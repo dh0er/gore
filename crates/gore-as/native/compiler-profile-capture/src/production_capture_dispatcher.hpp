@@ -18,7 +18,7 @@ enum class ProductionCaptureCoordinatorError : std::uint32_t {
   terminal_failure,
 };
 
-// Owns the one exact BuildID-24539464 capture transaction. preflight() is read-only;
+// Owns the one exact selected-generation capture transaction. preflight() is read-only;
 // install()/uninstall() delegate all writes to ProductionPatchCoordinator. The dispatcher is
 // direct (one switch over all 26 pinned site IDs) and never exposes a generic patch/inject API.
 class ProductionCaptureCoordinator final {

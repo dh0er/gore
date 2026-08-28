@@ -21,7 +21,7 @@ use crate::compiler_backend::{
     CompilerBackendDiagnosticSeverityV1, CompilerBackendDiagnosticV1, CompilerBackendFailureKindV1,
     CompilerBackendFailureV1,
 };
-use crate::compiler_profile::capture::validate_pinned_compiler_profile_target_v1;
+use crate::compiler_profile::capture::validate_supported_compiler_profile_target_v1;
 use crate::compiler_profile::frontend::{
     validate_frontend_profile_payloads, MAX_CLASS_GENERATOR_CONFIG_BYTES_V1,
     MAX_COMPILER_OPTIONS_BYTES_V1, MAX_PREPROCESSOR_CONFIG_BYTES_V1,
@@ -178,8 +178,10 @@ impl StandaloneSidecarConfigV1 {
 /// Construction reads the exact manifest plus all registry, frontend, and differential-parity
 /// payloads from `profile_root`. This proves package self-consistency, including exact parity-sidecar
 /// identity; it does not authenticate who authored the package. Product code must additionally
-/// match `profile().profile_sha256` and the sidecar seal against its trusted embedded catalog before
-/// treating this handle as authority-bearing generation evidence.
+/// match `profile().profile_sha256` and the historical qualification identity against its trusted
+/// embedded catalog before treating this handle as authority-bearing generation evidence. The
+/// separately catalogued release sidecar may have different bytes at the same semantic
+/// compatibility level.
 #[derive(Debug, Clone)]
 pub struct ValidatedCompilerProfilePackageV1 {
     profile: CompilerProfileV1,
@@ -252,10 +254,11 @@ impl StandaloneSidecarRunnerV1 {
                 "product standalone runner requires authenticated target inputs",
             ));
         }
-        validate_qualified_sidecar_seal(
-            config.sidecar_seal,
-            profile_package.standalone_compiler_identity(),
-        )?;
+        // Product construction is reachable only through the resolver's authority-bearing
+        // package. That path already authenticated the release executable exactly against the
+        // embedded catalog and matched this profile to the catalog's historical qualification
+        // reference by semantic compatibility and protocol. Requiring byte equality here would
+        // incorrectly reject a rebuilt or Authenticode-signed release of the same compiler.
         Ok(Self {
             config,
             profile_package: profile_package.clone(),
@@ -612,9 +615,9 @@ pub(crate) fn run_qualification_sidecar_v3(
                 "qualification profile is not the typed unqualified state: {error}"
             ))
         })?;
-    validate_pinned_compiler_profile_target_v1(profile).map_err(|error| {
+    validate_supported_compiler_profile_target_v1(profile).map_err(|error| {
         unavailable(format!(
-            "qualification profile does not match the pinned BuildID-24539464 target: {error}"
+            "qualification profile does not match an explicitly supported compiler target: {error}"
         ))
     })?;
     verify_memory_seal(

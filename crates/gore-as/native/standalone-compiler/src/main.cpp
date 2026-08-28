@@ -49,6 +49,7 @@ void print_capabilities() {
     std::cout
         << "{\"backend\":\"gore-as-standalone-compiler\",\"backend_version\":\""
         << wire::kBackendVersion
+        << "\",\"compatibility_id\":\"" << wire::kCompatibilityId
         << "\",\"request_version\":" << wire::kRequestProtocolVersionV2
         << ",\"request_versions\":[" << wire::kRequestProtocolVersionV1
         << ',' << wire::kRequestProtocolVersionV2 << ']'

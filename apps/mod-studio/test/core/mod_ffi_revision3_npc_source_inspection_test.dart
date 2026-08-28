@@ -351,9 +351,15 @@ void main() {
         expectedLabel: 'Asghan',
       ),
       (
-        byteLength: 171787776,
+        byteLength: 171792384,
         sha256:
-            'fb2c8d9e286a437bc5343748faf40959a77e9dc7c542ff9361f1ffaeca5c811c',
+            '824fbc94f2ac7f45927a0754605666c37af862d66156a15f8bf6813759d9e8e0',
+        expectedLabel: 'Asghan',
+      ),
+      (
+        byteLength: 171792384,
+        sha256:
+            '924fbc94f2ac7f45927a0754605666c37af862d66156a15f8bf6813759d9e8e0',
         expectedLabel: null,
       ),
     ];

@@ -1969,8 +1969,8 @@ fn standalone_compiler_check(readiness: StandaloneCompilerReadiness) -> Check {
             "standalone_compiler",
             "AS standalone",
             Verdict::Ok,
-            "authenticated standalone compiler is compatible with this cache/API; no game launch \
-             is required",
+            "authenticated standalone compiler is compatible with this cache/API; native \
+             diagnostics are available without a game launch",
         ),
         StandaloneCompilerReadiness::BundleAbsent => Check::new(
             "standalone_compiler",
@@ -3680,7 +3680,22 @@ mod tests {
     fn standalone_readiness_explains_offline_success_and_bounded_fallback() {
         let ready = standalone_compiler_check(StandaloneCompilerReadiness::Available);
         assert_eq!(ready.verdict, Verdict::Ok);
-        assert!(ready.detail.contains("no game launch"), "{}", ready.detail);
+        assert!(ready.detail.contains("cache/API"), "{}", ready.detail);
+        assert!(
+            ready.detail.contains("native diagnostics"),
+            "{}",
+            ready.detail
+        );
+        assert!(
+            ready.detail.contains("without a game launch"),
+            "{}",
+            ready.detail
+        );
+        assert!(
+            !ready.detail.contains("executable checksum"),
+            "{}",
+            ready.detail
+        );
         assert!(ready.items.is_empty());
 
         let absent = standalone_compiler_check(StandaloneCompilerReadiness::BundleAbsent);

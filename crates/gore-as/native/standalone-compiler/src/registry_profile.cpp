@@ -659,42 +659,39 @@ public:
 
     const void* GetStringConstant(const char* data, const asUINT length) override {
         const std::string key(data, static_cast<std::size_t>(length));
-        auto [iterator, inserted] = values_.try_emplace(key);
-        if (inserted) {
-            iterator->second.bytes = key;
-            if (qualification_fstring_) {
-                std::vector<char16_t> utf16;
-                if (!qualification_utf8_to_utf16(key, utf16)) {
-                    values_.erase(iterator);
-                    return nullptr;
-                }
-                qualification_fstring source;
-                source.data = utf16.data();
-                source.count = static_cast<std::int32_t>(utf16.size());
-                source.capacity = source.count;
-                iterator->second.value.assign(source);
+        auto value = std::make_unique<record>();
+        value->bytes = key;
+        if (qualification_fstring_) {
+            std::vector<char16_t> utf16;
+            if (!qualification_utf8_to_utf16(key, utf16)) {
+                return nullptr;
             }
+            qualification_fstring source;
+            source.data = utf16.data();
+            source.count = static_cast<std::int32_t>(utf16.size());
+            source.capacity = source.count;
+            value->value.assign(source);
         }
-        ++iterator->second.references;
-        return qualification_fstring_
-            ? static_cast<const void*>(&iterator->second.value)
-            : static_cast<const void*>(&iterator->second);
+        value->references = 1U;
+        const void* const result = qualification_fstring_
+            ? static_cast<const void*>(&value->value)
+            : static_cast<const void*>(value.get());
+        if (!values_.emplace(result, std::move(value)).second) {
+            return nullptr;
+        }
+        return result;
     }
 
     int ReleaseStringConstant(const void* value) override {
         if (value == nullptr) {
             return asINVALID_ARG;
         }
-        const auto iterator = std::find_if(values_.begin(), values_.end(), [&](const auto& row) {
-            return qualification_fstring_
-                ? static_cast<const void*>(&row.second.value) == value
-                : static_cast<const void*>(&row.second) == value;
-        });
-        if (iterator == values_.end() || iterator->second.references == 0U) {
+        const auto iterator = values_.find(value);
+        if (iterator == values_.end() || iterator->second->references == 0U) {
             return asINVALID_ARG;
         }
-        --iterator->second.references;
-        if (iterator->second.references == 0U) {
+        --iterator->second->references;
+        if (iterator->second->references == 0U) {
             values_.erase(iterator);
         }
         return asSUCCESS;
@@ -704,28 +701,21 @@ public:
         if (value == nullptr || length == nullptr) {
             return asINVALID_ARG;
         }
-        const auto iterator = std::find_if(values_.begin(), values_.end(), [&](const auto& row) {
-            return qualification_fstring_
-                ? static_cast<const void*>(&row.second.value) == value
-                : static_cast<const void*>(&row.second) == value;
-        });
+        const auto iterator = values_.find(value);
         if (iterator == values_.end() ||
-            iterator->second.bytes.size() > std::numeric_limits<asUINT>::max()) {
+            iterator->second->bytes.size() > std::numeric_limits<asUINT>::max()) {
             return asINVALID_ARG;
         }
-        const auto actual_length = static_cast<asUINT>(iterator->second.bytes.size());
+        const auto actual_length = static_cast<asUINT>(iterator->second->bytes.size());
         if (data != nullptr) {
-            std::memcpy(data, iterator->second.bytes.data(), actual_length);
+            std::memcpy(data, iterator->second->bytes.data(), actual_length);
         }
         *length = actual_length;
         return asSUCCESS;
     }
 
     [[nodiscard]] bool contains_qualification_value(const void* const value) const noexcept {
-        if (!qualification_fstring_ || value == nullptr) return false;
-        return std::any_of(values_.begin(), values_.end(), [&](const auto& row) {
-            return static_cast<const void*>(&row.second.value) == value;
-        });
+        return qualification_fstring_ && value != nullptr && values_.find(value) != values_.end();
     }
 
 private:
@@ -736,7 +726,10 @@ private:
         ~record() { _aligned_free(value.data); }
     };
     bool qualification_fstring_ = false;
-    std::map<std::string, record> values_;
+    // The target FString factory returns a distinct stable constant object for each request,
+    // including repeated text. Cache serialization keys string globals by those object addresses;
+    // interning by spelling therefore collapses real rows and changes the complete graph export.
+    std::unordered_map<const void*, std::unique_ptr<record>> values_;
 };
 
 struct aligned_delete {

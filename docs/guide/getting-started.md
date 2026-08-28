@@ -90,7 +90,7 @@ ok      game path     D:\SteamLibrary\steamapps\common\Gothic 1 Remake (source: 
 ok      UE4SS         installed at …\G1R\Binaries\Win64\ue4ss
 ok      UE4SS mods    22 mod folder(s), 7 enabled
 ok      deployment    nothing is deployed (no deploy record in the install)
-ok      AS standalone authenticated standalone compiler is compatible with this cache/API; no game launch is required
+ok      AS standalone authenticated standalone compiler is compatible with this cache/API; native diagnostics are available without a game launch
 problem loc catalog   43851 ids in 19 language(s), but stale: extracted from 37081808 bytes and the installed cache is now 37093440
                       fix: … Run 'gore loc extract' so the shared catalog describes the file that is actually installed
 

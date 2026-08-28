@@ -1,10 +1,22 @@
 # G1R compiler-profile capture tooling
 
-This directory contains the offline-buildable Windows-x64 capture lane for Steam BuildID
-`24539464`. Its live controller is deliberately limited to the exact pinned executable and
-production bridge: it can launch that executable windowed or attach to its exact running image,
+This directory contains the offline-buildable Windows-x64 capture lane for Steam BuildIDs
+`24539464` and `24878692`. The former remains an explicit historical decode/materialization
+target; the production bridge and live controller are deliberately limited to `24878692` and its
+exact pinned executable. The controller can launch that executable windowed or attach to its exact running image,
 install the closed hook table, seal the capture, restore every patched byte, unload the bridge,
 and terminate the controller-owned launch. It is not a generic injector or detour tool.
+
+The two targets are deliberately described field-by-field rather than by an RVA delta:
+
+| Steam BuildID | Role | EXE bytes | `SizeOfImage` | CodeView RSDS | cache GUID |
+| --- | --- | ---: | ---: | --- | --- |
+| `24539464` | historical decode/materialize | `171784704` | `0xa7e4000` | `cf0b83bd-e023-061b-2100-0f0fccf871d2`, age 1 | `be78fe0a46ac6643968597e85c7e5b3f` |
+| `24878692` | production live capture | `171792384` | `0xa7e5000` | `c2ca4ada-4878-d963-e567-717dc2c483a2`, age 1 | `7835bcc09c5eee488d72cb5ffb0fb0c3` |
+
+The build identifier remains `0x9e377abe`, and the verified compiler/layout semantics are
+unchanged. Code, `.rdata`, early `.data`, later `.data`, unwind data and tail-code addresses move
+by different amounts, so no blanket relocation rule is part of the contract.
 
 ## Produced targets
 
@@ -28,7 +40,7 @@ and terminate the controller-owned launch. It is not a generic injector or detou
   for UE arrays/sparse maps and sets, FString/FName, shared ownership, UObject/UClass,
   FFile/TChunkedArray and module/class descriptors. The same path validates both exact 24-byte
   graph-delegate objects and forces ProcessChunks/PostProcessCode to `bound=false` with empty
-  captures; BuildID 24539464 has no binding xrefs, and any runtime-object drift is terminal.
+  captures; neither authenticated generation has binding xrefs, and any runtime-object drift is terminal.
   The bounded sparse CurrentProcess snapshot builder, direct 26-site state-preserving MASM/patch
   coordinator and single semantic observer/serializer/bridge phase machine are connected and
   synthetic-tested across seal, abort and exact uninstall.
@@ -72,7 +84,7 @@ Successful `prepare_unload` is terminal for that loaded DLL image: subsequent br
 instrumentation preflights are refused, closing the post-return unload race.
 
 `open_pinned` independently verifies the on-disk/loaded primary-image file identity, Steam BuildID
-`24539464`, executable length/SHA-256, PE image size, and CodeView RSDS GUID/age. Output is
+`24878692`, executable length/SHA-256, PE image size, and CodeView RSDS GUID/age. Output is
 `CREATE_NEW`, final-component no-follow, non-shareable, handle-resolved outside the executable
 tree, and held by the exact creating handle. Unsafe-output cleanup failure is
 `output_recovery_required`. Runtime pointers are never serialized; primary-image pointers become
@@ -85,7 +97,8 @@ From the repository root in PowerShell:
 ```powershell
 cmake -S crates/gore-as/native/compiler-profile-capture `
   -B target/compiler-profile-capture `
-  -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTING=ON
+  -G "Visual Studio 17 2022" -A x64 `
+  -DBUILD_TESTING=ON -DGORE_AS_CAPTURE_BUILD_LIVE_CONTROLLER=ON
 cmake --build target/compiler-profile-capture --config Release --parallel
 ctest --test-dir target/compiler-profile-capture -C Release --output-on-failure
 ```
@@ -110,8 +123,8 @@ For a separately authorized real capture, the offline materializer syntax is:
 
 ```powershell
 target/compiler-profile-capture/Release/gore_as_capture_materializer.exe `
-  C:\capture-evidence\build-24539464.capture `
-  C:\capture-evidence\build-24539464.wire-summary.json
+  C:\capture-evidence\build-24878692.capture `
+  C:\capture-evidence\build-24878692.wire-summary.json
 ```
 
 The corresponding exclusive windowed live capture is:
@@ -121,7 +134,7 @@ target/compiler-profile-capture/Release/gore_as_capture_live_controller.exe `
   --capture-windowed `
   'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe' `
   (Resolve-Path target/compiler-profile-capture/Release/gore_as_compiler_profile_capture_bridge.dll) `
-  C:\capture-evidence\build-24539464.capture `
+  C:\capture-evidence\build-24878692.capture `
   180
 ```
 

@@ -1166,9 +1166,7 @@ impl FullGraphCompileArtifactV1 {
     /// caller-visible path.
     pub fn validate_retained_artifact(&self) -> Result<(), String> {
         let (byte_len, sha256) = hash_compiled_artifact_handle(
-            self.file
-                .try_clone()
-                .map_err(|error| format!("cloning retained full-graph handle: {error}"))?,
+            &self.file,
             MAX_PROJECT_COMPILER_CHECK_REGEN_BYTES,
             "retained full-graph output",
         )?;
@@ -1200,11 +1198,12 @@ impl FullGraphCompileArtifactV1 {
         Ok(())
     }
 
-    pub(crate) fn clone_retained_artifact_file(&self) -> Result<std::fs::File, String> {
-        self.validate_retained_artifact()?;
-        self.file
-            .try_clone()
-            .map_err(|error| format!("cloning retained full-graph output handle: {error}"))
+    pub(crate) fn read_retained_artifact_bytes(&self, max: u64) -> Result<Vec<u8>, String> {
+        let bytes = read_compiled_artifact_handle(&self.file, max, "retained full-graph output")?;
+        if bytes.len() as u64 != self.byte_len || sha256_digest(&bytes) != self.sha256 {
+            return Err("retained full-graph output bytes changed after publication".to_owned());
+        }
+        Ok(bytes)
     }
 }
 
@@ -1313,27 +1312,22 @@ pub(crate) fn bind_full_graph_artifact_for_test(
 
     let file = open_compiled_artifact_existing(&path)?;
     let (byte_len, sha256) = hash_compiled_artifact_handle(
-        file.try_clone()
-            .map_err(|error| format!("cloning test full-graph handle: {error}"))?,
+        &file,
         MAX_PROJECT_COMPILER_CHECK_REGEN_BYTES,
         "test full-graph output",
     )?;
-    let mut bytes = Vec::with_capacity(byte_len as usize);
-    let mut reader = file
-        .try_clone()
-        .map_err(|error| format!("cloning test full-graph read handle: {error}"))?;
-    reader
-        .seek(SeekFrom::Start(0))
-        .and_then(|_| reader.read_to_end(&mut bytes))
-        .map_err(|error| format!("reading test full-graph output: {error}"))?;
+    let bytes = read_compiled_artifact_handle(
+        &file,
+        MAX_PROJECT_COMPILER_CHECK_REGEN_BYTES,
+        "test full-graph output",
+    )?;
     if bytes.len() as u64 != byte_len || sha256_digest(&bytes) != sha256 {
         return Err("test full-graph output changed while binding its handle".to_owned());
     }
     validate_generated_cache(&bytes)?;
     validate_full_graph_regen_manifest_v1(&identities, &bytes)?;
     let (checked_len, checked_sha256) = hash_compiled_artifact_handle(
-        file.try_clone()
-            .map_err(|error| format!("recloning test full-graph handle: {error}"))?,
+        &file,
         MAX_PROJECT_COMPILER_CHECK_REGEN_BYTES,
         "test full-graph output",
     )?;
@@ -6928,15 +6922,7 @@ fn publish_full_graph_artifact_v1(
     }
     let expected_sha256 = sha256_digest(bytes);
     let exact = hash_compiled_artifact_handle(
-        match pending_artifact.file.try_clone() {
-            Ok(file) => file,
-            Err(error) => {
-                return Err(full_graph_pending_failure_v1(
-                    pending_artifact,
-                    format!("cloning full-graph pending handle: {error}"),
-                ));
-            }
-        },
+        &pending_artifact.file,
         MAX_PROJECT_COMPILER_CHECK_REGEN_BYTES,
         "pending full-graph output",
     );
@@ -7075,10 +7061,35 @@ fn neutralize_and_remove_full_graph_pending_v1(
 }
 
 fn hash_compiled_artifact_handle(
-    mut file: std::fs::File,
+    file: &std::fs::File,
     max: u64,
     label: &str,
 ) -> Result<(u64, Sha256Digest), String> {
+    with_positioned_compiled_artifact_bytes(file, max, label, |bytes| {
+        Ok((bytes.len() as u64, sha256_digest(bytes)))
+    })
+}
+
+fn read_compiled_artifact_handle(
+    file: &std::fs::File,
+    max: u64,
+    label: &str,
+) -> Result<Vec<u8>, String> {
+    with_positioned_compiled_artifact_bytes(file, max, label, |bytes| {
+        let mut copy = Vec::new();
+        copy.try_reserve_exact(bytes.len())
+            .map_err(|error| format!("allocating {label} buffer: {error}"))?;
+        copy.extend_from_slice(bytes);
+        Ok(copy)
+    })
+}
+
+fn with_positioned_compiled_artifact_bytes<T>(
+    file: &std::fs::File,
+    max: u64,
+    label: &str,
+    inspect: impl FnOnce(&[u8]) -> Result<T, String>,
+) -> Result<T, String> {
     let before = file
         .metadata()
         .map_err(|error| format!("inspecting {label}: {error}"))?;
@@ -7088,31 +7099,136 @@ fn hash_compiled_artifact_handle(
             before.len()
         ));
     }
-    file.seek(SeekFrom::Start(0))
-        .map_err(|error| format!("seeking {label}: {error}"))?;
-    let mut hash = Sha256::new();
-    let mut byte_len = 0u64;
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let read = file
-            .read(&mut buffer)
-            .map_err(|error| format!("reading {label}: {error}"))?;
-        if read == 0 {
-            break;
+    let length =
+        usize::try_from(before.len()).map_err(|_| format!("{label} length cannot be addressed"))?;
+
+    // Windows `FileExt::seek_read` changes the file object's shared cursor. A read-only mapping
+    // instead addresses the exact retained handle without reopening its path or serializing
+    // otherwise independent readers. Unix `read_at` already supplies true positioned I/O.
+    #[cfg(windows)]
+    let result = with_windows_mapped_artifact_bytes(file, length, label, inspect)?;
+
+    #[cfg(unix)]
+    let result = {
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(length)
+            .map_err(|error| format!("allocating {label} buffer: {error}"))?;
+        bytes.resize(length, 0);
+        let mut offset = 0usize;
+        while offset < bytes.len() {
+            let read = read_file_at_retry(file, &mut bytes[offset..], offset as u64)
+                .map_err(|error| format!("reading {label} at offset {offset}: {error}"))?;
+            if read == 0 {
+                return Err(format!("{label} ended early at offset {offset}"));
+            }
+            offset = offset
+                .checked_add(read)
+                .ok_or_else(|| format!("{label} read offset overflow"))?;
         }
-        byte_len = byte_len
-            .checked_add(read as u64)
-            .filter(|length| *length <= max)
-            .ok_or_else(|| format!("{label} exceeded {max} bytes while reading"))?;
-        hash.update(&buffer[..read]);
-    }
+        inspect(&bytes)?
+    };
+
+    #[cfg(not(any(windows, unix)))]
+    let result = {
+        let _ = inspect;
+        return Err(format!(
+            "positioned retained-artifact reads are unsupported for {label} on this platform"
+        ));
+    };
+
     let after = file
         .metadata()
         .map_err(|error| format!("rechecking {label}: {error}"))?;
-    if before.len() != byte_len || after.len() != byte_len {
+    if before.len() != after.len() {
         return Err(format!("{label} length changed during validation"));
     }
-    Ok((byte_len, Sha256Digest::from_bytes(hash.finalize().into())))
+    Ok(result)
+}
+
+#[cfg(unix)]
+fn read_file_at_retry(
+    file: &std::fs::File,
+    buffer: &mut [u8],
+    offset: u64,
+) -> std::io::Result<usize> {
+    loop {
+        match read_file_at(file, buffer, offset) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => return result,
+        }
+    }
+}
+
+#[cfg(windows)]
+fn with_windows_mapped_artifact_bytes<T>(
+    file: &std::fs::File,
+    length: usize,
+    label: &str,
+    inspect: impl FnOnce(&[u8]) -> Result<T, String>,
+) -> Result<T, String> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::Memory::{
+        CreateFileMappingW, MapViewOfFile, UnmapViewOfFile, FILE_MAP_READ,
+        MEMORY_MAPPED_VIEW_ADDRESS, PAGE_READONLY,
+    };
+
+    if length == 0 {
+        return inspect(&[]);
+    }
+
+    struct Mapping(HANDLE);
+    impl Drop for Mapping {
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
+    }
+
+    struct View(MEMORY_MAPPED_VIEW_ADDRESS);
+    impl Drop for View {
+        fn drop(&mut self) {
+            unsafe {
+                UnmapViewOfFile(self.0);
+            }
+        }
+    }
+
+    let mapping = unsafe {
+        CreateFileMappingW(
+            file.as_raw_handle(),
+            std::ptr::null(),
+            PAGE_READONLY,
+            0,
+            0,
+            std::ptr::null(),
+        )
+    };
+    if mapping.is_null() {
+        return Err(format!(
+            "creating a read-only mapping for {label}: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let mapping = Mapping(mapping);
+    let view = unsafe { MapViewOfFile(mapping.0, FILE_MAP_READ, 0, 0, length) };
+    if view.Value.is_null() {
+        return Err(format!(
+            "mapping {label} through its retained handle: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let view = View(view);
+    let bytes = unsafe { std::slice::from_raw_parts(view.0.Value.cast::<u8>(), length) };
+    inspect(bytes)
+}
+
+#[cfg(unix)]
+fn read_file_at(file: &std::fs::File, buffer: &mut [u8], offset: u64) -> std::io::Result<usize> {
+    use std::os::unix::fs::FileExt as _;
+    file.read_at(buffer, offset)
 }
 
 #[cfg(windows)]
@@ -12957,11 +13073,107 @@ mod tests {
         assert_eq!(artifact.deleted_modules().len(), 1);
         assert_eq!(artifact.deleted_modules()[0].module_name, "DeleteMe");
         artifact.validate_retained_artifact().unwrap();
+        let mut cursor_witness = artifact.file.try_clone().unwrap();
+        cursor_witness.seek(SeekFrom::Start(7)).unwrap();
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                let artifact = &artifact;
+                let expected_output = &expected_output;
+                scope.spawn(move || {
+                    for _ in 0..8 {
+                        artifact.validate_retained_artifact().unwrap();
+                        let retained =
+                            crate::generation_receipt_v2::read_full_graph_compile_output_bytes_v2(
+                                artifact,
+                            )
+                            .unwrap();
+                        assert_eq!(retained.as_slice(), expected_output.as_slice());
+                    }
+                });
+            }
+        });
+        assert_eq!(cursor_witness.stream_position().unwrap(), 7);
         assert_eq!(std::fs::read(artifact.path()).unwrap(), expected_output);
         let published = artifact.path().to_path_buf();
+        drop(cursor_witness);
         drop(artifact);
         std::fs::remove_file(published).unwrap();
         assert!(!install_mutation_lock_path(&opts.game_dir).exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn full_graph_retained_read_uses_an_exclusive_handle_without_reopening_its_path() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+
+        let root = unique_test_root("full-graph-retained-exclusive");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("exclusive.cache");
+        let expected_output = cache_with_empty_modules(&[("Only", "Only.as")]);
+        std::fs::write(&path, &expected_output).unwrap();
+        let artifact = bind_full_graph_artifact_for_test(
+            path.clone(),
+            sha256_digest(b"base"),
+            vec![FullGraphSourceManifestEntryV1 {
+                module_name: "Only".to_owned(),
+                relative_path: "Only.as".to_owned(),
+                disposition: FullGraphSourceDispositionV1::Base,
+                source_byte_len: None,
+                source_sha256: None,
+            }],
+            Vec::new(),
+        )
+        .unwrap();
+        let FullGraphCompileArtifactV1 {
+            path,
+            file,
+            byte_len,
+            sha256,
+            module_count,
+            base_cache_sha256,
+            final_manifest,
+            changes,
+            deleted_modules,
+        } = artifact;
+        drop(file);
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(0)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(&path)
+            .unwrap();
+        let artifact = FullGraphCompileArtifactV1 {
+            path,
+            file,
+            byte_len,
+            sha256,
+            module_count,
+            base_cache_sha256,
+            final_manifest,
+            changes,
+            deleted_modules,
+        };
+
+        assert!(
+            std::fs::File::open(artifact.path()).is_err(),
+            "an exclusive retained handle must make a pathname reopen impossible"
+        );
+        let mut cursor_witness = artifact.file.try_clone().unwrap();
+        cursor_witness.seek(SeekFrom::Start(5)).unwrap();
+        assert_eq!(
+            crate::generation_receipt_v2::read_full_graph_compile_output_bytes_v2(&artifact)
+                .unwrap(),
+            expected_output
+        );
+        assert_eq!(cursor_witness.stream_position().unwrap(), 5);
+
+        let published = artifact.path().to_path_buf();
+        drop(cursor_witness);
+        drop(artifact);
+        std::fs::remove_file(published).unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
 

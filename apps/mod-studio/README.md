@@ -42,8 +42,10 @@ listed under [What it can do](#what-it-can-do) and
   then creates and inserts its first localized greeting through two explicit
   project checkpoints; stopping after the first keeps the honest NPC-only
   Draft. Selected managed Quests and NPCs expose **Source/Profile & checks**,
-  including an evidence-only game-compiler check with structured diagnostics,
-  exact restoration/recovery handling, and no retained compiler artifact.
+  including an evidence-only standalone-first compiler check with native
+  file/line/column/severity diagnostics and no retained compiler artifact.
+  Strict standalone never starts or mutates the game; a deliberately selected
+  game-capable policy retains exact restoration and recovery handling.
 - See the exact current project's saved work under **My mod / Changes**, grouped
   as Quests, NPCs, Items, DataAssets, Dialog, Text, and Voice instead of a
   count/readiness-card grid. Proven generated and related helpers stay nested

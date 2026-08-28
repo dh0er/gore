@@ -20,19 +20,22 @@ of the image's exact `.text` section. A signature/structure mismatch, ambiguous 
 capture, or unsupported image disables acceptance of diagnostic output; safe infrastructure
 failures fall back to the ordinary game compiler.
 
-## Internal standalone compiler package
+## Qualified standalone compiler profiles
 
-`standalone-compiler-internal-package.zip` and its adjacent JSON descriptor are GORE source
-assets, not a separate downloadable product. The archive contains the already signed standalone
-compiler plus its qualified game-API data. It is deterministic Deflate-9 so the roughly 152 MiB
-qualified tree occupies about 7.5 MiB in source control; `build.py` verifies and expands it only
-for `gore-cli` and `gore-mod-studio`. Save Editor and Mod Manager never stage it.
+`standalone-compiler-qualified-profiles.zip` and its adjacent JSON descriptor are GORE source
+assets, not a downloadable compiler product. The deterministic archive contains the qualified
+`24539464` and `24878692` profile trees, their audit receipts, and notices. It deliberately contains
+no compiler executable and no release signature.
 
-Normal builds use the descriptor's exact length/SHA-256 as their source-tree authority and need no
-network access or GitHub release. Package creation is a separate one-time operation which verifies
-Authenticode, typed profile data, and GitHub/Sigstore provenance before publication into this
-directory. This replacement creates no compiler release or tag. Runtime selection is
-distribution-neutral: whole Steam/GOG files and store metadata do
-not gate use. A bounded AMD64 game executable, a supported Shipping cache format, and the fully
-parsed ordered Binds API fingerprint select the compatible game API. Incompatible or ambiguous
-inputs visibly fall back to the compiler embedded in the game.
+CLI and Mod Studio builds verify and expand this profile pack, build and test the native sidecar
+from the current source revision, and compose the product bundle. The sidecar advertises the same
+semantic compatibility id as the profile pack. A release signs the freshly built copy exactly once
+and pins its final length/SHA-256 in the embedded catalog; a local build leaves it unsigned. Save
+Editor and Mod Manager never build or stage it.
+
+The historical sidecar hash in the qualification reports remains exact audit evidence, but it is
+not used as a whole-EXE release allowlist. Runtime selection is distribution-neutral: a bounded
+AMD64 game executable, a supported Shipping cache format, and the fully parsed ordered Binds API
+fingerprint select the compatible game API. Incompatible or ambiguous inputs visibly fall back to
+the compiler embedded in the game. See
+[`docs/standalone-compiler-internal-bundle.md`](../../../docs/standalone-compiler-internal-bundle.md).

@@ -71,6 +71,9 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
+    const GORE_MODDING_SKILL: &str =
+        include_str!("../../../../plugins/gore/skills/gore-modding/SKILL.md");
+
     /// `docs/reference/README.md` is an index for browsing the directory on GitHub, not content.
     /// Embedding it would also collide with the guide's own README slug.
     const NOT_EMBEDDED: &[&str] = &["reference/README.md"];
@@ -80,7 +83,13 @@ mod tests {
         let dir = format!("{}/../../docs/{subdir}", env!("CARGO_MANIFEST_DIR"));
         std::fs::read_dir(&dir)
             .unwrap_or_else(|error| panic!("cannot read {dir}: {error}"))
-            .map(|entry| entry.expect("dir entry").file_name().to_string_lossy().into_owned())
+            .map(|entry| {
+                entry
+                    .expect("dir entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
             .filter(|name| name.ends_with(".md"))
             .map(|name| format!("{subdir}/{name}"))
             .filter(|path| !NOT_EMBEDDED.contains(&path.as_str()))
@@ -94,7 +103,10 @@ mod tests {
         let embedded: BTreeSet<String> = PAGES.iter().map(|page| page.file.to_string()).collect();
         let mut disk = on_disk("guide");
         disk.extend(on_disk("reference"));
-        assert_eq!(embedded, disk, "docs/ and the embedded page list have diverged");
+        assert_eq!(
+            embedded, disk,
+            "docs/ and the embedded page list have diverged"
+        );
     }
 
     #[test]
@@ -140,6 +152,118 @@ mod tests {
     fn no_page_is_empty() {
         for page in PAGES {
             assert!(!page.markdown.trim().is_empty(), "{} is empty", page.slug);
+        }
+    }
+
+    #[test]
+    fn scripts_guide_separates_standalone_diagnostics_from_the_game_hook() {
+        let scripts = PAGES
+            .iter()
+            .find(|page| page.slug == "scripts")
+            .expect("scripts guide page")
+            .markdown;
+
+        for claim in [
+            "source file, line, column, severity, and message",
+            "diagnostics require no game launch and no consent question",
+            "hook belongs only to the game backend",
+            "strict standalone compilation never loads it",
+        ] {
+            assert!(scripts.contains(claim), "scripts guide lost: {claim}");
+        }
+    }
+
+    #[test]
+    fn doctor_studio_and_plugin_keep_the_strict_standalone_contract() {
+        let page = |slug| {
+            PAGES
+                .iter()
+                .find(|page| page.slug == slug)
+                .unwrap_or_else(|| panic!("missing {slug} guide page"))
+                .markdown
+        };
+
+        for claim in [
+            "based on the cache/API, not a whole-file Steam/GOG executable checksum",
+            "native file/line/column/severity",
+            "Doctor does not run a",
+        ] {
+            assert!(
+                page("cli-reference").contains(claim),
+                "Doctor guide lost: {claim}"
+            );
+        }
+        for claim in [
+            "Strict standalone returns native file, line, column",
+            "without starting the game or entering an",
+            "Neither route",
+            "grants build, deployment, or runtime authority",
+        ] {
+            assert!(
+                page("mod-studio").contains(claim),
+                "Studio guide lost: {claim}"
+            );
+        }
+        for claim in [
+            "gore_as_compile` or",
+            "never need game-launch consent",
+            "does not start the game",
+            "returns native compiler diagnostics",
+            "runtime diagnostics hook belongs only to the game backend",
+        ] {
+            assert!(
+                GORE_MODDING_SKILL.contains(claim),
+                "plugin skill lost: {claim}"
+            );
+        }
+    }
+
+    #[test]
+    fn generation_references_keep_the_latest_offline_boundary_explicit() {
+        let game_updates = PAGES
+            .iter()
+            .find(|page| page.slug == "game-updates")
+            .expect("game-updates reference page")
+            .markdown;
+        let studio = PAGES
+            .iter()
+            .find(|page| page.slug == "studio-authoring")
+            .expect("studio-authoring reference page")
+            .markdown;
+
+        for page in [game_updates, studio] {
+            for claim in [
+                "exactly four reviewed",
+                "24878692",
+                "fresh 172709 USMAP",
+                "UGameplayAbilityAttackLoop",
+                "UGameplayAbilityMagicBase",
+                "UGameplayAbilityCastSpell",
+                "URagdollConfig",
+                "26,399 → 26,389",
+            ] {
+                assert!(page.contains(claim), "generation reference lost: {claim}");
+            }
+        }
+
+        for claim in [
+            "-14 + 4 = -10",
+            "frozen 27-case and full-tree embedded-versus-standalone comparisons",
+            "neither build `24340829` nor build `24878692`",
+        ] {
+            assert!(
+                game_updates.contains(claim),
+                "game update contract lost: {claim}"
+            );
+        }
+
+        for claim in [
+            "bounded project-only Story/NPC/Quest",
+            "no dialog-runtime, production-build, deployment, live-game, or",
+            "Standalone compiler-core parity is",
+            "separate frozen-corpus/full-tree qualification",
+        ] {
+            assert!(studio.contains(claim), "Studio boundary lost: {claim}");
         }
     }
 }

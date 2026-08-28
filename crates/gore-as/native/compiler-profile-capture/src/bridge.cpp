@@ -34,7 +34,7 @@ using gore_as_capture::v1::GuidBytes;
 using gore_as_capture::v1::RegistryCounts;
 
 #if defined(GORE_AS_CAPTURE_TEST_TARGET)
-constexpr std::uint64_t kExpectedObservedBuildId = 0xf17e'2453'9464'0001ull;
+constexpr std::uint64_t kExpectedObservedBuildId = 0xf17e'2487'8692'0001ull;
 constexpr std::uint32_t kTestFixtureOnly = 1;
 #else
 constexpr std::uint64_t kExpectedObservedBuildId = gore_as_capture::v1::kSteamBuildId;

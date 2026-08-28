@@ -413,7 +413,7 @@ CaptureError CaptureSession::open_pinned(
   }
   impl_->open_attempted = true;
 #if defined(GORE_AS_CAPTURE_TEST_TARGET)
-  constexpr std::uint64_t expected_observed_build_id = 0xf17e'2453'9464'0001ull;
+  constexpr std::uint64_t expected_observed_build_id = 0xf17e'2487'8692'0001ull;
 #else
   constexpr std::uint64_t expected_observed_build_id = kSteamBuildId;
 #endif

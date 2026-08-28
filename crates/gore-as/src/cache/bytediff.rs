@@ -19,7 +19,10 @@ use super::cfg;
 use super::disasm::{disassemble, Instr};
 use super::isa::{BcType, OPCODES};
 use super::refs::RefResolver;
-use super::remap::{ref_sites, OperandId, RefIdentity, RefKind};
+use super::remap::{
+    ref_sites, split_type_id_operand, valid_type_id_core, OperandId, RefIdentity, RefKind,
+    TYPE_ID_OBJECT_MASK, TYPE_ID_QUALIFIER_MASK,
+};
 
 // =================================================================================================
 // Operand role classification: split an instruction's positional words/dwords/qwords into roles
@@ -106,6 +109,17 @@ enum Operand {
     JumpIndex(Option<usize>),
     /// A ref operand resolved to a portable identity (N1).
     Ref(OperandId),
+    /// A bytecode type-id resolved through this cache's T2 -> complete T1 identity while retaining
+    /// the operand-local handle/const qualifiers and the core id's object-kind bits. The latter
+    /// matter because one T1 declaration may have several T2 aliases with different runtime
+    /// object semantics.
+    TypeId(TypeIdIdentity),
+    /// The coupled member operands of `ADDSi`, `LoadThisR`, `LoadRObjR`, or `LoadVObjR`, resolved
+    /// as one property declaration:
+    /// complete owner T1 identity + T7 name + complete T1 identity of T7 `OldTypeId`.
+    /// A site is emitted in this form only when every link resolves; otherwise both wire operands
+    /// remain raw so an offset/id drift cannot be hidden.
+    Property(PropertyIdentity),
     /// A resolved STR / __STATIC_NAME string literal, compared by text (N4).
     StaticName(Option<String>),
     /// A `TYPEID`/`Cast` operand that is a LARGE runtime object type-id feeding an `opCast`/`Cast`
@@ -120,6 +134,23 @@ enum Operand {
     RawDw(u32),
     RawQw(u64),
 }
+
+#[derive(Debug, Clone, PartialEq)]
+struct TypeIdIdentity {
+    identity: OperandId,
+    qualifiers: u32,
+    object_kind: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct PropertyIdentity {
+    owner: TypeIdIdentity,
+    name: String,
+    old_type: TypeIdIdentity,
+}
+
+const TYPE_ID_OBJHANDLE: u32 = 0x4000_0000;
+const TYPE_ID_HANDLETOCONST: u32 = 0x2000_0000;
 
 /// One instruction after normalization: opcode name + ordered operand tokens.
 #[derive(Debug, Clone)]
@@ -210,26 +241,27 @@ fn normalize(code: &[i32], instrs: &[Instr], side: &Side, opts: &NormOpts) -> Ve
         // Ref-operand dword indices (relative to the instruction start) → identity, via the
         // SHARED ref_sites classification (N1). Collect into a per-dword-index lookup so the
         // positional walk below can substitute them.
-        let mut ref_at_dw: HashMap<usize, OperandId> = HashMap::new();
+        let mut ref_at_dw: HashMap<usize, Operand> = HashMap::new();
         if opts.n1_refs {
             for site in ref_sites(name) {
                 let base = ins.offset_dw + site.dw_index;
                 if base >= code.len() {
                     continue;
                 }
-                let id = match site.kind {
+                let operand = match site.kind {
                     RefKind::GlobalPtr | RefKind::FuncPtr | RefKind::TypePtr => {
                         if base + 1 >= code.len() {
                             continue;
                         }
-                        side.ident
-                            .resolve_ptr(site.kind, read_qw(code, base) as i64)
+                        Operand::Ref(
+                            side.ident
+                                .resolve_ptr(site.kind, read_qw(code, base) as i64),
+                        )
                     }
-                    RefKind::FuncId | RefKind::TypeId => {
-                        side.ident.resolve_id(site.kind, code[base])
-                    }
+                    RefKind::FuncId => Operand::Ref(side.ident.resolve_id(site.kind, code[base])),
+                    RefKind::TypeId => normalize_type_id_operand(code[base], &side.ident),
                 };
-                ref_at_dw.insert(site.dw_index, id);
+                ref_at_dw.insert(site.dw_index, operand);
             }
         }
 
@@ -253,7 +285,7 @@ fn normalize(code: &[i32], instrs: &[Instr], side: &Side, opts: &NormOpts) -> Ve
 fn normalize_operands(
     name: &str,
     ins: &Instr,
-    ref_at_dw: &HashMap<usize, OperandId>,
+    ref_at_dw: &HashMap<usize, Operand>,
     off_to_idx: &HashMap<usize, usize>,
     side: &Side,
     opts: &NormOpts,
@@ -261,6 +293,17 @@ fn normalize_operands(
     pos: usize,
 ) -> Vec<Operand> {
     let mut out = Vec::new();
+
+    // The offset and owner type-id jointly address T7. Normalizing either operand in isolation is
+    // unsafe: equal offsets may name different fields on different owners, while offset drift is
+    // benign only when both caches resolve the complete same declaration. Resolve atomically, or
+    // keep the entire pair raw (fail closed).
+    if opts.n1_refs && matches!(name, "ADDSi" | "LoadThisR" | "LoadRObjR" | "LoadVObjR") {
+        return match resolve_property_operand(ins, side) {
+            Some(property) => resolved_property_operands(name, ins, property),
+            None => raw_property_operands(name, ins),
+        };
+    }
 
     // --- Word operands (16-bit): occupy dword 0 (hi/lo) or dword 1 hi depending on BcType. ---
     // For N1, ref operands are never in the word slots (all ref sites are dword/qword), so words
@@ -274,18 +317,21 @@ fn normalize_operands(
     for (dop, &dw_idx) in dword_indices.iter().enumerate() {
         let raw = *ins.dwords.get(dop).unwrap_or(&0);
         // N1 ref (func-id / type-id) at this dword index?
-        if let Some(id) = ref_at_dw.get(&dw_idx) {
+        if let Some(operand) = ref_at_dw.get(&dw_idx) {
             // GAP-C (batch-38): a `TYPEID`/`Cast` operand that is a LARGE runtime object type-id
             // (an `asCTypeInfo` id not in T2, mask bits set) is build-specific and drifts. When it
             // feeds an `opCast`/`Cast` whose callee identity matches on both sides (verified at the
             // opCast op's own index), the cast TARGET is pinned by that signature, so collapse the
             // drifting id to a single canonical token. A genuine primitive type-id stays a
             // value-compared Ref(Primitive).
-            if id.is_runtime_object_typeid() && feeds_matching_opcast(instrs, pos, side) {
+            if (matches!(operand, Operand::Ref(id) if id.is_runtime_object_typeid())
+                || matches!(operand, Operand::RawDw(_) if is_unresolved_runtime_type_id(raw as i32, &side.ident)))
+                && feeds_matching_opcast(instrs, pos, side)
+            {
                 out.push(Operand::OpCastTypeId);
                 continue;
             }
-            out.push(Operand::Ref(id.clone()));
+            out.push(operand.clone());
             continue;
         }
         // N3 jump target?
@@ -325,8 +371,8 @@ fn normalize_operands(
     let qword_indices = qword_operand_indices(ins.op.fmt);
     for (qop, &dw_idx) in qword_indices.iter().enumerate() {
         let raw = *ins.qwords.get(qop).unwrap_or(&0);
-        if let Some(id) = ref_at_dw.get(&dw_idx) {
-            out.push(Operand::Ref(id.clone()));
+        if let Some(operand) = ref_at_dw.get(&dw_idx) {
+            out.push(operand.clone());
             continue;
         }
         match const_qword_role(name) {
@@ -350,6 +396,117 @@ fn normalize_operands(
 
     let _ = opts;
     out
+}
+
+/// Resolve a raw bytecode type-id without losing operand-local semantics.
+///
+/// T2 is keyed by the core id only. Handle/const qualifiers therefore have to be split before
+/// lookup and retained beside the portable T1 identity. Unknown flag bits, impossible qualified
+/// non-object ids, invalid object-kind combinations, and missing T2/T1 links remain raw.
+fn normalize_type_id_operand(raw: i32, ident: &RefIdentity) -> Operand {
+    if let Some(identity) = resolve_type_id_identity(raw, ident) {
+        return Operand::TypeId(identity);
+    }
+    Operand::RawDw(raw as u32)
+}
+
+/// The narrow GAP-C exception for a runtime object id missing from T2. The operand remains raw
+/// everywhere else; only an adjacent resolved `opCast` signature may pin and collapse it.
+fn is_unresolved_runtime_type_id(raw: i32, ident: &RefIdentity) -> bool {
+    let (core, flags) = split_type_id_operand(raw);
+    let object_kind = core as u32 & TYPE_ID_OBJECT_MASK;
+    flags & !TYPE_ID_QUALIFIER_MASK == 0
+        && !(flags & TYPE_ID_HANDLETOCONST != 0 && flags & TYPE_ID_OBJHANDLE == 0)
+        && valid_type_id_core(core)
+        && object_kind != 0
+        && matches!(
+            ident.resolve_id(RefKind::TypeId, core),
+            OperandId::Primitive(_)
+        )
+}
+
+/// Resolve the portable semantic identity of a type-id operand.
+///
+/// Named/object/enum ids use complete T1 identity and retain their valid qualifier/object-kind
+/// bits. Primitive ids have no T1 row; their fixed core value is itself the portable identity and
+/// qualifiers/object-kind are canonically zero. Anything else is unresolved or invalid.
+fn resolve_type_id_identity(raw: i32, ident: &RefIdentity) -> Option<TypeIdIdentity> {
+    let (core, flags) = split_type_id_operand(raw);
+    let object_kind = core as u32 & TYPE_ID_OBJECT_MASK;
+    if flags & !TYPE_ID_QUALIFIER_MASK != 0
+        || (flags & TYPE_ID_HANDLETOCONST != 0 && flags & TYPE_ID_OBJHANDLE == 0)
+        || (flags != 0 && (!valid_type_id_core(core) || object_kind == 0))
+    {
+        return None;
+    }
+
+    match ident.resolve_id(RefKind::TypeId, core) {
+        identity @ OperandId::Named { .. } if valid_type_id_core(core) => Some(TypeIdIdentity {
+            identity,
+            qualifiers: flags,
+            object_kind,
+        }),
+        identity @ OperandId::Primitive(_) if flags == 0 && object_kind == 0 => {
+            Some(TypeIdIdentity {
+                identity,
+                qualifiers: 0,
+                object_kind: 0,
+            })
+        }
+        OperandId::Named { .. }
+        | OperandId::Primitive(_)
+        | OperandId::RawPtr(_)
+        | OperandId::RawId(_) => None,
+    }
+}
+
+fn resolve_property_operand(ins: &Instr, side: &Side) -> Option<PropertyIdentity> {
+    let raw_owner = *ins.dwords.first()? as i32;
+    let member_offset = i32::from(*ins.words.last()? as i16);
+    let (owner_core, owner_flags) = split_type_id_operand(raw_owner);
+    if owner_flags & !TYPE_ID_QUALIFIER_MASK != 0 {
+        return None;
+    }
+    let owner = match normalize_type_id_operand(raw_owner, &side.ident) {
+        Operand::TypeId(identity) if matches!(&identity.identity, OperandId::Named { .. }) => {
+            identity
+        }
+        _ => return None,
+    };
+    let (name, raw_old_type) = side.refs.member_identity(owner_core, member_offset)?;
+    let old_type = resolve_type_id_identity(raw_old_type, &side.ident)?;
+    Some(PropertyIdentity {
+        owner,
+        name: name.to_owned(),
+        old_type,
+    })
+}
+
+fn resolved_property_operands(name: &str, ins: &Instr, property: PropertyIdentity) -> Vec<Operand> {
+    let mut resolved = Vec::with_capacity(2);
+    if matches!(name, "LoadRObjR" | "LoadVObjR") {
+        if let Some(&slot) = ins.words.first() {
+            resolved.push(Operand::Slot(i32::from(slot as i16)));
+        }
+    }
+    resolved.push(Operand::Property(property));
+    resolved
+}
+
+fn raw_property_operands(name: &str, ins: &Instr) -> Vec<Operand> {
+    let mut raw = Vec::with_capacity(3);
+    if matches!(name, "LoadRObjR" | "LoadVObjR") {
+        if let Some(&slot) = ins.words.first() {
+            raw.push(Operand::Slot(i32::from(slot as i16)));
+        }
+    }
+    if let Some(&offset) = ins.words.last() {
+        raw.push(Operand::Word(offset));
+    }
+    if let Some(&owner) = ins.dwords.first() {
+        raw.push(Operand::RawDw(owner));
+    }
+    raw
 }
 
 /// Push the word (16-bit) operands of an instruction as Slot/Word tokens per BcType.
@@ -1986,12 +2143,28 @@ fn render_operand(op: &Operand) -> String {
         Operand::JumpIndex(Some(i)) => format!("->[{i:04}]"),
         Operand::JumpIndex(None) => "->[??]".to_string(),
         Operand::Ref(id) => id.display(),
+        Operand::TypeId(id) => render_type_id_identity(id),
+        Operand::Property(property) => format!(
+            "property(owner={},name={},old_type={})",
+            render_type_id_identity(&property.owner),
+            property.name,
+            render_type_id_identity(&property.old_type)
+        ),
         Operand::StaticName(Some(s)) => format!("n\"{s}\""),
         Operand::StaticName(None) => "n<?>".to_string(),
         Operand::OpCastTypeId => "opcast-typeid".to_string(),
         Operand::RawDw(d) => format!("0x{d:x}"),
         Operand::RawQw(q) => format!("0x{q:x}"),
     }
+}
+
+fn render_type_id_identity(id: &TypeIdIdentity) -> String {
+    format!(
+        "{}[kind={:#x},qual={:#x}]",
+        id.identity.display(),
+        id.object_kind,
+        id.qualifiers
+    )
 }
 
 /// Determine which normalizers actually collapsed a difference (for the BENIGN audit trail).
@@ -2017,6 +2190,18 @@ fn which_normalizers_fired(
                     if opts.n1_refs
                         && (v_raw[i].qwords != r_raw[i].qwords
                             || raw_id_differs(&v_raw[i], &r_raw[i]))
+                    {
+                        fired.n1_refs = true;
+                    }
+                }
+                (Operand::TypeId(a), Operand::TypeId(b)) if a == b => {
+                    if opts.n1_refs && v_raw[i].dwords != r_raw[i].dwords {
+                        fired.n1_refs = true;
+                    }
+                }
+                (Operand::Property(a), Operand::Property(b)) if a == b => {
+                    if opts.n1_refs
+                        && (v_raw[i].words != r_raw[i].words || v_raw[i].dwords != r_raw[i].dwords)
                     {
                         fired.n1_refs = true;
                     }
@@ -2387,6 +2572,14 @@ mod tests {
     fn rw_dw_arg(opcode: u8, slot: u16, arg: i32) -> Vec<i32> {
         vec![opcode as i32 | ((slot as i32) << 16), arg]
     }
+    /// Encode a W_DW_ARG op (`ADDSi` / `LoadThisR`): member offset + owner type-id.
+    fn w_dw_arg(opcode: u8, word: u16, arg: i32) -> Vec<i32> {
+        vec![opcode as i32 | ((word as i32) << 16), arg]
+    }
+    /// Encode an rW_W_DW_ARG op (`LoadRObjR` / `LoadVObjR`): slot + offset + owner type-id.
+    fn rw_w_dw_arg(opcode: u8, slot: u16, word: u16, arg: i32) -> Vec<i32> {
+        vec![opcode as i32 | ((slot as i32) << 16), word as i32, arg]
+    }
     /// Encode a QW_ARG op: opcode dword + 64-bit arg (2 dwords LE).
     fn qw_arg(opcode: u8, arg: u64) -> Vec<i32> {
         vec![opcode as i32, arg as u32 as i32, (arg >> 32) as u32 as i32]
@@ -2408,6 +2601,440 @@ mod tests {
     fn norm(code: &[i32], side: &Side, opts: &NormOpts) -> Vec<NormInstr> {
         let raw = disassemble(code).expect("disasm");
         normalize(code, &raw, side, opts)
+    }
+
+    fn push_sia(out: &mut Vec<u8>, value: &str) {
+        if value.is_empty() {
+            out.extend_from_slice(&0i32.to_le_bytes());
+        } else {
+            out.extend_from_slice(&(value.len() as i32).to_le_bytes());
+            out.extend_from_slice(value.as_bytes());
+            out.push(0);
+        }
+    }
+
+    /// Build a zero-module cache carrying only the T1/T2/T7 rows needed by the N1 tests.
+    /// Each type tuple is `(type-id, ptr, name, module, namespace)`; each property tuple is
+    /// `(owner type-id, member offset, property name, OldTypeId)`.
+    fn n1_side(
+        types: &[(i32, i64, &str, &str, &str)],
+        properties: &[(i32, i32, &str, i32)],
+    ) -> Side {
+        n1_side_with_functions(types, properties, &[])
+    }
+
+    fn n1_side_with_functions(
+        types: &[(i32, i64, &str, &str, &str)],
+        properties: &[(i32, i32, &str, i32)],
+        functions: &[(i64, &str)],
+    ) -> Side {
+        use super::super::header::{CacheHeader, CACHE_MAGIC};
+
+        let mut cache = vec![0u8; CacheHeader::SIZE];
+        cache[0x10..0x14].copy_from_slice(&CACHE_MAGIC.to_le_bytes());
+        // Module count at 0x14 stays zero, so the seven tail tables begin immediately at 0x18.
+        cache.extend_from_slice(&(types.len() as i32).to_le_bytes());
+        for &(_, ptr, name, module, namespace) in types {
+            cache.extend_from_slice(&ptr.to_le_bytes());
+            push_sia(&mut cache, name);
+            push_sia(&mut cache, module);
+            push_sia(&mut cache, namespace);
+            cache.extend_from_slice(&0i32.to_le_bytes()); // no template subtypes
+        }
+        cache.extend_from_slice(&(types.len() as i32).to_le_bytes());
+        for &(type_id, ptr, _, _, _) in types {
+            cache.extend_from_slice(&type_id.to_le_bytes());
+            cache.extend_from_slice(&ptr.to_le_bytes());
+        }
+        cache.extend_from_slice(&(functions.len() as i32).to_le_bytes());
+        for &(ptr, name) in functions {
+            cache.extend_from_slice(&ptr.to_le_bytes());
+            push_sia(&mut cache, name);
+            push_sia(&mut cache, ""); // module
+            push_sia(&mut cache, ""); // namespace
+            cache.extend_from_slice(&0i32.to_le_bytes()); // bIsConst
+            cache.extend_from_slice(&0i32.to_le_bytes()); // bIsImportedDecl
+            cache.extend_from_slice(&0i32.to_le_bytes()); // bIsMethod
+            cache.extend_from_slice(&0i64.to_le_bytes()); // ObjectType
+            cache.extend_from_slice(&0i32.to_le_bytes()); // no params
+            for _ in 0..6 {
+                cache.extend_from_slice(&0i32.to_le_bytes()); // return DataType flags
+            }
+            cache.extend_from_slice(&0i64.to_le_bytes()); // return TypeInfo
+            cache.extend_from_slice(&0x52i32.to_le_bytes()); // return void token
+        }
+        cache.extend_from_slice(&0i32.to_le_bytes()); // T4 FunctionIdReferenceToPointer
+        cache.extend_from_slice(&0i32.to_le_bytes()); // T5 GlobalReferences
+        cache.extend_from_slice(&0i32.to_le_bytes()); // T6 StaticNames
+        cache.extend_from_slice(&(properties.len() as i32).to_le_bytes());
+        for &(owner, offset, name, old_type_id) in properties {
+            let key = ((owner as i64) << 1) | ((offset as i64) << 33) | 1;
+            cache.extend_from_slice(&key.to_le_bytes());
+            push_sia(&mut cache, name);
+            cache.extend_from_slice(&old_type_id.to_le_bytes());
+        }
+        Side::build(&cache).expect("synthetic N1 side")
+    }
+
+    #[test]
+    fn n1_unresolved_runtime_type_id_collapses_only_at_resolved_opcast() {
+        const OPCAST_A: i64 = 0x7010;
+        const OPCAST_B: i64 = 0x7020;
+        let a = n1_side_with_functions(&[], &[], &[(OPCAST_A, "opCast")]);
+        let b = n1_side_with_functions(&[], &[], &[(OPCAST_B, "opCast")]);
+        let big_a = 0x4800_3464u32 as i32;
+        let big_b = 0x4800_3443u32 as i32;
+        let mut left_code = dw_arg(76, big_a);
+        left_code.extend(qw_arg(61, OPCAST_A as u64));
+        let mut right_code = dw_arg(76, big_b);
+        right_code.extend(qw_arg(61, OPCAST_B as u64));
+        let diff = diff_one(
+            "opcast-gate",
+            &left_code,
+            &right_code,
+            &a,
+            &b,
+            &NormOpts::default(),
+            1,
+        );
+        assert_eq!(diff.verdict, Verdict::Benign);
+        assert!(diff.fired.n1_refs);
+
+        let lone_a = norm(&dw_arg(76, big_a), &a, &NormOpts::default());
+        let lone_b = norm(&dw_arg(76, big_b), &b, &NormOpts::default());
+        assert!(matches!(lone_a[0].operands[0], Operand::RawDw(_)));
+        assert!(matches!(lone_b[0].operands[0], Operand::RawDw(_)));
+        assert!(!lone_a[0].norm_eq(&lone_b[0]));
+    }
+
+    #[test]
+    fn n1_type_id_splits_core_and_preserves_qualifier_and_object_kind() {
+        const APP_A: i32 = 0x0400_0100;
+        const APP_B: i32 = 0x0400_0200;
+        const SCRIPT_B: i32 = 0x0800_0200;
+        const HANDLE: i32 = 0x4000_0000;
+        const HANDLE_CONST: i32 = 0x6000_0000;
+
+        let a = n1_side(&[(APP_A, 0x1010, "FShared", "Core", "G1R")], &[]);
+        let b = n1_side(&[(APP_B, 0x2020, "FShared", "Core", "G1R")], &[]);
+        let b_other_kind = n1_side(&[(SCRIPT_B, 0x3030, "FShared", "Core", "G1R")], &[]);
+        let opts = NormOpts::default();
+
+        let left = norm(&dw_arg(76, APP_A | HANDLE), &a, &opts);
+        let same = norm(&dw_arg(76, APP_B | HANDLE), &b, &opts);
+        assert!(
+            left[0].norm_eq(&same[0]),
+            "same T1 + qualifier + object-kind must survive T2 allocation drift"
+        );
+        assert!(matches!(left[0].operands[0], Operand::TypeId(_)));
+        let benign = diff_one(
+            "type-id-drift",
+            &dw_arg(76, APP_A | HANDLE),
+            &dw_arg(76, APP_B | HANDLE),
+            &a,
+            &b,
+            &opts,
+            1,
+        );
+        assert_eq!(benign.verdict, Verdict::Benign);
+        assert!(benign.fired.n1_refs);
+
+        let other_qualifier = norm(&dw_arg(76, APP_B | HANDLE_CONST), &b, &opts);
+        assert!(
+            !left[0].norm_eq(&other_qualifier[0]),
+            "handle-to-const is semantic even when the complete T1 identity matches"
+        );
+
+        let other_kind = norm(&dw_arg(76, SCRIPT_B | HANDLE), &b_other_kind, &opts);
+        assert!(
+            !left[0].norm_eq(&other_kind[0]),
+            "application/script object-kind aliases must not collapse"
+        );
+    }
+
+    #[test]
+    fn n1_type_id_unknown_flags_and_unresolved_links_stay_raw() {
+        const TYPE_A: i32 = 0x0400_0100;
+        const TYPE_B: i32 = 0x0400_0200;
+        let a = n1_side(&[(TYPE_A, 0x1010, "FShared", "Core", "G1R")], &[]);
+        let b = n1_side(&[(TYPE_B, 0x2020, "FShared", "Core", "G1R")], &[]);
+        let empty = n1_side(&[], &[]);
+        let opts = NormOpts::default();
+
+        let unknown_a = norm(&dw_arg(76, (TYPE_A as u32 | 0x8000_0000) as i32), &a, &opts);
+        let unknown_b = norm(&dw_arg(76, (TYPE_B as u32 | 0x8000_0000) as i32), &b, &opts);
+        assert!(matches!(unknown_a[0].operands[0], Operand::RawDw(_)));
+        assert!(
+            !unknown_a[0].norm_eq(&unknown_b[0]),
+            "an unknown high flag must retain the exact wire id"
+        );
+
+        let const_without_handle = norm(&dw_arg(76, TYPE_A | 0x2000_0000), &a, &opts);
+        assert!(
+            matches!(const_without_handle[0].operands[0], Operand::RawDw(_)),
+            "HANDLETOCONST without OBJHANDLE is an invalid qualifier combination"
+        );
+
+        let unresolved_a = norm(&dw_arg(76, TYPE_A | 0x4000_0000), &empty, &opts);
+        let unresolved_b = norm(&dw_arg(76, TYPE_B | 0x4000_0000), &empty, &opts);
+        assert!(matches!(unresolved_a[0].operands[0], Operand::RawDw(_)));
+        assert!(
+            !unresolved_a[0].norm_eq(&unresolved_b[0]),
+            "a missing T2/T1 link must not turn allocation drift benign"
+        );
+    }
+
+    #[test]
+    fn n1_property_identity_accepts_only_complete_equal_t1_t7_chain() {
+        const OWNER_A: i32 = 0x0400_0100;
+        const VALUE_A: i32 = 0x0400_0110;
+        const OWNER_B: i32 = 0x0400_0200;
+        const VALUE_B: i32 = 0x0400_0210;
+        let a = n1_side(
+            &[
+                (OWNER_A, 0x1010, "AOwner", "Story", "G1R"),
+                (VALUE_A, 0x1110, "FValue", "Core", "G1R"),
+            ],
+            &[(OWNER_A, 8, "Field", VALUE_A)],
+        );
+        let b = n1_side(
+            &[
+                (OWNER_B, 0x2020, "AOwner", "Story", "G1R"),
+                (VALUE_B, 0x2120, "FValue", "Core", "G1R"),
+            ],
+            &[(OWNER_B, 12, "Field", VALUE_B)],
+        );
+        let opts = NormOpts::default();
+        for opcode in [79, 178] {
+            let left = norm(&w_dw_arg(opcode, 8, OWNER_A), &a, &opts);
+            let right = norm(&w_dw_arg(opcode, 12, OWNER_B), &b, &opts);
+            assert!(
+                left[0].norm_eq(&right[0]),
+                "{} offset/type allocation drift must be benign for an exact property identity",
+                left[0].op
+            );
+            assert!(matches!(left[0].operands[0], Operand::Property(_)));
+            let benign = diff_one(
+                "property-drift",
+                &w_dw_arg(opcode, 8, OWNER_A),
+                &w_dw_arg(opcode, 12, OWNER_B),
+                &a,
+                &b,
+                &opts,
+                1,
+            );
+            assert_eq!(benign.verdict, Verdict::Benign);
+            assert!(benign.fired.n1_refs);
+        }
+        for opcode in [184, 185] {
+            let left = norm(&rw_w_dw_arg(opcode, 3, 8, OWNER_A), &a, &opts);
+            let right = norm(&rw_w_dw_arg(opcode, 3, 12, OWNER_B), &b, &opts);
+            assert!(
+                left[0].norm_eq(&right[0]),
+                "{} property identity must cover its rW_W_DW form",
+                left[0].op
+            );
+            assert_eq!(left[0].operands.len(), 2);
+            assert_eq!(left[0].operands[0], Operand::Slot(3));
+            assert!(matches!(left[0].operands[1], Operand::Property(_)));
+            let benign = diff_one(
+                "property-drift",
+                &rw_w_dw_arg(opcode, 3, 8, OWNER_A),
+                &rw_w_dw_arg(opcode, 3, 12, OWNER_B),
+                &a,
+                &b,
+                &opts,
+                1,
+            );
+            assert_eq!(benign.verdict, Verdict::Benign);
+            assert!(benign.fired.n1_refs);
+
+            let different_slot = norm(&rw_w_dw_arg(opcode, 4, 12, OWNER_B), &b, &opts);
+            assert!(
+                !left[0].norm_eq(&different_slot[0]),
+                "{} leading slot remains semantic with N2 disabled",
+                left[0].op
+            );
+        }
+    }
+
+    #[test]
+    fn n1_property_accepts_primitive_old_type_id() {
+        const OWNER_A: i32 = 0x0400_0100;
+        const OWNER_B: i32 = 0x0400_0200;
+        const BOOL_TYPE_ID: i32 = 0x41;
+        let a = n1_side(
+            &[(OWNER_A, 0x1010, "AOwner", "Story", "G1R")],
+            &[(OWNER_A, 8, "Enabled", BOOL_TYPE_ID)],
+        );
+        let b = n1_side(
+            &[(OWNER_B, 0x2020, "AOwner", "Story", "G1R")],
+            &[(OWNER_B, 12, "Enabled", BOOL_TYPE_ID)],
+        );
+        let opts = NormOpts::default();
+        let left = norm(&w_dw_arg(79, 8, OWNER_A), &a, &opts);
+        let right = norm(&w_dw_arg(79, 12, OWNER_B), &b, &opts);
+        assert!(left[0].norm_eq(&right[0]));
+        let Operand::Property(property) = &left[0].operands[0] else {
+            panic!("primitive OldTypeId must still form a resolved property identity");
+        };
+        assert!(matches!(
+            &property.old_type.identity,
+            OperandId::Primitive(id) if *id == BOOL_TYPE_ID
+        ));
+        assert_eq!(property.old_type.object_kind, 0);
+        assert_eq!(property.old_type.qualifiers, 0);
+    }
+
+    #[test]
+    fn n1_property_same_name_different_owner_or_old_type_stays_semantic() {
+        const OWNER_A: i32 = 0x0400_0100;
+        const VALUE_A: i32 = 0x0400_0110;
+        const OWNER_B: i32 = 0x0400_0200;
+        const VALUE_B: i32 = 0x0400_0210;
+        let baseline = n1_side(
+            &[
+                (OWNER_A, 0x1010, "AOwner", "Story", "G1R"),
+                (VALUE_A, 0x1110, "FValue", "Core", "G1R"),
+            ],
+            &[(OWNER_A, 8, "Field", VALUE_A)],
+        );
+        let different_owner = n1_side(
+            &[
+                (OWNER_B, 0x2020, "AOtherOwner", "Story", "G1R"),
+                (VALUE_B, 0x2120, "FValue", "Core", "G1R"),
+            ],
+            &[(OWNER_B, 12, "Field", VALUE_B)],
+        );
+        let different_old_type = n1_side(
+            &[
+                (OWNER_B, 0x2020, "AOwner", "Story", "G1R"),
+                (VALUE_B, 0x2120, "FOtherValue", "Core", "G1R"),
+            ],
+            &[(OWNER_B, 12, "Field", VALUE_B)],
+        );
+        let opts = NormOpts::default();
+        let left = norm(&w_dw_arg(79, 8, OWNER_A), &baseline, &opts);
+        let owner_diff = norm(&w_dw_arg(79, 12, OWNER_B), &different_owner, &opts);
+        let old_type_diff = norm(&w_dw_arg(79, 12, OWNER_B), &different_old_type, &opts);
+        assert!(
+            !left[0].norm_eq(&owner_diff[0]),
+            "a same-named property on another complete owner identity is semantic"
+        );
+        assert!(
+            !left[0].norm_eq(&old_type_diff[0]),
+            "a same-named property with another OldTypeId T1 identity is semantic"
+        );
+    }
+
+    #[test]
+    fn n1_property_unresolved_site_keeps_both_operands_raw() {
+        const OWNER_A: i32 = 0x0400_0100;
+        const OWNER_B: i32 = 0x0400_0200;
+        let a = n1_side(&[(OWNER_A, 0x1010, "AOwner", "Story", "G1R")], &[]);
+        let b = n1_side(&[(OWNER_B, 0x2020, "AOwner", "Story", "G1R")], &[]);
+        let opts = NormOpts::default();
+        let left = norm(&w_dw_arg(79, 8, OWNER_A), &a, &opts);
+        let right = norm(&w_dw_arg(79, 12, OWNER_B), &b, &opts);
+        assert_eq!(
+            left[0].operands,
+            [Operand::Word(8), Operand::RawDw(OWNER_A as u32)]
+        );
+        assert_eq!(
+            right[0].operands,
+            [Operand::Word(12), Operand::RawDw(OWNER_B as u32)]
+        );
+        assert!(
+            !left[0].norm_eq(&right[0]),
+            "without T7/OldTypeId proof, even matching owner T1 identities stay semantic"
+        );
+    }
+
+    #[test]
+    fn n1_property_duplicate_t7_key_is_always_raw() {
+        const OWNER: i32 = 0x0400_0100;
+        const VALUE: i32 = 0x0400_0110;
+        let types = [
+            (OWNER, 0x1010, "AOwner", "Story", "G1R"),
+            (VALUE, 0x1110, "FValue", "Core", "G1R"),
+        ];
+        let identical_duplicate = n1_side(
+            &types,
+            &[(OWNER, 8, "Field", VALUE), (OWNER, 8, "Field", VALUE)],
+        );
+        let conflicting_duplicate = n1_side(
+            &types,
+            &[(OWNER, 8, "Field", VALUE), (OWNER, 8, "OtherField", OWNER)],
+        );
+        let opts = NormOpts::default();
+        for side in [&identical_duplicate, &conflicting_duplicate] {
+            let normalized = norm(&w_dw_arg(79, 8, OWNER), side, &opts);
+            assert_eq!(
+                normalized[0].operands,
+                [Operand::Word(8), Operand::RawDw(OWNER as u32)],
+                "every duplicate T7 key must fail closed, even when both rows are identical"
+            );
+        }
+    }
+
+    #[test]
+    fn n1_property_render_includes_owner_and_old_type_flags() {
+        const OWNER: i32 = 0x0400_0100;
+        const VALUE: i32 = 0x0800_0110;
+        const HANDLE_CONST: i32 = 0x6000_0000;
+        let side = n1_side(
+            &[
+                (OWNER, 0x1010, "AOwner", "Story", "G1R"),
+                (VALUE, 0x1110, "FValue", "Core", "G1R"),
+            ],
+            &[(OWNER, 8, "Field", VALUE | HANDLE_CONST)],
+        );
+        let normalized = norm(&w_dw_arg(79, 8, OWNER), &side, &NormOpts::default());
+        let rendered = render_operand(&normalized[0].operands[0]);
+        assert!(rendered.contains("owner="), "{rendered}");
+        assert!(rendered.contains("old_type="), "{rendered}");
+        assert!(rendered.contains("kind=0x4000000,qual=0x0"), "{rendered}");
+        assert!(
+            rendered.contains("kind=0x8000000,qual=0x60000000"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn n1_property_semantic_report_exposes_flag_drift() {
+        const OWNER_A: i32 = 0x0400_0100;
+        const VALUE_A: i32 = 0x0800_0110;
+        const OWNER_B: i32 = 0x0400_0200;
+        const VALUE_B: i32 = 0x0800_0210;
+        let a = n1_side(
+            &[
+                (OWNER_A, 0x1010, "AOwner", "Story", "G1R"),
+                (VALUE_A, 0x1110, "FValue", "Core", "G1R"),
+            ],
+            &[(OWNER_A, 8, "Field", VALUE_A | 0x4000_0000)],
+        );
+        let b = n1_side(
+            &[
+                (OWNER_B, 0x2020, "AOwner", "Story", "G1R"),
+                (VALUE_B, 0x2120, "FValue", "Core", "G1R"),
+            ],
+            &[(OWNER_B, 12, "Field", VALUE_B | 0x6000_0000)],
+        );
+        let diff = diff_one(
+            "flag-drift",
+            &w_dw_arg(79, 8, OWNER_A),
+            &w_dw_arg(79, 12, OWNER_B),
+            &a,
+            &b,
+            &NormOpts::default(),
+            1,
+        );
+        assert_eq!(diff.verdict, Verdict::Semantic);
+        let window = diff.window.expect("semantic diff has a rendered window");
+        assert!(window.contains("owner="), "{window}");
+        assert!(window.contains("old_type="), "{window}");
+        assert!(window.contains("qual=0x40000000"), "{window}");
+        assert!(window.contains("qual=0x60000000"), "{window}");
     }
 
     /// Minimal normalized companion for N2b unit tests. These streams contain only slot operands
@@ -2836,9 +3463,9 @@ mod tests {
     }
 
     /// GAP-C negative gate: a `TYPEID <large>` whose value is a large runtime object type-id but
-    /// which does NOT feed an `opCast` (no matching call follows) must stay a value-compared
-    /// `Ref(Primitive)`, so two different large ids still differ (SEMANTIC). This proves the gate
-    /// requires the opCast, not merely a large id.
+    /// which does NOT feed an `opCast` (no matching call follows) must stay raw, so two different
+    /// large ids still differ (SEMANTIC). This proves the gate requires the opCast, not merely a
+    /// large id.
     #[test]
     fn gap_c_typeid_without_opcast_stays_primitive() {
         let side = side_or_skip!();
@@ -2854,15 +3481,15 @@ mod tests {
         b.push(10); // RET
         let na = norm(&a, &side, &opts);
         let nb = norm(&b, &side, &opts);
-        // Both resolve to Ref(Primitive(<id>)) (large id absent from richtest T2), compared by
-        // value → the two DIFFER (no opcast gate fired).
+        // Both stay RawDw(<id>) (large id absent from richtest T2), compared by value → the two
+        // DIFFER (no opcast gate fired).
         assert_ne!(
             na[0].operands, nb[0].operands,
             "a large TYPEID not feeding opCast must NOT be collapsed"
         );
         assert!(
-            matches!(na[0].operands[0], Operand::Ref(_)),
-            "unfed large TYPEID stays a value-compared Ref, got {:?}",
+            matches!(na[0].operands[0], Operand::RawDw(_)),
+            "unfed large TYPEID stays raw, got {:?}",
             na[0].operands[0]
         );
     }

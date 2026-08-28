@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import sys
 import tempfile
 import unittest
 from unittest import mock
+import zipfile
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -16,7 +18,6 @@ class BuildStandaloneCompilerBundleTests(unittest.TestCase):
     def setUp(self) -> None:
         gore_build._PREPARED_STANDALONE_BUNDLES.clear()
         gore_build._QUALIFIED_PROFILE_VERIFIER = None
-        gore_build._PROMOTION_ATTESTATION_VERIFIER = None
 
     def test_only_cli_and_studio_are_bundle_hosts(self) -> None:
         enabled = {
@@ -25,6 +26,19 @@ class BuildStandaloneCompilerBundleTests(unittest.TestCase):
             if config.get("standalone_compiler_bundle")
         }
         self.assertEqual(enabled, {"gore-cli", "gore-mod-studio"})
+
+    def test_cli_and_studio_share_one_prepared_bundle_authority(self) -> None:
+        cli = gore_build._prepare_standalone_compiler_bundle(
+            "gore-cli", dry=True
+        )
+        studio = gore_build._prepare_standalone_compiler_bundle(
+            "gore-mod-studio", dry=True
+        )
+
+        self.assertIs(cli, studio)
+        self.assertIsNotNone(cli)
+        self.assertEqual(cli.catalog_path, studio.catalog_path)
+        self.assertEqual(cli.bundle_root, studio.bundle_root)
 
     def test_catalog_is_prepared_before_cli_host_build(self) -> None:
         events: list[str] = []
@@ -69,7 +83,7 @@ class BuildStandaloneCompilerBundleTests(unittest.TestCase):
             "gore-cli", gore_build.target_dir(True), dry=False
         )
 
-    def test_later_sign_dir_excludes_the_already_signed_sidecar(self) -> None:
+    def test_later_sign_dir_excludes_the_composed_sidecar(self) -> None:
         bundle_dir = Path("C:/synthetic/stage")
         with mock.patch.object(gore_build, "sign_dir") as signer:
             gore_build._sign_and_stage_app_local_runtime(
@@ -84,15 +98,16 @@ class BuildStandaloneCompilerBundleTests(unittest.TestCase):
             exclude_names=(gore_build.standalone_compiler_bundle.SIDECAR_FILE,),
         )
 
-    def test_default_build_materializes_the_internal_package(self) -> None:
-        internal_input = ROOT / "target" / "synthetic-internal-input"
+    def test_default_build_materializes_profiles_and_builds_sidecar(self) -> None:
+        profile_pack = ROOT / "target" / "synthetic-qualified-profiles"
+        sidecar = ROOT / "target/synthetic-native/gore-as-standalone-compiler.exe"
         verifier = mock.Mock()
-        descriptor = gore_build.standalone_compiler_bundle.InternalPackageDescriptor(
-            asset=gore_build.standalone_compiler_bundle.INTERNAL_PACKAGE_ARCHIVE_FILE,
+        descriptor = gore_build.standalone_compiler_bundle.QualifiedProfilesDescriptor(
+            asset=gore_build.standalone_compiler_bundle.QUALIFIED_PROFILES_ARCHIVE_FILE,
             archive=gore_build.standalone_compiler_bundle.Seal(123, "cd" * 32),
             compression="deflate-9",
-            catalog_sha256="ab" * 32,
-            file_count=28,
+            manifest_sha256="ef" * 32,
+            file_count=45,
         )
         prepared = gore_build.standalone_compiler_bundle.PreparedBundle(
             present=True,
@@ -104,6 +119,7 @@ class BuildStandaloneCompilerBundleTests(unittest.TestCase):
             bundle_root=ROOT / "target" / "standalone-compiler-product-bundle/compiler",
             sidecar_name=gore_build.standalone_compiler_bundle.SIDECAR_FILE,
             catalog_sha256="ab" * 32,
+            require_authenticode=False,
         )
         with (
             mock.patch.dict(gore_build.os.environ, {}, clear=True),
@@ -112,17 +128,22 @@ class BuildStandaloneCompilerBundleTests(unittest.TestCase):
             ) as typed,
             mock.patch.object(
                 gore_build.standalone_compiler_bundle,
-                "read_internal_package_descriptor",
+                "read_qualified_profiles_descriptor",
                 return_value=descriptor,
             ) as read_descriptor,
             mock.patch.object(
                 gore_build.standalone_compiler_bundle,
-                "materialize_internal_package",
-                return_value=internal_input,
+                "materialize_qualified_profiles_package",
+                return_value=profile_pack,
             ) as materialize,
             mock.patch.object(
                 gore_build.standalone_compiler_bundle,
-                "prepare_product_bundle",
+                "build_native_sidecar",
+                return_value=sidecar,
+            ) as build_sidecar,
+            mock.patch.object(
+                gore_build.standalone_compiler_bundle,
+                "prepare_product_bundle_from_profiles",
                 return_value=prepared,
             ) as prepare,
         ):
@@ -132,27 +153,27 @@ class BuildStandaloneCompilerBundleTests(unittest.TestCase):
         self.assertIs(result, prepared)
         typed.assert_called_once_with(dry=False)
         read_descriptor.assert_called_once_with(
-            gore_build._INTERNAL_STANDALONE_COMPILER_DESCRIPTOR
+            gore_build._QUALIFIED_STANDALONE_COMPILER_PROFILES_DESCRIPTOR
         )
         materialize.assert_called_once_with(
-            gore_build._INTERNAL_STANDALONE_COMPILER_ARCHIVE,
-            gore_build._INTERNAL_STANDALONE_COMPILER_DESCRIPTOR,
-            ROOT / "target" / "standalone-compiler-internal-input" / ("cd" * 32),
+            gore_build._QUALIFIED_STANDALONE_COMPILER_PROFILES_ARCHIVE,
+            gore_build._QUALIFIED_STANDALONE_COMPILER_PROFILES_DESCRIPTOR,
+            ROOT / "target" / "standalone-compiler-qualified-profiles" / ("cd" * 32),
             qualified_profile_verifier=verifier,
         )
+        build_sidecar.assert_called_once()
         prepare.assert_called_once_with(
-            internal_input,
+            profile_pack,
+            sidecar,
             ROOT / "target" / "standalone-compiler-product-bundle",
             qualified_profile_verifier=verifier,
-            promotion_attestation_verifier=(
-                gore_build.standalone_compiler_bundle.trust_pinned_internal_package_attestation
-            ),
+            require_authenticode=False,
         )
 
-    def test_non_hosts_never_touch_the_internal_package(self) -> None:
+    def test_non_hosts_never_touch_the_qualified_profiles(self) -> None:
         with mock.patch.object(
             gore_build.standalone_compiler_bundle,
-            "read_internal_package_descriptor",
+            "read_qualified_profiles_descriptor",
         ) as read_descriptor:
             self.assertIsNone(
                 gore_build._prepare_standalone_compiler_bundle(
@@ -165,6 +186,25 @@ class BuildStandaloneCompilerBundleTests(unittest.TestCase):
                 )
             )
         read_descriptor.assert_not_called()
+
+    def test_checked_in_profile_pack_covers_both_supported_generations(self) -> None:
+        archive_path = (
+            ROOT
+            / "crates/gore-as/assets"
+            / gore_build.standalone_compiler_bundle.QUALIFIED_PROFILES_ARCHIVE_FILE
+        )
+        with zipfile.ZipFile(archive_path) as archive:
+            names = archive.namelist()
+            manifest = json.loads(archive.read("qualified-profiles.json"))
+
+        self.assertFalse(any(name.casefold().endswith(".exe") for name in names))
+        self.assertEqual(
+            {
+                profile["target"]["target"]["steam_build_id"]
+                for profile in manifest["profiles"]
+            },
+            {24539464, 24878692},
+        )
 
     def test_linked_host_must_report_exact_prepared_catalog_digest(self) -> None:
         digest = "ab" * 32
@@ -228,10 +268,17 @@ class BuildStandaloneCompilerBundleTests(unittest.TestCase):
                 gore_build.hashlib.sha256(b"synthetic verifier image").hexdigest(),
             )
 
-    def test_present_internal_input_builds_and_requires_typed_verifier(self) -> None:
-        internal_input = Path("C:/sealed/internal-input")
+    def test_signed_build_signs_fresh_sidecar_once_before_catalog(self) -> None:
+        profile_pack = ROOT / "target/synthetic-qualified-profiles"
+        sidecar = ROOT / "target/synthetic-native/gore-as-standalone-compiler.exe"
         verifier = mock.Mock()
-        attestation_verifier = mock.Mock()
+        descriptor = gore_build.standalone_compiler_bundle.QualifiedProfilesDescriptor(
+            asset=gore_build.standalone_compiler_bundle.QUALIFIED_PROFILES_ARCHIVE_FILE,
+            archive=gore_build.standalone_compiler_bundle.Seal(123, "cd" * 32),
+            compression="deflate-9",
+            manifest_sha256="ef" * 32,
+            file_count=45,
+        )
         prepared = gore_build.standalone_compiler_bundle.PreparedBundle(
             present=True,
             work_root=ROOT / "target" / "standalone-compiler-product-bundle",
@@ -241,24 +288,35 @@ class BuildStandaloneCompilerBundleTests(unittest.TestCase):
             bundle_root=ROOT / "target" / "standalone-compiler-product-bundle/compiler",
             sidecar_name=gore_build.standalone_compiler_bundle.SIDECAR_FILE,
             catalog_sha256="ab" * 32,
+            require_authenticode=True,
         )
         with (
-            mock.patch.dict(
-                gore_build.os.environ,
-                {"GORE_STANDALONE_COMPILER_INTERNAL_INPUT": str(internal_input)},
-                clear=True,
-            ),
+            mock.patch.dict(gore_build.os.environ, {"GORE_SIGN": "1"}, clear=True),
+            mock.patch.object(gore_build, "_signing_config", return_value=mock.Mock()),
             mock.patch.object(
                 gore_build, "_qualified_profile_verifier", return_value=verifier
-            ) as typed,
-            mock.patch.object(
-                gore_build,
-                "_promotion_attestation_verifier",
-                return_value=attestation_verifier,
-            ) as attestation,
+            ),
             mock.patch.object(
                 gore_build.standalone_compiler_bundle,
-                "prepare_product_bundle",
+                "read_qualified_profiles_descriptor",
+                return_value=descriptor,
+            ),
+            mock.patch.object(
+                gore_build.standalone_compiler_bundle,
+                "materialize_qualified_profiles_package",
+                return_value=profile_pack,
+            ),
+            mock.patch.object(
+                gore_build.standalone_compiler_bundle,
+                "build_native_sidecar",
+                return_value=sidecar,
+            ),
+            mock.patch.object(
+                gore_build.standalone_compiler_bundle, "sign_sidecar_once"
+            ) as sign_once,
+            mock.patch.object(
+                gore_build.standalone_compiler_bundle,
+                "prepare_product_bundle_from_profiles",
                 return_value=prepared,
             ) as prepare,
         ):
@@ -266,13 +324,15 @@ class BuildStandaloneCompilerBundleTests(unittest.TestCase):
                 "gore-cli", dry=False
             )
         self.assertIs(result, prepared)
-        typed.assert_called_once_with(dry=False)
-        attestation.assert_called_once_with(dry=False)
+        sign_once.assert_called_once()
+        self.assertEqual(sign_once.call_args.args[0], sidecar)
+        self.assertEqual(sign_once.call_args.args[1].name, "signed-sidecar-identity.json")
         prepare.assert_called_once_with(
-            internal_input,
+            profile_pack,
+            sidecar,
             ROOT / "target" / "standalone-compiler-product-bundle",
             qualified_profile_verifier=verifier,
-            promotion_attestation_verifier=attestation_verifier,
+            require_authenticode=True,
         )
 
 

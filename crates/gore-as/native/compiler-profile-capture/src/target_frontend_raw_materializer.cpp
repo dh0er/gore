@@ -17,7 +17,7 @@ namespace {
 using Error = TargetFrontendRawError;
 using RegionKind = TargetRawRegionKind;
 
-// BuildID 24539464 contains 12,904 Blueprint push-argument specializations.
+// Both authenticated generations contain 12,904 Blueprint push-argument specializations.
 // Their independently allocated FString payloads legitimately produce more
 // than 4,096 immutable extents. The builder has the same 16,384-claim bound;
 // the separate 128-MiB byte cap remains the stronger memory limit.
@@ -30,7 +30,7 @@ constexpr std::size_t kMaximumFiles = 65'536;
 constexpr std::size_t kMaximumChunks = 1'000'000;
 constexpr std::size_t kMaximumObjectDepth = 64;
 constexpr std::int32_t kMaximumSharedReferences = 0x3fff'ffff;
-constexpr std::uint32_t kFNamePoolRva = 0x09af8600;
+constexpr std::uint32_t kFNamePoolRva = frontend_target_layout::fname_pool_rva;
 constexpr std::size_t kFNamePoolBlocks = 0x10;
 constexpr std::uint32_t kFNameBlockShift = 16;
 constexpr std::uint32_t kFNameOffsetMask = 0xffff;
@@ -50,7 +50,7 @@ constexpr std::size_t kSharedControllerWeak = 0x0c;
 // UE 5.4's FDefaultBitArrayAllocator is TInlineAllocator<4>: four inline uint32
 // words followed by the secondary allocation pointer, then NumBits/MaxBits.
 // The free-list fields follow the complete TBitArray rather than its inline
-// storage. These offsets were also verified against BuildID 24539464.
+// storage. These offsets were verified against both authenticated generations.
 constexpr std::size_t kSparseInlineAllocationFlags = 0x10;
 constexpr std::size_t kSparseSecondaryAllocation = 0x20;
 constexpr std::size_t kSparseAllocationNum = 0x28;

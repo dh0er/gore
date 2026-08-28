@@ -8,8 +8,9 @@ execute_process(
     OUTPUT_VARIABLE version_stdout
     ERROR_VARIABLE version_stderr
 )
+string(STRIP "${version_stdout}" version_stdout_stripped)
 if(NOT version_result EQUAL 0 OR
-   NOT version_stdout MATCHES "^gore-as-standalone-compiler 0\\.1\\.0-dev")
+   NOT version_stdout_stripped STREQUAL "gore-as-standalone-compiler 0.1.0")
     message(FATAL_ERROR "--version failed: ${version_result}; ${version_stdout}; ${version_stderr}")
 endif()
 
@@ -20,6 +21,7 @@ execute_process(
     ERROR_VARIABLE capabilities_stderr
 )
 if(NOT capabilities_result EQUAL 0 OR
+   NOT capabilities_stdout MATCHES "\\\"compatibility_id\\\":\\\"gore-as-standalone-semantic-v1\\\"" OR
    NOT capabilities_stdout MATCHES "\\\"request_version\\\":2" OR
    NOT capabilities_stdout MATCHES "\\\"request_versions\\\":\\[1,2\\]" OR
    NOT capabilities_stdout MATCHES "\\\"response_version\\\":1" OR

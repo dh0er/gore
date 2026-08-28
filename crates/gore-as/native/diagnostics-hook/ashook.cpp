@@ -12,8 +12,8 @@
 #include <cstring>
 #include "MinHook.h"
 
-// LogAngelscriptError(asSMessageInfo*, void*). Observed at RVA 0x4685ff0 in BuildID 24539464
-// (1.0.2: 0x467e200); RVAs are documentation only and never used for lookup.
+// LogAngelscriptError(asSMessageInfo*, void*). Observed at RVA 0x4685fb0 in BuildID 24878692
+// (BuildID 24539464: 0x4685ff0); RVAs are documentation only and never used for lookup.
 static const char* kLogErrSig =
     "40 55 56 57 48 8D AC 24 60 FF FF FF 48 81 EC A0 01 00 00 48 8B 05 ?? ?? ?? ?? "
     "48 33 C4 48 89 85 80 00 00 00 8B 15 ?? ??";
@@ -35,7 +35,7 @@ static const ShapeClause kCallbackShape[] = {
 };
 
 // FAngelscriptManager::ScriptCompileError(const FString&, const FDiagnostic&). Observed at RVA
-// 0x4689e80 in BuildID 24539464; the same AOB is unique in every archived 1.0.0..1.0.4a EXE.
+// 0x4689e40 in BuildID 24878692; the same AOB is unique in every archived 1.0.0..1.0.5 EXE.
 // RVAs are documentation only and never used for lookup.
 static const char* kManagerDiagnosticSig =
     "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 C6 81 58 04 00 00 01 "

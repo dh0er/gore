@@ -124,21 +124,38 @@ the vanilla identity; it is not a substitute for this new linked class chain.
 
 ### Mod Studio boundary
 
-The central closed generation registry currently contains exactly three
-reviewed Steam generation triples: the retained Steam 1.0.3 Hotfix 1 seal set,
-Steam build `24169431`, and Steam build `24340829` from the 2026-07-31 update.
+The central closed generation registry currently contains exactly four reviewed
+Steam generation triples: the retained Steam 1.0.3 Hotfix 1 seal set, Steam
+build `24169431`, Steam build `24340829` from the 2026-07-31 update, and Steam
+build `24878692` from the 2026-08-27/28 update.
 For Story/NPC/Quest, executable, deployment-aware pristine Shipping cache, and
 `Binds.Cache` must all match the same registered row; nearby hashes and cross-
 generation mixtures fail closed. Item authoring has a separate narrower gate:
 the exact executable seal selects the row and its audited Item field matrix,
 without treating Shipping or Binds as Item evidence. The `24340829` row retains
 offline qualification with no class reparenting or property-owner moves,
-byte-identical curated modules, and an unchanged audited Item field matrix. It
-therefore admits the existing bounded project-only Story/NPC/Quest routes for
-the exact triple and the Item route for the exact executable seal. It grants no
-dialog-runtime, production-build, deployment, live-game, or DataAsset authority,
-and it is not a promise that future or non-Steam builds are compatible without
-their own reviewed row.
+byte-identical curated modules, and an unchanged audited Item field matrix.
+
+The `24878692` row is a new exact compatibility generation, derived with the
+fresh 172709 USMAP rather than the stale 171261 dump. Its 6,602-class graph,
+6,582-class resolved bridge, native ancestry profile, eight-declaration/1,432-
+operand GameplayTag profile, and audited Item field matrix remain unchanged;
+zero classes were reparented, zero existing property owners moved, and zero
+default fields remain unresolved. The ordered Binds API changed in exactly four
+classes: `UGameplayAbilityAttackLoop`, `UGameplayAbilityMagicBase`,
+`UGameplayAbilityCastSpell`, and `URagdollConfig`. That requires a new compiler
+profile but is not evidence of compiler-language drift. The 26,399 → 26,389
+scalar-window change is fully accounted for by -14 removed and +4 added
+game-content windows, not parser loss; the complete item-authoring matrix stays
+unchanged.
+
+Those rows therefore admit the existing bounded project-only Story/NPC/Quest
+routes for their exact triples and the Item route for each exact executable
+seal. They grant no dialog-runtime, production-build, deployment, live-game, or
+DataAsset authority, and do not promise that future or non-Steam builds are
+compatible without their own reviewed row. Standalone compiler-core parity is
+a separate frozen-corpus/full-tree qualification and is not implied by Studio's
+generation admission.
 
 Native Story/NPC catalog refusals for an unsupported generation may include the
 optional, bounded `error.details` object

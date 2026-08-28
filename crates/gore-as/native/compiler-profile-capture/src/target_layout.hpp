@@ -1,12 +1,16 @@
 #pragma once
 
+#include "gore_as_capture/format.hpp"
+
+#include <array>
 #include <cstddef>
+#include <cstdint>
 
 namespace gore_as_capture::v1::instrumentation::layout_v23300 {
 
 // Shipping-layout witness compiled from the pinned UNREANGEL donor. These constants are not
 // sufficient evidence for target reads on their own: only members explicitly listed in
-// target_confirmed have matching instruction witnesses in BuildID 24539464.
+// target_confirmed have matching instruction witnesses in both authenticated generations.
 namespace donor {
 constexpr std::size_t type_info_alignment = 0x08;
 constexpr std::size_t string_bytes = 24;
@@ -77,7 +81,142 @@ constexpr std::size_t engine_default_namespace = 0x13e8;
 }  // namespace donor
 
 namespace target_confirmed {
-// Exact BuildID 24539464 instruction witnesses:
+struct TargetLayoutWitnesses final {
+  CaptureTargetGeneration generation{};
+  std::array<std::uint32_t, 3> object_type_allocations{};
+  std::uint32_t object_type_constructor{};
+  std::uint32_t object_type_vtable{};
+  std::array<std::uint32_t, 3> object_type_vtable_functions{};
+  std::array<std::uint32_t, 5> script_function_fields{};
+  std::array<std::uint32_t, 3> hidden_argument_indices{};
+  std::uint32_t hidden_argument_default{};
+  std::uint32_t output_type_argument_index{};
+  std::array<std::uint32_t, 3> compile_out_modes{};
+  std::array<std::uint32_t, 4> first_param_metadata{};
+  std::uint32_t global_property_write{};
+  std::uint32_t get_global_property{};
+  std::uint32_t object_property_read{};
+  std::array<std::uint32_t, 4> object_property_initializers{};
+  std::uint32_t default_access_mask{};
+  std::uint32_t default_namespace{};
+  std::uint32_t shared_zero_stub{};
+};
+
+inline constexpr TargetLayoutWitnesses kTargetLayoutWitnesses24539464{
+    CaptureTargetGeneration::build_24539464,
+    {0x0479a318, 0x0479aa98, 0x0479abfa},
+    0x046bc920,
+    0x081f3d90,
+    {0x034c4bb0, 0x0431deb0, 0x04755fe0},
+    {0x04754ed0, 0x04755c40, 0x0476b9e0, 0x04755c60, 0x04754fa1},
+    {0x047530b1, 0x047700a8, 0x04770321},
+    0x04791835,
+    0x0468a068,
+    {0x0467dd8e, 0x0467dde4, 0x05722fef},
+    {0x04688c44, 0x04688c4b, 0x04688c84, 0x04688c8b},
+    0x0468a140,
+    0x047557d0,
+    0x0476b9f0,
+    {0x04799452, 0x04799465, 0x047994fd, 0x0479951f},
+    0x047a4aa0,
+    0x04754270,
+    0x01002520,
+};
+
+inline constexpr TargetLayoutWitnesses kTargetLayoutWitnesses24878692{
+    CaptureTargetGeneration::build_24878692,
+    {0x0479a2d8, 0x0479aa58, 0x0479abba},
+    0x046bc8e0,
+    0x081f4d90,
+    {0x034c4b70, 0x0431de70, 0x04755fa0},
+    {0x04754e90, 0x04755c00, 0x0476b9a0, 0x04755c20, 0x04754f61},
+    {0x04753071, 0x04770068, 0x047702e1},
+    0x047917f5,
+    0x0468a028,
+    {0x0467dd4e, 0x0467dda4, 0x0572333f},
+    {0x04688c04, 0x04688c0b, 0x04688c44, 0x04688c4b},
+    0x0468a100,
+    0x04755790,
+    0x0476b9b0,
+    {0x04799412, 0x04799425, 0x047994bd, 0x047994df},
+    0x047a4a60,
+    0x04754230,
+    0x010026c0,
+};
+
+inline constexpr const TargetLayoutWitnesses& kTargetLayoutWitnesses =
+    kTargetLayoutWitnesses24878692;
+static_assert(kTargetLayoutWitnesses.generation == kCaptureTarget.generation);
+
+consteval std::array<std::uint32_t, 35> target_layout_witness_rvas(
+    const TargetLayoutWitnesses& witnesses) {
+  return {
+      witnesses.object_type_allocations[0],
+      witnesses.object_type_allocations[1],
+      witnesses.object_type_allocations[2],
+      witnesses.object_type_constructor,
+      witnesses.object_type_vtable,
+      witnesses.object_type_vtable_functions[0],
+      witnesses.object_type_vtable_functions[1],
+      witnesses.object_type_vtable_functions[2],
+      witnesses.script_function_fields[0],
+      witnesses.script_function_fields[1],
+      witnesses.script_function_fields[2],
+      witnesses.script_function_fields[3],
+      witnesses.script_function_fields[4],
+      witnesses.hidden_argument_indices[0],
+      witnesses.hidden_argument_indices[1],
+      witnesses.hidden_argument_indices[2],
+      witnesses.hidden_argument_default,
+      witnesses.output_type_argument_index,
+      witnesses.compile_out_modes[0],
+      witnesses.compile_out_modes[1],
+      witnesses.compile_out_modes[2],
+      witnesses.first_param_metadata[0],
+      witnesses.first_param_metadata[1],
+      witnesses.first_param_metadata[2],
+      witnesses.first_param_metadata[3],
+      witnesses.global_property_write,
+      witnesses.get_global_property,
+      witnesses.object_property_read,
+      witnesses.object_property_initializers[0],
+      witnesses.object_property_initializers[1],
+      witnesses.object_property_initializers[2],
+      witnesses.object_property_initializers[3],
+      witnesses.default_access_mask,
+      witnesses.default_namespace,
+      witnesses.shared_zero_stub,
+  };
+}
+
+consteval std::uint64_t target_layout_witness_fingerprint(
+    const TargetLayoutWitnesses& witnesses) {
+  std::uint64_t hash = 14695981039346656037ull;
+  const auto append_u32 = [&hash](const std::uint32_t value) {
+    for (unsigned shift = 0; shift < 32; shift += 8) {
+      hash ^= static_cast<std::uint8_t>((value >> shift) & 0xffu);
+      hash *= 1099511628211ull;
+    }
+  };
+  append_u32(static_cast<std::uint32_t>(witnesses.generation));
+  for (const auto rva : target_layout_witness_rvas(witnesses)) {
+    append_u32(rva);
+  }
+  return hash;
+}
+
+inline constexpr std::uint64_t kTargetLayoutWitnessFingerprint =
+    target_layout_witness_fingerprint(kTargetLayoutWitnesses);
+static_assert(kTargetLayoutWitnessFingerprint == 0x71fcdfdb12d5b04cull);
+static_assert([] {
+  for (const auto rva : target_layout_witness_rvas(kTargetLayoutWitnesses)) {
+    if (rva == 0 || rva >= kPeSizeOfImage) return false;
+  }
+  return true;
+}());
+
+// Exact BuildID 24539464 instruction witnesses (the typed 24878692 mapping above preserves the
+// same field semantics and records every nonuniform address explicitly):
 //   RVA 0x479a318/0x479aa98/0x479abfa: allocate 0x2d8 bytes for the object type;
 //                  each path immediately calls the same constructor at RVA 0x46bc920.
 //   RVA 0x46bc920: the object-type constructor writes alignment 8 at +08h, installs

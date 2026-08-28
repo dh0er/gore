@@ -116,6 +116,13 @@ has no handler for `.md`. Only `docs/guide/` is shipped and rendered.
 reference pages so the MCP server can serve them, but they are contracts rather
 than instructions and are not part of the user guide.
 
+For CLI and Mod Studio, `build.py` also verifies the checked-in qualified
+AngelScript profiles, builds and tests the native standalone compiler from the
+current checkout, and composes the compiler bundle before building the host. A
+release tag signs that fresh sidecar exactly once through `GORE_SIGN=1`; local
+builds leave it unsigned. There is no separate compiler promotion workflow.
+Save Editor and Mod Manager do not enter this compiler path.
+
 ## Repository layout
 
 ```

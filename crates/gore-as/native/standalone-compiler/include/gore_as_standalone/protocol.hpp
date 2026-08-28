@@ -12,7 +12,8 @@ inline constexpr std::uint32_t kRequestProtocolVersionV2 = 2;
 // returns same-process frontend/build/invoke evidence for promotion.
 inline constexpr std::uint32_t kQualificationProtocolVersionV3 = 3;
 inline constexpr std::uint32_t kResponseProtocolVersion = 1;
-inline constexpr char kBackendVersion[] = "0.1.0-dev";
+inline constexpr char kBackendVersion[] = "0.1.0";
+inline constexpr char kCompatibilityId[] = "gore-as-standalone-semantic-v1";
 inline constexpr char kCoreVersion[] = "2.33.0 WIP";
 inline constexpr char kCoreDialect[] = "UNREANGEL-modified";
 inline constexpr char kUnreangelRevision[] = "247954da5326ecc29724067da7b5880c352fe4ff";

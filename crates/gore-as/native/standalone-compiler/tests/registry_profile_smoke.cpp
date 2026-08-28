@@ -1,5 +1,6 @@
 #include "angelscript.h"
 #include "as_callfunc.h"
+#include "as_scriptengine.h"
 #include "as_scriptfunction.h"
 #include "gore_as_standalone/core.hpp"
 #include "gore_as_standalone/registry_profile.hpp"
@@ -1005,6 +1006,21 @@ int main() {
     if (!replay.succeeded()) {
         return fail("registry replay failed at phase " + std::to_string(static_cast<int>(replay.phase)) +
             " ordinal " + std::to_string(replay.failed_ordinal) + ": " + replay.detail, engine);
+    }
+    auto* const concrete_engine = static_cast<asCScriptEngine*>(engine);
+    const void* const first_literal = concrete_engine->stringFactory->GetStringConstant("same", 4U);
+    const void* const second_literal = concrete_engine->stringFactory->GetStringConstant("same", 4U);
+    asUINT first_literal_length = 0U;
+    asUINT second_literal_length = 0U;
+    if (first_literal == nullptr || second_literal == nullptr || first_literal == second_literal ||
+        concrete_engine->stringFactory->GetRawStringData(
+            first_literal, nullptr, &first_literal_length) < 0 ||
+        concrete_engine->stringFactory->GetRawStringData(
+            second_literal, nullptr, &second_literal_length) < 0 ||
+        first_literal_length != 4U || second_literal_length != 4U ||
+        concrete_engine->stringFactory->ReleaseStringConstant(first_literal) < 0 ||
+        concrete_engine->stringFactory->ReleaseStringConstant(second_literal) < 0) {
+        return fail("replayed string factory did not preserve distinct equal literal identities", engine);
     }
     message_log diagnostics;
     if (engine->SetMessageCallback(

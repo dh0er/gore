@@ -564,6 +564,11 @@ void main() {
 
     expect(requestedBackend, ScriptCompilerBackendMode.standalone);
     expect(safetyLoads, 0);
+    expect(find.textContaining('never starts the game'), findsOneWidget);
+    expect(
+      find.textContaining('native file, line, column, severity, and message'),
+      findsOneWidget,
+    );
     expect(
       find.byKey(const Key('revision3-project-compiler-safety-message')),
       findsNothing,

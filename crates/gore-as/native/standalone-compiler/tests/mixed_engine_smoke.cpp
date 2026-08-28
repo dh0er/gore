@@ -284,8 +284,10 @@ int main() {
         "NativeBase", "/Script/Test.NativeBase", 64U,
         standalone::native_super_kind::other_uobject, false, false});
     std::vector<asIScriptModule*> built;
+    standalone::shipping_static_jit_candidates static_jit_candidates;
     const auto mixed = precompiled::compile_mixed_cache_checkpoint(
-        *target_engine, cache, options, overlays, nullptr, runtime, true, built);
+        *target_engine, cache, options, overlays, nullptr, runtime, true, built,
+        &static_jit_candidates);
     asIScriptModule* const built_provider =
         target_engine->GetModule("Provider", asGM_ONLY_IF_EXISTS);
     asIScriptModule* const built_consumer =
@@ -310,6 +312,17 @@ int main() {
         shadow_type->GetProperty(
             0U, nullptr, nullptr, nullptr, nullptr, &shadow_property_offset);
     }
+    bool saw_provider_candidate = false;
+    bool saw_addon_candidate = false;
+    bool saw_literal_candidate = false;
+    bool saw_retained_cache_candidate = false;
+    for (asIScriptFunction* const candidate : static_jit_candidates.functions) {
+        asIScriptModule* const owner = candidate == nullptr ? nullptr : candidate->GetModule();
+        saw_provider_candidate |= owner == built_provider;
+        saw_addon_candidate |= owner == built_addon;
+        saw_literal_candidate |= owner == built_literal;
+        saw_retained_cache_candidate |= owner == built_consumer || owner == built_shadow;
+    }
     if (!mixed.succeeded() || cached_initializer_calls != 0 || built.size() != 5U ||
         built[0] != built_provider || built[1] != built_consumer ||
         built[2] != built_shadow || built[3] != built_addon ||
@@ -318,6 +331,8 @@ int main() {
         replacement_value == nullptr ||
         shadow_type == nullptr || shadow_type->GetSize() < 68U ||
         shadow_property_offset != 64 ||
+        !saw_provider_candidate || !saw_addon_candidate || !saw_literal_candidate ||
+        saw_retained_cache_candidate ||
         replacement_add->GetId() == original_add_id ||
         replacement_value->GetTypeId() == original_value_id ||
         !execute_add(*target_engine, *built_provider, 43U) ||

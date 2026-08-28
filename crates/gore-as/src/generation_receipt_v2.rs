@@ -6,7 +6,6 @@
 //! resolver. It is evidence, never a deployment capability.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -52,6 +51,7 @@ pub enum GenerationArtifactKindV2 {
 pub struct ProductQualifiedPackageIdentityV2 {
     pub catalog_sha256: Sha256Digest,
     pub sidecar: ArtifactSealV1,
+    pub compatibility_id: String,
     pub request_version: u32,
     pub response_version: u32,
     pub profile_manifest: ArtifactSealV1,
@@ -67,6 +67,7 @@ impl ProductQualifiedPackageIdentityV2 {
                 byte_len: identity.sidecar_byte_len(),
                 sha256: identity.sidecar_sha256(),
             },
+            compatibility_id: identity.compatibility_id().to_owned(),
             request_version: identity.request_version(),
             response_version: identity.response_version(),
             profile_manifest: ArtifactSealV1 {
@@ -103,6 +104,14 @@ impl ProductQualifiedPackageIdentityV2 {
                 "does not match the qualified standalone protocol",
             );
         }
+        crate::standalone_package::validate_standalone_compiler_compatibility_id_v1(
+            "qualified_package.compatibility_id",
+            &self.compatibility_id,
+        )
+        .map_err(|error| GenerationReceiptError::Invalid {
+            field: "qualified_package.compatibility_id",
+            reason: error.to_string(),
+        })?;
         ProductStandaloneCompilerTargetV1::try_new(
             self.target.target().clone(),
             self.target.pe_codeview().clone(),
@@ -381,14 +390,12 @@ impl GenerationReceiptV2 {
             );
         }
         let qualified_sidecar = profile_package.standalone_compiler_identity();
-        if qualified_sidecar.byte_len != self.qualified_package.sidecar.byte_len
-            || qualified_sidecar.sha256 != self.qualified_package.sidecar.sha256
-            || qualified_sidecar.request_version != self.qualified_package.request_version
+        if qualified_sidecar.request_version != self.qualified_package.request_version
             || qualified_sidecar.response_version != self.qualified_package.response_version
         {
             return invalid(
                 "qualified_package.sidecar",
-                "is not the exact binary/protocol used for differential qualification",
+                "does not use the wire protocol exercised by differential qualification",
             );
         }
         if profile.target != *self.qualified_package.target.target()
@@ -661,32 +668,17 @@ fn validate_output_manifest(
 fn read_retained_full_graph(
     artifact: &FullGraphCompileArtifactV1,
 ) -> Result<Vec<u8>, GenerationReceiptError> {
-    let mut file = artifact
-        .clone_retained_artifact_file()
-        .map_err(GenerationReceiptError::RetainedOutput)?;
-    let before = file
-        .metadata()
-        .map_err(|error| GenerationReceiptError::RetainedOutput(error.to_string()))?;
-    if !before.is_file() || before.len() == 0 || before.len() > MAX_GENERATION_OUTPUT_BYTES_V2 {
+    if artifact.byte_len() == 0 || artifact.byte_len() > MAX_GENERATION_OUTPUT_BYTES_V2 {
         return Err(GenerationReceiptError::InputTooLarge {
             field: "retained full-graph output",
-            actual: before.len(),
+            actual: artifact.byte_len(),
             max: MAX_GENERATION_OUTPUT_BYTES_V2,
         });
     }
-    file.seek(SeekFrom::Start(0))
-        .map_err(|error| GenerationReceiptError::RetainedOutput(error.to_string()))?;
-    let mut bytes = Vec::with_capacity(before.len() as usize);
-    (&mut file)
-        .take(MAX_GENERATION_OUTPUT_BYTES_V2 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| GenerationReceiptError::RetainedOutput(error.to_string()))?;
-    let after = file
-        .metadata()
-        .map_err(|error| GenerationReceiptError::RetainedOutput(error.to_string()))?;
-    if bytes.len() as u64 != before.len()
-        || before.len() != after.len()
-        || bytes.len() as u64 != artifact.byte_len()
+    let bytes = artifact
+        .read_retained_artifact_bytes(MAX_GENERATION_OUTPUT_BYTES_V2)
+        .map_err(GenerationReceiptError::RetainedOutput)?;
+    if bytes.len() as u64 != artifact.byte_len()
         || Sha256Digest::from_bytes(Sha256::digest(&bytes).into()) != artifact.sha256()
     {
         return Err(GenerationReceiptError::RetainedOutput(
@@ -697,6 +689,17 @@ fn read_retained_full_graph(
         .validate_retained_artifact()
         .map_err(GenerationReceiptError::RetainedOutput)?;
     Ok(bytes)
+}
+
+/// Read a published full-graph cache through its exact retained creation handle.
+///
+/// This is the only safe post-publication byte-read seam for external `gore-as` consumers: it
+/// never reopens [`FullGraphCompileArtifactV1::path`], and it rechecks the retained length and
+/// SHA-256 seal before returning the bounded bytes.
+pub fn read_full_graph_compile_output_bytes_v2(
+    artifact: &FullGraphCompileArtifactV1,
+) -> Result<Vec<u8>, GenerationReceiptError> {
+    read_retained_full_graph(artifact)
 }
 
 fn validate_artifact_seal(

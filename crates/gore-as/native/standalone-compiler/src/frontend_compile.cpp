@@ -188,7 +188,9 @@ frontend_compile_result compile_preprocessed_module_graph(
     const lexical_preprocess_result& input,
     registry_runtime* const registry,
     frontend_compile_runtime& runtime,
-    std::vector<asIScriptModule*>& modules) {
+    const global_initializer_policy initializer_policy,
+    std::vector<asIScriptModule*>& modules,
+    shipping_static_jit_candidates* const static_jit_candidates) {
     try {
         if (runtime.impl_ == nullptr) {
             return failure(
@@ -417,7 +419,9 @@ frontend_compile_result compile_preprocessed_module_graph(
         classify_context classify{registry, &input};
         const graph_build_hooks hooks{&classify, &classify_delegates};
         const graph_build_result graph =
-            build_module_graph(created.data(), created.size(), &hooks);
+            build_module_graph(
+                created.data(), created.size(), &hooks, initializer_policy,
+                static_jit_candidates);
         if (!graph.succeeded()) {
             frontend_compile_result result = failure(
                 frontend_compile_phase::build_graph,
@@ -448,6 +452,24 @@ frontend_compile_result compile_preprocessed_module_graph(
             no_failed_module,
             "unexpected frontend compiler bridge failure");
     }
+}
+
+frontend_compile_result compile_preprocessed_module_graph(
+    asIScriptEngine& engine,
+    const preprocessor_options& options,
+    const lexical_preprocess_result& input,
+    registry_runtime* const registry,
+    frontend_compile_runtime& runtime,
+    std::vector<asIScriptModule*>& modules) {
+    return compile_preprocessed_module_graph(
+        engine,
+        options,
+        input,
+        registry,
+        runtime,
+        global_initializer_policy::execute,
+        modules,
+        nullptr);
 }
 
 } // namespace gore::as::standalone

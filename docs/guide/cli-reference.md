@@ -106,6 +106,9 @@ What the five checks worth knowing the limits of actually read:
   installed Shipping ScriptCache and Binds match a qualified compiler API. It
   neither launches the game nor creates compiler scratch files. Compatibility
   is based on the cache/API, not a whole-file Steam/GOG executable checksum.
+  A compatible authenticated package provides native file/line/column/severity
+  diagnostics on the strict standalone compile path; Doctor does not run a
+  compilation to manufacture a sample error.
 - `loc_catalog` compares the byte count `gore loc status` recorded against the
   `.lcache` now installed. `gore loc import` re-encrypts that file in place, so a
   count that no longer agrees usually means the shared catalog describes text the

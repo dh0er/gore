@@ -59,17 +59,56 @@ qualified and admitted:
 | **Degraded** | `as default-sites`, `as patch-default`. They fall back to scalar-only: sites the script cache can type on its own stay editable, anything needing native ancestry does not. |
 | **Refused** | `as tag-map-sites`, `as patch-tag-map`, and Mod Studio's story, NPC, quest and item authoring. |
 
-After qualification, the central registry contains exactly three reviewed
-Steam rows: Steam 1.0.3 Hotfix 1, build `24169431`, and build `24340829`. The
-new row records the update's exact executable, pristine Shipping cache, and
-`Binds.Cache` triple together with bounded offline qualification: no class was
+After qualification, the central registry contains exactly four reviewed Steam
+rows: Steam 1.0.3 Hotfix 1, build `24169431`, build `24340829`, and build
+`24878692` from the 2026-08-27/28 update. Each row is a closed exact-generation
+admission, not a range or a promise about nearby builds.
+
+The `24340829` row retains its bounded offline qualification: no class was
 reparented, no property owner moved, the curated modules reproduced
-byte-for-byte, and the audited Item field matrix stayed unchanged. Mod Studio's
-Story/NPC/Quest authoring therefore recognizes that exact triple within its
-existing project-only contract. Item authoring is separately admitted by the
-row selected from the exact executable seal and its audited Item field matrix;
-it does not use Shipping or Binds as Item evidence. This admission is not
-dialog-runtime, production-build, deployment, live-game, or DataAsset
+byte-for-byte, and the audited Item field matrix stayed unchanged.
+
+The `24878692` row seals the new executable, pristine Shipping cache and
+`Binds.Cache` together. Its fresh 172709 USMAP,
+`G1R-5.4.3-172709-272ce2f8.usmap`, is required: the stale 171261 dump is not
+evidence for this row because it omits
+`/Script/G1R.RagdollConfig.m_FollowBone`. The bounded comparison establishes a
+new compatibility generation with these exact facts:
+
+- The USMAP still has 6,602 class rows, the direct-parent graph and native
+  ancestry profile are unchanged, no class was reparented, and no existing
+  property's declaring owner moved. The Binds/USMAP bridge remains 6,582
+  classes with zero unresolved default fields.
+- The GameplayTag-to-float32 profile is unchanged: eight declarations and
+  1,432 cache operands.
+- The ordered Binds API changed in exactly four classes:
+  `UGameplayAbilityAttackLoop` added three methods;
+  `UGameplayAbilityMagicBase` and `UGameplayAbilityCastSpell` each changed one
+  method's constness; `UGameplayAbilityCastSpell` also removed
+  `NeedUseManaToCast_Scriptable`; and `URagdollConfig` added the `FName`
+  property `m_FollowBone`. Method counts moved 16,416 → 16,418 and class-property
+  counts 14,966 → 14,967.
+- Scalar default windows moved 26,399 → 26,389, fully explained by content:
+  -5 Golem Stone Bridge `URagdollConfig`, -2 its `UWaterConfig`, -2 the hostile
+  HumanOrc Training relationship modifier, and -5 with the removed
+  `AIState_Warning_Human_Taunts` module; +1 each for the KalomDemon relationship
+  modifier, ArenaDetection `RegionTrait`, ArenaFallingThroughLavaPit
+  `RegionTrait`, and LordDemon Pyrolaser `ForceKnockback`. The arithmetic is
+  -14 + 4 = -10, and every remaining field resolves.
+- All six curated story modules reproduce their published source seals
+  byte-for-byte. The cache still uses the `0x9e377abe` build identifier and its
+  established wire format; no opcode-table change was observed.
+
+The ordered API delta requires a new standalone-compiler profile. It is not by
+itself evidence of AngelScript language or compiler-core semantic drift; the
+frozen 27-case and full-tree embedded-versus-standalone comparisons remain the
+separate compiler gate.
+
+Mod Studio's Story/NPC/Quest authoring recognizes each exact registered triple
+only within its existing project-only contract. Item authoring is separately
+admitted by the row selected from the exact executable seal and its audited Item
+field matrix; it does not use Shipping or Binds as Item evidence. Neither row
+grants dialog-runtime, production-build, deployment, live-game, or DataAsset
 qualification; every other consumer keeps its own independent gate.
 
 Nothing produced a wrong answer in the historical fail-closed state, and the
@@ -79,7 +118,8 @@ evidence required by its own contract still refuses to act on it.
 ## The checklist
 
 Run this when the game updates. Steps 1–4 are cheap and answer whether anything
-is wrong at all; 5–8 are the qualification itself.
+is wrong at all; 5–10 are the independent generation, compiler, and live-use
+qualification gates.
 
 **1. Confirm what moved.** `gore story-catalog` refuses with all three identities
 printed — byte length and SHA-256 for the executable, the shipping cache and the
@@ -107,9 +147,15 @@ side, so this is a file comparison, not an investigation. What matters, in order
 The 2026-07-31 update: 12 classes added, 4 removed, **0 reparented, 0 properties
 moved**. That is what made it a transcription job rather than an audit.
 
+The 2026-08-27/28 update kept all 6,602 class rows and the exact direct-parent
+graph, with **0 reparented and 0 existing properties moved**. The fresh 172709
+dump nevertheless matters: unlike the stale 171261 dump, it carries the new
+`RagdollConfig.m_FollowBone` property that the matching Binds file exposes.
+
 **4. Cross-check the dump against the build, without launching anything.** The new
-`Binds.Cache` should name the classes the new USMAP added and none of those it
-removed. If the two disagree, one of them is from the wrong build.
+`Binds.Cache` should name the classes and properties the new USMAP added and
+none of those it removed. If the two disagree, one of them is from the wrong
+build.
 
 **5. Run `gore as qualify --game "$GAME"`.** It derives every value a generation
 row needs, in-crate against the crate's own parsers, and prints the row plus a
@@ -143,12 +189,37 @@ audit had checked, and the answer is to look at what changed rather than to pass
 file. The tests make the row re-derive its own published ids from its own
 components, so a mistyped digest fails there rather than in the field.
 
-**8. Confirm every live claim separately on the running game.** A seal proves
+**8. Qualify the affected standalone-compiler profiles.** A central generation
+row and a compiler profile answer different questions. The former admits
+generation-bound authoring evidence; the latter captures the ordered
+AngelScript API and frontend/compiler support. Run the frozen 27-case embedded
+and standalone corpus for every new or changed API profile against one stable
+unsigned reference sidecar, then promote and typed-reload each profile. Record
+the compiler semantic ABI separately from the reference EXE hash. A Binds/API-
+only update normally needs a new profile at the existing ABI, not a speculative
+compiler-core change.
+
+**9. Run and seal one full-tree differential when the compiler ABI or relevant
+profile semantics changed.** Freeze the complete source tree before the
+comparison. The verifier must produce both outputs itself from one in-memory
+snapshot: exactly one guarded game-only run with captured native diagnostics
+and exact restoration, followed by exactly one strict standalone run with no
+installation mutation or fallback. Receipt v2 binds both execution records,
+the profile SHA-256, historical reference sidecar and protocol, that profile's
+Shipping and Binds seals, the source aggregate, and both retained candidates. A
+copied or caller-selected reference cache is not authority. The verifier also
+refuses `GORE_AS_DIAGNOSTICS_HOOK`, so an ambient development helper cannot
+stand in for the SHA-256-verified diagnostics hook. Accept only exact WholeCache
+structural equality, zero semantic differences, and zero alignment loss;
+benign normalized byte differences stay visible. Ordinary tags at the same ABI
+rebuild and test the sidecar but do not rerun the private game comparison.
+
+**10. Confirm every live claim separately on the running game.** A seal proves
 the evidence is the evidence, never that the game agrees with it. Patch one
 default you can see and look before claiming that live behavior. When the
 admitted scope stops at bounded offline authoring, record that boundary instead
-of implying this step happened: build `24340829` has no dialog-runtime
-qualification from its central generation row.
+of implying this step happened: neither build `24340829` nor build `24878692`
+gains dialog-runtime qualification from its central generation row.
 
 ## What is deliberately not automated
 

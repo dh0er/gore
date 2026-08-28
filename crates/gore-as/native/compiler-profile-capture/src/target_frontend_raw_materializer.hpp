@@ -152,7 +152,7 @@ TargetFrontendRawError materialize_fname_v1(
     TargetRawFName raw,
     std::string& spelling) noexcept;
 
-// BuildID 24539464 has no graph-hook binding path. Both exact 24-byte image objects must retain
+// Neither authenticated generation has a graph-hook binding path. Both exact 24-byte image objects retain
 // their static empty state; a pointer/count/capacity, compaction or broadcast-lock drift rejects
 // the phase instead of attempting to serialize an unsupported mutable callback.
 TargetFrontendRawError materialize_graph_hook_bindings_v1(

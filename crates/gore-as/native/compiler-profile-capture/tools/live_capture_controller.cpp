@@ -1,4 +1,5 @@
 #include "gore_as_capture/live_bootstrap.h"
+#include "gore_as_capture/format.hpp"
 
 #include <bcrypt.h>
 #include <tlhelp32.h>
@@ -71,19 +72,19 @@ constexpr std::array<std::byte, 57> kEarlyLoaderApc{{
     std::byte{0xc3},
 }};
 
-constexpr std::uint64_t kShippingCacheBytes = 124'354'799;
-constexpr std::uint64_t kBindsCacheBytes = 5'908'587;
+constexpr std::uint64_t kShippingCacheBytes = 124'459'412;
+constexpr std::uint64_t kBindsCacheBytes = 5'908'985;
 constexpr std::array<std::uint8_t, 32> kShippingCacheSha256{{
-    0xd0, 0xaf, 0xaf, 0x90, 0x9e, 0x62, 0x86, 0x7f,
-    0xae, 0xdc, 0x36, 0x78, 0xa1, 0x17, 0x5f, 0x5e,
-    0x8d, 0xe5, 0xe7, 0x84, 0xdc, 0x50, 0x3a, 0x14,
-    0xff, 0xbd, 0xe4, 0x72, 0x6f, 0x29, 0x72, 0x31,
+    0x7a, 0x18, 0xf9, 0x54, 0xe3, 0x2a, 0xf3, 0x0f,
+    0xc2, 0x4a, 0xe3, 0xa6, 0x6e, 0xa3, 0x5d, 0x3b,
+    0x5c, 0xb9, 0x85, 0x60, 0xc8, 0xf5, 0x08, 0x3c,
+    0x78, 0x46, 0xfc, 0x9c, 0xe1, 0xd7, 0x75, 0x11,
 }};
 constexpr std::array<std::uint8_t, 32> kBindsCacheSha256{{
-    0x85, 0x4f, 0x58, 0xa6, 0x95, 0xd0, 0x17, 0x01,
-    0x44, 0x95, 0x7f, 0x08, 0x5c, 0x1e, 0x8c, 0x0f,
-    0x9e, 0xf4, 0x0b, 0x27, 0x1e, 0x35, 0xe9, 0x0f,
-    0x79, 0xff, 0xbc, 0xcf, 0xf8, 0xd9, 0x99, 0xc5,
+    0xaa, 0x73, 0x40, 0x2c, 0x11, 0xd4, 0x00, 0x70,
+    0x35, 0xa2, 0xdf, 0x32, 0xc5, 0x5e, 0x50, 0x08,
+    0x6a, 0x6d, 0x9c, 0x5b, 0x6d, 0xa8, 0x61, 0x9c,
+    0xdf, 0xcb, 0x4d, 0xf5, 0x3f, 0x02, 0xce, 0xa2,
 }};
 
 class Handle final {
@@ -489,7 +490,7 @@ int attach_running_capture(
   control.struct_size = sizeof(control);
   control.magic = GORE_AS_CAPTURE_LIVE_CONTROL_MAGIC_V1;
   control.version = GORE_AS_CAPTURE_LIVE_CONTROL_VERSION_V1;
-  control.observed_steam_build_id = 24539464;
+  control.observed_steam_build_id = gore_as_capture::v1::kSteamBuildId;
   control.target_inputs_verified = 1;
   control.executable_path_chars = static_cast<std::uint32_t>(executable.native().size());
   control.output_path_chars = static_cast<std::uint32_t>(output.native().size());
@@ -794,7 +795,7 @@ int wmain(const int argc, wchar_t** const argv) {
   control.struct_size = sizeof(control);
   control.magic = GORE_AS_CAPTURE_LIVE_CONTROL_MAGIC_V1;
   control.version = GORE_AS_CAPTURE_LIVE_CONTROL_VERSION_V1;
-  control.observed_steam_build_id = 24539464;
+  control.observed_steam_build_id = gore_as_capture::v1::kSteamBuildId;
   control.target_inputs_verified = 1;
   control.executable_path_chars = static_cast<std::uint32_t>(executable.native().size());
   control.output_path_chars = static_cast<std::uint32_t>(output.native().size());

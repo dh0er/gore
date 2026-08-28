@@ -129,9 +129,11 @@ requires reconstructing its body manually or first extending the decompiler.
    has now repeated both gates on installed 1.0.3: the corrected whole tree compiled to a
    structurally complete 91,321,157-byte cache, while an intentional unknown-symbol compile
    returned the normal `file:line:column: error` diagnostic and accepted no output. Both runs
-   preserved the complete loose-source and JIT trees byte-for-byte. Archived 1.0.0 through 1.0.3
-   executables pass the same offline structural check; runtime injection remains proven only on
-   the installed 1.0.3 executable.
+   preserved the complete loose-source and JIT trees byte-for-byte. Archived 1.0.0 through 1.0.5
+   executables pass the same offline structural check. Runtime injection is also proven on the
+   installed 1.0.5 / Steam BuildID 24878692 executable: the 27-case embedded qualification captured
+   native file/line/column diagnostics, and the frozen whole-tree failure surfaced through the same
+   callback boundary without accepting an output cache.
 
    The compiler library now also exposes a bounded structured report instead of forcing callers
    to recover diagnostics from formatted error strings. It retains file, line, column, severity,

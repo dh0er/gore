@@ -12,10 +12,11 @@ use std::path::{Component, Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
+#[cfg(all(test, windows))]
+use super::CAPTURE_TARGET_24878692;
 use super::{
-    decode_capture_v1, CaptureDecodeError, DecodedCaptureV1, MAX_CAPTURE_BYTES_V1,
-    PINNED_ANGELSCRIPT_VERSION, PINNED_BUILD_IDENTIFIER, PINNED_CODEVIEW_AGE,
-    PINNED_EXECUTABLE_BYTES, PINNED_EXECUTABLE_SHA256, PINNED_STEAM_APP_ID, PINNED_STEAM_BUILD_ID,
+    capture_target_for_steam_build_id_v1, decode_capture_v1, CaptureDecodeError, CaptureTargetV1,
+    DecodedCaptureV1, MAX_CAPTURE_BYTES_V1,
 };
 use crate::compiler_profile::frontend::validate_frontend_profile_payloads;
 use crate::compiler_profile::manifest::{
@@ -50,9 +51,6 @@ pub const STANDALONE_QUALIFICATION_ARTIFACT_MANIFEST_FILE_V1: &str =
 pub const QUALIFIED_PROMOTION_RECEIPT_SCHEMA_V1: &str = "gore.as.qualified-profile-promotion";
 pub const QUALIFIED_PROMOTION_RECEIPT_SCHEMA_VERSION_V1: u32 = 1;
 
-const PINNED_DEPOT_ID_V1: u32 = 1_297_901;
-const PINNED_DEPOT_MANIFEST_GID_V1: u64 = 1_585_071_322_101_748_861;
-const PINNED_CODEVIEW_GUID_V1: &str = "cf0b83bd-e023-061b-2100-0f0fccf871d2";
 const MAX_SUPPORT_MANIFEST_BYTES_V1: u64 = 1024 * 1024;
 const MAX_STATIC_SUPPORT_BLOB_BYTES_V1: u64 = 256 * 1024 * 1024;
 const MAX_STATIC_SUPPORT_AGGREGATE_BYTES_V1: u64 = 512 * 1024 * 1024;
@@ -87,20 +85,28 @@ const PROFILE_PAYLOAD_FILES_V1: [&str; 16] = [
     "semantic-parity.json",
 ];
 
-pub(crate) fn validate_pinned_compiler_profile_target_v1(
+pub(crate) fn validate_supported_compiler_profile_target_v1(
     profile: &CompilerProfileV1,
 ) -> Result<(), ProfileMaterializationError> {
-    if profile.target.steam_app_id != PINNED_STEAM_APP_ID
-        || profile.target.steam_build_id != PINNED_STEAM_BUILD_ID
-        || profile.target.depot_id != PINNED_DEPOT_ID_V1
-        || profile.target.depot_manifest_gid != PINNED_DEPOT_MANIFEST_GID_V1
-        || profile.target.platform != CompilerPlatformV1::Windows
-        || profile.target.architecture != CompilerArchitectureV1::X86_64
-        || profile.target.build_configuration != CompilerBuildConfigurationV1::Shipping
+    supported_capture_target_for_compiler_target_v1(&profile.target)?;
+    Ok(())
+}
+
+fn supported_capture_target_for_compiler_target_v1(
+    compiler_target: &CompilerTargetV1,
+) -> Result<&'static CaptureTargetV1, ProfileMaterializationError> {
+    let target = capture_target_for_steam_build_id_v1(compiler_target.steam_build_id)
+        .ok_or(ProfileMaterializationError::StaticTargetMismatch)?;
+    if compiler_target.steam_app_id != target.steam_app_id
+        || compiler_target.depot_id != target.depot_id
+        || compiler_target.depot_manifest_gid != target.depot_manifest_gid
+        || compiler_target.platform != CompilerPlatformV1::Windows
+        || compiler_target.architecture != CompilerArchitectureV1::X86_64
+        || compiler_target.build_configuration != CompilerBuildConfigurationV1::Shipping
     {
         return Err(ProfileMaterializationError::StaticTargetMismatch);
     }
-    Ok(())
+    Ok(target)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -224,18 +230,9 @@ impl StaticProfileSupportManifestV1 {
         {
             return Err(ProfileMaterializationError::StaticSupportSchema);
         }
-        if self.target.steam_app_id != PINNED_STEAM_APP_ID
-            || self.target.steam_build_id != PINNED_STEAM_BUILD_ID
-            || self.target.depot_id != PINNED_DEPOT_ID_V1
-            || self.target.depot_manifest_gid != PINNED_DEPOT_MANIFEST_GID_V1
-            || self.target.platform != CompilerPlatformV1::Windows
-            || self.target.architecture != CompilerArchitectureV1::X86_64
-            || self.target.build_configuration != CompilerBuildConfigurationV1::Shipping
-        {
-            return Err(ProfileMaterializationError::StaticTargetMismatch);
-        }
-        if self.oracle.executable.byte_len != PINNED_EXECUTABLE_BYTES
-            || self.oracle.executable.sha256 != Sha256Digest::from_bytes(PINNED_EXECUTABLE_SHA256)
+        let target = supported_capture_target_for_compiler_target_v1(&self.target)?;
+        if self.oracle.executable.byte_len != target.executable_bytes
+            || self.oracle.executable.sha256 != Sha256Digest::from_bytes(target.executable_sha256)
             || self
                 .oracle
                 .executable
@@ -261,8 +258,8 @@ impl StaticProfileSupportManifestV1 {
                 .oracle
                 .pe_codeview
                 .guid
-                .eq_ignore_ascii_case(PINNED_CODEVIEW_GUID_V1)
-            || self.oracle.pe_codeview.age != PINNED_CODEVIEW_AGE
+                .eq_ignore_ascii_case(target.codeview_guid)
+            || self.oracle.pe_codeview.age != target.codeview_age
         {
             return Err(ProfileMaterializationError::StaticOracleMismatch);
         }
@@ -713,7 +710,12 @@ pub fn materialize_unqualified_profile_package_v1(
 ) -> Result<MaterializedUnqualifiedProfileV1, ProfileMaterializationError> {
     support.manifest.validate()?;
     require_absolute_normalized(output_root, "output root")?;
-    if decoded.build_jit.build_identifier != PINNED_BUILD_IDENTIFIER
+    let decoded_target = decoded.header.target();
+    let support_target = supported_capture_target_for_compiler_target_v1(&support.manifest.target)?;
+    if decoded_target.generation != support_target.generation {
+        return Err(ProfileMaterializationError::StaticTargetMismatch);
+    }
+    if decoded.build_jit.build_identifier != decoded_target.build_identifier
         || decoded.build_jit.as_reference_debugging
         || !decoded.build_jit.fork_opcode_table_201_212_present
         || decoded.build_jit.reference_debug_opcodes_emittable
@@ -809,7 +811,7 @@ pub fn materialize_unqualified_profile_package_v1(
         oracle: static_manifest.oracle.clone(),
         binds: static_manifest.binds.clone(),
         engine: EngineProfileV1 {
-            as_create_version: PINNED_ANGELSCRIPT_VERSION,
+            as_create_version: decoded_target.angelscript_version,
             ordered_engine_properties: seal(&seals, ENGINE_PROPERTIES_FILE)?,
             registration_trace: seal(&seals, REGISTRATION_TRACE_FILE)?,
             registration_trace_count: decoded.registration_trace.entries.len() as u64,
@@ -911,7 +913,7 @@ pub fn reload_unqualified_profile_package_v1(
         "profile manifest",
     )?;
     let profile = CompilerProfileV1::from_unqualified_json(&manifest_json)?;
-    validate_pinned_compiler_profile_target_v1(&profile)?;
+    validate_supported_compiler_profile_target_v1(&profile)?;
     if !matches!(
         CompilerProfileV1::from_json(&manifest_json),
         Err(CompilerProfileError::NotQualified)
@@ -988,7 +990,7 @@ pub fn promote_unqualified_profile_package_v1(
         "source profile manifest",
     )?;
     let source_profile = CompilerProfileV1::from_unqualified_json(&source_manifest_json)?;
-    validate_pinned_compiler_profile_target_v1(&source_profile)?;
+    validate_supported_compiler_profile_target_v1(&source_profile)?;
     if source_profile.qualification.required_probe_suite_version != FULL_QUALIFICATION_SUITE_ID_V1 {
         return Err(ProfileMaterializationError::QualificationBoundary);
     }
@@ -1215,7 +1217,7 @@ pub fn verify_qualified_profile_package_v1(
         "qualified profile manifest",
     )?;
     let profile = CompilerProfileV1::from_json(&manifest_json)?;
-    validate_pinned_compiler_profile_target_v1(&profile)?;
+    validate_supported_compiler_profile_target_v1(&profile)?;
     require_fixed_materialized_profile_paths(&profile)?;
     let mut bytes = BTreeMap::new();
     let mut pins = Vec::with_capacity(PROFILE_PAYLOAD_FILES_V1.len() + 3);
@@ -1792,9 +1794,9 @@ pub enum ProfileMaterializationError {
     InputChanged(&'static str),
     #[error("static support manifest schema is unsupported")]
     StaticSupportSchema,
-    #[error("static support target does not match BuildID 24539464")]
+    #[error("static support target does not match a supported capture generation")]
     StaticTargetMismatch,
-    #[error("static support oracle identity does not match the pinned executable")]
+    #[error("static support oracle identity does not match the selected capture generation")]
     StaticOracleMismatch,
     #[error("static support omits a required nonzero measurement")]
     StaticMeasurementMissing,
@@ -1858,30 +1860,31 @@ mod tests {
     }
 
     fn support_manifest(payload: PinnedSupportBlobV1) -> StaticProfileSupportManifestV1 {
+        let target = &CAPTURE_TARGET_24878692;
         StaticProfileSupportManifestV1 {
             schema: STATIC_SUPPORT_MANIFEST_SCHEMA_V1.to_owned(),
             schema_version: STATIC_SUPPORT_MANIFEST_SCHEMA_VERSION_V1,
             target: CompilerTargetV1 {
-                steam_app_id: PINNED_STEAM_APP_ID,
-                steam_build_id: PINNED_STEAM_BUILD_ID,
-                depot_id: PINNED_DEPOT_ID_V1,
-                depot_manifest_gid: PINNED_DEPOT_MANIFEST_GID_V1,
+                steam_app_id: target.steam_app_id,
+                steam_build_id: target.steam_build_id,
+                depot_id: target.depot_id,
+                depot_manifest_gid: target.depot_manifest_gid,
                 platform: CompilerPlatformV1::Windows,
                 architecture: CompilerArchitectureV1::X86_64,
                 build_configuration: CompilerBuildConfigurationV1::Shipping,
             },
             oracle: CompilerOracleV1 {
                 executable: FileSealV1 {
-                    byte_len: PINNED_EXECUTABLE_BYTES,
-                    sha256: Sha256Digest::from_bytes(PINNED_EXECUTABLE_SHA256),
+                    byte_len: target.executable_bytes,
+                    sha256: Sha256Digest::from_bytes(target.executable_sha256),
                     steam_content_sha1: Some(Sha1Digest::from_bytes([1; 20])),
                 },
                 binds_cache: file_seal(b"binds", true),
                 shipping_cache: file_seal(b"shipping", true),
                 depot_manifest: file_seal(b"manifest", false),
                 pe_codeview: PeCodeViewV1 {
-                    guid: PINNED_CODEVIEW_GUID_V1.to_owned(),
-                    age: PINNED_CODEVIEW_AGE,
+                    guid: target.codeview_guid.to_owned(),
+                    age: target.codeview_age,
                 },
             },
             binds: BindsProfileV1 {
@@ -1910,6 +1913,39 @@ mod tests {
                 semantic_parity: payload,
             },
         }
+    }
+
+    #[test]
+    fn static_support_accepts_each_generation_and_rejects_cross_generation_oracle_identity() {
+        let payload = PinnedSupportBlobV1 {
+            byte_len: 1,
+            sha256: Sha256Digest::from_bytes([0x41; 32]),
+        };
+        let mut historical = support_manifest(payload);
+        let target = &super::super::CAPTURE_TARGET_24539464;
+        historical.target.steam_app_id = target.steam_app_id;
+        historical.target.steam_build_id = target.steam_build_id;
+        historical.target.depot_id = target.depot_id;
+        historical.target.depot_manifest_gid = target.depot_manifest_gid;
+        historical.oracle.executable.byte_len = target.executable_bytes;
+        historical.oracle.executable.sha256 = Sha256Digest::from_bytes(target.executable_sha256);
+        historical.oracle.pe_codeview.guid = target.codeview_guid.to_owned();
+        historical.oracle.pe_codeview.age = target.codeview_age;
+        historical.validate().unwrap();
+
+        historical.target.depot_manifest_gid = CAPTURE_TARGET_24878692.depot_manifest_gid;
+        assert!(matches!(
+            historical.validate(),
+            Err(ProfileMaterializationError::StaticTargetMismatch)
+        ));
+        historical.target.depot_manifest_gid = target.depot_manifest_gid;
+
+        historical.oracle.executable.sha256 =
+            Sha256Digest::from_bytes(CAPTURE_TARGET_24878692.executable_sha256);
+        assert!(matches!(
+            historical.validate(),
+            Err(ProfileMaterializationError::StaticOracleMismatch)
+        ));
     }
 
     fn prepare_support(root: &Path) -> (PathBuf, PathBuf) {

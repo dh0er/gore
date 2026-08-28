@@ -441,7 +441,7 @@ class _Revision3ProjectCompilerCheckDialogState
                       ScriptCompilerBackendMode.game =>
                         'This route uses the game compiler and requires an exact, safe installation.',
                       ScriptCompilerBackendMode.standalone =>
-                        'This route never starts the game and never mutates the installation. It fails closed unless a qualified standalone package is available.',
+                        'This route never starts the game or mutates the installation. It returns native file, line, column, severity, and message diagnostics, and fails closed unless a qualified standalone package is available.',
                     },
                     key: const Key(
                       'revision3-project-compiler-backend-description',

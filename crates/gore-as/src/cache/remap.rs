@@ -3292,13 +3292,13 @@ fn remap_ptr(
 /// Flags that bytecode may OR onto a core AngelScript type-id. T2
 /// (`TypeIdReferenceToPointer`) is keyed only by `(MASK_SEQNBR | MASK_OBJECT)`; handle/const
 /// qualifiers are operand-local and must survive a remap unchanged.
-const TYPE_ID_CORE_MASK: u32 = 0x1fff_ffff; // MASK_SEQNBR | MASK_OBJECT
-const TYPE_ID_OBJECT_MASK: u32 = 0x1c00_0000;
-const TYPE_ID_QUALIFIER_MASK: u32 = 0x6000_0000; // OBJHANDLE | HANDLETOCONST
+pub(super) const TYPE_ID_CORE_MASK: u32 = 0x1fff_ffff; // MASK_SEQNBR | MASK_OBJECT
+pub(super) const TYPE_ID_OBJECT_MASK: u32 = 0x1c00_0000;
+pub(super) const TYPE_ID_QUALIFIER_MASK: u32 = 0x6000_0000; // OBJHANDLE | HANDLETOCONST
 const TYPE_ID_SEQUENCE_MASK: u32 = 0x03ff_ffff;
 const LAST_PRIMITIVE_TYPE_ID: i32 = 11;
 
-fn valid_type_id_core(id: i32) -> bool {
+pub(super) fn valid_type_id_core(id: i32) -> bool {
     if (id as u32) & TYPE_ID_SEQUENCE_MASK <= LAST_PRIMITIVE_TYPE_ID as u32
         || (id as u32) & !TYPE_ID_CORE_MASK != 0
     {
@@ -3323,7 +3323,7 @@ fn valid_datatype_pointer(dep: DataTypeDep, has_concrete_type_ptr: impl Fn(i64) 
     }
 }
 
-fn split_type_id_operand(id: i32) -> (i32, u32) {
+pub(super) fn split_type_id_operand(id: i32) -> (i32, u32) {
     let raw = id as u32;
     ((raw & TYPE_ID_CORE_MASK) as i32, raw & !TYPE_ID_CORE_MASK)
 }

@@ -194,6 +194,318 @@ int main() {
         source_engine->ShutDownAndRelease();
         return 2;
     }
+    asIScriptFunction* const stage3_function = source_module->GetFunctionByName("Add");
+    asIScriptFunction* const late_function = source_module->GetFunctionByName("CallAdd");
+    gore::as::standalone::shipping_static_jit_candidates static_jit_candidates;
+    static_jit_candidates.functions.push_back(stage3_function);
+    const std::vector<asIScriptModule*> static_jit_modules{source_module};
+    const auto static_jit = precompiled::apply_shipping_static_jit_checkpoint(
+        static_jit_modules, static_jit_candidates);
+    if (!static_jit.succeeded() || stage3_function == nullptr || late_function == nullptr ||
+        !stage3_function->IsFinal() || late_function->IsFinal()) {
+        std::cerr << "StaticJIT checkpoint did not preserve the stage-3 candidate boundary\n";
+        source_engine->ShutDownAndRelease();
+        return 3;
+    }
+    asIScriptEngine* foreign_engine = asCreateScriptEngine();
+    asIScriptModule* foreign_module = foreign_engine == nullptr
+        ? nullptr
+        : foreign_engine->GetModule("Foreign", asGM_ALWAYS_CREATE);
+    constexpr char foreign_source[] = "int ForeignFunction() { return 7; }";
+    if (foreign_module == nullptr ||
+        foreign_module->AddScriptSection(
+            "Foreign.as", foreign_source, sizeof(foreign_source) - 1U) < 0 ||
+        gore::as::standalone::build_module(*foreign_module) < 0) {
+        std::cerr << "could not build the foreign StaticJIT candidate fixture\n";
+        if (foreign_engine != nullptr) foreign_engine->ShutDownAndRelease();
+        source_engine->ShutDownAndRelease();
+        return 3;
+    }
+    gore::as::standalone::shipping_static_jit_candidates foreign_candidates;
+    foreign_candidates.functions.push_back(late_function);
+    foreign_candidates.functions.push_back(
+        foreign_module->GetFunctionByName("ForeignFunction"));
+    const auto rejected_static_jit = precompiled::apply_shipping_static_jit_checkpoint(
+        static_jit_modules, foreign_candidates);
+    if (rejected_static_jit.succeeded() || late_function->IsFinal()) {
+        std::cerr << "StaticJIT accepted a foreign candidate or partially mutated the graph\n";
+        foreign_engine->ShutDownAndRelease();
+        source_engine->ShutDownAndRelease();
+        return 3;
+    }
+    foreign_engine->ShutDownAndRelease();
+
+    asIScriptEngine* coverage_engine = asCreateScriptEngine();
+    asIScriptModule* covered_module = coverage_engine == nullptr
+        ? nullptr
+        : coverage_engine->GetModule("Covered", asGM_ALWAYS_CREATE);
+    asIScriptModule* partial_module = coverage_engine == nullptr
+        ? nullptr
+        : coverage_engine->GetModule("Partial", asGM_ALWAYS_CREATE);
+    constexpr char covered_source[] = "int CoveredFunction() { return 1; }";
+    constexpr char partial_source[] =
+        "int GeneratedRetained() { return 2; }\n"
+        "int ConstructorRetained() { return 3; }\n"
+        "int DestructorRetained() { return 4; }\n"
+        "int ReflectedRetained() { return 5; }\n"
+        "int PlainRetained() { return 6; }\n"
+        "int RemovedRetained() { return 7; }\n"
+        "int NonFinalFunction() { return 8; }";
+    if (covered_module == nullptr || partial_module == nullptr ||
+        covered_module->AddScriptSection(
+            "Covered.as", covered_source, sizeof(covered_source) - 1U) < 0 ||
+        partial_module->AddScriptSection(
+            "Partial.as", partial_source, sizeof(partial_source) - 1U) < 0) {
+        std::cerr << "could not create the StaticJIT coverage fixture\n";
+        if (coverage_engine != nullptr) coverage_engine->ShutDownAndRelease();
+        source_engine->ShutDownAndRelease();
+        return 3;
+    }
+    asIScriptModule* coverage_graph_modules[] = {covered_module, partial_module};
+    const auto coverage_build = gore::as::standalone::build_module_graph(
+        coverage_graph_modules, 2U);
+    asIScriptFunction* const base_generated =
+        partial_module->GetFunctionByName("GeneratedRetained");
+    asIScriptFunction* const base_constructor =
+        partial_module->GetFunctionByName("ConstructorRetained");
+    asIScriptFunction* const base_destructor =
+        partial_module->GetFunctionByName("DestructorRetained");
+    asIScriptFunction* const base_reflected =
+        partial_module->GetFunctionByName("ReflectedRetained");
+    asIScriptFunction* const base_plain =
+        partial_module->GetFunctionByName("PlainRetained");
+    asIScriptFunction* const base_removed =
+        partial_module->GetFunctionByName("RemovedRetained");
+    if (!coverage_build.succeeded() || base_generated == nullptr ||
+        base_constructor == nullptr || base_destructor == nullptr ||
+        base_reflected == nullptr || base_plain == nullptr || base_removed == nullptr) {
+        std::cerr << "could not build the StaticJIT role fixture\n";
+        coverage_engine->ShutDownAndRelease();
+        source_engine->ShutDownAndRelease();
+        return 3;
+    }
+    static_cast<asCScriptFunction*>(base_generated)->traits.SetTrait(
+        asTRAIT_GENERATED_FUNCTION, true);
+    static_cast<asCScriptFunction*>(base_constructor)->traits.SetTrait(
+        asTRAIT_CONSTRUCTOR, true);
+    static_cast<asCScriptFunction*>(base_destructor)->traits.SetTrait(
+        asTRAIT_DESTRUCTOR, true);
+    gore::as::standalone::shipping_static_jit_candidates covered_seed;
+    covered_seed.functions.push_back(covered_module->GetFunctionByName("CoveredFunction"));
+    covered_seed.functions.insert(
+        covered_seed.functions.end(),
+        {base_generated, base_constructor, base_destructor, base_reflected,
+         base_plain, base_removed});
+    const std::vector<asIScriptModule*> coverage_modules{
+        covered_module, partial_module};
+    const auto coverage_seed = precompiled::apply_shipping_static_jit_checkpoint(
+        coverage_modules, covered_seed);
+    precompiled::shipping_static_jit_coverage coverage;
+    const auto derived_coverage =
+        precompiled::derive_shipping_static_jit_module_coverage(
+            coverage_modules, coverage);
+    if (!coverage_seed.succeeded() || !derived_coverage.succeeded() ||
+        coverage.base_module_names != std::vector<std::string>({"Covered", "Partial"}) ||
+        coverage.fully_analyzed_module_names != std::vector<std::string>{"Covered"} ||
+        coverage.retained_final_functions.size() != 6U ||
+        !std::all_of(
+            coverage.retained_final_functions.begin(),
+            coverage.retained_final_functions.end(),
+            [](const auto& identity) { return identity.first == "Partial"; }) ||
+        !partial_module->GetFunctionByName("NonFinalFunction")->IsFinal()) {
+        std::cerr << "StaticJIT coverage was not derived from the sealed trait fixed point\n";
+        coverage_engine->ShutDownAndRelease();
+        source_engine->ShutDownAndRelease();
+        return 3;
+    }
+    coverage_engine->ShutDownAndRelease();
+
+    asIScriptEngine* projected_engine = asCreateScriptEngine();
+    asIScriptModule* projected_covered = projected_engine == nullptr
+        ? nullptr
+        : projected_engine->GetModule("Covered", asGM_ALWAYS_CREATE);
+    asIScriptModule* projected_partial = projected_engine == nullptr
+        ? nullptr
+        : projected_engine->GetModule("Partial", asGM_ALWAYS_CREATE);
+    asIScriptModule* projected_added = projected_engine == nullptr
+        ? nullptr
+        : projected_engine->GetModule("Added", asGM_ALWAYS_CREATE);
+    constexpr char projected_partial_source[] =
+        "int GeneratedRetained() { return 2; }\n"
+        "int ConstructorRetained() { return 3; }\n"
+        "int DestructorRetained() { return 4; }\n"
+        "int ReflectedRetained() { return 5; }\n"
+        "int PlainRetained() { return 6; }\n"
+        "int NonFinalFunction() { return 8; }";
+    constexpr char added_source[] = "int AddedFunction() { return 4; }";
+    if (projected_covered == nullptr || projected_partial == nullptr ||
+        projected_added == nullptr ||
+        projected_covered->AddScriptSection(
+            "Covered.as", covered_source, sizeof(covered_source) - 1U) < 0 ||
+        projected_partial->AddScriptSection(
+            "Partial.as", projected_partial_source,
+            sizeof(projected_partial_source) - 1U) < 0 ||
+        projected_added->AddScriptSection(
+            "Added.as", added_source, sizeof(added_source) - 1U) < 0) {
+        std::cerr << "could not create the projected StaticJIT coverage fixture\n";
+        if (projected_engine != nullptr) projected_engine->ShutDownAndRelease();
+        source_engine->ShutDownAndRelease();
+        return 3;
+    }
+    asIScriptModule* projected_graph_modules[] = {
+        projected_covered, projected_partial, projected_added};
+    const auto projected_build = gore::as::standalone::build_module_graph(
+        projected_graph_modules, 3U);
+    asIScriptFunction* const projected_generated =
+        projected_partial->GetFunctionByName("GeneratedRetained");
+    asIScriptFunction* const projected_constructor =
+        projected_partial->GetFunctionByName("ConstructorRetained");
+    asIScriptFunction* const projected_destructor =
+        projected_partial->GetFunctionByName("DestructorRetained");
+    asIScriptFunction* const projected_reflected =
+        projected_partial->GetFunctionByName("ReflectedRetained");
+    asIScriptFunction* const projected_plain =
+        projected_partial->GetFunctionByName("PlainRetained");
+    asIScriptFunction* const projected_nonfinal =
+        projected_partial->GetFunctionByName("NonFinalFunction");
+    if (!projected_build.succeeded() || projected_generated == nullptr ||
+        projected_constructor == nullptr || projected_destructor == nullptr ||
+        projected_reflected == nullptr || projected_plain == nullptr ||
+        projected_nonfinal == nullptr) {
+        std::cerr << "could not build the projected StaticJIT role fixture\n";
+        if (projected_engine != nullptr) projected_engine->ShutDownAndRelease();
+        source_engine->ShutDownAndRelease();
+        return 3;
+    }
+    static_cast<asCScriptFunction*>(projected_generated)->traits.SetTrait(
+        asTRAIT_GENERATED_FUNCTION, true);
+    static_cast<asCScriptFunction*>(projected_constructor)->traits.SetTrait(
+        asTRAIT_CONSTRUCTOR, true);
+    static_cast<asCScriptFunction*>(projected_destructor)->traits.SetTrait(
+        asTRAIT_DESTRUCTOR, true);
+    gore::as::standalone::shipping_static_jit_candidates projected_candidates;
+    for (asIScriptModule* const module : projected_graph_modules) {
+        for (asUINT index = 0U; index < module->GetFunctionCount(); ++index) {
+            projected_candidates.functions.push_back(module->GetFunctionByIndex(index));
+        }
+    }
+    const std::vector<asIScriptModule*> projected_modules{
+        projected_covered, projected_partial, projected_added};
+
+    gore::as::standalone::lexical_preprocess_result projected_source;
+    projected_source.ok = true;
+    for (const char* const module_name : {"Covered", "Partial", "Added"}) {
+        gore::as::standalone::lexical_module_description description;
+        description.module_name = module_name;
+        projected_source.modules.push_back(std::move(description));
+    }
+    gore::as::standalone::preprocessed_class_description statics;
+    statics.class_name = "Module_PartialStatics";
+    statics.is_statics_class = true;
+    gore::as::standalone::preprocessed_function_description reflected_description;
+    reflected_description.function_name = "ReflectedRetained";
+    reflected_description.script_function_name = "ReflectedRetained";
+    statics.methods.push_back(std::move(reflected_description));
+    projected_source.modules[1].classes.push_back(std::move(statics));
+
+    auto overlapping_coverage = coverage;
+    overlapping_coverage.fully_analyzed_module_names.push_back("Partial");
+    std::sort(
+        overlapping_coverage.fully_analyzed_module_names.begin(),
+        overlapping_coverage.fully_analyzed_module_names.end());
+    const auto rejected_overlap =
+        precompiled::apply_shipping_static_jit_coverage_checkpoint(
+            projected_modules, projected_candidates, overlapping_coverage,
+            projected_source);
+    auto ambiguous_source = projected_source;
+    ambiguous_source.modules[1].classes[0].methods.push_back(
+        ambiguous_source.modules[1].classes[0].methods[0]);
+    const auto rejected_ambiguous =
+        precompiled::apply_shipping_static_jit_coverage_checkpoint(
+            projected_modules, projected_candidates, coverage, ambiguous_source);
+    if (rejected_overlap.succeeded() || rejected_ambiguous.succeeded() ||
+        projected_generated->IsFinal() || projected_constructor->IsFinal() ||
+        projected_destructor->IsFinal() || projected_reflected->IsFinal() ||
+        projected_plain->IsFinal() || projected_nonfinal->IsFinal()) {
+        std::cerr << "StaticJIT coverage preflight was ambiguous or partially mutating\n";
+        projected_engine->ShutDownAndRelease();
+        source_engine->ShutDownAndRelease();
+        return 3;
+    }
+
+    asIScriptEngine* const overload_engine = asCreateScriptEngine();
+    asIScriptModule* const overload_module = overload_engine == nullptr
+        ? nullptr
+        : overload_engine->GetModule("OverloadProbe", asGM_ALWAYS_CREATE);
+    constexpr char overload_source[] =
+        "int Overloaded() { return 9; }\n"
+        "int Overloaded(int Value) { return Value; }";
+    if (overload_module == nullptr ||
+        overload_module->AddScriptSection(
+            "OverloadProbe.as", overload_source, sizeof(overload_source) - 1U) < 0 ||
+        gore::as::standalone::build_module(*overload_module) < 0) {
+        std::cerr << "could not build the StaticJIT overload fixture\n";
+        if (overload_engine != nullptr) overload_engine->ShutDownAndRelease();
+        projected_engine->ShutDownAndRelease();
+        source_engine->ShutDownAndRelease();
+        return 3;
+    }
+    const std::vector<asIScriptModule*> overload_modules{overload_module};
+    gore::as::standalone::shipping_static_jit_candidates overload_candidates;
+    for (asUINT index = 0U; index < overload_module->GetFunctionCount(); ++index) {
+        overload_candidates.functions.push_back(
+            overload_module->GetFunctionByIndex(index));
+    }
+    gore::as::standalone::lexical_preprocess_result overload_preprocessing;
+    overload_preprocessing.ok = true;
+    gore::as::standalone::lexical_module_description overload_description;
+    overload_description.module_name = "OverloadProbe";
+    gore::as::standalone::preprocessed_class_description overload_statics;
+    overload_statics.class_name = "Module_OverloadProbeStatics";
+    overload_statics.is_statics_class = true;
+    gore::as::standalone::preprocessed_function_description overload_function;
+    overload_function.function_name = "Overloaded";
+    overload_function.script_function_name = "Overloaded";
+    overload_statics.methods.push_back(std::move(overload_function));
+    overload_description.classes.push_back(std::move(overload_statics));
+    overload_preprocessing.modules.push_back(std::move(overload_description));
+    const auto rejected_overload =
+        precompiled::apply_shipping_static_jit_coverage_checkpoint(
+            overload_modules, overload_candidates, coverage,
+            overload_preprocessing);
+    if (rejected_overload.succeeded() || projected_generated->IsFinal() ||
+        projected_reflected->IsFinal() ||
+        overload_module->GetFunctionByIndex(0U)->IsFinal() ||
+        overload_module->GetFunctionByIndex(1U)->IsFinal()) {
+        std::cerr << "StaticJIT accepted an ambiguous UFUNCTION overload\n";
+        overload_engine->ShutDownAndRelease();
+        projected_engine->ShutDownAndRelease();
+        source_engine->ShutDownAndRelease();
+        return 3;
+    }
+    overload_engine->ShutDownAndRelease();
+    const auto projected =
+        precompiled::apply_shipping_static_jit_coverage_checkpoint(
+            projected_modules, projected_candidates, coverage, projected_source);
+    if (!projected.succeeded() ||
+        !projected_covered->GetFunctionByName("CoveredFunction")->IsFinal() ||
+        !projected_generated->IsFinal() || !projected_constructor->IsFinal() ||
+        !projected_destructor->IsFinal() || !projected_reflected->IsFinal() ||
+        projected_plain->IsFinal() || projected_nonfinal->IsFinal() ||
+        !projected_added->GetFunctionByName("AddedFunction")->IsFinal()) {
+        std::cerr << "StaticJIT function coverage projection was not exact: "
+                  << projected.detail << "; generated=" << projected_generated->IsFinal()
+                  << "; constructor=" << projected_constructor->IsFinal()
+                  << "; destructor=" << projected_destructor->IsFinal()
+                  << "; reflected=" << projected_reflected->IsFinal()
+                  << "; plain=" << projected_plain->IsFinal()
+                  << "; nonfinal=" << projected_nonfinal->IsFinal() << '\n';
+        projected_engine->ShutDownAndRelease();
+        source_engine->ShutDownAndRelease();
+        return 3;
+    }
+    projected_engine->ShutDownAndRelease();
+
     precompiled::cache cache;
     cache.build_identifier = static_cast<std::int32_t>(0x9e377abeU);
     precompiled::precompiled_module exported;

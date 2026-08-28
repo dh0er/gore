@@ -98,7 +98,7 @@ class DownloadTableContractTest(unittest.TestCase):
         self.assert_invalid(
             replace_once(
                 self.readme,
-                "releases/tag/gore-cli-v0.2.0)",
+                "releases/tag/gore-cli-v0.2.1)",
                 # Deliberately wrong test-only version: the checker must reject this link.
                 "releases/tag/gore-cli-v9.9.9)",
             ),
@@ -108,7 +108,7 @@ class DownloadTableContractTest(unittest.TestCase):
 
     def test_link_text_must_be_the_release_tag(self) -> None:
         self.assert_invalid(
-            replace_once(self.readme, "[gore-cli-v0.2.0]", "[latest]"),
+            replace_once(self.readme, "[gore-cli-v0.2.1]", "[latest]"),
             None,
             "link text must be the release tag",
         )
@@ -135,7 +135,7 @@ class DownloadTableContractTest(unittest.TestCase):
 
     def test_unreadable_and_unknown_rows_fail_closed(self) -> None:
         self.assert_invalid(
-            replace_once(self.readme, "| **CLI** | 0.2.0 |", "| **CLI** | v0.2.0 |"),
+            replace_once(self.readme, "| **CLI** | 0.2.1 |", "| **CLI** | v0.2.1 |"),
             None,
             "unreadable download row",
         )
@@ -153,9 +153,6 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
         cls.release = (ROOT / ".github" / "workflows" / "release.yml").read_text(
             encoding="utf-8"
         )
-        cls.promotion = (
-            ROOT / ".github" / "workflows" / "standalone-compiler-promotion.yml"
-        ).read_text(encoding="utf-8")
         cls.runner_resources = {
             product: (ROOT / contract.runner_rc).read_text(encoding="utf-8")
             for product, contract in APPCAST_KEYS.items()
@@ -166,14 +163,9 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
         *,
         ci: str | None = None,
         release: str | None = None,
-        promotion: str | None = None,
         mentions: str | None = None,
     ) -> list[str]:
-        problems = validate_workflows(
-            ci or self.ci,
-            release or self.release,
-            promotion or self.promotion,
-        )
+        problems = validate_workflows(ci or self.ci, release or self.release)
         self.assertTrue(problems, "mutated workflows unexpectedly passed")
         if mentions is not None:
             self.assertTrue(
@@ -183,7 +175,7 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
         return problems
 
     def test_current_workflows_pass(self) -> None:
-        self.assertEqual(validate_workflows(self.ci, self.release, self.promotion), [])
+        self.assertEqual(validate_workflows(self.ci, self.release), [])
         self.assertEqual(validate_appcast_key_resources(self.runner_resources), [])
 
     def test_ci_must_be_reusable_and_read_only(self) -> None:
@@ -194,182 +186,6 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
             self.ci, "permissions:\n  contents: read", "permissions:\n  contents: write"
         )
         self.assert_invalid(ci=writable, mentions="must be read")
-
-    def test_internal_signing_never_publishes_releases_or_tags(self) -> None:
-        for forbidden in (
-            "gh release",
-            "git/refs",
-            "contents: write",
-            "claim_tag",
-            "promotion_tag",
-        ):
-            with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, self.promotion)
-
-        wrong_dependency = mutate_job(
-            self.promotion,
-            "build-sign-candidate",
-            "needs: quality-gates",
-            "needs: another-job",
-        )
-        self.assert_invalid(promotion=wrong_dependency, mentions="needs")
-
-        second_signature = replace_once(
-            self.promotion,
-            "          $retainedSidecar = Join-Path $outputRoot 'gore-as-standalone-compiler.exe'\n",
-            "          python scripts/standalone_compiler_bundle.py sign-sidecar-once --sidecar $sidecar --identity-output $identity.second\n"
-            "          $retainedSidecar = Join-Path $outputRoot 'gore-as-standalone-compiler.exe'\n",
-        )
-        self.assert_invalid(promotion=second_signature, mentions="sign.run")
-
-        release_step = replace_once(
-            self.promotion,
-            "      - name: Retain the signed candidate as an internal workflow artifact\n",
-            "      - name: Publish forbidden compiler release\n"
-            "        shell: pwsh\n"
-            "        run: gh release create forbidden\n\n"
-            "      - name: Retain the signed candidate as an internal workflow artifact\n",
-        )
-        self.assert_invalid(promotion=release_step, mentions="exact step order")
-
-        writable_contents = replace_once(
-            self.promotion,
-            "      contents: read\n      id-token: write\n",
-            "      contents: write\n      id-token: write\n",
-        )
-        self.assert_invalid(promotion=writable_contents, mentions="permissions")
-
-        retryable = replace_once(
-            self.promotion,
-            "  cancel-in-progress: false",
-            "  cancel-in-progress: true",
-        )
-        self.assert_invalid(promotion=retryable, mentions="cancel-in-progress")
-
-    def test_promotion_credentials_are_confined_to_the_authorized_steps(self) -> None:
-        job_secret = mutate_job(
-            self.promotion,
-            "build-sign-candidate",
-            "    steps:\n",
-            "    env:\n      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}\n    steps:\n",
-        )
-        self.assert_invalid(promotion=job_secret, mentions="field set changed")
-
-        build_secret = replace_once(
-            self.promotion,
-            "      - name: Build and test the unsigned native candidate\n        shell: pwsh\n",
-            "      - name: Build and test the unsigned native candidate\n"
-            "        shell: pwsh\n"
-            "        env:\n"
-            "          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}\n",
-        )
-        self.assert_invalid(promotion=build_secret, mentions="field set changed")
-
-        sign_token = replace_once(
-            self.promotion,
-            '          GORE_SIGN: "1"\n',
-            '          GORE_SIGN: "1"\n          GH_TOKEN: ${{ github.token }}\n',
-        )
-        self.assert_invalid(promotion=sign_token, mentions="sign.env")
-
-        missing_sign_secret = replace_once(
-            self.promotion,
-            "          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}\n",
-            "",
-        )
-        self.assert_invalid(promotion=missing_sign_secret, mentions="sign.env")
-
-        persisted_checkout_token = replace_once(
-            self.promotion,
-            "          persist-credentials: false",
-            "          persist-credentials: true",
-        )
-        self.assert_invalid(
-            promotion=persisted_checkout_token, mentions="persist-credentials"
-        )
-
-    def test_promotion_attests_all_evidence_and_verifies_exact_origin(self) -> None:
-        missing_permission = replace_once(
-            self.promotion,
-            "      attestations: write\n",
-            "",
-        )
-        self.assert_invalid(promotion=missing_permission, mentions="permissions")
-
-        wrong_action = replace_once(
-            self.promotion,
-            "        uses: actions/attest@v4",
-            "        uses: third-party/attest@v4",
-        )
-        self.assert_invalid(promotion=wrong_action, mentions="attest.uses")
-
-        missing_provenance_subject = replace_nth(
-            self.promotion,
-            "            ${{ runner.temp }}/gore-as-signing-output/source-provenance.json\n",
-            "",
-            0,
-        )
-        self.assert_invalid(
-            promotion=missing_provenance_subject, mentions="subject-path"
-        )
-
-        for required_policy in (
-            "              --signer-workflow '${{ github.repository }}/.github/workflows/standalone-compiler-promotion.yml' `\n",
-            "              --signer-digest '${{ github.workflow_sha }}' `\n",
-            "              --source-digest '${{ github.sha }}' `\n",
-            "              --deny-self-hosted-runners\n",
-        ):
-            with self.subTest(policy=required_policy.strip()):
-                weakened = replace_once(self.promotion, required_policy, "")
-                self.assert_invalid(
-                    promotion=weakened, mentions="verify-attestation.run"
-                )
-
-        for provenance_field in (
-            "            workflow_sha = '${{ github.workflow_sha }}'\n",
-            "            workflow_run_id = [UInt64]'${{ github.run_id }}'\n",
-        ):
-            with self.subTest(provenance_field=provenance_field.strip()):
-                missing_binding = replace_once(
-                    self.promotion, provenance_field, ""
-                )
-                self.assert_invalid(promotion=missing_binding, mentions="sign.run")
-
-        unbound_retained_copy = replace_once(
-            self.promotion,
-            "              $identityRecord.signed.sha256 -ne $retainedSha256) {\n",
-            "              $false) {\n",
-        )
-        self.assert_invalid(promotion=unbound_retained_copy, mentions="sign.run")
-
-    def test_internal_artifact_is_complete_and_immutable(self) -> None:
-        missing_bundle = replace_once(
-            self.promotion,
-            "            ${{ runner.temp }}/gore-as-signing-output/github-attestation.sigstore.json\n",
-            "",
-        )
-        self.assert_invalid(promotion=missing_bundle, mentions="retain.with")
-
-        wrong_action = replace_once(
-            self.promotion,
-            "        uses: actions/upload-artifact@v4",
-            "        uses: third-party/upload@v4",
-        )
-        self.assert_invalid(promotion=wrong_action, mentions="retain.uses")
-
-        overwrite = replace_once(
-            self.promotion,
-            "          overwrite: false\n",
-            "          overwrite: true\n",
-        )
-        self.assert_invalid(promotion=overwrite, mentions="retain.with")
-
-        missing_retention = replace_once(
-            self.promotion,
-            "          retention-days: 30\n",
-            "",
-        )
-        self.assert_invalid(promotion=missing_retention, mentions="retain.with")
 
     def test_ci_must_keep_the_contract_checks_as_its_last_step(self) -> None:
         changed = replace_once(
@@ -526,7 +342,7 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
             "github.ref_type == 'tag' &&",
             "github.ref_type    ==    'tag'    &&",
         )
-        self.assertEqual(validate_workflows(self.ci, reformatted, self.promotion), [])
+        self.assertEqual(validate_workflows(self.ci, reformatted), [])
 
     def test_dispatch_project_is_required_and_closed(self) -> None:
         optional = replace_once(
@@ -561,6 +377,23 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
         self.assert_invalid(
             release=readonly, mentions="release.permissions.contents: changed"
         )
+
+    def test_cli_tag_builds_compiler_and_distribution_through_build_py(self) -> None:
+        renamed = mutate_job(
+            self.release,
+            "gore-cli",
+            "name: Build compiler and distribution",
+            "name: Build distribution",
+        )
+        self.assert_invalid(release=renamed, mentions="exact step order changed")
+
+        bypassed = mutate_job(
+            self.release,
+            "gore-cli",
+            "run: python build.py gore-cli dist",
+            "run: cargo build --release",
+        )
+        self.assert_invalid(release=bypassed, mentions="build command changed")
 
     def test_all_publish_and_feed_steps_keep_push_tag_only_guard(self) -> None:
         self.assertEqual(self.release.count(PUBLISH_GUARD), 7)

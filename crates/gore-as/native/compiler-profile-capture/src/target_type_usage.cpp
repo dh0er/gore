@@ -13,8 +13,8 @@
 namespace gore_as_capture::v1::instrumentation {
 namespace {
 
-constexpr std::uint32_t kFromTypeIdRva = 0x0474d8f0;
-constexpr std::uint32_t kDestroyTypeUsageRva = 0x0465c0d0;
+constexpr std::uint32_t kFromTypeIdRva = kTargetTypeUsage.from_type_id_rva;
+constexpr std::uint32_t kDestroyTypeUsageRva = kTargetTypeUsage.destroy_type_usage_rva;
 constexpr std::array<std::byte, 19> kFromTypeIdProlog{
     std::byte{0x48}, std::byte{0x89}, std::byte{0x5c}, std::byte{0x24}, std::byte{0x18},
     std::byte{0x55}, std::byte{0x56}, std::byte{0x57}, std::byte{0x41}, std::byte{0x54},
@@ -28,10 +28,8 @@ constexpr std::uint32_t kMaximumTypeUsageDepth = 64;
 constexpr std::uint32_t kMaximumTypeUsageNodes = 4096;
 constexpr std::int32_t kMaximumValueBytes = 64 * 1024 * 1024;
 
-// FAngelscriptType vtable byte offsets. The class-generator loop at target
-// 0x485e281/0x485e2a1/0x485e309 independently witnesses the property-policy
-// slots; the remaining slots are witnessed by the TSet/TMap/TOptional
-// operation validators at 0x4834e90..0x483543c and 0x484ddc9.
+// FAngelscriptType vtable byte offsets. Matching class-generator and validator shapes were
+// independently verified in both authenticated target generations.
 namespace type_slot {
 constexpr std::size_t can_create_property = 0x048 / sizeof(std::uintptr_t);
 constexpr std::size_t never_requires_gc = 0x070 / sizeof(std::uintptr_t);
@@ -159,6 +157,44 @@ bool pinned_prolog(
              reinterpret_cast<const void*>(image + rva),
              expected.data(),
              expected.size()) == 0;
+}
+
+bool pinned_runtime_function(
+    const std::uintptr_t image,
+    const std::uint32_t image_bytes,
+    const std::uint32_t begin_rva,
+    const std::uint32_t end_rva) noexcept {
+  if (begin_rva >= end_rva || end_rva > image_bytes ||
+      image > std::numeric_limits<std::uintptr_t>::max() - begin_rva) {
+    return false;
+  }
+  DWORD64 runtime_image_base = 0;
+  const auto* runtime_function = RtlLookupFunctionEntry(
+      static_cast<DWORD64>(image + begin_rva), &runtime_image_base, nullptr);
+  return runtime_function != nullptr && runtime_image_base == image &&
+         runtime_function->BeginAddress == begin_rva &&
+         runtime_function->EndAddress == end_rva;
+}
+
+bool pinned_type_usage_entrypoints(
+    const std::uintptr_t image,
+    const std::uint32_t image_bytes) noexcept {
+  return pinned_prolog(image, image_bytes, kFromTypeIdRva, kFromTypeIdProlog) &&
+         pinned_runtime_function(
+             image,
+             image_bytes,
+             kFromTypeIdRva,
+             kTargetTypeUsage.from_type_id_end_rva) &&
+         pinned_prolog(
+             image,
+             image_bytes,
+             kDestroyTypeUsageRva,
+             kDestroyTypeUsageProlog) &&
+         pinned_runtime_function(
+             image,
+             image_bytes,
+             kDestroyTypeUsageRva,
+             kTargetTypeUsage.destroy_type_usage_end_rva);
 }
 
 TargetTypeUsageError validate_type_usage_tree(
@@ -289,13 +325,7 @@ TargetTypeUsageError resolve_target_type_operations_v1(
   if (primary_image == 0 || image_bytes == 0 || engine_type_id == 0) {
     return TargetTypeUsageError::invalid_argument;
   }
-  if (!pinned_prolog(
-          primary_image, image_bytes, kFromTypeIdRva, kFromTypeIdProlog) ||
-      !pinned_prolog(
-          primary_image,
-          image_bytes,
-          kDestroyTypeUsageRva,
-          kDestroyTypeUsageProlog)) {
+  if (!pinned_type_usage_entrypoints(primary_image, image_bytes)) {
     return TargetTypeUsageError::prolog_drift;
   }
   using FromTypeId = void(__fastcall*)(TargetTypeUsage*, std::int32_t);
@@ -363,13 +393,7 @@ TargetTypeUsageError resolve_target_type_operations_projection_v1(
       declaration == nullptr || declaration_bytes == 0) {
     return TargetTypeUsageError::invalid_argument;
   }
-  if (!pinned_prolog(
-          primary_image, image_bytes, kFromTypeIdRva, kFromTypeIdProlog) ||
-      !pinned_prolog(
-          primary_image,
-          image_bytes,
-          kDestroyTypeUsageRva,
-          kDestroyTypeUsageProlog)) {
+  if (!pinned_type_usage_entrypoints(primary_image, image_bytes)) {
     return TargetTypeUsageError::prolog_drift;
   }
   using FromTypeId = void(__fastcall*)(TargetTypeUsage*, std::int32_t);

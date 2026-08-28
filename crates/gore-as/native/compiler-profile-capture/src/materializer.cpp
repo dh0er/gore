@@ -55,6 +55,7 @@ class Handle final {
 };
 
 struct ParsedSummary final {
+  const CaptureTarget* target{};
   std::uint64_t record_count{};
   Digest sealed_stream_sha256{};
   GuidBytes capture_id{};
@@ -304,16 +305,28 @@ MaterializeError parse_capture(
   }
   if (!equal_bytes(*magic, kCaptureMagic) || *schema != kSchemaVersion ||
       *header_bytes != kHeaderBytes || *header_reserved != 0 || *final_reserved != 0 ||
-      *app_id != kSteamAppId || *build_id != kSteamBuildId ||
-      *angelscript_version != kAngelScriptVersion || *executable_bytes != kExecutableBytes ||
-      !equal_bytes(*executable_sha, kExecutableSha256) ||
-      !equal_bytes(*codeview_guid, kCodeViewGuidRsds) || *codeview_age != kCodeViewAge) {
+      *app_id != kSteamAppId) {
     return MaterializeError::target_mismatch;
   }
+  const auto target = std::find_if(
+      kSupportedCaptureTargets.begin(), kSupportedCaptureTargets.end(),
+      [build_id](const CaptureTarget& candidate) {
+        return candidate.steam_build_id == *build_id;
+      });
+  if (target == kSupportedCaptureTargets.end() ||
+      *angelscript_version != target->angelscript_version ||
+      *executable_bytes != target->executable_bytes ||
+      !equal_bytes(*executable_sha, target->executable_sha256) ||
+      !equal_bytes(*codeview_guid, target->codeview_guid_rsds) ||
+      *codeview_age != target->codeview_age) {
+    return MaterializeError::target_mismatch;
+  }
+  summary.target = &*target;
   if (all_zero(*capture_id)) {
     return MaterializeError::malformed_capture;
   }
   std::memcpy(summary.capture_id.data(), capture_id->data(), summary.capture_id.size());
+  const auto& capture_target = *summary.target;
 
   Cursor footer(bytes.subspan(footer_offset));
   const auto footer_magic = footer.take(kFooterMagic.size());
@@ -387,7 +400,7 @@ MaterializeError parse_capture(
           if (!property_id.has_value() || !reserved0.has_value() || !value.has_value() ||
               !observation_rva.has_value() || !reserved1.has_value() || !property.empty() ||
               *property_id == 0 || *property_id > 34 || *reserved0 != 0 || *reserved1 != 0 ||
-              *observation_rva != kRvaSetEngineProperty) {
+              *observation_rva != capture_target.rva_set_engine_property) {
     return MaterializeError::malformed_capture;
           }
         }
@@ -404,7 +417,7 @@ MaterializeError parse_capture(
           const auto pointer_reserved = pointer.u32();
           if (!token.has_value() || !image_rva.has_value() || !pointer_reserved.has_value() ||
               !pointer.empty() || *token != pointer_count || *image_rva == 0 ||
-              *image_rva >= kPeSizeOfImage || *pointer_reserved != 0) {
+              *image_rva >= capture_target.pe_size_of_image || *pointer_reserved != 0) {
     return MaterializeError::malformed_capture;
           }
           ++pointer_count;
@@ -431,7 +444,7 @@ MaterializeError parse_capture(
     return MaterializeError::malformed_capture;
         }
         if (*phase == 1 && !bind_active && *callback == next_callback &&
-            *observation_rva == kRvaBindCallbackCall) {
+            *observation_rva == capture_target.rva_bind_callback_call) {
           bind_active = true;
           active_callback = *callback;
           active_bind_order = static_cast<std::int32_t>(*bind_order);
@@ -440,7 +453,7 @@ MaterializeError parse_capture(
           if (*callback != active_callback ||
               static_cast<std::int32_t>(*bind_order) != active_bind_order ||
               *pointer_token != active_pointer_token ||
-              *observation_rva != kRvaBindCallbackReturn) {
+              *observation_rva != capture_target.rva_bind_callback_return) {
     return MaterializeError::malformed_capture;
           }
           bind_active = false;
@@ -477,19 +490,20 @@ MaterializeError parse_capture(
           Cursor build(*payload);
           const auto identifier = build.u32();
           const auto build_flags = build.u32();
-          const auto precompiled_guid = build.take(kPrecompiledGuid.size());
+          const auto precompiled_guid = build.take(capture_target.precompiled_guid.size());
           const auto compiled_jit_guid = build.take(GuidBytes{}.size());
           const auto build_rva = build.u32();
           const auto jit_rva = build.u32();
           if (!identifier.has_value() || !build_flags.has_value() ||
               !precompiled_guid.has_value() ||
               !compiled_jit_guid.has_value() || !build_rva.has_value() || !jit_rva.has_value() ||
-              !build.empty() || *identifier != kBuildIdentifier ||
+              !build.empty() || *identifier != capture_target.build_identifier ||
               (*build_flags & ~0xffu) != 0 || (*build_flags & 0xf0u) != 0x20u ||
               (*build_flags & 0x08u) == 0 ||
               (*build_flags & 0x04u) != 0 ||
-              !equal_bytes(*precompiled_guid, kPrecompiledGuid) ||
-              *build_rva != kRvaGetBuildIdentifier || *jit_rva != kRvaGetStaticJitInfo ||
+              !equal_bytes(*precompiled_guid, capture_target.precompiled_guid) ||
+              *build_rva != capture_target.rva_get_build_identifier ||
+              *jit_rva != capture_target.rva_get_static_jit_info ||
               (((*build_flags & 0x01u) == 0) &&
                (((*build_flags & 0x02u) != 0) || !all_zero(*compiled_jit_guid))) ||
               (((*build_flags & 0x01u) != 0) &&
@@ -534,18 +548,21 @@ MaterializeError parse_capture(
                               output_digest.has_value() && boundary.empty() &&
                               !all_zero(*config_digest) &&
                               ((boundary_count == 0 && *boundary_kind == 1 &&
-                                *rva == kRvaInitialCompileEnter && *module_count == 0 &&
+                                *rva == capture_target.rva_initial_compile_enter &&
+                                *module_count == 0 &&
                                 all_zero(*output_digest)) ||
                                (boundary_count == 1 &&
                                 ((*boundary_kind == 2 &&
-                                  *rva == kRvaPrecompiledDescriptorsRequested &&
+                                  *rva == capture_target.rva_precompiled_descriptors_requested &&
                                   *module_count != 0 && !all_zero(*input_digest) &&
                                   !all_zero(*output_digest)) ||
                                  (*boundary_kind == 3 &&
-                                  *rva == kRvaPreprocessorConstructed && *module_count == 0 &&
+                                  *rva == capture_target.rva_preprocessor_constructed &&
+                                  *module_count == 0 &&
                                   all_zero(*input_digest) && all_zero(*output_digest)))) ||
                                (boundary_count == 2 && *boundary_kind == 4 &&
-                                *rva == kRvaInitialCompileReturn && *module_count != 0 &&
+                                *rva == capture_target.rva_initial_compile_return &&
+                                *module_count != 0 &&
                                 *result_code == 0 && !all_zero(*output_digest)));
         if (!expected ||
             (frontend_config_digest.has_value() &&
@@ -590,13 +607,14 @@ std::string hex(const std::span<const std::byte> bytes) {
 }
 
 std::string summary_json(const ParsedSummary& summary) {
+  const auto& target = *summary.target;
   std::string output;
   output.reserve(1024);
   output += "{\n  \"schema\": \"gore.as.capture-wire-materialization\",\n";
   output += "  \"schema_version\": 1,\n";
   output += "  \"scope\": \"wire_only_not_a_qualified_compiler_profile\",\n";
-  output += "  \"steam_app_id\": " + std::to_string(kSteamAppId) + ",\n";
-  output += "  \"steam_build_id\": " + std::to_string(kSteamBuildId) + ",\n";
+  output += "  \"steam_app_id\": " + std::to_string(target.steam_app_id) + ",\n";
+  output += "  \"steam_build_id\": " + std::to_string(target.steam_build_id) + ",\n";
   output += "  \"capture_id\": \"" + hex(summary.capture_id) + "\",\n";
   output += "  \"sealed_stream_sha256\": \"" + hex(summary.sealed_stream_sha256) + "\",\n";
   output += "  \"record_count\": " + std::to_string(summary.record_count) + ",\n";

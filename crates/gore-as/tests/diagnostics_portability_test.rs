@@ -7,9 +7,9 @@ use gore_generation::{file_seal, FileSeal};
 
 struct ReleaseFixture {
     version: &'static str,
-    /// Length and SHA-256 of the archived executable. The last two rows read the generation
-    /// table's own executable seal rather than restating it, so an archive can never describe a
-    /// build the table has re-sealed; the three older ones predate the table and carry their own.
+    /// Length and SHA-256 of the archived executable. The two 1.0.3 rows plus 1.0.4 and 1.0.5 read
+    /// the generation table's own executable seal rather than restating it; the remaining four
+    /// diagnostics fixtures carry explicit provenance seals. The scanner never reads this table.
     seal: FileSeal,
     callback_rva: u64,
     manager_diagnostic_rva: u64,
@@ -70,6 +70,12 @@ const RELEASE_FIXTURES: &[ReleaseFixture] = &[
         callback_rva: 0x4685ff0,
         manager_diagnostic_rva: 0x4689e80,
     },
+    ReleaseFixture {
+        version: "1.0.5",
+        seal: gore_generation::ROW_G1R_24878692.executable,
+        callback_rva: 0x4685fb0,
+        manager_diagnostic_rva: 0x4689e40,
+    },
 ];
 
 fn default_fixture_root() -> PathBuf {
@@ -86,7 +92,7 @@ fn default_fixture_root() -> PathBuf {
 /// makes their absence a test failure. A locally present default matrix must also be complete so a
 /// partially copied archive cannot look like complete release coverage.
 #[test]
-fn archived_release_executables_keep_the_verified_callback_capability() {
+fn archived_release_executables_keep_the_verified_diagnostics_capability() {
     let explicit_root = std::env::var_os("GORE_AS_RELEASE_MATRIX_DIR").map(PathBuf::from);
     let root = explicit_root.clone().unwrap_or_else(default_fixture_root);
     let present = RELEASE_FIXTURES
@@ -102,7 +108,8 @@ fn archived_release_executables_keep_the_verified_callback_capability() {
     }
 
     let mut hashes = BTreeSet::new();
-    let mut rvas = BTreeSet::new();
+    let mut callback_rvas = BTreeSet::new();
+    let mut manager_rvas = BTreeSet::new();
     for fixture in RELEASE_FIXTURES {
         let exe = executable(&root, fixture.version);
         assert!(
@@ -170,13 +177,15 @@ fn archived_release_executables_keep_the_verified_callback_capability() {
             fixture.version
         );
         assert!(hashes.insert(probe.sha256));
-        assert!(rvas.insert(fixture.callback_rva));
+        assert!(callback_rvas.insert(fixture.callback_rva));
+        assert!(manager_rvas.insert(fixture.manager_diagnostic_rva));
     }
 
-    // Different RVAs across all archived releases prove the regression is exercising AOB discovery,
-    // not accidentally validating one build-specific fixed address.
+    // Different callback and manager RVAs across all archived releases prove that both regressions
+    // exercise AOB discovery rather than accidentally validating build-specific fixed addresses.
     assert_eq!(hashes.len(), RELEASE_FIXTURES.len());
-    assert_eq!(rvas.len(), RELEASE_FIXTURES.len());
+    assert_eq!(callback_rvas.len(), RELEASE_FIXTURES.len());
+    assert_eq!(manager_rvas.len(), RELEASE_FIXTURES.len());
 }
 
 fn executable(root: &Path, version: &str) -> PathBuf {

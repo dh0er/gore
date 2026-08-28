@@ -107,7 +107,9 @@ void record_graph_failure(
 graph_build_result build_module_graph(
     asIScriptModule* const* module_interfaces,
     const std::size_t module_count,
-    const graph_build_hooks* const hooks) {
+    const graph_build_hooks* const hooks,
+    const global_initializer_policy initializer_policy,
+    shipping_static_jit_candidates* const static_jit_candidates) {
     graph_build_result result{};
     if (module_count == 0U) {
         return result;
@@ -176,6 +178,9 @@ graph_build_result build_module_graph(
 
     // Pinned FAngelscriptManager barrier 1: parse every module before any
     // module publishes its type declarations.
+    if (static_jit_candidates != nullptr) {
+        static_jit_candidates->functions.clear();
+    }
     for (std::size_t index = 0U; index < modules.size(); ++index) {
         module_state& state = modules[index];
         if (state.module->builder == nullptr) {
@@ -268,6 +273,17 @@ graph_build_result build_module_graph(
         asDELETE(state.module->builder, asCBuilder);
         state.module->builder = nullptr;
         state.module->JITCompile();
+        if (static_jit_candidates != nullptr) {
+            for (asUINT function_index = 0U;
+                 function_index < state.module->scriptFunctions.GetLength();
+                 ++function_index) {
+                asCScriptFunction* const function =
+                    state.module->scriptFunctions[function_index];
+                if (function != nullptr && function->funcType == asFUNC_SCRIPT) {
+                    static_jit_candidates->functions.push_back(function);
+                }
+            }
+        }
     }
 
     // Manager stage 4 validates templates once for the whole graph.
@@ -279,7 +295,8 @@ graph_build_result build_module_graph(
         record_graph_failure(result, graph_build_phase::validate_template_instances, asERROR);
     }
 
-    if (result.succeeded()) {
+    if (result.succeeded() &&
+        initializer_policy == global_initializer_policy::execute) {
         for (std::size_t index = 0U; index < modules.size(); ++index) {
             const int phase_result = modules[index].module->ResetGlobalVars(nullptr);
             if (phase_result != asSUCCESS) {
@@ -297,6 +314,18 @@ graph_build_result build_module_graph(
         cleanup.keep_built_modules();
     }
     return result;
+}
+
+graph_build_result build_module_graph(
+    asIScriptModule* const* const module_interfaces,
+    const std::size_t module_count,
+    const graph_build_hooks* const hooks) {
+    return build_module_graph(
+        module_interfaces,
+        module_count,
+        hooks,
+        global_initializer_policy::execute,
+        nullptr);
 }
 
 int build_module(asIScriptModule& module) {

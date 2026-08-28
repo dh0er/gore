@@ -21,8 +21,6 @@ from typing import Iterable, Mapping, Sequence
 ROOT = Path(__file__).resolve().parent.parent
 CI_PATH = ROOT / ".github" / "workflows" / "ci.yml"
 RELEASE_PATH = ROOT / ".github" / "workflows" / "release.yml"
-PROMOTION_PATH = ROOT / ".github" / "workflows" / "standalone-compiler-promotion.yml"
-
 README_PATH = ROOT / "README.md"
 
 DOWNLOAD_HEADING = "## ⬇️ Downloads"
@@ -333,7 +331,7 @@ PRODUCTS: dict[str, ProductContract] = {
         release_notes_command=_release_notes_command(
             "crates/gore/CHANGELOG.md", "dist/gore-cli"
         ),
-        build_step="Build distribution",
+        build_step="Build compiler and distribution",
         build_command="python build.py gore-cli dist",
         upload_name="gore-cli-windows-x64",
         upload_paths="dist/gore-cli/*.zip",
@@ -1283,377 +1281,16 @@ def _validate_release(root: dict[str, Field], problems: list[str]) -> None:
             _validate_product_steps(product, contract, steps, problems)
 
 
-def _validate_promotion(root: dict[str, Field], problems: list[str]) -> None:
-    context = "standalone compiler signing"
-    _expect_keys(
-        root,
-        {"name", "on", "permissions", "concurrency", "jobs"},
-        context,
-        problems,
-    )
-    _expect_scalar(
-        root,
-        "name",
-        "Internal standalone compiler signing",
-        context,
-        problems,
-    )
-    on = _required(root, "on", context, problems)
-    if on is not None:
-        triggers = _mapping(on, f"{context}.on")
-        _expect_keys(triggers, {"workflow_dispatch"}, f"{context}.on", problems)
-        dispatch = triggers.get("workflow_dispatch")
-        if dispatch is not None:
-            _expect_keys(
-                _mapping(dispatch, f"{context}.on.workflow_dispatch"),
-                set(),
-                f"{context}.on.workflow_dispatch",
-                problems,
-            )
-    permissions = _required(root, "permissions", context, problems)
-    if permissions is not None:
-        _expect_scalar_map(
-            permissions, {"contents": "read"}, f"{context}.permissions", problems
-        )
-    concurrency = _required(root, "concurrency", context, problems)
-    if concurrency is not None:
-        _expect_scalar_map(
-            concurrency,
-            {
-                "group": "standalone-compiler-signing-${{ github.sha }}",
-                "cancel-in-progress": "false",
-            },
-            f"{context}.concurrency",
-            problems,
-        )
-    jobs = _required(root, "jobs", context, problems)
-    if jobs is None:
-        return
-    job_fields = _mapping(jobs, f"{context}.jobs")
-    _expect_keys(
-        job_fields,
-        {"quality-gates", "build-sign-candidate"},
-        f"{context}.jobs",
-        problems,
-    )
-    quality = job_fields.get("quality-gates")
-    if quality is not None:
-        fields = _mapping(quality, f"{context}.jobs.quality-gates")
-        _expect_keys(
-            fields,
-            {"name", "permissions", "uses"},
-            f"{context}.jobs.quality-gates",
-            problems,
-        )
-        _expect_scalar(
-            fields,
-            "name",
-            "Exact-commit CI quality gates",
-            f"{context}.jobs.quality-gates",
-            problems,
-        )
-        _expect_scalar(
-            fields,
-            "uses",
-            REUSABLE_CI,
-            f"{context}.jobs.quality-gates",
-            problems,
-        )
-        quality_permissions = fields.get("permissions")
-        if quality_permissions is not None:
-            _expect_scalar_map(
-                quality_permissions,
-                {"contents": "read"},
-                f"{context}.jobs.quality-gates.permissions",
-                problems,
-            )
-    build = job_fields.get("build-sign-candidate")
-    if build is None:
-        return
-    fields = _mapping(build, f"{context}.jobs.build-sign-candidate")
-    _expect_keys(
-        fields,
-        {"name", "needs", "runs-on", "permissions", "steps"},
-        f"{context}.jobs.build-sign-candidate",
-        problems,
-    )
-    _expect_scalar(
-        fields,
-        "name",
-        "Build, sign, attest, and retain the internal candidate",
-        f"{context}.jobs.build-sign-candidate",
-        problems,
-    )
-    _expect_scalar(
-        fields,
-        "needs",
-        "quality-gates",
-        f"{context}.jobs.build-sign-candidate",
-        problems,
-    )
-    _expect_scalar(
-        fields,
-        "runs-on",
-        "windows-latest",
-        f"{context}.jobs.build-sign-candidate",
-        problems,
-    )
-    build_permissions = fields.get("permissions")
-    if build_permissions is not None:
-        _expect_scalar_map(
-            build_permissions,
-            {
-                "attestations": "write",
-                "contents": "read",
-                "id-token": "write",
-            },
-            f"{context}.jobs.build-sign-candidate.permissions",
-            problems,
-        )
-    steps_field = _required(
-        fields, "steps", f"{context}.jobs.build-sign-candidate", problems
-    )
-    if steps_field is None:
-        return
-    steps = _parse_steps(steps_field, f"{context}.jobs.build-sign-candidate.steps")
-    step_context = f"{context}.jobs.build-sign-candidate.steps"
-    expected_order = (
-        "uses:actions/checkout@v4",
-        "name:Build and test the unsigned native candidate",
-        "name:Sign the internal candidate exactly once",
-        "name:Attest the signed internal candidate and evidence",
-        "name:Verify and stage the GitHub attestation bundle",
-        "name:Retain the signed candidate as an internal workflow artifact",
-    )
-    actual_order = tuple(_step_identity(step, step_context) for step in steps)
-    if actual_order != expected_order:
-        problems.append(f"{step_context}: exact step order changed ({actual_order!r})")
-    if len(steps) != len(expected_order):
-        return
-
-    checkout_context = f"{step_context}.checkout"
-    _expect_keys(steps[0].fields, {"uses", "with"}, checkout_context, problems)
-    _expect_scalar(
-        steps[0].fields, "uses", "actions/checkout@v4", checkout_context, problems
-    )
-    checkout_with = steps[0].fields.get("with")
-    if checkout_with is not None:
-        _expect_scalar_map(
-            checkout_with,
-            {"persist-credentials": "false"},
-            f"{checkout_context}.with",
-            problems,
-        )
-
-    _expect_simple_step(
-        steps[1],
-        {
-            "name": "Build and test the unsigned native candidate",
-            "shell": "pwsh",
-            "run": (
-                "$buildRoot = Join-Path $env:RUNNER_TEMP 'gore-as-signing-native'\n"
-                "python scripts/standalone_compiler_bundle.py build-native --build-root $buildRoot"
-            ),
-        },
-        f"{step_context}.build",
-        problems,
-    )
-
-    sign_run = (
-        "$buildRoot = Join-Path $env:RUNNER_TEMP 'gore-as-signing-native'\n"
-        "$outputRoot = Join-Path $env:RUNNER_TEMP 'gore-as-signing-output'\n"
-        "New-Item -ItemType Directory -Path $outputRoot | Out-Null\n"
-        "$sidecar = Join-Path $buildRoot 'sidecar\\Release\\gore-as-standalone-compiler.exe'\n"
-        "$identity = Join-Path $outputRoot 'signed-sidecar-identity.json'\n"
-        "python scripts/standalone_compiler_bundle.py sign-sidecar-once `\n"
-        "  --sidecar $sidecar `\n"
-        "  --identity-output $identity\n"
-        "$retainedSidecar = Join-Path $outputRoot 'gore-as-standalone-compiler.exe'\n"
-        "[IO.File]::Copy($sidecar, $retainedSidecar, $false)\n"
-        "$identityRecord = Get-Content -Raw -LiteralPath $identity | ConvertFrom-Json\n"
-        "$retainedLength = (Get-Item -LiteralPath $retainedSidecar).Length\n"
-        "$retainedSha256 = (Get-FileHash -LiteralPath $retainedSidecar -Algorithm SHA256).Hash.ToLowerInvariant()\n"
-        "if ($identityRecord.schema -ne 'gore.as.signed-standalone-compiler-identity' -or `\n"
-        "    $identityRecord.schema_version -ne 1 -or `\n"
-        "    $identityRecord.signed.byte_len -ne $retainedLength -or `\n"
-        "    $identityRecord.signed.sha256 -ne $retainedSha256) {\n"
-        '  Write-Error "retained sidecar differs from its one-time signing identity"\n'
-        "  exit 1\n"
-        "}\n"
-        "$signature = Get-AuthenticodeSignature -LiteralPath $retainedSidecar\n"
-        "if ($signature.Status -ne 'Valid') {\n"
-        '  Write-Error "final Authenticode status is $($signature.Status)"\n'
-        "  exit 1\n"
-        "}\n"
-        "$identityBytes = [IO.File]::ReadAllBytes($identity)\n"
-        "[ordered]@{\n"
-        "  schema = 'gore.as.internal-standalone-compiler-signing-provenance'\n"
-        "  schema_version = 1\n"
-        "  repository = '${{ github.repository }}'\n"
-        "  commit = '${{ github.sha }}'\n"
-        "  workflow_sha = '${{ github.workflow_sha }}'\n"
-        "  workflow_run_id = [UInt64]'${{ github.run_id }}'\n"
-        "  workflow_run_attempt = [UInt32]'${{ github.run_attempt }}'\n"
-        "  signed_identity = [ordered]@{\n"
-        "    byte_len = [UInt64]$identityBytes.LongLength\n"
-        "    sha256 = (Get-FileHash -LiteralPath $identity -Algorithm SHA256).Hash.ToLowerInvariant()\n"
-        "  }\n"
-        "} | ConvertTo-Json | Set-Content `\n"
-        "  -LiteralPath (Join-Path $outputRoot 'source-provenance.json') `\n"
-        "  -Encoding utf8NoBOM"
-    )
-    sign_context = f"{step_context}.sign"
-    _expect_keys(
-        steps[2].fields, {"name", "shell", "env", "run"}, sign_context, problems
-    )
-    _expect_scalar(
-        steps[2].fields,
-        "name",
-        "Sign the internal candidate exactly once",
-        sign_context,
-        problems,
-    )
-    _expect_scalar(steps[2].fields, "shell", "pwsh", sign_context, problems)
-    sign_env = steps[2].fields.get("env")
-    if sign_env is not None:
-        _expect_scalar_map(
-            sign_env,
-            {
-                "GORE_SIGN": '"1"',
-                "TRUSTED_SIGNING_ENDPOINT": "${{ secrets.TRUSTED_SIGNING_ENDPOINT }}",
-                "TRUSTED_SIGNING_ACCOUNT": "${{ secrets.TRUSTED_SIGNING_ACCOUNT }}",
-                "TRUSTED_SIGNING_PROFILE": "${{ secrets.TRUSTED_SIGNING_PROFILE }}",
-                "AZURE_TENANT_ID": "${{ secrets.AZURE_TENANT_ID }}",
-                "AZURE_CLIENT_ID": "${{ secrets.AZURE_CLIENT_ID }}",
-                "AZURE_CLIENT_SECRET": "${{ secrets.AZURE_CLIENT_SECRET }}",
-            },
-            f"{sign_context}.env",
-            problems,
-        )
-    _expect_scalar(steps[2].fields, "run", sign_run, sign_context, problems)
-
-    attest_context = f"{step_context}.attest"
-    _expect_keys(
-        steps[3].fields, {"name", "id", "uses", "with"}, attest_context, problems
-    )
-    _expect_scalar(
-        steps[3].fields,
-        "name",
-        "Attest the signed internal candidate and evidence",
-        attest_context,
-        problems,
-    )
-    _expect_scalar(steps[3].fields, "id", "attest", attest_context, problems)
-    _expect_scalar(
-        steps[3].fields, "uses", "actions/attest@v4", attest_context, problems
-    )
-    attest_with = steps[3].fields.get("with")
-    if attest_with is not None:
-        _expect_scalar_map(
-            attest_with,
-            {
-                "github-token": "${{ github.token }}",
-                "subject-path": (
-                    "${{ runner.temp }}/gore-as-signing-output/gore-as-standalone-compiler.exe\n"
-                    "${{ runner.temp }}/gore-as-signing-output/signed-sidecar-identity.json\n"
-                    "${{ runner.temp }}/gore-as-signing-output/source-provenance.json"
-                ),
-            },
-            f"{attest_context}.with",
-            problems,
-        )
-
-    verify_run = (
-        "$outputRoot = Join-Path $env:RUNNER_TEMP 'gore-as-signing-output'\n"
-        "$bundle = Join-Path $outputRoot 'github-attestation.sigstore.json'\n"
-        "[IO.File]::Copy('${{ steps.attest.outputs.bundle-path }}', $bundle, $false)\n"
-        "$subjects = @(\n"
-        "  (Join-Path $outputRoot 'gore-as-standalone-compiler.exe'),\n"
-        "  (Join-Path $outputRoot 'signed-sidecar-identity.json'),\n"
-        "  (Join-Path $outputRoot 'source-provenance.json')\n"
-        ")\n"
-        "foreach ($subject in $subjects) {\n"
-        "  gh attestation verify $subject `\n"
-        "    --repo '${{ github.repository }}' `\n"
-        "    --bundle $bundle `\n"
-        "    --signer-workflow '${{ github.repository }}/.github/workflows/standalone-compiler-promotion.yml' `\n"
-        "    --signer-digest '${{ github.workflow_sha }}' `\n"
-        "    --source-digest '${{ github.sha }}' `\n"
-        "    --deny-self-hosted-runners\n"
-        "  if ($LASTEXITCODE -ne 0) {\n"
-        '    Write-Error "GitHub attestation verification failed for $subject"\n'
-        "    exit 1\n"
-        "  }\n"
-        "}"
-    )
-    _expect_simple_step(
-        steps[4],
-        {
-            "name": "Verify and stage the GitHub attestation bundle",
-            "shell": "pwsh",
-            "run": verify_run,
-        },
-        f"{step_context}.verify-attestation",
-        problems,
-    )
-
-    retain_context = f"{step_context}.retain"
-    _expect_keys(steps[5].fields, {"name", "uses", "with"}, retain_context, problems)
-    _expect_scalar(
-        steps[5].fields,
-        "name",
-        "Retain the signed candidate as an internal workflow artifact",
-        retain_context,
-        problems,
-    )
-    _expect_scalar(
-        steps[5].fields,
-        "uses",
-        "actions/upload-artifact@v4",
-        retain_context,
-        problems,
-    )
-    retain_with = steps[5].fields.get("with")
-    if retain_with is not None:
-        _expect_scalar_map(
-            retain_with,
-            {
-                "name": (
-                    "gore-as-signed-candidate-${{ github.sha }}-"
-                    "${{ github.run_id }}-${{ github.run_attempt }}"
-                ),
-                "path": (
-                    "${{ runner.temp }}/gore-as-signing-output/gore-as-standalone-compiler.exe\n"
-                    "${{ runner.temp }}/gore-as-signing-output/signed-sidecar-identity.json\n"
-                    "${{ runner.temp }}/gore-as-signing-output/source-provenance.json\n"
-                    "${{ runner.temp }}/gore-as-signing-output/github-attestation.sigstore.json"
-                ),
-                "if-no-files-found": "error",
-                "retention-days": "30",
-                "compression-level": "0",
-                "overwrite": "false",
-            },
-            f"{retain_context}.with",
-            problems,
-        )
-def validate_workflows(
-    ci_text: str, release_text: str, promotion_text: str
-) -> list[str]:
+def validate_workflows(ci_text: str, release_text: str) -> list[str]:
     """Return contract violations; an empty list means the workflows are safe."""
     try:
         ci_root = _parse_fields(_source(ci_text, "ci.yml"), 0, "ci.yml")
         release_root = _parse_fields(
             _source(release_text, "release.yml"), 0, "release.yml"
         )
-        promotion_root = _parse_fields(
-            _source(promotion_text, "standalone-compiler-promotion.yml"),
-            0,
-            "standalone-compiler-promotion.yml",
-        )
         problems: list[str] = []
         _validate_ci(ci_root, problems)
         _validate_release(release_root, problems)
-        _validate_promotion(promotion_root, problems)
         return problems
     except WorkflowParseError as error:
         return [str(error)]
@@ -1768,7 +1405,6 @@ def main() -> int:
     try:
         ci_text = CI_PATH.read_text(encoding="utf-8")
         release_text = RELEASE_PATH.read_text(encoding="utf-8")
-        promotion_text = PROMOTION_PATH.read_text(encoding="utf-8")
         runner_resources = {
             product: (ROOT / contract.runner_rc).read_text(encoding="utf-8")
             for product, contract in APPCAST_KEYS.items()
@@ -1781,7 +1417,7 @@ def main() -> int:
         )
         return 1
 
-    problems = validate_workflows(ci_text, release_text, promotion_text)
+    problems = validate_workflows(ci_text, release_text)
     problems.extend(validate_appcast_key_resources(runner_resources))
     problems.extend(
         validate_download_table(readme_text, os.environ.get("GITHUB_REF_NAME"))

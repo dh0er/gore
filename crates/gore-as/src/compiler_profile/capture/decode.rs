@@ -110,29 +110,13 @@ fn parse_header(bytes: &[u8]) -> Result<CaptureHeaderV1, CaptureDecodeError> {
         CAPTURE_HEADER_BYTES_V1 as u16,
     )?;
     expect_u32("header flags", cursor.u32()?, 0)?;
-    expect_u32("Steam app id", cursor.u32()?, PINNED_STEAM_APP_ID)?;
-    expect_u64("Steam build id", cursor.u64()?, PINNED_STEAM_BUILD_ID)?;
-    expect_u32(
-        "AngelScript version",
-        cursor.u32()?,
-        PINNED_ANGELSCRIPT_VERSION,
-    )?;
-    expect_u64(
-        "executable byte length",
-        cursor.u64()?,
-        PINNED_EXECUTABLE_BYTES,
-    )?;
-    expect_bytes(
-        "executable sha256",
-        cursor.take(32)?,
-        &PINNED_EXECUTABLE_SHA256,
-    )?;
-    expect_bytes(
-        "CodeView guid",
-        cursor.take(16)?,
-        &PINNED_CODEVIEW_GUID_RSDS,
-    )?;
-    expect_u32("CodeView age", cursor.u32()?, PINNED_CODEVIEW_AGE)?;
+    let steam_app_id = cursor.u32()?;
+    let steam_build_id = cursor.u64()?;
+    let angelscript_version = cursor.u32()?;
+    let executable_bytes = cursor.u64()?;
+    let executable_sha256: [u8; 32] = cursor.take(32)?.try_into().expect("fixed length");
+    let codeview_guid_rsds: [u8; 16] = cursor.take(16)?.try_into().expect("fixed length");
+    let codeview_age = cursor.u32()?;
     let capture_id: [u8; 16] = cursor.take(16)?.try_into().expect("fixed length");
     if capture_id == [0; 16] {
         return Err(CaptureDecodeError::Header("capture id is zero"));
@@ -141,7 +125,21 @@ fn parse_header(bytes: &[u8]) -> Result<CaptureHeaderV1, CaptureDecodeError> {
     if !cursor.is_empty() {
         return Err(CaptureDecodeError::Header("header has trailing bytes"));
     }
-    Ok(CaptureHeaderV1 { capture_id })
+    let target = capture_target_for_steam_build_id_v1(steam_build_id)
+        .ok_or(CaptureDecodeError::Target("Steam build id"))?;
+    if steam_app_id != target.steam_app_id
+        || angelscript_version != target.angelscript_version
+        || executable_bytes != target.executable_bytes
+        || executable_sha256 != target.executable_sha256
+        || codeview_guid_rsds != target.codeview_guid_rsds
+        || codeview_age != target.codeview_age
+    {
+        return Err(CaptureDecodeError::Target("capture target identity"));
+    }
+    Ok(CaptureHeaderV1 {
+        capture_id,
+        target_generation: target.generation,
+    })
 }
 
 fn parse_footer(
@@ -267,7 +265,7 @@ impl StreamDecoder {
         let value = cursor.u64()?;
         let call_rva = cursor.u32()?;
         expect_u32("engine property tail reserved field", cursor.u32()?, 0)?;
-        if call_rva != RVA_SET_ENGINE_PROPERTY {
+        if call_rva != self.header.target().rva_set_engine_property {
             return target("SetEngineProperty RVA");
         }
         let property = engine_property_from_id(property_id)
@@ -296,7 +294,7 @@ impl StreamDecoder {
                 actual: token_id,
             });
         }
-        if primary_image_rva == 0 || primary_image_rva >= PINNED_PE_SIZE_OF_IMAGE {
+        if primary_image_rva == 0 || primary_image_rva >= self.header.target().pe_size_of_image {
             return Err(CaptureDecodeError::PointerRva(primary_image_rva));
         }
         if !self.pointer_rvas.insert(primary_image_rva) {
@@ -366,7 +364,7 @@ impl StreamDecoder {
                 {
                     return order("bind orders are not nondecreasing");
                 }
-                if observation_rva != RVA_BIND_CALLBACK_CALL {
+                if observation_rva != self.header.target().rva_bind_callback_call {
                     return target("bind callback call RVA");
                 }
                 if let Some(previous) = self.last_registry_counts {
@@ -393,7 +391,7 @@ impl StreamDecoder {
                 {
                     return order("bind end identity differs from bind begin");
                 }
-                if observation_rva != RVA_BIND_CALLBACK_RETURN {
+                if observation_rva != self.header.target().rva_bind_callback_return {
                     return target("bind callback return RVA");
                 }
                 check_counts_nondecreasing(active.begin_counts, counts)?;
@@ -592,11 +590,12 @@ impl StreamDecoder {
             get_build_identifier_rva,
             get_static_jit_info_rva,
         };
-        if fact.build_identifier != PINNED_BUILD_IDENTIFIER
+        let target_generation = self.header.target();
+        if fact.build_identifier != target_generation.build_identifier
             || !fact.shipping_cache_matches
-            || fact.precompiled_guid != PINNED_PRECOMPILED_GUID
-            || fact.get_build_identifier_rva != RVA_GET_BUILD_IDENTIFIER
-            || fact.get_static_jit_info_rva != RVA_GET_STATIC_JIT_INFO
+            || fact.precompiled_guid != target_generation.precompiled_guid
+            || fact.get_build_identifier_rva != target_generation.rva_get_build_identifier
+            || fact.get_static_jit_info_rva != target_generation.rva_get_static_jit_info
             || fact.jit_database_cleared
             || fact.as_reference_debugging
             || !fact.fork_opcode_table_201_212_present
@@ -655,7 +654,7 @@ impl StreamDecoder {
         match kind {
             FrontendBoundaryKindV1::InitialCompileEnter => {
                 if !self.frontend_boundaries.is_empty()
-                    || observation_rva != RVA_INITIAL_COMPILE_ENTER
+                    || observation_rva != self.header.target().rva_initial_compile_enter
                     || module_count != 0
                     || output_sha256 != zero_digest()
                 {
@@ -665,7 +664,7 @@ impl StreamDecoder {
             FrontendBoundaryKindV1::PrecompiledDescriptorsRequested => {
                 if self.frontend_boundaries.len() != 1
                     || self.frontend_branch_seen
-                    || observation_rva != RVA_PRECOMPILED_DESCRIPTORS_REQUESTED
+                    || observation_rva != self.header.target().rva_precompiled_descriptors_requested
                     || module_count == 0
                     || input_sha256 == zero_digest()
                     || output_sha256 == zero_digest()
@@ -677,7 +676,7 @@ impl StreamDecoder {
             FrontendBoundaryKindV1::PreprocessorConstructed => {
                 if self.frontend_boundaries.len() != 1
                     || self.frontend_branch_seen
-                    || observation_rva != RVA_PREPROCESSOR_CONSTRUCTED
+                    || observation_rva != self.header.target().rva_preprocessor_constructed
                     || module_count != 0
                     || input_sha256 != zero_digest()
                     || output_sha256 != zero_digest()
@@ -689,7 +688,7 @@ impl StreamDecoder {
             FrontendBoundaryKindV1::InitialCompileReturn => {
                 if self.frontend_boundaries.len() != 2
                     || !self.frontend_branch_seen
-                    || observation_rva != RVA_INITIAL_COMPILE_RETURN
+                    || observation_rva != self.header.target().rva_initial_compile_return
                     || module_count == 0
                     || result_code != 0
                     || output_sha256 == zero_digest()
@@ -922,7 +921,7 @@ fn validate_target_fixed_operations(
     ];
     if support.primitive_operations.len() != identities.len() {
         return Err(CaptureDecodeError::Unqualified(
-            "primitive operation table does not match BuildID 24539464",
+            "primitive operation table does not match authenticated capture target",
         ));
     }
     for (ordinal, (captured, (primitive, size, alignment))) in support
@@ -953,7 +952,7 @@ fn validate_target_fixed_operations(
             || captured.operations != expected
         {
             return Err(CaptureDecodeError::Unqualified(
-                "primitive operation table does not match BuildID 24539464",
+                "primitive operation table does not match authenticated capture target",
             ));
         }
     }
@@ -978,7 +977,7 @@ fn validate_target_fixed_operations(
         || support.dynamic_script_operations.multicast_delegate != dynamic
     {
         return Err(CaptureDecodeError::Unqualified(
-            "dynamic script operation table does not match BuildID 24539464",
+            "dynamic script operation table does not match authenticated capture target",
         ));
     }
     Ok(())
@@ -1657,7 +1656,12 @@ pub(super) mod tests {
         }
     }
 
-    fn bind_payload(phase: u32, counts: RegistryCountsV1, snapshot: [u8; 32]) -> Vec<u8> {
+    fn bind_payload(
+        target: &CaptureTargetV1,
+        phase: u32,
+        counts: RegistryCountsV1,
+        snapshot: [u8; 32],
+    ) -> Vec<u8> {
         let mut payload = Vec::new();
         u32le(&mut payload, 0);
         u32le(&mut payload, phase);
@@ -1666,9 +1670,9 @@ pub(super) mod tests {
         u32le(
             &mut payload,
             if phase == 1 {
-                RVA_BIND_CALLBACK_CALL
+                target.rva_bind_callback_call
             } else {
-                RVA_BIND_CALLBACK_RETURN
+                target.rva_bind_callback_return
             },
         );
         u32le(&mut payload, 0);
@@ -1711,19 +1715,19 @@ pub(super) mod tests {
         payload
     }
 
-    fn fixture_stream() -> (Vec<u8>, u64) {
+    fn fixture_stream_for_target(target: &CaptureTargetV1) -> (Vec<u8>, u64) {
         let mut out = Vec::new();
         out.extend_from_slice(CAPTURE_MAGIC_V1);
         u16le(&mut out, CAPTURE_SCHEMA_VERSION_V1);
         u16le(&mut out, CAPTURE_HEADER_BYTES_V1 as u16);
         u32le(&mut out, 0);
-        u32le(&mut out, PINNED_STEAM_APP_ID);
-        u64le(&mut out, PINNED_STEAM_BUILD_ID);
-        u32le(&mut out, PINNED_ANGELSCRIPT_VERSION);
-        u64le(&mut out, PINNED_EXECUTABLE_BYTES);
-        out.extend_from_slice(&PINNED_EXECUTABLE_SHA256);
-        out.extend_from_slice(&PINNED_CODEVIEW_GUID_RSDS);
-        u32le(&mut out, PINNED_CODEVIEW_AGE);
+        u32le(&mut out, target.steam_app_id);
+        u64le(&mut out, target.steam_build_id);
+        u32le(&mut out, target.angelscript_version);
+        u64le(&mut out, target.executable_bytes);
+        out.extend_from_slice(&target.executable_sha256);
+        out.extend_from_slice(&target.codeview_guid_rsds);
+        u32le(&mut out, target.codeview_age);
         out.extend_from_slice(&[0x42; 16]);
         u32le(&mut out, 0);
         assert_eq!(out.len(), CAPTURE_HEADER_BYTES_V1);
@@ -1732,7 +1736,7 @@ pub(super) mod tests {
         u32le(&mut property, 2);
         u32le(&mut property, 0);
         u64le(&mut property, 1);
-        u32le(&mut property, RVA_SET_ENGINE_PROPERTY);
+        u32le(&mut property, target.rva_set_engine_property);
         u32le(&mut property, 0);
         record(&mut out, RecordKindV1::EngineProperty, &property);
 
@@ -1762,7 +1766,7 @@ pub(super) mod tests {
         record(
             &mut out,
             RecordKindV1::BindCallback,
-            &bind_payload(1, empty, digest(0x31)),
+            &bind_payload(target, 1, empty, digest(0x31)),
         );
         let delta = RegistryDeltaCaptureV1 {
             schema: REGISTRY_DELTA_CAPTURE_SCHEMA.to_owned(),
@@ -1821,7 +1825,7 @@ pub(super) mod tests {
         record(
             &mut out,
             RecordKindV1::BindCallback,
-            &bind_payload(2, after, digest(0x32)),
+            &bind_payload(target, 2, after, digest(0x32)),
         );
         let final_state = PostBindStateCaptureV1 {
             schema: POST_BIND_STATE_CAPTURE_SCHEMA.to_owned(),
@@ -1837,14 +1841,14 @@ pub(super) mod tests {
         );
 
         let mut build = Vec::new();
-        u32le(&mut build, PINNED_BUILD_IDENTIFIER);
+        u32le(&mut build, target.build_identifier);
         // Shipping cache matches + fork opcode table 201..=212 present. The exact pinned
         // Shipping build has neither reference debugging nor a ResolveObjectPtr callback.
         u32le(&mut build, 8 | 0x20);
-        build.extend_from_slice(&PINNED_PRECOMPILED_GUID);
+        build.extend_from_slice(&target.precompiled_guid);
         build.extend_from_slice(&[0; 16]);
-        u32le(&mut build, RVA_GET_BUILD_IDENTIFIER);
-        u32le(&mut build, RVA_GET_STATIC_JIT_INFO);
+        u32le(&mut build, target.rva_get_build_identifier);
+        u32le(&mut build, target.rva_get_static_jit_info);
         record(&mut out, RecordKindV1::BuildJit, &build);
 
         let configs = frontend_configs();
@@ -1860,9 +1864,9 @@ pub(super) mod tests {
         }
         let config_digest = frontend_config_set_digest(&configs);
         for (kind, rva, modules) in [
-            (1, RVA_INITIAL_COMPILE_ENTER, 0),
-            (3, RVA_PREPROCESSOR_CONSTRUCTED, 0),
-            (4, RVA_INITIAL_COMPILE_RETURN, 1),
+            (1, target.rva_initial_compile_enter, 0),
+            (3, target.rva_preprocessor_constructed, 0),
+            (4, target.rva_initial_compile_return, 1),
         ] {
             record(
                 &mut out,
@@ -1871,6 +1875,10 @@ pub(super) mod tests {
             );
         }
         (out, 16)
+    }
+
+    fn fixture_stream() -> (Vec<u8>, u64) {
+        fixture_stream_for_target(&CAPTURE_TARGET_24878692)
     }
 
     pub(crate) fn complete_capture_fixture() -> Vec<u8> {
@@ -1884,6 +1892,10 @@ pub(super) mod tests {
         let capture = reseal(stream, count);
         let decoded = decode_capture_v1(&capture).unwrap();
         assert_eq!(decoded.header.capture_id, [0x42; 16]);
+        assert_eq!(
+            decoded.header.target_generation,
+            CaptureTargetGenerationV1::Build24878692
+        );
         assert_eq!(decoded.pointer_tokens.len(), 2);
         assert_eq!(decoded.bind_callbacks.len(), 2);
         assert_eq!(decoded.registry_deltas.len(), 1);
@@ -1896,6 +1908,24 @@ pub(super) mod tests {
         assert!(decoded.build_jit.fork_opcode_table_201_212_present);
         assert!(!decoded.build_jit.reference_debug_opcodes_emittable);
         assert!(!decoded.build_jit.resolve_object_ptr_callback_registered);
+    }
+
+    #[test]
+    fn decodes_historical_generation_without_reinterpreting_current_rvas() {
+        let (stream, count) = fixture_stream_for_target(&CAPTURE_TARGET_24539464);
+        let decoded = decode_capture_v1(&reseal(stream, count)).unwrap();
+        assert_eq!(
+            decoded.header.target_generation,
+            CaptureTargetGenerationV1::Build24539464
+        );
+        assert_eq!(
+            decoded.engine_properties[0].call_rva,
+            CAPTURE_TARGET_24539464.rva_set_engine_property
+        );
+        assert_eq!(
+            decoded.build_jit.precompiled_guid,
+            CAPTURE_TARGET_24539464.precompiled_guid
+        );
     }
 
     #[test]
@@ -1945,7 +1975,7 @@ pub(super) mod tests {
             assert!(matches!(
                 validate_target_fixed_operations(&drifted),
                 Err(CaptureDecodeError::Unqualified(
-                    "primitive operation table does not match BuildID 24539464"
+                    "primitive operation table does not match authenticated capture target"
                 ))
             ));
         }
@@ -1954,7 +1984,7 @@ pub(super) mod tests {
         assert!(matches!(
             validate_target_fixed_operations(&support),
             Err(CaptureDecodeError::Unqualified(
-                "primitive operation table does not match BuildID 24539464"
+                "primitive operation table does not match authenticated capture target"
             ))
         ));
 
@@ -1963,7 +1993,7 @@ pub(super) mod tests {
         assert!(matches!(
             validate_target_fixed_operations(&support),
             Err(CaptureDecodeError::Unqualified(
-                "dynamic script operation table does not match BuildID 24539464"
+                "dynamic script operation table does not match authenticated capture target"
             ))
         ));
     }

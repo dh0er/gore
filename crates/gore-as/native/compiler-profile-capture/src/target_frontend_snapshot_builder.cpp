@@ -26,7 +26,7 @@ constexpr std::size_t kMaximumChunks = 1'000'000;
 constexpr std::size_t kMaximumObjectDepth = 64;
 constexpr std::size_t kMaximumTextCodeUnits = 8u * 1024u * 1024u;
 constexpr std::int32_t kMaximumSharedReferences = 0x3fff'ffff;
-constexpr std::uint32_t kFNamePoolRva = 0x09af8600;
+constexpr std::uint32_t kFNamePoolRva = frontend_target_layout::fname_pool_rva;
 constexpr std::size_t kFNamePoolBlocks = 0x10;
 constexpr std::uint32_t kFNameBlockShift = 16;
 constexpr std::uint32_t kFNameOffsetMask = 0xffff;
@@ -794,7 +794,7 @@ class Builder final {
   }
 
   BuildError hook_bindings() {
-    // The GetOnClassAnalyze target accessor returns image+0x98750a8. Its
+    // The generation-selected GetOnClassAnalyze accessor returns the class-analyze delegate. Its
     // multicast invocation list is a TArray of exact 16-byte delegate pairs;
     // the three callsites' Broadcast implementations use the same trailing
     // compaction/broadcast counters. Copy only that typed object and its owned

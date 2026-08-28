@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gore_as_capture/format.hpp"
 #include "target_capture_serializer.hpp"
 
 #include <cstddef>
@@ -7,10 +8,41 @@
 
 namespace gore_as_capture::v1::instrumentation {
 
-// Exact BuildID-24539464 representation returned by
-// FAngelscriptTypeUsage::FromTypeId (target RVA 0x474d8f0).  This intentionally does not model
-// Unreal ownership: the target destructor at RVA 0x465c0d0 is the only code allowed to release a
-// value returned by the target helper.
+struct TargetTypeUsageAddresses final {
+  CaptureTargetGeneration generation{};
+  std::uint32_t from_type_id_rva{};
+  std::uint32_t from_type_id_end_rva{};
+  std::uint32_t destroy_type_usage_rva{};
+  std::uint32_t destroy_type_usage_end_rva{};
+};
+
+inline constexpr TargetTypeUsageAddresses kTargetTypeUsage24539464{
+    CaptureTargetGeneration::build_24539464,
+    0x0474d8f0,
+    0x0474e700,
+    0x0465c0d0,
+    0x0465c151,
+};
+inline constexpr TargetTypeUsageAddresses kTargetTypeUsage24878692{
+    CaptureTargetGeneration::build_24878692,
+    0x0474d8b0,
+    0x0474e6c0,
+    0x0465c090,
+    0x0465c111,
+};
+inline constexpr const TargetTypeUsageAddresses& kTargetTypeUsage =
+    kTargetTypeUsage24878692;
+static_assert(kTargetTypeUsage.generation == kCaptureTarget.generation);
+static_assert(
+    kTargetTypeUsage.from_type_id_rva < kTargetTypeUsage.from_type_id_end_rva &&
+    kTargetTypeUsage.from_type_id_end_rva <= kPeSizeOfImage &&
+    kTargetTypeUsage.destroy_type_usage_rva <
+        kTargetTypeUsage.destroy_type_usage_end_rva &&
+    kTargetTypeUsage.destroy_type_usage_end_rva <= kPeSizeOfImage);
+
+// Exact representation returned by both authenticated target generations. This intentionally
+// does not model Unreal ownership: the generation-selected target destructor is the only code
+// allowed to release a value returned by the target helper.
 struct TargetTypeUsage final {
   std::uintptr_t subtypes{};
   std::int32_t subtype_count{};
