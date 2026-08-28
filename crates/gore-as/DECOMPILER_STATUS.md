@@ -719,6 +719,18 @@ window is a bare `RDR<w> vT; <address ops>; WRTV<w> vT`, and had the source trun
 compiler would have written the `dTOi` for it. Twenty such statements in twelve functions, every
 one of them divergent and none among the byte-faithful. 1,447 to 1,437.
 
+**A returned slot the function also widens is the enum, not an `int` holding one.** `sbTOi vW, vD`
+sign-extends vD before an integer use of it, and this compiler never widens an `int` — it does
+exactly that with an enum variable. The existing seed only fired when a CALL of the same enum type
+filled the slot, so an accumulator fed by a member read stayed untyped, was declared `int`, and
+then needed an `int(...)` at every read and an `iTOb` at the return. The witness fires on 47
+functions, all of them divergent, and on none of the 54,282 byte-faithful ones.
+
+Measured: **0 fixed, 0 broken**. The declarations are now vanilla's, but every one of those
+functions carries a second defect — mostly a loop rotation — so none of them flips on this alone.
+It is kept because it removes one defect from 45 records and cannot cost anything, not because it
+moved the number.
+
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
 vanilla holds, where the largest finite float came back one ULP low every time. The belief that

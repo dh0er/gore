@@ -3700,6 +3700,28 @@ fn infer_enum_flow(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
             _ => last_ret = None,
         }
     }
+    // A returned slot the function also WIDENS is the enum itself, not an `int` that happens to
+    // hold one. `sbTOi vW, vD` sign-extends vD before an integer use of it, and this compiler
+    // never widens an `int` — it does exactly this with an enum variable. The seed above only
+    // fires when a CALL of the same enum type filled the slot, so an accumulator fed by a member
+    // read stayed untyped, was declared `int`, and then needed an `int(...)` at every read and an
+    // `iTOb` at the return — a round trip vanilla does not have.
+    //
+    // Measured over the whole tree: the witness fires on 47 functions and every one of them is
+    // divergent, while none of the 54,282 byte-faithful ones carry it. Gate on the widening and
+    // never on the read being one byte wide: a one-byte read into a genuinely `int` local is the
+    // byte-faithful case, and 113 byte-faithful functions do exactly that.
+    let widened_from: HashSet<i32> = instrs
+        .iter()
+        .filter(|ins| matches!(ins.op.name, "sbTOi" | "ubTOi"))
+        .filter_map(|ins| ins.words.get(1).map(|word| *word as i16 as i32))
+        .collect();
+    seeds.extend(
+        return_slots
+            .iter()
+            .filter(|slot| **slot > 0 && widened_from.contains(slot))
+            .map(|slot| (*slot, ret_enum.clone())),
+    );
     propagate_proven_enum_slots(&instrs, seeds)
 }
 
