@@ -1149,16 +1149,23 @@ void main() {
     );
     expect(tester.getTopLeft(timeCard).dy, tester.getTopLeft(characterCard).dy);
     expect(tester.getTopLeft(timeCard).dy, tester.getTopLeft(questCard).dy);
-    expect(tester.getSize(timeCard).height, lessThan(300));
-    for (final card in [
-      characterCard,
-      questCard,
-      encountersCard,
-      inventoryCard,
-    ]) {
+    expect(tester.getSize(timeCard).height, lessThan(360));
+    for (final card in [characterCard, questCard]) {
       expect(tester.getSize(card).height, tester.getSize(timeCard).height);
       expect(tester.getSize(card).width, lessThan(450));
     }
+    expect(
+      tester.getSize(inventoryCard).height,
+      tester.getSize(encountersCard).height,
+    );
+    expect(
+      tester.getSize(inventoryCard).width,
+      tester.getSize(encountersCard).width,
+    );
+    expect(
+      tester.getSize(encountersCard).width,
+      greaterThan(tester.getSize(timeCard).width),
+    );
     expect(
       tester.getTopLeft(encountersCard).dy - tester.getBottomLeft(timeCard).dy,
       closeTo(14, 0.1),
@@ -1211,9 +1218,15 @@ void main() {
         .toList();
     expect(
       statisticsTexts,
-      contains('Old Camp · Guard'),
+      contains('Old Camp\nGuard'),
       reason: statisticsTexts.join(' | '),
     );
+    final guildValue = tester.widget<Text>(find.text('Old Camp\nGuard'));
+    expect(guildValue.maxLines, 2);
+    expect(guildValue.overflow, isNull);
+    final worldTimeValue = tester.widget<Text>(find.text('Day 16, 08:37:13'));
+    expect(worldTimeValue.maxLines, 2);
+    expect(worldTimeValue.overflow, isNull);
     expect(find.text('Killed monsters'), findsOneWidget);
     expect(find.text('Defeated NPCs'), findsOneWidget);
     expect(find.text('Killed NPCs'), findsOneWidget);

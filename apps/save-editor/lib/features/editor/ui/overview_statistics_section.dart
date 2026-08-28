@@ -554,9 +554,8 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
       final value when value.contains('swampcamp') => 'swampCampNovice',
       _ => null,
     };
-    return rank == null
-        ? guild.split(RegExp(r'[._]')).last
-        : l10n.statisticsGuildRank(rank, guild);
+    if (rank == null) return guild.split(RegExp(r'[._]')).last;
+    return l10n.statisticsGuildRank(rank, guild).replaceFirst(' · ', '\n');
   }
 }
 
@@ -593,9 +592,9 @@ const _statisticsCardSpacing = 14.0;
 const _statisticsCardMinWidth = 300.0;
 const _statisticsCardMaxColumns = 3;
 const _statisticsHeaderHeight = 40.0;
-const _statisticsMetricHeight = 56.0;
+const _statisticsMetricHeight = 80.0;
 const _statisticsMetricSpacing = 8.0;
-const _statisticsMetricMinWidth = 96.0;
+const _statisticsMetricMinWidth = 130.0;
 
 class _StatisticsGrid extends StatelessWidget {
   const _StatisticsGrid({required this.sections});
@@ -607,28 +606,45 @@ class _StatisticsGrid extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final columnCount = _cardColumnCount(constraints.maxWidth);
-        final cardWidth =
-            (constraints.maxWidth -
-                _statisticsCardSpacing * (columnCount - 1)) /
-            columnCount;
-        final metricColumns = _metricColumnCount(cardWidth - 28);
-        final cardHeight = sections
-            .map((section) => section.heightFor(metricColumns))
-            .reduce(
-              (height, candidate) => height > candidate ? height : candidate,
-            );
-
-        return GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: columnCount,
-            crossAxisSpacing: _statisticsCardSpacing,
-            mainAxisSpacing: _statisticsCardSpacing,
-            mainAxisExtent: cardHeight,
-          ),
-          itemCount: sections.length,
-          itemBuilder: (context, index) => sections[index],
+        final rows = <Widget>[];
+        for (var start = 0; start < sections.length; start += columnCount) {
+          final end = start + columnCount < sections.length
+              ? start + columnCount
+              : sections.length;
+          final rowSections = sections.sublist(start, end);
+          final rowColumnCount = rowSections.length;
+          final cardWidth =
+              (constraints.maxWidth -
+                  _statisticsCardSpacing * (rowColumnCount - 1)) /
+              rowColumnCount;
+          final metricColumns = _metricColumnCount(cardWidth - 28);
+          final rowHeight = rowSections
+              .map((section) => section.heightFor(metricColumns))
+              .reduce(
+                (height, candidate) => height > candidate ? height : candidate,
+              );
+          if (rows.isNotEmpty) {
+            rows.add(const SizedBox(height: _statisticsCardSpacing));
+          }
+          rows.add(
+            SizedBox(
+              height: rowHeight,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (var index = 0; index < rowSections.length; index++) ...[
+                    if (index > 0)
+                      const SizedBox(width: _statisticsCardSpacing),
+                    Expanded(child: rowSections[index]),
+                  ],
+                ],
+              ),
+            ),
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: rows,
         );
       },
     );
@@ -767,19 +783,9 @@ class _DetailMetric extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            metric.label,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.bodySmall,
-          ),
+          Text(metric.label, maxLines: 2, style: theme.textTheme.bodySmall),
           const SizedBox(height: 2),
-          Text(
-            metric.value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.labelLarge,
-          ),
+          Text(metric.value, maxLines: 2, style: theme.textTheme.labelLarge),
         ],
       ),
     );
