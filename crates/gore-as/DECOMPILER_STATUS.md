@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,518 functions (0.92%) recompile to bytecode that differs semantically.** A semantic
+**1,508 functions (0.92%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -669,6 +669,12 @@ separate declarations from temporaries, and the branch-in-the-gap test is a weak
 rule above.
 
 1,545 to 1,518, twenty-seven fixed and none broken.
+
+**A member initializer can only be lifted onto a field this class declares.** The pass that turns
+a constructor's parameter-free member store into a declaration initializer did not ask where the
+field lives. The declaration loop writes the class's OWN fields and nothing else, so a store lifted
+onto an INHERITED field had nowhere to land and vanished with the store — ten constructors lost a
+`SetV1; LoadThisR; WRTV1` that way. 1,518 to 1,508.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
