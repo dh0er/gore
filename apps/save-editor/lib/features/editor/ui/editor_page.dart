@@ -12,10 +12,12 @@ import 'package:goresave/features/app/ui/window_chrome.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/game_time.dart';
+import 'package:goresave/features/editor/domain/item_icon_catalog.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/ui/characters_tab.dart';
 import 'package:goresave/features/editor/ui/profile_localization.dart';
 import 'package:goresave/features/editor/ui/slot_repair_banner.dart';
+import 'package:goresave/features/editor/ui/title_preparation_progress.dart';
 import 'package:goresave/features/localization/domain/localization_controller.dart';
 import 'package:goresave/features/localization/ui/localization_flow.dart';
 import 'package:goresave/features/localization/ui/localization_settings.dart';
@@ -61,9 +63,16 @@ class _EditorPageState extends ConsumerState<EditorPage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Another tool (or `gore-cli loc extract`) may have written the shared
     // loc_catalog.json while this app was backgrounded; reload it on resume so
-    // item/NPC names pick up a catalog that appeared after first load.
+    // item/NPC names pick up a catalog that appeared after first load. Item
+    // images use a metadata-only source check; full PNG verification runs only
+    // when the installed container set actually changed.
     if (state == AppLifecycleState.resumed) {
       ref.read(locCatalogReloadProvider.notifier).state++;
+      unawaited(
+        ref
+            .read(itemIconCatalogRefreshProvider)
+            .refreshIfSourceChanged(),
+      );
     }
   }
 
@@ -148,7 +157,14 @@ class _EditorPageState extends ConsumerState<EditorPage>
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              const Expanded(child: SizedBox()),
+              const SizedBox(width: 16),
+              const Expanded(
+                flex: 2,
+                child: Align(
+                  alignment: Alignment.center,
+                  child: TitlePreparationProgress(),
+                ),
+              ),
             ],
           ),
         ),

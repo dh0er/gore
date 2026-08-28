@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -52,6 +52,16 @@ struct SourceBindingIdentity {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct SourceIdentity(Vec<SourceBindingIdentity>);
+
+#[derive(Debug, Eq, PartialEq, Serialize)]
+struct QuickSourceBindingIdentity {
+    role: String,
+    file: FileIdentity,
+    unreliable_content_blake3: Option<String>,
+}
+
+#[derive(Debug, Eq, PartialEq, Serialize)]
+struct QuickSourceIdentity(Vec<QuickSourceBindingIdentity>);
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -187,14 +197,151 @@ pub fn build_id_for(utoc: &Path, usmap: &Path) -> Result<String> {
     build_id_for_in_cache_dir(utoc, usmap, &gore_loc::paths::shared_data_dir())
 }
 
+/// Cheap change token for the installed IoStore source set. On filesystems with
+/// strong change tokens this binds only direct UTOC/UCAS metadata. A source
+/// lacking such a token is hashed so restored timestamps cannot hide updates.
+pub(crate) fn quick_composite_source_identity(main_utoc: &Path) -> Result<String> {
+    let paks = main_utoc
+        .parent()
+        .ok_or_else(|| invalid_data("installed texture UTOC has no Paks parent"))?;
+    let canonical_paks = std::fs::canonicalize(paks)?;
+    if !std::fs::symlink_metadata(&canonical_paks)?
+        .file_type()
+        .is_dir()
+    {
+        return Err(invalid_data(
+            "installed texture Paks authority is not a directory",
+        ));
+    }
+    let canonical_main = std::fs::canonicalize(main_utoc)?;
+    if canonical_main.parent() != Some(canonical_paks.as_path()) {
+        return Err(invalid_data(
+            "installed texture UTOC escaped the Paks authority",
+        ));
+    }
+
+    let mut found_main = false;
+    let mut bindings = Vec::new();
+    for entry in std::fs::read_dir(&canonical_paks)? {
+        let entry = entry?;
+        let path = entry.path();
+        let relevant = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("utoc") || extension.eq_ignore_ascii_case("ucas")
+            });
+        if !relevant {
+            continue;
+        }
+        if bindings.len() >= MAX_SOURCE_FILES {
+            return Err(invalid_data("too many installed texture source files"));
+        }
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+            return Err(invalid_data("texture source is not a plain regular file"));
+        }
+        let mut file = open_regular_no_follow(&path)?;
+        let metadata = file.metadata()?;
+        let identity = file_identity(&file, &metadata)?;
+        found_main |= path == canonical_main;
+        let role = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| invalid_data("installed texture source name is not Unicode"))?
+            .to_string();
+        bindings.push(quick_source_binding_identity(role, &mut file, identity)?);
+    }
+    if !found_main {
+        return Err(invalid_data(
+            "requested main UTOC is absent from the installed texture sources",
+        ));
+    }
+    bindings.sort_by(|left, right| left.role.cmp(&right.role));
+    let encoded = serde_json::to_vec(&QuickSourceIdentity(bindings)).map_err(|error| {
+        crate::error::TexError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            error.to_string(),
+        ))
+    })?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"gore-tex.quick-composite-source-identity.v1\0");
+    hasher.update(&encoded);
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+fn quick_source_binding_identity(
+    role: String,
+    file: &mut File,
+    identity: FileIdentity,
+) -> Result<QuickSourceBindingIdentity> {
+    let unreliable_content_blake3 = if identity.reliable_change_token {
+        None
+    } else {
+        file.seek(SeekFrom::Start(0))?;
+        let mut content = blake3::Hasher::new();
+        let copied = std::io::copy(file, &mut content)?;
+        if copied != identity.byte_len {
+            return Err(invalid_data(
+                "texture source length changed while checking its identity",
+            ));
+        }
+        Some(content.finalize().to_hex().to_string())
+    };
+    Ok(QuickSourceBindingIdentity {
+        role,
+        file: identity,
+        unreliable_content_blake3,
+    })
+}
+
 fn build_id_for_in_cache_dir(utoc: &Path, usmap: &Path, cache_directory: &Path) -> Result<String> {
     let composite = crate::container::InstalledTextureComposite::open(utoc)?;
-    let sources = open_source_files(&composite, usmap)?;
-    fingerprint_open_sources(sources, cache_directory)
+    let mut sources = open_source_files(&composite, usmap)?;
+    fingerprint_open_sources(&mut sources, cache_directory)
+}
+
+/// One captured installed-container generation whose source files stay open
+/// for an entire batch. This lets batch consumers verify the same build before
+/// publication without reopening the IoStore composite.
+pub(crate) struct OpenTextureGeneration {
+    sources: Vec<OpenSourceFile>,
+    build_id: String,
+    cache_directory: PathBuf,
+}
+
+impl OpenTextureGeneration {
+    pub(crate) fn capture(
+        composite: &crate::container::InstalledTextureComposite,
+        cache_directory: &Path,
+    ) -> Result<Self> {
+        let mut sources = open_composite_source_files(composite)?;
+        let build_id = fingerprint_open_sources(&mut sources, cache_directory)?;
+        Ok(Self {
+            sources,
+            build_id,
+            cache_directory: cache_directory.to_path_buf(),
+        })
+    }
+
+    pub(crate) fn captured_build_id(&self) -> &str {
+        &self.build_id
+    }
+
+    /// Recompute (or identity-cache) the fingerprint through the same captured
+    /// file handles after revalidating that every named source still resolves
+    /// to the captured file. A changed source either produces a different id or
+    /// fails closed; both prevent publication by the batch caller.
+    pub(crate) fn current_build_id(&mut self) -> Result<String> {
+        for source in &self.sources {
+            revalidate_source_file(source)?;
+        }
+        fingerprint_open_sources(&mut self.sources, &self.cache_directory)
+    }
 }
 
 fn fingerprint_open_sources(
-    sources: Vec<OpenSourceFile>,
+    sources: &mut [OpenSourceFile],
     cache_directory: &Path,
 ) -> Result<String> {
     let identity = SourceIdentity(
@@ -214,11 +361,11 @@ fn fingerprint_open_sources(
         let mut aggregate = blake3::Hasher::new();
         aggregate.update(SOURCE_FINGERPRINT_DOMAIN);
         aggregate.update(&(sources.len() as u64).to_le_bytes());
-        for mut source in sources {
+        for source in sources {
             aggregate.update(&(source.role.len() as u64).to_le_bytes());
             aggregate.update(source.role.as_bytes());
             aggregate.update(&source.identity.byte_len.to_le_bytes());
-            let digest = digest_source_file(&mut source, cache_directory)?;
+            let digest = digest_source_file(source, cache_directory)?;
             aggregate.update(&digest);
         }
         Ok(format!(
@@ -297,6 +444,7 @@ fn digest_source_file(source: &mut OpenSourceFile, cache_directory: &Path) -> Re
     }
     drop(cache);
 
+    source.file.seek(SeekFrom::Start(0))?;
     let mut content = blake3::Hasher::new();
     let copied = std::io::copy(&mut source.file, &mut content)?;
     if copied != source.identity.byte_len {
@@ -481,17 +629,30 @@ fn open_source_files(
         "mapping".to_string(),
         None,
     )?);
-    for source in composite.sources() {
-        sources.push(open_source_file(
-            source.path.clone(),
-            source.role.clone(),
-            source.parsed_blake3,
-        )?);
-    }
+    sources.extend(open_composite_source_files(composite)?);
     if sources.len() > MAX_SOURCE_FILES {
         return Err(invalid_data("too many installed texture source files"));
     }
     Ok(sources)
+}
+
+fn open_composite_source_files(
+    composite: &crate::container::InstalledTextureComposite,
+) -> Result<Vec<OpenSourceFile>> {
+    if composite.sources().len() > MAX_SOURCE_FILES {
+        return Err(invalid_data("too many installed texture source files"));
+    }
+    composite
+        .sources()
+        .iter()
+        .map(|source| {
+            open_source_file(
+                source.path.clone(),
+                source.role.clone(),
+                source.parsed_blake3,
+            )
+        })
+        .collect()
 }
 
 fn open_source_file(
@@ -1285,6 +1446,60 @@ mod tests {
     }
 
     #[test]
+    fn quick_composite_identity_tracks_source_files_but_ignores_unrelated_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let main = temp.path().join("G1R-Windows.utoc");
+        let main_data = temp.path().join("G1R-Windows.ucas");
+        std::fs::write(&main, b"toc-a").unwrap();
+        std::fs::write(&main_data, b"data-a").unwrap();
+        let initial = quick_composite_source_identity(&main).unwrap();
+
+        std::fs::write(temp.path().join("readme.txt"), b"ignored").unwrap();
+        assert_eq!(quick_composite_source_identity(&main).unwrap(), initial);
+
+        std::fs::write(temp.path().join("G1R-Windows_P.utoc"), b"toc-p").unwrap();
+        std::fs::write(temp.path().join("G1R-Windows_P.ucas"), b"data-p").unwrap();
+        let with_hotfix = quick_composite_source_identity(&main).unwrap();
+        assert_ne!(with_hotfix, initial);
+
+        std::fs::write(&main_data, b"longer-data-a").unwrap();
+        assert_ne!(quick_composite_source_identity(&main).unwrap(), with_hotfix,);
+    }
+
+    #[test]
+    fn quick_identity_hashes_sources_without_reliable_change_tokens() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("source.ucas");
+        let identity = FileIdentity {
+            byte_len: 6,
+            modified_stamp: "unchanged".to_string(),
+            change_stamp: "0".to_string(),
+            reliable_change_token: false,
+            platform_identity: "same-file".to_string(),
+        };
+
+        std::fs::write(&path, b"data-a").unwrap();
+        let first = quick_source_binding_identity(
+            "source.ucas".to_string(),
+            &mut File::open(&path).unwrap(),
+            identity.clone(),
+        )
+        .unwrap();
+        std::fs::write(&path, b"data-b").unwrap();
+        let second = quick_source_binding_identity(
+            "source.ucas".to_string(),
+            &mut File::open(&path).unwrap(),
+            identity,
+        )
+        .unwrap();
+
+        assert_ne!(
+            first.unreliable_content_blake3,
+            second.unreliable_content_blake3
+        );
+    }
+
+    #[test]
     fn source_fingerprint_cache_unlocks_for_compute_and_bounds_racing_inserts() {
         let _guard = SOURCE_FINGERPRINT_TEST_LOCK.lock().unwrap();
         let cache = SOURCE_FINGERPRINT_CACHE.get_or_init(|| Mutex::new(Vec::new()));
@@ -1387,7 +1602,7 @@ mod tests {
             .clear();
         SOURCE_FILE_HASHED_BYTES.store(0, Ordering::Relaxed);
 
-        let first = fingerprint_open_sources(sources(), &cache_root).unwrap();
+        let first = fingerprint_open_sources(&mut sources(), &cache_root).unwrap();
         let initial_hashed = SOURCE_FILE_HASHED_BYTES.load(Ordering::Relaxed);
         assert_eq!(
             initial_hashed,
@@ -1396,7 +1611,7 @@ mod tests {
                 + data.metadata().unwrap().len()
         );
         assert_eq!(
-            fingerprint_open_sources(sources(), &cache_root).unwrap(),
+            fingerprint_open_sources(&mut sources(), &cache_root).unwrap(),
             first
         );
         assert_eq!(
@@ -1443,7 +1658,7 @@ mod tests {
             original_identity.change_stamp
         );
 
-        let second = fingerprint_open_sources(sources(), &cache_root).unwrap();
+        let second = fingerprint_open_sources(&mut sources(), &cache_root).unwrap();
         assert_ne!(second, first);
         assert_eq!(
             SOURCE_FILE_HASHED_BYTES.load(Ordering::Relaxed) - initial_hashed,
@@ -1458,12 +1673,12 @@ mod tests {
             .lock()
             .unwrap()
             .clear();
-        let sealed = vec![
+        let mut sealed = vec![
             open_source_file(mapping, "mapping".into(), None).unwrap(),
             open_source_file(toc, "winner-000-utoc".into(), Some(wrong_utoc_seal)).unwrap(),
             open_source_file(data, "winner-000-ucas".into(), None).unwrap(),
         ];
-        assert!(fingerprint_open_sources(sealed, &cache_root).is_err());
+        assert!(fingerprint_open_sources(&mut sealed, &cache_root).is_err());
         let _ = std::fs::remove_dir_all(root);
     }
 

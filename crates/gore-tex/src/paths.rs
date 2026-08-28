@@ -61,7 +61,14 @@ pub fn main_container(game_dir: &Path) -> Result<PathBuf> {
 /// cached-index reuse, and mapping-dependent work stay stable across runs/filesystems.
 pub fn usmap(game_dir: &Path) -> Result<PathBuf> {
     let dir = game_dir.join("G1R/Binaries/Win64/ue4ss");
-    let mut found: Vec<PathBuf> = std::fs::read_dir(&dir)?
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(TexError::UsmapNotFound(dir));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let mut found: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "usmap"))
@@ -156,7 +163,6 @@ mod tests {
     #[test]
     fn usmap_missing_dir_errors() {
         let err = usmap(Path::new("/no/such/game")).unwrap_err();
-        // read_dir on a missing dir yields an io error -> mapped via From.
-        assert!(matches!(err, TexError::Io(_)));
+        assert!(matches!(err, TexError::UsmapNotFound(_)));
     }
 }

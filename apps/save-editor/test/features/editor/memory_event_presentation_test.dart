@@ -475,6 +475,7 @@ MemoryEventPresenter _presenter(AppLocalizations l10n) => MemoryEventPresenter(
       id: 'ItFo_Mutton_01',
       path: '/Script/Angelscript.ItFo_Mutton_01',
       category: 'food',
+      icon: 'ItFo_Mutton_01',
     ),
   ]),
   npcGlossaryCatalog: const [

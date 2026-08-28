@@ -53,12 +53,13 @@ fn catalog_item_produces_json() {
     assert!(items
         .iter()
         .any(|e| e["id"].as_str() == Some("ItMi_Orenugget")));
-    // Verify field order matches sort_keys=True (category < id < path)
+    // Verify the deterministic icon enrichment is present.
     let apple = items
         .iter()
         .find(|e| e["id"].as_str() == Some("ItFo_Apple"))
         .unwrap();
     assert_eq!(apple["category"].as_str(), Some("food"));
+    assert_eq!(apple["icon"].as_str(), Some("ItFo_Apple"));
     assert_eq!(
         apple["path"].as_str(),
         Some("/Script/Angelscript.ItFo_Apple")
@@ -152,13 +153,14 @@ fn catalog_item_entry_has_correct_fields() {
         .iter()
         .find(|e| e["id"].as_str() == Some("ItFo_Apple"))
         .unwrap();
-    // Verify the three fields id/path/category are all present
+    // Verify all generated item-catalog fields are present.
     assert!(apple.get("id").is_some());
     assert!(apple.get("path").is_some());
     assert!(apple.get("category").is_some());
+    assert!(apple.get("icon").is_some());
     // No extra fields (no display_name from old catalog format)
     let obj = apple.as_object().unwrap();
-    assert_eq!(obj.len(), 3);
+    assert_eq!(obj.len(), 4);
 }
 
 /// gui-model integration test: use the SDK fixture dump to build a model,

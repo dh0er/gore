@@ -962,6 +962,17 @@ void main() {
         find.byKey(const ValueKey((TraderStockMap.base, loaf))),
         findsNothing,
       );
+      expect(
+        find.byKey(
+          const ValueKey((
+            'trader-item-image',
+            TraderStockMap.current,
+            loaf,
+            'ItFo_Loaf',
+          )),
+        ),
+        findsOneWidget,
+      );
 
       await tester.tap(find.text('Restock baseline'));
       await tester.pumpAndSettle();
@@ -976,6 +987,17 @@ void main() {
       expect(
         find.byKey(const ValueKey((TraderStockMap.current, loaf))),
         findsNothing,
+      );
+      expect(
+        find.byKey(
+          const ValueKey((
+            'trader-item-image',
+            TraderStockMap.base,
+            loaf,
+            'ItFo_Loaf',
+          )),
+        ),
+        findsOneWidget,
       );
       // And it shows the baseline's own count.
       expect(

@@ -7,11 +7,13 @@ class ItemCatalogEntry {
     required this.id,
     required this.path,
     required this.category,
+    required this.icon,
   });
 
   final String id;
   final String path;
   final String category;
+  final String icon;
 }
 
 class ItemCatalog {
@@ -20,16 +22,22 @@ class ItemCatalog {
   final List<ItemCatalogEntry> entries;
 
   static ItemCatalog fromJsonString(String json) {
-    final list = (jsonDecode(json) as List)
-        .whereType<Map<String, Object?>>()
-        .map((e) => ItemCatalogEntry(
-              id: e['id'] as String? ?? '',
-              path: e['path'] as String? ?? '',
-              category: e['category'] as String? ?? 'special',
-            ))
-        .where((e) => e.id.isNotEmpty && e.path.isNotEmpty)
-        .toList()
-      ..sort((a, b) => a.id.compareTo(b.id));
+    final list =
+        (jsonDecode(json) as List)
+            .whereType<Map<String, Object?>>()
+            .map(
+              (e) => ItemCatalogEntry(
+                id: e['id'] as String? ?? '',
+                path: e['path'] as String? ?? '',
+                category: e['category'] as String? ?? 'special',
+                icon: e['icon'] as String? ?? '',
+              ),
+            )
+            .where(
+              (e) => e.id.isNotEmpty && e.path.isNotEmpty && e.icon.isNotEmpty,
+            )
+            .toList()
+          ..sort((a, b) => a.id.compareTo(b.id));
     return ItemCatalog(list);
   }
 

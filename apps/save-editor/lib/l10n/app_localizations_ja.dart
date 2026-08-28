@@ -1477,6 +1477,18 @@ class AppLocalizationsJa extends AppLocalizations {
   String get gameTextTitle => 'ゲームテキスト';
 
   @override
+  String get itemImagesTitle => 'アイテム画像';
+
+  @override
+  String get loadingTexts => 'テキストを読み込み中…';
+
+  @override
+  String get loadingImages => '画像を読み込み中…';
+
+  @override
+  String get preparing => '準備中…';
+
+  @override
   String gameTextExtractedWithCounts(int ids, int languages) {
     return '抽出済み: $languages 言語にわたり $ids 件の ID。';
   }

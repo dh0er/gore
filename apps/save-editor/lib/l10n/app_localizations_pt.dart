@@ -1518,6 +1518,18 @@ class AppLocalizationsPt extends AppLocalizations {
   String get gameTextTitle => 'Texto do jogo';
 
   @override
+  String get itemImagesTitle => 'Imagens de itens';
+
+  @override
+  String get loadingTexts => 'A carregar textos…';
+
+  @override
+  String get loadingImages => 'A carregar imagens…';
+
+  @override
+  String get preparing => 'A preparar…';
+
+  @override
   String gameTextExtractedWithCounts(int ids, int languages) {
     return 'Extraído: $ids ids em $languages idiomas.';
   }
@@ -4445,6 +4457,18 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get gameTextTitle => 'Texto do jogo';
+
+  @override
+  String get itemImagesTitle => 'Imagens de itens';
+
+  @override
+  String get loadingTexts => 'Carregando textos…';
+
+  @override
+  String get loadingImages => 'Carregando imagens…';
+
+  @override
+  String get preparing => 'Preparando…';
 
   @override
   String gameTextExtractedWithCounts(int ids, int languages) {

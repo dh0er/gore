@@ -2672,6 +2672,30 @@ abstract class AppLocalizations {
   /// **'Game text'**
   String get gameTextTitle;
 
+  /// No description provided for @itemImagesTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Item images'**
+  String get itemImagesTitle;
+
+  /// No description provided for @loadingTexts.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading texts…'**
+  String get loadingTexts;
+
+  /// No description provided for @loadingImages.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading images…'**
+  String get loadingImages;
+
+  /// No description provided for @preparing.
+  ///
+  /// In en, this message translates to:
+  /// **'Preparing…'**
+  String get preparing;
+
   /// No description provided for @gameTextExtractedWithCounts.
   ///
   /// In en, this message translates to:

@@ -1530,6 +1530,18 @@ class AppLocalizationsRu extends AppLocalizations {
   String get gameTextTitle => 'Текст игры';
 
   @override
+  String get itemImagesTitle => 'Изображения предметов';
+
+  @override
+  String get loadingTexts => 'Загрузка текстов…';
+
+  @override
+  String get loadingImages => 'Загрузка изображений…';
+
+  @override
+  String get preparing => 'Подготовка…';
+
+  @override
   String gameTextExtractedWithCounts(int ids, int languages) {
     return 'Извлечено: $ids идентификаторов на $languages языках.';
   }

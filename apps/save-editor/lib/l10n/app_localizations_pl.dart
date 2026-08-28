@@ -1533,6 +1533,18 @@ class AppLocalizationsPl extends AppLocalizations {
   String get gameTextTitle => 'Tekst gry';
 
   @override
+  String get itemImagesTitle => 'Obrazy przedmiotów';
+
+  @override
+  String get loadingTexts => 'Wczytywanie tekstów…';
+
+  @override
+  String get loadingImages => 'Wczytywanie obrazów…';
+
+  @override
+  String get preparing => 'Przygotowywanie…';
+
+  @override
   String gameTextExtractedWithCounts(int ids, int languages) {
     return 'Wyodrębniono: $ids identyfikatorów w $languages językach.';
   }

@@ -5,6 +5,7 @@ import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/item_catalog.dart';
 import 'package:goresave/features/editor/domain/item_categories.dart';
+import 'package:goresave/features/editor/ui/inventory_item_visual.dart';
 import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
@@ -234,6 +235,15 @@ class _AddInventoryItemDialogState
                 if (_selected != null) ...[
                   Row(
                     children: [
+                      InventoryItemVisual(
+                        key: ValueKey(('selected-item-image', _selected!.id)),
+                        itemId: _selected!.id,
+                        itemPath: _selected!.path,
+                        fallbackIcon: iconForItemCategory(
+                          itemCategoryFromId(_selected!.id),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -370,7 +380,12 @@ class _AddInventoryItemDialogState
       dense: true,
       selected: isSelected,
       selectedTileColor: theme.colorScheme.primaryContainer,
-      leading: Icon(iconForItemCategory(itemCategoryFromId(entry.id))),
+      leading: InventoryItemVisual(
+        key: ValueKey(('catalog-item-image', entry.id)),
+        itemId: entry.id,
+        itemPath: entry.path,
+        fallbackIcon: iconForItemCategory(itemCategoryFromId(entry.id)),
+      ),
       title: Text(
         _displayName(catalog, lang, entry.id),
         maxLines: 1,

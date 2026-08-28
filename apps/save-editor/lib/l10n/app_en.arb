@@ -724,6 +724,10 @@
   "updateUpToDate": "You are using the latest version.",
   "updateCheckFailed": "Could not check for updates. Please try again later.",
   "gameTextTitle": "Game text",
+  "itemImagesTitle": "Item images",
+  "loadingTexts": "Loading texts…",
+  "loadingImages": "Loading images…",
+  "preparing": "Preparing…",
   "gameTextExtractedWithCounts": "Extracted: {ids} ids across {languages} languages.",
   "@gameTextExtractedWithCounts": {
     "placeholders": {

@@ -1451,6 +1451,18 @@ class AppLocalizationsZh extends AppLocalizations {
   String get gameTextTitle => '游戏文本';
 
   @override
+  String get itemImagesTitle => '物品图片';
+
+  @override
+  String get loadingTexts => '正在加载文本…';
+
+  @override
+  String get loadingImages => '正在加载图片…';
+
+  @override
+  String get preparing => '正在准备…';
+
+  @override
   String gameTextExtractedWithCounts(int ids, int languages) {
     return '已提取：$languages 种语言共 $ids 个 ID。';
   }
@@ -4256,6 +4268,18 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get gameTextTitle => '游戏文本';
+
+  @override
+  String get itemImagesTitle => '物品图片';
+
+  @override
+  String get loadingTexts => '正在加载文本…';
+
+  @override
+  String get loadingImages => '正在加载图片…';
+
+  @override
+  String get preparing => '正在准备…';
 
   @override
   String gameTextExtractedWithCounts(int ids, int languages) {

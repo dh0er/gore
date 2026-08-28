@@ -5,6 +5,7 @@ import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/item_catalog.dart';
 import 'package:goresave/features/editor/ui/add_inventory_item_dialog.dart';
+import 'package:goresave/features/editor/ui/inventory_item_visual.dart';
 
 import '../../../support/l10n_test_app.dart';
 import '../../../support/ui_settings_test_store.dart';
@@ -17,11 +18,11 @@ import '../../../support/ui_settings_test_store.dart';
 /// already in the inventory (to verify exclusion).
 const _fakeCatalogJson = '''
 [
-  {"id": "ItMi_Orenugget",    "path": "/Script/Angelscript.ItMi_Orenugget",    "category": "misc"},
-  {"id": "ItMi_Sulfur",       "path": "/Script/Angelscript.ItMi_Sulfur",       "category": "misc"},
-  {"id": "ItFo_Bread",        "path": "/Script/Angelscript.ItFo_Bread",        "category": "food"},
-  {"id": "ItMw_Sword_01",     "path": "/Script/Angelscript.ItMw_Sword_01",     "category": "meleweapon"},
-  {"id": "ItMi_AlreadyOwned", "path": "/Script/Angelscript.ItMi_AlreadyOwned", "category": "misc"}
+  {"id": "ItMi_Orenugget",    "path": "/Script/Angelscript.ItMi_Orenugget",    "category": "misc",         "icon": "ItMi_Orenugget"},
+  {"id": "ItMi_Sulfur",       "path": "/Script/Angelscript.ItMi_Sulfur",       "category": "misc",         "icon": "ItMi_Sulfur"},
+  {"id": "ItFo_Bread",        "path": "/Script/Angelscript.ItFo_Bread",        "category": "food",         "icon": "ItFo_Bread"},
+  {"id": "ItMw_Sword_01",     "path": "/Script/Angelscript.ItMw_Sword_01",     "category": "meleeweapon",  "icon": "ItMw_Sword_01"},
+  {"id": "ItMi_AlreadyOwned", "path": "/Script/Angelscript.ItMi_AlreadyOwned", "category": "misc",         "icon": "ItMi_AlreadyOwned"}
 ]
 ''';
 
@@ -89,6 +90,18 @@ Widget _wrap({
 // ---------------------------------------------------------------------------
 
 void main() {
+  testWidgets('catalog rows and selected summary use the shared item visual', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_wrap(excludePaths: const {}));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(InventoryItemVisual), findsWidgets);
+    await tester.tap(find.text('Sword 01'));
+    await tester.pump();
+    expect(find.byType(InventoryItemVisual), findsNWidgets(2));
+  });
+
   testWidgets('item ids are hidden by default and shown when enabled', (
     tester,
   ) async {
