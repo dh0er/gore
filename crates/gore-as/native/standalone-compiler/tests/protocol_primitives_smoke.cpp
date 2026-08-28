@@ -184,21 +184,55 @@ bool profile_loader_smoke() {
         ",\"normalized_oracle_corpus\":" + blob + "},"
         "\"qualification\":{\"required_probe_suite_version\":\"test-v1\",\"diagnostic_parity\":" + blob +
         ",\"semantic_parity\":" + blob + ",\"qualified\":true}}";
-    sha256 profile_hash;
     constexpr char domain[] = "gore-as-compiler-profile-v1\0";
-    profile_hash.update(domain, sizeof(domain) - 1U);
-    profile_hash.update(payload);
-    std::string manifest_json = payload;
-    manifest_json.pop_back();
-    manifest_json += ",\"profile_sha256\":\"" + sha256_hex(profile_hash.finish()) + "\"}";
+    const auto seal_manifest = [&](const std::string& manifest_payload) {
+        sha256 profile_hash;
+        profile_hash.update(domain, sizeof(domain) - 1U);
+        profile_hash.update(manifest_payload);
+        std::string sealed = manifest_payload;
+        sealed.pop_back();
+        sealed += ",\"profile_sha256\":\"" + sha256_hex(profile_hash.finish()) + "\"}";
+        return sealed;
+    };
+    const std::string manifest_json = seal_manifest(payload);
     compiler_profile_manifest manifest;
     if (!expect(parse_compiler_profile_manifest(manifest_json, manifest, detail), detail.c_str())) return false;
     if (!expect(manifest.build_identifier < 0 && manifest.all_blobs.size() == 16U,
             "compiler manifest projection mismatch")) return false;
-    for (const auto& drift : std::array<std::pair<std::string_view, std::string_view>, 3U>{{
+
+    std::string current_payload = payload;
+    const auto replace_target_field = [&](const std::string_view before, const std::string_view after) {
+        const std::size_t position = current_payload.find(before);
+        if (!expect(position != std::string::npos, "current target fixture field is missing")) {
+            return false;
+        }
+        current_payload.replace(position, before.size(), after);
+        return true;
+    };
+    if (!replace_target_field("\"steam_build_id\":24539464", "\"steam_build_id\":24878692") ||
+        !replace_target_field(
+            "\"depot_manifest_gid\":1585071322101748861",
+            "\"depot_manifest_gid\":382135126159906494")) return false;
+    compiler_profile_manifest current_manifest;
+    if (!expect(
+            parse_compiler_profile_manifest(
+                seal_manifest(current_payload), current_manifest, detail),
+            detail.c_str()) ||
+        !expect(
+            current_manifest.steam_build_id == 24'878'692U &&
+                current_manifest.depot_manifest_gid == 382'135'126'159'906'494U,
+            "BuildID-24878692 compiler target projection mismatch")) return false;
+
+    for (const auto& drift : std::array<std::pair<std::string_view, std::string_view>, 7U>{{
              {"\"steam_app_id\":1297900", "\"steam_app_id\":1297901"},
              {"\"steam_build_id\":24539464", "\"steam_build_id\":24539465"},
              {"\"depot_id\":1297901", "\"depot_id\":1297902"},
+             {"\"depot_manifest_gid\":1585071322101748861",
+              "\"depot_manifest_gid\":382135126159906494"},
+             {"\"platform\":\"windows\"", "\"platform\":\"linux\""},
+             {"\"architecture\":\"x86_64\"", "\"architecture\":\"arm64\""},
+             {"\"build_configuration\":\"shipping\"",
+              "\"build_configuration\":\"development\""},
          }}) {
         std::string foreign_payload = payload;
         const std::size_t position = foreign_payload.find(drift.first);
@@ -206,19 +240,30 @@ bool profile_loader_smoke() {
             return false;
         }
         foreign_payload.replace(position, drift.first.size(), drift.second);
-        sha256 foreign_hash;
-        foreign_hash.update(domain, sizeof(domain) - 1U);
-        foreign_hash.update(foreign_payload);
-        std::string foreign_manifest = foreign_payload;
-        foreign_manifest.pop_back();
-        foreign_manifest += ",\"profile_sha256\":\"" +
-            sha256_hex(foreign_hash.finish()) + "\"}";
         compiler_profile_manifest rejected;
         if (!expect(
-                !parse_compiler_profile_manifest(foreign_manifest, rejected, detail),
+                !parse_compiler_profile_manifest(
+                    seal_manifest(foreign_payload), rejected, detail),
                 "resealed foreign compiler target was accepted")) {
             return false;
         }
+    }
+    std::string current_hybrid_payload = current_payload;
+    const std::string_view current_manifest_field{
+        "\"depot_manifest_gid\":382135126159906494"};
+    const std::size_t current_manifest_position = current_hybrid_payload.find(current_manifest_field);
+    if (!expect(
+            current_manifest_position != std::string::npos,
+            "current target hybrid fixture field is missing")) return false;
+    current_hybrid_payload.replace(
+        current_manifest_position, current_manifest_field.size(),
+        "\"depot_manifest_gid\":1585071322101748861");
+    compiler_profile_manifest rejected_current_hybrid;
+    if (!expect(
+            !parse_compiler_profile_manifest(
+                seal_manifest(current_hybrid_payload), rejected_current_hybrid, detail),
+            "resealed BuildID-24878692/BuildID-24539464 hybrid target was accepted")) {
+        return false;
     }
     return true;
 }

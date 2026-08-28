@@ -117,6 +117,22 @@ for non-Rust packaging. It emits a small JSON success record containing the type
 Copying only `compiler-profile.json` and its runtime payloads is not an authority-preserving
 promotion check.
 
+The three files above remain the exact typed profile tree. Product publication additionally
+requires one path-independent `gore.as.internal-full-tree-verification` receipt per required
+profile, stored outside that tree under `verification/full-tree/`. The receipt comes from one
+strict standalone FullGraph run over a frozen edit-only copy of the complete base module universe.
+It binds the qualified profile SHA-256, one common final sidecar seal and protocol, Shipping and
+Binds seals, the length-delimited source aggregate, copied embedded reference, standalone
+candidate, pinned Bytediff normalizers, and the complete WholeCache semantic digest/counts.
+
+The internal-input V2 packaging verifier accepts exactly product targets `24539464` and `24878692`,
+exactly one receipt in catalog order for each, `semantic = 0`, `alignment_loss = 0`, and exact
+WholeCache structural equality. Benign normalized byte differences may remain nonzero and are
+retained in the receipt. Record, independent Verify, archive extraction, Prepare, and host Stage
+all re-run the same check and reject missing/additional profiles, receipts, or files. This closed
+publishing set does not alter runtime compatibility: the single catalog sidecar is still selected
+through the bounded PE/cache format and ordered Binds API, not a complete executable hash.
+
 ## Productive standalone execution boundary
 
 `StandaloneQualificationHarnessV1` is the productive, offline implementation of

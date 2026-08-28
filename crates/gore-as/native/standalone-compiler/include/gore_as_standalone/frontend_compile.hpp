@@ -73,7 +73,9 @@ private:
         const lexical_preprocess_result&,
         registry_runtime*,
         frontend_compile_runtime&,
-        std::vector<asIScriptModule*>&);
+        global_initializer_policy,
+        std::vector<asIScriptModule*>&,
+        shipping_static_jit_candidates*);
 };
 
 // Materializes a successful preprocessor result in a registry-replayed engine,
@@ -87,5 +89,19 @@ frontend_compile_result compile_preprocessed_module_graph(
     registry_runtime* registry,
     frontend_compile_runtime& runtime,
     std::vector<asIScriptModule*>& modules);
+
+// Source-only product compilation uses `defer`: the compiled cache retains
+// initializer functions, while the offline compiler never executes game/world
+// code. The six-argument overload above preserves the historical `execute`
+// behavior for qualification and direct frontend callers.
+frontend_compile_result compile_preprocessed_module_graph(
+    asIScriptEngine& engine,
+    const preprocessor_options& options,
+    const lexical_preprocess_result& input,
+    registry_runtime* registry,
+    frontend_compile_runtime& runtime,
+    global_initializer_policy initializer_policy,
+    std::vector<asIScriptModule*>& modules,
+    shipping_static_jit_candidates* static_jit_candidates = nullptr);
 
 } // namespace gore::as::standalone

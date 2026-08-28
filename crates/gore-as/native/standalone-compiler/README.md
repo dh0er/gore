@@ -14,6 +14,14 @@ game artifacts. Productive G1R compilation requires a completely qualified,
 signed internal profile package; unknown, incomplete, or incompatible profiles
 fail closed.
 
+The native manifest loader admits exactly two complete target tuples:
+Steam BuildID `24539464` with depot manifest `1585071322101748861`, and Steam
+BuildID `24878692` with depot manifest `382135126159906494`; both require AppID
+`1297900`, depot `1297901`, Windows/x86-64/Shipping. Fields from the two tuples
+cannot be mixed. These are profile-provenance authorities, not whole-file
+executable-hash runtime gates: product target compatibility remains the Rust
+parent's authenticated cache/API qualification.
+
 ## What the core checkpoint proves
 
 `gore-as-unreangel-core` builds 27 generic translation units from the exact
@@ -86,8 +94,9 @@ profile switches rather than build guesses.
 shadow/delegate pre-class data, binds dependencies and invokes the graph
 barriers atomically. Its smoke compiles a consumer against a provider's
 preprocessed USTRUCT and proves a rejected graph leaves no module behind. The
-product FullGraph path additionally binds the reversed BuildID-24539464
-`ClassAnalyze` callback, enforces the target's unbound `OnProcessChunks` and
+product FullGraph path additionally binds the `ClassAnalyze` behavior first
+reversed on BuildID `24539464` and retained only after the BuildID `24878692`
+differential qualification, enforces both supported targets' unbound `OnProcessChunks` and
 `OnPostProcessCode` delegates, performs editor/release source discovery,
 requires canonical UTF-8 source bytes, resolves automatic dependency closure,
 and uses captured identities for non-ASCII FName comparison. Processed-code
@@ -107,7 +116,7 @@ remain represented by their effective ordered registry trace rather than
 duplicated as inputs. The native profile loader now projects these payloads
 into the preprocessor, compiler settings and registry runtime after verifying
 their manifest seals. The class-generator transient switch is parsed and
-sealed separately from `ClassAnalyze`. The pinned target captures it as
+sealed separately from `ClassAnalyze`. Both supported target profiles capture it as
 `false`; implicit struct-property metadata and script-class omission are
 explicit differential witnesses so the sidecar cannot silently ignore the
 donor's independent `RequiresProperty=false` default or its class-versus-struct
@@ -179,6 +188,17 @@ shadow layouts only from sealed native-super rows, retains cached statics and
 post-init records, and projects source class/property/function metadata plus
 delegate/event declarations. String-literal globals are recreated through the
 registered string factory rather than treated as ordinary global storage.
+For a source-only full graph it also derives the Shipping StaticJIT fixed point
+from a disposable rehydration of the sealed base. New and fully analyzed
+modules use their fresh Stage-3 candidates; partially analyzed modules retain a
+base-FINAL function only when the stable declaration has a constructor,
+destructor or generated-function role, or maps uniquely to the preprocessor's
+UFUNCTION identity. The complete projection is preflighted before mutation, so
+ambiguous descriptors and same-name ordinary overloads fail closed without
+leaking FINAL traits. These two boundaries -- string-factory instantiation and
+StaticJIT candidate projection -- are the only compiler/export-path changes
+required by the 2026-08 generation; the parser, language semantics and bytecode
+generator remain unchanged.
 `export_mixed_graph_checkpoint` re-exports every final module into one fresh
 reference-table namespace, restores descriptor-only metadata for unchanged
 modules, projects source metadata, and validates the complete encoded wire

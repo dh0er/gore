@@ -25,7 +25,7 @@ struct TypeIdResolver final {
 struct RegistrationContextFinalState final {
   std::string name_space;
   std::uint32_t access_mask{};
-  // BuildID 24539464 maps Begin/End/RemoveConfigGroup to the same zero-return stub.
+  // Both authenticated generations map Begin/End/RemoveConfigGroup to one zero-return stub.
   // A non-empty config group is therefore not representable for this exact target.
   bool has_config_group{};
 };

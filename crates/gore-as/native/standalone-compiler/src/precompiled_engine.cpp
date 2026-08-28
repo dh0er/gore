@@ -20,6 +20,7 @@
 #include <memory>
 #include <new>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -3306,7 +3307,8 @@ engine_bridge_result compile_mixed_cache_checkpoint(
     registry_runtime* const registry,
     frontend_compile_runtime& frontend_runtime,
     const bool initialize_source_globals,
-    std::vector<asIScriptModule*>& modules) {
+    std::vector<asIScriptModule*>& modules,
+    shipping_static_jit_candidates* const static_jit_candidates) {
     try {
         auto& engine = static_cast<asCScriptEngine&>(engine_interface);
         std::vector<std::string> cache_names;
@@ -3807,6 +3809,9 @@ engine_bridge_result compile_mixed_cache_checkpoint(
                 }
             }
         }
+        if (static_jit_candidates != nullptr) {
+            static_jit_candidates->functions.clear();
+        }
         for (std::size_t index = 0U; index < states.size(); ++index) {
             mixed_module_state& state = states[index];
             if (state.source == nullptr || state.module->builder == nullptr) continue;
@@ -3818,8 +3823,19 @@ engine_bridge_result compile_mixed_cache_checkpoint(
                     engine_bridge_phase::compile_source_code, index,
                     "source bytecode compilation failed in mixed graph", code);
             }
+            state.module->JITCompile();
+            if (static_jit_candidates != nullptr) {
+                for (asUINT function_index = 0U;
+                     function_index < state.module->scriptFunctions.GetLength();
+                     ++function_index) {
+                    asCScriptFunction* const function =
+                        state.module->scriptFunctions[function_index];
+                    if (function != nullptr && function->funcType == asFUNC_SCRIPT) {
+                        static_jit_candidates->functions.push_back(function);
+                    }
+                }
+            }
         }
-        for (mixed_module_state& state : states) state.module->JITCompile();
 
         asCBuilder validator(&engine, nullptr);
         validator.Reset();
@@ -3870,15 +3886,87 @@ engine_bridge_result compile_mixed_cache_checkpoint(
 }
 
 engine_bridge_result apply_shipping_static_jit_checkpoint(
-    const std::vector<asIScriptModule*>& modules) {
+    const std::vector<asIScriptModule*>& modules,
+    const shipping_static_jit_candidates& candidates) {
     try {
-        std::unordered_set<asCScriptFunction*> functions_with_virtual_overrides;
+        std::unordered_set<asIScriptModule*> graph_modules;
+        graph_modules.reserve(modules.size());
+        asIScriptEngine* graph_engine = nullptr;
         for (asIScriptModule* const module_interface : modules) {
-            if (module_interface == nullptr) {
+            if (module_interface == nullptr ||
+                !graph_modules.insert(module_interface).second) {
                 return failure(
                     engine_bridge_phase::preflight, kNoModule,
-                    "Shipping StaticJIT analysis received a null module", asINVALID_ARG);
+                    "Shipping StaticJIT analysis received a null or duplicate module",
+                    asINVALID_ARG);
             }
+            asIScriptEngine* const module_engine = module_interface->GetEngine();
+            if (module_engine == nullptr ||
+                (graph_engine != nullptr && module_engine != graph_engine)) {
+                return failure(
+                    engine_bridge_phase::preflight, kNoModule,
+                    "Shipping StaticJIT modules do not belong to one engine graph",
+                    asINVALID_ARG);
+            }
+            graph_engine = module_engine;
+        }
+        if (graph_engine == nullptr) {
+            if (!candidates.functions.empty()) {
+                return failure(
+                    engine_bridge_phase::preflight, kNoModule,
+                    "Shipping StaticJIT candidates require a non-empty module graph",
+                    asINVALID_ARG);
+            }
+            return {};
+        }
+        if (graph_engine->GetModuleCount() != graph_modules.size()) {
+            return failure(
+                engine_bridge_phase::preflight, kNoModule,
+                "Shipping StaticJIT analysis requires the complete engine module graph",
+                asINVALID_CONFIGURATION);
+        }
+        for (asUINT index = 0U; index < graph_engine->GetModuleCount(); ++index) {
+            asIScriptModule* const engine_module = graph_engine->GetModuleByIndex(index);
+            if (engine_module == nullptr ||
+                graph_modules.find(engine_module) == graph_modules.end()) {
+                return failure(
+                    engine_bridge_phase::preflight, kNoModule,
+                    "Shipping StaticJIT analysis requires the complete engine module graph",
+                    asINVALID_CONFIGURATION);
+            }
+        }
+
+        std::unordered_set<asCScriptFunction*> graph_script_functions;
+        for (asIScriptModule* const module_interface : modules) {
+            auto& module = static_cast<asCModule&>(*module_interface);
+            for (asUINT index = 0U; index < module.scriptFunctions.GetLength(); ++index) {
+                asCScriptFunction* const function = module.scriptFunctions[index];
+                if (function != nullptr && function->funcType == asFUNC_SCRIPT) {
+                    graph_script_functions.insert(function);
+                }
+            }
+        }
+        std::unordered_set<asCScriptFunction*> candidate_functions;
+        candidate_functions.reserve(candidates.functions.size());
+        for (asIScriptFunction* const candidate_interface : candidates.functions) {
+            if (candidate_interface == nullptr ||
+                candidate_interface->GetFuncType() != asFUNC_SCRIPT) {
+                return failure(
+                    engine_bridge_phase::preflight, kNoModule,
+                    "Shipping StaticJIT candidate set is invalid", asINVALID_ARG);
+            }
+            asCScriptFunction* const candidate =
+                static_cast<asCScriptFunction*>(candidate_interface);
+            if (graph_script_functions.find(candidate) == graph_script_functions.end()) {
+                return failure(
+                    engine_bridge_phase::preflight, kNoModule,
+                    "Shipping StaticJIT candidate is absent from the engine module graph",
+                    asINVALID_ARG);
+            }
+            candidate_functions.insert(candidate);
+        }
+        std::unordered_set<asCScriptFunction*> functions_with_virtual_overrides;
+        for (asIScriptModule* const module_interface : modules) {
             auto& module = static_cast<asCModule&>(*module_interface);
             for (asUINT type_index = 0U; type_index < module.classTypes.GetLength(); ++type_index) {
                 asCObjectType* const object_type = module.classTypes[type_index];
@@ -3903,15 +3991,28 @@ engine_bridge_result apply_shipping_static_jit_checkpoint(
                 }
             }
         }
+        for (asCScriptFunction* const candidate : candidate_functions) {
+            if (functions_with_virtual_overrides.find(candidate) !=
+                    functions_with_virtual_overrides.end() &&
+                candidate->traits.GetTrait(asTRAIT_FINAL)) {
+                return failure(
+                    engine_bridge_phase::preflight, kNoModule,
+                    "Shipping StaticJIT override candidate is already final",
+                    asINVALID_CONFIGURATION);
+            }
+        }
         for (asIScriptModule* const module_interface : modules) {
             auto& module = static_cast<asCModule&>(*module_interface);
             for (asUINT index = 0U; index < module.scriptFunctions.GetLength(); ++index) {
                 asCScriptFunction* const function = module.scriptFunctions[index];
-                if (function == nullptr || function->funcType != asFUNC_SCRIPT) continue;
-                function->traits.SetTrait(
-                    asTRAIT_FINAL,
-                    functions_with_virtual_overrides.find(function) ==
-                        functions_with_virtual_overrides.end());
+                if (function == nullptr || function->funcType != asFUNC_SCRIPT ||
+                    candidate_functions.find(function) == candidate_functions.end()) {
+                    continue;
+                }
+                if (functions_with_virtual_overrides.find(function) ==
+                    functions_with_virtual_overrides.end()) {
+                    function->traits.SetTrait(asTRAIT_FINAL, true);
+                }
             }
         }
         return {};
@@ -3925,6 +4026,384 @@ engine_bridge_result apply_shipping_static_jit_checkpoint(
         return failure(
             engine_bridge_phase::cleanup, kNoModule,
             "unexpected Shipping StaticJIT analysis failure", asERROR);
+    }
+}
+
+namespace {
+
+bool static_jit_function_identity(
+    asIScriptFunction& function,
+    std::pair<std::string, std::string>& identity) {
+    const char* const module_name = function.GetModuleName();
+    const char* const declaration =
+        function.GetDeclaration(true, true, false, false);
+    if (module_name == nullptr || *module_name == '\0' ||
+        declaration == nullptr || *declaration == '\0') {
+        return false;
+    }
+    identity = {module_name, declaration};
+    return true;
+}
+
+struct reflected_static_jit_identity {
+    std::string module_name;
+    std::string owner_namespace;
+    std::string owner_name;
+    std::string function_name;
+    bool object_bound = false;
+
+    bool operator<(const reflected_static_jit_identity& other) const noexcept {
+        return std::tie(
+                   module_name, object_bound, owner_namespace, owner_name,
+                   function_name) <
+            std::tie(
+                   other.module_name, other.object_bound, other.owner_namespace,
+                   other.owner_name, other.function_name);
+    }
+
+    bool operator==(const reflected_static_jit_identity& other) const noexcept {
+        return module_name == other.module_name && object_bound == other.object_bound &&
+            owner_namespace == other.owner_namespace && owner_name == other.owner_name &&
+            function_name == other.function_name;
+    }
+};
+
+bool static_jit_reflected_identity(
+    asIScriptFunction& function,
+    reflected_static_jit_identity& identity) {
+    const char* const module_name = function.GetModuleName();
+    const char* const function_name = function.GetName();
+    if (module_name == nullptr || *module_name == '\0' ||
+        function_name == nullptr || *function_name == '\0') {
+        return false;
+    }
+
+    identity = {};
+    identity.module_name = module_name;
+    identity.function_name = function_name;
+    asITypeInfo* const object_type = function.GetObjectType();
+    if (object_type == nullptr) {
+        const char* const name_space = function.GetNamespace();
+        if (name_space == nullptr) return false;
+        identity.owner_namespace = name_space;
+        return true;
+    }
+
+    const char* const owner_name = object_type->GetName();
+    const char* const owner_namespace = object_type->GetNamespace();
+    if (owner_name == nullptr || *owner_name == '\0' || owner_namespace == nullptr) {
+        return false;
+    }
+    identity.object_bound = true;
+    identity.owner_name = owner_name;
+    identity.owner_namespace = owner_namespace;
+    return true;
+}
+
+bool collect_reflected_static_jit_identities(
+    const lexical_preprocess_result& source,
+    std::vector<reflected_static_jit_identity>& identities,
+    std::string& detail) {
+    std::unordered_set<std::string> module_names;
+    module_names.reserve(source.modules.size());
+    for (const lexical_module_description& module : source.modules) {
+        if (module.module_name.empty() || module.module_name.find('\0') != std::string::npos ||
+            !module_names.insert(module.module_name).second) {
+            detail = "StaticJIT UFUNCTION coverage has an invalid or duplicate module";
+            return false;
+        }
+        for (const preprocessed_class_description& type : module.classes) {
+            if (type.class_name.empty() || type.class_name.find('\0') != std::string::npos ||
+                type.name_space.find('\0') != std::string::npos) {
+                detail = "StaticJIT UFUNCTION coverage has an invalid owner identity";
+                return false;
+            }
+            for (const preprocessed_function_description& function : type.methods) {
+                if (function.script_function_name.empty() ||
+                    function.script_function_name.find('\0') != std::string::npos) {
+                    detail = "StaticJIT UFUNCTION coverage has an invalid function identity";
+                    return false;
+                }
+                identities.push_back({
+                    module.module_name,
+                    type.name_space,
+                    type.is_statics_class ? std::string{} : type.class_name,
+                    function.script_function_name,
+                    !type.is_statics_class});
+            }
+        }
+    }
+    std::sort(identities.begin(), identities.end());
+    if (std::adjacent_find(identities.begin(), identities.end()) != identities.end()) {
+        detail = "StaticJIT UFUNCTION coverage is ambiguous";
+        return false;
+    }
+    return true;
+}
+
+template <typename T>
+bool sorted_unique(const std::vector<T>& values) {
+    return std::is_sorted(values.begin(), values.end()) &&
+        std::adjacent_find(values.begin(), values.end()) == values.end();
+}
+
+} // namespace
+
+engine_bridge_result derive_shipping_static_jit_module_coverage(
+    const std::vector<asIScriptModule*>& base_modules,
+    shipping_static_jit_coverage& coverage) {
+    try {
+        struct function_snapshot {
+            asCScriptFunction* function = nullptr;
+            asDWORD traits = 0U;
+            std::string declaration;
+        };
+        struct module_snapshot {
+            std::string name;
+            std::vector<function_snapshot> functions;
+        };
+
+        std::vector<module_snapshot> snapshots;
+        snapshots.reserve(base_modules.size());
+        shipping_static_jit_candidates all_candidates;
+        std::vector<std::pair<std::string, std::string>> function_identities;
+        std::unordered_set<std::string> names;
+        names.reserve(base_modules.size());
+        for (asIScriptModule* const module_interface : base_modules) {
+            if (module_interface == nullptr || module_interface->GetName() == nullptr) {
+                return failure(
+                    engine_bridge_phase::preflight, kNoModule,
+                    "StaticJIT coverage received a module without identity",
+                    asINVALID_ARG);
+            }
+            auto& module = static_cast<asCModule&>(*module_interface);
+            module_snapshot snapshot;
+            snapshot.name = module.GetName();
+            if (snapshot.name.empty() || !names.insert(snapshot.name).second) {
+                return failure(
+                    engine_bridge_phase::preflight, kNoModule,
+                    "StaticJIT coverage received an empty or duplicate module identity",
+                    asINVALID_ARG);
+            }
+            for (asUINT index = 0U; index < module.scriptFunctions.GetLength(); ++index) {
+                asCScriptFunction* const function = module.scriptFunctions[index];
+                if (function == nullptr || function->funcType != asFUNC_SCRIPT) continue;
+                std::pair<std::string, std::string> identity;
+                if (!static_jit_function_identity(*function, identity) ||
+                    identity.first != snapshot.name) {
+                    return failure(
+                        engine_bridge_phase::preflight, kNoModule,
+                        "StaticJIT coverage could not derive a stable function identity",
+                        asINVALID_CONFIGURATION);
+                }
+                snapshot.functions.push_back({
+                    function, function->traits.traits, std::move(identity.second)});
+                function_identities.emplace_back(
+                    identity.first, snapshot.functions.back().declaration);
+                all_candidates.functions.push_back(function);
+            }
+            snapshots.push_back(std::move(snapshot));
+        }
+
+        std::sort(function_identities.begin(), function_identities.end());
+        if (!sorted_unique(function_identities)) {
+            return failure(
+                engine_bridge_phase::preflight, kNoModule,
+                "StaticJIT coverage has an ambiguous function identity",
+                asINVALID_CONFIGURATION);
+        }
+
+        const engine_bridge_result analyzed = apply_shipping_static_jit_checkpoint(
+            base_modules, all_candidates);
+        if (!analyzed.succeeded()) return analyzed;
+
+        shipping_static_jit_coverage staged;
+        staged.base_module_names.reserve(snapshots.size());
+        staged.fully_analyzed_module_names.reserve(snapshots.size());
+        for (const module_snapshot& snapshot : snapshots) {
+            staged.base_module_names.push_back(snapshot.name);
+            const bool changed = std::any_of(
+                snapshot.functions.begin(), snapshot.functions.end(),
+                [](const function_snapshot& entry) {
+                    return entry.function->traits.traits != entry.traits;
+                });
+            // An empty base module carries no observable evidence that the
+            // Shipping stage-3 pass actually covered future source functions.
+            // Treat only non-empty fixed points as fully analyzed; otherwise
+            // a later edit of an empty placeholder module would inherit FINAL
+            // without a matching sealed function identity.
+            if (!changed && !snapshot.functions.empty()) {
+                staged.fully_analyzed_module_names.push_back(snapshot.name);
+                continue;
+            }
+            for (const function_snapshot& function : snapshot.functions) {
+                if ((function.traits & asTRAIT_FINAL) != 0U) {
+                    staged.retained_final_functions.emplace_back(
+                        snapshot.name, function.declaration);
+                }
+            }
+        }
+        std::sort(staged.base_module_names.begin(), staged.base_module_names.end());
+        std::sort(
+            staged.fully_analyzed_module_names.begin(),
+            staged.fully_analyzed_module_names.end());
+        std::sort(
+            staged.retained_final_functions.begin(),
+            staged.retained_final_functions.end());
+        coverage = std::move(staged);
+        return {};
+    } catch (const std::bad_alloc&) {
+        return failure(
+            engine_bridge_phase::cleanup, kNoModule,
+            "allocation failed while deriving StaticJIT module coverage",
+            asOUT_OF_MEMORY);
+    } catch (const std::exception& exception) {
+        return failure(engine_bridge_phase::cleanup, kNoModule, exception.what(), asERROR);
+    } catch (...) {
+        return failure(
+            engine_bridge_phase::cleanup, kNoModule,
+            "unexpected StaticJIT coverage failure", asERROR);
+    }
+}
+
+engine_bridge_result apply_shipping_static_jit_coverage_checkpoint(
+    const std::vector<asIScriptModule*>& modules,
+    const shipping_static_jit_candidates& candidates,
+    const shipping_static_jit_coverage& coverage,
+    const lexical_preprocess_result& source) {
+    try {
+        if (!sorted_unique(coverage.base_module_names) ||
+            !sorted_unique(coverage.fully_analyzed_module_names) ||
+            !sorted_unique(coverage.retained_final_functions) ||
+            !std::includes(
+                coverage.base_module_names.begin(), coverage.base_module_names.end(),
+                coverage.fully_analyzed_module_names.begin(),
+                coverage.fully_analyzed_module_names.end())) {
+            return failure(
+                engine_bridge_phase::preflight, kNoModule,
+                "Shipping StaticJIT coverage is not canonical or self-consistent",
+                asINVALID_ARG);
+        }
+        for (const auto& identity : coverage.retained_final_functions) {
+            if (!std::binary_search(
+                    coverage.base_module_names.begin(),
+                    coverage.base_module_names.end(), identity.first)) {
+                return failure(
+                    engine_bridge_phase::preflight, kNoModule,
+                    "Shipping StaticJIT retained function has no base module",
+                    asINVALID_ARG);
+            }
+            if (std::binary_search(
+                    coverage.fully_analyzed_module_names.begin(),
+                    coverage.fully_analyzed_module_names.end(), identity.first)) {
+                return failure(
+                    engine_bridge_phase::preflight, kNoModule,
+                    "Shipping StaticJIT retained and fully analyzed coverage overlap",
+                    asINVALID_ARG);
+            }
+        }
+
+        std::vector<reflected_static_jit_identity> reflected_functions;
+        std::string reflected_detail;
+        if (!collect_reflected_static_jit_identities(
+                source, reflected_functions, reflected_detail)) {
+            return failure(
+                engine_bridge_phase::preflight, kNoModule,
+                std::move(reflected_detail), asINVALID_CONFIGURATION);
+        }
+
+        // Preprocessor descriptors carry the exact exported script name but
+        // not an overload signature. Prove that each descriptor maps to one
+        // and only one current stage-3 candidate before any trait is changed;
+        // otherwise a same-name non-UFUNCTION overload could inherit FINAL.
+        std::vector<reflected_static_jit_identity> candidate_reflected_identities;
+        candidate_reflected_identities.reserve(candidates.functions.size());
+        for (asIScriptFunction* const candidate : candidates.functions) {
+            if (candidate == nullptr || candidate->GetFuncType() != asFUNC_SCRIPT) {
+                return failure(
+                    engine_bridge_phase::preflight, kNoModule,
+                    "Shipping StaticJIT coverage received an invalid candidate",
+                    asINVALID_ARG);
+            }
+            reflected_static_jit_identity reflected_identity;
+            if (!static_jit_reflected_identity(*candidate, reflected_identity)) {
+                return failure(
+                    engine_bridge_phase::preflight, kNoModule,
+                    "Shipping StaticJIT candidate has no reflected identity",
+                    asINVALID_CONFIGURATION);
+            }
+            candidate_reflected_identities.push_back(std::move(reflected_identity));
+        }
+        std::sort(
+            candidate_reflected_identities.begin(),
+            candidate_reflected_identities.end());
+        for (const reflected_static_jit_identity& reflected : reflected_functions) {
+            const auto matches = std::equal_range(
+                candidate_reflected_identities.begin(),
+                candidate_reflected_identities.end(), reflected);
+            if (std::distance(matches.first, matches.second) != 1) {
+                return failure(
+                    engine_bridge_phase::preflight, kNoModule,
+                    "Shipping StaticJIT UFUNCTION identity does not map uniquely",
+                    asINVALID_CONFIGURATION);
+            }
+        }
+
+        shipping_static_jit_candidates projected;
+        projected.functions.reserve(candidates.functions.size());
+        for (std::size_t candidate_index = 0U;
+             candidate_index < candidates.functions.size(); ++candidate_index) {
+            asIScriptFunction* const candidate = candidates.functions[candidate_index];
+            std::pair<std::string, std::string> identity;
+            if (!static_jit_function_identity(*candidate, identity)) {
+                return failure(
+                    engine_bridge_phase::preflight, kNoModule,
+                    "Shipping StaticJIT candidate has no stable function identity",
+                    asINVALID_CONFIGURATION);
+            }
+            const bool base_module = std::binary_search(
+                coverage.base_module_names.begin(),
+                coverage.base_module_names.end(), identity.first);
+            const bool fully_analyzed = std::binary_search(
+                coverage.fully_analyzed_module_names.begin(),
+                coverage.fully_analyzed_module_names.end(), identity.first);
+            const bool retained_final = std::binary_search(
+                coverage.retained_final_functions.begin(),
+                coverage.retained_final_functions.end(), identity);
+            auto& concrete = static_cast<asCScriptFunction&>(*candidate);
+            constexpr asDWORD retained_role_mask =
+                asTRAIT_CONSTRUCTOR | asTRAIT_DESTRUCTOR | asTRAIT_GENERATED_FUNCTION;
+            const bool retained_role =
+                (concrete.traits.traits & retained_role_mask) != 0U;
+            reflected_static_jit_identity reflected_identity;
+            const bool reflected_identity_valid =
+                static_jit_reflected_identity(*candidate, reflected_identity);
+            if (!reflected_identity_valid) {
+                return failure(
+                    engine_bridge_phase::preflight, kNoModule,
+                    "Shipping StaticJIT candidate has no reflected identity",
+                    asINVALID_CONFIGURATION);
+            }
+            const bool reflected = std::binary_search(
+                reflected_functions.begin(), reflected_functions.end(),
+                reflected_identity);
+            if (!base_module || fully_analyzed ||
+                (retained_final && (retained_role || reflected))) {
+                projected.functions.push_back(candidate);
+            }
+        }
+        return apply_shipping_static_jit_checkpoint(modules, projected);
+    } catch (const std::bad_alloc&) {
+        return failure(
+            engine_bridge_phase::cleanup, kNoModule,
+            "allocation failed while projecting StaticJIT coverage",
+            asOUT_OF_MEMORY);
+    } catch (const std::exception& exception) {
+        return failure(engine_bridge_phase::cleanup, kNoModule, exception.what(), asERROR);
+    } catch (...) {
+        return failure(
+            engine_bridge_phase::cleanup, kNoModule,
+            "unexpected StaticJIT coverage projection failure", asERROR);
     }
 }
 

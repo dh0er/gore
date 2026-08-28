@@ -864,6 +864,25 @@ const Type* checked_image_object(
   return readable_range(address, bytes) ? reinterpret_cast<const Type*>(address) : nullptr;
 }
 
+bool pinned_frontend_accessor(
+    const std::uintptr_t image,
+    const std::uint32_t accessor_rva,
+    const std::uint32_t delegate_rva) noexcept {
+  constexpr std::size_t kInstructionBytes = 7;
+  const auto* instruction = checked_image_object<std::byte>(
+      image, target::kPeSizeOfImage, accessor_rva, kInstructionBytes);
+  if (instruction == nullptr || instruction[0] != std::byte{0x48} ||
+      instruction[1] != std::byte{0x8d} || instruction[2] != std::byte{0x05}) {
+    return false;
+  }
+  std::int32_t displacement = 0;
+  std::memcpy(&displacement, instruction + 3, sizeof(displacement));
+  return static_cast<std::int64_t>(accessor_rva) +
+             static_cast<std::int64_t>(kInstructionBytes) +
+             static_cast<std::int64_t>(displacement) ==
+         static_cast<std::int64_t>(delegate_rva);
+}
+
 std::uint32_t validate_current_image(const std::uintptr_t image) noexcept {
   if (image == 0 || reinterpret_cast<HMODULE>(image) != GetModuleHandleW(nullptr) ||
       !readable_range(image, sizeof(IMAGE_DOS_HEADER))) {
@@ -943,7 +962,8 @@ std::uint32_t validate_current_image(const std::uintptr_t image) noexcept {
       return GORE_AS_CAPTURE_INSTRUMENTATION_PROLOG_DRIFT_V1;
     }
   }
-  for (const auto& site : registration::kPinnedRegistrationHooks) {
+  for (std::size_t index = 0; index < registration::kPinnedRegistrationHooks.size(); ++index) {
+    const auto& site = registration::kPinnedRegistrationHooks[index];
     const auto* actual = checked_image_object<std::byte>(
         image, target::kPeSizeOfImage, site.function_rva, site.overwrite_bytes);
     const auto* vtable_entry = checked_image_object<std::uintptr_t>(
@@ -955,6 +975,16 @@ std::uint32_t validate_current_image(const std::uintptr_t image) noexcept {
         std::memcmp(actual, site.expected.data(), site.overwrite_bytes) != 0 ||
         image > std::numeric_limits<std::uintptr_t>::max() - site.function_rva ||
         *vtable_entry != image + site.function_rva) {
+      return GORE_AS_CAPTURE_INSTRUMENTATION_PROLOG_DRIFT_V1;
+    }
+    DWORD64 runtime_image_base = 0;
+    const auto* runtime_function = RtlLookupFunctionEntry(
+        static_cast<DWORD64>(image + site.function_rva), &runtime_image_base, nullptr);
+    if (runtime_function == nullptr || runtime_image_base != image ||
+        runtime_function->BeginAddress != registration::kRegistrationTarget.function_rvas[index] ||
+        runtime_function->EndAddress != registration::kRegistrationTarget.function_end_rvas[index] ||
+        runtime_function->UnwindData !=
+            registration::kRegistrationTarget.source_unwind_info_rvas[index]) {
       return GORE_AS_CAPTURE_INSTRUMENTATION_PROLOG_DRIFT_V1;
     }
   }
@@ -969,6 +999,15 @@ std::uint32_t validate_current_image(const std::uintptr_t image) noexcept {
         site.return_rva != site.call_rva + site.expected_call.size() ||
         static_cast<std::int64_t>(site.return_rva) + site.relative_displacement !=
             site.direct_callee_rva) {
+      return GORE_AS_CAPTURE_INSTRUMENTATION_PROLOG_DRIFT_V1;
+    }
+  }
+  for (const auto accessor_rva :
+       adapter::frontend_target_layout::kFrontendTarget.class_analyze_accessor_rvas) {
+    if (!pinned_frontend_accessor(
+            image,
+            accessor_rva,
+            adapter::frontend_target_layout::class_analyze_delegate_rva)) {
       return GORE_AS_CAPTURE_INSTRUMENTATION_PROLOG_DRIFT_V1;
     }
   }
@@ -2174,7 +2213,7 @@ bool selftest_combined_unload_gate() noexcept {
 
 bool run_fixture_selftest(gore_as_capture_instrumentation_selftest_v1& result) {
   if (!selftest_combined_unload_gate()) return false;
-  // The production transaction fixture reserves the exact 0xa7e4000 target address range and a
+  // The production transaction fixture reserves the exact active-target address range and a
   // rel32-near relay arena. Run it before the smaller synthetic pages fragment that address
   // window; this mirrors production preflight, which also allocates every relay before a write.
   const auto production_shim_stages =

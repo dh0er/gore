@@ -57,6 +57,16 @@ fn run() -> Result<()> {
 
     let capture_bytes = fs::read(&capture_path).context("reading sealed capture")?;
     let decoded = decode_capture_v1(&capture_bytes).context("decoding sealed capture")?;
+    let target = decoded.header.target();
+    let executable_seal = file_seal(&executable_path, true)?;
+    if executable_seal.byte_len != target.executable_bytes
+        || executable_seal.sha256 != Sha256Digest::from_bytes(target.executable_sha256)
+    {
+        bail!(
+            "executable does not match capture generation BuildID {}",
+            target.steam_build_id
+        );
+    }
     let binds_bytes = fs::read(&binds_path).context("reading Binds.Cache")?;
     let binds_database = BindsDatabase::parse(&binds_bytes).context("parsing Binds.Cache")?;
     let probe_cache = fs::read(&probe_cache_path).context("reading game-oracle probe cache")?;
@@ -143,27 +153,27 @@ fn run() -> Result<()> {
         schema: STATIC_SUPPORT_MANIFEST_SCHEMA_V1.to_owned(),
         schema_version: STATIC_SUPPORT_MANIFEST_SCHEMA_VERSION_V1,
         target: CompilerTargetV1 {
-            steam_app_id: 1_297_900,
-            steam_build_id: 24_539_464,
-            depot_id: 1_297_901,
-            depot_manifest_gid: 1_585_071_322_101_748_861,
+            steam_app_id: target.steam_app_id,
+            steam_build_id: target.steam_build_id,
+            depot_id: target.depot_id,
+            depot_manifest_gid: target.depot_manifest_gid,
             platform: CompilerPlatformV1::Windows,
             architecture: CompilerArchitectureV1::X86_64,
             build_configuration: CompilerBuildConfigurationV1::Shipping,
         },
         oracle: CompilerOracleV1 {
-            executable: file_seal(&executable_path, true)?,
+            executable: executable_seal,
             binds_cache: file_seal(&binds_path, true)?,
             shipping_cache: file_seal(&shipping_path, true)?,
             depot_manifest: file_seal(&depot_manifest_path, false)?,
             pe_codeview: PeCodeViewV1 {
-                guid: "cf0b83bd-e023-061b-2100-0f0fccf871d2".to_owned(),
-                age: 1,
+                guid: target.codeview_guid.to_owned(),
+                age: target.codeview_age,
             },
         },
         binds: BindsProfileV1::from_database(&binds_database),
         unreal_metadata_schema_version: 1,
-        opcode_table_version: "unreangel-g1r-build24539464-asbc-212-v1".to_owned(),
+        opcode_table_version: format!("unreangel-g1r-build{}-asbc-212-v1", target.steam_build_id),
         cache_format_version: 1,
         required_probe_suite_version: FULL_QUALIFICATION_SUITE_ID_V1.to_owned(),
         payloads,

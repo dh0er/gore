@@ -20,6 +20,9 @@ const _hotfixExecutableSha256 =
 const _build24340829ExecutableByteLength = 171787776;
 const _build24340829ExecutableSha256 =
     'ab2c8d9e286a437bc5343748faf40959a77e9dc7c542ff9361f1ffaeca5c811c';
+const _build24878692ExecutableByteLength = 171792384;
+const _build24878692ExecutableSha256 =
+    '824fbc94f2ac7f45927a0754605666c37af862d66156a15f8bf6813759d9e8e0';
 
 String _headJson(String byte) => jsonEncode(<String, Object?>{
   'store_format': 1,
@@ -206,6 +209,10 @@ void main() {
           byteLength: _build24340829ExecutableByteLength,
           sha256: _build24340829ExecutableSha256,
         ),
+        (
+          byteLength: _build24878692ExecutableByteLength,
+          sha256: _build24878692ExecutableSha256,
+        ),
       ]) {
         final projectJson = _projectJson(
           executableByteLength: generation.byteLength,
@@ -281,6 +288,23 @@ void main() {
       (
         byteLength: _build24340829ExecutableByteLength,
         sha256: _hotfixExecutableSha256,
+      ),
+      (
+        byteLength: _build24878692ExecutableByteLength - 1,
+        sha256: _build24878692ExecutableSha256,
+      ),
+      (
+        byteLength: _build24878692ExecutableByteLength,
+        sha256:
+            '${_build24878692ExecutableSha256.substring(0, 63)}${_build24878692ExecutableSha256.endsWith('0') ? '1' : '0'}',
+      ),
+      (
+        byteLength: _build24340829ExecutableByteLength,
+        sha256: _build24878692ExecutableSha256,
+      ),
+      (
+        byteLength: _build24878692ExecutableByteLength,
+        sha256: _build24340829ExecutableSha256,
       ),
     ];
 

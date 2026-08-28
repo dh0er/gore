@@ -404,8 +404,8 @@ fn err(code: &str, msg: impl Into<String>) -> Value {
 /// whole generation seals rather than prose.
 const MAX_ERROR_DETAILS_BYTES: usize = 8 * 1024;
 
-/// At most this many supported generations are named. The list is a closed registry of three or so
-/// rows; a cap keeps one growing table from ever deciding the size of an error response.
+/// At most this many supported generations are named. The list is a deliberately small closed
+/// registry; a cap keeps one growing table from ever deciding the size of an error response.
 const MAX_ERROR_DETAILS_SUPPORTED_ENTRIES: usize = 16;
 
 /// `err`, plus one bounded machine-readable object.

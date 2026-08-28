@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gore_as_capture/format.hpp"
 #include "gore_as_capture/instrumentation.h"
 
 #include <array>
@@ -10,9 +11,49 @@
 namespace gore_as_capture::v1::instrumentation::registration {
 
 inline constexpr std::uint32_t kContractVersion = 1;
-inline constexpr std::uint32_t kEngineVtableRva = 0x081f4078;
 inline constexpr std::size_t kMaximumArguments = 9;
 inline constexpr std::size_t kMaximumUnwindOperations = 8;
+
+struct RegistrationTargetAddresses final {
+  CaptureTargetGeneration generation{};
+  std::uint32_t engine_vtable_rva{};
+  std::array<std::uint32_t, 14> function_rvas{};
+  std::array<std::uint32_t, 14> function_end_rvas{};
+  std::array<std::uint32_t, 14> source_unwind_info_rvas{};
+};
+
+inline constexpr RegistrationTargetAddresses kRegistrationTarget24539464{
+    CaptureTargetGeneration::build_24539464,
+    0x081f4078,
+    {0x047938b0, 0x04793fd0, 0x047997b0, 0x04799290, 0x04798f50,
+     0x04798bd0, 0x047964d0, 0x04796c50, 0x0479d530, 0x04791d20,
+     0x047927f0, 0x04792b10, 0x047933c0, 0x0479dc20},
+    {0x04793fca, 0x047940c7, 0x04799f88, 0x0479938e, 0x04799283,
+     0x04798cae, 0x0479658c, 0x047971c7, 0x0479d774, 0x04791dfb,
+     0x04792b0c, 0x0479314d, 0x04793485, 0x0479dd2e},
+    {0x094cbf2c, 0x094cbf70, 0x0939de28, 0x094cc078, 0x0932b838,
+     0x094cc0bc, 0x094cc100, 0x0932c9a0, 0x094cc160, 0x094cb7e0,
+     0x094cc180, 0x0932c9a0, 0x094cc1a0, 0x094cc200},
+};
+
+inline constexpr RegistrationTargetAddresses kRegistrationTarget24878692{
+    CaptureTargetGeneration::build_24878692,
+    0x081f5078,
+    {0x04793870, 0x04793f90, 0x04799770, 0x04799250, 0x04798f10,
+     0x04798b90, 0x04796490, 0x04796c10, 0x0479d4f0, 0x04791ce0,
+     0x047927b0, 0x04792ad0, 0x04793380, 0x0479dbe0},
+    {0x04793f8a, 0x04794087, 0x04799f48, 0x0479934e, 0x04799243,
+     0x04798c6e, 0x0479654c, 0x04797187, 0x0479d734, 0x04791dbb,
+     0x04792acc, 0x0479310d, 0x04793445, 0x0479dcee},
+    {0x094cd1f0, 0x094cd234, 0x0939f0ec, 0x094cd33c, 0x0932cafc,
+     0x094cd380, 0x094cd3c4, 0x0932dc64, 0x094cd424, 0x094ccaa4,
+     0x094cd444, 0x0932dc64, 0x094cd464, 0x094cd4c4},
+};
+
+inline constexpr const RegistrationTargetAddresses& kRegistrationTarget =
+    kRegistrationTarget24878692;
+inline constexpr std::uint32_t kEngineVtableRva = kRegistrationTarget.engine_vtable_rva;
+static_assert(kRegistrationTarget.generation == kCaptureTarget.generation);
 
 enum class UnwindOperationKind : std::uint8_t {
   push_nonvolatile = 1,
@@ -117,7 +158,7 @@ inline constexpr auto kCallableEntry =
     kEntryOrderAndResult | GORE_AS_CAPTURE_REGISTRATION_CONTRACT_AUXILIARY_TOKEN_V1 |
     GORE_AS_CAPTURE_REGISTRATION_CONTRACT_CALLER_DESCRIPTOR_V1;
 
-inline constexpr std::array<RegistrationHookPoint, 14> kPinnedRegistrationHooks{{
+inline constexpr std::array<RegistrationHookPoint, 14> kRegistrationHooks24539464{{
     {GORE_AS_CAPTURE_REGISTRATION_GLOBAL_FUNCTION_V1,
      10,
      0x047938b0,
@@ -428,6 +469,48 @@ inline constexpr std::array<RegistrationHookPoint, 14> kPinnedRegistrationHooks{
              push(5, UnwindRegister::rdi), push(4, UnwindRegister::rsi),
              push(3, UnwindRegister::rbx), push(2, UnwindRegister::rbp)})},
 }};
+
+consteval std::array<RegistrationHookPoint, 14> retarget_registration_hooks(
+    const std::array<RegistrationHookPoint, 14>& source,
+    const RegistrationTargetAddresses& target) {
+  auto result = source;
+  for (std::size_t index = 0; index < result.size(); ++index) {
+    result[index].function_rva = target.function_rvas[index];
+    result[index].source_unwind_info_rva = target.source_unwind_info_rvas[index];
+  }
+  return result;
+}
+
+inline constexpr auto kPinnedRegistrationHooks =
+    retarget_registration_hooks(kRegistrationHooks24539464, kRegistrationTarget);
+
+static_assert([] {
+  for (std::size_t index = 0; index < kPinnedRegistrationHooks.size(); ++index) {
+    if (kPinnedRegistrationHooks[index].function_rva !=
+            kRegistrationTarget.function_rvas[index] ||
+        kPinnedRegistrationHooks[index].source_unwind_info_rva !=
+            kRegistrationTarget.source_unwind_info_rvas[index] ||
+        kRegistrationTarget.function_rvas[index] >=
+            kRegistrationTarget.function_end_rvas[index] ||
+        kRegistrationTarget.function_end_rvas[index] > kPeSizeOfImage ||
+        kRegistrationTarget.source_unwind_info_rvas[index] >= kPeSizeOfImage) {
+      return false;
+    }
+  }
+  return true;
+}());
+
+static_assert([] {
+  for (std::size_t index = 0; index < kRegistrationHooks24539464.size(); ++index) {
+    if (kRegistrationHooks24539464[index].function_rva !=
+            kRegistrationTarget24539464.function_rvas[index] ||
+        kRegistrationHooks24539464[index].source_unwind_info_rva !=
+            kRegistrationTarget24539464.source_unwind_info_rvas[index]) {
+      return false;
+    }
+  }
+  return true;
+}());
 
 consteval std::uint64_t fingerprint(const bool include_prologs) {
   std::uint64_t hash = 14695981039346656037ull;

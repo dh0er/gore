@@ -31,7 +31,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parent.parent
 
 INTERNAL_INPUT_SCHEMA = "gore.as.standalone-compiler-internal-input"
-INTERNAL_INPUT_SCHEMA_VERSION = 1
+INTERNAL_INPUT_SCHEMA_VERSION = 2
 INTERNAL_INPUT_DESCRIPTOR_FILE = "internal-input.json"
 CATALOG_SCHEMA = "gore.as.product-standalone-compiler-catalog"
 CATALOG_SCHEMA_VERSION = 1
@@ -66,6 +66,10 @@ MAX_SIDECAR_BYTES = 256 * 1024 * 1024
 MAX_PROFILE_MANIFEST_BYTES = 4 * 1024 * 1024
 MAX_PROFILE_BLOB_BYTES = 512 * 1024 * 1024
 MAX_PROFILE_AGGREGATE_BYTES = 1024 * 1024 * 1024
+MAX_FULL_TREE_RECEIPT_BYTES = 4 * 1024 * 1024
+FULL_TREE_RECEIPT_SCHEMA = "gore.as.internal-full-tree-verification"
+FULL_TREE_RECEIPT_VERSION = 1
+FULL_TREE_VERIFICATION_DIRECTORY = "verification/full-tree"
 # Python's classic-ZIP writer switches to ZIP64 above this boundary. The
 # internal package deliberately forbids ZIP64, so the bound is explicit here.
 MAX_ARCHIVE_UNCOMPRESSED_BYTES = (1 << 31) - 1
@@ -83,6 +87,41 @@ REQUIRED_NOTICES = (
     "UNREANGEL-LICENSE.md",
     "SOURCE_INVENTORY.tsv",
     "PROVENANCE.toml",
+)
+# Publishing policy, deliberately separate from the runtime catalog's structural/API-based
+# target selection. Product artifacts for the August 2026 generation must carry both the last
+# qualified generation and its successor; runtime admission still does not pin complete binaries.
+REQUIRED_PRODUCT_COMPILER_TARGETS_V1 = (
+    {
+        "target": {
+            "steam_app_id": 1_297_900,
+            "steam_build_id": 24_539_464,
+            "depot_id": 1_297_901,
+            "depot_manifest_gid": 1_585_071_322_101_748_861,
+            "platform": "windows",
+            "architecture": "x86_64",
+            "build_configuration": "shipping",
+        },
+        "pe_codeview": {
+            "guid": "cf0b83bd-e023-061b-2100-0f0fccf871d2",
+            "age": 1,
+        },
+    },
+    {
+        "target": {
+            "steam_app_id": 1_297_900,
+            "steam_build_id": 24_878_692,
+            "depot_id": 1_297_901,
+            "depot_manifest_gid": 382_135_126_159_906_494,
+            "platform": "windows",
+            "architecture": "x86_64",
+            "build_configuration": "shipping",
+        },
+        "pe_codeview": {
+            "guid": "c2ca4ada-4878-d963-e567-717dc2c483a2",
+            "age": 1,
+        },
+    },
 )
 PROFILE_BLOB_FIELDS = (
     ("engine", "ordered_engine_properties"),
@@ -149,6 +188,7 @@ class PreparedBundle:
     bundle_root: Path | None
     sidecar_name: str | None
     catalog_sha256: str | None
+    legacy_internal_input_v1: bool = False
 
     @property
     def signing_exclusions(self) -> tuple[str, ...]:
@@ -161,6 +201,7 @@ class VerifiedBundle:
     catalog_bytes: bytes
     expected_files: dict[str, Seal]
     sidecar_name: str
+    internal_input_schema_version: int
 
 
 @dataclass(frozen=True)
@@ -170,6 +211,31 @@ class QualifiedProfileTreeAuthority:
     promotion_receipt_sha256: str
     tree_sha256: str
     file_count: int
+
+
+@dataclass(frozen=True)
+class FullTreeVerificationAuthority:
+    profile_sha256: str
+    sidecar: Seal
+    shipping: Seal
+    binds: Seal
+    frozen_source: Seal
+    embedded_reference: Seal
+    standalone_candidate: Seal
+    module_count: int
+
+
+@dataclass(frozen=True)
+class RecordedProfilePlan:
+    key: tuple[object, ...]
+    source_root: Path
+    manifest: bytes
+    blobs: list[tuple[str, Seal, str]]
+    promotion_audits: dict[str, Seal]
+    catalog_entry: dict[str, object]
+    full_tree_relative: str
+    full_tree_bytes: bytes
+    full_tree_entry: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -985,6 +1051,24 @@ def _require_uint(value: object, label: str, *, maximum: int = (1 << 64) - 1) ->
     return value
 
 
+def _require_nonnegative_uint(
+    value: object, label: str, *, maximum: int = (1 << 64) - 1
+) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 0 <= value <= maximum
+    ):
+        raise BundleError(f"{label} must be an integer in 0..{maximum}")
+    return value
+
+
+def _require_boolean(value: object, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise BundleError(f"{label} must be a boolean")
+    return value
+
+
 def _require_hex(value: object, digits: int, label: str) -> str:
     if not isinstance(value, str) or len(value) != digits:
         raise BundleError(
@@ -1334,6 +1418,36 @@ def _target_key(value: dict[str, object]) -> tuple[object, ...]:
         raise BundleError("catalog CodeView GUID is invalid")
     age = _require_uint(codeview["age"], "catalog CodeView age", maximum=(1 << 32) - 1)
     return (*numbers, guid.casefold(), age)
+
+
+def _target_key_label(key: tuple[object, ...]) -> str:
+    return f"BuildID {key[1]} / CodeView {key[4]} age {key[5]}"
+
+
+def _require_product_profile_targets(catalog: dict[str, object]) -> None:
+    profiles = catalog["profiles"]
+    assert isinstance(profiles, list)
+    actual = tuple(
+        _target_key(profile["target"])
+        for profile in profiles
+        if isinstance(profile, dict)
+    )
+    required = tuple(
+        sorted(
+            _target_key(copy.deepcopy(target))
+            for target in REQUIRED_PRODUCT_COMPILER_TARGETS_V1
+        )
+    )
+    if actual != required:
+        actual_set = set(actual)
+        required_set = set(required)
+        missing = [_target_key_label(key) for key in required if key not in actual_set]
+        extra = [_target_key_label(key) for key in actual if key not in required_set]
+        raise BundleError(
+            "product compiler target set differs: "
+            f"missing={missing}, extra={extra}; exactly BuildIDs 24539464 and 24878692 "
+            "are required for this product generation"
+        )
 
 
 def _catalog(value: object) -> dict[str, object]:
@@ -1747,6 +1861,460 @@ def _sidecar_identity(sidecar: dict[str, object]) -> dict[str, object]:
         "request_version": protocol["request_version"],
         "response_version": protocol["response_version"],
     }
+
+
+def _profile_oracle_seal(profile: dict[str, object], field: str) -> Seal:
+    oracle = profile.get("oracle")
+    if not isinstance(oracle, dict):
+        raise BundleError("qualified compiler profile oracle must be an object")
+    value = oracle.get(field)
+    if not isinstance(value, dict):
+        raise BundleError(f"qualified compiler profile oracle.{field} must be a file seal")
+    return Seal(
+        _require_uint(
+            value.get("byte_len"),
+            f"qualified compiler profile oracle.{field}.byte_len",
+            maximum=MAX_PROFILE_BLOB_BYTES,
+        ),
+        _require_hex(
+            value.get("sha256"),
+            64,
+            f"qualified compiler profile oracle.{field}.sha256",
+        ),
+    )
+
+
+def _full_tree_receipt_relative(catalog_entry: dict[str, object]) -> str:
+    target = catalog_entry["target"]
+    assert isinstance(target, dict)
+    target_tuple = target["target"]
+    codeview = target["pe_codeview"]
+    assert isinstance(target_tuple, dict) and isinstance(codeview, dict)
+    relative = (
+        f"{FULL_TREE_VERIFICATION_DIRECTORY}/build-"
+        f"{target_tuple['steam_build_id']}-{str(codeview['guid']).casefold()}.json"
+    )
+    return _safe_relative(relative, "full-tree verification receipt path")
+
+
+def _parse_full_tree_receipt(
+    bytes_: bytes,
+    catalog_entry: dict[str, object],
+    profile: dict[str, object],
+    sidecar: dict[str, object],
+) -> FullTreeVerificationAuthority:
+    receipt = _parse_json(
+        bytes_, "full-tree verification receipt", MAX_FULL_TREE_RECEIPT_BYTES
+    )
+    if bytes_ != _canonical_pretty(receipt):
+        raise BundleError("full-tree verification receipt is not canonical pretty JSON")
+    _require_exact_fields(
+        receipt,
+        (
+            "schema",
+            "version",
+            "passed",
+            "execution",
+            "authority",
+            "frozen_source",
+            "embedded_reference",
+            "standalone_candidate",
+            "bytediff",
+            "whole_cache_semantics_v1",
+        ),
+        "full-tree verification receipt",
+    )
+    if (
+        receipt["schema"] != FULL_TREE_RECEIPT_SCHEMA
+        or _require_uint(
+            receipt["version"],
+            "full-tree verification receipt version",
+            maximum=(1 << 32) - 1,
+        )
+        != FULL_TREE_RECEIPT_VERSION
+    ):
+        raise BundleError("full-tree verification receipt schema/version is unsupported")
+    _require_bool(receipt["passed"], True, "full-tree verification receipt passed")
+
+    execution = receipt["execution"]
+    if not isinstance(execution, dict):
+        raise BundleError("full-tree verification execution must be an object")
+    _require_exact_fields(
+        execution,
+        (
+            "backend",
+            "runner_invocations",
+            "standalone_attempted",
+            "game_attempted",
+            "install_restore",
+            "closing_audit",
+            "publication",
+            "recovery_required",
+            "fallback_present",
+            "backend_diagnostic_count",
+        ),
+        "full-tree verification execution",
+    )
+    if (
+        execution["backend"] != "standalone"
+        or _require_uint(
+            execution["runner_invocations"],
+            "full-tree verification runner invocations",
+            maximum=(1 << 32) - 1,
+        )
+        != 1
+        or execution["install_restore"] != "not_started"
+        or execution["closing_audit"] != "passed"
+        or execution["publication"] != "published"
+    ):
+        raise BundleError(
+            "full-tree verification did not use exactly one strict standalone publication"
+        )
+    _require_bool(
+        execution["standalone_attempted"],
+        True,
+        "full-tree verification standalone_attempted",
+    )
+    _require_bool(
+        execution["game_attempted"], False, "full-tree verification game_attempted"
+    )
+    _require_bool(
+        execution["recovery_required"],
+        False,
+        "full-tree verification recovery_required",
+    )
+    _require_bool(
+        execution["fallback_present"],
+        False,
+        "full-tree verification fallback_present",
+    )
+    _require_nonnegative_uint(
+        execution["backend_diagnostic_count"],
+        "full-tree verification backend diagnostic count",
+        maximum=(1 << 32) - 1,
+    )
+
+    authority = receipt["authority"]
+    if not isinstance(authority, dict):
+        raise BundleError("full-tree verification authority must be an object")
+    _require_exact_fields(
+        authority,
+        ("qualified_profile_sha256", "sidecar", "shipping", "binds"),
+        "full-tree verification authority",
+    )
+    expected_profile_sha256 = _require_hex(
+        catalog_entry["profile_sha256"], 64, "catalog profile SHA-256"
+    )
+    profile_sha256 = _require_hex(
+        authority["qualified_profile_sha256"],
+        64,
+        "full-tree verification qualified profile SHA-256",
+    )
+    if profile_sha256 != expected_profile_sha256:
+        raise BundleError("full-tree verification names a different qualified profile")
+
+    receipt_sidecar = authority["sidecar"]
+    if not isinstance(receipt_sidecar, dict):
+        raise BundleError("full-tree verification sidecar authority must be an object")
+    _require_exact_fields(
+        receipt_sidecar,
+        ("byte_len", "sha256", "request_version", "response_version"),
+        "full-tree verification sidecar authority",
+    )
+    parsed_sidecar_identity = {
+        "byte_len": _require_uint(
+            receipt_sidecar["byte_len"],
+            "full-tree verification sidecar byte length",
+            maximum=MAX_SIDECAR_BYTES,
+        ),
+        "sha256": _require_hex(
+            receipt_sidecar["sha256"],
+            64,
+            "full-tree verification sidecar SHA-256",
+        ),
+        "request_version": _require_uint(
+            receipt_sidecar["request_version"],
+            "full-tree verification sidecar request version",
+            maximum=(1 << 32) - 1,
+        ),
+        "response_version": _require_uint(
+            receipt_sidecar["response_version"],
+            "full-tree verification sidecar response version",
+            maximum=(1 << 32) - 1,
+        ),
+    }
+    if parsed_sidecar_identity != _sidecar_identity(sidecar):
+        raise BundleError(
+            "full-tree verification names different final sidecar bytes or protocol"
+        )
+    sidecar_seal = Seal(
+        int(parsed_sidecar_identity["byte_len"]),
+        str(parsed_sidecar_identity["sha256"]),
+    )
+
+    shipping = _seal(
+        authority["shipping"],
+        "full-tree verification Shipping authority",
+        MAX_PROFILE_BLOB_BYTES,
+    )
+    binds = _seal(
+        authority["binds"],
+        "full-tree verification Binds authority",
+        MAX_PROFILE_BLOB_BYTES,
+    )
+    if shipping != _profile_oracle_seal(profile, "shipping_cache"):
+        raise BundleError(
+            "full-tree verification Shipping authority differs from the qualified profile"
+        )
+    if binds != _profile_oracle_seal(profile, "binds_cache"):
+        raise BundleError(
+            "full-tree verification Binds authority differs from the qualified profile"
+        )
+
+    frozen = receipt["frozen_source"]
+    if not isinstance(frozen, dict):
+        raise BundleError("full-tree verification frozen source must be an object")
+    _require_exact_fields(
+        frozen,
+        ("module_count", "byte_len", "aggregate_sha256", "operations"),
+        "full-tree verification frozen source",
+    )
+    module_count = _require_uint(
+        frozen["module_count"],
+        "full-tree verification frozen source module count",
+        maximum=(1 << 32) - 1,
+    )
+    frozen_source = Seal(
+        _require_uint(
+            frozen["byte_len"],
+            "full-tree verification frozen source byte length",
+            maximum=MAX_PROFILE_AGGREGATE_BYTES,
+        ),
+        _require_hex(
+            frozen["aggregate_sha256"],
+            64,
+            "full-tree verification frozen source aggregate SHA-256",
+        ),
+    )
+    operations = frozen["operations"]
+    if not isinstance(operations, dict):
+        raise BundleError("full-tree verification operations must be an object")
+    _require_exact_fields(
+        operations,
+        ("add", "edit", "delete"),
+        "full-tree verification operations",
+    )
+    adds = _require_nonnegative_uint(
+        operations["add"], "full-tree verification add count", maximum=(1 << 32) - 1
+    )
+    edits = _require_nonnegative_uint(
+        operations["edit"],
+        "full-tree verification edit count",
+        maximum=(1 << 32) - 1,
+    )
+    deletes = _require_nonnegative_uint(
+        operations["delete"],
+        "full-tree verification delete count",
+        maximum=(1 << 32) - 1,
+    )
+    if (adds, edits, deletes) != (0, module_count, 0):
+        raise BundleError(
+            "full-tree verification frozen source must be the exact edit-only base module universe"
+        )
+
+    embedded_reference = _seal(
+        receipt["embedded_reference"],
+        "full-tree verification embedded reference",
+        MAX_PROFILE_BLOB_BYTES,
+    )
+    candidate_value = receipt["standalone_candidate"]
+    if not isinstance(candidate_value, dict):
+        raise BundleError("full-tree verification standalone candidate must be an object")
+    _require_exact_fields(
+        candidate_value,
+        ("byte_len", "sha256", "module_count"),
+        "full-tree verification standalone candidate",
+    )
+    standalone_candidate = Seal(
+        _require_uint(
+            candidate_value["byte_len"],
+            "full-tree verification standalone candidate byte length",
+            maximum=MAX_PROFILE_BLOB_BYTES,
+        ),
+        _require_hex(
+            candidate_value["sha256"],
+            64,
+            "full-tree verification standalone candidate SHA-256",
+        ),
+    )
+    if (
+        _require_uint(
+            candidate_value["module_count"],
+            "full-tree verification standalone candidate module count",
+            maximum=(1 << 32) - 1,
+        )
+        != module_count
+    ):
+        raise BundleError(
+            "full-tree verification candidate module count differs from frozen source"
+        )
+
+    bytediff = receipt["bytediff"]
+    if not isinstance(bytediff, dict):
+        raise BundleError("full-tree verification bytediff must be an object")
+    _require_exact_fields(
+        bytediff,
+        (
+            "equivalent_to_fail_on_semantic",
+            "context",
+            "normalization",
+            "aligned_functions",
+            "identical",
+            "benign",
+            "semantic",
+            "alignment_loss",
+        ),
+        "full-tree verification bytediff",
+    )
+    _require_bool(
+        bytediff["equivalent_to_fail_on_semantic"],
+        True,
+        "full-tree verification fail-on-semantic equivalence",
+    )
+    if (
+        _require_uint(
+            bytediff["context"],
+            "full-tree verification bytediff context",
+            maximum=(1 << 32) - 1,
+        )
+        != 6
+    ):
+        raise BundleError("full-tree verification bytediff context must be 6")
+    normalization = bytediff["normalization"]
+    expected_normalization = {
+        "n1_refs": True,
+        "n2_slots": False,
+        "n3_jumps": True,
+        "n4_consts": True,
+        "n5_scope": True,
+        "n6_reguard": True,
+    }
+    if not isinstance(normalization, dict):
+        raise BundleError("full-tree verification normalization must be an object")
+    _require_exact_fields(
+        normalization,
+        expected_normalization,
+        "full-tree verification normalization",
+    )
+    for field, expected in expected_normalization.items():
+        _require_bool(
+            normalization[field], expected, f"full-tree verification normalization {field}"
+        )
+    aligned = _require_nonnegative_uint(
+        bytediff["aligned_functions"],
+        "full-tree verification aligned function count",
+    )
+    identical = _require_nonnegative_uint(
+        bytediff["identical"], "full-tree verification identical function count"
+    )
+    benign = _require_nonnegative_uint(
+        bytediff["benign"], "full-tree verification benign function count"
+    )
+    semantic = _require_nonnegative_uint(
+        bytediff["semantic"], "full-tree verification semantic function count"
+    )
+    alignment_loss = _require_nonnegative_uint(
+        bytediff["alignment_loss"], "full-tree verification alignment-loss count"
+    )
+    if aligned != identical + benign + semantic:
+        raise BundleError("full-tree verification bytediff counts are inconsistent")
+    if semantic != 0 or alignment_loss != 0:
+        raise BundleError(
+            "full-tree verification must have zero semantic and alignment-loss diffs"
+        )
+
+    whole = receipt["whole_cache_semantics_v1"]
+    if not isinstance(whole, dict):
+        raise BundleError("full-tree WholeCache semantics must be an object")
+    count_fields = (
+        "function_count",
+        "class_count",
+        "behaviour_function_count",
+        "property_count",
+        "global_count",
+        "initializer_function_count",
+        "string_global_reference_count",
+    )
+    _require_exact_fields(
+        whole,
+        (
+            "exact_struct_equality",
+            "semantic_sha256",
+            "module_count",
+            "function_count",
+            "opcode_counts",
+            "class_count",
+            "behaviour_function_count",
+            "property_count",
+            "global_count",
+            "initializer_function_count",
+            "string_global_reference_count",
+            "tail_table_counts",
+            "invoke_return_included",
+        ),
+        "full-tree WholeCache semantics",
+    )
+    _require_bool(
+        whole["exact_struct_equality"],
+        True,
+        "full-tree WholeCache exact structural equality",
+    )
+    _require_hex(
+        whole["semantic_sha256"], 64, "full-tree WholeCache semantic SHA-256"
+    )
+    if (
+        _require_uint(
+            whole["module_count"],
+            "full-tree WholeCache module count",
+            maximum=(1 << 32) - 1,
+        )
+        != module_count
+    ):
+        raise BundleError("full-tree WholeCache module count differs from frozen source")
+    for field in count_fields:
+        _require_nonnegative_uint(
+            whole[field], f"full-tree WholeCache {field.replace('_', ' ')}"
+        )
+    opcode_counts = whole["opcode_counts"]
+    if not isinstance(opcode_counts, list) or len(opcode_counts) != 213:
+        raise BundleError("full-tree WholeCache opcode counts must contain exactly 213 rows")
+    for index, count in enumerate(opcode_counts):
+        _require_nonnegative_uint(
+            count, f"full-tree WholeCache opcode count {index}"
+        )
+    tail_counts = whole["tail_table_counts"]
+    if not isinstance(tail_counts, list) or len(tail_counts) != 7:
+        raise BundleError("full-tree WholeCache tail table counts must contain 7 rows")
+    for index, count in enumerate(tail_counts):
+        _require_nonnegative_uint(
+            count,
+            f"full-tree WholeCache tail table count {index}",
+            maximum=(1 << 32) - 1,
+        )
+    _require_boolean(
+        whole["invoke_return_included"],
+        "full-tree WholeCache invoke-return flag",
+    )
+    return FullTreeVerificationAuthority(
+        profile_sha256=profile_sha256,
+        sidecar=sidecar_seal,
+        shipping=shipping,
+        binds=binds,
+        frozen_source=frozen_source,
+        embedded_reference=embedded_reference,
+        standalone_candidate=standalone_candidate,
+        module_count=module_count,
+    )
 
 
 def _verify_qualification_identity(
@@ -2249,7 +2817,7 @@ def _verify_profile(
     sidecar: dict[str, object],
     expected_files: dict[str, Seal],
     qualified_profile_verifier: QualifiedProfileVerifier,
-) -> None:
+) -> dict[str, object]:
     relative = str(catalog_entry["manifest_relative_path"])
     manifest_path = bundle_root.joinpath(*PurePosixPath(relative).parts)
     manifest = _read_regular_no_follow(
@@ -2334,6 +2902,63 @@ def _verify_profile(
         raise BundleError(
             "Rust typed profile-tree authority differs from the initially ingested bytes"
         )
+    return profile
+
+
+def _verify_full_tree_verifications(
+    bundle_root: Path,
+    value: object,
+    profiles: list[dict[str, object]],
+    profile_documents: list[dict[str, object]],
+    sidecar: dict[str, object],
+    expected_files: dict[str, Seal],
+) -> None:
+    if not isinstance(value, list) or len(value) != len(profiles):
+        raise BundleError(
+            "full-tree verifications must contain exactly one receipt per product profile"
+        )
+    paths: set[str] = set()
+    for index, (entry, catalog_entry, profile) in enumerate(
+        zip(value, profiles, profile_documents, strict=True)
+    ):
+        label = f"full-tree verification {index}"
+        if not isinstance(entry, dict):
+            raise BundleError(f"{label} must be an object")
+        _require_exact_fields(
+            entry,
+            ("profile_sha256", "relative_path", "byte_len", "sha256"),
+            label,
+        )
+        expected_profile_sha256 = str(catalog_entry["profile_sha256"]).casefold()
+        if (
+            _require_hex(entry["profile_sha256"], 64, f"{label} profile SHA-256")
+            != expected_profile_sha256
+        ):
+            raise BundleError(f"{label} names a different catalog profile")
+        relative = _safe_relative(entry["relative_path"], f"{label} path")
+        expected_relative = _full_tree_receipt_relative(catalog_entry)
+        if relative != expected_relative:
+            raise BundleError(
+                f"{label} path must be exactly {expected_relative!r}"
+            )
+        if relative.casefold() in paths:
+            raise BundleError("full-tree verification receipt paths are not unique")
+        paths.add(relative.casefold())
+        seal = _seal(
+            {"byte_len": entry["byte_len"], "sha256": entry["sha256"]},
+            label,
+            MAX_FULL_TREE_RECEIPT_BYTES,
+        )
+        receipt_bytes = _read_regular_no_follow(
+            bundle_root.joinpath(*PurePosixPath(relative).parts),
+            MAX_FULL_TREE_RECEIPT_BYTES,
+            label,
+        )
+        _check_sealed_bytes(receipt_bytes, seal, label)
+        _parse_full_tree_receipt(
+            receipt_bytes, catalog_entry, profile, sidecar
+        )
+        expected_files[relative] = seal
 
 
 def _enumerate_regular_files(root: Path, label: str) -> set[str]:
@@ -2520,10 +3145,20 @@ def _verify_descriptor(
     qualified_profile_verifier: QualifiedProfileVerifier,
     promotion_attestation_verifier: PromotionAttestationVerifier,
     staged: bool,
+    allow_legacy_internal_input_v1: bool = False,
 ) -> VerifiedBundle:
     descriptor = _parse_json(
         descriptor_bytes, "compiler internal input", MAX_DESCRIPTOR_BYTES
     )
+    schema_version = descriptor.get("schema_version")
+    legacy_v1 = (
+        descriptor.get("schema") == INTERNAL_INPUT_SCHEMA and schema_version == 1
+    )
+    if legacy_v1 and not allow_legacy_internal_input_v1:
+        raise BundleError(
+            "compiler internal-input schema/version is unsupported; "
+            "legacy v1 is accepted only from the pinned local build asset"
+        )
     _require_exact_fields(
         descriptor,
         (
@@ -2533,18 +3168,21 @@ def _verify_descriptor(
             "qualified",
             "promotion",
             "catalog",
+            *(("full_tree_verifications",) if not legacy_v1 else ()),
             "notices",
         ),
         "compiler internal input",
     )
-    if (
-        descriptor["schema"] != INTERNAL_INPUT_SCHEMA
-        or descriptor["schema_version"] != INTERNAL_INPUT_SCHEMA_VERSION
+    if descriptor["schema"] != INTERNAL_INPUT_SCHEMA or not (
+        schema_version == INTERNAL_INPUT_SCHEMA_VERSION
+        or (allow_legacy_internal_input_v1 and legacy_v1)
     ):
         raise BundleError("compiler internal-input schema/version is unsupported")
     _require_bool(descriptor["immutable"], True, "compiler internal input immutable")
     _require_bool(descriptor["qualified"], True, "compiler internal input qualified")
     catalog = _catalog(descriptor["catalog"])
+    if not legacy_v1:
+        _require_product_profile_targets(catalog)
     catalog_bytes = _canonical_pretty(catalog)
     if len(catalog_bytes) > MAX_CATALOG_BYTES:
         raise BundleError("generated compiler catalog exceeds its byte limit")
@@ -2568,14 +3206,26 @@ def _verify_descriptor(
     )
     profiles = catalog["profiles"]
     assert isinstance(profiles, list)
+    profile_documents: list[dict[str, object]] = []
     for profile in profiles:
         assert isinstance(profile, dict)
-        _verify_profile(
+        profile_documents.append(
+            _verify_profile(
+                bundle_root,
+                profile,
+                sidecar,
+                expected_files,
+                qualified_profile_verifier,
+            )
+        )
+    if not legacy_v1:
+        _verify_full_tree_verifications(
             bundle_root,
-            profile,
+            descriptor["full_tree_verifications"],
+            profiles,
+            profile_documents,
             sidecar,
             expected_files,
-            qualified_profile_verifier,
         )
     notices = descriptor["notices"]
     if not isinstance(notices, dict) or set(notices) != set(REQUIRED_NOTICES):
@@ -2616,7 +3266,13 @@ def _verify_descriptor(
             raise BundleError(
                 "staged compiler bundle manifest changed during verification"
             )
-    return VerifiedBundle(descriptor_bytes, catalog_bytes, expected_files, SIDECAR_FILE)
+    return VerifiedBundle(
+        descriptor_bytes,
+        catalog_bytes,
+        expected_files,
+        SIDECAR_FILE,
+        int(schema_version),
+    )
 
 
 def verify_internal_input(
@@ -2625,6 +3281,7 @@ def verify_internal_input(
     sidecar_verifier: SidecarVerifier = verify_sidecar,
     qualified_profile_verifier: QualifiedProfileVerifier | None = None,
     promotion_attestation_verifier: PromotionAttestationVerifier | None = None,
+    allow_legacy_internal_input_v1: bool = False,
 ) -> VerifiedBundle:
     if qualified_profile_verifier is None:
         raise BundleError("the Rust typed qualified-profile verifier is required")
@@ -2643,6 +3300,7 @@ def verify_internal_input(
         qualified_profile_verifier=qualified_profile_verifier,
         promotion_attestation_verifier=promotion_attestation_verifier,
         staged=False,
+        allow_legacy_internal_input_v1=allow_legacy_internal_input_v1,
     )
 
 
@@ -3592,6 +4250,7 @@ def _verify_internal_input(
         sidecar_verifier=sidecar_verifier,
         qualified_profile_verifier=qualified_profile_verifier,
         promotion_attestation_verifier=promotion_attestation_verifier,
+        allow_legacy_internal_input_v1=True,
     )
     if (
         _sha256(verified.catalog_bytes) != descriptor.catalog_sha256
@@ -3768,6 +4427,7 @@ def verify_staged_bundle(
     sidecar_verifier: SidecarVerifier = verify_sidecar,
     qualified_profile_verifier: QualifiedProfileVerifier | None = None,
     promotion_attestation_verifier: PromotionAttestationVerifier | None = None,
+    allow_legacy_internal_input_v1: bool = False,
 ) -> VerifiedBundle:
     if qualified_profile_verifier is None:
         raise BundleError("the Rust typed qualified-profile verifier is required")
@@ -3784,6 +4444,7 @@ def verify_staged_bundle(
         qualified_profile_verifier=qualified_profile_verifier,
         promotion_attestation_verifier=promotion_attestation_verifier,
         staged=True,
+        allow_legacy_internal_input_v1=allow_legacy_internal_input_v1,
     )
 
 
@@ -3817,6 +4478,7 @@ def prepare_product_bundle(
     sidecar_verifier: SidecarVerifier = verify_sidecar,
     qualified_profile_verifier: QualifiedProfileVerifier | None = None,
     promotion_attestation_verifier: PromotionAttestationVerifier | None = None,
+    allow_legacy_internal_input_v1: bool = False,
 ) -> PreparedBundle:
     """Create one clean pre-host-build catalog/bundle workspace.
 
@@ -3831,6 +4493,7 @@ def prepare_product_bundle(
             sidecar_verifier=sidecar_verifier,
             qualified_profile_verifier=qualified_profile_verifier,
             promotion_attestation_verifier=promotion_attestation_verifier,
+            allow_legacy_internal_input_v1=allow_legacy_internal_input_v1,
         )
         if internal_input_root is not None
         else None
@@ -3854,6 +4517,7 @@ def prepare_product_bundle(
         sidecar_verifier=sidecar_verifier,
         qualified_profile_verifier=qualified_profile_verifier,
         promotion_attestation_verifier=promotion_attestation_verifier,
+        allow_legacy_internal_input_v1=allow_legacy_internal_input_v1,
     )
     if verified.expected_files != internal_input.expected_files:
         raise BundleError(
@@ -3866,6 +4530,7 @@ def prepare_product_bundle(
         bundle_root,
         internal_input.sidecar_name,
         _sha256(internal_input.catalog_bytes),
+        internal_input.internal_input_schema_version == 1,
     )
 
 
@@ -3894,6 +4559,7 @@ def stage_product_bundle(
         sidecar_verifier=sidecar_verifier,
         qualified_profile_verifier=qualified_profile_verifier,
         promotion_attestation_verifier=promotion_attestation_verifier,
+        allow_legacy_internal_input_v1=prepared.legacy_internal_input_v1,
     )
     if _sha256(verified.catalog_bytes) != prepared.catalog_sha256:
         raise BundleError("host-staged compiler catalog changed")
@@ -3905,6 +4571,7 @@ def record_internal_input(
     qualified_profile_roots: list[Path],
     output_root: Path,
     *,
+    full_tree_receipts: list[Path],
     promotion_identity: Path,
     promotion_provenance: Path,
     promotion_attestation: Path,
@@ -3917,8 +4584,9 @@ def record_internal_input(
 ) -> VerifiedBundle:
     """Copy final signed/qualified bytes into one new immutable internal-input directory.
 
-    This does not sign or qualify anything.  It is intentionally ordered after both operations and
-    refuses a profile whose parity reports identify any other sidecar bytes or protocol.
+    This does not sign or qualify anything. It is intentionally ordered after both operations and
+    refuses a profile whose parity reports identify any other sidecar bytes or protocol, or whose
+    paired full-tree receipt does not prove the strict release-scale differential contract.
     """
 
     signed_sidecar = _require_absolute_normalized(signed_sidecar, "signed sidecar")
@@ -3940,6 +4608,10 @@ def record_internal_input(
     )
     if not qualified_profile_roots:
         raise BundleError("at least one qualified compiler profile root is required")
+    if len(full_tree_receipts) != len(qualified_profile_roots):
+        raise BundleError(
+            "recording requires exactly one full-tree receipt for each qualified profile root"
+        )
     if qualified_profile_verifier is None:
         raise BundleError("the Rust typed qualified-profile verifier is required")
     if promotion_attestation_verifier is None:
@@ -3999,20 +4671,16 @@ def record_internal_input(
         promotion_authority,
     )
     identity = _sidecar_identity(sidecar)
-    profile_plans: list[
-        tuple[
-            tuple[object, ...],
-            Path,
-            bytes,
-            list[tuple[str, Seal, str]],
-            dict[str, Seal],
-            dict[str, object],
-        ]
-    ] = []
+    profile_plans: list[RecordedProfilePlan] = []
     output_names: set[str] = set()
-    for source_root in qualified_profile_roots:
+    for source_root, full_tree_receipt in zip(
+        qualified_profile_roots, full_tree_receipts, strict=True
+    ):
         source_root = _require_absolute_normalized(
             source_root, "qualified profile root"
+        )
+        full_tree_receipt = _require_absolute_normalized(
+            full_tree_receipt, "full-tree verification receipt"
         )
         manifest_path = source_root / "compiler-profile.json"
         manifest = _read_regular_no_follow(
@@ -4070,15 +4738,46 @@ def record_internal_input(
             "profile_sha256": profile_sha256,
             "target": catalog_target,
         }
-        profile_plans.append(
-            (key, source_root, manifest, blobs, promotion_audits, catalog_entry)
+        full_tree_bytes = _read_regular_no_follow(
+            full_tree_receipt,
+            MAX_FULL_TREE_RECEIPT_BYTES,
+            "full-tree verification receipt",
         )
-    profile_plans.sort(key=lambda plan: plan[0])
+        _parse_full_tree_receipt(
+            full_tree_bytes, catalog_entry, profile, sidecar
+        )
+        full_tree_relative = _full_tree_receipt_relative(catalog_entry)
+        full_tree_entry = {
+            "profile_sha256": profile_sha256,
+            "relative_path": full_tree_relative,
+            **_seal_bytes(full_tree_bytes),
+        }
+        profile_plans.append(
+            RecordedProfilePlan(
+                key=key,
+                source_root=source_root,
+                manifest=manifest,
+                blobs=blobs,
+                promotion_audits=promotion_audits,
+                catalog_entry=catalog_entry,
+                full_tree_relative=full_tree_relative,
+                full_tree_bytes=full_tree_bytes,
+                full_tree_entry=full_tree_entry,
+            )
+        )
+    profile_plans.sort(key=lambda plan: plan.key)
     if any(
-        profile_plans[index - 1][0] == profile_plans[index][0]
+        profile_plans[index - 1].key == profile_plans[index].key
         for index in range(1, len(profile_plans))
     ):
         raise BundleError("qualified internal input contains duplicate target tuples")
+    catalog = {
+        "schema": CATALOG_SCHEMA,
+        "schema_version": CATALOG_SCHEMA_VERSION,
+        "sidecar": sidecar,
+        "profiles": [plan.catalog_entry for plan in profile_plans],
+    }
+    _require_product_profile_targets(_catalog(catalog))
     sources = notice_sources or {
         "UNREANGEL-LICENSE.md": ROOT
         / "crates/gore-as/native/standalone-compiler/vendor/unreangel/UNREANGEL-LICENSE.md",
@@ -4096,12 +4795,6 @@ def record_internal_input(
             f"notice source {name}",
         )
         for name, path in sources.items()
-    }
-    catalog = {
-        "schema": CATALOG_SCHEMA,
-        "schema_version": CATALOG_SCHEMA_VERSION,
-        "sidecar": sidecar,
-        "profiles": [plan[5] for plan in profile_plans],
     }
     descriptor = {
         "schema": INTERNAL_INPUT_SCHEMA,
@@ -4128,6 +4821,9 @@ def record_internal_input(
             },
         },
         "catalog": catalog,
+        "full_tree_verifications": [
+            plan.full_tree_entry for plan in profile_plans
+        ],
         "notices": {name: _seal_bytes(bytes_) for name, bytes_ in notice_bytes.items()},
     }
     descriptor_bytes = _canonical_pretty(descriptor)
@@ -4155,30 +4851,33 @@ def record_internal_input(
             temporary_root.joinpath(*PurePosixPath(PROMOTION_ATTESTATION_FILE).parts),
             promotion_attestation_bytes,
         )
-        for (
-            _,
-            source_root,
-            manifest,
-            blobs,
-            promotion_audits,
-            catalog_entry,
-        ) in profile_plans:
-            manifest_relative = str(catalog_entry["manifest_relative_path"])
+        for plan in profile_plans:
+            manifest_relative = str(plan.catalog_entry["manifest_relative_path"])
             destination_root = temporary_root.joinpath(
                 *PurePosixPath(manifest_relative).parent.parts
             )
-            _write_new(destination_root / "compiler-profile.json", manifest)
+            _write_new(destination_root / "compiler-profile.json", plan.manifest)
             copied: set[str] = set()
-            for relative, seal, _ in blobs:
+            for relative, seal, _ in plan.blobs:
                 if relative.casefold() in copied:
                     continue
                 copied.add(relative.casefold())
-                _copy_expected_file(source_root, destination_root, relative, seal)
-            for relative, seal in sorted(promotion_audits.items()):
-                _copy_expected_file(source_root, destination_root, relative, seal)
+                _copy_expected_file(
+                    plan.source_root, destination_root, relative, seal
+                )
+            for relative, seal in sorted(plan.promotion_audits.items()):
+                _copy_expected_file(
+                    plan.source_root, destination_root, relative, seal
+                )
             qualified_profile_verifier(
                 destination_root,
-                str(catalog_entry["profile_sha256"]),
+                str(plan.catalog_entry["profile_sha256"]),
+            )
+            _write_new(
+                temporary_root.joinpath(
+                    *PurePosixPath(plan.full_tree_relative).parts
+                ),
+                plan.full_tree_bytes,
             )
         for name, bytes_ in notice_bytes.items():
             _write_new(temporary_root / name, bytes_)
@@ -4327,6 +5026,9 @@ def _main() -> int:
     record.add_argument(
         "--qualified-profile-root", type=Path, action="append", required=True
     )
+    record.add_argument(
+        "--full-tree-receipt", type=Path, action="append", required=True
+    )
     record.add_argument("--qualified-profile-verifier", type=Path, required=True)
     record.add_argument("--github-attestation-verifier", type=Path, required=True)
     record.add_argument("--output", type=Path, required=True)
@@ -4436,6 +5138,7 @@ def _main() -> int:
                 args.signed_sidecar,
                 args.qualified_profile_root,
                 args.output,
+                full_tree_receipts=args.full_tree_receipt,
                 promotion_identity=args.promotion_identity,
                 promotion_provenance=args.promotion_provenance,
                 promotion_attestation=args.promotion_attestation,

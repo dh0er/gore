@@ -185,6 +185,80 @@ bool full_graph_request(const compile_request& request) noexcept {
         request.request_version == wire::kQualificationProtocolVersionV3;
 }
 
+bool fully_source_backed_full_graph_request(const compile_request& request) noexcept {
+    if (request.request_version != wire::kRequestProtocolVersionV2 ||
+        request.final_manifest.empty() ||
+        std::any_of(
+            request.changes.begin(), request.changes.end(), [](const graph_change& change) {
+                return change.operation == graph_change_operation::remove;
+            })) {
+        return false;
+    }
+    // FullGraph validation separately proves that every Add/Edit is unique, source-sealed, and
+    // present in the final manifest. Equal counts therefore mean that no target module comes only
+    // from the base cache. Delete-bearing transformations deliberately remain on the mixed path.
+    return request.changes.size() == request.final_manifest.size();
+}
+
+bool order_fully_source_backed_sources(
+    const cache_wire::cache& base,
+    const compile_request& request,
+    std::vector<preprocessor_source>& sources,
+    std::string& detail) {
+    std::map<std::string, std::size_t> source_by_name;
+    for (std::size_t index = 0U; index < sources.size(); ++index) {
+        if (sources[index].module_name.empty() ||
+            !source_by_name.emplace(sources[index].module_name, index).second) {
+            detail = "source-only FullGraph has an empty or duplicate module identity";
+            return false;
+        }
+    }
+
+    std::vector<preprocessor_source> ordered;
+    ordered.reserve(sources.size());
+    std::set<std::string> emitted;
+    const auto append = [&](const std::string& module_name) {
+        const auto found = source_by_name.find(module_name);
+        if (found == source_by_name.end() || !emitted.insert(module_name).second) return false;
+        ordered.push_back(std::move(sources[found->second]));
+        return true;
+    };
+
+    // The embedded compiler preserves the sealed base-cache module order for recompiles.
+    // A fully source-backed graph therefore follows that authority even though the request's
+    // canonical source/change lists are lexically ordered.
+    for (const auto& entry : base.modules) {
+        if (!append(entry.second.module_name.bytes)) {
+            detail = "source-only FullGraph does not cover the sealed base module order";
+            return false;
+        }
+    }
+    // True additions have no base position. Their canonical final-manifest order is the stable
+    // authority after every rebuilt base module.
+    for (const final_module& module : request.final_manifest) {
+        if (emitted.find(module.module_name) == emitted.end() && !append(module.module_name)) {
+            detail = "source-only FullGraph final manifest is not covered by sealed sources";
+            return false;
+        }
+    }
+    if (ordered.size() != sources.size() || ordered.size() != request.final_manifest.size()) {
+        detail = "source-only FullGraph ordering did not consume the exact final source graph";
+        return false;
+    }
+    sources = std::move(ordered);
+    return true;
+}
+
+bool preprocessing_preserves_source_order(
+    const std::vector<preprocessor_source>& sources,
+    const lexical_preprocess_result& preprocessing) noexcept {
+    if (sources.size() != preprocessing.modules.size()) return false;
+    for (std::size_t index = 0U; index < sources.size(); ++index) {
+        if (sources[index].module_name != preprocessing.modules[index].module_name) return false;
+    }
+    return true;
+}
+
 std::string json_escape(const std::string_view text) {
     constexpr char hex[] = "0123456789abcdef";
     std::string output;
@@ -1858,7 +1932,7 @@ sidecar_compile_result compile_sidecar_request(
             !external_frontend.post_process_code.captures.empty()) {
             return failure(wire::ExitCode::unavailable, "engine_unavailable",
                 "GORE_AS_FRONTEND_TARGET_MISMATCH",
-                "BuildID 24539464 has no bound ProcessChunks or PostProcessCode delegate");
+                "supported compiler targets have no bound ProcessChunks or PostProcessCode delegate");
         }
 
         std::vector<std::uint8_t> base_bytes;
@@ -1881,6 +1955,8 @@ sidecar_compile_result compile_sidecar_request(
         if (!validate_and_apply_full_graph(request, base, detail)) {
             return failure(wire::ExitCode::data_error, "rejected", "GORE_AS_FULL_GRAPH_INVALID", detail);
         }
+        const bool use_source_only_full_graph =
+            fully_source_backed_full_graph_request(request);
 
         std::map<std::string, std::string> source_contents;
         for (const auto& file : request.source_files) {
@@ -1985,6 +2061,14 @@ sidecar_compile_result compile_sidecar_request(
                 "GORE_AS_SOURCE_DISCOVERY_INCOMPLETE",
                 "not every requested source resolves into the enabled sealed source graph");
         }
+        if (use_source_only_full_graph &&
+            !order_fully_source_backed_sources(base, request, sources, detail)) {
+            return failure(
+                wire::ExitCode::data_error,
+                "rejected",
+                "GORE_AS_SOURCE_ORDER_INVALID",
+                detail);
+        }
         preprocessor.static_names.reserve(base.static_names.size());
         for (const auto& name : base.static_names) preprocessor.static_names.push_back(name.bytes);
         qualification_trace qualification_evidence;
@@ -2050,6 +2134,15 @@ sidecar_compile_result compile_sidecar_request(
             return failure(wire::ExitCode::data_error, "rejected", "GORE_AS_PREPROCESSOR_REJECTED",
                 "source preprocessing failed", diagnostics);
         }
+        if (use_source_only_full_graph &&
+            !preprocessing_preserves_source_order(sources, preprocessing)) {
+            return failure(
+                wire::ExitCode::unavailable,
+                "engine_unavailable",
+                "GORE_AS_SOURCE_ORDER_UNAVAILABLE",
+                "qualified preprocessing did not preserve the sealed base module order",
+                diagnostics);
+        }
 
         FAngelscriptManager::Get().ConfigSettings->bErrorOnIncorrectEditorOnlyCode = options.error_on_incorrect_editor_only_code;
         FAngelscriptManager::Get().ConfigSettings->bWarnOnDivergentComparisonOperatorOverloads =
@@ -2060,6 +2153,70 @@ sidecar_compile_result compile_sidecar_request(
             options.warn_on_increment_decrement_in_complex_expression;
         FAngelscriptManager::Get().ConfigSettings->bWarnOnUnusedReturnValueForConstMethods =
             options.warn_on_unused_return_value_for_const_methods;
+
+        cache_wire::shipping_static_jit_coverage source_only_static_jit_coverage;
+        if (use_source_only_full_graph) {
+            // The donor's full-tree writer did not present every source module to
+            // StaticJIT. Rehydrate the sealed cache in a disposable engine and
+            // identify the modules that are already at the analysis fixed point.
+            // This derives the historical execution boundary from cache semantics;
+            // no executable fingerprint or product-specific module allowlist is
+            // involved.
+            registry_runtime coverage_registry_runtime;
+            frontend_compile_runtime coverage_frontend_runtime;
+            engine_ptr coverage_engine(asCreateScriptEngine(manifest.as_create_version));
+            if (!coverage_engine) {
+                return failure(
+                    wire::ExitCode::unavailable,
+                    "engine_unavailable",
+                    "GORE_AS_STATIC_JIT_COVERAGE_UNAVAILABLE",
+                    "the pinned AngelScript engine rejected the profile version",
+                    diagnostics);
+            }
+            coverage_engine->SetMessageCallback(
+                asFUNCTION(message_callback), &diagnostics, asCALL_CDECL);
+            const auto coverage_replay = replay_registry(
+                *coverage_engine, registry, coverage_registry_runtime);
+            if (!coverage_replay.succeeded()) {
+                return failure(
+                    wire::ExitCode::unavailable,
+                    "engine_unavailable",
+                    "GORE_AS_STATIC_JIT_COVERAGE_UNAVAILABLE",
+                    coverage_replay.detail + " (ordinal " +
+                        std::to_string(coverage_replay.failed_ordinal) + ")",
+                    diagnostics);
+            }
+            lexical_preprocess_result no_source_overlays;
+            no_source_overlays.ok = true;
+            std::vector<asIScriptModule*> coverage_modules;
+            const auto coverage_graph = cache_wire::compile_mixed_cache_checkpoint(
+                *coverage_engine,
+                base,
+                preprocessor,
+                no_source_overlays,
+                &coverage_registry_runtime,
+                coverage_frontend_runtime,
+                false,
+                coverage_modules);
+            if (!coverage_graph.succeeded()) {
+                return failure(
+                    wire::ExitCode::unavailable,
+                    "engine_unavailable",
+                    "GORE_AS_STATIC_JIT_COVERAGE_UNAVAILABLE",
+                    coverage_graph.detail,
+                    diagnostics);
+            }
+            const auto coverage = cache_wire::derive_shipping_static_jit_module_coverage(
+                coverage_modules, source_only_static_jit_coverage);
+            if (!coverage.succeeded()) {
+                return failure(
+                    wire::ExitCode::unavailable,
+                    "engine_unavailable",
+                    "GORE_AS_STATIC_JIT_COVERAGE_UNAVAILABLE",
+                    coverage.detail,
+                    diagnostics);
+            }
+        }
 
         registry_runtime registry_runtime_state;
         const qualification_runtime_kind qualification_runtime = request.qualification_mode
@@ -2090,12 +2247,38 @@ sidecar_compile_result compile_sidecar_request(
                 "GORE_AS_QUALIFICATION_RUNTIME_UNAVAILABLE", detail, diagnostics);
         }
         std::vector<asIScriptModule*> modules;
-        const auto compiled = cache_wire::compile_mixed_cache_checkpoint(
-            *engine, base, preprocessor, preprocessing, &registry_runtime_state,
-            frontend_runtime, request.qualification_mode, modules);
-        if (!compiled.succeeded()) {
-            return failure(wire::ExitCode::data_error, "rejected", "GORE_AS_COMPILE_REJECTED",
-                compiled.detail, diagnostics);
+        shipping_static_jit_candidates static_jit_candidates;
+        if (use_source_only_full_graph) {
+            const auto compiled = compile_preprocessed_module_graph(
+                *engine,
+                preprocessor,
+                preprocessing,
+                &registry_runtime_state,
+                frontend_runtime,
+                global_initializer_policy::defer,
+                modules,
+                &static_jit_candidates);
+            if (!compiled.succeeded()) {
+                return failure(
+                    wire::ExitCode::data_error,
+                    "rejected",
+                    "GORE_AS_COMPILE_REJECTED",
+                    compiled.detail,
+                    diagnostics);
+            }
+        } else {
+            const auto compiled = cache_wire::compile_mixed_cache_checkpoint(
+                *engine, base, preprocessor, preprocessing, &registry_runtime_state,
+                frontend_runtime, request.qualification_mode, modules,
+                &static_jit_candidates);
+            if (!compiled.succeeded()) {
+                return failure(
+                    wire::ExitCode::data_error,
+                    "rejected",
+                    "GORE_AS_COMPILE_REJECTED",
+                    compiled.detail,
+                    diagnostics);
+            }
         }
         if (qualification_runtime != qualification_runtime_kind::none &&
             !registry_runtime_state.prepare_qualification_runtime(*engine, detail)) {
@@ -2108,11 +2291,20 @@ sidecar_compile_result compile_sidecar_request(
             return failure(wire::ExitCode::unavailable, "engine_unavailable",
                 "GORE_AS_QUALIFICATION_INVOKE_UNAVAILABLE", detail, diagnostics);
         }
-        const auto static_jit = cache_wire::apply_shipping_static_jit_checkpoint(modules);
+        // Mixed graph compiles expose their exact stage-3 callback set directly.
+        // A full-tree source rebuild projects the sealed donor boundary by
+        // stable function identity, including partially analyzed modules.
+        const auto static_jit = use_source_only_full_graph
+            ? cache_wire::apply_shipping_static_jit_coverage_checkpoint(
+                  modules, static_jit_candidates, source_only_static_jit_coverage,
+                  preprocessing)
+            : cache_wire::apply_shipping_static_jit_checkpoint(
+                  modules, static_jit_candidates);
         if (!static_jit.succeeded()) {
             return failure(
                 wire::ExitCode::software, "invalid_output",
-                "GORE_AS_STATIC_JIT_ANALYSIS_FAILED", static_jit.detail, diagnostics);
+                "GORE_AS_STATIC_JIT_ANALYSIS_FAILED", static_jit.detail,
+                diagnostics);
         }
 
         sha256 guid_hash;
@@ -2161,10 +2353,15 @@ sidecar_compile_result compile_sidecar_request(
         std::array<std::uint8_t, 16U> guid{};
         std::copy_n(guid_digest.begin(), guid.size(), guid.begin());
         cache_wire::cache generated;
-        const auto exported = cache_wire::export_mixed_graph_checkpoint(
-            base, preprocessing, modules, guid, manifest.build_identifier, generated,
-            registry_runtime_state,
-            options.mark_non_uproperty_properties_as_transient);
+        const auto exported = use_source_only_full_graph
+            ? cache_wire::export_source_graph_checkpoint(
+                base, preprocessing, modules, guid, manifest.build_identifier, generated,
+                registry_runtime_state,
+                options.mark_non_uproperty_properties_as_transient)
+            : cache_wire::export_mixed_graph_checkpoint(
+                base, preprocessing, modules, guid, manifest.build_identifier, generated,
+                registry_runtime_state,
+                options.mark_non_uproperty_properties_as_transient);
         if (!exported.succeeded()) {
             if (exported.is_compile_diagnostic) {
                 diagnostics.push_back({

@@ -24,6 +24,12 @@ const _v3ShippingSha256 =
     '36124f1cdd4caae555423581aa40631af0ac80d5cef42528382739f932b0e728';
 const _v3BindsSha256 =
     '854f58a695d0170144957f085c1e8c0f9ef40b271e35e90f79ffbccff8d999c5';
+const _v4ExecutableSha256 =
+    '824fbc94f2ac7f45927a0754605666c37af862d66156a15f8bf6813759d9e8e0';
+const _v4ShippingSha256 =
+    '7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511';
+const _v4BindsSha256 =
+    'aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2';
 
 void main() {
   late AuthoringStoryCatalogGeneration generation;
@@ -217,7 +223,7 @@ void main() {
     },
   );
 
-  test('accepts the exact V1/V2/V3 triples and rejects hybrids', () async {
+  test('accepts every exact registered triple and rejects hybrids', () async {
     final v1 = await _trustedGeneration(
       executableByteLength: 171698176,
       executableSha256: _v1ExecutableSha256,
@@ -231,9 +237,18 @@ void main() {
       bindsCacheByteLength: 5908587,
       bindsCacheSha256: _v3BindsSha256,
     );
+    final v4 = await _trustedGeneration(
+      executableByteLength: 171792384,
+      executableSha256: _v4ExecutableSha256,
+      shippingCacheByteLength: 124459412,
+      shippingCacheSha256: _v4ShippingSha256,
+      bindsCacheByteLength: 5908985,
+      bindsCacheSha256: _v4BindsSha256,
+    );
     expect(_create(v1).target.executableSha256, _v1ExecutableSha256);
     expect(_create(generation).target.executableSha256, _v2ExecutableSha256);
     expect(_create(v3).target.executableSha256, _v3ExecutableSha256);
+    expect(_create(v4).target.executableSha256, _v4ExecutableSha256);
 
     final hybrids = <AuthoringStoryCatalogGeneration>[
       await _trustedGeneration(executableByteLength: 171698176),
@@ -250,6 +265,26 @@ void main() {
       await _trustedGeneration(
         bindsCacheByteLength: 5908587,
         bindsCacheSha256: _v3BindsSha256,
+      ),
+      await _trustedGeneration(
+        executableByteLength: 171792384,
+        executableSha256: _v4ExecutableSha256,
+      ),
+      await _trustedGeneration(
+        shippingCacheByteLength: 124459412,
+        shippingCacheSha256: _v4ShippingSha256,
+      ),
+      await _trustedGeneration(
+        bindsCacheByteLength: 5908985,
+        bindsCacheSha256: _v4BindsSha256,
+      ),
+      await _trustedGeneration(
+        executableByteLength: 171787776,
+        executableSha256: _v4ExecutableSha256,
+        shippingCacheByteLength: 124459412,
+        shippingCacheSha256: _v4ShippingSha256,
+        bindsCacheByteLength: 5908985,
+        bindsCacheSha256: _v4BindsSha256,
       ),
     ];
     for (final hybrid in hybrids) {

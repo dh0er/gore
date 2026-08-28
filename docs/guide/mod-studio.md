@@ -9,11 +9,15 @@ deployment and every in-game claim stay deliberately out of its hands (see
 Three rules hold everywhere. Everything you author lands in your managed
 project, saves are never written, and normal use of a configured Gothic 1
 Remake installation is read-only evidence. The separately invoked,
-evidence-only compiler check is a bounded exception: it prepares the complete
-validated base source tree with the derived managed module overlaid, stages
-that bounded tree under an installation-mutation guard, restores every touched
-path, and blocks later compiler or deployment mutation if exact recovery is
-uncertain. It grants no build, deployment, or runtime authority. Normal
+evidence-only compiler check authenticates the installed cache/API and uses the
+selected product policy. Strict standalone returns native file, line, column,
+severity, and message diagnostics without starting the game or entering an
+installation-mutation window. A deliberately selected game-capable policy is
+the bounded exception: it prepares the complete validated base source tree
+with the derived managed module overlaid, stages that tree under an
+installation-mutation guard, restores every touched path, and blocks later
+compiler or deployment mutation if exact recovery is uncertain. Neither route
+grants build, deployment, or runtime authority. Normal
 surfaces never ask for or show entity IDs, LocIDs, hashes, or paths — advanced
 disclosures exist where inspection needs them. And every dialog is bound to
 the exact project state it opened on: if the project changes underneath it or

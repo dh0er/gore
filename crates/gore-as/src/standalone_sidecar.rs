@@ -21,7 +21,7 @@ use crate::compiler_backend::{
     CompilerBackendDiagnosticSeverityV1, CompilerBackendDiagnosticV1, CompilerBackendFailureKindV1,
     CompilerBackendFailureV1,
 };
-use crate::compiler_profile::capture::validate_pinned_compiler_profile_target_v1;
+use crate::compiler_profile::capture::validate_supported_compiler_profile_target_v1;
 use crate::compiler_profile::frontend::{
     validate_frontend_profile_payloads, MAX_CLASS_GENERATOR_CONFIG_BYTES_V1,
     MAX_COMPILER_OPTIONS_BYTES_V1, MAX_PREPROCESSOR_CONFIG_BYTES_V1,
@@ -612,9 +612,9 @@ pub(crate) fn run_qualification_sidecar_v3(
                 "qualification profile is not the typed unqualified state: {error}"
             ))
         })?;
-    validate_pinned_compiler_profile_target_v1(profile).map_err(|error| {
+    validate_supported_compiler_profile_target_v1(profile).map_err(|error| {
         unavailable(format!(
-            "qualification profile does not match the pinned BuildID-24539464 target: {error}"
+            "qualification profile does not match an explicitly supported compiler target: {error}"
         ))
     })?;
     verify_memory_seal(

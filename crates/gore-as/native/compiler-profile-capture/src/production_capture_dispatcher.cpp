@@ -30,12 +30,12 @@ namespace registration = gore_as_capture::v1::instrumentation::registration;
 constexpr std::size_t kMaximumRegistrationDepth = 64;
 constexpr std::size_t kSettingsBytes = 0x76;
 constexpr std::size_t kPreprocessorBytes = 0x108;
-// BuildID-24539464 GetStaticJITInfo is exactly
+// The selected generation's GetStaticJITInfo is exactly
 //   48 8B 05 81 B3 49 05 C3  mov rax,[rip+0549B381h]; ret
 // Its prolog is part of the fail-closed patch preflight. Development-data
 // generation exits before calling this getter, so read its identical backing
 // slot after frontend capture instead of requiring an unreachable invocation.
-constexpr std::uint32_t kStaticJitInfoStorageRva = 0x09d6c2e8;
+constexpr std::uint32_t kStaticJitInfoStorageRva = kStaticJitInfoGlobalRva;
 
 bool readable_protection(const DWORD protection) noexcept {
   switch (protection & 0xffu) {
@@ -1303,7 +1303,7 @@ bool ProductionCaptureCoordinator::Impl::capture_complete_native_supers() noexce
                 {reinterpret_cast<std::byte*>(&raw_name), sizeof(raw_name)},
                 TargetRawRegionKind::immutable_data) == TargetFrontendRawError::ok &&
             native_snapshot.read(
-                image + 0x09af8600u + 0x10u +
+                image + frontend_target_layout::fname_pool_rva + 0x10u +
                     static_cast<std::size_t>(raw_name.comparison_index >> 16) *
                         sizeof(block),
                 {reinterpret_cast<std::byte*>(&block), sizeof(block)},

@@ -810,7 +810,7 @@ struct DefaultCensus {
 
 /// One entry per row of `gore_generation::rows()`;
 /// `every_audited_generation_has_a_recorded_default_census` is what keeps that true.
-static DEFAULT_CENSUS: [DefaultCensus; 3] = [
+static DEFAULT_CENSUS: [DefaultCensus; 4] = [
     DefaultCensus {
         generation: "g1r-steam-1.0.3",
         bridged_classes: 6_572,
@@ -852,6 +852,22 @@ static DEFAULT_CENSUS: [DefaultCensus; 3] = [
         ufunction_initializers: 26_755,
         branched_init_functions: 1,
         unresolved_fields: 5_210,
+        unresolved_types: 1,
+        ambiguous_fields: 1,
+    },
+    // Measured against the exact Shipping/Binds pair sealed for the 2026-08-27/28 update. The
+    // content transition adds eight initializers (five plain and three UFunction-shaped) while
+    // the ten-window scalar decrease recorded by the generation artifact leaves one fewer field
+    // without a cache-local native-grandparent proof. The sealed ancestry join still resolves all
+    // fields across the unchanged 6,582-class bridge.
+    DefaultCensus {
+        generation: "g1r-steam-24878692",
+        bridged_classes: 6_582,
+        init_functions: 30_013,
+        plain_initializers: 3_255,
+        ufunction_initializers: 26_758,
+        branched_init_functions: 1,
+        unresolved_fields: 5_209,
         unresolved_types: 1,
         ambiguous_fields: 1,
     },
@@ -1600,4 +1616,174 @@ fn configured_build_24340829_profile_and_item_field_matrix_are_exact() {
             (vec!["m_Value".into(), "m_Weight".into()], 109usize),
         ])
     );
+}
+
+#[test]
+fn configured_build_24878692_profile_and_item_field_matrix_are_exact() {
+    // The 2026-08-27/28 update moves the cache and ordered native API while retaining the class
+    // graph and audited item surface. The old 171261 USMAP is not accepted as evidence here: it
+    // omits RagdollConfig.m_FollowBone, so this test always names the fresh 172709 dump.
+    let Some(game) = std::env::var_os("GORE_AS_BUILD_24878692_GAME") else {
+        eprintln!("skip: set GORE_AS_BUILD_24878692_GAME");
+        return;
+    };
+    let Some(usmap) = std::env::var_os("GORE_AS_BUILD_24878692_USMAP") else {
+        eprintln!("skip: set GORE_AS_BUILD_24878692_USMAP to the fresh 172709 dump");
+        return;
+    };
+    let game = std::path::PathBuf::from(game);
+    let usmap = std::path::PathBuf::from(usmap);
+    let exe = game.join("G1R/Binaries/Win64/G1R-Win64-Shipping.exe");
+    let cache_path = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+    let binds_path = game.join("G1R/Script/Binds.Cache");
+
+    fn stream_seal(path: &Path) -> (u64, String) {
+        let mut file = std::fs::File::open(path).expect("open sealed generation file");
+        let length = file.metadata().expect("read sealed file metadata").len();
+        let mut hash = Sha256::new();
+        let mut buffer = vec![0u8; 1024 * 1024];
+        loop {
+            let read = file.read(&mut buffer).expect("hash sealed generation file");
+            if read == 0 {
+                break;
+            }
+            hash.update(&buffer[..read]);
+        }
+        (
+            length,
+            gore_as::cache::default_patch::encode_hex(&hash.finalize()),
+        )
+    }
+
+    let row = &gore_generation::ROW_G1R_24878692;
+    for (path, seal) in [
+        (&exe, row.executable),
+        (&cache_path, row.shipping_cache),
+        (&binds_path, row.binds_cache),
+        (&usmap, row.usmap),
+    ] {
+        assert_eq!(
+            stream_seal(path),
+            (
+                seal.byte_len,
+                gore_as::cache::default_patch::encode_hex(&seal.sha256)
+            ),
+            "sealed generation input changed: {}",
+            path.display()
+        );
+    }
+
+    let cache = std::fs::read(&cache_path).expect("read Shipping cache");
+    assert_eq!(
+        CacheHeader::parse(&cache).expect("parse header").hash,
+        [
+            0x78, 0x35, 0xbc, 0xc0, 0x9c, 0x5e, 0xee, 0x48, 0x8d, 0x72, 0xcb, 0x5f, 0xfb, 0x0f,
+            0xb0, 0xc3,
+        ]
+    );
+    let binds_bytes = std::fs::read(&binds_path).expect("read Binds");
+    let binds_profile = gore_as::cache::binds::derive_binds_profile(&binds_bytes);
+    assert_eq!(binds_profile.field_row_count, 27_435);
+    assert_eq!(binds_profile.class_path_row_count, 11_196);
+    assert_eq!(binds_profile.field_map_sha256, row.binds_field_map_sha256);
+    assert_eq!(
+        binds_profile.class_path_map_sha256,
+        row.binds_class_path_map_sha256
+    );
+
+    let binds =
+        gore_as::cache::binds::NativeApi::from_bytes(&binds_bytes).expect("parse sealed Binds");
+    let usmap_bytes = std::fs::read(&usmap).expect("read fresh USMAP");
+    let schemas = gore_asset::SchemaDb::from_usmap(&usmap_bytes).expect("parse fresh USMAP");
+    let ragdoll = schemas
+        .resolve_class("/Script/G1R.RagdollConfig")
+        .expect("resolve RagdollConfig in fresh USMAP");
+    assert!(
+        schemas
+            .schema(ragdoll)
+            .expect("resolved RagdollConfig")
+            .properties
+            .iter()
+            .any(|property| property.name == "m_FollowBone"),
+        "the fresh 172709 USMAP must carry the Binds-added m_FollowBone property"
+    );
+
+    let profile = gore_as::cache::default_ancestry::DefaultNativeAncestry::from_schema_db(
+        &binds, &cache, &schemas,
+    )
+    .expect("derive exact BuildID-24878692 profile");
+    assert_eq!(profile.class_count(), 6_582);
+    assert_eq!(profile.profile_id(), row.native_ancestry_profile_id);
+    assert_eq!(
+        profile.gameplay_tag_float32_map_proof_id(),
+        row.gameplay_tag_float32_map_proof_id
+    );
+    let tag_report = gore_as::cache::native_tag_map::inspect_native_tag_maps(&cache, &profile)
+        .expect("inspect sealed tag maps");
+    assert_eq!(tag_report.site_count(), 1_432);
+
+    let report = gore_as::cache::default_patch::default_sites_with_native_ancestry(
+        &cache,
+        Some(
+            gore_as::cache::binds::NativeApi::from_bytes(&binds_bytes)
+                .expect("reparse sealed Binds"),
+        ),
+        Some(profile),
+    )
+    .expect("inspect defaults with sealed ancestry");
+    assert_eq!(report.stats.direct_windows, 26_389);
+    assert_eq!(report.stats.unresolved_fields, 0);
+
+    let wanted_types = BTreeMap::from([
+        ("m_Value", "int"),
+        ("m_MaxStack", "int"),
+        ("m_Weight", "float32"),
+        ("m_Mass", "float32"),
+    ]);
+    let expected_counts = BTreeMap::from([
+        ("m_Value", 906usize),
+        ("m_MaxStack", 641usize),
+        ("m_Weight", 109usize),
+        ("m_Mass", 2usize),
+    ]);
+    let expected_native_counts = BTreeMap::from([
+        ("m_Value", 583usize),
+        ("m_MaxStack", 317usize),
+        ("m_Weight", 109usize),
+        ("m_Mass", 2usize),
+    ]);
+    let mut counts = BTreeMap::new();
+    let mut native_counts = BTreeMap::new();
+    let mut target_fields: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+    for site in report
+        .sites
+        .iter()
+        .filter(|site| wanted_types.contains_key(site.selector.field.as_str()))
+    {
+        let field = site.selector.field.as_str();
+        assert_eq!(site.selector.field_owner, "UItemDefinition", "{field}");
+        assert_eq!(
+            site.selector.value_type,
+            *wanted_types.get(field).expect("known requested field"),
+            "{field}"
+        );
+        *counts.entry(field).or_insert(0usize) += 1;
+        if let Some(ancestry_profile) = site.selector.ancestry_profile.as_deref() {
+            assert_eq!(ancestry_profile, row.native_ancestry_profile_id, "{field}");
+            *native_counts.entry(field).or_insert(0usize) += 1;
+        }
+        assert!(
+            target_fields
+                .entry((site.selector.module.clone(), site.selector.class.clone()))
+                .or_default()
+                .insert(site.selector.field.clone()),
+            "duplicate qualified target field: {}.{}.{}",
+            site.selector.module,
+            site.selector.class,
+            site.selector.field
+        );
+    }
+    assert_eq!(counts, expected_counts);
+    assert_eq!(native_counts, expected_native_counts);
+    assert_eq!(target_fields.len(), 918);
 }

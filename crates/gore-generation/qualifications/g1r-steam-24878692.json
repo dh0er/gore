@@ -1,0 +1,33 @@
+{
+  "generation_id": "g1r-steam-24878692",
+  "label": "Steam build 24878692 (2026-08-27/28 update)",
+  "native_ancestry_profile_id": "sha256:e82fd03d8fa86a1417a6c4d23444d129e2aae293368b1912b077956af2b51827",
+  "gameplay_tag_float32_map_proof_id": "sha256:92df7492e40d6f65db8789beb8660e4d365b4e42d0450e8845e834d691d148b3",
+  "scalar_default_operand_count": 26389,
+  "gameplay_tag_float32_operand_count": 1432,
+  "class_count": 6582,
+  "gameplay_tag_float32_map_field_count": 8,
+  "unresolved_fields_with_ancestry": 0,
+  "direct_windows": 26389,
+  "binds_field_row_count": 27435,
+  "binds_class_path_row_count": 11196,
+  "witnesses": {
+    "native_ancestry_profile_id": "crates/gore-as/tests/default_patch_test.rs::configured_build_24878692_profile_and_item_field_matrix_are_exact",
+    "gameplay_tag_float32_map_proof_id": "crates/gore-as/tests/default_patch_test.rs::configured_build_24878692_profile_and_item_field_matrix_are_exact",
+    "scalar_default_operand_count": "crates/gore-as/tests/default_patch_test.rs::configured_build_24878692_profile_and_item_field_matrix_are_exact",
+    "gameplay_tag_float32_operand_count": "crates/gore-as/src/cache/default_ancestry.rs::configured_production_profile_derives_its_evidence_ids",
+    "class_count": "crates/gore-as/tests/default_patch_test.rs::configured_build_24878692_profile_and_item_field_matrix_are_exact",
+    "gameplay_tag_float32_map_field_count": "crates/gore-as/src/cache/default_ancestry.rs::configured_production_profile_derives_its_evidence_ids",
+    "unresolved_fields_with_ancestry": "crates/gore-as/tests/default_patch_test.rs::configured_build_24878692_profile_and_item_field_matrix_are_exact",
+    "direct_windows": "crates/gore-as/tests/default_patch_test.rs::configured_build_24878692_profile_and_item_field_matrix_are_exact"
+  },
+  "notes": [
+    "Derived by `gore as qualify` against a hash-stable copy of Steam BuildID 24878692. The executable, Shipping cache, Binds.Cache and fresh 172709 UE4SS dump were copied only after source hashes were checked before and after; every digest came from the crate that owns the format.",
+    "The fresh `G1R-5.4.3-172709-272ce2f8.usmap` was generated with UE4SS loaded from an external directory into one owned windowed process. It contains `/Script/G1R.RagdollConfig.m_FollowBone`, which the installed stale 171261 dump omits. The game process exited normally and the live executable, Shipping cache, Binds.Cache, old USMAP, locks and AS_JITTED_CODE state remained unchanged.",
+    "The USMAP still has the identical 6602-class set and direct-parent graph: zero classes added or removed, zero reparented classes, zero existing properties whose declaring owner moved, and zero wire-shape or case-only renames. Its only class-declared property change is the new Name m_FollowBone on /Script/G1R.RagdollConfig; the 15 removed schemas are exclusively /Game/... AnimBlueprintGenerated(Constant|Mutable)Data structs. The Binds/USMAP bridge therefore remains 6582 classes with zero unresolved default fields; the GameplayTag-to-float32 surface remains eight declarations and 1432 cache operands.",
+    "The ordered Binds API changed in exactly four classes: UGameplayAbilityAttackLoop added three methods; UGameplayAbilityMagicBase and UGameplayAbilityCastSpell changed constness on one method each; UGameplayAbilityCastSpell removed NeedUseManaToCast_Scriptable; and URagdollConfig added FName m_FollowBone. Counts moved from 16416 to 16418 methods and from 14966 to 14967 class properties. This requires a new compiler profile but is not evidence of compiler-language drift.",
+    "Scalar default windows fell 26399 -> 26389, fully explained by content rather than parser loss: -5 Golem Stone Bridge URagdollConfig, -2 its UWaterConfig, -2 the hostile HumanOrc Training relationship modifier, -5 the removed AIState_Warning_Human_Taunts module, +1 KalomDemon relationship modifier, +1 ArenaDetection RegionTrait, +1 ArenaFallingThroughLavaPit RegionTrait and +1 LordDemon Pyrolaser ForceKnockback. The arithmetic is -14 +4 = -10, while every remaining field resolves.",
+    "All six curated story modules were emitted from this Shipping cache and reproduce their previously published source seals byte-for-byte: 460/2312e01b, 932/b728be66, 455/1a4c6caa, 932/dde3f35f, 96033/e49a3a5f and 856/5f5060a2. The curated content is unchanged; only its generation-bound V4 record and payload identities moved.",
+    "The cache parser reads all 7317 modules and the same 0x9e377abe build identifier. The cache GUID, tail location, module set and content changed, but no cache wire-format or opcode-table change was observed. Compiler-core semantics remain subject to the separate frozen 27-case and full-tree embedded-versus-standalone qualification."
+  ]
+}

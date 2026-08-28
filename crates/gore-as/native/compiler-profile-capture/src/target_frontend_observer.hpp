@@ -1,5 +1,7 @@
 #pragma once
 
+#include "gore_as_capture/format.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -190,7 +192,7 @@ enum class FrontendCallbackKind : std::uint8_t {
   class_analyze = 3,
 };
 
-// Exact BuildID-24539464 CALL witnesses.  These are validation inputs only: a matching callsite
+// Exact generation-specific CALL witnesses. These are validation inputs only: a matching callsite
 // does not make the target's mutable Unreal containers pointer-neutral or its delegate mutation
 // representable by the portable append-only hook schema.
 struct FrontendCallbackCallsite final {
@@ -203,8 +205,8 @@ struct FrontendCallbackCallsite final {
   std::array<std::byte, 5> expected_call{};
 };
 
-// BuildID-24539464 target offsets. The settings pointer is the CDO at manager+0x4d0; the
-// preprocessor object is the constructed value observed at RVA 0x468435d.
+// Both authenticated generations share these object offsets. Their independently verified image
+// addresses live in FrontendTargetAddresses below.
 namespace frontend_target_layout {
 inline constexpr std::size_t manager_settings = 0x4d0;
 inline constexpr std::size_t manager_blueprint_specializations = 0x478;
@@ -253,25 +255,119 @@ inline constexpr std::size_t uobject_name = 0x18;
 inline constexpr std::size_t uobject_outer = 0x20;
 inline constexpr std::size_t ustruct_super = 0x40;
 inline constexpr std::size_t ustruct_properties_size = 0x58;
-inline constexpr std::uint32_t static_names_rva = 0x09d6b2c8;
-inline constexpr std::uint32_t use_editor_scripts_rva = 0x09d6b341;
-inline constexpr std::uint32_t automatic_imports_rva = 0x09d6b362;
-inline constexpr std::uint32_t fname_to_string_rva = 0x011cf680;
-inline constexpr std::uint32_t type_usage_from_type_id_rva = 0x0474d8f0;
 inline constexpr std::size_t angelscript_type_get_class_vslot = 0x18;
-inline constexpr std::uint32_t process_chunks_call_rva = 0x0489f822;
-inline constexpr std::uint32_t process_chunks_return_rva = 0x0489f827;
-inline constexpr std::uint32_t process_chunks_delegate_rva = 0x09875598;
-inline constexpr std::uint32_t post_process_code_call_rva = 0x0489f90c;
-inline constexpr std::uint32_t post_process_code_return_rva = 0x0489f911;
-inline constexpr std::uint32_t post_process_code_delegate_rva = 0x098755b0;
-// FAngelscriptManager::GetOnClassAnalyze() returns this exact image object at
-// RVA 0x4681b27/0x4681b60. Unlike the two graph delegates it may be bound.
-inline constexpr std::uint32_t class_analyze_delegate_rva = 0x098750a8;
-inline constexpr std::uint32_t class_analyze_call_rva = 0x0488a237;
-inline constexpr std::uint32_t class_analyze_return_rva = 0x0488a23c;
-inline constexpr std::uint32_t multicast_broadcast_rva = 0x010419b0;
-inline constexpr std::uint32_t class_analyze_broadcast_rva = 0x0488a4a0;
+
+struct FrontendTargetAddresses final {
+  CaptureTargetGeneration generation{};
+  std::uint32_t static_names_rva{};
+  std::uint32_t use_editor_scripts_rva{};
+  std::uint32_t automatic_imports_rva{};
+  std::uint32_t fname_pool_rva{};
+  std::uint32_t fname_to_string_rva{};
+  std::uint32_t type_usage_from_type_id_rva{};
+  std::uint32_t process_chunks_call_rva{};
+  std::uint32_t process_chunks_return_rva{};
+  std::uint32_t process_chunks_delegate_rva{};
+  std::uint32_t post_process_code_call_rva{};
+  std::uint32_t post_process_code_return_rva{};
+  std::uint32_t post_process_code_delegate_rva{};
+  std::uint32_t class_analyze_delegate_rva{};
+  std::uint32_t class_analyze_call_rva{};
+  std::uint32_t class_analyze_return_rva{};
+  std::uint32_t multicast_broadcast_rva{};
+  std::uint32_t class_analyze_broadcast_rva{};
+  std::array<std::uint32_t, 2> class_analyze_accessor_rvas{};
+  std::uint32_t initial_compile_enter_rva{};
+  std::uint32_t descriptors_requested_rva{};
+  std::uint32_t preprocessor_constructed_rva{};
+  std::uint32_t initial_compile_return_rva{};
+};
+
+inline constexpr FrontendTargetAddresses kFrontendTarget24539464{
+    CaptureTargetGeneration::build_24539464,
+    0x09d6b2c8,
+    0x09d6b341,
+    0x09d6b362,
+    0x09af8600,
+    0x011cf680,
+    0x0474d8f0,
+    0x0489f822,
+    0x0489f827,
+    0x09875598,
+    0x0489f90c,
+    0x0489f911,
+    0x098755b0,
+    0x098750a8,
+    0x0488a237,
+    0x0488a23c,
+    0x010419b0,
+    0x0488a4a0,
+    {0x04681b27, 0x04681b60},
+    0x04684210,
+    0x046842d0,
+    0x0468435d,
+    0x04685a46,
+};
+
+inline constexpr FrontendTargetAddresses kFrontendTarget24878692{
+    CaptureTargetGeneration::build_24878692,
+    0x09d6c448,
+    0x09d6c4c1,
+    0x09d6c4e2,
+    0x09af9780,
+    0x011cf640,
+    0x0474d8b0,
+    0x0489f7e2,
+    0x0489f7e7,
+    0x09876598,
+    0x0489f8cc,
+    0x0489f8d1,
+    0x098765b0,
+    0x098760a8,
+    0x0488a1f7,
+    0x0488a1fc,
+    0x01041970,
+    0x0488a460,
+    {0x04681ae7, 0x04681b20},
+    0x046841d0,
+    0x04684290,
+    0x0468431d,
+    0x04685a06,
+};
+
+inline constexpr const FrontendTargetAddresses& kFrontendTarget =
+    kFrontendTarget24878692;
+inline constexpr std::uint32_t static_names_rva = kFrontendTarget.static_names_rva;
+inline constexpr std::uint32_t use_editor_scripts_rva =
+    kFrontendTarget.use_editor_scripts_rva;
+inline constexpr std::uint32_t automatic_imports_rva =
+    kFrontendTarget.automatic_imports_rva;
+inline constexpr std::uint32_t fname_pool_rva = kFrontendTarget.fname_pool_rva;
+inline constexpr std::uint32_t fname_to_string_rva = kFrontendTarget.fname_to_string_rva;
+inline constexpr std::uint32_t type_usage_from_type_id_rva =
+    kFrontendTarget.type_usage_from_type_id_rva;
+inline constexpr std::uint32_t process_chunks_call_rva =
+    kFrontendTarget.process_chunks_call_rva;
+inline constexpr std::uint32_t process_chunks_return_rva =
+    kFrontendTarget.process_chunks_return_rva;
+inline constexpr std::uint32_t process_chunks_delegate_rva =
+    kFrontendTarget.process_chunks_delegate_rva;
+inline constexpr std::uint32_t post_process_code_call_rva =
+    kFrontendTarget.post_process_code_call_rva;
+inline constexpr std::uint32_t post_process_code_return_rva =
+    kFrontendTarget.post_process_code_return_rva;
+inline constexpr std::uint32_t post_process_code_delegate_rva =
+    kFrontendTarget.post_process_code_delegate_rva;
+inline constexpr std::uint32_t class_analyze_delegate_rva =
+    kFrontendTarget.class_analyze_delegate_rva;
+inline constexpr std::uint32_t class_analyze_call_rva =
+    kFrontendTarget.class_analyze_call_rva;
+inline constexpr std::uint32_t class_analyze_return_rva =
+    kFrontendTarget.class_analyze_return_rva;
+inline constexpr std::uint32_t multicast_broadcast_rva =
+    kFrontendTarget.multicast_broadcast_rva;
+inline constexpr std::uint32_t class_analyze_broadcast_rva =
+    kFrontendTarget.class_analyze_broadcast_rva;
 inline constexpr std::array<FrontendCallbackCallsite, 3> callback_callsites{{
     {FrontendCallbackKind::process_chunks,
      process_chunks_call_rva,
@@ -305,10 +401,15 @@ static_assert(
     static_cast<std::int64_t>(post_process_code_return_rva) - 59'105'121 ==
     multicast_broadcast_rva);
 static_assert(class_analyze_return_rva + 612 == class_analyze_broadcast_rva);
-inline constexpr std::uint32_t initial_compile_enter_rva = 0x04684210;
-inline constexpr std::uint32_t descriptors_requested_rva = 0x046842d0;
-inline constexpr std::uint32_t preprocessor_constructed_rva = 0x0468435d;
-inline constexpr std::uint32_t initial_compile_return_rva = 0x04685a46;
+inline constexpr std::uint32_t initial_compile_enter_rva =
+    kFrontendTarget.initial_compile_enter_rva;
+inline constexpr std::uint32_t descriptors_requested_rva =
+    kFrontendTarget.descriptors_requested_rva;
+inline constexpr std::uint32_t preprocessor_constructed_rva =
+    kFrontendTarget.preprocessor_constructed_rva;
+inline constexpr std::uint32_t initial_compile_return_rva =
+    kFrontendTarget.initial_compile_return_rva;
+static_assert(kFrontendTarget.generation == kCaptureTarget.generation);
 }  // namespace frontend_target_layout
 
 FrontendObserverError project_frontend_settings_v1(

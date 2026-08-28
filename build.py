@@ -1574,6 +1574,7 @@ def _prepare_standalone_compiler_bundle(
                 work_root,
                 qualified_profile_verifier=qualified_profile_verifier,
                 promotion_attestation_verifier=promotion_attestation_verifier,
+                allow_legacy_internal_input_v1=configured_internal_input is None,
             )
         except standalone_compiler_bundle.BundleError as error:
             raise SystemExit(
@@ -1600,6 +1601,20 @@ def _standalone_compiler_build_env(project: str, *, dry: bool) -> dict[str, str]
         "GORE_STANDALONE_COMPILER_CATALOG_PATH": str(prepared.catalog_path),
         "GORE_STANDALONE_COMPILER_CATALOG_SHA256": catalog_sha256,
     }
+
+
+def _require_publishable_standalone_compiler_bundle(
+    project: str, *, dry: bool
+) -> None:
+    """Keep the committed V1 bridge usable for builds, never for publication."""
+
+    prepared = _prepare_standalone_compiler_bundle(project, dry=dry)
+    if prepared is not None and prepared.legacy_internal_input_v1:
+        raise SystemExit(
+            "standalone compiler publication requires the signed dual-profile "
+            "internal-input v2 package with per-profile full-tree receipts; "
+            "the committed v1 package is local-build compatibility only"
+        )
 
 
 def _verify_host_embedded_standalone_compiler_catalog(
@@ -1714,6 +1729,7 @@ def _verify_staged_standalone_compiler_bundle(
             promotion_attestation_verifier=_product_promotion_attestation_verifier(
                 dry=False
             ),
+            allow_legacy_internal_input_v1=prepared.legacy_internal_input_v1,
         )
     except standalone_compiler_bundle.BundleError as error:
         raise SystemExit(
@@ -2287,6 +2303,7 @@ def dist_project(project: str, dry: bool) -> Path | None:
     cfg = PROJECTS[project]
     if not cfg.get("releasable"):
         raise SystemExit(f"{project} is not releasable")
+    _require_publishable_standalone_compiler_bundle(project, dry=dry)
     build_project(project, release=True, dry=dry)
     # Drop any declared companion binaries (e.g. the `gore` CLI for mod-studio)
     # into the Release dir before it is packaged / handed to the installer.
@@ -2545,6 +2562,9 @@ def release_project(project: str, version: str, steps: dict, dry: bool) -> None:
         raise SystemExit(f"version must be X.Y.Z, got {version!r}")
     prefix = cfg["tag_prefix"]
     tag = f"{prefix}-v{version}"
+
+    if any(steps[name] for name in ("pack", "installer", "tag", "push")):
+        _require_publishable_standalone_compiler_bundle(project, dry=dry)
 
     if steps["bump"]:
         write_version(project, version, dry)

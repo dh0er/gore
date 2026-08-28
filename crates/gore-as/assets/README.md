@@ -23,15 +23,19 @@ failures fall back to the ordinary game compiler.
 ## Internal standalone compiler package
 
 `standalone-compiler-internal-package.zip` and its adjacent JSON descriptor are GORE source
-assets, not a separate downloadable product. The archive contains the already signed standalone
-compiler plus its qualified game-API data. It is deterministic Deflate-9 so the roughly 152 MiB
-qualified tree occupies about 7.5 MiB in source control; `build.py` verifies and expands it only
-for `gore-cli` and `gore-mod-studio`. Save Editor and Mod Manager never stage it.
+assets, not a separate downloadable product. The currently checked-in, already signed archive is
+the legacy internal-input V1 package for build `24539464`. `build.py` may verify and expand that
+exact pinned archive for local `gore-cli` and `gore-mod-studio` builds, so ordinary development
+does not require a premature replacement signature. Save Editor and Mod Manager never stage it.
 
 Normal builds use the descriptor's exact length/SHA-256 as their source-tree authority and need no
 network access or GitHub release. Package creation is a separate one-time operation which verifies
 Authenticode, typed profile data, and GitHub/Sigstore provenance before publication into this
-directory. This replacement creates no compiler release or tag. Runtime selection is
+directory. Internal-input V2 additionally requires exactly the `24539464` and `24878692` product
+profiles, both bound to the same final sidecar, with exactly one strict full-tree receipt each.
+Distribution packaging, installers, tags, and pushes reject the legacy V1 bridge; only a later,
+explicitly authorized one-time signing/promotion may replace it with that V2 publishing set. This
+publishing policy is intentionally separate from runtime admission. Runtime selection is
 distribution-neutral: whole Steam/GOG files and store metadata do
 not gate use. A bounded AMD64 game executable, a supported Shipping cache format, and the fully
 parsed ordered Binds API fingerprint select the compatible game API. Incompatible or ambiguous

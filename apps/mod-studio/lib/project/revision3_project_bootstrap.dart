@@ -164,6 +164,18 @@ const List<_SupportedStoryGeneration> _supportedStoryGenerations = [
     bindsCacheSha256:
         '854f58a695d0170144957f085c1e8c0f9ef40b271e35e90f79ffbccff8d999c5',
   ),
+  (
+    edition: 'g1r-steam',
+    executableByteLength: 171792384,
+    executableSha256:
+        '824fbc94f2ac7f45927a0754605666c37af862d66156a15f8bf6813759d9e8e0',
+    shippingCacheByteLength: 124459412,
+    shippingCacheSha256:
+        '7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511',
+    bindsCacheByteLength: 5908985,
+    bindsCacheSha256:
+        'aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2',
+  ),
 ];
 
 void _requireProjectId(String value) {

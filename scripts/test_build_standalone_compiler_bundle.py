@@ -26,6 +26,19 @@ class BuildStandaloneCompilerBundleTests(unittest.TestCase):
         }
         self.assertEqual(enabled, {"gore-cli", "gore-mod-studio"})
 
+    def test_cli_and_studio_share_one_prepared_bundle_authority(self) -> None:
+        cli = gore_build._prepare_standalone_compiler_bundle(
+            "gore-cli", dry=True
+        )
+        studio = gore_build._prepare_standalone_compiler_bundle(
+            "gore-mod-studio", dry=True
+        )
+
+        self.assertIs(cli, studio)
+        self.assertIsNotNone(cli)
+        self.assertEqual(cli.catalog_path, studio.catalog_path)
+        self.assertEqual(cli.bundle_root, studio.bundle_root)
+
     def test_catalog_is_prepared_before_cli_host_build(self) -> None:
         events: list[str] = []
 
@@ -147,6 +160,7 @@ class BuildStandaloneCompilerBundleTests(unittest.TestCase):
             promotion_attestation_verifier=(
                 gore_build.standalone_compiler_bundle.trust_pinned_internal_package_attestation
             ),
+            allow_legacy_internal_input_v1=True,
         )
 
     def test_non_hosts_never_touch_the_internal_package(self) -> None:
@@ -273,7 +287,32 @@ class BuildStandaloneCompilerBundleTests(unittest.TestCase):
             ROOT / "target" / "standalone-compiler-product-bundle",
             qualified_profile_verifier=verifier,
             promotion_attestation_verifier=attestation_verifier,
+            allow_legacy_internal_input_v1=False,
         )
+
+    def test_legacy_committed_package_is_build_only_not_publishable(self) -> None:
+        legacy = gore_build.standalone_compiler_bundle.PreparedBundle(
+            present=True,
+            work_root=ROOT / "target/compiler",
+            catalog_path=ROOT / "target/compiler/catalog.json",
+            bundle_root=ROOT / "target/compiler/compiler",
+            sidecar_name=gore_build.standalone_compiler_bundle.SIDECAR_FILE,
+            catalog_sha256="ab" * 32,
+            legacy_internal_input_v1=True,
+        )
+        with mock.patch.object(
+            gore_build, "_prepare_standalone_compiler_bundle", return_value=legacy
+        ):
+            self.assertEqual(
+                gore_build._standalone_compiler_build_env("gore-cli", dry=False)[
+                    "GORE_STANDALONE_COMPILER_CATALOG_SHA256"
+                ],
+                "ab" * 32,
+            )
+            with self.assertRaisesRegex(SystemExit, "local-build compatibility only"):
+                gore_build._require_publishable_standalone_compiler_bundle(
+                    "gore-cli", dry=False
+                )
 
 
 if __name__ == "__main__":

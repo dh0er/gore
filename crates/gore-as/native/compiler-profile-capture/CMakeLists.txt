@@ -79,7 +79,7 @@ gore_as_capture_configure_target(gore_as_capture_materializer_tool)
 
 add_executable(gore_as_capture_offline_host tools/offline_host.cpp)
 target_include_directories(gore_as_capture_offline_host PRIVATE include src)
-target_link_libraries(gore_as_capture_offline_host PRIVATE gore_as_capture_materializer)
+target_link_libraries(gore_as_capture_offline_host PRIVATE gore_as_capture_materializer bcrypt)
 gore_as_capture_configure_target(gore_as_capture_offline_host)
 
 if(GORE_AS_CAPTURE_BUILD_LIVE_CONTROLLER)
@@ -144,6 +144,7 @@ if(BUILD_TESTING)
   add_executable(gore_as_capture_donor_layout_test tests/donor_layout_test.cpp)
   target_include_directories(gore_as_capture_donor_layout_test PRIVATE
     src
+    include
     "${gore_as_capture_donor_root}/compat/include")
   target_include_directories(gore_as_capture_donor_layout_test SYSTEM PRIVATE
     "${gore_as_capture_donor_root}/vendor/unreangel/include"

@@ -20,7 +20,7 @@ both decisions. The known RVAs are documented in source but never used for looku
 structural, or hook failure causes the Rust side to terminate the diagnostic attempt and run the
 ordinary compiler only after process-tree exit is confirmed.
 
-The read-only four-release regression results and the exact future/non-Steam capability contract are
+The read-only eight-release regression results and the exact future/non-Steam capability contract are
 documented in [`../../DIAGNOSTICS_PORTABILITY.md`](../../DIAGNOSTICS_PORTABILITY.md).
 
 Capture content reserves room below the 8 MiB limit for a newline-terminated truncation marker. The

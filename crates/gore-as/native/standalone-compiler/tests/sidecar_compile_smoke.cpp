@@ -11,6 +11,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -78,10 +79,31 @@ bool replace_once(std::string& text, const std::string& from, const std::string&
     return true;
 }
 
+void inert_static_name() {}
+
 precompiled::map_string module_key(const std::string& name) {
     precompiled::map_string key;
     key.payload.assign(name.begin(), name.end());
     return key;
+}
+
+bool has_function(
+    const precompiled::precompiled_module& module,
+    const std::string_view name) {
+    return std::any_of(
+        module.functions.begin(), module.functions.end(), [&](const auto& function) {
+            return function.function_name.bytes == name;
+        });
+}
+
+const precompiled::precompiled_function* find_function(
+    const precompiled::precompiled_module& module,
+    const std::string_view name) {
+    const auto found = std::find_if(
+        module.functions.begin(), module.functions.end(), [&](const auto& function) {
+            return function.function_name.bytes == name;
+        });
+    return found == module.functions.end() ? nullptr : &*found;
 }
 
 } // namespace
@@ -104,8 +126,14 @@ int main() {
     asIScriptEngine* const probe = asCreateScriptEngine(23300U);
     if (probe == nullptr || probe->SetEngineProperty(asEP_OPTIMIZE_BYTECODE, 1U) < 0) return 2;
     const int enum_id = probe->RegisterEnum("ETest");
+    const asDWORD fname_flags = asOBJ_VALUE | asOBJ_POD | asOBJ_APP_PRIMITIVE;
+    const int fname_id = probe->RegisterObjectType("FName", 8, fname_flags);
+    const int static_name_function_id = probe->RegisterGlobalFunction(
+        "const FName& __STATIC_NAME(int Id) no_discard",
+        asFUNCTION(inert_static_name),
+        asCALL_CDECL);
     probe->ShutDownAndRelease();
-    if (enum_id < 0) return 3;
+    if (enum_id < 0 || fname_id < 0 || static_name_function_id < 0) return 3;
 
     const std::string digest(64U, '1');
     const std::string properties =
@@ -125,20 +153,48 @@ int main() {
             fixed_operations(primitives[index].second.first, primitives[index].second.second) + "}";
     }
     const std::string trace =
-        "{\"schema\":\"gore.as.registration-trace\",\"schema_version\":1,\"host_stubs\":[],"
+        "{\"schema\":\"gore.as.registration-trace\",\"schema_version\":1,\"host_stubs\":[{"
+        "\"stub_id\":0,\"purpose\":\"compile_only_never_invoke\",\"descriptor\":{"
+        "\"kind\":\"callable\",\"signature_sha256\":\"" + digest + "\"}}],"
         "\"primitive_operations\":[" + primitive_json + "],\"dynamic_script_operations\":{"
         "\"delegate\":" + fixed_operations(16, 8) + ",\"multicast_delegate\":" +
         fixed_operations(16, 8) + "},\"entries\":[{\"kind\":\"enum\",\"ordinal\":0,"
         "\"registration_id\":0,\"context\":{\"namespace\":\"\",\"config_group\":null,"
         "\"access_mask\":4294967295},\"type_id\":1,\"declaration\":\"ETest\","
         "\"type_operations\":{\"kind\":\"fixed\",\"operations\":" + fixed_operations(1, 1) +
-        "}}],\"canonical_sha256\":\"" + digest + "\"}";
+        "}},{\"kind\":\"object_type\",\"ordinal\":1,\"registration_id\":1,"
+        "\"context\":{\"namespace\":\"\",\"config_group\":null,\"access_mask\":4294967295},"
+        "\"type_id\":" + std::to_string(fname_id) + ",\"declaration\":\"FName\","
+        "\"byte_size\":8,\"alignment\":8,\"flags\":" + std::to_string(fname_flags) + ","
+        "\"type_operations\":{\"kind\":\"fixed\",\"operations\":" + fixed_operations(8, 4) +
+        "}},{\"kind\":\"global_function\",\"ordinal\":2,\"registration_id\":2,"
+        "\"context\":{\"namespace\":\"\",\"config_group\":null,\"access_mask\":4294967295},"
+        "\"function_id\":" + std::to_string(static_name_function_id) + ","
+        "\"declaration\":\"const FName& __STATIC_NAME(int Id) no_discard\","
+        "\"call_convention\":\"cdecl\",\"callable_stub_id\":0,"
+        "\"auxiliary_object_stub_id\":null}],\"canonical_sha256\":\"" + digest + "\"}";
     const std::string snapshot =
         "{\"schema\":\"gore.as.post-bind-snapshot\",\"schema_version\":1,"
         "\"engine_properties_sha256\":\"" + digest + "\",\"registration_trace_sha256\":\"" +
         digest + "\",\"entries\":[{\"ordinal\":0,\"trace_registration_id\":0,"
         "\"result\":{\"kind\":\"enum\",\"engine_type_id\":" + std::to_string(enum_id) +
-        "}}],\"final_states\":[],\"canonical_sha256\":\"" + digest + "\"}";
+        "}},{\"ordinal\":1,\"trace_registration_id\":1,\"result\":{"
+        "\"kind\":\"object_type\",\"engine_type_id\":" + std::to_string(fname_id) +
+        "}},{\"ordinal\":2,\"trace_registration_id\":2,\"result\":{"
+        "\"kind\":\"global_function\",\"engine_function_id\":" +
+        std::to_string(static_name_function_id) +
+        "}}],\"final_states\":[{\"kind\":\"object_type\",\"type_id\":" +
+        std::to_string(fname_id) +
+        ",\"byte_size\":8,\"alignment\":4,\"flags\":" + std::to_string(fname_flags) +
+        ",\"base_type_id\":null,\"shadow_type_id\":null,\"interface_type_ids\":[],"
+        "\"interface_vft_offsets\":[],\"has_implicit_constructors\":false,"
+        "\"accepts_value_subtype\":false,\"accepts_reference_subtype\":false,"
+        "\"is_invalid_generated_type\":false},{\"kind\":\"function\",\"function_id\":" +
+        std::to_string(static_name_function_id) +
+        ",\"trait_bits\":0,\"exposed_type\":255,\"hidden_argument_index\":null,"
+        "\"hidden_argument_default\":null,\"determines_output_type_argument_index\":null,"
+        "\"compile_out_mode\":\"compile_calls\",\"first_param_metadata\":\"none\"}],"
+        "\"canonical_sha256\":\"" + digest + "\"}";
     const std::string preprocessor =
         "{\"schema\":\"gore.as.preprocessor-config\",\"schema_version\":1,"
         "\"automatic_imports\":false,\"warn_on_manual_import_statements\":true,"
@@ -182,12 +238,13 @@ int main() {
 
     precompiled::cache empty_cache;
     empty_cache.build_identifier = 1;
-    for (const char* const name : {"A", "B"}) {
+    for (const char* const name : {"B", "A"}) {
         precompiled::precompiled_module module;
         module.module_name.bytes = name;
         module.script_relative_filename.bytes = std::string(name) + ".as";
         empty_cache.modules.emplace_back(module_key(name), std::move(module));
     }
+    empty_cache.static_names.push_back({"UnusedBaseStaticName"});
     std::vector<std::uint8_t> base;
     precompiled::codec_error codec_error;
     if (!precompiled::encode(empty_cache, base, codec_error)) return 5;
@@ -206,11 +263,19 @@ int main() {
         dependency_source.begin(), dependency_source.end());
     const std::vector<std::uint8_t> source_bytes(source.begin(), source.end());
     const std::vector<std::uint8_t> editor_bytes(editor_source.begin(), editor_source.end());
-    const std::string edit_a_source = "int EditedA() { return 41; }\n";
+    const std::string edit_a_source =
+        "struct AOrderType { int AOrderProperty; int ReadAProperty() { return AOrderProperty; } }\n"
+        "void TouchA(const FName&in Value) {}\n"
+        "int EditedA() { TouchA(n\"OrderA\"); return 41; }\n";
+    const std::string edit_b_source =
+        "struct BOrderType { int BOrderProperty; int ReadBProperty() { return BOrderProperty; } }\n"
+        "void TouchB(const FName&in Value) {}\n"
+        "int EditedB() { TouchB(n\"OrderB\"); return 40; }\n";
     const std::string add_c_source =
         "int QualificationPrimitive() { return 42; }\n"
         "int AddedC() { return QualificationPrimitive(); }\n";
     const std::vector<std::uint8_t> edit_a_bytes(edit_a_source.begin(), edit_a_source.end());
+    const std::vector<std::uint8_t> edit_b_bytes(edit_b_source.begin(), edit_b_source.end());
     const std::vector<std::uint8_t> add_c_bytes(add_c_source.begin(), add_c_source.end());
     std::string add_c_json = add_c_source;
     for (std::size_t position = 0U; (position = add_c_json.find('\n', position)) != std::string::npos;) {
@@ -243,6 +308,7 @@ int main() {
     const std::filesystem::path editor_path = source_root / "Editor" / "Ignored.as";
     const std::filesystem::path output_path = output_root / "generated.cache";
     const std::filesystem::path edit_a_path = source_root / "A.as";
+    const std::filesystem::path edit_b_path = source_root / "B.as";
     const std::filesystem::path add_c_path = source_root / "C.as";
     const std::filesystem::path full_graph_output_path = output_root / "full-graph.cache";
     if (!write_bytes(base_path, base) || !write_bytes(binds_path, binds) ||
@@ -252,6 +318,7 @@ int main() {
         !write_bytes(editor_path, editor_bytes) ||
         !write_bytes(source_path, source_bytes) ||
         !write_bytes(edit_a_path, edit_a_bytes) ||
+        !write_bytes(edit_b_path, edit_b_bytes) ||
         !write_bytes(add_c_path, add_c_bytes) ||
         !write_text(profile_root / "qualification-corpus.json", qualification_corpus)) return 6;
 
@@ -287,7 +354,7 @@ int main() {
         "\"method_count\":1,\"struct_property_count\":1,\"class_property_count\":1,"
         "\"canonical_database_sha256\":\"" + digest + "\"},"
         "\"engine\":{\"as_create_version\":23300,\"ordered_engine_properties\":" + properties_blob +
-        ",\"registration_trace\":" + trace_blob + ",\"registration_trace_count\":1,"
+        ",\"registration_trace\":" + trace_blob + ",\"registration_trace_count\":3,"
         "\"post_bind_snapshot\":" + snapshot_blob + "},"
         "\"unreal_semantics\":{\"reflected_type_graph\":" + common_blob + ",\"metadata_schema_version\":1},"
         "\"frontend\":{\"preprocessor_config\":" + preprocessor_blob +
@@ -366,8 +433,8 @@ int main() {
     precompiled::cache generated;
     if (!precompiled::decode(output_bytes.data(), output_bytes.size(), generated, codec_error) ||
         generated.modules.size() != 4U ||
-        generated.modules[0].second.module_name.bytes != "A" ||
-        generated.modules[1].second.module_name.bytes != "B" ||
+        generated.modules[0].second.module_name.bytes != "B" ||
+        generated.modules[1].second.module_name.bytes != "A" ||
         generated.modules[2].second.module_name.bytes != "Dependency" ||
         generated.modules[3].second.module_name.bytes != "Module" ||
         generated.modules[3].second.functions.size() != 1U ||
@@ -434,6 +501,86 @@ int main() {
         return request_prefix_v2 + files + changes + final_manifest +
             "]},\"output\":{\"cache_path\":\"" + json_path(output) + "\"}}";
     };
+
+    // A no-delete V2 graph whose Add/Edit sources cover the complete final manifest must use
+    // both halves of the source-only path: original graph barriers plus source projection.
+    const std::string source_only_files_v2 =
+        source_file("A.as", edit_a_bytes) + "," +
+        source_file("B.as", edit_b_bytes) + "," +
+        source_file("C.as", add_c_bytes);
+    const std::string source_only_changes_v2 =
+        "]},\"changes\":[{\"ordinal\":0,\"operation\":\"edit\",\"module_name\":\"A\","
+        "\"relative_path\":\"A.as\"," + source_seal_fields(edit_a_bytes) + "},{"
+        "\"ordinal\":1,\"operation\":\"edit\",\"module_name\":\"B\","
+        "\"relative_path\":\"B.as\"," + source_seal_fields(edit_b_bytes) + "},{"
+        "\"ordinal\":2,\"operation\":\"add\",\"module_name\":\"C\",\"relative_path\":\"C.as\"," +
+        source_seal_fields(add_c_bytes) + "}],\"final_manifest\":[";
+    const std::string source_only_final_v2 =
+        "{\"ordinal\":0,\"module_name\":\"A\",\"relative_path\":\"A.as\"},"
+        "{\"ordinal\":1,\"module_name\":\"B\",\"relative_path\":\"B.as\"},"
+        "{\"ordinal\":2,\"module_name\":\"C\",\"relative_path\":\"C.as\"}";
+    const std::filesystem::path source_only_output_path =
+        output_root / "source-only-full-graph.cache";
+    const std::filesystem::path source_only_request_path =
+        root / "source-only-full-graph.json";
+    if (!write_text(
+            source_only_request_path,
+            full_graph_request(
+                source_only_files_v2,
+                source_only_changes_v2,
+                source_only_final_v2,
+                source_only_output_path))) {
+        return 23;
+    }
+    const auto source_only_result =
+        standalone::compile_sidecar_request(source_only_request_path.native());
+    if (source_only_result.exit_code != standalone::protocol::ExitCode::success ||
+        source_only_result.response_json.find("\"ok\":true") == std::string::npos) {
+        std::cerr << source_only_result.response_json;
+        std::filesystem::remove_all(root, filesystem_error);
+        return 24;
+    }
+    std::ifstream source_only_stream(source_only_output_path, std::ios::binary);
+    const std::vector<std::uint8_t> source_only_bytes{
+        std::istreambuf_iterator<char>(source_only_stream),
+        std::istreambuf_iterator<char>()};
+    precompiled::cache source_only;
+    const precompiled::precompiled_function* source_only_edited_b = nullptr;
+    const precompiled::precompiled_function* source_only_added_c = nullptr;
+    if (!precompiled::decode(
+            source_only_bytes.data(), source_only_bytes.size(), source_only, codec_error) ||
+        source_only.modules.size() != 3U ||
+        source_only.modules[0].second.module_name.bytes != "B" ||
+        source_only.modules[0].second.functions.size() != 2U ||
+        !has_function(source_only.modules[0].second, "EditedB") ||
+        source_only.modules[0].second.classes.size() != 1U ||
+        source_only.modules[0].second.classes[0].class_name.bytes != "BOrderType" ||
+        source_only.modules[0].second.classes[0].properties.size() != 1U ||
+        source_only.modules[0].second.classes[0].properties[0].name.bytes != "BOrderProperty" ||
+        source_only.modules[1].second.module_name.bytes != "A" ||
+        source_only.modules[1].second.functions.size() != 2U ||
+        !has_function(source_only.modules[1].second, "EditedA") ||
+        source_only.modules[1].second.classes.size() != 1U ||
+        source_only.modules[1].second.classes[0].class_name.bytes != "AOrderType" ||
+        source_only.modules[1].second.classes[0].properties.size() != 1U ||
+        source_only.modules[1].second.classes[0].properties[0].name.bytes != "AOrderProperty" ||
+        source_only.modules[2].second.module_name.bytes != "C" ||
+        source_only.modules[2].second.functions.size() != 2U ||
+        source_only.static_names.size() != 2U ||
+        source_only.static_names[0].bytes != "OrderB" ||
+        source_only.static_names[1].bytes != "OrderA" ||
+        (source_only_edited_b = find_function(
+             source_only.modules[0].second, "EditedB")) == nullptr ||
+        (source_only_edited_b->function_traits & 0x20) != 0 ||
+        (source_only_added_c = find_function(
+             source_only.modules[2].second, "AddedC")) == nullptr ||
+        (source_only_added_c->function_traits & 0x20) == 0) {
+        std::filesystem::remove_all(root, filesystem_error);
+        return 25;
+    }
+
+    // Even when every surviving module has source, a Delete keeps the established mixed compile
+    // and export contract. The retained base FName proves that source projection was not selected.
     const std::string request_v2 = full_graph_request(
         source_files_v2, changes_v2, final_manifest_v2, full_graph_output_path);
     const std::filesystem::path request_path_v2 = root / "request-v2.json";
@@ -449,20 +596,73 @@ int main() {
     const std::vector<std::uint8_t> full_graph_bytes{
         std::istreambuf_iterator<char>(full_graph_stream), std::istreambuf_iterator<char>()};
     precompiled::cache full_graph;
+    const precompiled::precompiled_function* mixed_edited_a = nullptr;
     if (!precompiled::decode(
             full_graph_bytes.data(), full_graph_bytes.size(), full_graph, codec_error) ||
         full_graph.modules.size() != 2U ||
         full_graph.modules[0].second.module_name.bytes != "A" ||
         full_graph.modules[0].second.script_relative_filename.bytes != "A.as" ||
-        full_graph.modules[0].second.functions.size() != 1U ||
-        full_graph.modules[0].second.functions[0].function_name.bytes != "EditedA" ||
+        full_graph.modules[0].second.functions.size() != 2U ||
+        !has_function(full_graph.modules[0].second, "EditedA") ||
         full_graph.modules[1].second.module_name.bytes != "C" ||
         full_graph.modules[1].second.script_relative_filename.bytes != "C.as" ||
         full_graph.modules[1].second.functions.size() != 2U ||
+        full_graph.static_names.size() != 2U ||
+        full_graph.static_names[0].bytes != "UnusedBaseStaticName" ||
+        full_graph.static_names[1].bytes != "OrderA" ||
+        (mixed_edited_a = find_function(
+             full_graph.modules[0].second, "EditedA")) == nullptr ||
+        (mixed_edited_a->function_traits & 0x20) == 0 ||
         std::all_of(full_graph.data_guid.begin(), full_graph.data_guid.end(),
             [](const std::uint8_t byte) { return byte == 0U; })) {
         std::filesystem::remove_all(root, filesystem_error);
         return 14;
+    }
+
+    // A non-delete FullGraph with one retained base-only module also stays mixed.
+    const std::string partial_files_v2 = source_file("A.as", edit_a_bytes);
+    const std::string partial_changes_v2 =
+        "]},\"changes\":[{\"ordinal\":0,\"operation\":\"edit\",\"module_name\":\"A\","
+        "\"relative_path\":\"A.as\"," + source_seal_fields(edit_a_bytes) +
+        "}],\"final_manifest\":[";
+    const std::string partial_final_v2 =
+        "{\"ordinal\":0,\"module_name\":\"A\",\"relative_path\":\"A.as\"},"
+        "{\"ordinal\":1,\"module_name\":\"B\",\"relative_path\":\"B.as\"}";
+    const std::filesystem::path partial_output_path = output_root / "partial-full-graph.cache";
+    const std::filesystem::path partial_request_path = root / "partial-full-graph.json";
+    if (!write_text(
+            partial_request_path,
+            full_graph_request(
+                partial_files_v2,
+                partial_changes_v2,
+                partial_final_v2,
+                partial_output_path))) {
+        return 26;
+    }
+    const auto partial_result =
+        standalone::compile_sidecar_request(partial_request_path.native());
+    if (partial_result.exit_code != standalone::protocol::ExitCode::success) {
+        std::cerr << partial_result.response_json;
+        std::filesystem::remove_all(root, filesystem_error);
+        return 27;
+    }
+    std::ifstream partial_stream(partial_output_path, std::ios::binary);
+    const std::vector<std::uint8_t> partial_bytes{
+        std::istreambuf_iterator<char>(partial_stream),
+        std::istreambuf_iterator<char>()};
+    precompiled::cache partial;
+    if (!precompiled::decode(
+            partial_bytes.data(), partial_bytes.size(), partial, codec_error) ||
+        partial.modules.size() != 2U ||
+        partial.modules[0].second.module_name.bytes != "B" ||
+        partial.modules[1].second.module_name.bytes != "A" ||
+        partial.modules[1].second.functions.size() != 2U ||
+        !has_function(partial.modules[1].second, "EditedA") ||
+        partial.static_names.size() != 2U ||
+        partial.static_names[0].bytes != "UnusedBaseStaticName" ||
+        partial.static_names[1].bytes != "OrderA") {
+        std::filesystem::remove_all(root, filesystem_error);
+        return 28;
     }
 
     // Qualification v3 is a separate command capability: the product compile entry point must
@@ -605,6 +805,8 @@ int main() {
         delete_only.modules.size() != 1U ||
         delete_only.modules[0].second.module_name.bytes != "A" ||
         delete_only.modules[0].second.script_relative_filename.bytes != "A.as" ||
+        delete_only.static_names.size() != 1U ||
+        delete_only.static_names[0].bytes != "UnusedBaseStaticName" ||
         delete_only.data_guid == empty_cache.data_guid ||
         delete_only.data_guid == full_graph.data_guid) {
         std::filesystem::remove_all(root, filesystem_error);

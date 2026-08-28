@@ -3385,9 +3385,10 @@ final class CurrentProjectCoordinator
   });
 
   /// Check every managed ScriptModule from one exact visible revision-3
-  /// checkpoint in a single native game-compiler run. The returned receipt is
-  /// evidence-only and grants no build, deployment, runtime, publication, or
-  /// reusable-artifact authority.
+  /// checkpoint in one native compiler run under an explicit product policy.
+  /// Strict standalone never starts the game or enters the live-install mutation
+  /// window. The returned receipt is evidence-only and grants no build,
+  /// deployment, runtime, publication, or reusable-artifact authority.
   Future<ManagedRevision3ProjectCompilerCheckReceipt>
   checkCurrentRevision3ProjectCompiler({
     required String expectedRoot,
@@ -3456,7 +3457,9 @@ final class CurrentProjectCoordinator
     }
   });
 
-  /// Check one exact-current Quest/NPC ScriptModule with the game compiler.
+  /// Check one exact-current Quest/NPC ScriptModule under an explicit product
+  /// compiler policy. Strict standalone never starts the game or enters the
+  /// live-install mutation window.
   ///
   /// The selected revisions and module identity are compared with the
   /// coordinator's canonical project snapshot before the lease callback can

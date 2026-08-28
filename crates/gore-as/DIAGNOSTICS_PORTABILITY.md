@@ -1,6 +1,6 @@
 # AngelScript diagnostics portability matrix
 
-Last verified offline: **2026-08-23**.
+Last verified offline: **2026-08-28**.
 
 `gore as compile` does not select diagnostics by executable hash, release number, or a fixed
 address. The Rust preflight and injected helper independently scan the raw-backed intersection of
@@ -23,12 +23,13 @@ The following local, read-only fixtures were checked by
 | 1.0.3 Hotfix 2 | 171,704,320 | `b52cd0453ad03987b833f7f26d09a2075109f18d653b8d4ff95271c857139e5d` | `0x467fcd0` | `0x4683b60` | verified |
 | 1.0.4 / BuildID 24340829 | 171,787,776 | `ab2c8d9e286a437bc5343748faf40959a77e9dc7c542ff9361f1ffaeca5c811c` | `0x46861d0` | `0x468a060` | verified |
 | 1.0.4a / BuildID 24539464 | 171,784,704 | `c71c04dd86e11e3e94483ea02c26c612b6243c147f6d83973233b3c8ddc5de25` | `0x4685ff0` | `0x4689e80` | verified |
+| 1.0.5 / BuildID 24878692 | 171,792,384 | `824fbc94f2ac7f45927a0754605666c37af862d66156a15f8bf6813759d9e8e0` | `0x4685fb0` | `0x4689e40` | verified |
 
-The 1.0.3 and BuildID-24340829 rows read their length and digest from `gore-generation`; older
-archives and the standalone-compiler target carry explicit fixture seals. The hashes establish
+The two 1.0.3 rows and the BuildID-24340829/24878692 rows read their length and digest from
+`gore-generation`; the remaining four archives carry explicit fixture seals. The hashes establish
 fixture provenance only and are not an address allowlist.
 
-All seven callback RVAs and all seven manager RVAs differ. They are reported for auditing and
+All eight callback RVAs and all eight manager RVAs differ. They are reported for auditing and
 regression only; neither scanner uses them for lookup.
 
 Run the matrix from the repository root:
@@ -40,7 +41,7 @@ cargo test -p gore-as --test diagnostics_portability_test -- --nocapture
 The test discovers the local archive at `work/reversing/binaries` or accepts an explicit root via
 `GORE_AS_RELEASE_MATRIX_DIR`. The large proprietary executables are not distributed with the crate,
 so a checkout without fixtures skips the matrix. An explicitly configured or locally present matrix
-must contain all seven exact files.
+must contain all eight exact files.
 
 ## Capability and fallback contract
 

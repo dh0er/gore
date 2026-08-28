@@ -55,6 +55,12 @@ EXE/cache hashes, Steam build numbers and depot metadata document the build used
 for qualification, but they are not runtime locks. A differently packed AMD64
 EXE remains usable when its Shipping format and complete Binds API match.
 
+The internal release package has a stricter completeness rule than this runtime
+selection: it must carry both product profiles (`24539464` and `24878692`), one
+common final sidecar, and one sealed full-tree differential receipt per profile.
+That rule prevents an incomplete CLI/Studio release; it does not turn those two
+Steam tuples or their whole executable hashes into runtime gates.
+
 The default policy is `standalone-then-game`: GORE tries the qualified
 standalone compiler first. If the package is absent, the selected game's cache
 format or API is incompatible, or the standalone result is rejected, the reason is retained and
@@ -125,15 +131,21 @@ These are enforced, not advisory:
 
 ### Compiler diagnostics
 
-When the game fallback runs on Windows, compile automatically attempts an
+Strict `standalone` returns the bundled compiler's native diagnostics with the
+source file, line, column, severity, and message. On the normal fresh-workspace,
+outside-install route, diagnostics require no game launch and no consent question.
+Existing-path and inside-install write protections still apply. The optional runtime diagnostics
+hook belongs only to the game backend; strict standalone compilation never loads it.
+
+When a game-capable backend runs on Windows, compile automatically attempts an
 embedded, temporary x86-64 diagnostics hook. The selected AMD64 executable must
 have exactly one raw masked match for both the AngelScript callback and the
 manager's structured ClassGenerator-diagnostic boundary; their sparse
 `asSMessageInfo` and `FString`/`FDiagnostic` structure fingerprints must both
-verify. Errors are then printed like a normal compiler:
+verify. Hook-captured errors are then printed like a normal compiler:
 
 ```
-file:line:column: error: message
+file:line:column: severity: message
 ```
 
 Candidate signatures are retained as notes. The helper is never installed into
@@ -155,9 +167,13 @@ and both structure-verification results. An explicitly trusted helper
 override is available through `--diagnostics-hook DLL` or `GORE_AS_DIAGNOSTICS_HOOK`;
 the embedded and sibling release helpers are SHA-256 verified.
 
-Archived 1.0.0–1.0.4a executables pass the same offline two-boundary signature
-and structure audit. Runtime results for the pinned standalone-compiler target
-are recorded with its differential qualification evidence.
+Archived 1.0.0–1.0.5 executables pass the same offline two-boundary signature
+and structure audit. Runtime results for each explicitly supported standalone-compiler
+target are recorded with that generation's differential qualification evidence. The native
+profile loader accepts only the complete `24539464` and `24878692` target tuples; cross-generation
+BuildID/depot-manifest hybrids fail closed. This profile admission is separate from product
+runtime compatibility, which remains the structural cache/API check described above rather than
+a whole-file executable checksum.
 
 ## The normal authoring workflow: one module
 

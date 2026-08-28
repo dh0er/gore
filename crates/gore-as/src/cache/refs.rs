@@ -34,6 +34,9 @@ pub struct RefResolver {
     prop_by_key: HashMap<i64, String>,
     /// PropertyReferences OldTypeId per member key (for field-assignment casts).
     prop_type_id: HashMap<i64, i32>,
+    /// T7 keys seen more than once. Even byte-identical duplicate rows are ambiguous wire input
+    /// for the semantic oracle and must never be treated as one proven declaration.
+    duplicate_prop_keys: std::collections::HashSet<i64>,
     typeid_to_ptr: HashMap<i32, i64>,
     funcid_to_ptr: HashMap<i32, i64>,
     /// GlobalReferences with bIsString=true: the Name is the literal string text.
@@ -221,6 +224,9 @@ impl RefResolver {
             let key = c.read_i64()?;
             let name = c.read_sia()?;
             let old_type_id = c.read_i32()?; // OldTypeId
+            if r.prop_by_key.contains_key(&key) {
+                r.duplicate_prop_keys.insert(key);
+            }
             r.prop_by_key.insert(key, name);
             r.prop_type_id.insert(key, old_type_id);
         }
@@ -972,6 +978,22 @@ impl RefResolver {
     pub fn member(&self, type_id: i32, offset: i32) -> Option<&str> {
         let key = ((type_id as i64) << 1) | ((offset as i64) << 33) | 1;
         self.prop_by_key.get(&key).map(|s| s.as_str())
+    }
+    /// Atomically resolve one unambiguous T7 row as `(Name, OldTypeId)`.
+    ///
+    /// This is the semantic-oracle accessor: it refuses every duplicate key (including identical
+    /// duplicate rows) and any internally incomplete lookup. Callers can then resolve the retained
+    /// serialized `OldTypeId` through this cache's own T2 -> T1 chain. The older name-only helpers
+    /// remain available to decompilation paths whose compatibility behavior predates this gate.
+    pub(crate) fn member_identity(&self, type_id: i32, offset: i32) -> Option<(&str, i32)> {
+        let key = ((type_id as i64) << 1) | ((offset as i64) << 33) | 1;
+        if self.duplicate_prop_keys.contains(&key) {
+            return None;
+        }
+        self.prop_by_key
+            .get(&key)
+            .map(String::as_str)
+            .zip(self.prop_type_id.get(&key).copied())
     }
     /// Member's type NAME (e.g. `bool`, `ECrimeDurationType`) from type-id + byte offset,
     /// resolved via its PropertyReferences OldTypeId. Used to cast field-assignment RHS.

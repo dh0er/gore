@@ -6,8 +6,8 @@ download page, or update channel. Save Editor and Mod Manager do not contain it.
 
 There are two lifecycles:
 
-- A rare signing and qualification run creates new trusted compiler bytes and a
-  matching qualified profile.
+- A rare signing and qualification run creates new trusted compiler bytes and
+  the complete required set of matching qualified profiles.
 - Normal CLI and Studio builds verify and copy the checked-in compressed package.
   They never rebuild, re-sign, or re-qualify the compiler.
 
@@ -74,10 +74,12 @@ files are version-, length-, and SHA-256-pinned.
 ## Differential qualification
 
 The final signed bytes must pass the complete canonical qualification corpus
-against the embedded compiler from the authorized private game copy. Use fresh
-output directories. The standalone and game-backed runs must contain the same
-27 cases, including the Diego dialog-authoring example, the same accepted cache artifacts, and no unexplained diagnostic,
-frontend, bytecode, module-graph, invocation, or whole-cache difference.
+separately for every product target against the embedded compiler from the
+authorized private game copy. Use fresh output directories. Every standalone
+and game-backed pair must contain the same 27 cases, including the Diego
+dialog-authoring example, the same accepted cache artifacts, and no unexplained
+diagnostic, frontend, bytecode, module-graph, invocation, or whole-cache
+difference.
 
 After both captures pass, create the qualified profile through the typed Rust
 boundary:
@@ -99,6 +101,38 @@ The promotion tool refuses an existing output, a changed corpus, the wrong
 backend, missing or extra cache artifacts, different source/profile/sidecar
 identities, any parity difference, and any typed profile reload failure.
 
+The 27-case corpus is necessary but not the release-scale gate. For each
+profile, copy the complete source tree to a stable location outside the game
+installation, produce one embedded reference cache from those exact bytes, and
+run the internal full-tree verifier with the same frozen source:
+
+```powershell
+cargo build -p gore-as --release --bin gore-as-full-tree-verifier
+
+target\release\gore-as-full-tree-verifier.exe `
+  C:\absolute\signed-candidate\gore-as-standalone-compiler.exe `
+  C:\absolute\qualified-profile `
+  C:\absolute\game-root `
+  C:\absolute\game-root\G1R\Binaries\Win64\G1R-Win64-Shipping.exe `
+  C:\absolute\game-root\G1R\Script\PrecompiledScript_Shipping.Cache `
+  C:\absolute\game-root\G1R\Script\Binds.Cache `
+  C:\absolute\frozen-full-source `
+  C:\absolute\copied-embedded-reference.Cache `
+  C:\absolute\standalone-work `
+  C:\absolute\new-standalone-output.Cache `
+  C:\absolute\full-tree-build-<BuildID>.json
+```
+
+The helper can invoke only the strict standalone backend. Its canonical receipt
+binds the qualified profile SHA-256, the final sidecar length/SHA-256 and
+protocol, Shipping and Binds seals, the frozen source aggregate, the copied
+embedded reference and standalone candidate, and the complete WholeCache
+semantic digest/counts. Publication requires exact WholeCache structural
+equality, `semantic = 0`, and `alignment_loss = 0`. `benign` may be nonzero: it
+remains visible and is accepted only through the pinned default normalizers.
+Both output paths are create-new; the receipt is canonical UTF-8 JSON written
+directly by the helper, not shell-redirection output.
+
 ## Record and compress the internal package
 
 First copy the signed, attested, qualified bytes into one create-new verified
@@ -114,15 +148,31 @@ python scripts/standalone_compiler_bundle.py record-internal-input `
   --promotion-attestation C:\absolute\signed-candidate\github-attestation.sigstore.json `
   --expected-repository dh0er/gore `
   --expected-commit <exact-40-character-source-commit> `
-  --qualified-profile-root C:\absolute\new-qualified-profile `
+  --qualified-profile-root C:\absolute\qualified-build-24539464 `
+  --full-tree-receipt C:\absolute\full-tree-build-24539464.json `
+  --qualified-profile-root C:\absolute\qualified-build-24878692 `
+  --full-tree-receipt C:\absolute\full-tree-build-24878692.json `
   --qualified-profile-verifier C:\absolute\gore-as-qualified-profile-verifier.exe `
   --github-attestation-verifier 'C:\Program Files\GitHub CLI\gh.exe' `
   --output C:\absolute\internal-package-source
 ```
 
-The command verifies Authenticode, all Sigstore subjects, source/workflow/run
-provenance, the qualification receipt, both artifact manifests, every profile
-payload, and the complete expected file set. It has no release or tag operation.
+The profile-root and full-tree-receipt options pair by occurrence. The command
+verifies Authenticode, all Sigstore subjects, source/workflow/run provenance,
+the qualification receipt, both artifact manifests, every profile payload,
+every full-tree receipt, and the complete expected file set. It accepts exactly
+the required product targets shown below, with neither omissions nor additions,
+and requires every qualification and full-tree receipt to identify the one
+final sidecar in the catalog. It has no release or tag operation.
+
+| required product target | depot manifest | CodeView GUID / age |
+|---|---:|---|
+| BuildID `24539464` | `1585071322101748861` | `cf0b83bd-e023-061b-2100-0f0fccf871d2` / `1` |
+| BuildID `24878692` | `382135126159906494` | `c2ca4ada-4878-d963-e567-717dc2c483a2` / `1` |
+
+This closed set is a publishing-completeness policy, not a runtime binary-hash
+allowlist. Changing it requires an intentional package-contract review. The
+runtime remains structurally/API qualified as described below.
 
 Then replace the two checked-in internal assets with a newly generated pair:
 
@@ -210,6 +260,7 @@ profiles/build-<BuildID>-<CodeView GUID>/<profile payloads>
 profiles/build-<BuildID>-<CodeView GUID>/qualification-promotion-receipt.json
 profiles/build-<BuildID>-<CodeView GUID>/embedded-qualification-artifacts.json
 profiles/build-<BuildID>-<CodeView GUID>/standalone-qualification-artifacts.json
+verification/full-tree/build-<BuildID>-<CodeView GUID>.json
 UNREANGEL-LICENSE.md
 SOURCE_INVENTORY.tsv
 PROVENANCE.toml
@@ -218,4 +269,6 @@ PROVENANCE.toml
 The verifier rejects links, reparses, hard links, case aliases, unknown or
 missing files, unbounded inputs, seal drift, unqualified profiles, target/API
 drift, parity bound to another sidecar, invalid Authenticode, invalid workflow
-attestation, or changed notices.
+attestation, changed notices, a missing/additional product profile or full-tree
+receipt, receipt/profile/Shipping/Binds/source/reference drift, non-standalone
+execution, semantic differences, or alignment loss.

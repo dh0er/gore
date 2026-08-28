@@ -13,8 +13,8 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 /// Signature of `LogAngelscriptError(asSMessageInfo*, void*)`, the per-message callback registered
-/// by the UE-AngelScript fork. It was observed at RVA `0x4685ff0` in BuildID 24539464 (1.0.2 used
-/// `0x467e200`), but no fixed RVA is used. Wildcards cover RIP-relative
+/// by the UE-AngelScript fork. It was observed at RVA `0x4685fb0` in BuildID 24878692 (BuildID
+/// 24539464 used `0x4685ff0`), but no fixed RVA is used. Wildcards cover RIP-relative
 /// addresses/operands that vary by build. Both the offline preflight and helper DLL use this exact
 /// AOB, require one raw match, and then independently verify [`CALLBACK_SHAPE`].
 const LOG_ANGELSCRIPT_ERROR_AOB: &[Option<u8>] = &[
@@ -132,8 +132,8 @@ const CALLBACK_SHAPE: &[ShapeClause] = &[
 ];
 
 /// `FAngelscriptManager::ScriptCompileError(const FString&, const FDiagnostic&)`. The same entry
-/// bytes are unique in every archived G1R release from 1.0.0 through the BuildID-24539464 target;
-/// the target RVA is `0x4689e80`, but discovery never uses a fixed address. Unlike the ordinary
+/// bytes are unique in every archived G1R release from 1.0.0 through the BuildID-24878692 target;
+/// the target RVA is `0x4689e40`, but discovery never uses a fixed address. Unlike the ordinary
 /// callback, this boundary receives ClassGenerator diagnostics that are inserted directly into the
 /// manager's diagnostic map and therefore never pass through `LogAngelscriptError`.
 const SCRIPT_COMPILE_ERROR_AOB: &[Option<u8>] = &[

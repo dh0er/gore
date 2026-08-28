@@ -18,8 +18,6 @@ inline constexpr std::uint32_t kManagerStaticJitOffset = 0x468;
 inline constexpr std::uint32_t kManagerInitialCompileSucceededOffset = 0x388;
 inline constexpr std::uint32_t kBindRecordStride = 0x50;
 inline constexpr std::uint32_t kBindOrderOffset = 0;
-inline constexpr std::uint32_t kBindArrayRva = 0x09874fd0;
-inline constexpr std::uint32_t kStaticJitInfoGlobalRva = 0x09d6c2e8;
 inline constexpr std::uint32_t kPrecompiledDataGuidOffset = 0x28;
 inline constexpr std::uint32_t kStaticJitGuidBytes = 16;
 inline constexpr std::uint32_t kPrecompiledDescriptorStride = 16;
@@ -27,25 +25,80 @@ inline constexpr bool kAsReferenceDebugging = false;
 inline constexpr bool kForkOpcodeTable201Through212Present = true;
 inline constexpr bool kReferenceDebugOpcodesEmittable = false;
 inline constexpr bool kResolveObjectPtrCallbackRegistered = false;
-inline constexpr std::uint32_t kRvaPrecompiledRequestCallee = 0x048d4690;
-inline constexpr std::uint32_t kRvaPreprocessorConstructor = 0x04885800;
-inline constexpr std::uint16_t kTargetDllCharacteristics = 0x8160;
-inline constexpr std::uint32_t kTargetGuardFlags = 0x100;
-
 struct UnsafeInstallRange final {
   std::uint32_t begin_rva{};
   std::uint32_t end_rva{};
 };
 
+struct InstrumentationTarget final {
+  CaptureTargetGeneration generation{};
+  std::uint32_t bind_array_rva{};
+  std::uint32_t static_jit_info_global_rva{};
+  std::uint32_t rva_precompiled_request_callee{};
+  std::uint32_t rva_preprocessor_constructor{};
+  std::uint32_t bind_callback_patch_anchor_rva{};
+  std::uint32_t preprocessor_patch_anchor_rva{};
+  std::array<std::byte, 8> get_static_jit_expected{};
+  std::uint16_t dll_characteristics{};
+  std::uint32_t guard_flags{};
+  std::array<UnsafeInstallRange, 5> unsafe_install_ranges{};
+};
+
+inline constexpr InstrumentationTarget kInstrumentationTarget24539464{
+    CaptureTargetGeneration::build_24539464,
+    0x09874fd0,
+    0x09d6c2e8,
+    0x048d4690,
+    0x04885800,
+    0x046856f8,
+    0x0468435c,
+    {std::byte{0x48}, std::byte{0x8b}, std::byte{0x05}, std::byte{0x81},
+     std::byte{0xb3}, std::byte{0x49}, std::byte{0x05}, std::byte{0xc3}},
+    0x8160,
+    0x100,
+    {{{0x04684210, 0x046847f1},
+      {0x04685160, 0x04685c5c},
+      {0x047a50f0, 0x047a537b},
+      {0x048d0f60, 0x048d0f68},
+      {0x048d3230, 0x048d34b3}}},
+};
+
+inline constexpr InstrumentationTarget kInstrumentationTarget24878692{
+    CaptureTargetGeneration::build_24878692,
+    0x09875fd0,
+    0x09d6d468,
+    0x048d4650,
+    0x048857c0,
+    0x046856b8,
+    0x0468431c,
+    {std::byte{0x48}, std::byte{0x8b}, std::byte{0x05}, std::byte{0x41},
+     std::byte{0xc5}, std::byte{0x49}, std::byte{0x05}, std::byte{0xc3}},
+    0x8160,
+    0x100,
+    {{{0x046841d0, 0x046847b1},
+      {0x04685120, 0x04685c1c},
+      {0x047a50b0, 0x047a533b},
+      {0x048d0f20, 0x048d0f28},
+      {0x048d31f0, 0x048d3473}}},
+};
+
+inline constexpr const InstrumentationTarget& kInstrumentationTarget =
+    kInstrumentationTarget24878692;
+inline constexpr std::uint32_t kBindArrayRva = kInstrumentationTarget.bind_array_rva;
+inline constexpr std::uint32_t kStaticJitInfoGlobalRva =
+    kInstrumentationTarget.static_jit_info_global_rva;
+inline constexpr std::uint32_t kRvaPrecompiledRequestCallee =
+    kInstrumentationTarget.rva_precompiled_request_callee;
+inline constexpr std::uint32_t kRvaPreprocessorConstructor =
+    kInstrumentationTarget.rva_preprocessor_constructor;
+inline constexpr std::uint16_t kTargetDllCharacteristics =
+    kInstrumentationTarget.dll_characteristics;
+inline constexpr std::uint32_t kTargetGuardFlags = kInstrumentationTarget.guard_flags;
+static_assert(kInstrumentationTarget.generation == kCaptureTarget.generation);
+
 // Function bounds are address-driven static-analysis results for the pinned image. Installation
 // and removal reject a suspended thread in any range whose control flow contains a patched site.
-inline constexpr std::array<UnsafeInstallRange, 5> kUnsafeInstallRanges{{
-    {0x04684210, 0x046847f1},  // InitialCompile
-    {0x04685160, 0x04685c5c},  // Initialize_AnyThread / bind loop / return site
-    {0x047a50f0, 0x047a537b},  // asCScriptEngine::SetEngineProperty
-    {0x048d0f60, 0x048d0f68},  // FStaticJITCompiledInfo::Get
-    {0x048d3230, 0x048d34b3},  // GetCurrentBuildIdentifier
-}};
+inline constexpr auto kUnsafeInstallRanges = kInstrumentationTarget.unsafe_install_ranges;
 
 struct StaticSiteContract final {
   std::uint32_t transfer_kind{};
@@ -67,6 +120,17 @@ struct PinnedInstructionSpan final {
   std::array<std::byte, 16> expected{};
 };
 
+template <std::size_t Size>
+consteval std::array<std::byte, 16> pinned_expected(
+    const std::array<std::byte, Size>& source) {
+  static_assert(Size <= 16);
+  std::array<std::byte, 16> result{};
+  for (std::size_t index = 0; index < source.size(); ++index) {
+    result[index] = source[index];
+  }
+  return result;
+}
+
 inline constexpr std::array<PinnedInstructionSpan, 9> kPinnedInstructionSpans{{
     {HookPointKind::set_engine_property,
      kRvaSetEngineProperty,
@@ -79,7 +143,7 @@ inline constexpr std::array<PinnedInstructionSpan, 9> kPinnedInstructionSpans{{
       std::byte{0x63}, std::byte{0xc2}}},
     {HookPointKind::bind_callback_call,
      kRvaBindCallbackCall,
-     0x046856f8,
+     kInstrumentationTarget.bind_callback_patch_anchor_rva,
      3,
      5,
      {std::byte{0x48}, std::byte{0x8b}, std::byte{0xc8}, std::byte{0xff},
@@ -103,8 +167,7 @@ inline constexpr std::array<PinnedInstructionSpan, 9> kPinnedInstructionSpans{{
      kRvaGetStaticJitInfo,
      0,
      8,
-     {std::byte{0x48}, std::byte{0x8b}, std::byte{0x05}, std::byte{0x81},
-      std::byte{0xb3}, std::byte{0x49}, std::byte{0x05}, std::byte{0xc3}}},
+     pinned_expected(kInstrumentationTarget.get_static_jit_expected)},
     {HookPointKind::initial_compile_enter,
      kRvaInitialCompileEnter,
      kRvaInitialCompileEnter,
@@ -121,11 +184,11 @@ inline constexpr std::array<PinnedInstructionSpan, 9> kPinnedInstructionSpans{{
      {std::byte{0xe8}, std::byte{0xbb}, std::byte{0x03}, std::byte{0x25},
       std::byte{0x00}}},
     // The published semantic observation RVA is the first displacement byte of the containing
-    // call. Any future detour must relocate the whole instruction from 0x468435c; patching
-    // 0x468435d directly would silently corrupt its relative target.
+    // call. Any future detour must relocate the whole generation-selected call instruction;
+    // the displacement observation directly would silently corrupt its relative target.
     {HookPointKind::preprocessor_constructed,
      kRvaPreprocessorConstructed,
-     0x0468435c,
+     kInstrumentationTarget.preprocessor_patch_anchor_rva,
      1,
      5,
      {std::byte{0xe8}, std::byte{0x9f}, std::byte{0x14}, std::byte{0x20},
@@ -248,5 +311,18 @@ static_assert([] {
   return true;
 }());
 static_assert(kPinnedInstructionSpans[7].observation_offset == 1);
+static_assert([] {
+  const auto& span = kPinnedInstructionSpans[4];
+  if (span.kind != HookPointKind::get_static_jit_info ||
+      span.byte_count != kInstrumentationTarget.get_static_jit_expected.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < span.byte_count; ++index) {
+    if (span.expected[index] != kInstrumentationTarget.get_static_jit_expected[index]) {
+      return false;
+    }
+  }
+  return true;
+}());
 
 }  // namespace gore_as_capture::v1::instrumentation

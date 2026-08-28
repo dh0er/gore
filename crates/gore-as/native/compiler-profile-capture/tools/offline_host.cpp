@@ -6,6 +6,7 @@
 #include "materializer.hpp"
 
 #include <windows.h>
+#include <bcrypt.h>
 
 #include <algorithm>
 #include <array>
@@ -373,6 +374,20 @@ std::vector<std::byte> read_file(const std::filesystem::path& path) {
   return bytes;
 }
 
+bool contains_ascii(
+    const std::span<const std::byte> bytes,
+    const std::string_view needle) noexcept {
+  return std::search(
+             bytes.begin(),
+             bytes.end(),
+             needle.begin(),
+             needle.end(),
+             [](const std::byte left, const char right) {
+               return std::to_integer<unsigned char>(left) ==
+                      static_cast<unsigned char>(right);
+             }) != bytes.end();
+}
+
 bool write_new_file(
     const std::filesystem::path& path,
     std::span<const std::byte> bytes) noexcept {
@@ -395,6 +410,260 @@ bool write_new_file(
   ok = ok && FlushFileBuffers(file) != FALSE;
   ok = CloseHandle(file) != FALSE && ok;
   return ok;
+}
+
+std::uint16_t read_u16_at(
+    const std::span<const std::byte> bytes,
+    const std::size_t offset) noexcept {
+  if (offset > bytes.size() || bytes.size() - offset < sizeof(std::uint16_t)) return 0;
+  return static_cast<std::uint16_t>(std::to_integer<std::uint8_t>(bytes[offset])) |
+         static_cast<std::uint16_t>(
+             static_cast<std::uint16_t>(std::to_integer<std::uint8_t>(bytes[offset + 1])) << 8u);
+}
+
+std::uint32_t read_u32_at(
+    const std::span<const std::byte> bytes,
+    const std::size_t offset) noexcept {
+  if (offset > bytes.size() || bytes.size() - offset < sizeof(std::uint32_t)) return 0;
+  std::uint32_t value = 0;
+  for (unsigned index = 0; index < sizeof(value); ++index) {
+    value |= static_cast<std::uint32_t>(
+                 std::to_integer<std::uint8_t>(bytes[offset + index]))
+             << (index * 8u);
+  }
+  return value;
+}
+
+std::uint64_t read_u64_at(
+    const std::span<const std::byte> bytes,
+    const std::size_t offset) noexcept {
+  if (offset > bytes.size() || bytes.size() - offset < sizeof(std::uint64_t)) return 0;
+  std::uint64_t value = 0;
+  for (unsigned index = 0; index < sizeof(value); ++index) {
+    value |= static_cast<std::uint64_t>(
+                 std::to_integer<std::uint8_t>(bytes[offset + index]))
+             << (index * 8u);
+  }
+  return value;
+}
+
+bool write_u32_at(
+    const std::span<std::byte> bytes,
+    const std::size_t offset,
+    const std::uint32_t value) noexcept {
+  if (offset > bytes.size() || bytes.size() - offset < sizeof(value)) return false;
+  for (unsigned index = 0; index < sizeof(value); ++index) {
+    bytes[offset + index] = std::byte{static_cast<std::uint8_t>(value >> (index * 8u))};
+  }
+  return true;
+}
+
+bool write_u64_at(
+    const std::span<std::byte> bytes,
+    const std::size_t offset,
+    const std::uint64_t value) noexcept {
+  if (offset > bytes.size() || bytes.size() - offset < sizeof(value)) return false;
+  for (unsigned index = 0; index < sizeof(value); ++index) {
+    bytes[offset + index] = std::byte{static_cast<std::uint8_t>(value >> (index * 8u))};
+  }
+  return true;
+}
+
+bool write_bytes_at(
+    const std::span<std::byte> bytes,
+    const std::size_t offset,
+    const std::span<const std::byte> source) noexcept {
+  if (offset > bytes.size() || source.size() > bytes.size() - offset) return false;
+  std::copy(source.begin(), source.end(), bytes.begin() + offset);
+  return true;
+}
+
+bool reseal_capture(std::vector<std::byte>& bytes) noexcept {
+  using namespace gore_as_capture::v1;
+  if (bytes.size() < kHeaderBytes + kFooterBytes) return false;
+  const std::size_t footer_offset = bytes.size() - kFooterBytes;
+  if (!std::equal(
+          kFooterMagic.begin(), kFooterMagic.end(), bytes.begin() + footer_offset) ||
+      read_u64_at(bytes, footer_offset + 16) != footer_offset ||
+      footer_offset > std::numeric_limits<ULONG>::max() - kHashDomain.size()) {
+    return false;
+  }
+  std::vector<std::byte> hash_input;
+  hash_input.reserve(kHashDomain.size() + footer_offset);
+  hash_input.insert(hash_input.end(), kHashDomain.begin(), kHashDomain.end());
+  hash_input.insert(hash_input.end(), bytes.begin(), bytes.begin() + footer_offset);
+  Digest digest{};
+  BCRYPT_ALG_HANDLE algorithm = nullptr;
+  if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0) {
+    return false;
+  }
+  const NTSTATUS status = BCryptHash(
+      algorithm,
+      nullptr,
+      0,
+      reinterpret_cast<PUCHAR>(hash_input.data()),
+      static_cast<ULONG>(hash_input.size()),
+      reinterpret_cast<PUCHAR>(digest.data()),
+      static_cast<ULONG>(digest.size()));
+  BCryptCloseAlgorithmProvider(algorithm, 0);
+  return status >= 0 && write_bytes_at(bytes, footer_offset + 24, digest);
+}
+
+bool retarget_capture(
+    std::vector<std::byte>& bytes,
+    const gore_as_capture::v1::CaptureTarget& source,
+    const gore_as_capture::v1::CaptureTarget& target) noexcept {
+  using namespace gore_as_capture::v1;
+  constexpr std::size_t kHeaderBuildId = 20;
+  constexpr std::size_t kHeaderAngelScriptVersion = 28;
+  constexpr std::size_t kHeaderExecutableBytes = 32;
+  constexpr std::size_t kHeaderExecutableSha256 = 40;
+  constexpr std::size_t kHeaderCodeViewGuid = 72;
+  constexpr std::size_t kHeaderCodeViewAge = 88;
+  if (bytes.size() < kHeaderBytes + kFooterBytes ||
+      !std::equal(kCaptureMagic.begin(), kCaptureMagic.end(), bytes.begin()) ||
+      read_u64_at(bytes, kHeaderBuildId) != source.steam_build_id ||
+      read_u32_at(bytes, kHeaderAngelScriptVersion) != source.angelscript_version ||
+      read_u64_at(bytes, kHeaderExecutableBytes) != source.executable_bytes ||
+      !std::equal(
+          source.executable_sha256.begin(),
+          source.executable_sha256.end(),
+          bytes.begin() + kHeaderExecutableSha256) ||
+      !std::equal(
+          source.codeview_guid_rsds.begin(),
+          source.codeview_guid_rsds.end(),
+          bytes.begin() + kHeaderCodeViewGuid) ||
+      read_u32_at(bytes, kHeaderCodeViewAge) != source.codeview_age ||
+      !write_u64_at(bytes, kHeaderBuildId, target.steam_build_id) ||
+      !write_u32_at(bytes, kHeaderAngelScriptVersion, target.angelscript_version) ||
+      !write_u64_at(bytes, kHeaderExecutableBytes, target.executable_bytes) ||
+      !write_bytes_at(bytes, kHeaderExecutableSha256, target.executable_sha256) ||
+      !write_bytes_at(bytes, kHeaderCodeViewGuid, target.codeview_guid_rsds) ||
+      !write_u32_at(bytes, kHeaderCodeViewAge, target.codeview_age)) {
+    return false;
+  }
+
+  const std::size_t footer_offset = bytes.size() - kFooterBytes;
+  std::size_t cursor = kHeaderBytes;
+  std::uint32_t engine_properties = 0;
+  std::uint32_t bind_observations = 0;
+  std::uint32_t build_observations = 0;
+  std::uint32_t frontend_boundaries = 0;
+  while (cursor < footer_offset) {
+    if (footer_offset - cursor < kRecordHeaderBytes) return false;
+    const auto kind = static_cast<RecordKind>(read_u16_at(bytes, cursor));
+    const std::uint32_t payload_bytes = read_u32_at(bytes, cursor + 8);
+    const std::size_t payload = cursor + kRecordHeaderBytes;
+    if (payload > footer_offset || payload_bytes > footer_offset - payload) return false;
+    switch (kind) {
+      case RecordKind::engine_property:
+        if (payload_bytes != 24 || read_u32_at(bytes, payload + 16) !=
+                                       source.rva_set_engine_property ||
+            !write_u32_at(bytes, payload + 16, target.rva_set_engine_property)) {
+          return false;
+        }
+        ++engine_properties;
+        break;
+      case RecordKind::bind_callback: {
+        if (payload_bytes != 88) return false;
+        const std::uint32_t phase = read_u32_at(bytes, payload + 4);
+        const std::uint32_t source_rva = phase == 1 ? source.rva_bind_callback_call
+                                                    : source.rva_bind_callback_return;
+        const std::uint32_t target_rva = phase == 1 ? target.rva_bind_callback_call
+                                                    : target.rva_bind_callback_return;
+        if ((phase != 1 && phase != 2) || read_u32_at(bytes, payload + 16) != source_rva ||
+            !write_u32_at(bytes, payload + 16, target_rva)) {
+          return false;
+        }
+        ++bind_observations;
+        break;
+      }
+      case RecordKind::build_jit: {
+        if (payload_bytes != 48 || read_u32_at(bytes, payload) != source.build_identifier ||
+            !std::equal(
+                source.precompiled_guid.begin(),
+                source.precompiled_guid.end(),
+                bytes.begin() + payload + 8) ||
+            read_u32_at(bytes, payload + 40) != source.rva_get_build_identifier ||
+            read_u32_at(bytes, payload + 44) != source.rva_get_static_jit_info ||
+            !write_u32_at(bytes, payload, target.build_identifier) ||
+            !write_bytes_at(bytes, payload + 8, target.precompiled_guid) ||
+            !write_u32_at(bytes, payload + 40, target.rva_get_build_identifier) ||
+            !write_u32_at(bytes, payload + 44, target.rva_get_static_jit_info)) {
+          return false;
+        }
+        const std::uint32_t flags = read_u32_at(bytes, payload + 4);
+        if ((flags & 1u) != 0 &&
+            !write_bytes_at(bytes, payload + 24, target.precompiled_guid)) {
+          return false;
+        }
+        ++build_observations;
+        break;
+      }
+      case RecordKind::frontend_boundary: {
+        if (payload_bytes != 112) return false;
+        const std::uint32_t boundary_kind = read_u32_at(bytes, payload);
+        std::uint32_t source_rva = 0;
+        std::uint32_t target_rva = 0;
+        switch (boundary_kind) {
+          case 1:
+            source_rva = source.rva_initial_compile_enter;
+            target_rva = target.rva_initial_compile_enter;
+            break;
+          case 2:
+            source_rva = source.rva_precompiled_descriptors_requested;
+            target_rva = target.rva_precompiled_descriptors_requested;
+            break;
+          case 3:
+            source_rva = source.rva_preprocessor_constructed;
+            target_rva = target.rva_preprocessor_constructed;
+            break;
+          case 4:
+            source_rva = source.rva_initial_compile_return;
+            target_rva = target.rva_initial_compile_return;
+            break;
+          default:
+            return false;
+        }
+        if (read_u32_at(bytes, payload + 4) != source_rva ||
+            !write_u32_at(bytes, payload + 4, target_rva)) {
+          return false;
+        }
+        ++frontend_boundaries;
+        break;
+      }
+      default:
+        break;
+    }
+    cursor = payload + payload_bytes;
+  }
+  return cursor == footer_offset && engine_properties != 0 && bind_observations != 0 &&
+         build_observations == 1 && frontend_boundaries == 3 && reseal_capture(bytes);
+}
+
+bool patch_first_record_u32(
+    std::vector<std::byte>& bytes,
+    const gore_as_capture::v1::RecordKind requested_kind,
+    const std::size_t payload_offset,
+    const std::uint32_t value) noexcept {
+  using namespace gore_as_capture::v1;
+  if (bytes.size() < kHeaderBytes + kFooterBytes) return false;
+  const std::size_t footer_offset = bytes.size() - kFooterBytes;
+  std::size_t cursor = kHeaderBytes;
+  while (cursor < footer_offset) {
+    if (footer_offset - cursor < kRecordHeaderBytes) return false;
+    const auto kind = static_cast<RecordKind>(read_u16_at(bytes, cursor));
+    const std::uint32_t payload_bytes = read_u32_at(bytes, cursor + 8);
+    const std::size_t payload = cursor + kRecordHeaderBytes;
+    if (payload > footer_offset || payload_bytes > footer_offset - payload) return false;
+    if (kind == requested_kind) {
+      return payload_offset <= payload_bytes &&
+             sizeof(std::uint32_t) <= payload_bytes - payload_offset &&
+             write_u32_at(bytes, payload + payload_offset, value);
+    }
+    cursor = payload + payload_bytes;
+  }
+  return false;
 }
 
 int run_synthetic_e2e(
@@ -625,6 +894,82 @@ int run_synthetic_e2e(
           "materialize identical wire summaries")) {
     return 1;
   }
+
+  auto historical_bytes = read_file(capture_one);
+  const auto historical_capture = tree.path() / L"historical-24539464.capture";
+  const auto historical_summary = tree.path() / L"historical-24539464.summary.json";
+  if (!expect(
+          retarget_capture(
+              historical_bytes,
+              gore_as_capture::v1::kCaptureTarget24878692,
+              gore_as_capture::v1::kCaptureTarget24539464) &&
+              write_new_file(historical_capture, historical_bytes),
+          "retarget and reseal a complete historical 24539464 wire fixture")) {
+    return 1;
+  }
+  const auto historical_result =
+      gore_as_capture::v1::offline::materialize_capture_summary_v1(
+          historical_capture, historical_summary);
+  const auto historical_summary_bytes = read_file(historical_summary);
+  if (!expect(
+          historical_result.error == gore_as_capture::v1::offline::MaterializeError::ok &&
+              historical_result.record_count == 16 &&
+              contains_ascii(
+                  historical_summary_bytes,
+                  "\"steam_build_id\": 24539464") &&
+              !contains_ascii(
+                  historical_summary_bytes,
+                  "\"steam_build_id\": 24878692"),
+          "native materializer accepts the exact historical 24539464 generation")) {
+    return 1;
+  }
+
+  auto header_hybrid_bytes = read_file(capture_one);
+  const auto header_hybrid_capture = tree.path() / L"header-hybrid.capture";
+  const auto header_hybrid_summary = tree.path() / L"header-hybrid.summary.json";
+  if (!expect(
+          write_u64_at(header_hybrid_bytes, 20, gore_as_capture::v1::kCaptureTarget24539464.steam_build_id) &&
+              reseal_capture(header_hybrid_bytes) &&
+              write_new_file(header_hybrid_capture, header_hybrid_bytes),
+          "write a sealed cross-generation header hybrid")) {
+    return 1;
+  }
+  const auto header_hybrid_result =
+      gore_as_capture::v1::offline::materialize_capture_summary_v1(
+          header_hybrid_capture, header_hybrid_summary);
+  if (!expect(
+          header_hybrid_result.error ==
+                  gore_as_capture::v1::offline::MaterializeError::target_mismatch &&
+              !std::filesystem::exists(header_hybrid_summary),
+          "native materializer rejects a sealed cross-generation header hybrid")) {
+    return 1;
+  }
+
+  auto payload_hybrid_bytes = historical_bytes;
+  const auto payload_hybrid_capture = tree.path() / L"payload-hybrid.capture";
+  const auto payload_hybrid_summary = tree.path() / L"payload-hybrid.summary.json";
+  if (!expect(
+          patch_first_record_u32(
+              payload_hybrid_bytes,
+              gore_as_capture::v1::RecordKind::engine_property,
+              16,
+              gore_as_capture::v1::kCaptureTarget24878692.rva_set_engine_property) &&
+              reseal_capture(payload_hybrid_bytes) &&
+              write_new_file(payload_hybrid_capture, payload_hybrid_bytes),
+          "write a sealed cross-generation payload hybrid")) {
+    return 1;
+  }
+  const auto payload_hybrid_result =
+      gore_as_capture::v1::offline::materialize_capture_summary_v1(
+          payload_hybrid_capture, payload_hybrid_summary);
+  if (!expect(
+          payload_hybrid_result.error ==
+                  gore_as_capture::v1::offline::MaterializeError::malformed_capture &&
+              !std::filesystem::exists(payload_hybrid_summary),
+          "native materializer rejects a sealed cross-generation payload hybrid")) {
+    return 1;
+  }
+
   const auto summary_collision =
       gore_as_capture::v1::offline::materialize_capture_summary_v1(capture_one, summary_one);
   if (!expect(

@@ -38,9 +38,13 @@ retry with another new path.
    high nibble must be exactly `0x20`. Table presence does not make opcode 204 or 206..208
    reachable, and qualification must prove those target-disabled opcode counts remain zero.
 2. `static-support.json` has schema
-   `gore.as.unqualified-profile-static-support`, version `1`. It pins the exact BuildID
-   `24539464` Windows/x64/Shipping target, executable identity and CodeView identity, the Binds
-   measurements, static format-version strings, and byte length plus SHA-256 for every payload.
+   `gore.as.unqualified-profile-static-support`, version `1`. It pins exactly one supported
+   Windows/x64/Shipping target, its executable and CodeView identity, the Binds measurements,
+   static format-version strings, and byte length plus SHA-256 for every payload. BuildIDs
+   `24539464` and `24878692` are independently typed targets. The manifest and capture must select
+   the same generation; mixing their executable, CodeView, depot or capture identities fails
+   before publication. Existing BuildID-24539464 support remains valid for historical offline
+   decode/materialization, while the production capture path targets BuildID `24878692`.
 3. The support root contains the ten fixed-name payloads consumed by the manifest:
 
    - `reflected-type-graph.bin`
@@ -71,19 +75,19 @@ The complete manifest shape is:
   "schema_version": 1,
   "target": {
     "steam_app_id": 1297900,
-    "steam_build_id": 24539464,
+    "steam_build_id": 24878692,
     "depot_id": 1297901,
-    "depot_manifest_gid": 1585071322101748861,
+    "depot_manifest_gid": 382135126159906494,
     "platform": "windows",
     "architecture": "x86_64",
     "build_configuration": "shipping"
   },
   "oracle": {
-    "executable": { "byte_len": 171784704, "sha256": "c71c04dd86e11e3e94483ea02c26c612b6243c147f6d83973233b3c8ddc5de25", "steam_content_sha1": "<40 hex>" },
+    "executable": { "byte_len": 171792384, "sha256": "824fbc94f2ac7f45927a0754605666c37af862d66156a15f8bf6813759d9e8e0", "steam_content_sha1": "<40 hex>" },
     "binds_cache": { "byte_len": 1, "sha256": "<64 hex>", "steam_content_sha1": "<40 hex>" },
     "shipping_cache": { "byte_len": 1, "sha256": "<64 hex>", "steam_content_sha1": "<40 hex>" },
     "depot_manifest": { "byte_len": 1, "sha256": "<64 hex>" },
-    "pe_codeview": { "guid": "cf0b83bd-e023-061b-2100-0f0fccf871d2", "age": 1 }
+    "pe_codeview": { "guid": "c2ca4ada-4878-d963-e567-717dc2c483a2", "age": 1 }
   },
   "binds": {
     "wire_schema_version": 1,

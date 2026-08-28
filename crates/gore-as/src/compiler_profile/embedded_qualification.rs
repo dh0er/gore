@@ -148,6 +148,11 @@ impl EmbeddedQualificationHarnessV1 {
             .map_err(|error| unavailable(format!("reading authority capture: {error}")))?;
         let decoded = decode_capture_v1(&authority_capture)
             .map_err(|error| unavailable(format!("decoding authority capture: {error}")))?;
+        if !authority_capture_target_matches_profile(decoded.header.target(), &profile.target) {
+            return Err(unavailable(
+                "authority capture target does not exactly match the qualification profile target",
+            ));
+        }
         verify_frontend_profile_projection(&profile, &config.profile_root, &decoded)?;
         if decoded.build_jit.as_reference_debugging
             || decoded.build_jit.resolve_object_ptr_callback_registered
@@ -821,6 +826,19 @@ fn verify_frontend_profile_projection(
     Ok(())
 }
 
+fn authority_capture_target_matches_profile(
+    capture: &super::capture::CaptureTargetV1,
+    profile: &super::manifest::CompilerTargetV1,
+) -> bool {
+    capture.steam_app_id == profile.steam_app_id
+        && capture.steam_build_id == profile.steam_build_id
+        && capture.depot_id == profile.depot_id
+        && capture.depot_manifest_gid == profile.depot_manifest_gid
+        && profile.platform == super::manifest::CompilerPlatformV1::Windows
+        && profile.architecture == super::manifest::CompilerArchitectureV1::X86_64
+        && profile.build_configuration == super::manifest::CompilerBuildConfigurationV1::Shipping
+}
+
 fn bind_profile_corpus(
     profile: &CompilerProfileV1,
     corpus: &CompilerProbeCorpusV1,
@@ -927,6 +945,54 @@ mod tests {
             spelling: spelling.to_owned(),
             comparison_key: comparison_key.to_owned(),
         }
+    }
+
+    fn compiler_target(
+        capture: &super::super::capture::CaptureTargetV1,
+    ) -> super::super::manifest::CompilerTargetV1 {
+        super::super::manifest::CompilerTargetV1 {
+            steam_app_id: capture.steam_app_id,
+            steam_build_id: capture.steam_build_id,
+            depot_id: capture.depot_id,
+            depot_manifest_gid: capture.depot_manifest_gid,
+            platform: super::super::manifest::CompilerPlatformV1::Windows,
+            architecture: super::super::manifest::CompilerArchitectureV1::X86_64,
+            build_configuration: super::super::manifest::CompilerBuildConfigurationV1::Shipping,
+        }
+    }
+
+    #[test]
+    fn authority_capture_target_rejects_historical_capture_with_current_profile() {
+        let historical = &super::super::capture::CAPTURE_TARGET_24539464;
+        let current = &super::super::capture::CAPTURE_TARGET_24878692;
+        let historical_profile = compiler_target(historical);
+        let current_profile = compiler_target(current);
+
+        assert!(authority_capture_target_matches_profile(
+            historical,
+            &historical_profile
+        ));
+        assert!(!authority_capture_target_matches_profile(
+            historical,
+            &current_profile
+        ));
+    }
+
+    #[test]
+    fn authority_capture_target_rejects_current_capture_with_historical_profile() {
+        let historical = &super::super::capture::CAPTURE_TARGET_24539464;
+        let current = &super::super::capture::CAPTURE_TARGET_24878692;
+        let historical_profile = compiler_target(historical);
+        let current_profile = compiler_target(current);
+
+        assert!(authority_capture_target_matches_profile(
+            current,
+            &current_profile
+        ));
+        assert!(!authority_capture_target_matches_profile(
+            current,
+            &historical_profile
+        ));
     }
 
     #[test]

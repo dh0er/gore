@@ -15,6 +15,13 @@ namespace standalone = gore::as::standalone;
 
 namespace {
 
+int initializer_calls = 0;
+
+void observe_initializer(asIScriptGeneric* const call) {
+    ++initializer_calls;
+    call->SetReturnDWord(73U);
+}
+
 void message_callback(const asSMessageInfo* message, void*) {
     std::cerr << message->section << ':' << message->row << ':' << message->col
               << ": " << message->message << '\n';
@@ -166,6 +173,74 @@ int ConsumerValue() { return MiddleValue(); }
         return fail("automatic-import transitive graph closure did not compile", engine);
     }
     automatic_engine->ShutDownAndRelease();
+
+    const auto initializer_frontend = standalone::preprocess_lexical_module_graph(
+        options,
+        {source("Game/Initializer.as", R"AS(const int ObservedValue = ObserveInitializer();
+int ReadObservedValue() { return ObservedValue; }
+)AS")});
+    if (!initializer_frontend.ok) {
+        return fail("global-initializer fixture did not preprocess", engine);
+    }
+
+    asIScriptEngine* initializer_engine = asCreateScriptEngine(ANGELSCRIPT_VERSION);
+    if (initializer_engine == nullptr ||
+        initializer_engine->SetMessageCallback(
+            asFUNCTION(message_callback), nullptr, asCALL_CDECL) < 0 ||
+        initializer_engine->RegisterGlobalFunction(
+            "int ObserveInitializer()",
+            asFUNCTION(observe_initializer),
+            asCALL_GENERIC) < 0) {
+        if (initializer_engine != nullptr) initializer_engine->ShutDownAndRelease();
+        return fail("global-initializer engine configuration failed", engine);
+    }
+    initializer_calls = 0;
+    std::vector<asIScriptModule*> initializer_modules;
+    const auto initialized = standalone::compile_preprocessed_module_graph(
+        *initializer_engine,
+        options,
+        initializer_frontend,
+        nullptr,
+        runtime,
+        initializer_modules);
+    if (!initialized.succeeded() || initializer_modules.size() != 1U ||
+        !contains_bytecode(*initializer_modules[0], "ReadObservedValue") ||
+        initializer_calls != 1) {
+        initializer_engine->ShutDownAndRelease();
+        return fail("historical frontend entry point no longer executes global initializers", engine);
+    }
+    initializer_engine->ShutDownAndRelease();
+
+    asIScriptEngine* deferred_engine = asCreateScriptEngine(ANGELSCRIPT_VERSION);
+    if (deferred_engine == nullptr ||
+        deferred_engine->SetMessageCallback(
+            asFUNCTION(message_callback), nullptr, asCALL_CDECL) < 0 ||
+        deferred_engine->RegisterGlobalFunction(
+            "int ObserveInitializer()",
+            asFUNCTION(observe_initializer),
+            asCALL_GENERIC) < 0) {
+        if (deferred_engine != nullptr) deferred_engine->ShutDownAndRelease();
+        return fail("deferred-initializer engine configuration failed", engine);
+    }
+    initializer_calls = 0;
+    std::vector<asIScriptModule*> deferred_modules;
+    const auto deferred = standalone::compile_preprocessed_module_graph(
+        *deferred_engine,
+        options,
+        initializer_frontend,
+        nullptr,
+        runtime,
+        standalone::global_initializer_policy::defer,
+        deferred_modules);
+    if (!deferred.succeeded() || deferred_modules.size() != 1U ||
+        !contains_bytecode(*deferred_modules[0], "ReadObservedValue") ||
+        initializer_calls != 0 ||
+        deferred_modules[0]->ResetGlobalVars(nullptr) != asSUCCESS ||
+        initializer_calls != 1) {
+        deferred_engine->ShutDownAndRelease();
+        return fail("deferred frontend policy executed or discarded a global initializer", engine);
+    }
+    deferred_engine->ShutDownAndRelease();
 
     FAngelscriptManager::Get().ConfigSettings->bErrorOnIncorrectEditorOnlyCode = true;
     standalone::preprocessor_options editor_options;

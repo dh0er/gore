@@ -23,10 +23,44 @@ constexpr std::size_t max_json_depth = 32U;
 constexpr std::string_view profile_hash_domain{
     "gore-as-compiler-profile-v1\0",
     sizeof("gore-as-compiler-profile-v1\0") - 1U};
-constexpr std::uint32_t pinned_steam_app_id = 1'297'900U;
-constexpr std::uint64_t pinned_steam_build_id = 24'539'464U;
-constexpr std::uint32_t pinned_depot_id = 1'297'901U;
-constexpr std::uint64_t pinned_depot_manifest_gid = 1'585'071'322'101'748'861U;
+
+struct supported_compiler_target {
+    std::uint32_t steam_app_id;
+    std::uint64_t steam_build_id;
+    std::uint32_t depot_id;
+    std::uint64_t depot_manifest_gid;
+    std::string_view platform;
+    std::string_view architecture;
+    std::string_view build_configuration;
+};
+
+// Admission is deliberately an explicit tuple allowlist. A Steam BuildID alone is not enough,
+// and the sidecar does not turn either oracle executable's whole-file hash into a runtime gate.
+constexpr std::array<supported_compiler_target, 2U> supported_compiler_targets{{
+    {1'297'900U, 24'539'464U, 1'297'901U, 1'585'071'322'101'748'861U,
+     "windows", "x86_64", "shipping"},
+    {1'297'900U, 24'878'692U, 1'297'901U, 382'135'126'159'906'494U,
+     "windows", "x86_64", "shipping"},
+}};
+
+bool is_supported_compiler_target(
+    const std::uint32_t steam_app_id,
+    const std::uint64_t steam_build_id,
+    const std::uint32_t depot_id,
+    const std::uint64_t depot_manifest_gid,
+    const std::string_view platform,
+    const std::string_view architecture,
+    const std::string_view build_configuration) {
+    return std::any_of(
+        supported_compiler_targets.begin(), supported_compiler_targets.end(),
+        [&](const supported_compiler_target& supported) {
+            return steam_app_id == supported.steam_app_id &&
+                steam_build_id == supported.steam_build_id && depot_id == supported.depot_id &&
+                depot_manifest_gid == supported.depot_manifest_gid &&
+                platform == supported.platform && architecture == supported.architecture &&
+                build_configuration == supported.build_configuration;
+        });
+}
 
 bool parsed(std::string_view bytes, value& output, std::string& detail) {
     json::parse_error error;
@@ -921,13 +955,15 @@ bool parse_compiler_profile_manifest(
             !json::get_u64(*target, "steam_build_id", staged.steam_build_id, detail) ||
             !u32(*target, "depot_id", staged.depot_id, detail) ||
             !json::get_u64(*target, "depot_manifest_gid", staged.depot_manifest_gid, detail) ||
-            !json::get_string(*target, "platform", platform, detail) || platform != "windows" ||
-            !json::get_string(*target, "architecture", architecture, detail) || architecture != "x86_64" ||
-            !json::get_string(*target, "build_configuration", configuration, detail) || configuration != "shipping" ||
-            app_id != pinned_steam_app_id || staged.steam_build_id != pinned_steam_build_id ||
-            staged.depot_id != pinned_depot_id ||
-            staged.depot_manifest_gid != pinned_depot_manifest_gid) {
-            if (detail.empty()) detail = "compiler target is not the pinned BuildID-24539464 target";
+            !json::get_string(*target, "platform", platform, detail) ||
+            !json::get_string(*target, "architecture", architecture, detail) ||
+            !json::get_string(*target, "build_configuration", configuration, detail)) {
+            return false;
+        }
+        if (!is_supported_compiler_target(
+                app_id, staged.steam_build_id, staged.depot_id, staged.depot_manifest_gid,
+                platform, architecture, configuration)) {
+            detail = "compiler target is not an explicitly supported G1R generation";
             return false;
         }
 

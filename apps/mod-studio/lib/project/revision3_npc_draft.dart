@@ -22,6 +22,9 @@ const _authoringRevision3NpcExecutableSha256V2 =
 const _authoringRevision3NpcExecutableByteLengthV3 = 171787776;
 const _authoringRevision3NpcExecutableSha256V3 =
     'ab2c8d9e286a437bc5343748faf40959a77e9dc7c542ff9361f1ffaeca5c811c';
+const _authoringRevision3NpcExecutableByteLengthV4 = 171792384;
+const _authoringRevision3NpcExecutableSha256V4 =
+    '824fbc94f2ac7f45927a0754605666c37af862d66156a15f8bf6813759d9e8e0';
 
 typedef _AuthoringRevision3NpcParentEvidence = ({
   String role,
@@ -37,9 +40,9 @@ typedef _AuthoringRevision3NpcSelectionEvidence = ({
 });
 
 /// Exact closed projection of the native pinned Story-catalog rows shared by
-/// the currently registered V1, V2, and V3 generations. A new native catalog
-/// row must be reviewed and added here before its persisted parent evidence can
-/// cross the strict response boundary.
+/// every currently registered generation. A new native catalog row must be
+/// reviewed and added here before its persisted parent evidence can cross the
+/// strict response boundary.
 const Map<String, _AuthoringRevision3NpcSelectionEvidence>
 _authoringRevision3NpcSelectionEvidence = {
   'g1r:npc:om_grd_asghan_263': (
@@ -671,7 +674,9 @@ bool _authoringRevision3NpcIsSupportedExecutable(
     (byteLength == _authoringRevision3NpcExecutableByteLengthV2 &&
         sha256 == _authoringRevision3NpcExecutableSha256V2) ||
     (byteLength == _authoringRevision3NpcExecutableByteLengthV3 &&
-        sha256 == _authoringRevision3NpcExecutableSha256V3);
+        sha256 == _authoringRevision3NpcExecutableSha256V3) ||
+    (byteLength == _authoringRevision3NpcExecutableByteLengthV4 &&
+        sha256 == _authoringRevision3NpcExecutableSha256V4);
 
 bool _authoringRevision3NpcIsSupportedGeneration(
   ({Map<String, Object?> json, int byteLength, String sha256}) generation,

@@ -17,12 +17,12 @@ const _shippingSha256 =
     '757d8624f0c7480f63cc14a1ba2d7e43f461a529064b0c0cfbf523a54639e385';
 const _bindsSha256 =
     '46e6629ad5cacc112b9922d48a1aa948f40572d7285705b981c3eca3dc615fea';
-const _v3ExecutableSha256 =
-    'ab2c8d9e286a437bc5343748faf40959a77e9dc7c542ff9361f1ffaeca5c811c';
-const _v3ShippingSha256 =
-    '36124f1cdd4caae555423581aa40631af0ac80d5cef42528382739f932b0e728';
-const _v3BindsSha256 =
-    '854f58a695d0170144957f085c1e8c0f9ef40b271e35e90f79ffbccff8d999c5';
+const _latestExecutableSha256 =
+    '824fbc94f2ac7f45927a0754605666c37af862d66156a15f8bf6813759d9e8e0';
+const _latestShippingSha256 =
+    '7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511';
+const _latestBindsSha256 =
+    'aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2';
 
 void main() {
   test(
@@ -37,7 +37,7 @@ void main() {
         ..createSync();
       final generation = await _trustedGeneration(
         gameRoot.path,
-        build24340829: true,
+        latestGeneration: true,
       );
       String? preparedProjectJson;
       var recoveryCalls = 0;
@@ -74,8 +74,8 @@ void main() {
           .cast<String, Object?>();
       final target = (project['target']! as Map).cast<String, Object?>();
       expect(target['executable'], <String, Object?>{
-        'byte_len': 171787776,
-        'sha256': _v3ExecutableSha256,
+        'byte_len': 171792384,
+        'sha256': _latestExecutableSha256,
       });
     },
   );
@@ -332,24 +332,26 @@ final class _CreationLease implements ManagedRevision3CurrentProjectLease {
 
 Future<AuthoringStoryCatalogGeneration> _trustedGeneration(
   String gameRoot, {
-  bool build24340829 = false,
+  bool latestGeneration = false,
 }) async {
-  final executableSha256 = build24340829
-      ? _v3ExecutableSha256
+  final executableSha256 = latestGeneration
+      ? _latestExecutableSha256
       : _executableSha256;
-  final shippingSha256 = build24340829 ? _v3ShippingSha256 : _shippingSha256;
-  final bindsSha256 = build24340829 ? _v3BindsSha256 : _bindsSha256;
+  final shippingSha256 = latestGeneration
+      ? _latestShippingSha256
+      : _shippingSha256;
+  final bindsSha256 = latestGeneration ? _latestBindsSha256 : _bindsSha256;
   final generation = <String, Object?>{
     'edition': 'g1r-steam',
     'executable': _seal(
       executableSha256,
-      build24340829 ? 171787776 : 171704320,
+      latestGeneration ? 171792384 : 171704320,
     ),
     'shipping_cache': _seal(
       shippingSha256,
-      build24340829 ? 124352336 : 123394250,
+      latestGeneration ? 124459412 : 123394250,
     ),
-    'binds_cache': _seal(bindsSha256, build24340829 ? 5908587 : 5903938),
+    'binds_cache': _seal(bindsSha256, latestGeneration ? 5908985 : 5903938),
   };
   final catalogSeal = _seal(_repeat('4', 64), 5611);
   final catalogJson = jsonEncode(<String, Object?>{
@@ -357,7 +359,7 @@ Future<AuthoringStoryCatalogGeneration> _trustedGeneration(
     'schema_revision': 1,
     'catalog': <String, Object?>{
       'generation': generation,
-      'record_set_id': build24340829 ? 'creator-test-v3' : 'creator-test-v2',
+      'record_set_id': latestGeneration ? 'creator-test-v4' : 'creator-test-v2',
       'record_set_seal': _seal(_repeat('5', 64), 128),
       'npcs': <Object?>[],
       'quest_parents': <Object?>[],

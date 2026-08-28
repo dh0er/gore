@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
 import struct
 import sys
@@ -66,7 +67,52 @@ class SyntheticInternalInput:
         }
         self.codeview = {"guid": "cf0b83bd-e023-061b-2100-0f0fccf871d2", "age": 1}
         self.profile_sha256 = "ab" * 32
-        self.blobs: dict[tuple[str, str], dict[str, object]] = {}
+        self.blobs = self._write_profile_payloads(self.profile_root)
+        self.profile = self._profile()
+        current_target = copy.deepcopy(
+            bundle.REQUIRED_PRODUCT_COMPILER_TARGETS_V1[1]
+        )
+        self.current_target = current_target["target"]
+        self.current_codeview = current_target["pe_codeview"]
+        self.current_profile_sha256 = "cd" * 32
+        self.current_profile_root = self.root / "profiles" / "build-24878692"
+        self.current_profile_root.mkdir(parents=True)
+        self.current_blobs = self._write_profile_payloads(
+            self.current_profile_root, marker_prefix="current:"
+        )
+        self.current_profile = self._profile_for(
+            self.current_target,
+            self.current_codeview,
+            self.current_profile_sha256,
+            self.current_blobs,
+        )
+        self.profile_records: list[dict[str, object]] = [
+            {
+                "root": self.profile_root,
+                "target": self.target,
+                "codeview": self.codeview,
+                "profile_sha256": self.profile_sha256,
+                "blobs": self.blobs,
+                "profile": self.profile,
+            },
+            {
+                "root": self.current_profile_root,
+                "target": self.current_target,
+                "codeview": self.current_codeview,
+                "profile_sha256": self.current_profile_sha256,
+                "blobs": self.current_blobs,
+                "profile": self.current_profile,
+            },
+        ]
+        self.profile_roots = [
+            record["root"] for record in self.profile_records
+        ]
+        self._write_descriptor()
+
+    def _write_profile_payloads(
+        self, profile_root: Path, *, marker_prefix: str = ""
+    ) -> dict[tuple[str, str], dict[str, object]]:
+        blobs: dict[tuple[str, str], dict[str, object]] = {}
         for index, (group, field) in enumerate(bundle.PROFILE_BLOB_FIELDS):
             relative = f"payload/{index:02d}-{field}.bin"
             if field in (
@@ -84,75 +130,168 @@ class SyntheticInternalInput:
                     document["standalone_compiler"] = self.sidecar_identity
                 payload = bundle._canonical_pretty(document)
             else:
-                payload = f"synthetic:{group}.{field}\n".encode()
-            path = self.profile_root / Path(relative)
+                payload = f"synthetic:{marker_prefix}{group}.{field}\n".encode()
+            path = profile_root / Path(relative)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(payload)
-            self.blobs[(group, field)] = {"path": relative, **_seal(payload)}
-        self.profile = self._profile()
-        self._write_descriptor()
+            blobs[(group, field)] = {"path": relative, **_seal(payload)}
+        return blobs
 
     def _profile(self) -> dict[str, object]:
+        return self._profile_for(
+            self.target, self.codeview, self.profile_sha256, self.blobs
+        )
+
+    @staticmethod
+    def _profile_for(
+        target: dict[str, object],
+        codeview: dict[str, object],
+        profile_sha256: str,
+        blobs: dict[tuple[str, str], dict[str, object]],
+    ) -> dict[str, object]:
+        build_id = int(target["steam_build_id"])
+
+        def oracle_file(marker: int) -> dict[str, object]:
+            return {
+                "byte_len": marker,
+                "sha256": f"{build_id + marker:064x}",
+                "steam_content_sha1": f"{build_id + marker:040x}",
+            }
+
         return {
             "schema": "gore.as.compiler-profile",
             "schema_version": 1,
-            "target": self.target,
-            "oracle": {"pe_codeview": self.codeview},
+            "target": target,
+            "oracle": {
+                "executable": oracle_file(1),
+                "binds_cache": oracle_file(2),
+                "shipping_cache": oracle_file(3),
+                "depot_manifest": oracle_file(4),
+                "pe_codeview": codeview,
+            },
             "binds": {},
             "engine": {
-                "ordered_engine_properties": self.blobs[
+                "ordered_engine_properties": blobs[
                     ("engine", "ordered_engine_properties")
                 ],
-                "registration_trace": self.blobs[("engine", "registration_trace")],
-                "post_bind_snapshot": self.blobs[("engine", "post_bind_snapshot")],
+                "registration_trace": blobs[("engine", "registration_trace")],
+                "post_bind_snapshot": blobs[("engine", "post_bind_snapshot")],
             },
             "unreal_semantics": {
-                "reflected_type_graph": self.blobs[
+                "reflected_type_graph": blobs[
                     ("unreal_semantics", "reflected_type_graph")
                 ]
             },
             "frontend": {
-                "preprocessor_config": self.blobs[("frontend", "preprocessor_config")],
-                "class_generator_config": self.blobs[
+                "preprocessor_config": blobs[("frontend", "preprocessor_config")],
+                "class_generator_config": blobs[
                     ("frontend", "class_generator_config")
                 ],
-                "compiler_options": self.blobs[("frontend", "compiler_options")],
+                "compiler_options": blobs[("frontend", "compiler_options")],
             },
             "bytecode": {
-                "opcode_table": self.blobs[("bytecode", "opcode_table")],
-                "operand_schema": self.blobs[("bytecode", "operand_schema")],
-                "codegen_probe_corpus": self.blobs[
+                "opcode_table": blobs[("bytecode", "opcode_table")],
+                "operand_schema": blobs[("bytecode", "operand_schema")],
+                "codegen_probe_corpus": blobs[
                     ("bytecode", "codegen_probe_corpus")
                 ],
-                "expected_probe_results": self.blobs[
+                "expected_probe_results": blobs[
                     ("bytecode", "expected_probe_results")
                 ],
             },
             "cache_writer": {
-                "serializer_schema": self.blobs[("cache_writer", "serializer_schema")],
-                "reference_table_order": self.blobs[
+                "serializer_schema": blobs[("cache_writer", "serializer_schema")],
+                "reference_table_order": blobs[
                     ("cache_writer", "reference_table_order")
                 ],
-                "normalized_oracle_corpus": self.blobs[
+                "normalized_oracle_corpus": blobs[
                     ("cache_writer", "normalized_oracle_corpus")
                 ],
             },
             "qualification": {
                 "required_probe_suite_version": "synthetic-v1",
-                "diagnostic_parity": self.blobs[("qualification", "diagnostic_parity")],
-                "semantic_parity": self.blobs[("qualification", "semantic_parity")],
+                "diagnostic_parity": blobs[("qualification", "diagnostic_parity")],
+                "semantic_parity": blobs[("qualification", "semantic_parity")],
                 "qualified": True,
             },
-            "profile_sha256": self.profile_sha256,
+            "profile_sha256": profile_sha256,
         }
 
     def _write_descriptor(
         self, *, catalog_target: dict[str, object] | None = None
     ) -> None:
-        manifest = bundle._canonical_pretty(self.profile)
-        self.manifest = self.profile_root / "compiler-profile.json"
-        self.manifest.write_bytes(manifest)
-        self._write_promotion_audits(manifest)
+        self.profile_records[0].update(
+            {
+                "target": self.target,
+                "codeview": self.codeview,
+                "profile_sha256": self.profile_sha256,
+                "blobs": self.blobs,
+                "profile": self.profile,
+            }
+        )
+        catalog_profiles: list[dict[str, object]] = []
+        full_tree_verifications: list[dict[str, object]] = []
+        self.full_tree_receipts: list[Path] = []
+        for index, record in enumerate(self.profile_records):
+            profile_root = record["root"]
+            profile = record["profile"]
+            target = record["target"]
+            codeview = record["codeview"]
+            profile_sha256 = record["profile_sha256"]
+            blobs = record["blobs"]
+            assert isinstance(profile_root, Path)
+            assert isinstance(profile, dict)
+            assert isinstance(target, dict)
+            assert isinstance(codeview, dict)
+            assert isinstance(profile_sha256, str)
+            assert isinstance(blobs, dict)
+            manifest = bundle._canonical_pretty(profile)
+            manifest_path = profile_root / "compiler-profile.json"
+            manifest_path.write_bytes(manifest)
+            if index == 0:
+                self.manifest = manifest_path
+            self._write_promotion_audits(
+                manifest,
+                profile_root=profile_root,
+                target=target,
+                blobs=blobs,
+                profile_sha256=profile_sha256,
+            )
+            build_id = int(target["steam_build_id"])
+            catalog_entry = {
+                "manifest_relative_path": (
+                    f"profiles/build-{build_id}/compiler-profile.json"
+                ),
+                "manifest_byte_len": len(manifest),
+                "manifest_sha256": _sha256(manifest),
+                "profile_sha256": profile_sha256,
+                "target": (
+                    catalog_target
+                    if index == 0 and catalog_target is not None
+                    else {"target": target, "pe_codeview": codeview}
+                ),
+            }
+            catalog_profiles.append(catalog_entry)
+            receipt_bytes = self._full_tree_receipt(profile)
+            receipt_relative = bundle._full_tree_receipt_relative(
+                {
+                    **catalog_entry,
+                    "target": {"target": target, "pe_codeview": codeview},
+                }
+            )
+            receipt_path = self.root.joinpath(
+                *bundle.PurePosixPath(receipt_relative).parts
+            )
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            receipt_path.write_bytes(receipt_bytes)
+            self.full_tree_receipts.append(receipt_path)
+            full_tree_verifications.append(
+                {
+                    "profile_sha256": profile_sha256,
+                    "relative_path": receipt_relative,
+                    **_seal(receipt_bytes),
+                }
+            )
         for name in bundle.REQUIRED_NOTICES:
             source = f"synthetic notice {name}\n".encode()
             (self.root / name).write_bytes(source)
@@ -168,16 +307,7 @@ class SyntheticInternalInput:
                 },
                 "static_system_only": True,
             },
-            "profiles": [
-                {
-                    "manifest_relative_path": "profiles/build-24539464/compiler-profile.json",
-                    "manifest_byte_len": len(manifest),
-                    "manifest_sha256": _sha256(manifest),
-                    "profile_sha256": self.profile_sha256,
-                    "target": catalog_target
-                    or {"target": self.target, "pe_codeview": self.codeview},
-                }
-            ],
+            "profiles": catalog_profiles,
         }
         notices = {
             name: _seal((self.root / name).read_bytes())
@@ -186,11 +316,12 @@ class SyntheticInternalInput:
         promotion = self._write_internal_signing_provenance()
         self.descriptor = {
             "schema": bundle.INTERNAL_INPUT_SCHEMA,
-            "schema_version": 1,
+            "schema_version": bundle.INTERNAL_INPUT_SCHEMA_VERSION,
             "immutable": True,
             "qualified": True,
             "promotion": promotion,
             "catalog": catalog,
+            "full_tree_verifications": full_tree_verifications,
             "notices": notices,
         }
         (self.root / bundle.INTERNAL_INPUT_DESCRIPTOR_FILE).write_bytes(
@@ -252,7 +383,15 @@ class SyntheticInternalInput:
             },
         }
 
-    def _artifact_manifest(self, backend: str, marker: int) -> bytes:
+    def _artifact_manifest(
+        self,
+        backend: str,
+        marker: int,
+        *,
+        profile_root: Path,
+        target: dict[str, object],
+        blobs: dict[tuple[str, str], dict[str, object]],
+    ) -> bytes:
         cache = {
             "blob_id": f"{backend}.0000.cache",
             "byte_len": marker,
@@ -279,10 +418,15 @@ class SyntheticInternalInput:
             "schema_version": 1,
             "semantic_observer": "gore.as.whole-cache-semantic-observer/v1",
             "suite_id": "synthetic-v1",
-            "corpus_sha256": self._payload_digest("bytecode", "codegen_probe_corpus"),
+            "corpus_sha256": self._payload_digest(
+                "bytecode",
+                "codegen_probe_corpus",
+                profile_root=profile_root,
+                blobs=blobs,
+            ),
             "backend": backend,
             "source_profile_sha256": "11" * 32,
-            "source_target": self.target,
+            "source_target": target,
             "standalone_compiler": (
                 self.sidecar_identity if backend == "standalone" else None
             ),
@@ -316,18 +460,45 @@ class SyntheticInternalInput:
         )
         return bundle._canonical_pretty(document)
 
-    def _payload_digest(self, group: str, field: str) -> str:
-        path = self.profile_root / str(self.blobs[(group, field)]["path"])
+    @staticmethod
+    def _payload_digest(
+        group: str,
+        field: str,
+        *,
+        profile_root: Path,
+        blobs: dict[tuple[str, str], dict[str, object]],
+    ) -> str:
+        path = profile_root / str(blobs[(group, field)]["path"])
         return json.loads(path.read_text(encoding="utf-8"))["canonical_sha256"]
 
-    def _write_promotion_audits(self, manifest: bytes) -> None:
-        embedded = self._artifact_manifest("embedded_game", 4)
-        standalone = self._artifact_manifest("standalone", 5)
+    def _write_promotion_audits(
+        self,
+        manifest: bytes,
+        *,
+        profile_root: Path,
+        target: dict[str, object],
+        blobs: dict[tuple[str, str], dict[str, object]],
+        profile_sha256: str,
+    ) -> None:
+        embedded = self._artifact_manifest(
+            "embedded_game",
+            4,
+            profile_root=profile_root,
+            target=target,
+            blobs=blobs,
+        )
+        standalone = self._artifact_manifest(
+            "standalone",
+            5,
+            profile_root=profile_root,
+            target=target,
+            blobs=blobs,
+        )
         embedded_path = (
-            self.profile_root / bundle.EMBEDDED_QUALIFICATION_ARTIFACT_MANIFEST_FILE
+            profile_root / bundle.EMBEDDED_QUALIFICATION_ARTIFACT_MANIFEST_FILE
         )
         standalone_path = (
-            self.profile_root / bundle.STANDALONE_QUALIFICATION_ARTIFACT_MANIFEST_FILE
+            profile_root / bundle.STANDALONE_QUALIFICATION_ARTIFACT_MANIFEST_FILE
         )
         embedded_path.write_bytes(embedded)
         standalone_path.write_bytes(standalone)
@@ -339,7 +510,7 @@ class SyntheticInternalInput:
         )
         files = [{"path": "compiler-profile.json", **_seal(manifest)}]
         seen: set[str] = set()
-        for blob in self.blobs.values():
+        for blob in blobs.values():
             relative = str(blob["path"])
             if relative.casefold() in seen:
                 continue
@@ -369,24 +540,38 @@ class SyntheticInternalInput:
             "schema_version": bundle.QUALIFIED_PROMOTION_RECEIPT_SCHEMA_VERSION,
             "qualified": True,
             "source_profile_sha256": "11" * 32,
-            "source_target": self.target,
+            "source_target": target,
             "source_materialization_receipt_sha256": "12" * 32,
             "capture_stream_sha256": "13" * 32,
             "static_support_manifest_sha256": "14" * 32,
             "standalone_compiler": self.sidecar_identity,
             "embedded_artifacts": embedded_summary,
             "standalone_artifacts": standalone_summary,
-            "corpus_sha256": self._payload_digest("bytecode", "codegen_probe_corpus"),
+            "corpus_sha256": self._payload_digest(
+                "bytecode",
+                "codegen_probe_corpus",
+                profile_root=profile_root,
+                blobs=blobs,
+            ),
             "expected_results_sha256": self._payload_digest(
-                "bytecode", "expected_probe_results"
+                "bytecode",
+                "expected_probe_results",
+                profile_root=profile_root,
+                blobs=blobs,
             ),
             "diagnostic_parity_sha256": self._payload_digest(
-                "qualification", "diagnostic_parity"
+                "qualification",
+                "diagnostic_parity",
+                profile_root=profile_root,
+                blobs=blobs,
             ),
             "semantic_parity_sha256": self._payload_digest(
-                "qualification", "semantic_parity"
+                "qualification",
+                "semantic_parity",
+                profile_root=profile_root,
+                blobs=blobs,
             ),
-            "profile_sha256": self.profile_sha256,
+            "profile_sha256": profile_sha256,
             "files": files,
             "canonical_sha256": "0" * 64,
         }
@@ -395,8 +580,91 @@ class SyntheticInternalInput:
             {key: value for key, value in receipt.items() if key != "canonical_sha256"},
             include_length=False,
         )
-        (self.profile_root / bundle.QUALIFIED_PROMOTION_RECEIPT_FILE).write_bytes(
+        (profile_root / bundle.QUALIFIED_PROMOTION_RECEIPT_FILE).write_bytes(
             bundle._canonical_pretty(receipt)
+        )
+
+    def _full_tree_receipt(self, profile: dict[str, object]) -> bytes:
+        oracle = profile["oracle"]
+        assert isinstance(oracle, dict)
+        module_count = 3
+        return bundle._canonical_pretty(
+            {
+                "schema": bundle.FULL_TREE_RECEIPT_SCHEMA,
+                "version": bundle.FULL_TREE_RECEIPT_VERSION,
+                "passed": True,
+                "execution": {
+                    "backend": "standalone",
+                    "runner_invocations": 1,
+                    "standalone_attempted": True,
+                    "game_attempted": False,
+                    "install_restore": "not_started",
+                    "closing_audit": "passed",
+                    "publication": "published",
+                    "recovery_required": False,
+                    "fallback_present": False,
+                    "backend_diagnostic_count": 0,
+                },
+                "authority": {
+                    "qualified_profile_sha256": profile["profile_sha256"],
+                    "sidecar": self.sidecar_identity,
+                    "shipping": {
+                        "byte_len": oracle["shipping_cache"]["byte_len"],
+                        "sha256": oracle["shipping_cache"]["sha256"],
+                    },
+                    "binds": {
+                        "byte_len": oracle["binds_cache"]["byte_len"],
+                        "sha256": oracle["binds_cache"]["sha256"],
+                    },
+                },
+                "frozen_source": {
+                    "module_count": module_count,
+                    "byte_len": 30,
+                    "aggregate_sha256": "31" * 32,
+                    "operations": {"add": 0, "edit": module_count, "delete": 0},
+                },
+                "embedded_reference": {
+                    "byte_len": 40,
+                    "sha256": "32" * 32,
+                },
+                "standalone_candidate": {
+                    "byte_len": 40,
+                    "sha256": "33" * 32,
+                    "module_count": module_count,
+                },
+                "bytediff": {
+                    "equivalent_to_fail_on_semantic": True,
+                    "context": 6,
+                    "normalization": {
+                        "n1_refs": True,
+                        "n2_slots": False,
+                        "n3_jumps": True,
+                        "n4_consts": True,
+                        "n5_scope": True,
+                        "n6_reguard": True,
+                    },
+                    "aligned_functions": 10,
+                    "identical": 8,
+                    "benign": 2,
+                    "semantic": 0,
+                    "alignment_loss": 0,
+                },
+                "whole_cache_semantics_v1": {
+                    "exact_struct_equality": True,
+                    "semantic_sha256": "34" * 32,
+                    "module_count": module_count,
+                    "function_count": 10,
+                    "opcode_counts": [0] * 213,
+                    "class_count": 1,
+                    "behaviour_function_count": 0,
+                    "property_count": 2,
+                    "global_count": 3,
+                    "initializer_function_count": 0,
+                    "string_global_reference_count": 4,
+                    "tail_table_counts": [1, 1, 2, 2, 3, 4, 2],
+                    "invoke_return_included": True,
+                },
+            }
         )
 
 
@@ -653,7 +921,212 @@ class StandaloneCompilerBundleTests(unittest.TestCase):
             qualified_profile_verifier=_accept_synthetic_profile,
             promotion_attestation_verifier=_accept_synthetic_attestation,
         )
-        self.assertEqual(len(verified.expected_files), 27)
+        self.assertEqual(len(verified.expected_files), 49)
+
+    def test_legacy_v1_is_explicit_local_build_bridge_only(self) -> None:
+        fixture = SyntheticInternalInput(self.base)
+        descriptor = copy.deepcopy(fixture.descriptor)
+        descriptor["schema_version"] = 1
+        descriptor.pop("full_tree_verifications")
+        descriptor["catalog"]["profiles"] = descriptor["catalog"]["profiles"][:1]
+        (fixture.root / bundle.INTERNAL_INPUT_DESCRIPTOR_FILE).write_bytes(
+            bundle._canonical_pretty(descriptor)
+        )
+        shutil.rmtree(fixture.current_profile_root)
+        shutil.rmtree(fixture.root / "verification")
+
+        verification_args = {
+            "sidecar_verifier": _accept_synthetic_sidecar,
+            "qualified_profile_verifier": _accept_synthetic_profile,
+            "promotion_attestation_verifier": _accept_synthetic_attestation,
+        }
+        with self.assertRaisesRegex(bundle.BundleError, "pinned local build asset"):
+            bundle.verify_internal_input(fixture.root, **verification_args)
+
+        prepared = bundle.prepare_product_bundle(
+            fixture.root,
+            self.base / "legacy-prepared",
+            allow_legacy_internal_input_v1=True,
+            **verification_args,
+        )
+        self.assertTrue(prepared.legacy_internal_input_v1)
+        host = self.base / "legacy-host"
+        host.mkdir()
+        staged = bundle.stage_product_bundle(prepared, host, **verification_args)
+        assert staged is not None
+        with self.assertRaisesRegex(bundle.BundleError, "pinned local build asset"):
+            bundle.verify_staged_bundle(staged, **verification_args)
+        verified = bundle.verify_staged_bundle(
+            staged,
+            allow_legacy_internal_input_v1=True,
+            **verification_args,
+        )
+        self.assertEqual(verified.internal_input_schema_version, 1)
+
+    def test_product_gate_requires_exactly_both_supported_profile_targets(self) -> None:
+        for mutation, expected in (
+            ("missing", "missing=.*24878692"),
+            ("extra", "extra=.*30000000"),
+        ):
+            with self.subTest(mutation=mutation):
+                case = self.base / f"target-set-{mutation}"
+                case.mkdir()
+                fixture = SyntheticInternalInput(case)
+                descriptor_path = fixture.root / bundle.INTERNAL_INPUT_DESCRIPTOR_FILE
+                descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+                if mutation == "missing":
+                    descriptor["catalog"]["profiles"].pop()
+                    descriptor["full_tree_verifications"].pop()
+                else:
+                    extra = copy.deepcopy(descriptor["catalog"]["profiles"][-1])
+                    extra["manifest_relative_path"] = (
+                        "profiles/build-30000000/compiler-profile.json"
+                    )
+                    extra["profile_sha256"] = "ef" * 32
+                    extra["target"]["target"]["steam_build_id"] = 30_000_000
+                    extra["target"]["target"]["depot_manifest_gid"] = 999
+                    extra["target"]["pe_codeview"] = {
+                        "guid": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+                        "age": 1,
+                    }
+                    descriptor["catalog"]["profiles"].append(extra)
+                descriptor_path.write_bytes(bundle._canonical_pretty(descriptor))
+                with self.assertRaisesRegex(bundle.BundleError, expected):
+                    bundle.verify_internal_input(
+                        fixture.root,
+                        sidecar_verifier=_accept_synthetic_sidecar,
+                        qualified_profile_verifier=_accept_synthetic_profile,
+                        promotion_attestation_verifier=_accept_synthetic_attestation,
+                    )
+
+    def test_full_tree_receipts_are_one_per_profile_and_bind_every_authority(self) -> None:
+        def mutate_receipt(
+            fixture: SyntheticInternalInput,
+            profile_index: int,
+            mutation: callable,
+        ) -> None:
+            descriptor_path = fixture.root / bundle.INTERNAL_INPUT_DESCRIPTOR_FILE
+            descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+            entry = descriptor["full_tree_verifications"][profile_index]
+            receipt_path = fixture.root.joinpath(
+                *bundle.PurePosixPath(entry["relative_path"]).parts
+            )
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            mutation(receipt)
+            receipt_bytes = bundle._canonical_pretty(receipt)
+            receipt_path.write_bytes(receipt_bytes)
+            entry.update(_seal(receipt_bytes))
+            descriptor_path.write_bytes(bundle._canonical_pretty(descriptor))
+
+        manipulations = (
+            (
+                "profile",
+                lambda value: value["authority"].__setitem__(
+                    "qualified_profile_sha256", "ef" * 32
+                ),
+                "different qualified profile",
+            ),
+            (
+                "sidecar",
+                lambda value: value["authority"]["sidecar"].__setitem__(
+                    "sha256", "ef" * 32
+                ),
+                "different final sidecar",
+            ),
+            (
+                "shipping",
+                lambda value: value["authority"]["shipping"].__setitem__(
+                    "sha256", "ef" * 32
+                ),
+                "Shipping authority differs",
+            ),
+            (
+                "binds",
+                lambda value: value["authority"]["binds"].__setitem__(
+                    "sha256", "ef" * 32
+                ),
+                "Binds authority differs",
+            ),
+            (
+                "source-coverage",
+                lambda value: value["frozen_source"]["operations"].__setitem__(
+                    "add", 1
+                ),
+                "edit-only base module universe",
+            ),
+            (
+                "embedded-reference",
+                lambda value: value["embedded_reference"].__setitem__(
+                    "sha256", "0" * 64
+                ),
+                "must not be the zero digest",
+            ),
+            (
+                "candidate-module-count",
+                lambda value: value["standalone_candidate"].__setitem__(
+                    "module_count", 4
+                ),
+                "candidate module count differs",
+            ),
+            (
+                "semantic-diff",
+                lambda value: value["bytediff"].update(
+                    {"semantic": 1, "aligned_functions": 11}
+                ),
+                "zero semantic and alignment-loss",
+            ),
+            (
+                "alignment-loss",
+                lambda value: value["bytediff"].__setitem__("alignment_loss", 1),
+                "zero semantic and alignment-loss",
+            ),
+            (
+                "whole-cache",
+                lambda value: value["whole_cache_semantics_v1"].__setitem__(
+                    "exact_struct_equality", False
+                ),
+                "must be true",
+            ),
+        )
+        for name, mutation, expected in manipulations:
+            with self.subTest(mutation=name):
+                case = self.base / f"full-tree-{name}"
+                case.mkdir()
+                fixture = SyntheticInternalInput(case)
+                mutate_receipt(fixture, 1, mutation)
+                with self.assertRaisesRegex(bundle.BundleError, expected):
+                    bundle.verify_internal_input(
+                        fixture.root,
+                        sidecar_verifier=_accept_synthetic_sidecar,
+                        qualified_profile_verifier=_accept_synthetic_profile,
+                        promotion_attestation_verifier=_accept_synthetic_attestation,
+                    )
+
+        for mutation in ("missing", "extra", "swapped"):
+            with self.subTest(receipt_set=mutation):
+                case = self.base / f"full-tree-set-{mutation}"
+                case.mkdir()
+                fixture = SyntheticInternalInput(case)
+                descriptor_path = fixture.root / bundle.INTERNAL_INPUT_DESCRIPTOR_FILE
+                descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+                entries = descriptor["full_tree_verifications"]
+                if mutation == "missing":
+                    entries.pop()
+                elif mutation == "extra":
+                    entries.append(copy.deepcopy(entries[-1]))
+                else:
+                    entries.reverse()
+                descriptor_path.write_bytes(bundle._canonical_pretty(descriptor))
+                with self.assertRaisesRegex(
+                    bundle.BundleError,
+                    "exactly one receipt|different catalog profile",
+                ):
+                    bundle.verify_internal_input(
+                        fixture.root,
+                        sidecar_verifier=_accept_synthetic_sidecar,
+                        qualified_profile_verifier=_accept_synthetic_profile,
+                        promotion_attestation_verifier=_accept_synthetic_attestation,
+                    )
 
     def test_internal_package_is_compressed_deterministic_and_reusable(self) -> None:
         fixture = SyntheticInternalInput(self.base)
@@ -974,7 +1447,7 @@ class StandaloneCompilerBundleTests(unittest.TestCase):
             ("promotion-provenance", "pinned length/SHA-256"),
             ("promotion-receipt", "promotion receipt canonical seal differs"),
             ("promotion-artifact", "promotion authority differs"),
-            ("target", "target tuple differs"),
+            ("target", "product compiler target set differs"),
             ("target-width", "1..4294967295"),
             ("codeview", "CodeView GUID is invalid"),
             ("extra", "unknown="),
@@ -1158,8 +1631,9 @@ class StandaloneCompilerBundleTests(unittest.TestCase):
 
         verified = bundle.record_internal_input(
             fixture.root / bundle.SIDECAR_FILE,
-            [fixture.profile_root],
+            fixture.profile_roots,
             output,
+            full_tree_receipts=fixture.full_tree_receipts,
             promotion_identity=fixture.root.joinpath(
                 *bundle.PurePosixPath(bundle.PROMOTION_IDENTITY_FILE).parts
             ),
@@ -1179,18 +1653,16 @@ class StandaloneCompilerBundleTests(unittest.TestCase):
             },
         )
         self.assertEqual(verified.sidecar_name, bundle.SIDECAR_FILE)
-        self.assertEqual(len(verified_profiles), 3)
+        self.assertEqual(len(verified_profiles), 6)
         self.assertTrue(
             any(root.is_relative_to(output) for root, _ in verified_profiles)
         )
         self.assertTrue(
             any(not root.is_relative_to(output) for root, _ in verified_profiles)
         )
-        self.assertTrue(
-            all(
-                profile_sha256 == fixture.profile_sha256
-                for _, profile_sha256 in verified_profiles
-            )
+        self.assertEqual(
+            {profile_sha256 for _, profile_sha256 in verified_profiles},
+            {fixture.profile_sha256, fixture.current_profile_sha256},
         )
         self.assertEqual(
             (output / bundle.SIDECAR_FILE).read_bytes(), fixture.sidecar_bytes
@@ -1198,8 +1670,9 @@ class StandaloneCompilerBundleTests(unittest.TestCase):
         with self.assertRaisesRegex(bundle.BundleError, "must not exist"):
             bundle.record_internal_input(
                 fixture.root / bundle.SIDECAR_FILE,
-                [fixture.profile_root],
+                fixture.profile_roots,
                 output,
+                full_tree_receipts=fixture.full_tree_receipts,
                 promotion_identity=fixture.root.joinpath(
                     *bundle.PurePosixPath(bundle.PROMOTION_IDENTITY_FILE).parts
                 ),
@@ -1231,8 +1704,9 @@ class StandaloneCompilerBundleTests(unittest.TestCase):
         with self.assertRaisesRegex(bundle.BundleError, "typed verifier refused"):
             bundle.record_internal_input(
                 fixture.root / bundle.SIDECAR_FILE,
-                [fixture.profile_root],
+                fixture.profile_roots,
                 output,
+                full_tree_receipts=fixture.full_tree_receipts,
                 promotion_identity=fixture.root.joinpath(
                     *bundle.PurePosixPath(bundle.PROMOTION_IDENTITY_FILE).parts
                 ),
@@ -1254,14 +1728,44 @@ class StandaloneCompilerBundleTests(unittest.TestCase):
         self.assertFalse(output.exists())
         self.assertEqual(list(self.base.glob(f".{output.name}.*.tmp")), [])
 
+    def test_record_step_requires_one_full_tree_receipt_per_profile(self) -> None:
+        fixture = SyntheticInternalInput(self.base)
+        output = self.base / "missing-full-tree-receipt"
+        with self.assertRaisesRegex(bundle.BundleError, "exactly one full-tree receipt"):
+            bundle.record_internal_input(
+                fixture.root / bundle.SIDECAR_FILE,
+                fixture.profile_roots,
+                output,
+                full_tree_receipts=fixture.full_tree_receipts[:1],
+                promotion_identity=fixture.root.joinpath(
+                    *bundle.PurePosixPath(bundle.PROMOTION_IDENTITY_FILE).parts
+                ),
+                promotion_provenance=fixture.root.joinpath(
+                    *bundle.PurePosixPath(bundle.PROMOTION_PROVENANCE_FILE).parts
+                ),
+                promotion_attestation=fixture.root.joinpath(
+                    *bundle.PurePosixPath(bundle.PROMOTION_ATTESTATION_FILE).parts
+                ),
+                expected_repository=fixture.promotion_repository,
+                expected_commit=fixture.promotion_commit,
+                sidecar_verifier=_accept_synthetic_sidecar,
+                qualified_profile_verifier=_accept_synthetic_profile,
+                promotion_attestation_verifier=_accept_synthetic_attestation,
+                notice_sources={
+                    name: fixture.root / name for name in bundle.REQUIRED_NOTICES
+                },
+            )
+        self.assertFalse(output.exists())
+
     def test_record_step_requires_the_rust_typed_profile_verifier(self) -> None:
         fixture = SyntheticInternalInput(self.base)
         output = self.base / "recorded-without-typed-verifier"
         with self.assertRaisesRegex(bundle.BundleError, "Rust typed"):
             bundle.record_internal_input(
                 fixture.root / bundle.SIDECAR_FILE,
-                [fixture.profile_root],
+                fixture.profile_roots,
                 output,
+                full_tree_receipts=fixture.full_tree_receipts,
                 promotion_identity=fixture.root.joinpath(
                     *bundle.PurePosixPath(bundle.PROMOTION_IDENTITY_FILE).parts
                 ),
@@ -1296,8 +1800,9 @@ class StandaloneCompilerBundleTests(unittest.TestCase):
         with self.assertRaisesRegex(bundle.BundleError, "authorized commit"):
             bundle.record_internal_input(
                 fixture.root / bundle.SIDECAR_FILE,
-                [fixture.profile_root],
+                fixture.profile_roots,
                 output,
+                full_tree_receipts=fixture.full_tree_receipts,
                 promotion_identity=fixture.root.joinpath(
                     *bundle.PurePosixPath(bundle.PROMOTION_IDENTITY_FILE).parts
                 ),

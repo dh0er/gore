@@ -75,6 +75,19 @@ fn dart_generation_tables_cover_every_row() {
         gore_generation::rows().len()
     );
 
+    for marker in [
+        "const _authoringRevision3NpcExecutableByteLengthV",
+        "const _authoringRevision3NpcExecutableSha256V",
+    ] {
+        let declared = NPC_DRAFT.matches(marker).count();
+        assert_eq!(
+            declared,
+            gore_generation::rows().len(),
+            "revision3_npc_draft.dart declares {declared} `{marker}` rows and the table has {}",
+            gore_generation::rows().len()
+        );
+    }
+
     assert!(
         NPC_SOURCE_INSPECTION.contains("_authoringRevision3NpcIsSupportedExecutable("),
         "revision3_npc_source_inspection.dart must reuse the exact NPC generation predicate before \

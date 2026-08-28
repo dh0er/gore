@@ -352,14 +352,91 @@ pub const ROW_G1R_24340829: GenerationRow = GenerationRow {
     audited_item_generation: "g1r-steam-build-24340829",
 };
 
+/// Steam BuildID 24878692, shipped 2026-08-27/28. The script-cache wire format, class graph,
+/// resolved class bridge and GameplayTag-map surface remain unchanged, while the exact cache and
+/// ordered native API moved. The fresh 172709 UE4SS dump adds
+/// `/Script/G1R.RagdollConfig.m_FollowBone`; the previous 171261 dump is therefore not valid
+/// evidence for this row. The ten fewer scalar windows are fully accounted for by removed and
+/// added game-content modules rather than a parser regression. See
+/// `qualifications/g1r-steam-24878692.json`.
+pub const ROW_G1R_24878692: GenerationRow = GenerationRow {
+    id: "g1r-steam-24878692",
+    label: "Steam build 24878692 (2026-08-27/28 update)",
+    edition: "g1r-steam",
+
+    executable: FileSeal {
+        byte_len: 171_792_384,
+        sha256: hex("824fbc94f2ac7f45927a0754605666c37af862d66156a15f8bf6813759d9e8e0"),
+    },
+    shipping_cache: FileSeal {
+        byte_len: 124_459_412,
+        sha256: hex("7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511"),
+    },
+    binds_cache: FileSeal {
+        byte_len: 5_908_985,
+        sha256: hex("aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2"),
+    },
+    usmap: FileSeal {
+        byte_len: 2_415_439,
+        sha256: hex("6270c9d5fe22228ac78fc6a10330c2dd861e7d161d236a69eb550e6300b9c6bf"),
+    },
+
+    script_cache_guid: hex("7835bcc09c5eee488d72cb5ffb0fb0c3"),
+    script_cache_mutation_stable_sha256: hex(
+        "35a89f22ead3f3eed06fd5ccd00def41ae96da392bad78339984bf5630ed7512",
+    ),
+    scalar_default_operand_count: 26_389,
+    gameplay_tag_float32_operand_count: 1_432,
+
+    binds_field_map_sha256: hex(
+        "d7feb69355e5d66d02c66a9d5ca6ff3d675520bea10093cb8001bde0d47aafda",
+    ),
+    binds_class_path_map_sha256: hex(
+        "628d133fb6c6733c0d3d9e2710ae79d2758235582e9afed13201b84abaa7612b",
+    ),
+    usmap_class_graph_sha256: hex(
+        "642a8e0bc80301935a8a46498c00761b048cbac22bbd74fa914e86b6399fe321",
+    ),
+    resolved_class_profile_sha256: hex(
+        "a09e158df376b1f20b302f6eaa1e7476e660a7244c8d737b5a38f67243b52f5f",
+    ),
+    gameplay_tag_float32_map_profile_sha256: hex(
+        "5fa2e35616cb6b04a3060202e55ff575d8e8aeab5a25602aeddc10b3ad542708",
+    ),
+
+    native_ancestry_profile_id:
+        "sha256:e82fd03d8fa86a1417a6c4d23444d129e2aae293368b1912b077956af2b51827",
+    gameplay_tag_float32_map_proof_id:
+        "sha256:92df7492e40d6f65db8789beb8660e4d365b4e42d0450e8845e834d691d148b3",
+
+    record_set_id: "g1r-steam-1.0.3-curated-story-v4",
+    record_set_seal: FileSeal {
+        byte_len: 5_499,
+        sha256: hex("e7cf13f8b83ad3e111af7c0be83ae7d571d03cfa7d1f9755695f5344dd9680f9"),
+    },
+    catalog_payload_seal: FileSeal {
+        byte_len: 5_611,
+        sha256: hex("9438cc344ccc67556daf00b10be2b2310d1dcd30183e689eac95e261596622d3"),
+    },
+    catalog_label: "compiled curated V4",
+    record_seal_kind: "compiled curated V4 record set",
+    catalog_seal_kind: "compiled curated V4 catalog payload",
+
+    audited_item_generation: "g1r-steam-24878692",
+};
+
 /// Every audited generation, oldest first. A fixed-length array so the length appears in the diff
 /// of any commit that adds a row — the one piece of the old array-shaped friction worth keeping.
-pub static GENERATION_ROWS: [GenerationRow; 3] =
-    [ROW_G1R_1_0_3, ROW_G1R_24169431, ROW_G1R_24340829];
+pub static GENERATION_ROWS: [GenerationRow; 4] = [
+    ROW_G1R_1_0_3,
+    ROW_G1R_24169431,
+    ROW_G1R_24340829,
+    ROW_G1R_24878692,
+];
 
 /// The committed qualification artifact per row, keyed by [`GenerationRow::id`]. A row without one
 /// fails `every_row_has_a_committed_qualification_artifact`.
-pub const QUALIFICATION_ARTIFACTS: [(&str, &str); 3] = [
+pub const QUALIFICATION_ARTIFACTS: [(&str, &str); 4] = [
     (
         ROW_G1R_1_0_3.id,
         include_str!("../qualifications/g1r-steam-1.0.3.json"),
@@ -371,6 +448,10 @@ pub const QUALIFICATION_ARTIFACTS: [(&str, &str); 3] = [
     (
         ROW_G1R_24340829.id,
         include_str!("../qualifications/g1r-steam-24340829.json"),
+    ),
+    (
+        ROW_G1R_24878692.id,
+        include_str!("../qualifications/g1r-steam-24878692.json"),
     ),
 ];
 

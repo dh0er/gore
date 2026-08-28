@@ -3735,7 +3735,7 @@ fn hex16(b: &[u8; 16]) -> String {
 // ------------------------------------------------------------------------------------------
 // `gore as qualify` — deriving a generation row from an installation.
 //
-// The command exists because the last three generations were qualified by hand: a maintainer ran
+// The command exists because the first three generations were qualified by hand: a maintainer ran
 // half a dozen suites, read numbers out of their output, and pasted twenty-four values into a
 // struct literal across six files. Two things went wrong doing that, and both are designed against
 // here. A USMAP dump from the previous build passes its own hash check while describing the wrong
@@ -3999,6 +3999,10 @@ fn script_cache_native_bases(modules: &[gore_as::cache::model::Module]) -> Vec<S
         .iter()
         .flat_map(|module| module.classes.iter())
         .filter_map(|class| class.super_class.as_deref())
+        // The cache models script structs and classes uniformly. Non-inheriting F* records carry
+        // `Some("")` rather than `None`; that sentinel is not a native base and must not make a
+        // complete USMAP look one type short.
+        .filter(|base| !base.is_empty())
         .filter(|base| !declared.contains(base))
         .map(str::to_owned)
         .collect();
@@ -5591,6 +5595,35 @@ fn qualify_count(
 #[cfg(test)]
 mod default_cli_tests {
     use super::*;
+
+    #[test]
+    fn qualify_native_bases_ignore_the_empty_non_inheriting_sentinel() {
+        use gore_as::cache::model::{Class, Module};
+
+        let class = |name: &str, super_class: Option<&str>| Class {
+            name: name.to_owned(),
+            super_class: super_class.map(str::to_owned),
+            fields: Vec::new(),
+            methods: Vec::new(),
+            ctors: Vec::new(),
+            flags: 0,
+        };
+        let module = Module {
+            name: "QualificationFixture".to_owned(),
+            file: "QualificationFixture.as".to_owned(),
+            functions: Vec::new(),
+            classes: vec![
+                class("FValue", Some("")),
+                class("ULocalBase", None),
+                class("ULocalChild", Some("ULocalBase")),
+                class("UScriptChild", Some("UNativeBase")),
+            ],
+            enums: Vec::new(),
+            globals: Vec::new(),
+        };
+
+        assert_eq!(script_cache_native_bases(&[module]), ["UNativeBase"]);
+    }
 
     struct SuccessfulStandaloneRunner;
 
