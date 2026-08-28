@@ -955,9 +955,32 @@ class _EditorWorkspace extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final l10n = AppLocalizations.of(context);
+
+    Widget writeMessageBanner() {
+      final recovery = state.deletedSaveRecovery;
+      return MaterialBanner(
+        leading: const Icon(Icons.check_circle_outline),
+        content: Text(state.lastWriteMessage!),
+        actions: [
+          if (recovery != null)
+            TextButton.icon(
+              onPressed: state.isLoading
+                  ? null
+                  : () => notifier.restoreDeletedSave(),
+              icon: const Icon(Icons.undo),
+              label: Text(l10n.windowRestoreTooltip),
+            ),
+          TextButton(
+            onPressed: state.isLoading ? null : notifier.dismissWriteMessage,
+            child: Text(l10n.ok),
+          ),
+        ],
+      );
+    }
+
     Widget content;
     if (state.inspection == null) {
-      content = state.error != null
+      final emptyPane = state.error != null
           ? _MessagePane(
               icon: Icons.error_outline,
               title: l10n.errorTitle,
@@ -967,6 +990,14 @@ class _EditorWorkspace extends StatelessWidget {
               icon: Icons.search,
               title: l10n.selectASaveTitle,
               body: l10n.selectASaveBody,
+            );
+      content = state.lastWriteMessage == null
+          ? emptyPane
+          : Column(
+              children: [
+                writeMessageBanner(),
+                Expanded(child: emptyPane),
+              ],
             );
     } else {
       final inspection = state.inspection!;
@@ -1057,17 +1088,7 @@ class _EditorWorkspace extends StatelessWidget {
                   ),
                 ],
               ),
-            if (state.lastWriteMessage != null)
-              MaterialBanner(
-                leading: const Icon(Icons.check_circle_outline),
-                content: Text(state.lastWriteMessage!),
-                actions: [
-                  TextButton(
-                    onPressed: notifier.dismissWriteMessage,
-                    child: Text(l10n.ok),
-                  ),
-                ],
-              ),
+            if (state.lastWriteMessage != null) writeMessageBanner(),
             Expanded(
               child: TabBarView(
                 children: [
@@ -1401,7 +1422,7 @@ ProfileSummary? _selectedSaveProfile(EditorState state) {
   return null;
 }
 
-class _HeaderCard extends StatelessWidget {
+class _HeaderCard extends StatefulWidget {
   const _HeaderCard({
     required this.inspection,
     required this.state,
@@ -1413,7 +1434,18 @@ class _HeaderCard extends StatelessWidget {
   final EditorNotifier notifier;
 
   @override
+  State<_HeaderCard> createState() => _HeaderCardState();
+}
+
+class _HeaderCardState extends State<_HeaderCard> {
+  final _saveNameKey = GlobalKey<_SaveNameEditorState>();
+  final _gameTimeKey = GlobalKey<_GameTimeBadgeState>();
+
+  @override
   Widget build(BuildContext context) {
+    final inspection = widget.inspection;
+    final state = widget.state;
+    final notifier = widget.notifier;
     final l10n = AppLocalizations.of(context);
     final save = state.selectedSave;
     final currentProfile = _selectedSaveProfile(state);
@@ -1481,6 +1513,7 @@ class _HeaderCard extends StatelessWidget {
                     const SizedBox(height: 6),
                   ],
                   _GameTimeBadge(
+                    key: _gameTimeKey,
                     inspection: inspection,
                     notifier: notifier,
                     editable:
@@ -1524,6 +1557,7 @@ class _HeaderCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _SaveNameEditor(
+                    key: _saveNameKey,
                     inspection: inspection,
                     notifier: notifier,
                     fallbackTitle: title,
@@ -1687,6 +1721,7 @@ Uint8List? _decodeScreenshot(ScreenshotSummary? screenshot) {
 
 class _SaveNameEditor extends StatefulWidget {
   const _SaveNameEditor({
+    super.key,
     required this.inspection,
     required this.notifier,
     required this.fallbackTitle,
@@ -1748,7 +1783,7 @@ class _SaveNameEditorState extends State<_SaveNameEditor> {
     if (!mounted || value == null) return;
 
     setState(() => _draftName = value);
-    final original = widget.inspection.playerSaveName ?? '';
+    final original = widget.inspection.playerSaveName ?? widget.fallbackTitle;
     if (value == original) {
       widget.notifier.clearPendingEdit('publicName');
     } else {
@@ -2004,6 +2039,7 @@ class _SaveProfileCard extends StatelessWidget {
 /// verified, compress-ready codec); when false the badge is read-only.
 class _GameTimeBadge extends StatefulWidget {
   const _GameTimeBadge({
+    super.key,
     required this.inspection,
     required this.notifier,
     required this.editable,

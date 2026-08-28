@@ -140,6 +140,7 @@ class EditorState {
     this.error,
     this.codecError,
     this.lastWriteMessage,
+    this.deletedSaveRecovery,
     this.pendingEdits = const {},
     this.selectedActor = const Actor.player(),
     Set<String> invalidEditKeys = const {},
@@ -256,6 +257,14 @@ class EditorState {
   final String? codecError;
   final String? lastWriteMessage;
 
+  /// One-click recovery target retained after a backed-up save deletion.
+  ///
+  /// The deleted slot disappears from the scan immediately, so its regular
+  /// Backups tab can no longer address the snapshot. Keep the exact live and
+  /// backup paths until the user restores it or explicitly dismisses the
+  /// success banner.
+  final DeletedSaveRecovery? deletedSaveRecovery;
+
   /// User-visible changes across all pending keys, driving the global
   /// "Unsaved (N)" badge and the Save/Reset buttons. An invalid-only draft
   /// contributes one so Reset stays reachable.
@@ -365,6 +374,7 @@ class EditorState {
     String? error,
     String? codecError,
     String? lastWriteMessage,
+    Object? deletedSaveRecovery = _unchanged,
     Map<String, PendingSaveEdit>? pendingEdits,
     Actor? selectedActor,
     Set<String>? invalidEditKeys,
@@ -379,6 +389,7 @@ class EditorState {
     bool clearCodecError = false,
     bool clearCodecStatus = false,
     bool clearWriteMessage = false,
+    bool clearDeletedSaveRecovery = false,
     bool clearPendingEdits = false,
   }) {
     var resolvedInvalidEditKeys = clearPendingEdits
@@ -425,6 +436,11 @@ class EditorState {
       lastWriteMessage: clearWriteMessage
           ? null
           : lastWriteMessage ?? this.lastWriteMessage,
+      deletedSaveRecovery: clearDeletedSaveRecovery
+          ? null
+          : identical(deletedSaveRecovery, _unchanged)
+          ? this.deletedSaveRecovery
+          : deletedSaveRecovery as DeletedSaveRecovery?,
       pendingEdits: clearPendingEdits
           ? const {}
           : pendingEdits ?? this.pendingEdits,
@@ -537,6 +553,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     required String Function(String details) failureMessage,
     String command = 'write_save',
     void Function()? beforeRefresh,
+    void Function(Map<String, Object?> data)? onSuccess,
   }) async {
     var ok = false;
     await _withLoading(() async {
@@ -547,6 +564,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       }
       final data = (response['data'] as Map).cast<String, Object?>();
       state = state.copyWith(lastWriteMessage: message(data));
+      onSuccess?.call(data);
       beforeRefresh?.call();
       await refresh();
       ok = true;
@@ -944,7 +962,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// Dismiss the current success/status banner.
   void dismissWriteMessage() {
     if (state.lastWriteMessage != null) {
-      state = state.copyWith(clearWriteMessage: true);
+      state = state.copyWith(
+        clearWriteMessage: true,
+        clearDeletedSaveRecovery: true,
+      );
     }
   }
 
@@ -2707,6 +2728,16 @@ class EditorNotifier extends StateNotifier<EditorState> {
         }
         return message;
       },
+      onSuccess: (data) {
+        final backupPath = data['backupPath'] as String?;
+        if (backupPath == null || backupPath.isEmpty) return;
+        state = state.copyWith(
+          deletedSaveRecovery: DeletedSaveRecovery(
+            targetPath: save.path,
+            backupPath: backupPath,
+          ),
+        );
+      },
       beforeRefresh: () {
         state = state.copyWith(
           externalSavePaths: _removeSavePath(
@@ -2813,9 +2844,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// Restore a backup. [targetPath] overrides the file to restore (used for
   /// companion `PersistentDataList.sav` backups); it defaults to the selected
   /// slot.
-  Future<void> restoreBackup(String backupPath, {String? targetPath}) async {
+  Future<bool> restoreBackup(String backupPath, {String? targetPath}) async {
     final path = targetPath ?? state.selectedPath;
-    if (path == null) return;
+    if (path == null) return false;
+    var restored = false;
     await _withLoading(() async {
       final response = await _execute(
         'restore_backup',
@@ -2863,7 +2895,24 @@ class EditorNotifier extends StateNotifier<EditorState> {
           error: _l10n.editorRestoreReloadFailed(backupPath, state.error!),
         );
       }
+      restored = true;
     }, failureMessage: (details) => _l10n.editorRestoreFailed(details));
+    return restored;
+  }
+
+  /// Restore the most recently deleted slot from the exact snapshot returned
+  /// by `delete_save`. The core also restores its matching
+  /// PersistentDataList backup when present.
+  Future<void> restoreDeletedSave() async {
+    final recovery = state.deletedSaveRecovery;
+    if (recovery == null) return;
+    final restored = await restoreBackup(
+      recovery.backupPath,
+      targetPath: recovery.targetPath,
+    );
+    if (restored) {
+      state = state.copyWith(clearDeletedSaveRecovery: true);
+    }
   }
 
   /// Delete one backup of the selected save (or of `targetPath`). The core only
@@ -4149,6 +4198,16 @@ class _BackupSnapshot {
 
   final List<BackupEntry> backups;
   final List<BackupEntry> companionBackups;
+}
+
+class DeletedSaveRecovery {
+  const DeletedSaveRecovery({
+    required this.targetPath,
+    required this.backupPath,
+  });
+
+  final String targetPath;
+  final String backupPath;
 }
 
 /// A single flattened pending edit paired with the snapshot key it came from, so

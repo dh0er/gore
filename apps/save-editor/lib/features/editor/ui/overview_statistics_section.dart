@@ -356,6 +356,9 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
 
   _StatisticsSection _questSection(BuildContext context) {
     final l10n = AppLocalizations.of(context);
+    final authoritative =
+        widget.inspection.privateTypedVerified &&
+        widget.inspection.privateProgression.available;
     final counts = widget.inspection.privateProgression.questStates;
     final succeeded = _questCount(counts, 'Succeeded');
     final failed = _questCount(counts, 'Failed');
@@ -366,17 +369,31 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
       icon: Icons.assignment_outlined,
       title: l10n.statisticsCardTitle('quests', 'Quests'),
       metrics: [
-        _Metric(label: l10n.questStateSucceeded, value: '$succeeded'),
-        _Metric(label: l10n.questStateFailed, value: '$failed'),
-        _Metric(label: l10n.questStateRunning, value: '$running'),
-        _Metric(label: l10n.questStateAvailable, value: '$available'),
+        _Metric(
+          label: l10n.questStateSucceeded,
+          value: authoritative ? '$succeeded' : l10n.statisticsUnknown,
+        ),
+        _Metric(
+          label: l10n.questStateFailed,
+          value: authoritative ? '$failed' : l10n.statisticsUnknown,
+        ),
+        _Metric(
+          label: l10n.questStateRunning,
+          value: authoritative ? '$running' : l10n.statisticsUnknown,
+        ),
+        _Metric(
+          label: l10n.questStateAvailable,
+          value: authoritative ? '$available' : l10n.statisticsUnknown,
+        ),
       ],
-      footer: _QuestBar(
-        succeeded: succeeded,
-        failed: failed,
-        running: running,
-        available: available,
-      ),
+      footer: authoritative
+          ? _QuestBar(
+              succeeded: succeeded,
+              failed: failed,
+              running: running,
+              available: available,
+            )
+          : null,
     );
   }
 
@@ -438,11 +455,12 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
         ),
         _Metric(
           label: l10n.statisticsMetric('openCrimes', 'Open crimes'),
-          value:
-              widget.inspection.privateFactions?.guilds
-                  .fold<int>(0, (sum, guild) => sum + guild.unforgiven)
-                  .toString() ??
-              l10n.statisticsUnknown,
+          value: !widget.inspection.privateTypedVerified
+              ? l10n.statisticsUnknown
+              : widget.inspection.privateFactions?.guilds
+                        .fold<int>(0, (sum, guild) => sum + guild.unforgiven)
+                        .toString() ??
+                    l10n.statisticsUnknown,
         ),
       ],
     );
@@ -450,6 +468,7 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
 
   _StatisticsSection _inventorySection(BuildContext context) {
     final l10n = AppLocalizations.of(context);
+    final authoritative = widget.inspection.privateTypedVerified;
     final inventory = widget.inspection.privateInventory;
     final totalItems = inventory.items.fold<int>(
       0,
@@ -477,9 +496,12 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
         ),
         _Metric(
           label: l10n.statisticsMetric('inventoryItems', 'Items'),
-          value: '$totalItems',
+          value: authoritative ? '$totalItems' : l10n.statisticsUnknown,
         ),
-        _Metric(label: l10n.statisticsMetric('ore', 'Ore'), value: '$ore'),
+        _Metric(
+          label: l10n.statisticsMetric('ore', 'Ore'),
+          value: authoritative ? '$ore' : l10n.statisticsUnknown,
+        ),
       ],
     );
   }

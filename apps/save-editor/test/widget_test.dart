@@ -789,6 +789,93 @@ void main() {
     expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
   });
 
+  testWidgets('responsive header keeps pending name and game-time drafts', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final core = _FakeCoreService(gameTimeTotalSeconds: 1413433);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(core),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('edit-save-name')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('edit-save-name-field')),
+      'Responsive draft',
+    );
+    await tester.tap(find.byKey(const ValueKey('confirm-save-name')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('game-time-badge')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('game-time-day-field')),
+      '17',
+    );
+    await tester.tap(find.byKey(const ValueKey('confirm-game-time')));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(FilledButton, 'Save (2)'), findsOneWidget);
+
+    await tester.binding.setSurfaceSize(const Size(850, 1000));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<Text>(find.byKey(const ValueKey('selected-save-name')))
+          .data,
+      'Responsive draft',
+    );
+    expect(find.text('Day 17 · 08:37:13'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Save (2)'), findsOneWidget);
+  });
+
+  testWidgets('confirming an unnamed save fallback leaves it unchanged', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(
+            _FakeCoreService(playerSaveName: null),
+          ),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('edit-save-name')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('confirm-save-name')));
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithText(FilledButton, 'Save (1)'), findsNothing);
+    expect(
+      tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Save'))
+          .onPressed,
+      isNull,
+    );
+  });
+
   testWidgets('Reset button discards pending and restores field text', (
     tester,
   ) async {
@@ -1262,12 +1349,56 @@ void main() {
     }
   });
 
+  testWidgets('unavailable private statistics are not rendered as zero', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1500, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(
+            _UnavailableStatisticsCoreService(),
+          ),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('statistics-card-quests')),
+        matching: find.text('Not available'),
+      ),
+      findsNWidgets(4),
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('statistics-card-progress')),
+        matching: find.text('Not available'),
+      ),
+      findsAtLeastNWidgets(1),
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('statistics-section-inventory')),
+        matching: find.text('Not available'),
+      ),
+      findsAtLeastNWidgets(2),
+    );
+  });
+
   testWidgets(
     'save list shows file name and both delete actions require confirmation',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1400, 900));
       addTearDown(() => tester.binding.setSurfaceSize(null));
-      final core = _FakeCoreService();
+      final core = _DeletingSaveCoreService();
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
@@ -1412,6 +1543,18 @@ void main() {
       expect(request.payload['slot'], 'G1R-001');
       expect(request.payload['profileId'], 0);
       expect(request.payload['backup'], isTrue);
+
+      expect(find.widgetWithText(TextButton, 'Restore'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, 'Restore'));
+      await tester.pumpAndSettle();
+
+      final restore = core.requests.lastWhere(
+        (request) => request.command == 'restore_backup',
+      );
+      expect(restore.payload, {
+        'path': r'C:\tmp\saves\G1R-001.sav',
+        'backupPath': r'C:\tmp\saves\goresave_backups\G1R-001.sav.bak.301',
+      });
     },
   );
 
@@ -1562,9 +1705,13 @@ class _RecordedRequest {
 }
 
 class _FakeCoreService implements GoresaveCoreService {
-  _FakeCoreService({this.gameTimeTotalSeconds});
+  _FakeCoreService({
+    this.gameTimeTotalSeconds,
+    this.playerSaveName = 'Die Welt der Verurteilten',
+  });
 
   final double? gameTimeTotalSeconds;
+  final String? playerSaveName;
   final requests = <_RecordedRequest>[];
 
   @override
@@ -1594,7 +1741,7 @@ class _FakeCoreService implements GoresaveCoreService {
                 'sha1': 'abc',
                 'status': 'ok',
                 'persistentProfileId': 0,
-                'playerSaveName': 'Die Welt der Verurteilten',
+                'playerSaveName': playerSaveName,
                 'persistentPlayerSaveName':
                     'Die Welt der Verurteilten, Tag 1, 13:07',
                 'chapterId': 1,
@@ -1645,10 +1792,7 @@ class _FakeCoreService implements GoresaveCoreService {
               'bytesBase64':
                   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
             },
-            'public': {
-              'slotName': 'G1R-001',
-              'playerSaveName': 'Die Welt der Verurteilten',
-            },
+            'public': {'slotName': 'G1R-001', 'playerSaveName': playerSaveName},
             'difficulty': {'preset': 'DifficultyPreset_Custom'},
             'persistent': {
               'playerSaveName': 'Die Welt der Verurteilten, Tag 1, 13:07',
@@ -2278,6 +2422,67 @@ class _StatisticsCoreService extends _FakeCoreService {
       };
     }
     return super.execute(command, payload: payload);
+  }
+}
+
+class _UnavailableStatisticsCoreService extends _FakeCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    final response = await super.execute(command, payload: payload);
+    if (command != 'inspect_save') return response;
+
+    final data = (response['data'] as Map).cast<String, Object?>();
+    data['private'] = {
+      'status': 'unavailable',
+      'typedParse': {'status': 'failed'},
+      'progression': {'status': 'failed'},
+      'inventory': <String, Object?>{},
+    };
+    return response;
+  }
+}
+
+class _DeletingSaveCoreService extends _FakeCoreService {
+  bool _deleted = false;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'scan_save_dir' && _deleted) {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': true,
+        'data': {
+          'saveRoot': r'C:\tmp\saves',
+          'saves': <Object?>[],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'quickSaveSlots': ['G1R-001', 'G1R-002', 'G1R-003'],
+              'autoSaveSlots': ['G1R-001', 'G1R-002'],
+              'savedSlots': <Object?>[],
+              'difficultyPreset': 'DifficultyPreset_Custom',
+              'maxQuick': 3,
+              'maxAuto': 2,
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      };
+    }
+
+    final response = await super.execute(command, payload: payload);
+    if (command == 'delete_save') _deleted = true;
+    if (command == 'restore_backup') _deleted = false;
+    return response;
   }
 }
 

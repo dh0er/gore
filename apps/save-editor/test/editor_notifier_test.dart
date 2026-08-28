@@ -1398,61 +1398,58 @@ void main() {
     },
   );
 
-  test(
-    'saveAllPending refuses a container edit to a glossary quest CurrentState '
-    'path spelled another way',
-    () async {
-      final core = _RecordingCoreService();
-      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
-      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+  test('saveAllPending refuses a container edit to a glossary quest CurrentState '
+      'path spelled another way', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
-      // The index the editor wrote as [4]; the core reads both spellings as the
-      // same segment, so the pair has to be refused here rather than split into
-      // two writes where the later one silently wins.
-      notifier.setPendingGlossarySegment(
-        const GlossarySegmentEdit(
-          documentClass: '/Script/Angelscript.Document_Glossary_Wolf',
-          segmentClass:
-              '/Script/Angelscript.DocumentSegment_Glossary_Wolf_Unlock',
-          unlocked: true,
-          questStatePath: [
-            'QuestDataByClass',
-            '{/Script/Angelscript.Quest_CreaturesGlossary_Wolf_WolfUnlock}',
-            'SubQuests',
-            '[4]',
-            'CurrentState',
-          ],
-        ),
-      );
-      notifier.setPendingEdit(
-        'typed:wolf-current-state',
-        const PendingSaveEdit(
-          edits: [
-            {
-              'path': 'private.typed.arrayRemove',
-              'value': {
-                'path': [
-                  'QuestDataByClass',
-                  '{/Script/Angelscript.Quest_CreaturesGlossary_Wolf_WolfUnlock}',
-                  'SubQuests',
-                  '[04]',
-                  'CurrentState',
-                ],
-                'index': 0,
-              },
+    // The index the editor wrote as [4]; the core reads both spellings as the
+    // same segment, so the pair has to be refused here rather than split into
+    // two writes where the later one silently wins.
+    notifier.setPendingGlossarySegment(
+      const GlossarySegmentEdit(
+        documentClass: '/Script/Angelscript.Document_Glossary_Wolf',
+        segmentClass:
+            '/Script/Angelscript.DocumentSegment_Glossary_Wolf_Unlock',
+        unlocked: true,
+        questStatePath: [
+          'QuestDataByClass',
+          '{/Script/Angelscript.Quest_CreaturesGlossary_Wolf_WolfUnlock}',
+          'SubQuests',
+          '[4]',
+          'CurrentState',
+        ],
+      ),
+    );
+    notifier.setPendingEdit(
+      'typed:wolf-current-state',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.typed.arrayRemove',
+            'value': {
+              'path': [
+                'QuestDataByClass',
+                '{/Script/Angelscript.Quest_CreaturesGlossary_Wolf_WolfUnlock}',
+                'SubQuests',
+                '[04]',
+                'CurrentState',
+              ],
+              'index': 0,
             },
-          ],
-        ),
-      );
+          },
+        ],
+      ),
+    );
 
-      final ok = await notifier.saveAllPending();
+    final ok = await notifier.saveAllPending();
 
-      expect(ok, isFalse);
-      expect(notifier.state.error, contains('same quest CurrentState'));
-      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
-      expect(notifier.state.pendingEdits, hasLength(2));
-    },
-  );
+    expect(ok, isFalse);
+    expect(notifier.state.error, contains('same quest CurrentState'));
+    expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+    expect(notifier.state.pendingEdits, hasLength(2));
+  });
 
   test('saveAllPending refuses a typed value edit inside Hero MemorizedEvents '
       'alongside a glossary segment change', () async {
@@ -2708,7 +2705,11 @@ void main() {
       final notifier = EditorNotifier(core, saveDir: r'C:	mp\saves');
       await notifier.inspect(r'C:	mp\saves\G1R-001.sav');
 
-      Map<String, Object?> entry(String character, String name, bool present) => {
+      Map<String, Object?> entry(
+        String character,
+        String name,
+        bool present,
+      ) => {
         'path': 'private.knowledge.setEntry',
         'value': {'character': character, 'entry': name, 'present': present},
       };
@@ -2735,62 +2736,68 @@ void main() {
       }
     });
 
-    test('an id-addressed edit is written before the write that renumbers ids', () async {
-      final core = _RecordingCoreService();
-      final notifier = EditorNotifier(core, saveDir: r'C:	mp\saves');
-      await notifier.inspect(r'C:	mp\saves\G1R-001.sav');
+    test(
+      'an id-addressed edit is written before the write that renumbers ids',
+      () async {
+        final core = _RecordingCoreService();
+        final notifier = EditorNotifier(core, saveDir: r'C:	mp\saves');
+        await notifier.inspect(r'C:	mp\saves\G1R-001.sav');
 
-      // A raw write to a slot's m_Id renumbers what the count edit is addressed
-      // by. Two writes would not help — the second would resolve the id this one
-      // moved — so they share one write with the addressed edit first, which is
-      // the order the core accepts.
-      notifier.setPendingEdit(
-        'a-slot-id',
-        const PendingSaveEdit(
-          edits: [
-            {
-              'path': 'private.typed.setValue',
-              'value': {
-                'path': [
-                  'm_Inventory',
-                  'm_Containers',
-                  '[0]',
-                  'm_Slots',
-                  '[3]',
-                  'm_Id',
-                ],
-                'value': 9,
+        // A raw write to a slot's m_Id renumbers what the count edit is addressed
+        // by. Two writes would not help — the second would resolve the id this one
+        // moved — so they share one write with the addressed edit first, which is
+        // the order the core accepts.
+        notifier.setPendingEdit(
+          'a-slot-id',
+          const PendingSaveEdit(
+            edits: [
+              {
+                'path': 'private.typed.setValue',
+                'value': {
+                  'path': [
+                    'm_Inventory',
+                    'm_Containers',
+                    '[0]',
+                    'm_Slots',
+                    '[3]',
+                    'm_Id',
+                  ],
+                  'value': 9,
+                },
               },
-            },
-          ],
-        ),
-      );
-      notifier.setPendingEdit(
-        'z-count',
-        const PendingSaveEdit(
-          edits: [
-            {
-              'path': 'private.inventory.setItemCount',
-              'value': {'path': '/Script/Angelscript.ItMi_Orenugget', 'count': 5},
-            },
-          ],
-        ),
-      );
+            ],
+          ),
+        );
+        notifier.setPendingEdit(
+          'z-count',
+          const PendingSaveEdit(
+            edits: [
+              {
+                'path': 'private.inventory.setItemCount',
+                'value': {
+                  'path': '/Script/Angelscript.ItMi_Orenugget',
+                  'count': 5,
+                },
+              },
+            ],
+          ),
+        );
 
-      final ok = await notifier.saveAllPending();
+        final ok = await notifier.saveAllPending();
 
-      expect(ok, isTrue);
-      final writes = core.requests
-          .where((request) => request.command == 'write_save')
-          .toList();
-      expect(writes, hasLength(1));
-      final edits = (writes.single.payload['edits'] as List)
-          .cast<Map<String, Object?>>();
-      expect(
-        edits.map((edit) => edit['path']),
-        ['private.inventory.setItemCount', 'private.typed.setValue'],
-      );
-    });
+        expect(ok, isTrue);
+        final writes = core.requests
+            .where((request) => request.command == 'write_save')
+            .toList();
+        expect(writes, hasLength(1));
+        final edits = (writes.single.payload['edits'] as List)
+            .cast<Map<String, Object?>>();
+        expect(edits.map((edit) => edit['path']), [
+          'private.inventory.setItemCount',
+          'private.typed.setValue',
+        ]);
+      },
+    );
 
     test('a skill edit sent with an empty actor is the hero everywhere', () {
       final emptyActor = {
@@ -2838,13 +2845,10 @@ void main() {
       // The core reads an ABSENT or empty actor as the hero, and it decides that
       // before folding, so a blank of spaces stays an actor of its own.
       expect(
-        structuredEditsShareATarget(
-          skill('Hero', 'Ranged_Bow', 'Trained'),
-          {
-            'path': 'private.skills.set',
-            'value': {'base': 'Ranged_Bow', 'tier': 'Untrained'},
-          },
-        ),
+        structuredEditsShareATarget(skill('Hero', 'Ranged_Bow', 'Trained'), {
+          'path': 'private.skills.set',
+          'value': {'base': 'Ranged_Bow', 'tier': 'Untrained'},
+        }),
         isTrue,
       );
       expect(
@@ -5144,6 +5148,26 @@ void main() {
       expect(notifier.state.profiles.single.savedSlots, isEmpty);
       expect(notifier.state.selectedPath, isNull);
       expect(notifier.state.inspection, isNull);
+      expect(
+        notifier.state.deletedSaveRecovery?.targetPath,
+        r'C:\tmp\saves\G1R-006.sav',
+      );
+      expect(
+        notifier.state.deletedSaveRecovery?.backupPath,
+        r'C:\tmp\saves\goresave_backups\G1R-006.sav.bak.2',
+      );
+
+      await notifier.restoreDeletedSave();
+
+      final restore = core.requests.lastWhere(
+        (request) => request.command == 'restore_backup',
+      );
+      expect(restore.payload['path'], r'C:\tmp\saves\G1R-006.sav');
+      expect(
+        restore.payload['backupPath'],
+        r'C:\tmp\saves\goresave_backups\G1R-006.sav.bak.2',
+      );
+      expect(notifier.state.deletedSaveRecovery, isNull);
     },
   );
 
