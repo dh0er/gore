@@ -55,7 +55,10 @@ class _RecordingCore implements GoresaveCoreService {
     String command, {
     Map<String, Object?> payload = const {},
   }) async {
-    requests.add((command: command, payload: Map<String, Object?>.from(payload)));
+    requests.add((
+      command: command,
+      payload: Map<String, Object?>.from(payload),
+    ));
     onRequest?.call(command, payload);
     final wait = command == slowCommand ? _slowDelay : delay;
     if (wait > Duration.zero) await Future<void>.delayed(wait);
@@ -236,7 +239,19 @@ void main() {
     // The core caches one response per exact request, so a prefetch at the
     // wrong page size warms an answer no panel ever asks for.
     expect(progression('knowledge')['limit'], EditorPageSize.detail);
-    expect(progression('events')['limit'], EditorPageSize.detail);
+    final eventLimits = core.requests
+        .where(
+          (request) =>
+              request.command == 'query_progression' &&
+              request.payload['section'] == 'events',
+        )
+        .map((request) => request.payload['limit']);
+    // Overview aggregates the full Hero history in broad pages, while the
+    // Events panel still opens with its smaller interactive page.
+    expect(
+      eventLimits,
+      containsAll([EditorPageSize.statistics, EditorPageSize.detail]),
+    );
     expect(progression('quests')['limit'], EditorPageSize.fullList);
     expect(progression('story')['limit'], EditorPageSize.fullList);
     expect(progression('story')['includeUnset'], isTrue);
@@ -320,31 +335,34 @@ void main() {
     expect(core.commandCount('private.npc.list'), afterPanel);
   });
 
-  test('prefetch walks every page of a section the panel fetches whole', () async {
-    // Quests and story state are fetched whole and filtered client-side, in
-    // pages the core clamps to 1000. A save past that clamp would otherwise
-    // open those tabs on a cold traversal for every page after the first —
-    // with the panel's spinner up.
-    final core = _RecordingCore(
-      pagedSectionTotals: const {'quests': 2300, 'story': 1000},
-    );
-    final notifier = await _loadedEditor(core);
+  test(
+    'prefetch walks every page of a section the panel fetches whole',
+    () async {
+      // Quests and story state are fetched whole and filtered client-side, in
+      // pages the core clamps to 1000. A save past that clamp would otherwise
+      // open those tabs on a cold traversal for every page after the first —
+      // with the panel's spinner up.
+      final core = _RecordingCore(
+        pagedSectionTotals: const {'quests': 2300, 'story': 1000},
+      );
+      final notifier = await _loadedEditor(core);
 
-    notifier.prefetchTabData();
-    await _settledPrefetch(notifier);
+      notifier.prefetchTabData();
+      await _settledPrefetch(notifier);
 
-    List<int> offsetsFor(String section) => [
-      for (final request in core.requests)
-        if (request.command == 'query_progression' &&
-            request.payload['section'] == section)
-          request.payload['offset'] as int,
-    ];
+      List<int> offsetsFor(String section) => [
+        for (final request in core.requests)
+          if (request.command == 'query_progression' &&
+              request.payload['section'] == section)
+            request.payload['offset'] as int,
+      ];
 
-    // 2300 over pages of 1000: the panel asks at 0, 1000, 2000 and stops.
-    expect(offsetsFor('quests'), [0, 1000, 2000]);
-    // Exactly one full page: the panel stops after it, so the warm-up must too.
-    expect(offsetsFor('story'), [0]);
-  });
+      // 2300 over pages of 1000: the panel asks at 0, 1000, 2000 and stops.
+      expect(offsetsFor('quests'), [0, 1000, 2000]);
+      // Exactly one full page: the panel stops after it, so the warm-up must too.
+      expect(offsetsFor('story'), [0]);
+    },
+  );
 
   test('a paged walk stops when something else takes the editor', () async {
     // The offsets and total a walk carries belong to the file it began against.
@@ -352,9 +370,7 @@ void main() {
     // queue ahead of the user's own request to warm an offset nothing will ask
     // for — and, unpinned, would ask it of a different file.
     // Twenty pages' worth, so a walk that ignores supersede is unmistakable.
-    final core = _RecordingCore(
-      pagedSectionTotals: const {'quests': 20000},
-    );
+    final core = _RecordingCore(pagedSectionTotals: const {'quests': 20000});
     final notifier = await _loadedEditor(core);
 
     // Disturb the editor from INSIDE the walk, on its first page — timing it
@@ -381,7 +397,11 @@ void main() {
     ];
     // The superseded walk must abandon its remaining pages. The restart then
     // walks all twenty, so the count lands near twenty rather than near forty.
-    expect(offsets.length, lessThan(30), reason: 'a superseded walk kept paging');
+    expect(
+      offsets.length,
+      lessThan(30),
+      reason: 'a superseded walk kept paging',
+    );
     // Every page it did ask for names the file the walk began against.
     for (final request in core.requests) {
       if (request.command != 'query_progression') continue;
@@ -491,7 +511,9 @@ void main() {
     final reinspect = notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
     await notifier.prefetchInFlight;
     final duringPrefetch = core.commands
-        .where((command) => command != 'inspect_save' && command != 'list_backups')
+        .where(
+          (command) => command != 'inspect_save' && command != 'list_backups',
+        )
         .length;
     await reinspect;
 

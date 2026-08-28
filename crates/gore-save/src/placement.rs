@@ -319,6 +319,13 @@ pub fn forget_key(save_path: &Path, key: &str) -> Result<(), CoreError> {
     mutate_notes_for(save_path, key, |notes| notes.clear())
 }
 
+/// Drop the notes associated with the live save file after that file was
+/// deleted. Backup-note keys remain intact so the safety backup can still be
+/// restored with its matching placement undo information.
+pub fn forget_live(save_path: &Path) -> Result<(), CoreError> {
+    forget_key(save_path, &save_key(save_path))
+}
+
 /// Drop the notes for `npcs`. Dropping one that is not there is not an error —
 /// a restore whose note was already cleared has nothing left to do.
 pub fn clear(save_path: &Path, npcs: &[String]) -> Result<(), CoreError> {

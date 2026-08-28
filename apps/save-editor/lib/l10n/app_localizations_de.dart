@@ -662,7 +662,7 @@ class AppLocalizationsDe extends AppLocalizations {
   }
 
   @override
-  String get publicSaveName => 'Öffentlicher Speichername';
+  String get publicSaveName => 'Name';
 
   @override
   String get gameTimeTitle => 'Spielzeit';
@@ -2195,6 +2195,17 @@ class AppLocalizationsDe extends AppLocalizations {
   String get removeFromProfile => 'Aus Profil entfernen';
 
   @override
+  String get deleteSavegame => 'Savegame löschen';
+
+  @override
+  String get deleteSavegameTitle => 'Savegame löschen?';
+
+  @override
+  String deleteSavegameBody(String save, String fileName, String profile) {
+    return '„$save“ ($fileName) wirklich löschen? Es wird aus $profile entfernt und im Savegame-Ordner gelöscht. GORE legt vorher ein Backup an.';
+  }
+
+  @override
   String get removeSaveFromProfileTitle => 'Spielstand aus Profil entfernen?';
 
   @override
@@ -2300,6 +2311,10 @@ class AppLocalizationsDe extends AppLocalizations {
       'Speichere deine Änderungen oder setze sie zurück, bevor du einen Spielstand aus seinem Profil entfernst.';
 
   @override
+  String get editorUnsavedBeforeDeleteSave =>
+      'Speichere deine Änderungen oder setze sie zurück, bevor du dieses Savegame löschst.';
+
+  @override
   String get editorUnsavedBeforeRestoreProfile =>
       'Es gibt ungespeicherte Spielstandänderungen. Speichere sie oder setze sie zurück, bevor du eine Profilsicherung wiederherstellst.';
 
@@ -2400,6 +2415,9 @@ class AppLocalizationsDe extends AppLocalizations {
       'Spielstand aus dem Profil entfernt';
 
   @override
+  String get editorSaveDeleted => 'Savegame gelöscht; Backup angelegt';
+
+  @override
   String editorRestoredBackup(String path) {
     return 'Sicherung wiederhergestellt: $path';
   }
@@ -2427,6 +2445,11 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String editorProfileRemovalFailed(String details) {
     return 'Der Spielstand konnte nicht aus dem Profil entfernt werden: $details';
+  }
+
+  @override
+  String editorDeleteSaveFailed(String details) {
+    return 'Das Savegame konnte nicht gelöscht werden: $details';
   }
 
   @override
@@ -2944,4 +2967,95 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String get slotRepairNotOffered =>
       'Für dieses Savegame steht die Reparatur nicht zur Verfügung.';
+
+  @override
+  String get statisticsTitle => 'Statistiken';
+
+  @override
+  String get statisticsSubtitle =>
+      'Kompakte Übersicht über Charakter, Quests, Welt und Spielfortschritt.';
+
+  @override
+  String statisticsCardTitle(String card, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(card, {
+      'timing': 'Zeit',
+      'character': 'Charakter',
+      'quests': 'Quests',
+      'progress': 'Fortschritt',
+      'encounters': 'Kampf & Kontakte',
+      'inventory': 'Fähigkeiten & Inventar',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String statisticsMetric(String metric, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(metric, {
+      'timePlayed': 'Gespielt',
+      'worldTime': 'Weltzeit',
+      'level': 'Level',
+      'experience': 'Erfahrung',
+      'learningPoints': 'Lernpunkte',
+      'guild': 'Fraktion',
+      'health': 'Lebensenergie',
+      'mana': 'Mana',
+      'chapter': 'Kapitel',
+      'location': 'Ort',
+      'kills': 'Getötete NPCs',
+      'knownCharacters': 'Bekannte Charaktere',
+      'killedMonsters': 'Getötete Monster',
+      'defeatedNpcs': 'Besiegte NPCs',
+      'killedNpcs': 'Getötete NPCs',
+      'knownNpcs': 'Bekannte NPCs',
+      'knownTeachers': 'Bekannte Lehrer',
+      'learnedSkills': 'Gelernte Talente',
+      'knowledge': 'Wissenseinträge',
+      'deadCharacters': 'Tote Charaktere',
+      'traders': 'Bekannte Händler',
+      'inventoryStacks': 'Gegenstandsstapel',
+      'inventoryItems': 'Gegenstände',
+      'ore': 'Erz',
+      'equipped': 'Ausgerüstet',
+      'hostileFactions': 'Feindliche Fraktionen',
+      'openCrimes': 'Offene Verbrechen',
+      'position': 'Position',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String statisticsGuildRank(String rank, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(rank, {
+      'oldCampShadow': 'Altes Lager · Schatten',
+      'oldCampGuard': 'Altes Lager · Gardist',
+      'oldCampFireMage': 'Altes Lager · Feuermagier',
+      'newCampRogue': 'Neues Lager · Bandit',
+      'newCampMercenary': 'Neues Lager · Söldner',
+      'newCampWaterMage': 'Neues Lager · Wassermagier',
+      'swampCampNovice': 'Sumpflager · Novize',
+      'swampCampTemplar': 'Sumpflager · Templer',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get statisticsUnknown => 'Nicht verfügbar';
+
+  @override
+  String get statisticsMore => 'Weitere Statistiken';
+
+  @override
+  String statisticsSummary(
+    String level,
+    String guild,
+    String chapter,
+    int completed,
+    int failed,
+    String playTime,
+  ) {
+    return 'Level $level, $guild, Kapitel $chapter. $completed Quests abgeschlossen, $failed fehlgeschlagen. Spielzeit: $playTime.';
+  }
 }

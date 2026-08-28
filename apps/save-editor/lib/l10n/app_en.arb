@@ -252,7 +252,7 @@
       }
     }
   },
-  "publicSaveName": "Public save name",
+  "publicSaveName": "Name",
   "gameTimeTitle": "Game time",
   "gameTimeDay": "Day",
   "gameTimeHours": "Hours",
@@ -1064,6 +1064,10 @@
     }
   },
   "removeFromProfile": "Remove from profile",
+  "deleteSavegame": "Delete save",
+  "deleteSavegameTitle": "Delete savegame?",
+  "deleteSavegameBody": "Delete {save} ({fileName})? It will be removed from {profile} and deleted from the save folder. GORE creates a backup first.",
+  "@deleteSavegameBody": {"placeholders": {"save": {"type": "String"}, "fileName": {"type": "String"}, "profile": {"type": "String"}}},
   "removeSaveFromProfileTitle": "Remove save from profile?",
   "removeSaveFromProfileBody": "Remove {save} from {profile}? The save file itself will be kept if it still exists.",
   "@removeSaveFromProfileBody": {
@@ -1134,6 +1138,7 @@
   "editorNotGothicGsav": "The selected file is not a Gothic GSAV savegame.",
   "editorUnsavedBeforeChangeSaveProfile": "Save or reset your unsaved changes before changing the save profile.",
   "editorUnsavedBeforeRemoveProfile": "Save or reset your unsaved changes before removing a save from its profile.",
+  "editorUnsavedBeforeDeleteSave": "Save or reset your unsaved changes before deleting this save.",
   "editorUnsavedBeforeRestoreProfile": "You have unsaved save edits. Save or reset them before restoring a profile backup.",
   "editorConflictingPropertyEdits": "Conflicting unsaved edits target the same property ({path}) from two tabs. Reset or revert one of them, then save again.",
   "@editorConflictingPropertyEdits": {"placeholders": {"path": {"type": "String"}}},
@@ -1167,6 +1172,7 @@
   "editorSaveSlotNotAssigned": "Save slot {slot} is not assigned to profile {profileId}.",
   "@editorSaveSlotNotAssigned": {"placeholders": {"slot": {"type": "String"}, "profileId": {"type": "int"}}},
   "editorSaveRemovedFromProfile": "Save removed from profile",
+  "editorSaveDeleted": "Save deleted; backup created",
   "editorRestoredBackup": "Restored backup: {path}",
   "@editorRestoredBackup": {"placeholders": {"path": {"type": "String"}}},
   "editorRestoredBackupWithoutCompanion": "Restored backup: {path} (PersistentDataList.sav left unchanged — no matching companion backup; slot metadata may differ)",
@@ -1178,6 +1184,8 @@
   "editorProfileAssignmentFailed": "Could not assign the save to the profile: {details}",
   "@editorProfileAssignmentFailed": {"placeholders": {"details": {"type": "String"}}},
   "editorProfileRemovalFailed": "Could not remove the save from the profile: {details}",
+  "editorDeleteSaveFailed": "Could not delete the save: {details}",
+  "@editorDeleteSaveFailed": {"placeholders": {"details": {"type": "String"}}},
   "@editorProfileRemovalFailed": {"placeholders": {"details": {"type": "String"}}},
   "editorSaveFailed": "Could not save the changes: {details}",
   "@editorSaveFailed": {"placeholders": {"details": {"type": "String"}}},
@@ -1279,5 +1287,17 @@
   "slotRepairUnavailable": "Repairing is not possible right now — this savegame cannot be written.",
   "editorDeletedBackupWithLabelWarning": "Backup deleted: {path} — its name could not be removed: {details}",
   "@editorDeletedBackupWithLabelWarning": {"placeholders": {"path": {"type": "String"}, "details": {"type": "String"}}},
-  "slotRepairNotOffered": "The repair is not available for this savegame."
+  "slotRepairNotOffered": "The repair is not available for this savegame.",
+  "statisticsTitle": "Statistics",
+  "statisticsSubtitle": "A compact summary of character, quest, world, and save progress.",
+  "statisticsCardTitle": "{card, select, timing{Time} character{Character} quests{Quests} progress{Progress} encounters{Combat & contacts} inventory{Skills & inventory} other{{fallback}}}",
+  "@statisticsCardTitle": {"placeholders": {"card": {"type": "String"}, "fallback": {"type": "String"}}},
+  "statisticsMetric": "{metric, select, timePlayed{Played} worldTime{World time} level{Level} experience{Experience} learningPoints{Learning points} guild{Guild} health{Health} mana{Mana} chapter{Chapter} location{Location} kills{NPC kills} knownCharacters{Known characters} killedMonsters{Killed monsters} defeatedNpcs{Defeated NPCs} killedNpcs{Killed NPCs} knownNpcs{Known NPCs} knownTeachers{Known teachers} learnedSkills{Learned skills} knowledge{Knowledge entries} deadCharacters{Dead characters} traders{Known traders} inventoryStacks{Item stacks} inventoryItems{Items} ore{Ore} equipped{Equipped} hostileFactions{Hostile factions} openCrimes{Open crimes} position{Position} other{{fallback}}}",
+  "@statisticsMetric": {"placeholders": {"metric": {"type": "String"}, "fallback": {"type": "String"}}},
+  "statisticsGuildRank": "{rank, select, oldCampShadow{Old Camp · Shadow} oldCampGuard{Old Camp · Guard} oldCampFireMage{Old Camp · Fire Mage} newCampRogue{New Camp · Bandit} newCampMercenary{New Camp · Mercenary} newCampWaterMage{New Camp · Water Mage} swampCampNovice{Swamp Camp · Novice} swampCampTemplar{Swamp Camp · Templar} other{{fallback}}}",
+  "@statisticsGuildRank": {"placeholders": {"rank": {"type": "String"}, "fallback": {"type": "String"}}},
+  "statisticsUnknown": "Not available",
+  "statisticsMore": "More statistics",
+  "statisticsSummary": "Level {level}, {guild}, chapter {chapter}. {completed} quests completed, {failed} failed. Play time: {playTime}.",
+  "@statisticsSummary": {"placeholders": {"level": {"type": "String"}, "guild": {"type": "String"}, "chapter": {"type": "String"}, "completed": {"type": "int"}, "failed": {"type": "int"}, "playTime": {"type": "String"}}}
 }

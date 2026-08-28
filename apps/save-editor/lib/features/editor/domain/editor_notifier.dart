@@ -36,6 +36,10 @@ abstract final class EditorPageSize {
   /// One screen of rows: knowledge entries, memory events, the property browser.
   static const detail = 50;
 
+  /// Overview aggregates Hero combat events in larger pages so it reaches the
+  /// final totals without dozens of serialized round trips.
+  static const statistics = 500;
+
   /// Fetched whole and then filtered/paged in the client: quests, tutorials,
   /// story state.
   static const fullList = 1000;
@@ -623,6 +627,25 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// starts.
   Future<void> _coreQueue = Future<void>.value();
 
+  // The Overview header, statistics section, and background prefetch are
+  // mounted at nearly the same time and request the same read-only sources.
+  // Share only their in-flight futures: this removes duplicate work from the
+  // serialized native queue while a later refresh still performs a fresh read.
+  String? _sharedReadPath;
+  Future<GameTime?>? _gameTimeInFlight;
+  Future<HeroAttributesResult>? _heroAttributesInFlight;
+  Future<SkillsResult>? _skillsInFlight;
+  Future<CharacterIndexPage>? _charactersInFlight;
+
+  void _guardSharedReads(String? path) {
+    if (_sharedReadPath == path) return;
+    _sharedReadPath = path;
+    _gameTimeInFlight = null;
+    _heroAttributesInFlight = null;
+    _skillsInFlight = null;
+    _charactersInFlight = null;
+  }
+
   /// The inspection the background prefetch warmed IN FULL, so re-entering the
   /// editor for an unchanged save does not queue the same warm-up twice.
   ///
@@ -735,6 +758,21 @@ class EditorNotifier extends StateNotifier<EditorState> {
     await step(loadAllCharacters);
     await step(loadHeroAttributes);
     await step(loadSkills);
+    // The Overview is already visible. Warm every page its aggregate combat
+    // statistics ask for before the broad tab prefetch can occupy the queue.
+    final overviewHeroId = superseded() ? null : state.heroGlobalId;
+    if (overviewHeroId != null) {
+      await step(
+        () => _prefetchAllPages(superseded, (offset) async {
+          final page = await loadMemoryEvents(
+            overviewHeroId,
+            offset: offset,
+            limit: EditorPageSize.statistics,
+          );
+          return (total: page.total, count: page.events.length);
+        }),
+      );
+    }
     // Warms the CORE's cache without filling the Dart-side NPC memo. That memo
     // is pinned to one inspection by design, so pre-filling it here would hand
     // the first NPC panel a roster fetched seconds earlier; letting the panel
@@ -1069,7 +1107,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
       ..remove(state.invalidNpcEditKey)
       ..removeWhere(
         (key) =>
-            key.startsWith('npc.attributes:') || key.startsWith('npc.position:'),
+            key.startsWith('npc.attributes:') ||
+            key.startsWith('npc.position:'),
       );
     state = state.copyWith(selectedActor: actor, invalidEditKeys: invalid);
   }
@@ -2600,6 +2639,90 @@ class EditorNotifier extends StateNotifier<EditorState> {
     );
   }
 
+  /// Delete a registered save file and remove all of its profile references.
+  ///
+  /// Native owns the paired compare-and-swap mutation and creates matching
+  /// backups of the save and PersistentDataList before either live path
+  /// changes. Missing references and detached files deliberately use their
+  /// existing non-destructive flows instead.
+  Future<bool> deleteSave({
+    required String slot,
+    required int profileId,
+  }) async {
+    if (state.isLoading) return false;
+    if (state.hasUnsavedEdits) {
+      state = state.copyWith(error: _l10n.editorUnsavedBeforeDeleteSave);
+      return false;
+    }
+    final profile = state.profiles
+        .where((candidate) => candidate.profileId == profileId)
+        .firstOrNull;
+    if (profile == null) {
+      state = state.copyWith(error: _l10n.editorProfileNotFound(profileId));
+      return false;
+    }
+    final save = state.saves
+        .where(
+          (candidate) =>
+              candidate.slot == slot &&
+              candidate.persistentProfileId == profileId &&
+              !candidate.isExternal &&
+              !candidate.isMissing,
+        )
+        .firstOrNull;
+    if (save == null || !profile.savedSlots.contains(slot)) {
+      state = state.copyWith(
+        error: _l10n.editorSaveSlotNotAssigned(slot, profileId),
+      );
+      return false;
+    }
+
+    final dir = state.saveDir;
+    if (dir.trim().isEmpty) {
+      state = state.copyWith(error: _l10n.editorNoSaveFolderSelected);
+      return false;
+    }
+    final isWindowsStyle =
+        save.path.contains('\\') || RegExp(r'^[A-Za-z]:').hasMatch(save.path);
+    final ctx = isWindowsStyle ? p.Context(style: p.Style.windows) : p.posix;
+
+    return _runWrite(
+      command: 'delete_save',
+      payload: {
+        'path': save.path,
+        'persistentPath': ctx.join(
+          ctx.dirname(save.path),
+          'PersistentDataList.sav',
+        ),
+        'slot': slot,
+        'profileId': profileId,
+        'backup': true,
+      },
+      failureMessage: (details) => _l10n.editorDeleteSaveFailed(details),
+      message: (data) {
+        var message = _backupMessage(_l10n.editorSaveDeleted, data);
+        final noteWarning = data['placementNoteWarning'];
+        if (noteWarning is String && noteWarning.isNotEmpty) {
+          message = '$message\n${_l10n.editorPlacementNoteFailed(noteWarning)}';
+        }
+        return message;
+      },
+      beforeRefresh: () {
+        state = state.copyWith(
+          externalSavePaths: _removeSavePath(
+            state.externalSavePaths,
+            save.path,
+          ),
+          hiddenOtherSavePaths: _removeSavePath(
+            state.hiddenOtherSavePaths,
+            save.path,
+          ),
+        );
+        _persistSettings();
+      },
+    );
+  }
+
   String? _freeExternalImportPath(SaveSlot source, p.Context ctx) {
     final occupiedSlots = state.saves
         .where((save) => !save.isExternal)
@@ -2774,8 +2897,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // under the same file name.
       final noteWarning = data?['placementNoteWarning'];
       if (noteWarning is String && noteWarning.isNotEmpty) {
-        message =
-            '$message\n${_l10n.editorPlacementNoteFailed(noteWarning)}';
+        message = '$message\n${_l10n.editorPlacementNoteFailed(noteWarning)}';
       }
       state = state.copyWith(lastWriteMessage: message);
       await refreshBackups();
@@ -2924,7 +3046,21 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// core caps each search page at 1000 hits, so page through the full match
   /// set instead of trusting one request. The decode cache is already seeded
   /// by inspect, so this does not pay a second full private-payload decode.
-  Future<HeroAttributesResult> loadHeroAttributes() async {
+  Future<HeroAttributesResult> loadHeroAttributes() {
+    final path = state.selectedPath;
+    _guardSharedReads(path);
+    final inFlight = _heroAttributesInFlight;
+    if (inFlight != null) return inFlight;
+    final future = _loadHeroAttributes();
+    _heroAttributesInFlight = future;
+    return future.whenComplete(() {
+      if (identical(_heroAttributesInFlight, future)) {
+        _heroAttributesInFlight = null;
+      }
+    });
+  }
+
+  Future<HeroAttributesResult> _loadHeroAttributes() async {
     // Pin the save under load: searchTypedProperties always reads the
     // current selection, so a save switch mid-pagination would silently
     // merge pages from two different files into one stat list.
@@ -2967,7 +3103,19 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// practice, a save whose data happens to push the leaf past one page must
   /// still surface it. Mirrors [loadHeroAttributes]' paginated fixed-query scan,
   /// including the save-pin guard against a mid-pagination selection change.
-  Future<GameTime?> loadGameTime() async {
+  Future<GameTime?> loadGameTime() {
+    final path = state.selectedPath;
+    _guardSharedReads(path);
+    final inFlight = _gameTimeInFlight;
+    if (inFlight != null) return inFlight;
+    final future = _loadGameTime();
+    _gameTimeInFlight = future;
+    return future.whenComplete(() {
+      if (identical(_gameTimeInFlight, future)) _gameTimeInFlight = null;
+    });
+  }
+
+  Future<GameTime?> _loadGameTime() async {
     final loadPath = state.selectedPath;
     var offset = 0;
     while (true) {
@@ -2999,7 +3147,23 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// Load the hero's skills (`private.skills.list`): every learned skill plus
   /// the full learnable roster, with per-skill tier options. Returns a result
   /// carrying an inline [SkillsResult.error] on failure instead of throwing.
-  Future<SkillsResult> loadSkills({String actor = 'Hero'}) async {
+  Future<SkillsResult> loadSkills({String actor = 'Hero'}) {
+    // Only Hero participates in the shared Overview/prefetch load. Actor-aware
+    // calls remain independent so a future non-Hero consumer cannot receive the
+    // wrong roster.
+    if (actor != 'Hero') return _loadSkills(actor);
+    final path = state.selectedPath;
+    _guardSharedReads(path);
+    final inFlight = _skillsInFlight;
+    if (inFlight != null) return inFlight;
+    final future = _loadSkills(actor);
+    _skillsInFlight = future;
+    return future.whenComplete(() {
+      if (identical(_skillsInFlight, future)) _skillsInFlight = null;
+    });
+  }
+
+  Future<SkillsResult> _loadSkills(String actor) async {
     final path = state.selectedPath;
     if (path == null) {
       return SkillsResult(error: _l10n.editorNoSaveSelected);
@@ -3083,10 +3247,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// Queue one trader stock change. Re-editing the same line replaces its
   /// pending edit rather than stacking a second one.
   void setTraderStockEdit(TraderStockEdit edit) {
-    setPendingEdit(
-      edit.pendingKey,
-      PendingSaveEdit(edits: [edit.toEdit()]),
-    );
+    setPendingEdit(edit.pendingKey, PendingSaveEdit(edits: [edit.toEdit()]));
   }
 
   /// Drop a queued trader change (the user reverted the field).
@@ -3135,14 +3296,18 @@ class EditorNotifier extends StateNotifier<EditorState> {
     String? path,
   }) async {
     String? error;
-    final data = await _queryProgression({
-      'section': 'quests',
-      'query': query,
-      'offset': offset,
-      'limit': limit,
-      if (state != null && state.isNotEmpty) 'state': state,
-      if (group != null && group.isNotEmpty) 'group': group,
-    }, path: path, onError: (message) => error = message);
+    final data = await _queryProgression(
+      {
+        'section': 'quests',
+        'query': query,
+        'offset': offset,
+        'limit': limit,
+        if (state != null && state.isNotEmpty) 'state': state,
+        if (group != null && group.isNotEmpty) 'group': group,
+      },
+      path: path,
+      onError: (message) => error = message,
+    );
     if (data == null) return ProgressionQuestPage(error: error);
     return ProgressionQuestPage.fromJson(data);
   }
@@ -3215,7 +3380,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
     return GlossaryPage.fromJson(data);
   }
 
-  static String _glossaryPendingKey(String documentClass, String segmentClass) =>
+  static String _glossaryPendingKey(
+    String documentClass,
+    String segmentClass,
+  ) =>
       'glossary.segment:${foldEditTargetPart(documentClass)}'
       '::${foldEditTargetPart(segmentClass)}';
 
@@ -3334,7 +3502,19 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// [EditorState.heroGlobalIdSettled] for the save it was issued against, so
   /// the player's Ereignisse pane can stop showing its "index load in flight"
   /// spinner and settle to an empty state when no id is coming.
-  Future<CharacterIndexPage> loadAllCharacters() async {
+  Future<CharacterIndexPage> loadAllCharacters() {
+    final path = state.selectedPath;
+    _guardSharedReads(path);
+    final inFlight = _charactersInFlight;
+    if (inFlight != null) return inFlight;
+    final future = _loadAllCharacters();
+    _charactersInFlight = future;
+    return future.whenComplete(() {
+      if (identical(_charactersInFlight, future)) _charactersInFlight = null;
+    });
+  }
+
+  Future<CharacterIndexPage> _loadAllCharacters() async {
     final path = state.selectedPath;
     if (path == null) {
       return CharacterIndexPage(error: _l10n.editorNoSaveSelected);
@@ -4438,7 +4618,10 @@ bool structuredEditRewrites(
     'private.traders.addItem',
     'private.traders.removeItem',
   };
-  const arrayOps = {'private.typed.arrayRemove', 'private.typed.arrayDuplicate'};
+  const arrayOps = {
+    'private.typed.arrayRemove',
+    'private.typed.arrayDuplicate',
+  };
   for (final edit in edits) {
     if (!traderOps.contains(edit['path'])) continue;
     for (final other in edits) {
@@ -4478,10 +4661,7 @@ bool editsRewriteSameTarget(
 /// pending. Both are refused as peers by the core: a story batch takes its
 /// compare-and-set snapshot from the payload as it enters and proves its own
 /// postconditions before committing, and a reset replaces the whole inventory.
-const _exclusiveEditPaths = {
-  storyStateApplyPath,
-  'private.inventory.reset',
-};
+const _exclusiveEditPaths = {storyStateApplyPath, 'private.inventory.reset'};
 
 /// Whether [edit] can change how many elements a container holds, or renumber
 /// inventory slot ids — the only two things that invalidate an index or slot id a

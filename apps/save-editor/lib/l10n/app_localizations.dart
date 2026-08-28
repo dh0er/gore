@@ -1259,7 +1259,7 @@ abstract class AppLocalizations {
   /// No description provided for @publicSaveName.
   ///
   /// In en, this message translates to:
-  /// **'Public save name'**
+  /// **'Name'**
   String get publicSaveName;
 
   /// No description provided for @gameTimeTitle.
@@ -3758,6 +3758,24 @@ abstract class AppLocalizations {
   /// **'Remove from profile'**
   String get removeFromProfile;
 
+  /// No description provided for @deleteSavegame.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete save'**
+  String get deleteSavegame;
+
+  /// No description provided for @deleteSavegameTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete savegame?'**
+  String get deleteSavegameTitle;
+
+  /// No description provided for @deleteSavegameBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete {save} ({fileName})? It will be removed from {profile} and deleted from the save folder. GORE creates a backup first.'**
+  String deleteSavegameBody(String save, String fileName, String profile);
+
   /// No description provided for @removeSaveFromProfileTitle.
   ///
   /// In en, this message translates to:
@@ -3926,6 +3944,12 @@ abstract class AppLocalizations {
   /// **'Save or reset your unsaved changes before removing a save from its profile.'**
   String get editorUnsavedBeforeRemoveProfile;
 
+  /// No description provided for @editorUnsavedBeforeDeleteSave.
+  ///
+  /// In en, this message translates to:
+  /// **'Save or reset your unsaved changes before deleting this save.'**
+  String get editorUnsavedBeforeDeleteSave;
+
   /// No description provided for @editorUnsavedBeforeRestoreProfile.
   ///
   /// In en, this message translates to:
@@ -4052,6 +4076,12 @@ abstract class AppLocalizations {
   /// **'Save removed from profile'**
   String get editorSaveRemovedFromProfile;
 
+  /// No description provided for @editorSaveDeleted.
+  ///
+  /// In en, this message translates to:
+  /// **'Save deleted; backup created'**
+  String get editorSaveDeleted;
+
   /// No description provided for @editorRestoredBackup.
   ///
   /// In en, this message translates to:
@@ -4087,6 +4117,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Could not remove the save from the profile: {details}'**
   String editorProfileRemovalFailed(String details);
+
+  /// No description provided for @editorDeleteSaveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not delete the save: {details}'**
+  String editorDeleteSaveFailed(String details);
 
   /// No description provided for @editorSaveFailed.
   ///
@@ -4469,6 +4505,61 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'The repair is not available for this savegame.'**
   String get slotRepairNotOffered;
+
+  /// No description provided for @statisticsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Statistics'**
+  String get statisticsTitle;
+
+  /// No description provided for @statisticsSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'A compact summary of character, quest, world, and save progress.'**
+  String get statisticsSubtitle;
+
+  /// No description provided for @statisticsCardTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'{card, select, timing{Time} character{Character} quests{Quests} progress{Progress} encounters{Combat & contacts} inventory{Skills & inventory} other{{fallback}}}'**
+  String statisticsCardTitle(String card, String fallback);
+
+  /// No description provided for @statisticsMetric.
+  ///
+  /// In en, this message translates to:
+  /// **'{metric, select, timePlayed{Played} worldTime{World time} level{Level} experience{Experience} learningPoints{Learning points} guild{Guild} health{Health} mana{Mana} chapter{Chapter} location{Location} kills{NPC kills} knownCharacters{Known characters} killedMonsters{Killed monsters} defeatedNpcs{Defeated NPCs} killedNpcs{Killed NPCs} knownNpcs{Known NPCs} knownTeachers{Known teachers} learnedSkills{Learned skills} knowledge{Knowledge entries} deadCharacters{Dead characters} traders{Known traders} inventoryStacks{Item stacks} inventoryItems{Items} ore{Ore} equipped{Equipped} hostileFactions{Hostile factions} openCrimes{Open crimes} position{Position} other{{fallback}}}'**
+  String statisticsMetric(String metric, String fallback);
+
+  /// No description provided for @statisticsGuildRank.
+  ///
+  /// In en, this message translates to:
+  /// **'{rank, select, oldCampShadow{Old Camp · Shadow} oldCampGuard{Old Camp · Guard} oldCampFireMage{Old Camp · Fire Mage} newCampRogue{New Camp · Bandit} newCampMercenary{New Camp · Mercenary} newCampWaterMage{New Camp · Water Mage} swampCampNovice{Swamp Camp · Novice} swampCampTemplar{Swamp Camp · Templar} other{{fallback}}}'**
+  String statisticsGuildRank(String rank, String fallback);
+
+  /// No description provided for @statisticsUnknown.
+  ///
+  /// In en, this message translates to:
+  /// **'Not available'**
+  String get statisticsUnknown;
+
+  /// No description provided for @statisticsMore.
+  ///
+  /// In en, this message translates to:
+  /// **'More statistics'**
+  String get statisticsMore;
+
+  /// No description provided for @statisticsSummary.
+  ///
+  /// In en, this message translates to:
+  /// **'Level {level}, {guild}, chapter {chapter}. {completed} quests completed, {failed} failed. Play time: {playTime}.'**
+  String statisticsSummary(
+    String level,
+    String guild,
+    String chapter,
+    int completed,
+    int failed,
+    String playTime,
+  );
 }
 
 class _AppLocalizationsDelegate

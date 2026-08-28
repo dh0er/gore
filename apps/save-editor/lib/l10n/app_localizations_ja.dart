@@ -653,7 +653,7 @@ class AppLocalizationsJa extends AppLocalizations {
   }
 
   @override
-  String get publicSaveName => '公開セーブ名';
+  String get publicSaveName => '名前';
 
   @override
   String get gameTimeTitle => 'プレイ時間';
@@ -2122,6 +2122,17 @@ class AppLocalizationsJa extends AppLocalizations {
   String get removeFromProfile => 'プロフィールから削除';
 
   @override
+  String get deleteSavegame => 'セーブデータを削除';
+
+  @override
+  String get deleteSavegameTitle => 'セーブデータを削除しますか？';
+
+  @override
+  String deleteSavegameBody(String save, String fileName, String profile) {
+    return '$save（$fileName）を削除しますか？$profile から削除され、セーブフォルダーからも削除されます。GORE は先にバックアップを作成します。';
+  }
+
+  @override
   String get removeSaveFromProfileTitle => 'セーブデータをプロフィールから削除しますか？';
 
   @override
@@ -2223,6 +2234,10 @@ class AppLocalizationsJa extends AppLocalizations {
       'セーブデータをプロフィールから削除する前に、未保存の変更を保存するかリセットしてください。';
 
   @override
+  String get editorUnsavedBeforeDeleteSave =>
+      'このセーブデータを削除する前に、未保存の変更を保存するかリセットしてください。';
+
+  @override
   String get editorUnsavedBeforeRestoreProfile =>
       'セーブデータに未保存の変更があります。プロフィールのバックアップを復元する前に、変更を保存するかリセットしてください。';
 
@@ -2314,6 +2329,9 @@ class AppLocalizationsJa extends AppLocalizations {
   String get editorSaveRemovedFromProfile => 'セーブデータをプロフィールから削除しました';
 
   @override
+  String get editorSaveDeleted => 'セーブデータを削除し、バックアップを作成しました';
+
+  @override
   String editorRestoredBackup(String path) {
     return 'バックアップを復元しました: $path';
   }
@@ -2341,6 +2359,11 @@ class AppLocalizationsJa extends AppLocalizations {
   @override
   String editorProfileRemovalFailed(String details) {
     return 'セーブデータをプロフィールから削除できませんでした: $details';
+  }
+
+  @override
+  String editorDeleteSaveFailed(String details) {
+    return 'セーブデータを削除できませんでした: $details';
   }
 
   @override
@@ -2855,4 +2878,94 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get slotRepairNotOffered => 'このセーブデータでは修復を利用できません。';
+
+  @override
+  String get statisticsTitle => '統計';
+
+  @override
+  String get statisticsSubtitle => 'キャラクター、クエスト、ワールド、進行状況の概要です。';
+
+  @override
+  String statisticsCardTitle(String card, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(card, {
+      'timing': '時間',
+      'character': 'キャラクター',
+      'quests': 'クエスト',
+      'progress': '進行状況',
+      'encounters': '戦闘と交流',
+      'inventory': 'スキルと所持品',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String statisticsMetric(String metric, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(metric, {
+      'timePlayed': 'プレイ時間',
+      'worldTime': 'ワールド時間',
+      'level': 'レベル',
+      'experience': '経験値',
+      'learningPoints': '学習ポイント',
+      'guild': '派閥',
+      'health': '体力',
+      'mana': 'マナ',
+      'chapter': 'チャプター',
+      'location': '場所',
+      'kills': 'NPC撃破数',
+      'knownCharacters': '既知のキャラクター',
+      'killedMonsters': '倒したモンスター',
+      'defeatedNpcs': '倒したNPC',
+      'killedNpcs': '殺したNPC',
+      'knownNpcs': '既知のNPC',
+      'knownTeachers': '既知の教師',
+      'learnedSkills': '習得スキル',
+      'knowledge': '知識項目',
+      'deadCharacters': '死亡キャラクター',
+      'traders': '既知の商人',
+      'inventoryStacks': 'アイテムスタック',
+      'inventoryItems': 'アイテム',
+      'ore': '鉱石',
+      'equipped': '装備中',
+      'hostileFactions': '敵対派閥',
+      'openCrimes': '未解決の犯罪',
+      'position': '位置',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String statisticsGuildRank(String rank, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(rank, {
+      'oldCampShadow': '旧キャンプ · シャドウ',
+      'oldCampGuard': '旧キャンプ · ガード',
+      'oldCampFireMage': '旧キャンプ · 火の魔術師',
+      'newCampRogue': '新キャンプ · 盗賊',
+      'newCampMercenary': '新キャンプ · 傭兵',
+      'newCampWaterMage': '新キャンプ · 水の魔術師',
+      'swampCampNovice': '沼地キャンプ · 見習い',
+      'swampCampTemplar': '沼地キャンプ · テンプラー',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get statisticsUnknown => '利用不可';
+
+  @override
+  String get statisticsMore => 'その他の統計';
+
+  @override
+  String statisticsSummary(
+    String level,
+    String guild,
+    String chapter,
+    int completed,
+    int failed,
+    String playTime,
+  ) {
+    return 'レベル$level、$guild、チャプター$chapter。完了クエスト$completed件、失敗$failed件。プレイ時間：$playTime。';
+  }
 }

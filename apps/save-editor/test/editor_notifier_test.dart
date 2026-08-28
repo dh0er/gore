@@ -5097,6 +5097,57 @@ void main() {
   });
 
   test(
+    'deleteSave removes the registered file and refreshes selection',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-006.sav',
+              'slot': 'G1R-006',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'a',
+              'status': 'ok',
+              'playerSaveName': 'Delete me',
+              'persistentProfileId': 0,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'savedSlots': ['G1R-006'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+
+      final ok = await notifier.deleteSave(slot: 'G1R-006', profileId: 0);
+
+      expect(ok, isTrue);
+      final request = core.requests.lastWhere(
+        (request) => request.command == 'delete_save',
+      );
+      expect(request.payload['path'], r'C:\tmp\saves\G1R-006.sav');
+      expect(
+        request.payload['persistentPath'],
+        r'C:\tmp\saves\PersistentDataList.sav',
+      );
+      expect(request.payload['slot'], 'G1R-006');
+      expect(request.payload['profileId'], 0);
+      expect(request.payload['backup'], isTrue);
+      expect(notifier.state.saves, isEmpty);
+      expect(notifier.state.profiles.single.savedSlots, isEmpty);
+      expect(notifier.state.selectedPath, isNull);
+      expect(notifier.state.inspection, isNull);
+    },
+  );
+
+  test(
     'all unassigned saves stay out of profiles and collect in Other saves',
     () async {
       final core = _RecordingCoreService(
@@ -5973,6 +6024,30 @@ class _RecordingCoreService implements GoresaveCoreService {
             'backupPath': null,
             'persistentBackupPath':
                 r'C:\tmp\saves\PersistentDataList.sav.bak.2',
+          },
+        };
+      case 'delete_save':
+        final profileId = (payload['profileId'] as num).toInt();
+        final slot = payload['slot'] as String;
+        final saves = (scanData['saves'] as List?) ?? <Object?>[];
+        saves.removeWhere((raw) => raw is Map && raw['slot'] == slot);
+        for (final raw
+            in ((scanData['profiles'] as List?) ?? <Object?>[])
+                .whereType<Map>()) {
+          for (final key in ['savedSlots', 'quickSaveSlots', 'autoSaveSlots']) {
+            (raw[key] as List?)?.removeWhere((value) => value == slot);
+          }
+        }
+        return {
+          'ok': true,
+          'data': {
+            'path': payload['path'],
+            'slot': slot,
+            'persistentPath': payload['persistentPath'],
+            'profileId': profileId,
+            'backupPath': r'C:\tmp\saves\goresave_backups\G1R-006.sav.bak.2',
+            'persistentBackupPath':
+                r'C:\tmp\saves\goresave_backups\PersistentDataList.sav.bak.2',
           },
         };
       case 'search_typed_properties':
