@@ -1462,6 +1462,9 @@ class AppLocalizationsRu extends AppLocalizations {
   String get appearanceTitle => 'Внешний вид';
 
   @override
+  String get uiFont => 'Шрифт';
+
+  @override
   String get theme => 'Тема';
 
   @override

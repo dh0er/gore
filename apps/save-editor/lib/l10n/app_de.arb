@@ -419,6 +419,7 @@
   "backupFactSha1": "SHA-1",
   "restoreBackupTooltip": "{fileName} wiederherstellen",
   "appearanceTitle": "Erscheinungsbild",
+  "uiFont": "Schriftart",
   "theme": "Design",
   "themeLight": "Hell",
   "themeDark": "Dunkel",

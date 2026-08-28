@@ -9,7 +9,9 @@ import 'package:goresave/features/editor/domain/character_category_catalog.dart'
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/features/editor/domain/item_icon_catalog.dart';
+import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/providers/data_providers.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 
 import 'support/ui_settings_test_store.dart';
 import 'support/detail_tabs.dart';
@@ -75,6 +77,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('GORE Save Editor'), findsOneWidget);
+    final windowTitle = tester.widget<Text>(find.text('GORE Save Editor'));
+    expect(windowTitle.style?.fontFamily, podkovaFontFamily);
+    expect(windowTitle.style?.fontSize, isNull);
+    expect(windowTitle.style?.height, isNull);
     expect(find.text('Die Welt der Verurteilten'), findsAtLeastNWidgets(1));
     expect(find.text('Overview'), findsOneWidget);
     expect(find.byKey(const ValueKey('edit-save-name')), findsOneWidget);
@@ -578,6 +584,7 @@ void main() {
 
     // Collapsed by default: neither the codec status nor the raw JSON shows yet.
     expect(find.text('Advanced (debug)'), findsOneWidget);
+    expect(find.text('Font'), findsOneWidget);
     expect(find.text('Codec ready'), findsNothing);
     expect(find.text('Inspection JSON'), findsNothing);
 
@@ -602,11 +609,118 @@ void main() {
 
     expect(tester.widget<SwitchListTile>(objectIdsToggle).value, isTrue);
 
+    final fontDropdown = find.byKey(const ValueKey('ui-font-family-dropdown'));
+    expect(
+      tester.getTopLeft(fontDropdown).dy,
+      greaterThan(tester.getTopLeft(find.text('Language')).dy),
+    );
+    expect(
+      tester.widget<DropdownButton<UiFontFamily>>(fontDropdown).value,
+      UiFontFamily.system,
+    );
+    final settingsContext = tester.element(find.text('Appearance'));
+    expect(
+      Theme.of(settingsContext).textTheme.bodyMedium?.fontFamily,
+      'Segoe UI',
+    );
+    expect(
+      Theme.of(settingsContext).textTheme.titleMedium?.fontFamily,
+      'Segoe UI',
+    );
+    expect(
+      tester.widget<Text>(find.text('GORE Save Editor')).style?.fontFamily,
+      podkovaFontFamily,
+    );
+
+    tester.widget<DropdownButton<UiFontFamily>>(fontDropdown).onChanged!(
+      UiFontFamily.podkova,
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<DropdownButton<UiFontFamily>>(fontDropdown).value,
+      UiFontFamily.podkova,
+    );
+    expect(
+      Theme.of(
+        tester.element(find.text('Appearance')),
+      ).textTheme.bodyMedium?.fontFamily,
+      podkovaFontFamily,
+    );
+
+    tester.widget<DropdownButton<UiFontFamily>>(fontDropdown).onChanged!(
+      UiFontFamily.notoSerif,
+    );
+    await tester.pumpAndSettle();
+    expect(
+      Theme.of(
+        tester.element(find.text('Appearance')),
+      ).textTheme.bodyMedium?.fontFamily,
+      notoSerifFontFamily,
+    );
+    // The language-independent product title intentionally stays Podkova.
+    expect(
+      tester.widget<Text>(find.text('GORE Save Editor')).style?.fontFamily,
+      podkovaFontFamily,
+    );
+
     await tester.tap(find.text('Inspection JSON'));
     await tester.pumpAndSettle();
 
     expect(find.textContaining('"format"'), findsOneWidget);
   });
+
+  for (final localeCode in ['ja', 'zh-Hans']) {
+    testWidgets('Podkova falls back to Noto Serif for $localeCode', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final core = _FakeCoreService();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            coreServiceProvider.overrideWithValue(core),
+            editorSettingsStoreProvider.overrideWithValue(
+              const NoopEditorSettingsStore(),
+            ),
+            uiSettingsStoreProvider.overrideWithValue(
+              TestUiSettingsStore(
+                appLocale: localeCode,
+                uiFontFamily: UiFontFamily.podkova,
+              ),
+            ),
+          ],
+          child: const GoresaveApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final scaffoldContext = tester.element(find.byType(Scaffold).first);
+      final l10n = AppLocalizations.of(scaffoldContext);
+      expect(
+        Theme.of(scaffoldContext).textTheme.bodyMedium?.fontFamily,
+        localeCode == 'ja' ? notoSerifJpFontFamily : notoSerifScFontFamily,
+      );
+
+      await tester.drag(find.byType(TabBar).first, const Offset(-800, 0));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.widgetWithText(Tab, l10n.tabSettings),
+        warnIfMissed: false,
+      );
+      await tester.pumpAndSettle();
+
+      final fontDropdown = tester.widget<DropdownButton<UiFontFamily>>(
+        find.byKey(const ValueKey('ui-font-family-dropdown')),
+      );
+      expect(fontDropdown.value, UiFontFamily.notoSerif);
+      expect(
+        fontDropdown.items!.map((item) => item.value),
+        isNot(contains(UiFontFamily.podkova)),
+      );
+    });
+  }
 
   testWidgets('switching tabs preserves unsaved edit and Save count', (
     tester,

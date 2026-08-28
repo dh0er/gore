@@ -2552,6 +2552,12 @@ abstract class AppLocalizations {
   /// **'Appearance'**
   String get appearanceTitle;
 
+  /// No description provided for @uiFont.
+  ///
+  /// In en, this message translates to:
+  /// **'Font'**
+  String get uiFont;
+
   /// No description provided for @theme.
   ///
   /// In en, this message translates to:

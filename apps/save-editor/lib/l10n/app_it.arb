@@ -384,6 +384,7 @@
   "backupFactSha1": "SHA-1",
   "restoreBackupTooltip": "Ripristina {fileName}",
   "appearanceTitle": "Aspetto",
+  "uiFont": "Carattere",
   "theme": "Tema",
   "themeLight": "Chiaro",
   "themeDark": "Scuro",

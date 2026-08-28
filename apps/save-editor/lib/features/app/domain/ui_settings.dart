@@ -8,9 +8,19 @@ import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/utils/gore_tools_paths.dart';
 import 'package:path/path.dart' as p;
 
+enum UiFontFamily { system, podkova, notoSerif }
+
+bool uiFontFamilySupportedFor(UiFontFamily font, GameLang lang) =>
+    font != UiFontFamily.podkova ||
+    (lang.locale.languageCode != 'ja' && lang.locale.languageCode != 'zh');
+
+UiFontFamily effectiveUiFontFamily(UiFontFamily font, GameLang lang) =>
+    uiFontFamilySupportedFor(font, lang) ? font : UiFontFamily.notoSerif;
+
 class UiSettings {
   const UiSettings({
     this.themeMode = ThemeMode.light,
+    this.uiFontFamily = UiFontFamily.system,
     this.uiScale = 1.0,
     this.windowSize,
     this.windowMaximized = false,
@@ -26,6 +36,18 @@ class UiSettings {
         'dark' => ThemeMode.dark,
         'system' => ThemeMode.system,
         _ => ThemeMode.light,
+      },
+      uiFontFamily: switch (json['uiFontFamily']) {
+        'system' => UiFontFamily.system,
+        'podkova' => UiFontFamily.podkova,
+        'notoSerif' => UiFontFamily.notoSerif,
+        // Migrate the previous switch without unexpectedly changing an
+        // existing user's appearance. New installs default to Segoe UI.
+        _ when json.containsKey('gothicUiFont') =>
+          json['gothicUiFont'] == true
+              ? UiFontFamily.podkova
+              : UiFontFamily.system,
+        _ => UiFontFamily.system,
       },
       appLocale: switch (json['appLocale']) {
         // A missing or blank value stays null ("never chosen") so the app
@@ -51,6 +73,7 @@ class UiSettings {
   }
 
   final ThemeMode themeMode;
+  final UiFontFamily uiFontFamily;
   final double uiScale;
 
   /// Last known window size in logical pixels; null until first persisted.
@@ -78,6 +101,7 @@ class UiSettings {
 
   UiSettings copyWith({
     ThemeMode? themeMode,
+    UiFontFamily? uiFontFamily,
     double? uiScale,
     Size? windowSize,
     bool? windowMaximized,
@@ -88,6 +112,7 @@ class UiSettings {
   }) {
     return UiSettings(
       themeMode: themeMode ?? this.themeMode,
+      uiFontFamily: uiFontFamily ?? this.uiFontFamily,
       uiScale: uiScale ?? this.uiScale,
       windowSize: windowSize ?? this.windowSize,
       windowMaximized: windowMaximized ?? this.windowMaximized,
@@ -104,6 +129,7 @@ class UiSettings {
       ThemeMode.system => 'system',
       ThemeMode.light => 'light',
     },
+    'uiFontFamily': uiFontFamily.name,
     'uiScale': uiScale,
     if (windowSize case final size?) ...{
       'windowWidth': size.width,
@@ -140,9 +166,7 @@ class JsonFileUiSettingsStore implements UiSettingsStore {
   }) {
     final env = environment ?? Platform.environment;
     const fileName = 'ui_settings.json';
-    final file = File(
-      p.join(goreSaveSettingsDir(environment: env), fileName),
-    );
+    final file = File(p.join(goreSaveSettingsDir(environment: env), fileName));
     migrateLegacySettingsFile(_legacyFile(env, fileName), file);
     return JsonFileUiSettingsStore(file);
   }
@@ -214,6 +238,22 @@ class ThemeModeNotifier extends StateNotifier<ThemeMode> {
   }
 }
 
+final uiFontFamilyProvider =
+    StateNotifierProvider<UiFontFamilyNotifier, UiFontFamily>((ref) {
+      return UiFontFamilyNotifier(ref.watch(uiSettingsStoreProvider));
+    });
+
+class UiFontFamilyNotifier extends StateNotifier<UiFontFamily> {
+  UiFontFamilyNotifier(this._store) : super(_store.read().uiFontFamily);
+
+  final UiSettingsStore _store;
+
+  void set(UiFontFamily font) {
+    state = font;
+    _store.write(_store.read().copyWith(uiFontFamily: font));
+  }
+}
+
 /// Selected language code (one of [kGameLangs]). Persisted through the shared
 /// Ui settings store, mirroring [themeModeProvider]. Drives both the app UI
 /// locale and which extracted game-text names are shown.
@@ -223,12 +263,12 @@ final localeProvider = StateNotifierProvider<LocaleNotifier, String>((ref) {
 
 class LocaleNotifier extends StateNotifier<String> {
   LocaleNotifier(this._store)
-      : super(
-          _store.read().appLocale ??
-              deviceLanguageCode(
-                WidgetsBinding.instance.platformDispatcher.locales,
-              ),
-        );
+    : super(
+        _store.read().appLocale ??
+            deviceLanguageCode(
+              WidgetsBinding.instance.platformDispatcher.locales,
+            ),
+      );
 
   final UiSettingsStore _store;
 

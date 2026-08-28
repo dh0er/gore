@@ -1450,6 +1450,9 @@ class AppLocalizationsPt extends AppLocalizations {
   String get appearanceTitle => 'Aparência';
 
   @override
+  String get uiFont => 'Tipo de letra';
+
+  @override
   String get theme => 'Tema';
 
   @override
@@ -4504,6 +4507,9 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get appearanceTitle => 'Aparência';
+
+  @override
+  String get uiFont => 'Fonte';
 
   @override
   String get theme => 'Tema';

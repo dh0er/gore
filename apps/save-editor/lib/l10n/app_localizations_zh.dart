@@ -1387,6 +1387,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get appearanceTitle => '外观';
 
   @override
+  String get uiFont => '字体';
+
+  @override
   String get theme => '主题';
 
   @override
@@ -4316,6 +4319,9 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get appearanceTitle => '外观';
+
+  @override
+  String get uiFont => '字体';
 
   @override
   String get theme => '主题';

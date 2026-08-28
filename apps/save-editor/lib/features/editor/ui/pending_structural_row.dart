@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 
 /// Whether a queued structural change adds something or takes it away. Only the
 /// colour scheme differs; the two read as opposites at a glance.
@@ -70,7 +71,7 @@ class PendingStructuralRow extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: fg.withValues(alpha: 0.72),
-                  fontFamily: 'Consolas',
+                  fontFamily: uiAwareMonospaceFontFamily(context),
                   fontSize: 11,
                 ),
               ),

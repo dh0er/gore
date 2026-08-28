@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:goresave/features/app/ui/about_dialog.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import 'support/l10n_test_app.dart';
@@ -21,7 +22,9 @@ void main() {
     expect(aboutVersionLabel(null), '');
   });
 
-  testWidgets('about dialog shows copyright and license notice', (tester) async {
+  testWidgets('about dialog shows copyright and license notice', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       wrapWithL10n(const Scaffold(body: GoresaveAboutDialog())),
     );
@@ -29,5 +32,14 @@ void main() {
 
     expect(find.text(aboutCopyrightNotice), findsOneWidget);
     expect(find.text(aboutLicenseNotice), findsOneWidget);
+    final titleFinder = find.text('GORE Save Editor');
+    final title = tester.widget<Text>(titleFinder);
+    final titleContext = tester.element(titleFinder);
+    expect(title.style?.fontFamily, podkovaFontFamily);
+    expect(
+      title.style?.fontSize,
+      Theme.of(titleContext).textTheme.titleLarge?.fontSize,
+    );
+    expect(title.style?.fontWeight, FontWeight.bold);
   });
 }

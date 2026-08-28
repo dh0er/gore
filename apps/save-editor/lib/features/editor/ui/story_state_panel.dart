@@ -4,6 +4,7 @@ import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 
 import '../domain/editor_models.dart';
 import '../domain/editor_notifier.dart';
@@ -532,7 +533,7 @@ class _StoryValueTile extends StatelessWidget {
               value.id,
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
-                fontFamily: 'Consolas',
+                fontFamily: uiAwareMonospaceFontFamily(context),
               ),
             ),
             const SizedBox(height: 3),
@@ -685,7 +686,7 @@ class _StoryValueTile extends StatelessWidget {
                     value.path.join(' › '),
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
-                      fontFamily: 'Consolas',
+                      fontFamily: uiAwareMonospaceFontFamily(context),
                     ),
                   ),
                 ],

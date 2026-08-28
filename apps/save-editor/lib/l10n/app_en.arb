@@ -691,6 +691,7 @@
     }
   },
   "appearanceTitle": "Appearance",
+  "uiFont": "Font",
   "theme": "Theme",
   "themeLight": "Light",
   "themeDark": "Dark",
