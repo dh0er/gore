@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,457 functions (0.89%) recompile to bytecode that differs semantically.** A semantic
+**1,447 functions (0.88%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -703,6 +703,10 @@ caution over const-ness, and the whole statement disappeared with it: the return
 way back to the thing that made it. The caution is answered by the site itself. The store IS in
 vanilla's bytecode, so the source wrote it and it compiled; only our own recovery of the
 DESTINATION could still be wrong, and that is a compile error rather than a silent one.
+
+**`++x` is one opcode and `x = x + 1` is three.** The slot-operand increment was written back in
+the long form, so vanilla's `IncVi` came back as an `ADDIi` every time. The argument was already
+in the file, one arm further down, for the register form. 1,457 to 1,447.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
