@@ -33,7 +33,7 @@ void main() {
 
     expect(settings.windowSize, isNull);
     expect(settings.windowMaximized, isFalse);
-    expect(settings.uiFontFamily, UiFontFamily.system);
+    expect(settings.uiFontFamily, UiFontFamily.notoSerif);
     expect(settings.showObjectIds, isFalse);
   });
 
@@ -87,7 +87,7 @@ void main() {
     );
     addTearDown(container.dispose);
 
-    expect(container.read(uiFontFamilyProvider), UiFontFamily.system);
+    expect(container.read(uiFontFamilyProvider), UiFontFamily.notoSerif);
 
     container.read(uiFontFamilyProvider.notifier).set(UiFontFamily.podkova);
 

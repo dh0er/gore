@@ -79,7 +79,7 @@ void main() {
     expect(find.text('GORE Save Editor'), findsOneWidget);
     expect(
       _effectiveTextStyle(tester, find.text('GORE Save Editor')).fontFamily,
-      'Segoe UI',
+      notoSerifFontFamily,
     );
     expect(find.text('Die Welt der Verurteilten'), findsAtLeastNWidgets(1));
     expect(find.text('Overview'), findsOneWidget);
@@ -616,7 +616,7 @@ void main() {
     );
     expect(
       tester.widget<DropdownButton<UiFontFamily>>(fontDropdown).value,
-      UiFontFamily.system,
+      UiFontFamily.notoSerif,
     );
     final fontItems = tester
         .widget<DropdownButton<UiFontFamily>>(fontDropdown)
@@ -632,15 +632,15 @@ void main() {
     final settingsContext = tester.element(find.text('Appearance'));
     expect(
       Theme.of(settingsContext).textTheme.bodyMedium?.fontFamily,
-      'Segoe UI',
+      notoSerifFontFamily,
     );
     expect(
       Theme.of(settingsContext).textTheme.titleMedium?.fontFamily,
-      'Segoe UI',
+      notoSerifFontFamily,
     );
     expect(
       _effectiveTextStyle(tester, find.text('GORE Save Editor')).fontFamily,
-      'Segoe UI',
+      notoSerifFontFamily,
     );
 
     tester.widget<DropdownButton<UiFontFamily>>(fontDropdown).onChanged!(

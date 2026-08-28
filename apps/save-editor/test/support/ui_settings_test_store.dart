@@ -5,7 +5,7 @@ import 'package:goresave/features/app/domain/ui_settings.dart';
 class TestUiSettingsStore implements UiSettingsStore {
   TestUiSettingsStore({
     bool showObjectIds = false,
-    UiFontFamily uiFontFamily = UiFontFamily.system,
+    UiFontFamily uiFontFamily = UiFontFamily.notoSerif,
     String appLocale = 'en',
   }) : _settings = UiSettings(
          appLocale: appLocale,

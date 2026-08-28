@@ -20,7 +20,7 @@ UiFontFamily effectiveUiFontFamily(UiFontFamily font, GameLang lang) =>
 class UiSettings {
   const UiSettings({
     this.themeMode = ThemeMode.light,
-    this.uiFontFamily = UiFontFamily.system,
+    this.uiFontFamily = UiFontFamily.notoSerif,
     this.uiScale = 1.0,
     this.windowSize,
     this.windowMaximized = false,
@@ -42,12 +42,12 @@ class UiSettings {
         'podkova' => UiFontFamily.podkova,
         'notoSerif' => UiFontFamily.notoSerif,
         // Migrate the previous switch without unexpectedly changing an
-        // existing user's appearance. New installs default to Segoe UI.
+        // existing user's appearance. New installs default to Noto Serif.
         _ when json.containsKey('gothicUiFont') =>
           json['gothicUiFont'] == true
               ? UiFontFamily.podkova
               : UiFontFamily.system,
-        _ => UiFontFamily.system,
+        _ => UiFontFamily.notoSerif,
       },
       appLocale: switch (json['appLocale']) {
         // A missing or blank value stays null ("never chosen") so the app
