@@ -650,7 +650,12 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver, defaults: Option<&[
             Some(&c.name),
         );
     }
-    let member_initializers = extract_member_initializers(&mut constructors);
+    // Only THIS class's own fields can carry an initializer: the declaration loop below writes
+    // `c.fields` and nothing else, so a store lifted out of a constructor into an INHERITED
+    // field's declaration has nowhere to land and disappears with the store (measured: 10
+    // constructors lost a `SetV1; LoadThisR; WRTV1` this way).
+    let own_fields: HashSet<&str> = c.fields.iter().map(|f| f.name.as_str()).collect();
+    let member_initializers = extract_member_initializers(&mut constructors, &own_fields);
     let handle_nulls_are_the_compiler_s = null_stores_are_compiler_generated(&c.ctors);
     for f in &c.fields {
         // Drop a leading `const`: UE-AS UPROPERTY members aren't const-assignable, yet the
@@ -901,6 +906,7 @@ fn emit_function_ctor(
     // Handles vanilla ALIASED into a slot of their own: that alias is a name the source wrote.
     let aliased = handle_alias_slots(f);
     let copied_on = copied_on_slots(f);
+    let hoisted = hoisted_handle_slots(f);
     // How often each slot is default-constructed: more than once and the source spelled the
     // temporary out at every use.
     let constructions = default_construction_counts(f, refs);
@@ -1411,6 +1417,7 @@ fn emit_function_ctor(
         &widened,
         &aliased,
         &copied_on,
+        &hoisted,
     );
     // Runs after the producers have moved into their readers: only then is the value arm of a
     // short circuit the single assignment it was in source.
@@ -1440,6 +1447,7 @@ fn emit_function_ctor(
         &widened,
         &aliased,
         &copied_on,
+        &hoisted,
     );
     let body = rewrite_operator_calls(&body);
     let body = fold_cast_diamonds(&body);
@@ -1462,6 +1470,7 @@ fn emit_function_ctor(
         &widened,
         &aliased,
         &copied_on,
+        &hoisted,
     );
     let body = drop_unreachable_statements(&body);
     // All three run before the declarations are hoisted, so a temporary they empty out never
@@ -3890,6 +3899,72 @@ fn statement_producer_slots(f: &Func) -> HashSet<i32> {
 /// temporary — which means vanilla ran that method on a temporary at that exact site, and so may
 /// we. That is a stronger answer than `has_const_overload`, whose table has nothing to say about
 /// most native value types.
+/// Handles vanilla PARKED: the source gave them a name.
+///
+/// A producer writes slot S, exactly one later instruction reads S, and that read is a plain
+/// `PshVPtr S` — with real work in between. This compiler evaluates a call's arguments first and
+/// its receiver last, and converts a register result into a variable only when pending cleanup
+/// stands in the way; so a value produced, left sitting while unrelated code runs, and only then
+/// pushed cannot be the expression's own temporary. Where the gap holds nothing but `PSF vT;
+/// CALLSYS` destructor pairs it IS that cleanup, and the value is a temporary after all.
+///
+/// Measured over 19,768 handle producer/single-read sites in byte-faithful functions: the rule
+/// fires 151 times and all 151 are names, while the 58 destructor-pair gaps and the 19,559
+/// adjacent sites hold no name at all. This is the one witness that runs in the direction the
+/// others do not — it says vanilla NAMED something.
+fn hoisted_handle_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let mut out = HashSet::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if !matches!(ins.op.name, "STOREOBJ" | "RefCpyV" | "ClrVPtr") {
+            continue;
+        }
+        let slot = w0(ins);
+        if slot <= 0 {
+            continue;
+        }
+        // Every read of the slot before it holds anything else. A release is not a read.
+        let mut reads: Vec<usize> = Vec::new();
+        for (j, next) in instrs.iter().enumerate().skip(at + 1) {
+            if matches!(
+                next.op.name,
+                "STOREOBJ" | "RefCpyV" | "ClrVPtr" | "REFCPY" | "CpyVtoV8" | "CpyVtoV4"
+            ) && w0(next) == slot
+            {
+                break;
+            }
+            if matches!(next.op.name, "FreeNullV8" | "FreeNullV4" | "FREE") {
+                continue;
+            }
+            if super::bytediff::addressed_slots(next).contains(&slot) {
+                reads.push(j);
+            }
+        }
+        let [read] = reads[..] else { continue };
+        if instrs[read].op.name != "PshVPtr" || read <= at + 1 {
+            continue;
+        }
+        let gap = &instrs[at + 1..read];
+        let mut k = 0usize;
+        let mut cleanup_only = true;
+        while k < gap.len() {
+            if k + 1 < gap.len() && gap[k].op.name == "PSF" && gap[k + 1].op.name == "CALLSYS" {
+                k += 2;
+            } else {
+                cleanup_only = false;
+                break;
+            }
+        }
+        if !cleanup_only {
+            out.insert(slot);
+        }
+    }
+    out
+}
+
 fn temporary_receiver_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
@@ -4063,9 +4138,7 @@ fn wholly_consumed_object_slots(f: &Func) -> HashSet<i32> {
         // (measured: it inlined a `Cast<T>(…)` into its own null test).
         match ins.op.name {
             "STOREOBJ" => {
-                let at_once = instrs.get(i + 1).is_some_and(|next| {
-                    matches!(next.op.name, "PshVPtr" | "LoadRObjR") && w0(next) == dst
-                });
+                let at_once = consumed_next(&instrs, i, dst);
                 if at_once {
                     consumed.insert(dst);
                 } else {
@@ -6048,6 +6121,7 @@ fn inline_call_argument_temporaries(
     widened: &HashSet<i32>,
     aliased: &HashSet<i32>,
     copied_on: &HashSet<i32>,
+    hoisted: &HashSet<i32>,
 ) -> String {
     const MAX_ARGUMENT_INLINE_PASSES: usize = 8;
     let trailing_newline = body.ends_with('\n');
@@ -6106,7 +6180,7 @@ fn inline_call_argument_temporaries(
                 if inline_temporary_into(
                     &mut lines, index, &temp, &callee, position, locals, refs, fields, call_types,
                     statement_producers, temporary_receivers, loop_elements, widened, aliased,
-                    copied_on,
+                    copied_on, hoisted,
                 ) {
                     changed = true;
                     moved = true;
@@ -6149,6 +6223,7 @@ fn inline_temporary_into(
     widened: &HashSet<i32>,
     aliased: &HashSet<i32>,
     copied_on: &HashSet<i32>,
+    hoisted: &HashSet<i32>,
 ) -> bool {
     let receiver = position == Position::Receiver;
     // A loop header is evaluated once per ITERATION, and this producer stands before the loop.
@@ -6176,6 +6251,10 @@ fn inline_temporary_into(
     // other arguments, it was a statement of its own, and moving it into the call would reorder
     // the evaluation. Absence of that proof is not proof of the opposite: a slot the witness
     // says nothing about keeps the gates below.
+    if slot_and_life_any(temp).is_some_and(|(slot, _)| hoisted.contains(&slot)) {
+        inline_reject("parked", callee, temp, &lines[index]);
+        return false;
+    }
     if temp
         .strip_prefix("local_")
         .and_then(|slot| slot.parse::<i32>().ok())
@@ -6758,7 +6837,10 @@ fn null_stores_are_compiler_generated(ctors: &[Func]) -> bool {
     seen
 }
 
-fn extract_member_initializers(constructors: &mut String) -> HashMap<String, String> {
+fn extract_member_initializers(
+    constructors: &mut String,
+    own_fields: &HashSet<&str>,
+) -> HashMap<String, String> {
     let mut initializers = HashMap::new();
     let lines: Vec<&str> = constructors.lines().collect();
     let mut keep: Vec<String> = Vec::with_capacity(lines.len());
@@ -6794,8 +6876,9 @@ fn extract_member_initializers(constructors: &mut String) -> HashMap<String, Str
                 trimmed != "super();" && trimmed != "return;"
             })
             .map(|line| {
-                member_store(line).filter(|(_, value)| {
-                    count_ident(value, "local") == 0
+                member_store(line).filter(|(field, value)| {
+                    own_fields.contains(field.as_str())
+                        && count_ident(value, "local") == 0
                         && !value.contains("local_")
                         && parameters
                             .iter()
@@ -9497,6 +9580,17 @@ fn scope_exit_destroyed_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
             at += 1;
         }
     }
+    // A slot destroyed at TWO OR MORE program points was declared, whatever the runs look like:
+    // this compiler destroys an expression temporary once, and only a local declared in a block
+    // is destroyed on every path out of it. Measured over the byte-faithful corpus: fires on 232
+    // of 11,035 value slots and all 232 are names.
+    let mut sites: HashMap<i32, usize> = HashMap::new();
+    for at in 0..instrs.len().saturating_sub(1) {
+        if let Some(slot) = destructs(at).filter(|slot| *slot > 0) {
+            *sites.entry(slot).or_default() += 1;
+        }
+    }
+    out.extend(sites.into_iter().filter(|(_, n)| *n >= 2).map(|(slot, _)| slot));
     out
 }
 
@@ -9888,6 +9982,25 @@ fn inline_unnamed_value_temporaries(
 /// Slots whose object value is consumed where it was produced: a `STOREOBJ` whose very next
 /// instruction pushes the same slot. A slot written any other way — a second `STOREOBJ` that is
 /// not consumed at once, a handle copy, a null store — is not one of these.
+/// Whether the store at `i` is consumed where it stands, reading past the compiler's own deferred
+/// cleanup. `PSF vT; CALLSYS ::$beh2` pairs between the store and the push are that cleanup — the
+/// arguments the consuming call already took — and they do not make the value a name: measured
+/// over the byte-faithful corpus, 0 of 58 slots whose gap is nothing but such pairs are named.
+fn consumed_next(instrs: &[super::disasm::Instr], i: usize, dst: i32) -> bool {
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let mut at = i + 1;
+    while at + 1 < instrs.len()
+        && instrs[at].op.name == "PSF"
+        && instrs[at + 1].op.name == "CALLSYS"
+        && w0(&instrs[at]) != dst
+    {
+        at += 2;
+    }
+    instrs
+        .get(at)
+        .is_some_and(|next| matches!(next.op.name, "PshVPtr" | "LoadRObjR") && w0(next) == dst)
+}
+
 fn immediately_consumed_defs(f: &Func) -> HashSet<(i32, usize)> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
@@ -9904,10 +10017,7 @@ fn immediately_consumed_defs(f: &Func) -> HashSet<(i32, usize)> {
         *life += 1;
         // Consumed where produced: pushed as an operand, or dereferenced for a member the very
         // next instruction — `LoadRObjR` is how a member read-modify-write takes its receiver.
-        let at_once = ins.op.name == "STOREOBJ"
-            && instrs.get(i + 1).is_some_and(|next| {
-                matches!(next.op.name, "PshVPtr" | "LoadRObjR") && w0(next) == dst
-            });
+        let at_once = ins.op.name == "STOREOBJ" && consumed_next(&instrs, i, dst);
         if at_once {
             out.insert((dst, *life));
         }

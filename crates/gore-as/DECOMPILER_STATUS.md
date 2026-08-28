@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 99.06% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 99.08% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **99.06%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **99.08%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,545 functions (0.94%) recompile to bytecode that differs semantically.** A semantic
+**1,518 functions (0.92%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -646,6 +646,29 @@ destructor that already makes a value-type slot loose.
 scope has not been left and the return value does not exist yet, so that `$beh2` cannot be scope
 exit — it is the cleanup of the arguments the returned expression consumed, which means those
 operands were written inside the expression rather than declared above it. 1,546 to 1,545.
+
+**The direction that was missing: a handle vanilla PARKED was named.** Every rule above runs one
+way — it finds evidence that vanilla did NOT name a value and folds our local away. The mirror was
+absent, and roughly half the ordering class was unreachable without it. It is the CONTENT OF THE
+GAP: a producer writes a slot, exactly one later instruction reads it, that read is a plain
+`PshVPtr`, and real work stands in between. This compiler evaluates a call's arguments first and
+its receiver last, and turns a register result into a variable only when pending cleanup is in the
+way — so a value produced, left sitting while unrelated code runs, and only then pushed cannot be
+the expression's own temporary. Where the gap holds nothing but `PSF vT; CALLSYS` destructor pairs
+it IS that cleanup, and the value is a temporary after all.
+
+Measured over 19,768 producer/single-read sites in byte-faithful functions, where our text IS
+vanilla's source: the rule fires 151 times and every one is a name, while the 58 cleanup-only gaps
+and the 19,559 adjacent sites hold none. Two smaller rules came with it — a value slot destroyed at
+two different program points was declared (232 of 232 on the same control), and adjacency now reads
+past deferred cleanup.
+
+Three things were ruled OUT by the same control, and that is worth as much: the bool spill is not a
+name (61 of 69 byte-faithful sites carry it from text that names nothing), slot geometry does not
+separate declarations from temporaries, and the branch-in-the-gap test is a weaker subset of the
+rule above.
+
+1,545 to 1,518, twenty-seven fixed and none broken.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
