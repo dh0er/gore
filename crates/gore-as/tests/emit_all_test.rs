@@ -106,6 +106,82 @@ fn collision_plan_matches_emitted_functions_and_reference_modifiers() {
 }
 
 #[test]
+fn distinct_real_world_namespaces_do_not_create_free_function_collisions() {
+    let context_module = |module_name: &str, namespace: &str| {
+        module(
+            module_name,
+            vec![
+                function(
+                    "FetchContext",
+                    namespace,
+                    vec![parameter(primitive(0x44), 0)],
+                ),
+                function(
+                    "GetTuning",
+                    namespace,
+                    vec![parameter(primitive(0x44), 0)],
+                ),
+            ],
+            Vec::new(),
+        )
+    };
+    let modules = vec![
+        context_module("Theft", "TheftContext"),
+        context_module("Pickpocket", "PickpocketContext"),
+        context_module("Creeping", "CreepingContext"),
+    ];
+    let mut refs = RefResolver::default();
+    let prepared = PreparedEmit::new(&modules, &mut refs, None).unwrap();
+
+    for (index, namespace) in
+        ["TheftContext", "PickpocketContext", "CreepingContext"]
+            .into_iter()
+            .enumerate()
+    {
+        let emitted = prepared.emit_module(index).unwrap();
+        assert!(emitted.contains(&format!("namespace {namespace}")));
+        assert!(emitted.contains("FetchContext("));
+        assert!(emitted.contains("GetTuning("));
+        assert!(!emitted.contains("FetchContext_g"));
+        assert!(!emitted.contains("GetTuning_g"));
+    }
+
+    prepared
+        .prepare_overlay(
+            "add",
+            "AssessmentBits",
+            "void Check() { TheftContext::FetchContext(1); PickpocketContext::GetTuning(1); CreepingContext::FetchContext(1); }",
+        )
+        .unwrap();
+}
+
+#[test]
+fn same_namespace_free_function_calls_remain_fail_closed() {
+    let shared = || {
+        function(
+            "FetchContext",
+            "SharedContext",
+            vec![parameter(primitive(0x44), 0)],
+        )
+    };
+    let modules = vec![
+        module("First", vec![shared()], Vec::new()),
+        module("Second", vec![shared()], Vec::new()),
+    ];
+    let mut refs = RefResolver::default();
+    let prepared = PreparedEmit::new(&modules, &mut refs, None).unwrap();
+
+    assert!(prepared
+        .prepare_overlay(
+            "add",
+            "Caller",
+            "void Check() { SharedContext::FetchContext(1); }",
+        )
+        .unwrap_err()
+        .contains("collision-ambiguous"));
+}
+
+#[test]
 fn collision_targets_are_unique_and_overlay_calls_fail_closed() {
     let get = || function("Get", "", vec![parameter(primitive(0x44), 0)]);
     let get_pair = || {

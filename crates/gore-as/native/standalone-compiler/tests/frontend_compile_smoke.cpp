@@ -1,10 +1,12 @@
 #include "gore_as_standalone/frontend_compile.hpp"
 #include "gore_as_standalone/module_preprocessor.hpp"
+#include "gore_as_standalone/precompiled_engine.hpp"
 
 #include "AngelscriptManager.h"
 #include "angelscript.h"
 #include "as_scriptfunction.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <iostream>
 #include <string>
@@ -173,6 +175,99 @@ int ConsumerValue() { return MiddleValue(); }
         return fail("automatic-import transitive graph closure did not compile", engine);
     }
     automatic_engine->ShutDownAndRelease();
+
+    const auto namespaced_reflection =
+        standalone::preprocess_lexical_module_graph(
+            {},
+            {source("AI/AssessmentResponseSystem/AssessmentBits.as", R"AS(
+namespace Assessed::Evaluate
+{
+UFUNCTION()
+bool AffectedIsDead() { return true; }
+}
+)AS")});
+    asIScriptEngine* const namespaced_engine =
+        asCreateScriptEngine(ANGELSCRIPT_VERSION);
+    std::vector<asIScriptModule*> namespaced_modules;
+    standalone::shipping_static_jit_candidates namespaced_candidates;
+    const auto namespaced_compiled = namespaced_engine == nullptr
+        ? standalone::frontend_compile_result{asERROR}
+        : standalone::compile_preprocessed_module_graph(
+              *namespaced_engine,
+              {},
+              namespaced_reflection,
+              nullptr,
+              runtime,
+              standalone::global_initializer_policy::defer,
+              namespaced_modules,
+              &namespaced_candidates);
+    const standalone::precompiled::shipping_static_jit_coverage empty_coverage;
+    const auto namespaced_projected = namespaced_engine == nullptr
+        ? standalone::precompiled::engine_bridge_result{asERROR}
+        : standalone::precompiled::apply_shipping_static_jit_coverage_checkpoint(
+              namespaced_modules,
+              namespaced_candidates,
+              empty_coverage,
+              namespaced_reflection);
+    if (!namespaced_reflection.ok || !namespaced_compiled.succeeded() ||
+        !namespaced_projected.succeeded() || namespaced_modules.size() != 1U ||
+        namespaced_candidates.functions.size() != 1U ||
+        !namespaced_candidates.functions[0]->IsFinal()) {
+        if (namespaced_engine != nullptr) namespaced_engine->ShutDownAndRelease();
+        return fail(
+            "namespaced global UFUNCTION did not retain its unique module-statics identity",
+            engine);
+    }
+    namespaced_engine->ShutDownAndRelease();
+
+    const auto ambiguous_reflection =
+        standalone::preprocess_lexical_module_graph(
+            {},
+            {source("Game/AmbiguousReflection.as", R"AS(
+namespace First
+{
+UFUNCTION()
+bool Reflected() { return true; }
+}
+namespace Second
+{
+bool Reflected() { return false; }
+}
+)AS")});
+    asIScriptEngine* const ambiguous_engine =
+        asCreateScriptEngine(ANGELSCRIPT_VERSION);
+    std::vector<asIScriptModule*> ambiguous_modules;
+    standalone::shipping_static_jit_candidates ambiguous_candidates;
+    const auto ambiguous_compiled = ambiguous_engine == nullptr
+        ? standalone::frontend_compile_result{asERROR}
+        : standalone::compile_preprocessed_module_graph(
+              *ambiguous_engine,
+              {},
+              ambiguous_reflection,
+              nullptr,
+              runtime,
+              standalone::global_initializer_policy::defer,
+              ambiguous_modules,
+              &ambiguous_candidates);
+    const auto ambiguous_projected = ambiguous_engine == nullptr
+        ? standalone::precompiled::engine_bridge_result{asERROR}
+        : standalone::precompiled::apply_shipping_static_jit_coverage_checkpoint(
+              ambiguous_modules,
+              ambiguous_candidates,
+              empty_coverage,
+              ambiguous_reflection);
+    if (!ambiguous_reflection.ok || !ambiguous_compiled.succeeded() ||
+        ambiguous_projected.succeeded() || ambiguous_candidates.functions.size() != 2U ||
+        std::any_of(
+            ambiguous_candidates.functions.begin(),
+            ambiguous_candidates.functions.end(),
+            [](asIScriptFunction* const function) { return function->IsFinal(); })) {
+        if (ambiguous_engine != nullptr) ambiguous_engine->ShutDownAndRelease();
+        return fail(
+            "ambiguous namespaced global UFUNCTIONs did not fail closed before mutation",
+            engine);
+    }
+    ambiguous_engine->ShutDownAndRelease();
 
     const auto initializer_frontend = standalone::preprocess_lexical_module_graph(
         options,

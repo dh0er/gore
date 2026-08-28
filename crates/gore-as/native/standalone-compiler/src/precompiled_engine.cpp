@@ -4053,18 +4053,33 @@ struct reflected_static_jit_identity {
     bool object_bound = false;
 
     bool operator<(const reflected_static_jit_identity& other) const noexcept {
-        return std::tie(
-                   module_name, object_bound, owner_namespace, owner_name,
-                   function_name) <
+        if (module_name != other.module_name) {
+            return module_name < other.module_name;
+        }
+        if (object_bound != other.object_bound) {
+            return object_bound < other.object_bound;
+        }
+        // Global UFUNCTION descriptors belong to the module's one reflected
+        // statics class. That descriptor, and the cached metadata projection,
+        // identify them by module and exported function name; the AngelScript
+        // namespace is not part of the reflected identity. It remains part of
+        // object-bound identity, where class namespaces are authoritative.
+        if (!object_bound) {
+            return function_name < other.function_name;
+        }
+        return std::tie(owner_namespace, owner_name, function_name) <
             std::tie(
-                   other.module_name, other.object_bound, other.owner_namespace,
-                   other.owner_name, other.function_name);
+                   other.owner_namespace, other.owner_name,
+                   other.function_name);
     }
 
     bool operator==(const reflected_static_jit_identity& other) const noexcept {
-        return module_name == other.module_name && object_bound == other.object_bound &&
-            owner_namespace == other.owner_namespace && owner_name == other.owner_name &&
-            function_name == other.function_name;
+        return module_name == other.module_name &&
+            object_bound == other.object_bound &&
+            function_name == other.function_name &&
+            (!object_bound ||
+             (owner_namespace == other.owner_namespace &&
+              owner_name == other.owner_name));
     }
 };
 
@@ -4341,10 +4356,21 @@ engine_bridge_result apply_shipping_static_jit_coverage_checkpoint(
             const auto matches = std::equal_range(
                 candidate_reflected_identities.begin(),
                 candidate_reflected_identities.end(), reflected);
-            if (std::distance(matches.first, matches.second) != 1) {
+            const auto match_count = std::distance(matches.first, matches.second);
+            if (match_count != 1) {
+                const std::string owner = reflected.object_bound
+                    ? (reflected.owner_namespace.empty()
+                           ? reflected.owner_name
+                           : reflected.owner_namespace + "::" + reflected.owner_name)
+                    : (reflected.owner_namespace.empty()
+                           ? std::string{"<global>"}
+                           : reflected.owner_namespace + "::<global>");
                 return failure(
                     engine_bridge_phase::preflight, kNoModule,
-                    "Shipping StaticJIT UFUNCTION identity does not map uniquely",
+                    "Shipping StaticJIT UFUNCTION identity " +
+                        reflected.module_name + "/" + owner + "::" +
+                        reflected.function_name + " maps to " +
+                        std::to_string(match_count) + " stage-3 candidates",
                     asINVALID_CONFIGURATION);
             }
         }
