@@ -5156,6 +5156,10 @@ void main() {
         notifier.state.deletedSaveRecovery?.backupPath,
         r'C:\tmp\saves\goresave_backups\G1R-006.sav.bak.2',
       );
+      expect(
+        notifier.state.deletedSaveRecovery?.persistentPostDeleteSha1,
+        'post-delete-profile-sha',
+      );
 
       await notifier.restoreDeletedSave();
 
@@ -5167,9 +5171,61 @@ void main() {
         restore.payload['backupPath'],
         r'C:\tmp\saves\goresave_backups\G1R-006.sav.bak.2',
       );
+      expect(
+        restore.payload['expectedPersistentSha1'],
+        'post-delete-profile-sha',
+      );
       expect(notifier.state.deletedSaveRecovery, isNull);
     },
   );
+
+  test('restoreDeletedSave preserves pending edits', () async {
+    final core = _RecordingCoreService(
+      scanData: {
+        'saves': [
+          {
+            'path': r'C:\tmp\saves\G1R-006.sav',
+            'slot': 'G1R-006',
+            'format': 'GSAV',
+            'fileSize': 100,
+            'sha1': 'a',
+            'status': 'ok',
+            'persistentProfileId': 0,
+          },
+        ],
+        'profiles': [
+          {
+            'profileId': 0,
+            'profileName': '0',
+            'savedSlots': ['G1R-006'],
+          },
+        ],
+        'activeProfileId': 0,
+      },
+    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await pumpEventQueue();
+    expect(await notifier.deleteSave(slot: 'G1R-006', profileId: 0), isTrue);
+    notifier.setPendingEdit(
+      'draft',
+      const PendingSaveEdit(
+        edits: [
+          {'op': 'public.setName', 'value': 'Keep me'},
+        ],
+      ),
+    );
+
+    await notifier.restoreDeletedSave();
+
+    expect(notifier.state.pendingEdits, contains('draft'));
+    expect(notifier.state.deletedSaveRecovery, isNotNull);
+    expect(
+      core.requests.where(
+        (request) => request.command == 'restore_deleted_save',
+      ),
+      isEmpty,
+    );
+  });
 
   test('selecting another save disarms deleted-save recovery', () async {
     final core = _RecordingCoreService(
@@ -6120,6 +6176,7 @@ class _RecordingCoreService implements GoresaveCoreService {
             'backupPath': r'C:\tmp\saves\goresave_backups\G1R-006.sav.bak.2',
             'persistentBackupPath':
                 r'C:\tmp\saves\goresave_backups\PersistentDataList.sav.bak.2',
+            'persistentPostDeleteSha1': 'post-delete-profile-sha',
           },
         };
       case 'search_typed_properties':

@@ -2733,11 +2733,19 @@ class EditorNotifier extends StateNotifier<EditorState> {
       },
       onSuccess: (data) {
         final backupPath = data['backupPath'] as String?;
-        if (backupPath == null || backupPath.isEmpty) return;
+        final persistentPostDeleteSha1 =
+            data['persistentPostDeleteSha1'] as String?;
+        if (backupPath == null ||
+            backupPath.isEmpty ||
+            persistentPostDeleteSha1 == null ||
+            persistentPostDeleteSha1.isEmpty) {
+          return;
+        }
         state = state.copyWith(
           deletedSaveRecovery: DeletedSaveRecovery(
             targetPath: save.path,
             backupPath: backupPath,
+            persistentPostDeleteSha1: persistentPostDeleteSha1,
           ),
         );
       },
@@ -2855,6 +2863,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     String command,
     String backupPath, {
     String? targetPath,
+    String? expectedPersistentSha1,
   }) async {
     final path = targetPath ?? state.selectedPath;
     if (path == null) return false;
@@ -2862,7 +2871,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
     await _withLoading(() async {
       final response = await _execute(
         command,
-        payload: {'path': path, 'backupPath': backupPath},
+        payload: {
+          'path': path,
+          'backupPath': backupPath,
+          'expectedPersistentSha1': ?expectedPersistentSha1,
+        },
       );
       if (response['ok'] != true) {
         state = state.copyWith(
@@ -2917,10 +2930,15 @@ class EditorNotifier extends StateNotifier<EditorState> {
   Future<void> restoreDeletedSave() async {
     final recovery = state.deletedSaveRecovery;
     if (recovery == null) return;
+    if (state.hasUnsavedEdits) {
+      state = state.copyWith(error: _l10n.editorUnsavedBeforeRestoreProfile);
+      return;
+    }
     final restored = await _restoreBackup(
       'restore_deleted_save',
       recovery.backupPath,
       targetPath: recovery.targetPath,
+      expectedPersistentSha1: recovery.persistentPostDeleteSha1,
     );
     if (restored) {
       state = state.copyWith(clearDeletedSaveRecovery: true);
@@ -4216,10 +4234,12 @@ class DeletedSaveRecovery {
   const DeletedSaveRecovery({
     required this.targetPath,
     required this.backupPath,
+    required this.persistentPostDeleteSha1,
   });
 
   final String targetPath;
   final String backupPath;
+  final String persistentPostDeleteSha1;
 
   String get fileName {
     final normalized = targetPath.replaceAll('\\', '/');

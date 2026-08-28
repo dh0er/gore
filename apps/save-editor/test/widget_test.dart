@@ -1602,6 +1602,7 @@ void main() {
       expect(restore.payload, {
         'path': r'C:\tmp\saves\G1R-001.sav',
         'backupPath': r'C:\tmp\saves\goresave_backups\G1R-001.sav.bak.301',
+        'expectedPersistentSha1': 'post-delete-profile-sha',
       });
     },
   );
@@ -2021,6 +2022,7 @@ class _FakeCoreService implements GoresaveCoreService {
             'backupPath': r'C:\tmp\saves\goresave_backups\G1R-001.sav.bak.301',
             'persistentBackupPath':
                 r'C:\tmp\saves\goresave_backups\PersistentDataList.sav.bak.301',
+            'persistentPostDeleteSha1': 'post-delete-profile-sha',
           },
         };
       case 'search_typed_properties':

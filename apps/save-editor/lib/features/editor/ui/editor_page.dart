@@ -964,7 +964,7 @@ class _EditorWorkspace extends StatelessWidget {
         actions: [
           if (recovery != null)
             TextButton.icon(
-              onPressed: state.isLoading
+              onPressed: state.isLoading || state.hasUnsavedEdits
                   ? null
                   : () => notifier.restoreDeletedSave(),
               icon: const Icon(Icons.undo),

@@ -603,7 +603,19 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .ok_or_else(|| {
                     CoreError::InvalidRequest("missing payload.backupPath".to_string())
                 })?;
-            Ok(restore_deleted_save(&path, &backup_path)?)
+            let expected_persistent_sha1 = payload
+                .get("expectedPersistentSha1")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    CoreError::InvalidRequest(
+                        "missing payload.expectedPersistentSha1".to_string(),
+                    )
+                })?;
+            Ok(restore_deleted_save(
+                &path,
+                &backup_path,
+                expected_persistent_sha1,
+            )?)
         }
         "delete_backup" => {
             let path = required_path(&payload)?;
@@ -2272,7 +2284,11 @@ fn restore_backup(path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
 /// Recreate a slot removed by [`delete_save`] from its exact paired backup.
 /// The target must still be absent; a game/cloud process that recreated it wins
 /// and is never overwritten.
-fn restore_deleted_save(path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
+fn restore_deleted_save(
+    path: &Path,
+    backup_path: &Path,
+    expected_persistent_sha1: &str,
+) -> Result<Value, CoreError> {
     let file_name = path
         .file_name()
         .and_then(|value| value.to_str())
@@ -2285,7 +2301,13 @@ fn restore_deleted_save(path: &Path, backup_path: &Path) -> Result<Value, CoreEr
             "payload.path does not name a valid save slot: {file_name}"
         )));
     }
-    restore_backup_with_mode(path, backup_path, true, |_| Ok(()))
+    restore_backup_with_mode(
+        path,
+        backup_path,
+        true,
+        Some(expected_persistent_sha1),
+        |_| Ok(()),
+    )
 }
 
 fn restore_backup_with_before_replace<F>(
@@ -2296,13 +2318,14 @@ fn restore_backup_with_before_replace<F>(
 where
     F: FnOnce(&Path) -> Result<(), CoreError>,
 {
-    restore_backup_with_mode(path, backup_path, false, before_replace)
+    restore_backup_with_mode(path, backup_path, false, None, before_replace)
 }
 
 fn restore_backup_with_mode<F>(
     path: &Path,
     backup_path: &Path,
     require_missing_target: bool,
+    expected_persistent_sha1: Option<&str>,
     before_replace: F,
 ) -> Result<Value, CoreError>
 where
@@ -2365,6 +2388,24 @@ where
     // slot file, so a companion failure aborts the whole restore instead of
     // leaving the slot restored while PersistentDataList.sav stays out of sync.
     let companion_plan = prepare_paired_persistent_data_list_restore(path, backup_path)?;
+    if require_missing_target {
+        let expected_sha1 = expected_persistent_sha1.ok_or_else(|| {
+            CoreError::InvalidRequest(
+                "deleted-save recovery requires the post-delete profile hash".to_string(),
+            )
+        })?;
+        let plan = companion_plan.as_ref().ok_or_else(|| {
+            CoreError::Validation(
+                "the deleted save's paired PersistentDataList backup was not found".to_string(),
+            )
+        })?;
+        if sha1_hex(&plan.original_data) != expected_sha1 {
+            return Err(CoreError::Update(format!(
+                "{} changed after the save was deleted; the newer profile was preserved",
+                plan.persistent_path.display()
+            )));
+        }
+    }
 
     // Take safety backups of both files up front. For a profile-file restore,
     // the safety backup must avoid existing slot-backup suffixes too — otherwise
@@ -5054,6 +5095,7 @@ where
         "profileId": profile_id,
         "backupPath": backup_path,
         "persistentBackupPath": persistent_backup_path,
+        "persistentPostDeleteSha1": sha1_hex(&persistent_edited),
         "placementNoteWarning": placement_note_warning,
     }))
 }
@@ -16629,7 +16671,11 @@ mod tests {
         let restore = execute_json_inner(
             &json!({
                 "command": "restore_deleted_save",
-                "payload": {"path": save_path, "backupPath": backup_path}
+                "payload": {
+                    "path": save_path,
+                    "backupPath": backup_path,
+                    "expectedPersistentSha1": response["persistentPostDeleteSha1"],
+                }
             })
             .to_string(),
         )
@@ -16671,10 +16717,39 @@ mod tests {
         fs::write(&backup_path, deleted).unwrap();
         fs::write(&save_path, &recreated).unwrap();
 
-        let error = restore_deleted_save(&save_path, &backup_path).unwrap_err();
+        let error =
+            restore_deleted_save(&save_path, &backup_path, "unused-profile-sha").unwrap_err();
 
         assert!(matches!(error, CoreError::Update(_)));
         assert_eq!(fs::read(&save_path).unwrap(), recreated);
+    }
+
+    #[test]
+    fn restore_deleted_save_preserves_a_newer_profile() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-006";
+        let save_path = dir.path().join(format!("{slot}.sav"));
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let save_original = build_gsav(
+            2,
+            &public_payload_with_profile("Deleted", 0),
+            &minimal_stream(),
+            &[0, 0, 0, 0],
+        );
+        fs::write(&save_path, &save_original).unwrap();
+        fs::write(&persistent_path, assignment_persistent_data_list(slot, 0)).unwrap();
+        let deleted = delete_save(&save_path, &persistent_path, slot, 0, true).unwrap();
+        let backup_path = PathBuf::from(deleted["backupPath"].as_str().unwrap());
+        let expected_sha1 = deleted["persistentPostDeleteSha1"].as_str().unwrap();
+        let newer_profile = assignment_persistent_data_list("G1R-007", 0);
+        fs::write(&persistent_path, &newer_profile).unwrap();
+
+        let error =
+            restore_deleted_save(&save_path, &backup_path, expected_sha1).unwrap_err();
+
+        assert!(matches!(error, CoreError::Update(_)));
+        assert!(!save_path.exists());
+        assert_eq!(fs::read(&persistent_path).unwrap(), newer_profile);
     }
 
     #[test]
