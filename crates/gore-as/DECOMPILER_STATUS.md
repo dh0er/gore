@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,546 functions (0.94%) recompile to bytecode that differs semantically.** A semantic
+**1,545 functions (0.94%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -641,6 +641,11 @@ carrying one can no longer be called wholly consumed — the object mirror of th
 destructor that already makes a value-type slot loose.
 
 1,549 to 1,546.
+
+**A destructor standing before the return object is built is deferred-argument cleanup.** The
+scope has not been left and the return value does not exist yet, so that `$beh2` cannot be scope
+exit — it is the cleanup of the arguments the returned expression consumed, which means those
+operands were written inside the expression rather than declared above it. 1,546 to 1,545.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern

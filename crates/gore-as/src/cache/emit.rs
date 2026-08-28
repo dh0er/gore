@@ -3908,16 +3908,26 @@ fn temporary_receiver_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
         };
         destructions.entry(slot).or_default().push(at);
     }
+    // Where the RETURN object is constructed. A destructor standing before it cannot be scope
+    // exit — the scope has not been left yet, and the return value is not built. It is
+    // AngelScript's deferred cleanup of the arguments the returned expression consumed, so those
+    // operands were written INSIDE that expression rather than declared above it.
+    let return_built = instrs.iter().position(|ins| {
+        ins.op.name == "CALLSYS"
+            && refs.func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64) == Some("$beh0")
+    });
     destructions
         .into_iter()
         .filter(|(slot, at)| *slot > 0 && at.len() == 1)
         .filter(|(_, at)| {
             // Mid-expression: what follows is real work, not the rest of a scope's cleanup group
-            // running into the block's exit.
-            instrs[at[0] + 1..]
-                .iter()
-                .find(|next| next.op.name != "PSF" && !destroys(next))
-                .is_some_and(|next| !matches!(next.op.name, "RET" | "JMP"))
+            // running into the block's exit — or the destructor stands before the return object
+            // is even built.
+            return_built.is_some_and(|built| at[0] < built)
+                || instrs[at[0] + 1..]
+                    .iter()
+                    .find(|next| next.op.name != "PSF" && !destroys(next))
+                    .is_some_and(|next| !matches!(next.op.name, "RET" | "JMP"))
         })
         .map(|(slot, _)| slot)
         .collect()
@@ -6253,6 +6263,12 @@ fn inline_temporary_into(
     let movable = match position {
         Position::Operand => {
             (operand_read_takes_a_value(&lines[index])
+                // A returned expression whose operands vanilla cleaned up BEFORE building the
+                // return object was written inline: the cleanup is the deferred-argument kind,
+                // which only a temporary gets.
+                || (lines[index].trim().starts_with("return ")
+                    && slot_and_life_any(temp)
+                        .is_some_and(|(slot, _)| temporary_receivers.contains(&slot)))
                 || (reads_plain() && assigns_a_scalar(&lines[index], locals))
                 // A `return` is refused because a returned REFERENCE may not be a temporary.
                 // A bool is not one, and the cache can say so.
