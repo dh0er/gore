@@ -5061,18 +5061,28 @@ where
         }
     };
 
-    let recreated_target_error = match fs::symlink_metadata(save_path) {
-        Ok(_) => Some(CoreError::Update(format!(
+    let target_was_recreated = match fs::symlink_metadata(save_path) {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            let base = map_locked_file_error(
+                error,
+                &format!("checking {} before deletion", save_path.display()),
+            );
+            return match persistent_pending.rollback() {
+                Ok(()) => Err(abort_claim_with_restore(save_path, &save_claim, base)),
+                Err(rollback_error) => Err(CoreError::Update(format!(
+                    "{base}; profile rollback failed safely: {rollback_error}; the displaced original remains at {}",
+                    save_claim.display()
+                ))),
+            };
+        }
+    };
+    if target_was_recreated {
+        let base = CoreError::Update(format!(
             "{} was recreated while deletion was being prepared; the newer save was preserved",
             save_path.display()
-        ))),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => Some(map_locked_file_error(
-            error,
-            &format!("checking {} before deletion", save_path.display()),
-        )),
-    };
-    if let Some(base) = recreated_target_error {
+        ));
         return match persistent_pending.rollback() {
             Ok(()) => match fs::remove_file(&save_claim) {
                 Ok(()) => Err(base),
