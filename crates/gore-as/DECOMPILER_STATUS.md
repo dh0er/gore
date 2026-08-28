@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,495 functions (0.91%) recompile to bytecode that differs semantically.** A semantic
+**1,494 functions (0.91%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -682,6 +682,20 @@ members with NO initializer: for a primitive or an enum it pushes the DESTINATIO
 constructor takes parameters). Pass 2 takes the members that HAVE one and lowers it as an ordinary
 assignment, so the VALUE is compiled first. Address-first therefore says the source wrote that
 member bare — asked per FIELD, because one struct carries both kinds side by side. 1,508 to 1,495.
+
+**The bool spill has three producers, and only one of them is a name.** `CALL*; CpyRtoV4 vN;
+CpyVtoR1 vN; J*` is a bool result stored and read straight back before the branch, and this
+compiler otherwise branches on the register where it stands. The round trip has three causes: a
+stack TEMPORARY handed to the call by reference (its address is pushed twice, and passing a
+temporary by reference forces the result out of the register even when the temporary has no
+destructor to emit); the value being the left operand of a `&&`/`||` that must produce a value,
+where the arms write a carrier and jump to a merge that copies it on; and the source declaring a
+`bool` for it. Subtract the first two and the rest is the name — 149 sites carry the shape, 70 for
+one of the other two reasons, and our own output already reproduces those.
+
+An earlier reading of this shape as a name outright was refused on the control for exactly that
+reason, and the refusal was right: without the two exclusions the rule names values vanilla never
+named. 1,495 to 1,494 so far, with the fold that removes the name in a second place still to land.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern

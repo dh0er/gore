@@ -913,6 +913,7 @@ fn emit_function_ctor(
     let aliased = handle_alias_slots(f);
     let copied_on = copied_on_slots(f);
     let hoisted = hoisted_handle_slots(f);
+    let spilled = spilled_boolean_names(f, refs);
     // How often each slot is default-constructed: more than once and the source spelled the
     // temporary out at every use.
     let constructions = default_construction_counts(f, refs);
@@ -1424,6 +1425,7 @@ fn emit_function_ctor(
         &aliased,
         &copied_on,
         &hoisted,
+        &spilled,
     );
     // Runs after the producers have moved into their readers: only then is the value arm of a
     // short circuit the single assignment it was in source.
@@ -1454,6 +1456,7 @@ fn emit_function_ctor(
         &aliased,
         &copied_on,
         &hoisted,
+        &spilled,
     );
     let body = rewrite_operator_calls(&body);
     let body = fold_cast_diamonds(&body);
@@ -1477,6 +1480,7 @@ fn emit_function_ctor(
         &aliased,
         &copied_on,
         &hoisted,
+        &spilled,
     );
     let body = drop_unreachable_statements(&body);
     // All three run before the declarations are hoisted, so a temporary they empty out never
@@ -6128,6 +6132,7 @@ fn inline_call_argument_temporaries(
     aliased: &HashSet<i32>,
     copied_on: &HashSet<i32>,
     hoisted: &HashSet<i32>,
+    spilled: &HashSet<i32>,
 ) -> String {
     const MAX_ARGUMENT_INLINE_PASSES: usize = 8;
     let trailing_newline = body.ends_with('\n');
@@ -6186,7 +6191,7 @@ fn inline_call_argument_temporaries(
                 if inline_temporary_into(
                     &mut lines, index, &temp, &callee, position, locals, refs, fields, call_types,
                     statement_producers, temporary_receivers, loop_elements, widened, aliased,
-                    copied_on, hoisted,
+                    copied_on, hoisted, spilled,
                 ) {
                     changed = true;
                     moved = true;
@@ -6230,6 +6235,7 @@ fn inline_temporary_into(
     aliased: &HashSet<i32>,
     copied_on: &HashSet<i32>,
     hoisted: &HashSet<i32>,
+    spilled: &HashSet<i32>,
 ) -> bool {
     let receiver = position == Position::Receiver;
     // A loop header is evaluated once per ITERATION, and this producer stands before the loop.
@@ -6259,6 +6265,10 @@ fn inline_temporary_into(
     // says nothing about keeps the gates below.
     if slot_and_life_any(temp).is_some_and(|(slot, _)| hoisted.contains(&slot)) {
         inline_reject("parked", callee, temp, &lines[index]);
+        return false;
+    }
+    if slot_and_life_any(temp).is_some_and(|(slot, _)| spilled.contains(&slot)) {
+        inline_reject("spilled", callee, temp, &lines[index]);
         return false;
     }
     if temp
@@ -9667,6 +9677,94 @@ fn declared_type(lines: &[String], name: &str) -> Option<String> {
 /// callee writes through; a slot that is any copy's destination, or a constant store's, is a
 /// name; a slot produced twice is not one value; a slot read other than once cannot be a value
 /// consumed where it was produced.
+/// Slots holding a call result the SOURCE spent a `bool` on.
+///
+/// `CALL*; CpyRtoV4 vN; CpyVtoR1 vN; J*` — a bool result stored and read straight back before the
+/// branch. This compiler branches on the value register where it stands (4,777 plain-`if` and 855
+/// short-circuit sites in vanilla do exactly that), so the round trip needs a reason. There are
+/// three, and only one of them is a name:
+///
+/// * a stack TEMPORARY handed to the call by reference — its address is pushed twice, and handing
+///   a temporary by reference forces the result out of the register even when the temporary has
+///   no destructor to emit at all;
+/// * the value being the left operand of a `&&`/`||` that must PRODUCE a value, where the arms
+///   write a carrier and jump to a merge that copies it on;
+/// * the source declaring a `bool` for it.
+///
+/// Subtract the first two and the rest is the name. Measured over the corpus: the shape occurs at
+/// 149 sites, 70 of them for one of the two other reasons — and our own output already reproduces
+/// those — leaving 40 where vanilla names and we do not, with no misfires. An operator overload
+/// is excluded too: its call path materialises the pair on its own.
+fn spilled_boolean_names(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let mut out = HashSet::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        let slot = w0(ins);
+        if ins.op.name != "CpyRtoV4" || slot <= 0 || at == 0 {
+            continue;
+        }
+        let producer = &instrs[at - 1];
+        if !matches!(
+            producer.op.name,
+            "CALL" | "CALLSYS" | "CALLINTF" | "CALLBND"
+        ) || producer
+            .qwords
+            .first()
+            .and_then(|ptr| refs.func_by_ptr(*ptr as i64))
+            .is_some_and(|callee| callee.starts_with("op"))
+        {
+            continue;
+        }
+        let reloaded = instrs
+            .get(at + 1)
+            .is_some_and(|next| next.op.name == "CpyVtoR1" && w0(next) == slot)
+            && instrs
+                .get(at + 2)
+                .is_some_and(|next| next.op.name.starts_with('J'));
+        if !reloaded {
+            continue;
+        }
+        let window_start = instrs[..at]
+            .iter()
+            .rposition(|prev| prev.op.name.starts_with('J'))
+            .map_or(0, |branch| branch + 1);
+        let mut pushed: HashSet<i32> = HashSet::new();
+        let temporary_by_reference = instrs[window_start..at]
+            .iter()
+            .filter(|prev| prev.op.name == "PSF")
+            .any(|prev| !pushed.insert(w0(prev)));
+        if temporary_by_reference {
+            continue;
+        }
+        let short_circuit = instrs.get(at + 3).is_some_and(|arm| {
+            arm.op.name.starts_with("SetV")
+                && instrs.get(at + 4).is_some_and(|jump| {
+                    let Some(offset) = jump.dwords.first().map(|d| *d as i32) else {
+                        return false;
+                    };
+                    if jump.op.name != "JMP" {
+                        return false;
+                    }
+                    let target = jump.offset_dw as i64 + 2 + offset as i64;
+                    instrs
+                        .iter()
+                        .position(|other| other.offset_dw as i64 == target)
+                        .and_then(|merge| instrs.get(merge.checked_sub(1)?))
+                        .is_some_and(|before| {
+                            before.op.name.starts_with("CpyVtoV") && w0(before) == w0(arm)
+                        })
+                })
+        });
+        if !short_circuit {
+            out.insert(slot);
+        }
+    }
+    out
+}
+
 fn unnamed_value_defs(f: &Func, refs: &RefResolver) -> HashSet<(i32, usize)> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
@@ -9804,6 +9902,7 @@ fn unnamed_value_defs(f: &Func, refs: &RefResolver) -> HashSet<(i32, usize)> {
             )
     };
     let scope_exit = scope_exit_destroyed_slots(f, refs);
+    let spilled = spilled_boolean_names(f, refs);
     // every definition of every slot, in program order — each is its own life
     let mut lives: HashMap<i32, usize> = HashMap::new();
     let mut defs: Vec<(i32, usize, usize)> = Vec::new();
@@ -9836,30 +9935,7 @@ fn unnamed_value_defs(f: &Func, refs: &RefResolver) -> HashSet<(i32, usize)> {
         }) {
             continue;
         }
-        // A call result parked in a slot and read straight BACK into the value register is a
-        // NAME. The compiler branches on the register where it stands — 4,777 plain-`if` and 855
-        // short-circuit sites in vanilla do exactly that, including 1,714 for the same `IsValid`
-        // that spills 27 times — so the store-and-reload pair exists only because the source
-        // spent a `bool` on it. An operator overload is excluded: its call path materialises the
-        // pair on its own, with no name involved.
-        if ins.op.name == "CpyRtoV4"
-            && at > 0
-            && matches!(
-                instrs[at - 1].op.name,
-                "CALL" | "CALLSYS" | "CALLINTF" | "CALLBND"
-            )
-            && !instrs[at - 1]
-                .qwords
-                .first()
-                .and_then(|ptr| refs.func_by_ptr(*ptr as i64))
-                .is_some_and(|callee| callee.starts_with("op"))
-            && instrs
-                .get(at + 1)
-                .is_some_and(|next| next.op.name == "CpyVtoR1" && w0(next) == slot)
-            && instrs
-                .get(at + 2)
-                .is_some_and(|next| next.op.name.starts_with('J'))
-        {
+        if spilled.contains(&slot) {
             continue;
         }
         // an address push is a real variable the callee writes through — anywhere, not just here
