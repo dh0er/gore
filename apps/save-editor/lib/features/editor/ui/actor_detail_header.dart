@@ -4,6 +4,7 @@ import 'package:goresave/features/editor/ui/character_master_list.dart'
     show localizedNpcName;
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 
 /// Compact header identifying WHICH actor a detail pane is showing. Shared by
 /// the Attribute and Inventory tab detail areas so both tabs make the selection
@@ -105,7 +106,7 @@ class ActorDetailHeader extends StatelessWidget {
                       technicalId,
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: scheme.onSurfaceVariant,
-                        fontFamily: 'Consolas',
+                        fontFamily: uiAwareMonospaceFontFamily(context),
                       ),
                     ),
                   ),

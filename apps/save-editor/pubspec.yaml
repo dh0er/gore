@@ -68,3 +68,26 @@ flutter:
     - assets/location_catalog.json
     - assets/glossary_npc_catalog.json
     - assets/glossary_segment_text_catalog.json
+    - assets/licenses/
+
+  fonts:
+    - family: GothicTitle
+      fonts:
+        - asset: assets/fonts/Gothic_Titel_Repariert.ttf
+    - family: GothicIngame
+      fonts:
+        - asset: assets/fonts/Gothic_Ingame_Repariert.ttf
+    - family: Podkova
+      fonts:
+        - asset: assets/fonts/Podkova-Variable.ttf
+    - family: NotoSerif
+      fonts:
+        - asset: assets/fonts/NotoSerif-Variable.ttf
+        - asset: assets/fonts/NotoSerif-Italic-Variable.ttf
+          style: italic
+    - family: NotoSerifJP
+      fonts:
+        - asset: assets/fonts/NotoSerifJP-Variable.ttf
+    - family: NotoSerifSC
+      fonts:
+        - asset: assets/fonts/NotoSerifSC-Variable.ttf

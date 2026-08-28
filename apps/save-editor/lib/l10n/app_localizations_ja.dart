@@ -1412,6 +1412,9 @@ class AppLocalizationsJa extends AppLocalizations {
   String get appearanceTitle => '外観';
 
   @override
+  String get uiFont => 'フォント';
+
+  @override
   String get theme => 'テーマ';
 
   @override

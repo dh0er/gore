@@ -24,6 +24,7 @@ import 'package:goresave/features/localization/ui/localization_settings.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
 import 'package:goresave/providers/data_providers.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 import 'package:intl/intl.dart';
 import 'difficulty_dialog.dart';
 import 'world_tab.dart';
@@ -69,9 +70,7 @@ class _EditorPageState extends ConsumerState<EditorPage>
     if (state == AppLifecycleState.resumed) {
       ref.read(locCatalogReloadProvider.notifier).state++;
       unawaited(
-        ref
-            .read(itemIconCatalogRefreshProvider)
-            .refreshIfSourceChanged(),
+        ref.read(itemIconCatalogRefreshProvider).refreshIfSourceChanged(),
       );
     }
   }
@@ -155,6 +154,7 @@ class _EditorPageState extends ConsumerState<EditorPage>
                   l10n.appTitle,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontFamily: podkovaFontFamily),
                 ),
               ),
               const SizedBox(width: 16),
@@ -1279,8 +1279,8 @@ class _DebugSectionState extends State<_DebugSection> {
                       alignment: Alignment.centerLeft,
                       child: SelectableText(
                         _json(inspection),
-                        style: const TextStyle(
-                          fontFamily: 'Consolas',
+                        style: TextStyle(
+                          fontFamily: uiAwareMonospaceFontFamily(context),
                           fontSize: 12,
                         ),
                       ),
@@ -2921,7 +2921,9 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
           overflow: TextOverflow.ellipsis,
           style: theme.textTheme.bodyMedium?.copyWith(
             color: theme.colorScheme.onSurfaceVariant,
-            fontFamily: hit.kind == 'opaque' ? 'monospace' : null,
+            fontFamily: hit.kind == 'opaque'
+                ? uiAwareMonospaceFontFamily(context, fallback: 'monospace')
+                : null,
           ),
         ),
       );
@@ -3642,7 +3644,10 @@ class _PathSettingRow extends StatelessWidget {
             child: SelectableText(
               value.isEmpty ? '-' : value,
               maxLines: 2,
-              style: const TextStyle(fontFamily: 'Consolas', fontSize: 12),
+              style: TextStyle(
+                fontFamily: uiAwareMonospaceFontFamily(context),
+                fontSize: 12,
+              ),
             ),
           ),
         ),

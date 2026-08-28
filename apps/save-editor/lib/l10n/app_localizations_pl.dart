@@ -1465,6 +1465,9 @@ class AppLocalizationsPl extends AppLocalizations {
   String get appearanceTitle => 'Wygląd';
 
   @override
+  String get uiFont => 'Czcionka';
+
+  @override
   String get theme => 'Motyw';
 
   @override

@@ -12,11 +12,14 @@ class AppearanceSettingsCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final themeMode = ref.watch(themeModeProvider);
+    final selectedUiFont = ref.watch(uiFontFamilyProvider);
     final uiScale = ref.watch(uiScaleProvider);
     // Normalize through gameLangByCode so an unknown/typo'd persisted code maps
     // to a real kGameLangs entry; otherwise the DropdownButton (whose items are
     // the kGameLangs codes) asserts on a value with no matching item.
-    final localeCode = gameLangByCode(ref.watch(localeProvider)).code;
+    final lang = gameLangByCode(ref.watch(localeProvider));
+    final localeCode = lang.code;
+    final uiFont = effectiveUiFontFamily(selectedUiFont, lang);
     final l10n = AppLocalizations.of(context);
     final textTheme = Theme.of(context).textTheme;
     return Card(
@@ -98,6 +101,41 @@ class AppearanceSettingsCard extends ConsumerWidget {
               children: [
                 SizedBox(
                   width: 90,
+                  child: Text(l10n.uiFont, style: textTheme.labelLarge),
+                ),
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: DropdownButton<UiFontFamily>(
+                      key: const ValueKey('ui-font-family-dropdown'),
+                      value: uiFont,
+                      onChanged: (font) {
+                        if (font != null) {
+                          ref.read(uiFontFamilyProvider.notifier).set(font);
+                        }
+                      },
+                      items: [
+                        for (final font in UiFontFamily.values)
+                          if (uiFontFamilySupportedFor(font, lang))
+                            DropdownMenuItem(
+                              value: font,
+                              child: Text(switch (font) {
+                                UiFontFamily.system => 'Segoe UI',
+                                UiFontFamily.podkova => 'Podkova',
+                                UiFontFamily.notoSerif => 'Noto Serif',
+                              }),
+                            ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                SizedBox(
+                  width: 90,
                   child: Text(l10n.uiScale, style: textTheme.labelLarge),
                 ),
                 Expanded(
@@ -127,10 +165,7 @@ class AppearanceSettingsCard extends ConsumerWidget {
               ],
             ),
             const SizedBox(height: 4),
-            Text(
-              l10n.zoomTip,
-              style: textTheme.bodySmall,
-            ),
+            Text(l10n.zoomTip, style: textTheme.bodySmall),
           ],
         ),
       ),

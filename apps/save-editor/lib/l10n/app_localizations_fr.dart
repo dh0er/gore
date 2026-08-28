@@ -1459,6 +1459,9 @@ class AppLocalizationsFr extends AppLocalizations {
   String get appearanceTitle => 'Apparence';
 
   @override
+  String get uiFont => 'Police';
+
+  @override
   String get theme => 'Thème';
 
   @override

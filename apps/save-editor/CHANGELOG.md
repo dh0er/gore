@@ -6,6 +6,14 @@ notes, so every release needs an entry.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- Appearance settings now offer Segoe UI, Podkova and Noto Serif as interface
+  fonts. Noto Serif includes dedicated Japanese and Simplified Chinese variants;
+  Podkova remains available for every other supported language.
+
 ## [1.3.1] - 2026-08-26
 
 ### Changed
