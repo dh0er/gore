@@ -8850,13 +8850,14 @@ where
         .map(|entry| gore_tex::item_icons::ItemIconSpec::new(entry.id, entry.icon))
         .collect::<Vec<_>>();
     let game_root = resolve_game_root(explicit)?;
-    let manifest_path = match prepare(&game_root, &items) {
-        Ok(path) => path,
+    let (manifest_path, source_game_path) = match prepare(&game_root, &items) {
+        Ok(path) => (path, game_root),
         Err(first_error) if item_icon_source_is_missing(&first_error) => {
             match discover_game_root().filter(|fallback| fallback != &game_root) {
-                Some(fallback) => {
-                    prepare(&fallback, &items).map_err(|error| CoreError::Io(error.to_string()))?
-                }
+                Some(fallback) => (
+                    prepare(&fallback, &items).map_err(|error| CoreError::Io(error.to_string()))?,
+                    fallback,
+                ),
                 None => return Err(CoreError::Io(first_error.to_string())),
             }
         }
@@ -8864,6 +8865,7 @@ where
     };
     Ok(json!({
         "manifestPath": manifest_path.display().to_string(),
+        "sourceGamePath": source_game_path.display().to_string(),
     }))
 }
 
@@ -15238,7 +15240,7 @@ mod tests {
     static REAL_SAVE_CACHE_TESTS: Mutex<()> = Mutex::new(());
 
     #[test]
-    fn item_icons_prepare_uses_game_path_and_returns_only_manifest_path() {
+    fn item_icons_prepare_returns_manifest_and_actual_source_path() {
         let resolved_hint = RefCell::new(None);
         let prepared = RefCell::new(None);
         let catalog = r#"[
@@ -15276,7 +15278,10 @@ mod tests {
         assert_eq!(items[2].icon_id, "Food");
         assert_eq!(
             response,
-            json!({"manifestPath": "D:/cache/item-icons/manifest.json"})
+            json!({
+                "manifestPath": "D:/cache/item-icons/manifest.json",
+                "sourceGamePath": "D:/resolved-game",
+            })
         );
     }
 
@@ -15299,6 +15304,7 @@ mod tests {
             )
             .unwrap();
             assert_eq!(response["manifestPath"], "cache/manifest.json");
+            assert_eq!(response["sourceGamePath"], "resolved");
         }
     }
 
@@ -15445,6 +15451,7 @@ mod tests {
             )
             .unwrap();
             assert_eq!(response["manifestPath"], "cache/manifest.json");
+            assert_eq!(response["sourceGamePath"], "D:/Steam/Gothic 1 Remake");
             assert_eq!(
                 *attempted.borrow(),
                 vec![

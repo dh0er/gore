@@ -131,6 +131,7 @@ class _ItemIconCatalogRetention {
   ItemIconCatalog? value;
   int requestSequence = 0;
   String? sourceIdentity;
+  String? sourceGamePath;
   String? pendingSourceIdentity;
   String? attemptedSourceIdentity;
   Future<String?>? sourceIdentityRead;
@@ -171,7 +172,7 @@ class ItemIconCatalogRefresh {
     if (!core.isAvailable) return;
     final identity = await _readItemIconSourceIdentity(
       core,
-      _gamePath(),
+      _retention.sourceGamePath ?? _gamePath(),
       _retention,
     );
     if (identity == null ||
@@ -213,6 +214,7 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
     final data = (response['data'] as Map?)?.cast<String, Object?>();
     final manifestPath = data?['manifestPath'] as String?;
     final sourceIdentity = data?['sourceIdentity'] as String?;
+    final sourceGamePath = data?['sourceGamePath'] as String?;
     if (manifestPath == null || manifestPath.isEmpty) {
       return retainedOrEmpty();
     }
@@ -237,6 +239,10 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
     }
     if (sourceIdentity != null && sourceIdentity.isNotEmpty) {
       retention.sourceIdentity = sourceIdentity;
+      retention.sourceGamePath =
+          sourceGamePath != null && sourceGamePath.isNotEmpty
+          ? sourceGamePath
+          : null;
       retention.attemptedSourceIdentity = null;
     }
     final previousManifestPath = retention.value?.manifestPath;

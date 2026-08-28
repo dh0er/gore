@@ -296,8 +296,13 @@ void main() {
       ['source-a', 'source-b'],
       ['source-a', 'source-b'],
     );
+    final config = SharedConfig(File(p.join(root.path, 'config.json')))
+      ..setGamePath('C:/stale-configured-game');
     final container = ProviderContainer(
-      overrides: [itemIconCoreServiceProvider.overrideWithValue(core)],
+      overrides: [
+        itemIconCoreServiceProvider.overrideWithValue(core),
+        sharedConfigProvider.overrideWithValue(config),
+      ],
     );
     addTearDown(container.dispose);
     final sub = container.listen(itemIconCatalogProvider, (_, _) {});
@@ -312,6 +317,10 @@ void main() {
     expect(container.read(itemIconCatalogReloadProvider), 1);
     await container.read(itemIconCatalogProvider.future);
     expect(core.prepares, 2);
+    expect(core.identityPayloads, [
+      {'gamePath': 'D:/Steam/Gothic 1 Remake'},
+      {'gamePath': 'D:/Steam/Gothic 1 Remake'},
+    ]);
   });
 
   test(
@@ -549,6 +558,8 @@ class _SourceChangeItemIconCore implements GoresaveCoreService {
   final List<String> prepareIdentities;
   final List<String> identities;
   final Set<int> failPrepareIndices;
+  final String sourceGamePath = 'D:/Steam/Gothic 1 Remake';
+  final List<Map<String, Object?>> identityPayloads = [];
   int prepares = 0;
   int identityReads = 0;
 
@@ -577,10 +588,12 @@ class _SourceChangeItemIconCore implements GoresaveCoreService {
         'data': {
           'manifestPath': manifestPath,
           'sourceIdentity': sourceIdentity,
+          'sourceGamePath': sourceGamePath,
         },
       };
     }
     if (command == 'item_icons_source_identity') {
+      identityPayloads.add(payload);
       return {
         'ok': true,
         'data': {'sourceIdentity': identities[identityReads++]},

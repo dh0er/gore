@@ -1311,7 +1311,9 @@ fn owned_lease_generation_name(name: &str) -> Option<&str> {
 /// Keep the current complete cache and one recent fallback. Every cleanup
 /// target must use this module's exact grammar; published directories are
 /// deleted only after their complete manifest and PNG seals validate again
-/// while their generation lock is held.
+/// while their generation lock is held. Structurally incomplete generations
+/// are quarantined and removed only after the same ownership, metadata, lock,
+/// and lease checks.
 fn prune_obsolete_item_icon_cache(cache_root: &Path, current_generation: &Path) {
     let Ok(current_name) = owned_generation_name(cache_root, current_generation) else {
         return;
@@ -1322,6 +1324,7 @@ fn prune_obsolete_item_icon_cache(cache_root: &Path, current_generation: &Path) 
     };
 
     let mut generations = Vec::<(SystemTime, String, PathBuf)>::new();
+    let mut corrupt = BTreeMap::<String, SystemTime>::new();
     let mut owned_names = BTreeSet::new();
     owned_names.insert(current_name.clone());
     for entry in entries.flatten() {
@@ -1338,18 +1341,15 @@ fn prune_obsolete_item_icon_cache(cache_root: &Path, current_generation: &Path) 
             let Ok(metadata) = std::fs::symlink_metadata(&path) else {
                 continue;
             };
-            if metadata.file_type().is_dir()
-                && !metadata.file_type().is_symlink()
-                && structurally_complete_owned_manifest(&path)
-                    .ok()
-                    .flatten()
-                    .is_some()
-            {
-                generations.push((
-                    metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
-                    name.to_string(),
-                    path,
-                ));
+            if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
+                let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+                match structurally_complete_owned_manifest(&path) {
+                    Ok(Some(_)) => generations.push((modified, name.to_string(), path)),
+                    Ok(None) => {
+                        corrupt.insert(name.to_string(), modified);
+                    }
+                    Err(_) => {}
+                }
             }
         } else if let Some(generation) = owned_auxiliary_directory_generation_name(name)
             .or_else(|| owned_lease_generation_name(name))
@@ -1398,6 +1398,21 @@ fn prune_obsolete_item_icon_cache(cache_root: &Path, current_generation: &Path) 
                 && complete_cache_is_owned(&generation).unwrap_or(false);
             if removable {
                 let _ = std::fs::remove_dir_all(&generation);
+            }
+        } else if let Some(expected_modified) = corrupt.get(&name) {
+            let still_corrupt = std::fs::symlink_metadata(&generation)
+                .ok()
+                .filter(|metadata| {
+                    metadata.file_type().is_dir()
+                        && !metadata.file_type().is_symlink()
+                        && metadata.modified().ok().as_ref() == Some(expected_modified)
+                })
+                .is_some()
+                && matches!(structurally_complete_owned_manifest(&generation), Ok(None));
+            if still_corrupt {
+                if let Ok(quarantine) = quarantine_incomplete_generation(cache_root, &generation) {
+                    let _ = std::fs::remove_dir_all(quarantine);
+                }
             }
         }
 
@@ -1890,7 +1905,7 @@ mod tests {
             .into_owned();
 
         // A newer incomplete sibling must neither steal the fallback slot nor
-        // become eligible for deletion merely because its name is owned.
+        // survive cleanup merely because it never entered the complete list.
         let catalog = PreparedCatalog::from_specs(&specs()).unwrap();
         let incomplete = generation_directory(temp.path(), "build-incomplete", &catalog.digest);
         std::fs::create_dir(&incomplete).unwrap();
@@ -1927,7 +1942,7 @@ mod tests {
                     .iter()
                     .any(|path| path == second_manifest.parent().unwrap())
         );
-        assert!(incomplete.exists());
+        assert!(!incomplete.exists());
         assert!(std::fs::read_dir(temp.path())
             .unwrap()
             .flatten()
