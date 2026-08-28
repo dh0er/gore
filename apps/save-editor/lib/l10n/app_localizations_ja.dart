@@ -1483,6 +1483,24 @@ class AppLocalizationsJa extends AppLocalizations {
   String get itemImagesTitle => 'アイテム画像';
 
   @override
+  String get gameDataTitle => 'ゲームデータ';
+
+  @override
+  String itemImagesReady(int count) {
+    return '$count 件のアイテム画像を使用できます。';
+  }
+
+  @override
+  String get itemImagesUnavailable => 'アイテム画像を使用できません。代わりにカテゴリのアイコンが使用されます。';
+
+  @override
+  String get checkRefreshItemImages => 'アイテム画像を確認 / 更新';
+
+  @override
+  String get gameDataSourceMissing =>
+      'ゲームテキストを自動的に準備できませんでした。設定でローカライズキャッシュを選択できます。';
+
+  @override
   String get loadingTexts => 'テキストを読み込み中…';
 
   @override
@@ -1507,19 +1525,6 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get extractRefreshLocalizedText => 'ローカライズテキストを抽出 / 更新';
-
-  @override
-  String get extractLocalizedTextTitle => 'ローカライズされたゲームテキストを抽出しますか？';
-
-  @override
-  String get extractLocalizedTextBody =>
-      'ローカライズされたゲームテキストはまだ抽出されていません。今すぐゲームのインストール先から抽出しますか？（任意）';
-
-  @override
-  String get notNow => '後で';
-
-  @override
-  String get extract => '抽出';
 
   @override
   String get extractionComplete => '抽出が完了しました';

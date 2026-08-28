@@ -20,7 +20,6 @@ import 'package:goresave/features/editor/ui/profile_localization.dart';
 import 'package:goresave/features/editor/ui/slot_repair_banner.dart';
 import 'package:goresave/features/editor/ui/title_preparation_progress.dart';
 import 'package:goresave/features/localization/domain/localization_controller.dart';
-import 'package:goresave/features/localization/ui/localization_flow.dart';
 import 'package:goresave/features/localization/ui/localization_settings.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
@@ -43,12 +42,11 @@ class _EditorPageState extends ConsumerState<EditorPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // First-run, optional localized-text extraction prompt. Runs after the
-    // first frame so the Scaffold (SnackBar host) and Navigator (dialog host)
-    // exist. Guarded by a persisted flag so it only auto-prompts once; the
-    // manual Settings button stays available regardless.
+    // Prepare localized text without interrupting startup. A missing source is
+    // reported non-modally; selecting an .lcache stays an explicit Settings
+    // action.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(_maybePromptLocalizationExtract());
+      unawaited(_prepareLocalizationAutomatically());
       // Covers a page that mounts with a save already inspected (a remount, a
       // hot reload): the listener in build only sees LATER changes.
       if (mounted) ref.read(editorProvider.notifier).prefetchTabData();
@@ -76,46 +74,33 @@ class _EditorPageState extends ConsumerState<EditorPage>
     }
   }
 
-  Future<void> _maybePromptLocalizationExtract() async {
-    // Always refresh status first, so the Settings localization card reflects a
-    // catalog extracted earlier (or via `gore-cli loc extract`). The persisted
-    // flag only suppresses the one-time prompt dialog, not the status refresh.
+  Future<void> _prepareLocalizationAutomatically() async {
+    // Always refresh status first so Settings reflects a catalog created by
+    // another GORE tool. A failed status query must not be mistaken for a
+    // missing catalog.
     final present = await ref
         .read(localizationControllerProvider.notifier)
         .status();
-    // Only prompt when the catalog is definitively absent: a null status means
-    // the query failed (e.g. core unavailable), where extraction can't work.
+    // Only extract when the catalog is definitively absent: null means the
+    // query itself failed (for example because Core is unavailable).
     if (present != false || !mounted) return;
-
-    final store = ref.read(uiSettingsStoreProvider);
-    if (store.read().locExtractPrompted) return;
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) {
-        final l10n = AppLocalizations.of(context);
-        return AlertDialog(
-          title: Text(l10n.extractLocalizedTextTitle),
-          content: Text(l10n.extractLocalizedTextBody),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: Text(l10n.notNow),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: Text(l10n.extract),
-            ),
-          ],
-        );
-      },
-    );
-    if (confirmed != true || !mounted) return;
-    // Record only once the user chose to extract, so the flag isn't set when the
-    // dialog never appeared and deferring ("Not now") lets the optional prompt
-    // offer again on a later launch (matching gore-mod).
-    store.write(store.read().copyWith(locExtractPrompted: true));
-    await runLocalizationExtractFlow(context, ref);
+    final result = await ref
+        .read(automaticLocalizationExtractorProvider)
+        .extract();
+    if (!mounted) return;
+    // A catalog can already have been written when only its metadata write
+    // failed, so reload after every non-interactive attempt.
+    ref.read(locCatalogReloadProvider.notifier).state++;
+    if (result.notFound) {
+      final store = ref.read(uiSettingsStoreProvider);
+      if (store.read().gameDataSourceNoticeShown) return;
+      store.write(store.read().copyWith(gameDataSourceNoticeShown: true));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(AppLocalizations.of(context).gameDataSourceMissing),
+        ),
+      );
+    }
   }
 
   @override
@@ -3828,7 +3813,7 @@ class _SettingsPanel extends StatelessWidget {
         const SizedBox(height: 16),
         const UpdateSettingsCard(),
         const SizedBox(height: 16),
-        const LocalizationSettingsCard(),
+        const GameDataSettingsCard(),
         const SizedBox(height: 16),
         Card(
           child: Padding(

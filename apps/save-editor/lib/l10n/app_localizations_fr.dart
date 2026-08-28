@@ -1533,6 +1533,26 @@ class AppLocalizationsFr extends AppLocalizations {
   String get itemImagesTitle => 'Images d’objets';
 
   @override
+  String get gameDataTitle => 'Données du jeu';
+
+  @override
+  String itemImagesReady(int count) {
+    return '$count images d’objets sont prêtes.';
+  }
+
+  @override
+  String get itemImagesUnavailable =>
+      'Les images d’objets ne sont pas disponibles. Les icônes de catégorie seront utilisées.';
+
+  @override
+  String get checkRefreshItemImages =>
+      'Vérifier / actualiser les images d’objets';
+
+  @override
+  String get gameDataSourceMissing =>
+      'Le texte du jeu n’a pas pu être préparé automatiquement. Vous pouvez sélectionner le cache de localisation dans les paramètres.';
+
+  @override
   String get loadingTexts => 'Chargement des textes…';
 
   @override
@@ -1559,19 +1579,6 @@ class AppLocalizationsFr extends AppLocalizations {
   @override
   String get extractRefreshLocalizedText =>
       'Extraire / actualiser le texte localisé';
-
-  @override
-  String get extractLocalizedTextTitle => 'Extraire le texte localisé du jeu ?';
-
-  @override
-  String get extractLocalizedTextBody =>
-      'Le texte localisé du jeu n\'est pas encore extrait. L\'extraire maintenant depuis votre installation du jeu ? (facultatif)';
-
-  @override
-  String get notNow => 'Pas maintenant';
-
-  @override
-  String get extract => 'Extraire';
 
   @override
   String get extractionComplete => 'Extraction terminée';

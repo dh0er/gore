@@ -1524,6 +1524,25 @@ class AppLocalizationsPt extends AppLocalizations {
   String get itemImagesTitle => 'Imagens de itens';
 
   @override
+  String get gameDataTitle => 'Dados do jogo';
+
+  @override
+  String itemImagesReady(int count) {
+    return 'Estão prontas $count imagens de itens.';
+  }
+
+  @override
+  String get itemImagesUnavailable =>
+      'As imagens de itens não estão disponíveis. Serão usados ícones de categoria.';
+
+  @override
+  String get checkRefreshItemImages => 'Verificar / atualizar imagens de itens';
+
+  @override
+  String get gameDataSourceMissing =>
+      'Não foi possível preparar automaticamente o texto do jogo. Pode selecionar a cache de localização nas Definições.';
+
+  @override
   String get loadingTexts => 'A carregar textos…';
 
   @override
@@ -1550,19 +1569,6 @@ class AppLocalizationsPt extends AppLocalizations {
   @override
   String get extractRefreshLocalizedText =>
       'Extrair / atualizar texto localizado';
-
-  @override
-  String get extractLocalizedTextTitle => 'Extrair o texto localizado do jogo?';
-
-  @override
-  String get extractLocalizedTextBody =>
-      'O texto localizado do jogo ainda não foi extraído. Extraí-lo agora da sua instalação do jogo? (opcional)';
-
-  @override
-  String get notNow => 'Agora não';
-
-  @override
-  String get extract => 'Extrair';
 
   @override
   String get extractionComplete => 'Extração concluída';
@@ -4583,6 +4589,25 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   String get itemImagesTitle => 'Imagens de itens';
 
   @override
+  String get gameDataTitle => 'Dados do jogo';
+
+  @override
+  String itemImagesReady(int count) {
+    return 'Há $count imagens de itens prontas.';
+  }
+
+  @override
+  String get itemImagesUnavailable =>
+      'As imagens de itens não estão disponíveis. Serão usados ícones de categoria.';
+
+  @override
+  String get checkRefreshItemImages => 'Verificar / atualizar imagens de itens';
+
+  @override
+  String get gameDataSourceMissing =>
+      'Não foi possível preparar automaticamente o texto do jogo. Você pode selecionar o cache de localização nas Configurações.';
+
+  @override
   String get loadingTexts => 'Carregando textos…';
 
   @override
@@ -4609,19 +4634,6 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   @override
   String get extractRefreshLocalizedText =>
       'Extrair / atualizar texto localizado';
-
-  @override
-  String get extractLocalizedTextTitle => 'Extrair o texto localizado do jogo?';
-
-  @override
-  String get extractLocalizedTextBody =>
-      'O texto localizado do jogo ainda não foi extraído. Extraí-lo agora da sua instalação do jogo? (opcional)';
-
-  @override
-  String get notNow => 'Agora não';
-
-  @override
-  String get extract => 'Extrair';
 
   @override
   String get extractionComplete => 'Extração concluída';

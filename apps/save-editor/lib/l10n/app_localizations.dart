@@ -2684,6 +2684,36 @@ abstract class AppLocalizations {
   /// **'Item images'**
   String get itemImagesTitle;
 
+  /// No description provided for @gameDataTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Game data'**
+  String get gameDataTitle;
+
+  /// No description provided for @itemImagesReady.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} item images are ready.'**
+  String itemImagesReady(int count);
+
+  /// No description provided for @itemImagesUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Item images are not available. Category icons will be used instead.'**
+  String get itemImagesUnavailable;
+
+  /// No description provided for @checkRefreshItemImages.
+  ///
+  /// In en, this message translates to:
+  /// **'Check / refresh item images'**
+  String get checkRefreshItemImages;
+
+  /// No description provided for @gameDataSourceMissing.
+  ///
+  /// In en, this message translates to:
+  /// **'Game text could not be prepared automatically. You can select the localization cache in Settings.'**
+  String get gameDataSourceMissing;
+
   /// No description provided for @loadingTexts.
   ///
   /// In en, this message translates to:
@@ -2731,30 +2761,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Extract / refresh localized text'**
   String get extractRefreshLocalizedText;
-
-  /// No description provided for @extractLocalizedTextTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Extract localized game text?'**
-  String get extractLocalizedTextTitle;
-
-  /// No description provided for @extractLocalizedTextBody.
-  ///
-  /// In en, this message translates to:
-  /// **'Localized game text isn\'t extracted yet. Extract it now from your game install? (optional)'**
-  String get extractLocalizedTextBody;
-
-  /// No description provided for @notNow.
-  ///
-  /// In en, this message translates to:
-  /// **'Not now'**
-  String get notNow;
-
-  /// No description provided for @extract.
-  ///
-  /// In en, this message translates to:
-  /// **'Extract'**
-  String get extract;
 
   /// No description provided for @extractionComplete.
   ///

@@ -1539,6 +1539,25 @@ class AppLocalizationsPl extends AppLocalizations {
   String get itemImagesTitle => 'Obrazy przedmiotów';
 
   @override
+  String get gameDataTitle => 'Dane gry';
+
+  @override
+  String itemImagesReady(int count) {
+    return 'Gotowe obrazy przedmiotów: $count.';
+  }
+
+  @override
+  String get itemImagesUnavailable =>
+      'Obrazy przedmiotów są niedostępne. Zostaną użyte ikony kategorii.';
+
+  @override
+  String get checkRefreshItemImages => 'Sprawdź / odśwież obrazy przedmiotów';
+
+  @override
+  String get gameDataSourceMissing =>
+      'Nie udało się automatycznie przygotować tekstu gry. Pamięć podręczną lokalizacji można wybrać w Ustawieniach.';
+
+  @override
   String get loadingTexts => 'Wczytywanie tekstów…';
 
   @override
@@ -1566,19 +1585,6 @@ class AppLocalizationsPl extends AppLocalizations {
   @override
   String get extractRefreshLocalizedText =>
       'Wyodrębnij / odśwież zlokalizowany tekst';
-
-  @override
-  String get extractLocalizedTextTitle => 'Wyodrębnić zlokalizowany tekst gry?';
-
-  @override
-  String get extractLocalizedTextBody =>
-      'Zlokalizowany tekst gry nie został jeszcze wyodrębniony. Wyodrębnić go teraz z Twojej instalacji gry? (opcjonalnie)';
-
-  @override
-  String get notNow => 'Nie teraz';
-
-  @override
-  String get extract => 'Wyodrębnij';
 
   @override
   String get extractionComplete => 'Wyodrębnianie zakończone';

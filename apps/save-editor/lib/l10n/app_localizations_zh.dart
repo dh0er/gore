@@ -1457,6 +1457,23 @@ class AppLocalizationsZh extends AppLocalizations {
   String get itemImagesTitle => '物品图片';
 
   @override
+  String get gameDataTitle => '游戏数据';
+
+  @override
+  String itemImagesReady(int count) {
+    return '已准备 $count 张物品图片。';
+  }
+
+  @override
+  String get itemImagesUnavailable => '物品图片不可用，将改用分类图标。';
+
+  @override
+  String get checkRefreshItemImages => '检查 / 更新物品图片';
+
+  @override
+  String get gameDataSourceMissing => '无法自动准备游戏文本。你可以在设置中选择本地化缓存。';
+
+  @override
   String get loadingTexts => '正在加载文本…';
 
   @override
@@ -1481,18 +1498,6 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get extractRefreshLocalizedText => '提取 / 刷新本地化文本';
-
-  @override
-  String get extractLocalizedTextTitle => '提取本地化游戏文本？';
-
-  @override
-  String get extractLocalizedTextBody => '本地化游戏文本尚未提取。现在从你的游戏安装目录提取吗？（可选）';
-
-  @override
-  String get notNow => '暂不';
-
-  @override
-  String get extract => '提取';
 
   @override
   String get extractionComplete => '提取完成';
@@ -4391,6 +4396,23 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get itemImagesTitle => '物品图片';
 
   @override
+  String get gameDataTitle => '游戏数据';
+
+  @override
+  String itemImagesReady(int count) {
+    return '已准备 $count 张物品图片。';
+  }
+
+  @override
+  String get itemImagesUnavailable => '物品图片不可用，将改用分类图标。';
+
+  @override
+  String get checkRefreshItemImages => '检查 / 更新物品图片';
+
+  @override
+  String get gameDataSourceMissing => '无法自动准备游戏文本。你可以在设置中选择本地化缓存。';
+
+  @override
   String get loadingTexts => '正在加载文本…';
 
   @override
@@ -4415,18 +4437,6 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get extractRefreshLocalizedText => '提取 / 刷新本地化文本';
-
-  @override
-  String get extractLocalizedTextTitle => '提取本地化游戏文本？';
-
-  @override
-  String get extractLocalizedTextBody => '本地化游戏文本尚未提取。现在从你的游戏安装目录提取吗？（可选）';
-
-  @override
-  String get notNow => '暂不';
-
-  @override
-  String get extract => '提取';
 
   @override
   String get extractionComplete => '提取完成';

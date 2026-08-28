@@ -1536,6 +1536,26 @@ class AppLocalizationsRu extends AppLocalizations {
   String get itemImagesTitle => 'Изображения предметов';
 
   @override
+  String get gameDataTitle => 'Данные игры';
+
+  @override
+  String itemImagesReady(int count) {
+    return 'Готово изображений предметов: $count.';
+  }
+
+  @override
+  String get itemImagesUnavailable =>
+      'Изображения предметов недоступны. Вместо них будут использоваться значки категорий.';
+
+  @override
+  String get checkRefreshItemImages =>
+      'Проверить / обновить изображения предметов';
+
+  @override
+  String get gameDataSourceMissing =>
+      'Не удалось автоматически подготовить текст игры. Кэш локализации можно выбрать в настройках.';
+
+  @override
   String get loadingTexts => 'Загрузка текстов…';
 
   @override
@@ -1562,19 +1582,6 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get extractRefreshLocalizedText =>
       'Извлечь / обновить локализованный текст';
-
-  @override
-  String get extractLocalizedTextTitle => 'Извлечь локализованный текст игры?';
-
-  @override
-  String get extractLocalizedTextBody =>
-      'Локализованный текст игры ещё не извлечён. Извлечь его сейчас из вашей установки игры? (необязательно)';
-
-  @override
-  String get notNow => 'Не сейчас';
-
-  @override
-  String get extract => 'Извлечь';
 
   @override
   String get extractionComplete => 'Извлечение завершено';

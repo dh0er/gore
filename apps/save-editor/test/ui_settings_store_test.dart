@@ -105,6 +105,21 @@ void main() {
       UiFontFamily.system,
     );
   });
+
+  test('migrates the old localization prompt to the non-modal notice', () {
+    expect(
+      UiSettings.fromJson(const {
+        'locExtractPrompted': true,
+      }).gameDataSourceNoticeShown,
+      isTrue,
+    );
+    expect(
+      UiSettings.fromJson(const {
+        'gameDataSourceNoticeShown': true,
+      }).gameDataSourceNoticeShown,
+      isTrue,
+    );
+  });
 }
 
 class _MemoryUiSettingsStore implements UiSettingsStore {

@@ -1524,6 +1524,26 @@ class AppLocalizationsEs extends AppLocalizations {
   String get itemImagesTitle => 'Imágenes de objetos';
 
   @override
+  String get gameDataTitle => 'Datos del juego';
+
+  @override
+  String itemImagesReady(int count) {
+    return 'Hay $count imágenes de objetos listas.';
+  }
+
+  @override
+  String get itemImagesUnavailable =>
+      'Las imágenes de objetos no están disponibles. Se usarán iconos de categoría.';
+
+  @override
+  String get checkRefreshItemImages =>
+      'Comprobar / actualizar imágenes de objetos';
+
+  @override
+  String get gameDataSourceMissing =>
+      'El texto del juego no se pudo preparar automáticamente. Puedes seleccionar la caché de localización en Ajustes.';
+
+  @override
   String get loadingTexts => 'Cargando textos…';
 
   @override
@@ -1551,20 +1571,6 @@ class AppLocalizationsEs extends AppLocalizations {
   @override
   String get extractRefreshLocalizedText =>
       'Extraer / actualizar texto localizado';
-
-  @override
-  String get extractLocalizedTextTitle =>
-      '¿Extraer el texto localizado del juego?';
-
-  @override
-  String get extractLocalizedTextBody =>
-      'El texto localizado del juego aún no se ha extraído. ¿Extraerlo ahora desde tu instalación del juego? (opcional)';
-
-  @override
-  String get notNow => 'Ahora no';
-
-  @override
-  String get extract => 'Extraer';
 
   @override
   String get extractionComplete => 'Extracción completada';

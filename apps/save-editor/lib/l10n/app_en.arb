@@ -726,6 +726,18 @@
   "updateCheckFailed": "Could not check for updates. Please try again later.",
   "gameTextTitle": "Game text",
   "itemImagesTitle": "Item images",
+  "gameDataTitle": "Game data",
+  "itemImagesReady": "{count} item images are ready.",
+  "@itemImagesReady": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "itemImagesUnavailable": "Item images are not available. Category icons will be used instead.",
+  "checkRefreshItemImages": "Check / refresh item images",
+  "gameDataSourceMissing": "Game text could not be prepared automatically. You can select the localization cache in Settings.",
   "loadingTexts": "Loading texts…",
   "loadingImages": "Loading images…",
   "preparing": "Preparing…",
@@ -744,10 +756,6 @@
   "gameTextNotExtracted": "Localized game text is not extracted yet.",
   "extracting": "Extracting…",
   "extractRefreshLocalizedText": "Extract / refresh localized text",
-  "extractLocalizedTextTitle": "Extract localized game text?",
-  "extractLocalizedTextBody": "Localized game text isn't extracted yet. Extract it now from your game install? (optional)",
-  "notNow": "Not now",
-  "extract": "Extract",
   "extractionComplete": "Extraction complete",
   "extractionFailed": "Extraction failed",
   "localizationCacheFileType": "Localization cache",

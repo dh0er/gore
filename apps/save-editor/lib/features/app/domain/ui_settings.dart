@@ -25,7 +25,7 @@ class UiSettings {
     this.windowSize,
     this.windowMaximized = false,
     this.autoUpdateCheck = true,
-    this.locExtractPrompted = false,
+    this.gameDataSourceNoticeShown = false,
     this.showObjectIds = false,
     this.appLocale,
   });
@@ -67,7 +67,12 @@ class UiSettings {
       },
       windowMaximized: json['windowMaximized'] == true,
       autoUpdateCheck: json['autoUpdateCheck'] != false,
-      locExtractPrompted: json['locExtractPrompted'] == true,
+      // The old modal used `locExtractPrompted`. Treat an accepted legacy
+      // prompt as an already-seen replacement notice so existing users are not
+      // interrupted again after upgrading.
+      gameDataSourceNoticeShown:
+          json['gameDataSourceNoticeShown'] == true ||
+          json['locExtractPrompted'] == true,
       showObjectIds: json['showObjectIds'] == true,
     );
   }
@@ -83,10 +88,9 @@ class UiSettings {
   /// Whether the app checks for updates automatically (on by default).
   final bool autoUpdateCheck;
 
-  /// Whether the one-time first-run prompt to extract localized game text has
-  /// already been shown. Keeps the auto-prompt from reappearing every launch;
-  /// the manual Settings button stays available regardless.
-  final bool locExtractPrompted;
+  /// Whether the one-time, non-modal hint for a missing localization source
+  /// has been shown. Automatic source detection still retries on later starts.
+  final bool gameDataSourceNoticeShown;
 
   /// Whether technical object identifiers are shown alongside localized names.
   /// Kept off by default so normal editor views stay focused on player-facing
@@ -106,7 +110,7 @@ class UiSettings {
     Size? windowSize,
     bool? windowMaximized,
     bool? autoUpdateCheck,
-    bool? locExtractPrompted,
+    bool? gameDataSourceNoticeShown,
     bool? showObjectIds,
     String? appLocale,
   }) {
@@ -117,7 +121,8 @@ class UiSettings {
       windowSize: windowSize ?? this.windowSize,
       windowMaximized: windowMaximized ?? this.windowMaximized,
       autoUpdateCheck: autoUpdateCheck ?? this.autoUpdateCheck,
-      locExtractPrompted: locExtractPrompted ?? this.locExtractPrompted,
+      gameDataSourceNoticeShown:
+          gameDataSourceNoticeShown ?? this.gameDataSourceNoticeShown,
       showObjectIds: showObjectIds ?? this.showObjectIds,
       appLocale: appLocale ?? this.appLocale,
     );
@@ -137,7 +142,7 @@ class UiSettings {
     },
     'windowMaximized': windowMaximized,
     'autoUpdateCheck': autoUpdateCheck,
-    'locExtractPrompted': locExtractPrompted,
+    'gameDataSourceNoticeShown': gameDataSourceNoticeShown,
     'showObjectIds': showObjectIds,
     'appLocale': ?appLocale,
   };
