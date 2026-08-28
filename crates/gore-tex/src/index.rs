@@ -187,6 +187,82 @@ pub fn build_id_for(utoc: &Path, usmap: &Path) -> Result<String> {
     build_id_for_in_cache_dir(utoc, usmap, &gore_loc::paths::shared_data_dir())
 }
 
+/// Cheap change token for the installed IoStore source set. Unlike the build
+/// fingerprint this reads no container payload bytes: it only binds the direct
+/// UTOC/UCAS directory entries to strong platform file identities.
+pub(crate) fn quick_composite_source_identity(main_utoc: &Path) -> Result<String> {
+    let paks = main_utoc
+        .parent()
+        .ok_or_else(|| invalid_data("installed texture UTOC has no Paks parent"))?;
+    let canonical_paks = std::fs::canonicalize(paks)?;
+    if !std::fs::symlink_metadata(&canonical_paks)?
+        .file_type()
+        .is_dir()
+    {
+        return Err(invalid_data(
+            "installed texture Paks authority is not a directory",
+        ));
+    }
+    let canonical_main = std::fs::canonicalize(main_utoc)?;
+    if canonical_main.parent() != Some(canonical_paks.as_path()) {
+        return Err(invalid_data(
+            "installed texture UTOC escaped the Paks authority",
+        ));
+    }
+
+    let mut found_main = false;
+    let mut bindings = Vec::new();
+    for entry in std::fs::read_dir(&canonical_paks)? {
+        let entry = entry?;
+        let path = entry.path();
+        let relevant = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("utoc") || extension.eq_ignore_ascii_case("ucas")
+            });
+        if !relevant {
+            continue;
+        }
+        if bindings.len() >= MAX_SOURCE_FILES {
+            return Err(invalid_data("too many installed texture source files"));
+        }
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+            return Err(invalid_data("texture source is not a plain regular file"));
+        }
+        let file = open_regular_no_follow(&path)?;
+        let metadata = file.metadata()?;
+        let identity = file_identity(&file, &metadata)?;
+        found_main |= path == canonical_main;
+        let role = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| invalid_data("installed texture source name is not Unicode"))?
+            .to_string();
+        bindings.push(SourceBindingIdentity {
+            role,
+            file: identity,
+        });
+    }
+    if !found_main {
+        return Err(invalid_data(
+            "requested main UTOC is absent from the installed texture sources",
+        ));
+    }
+    bindings.sort_by(|left, right| left.role.cmp(&right.role));
+    let encoded = serde_json::to_vec(&SourceIdentity(bindings)).map_err(|error| {
+        crate::error::TexError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            error.to_string(),
+        ))
+    })?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"gore-tex.quick-composite-source-identity.v1\0");
+    hasher.update(&encoded);
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
 fn build_id_for_in_cache_dir(utoc: &Path, usmap: &Path, cache_directory: &Path) -> Result<String> {
     let composite = crate::container::InstalledTextureComposite::open(utoc)?;
     let mut sources = open_source_files(&composite, usmap)?;
@@ -1335,6 +1411,27 @@ mod tests {
         assert!(TextureIndex::load_current(&path, "G1R-5.4.3-old.usmap").is_some());
         assert!(TextureIndex::load_current(&path, "G1R-5.4.4-new.usmap").is_none());
         assert!(TextureIndex::load_current(&dir.join("missing.json"), "x").is_none());
+    }
+
+    #[test]
+    fn quick_composite_identity_tracks_source_files_but_ignores_unrelated_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let main = temp.path().join("G1R-Windows.utoc");
+        let main_data = temp.path().join("G1R-Windows.ucas");
+        std::fs::write(&main, b"toc-a").unwrap();
+        std::fs::write(&main_data, b"data-a").unwrap();
+        let initial = quick_composite_source_identity(&main).unwrap();
+
+        std::fs::write(temp.path().join("readme.txt"), b"ignored").unwrap();
+        assert_eq!(quick_composite_source_identity(&main).unwrap(), initial);
+
+        std::fs::write(temp.path().join("G1R-Windows_P.utoc"), b"toc-p").unwrap();
+        std::fs::write(temp.path().join("G1R-Windows_P.ucas"), b"data-p").unwrap();
+        let with_hotfix = quick_composite_source_identity(&main).unwrap();
+        assert_ne!(with_hotfix, initial);
+
+        std::fs::write(&main_data, b"longer-data-a").unwrap();
+        assert_ne!(quick_composite_source_identity(&main).unwrap(), with_hotfix,);
     }
 
     #[test]

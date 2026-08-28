@@ -108,8 +108,12 @@ void main() {
 
     final catalog = await container.read(itemIconCatalogProvider.future);
 
-    expect(core.commands, ['item_icons_prepare']);
+    expect(core.commands, [
+      'item_icons_prepare',
+      'item_icons_source_identity',
+    ]);
     expect(core.payloads, [
+      {'gamePath': 'D:/Games/Gothic Remake'},
       {'gamePath': 'D:/Games/Gothic Remake'},
     ]);
     expect(catalog.pathFor(itemId: 'ItFo_Apple'), isNotNull);
@@ -189,7 +193,9 @@ void main() {
     expect(second.buildId, 'generation-b');
     expect(core.commands, [
       'item_icons_prepare',
+      'item_icons_source_identity',
       'item_icons_prepare',
+      'item_icons_source_identity',
       'item_icons_release',
     ]);
     expect(core.payloads.last, {'manifestPath': firstManifest.path});
@@ -278,6 +284,40 @@ void main() {
       'generation-b',
     );
   });
+
+  test('cheap source changes trigger one production cache reload', () async {
+    final root = Directory.systemTemp.createTempSync('gore_item_icons_source');
+    addTearDown(() => root.deleteSync(recursive: true));
+    final manifest = File(p.join(root.path, 'manifest.json'))
+      ..writeAsStringSync(
+        jsonEncode({
+          'schema': 1,
+          'buildId': 'generation-a',
+          'itemCount': 1,
+          'items': {'ItFo_Apple': 'ItFo_Apple.png'},
+        }),
+      );
+    final core = _SourceChangeItemIconCore(
+      manifest.path,
+      ['source-a', 'source-a', 'source-b', 'source-b'],
+    );
+    final container = ProviderContainer(
+      overrides: [itemIconCoreServiceProvider.overrideWithValue(core)],
+    );
+    addTearDown(container.dispose);
+    final sub = container.listen(itemIconCatalogProvider, (_, _) {});
+    addTearDown(sub.close);
+
+    await container.read(itemIconCatalogProvider.future);
+    final refresh = container.read(itemIconCatalogRefreshProvider);
+    await refresh.refreshIfSourceChanged();
+    expect(container.read(itemIconCatalogReloadProvider), 0);
+
+    await refresh.refreshIfSourceChanged();
+    expect(container.read(itemIconCatalogReloadProvider), 1);
+    await container.read(itemIconCatalogProvider.future);
+    expect(core.prepares, 2);
+  });
 }
 
 class _ItemIconCore implements GoresaveCoreService {
@@ -300,6 +340,12 @@ class _ItemIconCore implements GoresaveCoreService {
   }) async {
     commands.add(command);
     payloads.add(payload);
+    if (command == 'item_icons_source_identity') {
+      return {
+        'ok': true,
+        'data': {'sourceIdentity': 'source-a'},
+      };
+    }
     return {
       'ok': true,
       'data': {'manifestPath': manifestPath},
@@ -325,6 +371,12 @@ class _ReloadItemIconCore implements GoresaveCoreService {
     String command, {
     Map<String, Object?> payload = const {},
   }) {
+    if (command == 'item_icons_source_identity') {
+      return Future.value({
+        'ok': true,
+        'data': {'sourceIdentity': 'source-a'},
+      });
+    }
     calls++;
     if (calls == 1) {
       return Future.value({
@@ -363,6 +415,12 @@ class _ReplacingItemIconCore implements GoresaveCoreService {
         'data': {'manifestPath': manifestPaths[prepares++]},
       };
     }
+    if (command == 'item_icons_source_identity') {
+      return {
+        'ok': true,
+        'data': {'sourceIdentity': 'source-$prepares'},
+      };
+    }
     return {
       'ok': true,
       'data': {'released': true},
@@ -390,8 +448,53 @@ class _OverlappingItemIconCore implements GoresaveCoreService {
         'data': {'released': true},
       });
     }
+    if (command == 'item_icons_source_identity') {
+      return Future.value({
+        'ok': true,
+        'data': {'sourceIdentity': 'source-a'},
+      });
+    }
     final response = Completer<Map<String, Object?>>();
     prepares.add(response);
     return response.future;
+  }
+}
+
+class _SourceChangeItemIconCore implements GoresaveCoreService {
+  _SourceChangeItemIconCore(this.manifestPath, this.identities);
+
+  final String manifestPath;
+  final List<String> identities;
+  int prepares = 0;
+  int identityReads = 0;
+
+  @override
+  String get description => 'source-change-item-icon-test-core';
+
+  @override
+  bool get isAvailable => true;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'item_icons_prepare') {
+      prepares++;
+      return {
+        'ok': true,
+        'data': {'manifestPath': manifestPath},
+      };
+    }
+    if (command == 'item_icons_source_identity') {
+      return {
+        'ok': true,
+        'data': {'sourceIdentity': identities[identityReads++]},
+      };
+    }
+    return {
+      'ok': true,
+      'data': {'released': true},
+    };
   }
 }

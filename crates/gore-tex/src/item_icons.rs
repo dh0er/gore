@@ -92,6 +92,13 @@ pub fn prepare_item_icon_cache(game_root: &Path, items: &[ItemIconSpec]) -> Resu
     prepare_item_icon_cache_with_source_and_lease(&cache_root, items, &mut source, true)
 }
 
+/// Metadata-only identity used by Save Editor to decide whether a later resume
+/// needs the expensive, byte-verifying cache preparation again.
+pub fn item_icon_source_identity(game_root: &Path) -> Result<String> {
+    let utoc = crate::paths::main_container(game_root)?;
+    crate::index::quick_composite_source_identity(&utoc)
+}
+
 /// Release this process's read lease after the UI has stopped retaining the
 /// catalog. The path must exactly identify a manifest returned by preparation;
 /// arbitrary paths cannot remove leases or files.
@@ -1784,21 +1791,17 @@ mod tests {
     fn live_catalog_is_not_moved_when_its_generation_needs_repair() {
         let temp = tempfile::tempdir().unwrap();
         let mut first = FakeSource::stable("build-a");
-        let manifest_path = prepare_item_icon_cache_with_source_and_lease(
-            temp.path(),
-            &specs(),
-            &mut first,
-            true,
-        )
-        .unwrap();
+        let manifest_path =
+            prepare_item_icon_cache_with_source_and_lease(temp.path(), &specs(), &mut first, true)
+                .unwrap();
         let manifest: ItemIconManifest =
             serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
         let generation = manifest_path.parent().unwrap();
         std::fs::remove_file(generation.join(&manifest.items["ItMi_One"])).unwrap();
 
         let mut blocked = FakeSource::stable("build-a");
-        let error = prepare_item_icon_cache_with_source(temp.path(), &specs(), &mut blocked)
-            .unwrap_err();
+        let error =
+            prepare_item_icon_cache_with_source(temp.path(), &specs(), &mut blocked).unwrap_err();
         assert!(error.to_string().contains("currently in use"));
         assert!(manifest_path.exists());
         assert!(std::fs::read_dir(temp.path())

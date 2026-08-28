@@ -838,6 +838,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             }
         }
         "item_icons_prepare" => item_icons_prepare(&payload),
+        "item_icons_source_identity" => item_icons_source_identity(&payload),
         "item_icons_release" => item_icons_release(&payload),
         other => Err(CoreError::InvalidRequest(format!(
             "unknown command {other:?}"
@@ -8774,6 +8775,24 @@ fn item_icons_prepare(payload: &Value) -> Result<Value, CoreError> {
     )
 }
 
+fn item_icons_source_identity(payload: &Value) -> Result<Value, CoreError> {
+    item_icons_source_identity_with(
+        payload,
+        |explicit| {
+            gore_loc::config::game_root(explicit)
+                .map_err(|error| CoreError::InvalidRequest(error.to_string()))
+        },
+        gore_tex::item_icons::item_icon_source_identity,
+        || {
+            if gore_loc::config::autodetect_disabled() {
+                None
+            } else {
+                gore_loc::discover::find_game_root()
+            }
+        },
+    )
+}
+
 fn item_icons_release(payload: &Value) -> Result<Value, CoreError> {
     let manifest_path = payload
         .as_object()
@@ -8804,21 +8823,7 @@ where
     Resolve: FnOnce(Option<PathBuf>) -> Result<PathBuf, CoreError>,
     Prepare: FnMut(&Path, &[gore_tex::item_icons::ItemIconSpec]) -> gore_tex::Result<PathBuf>,
 {
-    let request = payload.as_object().ok_or_else(|| {
-        CoreError::InvalidRequest("item_icons_prepare payload must be an object".to_string())
-    })?;
-    let explicit = match request.get("gamePath") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(value)) if value.trim().is_empty() => None,
-        Some(Value::String(value)) if !value.chars().any(char::is_control) => {
-            Some(PathBuf::from(value))
-        }
-        Some(_) => {
-            return Err(CoreError::InvalidRequest(
-                "payload.gamePath must be a path string or null".to_string(),
-            ));
-        }
-    };
+    let explicit = item_icon_game_path_hint(payload, "item_icons_prepare")?;
 
     let catalog: Vec<ItemIconCatalogEntry> =
         serde_json::from_str(catalog_json).map_err(|error| {
@@ -8846,6 +8851,49 @@ where
     Ok(json!({
         "manifestPath": manifest_path.display().to_string(),
     }))
+}
+
+fn item_icons_source_identity_with<Resolve, Identity>(
+    payload: &Value,
+    resolve_game_root: Resolve,
+    mut identity: Identity,
+    discover_game_root: impl FnOnce() -> Option<PathBuf>,
+) -> Result<Value, CoreError>
+where
+    Resolve: FnOnce(Option<PathBuf>) -> Result<PathBuf, CoreError>,
+    Identity: FnMut(&Path) -> gore_tex::Result<String>,
+{
+    let explicit = item_icon_game_path_hint(payload, "item_icons_source_identity")?;
+    let game_root = resolve_game_root(explicit)?;
+    let source_identity = match identity(&game_root) {
+        Ok(identity) => identity,
+        Err(first_error) if item_icon_source_is_missing(&first_error) => {
+            match discover_game_root().filter(|fallback| fallback != &game_root) {
+                Some(fallback) => {
+                    identity(&fallback).map_err(|error| CoreError::Io(error.to_string()))?
+                }
+                None => return Err(CoreError::Io(first_error.to_string())),
+            }
+        }
+        Err(error) => return Err(CoreError::Io(error.to_string())),
+    };
+    Ok(json!({"sourceIdentity": source_identity}))
+}
+
+fn item_icon_game_path_hint(payload: &Value, command: &str) -> Result<Option<PathBuf>, CoreError> {
+    let request = payload
+        .as_object()
+        .ok_or_else(|| CoreError::InvalidRequest(format!("{command} payload must be an object")))?;
+    match request.get("gamePath") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) if value.trim().is_empty() => Ok(None),
+        Some(Value::String(value)) if !value.chars().any(char::is_control) => {
+            Ok(Some(PathBuf::from(value)))
+        }
+        Some(_) => Err(CoreError::InvalidRequest(
+            "payload.gamePath must be a path string or null".to_string(),
+        )),
+    }
 }
 
 fn item_icon_source_is_missing(error: &gore_tex::TexError) -> bool {
@@ -15251,6 +15299,62 @@ mod tests {
             let error = item_icons_release(&payload).unwrap_err();
             assert!(error.to_string().contains("manifestPath"));
         }
+    }
+
+    #[test]
+    fn item_icons_source_identity_uses_configured_game_and_returns_cheap_token() {
+        let resolved_hint = RefCell::new(None);
+        let inspected = RefCell::new(None);
+        let response = item_icons_source_identity_with(
+            &json!({"gamePath": "D:/Games/Gothic 1 Remake"}),
+            |hint| {
+                *resolved_hint.borrow_mut() = Some(hint.clone());
+                Ok(PathBuf::from("D:/resolved-game"))
+            },
+            |game_root| {
+                *inspected.borrow_mut() = Some(game_root.to_path_buf());
+                Ok("source-token-a".to_string())
+            },
+            || panic!("successful identity check must not discover Steam"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            *resolved_hint.borrow(),
+            Some(Some(PathBuf::from("D:/Games/Gothic 1 Remake")))
+        );
+        assert_eq!(*inspected.borrow(), Some(PathBuf::from("D:/resolved-game")));
+        assert_eq!(response, json!({"sourceIdentity": "source-token-a"}));
+    }
+
+    #[test]
+    fn item_icons_source_identity_retries_a_different_discovered_root() {
+        let inspected = RefCell::new(Vec::new());
+        let response = item_icons_source_identity_with(
+            &json!({"gamePath": "C:/stale"}),
+            |_| Ok(PathBuf::from("C:/stale")),
+            |game_root| {
+                inspected.borrow_mut().push(game_root.to_path_buf());
+                if game_root == Path::new("C:/stale") {
+                    Err(gore_tex::TexError::ContainerNotFound(
+                        game_root.join("G1R-Windows.utoc"),
+                    ))
+                } else {
+                    Ok("source-token-b".to_string())
+                }
+            },
+            || Some(PathBuf::from("D:/Steam/Gothic 1 Remake")),
+        )
+        .unwrap();
+
+        assert_eq!(response["sourceIdentity"], "source-token-b");
+        assert_eq!(
+            *inspected.borrow(),
+            vec![
+                PathBuf::from("C:/stale"),
+                PathBuf::from("D:/Steam/Gothic 1 Remake"),
+            ]
+        );
     }
 
     #[test]

@@ -130,6 +130,57 @@ final _itemIconCatalogRetentionProvider = Provider(
 class _ItemIconCatalogRetention {
   ItemIconCatalog? value;
   int requestSequence = 0;
+  String? sourceIdentity;
+  String? pendingSourceIdentity;
+  Future<String?>? sourceIdentityRead;
+  String? sourceIdentityReadGamePath;
+}
+
+final itemIconCatalogRefreshProvider = Provider<ItemIconCatalogRefresh>((ref) {
+  final retention = ref.read(_itemIconCatalogRetentionProvider);
+  return ItemIconCatalogRefresh._(
+    () => ref.read(itemIconCoreServiceProvider),
+    () => ref.read(sharedConfigProvider).gamePath(),
+    () => ref.read(itemIconCatalogProvider).isLoading,
+    retention,
+    () => ref.read(itemIconCatalogReloadProvider.notifier).state++,
+  );
+});
+
+class ItemIconCatalogRefresh {
+  ItemIconCatalogRefresh._(
+    this._core,
+    this._gamePath,
+    this._catalogIsLoading,
+    this._retention,
+    this._reload,
+  );
+
+  final GoresaveCoreService Function() _core;
+  final String? Function() _gamePath;
+  final bool Function() _catalogIsLoading;
+  final _ItemIconCatalogRetention _retention;
+  final void Function() _reload;
+
+  /// Check only source-file metadata on resume. Full PNG verification runs
+  /// solely when this identity changed or a previously missing install appears.
+  Future<void> refreshIfSourceChanged() async {
+    if (_catalogIsLoading()) return;
+    final core = _core();
+    if (!core.isAvailable) return;
+    final identity = await _readItemIconSourceIdentity(
+      core,
+      _gamePath(),
+      _retention,
+    );
+    if (identity == null ||
+        identity == _retention.sourceIdentity ||
+        identity == _retention.pendingSourceIdentity) {
+      return;
+    }
+    _retention.pendingSourceIdentity = identity;
+    _reload();
+  }
 }
 
 /// Ensures the complete bundled item set is cached, then reads its small
@@ -138,6 +189,7 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
   ref.watch(itemIconCatalogReloadProvider);
   final retention = ref.read(_itemIconCatalogRetentionProvider);
   final requestSequence = ++retention.requestSequence;
+  retention.pendingSourceIdentity = null;
   ItemIconCatalog retainedOrEmpty() =>
       retention.value ?? const ItemIconCatalog.empty();
   final core = ref.watch(itemIconCoreServiceProvider);
@@ -171,10 +223,16 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
       manifestPath: manifestPath,
       json: await file.readAsString(),
     );
+    final sourceIdentity = await _readItemIconSourceIdentity(
+      core,
+      gamePath,
+      retention,
+    );
     if (requestSequence != retention.requestSequence) {
       await _releaseItemIconCatalog(core, catalog.manifestPath);
       return retainedOrEmpty();
     }
+    if (sourceIdentity != null) retention.sourceIdentity = sourceIdentity;
     final previousManifestPath = retention.value?.manifestPath;
     retention.value = catalog;
     if (previousManifestPath != null &&
@@ -194,6 +252,7 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
     }
     return catalog;
   } catch (_) {
+    retention.pendingSourceIdentity = null;
     if (preparedManifestPath != null) {
       await _releaseItemIconCatalog(core, preparedManifestPath);
     }
@@ -203,6 +262,39 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
     return retainedOrEmpty();
   }
 });
+
+Future<String?> _readItemIconSourceIdentity(
+  GoresaveCoreService core,
+  String? gamePath,
+  _ItemIconCatalogRetention retention,
+) {
+  final active = retention.sourceIdentityRead;
+  if (active != null && retention.sourceIdentityReadGamePath == gamePath) {
+    return active;
+  }
+  final request = () async {
+    try {
+      final response = await core.execute(
+        'item_icons_source_identity',
+        payload: {'gamePath': ?gamePath},
+      );
+      if (response['ok'] != true) return null;
+      final data = (response['data'] as Map?)?.cast<String, Object?>();
+      final identity = data?['sourceIdentity'] as String?;
+      return identity == null || identity.isEmpty ? null : identity;
+    } catch (_) {
+      return null;
+    }
+  }();
+  retention.sourceIdentityRead = request;
+  retention.sourceIdentityReadGamePath = gamePath;
+  return request.whenComplete(() {
+    if (identical(retention.sourceIdentityRead, request)) {
+      retention.sourceIdentityRead = null;
+      retention.sourceIdentityReadGamePath = null;
+    }
+  });
+}
 
 Future<void> _releaseItemIconCatalog(
   GoresaveCoreService core,
