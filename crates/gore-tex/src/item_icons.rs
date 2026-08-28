@@ -1360,9 +1360,9 @@ fn prune_obsolete_item_icon_cache(cache_root: &Path, current_generation: &Path) 
 
     // The ready current generation was already fully verified. Select one
     // recent structurally complete fallback without rereading PNG contents;
-    // only generations selected for deletion pay hash validation below.
+    // deletion candidates and that single fallback pay hash validation below.
     generations.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| right.1.cmp(&left.1)));
-    let mut retained = BTreeSet::from([current_name]);
+    let mut retained = BTreeSet::from([current_name.clone()]);
     for (_, name, _) in &generations {
         if retained.len() >= MAX_RETAINED_GENERATIONS {
             break;
@@ -1387,17 +1387,37 @@ fn prune_obsolete_item_icon_cache(cache_root: &Path, current_generation: &Path) 
         }
 
         if let Some(expected_modified) = prunable.get(&name) {
-            let removable = std::fs::symlink_metadata(&generation)
+            let unchanged_owned_directory = std::fs::symlink_metadata(&generation)
                 .ok()
                 .filter(|metadata| {
                     metadata.file_type().is_dir()
                         && !metadata.file_type().is_symlink()
                         && metadata.modified().ok().as_ref() == Some(expected_modified)
                 })
-                .is_some()
-                && complete_cache_is_owned(&generation).unwrap_or(false);
-            if removable {
-                let _ = std::fs::remove_dir_all(&generation);
+                .is_some();
+            if unchanged_owned_directory {
+                match complete_cache_is_owned(&generation) {
+                    Ok(true) => {
+                        let _ = std::fs::remove_dir_all(&generation);
+                    }
+                    Ok(false) => {
+                        if let Ok(quarantine) =
+                            quarantine_incomplete_generation(cache_root, &generation)
+                        {
+                            let _ = std::fs::remove_dir_all(quarantine);
+                        }
+                    }
+                    Err(_) => {}
+                }
+            }
+        } else if name != current_name && retained.contains(&name) {
+            // The one fallback avoided byte reads during candidate selection.
+            // Validate it now so a same-length PNG corruption cannot occupy the
+            // retained slot forever. A valid fallback stays untouched.
+            if matches!(complete_cache_is_owned(&generation), Ok(false)) {
+                if let Ok(quarantine) = quarantine_incomplete_generation(cache_root, &generation) {
+                    let _ = std::fs::remove_dir_all(quarantine);
+                }
             }
         } else if let Some(expected_modified) = corrupt.get(&name) {
             let still_corrupt = std::fs::symlink_metadata(&generation)
@@ -1958,6 +1978,42 @@ mod tests {
                 .join(format!(".{generation_name}.lock"))
                 .is_file());
         }
+    }
+
+    #[test]
+    fn content_corrupt_retained_fallback_is_quarantined_and_removed() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut first = FakeSource::stable("build-a");
+        let first_manifest =
+            prepare_item_icon_cache_with_source(temp.path(), &specs(), &mut first).unwrap();
+        let mut second = FakeSource::stable("build-b");
+        let current = prepare_item_icon_cache_with_source(temp.path(), &specs(), &mut second)
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+
+        let manifest: ItemIconManifest =
+            serde_json::from_slice(&std::fs::read(&first_manifest).unwrap()).unwrap();
+        let image = first_manifest
+            .parent()
+            .unwrap()
+            .join(&manifest.items["ItMi_One"]);
+        let mut bytes = std::fs::read(&image).unwrap();
+        let middle = bytes.len() / 2;
+        bytes[middle] ^= 1;
+        std::fs::write(&image, bytes).unwrap();
+
+        assert!(
+            structurally_complete_owned_manifest(first_manifest.parent().unwrap())
+                .unwrap()
+                .is_some()
+        );
+        assert!(!complete_cache_is_owned(first_manifest.parent().unwrap()).unwrap());
+        prune_obsolete_item_icon_cache(temp.path(), &current);
+
+        assert!(!first_manifest.parent().unwrap().exists());
+        assert!(current.exists());
     }
 
     #[test]
