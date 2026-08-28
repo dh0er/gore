@@ -5015,7 +5015,6 @@ where
         ))
     })?;
 
-    before_commit(save_path, persistent_path)?;
     let save_claim = claim_existing_target(save_path, "delete").map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             CoreError::Update(format!(
@@ -5049,6 +5048,7 @@ where
             )),
         ));
     }
+    before_commit(save_path, persistent_path)?;
 
     let persistent_pending = match begin_replace_if_unchanged(
         persistent_path,
@@ -5060,6 +5060,33 @@ where
             return Err(abort_claim_with_restore(save_path, &save_claim, error));
         }
     };
+
+    let recreated_target_error = match fs::symlink_metadata(save_path) {
+        Ok(_) => Some(CoreError::Update(format!(
+            "{} was recreated while deletion was being prepared; the newer save was preserved",
+            save_path.display()
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => Some(map_locked_file_error(
+            error,
+            &format!("checking {} before deletion", save_path.display()),
+        )),
+    };
+    if let Some(base) = recreated_target_error {
+        return match persistent_pending.rollback() {
+            Ok(()) => match fs::remove_file(&save_claim) {
+                Ok(()) => Err(base),
+                Err(cleanup_error) => Err(CoreError::Update(format!(
+                    "{base}; the displaced original could not be removed from {}: {cleanup_error}",
+                    save_claim.display()
+                ))),
+            },
+            Err(rollback_error) => Err(CoreError::Update(format!(
+                "{base}; profile rollback failed safely: {rollback_error}; the displaced original remains at {}",
+                save_claim.display()
+            ))),
+        };
+    }
 
     if let Err(delete_error) = fs::remove_file(&save_claim) {
         let base =
@@ -16801,7 +16828,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_save_preserves_a_concurrently_rewritten_save() {
+    fn delete_save_rolls_back_profile_when_save_is_recreated_after_claim() {
         let dir = tempdir().unwrap();
         let slot = "G1R-006";
         let save_path = dir.path().join(format!("{slot}.sav"));
