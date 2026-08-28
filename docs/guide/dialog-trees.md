@@ -1,9 +1,10 @@
-# Reading dialog trees
+# Reading and editing dialog trees
 
-`gore dialog` shows what an NPC actually says. It reads the game's own script
-cache and reconstructs the whole conversation: every option in the menu, what
-unlocks or hides it, the lines both sides speak, the effects a choice applies,
-and which sub-menu it opens.
+`gore dialog` shows what an NPC actually says and checks structural edits before
+they reach the compiler. It reads the game's own script cache and reconstructs
+the whole conversation: every option in the menu, what unlocks or hides it, the
+lines both sides speak, the effects a choice applies, and which sub-menu it
+opens.
 
 ```powershell
 gore dialog list viper                    # which conversations exist
@@ -11,15 +12,16 @@ gore dialog tree om_stt_viper_302         # the whole tree
 gore dialog tree brannok --lang german    # in German
 gore dialog show ChoiceStt302ViperMelt    # one option in full
 gore dialog text viper -o viper.json      # its lines, ready to edit and re-import
-gore dialog new-topic viper --caption-key K --mod-name MyMod -o MyMod   # a new option
-gore dialog checkout viper -o work        # its AngelScript, to change what an option does
+gore dialog new-topic viper --caption-key K --mod-name MyMod -o MyMod   # root-topic scaffold
+gore dialog checkout viper -o work        # editable AngelScript, including defaults
 gore dialog export -o dialog\             # every conversation as JSON
 ```
 
-Everything here works offline. It needs the game installed — that is where the
-script cache lives — but only ever reads it: no command on this page launches
-the game, writes into the install, or touches a save. The commands that produce
-something write it where you point them.
+The `gore dialog` commands work offline. They read the installed cache and write
+only the files you request; they do not launch the game, change the install, or
+touch a save. Strict standalone compilation and packaging are also offline.
+Deployment and a runtime check are later, explicit steps with different proof
+boundaries.
 
 ## What a tree looks like
 
@@ -119,145 +121,149 @@ entirely.
 This changes wording only. Which options exist, what unlocks them, and what
 they do live in the script cache, not in the localization cache.
 
-## Adding an option
+## Editing an existing option
 
-`gore dialog new-topic` writes the two files a new root-level option needs,
-with the identities filled in from the tree:
+Wording lives in the localization cache; structure and behaviour live in the
+script cache. Checkout the conversation module to change the latter:
+
+```powershell
+gore dialog checkout om_stt_viper_302 -o work
+# edit work\Conversation_OM_STT_VIPER_302.as
+gore dialog check work
+gore dialog stage work --mod-name ViperEdit
+```
+
+`checkout` writes the compiler-ready source, an untouched copy under
+`pristine\`, and a manifest bound to the exact base cache. The source includes
+the reconstructed class-scope `default` statements. They are authored source,
+so existing topics may change their `Caption`, `PriorityRank`, `Rules` and
+flags such as `bIsSubTopic`, `bIsAmbientTopic` and `bIsFollowupTopic`, as well
+as `IsVisible_Implementation`, `Act_Implementation`, spoken lines, effects,
+branches, and existing `Subdialog` calls.
+
+Changing `Caption` to a new localization key changes only the script reference.
+The localized row itself is a separate asset: add or edit it with `gore loc`
+and include that localization change in the bundle.
+
+### The fail-closed default contract
+
+An authored default block replaces the compiler-generated `__InitDefaults`
+record; it is not a patch layered over it. Therefore `check` requires all of
+the following before compilation:
+
+- Every shipped class in the module that had `__InitDefaults` must still author
+  defaults.
+- Every shipped default target must remain present at least as often as in the
+  checkout. Values and arguments may change, and new defaults may be added, but
+  deleting a target cannot silently reset it to an engine value.
+- An emitter-omitted generated `__*` method other than `__InitDefaults` blocks
+  this path because class-scope defaults cannot supersede it.
+- Existing classes, parents, member layouts and callable signatures remain
+  fixed. Method bodies may change; existing declarations may not disappear.
+
+The byte-exact generated-default carry still exists, but only as an
+all-or-nothing fallback for a module whose source authors no defaults. Deleting
+defaults from a normal dialog checkout does not opt into that fallback. A
+partial or ambiguous source is refused before an output mini-cache is written.
+
+`check` reports changed method bodies and changed default targets. It also
+reports added classes, free functions and string-table entries as requiring
+`--allow-new-symbols`. Those new rows do not weaken the completeness checks
+above.
+
+`check` compares against the exact cache recorded by the checkout and refuses a
+different game build. It inventories source structure, but the strict
+standalone compile remains the syntax and type check.
+
+## Adding a topic safely
+
+The bounded new-topic mini-cache shape keeps both sides of the dependency in
+one existing conversation module:
+
+1. Checkout that conversation.
+2. Append the new topic class at the **end of the existing conversation
+   namespace**, before its closing brace; do not interleave or reorder shipped
+   declarations or move them between namespaces.
+3. For a sub-menu topic, edit the existing parent's `Subdialog` body to name the
+   appended class.
+4. Keep the complete authored defaults and run `check`. The report should name
+   the new class (and any new strings) as new symbols, not as silent losses.
+5. Run `stage`; its compile command uses `--op edit --allow-new-symbols` for
+   this case.
+
+This combination passes the complete-default checker and the same-module
+new-class/remap/loadout oracles. A real strict standalone compile additionally
+needs a qualified profile compatible with the installed target; an unknown
+Binds API is refused before compilation. The new sub-dialog has not yet been
+shown or selected in game, so offline acceptance is not a runtime claim.
+
+`gore dialog new-topic` creates that same-module edit workspace directly. For
+a **root topic**:
 
 ```powershell
 gore dialog new-topic om_stt_viper_302 --caption-key STT_302_VIPER_WORK_INFO_15_01 `
   --mod-name ViperWork -o ViperWork
 ```
 
-```
-class     UChoiceViperWork : UTopic_Hero__OM_STT_VIPER_302
-sentinel  UChoiceStt302ViperExit
-```
+It resolves the conversation-private topic base, participant, an unused class
+name, and a vanilla sentinel; then it checks out the complete conversation,
+inserts the class into its owning namespace, and stores the registration in the
+edit manifest. Run
+`dialog check` and `dialog stage` on the output directory. The command does not
+emit an isolated `compile-module --op add` recipe: a private topic base from
+another module is not visible there, and separate add/edit mini-caches cannot
+depend on one another.
 
-Those two lines are the part worth automating. The class has to derive from
-that conversation's own topic base, and the bundle's registration needs a
-*sentinel* — an existing vanilla topic that proves the live topic set belongs to
-this NPC. The command reads both out of the cache and picks the conversation's
-exit option as the sentinel, since every conversation has one and it is never
-conditional. It also refuses a class name the cache already declares.
+For a real sub-menu addition, add
+`--subdialog-of UExistingParentTopic`. The parent must contain exactly one
+`Subdialog` call with an empty topic slot; the command fills that slot and adds
+the new class with `bIsSubTopic`. It refuses ambiguous or full calls.
 
-The generated `Dialog.as` is the shape with runtime evidence behind it: a
-caption, an always-visible option, and a body that ends the conversation.
-Spoken lines, conditions and effects are yours to write — `gore dialog show`
-prints how the game writes its own. The generated `spec.json` is a complete
-build spec, so the next two commands are the ordinary ones:
+A new root class also needs its generated `dialog_topics` registration in the
+bundle spec. Automatic discovery of a new class into an already constructed
+`ConversationTopicSet` remains unproven; compilation alone does not register
+it. `check` binds that row to the exact newly added class, resolved participant
+and canonical vanilla sentinel. Conversely, every new direct topic must be
+either registered once or referenced once from a shipped `Subdialog` body, so
+renamed, deleted, duplicated or orphaned intent fails before `stage`.
 
-```powershell
-gore as compile-module --op add --module ViperWork.Dialog `
-  --rel-path ViperWork/Dialog.as --source ViperWork\Dialog.as `
-  --work-dir .gore-as-work --allow-new-symbols -o ViperWork.Dialog.mini.Cache
-gore mod build --spec ViperWork\spec.json -o build
-```
+Full-graph V2 can compile a cross-module add plus edit together, but its result
+is a complete regenerated cache. The normal dialog bundle path consumes
+deployable module mini-caches, so that full-cache result is an offline compiler
+capability, not a packaging recipe. Keeping the new class and the rewired
+`Subdialog` in the same existing module is the supported mini-cache path.
 
-The command prints them with the paths filled in. Compiling drives the game's
-own compiler, so it needs the game installed and takes a couple of minutes;
-what that path proves and what it does not is
-[Dialog authoring](dialog-authoring.md).
+## Compile, package, deploy, prove
 
-This adds an option to the **root** menu. Changing what the existing options do
-is a different operation — [editing the module](#changing-what-an-option-does)
-— and a genuinely new option inside a sub-menu is reachable by neither.
-
-## Changing what an option does
-
-Wording lives in the localization cache; behaviour lives in the script cache.
-To change behaviour you edit the conversation's own AngelScript and recompile
-that one module.
+`stage` writes `spec.json` and prints a strict standalone edit command. It adds
+`--allow-new-symbols` only when `check` found intentional new class, function or
+string rows. It also names the resolved game root and refuses to stage when its
+current script cache is not byte-identical to the checkout base; `compile-module`
+cannot safely target an unrelated archive passed only through `--cache`:
 
 ```powershell
-gore dialog checkout om_stt_viper_302 -o work    # take the module out
-# edit work\Conversation_OM_STT_VIPER_302.as
-gore dialog check work                           # will this survive the trip back?
-gore dialog stage work --mod-name ViperEdit      # write the build spec
-```
-
-`checkout` writes the exact source the compiler itself would emit for that
-module, an untouched copy under `pristine\`, and a manifest binding the edit to
-that exact game build.
-
-### What you may change, and what you may not
-
-An edited module has to come back onto the shipping cache, and two mechanisms
-decide what survives. The compiler-generated defaults — caption, priority,
-rules, flags — are carried back from the shipped module byte-for-byte, which
-only works while every surrounding identity is unchanged. And the recompiled
-module is remapped *strictly* onto the base cache's keyspace, so it can only
-name things that build already has.
-
-| | |
-|---|---|
-| **You may change** | what a method does: spoken lines, effects, their order and their branches; the `IsVisible` test; which existing topics a `Subdialog` offers |
-| **You may not** | add, remove, rename or reorder classes or methods; change a signature or a member variable; write a `default` statement; name a type or a text id the build does not already have |
-
-Those are not house rules, they are the conditions under which the recompile
-path accepts the result. Every one of them would otherwise surface as a refusal
-*after* a two-minute compile, so `check` asks the same questions offline against
-the same cache:
-
-```
-this edit cannot be carried back:
-  - line 216: a `default` statement. Captions, priority, rules and flags are carried back from
-    the shipped module unchanged, so they cannot be edited here
-  - class UChoiceStt302ViperInvented is new. An edited module has to keep exactly the classes it
-    shipped with; a new topic needs its own module
-  - the literal "MY_BRAND_NEW_LINE" is not in this cache's string table. An edited module can
-    only use text ids the game already ships; a brand-new one needs its own module
-```
-
-A clean edit names the methods it rewrote:
-
-```
-this edit can be carried back. Rewritten:
-  - UChoiceBrannok119230::void Act_Implementation()
-```
-
-`check` compares against the cache the checkout was taken from and refuses if
-the game has been updated since — a new build changes every identity the edit is
-checked against.
-
-### What this reaches
-
-Re-pointing a line at different text the game already ships, reordering what an
-option says, adding or removing an effect, changing when an option is visible,
-and adding an **existing** topic to a sub-menu — a `Subdialog` call lists its
-options as arguments with empty slots to spare, so extending one is an ordinary
-body edit.
-
-What it does not reach: a genuinely new option inside a sub-menu. That needs a
-new class, and a new class can neither go into an edited module (identity drift)
-nor be named from one (strict remap). New options are root-level, through
-[`new-topic`](#adding-an-option).
-
-The nearest thing that does work is putting an existing topic into a menu it is
-not offered in and rewriting what it says — new content in a sub-menu, in a
-class the game already has. It is the same topic everywhere it appears, so it
-changes the other menu that offers it too; `gore dialog tree` shows where that
-is before you decide.
-
-### Then compile it
-
-`stage` writes `spec.json` and prints the two commands, with `--op edit` and without
-`--allow-new-symbols`:
-
-```powershell
-gore as compile-module --op edit --module Story.G1R.Conversation.Conversation_BC_BAN_BRANNOK_863 `
+gore as compile-module --backend standalone --op edit `
+  --module Story.G1R.Conversation.Conversation_BC_BAN_BRANNOK_863 `
   --rel-path Story/G1R/Conversation/Conversation_BC_BAN_BRANNOK_863.as `
-  --source work\Conversation_BC_BAN_BRANNOK_863.as --work-dir .gore-as-work `
-  -o work\ViperEdit.mini.Cache
+  --source work\Conversation_BC_BAN_BRANNOK_863.as `
+  --work-dir work\.gore-as-work --allow-new-symbols `
+  -o work\ViperEdit.mini.Cache --game $GAME
 gore mod build --spec work\spec.json -o build
 ```
 
-Passing `--allow-new-symbols` here is refused by design: strict remapping is
-exactly what lets the shipped captions and rules come back unchanged.
+These are distinct evidence steps:
 
-`check` reads the shipped module, not your syntax. It cannot tell you that your
-AngelScript parses — only the compile step can, and that is the step that takes
-the minutes.
+1. `dialog check` proves the source/edit invariants offline; it does not parse
+   AngelScript with the compiler.
+2. `as compile-module --backend standalone` performs the strict offline compile
+   and remap. It neither launches the game nor writes into the install.
+3. `mod build` packages the mini-cache, localization payload and, for a new
+   root, explicit registration. It does not deploy them.
+4. `mod deploy` or Manager Apply changes the installation and requires the
+   normal consent and recovery workflow.
+5. A natural in-game conversation is the runtime test. Existing adapter render
+   evidence does not yet prove selection or the new sub-menu path; use a
+   disposable or backed-up save and keep those claims separate.
 
 ## Conditions, in the game's own vocabulary
 
@@ -316,6 +322,6 @@ not.
 ## Related
 
 - [Text & dialogs](text-and-dialogs.md) — changing what a line says
-- [Dialog authoring](dialog-authoring.md) — adding a new option to a conversation
+- [Dialog authoring](dialog-authoring.md) — editing and adding safe topic shapes
 - [Scripts (AngelScript)](scripts.md) — the cache this reads
 - [Finding things](find.md) — looking one class or id up

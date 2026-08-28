@@ -662,7 +662,8 @@ const DIALOG_CHECKOUT_ARGS: &[ArgSpec] = &[
         "out",
         Long("out"),
         Path,
-        "Working directory for the source, its pristine copy, and the manifest",
+        "Working directory for the editable source (including complete reconstructed class \
+         defaults), its pristine copy, and the manifest",
         true,
     ),
     DIALOG_CACHE_ARGS[0],
@@ -693,7 +694,7 @@ const DIALOG_STAGE_ARGS: &[ArgSpec] = &[
         "mod_name",
         Long("mod-name"),
         Str,
-        "Mod name for the bundle this edit ships in",
+        "Mod name for the mini-cache and bundle spec this edit stages",
         false,
     )
     .with_default("MyDialogEdit"),
@@ -759,10 +760,27 @@ const DIALOG_NEW_TOPIC_ARGS: &[ArgSpec] = &[
     )
     .with_default("UChoice<mod name>"),
     ArgSpec::new(
+        "subdialog_of",
+        Long("subdialog-of"),
+        Str,
+        "Existing topic whose single `Subdialog(...)` call should receive the new same-module \
+         class. Omit this to scaffold a root topic and record its explicit `dialog_topics` \
+         registration",
+        false,
+    ),
+    ArgSpec::new(
+        "allow_hidden",
+        crate::spec::ArgForm::Switch("allow-hidden"),
+        crate::spec::ArgKind::Bool,
+        "Permit a state-dependent root topic to be cleanly hidden at runtime; incompatible with \
+         --subdialog-of",
+        false,
+    ),
+    ArgSpec::new(
         "mod_name",
         Long("mod-name"),
         Str,
-        "Mod name, used for the module, the file path, and the bundle",
+        "Mod name, used for the default class name and the later staged bundle",
         false,
     )
     .with_default("MyDialogMod"),
@@ -770,7 +788,8 @@ const DIALOG_NEW_TOPIC_ARGS: &[ArgSpec] = &[
         "out",
         Long("out"),
         Path,
-        "Output directory for the source and the build spec",
+        "Empty output directory for the edited same-module source, its pristine copy, and the \
+         edit manifest",
         true,
     ),
     DIALOG_CACHE_ARGS[0],
@@ -818,7 +837,8 @@ const DIALOG_COMMANDS: &[CommandSpec] = &[
     // picks. The game install is only read.
     CommandSpec::new(
         "checkout",
-        "Take one conversation's AngelScript out of the cache so its bodies can be rewritten",
+        "Check out one conversation as editable AngelScript, including complete reconstructed \
+         defaults for Caption, PriorityRank, Rules, and topic flags",
         DIALOG_CHECKOUT_ARGS,
         Safety::write().writes_into(&["out"]),
         T_NORMAL,
@@ -826,7 +846,8 @@ const DIALOG_COMMANDS: &[CommandSpec] = &[
     .guide("dialog-trees"),
     CommandSpec::new(
         "check",
-        "Check an edited conversation against what the recompile path can carry back",
+        "Fail closed unless an edited conversation preserves every required class/default and \
+         satisfies the current edit/remap contract",
         DIALOG_CHECK_ARGS,
         Safety::read(),
         T_NORMAL,
@@ -836,17 +857,19 @@ const DIALOG_COMMANDS: &[CommandSpec] = &[
     // One build spec inside the directory `checkout` already created.
     CommandSpec::new(
         "stage",
-        "Write the build spec for a checked edit and print the commands that compile it",
+        "Write the build spec for a checked edit and print its strict standalone `--op edit` \
+         compile command, adding `--allow-new-symbols` only when required",
         DIALOG_STAGE_ARGS,
         Safety::write().writes_into(&["dir"]),
         T_NORMAL,
     )
     .guide("dialog-trees"),
-    // Two new files under a directory the caller picks: the authored source and a build spec.
-    // Both are overwritten if they are already there, and the game install is only read.
+    // A same-module editable source, pristine copy, and manifest under a caller-picked empty
+    // directory. The game install is only read.
     CommandSpec::new(
         "new-topic",
-        "Scaffold a new dialog option for one NPC: the AngelScript source and a build spec",
+        "Scaffold a new topic inside an NPC's existing conversation module: register it as a \
+         root, or wire it into one existing Subdialog call with --subdialog-of",
         DIALOG_NEW_TOPIC_ARGS,
         Safety::write().writes_into(&["out"]),
         T_NORMAL,
@@ -867,12 +890,12 @@ const DIALOG_COMMANDS: &[CommandSpec] = &[
 
 pub const DIALOG: GroupSpec = GroupSpec {
     tool: "gore_dialog",
-    title: "gore dialog reader",
+    title: "gore dialog reader and authoring guard",
     cli: "dialog",
-    summary: "Read the game's dialog trees out of the installed script cache: every option an NPC \
-              offers, what unlocks or hides it, the lines each side speaks with their localized \
-              text, the effects a choice applies, and which sub-menu it opens. Offline and \
-              read-only — it reports what the cache declares, not what a given save would show.",
+    summary: "Read the dialog trees declared by the installed script cache, edit method bodies and \
+              complete reconstructed defaults, and stage checked same-module topic additions. \
+              Localization, compilation, packaging, deployment, and runtime proof remain \
+              separate steps; read commands report cache declarations, not save-state behavior.",
     shape: GroupShape::Nested,
     commands: DIALOG_COMMANDS,
 };

@@ -23,6 +23,56 @@ fn graph() -> Option<DialogGraph> {
     Some(dialog::build(&bytes).expect("the real cache should read as dialog"))
 }
 
+fn rewrite_first_default(
+    source: &str,
+    select: impl Fn(&str) -> bool,
+    rewrite: impl Fn(&str) -> String,
+) -> Option<String> {
+    for (start, _) in source.match_indices("default ") {
+        let end = start + source[start..].find(';')? + 1;
+        let statement = &source[start..end];
+        if !select(statement) {
+            continue;
+        }
+        let replacement = rewrite(statement);
+        if replacement == statement {
+            continue;
+        }
+        let mut edited = source.to_owned();
+        edited.replace_range(start..end, &replacement);
+        return Some(edited);
+    }
+    None
+}
+
+fn verify_real_default_edit(
+    modules: &[dialog::Checkout],
+    known: &dialog::KnownNames,
+    label: &str,
+    select: impl Fn(&str) -> bool,
+    rewrite: impl Fn(&str) -> String,
+) -> dialog::EditReport {
+    let (module, edited) = modules
+        .iter()
+        .find_map(|module| {
+            rewrite_first_default(&module.source, &select, &rewrite).map(|edited| (module, edited))
+        })
+        .unwrap_or_else(|| panic!("the shipping dialog corpus has no {label} default to edit"));
+    let report = dialog::verify(module, &edited, known);
+    assert!(
+        report.is_carryable(),
+        "{label} edit in {} was refused: {:?}",
+        module.module,
+        report.violations
+    );
+    assert!(
+        !report.changed_defaults.is_empty(),
+        "{label} edit in {} was not reported as a changed default",
+        module.module
+    );
+    report
+}
+
 /// The caption a topic declares must be the one the independent knowledge extractor finds. That
 /// extractor feeds the shipped knowledge catalog and was written against the same bytecode from
 /// the other direction, so agreement across thousands of classes is real evidence.
@@ -190,14 +240,15 @@ fn nothing_is_read_away_silently() {
     );
 }
 
-/// A checkout nobody has touched must read as carryable, for every conversation the game ships.
+/// A checkout nobody has touched must contain complete authored defaults and check cleanly, for
+/// every conversation the game ships.
 ///
-/// This is the scanner's real test. It has to survive every shape 283 shipped modules put in
-/// front of it — nested braces in a body, a class with no members, a free function beside the
-/// classes — and a false positive here would send an author hunting for a problem that is not
-/// there.
+/// `checkout_many` already refuses when a cache class with `__InitDefaults` is absent from the
+/// emitted coverage. This test independently parses that emitted source through the public dialog
+/// outline and requires its authored-default classes to agree with the checkout metadata. It also
+/// exercises the checker against every source shape the shipping corpus puts in front of it.
 #[test]
-fn an_untouched_checkout_of_every_conversation_is_carryable() {
+fn every_conversation_checkout_has_authored_defaults_and_checks_cleanly() {
     let Some(bytes) = real_cache() else {
         eprintln!("skip: set GORE_AS_REAL_CACHE");
         return;
@@ -215,7 +266,28 @@ fn an_untouched_checkout_of_every_conversation_is_carryable() {
     let mut checked = 0usize;
     let mut complaints = Vec::new();
     for module in &taken {
-        let report = dialog::verify(&module.source, &module.source, &known);
+        let outline = dialog::read_outline(&module.source)
+            .unwrap_or_else(|error| panic!("{} checkout is invalid: {error}", module.module));
+        let outlined_default_classes = outline
+            .classes
+            .iter()
+            .filter(|class| !class.defaults.is_empty())
+            .map(|class| class.name.clone())
+            .collect::<BTreeSet<_>>();
+        if module.default_classes.is_empty() {
+            complaints.push(format!(
+                "{}: checkout carries no authored-default classes",
+                module.module
+            ));
+        }
+        if outlined_default_classes != module.default_classes {
+            complaints.push(format!(
+                "{}: outline sees {:?}, checkout records {:?}",
+                module.module, outlined_default_classes, module.default_classes
+            ));
+        }
+
+        let report = dialog::verify(module, &module.source, &known);
         checked += 1;
         if !report.unchanged {
             complaints.push(format!("{}: a checkout differs from itself", module.module));
@@ -244,6 +316,106 @@ fn an_untouched_checkout_of_every_conversation_is_carryable() {
             .cloned()
             .collect::<Vec<_>>()
             .join("\n")
+    );
+
+    let caption = verify_real_default_edit(
+        &taken,
+        &known,
+        "Caption",
+        |statement| statement.starts_with("default Caption "),
+        |_| "default Caption = LocText(\"GORE_DIALOG_REAL_CACHE_ORACLE_CAPTION\");".to_owned(),
+    );
+    assert!(caption
+        .changed_defaults
+        .iter()
+        .any(|change| change.target == "Caption"));
+    assert!(caption
+        .new_strings
+        .iter()
+        .any(|value| value == "GORE_DIALOG_REAL_CACHE_ORACLE_CAPTION"));
+    assert!(caption.requires_new_symbols());
+
+    // The shipping corpus currently carries no authored PriorityRank statement. Setting its
+    // previously implicit value is therefore an added default on an existing topic, not a
+    // replacement; all shipped defaults in that class must still remain present.
+    let priority = verify_real_default_edit(
+        &taken,
+        &known,
+        "PriorityRank",
+        |statement| statement.starts_with("default Caption "),
+        |statement| format!("{statement}\ndefault PriorityRank = 31415;"),
+    );
+    assert!(priority
+        .changed_defaults
+        .iter()
+        .any(|change| change.target == "PriorityRank"));
+
+    let rules = verify_real_default_edit(
+        &taken,
+        &known,
+        "Rules",
+        |statement| statement.starts_with("default Rules."),
+        |statement| format!("{statement}\n{statement}"),
+    );
+    assert!(rules
+        .changed_defaults
+        .iter()
+        .any(|change| change.target == "Rules"));
+
+    let flag = verify_real_default_edit(
+        &taken,
+        &known,
+        "dialog flag",
+        |statement| {
+            [
+                "default bIsSubTopic ",
+                "default bIsAmbientTopic ",
+                "default bIsFollowupTopic ",
+            ]
+            .iter()
+            .any(|prefix| statement.starts_with(prefix))
+        },
+        |statement| {
+            if statement.contains("true") {
+                statement.replacen("true", "false", 1)
+            } else {
+                statement.replacen("false", "true", 1)
+            }
+        },
+    );
+    assert!(flag.changed_defaults.iter().any(|change| matches!(
+        change.target.as_str(),
+        "bIsSubTopic" | "bIsAmbientTopic" | "bIsFollowupTopic"
+    )));
+
+    let (subdialog_module, edited_subdialog) = taken
+        .iter()
+        .find_map(|module| {
+            let position = module.source.find("Subdialog(this,")?;
+            let mut edited = module.source.clone();
+            edited.replace_range(
+                position..position + "Subdialog(this,".len(),
+                "Subdialog((this),",
+            );
+            Some((module, edited))
+        })
+        .expect("the shipping dialog corpus has no Subdialog call");
+    assert_eq!(
+        edited_subdialog.replace("Subdialog((this),", "Subdialog(this,"),
+        subdialog_module.source,
+        "the body oracle must retain the exact shipped Subdialog call"
+    );
+    let report = dialog::verify(subdialog_module, &edited_subdialog, &known);
+    assert!(
+        report.is_carryable(),
+        "body-only Subdialog edit in {} was refused: {:?}",
+        subdialog_module.module,
+        report.violations
+    );
+    assert!(
+        !report.changed.is_empty(),
+        "body-only Subdialog edit in {} was not reported",
+        subdialog_module.module
     );
 }
 

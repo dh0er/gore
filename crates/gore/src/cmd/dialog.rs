@@ -6,8 +6,9 @@
 //! deploys; the commands that produce something write only where they are pointed.
 //!
 //! `checkout`/`check`/`stage` prepare an edit to a shipped conversation module and say offline
-//! whether the recompile path could carry it back. They stop at the compiler's door: producing
-//! the mini-cache is `gore as compile-module`, and shipping it is `gore mod`.
+//! whether the current default-regeneration and remap contract can represent it. They stop at the
+//! compiler's door: producing the mini-cache is `gore as compile-module`, and shipping it is
+//! `gore mod`.
 //!
 //! What the cache declares is not the same as what a player sees: a topic's rules and its
 //! `IsVisible` override decide that per save state, and this command deliberately reports both
@@ -15,7 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use clap::Subcommand;
@@ -95,7 +96,7 @@ pub enum DialogAction {
         #[arg(long)]
         game: Option<PathBuf>,
     },
-    /// Scaffold a new dialog option for one NPC: the AngelScript source and a build spec
+    /// Insert a new dialog option into one NPC's checked-out conversation module
     NewTopic {
         /// Participant identifier (`om_stt_viper_302`), part of one, or a module name
         npc: String,
@@ -112,10 +113,16 @@ pub enum DialogAction {
         /// AngelScript class name for the new option
         #[arg(long)]
         class: Option<String>,
-        /// Mod name, used for the module, the file path, and the bundle
+        /// Existing parent topic whose one Subdialog call should receive the new option
+        #[arg(long, value_name = "TOPIC")]
+        subdialog_of: Option<String>,
+        /// Permit a state-dependent root topic to be cleanly hidden at runtime
+        #[arg(long, conflicts_with = "subdialog_of")]
+        allow_hidden: bool,
+        /// Mod name, used for the default class name and the staged bundle
         #[arg(long, default_value = "MyDialogMod")]
         mod_name: String,
-        /// Output directory for the source and the build spec
+        /// Output directory for source, pristine copy, and edit manifest
         #[arg(short = 'o', long)]
         out: PathBuf,
         #[arg(long)]
@@ -123,7 +130,7 @@ pub enum DialogAction {
         #[arg(long)]
         game: Option<PathBuf>,
     },
-    /// Take one conversation's AngelScript out of the cache so its bodies can be rewritten
+    /// Take one conversation's AngelScript, including class defaults, out for editing
     Checkout {
         /// Participant identifier (`om_stt_viper_302`), part of one, or a module name
         npc: String,
@@ -135,7 +142,7 @@ pub enum DialogAction {
         #[arg(long)]
         game: Option<PathBuf>,
     },
-    /// Check an edited conversation against what the recompile path can carry back
+    /// Check an edited conversation against the current compile/remap contract
     Check {
         /// The directory `checkout` wrote
         dir: PathBuf,
@@ -207,6 +214,8 @@ pub fn run(action: DialogAction) -> Result<()> {
             caption,
             caption_key,
             class,
+            subdialog_of,
+            allow_hidden,
             mod_name,
             out,
             cache,
@@ -216,6 +225,8 @@ pub fn run(action: DialogAction) -> Result<()> {
             caption,
             caption_key,
             class,
+            subdialog_of,
+            allow_hidden,
             mod_name,
             out,
             cache,
@@ -628,7 +639,7 @@ fn print_topic(
 /// The rules and visibility override rendered as human sentences.
 fn condition_lines(topic: &Topic, text: &Text) -> Vec<String> {
     let mut lines = Vec::new();
-    let owner = topic.class.trim_start_matches('U');
+    let owner = class_without_object_prefix(&topic.class);
     for rule in &topic.rules {
         lines.push(format!("? {}", rule_sentence(rule, Some(owner), text)));
     }
@@ -660,7 +671,7 @@ fn condition_lines(topic: &Topic, text: &Text) -> Vec<String> {
 
 fn rule_sentence(rule: &Rule, owner: Option<&str>, text: &Text) -> String {
     let first_class = rule.args.iter().find_map(|arg| match arg {
-        Arg::Class { name } => Some(name.trim_start_matches('U').to_owned()),
+        Arg::Class { name } => Some(class_without_object_prefix(name).to_owned()),
         _ => None,
     });
     let first_text = rule.args.iter().find_map(|arg| match arg {
@@ -802,7 +813,7 @@ fn render_args(args: &[Arg]) -> String {
 
 fn render_arg(arg: &Arg) -> String {
     match arg {
-        Arg::Class { name } => name.trim_start_matches('U').to_owned(),
+        Arg::Class { name } => class_without_object_prefix(name).to_owned(),
         Arg::Name { value } => format!("n\"{value}\""),
         Arg::Symbol { name } => name.clone(),
         Arg::Text { value } => format!("\"{value}\""),
@@ -837,12 +848,14 @@ fn show(
     game: Option<PathBuf>,
 ) -> Result<()> {
     let graph = read_graph(cache, game)?;
-    let wanted = topic.trim_start_matches('U').to_lowercase();
+    let wanted = class_without_object_prefix(topic).to_lowercase();
     let found = graph.conversations.iter().find_map(|conversation| {
         conversation
             .topics
             .iter()
-            .find(|candidate| candidate.class.trim_start_matches('U').to_lowercase() == wanted)
+            .find(|candidate| {
+                class_without_object_prefix(&candidate.class).to_lowercase() == wanted
+            })
             .map(|candidate| (conversation, candidate))
     });
     let Some((conversation, found)) = found else {
@@ -1037,6 +1050,187 @@ struct EditManifest {
     participant: String,
     /// The exact cache this edit is bound to. A game update invalidates the whole contract.
     cache_sha256: String,
+    /// Explicit root-topic registrations for the bundle spec. Subdialog topics are wired by the
+    /// authored `Subdialog` call and need no transient root registration.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dialog_topics: Vec<DialogTopicRegistration>,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct DialogTopicRegistration {
+    id: String,
+    participant_name: String,
+    topic_class: String,
+    sentinel_class: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    allow_hidden: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+fn reflected_topic_path(class: &str) -> String {
+    format!(
+        "/Script/Angelscript.{}",
+        class_without_object_prefix(class)
+    )
+}
+
+fn registered_topic_class(path: &str) -> Result<String> {
+    let leaf = path
+        .strip_prefix("/Script/Angelscript.")
+        .filter(|leaf| is_angelscript_identifier(leaf))
+        .with_context(|| format!("invalid dialog topic class path {path:?}"))?;
+    Ok(format!("U{leaf}"))
+}
+
+fn subdialog_reference_owners(source: &str, class: &str) -> Result<Vec<String>> {
+    let tokens = code_tokens(source)?;
+    let mut owners = Vec::new();
+    for declaration in 0..tokens.len().saturating_sub(1) {
+        if !matches!(tokens[declaration].text.as_str(), "class" | "struct") {
+            continue;
+        }
+        let Some(name) = tokens.get(declaration + 1).map(|token| token.text.clone()) else {
+            continue;
+        };
+        let Some(open) = ((declaration + 2)..tokens.len())
+            .find(|candidate| matches!(tokens[*candidate].text.as_str(), "{" | ";"))
+        else {
+            continue;
+        };
+        if tokens[open].text != "{" {
+            continue;
+        }
+        let class_close = matching_close(&tokens, open, "{", "}")?;
+        for call in (open + 1)..class_close.saturating_sub(1) {
+            if tokens[call].text != "Subdialog" || tokens[call + 1].text != "(" {
+                continue;
+            }
+            let close = matching_close(&tokens, call + 1, "(", ")")?;
+            if close < class_close
+                && tokens[call + 2..close]
+                    .iter()
+                    .any(|token| token.text == class)
+            {
+                owners.push(name.clone());
+            }
+        }
+    }
+    Ok(owners)
+}
+
+/// Bind a staged root registration to the exact class and base conversation checked above.
+/// Without this gate an edited JSON manifest could point at a renamed/deleted class or another
+/// participant and still build successfully, failing only when the runtime adapter looks it up.
+fn validate_topic_registrations(
+    manifest: &EditManifest,
+    report: &dialog::EditReport,
+    authored: &str,
+    cache: &[u8],
+) -> Result<()> {
+    if report.added_classes.is_empty() && manifest.dialog_topics.is_empty() {
+        return Ok(());
+    }
+
+    let graph = dialog::build(cache).context("re-reading the base dialog for registration checks")?;
+    let matches = graph
+        .conversations
+        .iter()
+        .filter(|conversation| conversation.module == manifest.module)
+        .collect::<Vec<_>>();
+    let [conversation] = matches.as_slice() else {
+        bail!(
+            "the edit module maps to {} base conversations; exactly one is required for a new topic",
+            matches.len()
+        );
+    };
+    let root_class = conversation
+        .root_class
+        .as_deref()
+        .context("the base conversation has no private root topic class")?;
+    let outline = dialog::read_outline(authored)
+        .map_err(|reason| anyhow::anyhow!("inventorying new topic classes: {reason}"))?;
+    let root_matches = outline
+        .classes
+        .iter()
+        .filter(|class| class.name == root_class)
+        .collect::<Vec<_>>();
+    let [root_outline] = root_matches.as_slice() else {
+        bail!(
+            "the private root class {root_class} has {} source identities; exactly one is required",
+            root_matches.len()
+        );
+    };
+    let qualified_root = if root_outline.namespace.is_empty() {
+        root_class.to_owned()
+    } else {
+        format!("{}::{root_class}", root_outline.namespace)
+    };
+    let added_topics = outline
+        .classes
+        .iter()
+        .filter(|class| {
+            report.added_classes.contains(&class.name)
+                && class.super_class.as_deref().is_some_and(|parent| {
+                    (parent == root_class && class.namespace == root_outline.namespace)
+                        || parent.strip_prefix("::").unwrap_or(parent) == qualified_root
+                })
+        })
+        .map(|class| class.name.clone())
+        .collect::<BTreeSet<_>>();
+
+    let participants = conversation
+        .npc_participants()
+        .map(|participant| participant.to_ascii_lowercase())
+        .collect::<BTreeSet<_>>();
+    let sentinel = sentinel_of(conversation)
+        .map(|topic| reflected_topic_path(&topic.class))
+        .context("the base conversation has no root sentinel for registration")?;
+    let mut registrations = BTreeMap::<String, usize>::new();
+    for registration in &manifest.dialog_topics {
+        let class = registered_topic_class(&registration.topic_class)?;
+        if !added_topics.contains(&class) {
+            bail!(
+                "dialog_topics registers {}, but that is not one newly added direct topic class in {}",
+                registration.topic_class,
+                manifest.module
+            );
+        }
+        if !participants.contains(&registration.participant_name.to_ascii_lowercase()) {
+            bail!(
+                "dialog_topics participant {:?} does not belong to {}",
+                registration.participant_name,
+                manifest.module
+            );
+        }
+        if registration.sentinel_class != sentinel {
+            bail!(
+                "dialog_topics sentinel {:?} is not this conversation's checked sentinel {:?}",
+                registration.sentinel_class,
+                sentinel
+            );
+        }
+        *registrations.entry(class).or_default() += 1;
+    }
+
+    for class in added_topics {
+        let roots = registrations.get(&class).copied().unwrap_or(0);
+        let owners = subdialog_reference_owners(authored, &class)?;
+        let subdialog_is_existing = owners
+            .as_slice()
+            .first()
+            .is_some_and(|owner| !report.added_classes.contains(owner));
+        match (roots, owners.len(), subdialog_is_existing) {
+            (1, 0, false) | (0, 1, true) => {}
+            _ => bail!(
+                "new topic {class} must be either registered once as a root or referenced once by Subdialog from a shipped class; found {roots} registration(s) and references from {:?}",
+                owners
+            ),
+        }
+    }
+    Ok(())
 }
 
 const MANIFEST_NAME: &str = "gore-dialog-edit.json";
@@ -1093,6 +1287,7 @@ fn checkout(npc: &str, out: &PathBuf, cache: Option<PathBuf>, game: Option<PathB
         pristine_file: format!("pristine/{leaf}"),
         participant: participant_label(conversation),
         cache_sha256: digest_of(&bytes),
+        dialog_topics: Vec::new(),
     };
     let manifest_path = out.join(MANIFEST_NAME);
     fs::write(
@@ -1105,12 +1300,12 @@ fn checkout(npc: &str, out: &PathBuf, cache: Option<PathBuf>, game: Option<PathB
     println!("edit    {}", source_file.display());
     println!("as-was  {}", pristine_file.display());
     println!();
-    println!("you may change: what a method does — spoken lines, effects, their order and");
-    println!("                branches, the `IsVisible` test, and which existing topics a");
-    println!("                `Subdialog` offers");
-    println!("you may not:    add, remove, rename or reorder classes and methods; change a");
-    println!("                signature or a member variable; write a `default` statement;");
-    println!("                name a type or a text id this game build does not already have");
+    println!("you may change: method bodies and reconstructed class defaults — Caption,");
+    println!("                PriorityRank, Rules and topic flags included");
+    println!("you may add:    a same-module topic class, its own methods/defaults, and new");
+    println!("                string/text ids; stage then selects --allow-new-symbols");
+    println!("you may not:    remove shipped defaults, classes, methods or fields, or change");
+    println!("                the layout/signature of an existing class");
     println!();
     println!("then: gore dialog check {}", out.display());
     Ok(())
@@ -1146,7 +1341,11 @@ fn open_edit(
     let authored = fs::read_to_string(&source_path)
         .with_context(|| format!("reading {}", source_path.display()))?;
     let known = dialog::known_names(&bytes).context("collecting the cache's names")?;
-    let report = dialog::verify(&taken.source, &authored, &known);
+    let report = dialog::verify(&taken, &authored, &known);
+    if report.is_carryable() {
+        validate_topic_registrations(&manifest, &report, &authored, &bytes)
+            .context("the dialog registration manifest is not bound to this checked source")?;
+    }
     Ok((manifest, report, source_path))
 }
 
@@ -1158,10 +1357,17 @@ fn check(dir: &PathBuf, json: bool, cache: Option<PathBuf>, game: Option<PathBuf
             "module": manifest.module,
             "participant": manifest.participant,
             "unchanged": report.unchanged,
-            "carryable": report.is_carryable(),
+            "safe": report.is_carryable(),
+            "requires_new_symbols": report.requires_new_symbols(),
             "changed": report.changed.iter().map(|body| {
                 serde_json::json!({ "class": body.class, "member": body.member })
             }).collect::<Vec<_>>(),
+            "changed_defaults": report.changed_defaults.iter().map(|change| {
+                serde_json::json!({ "class": change.class, "target": change.target })
+            }).collect::<Vec<_>>(),
+            "added_classes": report.added_classes,
+            "added_functions": report.added_functions,
+            "new_strings": report.new_strings,
             "violations": report.violations.iter().map(|violation| violation.explain())
                 .collect::<Vec<_>>(),
         });
@@ -1178,7 +1384,7 @@ fn check(dir: &PathBuf, json: bool, cache: Option<PathBuf>, game: Option<PathBuf
     println!();
 
     if !report.violations.is_empty() {
-        println!("this edit cannot be carried back:");
+        println!("this edit is not safe to compile:");
         for violation in &report.violations {
             println!("  - {}", violation.explain());
         }
@@ -1194,9 +1400,18 @@ fn check(dir: &PathBuf, json: bool, cache: Option<PathBuf>, game: Option<PathBuf
         return Ok(());
     }
 
-    println!("this edit can be carried back. Rewritten:");
+    println!("this edit is safe for the current compile/remap contract. Rewritten bodies:");
     for body in &report.changed {
         println!("  - {}::{}", body.class, body.member);
+    }
+    if !report.changed_defaults.is_empty() {
+        println!("rewritten defaults:");
+        for change in &report.changed_defaults {
+            println!("  - {}::default {}", change.class, change.target);
+        }
+    }
+    if report.requires_new_symbols() {
+        println!("new symbols: --allow-new-symbols is required");
     }
     println!();
     println!("checked offline against the shipped module. The compiler still has the last word");
@@ -1213,6 +1428,7 @@ fn stage(
     cache: Option<PathBuf>,
     game: Option<PathBuf>,
 ) -> Result<()> {
+    let compiler_game_arg = game.clone();
     let (manifest, report, source_path) = open_edit(dir, cache, game)?;
     if !report.is_carryable() {
         for violation in &report.violations {
@@ -1227,9 +1443,10 @@ fn stage(
     if report.unchanged {
         bail!("the file is unchanged, so there is nothing to build");
     }
+    let compiler_game = compiler_game_for(&manifest, compiler_game_arg)?;
 
     let mini = format!("{mod_name}.mini.Cache");
-    let spec = serde_json::json!({
+    let mut spec = serde_json::json!({
         "meta": { "name": mod_name, "version": "0.1.0", "author": "" },
         "scripts": [{
             "op": "edit",
@@ -1237,6 +1454,9 @@ fn stage(
             "mini_cache": mini,
         }],
     });
+    if !manifest.dialog_topics.is_empty() {
+        spec["dialog_topics"] = serde_json::to_value(&manifest.dialog_topics)?;
+    }
     let spec_path = dir.join("spec.json");
     fs::write(
         &spec_path,
@@ -1244,28 +1464,112 @@ fn stage(
     )
     .with_context(|| format!("writing {}", spec_path.display()))?;
 
+    let work_dir = dir.join(".gore-as-work");
+    fs::create_dir_all(&work_dir)
+        .with_context(|| format!("creating {}", work_dir.display()))?;
+    let mini_path = dir.join(&mini);
+
     println!("wrote {}", spec_path.display());
     println!();
-    println!("rewritten:");
+    println!("rewritten method bodies:");
     for body in &report.changed {
         println!("  - {}::{}", body.class, body.member);
+    }
+    for change in &report.changed_defaults {
+        println!("  - {}::default {}", change.class, change.target);
+    }
+    for class in &report.added_classes {
+        println!("  - new class {class}");
+    }
+    for function in &report.added_functions {
+        println!("  - new function {function}");
     }
     println!();
     println!("next:");
     println!(
-        "  gore as compile-module --op edit --module {} --rel-path {} \\\n\
-         \x20   --source {} --work-dir .gore-as-work -o {}",
-        manifest.module,
-        manifest.relative_path,
-        source_path.display(),
-        dir.join(&mini).display()
+        "  {}",
+        compile_module_command(
+            &manifest,
+            &source_path,
+            &work_dir,
+            &mini_path,
+            &compiler_game,
+            report.requires_new_symbols(),
+        )
     );
-    println!("  gore mod build --spec {} -o build", spec_path.display());
-    println!("  gore mod deploy --bundle build/{mod_name}");
+    println!(
+        "  gore mod build --spec {} -o {}",
+        powershell_quote(&spec_path),
+        powershell_quote(&dir.join("build")),
+    );
     println!();
-    println!("no `--allow-new-symbols`: an edited module is remapped strictly onto this exact");
-    println!("cache, which is what lets its captions and rules come back unchanged");
+    if report.requires_new_symbols() {
+        println!("`--allow-new-symbols` is required because this edit introduces names, strings,");
+        println!("functions or classes absent from the pristine cache.");
+    } else {
+        println!("strict remapping is sufficient because this edit introduces no new symbols.");
+    }
+    println!("Complete authored defaults are regenerated by the compiler; byte-for-byte default");
+    println!("carry is only the fallback for sources that author no defaults at all.");
+    println!();
+    println!("Building writes only below this edit directory. Deployment is a separate,");
+    println!("installation-writing step and is intentionally not run or suggested as automatic.");
     Ok(())
+}
+
+/// `compile-module` targets a resolved game installation, not an arbitrary cache file. Bind the
+/// printed command to an installation whose current script cache is exactly the checkout base.
+fn compiler_game_for(manifest: &EditManifest, game: Option<PathBuf>) -> Result<PathBuf> {
+    let root = gore_loc::config::game_root(game).context("resolving compiler game path")?;
+    let script_cache = gore_mod::resolve_game_paths(&root).script_cache;
+    let bytes = fs::read(&script_cache).with_context(|| {
+        format!(
+            "reading compiler base cache {}. `compile-module` cannot target an arbitrary --cache file",
+            script_cache.display()
+        )
+    })?;
+    if digest_of(&bytes) != manifest.cache_sha256 {
+        bail!(
+            "the game cache at {} is not the cache this edit was checked out from. `stage` cannot \
+             print a safe compile command for a different or arbitrary --cache file",
+            script_cache.display()
+        );
+    }
+    Ok(root)
+}
+
+fn powershell_quote(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "''"))
+}
+
+fn powershell_quote_text(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn compile_module_command(
+    manifest: &EditManifest,
+    source: &Path,
+    work_dir: &Path,
+    out: &Path,
+    game: &Path,
+    allow_new_symbols: bool,
+) -> String {
+    let allow_new = if allow_new_symbols {
+        " --allow-new-symbols"
+    } else {
+        ""
+    };
+    format!(
+        "gore as compile-module --backend standalone --op edit --module {} --rel-path {} \
+         --source {} --work-dir {}{} -o {} --game {}",
+        powershell_quote_text(&manifest.module),
+        powershell_quote_text(&manifest.relative_path),
+        powershell_quote(source),
+        powershell_quote(work_dir),
+        allow_new,
+        powershell_quote(out),
+        powershell_quote(game),
+    )
 }
 
 // ─── new-topic ───────────────────────────────────────────────────────────────
@@ -1275,6 +1579,8 @@ pub struct NewTopicRequest {
     pub caption: Option<String>,
     pub caption_key: Option<String>,
     pub class: Option<String>,
+    pub subdialog_of: Option<String>,
+    pub allow_hidden: bool,
     pub mod_name: String,
     pub out: PathBuf,
     pub cache: Option<PathBuf>,
@@ -1334,20 +1640,319 @@ fn declared_classes(bytes: &[u8]) -> Result<BTreeSet<String>> {
         .collect())
 }
 
+fn is_angelscript_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|character| character.is_ascii_alphanumeric() || character == '_')
+}
+
+fn class_without_object_prefix(name: &str) -> &str {
+    name.strip_prefix('U').unwrap_or(name)
+}
+
+fn resolve_topic_in<'a>(conversation: &'a Conversation, wanted: &str) -> Result<&'a Topic> {
+    let wanted = class_without_object_prefix(wanted).to_ascii_lowercase();
+    let matches = conversation
+        .topics
+        .iter()
+        .filter(|topic| class_without_object_prefix(&topic.class).eq_ignore_ascii_case(&wanted))
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [topic] => Ok(topic),
+        [] => bail!(
+            "no topic {wanted:?} belongs to {}. Use `gore dialog tree {} --ids`",
+            participant_label(conversation),
+            participant_label(conversation),
+        ),
+        _ => bail!("topic {wanted:?} is not unique in {}", conversation.module),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CodeToken {
+    text: String,
+    start: usize,
+    end: usize,
+}
+
+/// Lex only code punctuation and identifiers. Comments and quoted literals deliberately vanish,
+/// so a scaffold never patches a word that merely looks like `class` or `Subdialog` in prose.
+fn code_tokens(source: &str) -> Result<Vec<CodeToken>> {
+    let bytes = source.as_bytes();
+    let mut tokens = Vec::new();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index].is_ascii_whitespace() {
+            index += 1;
+            continue;
+        }
+        if bytes[index] == b'/' && bytes.get(index + 1) == Some(&b'/') {
+            index += 2;
+            while index < bytes.len() && !matches!(bytes[index], b'\r' | b'\n') {
+                index += 1;
+            }
+            continue;
+        }
+        if bytes[index] == b'/' && bytes.get(index + 1) == Some(&b'*') {
+            index += 2;
+            let mut closed = false;
+            while index < bytes.len() {
+                if bytes[index] == b'*' && bytes.get(index + 1) == Some(&b'/') {
+                    index += 2;
+                    closed = true;
+                    break;
+                }
+                index += 1;
+            }
+            if !closed {
+                bail!("authored source has an unterminated block comment");
+            }
+            continue;
+        }
+        if matches!(bytes[index], b'\'' | b'\"') {
+            let quote = bytes[index];
+            index += 1;
+            let mut closed = false;
+            while index < bytes.len() {
+                if bytes[index] == b'\\' {
+                    index = (index + 2).min(bytes.len());
+                    continue;
+                }
+                if bytes[index] == quote {
+                    index += 1;
+                    closed = true;
+                    break;
+                }
+                index += 1;
+            }
+            if !closed {
+                bail!("authored source has an unterminated quoted literal");
+            }
+            continue;
+        }
+        if bytes[index].is_ascii_alphabetic() || bytes[index] == b'_' {
+            let start = index;
+            index += 1;
+            while index < bytes.len()
+                && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+            {
+                index += 1;
+            }
+            tokens.push(CodeToken {
+                text: source[start..index].to_owned(),
+                start,
+                end: index,
+            });
+            continue;
+        }
+
+        let start = index;
+        let character = source[index..]
+            .chars()
+            .next()
+            .context("reading authored source")?;
+        index += character.len_utf8();
+        tokens.push(CodeToken {
+            text: character.to_string(),
+            start,
+            end: index,
+        });
+    }
+    Ok(tokens)
+}
+
+fn matching_close(tokens: &[CodeToken], open: usize, left: &str, right: &str) -> Result<usize> {
+    let mut depth = 0usize;
+    for (index, token) in tokens.iter().enumerate().skip(open) {
+        if token.text == left {
+            depth += 1;
+        } else if token.text == right {
+            depth = depth
+                .checked_sub(1)
+                .with_context(|| format!("unmatched {right} in authored source"))?;
+            if depth == 0 {
+                return Ok(index);
+            }
+        }
+    }
+    bail!("unclosed {left} in authored source")
+}
+
+fn namespace_name(tokens: &[CodeToken]) -> Result<String> {
+    if tokens.is_empty() {
+        bail!("namespace declaration has no name");
+    }
+    let mut parts = Vec::new();
+    let mut index = 0usize;
+    while index < tokens.len() {
+        let name = &tokens[index].text;
+        if !is_angelscript_identifier(name) {
+            bail!("namespace declaration contains an invalid name {name:?}");
+        }
+        parts.push(name.as_str());
+        index += 1;
+        if index == tokens.len() {
+            break;
+        }
+        if tokens.get(index).is_none_or(|token| token.text != ":")
+            || tokens.get(index + 1).is_none_or(|token| token.text != ":")
+        {
+            bail!("namespace declaration is not a `Name::Name` path");
+        }
+        index += 2;
+    }
+    Ok(parts.join("::"))
+}
+
+/// Put generated declarations in the namespace that owns `class`, immediately before the
+/// innermost namespace's closing brace. Moving the new topic to global scope would change both
+/// its compiler identity and whether it can resolve the module-private conversation base.
+fn append_to_class_namespace(source: &str, class: &str, addition: &str) -> Result<String> {
+    let tokens = code_tokens(source)?;
+    let mut declarations = Vec::new();
+    for index in 0..tokens.len().saturating_sub(1) {
+        if !matches!(tokens[index].text.as_str(), "class" | "struct")
+            || tokens[index + 1].text != class
+        {
+            continue;
+        }
+        let Some(open) = ((index + 2)..tokens.len())
+            .find(|candidate| matches!(tokens[*candidate].text.as_str(), "{" | ";"))
+        else {
+            bail!("class {class} has no body");
+        };
+        if tokens[open].text == "{" {
+            declarations.push(index);
+        }
+    }
+    let [class_at] = declarations.as_slice() else {
+        bail!(
+            "class {class} has {} source bodies; exactly one is required",
+            declarations.len()
+        );
+    };
+
+    let mut scopes = Vec::<(usize, usize, String)>::new();
+    for index in 0..tokens.len() {
+        if tokens[index].text != "namespace" {
+            continue;
+        }
+        let Some(open) = ((index + 1)..tokens.len())
+            .find(|candidate| matches!(tokens[*candidate].text.as_str(), "{" | ";"))
+        else {
+            bail!("namespace at byte {} has no body", tokens[index].start);
+        };
+        if tokens[open].text == ";" {
+            continue;
+        }
+        let close = matching_close(&tokens, open, "{", "}")?;
+        if open < *class_at && *class_at < close {
+            scopes.push((open, close, namespace_name(&tokens[index + 1..open])?));
+        }
+    }
+    scopes.sort_by_key(|(open, _, _)| *open);
+
+    let mut edited = source.to_owned();
+    let addition = addition.trim_end();
+    if let Some((_, close, _)) = scopes.last() {
+        let insert_at = tokens[*close].start;
+        let prefix = if source[..insert_at].ends_with('\n') {
+            "\n"
+        } else {
+            "\n\n"
+        };
+        edited.insert_str(insert_at, &format!("{prefix}{addition}\n"));
+    } else {
+        if !edited.ends_with('\n') {
+            edited.push('\n');
+        }
+        edited.push('\n');
+        edited.push_str(addition);
+        edited.push('\n');
+    }
+    Ok(edited)
+}
+
+/// Add one class argument to the one `Subdialog` call in one existing topic class.
+///
+/// This is intentionally narrower than a source rewriter: ambiguity is a refusal, and the final
+/// `dialog check` independently verifies that no shipped declaration/default target was lost.
+fn wire_subdialog(source: &str, parent: &str, child: &str) -> Result<String> {
+    let tokens = code_tokens(source)?;
+    let mut class_bodies = Vec::new();
+    for index in 0..tokens.len().saturating_sub(1) {
+        if tokens[index].text != "class" || tokens[index + 1].text != parent {
+            continue;
+        }
+        let Some(open) = ((index + 2)..tokens.len()).find(|candidate| {
+            matches!(tokens[*candidate].text.as_str(), "{" | ";")
+        }) else {
+            bail!("class {parent} has no body");
+        };
+        if tokens[open].text == ";" {
+            continue;
+        }
+        class_bodies.push((open, matching_close(&tokens, open, "{", "}")?));
+    }
+    let [(class_open, class_close)] = class_bodies.as_slice() else {
+        bail!(
+            "class {parent} has {} source bodies; exactly one is required",
+            class_bodies.len()
+        );
+    };
+
+    let calls = ((*class_open + 1)..*class_close)
+        .filter(|index| {
+            tokens[*index].text == "Subdialog"
+                && tokens.get(*index + 1).is_some_and(|token| token.text == "(")
+        })
+        .collect::<Vec<_>>();
+    let [call] = calls.as_slice() else {
+        bail!(
+            "{parent} contains {} source-level Subdialog calls; exactly one is required",
+            calls.len()
+        );
+    };
+    let open = *call + 1;
+    let close = matching_close(&tokens, open, "(", ")")?;
+    if close >= *class_close {
+        bail!("the Subdialog call in {parent} leaves its class body");
+    }
+    let placeholder = ((open + 1)..close.saturating_sub(6)).find(|start| {
+        [
+            "TSubclassOf",
+            "<",
+            "UConversationTopic",
+            ">",
+            "(",
+            "nullptr",
+            ")",
+        ]
+        .iter()
+        .enumerate()
+        .all(|(offset, expected)| tokens[*start + offset].text == *expected)
+    });
+    let Some(placeholder) = placeholder else {
+        bail!("the Subdialog call in {parent} has no empty topic slot");
+    };
+    let mut edited = source.to_owned();
+    edited.replace_range(
+        tokens[placeholder].start..tokens[placeholder + 6].end,
+        child,
+    );
+    Ok(edited)
+}
+
 fn new_topic(request: NewTopicRequest) -> Result<()> {
-    let (_, bytes) = read_cache(request.cache, request.game)?;
+    let (cache_path, bytes) = read_cache(request.cache, request.game)?;
     let graph = dialog::build(&bytes).context("reading dialog from the script cache")?;
     let conversation = resolve_one(&graph, &request.npc)?;
 
     let Some(root_class) = conversation.root_class.clone() else {
         bail!(
             "{} declares no dialog topics, so there is no base class to derive from",
-            participant_label(conversation)
-        );
-    };
-    let Some(sentinel) = sentinel_of(conversation) else {
-        bail!(
-            "{} has no root option to use as the registration sentinel",
             participant_label(conversation)
         );
     };
@@ -1366,14 +1971,15 @@ fn new_topic(request: NewTopicRequest) -> Result<()> {
     if !class.starts_with('U') {
         bail!("an AngelScript topic class name has to start with `U`, unlike {class:?}");
     }
+    if !is_angelscript_identifier(&class) {
+        bail!("{class:?} is not an AngelScript identifier");
+    }
     let declared = declared_classes(&bytes)?;
     if declared.contains(&class.to_lowercase()) {
         bail!("the cache already declares a class called {class:?}. Pass a different --class");
     }
 
-    let module = format!("{}.Dialog", request.mod_name);
-    let rel_path = format!("{}/Dialog.as", request.mod_name);
-    let helper = format!("{}Caption", class.trim_start_matches('U'));
+    let helper = format!("{}Caption", class_without_object_prefix(&class));
     let caption_line = match (&request.caption, &request.caption_key) {
         (Some(text), _) => format!(
             "    default Caption = {helper}(n{});",
@@ -1393,19 +1999,23 @@ fn new_topic(request: NewTopicRequest) -> Result<()> {
         String::new()
     };
 
-    let source = format!(
+    let subtopic_default = if request.subdialog_of.is_some() {
+        "    default bIsSubTopic = true;\n"
+    } else {
+        ""
+    };
+    let topic_source = format!(
         "// Generated by `gore dialog new-topic` for {participant}.\n\
          //\n\
-         // The class derives from the conversation's own topic base, so the engine treats it as\n\
-         // one of that NPC's options. The body below is the shape with runtime evidence behind\n\
-         // it: a caption, an always-visible option, and an act that ends the conversation.\n\
-         // Spoken lines, conditions and effects are yours to add — see\n\
-         // `gore dialog show <topic>` for how the game writes them.\n\
+         // This class stays in the conversation's own module and namespace. Keep it there: a\n\
+         // separate add-module cannot derive from the module-private topic base. Spoken lines, conditions\n\
+         // and effects are yours to add; `gore dialog show <topic>` displays shipped examples.\n\
          \n\
          {helper_block}class {class} : {root_class}\n\
          {{\n\
          {caption_line}\n\
          \x20   default PriorityRank = 2;\n\
+         {subtopic_default}\
          \n\
          \x20   UFUNCTION()\n\
          \x20   bool IsVisible_Implementation()\n\
@@ -1421,68 +2031,134 @@ fn new_topic(request: NewTopicRequest) -> Result<()> {
          }}\n"
     );
 
-    let spec = serde_json::json!({
-        "meta": {
-            "name": request.mod_name,
-            "version": "0.1.0",
-            "author": "",
-        },
-        "scripts": [{
-            "op": "add",
-            "module_name": module,
-            "mini_cache": format!("{module}.mini.Cache"),
-        }],
-        "dialog_topics": [{
-            "id": slug.to_lowercase(),
-            "participant_name": participant.to_lowercase(),
-            "topic_class": format!("/Script/Angelscript.{}", class.trim_start_matches('U')),
-            "sentinel_class": format!(
-                "/Script/Angelscript.{}",
-                sentinel.class.trim_start_matches('U')
-            ),
-        }],
-    });
-
-    let source_path = request.out.join(&request.mod_name).join("Dialog.as");
-    if let Some(parent) = source_path.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
-    }
-    fs::write(&source_path, source)
-        .with_context(|| format!("writing {}", source_path.display()))?;
-    let spec_path = request.out.join("spec.json");
-    fs::write(
-        &spec_path,
-        format!("{}\n", serde_json::to_string_pretty(&spec)?),
-    )
-    .with_context(|| format!("writing {}", spec_path.display()))?;
-
-    if let Some(text) = &request.caption {
-        if !text.is_ascii() {
-            println!(
-                "note: {text:?} is an untranslated literal with non-ASCII characters, which no                  GORE run has compiled yet. --caption-key with a real localization id is the                  route with evidence behind it."
+    let taken = dialog::checkout(&bytes, &conversation.module, native_api(&cache_path))
+        .with_context(|| format!("taking {} out of the cache", conversation.module))?;
+    let mut source = if let Some(parent_name) = request.subdialog_of.as_deref() {
+        let parent = resolve_topic_in(conversation, parent_name)?;
+        let subdialog_count = parent
+            .act
+            .iter()
+            .filter(|step| matches!(step.kind, StepKind::Subdialog { .. }))
+            .count();
+        if subdialog_count != 1 {
+            bail!(
+                "{} has {subdialog_count} compiled Subdialog calls; --subdialog-of requires exactly one",
+                parent.class
             );
         }
+        wire_subdialog(&taken.source, &parent.class, &class)
+            .with_context(|| format!("wiring the new topic into {}", parent.class))?
+    } else {
+        taken.source.clone()
+    };
+    source = append_to_class_namespace(&source, &root_class, &topic_source)
+        .with_context(|| format!("placing {class} beside its conversation base {root_class}"))?;
+
+    let dialog_topics = if request.subdialog_of.is_none() {
+        let Some(sentinel) = sentinel_of(conversation) else {
+            bail!(
+                "{} has no root option to use as the registration sentinel",
+                participant_label(conversation)
+            );
+        };
+        vec![DialogTopicRegistration {
+            id: slug.to_lowercase(),
+            participant_name: participant.to_lowercase(),
+            topic_class: reflected_topic_path(&class),
+            sentinel_class: reflected_topic_path(&sentinel.class),
+            allow_hidden: request.allow_hidden,
+        }]
+    } else {
+        Vec::new()
+    };
+
+    let known = dialog::known_names(&bytes).context("collecting the cache's names")?;
+    let report = dialog::verify(&taken, &source, &known);
+    if !report.is_carryable() {
+        let reasons = report
+            .violations
+            .iter()
+            .map(|violation| violation.explain())
+            .collect::<Vec<_>>()
+            .join("; ");
+        bail!("generated topic did not pass the dialog edit contract: {reasons}");
     }
-    println!("wrote {}", source_path.display());
-    println!("wrote {}", spec_path.display());
+    if !report.added_classes.iter().any(|added| added == &class)
+        || !report.requires_new_symbols()
+    {
+        bail!("generated topic was not recognized as a same-module new-symbol edit");
+    }
+
+    if request.out.exists()
+        && fs::read_dir(&request.out)
+            .with_context(|| format!("reading {}", request.out.display()))?
+            .next()
+            .is_some()
+    {
+        bail!(
+            "{} is not empty; choose an empty --out directory so no stale spec or source survives",
+            request.out.display()
+        );
+    }
+    fs::create_dir_all(request.out.join("pristine"))
+        .with_context(|| format!("creating {}", request.out.display()))?;
+    let leaf = taken
+        .relative_path
+        .rsplit('/')
+        .next()
+        .unwrap_or("module.as")
+        .to_owned();
+    let source_path = request.out.join(&leaf);
+    let pristine_path = request.out.join("pristine").join(&leaf);
+    fs::write(&source_path, &source)
+        .with_context(|| format!("writing {}", source_path.display()))?;
+    fs::write(&pristine_path, &taken.source)
+        .with_context(|| format!("writing {}", pristine_path.display()))?;
+    let manifest = EditManifest {
+        module: taken.module,
+        relative_path: taken.relative_path,
+        source_file: leaf.clone(),
+        pristine_file: format!("pristine/{leaf}"),
+        participant: participant_label(conversation),
+        cache_sha256: digest_of(&bytes),
+        dialog_topics,
+    };
+    let manifest_path = request.out.join(MANIFEST_NAME);
+    fs::write(
+        &manifest_path,
+        format!("{}\n", serde_json::to_string_pretty(&manifest)?),
+    )
+    .with_context(|| format!("writing {}", manifest_path.display()))?;
+
+    println!("{} — {}", manifest.participant, manifest.module);
+    println!("wrote     {}", source_path.display());
+    println!("as-was    {}", pristine_path.display());
+    println!("manifest  {}", manifest_path.display());
     println!();
     println!("class     {class} : {root_class}");
-    println!("sentinel  {}", sentinel.class);
+    if let Some(parent) = request.subdialog_of.as_deref() {
+        println!("subdialog {parent} (same module; no root registration)");
+    } else {
+        println!("root registration recorded for the staged bundle spec");
+    }
+    if request.caption_key.is_some() {
+        println!("localization key recorded in source only; add its localized row separately");
+    } else {
+        println!("caption is an untranslated literal; localized rows remain a separate payload");
+    }
+    println!();
     println!("next:");
     println!(
-        "  gore as compile-module --op add --module {module} --rel-path {rel_path} \\\n\
-         \x20   --source {} --work-dir .gore-as-work --allow-new-symbols \\\n\
-         \x20   -o {}",
-        source_path.display(),
-        request.out.join(format!("{module}.mini.Cache")).display()
+        "  gore dialog check {}",
+        powershell_quote(&request.out)
     );
-    println!("  gore mod build --spec {} -o build", spec_path.display());
-    println!("  gore mod deploy --bundle build/{}", request.mod_name);
-    println!();
     println!(
-        "the compile step drives the game's own compiler, so it needs the game installed and \
-         takes a couple of minutes"
+        "  gore dialog stage {} --mod-name {}",
+        powershell_quote(&request.out),
+        powershell_quote_text(&request.mod_name),
     );
+    println!("stage uses one same-module edit with allow-new-symbols.");
+    println!("It does not compile, package, deploy, launch the game, or prove runtime behavior.");
     Ok(())
 }
 
@@ -1636,6 +2312,17 @@ mod tests {
     }
 
     #[test]
+    fn only_one_unreal_object_prefix_is_removed() {
+        assert_eq!(class_without_object_prefix("UChoice"), "Choice");
+        assert_eq!(class_without_object_prefix("UUFoo"), "UFoo");
+        assert_eq!(class_without_object_prefix("Choice"), "Choice");
+        assert_eq!(
+            registered_topic_class(&reflected_topic_path("UUFoo")).unwrap(),
+            "UUFoo"
+        );
+    }
+
+    #[test]
     fn the_exit_option_is_the_registration_sentinel() {
         let conversation = Conversation {
             module: "M".to_owned(),
@@ -1695,5 +2382,174 @@ mod tests {
             },
         ];
         assert_eq!(render_args(&args), "Topic_Brannok_136200, n\"Hero\"");
+    }
+
+    #[test]
+    fn a_subdialog_child_is_wired_only_into_the_named_class_code() {
+        let source = r#"
+// class UParent { Subdialog(UBogus::StaticClass()); }
+class UParent : UBase
+{
+    void Act_Implementation()
+    {
+        FString Example = "Subdialog(also not code)";
+        this.Subdialog(UFirst, TSubclassOf<UConversationTopic>(nullptr));
+    }
+}
+
+class UOther : UBase
+{
+    void Act_Implementation()
+    {
+        this.Subdialog(UUntouched, TSubclassOf<UConversationTopic>(nullptr));
+    }
+}
+"#;
+        let edited = wire_subdialog(source, "UParent", "UNewChild").unwrap();
+        assert!(edited.contains("this.Subdialog(UFirst, UNewChild);"));
+        assert!(edited.contains(
+            "this.Subdialog(UUntouched, TSubclassOf<UConversationTopic>(nullptr));"
+        ));
+        assert_eq!(edited.matches("UNewChild").count(), 1);
+        assert_eq!(
+            subdialog_reference_owners(&edited, "UNewChild").unwrap(),
+            ["UParent"]
+        );
+    }
+
+    #[test]
+    fn ambiguous_subdialog_wiring_fails_closed() {
+        let source = r#"
+class UParent : UBase
+{
+    void Act_Implementation()
+    {
+        this.Subdialog(UA, TSubclassOf<UConversationTopic>(nullptr));
+        this.Subdialog(UB, TSubclassOf<UConversationTopic>(nullptr));
+    }
+}
+"#;
+        let error = wire_subdialog(source, "UParent", "UNewChild").unwrap_err();
+        assert!(error.to_string().contains("exactly one"), "{error}");
+    }
+
+    #[test]
+    fn a_full_subdialog_call_fails_closed() {
+        let source = r#"
+class UParent : UBase
+{
+    void Act_Implementation()
+    {
+        this.Subdialog(UA, UB);
+    }
+}
+"#;
+        let error = wire_subdialog(source, "UParent", "UNewChild").unwrap_err();
+        assert!(error.to_string().contains("no empty topic slot"), "{error}");
+    }
+
+    #[test]
+    fn a_new_topic_is_inserted_inside_the_conversation_namespace() {
+        let source = r#"namespace G1R::Conversation
+{
+class UTopic_Hero__Npc : UConversationTopic
+{
+}
+}
+"#;
+        let edited = append_to_class_namespace(
+            source,
+            "UTopic_Hero__Npc",
+            "class UChoiceNew : UTopic_Hero__Npc\n{\n}",
+        )
+        .unwrap();
+
+        let topic = edited.find("class UChoiceNew").unwrap();
+        let namespace_close = edited.rfind('}').unwrap();
+        assert!(topic < namespace_close);
+        assert!(edited[topic..namespace_close].contains("UTopic_Hero__Npc"));
+        assert!(!edited[namespace_close + 1..].contains("UChoiceNew"));
+    }
+
+    #[test]
+    fn namespace_insertion_requires_one_exact_base_class() {
+        let duplicate =
+            "namespace A { class UBase {} }\nnamespace B { class UBase {} }\n";
+        let error = append_to_class_namespace(duplicate, "UBase", "class UNew : UBase {}")
+            .unwrap_err();
+        assert!(error.to_string().contains("exactly one"), "{error}");
+    }
+
+    fn command_manifest() -> EditManifest {
+        EditManifest {
+            module: "Story.G1R.Conversation.Test".to_owned(),
+            relative_path: "Story/G1R/Conversation/Test.as".to_owned(),
+            source_file: "Test.as".to_owned(),
+            pristine_file: "pristine/Test.as".to_owned(),
+            participant: "TestNpc".to_owned(),
+            cache_sha256: "00".repeat(32),
+            dialog_topics: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn stage_uses_the_strict_standalone_edit_contract() {
+        let command = compile_module_command(
+            &command_manifest(),
+            Path::new("work/source.as"),
+            Path::new("work/compiler"),
+            Path::new("work/output.mini.Cache"),
+            Path::new("game root"),
+            true,
+        );
+        assert_eq!(
+            command,
+            "gore as compile-module --backend standalone --op edit \
+             --module 'Story.G1R.Conversation.Test' \
+             --rel-path 'Story/G1R/Conversation/Test.as' \
+             --source 'work/source.as' --work-dir 'work/compiler' \
+             --allow-new-symbols -o 'work/output.mini.Cache' --game 'game root'"
+        );
+    }
+
+    #[test]
+    fn stage_omits_new_symbol_mode_for_defaults_and_bodies_only() {
+        let command = compile_module_command(
+            &command_manifest(),
+            Path::new("source.as"),
+            Path::new("compiler"),
+            Path::new("output.Cache"),
+            Path::new("game"),
+            false,
+        );
+        assert!(command.contains("--backend standalone --op edit"));
+        assert!(!command.contains("--allow-new-symbols"));
+    }
+
+    #[test]
+    fn stage_binds_the_compile_target_to_the_checkout_cache_hash() {
+        let game = tempfile::tempdir().unwrap();
+        let cache = gore_mod::resolve_game_paths(game.path()).script_cache;
+        fs::create_dir_all(cache.parent().unwrap()).unwrap();
+        fs::write(&cache, b"checkout cache").unwrap();
+
+        let mut manifest = command_manifest();
+        manifest.cache_sha256 = digest_of(b"checkout cache");
+        assert_eq!(
+            compiler_game_for(&manifest, Some(game.path().to_owned())).unwrap(),
+            game.path()
+        );
+
+        fs::write(&cache, b"updated cache").unwrap();
+        let error = compiler_game_for(&manifest, Some(game.path().to_owned())).unwrap_err();
+        assert!(error.to_string().contains("not the cache"), "{error}");
+    }
+
+    #[test]
+    fn powershell_arguments_escape_single_quotes() {
+        assert_eq!(
+            powershell_quote(Path::new("work/author's source.as")),
+            "'work/author''s source.as'"
+        );
     }
 }

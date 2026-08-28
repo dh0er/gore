@@ -18,7 +18,7 @@ gore --version
 | `mcp` | `serve` · `tools` | Serve the whole CLI over the Model Context Protocol (stdio JSON-RPC) for AI assistants. | [mcp](mcp.md) |
 | `guide` | `search` · `html` | Search this guide and the reference from a shell, or render the guide into one self-contained HTML file. | [below](#guide) |
 | `find` | — | Search the bundled catalogs and the effect register: class names, ids, categories, display names, and what an id does in game. | [find](find.md) |
-| `dialog` | `list` · `tree` · `show` · `text` · `new-topic` · `checkout` · `check` · `stage` · `export` | Read the game's dialog trees out of the installed script cache: options, conditions, lines, effects, sub-menus. | [dialog-trees](dialog-trees.md) |
+| `dialog` | `list` · `tree` · `show` · `text` · `new-topic` · `checkout` · `check` · `stage` · `export` | Inspect dialog trees and prepare checked structural/default edits from the installed script cache. | [dialog-trees](dialog-trees.md) |
 | `gen` | — | Compile `overrides.toml` → a UE4SS Lua override mod. | [items](items.md) |
 | `mod` | `build` · `inspect` · `deploy` · `undeploy` | Build, validate, inspect, deploy, or undeploy a unified bundle. | [bundles](bundles.md) |
 | `mgr` | `import` · `list` · `remove` · `enable` · `disable` · `order` · `analyze` · `preflight` · `recover` · `apply` · `status` · `reset` | Multi-mod manager: library, load order, readiness/recovery, conflicts, composed deployment, status and Reset. | [mod-manager](mod-manager.md) |
@@ -158,10 +158,10 @@ and failing would bury the line explaining what was not searched.
 | `tree` | `<NPC>` · `--lang` · `--depth <N>` · `--ids` | One NPC's complete dialog tree: options in menu order, their rules and `IsVisible` checks, the lines each side speaks, the effects, and nested sub-menus. |
 | `show` | `<TOPIC>` · `--lang` | One topic class in full, with class names and localization keys. |
 | `text` | `<NPC>` · `--lang` · `--out <FILE>` | That conversation's lines as a `gore loc import` edits document, each under the column the game actually reads. |
-| `new-topic` | `<NPC>` · `--caption`/`--caption-key` · `--class` · `--mod-name` · `--out <DIR>` | Scaffold a new root-level option: the AngelScript source, derived from that conversation's topic base, and a build spec with the participant and a sentinel filled in. |
-| `checkout` | `<NPC>` · `--out <DIR>` | The conversation module's AngelScript, exactly as the compiler emits it, plus an untouched copy and a manifest bound to this game build. |
-| `check` | `<DIR>` | Whether an edited module can be carried back onto the cache, and which method bodies it rewrites. Offline; no compile. |
-| `stage` | `<DIR>` · `--mod-name` | The build spec for a checked edit, and the `compile-module --op edit` command that produces its mini-cache. |
+| `new-topic` | `<NPC>` · `--caption`/`--caption-key` · `--class` · `--subdialog-of <TOPIC>` · `--allow-hidden` · `--mod-name` · `--out <DIR>` | Write a complete same-module edit workspace with the new class inserted into the conversation namespace. Without `--subdialog-of`, record explicit root registration (`--allow-hidden` opts a state-dependent root into clean-hidden runtime reporting); with it, fill one empty slot in the named parent's single `Subdialog` call. This is not an isolated `--op add` recipe. |
+| `checkout` | `<NPC>` · `--out <DIR>` | The conversation module's compiler-ready AngelScript, including reconstructed class defaults, plus an untouched copy and a manifest bound to this game build. |
+| `check` | `<DIR>` | Check method/default edits, complete default supersession, fixed shipped ABI and intentional new symbols. Partial or loss-prone defaults fail closed. Offline; no compile. |
+| `stage` | `<DIR>` · `--mod-name` · `--cache` · `--game` | Write the build spec and strict standalone `compile-module --op edit` command. Adds `--allow-new-symbols` when required, includes the resolved `--game`, and refuses a cache hash that does not match that installation. |
 | `export` | `--out <DIR>` | One JSON file per conversation. |
 
 Every subcommand also takes `--cache <PATH>` to read an exact script cache and
@@ -174,17 +174,25 @@ comes from the shared catalog, so it needs `gore loc extract` once; without it
 lines print as their localization keys and the output says so.
 
 `new-topic`, `checkout` and `stage` write files and read the install; they
-compile and deploy nothing. `check` is read-only, and answers offline the same
-questions the recompile path would answer after a two-minute compile: an edited
-module may rewrite method bodies, but may not change its classes, its methods,
-their signatures, its member variables or its defaults, and may only name types
-and text ids this game build already carries. What the compile-and-deploy path that follows it proves is in
-[Dialog authoring](dialog-authoring.md).
+compile and deploy nothing. `check` is read-only. Existing topics may change
+method bodies and the emitted `Caption`, `PriorityRank`, `Rules` and flag
+defaults. Every shipped default-bearing class and target must remain covered;
+the byte-exact carry is only the fallback for source with no authored defaults.
+Existing shipped class/member/callable ABI remains fixed.
+
+A checked edit may append a new topic class at the end of the same existing
+conversation module and wire it from an existing `Subdialog` body. New classes,
+free functions and strings require `--allow-new-symbols`, which `stage` selects.
+A new root class additionally requires explicit `dialog_topics` registration;
+automatic discovery remains unproven. Separate add/edit mini-caches cannot
+depend on each other, so an isolated cross-module `--op add` is not the dialog
+recipe. Full detail and the compile/package/deploy/runtime proof boundaries are
+in [Dialog authoring](dialog-authoring.md).
 
 **Read-only apart from the files it is asked to write.** Nothing is deployed or
 launched, and the tree describes
 what the cache declares rather than what a given save would show. Full detail in
-[Reading dialog trees](dialog-trees.md).
+[Reading and editing dialog trees](dialog-trees.md).
 
 ## `gen`
 

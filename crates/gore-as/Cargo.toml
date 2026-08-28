@@ -15,7 +15,6 @@ crate-type = ["rlib"]
 [dependencies]
 gore-asset = { path = "../gore-asset" }
 gore-generation = { path = "../gore-generation" }
-serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 anyhow = "1"
 sha2 = "0.10"

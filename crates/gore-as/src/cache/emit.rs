@@ -151,8 +151,9 @@ pub(crate) fn emitted_body_count(m: &Module, refs: &RefResolver) -> usize {
 ///
 /// This is the shape every existing consumer expects: the compile baseline, the sealed NPC
 /// archetype evidence, the qualification digests, and the source Mod Studio hands to its edit
-/// flow all either hash this text or feed it back to the compiler. Writing defaults is opted
-/// INTO through [`emit_module_with`], so no caller acquires them by accident.
+/// flow all either hash this text or feed it back to the compiler. Callers that author data-class
+/// values opt into the complete reconstructed defaults through [`emit_module_with`]; the
+/// defaults-free shape remains available for qualified baselines and carry-fallback inputs.
 pub fn emit_module(m: &Module, refs: &RefResolver) -> String {
     emit_module_with(m, refs, false)
 }
@@ -160,11 +161,11 @@ pub fn emit_module(m: &Module, refs: &RefResolver) -> String {
 /// Emit one module.
 ///
 /// `class_defaults` writes the class-scope `default` statements recovered from the generated
-/// `__InitDefaults` — everything an item, NPC or config class is made of. It is OFF by default
-/// everywhere, because a module that authors defaults makes the compiler regenerate that
-/// method, and the remap behind `compile-module --op edit` does not yet follow the references
-/// the regenerated body introduces; source that is going to be hashed or recompiled must keep
-/// the historical shape. `gore as emit` / `emit-all` turn it on for the human reading it.
+/// `__InitDefaults` — everything an item, NPC or config class is made of. A complete authored set
+/// is valid input to `compile-module --op edit` and regenerates that method; the edit preflight
+/// fails closed if any default-bearing class is only partially represented. The false default
+/// preserves the historical baseline shape, while authoring paths such as dialog checkout and
+/// ordinary `gore as emit` / `emit-all` opt in explicitly.
 pub fn emit_module_with(m: &Module, refs: &RefResolver, class_defaults: bool) -> String {
     let mut s = String::new();
     let _ = writeln!(s, "// gore-as decompiled module: {} ({})", m.name, m.file);
@@ -717,10 +718,10 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver, defaults: Option<&[
     // without it dropped the const half of every one of them.
     let mut seen_sigs: HashSet<String> = HashSet::new();
     for m in &c.methods {
-        // `__InitDefaults` (and other `__`-prefixed generator methods) set the CDO defaults
-        // via raw `__StaticType_*` symbols and untyped literals we can't reconstruct offline;
-        // they are auto-generated boilerplate, not hand-written script — skip them so the
-        // class compiles. (Runtime UPROPERTY defaults are lost; real script logic is intact.)
+        // Generator method bodies are compiler-owned boilerplate and are not emitted as authored
+        // methods. When class-default emission is enabled, recovered class-scope `default`
+        // statements represent `__InitDefaults` instead; complete authored defaults regenerate
+        // that method. Other omitted `__*` methods remain fail-closed in the edit preflight.
         if m.name.starts_with("__") {
             continue;
         }

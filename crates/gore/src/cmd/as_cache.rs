@@ -169,9 +169,9 @@ pub enum AsCmd {
     EmitAll {
         file: PathBuf,
         outdir: PathBuf,
-        /// Omit class `default` statements. Needed for a module you intend to edit and splice
-        /// back with `compile-module --op edit`, whose remap cannot follow a regenerated
-        /// `__InitDefaults`; the defaults are preserved byte-exact for you in that case.
+        /// Omit every class `default` statement. Use only for an edit that intentionally authors
+        /// no defaults and can use the strict-remap, byte-exact `__InitDefaults` carry fallback;
+        /// ordinary `compile-module --op edit` inputs should retain the complete emitted defaults.
         #[arg(long)]
         no_defaults: bool,
     },
@@ -182,9 +182,9 @@ pub enum AsCmd {
         needle: String,
         #[arg(long, default_value_t = 5)]
         max: usize,
-        /// Omit class `default` statements. Needed for a module you intend to edit and splice
-        /// back with `compile-module --op edit`, whose remap cannot follow a regenerated
-        /// `__InitDefaults`; the defaults are preserved byte-exact for you in that case.
+        /// Omit every class `default` statement. Use only for an edit that intentionally authors
+        /// no defaults and can use the strict-remap, byte-exact `__InitDefaults` carry fallback;
+        /// ordinary `compile-module --op edit` inputs should retain the complete emitted defaults.
         #[arg(long)]
         no_defaults: bool,
     },

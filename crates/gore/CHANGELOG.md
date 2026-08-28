@@ -163,13 +163,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   from the shared localization catalog; `--lang` picks the language.
 - `dialog text` — one conversation's lines as a `gore loc import` edits
   document, each under the localization column the game actually reads.
-- `dialog new-topic` — scaffold a new root-level dialog option: the AngelScript
-  source derived from that conversation's own topic base, and a build spec with
-  the participant and registration sentinel filled in from the cache.
+- `dialog new-topic` — scaffold a new root option with the conversation-private
+  base, participant, unused class identity and registration sentinel resolved
+  from the cache. The class is integrated into a checkout of that conversation
+  module; the scaffold is not an isolated cross-module `--op add` recipe.
 - `dialog checkout` / `check` / `stage` — edit a shipped conversation's own
-  AngelScript: take the module out as the compiler emits it, rewrite what its
-  options do, and have the edit checked offline against everything the recompile
-  path requires before spending a compile on it.
+  AngelScript, including reconstructed defaults for `Caption`, `PriorityRank`,
+  `Rules` and flags. Checks reject partial default coverage, removed shipped
+  targets, unsupported generated-method loss and unsafe shipped-ABI drift before
+  compilation; byte-exact default carry remains only for source without
+  authored defaults.
+- Checked edits can retain intentional new-symbol rows and append a new topic
+  class inside the owning namespace of the same existing conversation module.
+  Qualified class identity and namespace residence are checked alongside complete-default,
+  same-module new-class/remap and cross-mini loadout oracles cover that class
+  together with existing `Subdialog` rewiring; strict standalone compilation
+  additionally requires a qualified profile matching the target Binds API.
+  Separate add/edit minis cannot depend on one another; full-graph cross-module
+  compilation emits a complete cache and is not a normal dialog-bundle recipe.
+- New root topics still use explicit `dialog_topics` registration because
+  automatic topic-set discovery is unproven. Check/stage bind each row to the
+  exact new class, base participant and vanilla sentinel, and reject stale or
+  orphaned root/sub-topic intent. Offline source checking, strict
+  compilation, packaging, deployment and runtime evidence are reported as
+  separate stages; in-game selection and the new sub-topic path remain to be
+  proven.
 - `gore_dialog` MCP tool for the same nine subcommands.
 
 ## [0.1.0] - 2026-08-18

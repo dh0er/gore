@@ -10,7 +10,7 @@ Everything you need to mod Gothic 1 Remake with GORE. Start with
 | [Getting started](getting-started.md) | Install the CLI, point it at the game, pick the right tool, first mod |
 | [CLI reference](cli-reference.md) | Every command, subcommand, and flag |
 | [Finding things](find.md) | `gore find`: class names, asset paths, and what an id does in game |
-| [Reading dialog trees](dialog-trees.md) | `gore dialog`: what an NPC says, what unlocks it, which menu it sits in |
+| [Reading and editing dialog trees](dialog-trees.md) | `gore dialog`: inspect conversations; edit behavior and reconstructed defaults; stage safe topic changes |
 | [MCP server](mcp.md) | Drive the whole CLI from an AI assistant over the Model Context Protocol |
 
 ## Modding domains
@@ -29,7 +29,7 @@ Everything you need to mod Gothic 1 Remake with GORE. Start with
 
 | Page | What it covers |
 |---|---|
-| [Dialog authoring](dialog-authoring.md) | Write a compiled dialog topic and get it into the game |
+| [Dialog authoring](dialog-authoring.md) | Same-module topic authoring, localization, strict compile, packaging, deployment and runtime proof boundaries |
 | [Offline default patching](angelscript-defaults.md) | `default-sites` / `patch-default` / `tag-map-sites` / `patch-tag-map` |
 
 ## Shipping and combining

@@ -4187,11 +4187,11 @@ fn validate_full_graph_regen_manifest_v1(
     Ok(())
 }
 
-/// Return the compiler-generated class methods that the source emitter deliberately omits.
-/// Replacing an existing module without carrying these records forward would silently erase CDO
-/// defaults (NPC/quest/dialog configuration among them), so `edit` must fail closed until the
-/// records can be preserved byte-for-byte. `PreparedEmit::prepare_compile_overlay` has already
-/// proved that `module_name` identifies exactly one base module before this helper is called.
+/// Return the compiler-generated class methods whose bodies the source emitter omits. Complete
+/// class-scope `default` statements safely regenerate `__InitDefaults`; an edit that authors no
+/// defaults instead needs byte-exact carry. Any partial supersession or other omitted `__*` method
+/// must fail closed. `PreparedEmit::prepare_compile_overlay` has already proved that `module_name`
+/// identifies exactly one base module before this helper is called.
 fn omitted_generated_methods(
     mods: &[model::Module],
     module_name: &str,
@@ -4278,12 +4278,6 @@ fn prepare_generated_defaults_edit(
             omitted.len()
         ))
     };
-    if allow_new_symbols {
-        return Err(refusal(
-            "generated-default carry requires strict base-keyspace remap; disable \
-             --allow-new-symbols or use `add` for a new module",
-        ));
-    }
     if source_contains_default_token(overlay).map_err(|reason| refusal(&reason))? {
         // The overlay authors class defaults itself, so the compiler REGENERATES
         // `__InitDefaults` from that source and the carried copy is superseded — carrying it
@@ -4306,13 +4300,21 @@ fn prepare_generated_defaults_edit(
             return Err(refusal(&format!(
                 "the authored overlay declares `default` statements, which makes the compiler \
                  regenerate the class defaults and the carried copies stale, but it does not \
-                 supersede {} of them ({}); author defaults for every class, or emit the module \
-                 with `--no-defaults` and edit that",
+                 supersede {} of them ({}); author defaults for every default-bearing class, or \
+                 use `--no-defaults` only for an edit that needs no new symbols and deliberately \
+                 relies on byte-exact carry",
                 unsuperseded.len(),
                 unsuperseded.join(", ")
             )));
         }
         return Ok(None);
+    }
+    if allow_new_symbols {
+        return Err(refusal(
+            "generated-default carry requires strict base-keyspace remap; disable \
+             --allow-new-symbols, or author complete defaults for every default-bearing class \
+             before using new-symbol remap",
+        ));
     }
     let plan =
         crate::cache::generated_defaults::GeneratedDefaultsPlan::prepare(base, mods, module_name)
@@ -11617,6 +11619,100 @@ mod tests {
             &deleted,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn edit_preflight_allows_new_symbols_after_complete_authored_default_supersession() {
+        let modules = vec![Module {
+            name: "QuestModule".into(),
+            file: "QuestModule.as".into(),
+            functions: Vec::new(),
+            classes: vec![Class {
+                name: "UQuestFixture".into(),
+                namespace: String::new(),
+                super_class: None,
+                fields: Vec::new(),
+                methods: vec![test_function("__InitDefaults")],
+                ctors: Vec::new(),
+                flags: 0,
+            }],
+            enums: Vec::new(),
+            globals: Vec::new(),
+        }];
+
+        let plan = prepare_generated_defaults_edit(
+            "edit",
+            &modules,
+            "QuestModule",
+            &[],
+            "class UQuestFixture { default PriorityRank = 42; }",
+            true,
+        )
+        .expect("complete authored defaults supersede carry before new-symbol remap");
+        assert!(plan.is_none());
+    }
+
+    #[test]
+    fn edit_preflight_rejects_partial_defaults_and_other_generated_methods_with_new_symbols() {
+        let class = |name: &str, methods: Vec<Func>| Class {
+            name: name.into(),
+            namespace: String::new(),
+            super_class: None,
+            fields: Vec::new(),
+            methods,
+            ctors: Vec::new(),
+            flags: 0,
+        };
+        let module = |classes| {
+            vec![Module {
+                name: "QuestModule".into(),
+                file: "QuestModule.as".into(),
+                functions: Vec::new(),
+                classes,
+                enums: Vec::new(),
+                globals: Vec::new(),
+            }]
+        };
+
+        let partial = module(vec![
+            class("UQuestFixture", vec![test_function("__InitDefaults")]),
+            class("UQuestOther", vec![test_function("__InitDefaults")]),
+        ]);
+        let error = prepare_generated_defaults_edit(
+            "edit",
+            &partial,
+            "QuestModule",
+            &[],
+            "class UQuestFixture { default PriorityRank = 42; }",
+            true,
+        )
+        .expect_err("new-symbol remap must not make partial authored defaults safe")
+        .to_string();
+        assert!(error.contains("does not supersede 1 of them"), "{error}");
+        assert!(error.contains("UQuestOther::__InitDefaults"), "{error}");
+
+        let other_generated = module(vec![class(
+            "UQuestFixture",
+            vec![
+                test_function("__InitDefaults"),
+                test_function("__GeneratedHelper"),
+            ],
+        )]);
+        let error = prepare_generated_defaults_edit(
+            "edit",
+            &other_generated,
+            "QuestModule",
+            &[],
+            "class UQuestFixture { default PriorityRank = 42; }",
+            true,
+        )
+        .expect_err("default statements cannot supersede another generated method")
+        .to_string();
+        assert!(
+            error.contains("UQuestFixture::__GeneratedHelper"),
+            "{error}"
+        );
+        assert!(error.contains("does not supersede 1 of them"), "{error}");
     }
 
     #[test]

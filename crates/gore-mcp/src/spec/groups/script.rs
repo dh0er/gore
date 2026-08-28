@@ -162,15 +162,15 @@ const DECOMPILE_ARGS: &[ArgSpec] = &[
 ];
 
 /// Class `default` statements carry the values a data class is made of, so they are written by
-/// default. A module destined for `compile-module --op edit` needs them left out: authoring them
-/// makes the compiler regenerate `__InitDefaults`, which that path's remap cannot follow.
+/// default. A complete authored set is the normal `compile-module --op edit` input and regenerates
+/// `__InitDefaults`; omitting all defaults selects the legacy byte-exact carry fallback instead.
 const NO_DEFAULTS: ArgSpec = ArgSpec::new(
     "no_defaults",
     Switch("no-defaults"),
     Bool,
-    "Omit class `default` statements. Needed for a module you intend to edit and splice back \
-     with `compile-module --op edit`, whose remap cannot follow a regenerated `__InitDefaults`; \
-     the defaults are preserved byte-exact for you in that case.",
+    "Omit every class `default` statement. Use only when an edit intentionally leaves all \
+     defaults unauthored and needs the strict-remap, byte-exact `__InitDefaults` carry fallback; \
+     ordinary edits should retain the complete emitted defaults.",
     false,
 );
 

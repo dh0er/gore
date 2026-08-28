@@ -11,9 +11,8 @@ The controlled Viper fixture and version 1 of the public
 `BuildSpec.dialog_topics` generator both validated this chain:
 
 ```text
-new UChoice subclass
-  -> gore as compile-module --allow-new-symbols
-  -> additive mini-cache
+new UChoice subclass in the qualified fixture
+  -> prepared mini-cache with new-symbol rows
   -> gore-mod script-cache deployment
   -> resident /Script/Angelscript class
   -> ConversationTopicSet::AddTopic
@@ -21,6 +20,11 @@ new UChoice subclass
   -> ConversationWidget::OnShowTopicSelection
   -> visible root-menu option
 ```
+
+That chain is runtime evidence for the registration adapter, not an isolated
+cross-module `--op add` recipe. The current deployable source workflow appends a
+new class to the existing conversation module and emits an edit mini-cache; the
+source/compile boundary is described below.
 
 For one live conversation attempt the fail-closed observer recorded:
 
@@ -212,7 +216,8 @@ writes a save/quest/knowledge field.
 
 ## Current limits
 
-- Automatic discovery for a new module remains unproven.
+- Automatic discovery of a newly authored root class into an already
+  constructed topic set remains unproven.
 - The controlled visual proof currently covers Gothic 1 Remake 1.0.3 with
   UE4SS 3.0.1. That version string does not identify a build: RE-UE4SS's stable
   tag `v3.0.1` is from February 2024, and its rolling `experimental-latest`
@@ -240,35 +245,70 @@ writes a save/quest/knowledge field.
   as class-scope `default` statements; recovery is all-or-nothing per module, a
   module whose defaults cannot all be recovered says so in its header and keeps
   them byte-exact on recompile, and `emit --no-defaults` still produces the
-  previous shape. `compile-module --op edit` carries an existing `__InitDefaults`
-  record only through the strict, base-keyspace remap path and only when the
-  complete class identity/layout, ordinary method signatures and UFUNCTION
-  metadata, constructors, behavior declarations, module globals/imports, and
-  source identity remain exact. The vanilla generated record, emitter-omitted
-  factory/spawn/accessor wrappers, every `Class.BehaviorFunctions` record, and
-  the full local `Class.MethodTable` are then restored byte-for-byte and
-  reparsed as a postcondition. The base header, complete module region, all
-  seven tail tables, and EOF must parse exactly; the mixed result's serialized
-  function IDs must stay unique both locally and against every untouched base
-  module. A strict self-remap first proves that every copied vanilla reference
-  resolves uniquely. `--allow-new-symbols`, an authored CDO `default`
-  statement (ordinary switch `default:` labels are allowed), another generated
-  `__*` shape, malformed/ambiguous identities, or
-  any regenerated metadata/layout drift fails closed without writing a mini;
-  base/source failures are rejected before rebuilding the source tree or
-  launching the game compiler. Newly authored modules remain supported through
-  `--op add`, including explicit `default` statements.
-- Existing vanilla defaults now also have a separate offline, copy-on-write
+  previous shape.
+- Dialog checkout now emits every reconstructed `__InitDefaults` record as
+  class-scope `default` statements. Those statements are compiler input, so
+  `Caption`, `PriorityRank`, `Rules` and topic flags can change along with
+  method bodies. The compiler regenerates `__InitDefaults`; it does not restore
+  the old record over authored values.
+- Authored defaults are an all-or-nothing supersession. Every base class with
+  `__InitDefaults` must still author defaults, and every shipped default target
+  must remain present at least as often as in the checkout. A different value,
+  call argument or additional target is allowed; a missing class or target,
+  malformed/ambiguous source, or another emitter-omitted generated `__*` method
+  fails closed before a mini-cache is written. Existing class ancestry,
+  property layout and callable identities also remain fixed because no runtime
+  ABI migration for shipped classes is proven.
+- Byte-exact generated-method carry remains an all-or-nothing fallback only
+  when the overlay authors no defaults. It uses strict base-keyspace remapping,
+  cannot be combined with `--allow-new-symbols`, and requires exact class
+  identity/layout, ordinary and UFUNCTION signatures, constructors, behavior
+  declarations, module globals/imports and source identity. The generated
+  record, emitter-omitted factory/spawn/accessor wrappers, every
+  `Class.BehaviorFunctions` record and the local `Class.MethodTable` are then
+  restored byte-for-byte. The complete mixed module and all seven tail tables
+  are reparsed, function ids must remain unique, and a strict self-remap first
+  proves every copied vanilla reference resolves uniquely. Removing part of an
+  authored checkout cannot opt into carry; the partial overlay is rejected.
+- Once every generated default is superseded by authored source,
+  `compile-module --op edit --allow-new-symbols` may retain the minimal new
+  class, function, name and string rows. The bounded dialog edit shape appends a
+  new topic class inside the owning namespace of the same existing conversation
+  module and changes an existing `Subdialog` body to reference it. Qualified
+  class identity and namespace residence are part of the fail-closed check.
+  Complete-default,
+  same-module new-class/remap and cross-mini loadout oracles cover that shape;
+  a real strict standalone run additionally needs a qualified profile matching
+  the target Binds API. It does not authorize reparenting or changing the
+  members/signatures of shipped classes.
+- Separate add and edit mini-caches cannot depend on one another: a new module
+  cannot see the conversation-private root, and the edit mini cannot resolve a
+  class supplied only by the add mini. Full-graph V2 can compile that
+  cross-module add-plus-edit graph together, but produces a complete cache. The
+  ordinary bundle composer consumes module mini-caches, so that result is a
+  compiler proof, not a dialog packaging or deployment recipe.
+- A newly compiled root topic is not automatically registered. Discovery into
+  an already constructed `ConversationTopicSet` remains unproven; a root needs
+  an explicit `dialog_topics` participant/topic/sentinel adapter. The
+  same-module sub-topic path uses authored `Subdialog` wiring, but its in-game
+  appearance and selection have not yet been proven. The offline gate binds a
+  root row to the exact new class, base participant and selected vanilla
+  sentinel, and requires every new direct topic to be exactly one registered
+  root or one sub-topic referenced by a shipped class.
+- Source checking, strict standalone compilation, bundle packaging, deployment
+  and runtime observation are separate claims. The current live evidence above
+  covers the registered root fixture reaching render, not the new same-module
+  authoring path, topic selection, recorded voice, or selection-side save
+  effects. In the 2026-08-28 development oracle, Steam build `24878692` was
+  newer than the checked-in qualified standalone profile for build `24539464`;
+  target validation correctly refused the changed Binds API before compilation.
+- Existing vanilla defaults also retain the separate offline, copy-on-write
   [`default-sites` / `patch-default` scalar path](../guide/angelscript-defaults.md).
-  It re-resolves exact module/class/declaring-owner/field selectors, proves the
-  target-to-owner ancestry, requires the complete current operand as a raw
-  compare-and-swap guard, and changes no save or live runtime state. This does
-  not make `__InitDefaults` source-editable: only a unique branch-free direct
-  primitive/enum assignment in a one-terminal-`RET` initializer is admitted.
-  Calls, computed expressions, structs, object handles, and containers remain
-  unsupported by that scalar workflow. The separately sealed `tag-map-sites` /
-  `patch-tag-map` workflow can patch only an already-present native
-  `GameplayTag`-to-`float32` entry; it cannot add keys or maps, resize bytecode,
-  or make generated defaults source-editable.
+  It re-resolves exact selectors and admits only a unique branch-free direct
+  primitive/enum assignment guarded by the complete current operand. Calls,
+  computed expressions, structs, handles and containers remain outside that
+  narrow workflow. `tag-map-sites` / `patch-tag-map` likewise changes only an
+  already-present native `GameplayTag`-to-`float32` entry. Neither scalar path
+  bypasses the complete-default contract for a source edit.
 - Decompiled `Say` calls can omit the prepared `FText` argument. Use only a
   signature verified against `Binds.Cache` or a known compiling source template.

@@ -3,16 +3,16 @@
 //! # Why this needs a checker at all
 //!
 //! Editing a vanilla module means recompiling it and splicing the result back onto the shipping
-//! cache. Two mechanisms decide what survives that trip, and both fail closed:
+//! cache. The current emitter reconstructs `__InitDefaults` as class-scope `default` statements,
+//! so an ordinary checkout authors every class default and the compiler regenerates those
+//! methods. The old byte-exact carry remains only as an all-or-nothing fallback for a module that
+//! authors no defaults at all.
 //!
-//! * The source emitter deliberately omits the compiler-generated `__InitDefaults`, and
-//!   [`super::super::generated_defaults`] carries those records back byte-for-byte — but only
-//!   when every surrounding identity is unchanged. Same classes, same order, same properties,
-//!   same constructors, same methods with the same signatures. A class added, a field added, or
-//!   a `default` statement written by hand, and the carry refuses.
-//! * The remap that rebinds the recompiled module to the shipping cache's keyspace is strict for
-//!   an edit: `--allow-new-symbols` is rejected outright when generated defaults are carried. So
-//!   the edited body may only name types and string literals the base cache already has.
+//! That distinction is security-relevant. Once one class authors a default, every base class with
+//! an `__InitDefaults` record must still be covered and every default target the checkout carried
+//! must remain present; otherwise recompilation could silently replace an omitted value with an
+//! engine default. A fully authored module may opt into the remapper's minimal new-symbol rows.
+//! The fallback carry may not.
 //!
 //! Every one of those refusals arrives after a two-minute compile that drives the game's own
 //! compiler. This module answers the same questions offline, in milliseconds, from the same base
@@ -20,11 +20,10 @@
 //!
 //! # What that leaves an author
 //!
-//! Method **bodies**. `compare_function` checks a method's name, signature and UFUNCTION
-//! metadata and never its bytecode, so what a topic *does* — its lines, its effects, their order
-//! and their branches — and when it is visible are both open, as is which existing topics a
-//! `Subdialog` offers. What a topic *is* — caption, priority, rules, flags — lives in the
-//! generated defaults and is carried back unchanged, so it cannot be edited this way.
+//! Method bodies remain editable, including an existing `Subdialog` call. Reconstructed defaults
+//! make caption, priority, rules and flags editable as source too. New classes, free functions and
+//! strings are reported as requiring `--allow-new-symbols`; existing class layout and callable
+//! identities stay fixed because no runtime ABI migration for live vanilla classes is proven.
 
 use std::collections::BTreeSet;
 
@@ -43,6 +42,10 @@ pub struct Checkout {
     pub relative_path: String,
     /// The exact source the compiler would emit for this module.
     pub source: String,
+    /// Base classes whose compiler-generated initializer is fully authored in `source`.
+    pub default_classes: BTreeSet<String>,
+    /// Other emitter-omitted `__*` methods which defaults cannot supersede.
+    pub unsupported_generated_methods: Vec<String>,
 }
 
 /// Take one module out of a cache as editable source.
@@ -86,7 +89,8 @@ pub fn checkout_many(
     }
 
     let prepared = PreparedEmit::new(&modules, &mut refs, native_api)
-        .map_err(|error| DialogError::Parse(error.to_string()))?;
+        .map_err(|error| DialogError::Parse(error.to_string()))?
+        .with_class_defaults(true);
     let mut taken = Vec::with_capacity(indices.len());
     for (index, module_name) in indices.into_iter().zip(module_names) {
         let relative_path = prepared
@@ -98,10 +102,45 @@ pub fn checkout_many(
         let source = prepared
             .emit_module(index)
             .map_err(|error| DialogError::Parse(error.to_string()))?;
+        let module = &modules[index];
+        let expected_defaults = module
+            .classes
+            .iter()
+            .filter(|class| class.methods.iter().any(|method| method.name == "__InitDefaults"))
+            .map(|class| class.name.clone())
+            .collect::<BTreeSet<_>>();
+        let default_classes = super::super::default_source::classes_with_default_statements(&source)
+            .map_err(DialogError::Parse)?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let missing = expected_defaults
+            .difference(&default_classes)
+            .cloned()
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            return Err(DialogError::Parse(format!(
+                "module {module_name:?} did not emit complete class defaults for {}: {}",
+                missing.len(),
+                missing.join(", ")
+            )));
+        }
+        let unsupported_generated_methods = module
+            .classes
+            .iter()
+            .flat_map(|class| {
+                class
+                    .methods
+                    .iter()
+                    .filter(|method| method.name.starts_with("__") && method.name != "__InitDefaults")
+                    .map(|method| format!("{}::{}", class.name, method.name))
+            })
+            .collect();
         taken.push(Checkout {
             module: (*module_name).to_owned(),
             relative_path,
             source,
+            default_classes,
+            unsupported_generated_methods,
         });
     }
     Ok(taken)
@@ -146,8 +185,14 @@ impl KnownNames {
 /// One class as the source declares it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassOutline {
+    /// The complete lexical namespace, without a leading `::`.
+    pub namespace: String,
     pub name: String,
+    /// `class` and `struct` are distinct declarations and may not be exchanged in-place.
+    pub kind: String,
     pub super_class: Option<String>,
+    /// Class-scope defaults, kept separate from fields and functions.
+    pub defaults: Vec<DefaultOutline>,
     /// Member declarations, in order, as written.
     pub fields: Vec<String>,
     /// Member function declarations, in order, as written.
@@ -162,86 +207,455 @@ pub struct SourceOutline {
     pub functions: Vec<String>,
 }
 
-fn strip_comment(line: &str) -> &str {
-    match line.find("//") {
-        Some(position) => &line[..position],
-        None => line,
-    }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DefaultOutline {
+    pub target: String,
+    pub statement: String,
+    pub line: usize,
 }
 
-/// Read the declarations out of emitted or hand-edited module source.
-///
-/// This is deliberately a scanner rather than a parser: both sides of every comparison start as
-/// the emitter's own output, whose shape is known, and a scanner cannot mistake a body edit for a
-/// declaration change the way a partial parser could.
-pub fn read_outline(source: &str) -> SourceOutline {
-    let mut outline = SourceOutline::default();
-    let mut depth = 0i32;
-    let mut current: Option<ClassOutline> = None;
+#[derive(Debug, Clone)]
+struct Token {
+    text: String,
+    line: usize,
+    word: bool,
+}
 
-    for raw in source.lines() {
-        let line = strip_comment(raw).trim();
-        let opens = line.matches('{').count() as i32;
-        let closes = line.matches('}').count() as i32;
-
-        if depth == 0 && !line.is_empty() {
-            if let Some(rest) = line.strip_prefix("class ") {
-                let (name, super_class) = match rest.split_once(':') {
-                    Some((name, parent)) => (
-                        name.trim().trim_end_matches('{').trim().to_owned(),
-                        Some(parent.trim().trim_end_matches('{').trim().to_owned()),
-                    ),
-                    None => (rest.trim().trim_end_matches('{').trim().to_owned(), None),
-                };
-                current = Some(ClassOutline {
-                    name,
-                    super_class,
-                    fields: Vec::new(),
-                    members: Vec::new(),
+fn tokenize(source: &str) -> Result<Vec<Token>, String> {
+    let bytes = source.as_bytes();
+    let mut out = Vec::new();
+    let mut index = 0usize;
+    let mut line = 1usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\r' => index += 1,
+            b'\n' => {
+                line += 1;
+                index += 1;
+            }
+            byte if byte.is_ascii_whitespace() => index += 1,
+            b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                index += 2;
+                while index < bytes.len() && !matches!(bytes[index], b'\r' | b'\n') {
+                    index += 1;
+                }
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                index += 2;
+                let mut closed = false;
+                while index < bytes.len() {
+                    if bytes[index] == b'\n' {
+                        line += 1;
+                    }
+                    if bytes[index] == b'*' && bytes.get(index + 1) == Some(&b'/') {
+                        index += 2;
+                        closed = true;
+                        break;
+                    }
+                    index += 1;
+                }
+                if !closed {
+                    return Err("source has an unterminated block comment".into());
+                }
+            }
+            quote @ (b'\'' | b'\"') => {
+                let start = index;
+                let token_line = line;
+                index += 1;
+                let mut closed = false;
+                while index < bytes.len() {
+                    if bytes[index] == b'\\' {
+                        index = (index + 2).min(bytes.len());
+                    } else if bytes[index] == quote {
+                        index += 1;
+                        closed = true;
+                        break;
+                    } else {
+                        if bytes[index] == b'\n' {
+                            line += 1;
+                        }
+                        index += 1;
+                    }
+                }
+                if !closed {
+                    return Err("source has an unterminated quoted literal".into());
+                }
+                out.push(Token {
+                    text: source[start..index].to_owned(),
+                    line: token_line,
+                    word: false,
                 });
-            } else if line.contains('(') && !line.starts_with('#') && closes == 0 {
-                // A free function's declaration line, e.g. `void Helper(int Value)`.
-                outline.functions.push(normalize_declaration(line));
             }
-        } else if depth == 1 && !line.is_empty() {
-            if let Some(class) = current.as_mut() {
-                if line == "UFUNCTION()"
-                    || line.starts_with("UPROPERTY")
-                    || line == "{"
-                    || line == "}"
+            byte if byte.is_ascii_alphanumeric() || byte == b'_' => {
+                let start = index;
+                let token_line = line;
+                index += 1;
+                while index < bytes.len()
+                    && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
                 {
-                    // Attribute lines carry no identity of their own.
-                } else if line.contains('(') {
-                    class.members.push(normalize_declaration(line));
-                } else if line.ends_with(';') {
-                    class.fields.push(normalize_declaration(line));
+                    index += 1;
                 }
+                out.push(Token {
+                    text: source[start..index].to_owned(),
+                    line: token_line,
+                    word: true,
+                });
             }
-        }
-
-        let was_inside = depth > 0;
-        depth += opens - closes;
-        if depth <= 0 {
-            depth = 0;
-            // Only a class we were actually inside is finished here. The declaration line itself
-            // leaves depth at zero, because the emitter puts the opening brace on the next line.
-            if was_inside {
-                if let Some(class) = current.take() {
-                    outline.classes.push(class);
-                }
+            _ => {
+                let token_line = line;
+                let start = index;
+                index += 1;
+                out.push(Token {
+                    text: source[start..index].to_owned(),
+                    line: token_line,
+                    word: false,
+                });
             }
         }
     }
-    if let Some(class) = current.take() {
-        outline.classes.push(class);
-    }
-    outline
+    Ok(out)
 }
 
-/// Collapse whitespace so re-indentation is not mistaken for a signature change.
-fn normalize_declaration(line: &str) -> String {
-    let line = line.trim_end_matches('{').trim();
-    line.split_whitespace().collect::<Vec<_>>().join(" ")
+fn brace_pairs(tokens: &[Token]) -> Result<Vec<Option<usize>>, String> {
+    let mut pairs = vec![None; tokens.len()];
+    let mut stack = Vec::new();
+    for (index, token) in tokens.iter().enumerate() {
+        match token.text.as_str() {
+            "{" => stack.push(index),
+            "}" => {
+                let Some(open) = stack.pop() else {
+                    return Err(format!("line {}: unmatched closing brace", token.line));
+                };
+                pairs[open] = Some(index);
+                pairs[index] = Some(open);
+            }
+            _ => {}
+        }
+    }
+    if let Some(open) = stack.pop() {
+        return Err(format!("line {}: unclosed block", tokens[open].line));
+    }
+    Ok(pairs)
+}
+
+fn normalized(tokens: &[Token]) -> String {
+    tokens
+        .iter()
+        .map(|token| token.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn compact(tokens: &[Token]) -> String {
+    tokens.iter().map(|token| token.text.as_str()).collect()
+}
+
+fn qualified_name(namespace: &str, name: &str) -> String {
+    if namespace.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{namespace}::{name}")
+    }
+}
+
+// Body-change reporting is informational only; the safety checks above use the tokenized outline.
+fn strip_comment(line: &str) -> &str {
+    line.split_once("//").map_or(line, |(code, _)| code)
+}
+
+fn default_target(tokens: &[Token]) -> Result<String, String> {
+    let mut target = String::new();
+    for token in tokens {
+        match token.text.as_str() {
+            "=" | "(" => break,
+            "." | "::" => target.push_str(&token.text),
+            _ if token.word => target.push_str(&token.text),
+            _ => {}
+        }
+    }
+    if target.is_empty() {
+        return Err("class default has no assignment or call target".into());
+    }
+    if target.starts_with("Rules.") {
+        Ok("Rules".to_owned())
+    } else {
+        Ok(target)
+    }
+}
+
+fn parse_class(
+    tokens: &[Token],
+    pairs: &[Option<usize>],
+    namespace: &str,
+    declaration: usize,
+    open: usize,
+    close: usize,
+) -> Result<ClassOutline, String> {
+    let name_token = tokens
+        .get(declaration + 1)
+        .filter(|token| token.word)
+        .ok_or_else(|| format!("line {}: class has no name", tokens[declaration].line))?;
+    let colon = tokens[declaration + 2..open]
+        .iter()
+        .position(|token| token.text == ":")
+        .map(|offset| declaration + 2 + offset);
+    let super_class = colon
+        .map(|colon| compact(&tokens[colon + 1..open]))
+        .filter(|name| !name.is_empty());
+    let mut class = ClassOutline {
+        namespace: namespace.to_owned(),
+        name: name_token.text.clone(),
+        kind: tokens[declaration].text.clone(),
+        super_class,
+        defaults: Vec::new(),
+        fields: Vec::new(),
+        members: Vec::new(),
+    };
+    let mut index = open + 1;
+    let mut item_start = index;
+    while index < close {
+        if tokens[index].text == "default" {
+            let start = index;
+            let mut end = index + 1;
+            while end < close && tokens[end].text != ";" {
+                if tokens[end].text == "{" {
+                    let nested = pairs[end].ok_or_else(|| {
+                        format!("line {}: unclosed default expression", tokens[end].line)
+                    })?;
+                    end = nested + 1;
+                } else {
+                    end += 1;
+                }
+            }
+            if end >= close {
+                return Err(format!(
+                    "line {}: class default has no terminating semicolon",
+                    tokens[start].line
+                ));
+            }
+            class.defaults.push(DefaultOutline {
+                target: default_target(&tokens[start + 1..end])?,
+                statement: normalized(&tokens[start..=end]),
+                line: tokens[start].line,
+            });
+            index = end + 1;
+            item_start = index;
+            continue;
+        }
+        match tokens[index].text.as_str() {
+            "{" => {
+                let end = pairs[index]
+                    .ok_or_else(|| format!("line {}: unclosed member body", tokens[index].line))?;
+                let declaration = normalized(&tokens[item_start..index]);
+                if !declaration.is_empty() {
+                    class.members.push(declaration);
+                }
+                index = end + 1;
+                item_start = index;
+            }
+            ";" => {
+                let declaration = normalized(&tokens[item_start..=index]);
+                if !declaration.is_empty() {
+                    if tokens[item_start..index]
+                        .iter()
+                        .any(|token| token.text == "(")
+                    {
+                        class.members.push(declaration);
+                    } else {
+                        class.fields.push(declaration);
+                    }
+                }
+                index += 1;
+                item_start = index;
+            }
+            _ => index += 1,
+        }
+    }
+    Ok(class)
+}
+
+#[derive(Debug, Clone)]
+struct ClassSpan {
+    namespace: String,
+    declaration: usize,
+    open: usize,
+    close: usize,
+}
+
+#[derive(Debug, Default)]
+struct ModuleItems {
+    classes: Vec<ClassSpan>,
+    functions: Vec<String>,
+}
+
+fn namespace_path(tokens: &[Token]) -> Result<String, String> {
+    let mut segments = Vec::new();
+    let mut at = 0usize;
+    while at < tokens.len() {
+        let Some(segment) = tokens.get(at).filter(|token| token.word) else {
+            return Err("namespace name must contain only identifiers separated by `::`".into());
+        };
+        segments.push(segment.text.clone());
+        at += 1;
+        if at == tokens.len() {
+            break;
+        }
+        if tokens.get(at).map(|token| token.text.as_str()) != Some(":")
+            || tokens.get(at + 1).map(|token| token.text.as_str()) != Some(":")
+        {
+            return Err("namespace name must contain only identifiers separated by `::`".into());
+        }
+        at += 2;
+    }
+    if segments.is_empty() {
+        Err("namespace declaration has no name".into())
+    } else {
+        Ok(segments.join("::"))
+    }
+}
+
+fn unsupported_scope_declaration(tokens: &[Token]) -> String {
+    let declaration = normalized(tokens);
+    let line = tokens.first().map_or(1, |token| token.line);
+    format!(
+        "line {line}: unsupported module-scope declaration `{declaration}`; dialog edits only \
+         inventory namespaces, classes/structs and free functions"
+    )
+}
+
+fn scan_scope(
+    tokens: &[Token],
+    pairs: &[Option<usize>],
+    mut at: usize,
+    end: usize,
+    namespace: &str,
+    items: &mut ModuleItems,
+) -> Result<(), String> {
+    while at < end {
+        if tokens[at].text == ";" {
+            at += 1;
+            continue;
+        }
+
+        if tokens[at].text == "namespace" {
+            let mut open = at + 1;
+            while open < end && !matches!(tokens[open].text.as_str(), "{" | ";") {
+                open += 1;
+            }
+            if open >= end || tokens[open].text != "{" {
+                let declaration_end = open.min(end.saturating_sub(1));
+                return Err(unsupported_scope_declaration(&tokens[at..=declaration_end]));
+            }
+            let local = namespace_path(&tokens[at + 1..open])
+                .map_err(|reason| format!("line {}: {reason}", tokens[at].line))?;
+            let nested = qualified_name(namespace, &local);
+            let close = pairs[open]
+                .ok_or_else(|| format!("line {}: namespace body is not closed", tokens[at].line))?;
+            if close > end {
+                return Err(format!(
+                    "line {}: namespace crosses its containing scope",
+                    tokens[at].line
+                ));
+            }
+            scan_scope(tokens, pairs, open + 1, close, &nested, items)?;
+            at = close + 1;
+            continue;
+        }
+
+        let start = at;
+        while at < end && !matches!(tokens[at].text.as_str(), "{" | ";") {
+            at += 1;
+        }
+        if at >= end {
+            return Err(unsupported_scope_declaration(&tokens[start..end]));
+        }
+        if tokens[at].text == ";" {
+            return Err(unsupported_scope_declaration(&tokens[start..=at]));
+        }
+
+        let open = at;
+        let close = pairs[open].ok_or_else(|| {
+            format!(
+                "line {}: module-scope block is not closed",
+                tokens[start].line
+            )
+        })?;
+        if close > end {
+            return Err(format!(
+                "line {}: declaration crosses its containing scope",
+                tokens[start].line
+            ));
+        }
+        let header = &tokens[start..open];
+        let first = header
+            .first()
+            .filter(|token| token.word)
+            .map(|token| token.text.as_str());
+        if matches!(first, Some("class" | "struct")) {
+            items.classes.push(ClassSpan {
+                namespace: namespace.to_owned(),
+                declaration: start,
+                open,
+                close,
+            });
+        } else if header.iter().any(|token| token.text == "(")
+            && !header.iter().any(|token| token.text == "=")
+            && !header
+                .iter()
+                .any(|token| matches!(token.text.as_str(), "class" | "struct"))
+            && !matches!(
+                first,
+                Some(
+                    "delegate"
+                        | "enum"
+                        | "event"
+                        | "funcdef"
+                        | "if"
+                        | "import"
+                        | "interface"
+                        | "mixin"
+                        | "switch"
+                )
+            )
+        {
+            let declaration = normalized(header);
+            items
+                .functions
+                .push(qualified_name(namespace, &declaration));
+        } else {
+            return Err(unsupported_scope_declaration(&tokens[start..=close]));
+        }
+        at = close + 1;
+    }
+    Ok(())
+}
+
+fn module_items(tokens: &[Token], pairs: &[Option<usize>]) -> Result<ModuleItems, String> {
+    let mut items = ModuleItems::default();
+    scan_scope(tokens, pairs, 0, tokens.len(), "", &mut items)?;
+    Ok(items)
+}
+
+/// Read the declarations and class-scope defaults out of emitted or hand-edited module source.
+/// Comments and literals are lexed before braces are interpreted; malformed source fails closed.
+pub fn read_outline(source: &str) -> Result<SourceOutline, String> {
+    let tokens = tokenize(source)?;
+    let pairs = brace_pairs(&tokens)?;
+    let items = module_items(&tokens, &pairs)?;
+
+    let mut outline = SourceOutline::default();
+    for span in &items.classes {
+        outline.classes.push(parse_class(
+            &tokens,
+            &pairs,
+            &span.namespace,
+            span.declaration,
+            span.open,
+            span.close,
+        )?);
+    }
+    outline.functions = items.functions;
+    Ok(outline)
 }
 
 // ─── The contract ────────────────────────────────────────────────────────────
@@ -249,20 +663,44 @@ fn normalize_declaration(line: &str) -> String {
 /// One reason a compile of this edit would be refused, or would not survive the trip back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Violation {
-    /// A `default` statement makes the compiler generate `__InitDefaults`, and the carry refuses
-    /// to overwrite an authored one with the base's.
-    AuthoredDefault {
-        line: usize,
+    SourceInvalid {
+        side: &'static str,
+        reason: String,
     },
-    ClassAdded {
+    MissingClassDefaults {
+        class: String,
+    },
+    DefaultTargetRemoved {
+        class: String,
+        target: String,
+        expected: usize,
+        found: usize,
+    },
+    UnsupportedGeneratedMethod {
         name: String,
     },
     ClassRemoved {
         name: String,
     },
-    ClassReordered {
+    ClassNamespaceChanged {
+        name: String,
         expected: String,
         found: String,
+    },
+    ClassKindChanged {
+        name: String,
+        expected: String,
+        found: String,
+    },
+    DuplicateClassIdentity {
+        side: &'static str,
+        identity: String,
+        found: usize,
+    },
+    AmbiguousClassName {
+        side: &'static str,
+        name: String,
+        identities: Vec<String>,
     },
     ClassReparented {
         name: String,
@@ -284,7 +722,11 @@ pub enum Violation {
         expected: String,
         found: String,
     },
-    FunctionsChanged {
+    FunctionRemoved {
+        declaration: String,
+    },
+    DuplicateFunctionIdentity {
+        declaration: String,
         expected: usize,
         found: usize,
     },
@@ -292,30 +734,64 @@ pub enum Violation {
     UnknownType {
         name: String,
     },
-    /// A string literal the base cache does not carry, for the same reason.
-    UnknownString {
-        value: String,
-    },
 }
 
 impl Violation {
     /// One sentence a person can act on.
     pub fn explain(&self) -> String {
         match self {
-            Violation::AuthoredDefault { line } => format!(
-                "line {line}: a `default` statement. Captions, priority, rules and flags are \
-                 carried back from the shipped module unchanged, so they cannot be edited here"
+            Violation::SourceInvalid { side, reason } => {
+                format!("the {side} source could not be inventoried safely: {reason}")
+            }
+            Violation::MissingClassDefaults { class } => format!(
+                "class {class} no longer authors any defaults. Its shipped `__InitDefaults` \
+                 would be lost instead of regenerated"
             ),
-            Violation::ClassAdded { name } => format!(
-                "class {name} is new. An edited module has to keep exactly the classes it shipped \
-                 with; a new topic needs its own module"
+            Violation::DefaultTargetRemoved {
+                class,
+                target,
+                expected,
+                found,
+            } => format!(
+                "class {class} now carries {found} `default {target}` statement(s) instead of \
+                 {expected}. Values and arguments may change and defaults may be added, but a \
+                 shipped target may not disappear silently"
+            ),
+            Violation::UnsupportedGeneratedMethod { name } => format!(
+                "{name} is an emitter-omitted generated method which class-scope defaults do not \
+                 supersede; this module cannot use the authored-default edit path"
             ),
             Violation::ClassRemoved { name } => {
                 format!("class {name} is missing. An edited module has to keep every class")
             }
-            Violation::ClassReordered { expected, found } => format!(
-                "class order changed: {expected} was declared here, {found} is now. The order is \
-                 part of the module's identity"
+            Violation::ClassNamespaceChanged {
+                name,
+                expected,
+                found,
+            } => format!(
+                "class {name} moved from namespace `{expected}` to `{found}`. Existing class identities must keep their complete namespace"
+            ),
+            Violation::ClassKindChanged {
+                name,
+                expected,
+                found,
+            } => format!(
+                "{name} is declared as `{found}` instead of `{expected}`. An existing class and struct are not interchangeable"
+            ),
+            Violation::DuplicateClassIdentity {
+                side,
+                identity,
+                found,
+            } => format!(
+                "the {side} source declares {identity} {found} times. A qualified class/struct identity must be unique"
+            ),
+            Violation::AmbiguousClassName {
+                side,
+                name,
+                identities,
+            } => format!(
+                "the {side} source uses the bare class name {name} for multiple identities: {}. The dialog pipeline requires class names to be unambiguous within a module",
+                identities.join(", ")
             ),
             Violation::ClassReparented {
                 name,
@@ -350,16 +826,19 @@ impl Violation {
                 "class {class}: `{found}` does not match the shipped declaration `{expected}`. A \
                  body may change; a signature may not"
             ),
-            Violation::FunctionsChanged { expected, found } => {
-                format!("the module declares {found} free function(s) instead of {expected}")
+            Violation::FunctionRemoved { declaration } => {
+                format!("the shipped free-function declaration `{declaration}` is missing")
             }
-            Violation::UnknownType { name } => format!(
-                "{name} is not a type this cache carries, so an edit cannot bind to it. Only names \
-                 the shipped game already has are reachable from an edited module"
+            Violation::DuplicateFunctionIdentity {
+                declaration,
+                expected,
+                found,
+            } => format!(
+                "the authored source declares free function `{declaration}` {found} times; at most {expected} occurrence(s) are allowed by the pristine module"
             ),
-            Violation::UnknownString { value } => format!(
-                "the literal {value:?} is not in this cache's string table. An edited module can \
-                 only use text ids the game already ships; a brand-new one needs its own module"
+            Violation::UnknownType { name } => format!(
+                "{name} is neither a type from the base cache nor a class declared by this \
+                 overlay, so the compiler cannot resolve it"
             ),
         }
     }
@@ -372,11 +851,21 @@ pub struct ChangedBody {
     pub member: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangedDefault {
+    pub class: String,
+    pub target: String,
+}
+
 /// The verdict on one edited module.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditReport {
     pub violations: Vec<Violation>,
     pub changed: Vec<ChangedBody>,
+    pub changed_defaults: Vec<ChangedDefault>,
+    pub added_classes: Vec<String>,
+    pub added_functions: Vec<String>,
+    pub new_strings: Vec<String>,
     /// True when the authored source is byte-identical to the shipped one.
     pub unchanged: bool,
 }
@@ -385,77 +874,235 @@ impl EditReport {
     pub fn is_carryable(&self) -> bool {
         self.violations.is_empty()
     }
+
+    pub fn requires_new_symbols(&self) -> bool {
+        !self.added_classes.is_empty()
+            || !self.added_functions.is_empty()
+            || !self.new_strings.is_empty()
+    }
+}
+
+fn class_identity(class: &ClassOutline) -> String {
+    qualified_name(&class.namespace, &class.name)
+}
+
+fn class_identity_counts(outline: &SourceOutline) -> std::collections::BTreeMap<String, usize> {
+    let mut counts = std::collections::BTreeMap::new();
+    for class in &outline.classes {
+        *counts.entry(class_identity(class)).or_default() += 1;
+    }
+    counts
+}
+
+fn bare_class_identities(
+    outline: &SourceOutline,
+) -> std::collections::BTreeMap<String, BTreeSet<String>> {
+    let mut identities = std::collections::BTreeMap::<String, BTreeSet<String>>::new();
+    for class in &outline.classes {
+        identities
+            .entry(class.name.clone())
+            .or_default()
+            .insert(class_identity(class));
+    }
+    identities
+}
+
+fn function_counts(functions: &[String]) -> std::collections::BTreeMap<String, usize> {
+    let mut counts = std::collections::BTreeMap::new();
+    for function in functions {
+        *counts.entry(function.clone()).or_default() += 1;
+    }
+    counts
+}
+
+fn added_parent_resolves(
+    class: &ClassOutline,
+    parent: &str,
+    declared_identities: &BTreeSet<String>,
+    module_class_names: &BTreeSet<&str>,
+    known: &KnownNames,
+) -> bool {
+    let parent = parent.strip_prefix("::").unwrap_or(parent);
+    if parent.contains("::") {
+        declared_identities.contains(parent)
+    } else {
+        declared_identities.contains(&qualified_name(&class.namespace, parent))
+            || (!module_class_names.contains(parent) && known.has_type(parent))
+    }
 }
 
 /// Check an authored module against the source it was taken from.
-pub fn verify(pristine: &str, authored: &str, known: &KnownNames) -> EditReport {
+pub fn verify(checkout: &Checkout, authored: &str, known: &KnownNames) -> EditReport {
+    let pristine = checkout.source.as_str();
     let mut violations = Vec::new();
+    let base = match read_outline(pristine) {
+        Ok(outline) => outline,
+        Err(reason) => {
+            return EditReport {
+                violations: vec![Violation::SourceInvalid {
+                    side: "pristine",
+                    reason,
+                }],
+                changed: Vec::new(),
+                changed_defaults: Vec::new(),
+                added_classes: Vec::new(),
+                added_functions: Vec::new(),
+                new_strings: Vec::new(),
+                unchanged: pristine == authored,
+            };
+        }
+    };
+    let edit = match read_outline(authored) {
+        Ok(outline) => outline,
+        Err(reason) => {
+            return EditReport {
+                violations: vec![Violation::SourceInvalid {
+                    side: "authored",
+                    reason,
+                }],
+                changed: Vec::new(),
+                changed_defaults: Vec::new(),
+                added_classes: Vec::new(),
+                added_functions: Vec::new(),
+                new_strings: Vec::new(),
+                unchanged: pristine == authored,
+            };
+        }
+    };
 
-    for (index, raw) in authored.lines().enumerate() {
-        let line = strip_comment(raw).trim();
-        if line == "default" || line.starts_with("default ") || line.starts_with("default\t") {
-            violations.push(Violation::AuthoredDefault { line: index + 1 });
+    let base_identity_counts = class_identity_counts(&base);
+    let edit_identity_counts = class_identity_counts(&edit);
+    for (side, counts) in [
+        ("pristine", &base_identity_counts),
+        ("authored", &edit_identity_counts),
+    ] {
+        for (identity, found) in counts.iter().filter(|(_, count)| **count > 1) {
+            violations.push(Violation::DuplicateClassIdentity {
+                side,
+                identity: identity.clone(),
+                found: *found,
+            });
+        }
+    }
+    for (side, outline) in [("pristine", &base), ("authored", &edit)] {
+        for (name, identities) in bare_class_identities(outline)
+            .into_iter()
+            .filter(|(_, identities)| identities.len() > 1)
+        {
+            violations.push(Violation::AmbiguousClassName {
+                side,
+                name,
+                identities: identities.into_iter().collect(),
+            });
         }
     }
 
-    let base = read_outline(pristine);
-    let edit = read_outline(authored);
-
-    let base_names: BTreeSet<&str> = base.classes.iter().map(|c| c.name.as_str()).collect();
-    let edit_names: BTreeSet<&str> = edit.classes.iter().map(|c| c.name.as_str()).collect();
-    for name in edit_names.difference(&base_names) {
-        violations.push(Violation::ClassAdded {
-            name: (*name).to_owned(),
-        });
+    let base_identities = base_identity_counts.keys().cloned().collect::<BTreeSet<_>>();
+    let edit_identities = edit_identity_counts.keys().cloned().collect::<BTreeSet<_>>();
+    let mut moved_names = BTreeSet::new();
+    for base_class in &base.classes {
+        let identity = class_identity(base_class);
+        if edit_identities.contains(&identity) {
+            continue;
+        }
+        let same_name = edit
+            .classes
+            .iter()
+            .filter(|class| class.name == base_class.name)
+            .collect::<Vec<_>>();
+        if let [moved] = same_name.as_slice() {
+            violations.push(Violation::ClassNamespaceChanged {
+                name: base_class.name.clone(),
+                expected: base_class.namespace.clone(),
+                found: moved.namespace.clone(),
+            });
+            moved_names.insert(base_class.name.clone());
+        } else if same_name.is_empty() {
+            violations.push(Violation::ClassRemoved { name: identity });
+        }
     }
-    for name in base_names.difference(&edit_names) {
-        violations.push(Violation::ClassRemoved {
-            name: (*name).to_owned(),
-        });
-    }
+    let added_identities = edit_identities
+        .difference(&base_identities)
+        .filter(|identity| {
+            let name = identity
+                .rsplit("::")
+                .next()
+                .unwrap_or_else(|| identity.as_str());
+            !moved_names.contains(name)
+        })
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let added_classes = edit
+        .classes
+        .iter()
+        .filter(|class| added_identities.contains(&class_identity(class)))
+        .map(|class| class.name.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let edit_names: BTreeSet<&str> = edit.classes.iter().map(|class| class.name.as_str()).collect();
 
-    if base.functions.len() != edit.functions.len() {
-        violations.push(Violation::FunctionsChanged {
-            expected: base.functions.len(),
-            found: edit.functions.len(),
-        });
+    let mut remaining_functions = edit.functions.clone();
+    for declaration in &base.functions {
+        if let Some(position) = remaining_functions.iter().position(|item| item == declaration) {
+            remaining_functions.remove(position);
+        } else {
+            violations.push(Violation::FunctionRemoved {
+                declaration: declaration.clone(),
+            });
+        }
     }
-
-    // Order is only worth reporting once the sets agree: one inserted class would otherwise
-    // shift every class after it and bury the real cause under a list of consequences.
-    let same_set = base_names == edit_names;
+    let base_function_counts = function_counts(&base.functions);
+    for (declaration, found) in function_counts(&edit.functions) {
+        let expected = base_function_counts
+            .get(&declaration)
+            .copied()
+            .unwrap_or(0)
+            .max(1);
+        if found > expected {
+            violations.push(Violation::DuplicateFunctionIdentity {
+                declaration,
+                expected,
+                found,
+            });
+        }
+    }
 
     let mut changed = Vec::new();
-    for (position, base_class) in base.classes.iter().enumerate() {
-        let Some(edit_class) = edit.classes.get(position) else {
+    let mut changed_defaults = Vec::new();
+    for base_class in &base.classes {
+        let identity = class_identity(base_class);
+        let Some(edit_class) = edit
+            .classes
+            .iter()
+            .find(|class| class_identity(class) == identity)
+        else {
             continue;
         };
-        if edit_class.name != base_class.name {
-            if same_set {
-                violations.push(Violation::ClassReordered {
-                    expected: base_class.name.clone(),
-                    found: edit_class.name.clone(),
-                });
-            }
-            continue;
+        if edit_class.kind != base_class.kind {
+            violations.push(Violation::ClassKindChanged {
+                name: identity.clone(),
+                expected: base_class.kind.clone(),
+                found: edit_class.kind.clone(),
+            });
         }
         if edit_class.super_class != base_class.super_class {
             violations.push(Violation::ClassReparented {
-                name: base_class.name.clone(),
+                name: identity.clone(),
                 expected: base_class.super_class.clone(),
                 found: edit_class.super_class.clone(),
             });
         }
         if edit_class.fields != base_class.fields {
             violations.push(Violation::FieldsChanged {
-                class: base_class.name.clone(),
+                class: identity.clone(),
                 expected: base_class.fields.len(),
                 found: edit_class.fields.len(),
             });
         }
         if edit_class.members.len() != base_class.members.len() {
             violations.push(Violation::MembersChanged {
-                class: base_class.name.clone(),
+                class: identity.clone(),
                 expected: base_class.members.len(),
                 found: edit_class.members.len(),
             });
@@ -464,9 +1111,85 @@ pub fn verify(pristine: &str, authored: &str, known: &KnownNames) -> EditReport 
         for (expected, found) in base_class.members.iter().zip(&edit_class.members) {
             if expected != found {
                 violations.push(Violation::MemberSignatureChanged {
-                    class: base_class.name.clone(),
+                    class: identity.clone(),
                     expected: expected.clone(),
                     found: found.clone(),
+                });
+            }
+        }
+
+        if (checkout.default_classes.contains(&base_class.name)
+            || checkout.default_classes.contains(&identity))
+            && edit_class.defaults.is_empty()
+        {
+            violations.push(Violation::MissingClassDefaults {
+                class: identity.clone(),
+            });
+        }
+        let mut base_targets = std::collections::BTreeMap::<&str, usize>::new();
+        let mut edit_targets = std::collections::BTreeMap::<&str, usize>::new();
+        for default in &base_class.defaults {
+            *base_targets.entry(default.target.as_str()).or_default() += 1;
+        }
+        for default in &edit_class.defaults {
+            *edit_targets.entry(default.target.as_str()).or_default() += 1;
+        }
+        for (target, expected) in base_targets {
+            let found = edit_targets.get(target).copied().unwrap_or(0);
+            if found < expected {
+                violations.push(Violation::DefaultTargetRemoved {
+                    class: identity.clone(),
+                    target: target.to_owned(),
+                    expected,
+                    found,
+                });
+            }
+        }
+        let targets = base_class
+            .defaults
+            .iter()
+            .chain(&edit_class.defaults)
+            .map(|default| default.target.as_str())
+            .collect::<BTreeSet<_>>();
+        for target in targets {
+            let base_statements = base_class
+                .defaults
+                .iter()
+                .filter(|default| default.target == target)
+                .map(|default| default.statement.as_str())
+                .collect::<Vec<_>>();
+            let edit_statements = edit_class
+                .defaults
+                .iter()
+                .filter(|default| default.target == target)
+                .map(|default| default.statement.as_str())
+                .collect::<Vec<_>>();
+            if base_statements != edit_statements {
+                changed_defaults.push(ChangedDefault {
+                    class: identity.clone(),
+                    target: target.to_owned(),
+                });
+            }
+        }
+    }
+
+    if !checkout.default_classes.is_empty() {
+        violations.extend(
+            checkout
+                .unsupported_generated_methods
+                .iter()
+                .cloned()
+                .map(|name| Violation::UnsupportedGeneratedMethod { name }),
+        );
+    }
+
+    for class in edit.classes.iter().filter(|class| {
+        added_identities.contains(&class_identity(class))
+    }) {
+        if let Some(parent) = class.super_class.as_deref() {
+            if !added_parent_resolves(class, parent, &edit_identities, &edit_names, known) {
+                violations.push(Violation::UnknownType {
+                    name: parent.to_owned(),
                 });
             }
         }
@@ -479,12 +1202,17 @@ pub fn verify(pristine: &str, authored: &str, known: &KnownNames) -> EditReport 
         });
     }
 
-    violations.extend(unknown_names(pristine, authored, known));
+    let (name_violations, new_strings) = unknown_names(pristine, authored, known, &edit_names);
+    violations.extend(name_violations);
 
     EditReport {
         unchanged: pristine == authored,
         violations,
         changed,
+        changed_defaults,
+        added_classes,
+        added_functions: remaining_functions,
+        new_strings,
     }
 }
 
@@ -502,56 +1230,135 @@ fn changed_bodies(pristine: &str, authored: &str) -> Vec<(String, String)> {
     changed
 }
 
+fn member_label(tokens: &[Token]) -> String {
+    let mut start = 0usize;
+    if tokens.first().is_some_and(|token| token.text == "UFUNCTION")
+        && tokens.get(1).is_some_and(|token| token.text == "(")
+    {
+        let mut depth = 0usize;
+        for (index, token) in tokens.iter().enumerate().skip(1) {
+            match token.text.as_str() {
+                "(" => depth += 1,
+                ")" => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        start = index + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut label = String::new();
+    for token in &tokens[start..] {
+        match token.text.as_str() {
+            "(" | "[" => {
+                while label.ends_with(' ') {
+                    label.pop();
+                }
+                label.push_str(&token.text);
+            }
+            ")" | "]" => {
+                while label.ends_with(' ') {
+                    label.pop();
+                }
+                label.push_str(&token.text);
+            }
+            "," => {
+                while label.ends_with(' ') {
+                    label.pop();
+                }
+                label.push_str(", ");
+            }
+            "::" | "." => {
+                while label.ends_with(' ') {
+                    label.pop();
+                }
+                label.push_str(&token.text);
+            }
+            _ => {
+                if !label.is_empty()
+                    && !label
+                        .chars()
+                        .last()
+                        .is_some_and(|last| matches!(last, ' ' | '(' | '[' | ':' | '.'))
+                {
+                    label.push(' ');
+                }
+                label.push_str(&token.text);
+            }
+        }
+    }
+    label
+}
+
 /// Every member body in a module's source, keyed by `(class, declaration)`.
 fn bodies(source: &str) -> Vec<((String, String), String)> {
+    let Ok(tokens) = tokenize(source) else {
+        return Vec::new();
+    };
+    let Ok(pairs) = brace_pairs(&tokens) else {
+        return Vec::new();
+    };
+    let Ok(items) = module_items(&tokens, &pairs) else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
-    let mut depth = 0i32;
-    let mut class = String::new();
-    let mut member: Option<(String, String)> = None;
-    let mut body = String::new();
-
-    for raw in source.lines() {
-        let line = strip_comment(raw).trim();
-        let opens = line.matches('{').count() as i32;
-        let closes = line.matches('}').count() as i32;
-
-        if depth == 0 {
-            if let Some(rest) = line.strip_prefix("class ") {
-                class = rest
-                    .split(':')
-                    .next()
-                    .unwrap_or(rest)
-                    .trim()
-                    .trim_end_matches('{')
-                    .trim()
-                    .to_owned();
+    for span in items.classes {
+        let Some(class) = tokens
+            .get(span.declaration + 1)
+            .map(|token| qualified_name(&span.namespace, &token.text))
+        else {
+            continue;
+        };
+        let mut index = span.open + 1;
+        let mut item_start = index;
+        while index < span.close {
+            if tokens[index].text == "default" {
+                while index < span.close && tokens[index].text != ";" {
+                    index += 1;
+                }
+                index = (index + 1).min(span.close);
+                item_start = index;
+                continue;
             }
-        } else if depth == 1 && line.contains('(') && !line.starts_with("UFUNCTION") {
-            member = Some((class.clone(), normalize_declaration(line)));
-            body.clear();
-        } else if depth >= 2 {
-            body.push_str(line);
-            body.push('\n');
-        }
-
-        // A member is finished when its body closes, not when its declaration line ends: the
-        // emitter puts the opening brace on the line after the declaration.
-        let was_inside_body = depth >= 2;
-        depth += opens - closes;
-        if was_inside_body && depth <= 1 {
-            if let Some(key) = member.take() {
-                out.push((key, std::mem::take(&mut body)));
+            match tokens[index].text.as_str() {
+                "{" => {
+                    let Some(end) = pairs[index] else {
+                        return Vec::new();
+                    };
+                    let declaration = member_label(&tokens[item_start..index]);
+                    if tokens[item_start..index]
+                        .iter()
+                        .any(|token| token.text == "(")
+                    {
+                        out.push((
+                            (class.clone(), declaration),
+                            normalized(&tokens[index + 1..end]),
+                        ));
+                    }
+                    index = end + 1;
+                    item_start = index;
+                }
+                ";" => {
+                    index += 1;
+                    item_start = index;
+                }
+                _ => index += 1,
             }
-        }
-        if depth < 0 {
-            depth = 0;
         }
     }
     out
 }
 
 /// Types and string literals the authored source introduces that the base cache cannot bind.
-fn unknown_names(pristine: &str, authored: &str, known: &KnownNames) -> Vec<Violation> {
+fn unknown_names(
+    pristine: &str,
+    authored: &str,
+    known: &KnownNames,
+    declared: &BTreeSet<&str>,
+) -> (Vec<Violation>, Vec<String>) {
     let mut violations = Vec::new();
     let mut seen = BTreeSet::new();
 
@@ -559,21 +1366,22 @@ fn unknown_names(pristine: &str, authored: &str, known: &KnownNames) -> Vec<Viol
         if static_class_names(pristine).contains(&name) {
             continue;
         }
-        if !known.has_type(&name) && seen.insert(name.clone()) {
+        if !known.has_type(&name) && !declared.contains(name.as_str()) && seen.insert(name.clone()) {
             violations.push(Violation::UnknownType { name });
         }
     }
 
     let base_strings = string_literals(pristine);
+    let mut new_strings = Vec::new();
     for value in string_literals(authored) {
         if base_strings.contains(&value) {
             continue;
         }
         if !known.strings.contains(&value) && seen.insert(value.clone()) {
-            violations.push(Violation::UnknownString { value });
+            new_strings.push(value);
         }
     }
-    violations
+    (violations, new_strings)
 }
 
 /// Class names used as `UX::StaticClass()`, which is how a body names a type.
@@ -633,6 +1441,11 @@ mod tests {
     const PRISTINE: &str = r#"
 class UChoiceOne : UTopic_Hero__NPC
 {
+    default Caption = LocText("EXISTING_KEY");
+    default PriorityRank = 2;
+    default Rules.HideIfKnows(this);
+    default bIsFollowupTopic = false;
+
     UChoiceOne()
     {
         super();
@@ -647,6 +1460,16 @@ class UChoiceOne : UTopic_Hero__NPC
 }
 "#;
 
+    fn checkout(source: &str) -> Checkout {
+        Checkout {
+            module: "Dialog.NPC".to_owned(),
+            relative_path: "Dialog/NPC.as".to_owned(),
+            source: source.to_owned(),
+            default_classes: ["UChoiceOne".to_owned()].into_iter().collect(),
+            unsupported_generated_methods: Vec::new(),
+        }
+    }
+
     fn known() -> KnownNames {
         KnownNames {
             types: ["UChoiceOne".to_owned(), "UTopic_Hero__NPC".to_owned()]
@@ -658,16 +1481,17 @@ class UChoiceOne : UTopic_Hero__NPC
 
     #[test]
     fn an_untouched_checkout_is_carryable_and_reports_nothing_changed() {
-        let report = verify(PRISTINE, PRISTINE, &known());
+        let report = verify(&checkout(PRISTINE), PRISTINE, &known());
         assert!(report.is_carryable(), "{:?}", report.violations);
         assert!(report.unchanged);
         assert!(report.changed.is_empty());
+        assert!(report.changed_defaults.is_empty());
     }
 
     #[test]
     fn a_body_edit_is_carryable_and_names_the_method() {
         let edited = PRISTINE.replace("this.EndConversation();", "this.ReturnToLastSelection();");
-        let report = verify(PRISTINE, &edited, &known());
+        let report = verify(&checkout(PRISTINE), &edited, &known());
         assert!(report.is_carryable(), "{:?}", report.violations);
         assert!(!report.unchanged);
         assert_eq!(
@@ -680,25 +1504,219 @@ class UChoiceOne : UTopic_Hero__NPC
     }
 
     #[test]
-    fn a_new_class_is_refused() {
-        let edited = format!("{PRISTINE}\nclass UChoiceTwo : UTopic_Hero__NPC\n{{\n}}\n");
-        let report = verify(PRISTINE, &edited, &known());
-        assert!(report.violations.contains(&Violation::ClassAdded {
-            name: "UChoiceTwo".to_owned()
+    fn a_namespaced_subdialog_body_edit_is_reported() {
+        let pristine = format!("namespace G1R::Conversation\n{{\n{PRISTINE}\n}}\n");
+        let edited = pristine.replace(
+            "this.EndConversation();",
+            "Subdialog(this, UChoiceOne::StaticClass());",
+        );
+        let report = verify(&checkout(&pristine), &edited, &known());
+        assert!(report.is_carryable(), "{:?}", report.violations);
+        assert!(report.changed.iter().any(|body| {
+            body.class == "G1R::Conversation::UChoiceOne"
+                && body.member.contains("Act_Implementation")
         }));
     }
 
     #[test]
-    fn an_authored_default_is_refused() {
-        let edited = PRISTINE.replace(
-            "    UFUNCTION()",
-            "    default PriorityRank = 3;\n    UFUNCTION()",
+    fn an_untouched_namespaced_checkout_preserves_the_qualified_identity() {
+        let pristine = format!("namespace G1R::Conversation\n{{\n{PRISTINE}\n}}\n");
+        let report = verify(&checkout(&pristine), &pristine, &known());
+        assert!(report.is_carryable(), "{:?}", report.violations);
+        assert!(report.unchanged);
+        let outline = read_outline(&pristine).unwrap();
+        assert_eq!(outline.classes[0].namespace, "G1R::Conversation");
+    }
+
+    #[test]
+    fn moving_an_existing_class_out_of_its_namespace_is_refused() {
+        let pristine = format!("namespace G1R::Conversation\n{{\n{PRISTINE}\n}}\n");
+        let report = verify(&checkout(&pristine), PRISTINE, &known());
+        assert!(report.violations.iter().any(|violation| matches!(
+            violation,
+            Violation::ClassNamespaceChanged {
+                name,
+                expected,
+                found,
+            } if name == "UChoiceOne" && expected == "G1R::Conversation" && found.is_empty()
+        )));
+    }
+
+    #[test]
+    fn a_new_topic_resolves_a_bare_module_parent_only_in_the_same_namespace() {
+        let pristine = format!("namespace G1R::Conversation\n{{\n{PRISTINE}\n}}\n");
+        let same_namespace = format!(
+            "namespace G1R::Conversation\n{{\n{PRISTINE}\nclass UChoiceTwo : UChoiceOne {{ default Caption = LocText(\"NEW_KEY\"); }}\n}}\n"
         );
-        let report = verify(PRISTINE, &edited, &known());
-        assert!(report
-            .violations
+        let report = verify(&checkout(&pristine), &same_namespace, &known());
+        assert!(report.is_carryable(), "{:?}", report.violations);
+        assert_eq!(report.added_classes, ["UChoiceTwo"]);
+
+        let global = format!(
+            "{pristine}\nclass UChoiceTwo : UChoiceOne {{ default Caption = LocText(\"NEW_KEY\"); }}\n"
+        );
+        let report = verify(&checkout(&pristine), &global, &known());
+        assert!(report.violations.contains(&Violation::UnknownType {
+            name: "UChoiceOne".to_owned()
+        }));
+    }
+
+    #[test]
+    fn a_new_class_in_another_namespace_can_use_a_qualified_module_parent() {
+        let pristine = format!("namespace G1R::Conversation\n{{\n{PRISTINE}\n}}\n");
+        let edited = format!(
+            "{pristine}\nnamespace Modded {{ class UChoiceTwo : G1R::Conversation::UChoiceOne {{ default Caption = LocText(\"NEW_KEY\"); }} }}\n"
+        );
+        let report = verify(&checkout(&pristine), &edited, &known());
+        assert!(report.is_carryable(), "{:?}", report.violations);
+        assert_eq!(report.added_classes, ["UChoiceTwo"]);
+    }
+
+    #[test]
+    fn duplicate_and_ambiguous_class_identities_are_refused() {
+        let pristine = format!("namespace A {{ {PRISTINE} }}");
+        let duplicate = format!("{pristine}\nnamespace A {{ {PRISTINE} }}");
+        let report = verify(&checkout(&pristine), &duplicate, &known());
+        assert!(report.violations.iter().any(|violation| matches!(
+            violation,
+            Violation::DuplicateClassIdentity { side: "authored", identity, found }
+                if identity == "A::UChoiceOne" && *found == 2
+        )));
+
+        let ambiguous = format!("{pristine}\nnamespace B {{ {PRISTINE} }}");
+        let report = verify(&checkout(&pristine), &ambiguous, &known());
+        assert!(report.violations.iter().any(|violation| matches!(
+            violation,
+            Violation::AmbiguousClassName { side: "authored", name, .. }
+                if name == "UChoiceOne"
+        )));
+    }
+
+    #[test]
+    fn changing_a_class_into_a_struct_is_refused() {
+        let edited = PRISTINE.replacen("class UChoiceOne", "struct UChoiceOne", 1);
+        let report = verify(&checkout(PRISTINE), &edited, &known());
+        assert!(report.violations.iter().any(|violation| matches!(
+            violation,
+            Violation::ClassKindChanged { name, expected, found }
+                if name == "UChoiceOne" && expected == "class" && found == "struct"
+        )));
+    }
+
+    #[test]
+    fn namespaced_free_functions_are_inventoried_and_duplicate_helpers_are_refused() {
+        let pristine = format!(
+            "namespace G1R::Conversation {{\nFText Caption(const FName Text) {{ return FText::FromString(Text.ToString()); }}\n{PRISTINE}\n}}"
+        );
+        let untouched = verify(&checkout(&pristine), &pristine, &known());
+        assert!(untouched.is_carryable(), "{:?}", untouched.violations);
+        let outline = read_outline(&pristine).unwrap();
+        assert_eq!(
+            outline.functions,
+            ["G1R::Conversation::FText Caption ( const FName Text )"]
+        );
+
+        let duplicate = pristine.replace(
+            PRISTINE,
+            &format!(
+                "FText Caption(const FName Text) {{ return FText::FromString(Text.ToString()); }}\n{PRISTINE}"
+            ),
+        );
+        let report = verify(&checkout(&pristine), &duplicate, &known());
+        assert!(report.violations.iter().any(|violation| matches!(
+            violation,
+            Violation::DuplicateFunctionIdentity { declaration, expected: 1, found: 2 }
+                if declaration.starts_with("G1R::Conversation::FText Caption")
+        )));
+    }
+
+    #[test]
+    fn a_new_namespaced_free_function_requires_new_symbols() {
+        let pristine = format!("namespace G1R::Conversation {{ {PRISTINE} }}");
+        let edited = pristine.replace(
+            PRISTINE,
+            &format!("void Helper() {{ return; }}\n{PRISTINE}"),
+        );
+        let report = verify(&checkout(&pristine), &edited, &known());
+        assert!(report.is_carryable(), "{:?}", report.violations);
+        assert_eq!(
+            report.added_functions,
+            ["G1R::Conversation::void Helper ( )"]
+        );
+        assert!(report.requires_new_symbols());
+    }
+
+    #[test]
+    fn unsupported_module_scope_declarations_fail_closed() {
+        for declaration in [
+            "enum EState { Idle }",
+            "int HiddenGlobal;",
+            "auto HiddenFactory = function() { return 1; }",
+        ] {
+            let edited = format!("{PRISTINE}\n{declaration}\n");
+            let report = verify(&checkout(PRISTINE), &edited, &known());
+            assert!(report.violations.iter().any(|violation| matches!(
+                violation,
+                Violation::SourceInvalid { side: "authored", reason }
+                    if reason.contains("unsupported module-scope declaration")
+            )), "{declaration}: {:?}", report.violations);
+        }
+    }
+
+    #[test]
+    fn a_new_same_module_topic_is_accepted_and_requires_new_symbols() {
+        let edited = format!(
+            "{PRISTINE}\nclass UChoiceTwo : UChoiceOne\n{{\n    default Caption = LocText(\"NEW_KEY\");\n}}\n"
+        );
+        let report = verify(&checkout(PRISTINE), &edited, &known());
+        assert!(report.is_carryable(), "{:?}", report.violations);
+        assert_eq!(report.added_classes, ["UChoiceTwo"]);
+        assert!(report.requires_new_symbols());
+        assert_eq!(report.new_strings, ["NEW_KEY"]);
+    }
+
+    #[test]
+    fn caption_priority_rules_and_flags_are_editable() {
+        let edited = PRISTINE
+            .replace("LocText(\"EXISTING_KEY\")", "LocText(\"NEW_KEY\")")
+            .replace("PriorityRank = 2", "PriorityRank = 7")
+            .replace("Rules.HideIfKnows(this)", "Rules.AllowIfCharacterHasKnowledgeOf(this, n\"KNOWS\")")
+            .replace("bIsFollowupTopic = false", "bIsFollowupTopic = true");
+        let report = verify(&checkout(PRISTINE), &edited, &known());
+        assert!(report.is_carryable(), "{:?}", report.violations);
+        let targets = report
+            .changed_defaults
             .iter()
-            .any(|violation| matches!(violation, Violation::AuthoredDefault { .. })));
+            .map(|change| change.target.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            targets,
+            ["Caption", "PriorityRank", "Rules", "bIsFollowupTopic"]
+                .into_iter()
+                .collect()
+        );
+        assert!(report.requires_new_symbols());
+    }
+
+    #[test]
+    fn a_partial_or_empty_default_set_is_refused() {
+        let partial = PRISTINE.replace("    default PriorityRank = 2;\n", "");
+        let report = verify(&checkout(PRISTINE), &partial, &known());
+        assert!(report.violations.iter().any(|violation| matches!(
+            violation,
+            Violation::DefaultTargetRemoved { target, .. } if target == "PriorityRank"
+        )));
+
+        let empty = PRISTINE
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("default "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let report = verify(&checkout(PRISTINE), &empty, &known());
+        assert!(report.violations.iter().any(|violation| matches!(
+            violation,
+            Violation::MissingClassDefaults { class } if class == "UChoiceOne"
+        )));
     }
 
     #[test]
@@ -707,7 +1725,7 @@ class UChoiceOne : UTopic_Hero__NPC
             "    UFUNCTION()\n    void Act_Implementation()",
             "    void Helper()\n    {\n        return;\n    }\n    UFUNCTION()\n    void Act_Implementation()",
         );
-        let report = verify(PRISTINE, &edited, &known());
+        let report = verify(&checkout(PRISTINE), &edited, &known());
         assert!(report
             .violations
             .iter()
@@ -720,7 +1738,7 @@ class UChoiceOne : UTopic_Hero__NPC
             "void Act_Implementation()",
             "void Act_Implementation(int X)",
         );
-        let report = verify(PRISTINE, &edited, &known());
+        let report = verify(&checkout(PRISTINE), &edited, &known());
         assert!(report
             .violations
             .iter()
@@ -733,7 +1751,7 @@ class UChoiceOne : UTopic_Hero__NPC
             "this.EndConversation();",
             "Subdialog(this, UChoiceInvented::StaticClass());",
         );
-        let report = verify(PRISTINE, &edited, &known());
+        let report = verify(&checkout(PRISTINE), &edited, &known());
         assert!(report.violations.contains(&Violation::UnknownType {
             name: "UChoiceInvented".to_owned()
         }));
@@ -745,32 +1763,71 @@ class UChoiceOne : UTopic_Hero__NPC
             "this.EndConversation();",
             "Subdialog(this, UChoiceOne::StaticClass());",
         );
-        let report = verify(PRISTINE, &edited, &known());
+        let report = verify(&checkout(PRISTINE), &edited, &known());
         assert!(report.is_carryable(), "{:?}", report.violations);
     }
 
     #[test]
-    fn a_brand_new_text_id_is_refused_and_a_shipped_one_is_not() {
+    fn a_brand_new_text_id_selects_new_symbol_remap_and_a_shipped_one_does_not() {
         let invented = PRISTINE.replace("this.EndConversation();", "LocText(\"BRAND_NEW_KEY\");");
-        let report = verify(PRISTINE, &invented, &known());
-        assert!(report.violations.contains(&Violation::UnknownString {
-            value: "BRAND_NEW_KEY".to_owned()
-        }));
+        let report = verify(&checkout(PRISTINE), &invented, &known());
+        assert!(report.is_carryable(), "{:?}", report.violations);
+        assert_eq!(report.new_strings, ["BRAND_NEW_KEY"]);
+        assert!(report.requires_new_symbols());
 
         let shipped = PRISTINE.replace("this.EndConversation();", "LocText(\"EXISTING_KEY\");");
-        let report = verify(PRISTINE, &shipped, &known());
+        let report = verify(&checkout(PRISTINE), &shipped, &known());
         assert!(report.is_carryable(), "{:?}", report.violations);
+        assert!(!report.requires_new_symbols());
+    }
+
+    #[test]
+    fn a_switch_default_label_is_not_a_class_default() {
+        let edited = PRISTINE.replace(
+            "this.EndConversation();",
+            "switch (1) { default: this.EndConversation(); break; }",
+        );
+        let report = verify(&checkout(PRISTINE), &edited, &known());
+        assert!(report.is_carryable(), "{:?}", report.violations);
+    }
+
+    #[test]
+    fn another_omitted_generated_method_is_refused_with_authored_defaults() {
+        let mut taken = checkout(PRISTINE);
+        taken.unsupported_generated_methods = vec!["UChoiceOne::__Factory".to_owned()];
+        let report = verify(&taken, PRISTINE, &known());
+        assert!(report.violations.iter().any(|violation| matches!(
+            violation,
+            Violation::UnsupportedGeneratedMethod { name } if name.ends_with("::__Factory")
+        )));
     }
 
     #[test]
     fn the_outline_reads_classes_fields_and_members() {
         let source =
             "class UA : UB\n{\n    int Value;\n    UFUNCTION()\n    void Go()\n    {\n    }\n}\n";
-        let outline = read_outline(source);
+        let outline = read_outline(source).unwrap();
         assert_eq!(outline.classes.len(), 1);
+        assert_eq!(outline.classes[0].namespace, "");
         assert_eq!(outline.classes[0].name, "UA");
+        assert_eq!(outline.classes[0].kind, "class");
         assert_eq!(outline.classes[0].super_class.as_deref(), Some("UB"));
-        assert_eq!(outline.classes[0].fields, vec!["int Value;".to_owned()]);
-        assert_eq!(outline.classes[0].members, vec!["void Go()".to_owned()]);
+        assert_eq!(outline.classes[0].fields, vec!["int Value ;".to_owned()]);
+        assert_eq!(
+            outline.classes[0].members,
+            vec!["UFUNCTION ( ) void Go ( )".to_owned()]
+        );
+    }
+
+    #[test]
+    fn namespaced_classes_and_defaults_are_inventoried() {
+        let outline = read_outline(
+            "namespace G1R::Conversation { class UChoice : UBase { default Caption = LocText(\"ID\"); void Act() { } } }",
+        )
+        .unwrap();
+        assert_eq!(outline.classes.len(), 1);
+        assert_eq!(outline.classes[0].namespace, "G1R::Conversation");
+        assert_eq!(outline.classes[0].name, "UChoice");
+        assert_eq!(outline.classes[0].defaults[0].target, "Caption");
     }
 }

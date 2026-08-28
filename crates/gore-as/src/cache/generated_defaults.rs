@@ -1,10 +1,12 @@
 //! Fail-closed carry-through for compiler-generated class-default methods.
 //!
-//! The source emitter deliberately omits `__InitDefaults`. Recompiling an emitted vanilla module
-//! therefore removes both that raw function record and its local `Class.MethodTable` slot. This
-//! module restores those pieces, plus every other executable record omitted by the emitter inside
-//! the same module, only when the regenerated/remapped module proves that every surrounding
-//! identity and layout is unchanged. It never decompiles or synthesizes defaults.
+//! The source emitter never writes compiler-generated method bodies. When an edit authors no
+//! class-scope `default` statements at all, recompilation therefore omits `__InitDefaults` and its
+//! local `Class.MethodTable` slot. This fallback restores those pieces, plus every other executable
+//! record omitted by the emitter inside the same module, only when the regenerated/remapped module
+//! proves that every surrounding identity and layout is unchanged. Complete authored defaults
+//! instead regenerate `__InitDefaults` and bypass this carry path. This module never decompiles or
+//! synthesizes defaults.
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
