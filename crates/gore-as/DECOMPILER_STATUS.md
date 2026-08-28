@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 99.12% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 99.13% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **99.12%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **99.13%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,447 functions (0.88%) recompile to bytecode that differs semantically.** A semantic
+**1,437 functions (0.87%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -707,6 +707,17 @@ DESTINATION could still be wrong, and that is a compile error rather than a sile
 **`++x` is one opcode and `x = x + 1` is three.** The slot-operand increment was written back in
 the long form, so vanilla's `IncVi` came back as an `ADDIi` every time. The argument was already
 in the file, one arm further down, for the register form. 1,457 to 1,447.
+
+**An `int(...)` that truncates what the source copied.** A member read was wrapped whenever the
+destination slot had no entry in the typed-locals map, because such a slot renders as an `int`
+local and a float read into one is a precision warning the game compile treats as an error. The
+presumption fails for a slot the very next member store writes straight back out at the SAME
+width: that is not a declaration but the compiler's pass-through temporary for
+`<member> = <member>;`, which the emitter folds into the store — so there is no `int` variable to
+warn about and the wrap rounds a rotation angle to a whole degree. Vanilla says so itself: the
+window is a bare `RDR<w> vT; <address ops>; WRTV<w> vT`, and had the source truncated, this
+compiler would have written the `dTOi` for it. Twenty such statements in twelve functions, every
+one of them divergent and none among the byte-faithful. 1,447 to 1,437.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern

@@ -3167,7 +3167,46 @@ fn block_stmts_in(
                             .as_deref()
                             .map(|t| t.trim_start_matches("const ")),
                         Some("float" | "float32" | "double")
-                    );
+                    ) &&
+                    // …but the wrap presumes the destination is an INT-DECLARED local, which is
+                    // only what an UNTYPED slot renders as. A slot the very next member store
+                    // writes back out at the SAME width is not a declaration at all: it is the
+                    // compiler's pass-through temporary for `<member> = <member>;`, and the
+                    // emitter folds it into the store, so there is no `int` variable to warn
+                    // about and the wrap truncates the value the source copied. Vanilla says so
+                    // itself — the window is a bare `RDR<w> vT; <address ops>; WRTV<w> vT`. Had
+                    // the source truncated, this compiler would have written the `dTOi`/`fTOi`
+                    // for it. Equal widths also mean no narrowing is owed, so dropping the wrap
+                    // cannot bring the precision warning back (measured: 20 such statements in
+                    // 12 functions, every one of them in the divergent set and none among the
+                    // ~163,000 byte-faithful ones).
+                    !{
+                        let width = n.trim_start_matches("RDR");
+                        let mut back = false;
+                        for later in &insns[k + 1..] {
+                            let touches = super::bytediff::addressed_slots(later)
+                                .contains(&dst_slot);
+                            if later.op.name == format!("WRTV{width}") && touches {
+                                back = true;
+                                break;
+                            }
+                            if touches
+                                || !matches!(
+                                    later.op.name,
+                                    "PshVPtr"
+                                        | "ADDSi"
+                                        | "RDSPtr"
+                                        | "PopRPtr"
+                                        | "LoadRObjR"
+                                        | "LoadVObjR"
+                                        | "LoadThisR"
+                                )
+                            {
+                                break;
+                            }
+                        }
+                        back
+                    };
                     // batch-30c: RDR8 joins the wrap for KNOWN float-family members (the
                     // float64 member -> int slot precision-warning residue: foreign script
                     // config floats, FVector.Z/FRotator.Yaw); int64 member reads stay bare.
@@ -3543,13 +3582,16 @@ fn block_stmts_in(
                     c
                 ));
             }
+            // The same argument the `INCi` arm below makes, for the slot-operand form: `++x` is
+            // one opcode and `x = x + 1` is a read/add/write, so writing the long form back turns
+            // vanilla's `IncVi` into an `ADDIi` every time.
             "IncVi" | "IncVf" => {
                 flush!();
-                out.push(format!("{0} = {0} + 1;", name(w(ins, 0))));
+                out.push(format!("++{};", name(w(ins, 0))));
             }
             "DecVi" | "DecVf" => {
                 flush!();
-                out.push(format!("{0} = {0} - 1;", name(w(ins, 0))));
+                out.push(format!("--{};", name(w(ins, 0))));
             }
             // asBC_INCi/DECi (NO_ARG): ++/-- the int at the value/ref register — an lvalue that
             // is a member or deref (LoadThisR/LoadRObjR set ref_reg), unlike IncVi/DecVi which
