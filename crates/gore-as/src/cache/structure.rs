@@ -5131,6 +5131,15 @@ fn block_stmts_in(
                         && !src.s.contains('\u{1}')
                         && src.s != UNRESOLVED
                         && !src.s.starts_with('~');
+                    // A bare `this` stored into another object's member is the back-link an owner
+                    // hands to the thing it just made — `local_4.Owner = this;`. It was bailed for
+                    // caution over const-ness, and the caution cost whole statements: dropping it
+                    // returns an object with no way back, which is a wrong program and not a byte
+                    // difference. The caution is answered by the site itself — this store IS in
+                    // vanilla's bytecode, so the source wrote it and it compiled. Only our own
+                    // recovery of the DESTINATION could still be wrong, and that is a compile
+                    // error, not a silent one.
+                    let this_backlink = src.s == "this";
                     let src_ok = !src.s.is_empty()
                         && src.s != UNRESOLVED
                         && !src.s.contains('\u{2}')
@@ -5139,6 +5148,7 @@ fn block_stmts_in(
                             || src.s == "nullptr"
                             || member_src
                             || src_is_opindex_elem
+                            || this_backlink
                             || ctx.param_src_ok(&src.s));
                     // batch-41d (CLASS 1b): the source slot holds a CONST object handle (a
                     // const-returning call result / const member read). Storing it into a

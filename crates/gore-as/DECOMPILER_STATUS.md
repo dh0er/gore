@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 99.09% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 99.12% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **99.09%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **99.12%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,494 functions (0.91%) recompile to bytecode that differs semantically.** A semantic
+**1,457 functions (0.89%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -695,7 +695,14 @@ one of the other two reasons, and our own output already reproduces those.
 
 An earlier reading of this shape as a name outright was refused on the control for exactly that
 reason, and the refusal was right: without the two exclusions the rule names values vanilla never
-named. 1,495 to 1,494 so far, with the fold that removes the name in a second place still to land.
+named. 1,495 to 1,457, once the fold that removes the name a second time was gated on the same witness.
+
+**A dropped `this` back-link is a wrong program, not a byte difference.** Where an owner makes an
+object and hands it a reference back — `local_4.TauntData = this;` — the store was bailed out of
+caution over const-ness, and the whole statement disappeared with it: the returned object had no
+way back to the thing that made it. The caution is answered by the site itself. The store IS in
+vanilla's bytecode, so the source wrote it and it compiled; only our own recovery of the
+DESTINATION could still be wrong, and that is a compile error rather than a silent one.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern

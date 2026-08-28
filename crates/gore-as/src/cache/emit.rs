@@ -1488,7 +1488,7 @@ fn emit_function_ctor(
     // A function that returns by REFERENCE keeps its named local: the name is what makes the
     // returned thing outlive the expression (same condition as `ref_ret` below).
     let returns_by_reference = f.ret.is_reference && f.ret.token == 5 && !f.ret.is_object_handle;
-    let body = fold_condition_temporaries(&body, &declared_locals, refs, fields);
+    let body = fold_condition_temporaries(&body, &declared_locals, refs, fields, &spilled_boolean_names(f, refs));
     let body = fold_alias_copies(&body, &declared_locals);
     let body = fold_copy_out_temporaries(&body, &declared_locals, &const_result_slots, fields);
     let body = fold_cast_operands(&body, &declared_locals, &call_result_types);
@@ -2006,7 +2006,7 @@ fn emit_function_ctor(
         // The rest of the fold chain, for the same reason as the passes above it: each of these
         // asks about a declaration, and until the hoist has been joined back on there is nothing
         // for them to ask about.
-        let rendered = fold_condition_temporaries(&rendered, &declared_locals, refs, fields);
+        let rendered = fold_condition_temporaries(&rendered, &declared_locals, refs, fields, &spilled_boolean_names(f, refs));
         let rendered = fold_alias_copies(&rendered, &declared_locals);
         let rendered = fold_assignment_receivers(&rendered, &immediately_consumed_defs(f));
         let rendered =
@@ -7019,6 +7019,7 @@ fn fold_condition_temporaries(
     locals: &BTreeMap<i32, String>,
     refs: &RefResolver,
     fields: Option<&HashMap<String, String>>,
+    spilled: &HashSet<i32>,
 ) -> String {
     // A field of the class carries its type in the class's own map, which `renders_a_bool` does
     // not read.
@@ -7035,6 +7036,12 @@ fn fold_condition_temporaries(
     while at < lines.len() {
         let folded = (|| {
             let (name, value) = slot_store(lines[at])?;
+            // A call result the source spent a `bool` on keeps its name: folding it into the
+            // condition takes away the store and the reload, which is what said the name was
+            // there.
+            if slot_and_life_any(&name).is_some_and(|(slot, _)| spilled.contains(&slot)) {
+                return None;
+            }
             let tested = lines.get(at + 1)?.trim();
             let condition = tested.strip_prefix("if (")?.strip_suffix(')')?;
             if value.contains(&name)
