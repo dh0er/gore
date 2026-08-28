@@ -1438,6 +1438,36 @@ void main() {
     );
   });
 
+  testWidgets('global inventory observations remain unavailable', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1500, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(
+            _GlobalInventoryStatisticsCoreService(),
+          ),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('statistics-section-inventory')),
+        matching: find.text('Not available'),
+      ),
+      findsNWidgets(2),
+    );
+  });
+
   testWidgets(
     'save list shows file name and both delete actions require confirmation',
     (tester) async {
@@ -2542,6 +2572,23 @@ class _TruncatedStatisticsCoreService extends _StatisticsCoreService {
     final private = (data['private'] as Map).cast<String, Object?>();
     final inventory = (private['inventory'] as Map).cast<String, Object?>();
     inventory['itemStackCount'] = 4097;
+    return response;
+  }
+}
+
+class _GlobalInventoryStatisticsCoreService extends _StatisticsCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    final response = await super.execute(command, payload: payload);
+    if (command != 'inspect_save') return response;
+
+    final data = (response['data'] as Map).cast<String, Object?>();
+    final private = (data['private'] as Map).cast<String, Object?>();
+    final inventory = (private['inventory'] as Map).cast<String, Object?>();
+    inventory['itemScope'] = 'global_observed';
     return response;
   }
 }

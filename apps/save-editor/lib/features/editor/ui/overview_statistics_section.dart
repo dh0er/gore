@@ -472,7 +472,9 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
     final authoritative = widget.inspection.privateTypedVerified;
     final inventory = widget.inspection.privateInventory;
     final inventoryComplete =
-        authoritative && inventory.itemStackCount == inventory.items.length;
+        authoritative &&
+        inventory.itemScope == 'player_inventory_region' &&
+        inventory.itemStackCount == inventory.items.length;
     final totalItems = inventory.items.fold<int>(
       0,
       (sum, item) => sum + (item.count ?? 1),
