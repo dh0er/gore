@@ -261,8 +261,8 @@ class EditorState {
   ///
   /// The deleted slot disappears from the scan immediately, so its regular
   /// Backups tab can no longer address the snapshot. Keep the exact live and
-  /// backup paths until the user restores it or explicitly dismisses the
-  /// success banner.
+  /// backup paths until the user restores it or explicitly dismisses its
+  /// dedicated recovery banner.
   final DeletedSaveRecovery? deletedSaveRecovery;
 
   /// User-visible changes across all pending keys, driving the global
@@ -436,7 +436,7 @@ class EditorState {
       lastWriteMessage: clearWriteMessage
           ? null
           : lastWriteMessage ?? this.lastWriteMessage,
-      deletedSaveRecovery: clearDeletedSaveRecovery || clearWriteMessage
+      deletedSaveRecovery: clearDeletedSaveRecovery
           ? null
           : identical(deletedSaveRecovery, _unchanged)
           ? this.deletedSaveRecovery
@@ -563,10 +563,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
         return;
       }
       final data = (response['data'] as Map).cast<String, Object?>();
-      state = state.copyWith(
-        lastWriteMessage: message(data),
-        clearDeletedSaveRecovery: true,
-      );
+      state = state.copyWith(lastWriteMessage: message(data));
       onSuccess?.call(data);
       beforeRefresh?.call();
       await refresh();
@@ -658,13 +655,18 @@ class EditorNotifier extends StateNotifier<EditorState> {
   Future<SkillsResult>? _skillsInFlight;
   Future<CharacterIndexPage>? _charactersInFlight;
 
-  void _guardSharedReads(String? path) {
-    if (_sharedReadPath == path) return;
-    _sharedReadPath = path;
+  void _invalidateSharedReads() {
+    _sharedReadPath = null;
     _gameTimeInFlight = null;
     _heroAttributesInFlight = null;
     _skillsInFlight = null;
     _charactersInFlight = null;
+  }
+
+  void _guardSharedReads(String? path) {
+    if (_sharedReadPath == path) return;
+    _invalidateSharedReads();
+    _sharedReadPath = path;
   }
 
   /// The inspection the background prefetch warmed IN FULL, so re-entering the
@@ -965,10 +967,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// Dismiss the current success/status banner.
   void dismissWriteMessage() {
     if (state.lastWriteMessage != null) {
-      state = state.copyWith(
-        clearWriteMessage: true,
-        clearDeletedSaveRecovery: true,
-      );
+      state = state.copyWith(clearWriteMessage: true);
+    }
+  }
+
+  /// Dismiss the one-click recovery for the most recently deleted save.
+  void dismissDeletedSaveRecovery() {
+    if (state.deletedSaveRecovery != null) {
+      state = state.copyWith(clearDeletedSaveRecovery: true);
     }
   }
 
@@ -2437,6 +2443,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // A fresh inspection re-seeds every editor; drop the cached full NPC list
       // so the next list load re-fetches against the new save state.
       _invalidateNpcCache();
+      // A same-path re-inspection is still a new data generation. An older
+      // paginated read may remain in flight across the serialized inspect;
+      // never hand that mixed-generation future to the rebuilt Overview.
+      _invalidateSharedReads();
       final inspection = SaveInspection.fromJson(data);
       final selectedWasExternal = state.saves.any(
         (save) => save.isExternal && _sameSavePath(save.path, path),
@@ -2742,10 +2752,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
           return;
         }
         state = state.copyWith(
+          clearWriteMessage: true,
           deletedSaveRecovery: DeletedSaveRecovery(
             targetPath: save.path,
             backupPath: backupPath,
             persistentPostDeleteSha1: persistentPostDeleteSha1,
+            message: state.lastWriteMessage!,
           ),
         );
       },
@@ -4235,11 +4247,13 @@ class DeletedSaveRecovery {
     required this.targetPath,
     required this.backupPath,
     required this.persistentPostDeleteSha1,
+    required this.message,
   });
 
   final String targetPath;
   final String backupPath;
   final String persistentPostDeleteSha1;
+  final String message;
 
   String get fileName {
     final normalized = targetPath.replaceAll('\\', '/');

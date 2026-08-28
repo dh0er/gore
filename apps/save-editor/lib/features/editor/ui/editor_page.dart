@@ -957,21 +957,35 @@ class _EditorWorkspace extends StatelessWidget {
     final l10n = AppLocalizations.of(context);
 
     Widget writeMessageBanner() {
-      final recovery = state.deletedSaveRecovery;
       return MaterialBanner(
         leading: const Icon(Icons.check_circle_outline),
         content: Text(state.lastWriteMessage!),
         actions: [
-          if (recovery != null)
-            TextButton.icon(
-              onPressed: state.isLoading || state.hasUnsavedEdits
-                  ? null
-                  : () => notifier.restoreDeletedSave(),
-              icon: const Icon(Icons.undo),
-              label: Text(l10n.restoreBackupTooltip(recovery.fileName)),
-            ),
           TextButton(
             onPressed: state.isLoading ? null : notifier.dismissWriteMessage,
+            child: Text(l10n.ok),
+          ),
+        ],
+      );
+    }
+
+    Widget deletedSaveRecoveryBanner() {
+      final recovery = state.deletedSaveRecovery!;
+      return MaterialBanner(
+        leading: const Icon(Icons.check_circle_outline),
+        content: Text(recovery.message),
+        actions: [
+          TextButton.icon(
+            onPressed: state.isLoading || state.hasUnsavedEdits
+                ? null
+                : () => notifier.restoreDeletedSave(),
+            icon: const Icon(Icons.undo),
+            label: Text(l10n.restoreBackupTooltip(recovery.fileName)),
+          ),
+          TextButton(
+            onPressed: state.isLoading
+                ? null
+                : notifier.dismissDeletedSaveRecovery,
             child: Text(l10n.ok),
           ),
         ],
@@ -991,11 +1005,15 @@ class _EditorWorkspace extends StatelessWidget {
               title: l10n.selectASaveTitle,
               body: l10n.selectASaveBody,
             );
-      content = state.lastWriteMessage == null
+      final hasBanner =
+          state.deletedSaveRecovery != null || state.lastWriteMessage != null;
+      content = !hasBanner
           ? emptyPane
           : Column(
               children: [
-                writeMessageBanner(),
+                if (state.deletedSaveRecovery != null)
+                  deletedSaveRecoveryBanner(),
+                if (state.lastWriteMessage != null) writeMessageBanner(),
                 Expanded(child: emptyPane),
               ],
             );
@@ -1088,6 +1106,7 @@ class _EditorWorkspace extends StatelessWidget {
                   ),
                 ],
               ),
+            if (state.deletedSaveRecovery != null) deletedSaveRecoveryBanner(),
             if (state.lastWriteMessage != null) writeMessageBanner(),
             Expanded(
               child: TabBarView(

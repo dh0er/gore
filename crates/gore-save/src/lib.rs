@@ -2974,6 +2974,21 @@ fn abort_claim_with_restore(target: &Path, claim: &Path, original: CoreError) ->
     }
 }
 
+fn abort_delete_with_profile_rollback(
+    save_path: &Path,
+    save_claim: &Path,
+    persistent_pending: PendingReplace,
+    original: CoreError,
+) -> CoreError {
+    match persistent_pending.rollback() {
+        Ok(()) => abort_claim_with_restore(save_path, save_claim, original),
+        Err(rollback_error) => CoreError::Update(format!(
+            "{original}; profile rollback failed safely: {rollback_error}; the claimed save remains at {}",
+            save_claim.display()
+        )),
+    }
+}
+
 /// Map an I/O error that occurred while renaming or replacing a live save file
 /// into a human-readable [`CoreError`] when the error indicates that another
 /// process holds the file open (Windows sharing/lock violation).
@@ -4946,6 +4961,30 @@ fn delete_save_with_before_commit<F>(
 where
     F: FnOnce(&Path, &Path) -> Result<(), CoreError>,
 {
+    delete_save_with_hooks(
+        save_path,
+        persistent_path,
+        slot,
+        profile_id,
+        backup,
+        before_commit,
+        |_, _| Ok(()),
+    )
+}
+
+fn delete_save_with_hooks<F, G>(
+    save_path: &Path,
+    persistent_path: &Path,
+    slot: &str,
+    profile_id: i32,
+    backup: bool,
+    before_commit: F,
+    before_final_claim: G,
+) -> Result<Value, CoreError>
+where
+    F: FnOnce(&Path, &Path) -> Result<(), CoreError>,
+    G: FnOnce(&Path, &Path) -> Result<(), CoreError>,
+{
     if !looks_slot_name(slot) {
         return Err(CoreError::InvalidRequest(format!(
             "{slot:?} is not a valid save-slot name"
@@ -5048,7 +5087,36 @@ where
             )),
         ));
     }
-    before_commit(save_path, persistent_path)?;
+    if let Err(error) = before_commit(save_path, persistent_path) {
+        return Err(abort_claim_with_restore(save_path, &save_claim, error));
+    }
+
+    // Put the verified original back at the live path as a valid guard while
+    // the profile replacement is prepared. A concurrent create that already
+    // won is preserved, and no profile bytes have changed yet.
+    if let Err(error) = restore_claim_noclobber(&save_claim, save_path) {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            let base = CoreError::Update(format!(
+                "{} was recreated while deletion was being prepared; the newer save was preserved",
+                save_path.display()
+            ));
+            return match fs::remove_file(&save_claim) {
+                Ok(()) => Err(base),
+                Err(cleanup_error) => Err(CoreError::Update(format!(
+                    "{base}; the displaced original could not be removed from {}: {cleanup_error}",
+                    save_claim.display()
+                ))),
+            };
+        }
+        return Err(abort_claim_with_restore(
+            save_path,
+            &save_claim,
+            map_locked_file_error(
+                error,
+                &format!("guarding {} during deletion", save_path.display()),
+            ),
+        ));
+    }
 
     let persistent_pending = match begin_replace_if_unchanged(
         persistent_path,
@@ -5056,67 +5124,76 @@ where
         &FileSnapshot::Present(persistent_original.clone()),
     ) {
         Ok(pending) => pending,
-        Err(error) => {
-            return Err(abort_claim_with_restore(save_path, &save_claim, error));
-        }
+        Err(error) => return Err(error),
     };
-
-    let target_was_recreated = match fs::symlink_metadata(save_path) {
-        Ok(_) => true,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-        Err(error) => {
-            let base = map_locked_file_error(
-                error,
-                &format!("checking {} before deletion", save_path.display()),
-            );
-            return match persistent_pending.rollback() {
-                Ok(()) => Err(abort_claim_with_restore(save_path, &save_claim, base)),
-                Err(rollback_error) => Err(CoreError::Update(format!(
-                    "{base}; profile rollback failed safely: {rollback_error}; the displaced original remains at {}",
-                    save_claim.display()
-                ))),
-            };
-        }
-    };
-    if target_was_recreated {
-        let base = CoreError::Update(format!(
-            "{} was recreated while deletion was being prepared; the newer save was preserved",
-            save_path.display()
-        ));
+    if let Err(error) = before_final_claim(save_path, persistent_path) {
         return match persistent_pending.rollback() {
-            Ok(()) => match fs::remove_file(&save_claim) {
-                Ok(()) => Err(base),
-                Err(cleanup_error) => Err(CoreError::Update(format!(
-                    "{base}; the displaced original could not be removed from {}: {cleanup_error}",
-                    save_claim.display()
-                ))),
-            },
+            Ok(()) => Err(error),
             Err(rollback_error) => Err(CoreError::Update(format!(
-                "{base}; profile rollback failed safely: {rollback_error}; the displaced original remains at {}",
-                save_claim.display()
+                "{error}; profile rollback failed safely: {rollback_error}"
             ))),
         };
     }
 
+    // Atomically claim whatever occupies the guarded path after the profile
+    // replacement was installed, then compare it with the original. This claim
+    // is the delete transaction's linearization point: a newer writer before it
+    // is detected and preserved; a writer after it is a new save created after
+    // this deletion.
+    let save_claim = match claim_existing_target(save_path, "delete-final") {
+        Ok(claim) => claim,
+        Err(error) => {
+            let base = if error.kind() == std::io::ErrorKind::NotFound {
+                CoreError::Update(format!(
+                    "{} disappeared before deletion could commit",
+                    save_path.display()
+                ))
+            } else {
+                map_locked_file_error(
+                    error,
+                    &format!("finalizing deletion of {}", save_path.display()),
+                )
+            };
+            return match persistent_pending.rollback() {
+                Ok(()) => Err(base),
+                Err(rollback_error) => Err(CoreError::Update(format!(
+                    "{base}; profile rollback failed safely: {rollback_error}"
+                ))),
+            };
+        }
+    };
+    let claimed_save = match fs::read(&save_claim) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return Err(abort_delete_with_profile_rollback(
+                save_path,
+                &save_claim,
+                persistent_pending,
+                CoreError::Io(format!(
+                    "could not verify final save claim {}: {error}",
+                    save_path.display()
+                )),
+            ));
+        }
+    };
+    if claimed_save != save_original {
+        return Err(abort_delete_with_profile_rollback(
+            save_path,
+            &save_claim,
+            persistent_pending,
+            CoreError::Update(format!(
+                "{} changed while deletion was being prepared; the newer save was preserved",
+                save_path.display()
+            )),
+        ));
+    }
     if let Err(delete_error) = fs::remove_file(&save_claim) {
-        let base =
-            map_locked_file_error(delete_error, &format!("deleting {}", save_path.display()));
-        let profile_rollback = persistent_pending.rollback();
-        let save_restore = restore_claim_noclobber(&save_claim, save_path);
-        return match (profile_rollback, save_restore) {
-            (Ok(()), Ok(())) => Err(base),
-            (profile_result, save_result) => Err(CoreError::Update(format!(
-                "{base}; profile rollback: {}; save restore: {}",
-                profile_result
-                    .err()
-                    .map(|error| error.to_string())
-                    .unwrap_or_else(|| "ok".to_string()),
-                save_result
-                    .err()
-                    .map(|error| error.to_string())
-                    .unwrap_or_else(|| "ok".to_string())
-            ))),
-        };
+        return Err(abort_delete_with_profile_rollback(
+            save_path,
+            &save_claim,
+            persistent_pending,
+            map_locked_file_error(delete_error, &format!("deleting {}", save_path.display())),
+        ));
     }
     persistent_pending.commit();
     invalidate_decoded_payload_cache(save_path);
@@ -16859,12 +16936,13 @@ mod tests {
         fs::write(&save_path, &save_original).unwrap();
         fs::write(&persistent_path, &persistent_original).unwrap();
 
-        let error = delete_save_with_before_commit(
+        let error = delete_save_with_hooks(
             &save_path,
             &persistent_path,
             slot,
             0,
             true,
+            |_, _| Ok(()),
             |target, _| {
                 fs::write(target, &save_newer)?;
                 Ok(())

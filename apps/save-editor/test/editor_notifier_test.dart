@@ -2150,6 +2150,84 @@ void main() {
     },
   );
 
+  test('same-path reinspection invalidates shared in-flight reads', () async {
+    Map<String, Object?> heroHit(String leaf) => {
+      'path': [
+        'm_GenericData',
+        '{CharacterStates}',
+        'AnyCharacterType',
+        'AttributesByGlobalId',
+        '{Hero}',
+        'AttributeSetsByClass',
+        '{/Script/G1R.AttributeSet_Health}',
+        'Attributes',
+        '{MaxHealth}',
+        leaf,
+      ],
+      'display': '…',
+      'type': 'FloatProperty',
+      'value': '64',
+      'editable': true,
+    };
+    final pageTwoGate = Completer<void>();
+    final core = _RecordingCoreService(
+      typedSearchPages: [
+        {
+          'query': 'AttributesByGlobalId {Hero}',
+          'offset': 0,
+          'limit': 1000,
+          'total': 2,
+          'count': 1,
+          'results': [heroHit('BaseValue')],
+        },
+        {
+          'query': 'AttributesByGlobalId {Hero}',
+          'offset': 1,
+          'limit': 1000,
+          'total': 2,
+          'count': 1,
+          'results': [heroHit('CurrentValue')],
+        },
+        {
+          'query': 'AttributesByGlobalId {Hero}',
+          'offset': 0,
+          'limit': 1000,
+          'total': 1,
+          'count': 1,
+          'results': [heroHit('BaseValue')],
+        },
+      ],
+    );
+    late final EditorNotifier notifier;
+    Future<void>? reinspection;
+    core.onTypedSearchCall = (call) {
+      if (call == 0) {
+        reinspection = notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      }
+    };
+    core.waitTypedSearchCall = (call) =>
+        call == 1 ? pageTwoGate.future : Future<void>.value();
+    notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    final originalInspection = notifier.state.inspection;
+
+    final stale = notifier.loadHeroAttributes();
+    while (identical(notifier.state.inspection, originalInspection)) {
+      await pumpEventQueue();
+    }
+    final fresh = notifier.loadHeroAttributes();
+
+    expect(identical(fresh, stale), isFalse);
+    pageTwoGate.complete();
+    await Future.wait([stale, fresh, reinspection!]);
+    expect(
+      core.requests.where(
+        (request) => request.command == 'search_typed_properties',
+      ),
+      hasLength(3),
+    );
+  });
+
   // ---------------------------------------------------------------------------
   // The core's SAME-TARGET rule is order-independent: a structured operation
   // rewrites its target wholesale, so a raw typed edit addressing what it
@@ -5227,52 +5305,57 @@ void main() {
     );
   });
 
-  test('selecting another save disarms deleted-save recovery', () async {
-    final core = _RecordingCoreService(
-      scanData: {
-        'saves': [
-          {
-            'path': r'C:\tmp\saves\G1R-006.sav',
-            'slot': 'G1R-006',
-            'format': 'GSAV',
-            'fileSize': 100,
-            'sha1': 'a',
-            'status': 'ok',
-            'playerSaveName': 'Delete me',
-            'persistentProfileId': 0,
-          },
-          {
-            'path': r'C:\tmp\saves\G1R-007.sav',
-            'slot': 'G1R-007',
-            'format': 'GSAV',
-            'fileSize': 100,
-            'sha1': 'b',
-            'status': 'ok',
-            'playerSaveName': 'Keep me',
-            'persistentProfileId': 0,
-          },
-        ],
-        'profiles': [
-          {
-            'profileId': 0,
-            'profileName': '0',
-            'savedSlots': ['G1R-006', 'G1R-007'],
-          },
-        ],
-        'activeProfileId': 0,
-      },
-    );
-    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
-    await pumpEventQueue();
+  test(
+    'selecting another save keeps deleted-save recovery reachable',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-006.sav',
+              'slot': 'G1R-006',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'a',
+              'status': 'ok',
+              'playerSaveName': 'Delete me',
+              'persistentProfileId': 0,
+            },
+            {
+              'path': r'C:\tmp\saves\G1R-007.sav',
+              'slot': 'G1R-007',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'b',
+              'status': 'ok',
+              'playerSaveName': 'Keep me',
+              'persistentProfileId': 0,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'savedSlots': ['G1R-006', 'G1R-007'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
 
-    expect(await notifier.deleteSave(slot: 'G1R-006', profileId: 0), isTrue);
-    expect(notifier.state.deletedSaveRecovery, isNotNull);
+      expect(await notifier.deleteSave(slot: 'G1R-006', profileId: 0), isTrue);
+      expect(notifier.state.deletedSaveRecovery, isNotNull);
 
-    await notifier.inspect(r'C:\tmp\saves\G1R-007.sav');
+      await notifier.inspect(r'C:\tmp\saves\G1R-007.sav');
 
-    expect(notifier.state.lastWriteMessage, isNull);
-    expect(notifier.state.deletedSaveRecovery, isNull);
-  });
+      expect(notifier.state.lastWriteMessage, isNull);
+      expect(notifier.state.deletedSaveRecovery, isNotNull);
+      notifier.dismissDeletedSaveRecovery();
+      expect(notifier.state.deletedSaveRecovery, isNull);
+    },
+  );
 
   test(
     'all unassigned saves stay out of profiles and collect in Other saves',
@@ -5948,6 +6031,8 @@ class _RecordingCoreService implements GoresaveCoreService {
   /// [typedSearchData]. The last page repeats if called more often.
   final List<Map<String, Object?>>? typedSearchPages;
   var _typedSearchCalls = 0;
+  void Function(int call)? onTypedSearchCall;
+  Future<void> Function(int call)? waitTypedSearchCall;
 
   /// Canned response data for query_progression. When null the command falls
   /// through to the default unhandled-command error response.
@@ -6182,8 +6267,10 @@ class _RecordingCoreService implements GoresaveCoreService {
       case 'search_typed_properties':
         final pages = typedSearchPages;
         if (pages != null && pages.isNotEmpty) {
-          final page = pages[_typedSearchCalls.clamp(0, pages.length - 1)];
-          _typedSearchCalls++;
+          final call = _typedSearchCalls++;
+          final page = pages[call.clamp(0, pages.length - 1)];
+          onTypedSearchCall?.call(call);
+          await waitTypedSearchCall?.call(call);
           return {'ok': true, 'data': page};
         }
         return {
