@@ -42,7 +42,7 @@ class UiSettings {
         'podkova' => UiFontFamily.podkova,
         'notoSerif' => UiFontFamily.notoSerif,
         // Migrate the previous switch without unexpectedly changing an
-        // existing user's appearance. New installs default to Podkova.
+        // existing user's appearance. New installs default to Segoe UI.
         _ when json.containsKey('gothicUiFont') =>
           json['gothicUiFont'] == true
               ? UiFontFamily.podkova

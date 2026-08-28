@@ -71,12 +71,6 @@ flutter:
     - assets/licenses/
 
   fonts:
-    - family: GothicTitle
-      fonts:
-        - asset: assets/fonts/Gothic_Titel_Repariert.ttf
-    - family: GothicIngame
-      fonts:
-        - asset: assets/fonts/Gothic_Ingame_Repariert.ttf
     - family: Podkova
       fonts:
         - asset: assets/fonts/Podkova-Variable.ttf
