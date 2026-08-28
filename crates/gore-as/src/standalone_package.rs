@@ -23,10 +23,12 @@ pub const PRODUCT_STANDALONE_COMPILER_CATALOG_SCHEMA_V1: &str =
     "gore.as.product-standalone-compiler-catalog";
 pub const PRODUCT_STANDALONE_COMPILER_CATALOG_SCHEMA_VERSION_V1: u32 = 1;
 pub const PRODUCT_STANDALONE_COMPILER_PACKAGE_ROOT_V1: &str = "compiler";
+pub const STANDALONE_COMPILER_COMPATIBILITY_ID_V1: &str = "gore-as-standalone-semantic-v1";
 pub const MAX_PRODUCT_STANDALONE_COMPILER_CATALOG_JSON_BYTES_V1: usize = 256 * 1024;
 pub const MAX_PRODUCT_STANDALONE_COMPILER_PROFILES_V1: usize = 64;
 pub const MAX_PRODUCT_STANDALONE_COMPILER_RELATIVE_PATH_BYTES_V1: usize = 512;
 pub const MAX_PRODUCT_STANDALONE_COMPILER_PATH_COMPONENT_BYTES_V1: usize = 128;
+pub const MAX_STANDALONE_COMPILER_COMPATIBILITY_ID_BYTES_V1: usize = 128;
 pub const MAX_PRODUCT_STANDALONE_COMPILER_SIDECAR_BYTES_V1: u64 = 256 * 1024 * 1024;
 pub const EMBEDDED_PRODUCT_STANDALONE_COMPILER_CATALOG_BUILD_SHA256_HEX_V1: &str =
     env!("GORE_EMBEDDED_STANDALONE_COMPILER_CATALOG_SHA256");
@@ -86,6 +88,7 @@ pub struct ProductStandaloneCompilerSidecarV1 {
     relative_path: String,
     byte_len: u64,
     sha256: Sha256Digest,
+    compatibility_id: String,
     protocol: ProductStandaloneCompilerProtocolV1,
     /// Release verification must prove that the PE imports only statically named system DLLs.
     /// Runtime catalog validation refuses any weaker package policy.
@@ -105,12 +108,49 @@ impl ProductStandaloneCompilerSidecarV1 {
         self.sha256
     }
 
+    pub fn compatibility_id(&self) -> &str {
+        &self.compatibility_id
+    }
+
     pub fn protocol(&self) -> ProductStandaloneCompilerProtocolV1 {
         self.protocol
     }
 
     pub fn static_system_only(&self) -> bool {
         self.static_system_only
+    }
+}
+
+/// Historical standalone compiler used to produce the sealed parity reports.
+///
+/// This is deliberately distinct from [`ProductStandaloneCompilerSidecarV1`]: reproducible
+/// rebuilding and release signing may change executable bytes without changing compiler
+/// semantics. Product execution accepts that rebuilt sidecar only when both records declare the
+/// same semantic compatibility and wire protocol.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProductStandaloneCompilerQualificationReferenceV1 {
+    byte_len: u64,
+    sha256: Sha256Digest,
+    compatibility_id: String,
+    protocol: ProductStandaloneCompilerProtocolV1,
+}
+
+impl ProductStandaloneCompilerQualificationReferenceV1 {
+    pub fn byte_len(&self) -> u64 {
+        self.byte_len
+    }
+
+    pub fn sha256(&self) -> Sha256Digest {
+        self.sha256
+    }
+
+    pub fn compatibility_id(&self) -> &str {
+        &self.compatibility_id
+    }
+
+    pub fn protocol(&self) -> ProductStandaloneCompilerProtocolV1 {
+        self.protocol
     }
 }
 
@@ -185,6 +225,7 @@ pub struct ProductStandaloneCompilerCatalogV1 {
     schema: String,
     schema_version: u32,
     sidecar: ProductStandaloneCompilerSidecarV1,
+    qualification_reference: ProductStandaloneCompilerQualificationReferenceV1,
     profiles: Vec<ProductStandaloneCompilerProfileV1>,
 }
 
@@ -223,6 +264,10 @@ impl ProductStandaloneCompilerCatalogV1 {
 
     pub fn sidecar(&self) -> &ProductStandaloneCompilerSidecarV1 {
         &self.sidecar
+    }
+
+    pub fn qualification_reference(&self) -> &ProductStandaloneCompilerQualificationReferenceV1 {
+        &self.qualification_reference
     }
 
     pub fn profiles(&self) -> &[ProductStandaloneCompilerProfileV1] {
@@ -341,6 +386,10 @@ impl ProductStandaloneCompilerCatalogV1 {
             self.sidecar.sha256,
             MAX_PRODUCT_STANDALONE_COMPILER_SIDECAR_BYTES_V1,
         )?;
+        validate_standalone_compiler_compatibility_id_v1(
+            "sidecar.compatibility_id",
+            &self.sidecar.compatibility_id,
+        )?;
         if !matches!(
             self.sidecar.protocol.request_version,
             SIDECAR_REQUEST_VERSION_V1 | SIDECAR_REQUEST_VERSION_V2
@@ -353,6 +402,34 @@ impl ProductStandaloneCompilerCatalogV1 {
         }
         if !self.sidecar.static_system_only {
             return Err(ProductStandaloneCompilerCatalogError::StaticSystemOnlyRequired);
+        }
+
+        validate_nonzero_seal(
+            "qualification_reference",
+            self.qualification_reference.byte_len,
+            self.qualification_reference.sha256,
+            MAX_PRODUCT_STANDALONE_COMPILER_SIDECAR_BYTES_V1,
+        )?;
+        validate_standalone_compiler_compatibility_id_v1(
+            "qualification_reference.compatibility_id",
+            &self.qualification_reference.compatibility_id,
+        )?;
+        let qualification_protocol = self.qualification_reference.protocol;
+        if !matches!(
+            qualification_protocol.request_version,
+            SIDECAR_REQUEST_VERSION_V1 | SIDECAR_REQUEST_VERSION_V2
+        ) || qualification_protocol.response_version != SIDECAR_RESPONSE_VERSION_V1
+        {
+            return Err(ProductStandaloneCompilerCatalogError::UnsupportedProtocol {
+                request_version: qualification_protocol.request_version,
+                response_version: qualification_protocol.response_version,
+            });
+        }
+        if self.sidecar.compatibility_id != self.qualification_reference.compatibility_id {
+            return Err(ProductStandaloneCompilerCatalogError::QualificationCompatibilityMismatch);
+        }
+        if self.sidecar.protocol != qualification_protocol {
+            return Err(ProductStandaloneCompilerCatalogError::QualificationProtocolMismatch);
         }
 
         let mut paths = BTreeSet::<String>::new();
@@ -662,6 +739,29 @@ fn zero_sha256() -> Sha256Digest {
     Sha256Digest::from_bytes([0; 32])
 }
 
+pub(crate) fn validate_standalone_compiler_compatibility_id_v1(
+    field: &'static str,
+    value: &str,
+) -> Result<(), ProductStandaloneCompilerCatalogError> {
+    let version = value
+        .strip_prefix("gore-as-standalone-semantic-v")
+        .filter(|version| {
+            !version.is_empty()
+                && version.len() <= MAX_STANDALONE_COMPILER_COMPATIBILITY_ID_BYTES_V1
+                && version.bytes().all(|byte| byte.is_ascii_digit())
+                && !version.starts_with('0')
+        });
+    if version.is_none() || value.len() > MAX_STANDALONE_COMPILER_COMPATIBILITY_ID_BYTES_V1 {
+        return Err(
+            ProductStandaloneCompilerCatalogError::InvalidCompatibilityId {
+                field,
+                value: value.to_owned(),
+            },
+        );
+    }
+    Ok(())
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ProductStandaloneCompilerCatalogError {
     #[error("embedded standalone compiler catalog build identity is invalid")]
@@ -712,6 +812,14 @@ pub enum ProductStandaloneCompilerCatalogError {
     },
     #[error("sidecar package policy must require static_system_only")]
     StaticSystemOnlyRequired,
+    #[error("{field} contains invalid standalone compiler compatibility id {value:?}")]
+    InvalidCompatibilityId { field: &'static str, value: String },
+    #[error(
+        "shipped sidecar and qualification reference use different compiler compatibility ids"
+    )]
+    QualificationCompatibilityMismatch,
+    #[error("shipped sidecar and qualification reference use different wire protocols")]
+    QualificationProtocolMismatch,
     #[error("compiler target tuple contains a zero Steam/depot identity")]
     IncompleteTarget,
     #[error("compiler target tuple contains an invalid PE CodeView GUID or age")]
@@ -821,11 +929,21 @@ mod tests {
                 relative_path: "bin/gore-as-standalone-compiler.exe".to_owned(),
                 byte_len: 4,
                 sha256: sha256(b"tool"),
+                compatibility_id: STANDALONE_COMPILER_COMPATIBILITY_ID_V1.to_owned(),
                 protocol: ProductStandaloneCompilerProtocolV1 {
                     request_version: SIDECAR_REQUEST_VERSION_V1,
                     response_version: SIDECAR_RESPONSE_VERSION_V1,
                 },
                 static_system_only: true,
+            },
+            qualification_reference: ProductStandaloneCompilerQualificationReferenceV1 {
+                byte_len: 4,
+                sha256: sha256(b"tool"),
+                compatibility_id: STANDALONE_COMPILER_COMPATIBILITY_ID_V1.to_owned(),
+                protocol: ProductStandaloneCompilerProtocolV1 {
+                    request_version: SIDECAR_REQUEST_VERSION_V1,
+                    response_version: SIDECAR_RESPONSE_VERSION_V1,
+                },
             },
             profiles,
         }
@@ -941,6 +1059,8 @@ mod tests {
         let mut full_graph: serde_json::Value = serde_json::from_slice(&json).unwrap();
         full_graph["sidecar"]["protocol"]["request_version"] =
             serde_json::json!(SIDECAR_REQUEST_VERSION_V2);
+        full_graph["qualification_reference"]["protocol"]["request_version"] =
+            serde_json::json!(SIDECAR_REQUEST_VERSION_V2);
         let full_graph = ProductStandaloneCompilerCatalogV1::from_json(
             &serde_json::to_vec(&full_graph).unwrap(),
         )
@@ -949,6 +1069,26 @@ mod tests {
             full_graph.sidecar().protocol().request_version(),
             SIDECAR_REQUEST_VERSION_V2
         );
+
+        let mut incompatible: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        incompatible["qualification_reference"]["compatibility_id"] =
+            serde_json::json!("gore-as-standalone-semantic-v2");
+        assert!(matches!(
+            ProductStandaloneCompilerCatalogV1::from_json(
+                &serde_json::to_vec(&incompatible).unwrap()
+            ),
+            Err(ProductStandaloneCompilerCatalogError::QualificationCompatibilityMismatch)
+        ));
+
+        let mut protocol_mismatch: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        protocol_mismatch["qualification_reference"]["protocol"]["request_version"] =
+            serde_json::json!(SIDECAR_REQUEST_VERSION_V2);
+        assert!(matches!(
+            ProductStandaloneCompilerCatalogV1::from_json(
+                &serde_json::to_vec(&protocol_mismatch).unwrap()
+            ),
+            Err(ProductStandaloneCompilerCatalogError::QualificationProtocolMismatch)
+        ));
 
         let query_target = target(24_539_464, "01234567-89AB-CDEF-0123-456789ABCDEF");
         let manifest_target = target(24_539_464, "01234567-89ab-cdef-0123-456789abcdef");

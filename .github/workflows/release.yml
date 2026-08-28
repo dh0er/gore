@@ -459,7 +459,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build distribution
+      - name: Build compiler and distribution
         run: python build.py gore-cli dist
 
       - name: Extract release notes from CHANGELOG.md

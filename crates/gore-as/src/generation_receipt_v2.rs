@@ -51,6 +51,7 @@ pub enum GenerationArtifactKindV2 {
 pub struct ProductQualifiedPackageIdentityV2 {
     pub catalog_sha256: Sha256Digest,
     pub sidecar: ArtifactSealV1,
+    pub compatibility_id: String,
     pub request_version: u32,
     pub response_version: u32,
     pub profile_manifest: ArtifactSealV1,
@@ -66,6 +67,7 @@ impl ProductQualifiedPackageIdentityV2 {
                 byte_len: identity.sidecar_byte_len(),
                 sha256: identity.sidecar_sha256(),
             },
+            compatibility_id: identity.compatibility_id().to_owned(),
             request_version: identity.request_version(),
             response_version: identity.response_version(),
             profile_manifest: ArtifactSealV1 {
@@ -102,6 +104,14 @@ impl ProductQualifiedPackageIdentityV2 {
                 "does not match the qualified standalone protocol",
             );
         }
+        crate::standalone_package::validate_standalone_compiler_compatibility_id_v1(
+            "qualified_package.compatibility_id",
+            &self.compatibility_id,
+        )
+        .map_err(|error| GenerationReceiptError::Invalid {
+            field: "qualified_package.compatibility_id",
+            reason: error.to_string(),
+        })?;
         ProductStandaloneCompilerTargetV1::try_new(
             self.target.target().clone(),
             self.target.pe_codeview().clone(),
@@ -380,14 +390,12 @@ impl GenerationReceiptV2 {
             );
         }
         let qualified_sidecar = profile_package.standalone_compiler_identity();
-        if qualified_sidecar.byte_len != self.qualified_package.sidecar.byte_len
-            || qualified_sidecar.sha256 != self.qualified_package.sidecar.sha256
-            || qualified_sidecar.request_version != self.qualified_package.request_version
+        if qualified_sidecar.request_version != self.qualified_package.request_version
             || qualified_sidecar.response_version != self.qualified_package.response_version
         {
             return invalid(
                 "qualified_package.sidecar",
-                "is not the exact binary/protocol used for differential qualification",
+                "does not use the wire protocol exercised by differential qualification",
             );
         }
         if profile.target != *self.qualified_package.target.target()

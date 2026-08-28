@@ -282,8 +282,10 @@ gore-as-standalone-compiler compile --request <utf8-json-file>
 gore-as-standalone-compiler qualify --request <utf8-json-file>
 ```
 
-Protocol versions and hard limits live in
-`include/gore_as_standalone/protocol.hpp`. Responses are one bounded JSON object
+Protocol versions, the semantic compatibility id, and hard limits live in
+`include/gore_as_standalone/protocol.hpp`. `--capabilities` reports that id so a
+freshly rebuilt or signed executable can use already qualified profiles without
+being byte-identical to the historical reference. Responses are one bounded JSON object
 on stdout. Exit status 0 means success, 64 invalid CLI use, 65 invalid request
 data, 69 capability unavailable, and 70 an internal software error.
 
@@ -336,10 +338,11 @@ explicitly modified vendored canonical text, and inventory/tree membership mecha
 
 ## Internal product packaging
 
-The source build is not itself a product bundle. The final executable is signed once through an
-internal workflow artifact, differential qualification is bound to those signed bytes, and the
-resulting sidecar/profile set is compressed into GORE's checked-in internal package. No compiler
-GitHub release or tag exists. Ordinary CLI/Studio builds only verify and copy that package and
-explicitly exclude the sidecar from later directory signing. The exact order, commands, verifier
-contract, compatibility selection and game-compiler fallback are documented in
+The compiler has a semantic compatibility id independent of the exact executable hash. Qualified
+profiles retain the exact historical sidecar identity that produced their differential evidence;
+the checked-in source asset contains those profiles but no executable. Every CLI/Studio build
+compiles and tests a fresh sidecar from this source tree. A product release signs that copy exactly
+once, pins its final length/SHA-256 in the embedded catalog, and excludes it from later directory
+signing. No separate compiler release or promotion workflow exists. The exact order, qualification
+rules, compatibility selection and game-compiler fallback are documented in
 [`docs/standalone-compiler-internal-bundle.md`](../../../../docs/standalone-compiler-internal-bundle.md).

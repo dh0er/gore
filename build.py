@@ -1328,33 +1328,18 @@ def target_dir(release: bool) -> Path:
 
 
 _PREPARED_STANDALONE_BUNDLES: dict[
-    tuple[str | None, bool], standalone_compiler_bundle.PreparedBundle
+    tuple[bool, bool], standalone_compiler_bundle.PreparedBundle
 ] = {}
 _QUALIFIED_PROFILE_VERIFIER: tuple[Path, standalone_compiler_bundle.Seal] | None = None
-_PROMOTION_ATTESTATION_VERIFIER: tuple[Path, standalone_compiler_bundle.Seal] | None = (
-    None
-)
 _INTERNAL_STANDALONE_COMPILER_ASSET_ROOT = ROOT / "crates" / "gore-as" / "assets"
-_INTERNAL_STANDALONE_COMPILER_ARCHIVE = (
+_QUALIFIED_STANDALONE_COMPILER_PROFILES_ARCHIVE = (
     _INTERNAL_STANDALONE_COMPILER_ASSET_ROOT
-    / standalone_compiler_bundle.INTERNAL_PACKAGE_ARCHIVE_FILE
+    / standalone_compiler_bundle.QUALIFIED_PROFILES_ARCHIVE_FILE
 )
-_INTERNAL_STANDALONE_COMPILER_DESCRIPTOR = (
+_QUALIFIED_STANDALONE_COMPILER_PROFILES_DESCRIPTOR = (
     _INTERNAL_STANDALONE_COMPILER_ASSET_ROOT
-    / standalone_compiler_bundle.INTERNAL_PACKAGE_DESCRIPTOR_FILE
+    / standalone_compiler_bundle.QUALIFIED_PROFILES_DESCRIPTOR_FILE
 )
-
-
-def _configured_standalone_compiler_internal_input() -> Path | None:
-    raw = os.environ.get("GORE_STANDALONE_COMPILER_INTERNAL_INPUT", "").strip()
-    if not raw:
-        return None
-    path = Path(raw)
-    if not path.is_absolute() or any(part in (".", "..") for part in path.parts):
-        raise SystemExit(
-            "GORE_STANDALONE_COMPILER_INTERNAL_INPUT must be an absolute normalized path"
-        )
-    return path
 
 
 def _qualified_profile_verifier(*, dry: bool):
@@ -1440,102 +1425,36 @@ def _promote_qualified_profile_verifier_authority(
     )
 
 
-def _promotion_attestation_verifier(*, dry: bool):
-    """Return a single-link, measured GitHub CLI attestation verifier."""
-
-    global _PROMOTION_ATTESTATION_VERIFIER
-    if dry:
-        return None
-    if _PROMOTION_ATTESTATION_VERIFIER is None:
-        candidate_name = shutil.which("gh.exe") or shutil.which("gh")
-        if candidate_name is None:
-            raise SystemExit(
-                "GitHub CLI is required to verify standalone compiler provenance"
-            )
-        candidate = Path(candidate_name).resolve()
-        target_parent = ROOT / "target" / "github-attestation-verifier-trusted"
-        target_parent.mkdir(parents=True, exist_ok=True)
-        target_root = Path(
-            tempfile.mkdtemp(prefix="build-", dir=target_parent)
-        ).resolve()
-        candidate_bytes = standalone_compiler_bundle._read_pinned_windows_regular(
-            candidate,
-            standalone_compiler_bundle.MAX_SIDECAR_BYTES,
-            "installed GitHub attestation verifier",
-            require_single_link=False,
-        )
-        verifier = target_root / "gh.exe"
-        try:
-            with verifier.open("xb") as stream:
-                stream.write(candidate_bytes)
-                stream.flush()
-                os.fsync(stream.fileno())
-        except OSError as error:
-            raise SystemExit(
-                f"cannot publish GitHub attestation verifier authority: {error}"
-            ) from error
-        verifier_bytes = standalone_compiler_bundle._read_regular_no_follow(
-            verifier,
-            standalone_compiler_bundle.MAX_SIDECAR_BYTES,
-            "single-link GitHub attestation verifier authority",
-        )
-        if verifier_bytes != candidate_bytes:
-            raise SystemExit("GitHub attestation verifier authority copy changed")
-        _PROMOTION_ATTESTATION_VERIFIER = (
-            verifier,
-            standalone_compiler_bundle.Seal(
-                len(verifier_bytes), hashlib.sha256(verifier_bytes).hexdigest()
-            ),
-        )
-    verifier, verifier_seal = _PROMOTION_ATTESTATION_VERIFIER
-
-    def verify(
-        bundle_path: Path,
-        subjects: dict[str, Path],
-        authority: standalone_compiler_bundle.PromotionAuthority,
-    ) -> None:
-        standalone_compiler_bundle.verify_github_attestation_with_executable(
-            verifier,
-            verifier_seal,
-            bundle_path,
-            subjects,
-            authority,
-        )
-
-    return verify
-
-
-def _product_promotion_attestation_verifier(*, dry: bool):
-    """Use external Sigstore verification only for an explicit development input."""
-
-    if _configured_standalone_compiler_internal_input() is None:
-        return standalone_compiler_bundle.trust_pinned_internal_package_attestation
-    return _promotion_attestation_verifier(dry=dry)
-
-
 def _prepare_standalone_compiler_bundle(
     project: str, *, dry: bool
 ) -> standalone_compiler_bundle.PreparedBundle | None:
     if not PROJECTS[project].get("standalone_compiler_bundle"):
         return None
-    configured_internal_input = _configured_standalone_compiler_internal_input()
-    source_key = (
-        f"development:{configured_internal_input}"
-        if configured_internal_input is not None
-        else f"internal:{_INTERNAL_STANDALONE_COMPILER_DESCRIPTOR}"
-    )
-    key = (source_key, dry)
+    require_authenticode = os.environ.get("GORE_SIGN") == "1"
+    if require_authenticode and not dry:
+        _signing_config()
+    key = (dry, require_authenticode)
     cached = _PREPARED_STANDALONE_BUNDLES.get(key)
     if cached is not None:
         return cached
     work_root = ROOT / "target" / "standalone-compiler-product-bundle"
     if dry:
-        state = (
-            "development internal-input override"
-            if configured_internal_input is not None
-            else "GORE-internal compressed package"
+        try:
+            descriptor = standalone_compiler_bundle.read_qualified_profiles_descriptor(
+                _QUALIFIED_STANDALONE_COMPILER_PROFILES_DESCRIPTOR
+            )
+            standalone_compiler_bundle.verify_qualified_profiles_archive_pin(
+                _QUALIFIED_STANDALONE_COMPILER_PROFILES_ARCHIVE, descriptor
+            )
+        except standalone_compiler_bundle.BundleError as error:
+            raise SystemExit(
+                f"standalone compiler profile package failed: {error}"
+            ) from error
+        signing = "sign once" if require_authenticode else "keep unsigned"
+        print(
+            "[dry-run] would verify qualified profiles, build/test the native "
+            f"standalone compiler, {signing}, and compose the product bundle"
         )
-        print(f"[dry-run] would prepare standalone compiler bundle: {state}")
         prepared = standalone_compiler_bundle.PreparedBundle(
             present=True,
             work_root=work_root,
@@ -1543,39 +1462,44 @@ def _prepare_standalone_compiler_bundle(
             bundle_root=work_root / "compiler",
             sidecar_name=standalone_compiler_bundle.SIDECAR_FILE,
             catalog_sha256=None,
+            require_authenticode=require_authenticode,
         )
     else:
         try:
             qualified_profile_verifier = _qualified_profile_verifier(dry=False)
-            if configured_internal_input is None:
-                descriptor = standalone_compiler_bundle.read_internal_package_descriptor(
-                    _INTERNAL_STANDALONE_COMPILER_DESCRIPTOR
-                )
-                extracted_parent = (
-                    ROOT / "target" / "standalone-compiler-internal-input"
-                )
-                extracted_parent.mkdir(parents=True, exist_ok=True)
-                internal_input = standalone_compiler_bundle.materialize_internal_package(
-                    _INTERNAL_STANDALONE_COMPILER_ARCHIVE,
-                    _INTERNAL_STANDALONE_COMPILER_DESCRIPTOR,
+            descriptor = standalone_compiler_bundle.read_qualified_profiles_descriptor(
+                _QUALIFIED_STANDALONE_COMPILER_PROFILES_DESCRIPTOR
+            )
+            extracted_parent = ROOT / "target" / "standalone-compiler-qualified-profiles"
+            extracted_parent.mkdir(parents=True, exist_ok=True)
+            qualified_profiles = (
+                standalone_compiler_bundle.materialize_qualified_profiles_package(
+                    _QUALIFIED_STANDALONE_COMPILER_PROFILES_ARCHIVE,
+                    _QUALIFIED_STANDALONE_COMPILER_PROFILES_DESCRIPTOR,
                     extracted_parent / descriptor.archive.sha256,
                     qualified_profile_verifier=qualified_profile_verifier,
                 )
-                promotion_attestation_verifier = (
-                    standalone_compiler_bundle.trust_pinned_internal_package_attestation
-                )
-            else:
-                internal_input = configured_internal_input
-                promotion_attestation_verifier = _promotion_attestation_verifier(
-                    dry=False
-                )
-            prepared = standalone_compiler_bundle.prepare_product_bundle(
-                internal_input,
-                work_root,
-                qualified_profile_verifier=qualified_profile_verifier,
-                promotion_attestation_verifier=promotion_attestation_verifier,
-                allow_legacy_internal_input_v1=configured_internal_input is None,
             )
+            native_parent = ROOT / "target" / "standalone-compiler-native-release"
+            native_parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(
+                prefix="build-", dir=native_parent
+            ) as native_name:
+                native_root = Path(native_name).resolve()
+                sidecar = standalone_compiler_bundle.build_native_sidecar(native_root)
+                if require_authenticode:
+                    standalone_compiler_bundle.sign_sidecar_once(
+                        sidecar, native_root / "signed-sidecar-identity.json"
+                    )
+                prepared = (
+                    standalone_compiler_bundle.prepare_product_bundle_from_profiles(
+                        qualified_profiles,
+                        sidecar,
+                        work_root,
+                        qualified_profile_verifier=qualified_profile_verifier,
+                        require_authenticode=require_authenticode,
+                    )
+                )
         except standalone_compiler_bundle.BundleError as error:
             raise SystemExit(
                 f"standalone compiler package failed: {error}"
@@ -1601,20 +1525,6 @@ def _standalone_compiler_build_env(project: str, *, dry: bool) -> dict[str, str]
         "GORE_STANDALONE_COMPILER_CATALOG_PATH": str(prepared.catalog_path),
         "GORE_STANDALONE_COMPILER_CATALOG_SHA256": catalog_sha256,
     }
-
-
-def _require_publishable_standalone_compiler_bundle(
-    project: str, *, dry: bool
-) -> None:
-    """Keep the committed V1 bridge usable for builds, never for publication."""
-
-    prepared = _prepare_standalone_compiler_bundle(project, dry=dry)
-    if prepared is not None and prepared.legacy_internal_input_v1:
-        raise SystemExit(
-            "standalone compiler publication requires the signed dual-profile "
-            "internal-input v2 package with per-profile full-tree receipts; "
-            "the committed v1 package is local-build compatibility only"
-        )
 
 
 def _verify_host_embedded_standalone_compiler_catalog(
@@ -1691,11 +1601,6 @@ def _stage_standalone_compiler_bundle(
             qualified_profile_verifier=(
                 _qualified_profile_verifier(dry=False) if prepared.present else None
             ),
-            promotion_attestation_verifier=(
-                _product_promotion_attestation_verifier(dry=False)
-                if prepared.present
-                else None
-            ),
         )
     except standalone_compiler_bundle.BundleError as error:
         raise SystemExit(f"standalone compiler staging failed: {error}") from error
@@ -1725,11 +1630,12 @@ def _verify_staged_standalone_compiler_bundle(
     try:
         verified = standalone_compiler_bundle.verify_staged_bundle(
             bundle_root,
-            qualified_profile_verifier=_qualified_profile_verifier(dry=False),
-            promotion_attestation_verifier=_product_promotion_attestation_verifier(
-                dry=False
+            sidecar_verifier=(
+                standalone_compiler_bundle.verify_sidecar
+                if prepared.require_authenticode
+                else standalone_compiler_bundle._verify_unsigned_sidecar
             ),
-            allow_legacy_internal_input_v1=prepared.legacy_internal_input_v1,
+            qualified_profile_verifier=_qualified_profile_verifier(dry=False),
         )
     except standalone_compiler_bundle.BundleError as error:
         raise SystemExit(
@@ -2303,7 +2209,6 @@ def dist_project(project: str, dry: bool) -> Path | None:
     cfg = PROJECTS[project]
     if not cfg.get("releasable"):
         raise SystemExit(f"{project} is not releasable")
-    _require_publishable_standalone_compiler_bundle(project, dry=dry)
     build_project(project, release=True, dry=dry)
     # Drop any declared companion binaries (e.g. the `gore` CLI for mod-studio)
     # into the Release dir before it is packaged / handed to the installer.
@@ -2562,9 +2467,6 @@ def release_project(project: str, version: str, steps: dict, dry: bool) -> None:
         raise SystemExit(f"version must be X.Y.Z, got {version!r}")
     prefix = cfg["tag_prefix"]
     tag = f"{prefix}-v{version}"
-
-    if any(steps[name] for name in ("pack", "installer", "tag", "push")):
-        _require_publishable_standalone_compiler_bundle(project, dry=dry)
 
     if steps["bump"]:
         write_version(project, version, dry)

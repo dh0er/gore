@@ -51,6 +51,7 @@ pub struct ProductStandaloneCompilerPackageIdentityV1 {
     catalog_sha256: Sha256Digest,
     sidecar_byte_len: u64,
     sidecar_sha256: Sha256Digest,
+    compatibility_id: String,
     request_version: u32,
     response_version: u32,
     manifest_byte_len: u64,
@@ -70,6 +71,10 @@ impl ProductStandaloneCompilerPackageIdentityV1 {
 
     pub fn sidecar_sha256(&self) -> Sha256Digest {
         self.sidecar_sha256
+    }
+
+    pub fn compatibility_id(&self) -> &str {
+        &self.compatibility_id
     }
 
     pub fn request_version(&self) -> u32 {
@@ -594,15 +599,17 @@ fn try_resolve_authoritative_catalog_at_host_v1(
             )
                 })?;
         let qualified_sidecar = profile_package.standalone_compiler_identity();
+        let qualification_reference = catalog.qualification_reference();
         let catalog_protocol = catalog.sidecar().protocol();
-        if qualified_sidecar.byte_len != sidecar_len
-            || qualified_sidecar.sha256 != sidecar_sha256
-            || qualified_sidecar.request_version != catalog_protocol.request_version()
-            || qualified_sidecar.response_version != catalog_protocol.response_version()
+        let qualification_protocol = qualification_reference.protocol();
+        if qualified_sidecar.byte_len != qualification_reference.byte_len()
+            || qualified_sidecar.sha256 != qualification_reference.sha256()
+            || qualified_sidecar.request_version != qualification_protocol.request_version()
+            || qualified_sidecar.response_version != qualification_protocol.response_version()
         {
             return Err(unavailable_value(
                 ProductStandaloneCompilerPackageUnavailableKindV1::QualificationIdentityMismatch,
-                "catalogued sidecar is not the exact binary/protocol used for qualification",
+                "compiler profile does not match the catalogued qualification reference",
             ));
         }
         if profile_package.profile().profile_sha256 != entry.profile_sha256()
@@ -634,6 +641,7 @@ fn try_resolve_authoritative_catalog_at_host_v1(
             catalog_sha256,
             sidecar_byte_len: sidecar_len,
             sidecar_sha256,
+            compatibility_id: catalog.sidecar().compatibility_id().to_owned(),
             request_version: catalog_protocol.request_version(),
             response_version: catalog_protocol.response_version(),
             manifest_byte_len: entry.manifest_byte_len(),
@@ -1089,6 +1097,7 @@ pub(crate) mod test_support {
     use crate::standalone_package::{
         PRODUCT_STANDALONE_COMPILER_CATALOG_SCHEMA_V1,
         PRODUCT_STANDALONE_COMPILER_CATALOG_SCHEMA_VERSION_V1,
+        STANDALONE_COMPILER_COMPATIBILITY_ID_V1,
     };
     #[cfg(windows)]
     use crate::standalone_sidecar::{SIDECAR_REQUEST_VERSION_V2, SIDECAR_RESPONSE_VERSION_V1};
@@ -1195,7 +1204,10 @@ pub(crate) mod test_support {
             let manifest_path = profile_root.join("compiler-profile.json");
             std::fs::create_dir_all(sidecar_path.parent().unwrap()).unwrap();
             std::fs::create_dir_all(&profile_root).unwrap();
-            let sidecar_bytes = b"synthetic-qualified-sidecar";
+            // The parity reports retain the exact unsigned qualification build. Product bytes
+            // model a later reproducible rebuild plus release signing at the same semantic ABI.
+            let qualification_sidecar_bytes = b"synthetic-qualified-sidecar";
+            let sidecar_bytes = b"synthetic-rebuilt-and-signed-sidecar";
             std::fs::write(&sidecar_path, sidecar_bytes).unwrap();
 
             let install_root = temp.path().join("install/G1R");
@@ -1264,8 +1276,8 @@ pub(crate) mod test_support {
                 &compiler_options.to_json().unwrap(),
             );
             let qualified_sidecar = QualifiedSidecarIdentityV1 {
-                byte_len: sidecar_bytes.len() as u64,
-                sha256: sha256(sidecar_bytes),
+                byte_len: qualification_sidecar_bytes.len() as u64,
+                sha256: sha256(qualification_sidecar_bytes),
                 request_version: QUALIFIED_SIDECAR_REQUEST_VERSION_V2,
                 response_version: QUALIFIED_SIDECAR_RESPONSE_VERSION_V1,
             };
@@ -1360,11 +1372,21 @@ pub(crate) mod test_support {
                     "relative_path": "bin/gore-as-standalone-compiler.exe",
                     "byte_len": sidecar_bytes.len(),
                     "sha256": sha256(sidecar_bytes),
+                    "compatibility_id": STANDALONE_COMPILER_COMPATIBILITY_ID_V1,
                     "protocol": {
                         "request_version": SIDECAR_REQUEST_VERSION_V2,
                         "response_version": SIDECAR_RESPONSE_VERSION_V1
                     },
                     "static_system_only": true
+                },
+                "qualification_reference": {
+                    "byte_len": qualification_sidecar_bytes.len(),
+                    "sha256": sha256(qualification_sidecar_bytes),
+                    "compatibility_id": STANDALONE_COMPILER_COMPATIBILITY_ID_V1,
+                    "protocol": {
+                        "request_version": SIDECAR_REQUEST_VERSION_V2,
+                        "response_version": SIDECAR_RESPONSE_VERSION_V1
+                    }
                 },
                 "profiles": [{
                     "manifest_relative_path": "profiles/build-24539464/compiler-profile.json",
@@ -1846,6 +1868,27 @@ pub(crate) mod test_support {
         };
         assert_eq!(auto_selected.identity().target(), &fixture.target);
         drop(auto_selected);
+
+        let mut wrong_reference_json: serde_json::Value =
+            serde_json::from_slice(&fixture.catalog_bytes).unwrap();
+        wrong_reference_json["qualification_reference"]["sha256"] =
+            serde_json::json!(sha256(b"different-qualified-build"));
+        let wrong_reference_bytes = serde_json::to_vec_pretty(&wrong_reference_json).unwrap();
+        let wrong_reference_catalog =
+            ProductStandaloneCompilerCatalogV1::from_json(&wrong_reference_bytes).unwrap();
+        assert!(matches!(
+            resolve_authoritative_catalog_at_host_v1(
+                &wrong_reference_catalog,
+                sha256(&wrong_reference_bytes),
+                &fixture.host_module,
+                &fixture.target,
+                fixture.target_paths(),
+            ),
+            ProductStandaloneCompilerPackageResolutionV1::Unavailable(ref value)
+                if value.kind()
+                    == ProductStandaloneCompilerPackageUnavailableKindV1::QualificationIdentityMismatch
+        ));
+
         let available = match fixture.resolve() {
             ProductStandaloneCompilerPackageResolutionV1::Available(value) => value,
             other => panic!("expected available synthetic package, got {other:?}"),
@@ -1858,6 +1901,23 @@ pub(crate) mod test_support {
             available.identity().profile_sha256(),
             available.profile_package().profile().profile_sha256
         );
+        assert_eq!(
+            available.identity().compatibility_id(),
+            STANDALONE_COMPILER_COMPATIBILITY_ID_V1
+        );
+        assert_ne!(
+            available.identity().sidecar_sha256(),
+            available
+                .profile_package()
+                .standalone_compiler_identity()
+                .sha256,
+            "a rebuilt/signed sidecar must be accepted at the qualified semantic ABI"
+        );
+        let product_scratch = fixture._temp.path().join("product-scratch");
+        std::fs::create_dir(&product_scratch).unwrap();
+        available
+            .sidecar_runner(product_scratch)
+            .expect("product runner must retain the resolver's compatibility decision");
         assert_eq!(
             fixture.catalog.sidecar().protocol().request_version(),
             SIDECAR_REQUEST_VERSION_V2
@@ -1884,7 +1944,11 @@ pub(crate) mod test_support {
             authority.identity().profile_sha256(),
             authority.profile_package().profile().profile_sha256
         );
-        assert!(std::fs::write(&fixture.sidecar_path, b"synthetic-qualified-sidecar").is_err());
+        assert!(std::fs::write(
+            &fixture.sidecar_path,
+            b"synthetic-rebuilt-and-signed-sidecar"
+        )
+        .is_err());
         assert!(std::fs::write(&fixture.manifest_path, &fixture.manifest_bytes).is_err());
         assert!(std::fs::write(
             fixture
@@ -1903,7 +1967,11 @@ pub(crate) mod test_support {
         .is_err());
         drop(target_inputs);
         assert!(std::fs::write(&fixture.shipping_path, &fixture.shipping_bytes).is_ok());
-        assert!(std::fs::write(&fixture.sidecar_path, b"synthetic-qualified-sidecar").is_err());
+        assert!(std::fs::write(
+            &fixture.sidecar_path,
+            b"synthetic-rebuilt-and-signed-sidecar"
+        )
+        .is_err());
         drop(authority);
 
         let original_sidecar = std::fs::read(&fixture.sidecar_path).unwrap();

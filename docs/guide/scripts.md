@@ -55,14 +55,12 @@ EXE/cache hashes, Steam build numbers and depot metadata document the build used
 for qualification, but they are not runtime locks. A differently packed AMD64
 EXE remains usable when its Shipping format and complete Binds API match.
 
-The internal release package has a stricter completeness rule than this runtime
-selection: it must carry both product profiles (`24539464` and `24878692`), one
-common final sidecar, and one sealed full-tree differential receipt v2 per
-profile. Each receipt comes from one helper-controlled embedded-game run and
-one strict standalone run over the same frozen graph; callers cannot substitute
-their own reference cache. That rule prevents an incomplete CLI/Studio release;
-it does not turn those two Steam tuples or their whole executable hashes into
-runtime gates.
+The checked-in source package contains the qualified `24539464` and `24878692`
+profiles and their evidence, but no compiler executable. Each CLI/Studio build
+compiles and tests a fresh sidecar. The product catalog seals its exact release
+bytes while a separate semantic ABI links it to the historical qualification
+reference. Rebuilding or signing may therefore change the EXE hash without
+turning either Steam tuple or whole executable into a runtime gate.
 
 The default policy is `standalone-then-game`: GORE tries the qualified
 standalone compiler first. If the package is absent, the selected game's cache

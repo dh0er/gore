@@ -189,32 +189,30 @@ audit had checked, and the answer is to look at what changed rather than to pass
 file. The tests make the row re-derive its own published ids from its own
 components, so a mistyped digest fails there rather than in the field.
 
-**8. Requalify every standalone-compiler product target.** A central generation
+**8. Qualify the affected standalone-compiler profiles.** A central generation
 row and a compiler profile answer different questions. The former admits
 generation-bound authoring evidence; the latter captures the ordered
 AngelScript API and frontend/compiler support. Run the frozen 27-case embedded
-and standalone corpus for both required product targets (`24539464` and
-`24878692`) against the exact same final signed sidecar. Promote and typed-reload
-each profile independently. A Binds/API-only update normally requires new
-profile data, not a speculative compiler-core change.
+and standalone corpus for every new or changed API profile against one stable
+unsigned reference sidecar, then promote and typed-reload each profile. Record
+the compiler semantic ABI separately from the reference EXE hash. A Binds/API-
+only update normally needs a new profile at the existing ABI, not a speculative
+compiler-core change.
 
-**9. Run and seal one full-tree differential per compiler profile.** Freeze the
-complete source tree before the comparison. The verifier must produce both
-outputs itself from one in-memory snapshot: exactly one guarded game-only run
-with captured native diagnostics and exact restoration, followed by exactly one
-strict standalone run with no installation mutation or fallback. Receipt v2
-binds both execution records, its profile SHA-256, the common final sidecar and
-protocol, that profile's Shipping and Binds seals, the source aggregate, and
-both retained candidates. A copied or caller-selected reference cache is not
-authority. The release verifier also refuses `GORE_AS_DIAGNOSTICS_HOOK`, so an
-ambient development helper cannot stand in for the SHA-256-verified diagnostics
-hook. Accept only exact WholeCache structural equality, zero semantic
-diffs, and zero alignment loss; benign normalized byte differences stay
-visible. The internal package recorder then requires exactly both product
-targets and exactly one receipt per profile. Missing and additional targets or
-receipts fail Record, Verify, and Stage. This is a package-completeness gate,
-not a whole-binary runtime allowlist: installed builds still qualify by bounded
-PE/cache structure and the ordered Binds API.
+**9. Run and seal one full-tree differential when the compiler ABI or relevant
+profile semantics changed.** Freeze the complete source tree before the
+comparison. The verifier must produce both outputs itself from one in-memory
+snapshot: exactly one guarded game-only run with captured native diagnostics
+and exact restoration, followed by exactly one strict standalone run with no
+installation mutation or fallback. Receipt v2 binds both execution records,
+the profile SHA-256, historical reference sidecar and protocol, that profile's
+Shipping and Binds seals, the source aggregate, and both retained candidates. A
+copied or caller-selected reference cache is not authority. The verifier also
+refuses `GORE_AS_DIAGNOSTICS_HOOK`, so an ambient development helper cannot
+stand in for the SHA-256-verified diagnostics hook. Accept only exact WholeCache
+structural equality, zero semantic differences, and zero alignment loss;
+benign normalized byte differences stay visible. Ordinary tags at the same ABI
+rebuild and test the sidecar but do not rerun the private game comparison.
 
 **10. Confirm every live claim separately on the running game.** A seal proves
 the evidence is the evidence, never that the game agrees with it. Patch one
