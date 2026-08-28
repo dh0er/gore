@@ -19,6 +19,29 @@ The Flutter GUIs reuse the same Rust engine as the CLI through a `dart:ffi`
 bridge. The CLI is the expert and automation surface; the GUIs package those
 contracts into guided workflows instead of maintaining a second engine.
 
+## ✅ Compatibility
+
+**Save Editor** is not tied to a specific game version. It edits the save file
+itself, never the game installation, and is designed to preserve data it does
+not understand. Its core save editing is stable across game versions, although
+a future patch can add or change save fields or make the bundled item and
+location catalogs stale. Keep backups of important saves.
+
+**Mod Manager** and the **CLI** have been tested with Gothic 1 Remake **1.0.4a
+(CL171864)**. Neither uses a simple version-number lock. Mod Manager
+compatibility also depends on the individual mod and whether its target files,
+localization IDs, assets, and script targets exist in the installed game.
+Import validates the package, but cannot prove runtime compatibility; Apply
+checks the current installation and reports missing or incompatible targets.
+
+Many offline CLI commands are independent of the installed game version, while
+commands that read, build, or deploy game data depend on the relevant formats
+and APIs. In particular, the bundled standalone AngelScript compiler checks the
+installed Shipping cache format and complete ordered Binds API instead of the
+displayed game version. If they do not match, strict standalone compilation
+fails safely; the default `standalone-then-game` mode reports the reason and can
+use the game's embedded compiler as a fallback.
+
 ## ⬇️ Downloads
 
 | Tool | Version | Release page |
