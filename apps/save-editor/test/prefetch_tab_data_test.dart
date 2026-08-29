@@ -246,12 +246,9 @@ void main() {
               request.payload['section'] == 'events',
         )
         .map((request) => request.payload['limit']);
-    // Overview aggregates the full Hero history in broad pages, while the
-    // Events panel still opens with its smaller interactive page.
-    expect(
-      eventLimits,
-      containsAll([EditorPageSize.statistics, EditorPageSize.detail]),
-    );
+    // The mounted Overview owns its broad statistics walk. Prefetch only warms
+    // the smaller request the interactive Events panel will make.
+    expect(eventLimits, [EditorPageSize.detail]);
     expect(progression('quests')['limit'], EditorPageSize.fullList);
     expect(progression('story')['limit'], EditorPageSize.fullList);
     expect(progression('story')['includeUnset'], isTrue);
