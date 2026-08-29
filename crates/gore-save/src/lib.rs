@@ -1024,7 +1024,7 @@ fn scan_save_dir_summary_with_codec_backend(
             path.display()
         )));
     }
-    recover_interrupted_profile_assignment_claims(path)?;
+    recover_interrupted_profile_assignment_claims(path);
     let mut persistent = persistent_data_list_summary_for_dir(path).unwrap_or_default();
     let profile_slot_owners =
         normalize_profile_saved_slots(&mut persistent.profiles, &persistent.slots);
@@ -3134,21 +3134,14 @@ fn rollback_profile_assignment_restore_conflict(
 /// back. If the process dies in that tiny window, the profile half is already
 /// committed. Restore only a structurally valid, profile-matching claim whose
 /// target is still absent; a concurrently recreated target always wins.
-fn recover_interrupted_profile_assignment_claims(save_root: &Path) -> Result<(), CoreError> {
+fn recover_interrupted_profile_assignment_claims(save_root: &Path) {
     const MARKER: &str = ".assign-final-goresave-";
-    let persistent_path = save_root.join("PersistentDataList.sav");
-    let persistent = match fs::read(&persistent_path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error.into()),
+    let entries = match fs::read_dir(save_root) {
+        Ok(entries) => entries,
+        Err(_) => return,
     };
-    let root = match parse_profile_file(&persistent) {
-        Ok(root) => root,
-        Err(_) => return Ok(()),
-    };
-
-    for entry in fs::read_dir(save_root)? {
-        let entry = entry?;
+    let mut claims_by_target: HashMap<String, Vec<((u128, u64), PathBuf)>> = HashMap::new();
+    for entry in entries.flatten() {
         let file_name = entry.file_name().to_string_lossy().into_owned();
         let Some((target_name, claim_suffix)) = file_name.split_once(MARKER) else {
             continue;
@@ -3166,54 +3159,107 @@ fn recover_interrupted_profile_assignment_claims(save_root: &Path) -> Result<(),
             continue;
         }
         let claim = entry.path();
-        let metadata = fs::symlink_metadata(&claim)?;
+        let Ok(metadata) = fs::symlink_metadata(&claim) else {
+            continue;
+        };
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             continue;
         }
-        let target = save_root.join(target_name);
-        if target.exists() {
-            continue;
-        }
-        let claim_bytes = fs::read(&claim)?;
-        let save_parts = match split_gsav(&claim_bytes) {
-            Ok(parts) => parts,
+        let mut parts = claim_suffix.rsplitn(3, '-');
+        let sequence = parts.next().and_then(|value| value.parse().ok()).unwrap_or(0);
+        let nanos = parts.next().and_then(|value| value.parse().ok()).unwrap_or(0);
+        claims_by_target
+            .entry(target_name.to_string())
+            .or_default()
+            .push(((nanos, sequence), claim));
+    }
+
+    let root = fs::read(save_root.join("PersistentDataList.sav"))
+        .ok()
+        .and_then(|persistent| parse_profile_file(&persistent).ok());
+    for (target_name, mut claims) in claims_by_target {
+        claims.sort_by(|left, right| right.0.cmp(&left.0));
+        let target = save_root.join(&target_name);
+        match fs::symlink_metadata(&target) {
+            Ok(_) => {
+                // A live target created after the interrupted CAS is the newer
+                // authority. Retire every older claim permanently.
+                for (_, claim) in claims {
+                    let _ = fs::remove_file(claim);
+                }
+                continue;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(_) => continue,
-        };
-        let public = summarize_public_payload(save_parts.public_payload);
-        if public
-            .slot_name
-            .as_deref()
-            .is_some_and(|public_slot| public_slot != slot)
-        {
-            continue;
         }
-        let profile_path = match persistent_slot_profile_path(&root, slot) {
+        let Some(root) = root.as_ref() else {
+            continue;
+        };
+        let Some(slot) = Path::new(&target_name)
+            .file_stem()
+            .and_then(|value| value.to_str())
+        else {
+            continue;
+        };
+        let profile_path = match persistent_slot_profile_path(root, slot) {
             Ok(path) => path,
             Err(_) => continue,
         };
-        let profile_segments = properties::parse_path(&profile_path)?;
-        let profile_chain = properties::resolve_chain(&root.properties, &profile_segments)?;
+        let profile_segments = match properties::parse_path(&profile_path) {
+            Ok(segments) => segments,
+            Err(_) => continue,
+        };
+        let profile_chain = match properties::resolve_chain(&root.properties, &profile_segments) {
+            Ok(chain) => chain,
+            Err(_) => continue,
+        };
         let properties::PropertyValue::Int(profile_id) = &profile_chain.target.value else {
             continue;
         };
-        if public
-            .profile_id
-            .is_some_and(|public_profile_id| public_profile_id != *profile_id)
-        {
-            continue;
-        }
-        match restore_claim_noclobber(&claim, &target) {
-            Ok(()) => invalidate_decoded_payload_cache(&target),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => {
-                return Err(map_locked_file_error(
-                    error,
-                    &format!("recovering interrupted profile assignment for {}", target.display()),
-                ));
+
+        for (_, claim) in &claims {
+            let claim_bytes = match fs::read(claim) {
+                Ok(bytes) => bytes,
+                // The newest claim is the only candidate with a defensible
+                // ordering. If it is locked, defer recovery instead of falling
+                // back to older bytes.
+                Err(_) => break,
+            };
+            let save_parts = match split_gsav(&claim_bytes) {
+                Ok(parts) => parts,
+                Err(_) => continue,
+            };
+            let public = summarize_public_payload(save_parts.public_payload);
+            if public
+                .slot_name
+                .as_deref()
+                .is_some_and(|public_slot| public_slot != slot)
+                || public
+                    .profile_id
+                    .is_some_and(|public_profile_id| public_profile_id != *profile_id)
+            {
+                continue;
+            }
+            match restore_claim_noclobber(claim, &target) {
+                Ok(()) => {
+                    invalidate_decoded_payload_cache(&target);
+                    for (_, stale_claim) in &claims {
+                        if stale_claim != claim {
+                            let _ = fs::remove_file(stale_claim);
+                        }
+                    }
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    for (_, stale_claim) in &claims {
+                        let _ = fs::remove_file(stale_claim);
+                    }
+                    break;
+                }
+                Err(_) => break,
             }
         }
-    }
-    Ok(())
+    };
 }
 
 fn abort_delete_with_profile_rollback(
@@ -17523,6 +17569,60 @@ mod tests {
         assert!(!interrupted_claim.exists());
         assert_eq!(summary.saves.len(), 1);
         assert_eq!(summary.saves[0].persistent_profile_id, Some(1));
+    }
+
+    #[test]
+    fn scan_retires_assignment_claim_after_a_live_save_wins() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-006";
+        let save_path = dir.path().join(format!("{slot}.sav"));
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        fs::write(
+            &save_path,
+            build_gsav(
+                2,
+                &public_payload_with_profile("Assignment claim", 0),
+                &minimal_stream(),
+                &[0, 0, 0, 0],
+            ),
+        )
+        .unwrap();
+        fs::write(
+            &persistent_path,
+            assignment_persistent_data_list(slot, 0),
+        )
+        .unwrap();
+        assign_save_profile(&save_path, None, &persistent_path, 1, false).unwrap();
+        let stale_claim = claim_existing_target(&save_path, "assign-final").unwrap();
+        let concurrent_save = minimal_gsav("Concurrent winner");
+        fs::write(&save_path, &concurrent_save).unwrap();
+
+        scan_save_dir_summary_with_codec_backend(dir.path(), None).unwrap();
+        assert_eq!(fs::read(&save_path).unwrap(), concurrent_save);
+        assert!(!stale_claim.exists());
+
+        fs::remove_file(&save_path).unwrap();
+        scan_save_dir_summary_with_codec_backend(dir.path(), None).unwrap();
+        assert!(!save_path.exists());
+    }
+
+    #[test]
+    fn scan_ignores_assignment_recovery_when_profile_is_unreadable() {
+        let dir = tempdir().unwrap();
+        let save_path = dir.path().join("G1R-006.sav");
+        fs::write(&save_path, minimal_gsav("Readable save")).unwrap();
+        fs::create_dir(dir.path().join("PersistentDataList.sav")).unwrap();
+        fs::write(
+            dir.path()
+                .join("G1R-007.sav.assign-final-goresave-1-2-3"),
+            minimal_gsav("Deferred claim"),
+        )
+        .unwrap();
+
+        let summary = scan_save_dir_summary_with_codec_backend(dir.path(), None).unwrap();
+
+        assert_eq!(summary.saves.len(), 1);
+        assert_eq!(summary.saves[0].slot, "G1R-006");
     }
 
     #[test]
