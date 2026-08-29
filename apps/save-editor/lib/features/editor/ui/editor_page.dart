@@ -1977,29 +1977,36 @@ class _SaveProfileCard extends StatelessWidget {
         ),
       ],
     );
-    final profileSelector = DropdownButtonFormField<int>(
+    final profileSelector = KeyedSubtree(
       key: const ValueKey('save-profile-selector'),
-      initialValue: currentId,
-      isExpanded: true,
-      decoration: InputDecoration(labelText: l10n.profile, isDense: true),
-      hint: Text(l10n.saveProfileSelect),
-      items: [
-        for (final profile in state.profiles)
-          DropdownMenuItem<int>(
-            value: profile.profileId,
-            child: Text(
-              localizedProfileDisplayName(l10n, profile),
-              overflow: TextOverflow.ellipsis,
+      child: DropdownButtonFormField<int>(
+        // DropdownButtonFormField owns its selected value. Recreate that state
+        // whenever the authoritative editor state changes so a completed
+        // removal, assignment, or failed optimistic assignment cannot leave a
+        // stale profile displayed.
+        key: ObjectKey(state),
+        initialValue: currentId,
+        isExpanded: true,
+        decoration: InputDecoration(labelText: l10n.profile, isDense: true),
+        hint: Text(l10n.saveProfileSelect),
+        items: [
+          for (final profile in state.profiles)
+            DropdownMenuItem<int>(
+              value: profile.profileId,
+              child: Text(
+                localizedProfileDisplayName(l10n, profile),
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
-          ),
-      ],
-      onChanged: enabled
-          ? (profileId) {
-              if (profileId != null && profileId != currentId) {
-                notifier.assignSelectedSaveToProfile(profileId);
+        ],
+        onChanged: enabled
+            ? (profileId) {
+                if (profileId != null && profileId != currentId) {
+                  notifier.assignSelectedSaveToProfile(profileId);
+                }
               }
-            }
-          : null,
+            : null,
+      ),
     );
     final profileControls = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,

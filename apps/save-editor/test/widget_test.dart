@@ -1720,6 +1720,51 @@ void main() {
     expect(find.text('Newest unassigned'), findsAtLeastNWidgets(1));
   });
 
+  testWidgets('profile selector returns to authoritative value after failure', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final core = _FailedProfileAssignmentCoreService();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(core),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final selector = find.byKey(const ValueKey('save-profile-selector'));
+    expect(
+      find.descendant(of: selector, matching: find.text('Profile 0')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byType(DropdownButtonFormField<int>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Profile 1').last);
+    await tester.pumpAndSettle();
+
+    final assignment = core.requests.singleWhere(
+      (request) => request.command == 'assign_save_profile',
+    );
+    expect(assignment.payload['profileId'], 1);
+    expect(
+      find.descendant(of: selector, matching: find.text('Profile 0')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: selector, matching: find.text('Profile 1')),
+      findsNothing,
+    );
+  });
+
   testWidgets(
     'missing profile save is marked, not inspectable, and removable after confirmation',
     (tester) async {
@@ -2700,6 +2745,31 @@ class _DeletingSaveCoreService extends _FakeCoreService {
     final response = await super.execute(command, payload: payload);
     if (command == 'delete_save') _deleted = true;
     if (command == 'restore_deleted_save') _deleted = false;
+    return response;
+  }
+}
+
+class _FailedProfileAssignmentCoreService extends _FakeCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    final response = await super.execute(command, payload: payload);
+    if (command != 'scan_save_dir') return response;
+
+    final data = (response['data'] as Map).cast<String, Object?>();
+    final profiles = data['profiles'] as List<Object?>;
+    profiles.add({
+      'profileId': 1,
+      'profileName': '1',
+      'quickSaveSlots': <String>[],
+      'autoSaveSlots': <String>[],
+      'savedSlots': <String>[],
+      'difficultyPreset': 'DifficultyPreset_Custom',
+      'maxQuick': 3,
+      'maxAuto': 2,
+    });
     return response;
   }
 }
