@@ -163,11 +163,10 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
         final killed =
             tags.contains('memory.character.defeated.kill') ||
             tags.contains('memory.execution');
-        final defeated =
-            tags.contains('memory.character.defeated') ||
-            tags.contains('memory.wasdefeated') ||
-            tags.contains('memory.combat.wasdefeated') ||
-            tags.contains('memory.saveandload.defeated');
+        // The queried memory belongs to the hero. `Character.Defeated` records
+        // a target the hero beat, while the `WasDefeated`/save-load variants
+        // record the hero's own loss and must not inflate defeated-NPC totals.
+        final defeated = tags.contains('memory.character.defeated');
         final targetCategory = _targetCategory(event, catalog);
         if (killed && targetCategory == _TargetCategory.monster) {
           killedMonsters++;

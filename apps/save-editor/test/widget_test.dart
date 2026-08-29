@@ -108,6 +108,34 @@ void main() {
     await tester.pumpAndSettle();
   });
 
+  testWidgets('title measurement follows the ambient text scale', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    tester.platformDispatcher.textScaleFactorTestValue = 2;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(_EmptyCoreService()),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('title-brand'))).width,
+      greaterThan(200),
+    );
+  });
+
   testWidgets('renders editor shell with fake save data', (tester) async {
     // Desktop window size so the inventory/diagnostics accordion (which fills
     // the available height) has room to lay out.
@@ -2857,10 +2885,10 @@ class _StatisticsCoreService extends _FakeCoreService {
         'data': {
           'section': 'events',
           'character': 'Hero_Global',
-          'total': 6,
+          'total': 9,
           'offset': 0,
           'limit': payload['limit'] ?? 500,
-          'count': 6,
+          'count': 9,
           'events': [
             {
               'index': 0,
@@ -2901,6 +2929,16 @@ class _StatisticsCoreService extends _FakeCoreService {
               // stay unknown rather than inflating the monster count.
               'affected': 'Human',
             },
+            for (final loss in const [
+              (6, 'Memory.WasDefeated'),
+              (7, 'Memory.Combat.WasDefeated'),
+              (8, 'Memory.SaveAndLoad.Defeated'),
+            ])
+              {
+                'index': loss.$1,
+                'tags': [loss.$2],
+                'affected': 'OC_STT_Diego',
+              },
           ],
           'arrayPath': [
             'LongTermMemoryByGlobalId',
@@ -2930,7 +2968,7 @@ class _ExpelledStatisticsCoreService extends _StatisticsCoreService {
     final data = (response['data'] as Map).cast<String, Object?>();
     final events = data['events'] as List<Object?>;
     events.add({
-      'index': 6,
+      'index': 9,
       'tags': ['Memory.Guild.Expelled', 'Guild.Human.NewCamp.Mercenary'],
       'affected': 'Hero',
     });

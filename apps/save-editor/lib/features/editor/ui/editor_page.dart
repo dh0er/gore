@@ -143,11 +143,13 @@ class _EditorPageState extends ConsumerState<EditorPage>
                 ),
                 maxLines: 1,
                 textDirection: Directionality.of(context),
+                textScaler: MediaQuery.textScalerOf(context),
               )..layout(maxWidth: 260);
               final titleWidth = math.min(
                 titlePainter.width,
                 maximumTitleWidth,
               );
+              titlePainter.dispose();
 
               return Row(
                 children: [
@@ -165,6 +167,7 @@ class _EditorPageState extends ConsumerState<EditorPage>
                   // stays content-sized on wide windows, but yields space to
                   // preparation progress when UI scaling narrows the AppBar.
                   SizedBox(
+                    key: const ValueKey('title-brand'),
                     width: titleWidth,
                     child: Text(
                       l10n.appTitle,
