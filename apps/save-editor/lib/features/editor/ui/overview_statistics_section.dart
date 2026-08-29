@@ -405,7 +405,6 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
         ? null
         : _characters!.characters.where(
             (row) =>
-                row.globalId != null &&
                 row.uniqueName.toLowerCase() != 'hero' &&
                 catalog.isHuman(row.uniqueName),
           );

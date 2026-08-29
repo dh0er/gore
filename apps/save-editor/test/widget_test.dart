@@ -1246,6 +1246,26 @@ void main() {
     final encountersCard = find.byKey(
       const ValueKey('statistics-card-progress'),
     );
+    String metricValue(String label) {
+      Element? metric;
+      tester.element(find.text(label)).visitAncestorElements((candidate) {
+        if (candidate.widget is Column) {
+          metric = candidate;
+          return false;
+        }
+        return true;
+      });
+      final texts = <String>[];
+      void collectText(Element element) {
+        final widget = element.widget;
+        if (widget is Text && widget.data != null) texts.add(widget.data!);
+        element.visitChildElements(collectText);
+      }
+
+      metric!.visitChildElements(collectText);
+      return texts.last;
+    }
+
     final inventoryCard = find.byKey(
       const ValueKey('statistics-section-inventory'),
     );
@@ -1335,6 +1355,9 @@ void main() {
     expect(find.text('Killed NPCs'), findsOneWidget);
     expect(find.text('Known NPCs'), findsOneWidget);
     expect(find.text('Known teachers'), findsOneWidget);
+    expect(metricValue('Known NPCs'), '2');
+    expect(metricValue('Known traders'), '2');
+    expect(metricValue('Known teachers'), '2');
     expect(
       find.descendant(
         of: find.byKey(const ValueKey('statistics-card-character')),
@@ -2309,7 +2332,7 @@ class _StatisticsCoreService extends _FakeCoreService {
       return {
         'ok': true,
         'data': {
-          'total': 3,
+          'total': 4,
           'characters': [
             {
               'globalId': 'Hero_Global',
@@ -2335,6 +2358,15 @@ class _StatisticsCoreService extends _FakeCoreService {
               'hasInventory': false,
               'hasKnowledge': false,
               'hasEvents': true,
+            },
+            {
+              'globalId': null,
+              'uniqueName': 'NC_BAU_Homer_935',
+              'isDead': false,
+              'hasInventory': false,
+              'hasKnowledge': true,
+              'hasEvents': false,
+              'isTrader': true,
             },
           ],
         },
