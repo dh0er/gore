@@ -542,9 +542,11 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
   }
 
   static int _questCount(Map<String, int> counts, String state) {
-    final suffix = state.toLowerCase();
+    final normalized = state.toLowerCase();
     return counts.entries
-        .where((entry) => entry.key.toLowerCase().endsWith(suffix))
+        .where(
+          (entry) => entry.key.split('::').last.toLowerCase() == normalized,
+        )
         .fold(0, (sum, entry) => sum + entry.value);
   }
 

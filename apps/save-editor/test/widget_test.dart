@@ -1363,6 +1363,8 @@ void main() {
     expect(metricValue('Known traders'), '2');
     expect(metricValue('Known teachers'), '2');
     expect(metricValue('Open crimes'), '1');
+    expect(metricValue('Available'), '1');
+    expect(metricValue('Running'), '1');
     expect(
       core.requests.where(
         (request) =>
@@ -2412,6 +2414,12 @@ class _StatisticsCoreService extends _FakeCoreService {
       final data = (response['data'] as Map).cast<String, Object?>();
       data.remove('screenshot');
       final private = (data['private'] as Map).cast<String, Object?>();
+      final progression = (private['progression'] as Map)
+          .cast<String, Object?>();
+      final questStates = (progression['questStates'] as Map)
+          .cast<String, Object?>();
+      questStates['Unavailable'] = 40;
+      questStates['NotRunning'] = 30;
       private['factions'] = {
         // One global crime implicates both guilds. The Overview must use the
         // unique global count instead of summing the duplicated guild rows.
