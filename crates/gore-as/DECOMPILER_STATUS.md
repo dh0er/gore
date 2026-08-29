@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 99.17% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 99.18% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -9,21 +9,22 @@ was measured, and what is left.
 
 ## What is measured, and on what
 
-Measured 2026-08-23 against build `Build55_CL171864` (script cache SHA-256
-`D0AFAF909E62867FAEDC3678A1175F5E8DE5E784DC503A14FFBDE4726F297231`, GUID
-`be78fe0a46ac6643968597e85c7e5b3f`). This build is not one of the audited generations, so the
-numbers qualify the DECOMPILER, not the build.
+Measured 2026-08-29 against the shipped build whose script cache has SHA-256
+`7A18F954E32AF30FC24AE3A66EA35D3B5CB98560C8F5083C7846FC9CE1D77511` (GUID
+`7835bcc09c5eee488d72cb5ffb0fb0c3`). This build is not one of the audited generations, so the
+numbers qualify the DECOMPILER, not the build. Counts from the earlier `D0AFAF90…` build are not
+comparable: that one had 7,308 modules and 164,607 aligned functions.
 
-Everything except the splice test runs over the **whole corpus** — all 7,308 modules, all 164,604
+Everything except the splice test runs over the **whole corpus** — all 7,317 modules, all 164,723
 functions the vanilla and regenerated caches align:
 
 | Measurement | Scope | Result |
 |-------------|-------|--------|
-| Modules emitted, fallback stubs | full corpus | 7,308 modules, **0 stubs** |
+| Modules emitted, fallback stubs | full corpus | 7,317 modules, **0 stubs** |
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **99.17%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,723 functions | **99.18%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,10 +38,13 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,374 functions (0.83%) recompile to bytecode that differs semantically.** A semantic
+**1,344 functions (0.82%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
+
+The class table below is the last full classification, taken when the total stood at 3,511 — it
+says which shapes the work was aimed at, not what the remaining 1,344 are made of.
 
 Classified over WHOLE functions — every instruction of both sides, not the window around the
 first divergence. An earlier revision of this document classified the window instead and reported
