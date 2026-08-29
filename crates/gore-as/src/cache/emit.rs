@@ -2125,6 +2125,11 @@ fn emit_function_ctor(
             fields,
             &spilled_boolean_names(f, refs),
         );
+        let rendered = fold_literal_null_returns(
+            &rendered,
+            &literal_null_return_slots(f),
+            returns_by_reference,
+        );
         s.truncate(declarations_at);
         s.push_str(&rendered);
     } else {
@@ -10737,8 +10742,7 @@ fn fold_assignment_receivers(body: &str, consumed: &HashSet<(i32, usize)>) -> St
             None => at += 1,
         }
     }
-    let mut text = lines.join("
-");
+    let mut text = lines.join("\n");
     if body.ends_with('\n') {
         text.push('\n');
     }
@@ -11051,6 +11055,93 @@ fn rewrite_inline_enum_round_trips(
 /// The slot number a `local_N` identifier names.
 fn slot_of(ident: &str) -> Option<i32> {
     ident.strip_prefix("local_")?.parse().ok()
+}
+
+/// A literal `return nullptr;` NULLS the return slot before it loads it.
+///
+/// `FreeNullV8 S` standing immediately before `LOADOBJ S` — reading past the `PSF vT; CALLSYS`
+/// cleanup pairs a scope exit emits between the two — is the compiler releasing whatever the slot
+/// held so that it can load a null out of it. A `T x = nullptr; return x;` never pays that
+/// release: the local is already null and the compiler loads it straight out. So the release is
+/// the witness that the source wrote the literal, and it is a strong one: 120 occurrences stand in
+/// functions we already reproduce byte for byte.
+fn literal_null_return_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let mut out = HashSet::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if ins.op.name != "FreeNullV8" {
+            continue;
+        }
+        let slot = w0(ins);
+        if slot <= 0 {
+            continue;
+        }
+        let mut next = at + 1;
+        while instrs.get(next).is_some_and(|ins| ins.op.name == "PSF")
+            && instrs
+                .get(next + 1)
+                .is_some_and(|ins| ins.op.name == "CALLSYS")
+        {
+            next += 2;
+        }
+        if instrs
+            .get(next)
+            .is_some_and(|ins| ins.op.name == "LOADOBJ" && w0(ins) == slot)
+        {
+            out.insert(slot);
+        }
+    }
+    out
+}
+
+/// `T x = nullptr; return x;` is `return nullptr;` wherever the bytecode witnesses the literal.
+///
+/// The name exists only to be returned, so folding it away costs nothing — but only the release
+/// tells the two forms apart, which is why this is gated on [`literal_null_return_slots`] rather
+/// than on the shape of the text.
+fn fold_literal_null_returns(body: &str, witnessed: &HashSet<i32>, by_reference: bool) -> String {
+    if witnessed.is_empty() || by_reference {
+        return body.to_owned();
+    }
+    let lines: Vec<&str> = body.lines().collect();
+    let mut kept: Vec<String> = Vec::new();
+    let mut at = 0usize;
+    while at < lines.len() {
+        let folded = (|| {
+            let (indent, name, init) = declaration_with_initializer(lines[at])?;
+            if init != "nullptr" {
+                return None;
+            }
+            let (slot, _) = slot_and_life(&name)?;
+            if !witnessed.contains(&slot) {
+                return None;
+            }
+            let next = lines.get(at + 1)?;
+            if next.trim() != format!("return {name};") || indent_of(next) != indent {
+                return None;
+            }
+            // The declaration and the return are the name's whole life.
+            (count_ident(body, &name) == 2).then(|| format!("{indent}return nullptr;"))
+        })();
+        match folded {
+            Some(line) => {
+                kept.push(line);
+                at += 2;
+            }
+            None => {
+                kept.push(lines[at].to_string());
+                at += 1;
+            }
+        }
+    }
+    let mut joined = kept.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
 }
 
 /// `local_N = <expr>; return local_N;` is `return <expr>;`. The name is the whole cost: a
