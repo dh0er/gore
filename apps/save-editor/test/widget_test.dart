@@ -42,7 +42,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          coreServiceProvider.overrideWithValue(_FakeCoreService()),
+          coreServiceProvider.overrideWithValue(_EmptyCoreService()),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
           ),
@@ -63,6 +63,45 @@ void main() {
     expect(
       tester.getCenter(progress).dx,
       closeTo(tester.getCenter(availableSpace).dx, 0.5),
+    );
+
+    itemCatalog.complete(const ItemIconCatalog.empty());
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('title bar fits the minimum window at 200 percent UI scale', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(960, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final itemCatalog = Completer<ItemIconCatalog>();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(_EmptyCoreService()),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(
+            TestUiSettingsStore(uiScale: 2),
+          ),
+          itemIconCatalogProvider.overrideWith((ref) => itemCatalog.future),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    expect(
+      tester
+          .getSize(find.byKey(const ValueKey('title-progress-available-space')))
+          .width,
+      greaterThanOrEqualTo(96),
+    );
+    expect(
+      find.byKey(const ValueKey('title-progress-item-images')),
+      findsOneWidget,
     );
 
     itemCatalog.complete(const ItemIconCatalog.empty());
@@ -1763,6 +1802,41 @@ void main() {
     },
   );
 
+  testWidgets('deleted-save recovery blocks registered save-name edits', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(_RecoveryCoreService()),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<IconButton>(find.byKey(const ValueKey('edit-save-name')))
+          .onPressed,
+      isNull,
+    );
+    expect(
+      tester
+          .widget<TextButton>(
+            find.widgetWithText(TextButton, 'Restore G1R-009.sav'),
+          )
+          .onPressed,
+      isNotNull,
+    );
+  });
+
   testWidgets('profile menu opens a dedicated persistent Other saves list', (
     tester,
   ) async {
@@ -2433,6 +2507,49 @@ class _FakeCoreService implements GoresaveCoreService {
           'error': {'message': 'Unhandled fake command $command'},
         };
     }
+  }
+}
+
+class _EmptyCoreService extends _FakeCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command != 'scan_save_dir') {
+      return super.execute(command, payload: payload);
+    }
+    requests.add(_RecordedRequest(command, Map<String, Object?>.from(payload)));
+    return {
+      'ok': true,
+      'data': {
+        'saveRoot': r'C:\tmp\saves',
+        'saves': <Object?>[],
+        'profiles': <Object?>[],
+        'activeProfileId': null,
+      },
+    };
+  }
+}
+
+class _RecoveryCoreService extends _FakeCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    final response = await super.execute(command, payload: payload);
+    if (command != 'scan_save_dir') return response;
+
+    final data = (response['data'] as Map).cast<String, Object?>();
+    data['deletedSaveRecovery'] = {
+      'targetPath': r'C:\tmp\saves\G1R-009.sav',
+      'backupPath': r'C:\tmp\saves\goresave_backups\G1R-009.sav.bak.301',
+      'persistentPostDeleteSha1': 'post-delete-profile-sha',
+      'deletedSaveSha1': 'deleted-save-sha',
+      'deletedPersistentSha1': 'deleted-persistent-sha',
+    };
+    return response;
   }
 }
 

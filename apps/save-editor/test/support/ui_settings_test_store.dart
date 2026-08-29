@@ -7,10 +7,12 @@ class TestUiSettingsStore implements UiSettingsStore {
     bool showObjectIds = false,
     UiFontFamily uiFontFamily = UiFontFamily.notoSerif,
     String appLocale = 'en',
+    double uiScale = 1.0,
   }) : _settings = UiSettings(
          appLocale: appLocale,
          showObjectIds: showObjectIds,
          uiFontFamily: uiFontFamily,
+         uiScale: uiScale,
        );
 
   UiSettings _settings;

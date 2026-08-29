@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -124,35 +125,64 @@ class _EditorPageState extends ConsumerState<EditorPage>
       // moves the window, double-click toggles maximize/restore.
       appBar: AppBar(
         title: WindowDragArea(
-          child: Row(
-            children: [
-              const SizedBox(width: 16),
-              Image.asset(
-                'assets/goresave_icon.png',
-                height: 32,
-                semanticLabel: l10n.appLogoSemanticLabel,
-              ),
-              const SizedBox(width: 10),
-              // Keep the brand only as wide as its contents. Giving it a flex
-              // lane shifts the preparation progress away from the center of
-              // the otherwise free title-bar space.
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 260),
-                child: Text(
-                  l10n.appTitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              const fixedBrandWidth = 16.0 + 32.0 + 10.0 + 16.0;
+              const minimumProgressWidth = 96.0;
+              final maximumTitleWidth = math.max(
+                0.0,
+                math.min(
+                  260.0,
+                  constraints.maxWidth - fixedBrandWidth - minimumProgressWidth,
                 ),
-              ),
-              const SizedBox(width: 16),
-              const Expanded(
-                key: ValueKey('title-progress-available-space'),
-                child: Align(
-                  alignment: Alignment.center,
-                  child: TitlePreparationProgress(),
+              );
+              final titlePainter = TextPainter(
+                text: TextSpan(
+                  text: l10n.appTitle,
+                  style: DefaultTextStyle.of(context).style,
                 ),
-              ),
-            ],
+                maxLines: 1,
+                textDirection: Directionality.of(context),
+              )..layout(maxWidth: 260);
+              final titleWidth = math.min(
+                titlePainter.width,
+                maximumTitleWidth,
+              );
+
+              return Row(
+                children: [
+                  const SizedBox(width: 16),
+                  SizedBox.square(
+                    dimension: 32,
+                    child: Image.asset(
+                      'assets/goresave_icon.png',
+                      fit: BoxFit.contain,
+                      semanticLabel: l10n.appLogoSemanticLabel,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  // Measure the title instead of giving it a flex lane: it
+                  // stays content-sized on wide windows, but yields space to
+                  // preparation progress when UI scaling narrows the AppBar.
+                  SizedBox(
+                    width: titleWidth,
+                    child: Text(
+                      l10n.appTitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  const Expanded(
+                    key: ValueKey('title-progress-available-space'),
+                    child: Align(
+                      alignment: Alignment.center,
+                      child: TitlePreparationProgress(),
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
         ),
         titleSpacing: 0,
@@ -1579,6 +1609,8 @@ class _HeaderCardState extends State<_HeaderCard> {
 
             Widget details({required bool fillPreviewHeight}) {
               final delete = deleteAction();
+              final nameSyncsPersistentDataList =
+                  state.selectedSave?.isExternal != true;
               return Column(
                 mainAxisSize: fillPreviewHeight
                     ? MainAxisSize.max
@@ -1590,9 +1622,11 @@ class _HeaderCardState extends State<_HeaderCard> {
                     inspection: inspection,
                     notifier: notifier,
                     fallbackTitle: title,
-                    enabled: !state.isLoading,
-                    syncPersistentDataList:
-                        state.selectedSave?.isExternal != true,
+                    enabled:
+                        !state.isLoading &&
+                        (!nameSyncsPersistentDataList ||
+                            state.deletedSaveRecovery == null),
+                    syncPersistentDataList: nameSyncsPersistentDataList,
                   ),
                   const SizedBox(height: 4),
                   Text(
@@ -1814,7 +1848,7 @@ class _SaveNameEditorState extends State<_SaveNameEditor> {
       context: context,
       builder: (_) => _SaveNameDialog(initialName: _draftName),
     );
-    if (!mounted || value == null) return;
+    if (!mounted || value == null || !widget.enabled) return;
 
     setState(() => _draftName = value);
     final original = _effectiveName(widget.inspection.playerSaveName);
