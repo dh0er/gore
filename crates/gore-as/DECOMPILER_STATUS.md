@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,384 functions (0.84%) recompile to bytecode that differs semantically.** A semantic
+**1,375 functions (0.83%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -798,6 +798,13 @@ sites only. A const return has to say `const T&`, or the initializer is refused 
 The other half of that lever — recovering `return <name>;` where the value travels as an address
 rather than through a register — is NOT in: it put a local out of scope in one function and made
 another return a reference into an expression the compiler refuses to keep alive. 1,386 to 1,384.
+
+**A value-type local is destroyed once per exit from the block it was declared in.** So vanilla
+spending ONE `$beh0` and TWO OR MORE `$beh2` for a slot, all of them inside a back edge's span, is
+the source declaring that local in the LOOP BODY: the constructor ran once per iteration and each
+`continue`, `break` and fall-through paid its own destructor. The sink refused every loop
+categorically; it now makes an exception for exactly that shape. One constructor is what makes it
+a declaration — two are two unnamed temporaries sharing a slot. 1,384 to 1,375.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern

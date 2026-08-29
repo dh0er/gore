@@ -2017,7 +2017,11 @@ fn emit_function_ctor(
         // Declarations and body are one text now. A struct declared at function scope costs a
         // constructor at entry and a destructor on every path out; where vanilla touched the slot
         // only after it had branched, the declaration stood in the block that touches it.
-        let rendered = sink_declarations_into_their_block(&s[declarations_at..], &touched_after_branch);
+        let rendered = sink_declarations_into_their_block(
+            &s[declarations_at..],
+            &touched_after_branch,
+            &slots_built_once_per_iteration(f, refs),
+        );
         // Same text, same reason as the sink: the declaration lives in `s`, its uses in `body`.
         let rendered = spell_out_repeated_temporaries(&rendered, &constructions);
         let rendered = sink_declarations_to_first_use(&rendered, &late_constructed_slots(f, refs));
@@ -8023,12 +8027,18 @@ fn slots_touched_only_after_a_branch(f: &Func) -> HashSet<i32> {
 /// the function. A struct declared there costs a constructor at entry and a destructor on every
 /// path out — including the early returns that leave before the value exists. `after_branch`
 /// carries the slots vanilla proves were not declared there.
-fn sink_declarations_into_their_block(body: &str, after_branch: &HashSet<i32>) -> String {
+fn sink_declarations_into_their_block(
+    body: &str,
+    after_branch: &HashSet<i32>,
+    built_per_iteration: &HashSet<i32>,
+) -> String {
     let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
     // One move per pass, then everything is derived again: a move renumbers every line after it,
     // and two moves planned against the same numbering land in each other's way.
     for _ in 0..lines.len() {
-        let Some((from, to, text)) = next_declaration_to_sink(&lines, after_branch) else {
+        let Some((from, to, text)) =
+            next_declaration_to_sink(&lines, after_branch, built_per_iteration)
+        else {
             break;
         };
         lines.remove(from);
@@ -8046,6 +8056,7 @@ fn sink_declarations_into_their_block(body: &str, after_branch: &HashSet<i32>) -
 fn next_declaration_to_sink(
     lines: &[String],
     after_branch: &HashSet<i32>,
+    built_per_iteration: &HashSet<i32>,
 ) -> Option<(usize, usize, String)> {
     let depths = block_depths(lines);
     for (index, line) in lines.iter().enumerate() {
@@ -8111,7 +8122,9 @@ fn next_declaration_to_sink(
                 let head = line.trim_start();
                 head.starts_with("for") || head.starts_with("while") || head.starts_with("do")
             });
-        if heads_a_loop {
+        // …unless vanilla built it once per iteration and released it on every exit, which is
+        // the source declaring it in the body.
+        if heads_a_loop && !built_per_iteration.contains(&slot) {
             continue;
         }
         let extra = "    ".repeat(depth - depths[index]);
@@ -9307,6 +9320,70 @@ fn enum_of_member_path(
 /// Slots whose ONE default construction stands behind real work — a call or a branch runs before
 /// it. A value-type declaration costs a constructor where it stands, so the position is evidence:
 /// the source declared it there, not in the prologue where the emitter hoists every declaration.
+/// Value-type slots the source declared INSIDE a loop body.
+///
+/// A value-type local is destroyed once per exit from the block it was declared in. So vanilla
+/// spending ONE `$beh0` and TWO OR MORE `$beh2` for a slot, all of them between a back edge's
+/// target and the jump that closes it, is the source declaring that local in the loop body: the
+/// constructor ran once per iteration and each `continue`, `break` and fall-through paid its own
+/// destructor. Exactly one constructor is what makes it a declaration — two are two unnamed
+/// temporaries sharing a slot, which is never what a declaration looks like.
+fn slots_built_once_per_iteration(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let behaviour = |at: usize, want: &str| -> Option<i32> {
+        let pair = instrs.get(at..at + 2)?;
+        (pair[0].op.name == "PSF" && pair[1].op.name == "CALLSYS").then_some(())?;
+        let ptr = pair[1].qwords.first().copied().unwrap_or(0) as i64;
+        (refs.func_by_ptr(ptr) == Some(want)).then(|| pair[0].words.first().map(|w| *w as i16 as i32))?
+    };
+    let mut ctors: HashMap<i32, Vec<usize>> = HashMap::new();
+    let mut dtors: HashMap<i32, Vec<usize>> = HashMap::new();
+    for at in 0..instrs.len().saturating_sub(1) {
+        if let Some(slot) = behaviour(at, "$beh0").filter(|slot| *slot > 0) {
+            ctors.entry(slot).or_default().push(at);
+        }
+        if let Some(slot) = behaviour(at, "$beh2").filter(|slot| *slot > 0) {
+            dtors.entry(slot).or_default().push(at);
+        }
+    }
+    // Every back edge, as an instruction-index span.
+    let mut back: Vec<(usize, usize)> = Vec::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if !ins.op.name.starts_with('J') {
+            continue;
+        }
+        let Some(offset) = ins.dwords.first().map(|d| *d as i32) else {
+            continue;
+        };
+        let target = ins.offset_dw as i64 + 2 + offset as i64;
+        if target < 0 || target as usize >= ins.offset_dw {
+            continue;
+        }
+        if let Some(start) = instrs
+            .iter()
+            .position(|other| other.offset_dw == target as usize)
+        {
+            back.push((start, at));
+        }
+    }
+    ctors
+        .into_iter()
+        .filter(|(_, sites)| sites.len() == 1)
+        .filter_map(|(slot, sites)| {
+            let releases = dtors.get(&slot)?;
+            (releases.len() >= 2).then_some((slot, sites[0], releases))
+        })
+        .filter(|(_, built, releases)| {
+            back.iter().any(|(start, end)| {
+                (start..=end).contains(&built) && releases.iter().all(|at| (start..=end).contains(&at))
+            })
+        })
+        .map(|(slot, _, _)| slot)
+        .collect()
+}
+
 fn late_constructed_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
@@ -13091,7 +13168,7 @@ mod declaration_sink_tests {
 
     #[test]
     fn a_declaration_used_in_one_block_moves_into_it() {
-        let sunk = sink_declarations_into_their_block(BODY, &HashSet::from([9]));
+        let sunk = sink_declarations_into_their_block(BODY, &HashSet::from([9]), &HashSet::new());
         assert_eq!(
             sunk,
             "    if (Guard())\n    {\n        return;\n    }\n    if (Other())\n    {\n        FThing local_9;\n        local_9.Field = 1;\n        Use(local_9);\n    }\n    return;\n",
@@ -13102,7 +13179,7 @@ mod declaration_sink_tests {
     #[test]
     fn a_slot_touched_before_the_branch_stays_where_it_was() {
         assert_eq!(
-            sink_declarations_into_their_block(BODY, &HashSet::new()),
+            sink_declarations_into_their_block(BODY, &HashSet::new(), &HashSet::new()),
             BODY,
             "without the witness the declaration was at function scope and stays there"
         );
@@ -13112,7 +13189,7 @@ mod declaration_sink_tests {
     fn mentions_in_two_blocks_stay_at_function_scope() {
         let body = "    FThing local_9;\n    if (A())\n    {\n        Use(local_9);\n    }\n    if (B())\n    {\n        Use(local_9);\n    }\n";
         assert_eq!(
-            sink_declarations_into_their_block(body, &HashSet::from([9])),
+            sink_declarations_into_their_block(body, &HashSet::from([9]), &HashSet::new()),
             body,
             "no single block holds every mention, so nothing can hold the declaration"
         );
