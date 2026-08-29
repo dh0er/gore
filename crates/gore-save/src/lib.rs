@@ -3345,6 +3345,36 @@ fn deleted_save_recovery_manifest_path(backup_path: &Path) -> Result<PathBuf, Co
     )))
 }
 
+#[cfg(windows)]
+fn sync_directory(path: &Path) -> std::io::Result<()> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+    };
+
+    let directory = OpenOptions::new()
+        .write(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    directory.sync_all()
+}
+
+#[cfg(unix)]
+fn sync_directory(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)?;
+    directory.sync_all()
+}
+
+#[cfg(not(any(windows, unix)))]
+fn sync_directory(path: &Path) -> std::io::Result<()> {
+    File::open(path)?.sync_all()
+}
+
 struct DeleteRecoveryManifestGuard {
     path: PathBuf,
     keep: bool,
@@ -3362,6 +3392,19 @@ impl DeleteRecoveryManifestGuard {
             .open(&path)?;
         file.write_all(&bytes)?;
         file.sync_all()?;
+        drop(file);
+        let parent = path.parent().ok_or_else(|| {
+            CoreError::InvalidRequest("recovery manifest has no parent".to_string())
+        })?;
+        // `sync_all` above flushes file contents, while this flush makes the
+        // directory entries for both paired backups and this manifest durable
+        // before deletion touches either live path.
+        sync_directory(parent)?;
+        if let Some(save_root) = parent.parent() {
+            // `goresave_backups` itself may have been created by this delete;
+            // flush its entry in the save directory as well.
+            sync_directory(save_root)?;
+        }
         Ok(Self { path, keep: false })
     }
 
