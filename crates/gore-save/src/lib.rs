@@ -454,13 +454,17 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .unwrap_or_else(default_save_root);
             let kraken_backend = codec_backend::KrakenBackend::default();
             let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
+            // Recovery may reinstall a hash-bound profile backup after a crash
+            // left PersistentDataList.sav in its temporary claim sidecar. Run
+            // it before parsing profiles so this same scan sees the repair.
+            let deleted_save_recovery = discover_deleted_save_recovery(&path)?;
             let summary = scan_save_dir_summary_with_codec_backend(&path, codec_backend)?;
             Ok(json!({
                 "saveRoot": path,
                 "saves": summary.saves,
                 "profiles": summary.profiles,
                 "activeProfileId": summary.active_profile_id,
-                "deletedSaveRecovery": discover_deleted_save_recovery(&path)?,
+                "deletedSaveRecovery": deleted_save_recovery,
             }))
         }
         // Make this save the one the decoded-payload and parsed-root caches
@@ -1020,6 +1024,7 @@ fn scan_save_dir_summary_with_codec_backend(
             path.display()
         )));
     }
+    recover_interrupted_profile_assignment_claims(path)?;
     let mut persistent = persistent_data_list_summary_for_dir(path).unwrap_or_default();
     let profile_slot_owners =
         normalize_profile_saved_slots(&mut persistent.profiles, &persistent.slots);
@@ -3077,6 +3082,140 @@ fn rollback_profile_assignment_save(
     }
 }
 
+fn rollback_profile_assignment_companion(
+    save_pending: PendingReplace,
+    persistent_pending: PendingReplace,
+    original: CoreError,
+) -> CoreError {
+    let error = match persistent_pending.rollback() {
+        Ok(()) => original,
+        Err(rollback_error) => CoreError::Update(format!(
+            "{original}; profile rollback failed safely: {rollback_error}"
+        )),
+    };
+    rollback_profile_assignment_save(save_pending, error)
+}
+
+fn rollback_profile_assignment_claim_and_companion(
+    target_path: &Path,
+    save_claim: &Path,
+    save_pending: PendingReplace,
+    persistent_pending: PendingReplace,
+    original: CoreError,
+) -> CoreError {
+    let error = abort_claim_with_restore(target_path, save_claim, original);
+    rollback_profile_assignment_companion(save_pending, persistent_pending, error)
+}
+
+fn rollback_profile_assignment_restore_conflict(
+    save_claim: &Path,
+    save_pending: PendingReplace,
+    persistent_pending: PendingReplace,
+    original: CoreError,
+) -> CoreError {
+    let error = match persistent_pending.rollback() {
+        Ok(()) => match fs::remove_file(save_claim) {
+            Ok(()) => original,
+            Err(cleanup_error) => CoreError::Update(format!(
+                "{original}; the uncommitted assigned save remains at {}: {cleanup_error}",
+                save_claim.display()
+            )),
+        },
+        Err(rollback_error) => CoreError::Update(format!(
+            "{original}; profile rollback failed safely: {rollback_error}; the assigned save remains at {}",
+            save_claim.display()
+        )),
+    };
+    rollback_profile_assignment_save(save_pending, error)
+}
+
+/// A successful assignment performs one short final CAS by renaming the live
+/// save to an `assign-final` sidecar, comparing it, and putting it straight
+/// back. If the process dies in that tiny window, the profile half is already
+/// committed. Restore only a structurally valid, profile-matching claim whose
+/// target is still absent; a concurrently recreated target always wins.
+fn recover_interrupted_profile_assignment_claims(save_root: &Path) -> Result<(), CoreError> {
+    const MARKER: &str = ".assign-final-goresave-";
+    let persistent_path = save_root.join("PersistentDataList.sav");
+    let persistent = match fs::read(&persistent_path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let root = match parse_profile_file(&persistent) {
+        Ok(root) => root,
+        Err(_) => return Ok(()),
+    };
+
+    for entry in fs::read_dir(save_root)? {
+        let entry = entry?;
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        let Some((target_name, claim_suffix)) = file_name.split_once(MARKER) else {
+            continue;
+        };
+        if claim_suffix.is_empty() {
+            continue;
+        }
+        let target_name_path = Path::new(target_name);
+        let Some(slot) = target_name_path.file_stem().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if target_name_path.extension().and_then(|value| value.to_str()) != Some("sav")
+            || !looks_slot_name(slot)
+        {
+            continue;
+        }
+        let claim = entry.path();
+        let metadata = fs::symlink_metadata(&claim)?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            continue;
+        }
+        let target = save_root.join(target_name);
+        if target.exists() {
+            continue;
+        }
+        let claim_bytes = fs::read(&claim)?;
+        let save_parts = match split_gsav(&claim_bytes) {
+            Ok(parts) => parts,
+            Err(_) => continue,
+        };
+        let public = summarize_public_payload(save_parts.public_payload);
+        if public
+            .slot_name
+            .as_deref()
+            .is_some_and(|public_slot| public_slot != slot)
+        {
+            continue;
+        }
+        let profile_path = match persistent_slot_profile_path(&root, slot) {
+            Ok(path) => path,
+            Err(_) => continue,
+        };
+        let profile_segments = properties::parse_path(&profile_path)?;
+        let profile_chain = properties::resolve_chain(&root.properties, &profile_segments)?;
+        let properties::PropertyValue::Int(profile_id) = &profile_chain.target.value else {
+            continue;
+        };
+        if public
+            .profile_id
+            .is_some_and(|public_profile_id| public_profile_id != *profile_id)
+        {
+            continue;
+        }
+        match restore_claim_noclobber(&claim, &target) {
+            Ok(()) => invalidate_decoded_payload_cache(&target),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(map_locked_file_error(
+                    error,
+                    &format!("recovering interrupted profile assignment for {}", target.display()),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn abort_delete_with_profile_rollback(
     save_path: &Path,
     save_claim: &Path,
@@ -3486,7 +3625,7 @@ fn validate_discovered_deleted_save_recovery(
     save_root: &Path,
     manifest_path: &Path,
     manifest: &DeletedSaveRecoveryManifest,
-) -> Result<String, CoreError> {
+) -> Result<Option<String>, CoreError> {
     if deleted_save_recovery_manifest_path(&manifest.backup_path)? != manifest_path {
         return Err(CoreError::Validation(
             "recovery manifest name does not match its slot backup".to_string(),
@@ -3504,7 +3643,13 @@ fn validate_discovered_deleted_save_recovery(
         ));
     }
     let expected_persistent = canonical_root.join("PersistentDataList.sav");
-    if fs::canonicalize(&manifest.persistent_path)? != fs::canonicalize(&expected_persistent)? {
+    let persistent_parent = manifest
+        .persistent_path
+        .parent()
+        .ok_or_else(|| CoreError::Validation("recovery profile has no parent".to_string()))?;
+    if manifest.persistent_path.file_name() != expected_persistent.file_name()
+        || fs::canonicalize(persistent_parent)? != canonical_root
+    {
         return Err(CoreError::Validation(
             "recovery profile is outside the scanned save folder".to_string(),
         ));
@@ -3566,21 +3711,62 @@ fn validate_discovered_deleted_save_recovery(
             "the recovery target was recreated with different bytes".to_string(),
         ));
     }
-    let persistent_sha1 = sha1_hex(&fs::read(&manifest.persistent_path)?);
+    let persistent_sha1 = match fs::symlink_metadata(&manifest.persistent_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Err(CoreError::Validation(
+                "recovery profile is not a regular file".to_string(),
+            ));
+        }
+        Ok(_) => sha1_hex(&fs::read(&manifest.persistent_path)?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if target_sha1.as_deref() != Some(manifest.deleted_save_sha1.as_str()) {
+                return Err(CoreError::Validation(
+                    "the recovery profile is missing without its exact guarded save".to_string(),
+                ));
+            }
+            let persistent_backup = fs::read(&manifest.persistent_backup_path)?;
+            if sha1_hex(&persistent_backup) != manifest.deleted_persistent_sha1 {
+                return Err(CoreError::Validation(
+                    "the recovery profile backup no longer matches the original snapshot"
+                        .to_string(),
+                ));
+            }
+            parse_profile_file(&persistent_backup).map_err(|error| {
+                CoreError::Validation(format!(
+                    "the recovery profile backup is not a valid PersistentDataList.sav: {error}"
+                ))
+            })?;
+            let staged = ScratchFile::create(
+                &manifest.persistent_path,
+                "tmp-delete-recovery",
+                &persistent_backup,
+            )?;
+            begin_replace_if_unchanged(
+                &manifest.persistent_path,
+                staged.path(),
+                &FileSnapshot::Missing,
+            )?
+            .commit();
+            fs::remove_file(manifest_path)?;
+            sync_directory(&canonical_backup_dir)?;
+            return Ok(None);
+        }
+        Err(error) => return Err(error.into()),
+    };
     if persistent_sha1 == manifest.persistent_post_delete_sha1 {
-        return Ok(persistent_sha1);
+        return Ok(Some(persistent_sha1));
     }
     // A crash before the profile replacement may already have claimed the
     // slot while leaving the original profile live. The paired backup is still
     // authoritative; let recovery reinstall the missing slot without falsely
     // requiring post-delete profile bytes.
     if target_sha1.is_none() && persistent_sha1 == manifest.deleted_persistent_sha1 {
-        return Ok(persistent_sha1);
+        return Ok(Some(persistent_sha1));
     }
     if target_sha1.is_some() && persistent_sha1 == manifest.deleted_persistent_sha1 {
-        return Err(CoreError::Validation(
-            "the deleted save and profile are already restored".to_string(),
-        ));
+        fs::remove_file(manifest_path)?;
+        sync_directory(&canonical_backup_dir)?;
+        return Ok(None);
     }
     Err(CoreError::Validation(
         "the live profile changed after deletion".to_string(),
@@ -3610,6 +3796,9 @@ fn discover_deleted_save_recovery(save_root: &Path) -> Result<Option<Value>, Cor
         let Ok(expected_persistent_sha1) =
             validate_discovered_deleted_save_recovery(save_root, &path, &manifest)
         else {
+            continue;
+        };
+        let Some(expected_persistent_sha1) = expected_persistent_sha1 else {
             continue;
         };
         // `restore_deleted_save` compares this field with the currently live
@@ -5189,7 +5378,24 @@ where
     let expected_save =
         expected_import_target.unwrap_or_else(|| FileSnapshot::Present(save_original.clone()));
     let save_pending = begin_replace_if_unchanged(target_path, save_tmp.path(), &expected_save)?;
-    let save_claim = match claim_existing_target(target_path, "assign-commit") {
+    if let Err(error) = before_companion_replace(target_path) {
+        return Err(rollback_profile_assignment_save(save_pending, error));
+    }
+
+    let persistent_pending = match begin_replace_if_unchanged(
+        persistent_path,
+        persistent_tmp.path(),
+        &FileSnapshot::Present(persistent_original.clone()),
+    ) {
+        Ok(persistent_pending) => persistent_pending,
+        Err(error) => return Err(rollback_profile_assignment_save(save_pending, error)),
+    };
+
+    // The save stays live while the companion is published. Atomically claim it
+    // only for the final compare-and-restore, so a crash during the longer
+    // profile write cannot hide the slot. Any writer that changed the save
+    // before this point wins and forces the companion back to its old bytes.
+    let save_claim = match claim_existing_target(target_path, "assign-final") {
         Ok(claim) => claim,
         Err(error) => {
             let error = if error.kind() == std::io::ErrorKind::NotFound {
@@ -5200,67 +5406,55 @@ where
             } else {
                 map_locked_file_error(
                     error,
-                    &format!("claiming {} for profile assignment", target_path.display()),
+                    &format!("finalizing profile assignment for {}", target_path.display()),
                 )
             };
-            return Err(rollback_profile_assignment_save(save_pending, error));
+            return Err(rollback_profile_assignment_companion(
+                save_pending,
+                persistent_pending,
+                error,
+            ));
         }
     };
     let claimed_save = match fs::read(&save_claim) {
         Ok(bytes) => bytes,
         Err(error) => {
-            let error = abort_claim_with_restore(
+            return Err(rollback_profile_assignment_claim_and_companion(
                 target_path,
                 &save_claim,
+                save_pending,
+                persistent_pending,
                 CoreError::Io(format!(
                     "could not verify {} before committing its profile assignment: {error}",
                     target_path.display()
                 )),
-            );
-            return Err(rollback_profile_assignment_save(save_pending, error));
+            ));
         }
     };
     if claimed_save != save_edited {
-        let error = abort_claim_with_restore(
+        return Err(rollback_profile_assignment_claim_and_companion(
             target_path,
             &save_claim,
+            save_pending,
+            persistent_pending,
             CoreError::Update(format!(
                 "{} changed again before its profile assignment could be committed; the newer save was preserved",
                 target_path.display()
             )),
-        );
-        return Err(rollback_profile_assignment_save(save_pending, error));
+        ));
     }
-    if let Err(error) = before_companion_replace(target_path) {
-        let error = abort_claim_with_restore(target_path, &save_claim, error);
-        return Err(rollback_profile_assignment_save(save_pending, error));
-    }
-
-    let persistent_pending = match begin_replace_if_unchanged(
-        persistent_path,
-        persistent_tmp.path(),
-        &FileSnapshot::Present(persistent_original.clone()),
-    ) {
-        Ok(persistent_pending) => persistent_pending,
-        Err(error) => {
-            let error = abort_claim_with_restore(target_path, &save_claim, error);
-            return Err(rollback_profile_assignment_save(save_pending, error));
-        }
-    };
     if let Err(error) = restore_claim_noclobber(&save_claim, target_path) {
-        let restore_error = recovery_error(
-            target_path,
+        return Err(rollback_profile_assignment_restore_conflict(
             &save_claim,
-            "a concurrent writer created the save while its profile assignment was being committed",
-            error,
-        );
-        let error = match persistent_pending.rollback() {
-            Ok(()) => restore_error,
-            Err(rollback_error) => CoreError::Update(format!(
-                "{restore_error}; profile rollback failed safely: {rollback_error}"
-            )),
-        };
-        return Err(rollback_profile_assignment_save(save_pending, error));
+            save_pending,
+            persistent_pending,
+            recovery_error(
+                target_path,
+                &save_claim,
+                "a concurrent writer created the save while its profile assignment was being finalized",
+                error,
+            ),
+        ));
     }
     persistent_pending.commit();
     save_pending.commit();
@@ -17276,7 +17470,7 @@ mod tests {
             false,
             |_| Ok(()),
             |target| {
-                assert!(!target.exists());
+                assert!(target.exists());
                 fs::write(target, &concurrent_save)?;
                 Ok(())
             },
@@ -17292,6 +17486,43 @@ mod tests {
             .filter_map(|entry| fs::read(entry.path()).ok())
             .collect::<Vec<_>>();
         assert!(safety_bytes.contains(&save_original));
+        assert!(fs::read_dir(dir.path()).unwrap().flatten().all(|entry| {
+            !entry
+                .file_name()
+                .to_string_lossy()
+                .contains(".assign-final-goresave-")
+        }));
+    }
+
+    #[test]
+    fn scan_recovers_a_save_claimed_during_final_profile_assignment_cas() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-006";
+        let save_path = dir.path().join(format!("{slot}.sav"));
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let save_original = build_gsav(
+            2,
+            &public_payload_with_profile("Assignment recovery", 0),
+            &minimal_stream(),
+            &[0, 0, 0, 0],
+        );
+        fs::write(&save_path, save_original).unwrap();
+        fs::write(
+            &persistent_path,
+            assignment_persistent_data_list(slot, 0),
+        )
+        .unwrap();
+        assign_save_profile(&save_path, None, &persistent_path, 1, false).unwrap();
+        let assigned = fs::read(&save_path).unwrap();
+        let interrupted_claim = claim_existing_target(&save_path, "assign-final").unwrap();
+        assert!(!save_path.exists());
+
+        let summary = scan_save_dir_summary_with_codec_backend(dir.path(), None).unwrap();
+
+        assert_eq!(fs::read(&save_path).unwrap(), assigned);
+        assert!(!interrupted_claim.exists());
+        assert_eq!(summary.saves.len(), 1);
+        assert_eq!(summary.saves[0].persistent_profile_id, Some(1));
     }
 
     #[test]
@@ -17552,6 +17783,48 @@ mod tests {
 
         assert_eq!(fs::read(&save_path).unwrap(), save_original);
         assert_eq!(fs::read(&persistent_path).unwrap(), persistent_original);
+    }
+
+    #[test]
+    fn scan_repairs_a_profile_claimed_during_interrupted_delete() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-006";
+        let save_path = dir.path().join(format!("{slot}.sav"));
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let save_original = build_gsav(
+            2,
+            &public_payload_with_profile("Interrupted profile claim", 0),
+            &minimal_stream(),
+            &[0, 0, 0, 0],
+        );
+        let persistent_original = assignment_persistent_data_list(slot, 0);
+        fs::write(&save_path, &save_original).unwrap();
+        fs::write(&persistent_path, &persistent_original).unwrap();
+        let deleted = delete_save(&save_path, &persistent_path, slot, 0, true).unwrap();
+        let backup_path = PathBuf::from(deleted["backupPath"].as_str().unwrap());
+        let manifest_path = deleted_save_recovery_manifest_path(&backup_path).unwrap();
+
+        // Exact crash state: the verified save guard is live, while the
+        // original profile has been claimed and no staged replacement landed.
+        fs::copy(&backup_path, &save_path).unwrap();
+        fs::write(&persistent_path, &persistent_original).unwrap();
+        let stranded_profile = claim_existing_target(&persistent_path, "claim").unwrap();
+        assert!(!persistent_path.exists());
+
+        let response = execute_json_inner(
+            &json!({
+                "command": "scan_save_dir",
+                "payload": { "path": dir.path() }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(fs::read(&persistent_path).unwrap(), persistent_original);
+        assert_eq!(fs::read(stranded_profile).unwrap(), persistent_original);
+        assert!(!manifest_path.exists());
+        assert!(response["deletedSaveRecovery"].is_null());
+        assert_eq!(response["profiles"][0]["profileId"], 0);
     }
 
     #[test]
