@@ -8684,6 +8684,45 @@ fn fold_bool_member_comparisons(
             break;
         }
     }
+    // …and the same comparison standing on its own, with no declaration left to consume: a
+    // member the field tables PROVE is a bool needs no `!= 0`, and vanilla never spends the
+    // compare. This is what the pass above leaves behind once the local has folded away.
+    for line in &mut lines {
+        let mut at = 0usize;
+        while let Some(found) = line[at..].find(" != 0)") {
+            let close = at + found;
+            let Some(open) = line[..close].rfind('(') else {
+                at = close + 1;
+                continue;
+            };
+            // `(int(<path>) != 0)` is the whole shape: the structurer wraps a one-byte member
+            // read it could not type, and the boolean context then compares it. Both halves go,
+            // and only together — the wrap alone is what an INT local's initialiser needs, and
+            // dropping it there is "Can't implicitly convert bool to int".
+            let wrapped = line[..=open].ends_with("int(")
+                && open >= 4
+                && line[..close].ends_with(')')
+                && line.as_bytes().get(open - 4) == Some(&b'(');
+            let (outer, path) = match wrapped {
+                true => (open - 4, &line[open + 1..close - 1]),
+                false => (open, &line[open + 1..close]),
+            };
+            let is_path = !path.is_empty()
+                && path
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.'));
+            if is_path
+                && type_of_member_path(path, fields, roots, refs).as_deref() == Some("bool")
+            {
+                let replacement = path.to_owned();
+                let end = close + " != 0)".len();
+                line.replace_range(outer..end, &replacement);
+                at = outer + replacement.len();
+                continue;
+            }
+            at = close + 1;
+        }
+    }
     let mut out = lines.join("\n");
     if body.ends_with('\n') {
         out.push('\n');
