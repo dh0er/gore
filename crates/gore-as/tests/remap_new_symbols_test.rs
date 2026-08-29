@@ -1,5 +1,6 @@
 use gore_as::cache::disasm::disassemble;
 use gore_as::cache::header::CACHE_MAGIC;
+use gore_as::cache::model::parse_modules;
 use gore_as::cache::refs::RefResolver;
 use gore_as::cache::remap::{
     remap_module_to_base, remap_module_to_base_with_options, RemapError, RemapOptions,
@@ -246,6 +247,31 @@ fn function_with_signature(
     bytecode: &[i32],
     id: i32,
 ) -> Vec<u8> {
+    let defaults = vec![""; parameter_types.len()];
+    function_with_signature_and_defaults(
+        name,
+        namespace,
+        parameter_types,
+        return_type,
+        is_const,
+        &defaults,
+        bytecode,
+        id,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn function_with_signature_and_defaults(
+    name: &str,
+    namespace: &str,
+    parameter_types: &[Vec<u8>],
+    return_type: &[u8],
+    is_const: bool,
+    parameter_defaults: &[&str],
+    bytecode: &[i32],
+    id: i32,
+) -> Vec<u8> {
+    assert_eq!(parameter_types.len(), parameter_defaults.len());
     let mut out = sia(name);
     out.extend_from_slice(&sia(namespace));
     out.extend_from_slice(return_type);
@@ -262,8 +288,8 @@ fn function_with_signature(
         out.extend_from_slice(&0i32.to_le_bytes());
     }
     out.extend_from_slice(&(parameter_types.len() as i32).to_le_bytes());
-    for _ in parameter_types {
-        out.extend_from_slice(&sia(""));
+    for default in parameter_defaults {
+        out.extend_from_slice(&sia(default));
     }
     out.extend_from_slice(&(if is_const { 4i32 } else { 0 }).to_le_bytes());
     out.extend_from_slice(&(bytecode.len() as i32).to_le_bytes());
@@ -1014,6 +1040,22 @@ fn cache_with_records(
     imports: &[Vec<u8>],
 ) -> Vec<u8> {
     cache_with_all_records(functions, classes, enums, &[], imports)
+}
+
+fn cache_with_main_function(function: Vec<u8>, tables: Tables) -> Vec<u8> {
+    let declarations =
+        synthetic_declarations_for_tables(MODULE, &tables, DEFAULT_MODULE_FUNCTION_ID);
+    let mut functions = vec![function];
+    functions.extend(declarations.functions);
+    let module = module_value_with_name_and_records(
+        MODULE,
+        &functions,
+        &declarations.classes,
+        &[],
+        &declarations.globals,
+        &declarations.imports,
+    );
+    cache_from_module_value(&module, tables)
 }
 
 fn cache_with_all_records(
@@ -7040,6 +7082,168 @@ fn only_static_operand(mini: &[u8], op: &str) -> i64 {
     }
 }
 
+fn static_accessor_tables(ptr: i64, id: i32, names: &[&str]) -> Tables {
+    Tables {
+        funcs: vec![func_row(ptr, "__STATIC_NAME", "", 0, &[], 0)],
+        func_ids: vec![id_row(id, ptr)],
+        static_names: names.iter().map(|name| sia(name)).collect(),
+        ..Tables::default()
+    }
+}
+
+#[test]
+fn strict_remap_rebases_exact_static_name_parameter_defaults_only() {
+    let base_names = [
+        "Pad0", "Pad1", "Pad2", "Pad3", "Pad4", "Pad5", "Pad6", "Pad7", "Pad8",
+        "Pad9", "None",
+    ];
+    let base = cache(
+        &[10],
+        static_accessor_tables(BASE_STATIC_FUNC_PTR, BASE_STATIC_FUNC_ID, &base_names),
+    );
+    let parameter_types = vec![datatype(0, 0x44); 3];
+    let function = function_with_signature_and_defaults(
+        "WithFNameDefault",
+        "",
+        &parameter_types,
+        &datatype(0, 0x52),
+        false,
+        &[
+            "__STATIC_NAME ( 0 )",
+            "__STATIC_NAME(-1)",
+            "__STATIC_NAME(0) + 2",
+        ],
+        &[10],
+        DEFAULT_MODULE_FUNCTION_ID,
+    );
+    let regen = cache_with_main_function(
+        function,
+        static_accessor_tables(REGEN_STATIC_FUNC_PTR, REGEN_STATIC_FUNC_ID, &["None"]),
+    );
+
+    let (remapped, counts) = remap_module_to_base(&regen, &base).unwrap();
+    assert_eq!(counts.static_name, 1);
+    let modules = parse_modules(&remapped).unwrap();
+    assert_eq!(
+        modules[0].functions[0].param_defaults,
+        [
+            "__STATIC_NAME ( 10 )",
+            "__STATIC_NAME(-1)",
+            "__STATIC_NAME(0) + 2",
+        ]
+    );
+    let tail = parse_tail_tables(&remapped, module_region_end(&remapped).unwrap()).unwrap();
+    assert_eq!(tail.tables[5].count, 0, "strict remap retains no private T6 rows");
+}
+
+#[test]
+fn allow_new_retains_a_static_name_used_only_by_a_parameter_default() {
+    let base = cache(
+        &[10],
+        static_accessor_tables(
+            BASE_STATIC_FUNC_PTR,
+            BASE_STATIC_FUNC_ID,
+            &["ExistingName"],
+        ),
+    );
+    let function = function_with_signature_and_defaults(
+        "DefaultOnly",
+        "",
+        &[datatype(0, 0x44)],
+        &datatype(0, 0x52),
+        false,
+        &["__STATIC_NAME(0)"],
+        &[10],
+        DEFAULT_MODULE_FUNCTION_ID,
+    );
+    let regen = cache_with_main_function(
+        function,
+        static_accessor_tables(
+            REGEN_STATIC_FUNC_PTR,
+            REGEN_STATIC_FUNC_ID,
+            &["DefaultOnlyName"],
+        ),
+    );
+
+    let (mini, counts) = remap_module_to_base_with_options(
+        &regen,
+        &base,
+        RemapOptions {
+            allow_new_symbols: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(counts.static_name, 1);
+    assert_eq!(
+        parse_modules(&mini).unwrap()[0].functions[0].param_defaults[0],
+        "__STATIC_NAME(1)"
+    );
+    let tail = parse_tail_tables(&mini, module_region_end(&mini).unwrap()).unwrap();
+    assert_eq!(tail.tables[5].count, 1);
+
+    let replaced = replace_module(&base, &mini, MODULE).unwrap();
+    let refs = RefResolver::build(&replaced).unwrap();
+    assert_eq!(refs.static_name(1), Some("DefaultOnlyName"));
+}
+
+#[test]
+fn strict_and_allow_new_remap_rebase_observed_spilled_static_names() {
+    let spilled_code = |index: i32, ptr: i64| {
+        let mut code = vec![77 | (7 << 16), index, 3 | (7 << 16)]; // SetV4 w7; PshV4 r7
+        qw_op(61, ptr, &mut code); // CALLSYS __STATIC_NAME
+        code.push(10);
+        code
+    };
+    let base = cache(
+        &[10],
+        static_accessor_tables(
+            BASE_STATIC_FUNC_PTR,
+            BASE_STATIC_FUNC_ID,
+            &["Other", "Shared"],
+        ),
+    );
+
+    let strict_regen = cache(
+        &spilled_code(0, REGEN_STATIC_FUNC_PTR),
+        static_accessor_tables(REGEN_STATIC_FUNC_PTR, REGEN_STATIC_FUNC_ID, &["Shared"]),
+    );
+    let (strict, strict_counts) = remap_module_to_base(&strict_regen, &base).unwrap();
+    assert_eq!(strict_counts.static_name, 1);
+    assert_eq!(only_static_operand(&strict, "SetV4"), 1);
+
+    let mut mismatched_code = vec![77 | (7 << 16), 0, 3 | (8 << 16)];
+    qw_op(61, REGEN_STATIC_FUNC_PTR, &mut mismatched_code);
+    mismatched_code.push(10);
+    let mismatched = cache(
+        &mismatched_code,
+        static_accessor_tables(REGEN_STATIC_FUNC_PTR, REGEN_STATIC_FUNC_ID, &["Shared"]),
+    );
+    let (mismatched, mismatched_counts) = remap_module_to_base(&mismatched, &base).unwrap();
+    assert_eq!(mismatched_counts.static_name, 0);
+    assert_eq!(
+        only_static_operand(&mismatched, "SetV4"),
+        0,
+        "a different temp slot is an ordinary integer, not a proven StaticName index"
+    );
+
+    let new_regen = cache(
+        &spilled_code(0, REGEN_STATIC_FUNC_PTR),
+        static_accessor_tables(REGEN_STATIC_FUNC_PTR, REGEN_STATIC_FUNC_ID, &["BrandNew"]),
+    );
+    let (allow_new, _) = remap_module_to_base_with_options(
+        &new_regen,
+        &base,
+        RemapOptions {
+            allow_new_symbols: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(only_static_operand(&allow_new, "SetV4"), 2);
+    let replaced = replace_module(&base, &allow_new, MODULE).unwrap();
+    let refs = RefResolver::build(&replaced).unwrap();
+    assert_eq!(refs.static_name(2), Some("BrandNew"));
+}
+
 #[test]
 fn sequential_guard_rebases_two_static_name_minis_across_empty_mini_and_deduplicates() {
     let base = base_cache(); // two pristine names; independent minis both start private T6 at 2
@@ -7072,6 +7276,45 @@ fn sequential_guard_rebases_two_static_name_minis_across_empty_mini_and_deduplic
     assert_eq!(only_static_operand(&second, "PshC4"), 3);
     let second_tail = parse_tail_tables(&second, module_region_end(&second).unwrap()).unwrap();
     assert_eq!(second_tail.tables[5].count, 1);
+
+    // Parameter defaults are serialized source expressions, not bytecode. The patch-1.0.5
+    // full tree contains this exact FName form, so it must follow the same accumulated T6 pool.
+    let default_function = function_with_signature_and_defaults(
+        "DefaultName",
+        "",
+        &[datatype(0, 0x44)],
+        &datatype(0, 0x52),
+        false,
+        &["__STATIC_NAME ( 2 )"],
+        &[10],
+        DEFAULT_MODULE_FUNCTION_ID,
+    );
+    let default_raw = cache_with_main_function(
+        default_function,
+        Tables {
+            static_names: vec![sia("DefaultName")],
+            ..Tables::default()
+        },
+    );
+    let prepared_default = guard.check_and_record(&default_raw).unwrap();
+    assert_eq!(
+        parse_modules(&prepared_default).unwrap()[0].functions[0].param_defaults[0],
+        "__STATIC_NAME ( 4 )"
+    );
+
+    // The other observed compiler form spills the index through an adjacent same-slot temp.
+    let mut spilled_code = vec![77 | (7 << 16), 2, 3 | (7 << 16)];
+    qw_op(61, BASE_STATIC_FUNC_PTR, &mut spilled_code);
+    spilled_code.push(10);
+    let spilled_raw = cache(
+        &spilled_code,
+        Tables {
+            static_names: vec![sia("SpilledName")],
+            ..Tables::default()
+        },
+    );
+    let spilled = guard.check_and_record(&spilled_raw).unwrap();
+    assert_eq!(only_static_operand(&spilled, "SetV4"), 5);
 
     // Text identity makes this duplicate safe to fold onto FirstName at index 2. The prepared
     // mini contributes no T6 row, rather than appending an unreachable duplicate.

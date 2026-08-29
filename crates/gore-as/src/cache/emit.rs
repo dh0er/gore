@@ -136,7 +136,12 @@ pub(crate) fn emitted_body_count(m: &Module, refs: &RefResolver) -> usize {
                     && !is_generated_spawn(function, refs)
             })
             .filter(|function| {
-                seen_free.insert(format!("{}({})", function.name, param_sig(function, refs)))
+                seen_free.insert(format!(
+                    "{}::{}({})",
+                    function.namespace,
+                    function.name,
+                    param_sig(function, refs)
+                ))
             })
             .count()
 }
@@ -284,7 +289,12 @@ pub fn emit_module_with(m: &Module, refs: &RefResolver, class_defaults: bool) ->
         if is_generated(f, &class_names, &class_members) || is_generated_spawn(f, refs) {
             continue;
         }
-        if !seen_free.insert(format!("{}({})", f.name, param_sig(f, refs))) {
+        if !seen_free.insert(format!(
+            "{}::{}({})",
+            f.namespace,
+            f.name,
+            param_sig(f, refs)
+        )) {
             continue; // duplicate signature -> "function ... already exists"
         }
         namespaces.enter(&mut s, &f.namespace);

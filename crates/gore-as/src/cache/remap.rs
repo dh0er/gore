@@ -8,13 +8,13 @@
 //! regen assigns DIFFERENT keys than vanilla for the SAME symbols. `replace_module` merges
 //! the mini's tables into the base on key-collision; with non-colliding regen keys EVERY row
 //! would be appended (cache grows ~22 MB, duplicate type registration, boot crash). The fix:
-//! rewrite the module's bytecode operands to vanilla keys, then ship EMPTY tail tables so the
-//! merge adds nothing.
+//! rewrite the module's bytecode operands and exact serialized StaticName defaults to vanilla
+//! indices, then ship EMPTY tail tables so the merge adds nothing.
 //!
 //! Operand classification is the authoritative table from `findings/decompile-refs.md §3`
 //! (verbatim from the engine `FAngelscriptBytecodeReferencer` Store/Load switch). See
-//! `OP_REFS` below. Remap is SIZE-PRESERVING (i64 key->i64 key, i32 id->i32 id) so operand
-//! dwords are patched in place; no resize.
+//! `OP_REFS` below. Bytecode remap is SIZE-PRESERVING (i64 key->i64 key, i32 id->i32 id), while
+//! a StaticName default's decimal index may resize only its containing SIA string.
 
 use std::collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
 
-use super::disasm::disassemble;
+use super::disasm::{disassemble, Instr};
 use super::header::CacheHeader;
 use super::types::DATA_TYPE_SIZE;
 use super::walk_modules::module_region_end;
@@ -3045,18 +3045,16 @@ pub(super) fn rebase_static_names_for_composition(
                     let low = code[ins.offset_dw] as u32 & 0x0000_ffff;
                     code[ins.offset_dw] = (low | (u32::from(mapped) << 16)) as i32;
                 }
-            } else if ins.op.name == "PshC4"
-                && instrs
-                    .get(pos + 1)
-                    .is_some_and(|next| context.next_is_static_accessor(next, &original))
-            {
-                let raw = original[ins.offset_dw + 1] as i64;
+            } else if let Some(operand_dw) = static_name_operand_dw(&instrs, pos, |call| {
+                context.next_is_static_accessor(call, &original)
+            }) {
+                let raw = original[operand_dw] as i64;
                 if raw >= pristine_len as i64 {
                     let mapped = source_to_final
                         .get(&raw)
                         .copied()
                         .ok_or(RemapError::MissingStaticName(raw))?;
-                    code[ins.offset_dw + 1] = i32::try_from(mapped)
+                    code[operand_dw] = i32::try_from(mapped)
                         .map_err(|_| RemapError::StaticNameIndexOverflow(mapped))?;
                 }
             }
@@ -3067,8 +3065,25 @@ pub(super) fn rebase_static_names_for_composition(
         }
     }
 
+    patch_static_name_defaults(
+        &mut module_bytes,
+        mod_start,
+        &spans.static_name_defaults,
+        |raw| {
+            if raw < pristine_len as i64 {
+                return Ok(None);
+            }
+            source_to_final
+                .get(&raw)
+                .copied()
+                .map(Some)
+                .ok_or(RemapError::MissingStaticName(raw))
+        },
+    )?;
+
     // Rebuild only T6. All keyed tables and their byte offsets within the tail remain byte-exact;
-    // module bytecode patching is size-preserving.
+    // bytecode patching is size-preserving, while a default-argument SIA may move the unchanged
+    // tail as a whole.
     let selected: HashSet<usize> = appended_rows.into_iter().collect();
     let tables = super::tables::parse_tail_tables(mini, mod_end)?;
     let static_table = &tables.tables[5];
@@ -3265,8 +3280,8 @@ pub struct RemapCounts {
     /// Embedded module-record int64 refs (ObjVariableTypes/DerivedFrom/ShadowType/Factory/Behavior).
     pub embed_type_ptr: usize,
     pub embed_func_id: usize,
-    /// T6 StaticNames operands rewritten onto the base pool (`STR`, and `PshC4` before
-    /// `__STATIC_NAME`).
+    /// T6 StaticNames operands rewritten onto the base pool (`STR`, direct/spilled
+    /// `__STATIC_NAME` bytecode, and exact serialized parameter defaults).
     pub static_name: usize,
 }
 
@@ -4179,6 +4194,80 @@ fn diagnose_unresolved(
     }
 }
 
+/// Return the dword containing a StaticNames index for the two compiler shapes observed in real
+/// caches: a direct `PshC4; __STATIC_NAME` call, or the adjacent same-slot
+/// `SetV4; PshV4; __STATIC_NAME` spill used by patch 1.0.5. Any intervening instruction or slot
+/// mismatch stays an ordinary integer and is deliberately not rewritten.
+fn static_name_operand_dw(
+    instrs: &[Instr],
+    pos: usize,
+    is_static_name_call: impl Fn(&Instr) -> bool,
+) -> Option<usize> {
+    let current = instrs.get(pos)?;
+    if current.op.name == "PshC4"
+        && instrs
+            .get(pos + 1)
+            .is_some_and(&is_static_name_call)
+    {
+        return Some(current.offset_dw + 1);
+    }
+    if current.op.name != "SetV4" {
+        return None;
+    }
+    let push = instrs.get(pos + 1)?;
+    let call = instrs.get(pos + 2)?;
+    (push.op.name == "PshV4"
+        && current.words.first() == push.words.first()
+        && is_static_name_call(call))
+    .then_some(current.offset_dw + 1)
+}
+
+fn patch_static_name_defaults(
+    module_bytes: &mut Vec<u8>,
+    module_start: usize,
+    spans: &[StaticNameDefaultSpan],
+    mut map: impl FnMut(i64) -> Result<Option<i64>, RemapError>,
+) -> Result<usize, RemapError> {
+    let mut replacements = Vec::<(usize, usize, usize, String)>::new();
+    for span in spans {
+        let Some(mapped) = map(span.source_index)? else {
+            continue;
+        };
+        i32::try_from(mapped).map_err(|_| RemapError::StaticNameIndexOverflow(mapped))?;
+        replacements.push((
+            span.sia_start - module_start,
+            span.digits_start - module_start,
+            span.digits_end - module_start,
+            mapped.to_string(),
+        ));
+    }
+
+    // Variable-width SIA strings are patched from the end of the module towards the beginning,
+    // so every absolute span collected from the original module remains valid.
+    for (sia_start, digits_start, digits_end, replacement) in replacements.iter().rev() {
+        let old_len = i32::from_le_bytes(
+            module_bytes[*sia_start..*sia_start + 4]
+                .try_into()
+                .expect("validated SIA length prefix"),
+        );
+        let delta = replacement.len() as i64 - (*digits_end - *digits_start) as i64;
+        let new_len = i64::from(old_len)
+            .checked_add(delta)
+            .and_then(|len| i32::try_from(len).ok())
+            .ok_or(WireError::BadLen {
+                pos: module_start + *sia_start,
+                len: i64::from(old_len).saturating_add(delta),
+                field: "ParameterDefaultArgs",
+            })?;
+        module_bytes.splice(
+            *digits_start..*digits_end,
+            replacement.as_bytes().iter().copied(),
+        );
+        module_bytes[*sia_start..*sia_start + 4].copy_from_slice(&new_len.to_le_bytes());
+    }
+    Ok(replacements.len())
+}
+
 /// Remap one function's bytecode dwords IN PLACE. `code` is the function's `Vec<i32>`.
 fn remap_bytecode(
     code: &mut [i32],
@@ -4200,15 +4289,12 @@ fn remap_bytecode(
             let low = code[ins.offset_dw] as u32 & 0x0000_ffff;
             code[ins.offset_dw] = (low | ((narrowed as u32) << 16)) as i32;
             counts.static_name += 1;
-        } else if ins.op.name == "PshC4"
-            && instrs
-                .get(pos + 1)
-                .and_then(|next| callee_name_from_effective(next, &original, regen, base))
-                == Some("__STATIC_NAME")
-        {
-            let raw = original[ins.offset_dw + 1] as i64;
-            let mapped = remap_static_name("PshC4", raw, regen, base)?;
-            code[ins.offset_dw + 1] =
+        } else if let Some(operand_dw) = static_name_operand_dw(&instrs, pos, |call| {
+            callee_name_from_effective(call, &original, regen, base) == Some("__STATIC_NAME")
+        }) {
+            let raw = original[operand_dw] as i64;
+            let mapped = remap_static_name(ins.op.name, raw, regen, base)?;
+            code[operand_dw] =
                 i32::try_from(mapped).map_err(|_| RemapError::StaticNameIndexOverflow(mapped))?;
             counts.static_name += 1;
         }
@@ -4644,6 +4730,7 @@ struct ModuleSpans {
     module: String,
     inner_module: String,
     code: Vec<CodeSpan>,
+    static_name_defaults: Vec<StaticNameDefaultSpan>,
     embeds: Vec<EmbedRef>,
     function_ids: Vec<i32>,
     function_id_sites: Vec<ModuleFunctionIdSite>,
@@ -4651,6 +4738,86 @@ struct ModuleSpans {
     capture_function_identities: bool,
     declarations: Option<DeclarationInventory>,
     structural_violation: Option<(&'static str, String)>,
+}
+
+/// One exact serialized `__STATIC_NAME(<non-negative index>)` parameter default. Only this
+/// complete expression is safe to rewrite: negative, compound, and malformed defaults are left
+/// byte-exact, matching the native projection's deliberately narrow contract.
+#[derive(Debug)]
+struct StaticNameDefaultSpan {
+    sia_start: usize,
+    digits_start: usize,
+    digits_end: usize,
+    source_index: i64,
+}
+
+fn static_name_default_index(expression: &str) -> Option<(std::ops::Range<usize>, i64)> {
+    let bytes = expression.as_bytes();
+    let mut pos = 0usize;
+    while bytes.get(pos).is_some_and(u8::is_ascii_whitespace) {
+        pos += 1;
+    }
+    const IDENTIFIER: &[u8] = b"__STATIC_NAME";
+    if !bytes.get(pos..)?.starts_with(IDENTIFIER) {
+        return None;
+    }
+    pos += IDENTIFIER.len();
+    while bytes.get(pos).is_some_and(u8::is_ascii_whitespace) {
+        pos += 1;
+    }
+    if bytes.get(pos) != Some(&b'(') {
+        return None;
+    }
+    pos += 1;
+    while bytes.get(pos).is_some_and(u8::is_ascii_whitespace) {
+        pos += 1;
+    }
+    let digits_start = pos;
+    let mut index = 0i64;
+    while let Some(&byte) = bytes.get(pos) {
+        if !byte.is_ascii_digit() {
+            break;
+        }
+        index = index.checked_mul(10)?.checked_add(i64::from(byte - b'0'))?;
+        pos += 1;
+    }
+    let digits_end = pos;
+    if digits_start == digits_end {
+        return None;
+    }
+    while bytes.get(pos).is_some_and(u8::is_ascii_whitespace) {
+        pos += 1;
+    }
+    if bytes.get(pos) != Some(&b')') {
+        return None;
+    }
+    pos += 1;
+    while bytes.get(pos).is_some_and(u8::is_ascii_whitespace) {
+        pos += 1;
+    }
+    (pos == bytes.len()).then_some((digits_start..digits_end, index))
+}
+
+fn read_parameter_default_spans(
+    c: &mut Cursor,
+    out: &mut ModuleSpans,
+    count: usize,
+) -> Result<(), WireError> {
+    for _ in 0..count {
+        let sia_start = c.pos();
+        let expression = c.read_sia()?;
+        if let Some((digits, source_index)) = static_name_default_index(&expression) {
+            // An accepted expression is entirely ASCII, so decoded byte offsets equal the SIA
+            // payload offsets after its four-byte length prefix.
+            out.static_name_defaults.push(StaticNameDefaultSpan {
+                sia_start,
+                digits_start: sia_start + 4 + digits.start,
+                digits_end: sia_start + 4 + digits.end,
+                source_index,
+            });
+        }
+    }
+    Ok(())
 }
 
 struct DeclarationTypeContext<'a> {
@@ -5748,9 +5915,7 @@ fn read_function_spans(
     let npflags = c.read_count("ParameterFlags")?;
     c.skip(npflags * 4)?;
     let npdefaults = c.read_count("ParameterDefaultArgs")?;
-    for _ in 0..npdefaults {
-        c.read_sia()?;
-    }
+    read_parameter_default_spans(c, out, npdefaults)?;
     require_equal_counts(
         out,
         "Function.Parameters",
@@ -7192,20 +7357,17 @@ fn analyze_bytecode_for_new_symbols(
             }
         }
 
-        // StaticNames has two observed operand forms. STR stores a u16 index in dword 0's high
-        // word. An n"..." literal stores an i32 index in PshC4 immediately before the native
-        // __STATIC_NAME accessor. Record both by text later, after all refs are classified.
+        // StaticNames has three observed operand forms. STR stores a u16 index in dword 0's high
+        // word. An n"..." literal stores an i32 index either in PshC4 immediately before the
+        // native accessor or in the adjacent same-slot SetV4/PshV4 spill emitted in patch 1.0.5.
+        // Record them by text later, after all refs are classified.
         if ins.op.name == "STR" {
             let idx = ((code[ins.offset_dw] as u32 >> 16) & 0xffff) as i64;
             plan.used_static_indices.insert(idx);
-        } else if ins.op.name == "PshC4"
-            && instrs
-                .get(pos + 1)
-                .and_then(|next| callee_name_from_effective(next, code, regen, base))
-                == Some("__STATIC_NAME")
-        {
-            plan.used_static_indices
-                .insert(code[ins.offset_dw + 1] as i64);
+        } else if let Some(operand_dw) = static_name_operand_dw(&instrs, pos, |call| {
+            callee_name_from_effective(call, code, regen, base) == Some("__STATIC_NAME")
+        }) {
+            plan.used_static_indices.insert(code[operand_dw] as i64);
         }
     }
     Ok(())
@@ -8459,15 +8621,12 @@ fn patch_bytecode_with_new_symbols(
                 let low = code[ins.offset_dw] as u32 & 0x0000_ffff;
                 code[ins.offset_dw] = (low | ((mapped as u32) << 16)) as i32;
             }
-        } else if ins.op.name == "PshC4"
-            && instrs
-                .get(pos + 1)
-                .and_then(|next| callee_name_from_effective(next, &original, regen, base))
-                == Some("__STATIC_NAME")
-        {
-            let raw = original[ins.offset_dw + 1] as i64;
+        } else if let Some(operand_dw) = static_name_operand_dw(&instrs, pos, |call| {
+            callee_name_from_effective(call, &original, regen, base) == Some("__STATIC_NAME")
+        }) {
+            let raw = original[operand_dw] as i64;
             if let Some(&mapped) = plan.static_indices.get(&raw) {
-                code[ins.offset_dw + 1] = i32::try_from(mapped)
+                code[operand_dw] = i32::try_from(mapped)
                     .map_err(|_| RemapError::StaticNameIndexOverflow(mapped))?;
             }
         }
@@ -8841,6 +9000,12 @@ fn analyze_new_symbol_mini(
             &mut comparison_budget,
         )?;
     }
+    plan.used_static_indices.extend(
+        spans
+            .static_name_defaults
+            .iter()
+            .map(|span| span.source_index),
+    );
     for embed in &spans.embeds {
         let raw = i64::from_le_bytes(
             extracted_mini[embed.byte_off..embed.byte_off + 8]
@@ -8993,6 +9158,19 @@ fn finish_new_symbol_remap(
             }
         }
     }
+
+    total.static_name += patch_static_name_defaults(
+        &mut module_bytes,
+        mod_start,
+        &spans.static_name_defaults,
+        |raw| {
+            plan.static_indices
+                .get(&raw)
+                .copied()
+                .map(Some)
+                .ok_or(RemapError::MissingStaticName(raw))
+        },
+    )?;
 
     // Preserve the hard invariant. Only raw keys of declared-new symbols that remained
     // collision-free are allowed to survive; re-keyed symbols must use their replacement key.
@@ -9415,6 +9593,13 @@ pub fn remap_module_to_base(
             }
         }
     }
+
+    total.static_name += patch_static_name_defaults(
+        &mut module_bytes,
+        mod_start,
+        &spans.static_name_defaults,
+        |raw| remap_static_name("ParameterDefaultArgs", raw, &regen, &base_syms).map(Some),
+    )?;
 
     // HARD POST-CONDITION: no regen tail-table key may survive anywhere in the remapped module
     // bytes. If one does, it lives in a module-record field the remap doesn't cover yet — fail

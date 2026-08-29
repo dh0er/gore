@@ -156,6 +156,29 @@ fn distinct_real_world_namespaces_do_not_create_free_function_collisions() {
 }
 
 #[test]
+fn same_module_namespaced_free_function_signatures_remain_distinct() {
+    let modules = vec![module(
+        "Namespaced",
+        vec![
+            function("Same", "Alpha", vec![parameter(primitive(0x44), 0)]),
+            function("Same", "Beta", vec![parameter(primitive(0x44), 0)]),
+        ],
+        Vec::new(),
+    )];
+    let mut refs = RefResolver::default();
+    let prepared = PreparedEmit::new(&modules, &mut refs, None).unwrap();
+
+    let emitted = prepared.emit_module(0).unwrap();
+    assert!(emitted.contains("namespace Alpha"));
+    assert!(emitted.contains("namespace Beta"));
+    assert_eq!(emitted.matches("void Same(int Value)").count(), 2);
+
+    let output = tempfile::tempdir().unwrap();
+    let stats = prepared.emit_tree(output.path()).unwrap();
+    assert_eq!(stats.functions, 2);
+}
+
+#[test]
 fn same_namespace_free_function_calls_remain_fail_closed() {
     let shared = || {
         function(
