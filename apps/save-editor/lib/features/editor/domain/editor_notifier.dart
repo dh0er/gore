@@ -795,21 +795,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
     await step(loadAllCharacters);
     await step(loadHeroAttributes);
     await step(loadSkills);
-    // The Overview is already visible. Warm every page its aggregate combat
-    // statistics ask for before the broad tab prefetch can occupy the queue.
-    final overviewHeroId = superseded() ? null : state.heroGlobalId;
-    if (overviewHeroId != null) {
-      await step(
-        () => _prefetchAllPages(superseded, (offset) async {
-          final page = await loadMemoryEvents(
-            overviewHeroId,
-            offset: offset,
-            limit: EditorPageSize.statistics,
-          );
-          return (total: page.total, count: page.events.length);
-        }),
-      );
-    }
+    // The mounted Overview owns the complete Hero event walk for its aggregate
+    // statistics. Warming the same 500-row pages here would enqueue an
+    // identical second scan and make the visible result slower, not faster.
     // Warms the CORE's cache without filling the Dart-side NPC memo. That memo
     // is pinned to one inspection by design, so pre-filling it here would hand
     // the first NPC panel a roster fetched seconds earlier; letting the panel

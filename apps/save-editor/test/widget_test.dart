@@ -7,6 +7,7 @@ import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/app/ui/goresave_app.dart';
 import 'package:goresave/features/editor/domain/character_category_catalog.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
+import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/features/editor/domain/item_icon_catalog.dart';
 import 'package:goresave/l10n/app_localizations.dart';
@@ -1362,6 +1363,18 @@ void main() {
     expect(metricValue('Known traders'), '2');
     expect(metricValue('Known teachers'), '2');
     expect(metricValue('Open crimes'), '1');
+    expect(
+      core.requests.where(
+        (request) =>
+            request.command == 'query_progression' &&
+            request.payload['section'] == 'events' &&
+            request.payload['character'] == 'Hero_Global' &&
+            request.payload['limit'] == EditorPageSize.statistics,
+      ),
+      hasLength(1),
+      reason:
+          'Overview must own its aggregate event scan without prefetching it twice.',
+    );
     expect(
       find.descendant(
         of: find.byKey(const ValueKey('statistics-card-character')),
