@@ -8,6 +8,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `dialog` — read the game's dialog trees offline: `list` the conversations,
+  print one NPC's whole `tree` with its options, conditions, lines, effects and
+  sub-menus, `show` a single topic, or `export` everything as JSON. Text comes
+  from the shared localization catalog; `--lang` picks the language.
+- `dialog text` — one conversation's lines as a `gore loc import` edits
+  document, each under the localization column the game actually reads.
+- `dialog new-topic` — scaffold a new root option with the conversation-private
+  base, participant, unused class identity and registration sentinel resolved
+  from the cache. The class is integrated into a checkout of that conversation
+  module; the scaffold is not an isolated cross-module `--op add` recipe.
+- `dialog checkout` / `check` / `stage` — edit a shipped conversation's own
+  AngelScript, including reconstructed defaults for `Caption`, `PriorityRank`,
+  `Rules` and flags. Checks reject partial default coverage, removed shipped
+  targets, unsupported generated-method loss and unsafe shipped-ABI drift before
+  compilation; byte-exact default carry remains only for source without
+  authored defaults.
+- Checked edits can retain intentional new-symbol rows and append a new topic
+  class inside the owning namespace of the same existing conversation module.
+  Qualified class identity and namespace residence are checked alongside the
+  complete-default contract. Same-module new-class/remap and cross-mini loadout
+  oracles cover that class together with existing `Subdialog` rewiring. On
+  BuildID `24878692`, Doctor accepted the installed cache/API. Strict standalone
+  compilation/remap produced a 17,085-byte Payfine sub-topic mini-cache and an
+  8,271-byte Charlotte root-topic mini-cache. Their offline bundles built and
+  passed inspection: one component/three files for Payfine and two
+  components/five files for Charlotte. A current Brannok checkout plus a new
+  same-module sub-topic produced a 104,047-byte mini-cache and an inspected
+  104,448-byte one-component/three-file bundle. None was deployed or game-tested.
+  Separate add/edit minis cannot depend on one another; full-graph cross-module
+  compilation emits a complete cache and is not a normal dialog-bundle recipe.
+- New root topics still use explicit `dialog_topics` registration because
+  automatic topic-set discovery is unproven. Check/stage bind each row to the
+  exact new class, base participant and vanilla sentinel, and reject stale or
+  orphaned root/sub-topic intent. Offline source checking, strict
+  compilation, packaging, deployment and runtime evidence are reported as
+  separate stages; in-game selection and the new sub-topic path remain to be
+  proven.
+- `gore_dialog` MCP tool for the same nine subcommands.
+
+### Fixed
+
+- Rehydrate cached modules for standalone mixed-source compilation with their
+  `AutomaticImports` relationships intact after source reset, reconstruct const
+  qualification from both cached const encodings, and publish cached script
+  enums to the compiler-wide type registry.
+- Publish cached `__StaticType` globals through engine-wide automatic imports,
+  preserve the `SCRIPT_OBJECT`, `TEMPLATE` and `APPOBJECT` kind of rehydrated
+  script-class type IDs, and expose cached mixin globals only during source
+  binding before restoring their original traits.
+- Compile the real Payfine and Brannok emitter shapes where `Say` receives a
+  prepared `LocText` temporary. The Brannok product oracle now also covers
+  `Subdialog`, cached cross-module class values and mixins.
+- Raise the bounded new-symbol portable-identity and namespace-comparison
+  ceilings to 512 MiB while retaining the four-times composed-input and
+  identity-footprint limits.
+
 ## [0.2.3] - 2026-09-01
 
 - `gore texture story-images` lists the loose story images — the glossary
@@ -154,41 +212,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   missing, so the code behind it stays guarded.
 - A cast reads the call it casts, a value the source built at a call site is
   written there, and an enum field is passed as itself.
-
-### Added
-
-- `dialog` — read the game's dialog trees offline: `list` the conversations,
-  print one NPC's whole `tree` with its options, conditions, lines, effects and
-  sub-menus, `show` a single topic, or `export` everything as JSON. Text comes
-  from the shared localization catalog; `--lang` picks the language.
-- `dialog text` — one conversation's lines as a `gore loc import` edits
-  document, each under the localization column the game actually reads.
-- `dialog new-topic` — scaffold a new root option with the conversation-private
-  base, participant, unused class identity and registration sentinel resolved
-  from the cache. The class is integrated into a checkout of that conversation
-  module; the scaffold is not an isolated cross-module `--op add` recipe.
-- `dialog checkout` / `check` / `stage` — edit a shipped conversation's own
-  AngelScript, including reconstructed defaults for `Caption`, `PriorityRank`,
-  `Rules` and flags. Checks reject partial default coverage, removed shipped
-  targets, unsupported generated-method loss and unsafe shipped-ABI drift before
-  compilation; byte-exact default carry remains only for source without
-  authored defaults.
-- Checked edits can retain intentional new-symbol rows and append a new topic
-  class inside the owning namespace of the same existing conversation module.
-  Qualified class identity and namespace residence are checked alongside complete-default,
-  same-module new-class/remap and cross-mini loadout oracles cover that class
-  together with existing `Subdialog` rewiring; strict standalone compilation
-  additionally requires a qualified profile matching the target Binds API.
-  Separate add/edit minis cannot depend on one another; full-graph cross-module
-  compilation emits a complete cache and is not a normal dialog-bundle recipe.
-- New root topics still use explicit `dialog_topics` registration because
-  automatic topic-set discovery is unproven. Check/stage bind each row to the
-  exact new class, base participant and vanilla sentinel, and reject stale or
-  orphaned root/sub-topic intent. Offline source checking, strict
-  compilation, packaging, deployment and runtime evidence are reported as
-  separate stages; in-game selection and the new sub-topic path remain to be
-  proven.
-- `gore_dialog` MCP tool for the same nine subcommands.
 
 ## [0.1.0] - 2026-08-18
 

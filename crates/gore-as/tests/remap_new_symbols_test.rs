@@ -8053,5 +8053,5 @@ fn real_cache_tail_tables_roundtrip_when_configured() {
         "raw table rows round-trip byte-for-byte"
     );
     SequentialMiniGuard::new(&bytes)
-        .expect("real Shipping cache identities must fit the composed 4x/256 MiB guard budget");
+        .expect("real Shipping cache identities must fit the composed 4x/512 MiB guard budget");
 }

@@ -1346,16 +1346,11 @@ impl RefResolver {
             .and_then(|p| self.free_fn_renames.get(p))
             .map(|s| s.as_str())
     }
-    /// True if `name` exists as a MEMBER anywhere: T3 method names (native or script, referenced
-    /// by bytecode), injected script-class method declarations, or any Binds native signature
-    /// name. The production emit runs WITHOUT Binds (JOURNAL: binds-arity emit regressed), so the
-    /// cache-derived sets are the load-bearing sources; Binds adds coverage when loaded.
-    /// batch-32b (N6, spec batch31-nomatch-illegalop §1.10): universal UObject members shadow a
-    /// same-named free script global inside EVERY class body (all script classes derive UObject),
-    /// but are invisible to the cache-derived sets unless some bytecode call references them as a
-    /// T3 method — `GetName(EPerceptionCharacterType)` resolved against the inherited
-    /// `FName UObject::GetName() const` instead of the free script fn (EventResponses ×2).
-    /// Static list; `::`-over-qualification of a non-shadowed global stays harmless.
+    /// True if `name` exists as a member in cached/script/native evidence.
+    ///
+    /// The bytecode emitter now globally qualifies every structurally proven free script global
+    /// inside a class, because a production cache without Binds cannot make this inventory
+    /// complete. Keep the query for collision planning, diagnostics and evidence tests.
     pub fn member_name_exists(&self, name: &str) -> bool {
         const UNIVERSAL_UOBJECT_MEMBERS: [&str; 5] =
             ["GetName", "GetClass", "GetOuter", "GetWorld", "GetFName"];
@@ -1403,6 +1398,13 @@ impl RefResolver {
             .ok()
             .and_then(|i| self.static_names.get(i))
             .map(|s| s.as_str())
+    }
+    /// Every FName-literal text carried by the StaticNames tail table.
+    ///
+    /// This is deliberately separate from [`Self::string_globals`]: `n"..."` and ordinary
+    /// string literals occupy different remap domains even when their text is identical.
+    pub(super) fn static_names(&self) -> impl Iterator<Item = &str> {
+        self.static_names.iter().map(String::as_str)
     }
     /// Number of StaticNames entries (debug aid).
     pub fn static_name_count(&self) -> usize {

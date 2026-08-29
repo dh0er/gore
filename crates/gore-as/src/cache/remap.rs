@@ -198,9 +198,12 @@ const MAX_IDENTITY_BYTES: usize = 64 * 1024;
 const MAX_IDENTITY_NAMESPACES: usize = 4096;
 const MIN_IDENTITY_BUDGET: usize = 64 * 1024;
 // The current 124 MiB Shipping cache's framed T1/T3/T5 footprint is above 128 MiB once owned-map
-// and diagnostic strings are counted. Keep a hard ceiling, but leave broad headroom above that
-// real generation while the 4x-input rule remains the tighter bound for normal/minimal caches.
-const MAX_IDENTITY_BUDGET: usize = 256 * 1024 * 1024;
+// and diagnostic strings are counted. An allow-new edit holds the pristine identities while it
+// derives the regenerated module's portable identities, so that legitimate composed pass can
+// exceed 256 MiB. Keep a hard ceiling, but leave enough headroom for both the pristine and
+// regenerated identity graphs while the 4x-composed-input rule remains the tighter bound for the
+// current Shipping cache and for every normal/minimal cache.
+const MAX_IDENTITY_BUDGET: usize = 512 * 1024 * 1024;
 
 /// Namespace-tolerant identity equality is deliberately pairwise and non-transitive. Bound the
 /// worst-case bytes each comparison may inspect to a small multiple of the effective plus incoming
@@ -208,7 +211,7 @@ const MAX_IDENTITY_BUDGET: usize = 256 * 1024 * 1024;
 /// quadratic preflight time even when its strings differ only near the end.
 const IDENTITY_COMPARISON_WORK_MULTIPLIER: usize = 4;
 const MIN_IDENTITY_COMPARISON_WORK: usize = 64 * 1024;
-const MAX_IDENTITY_COMPARISON_WORK: usize = 256 * 1024 * 1024;
+const MAX_IDENTITY_COMPARISON_WORK: usize = 512 * 1024 * 1024;
 
 // Declaration authority is queried only for keyed T1/T5/T7 rows. Keep the transient query set at
 // the same production envelope as sequential keyed-row composition, while allowing the compact

@@ -1368,6 +1368,7 @@ fn check(dir: &PathBuf, json: bool, cache: Option<PathBuf>, game: Option<PathBuf
             "added_classes": report.added_classes,
             "added_functions": report.added_functions,
             "new_strings": report.new_strings,
+            "new_static_names": report.new_static_names,
             "violations": report.violations.iter().map(|violation| violation.explain())
                 .collect::<Vec<_>>(),
         });

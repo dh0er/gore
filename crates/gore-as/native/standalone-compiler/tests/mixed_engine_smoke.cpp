@@ -3,6 +3,7 @@
 #include "gore_as_standalone/precompiled_engine.hpp"
 
 #include "as_bytecode.h"
+#include "as_scriptfunction.h"
 
 #include <algorithm>
 #include <array>
@@ -82,6 +83,17 @@ struct dummy_value {
     std::int32_t value = 0;
 };
 
+bool register_dialog_signature_types(asIScriptEngine& engine) {
+    constexpr asDWORD reference_value = asOBJ_REF | asOBJ_NOCOUNT;
+    constexpr asDWORD unreal_object =
+        asOBJ_REF | asOBJ_NOCOUNT | asOBJ_IMPLICIT_HANDLE;
+    return engine.SetEngineProperty(asEP_ALLOW_IMPLICIT_HANDLE_TYPES, 1) >= 0 &&
+           engine.RegisterObjectType("UGameplayAbility_AI", 0, unreal_object) >= 0 &&
+           engine.RegisterObjectType("AGothicCharacter", 0, unreal_object) >= 0 &&
+           engine.RegisterObjectType("DialogTag", 0, reference_value) >= 0 &&
+           engine.RegisterObjectType("DialogName", 0, reference_value) >= 0;
+}
+
 precompiled::map_string module_key(const char* const name) {
     const std::string text(name);
     return {false, std::vector<std::uint8_t>(text.begin(), text.end())};
@@ -101,6 +113,26 @@ bool execute_no_args(
     if (context != nullptr) context->Release();
     if (execution != asEXECUTION_FINISHED || actual != expected) {
         std::cerr << name << " returned " << actual
+                  << " with execution state " << execution << '\n';
+        return false;
+    }
+    return true;
+}
+
+bool execute_no_args_decl(
+    asIScriptEngine& engine,
+    asIScriptModule& module,
+    const char* const declaration,
+    const asDWORD expected) {
+    asIScriptFunction* const function = module.GetFunctionByDecl(declaration);
+    asIScriptContext* const context = engine.CreateContext();
+    const bool prepared = function != nullptr && context != nullptr &&
+                          context->Prepare(function) >= 0;
+    const int execution = prepared ? context->Execute() : asERROR;
+    const asDWORD actual = context == nullptr ? 0U : context->GetReturnDWord();
+    if (context != nullptr) context->Release();
+    if (execution != asEXECUTION_FINISHED || actual != expected) {
+        std::cerr << declaration << " returned " << actual
                   << " with execution state " << execution << '\n';
         return false;
     }
@@ -147,6 +179,7 @@ standalone::lexical_module_description source_module(
 int main() {
     asIScriptEngine* const source_engine = asCreateScriptEngine();
     if (source_engine == nullptr) return 1;
+    probe_string_factory source_strings;
     source_engine->SetMessageCallback(
         asFUNCTION(message_callback), nullptr, asCALL_CDECL);
     asIScriptModule* const provider =
@@ -155,6 +188,9 @@ int main() {
         source_engine->GetModule("Consumer", asGM_ALWAYS_CREATE);
     consumer->AddPreClassData("LinkedTarget", asPreClassData{});
     consumer->AddPreClassData("LinkedNode", asPreClassData{});
+    consumer->AddPreClassData("UGlossaryOutsidersDocument", asPreClassData{});
+    consumer->AddPreClassData(
+        "UDocument_Glossary_BC_BAN_BRANNOK", asPreClassData{});
     constexpr char provider_code[] =
         "struct SharedValue { int Number; }\n"
         "int Add(int Left, int Right) { return Left + Right; }";
@@ -163,9 +199,25 @@ int main() {
         "class LinkedNode { LinkedTarget Next; }\n"
         "const int InitWitness = CountCachedInitializer();\n"
         "int CallProvider() { return Add(20, 22); }\n"
-        "int ReadProviderValue() { SharedValue Value; Value.Number = 42; return Value.Number; }";
+        "int ReadProviderValue() { SharedValue Value; Value.Number = 42; return Value.Number; }\n"
+        "int LocText(const Text &inout TextId) { return 40; }\n"
+        "namespace DialogScope {\n"
+        "struct CachedCaption { int Value; }\n"
+        "enum CachedFlag { Ready = 1 }\n"
+        "}\n"
+        "class UGlossaryOutsidersDocument {}\n"
+        "namespace G1R::Document {\n"
+        "const int __StaticType_UDocument_Glossary_BC_BAN_BRANNOK = 42;\n"
+        "class UDocument_Glossary_BC_BAN_BRANNOK : UGlossaryOutsidersDocument { int Value; }\n"
+        "}\n"
+        "struct DialogExecutor { int Value; }\n"
+        "DialogExecutor Say(UGameplayAbility_AI AI, const Text &inout TextValue, const DialogTag &inout Expression, AGothicCharacter TargetCharacter, const bool Unskippable, const DialogName &inout ForceCameraPreset, const DialogName &inout ForceSubtitleLanguage, const DialogTag &inout Posture) { DialogExecutor Result; Result.Value = 42; return Result; }";
     consumer->ImportModule(provider);
-    if (source_engine->RegisterGlobalFunction(
+    if (!register_dialog_signature_types(*source_engine) ||
+        source_engine->RegisterObjectType(
+            "Text", 0, asOBJ_REF | asOBJ_NOCOUNT) < 0 ||
+        source_engine->RegisterStringFactory("Text", &source_strings) < 0 ||
+        source_engine->RegisterGlobalFunction(
             "int CountCachedInitializer()",
             asFUNCTION(count_cached_initializer), asCALL_GENERIC) < 0) {
         source_engine->ShutDownAndRelease();
@@ -209,6 +261,35 @@ int main() {
         source_engine->ShutDownAndRelease();
         return 4;
     }
+    bool found_cached_loc_text = false;
+    bool found_cached_say = false;
+    for (precompiled::precompiled_function& function : encoded_consumer.functions) {
+        if (function.function_name.bytes == "LocText" &&
+            function.parameter_types.size() == 1U) {
+            // The shipping cache represents this non-handle const reference through
+            // bIsConstHandle even when bIsObjectConst is clear.
+            function.parameter_types[0].is_object_const = false;
+            function.parameter_types[0].is_const_handle = true;
+            found_cached_loc_text = true;
+        }
+        if (function.function_name.bytes == "Say" &&
+            function.parameter_types.size() == 8U) {
+            // Shipping dialog helpers are cached mixins (MIXIN | FINAL), while
+            // decompiled source calls them as ordinary globals with an explicit
+            // first argument.
+            function.function_traits = 0x820;
+            for (const std::size_t index : {1U, 2U, 4U, 5U, 6U, 7U}) {
+                function.parameter_types[index].is_object_const = true;
+                function.parameter_types[index].is_const_handle = true;
+            }
+            found_cached_say = true;
+        }
+    }
+    if (!found_cached_loc_text || !found_cached_say) {
+        std::cerr << "cached dialog-call fixture was not exported\n";
+        source_engine->ShutDownAndRelease();
+        return 4;
+    }
     cache.modules.emplace_back(module_key("Provider"), std::move(encoded_provider));
     cache.modules.emplace_back(module_key("Consumer"), std::move(encoded_consumer));
     constexpr std::int64_t shadow_pointer = 0x222222222LL;
@@ -239,7 +320,25 @@ int main() {
     overlays.modules.push_back(source_module(
         "Provider", "Provider.as",
         "struct SharedValue { int Padding; int Number; }\n"
-        "int Add(int Left, int Right) { return Left + Right + 1; }"));
+        "int Add(int Left, int Right) { return Left + Right + 1; }\n"
+        "class EditedDialogTopic {\n"
+        "DialogScope::CachedCaption Caption;\n"
+        "DialogScope::CachedFlag Flag;\n"
+        "int Priority;\n"
+        "default Priority = LocText(\"TEXT_DIALOG_END\");\n"
+        "}\n"
+        "int ReadCachedDialogSymbols() { DialogScope::CachedCaption Caption; Caption.Value = 2; return LocText(\"TEXT_DIALOG_END\") + Caption.Value; }\n"
+        "int ExerciseCachedSay(UGameplayAbility_AI AI, const Text &inout TextValue, const DialogTag &inout Tag, const DialogName &inout Name) { DialogExecutor Result = ::Say(AI, TextValue, Tag, nullptr, false, Name, Name, Tag); return Result.Value; }\n"
+        "int ReadCachedDocumentClassValue() { return G1R::Document::UDocument_Glossary_BC_BAN_BRANNOK; }\n"
+        "namespace G1R::Conversation {\n"
+        "int ReadCachedDocument() { G1R::Document::UDocument_Glossary_BC_BAN_BRANNOK Document; Document.Value = 42; return Document.Value; }\n"
+        "}"));
+    standalone::preprocessed_class_description edited_dialog_topic;
+    edited_dialog_topic.class_name = "EditedDialogTopic";
+    edited_dialog_topic.super_class = "NativeBase";
+    edited_dialog_topic.code_super_class = "/Script/Test.NativeBase";
+    edited_dialog_topic.super_is_code_class = true;
+    overlays.modules.back().classes.push_back(std::move(edited_dialog_topic));
     overlays.modules.push_back(source_module(
         "Addon", "Addon.as",
         "int Added() { return CallProvider(); }", {"Consumer"}));
@@ -254,7 +353,9 @@ int main() {
     probe_string_factory target_strings;
     target_engine->SetMessageCallback(
         asFUNCTION(message_callback), nullptr, asCALL_CDECL);
-    if (target_engine->RegisterGlobalFunction(
+    if (!register_dialog_signature_types(*target_engine) ||
+        target_engine->SetEngineProperty(asEP_AUTOMATIC_IMPORTS, 1) < 0 ||
+        target_engine->RegisterGlobalFunction(
             "int Skew()", asFUNCTION(skew_function), asCALL_CDECL) < 0 ||
         target_engine->RegisterGlobalFunction(
             "int CountCachedInitializer()",
@@ -265,8 +366,7 @@ int main() {
             "Dummy", sizeof(dummy_value),
             asOBJ_VALUE | asOBJ_POD | asGetTypeTraits<dummy_value>()) < 0 ||
         target_engine->RegisterObjectType(
-            "Text", sizeof(std::string),
-            asOBJ_VALUE | asOBJ_POD | asOBJ_APP_CLASS) < 0 ||
+            "Text", 0, asOBJ_REF | asOBJ_NOCOUNT) < 0 ||
         target_engine->RegisterStringFactory("Text", &target_strings) < 0 ||
         target_engine->RegisterGlobalFunction(
             "int ProbeText(const Text &in Value)",
@@ -307,6 +407,13 @@ int main() {
     asITypeInfo* const shadow_type = built_shadow == nullptr
         ? nullptr
         : built_shadow->GetTypeInfoByDecl("AShadowChild");
+    asIScriptFunction* const cached_say = built_consumer == nullptr
+        ? nullptr
+        : built_consumer->GetFunctionByName("Say");
+    asITypeInfo* const cached_document = built_consumer == nullptr
+        ? nullptr
+        : built_consumer->GetTypeInfoByDecl(
+              "G1R::Document::UDocument_Glossary_BC_BAN_BRANNOK");
     int shadow_property_offset = -1;
     if (shadow_type != nullptr) {
         shadow_type->GetProperty(
@@ -329,6 +436,10 @@ int main() {
         built[4] != built_literal ||
         replacement_add == nullptr ||
         replacement_value == nullptr ||
+        cached_say == nullptr ||
+        !static_cast<asCScriptFunction*>(cached_say)->IsMixin() ||
+        cached_document == nullptr ||
+        (cached_document->GetTypeId() & asTYPEID_MASK_OBJECT) != asTYPEID_SCRIPTOBJECT ||
         shadow_type == nullptr || shadow_type->GetSize() < 68U ||
         shadow_property_offset != 64 ||
         !saw_provider_candidate || !saw_addon_candidate || !saw_literal_candidate ||
@@ -339,6 +450,12 @@ int main() {
         !execute_no_args(*target_engine, *built_consumer, "CallProvider", 43U) ||
         !execute_no_args(
             *target_engine, *built_consumer, "ReadProviderValue", 42U) ||
+        !execute_no_args_decl(
+            *target_engine, *built_provider,
+            "int ReadCachedDialogSymbols()", 42U) ||
+        !execute_no_args(
+            *target_engine, *built_provider,
+            "ReadCachedDocumentClassValue", 42U) ||
         !execute_no_args(*target_engine, *built_addon, "Added", 43U) ||
         !execute_no_args(*target_engine, *built_literal, "LiteralSize", 5U) ||
         !execute_no_args(*target_engine, *built_literal, "Utf8LiteralSize", 6U) ||
@@ -663,7 +780,8 @@ int QualificationNameProjection()
     probe_string_factory reload_strings;
     reload_engine->SetMessageCallback(
         asFUNCTION(message_callback), nullptr, asCALL_CDECL);
-    if (reload_engine->RegisterObjectType(
+    if (!register_dialog_signature_types(*reload_engine) ||
+        reload_engine->RegisterObjectType(
             "NativeBase", 0, asOBJ_REF | asOBJ_NOCOUNT) < 0 ||
         reload_engine->RegisterGlobalFunction(
             "int CountCachedInitializer()",

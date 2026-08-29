@@ -98,6 +98,20 @@ bytes while a separate semantic ABI links it to the historical qualification
 reference. Rebuilding or signing may therefore change the EXE hash without
 turning either Steam tuple or whole executable into a runtime gate.
 
+The mixed cached/source compiler rehydrates unchanged modules from the sealed
+base instead of recompiling their source. Its current rehydration restores the
+compiler metadata authored overlays depend on: automatic-import relationships
+are wired after a source module reset when `AutomaticImports` is enabled,
+cached const qualification is reconstructed from both object-const and
+const-handle flags,
+and cached script enums are published in the engine-wide script-type registry.
+Cached `__StaticType` globals are also available through engine-wide automatic
+imports, reconstructed script-class type IDs retain their `SCRIPT_OBJECT`,
+`TEMPLATE` and `APPOBJECT` kind, and cached mixin globals are exposed only while
+source binding runs before their original traits are restored. Those are
+compiler-resolution fixes; they do not by themselves prove deployment or game
+runtime behavior.
+
 The default policy is `standalone-then-game`: GORE tries the qualified
 standalone compiler first. If the package is absent, the selected game's cache
 format or API is incompatible, or the standalone result is rejected, the reason is retained and
@@ -301,6 +315,13 @@ that do not exist there are retained, with collision checks before deployment.
 Mod Studio defaults it **on** for a new module and **off** for an edit; an
 existing-module edit can enable it explicitly when it intentionally adds a class
 or function.
+
+Portable-identity construction remains bounded. The remapper permits at most
+four times the composed input size, clamped to a 512 MiB hard ceiling; the
+namespace-tolerant comparison work is separately limited to four times the
+materialized identity footprint with the same ceiling. The larger ceiling lets
+a legitimate allow-new edit hold both the pristine and regenerated identity
+graphs without turning malformed input into unbounded memory or comparison work.
 
 The remapped mini-cache is bound to the exact target cache GUID. Apply checks
 that binding again and validates every executable reference and retained symbol

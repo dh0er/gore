@@ -340,7 +340,8 @@ pub enum AsCmd {
         #[arg(long)]
         work_dir: PathBuf,
         /// Explicitly retain minimal rows for classes/functions/names absent from the pristine
-        /// cache. Normally used with `--op add`; strict remapping remains the default.
+        /// cache. Used for `--op add` and for intentional new symbols in a safe `--op edit`;
+        /// strict remapping remains the default.
         #[arg(long)]
         allow_new_symbols: bool,
         /// Output path for the remapped 1-module mini-cache.

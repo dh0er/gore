@@ -276,17 +276,26 @@ writes a save/quest/knowledge field.
   new topic class inside the owning namespace of the same existing conversation
   module and changes an existing `Subdialog` body to reference it. Qualified
   class identity and namespace residence are part of the fail-closed check.
-  Complete-default,
-  same-module new-class/remap and cross-mini loadout oracles cover that shape;
-  a real strict standalone run additionally needs a qualified profile matching
-  the target Binds API. It does not authorize reparenting or changing the
+  Complete-default, same-module new-class/remap and cross-mini loadout oracles
+  cover that shape. On BuildID `24878692`, Doctor accepted the installed
+  Shipping cache and complete Binds API. Strict standalone compilation/remap
+  produced a 17,085-byte Payfine same-module sub-topic mini-cache and an
+  8,271-byte Charlotte same-module root-topic mini-cache. Their offline bundles
+  built and passed inspection: Payfine has one component/three files and
+  Charlotte has two components/five files. A current Brannok checkout plus a new
+  same-module sub-topic also strictly compiled/remapped to a 104,047-byte mini;
+  its 104,448-byte one-component/three-file offline bundle built and passed
+  inspection. This does not authorize reparenting or changing the
   members/signatures of shipped classes.
 - Separate add and edit mini-caches cannot depend on one another: a new module
   cannot see the conversation-private root, and the edit mini cannot resolve a
-  class supplied only by the add mini. Full-graph V2 can compile that
-  cross-module add-plus-edit graph together, but produces a complete cache. The
-  ordinary bundle composer consumes module mini-caches, so that result is a
-  compiler proof, not a dialog packaging or deployment recipe.
+  class supplied only by the add mini. Each mini is remapped independently to
+  the pristine base; neither becomes authority for the other. Full-graph V2
+  instead submits the complete sealed base graph and coordinated add/edit/delete
+  changes to one standalone compile, so visible cross-module references can be
+  resolved together. It produces a complete cache and full-graph receipt. The
+  ordinary bundle composer consumes module mini-caches, so that artifact is an
+  offline compiler capability, not a dialog packaging or deployment recipe.
 - A newly compiled root topic is not automatically registered. Discovery into
   an already constructed `ConversationTopicSet` remains unproven; a root needs
   an explicit `dialog_topics` participant/topic/sentinel adapter. The
@@ -299,9 +308,11 @@ writes a save/quest/knowledge field.
   and runtime observation are separate claims. The current live evidence above
   covers the registered root fixture reaching render, not the new same-module
   authoring path, topic selection, recorded voice, or selection-side save
-  effects. In the 2026-08-28 development oracle, Steam build `24878692` was
-  newer than the checked-in qualified standalone profile for build `24539464`;
-  target validation correctly refused the changed Binds API before compilation.
+  effects. The BuildID-`24878692` Charlotte, Payfine and Brannok runs prove current
+  profile/API acceptance, strict standalone creation/remap, and successful
+  offline bundle build/inspection for the root and sub-topic shapes described
+  above. No bundle was deployed, the game was not launched, and neither root
+  registration/rendering nor any sub-topic or selection path was exercised.
 - Existing vanilla defaults also retain the separate offline, copy-on-write
   [`default-sites` / `patch-default` scalar path](../guide/angelscript-defaults.md).
   It re-resolves exact selectors and admits only a unique branch-free direct
@@ -310,5 +321,7 @@ writes a save/quest/knowledge field.
   narrow workflow. `tag-map-sites` / `patch-tag-map` likewise changes only an
   already-present native `GameplayTag`-to-`float32` entry. Neither scalar path
   bypasses the complete-default contract for a source edit.
-- Decompiled `Say` calls can omit the prepared `FText` argument. Use only a
-  signature verified against `Binds.Cache` or a known compiling source template.
+- Real decompiled Payfine and Brannok `Say` calls that pass prepared `LocText`
+  temporaries compile in the current strict standalone path. The Brannok product
+  oracle additionally covers `Subdialog`, cached cross-module class-value
+  expressions, cached mixins, and reconstructed script-class type identities.

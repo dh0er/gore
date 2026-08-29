@@ -192,10 +192,17 @@ one existing conversation module:
    this case.
 
 This combination passes the complete-default checker and the same-module
-new-class/remap/loadout oracles. A real strict standalone compile additionally
-needs a qualified profile compatible with the installed target; an unknown
-Binds API is refused before compilation. The new sub-dialog has not yet been
-shown or selected in game, so offline acceptance is not a runtime claim.
+new-class/remap/loadout oracles. On BuildID `24878692`, the real Payfine shape
+strictly compiled and remapped to a 17,085-byte mini-cache; its one-component,
+three-file offline bundle built and passed inspection. The corresponding
+Charlotte root-topic shape produced an 8,271-byte mini-cache and an inspected
+two-component, five-file offline bundle. Neither was deployed or started in the
+game. A current Brannok checkout plus a new same-module sub-topic likewise
+strictly compiled/remapped to a 104,047-byte mini-cache; its 104,448-byte,
+one-component, three-file offline bundle built and passed inspection. This
+Brannok oracle includes real decompiled `LocText` temporary `Say` calls,
+`Subdialog`, and cached cross-module class-value expressions. None of these
+topics has yet been shown or selected in game.
 
 `gore dialog new-topic` creates that same-module edit workspace directly. For
 a **root topic**:
@@ -227,11 +234,18 @@ and canonical vanilla sentinel. Conversely, every new direct topic must be
 either registered once or referenced once from a shipped `Subdialog` body, so
 renamed, deleted, duplicated or orphaned intent fails before `stage`.
 
-Full-graph V2 can compile a cross-module add plus edit together, but its result
-is a complete regenerated cache. The normal dialog bundle path consumes
-deployable module mini-caches, so that full-cache result is an offline compiler
-capability, not a packaging recipe. Keeping the new class and the rewired
-`Subdialog` in the same existing module is the supported mini-cache path.
+Full-graph V2 gives one standalone compiler request the complete sealed base
+graph plus all coordinated add/edit/delete sources. That lets visible symbols in
+different modules resolve in one compilation, but its result is a complete
+regenerated cache plus a full-graph receipt. It is not a module mini-cache.
+
+The normal dialog bundle path instead consumes independently base-bound module
+minis. One add mini cannot provide symbols to a separate edit mini, and the
+bundle composer does not turn a FullGraph cache into a dialog-mini deployment.
+Keeping the new class and the rewired `Subdialog` in the same existing module is
+the supported mini-cache shape. Its compile/remap and offline packaging path is
+proven on Payfine and Brannok; the new sub-topic's appearance and selection in
+game are not.
 
 ## Compile, package, deploy, prove
 

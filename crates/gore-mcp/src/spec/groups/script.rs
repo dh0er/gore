@@ -418,7 +418,8 @@ const COMPILE_MODULE_ARGS: &[ArgSpec] = &[
         Switch("allow-new-symbols"),
         Bool,
         "Explicitly retain minimal rows for classes/functions/names absent from the pristine cache. \
-         Normally used with `--op add`; strict remapping remains the default.",
+         Used for `--op add` and for intentional new symbols in a safe `--op edit`; strict \
+         remapping remains the default.",
         false,
     ),
     ArgSpec::new(

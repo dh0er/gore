@@ -1590,9 +1590,9 @@ impl<'a> PreparedEmit<'a> {
     }
 
     /// Emit one module using the same full-cache resolver and collision plan as `emit_tree`.
-    /// Write class `default` statements. OFF unless opted into: emitted source is also hashed
-    /// into sealed evidence and fed back to the compiler, and both need the historical shape.
-    /// Turn it on for source a person is going to read.
+    /// Write class `default` statements when opted into. Complete authored defaults are valid
+    /// compiler input and regenerate `__InitDefaults`; the defaults-free shape remains useful for
+    /// historical evidence and the byte-exact carry fallback.
     pub fn with_class_defaults(mut self, class_defaults: bool) -> Self {
         self.class_defaults = class_defaults;
         self

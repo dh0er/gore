@@ -3985,24 +3985,24 @@ fn block_stmts_in(
                         ref_reg_nfty = None;
                         ref_reg_vty = None;
                     }
-                    // batch-24b shadow gate: a free SCRIPT global (no owner, global namespace)
-                    // rendered inside a class method is shadowed by any same-named member in
-                    // the class's (native or script) ancestry. Member-name existence (T3
-                    // method names, script method decls, Binds when loaded) over-approximates
-                    // "such a member exists somewhere" — `::`-qualifying a non-shadowed global
-                    // resolves identically, so false positives are harmless; no name sources
-                    // -> false (status quo).
+                    // batch-24b/batch-43: a free SCRIPT global (no owner, global namespace)
+                    // rendered inside a class method must use the global-scope qualifier. Member
+                    // lookup can otherwise select a same-named native mixin or inherited method.
+                    // The cache does not enumerate every callable native overload when Binds is
+                    // absent (the production emitter intentionally runs without it), so a
+                    // name-existence gate missed `Subdialog(Topic, ...)` and the compiler selected
+                    // the native `Subdialog(T1, ...)` mixin instead. `::`-qualifying a genuine
+                    // unnamespaced global is always legal even when no collision exists, making
+                    // the structural free-global evidence both sufficient and fail-closed.
                     // batch-32b (N6): the namespaced-fn exclusion is GONE — the emitter never
                     // writes namespace blocks, so a vanilla-namespaced script fn (e.g.
                     // FPerceptionCharacterType::GetName) is a bare GLOBAL in our tree and is
                     // shadowed inside class bodies exactly like an unnamespaced one; `::f`
                     // resolves it. The old gate left `GetName(EPerceptionCharacterType(...))`
-                    // resolving against the inherited `UObject::GetName()` (EventResponses ×2,
-                    // + the universal-UObject-member rows in member_name_exists).
-                    let global_shadowed = !ctx.refs.is_method_by_id(id)
+                    // resolving against the inherited `UObject::GetName()` (EventResponses ×2).
+                    let free_global_in_class = !ctx.refs.is_method_by_id(id)
                         && owner.is_none()
-                        && ctx.class_name.is_some()
-                        && ctx.refs.member_name_exists(&f);
+                        && ctx.class_name.is_some();
                     // A free/static SCRIPT function declared in a namespace has to be called
                     // qualified, exactly like the native namespaced calls below. The binding
                     // puts a class's companion functions in a namespace named after the class
@@ -4028,7 +4028,7 @@ fn block_stmts_in(
                         n == "CALL",
                         pending_ty.as_deref(),
                         ret_is_ref,
-                        global_shadowed,
+                        free_global_in_class,
                         ctx.refs,
                     )
                 };

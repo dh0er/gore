@@ -21,9 +21,10 @@
 //! # What that leaves an author
 //!
 //! Method bodies remain editable, including an existing `Subdialog` call. Reconstructed defaults
-//! make caption, priority, rules and flags editable as source too. New classes, free functions and
-//! strings are reported as requiring `--allow-new-symbols`; existing class layout and callable
-//! identities stay fixed because no runtime ABI migration for live vanilla classes is proven.
+//! make caption, priority, rules and flags editable as source too. New classes, free functions,
+//! strings and FName literals are reported as requiring `--allow-new-symbols`; existing class
+//! layout and callable identities stay fixed because no runtime ABI migration for live vanilla
+//! classes is proven.
 
 use std::collections::BTreeSet;
 
@@ -151,6 +152,7 @@ pub fn checkout_many(
 pub struct KnownNames {
     pub types: BTreeSet<String>,
     pub strings: BTreeSet<String>,
+    pub static_names: BTreeSet<String>,
 }
 
 /// Collect the type names and string literals the base cache can bind an edit to.
@@ -170,6 +172,7 @@ pub fn known_names(cache: &[u8]) -> Result<KnownNames, DialogError> {
     );
     Ok(KnownNames {
         strings: refs.string_globals().map(str::to_owned).collect(),
+        static_names: refs.static_names().map(str::to_owned).collect(),
         types,
     })
 }
@@ -866,6 +869,7 @@ pub struct EditReport {
     pub added_classes: Vec<String>,
     pub added_functions: Vec<String>,
     pub new_strings: Vec<String>,
+    pub new_static_names: Vec<String>,
     /// True when the authored source is byte-identical to the shipped one.
     pub unchanged: bool,
 }
@@ -879,6 +883,7 @@ impl EditReport {
         !self.added_classes.is_empty()
             || !self.added_functions.is_empty()
             || !self.new_strings.is_empty()
+            || !self.new_static_names.is_empty()
     }
 }
 
@@ -948,6 +953,7 @@ pub fn verify(checkout: &Checkout, authored: &str, known: &KnownNames) -> EditRe
                 added_classes: Vec::new(),
                 added_functions: Vec::new(),
                 new_strings: Vec::new(),
+                new_static_names: Vec::new(),
                 unchanged: pristine == authored,
             };
         }
@@ -965,6 +971,7 @@ pub fn verify(checkout: &Checkout, authored: &str, known: &KnownNames) -> EditRe
                 added_classes: Vec::new(),
                 added_functions: Vec::new(),
                 new_strings: Vec::new(),
+                new_static_names: Vec::new(),
                 unchanged: pristine == authored,
             };
         }
@@ -1202,7 +1209,8 @@ pub fn verify(checkout: &Checkout, authored: &str, known: &KnownNames) -> EditRe
         });
     }
 
-    let (name_violations, new_strings) = unknown_names(pristine, authored, known, &edit_names);
+    let (name_violations, new_strings, new_static_names) =
+        unknown_names(pristine, authored, known, &edit_names);
     violations.extend(name_violations);
 
     EditReport {
@@ -1213,6 +1221,7 @@ pub fn verify(checkout: &Checkout, authored: &str, known: &KnownNames) -> EditRe
         added_classes,
         added_functions: remaining_functions,
         new_strings,
+        new_static_names,
     }
 }
 
@@ -1358,30 +1367,46 @@ fn unknown_names(
     authored: &str,
     known: &KnownNames,
     declared: &BTreeSet<&str>,
-) -> (Vec<Violation>, Vec<String>) {
+) -> (Vec<Violation>, Vec<String>, Vec<String>) {
     let mut violations = Vec::new();
-    let mut seen = BTreeSet::new();
+    let mut seen_types = BTreeSet::new();
 
     for name in static_class_names(authored) {
         if static_class_names(pristine).contains(&name) {
             continue;
         }
-        if !known.has_type(&name) && !declared.contains(name.as_str()) && seen.insert(name.clone()) {
+        if !known.has_type(&name)
+            && !declared.contains(name.as_str())
+            && seen_types.insert(name.clone())
+        {
             violations.push(Violation::UnknownType { name });
         }
     }
 
     let base_strings = string_literals(pristine);
     let mut new_strings = Vec::new();
+    let mut seen_strings = BTreeSet::new();
     for value in string_literals(authored) {
         if base_strings.contains(&value) {
             continue;
         }
-        if !known.strings.contains(&value) && seen.insert(value.clone()) {
+        if !known.strings.contains(&value) && seen_strings.insert(value.clone()) {
             new_strings.push(value);
         }
     }
-    (violations, new_strings)
+
+    let base_static_names = static_name_literals(pristine);
+    let mut new_static_names = Vec::new();
+    let mut seen_static_names = BTreeSet::new();
+    for value in static_name_literals(authored) {
+        if base_static_names.contains(&value) {
+            continue;
+        }
+        if !known.static_names.contains(&value) && seen_static_names.insert(value.clone()) {
+            new_static_names.push(value);
+        }
+    }
+    (violations, new_strings, new_static_names)
 }
 
 /// Class names used as `UX::StaticClass()`, which is how a body names a type.
@@ -1406,32 +1431,45 @@ fn static_class_names(source: &str) -> BTreeSet<String> {
     names
 }
 
-/// Double-quoted literals, which reach the cache as string-table entries.
-fn string_literals(source: &str) -> BTreeSet<String> {
-    let mut values = BTreeSet::new();
-    for line in source.lines() {
-        let line = strip_comment(line);
-        let mut chars = line.char_indices().peekable();
-        while let Some((index, character)) = chars.next() {
-            if character != '"' {
-                continue;
-            }
-            let mut value = String::new();
-            let mut closed = false;
-            for (_, next) in chars.by_ref() {
-                if next == '"' {
-                    closed = true;
-                    break;
-                }
-                value.push(next);
-            }
-            if closed && !value.is_empty() {
-                values.insert(value);
-            }
-            let _ = index;
+/// Double-quoted literals split by their two independent remap domains.
+fn quoted_literals(source: &str) -> (BTreeSet<String>, BTreeSet<String>) {
+    let mut strings = BTreeSet::new();
+    let mut static_names = BTreeSet::new();
+    let Ok(tokens) = tokenize(source) else {
+        return (strings, static_names);
+    };
+    for (index, token) in tokens.iter().enumerate() {
+        if !token.text.starts_with('"') || !token.text.ends_with('"') {
+            continue;
+        }
+        let value = serde_json::from_str::<String>(&token.text).unwrap_or_else(|_| {
+            token
+                .text
+                .trim_start_matches('"')
+                .trim_end_matches('"')
+                .to_owned()
+        });
+        if value.is_empty() {
+            continue;
+        }
+        if tokens
+            .get(index.wrapping_sub(1))
+            .is_some_and(|prefix| prefix.word && prefix.text == "n")
+        {
+            static_names.insert(value);
+        } else {
+            strings.insert(value);
         }
     }
-    values
+    (strings, static_names)
+}
+
+fn string_literals(source: &str) -> BTreeSet<String> {
+    quoted_literals(source).0
+}
+
+fn static_name_literals(source: &str) -> BTreeSet<String> {
+    quoted_literals(source).1
 }
 
 #[cfg(test)]
@@ -1476,6 +1514,7 @@ class UChoiceOne : UTopic_Hero__NPC
                 .into_iter()
                 .collect(),
             strings: ["EXISTING_KEY".to_owned()].into_iter().collect(),
+            static_names: BTreeSet::new(),
         }
     }
 
@@ -1777,6 +1816,31 @@ class UChoiceOne : UTopic_Hero__NPC
 
         let shipped = PRISTINE.replace("this.EndConversation();", "LocText(\"EXISTING_KEY\");");
         let report = verify(&checkout(PRISTINE), &shipped, &known());
+        assert!(report.is_carryable(), "{:?}", report.violations);
+        assert!(!report.requires_new_symbols());
+    }
+
+    #[test]
+    fn fname_literals_use_the_static_name_domain_even_when_string_text_exists() {
+        let mut names = known();
+        names.strings.insert("SHARED_TEXT".to_owned());
+        names.static_names.insert("KNOWN_FNAME".to_owned());
+
+        let invented = PRISTINE.replace(
+            "this.EndConversation();",
+            "Remember(n\"SHARED_TEXT\");",
+        );
+        let report = verify(&checkout(PRISTINE), &invented, &names);
+        assert!(report.is_carryable(), "{:?}", report.violations);
+        assert!(report.new_strings.is_empty());
+        assert_eq!(report.new_static_names, ["SHARED_TEXT"]);
+        assert!(report.requires_new_symbols());
+
+        let shipped = PRISTINE.replace(
+            "this.EndConversation();",
+            "Remember(n\"KNOWN_FNAME\");",
+        );
+        let report = verify(&checkout(PRISTINE), &shipped, &names);
         assert!(report.is_carryable(), "{:?}", report.violations);
         assert!(!report.requires_new_symbols());
     }

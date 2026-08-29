@@ -18,6 +18,7 @@ of that page, not a second claim.
 | | |
 |---|---|
 | **Shown in game** | An authored topic rendered in a real conversation on Gothic 1 Remake **1.0.3**: caption independently confirmed, `RENDER_PASS`, the same object and exact class once each in both observed arrays. That historical version-1 proof restored the 123,394,250-byte shipping cache to its recorded SHA-256, with 92 of 93 saves byte-identical. On 2026-08-18, runtime version 3 also rendered `[Gore probe] UI fixture` on BuildID 24539464 and logged `ARMED`, `CHOICE_PASS`, and `RENDER_PASS` with `exact_count=1`; no topic was selected and no save was written. |
+| **Current offline compiler/package proof** | On BuildID `24878692`, `gore doctor` accepted the installed Shipping cache and complete Binds API. Strict standalone `compile-module --op edit --allow-new-symbols` produced same-module topic minis for Payfine (17,085-byte sub-topic), Charlotte (8,271-byte root topic), and Brannok (104,047-byte sub-topic). All three offline bundles built and passed inspection: Payfine and Brannok each have one component/three files; Charlotte has two components/five files. The Brannok bundle is 104,448 bytes. None was deployed and the game was not launched, so appearance and selection remain unproven. |
 | **Current-proof boundary** | The version-3 probe was GORE-authored and used the PR #91-fixed app-local Core DLL. Postflight restored the captured four-mod baseline loadout byte-for-byte and removed the temporary fixture. It does not qualify a third-party AngelScript mod or a three-way script conflict. |
 | **Not certified by that proof** | Selecting the topic. Authored knowledge or quest changes. **Recorded voice on an authored topic.** Save effects on the selection side. |
 | **Not qualified at all** | Steam build `24340829`, the exact frozen runtime-version-3 artifact for older build `24169431`, and game/UE4SS combinations other than the separately recorded proofs. |
@@ -126,12 +127,35 @@ writing into its install. Complete authored defaults are what make
 `--op edit --allow-new-symbols` safe: no stale `__InitDefaults` carry remains to
 depend on the old keyspace. A partial default set still fails closed.
 
+That exact path has now completed three times against installed BuildID
+`24878692`. The strict standalone compiler/remapper produced a 17,085-byte
+Payfine same-module sub-topic mini-cache, an 8,271-byte Charlotte same-module
+root-topic mini-cache, and a 104,047-byte Brannok same-module sub-topic
+mini-cache. Their offline bundles also built and passed inspection. Payfine and
+Brannok each have one component and three files; Charlotte has two components
+and five files. The Brannok bundle is 104,448 bytes. Nothing was deployed and
+the game was not started. This evidence does not show any option, exercise root
+registration, or prove selection.
+
+The Brannok product oracle also covers the harder cached-module bridge shape:
+real decompiled `LocText` temporary `Say` calls, `Subdialog`, cross-module class
+values, cached mixins, and script-class type identities all bind in the current
+strict standalone path.
+
 Do not turn a generated topic scaffold into an isolated
 `compile-module --op add` command. The conversation root is module-private, so
 a separate module cannot derive from it. Nor can separate add and edit
-mini-caches depend on one another. Full-graph V2 can compile a cross-module add
-and edit together, but it returns a complete cache; the normal bundle path
-composes module mini-caches and cannot deploy that result as a dialog mini.
+mini-caches depend on one another: each mini is independently remapped against
+the pristine base, and one mini never becomes symbol authority for the other.
+
+Full-graph V2 is a different compiler product. It gives one standalone compiler
+request the complete sealed base graph plus all coordinated add/edit/delete
+changes, so otherwise-visible cross-module references can resolve together. Its
+artifact is a complete regenerated script cache and a full-graph receipt, not a
+base-bound one-module mini-cache. The normal bundle composer consumes module
+minis and has no deployment recipe for that complete-cache artifact. For dialog
+mods, keeping the new topic and any `Subdialog` rewiring in the same existing
+conversation module is therefore the practical mini-bundle path.
 
 ## Root topics and explicit registration
 
@@ -188,8 +212,10 @@ The staged root spec has this shape:
 Compilation creates the class but does not prove that an already constructed
 `ConversationTopicSet` discovers it. Automatic discovery remains unproven, so a
 new root topic needs this explicit adapter registration. A sub-menu topic is
-instead reached by the authored `Subdialog` wiring in its existing module; its
-in-game appearance and selection still await runtime proof.
+instead reached by the authored `Subdialog` wiring in its existing module. The
+Payfine and Brannok now have strict compile/remap and inspected offline-bundle
+evidence for this shape; their in-game appearance and selection still await
+runtime proof.
 
 State-dependent root topics can pass `new-topic --allow-hidden`, which stages
 `"allow_hidden": true`. A clean
