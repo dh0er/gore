@@ -1864,6 +1864,7 @@ fn emit_function_ctor(
                 &range_for_iterator_slots(f, refs),
                 &proceed_element_slots(f, refs),
                 &reference_locals,
+                &inline_range_for_containers(f, refs),
             );
         // Before the declaration merge: a conversion naming the type the value already has hides
         // the copy-construction the merge is looking for.
@@ -12316,6 +12317,7 @@ fn rewrite_foreach_loops(
     range_for: &HashSet<i32>,
     elements: &HashMap<i32, i32>,
     reference_locals: &HashMap<i32, bool>,
+    inline_containers: &HashSet<i32>,
 ) -> (String, HashSet<i32>) {
     let trailing_newline = body.ends_with('\n');
     let lines: Vec<&str> = body.lines().collect();
@@ -12470,7 +12472,7 @@ fn rewrite_foreach_loops(
     }
 
     if suppressed.is_empty() {
-        return inline_foreach_containers(body);
+        return inline_foreach_containers(body, inline_containers);
     }
     let mut out: Vec<String> = Vec::with_capacity(lines.len());
     for (n, line) in lines.iter().enumerate() {
@@ -12483,9 +12485,52 @@ fn rewrite_foreach_loops(
     if trailing_newline {
         joined.push('\n');
     }
-    let (joined, inlined) = inline_foreach_containers(&joined);
+    let (joined, inlined) = inline_foreach_containers(&joined, inline_containers);
     suppressed.extend(inlined);
     (joined, suppressed)
+}
+
+/// The container of a range-for that the source wrote as a SUB-EXPRESSION of the header.
+///
+/// The compiler pushes the iterator's destination BEFORE it evaluates the container, so a container
+/// the source named reads `PSF <iterator>; PSF <container>; CALLSYS ::Iterator` — two pushes in a
+/// row, because a named local needs no evaluating. A container that is a sub-expression has to be
+/// evaluated first, and that evaluation stands between the two pushes. So a `PSF c; CALLSYS
+/// ::Iterator` whose preceding instruction is NOT itself a `PSF` is the witness that the source
+/// never named `c`, and the local we materialised for it belongs back in the header.
+fn inline_range_for_containers(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let mut out = HashSet::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if ins.op.name != "CALLSYS" {
+            continue;
+        }
+        let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
+        if refs.func_by_ptr(ptr) != Some("Iterator") {
+            continue;
+        }
+        let Some(push) = at
+            .checked_sub(1)
+            .map(|prev| &instrs[prev])
+            .filter(|prev| prev.op.name == "PSF")
+        else {
+            continue;
+        };
+        if at >= 2 && instrs[at - 2].op.name == "PSF" {
+            continue;
+        }
+        if let Some(slot) = push
+            .words
+            .first()
+            .map(|word| *word as i16 as i32)
+            .filter(|slot| *slot > 0)
+        {
+            out.insert(slot);
+        }
+    }
+    out
 }
 
 /// The structurer materializes the iterated container into its own slot. Vanilla iterated the
@@ -12493,7 +12538,13 @@ fn rewrite_foreach_loops(
 /// Inline it when the local is written once from a pure path, read only by the loop header, and
 /// the loop body never touches that path — so iterating the member instead of a copy of it cannot
 /// observe a mutation the copy would have hidden.
-fn inline_foreach_containers(body: &str) -> (String, HashSet<i32>) {
+///
+/// Those two conditions are what the shape rule needs in the ABSENCE of a witness. Where
+/// [`inline_range_for_containers`] says vanilla evaluated the container in the header, they are
+/// beside the point: an initialiser with a call in it is then exactly what the source wrote, and
+/// "the body touches that path" describes vanilla's own program. The witness overrides them. The
+/// single-read condition stays either way — a container read anywhere but the header is a name.
+fn inline_foreach_containers(body: &str, witnessed: &HashSet<i32>) -> (String, HashSet<i32>) {
     let lines: Vec<&str> = body.lines().collect();
     let mut drop_line = vec![false; lines.len()];
     let mut replace: Vec<Option<String>> = vec![None; lines.len()];
@@ -12501,16 +12552,23 @@ fn inline_foreach_containers(body: &str) -> (String, HashSet<i32>) {
 
     for i in 0..lines.len() {
         let trimmed = lines[i].trim();
-        let Some(rest) = trimmed.strip_prefix("for (auto ") else {
+        let Some((head, rest)) = ["for (auto& ", "for (auto "]
+            .into_iter()
+            .find_map(|head| Some((head, trimmed.strip_prefix(head)?)))
+        else {
             continue;
         };
         let Some((elem, container)) = rest.strip_suffix(')').and_then(|r| r.split_once(" : "))
         else {
             continue;
         };
-        if !container.starts_with("local_") {
+        let Some(slot) = container
+            .strip_prefix("local_")
+            .and_then(|rest| rest.parse::<i32>().ok())
+        else {
             continue;
-        }
+        };
+        let by_witness = witnessed.contains(&slot);
         let uses: usize = lines.iter().map(|l| count_ident(l, container)).sum();
         if uses != 2 {
             continue;
@@ -12519,7 +12577,11 @@ fn inline_foreach_containers(body: &str) -> (String, HashSet<i32>) {
             .iter()
             .enumerate()
             .find(|(n, l)| *n != i && count_ident(l, container) == 1)
-            .and_then(|(n, l)| container_decl_path(l, container).map(|p| (n, p)))
+            .and_then(|(n, l)| {
+                container_decl_path(l, container)
+                    .or_else(|| by_witness.then(|| container_decl_value(l, container)).flatten())
+                    .map(|p| (n, p))
+            })
         else {
             continue;
         };
@@ -12535,20 +12597,15 @@ fn inline_foreach_containers(body: &str) -> (String, HashSet<i32>) {
             .rsplit_once('.')
             .map(|(head, _)| head)
             .filter(|head| head.starts_with("local_"));
-        if lines[i + 1..=end]
-            .iter()
-            .any(|l| l.contains(callee) || receiver.is_some_and(|r| l.contains(r)))
+        if !by_witness
+            && lines[i + 1..=end]
+                .iter()
+                .any(|l| l.contains(callee) || receiver.is_some_and(|r| l.contains(r)))
         {
             continue;
         }
-        let Some(slot) = container
-            .strip_prefix("local_")
-            .and_then(|rest| rest.parse::<i32>().ok())
-        else {
-            continue;
-        };
         let indent = leading_indent(lines[i]);
-        replace[i] = Some(format!("{indent}for (auto {elem} : {path})"));
+        replace[i] = Some(format!("{indent}{head}{elem} : {path})"));
         drop_line[decl] = true;
         // The local has no definition left anywhere, so its hoisted declaration has to go too —
         // a bare declaration of a container type asks for a default constructor the base cache
@@ -12591,6 +12648,18 @@ fn container_decl_path(line: &str, ident: &str) -> Option<String> {
     rhs.bytes()
         .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.'))
         .then(|| rhs.to_owned())
+}
+
+/// The initialiser of a container declaration, whatever its shape. Used only where the bytecode
+/// witnesses that the container was a header sub-expression: without that, a call in the
+/// initialiser is exactly what must not be moved into a loop header.
+fn container_decl_value(line: &str, ident: &str) -> Option<String> {
+    let trimmed = line.trim().strip_suffix(';')?;
+    let (lhs, rhs) = trimmed.split_once(" = ")?;
+    if !lhs.ends_with(ident) || rhs.is_empty() {
+        return None;
+    }
+    (!rhs.contains('\u{1}') && !rhs.contains('\u{2}')).then(|| rhs.to_owned())
 }
 
 /// True when the loop body writes through `ident` — assigns into it, calls through one of its
@@ -13895,6 +13964,7 @@ mod source_shape_tests {
                 &std::collections::HashSet::new(),
                 &std::collections::HashMap::new(),
                 &std::collections::HashMap::new(),
+                &std::collections::HashSet::new(),
             );
         assert_eq!(
             out,
@@ -13930,8 +14000,9 @@ mod source_shape_tests {
             &RefResolver::default(),
             &std::collections::HashSet::new(),
             &std::collections::HashMap::new(),
-                &std::collections::HashMap::new(),
-            );
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+        );
         assert_eq!(
             out,
             concat!(
@@ -13966,6 +14037,7 @@ mod source_shape_tests {
                 &std::collections::HashSet::new(),
                 &std::collections::HashMap::new(),
                 &std::collections::HashMap::new(),
+                &std::collections::HashSet::new(),
             );
         assert_eq!(out, body);
         assert!(gone.is_empty());
@@ -13989,6 +14061,7 @@ mod source_shape_tests {
                 &std::collections::HashSet::new(),
                 &std::collections::HashMap::new(),
                 &std::collections::HashMap::new(),
+                &std::collections::HashSet::new(),
             );
         assert_eq!(out, body);
     }
@@ -14003,7 +14076,7 @@ mod source_shape_tests {
             "        }\n",
         );
         assert_eq!(
-            inline_foreach_containers(body).0,
+            inline_foreach_containers(body, &std::collections::HashSet::new()).0,
             concat!(
                 "        for (auto local_40 : this.m_Map)\n",
                 "        {\n",
@@ -14022,7 +14095,7 @@ mod source_shape_tests {
             "            this.m_Map.Remove(local_40.GetKey());\n",
             "        }\n",
         );
-        assert_eq!(inline_foreach_containers(body).0, body);
+        assert_eq!(inline_foreach_containers(body, &std::collections::HashSet::new()).0, body);
     }
 
     #[test]
