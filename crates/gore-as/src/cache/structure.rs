@@ -5728,6 +5728,16 @@ struct Structurer<'a> {
 struct LoopScope {
     continue_off: usize,
     break_off: usize,
+    /// A scope opened only so a back edge inside the body can be read as `continue;`.
+    ///
+    /// The top-test arm never set a scope at all, so an in-body jump back to the header rendered
+    /// as its own nested `while` — an extra `SUSPEND` and a moved back edge. Setting the scope
+    /// fixes that, but it also offers `break;` and `return …;` to bodies that never asked: those
+    /// two fire on byte-faithful functions (6 and 4), and this one does not fire on any.
+    continue_only: bool,
+    /// The body's LAST block, whose back edge is the loop's own latch. Control reaches the header
+    /// from there anyway, so writing `continue;` for it adds a statement the source never had.
+    latch_block: Option<usize>,
 }
 
 const COMPOUND_HEADER_MAX_BLOCKS: usize = 8;
@@ -6269,7 +6279,20 @@ impl Structurer<'_> {
                 // top-test loop: `header: <cmp> Jcc exit; body; JMP header`
                 let _ = writeln!(out, "{ind}while ({cond})");
                 let _ = writeln!(out, "{ind}{{");
+                // A body jump back to this header is a `continue;`. Without a scope it was read
+                // as a latch instead, and the guarded region in front of it became a nested
+                // `while` of its own — one extra `SUSPEND` and a back edge in the wrong place.
+                // The scope is continue-only on purpose: `break;` and `return …;` offered here
+                // fire on byte-faithful functions, this does not.
+                let saved = self.loop_scope;
+                self.loop_scope = Some(LoopScope {
+                    continue_off: b.start_dw,
+                    break_off: usize::MAX,
+                    continue_only: true,
+                    latch_block: body_end.checked_sub(1),
+                });
                 self.emit_range(i + 1, body_end, depth + 1, out);
+                self.loop_scope = saved;
                 let _ = writeln!(out, "{ind}}}");
                 next = body_end;
             } else if let Some((latch, cond, cont_off, brk_off)) =
@@ -6291,6 +6314,8 @@ impl Structurer<'_> {
                 let ls = LoopScope {
                     continue_off: cont_off,
                     break_off: brk_off,
+                    continue_only: false,
+                    latch_block: None,
                 };
                 let saved = self.loop_scope;
                 self.loop_scope = Some(ls);
@@ -6310,6 +6335,8 @@ impl Structurer<'_> {
                 self.loop_scope = Some(LoopScope {
                     continue_off: cont_off,
                     break_off: brk_off,
+                    continue_only: false,
+                    latch_block: None,
                 });
                 self.emit_range(body, exit, depth + 1, out);
                 self.loop_scope = saved;
@@ -6365,6 +6392,8 @@ impl Structurer<'_> {
                 let ls = LoopScope {
                     continue_off: test_off,
                     break_off,
+                    continue_only: false,
+                    latch_block: None,
                 };
                 let saved = self.loop_scope;
                 self.loop_scope = Some(ls);
@@ -6404,6 +6433,8 @@ impl Structurer<'_> {
                     let ls = LoopScope {
                         continue_off: latch_off,
                         break_off,
+                        continue_only: false,
+                    latch_block: None,
                     };
                     // `loop_scope` must be set BEFORE Gate 2 — its nested-switch dry run
                     // (`switch_span` -> `try_emit_switch`) consults it to accept loop
@@ -6470,12 +6501,18 @@ impl Structurer<'_> {
                 // Mark it instead, and let the emitter turn the pair into a `while` once it has
                 // folded the condition into one expression -- where it cannot, the mark is
                 // dropped and this stays the `if` it is today.
+                // …and a jump back to the ENCLOSING loop's header is that loop's `continue;`,
+                // not a latch of this arm. Reading it as a latch invents a loop the source never
+                // wrote around the guarded region in front of it.
                 let latch_back = (then_end > i + 1
                     && self.is_backward_jump(then_end - 1)
                     && self.g.blocks[then_end - 1]
                         .succs
                         .first()
-                        .is_some_and(|&s| s <= b.start_dw))
+                        .is_some_and(|&s| {
+                            s <= b.start_dw
+                                && self.loop_scope.is_none_or(|ls| ls.continue_off != s)
+                        }))
                 .then_some(then_end - 1);
                 // The latch block is NOT excluded: its jump is only its terminator, and the
                 // statements before it are the body's last ones.
@@ -6967,11 +7004,19 @@ impl Structurer<'_> {
             return None;
         }
         let t = *b.succs.first()?;
+        if t == ls.continue_off {
+            // …unless this IS the latch: control reaches the header from the body's last block
+            // anyway, and writing the keyword there adds a statement the source never had.
+            if ls.latch_block == Some(bi) {
+                return None;
+            }
+            return Some("continue;".into());
+        }
+        if ls.continue_only {
+            return None;
+        }
         if t == ls.break_off {
             return Some("break;".into());
-        }
-        if t == ls.continue_off {
-            return Some("continue;".into());
         }
         // an in-body `return <expr>;` compiled as a JMP to the function's shared bare RET row —
         // recover the returned value from the block's trailing register write (scan floored to
@@ -7113,6 +7158,8 @@ impl Structurer<'_> {
                         let inner_ls = LoopScope {
                             continue_off: inner_off,
                             break_off: ib,
+                            continue_only: false,
+                    latch_block: None,
                         };
                         // the inner loop's exit must stay inside our body or be our own exit.
                         let ib_in_body = self
@@ -8763,6 +8810,8 @@ impl Structurer<'_> {
         let ls = LoopScope {
             continue_off,
             break_off,
+            continue_only: false,
+                    latch_block: None,
         };
         if !self.body_has_inner_branch(body, exit, ls) {
             return None;
@@ -8936,6 +8985,8 @@ impl Structurer<'_> {
         let ls = LoopScope {
             continue_off: test_off,
             break_off,
+            continue_only: false,
+                    latch_block: None,
         };
         let saved = self.loop_scope;
         self.loop_scope = Some(ls);
@@ -9048,6 +9099,8 @@ impl Structurer<'_> {
         let ls = LoopScope {
             continue_off: cont_off,
             break_off: brk_off,
+            continue_only: false,
+                    latch_block: None,
         };
         if !self.body_has_inner_branch(i + 1, latch, ls) {
             return None;
@@ -9667,6 +9720,8 @@ mod tests {
         let scope = LoopScope {
             continue_off: break_target.labels["head"],
             break_off: break_target.labels["loop_exit"],
+            continue_only: false,
+                    latch_block: None,
         };
         let body = render_fixture_range(&break_target, Some(("switch", "loop_exit", scope)));
         assert!(
@@ -9680,6 +9735,8 @@ mod tests {
         let scope = LoopScope {
             continue_off: ambiguous.labels["head"],
             break_off: ambiguous.labels["alt_ret"],
+            continue_only: false,
+                    latch_block: None,
         };
         let body = render_fixture_range(&ambiguous, Some(("switch", "loop_exit", scope)));
         assert!(
