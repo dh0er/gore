@@ -6941,10 +6941,20 @@ impl Structurer<'_> {
         if self.idx_of.get(&fall).copied() != Some(bi + 1) {
             return None;
         }
+        // A conditional whose TAKEN edge is the latch is NOT a `continue`. This compiler never
+        // folds a jump over a jump, so a source `continue` always spends an unconditional `JMP` to
+        // the latch — which `loop_exit_stmt` already recognises. Straight to the latch is the
+        // compiled form of a plain `if (<fall condition>) { <rest of the body> }`, and claiming it
+        // here costs an extra `JMP` and an inverted condition: a `NOT`, plus the store-and-reload
+        // where vanilla tested the register directly. The `is_cond` arm renders the fall condition
+        // positively and is what should take it.
+        //
+        // Vanilla witnesses the premise in its own stream — `TryUseFreepoint` carries both shapes,
+        // and its jump-over-jump guard is byte-identical on both sides while the direct-to-latch
+        // one is where the extra jump appears. The `break` arm keeps its claim: a conditional
+        // straight to the break target still leaves a fall-through that reaches the latch.
         let kw = if taken == ls.break_off {
             "break;"
-        } else if taken == ls.continue_off {
-            "continue;"
         } else {
             return None;
         };
