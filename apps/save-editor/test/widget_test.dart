@@ -896,6 +896,40 @@ void main() {
     expect(find.widgetWithText(FilledButton, 'Save (2)'), findsOneWidget);
   });
 
+  testWidgets('wide header grows when scaled content exceeds the screenshot', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(2000, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(
+            _FakeCoreService(gameTimeTotalSeconds: 1413433),
+          ),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(
+            TestUiSettingsStore(uiScale: 2),
+          ),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(
+      tester
+          .getSize(find.byKey(const ValueKey('selected-save-header-details')))
+          .height,
+      greaterThan(
+        tester.getSize(find.byKey(const ValueKey('header-screenshot'))).height,
+      ),
+    );
+  });
+
   testWidgets('confirming an unnamed save fallback leaves it unchanged', (
     tester,
   ) async {

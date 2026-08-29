@@ -1612,6 +1612,7 @@ class _HeaderCardState extends State<_HeaderCard> {
               final nameSyncsPersistentDataList =
                   state.selectedSave?.isExternal != true;
               return Column(
+                key: const ValueKey('selected-save-header-details'),
                 mainAxisSize: fillPreviewHeight
                     ? MainAxisSize.max
                     : MainAxisSize.min,
@@ -1673,18 +1674,15 @@ class _HeaderCardState extends State<_HeaderCard> {
               );
             }
 
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                preview,
-                const SizedBox(width: 14),
-                Expanded(
-                  child: SizedBox(
-                    height: previewHeight,
-                    child: details(fillPreviewHeight: true),
-                  ),
-                ),
-              ],
+            return IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Align(alignment: Alignment.topLeft, child: preview),
+                  const SizedBox(width: 14),
+                  Expanded(child: details(fillPreviewHeight: true)),
+                ],
+              ),
             );
           },
         ),

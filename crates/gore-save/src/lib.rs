@@ -2342,14 +2342,17 @@ fn restore_deleted_save(
         |_| Ok(()),
     )?;
     let manifest_path = deleted_save_recovery_manifest_path(backup_path)?;
-    let manifest_warning = match fs::remove_file(&manifest_path) {
-        Ok(()) => None,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => Some(format!(
-            "restored the save, but could not clear recovery manifest {}: {error}",
-            manifest_path.display()
-        )),
-    };
+    let live_directory = fs::canonicalize(path.parent().ok_or_else(|| {
+        CoreError::InvalidRequest("payload.path has no parent directory".to_string())
+    })?)?;
+    let manifest_directory = fs::canonicalize(manifest_path.parent().ok_or_else(|| {
+        CoreError::InvalidRequest("recovery manifest has no parent directory".to_string())
+    })?)?;
+    let manifest_warning = retire_deleted_save_recovery_manifest(
+        &live_directory,
+        &manifest_directory,
+        &manifest_path,
+    )?;
     if let Some(object) = restored.as_object_mut() {
         object.insert(
             "recoveryManifestWarning".to_string(),
@@ -3585,6 +3588,47 @@ fn sync_directory(path: &Path) -> std::io::Result<()> {
     File::open(path)?.sync_all()
 }
 
+fn retire_deleted_save_recovery_manifest(
+    live_directory: &Path,
+    manifest_directory: &Path,
+    manifest_path: &Path,
+) -> Result<Option<String>, CoreError> {
+    retire_deleted_save_recovery_manifest_with_sync(
+        live_directory,
+        manifest_directory,
+        manifest_path,
+        sync_directory,
+    )
+}
+
+fn retire_deleted_save_recovery_manifest_with_sync<F>(
+    live_directory: &Path,
+    manifest_directory: &Path,
+    manifest_path: &Path,
+    mut sync: F,
+) -> Result<Option<String>, CoreError>
+where
+    F: FnMut(&Path) -> std::io::Result<()>,
+{
+    // The restored live entries must be durable before their recovery token is
+    // retired. Otherwise a crash can persist the manifest unlink while losing
+    // one of the preceding renames, leaving no safe route to finish recovery.
+    sync(live_directory)?;
+    match fs::remove_file(manifest_path) {
+        Ok(()) => Ok(sync(manifest_directory).err().map(|error| {
+            format!(
+                "restored the save and cleared recovery manifest {}, but could not make its removal durable: {error}",
+                manifest_path.display()
+            )
+        })),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Ok(Some(format!(
+            "restored the save, but could not clear recovery manifest {}: {error}",
+            manifest_path.display()
+        ))),
+    }
+}
+
 struct DeleteRecoveryManifestGuard {
     path: PathBuf,
     keep: bool,
@@ -3793,8 +3837,13 @@ fn validate_discovered_deleted_save_recovery(
                 &FileSnapshot::Missing,
             )?
             .commit();
-            fs::remove_file(manifest_path)?;
-            sync_directory(&canonical_backup_dir)?;
+            if let Some(warning) = retire_deleted_save_recovery_manifest(
+                &canonical_root,
+                &canonical_backup_dir,
+                manifest_path,
+            )? {
+                return Err(CoreError::Update(warning));
+            }
             return Ok(None);
         }
         Err(error) => return Err(error.into()),
@@ -3810,8 +3859,13 @@ fn validate_discovered_deleted_save_recovery(
         return Ok(Some(persistent_sha1));
     }
     if target_sha1.is_some() && persistent_sha1 == manifest.deleted_persistent_sha1 {
-        fs::remove_file(manifest_path)?;
-        sync_directory(&canonical_backup_dir)?;
+        if let Some(warning) = retire_deleted_save_recovery_manifest(
+            &canonical_root,
+            &canonical_backup_dir,
+            manifest_path,
+        )? {
+            return Err(CoreError::Update(warning));
+        }
         return Ok(None);
     }
     Err(CoreError::Validation(
@@ -17680,6 +17734,66 @@ mod tests {
                 .iter()
                 .all(|profile| !profile.saved_slots.iter().any(|saved| saved == slot))
         );
+    }
+
+    #[test]
+    fn recovery_manifest_retires_after_live_directory_sync() {
+        let dir = tempdir().unwrap();
+        let live_directory = dir.path().join("saves");
+        let manifest_directory = live_directory.join("goresave_backups");
+        fs::create_dir_all(&manifest_directory).unwrap();
+        let manifest_path = manifest_directory.join("recovery.json");
+        fs::write(&manifest_path, b"manifest").unwrap();
+        let synced = RefCell::new(Vec::new());
+
+        let warning = retire_deleted_save_recovery_manifest_with_sync(
+            &live_directory,
+            &manifest_directory,
+            &manifest_path,
+            |directory| {
+                synced.borrow_mut().push(directory.to_path_buf());
+                if directory == live_directory {
+                    assert!(manifest_path.exists());
+                } else {
+                    assert_eq!(directory, manifest_directory);
+                    assert!(!manifest_path.exists());
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert!(warning.is_none());
+        assert_eq!(
+            synced.into_inner(),
+            vec![live_directory, manifest_directory]
+        );
+    }
+
+    #[test]
+    fn recovery_manifest_survives_failed_live_directory_sync() {
+        let dir = tempdir().unwrap();
+        let live_directory = dir.path().join("saves");
+        let manifest_directory = live_directory.join("goresave_backups");
+        fs::create_dir_all(&manifest_directory).unwrap();
+        let manifest_path = manifest_directory.join("recovery.json");
+        fs::write(&manifest_path, b"manifest").unwrap();
+
+        let error = retire_deleted_save_recovery_manifest_with_sync(
+            &live_directory,
+            &manifest_directory,
+            &manifest_path,
+            |_| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "simulated directory sync failure",
+                ))
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, CoreError::Io(_)));
+        assert!(manifest_path.exists());
     }
 
     #[test]
