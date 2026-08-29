@@ -908,46 +908,60 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String get itemTooltipIngredientFor => 'Ingredient for';
+
+  @override
+  String itemTooltipTeaches(String item) {
+    return 'Teaches: $item';
+  }
+
+  @override
+  String get itemTooltipValue => 'Value';
+
+  @override
+  String get itemTooltipProtection => 'Protection';
+
+  @override
+  String get itemTooltipRequirements => 'Requirements:';
+
+  @override
+  String get itemTooltipManaCost => 'Mana cost';
+
+  @override
+  String get itemTooltipManaUpkeep => 'Charge mana cost';
+
+  @override
+  String get itemCategoryAll => 'All';
+
+  @override
   String get itemCategoryMeleeWeapon => 'Melee weapons';
 
   @override
   String get itemCategoryRangedWeapon => 'Ranged weapons';
 
   @override
-  String get itemCategoryAmmunition => 'Ammunition';
+  String get itemCategoryMagic => 'Magic';
 
   @override
-  String get itemCategoryArmor => 'Armor';
+  String get itemCategoryWearable => 'Wearables';
 
   @override
-  String get itemCategoryRune => 'Runes';
+  String get itemCategoryFood => 'Food';
 
   @override
-  String get itemCategoryScroll => 'Spell scrolls';
+  String get itemCategoryPotion => 'Potions';
 
   @override
-  String get itemCategoryFood => 'Food & potions';
+  String get itemCategoryMaterial => 'Materials';
+
+  @override
+  String get itemCategoryDocument => 'Documents';
 
   @override
   String get itemCategoryMisc => 'Miscellaneous';
 
   @override
-  String get itemCategoryAmulet => 'Amulets';
-
-  @override
-  String get itemCategoryRing => 'Rings';
-
-  @override
-  String get itemCategoryTrophy => 'Animal trophies';
-
-  @override
-  String get itemCategoryWriting => 'Writings';
-
-  @override
-  String get itemCategoryMission => 'Mission items';
-
-  @override
-  String get itemCategoryKey => 'Keys';
+  String get itemCategoryArtefact => 'Artefacts';
 
   @override
   String get itemCategoryOther => 'Other';
@@ -1778,7 +1792,7 @@ class AppLocalizationsEn extends AppLocalizations {
       'Once Diving is learned, the game resets breath and recovery to the skill\'s own values every time the savegame loads. Breath used per second stays as you set it.';
 
   @override
-  String get heroGroupSleep => 'Sleep & Rest';
+  String get heroGroupSleep => 'Sleep';
 
   @override
   String get heroGroupIntoxication => 'Intoxication';
@@ -1868,6 +1882,18 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get glossaryFilterTeachers => 'Teachers';
+
+  @override
+  String get roleTrader => 'Trader';
+
+  @override
+  String get roleDead => 'Dead';
+
+  @override
+  String get roleTeacher => 'Teacher';
+
+  @override
+  String get roleArmorer => 'Armorer';
 
   @override
   String get glossaryFilterArmorers => 'Armorers';
@@ -2092,6 +2118,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'SwampweedDepletionRate': 'Wear-off speed',
       'XPExecutedBounty': 'XP for finishing off',
       'XPKillOrDefeatBounty': 'XP for defeating',
+      'Level': 'Level',
+      'LockpickDurability': 'Lockpick durability',
+      'LockpickPrecision': 'Lockpick precision',
+      'PickPocketing': 'Pickpocketing',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -2141,6 +2171,14 @@ class AppLocalizationsEn extends AppLocalizations {
           'Experience for killing this character while it already lies defeated on the ground.',
       'XPKillOrDefeatBounty':
           'Experience for bringing this character down, whether it dies or is only beaten unconscious.',
+      'Level':
+          'The character level. It rises with experience and grants learning points.',
+      'LockpickDurability':
+          'Set by the Lockpicking skill: 2 untrained, 4 trained, 6 mastered.',
+      'LockpickPrecision':
+          'Set by the Lockpicking skill: 0 untrained, 1 trained, 2 mastered.',
+      'PickPocketing':
+          'Set by the Pickpocketing skill: -30 untrained, -10 trained, +10 mastered.',
       'other': '?',
     });
     return '$_temp0';

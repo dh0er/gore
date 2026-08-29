@@ -913,46 +913,60 @@ class AppLocalizationsPt extends AppLocalizations {
   }
 
   @override
+  String get itemTooltipIngredientFor => 'Ingrediente para';
+
+  @override
+  String itemTooltipTeaches(String item) {
+    return 'Ensina: $item';
+  }
+
+  @override
+  String get itemTooltipValue => 'Valor';
+
+  @override
+  String get itemTooltipProtection => 'Proteção';
+
+  @override
+  String get itemTooltipRequirements => 'Requisitos:';
+
+  @override
+  String get itemTooltipManaCost => 'Custo de mana';
+
+  @override
+  String get itemTooltipManaUpkeep => 'Custo de mana de carga';
+
+  @override
+  String get itemCategoryAll => 'Tudo';
+
+  @override
   String get itemCategoryMeleeWeapon => 'Armas corpo a corpo';
 
   @override
   String get itemCategoryRangedWeapon => 'Armas à distância';
 
   @override
-  String get itemCategoryAmmunition => 'Munição';
+  String get itemCategoryMagic => 'Magia';
 
   @override
-  String get itemCategoryArmor => 'Armaduras';
+  String get itemCategoryWearable => 'Vestuário';
 
   @override
-  String get itemCategoryRune => 'Runas';
+  String get itemCategoryFood => 'Comida';
 
   @override
-  String get itemCategoryScroll => 'Pergaminhos de magia';
+  String get itemCategoryPotion => 'Poções';
 
   @override
-  String get itemCategoryFood => 'Comida e poções';
+  String get itemCategoryMaterial => 'Materiais';
+
+  @override
+  String get itemCategoryDocument => 'Documentos';
 
   @override
   String get itemCategoryMisc => 'Diversos';
 
   @override
-  String get itemCategoryAmulet => 'Amuletos';
-
-  @override
-  String get itemCategoryRing => 'Anéis';
-
-  @override
-  String get itemCategoryTrophy => 'Troféus de animais';
-
-  @override
-  String get itemCategoryWriting => 'Escritos';
-
-  @override
-  String get itemCategoryMission => 'Itens de missão';
-
-  @override
-  String get itemCategoryKey => 'Chaves';
+  String get itemCategoryArtefact => 'Artefatos';
 
   @override
   String get itemCategoryOther => 'Outros';
@@ -1790,7 +1804,7 @@ class AppLocalizationsPt extends AppLocalizations {
       'Depois de aprender Mergulho, o jogo redefine o fôlego e a recuperação para os valores da habilidade sempre que carrega o save. O ar gasto por segundo permanece como você definir.';
 
   @override
-  String get heroGroupSleep => 'Sono e descanso';
+  String get heroGroupSleep => 'Sono';
 
   @override
   String get heroGroupIntoxication => 'Embriaguez';
@@ -1880,6 +1894,18 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get glossaryFilterTeachers => 'Professores';
+
+  @override
+  String get roleTrader => 'Comerciante';
+
+  @override
+  String get roleDead => 'Morto';
+
+  @override
+  String get roleTeacher => 'Instrutor';
+
+  @override
+  String get roleArmorer => 'Armeiro';
 
   @override
   String get glossaryFilterArmorers => 'Armeiros';
@@ -2105,6 +2131,10 @@ class AppLocalizationsPt extends AppLocalizations {
       'SwampweedDepletionRate': 'Rapidez para o efeito passar',
       'XPExecutedBounty': 'XP por matar o caído',
       'XPKillOrDefeatBounty': 'XP por derrotar',
+      'Level': 'Nível',
+      'LockpickDurability': 'Durabilidade da gazua',
+      'LockpickPrecision': 'Precisão da gazua',
+      'PickPocketing': 'Furto',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -2157,6 +2187,14 @@ class AppLocalizationsPt extends AppLocalizations {
           'Experiência por matar este personagem enquanto ele já está no chão, derrotado.',
       'XPKillOrDefeatBounty':
           'Experiência por derrubar este personagem, quer ele morra, quer apenas fique desacordado.',
+      'Level':
+          'O nível da personagem. Sobe com a experiência e concede pontos de aprendizagem.',
+      'LockpickDurability':
+          'Vem da perícia de arrombamento: 2 sem treino, 4 treinado, 6 mestre.',
+      'LockpickPrecision':
+          'Vem da perícia de arrombamento: 0 sem treino, 1 treinado, 2 mestre.',
+      'PickPocketing':
+          'Vem da perícia de furto: -30 sem treino, -10 treinado, +10 mestre.',
       'other': '?',
     });
     return '$_temp0';
@@ -3978,46 +4016,60 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   }
 
   @override
+  String get itemTooltipIngredientFor => 'Ingrediente para';
+
+  @override
+  String itemTooltipTeaches(String item) {
+    return 'Ensina: $item';
+  }
+
+  @override
+  String get itemTooltipValue => 'Valor';
+
+  @override
+  String get itemTooltipProtection => 'Proteção';
+
+  @override
+  String get itemTooltipRequirements => 'Requisitos:';
+
+  @override
+  String get itemTooltipManaCost => 'Custo de mana';
+
+  @override
+  String get itemTooltipManaUpkeep => 'Custo de mana de carga';
+
+  @override
+  String get itemCategoryAll => 'Tudo';
+
+  @override
   String get itemCategoryMeleeWeapon => 'Armas corpo a corpo';
 
   @override
   String get itemCategoryRangedWeapon => 'Armas à distância';
 
   @override
-  String get itemCategoryAmmunition => 'Munição';
+  String get itemCategoryMagic => 'Magia';
 
   @override
-  String get itemCategoryArmor => 'Armaduras';
+  String get itemCategoryWearable => 'Vestuário';
 
   @override
-  String get itemCategoryRune => 'Runas';
+  String get itemCategoryFood => 'Comida';
 
   @override
-  String get itemCategoryScroll => 'Pergaminhos de magia';
+  String get itemCategoryPotion => 'Poções';
 
   @override
-  String get itemCategoryFood => 'Comida e poções';
+  String get itemCategoryMaterial => 'Materiais';
+
+  @override
+  String get itemCategoryDocument => 'Documentos';
 
   @override
   String get itemCategoryMisc => 'Diversos';
 
   @override
-  String get itemCategoryAmulet => 'Amuletos';
-
-  @override
-  String get itemCategoryRing => 'Anéis';
-
-  @override
-  String get itemCategoryTrophy => 'Troféus de animais';
-
-  @override
-  String get itemCategoryWriting => 'Escritos';
-
-  @override
-  String get itemCategoryMission => 'Itens de missão';
-
-  @override
-  String get itemCategoryKey => 'Chaves';
+  String get itemCategoryArtefact => 'Artefatos';
 
   @override
   String get itemCategoryOther => 'Outros';
@@ -4855,7 +4907,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
       'Depois de aprender Mergulho, o jogo redefine o fôlego e a recuperação para os valores da habilidade sempre que carrega o save. O ar gasto por segundo permanece como você definir.';
 
   @override
-  String get heroGroupSleep => 'Sono e descanso';
+  String get heroGroupSleep => 'Sono';
 
   @override
   String get heroGroupIntoxication => 'Embriaguez';
@@ -4945,6 +4997,18 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get glossaryFilterTeachers => 'Professores';
+
+  @override
+  String get roleTrader => 'Comerciante';
+
+  @override
+  String get roleDead => 'Morto';
+
+  @override
+  String get roleTeacher => 'Instrutor';
+
+  @override
+  String get roleArmorer => 'Armeiro';
 
   @override
   String get glossaryFilterArmorers => 'Armeiros';
@@ -5170,6 +5234,10 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
       'SwampweedDepletionRate': 'Rapidez para o efeito passar',
       'XPExecutedBounty': 'XP por matar o caído',
       'XPKillOrDefeatBounty': 'XP por derrotar',
+      'Level': 'Nível',
+      'LockpickDurability': 'Durabilidade da gazua',
+      'LockpickPrecision': 'Precisão da gazua',
+      'PickPocketing': 'Furto',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -5222,6 +5290,14 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
           'Experiência por matar este personagem enquanto ele já está no chão, derrotado.',
       'XPKillOrDefeatBounty':
           'Experiência por derrubar este personagem, quer ele morra, quer apenas fique desacordado.',
+      'Level':
+          'O nível da personagem. Sobe com a experiência e concede pontos de aprendizagem.',
+      'LockpickDurability':
+          'Vem da perícia de arrombamento: 2 sem treino, 4 treinado, 6 mestre.',
+      'LockpickPrecision':
+          'Vem da perícia de arrombamento: 0 sem treino, 1 treinado, 2 mestre.',
+      'PickPocketing':
+          'Vem da perícia de furto: -30 sem treino, -10 treinado, +10 mestre.',
       'other': '?',
     });
     return '$_temp0';

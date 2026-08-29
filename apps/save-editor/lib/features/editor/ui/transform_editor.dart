@@ -117,18 +117,6 @@ class _PlayerTransformEditorState extends State<PlayerTransformEditor> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            const Icon(Icons.explore_outlined),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                l10n.heroTransform,
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
-            ),
-          ],
-        ),
         if (_error != null) ...[
           const SizedBox(height: 6),
           Text(

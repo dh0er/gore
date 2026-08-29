@@ -13,9 +13,11 @@ import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/features/editor/ui/game_icon.dart';
 import 'package:goresave/loc/progression_loc.dart';
 
 import '../domain/editor_models.dart';
+import '../domain/game_icons.dart';
 import '../domain/editor_notifier.dart';
 import '../domain/glossary_npc_catalog.dart';
 import '../domain/glossary_segment_text_catalog.dart';
@@ -90,6 +92,7 @@ class _GroupTile extends StatelessWidget {
     required this.selected,
     required this.onTap,
     this.icon,
+    this.gameIcon,
   });
 
   final String label;
@@ -97,13 +100,19 @@ class _GroupTile extends StatelessWidget {
   final VoidCallback onTap;
   final IconData? icon;
 
+  /// Shared game glyph shown instead of [icon] once the user's install has been
+  /// read; null keeps [icon].
+  final String? gameIcon;
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return ListTile(
       dense: true,
       selected: selected,
-      leading: icon == null ? null : Icon(icon, size: 18),
+      leading: icon == null && gameIcon == null
+          ? null
+          : GameIcon(name: gameIcon, fallbackIcon: icon, size: 18),
       title: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
       selectedTileColor: scheme.primaryContainer,
       selectedColor: scheme.primary,
@@ -588,6 +597,7 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
               page.sectionCounts[section] ?? 0,
             ),
             icon: _sectionIcon(section),
+            gameIcon: gameIconForQuestSection(section),
             selected: selected == section,
             onTap: () {
               if (selected == section) return;
@@ -2050,11 +2060,13 @@ class _FactionsDetailState extends ConsumerState<FactionsDetail> {
                             widget.editable && !isPending && g.unforgiven > 0;
                         final breakdown = _crimeBreakdownText(l10n, g);
                         return ListTile(
-                          leading: Icon(
-                            isHostile
-                                ? Icons.gpp_bad_outlined
-                                : Icons.verified_user_outlined,
-                            color: isHostile ? scheme.error : Colors.green,
+                          // The camp's own crest. Whether it is hostile is
+                          // already spelled out in the badge beside the name —
+                          // a second red-or-green mark said it twice.
+                          leading: GameIcon(
+                            name: gameIconForGuild(g.guild),
+                            fallbackIcon: Icons.gavel_outlined,
+                            size: 24,
                           ),
                           title: Row(
                             children: [

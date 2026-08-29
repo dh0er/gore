@@ -122,6 +122,13 @@ ThemeData _buildTheme(
       ),
     ),
     dividerTheme: DividerThemeData(color: scheme.outlineVariant),
+    // Attribute rows carry the game's own descriptions, which are whole
+    // sentences. An unconstrained tooltip lays those out on ONE line and
+    // stretches to the window edge; bound the width so they wrap into a block.
+    tooltipTheme: const TooltipThemeData(
+      constraints: BoxConstraints(maxWidth: 420),
+      padding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+    ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),

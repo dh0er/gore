@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:goresave/features/editor/domain/actor.dart';
+import 'package:goresave/features/editor/domain/glossary_images.dart';
 import 'package:goresave/features/editor/ui/actor_detail_header.dart';
+import 'package:goresave/features/editor/ui/glossary_portrait.dart';
 import 'package:goresave/loc/game_lang.dart';
 
 import 'support/l10n_test_app.dart';
@@ -151,4 +153,41 @@ void main() {
     expect(find.text('ST_VLK_Mud_Sleeper'), findsOneWidget);
     expect(find.text('orphan:ST_VLK_Mud_Sleeper'), findsNothing);
   });
+
+  testWidgets(
+    'the detail picture is the wide cut, and death is not an identity',
+    (tester) async {
+      await tester.pumpWidget(
+        wrapWithL10n(
+          Scaffold(
+            body: SizedBox(
+              width: 600,
+              child: ActorDetailHeader(
+                actor: const Actor.npc(
+                  id: 'Diego-WP_A',
+                  name: 'Diego',
+                  uniqueName: 'Diego',
+                  isDead: true,
+                ),
+                locCatalog: const {},
+                lang: kGameLangs.first,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final mark = tester.widget<GlossaryPortrait>(
+        find.byType(GlossaryPortrait),
+      );
+      // The banner artwork is 500x264; the box keeps that shape.
+      expect(mark.size, GlossaryImageSize.banner);
+      expect(mark.width / mark.height, closeTo(500 / 264, 0.05));
+      // A killed character keeps his own face here — the status row says he is
+      // dead, the picture says who he is.
+      expect(mark.npcUniqueName, 'Diego-WP_A');
+      expect(mark.fallbackGameIcon, isNull);
+    },
+  );
 }

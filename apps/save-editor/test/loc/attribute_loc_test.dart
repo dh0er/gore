@@ -105,7 +105,10 @@ void main() {
       ),
       startsWith('Verbleibende Sekunden Luft'),
     );
-    expect(attributeTooltip('SomeFutureAttribute', l10n: AppLocalizationsDe()), '');
+    expect(
+      attributeTooltip('SomeFutureAttribute', l10n: AppLocalizationsDe()),
+      '',
+    );
     expect(
       readableAttributeName('OxygenRecoveryRate', AppLocalizationsJa()),
       '息の回復（毎秒）',
@@ -150,5 +153,95 @@ void main() {
       localizedAttributeName(ambiguous, gameLangByCode('de'), 'Shared'),
       'Shared',
     );
+  });
+
+  group('attribute tooltips', () {
+    final descriptions = <String, Map<String, String>>{
+      'attributeset_mana_mana_description': {
+        'english': 'Mana fuels your magical abilities.',
+        'german': 'Mana ermöglicht dir den Einsatz magischer Fähigkeiten.',
+      },
+      'attributeset_armor_resistance_fire_description': {
+        'english': 'Shields against the intense heat of flames.',
+        'german': 'Schützt vor der intensiven Hitze der Flammen.',
+      },
+    };
+
+    test("prefers the game's own description, in the chosen language", () {
+      expect(
+        attributeTooltip(
+          'Mana',
+          setClass: '/Script/G1R.AttributeSet_Mana',
+          l10n: AppLocalizationsDe(),
+          catalog: descriptions,
+          lang: gameLangByCode('de'),
+        ),
+        'Mana ermöglicht dir den Einsatz magischer Fähigkeiten.',
+      );
+    });
+
+    test(
+      'reaches a description through the known-set map without a set class',
+      () {
+        expect(
+          attributeTooltip(
+            'Mana',
+            l10n: AppLocalizationsDe(),
+            catalog: descriptions,
+            lang: gameLangByCode('en'),
+          ),
+          'Mana fuels your magical abilities.',
+        );
+      },
+    );
+
+    test('resistances resolve against their armour set', () {
+      expect(
+        gameAttributeDescription(
+          descriptions,
+          gameLangByCode('en'),
+          'Resistance_Fire',
+          setClass: '/Script/G1R.AttributeSet_Armor',
+        ),
+        'Shields against the intense heat of flames.',
+      );
+    });
+
+    test(
+      'falls back to the manual table where the game has no description',
+      () {
+        // Poise is not on the game's own character screen, so only the editor
+        // has anything to say about it.
+        expect(
+          gameAttributeDescription(
+            descriptions,
+            gameLangByCode('en'),
+            'SuperArmor',
+          ),
+          isNull,
+        );
+        expect(
+          attributeTooltip(
+            'SuperArmor',
+            l10n: AppLocalizationsDe(),
+            catalog: descriptions,
+            lang: gameLangByCode('de'),
+          ),
+          isNotEmpty,
+        );
+      },
+    );
+
+    test('an attribute nobody explains gets no tooltip at all', () {
+      expect(
+        attributeTooltip(
+          'SomeFutureStat',
+          l10n: AppLocalizationsDe(),
+          catalog: descriptions,
+          lang: gameLangByCode('de'),
+        ),
+        isEmpty,
+      );
+    });
   });
 }

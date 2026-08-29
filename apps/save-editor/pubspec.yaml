@@ -1,7 +1,7 @@
 name: goresave
 description: "goresave: Gothic Remake Savegame-Editor"
 publish_to: "none"
-version: 1.3.1
+version: 1.4.0
 
 environment:
   sdk: ^3.12.0
@@ -63,9 +63,11 @@ flutter:
   assets:
     - assets/goresave_icon.png
     - assets/item_catalog.json
+    - assets/item_stats.json
     - assets/npc_catalog.json
     - assets/knowledge_catalog.json
     - assets/location_catalog.json
+    - assets/glossary_images.json
     - assets/glossary_npc_catalog.json
     - assets/glossary_segment_text_catalog.json
     - assets/licenses/

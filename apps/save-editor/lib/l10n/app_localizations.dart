@@ -1688,6 +1688,54 @@ abstract class AppLocalizations {
   /// **'{label} ({count})'**
   String categoryWithCount(String label, int count);
 
+  /// No description provided for @itemTooltipIngredientFor.
+  ///
+  /// In en, this message translates to:
+  /// **'Ingredient for'**
+  String get itemTooltipIngredientFor;
+
+  /// No description provided for @itemTooltipTeaches.
+  ///
+  /// In en, this message translates to:
+  /// **'Teaches: {item}'**
+  String itemTooltipTeaches(String item);
+
+  /// No description provided for @itemTooltipValue.
+  ///
+  /// In en, this message translates to:
+  /// **'Value'**
+  String get itemTooltipValue;
+
+  /// No description provided for @itemTooltipProtection.
+  ///
+  /// In en, this message translates to:
+  /// **'Protection'**
+  String get itemTooltipProtection;
+
+  /// No description provided for @itemTooltipRequirements.
+  ///
+  /// In en, this message translates to:
+  /// **'Requirements:'**
+  String get itemTooltipRequirements;
+
+  /// No description provided for @itemTooltipManaCost.
+  ///
+  /// In en, this message translates to:
+  /// **'Mana cost'**
+  String get itemTooltipManaCost;
+
+  /// No description provided for @itemTooltipManaUpkeep.
+  ///
+  /// In en, this message translates to:
+  /// **'Charge mana cost'**
+  String get itemTooltipManaUpkeep;
+
+  /// No description provided for @itemCategoryAll.
+  ///
+  /// In en, this message translates to:
+  /// **'All'**
+  String get itemCategoryAll;
+
   /// No description provided for @itemCategoryMeleeWeapon.
   ///
   /// In en, this message translates to:
@@ -1700,35 +1748,41 @@ abstract class AppLocalizations {
   /// **'Ranged weapons'**
   String get itemCategoryRangedWeapon;
 
-  /// No description provided for @itemCategoryAmmunition.
+  /// No description provided for @itemCategoryMagic.
   ///
   /// In en, this message translates to:
-  /// **'Ammunition'**
-  String get itemCategoryAmmunition;
+  /// **'Magic'**
+  String get itemCategoryMagic;
 
-  /// No description provided for @itemCategoryArmor.
+  /// No description provided for @itemCategoryWearable.
   ///
   /// In en, this message translates to:
-  /// **'Armor'**
-  String get itemCategoryArmor;
-
-  /// No description provided for @itemCategoryRune.
-  ///
-  /// In en, this message translates to:
-  /// **'Runes'**
-  String get itemCategoryRune;
-
-  /// No description provided for @itemCategoryScroll.
-  ///
-  /// In en, this message translates to:
-  /// **'Spell scrolls'**
-  String get itemCategoryScroll;
+  /// **'Wearables'**
+  String get itemCategoryWearable;
 
   /// No description provided for @itemCategoryFood.
   ///
   /// In en, this message translates to:
-  /// **'Food & potions'**
+  /// **'Food'**
   String get itemCategoryFood;
+
+  /// No description provided for @itemCategoryPotion.
+  ///
+  /// In en, this message translates to:
+  /// **'Potions'**
+  String get itemCategoryPotion;
+
+  /// No description provided for @itemCategoryMaterial.
+  ///
+  /// In en, this message translates to:
+  /// **'Materials'**
+  String get itemCategoryMaterial;
+
+  /// No description provided for @itemCategoryDocument.
+  ///
+  /// In en, this message translates to:
+  /// **'Documents'**
+  String get itemCategoryDocument;
 
   /// No description provided for @itemCategoryMisc.
   ///
@@ -1736,41 +1790,11 @@ abstract class AppLocalizations {
   /// **'Miscellaneous'**
   String get itemCategoryMisc;
 
-  /// No description provided for @itemCategoryAmulet.
+  /// No description provided for @itemCategoryArtefact.
   ///
   /// In en, this message translates to:
-  /// **'Amulets'**
-  String get itemCategoryAmulet;
-
-  /// No description provided for @itemCategoryRing.
-  ///
-  /// In en, this message translates to:
-  /// **'Rings'**
-  String get itemCategoryRing;
-
-  /// No description provided for @itemCategoryTrophy.
-  ///
-  /// In en, this message translates to:
-  /// **'Animal trophies'**
-  String get itemCategoryTrophy;
-
-  /// No description provided for @itemCategoryWriting.
-  ///
-  /// In en, this message translates to:
-  /// **'Writings'**
-  String get itemCategoryWriting;
-
-  /// No description provided for @itemCategoryMission.
-  ///
-  /// In en, this message translates to:
-  /// **'Mission items'**
-  String get itemCategoryMission;
-
-  /// No description provided for @itemCategoryKey.
-  ///
-  /// In en, this message translates to:
-  /// **'Keys'**
-  String get itemCategoryKey;
+  /// **'Artefacts'**
+  String get itemCategoryArtefact;
 
   /// No description provided for @itemCategoryOther.
   ///
@@ -3155,7 +3179,7 @@ abstract class AppLocalizations {
   /// No description provided for @heroGroupSleep.
   ///
   /// In en, this message translates to:
-  /// **'Sleep & Rest'**
+  /// **'Sleep'**
   String get heroGroupSleep;
 
   /// No description provided for @heroGroupIntoxication.
@@ -3319,6 +3343,30 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Teachers'**
   String get glossaryFilterTeachers;
+
+  /// No description provided for @roleTrader.
+  ///
+  /// In en, this message translates to:
+  /// **'Trader'**
+  String get roleTrader;
+
+  /// No description provided for @roleDead.
+  ///
+  /// In en, this message translates to:
+  /// **'Dead'**
+  String get roleDead;
+
+  /// No description provided for @roleTeacher.
+  ///
+  /// In en, this message translates to:
+  /// **'Teacher'**
+  String get roleTeacher;
+
+  /// No description provided for @roleArmorer.
+  ///
+  /// In en, this message translates to:
+  /// **'Armorer'**
+  String get roleArmorer;
 
   /// No description provided for @glossaryFilterArmorers.
   ///
@@ -3683,13 +3731,13 @@ abstract class AppLocalizations {
   /// No description provided for @attributeManualFallbackLabel.
   ///
   /// In en, this message translates to:
-  /// **'{attributeId, select, SuperArmor{Poise} MaxSuperArmor{Maximum poise} DamageMultiplier{Damage taken} SpeedModifier{Movement speed} Oxygen{Breath} MaxOxygen{Maximum breath} OxygenDepletionRate{Breath used per second} OxygenRecoveryRate{Breath regained per second} CriticalLevelPercent{Low-breath warning} SleepTime{Restful hours left} MaxSleepTime{Maximum restful hours} SleepTimeRecoveryAmount{Restful hours regained} SleepTimeRecoveryPeriod{Refill interval} MaxRestTime{Maximum time in bed} Health_RecoveryRatePerHourOfSleep{Health per hour of sleep} Mana_RecoveryRatePerHourOfSleep{Mana per hour of sleep} Alcohol{Alcohol level} MaxAlcohol{Maximum alcohol} AlcoholDepletionRate{Sobering speed} Swampweed{Swampweed level} MaxSwampweed{Maximum swampweed} SwampweedDepletionRate{Wear-off speed} XPExecutedBounty{XP for finishing off} XPKillOrDefeatBounty{XP for defeating} other{{fallback}}}'**
+  /// **'{attributeId, select, SuperArmor{Poise} MaxSuperArmor{Maximum poise} DamageMultiplier{Damage taken} SpeedModifier{Movement speed} Oxygen{Breath} MaxOxygen{Maximum breath} OxygenDepletionRate{Breath used per second} OxygenRecoveryRate{Breath regained per second} CriticalLevelPercent{Low-breath warning} SleepTime{Restful hours left} MaxSleepTime{Maximum restful hours} SleepTimeRecoveryAmount{Restful hours regained} SleepTimeRecoveryPeriod{Refill interval} MaxRestTime{Maximum time in bed} Health_RecoveryRatePerHourOfSleep{Health per hour of sleep} Mana_RecoveryRatePerHourOfSleep{Mana per hour of sleep} Alcohol{Alcohol level} MaxAlcohol{Maximum alcohol} AlcoholDepletionRate{Sobering speed} Swampweed{Swampweed level} MaxSwampweed{Maximum swampweed} SwampweedDepletionRate{Wear-off speed} XPExecutedBounty{XP for finishing off} XPKillOrDefeatBounty{XP for defeating} Level{Level} LockpickDurability{Lockpick durability} LockpickPrecision{Lockpick precision} PickPocketing{Pickpocketing} other{{fallback}}}'**
   String attributeManualFallbackLabel(String attributeId, String fallback);
 
   /// No description provided for @attributeManualTooltip.
   ///
   /// In en, this message translates to:
-  /// **'{attributeId, select, SuperArmor{How much punishment this character absorbs before a hit staggers them.} MaxSuperArmor{The full poise pool; it grows with character level and with worn armour.} DamageMultiplier{Factor applied to the damage this character takes — 1 is normal, higher hurts more.} SpeedModifier{Factor on how fast this character moves — 1 is normal.} Oxygen{Seconds of air left under water; at zero this character drowns.} MaxOxygen{How many seconds this character can stay under water; the Diving skill raises it.} OxygenDepletionRate{Air used up each second while submerged.} OxygenRecoveryRate{Air that comes back each second after surfacing.} CriticalLevelPercent{Share of remaining air at which the game warns of drowning.} SleepTime{Hours of sleep that still restore something; beyond them the game grants no resting bonus.} MaxSleepTime{The largest budget of restful hours this character can hold.} SleepTimeRecoveryAmount{Restful hours added back each time the budget refills.} SleepTimeRecoveryPeriod{How long it takes before the budget of restful hours refills again.} MaxRestTime{The longest single stay in bed the game allows.} Health_RecoveryRatePerHourOfSleep{Share of maximum health restored for every hour slept.} Mana_RecoveryRatePerHourOfSleep{Share of maximum mana restored for every hour slept.} Alcohol{How drunk this character is; the higher tiers trade dexterity and mana for strength.} MaxAlcohol{The highest alcohol level this character can reach.} AlcoholDepletionRate{How quickly the alcohol level falls back towards sober.} Swampweed{How stoned this character is; the higher tiers shift their attributes around.} MaxSwampweed{The highest swampweed level this character can reach.} SwampweedDepletionRate{How quickly the swampweed high wears off.} XPExecutedBounty{Experience for killing this character while it already lies defeated on the ground.} XPKillOrDefeatBounty{Experience for bringing this character down, whether it dies or is only beaten unconscious.} other{?}}'**
+  /// **'{attributeId, select, SuperArmor{How much punishment this character absorbs before a hit staggers them.} MaxSuperArmor{The full poise pool; it grows with character level and with worn armour.} DamageMultiplier{Factor applied to the damage this character takes — 1 is normal, higher hurts more.} SpeedModifier{Factor on how fast this character moves — 1 is normal.} Oxygen{Seconds of air left under water; at zero this character drowns.} MaxOxygen{How many seconds this character can stay under water; the Diving skill raises it.} OxygenDepletionRate{Air used up each second while submerged.} OxygenRecoveryRate{Air that comes back each second after surfacing.} CriticalLevelPercent{Share of remaining air at which the game warns of drowning.} SleepTime{Hours of sleep that still restore something; beyond them the game grants no resting bonus.} MaxSleepTime{The largest budget of restful hours this character can hold.} SleepTimeRecoveryAmount{Restful hours added back each time the budget refills.} SleepTimeRecoveryPeriod{How long it takes before the budget of restful hours refills again.} MaxRestTime{The longest single stay in bed the game allows.} Health_RecoveryRatePerHourOfSleep{Share of maximum health restored for every hour slept.} Mana_RecoveryRatePerHourOfSleep{Share of maximum mana restored for every hour slept.} Alcohol{How drunk this character is; the higher tiers trade dexterity and mana for strength.} MaxAlcohol{The highest alcohol level this character can reach.} AlcoholDepletionRate{How quickly the alcohol level falls back towards sober.} Swampweed{How stoned this character is; the higher tiers shift their attributes around.} MaxSwampweed{The highest swampweed level this character can reach.} SwampweedDepletionRate{How quickly the swampweed high wears off.} XPExecutedBounty{Experience for killing this character while it already lies defeated on the ground.} XPKillOrDefeatBounty{Experience for bringing this character down, whether it dies or is only beaten unconscious.} Level{The character level. It rises with experience and grants learning points.} LockpickDurability{Set by the Lockpicking skill: 2 untrained, 4 trained, 6 mastered.} LockpickPrecision{Set by the Lockpicking skill: 0 untrained, 1 trained, 2 mastered.} PickPocketing{Set by the Pickpocketing skill: -30 untrained, -10 trained, +10 mastered.} other{?}}'**
   String attributeManualTooltip(String attributeId);
 
   /// No description provided for @knowledgeTypeVoiceLine.

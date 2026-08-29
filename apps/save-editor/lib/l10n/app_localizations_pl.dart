@@ -913,46 +913,60 @@ class AppLocalizationsPl extends AppLocalizations {
   }
 
   @override
+  String get itemTooltipIngredientFor => 'Składnik do';
+
+  @override
+  String itemTooltipTeaches(String item) {
+    return 'Uczy: $item';
+  }
+
+  @override
+  String get itemTooltipValue => 'Wartość';
+
+  @override
+  String get itemTooltipProtection => 'Ochrona';
+
+  @override
+  String get itemTooltipRequirements => 'Wymagania:';
+
+  @override
+  String get itemTooltipManaCost => 'Koszt many';
+
+  @override
+  String get itemTooltipManaUpkeep => 'Koszt many ładowania';
+
+  @override
+  String get itemCategoryAll => 'Wszystko';
+
+  @override
   String get itemCategoryMeleeWeapon => 'Broń biała';
 
   @override
   String get itemCategoryRangedWeapon => 'Broń dystansowa';
 
   @override
-  String get itemCategoryAmmunition => 'Amunicja';
+  String get itemCategoryMagic => 'Magia';
 
   @override
-  String get itemCategoryArmor => 'Zbroje';
+  String get itemCategoryWearable => 'Odzież i ozdoby';
 
   @override
-  String get itemCategoryRune => 'Runy';
+  String get itemCategoryFood => 'Jedzenie';
 
   @override
-  String get itemCategoryScroll => 'Zwoje zaklęć';
+  String get itemCategoryPotion => 'Mikstury';
 
   @override
-  String get itemCategoryFood => 'Jedzenie i mikstury';
+  String get itemCategoryMaterial => 'Materiały';
+
+  @override
+  String get itemCategoryDocument => 'Dokumenty';
 
   @override
   String get itemCategoryMisc => 'Różne';
 
   @override
-  String get itemCategoryAmulet => 'Amulety';
-
-  @override
-  String get itemCategoryRing => 'Pierścienie';
-
-  @override
-  String get itemCategoryTrophy => 'Trofea ze zwierząt';
-
-  @override
-  String get itemCategoryWriting => 'Pisma';
-
-  @override
-  String get itemCategoryMission => 'Przedmioty zadań';
-
-  @override
-  String get itemCategoryKey => 'Klucze';
+  String get itemCategoryArtefact => 'Artefakty';
 
   @override
   String get itemCategoryOther => 'Inne';
@@ -1806,7 +1820,7 @@ class AppLocalizationsPl extends AppLocalizations {
       'Po nauczeniu się nurkowania gra przy każdym wczytaniu przywraca zapas i regenerację oddechu do wartości z umiejętności. Zużycie na sekundę pozostaje takie, jakie ustawisz.';
 
   @override
-  String get heroGroupSleep => 'Sen i odpoczynek';
+  String get heroGroupSleep => 'Sen';
 
   @override
   String get heroGroupIntoxication => 'Odurzenie';
@@ -1896,6 +1910,18 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get glossaryFilterTeachers => 'Nauczyciele';
+
+  @override
+  String get roleTrader => 'Handlarz';
+
+  @override
+  String get roleDead => 'Martwy';
+
+  @override
+  String get roleTeacher => 'Nauczyciel';
+
+  @override
+  String get roleArmorer => 'Płatnerz';
 
   @override
   String get glossaryFilterArmorers => 'Płatnerze';
@@ -2120,6 +2146,10 @@ class AppLocalizationsPl extends AppLocalizations {
       'SwampweedDepletionRate': 'Tempo mijania odurzenia',
       'XPExecutedBounty': 'PD za dobicie leżącego',
       'XPKillOrDefeatBounty': 'PD za pokonanie',
+      'Level': 'Poziom',
+      'LockpickDurability': 'Wytrzymałość wytrycha',
+      'LockpickPrecision': 'Precyzja wytrycha',
+      'PickPocketing': 'Kradzież kieszonkowa',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -2171,6 +2201,14 @@ class AppLocalizationsPl extends AppLocalizations {
           'Doświadczenie za dobicie tej postaci, gdy leży już pokonana na ziemi.',
       'XPKillOrDefeatBounty':
           'Doświadczenie za powalenie tej postaci, niezależnie od tego, czy zginie, czy tylko padnie nieprzytomna.',
+      'Level':
+          'Poziom postaci. Rośnie wraz z doświadczeniem i daje punkty nauki.',
+      'LockpickDurability':
+          'Pochodzi z umiejętności otwierania zamków: 2 bez wprawy, 4 wyszkolony, 6 mistrz.',
+      'LockpickPrecision':
+          'Pochodzi z umiejętności otwierania zamków: 0 bez wprawy, 1 wyszkolony, 2 mistrz.',
+      'PickPocketing':
+          'Pochodzi z umiejętności kradzieży kieszonkowej: -30 bez wprawy, -10 wyszkolony, +10 mistrz.',
       'other': '?',
     });
     return '$_temp0';

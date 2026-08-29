@@ -913,46 +913,60 @@ class AppLocalizationsIt extends AppLocalizations {
   }
 
   @override
+  String get itemTooltipIngredientFor => 'Ingrediente per';
+
+  @override
+  String itemTooltipTeaches(String item) {
+    return 'Insegna: $item';
+  }
+
+  @override
+  String get itemTooltipValue => 'Valore';
+
+  @override
+  String get itemTooltipProtection => 'Protezione';
+
+  @override
+  String get itemTooltipRequirements => 'Requisiti:';
+
+  @override
+  String get itemTooltipManaCost => 'Costo di mana';
+
+  @override
+  String get itemTooltipManaUpkeep => 'Costo di mana per carica';
+
+  @override
+  String get itemCategoryAll => 'Tutti';
+
+  @override
   String get itemCategoryMeleeWeapon => 'Armi da mischia';
 
   @override
   String get itemCategoryRangedWeapon => 'Armi a distanza';
 
   @override
-  String get itemCategoryAmmunition => 'Munizioni';
+  String get itemCategoryMagic => 'Magia';
 
   @override
-  String get itemCategoryArmor => 'Armature';
+  String get itemCategoryWearable => 'Indossabili';
 
   @override
-  String get itemCategoryRune => 'Rune';
+  String get itemCategoryFood => 'Cibo';
 
   @override
-  String get itemCategoryScroll => 'Pergamene magiche';
+  String get itemCategoryPotion => 'Pozioni';
 
   @override
-  String get itemCategoryFood => 'Cibo e pozioni';
+  String get itemCategoryMaterial => 'Materiali';
+
+  @override
+  String get itemCategoryDocument => 'Documenti';
 
   @override
   String get itemCategoryMisc => 'Varie';
 
   @override
-  String get itemCategoryAmulet => 'Amuleti';
-
-  @override
-  String get itemCategoryRing => 'Anelli';
-
-  @override
-  String get itemCategoryTrophy => 'Trofei animali';
-
-  @override
-  String get itemCategoryWriting => 'Scritti';
-
-  @override
-  String get itemCategoryMission => 'Oggetti della missione';
-
-  @override
-  String get itemCategoryKey => 'Chiavi';
+  String get itemCategoryArtefact => 'Artefatti';
 
   @override
   String get itemCategoryOther => 'Altro';
@@ -1795,7 +1809,7 @@ class AppLocalizationsIt extends AppLocalizations {
       'Una volta appresa Immersione, a ogni caricamento il gioco riporta fiato e recupero ai valori dell\'abilità. L\'aria consumata al secondo resta come la imposti.';
 
   @override
-  String get heroGroupSleep => 'Sonno e riposo';
+  String get heroGroupSleep => 'Sonno';
 
   @override
   String get heroGroupIntoxication => 'Ebbrezza';
@@ -1885,6 +1899,18 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get glossaryFilterTeachers => 'Maestri';
+
+  @override
+  String get roleTrader => 'Mercante';
+
+  @override
+  String get roleDead => 'Morto';
+
+  @override
+  String get roleTeacher => 'Maestro';
+
+  @override
+  String get roleArmorer => 'Armaiolo';
 
   @override
   String get glossaryFilterArmorers => 'Armaioli';
@@ -2109,6 +2135,10 @@ class AppLocalizationsIt extends AppLocalizations {
       'SwampweedDepletionRate': 'Smaltimento dell\'erba',
       'XPExecutedBounty': 'PE per il colpo di grazia',
       'XPKillOrDefeatBounty': 'PE per sconfiggere',
+      'Level': 'Livello',
+      'LockpickDurability': 'Resistenza del grimaldello',
+      'LockpickPrecision': 'Precisione del grimaldello',
+      'PickPocketing': 'Borseggio',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -2162,6 +2192,14 @@ class AppLocalizationsIt extends AppLocalizations {
           'Esperienza per uccidere questo personaggio mentre giace già sconfitto a terra.',
       'XPKillOrDefeatBounty':
           'Esperienza per abbattere questo personaggio, che muoia o resti soltanto privo di sensi.',
+      'Level':
+          'Il livello del personaggio. Sale con l’esperienza e dà punti di apprendimento.',
+      'LockpickDurability':
+          'Deriva dall’abilità di scasso: 2 inesperto, 4 addestrato, 6 maestro.',
+      'LockpickPrecision':
+          'Deriva dall’abilità di scasso: 0 inesperto, 1 addestrato, 2 maestro.',
+      'PickPocketing':
+          'Deriva dall’abilità di borseggio: -30 inesperto, -10 addestrato, +10 maestro.',
       'other': '?',
     });
     return '$_temp0';

@@ -3,14 +3,20 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/actor.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
+import 'package:goresave/features/editor/domain/game_icons.dart';
 import 'package:goresave/features/editor/domain/item_categories.dart';
+import 'package:goresave/features/editor/domain/item_stats.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/ui/actor_detail_header.dart';
+import 'package:goresave/features/editor/ui/game_icon.dart';
+import 'package:goresave/features/editor/ui/item_stats_tooltip.dart';
 import 'package:goresave/features/editor/ui/pending_structural_row.dart';
 import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 import 'package:goresave/features/editor/ui/slot_repair_banner.dart';
 import 'package:goresave/l10n/app_localizations.dart';
+import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/providers/data_providers.dart';
 
 import '../domain/editor_notifier.dart';
 import 'add_inventory_item_dialog.dart';
@@ -350,6 +356,25 @@ class _PrivateInventorySummaryCard extends ConsumerStatefulWidget {
       _PrivateInventorySummaryCardState();
 }
 
+/// One entry of the inventory sidebar: the game's "All" tab (a null [category])
+/// or one of its categories, with the label, glyph and items it lists.
+class _InventoryTab {
+  const _InventoryTab({
+    required this.category,
+    required this.label,
+    required this.gameIcon,
+    required this.fallbackIcon,
+    required this.items,
+  });
+
+  /// Null for "All", which is no category and collects everything.
+  final ItemCategory? category;
+  final String label;
+  final String? gameIcon;
+  final IconData fallbackIcon;
+  final List<PrivateInventoryItem> items;
+}
+
 class _PrivateInventorySummaryCardState
     extends ConsumerState<_PrivateInventorySummaryCard> {
   String _query = '';
@@ -650,27 +675,84 @@ class _PrivateInventorySummaryCardState
           itemDisplayNameFromId(classId, fallback: l10n.fallbackItem);
     }
 
-    final groups = groupInventoryItems(items, displayNameOf: nameOf);
-
-    // Keep the current category selected if it still has items, else fall
-    // back to the first available group.
-    var selected = _selectedCategory;
-    if (groups.every((g) => g.category != selected)) {
-      selected = groups.isEmpty ? null : groups.first.category;
+    // The game files an item by its own type tag; the bundled stats carry that
+    // tag and the very filter tables the game's inventory rail is built from,
+    // so the groups here are the ones the player sees in game. Without the
+    // stats (load failure) the class-name prefix decides, which lands in the
+    // same tab for every shipped item family.
+    final itemStats = ref.watch(itemStatsCatalogProvider).value;
+    final groups = groupInventoryItems(
+      items,
+      displayNameOf: nameOf,
+      stats: itemStats,
+    );
+    // Tab name and glyph: the game's own where the user's install has been
+    // read, the editor's own translation otherwise.
+    // The game's own "All" filter is not a category — it collects everything —
+    // so it is deliberately absent here.
+    final filtersById = <ItemCategory, InventoryFilter>{
+      for (final filter in itemStats?.filters ?? const <InventoryFilter>[])
+        ?itemCategoryFromFilterId(filter.id): filter,
+    };
+    String categoryLabel(ItemCategory category) {
+      final key = filtersById[category]?.nameKey ?? '';
+      final fromGame = key.isEmpty
+          ? null
+          : resolveGameText(locCatalog, key, lang);
+      return fromGame ?? localizedItemCategoryLabel(l10n, category);
     }
-    final selectedGroup = groups
-        .where((g) => g.category == selected)
+
+    String? categoryGameIcon(ItemCategory category) =>
+        filtersById[category]?.icon ?? gameIconForItemCategory(category);
+
+    // Every item, in the order the groups sort theirs. Backs both the "All"
+    // tab and an active search.
+    final allItems = [...items]
+      ..sort(
+        (a, b) => nameOf(a).toLowerCase().compareTo(nameOf(b).toLowerCase()),
+      );
+    // The tabs, led by the game's own "All" — the first entry of its inventory
+    // rail, and the one it opens on. A null category IS that tab.
+    final allFilter = itemStats?.filters
+        .where((filter) => filter.isAll)
         .firstOrNull;
+    final tabs = <_InventoryTab>[
+      _InventoryTab(
+        category: null,
+        label:
+            (allFilter == null
+                ? null
+                : resolveGameText(locCatalog, allFilter.nameKey, lang)) ??
+            l10n.itemCategoryAll,
+        gameIcon: allFilter?.icon ?? 'T_Icon_AllItems',
+        fallbackIcon: Icons.all_inclusive,
+        items: allItems,
+      ),
+      for (final group in groups)
+        _InventoryTab(
+          category: group.category,
+          label: categoryLabel(group.category),
+          gameIcon: categoryGameIcon(group.category),
+          fallbackIcon: iconForItemCategory(group.category),
+          items: group.items,
+        ),
+    ];
+
+    // Keep the current category selected while it still has items; a group that
+    // emptied out falls back to "All" rather than to whatever sorts first.
+    var selected = _selectedCategory;
+    if (selected != null && groups.every((g) => g.category != selected)) {
+      selected = null;
+    }
+    final selectedTab = tabs.firstWhere(
+      (tab) => tab.category == selected,
+      orElse: () => tabs.first,
+    );
 
     // An active search shows matches across all categories as a flat list;
-    // an empty query browses by the selected category.
+    // an empty query browses by the selected tab.
     final searching = query.isNotEmpty;
-    final shownItems = searching
-        ? (items..sort(
-            (a, b) =>
-                nameOf(a).toLowerCase().compareTo(nameOf(b).toLowerCase()),
-          ))
-        : (selectedGroup?.items ?? const <PrivateInventoryItem>[]);
+    final shownItems = searching ? allItems : selectedTab.items;
 
     final hasItems = inventory.items.isNotEmpty;
     final hasPendingAdd = _pendingAdds.isNotEmpty;
@@ -984,28 +1066,26 @@ class _PrivateInventorySummaryCardState
                                   height: 48,
                                   child: ListView.separated(
                                     scrollDirection: Axis.horizontal,
-                                    itemCount: groups.length,
+                                    itemCount: tabs.length,
                                     separatorBuilder: (_, _) =>
                                         const SizedBox(width: 8),
                                     itemBuilder: (context, index) {
-                                      final group = groups[index];
+                                      final tab = tabs[index];
                                       return ChoiceChip(
-                                        avatar: Icon(
-                                          iconForItemCategory(group.category),
+                                        avatar: GameIcon(
+                                          name: tab.gameIcon,
+                                          fallbackIcon: tab.fallbackIcon,
                                           size: 18,
                                         ),
                                         label: Text(
                                           l10n.categoryWithCount(
-                                            localizedItemCategoryLabel(
-                                              l10n,
-                                              group.category,
-                                            ),
-                                            group.items.length,
+                                            tab.label,
+                                            tab.items.length,
                                           ),
                                         ),
-                                        selected: group.category == selected,
+                                        selected: tab.category == selected,
                                         onSelected: (_) => setState(() {
-                                          _selectedCategory = group.category;
+                                          _selectedCategory = tab.category;
                                         }),
                                       );
                                     },
@@ -1036,27 +1116,24 @@ class _PrivateInventorySummaryCardState
                                             ),
                                             child: Column(
                                               children: [
-                                                for (final group in groups)
+                                                for (final tab in tabs)
                                                   SidebarTile(
-                                                    icon: iconForItemCategory(
-                                                      group.category,
-                                                    ),
-                                                    label: l10n.categoryWithCount(
-                                                      localizedItemCategoryLabel(
-                                                        l10n,
-                                                        group.category,
-                                                      ),
-                                                      group.items.length,
-                                                    ),
+                                                    icon: tab.fallbackIcon,
+                                                    gameIcon: tab.gameIcon,
+                                                    label: l10n
+                                                        .categoryWithCount(
+                                                          tab.label,
+                                                          tab.items.length,
+                                                        ),
                                                     selected:
                                                         !searching &&
-                                                        group.category ==
+                                                        tab.category ==
                                                             selected,
                                                     onTap: () => setState(() {
                                                       _selectedCategory =
-                                                          group.category;
+                                                          tab.category;
                                                       // Leave search mode so the chosen
-                                                      // category's items are shown.
+                                                      // tab's items are shown.
                                                       _query = '';
                                                       _searchController.clear();
                                                     }),
@@ -1106,101 +1183,154 @@ class _PrivateInventorySummaryCardState
                                                         const BoxConstraints(
                                                           maxWidth: 560,
                                                         ),
-                                                    child: ListTile(
-                                                      key: ValueKey((
-                                                        'inventory-item-row',
-                                                        _inventoryItemKey(item),
-                                                      )),
-                                                      dense: true,
-                                                      // The count editor itself is a
-                                                      // 48 px control. Removing ListTile's
-                                                      // extra vertical padding keeps
-                                                      // adjacent inventory rows compact
-                                                      // without shrinking either the
-                                                      // field or delete touch target.
-                                                      minTileHeight: 48,
-                                                      minVerticalPadding: 0,
-                                                      contentPadding:
-                                                          const EdgeInsets.symmetric(
-                                                            horizontal: 8,
+                                                    // Hovering a row shows what
+                                                    // the game shows when the
+                                                    // player hovers the item.
+                                                    child: ItemStatsTooltip(
+                                                      itemId: item.id.isEmpty
+                                                          ? _itemDisplayFromPath(
+                                                              item.path,
+                                                            )
+                                                          : item.id,
+                                                      title: nameOf(item),
+                                                      child: ListTile(
+                                                        key: ValueKey((
+                                                          'inventory-item-row',
+                                                          _inventoryItemKey(
+                                                            item,
                                                           ),
-                                                      horizontalTitleGap: 8,
-                                                      leading:
-                                                          ultraCompactBrowser
-                                                          ? null
-                                                          : InventoryItemVisual(
-                                                              key: ValueKey((
-                                                                'inventory-item-image',
-                                                                _inventoryItemKey(
-                                                                  item,
-                                                                ),
-                                                              )),
-                                                              itemId: item.id,
-                                                              itemPath:
-                                                                  item.path,
-                                                              fallbackIcon: iconForItemCategory(
-                                                                itemCategoryFromId(
-                                                                  item.id.isEmpty
-                                                                      ? _itemDisplayFromPath(
-                                                                          item.path,
-                                                                        )
-                                                                      : item.id,
-                                                                ),
-                                                              ),
-                                                              size:
-                                                                  compactBrowser
-                                                                  ? 32
-                                                                  : 40,
+                                                        )),
+                                                        dense: true,
+                                                        // The count editor itself is a
+                                                        // 48 px control. Removing ListTile's
+                                                        // extra vertical padding keeps
+                                                        // adjacent inventory rows compact
+                                                        // without shrinking either the
+                                                        // field or delete touch target.
+                                                        minTileHeight: 48,
+                                                        minVerticalPadding: 0,
+                                                        contentPadding:
+                                                            const EdgeInsets.symmetric(
+                                                              horizontal: 8,
                                                             ),
-                                                      title: Column(
-                                                        crossAxisAlignment:
-                                                            CrossAxisAlignment
-                                                                .stretch,
-                                                        children: [
-                                                          Row(
-                                                            children: [
-                                                              if (ultraCompactBrowser) ...[
-                                                                InventoryItemVisual(
-                                                                  key: ValueKey((
-                                                                    'inventory-item-image-compact',
-                                                                    _inventoryItemKey(
+                                                        horizontalTitleGap: 8,
+                                                        leading:
+                                                            ultraCompactBrowser
+                                                            ? null
+                                                            : InventoryItemVisual(
+                                                                key: ValueKey((
+                                                                  'inventory-item-image',
+                                                                  _inventoryItemKey(
+                                                                    item,
+                                                                  ),
+                                                                )),
+                                                                itemId: item.id,
+                                                                itemPath:
+                                                                    item.path,
+                                                                fallbackIcon: iconForItemCategory(
+                                                                  itemCategoryFromId(
+                                                                    item.id.isEmpty
+                                                                        ? _itemDisplayFromPath(
+                                                                            item.path,
+                                                                          )
+                                                                        : item.id,
+                                                                  ),
+                                                                ),
+                                                                size:
+                                                                    compactBrowser
+                                                                    ? 32
+                                                                    : 40,
+                                                              ),
+                                                        title: Column(
+                                                          crossAxisAlignment:
+                                                              CrossAxisAlignment
+                                                                  .stretch,
+                                                          children: [
+                                                            Row(
+                                                              children: [
+                                                                if (ultraCompactBrowser) ...[
+                                                                  InventoryItemVisual(
+                                                                    key: ValueKey((
+                                                                      'inventory-item-image-compact',
+                                                                      _inventoryItemKey(
+                                                                        item,
+                                                                      ),
+                                                                    )),
+                                                                    itemId:
+                                                                        item.id,
+                                                                    itemPath:
+                                                                        item.path,
+                                                                    fallbackIcon: iconForItemCategory(
+                                                                      itemCategoryFromId(
+                                                                        item.id.isEmpty
+                                                                            ? _itemDisplayFromPath(
+                                                                                item.path,
+                                                                              )
+                                                                            : item.id,
+                                                                      ),
+                                                                    ),
+                                                                    size: 24,
+                                                                  ),
+                                                                  const SizedBox(
+                                                                    width: 4,
+                                                                  ),
+                                                                ],
+                                                                Flexible(
+                                                                  child: Text(
+                                                                    nameOf(
                                                                       item,
                                                                     ),
-                                                                  )),
-                                                                  itemId:
-                                                                      item.id,
-                                                                  itemPath:
-                                                                      item.path,
-                                                                  fallbackIcon: iconForItemCategory(
-                                                                    itemCategoryFromId(
-                                                                      item.id.isEmpty
-                                                                          ? _itemDisplayFromPath(
-                                                                              item.path,
-                                                                            )
-                                                                          : item.id,
+                                                                    maxLines: 1,
+                                                                    overflow:
+                                                                        TextOverflow
+                                                                            .ellipsis,
+                                                                  ),
+                                                                ),
+                                                                if (item.equipped &&
+                                                                    !ultraCompactBrowser) ...[
+                                                                  const SizedBox(
+                                                                    width: 8,
+                                                                  ),
+                                                                  Container(
+                                                                    padding: const EdgeInsets.symmetric(
+                                                                      horizontal:
+                                                                          6,
+                                                                      vertical:
+                                                                          2,
+                                                                    ),
+                                                                    decoration: BoxDecoration(
+                                                                      color: theme
+                                                                          .colorScheme
+                                                                          .primaryContainer,
+                                                                      borderRadius:
+                                                                          BorderRadius.circular(
+                                                                            4,
+                                                                          ),
+                                                                    ),
+                                                                    child: Text(
+                                                                      l10n.equippedBadge,
+                                                                      style: theme
+                                                                          .textTheme
+                                                                          .labelSmall
+                                                                          ?.copyWith(
+                                                                            color:
+                                                                                theme.colorScheme.onPrimaryContainer,
+                                                                          ),
                                                                     ),
                                                                   ),
-                                                                  size: 24,
-                                                                ),
-                                                                const SizedBox(
-                                                                  width: 4,
-                                                                ),
+                                                                ],
                                                               ],
-                                                              Flexible(
-                                                                child: Text(
-                                                                  nameOf(item),
-                                                                  maxLines: 1,
-                                                                  overflow:
-                                                                      TextOverflow
-                                                                          .ellipsis,
-                                                                ),
-                                                              ),
-                                                              if (item.equipped &&
-                                                                  !ultraCompactBrowser) ...[
-                                                                const SizedBox(
-                                                                  width: 8,
-                                                                ),
-                                                                Container(
+                                                            ),
+                                                            if (ultraCompactBrowser &&
+                                                                item.equipped)
+                                                              Align(
+                                                                alignment: Alignment
+                                                                    .centerLeft,
+                                                                child: Container(
+                                                                  margin:
+                                                                      const EdgeInsets.only(
+                                                                        top: 4,
+                                                                      ),
                                                                   padding:
                                                                       const EdgeInsets.symmetric(
                                                                         horizontal:
@@ -1229,158 +1359,119 @@ class _PrivateInventorySummaryCardState
                                                                         ),
                                                                   ),
                                                                 ),
-                                                              ],
-                                                            ],
-                                                          ),
-                                                          if (ultraCompactBrowser &&
-                                                              item.equipped)
-                                                            Align(
-                                                              alignment: Alignment
-                                                                  .centerLeft,
-                                                              child: Container(
-                                                                margin:
+                                                              ),
+                                                            if (ultraCompactBrowser)
+                                                              Padding(
+                                                                padding:
                                                                     const EdgeInsets.only(
                                                                       top: 4,
                                                                     ),
-                                                                padding:
-                                                                    const EdgeInsets.symmetric(
-                                                                      horizontal:
-                                                                          6,
-                                                                      vertical:
-                                                                          2,
+                                                                child: Align(
+                                                                  alignment:
+                                                                      Alignment
+                                                                          .centerRight,
+                                                                  child:
+                                                                      itemTrailing,
+                                                                ),
+                                                              ),
+                                                          ],
+                                                        ),
+                                                        subtitle:
+                                                            (!showObjectIds ||
+                                                                    (item.id.isEmpty &&
+                                                                        item
+                                                                            .path
+                                                                            .isEmpty)) &&
+                                                                item
+                                                                    .upgrades
+                                                                    .isEmpty
+                                                            ? null
+                                                            : Column(
+                                                                crossAxisAlignment:
+                                                                    CrossAxisAlignment
+                                                                        .start,
+                                                                mainAxisSize:
+                                                                    MainAxisSize
+                                                                        .min,
+                                                                children: [
+                                                                  if (showObjectIds &&
+                                                                      item
+                                                                          .id
+                                                                          .isNotEmpty)
+                                                                    Text(
+                                                                      item.id,
+                                                                      maxLines:
+                                                                          1,
+                                                                      overflow:
+                                                                          TextOverflow
+                                                                              .ellipsis,
                                                                     ),
-                                                                decoration: BoxDecoration(
-                                                                  color: theme
-                                                                      .colorScheme
-                                                                      .primaryContainer,
-                                                                  borderRadius:
-                                                                      BorderRadius.circular(
-                                                                        4,
-                                                                      ),
-                                                                ),
-                                                                child: Text(
-                                                                  l10n.equippedBadge,
-                                                                  style: theme
-                                                                      .textTheme
-                                                                      .labelSmall
-                                                                      ?.copyWith(
-                                                                        color: theme
-                                                                            .colorScheme
-                                                                            .onPrimaryContainer,
-                                                                      ),
-                                                                ),
-                                                              ),
-                                                            ),
-                                                          if (ultraCompactBrowser)
-                                                            Padding(
-                                                              padding:
-                                                                  const EdgeInsets.only(
-                                                                    top: 4,
-                                                                  ),
-                                                              child: Align(
-                                                                alignment: Alignment
-                                                                    .centerRight,
-                                                                child:
-                                                                    itemTrailing,
-                                                              ),
-                                                            ),
-                                                        ],
-                                                      ),
-                                                      subtitle:
-                                                          (!showObjectIds ||
-                                                                  (item.id.isEmpty &&
+                                                                  if (showObjectIds &&
                                                                       item
                                                                           .path
-                                                                          .isEmpty)) &&
-                                                              item
-                                                                  .upgrades
-                                                                  .isEmpty
-                                                          ? null
-                                                          : Column(
-                                                              crossAxisAlignment:
-                                                                  CrossAxisAlignment
-                                                                      .start,
-                                                              mainAxisSize:
-                                                                  MainAxisSize
-                                                                      .min,
-                                                              children: [
-                                                                if (showObjectIds &&
-                                                                    item
-                                                                        .id
-                                                                        .isNotEmpty)
-                                                                  Text(
-                                                                    item.id,
-                                                                    maxLines: 1,
-                                                                    overflow:
-                                                                        TextOverflow
-                                                                            .ellipsis,
-                                                                  ),
-                                                                if (showObjectIds &&
-                                                                    item
-                                                                        .path
-                                                                        .isNotEmpty &&
-                                                                    item.path !=
-                                                                        item.id)
-                                                                  Text(
-                                                                    item.path,
-                                                                    maxLines: 1,
-                                                                    overflow:
-                                                                        TextOverflow
-                                                                            .ellipsis,
-                                                                  ),
-                                                                if (item
-                                                                    .upgrades
-                                                                    .isNotEmpty)
-                                                                  Padding(
-                                                                    padding:
-                                                                        const EdgeInsets.only(
-                                                                          top:
-                                                                              4,
-                                                                        ),
-                                                                    child: Wrap(
-                                                                      spacing:
-                                                                          4,
-                                                                      runSpacing:
-                                                                          2,
-                                                                      crossAxisAlignment:
-                                                                          WrapCrossAlignment
-                                                                              .center,
-                                                                      children: [
-                                                                        Text(
-                                                                          l10n.armorUpgradesLabel,
-                                                                          style: theme
-                                                                              .textTheme
-                                                                              .labelSmall,
-                                                                        ),
-                                                                        for (final u
-                                                                            in item.upgrades)
-                                                                          Container(
-                                                                            padding: const EdgeInsets.symmetric(
-                                                                              horizontal: 6,
-                                                                              vertical: 1,
-                                                                            ),
-                                                                            decoration: BoxDecoration(
-                                                                              color: theme.colorScheme.surfaceContainerHighest,
-                                                                              borderRadius: BorderRadius.circular(
-                                                                                4,
-                                                                              ),
-                                                                            ),
-                                                                            child: Text(
-                                                                              '${_upgradePart(l10n, u.key)}: ${_upgradeTier(l10n, u.value)}',
-                                                                              style: theme.textTheme.labelSmall?.copyWith(
-                                                                                color: theme.colorScheme.onSurfaceVariant,
-                                                                              ),
-                                                                            ),
-                                                                          ),
-                                                                      ],
+                                                                          .isNotEmpty &&
+                                                                      item.path !=
+                                                                          item.id)
+                                                                    Text(
+                                                                      item.path,
+                                                                      maxLines:
+                                                                          1,
+                                                                      overflow:
+                                                                          TextOverflow
+                                                                              .ellipsis,
                                                                     ),
-                                                                  ),
-                                                              ],
-                                                            ),
-                                                      trailing:
-                                                          ultraCompactBrowser
-                                                          ? null
-                                                          : itemTrailing,
+                                                                  if (item
+                                                                      .upgrades
+                                                                      .isNotEmpty)
+                                                                    Padding(
+                                                                      padding:
+                                                                          const EdgeInsets.only(
+                                                                            top:
+                                                                                4,
+                                                                          ),
+                                                                      child: Wrap(
+                                                                        spacing:
+                                                                            4,
+                                                                        runSpacing:
+                                                                            2,
+                                                                        crossAxisAlignment:
+                                                                            WrapCrossAlignment.center,
+                                                                        children: [
+                                                                          Text(
+                                                                            l10n.armorUpgradesLabel,
+                                                                            style:
+                                                                                theme.textTheme.labelSmall,
+                                                                          ),
+                                                                          for (final u
+                                                                              in item.upgrades)
+                                                                            Container(
+                                                                              padding: const EdgeInsets.symmetric(
+                                                                                horizontal: 6,
+                                                                                vertical: 1,
+                                                                              ),
+                                                                              decoration: BoxDecoration(
+                                                                                color: theme.colorScheme.surfaceContainerHighest,
+                                                                                borderRadius: BorderRadius.circular(
+                                                                                  4,
+                                                                                ),
+                                                                              ),
+                                                                              child: Text(
+                                                                                '${_upgradePart(l10n, u.key)}: ${_upgradeTier(l10n, u.value)}',
+                                                                                style: theme.textTheme.labelSmall?.copyWith(
+                                                                                  color: theme.colorScheme.onSurfaceVariant,
+                                                                                ),
+                                                                              ),
+                                                                            ),
+                                                                        ],
+                                                                      ),
+                                                                    ),
+                                                                ],
+                                                              ),
+                                                        trailing:
+                                                            ultraCompactBrowser
+                                                            ? null
+                                                            : itemTrailing,
+                                                      ),
                                                     ),
                                                   ),
                                                 );

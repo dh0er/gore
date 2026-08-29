@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:goresave/features/editor/domain/game_icons.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/domain/skills_models.dart';
+import 'package:goresave/features/editor/ui/game_icon.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 
 import '../domain/editor_notifier.dart';
@@ -229,6 +231,8 @@ class _SkillsSectionState extends ConsumerState<SkillsSection> {
           SizedBox(height: i == 0 ? 4 : 22),
           Padding(
             padding: const EdgeInsets.only(bottom: 4),
+            // Deliberately unadorned: the rows under it already carry a glyph
+            // each, and a second one on the heading only crowds the column.
             child: Text(
               _categoryLabel(l10n, categories[i].key),
               style: theme.textTheme.labelSmall?.copyWith(
@@ -270,8 +274,10 @@ class _SkillRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context);
-    final label = Text(
-      _skillName(l10n, skill),
+    // The glyph the game marks this skill with on its own character sheet.
+    final label = GameIconLabel(
+      label: _skillName(l10n, skill),
+      iconName: gameIconForSkill(skill.base),
       style: theme.textTheme.labelLarge,
     );
 

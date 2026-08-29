@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:goresave/features/editor/domain/game_icons.dart';
+import 'package:goresave/features/editor/ui/game_icon.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
@@ -49,12 +51,25 @@ bool detailTabsCanCarryLabels(double width) =>
 /// in the node's `tooltip`, which platforms surface as help text rather than as
 /// the control's name, so the tab would read out as "Tab 3 of 6" — the
 /// [Icon.semanticLabel] is what puts the name where a labelled tab has it.
-Tab _detailTab(IconData icon, String label, bool labelled) => Tab(
-  icon: labelled
-      ? Icon(icon)
-      : Tooltip(message: label, child: Icon(icon, semanticLabel: label)),
-  text: labelled ? label : null,
-);
+Tab _detailTab(
+  IconData icon,
+  String label,
+  bool labelled, {
+  String? gameIcon,
+}) {
+  final mark = GameIcon(name: gameIcon, fallbackIcon: icon, size: 24);
+  return Tab(
+    icon: labelled
+        ? mark
+        // An icon-only tab names itself twice over: the tooltip is help text,
+        // while the semantics label is what a screen reader reads as its name.
+        : Tooltip(
+            message: label,
+            child: Semantics(label: label, child: mark),
+          ),
+    text: labelled ? label : null,
+  );
+}
 
 class CharactersTab extends ConsumerWidget {
   const CharactersTab({
@@ -265,20 +280,42 @@ class CharactersTab extends ConsumerWidget {
                     );
                     return TabBar(
                       tabs: [
-                        _detailTab(Icons.person_outline, l10n.tabAttribute, labelled),
+                        _detailTab(
+                          Icons.person_outline,
+                          l10n.tabAttribute,
+                          labelled,
+                          gameIcon: gameIconCharacter,
+                        ),
                         _detailTab(
                           Icons.inventory_2_outlined,
                           l10n.tabInventory,
                           labelled,
+                          gameIcon: 'T_Icon_Weight',
                         ),
-                        _detailTab(Icons.storefront_outlined, l10n.tabTrade, labelled),
+                        _detailTab(
+                          Icons.storefront_outlined,
+                          l10n.tabTrade,
+                          labelled,
+                          gameIcon: gameIconTrade,
+                        ),
                         _detailTab(
                           Icons.school_outlined,
                           l10n.dialogKnowledge,
                           labelled,
+                          gameIcon: gameIconKnowledge,
                         ),
-                        _detailTab(Icons.history_outlined, l10n.sectionEvents, labelled),
-                        _detailTab(Icons.place_outlined, l10n.heroTransform, labelled),
+                        _detailTab(
+                          Icons.history_outlined,
+                          l10n.sectionEvents,
+                          labelled,
+                          gameIcon: 'T_Icon_Eye',
+                        ),
+                        _detailTab(
+                          Icons.place_outlined,
+                          l10n.heroTransform,
+                          labelled,
+                          gameIcon: 'T_Icon_Location',
+                        ),
                       ],
                     );
                   },

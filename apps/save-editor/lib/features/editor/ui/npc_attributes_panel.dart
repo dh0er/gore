@@ -6,8 +6,10 @@ import 'package:goresave/features/editor/domain/hero_attributes.dart'
         heroAttributeGroup,
         heroAttributeLabel,
         heroAttributeRank;
+import 'package:goresave/features/editor/domain/game_icons.dart';
 import 'package:goresave/features/editor/domain/npc_actors_page.dart';
 import 'package:goresave/features/editor/domain/npc_attributes.dart';
+import 'package:goresave/features/editor/ui/game_icon.dart';
 import 'package:goresave/features/editor/ui/grouped_attribute_sidebar.dart';
 import 'package:goresave/features/editor/ui/hero_stats_card.dart'
     show formatHeroValue;
@@ -439,9 +441,8 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
               key: ValueKey((widget.reloadKey, a.key, a.basePath)),
               attribute: a,
               label: _displayLabel(a),
-              tooltip:
-                  widget.attributeTooltip?.call(a.key, a.setClass) ??
-                  '',
+              gameIcon: gameIconForAttribute(a.key, a.setClass),
+              tooltip: widget.attributeTooltip?.call(a.key, a.setClass) ?? '',
               editable: widget.editable,
               initialBaseText: _pending[_pathKey(a.basePath)],
               initialCurrentText: _pending[_pathKey(a.currentPath)],
@@ -467,6 +468,7 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
             id: group,
             label: _groupTitle(l10n, group),
             icon: _groupIcon(group),
+            gameIcon: gameIconForAttributeGroup(group),
             detail: detailFor(group),
           ),
       ],
@@ -474,10 +476,7 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
   }
 
   String _displayLabel(NpcAttributeRow attribute) =>
-      widget.attributeLabel?.call(
-        attribute.key,
-        attribute.setClass,
-      ) ??
+      widget.attributeLabel?.call(attribute.key, attribute.setClass) ??
       heroAttributeLabel(attribute.key);
 
   /// The NPC Status row shown as the FIRST entry of the core ("Hauptwerte")
@@ -580,6 +579,7 @@ class _NpcAttributeRow extends StatefulWidget {
     required this.attribute,
     required this.label,
     this.tooltip = '',
+    this.gameIcon,
     required this.editable,
     required this.onBaseChanged,
     required this.onCurrentChanged,
@@ -592,6 +592,9 @@ class _NpcAttributeRow extends StatefulWidget {
 
   /// One sentence on what this value does in the game. Empty = no tooltip.
   final String tooltip;
+
+  /// The glyph the game puts in front of this value, when it has one.
+  final String? gameIcon;
   final bool editable;
   final ValueChanged<String> onBaseChanged;
   final ValueChanged<String> onCurrentChanged;
@@ -660,19 +663,17 @@ class _NpcAttributeRowState extends State<_NpcAttributeRow> {
             ),
           );
           // The label carries the explanation of what the value does in the
-          // game; rows we have nothing to say about stay plain text.
+          // game; rows we have nothing to say about stay plain text. The glyph
+          // in front is the game's own, with the ◆ it marks an unadorned value
+          // with as the fallback.
+          final labelText = GameIconLabel(
+            label: widget.label,
+            iconName: widget.gameIcon,
+            style: Theme.of(context).textTheme.labelLarge,
+          );
           final Widget rowLabel = widget.tooltip.isEmpty
-              ? Text(
-                  widget.label,
-                  style: Theme.of(context).textTheme.labelLarge,
-                )
-              : Tooltip(
-                  message: widget.tooltip,
-                  child: Text(
-                    widget.label,
-                    style: Theme.of(context).textTheme.labelLarge,
-                  ),
-                );
+              ? labelText
+              : Tooltip(message: widget.tooltip, child: labelText);
           if (compact) {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,

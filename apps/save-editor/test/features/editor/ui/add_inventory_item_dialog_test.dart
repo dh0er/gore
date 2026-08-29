@@ -128,7 +128,7 @@ void main() {
     // Category tiles present in the sidebar (label + count from the catalog,
     // already-owned misc item excluded so misc count is 2).
     expect(find.text('Melee weapons (1)'), findsOneWidget);
-    expect(find.text('Food & potions (1)'), findsOneWidget);
+    expect(find.text('Food (1)'), findsOneWidget);
     expect(find.text('Miscellaneous (2)'), findsOneWidget);
 
     // Default selection is the first category (Melee weapons) → only its

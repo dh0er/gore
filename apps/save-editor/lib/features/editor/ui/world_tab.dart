@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:goresave/features/editor/ui/game_icon.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 
 import '../domain/editor_models.dart';
@@ -87,6 +88,8 @@ class _WorldTabState extends State<WorldTab> {
                   children: [
                     _SidebarTile(
                       icon: Icons.flag_outlined,
+                      // The game's own quest marker.
+                      gameIcon: 'T_Icon_StoryQuest',
                       label: l10n.sectionQuests,
                       selected: _selected == _WorldSection.quests,
                       onTap: () =>
@@ -94,6 +97,9 @@ class _WorldTabState extends State<WorldTab> {
                     ),
                     _SidebarTile(
                       icon: Icons.menu_book_outlined,
+                      // The glossary's own book, not the speech bubble that
+                      // marks captured dialogue.
+                      gameIcon: 'T_Icon_Book',
                       label: l10n.sectionGlossary,
                       selected: _selected == _WorldSection.glossary,
                       onTap: () => setState(() {
@@ -103,6 +109,9 @@ class _WorldTabState extends State<WorldTab> {
                     ),
                     _SidebarTile(
                       icon: Icons.gavel_outlined,
+                      // The game draws no crest for "factions" as such; the
+                      // Old Camp's stands for all of them.
+                      gameIcon: 'T_Icon_OldCamp',
                       label: l10n.factionsSidebar,
                       selected: _selected == _WorldSection.factions,
                       onTap: () =>
@@ -110,6 +119,7 @@ class _WorldTabState extends State<WorldTab> {
                     ),
                     _SidebarTile(
                       icon: Icons.account_tree_outlined,
+                      gameIcon: 'T_Icon_Commpleted',
                       label: l10n.storyStateSidebar,
                       selected: _selected == _WorldSection.storyState,
                       onTap: () => setState(() {
@@ -195,7 +205,12 @@ class _SidebarTile extends StatelessWidget {
     required this.label,
     required this.selected,
     required this.onTap,
+    this.gameIcon,
   });
+
+  /// The game's own glyph for this section, when it has one. Falls back to
+  /// [icon] without a game installation.
+  final String? gameIcon;
 
   final IconData icon;
   final String label;
@@ -217,8 +232,9 @@ class _SidebarTile extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
             child: Row(
               children: [
-                Icon(
-                  icon,
+                GameIcon(
+                  name: gameIcon,
+                  fallbackIcon: icon,
                   size: 18,
                   color: selected ? scheme.primary : scheme.onSurfaceVariant,
                 ),

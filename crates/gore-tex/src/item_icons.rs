@@ -41,10 +41,31 @@ static LEASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static GENERATION_LEASES: OnceLock<Mutex<BTreeMap<PathBuf, RetainedGenerationLease>>> =
     OnceLock::new();
 
+/// Which shipped texture folder an icon id is resolved against. Item icons are
+/// the inventory previews under `ItemIcons`; UI icons are the shared attribute,
+/// resistance, skill and category glyphs the game draws next to its own labels.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum IconKind {
+    Item,
+    Ui,
+}
+
+impl IconKind {
+    /// Hash/namespace discriminator. Kept out of the icon id itself so both
+    /// folders may carry the same suffix without colliding in one cache.
+    fn tag(self) -> u8 {
+        match self {
+            IconKind::Item => 0,
+            IconKind::Ui => 1,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ItemIconSpec {
     pub item_id: String,
     pub icon_id: String,
+    pub kind: IconKind,
 }
 
 impl ItemIconSpec {
@@ -52,6 +73,17 @@ impl ItemIconSpec {
         Self {
             item_id: item_id.into(),
             icon_id: icon_id.into(),
+            kind: IconKind::Item,
+        }
+    }
+
+    /// A shared `/Game/UI/Textures/Common/Icons` glyph. The `item_id` is the
+    /// key Save Editor looks the image up by, not a game item.
+    pub fn ui(item_id: impl Into<String>, icon_id: impl Into<String>) -> Self {
+        Self {
+            item_id: item_id.into(),
+            icon_id: icon_id.into(),
+            kind: IconKind::Ui,
         }
     }
 }
@@ -175,15 +207,32 @@ pub fn release_item_icon_cache(manifest_path: &Path) -> Result<bool> {
 }
 
 struct PreparedCatalog {
+    item_to_icon: BTreeMap<String, (IconKind, String)>,
     item_to_png: BTreeMap<String, String>,
-    icon_to_png: BTreeMap<String, String>,
+    icon_to_png: BTreeMap<(IconKind, String), String>,
     digest: String,
+}
+
+impl PreparedCatalog {
+    /// Item ids whose image the shipped game is allowed not to carry. Only the
+    /// shared UI glyphs are optional: they decorate labels, so a renamed glyph
+    /// in a later build must not take the whole item-preview cache down with
+    /// it. Every real item icon stays mandatory.
+    fn optional_item_ids(&self) -> BTreeSet<String> {
+        self.item_to_icon
+            .iter()
+            .filter(|(_, (kind, _))| *kind == IconKind::Ui)
+            .map(|(item_id, _)| item_id.clone())
+            .collect()
+    }
 }
 
 struct ExpectedItemIconManifest {
     build_id: String,
-    item_count: usize,
     items: BTreeMap<String, String>,
+    /// Entries a published manifest may legitimately omit (see
+    /// [`PreparedCatalog::optional_item_ids`]).
+    optional: BTreeSet<String>,
 }
 
 #[derive(Default)]
@@ -220,7 +269,7 @@ impl PreparedCatalog {
             validate_item_id(&spec.item_id)?;
             validate_icon_id(&spec.icon_id)?;
             if item_to_icon
-                .insert(spec.item_id.clone(), spec.icon_id.clone())
+                .insert(spec.item_id.clone(), (spec.kind, spec.icon_id.clone()))
                 .is_some()
             {
                 return Err(invalid_data(
@@ -230,18 +279,18 @@ impl PreparedCatalog {
         }
 
         let mut icon_to_png = BTreeMap::new();
-        for icon_id in item_to_icon.values() {
+        for icon in item_to_icon.values() {
             icon_to_png
-                .entry(icon_id.clone())
-                .or_insert_with(|| icon_relative_path(icon_id));
+                .entry(icon.clone())
+                .or_insert_with(|| icon_relative_path(icon.0, &icon.1));
         }
         let item_to_png = item_to_icon
             .iter()
-            .map(|(item_id, icon_id)| {
+            .map(|(item_id, icon)| {
                 (
                     item_id.clone(),
                     icon_to_png
-                        .get(icon_id)
+                        .get(icon)
                         .expect("every validated icon has a cache path")
                         .clone(),
                 )
@@ -251,12 +300,14 @@ impl PreparedCatalog {
         let mut hasher = blake3::Hasher::new();
         hasher.update(b"gore-tex.item-icon-catalog.v1\0");
         hasher.update(&(item_to_icon.len() as u64).to_le_bytes());
-        for (item_id, icon_id) in &item_to_icon {
+        for (item_id, (kind, icon_id)) in &item_to_icon {
             hash_string(&mut hasher, item_id);
+            hasher.update(&[kind.tag()]);
             hash_string(&mut hasher, icon_id);
         }
 
         Ok(Self {
+            item_to_icon,
             item_to_png,
             icon_to_png,
             digest: hasher.finalize().to_hex().to_string(),
@@ -296,11 +347,29 @@ fn hash_string(hasher: &mut blake3::Hasher, value: &str) {
     hasher.update(value.as_bytes());
 }
 
-fn icon_relative_path(icon_id: &str) -> String {
+fn icon_relative_path(kind: IconKind, icon_id: &str) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"gore-tex.item-icon-file.v1\0");
+    hasher.update(&[kind.tag()]);
     hash_string(&mut hasher, icon_id);
     format!("images/{}.png", hasher.finalize().to_hex())
+}
+
+/// Cooked asset paths an icon id resolves to, in the order tried; the first one
+/// the container carries wins. Item icons have a second spelling in the shipped
+/// container. Shared UI glyphs live in the common icon folder, except the
+/// glossary's "no portrait" silhouettes, which sit with the glossary artwork.
+fn icon_asset_paths(kind: IconKind, icon_id: &str) -> Vec<String> {
+    match kind {
+        IconKind::Item => vec![
+            format!("/Game/UI/Textures/ItemIcons/T_ItemIcon_{icon_id}"),
+            format!("/Game/UI/Textures/ItemIcons/T_Itemicon_{icon_id}"),
+        ],
+        IconKind::Ui => vec![
+            format!("/Game/UI/Textures/Common/Icons/{icon_id}"),
+            format!("/Game/UI/Textures/ManagementUI/Glossary/Images/{icon_id}"),
+        ],
+    }
 }
 
 fn generation_directory(cache_root: &Path, build_id: &str, catalog_digest: &str) -> PathBuf {
@@ -444,8 +513,8 @@ fn prepare_item_icon_cache_with_source_and_lease(
     validate_build_id(&build_id_before)?;
     let expected = ExpectedItemIconManifest {
         build_id: build_id_before.clone(),
-        item_count: catalog.item_to_png.len(),
         items: catalog.item_to_png.clone(),
+        optional: catalog.optional_item_ids(),
     };
     let final_directory = generation_directory(cache_root, &build_id_before, &catalog.digest);
     let manifest_path = final_directory.join(MANIFEST_FILE_NAME);
@@ -489,16 +558,29 @@ fn prepare_item_icon_cache_with_source_and_lease(
 
     let mut budget = CacheBudget::default();
     let mut files = BTreeMap::new();
-    for (icon_id, relative_png) in &catalog.icon_to_png {
+    let mut missing_optional: BTreeSet<(IconKind, String)> = BTreeSet::new();
+    for ((kind, icon_id), relative_png) in &catalog.icon_to_png {
         let output = staging.path().join(relative_png);
-        let canonical = format!("/Game/UI/Textures/ItemIcons/T_ItemIcon_{icon_id}");
-        match source.write_png(&canonical, &output) {
-            Ok(()) => {}
-            Err(TexError::AssetNotFound(_)) => {
-                let lower_i = format!("/Game/UI/Textures/ItemIcons/T_Itemicon_{icon_id}");
-                source.write_png(&lower_i, &output)?;
+        let candidates = icon_asset_paths(*kind, icon_id);
+        let last = candidates.len() - 1;
+        let mut written = false;
+        for (index, candidate) in candidates.iter().enumerate() {
+            match source.write_png(candidate, &output) {
+                Ok(()) => {
+                    written = true;
+                    break;
+                }
+                Err(TexError::AssetNotFound(_)) if index < last => continue,
+                // A shared UI glyph the installed build no longer carries is
+                // simply left out of this generation; Save Editor falls back to
+                // its own icon for that label. Item previews stay mandatory.
+                Err(TexError::AssetNotFound(_)) if *kind == IconKind::Ui => break,
+                Err(error) => return Err(error),
             }
-            Err(error) => return Err(error),
+        }
+        if !written {
+            missing_optional.insert((*kind, icon_id.clone()));
+            continue;
         }
         let output_length = std::fs::metadata(&output)?.len();
         let seal = inspect_cached_png(&output, output_length)?.ok_or_else(|| {
@@ -512,11 +594,22 @@ fn prepare_item_icon_cache_with_source_and_lease(
         files.insert(relative_png.clone(), seal);
     }
 
+    let items: BTreeMap<String, String> = catalog
+        .item_to_icon
+        .iter()
+        .filter(|(_, icon)| !missing_optional.contains(*icon))
+        .map(|(item_id, icon)| {
+            (
+                item_id.clone(),
+                catalog.icon_to_png[icon].clone(),
+            )
+        })
+        .collect();
     let manifest = ItemIconManifest {
         schema: ITEM_ICON_CACHE_SCHEMA,
         build_id: expected.build_id.clone(),
-        item_count: expected.item_count,
-        items: expected.items.clone(),
+        item_count: items.len(),
+        items,
         files,
     };
     write_manifest(staging.path(), &manifest)?;
@@ -647,10 +740,22 @@ fn complete_cache_matches(directory: &Path, expected: &ExpectedItemIconManifest)
     };
     if manifest.schema != ITEM_ICON_CACHE_SCHEMA
         || manifest.build_id != expected.build_id
-        || manifest.item_count != expected.item_count
-        || manifest.items != expected.items
+        || manifest.item_count != manifest.items.len()
     {
         return Ok(false);
+    }
+    // Every published entry must be one this catalog asked for, at exactly the
+    // path it asked for; every mandatory entry must be present. Optional UI
+    // glyphs the installed build did not carry are legitimately absent.
+    for (item_id, relative) in &manifest.items {
+        if expected.items.get(item_id) != Some(relative) {
+            return Ok(false);
+        }
+    }
+    for item_id in expected.items.keys() {
+        if !manifest.items.contains_key(item_id) && !expected.optional.contains(item_id) {
+            return Ok(false);
+        }
     }
 
     let unique_paths: BTreeSet<_> = manifest.items.values().map(String::as_str).collect();
@@ -701,10 +806,12 @@ fn complete_cache_is_owned(directory: &Path) -> Result<bool> {
     let Some(manifest) = structurally_complete_owned_manifest(directory)? else {
         return Ok(false);
     };
+    // Self-check: the manifest on disk is its own expectation, so nothing is
+    // optional here — the published set must be exactly what it claims.
     let expected = ExpectedItemIconManifest {
         build_id: manifest.build_id,
-        item_count: manifest.item_count,
         items: manifest.items,
+        optional: BTreeSet::new(),
     };
     complete_cache_matches(directory, &expected)
 }
@@ -1771,6 +1878,170 @@ mod tests {
         for relative in manifest.items.values() {
             assert!(manifest_path.parent().unwrap().join(relative).is_file());
         }
+    }
+
+    #[test]
+    fn ui_glyphs_take_the_common_icon_folder_before_the_glossary_one() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut source = FakeSource::stable("build-a");
+        let mut specs = specs();
+        specs.push(ItemIconSpec::ui("ui:T_Icon_Mana", "T_Icon_Mana"));
+        // Only the glossary folder carries the "no portrait" silhouette.
+        source.missing.insert(
+            "/Game/UI/Textures/Common/Icons/T_CharacterImageSmall_Missing".to_string(),
+        );
+        specs.push(ItemIconSpec::ui(
+            "ui:T_CharacterImageSmall_Missing",
+            "T_CharacterImageSmall_Missing",
+        ));
+
+        let manifest_path =
+            prepare_item_icon_cache_with_source(temp.path(), &specs, &mut source).unwrap();
+        assert!(
+            source
+                .calls
+                .contains(&"/Game/UI/Textures/Common/Icons/T_Icon_Mana".to_string()),
+            "the common folder is tried first: {:?}",
+            source.calls
+        );
+        assert!(
+            source.calls.contains(
+                &"/Game/UI/Textures/ManagementUI/Glossary/Images/T_CharacterImageSmall_Missing"
+                    .to_string()
+            ),
+            "a glyph the common folder lacks falls through to the glossary one: {:?}",
+            source.calls
+        );
+
+        let manifest: ItemIconManifest =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        assert_eq!(manifest.item_count, 5);
+        for key in ["ui:T_Icon_Mana", "ui:T_CharacterImageSmall_Missing"] {
+            assert!(
+                manifest_path
+                    .parent()
+                    .unwrap()
+                    .join(&manifest.items[key])
+                    .is_file(),
+                "{key} has no PNG"
+            );
+        }
+    }
+
+    /// An item icon and a UI glyph may share a suffix; they must still be two
+    /// separate cached files, because they come from two different textures.
+    #[test]
+    fn identical_suffixes_in_both_folders_stay_separate_images() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut source = FakeSource::stable("build-a");
+        let specs = vec![
+            ItemIconSpec::new("ItAt_Claws", "Claws"),
+            ItemIconSpec::ui("ui:Claws", "Claws"),
+        ];
+
+        let manifest_path =
+            prepare_item_icon_cache_with_source(temp.path(), &specs, &mut source).unwrap();
+        let manifest: ItemIconManifest =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        assert_ne!(manifest.items["ItAt_Claws"], manifest.items["ui:Claws"]);
+        assert_eq!(manifest.files.len(), 2);
+    }
+
+    #[test]
+    fn a_missing_ui_glyph_is_omitted_while_a_missing_item_icon_still_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut source = FakeSource::stable("build-a");
+        // Absent from BOTH folders a UI glyph may live in.
+        for folder in [
+            "/Game/UI/Textures/Common/Icons",
+            "/Game/UI/Textures/ManagementUI/Glossary/Images",
+        ] {
+            source.missing.insert(format!("{folder}/T_Icon_Gone"));
+        }
+        let mut specs = specs();
+        specs.push(ItemIconSpec::ui("ui:T_Icon_Gone", "T_Icon_Gone"));
+        specs.push(ItemIconSpec::ui("ui:T_Icon_Mana", "T_Icon_Mana"));
+
+        let manifest_path =
+            prepare_item_icon_cache_with_source(temp.path(), &specs, &mut source).unwrap();
+        let manifest: ItemIconManifest =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        assert_eq!(manifest.item_count, 4);
+        assert!(!manifest.items.contains_key("ui:T_Icon_Gone"));
+        assert!(manifest.items.contains_key("ui:T_Icon_Mana"));
+        assert!(manifest.items.contains_key("ItFo_Three"));
+
+        // The published generation is complete on its own terms, so a second
+        // run reuses it instead of extracting the whole catalog again.
+        let mut second = FakeSource::stable("build-a");
+        let reused = prepare_item_icon_cache_with_source(temp.path(), &specs, &mut second).unwrap();
+        assert_eq!(reused, manifest_path);
+        assert!(second.calls.is_empty());
+
+        // A missing ITEM icon is still fatal: those are the previews the editor
+        // is built around, and a stale catalog must be visible, not silent.
+        let items_only = tempfile::tempdir().unwrap();
+        let mut strict = FakeSource::stable("build-a");
+        strict
+            .missing
+            .insert("/Game/UI/Textures/ItemIcons/T_ItemIcon_Food".to_string());
+        strict
+            .missing
+            .insert("/Game/UI/Textures/ItemIcons/T_Itemicon_Food".to_string());
+        let error = prepare_item_icon_cache_with_source(items_only.path(), &specs, &mut strict)
+            .unwrap_err();
+        assert!(matches!(error, TexError::AssetNotFound(_)));
+        assert!(published_generations(items_only.path()).is_empty());
+    }
+
+    /// Proves against the shipped container that the shared glyph folder is
+    /// reachable through the same batch that extracts the item previews — the
+    /// unit tests above only prove the path the source is asked for.
+    #[test]
+    #[ignore = "requires a local Gothic 1 Remake installation"]
+    fn real_installation_yields_the_shared_ui_glyphs() {
+        let game = std::env::var_os("GORE_REAL_GAME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(r"C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake")
+            });
+        let temp = tempfile::tempdir().unwrap();
+        let utoc = crate::paths::main_container(&game).unwrap();
+        let mut source = InstalledItemIconSource::open(&utoc, temp.path()).unwrap();
+        let specs = vec![
+            ItemIconSpec::new("ItFo_Apple", "ItFo_Apple"),
+            ItemIconSpec::ui("ui:T_Icon_Mana", "T_Icon_Mana"),
+            ItemIconSpec::ui("ui:T_Icon_Resistance_Fire", "T_Icon_Resistance_Fire"),
+            ItemIconSpec::ui("ui:T_Icon_Melee", "T_Icon_Melee"),
+            // Lives with the glossary artwork, not in the common icon folder.
+            ItemIconSpec::ui(
+                "ui:T_CharacterImageSmall_Missing",
+                "T_CharacterImageSmall_Missing",
+            ),
+            // A name the shipped folder does not carry: it must be dropped, not
+            // fail the batch that also holds the item preview.
+            ItemIconSpec::ui("ui:T_Icon_NotAThing", "T_Icon_NotAThing"),
+        ];
+
+        let manifest_path =
+            prepare_item_icon_cache_with_source(temp.path(), &specs, &mut source).unwrap();
+        let manifest: ItemIconManifest =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        let directory = manifest_path.parent().unwrap();
+        for key in [
+            "ItFo_Apple",
+            "ui:T_Icon_Mana",
+            "ui:T_Icon_Resistance_Fire",
+            "ui:T_Icon_Melee",
+            "ui:T_CharacterImageSmall_Missing",
+        ] {
+            let relative = manifest
+                .items
+                .get(key)
+                .unwrap_or_else(|| panic!("{key} is missing from the manifest"));
+            assert!(directory.join(relative).is_file(), "{key} has no PNG");
+        }
+        assert!(!manifest.items.contains_key("ui:T_Icon_NotAThing"));
     }
 
     #[test]

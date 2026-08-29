@@ -4,13 +4,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/actor.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
+import 'package:goresave/features/editor/domain/game_icons.dart';
 import 'package:goresave/features/editor/domain/item_categories.dart';
+import 'package:goresave/features/editor/domain/item_stats.dart';
 import 'package:goresave/features/editor/domain/trader_models.dart';
 import 'package:goresave/features/editor/ui/add_inventory_item_dialog.dart';
 import 'package:goresave/features/editor/ui/inventory_item_visual.dart';
+import 'package:goresave/features/editor/ui/item_stats_tooltip.dart';
 import 'package:goresave/features/editor/ui/pending_structural_row.dart';
 import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 import 'package:goresave/l10n/app_localizations.dart';
+import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
 import 'package:goresave/providers/data_providers.dart';
 
@@ -692,7 +696,24 @@ class _StockSection extends ConsumerWidget {
     final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
     String nameOf(TraderItem item) =>
         localizedGameName(locCatalog, lang, item.id) ?? item.id;
-    final groups = _grouped(items, displayNameOf: nameOf);
+    // The trader's stock is inventory too, so it is filed by the same tabs the
+    // game's own inventory rail uses.
+    final itemStats = ref.watch(itemStatsCatalogProvider).value;
+    final groups = _grouped(items, displayNameOf: nameOf, stats: itemStats);
+    // The game's own "All" filter is not a category — it collects everything —
+    // so it is deliberately absent here.
+    final filtersById = <ItemCategory, InventoryFilter>{
+      for (final filter in itemStats?.filters ?? const <InventoryFilter>[])
+        ?itemCategoryFromFilterId(filter.id): filter,
+    };
+    String categoryLabel(ItemCategory category) {
+      final key = filtersById[category]?.nameKey ?? '';
+      final fromGame = key.isEmpty
+          ? null
+          : resolveGameText(locCatalog, key, lang);
+      return fromGame ?? localizedItemCategoryLabel(l10n, category);
+    }
+
     // The compact pane has no sidebar, so it lists every line at once. The core
     // hands them over in class-id order, which in most languages is not the
     // order of the names on screen — sort them the way the groups are sorted.
@@ -803,11 +824,13 @@ class _StockSection extends ConsumerWidget {
                                   for (final group in groups)
                                     SidebarTile(
                                       icon: iconForItemCategory(group.category),
+                                      gameIcon:
+                                          filtersById[group.category]?.icon ??
+                                          gameIconForItemCategory(
+                                            group.category,
+                                          ),
                                       label: l10n.categoryWithCount(
-                                        localizedItemCategoryLabel(
-                                          l10n,
-                                          group.category,
-                                        ),
+                                        categoryLabel(group.category),
                                         group.items.length,
                                       ),
                                       selected: group.category == selected,
@@ -882,10 +905,13 @@ int Function(TraderItem, TraderItem) _byDisplayName(
 List<_StockGroup> _grouped(
   List<TraderItem> items, {
   required String Function(TraderItem item) displayNameOf,
+  ItemStatsCatalog? stats,
 }) {
   final byCategory = <ItemCategory, List<TraderItem>>{};
   for (final item in items) {
-    byCategory.putIfAbsent(itemCategoryFromId(item.id), () => []).add(item);
+    byCategory
+        .putIfAbsent(itemCategoryFor(item.id, stats: stats), () => [])
+        .add(item);
   }
   final compare = _byDisplayName(displayNameOf);
 
@@ -1009,48 +1035,66 @@ class _StockRow extends ConsumerWidget {
       ],
     );
 
+    // Hovering a row shows what the game shows when the player hovers the item,
+    // the same card the inventory rows carry. Ore is the shop's buying power
+    // rather than a stocked item, so it has no card.
+    Widget hoverable(Widget row) => item.isOre
+        ? row
+        : ItemStatsTooltip(itemId: item.id, title: label, child: row);
+
     return LayoutBuilder(
       builder: (context, box) {
         // A ListTile keeps its trailing at full width, and the field plus the
         // delete button want ~180px — more than the whole row gets at the
         // smallest supported window. There the value moves under the name.
         if (box.maxWidth >= _rowStackBelow) {
-          return ListTile(
-            dense: true,
-            leading: icon,
-            title: Text(label),
-            subtitle: subtitle.isEmpty
-                ? null
-                : Text(subtitle, style: theme.textTheme.bodySmall),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                SizedBox(width: 130, child: field),
-                ?delete,
-              ],
-            ),
-          );
-        }
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+          return hoverable(
+            ListTile(
+              dense: true,
+              // Matched to the inventory rows: the count editor is a 48px
+              // control, and dropping the tile's own vertical padding keeps
+              // neighbouring rows compact without shrinking it.
+              minTileHeight: 48,
+              minVerticalPadding: 0,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+              horizontalTitleGap: 8,
+              leading: icon,
+              title: Text(label),
+              subtitle: subtitle.isEmpty
+                  ? null
+                  : Text(subtitle, style: theme.textTheme.bodySmall),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  icon,
-                  const SizedBox(width: 12),
-                  Expanded(child: text),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(child: field),
+                  SizedBox(width: 132, child: field),
                   ?delete,
                 ],
               ),
-            ],
+            ),
+          );
+        }
+        return hoverable(
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    icon,
+                    const SizedBox(width: 12),
+                    Expanded(child: text),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(child: field),
+                    ?delete,
+                  ],
+                ),
+              ],
+            ),
           ),
         );
       },
@@ -1190,25 +1234,30 @@ class _CountFieldState extends State<_CountField> {
   @override
   Widget build(BuildContext context) {
     final dirty = widget.pending != null && widget.pending != widget.value;
-    return TextField(
-      controller: _controller,
-      focusNode: _focus,
-      enabled: widget.enabled,
-      keyboardType: TextInputType.number,
-      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-      textAlign: TextAlign.end,
-      decoration: InputDecoration(
-        isDense: true,
-        border: const OutlineInputBorder(),
-        errorText: _error,
-        suffixIcon: dirty
-            ? IconButton(
-                icon: const Icon(Icons.undo, size: 16),
-                onPressed: _undo,
-              )
-            : null,
+    // The same field the inventory rows carry: named, theme-bordered and left
+    // aligned. A stock count and an inventory count are the same kind of
+    // number, and the two lists sit one tab apart.
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 48),
+      child: TextField(
+        controller: _controller,
+        focusNode: _focus,
+        enabled: widget.enabled,
+        keyboardType: TextInputType.number,
+        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+        decoration: InputDecoration(
+          labelText: AppLocalizations.of(context).count,
+          isDense: true,
+          errorText: _error,
+          suffixIcon: dirty
+              ? IconButton(
+                  icon: const Icon(Icons.undo, size: 16),
+                  onPressed: _undo,
+                )
+              : null,
+        ),
+        onChanged: _onChanged,
       ),
-      onChanged: _onChanged,
     );
   }
 }

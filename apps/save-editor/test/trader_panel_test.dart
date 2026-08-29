@@ -236,7 +236,6 @@ void main() {
   });
 
   group('trader edit conflicts', () {
-
     test('a trader edit and an m_Traders splice conflict either way', () {
       const traderEdit = TraderStockEdit(
         kind: TraderEditKind.setStock,
@@ -419,10 +418,12 @@ void main() {
       expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
 
       // Cancelling it takes the banner away again.
-      await tester.tap(find.descendant(
-        of: find.byType(PendingStructuralRow),
-        matching: find.byIcon(Icons.close),
-      ));
+      await tester.tap(
+        find.descendant(
+          of: find.byType(PendingStructuralRow),
+          matching: find.byIcon(Icons.close),
+        ),
+      );
       await tester.pumpAndSettle();
       expect(find.byType(PendingStructuralRow), findsNothing);
       expect(find.text('ItFo_Cheese'), findsNothing);
@@ -469,7 +470,9 @@ void main() {
         reason: 'the save must actually go out',
       );
       expect(
-        core.requests.where((r) => r.command == 'private.traders.detail').length,
+        core.requests
+            .where((r) => r.command == 'private.traders.detail')
+            .length,
         greaterThan(before),
         reason: 'the panel must re-read after the save',
       );
@@ -519,40 +522,41 @@ void main() {
       }
     });
 
-    testWidgets('a queued addition prints its class path only when ids are on', (
-      tester,
-    ) async {
-      Future<void> queueAdd(WidgetTester tester) async {
-        await tester.tap(find.widgetWithText(Tab, 'Characters'));
-        await tester.pumpAndSettle();
-        await tester.tap(detailTab('Trade'));
-        await tester.pumpAndSettle();
-        ProviderScope.containerOf(tester.element(find.byType(Scaffold).first))
-            .read(editorProvider.notifier)
-            .setTraderStockEdit(
-              const TraderStockEdit(
-                kind: TraderEditKind.addItem,
-                index: 7,
-                map: TraderStockMap.current,
-                path: '/Script/Angelscript.ItFo_Cheese',
-                count: 1,
-              ),
-            );
-        await tester.pumpAndSettle();
-      }
+    testWidgets(
+      'a queued addition prints its class path only when ids are on',
+      (tester) async {
+        Future<void> queueAdd(WidgetTester tester) async {
+          await tester.tap(find.widgetWithText(Tab, 'Characters'));
+          await tester.pumpAndSettle();
+          await tester.tap(detailTab('Trade'));
+          await tester.pumpAndSettle();
+          ProviderScope.containerOf(tester.element(find.byType(Scaffold).first))
+              .read(editorProvider.notifier)
+              .setTraderStockEdit(
+                const TraderStockEdit(
+                  kind: TraderEditKind.addItem,
+                  index: 7,
+                  map: TraderStockMap.current,
+                  path: '/Script/Angelscript.ItFo_Cheese',
+                  count: 1,
+                ),
+              );
+          await tester.pumpAndSettle();
+        }
 
-      await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
-      await queueAdd(tester);
-      expect(find.text('/Script/Angelscript.ItFo_Cheese'), findsNothing);
+        await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
+        await queueAdd(tester);
+        expect(find.text('/Script/Angelscript.ItFo_Cheese'), findsNothing);
 
-      await pumpApp(
-        tester,
-        _TraderCoreService(playerIsTrader: true),
-        showObjectIds: true,
-      );
-      await queueAdd(tester);
-      expect(find.text('/Script/Angelscript.ItFo_Cheese'), findsOneWidget);
-    });
+        await pumpApp(
+          tester,
+          _TraderCoreService(playerIsTrader: true),
+          showObjectIds: true,
+        );
+        await queueAdd(tester);
+        expect(find.text('/Script/Angelscript.ItFo_Cheese'), findsOneWidget);
+      },
+    );
 
     testWidgets('stock is grouped by category and the sidebar filters it', (
       tester,
@@ -566,15 +570,15 @@ void main() {
       // One sidebar entry per populated category, counted. Ore is not among
       // them: in the live stock it has its own card, so it leaves the list.
       expect(find.text('Melee weapons (1)'), findsOneWidget);
-      expect(find.text('Ammunition (1)'), findsOneWidget);
-      expect(find.text('Food & potions (2)'), findsOneWidget);
+      expect(find.text('Ranged weapons (1)'), findsOneWidget);
+      expect(find.text('Food (2)'), findsOneWidget);
       expect(find.textContaining('Miscellaneous'), findsNothing);
 
       // The list shows the selected category only — melee comes first.
       expect(find.text('ItMw_1H_Sword_01'), findsOneWidget);
       expect(find.text('ItFo_Loaf'), findsNothing);
 
-      await tester.tap(find.text('Food & potions (2)'));
+      await tester.tap(find.text('Food (2)'));
       await tester.pumpAndSettle();
       expect(find.text('ItFo_Loaf'), findsOneWidget);
       expect(find.text('ItFo_Apple'), findsOneWidget);
@@ -599,7 +603,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Food & potions (2)'));
+      await tester.tap(find.text('Food (2)'));
       await tester.pumpAndSettle();
 
       final bread = tester.getTopLeft(find.text('Bread')).dy;
@@ -659,8 +663,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(fieldTexts(), containsAll(<String>['55', '1']));
 
-      // Ammunition holds one arrow stack of 18 at the same list position.
-      await tester.tap(find.text('Ammunition (1)'));
+      // Ranged holds one arrow stack of 18 at the same list position.
+      await tester.tap(find.text('Ranged weapons (1)'));
       await tester.pumpAndSettle();
       expect(fieldTexts(), containsAll(<String>['55', '18']));
       expect(
@@ -686,11 +690,17 @@ void main() {
         tester.element(find.byType(Scaffold).first),
       );
       await tester.tap(
-        find.descendant(of: oreCard, matching: find.byIcon(Icons.delete_outline)),
+        find.descendant(
+          of: oreCard,
+          matching: find.byIcon(Icons.delete_outline),
+        ),
       );
       await tester.pumpAndSettle();
 
-      final queued = container.read(editorProvider).pendingEdits.values
+      final queued = container
+          .read(editorProvider)
+          .pendingEdits
+          .values
           .expand((p) => p.edits)
           .where((e) => e['path'] == 'private.traders.removeItem')
           .toList();
@@ -709,7 +719,10 @@ void main() {
       await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
-      final field = find.descendant(of: oreCard, matching: find.byType(TextField));
+      final field = find.descendant(
+        of: oreCard,
+        matching: find.byType(TextField),
+      );
       await tester.enterText(field, '2147483648');
       await tester.pump();
 
@@ -718,9 +731,9 @@ void main() {
       // typed: snapping it back under the cursor would fight the typing.
       expect(find.textContaining('2147483647'), findsOneWidget);
       expect(
-        ProviderScope.containerOf(tester.element(find.byType(Scaffold).first))
-            .read(editorProvider)
-            .pendingEdits,
+        ProviderScope.containerOf(
+          tester.element(find.byType(Scaffold).first),
+        ).read(editorProvider).pendingEdits,
         isEmpty,
       );
     });
@@ -818,25 +831,24 @@ void main() {
       expect(tester.takeException(), isNull, reason: 'no RenderFlex overflow');
     });
 
-    testWidgets('a knowledge-only merchant is badged like any other', (
+    testWidgets('a merchant with no in-world actor is not listed', (
       tester,
     ) async {
-      // A trader row is keyed by name, so a row with no spawned actor can own
-      // one. The orphan tile drew its own trailing and showed only the
-      // knowledge icon, hiding exactly the merchants the core had started to
-      // flag.
+      // A trader row is keyed by name, so a row with no spawned actor could in
+      // principle own one — but no real save has ever carried such a row, and
+      // characters that never spawned are out of the list entirely.
       await pumpApp(tester, _TraderCoreService(orphanMerchant: true));
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
 
       // Scoped to the list: the Trade sub-tab carries the same icon, so an
-      // unscoped finder passes with or without the badge.
+      // unscoped finder would pass either way.
       expect(
         find.descendant(
           of: find.byType(CharacterMasterList),
           matching: find.byIcon(Icons.storefront_outlined),
         ),
-        findsOneWidget,
+        findsNothing,
       );
     });
 
@@ -852,13 +864,20 @@ void main() {
       await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
-      final field = find.descendant(of: oreCard, matching: find.byType(TextField));
+      final field = find.descendant(
+        of: oreCard,
+        matching: find.byType(TextField),
+      );
       await tester.enterText(field, '4242');
       await tester.pump();
 
-      final pending = ProviderScope.containerOf(
-        tester.element(find.byType(Scaffold).first),
-      ).read(editorProvider).pendingEdits.values.expand((p) => p.edits).toList();
+      final pending =
+          ProviderScope.containerOf(tester.element(find.byType(Scaffold).first))
+              .read(editorProvider)
+              .pendingEdits
+              .values
+              .expand((p) => p.edits)
+              .toList();
       expect(pending, hasLength(1));
       expect((pending.single['value'] as Map)['count'], 4242);
 
@@ -866,9 +885,9 @@ void main() {
       await tester.enterText(field, '55');
       await tester.pump();
       expect(
-        ProviderScope.containerOf(tester.element(find.byType(Scaffold).first))
-            .read(editorProvider)
-            .pendingEdits,
+        ProviderScope.containerOf(
+          tester.element(find.byType(Scaffold).first),
+        ).read(editorProvider).pendingEdits,
         isEmpty,
       );
     });
@@ -885,7 +904,10 @@ void main() {
       await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
-      final field = find.descendant(of: oreCard, matching: find.byType(TextField));
+      final field = find.descendant(
+        of: oreCard,
+        matching: find.byType(TextField),
+      );
       await tester.tap(field);
       await tester.pump();
       await tester.enterText(field, '12');
@@ -896,9 +918,9 @@ void main() {
       expect(tester.widget<TextField>(field).controller?.text, isEmpty);
       // And an empty field queues nothing rather than a zero.
       expect(
-        ProviderScope.containerOf(tester.element(find.byType(Scaffold).first))
-            .read(editorProvider)
-            .pendingEdits,
+        ProviderScope.containerOf(
+          tester.element(find.byType(Scaffold).first),
+        ).read(editorProvider).pendingEdits,
         isEmpty,
       );
     });
@@ -915,7 +937,10 @@ void main() {
       await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
-      final field = find.descendant(of: oreCard, matching: find.byType(TextField));
+      final field = find.descendant(
+        of: oreCard,
+        matching: find.byType(TextField),
+      );
       await tester.tap(field);
       await tester.pump();
       await tester.enterText(field, '');
@@ -927,9 +952,9 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.widget<TextField>(field).controller?.text, '55');
       expect(
-        ProviderScope.containerOf(tester.element(find.byType(Scaffold).first))
-            .read(editorProvider)
-            .pendingEdits,
+        ProviderScope.containerOf(
+          tester.element(find.byType(Scaffold).first),
+        ).read(editorProvider).pendingEdits,
         isEmpty,
       );
     });
@@ -950,7 +975,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Food & potions (2)'));
+      await tester.tap(find.text('Food (2)'));
       await tester.pumpAndSettle();
 
       const loaf = '/Script/Angelscript.ItFo_Loaf';
@@ -976,7 +1001,7 @@ void main() {
 
       await tester.tap(find.text('Restock baseline'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Food & potions (1)'));
+      await tester.tap(find.text('Food (1)'));
       await tester.pumpAndSettle();
 
       // A distinct key, so the row cannot inherit the other map's field state.
@@ -1068,21 +1093,29 @@ void main() {
       await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
-      final field = find.descendant(of: oreCard, matching: find.byType(TextField));
+      final field = find.descendant(
+        of: oreCard,
+        matching: find.byType(TextField),
+      );
       await tester.tap(field);
       await tester.pump();
       await tester.enterText(field, '4242');
       await tester.pump();
-      expect(find.descendant(of: oreCard, matching: find.byIcon(Icons.undo)), findsOneWidget);
+      expect(
+        find.descendant(of: oreCard, matching: find.byIcon(Icons.undo)),
+        findsOneWidget,
+      );
 
-      await tester.tap(find.descendant(of: oreCard, matching: find.byIcon(Icons.undo)));
+      await tester.tap(
+        find.descendant(of: oreCard, matching: find.byIcon(Icons.undo)),
+      );
       await tester.pump();
 
       expect(tester.widget<TextField>(field).controller?.text, '55');
       expect(
-        ProviderScope.containerOf(tester.element(find.byType(Scaffold).first))
-            .read(editorProvider)
-            .pendingEdits,
+        ProviderScope.containerOf(
+          tester.element(find.byType(Scaffold).first),
+        ).read(editorProvider).pendingEdits,
         isEmpty,
       );
     });
@@ -1115,7 +1148,10 @@ void main() {
       // filtered list is empty while the map is not. Reading "nothing in stock"
       // off the filtered list contradicted both the line count and the purse
       // shown right above it.
-      await pumpApp(tester, _TraderCoreService(playerIsTrader: true, oreOnly: true));
+      await pumpApp(
+        tester,
+        _TraderCoreService(playerIsTrader: true, oreOnly: true),
+      );
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
       await tester.tap(detailTab('Trade'));
@@ -1411,30 +1447,30 @@ class _TraderCoreService implements GoresaveCoreService {
                 'unknownItem': false,
               },
               if (!oreOnly) ...[
-              {
-                'path': '/Script/Angelscript.ItFo_Loaf',
-                'id': 'ItFo_Loaf',
-                'count': 3,
-                'unknownItem': false,
-              },
-              {
-                'path': '/Script/Angelscript.ItFo_Apple',
-                'id': 'ItFo_Apple',
-                'count': 7,
-                'unknownItem': false,
-              },
-              {
-                'path': '/Script/Angelscript.ItMw_1H_Sword_01',
-                'id': 'ItMw_1H_Sword_01',
-                'count': 1,
-                'unknownItem': false,
-              },
-              {
-                'path': '/Script/Angelscript.ItAm_Arrow',
-                'id': 'ItAm_Arrow',
-                'count': 18,
-                'unknownItem': false,
-              },
+                {
+                  'path': '/Script/Angelscript.ItFo_Loaf',
+                  'id': 'ItFo_Loaf',
+                  'count': 3,
+                  'unknownItem': false,
+                },
+                {
+                  'path': '/Script/Angelscript.ItFo_Apple',
+                  'id': 'ItFo_Apple',
+                  'count': 7,
+                  'unknownItem': false,
+                },
+                {
+                  'path': '/Script/Angelscript.ItMw_1H_Sword_01',
+                  'id': 'ItMw_1H_Sword_01',
+                  'count': 1,
+                  'unknownItem': false,
+                },
+                {
+                  'path': '/Script/Angelscript.ItAm_Arrow',
+                  'id': 'ItAm_Arrow',
+                  'count': 18,
+                  'unknownItem': false,
+                },
               ],
             ],
             'defaultItems': [

@@ -33,6 +33,22 @@ pub enum TextureAction {
         #[arg(long)]
         json: bool,
     },
+    /// List the game's LOOSE story images (glossary portraits, tutorial pictures,
+    /// writings, loading-screen art). These are plain PNG/JPG files under
+    /// G1R/Story/Conversation/images, not container assets — `list` will never
+    /// show them
+    StoryImages {
+        /// Path to the game install dir (contains G1R/Content/Paks/…)
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// Keep only paths containing this substring (case-insensitive), e.g.
+        /// `Glossary/Creatures`
+        #[arg(long)]
+        filter: Option<String>,
+        /// Print the absolute file path instead of the name below the images dir
+        #[arg(long)]
+        absolute: bool,
+    },
     /// Extract a texture's top mip to a PNG
     Extract {
         /// Path to the game install dir (contains G1R/Content/Paks/…)
@@ -361,6 +377,28 @@ pub fn run(action: TextureAction) -> Result<()> {
             for e in gore_tex::container::list_textures(&utoc, &usmap, filter.as_deref())? {
                 println!("{}", e.asset_path);
             }
+            Ok(())
+        }
+        TextureAction::StoryImages {
+            game,
+            filter,
+            absolute,
+        } => {
+            let game = gore_loc::config::game_root(game)?;
+            let images = gore_tex::story_images::list_story_images(&game, filter.as_deref())?;
+            for image in &images {
+                if absolute {
+                    println!("{}", image.path.display());
+                } else {
+                    println!("{}", image.relative_path);
+                }
+            }
+            eprintln!(
+                "{} loose story images under {}/{}",
+                images.len(),
+                game.display(),
+                gore_tex::story_images::STORY_IMAGE_DIRECTORY
+            );
             Ok(())
         }
         TextureAction::Paklist {

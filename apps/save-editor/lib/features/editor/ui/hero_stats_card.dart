@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:goresave/features/editor/domain/game_icons.dart';
+import 'package:goresave/features/editor/ui/game_icon.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 
 import '../domain/hero_attributes.dart';
@@ -389,6 +391,7 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
             id: entry,
             label: _entryLabel(AppLocalizations.of(context), entry),
             icon: _entryIcon(entry),
+            gameIcon: _entryGameIcon(entry),
             detail: detailFor(entry),
           ),
       ],
@@ -425,6 +428,12 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
     };
   }
 
+  /// The glyph the game itself uses for this group of values.
+  String? _entryGameIcon(_SidebarEntry entry) {
+    final group = _entryToGroup(entry);
+    return group == null ? null : gameIconForAttributeGroup(group);
+  }
+
   IconData _entryIcon(_SidebarEntry entry) {
     return switch (entry) {
       _SidebarEntry.core => Icons.favorite_border,
@@ -443,6 +452,7 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
     final tooltip =
         widget.attributeTooltip?.call(attribute.id, attribute.setClass) ?? '';
     return _HeroAttributeRow(
+      gameIcon: gameIconForAttribute(attribute.id, attribute.setClass),
       // Record key compares reloadKey by its own equality (identity for
       // SaveInspection, which has no == override), not by toString(), so a
       // fresh SaveInspection instance always causes a new row to be built
@@ -508,6 +518,7 @@ class _HeroAttributeRow extends StatefulWidget {
     required this.attribute,
     required this.label,
     this.tooltip = '',
+    this.gameIcon,
     required this.editable,
     required this.onBaseChanged,
     required this.onCurrentChanged,
@@ -520,6 +531,9 @@ class _HeroAttributeRow extends StatefulWidget {
 
   /// One sentence on what this value does in the game. Empty = no tooltip.
   final String tooltip;
+
+  /// The glyph the game puts in front of this value, when it has one.
+  final String? gameIcon;
   final bool editable;
   final ValueChanged<String> onBaseChanged;
   final ValueChanged<String> onCurrentChanged;
@@ -599,19 +613,18 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
             ),
           );
           // The label carries the explanation of what the value does in the
-          // game; rows we have nothing to say about stay plain text.
+          // game; rows we have nothing to say about stay plain text. The glyph
+          // in front is the game's own, with the ◆ it marks an unadorned value
+          // with as the fallback.
+          final labelStyle = Theme.of(context).textTheme.labelLarge;
+          final Widget labelText = GameIconLabel(
+            label: widget.label,
+            iconName: widget.gameIcon,
+            style: labelStyle,
+          );
           final Widget rowLabel = widget.tooltip.isEmpty
-              ? Text(
-                  widget.label,
-                  style: Theme.of(context).textTheme.labelLarge,
-                )
-              : Tooltip(
-                  message: widget.tooltip,
-                  child: Text(
-                    widget.label,
-                    style: Theme.of(context).textTheme.labelLarge,
-                  ),
-                );
+              ? labelText
+              : Tooltip(message: widget.tooltip, child: labelText);
           if (compact) {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,

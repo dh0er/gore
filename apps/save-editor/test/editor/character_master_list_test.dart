@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:goresave/features/editor/domain/game_icons.dart';
+import 'package:goresave/features/editor/ui/game_icon.dart';
+import 'package:goresave/features/editor/ui/glossary_portrait.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -66,7 +69,7 @@ void main() {
   // 'NC_', so nothing is stripped from the front).
   const laresDisplay = 'Nc Org Lares';
 
-  testWidgets('renders Player, an NPC row, and the Weitere orphan group', (
+  testWidgets('renders Player and the actors, never one that never spawned', (
     tester,
   ) async {
     const page = CharacterIndexPage(
@@ -117,8 +120,10 @@ void main() {
 
     // Player pinned on top (German label).
     expect(find.text('Spieler'), findsOneWidget);
-    // Weitere group present because there's an orphan.
-    expect(find.text('Weitere'), findsOneWidget);
+    // The knowledge-only character has no actor in the world, so it is not
+    // listed at all — neither a row nor the group header that used to carry it.
+    expect(find.text('Weitere'), findsNothing);
+    expect(find.text('St Vlk Mud Sleeper'), findsNothing);
 
     // Tap the actor row (found by its resolved, prettified display name).
     await tester.tap(find.text(laresDisplay));
@@ -126,14 +131,6 @@ void main() {
     expect(picked?.id, 'NC_ORG_Lares_801-WP_X');
     expect(picked?.uniqueName, 'NC_ORG_Lares_801');
     expect(picked?.isOrphan, isFalse);
-
-    // Tap the orphan row → an orphan actor carrying the uniqueName.
-    // 'ST_VLK_Mud_Sleeper' has no '-', prefix 'ST_' is not stripped → the whole
-    // key humanizes to 'St Vlk Mud Sleeper'.
-    await tester.tap(find.text('St Vlk Mud Sleeper'));
-    await tester.pumpAndSettle();
-    expect(picked!.isOrphan, isTrue);
-    expect(picked!.uniqueName, 'ST_VLK_Mud_Sleeper');
   });
 
   // ---------------------------------------------------------------------------
@@ -168,13 +165,12 @@ void main() {
       await tester.pumpWidget(_pump(load: () async => page));
       await tester.pumpAndSettle();
 
-      // Pinned Player + the normal NPC + the orphan are all present.
+      // Pinned Player + the normal NPC. The knowledge-only character never
+      // spawned, so it is absent along with the group that used to hold it.
       expect(find.text('Player'), findsOneWidget);
       expect(find.text('Lizard'), findsOneWidget);
-      expect(find.text('St Vlk Mud Sleeper'), findsOneWidget);
-      // English-locale harness → the orphan group header is the localized
-      // 'Other' (the German suite above pins 'Weitere' for the same header).
-      expect(find.text('Other'), findsOneWidget);
+      expect(find.text('St Vlk Mud Sleeper'), findsNothing);
+      expect(find.text('Other'), findsNothing);
       // No 'Hero' NPC row: neither its resolved title nor its id subtitle
       // render (both would be the text 'Hero').
       expect(find.text('Hero'), findsNothing);
@@ -214,9 +210,7 @@ void main() {
     expect(find.text('Herek-WP_B'), findsOneWidget);
   });
 
-  testWidgets('hides actor and orphan ids while keeping readable names', (
-    tester,
-  ) async {
+  testWidgets('hides actor ids while keeping readable names', (tester) async {
     await tester.pumpWidget(
       _pump(
         showObjectIds: false,
@@ -246,8 +240,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Meatbug'), findsOneWidget);
-    expect(find.text('St Vlk Mud Sleeper'), findsOneWidget);
     expect(find.text('Creature_Meatbug-WP_A'), findsNothing);
+    // The knowledge-only character is out of the list entirely.
+    expect(find.text('St Vlk Mud Sleeper'), findsNothing);
     expect(find.text('ST_VLK_Mud_Sleeper'), findsNothing);
   });
 
@@ -275,7 +270,7 @@ void main() {
     expect(selections.last.isPlayer, isTrue);
   });
 
-  testWidgets('a dead actor shows the death avatar, an alive one the face', (
+  testWidgets('a killed actor keeps its picture and gains a death badge', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -291,10 +286,66 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // Death is encoded in the LEADING avatar: exactly one skull (the dead
-    // Diego) and exactly one live face (the alive Lizard).
-    expect(find.byIcon(Icons.dangerous), findsOneWidget);
-    expect(find.byIcon(Icons.face_outlined), findsOneWidget);
+    // Death says something ABOUT a character, it is not who the character is —
+    // so both rows ask for their own picture and the killed one carries the
+    // game's death mark among its trailing badges instead.
+    GlossaryPortrait markOf(String name) => tester.widget<GlossaryPortrait>(
+      find.descendant(
+        of: find.ancestor(of: find.text(name), matching: find.byType(ListTile)),
+        matching: find.byType(GlossaryPortrait),
+      ),
+    );
+    expect(markOf('Diego').npcUniqueName, startsWith('Diego'));
+    expect(markOf('Diego').fallbackGameIcon, isNull);
+    expect(markOf('Lizard').npcUniqueName, startsWith('Lizard'));
+
+    Finder badge(String name, String icon) => find.descendant(
+      of: find.ancestor(of: find.text(name), matching: find.byType(ListTile)),
+      matching: find.byWidgetPredicate(
+        (widget) => widget is GameIcon && widget.name == icon,
+      ),
+    );
+    expect(badge('Diego', gameIconDead), findsOneWidget);
+    expect(badge('Lizard', gameIconDead), findsNothing);
+
+    // Every mark reserves the same box, so the names line up down the list.
+    final widths = tester
+        .widgetList<GlossaryPortrait>(find.byType(GlossaryPortrait))
+        .map((mark) => mark.width)
+        .toSet();
+    expect(widths, hasLength(1));
+  });
+
+  testWidgets("the badges are the game's own glyphs, events is not one", (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _pump(
+        load: () async => CharacterIndexPage(
+          characters: [
+            const CharacterRow(
+              globalId: 'Diego-WP_A',
+              uniqueName: 'Diego',
+              isDead: false,
+              hasInventory: true,
+              hasKnowledge: true,
+              hasEvents: true,
+              isTrader: true,
+            ),
+          ],
+          total: 1,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    Finder glyph(String name) => find.byWidgetPredicate(
+      (widget) => widget is GameIcon && widget.name == name,
+    );
+    expect(glyph(gameIconKnowledge), findsOneWidget);
+    expect(glyph(gameIconTrade), findsOneWidget);
+    // Every actor records events, so the badge said nothing and is gone.
+    expect(find.byIcon(Icons.history), findsNothing);
   });
 
   testWidgets('a badge-less row renders a short id subtitle fully', (
@@ -453,13 +504,8 @@ void main() {
     expect(calls, 1);
   });
 
-  // ---------------------------------------------------------------------------
-  // The search query filters the ORPHAN group too (same id|name predicate as
-  // the actor rows). When no orphan matches, the whole "Other" section —
-  // header included — is hidden, mirroring the non-empty-only rule.
-  // ---------------------------------------------------------------------------
-
-  /// Hero actor + one NPC + one knowledge-only orphan — the standard fixture.
+  /// Hero actor + one NPC + one knowledge-only character — the standard
+  /// fixture.
   CharacterIndexPage heroNpcOrphanPage() => CharacterIndexPage(
     characters: [
       _actor('Hero', uniqueName: 'Hero', hasKnowledge: true, hasEvents: true),
@@ -476,7 +522,7 @@ void main() {
     total: 3,
   );
 
-  testWidgets('a query matching only an NPC hides the orphan group entirely', (
+  testWidgets('a character that never spawned is absent, query or not', (
     tester,
   ) async {
     await tester.pumpWidget(_pump(load: () async => heroNpcOrphanPage()));
@@ -487,42 +533,20 @@ void main() {
     Finder tileText(String s) =>
         find.descendant(of: find.byType(ListTile), matching: find.text(s));
 
-    // Unfiltered: the NPC, the orphan row, and the 'Other' header all render.
-    expect(tileText('Lizard'), findsOneWidget);
-    expect(tileText('St Vlk Mud Sleeper'), findsOneWidget);
-    expect(find.text('Other'), findsOneWidget);
-
-    await tester.enterText(
-      find.widgetWithText(TextField, 'Search NPCs'),
-      'Lizard',
-    );
-    await tester.pumpAndSettle();
-
-    // Only the matching NPC remains; the orphan row AND the group header are
-    // gone (not an always-rendered trailing section).
     expect(tileText('Lizard'), findsOneWidget);
     expect(tileText('St Vlk Mud Sleeper'), findsNothing);
     expect(find.text('Other'), findsNothing);
-  });
+    // It is out of the COUNT too, not merely hidden.
+    expect(find.text('1–1 of 1'), findsOneWidget);
 
-  testWidgets('a query matching an orphan keeps it and filters the actors', (
-    tester,
-  ) async {
-    await tester.pumpWidget(_pump(load: () async => heroNpcOrphanPage()));
-    await tester.pumpAndSettle();
-
-    // 'sleeper' matches only the orphan (id 'ST_VLK_Mud_Sleeper' and its
-    // prettified name 'St Vlk Mud Sleeper' — same predicate as actors).
+    // Searching for it by name finds nothing to show.
     await tester.enterText(
       find.widgetWithText(TextField, 'Search NPCs'),
       'sleeper',
     );
     await tester.pumpAndSettle();
-
-    expect(find.text('St Vlk Mud Sleeper'), findsOneWidget);
-    expect(find.text('Other'), findsOneWidget);
-    // The non-matching actor is filtered out.
-    expect(find.text('Lizard'), findsNothing);
+    expect(tileText('St Vlk Mud Sleeper'), findsNothing);
+    expect(tileText('Lizard'), findsNothing);
   });
 
   testWidgets('searching an id substring still filters', (tester) async {
@@ -551,7 +575,9 @@ void main() {
     await tester.pumpWidget(
       _pump(
         load: () async => CharacterIndexPage(
-          characters: [for (var i = 0; i < 250; i++) _actor('Filler_$i-WP')],
+          // Distinct display names: same-named actors would fold into one
+          // group and page as a single line (covered separately below).
+          characters: [for (var i = 0; i < 250; i++) _actor('Filler_${i}x-WP')],
           total: 250,
         ),
       ),
@@ -564,7 +590,7 @@ void main() {
     // Filter to a single filler key — exactly one match.
     await tester.enterText(
       find.widgetWithText(TextField, 'Search NPCs'),
-      'Filler_42-',
+      'Filler_42x-',
     );
     await tester.pumpAndSettle();
 
@@ -600,6 +626,130 @@ void main() {
     expect(find.text('Herek'), findsOneWidget);
     // The previous save's actor is gone (state reset, not appended).
     expect(find.text('Lizard'), findsNothing);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Same-named actors — the forty scavengers, the fifty guards — fold into one
+  // expandable row so the list stays readable.
+  // ---------------------------------------------------------------------------
+
+  testWidgets('same-named actors fold into one row carrying their count', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _pump(
+        showObjectIds: false,
+        load: () async => CharacterIndexPage(
+          characters: [
+            _actor('Bloodfly-WP_A'),
+            _actor('Bloodfly-WP_B'),
+            _actor('Bloodfly-WP_C'),
+            _actor('Herek-WP_D'),
+          ],
+          total: 4,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // One line for the three, one for the lone actor.
+    expect(find.text('Bloodfly (3)'), findsOneWidget);
+    expect(find.text('Bloodfly'), findsNothing);
+    expect(find.text('Herek'), findsOneWidget);
+    // Paging counts the LINES, so the number matches what is on screen.
+    expect(find.text('1–2 of 2'), findsOneWidget);
+
+    // Opening it reveals every member; the count line stays put.
+    await tester.tap(find.text('Bloodfly (3)'));
+    await tester.pumpAndSettle();
+    expect(find.text('Bloodfly'), findsNWidgets(3));
+    expect(find.text('Bloodfly (3)'), findsOneWidget);
+    expect(find.text('1–2 of 2'), findsOneWidget);
+
+    // And closing it puts the members away again.
+    await tester.tap(find.text('Bloodfly (3)'));
+    await tester.pumpAndSettle();
+    expect(find.text('Bloodfly'), findsNothing);
+  });
+
+  testWidgets('a member row selects the actor behind it, not the group', (
+    tester,
+  ) async {
+    final selections = <Actor>[];
+    await tester.pumpWidget(
+      _pump(
+        showObjectIds: false,
+        onSelect: selections.add,
+        load: () async => CharacterIndexPage(
+          characters: [
+            _actor('Bloodfly-WP_A'),
+            _actor('Bloodfly-WP_B'),
+            _actor('Bloodfly-WP_C'),
+          ],
+          total: 3,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Bloodfly (3)'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Bloodfly').first);
+    await tester.pump();
+    expect(selections.single.id, 'Bloodfly-WP_A');
+  });
+
+  testWidgets('two of a name stay two rows; a third folds them', (
+    tester,
+  ) async {
+    // Hiding a pair behind a click buys nothing.
+    CharacterIndexPage page(int count) => CharacterIndexPage(
+      characters: [for (var i = 0; i < count; i++) _actor('Bloodfly-WP_$i')],
+      total: count,
+    );
+    await tester.pumpWidget(
+      _pump(showObjectIds: false, load: () async => page(2)),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Bloodfly'), findsNWidgets(2));
+    expect(find.text('Bloodfly (2)'), findsNothing);
+
+    await tester.pumpWidget(
+      _pump(showObjectIds: false, reloadKey: 'k2', load: () async => page(3)),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Bloodfly'), findsNothing);
+    expect(find.text('Bloodfly (3)'), findsOneWidget);
+  });
+
+  testWidgets('an opened group may carry the page past its own size', (
+    tester,
+  ) async {
+    // 100 lone actors fill the page exactly; opening a group on it adds its
+    // members on top of the hundred.
+    await tester.pumpWidget(
+      _pump(
+        showObjectIds: false,
+        load: () async => CharacterIndexPage(
+          characters: [
+            for (var i = 0; i < 99; i++) _actor('Filler_${i}x-WP'),
+            _actor('Aaa-WP_A'),
+            _actor('Aaa-WP_B'),
+            _actor('Aaa-WP_C'),
+          ],
+          total: 102,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 99 lone actors + one group = 100 lines, one full page.
+    expect(find.text('1–100 of 100'), findsOneWidget);
+    await tester.tap(find.text('Aaa (3)'));
+    await tester.pumpAndSettle();
+    // The three members are on the page now; the paging numbers do not move.
+    expect(find.text('1–100 of 100'), findsOneWidget);
+    expect(find.text('Aaa'), findsNWidgets(3));
   });
 
   testWidgets('actor rows are sorted alphabetically by resolved name', (

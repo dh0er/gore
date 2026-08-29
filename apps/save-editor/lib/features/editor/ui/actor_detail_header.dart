@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:goresave/features/editor/domain/actor.dart';
+import 'package:goresave/features/editor/domain/game_icons.dart';
 import 'package:goresave/features/editor/ui/character_master_list.dart'
     show localizedNpcName;
+import 'package:goresave/features/editor/domain/glossary_images.dart';
+import 'package:goresave/features/editor/ui/glossary_portrait.dart';
+import 'package:goresave/features/editor/ui/npc_role_badges.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/ui/design/app_theme.dart';
@@ -76,13 +80,26 @@ class ActorDetailHeader extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        // The name — with its id under it where there is one — sits level with
+        // the middle of the picture, not hung from its top edge.
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Icon(
-            isPlayer
-                ? Icons.person_outline
-                : (isOrphan ? Icons.help_outline : Icons.face_outlined),
+          // The same picture the list row carries, so the detail pane and the
+          // list agree on who is selected — here in the wide cut the game draws
+          // for a detail view, the way the glossary shows it. A killed
+          // character keeps his own face: death is a badge on the status row,
+          // not an identity.
+          GlossaryPortrait(
+            npcUniqueName: isPlayer || isOrphan ? null : id,
+            fallbackGameIcon: isOrphan || !isPlayer ? null : gameIconCharacter,
+            fallbackIcon: isOrphan ? Icons.help_outline : Icons.person_outline,
             color: scheme.primary,
+            // The banner artwork is 500x264, shown at the size the glossary's
+            // own detail view shows it, so a character looks the same wherever
+            // the editor puts him.
+            size: GlossaryImageSize.banner,
+            width: glossaryBannerWidth,
+            height: glossaryBannerHeight,
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -113,6 +130,14 @@ class ActorDetailHeader extends StatelessWidget {
               ],
             ),
           ),
+          // What the glossary files this character as — the shops he runs, the
+          // skills he teaches, the armour he makes. The list rows have no room
+          // to name them; the space beside the name does.
+          if (!isPlayer && !isOrphan && id != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 12, top: 2),
+              child: NpcRoleBadges(npcUniqueName: id, isDead: actor.isDead),
+            ),
         ],
       ),
     );

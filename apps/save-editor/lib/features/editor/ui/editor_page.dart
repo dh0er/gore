@@ -12,10 +12,12 @@ import 'package:goresave/features/app/ui/update_settings.dart';
 import 'package:goresave/features/app/ui/window_chrome.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
+import 'package:goresave/features/editor/domain/game_icons.dart';
 import 'package:goresave/features/editor/domain/game_time.dart';
 import 'package:goresave/features/editor/domain/item_icon_catalog.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/ui/characters_tab.dart';
+import 'package:goresave/features/editor/ui/game_icon.dart';
 import 'package:goresave/features/editor/ui/overview_statistics_section.dart';
 import 'package:goresave/features/editor/ui/profile_localization.dart';
 import 'package:goresave/features/editor/ui/slot_repair_banner.dart';
@@ -423,7 +425,15 @@ class _ProfileHeader extends StatelessWidget {
               color: scheme.primaryContainer,
               borderRadius: BorderRadius.circular(8),
             ),
-            child: Icon(Icons.person_outline, color: scheme.primary),
+            // The glyph the game marks its own people with.
+            child: Center(
+              child: GameIcon(
+                name: gameIconCharacter,
+                fallbackIcon: Icons.person_outline,
+                size: 24,
+                color: scheme.primary,
+              ),
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(

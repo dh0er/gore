@@ -10,6 +10,10 @@ import 'package:goresave/providers/data_providers.dart';
 import 'package:path/path.dart' as p;
 
 const _maximumItemCount = 4096;
+
+/// Reserved manifest-key prefix for the shared `Common/Icons` UI glyphs.
+/// Mirrors `UI_ICON_KEY_PREFIX` in gore-save.
+const uiIconKeyPrefix = 'ui:';
 const _maximumManifestBytes = 8 * 1024 * 1024;
 const _preparationRetryDelays = [
   Duration(minutes: 1),
@@ -41,6 +45,17 @@ class ItemIconCatalog {
       if (path != null) return path;
     }
     return null;
+  }
+
+  /// Path of a shared game UI glyph (`T_Icon_Mana`, `T_Icon_Resistance_Fire`,
+  /// …), or null when this generation does not carry it. Native publishes the
+  /// glyphs under a reserved `ui:` key so they cannot collide with an item id,
+  /// and it is allowed to omit one the installed build no longer ships — every
+  /// caller therefore needs its own fallback icon.
+  String? uiPathFor(String iconName) {
+    final trimmed = iconName.trim();
+    if (trimmed.isEmpty) return null;
+    return pathByItemId['$uiIconKeyPrefix$trimmed'.toLowerCase()];
   }
 
   @visibleForTesting

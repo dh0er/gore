@@ -3,13 +3,17 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
+import 'package:goresave/features/editor/domain/game_icons.dart';
 import 'package:goresave/features/editor/domain/item_catalog.dart';
 import 'package:goresave/features/editor/domain/item_categories.dart';
+import 'package:goresave/features/editor/domain/item_stats.dart';
 import 'package:goresave/features/editor/ui/inventory_item_visual.dart';
+import 'package:goresave/features/editor/ui/item_stats_tooltip.dart';
 import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/providers/data_providers.dart';
 import 'package:goresave/ui/design/app_theme.dart';
 
 /// Dialog that lets the user pick an item from the bundled catalog and specify
@@ -116,10 +120,15 @@ class _AddInventoryItemDialogState
     ).pop(InventoryItemAdd(path: entry.path, count: parsed));
   }
 
-  List<_CatalogGroup> _group(List<ItemCatalogEntry> entries) {
+  List<_CatalogGroup> _group(
+    List<ItemCatalogEntry> entries,
+    ItemStatsCatalog? stats,
+  ) {
     final byCategory = <ItemCategory, List<ItemCatalogEntry>>{};
     for (final entry in entries) {
-      byCategory.putIfAbsent(itemCategoryFromId(entry.id), () => []).add(entry);
+      byCategory
+          .putIfAbsent(itemCategoryFor(entry.id, stats: stats), () => [])
+          .add(entry);
     }
     return [
       for (final cat in ItemCategory.values)
@@ -135,6 +144,23 @@ class _AddInventoryItemDialogState
     final lang = ref.watch(currentGameLangProvider);
     final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
     final showObjectIds = ref.watch(showObjectIdsProvider);
+    // File the catalog by the game's own inventory tabs, so the dialog reads
+    // like the inventory it adds to.
+    final itemStats = ref.watch(itemStatsCatalogProvider).value;
+    // The game's own "All" filter is not a category — it collects everything —
+    // so it is deliberately absent here.
+    final filtersById = <ItemCategory, InventoryFilter>{
+      for (final filter in itemStats?.filters ?? const <InventoryFilter>[])
+        ?itemCategoryFromFilterId(filter.id): filter,
+    };
+    String categoryLabel(ItemCategory category) {
+      final key = filtersById[category]?.nameKey ?? '';
+      final fromGame = key.isEmpty
+          ? null
+          : resolveGameText(locCatalog, key, lang);
+      return fromGame ?? localizedItemCategoryLabel(l10n, category);
+    }
+
     return AlertDialog(
       title: Text(l10n.addItemDialogTitle),
       contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
@@ -167,7 +193,7 @@ class _AddInventoryItemDialogState
                           _displayName(locCatalog, lang, b.id).toLowerCase(),
                         ),
                   );
-            final groups = _group(available);
+            final groups = _group(available, itemStats);
 
             // Resolve the selected category (fall back to first available).
             var selectedCat = _selectedCategory;
@@ -313,11 +339,13 @@ class _AddInventoryItemDialogState
                                       for (final g in groups)
                                         SidebarTile(
                                           icon: iconForItemCategory(g.category),
+                                          gameIcon:
+                                              filtersById[g.category]?.icon ??
+                                              gameIconForItemCategory(
+                                                g.category,
+                                              ),
                                           label: l10n.categoryWithCount(
-                                            localizedItemCategoryLabel(
-                                              l10n,
-                                              g.category,
-                                            ),
+                                            categoryLabel(g.category),
                                             g.entries.length,
                                           ),
                                           selected:
@@ -379,27 +407,36 @@ class _AddInventoryItemDialogState
     bool showObjectIds,
   ) {
     final isSelected = _selected == entry;
-    return ListTile(
-      dense: true,
-      selected: isSelected,
-      selectedTileColor: theme.colorScheme.primaryContainer,
-      leading: InventoryItemVisual(
-        key: ValueKey(('catalog-item-image', entry.id)),
-        itemId: entry.id,
-        itemPath: entry.path,
-        fallbackIcon: iconForItemCategory(itemCategoryFromId(entry.id)),
+    // Same hover block as the inventory, so the item can be judged before it is
+    // added rather than after.
+    return ItemStatsTooltip(
+      itemId: entry.id,
+      title: _displayName(catalog, lang, entry.id),
+      // The tile is tappable and brings its own hover colour; a second tint on
+      // top of it would only muddy the selected row.
+      highlightOnHover: false,
+      child: ListTile(
+        dense: true,
+        selected: isSelected,
+        selectedTileColor: theme.colorScheme.primaryContainer,
+        leading: InventoryItemVisual(
+          key: ValueKey(('catalog-item-image', entry.id)),
+          itemId: entry.id,
+          itemPath: entry.path,
+          fallbackIcon: iconForItemCategory(itemCategoryFromId(entry.id)),
+        ),
+        title: Text(
+          _displayName(catalog, lang, entry.id),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        subtitle: showObjectIds
+            ? Text(entry.id, maxLines: 1, overflow: TextOverflow.ellipsis)
+            : null,
+        onTap: () => setState(() {
+          _selected = isSelected ? null : entry;
+        }),
       ),
-      title: Text(
-        _displayName(catalog, lang, entry.id),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      subtitle: showObjectIds
-          ? Text(entry.id, maxLines: 1, overflow: TextOverflow.ellipsis)
-          : null,
-      onTap: () => setState(() {
-        _selected = isSelected ? null : entry;
-      }),
     );
   }
 }
