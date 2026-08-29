@@ -2125,6 +2125,9 @@ fn emit_function_ctor(
             fields,
             &spilled_boolean_names(f, refs),
         );
+        // After the carrier chains are whole: the source declared a witnessed carrier on its
+        // initialiser, and the initialiser is only one statement once the arms have rejoined.
+        let rendered = sink_carrier_declarations(&rendered, &declared_at_initializer_carriers(f));
         let rendered = fold_literal_null_returns(
             &rendered,
             &literal_null_return_slots(f),
@@ -10258,6 +10261,138 @@ fn spilled_boolean_names(f: &Func, refs: &RefResolver) -> HashSet<i32> {
         if !short_circuit {
             out.insert(slot);
         }
+    }
+    out
+}
+
+/// A short-circuit carrier the source declared AT its initialiser.
+///
+/// `bool b = A && B;` and `bool b; ... b = A && B;` compile to the same arms and the same merge —
+/// what tells the two apart is what stands AT the merge label. A HOISTED declaration is a second
+/// slot, so vanilla copies the merged value on: `CpyVtoV X,S` with `X != S`. A declaration at its
+/// initialiser has nowhere to copy it to, so the merge label CONSUMES the carrier directly — a
+/// push, a register copy, a compare, a branch.
+///
+/// The rule only says where the DECLARATION stood. It never rewrites the carrier's readers: the
+/// shape that substitutes the chain into its reader is the one that crashed the compiler on an
+/// `&&` whose operand is not a bool.
+fn declared_at_initializer_carriers(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let mut out = HashSet::new();
+    for (at, arm) in instrs.iter().enumerate() {
+        let slot = w0(arm);
+        if !arm.op.name.starts_with("SetV") || slot <= 0 {
+            continue;
+        }
+        let Some(jump) = instrs.get(at + 1) else {
+            continue;
+        };
+        if jump.op.name != "JMP" {
+            continue;
+        }
+        let Some(offset) = jump.dwords.first().map(|word| *word as i32) else {
+            continue;
+        };
+        let target = jump.offset_dw as i64 + 2 + i64::from(offset);
+        let Some(merge) = instrs.iter().position(|other| other.offset_dw as i64 == target) else {
+            continue;
+        };
+        // The other arm writes the same carrier immediately before the merge.
+        let written = merge
+            .checked_sub(1)
+            .and_then(|before| instrs.get(before))
+            .is_some_and(|before| before.op.name.starts_with("CpyVtoV") && w0(before) == slot);
+        if !written {
+            continue;
+        }
+        let consumed = instrs.get(merge).is_some_and(|m| {
+            (m.op.name.starts_with("PshV")
+                || m.op.name.starts_with("CpyVtoR")
+                || m.op.name.starts_with("CMP")
+                || m.op.name.starts_with('J'))
+                && (m.op.name.starts_with('J') || w0(m) == slot)
+        });
+        if consumed {
+            out.insert(slot);
+        }
+    }
+    out
+}
+
+/// Put a witnessed carrier's declaration back where the source wrote it: on its initialiser.
+///
+/// The hoist is the emitter's, not vanilla's — where the merge label consumes the carrier the
+/// source said `bool b = A && B;` in one statement. Joining the two lines costs one `CpyVtoV`
+/// less, which is exactly the difference those records carry.
+///
+/// Sinking narrows the name's scope to the block its assignment stands in, so it is refused
+/// whenever anything after that block still reads the name. That guard, not the shape of the
+/// statement, is what keeps this off the 94-lost/46-gained result the unwitnessed version had.
+fn sink_carrier_declarations(body: &str, witnessed: &HashSet<i32>) -> String {
+    if witnessed.is_empty() {
+        return body.to_owned();
+    }
+    let mut lines: Vec<String> = body.lines().map(|line| line.to_owned()).collect();
+    let mut at = 0usize;
+    while at < lines.len() {
+        let sunk = (|| {
+            let name = lines[at].trim().strip_prefix("bool ")?.strip_suffix(';')?;
+            if !is_decompiler_local(name) {
+                return None;
+            }
+            let (slot, _) = slot_and_life(name)?;
+            if !witnessed.contains(&slot) {
+                return None;
+            }
+            // The first line that mentions the name has to BE its initialisation.
+            let store = lines[at + 1..]
+                .iter()
+                .position(|line| count_ident(line, name) != 0)?
+                + at
+                + 1;
+            let value = lines[store]
+                .trim()
+                .strip_prefix(&format!("{name} = "))?
+                .strip_suffix(';')?;
+            if count_ident(&lines[store], name) != 1
+                || top_level_logical_operator(value).is_none()
+            {
+                return None;
+            }
+            // Nothing after the assignment's own block may read the name.
+            let mut depth = 0i32;
+            let mut end = lines.len();
+            for (offset, line) in lines[store + 1..].iter().enumerate() {
+                depth += brace_net(line);
+                if depth < 0 {
+                    end = store + 1 + offset;
+                    break;
+                }
+            }
+            lines[end..]
+                .iter()
+                .all(|line| count_ident(line, name) == 0)
+                .then(|| {
+                    (
+                        store,
+                        format!("{}bool {name} = {value};", indent_of(&lines[store])),
+                    )
+                })
+        })();
+        match sunk {
+            Some((store, joined)) => {
+                lines[store] = joined;
+                lines.remove(at);
+            }
+            None => at += 1,
+        }
+    }
+    let mut out = lines.join("\n");
+    if body.ends_with('\n') {
+        out.push('\n');
     }
     out
 }
