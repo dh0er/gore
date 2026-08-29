@@ -10400,142 +10400,146 @@ fn sink_carrier_declarations(body: &str, witnessed: &HashSet<i32>) -> String {
     out
 }
 
+/// Every op that leaves a NEW value in its first operand.
+fn produces_value(op: &str) -> bool {
+    matches!(
+        op,
+        "RDR1"
+            | "RDR2"
+            | "RDR4"
+            | "RDR8"
+            | "fTOd"
+            | "dTOf"
+            | "iTOd"
+            | "iTOf"
+            | "uTOf"
+            | "uTOd"
+            | "CpyRtoV1"
+            | "CpyRtoV4"
+            | "CpyRtoV8"
+            | "NOT"
+            // A named literal is the destination of the COPY, not of the constant store:
+            // `bool b = false;` is `SetV1 vT,0; CpyVtoV4 vB,vT`. So a constant store with no
+            // copy behind it is a literal the source wrote where it is used.
+            | "SetV1"
+            | "SetV4"
+            | "SetV8"
+    )
+}
+
+/// Every op that WRITES its first operand — producing a new value, or updating one in place.
+fn writes_destination(op: &str) -> bool {
+    produces_value(op)
+        || matches!(
+            op,
+            "CpyVtoV4"
+                | "CpyVtoV8"
+                | "CpyGtoV4"
+                | "STOREOBJ"
+                | "RefCpyV"
+                | "REFCPY"
+                | "ClrVPtr"
+                | "LOADOBJ"
+                | "FreeNullV8"
+                | "SetV2"
+                | "ADDIf"
+                | "ADDIi"
+                | "ADDd"
+                | "ADDf"
+                | "ADDi"
+                | "ADDi64"
+                | "SUBIf"
+                | "SUBIi"
+                | "SUBd"
+                | "SUBf"
+                | "SUBi"
+                | "SUBi64"
+                | "MULIf"
+                | "MULIi"
+                | "MULd"
+                | "MULf"
+                | "MULi"
+                | "MULi64"
+                | "DIVd"
+                | "DIVf"
+                | "DIVi"
+                | "DIVi64"
+                | "DIVu"
+                | "DIVu64"
+                | "MODd"
+                | "MODf"
+                | "MODi"
+                | "MODi64"
+                | "MODu"
+                | "MODu64"
+                | "NEGd"
+                | "NEGf"
+                | "NEGi"
+                | "NEGi64"
+                | "INCd"
+                | "INCf"
+                | "INCi"
+                | "INCi8"
+                | "INCi16"
+                | "INCi64"
+                | "DECd"
+                | "DECf"
+                | "DECi"
+                | "DECi8"
+                | "DECi16"
+                | "DECi64"
+                | "IncVi"
+                | "DecVi"
+                | "BAND"
+                | "BAND64"
+                | "BOR"
+                | "BOR64"
+                | "BXOR"
+                | "BXOR64"
+                | "BSLL"
+                | "BSLL64"
+                | "BSRA"
+                | "BSRA64"
+                | "BSRL"
+                | "BSRL64"
+                | "POWd"
+                | "POWdi"
+                | "POWf"
+                | "POWi"
+                | "POWi64"
+                | "POWu"
+                | "POWu64"
+                | "sbTOi"
+                | "swTOi"
+                | "ubTOi"
+                | "uwTOi"
+                | "iTOb"
+                | "iTOw"
+                | "i64TOi"
+                | "iTOi64"
+                | "u64TOi"
+                | "iTOu64"
+                | "dTOi"
+                | "dTOu"
+                | "dTOi64"
+                | "dTOu64"
+                | "fTOi"
+                | "fTOu"
+                | "fTOi64"
+                | "fTOu64"
+        )
+}
+
 fn unnamed_value_defs(f: &Func, refs: &RefResolver) -> HashSet<(i32, usize)> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
     };
     let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
-    let produces = |op: &str| {
-        matches!(
-            op,
-            "RDR1"
-                | "RDR2"
-                | "RDR4"
-                | "RDR8"
-                | "fTOd"
-                | "dTOf"
-                | "iTOd"
-                | "iTOf"
-                | "uTOf"
-                | "uTOd"
-                | "CpyRtoV1"
-                | "CpyRtoV4"
-                | "CpyRtoV8"
-                | "NOT"
-                // A named literal is the destination of the COPY, not of the constant store:
-                // `bool b = false;` is `SetV1 vT,0; CpyVtoV4 vB,vT`. So a constant store with no
-                // copy behind it is a literal the source wrote where it is used.
-                | "SetV1"
-                | "SetV4"
-                | "SetV8"
-        )
-    };
     // Every op that leaves a new value in its first operand. The compiler reuses a frame slot for
     // unrelated values, and the emitter names each of those separately (`local_8`, `local_8_2`), so
     // a value's life ends at the next write and the reads after it belong to someone else. The
     // list is spelled out: a name this MISSES lets a later life's read count as this one's single
     // reader, which is not a byte difference but a wrong program.
-    let writes = |op: &str| {
-        produces(op)
-            || matches!(
-                op,
-                "CpyVtoV4"
-                    | "CpyVtoV8"
-                    | "CpyGtoV4"
-                    | "STOREOBJ"
-                    | "RefCpyV"
-                    | "REFCPY"
-                    | "ClrVPtr"
-                    | "LOADOBJ"
-                    | "FreeNullV8"
-                    | "SetV2"
-                    | "ADDIf"
-                    | "ADDIi"
-                    | "ADDd"
-                    | "ADDf"
-                    | "ADDi"
-                    | "ADDi64"
-                    | "SUBIf"
-                    | "SUBIi"
-                    | "SUBd"
-                    | "SUBf"
-                    | "SUBi"
-                    | "SUBi64"
-                    | "MULIf"
-                    | "MULIi"
-                    | "MULd"
-                    | "MULf"
-                    | "MULi"
-                    | "MULi64"
-                    | "DIVd"
-                    | "DIVf"
-                    | "DIVi"
-                    | "DIVi64"
-                    | "DIVu"
-                    | "DIVu64"
-                    | "MODd"
-                    | "MODf"
-                    | "MODi"
-                    | "MODi64"
-                    | "MODu"
-                    | "MODu64"
-                    | "NEGd"
-                    | "NEGf"
-                    | "NEGi"
-                    | "NEGi64"
-                    | "INCd"
-                    | "INCf"
-                    | "INCi"
-                    | "INCi8"
-                    | "INCi16"
-                    | "INCi64"
-                    | "DECd"
-                    | "DECf"
-                    | "DECi"
-                    | "DECi8"
-                    | "DECi16"
-                    | "DECi64"
-                    | "IncVi"
-                    | "DecVi"
-                    | "BAND"
-                    | "BAND64"
-                    | "BOR"
-                    | "BOR64"
-                    | "BXOR"
-                    | "BXOR64"
-                    | "BSLL"
-                    | "BSLL64"
-                    | "BSRA"
-                    | "BSRA64"
-                    | "BSRL"
-                    | "BSRL64"
-                    | "POWd"
-                    | "POWdi"
-                    | "POWf"
-                    | "POWi"
-                    | "POWi64"
-                    | "POWu"
-                    | "POWu64"
-                    | "sbTOi"
-                    | "swTOi"
-                    | "ubTOi"
-                    | "uwTOi"
-                    | "iTOb"
-                    | "iTOw"
-                    | "i64TOi"
-                    | "iTOi64"
-                    | "u64TOi"
-                    | "iTOu64"
-                    | "dTOi"
-                    | "dTOu"
-                    | "dTOi64"
-                    | "dTOu64"
-                    | "fTOi"
-                    | "fTOu"
-                    | "fTOi64"
-                    | "fTOu64"
-            )
-    };
     let scope_exit = scope_exit_destroyed_slots(f, refs);
     let spilled = spilled_boolean_names(f, refs);
     // every definition of every slot, in program order — each is its own life
@@ -10544,7 +10548,7 @@ fn unnamed_value_defs(f: &Func, refs: &RefResolver) -> HashSet<(i32, usize)> {
     let mut out = HashSet::new();
     for (i, ins) in instrs.iter().enumerate() {
         let dst = w0(ins);
-        if dst > 0 && writes(ins.op.name) {
+        if dst > 0 && writes_destination(ins.op.name) {
             let life = lives.entry(dst).or_default();
             *life += 1;
             defs.push((dst, *life, i));
@@ -10552,7 +10556,7 @@ fn unnamed_value_defs(f: &Func, refs: &RefResolver) -> HashSet<(i32, usize)> {
     }
     for (slot, life, at) in defs {
         let ins = &instrs[at];
-        if !produces(ins.op.name) {
+        if !produces_value(ins.op.name) {
             continue;
         }
         // The element of a range-for is stored right after `Proceed()`, and it IS named — by the
@@ -10586,7 +10590,7 @@ fn unnamed_value_defs(f: &Func, refs: &RefResolver) -> HashSet<(i32, usize)> {
         // exactly one read, and it must come before the slot holds anything else
         let mut reads = 0usize;
         for other in &instrs[at + 1..] {
-            if w0(other) == slot && writes(other.op.name) {
+            if w0(other) == slot && writes_destination(other.op.name) {
                 break;
             }
             reads += super::bytediff::addressed_slots(other)
@@ -10811,6 +10815,47 @@ fn immediately_consumed_defs(f: &Func) -> HashSet<(i32, usize)> {
 /// its own `STOREOBJ`, which stands where the value is pushed.
 fn fold_assignment_receivers(body: &str, consumed: &HashSet<(i32, usize)>) -> String {
     let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    // A name that exists for NOTHING BUT receiver pairs: one hoisted declaration plus exactly two
+    // mentions per pair, and not one more. See the cap below for why the count is taken up front.
+    let receiver_only: HashSet<String> = {
+        let mut pairs: HashMap<String, usize> = HashMap::new();
+        for at in 0..lines.len().saturating_sub(1) {
+            let head = declaration_with_initializer(&lines[at]).or_else(|| {
+                let (target, value) = slot_store(&lines[at])?;
+                is_decompiler_local(&target).then(|| (indent_of(&lines[at]), target, value))
+            });
+            let Some((indent, name, init)) = head else {
+                continue;
+            };
+            if !init.ends_with(')')
+                || init.contains(" = ")
+                || indent_of(&lines[at + 1]) != indent
+                || !lines[at + 1].trim().starts_with(&format!("{name}."))
+            {
+                continue;
+            }
+            // Only a PLAIN assignment. A compound one through a call receiver
+            // (`this.GetG1R().Counter += 1;`) is a form the tree had not carried before, and
+            // shipping 19 of them took the compiler down with no diagnostic at all. Counting the
+            // pair here is what lets the whole name fail the mention test below, so its
+            // declaration is never removed out from under a statement that still needs it.
+            if !lines[at + 1].trim().contains(" = ") {
+                continue;
+            }
+            *pairs.entry(name).or_default() += 1;
+        }
+        pairs
+            .into_iter()
+            .filter(|(name, count)| {
+                let declared = lines
+                    .iter()
+                    .any(|line| bare_declaration(line).is_some_and(|(_, n)| n == *name));
+                let mentions: usize = lines.iter().map(|line| count_ident(line, name)).sum();
+                mentions == usize::from(declared) + 2 * count
+            })
+            .map(|(name, _)| name)
+            .collect()
+    };
     let mut at = 0usize;
     while at + 1 < lines.len() {
         let folded = (|| {
@@ -10823,7 +10868,11 @@ fn fold_assignment_receivers(body: &str, consumed: &HashSet<(i32, usize)>) -> St
             if !init.ends_with(')') || init.contains(" = ") {
                 return None;
             }
-            if !consumed.contains(&slot_and_life_any(&name)?) {
+            // The slot's life number in the TEXT and in the bytecode disagree wherever an
+            // earlier life was folded away, so the witness is asked of the slot: some life of it
+            // is consumed where it is produced.
+            let (slot, _) = slot_and_life_any(&name)?;
+            if !consumed.iter().any(|(consumed, _)| *consumed == slot) {
                 return None;
             }
             let declaration = lines
@@ -10832,9 +10881,10 @@ fn fold_assignment_receivers(body: &str, consumed: &HashSet<(i32, usize)>) -> St
             // Reusing the slot elsewhere is none of this fold's business in principle — the store
             // kills whatever it held — but folding EVERY such receiver at once pushes the whole
             // tree past the compiler's memory ceiling (four runs, no diagnostic, while subsets of
-            // the same tree compile). Kept to a name this function mentions nowhere else.
-            let mentions = 2 + usize::from(declaration.is_some());
-            if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != mentions {
+            // the same tree compile). Kept to a name that is nothing BUT receiver pairs: one
+            // conversation topic assigns six members of the same story object in a row, and
+            // demanding a single pair is what left all six standing.
+            if !receiver_only.contains(&name) {
                 return None;
             }
             let next = &lines[at + 1];
@@ -10843,23 +10893,9 @@ fn fold_assignment_receivers(body: &str, consumed: &HashSet<(i32, usize)>) -> St
             }
             let assigned = next.trim().strip_prefix(name.as_str())?.strip_suffix(';')?;
             // `= ` or any compound form: the receiver is evaluated once either way.
-            let (target, compound) = [" += ", " -= ", " *= ", " /= ", " |= ", " &= ", " ^= "]
-                .iter()
-                .find_map(|op| assigned.split_once(op).map(|(target, _)| (target, true)))
-                .or_else(|| assigned.split_once(" = ").map(|(target, _)| (target, false)))?;
-            // A compound assignment reads the receiver back, so the receiver must be a HANDLE:
-            // through a value-returning getter it would read and write a temporary.
-            if compound {
-                let head = lines[at].trim().trim_end_matches(';');
-                let declared = head[..head.len().saturating_sub(name.len() + init.len() + 3)].trim();
-                let declared = match declared.is_empty() {
-                    true => declared_type(&lines, &name).unwrap_or_default(),
-                    false => declared.to_owned(),
-                };
-                if !is_object_handle_type(&declared) {
-                    return None;
-                }
-            }
+            // A compound assignment through a call receiver is refused outright: see the
+            // pre-pass. Only the plain form folds.
+            let (target, _) = assigned.split_once(" = ")?;
             if !target.starts_with('.') || target.contains('(') {
                 return None;
             }
