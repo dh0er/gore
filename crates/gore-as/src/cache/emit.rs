@@ -1897,7 +1897,14 @@ fn emit_function_ctor(
         .copied()
         .collect();
         let (body, first_use_suppressed) =
-            rewrite_first_use_decl_init(&body, &locals, refs, &already_declared_at_use, &reference_locals);
+            rewrite_first_use_decl_init(
+                &body,
+                &locals,
+                refs,
+                &already_declared_at_use,
+                &reference_locals,
+                &bare_declaration_slots(f),
+            );
         let (body, first_write_suppressed) = rewrite_bare_decl_at_first_write(
             &body,
             &locals,
@@ -13130,6 +13137,66 @@ fn rewrite_bare_decl_at_first_write(
     (joined, suppressed)
 }
 
+/// A local the source declared BARE and assigned afterwards.
+///
+/// A declaration-with-initialiser adopts the initialiser's temporary as the variable's own slot —
+/// the producer writes the variable directly and there is no copy. A declaration that already
+/// stands cannot do that: the producer fills a temporary and the value is copied on. So a slot
+/// whose ONLY write is `CpyVtoV X, T`, with `T`'s producer separated from the copy by nothing but
+/// the temporary-destructor group, is a name the source declared bare — those destructors run at
+/// the end of the full statement, which is exactly where the copy had to wait.
+///
+/// Measured: fires on 9 functions tree-wide, none of them byte-faithful. Every byte-faithful
+/// sole-copy local has its producer ADJACENT to the copy, which is what the gap separates.
+fn bare_declaration_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let mut out = HashSet::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if !ins.op.name.starts_with("CpyVtoV") {
+            continue;
+        }
+        let (dst, src) = (w0(ins), ins.words.get(1).map(|w| *w as i16 as i32).unwrap_or(0));
+        if dst <= 0 || src <= 0 || dst == src {
+            continue;
+        }
+        // The copy has to be the destination's only write.
+        let written_once = !instrs.iter().enumerate().any(|(other, ins)| {
+            other != at && w0(ins) == dst && writes_destination(ins.op.name)
+        });
+        if !written_once {
+            continue;
+        }
+        // The source is produced earlier, and the gap between the two is nothing but cleanup.
+        let Some(producer) = instrs[..at]
+            .iter()
+            .rposition(|ins| w0(ins) == src && writes_destination(ins.op.name))
+            .filter(|producer| produces_value(instrs[*producer].op.name))
+        else {
+            continue;
+        };
+        if at == producer + 1 {
+            continue; // adjacent: the declaration took the temporary
+        }
+        let cleanup_only = instrs[producer + 1..at].iter().all(|ins| {
+            matches!(
+                ins.op.name,
+                "PSF" | "CALLSYS" | "PshVPtr" | "STOREOBJ" | "PopPtr"
+            )
+        });
+        // …and the temporary is dead after the copy.
+        let reused = instrs[at + 1..]
+            .iter()
+            .any(|ins| super::bytediff::addressed_slots(ins).into_iter().any(|s| s == src));
+        if cleanup_only && !reused {
+            out.insert(dst);
+        }
+    }
+    out
+}
+
 /// Every remaining local whose first reference is the assignment that gives it its value: the
 /// source declared it there. Hoisting the declaration instead makes the compiler put the value in
 /// a temporary of its own and copy it into the declared slot.
@@ -13141,13 +13208,17 @@ fn rewrite_first_use_decl_init(
     refs: &RefResolver,
     already: &HashSet<i32>,
     reference_locals: &HashMap<i32, bool>,
+    declared_bare: &HashSet<i32>,
 ) -> (String, HashSet<i32>) {
     // Only where the assignment stands at the FUNCTION's own level. Inside a loop or a branch a
     // declaration is entered and left again with the block, and the compiler spends the slot's
     // construction and release on every pass — which vanilla, having hoisted it, does not
     // (measured: 94 functions lost against 46 gained when this was not required).
-    let wanted =
-        |slot: i32, _ty: &str| !already.contains(&slot) && first_top_level_assignment_before_read(body, slot);
+    let wanted = |slot: i32, _ty: &str| {
+        !already.contains(&slot)
+            && !declared_bare.contains(&slot)
+            && first_top_level_assignment_before_read(body, slot)
+    };
     rewrite_decl_at_assignment(body, locals, &wanted, &|slot, ty| {
         let head = qualify_decl_type(ty, refs);
         match reference_locals.get(&slot) {
