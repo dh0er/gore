@@ -117,7 +117,7 @@ void main() {
     // Every registered save exposes its authoritative profile association on
     // Overview (the fake fixture has profile 0 selected).
     expect(find.text('Save profile'), findsOneWidget);
-    expect(find.byType(DropdownButtonFormField<int>), findsOneWidget);
+    expect(find.byType(DropdownButton<int>), findsOneWidget);
     expect(
       find.byKey(const ValueKey('remove-selected-save-profile')),
       findsOneWidget,
@@ -1746,7 +1746,7 @@ void main() {
       findsOneWidget,
     );
 
-    await tester.tap(find.byType(DropdownButtonFormField<int>));
+    await tester.tap(find.byType(DropdownButton<int>));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Profile 1').last);
     await tester.pumpAndSettle();
