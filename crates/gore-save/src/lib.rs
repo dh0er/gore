@@ -3058,6 +3058,25 @@ fn abort_claim_with_restore(target: &Path, claim: &Path, original: CoreError) ->
     }
 }
 
+fn rollback_profile_assignment_save(
+    save_pending: PendingReplace,
+    original: CoreError,
+) -> CoreError {
+    let recovery = save_pending.aside.clone();
+    match save_pending.rollback() {
+        Ok(()) => original,
+        Err(rollback_error) => {
+            let recovery_note = recovery
+                .filter(|path| path.exists())
+                .map(|path| format!("; the original save remains at {}", path.display()))
+                .unwrap_or_default();
+            CoreError::Update(format!(
+                "{original}; save rollback also failed safely: {rollback_error}{recovery_note}"
+            ))
+        }
+    }
+}
+
 fn abort_delete_with_profile_rollback(
     save_path: &Path,
     save_claim: &Path,
@@ -4941,6 +4960,30 @@ fn assign_save_profile_with_before_replace<F>(
 where
     F: FnOnce(&Path) -> Result<(), CoreError>,
 {
+    assign_save_profile_with_hooks(
+        save_path,
+        destination_path,
+        persistent_path,
+        profile_id,
+        backup,
+        before_replace,
+        |_| Ok(()),
+    )
+}
+
+fn assign_save_profile_with_hooks<F, G>(
+    save_path: &Path,
+    destination_path: Option<&Path>,
+    persistent_path: &Path,
+    profile_id: i32,
+    backup: bool,
+    before_replace: F,
+    before_companion_replace: G,
+) -> Result<Value, CoreError>
+where
+    F: FnOnce(&Path) -> Result<(), CoreError>,
+    G: FnOnce(&Path) -> Result<(), CoreError>,
+{
     let target_path = destination_path.unwrap_or(save_path);
     let importing = target_path != save_path;
     let expected_import_target = if importing {
@@ -5146,24 +5189,81 @@ where
     let expected_save =
         expected_import_target.unwrap_or_else(|| FileSnapshot::Present(save_original.clone()));
     let save_pending = begin_replace_if_unchanged(target_path, save_tmp.path(), &expected_save)?;
-    match begin_replace_if_unchanged(
+    let save_claim = match claim_existing_target(target_path, "assign-commit") {
+        Ok(claim) => claim,
+        Err(error) => {
+            let error = if error.kind() == std::io::ErrorKind::NotFound {
+                CoreError::Update(format!(
+                    "{} disappeared before its profile assignment could be committed",
+                    target_path.display()
+                ))
+            } else {
+                map_locked_file_error(
+                    error,
+                    &format!("claiming {} for profile assignment", target_path.display()),
+                )
+            };
+            return Err(rollback_profile_assignment_save(save_pending, error));
+        }
+    };
+    let claimed_save = match fs::read(&save_claim) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let error = abort_claim_with_restore(
+                target_path,
+                &save_claim,
+                CoreError::Io(format!(
+                    "could not verify {} before committing its profile assignment: {error}",
+                    target_path.display()
+                )),
+            );
+            return Err(rollback_profile_assignment_save(save_pending, error));
+        }
+    };
+    if claimed_save != save_edited {
+        let error = abort_claim_with_restore(
+            target_path,
+            &save_claim,
+            CoreError::Update(format!(
+                "{} changed again before its profile assignment could be committed; the newer save was preserved",
+                target_path.display()
+            )),
+        );
+        return Err(rollback_profile_assignment_save(save_pending, error));
+    }
+    if let Err(error) = before_companion_replace(target_path) {
+        let error = abort_claim_with_restore(target_path, &save_claim, error);
+        return Err(rollback_profile_assignment_save(save_pending, error));
+    }
+
+    let persistent_pending = match begin_replace_if_unchanged(
         persistent_path,
         persistent_tmp.path(),
         &FileSnapshot::Present(persistent_original.clone()),
     ) {
-        Ok(persistent_pending) => {
-            persistent_pending.commit();
-            save_pending.commit();
-        }
+        Ok(persistent_pending) => persistent_pending,
         Err(error) => {
-            return match save_pending.rollback() {
-                Ok(()) => Err(error),
-                Err(rollback_error) => Err(CoreError::Update(format!(
-                    "{error}; save rollback also failed safely: {rollback_error}"
-                ))),
-            };
+            let error = abort_claim_with_restore(target_path, &save_claim, error);
+            return Err(rollback_profile_assignment_save(save_pending, error));
         }
+    };
+    if let Err(error) = restore_claim_noclobber(&save_claim, target_path) {
+        let restore_error = recovery_error(
+            target_path,
+            &save_claim,
+            "a concurrent writer created the save while its profile assignment was being committed",
+            error,
+        );
+        let error = match persistent_pending.rollback() {
+            Ok(()) => restore_error,
+            Err(rollback_error) => CoreError::Update(format!(
+                "{restore_error}; profile rollback failed safely: {rollback_error}"
+            )),
+        };
+        return Err(rollback_profile_assignment_save(save_pending, error));
     }
+    persistent_pending.commit();
+    save_pending.commit();
     invalidate_decoded_payload_cache(target_path);
 
     // An imported save carries its pinned NPCs with it, but the notes are keyed
@@ -17149,6 +17249,49 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(safety_bytes.contains(&save_original));
         assert!(safety_bytes.contains(&persistent_original));
+    }
+
+    #[test]
+    fn profile_assignment_rolls_back_companion_when_save_is_recreated_during_commit() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-006";
+        let save_path = dir.path().join(format!("{slot}.sav"));
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let save_original = build_gsav(
+            2,
+            &public_payload_with_profile("Assignment test", 0),
+            &minimal_stream(),
+            &[0, 0, 0, 0],
+        );
+        let concurrent_save = minimal_gsav("Concurrent cloud save");
+        let persistent_original = assignment_persistent_data_list(slot, 0);
+        fs::write(&save_path, &save_original).unwrap();
+        fs::write(&persistent_path, &persistent_original).unwrap();
+
+        let error = assign_save_profile_with_hooks(
+            &save_path,
+            None,
+            &persistent_path,
+            1,
+            false,
+            |_| Ok(()),
+            |target| {
+                assert!(!target.exists());
+                fs::write(target, &concurrent_save)?;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, CoreError::Update(_)));
+        assert_eq!(fs::read(&save_path).unwrap(), concurrent_save);
+        assert_eq!(fs::read(&persistent_path).unwrap(), persistent_original);
+        let safety_bytes = fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .filter_map(|entry| fs::read(entry.path()).ok())
+            .collect::<Vec<_>>();
+        assert!(safety_bytes.contains(&save_original));
     }
 
     #[test]
