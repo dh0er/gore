@@ -907,6 +907,11 @@ fn emit_function_ctor(
     // The type each slot's captured call result actually has — the witness the operand gates
     // need to tell a plain read from a read the declaration converts.
     let call_result_types = call_result_types(f, refs);
+    // Slots vanilla filled from a call that returns `T&`. The slot holds a POINTER, not a `T`, so
+    // rendering it by value costs a copy constructor and a scope-exit destructor — and because the
+    // return then travels as an address rather than through a register, the name looked like a
+    // dead store and was deleted outright. One missing fact, three symptoms.
+    let reference_locals = reference_result_slots(f, refs);
     // Producers the SOURCE kept as statements of their own — see `statement_producer_slots`.
     let statement_producers = statement_producer_slots(f);
     // Where vanilla destroyed a value slot mid-expression it was calling on a temporary there.
@@ -1863,7 +1868,7 @@ fn emit_function_ctor(
         // the copy-construction the merge is looking for.
         let body = drop_redundant_conversions(&body, fields, &path_roots, refs);
         let (body, value_suppressed) =
-            rewrite_value_decl_init(&body, &locals, refs, &copy_constructed_slots(f, refs));
+            rewrite_value_decl_init(&body, &locals, refs, &copy_constructed_slots(f, refs), &reference_locals);
         // A local that receives a CONST call result has to be const as well, and a const local is
         // declared where it gets its value.
         let (body, const_suppressed) =
@@ -1888,7 +1893,7 @@ fn emit_function_ctor(
         .copied()
         .collect();
         let (body, first_use_suppressed) =
-            rewrite_first_use_decl_init(&body, &locals, refs, &already_declared_at_use);
+            rewrite_first_use_decl_init(&body, &locals, refs, &already_declared_at_use, &reference_locals);
         let (body, first_write_suppressed) = rewrite_bare_decl_at_first_write(
             &body,
             &locals,
@@ -1948,6 +1953,9 @@ fn emit_function_ctor(
                 // `const` on the declaration matches the vanilla form (non-const stores into a
                 // const handle remain legal, so mixed-source slots are safe).
                 let _ = writeln!(s, "{ind}    const {ty} local_{slot};");
+            } else if let Some(is_const) = reference_locals.get(slot) {
+                let qualifier = if *is_const { "const " } else { "" };
+                let _ = writeln!(s, "{ind}    {qualifier}{ty}& local_{slot};");
             } else {
                 let _ = writeln!(s, "{ind}    {ty} local_{slot};");
             }
@@ -3417,7 +3425,7 @@ fn rewrite_const_decl_init(
         return (body.to_owned(), HashSet::new());
     }
     let want = |slot: i32, _ty: &str| const_slots.contains(&slot);
-    rewrite_decl_at_assignment(body, locals, &want, &|ty| {
+    rewrite_decl_at_assignment(body, locals, &want, &|_, ty| {
         format!("const {}", qualify_decl_type(ty, refs))
     })
 }
@@ -3863,6 +3871,51 @@ fn const_call_result_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
                 }
             }
             _ => returned = None,
+        }
+    }
+    out
+}
+
+/// Slots a `T&`-returning call fills: the source declared a REFERENCE there.
+fn reference_result_slots(f: &Func, refs: &RefResolver) -> HashMap<i32, bool> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashMap::new();
+    };
+    let by_reference = |ty: &super::types::DataType| {
+        ty.is_reference && ty.token == 5 && !ty.is_object_handle
+    };
+    let mut out = HashMap::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if ins.op.name != "CpyRtoV8" || at == 0 {
+            continue;
+        }
+        let call = &instrs[at - 1];
+        let returns = match call.op.name {
+            "CALLSYS" | "Thiscall1" => {
+                refs.func_ret_by_ptr(call.qwords.first().copied().unwrap_or(0) as i64)
+            }
+            "CALL" | "CALLINTF" | "CALLBND" => {
+                refs.func_ret_by_id(call.dwords.first().copied().unwrap_or(0) as i32)
+            }
+            _ => None,
+        };
+        if std::env::var_os("GORE_AS_REF_DIAG").is_some() {
+            eprintln!(
+                "[ref] {} slot={:?} ret={:?}",
+                call.op.name,
+                ins.words.first().map(|w| *w as i16 as i32),
+                returns.map(|t| (t.is_reference, t.token, t.is_object_handle))
+            );
+        }
+        if let Some(ret) = returns.filter(|ret| by_reference(ret)) {
+            if let Some(slot) = ins.words.first().map(|word| *word as i16 as i32) {
+                if slot > 0 {
+                    // A const reference has to say so, or the initializer is refused:
+                    // "Cannot initialize reference variable of type T& with an expression of
+                    // type const T".
+                    out.insert(slot, ret.is_read_only || ret.is_object_const);
+                }
+            }
         }
     }
     out
@@ -12415,7 +12468,7 @@ fn rewrite_iterator_decl_init(
         )
     };
     // `auto`, not the inferred iterator head — see the render comment below.
-    rewrite_decl_at_assignment(body, locals, &is_iter, &|_| "auto".to_string())
+    rewrite_decl_at_assignment(body, locals, &is_iter, &|_, _| "auto".to_string())
 }
 
 /// A VALUE-type local (`F*`/`T*`) that is hoisted and then assigned costs two symbols vanilla
@@ -12455,6 +12508,7 @@ fn rewrite_value_decl_init(
     locals: &BTreeMap<i32, String>,
     refs: &RefResolver,
     copy_constructed: &HashSet<i32>,
+    reference_locals: &HashMap<i32, bool>,
 ) -> (String, HashSet<i32>) {
     // A slot vanilla COPY-constructs was declared with its value: the `$beh0` there takes a
     // parameter, which a default construction does not. That is a fact about this function, and
@@ -12464,7 +12518,13 @@ fn rewrite_value_decl_init(
         copy_constructed.contains(&slot)
             || (is_value_struct_type(ty) && !constructs_by_assignment(ty, refs))
     };
-    rewrite_decl_at_assignment(body, locals, &is_value, &|ty| ty.to_string())
+    rewrite_decl_at_assignment(body, locals, &is_value, &|slot, ty| {
+        match reference_locals.get(&slot) {
+            Some(true) => format!("const {ty}&"),
+            Some(false) => format!("{ty}&"),
+            None => ty.to_string(),
+        }
+    })
 }
 
 /// A local whose first reference WRITES it through a member or an element — `local_N.Field = …;`
@@ -12541,6 +12601,7 @@ fn rewrite_first_use_decl_init(
     locals: &BTreeMap<i32, String>,
     refs: &RefResolver,
     already: &HashSet<i32>,
+    reference_locals: &HashMap<i32, bool>,
 ) -> (String, HashSet<i32>) {
     // Only where the assignment stands at the FUNCTION's own level. Inside a loop or a branch a
     // declaration is entered and left again with the block, and the compiler spends the slot's
@@ -12548,7 +12609,14 @@ fn rewrite_first_use_decl_init(
     // (measured: 94 functions lost against 46 gained when this was not required).
     let wanted =
         |slot: i32, _ty: &str| !already.contains(&slot) && first_top_level_assignment_before_read(body, slot);
-    rewrite_decl_at_assignment(body, locals, &wanted, &|ty| qualify_decl_type(ty, refs))
+    rewrite_decl_at_assignment(body, locals, &wanted, &|slot, ty| {
+        let head = qualify_decl_type(ty, refs);
+        match reference_locals.get(&slot) {
+            Some(true) => format!("const {head}&"),
+            Some(false) => format!("{head}&"),
+            None => head,
+        }
+    })
 }
 
 /// Shared engine for both: declare a local at the assignment that first gives it a value,
@@ -12575,7 +12643,7 @@ fn rewrite_decl_at_assignment(
     body: &str,
     locals: &BTreeMap<i32, String>,
     want: &dyn Fn(i32, &str) -> bool,
-    decl_head: &dyn Fn(&str) -> String,
+    decl_head: &dyn Fn(i32, &str) -> String,
 ) -> (String, HashSet<i32>) {
     let mut suppressed: HashSet<i32> = HashSet::new();
     let mut out = body.to_string();
@@ -12659,7 +12727,7 @@ fn rewrite_decl_at_assignment(
             if decl_lines.contains(&i) {
                 let t = line.trim_start();
                 let indent = &line[..line.len() - t.len()];
-                let head = decl_head(ty);
+                let head = decl_head(*slot, ty);
                 let _ = writeln!(rewritten, "{indent}{head} {t}");
             } else {
                 rewritten.push_str(&line);

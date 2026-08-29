@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,386 functions (0.84%) recompile to bytecode that differs semantically.** A semantic
+**1,384 functions (0.84%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -788,6 +788,16 @@ conditional straight to the break target still leaves a fall-through that reache
 The one function this turns into an empty `if { }` was the named risk, and the corpus answers it —
 the tree already carried 154 such blocks and compiled. 1,412 to 1,386, twenty-six fixed and none
 broken.
+
+**A slot a `T&`-returning call fills holds a POINTER, not a `T`.** Rendered by value it costs a
+copy constructor and a scope-exit destructor that vanilla does not have. The type map must not
+carry the `&` — there are two of them and a qualifier in one poisons every comparison against the
+other — so the reference slots travel as their own set and the `&` is appended at the declaration
+sites only. A const return has to say `const T&`, or the initializer is refused outright.
+
+The other half of that lever — recovering `return <name>;` where the value travels as an address
+rather than through a register — is NOT in: it put a local out of scope in one function and made
+another return a reference into an expression the compiler refuses to keep alive. 1,386 to 1,384.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
