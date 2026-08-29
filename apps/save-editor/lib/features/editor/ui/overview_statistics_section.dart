@@ -176,10 +176,13 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
         } else if (defeated && targetCategory == _TargetCategory.npc) {
           defeatedNpcs++;
         }
-        if (tags.contains('memory.guild.joined')) {
+        if (tags.contains('memory.guild.joined') ||
+            tags.contains('memory.guild.expelled')) {
           // The timestamp is optional, so comparing it with an array index
           // mixes unrelated units. The event index is present for every row
-          // and preserves one consistent ordering across mixed records.
+          // and preserves one consistent ordering across mixed records. Keep
+          // expulsions as membership changes too so a later expulsion clears
+          // an earlier join instead of leaving a stale guild visible.
           if (latestGuildEvent == null ||
               event.index >= latestGuildEvent.index) {
             latestGuildEvent = event;
@@ -217,6 +220,9 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
 
   static String? _guildTag(MemoryEvent? event) {
     if (event == null) return null;
+    if (event.tags.any((tag) => tag.toLowerCase() == 'memory.guild.expelled')) {
+      return null;
+    }
     for (final tag in event.tags) {
       final lower = tag.toLowerCase();
       if (lower == 'memory.guild.joined') continue;

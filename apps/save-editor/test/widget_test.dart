@@ -1391,6 +1391,46 @@ void main() {
     }
   });
 
+  testWidgets('overview clears a guild after a later expulsion', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1500, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.runAsync(loadCharacterCategoryCatalog);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(
+            _ExpelledStatisticsCoreService(),
+          ),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 10)),
+    );
+    await tester.pumpAndSettle();
+
+    final characterCard = find.byKey(
+      const ValueKey('statistics-card-character'),
+    );
+    expect(
+      find.descendant(of: characterCard, matching: find.text('Guild')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: characterCard, matching: find.text('Not available')),
+      findsOneWidget,
+    );
+    expect(find.text('New Camp\nMercenary'), findsNothing);
+  });
+
   testWidgets('unavailable private statistics are not rendered as zero', (
     tester,
   ) async {
@@ -2627,6 +2667,32 @@ class _StatisticsCoreService extends _FakeCoreService {
       };
     }
     return super.execute(command, payload: payload);
+  }
+}
+
+class _ExpelledStatisticsCoreService extends _StatisticsCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    final response = await super.execute(command, payload: payload);
+    if (command != 'query_progression' ||
+        payload['section'] != 'events' ||
+        payload['character'] != 'Hero_Global') {
+      return response;
+    }
+
+    final data = (response['data'] as Map).cast<String, Object?>();
+    final events = data['events'] as List<Object?>;
+    events.add({
+      'index': 6,
+      'tags': ['Memory.Guild.Expelled', 'Guild.Human.NewCamp.Mercenary'],
+      'affected': 'Hero',
+    });
+    data['total'] = events.length;
+    data['count'] = events.length;
+    return response;
   }
 }
 
