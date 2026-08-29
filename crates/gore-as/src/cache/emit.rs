@@ -2091,6 +2091,11 @@ fn emit_function_ctor(
                 .union(&immediately_consumed_defs(f))
                 .copied()
                 .chain(rvo_temporary_slots(f, refs).into_iter().map(|slot| (slot, 1)))
+                .chain(
+                    fused_short_circuit_carriers(f)
+                        .into_iter()
+                        .map(|slot| (slot, 1)),
+                )
                 .collect(),
             &wholly_consumed_object_slots(f),
             &rvo_temporary_slots(f, refs),
@@ -2105,6 +2110,11 @@ fn emit_function_ctor(
                 .union(&immediately_consumed_defs(f))
                 .copied()
                 .chain(rvo_temporary_slots(f, refs).into_iter().map(|slot| (slot, 1)))
+                .chain(
+                    fused_short_circuit_carriers(f)
+                        .into_iter()
+                        .map(|slot| (slot, 1)),
+                )
                 .collect(),
             &wholly_consumed_object_slots(f),
             &rvo_temporary_slots(f, refs),
@@ -10456,6 +10466,58 @@ fn declared_at_initializer_carriers(f: &Func) -> HashSet<i32> {
         if consumed {
             out.insert(slot);
         }
+    }
+    out
+}
+
+/// A short-circuit carrier the source never named at all.
+///
+/// The compiler materialises a branch condition into a slot and reloads it — `CpyRtoV4 S;
+/// CpyVtoR1 S; J…` — and its peephole collapses that round trip to a bare conditional jump
+/// exactly when the slot is a free temporary. So a diamond whose left test vanilla FUSED
+/// (`CmpPtrNull v4; JNZ`, no round trip) had no name there: the source wrote the whole chain
+/// where it is read.
+///
+/// Same diamonds as [`declared_at_initializer_carriers`], asked the other question.
+fn fused_short_circuit_carriers(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let mut out = HashSet::new();
+    for (at, arm) in instrs.iter().enumerate() {
+        let slot = w0(arm);
+        if !arm.op.name.starts_with("SetV") || slot <= 0 || at < 2 {
+            continue;
+        }
+        let Some(jump) = instrs.get(at + 1) else {
+            continue;
+        };
+        if jump.op.name != "JMP" {
+            continue;
+        }
+        let Some(offset) = jump.dwords.first().map(|word| *word as i32) else {
+            continue;
+        };
+        let target = jump.offset_dw as i64 + 2 + i64::from(offset);
+        let Some(merge) = instrs.iter().position(|other| other.offset_dw as i64 == target) else {
+            continue;
+        };
+        let written = merge
+            .checked_sub(1)
+            .and_then(|before| instrs.get(before))
+            .is_some_and(|before| before.op.name.starts_with("CpyVtoV") && w0(before) == slot);
+        if !written {
+            continue;
+        }
+        // The arm is entered by the left test. A round trip in front of it names the slot; a
+        // compare straight into the jump does not.
+        if !instrs[at - 1].op.name.starts_with('J')
+            || matches!(instrs[at - 2].op.name, "CpyVtoR1" | "CpyVtoR4")
+        {
+            continue;
+        }
+        out.insert(slot);
     }
     out
 }
