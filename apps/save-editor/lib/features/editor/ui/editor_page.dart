@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -15,15 +16,16 @@ import 'package:goresave/features/editor/domain/game_time.dart';
 import 'package:goresave/features/editor/domain/item_icon_catalog.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/ui/characters_tab.dart';
+import 'package:goresave/features/editor/ui/overview_statistics_section.dart';
 import 'package:goresave/features/editor/ui/profile_localization.dart';
 import 'package:goresave/features/editor/ui/slot_repair_banner.dart';
 import 'package:goresave/features/editor/ui/title_preparation_progress.dart';
 import 'package:goresave/features/localization/domain/localization_controller.dart';
-import 'package:goresave/features/localization/ui/localization_flow.dart';
 import 'package:goresave/features/localization/ui/localization_settings.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
 import 'package:goresave/providers/data_providers.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 import 'package:intl/intl.dart';
 import 'difficulty_dialog.dart';
 import 'world_tab.dart';
@@ -41,12 +43,11 @@ class _EditorPageState extends ConsumerState<EditorPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // First-run, optional localized-text extraction prompt. Runs after the
-    // first frame so the Scaffold (SnackBar host) and Navigator (dialog host)
-    // exist. Guarded by a persisted flag so it only auto-prompts once; the
-    // manual Settings button stays available regardless.
+    // Prepare localized text without interrupting startup. A missing source is
+    // reported non-modally; selecting an .lcache stays an explicit Settings
+    // action.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(_maybePromptLocalizationExtract());
+      unawaited(_prepareLocalizationAutomatically());
       // Covers a page that mounts with a save already inspected (a remount, a
       // hot reload): the listener in build only sees LATER changes.
       if (mounted) ref.read(editorProvider.notifier).prefetchTabData();
@@ -69,53 +70,38 @@ class _EditorPageState extends ConsumerState<EditorPage>
     if (state == AppLifecycleState.resumed) {
       ref.read(locCatalogReloadProvider.notifier).state++;
       unawaited(
-        ref
-            .read(itemIconCatalogRefreshProvider)
-            .refreshIfSourceChanged(),
+        ref.read(itemIconCatalogRefreshProvider).refreshIfSourceChanged(),
       );
     }
   }
 
-  Future<void> _maybePromptLocalizationExtract() async {
-    // Always refresh status first, so the Settings localization card reflects a
-    // catalog extracted earlier (or via `gore-cli loc extract`). The persisted
-    // flag only suppresses the one-time prompt dialog, not the status refresh.
+  Future<void> _prepareLocalizationAutomatically() async {
+    // Always refresh status first so Settings reflects a catalog created by
+    // another GORE tool. A failed status query must not be mistaken for a
+    // missing catalog.
     final present = await ref
         .read(localizationControllerProvider.notifier)
         .status();
-    // Only prompt when the catalog is definitively absent: a null status means
-    // the query failed (e.g. core unavailable), where extraction can't work.
+    // Only extract when the catalog is definitively absent: null means the
+    // query itself failed (for example because Core is unavailable).
     if (present != false || !mounted) return;
-
-    final store = ref.read(uiSettingsStoreProvider);
-    if (store.read().locExtractPrompted) return;
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) {
-        final l10n = AppLocalizations.of(context);
-        return AlertDialog(
-          title: Text(l10n.extractLocalizedTextTitle),
-          content: Text(l10n.extractLocalizedTextBody),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: Text(l10n.notNow),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: Text(l10n.extract),
-            ),
-          ],
-        );
-      },
-    );
-    if (confirmed != true || !mounted) return;
-    // Record only once the user chose to extract, so the flag isn't set when the
-    // dialog never appeared and deferring ("Not now") lets the optional prompt
-    // offer again on a later launch (matching gore-mod).
-    store.write(store.read().copyWith(locExtractPrompted: true));
-    await runLocalizationExtractFlow(context, ref);
+    final result = await ref
+        .read(automaticLocalizationExtractorProvider)
+        .extract();
+    if (!mounted) return;
+    // A catalog can already have been written when only its metadata write
+    // failed, so reload after every non-interactive attempt.
+    ref.read(locCatalogReloadProvider.notifier).state++;
+    if (result.notFound) {
+      final store = ref.read(uiSettingsStoreProvider);
+      if (store.read().gameDataSourceNoticeShown) return;
+      store.write(store.read().copyWith(gameDataSourceNoticeShown: true));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(AppLocalizations.of(context).gameDataSourceMissing),
+        ),
+      );
+    }
   }
 
   @override
@@ -139,33 +125,67 @@ class _EditorPageState extends ConsumerState<EditorPage>
       // moves the window, double-click toggles maximize/restore.
       appBar: AppBar(
         title: WindowDragArea(
-          child: Row(
-            children: [
-              const SizedBox(width: 16),
-              Image.asset(
-                'assets/goresave_icon.png',
-                height: 32,
-                semanticLabel: l10n.appLogoSemanticLabel,
-              ),
-              const SizedBox(width: 10),
-              // Flexible + ellipsis: at narrow window widths the long title
-              // must truncate instead of overflowing the title bar row.
-              Flexible(
-                child: Text(
-                  l10n.appTitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              const fixedBrandWidth = 16.0 + 32.0 + 10.0 + 16.0;
+              const minimumProgressWidth = 96.0;
+              final maximumTitleWidth = math.max(
+                0.0,
+                math.min(
+                  260.0,
+                  constraints.maxWidth - fixedBrandWidth - minimumProgressWidth,
                 ),
-              ),
-              const SizedBox(width: 16),
-              const Expanded(
-                flex: 2,
-                child: Align(
-                  alignment: Alignment.center,
-                  child: TitlePreparationProgress(),
+              );
+              final titlePainter = TextPainter(
+                text: TextSpan(
+                  text: l10n.appTitle,
+                  style: DefaultTextStyle.of(context).style,
                 ),
-              ),
-            ],
+                maxLines: 1,
+                textDirection: Directionality.of(context),
+                textScaler: MediaQuery.textScalerOf(context),
+              )..layout(maxWidth: 260);
+              final titleWidth = math.min(
+                titlePainter.width,
+                maximumTitleWidth,
+              );
+              titlePainter.dispose();
+
+              return Row(
+                children: [
+                  const SizedBox(width: 16),
+                  SizedBox.square(
+                    dimension: 32,
+                    child: Image.asset(
+                      'assets/goresave_icon.png',
+                      fit: BoxFit.contain,
+                      semanticLabel: l10n.appLogoSemanticLabel,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  // Measure the title instead of giving it a flex lane: it
+                  // stays content-sized on wide windows, but yields space to
+                  // preparation progress when UI scaling narrows the AppBar.
+                  SizedBox(
+                    key: const ValueKey('title-brand'),
+                    width: titleWidth,
+                    child: Text(
+                      l10n.appTitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  const Expanded(
+                    key: ValueKey('title-progress-available-space'),
+                    child: Align(
+                      alignment: Alignment.center,
+                      child: TitlePreparationProgress(),
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
         ),
         titleSpacing: 0,
@@ -269,6 +289,7 @@ class _SaveSidebar extends StatelessWidget {
             otherSavesSelected: state.otherSavesSelected,
             notifier: notifier,
             isLoading: state.isLoading,
+            profileWritesBlocked: state.deletedSaveRecovery != null,
           ),
           if (state.otherSavesSelected)
             Padding(
@@ -320,9 +341,23 @@ class _SaveSidebar extends StatelessWidget {
                           onRemoveFromProfile:
                               assignedProfile == null ||
                                   state.isLoading ||
+                                  state.deletedSaveRecovery != null ||
                                   state.hasUnsavedEdits
                               ? null
                               : () => _confirmRemoveSaveFromProfile(
+                                  context,
+                                  save: save,
+                                  profile: assignedProfile!,
+                                  notifier: notifier,
+                                ),
+                          onDeleteSave:
+                              assignedProfile == null ||
+                                  save.isMissing ||
+                                  state.isLoading ||
+                                  state.deletedSaveRecovery != null ||
+                                  state.hasUnsavedEdits
+                              ? null
+                              : () => _confirmDeleteSave(
                                   context,
                                   save: save,
                                   profile: assignedProfile!,
@@ -353,6 +388,7 @@ class _ProfileHeader extends StatelessWidget {
     required this.otherSavesSelected,
     required this.notifier,
     required this.isLoading,
+    required this.profileWritesBlocked,
   });
 
   final ProfileSummary? profile;
@@ -360,6 +396,7 @@ class _ProfileHeader extends StatelessWidget {
   final bool otherSavesSelected;
   final EditorNotifier notifier;
   final bool isLoading;
+  final bool profileWritesBlocked;
 
   @override
   Widget build(BuildContext context) {
@@ -406,7 +443,7 @@ class _ProfileHeader extends StatelessWidget {
                   child: ProfileDifficultyChip(
                     profile: profile,
                     notifier: notifier,
-                    isLoading: isLoading,
+                    isLoading: isLoading || profileWritesBlocked,
                   ),
                 ),
               ],
@@ -567,6 +604,7 @@ class _SaveSlotCard extends StatelessWidget {
     required this.onTap,
     required this.showRemoveFromOther,
     this.onRemoveFromProfile,
+    this.onDeleteSave,
     this.onRemoveFromOther,
   });
 
@@ -576,6 +614,7 @@ class _SaveSlotCard extends StatelessWidget {
   final VoidCallback onTap;
   final bool showRemoveFromOther;
   final VoidCallback? onRemoveFromProfile;
+  final VoidCallback? onDeleteSave;
   final VoidCallback? onRemoveFromOther;
 
   @override
@@ -631,81 +670,151 @@ class _SaveSlotCard extends StatelessWidget {
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Column(
+                child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.only(top: 2),
-                          child: save.isMissing
-                              ? Tooltip(
-                                  message: l10n.missingSaveReference,
-                                  child: Icon(
-                                    Icons.link_off_outlined,
-                                    size: 16,
-                                    color: scheme.error,
-                                  ),
-                                )
-                              : _SaveKindIcon(
-                                  quickSave: save.quickSave,
-                                  autoSave: save.autoSave,
-                                  external: save.isExternal,
-                                  selected: selected,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.only(top: 2),
+                                child: save.isMissing
+                                    ? Tooltip(
+                                        message: l10n.missingSaveReference,
+                                        child: Icon(
+                                          Icons.link_off_outlined,
+                                          size: 16,
+                                          color: scheme.error,
+                                        ),
+                                      )
+                                    : _SaveKindIcon(
+                                        quickSave: save.quickSave,
+                                        autoSave: save.autoSave,
+                                        external: save.isExternal,
+                                        selected: selected,
+                                      ),
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  save.displayName,
+                                  key: ValueKey('save-title-${save.slot}'),
+                                  maxLines: 3,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.titleSmall,
                                 ),
-                        ),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            save.displayName,
-                            maxLines: 3,
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            _saveSlotSubtitle(l10n, save),
+                            key: ValueKey('save-subtitle-${save.slot}'),
+                            maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.titleSmall,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: scheme.onSurfaceVariant),
                           ),
-                        ),
-                        if (onRemoveFromProfile != null)
-                          IconButton(
-                            key: ValueKey(
-                              'remove-save-profile-${save.persistentProfileId}-${save.slot}',
-                            ),
-                            icon: const Icon(Icons.link_off_outlined, size: 18),
-                            tooltip: l10n.removeFromProfile,
-                            visualDensity: VisualDensity.compact,
-                            constraints: const BoxConstraints(
-                              minWidth: 32,
-                              minHeight: 32,
-                            ),
-                            color: save.isMissing
-                                ? scheme.error
-                                : scheme.onSurfaceVariant,
-                            onPressed: onRemoveFromProfile,
+                          const SizedBox(height: 2),
+                          Text(
+                            save.fileName,
+                            key: ValueKey('save-file-name-${save.slot}'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: scheme.onSurfaceVariant),
                           ),
-                        if (showRemoveFromOther)
-                          IconButton(
-                            key: ValueKey('remove-other-save-${save.path}'),
-                            icon: const Icon(Icons.close, size: 18),
-                            tooltip: l10n.removeEntry,
-                            visualDensity: VisualDensity.compact,
-                            constraints: const BoxConstraints(
-                              minWidth: 32,
-                              minHeight: 32,
-                            ),
-                            color: scheme.onSurfaceVariant,
-                            onPressed: onRemoveFromOther,
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      _saveSlotSubtitle(l10n, save),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
+                        ],
                       ),
                     ),
+                    if (onRemoveFromProfile != null || onDeleteSave != null)
+                      SizedBox.square(
+                        dimension: 32,
+                        child: PopupMenuButton<String>(
+                          key: ValueKey(
+                            'save-actions-menu-${save.persistentProfileId}-${save.slot}',
+                          ),
+                          tooltip: MaterialLocalizations.of(
+                            context,
+                          ).moreButtonTooltip,
+                          icon: const Icon(Icons.more_vert),
+                          iconSize: 18,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 320,
+                            maxWidth: 360,
+                          ),
+                          onSelected: (action) {
+                            switch (action) {
+                              case 'remove-from-profile':
+                                onRemoveFromProfile?.call();
+                              case 'delete-save':
+                                onDeleteSave?.call();
+                            }
+                          },
+                          itemBuilder: (context) => [
+                            if (onRemoveFromProfile != null)
+                              PopupMenuItem<String>(
+                                key: ValueKey(
+                                  'remove-save-profile-${save.persistentProfileId}-${save.slot}',
+                                ),
+                                value: 'remove-from-profile',
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      Icons.link_off_outlined,
+                                      size: 18,
+                                      color: save.isMissing
+                                          ? scheme.error
+                                          : scheme.onSurfaceVariant,
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Text(l10n.removeFromProfile),
+                                  ],
+                                ),
+                              ),
+                            if (onDeleteSave != null)
+                              PopupMenuItem<String>(
+                                key: ValueKey(
+                                  'delete-save-${save.persistentProfileId}-${save.slot}',
+                                ),
+                                value: 'delete-save',
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      Icons.delete_forever_outlined,
+                                      size: 18,
+                                      color: scheme.error,
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Text(
+                                      l10n.deleteSavegame,
+                                      style: TextStyle(color: scheme.error),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    if (showRemoveFromOther)
+                      IconButton(
+                        key: ValueKey('remove-other-save-${save.path}'),
+                        icon: const Icon(Icons.close, size: 18),
+                        tooltip: l10n.removeEntry,
+                        visualDensity: VisualDensity.compact,
+                        constraints: const BoxConstraints(
+                          minWidth: 32,
+                          minHeight: 32,
+                        ),
+                        color: scheme.onSurfaceVariant,
+                        onPressed: onRemoveFromOther,
+                      ),
                   ],
                 ),
               ),
@@ -815,6 +924,44 @@ Future<void> _confirmRemoveSaveFromProfile(
   );
 }
 
+Future<void> _confirmDeleteSave(
+  BuildContext context, {
+  required SaveSlot save,
+  required ProfileSummary profile,
+  required EditorNotifier notifier,
+}) async {
+  final l10n = AppLocalizations.of(context);
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(l10n.deleteSavegameTitle),
+      content: Text(
+        l10n.deleteSavegameBody(
+          save.displayName,
+          save.fileName,
+          localizedProfileDisplayName(l10n, profile),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: Text(l10n.cancel),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: Theme.of(context).colorScheme.error,
+            foregroundColor: Theme.of(context).colorScheme.onError,
+          ),
+          onPressed: () => Navigator.of(context).pop(true),
+          child: Text(l10n.deleteSavegame),
+        ),
+      ],
+    ),
+  );
+  if (confirmed != true) return;
+  await notifier.deleteSave(slot: save.slot, profileId: profile.profileId);
+}
+
 String _formatDurationSeconds(AppLocalizations l10n, double? seconds) {
   if (seconds == null || seconds.isNaN || seconds.isInfinite) return '-';
   final totalMinutes = (seconds < 0 ? 0 : seconds / 60).floor();
@@ -846,9 +993,46 @@ class _EditorWorkspace extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final l10n = AppLocalizations.of(context);
+
+    Widget writeMessageBanner() {
+      return MaterialBanner(
+        leading: const Icon(Icons.check_circle_outline),
+        content: Text(state.lastWriteMessage!),
+        actions: [
+          TextButton(
+            onPressed: state.isLoading ? null : notifier.dismissWriteMessage,
+            child: Text(l10n.ok),
+          ),
+        ],
+      );
+    }
+
+    Widget deletedSaveRecoveryBanner() {
+      final recovery = state.deletedSaveRecovery!;
+      return MaterialBanner(
+        leading: const Icon(Icons.check_circle_outline),
+        content: Text(recovery.message),
+        actions: [
+          TextButton.icon(
+            onPressed: state.isLoading || state.hasUnsavedEdits
+                ? null
+                : () => notifier.restoreDeletedSave(),
+            icon: const Icon(Icons.undo),
+            label: Text(l10n.restoreBackupTooltip(recovery.fileName)),
+          ),
+          TextButton(
+            onPressed: state.isLoading
+                ? null
+                : notifier.dismissDeletedSaveRecovery,
+            child: Text(l10n.ok),
+          ),
+        ],
+      );
+    }
+
     Widget content;
     if (state.inspection == null) {
-      content = state.error != null
+      final emptyPane = state.error != null
           ? _MessagePane(
               icon: Icons.error_outline,
               title: l10n.errorTitle,
@@ -858,6 +1042,18 @@ class _EditorWorkspace extends StatelessWidget {
               icon: Icons.search,
               title: l10n.selectASaveTitle,
               body: l10n.selectASaveBody,
+            );
+      final hasBanner =
+          state.deletedSaveRecovery != null || state.lastWriteMessage != null;
+      content = !hasBanner
+          ? emptyPane
+          : Column(
+              children: [
+                if (state.deletedSaveRecovery != null)
+                  deletedSaveRecoveryBanner(),
+                if (state.lastWriteMessage != null) writeMessageBanner(),
+                Expanded(child: emptyPane),
+              ],
             );
     } else {
       final inspection = state.inspection!;
@@ -928,6 +1124,8 @@ class _EditorWorkspace extends StatelessWidget {
                       onPressed:
                           pendingCount > 0 &&
                               !state.isLoading &&
+                              (!state.pendingEditsChangePersistentDataList ||
+                                  state.deletedSaveRecovery == null) &&
                               !state.hasInvalidEdits
                           ? notifier.saveAllPending
                           : null,
@@ -948,17 +1146,8 @@ class _EditorWorkspace extends StatelessWidget {
                   ),
                 ],
               ),
-            if (state.lastWriteMessage != null)
-              MaterialBanner(
-                leading: const Icon(Icons.check_circle_outline),
-                content: Text(state.lastWriteMessage!),
-                actions: [
-                  TextButton(
-                    onPressed: notifier.dismissWriteMessage,
-                    child: Text(l10n.ok),
-                  ),
-                ],
-              ),
+            if (state.deletedSaveRecovery != null) deletedSaveRecoveryBanner(),
+            if (state.lastWriteMessage != null) writeMessageBanner(),
             Expanded(
               child: TabBarView(
                 children: [
@@ -1132,24 +1321,11 @@ class _OverviewPanel extends StatelessWidget {
           ),
           const SizedBox(height: 16),
         ],
-        _HeaderCard(inspection: inspection, save: state.selectedSave),
-        const SizedBox(height: 16),
-        _MetadataEditor(
-          inspection: inspection,
-          notifier: notifier,
-          syncPersistentDataList: state.selectedSave?.isExternal != true,
-        ),
+        _HeaderCard(inspection: inspection, state: state, notifier: notifier),
         const SizedBox(height: 16),
         _SaveProfileCard(state: state, notifier: notifier),
         const SizedBox(height: 16),
-        _GameTimeCard(
-          inspection: inspection,
-          notifier: notifier,
-          editable:
-              inspection.privateEditable &&
-              inspection.privateTypedVerified &&
-              state.codecCompressReady,
-        ),
+        OverviewStatisticsSection(inspection: inspection, notifier: notifier),
       ],
     );
   }
@@ -1279,8 +1455,8 @@ class _DebugSectionState extends State<_DebugSection> {
                       alignment: Alignment.centerLeft,
                       child: SelectableText(
                         _json(inspection),
-                        style: const TextStyle(
-                          fontFamily: 'Consolas',
+                        style: TextStyle(
+                          fontFamily: uiAwareMonospaceFontFamily(context),
                           fontSize: 12,
                         ),
                       ),
@@ -1296,15 +1472,47 @@ class _DebugSectionState extends State<_DebugSection> {
   }
 }
 
-class _HeaderCard extends StatelessWidget {
-  const _HeaderCard({required this.inspection, this.save});
+ProfileSummary? _selectedSaveProfile(EditorState state) {
+  final save = state.selectedSave;
+  if (save == null || save.isExternal) return null;
+  for (final profile in state.profiles) {
+    if (profile.profileId == save.persistentProfileId) return profile;
+  }
+  return null;
+}
+
+class _HeaderCard extends StatefulWidget {
+  const _HeaderCard({
+    required this.inspection,
+    required this.state,
+    required this.notifier,
+  });
 
   final SaveInspection inspection;
-  final SaveSlot? save;
+  final EditorState state;
+  final EditorNotifier notifier;
+
+  @override
+  State<_HeaderCard> createState() => _HeaderCardState();
+}
+
+class _HeaderCardState extends State<_HeaderCard> {
+  final _saveNameKey = GlobalKey<_SaveNameEditorState>();
+  final _gameTimeKey = GlobalKey<_GameTimeBadgeState>();
 
   @override
   Widget build(BuildContext context) {
+    final inspection = widget.inspection;
+    final state = widget.state;
+    final notifier = widget.notifier;
     final l10n = AppLocalizations.of(context);
+    final save = state.selectedSave;
+    final currentProfile = _selectedSaveProfile(state);
+    final actionsEnabled =
+        !state.isLoading &&
+        !state.hasUnsavedEdits &&
+        state.deletedSaveRecovery == null &&
+        currentProfile != null;
     final screenshot = save?.screenshot ?? inspection.screenshot;
     final title =
         save?.displayName ??
@@ -1313,87 +1521,171 @@ class _HeaderCard extends StatelessWidget {
         l10n.savegameFallbackTitle;
     final slot = save?.slot ?? inspection.slot ?? l10n.savegameFallbackTitle;
     return Card(
+      key: const ValueKey('selected-save-header-card'),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: LayoutBuilder(
           builder: (context, constraints) {
             final compact = constraints.maxWidth < 560;
-            final previewWidth = compact ? 170.0 : 320.0;
+            final previewWidth = compact
+                ? constraints.maxWidth.clamp(0.0, 320.0).toDouble()
+                : 320.0;
             final previewHeight = previewWidth * 9 / 16;
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SizedBox(
-                  width: previewWidth,
-                  height: previewHeight,
-                  child: _ScreenshotPreview(
-                    screenshot: screenshot,
-                    slot: slot,
-                    compact: compact,
+            final preview = SizedBox(
+              key: const ValueKey('header-screenshot'),
+              width: previewWidth,
+              height: previewHeight,
+              child: _ScreenshotPreview(
+                screenshot: screenshot,
+                slot: slot,
+                compact: compact,
+              ),
+            );
+
+            Widget badges() {
+              final summaryBadges = <Widget>[
+                if (inspection.chapterId != null)
+                  _InfoPill(
+                    key: const ValueKey('chapter-badge'),
+                    icon: Icons.flag_outlined,
+                    label: l10n.chapterLabel(inspection.chapterId!),
                   ),
+                if (inspection.timePlayedSeconds != null)
+                  _InfoPill(
+                    key: const ValueKey('time-played-badge'),
+                    icon: Icons.timer_outlined,
+                    label: _formatDurationSeconds(
+                      l10n,
+                      inspection.timePlayedSeconds,
+                    ),
+                  ),
+              ];
+              return Column(
+                key: const ValueKey('header-badges'),
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (summaryBadges.isNotEmpty) ...[
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.end,
+                      children: summaryBadges,
+                    ),
+                    const SizedBox(height: 6),
+                  ],
+                  _GameTimeBadge(
+                    key: _gameTimeKey,
+                    inspection: inspection,
+                    notifier: notifier,
+                    editable:
+                        inspection.privateEditable &&
+                        inspection.privateTypedVerified &&
+                        state.codecCompressReady,
+                  ),
+                ],
+              );
+            }
+
+            Widget? deleteAction() {
+              if (save == null || currentProfile == null) return null;
+              return TextButton.icon(
+                key: const ValueKey('delete-selected-save'),
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(context).colorScheme.error,
+                  minimumSize: const Size(0, 32),
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.save_outlined,
-                            size: 28,
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              title,
-                              style: Theme.of(context).textTheme.titleLarge,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
+                icon: const Icon(Icons.delete_forever_outlined, size: 18),
+                label: Text(l10n.deleteSavegame),
+                onPressed: actionsEnabled
+                    ? () => _confirmDeleteSave(
+                        context,
+                        save: save,
+                        profile: currentProfile,
+                        notifier: notifier,
+                      )
+                    : null,
+              );
+            }
+
+            Widget details({required bool fillPreviewHeight}) {
+              final delete = deleteAction();
+              final nameSyncsPersistentDataList =
+                  state.selectedSave?.isExternal != true;
+              return Column(
+                key: const ValueKey('selected-save-header-details'),
+                mainAxisSize: fillPreviewHeight
+                    ? MainAxisSize.max
+                    : MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _SaveNameEditor(
+                    key: _saveNameKey,
+                    inspection: inspection,
+                    notifier: notifier,
+                    fallbackTitle: title,
+                    enabled:
+                        !state.isLoading &&
+                        (!nameSyncsPersistentDataList ||
+                            state.deletedSaveRecovery == null),
+                    syncPersistentDataList: nameSyncsPersistentDataList,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    inspection.path ?? '',
+                    key: const ValueKey('selected-save-path'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  if (fillPreviewHeight)
+                    const Spacer()
+                  else
+                    const SizedBox(height: 12),
+                  if (fillPreviewHeight)
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Expanded(child: badges()),
+                        if (delete != null) ...[
+                          const SizedBox(width: 4),
+                          delete,
                         ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        inspection.path ?? '',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                      Builder(
-                        builder: (context) {
-                          final pills = <Widget>[
-                            if (inspection.chapterId != null)
-                              _InfoPill(
-                                icon: Icons.flag_outlined,
-                                label: l10n.chapterLabel(inspection.chapterId!),
-                              ),
-                            if (inspection.timePlayedSeconds != null)
-                              _InfoPill(
-                                icon: Icons.timer_outlined,
-                                label: _formatDurationSeconds(
-                                  l10n,
-                                  inspection.timePlayedSeconds,
-                                ),
-                              ),
-                          ];
-                          if (pills.isEmpty) return const SizedBox.shrink();
-                          return Padding(
-                            padding: const EdgeInsets.only(top: 9),
-                            child: Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: pills,
-                            ),
-                          );
-                        },
-                      ),
+                      ],
+                    )
+                  else ...[
+                    badges(),
+                    if (delete != null) ...[
+                      const SizedBox(height: 8),
+                      Align(alignment: Alignment.centerRight, child: delete),
                     ],
-                  ),
-                ),
-              ],
+                  ],
+                ],
+              );
+            }
+
+            if (compact) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  preview,
+                  const SizedBox(height: 12),
+                  details(fillPreviewHeight: false),
+                ],
+              );
+            }
+
+            return IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Align(alignment: Alignment.topLeft, child: preview),
+                  const SizedBox(width: 14),
+                  Expanded(child: details(fillPreviewHeight: true)),
+                ],
+              ),
             );
           },
         ),
@@ -1445,7 +1737,7 @@ class _ScreenshotPreview extends StatelessWidget {
 }
 
 class _InfoPill extends StatelessWidget {
-  const _InfoPill({required this.icon, required this.label});
+  const _InfoPill({super.key, required this.icon, required this.label});
 
   final IconData icon;
   final String label;
@@ -1491,80 +1783,76 @@ Uint8List? _decodeScreenshot(ScreenshotSummary? screenshot) {
   }
 }
 
-class _MetadataEditor extends StatefulWidget {
-  const _MetadataEditor({
+class _SaveNameEditor extends StatefulWidget {
+  const _SaveNameEditor({
+    super.key,
     required this.inspection,
     required this.notifier,
+    required this.fallbackTitle,
+    required this.enabled,
     required this.syncPersistentDataList,
   });
 
   final SaveInspection inspection;
   final EditorNotifier notifier;
+  final String fallbackTitle;
+  final bool enabled;
   final bool syncPersistentDataList;
 
   @override
-  State<_MetadataEditor> createState() => _MetadataEditorState();
+  State<_SaveNameEditor> createState() => _SaveNameEditorState();
 }
 
-class _MetadataEditorState extends State<_MetadataEditor> {
-  late final TextEditingController _controller;
+class _SaveNameEditorState extends State<_SaveNameEditor> {
   Object? _inspectionIdentity;
   String? _path;
-  String? _name;
-  String? _error;
+  String? _canonicalName;
+  late String _draftName;
 
   @override
   void initState() {
     super.initState();
-    _controller = TextEditingController();
     _sync();
   }
 
   @override
-  void didUpdateWidget(covariant _MetadataEditor oldWidget) {
+  void didUpdateWidget(covariant _SaveNameEditor oldWidget) {
     super.didUpdateWidget(oldWidget);
     _sync();
   }
 
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
   void _sync() {
-    final name = widget.inspection.playerSaveName ?? '';
+    final canonicalName = widget.inspection.playerSaveName;
     // Re-seed whenever the inspection identity changes (e.g. after a Reset /
     // refresh that produces a new SaveInspection instance) or when path/name
-    // changes. This ensures that after a Reset the field visually reverts to
+    // changes. This ensures that after a Reset the title visually reverts to
     // the canonical value even if the canonical value itself did not change.
     final sameIdentity = identical(widget.inspection, _inspectionIdentity);
-    if (sameIdentity && _path == widget.inspection.path && _name == name) {
+    if (sameIdentity &&
+        _path == widget.inspection.path &&
+        _canonicalName == canonicalName) {
       return;
     }
     _inspectionIdentity = widget.inspection;
     _path = widget.inspection.path;
-    _name = name;
-    _controller.text = name;
-    // Do NOT call _updatePending here: refresh() centrally clears all pending
-    // edits in the notifier (event-handler context). Calling clearPendingEdit /
-    // setPendingEdit from initState / didUpdateWidget mutates the provider
-    // during build and throws with flutter_riverpod. The field is re-seeded
-    // from the canonical value above; the next user keystroke (onChanged) will
-    // re-register a pending edit if needed.
-    setState(() => _error = null);
+    _canonicalName = canonicalName;
+    _draftName = _effectiveName(canonicalName);
   }
 
-  void _updatePending(String fieldText) {
-    final value = fieldText.trim();
-    if (value.isEmpty) {
-      final required = AppLocalizations.of(context).required;
-      setState(() => _error = required);
-      widget.notifier.clearPendingEdit('publicName');
-      return;
-    }
-    final original = widget.inspection.playerSaveName ?? '';
-    setState(() => _error = null);
+  String _effectiveName(String? canonicalName) =>
+      canonicalName == null || canonicalName.isEmpty
+      ? widget.fallbackTitle
+      : canonicalName;
+
+  Future<void> _edit() async {
+    final value = await showDialog<String>(
+      context: context,
+      builder: (_) => _SaveNameDialog(initialName: _draftName),
+    );
+    if (!mounted || value == null || !widget.enabled) return;
+
+    setState(() => _draftName = value);
+    final original = _effectiveName(widget.inspection.playerSaveName);
     if (value == original) {
       widget.notifier.clearPendingEdit('publicName');
     } else {
@@ -1582,19 +1870,91 @@ class _MetadataEditorState extends State<_MetadataEditor> {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: TextField(
-          controller: _controller,
-          decoration: InputDecoration(
-            labelText: AppLocalizations.of(context).publicSaveName,
-            prefixIcon: const Icon(Icons.edit_outlined),
-            errorText: _error,
+    return Row(
+      children: [
+        Flexible(
+          child: Text(
+            _draftName,
+            key: const ValueKey('selected-save-name'),
+            style: Theme.of(context).textTheme.titleLarge,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
-          onChanged: _updatePending,
         ),
+        const SizedBox(width: 4),
+        IconButton(
+          key: const ValueKey('edit-save-name'),
+          tooltip: AppLocalizations.of(context).publicSaveName,
+          constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+          padding: EdgeInsets.zero,
+          icon: const Icon(Icons.edit_outlined, size: 20),
+          onPressed: widget.enabled ? _edit : null,
+        ),
+      ],
+    );
+  }
+}
+
+class _SaveNameDialog extends StatefulWidget {
+  const _SaveNameDialog({required this.initialName});
+
+  final String initialName;
+
+  @override
+  State<_SaveNameDialog> createState() => _SaveNameDialogState();
+}
+
+class _SaveNameDialogState extends State<_SaveNameDialog> {
+  late final TextEditingController _controller;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialName);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final candidate = _controller.text.trim();
+    if (candidate.isEmpty) {
+      setState(() => _error = AppLocalizations.of(context).required);
+      return;
+    }
+    Navigator.of(context).pop(candidate);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    return AlertDialog(
+      title: Text(l10n.publicSaveName),
+      content: TextField(
+        key: const ValueKey('edit-save-name-field'),
+        controller: _controller,
+        autofocus: true,
+        decoration: InputDecoration(
+          labelText: l10n.publicSaveName,
+          errorText: _error,
+        ),
+        onSubmitted: (_) => _submit(),
       ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(l10n.cancel),
+        ),
+        FilledButton(
+          key: const ValueKey('confirm-save-name'),
+          onPressed: _submit,
+          child: Text(l10n.save),
+        ),
+      ],
     );
   }
 }
@@ -1618,125 +1978,150 @@ class _SaveProfileCard extends StatelessWidget {
     // A detached file's embedded numeric profile id is not authoritative for
     // this folder. Keep the selector empty so even a coincidental matching id
     // can be chosen to trigger the import.
-    ProfileSummary? currentProfile;
-    if (!external) {
-      for (final profile in state.profiles) {
-        if (profile.profileId == save?.persistentProfileId) {
-          currentProfile = profile;
-          break;
-        }
-      }
-    }
+    final currentProfile = _selectedSaveProfile(state);
     final currentId = currentProfile?.profileId;
     final enabled =
-        state.profiles.isNotEmpty && !state.isLoading && !state.hasUnsavedEdits;
+        state.profiles.isNotEmpty &&
+        !state.isLoading &&
+        !state.hasUnsavedEdits &&
+        state.deletedSaveRecovery == null;
     final explanation = external
         ? l10n.saveProfileExternalHint
         : state.profiles.isEmpty
         ? l10n.saveProfileNoProfiles
         : l10n.saveProfileDescription;
 
+    final profileCopy = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          external ? Icons.link_off_outlined : Icons.account_tree_outlined,
+          color: theme.colorScheme.primary,
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            key: const ValueKey('save-profile-copy'),
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(l10n.saveProfileTitle, style: theme.textTheme.titleSmall),
+              const SizedBox(height: 3),
+              Text(
+                explanation,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+    final profileSelector = InputDecorator(
+      key: const ValueKey('save-profile-selector'),
+      decoration: InputDecoration(labelText: l10n.profile, isDense: true),
+      isEmpty: currentId == null,
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<int>(
+          // Unlike DropdownButtonFormField's initialValue, value is controlled
+          // by the current editor state. Profile refreshes and failed writes
+          // therefore update the displayed selection without remounting the
+          // control during unrelated background state changes.
+          value: currentId,
+          isDense: true,
+          isExpanded: true,
+          hint: Text(l10n.saveProfileSelect),
+          items: [
+            for (final profile in state.profiles)
+              DropdownMenuItem<int>(
+                value: profile.profileId,
+                child: Text(
+                  localizedProfileDisplayName(l10n, profile),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+          ],
+          onChanged: enabled
+              ? (profileId) {
+                  if (profileId != null && profileId != currentId) {
+                    notifier.assignSelectedSaveToProfile(profileId);
+                  }
+                }
+              : null,
+        ),
+      ),
+    );
+    final profileControls = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        profileSelector,
+        if (save != null && currentProfile != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                key: const ValueKey('remove-selected-save-profile'),
+                icon: const Icon(Icons.link_off_outlined, size: 18),
+                label: Text(l10n.removeFromProfile),
+                onPressed: enabled
+                    ? () => _confirmRemoveSaveFromProfile(
+                        context,
+                        save: save,
+                        profile: currentProfile,
+                        notifier: notifier,
+                      )
+                    : null,
+              ),
+            ),
+          ),
+      ],
+    );
+
     return Card(
+      key: const ValueKey('save-profile-card'),
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Icon(
-              external ? Icons.link_off_outlined : Icons.account_tree_outlined,
-              color: theme.colorScheme.primary,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    l10n.saveProfileTitle,
-                    style: theme.textTheme.titleSmall,
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    explanation,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 20),
-            SizedBox(
-              width: 260,
-              child: Column(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            if (constraints.maxWidth < 700) {
+              return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  DropdownButtonFormField<int>(
-                    initialValue: currentId,
-                    isExpanded: true,
-                    decoration: InputDecoration(
-                      labelText: l10n.profile,
-                      isDense: true,
-                    ),
-                    hint: Text(l10n.saveProfileSelect),
-                    items: [
-                      for (final profile in state.profiles)
-                        DropdownMenuItem<int>(
-                          value: profile.profileId,
-                          child: Text(
-                            localizedProfileDisplayName(l10n, profile),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                    ],
-                    onChanged: enabled
-                        ? (profileId) {
-                            if (profileId != null && profileId != currentId) {
-                              notifier.assignSelectedSaveToProfile(profileId);
-                            }
-                          }
-                        : null,
-                  ),
-                  if (save != null && currentProfile != null)
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: TextButton.icon(
-                        key: const ValueKey('remove-selected-save-profile'),
-                        icon: const Icon(Icons.link_off_outlined, size: 18),
-                        label: Text(l10n.removeFromProfile),
-                        onPressed: enabled
-                            ? () => _confirmRemoveSaveFromProfile(
-                                context,
-                                save: save,
-                                profile: currentProfile!,
-                                notifier: notifier,
-                              )
-                            : null,
-                      ),
-                    ),
+                  profileCopy,
+                  const SizedBox(height: 12),
+                  profileControls,
                 ],
-              ),
-            ),
-          ],
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: profileCopy),
+                const SizedBox(width: 20),
+                SizedBox(width: 360, child: profileControls),
+              ],
+            );
+          },
         ),
       ),
     );
   }
 }
 
-/// Overview-tab editor for the world game clock (the single typed
+/// Compact Overview editor for the world game clock (the single typed
 /// `DoubleProperty` at `m_GenericData{GameTime} › CurrentTime › TotalSeconds`).
-/// Splits the cumulative TotalSeconds into Day/Hours/Minutes/Seconds fields
-/// (the game counts days from 0). Loads its value lazily via
-/// [EditorNotifier.loadGameTime]; renders nothing when the save has no such
-/// leaf (non-GSAV, undecoded, or absent), so the Overview layout is unaffected.
+/// The header shows a readable badge; editing happens in a dialog so four
+/// numeric fields do not dominate the save summary. Loads its value lazily via
+/// [EditorNotifier.loadGameTime] and renders nothing when the save has no leaf.
 ///
 /// Edits flow through the same pending-edit registry as every other typed
 /// editor (`private.typed.setValue`, key `gameTime`), so the shared Save button
 /// writes them. [editable] mirrors the Player/All-data gating (decoded, typed-
-/// verified, compress-ready codec); when false the fields show read-only.
-class _GameTimeCard extends StatefulWidget {
-  const _GameTimeCard({
+/// verified, compress-ready codec); when false the badge is read-only.
+class _GameTimeBadge extends StatefulWidget {
+  const _GameTimeBadge({
+    super.key,
     required this.inspection,
     required this.notifier,
     required this.editable,
@@ -1747,22 +2132,17 @@ class _GameTimeCard extends StatefulWidget {
   final bool editable;
 
   @override
-  State<_GameTimeCard> createState() => _GameTimeCardState();
+  State<_GameTimeBadge> createState() => _GameTimeBadgeState();
 }
 
-class _GameTimeCardState extends State<_GameTimeCard> {
+class _GameTimeBadgeState extends State<_GameTimeBadge> {
   static const _pendingKey = 'gameTime';
 
-  final _day = TextEditingController();
-  final _hour = TextEditingController();
-  final _minute = TextEditingController();
-  final _second = TextEditingController();
-
   GameTime? _gameTime;
+  GameTimeParts? _parts;
   bool _loaded = false;
   // Discards results from superseded reloads (rapid inspection swaps).
   int _epoch = 0;
-  String? _error;
 
   @override
   void initState() {
@@ -1771,18 +2151,9 @@ class _GameTimeCardState extends State<_GameTimeCard> {
   }
 
   @override
-  void didUpdateWidget(covariant _GameTimeCard oldWidget) {
+  void didUpdateWidget(covariant _GameTimeBadge oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(widget.inspection, oldWidget.inspection)) _load();
-  }
-
-  @override
-  void dispose() {
-    _day.dispose();
-    _hour.dispose();
-    _minute.dispose();
-    _second.dispose();
-    super.dispose();
   }
 
   Future<void> _load() async {
@@ -1797,7 +2168,7 @@ class _GameTimeCardState extends State<_GameTimeCard> {
     // refresh loading overlay masks the brief hide, so there is no flicker.
     _loaded = false;
     _gameTime = null;
-    _error = null;
+    _parts = null;
     final loaded = widget.inspection.privateDecoded
         ? await widget.notifier.loadGameTime()
         : null;
@@ -1806,47 +2177,27 @@ class _GameTimeCardState extends State<_GameTimeCard> {
     setState(() {
       _gameTime = loaded;
       _loaded = true;
-      _error = null;
-      if (loaded != null) {
-        final parts = GameTimeParts.fromTotalSeconds(loaded.totalSeconds);
-        _day.text = parts.day.toString();
-        _hour.text = parts.hour.toString();
-        _minute.text = parts.minute.toString();
-        _second.text = parts.second.toString();
-      }
+      _parts = loaded == null
+          ? null
+          : GameTimeParts.fromTotalSeconds(loaded.totalSeconds);
     });
     // Do NOT touch the pending registry here: refresh() clears it centrally in
     // event-handler context. Mutating it from this build-adjacent callback would
     // throw with flutter_riverpod, exactly as the hero-stats card documents.
   }
 
-  /// Parse a field as a non-negative int within [0, max]; null when invalid.
-  int? _field(TextEditingController c, int max) {
-    final value = int.tryParse(c.text.trim());
-    if (value == null || value < 0 || value > max) return null;
-    return value;
-  }
-
-  void _onChanged() {
-    if (!widget.editable) return;
+  Future<void> _edit() async {
     final gameTime = _gameTime;
-    if (gameTime == null) return;
-    final day = _field(_day, 1 << 30);
-    final hour = _field(_hour, 23);
-    final minute = _field(_minute, 59);
-    final second = _field(_second, 59);
-    if (day == null || hour == null || minute == null || second == null) {
-      setState(() => _error = AppLocalizations.of(context).gameTimeInvalid);
-      widget.notifier.clearPendingEdit(_pendingKey);
-      return;
-    }
-    setState(() => _error = null);
-    final total = GameTimeParts(
-      day: day,
-      hour: hour,
-      minute: minute,
-      second: second,
-    ).toTotalSeconds();
+    final parts = _parts;
+    if (!widget.editable || gameTime == null || parts == null) return;
+    final edited = await showDialog<GameTimeParts>(
+      context: context,
+      builder: (_) => _GameTimeDialog(initialValue: parts),
+    );
+    if (!mounted || edited == null) return;
+
+    setState(() => _parts = edited);
+    final total = edited.toTotalSeconds();
     // Compare against the truncated original: re-typing the same clock must not
     // leave a no-op edit that still bumps the Save counter (and would rewrite
     // away the harmless sub-second fraction for nothing).
@@ -1872,88 +2223,208 @@ class _GameTimeCardState extends State<_GameTimeCard> {
   Widget build(BuildContext context) {
     // Hidden until we know there's a clock to show — keeps the Overview layout
     // identical for saves without one (and avoids a load flash).
-    if (!_loaded || _gameTime == null) return const SizedBox.shrink();
+    final parts = _parts;
+    if (!_loaded || _gameTime == null || parts == null) {
+      return const SizedBox.shrink();
+    }
 
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context);
+    final clock = [
+      parts.hour,
+      parts.minute,
+      parts.second,
+    ].map((value) => value.toString().padLeft(2, '0')).join(':');
+    final total = parts.toTotalSeconds();
 
-    // Caption reflects the live fields when valid, else the canonical value.
+    return Tooltip(
+      message: '${l10n.gameTimeTitle} ${l10n.gameTimeTotal(total)}',
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerLeft,
+        child: ActionChip(
+          key: const ValueKey('game-time-badge'),
+          visualDensity: VisualDensity.compact,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          avatar: Icon(
+            Icons.schedule_outlined,
+            size: 18,
+            color: theme.colorScheme.primary,
+          ),
+          label: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '${l10n.gameTimeDay} ${parts.day} · $clock',
+                key: const ValueKey('game-time-value'),
+                style: theme.textTheme.labelLarge?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              if (widget.editable) ...[
+                const SizedBox(width: 7),
+                Icon(
+                  Icons.edit_outlined,
+                  size: 16,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ],
+            ],
+          ),
+          onPressed: widget.editable ? _edit : null,
+        ),
+      ),
+    );
+  }
+}
+
+class _GameTimeDialog extends StatefulWidget {
+  const _GameTimeDialog({required this.initialValue});
+
+  final GameTimeParts initialValue;
+
+  @override
+  State<_GameTimeDialog> createState() => _GameTimeDialogState();
+}
+
+class _GameTimeDialogState extends State<_GameTimeDialog> {
+  late final TextEditingController _day;
+  late final TextEditingController _hour;
+  late final TextEditingController _minute;
+  late final TextEditingController _second;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _day = TextEditingController(text: widget.initialValue.day.toString());
+    _hour = TextEditingController(text: widget.initialValue.hour.toString());
+    _minute = TextEditingController(
+      text: widget.initialValue.minute.toString(),
+    );
+    _second = TextEditingController(
+      text: widget.initialValue.second.toString(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _day.dispose();
+    _hour.dispose();
+    _minute.dispose();
+    _second.dispose();
+    super.dispose();
+  }
+
+  int? _field(TextEditingController controller, int max) {
+    final value = int.tryParse(controller.text.trim());
+    if (value == null || value < 0 || value > max) return null;
+    return value;
+  }
+
+  void _submit() {
     final day = _field(_day, 1 << 30);
     final hour = _field(_hour, 23);
     final minute = _field(_minute, 59);
     final second = _field(_second, 59);
-    final liveTotal =
-        (day != null && hour != null && minute != null && second != null)
-        ? GameTimeParts(
-            day: day,
-            hour: hour,
-            minute: minute,
-            second: second,
-          ).toTotalSeconds()
-        : _gameTime!.totalSeconds.floor();
+    if (day == null || hour == null || minute == null || second == null) {
+      setState(() => _error = AppLocalizations.of(context).gameTimeInvalid);
+      return;
+    }
+    Navigator.of(
+      context,
+    ).pop(GameTimeParts(day: day, hour: hour, minute: minute, second: second));
+  }
 
-    Widget unit(String label, TextEditingController controller) {
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+
+    Widget unit({
+      required Key key,
+      required String label,
+      required TextEditingController controller,
+      TextInputAction textInputAction = TextInputAction.next,
+    }) {
       return SizedBox(
-        width: 96,
+        width: 112,
         child: TextField(
+          key: key,
           controller: controller,
-          enabled: widget.editable,
-          onChanged: (_) => _onChanged(),
+          autofocus: identical(controller, _day),
           keyboardType: TextInputType.number,
+          textInputAction: textInputAction,
+          onSubmitted: textInputAction == TextInputAction.done
+              ? (_) => _submit()
+              : null,
           decoration: InputDecoration(labelText: label),
         ),
       );
     }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    return AlertDialog(
+      key: const ValueKey('game-time-dialog'),
+      title: Row(
+        children: [
+          const Icon(Icons.schedule_outlined),
+          const SizedBox(width: 10),
+          Text(l10n.gameTimeTitle),
+        ],
+      ),
+      content: SizedBox(
+        width: 500,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
               children: [
-                Row(
-                  children: [
-                    const Icon(Icons.schedule_outlined),
-                    const SizedBox(width: 8),
-                    Text(l10n.gameTimeTitle, style: theme.textTheme.titleSmall),
-                  ],
+                unit(
+                  key: const ValueKey('game-time-day-field'),
+                  label: l10n.gameTimeDay,
+                  controller: _day,
                 ),
-                const SizedBox(height: 8),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    unit(l10n.gameTimeDay, _day),
-                    const SizedBox(width: 8),
-                    unit(l10n.gameTimeHours, _hour),
-                    const SizedBox(width: 8),
-                    unit(l10n.gameTimeMinutes, _minute),
-                    const SizedBox(width: 8),
-                    unit(l10n.gameTimeSeconds, _second),
-                  ],
+                unit(
+                  key: const ValueKey('game-time-hour-field'),
+                  label: l10n.gameTimeHours,
+                  controller: _hour,
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  l10n.gameTimeTotal(liveTotal),
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
+                unit(
+                  key: const ValueKey('game-time-minute-field'),
+                  label: l10n.gameTimeMinutes,
+                  controller: _minute,
                 ),
-                if (_error != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      _error!,
-                      style: TextStyle(color: theme.colorScheme.error),
-                    ),
-                  ),
+                unit(
+                  key: const ValueKey('game-time-second-field'),
+                  label: l10n.gameTimeSeconds,
+                  controller: _second,
+                  textInputAction: TextInputAction.done,
+                ),
               ],
             ),
-          ),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: Text(
+                  _error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
+          ],
         ),
-        const SizedBox(height: 16),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(l10n.cancel),
+        ),
+        FilledButton(
+          key: const ValueKey('confirm-game-time'),
+          onPressed: _submit,
+          child: Text(l10n.save),
+        ),
       ],
     );
   }
@@ -2921,7 +3392,9 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
           overflow: TextOverflow.ellipsis,
           style: theme.textTheme.bodyMedium?.copyWith(
             color: theme.colorScheme.onSurfaceVariant,
-            fontFamily: hit.kind == 'opaque' ? 'monospace' : null,
+            fontFamily: hit.kind == 'opaque'
+                ? uiAwareMonospaceFontFamily(context, fallback: 'monospace')
+                : null,
           ),
         ),
       );
@@ -3085,7 +3558,7 @@ class _BackupsPanel extends StatelessWidget {
           ...backups.map(
             (backup) => _BackupCard(
               backup: backup,
-              isLoading: state.isLoading,
+              isLoading: state.isLoading || state.deletedSaveRecovery != null,
               showRestoreAction: true,
               onRestore: () => notifier.restoreBackup(backup.path),
               onRename: (name) => notifier.renameBackup(backup.path, name),
@@ -3103,7 +3576,7 @@ class _BackupsPanel extends StatelessWidget {
           ...companionBackups.map(
             (backup) => _BackupCard(
               backup: backup,
-              isLoading: state.isLoading,
+              isLoading: state.isLoading || state.deletedSaveRecovery != null,
               showRestoreAction: true,
               onRestore: () => notifier.restoreCompanionBackup(backup.path),
               onRename: (name) => notifier.renameBackup(backup.path, name),
@@ -3457,7 +3930,7 @@ class _SettingsPanel extends StatelessWidget {
         const SizedBox(height: 16),
         const UpdateSettingsCard(),
         const SizedBox(height: 16),
-        const LocalizationSettingsCard(),
+        const GameDataSettingsCard(),
         const SizedBox(height: 16),
         Card(
           child: Padding(
@@ -3642,7 +4115,10 @@ class _PathSettingRow extends StatelessWidget {
             child: SelectableText(
               value.isEmpty ? '-' : value,
               maxLines: 2,
-              style: const TextStyle(fontFamily: 'Consolas', fontSize: 12),
+              style: TextStyle(
+                fontFamily: uiAwareMonospaceFontFamily(context),
+                fontSize: 12,
+              ),
             ),
           ),
         ),

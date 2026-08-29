@@ -1020,7 +1020,7 @@ class _PrivateInventorySummaryCardState
                                   children: [
                                     if (!compactBrowser)
                                       SizedBox(
-                                        width: 200,
+                                        width: 240,
                                         child: DecoratedBox(
                                           decoration: BoxDecoration(
                                             color: theme

@@ -1,10 +1,52 @@
 import 'package:flutter/material.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 
-ThemeData buildGoresaveTheme() => _buildTheme(Brightness.light);
+const podkovaFontFamily = 'Podkova';
+const notoSerifFontFamily = 'NotoSerif';
+const notoSerifJpFontFamily = 'NotoSerifJP';
+const notoSerifScFontFamily = 'NotoSerifSC';
 
-ThemeData buildGoresaveDarkTheme() => _buildTheme(Brightness.dark);
+/// Keeps technical values monospaced for the system font, while honoring a
+/// bundled font when the user applies it to the entire interface.
+String uiAwareMonospaceFontFamily(
+  BuildContext context, {
+  String fallback = 'Consolas',
+}) {
+  final activeFamily = Theme.of(context).textTheme.bodyMedium?.fontFamily;
+  return switch (activeFamily) {
+    podkovaFontFamily ||
+    notoSerifFontFamily ||
+    notoSerifJpFontFamily ||
+    notoSerifScFontFamily => activeFamily!,
+    _ => fallback,
+  };
+}
 
-ThemeData _buildTheme(Brightness brightness) {
+String uiFontFamilyName(UiFontFamily font, Locale locale) => switch (font) {
+  UiFontFamily.system => 'Segoe UI',
+  UiFontFamily.podkova => podkovaFontFamily,
+  UiFontFamily.notoSerif when locale.languageCode == 'ja' =>
+    notoSerifJpFontFamily,
+  UiFontFamily.notoSerif when locale.languageCode == 'zh' =>
+    notoSerifScFontFamily,
+  UiFontFamily.notoSerif => notoSerifFontFamily,
+};
+
+ThemeData buildGoresaveTheme({
+  UiFontFamily uiFontFamily = UiFontFamily.system,
+  Locale locale = const Locale('en'),
+}) => _buildTheme(Brightness.light, uiFontFamily: uiFontFamily, locale: locale);
+
+ThemeData buildGoresaveDarkTheme({
+  UiFontFamily uiFontFamily = UiFontFamily.system,
+  Locale locale = const Locale('en'),
+}) => _buildTheme(Brightness.dark, uiFontFamily: uiFontFamily, locale: locale);
+
+ThemeData _buildTheme(
+  Brightness brightness, {
+  required UiFontFamily uiFontFamily,
+  required Locale locale,
+}) {
   const teal = Color(0xFF0F766E);
   const gold = Color(0xFFB7791F);
 
@@ -59,7 +101,12 @@ ThemeData _buildTheme(Brightness brightness) {
     useMaterial3: true,
     colorScheme: scheme,
     scaffoldBackgroundColor: scheme.surface,
-    fontFamily: 'Segoe UI',
+    fontFamily: uiFontFamilyName(uiFontFamily, locale),
+    fontFamilyFallback: uiFontFamily == UiFontFamily.system
+        ? locale.languageCode == 'ja'
+              ? const ['Yu Gothic UI', 'Microsoft YaHei UI']
+              : const ['Microsoft YaHei UI', 'Yu Gothic UI']
+        : null,
     appBarTheme: AppBarTheme(
       backgroundColor: scheme.surfaceContainerLowest,
       foregroundColor: scheme.onSurface,

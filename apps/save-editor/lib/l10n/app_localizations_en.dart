@@ -660,7 +660,7 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String get publicSaveName => 'Public save name';
+  String get publicSaveName => 'Name';
 
   @override
   String get gameTimeTitle => 'Game time';
@@ -1442,6 +1442,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get appearanceTitle => 'Appearance';
 
   @override
+  String get uiFont => 'Font';
+
+  @override
   String get theme => 'Theme';
 
   @override
@@ -1512,6 +1515,25 @@ class AppLocalizationsEn extends AppLocalizations {
   String get itemImagesTitle => 'Item images';
 
   @override
+  String get gameDataTitle => 'Game data';
+
+  @override
+  String itemImagesReady(int count) {
+    return '$count item images are ready.';
+  }
+
+  @override
+  String get itemImagesUnavailable =>
+      'Item images are not available. Category icons will be used instead.';
+
+  @override
+  String get checkRefreshItemImages => 'Check / refresh item images';
+
+  @override
+  String get gameDataSourceMissing =>
+      'Game text could not be prepared automatically. You can select the localization cache in Settings.';
+
+  @override
   String get loadingTexts => 'Loading texts…';
 
   @override
@@ -1537,19 +1559,6 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get extractRefreshLocalizedText => 'Extract / refresh localized text';
-
-  @override
-  String get extractLocalizedTextTitle => 'Extract localized game text?';
-
-  @override
-  String get extractLocalizedTextBody =>
-      'Localized game text isn\'t extracted yet. Extract it now from your game install? (optional)';
-
-  @override
-  String get notNow => 'Not now';
-
-  @override
-  String get extract => 'Extract';
 
   @override
   String get extractionComplete => 'Extraction complete';
@@ -2179,6 +2188,17 @@ class AppLocalizationsEn extends AppLocalizations {
   String get removeFromProfile => 'Remove from profile';
 
   @override
+  String get deleteSavegame => 'Delete save';
+
+  @override
+  String get deleteSavegameTitle => 'Delete savegame?';
+
+  @override
+  String deleteSavegameBody(String save, String fileName, String profile) {
+    return 'Delete $save ($fileName)? It will be removed from $profile and deleted from the save folder. GORE creates a backup first.';
+  }
+
+  @override
   String get removeSaveFromProfileTitle => 'Remove save from profile?';
 
   @override
@@ -2283,6 +2303,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'Save or reset your unsaved changes before removing a save from its profile.';
 
   @override
+  String get editorUnsavedBeforeDeleteSave =>
+      'Save or reset your unsaved changes before deleting this save.';
+
+  @override
   String get editorUnsavedBeforeRestoreProfile =>
       'You have unsaved save edits. Save or reset them before restoring a profile backup.';
 
@@ -2381,6 +2405,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get editorSaveRemovedFromProfile => 'Save removed from profile';
 
   @override
+  String get editorSaveDeleted => 'Save deleted; backup created';
+
+  @override
   String editorRestoredBackup(String path) {
     return 'Restored backup: $path';
   }
@@ -2408,6 +2435,11 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String editorProfileRemovalFailed(String details) {
     return 'Could not remove the save from the profile: $details';
+  }
+
+  @override
+  String editorDeleteSaveFailed(String details) {
+    return 'Could not delete the save: $details';
   }
 
   @override
@@ -2924,4 +2956,95 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get slotRepairNotOffered =>
       'The repair is not available for this savegame.';
+
+  @override
+  String get statisticsTitle => 'Statistics';
+
+  @override
+  String get statisticsSubtitle =>
+      'A compact summary of character, quest, world, and save progress.';
+
+  @override
+  String statisticsCardTitle(String card, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(card, {
+      'timing': 'Time',
+      'character': 'Character',
+      'quests': 'Quests',
+      'progress': 'Progress',
+      'encounters': 'Combat & contacts',
+      'inventory': 'Skills & inventory',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String statisticsMetric(String metric, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(metric, {
+      'timePlayed': 'Played',
+      'worldTime': 'World time',
+      'level': 'Level',
+      'experience': 'Experience',
+      'learningPoints': 'Learning points',
+      'guild': 'Guild',
+      'health': 'Health',
+      'mana': 'Mana',
+      'chapter': 'Chapter',
+      'location': 'Location',
+      'kills': 'NPC kills',
+      'knownCharacters': 'Known characters',
+      'killedMonsters': 'Killed monsters',
+      'defeatedNpcs': 'Defeated NPCs',
+      'killedNpcs': 'Killed NPCs',
+      'knownNpcs': 'Known NPCs',
+      'knownTeachers': 'Known teachers',
+      'learnedSkills': 'Learned skills',
+      'knowledge': 'Knowledge entries',
+      'deadCharacters': 'Dead characters',
+      'traders': 'Known traders',
+      'inventoryStacks': 'Item stacks',
+      'inventoryItems': 'Items',
+      'ore': 'Ore',
+      'equipped': 'Equipped',
+      'hostileFactions': 'Hostile factions',
+      'openCrimes': 'Open crimes',
+      'position': 'Position',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String statisticsGuildRank(String rank, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(rank, {
+      'oldCampShadow': 'Old Camp · Shadow',
+      'oldCampGuard': 'Old Camp · Guard',
+      'oldCampFireMage': 'Old Camp · Fire Mage',
+      'newCampRogue': 'New Camp · Bandit',
+      'newCampMercenary': 'New Camp · Mercenary',
+      'newCampWaterMage': 'New Camp · Water Mage',
+      'swampCampNovice': 'Swamp Camp · Novice',
+      'swampCampTemplar': 'Swamp Camp · Templar',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get statisticsUnknown => 'Not available';
+
+  @override
+  String get statisticsMore => 'More statistics';
+
+  @override
+  String statisticsSummary(
+    String level,
+    String guild,
+    String chapter,
+    int completed,
+    int failed,
+    String playTime,
+  ) {
+    return 'Level $level, $guild, chapter $chapter. $completed quests completed, $failed failed. Play time: $playTime.';
+  }
 }

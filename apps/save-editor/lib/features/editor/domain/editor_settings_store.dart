@@ -9,6 +9,7 @@ class EditorSettings {
     this.saveDir,
     this.externalSavePaths = const [],
     this.hiddenOtherSavePaths = const [],
+    this.deletedSaveRecovery,
   });
 
   factory EditorSettings.fromJson(Map<String, Object?> json) {
@@ -16,6 +17,9 @@ class EditorSettings {
       saveDir: _stringOrNull(json['saveDir']),
       externalSavePaths: _stringList(json['externalSavePaths']),
       hiddenOtherSavePaths: _stringList(json['hiddenOtherSavePaths']),
+      deletedSaveRecovery: DeletedSaveRecovery.tryFromJson(
+        json['deletedSaveRecovery'],
+      ),
     );
   }
 
@@ -28,10 +32,16 @@ class EditorSettings {
   /// removed from the Other saves list. They stay on disk and remain hidden.
   final List<String> hiddenOtherSavePaths;
 
+  /// Exact one-click recovery token for a deleted save. Persisted so a normal
+  /// restart or crash does not make the backed-up slot unreachable from the UI.
+  final DeletedSaveRecovery? deletedSaveRecovery;
+
   Map<String, Object?> toJson() => {
     if (saveDir != null) 'saveDir': saveDir,
     'externalSavePaths': externalSavePaths,
     'hiddenOtherSavePaths': hiddenOtherSavePaths,
+    if (deletedSaveRecovery != null)
+      'deletedSaveRecovery': deletedSaveRecovery!.toJson(),
   };
 
   static String? _stringOrNull(Object? value) {
@@ -47,6 +57,71 @@ class EditorSettings {
       if (path.isNotEmpty && !result.contains(path)) result.add(path);
     }
     return List.unmodifiable(result);
+  }
+}
+
+class DeletedSaveRecovery {
+  const DeletedSaveRecovery({
+    required this.targetPath,
+    required this.backupPath,
+    required this.persistentPostDeleteSha1,
+    required this.deletedSaveSha1,
+    required this.deletedPersistentSha1,
+    required this.message,
+  });
+
+  static DeletedSaveRecovery? tryFromJson(Object? value) {
+    if (value is! Map) return null;
+    final json = value.cast<Object?, Object?>();
+    String? requiredString(String key) {
+      final candidate = json[key];
+      if (candidate is! String || candidate.trim().isEmpty) return null;
+      return candidate;
+    }
+
+    final targetPath = requiredString('targetPath');
+    final backupPath = requiredString('backupPath');
+    final persistentPostDeleteSha1 = requiredString('persistentPostDeleteSha1');
+    final deletedSaveSha1 = requiredString('deletedSaveSha1');
+    final deletedPersistentSha1 = requiredString('deletedPersistentSha1');
+    final message = requiredString('message');
+    if (targetPath == null ||
+        backupPath == null ||
+        persistentPostDeleteSha1 == null ||
+        deletedSaveSha1 == null ||
+        deletedPersistentSha1 == null ||
+        message == null) {
+      return null;
+    }
+    return DeletedSaveRecovery(
+      targetPath: targetPath,
+      backupPath: backupPath,
+      persistentPostDeleteSha1: persistentPostDeleteSha1,
+      deletedSaveSha1: deletedSaveSha1,
+      deletedPersistentSha1: deletedPersistentSha1,
+      message: message,
+    );
+  }
+
+  final String targetPath;
+  final String backupPath;
+  final String persistentPostDeleteSha1;
+  final String deletedSaveSha1;
+  final String deletedPersistentSha1;
+  final String message;
+
+  Map<String, Object?> toJson() => {
+    'targetPath': targetPath,
+    'backupPath': backupPath,
+    'persistentPostDeleteSha1': persistentPostDeleteSha1,
+    'deletedSaveSha1': deletedSaveSha1,
+    'deletedPersistentSha1': deletedPersistentSha1,
+    'message': message,
+  };
+
+  String get fileName {
+    final normalized = targetPath.replaceAll('\\', '/');
+    return normalized.split('/').last;
   }
 }
 

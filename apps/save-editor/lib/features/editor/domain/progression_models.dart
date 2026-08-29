@@ -463,10 +463,11 @@ class FactionGuild {
 /// [error] (set by the notifier instead of throwing) so the pane renders
 /// failures inline, mirroring the other progression pages.
 class FactionsPage {
-  const FactionsPage({this.guilds = const [], this.error});
+  const FactionsPage({this.guilds = const [], this.openCrimes, this.error});
 
   factory FactionsPage.fromJson(Map<String, Object?> json) {
     return FactionsPage(
+      openCrimes: (json['openCrimes'] as num?)?.toInt(),
       guilds:
           (json['guilds'] as List?)
               ?.whereType<Map>()
@@ -477,6 +478,7 @@ class FactionsPage {
   }
 
   final List<FactionGuild> guilds;
+  final int? openCrimes;
   final String? error;
 }
 

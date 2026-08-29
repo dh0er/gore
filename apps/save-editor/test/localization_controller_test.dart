@@ -67,6 +67,65 @@ void main() {
       );
     },
   );
+
+  test(
+    'automatic extraction falls back from configured path to Steam',
+    () async {
+      final core = _SequenceCoreService([
+        {
+          'ok': false,
+          'error': {'code': 'INVALID_REQUEST', 'message': 'not found'},
+        },
+        {
+          'ok': true,
+          'data': {
+            'meta': {
+              'id_count': 12,
+              'languages': ['en', 'de'],
+            },
+          },
+        },
+      ]);
+      final controller = LocalizationController(core);
+      final extractor = AutomaticLocalizationExtractor(
+        () => controller,
+        () => r'C:\Games\Gothic',
+      );
+
+      final result = await extractor.extract();
+
+      expect(result.success, isTrue);
+      expect(core.payloads, [
+        {'lcache': r'C:\Games\Gothic'},
+        <String, Object?>{},
+      ]);
+    },
+  );
+
+  test(
+    'automatic extraction does not hide a real configured-source error',
+    () async {
+      final core = _SequenceCoreService([
+        {
+          'ok': false,
+          'error': {'code': 'BROKEN', 'message': 'decode failed'},
+        },
+      ]);
+      final controller = LocalizationController(core);
+      final extractor = AutomaticLocalizationExtractor(
+        () => controller,
+        () => r'C:\Games\Gothic',
+      );
+
+      final result = await extractor.extract();
+
+      expect(result.success, isFalse);
+      expect(result.notFound, isFalse);
+      expect(core.payloads, [
+        {'lcache': r'C:\Games\Gothic'},
+      ]);
+    },
+  );
 }
 
 class _ErrorCoreService implements GoresaveCoreService {
@@ -85,5 +144,28 @@ class _ErrorCoreService implements GoresaveCoreService {
       'ok': false,
       'error': {'code': 'BROKEN', 'message': 'boom'},
     };
+  }
+}
+
+class _SequenceCoreService implements GoresaveCoreService {
+  _SequenceCoreService(this._responses);
+
+  final List<Map<String, Object?>> _responses;
+  final List<Map<String, Object?>> payloads = [];
+
+  @override
+  String get description => 'sequence core';
+
+  @override
+  bool get isAvailable => true;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    expect(command, 'loc_extract');
+    payloads.add(Map.of(payload));
+    return _responses.removeAt(0);
   }
 }

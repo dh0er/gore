@@ -5,6 +5,7 @@ import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 
 import '../domain/character_index.dart';
 import '../domain/editor_models.dart';
@@ -959,7 +960,10 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
                                               .theme
                                               .colorScheme
                                               .onSurfaceVariant,
-                                          fontFamily: 'Consolas',
+                                          fontFamily:
+                                              uiAwareMonospaceFontFamily(
+                                                context,
+                                              ),
                                         ),
                                   ),
                                 if (pending) Text(l10n.glossaryPending),
@@ -1179,8 +1183,8 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
                               document.technicalNpcId!,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontFamily: 'Consolas',
+                              style: TextStyle(
+                                fontFamily: uiAwareMonospaceFontFamily(context),
                                 fontSize: 11,
                               ),
                             ),
@@ -1322,7 +1326,7 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
                       maxLines: 1,
                       style: widget.theme.textTheme.bodySmall?.copyWith(
                         color: widget.theme.colorScheme.onSurfaceVariant,
-                        fontFamily: 'Consolas',
+                        fontFamily: uiAwareMonospaceFontFamily(context),
                       ),
                     ),
                   const SizedBox(height: 2),
@@ -1693,8 +1697,10 @@ class _AddGlossaryEntryDialogState extends State<_AddGlossaryEntryDialog> {
                                   document.technicalNpcId!,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontFamily: 'Consolas',
+                                  style: TextStyle(
+                                    fontFamily: uiAwareMonospaceFontFamily(
+                                      context,
+                                    ),
                                     fontSize: 11,
                                   ),
                                 ),

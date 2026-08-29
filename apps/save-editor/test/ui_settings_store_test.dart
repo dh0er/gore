@@ -15,6 +15,7 @@ void main() {
       const UiSettings(
         windowSize: Size(1720, 980),
         windowMaximized: true,
+        uiFontFamily: UiFontFamily.notoSerif,
         showObjectIds: true,
       ),
     );
@@ -23,6 +24,7 @@ void main() {
 
     expect(reloaded.windowSize, const Size(1720, 980));
     expect(reloaded.windowMaximized, isTrue);
+    expect(reloaded.uiFontFamily, UiFontFamily.notoSerif);
     expect(reloaded.showObjectIds, isTrue);
   });
 
@@ -31,6 +33,7 @@ void main() {
 
     expect(settings.windowSize, isNull);
     expect(settings.windowMaximized, isFalse);
+    expect(settings.uiFontFamily, UiFontFamily.notoSerif);
     expect(settings.showObjectIds, isFalse);
   });
 
@@ -75,6 +78,47 @@ void main() {
 
     expect(container.read(showObjectIdsProvider), isTrue);
     expect(store.settings.showObjectIds, isTrue);
+  });
+
+  test('UI font provider persists changes through the UI store', () {
+    final store = _MemoryUiSettingsStore();
+    final container = ProviderContainer(
+      overrides: [uiSettingsStoreProvider.overrideWithValue(store)],
+    );
+    addTearDown(container.dispose);
+
+    expect(container.read(uiFontFamilyProvider), UiFontFamily.notoSerif);
+
+    container.read(uiFontFamilyProvider.notifier).set(UiFontFamily.podkova);
+
+    expect(container.read(uiFontFamilyProvider), UiFontFamily.podkova);
+    expect(store.settings.uiFontFamily, UiFontFamily.podkova);
+  });
+
+  test('migrates the previous Gothic font switch', () {
+    expect(
+      UiSettings.fromJson(const {'gothicUiFont': true}).uiFontFamily,
+      UiFontFamily.podkova,
+    );
+    expect(
+      UiSettings.fromJson(const {'gothicUiFont': false}).uiFontFamily,
+      UiFontFamily.system,
+    );
+  });
+
+  test('migrates the old localization prompt to the non-modal notice', () {
+    expect(
+      UiSettings.fromJson(const {
+        'locExtractPrompted': true,
+      }).gameDataSourceNoticeShown,
+      isTrue,
+    );
+    expect(
+      UiSettings.fromJson(const {
+        'gameDataSourceNoticeShown': true,
+      }).gameDataSourceNoticeShown,
+      isTrue,
+    );
   });
 }
 

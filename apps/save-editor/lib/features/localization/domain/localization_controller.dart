@@ -1,3 +1,4 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/l10n/app_localizations.dart';
@@ -205,5 +206,36 @@ final localizationControllerProvider =
       return LocalizationController(
         ref.watch(coreServiceProvider),
         localizations: () => ref.read(appLocalizationsProvider),
+      );
+    });
+
+/// Runs the non-interactive part of localized-text extraction.
+///
+/// A configured game install is preferred, but remains only a hint: when it
+/// contains no localization cache, Steam auto-detection gets one fallback
+/// attempt. File selection deliberately stays in the manual UI flow so startup
+/// preparation can never open a modal picker.
+class AutomaticLocalizationExtractor {
+  AutomaticLocalizationExtractor(this._controller, this._configuredGamePath);
+
+  final LocalizationController Function() _controller;
+  final String? Function() _configuredGamePath;
+
+  Future<LocalizationExtractResult> extract() async {
+    final controller = _controller();
+    final configuredGamePath = _configuredGamePath();
+    var result = await controller.extract(lcacheHint: configuredGamePath);
+    if (result.notFound && configuredGamePath != null) {
+      result = await controller.extract(lcacheHint: null);
+    }
+    return result;
+  }
+}
+
+final automaticLocalizationExtractorProvider =
+    Provider<AutomaticLocalizationExtractor>((ref) {
+      return AutomaticLocalizationExtractor(
+        () => ref.read(localizationControllerProvider.notifier),
+        () => ref.read(sharedConfigProvider).gamePath(),
       );
     });

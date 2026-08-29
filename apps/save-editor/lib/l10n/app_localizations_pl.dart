@@ -664,7 +664,7 @@ class AppLocalizationsPl extends AppLocalizations {
   }
 
   @override
-  String get publicSaveName => 'Publiczna nazwa zapisu';
+  String get publicSaveName => 'Nazwa';
 
   @override
   String get gameTimeTitle => 'Czas gry';
@@ -1465,6 +1465,9 @@ class AppLocalizationsPl extends AppLocalizations {
   String get appearanceTitle => 'Wygląd';
 
   @override
+  String get uiFont => 'Czcionka';
+
+  @override
   String get theme => 'Motyw';
 
   @override
@@ -1536,6 +1539,25 @@ class AppLocalizationsPl extends AppLocalizations {
   String get itemImagesTitle => 'Obrazy przedmiotów';
 
   @override
+  String get gameDataTitle => 'Dane gry';
+
+  @override
+  String itemImagesReady(int count) {
+    return 'Gotowe obrazy przedmiotów: $count.';
+  }
+
+  @override
+  String get itemImagesUnavailable =>
+      'Obrazy przedmiotów są niedostępne. Zostaną użyte ikony kategorii.';
+
+  @override
+  String get checkRefreshItemImages => 'Sprawdź / odśwież obrazy przedmiotów';
+
+  @override
+  String get gameDataSourceMissing =>
+      'Nie udało się automatycznie przygotować tekstu gry. Pamięć podręczną lokalizacji można wybrać w Ustawieniach.';
+
+  @override
   String get loadingTexts => 'Wczytywanie tekstów…';
 
   @override
@@ -1563,19 +1585,6 @@ class AppLocalizationsPl extends AppLocalizations {
   @override
   String get extractRefreshLocalizedText =>
       'Wyodrębnij / odśwież zlokalizowany tekst';
-
-  @override
-  String get extractLocalizedTextTitle => 'Wyodrębnić zlokalizowany tekst gry?';
-
-  @override
-  String get extractLocalizedTextBody =>
-      'Zlokalizowany tekst gry nie został jeszcze wyodrębniony. Wyodrębnić go teraz z Twojej instalacji gry? (opcjonalnie)';
-
-  @override
-  String get notNow => 'Nie teraz';
-
-  @override
-  String get extract => 'Wyodrębnij';
 
   @override
   String get extractionComplete => 'Wyodrębnianie zakończone';
@@ -2209,6 +2218,17 @@ class AppLocalizationsPl extends AppLocalizations {
   String get removeFromProfile => 'Usuń z profilu';
 
   @override
+  String get deleteSavegame => 'Usuń zapis';
+
+  @override
+  String get deleteSavegameTitle => 'Usunąć zapis?';
+
+  @override
+  String deleteSavegameBody(String save, String fileName, String profile) {
+    return 'Usunąć $save ($fileName)? Zostanie usunięty z $profile i z folderu zapisów. GORE najpierw utworzy kopię zapasową.';
+  }
+
+  @override
   String get removeSaveFromProfileTitle => 'Usunąć zapis z profilu?';
 
   @override
@@ -2314,6 +2334,10 @@ class AppLocalizationsPl extends AppLocalizations {
       'Zapisz lub zresetuj niezapisane zmiany przed usunięciem zapisu z profilu.';
 
   @override
+  String get editorUnsavedBeforeDeleteSave =>
+      'Zapisz lub zresetuj niezapisane zmiany przed usunięciem tego zapisu.';
+
+  @override
   String get editorUnsavedBeforeRestoreProfile =>
       'Zapis zawiera niezapisane zmiany. Zapisz je lub zresetuj przed przywróceniem kopii zapasowej profilu.';
 
@@ -2415,6 +2439,9 @@ class AppLocalizationsPl extends AppLocalizations {
   String get editorSaveRemovedFromProfile => 'Zapis usunięto z profilu';
 
   @override
+  String get editorSaveDeleted => 'Zapis usunięto; utworzono kopię zapasową';
+
+  @override
   String editorRestoredBackup(String path) {
     return 'Przywrócono kopię zapasową: $path';
   }
@@ -2442,6 +2469,11 @@ class AppLocalizationsPl extends AppLocalizations {
   @override
   String editorProfileRemovalFailed(String details) {
     return 'Nie udało się usunąć zapisu z profilu: $details';
+  }
+
+  @override
+  String editorDeleteSaveFailed(String details) {
+    return 'Nie udało się usunąć zapisu: $details';
   }
 
   @override
@@ -2959,4 +2991,95 @@ class AppLocalizationsPl extends AppLocalizations {
   @override
   String get slotRepairNotOffered =>
       'Naprawa nie jest dostępna dla tego zapisu gry.';
+
+  @override
+  String get statisticsTitle => 'Statystyki';
+
+  @override
+  String get statisticsSubtitle =>
+      'Zwięzłe podsumowanie postaci, zadań, świata i postępów.';
+
+  @override
+  String statisticsCardTitle(String card, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(card, {
+      'timing': 'Czas',
+      'character': 'Postać',
+      'quests': 'Zadania',
+      'progress': 'Postęp',
+      'encounters': 'Walka i kontakty',
+      'inventory': 'Umiejętności i ekwipunek',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String statisticsMetric(String metric, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(metric, {
+      'timePlayed': 'Czas gry',
+      'worldTime': 'Czas świata',
+      'level': 'Poziom',
+      'experience': 'Doświadczenie',
+      'learningPoints': 'Punkty nauki',
+      'guild': 'Frakcja',
+      'health': 'Zdrowie',
+      'mana': 'Mana',
+      'chapter': 'Rozdział',
+      'location': 'Miejsce',
+      'kills': 'Zabici NPC',
+      'knownCharacters': 'Znane postacie',
+      'killedMonsters': 'Zabite potwory',
+      'defeatedNpcs': 'Pokonani NPC',
+      'killedNpcs': 'Zabici NPC',
+      'knownNpcs': 'Znani NPC',
+      'knownTeachers': 'Znani nauczyciele',
+      'learnedSkills': 'Poznane umiejętności',
+      'knowledge': 'Wpisy wiedzy',
+      'deadCharacters': 'Martwe postacie',
+      'traders': 'Znani handlarze',
+      'inventoryStacks': 'Stosy przedmiotów',
+      'inventoryItems': 'Przedmioty',
+      'ore': 'Ruda',
+      'equipped': 'Wyposażenie',
+      'hostileFactions': 'Wrogie frakcje',
+      'openCrimes': 'Otwarte przestępstwa',
+      'position': 'Pozycja',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String statisticsGuildRank(String rank, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(rank, {
+      'oldCampShadow': 'Stary Obóz · Cień',
+      'oldCampGuard': 'Stary Obóz · Strażnik',
+      'oldCampFireMage': 'Stary Obóz · Mag Ognia',
+      'newCampRogue': 'Nowy Obóz · Bandyta',
+      'newCampMercenary': 'Nowy Obóz · Najemnik',
+      'newCampWaterMage': 'Nowy Obóz · Mag Wody',
+      'swampCampNovice': 'Obóz na Bagnie · Nowicjusz',
+      'swampCampTemplar': 'Obóz na Bagnie · Templariusz',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get statisticsUnknown => 'Niedostępne';
+
+  @override
+  String get statisticsMore => 'Więcej statystyk';
+
+  @override
+  String statisticsSummary(
+    String level,
+    String guild,
+    String chapter,
+    int completed,
+    int failed,
+    String playTime,
+  ) {
+    return 'Poziom $level, $guild, rozdział $chapter. Ukończone zadania: $completed, nieudane: $failed. Czas gry: $playTime.';
+  }
 }

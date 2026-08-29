@@ -36,6 +36,10 @@ abstract final class EditorPageSize {
   /// One screen of rows: knowledge entries, memory events, the property browser.
   static const detail = 50;
 
+  /// Overview aggregates Hero combat events in larger pages so it reaches the
+  /// final totals without dozens of serialized round trips.
+  static const statistics = 500;
+
   /// Fetched whole and then filtered/paged in the client: quests, tutorials,
   /// story state.
   static const fullList = 1000;
@@ -117,6 +121,16 @@ bool _sameSavePathList(List<String> a, List<String> b) {
   return true;
 }
 
+bool _sameDeletedSaveRecovery(DeletedSaveRecovery? a, DeletedSaveRecovery? b) {
+  if (identical(a, b)) return true;
+  if (a == null || b == null) return false;
+  return _sameSavePath(a.targetPath, b.targetPath) &&
+      _sameSavePath(a.backupPath, b.backupPath) &&
+      a.persistentPostDeleteSha1 == b.persistentPostDeleteSha1 &&
+      a.deletedSaveSha1 == b.deletedSaveSha1 &&
+      a.deletedPersistentSha1 == b.deletedPersistentSha1;
+}
+
 class EditorState {
   EditorState({
     required this.saveDir,
@@ -136,6 +150,7 @@ class EditorState {
     this.error,
     this.codecError,
     this.lastWriteMessage,
+    this.deletedSaveRecovery,
     this.pendingEdits = const {},
     this.selectedActor = const Actor.player(),
     Set<String> invalidEditKeys = const {},
@@ -204,6 +219,9 @@ class EditorState {
 
   bool get hasInvalidEdits => invalidEditKeys.isNotEmpty;
 
+  bool get pendingEditsChangePersistentDataList =>
+      pendingEdits.values.any((edit) => edit.syncPersistentDataList);
+
   /// Compatibility view for the NPC attribute editor. New surfaces should use
   /// [invalidEditKeys]/[hasInvalidEdits] instead.
   String? get invalidNpcEditKey {
@@ -251,6 +269,14 @@ class EditorState {
   /// save-directory refresh does not wipe a standing codec configuration error.
   final String? codecError;
   final String? lastWriteMessage;
+
+  /// One-click recovery target retained after a backed-up save deletion.
+  ///
+  /// The deleted slot disappears from the scan immediately, so its regular
+  /// Backups tab can no longer address the snapshot. Keep the exact live and
+  /// backup paths until the user restores it or explicitly dismisses its
+  /// dedicated recovery banner.
+  final DeletedSaveRecovery? deletedSaveRecovery;
 
   /// User-visible changes across all pending keys, driving the global
   /// "Unsaved (N)" badge and the Save/Reset buttons. An invalid-only draft
@@ -361,6 +387,7 @@ class EditorState {
     String? error,
     String? codecError,
     String? lastWriteMessage,
+    Object? deletedSaveRecovery = _unchanged,
     Map<String, PendingSaveEdit>? pendingEdits,
     Actor? selectedActor,
     Set<String>? invalidEditKeys,
@@ -375,6 +402,7 @@ class EditorState {
     bool clearCodecError = false,
     bool clearCodecStatus = false,
     bool clearWriteMessage = false,
+    bool clearDeletedSaveRecovery = false,
     bool clearPendingEdits = false,
   }) {
     var resolvedInvalidEditKeys = clearPendingEdits
@@ -421,6 +449,11 @@ class EditorState {
       lastWriteMessage: clearWriteMessage
           ? null
           : lastWriteMessage ?? this.lastWriteMessage,
+      deletedSaveRecovery: clearDeletedSaveRecovery
+          ? null
+          : identical(deletedSaveRecovery, _unchanged)
+          ? this.deletedSaveRecovery
+          : deletedSaveRecovery as DeletedSaveRecovery?,
       pendingEdits: clearPendingEdits
           ? const {}
           : pendingEdits ?? this.pendingEdits,
@@ -533,6 +566,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     required String Function(String details) failureMessage,
     String command = 'write_save',
     void Function()? beforeRefresh,
+    void Function(Map<String, Object?> data)? onSuccess,
   }) async {
     var ok = false;
     await _withLoading(() async {
@@ -543,6 +577,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       }
       final data = (response['data'] as Map).cast<String, Object?>();
       state = state.copyWith(lastWriteMessage: message(data));
+      onSuccess?.call(data);
       beforeRefresh?.call();
       await refresh();
       ok = true;
@@ -573,6 +608,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       state = state.copyWith(error: _l10n.editorOperationInProgress);
       return Future.value(false);
     }
+    if (state.deletedSaveRecovery != null) return Future.value(false);
     // Refuse while slot edits are pending: this write runs _runWrite -> refresh,
     // and the same-save _inspect clears the pending registry — silently
     // discarding those drafts even though no write_save ran for them. Make the
@@ -622,6 +658,30 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// through this queue guarantees one core command finishes before the next
   /// starts.
   Future<void> _coreQueue = Future<void>.value();
+
+  // The Overview header, statistics section, and background prefetch are
+  // mounted at nearly the same time and request the same read-only sources.
+  // Share only their in-flight futures: this removes duplicate work from the
+  // serialized native queue while a later refresh still performs a fresh read.
+  String? _sharedReadPath;
+  Future<GameTime?>? _gameTimeInFlight;
+  Future<HeroAttributesResult>? _heroAttributesInFlight;
+  Future<SkillsResult>? _skillsInFlight;
+  Future<CharacterIndexPage>? _charactersInFlight;
+
+  void _invalidateSharedReads() {
+    _sharedReadPath = null;
+    _gameTimeInFlight = null;
+    _heroAttributesInFlight = null;
+    _skillsInFlight = null;
+    _charactersInFlight = null;
+  }
+
+  void _guardSharedReads(String? path) {
+    if (_sharedReadPath == path) return;
+    _invalidateSharedReads();
+    _sharedReadPath = path;
+  }
 
   /// The inspection the background prefetch warmed IN FULL, so re-entering the
   /// editor for an unchanged save does not queue the same warm-up twice.
@@ -735,6 +795,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
     await step(loadAllCharacters);
     await step(loadHeroAttributes);
     await step(loadSkills);
+    // The mounted Overview owns the complete Hero event walk for its aggregate
+    // statistics. Warming the same 500-row pages here would enqueue an
+    // identical second scan and make the visible result slower, not faster.
     // Warms the CORE's cache without filling the Dart-side NPC memo. That memo
     // is pinned to one inspection by design, so pre-filling it here would hand
     // the first NPC panel a roster fetched seconds earlier; letting the panel
@@ -910,6 +973,37 @@ class EditorNotifier extends StateNotifier<EditorState> {
     }
   }
 
+  /// Dismiss the one-click recovery for the most recently deleted save.
+  Future<void> dismissDeletedSaveRecovery() async {
+    final recovery = state.deletedSaveRecovery;
+    if (recovery == null) return;
+    await _withLoading(() async {
+      try {
+        final response = await _execute(
+          'dismiss_deleted_save_recovery',
+          payload: {
+            'path': recovery.targetPath,
+            'backupPath': recovery.backupPath,
+          },
+        );
+        if (response['ok'] != true) {
+          state = state.copyWith(
+            error: _l10n.editorUnexpectedError(_errorDetails(response)),
+          );
+        }
+      } finally {
+        // Dismiss is an escape hatch, not a second destructive operation. A
+        // missing/corrupt/inaccessible native manifest must never leave this
+        // token blocking all later writes. Native discovery already ignores
+        // unusable manifests and can safely rehydrate a still-valid one.
+        if (_sameDeletedSaveRecovery(state.deletedSaveRecovery, recovery)) {
+          state = state.copyWith(clearDeletedSaveRecovery: true);
+          _persistSettings();
+        }
+      }
+    }, failureMessage: _l10n.editorUnexpectedError);
+  }
+
   /// Switch the active profile filter. Pass null to clear the explicit
   /// selection (show all profiles).
   ///
@@ -1069,7 +1163,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
       ..remove(state.invalidNpcEditKey)
       ..removeWhere(
         (key) =>
-            key.startsWith('npc.attributes:') || key.startsWith('npc.position:'),
+            key.startsWith('npc.attributes:') ||
+            key.startsWith('npc.position:'),
       );
     state = state.copyWith(selectedActor: actor, invalidEditKeys: invalid);
   }
@@ -1216,6 +1311,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
     if (state.hasInvalidEdits) return false;
     if (state.pendingEdits.isEmpty) return true;
     if (state.isLoading) return false;
+    if (state.deletedSaveRecovery != null &&
+        state.pendingEditsChangePersistentDataList) {
+      return false;
+    }
     final savePath = state.selectedPath;
     if (savePath == null) return false;
 
@@ -2106,10 +2205,19 @@ class EditorNotifier extends StateNotifier<EditorState> {
       if (seq != _loadSeq) return;
       String? scanError;
       Map<String, Object?>? data;
+      DeletedSaveRecovery? discoveredDeletedSaveRecovery;
       late final List<ProfileSummary> profiles;
       late final List<SaveSlot> saves;
       if (response['ok'] == true) {
         data = (response['data'] as Map?)?.cast<String, Object?>();
+        final rawRecovery = data?['deletedSaveRecovery'];
+        if (rawRecovery is Map) {
+          final recoveryData = rawRecovery.cast<String, Object?>();
+          discoveredDeletedSaveRecovery = DeletedSaveRecovery.tryFromJson({
+            ...recoveryData,
+            'message': _backupMessage(_l10n.editorSaveDeleted, recoveryData),
+          });
+        }
         final rawProfiles = (data?['profiles'] as List?) ?? const [];
         profiles = rawProfiles
             .whereType<Map>()
@@ -2230,6 +2338,25 @@ class EditorNotifier extends StateNotifier<EditorState> {
           ? state.selectedProfileId
           : null;
 
+      // A native manifest is the crash-safe authority. Drop a settings-only
+      // token once a successful scan sees its target recreated; keeping it
+      // would expose an undo action that can no longer restore safely.
+      final retainedDeletedSaveRecovery =
+          scanError == null &&
+              state.deletedSaveRecovery != null &&
+              saves.any(
+                (save) =>
+                    !save.isMissing &&
+                    _sameSavePath(
+                      save.path,
+                      state.deletedSaveRecovery!.targetPath,
+                    ),
+              )
+          ? null
+          : state.deletedSaveRecovery;
+      final deletedSaveRecovery =
+          discoveredDeletedSaveRecovery ?? retainedDeletedSaveRecovery;
+
       // When the explicit selection was reset, fall back to any visible save;
       // otherwise restrict to the still-valid profile's visible saves.
       final newState = state.copyWith(
@@ -2239,13 +2366,21 @@ class EditorNotifier extends StateNotifier<EditorState> {
         selectedProfileId: keptSelectedProfileId,
         externalSavePaths: externalSavePaths,
         hiddenOtherSavePaths: hiddenOtherSavePaths,
+        deletedSaveRecovery: deletedSaveRecovery,
         // With no profiles, Other saves is the switcher's only destination and
         // therefore the natural initial view (including its Open file button).
         otherSavesSelected: profiles.isEmpty ? true : state.otherSavesSelected,
       );
       final settingsChanged =
           !_sameSavePathList(state.externalSavePaths, externalSavePaths) ||
-          !_sameSavePathList(state.hiddenOtherSavePaths, hiddenOtherSavePaths);
+          !_sameSavePathList(
+            state.hiddenOtherSavePaths,
+            hiddenOtherSavePaths,
+          ) ||
+          !_sameDeletedSaveRecovery(
+            state.deletedSaveRecovery,
+            deletedSaveRecovery,
+          );
       // Compute visible saves with the updated state fields to find a
       // sensible first selection path when the folder or profile changed.
       final visibleAfterRefresh = newState.visibleSaves;
@@ -2374,6 +2509,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // A fresh inspection re-seeds every editor; drop the cached full NPC list
       // so the next list load re-fetches against the new save state.
       _invalidateNpcCache();
+      // A same-path re-inspection is still a new data generation. An older
+      // paginated read may remain in flight across the serialized inspect;
+      // never hand that mixed-generation future to the rebuilt Overview.
+      _invalidateSharedReads();
       final inspection = SaveInspection.fromJson(data);
       final selectedWasExternal = state.saves.any(
         (save) => save.isExternal && _sameSavePath(save.path, path),
@@ -2435,6 +2574,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// updates the save and PersistentDataList.sav as one operation.
   Future<bool> assignSelectedSaveToProfile(int profileId) async {
     if (state.isLoading) return false;
+    if (state.deletedSaveRecovery != null) return false;
     if (state.hasUnsavedEdits) {
       state = state.copyWith(error: _l10n.editorUnsavedBeforeChangeSaveProfile);
       return false;
@@ -2541,6 +2681,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     required int profileId,
   }) async {
     if (state.isLoading) return false;
+    if (state.deletedSaveRecovery != null) return false;
     if (state.hasUnsavedEdits) {
       state = state.copyWith(error: _l10n.editorUnsavedBeforeRemoveProfile);
       return false;
@@ -2597,6 +2738,122 @@ class EditorNotifier extends StateNotifier<EditorState> {
               );
               _persistSettings();
             },
+    );
+  }
+
+  /// Delete a registered save file and remove all of its profile references.
+  ///
+  /// Native owns the paired compare-and-swap mutation and creates matching
+  /// backups of the save and PersistentDataList before either live path
+  /// changes. Missing references and detached files deliberately use their
+  /// existing non-destructive flows instead.
+  Future<bool> deleteSave({
+    required String slot,
+    required int profileId,
+  }) async {
+    if (state.isLoading) return false;
+    // Keep the existing one-click recovery reachable. A second successful
+    // deletion would otherwise replace its sole recovery token and strand the
+    // first save's paired snapshots outside the UI.
+    if (state.deletedSaveRecovery != null) return false;
+    if (state.hasUnsavedEdits) {
+      state = state.copyWith(error: _l10n.editorUnsavedBeforeDeleteSave);
+      return false;
+    }
+    final profile = state.profiles
+        .where((candidate) => candidate.profileId == profileId)
+        .firstOrNull;
+    if (profile == null) {
+      state = state.copyWith(error: _l10n.editorProfileNotFound(profileId));
+      return false;
+    }
+    final save = state.saves
+        .where(
+          (candidate) =>
+              candidate.slot == slot &&
+              candidate.persistentProfileId == profileId &&
+              !candidate.isExternal &&
+              !candidate.isMissing,
+        )
+        .firstOrNull;
+    if (save == null || !profile.savedSlots.contains(slot)) {
+      state = state.copyWith(
+        error: _l10n.editorSaveSlotNotAssigned(slot, profileId),
+      );
+      return false;
+    }
+
+    final dir = state.saveDir;
+    if (dir.trim().isEmpty) {
+      state = state.copyWith(error: _l10n.editorNoSaveFolderSelected);
+      return false;
+    }
+    final isWindowsStyle =
+        save.path.contains('\\') || RegExp(r'^[A-Za-z]:').hasMatch(save.path);
+    final ctx = isWindowsStyle ? p.Context(style: p.Style.windows) : p.posix;
+
+    return _runWrite(
+      command: 'delete_save',
+      payload: {
+        'path': save.path,
+        'persistentPath': ctx.join(
+          ctx.dirname(save.path),
+          'PersistentDataList.sav',
+        ),
+        'slot': slot,
+        'profileId': profileId,
+        'backup': true,
+      },
+      failureMessage: (details) => _l10n.editorDeleteSaveFailed(details),
+      message: (data) {
+        var message = _backupMessage(_l10n.editorSaveDeleted, data);
+        final noteWarning = data['placementNoteWarning'];
+        if (noteWarning is String && noteWarning.isNotEmpty) {
+          message = '$message\n${_l10n.editorPlacementNoteFailed(noteWarning)}';
+        }
+        return message;
+      },
+      onSuccess: (data) {
+        final backupPath = data['backupPath'] as String?;
+        final persistentPostDeleteSha1 =
+            data['persistentPostDeleteSha1'] as String?;
+        final deletedSaveSha1 = data['deletedSaveSha1'] as String?;
+        final deletedPersistentSha1 = data['deletedPersistentSha1'] as String?;
+        if (backupPath == null ||
+            backupPath.isEmpty ||
+            persistentPostDeleteSha1 == null ||
+            persistentPostDeleteSha1.isEmpty ||
+            deletedSaveSha1 == null ||
+            deletedSaveSha1.isEmpty ||
+            deletedPersistentSha1 == null ||
+            deletedPersistentSha1.isEmpty) {
+          return;
+        }
+        state = state.copyWith(
+          clearWriteMessage: true,
+          deletedSaveRecovery: DeletedSaveRecovery(
+            targetPath: save.path,
+            backupPath: backupPath,
+            persistentPostDeleteSha1: persistentPostDeleteSha1,
+            deletedSaveSha1: deletedSaveSha1,
+            deletedPersistentSha1: deletedPersistentSha1,
+            message: state.lastWriteMessage!,
+          ),
+        );
+      },
+      beforeRefresh: () {
+        state = state.copyWith(
+          externalSavePaths: _removeSavePath(
+            state.externalSavePaths,
+            save.path,
+          ),
+          hiddenOtherSavePaths: _removeSavePath(
+            state.hiddenOtherSavePaths,
+            save.path,
+          ),
+        );
+        _persistSettings();
+      },
     );
   }
 
@@ -2690,13 +2947,32 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// Restore a backup. [targetPath] overrides the file to restore (used for
   /// companion `PersistentDataList.sav` backups); it defaults to the selected
   /// slot.
-  Future<void> restoreBackup(String backupPath, {String? targetPath}) async {
+  Future<bool> restoreBackup(String backupPath, {String? targetPath}) async {
+    if (state.deletedSaveRecovery != null) return false;
+    return _restoreBackup('restore_backup', backupPath, targetPath: targetPath);
+  }
+
+  Future<bool> _restoreBackup(
+    String command,
+    String backupPath, {
+    String? targetPath,
+    String? expectedPersistentSha1,
+    String? expectedSaveSha1,
+    String? expectedPersistentBackupSha1,
+  }) async {
     final path = targetPath ?? state.selectedPath;
-    if (path == null) return;
+    if (path == null) return false;
+    var restored = false;
     await _withLoading(() async {
       final response = await _execute(
-        'restore_backup',
-        payload: {'path': path, 'backupPath': backupPath},
+        command,
+        payload: {
+          'path': path,
+          'backupPath': backupPath,
+          'expectedPersistentSha1': ?expectedPersistentSha1,
+          'expectedSaveSha1': ?expectedSaveSha1,
+          'expectedPersistentBackupSha1': ?expectedPersistentBackupSha1,
+        },
       );
       if (response['ok'] != true) {
         state = state.copyWith(
@@ -2740,13 +3016,44 @@ class EditorNotifier extends StateNotifier<EditorState> {
           error: _l10n.editorRestoreReloadFailed(backupPath, state.error!),
         );
       }
+      restored = true;
     }, failureMessage: (details) => _l10n.editorRestoreFailed(details));
+    return restored;
+  }
+
+  /// Restore the most recently deleted slot from the exact snapshot returned
+  /// by `delete_save`. The core also restores its matching
+  /// PersistentDataList backup when present.
+  Future<void> restoreDeletedSave() async {
+    final recovery = state.deletedSaveRecovery;
+    if (recovery == null) return;
+    if (state.hasUnsavedEdits) {
+      state = state.copyWith(error: _l10n.editorUnsavedBeforeRestoreProfile);
+      return;
+    }
+    final restored = await _restoreBackup(
+      'restore_deleted_save',
+      recovery.backupPath,
+      targetPath: recovery.targetPath,
+      expectedPersistentSha1: recovery.persistentPostDeleteSha1,
+      expectedSaveSha1: recovery.deletedSaveSha1,
+      expectedPersistentBackupSha1: recovery.deletedPersistentSha1,
+    );
+    // refresh() may have discovered the previous native recovery after this
+    // restore made it valid again. Only clear the token we actually restored;
+    // never discard a newly surfaced predecessor transaction.
+    if (restored &&
+        _sameDeletedSaveRecovery(state.deletedSaveRecovery, recovery)) {
+      state = state.copyWith(clearDeletedSaveRecovery: true);
+      _persistSettings();
+    }
   }
 
   /// Delete one backup of the selected save (or of `targetPath`). The core only
   /// accepts a file its own backup listing produced, so this can never remove
   /// the live save or another slot's snapshot.
   Future<void> deleteBackup(String backupPath, {String? targetPath}) async {
+    if (state.deletedSaveRecovery != null) return;
     final path = targetPath ?? state.selectedPath;
     if (path == null) return;
     await _withLoading(() async {
@@ -2774,8 +3081,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // under the same file name.
       final noteWarning = data?['placementNoteWarning'];
       if (noteWarning is String && noteWarning.isNotEmpty) {
-        message =
-            '$message\n${_l10n.editorPlacementNoteFailed(noteWarning)}';
+        message = '$message\n${_l10n.editorPlacementNoteFailed(noteWarning)}';
       }
       state = state.copyWith(lastWriteMessage: message);
       await refreshBackups();
@@ -2924,7 +3230,21 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// core caps each search page at 1000 hits, so page through the full match
   /// set instead of trusting one request. The decode cache is already seeded
   /// by inspect, so this does not pay a second full private-payload decode.
-  Future<HeroAttributesResult> loadHeroAttributes() async {
+  Future<HeroAttributesResult> loadHeroAttributes() {
+    final path = state.selectedPath;
+    _guardSharedReads(path);
+    final inFlight = _heroAttributesInFlight;
+    if (inFlight != null) return inFlight;
+    final future = _loadHeroAttributes();
+    _heroAttributesInFlight = future;
+    return future.whenComplete(() {
+      if (identical(_heroAttributesInFlight, future)) {
+        _heroAttributesInFlight = null;
+      }
+    });
+  }
+
+  Future<HeroAttributesResult> _loadHeroAttributes() async {
     // Pin the save under load: searchTypedProperties always reads the
     // current selection, so a save switch mid-pagination would silently
     // merge pages from two different files into one stat list.
@@ -2967,7 +3287,19 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// practice, a save whose data happens to push the leaf past one page must
   /// still surface it. Mirrors [loadHeroAttributes]' paginated fixed-query scan,
   /// including the save-pin guard against a mid-pagination selection change.
-  Future<GameTime?> loadGameTime() async {
+  Future<GameTime?> loadGameTime() {
+    final path = state.selectedPath;
+    _guardSharedReads(path);
+    final inFlight = _gameTimeInFlight;
+    if (inFlight != null) return inFlight;
+    final future = _loadGameTime();
+    _gameTimeInFlight = future;
+    return future.whenComplete(() {
+      if (identical(_gameTimeInFlight, future)) _gameTimeInFlight = null;
+    });
+  }
+
+  Future<GameTime?> _loadGameTime() async {
     final loadPath = state.selectedPath;
     var offset = 0;
     while (true) {
@@ -2999,7 +3331,23 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// Load the hero's skills (`private.skills.list`): every learned skill plus
   /// the full learnable roster, with per-skill tier options. Returns a result
   /// carrying an inline [SkillsResult.error] on failure instead of throwing.
-  Future<SkillsResult> loadSkills({String actor = 'Hero'}) async {
+  Future<SkillsResult> loadSkills({String actor = 'Hero'}) {
+    // Only Hero participates in the shared Overview/prefetch load. Actor-aware
+    // calls remain independent so a future non-Hero consumer cannot receive the
+    // wrong roster.
+    if (actor != 'Hero') return _loadSkills(actor);
+    final path = state.selectedPath;
+    _guardSharedReads(path);
+    final inFlight = _skillsInFlight;
+    if (inFlight != null) return inFlight;
+    final future = _loadSkills(actor);
+    _skillsInFlight = future;
+    return future.whenComplete(() {
+      if (identical(_skillsInFlight, future)) _skillsInFlight = null;
+    });
+  }
+
+  Future<SkillsResult> _loadSkills(String actor) async {
     final path = state.selectedPath;
     if (path == null) {
       return SkillsResult(error: _l10n.editorNoSaveSelected);
@@ -3083,10 +3431,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// Queue one trader stock change. Re-editing the same line replaces its
   /// pending edit rather than stacking a second one.
   void setTraderStockEdit(TraderStockEdit edit) {
-    setPendingEdit(
-      edit.pendingKey,
-      PendingSaveEdit(edits: [edit.toEdit()]),
-    );
+    setPendingEdit(edit.pendingKey, PendingSaveEdit(edits: [edit.toEdit()]));
   }
 
   /// Drop a queued trader change (the user reverted the field).
@@ -3135,14 +3480,18 @@ class EditorNotifier extends StateNotifier<EditorState> {
     String? path,
   }) async {
     String? error;
-    final data = await _queryProgression({
-      'section': 'quests',
-      'query': query,
-      'offset': offset,
-      'limit': limit,
-      if (state != null && state.isNotEmpty) 'state': state,
-      if (group != null && group.isNotEmpty) 'group': group,
-    }, path: path, onError: (message) => error = message);
+    final data = await _queryProgression(
+      {
+        'section': 'quests',
+        'query': query,
+        'offset': offset,
+        'limit': limit,
+        if (state != null && state.isNotEmpty) 'state': state,
+        if (group != null && group.isNotEmpty) 'group': group,
+      },
+      path: path,
+      onError: (message) => error = message,
+    );
     if (data == null) return ProgressionQuestPage(error: error);
     return ProgressionQuestPage.fromJson(data);
   }
@@ -3215,7 +3564,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
     return GlossaryPage.fromJson(data);
   }
 
-  static String _glossaryPendingKey(String documentClass, String segmentClass) =>
+  static String _glossaryPendingKey(
+    String documentClass,
+    String segmentClass,
+  ) =>
       'glossary.segment:${foldEditTargetPart(documentClass)}'
       '::${foldEditTargetPart(segmentClass)}';
 
@@ -3334,7 +3686,19 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// [EditorState.heroGlobalIdSettled] for the save it was issued against, so
   /// the player's Ereignisse pane can stop showing its "index load in flight"
   /// spinner and settle to an empty state when no id is coming.
-  Future<CharacterIndexPage> loadAllCharacters() async {
+  Future<CharacterIndexPage> loadAllCharacters() {
+    final path = state.selectedPath;
+    _guardSharedReads(path);
+    final inFlight = _charactersInFlight;
+    if (inFlight != null) return inFlight;
+    final future = _loadAllCharacters();
+    _charactersInFlight = future;
+    return future.whenComplete(() {
+      if (identical(_charactersInFlight, future)) _charactersInFlight = null;
+    });
+  }
+
+  Future<CharacterIndexPage> _loadAllCharacters() async {
     final path = state.selectedPath;
     if (path == null) {
       return CharacterIndexPage(error: _l10n.editorNoSaveSelected);
@@ -3944,6 +4308,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
         saveDir: state.saveDir,
         externalSavePaths: state.externalSavePaths,
         hiddenOtherSavePaths: state.hiddenOtherSavePaths,
+        deletedSaveRecovery: state.deletedSaveRecovery,
       ),
     );
   }
@@ -3957,6 +4322,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       saveDir: saveDir ?? stored.saveDir ?? defaultSaveRoot(),
       externalSavePaths: stored.externalSavePaths,
       hiddenOtherSavePaths: stored.hiddenOtherSavePaths,
+      deletedSaveRecovery: stored.deletedSaveRecovery,
     );
   }
 }
@@ -4438,7 +4804,10 @@ bool structuredEditRewrites(
     'private.traders.addItem',
     'private.traders.removeItem',
   };
-  const arrayOps = {'private.typed.arrayRemove', 'private.typed.arrayDuplicate'};
+  const arrayOps = {
+    'private.typed.arrayRemove',
+    'private.typed.arrayDuplicate',
+  };
   for (final edit in edits) {
     if (!traderOps.contains(edit['path'])) continue;
     for (final other in edits) {
@@ -4478,10 +4847,7 @@ bool editsRewriteSameTarget(
 /// pending. Both are refused as peers by the core: a story batch takes its
 /// compare-and-set snapshot from the payload as it enters and proves its own
 /// postconditions before committing, and a reset replaces the whole inventory.
-const _exclusiveEditPaths = {
-  storyStateApplyPath,
-  'private.inventory.reset',
-};
+const _exclusiveEditPaths = {storyStateApplyPath, 'private.inventory.reset'};
 
 /// Whether [edit] can change how many elements a container holds, or renumber
 /// inventory slot ids — the only two things that invalidate an index or slot id a

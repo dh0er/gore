@@ -5,14 +5,137 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/app/ui/goresave_app.dart';
+import 'package:goresave/features/editor/domain/character_category_catalog.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
+import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
+import 'package:goresave/features/editor/domain/item_icon_catalog.dart';
+import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/providers/data_providers.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 
 import 'support/ui_settings_test_store.dart';
 import 'support/detail_tabs.dart';
 
 void main() {
+  test('system font fallbacks prefer the locale-specific CJK face', () {
+    expect(
+      buildGoresaveTheme(
+        locale: const Locale('ja'),
+      ).textTheme.bodyMedium?.fontFamilyFallback,
+      ['Yu Gothic UI', 'Microsoft YaHei UI'],
+    );
+    expect(
+      buildGoresaveTheme(
+        locale: const Locale('zh'),
+      ).textTheme.bodyMedium?.fontFamilyFallback,
+      ['Microsoft YaHei UI', 'Yu Gothic UI'],
+    );
+  });
+
+  testWidgets('title progress is centered in the available title-bar space', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final itemCatalog = Completer<ItemIconCatalog>();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(_EmptyCoreService()),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+          itemIconCatalogProvider.overrideWith((ref) => itemCatalog.future),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pump();
+
+    final availableSpace = find.byKey(
+      const ValueKey('title-progress-available-space'),
+    );
+    final progress = find.byKey(const ValueKey('title-progress-item-images'));
+    expect(availableSpace, findsOneWidget);
+    expect(progress, findsOneWidget);
+    expect(
+      tester.getCenter(progress).dx,
+      closeTo(tester.getCenter(availableSpace).dx, 0.5),
+    );
+
+    itemCatalog.complete(const ItemIconCatalog.empty());
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('title bar fits the minimum window at 200 percent UI scale', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(960, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final itemCatalog = Completer<ItemIconCatalog>();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(_EmptyCoreService()),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(
+            TestUiSettingsStore(uiScale: 2),
+          ),
+          itemIconCatalogProvider.overrideWith((ref) => itemCatalog.future),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    expect(
+      tester
+          .getSize(find.byKey(const ValueKey('title-progress-available-space')))
+          .width,
+      greaterThanOrEqualTo(96),
+    );
+    expect(
+      find.byKey(const ValueKey('title-progress-item-images')),
+      findsOneWidget,
+    );
+
+    itemCatalog.complete(const ItemIconCatalog.empty());
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('title measurement follows the ambient text scale', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    tester.platformDispatcher.textScaleFactorTestValue = 2;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(_EmptyCoreService()),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('title-brand'))).width,
+      greaterThan(200),
+    );
+  });
+
   testWidgets('renders editor shell with fake save data', (tester) async {
     // Desktop window size so the inventory/diagnostics accordion (which fills
     // the available height) has room to lay out.
@@ -37,12 +160,16 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('GORE Save Editor'), findsOneWidget);
+    expect(
+      _effectiveTextStyle(tester, find.text('GORE Save Editor')).fontFamily,
+      notoSerifFontFamily,
+    );
     expect(find.text('Die Welt der Verurteilten'), findsAtLeastNWidgets(1));
     expect(find.text('Overview'), findsOneWidget);
-    expect(find.text('Public save name'), findsOneWidget);
+    expect(find.byKey(const ValueKey('edit-save-name')), findsOneWidget);
     // Header pills summarise chapter and time played for the save.
     expect(find.text('Chapter 1'), findsOneWidget);
-    expect(find.text('1 hr 56 min'), findsOneWidget);
+    expect(find.text('1 hr 56 min'), findsAtLeastNWidgets(1));
     expect(find.text('Profile 0'), findsWidgets);
     // The profile header carries the difficulty chip (profile-wide difficulty).
     expect(find.text('Custom'), findsAtLeastNWidgets(1));
@@ -58,10 +185,24 @@ void main() {
     // Every registered save exposes its authoritative profile association on
     // Overview (the fake fixture has profile 0 selected).
     expect(find.text('Save profile'), findsOneWidget);
-    expect(find.byType(DropdownButtonFormField<int>), findsOneWidget);
+    expect(find.byType(DropdownButton<int>), findsOneWidget);
     expect(
       find.byKey(const ValueKey('remove-selected-save-profile')),
       findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('save-profile-card')),
+        matching: find.byKey(const ValueKey('remove-selected-save-profile')),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('selected-save-header-card')),
+        matching: find.byKey(const ValueKey('remove-selected-save-profile')),
+      ),
+      findsNothing,
     );
 
     // The header shows the save's screenshot on the Overview tab.
@@ -79,12 +220,15 @@ void main() {
       isNull,
     );
 
-    // Edit the public save name — button label gains count.
+    // Edit the save name — the global button label gains a pending count.
+    await tester.tap(find.byKey(const ValueKey('edit-save-name')));
+    await tester.pumpAndSettle();
     await tester.enterText(
-      find.widgetWithText(TextField, 'Public save name'),
+      find.byKey(const ValueKey('edit-save-name-field')),
       'Much Longer Save Name',
     );
-    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('confirm-save-name')));
+    await tester.pumpAndSettle();
     expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
 
     // Tap the global Save button.
@@ -523,6 +667,7 @@ void main() {
 
     // Collapsed by default: neither the codec status nor the raw JSON shows yet.
     expect(find.text('Advanced (debug)'), findsOneWidget);
+    expect(find.text('Font'), findsOneWidget);
     expect(find.text('Codec ready'), findsNothing);
     expect(find.text('Inspection JSON'), findsNothing);
 
@@ -547,11 +692,132 @@ void main() {
 
     expect(tester.widget<SwitchListTile>(objectIdsToggle).value, isTrue);
 
+    final fontDropdown = find.byKey(const ValueKey('ui-font-family-dropdown'));
+    expect(
+      tester.getTopLeft(fontDropdown).dy,
+      greaterThan(tester.getTopLeft(find.text('Language')).dy),
+    );
+    expect(
+      tester.widget<DropdownButton<UiFontFamily>>(fontDropdown).value,
+      UiFontFamily.notoSerif,
+    );
+    final fontItems = tester
+        .widget<DropdownButton<UiFontFamily>>(fontDropdown)
+        .items!;
+    Text fontItem(UiFontFamily font) =>
+        fontItems.singleWhere((item) => item.value == font).child as Text;
+    expect(fontItem(UiFontFamily.system).style?.fontFamily, 'Segoe UI');
+    expect(fontItem(UiFontFamily.podkova).style?.fontFamily, podkovaFontFamily);
+    expect(
+      fontItem(UiFontFamily.notoSerif).style?.fontFamily,
+      notoSerifFontFamily,
+    );
+    final settingsContext = tester.element(find.text('Appearance'));
+    expect(
+      Theme.of(settingsContext).textTheme.bodyMedium?.fontFamily,
+      notoSerifFontFamily,
+    );
+    expect(
+      Theme.of(settingsContext).textTheme.titleMedium?.fontFamily,
+      notoSerifFontFamily,
+    );
+    expect(
+      _effectiveTextStyle(tester, find.text('GORE Save Editor')).fontFamily,
+      notoSerifFontFamily,
+    );
+
+    tester.widget<DropdownButton<UiFontFamily>>(fontDropdown).onChanged!(
+      UiFontFamily.podkova,
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<DropdownButton<UiFontFamily>>(fontDropdown).value,
+      UiFontFamily.podkova,
+    );
+    expect(
+      Theme.of(
+        tester.element(find.text('Appearance')),
+      ).textTheme.bodyMedium?.fontFamily,
+      podkovaFontFamily,
+    );
+    expect(
+      _effectiveTextStyle(tester, find.text('GORE Save Editor')).fontFamily,
+      podkovaFontFamily,
+    );
+
+    tester.widget<DropdownButton<UiFontFamily>>(fontDropdown).onChanged!(
+      UiFontFamily.notoSerif,
+    );
+    await tester.pumpAndSettle();
+    expect(
+      Theme.of(
+        tester.element(find.text('Appearance')),
+      ).textTheme.bodyMedium?.fontFamily,
+      notoSerifFontFamily,
+    );
+    expect(
+      _effectiveTextStyle(tester, find.text('GORE Save Editor')).fontFamily,
+      notoSerifFontFamily,
+    );
+
     await tester.tap(find.text('Inspection JSON'));
     await tester.pumpAndSettle();
 
     expect(find.textContaining('"format"'), findsOneWidget);
   });
+
+  for (final localeCode in ['ja', 'zh-Hans']) {
+    testWidgets('Podkova falls back to Noto Serif for $localeCode', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final core = _FakeCoreService();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            coreServiceProvider.overrideWithValue(core),
+            editorSettingsStoreProvider.overrideWithValue(
+              const NoopEditorSettingsStore(),
+            ),
+            uiSettingsStoreProvider.overrideWithValue(
+              TestUiSettingsStore(
+                appLocale: localeCode,
+                uiFontFamily: UiFontFamily.podkova,
+              ),
+            ),
+          ],
+          child: const GoresaveApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final scaffoldContext = tester.element(find.byType(Scaffold).first);
+      final l10n = AppLocalizations.of(scaffoldContext);
+      expect(
+        Theme.of(scaffoldContext).textTheme.bodyMedium?.fontFamily,
+        localeCode == 'ja' ? notoSerifJpFontFamily : notoSerifScFontFamily,
+      );
+
+      await tester.drag(find.byType(TabBar).first, const Offset(-800, 0));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.widgetWithText(Tab, l10n.tabSettings),
+        warnIfMissed: false,
+      );
+      await tester.pumpAndSettle();
+
+      final fontDropdown = tester.widget<DropdownButton<UiFontFamily>>(
+        find.byKey(const ValueKey('ui-font-family-dropdown')),
+      );
+      expect(fontDropdown.value, UiFontFamily.notoSerif);
+      expect(
+        fontDropdown.items!.map((item) => item.value),
+        isNot(contains(UiFontFamily.podkova)),
+      );
+    });
+  }
 
   testWidgets('switching tabs preserves unsaved edit and Save count', (
     tester,
@@ -572,12 +838,15 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // Enter a draft in the public name field on Overview.
+    // Enter a draft through the title's edit dialog on Overview.
+    await tester.tap(find.byKey(const ValueKey('edit-save-name')));
+    await tester.pumpAndSettle();
     await tester.enterText(
-      find.widgetWithText(TextField, 'Public save name'),
+      find.byKey(const ValueKey('edit-save-name-field')),
       'Draft Name',
     );
-    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('confirm-save-name')));
+    await tester.pumpAndSettle();
     // Save button now shows 1 pending edit.
     expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
 
@@ -592,15 +861,179 @@ void main() {
     await tester.tap(find.widgetWithText(Tab, 'Overview'));
     await tester.pumpAndSettle();
 
-    // The draft text must still be visible in the field.
-    final field = find.widgetWithText(TextField, 'Public save name');
-    final editableText = tester.widget<EditableText>(
-      find.descendant(of: field, matching: find.byType(EditableText)),
+    // The draft text must still be visible in the title.
+    expect(
+      tester
+          .widget<Text>(find.byKey(const ValueKey('selected-save-name')))
+          .data,
+      'Draft Name',
     );
-    expect(editableText.controller.text, 'Draft Name');
     // Save button still shows 1.
     expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
   });
+
+  testWidgets('responsive header keeps pending name and game-time drafts', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final core = _FakeCoreService(gameTimeTotalSeconds: 1413433);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(core),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('edit-save-name')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('edit-save-name-field')),
+      'Responsive draft',
+    );
+    await tester.tap(find.byKey(const ValueKey('confirm-save-name')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('game-time-badge')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('game-time-day-field')),
+      '17',
+    );
+    await tester.tap(find.byKey(const ValueKey('confirm-game-time')));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(FilledButton, 'Save (2)'), findsOneWidget);
+
+    await tester.binding.setSurfaceSize(const Size(850, 1000));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<Text>(find.byKey(const ValueKey('selected-save-name')))
+          .data,
+      'Responsive draft',
+    );
+    expect(find.text('Day 17 · 08:37:13'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Save (2)'), findsOneWidget);
+  });
+
+  testWidgets('wide header grows when scaled content exceeds the screenshot', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(2000, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(
+            _FakeCoreService(gameTimeTotalSeconds: 1413433),
+          ),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(
+            TestUiSettingsStore(uiScale: 2),
+          ),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(
+      tester
+          .getSize(find.byKey(const ValueKey('selected-save-header-details')))
+          .height,
+      greaterThan(
+        tester.getSize(find.byKey(const ValueKey('header-screenshot'))).height,
+      ),
+    );
+  });
+
+  testWidgets('confirming an unnamed save fallback leaves it unchanged', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(
+            _FakeCoreService(playerSaveName: null),
+          ),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('edit-save-name')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('confirm-save-name')));
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithText(FilledButton, 'Save (1)'), findsNothing);
+    expect(
+      tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Save'))
+          .onPressed,
+      isNull,
+    );
+  });
+
+  testWidgets(
+    'empty save name uses the slot fallback without creating an edit',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            coreServiceProvider.overrideWithValue(
+              _FakeCoreService(playerSaveName: ''),
+            ),
+            editorSettingsStoreProvider.overrideWithValue(
+              const NoopEditorSettingsStore(),
+            ),
+            uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+          ],
+          child: const GoresaveApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .widget<Text>(find.byKey(const ValueKey('selected-save-name')))
+            .data,
+        'G1R-001',
+      );
+      await tester.tap(find.byKey(const ValueKey('edit-save-name')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('confirm-save-name')));
+      await tester.pumpAndSettle();
+
+      expect(find.widgetWithText(FilledButton, 'Save (1)'), findsNothing);
+      expect(
+        tester
+            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Save'))
+            .onPressed,
+        isNull,
+      );
+    },
+  );
 
   testWidgets('Reset button discards pending and restores field text', (
     tester,
@@ -626,13 +1059,16 @@ void main() {
     expect(resetFinder, findsOneWidget);
     expect(tester.widget<OutlinedButton>(resetFinder).onPressed, isNull);
 
-    // Enter a draft in the public name field.
+    // Enter a draft through the title's edit dialog.
     final originalName = 'Die Welt der Verurteilten';
+    await tester.tap(find.byKey(const ValueKey('edit-save-name')));
+    await tester.pumpAndSettle();
     await tester.enterText(
-      find.widgetWithText(TextField, 'Public save name'),
+      find.byKey(const ValueKey('edit-save-name-field')),
       'Edited Name',
     );
-    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('confirm-save-name')));
+    await tester.pumpAndSettle();
     expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
     // Reset should now be enabled.
     expect(tester.widget<OutlinedButton>(resetFinder).onPressed, isNotNull);
@@ -651,12 +1087,13 @@ void main() {
     );
     expect(tester.widget<OutlinedButton>(resetFinder).onPressed, isNull);
 
-    // The field must display the canonical (original) name again.
-    final field = find.widgetWithText(TextField, 'Public save name');
-    final editableText = tester.widget<EditableText>(
-      find.descendant(of: field, matching: find.byType(EditableText)),
+    // The title must display the canonical (original) name again.
+    expect(
+      tester
+          .widget<Text>(find.byKey(const ValueKey('selected-save-name')))
+          .data,
+      originalName,
     );
-    expect(editableText.controller.text, originalName);
   });
 
   testWidgets(
@@ -803,6 +1240,695 @@ void main() {
     expect(oreDelete.onPressed, isNotNull);
   });
 
+  testWidgets('game time uses a compact badge and edits in a roomy dialog', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final core = _FakeCoreService(gameTimeTotalSeconds: 1413433);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(core),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('game-time-badge')), findsOneWidget);
+    expect(find.text('Day 16 · 08:37:13'), findsOneWidget);
+    final badgeBottom = tester
+        .getBottomLeft(find.byKey(const ValueKey('game-time-badge')))
+        .dy;
+    final summaryBottom = tester
+        .getBottomLeft(find.byKey(const ValueKey('chapter-badge')))
+        .dy;
+    expect(
+      tester.getBottomLeft(find.byKey(const ValueKey('time-played-badge'))).dy,
+      closeTo(summaryBottom, 0.5),
+    );
+    expect(
+      tester.getTopLeft(find.byKey(const ValueKey('game-time-badge'))).dy,
+      greaterThan(summaryBottom),
+    );
+    expect(
+      badgeBottom,
+      closeTo(
+        tester
+            .getBottomLeft(find.byKey(const ValueKey('delete-selected-save')))
+            .dy,
+        0.5,
+      ),
+    );
+    expect(
+      tester.getBottomLeft(find.byKey(const ValueKey('selected-save-path'))).dy,
+      lessThan(
+        tester.getTopLeft(find.byKey(const ValueKey('header-badges'))).dy - 20,
+      ),
+    );
+    expect(find.byKey(const ValueKey('game-time-day-field')), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('game-time-badge')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('game-time-dialog')), findsOneWidget);
+
+    for (final key in [
+      'game-time-day-field',
+      'game-time-hour-field',
+      'game-time-minute-field',
+      'game-time-second-field',
+    ]) {
+      expect(
+        tester.getSize(find.byKey(ValueKey(key))).width,
+        greaterThanOrEqualTo(110),
+      );
+    }
+
+    await tester.enterText(
+      find.byKey(const ValueKey('game-time-day-field')),
+      '17',
+    );
+    await tester.tap(find.byKey(const ValueKey('confirm-game-time')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Day 17 · 08:37:13'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Save (1)'));
+    await tester.pumpAndSettle();
+    final write = core.requests.lastWhere(
+      (request) => request.command == 'write_save',
+    );
+    expect(write.payload['edits'], [
+      {
+        'path': 'private.typed.setValue',
+        'value': {
+          'path': [
+            'm_GenericData',
+            '{GameTime}',
+            'CurrentTime',
+            'TotalSeconds',
+          ],
+          'value': 1499833.0,
+        },
+      },
+    ]);
+  });
+
+  testWidgets('overview statistics use authoritative save data', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1500, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.runAsync(loadCharacterCategoryCatalog);
+    final core = _StatisticsCoreService();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(core),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 10)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('overview-statistics-section')),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .getSize(find.byKey(const ValueKey('overview-statistics-section')))
+          .width,
+      lessThanOrEqualTo(1280),
+    );
+    for (final card in ['time', 'character', 'quests', 'progress']) {
+      expect(find.byKey(ValueKey('statistics-card-$card')), findsOneWidget);
+    }
+    expect(
+      find.byKey(const ValueKey('statistics-section-inventory')),
+      findsOneWidget,
+    );
+    final timeCard = find.byKey(const ValueKey('statistics-card-time'));
+    final characterCard = find.byKey(
+      const ValueKey('statistics-card-character'),
+    );
+    final questCard = find.byKey(const ValueKey('statistics-card-quests'));
+    final encountersCard = find.byKey(
+      const ValueKey('statistics-card-progress'),
+    );
+    String metricValue(String label) {
+      Element? metric;
+      tester.element(find.text(label)).visitAncestorElements((candidate) {
+        if (candidate.widget is Column) {
+          metric = candidate;
+          return false;
+        }
+        return true;
+      });
+      final texts = <String>[];
+      void collectText(Element element) {
+        final widget = element.widget;
+        if (widget is Text && widget.data != null) texts.add(widget.data!);
+        element.visitChildElements(collectText);
+      }
+
+      metric!.visitChildElements(collectText);
+      return texts.last;
+    }
+
+    final inventoryCard = find.byKey(
+      const ValueKey('statistics-section-inventory'),
+    );
+    expect(tester.getTopLeft(timeCard).dy, tester.getTopLeft(characterCard).dy);
+    expect(tester.getTopLeft(timeCard).dy, tester.getTopLeft(questCard).dy);
+    expect(tester.getSize(timeCard).height, lessThan(270));
+    for (final card in [characterCard, questCard]) {
+      expect(tester.getSize(card).height, tester.getSize(timeCard).height);
+      expect(tester.getSize(card).width, lessThan(450));
+    }
+    expect(
+      tester.getSize(inventoryCard).height,
+      tester.getSize(encountersCard).height,
+    );
+    expect(tester.getSize(encountersCard).height, lessThan(270));
+    expect(
+      tester.getSize(inventoryCard).width,
+      tester.getSize(encountersCard).width,
+    );
+    expect(
+      tester.getSize(encountersCard).width,
+      greaterThan(tester.getSize(timeCard).width),
+    );
+    expect(
+      tester.getTopLeft(encountersCard).dy - tester.getBottomLeft(timeCard).dy,
+      closeTo(14, 0.1),
+    );
+    expect(
+      tester.getTopLeft(inventoryCard).dy,
+      tester.getTopLeft(encountersCard).dy,
+    );
+    final chapterLabel = find.descendant(
+      of: timeCard,
+      matching: find.text('Chapter'),
+    );
+    final chapterValue = find.descendant(
+      of: timeCard,
+      matching: find.text('1'),
+    );
+    expect(
+      tester.getTopLeft(chapterValue).dy,
+      greaterThan(tester.getTopLeft(chapterLabel).dy),
+    );
+    expect(
+      tester.getTopLeft(chapterValue).dx,
+      closeTo(tester.getTopLeft(chapterLabel).dx, 0.1),
+    );
+    expect(
+      find.text(
+        'A compact summary of character, quest, world, and save progress.',
+      ),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('statistics-summary')), findsNothing);
+    expect(find.byKey(const ValueKey('statistics-more')), findsNothing);
+    expect(find.byType(ExpansionTile), findsNothing);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('statistics-card-time')),
+        matching: find.text('Day 16, 08:37:13'),
+      ),
+      findsOneWidget,
+    );
+    final statisticsTexts = tester
+        .widgetList<Text>(
+          find.descendant(
+            of: find.byKey(const ValueKey('overview-statistics-section')),
+            matching: find.byType(Text),
+          ),
+        )
+        .map((widget) => widget.data)
+        .whereType<String>()
+        .toList();
+    expect(
+      statisticsTexts,
+      contains('New Camp\nMercenary'),
+      reason: statisticsTexts.join(' | '),
+    );
+    final guildValue = tester.widget<Text>(find.text('New Camp\nMercenary'));
+    expect(guildValue.maxLines, 2);
+    expect(guildValue.overflow, isNull);
+    final worldTimeValue = tester.widget<Text>(find.text('Day 16, 08:37:13'));
+    expect(worldTimeValue.maxLines, 2);
+    expect(worldTimeValue.overflow, isNull);
+    expect(find.text('Killed monsters'), findsOneWidget);
+    expect(find.text('Defeated NPCs'), findsOneWidget);
+    expect(find.text('Killed NPCs'), findsOneWidget);
+    expect(find.text('Known NPCs'), findsOneWidget);
+    expect(find.text('Known teachers'), findsOneWidget);
+    expect(metricValue('Killed monsters'), '1');
+    expect(metricValue('Defeated NPCs'), '1');
+    expect(metricValue('Killed NPCs'), '1');
+    expect(metricValue('Known NPCs'), '2');
+    expect(metricValue('Known traders'), '2');
+    expect(metricValue('Known teachers'), '2');
+    expect(metricValue('Open crimes'), '1');
+    expect(metricValue('Available'), '1');
+    expect(metricValue('Running'), '1');
+    expect(
+      core.requests.where(
+        (request) =>
+            request.command == 'query_progression' &&
+            request.payload['section'] == 'events' &&
+            request.payload['character'] == 'Hero_Global' &&
+            request.payload['limit'] == EditorPageSize.statistics,
+      ),
+      hasLength(1),
+      reason:
+          'Overview must own its aggregate event scan without prefetching it twice.',
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('statistics-card-character')),
+        matching: find.text('18'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('statistics-card-progress')),
+        matching: find.text('1'),
+      ),
+      findsAtLeastNWidgets(1),
+    );
+    expect(find.text('Learned skills'), findsOneWidget);
+    expect(find.text('Open crimes'), findsOneWidget);
+    for (final removed in [
+      'Item stacks',
+      'Dead characters',
+      'Hostile factions',
+      'Equipped',
+      'Position',
+      'Knowledge entries',
+      'Location',
+    ]) {
+      expect(find.text(removed), findsNothing);
+    }
+  });
+
+  testWidgets('overview clears a guild after a later expulsion', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1500, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.runAsync(loadCharacterCategoryCatalog);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(
+            _ExpelledStatisticsCoreService(),
+          ),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 10)),
+    );
+    await tester.pumpAndSettle();
+
+    final characterCard = find.byKey(
+      const ValueKey('statistics-card-character'),
+    );
+    expect(
+      find.descendant(of: characterCard, matching: find.text('Guild')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: characterCard, matching: find.text('Not available')),
+      findsOneWidget,
+    );
+    expect(find.text('New Camp\nMercenary'), findsNothing);
+  });
+
+  testWidgets('unavailable private statistics are not rendered as zero', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1500, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(
+            _UnavailableStatisticsCoreService(),
+          ),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('statistics-card-quests')),
+        matching: find.text('Not available'),
+      ),
+      findsNWidgets(4),
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('statistics-card-progress')),
+        matching: find.text('Not available'),
+      ),
+      findsAtLeastNWidgets(1),
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('statistics-section-inventory')),
+        matching: find.text('Not available'),
+      ),
+      findsNWidgets(3),
+    );
+  });
+
+  testWidgets('truncated inventory statistics remain unavailable', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1500, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(
+            _TruncatedStatisticsCoreService(),
+          ),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('statistics-section-inventory')),
+        matching: find.text('Not available'),
+      ),
+      findsNWidgets(2),
+    );
+  });
+
+  testWidgets('unknown inventory counts keep aggregate totals unavailable', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1500, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(
+            _UnknownCountStatisticsCoreService(),
+          ),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('statistics-section-inventory')),
+        matching: find.text('Not available'),
+      ),
+      findsNWidgets(2),
+    );
+  });
+
+  testWidgets('global inventory observations remain unavailable', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1500, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(
+            _GlobalInventoryStatisticsCoreService(),
+          ),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('statistics-section-inventory')),
+        matching: find.text('Not available'),
+      ),
+      findsNWidgets(2),
+    );
+  });
+
+  testWidgets(
+    'save list shows file name and both delete actions require confirmation',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final core = _DeletingSaveCoreService();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            coreServiceProvider.overrideWithValue(core),
+            editorSettingsStoreProvider.overrideWithValue(
+              const NoopEditorSettingsStore(),
+            ),
+            uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+          ],
+          child: const GoresaveApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('save-file-name-G1R-001')),
+        findsOneWidget,
+      );
+      expect(find.text('G1R-001.sav'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('save-actions-menu-0-G1R-001')),
+        findsOneWidget,
+      );
+      expect(
+        tester.getSize(
+          find.byKey(const ValueKey('save-actions-menu-0-G1R-001')),
+        ),
+        const Size(32, 32),
+      );
+      expect(
+        find.byKey(const ValueKey('remove-save-profile-0-G1R-001')),
+        findsNothing,
+      );
+      expect(find.byKey(const ValueKey('delete-save-0-G1R-001')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('delete-selected-save')),
+        findsOneWidget,
+      );
+      expect(
+        tester.getTopLeft(find.byKey(const ValueKey('edit-save-name'))).dx -
+            tester
+                .getTopRight(find.byKey(const ValueKey('selected-save-name')))
+                .dx,
+        closeTo(4, 0.5),
+      );
+      expect(
+        tester
+            .getBottomRight(find.byKey(const ValueKey('delete-selected-save')))
+            .dy,
+        closeTo(
+          tester
+              .getBottomRight(find.byKey(const ValueKey('header-screenshot')))
+              .dy,
+          0.5,
+        ),
+      );
+      expect(
+        tester
+                .getTopLeft(find.byKey(const ValueKey('save-subtitle-G1R-001')))
+                .dy -
+            tester
+                .getBottomLeft(find.byKey(const ValueKey('save-title-G1R-001')))
+                .dy,
+        closeTo(3, 0.5),
+      );
+
+      final profileCopyTop = tester.getTopLeft(
+        find.byKey(const ValueKey('save-profile-copy')),
+      );
+      final profileSelectorTop = tester.getTopLeft(
+        find.byKey(const ValueKey('save-profile-selector')),
+      );
+      expect(profileCopyTop.dy, closeTo(profileSelectorTop.dy, 0.5));
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('selected-save-header-card')),
+          matching: find.byKey(const ValueKey('delete-selected-save')),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('save-profile-card')),
+          matching: find.byKey(const ValueKey('remove-selected-save-profile')),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<Text>(
+              find.descendant(
+                of: find.byKey(const ValueKey('remove-selected-save-profile')),
+                matching: find.text('Remove from profile'),
+              ),
+            )
+            .overflow,
+        isNull,
+      );
+
+      await tester.tap(
+        find.byKey(const ValueKey('save-actions-menu-0-G1R-001')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('remove-save-profile-0-G1R-001')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('delete-save-0-G1R-001')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const ValueKey('delete-save-0-G1R-001')));
+      await tester.pumpAndSettle();
+      expect(find.text('Delete savegame?'), findsOneWidget);
+      expect(
+        find.textContaining(
+          'G1R-001.sav)? It will be removed from Profile 0',
+          findRichText: true,
+        ),
+        findsOneWidget,
+      );
+      expect(
+        core.requests.where((request) => request.command == 'delete_save'),
+        isEmpty,
+      );
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('delete-selected-save')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Delete save'));
+      await tester.pumpAndSettle();
+
+      final request = core.requests.singleWhere(
+        (request) => request.command == 'delete_save',
+      );
+      expect(request.payload['path'], r'C:\tmp\saves\G1R-001.sav');
+      expect(
+        request.payload['persistentPath'],
+        r'C:\tmp\saves\PersistentDataList.sav',
+      );
+      expect(request.payload['slot'], 'G1R-001');
+      expect(request.payload['profileId'], 0);
+      expect(request.payload['backup'], isTrue);
+
+      expect(
+        find.widgetWithText(TextButton, 'Restore G1R-001.sav'),
+        findsOneWidget,
+      );
+      await tester.tap(find.widgetWithText(TextButton, 'Restore G1R-001.sav'));
+      await tester.pumpAndSettle();
+
+      final restore = core.requests.lastWhere(
+        (request) => request.command == 'restore_deleted_save',
+      );
+      expect(restore.payload, {
+        'path': r'C:\tmp\saves\G1R-001.sav',
+        'backupPath': r'C:\tmp\saves\goresave_backups\G1R-001.sav.bak.301',
+        'expectedPersistentSha1': 'post-delete-profile-sha',
+        'expectedSaveSha1': 'deleted-save-sha',
+        'expectedPersistentBackupSha1': 'deleted-persistent-sha',
+      });
+    },
+  );
+
+  testWidgets('deleted-save recovery blocks registered save-name edits', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(_RecoveryCoreService()),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<IconButton>(find.byKey(const ValueKey('edit-save-name')))
+          .onPressed,
+      isNull,
+    );
+    expect(
+      tester
+          .widget<TextButton>(
+            find.widgetWithText(TextButton, 'Restore G1R-009.sav'),
+          )
+          .onPressed,
+      isNotNull,
+    );
+  });
+
   testWidgets('profile menu opens a dedicated persistent Other saves list', (
     tester,
   ) async {
@@ -857,6 +1983,51 @@ void main() {
     expect(find.text('Newest unassigned'), findsAtLeastNWidgets(1));
   });
 
+  testWidgets('profile selector returns to authoritative value after failure', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final core = _FailedProfileAssignmentCoreService();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(core),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final selector = find.byKey(const ValueKey('save-profile-selector'));
+    expect(
+      find.descendant(of: selector, matching: find.text('Profile 0')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byType(DropdownButton<int>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Profile 1').last);
+    await tester.pumpAndSettle();
+
+    final assignment = core.requests.singleWhere(
+      (request) => request.command == 'assign_save_profile',
+    );
+    expect(assignment.payload['profileId'], 1);
+    expect(
+      find.descendant(of: selector, matching: find.text('Profile 0')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: selector, matching: find.text('Profile 1')),
+      findsNothing,
+    );
+  });
+
   testWidgets(
     'missing profile save is marked, not inspectable, and removable after confirmation',
     (tester) async {
@@ -889,6 +2060,11 @@ void main() {
         core.requests.where((request) => request.command == 'inspect_save'),
         isEmpty,
       );
+      expect(
+        find.byKey(const ValueKey('save-actions-menu-0-G1R-009')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('delete-save-0-G1R-009')), findsNothing);
 
       // Tapping the disabled row cannot turn its expected path into a failed
       // inspection. Cleanup remains available via its separate unlink action.
@@ -899,6 +2075,11 @@ void main() {
         isEmpty,
       );
 
+      await tester.tap(
+        find.byKey(const ValueKey('save-actions-menu-0-G1R-009')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('delete-save-0-G1R-009')), findsNothing);
       await tester.tap(
         find.byKey(const ValueKey('remove-save-profile-0-G1R-009')),
       );
@@ -926,6 +2107,12 @@ void main() {
   );
 }
 
+TextStyle _effectiveTextStyle(WidgetTester tester, Finder finder) {
+  final text = tester.widget<Text>(finder);
+  final inheritedStyle = DefaultTextStyle.of(tester.element(finder)).style;
+  return text.style == null ? inheritedStyle : inheritedStyle.merge(text.style);
+}
+
 class _RecordedRequest {
   const _RecordedRequest(this.command, this.payload);
 
@@ -934,6 +2121,13 @@ class _RecordedRequest {
 }
 
 class _FakeCoreService implements GoresaveCoreService {
+  _FakeCoreService({
+    this.gameTimeTotalSeconds,
+    this.playerSaveName = 'Die Welt der Verurteilten',
+  });
+
+  final double? gameTimeTotalSeconds;
+  final String? playerSaveName;
   final requests = <_RecordedRequest>[];
 
   @override
@@ -963,7 +2157,7 @@ class _FakeCoreService implements GoresaveCoreService {
                 'sha1': 'abc',
                 'status': 'ok',
                 'persistentProfileId': 0,
-                'playerSaveName': 'Die Welt der Verurteilten',
+                'playerSaveName': playerSaveName,
                 'persistentPlayerSaveName':
                     'Die Welt der Verurteilten, Tag 1, 13:07',
                 'chapterId': 1,
@@ -1014,10 +2208,7 @@ class _FakeCoreService implements GoresaveCoreService {
               'bytesBase64':
                   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
             },
-            'public': {
-              'slotName': 'G1R-001',
-              'playerSaveName': 'Die Welt der Verurteilten',
-            },
+            'public': {'slotName': 'G1R-001', 'playerSaveName': playerSaveName},
             'difficulty': {'preset': 'DifficultyPreset_Custom'},
             'persistent': {
               'playerSaveName': 'Die Welt der Verurteilten, Tag 1, 13:07',
@@ -1039,6 +2230,11 @@ class _FakeCoreService implements GoresaveCoreService {
             },
             'private': {
               'status': preview ? 'decoded_preview' : 'decoded',
+              'typedParse': {
+                'status': preview ? 'skipped_preview' : 'ok',
+                'propertyCount': preview ? 0 : 2,
+                'maxDepth': preview ? 0 : 2,
+              },
               'message': preview
                   ? 'Private payload preview decoded through the G1R codec host.'
                   : 'Private payload decoded through the G1R codec host.',
@@ -1073,7 +2269,7 @@ class _FakeCoreService implements GoresaveCoreService {
               'inventory': {
                 'candidateCount': 2,
                 'candidates': ['ITMI_GOLD', 'BP_Item_Ore'],
-                'itemStackCount': 1,
+                'itemStackCount': 2,
                 'itemScope': 'player_inventory_region',
                 'items': [
                   {
@@ -1174,6 +2370,7 @@ class _FakeCoreService implements GoresaveCoreService {
           },
         };
       case 'restore_backup':
+      case 'restore_deleted_save':
         return {
           'ok': true,
           'data': {
@@ -1182,7 +2379,68 @@ class _FakeCoreService implements GoresaveCoreService {
             'backupPath': r'C:\tmp\saves\G1R-001.sav.bak.300',
           },
         };
+      case 'delete_save':
+        return {
+          'ok': true,
+          'data': {
+            'path': payload['path'],
+            'slot': payload['slot'],
+            'profileId': payload['profileId'],
+            'backupPath': r'C:\tmp\saves\goresave_backups\G1R-001.sav.bak.301',
+            'persistentBackupPath':
+                r'C:\tmp\saves\goresave_backups\PersistentDataList.sav.bak.301',
+            'persistentPostDeleteSha1': 'post-delete-profile-sha',
+            'deletedSaveSha1': 'deleted-save-sha',
+            'deletedPersistentSha1': 'deleted-persistent-sha',
+          },
+        };
+      case 'dismiss_deleted_save_recovery':
+        return {
+          'ok': true,
+          'data': {'dismissed': true},
+        };
       case 'search_typed_properties':
+        if (payload['query'] == 'GameTime' && gameTimeTotalSeconds != null) {
+          return {
+            'ok': true,
+            'data': {
+              'source': 'private',
+              'offset': 0,
+              'limit': payload['limit'] ?? 1000,
+              'total': 1,
+              'count': 1,
+              'summary': {
+                'sources': {'private': 1},
+                'kinds': {'scalar': 1},
+                'types': {'DoubleProperty': 1},
+                'editable': 1,
+                'readOnly': 0,
+                'typedSources': ['private'],
+              },
+              'results': [
+                {
+                  'id': 'private:game-time',
+                  'source': 'private',
+                  'path': [
+                    'm_GenericData',
+                    '{GameTime}',
+                    'CurrentTime',
+                    'TotalSeconds',
+                  ],
+                  'display':
+                      'm_GenericData{GameTime} › CurrentTime › TotalSeconds',
+                  'type': 'DoubleProperty',
+                  'kind': 'scalar',
+                  'value': gameTimeTotalSeconds.toString(),
+                  'editValue': gameTimeTotalSeconds,
+                  'editable': true,
+                  'childCount': 0,
+                  'depth': 2,
+                },
+              ],
+            },
+          };
+        }
         return {
           'ok': true,
           'data': {
@@ -1341,6 +2599,544 @@ class _FakeCoreService implements GoresaveCoreService {
           'error': {'message': 'Unhandled fake command $command'},
         };
     }
+  }
+}
+
+class _EmptyCoreService extends _FakeCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command != 'scan_save_dir') {
+      return super.execute(command, payload: payload);
+    }
+    requests.add(_RecordedRequest(command, Map<String, Object?>.from(payload)));
+    return {
+      'ok': true,
+      'data': {
+        'saveRoot': r'C:\tmp\saves',
+        'saves': <Object?>[],
+        'profiles': <Object?>[],
+        'activeProfileId': null,
+      },
+    };
+  }
+}
+
+class _RecoveryCoreService extends _FakeCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    final response = await super.execute(command, payload: payload);
+    if (command != 'scan_save_dir') return response;
+
+    final data = (response['data'] as Map).cast<String, Object?>();
+    data['deletedSaveRecovery'] = {
+      'targetPath': r'C:\tmp\saves\G1R-009.sav',
+      'backupPath': r'C:\tmp\saves\goresave_backups\G1R-009.sav.bak.301',
+      'persistentPostDeleteSha1': 'post-delete-profile-sha',
+      'deletedSaveSha1': 'deleted-save-sha',
+      'deletedPersistentSha1': 'deleted-persistent-sha',
+    };
+    return response;
+  }
+}
+
+class _StatisticsCoreService extends _FakeCoreService {
+  _StatisticsCoreService() : super(gameTimeTotalSeconds: 1413433);
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'scan_save_dir') {
+      final response = await super.execute(command, payload: payload);
+      final data = (response['data'] as Map).cast<String, Object?>();
+      final saves = data['saves'] as List;
+      (saves.single as Map).remove('screenshot');
+      return response;
+    }
+    if (command == 'inspect_save') {
+      final response = await super.execute(command, payload: payload);
+      final data = (response['data'] as Map).cast<String, Object?>();
+      data.remove('screenshot');
+      final private = (data['private'] as Map).cast<String, Object?>();
+      final progression = (private['progression'] as Map)
+          .cast<String, Object?>();
+      final questStates = (progression['questStates'] as Map)
+          .cast<String, Object?>();
+      questStates['Unavailable'] = 40;
+      questStates['NotRunning'] = 30;
+      private['factions'] = {
+        // One global crime implicates both guilds. The Overview must use the
+        // unique global count instead of summing the duplicated guild rows.
+        'openCrimes': 1,
+        'guilds': [
+          {
+            'guild': 'Guild.Human.OldCamp',
+            'label': 'OldCamp',
+            'total': 1,
+            'forgiven': 0,
+            'unforgiven': 1,
+            'isHostile': true,
+            'crimes': {'assault': 1},
+          },
+          {
+            'guild': 'Guild.Human.NewCamp',
+            'label': 'NewCamp',
+            'total': 1,
+            'forgiven': 0,
+            'unforgiven': 1,
+            'isHostile': false,
+            'crimes': {'assault': 1},
+          },
+        ],
+      };
+      return response;
+    }
+    if (command == 'private.characters.list') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': true,
+        'data': {
+          'total': 4,
+          'characters': [
+            {
+              'globalId': 'Hero_Global',
+              'uniqueName': 'Hero',
+              'isDead': false,
+              'hasInventory': true,
+              'hasKnowledge': true,
+              'hasEvents': true,
+            },
+            {
+              'globalId': 'Diego_Global',
+              'uniqueName': 'OC_STT_Diego',
+              'isDead': false,
+              'hasInventory': true,
+              'hasKnowledge': true,
+              'hasEvents': true,
+              'isTrader': true,
+            },
+            {
+              'globalId': 'Molerat_Global',
+              'uniqueName': 'Creature_Molerat',
+              'isDead': true,
+              'hasInventory': false,
+              'hasKnowledge': false,
+              'hasEvents': true,
+            },
+            {
+              'globalId': null,
+              'uniqueName': 'NC_BAU_Homer_935',
+              'isDead': false,
+              'hasInventory': false,
+              'hasKnowledge': true,
+              'hasEvents': false,
+              'isTrader': true,
+            },
+          ],
+        },
+      };
+    }
+    if (command == 'private.skills.list') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': true,
+        'data': {
+          'actor': 'Hero',
+          'found': true,
+          'skills': [
+            {
+              'base': 'OneHanded',
+              'label': 'One-handed',
+              'category': 'Combat',
+              'kind': 'ladder',
+              'learned': true,
+              'current': 'Trained',
+              'hasUntrained': true,
+              'options': [
+                {'value': 'Untrained'},
+                {'value': 'Trained'},
+              ],
+            },
+            {
+              'base': 'Sneaking',
+              'label': 'Sneaking',
+              'category': 'Thief',
+              'kind': 'binary',
+              'learned': true,
+              'current': 'Learned',
+              'hasUntrained': true,
+              'options': [
+                {'value': 'Untrained'},
+                {'value': 'Learned'},
+              ],
+            },
+          ],
+        },
+      };
+    }
+    if (command == 'private.factions.list') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': true,
+        'data': {
+          'openCrimes': 1,
+          'guilds': [
+            {
+              'guild': 'Guild.Human.OldCamp',
+              'label': 'OldCamp',
+              'total': 1,
+              'forgiven': 0,
+              'unforgiven': 1,
+              'isHostile': true,
+              'crimes': {'assault': 1},
+            },
+            {
+              'guild': 'Guild.Human.NewCamp',
+              'label': 'NewCamp',
+              'total': 1,
+              'forgiven': 0,
+              'unforgiven': 1,
+              'isHostile': false,
+              'crimes': {'assault': 1},
+            },
+          ],
+        },
+      };
+    }
+    if (command == 'search_typed_properties' &&
+        payload['query'] == 'AttributesByGlobalId {Hero}') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      const values = {
+        'Level': 18.0,
+        'Experience': 42850.0,
+        'SkillPoints': 12.0,
+        'Health': 140.0,
+        'MaxHealth': 160.0,
+        'Mana': 42.0,
+        'MaxMana': 60.0,
+      };
+      final results = [
+        for (final entry in values.entries)
+          {
+            'id': 'private:hero-${entry.key}',
+            'source': 'private',
+            'path': [
+              'AttributesByGlobalId',
+              '{Hero}',
+              'AttributeSetsByClass',
+              '{HeroAttributes}',
+              '{${entry.key}}',
+              'CurrentValue',
+            ],
+            'display':
+                'AttributesByGlobalId › {Hero} › {${entry.key}} › CurrentValue',
+            'type': 'FloatProperty',
+            'kind': 'scalar',
+            'value': entry.value.toString(),
+            'editValue': entry.value,
+            'editable': true,
+            'childCount': 0,
+            'depth': 5,
+          },
+      ];
+      return {
+        'ok': true,
+        'data': {
+          'source': 'private',
+          'offset': 0,
+          'limit': payload['limit'] ?? 1000,
+          'total': results.length,
+          'count': results.length,
+          'summary': {
+            'sources': {'private': results.length},
+            'kinds': {'scalar': results.length},
+            'types': {'FloatProperty': results.length},
+            'editable': results.length,
+            'readOnly': 0,
+            'typedSources': ['private'],
+          },
+          'results': results,
+        },
+      };
+    }
+    if (command == 'query_progression' &&
+        payload['section'] == 'events' &&
+        payload['character'] == 'Hero_Global') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': true,
+        'data': {
+          'section': 'events',
+          'character': 'Hero_Global',
+          'total': 9,
+          'offset': 0,
+          'limit': payload['limit'] ?? 500,
+          'count': 9,
+          'events': [
+            {
+              'index': 0,
+              'tags': ['Memory.Guild.Joined', 'Guild.Human.OldCamp.Guard'],
+              'timeSeconds': 100.0,
+              'affected': 'Hero',
+            },
+            {
+              'index': 1,
+              'tags': [
+                'Memory.Character.Defeated.Kill',
+                'Species.Creature.Scavenger',
+              ],
+              'timeSeconds': 200.0,
+              'affected': 'Creature_Scavenger_Adult',
+            },
+            {
+              'index': 2,
+              'tags': ['Memory.Execution'],
+              'timeSeconds': 300.0,
+              'affected': 'OC_STT_Diego-01234567-89ab-cdef-0123-456789abcdef',
+            },
+            {
+              'index': 3,
+              'tags': ['Memory.Character.Defeated'],
+              'timeSeconds': 400.0,
+              'affected': 'OC_STT_Diego',
+            },
+            {
+              'index': 4,
+              'tags': ['Memory.Guild.Joined', 'Guild.Human.NewCamp.Mercenary'],
+              'affected': 'Hero',
+            },
+            {
+              'index': 5,
+              'tags': ['Memory.Character.Defeated.Kill'],
+              // `Human` is a real catch-all (`other`) catalog entry. It must
+              // stay unknown rather than inflating the monster count.
+              'affected': 'Human',
+            },
+            for (final loss in const [
+              (6, 'Memory.WasDefeated'),
+              (7, 'Memory.Combat.WasDefeated'),
+              (8, 'Memory.SaveAndLoad.Defeated'),
+            ])
+              {
+                'index': loss.$1,
+                'tags': [loss.$2],
+                'affected': 'OC_STT_Diego',
+              },
+          ],
+          'arrayPath': [
+            'LongTermMemoryByGlobalId',
+            '{Hero_Global}',
+            'MemorizedEvents',
+          ],
+        },
+      };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+class _ExpelledStatisticsCoreService extends _StatisticsCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    final response = await super.execute(command, payload: payload);
+    if (command != 'query_progression' ||
+        payload['section'] != 'events' ||
+        payload['character'] != 'Hero_Global') {
+      return response;
+    }
+
+    final data = (response['data'] as Map).cast<String, Object?>();
+    final events = data['events'] as List<Object?>;
+    events.add({
+      'index': 9,
+      'tags': ['Memory.Guild.Expelled', 'Guild.Human.NewCamp.Mercenary'],
+      'affected': 'Hero',
+    });
+    data['total'] = events.length;
+    data['count'] = events.length;
+    return response;
+  }
+}
+
+class _UnavailableStatisticsCoreService extends _FakeCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'private.skills.list') {
+      return {
+        'ok': true,
+        'data': {
+          'actor': 'Hero',
+          'found': false,
+          'skills': [
+            {
+              'base': 'Sneaking',
+              'label': 'Sneaking',
+              'category': 'Thief',
+              'kind': 'binary',
+              'learned': false,
+              'current': 'Untrained',
+              'hasUntrained': true,
+              'options': [
+                {'value': 'Untrained'},
+                {'value': 'Learned'},
+              ],
+            },
+          ],
+        },
+      };
+    }
+    final response = await super.execute(command, payload: payload);
+    if (command != 'inspect_save') return response;
+
+    final data = (response['data'] as Map).cast<String, Object?>();
+    data['private'] = {
+      'status': 'unavailable',
+      'typedParse': {'status': 'failed'},
+      'progression': {'status': 'failed'},
+      'inventory': <String, Object?>{},
+    };
+    return response;
+  }
+}
+
+class _TruncatedStatisticsCoreService extends _StatisticsCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    final response = await super.execute(command, payload: payload);
+    if (command != 'inspect_save') return response;
+
+    final data = (response['data'] as Map).cast<String, Object?>();
+    final private = (data['private'] as Map).cast<String, Object?>();
+    final inventory = (private['inventory'] as Map).cast<String, Object?>();
+    inventory['itemStackCount'] = 4097;
+    return response;
+  }
+}
+
+class _UnknownCountStatisticsCoreService extends _StatisticsCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    final response = await super.execute(command, payload: payload);
+    if (command != 'inspect_save') return response;
+
+    final data = (response['data'] as Map).cast<String, Object?>();
+    final private = (data['private'] as Map).cast<String, Object?>();
+    final inventory = (private['inventory'] as Map).cast<String, Object?>();
+    final items = inventory['items'] as List<Object?>;
+    (items.first as Map).remove('count');
+    return response;
+  }
+}
+
+class _GlobalInventoryStatisticsCoreService extends _StatisticsCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    final response = await super.execute(command, payload: payload);
+    if (command != 'inspect_save') return response;
+
+    final data = (response['data'] as Map).cast<String, Object?>();
+    final private = (data['private'] as Map).cast<String, Object?>();
+    final inventory = (private['inventory'] as Map).cast<String, Object?>();
+    inventory['itemScope'] = 'global_observed';
+    return response;
+  }
+}
+
+class _DeletingSaveCoreService extends _FakeCoreService {
+  bool _deleted = false;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'scan_save_dir' && _deleted) {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': true,
+        'data': {
+          'saveRoot': r'C:\tmp\saves',
+          'saves': <Object?>[],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'quickSaveSlots': ['G1R-001', 'G1R-002', 'G1R-003'],
+              'autoSaveSlots': ['G1R-001', 'G1R-002'],
+              'savedSlots': <Object?>[],
+              'difficultyPreset': 'DifficultyPreset_Custom',
+              'maxQuick': 3,
+              'maxAuto': 2,
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      };
+    }
+
+    final response = await super.execute(command, payload: payload);
+    if (command == 'delete_save') _deleted = true;
+    if (command == 'restore_deleted_save') _deleted = false;
+    return response;
+  }
+}
+
+class _FailedProfileAssignmentCoreService extends _FakeCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    final response = await super.execute(command, payload: payload);
+    if (command != 'scan_save_dir') return response;
+
+    final data = (response['data'] as Map).cast<String, Object?>();
+    final profiles = data['profiles'] as List<Object?>;
+    profiles.add({
+      'profileId': 1,
+      'profileName': '1',
+      'quickSaveSlots': <String>[],
+      'autoSaveSlots': <String>[],
+      'savedSlots': <String>[],
+      'difficultyPreset': 'DifficultyPreset_Custom',
+      'maxQuick': 3,
+      'maxAuto': 2,
+    });
+    return response;
   }
 }
 

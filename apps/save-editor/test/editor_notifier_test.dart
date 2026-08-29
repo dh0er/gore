@@ -1398,61 +1398,58 @@ void main() {
     },
   );
 
-  test(
-    'saveAllPending refuses a container edit to a glossary quest CurrentState '
-    'path spelled another way',
-    () async {
-      final core = _RecordingCoreService();
-      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
-      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+  test('saveAllPending refuses a container edit to a glossary quest CurrentState '
+      'path spelled another way', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
-      // The index the editor wrote as [4]; the core reads both spellings as the
-      // same segment, so the pair has to be refused here rather than split into
-      // two writes where the later one silently wins.
-      notifier.setPendingGlossarySegment(
-        const GlossarySegmentEdit(
-          documentClass: '/Script/Angelscript.Document_Glossary_Wolf',
-          segmentClass:
-              '/Script/Angelscript.DocumentSegment_Glossary_Wolf_Unlock',
-          unlocked: true,
-          questStatePath: [
-            'QuestDataByClass',
-            '{/Script/Angelscript.Quest_CreaturesGlossary_Wolf_WolfUnlock}',
-            'SubQuests',
-            '[4]',
-            'CurrentState',
-          ],
-        ),
-      );
-      notifier.setPendingEdit(
-        'typed:wolf-current-state',
-        const PendingSaveEdit(
-          edits: [
-            {
-              'path': 'private.typed.arrayRemove',
-              'value': {
-                'path': [
-                  'QuestDataByClass',
-                  '{/Script/Angelscript.Quest_CreaturesGlossary_Wolf_WolfUnlock}',
-                  'SubQuests',
-                  '[04]',
-                  'CurrentState',
-                ],
-                'index': 0,
-              },
+    // The index the editor wrote as [4]; the core reads both spellings as the
+    // same segment, so the pair has to be refused here rather than split into
+    // two writes where the later one silently wins.
+    notifier.setPendingGlossarySegment(
+      const GlossarySegmentEdit(
+        documentClass: '/Script/Angelscript.Document_Glossary_Wolf',
+        segmentClass:
+            '/Script/Angelscript.DocumentSegment_Glossary_Wolf_Unlock',
+        unlocked: true,
+        questStatePath: [
+          'QuestDataByClass',
+          '{/Script/Angelscript.Quest_CreaturesGlossary_Wolf_WolfUnlock}',
+          'SubQuests',
+          '[4]',
+          'CurrentState',
+        ],
+      ),
+    );
+    notifier.setPendingEdit(
+      'typed:wolf-current-state',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.typed.arrayRemove',
+            'value': {
+              'path': [
+                'QuestDataByClass',
+                '{/Script/Angelscript.Quest_CreaturesGlossary_Wolf_WolfUnlock}',
+                'SubQuests',
+                '[04]',
+                'CurrentState',
+              ],
+              'index': 0,
             },
-          ],
-        ),
-      );
+          },
+        ],
+      ),
+    );
 
-      final ok = await notifier.saveAllPending();
+    final ok = await notifier.saveAllPending();
 
-      expect(ok, isFalse);
-      expect(notifier.state.error, contains('same quest CurrentState'));
-      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
-      expect(notifier.state.pendingEdits, hasLength(2));
-    },
-  );
+    expect(ok, isFalse);
+    expect(notifier.state.error, contains('same quest CurrentState'));
+    expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+    expect(notifier.state.pendingEdits, hasLength(2));
+  });
 
   test('saveAllPending refuses a typed value edit inside Hero MemorizedEvents '
       'alongside a glossary segment change', () async {
@@ -2153,6 +2150,84 @@ void main() {
     },
   );
 
+  test('same-path reinspection invalidates shared in-flight reads', () async {
+    Map<String, Object?> heroHit(String leaf) => {
+      'path': [
+        'm_GenericData',
+        '{CharacterStates}',
+        'AnyCharacterType',
+        'AttributesByGlobalId',
+        '{Hero}',
+        'AttributeSetsByClass',
+        '{/Script/G1R.AttributeSet_Health}',
+        'Attributes',
+        '{MaxHealth}',
+        leaf,
+      ],
+      'display': '…',
+      'type': 'FloatProperty',
+      'value': '64',
+      'editable': true,
+    };
+    final pageTwoGate = Completer<void>();
+    final core = _RecordingCoreService(
+      typedSearchPages: [
+        {
+          'query': 'AttributesByGlobalId {Hero}',
+          'offset': 0,
+          'limit': 1000,
+          'total': 2,
+          'count': 1,
+          'results': [heroHit('BaseValue')],
+        },
+        {
+          'query': 'AttributesByGlobalId {Hero}',
+          'offset': 1,
+          'limit': 1000,
+          'total': 2,
+          'count': 1,
+          'results': [heroHit('CurrentValue')],
+        },
+        {
+          'query': 'AttributesByGlobalId {Hero}',
+          'offset': 0,
+          'limit': 1000,
+          'total': 1,
+          'count': 1,
+          'results': [heroHit('BaseValue')],
+        },
+      ],
+    );
+    late final EditorNotifier notifier;
+    Future<void>? reinspection;
+    core.onTypedSearchCall = (call) {
+      if (call == 0) {
+        reinspection = notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      }
+    };
+    core.waitTypedSearchCall = (call) =>
+        call == 1 ? pageTwoGate.future : Future<void>.value();
+    notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    final originalInspection = notifier.state.inspection;
+
+    final stale = notifier.loadHeroAttributes();
+    while (identical(notifier.state.inspection, originalInspection)) {
+      await pumpEventQueue();
+    }
+    final fresh = notifier.loadHeroAttributes();
+
+    expect(identical(fresh, stale), isFalse);
+    pageTwoGate.complete();
+    await Future.wait([stale, fresh, reinspection!]);
+    expect(
+      core.requests.where(
+        (request) => request.command == 'search_typed_properties',
+      ),
+      hasLength(3),
+    );
+  });
+
   // ---------------------------------------------------------------------------
   // The core's SAME-TARGET rule is order-independent: a structured operation
   // rewrites its target wholesale, so a raw typed edit addressing what it
@@ -2708,7 +2783,11 @@ void main() {
       final notifier = EditorNotifier(core, saveDir: r'C:	mp\saves');
       await notifier.inspect(r'C:	mp\saves\G1R-001.sav');
 
-      Map<String, Object?> entry(String character, String name, bool present) => {
+      Map<String, Object?> entry(
+        String character,
+        String name,
+        bool present,
+      ) => {
         'path': 'private.knowledge.setEntry',
         'value': {'character': character, 'entry': name, 'present': present},
       };
@@ -2735,62 +2814,68 @@ void main() {
       }
     });
 
-    test('an id-addressed edit is written before the write that renumbers ids', () async {
-      final core = _RecordingCoreService();
-      final notifier = EditorNotifier(core, saveDir: r'C:	mp\saves');
-      await notifier.inspect(r'C:	mp\saves\G1R-001.sav');
+    test(
+      'an id-addressed edit is written before the write that renumbers ids',
+      () async {
+        final core = _RecordingCoreService();
+        final notifier = EditorNotifier(core, saveDir: r'C:	mp\saves');
+        await notifier.inspect(r'C:	mp\saves\G1R-001.sav');
 
-      // A raw write to a slot's m_Id renumbers what the count edit is addressed
-      // by. Two writes would not help — the second would resolve the id this one
-      // moved — so they share one write with the addressed edit first, which is
-      // the order the core accepts.
-      notifier.setPendingEdit(
-        'a-slot-id',
-        const PendingSaveEdit(
-          edits: [
-            {
-              'path': 'private.typed.setValue',
-              'value': {
-                'path': [
-                  'm_Inventory',
-                  'm_Containers',
-                  '[0]',
-                  'm_Slots',
-                  '[3]',
-                  'm_Id',
-                ],
-                'value': 9,
+        // A raw write to a slot's m_Id renumbers what the count edit is addressed
+        // by. Two writes would not help — the second would resolve the id this one
+        // moved — so they share one write with the addressed edit first, which is
+        // the order the core accepts.
+        notifier.setPendingEdit(
+          'a-slot-id',
+          const PendingSaveEdit(
+            edits: [
+              {
+                'path': 'private.typed.setValue',
+                'value': {
+                  'path': [
+                    'm_Inventory',
+                    'm_Containers',
+                    '[0]',
+                    'm_Slots',
+                    '[3]',
+                    'm_Id',
+                  ],
+                  'value': 9,
+                },
               },
-            },
-          ],
-        ),
-      );
-      notifier.setPendingEdit(
-        'z-count',
-        const PendingSaveEdit(
-          edits: [
-            {
-              'path': 'private.inventory.setItemCount',
-              'value': {'path': '/Script/Angelscript.ItMi_Orenugget', 'count': 5},
-            },
-          ],
-        ),
-      );
+            ],
+          ),
+        );
+        notifier.setPendingEdit(
+          'z-count',
+          const PendingSaveEdit(
+            edits: [
+              {
+                'path': 'private.inventory.setItemCount',
+                'value': {
+                  'path': '/Script/Angelscript.ItMi_Orenugget',
+                  'count': 5,
+                },
+              },
+            ],
+          ),
+        );
 
-      final ok = await notifier.saveAllPending();
+        final ok = await notifier.saveAllPending();
 
-      expect(ok, isTrue);
-      final writes = core.requests
-          .where((request) => request.command == 'write_save')
-          .toList();
-      expect(writes, hasLength(1));
-      final edits = (writes.single.payload['edits'] as List)
-          .cast<Map<String, Object?>>();
-      expect(
-        edits.map((edit) => edit['path']),
-        ['private.inventory.setItemCount', 'private.typed.setValue'],
-      );
-    });
+        expect(ok, isTrue);
+        final writes = core.requests
+            .where((request) => request.command == 'write_save')
+            .toList();
+        expect(writes, hasLength(1));
+        final edits = (writes.single.payload['edits'] as List)
+            .cast<Map<String, Object?>>();
+        expect(edits.map((edit) => edit['path']), [
+          'private.inventory.setItemCount',
+          'private.typed.setValue',
+        ]);
+      },
+    );
 
     test('a skill edit sent with an empty actor is the hero everywhere', () {
       final emptyActor = {
@@ -2838,13 +2923,10 @@ void main() {
       // The core reads an ABSENT or empty actor as the hero, and it decides that
       // before folding, so a blank of spaces stays an actor of its own.
       expect(
-        structuredEditsShareATarget(
-          skill('Hero', 'Ranged_Bow', 'Trained'),
-          {
-            'path': 'private.skills.set',
-            'value': {'base': 'Ranged_Bow', 'tier': 'Untrained'},
-          },
-        ),
+        structuredEditsShareATarget(skill('Hero', 'Ranged_Bow', 'Trained'), {
+          'path': 'private.skills.set',
+          'value': {'base': 'Ranged_Bow', 'tier': 'Untrained'},
+        }),
         isTrue,
       );
       expect(
@@ -5097,6 +5179,515 @@ void main() {
   });
 
   test(
+    'deleteSave removes the registered file and refreshes selection',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-006.sav',
+              'slot': 'G1R-006',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'a',
+              'status': 'ok',
+              'playerSaveName': 'Delete me',
+              'persistentProfileId': 0,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'savedSlots': ['G1R-006'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+
+      final ok = await notifier.deleteSave(slot: 'G1R-006', profileId: 0);
+
+      expect(ok, isTrue);
+      final request = core.requests.lastWhere(
+        (request) => request.command == 'delete_save',
+      );
+      expect(request.payload['path'], r'C:\tmp\saves\G1R-006.sav');
+      expect(
+        request.payload['persistentPath'],
+        r'C:\tmp\saves\PersistentDataList.sav',
+      );
+      expect(request.payload['slot'], 'G1R-006');
+      expect(request.payload['profileId'], 0);
+      expect(request.payload['backup'], isTrue);
+      expect(notifier.state.saves, isEmpty);
+      expect(notifier.state.profiles.single.savedSlots, isEmpty);
+      expect(notifier.state.selectedPath, isNull);
+      expect(notifier.state.inspection, isNull);
+      expect(
+        notifier.state.deletedSaveRecovery?.targetPath,
+        r'C:\tmp\saves\G1R-006.sav',
+      );
+      expect(
+        notifier.state.deletedSaveRecovery?.backupPath,
+        r'C:\tmp\saves\goresave_backups\G1R-006.sav.bak.2',
+      );
+      expect(
+        notifier.state.deletedSaveRecovery?.persistentPostDeleteSha1,
+        'post-delete-profile-sha',
+      );
+      expect(
+        notifier.state.deletedSaveRecovery?.deletedSaveSha1,
+        'deleted-save-sha',
+      );
+      expect(
+        notifier.state.deletedSaveRecovery?.deletedPersistentSha1,
+        'deleted-persistent-sha',
+      );
+
+      await notifier.restoreDeletedSave();
+
+      final restore = core.requests.lastWhere(
+        (request) => request.command == 'restore_deleted_save',
+      );
+      expect(restore.payload['path'], r'C:\tmp\saves\G1R-006.sav');
+      expect(
+        restore.payload['backupPath'],
+        r'C:\tmp\saves\goresave_backups\G1R-006.sav.bak.2',
+      );
+      expect(
+        restore.payload['expectedPersistentSha1'],
+        'post-delete-profile-sha',
+      );
+      expect(restore.payload['expectedSaveSha1'], 'deleted-save-sha');
+      expect(
+        restore.payload['expectedPersistentBackupSha1'],
+        'deleted-persistent-sha',
+      );
+      expect(notifier.state.deletedSaveRecovery, isNull);
+    },
+  );
+
+  test('restoreDeletedSave preserves pending edits', () async {
+    final core = _RecordingCoreService(
+      scanData: {
+        'saves': [
+          {
+            'path': r'C:\tmp\saves\G1R-006.sav',
+            'slot': 'G1R-006',
+            'format': 'GSAV',
+            'fileSize': 100,
+            'sha1': 'a',
+            'status': 'ok',
+            'persistentProfileId': 0,
+          },
+        ],
+        'profiles': [
+          {
+            'profileId': 0,
+            'profileName': '0',
+            'savedSlots': ['G1R-006'],
+          },
+        ],
+        'activeProfileId': 0,
+      },
+    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await pumpEventQueue();
+    expect(await notifier.deleteSave(slot: 'G1R-006', profileId: 0), isTrue);
+    notifier.setPendingEdit(
+      'draft',
+      const PendingSaveEdit(
+        edits: [
+          {'op': 'public.setName', 'value': 'Keep me'},
+        ],
+      ),
+    );
+
+    await notifier.restoreDeletedSave();
+
+    expect(notifier.state.pendingEdits, contains('draft'));
+    expect(notifier.state.deletedSaveRecovery, isNotNull);
+    expect(
+      core.requests.where(
+        (request) => request.command == 'restore_deleted_save',
+      ),
+      isEmpty,
+    );
+  });
+
+  test('restoreDeletedSave retains a newly discovered predecessor', () async {
+    const current = <String, Object?>{
+      'version': 1,
+      'createdEpoch': 2,
+      'targetPath': r'C:\tmp\saves\G1R-007.sav',
+      'backupPath': r'C:\tmp\saves\goresave_backups\G1R-007.sav.bak.2',
+      'persistentPath': r'C:\tmp\saves\PersistentDataList.sav',
+      'persistentBackupPath':
+          r'C:\tmp\saves\goresave_backups\PersistentDataList.sav.bak.2',
+      'persistentPostDeleteSha1': 'current-post-delete',
+      'deletedSaveSha1': 'current-save',
+      'deletedPersistentSha1': 'current-persistent',
+    };
+    const predecessor = <String, Object?>{
+      'version': 1,
+      'createdEpoch': 1,
+      'targetPath': r'C:\tmp\saves\G1R-006.sav',
+      'backupPath': r'C:\tmp\saves\goresave_backups\G1R-006.sav.bak.1',
+      'persistentPath': r'C:\tmp\saves\PersistentDataList.sav',
+      'persistentBackupPath':
+          r'C:\tmp\saves\goresave_backups\PersistentDataList.sav.bak.1',
+      'persistentPostDeleteSha1': 'predecessor-post-delete',
+      'deletedSaveSha1': 'predecessor-save',
+      'deletedPersistentSha1': 'predecessor-persistent',
+    };
+    final store = _MemoryEditorSettingsStore();
+    final core = _PredecessorRecoveryCoreService(
+      currentRecovery: current,
+      predecessorRecovery: predecessor,
+    );
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\tmp\saves',
+      settingsStore: store,
+    );
+    await pumpEventQueue();
+
+    expect(
+      notifier.state.deletedSaveRecovery?.backupPath,
+      current['backupPath'],
+    );
+    await notifier.restoreDeletedSave();
+
+    expect(
+      notifier.state.deletedSaveRecovery?.backupPath,
+      predecessor['backupPath'],
+    );
+    expect(
+      store.settings.deletedSaveRecovery?.backupPath,
+      predecessor['backupPath'],
+    );
+  });
+
+  test('deleteSave preserves an existing one-click recovery', () async {
+    final store = _MemoryEditorSettingsStore();
+    final core = _RecordingCoreService(
+      scanData: {
+        'saves': [
+          {
+            'path': r'C:\tmp\saves\G1R-006.sav',
+            'slot': 'G1R-006',
+            'format': 'GSAV',
+            'fileSize': 100,
+            'sha1': 'a',
+            'status': 'ok',
+            'persistentProfileId': 0,
+          },
+          {
+            'path': r'C:\tmp\saves\G1R-007.sav',
+            'slot': 'G1R-007',
+            'format': 'GSAV',
+            'fileSize': 100,
+            'sha1': 'b',
+            'status': 'ok',
+            'persistentProfileId': 0,
+          },
+        ],
+        'profiles': [
+          {
+            'profileId': 0,
+            'profileName': '0',
+            'savedSlots': ['G1R-006', 'G1R-007'],
+          },
+          {'profileId': 1, 'profileName': '1', 'savedSlots': <String>[]},
+        ],
+        'activeProfileId': 0,
+      },
+    );
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\tmp\saves',
+      settingsStore: store,
+    );
+    await pumpEventQueue();
+
+    expect(await notifier.deleteSave(slot: 'G1R-006', profileId: 0), isTrue);
+    final recovery = notifier.state.deletedSaveRecovery;
+    expect(store.settings.deletedSaveRecovery, same(recovery));
+
+    expect(await notifier.deleteSave(slot: 'G1R-007', profileId: 0), isFalse);
+    expect(notifier.state.deletedSaveRecovery, same(recovery));
+    expect(
+      core.requests.where((request) => request.command == 'delete_save'),
+      hasLength(1),
+    );
+
+    expect(await notifier.assignSelectedSaveToProfile(1), isFalse);
+    expect(
+      await notifier.removeSaveFromProfile(slot: 'G1R-007', profileId: 0),
+      isFalse,
+    );
+    expect(
+      await notifier.writeProfileDifficulty(
+        profileId: 0,
+        difficulty: const {'preset': 'Gothic'},
+      ),
+      isFalse,
+    );
+    expect(
+      await notifier.restoreBackup(r'C:\tmp\saves\G1R-007.sav.bak.1'),
+      isFalse,
+    );
+    await notifier.deleteBackup(r'C:\tmp\saves\G1R-007.sav.bak.1');
+    notifier.setPendingEdit(
+      'publicName',
+      const PendingSaveEdit(
+        edits: [
+          {'op': 'public.setName', 'value': 'Keep recovery valid'},
+        ],
+        syncPersistentDataList: true,
+      ),
+    );
+    expect(await notifier.saveAllPending(), isFalse);
+    for (final command in [
+      'assign_save_profile',
+      'remove_save_from_profile',
+      'write_difficulty',
+      'restore_backup',
+      'delete_backup',
+      'write_save',
+    ]) {
+      expect(
+        core.requests.where((request) => request.command == command),
+        isEmpty,
+        reason: '$command must not invalidate the pending recovery',
+      );
+    }
+
+    final restarted = EditorNotifier(
+      core,
+      saveDir: r'C:\tmp\saves',
+      settingsStore: store,
+    );
+    expect(
+      restarted.state.deletedSaveRecovery?.targetPath,
+      recovery?.targetPath,
+    );
+    expect(
+      restarted.state.deletedSaveRecovery?.backupPath,
+      recovery?.backupPath,
+    );
+    await restarted.dismissDeletedSaveRecovery();
+    expect(store.settings.deletedSaveRecovery, isNull);
+  });
+
+  test('refresh discovers a native deleted-save recovery manifest', () async {
+    final store = _MemoryEditorSettingsStore();
+    final core = _RecordingCoreService(
+      scanData: {
+        'saves': <Object?>[],
+        'profiles': <Object?>[],
+        'deletedSaveRecovery': {
+          'version': 1,
+          'createdEpoch': 1,
+          'targetPath': r'C:\tmp\saves\G1R-006.sav',
+          'backupPath': r'C:\tmp\saves\goresave_backups\G1R-006.sav.bak.1',
+          'persistentPath': r'C:\tmp\saves\PersistentDataList.sav',
+          'persistentBackupPath':
+              r'C:\tmp\saves\goresave_backups\PersistentDataList.sav.bak.1',
+          'persistentPostDeleteSha1': 'post-delete-profile-sha',
+          'deletedSaveSha1': 'deleted-save-sha',
+          'deletedPersistentSha1': 'deleted-persistent-sha',
+        },
+      },
+    );
+
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\tmp\saves',
+      settingsStore: store,
+    );
+    await pumpEventQueue();
+
+    expect(
+      notifier.state.deletedSaveRecovery?.targetPath,
+      r'C:\tmp\saves\G1R-006.sav',
+    );
+    expect(store.settings.deletedSaveRecovery, isNotNull);
+    await notifier.dismissDeletedSaveRecovery();
+    expect(store.settings.deletedSaveRecovery, isNull);
+    expect(
+      core.requests
+          .lastWhere(
+            (request) => request.command == 'dismiss_deleted_save_recovery',
+          )
+          .payload['backupPath'],
+      r'C:\tmp\saves\goresave_backups\G1R-006.sav.bak.1',
+    );
+  });
+
+  test('refresh clears stale recovery after target is recreated', () async {
+    final recovery = DeletedSaveRecovery(
+      targetPath: r'C:\tmp\saves\G1R-006.sav',
+      backupPath: r'C:\tmp\saves\goresave_backups\G1R-006.sav.bak.1',
+      persistentPostDeleteSha1: 'post-delete-profile-sha',
+      deletedSaveSha1: 'deleted-save-sha',
+      deletedPersistentSha1: 'deleted-persistent-sha',
+      message: 'Deleted',
+    );
+    final store = _MemoryEditorSettingsStore(
+      EditorSettings(deletedSaveRecovery: recovery),
+    );
+    final core = _RecordingCoreService(
+      scanData: {
+        'saves': <Object?>[
+          {
+            'path': r'C:\tmp\saves\G1R-006.sav',
+            'slot': 'G1R-006',
+            'format': 'GSAV',
+            'fileSize': 1,
+            'sha1': 'recreated-save-sha',
+            'status': 'ok',
+          },
+        ],
+        'profiles': <Object?>[],
+        'deletedSaveRecovery': null,
+      },
+    );
+
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\tmp\saves',
+      settingsStore: store,
+    );
+    await pumpEventQueue();
+
+    expect(notifier.state.deletedSaveRecovery, isNull);
+    expect(store.settings.deletedSaveRecovery, isNull);
+  });
+
+  test('refresh keeps native recovery for an exact recreated target', () async {
+    final recoveryJson = <String, Object?>{
+      'version': 1,
+      'createdEpoch': 1,
+      'targetPath': r'C:\tmp\saves\G1R-006.sav',
+      'backupPath': r'C:\tmp\saves\goresave_backups\G1R-006.sav.bak.1',
+      'persistentPath': r'C:\tmp\saves\PersistentDataList.sav',
+      'persistentBackupPath':
+          r'C:\tmp\saves\goresave_backups\PersistentDataList.sav.bak.1',
+      'persistentPostDeleteSha1': 'post-delete-profile-sha',
+      'deletedSaveSha1': 'deleted-save-sha',
+      'deletedPersistentSha1': 'deleted-persistent-sha',
+    };
+    final core = _RecordingCoreService(
+      scanData: {
+        'saves': <Object?>[
+          {
+            'path': r'C:\tmp\saves\G1R-006.sav',
+            'slot': 'G1R-006',
+            'format': 'GSAV',
+            'fileSize': 1,
+            'sha1': 'deleted-save-sha',
+            'status': 'ok',
+          },
+        ],
+        'profiles': <Object?>[],
+        'deletedSaveRecovery': recoveryJson,
+      },
+    );
+
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await pumpEventQueue();
+
+    expect(notifier.state.deletedSaveRecovery, isNotNull);
+    expect(
+      notifier.state.deletedSaveRecovery?.targetPath,
+      r'C:\tmp\saves\G1R-006.sav',
+    );
+  });
+
+  test('dismiss clears a token even when native cleanup fails', () async {
+    final recovery = DeletedSaveRecovery(
+      targetPath: r'C:\tmp\saves\G1R-006.sav',
+      backupPath: r'C:\tmp\saves\goresave_backups\G1R-006.sav.bak.1',
+      persistentPostDeleteSha1: 'post-delete-profile-sha',
+      deletedSaveSha1: 'deleted-save-sha',
+      deletedPersistentSha1: 'deleted-persistent-sha',
+      message: 'Deleted',
+    );
+    final store = _MemoryEditorSettingsStore(
+      EditorSettings(deletedSaveRecovery: recovery),
+    );
+    final notifier = EditorNotifier(
+      _FailingDismissRecoveryCoreService(),
+      saveDir: r'C:\tmp\saves',
+      settingsStore: store,
+    );
+    await pumpEventQueue();
+
+    expect(notifier.state.deletedSaveRecovery, isNotNull);
+    await notifier.dismissDeletedSaveRecovery();
+
+    expect(notifier.state.deletedSaveRecovery, isNull);
+    expect(store.settings.deletedSaveRecovery, isNull);
+    expect(notifier.state.error, isNotNull);
+  });
+
+  test(
+    'selecting another save keeps deleted-save recovery reachable',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-006.sav',
+              'slot': 'G1R-006',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'a',
+              'status': 'ok',
+              'playerSaveName': 'Delete me',
+              'persistentProfileId': 0,
+            },
+            {
+              'path': r'C:\tmp\saves\G1R-007.sav',
+              'slot': 'G1R-007',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'b',
+              'status': 'ok',
+              'playerSaveName': 'Keep me',
+              'persistentProfileId': 0,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'savedSlots': ['G1R-006', 'G1R-007'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+
+      expect(await notifier.deleteSave(slot: 'G1R-006', profileId: 0), isTrue);
+      expect(notifier.state.deletedSaveRecovery, isNotNull);
+
+      await notifier.inspect(r'C:\tmp\saves\G1R-007.sav');
+
+      expect(notifier.state.lastWriteMessage, isNull);
+      expect(notifier.state.deletedSaveRecovery, isNotNull);
+      await notifier.dismissDeletedSaveRecovery();
+      expect(notifier.state.deletedSaveRecovery, isNull);
+    },
+  );
+
+  test(
     'all unassigned saves stay out of profiles and collect in Other saves',
     () async {
       final core = _RecordingCoreService(
@@ -5770,6 +6361,8 @@ class _RecordingCoreService implements GoresaveCoreService {
   /// [typedSearchData]. The last page repeats if called more often.
   final List<Map<String, Object?>>? typedSearchPages;
   var _typedSearchCalls = 0;
+  void Function(int call)? onTypedSearchCall;
+  Future<void> Function(int call)? waitTypedSearchCall;
 
   /// Canned response data for query_progression. When null the command falls
   /// through to the default unhandled-command error response.
@@ -5875,6 +6468,7 @@ class _RecordingCoreService implements GoresaveCoreService {
           },
         };
       case 'restore_backup':
+      case 'restore_deleted_save':
         return {
           'ok': true,
           'data': {
@@ -5975,11 +6569,45 @@ class _RecordingCoreService implements GoresaveCoreService {
                 r'C:\tmp\saves\PersistentDataList.sav.bak.2',
           },
         };
+      case 'delete_save':
+        final profileId = (payload['profileId'] as num).toInt();
+        final slot = payload['slot'] as String;
+        final saves = (scanData['saves'] as List?) ?? <Object?>[];
+        saves.removeWhere((raw) => raw is Map && raw['slot'] == slot);
+        for (final raw
+            in ((scanData['profiles'] as List?) ?? <Object?>[])
+                .whereType<Map>()) {
+          for (final key in ['savedSlots', 'quickSaveSlots', 'autoSaveSlots']) {
+            (raw[key] as List?)?.removeWhere((value) => value == slot);
+          }
+        }
+        return {
+          'ok': true,
+          'data': {
+            'path': payload['path'],
+            'slot': slot,
+            'persistentPath': payload['persistentPath'],
+            'profileId': profileId,
+            'backupPath': r'C:\tmp\saves\goresave_backups\G1R-006.sav.bak.2',
+            'persistentBackupPath':
+                r'C:\tmp\saves\goresave_backups\PersistentDataList.sav.bak.2',
+            'persistentPostDeleteSha1': 'post-delete-profile-sha',
+            'deletedSaveSha1': 'deleted-save-sha',
+            'deletedPersistentSha1': 'deleted-persistent-sha',
+          },
+        };
+      case 'dismiss_deleted_save_recovery':
+        return {
+          'ok': true,
+          'data': {'dismissed': true},
+        };
       case 'search_typed_properties':
         final pages = typedSearchPages;
         if (pages != null && pages.isNotEmpty) {
-          final page = pages[_typedSearchCalls.clamp(0, pages.length - 1)];
-          _typedSearchCalls++;
+          final call = _typedSearchCalls++;
+          final page = pages[call.clamp(0, pages.length - 1)];
+          onTypedSearchCall?.call(call);
+          await waitTypedSearchCall?.call(call);
           return {'ok': true, 'data': page};
         }
         return {
@@ -6042,6 +6670,33 @@ class _RecordingCoreService implements GoresaveCoreService {
   }
 }
 
+class _PredecessorRecoveryCoreService extends _RecordingCoreService {
+  _PredecessorRecoveryCoreService({
+    required Map<String, Object?> currentRecovery,
+    required this.predecessorRecovery,
+  }) : super(
+         scanData: {
+           'saves': <Object?>[],
+           'profiles': <Object?>[],
+           'deletedSaveRecovery': currentRecovery,
+         },
+       );
+
+  final Map<String, Object?> predecessorRecovery;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    final response = await super.execute(command, payload: payload);
+    if (command == 'restore_deleted_save') {
+      scanData['deletedSaveRecovery'] = predecessorRecovery;
+    }
+    return response;
+  }
+}
+
 class _RejectExternalInspectCoreService extends _RecordingCoreService {
   _RejectExternalInspectCoreService({super.scanData});
 
@@ -6058,6 +6713,25 @@ class _RejectExternalInspectCoreService extends _RecordingCoreService {
       return {
         'ok': false,
         'error': {'message': 'invalid external file'},
+      };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+class _FailingDismissRecoveryCoreService extends _RecordingCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'dismiss_deleted_save_recovery') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': false,
+        'error': {'message': 'recovery manifest is inaccessible'},
       };
     }
     return super.execute(command, payload: payload);

@@ -322,15 +322,19 @@ fn label_for(guild: &str) -> String {
     guild.rsplit('.').next().unwrap_or(guild).to_string()
 }
 
+/// Whether one global crime entry belongs to the player.
+fn is_hero_crime(entry_props: &[Property]) -> bool {
+    member(entry_props, "CriminalGlobalID")
+        .map(|p| matches!(&p.value, PropertyValue::Name(s) | PropertyValue::Str(s) if s == HERO))
+        .unwrap_or(false)
+}
+
 /// The set of camp-level guild tags a single global crime entry implicates,
 /// considering ONLY the player's crimes (`CriminalGlobalID == "Hero"`). Returns
 /// an empty set for non-Hero crimes. A crime with neither a mappable guild tag
 /// nor a mappable victim prefix maps to [`OTHER_BUCKET`].
 fn entry_guilds(entry_props: &[Property]) -> Vec<String> {
-    let is_hero = member(entry_props, "CriminalGlobalID")
-        .map(|p| matches!(&p.value, PropertyValue::Name(s) | PropertyValue::Str(s) if s == HERO))
-        .unwrap_or(false);
-    if !is_hero {
+    if !is_hero_crime(entry_props) {
         return Vec::new();
     }
     let mut guilds: Vec<String> = Vec::new();
@@ -372,6 +376,22 @@ fn is_forgiven(entry_props: &[Property]) -> bool {
     member(entry_props, "bIsForgiven")
         .map(|p| matches!(p.value, PropertyValue::Bool(true)))
         .unwrap_or(false)
+}
+
+/// Count the player's unforgiven global crime entries exactly once each.
+///
+/// This deliberately does not derive a total from per-guild rows: one global
+/// entry may implicate several victim guilds, while an unmappable entry belongs
+/// to the hidden [`OTHER_BUCKET`].
+pub fn count_open_crimes(root: &RootObject) -> usize {
+    let Some((_, blob)) = find_crime_blob(root) else {
+        return 0;
+    };
+    global_entries(blob)
+        .iter()
+        .filter_map(element_props)
+        .filter(|props| is_hero_crime(props) && !is_forgiven(props))
+        .count()
 }
 
 /// `true` when the camp-level guild `target` is implicated by this entry per the
@@ -1224,6 +1244,24 @@ mod tests {
         assert!(!by.contains_key("Other"), "rows: {rows:?}");
         // Sorted by unforgiven desc.
         assert_eq!(rows[0].guild, "Guild.Human.OldCamp");
+        assert_eq!(count_open_crimes(&root), 3);
+    }
+
+    #[test]
+    fn open_crime_count_does_not_duplicate_multi_guild_entries() {
+        let global = vec![global_entry(
+            1,
+            false,
+            "Hero",
+            &["Guild.Human.OldCamp", "Guild.Human.NewCamp"],
+            &[],
+        )];
+        let payload = crime_payload(&global, &[]);
+        let root = parse_private_root(&payload).unwrap();
+        let rows = list_guild_crimes(&root);
+
+        assert_eq!(rows.iter().map(|row| row.unforgiven).sum::<usize>(), 2);
+        assert_eq!(count_open_crimes(&root), 1);
     }
 
     #[test]
@@ -1238,6 +1276,7 @@ mod tests {
             !rows.iter().any(|r| r.guild == "Other"),
             "Other bucket must not be listed: {rows:?}"
         );
+        assert_eq!(count_open_crimes(&root), 1);
     }
 
     // ── hostility (real model: fresh, un-forgiven player-crime severity) ─────────

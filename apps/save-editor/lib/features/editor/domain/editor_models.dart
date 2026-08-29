@@ -448,6 +448,14 @@ class SaveSlot {
   /// inspectable as save files.
   bool get isMissing => status == 'missing';
 
+  /// The platform-independent basename shown in the sidebar. Save paths can be
+  /// Windows-style even when tests or tooling run on another host.
+  String get fileName {
+    final normalized = path.replaceAll('\\', '/');
+    final name = normalized.split('/').last;
+    return name.isEmpty ? '$slot.sav' : name;
+  }
+
   String get displayName {
     final name = playerSaveName ?? persistentPlayerSaveName;
     return name == null || name.isEmpty ? slot : name;
@@ -490,6 +498,7 @@ class SaveInspection {
     this.privateInventory = const PrivateInventorySummary(),
     this.privateNpc = const PrivateNpcSummary(),
     this.privateProgression = const ProgressionOverview(),
+    this.privateFactions,
     this.privateTypedParseStatus,
     this.privateTypedPropertyCount,
     this.privateTypedMaxDepth,
@@ -505,6 +514,8 @@ class SaveInspection {
         ?.cast<String, Object?>();
     final privateNpc = (private?['npc'] as Map?)?.cast<String, Object?>();
     final privateProgression = (private?['progression'] as Map?)
+        ?.cast<String, Object?>();
+    final privateFactions = (private?['factions'] as Map?)
         ?.cast<String, Object?>();
     final privateStatus = private?['status'] as String?;
     final typedParse = (private?['typedParse'] as Map?)
@@ -552,6 +563,9 @@ class SaveInspection {
       privateInventory: PrivateInventorySummary.fromJson(privateInventory),
       privateNpc: PrivateNpcSummary.fromJson(privateNpc),
       privateProgression: ProgressionOverview.fromJson(privateProgression),
+      privateFactions: privateFactions == null
+          ? null
+          : FactionsPage.fromJson(privateFactions),
       privateTypedParseStatus: typedParse?['status'] as String?,
       privateTypedPropertyCount: (typedParse?['propertyCount'] as num?)
           ?.toInt(),
@@ -598,6 +612,7 @@ class SaveInspection {
   final PrivateInventorySummary privateInventory;
   final PrivateNpcSummary privateNpc;
   final ProgressionOverview privateProgression;
+  final FactionsPage? privateFactions;
 
   /// Status of the strict typed property parse of the decoded private payload
   /// ('ok', 'failed', 'skipped_preview'); null when no private decode ran.

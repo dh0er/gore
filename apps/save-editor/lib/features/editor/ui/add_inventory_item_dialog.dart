@@ -10,6 +10,7 @@ import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 
 /// Dialog that lets the user pick an item from the bundled catalog and specify
 /// a count to add to the inventory.
@@ -261,7 +262,9 @@ class _AddInventoryItemDialogState
                                 overflow: TextOverflow.ellipsis,
                                 style: theme.textTheme.bodySmall?.copyWith(
                                   color: theme.colorScheme.onSurfaceVariant,
-                                  fontFamily: 'Consolas',
+                                  fontFamily: uiAwareMonospaceFontFamily(
+                                    context,
+                                  ),
                                 ),
                               ),
                           ],

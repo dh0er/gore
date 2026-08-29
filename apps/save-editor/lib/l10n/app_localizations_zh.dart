@@ -643,7 +643,7 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
-  String get publicSaveName => '公开存档名称';
+  String get publicSaveName => '名称';
 
   @override
   String get gameTimeTitle => '游戏时间';
@@ -1387,6 +1387,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get appearanceTitle => '外观';
 
   @override
+  String get uiFont => '字体';
+
+  @override
   String get theme => '主题';
 
   @override
@@ -1454,6 +1457,23 @@ class AppLocalizationsZh extends AppLocalizations {
   String get itemImagesTitle => '物品图片';
 
   @override
+  String get gameDataTitle => '游戏数据';
+
+  @override
+  String itemImagesReady(int count) {
+    return '已准备 $count 张物品图片。';
+  }
+
+  @override
+  String get itemImagesUnavailable => '物品图片不可用，将改用分类图标。';
+
+  @override
+  String get checkRefreshItemImages => '检查 / 更新物品图片';
+
+  @override
+  String get gameDataSourceMissing => '无法自动准备游戏文本。你可以在设置中选择本地化缓存。';
+
+  @override
   String get loadingTexts => '正在加载文本…';
 
   @override
@@ -1478,18 +1498,6 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get extractRefreshLocalizedText => '提取 / 刷新本地化文本';
-
-  @override
-  String get extractLocalizedTextTitle => '提取本地化游戏文本？';
-
-  @override
-  String get extractLocalizedTextBody => '本地化游戏文本尚未提取。现在从你的游戏安装目录提取吗？（可选）';
-
-  @override
-  String get notNow => '暂不';
-
-  @override
-  String get extract => '提取';
 
   @override
   String get extractionComplete => '提取完成';
@@ -2092,6 +2100,17 @@ class AppLocalizationsZh extends AppLocalizations {
   String get removeFromProfile => '从存档配置中移除';
 
   @override
+  String get deleteSavegame => '删除存档';
+
+  @override
+  String get deleteSavegameTitle => '删除存档？';
+
+  @override
+  String deleteSavegameBody(String save, String fileName, String profile) {
+    return '要删除 $save（$fileName）吗？它将从 $profile 中移除，并从存档文件夹中删除。GORE 会先创建备份。';
+  }
+
+  @override
   String get removeSaveFromProfileTitle => '从存档配置中移除存档？';
 
   @override
@@ -2190,6 +2209,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get editorUnsavedBeforeRemoveProfile => '从存档配置中移除存档前，请先保存或重置未保存的修改。';
 
   @override
+  String get editorUnsavedBeforeDeleteSave => '删除此存档前，请先保存或重置未保存的修改。';
+
+  @override
   String get editorUnsavedBeforeRestoreProfile =>
       '存档中有未保存的修改。恢复存档配置备份前，请先保存或重置这些修改。';
 
@@ -2280,6 +2302,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get editorSaveRemovedFromProfile => '已从存档配置中移除存档';
 
   @override
+  String get editorSaveDeleted => '存档已删除；已创建备份';
+
+  @override
   String editorRestoredBackup(String path) {
     return '已恢复备份：$path';
   }
@@ -2307,6 +2332,11 @@ class AppLocalizationsZh extends AppLocalizations {
   @override
   String editorProfileRemovalFailed(String details) {
     return '无法从存档配置中移除存档：$details';
+  }
+
+  @override
+  String editorDeleteSaveFailed(String details) {
+    return '无法删除存档：$details';
   }
 
   @override
@@ -2821,6 +2851,96 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get slotRepairNotOffered => '此存档不支持修复。';
+
+  @override
+  String get statisticsTitle => '统计';
+
+  @override
+  String get statisticsSubtitle => '角色、任务、世界和游戏进度的简要概览。';
+
+  @override
+  String statisticsCardTitle(String card, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(card, {
+      'timing': '时间',
+      'character': '角色',
+      'quests': '任务',
+      'progress': '进度',
+      'encounters': '战斗与交往',
+      'inventory': '技能与物品',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String statisticsMetric(String metric, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(metric, {
+      'timePlayed': '游玩时间',
+      'worldTime': '世界时间',
+      'level': '等级',
+      'experience': '经验',
+      'learningPoints': '学习点数',
+      'guild': '阵营',
+      'health': '生命值',
+      'mana': '法力',
+      'chapter': '章节',
+      'location': '位置',
+      'kills': '击杀NPC',
+      'knownCharacters': '已知角色',
+      'killedMonsters': '击杀怪物',
+      'defeatedNpcs': '击败NPC',
+      'killedNpcs': '击杀NPC',
+      'knownNpcs': '已知NPC',
+      'knownTeachers': '已知导师',
+      'learnedSkills': '已学技能',
+      'knowledge': '知识条目',
+      'deadCharacters': '死亡角色',
+      'traders': '已知商人',
+      'inventoryStacks': '物品堆叠',
+      'inventoryItems': '物品',
+      'ore': '矿石',
+      'equipped': '已装备',
+      'hostileFactions': '敌对阵营',
+      'openCrimes': '未解决罪行',
+      'position': '坐标',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String statisticsGuildRank(String rank, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(rank, {
+      'oldCampShadow': '旧营地 · 影子',
+      'oldCampGuard': '旧营地 · 守卫',
+      'oldCampFireMage': '旧营地 · 火法师',
+      'newCampRogue': '新营地 · 强盗',
+      'newCampMercenary': '新营地 · 雇佣兵',
+      'newCampWaterMage': '新营地 · 水法师',
+      'swampCampNovice': '沼泽营地 · 新人',
+      'swampCampTemplar': '沼泽营地 · 圣殿骑士',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get statisticsUnknown => '不可用';
+
+  @override
+  String get statisticsMore => '更多统计';
+
+  @override
+  String statisticsSummary(
+    String level,
+    String guild,
+    String chapter,
+    int completed,
+    int failed,
+    String playTime,
+  ) {
+    return '等级$level，$guild，第$chapter章。完成任务$completed个，失败$failed个。游玩时间：$playTime。';
+  }
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hans`).
@@ -3462,7 +3582,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   }
 
   @override
-  String get publicSaveName => '公开存档名称';
+  String get publicSaveName => '名称';
 
   @override
   String get gameTimeTitle => '游戏时间';
@@ -4206,6 +4326,9 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get appearanceTitle => '外观';
 
   @override
+  String get uiFont => '字体';
+
+  @override
   String get theme => '主题';
 
   @override
@@ -4273,6 +4396,23 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get itemImagesTitle => '物品图片';
 
   @override
+  String get gameDataTitle => '游戏数据';
+
+  @override
+  String itemImagesReady(int count) {
+    return '已准备 $count 张物品图片。';
+  }
+
+  @override
+  String get itemImagesUnavailable => '物品图片不可用，将改用分类图标。';
+
+  @override
+  String get checkRefreshItemImages => '检查 / 更新物品图片';
+
+  @override
+  String get gameDataSourceMissing => '无法自动准备游戏文本。你可以在设置中选择本地化缓存。';
+
+  @override
   String get loadingTexts => '正在加载文本…';
 
   @override
@@ -4297,18 +4437,6 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get extractRefreshLocalizedText => '提取 / 刷新本地化文本';
-
-  @override
-  String get extractLocalizedTextTitle => '提取本地化游戏文本？';
-
-  @override
-  String get extractLocalizedTextBody => '本地化游戏文本尚未提取。现在从你的游戏安装目录提取吗？（可选）';
-
-  @override
-  String get notNow => '暂不';
-
-  @override
-  String get extract => '提取';
 
   @override
   String get extractionComplete => '提取完成';
@@ -4911,6 +5039,17 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get removeFromProfile => '从存档配置中移除';
 
   @override
+  String get deleteSavegame => '删除存档';
+
+  @override
+  String get deleteSavegameTitle => '删除存档？';
+
+  @override
+  String deleteSavegameBody(String save, String fileName, String profile) {
+    return '要删除 $save（$fileName）吗？它将从 $profile 中移除，并从存档文件夹中删除。GORE 会先创建备份。';
+  }
+
+  @override
   String get removeSaveFromProfileTitle => '从存档配置中移除存档？';
 
   @override
@@ -5009,6 +5148,9 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get editorUnsavedBeforeRemoveProfile => '从存档配置中移除存档前，请先保存或重置未保存的修改。';
 
   @override
+  String get editorUnsavedBeforeDeleteSave => '删除此存档前，请先保存或重置未保存的修改。';
+
+  @override
   String get editorUnsavedBeforeRestoreProfile =>
       '存档中有未保存的修改。恢复存档配置备份前，请先保存或重置这些修改。';
 
@@ -5099,6 +5241,9 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get editorSaveRemovedFromProfile => '已从存档配置中移除存档';
 
   @override
+  String get editorSaveDeleted => '存档已删除；已创建备份';
+
+  @override
   String editorRestoredBackup(String path) {
     return '已恢复备份：$path';
   }
@@ -5126,6 +5271,11 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   @override
   String editorProfileRemovalFailed(String details) {
     return '无法从存档配置中移除存档：$details';
+  }
+
+  @override
+  String editorDeleteSaveFailed(String details) {
+    return '无法删除存档：$details';
   }
 
   @override
@@ -5640,4 +5790,94 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get slotRepairNotOffered => '此存档不支持修复。';
+
+  @override
+  String get statisticsTitle => '统计';
+
+  @override
+  String get statisticsSubtitle => '角色、任务、世界和游戏进度的简要概览。';
+
+  @override
+  String statisticsCardTitle(String card, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(card, {
+      'timing': '时间',
+      'character': '角色',
+      'quests': '任务',
+      'progress': '进度',
+      'encounters': '战斗与交往',
+      'inventory': '技能与物品',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String statisticsMetric(String metric, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(metric, {
+      'timePlayed': '游玩时间',
+      'worldTime': '世界时间',
+      'level': '等级',
+      'experience': '经验',
+      'learningPoints': '学习点数',
+      'guild': '阵营',
+      'health': '生命值',
+      'mana': '法力',
+      'chapter': '章节',
+      'location': '位置',
+      'kills': '击杀NPC',
+      'knownCharacters': '已知角色',
+      'killedMonsters': '击杀怪物',
+      'defeatedNpcs': '击败NPC',
+      'killedNpcs': '击杀NPC',
+      'knownNpcs': '已知NPC',
+      'knownTeachers': '已知导师',
+      'learnedSkills': '已学技能',
+      'knowledge': '知识条目',
+      'deadCharacters': '死亡角色',
+      'traders': '已知商人',
+      'inventoryStacks': '物品堆叠',
+      'inventoryItems': '物品',
+      'ore': '矿石',
+      'equipped': '已装备',
+      'hostileFactions': '敌对阵营',
+      'openCrimes': '未解决罪行',
+      'position': '坐标',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String statisticsGuildRank(String rank, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(rank, {
+      'oldCampShadow': '旧营地 · 影子',
+      'oldCampGuard': '旧营地 · 守卫',
+      'oldCampFireMage': '旧营地 · 火法师',
+      'newCampRogue': '新营地 · 强盗',
+      'newCampMercenary': '新营地 · 雇佣兵',
+      'newCampWaterMage': '新营地 · 水法师',
+      'swampCampNovice': '沼泽营地 · 新人',
+      'swampCampTemplar': '沼泽营地 · 圣殿骑士',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get statisticsUnknown => '不可用';
+
+  @override
+  String get statisticsMore => '更多统计';
+
+  @override
+  String statisticsSummary(
+    String level,
+    String guild,
+    String chapter,
+    int completed,
+    int failed,
+    String playTime,
+  ) {
+    return '等级$level，$guild，第$chapter章。完成任务$completed个，失败$failed个。游玩时间：$playTime。';
+  }
 }

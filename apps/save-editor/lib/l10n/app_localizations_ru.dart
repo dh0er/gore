@@ -665,7 +665,7 @@ class AppLocalizationsRu extends AppLocalizations {
   }
 
   @override
-  String get publicSaveName => 'Публичное имя сохранения';
+  String get publicSaveName => 'Имя';
 
   @override
   String get gameTimeTitle => 'Время игры';
@@ -1462,6 +1462,9 @@ class AppLocalizationsRu extends AppLocalizations {
   String get appearanceTitle => 'Внешний вид';
 
   @override
+  String get uiFont => 'Шрифт';
+
+  @override
   String get theme => 'Тема';
 
   @override
@@ -1533,6 +1536,26 @@ class AppLocalizationsRu extends AppLocalizations {
   String get itemImagesTitle => 'Изображения предметов';
 
   @override
+  String get gameDataTitle => 'Данные игры';
+
+  @override
+  String itemImagesReady(int count) {
+    return 'Готово изображений предметов: $count.';
+  }
+
+  @override
+  String get itemImagesUnavailable =>
+      'Изображения предметов недоступны. Вместо них будут использоваться значки категорий.';
+
+  @override
+  String get checkRefreshItemImages =>
+      'Проверить / обновить изображения предметов';
+
+  @override
+  String get gameDataSourceMissing =>
+      'Не удалось автоматически подготовить текст игры. Кэш локализации можно выбрать в настройках.';
+
+  @override
   String get loadingTexts => 'Загрузка текстов…';
 
   @override
@@ -1559,19 +1582,6 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get extractRefreshLocalizedText =>
       'Извлечь / обновить локализованный текст';
-
-  @override
-  String get extractLocalizedTextTitle => 'Извлечь локализованный текст игры?';
-
-  @override
-  String get extractLocalizedTextBody =>
-      'Локализованный текст игры ещё не извлечён. Извлечь его сейчас из вашей установки игры? (необязательно)';
-
-  @override
-  String get notNow => 'Не сейчас';
-
-  @override
-  String get extract => 'Извлечь';
 
   @override
   String get extractionComplete => 'Извлечение завершено';
@@ -2208,6 +2218,17 @@ class AppLocalizationsRu extends AppLocalizations {
   String get removeFromProfile => 'Удалить из профиля';
 
   @override
+  String get deleteSavegame => 'Удалить сохранение';
+
+  @override
+  String get deleteSavegameTitle => 'Удалить сохранение?';
+
+  @override
+  String deleteSavegameBody(String save, String fileName, String profile) {
+    return 'Удалить $save ($fileName)? Оно будет удалено из $profile и из папки сохранений. Сначала GORE создаст резервную копию.';
+  }
+
+  @override
   String get removeSaveFromProfileTitle => 'Удалить сохранение из профиля?';
 
   @override
@@ -2313,6 +2334,10 @@ class AppLocalizationsRu extends AppLocalizations {
       'Сохраните или сбросьте несохранённые изменения перед удалением сохранения из профиля.';
 
   @override
+  String get editorUnsavedBeforeDeleteSave =>
+      'Сохраните или сбросьте несохранённые изменения перед удалением этого сохранения.';
+
+  @override
   String get editorUnsavedBeforeRestoreProfile =>
       'В сохранении есть несохранённые изменения. Сохраните или сбросьте их перед восстановлением резервной копии профиля.';
 
@@ -2413,6 +2438,9 @@ class AppLocalizationsRu extends AppLocalizations {
   String get editorSaveRemovedFromProfile => 'Сохранение удалено из профиля';
 
   @override
+  String get editorSaveDeleted => 'Сохранение удалено; резервная копия создана';
+
+  @override
   String editorRestoredBackup(String path) {
     return 'Резервная копия восстановлена: $path';
   }
@@ -2440,6 +2468,11 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String editorProfileRemovalFailed(String details) {
     return 'Не удалось удалить сохранение из профиля: $details';
+  }
+
+  @override
+  String editorDeleteSaveFailed(String details) {
+    return 'Не удалось удалить сохранение: $details';
   }
 
   @override
@@ -2957,4 +2990,95 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get slotRepairNotOffered =>
       'Для этого сохранения восстановление недоступно.';
+
+  @override
+  String get statisticsTitle => 'Статистика';
+
+  @override
+  String get statisticsSubtitle =>
+      'Краткая сводка по персонажу, заданиям, миру и прогрессу.';
+
+  @override
+  String statisticsCardTitle(String card, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(card, {
+      'timing': 'Время',
+      'character': 'Персонаж',
+      'quests': 'Задания',
+      'progress': 'Прогресс',
+      'encounters': 'Бои и контакты',
+      'inventory': 'Навыки и инвентарь',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String statisticsMetric(String metric, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(metric, {
+      'timePlayed': 'Время игры',
+      'worldTime': 'Время мира',
+      'level': 'Уровень',
+      'experience': 'Опыт',
+      'learningPoints': 'Очки обучения',
+      'guild': 'Фракция',
+      'health': 'Здоровье',
+      'mana': 'Мана',
+      'chapter': 'Глава',
+      'location': 'Место',
+      'kills': 'Убито NPC',
+      'knownCharacters': 'Знакомые персонажи',
+      'killedMonsters': 'Убито монстров',
+      'defeatedNpcs': 'Побеждено NPC',
+      'killedNpcs': 'Убито NPC',
+      'knownNpcs': 'Знакомые NPC',
+      'knownTeachers': 'Знакомые учителя',
+      'learnedSkills': 'Изученные навыки',
+      'knowledge': 'Записи знаний',
+      'deadCharacters': 'Мёртвые персонажи',
+      'traders': 'Знакомые торговцы',
+      'inventoryStacks': 'Стопки предметов',
+      'inventoryItems': 'Предметы',
+      'ore': 'Руда',
+      'equipped': 'Экипировано',
+      'hostileFactions': 'Враждебные фракции',
+      'openCrimes': 'Непрощённые преступления',
+      'position': 'Позиция',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String statisticsGuildRank(String rank, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(rank, {
+      'oldCampShadow': 'Старый лагерь · Призрак',
+      'oldCampGuard': 'Старый лагерь · Стражник',
+      'oldCampFireMage': 'Старый лагерь · Маг Огня',
+      'newCampRogue': 'Новый лагерь · Бандит',
+      'newCampMercenary': 'Новый лагерь · Наёмник',
+      'newCampWaterMage': 'Новый лагерь · Маг Воды',
+      'swampCampNovice': 'Болотный лагерь · Послушник',
+      'swampCampTemplar': 'Болотный лагерь · Тамплиер',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get statisticsUnknown => 'Недоступно';
+
+  @override
+  String get statisticsMore => 'Дополнительная статистика';
+
+  @override
+  String statisticsSummary(
+    String level,
+    String guild,
+    String chapter,
+    int completed,
+    int failed,
+    String playTime,
+  ) {
+    return 'Уровень $level, $guild, глава $chapter. Выполнено заданий: $completed, провалено: $failed. Время игры: $playTime.';
+  }
 }

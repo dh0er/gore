@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:goresave/features/editor/domain/memory_event_presentation.dart';
 import 'package:goresave/features/editor/domain/progression_models.dart';
 import 'package:goresave/l10n/app_localizations.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 
 /// Compact semantic event card. The collapsed row answers "what happened and
 /// when?"; expanding it exposes every parsed fact and the raw gameplay tags.
@@ -377,7 +378,7 @@ class _PayloadFieldRow extends StatelessWidget {
               _payloadValue(field.value),
               style: theme.textTheme.bodySmall?.copyWith(
                 fontFamily: field.value is Map || field.value is List
-                    ? 'monospace'
+                    ? uiAwareMonospaceFontFamily(context, fallback: 'monospace')
                     : null,
               ),
             ),
