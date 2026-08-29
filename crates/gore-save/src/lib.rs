@@ -3641,7 +3641,15 @@ fn dismiss_deleted_save_recovery(
         Err(CoreError::Parse(_) | CoreError::Validation(_)) => {}
         Err(error) => return Err(error),
     }
+    let manifest_parent = manifest_path
+        .parent()
+        .ok_or_else(|| CoreError::InvalidRequest("recovery manifest has no parent".to_string()))?;
+    let canonical_parent = fs::canonicalize(manifest_parent)?;
     fs::remove_file(&manifest_path)?;
+    // Publication syncs this same directory before exposing the recovery
+    // token. Make an explicit dismissal equally crash-durable so a power loss
+    // cannot resurrect the manifest and its Undo prompt after success.
+    sync_directory(&canonical_parent)?;
     Ok(json!({ "dismissed": true }))
 }
 
