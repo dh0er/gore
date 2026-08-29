@@ -3062,14 +3062,20 @@ fn abort_delete_with_profile_rollback(
     save_path: &Path,
     save_claim: &Path,
     persistent_pending: PendingReplace,
+    recovery_manifest: &mut Option<DeleteRecoveryManifestGuard>,
     original: CoreError,
 ) -> CoreError {
     match persistent_pending.rollback() {
         Ok(()) => abort_claim_with_restore(save_path, save_claim, original),
-        Err(rollback_error) => CoreError::Update(format!(
-            "{original}; profile rollback failed safely: {rollback_error}; the claimed save remains at {}",
-            save_claim.display()
-        )),
+        Err(rollback_error) => {
+            if let Some(manifest) = recovery_manifest {
+                manifest.keep();
+            }
+            CoreError::Update(format!(
+                "{original}; profile rollback failed safely: {rollback_error}; the claimed save remains at {}",
+                save_claim.display()
+            ))
+        }
     }
 }
 
@@ -5564,9 +5570,14 @@ where
     if let Err(error) = before_final_claim(save_path, persistent_path) {
         return match persistent_pending.rollback() {
             Ok(()) => Err(error),
-            Err(rollback_error) => Err(CoreError::Update(format!(
-                "{error}; profile rollback failed safely: {rollback_error}"
-            ))),
+            Err(rollback_error) => {
+                if let Some(manifest) = &mut recovery_manifest {
+                    manifest.keep();
+                }
+                Err(CoreError::Update(format!(
+                    "{error}; profile rollback failed safely: {rollback_error}"
+                )))
+            }
         };
     }
 
@@ -5591,9 +5602,14 @@ where
             };
             return match persistent_pending.rollback() {
                 Ok(()) => Err(base),
-                Err(rollback_error) => Err(CoreError::Update(format!(
-                    "{base}; profile rollback failed safely: {rollback_error}"
-                ))),
+                Err(rollback_error) => {
+                    if let Some(manifest) = &mut recovery_manifest {
+                        manifest.keep();
+                    }
+                    Err(CoreError::Update(format!(
+                        "{base}; profile rollback failed safely: {rollback_error}"
+                    )))
+                }
             };
         }
     };
@@ -5604,6 +5620,7 @@ where
                 save_path,
                 &save_claim,
                 persistent_pending,
+                &mut recovery_manifest,
                 CoreError::Io(format!(
                     "could not verify final save claim {}: {error}",
                     save_path.display()
@@ -5616,6 +5633,7 @@ where
             save_path,
             &save_claim,
             persistent_pending,
+            &mut recovery_manifest,
             CoreError::Update(format!(
                 "{} changed while deletion was being prepared; the newer save was preserved",
                 save_path.display()
@@ -5627,6 +5645,7 @@ where
             save_path,
             &save_claim,
             persistent_pending,
+            &mut recovery_manifest,
             map_locked_file_error(delete_error, &format!("deleting {}", save_path.display())),
         ));
     }
@@ -17606,6 +17625,37 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[test]
+    fn failed_delete_rollback_keeps_the_recovery_manifest() {
+        let dir = tempdir().unwrap();
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let installed = b"post-delete profile".to_vec();
+        fs::write(&persistent_path, &installed).unwrap();
+        let persistent_pending = PendingReplace {
+            target: persistent_path,
+            aside: Some(dir.path().join("missing-original-persistent.sav")),
+            installed,
+        };
+        let manifest_path = dir.path().join("delete-recovery.json");
+        fs::write(&manifest_path, b"recovery").unwrap();
+        let mut recovery_manifest = Some(DeleteRecoveryManifestGuard {
+            path: manifest_path.clone(),
+            keep: false,
+        });
+
+        let error = abort_delete_with_profile_rollback(
+            &dir.path().join("G1R-006.sav"),
+            &dir.path().join("claimed-save.sav"),
+            persistent_pending,
+            &mut recovery_manifest,
+            CoreError::Update("forced final-delete failure".to_string()),
+        );
+        drop(recovery_manifest);
+
+        assert!(error.to_string().contains("profile rollback failed"));
+        assert!(manifest_path.exists());
     }
 
     #[test]

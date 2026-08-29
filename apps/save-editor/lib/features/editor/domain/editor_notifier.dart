@@ -3051,7 +3051,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
       expectedSaveSha1: recovery.deletedSaveSha1,
       expectedPersistentBackupSha1: recovery.deletedPersistentSha1,
     );
-    if (restored) {
+    // refresh() may have discovered the previous native recovery after this
+    // restore made it valid again. Only clear the token we actually restored;
+    // never discard a newly surfaced predecessor transaction.
+    if (restored &&
+        _sameDeletedSaveRecovery(state.deletedSaveRecovery, recovery)) {
       state = state.copyWith(clearDeletedSaveRecovery: true);
       _persistSettings();
     }

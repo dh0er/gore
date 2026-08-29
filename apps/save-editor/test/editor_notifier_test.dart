@@ -5318,6 +5318,59 @@ void main() {
     );
   });
 
+  test('restoreDeletedSave retains a newly discovered predecessor', () async {
+    const current = <String, Object?>{
+      'version': 1,
+      'createdEpoch': 2,
+      'targetPath': r'C:\tmp\saves\G1R-007.sav',
+      'backupPath': r'C:\tmp\saves\goresave_backups\G1R-007.sav.bak.2',
+      'persistentPath': r'C:\tmp\saves\PersistentDataList.sav',
+      'persistentBackupPath':
+          r'C:\tmp\saves\goresave_backups\PersistentDataList.sav.bak.2',
+      'persistentPostDeleteSha1': 'current-post-delete',
+      'deletedSaveSha1': 'current-save',
+      'deletedPersistentSha1': 'current-persistent',
+    };
+    const predecessor = <String, Object?>{
+      'version': 1,
+      'createdEpoch': 1,
+      'targetPath': r'C:\tmp\saves\G1R-006.sav',
+      'backupPath': r'C:\tmp\saves\goresave_backups\G1R-006.sav.bak.1',
+      'persistentPath': r'C:\tmp\saves\PersistentDataList.sav',
+      'persistentBackupPath':
+          r'C:\tmp\saves\goresave_backups\PersistentDataList.sav.bak.1',
+      'persistentPostDeleteSha1': 'predecessor-post-delete',
+      'deletedSaveSha1': 'predecessor-save',
+      'deletedPersistentSha1': 'predecessor-persistent',
+    };
+    final store = _MemoryEditorSettingsStore();
+    final core = _PredecessorRecoveryCoreService(
+      currentRecovery: current,
+      predecessorRecovery: predecessor,
+    );
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\tmp\saves',
+      settingsStore: store,
+    );
+    await pumpEventQueue();
+
+    expect(
+      notifier.state.deletedSaveRecovery?.backupPath,
+      current['backupPath'],
+    );
+    await notifier.restoreDeletedSave();
+
+    expect(
+      notifier.state.deletedSaveRecovery?.backupPath,
+      predecessor['backupPath'],
+    );
+    expect(
+      store.settings.deletedSaveRecovery?.backupPath,
+      predecessor['backupPath'],
+    );
+  });
+
   test('deleteSave preserves an existing one-click recovery', () async {
     final store = _MemoryEditorSettingsStore();
     final core = _RecordingCoreService(
@@ -6614,6 +6667,33 @@ class _RecordingCoreService implements GoresaveCoreService {
           'error': {'message': 'Unhandled command $command'},
         };
     }
+  }
+}
+
+class _PredecessorRecoveryCoreService extends _RecordingCoreService {
+  _PredecessorRecoveryCoreService({
+    required Map<String, Object?> currentRecovery,
+    required this.predecessorRecovery,
+  }) : super(
+         scanData: {
+           'saves': <Object?>[],
+           'profiles': <Object?>[],
+           'deletedSaveRecovery': currentRecovery,
+         },
+       );
+
+  final Map<String, Object?> predecessorRecovery;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    final response = await super.execute(command, payload: payload);
+    if (command == 'restore_deleted_save') {
+      scanData['deletedSaveRecovery'] = predecessorRecovery;
+    }
+    return response;
   }
 }
 
