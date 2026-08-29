@@ -232,6 +232,7 @@ pub fn body_statements_ctor(
         exit_scan_floor: 0,
         carry: None,
         loop_scope: None,
+        shared_return: None,
     };
     st.emit_range(0, g.blocks.len(), depth, &mut body);
     body
@@ -5717,6 +5718,10 @@ struct Structurer<'a> {
     /// `break;` lands: the latch's non-back-edge successor). Saved/restored around the recursive
     /// body emission; nested loops push/pop so break/continue always bind to the innermost loop.
     loop_scope: Option<LoopScope>,
+    /// While a then-arm is being emitted: the offset the enclosing conditional jumps to when its
+    /// test fails. A constant-return block there is the tail BOTH guards share, and writing it
+    /// again inside the arm duplicates a `return` vanilla wrote once.
+    shared_return: Option<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -6480,7 +6485,9 @@ impl Structurer<'_> {
                 let then_body_at = out.len();
                 if let Some(t) = then_idx {
                     if t > i && t <= then_end_body {
+                        let outer = std::mem::replace(&mut self.shared_return, taken);
                         self.emit_range(t, then_end_body, depth + 1, out);
+                        self.shared_return = outer;
                     }
                 }
                 if latch_back.is_some() {
@@ -6773,6 +6780,15 @@ impl Structurer<'_> {
             .map(|t| t.base_name(self.ctx.refs))
             .as_deref()
             != Some("bool")
+        {
+            return None;
+        }
+        // The else arm IS the tail the enclosing guard falls to: two guards in a row that both
+        // leave with the same constant. Writing the diamond here puts a second `return false;`
+        // inside the arm, where vanilla wrote one behind both.
+        if else_idx
+            .map(|ei| self.g.blocks[ei].start_dw)
+            .is_some_and(|start| self.shared_return == Some(start))
         {
             return None;
         }
@@ -9361,6 +9377,7 @@ mod tests {
             exit_scan_floor: 0,
             carry: None,
             loop_scope: None,
+            shared_return: None,
         };
         let (start, stop) = if let Some((start, stop, scope)) = range {
             st.loop_scope = Some(scope);
