@@ -666,11 +666,13 @@ mod tests {
             functions: Vec::new(),
             classes: vec![Class {
                 name: class.into(),
+                namespace: String::new(),
                 super_class: Some(super_class.into()),
                 fields: Vec::new(),
                 methods: vec![Func {
                     name: "__InitDefaults".into(),
                     namespace: String::new(),
+                    param_defaults: Vec::new(),
                     ret: crate::cache::types::DataType {
                         token: 0x52,
                         ..Default::default()

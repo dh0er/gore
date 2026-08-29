@@ -236,6 +236,10 @@ int main() {
     foreign_engine->ShutDownAndRelease();
 
     asIScriptEngine* coverage_engine = asCreateScriptEngine();
+    if (coverage_engine != nullptr) {
+        coverage_engine->SetMessageCallback(
+            asFUNCTION(message_callback), nullptr, asCALL_CDECL);
+    }
     asIScriptModule* covered_module = coverage_engine == nullptr
         ? nullptr
         : coverage_engine->GetModule("Covered", asGM_ALWAYS_CREATE);
@@ -250,7 +254,8 @@ int main() {
         "int ReflectedRetained() { return 5; }\n"
         "int PlainRetained() { return 6; }\n"
         "int RemovedRetained() { return 7; }\n"
-        "int NonFinalFunction() { return 8; }";
+        "int NonFinalFunction() { return 8; }\n"
+        "class RetainedDefaults { int Value; default Value = 9; }";
     if (covered_module == nullptr || partial_module == nullptr ||
         covered_module->AddScriptSection(
             "Covered.as", covered_source, sizeof(covered_source) - 1U) < 0 ||
@@ -261,6 +266,7 @@ int main() {
         source_engine->ShutDownAndRelease();
         return 3;
     }
+    partial_module->AddPreClassData("RetainedDefaults", asPreClassData{});
     asIScriptModule* coverage_graph_modules[] = {covered_module, partial_module};
     const auto coverage_build = gore::as::standalone::build_module_graph(
         coverage_graph_modules, 2U);
@@ -276,9 +282,15 @@ int main() {
         partial_module->GetFunctionByName("PlainRetained");
     asIScriptFunction* const base_removed =
         partial_module->GetFunctionByName("RemovedRetained");
+    asITypeInfo* const base_defaults_type =
+        partial_module->GetTypeInfoByName("RetainedDefaults");
+    asIScriptFunction* const base_defaults = base_defaults_type == nullptr
+        ? nullptr
+        : base_defaults_type->GetMethodByName("__InitDefaults");
     if (!coverage_build.succeeded() || base_generated == nullptr ||
         base_constructor == nullptr || base_destructor == nullptr ||
-        base_reflected == nullptr || base_plain == nullptr || base_removed == nullptr) {
+        base_reflected == nullptr || base_plain == nullptr || base_removed == nullptr ||
+        base_defaults == nullptr) {
         std::cerr << "could not build the StaticJIT role fixture\n";
         coverage_engine->ShutDownAndRelease();
         source_engine->ShutDownAndRelease();
@@ -295,7 +307,7 @@ int main() {
     covered_seed.functions.insert(
         covered_seed.functions.end(),
         {base_generated, base_constructor, base_destructor, base_reflected,
-         base_plain, base_removed});
+         base_plain, base_removed, base_defaults});
     const std::vector<asIScriptModule*> coverage_modules{
         covered_module, partial_module};
     const auto coverage_seed = precompiled::apply_shipping_static_jit_checkpoint(
@@ -307,7 +319,7 @@ int main() {
     if (!coverage_seed.succeeded() || !derived_coverage.succeeded() ||
         coverage.base_module_names != std::vector<std::string>({"Covered", "Partial"}) ||
         coverage.fully_analyzed_module_names != std::vector<std::string>{"Covered"} ||
-        coverage.retained_final_functions.size() != 6U ||
+        coverage.retained_final_functions.size() != 7U ||
         !std::all_of(
             coverage.retained_final_functions.begin(),
             coverage.retained_final_functions.end(),
@@ -336,7 +348,8 @@ int main() {
         "int DestructorRetained() { return 4; }\n"
         "int ReflectedRetained() { return 5; }\n"
         "int PlainRetained() { return 6; }\n"
-        "int NonFinalFunction() { return 8; }";
+        "int NonFinalFunction() { return 8; }\n"
+        "class RetainedDefaults { int Value; default Value = 9; }";
     constexpr char added_source[] = "int AddedFunction() { return 4; }";
     if (projected_covered == nullptr || projected_partial == nullptr ||
         projected_added == nullptr ||
@@ -352,6 +365,7 @@ int main() {
         source_engine->ShutDownAndRelease();
         return 3;
     }
+    projected_partial->AddPreClassData("RetainedDefaults", asPreClassData{});
     asIScriptModule* projected_graph_modules[] = {
         projected_covered, projected_partial, projected_added};
     const auto projected_build = gore::as::standalone::build_module_graph(
@@ -368,10 +382,15 @@ int main() {
         projected_partial->GetFunctionByName("PlainRetained");
     asIScriptFunction* const projected_nonfinal =
         projected_partial->GetFunctionByName("NonFinalFunction");
+    asITypeInfo* const projected_defaults_type =
+        projected_partial->GetTypeInfoByName("RetainedDefaults");
+    asIScriptFunction* const projected_defaults = projected_defaults_type == nullptr
+        ? nullptr
+        : projected_defaults_type->GetMethodByName("__InitDefaults");
     if (!projected_build.succeeded() || projected_generated == nullptr ||
         projected_constructor == nullptr || projected_destructor == nullptr ||
         projected_reflected == nullptr || projected_plain == nullptr ||
-        projected_nonfinal == nullptr) {
+        projected_nonfinal == nullptr || projected_defaults == nullptr) {
         std::cerr << "could not build the projected StaticJIT role fixture\n";
         if (projected_engine != nullptr) projected_engine->ShutDownAndRelease();
         source_engine->ShutDownAndRelease();
@@ -389,6 +408,7 @@ int main() {
             projected_candidates.functions.push_back(module->GetFunctionByIndex(index));
         }
     }
+    projected_candidates.functions.push_back(projected_defaults);
     const std::vector<asIScriptModule*> projected_modules{
         projected_covered, projected_partial, projected_added};
 
@@ -426,7 +446,8 @@ int main() {
     if (rejected_overlap.succeeded() || rejected_ambiguous.succeeded() ||
         projected_generated->IsFinal() || projected_constructor->IsFinal() ||
         projected_destructor->IsFinal() || projected_reflected->IsFinal() ||
-        projected_plain->IsFinal() || projected_nonfinal->IsFinal()) {
+        projected_plain->IsFinal() || projected_nonfinal->IsFinal() ||
+        projected_defaults->IsFinal()) {
         std::cerr << "StaticJIT coverage preflight was ambiguous or partially mutating\n";
         projected_engine->ShutDownAndRelease();
         source_engine->ShutDownAndRelease();
@@ -491,6 +512,7 @@ int main() {
         !projected_covered->GetFunctionByName("CoveredFunction")->IsFinal() ||
         !projected_generated->IsFinal() || !projected_constructor->IsFinal() ||
         !projected_destructor->IsFinal() || !projected_reflected->IsFinal() ||
+        !projected_defaults->IsFinal() ||
         projected_plain->IsFinal() || projected_nonfinal->IsFinal() ||
         !projected_added->GetFunctionByName("AddedFunction")->IsFinal()) {
         std::cerr << "StaticJIT function coverage projection was not exact: "
@@ -498,6 +520,7 @@ int main() {
                   << "; constructor=" << projected_constructor->IsFinal()
                   << "; destructor=" << projected_destructor->IsFinal()
                   << "; reflected=" << projected_reflected->IsFinal()
+                  << "; defaults=" << projected_defaults->IsFinal()
                   << "; plain=" << projected_plain->IsFinal()
                   << "; nonfinal=" << projected_nonfinal->IsFinal() << '\n';
         projected_engine->ShutDownAndRelease();

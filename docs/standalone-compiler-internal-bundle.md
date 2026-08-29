@@ -7,7 +7,7 @@ GORE Save Editor and GORE Mod Manager do not contain it.
 Two independent contracts are kept deliberately separate:
 
 - **Compiler compatibility** is identified by the explicit semantic ABI from
-  `--capabilities` (currently `gore-as-standalone-semantic-v1`) and the request
+  `--capabilities` (currently `gore-as-standalone-semantic-v2`) and the request
   and response protocol versions.
 - **Artifact integrity** is the exact length and SHA-256 of the sidecar built
   for one product release. Release signing changes these bytes, so this seal is

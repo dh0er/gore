@@ -129,6 +129,8 @@ pub struct Param {
 #[derive(Debug, Clone)]
 pub struct Func {
     pub name: String,
+    /// Source text of the trailing parameter default arguments, in declaration order.
+    pub param_defaults: Vec<String>,
     pub namespace: String,
     pub ret: DataType,
     pub params: Vec<Param>,
@@ -159,6 +161,10 @@ pub struct Field {
 #[derive(Debug, Clone)]
 pub struct Class {
     pub name: String,
+    /// Declaring AngelScript namespace, empty at global scope. Part of the class's identity in
+    /// the cache's TypeReferences table, so a recompile that drops it produces a DIFFERENT
+    /// symbol that no longer matches the base cache.
+    pub namespace: String,
     pub super_class: Option<String>,
     pub fields: Vec<Field>,
     pub methods: Vec<Func>,
@@ -177,6 +183,14 @@ pub struct EnumDef {
 #[derive(Debug, Clone)]
 pub struct Global {
     pub name: String,
+    /// The global's initializer function, when it has one. Its bytecode carries the value a
+    /// non-primitive global is built from — an `FName` global's real name literal, say, which is
+    /// otherwise unrecoverable from the declaration alone.
+    pub init: Option<Func>,
+    /// Declaring AngelScript namespace, empty at global scope. Reference sites render a
+    /// namespaced global as `Ns::Name`, so the declaration has to reopen that namespace or the
+    /// compiler rejects the reference with "Unknown scope".
+    pub namespace: String,
     pub ty: DataType,
     pub value: Option<u64>,
 }
@@ -274,7 +288,10 @@ fn read_function(c: &mut Cursor) -> Result<Func, WireError> {
     for _ in 0..nflags {
         pflags.push(c.read_i32()?);
     }
-    skip_tarray_sia_checked(c, "ParameterDefaultArgs")?;
+    // Source text of each parameter's default argument, right-aligned with the LAST
+    // parameters (AngelScript only allows trailing defaults). A call that omits them renders
+    // differently from one that spells them out, and the two compile into different symbols.
+    let param_defaults = read_tarray_sia_checked(c, "ParameterDefaultArgs")?;
     let traits = c.read_i32()?; // FunctionTraits (asSFunctionTraits bitfield)
     let bytecode = read_tarray_i32_checked(c, "ByteCode")?;
     skip_tarray_fixed_checked(c, 4, "ByteCodeReferences")?;
@@ -320,6 +337,7 @@ fn read_function(c: &mut Cursor) -> Result<Func, WireError> {
         namespace,
         ret,
         params,
+        param_defaults,
         bytecode,
         obj_locals,
         is_ufunction,
@@ -358,7 +376,7 @@ fn read_property(c: &mut Cursor) -> Result<Field, WireError> {
 
 fn read_class(c: &mut Cursor) -> Result<Class, WireError> {
     let name = c.read_sia()?;
-    c.read_sia()?; // Namespace
+    let namespace = c.read_sia()?;
     let flags = c.read_i32()? as u32; // asCObjectType Flags (asOBJ_* bitfield)
     let nprops = bounded_count(c, "Class.Properties", MIN_PROPERTY_BYTES)?;
     let mut fields = Vec::with_capacity(nprops);
@@ -404,6 +422,7 @@ fn read_class(c: &mut Cursor) -> Result<Class, WireError> {
     }
     Ok(Class {
         name,
+        namespace,
         super_class,
         fields,
         methods,
@@ -431,21 +450,32 @@ fn read_enum(c: &mut Cursor) -> Result<EnumDef, WireError> {
 
 fn read_global(c: &mut Cursor) -> Result<Global, WireError> {
     let name = c.read_sia()?;
-    c.read_sia()?; // Namespace
+    let namespace = c.read_sia()?;
     let ty = DataType::read(c)?;
     let mut value = None;
+    let mut init = None;
     if !c.read_bool4()? {
         // !bIsDefaultInit
         if c.read_bool4()? {
             value = Some(c.read_u64()?); // PureConstantValue
         } else {
-            c.read_bool4()?; // bHasInitFunction
-                             // The fork archives InitFunc unconditionally in this branch,
-                             // including the default function object when the flag is false.
-            read_function(c)?; // InitFunc (ignored for emit)
+            let has_init = c.read_bool4()?; // bHasInitFunction
+            // The fork archives InitFunc unconditionally in this branch, including the default
+            // function object when the flag is false. Read it either way to keep the stream in
+            // step, and keep it only when the flag says it is a real initializer.
+            let func = read_function(c)?;
+            if has_init {
+                init = Some(func);
+            }
         }
     }
-    Ok(Global { name, ty, value })
+    Ok(Global {
+        name,
+        namespace,
+        ty,
+        value,
+        init,
+    })
 }
 
 fn read_function_import(c: &mut Cursor) -> Result<(), WireError> {

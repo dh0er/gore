@@ -46,9 +46,17 @@ impl DataType {
             if self.is_auto {
                 "auto".to_string()
             } else {
+                // A type declared inside a namespace is only reachable from elsewhere when it
+                // is spelled out. Rendering the bare name made every cross-namespace
+                // declaration resolve to nothing, and every use of that local then failed with
+                // "Illegal operation on 'Unknown'". Fully qualifying is also valid inside the
+                // declaring namespace, so the render needs no context.
                 let base = refs
                     .type_by_ptr(self.type_info)
-                    .map(|s| s.to_string())
+                    .map(|name| match refs.type_ns_by_ptr(self.type_info) {
+                        Some(namespace) => format!("{namespace}::{name}"),
+                        None => name.to_string(),
+                    })
                     .unwrap_or_else(|| "auto".to_string());
                 // template types (TSubclassOf, TArray, ...) need their <SubTypes>
                 match refs.type_subtypes(self.type_info) {

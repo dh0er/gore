@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -51,6 +52,15 @@ struct engine_bridge_result {
 
     [[nodiscard]] bool succeeded() const noexcept { return code >= 0; }
 };
+
+namespace detail {
+
+// Internal source-projection step, declared here for focused structural tests.
+engine_bridge_result rebase_projected_static_names(
+    cache& projected,
+    const std::unordered_map<std::size_t, std::size_t>& global_to_local);
+
+} // namespace detail
 
 // Current engine bridge checkpoint. It restores the generic fork-side portion
 // of the three PrecompiledData apply stages: module imports/function-import

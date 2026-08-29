@@ -11,6 +11,7 @@ pub mod default_evidence;
 pub mod default_fingerprint;
 pub mod default_patch;
 pub(crate) mod default_patterns;
+pub(crate) mod default_source;
 pub(crate) mod default_tag_map;
 pub mod disasm;
 pub mod emit;

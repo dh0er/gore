@@ -4053,18 +4053,33 @@ struct reflected_static_jit_identity {
     bool object_bound = false;
 
     bool operator<(const reflected_static_jit_identity& other) const noexcept {
-        return std::tie(
-                   module_name, object_bound, owner_namespace, owner_name,
-                   function_name) <
+        if (module_name != other.module_name) {
+            return module_name < other.module_name;
+        }
+        if (object_bound != other.object_bound) {
+            return object_bound < other.object_bound;
+        }
+        // Global UFUNCTION descriptors belong to the module's one reflected
+        // statics class. That descriptor, and the cached metadata projection,
+        // identify them by module and exported function name; the AngelScript
+        // namespace is not part of the reflected identity. It remains part of
+        // object-bound identity, where class namespaces are authoritative.
+        if (!object_bound) {
+            return function_name < other.function_name;
+        }
+        return std::tie(owner_namespace, owner_name, function_name) <
             std::tie(
-                   other.module_name, other.object_bound, other.owner_namespace,
-                   other.owner_name, other.function_name);
+                   other.owner_namespace, other.owner_name,
+                   other.function_name);
     }
 
     bool operator==(const reflected_static_jit_identity& other) const noexcept {
-        return module_name == other.module_name && object_bound == other.object_bound &&
-            owner_namespace == other.owner_namespace && owner_name == other.owner_name &&
-            function_name == other.function_name;
+        return module_name == other.module_name &&
+            object_bound == other.object_bound &&
+            function_name == other.function_name &&
+            (!object_bound ||
+             (owner_namespace == other.owner_namespace &&
+              owner_name == other.owner_name));
     }
 };
 
@@ -4341,10 +4356,21 @@ engine_bridge_result apply_shipping_static_jit_coverage_checkpoint(
             const auto matches = std::equal_range(
                 candidate_reflected_identities.begin(),
                 candidate_reflected_identities.end(), reflected);
-            if (std::distance(matches.first, matches.second) != 1) {
+            const auto match_count = std::distance(matches.first, matches.second);
+            if (match_count != 1) {
+                const std::string owner = reflected.object_bound
+                    ? (reflected.owner_namespace.empty()
+                           ? reflected.owner_name
+                           : reflected.owner_namespace + "::" + reflected.owner_name)
+                    : (reflected.owner_namespace.empty()
+                           ? std::string{"<global>"}
+                           : reflected.owner_namespace + "::<global>");
                 return failure(
                     engine_bridge_phase::preflight, kNoModule,
-                    "Shipping StaticJIT UFUNCTION identity does not map uniquely",
+                    "Shipping StaticJIT UFUNCTION identity " +
+                        reflected.module_name + "/" + owner + "::" +
+                        reflected.function_name + " maps to " +
+                        std::to_string(match_count) + " stage-3 candidates",
                     asINVALID_CONFIGURATION);
             }
         }
@@ -4375,6 +4401,11 @@ engine_bridge_result apply_shipping_static_jit_coverage_checkpoint(
                 asTRAIT_CONSTRUCTOR | asTRAIT_DESTRUCTOR | asTRAIT_GENERATED_FUNCTION;
             const bool retained_role =
                 (concrete.traits.traits & retained_role_mask) != 0U;
+            const bool retained_default_initializer =
+                candidate->GetObjectType() != nullptr &&
+                std::strcmp(candidate->GetName(), "__InitDefaults") == 0 &&
+                candidate->GetParamCount() == 0U &&
+                candidate->GetReturnTypeId() == asTYPEID_VOID;
             reflected_static_jit_identity reflected_identity;
             const bool reflected_identity_valid =
                 static_jit_reflected_identity(*candidate, reflected_identity);
@@ -4388,7 +4419,8 @@ engine_bridge_result apply_shipping_static_jit_coverage_checkpoint(
                 reflected_functions.begin(), reflected_functions.end(),
                 reflected_identity);
             if (!base_module || fully_analyzed ||
-                (retained_final && (retained_role || reflected))) {
+                (retained_final &&
+                 (retained_role || reflected || retained_default_initializer))) {
                 projected.functions.push_back(candidate);
             }
         }
@@ -4836,7 +4868,7 @@ static void visit_module_functions(precompiled_module& module, Visitor&& visitor
     }
 }
 
-static engine_bridge_result rebase_projected_static_names(
+engine_bridge_result detail::rebase_projected_static_names(
     cache& projected,
     const std::unordered_map<std::size_t, std::size_t>& global_to_local) {
     std::unordered_set<std::int64_t> static_name_functions;
@@ -4847,9 +4879,108 @@ static engine_bridge_result rebase_projected_static_names(
     }
     bool failed = false;
     std::string detail;
+    const auto rebase_index = [&](std::int32_t& index) {
+        const std::int64_t source_index = index;
+        if (source_index < 0) return false;
+        const auto local = global_to_local.find(
+            static_cast<std::size_t>(source_index));
+        if (local == global_to_local.end() ||
+            local->second > static_cast<std::size_t>(
+                (std::numeric_limits<std::int32_t>::max)())) {
+            return false;
+        }
+        index = static_cast<std::int32_t>(local->second);
+        return true;
+    };
+    const auto is_static_name_call = [&](const precompiled_function& function,
+                                         const std::size_t offset) {
+        if (offset >= function.byte_code.size()) return false;
+        const auto opcode =
+            static_cast<asEBCInstr>(function.byte_code[offset] & 0xff);
+        const std::size_t size =
+            static_cast<std::size_t>(asBCTypeSize[asBCInfo[opcode].type]);
+        if (opcode != asBC_CALLSYS || size < 3U ||
+            offset > function.byte_code.size() - size) {
+            return false;
+        }
+        const std::uint64_t low =
+            static_cast<std::uint32_t>(function.byte_code[offset + 1U]);
+        const std::uint64_t high =
+            static_cast<std::uint32_t>(function.byte_code[offset + 2U]);
+        const auto function_key = static_cast<std::int64_t>(low | (high << 32U));
+        return static_name_functions.find(function_key) !=
+            static_name_functions.end();
+    };
+    const auto fail_outside_projection = [&]() {
+        failed = true;
+        detail = "qualification source referenced a static name outside its projected rows";
+    };
+    const auto is_ascii_space = [](const char value) {
+        return value == ' ' || value == '\t' || value == '\r' || value == '\n' ||
+            value == '\f' || value == '\v';
+    };
+    const auto rebase_default_argument = [&](archive_string& argument) {
+        std::string& expression = argument.bytes;
+        std::size_t position = 0U;
+        while (position < expression.size() && is_ascii_space(expression[position])) {
+            ++position;
+        }
+        constexpr std::string_view identifier = "__STATIC_NAME";
+        if (expression.compare(position, identifier.size(), identifier) != 0) return;
+        position += identifier.size();
+        while (position < expression.size() && is_ascii_space(expression[position])) {
+            ++position;
+        }
+        if (position >= expression.size() || expression[position] != '(') return;
+        ++position;
+        while (position < expression.size() && is_ascii_space(expression[position])) {
+            ++position;
+        }
+        const std::size_t digits_begin = position;
+        std::size_t source_index = 0U;
+        bool overflow = false;
+        while (position < expression.size() &&
+               expression[position] >= '0' && expression[position] <= '9') {
+            const std::size_t digit =
+                static_cast<std::size_t>(expression[position] - '0');
+            if (source_index >
+                ((std::numeric_limits<std::size_t>::max)() - digit) / 10U) {
+                overflow = true;
+            } else if (!overflow) {
+                source_index = source_index * 10U + digit;
+            }
+            ++position;
+        }
+        const std::size_t digits_end = position;
+        if (digits_begin == digits_end) return;
+        while (position < expression.size() && is_ascii_space(expression[position])) {
+            ++position;
+        }
+        if (position >= expression.size() || expression[position] != ')') return;
+        ++position;
+        while (position < expression.size() && is_ascii_space(expression[position])) {
+            ++position;
+        }
+        if (position != expression.size()) return;
+        const auto local = overflow ? global_to_local.end()
+                                    : global_to_local.find(source_index);
+        if (local == global_to_local.end() ||
+            local->second > static_cast<std::size_t>(
+                (std::numeric_limits<std::int32_t>::max)())) {
+            fail_outside_projection();
+            return;
+        }
+        expression.replace(
+            digits_begin, digits_end - digits_begin,
+            std::to_string(local->second));
+    };
     for (auto& module_entry : projected.modules) {
         visit_module_functions(module_entry.second, [&](precompiled_function& function) {
             if (failed) return;
+            for (archive_string& argument : function.parameter_default_args) {
+                rebase_default_argument(argument);
+                if (failed) return;
+            }
             std::size_t offset = 0U;
             while (offset < function.byte_code.size()) {
                 const auto opcode =
@@ -4862,38 +4993,29 @@ static engine_bridge_result rebase_projected_static_names(
                     return;
                 }
                 const std::size_t next = offset + size;
-                if (opcode == asBC_PshC4 && size >= 2U && next < function.byte_code.size()) {
-                    const auto next_opcode =
+                if (opcode == asBC_PshC4 && size >= 2U &&
+                    is_static_name_call(function, next) &&
+                    !rebase_index(function.byte_code[offset + 1U])) {
+                    fail_outside_projection();
+                    return;
+                }
+                if (opcode == asBC_SetV4 && size >= 2U &&
+                    next < function.byte_code.size()) {
+                    const auto push_opcode =
                         static_cast<asEBCInstr>(function.byte_code[next] & 0xff);
-                    const std::size_t next_size =
-                        static_cast<std::size_t>(asBCTypeSize[asBCInfo[next_opcode].type]);
-                    if (next_opcode == asBC_CALLSYS && next_size >= 3U &&
-                        next <= function.byte_code.size() - next_size) {
-                        const std::uint64_t low =
-                            static_cast<std::uint32_t>(function.byte_code[next + 1U]);
-                        const std::uint64_t high =
-                            static_cast<std::uint32_t>(function.byte_code[next + 2U]);
-                        const auto function_key = static_cast<std::int64_t>(low | (high << 32U));
-                        if (static_name_functions.find(function_key) !=
-                            static_name_functions.end()) {
-                            const std::int64_t source_index = function.byte_code[offset + 1U];
-                            if (source_index < 0) {
-                                failed = true;
-                                detail = "qualification source referenced a static name outside its projected rows";
-                                return;
-                            }
-                            const auto local = global_to_local.find(
-                                static_cast<std::size_t>(source_index));
-                            if (local == global_to_local.end() ||
-                                local->second > static_cast<std::size_t>(
-                                    (std::numeric_limits<std::int32_t>::max)())) {
-                                failed = true;
-                                detail = "qualification source referenced a static name outside its projected rows";
-                                return;
-                            }
-                            function.byte_code[offset + 1U] = static_cast<std::int32_t>(
-                                local->second);
-                        }
+                    const std::size_t push_size = static_cast<std::size_t>(
+                        asBCTypeSize[asBCInfo[push_opcode].type]);
+                    const auto slot = [](const std::int32_t instruction) {
+                        return static_cast<std::int16_t>(
+                            static_cast<std::uint32_t>(instruction) >> 16U);
+                    };
+                    if (push_opcode == asBC_PshV4 && push_size == 1U &&
+                        slot(function.byte_code[offset]) ==
+                            slot(function.byte_code[next]) &&
+                        is_static_name_call(function, next + push_size) &&
+                        !rebase_index(function.byte_code[offset + 1U])) {
+                        fail_outside_projection();
+                        return;
                     }
                 }
                 offset = next;
@@ -5167,7 +5289,7 @@ engine_bridge_result export_source_graph_checkpoint(
             staged.modules.emplace_back(std::move(key), std::move(rebuilt));
         }
         engine_bridge_result rebase =
-            rebase_projected_static_names(staged, global_to_local);
+            detail::rebase_projected_static_names(staged, global_to_local);
         if (!rebase.succeeded()) return rebase;
         codec_error codec;
         std::vector<std::uint8_t> encoded;

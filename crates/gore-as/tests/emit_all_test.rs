@@ -18,6 +18,7 @@ fn function(name: &str, namespace: &str, params: Vec<Param>) -> Func {
     Func {
         name: name.into(),
         namespace: namespace.into(),
+        param_defaults: Vec::new(),
         ret: primitive(0x52),
         params,
         bytecode: Vec::new(),
@@ -56,6 +57,7 @@ fn collision_plan_matches_emitted_functions_and_reference_modifiers() {
     let mirror = || function("Mirror", "Owner", Vec::new());
     let owner = || Class {
         name: "Owner".into(),
+        namespace: String::new(),
         super_class: None,
         fields: Vec::new(),
         methods: vec![function("Mirror", "Owner", Vec::new())],
@@ -101,6 +103,105 @@ fn collision_plan_matches_emitted_functions_and_reference_modifiers() {
     // Exact generated/class-mirror records are not emitted and cannot create collisions.
     assert!(!a.contains("StaticClass_g0("));
     assert!(!a.contains("Mirror_g0("));
+}
+
+#[test]
+fn distinct_real_world_namespaces_do_not_create_free_function_collisions() {
+    let context_module = |module_name: &str, namespace: &str| {
+        module(
+            module_name,
+            vec![
+                function(
+                    "FetchContext",
+                    namespace,
+                    vec![parameter(primitive(0x44), 0)],
+                ),
+                function(
+                    "GetTuning",
+                    namespace,
+                    vec![parameter(primitive(0x44), 0)],
+                ),
+            ],
+            Vec::new(),
+        )
+    };
+    let modules = vec![
+        context_module("Theft", "TheftContext"),
+        context_module("Pickpocket", "PickpocketContext"),
+        context_module("Creeping", "CreepingContext"),
+    ];
+    let mut refs = RefResolver::default();
+    let prepared = PreparedEmit::new(&modules, &mut refs, None).unwrap();
+
+    for (index, namespace) in
+        ["TheftContext", "PickpocketContext", "CreepingContext"]
+            .into_iter()
+            .enumerate()
+    {
+        let emitted = prepared.emit_module(index).unwrap();
+        assert!(emitted.contains(&format!("namespace {namespace}")));
+        assert!(emitted.contains("FetchContext("));
+        assert!(emitted.contains("GetTuning("));
+        assert!(!emitted.contains("FetchContext_g"));
+        assert!(!emitted.contains("GetTuning_g"));
+    }
+
+    prepared
+        .prepare_overlay(
+            "add",
+            "AssessmentBits",
+            "void Check() { TheftContext::FetchContext(1); PickpocketContext::GetTuning(1); CreepingContext::FetchContext(1); }",
+        )
+        .unwrap();
+}
+
+#[test]
+fn same_module_namespaced_free_function_signatures_remain_distinct() {
+    let modules = vec![module(
+        "Namespaced",
+        vec![
+            function("Same", "Alpha", vec![parameter(primitive(0x44), 0)]),
+            function("Same", "Beta", vec![parameter(primitive(0x44), 0)]),
+        ],
+        Vec::new(),
+    )];
+    let mut refs = RefResolver::default();
+    let prepared = PreparedEmit::new(&modules, &mut refs, None).unwrap();
+
+    let emitted = prepared.emit_module(0).unwrap();
+    assert!(emitted.contains("namespace Alpha"));
+    assert!(emitted.contains("namespace Beta"));
+    assert_eq!(emitted.matches("void Same(int Value)").count(), 2);
+
+    let output = tempfile::tempdir().unwrap();
+    let stats = prepared.emit_tree(output.path()).unwrap();
+    assert_eq!(stats.functions, 2);
+}
+
+#[test]
+fn same_namespace_free_function_calls_remain_fail_closed() {
+    let shared = || {
+        function(
+            "FetchContext",
+            "SharedContext",
+            vec![parameter(primitive(0x44), 0)],
+        )
+    };
+    let modules = vec![
+        module("First", vec![shared()], Vec::new()),
+        module("Second", vec![shared()], Vec::new()),
+    ];
+    let mut refs = RefResolver::default();
+    let prepared = PreparedEmit::new(&modules, &mut refs, None).unwrap();
+
+    assert!(prepared
+        .prepare_overlay(
+            "add",
+            "Caller",
+            "void Check() { SharedContext::FetchContext(1); }",
+        )
+        .unwrap_err()
+        .contains("collision-ambiguous"));
 }
 
 #[test]
@@ -268,6 +369,7 @@ fn overlay_scanner_is_comment_safe_and_understands_class_members_and_handles() {
     let mut modules = direction_collision_modules();
     modules[0].classes.push(Class {
         name: "VanillaClass".into(),
+        namespace: String::new(),
         super_class: None,
         fields: Vec::new(),
         methods: vec![function("Shared", "VanillaClass", Vec::new())],
@@ -487,6 +589,7 @@ fn full_tree_resolver_preparation_includes_classes_fields_and_unreferenced_metho
     let method = Func {
         name: "ShadowedName".into(),
         namespace: String::new(),
+        param_defaults: Vec::new(),
         ret: DataType {
             token: 0x52,
             ..DataType::default()
@@ -504,6 +607,7 @@ fn full_tree_resolver_preparation_includes_classes_fields_and_unreferenced_metho
         classes: vec![
             Class {
                 name: "UBaseFixture".into(),
+                namespace: String::new(),
                 super_class: None,
                 fields: vec![Field {
                     name: "Count".into(),
@@ -516,6 +620,7 @@ fn full_tree_resolver_preparation_includes_classes_fields_and_unreferenced_metho
             },
             Class {
                 name: "UChildFixture".into(),
+                namespace: String::new(),
                 super_class: Some("UBaseFixture".into()),
                 fields: Vec::new(),
                 methods: Vec::new(),

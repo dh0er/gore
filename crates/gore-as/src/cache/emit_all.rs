@@ -5,8 +5,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
+use super::disasm::disassemble;
 use super::model::{Func, Module};
-use super::refs::RefResolver;
+use super::refs::{const_return_key, RefResolver};
 
 #[derive(Debug)]
 pub struct EmitAllStats {
@@ -138,6 +139,82 @@ fn empty_required_signatures() -> &'static BTreeMap<String, BTreeSet<ParameterSi
 
 /// Populate resolver inputs that preserve cache semantics without inventing emit-tree-only names.
 /// `as decompile` uses this path so its output continues to describe the inspected cache.
+/// Names whose const return SOME caller cannot hold. A caller stores an object result with
+/// `STOREOBJ`; if that slot also receives any other write — a null store, a handle copy, a call
+/// whose return is not const — then no single declaration can own it, and AngelScript has no way
+/// to drop the qualifier at the store ("No conversion from 'const X' to 'X' available"). Such a
+/// name keeps the stripped return type, exactly as before the qualifier was restored.
+fn unusable_const_returns(mods: &[Module], refs: &RefResolver) -> HashSet<String> {
+    let mut unusable = HashSet::new();
+    for module in mods {
+        let functions = module.functions.iter().chain(
+            module
+                .classes
+                .iter()
+                .flat_map(|class| class.methods.iter().chain(class.ctors.iter())),
+        );
+        for function in functions {
+            let Ok(instrs) = disassemble(&function.bytecode) else {
+                continue;
+            };
+            // slot -> the const-returning callee stored into it, and whether anything else wrote it
+            let mut const_source: HashMap<i32, String> = HashMap::new();
+            let mut written_otherwise: HashSet<i32> = HashSet::new();
+            for (index, ins) in instrs.iter().enumerate() {
+                let destination = match ins.op.name {
+                    "STOREOBJ" | "RefCpyV" | "ClrVPtr" | "LOADOBJ" => {
+                        ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0)
+                    }
+                    _ => continue,
+                };
+                if destination <= 0 {
+                    continue;
+                }
+                let producer = (ins.op.name == "STOREOBJ")
+                    .then(|| index.checked_sub(1).and_then(|j| instrs.get(j)))
+                    .flatten()
+                    .and_then(|previous| match previous.op.name {
+                        "CALL" | "CALLINTF" | "CALLBND" => {
+                            let id = previous.dwords.first().copied().unwrap_or(0) as i32;
+                            Some((
+                                refs.func_ret_by_id(id)?,
+                                refs.func_by_id(id)?,
+                                refs.is_const_method_by_id(id),
+                            ))
+                        }
+                        "CALLSYS" | "Thiscall1" => {
+                            let ptr = previous.qwords.first().copied().unwrap_or(0) as i64;
+                            Some((
+                                refs.func_ret_by_ptr(ptr)?,
+                                refs.func_by_ptr(ptr)?,
+                                refs.is_const_method_by_ptr(ptr),
+                            ))
+                        }
+                        _ => None,
+                    })
+                    .filter(|(ret, _, _)| {
+                        ret.token == 5 && (ret.is_object_const || ret.is_read_only)
+                    })
+                    .map(|(_, name, is_const_method)| const_return_key(name, is_const_method));
+                match producer {
+                    Some(name) => {
+                        const_source.insert(destination, name);
+                    }
+                    None => {
+                        written_otherwise.insert(destination);
+                    }
+                }
+            }
+            for (slot, name) in const_source {
+                if written_otherwise.contains(&slot) {
+                    unusable.insert(name);
+                }
+            }
+        }
+    }
+    unusable
+}
+
 pub fn prepare_resolver_semantics(
     mods: &[Module],
     refs: &mut RefResolver,
@@ -174,6 +251,86 @@ pub fn prepare_resolver_semantics(
         })
         .collect();
     refs.set_class_fields(fields);
+    let non_const = mods
+        .iter()
+        .flat_map(|module| &module.classes)
+        .map(|class| {
+            let methods = class
+                .methods
+                .iter()
+                .filter(|method| !method.is_const_method())
+                .map(|method| method.name.clone())
+                .collect::<HashSet<_>>();
+            (class.name.clone(), methods)
+        })
+        .collect();
+    refs.set_non_const_methods(non_const);
+    // The enum tables, so a constant can be written the way the source wrote it. A bare name two
+    // modules disagree about carries no witness and is dropped.
+    let mut enum_entries: HashMap<String, Vec<(String, i32)>> = HashMap::new();
+    let mut ambiguous: HashSet<String> = HashSet::new();
+    for module in mods {
+        for enum_def in &module.enums {
+            match enum_entries.get(&enum_def.name) {
+                Some(seen) if *seen != enum_def.entries => {
+                    ambiguous.insert(enum_def.name.clone());
+                }
+                Some(_) => {}
+                None => {
+                    enum_entries.insert(enum_def.name.clone(), enum_def.entries.clone());
+                }
+            }
+        }
+    }
+    enum_entries.retain(|name, _| !ambiguous.contains(name));
+    refs.set_enum_entries(enum_entries);
+    let declared = mods
+        .iter()
+        .flat_map(|module| &module.classes)
+        .map(|class| {
+            let methods = class
+                .methods
+                .iter()
+                .map(|method| {
+                    format!(
+                        "{}/{}{}",
+                        method.name,
+                        method.params.len(),
+                        if method.is_const_method() {
+                            "/const"
+                        } else {
+                            ""
+                        }
+                    )
+                })
+                .collect::<HashSet<_>>();
+            (class.name.clone(), methods)
+        })
+        .collect();
+    refs.set_class_methods(declared);
+    let mut param_defaults = HashMap::new();
+    for module in mods {
+        for function in &module.functions {
+            if function.param_defaults.iter().any(|d| !d.is_empty()) {
+                param_defaults.insert(
+                    (String::new(), function.name.clone()),
+                    function.param_defaults.clone(),
+                );
+            }
+        }
+        for class in &module.classes {
+            for method in class.methods.iter().chain(class.ctors.iter()) {
+                if method.param_defaults.iter().any(|d| !d.is_empty()) {
+                    param_defaults.insert(
+                        (class.name.clone(), method.name.clone()),
+                        method.param_defaults.clone(),
+                    );
+                }
+            }
+        }
+    }
+    refs.set_param_defaults(param_defaults);
+    refs.set_unusable_const_returns(unusable_const_returns(mods, refs));
     refs.add_method_names(
         mods.iter()
             .flat_map(|module| module.classes.iter())
@@ -242,7 +399,11 @@ fn emitted_free_functions<'a>(module: &'a Module, refs: &RefResolver) -> Vec<(&'
         })
         .filter_map(|function| {
             let params = free_param_signature(function, refs);
-            let signature = format!("{}({params})", function.name);
+            // The collision key carries the NAMESPACE. Two same-named free functions in
+            // different namespaces are already distinct declarations that a qualified call
+            // reaches unambiguously; renaming them would only invent a symbol the base cache
+            // does not have. Only a genuine global-scope clash still needs the rename.
+            let signature = format!("{}::{}({params})", function.namespace, function.name);
             seen.insert(signature.clone())
                 .then_some((function, signature))
         })
@@ -432,7 +593,13 @@ fn free_function_rename_plan(
             let name = plan
                 .renamed(module_index, &function.name)
                 .unwrap_or(&function.name);
-            let signature = format!("{name}({})", free_param_signature(function, refs));
+            // Same key as the plan: a namespace is part of the declaration's identity, so two
+            // same-named functions in different namespaces are not a duplicate.
+            let signature = format!(
+                "{}::{name}({})",
+                function.namespace,
+                free_param_signature(function, refs)
+            );
             if let Some(previous) = final_signatures.insert(signature.clone(), module_index) {
                 return Err(format!(
                     "free-function signature {signature} remains duplicated in modules {:?} and {:?}",
@@ -1401,6 +1568,7 @@ pub struct PreparedEmit<'a> {
     refs: &'a RefResolver,
     rename_plan: FreeFunctionRenamePlan,
     layout: Vec<ModuleLayout>,
+    class_defaults: bool,
 }
 
 impl<'a> PreparedEmit<'a> {
@@ -1417,10 +1585,19 @@ impl<'a> PreparedEmit<'a> {
             refs,
             rename_plan,
             layout,
+            class_defaults: false,
         })
     }
 
     /// Emit one module using the same full-cache resolver and collision plan as `emit_tree`.
+    /// Write class `default` statements. OFF unless opted into: emitted source is also hashed
+    /// into sealed evidence and fed back to the compiler, and both need the historical shape.
+    /// Turn it on for source a person is going to read.
+    pub fn with_class_defaults(mut self, class_defaults: bool) -> Self {
+        self.class_defaults = class_defaults;
+        self
+    }
+
     pub fn emit_module(&self, module_index: usize) -> Result<String, EmitAllError> {
         let module = self
             .mods
@@ -1429,7 +1606,7 @@ impl<'a> PreparedEmit<'a> {
                 index: module_index,
                 modules: self.mods.len(),
             })?;
-        let source = super::emit::emit_module(module, self.refs);
+        let source = super::emit::emit_module_with(module, self.refs, self.class_defaults);
         Ok(self
             .rename_plan
             .rewrite_emitted_module(module_index, &source))

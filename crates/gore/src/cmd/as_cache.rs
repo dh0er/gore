@@ -166,7 +166,15 @@ pub enum AsCmd {
         max: usize,
     },
     /// Emit ALL modules as recompilable .as into <outdir>, mirroring ScriptRelativeFilename.
-    EmitAll { file: PathBuf, outdir: PathBuf },
+    EmitAll {
+        file: PathBuf,
+        outdir: PathBuf,
+        /// Omit class `default` statements. Needed for a module you intend to edit and splice
+        /// back with `compile-module --op edit`, whose remap cannot follow a regenerated
+        /// `__InitDefaults`; the defaults are preserved byte-exact for you in that case.
+        #[arg(long)]
+        no_defaults: bool,
+    },
     /// Emit recompilable .as for modules whose name contains <needle>.
     Emit {
         file: PathBuf,
@@ -174,6 +182,11 @@ pub enum AsCmd {
         needle: String,
         #[arg(long, default_value_t = 5)]
         max: usize,
+        /// Omit class `default` statements. Needed for a module you intend to edit and splice
+        /// back with `compile-module --op edit`, whose remap cannot follow a regenerated
+        /// `__InitDefaults`; the defaults are preserved byte-exact for you in that case.
+        #[arg(long)]
+        no_defaults: bool,
     },
     /// Dump StaticNames tail-table entries (the `n"..."` FName-literal pool indexed by
     /// `__STATIC_NAME(Id)`). With no indices: count + first 10 entries.
@@ -2527,16 +2540,22 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             }
             eprintln!("({n} function(s))");
         }
-        AsCmd::EmitAll { file, outdir } => {
+        AsCmd::EmitAll {
+            file,
+            outdir,
+            no_defaults,
+        } => {
             let bytes = read_module_cache(&file)?;
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
-            let stats = gore_as::cache::emit_all::emit_all_tree(
+            let stats = gore_as::cache::emit_all::PreparedEmit::new(
                 &mods,
                 &mut refs,
                 load_native_api(&file),
-                &outdir,
             )
+            .context("prepare emitted modules")?
+            .with_class_defaults(!no_defaults)
+            .emit_tree(&outdir)
             .with_context(|| format!("emitting to {}", outdir.display()))?;
             eprintln!(
                 "emitted {} modules / {} body-bearing functions to {} ({} cache function records; {} modules / {} functions contain a stubbed body)",
@@ -2548,7 +2567,12 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 stats.stubbed_functions
             );
         }
-        AsCmd::Emit { file, needle, max } => {
+        AsCmd::Emit {
+            file,
+            needle,
+            max,
+            no_defaults,
+        } => {
             let bytes = read_module_cache(&file)?;
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
@@ -2557,7 +2581,8 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 &mut refs,
                 load_native_api(&file),
             )
-            .context("prepare emitted modules")?;
+            .context("prepare emitted modules")?
+            .with_class_defaults(!no_defaults);
             let mut n = 0;
             for (module_index, _) in mods
                 .iter()
@@ -5602,6 +5627,7 @@ mod default_cli_tests {
 
         let class = |name: &str, super_class: Option<&str>| Class {
             name: name.to_owned(),
+            namespace: String::new(),
             super_class: super_class.map(str::to_owned),
             fields: Vec::new(),
             methods: Vec::new(),

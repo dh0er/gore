@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-29
+
+- Fix standalone AngelScript compilation for patch 1.0.5.
+
 ## [0.2.1] - 2026-08-28
 
 - Add support for Gothic 1 Remake patch 1.0.5.
@@ -49,6 +53,82 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   voice bundle is built.
 - Derive newly added AngelScript module identities from their relative `.as`
   paths, matching both the standalone compiler and the game's source discovery.
+
+- `as emit` / `as emit-all` now write class `default` statements, so item, NPC
+  and config classes decompile with their values instead of as empty shells.
+- A module whose defaults cannot all be recovered says so in its header and
+  keeps them byte-exact on recompile.
+- A module whose source declares defaults can be edited and spliced back;
+  `as emit --no-defaults` still produces the previous shape.
+- Scalar member stores into fields declared on a native base are recovered
+  instead of dropped.
+- Editing a module and splicing it back now keeps its `n"..."` names: they were
+  remapped to unrelated entries before, so an item could come back wearing
+  another item's model.
+- Decompiled source keeps namespaces, `const` methods and parameter defaults, so
+  quest, document and conversation modules can be edited and spliced at all.
+- Every module in the game writes its class defaults now, down to the main map's
+  worldpoint and item-spawn tables.
+- A fluent chain keeps its links: a temporary's destructor between two of them
+  no longer ends the statement, so AI rule tables decompile as the one call
+  chain they were written as.
+- A `Cast<>` comes back as a cast instead of the compiler's null-guarded
+  if/else, and a bool field written from an int gets the bool form.
+- A method's `const` return type is written again, so an edited module keeps
+  that part of its identity; locals that receive such a value are declared
+  const to match.
+- Both halves of an accessor pair (`T f()` and `const T f() const`) are written,
+  where the const half used to be dropped — every function in the cache is
+  regenerated now.
+- Decompiled bodies read the way they were written: an argument expression sits
+  inside its call, a constant sits where it is used, `!(!(x))` is `x`, and a
+  local the original never initialized is not initialized.
+- A constructor that only gives members their values decompiles as member
+  initializers, and a member store that used to be dropped from constructors is
+  recovered — an `FName` global reads its real value instead of its own name.
+- A `default` statement whose call lost an argument is refused instead of
+  written, so a module keeps its byte-exact defaults rather than quietly
+  changing meaning.
+- Decompiled bodies write the range-for the compiler desugared, fold the
+  temporaries it invented, drop stores nothing reads, and call `Super::` where
+  an override calls the method it overrides.
+- A branch that returns comes back as a return: a bool function's guarded return
+  kept its condition, and every branch that leaves through the shared exit
+  returns its own value instead of the one another branch left behind.
+- A call's receiver and its arguments sit inside the call, including a call that
+  stands in an `if`, a `while` or a `return` — they used to be evaluated earlier
+  than the source evaluated them.
+- A slot that holds what a call returned is declared with that type, so a bool
+  result reads as a bool instead of `(x != 0)`.
+- Decompiled bodies stop naming the temporaries the compiler made: a call whose
+  result nothing reads is the statement it was, a by-value struct return returns
+  its value instead of assigning a hidden slot first, and a `!` is applied where
+  the value already sits.
+- A comparison the source read as a value comes back: those functions returned
+  the declaration's default instead of what they compared.
+- A call whose result the source threw away is written as the statement it was,
+  wherever the language allows the result to be dropped.
+- `as extract-remap` and `compile-module` resolve a repeated string literal
+  instead of refusing the module.
+- `GORE_AS_REMAP_DIAG=1` prints the two identities behind an unresolved or
+  ambiguous reference.
+- A function returns its expression instead of naming it first, a condition
+  tests its expression, and a handle copied from another handle is gone.
+- A class says a member's initial value once instead of repeating it in every
+  constructor that also takes a parameter.
+- A chain of `&&` comes back as the chain it was rather than one `if`/`else`
+  per link.
+- A value passed to a constructor sits inside the call, where it used to be
+  left behind in a local.
+- A condition or a call argument holds the expression it tests, instead of a
+  local the source never named — including a whole `&&` chain.
+- A comparison handed to a call sits inside the call.
+- A bool the cache proved from a comparison, a `!` or a call's return is
+  recognized as one everywhere, and so is a bool field of the class.
+- A guard that returns is written as one: an early `return` no longer goes
+  missing, so the code behind it stays guarded.
+- A cast reads the call it casts, a value the source built at a call site is
+  written there, and an enum field is passed as itself.
 
 ## [0.1.0] - 2026-08-18
 

@@ -118,6 +118,9 @@ These paths are suitable for reviewed, fixed-width changes already present in ge
 `__InitDefaults`: direct supported scalar assignments, plus the separately sealed native
 `GameplayTag`-to-`float32` map-entry shape above. They do not author new fields, assignments, map
 keys, or maps; resize bytecode or containers; edit arbitrary complex initializer expressions; or
-create NPCs, dialogs, or quests. They also do not replace the separate transactional
+create NPCs, dialogs, or quests. For anything beyond that fixed-width envelope, decompile the
+module instead: `gore as emit` writes the initializer back out as class-scope `default`
+statements, which can be edited freely and recompiled — see
+[Scripts](../guide/scripts.md). They also do not replace the separate transactional
 bundle/deployment and save-comparison workflow described in
 [AngelScript dialog authoring](../guide/dialog-authoring.md).

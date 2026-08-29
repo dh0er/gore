@@ -615,7 +615,7 @@ impl Ctx<'_> {
                         if declared_ty.as_deref() == Some(tn.as_str()) {
                             v
                         } else {
-                            cast_to_typename(&v, &tn).unwrap_or(v)
+                            cast_to_typename(&v, &tn, self.refs).unwrap_or(v)
                         }
                     }
                     _ => v,
@@ -636,7 +636,7 @@ impl Ctx<'_> {
                         let rh = rt.base_name(self.refs);
                         match self.slot_type(slot) {
                             Some(st) if provably_derived(&rh, &st, self.refs) => {
-                                format!("Cast<{rh}>({v})")
+                                format!("Cast<{}>({v})", qualify_class_name(&rh, self.refs))
                             }
                             _ => v,
                         }
@@ -771,6 +771,21 @@ impl Ctx<'_> {
         (ty.is_object_handle || ty.is_reference) && !ty.is_read_only && !ty.is_object_const
     }
 
+    /// Whether the object PARAMETER `name` is const — read-only or a const handle. `param_src_ok`
+    /// refuses those outright; a copy of one is still recoverable when its only consumer is a
+    /// comparison, which const cannot break.
+    fn param_is_const(&self, name: &str) -> bool {
+        let idx = self
+            .f
+            .param_names
+            .iter()
+            .position(|n| !n.is_empty() && n == name);
+        match idx.and_then(|i| self.f.param_types.get(i)) {
+            Some(t) => t.is_read_only || t.is_object_const,
+            None => false,
+        }
+    }
+
     /// batch-45c (FIX-4): true when `name` is EXACTLY a declared object/reference PARAMETER —
     /// const-AGNOSTIC (unlike `param_src_ok`), because the only use is a null-guard fold
     /// (`if (<param> == nullptr)`), a comparison that is const-safe. Never matches `this` (not a
@@ -816,6 +831,78 @@ fn scan_back_retval(ctx: &Ctx, before: usize) -> Option<String> {
 /// [`scan_back_retval`] bounded below by `floor` (instruction index): used by the switch
 /// recovery's synthesized `return`s so a case's value never leaks in from a PRECEDING case
 /// region (the linear scan would otherwise cross the region boundary).
+/// Which loop shape produced a condition, and what its test block carried, behind
+/// `GORE_AS_LOOP_DIAG`.
+fn loop_diag(path: &str, stmts: &[String], cond: &str) {
+    if std::env::var_os("GORE_AS_LOOP_DIAG").is_some() {
+        eprintln!("[loop] {path} cond={cond} stmts={stmts:?}");
+    }
+}
+
+/// `local_N = <value>;` as a loop header's only statement, tested by `local_N != 0` or
+/// `local_N == 0`: the loop's condition is that value, or its negation.
+fn fold_loop_header_store(stmts: &[String], cond: &str) -> Option<String> {
+    if stmts.is_empty() {
+        return None;
+    }
+    let is_local = |name: &str| {
+        name.strip_prefix("local_")
+            .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+    };
+    // The header builds one value in one slot, in steps: read it, then negate it. Compose the
+    // steps back into the expression they spell.
+    let mut slot: Option<&str> = None;
+    let mut value = String::new();
+    for stmt in stmts {
+        let (target, rhs) = stmt.trim().strip_suffix(';')?.split_once(" = ")?;
+        if !is_local(target) || rhs.is_empty() || *slot.get_or_insert(target) != target {
+            return None;
+        }
+        value = match count_word(rhs, target) {
+            0 if value.is_empty() => rhs.to_owned(),
+            // A step that reads the slot back continues the expression built so far.
+            1 if !value.is_empty() => rhs.replace(target, &format!("({value})")),
+            _ => return None,
+        };
+    }
+    // A slot the tables call `bool` is tested bare; an int-declared one through `!= 0`. The
+    // branch's own inversion can arrive as a double negation — `!(!(local_1))` is `local_1`.
+    let slot = slot?;
+    let mut cond = cond;
+    while let Some(inner) = cond
+        .strip_prefix("!(!(")
+        .and_then(|rest| rest.strip_suffix("))"))
+    {
+        cond = inner;
+    }
+    // A BARE test says the slot is a bool, so the value it was built from is one too. A test
+    // against zero says the opposite — the slot is an int, and the comparison carries the type.
+    // Dropping it there writes `while (1)`, which the compiler refuses ("Expression must be of
+    // boolean type"); an integer LITERAL is the one value that can lose it, as `true`/`false`.
+    let literal = value.parse::<i64>().ok();
+    match cond {
+        _ if cond == slot => Some(value),
+        _ if cond == format!("!{slot}") || cond == format!("!({slot})") => {
+            Some(format!("!({value})"))
+        }
+        _ => match (cond.strip_prefix(slot)?, literal) {
+            (" != 0", Some(n)) => Some(bool_literal(n != 0)),
+            (" == 0", Some(n)) => Some(bool_literal(n == 0)),
+            (" != 0", None) => Some(format!("({value}) != 0")),
+            (" == 0", None) => Some(format!("({value}) == 0")),
+            _ => None,
+        },
+    }
+}
+
+/// AngelScript's spelling of a boolean constant.
+fn bool_literal(value: bool) -> String {
+    match value {
+        true => "true".to_owned(),
+        false => "false".to_owned(),
+    }
+}
+
 fn scan_back_retval_floor(ctx: &Ctx, before: usize, floor: usize) -> Option<String> {
     for i in (floor..before).rev() {
         let ins = &ctx.instrs[i];
@@ -828,6 +915,42 @@ fn scan_back_retval_floor(ctx: &Ctx, before: usize, floor: usize) -> Option<Stri
         }
     }
     None
+}
+
+/// `local_N = <expr>;` immediately before `return local_N;` is one `return <expr>;`. The slot is
+/// the compiler's own temporary there, so naming it costs a copy vanilla does not have. Folds
+/// only when the value does not read the slot back.
+fn fold_return_into_store(stmts: &mut Vec<String>, exit: String) -> String {
+    let Some(slot) = exit
+        .strip_prefix("return ")
+        .and_then(|value| value.strip_suffix(';'))
+        .filter(|value| value.starts_with("local_") && !value.contains(['.', '(', ' ', '[']))
+    else {
+        return exit;
+    };
+    let Some((target, value)) = stmts
+        .last()
+        .and_then(|last| last.trim().strip_suffix(';'))
+        .and_then(|last| last.split_once(" = "))
+    else {
+        return exit;
+    };
+    if target.trim() != slot || value.contains(slot) {
+        return exit;
+    }
+    let folded = format!("return {value};");
+    stmts.pop();
+    folded
+}
+
+/// The boolean value a `CMP*` + `T*` pair leaves in the value register.
+fn materialized_comparison(c: &Cmp) -> Option<String> {
+    if let Some(expr) = &c.expr {
+        return Some(expr.clone());
+    }
+    let op = c.op?;
+    (!c.a.is_empty() && !c.b.is_empty() && c.a != UNRESOLVED && c.b != UNRESOLVED)
+        .then(|| format!("({} {op} {})", c.a, c.b))
 }
 
 /// Conditional-jump opcode (mirrors `cfg::is_cond_jump`, which is private to that module).
@@ -931,10 +1054,14 @@ fn fmt_float(b: ConstBits, double: bool) -> String {
         return match (v.is_nan(), v.is_sign_negative(), double) {
             (true, _, true) => "0.0".into(),
             (true, _, false) => "0.0f".into(),
-            (false, false, true) => format!("{:?}", f64::MAX),
-            (false, true, true) => format!("{:?}", f64::MIN),
-            (false, false, false) => format!("{:?}f", f32::MAX),
-            (false, true, false) => format!("{:?}f", f32::MIN),
+            // An OVERFLOWING decimal literal is the closest thing to an infinity literal this
+            // language has: it parses, and IEEE round-to-nearest takes it to ±inf, which is the
+            // bit pattern vanilla holds. The type's max finite value — what this used to emit —
+            // comes back one ULP low.
+            (false, false, true) => "1e309".into(),
+            (false, true, true) => "-1e309".into(),
+            (false, false, false) => "1e39f".into(),
+            (false, true, false) => "-1e39f".into(),
         };
     }
     if double {
@@ -1010,6 +1137,12 @@ fn build_call(
     global_shadowed: bool,
     refs: &RefResolver,
 ) -> Option<String> {
+    // The callee's declared default arguments, so a call can be rendered the way it was
+    // written rather than the way it was compiled.
+    let arg_defaults = target_owner
+        .or(cur_class)
+        .and_then(|owner| refs.param_defaults(owner, f))
+        .or_else(|| refs.param_defaults("", f));
     if f.starts_with('$') || f.starts_with('~') || f == "__STATIC_NAME" {
         // EDIT C (the dominant FName form): `__STATIC_NAME` is the synthesized name-table accessor
         // (`const FName& __STATIC_NAME(int Id)` per the exe's registered decl) that fetches
@@ -1171,9 +1304,25 @@ fn build_call(
         fn head(s: &str) -> &str {
             s.split('<').next().unwrap_or(s)
         }
+        // A self-call that names an ANCESTOR's function while the current class declares that
+        // very method with the same arity is `Super::` — see the arm below. It has to be known
+        // HERE too: a struct-by-value return is rendered by the RVO probe further down, which
+        // would otherwise write `out = this.Method(...)` and recurse.
+        let is_super_call = recv.s == "this"
+            && match (target_owner, cur_class, params) {
+                (Some(owner), Some(cur), Some(declared)) => {
+                    owner != cur
+                        && refs.is_subclass(cur, owner)
+                        && (non_virtual || refs.class_overrides_method(cur, f, declared.len()))
+                }
+                _ => false,
+            };
         let is_operator = assign_op(f).is_some() || binop_method(f).is_some();
         if let Some(rh) = ret_ty.map(head).filter(|_| !is_operator && !ret_is_ref) {
-            if matches!(rh.bytes().next(), Some(b'F') | Some(b'T') | Some(b'E')) {
+            if matches!(
+                bare_type_name(rh).bytes().next(),
+                Some(b'F') | Some(b'T') | Some(b'E')
+            ) {
                 // the RVO out-slot = a PSF arg whose type head equals the return-type head.
                 // batch-29c (3a, specs/batch29-errortail.md): the ABI pushes
                 // [args..., dest, recv], so after the recv pop the dest is the LAST entry —
@@ -1199,10 +1348,16 @@ fn build_call(
                     // GetActorLocation()` instead of `out = recv.Iterator()` -> "No matching
                     // signatures". `this`-receivers render `this.Method()` (legal, matches the
                     // normal method-render path below).
+                    if is_super_call {
+                        return Some(format!(
+                            "{out} = Super::{f}({})",
+                            render_args(&a, params, refs, arg_defaults)
+                        ));
+                    }
                     return Some(format!(
                         "{out} = {}.{f}({})",
                         wrap_uobject_recv(&recv, target_owner, refs),
-                        render_args(&a, params, refs)
+                        render_args(&a, params, refs, arg_defaults)
                     ));
                 }
             }
@@ -1267,18 +1422,24 @@ fn build_call(
         // super name is itself a type name).
         if super_ctor == Some(f) && recv.s == "this" {
             maybe_reverse_args(&mut a, params, refs); // super calls are reverse-pushed too
-            return Some(format!("super({})", render_args(&a, params, refs)));
+            return Some(format!(
+                "super({})",
+                render_args(&a, params, refs, arg_defaults)
+            ));
         }
         // BUG (a) — SUPER-CALL: a NON-VIRTUAL (`CALL`) dispatch on `this` to a method owned by a
         // STRICT ANCESTOR of the current class is a `Super::method()` call, not `this.method()`
         // (a genuine virtual self-call compiles to CALLINTF, never a CALL to the base func-id).
-        if non_virtual && recv.s == "this" {
-            if let (Some(owner), Some(cur)) = (target_owner, cur_class) {
-                if owner != cur && refs.is_subclass(cur, owner) {
-                    maybe_reverse_args(&mut a, params, refs); // super calls are reverse-pushed too
-                    return Some(format!("Super::{f}({})", render_args(&a, params, refs)));
-                }
-            }
+        // A VIRTUAL (`CALLINTF`) self-call that names the ANCESTOR's function while the current
+        // class declares that very method is `Super::` too: a plain `this.` call would compile
+        // to the class's own override — infinite recursion, and a function identity the base
+        // cache does not have, which costs the module its splicability.
+        if is_super_call {
+            maybe_reverse_args(&mut a, params, refs); // super calls are reverse-pushed too
+            return Some(format!(
+                "Super::{f}({})",
+                render_args(&a, params, refs, arg_defaults)
+            ));
         }
         // a call whose name is a type = an in-place constructor (member struct default ctor) —
         // implicit in AS source, emit nothing.
@@ -1319,11 +1480,11 @@ fn build_call(
             }
         }
         maybe_reverse_args(&mut a, params, refs);
-        cast_container_args(f, recv.ty.as_deref(), &mut a);
+        cast_container_args(f, recv.ty.as_deref(), &mut a, refs);
         Some(format!(
             "{}.{f}({})",
             wrap_uobject_recv(&recv, target_owner, refs),
-            render_args(&a, params, refs)
+            render_args(&a, params, refs, arg_defaults)
         ))
     } else {
         if refs.is_type_name(f) {
@@ -1357,22 +1518,31 @@ fn build_call(
             // a member store / return is worse than a dropped one, and a mis-fire on a genuine in-place
             // ctor = silent DOUBLE construction).
             let head = f.split('<').next().unwrap_or(f);
-            let is_value = matches!(head.bytes().next(), Some(b'F') | Some(b'E') | Some(b'T'));
+            let is_value = matches!(
+                bare_type_name(head).bytes().next(),
+                Some(b'F') | Some(b'E') | Some(b'T')
+            );
             if is_value && !a.is_empty() {
                 maybe_reverse_args(&mut a, params, refs);
-                return Some(format!("{f}({})", render_args(&a, params, refs)));
+                return Some(format!(
+                    "{f}({})",
+                    render_args(&a, params, refs, arg_defaults)
+                ));
             }
             // OBJECT factory: non-method (structurally: an in-place ctor is void and/or a method the
             // idiom-C arm consumed first), return type resolves to a real U/A class head, non-void.
+            // `bare_type_name` first: a namespaced return (`AutomatedTest::UAIState_Test_…`)
+            // starts with the NAMESPACE, so the class-head test read `Au` and refused a genuine
+            // factory — its `STOREOBJ` slot then stayed unwritten and every use of it dangled.
             let is_object_factory = !is_method
-                && matches!(ret_ty.map(tyhead), Some(rh) if
+                && matches!(ret_ty.map(tyhead).map(bare_type_name), Some(rh) if
                     matches!(rh.bytes().next(), Some(b'U') | Some(b'A'))
                     // U/A + uppercase-2nd-char = a real class head (rejects `uint`-ish primitives).
                     && rh.as_bytes().get(1).map(|c| c.is_ascii_uppercase()).unwrap_or(false)
                     && rh != "void");
             if is_object_factory {
                 maybe_reverse_args(&mut a, params, refs);
-                let rendered = render_args(&a, params, refs);
+                let rendered = render_args(&a, params, refs, arg_defaults);
                 // Never emit a sentinel-marked / unresolved arg list (a definite mismatch): bail.
                 if !rendered.contains('\u{2}')
                     && !rendered.contains('\u{1}')
@@ -1415,7 +1585,10 @@ fn build_call(
             });
             if let Some(owner) = owner {
                 maybe_reverse_args(&mut a, params, refs);
-                return Some(format!("{owner}::{f}({})", render_args(&a, params, refs)));
+                return Some(format!(
+                    "{owner}::{f}({})",
+                    render_args(&a, params, refs, arg_defaults)
+                ));
             }
         }
         // batch-24b: AngelScript member lookup SHADOWS globals — an unqualified call to a free
@@ -1439,7 +1612,10 @@ fn build_call(
         // (batch-20 Class D): a BY-REFERENCE return has no out-slot, and the probe would steal a
         // same-typed by-ref struct arg.
         if let Some(rh) = ret_ty.map(tyhead).filter(|_| !ret_is_ref) {
-            if matches!(rh.bytes().next(), Some(b'F') | Some(b'T') | Some(b'E')) {
+            if matches!(
+                bare_type_name(rh).bytes().next(),
+                Some(b'F') | Some(b'T') | Some(b'E')
+            ) {
                 // batch-32b (N5): the free-call ABI pushes [args..., dest] — the RVO dest is
                 // the TOP entry (build_call's own rvo_slot probe: idx=1 for free calls), so
                 // probe with rposition, mirroring the batch-29c method-arm fix (line ~691).
@@ -1460,7 +1636,10 @@ fn build_call(
                         }
                     }
                     maybe_reverse_args(&mut a, params, refs);
-                    return Some(format!("{out} = {f}({})", render_args(&a, params, refs)));
+                    return Some(format!(
+                        "{out} = {f}({})",
+                        render_args(&a, params, refs, arg_defaults)
+                    ));
                 }
             }
         }
@@ -1471,7 +1650,10 @@ fn build_call(
             }
         }
         maybe_reverse_args(&mut a, params, refs);
-        Some(format!("{f}({})", render_args(&a, params, refs)))
+        Some(format!(
+            "{f}({})",
+            render_args(&a, params, refs, arg_defaults)
+        ))
     }
 }
 
@@ -1534,7 +1716,7 @@ fn wrap_uobject_recv(recv: &Arg, owner: Option<&str>, refs: &RefResolver) -> Str
     {
         return recv.s.clone();
     }
-    format!("Cast<{o}>({})", recv.s)
+    format!("Cast<{}>({})", qualify_class_name(&o, refs), recv.s)
 }
 
 /// Count DEFINITE type mismatches when pairing args[i] with params[i] (mirrors `cast_arg`'s
@@ -1544,8 +1726,13 @@ fn wrap_uobject_recv(recv: &Arg, owner: Option<&str>, refs: &RefResolver) -> Str
 /// the score never penalizes a legitimately-ordered call.
 fn arg_mismatch_count(a: &[Arg], params: &[DataType], refs: &RefResolver) -> usize {
     let head = |s: &str| s.split('<').next().unwrap_or(s).to_string();
-    let is_value = |s: &str| matches!(s.bytes().next(), Some(b'F') | Some(b'E') | Some(b'T'));
-    let is_obj = |s: &str| matches!(s.bytes().next(), Some(b'U') | Some(b'A'));
+    let is_value = |s: &str| {
+        matches!(
+            bare_type_name(s).bytes().next(),
+            Some(b'F') | Some(b'E') | Some(b'T')
+        )
+    };
+    let is_obj = |s: &str| matches!(bare_type_name(s).bytes().next(), Some(b'U') | Some(b'A'));
     let mut n = 0;
     for (i, arg) in a.iter().enumerate() {
         let Some(pt) = params.get(i) else { continue };
@@ -1558,7 +1745,7 @@ fn arg_mismatch_count(a: &[Arg], params: &[DataType], refs: &RefResolver) -> usi
         // maybe_reverse_args sees the evidence and can flip a reverse-pushed call. An int
         // const carries `ty: None`, so without this it was invisible to the scorer.
         if arg.is_int {
-            if cast_to_typename("0", &pt.base_name(refs)).is_none() {
+            if cast_to_typename("0", &pt.base_name(refs), refs).is_none() {
                 n += 1;
             }
             continue;
@@ -1624,7 +1811,7 @@ fn maybe_reverse_args(a: &mut Vec<Arg>, params: Option<&[DataType]>, refs: &RefR
 /// Derive the expected types from the receiver's COMPOSED type name (`TMap<ECombatRole,
 /// float>` — locals via obj_locals, this-class members via the fields map) and wrap int args
 /// in place. Foreign-member receivers with unknown types stay untouched (status-quo error).
-fn cast_container_args(method: &str, recv_ty: Option<&str>, a: &mut [Arg]) {
+fn cast_container_args(method: &str, recv_ty: Option<&str>, a: &mut [Arg], refs: &RefResolver) {
     let Some(t) = recv_ty else { return };
     let t = t.trim_start_matches("const ");
     let Some((head, rest)) = t.split_once('<') else {
@@ -1669,7 +1856,7 @@ fn cast_container_args(method: &str, recv_ty: Option<&str>, a: &mut [Arg]) {
         if !(arg.is_int || (arg.is_psf && arg.ty.is_none())) {
             continue;
         }
-        if let Some(c) = cast_to_typename(&arg.s, want) {
+        if let Some(c) = cast_to_typename(&arg.s, want, refs) {
             arg.s = c;
             arg.is_int = false;
             arg.cbits = None;
@@ -1679,15 +1866,36 @@ fn cast_container_args(method: &str, recv_ty: Option<&str>, a: &mut [Arg]) {
 }
 
 /// Render args joined by ", ", casting each int arg to the callee's expected param type.
-fn render_args(a: &[Arg], params: Option<&[DataType]>, refs: &RefResolver) -> String {
-    a.iter()
+fn render_args(
+    a: &[Arg],
+    params: Option<&[DataType]>,
+    refs: &RefResolver,
+    defaults: Option<&[String]>,
+) -> String {
+    let mut rendered: Vec<String> = a
+        .iter()
         .enumerate()
         .map(|(i, arg)| match params.and_then(|p| p.get(i)) {
             Some(pt) => cast_arg(arg, pt, refs),
             None => arg.s.clone(),
         })
-        .collect::<Vec<_>>()
-        .join(", ")
+        .collect();
+    // Drop trailing arguments that just restate the declared default. The bytecode always
+    // materialises them, so recovering them literally is not wrong — but it is a DIFFERENT
+    // source program, and one that makes the compiler emit construct behaviours the base cache
+    // never had (`TSubclassOf<UConversationTopic>::$beh0()`), which then fail to remap.
+    if let Some(defaults) = defaults {
+        while let Some(last) = rendered.len().checked_sub(1) {
+            let Some(default) = defaults.get(last).filter(|value| !value.is_empty()) else {
+                break;
+            };
+            if super::refs::pack_tokens(&rendered[last]) != *default {
+                break;
+            }
+            rendered.pop();
+        }
+    }
+    rendered.join(", ")
 }
 
 /// Cast an int-origin argument to the callee's `bool`/enum param (AngelScript has no
@@ -1702,9 +1910,14 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
                 // compare the type "head" (before any `<...>`) so covariant template
                 // instantiations (e.g. TSubclassOf<Derived> vs <Base>) aren't flagged.
                 let head = |s: &str| s.split('<').next().unwrap_or(s).to_string();
-                let is_value =
-                    |s: &str| matches!(s.bytes().next(), Some(b'F') | Some(b'E') | Some(b'T'));
-                let is_obj = |s: &str| matches!(s.bytes().next(), Some(b'U') | Some(b'A'));
+                let is_value = |s: &str| {
+                    matches!(
+                        bare_type_name(s).bytes().next(),
+                        Some(b'F') | Some(b'E') | Some(b'T')
+                    )
+                };
+                let is_obj =
+                    |s: &str| matches!(bare_type_name(s).bytes().next(), Some(b'U') | Some(b'A'));
                 let (ph, ah) = (head(&pt.base_name(refs)), head(at));
                 // value types (F/E/T) have no inheritance — any head mismatch is wrong.
                 // Emitting the raw arg (e.g. an FName where an FVector is wanted) won't
@@ -1778,12 +1991,24 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
         0x46 => return format!("int16({})", arg.s),
         0x4C => return format!("uint8({})", arg.s),
         0x4D => return format!("uint16({})", arg.s),
+        // A 32-bit constant feeding a `uint`/`uint64` parameter is unsigned data rendered
+        // through a signed slot: an ARGB colour hex reaches `FLinearColor::MakeFromHex` as
+        // `-8364214` and warns "Implicit conversion changed sign of value" (warnings are
+        // errors here). Re-render the SAME bits unsigned; a non-negative constant and any
+        // non-constant argument are left exactly as they were.
+        0x4B | 0x4E => {
+            if let Some(ConstBits::W4(bits)) = arg.cbits {
+                if (bits as i32) < 0 {
+                    return bits.to_string();
+                }
+            }
+        }
         _ => {}
     }
     if pt.token == 5 {
         // object/enum identifier type: UE enums are `E<Upper>...`; cast int -> enum
         let base = pt.base_name(refs);
-        if let Some(c) = cast_to_typename(&arg.s, &base) {
+        if let Some(c) = cast_to_typename(&arg.s, &base, refs) {
             return c;
         }
         // an int arg to a non-enum object/struct param can't convert at all — the arg
@@ -1830,11 +2055,22 @@ fn downcast(
             if refs.is_subclass(&s, d) {
                 rhs
             } else {
-                format!("Cast<{d}>({rhs})")
+                format!("Cast<{}>({rhs})", qualify_class_name(d, refs))
             }
         }
         (Some(s), Some(d)) if src_const && is_obj(&s) && s == *d => format!("{CONSTSTORE}{rhs}"),
-        _ => rhs,
+        // The destination's type is not always recorded here — the cache's `obj_locals` can be
+        // silent about a slot the emitter types later from this very call. A const handle stored
+        // into an unknown destination is still a const handle, and the declaration has to say so
+        // or the store is refused ("Can't implicitly convert from 'const T' to 'T'"). There is
+        // nothing to cast to, so the marker is the only thing this arm can contribute.
+        (Some(s), None) if src_const && is_obj(&s) => format!("{CONSTSTORE}{rhs}"),
+        other => {
+            if std::env::var_os("GORE_AS_CONST_DIAG").is_some() {
+                eprintln!("[const-store] src={:?} const={src_const} dst={:?} rhs={rhs}", other.0, other.1);
+            }
+            rhs
+        }
     }
 }
 
@@ -1843,8 +2079,8 @@ fn downcast(
 /// F-structs, U*/A* objects) can't hold an int — return UNRESOLVED so just THIS assignment
 /// is dropped (a generator-inlined CDO default we can't reconstruct) and the rest of the
 /// function still recovers, rather than stubbing the whole body.
-fn field_assign_rhs(rhs: &str, tyname: &str) -> String {
-    if let Some(c) = cast_to_typename(rhs, tyname) {
+fn field_assign_rhs(rhs: &str, tyname: &str, refs: &RefResolver) -> String {
+    if let Some(c) = cast_to_typename(rhs, tyname, refs) {
         return c; // bool / enum
     }
     match tyname {
@@ -1903,8 +2139,54 @@ fn provably_derived(dst: &str, src: &str, refs: &RefResolver) -> bool {
 
 /// True if `tyname` is a UE enum type (`E<Upper>...`) — same shape `cast_to_typename` keys on.
 /// Tolerates a leading `const ` (a const-qualified enum is still an enum for cast purposes).
+/// A native field type that is a scalar but provably NOT a bool. Used to stop the 1-byte-write
+/// bool heuristic from converting an integer class default into `(N != 0)`.
+fn is_proven_non_bool_scalar(value: &str) -> bool {
+    matches!(
+        value.trim_start_matches("const "),
+        "int8"
+            | "uint8"
+            | "int16"
+            | "uint16"
+            | "int"
+            | "int32"
+            | "uint"
+            | "uint32"
+            | "int64"
+            | "uint64"
+    )
+}
+
+/// The declaration-local part of a possibly namespace-qualified type name: `G1R::EWeather` ->
+/// `EWeather`. Every family predicate here keys on the leading letters of the BARE name, so a
+/// qualified render must be reduced first or an enum stops looking like one.
+pub(crate) fn bare_type_name(tyname: &str) -> &str {
+    let unqualified = tyname.trim_start_matches("const ");
+    match unqualified.rsplit_once("::") {
+        Some((_, tail)) => tail,
+        None => unqualified,
+    }
+}
+
+/// Qualify a bare class name for use in an EXPRESSION (`G1R::UStoryG1R::StaticClass()`,
+/// `default MainStoryClass = G1R::UStoryG1R;`). A class declared in a namespace is not reachable
+/// by its bare name from anywhere else, and `UStoryG1R::StaticClass()` is then read as a
+/// The mark a then-arm carries when its last block jumped BACK to the test: a loop the block
+/// detectors could not take, because its condition is computed across several blocks. The
+/// emitter turns the pair into a `while` once the condition is one expression, and drops the
+/// mark when it cannot -- leaving exactly the `if` that stood here before.
+pub(crate) const LOOP_BACK_EDGE: &str = "//__gore_back_edge";
+
+/// NAMESPACE access, which fails with "Namespace 'UStoryG1R' doesn't exist".
+pub(crate) fn qualify_class_name(name: &str, refs: &RefResolver) -> String {
+    match refs.type_ns_by_name(name) {
+        Some(namespace) if !name.contains("::") => format!("{namespace}::{name}"),
+        _ => name.to_string(),
+    }
+}
+
 pub(crate) fn is_enum_name(tyname: &str) -> bool {
-    let b = tyname.trim_start_matches("const ").as_bytes();
+    let b = bare_type_name(tyname).as_bytes();
     b.len() >= 2 && b[0] == b'E' && b[1].is_ascii_uppercase()
 }
 
@@ -1934,6 +2216,12 @@ fn float_field_type(refs: &RefResolver, tid: i32, field: &str) -> Option<String>
     let cls = refs.type_by_id(tid)?;
     refs.field_type_by_class(cls, field)
         .or_else(|| refs.native_field_type(cls, field))
+        // The declared type from `Binds.Cache` covers ordinary members of native classes and
+        // structs, which neither channel above knows. Without it a float default keeps its raw
+        // IEEE-754 bits: `PostProcessSettings.ChromaticAberrationStartOffset = 1045220557;`
+        // instead of `= 0.1f;` — the compiler then coerces the int and the value is off by ten
+        // orders of magnitude.
+        .or_else(|| refs.native_field_value_type(cls, field))
         .filter(|t| matches!(*t, "float" | "float32" | "double"))
         .map(|s| s.to_string())
 }
@@ -1947,12 +2235,30 @@ fn enum_to_int(rhs: String, src_ty: Option<&str>, dst_is_int: bool) -> String {
 
 /// Cast an int RHS to a named target type: `bool` -> `(x != 0)`, UE enum
 /// (`E<Upper>...`) -> `EEnum(x)`. Returns None when no cast applies.
-fn cast_to_typename(rhs: &str, tyname: &str) -> Option<String> {
+fn cast_to_typename(rhs: &str, tyname: &str, refs: &RefResolver) -> Option<String> {
     if tyname == "bool" {
+        // Already a bool: `(true != 0)` is "No conversion from 'int' to 'bool'".
+        if matches!(rhs, "true" | "false") {
+            return None;
+        }
         return Some(format!("({rhs} != 0)"));
     }
-    let b = tyname.as_bytes();
+    // The CHECK reduces to the bare name; the CAST keeps the qualified one, which is what has
+    // to be written when the enum lives in a namespace.
+    let bare = bare_type_name(tyname);
+    let b = bare.as_bytes();
     if b.len() >= 2 && b[0] == b'E' && b[1].is_ascii_uppercase() {
+        // The cache carries the enumerator NAMES. A constant written as its name is what the
+        // source had, and it is not the same expression as one built by a conversion: the
+        // compiler stores a named constant where the destination already is, while a conversion
+        // is built first and the destination looked up afterwards.
+        if let Some(entry) = rhs
+            .parse::<i32>()
+            .ok()
+            .and_then(|value| refs.enumerator_name(&bare, value))
+        {
+            return Some(format!("{tyname}::{entry}"));
+        }
         return Some(format!("{tyname}({rhs})"));
     }
     None
@@ -2015,6 +2321,13 @@ fn is_pure_iter_get(s: &str) -> bool {
 
 /// True if a rendered operand is an integer slot/constant (safe to cast to bool/enum).
 /// Excludes already-typed operands (params, fields, calls) so we never double-cast.
+/// A bare integer LITERAL (not a slot name). A literal the compiler can prove fits its target
+/// needs no narrowing cast; a slot does.
+fn is_int_literal(s: &str) -> bool {
+    let s = s.strip_prefix('-').unwrap_or(s);
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+}
+
 fn looks_int(s: &str) -> bool {
     let s = s.strip_prefix('-').unwrap_or(s);
     if let Some(r) = s.strip_prefix("local_") {
@@ -2045,6 +2358,131 @@ fn binop_method(f: &str) -> Option<&'static str> {
         "opEquals" => "==",
         _ => return None,
     })
+}
+
+/// Whole-word occurrences of `word` in `text` (an identifier is not a substring of a longer one).
+fn count_word(text: &str, word: &str) -> usize {
+    word_positions(text, word).len()
+}
+
+pub(crate) fn word_positions(text: &str, word: &str) -> Vec<usize> {
+    let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let bytes = text.as_bytes();
+    let mut found = Vec::new();
+    let mut at = 0usize;
+    while let Some(hit) = text[at..].find(word) {
+        let start = at + hit;
+        let end = start + word.len();
+        let before_ok = start == 0 || !is_word(bytes[start - 1]);
+        let after_ok = end == bytes.len() || !is_word(bytes[end]);
+        if before_ok && after_ok {
+            found.push(start);
+        }
+        at = end;
+    }
+    found
+}
+
+/// `<receiver>.<Method>(<slot>);` — a one-argument call that takes the slot's type by value or by
+/// const reference, which is where a TEMPORARY is legal (`PursuedCrimes.Add(FCrimeSetup());`).
+/// The verdict comes from the cache's own parameter table, over every one-parameter row of that
+/// name: one non-const-reference overload disqualifies the whole name, so the substitution can
+/// never turn into "cannot pass a temporary into a non-const reference parameter".
+fn temporary_argument_call(
+    statement: &str,
+    slot: &str,
+    ty: &str,
+    value: &str,
+    refs: &RefResolver,
+    sole_mention: bool,
+    resolved: &HashMap<(String, usize), Vec<bool>>,
+) -> Option<String> {
+    // The sole-argument form, decided by the TYPE-keyed table.
+    if let Some(call) = statement.strip_suffix(&format!("({slot});")) {
+        let method = call.rsplit(['.', ':']).next()?;
+        if !method.is_empty()
+            && method
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            && refs.one_arg_call_accepts_temporary(method, ty)
+        {
+            return Some(format!("{call}({value});"));
+        }
+        return None;
+    }
+    // Any OTHER argument position. Two things have to be true, and neither is the by-name table:
+    // the slot is mentioned NOWHERE else in the body — a value the caller reads back is read back
+    // somewhere — and the parameter of the overload THIS call resolves to takes a value rather
+    // than a non-const reference. Deciding the second from the callee's name instead costs 35
+    // errors, and adding only the first still leaves 15.
+    if !sole_mention {
+        return None;
+    }
+    let call = statement.trim_end().strip_suffix(';')?.trim_end();
+    if !call.ends_with(')') || count_word(call, slot) != 1 {
+        return None;
+    }
+    let bytes = call.as_bytes();
+    let mut depth = 0i32;
+    let mut open = None;
+    for at in (0..bytes.len()).rev() {
+        match bytes[at] {
+            b')' => depth += 1,
+            b'(' => {
+                depth -= 1;
+                if depth == 0 {
+                    open = Some(at);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let open = open?;
+    let method = call[..open].rsplit(['.', ':']).next()?;
+    if method.is_empty()
+        || !method
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    {
+        return None;
+    }
+    let inner = &call[open + 1..call.len() - 1];
+    let mut arguments: Vec<&str> = Vec::new();
+    let (mut depth, mut start) = (0i32, 0usize);
+    for (at, byte) in inner.bytes().enumerate() {
+        match byte {
+            b'(' | b'<' | b'[' => depth += 1,
+            b')' | b'>' | b']' => depth -= 1,
+            b',' if depth == 0 => {
+                arguments.push(inner[start..at].trim());
+                start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    if !inner.trim().is_empty() {
+        arguments.push(inner[start..].trim());
+    }
+    let position = arguments.iter().position(|argument| *argument == slot)?;
+    resolved
+        .get(&(method.to_owned(), arguments.len()))
+        .and_then(|accepts| accepts.get(position))
+        .copied()
+        .unwrap_or(false)
+        .then(|| {
+            let mut rebuilt = arguments.clone();
+            rebuilt[position] = value;
+            format!("{}({});", &call[..open], rebuilt.join(", "))
+        })
+}
+
+/// UHT reserves the `b<Uppercase>` prefix for bool UPROPERTYs, so the last path segment of a
+/// member reference tells whether the field is one even when no type channel resolved it.
+fn is_ue_bool_field(reference: &str) -> bool {
+    let field = reference.rsplit(['.', ':']).next().unwrap_or("");
+    let bytes = field.as_bytes();
+    bytes.len() >= 2 && bytes[0] == b'b' && bytes[1].is_ascii_uppercase()
 }
 
 /// Emit `dst = rhs;` if a result is available (object store).
@@ -2127,6 +2565,11 @@ fn block_stmts_in(
     // and, when the precise script-field channel is absent, by PshRPtr's call-argument typing.
     // The lookup is enum-filtered at every assignment, so non-enum native fields remain unknown.
     let mut ref_reg_nfty: Option<String> = None;
+    // Unfiltered NATIVE field value type behind ref_reg (Binds.Cache field decls + the in-crate
+    // rows). `ref_reg_nfty` keeps its enum filter for the historical consumers; this channel is
+    // consumed ONLY by the WRTV rescue below, where a field DECLARED ON A NATIVE BASE (absent
+    // from every script-side map) otherwise leaves both type channels empty.
+    let mut ref_reg_nvty: Option<String> = None;
     let mut set_consts: HashMap<i32, ConstBits> = HashMap::new(); // last SetV* constant per slot
                                                                   // Slots whose current value came from a MEMBER READ (RDR* after a member-ref load) — real
                                                                   // data values, kept by the nested-call retain (see Arg.keep). Invalidated on overwrite.
@@ -2158,6 +2601,10 @@ fn block_stmts_in(
     // when the source temp was default-built of the SAME value type. Cleared when the slot is
     // overwritten by any non-construct producer.
     let mut default_ctor_temp: HashMap<String, String> = HashMap::new();
+    // Per-call parameter flags read from the pointer the call ACTUALLY uses, keyed by name and
+    // arity. The global by-name table merges every overload in the cache and answers the
+    // constness question wrongly for a name the engine reuses; the pointer names one row.
+    let mut resolved_params: HashMap<(String, usize), Vec<bool>> = HashMap::new();
     let mut pending: Option<String> = None; // unconsumed call/ctor result
     let mut pending_ty: Option<String> = None; // recovered type of `pending` (call return type)
                                                // batch-20 Class B: the call returns a CONST object handle (`const UCharacterAIState`).
@@ -2228,10 +2675,17 @@ fn block_stmts_in(
         };
     }
 
+    // Index of a statement that a construct/destruct behaviour's pre-call flush just emitted.
+    // A fluent chain is built as one `pending` expression, and the temporary destructor between
+    // two links ends it — the next link then finds no pending and takes a leftover operand as
+    // its receiver. Kept for exactly one instruction, so a `PshRPtr` that immediately follows
+    // can take the statement back and carry the chain on.
+    let mut behaviour_flushed: Option<usize> = None;
     let insns = &ctx.instrs[lo..hi];
     for k in 0..insns.len() {
         let ins = &insns[k];
         let n = ins.op.name;
+        let flushed_by_behaviour = behaviour_flushed.take();
         // Invalidate a cached SetV* constant when this op overwrites that slot with a
         // NON-constant value (copy, call-result deref, arithmetic, conversion). Otherwise a
         // later float/double field store reads the stale literal instead of the live value.
@@ -2357,6 +2811,16 @@ fn block_stmts_in(
                     stack.push(Arg::typed(s, None));
                     continue;
                 }
+                // A behaviour's flush ended a chain one instruction ago: take that statement
+                // back and carry it as the operand it was about to become.
+                if pending.is_none() {
+                    if let Some(at) = flushed_by_behaviour.filter(|at| *at + 1 == out.len()) {
+                        let statement = out.remove(at);
+                        let expr = statement.trim_end_matches(';').to_string();
+                        stack.push(Arg::typed(expr, None));
+                        continue;
+                    }
+                }
                 // The value register holds a just-completed call's return value; PshRPtr pushes it
                 // back onto the operand stack as the NEXT call's argument (e.g. the receiver/arg of
                 // a chained call). Prefer that live call result over the stale member-ref register.
@@ -2418,8 +2882,14 @@ fn block_stmts_in(
                 } else {
                     let nm = ctx.refs.global_by_ptr(ptr).unwrap_or("global?");
                     if let Some(cls) = nm.strip_prefix("__StaticType_") {
-                        // generator class-pointer global -> the real UClass accessor
-                        stack.push(Arg::obj(format!("{cls}::StaticClass()")).carry());
+                        // Generator class-pointer global. The BARE class name is what compiles
+                        // into this push: writing `X::StaticClass()` instead compiles into
+                        // `CALL StaticClass` plus a `TSubclassOf` conversion — a different
+                        // program, and one that makes the compiler GENERATE a `StaticClass`
+                        // free function the base cache never had, which then fails to remap
+                        // ("no matching symbol in the base cache"). Vanilla contains both forms;
+                        // only this one pushes the global, so render what was actually written.
+                        stack.push(Arg::obj(qualify_class_name(cls, ctx.refs)).carry());
                     } else if nm.starts_with("__") {
                         // other implicit generator global (e.g. __WorldContext) — not a
                         // source-level identifier. Push a MARKER (not dropped): the native's arity
@@ -2546,6 +3016,15 @@ fn block_stmts_in(
                     .and_then(|cls| ctx.refs.native_field_type(cls, &field))
                     .filter(|t| is_enum_name(t))
                     .map(|s| s.to_string());
+                ref_reg_nvty = ctx
+                    .refs
+                    .type_by_id(tid)
+                    .and_then(|cls| {
+                        ctx.refs
+                            .native_field_value_type(cls, &field)
+                            .or_else(|| ctx.refs.native_field_type(cls, &field))
+                    })
+                    .map(|s| s.to_string());
                 // batch-32b: precise value type (poison-free sources only — see decl comment).
                 ref_reg_vty = ctx.fields.and_then(|m| m.get(&field)).cloned().or_else(|| {
                     ctx.refs
@@ -2577,6 +3056,15 @@ fn block_stmts_in(
                     .type_by_id(tid)
                     .and_then(|cls| ctx.refs.native_field_type(cls, &field))
                     .filter(|t| is_enum_name(t))
+                    .map(|s| s.to_string());
+                ref_reg_nvty = ctx
+                    .refs
+                    .type_by_id(tid)
+                    .and_then(|cls| {
+                        ctx.refs
+                            .native_field_value_type(cls, &field)
+                            .or_else(|| ctx.refs.native_field_type(cls, &field))
+                    })
                     .map(|s| s.to_string());
                 // batch-32b: precise value type (poison-free sources only — see decl comment).
                 ref_reg_vty = ctx
@@ -2679,7 +3167,46 @@ fn block_stmts_in(
                             .as_deref()
                             .map(|t| t.trim_start_matches("const ")),
                         Some("float" | "float32" | "double")
-                    );
+                    ) &&
+                    // …but the wrap presumes the destination is an INT-DECLARED local, which is
+                    // only what an UNTYPED slot renders as. A slot the very next member store
+                    // writes back out at the SAME width is not a declaration at all: it is the
+                    // compiler's pass-through temporary for `<member> = <member>;`, and the
+                    // emitter folds it into the store, so there is no `int` variable to warn
+                    // about and the wrap truncates the value the source copied. Vanilla says so
+                    // itself — the window is a bare `RDR<w> vT; <address ops>; WRTV<w> vT`. Had
+                    // the source truncated, this compiler would have written the `dTOi`/`fTOi`
+                    // for it. Equal widths also mean no narrowing is owed, so dropping the wrap
+                    // cannot bring the precision warning back (measured: 20 such statements in
+                    // 12 functions, every one of them in the divergent set and none among the
+                    // ~163,000 byte-faithful ones).
+                    !{
+                        let width = n.trim_start_matches("RDR");
+                        let mut back = false;
+                        for later in &insns[k + 1..] {
+                            let touches = super::bytediff::addressed_slots(later)
+                                .contains(&dst_slot);
+                            if later.op.name == format!("WRTV{width}") && touches {
+                                back = true;
+                                break;
+                            }
+                            if touches
+                                || !matches!(
+                                    later.op.name,
+                                    "PshVPtr"
+                                        | "ADDSi"
+                                        | "RDSPtr"
+                                        | "PopRPtr"
+                                        | "LoadRObjR"
+                                        | "LoadVObjR"
+                                        | "LoadThisR"
+                                )
+                            {
+                                break;
+                            }
+                        }
+                        back
+                    };
                     // batch-30c: RDR8 joins the wrap for KNOWN float-family members (the
                     // float64 member -> int slot precision-warning residue: foreign script
                     // config floats, FVector.Z/FRotator.Yaw); int64 member reads stay bare.
@@ -2759,7 +3286,7 @@ fn block_stmts_in(
                         Some("float") | Some("double") => {
                             float_lit(&set_consts, slot, true).unwrap_or(raw.clone())
                         }
-                        Some(t) if looks_int(&raw) => field_assign_rhs(&raw, t),
+                        Some(t) if looks_int(&raw) => field_assign_rhs(&raw, t, ctx.refs),
                         _ => raw.clone(),
                     };
                     // batch-45b (FIX-3): a member-write on a FOREIGN object (a call-result /
@@ -2774,8 +3301,21 @@ fn block_stmts_in(
                     // rescues an already-DROPPED store (rhs still UNRESOLVED) and only when vty is
                     // a real primitive value type (never an object/owner name that would re-bail),
                     // so no working store changes.
+                    //
+                    // `ref_reg_nvty` extends the same rescue to fields DECLARED ON A NATIVE BASE.
+                    // Those appear in no script-side map at all, so both channels above are empty
+                    // and every such store dropped — which silently erased the scalar class
+                    // defaults of every item, weapon and config class (`m_Value`,
+                    // `m_SuperArmorDamageBase`, …), since their fields belong to native
+                    // `UItemDefinition`/`UWeaponDefinition` rather than to the script class.
                     if rhs == UNRESOLVED {
-                        if let Some(vty) = ref_reg_vty.as_deref() {
+                        for vty in [ref_reg_vty.as_deref(), ref_reg_nvty.as_deref()]
+                            .into_iter()
+                            .flatten()
+                        {
+                            if rhs != UNRESOLVED {
+                                break;
+                            }
                             let v = vty.trim_start_matches("const ");
                             let is_primitive = matches!(
                                 v,
@@ -2798,7 +3338,7 @@ fn block_stmts_in(
                                         .unwrap_or_else(|| raw.clone()),
                                     "float" | "double" => float_lit(&set_consts, slot, true)
                                         .unwrap_or_else(|| raw.clone()),
-                                    _ if looks_int(&raw) => field_assign_rhs(&raw, v),
+                                    _ if looks_int(&raw) => field_assign_rhs(&raw, v, ctx.refs),
                                     _ => raw.clone(),
                                 };
                                 if cand != UNRESOLVED {
@@ -2822,13 +3362,20 @@ fn block_stmts_in(
                     // (rhs still UNRESOLVED), only for a 1-byte write (bool/int8/uint8 width),
                     // only for an int-family source, and renders the same `(x != 0)` bool wrap the
                     // heuristic below produces for owner-typed fields — so no working store changes.
-                    if rhs == UNRESOLVED && n == "WRTV1" && looks_int(&raw) {
-                        let field_name = r.rsplit('.').next().unwrap_or("");
-                        let fb = field_name.as_bytes();
-                        let is_ue_bool =
-                            fb.len() >= 2 && fb[0] == b'b' && fb[1].is_ascii_uppercase();
-                        if is_ue_bool {
+                    if rhs == UNRESOLVED && n == "WRTV1" && looks_int(&raw) && is_ue_bool_field(r) {
+                        if !matches!(raw.as_str(), "true" | "false") {
                             rhs = format!("({raw} != 0)");
+                        }
+                    }
+                    // Same convention, the other way round: the store was NOT dropped but the
+                    // constant was already resolved to an int LITERAL, so both wraps below (which
+                    // require an untransformed bare slot) skip it and `bRunning = 1` reaches the
+                    // compiler as "Can't implicitly convert from 'int' to 'bool&'". A `b<Upper>`
+                    // field is a bool UPROPERTY by UHT's own rule, so the literal takes the bool
+                    // form. Bounded to a 1-byte write of a plain integer literal.
+                    if n == "WRTV1" && is_int_literal(&rhs) && is_ue_bool_field(r) {
+                        if !matches!(rhs.as_str(), "true" | "false") {
+                            rhs = format!("({rhs} != 0)");
                         }
                     }
                     // batch-25a (G2, specs/batch23-cantconvert.md): a 1-byte write to a NATIVE
@@ -2851,7 +3398,7 @@ fn block_stmts_in(
                             .unwrap_or(false)
                     {
                         if let Some(ety) = ref_reg_nfty.as_deref() {
-                            if let Some(c) = cast_to_typename(&raw, ety) {
+                            if let Some(c) = cast_to_typename(&raw, ety, ctx.refs) {
                                 rhs = c;
                             }
                         }
@@ -2869,9 +3416,18 @@ fn block_stmts_in(
                     // `(Param != 0)` -> "bool -> EPerceptionCharacterType&", 41 in-game errors),
                     // or the FIELD's value type is a known enum (this-class fields map), the write
                     // is enum->enum: keep it bare.
+                    // NATIVE guard: the heuristic reads "1-byte write to a field of unknown type",
+                    // and a field declared on a native base used to be exactly that. Now that the
+                    // native declaration is readable, a proven non-bool 1-byte field keeps its
+                    // integer store — `m_GroundRaysAmount = 2` (uint8) had become
+                    // `m_GroundRaysAmount = (2 != 0)`, which is both a different value and a
+                    // compile error ("Can't implicitly convert from 'bool' to 'uint8&'").
                     if n == "WRTV1"
                         && ref_reg_ty.as_deref() != Some("bool")
                         && !ref_reg_ty.as_deref().map(is_enum_name).unwrap_or(false)
+                        && !ref_reg_nvty
+                            .as_deref()
+                            .is_some_and(is_proven_non_bool_scalar)
                         && rhs == raw
                         && rhs != UNRESOLVED
                         && ctx.slot_type(slot).as_deref() != Some("bool")
@@ -2881,7 +3437,35 @@ fn block_stmts_in(
                             .map(is_enum_name)
                             .unwrap_or(false)
                     {
-                        rhs = format!("({rhs} != 0)");
+                        if !matches!(rhs.as_str(), "true" | "false") {
+                            rhs = format!("({rhs} != 0)");
+                        }
+                    }
+                    // The mirror case: a KNOWN bool field written from an int LITERAL (the
+                    // `SetV1 w,1` folded into the store). The generated accessor is `bool&`, so
+                    // `= 1` is "Can't implicitly convert from 'int' to 'bool&'". A bool SOURCE
+                    // slot still stores bare — `bool != 0` would be the illegal form there.
+                    if n == "WRTV1" && target_is_bool && !source_is_bool && is_int_literal(&rhs) {
+                        if !matches!(rhs.as_str(), "true" | "false") {
+                            rhs = format!("({rhs} != 0)");
+                        }
+                    }
+                    // Storing a slot into a NARROW native field warns twice ("signed to
+                    // unsigned" + "truncates") and warnings are errors here. Narrow the store
+                    // explicitly, mirroring the small-int parameter cast in `cast_arg`. Only a
+                    // proven native type narrower than the 4-byte slot qualifies, and only for a
+                    // bare slot RHS — a literal that already fits, and every rendering the rules
+                    // above produced, are left alone.
+                    if matches!(n, "WRTV1" | "WRTV2") && rhs == raw && rhs != UNRESOLVED {
+                        if let Some(narrow) = ref_reg_nvty
+                            .as_deref()
+                            .map(|t| t.trim_start_matches("const "))
+                            .filter(|t| matches!(*t, "int8" | "uint8" | "int16" | "uint16"))
+                        {
+                            if !is_int_literal(&raw) {
+                                rhs = format!("{narrow}({rhs})");
+                            }
+                        }
                     }
                     out.push(format!("{r} = {rhs};"));
                 }
@@ -2915,7 +3499,16 @@ fn block_stmts_in(
                     // batch-31c (N3 Fix 2): an ENUM-typed slot (out-param slot typing)
                     // written a raw ordinal needs the explicit conversion — AS has no
                     // implicit int->enum (`EInventoryTypes local_7 = 0;` fails).
-                    format!("{}({})", ctx.slot_type(w(ins, 0)).unwrap(), bits as i32)
+                    //
+                    // Where the cache carries the enumerator's NAME, write that instead. It is
+                    // what the source had, and it is not the same expression: a named constant
+                    // goes straight where the destination is, while a conversion is built first
+                    // and the destination looked up afterwards.
+                    let ty = ctx.slot_type(w(ins, 0)).unwrap();
+                    match ctx.refs.enumerator_name(&ty, bits as i32) {
+                        Some(entry) => format!("{ty}::{entry}"),
+                        None => format!("{ty}({})", bits as i32),
+                    }
                 } else {
                     (bits as i32).to_string()
                 };
@@ -2989,13 +3582,16 @@ fn block_stmts_in(
                     c
                 ));
             }
+            // The same argument the `INCi` arm below makes, for the slot-operand form: `++x` is
+            // one opcode and `x = x + 1` is a read/add/write, so writing the long form back turns
+            // vanilla's `IncVi` into an `ADDIi` every time.
             "IncVi" | "IncVf" => {
                 flush!();
-                out.push(format!("{0} = {0} + 1;", name(w(ins, 0))));
+                out.push(format!("++{};", name(w(ins, 0))));
             }
             "DecVi" | "DecVf" => {
                 flush!();
-                out.push(format!("{0} = {0} - 1;", name(w(ins, 0))));
+                out.push(format!("--{};", name(w(ins, 0))));
             }
             // asBC_INCi/DECi (NO_ARG): ++/-- the int at the value/ref register — an lvalue that
             // is a member or deref (LoadThisR/LoadRObjR set ref_reg), unlike IncVi/DecVi which
@@ -3234,7 +3830,7 @@ fn block_stmts_in(
                     if !args_clean {
                         break 'idiom_c false;
                     }
-                    let rendered = render_args(&args, Some(params), ctx.refs);
+                    let rendered = render_args(&args, Some(params), ctx.refs, None);
                     // A definite arg-type mismatch surfaces as the \u{2} sentinel from cast_arg
                     // -> bail (keep the member's default-constructed struct) rather than emit an
                     // uncompilable build.
@@ -3270,7 +3866,10 @@ fn block_stmts_in(
                         .or_else(|| ctx.refs.func_owner_by_id(id))
                         .or(ctx.class_name)
                         .unwrap_or("UObject");
-                    Some(format!("{cls}::StaticClass()"))
+                    Some(format!(
+                        "{}::StaticClass()",
+                        qualify_class_name(cls, ctx.refs)
+                    ))
                 } else {
                     pending_ty = ctx.refs.func_ret_by_id(id).map(|d| d.base_name(ctx.refs));
                     // CALL-by-id = SCRIPT function: its authoritative signature is the module-region
@@ -3331,9 +3930,21 @@ fn block_stmts_in(
                         && owner.is_none()
                         && ctx.class_name.is_some()
                         && ctx.refs.member_name_exists(&f);
+                    // A free/static SCRIPT function declared in a namespace has to be called
+                    // qualified, exactly like the native namespaced calls below. The binding
+                    // puts a class's companion functions in a namespace named after the class
+                    // (`UEffect_GiveExperience::ApplyTo`), so an unqualified call picks a
+                    // same-named overload from somewhere else — or none at all. Name-keyed
+                    // lookups above keep using the bare `f`; only the render is qualified.
+                    let called = match ctx.refs.func_ns_by_id(id) {
+                        Some(namespace) if !ctx.refs.is_method_by_id(id) => {
+                            format!("{namespace}::{f}")
+                        }
+                        _ => f.clone(),
+                    };
                     build_call(
                         &mut stack,
-                        &f,
+                        &called,
                         ctx.refs.is_method_by_id(id),
                         ctx.super_ctor,
                         ctx.refs.func_params_by_id(id),
@@ -3355,9 +3966,33 @@ fn block_stmts_in(
                 test_after_call = false;
                 // Fix b2 — flush a pending statement-position call result before this call begins
                 // (e.g. MakeRequirement's result must be emitted before `Add(...)` overwrites it).
+                let before_flush = out.len();
                 flush_b2!();
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 let f = ctx.refs.func_by_ptr(ptr).unwrap_or("syscall?").to_string();
+                if let Some(params) = ctx.refs.func_params_by_ptr(ptr) {
+                    let accepts: Vec<bool> = params
+                        .iter()
+                        .map(|p| !p.is_reference || p.is_object_const || p.is_read_only)
+                        .collect();
+                    match resolved_params.get_mut(&(f.clone(), accepts.len())) {
+                        Some(seen) => {
+                            for (slot, accepted) in seen.iter_mut().zip(&accepts) {
+                                *slot &= *accepted;
+                            }
+                        }
+                        None => {
+                            resolved_params.insert((f.clone(), accepts.len()), accepts);
+                        }
+                    }
+                }
+                // A behaviour emits no statement of its own and consumes only its own operands,
+                // so a statement flushed for it may still belong to a chain the very next
+                // `PshRPtr` continues. Note it; the flush itself stays, so nothing is lost if
+                // the next instruction is anything else.
+                if (f.starts_with('$') || f.starts_with('~')) && out.len() > before_flush {
+                    behaviour_flushed = Some(out.len() - 1);
+                }
                 if f == "opCast" {
                     // `opCast` is the AngelScript handle-downcast behaviour — the lowered form of
                     // `T@ dst = Cast<T>(src)`. The cache renders it `src.opCast(out)` with the cast
@@ -3377,7 +4012,7 @@ fn block_stmts_in(
                         // so the destination/return local is written (never a discarded cast).
                         let rhs = match &t {
                             Some(ty) if ty.starts_with('U') || ty.starts_with('A') => {
-                                format!("Cast<{ty}>({src})")
+                                format!("Cast<{}>({src})", qualify_class_name(ty, ctx.refs))
                             }
                             _ => src,
                         };
@@ -3386,6 +4021,15 @@ fn block_stmts_in(
                     continue;
                 }
                 if f == "$beh0" {
+                    if std::env::var_os("GORE_AS_DEFAULTS_DEBUG").is_some() {
+                        eprintln!(
+                            "[beh0] params={:?} psf={:?} top={:?} owner={:?}",
+                            ctx.refs.func_params_by_ptr(ptr).map(|p| p.len()),
+                            stack.last().map(|t| t.is_psf),
+                            stack.last().map(|t| t.s.clone()),
+                            ctx.refs.func_owner_by_ptr(ptr)
+                        );
+                    }
                     // batch-46a (FIX-5, GameplayTag default-init triad): a 0-param `$beh0` CONSTRUCT
                     // on a PSF'd temp slot of a VALUE type (owner F*/T*/E*) default-initialises that
                     // temp (`PSF t; CALLSYS $beh0(0-param)`). The temp carries no `.ty` (a bare PSF
@@ -3507,8 +4151,36 @@ fn block_stmts_in(
                             // Gate (c): arg count matches the ctor's declared param count (no
                             // spurious leftover operands on the stack).
                             let count_ok = params.map(|p| p.len() == args.len()).unwrap_or(false);
-                            if !args.is_empty() && (!any_psf_arg || proven_psf_copy) && count_ok {
-                                let rendered = render_args(&args, params, ctx.refs);
+                            // Gate (b) exists because a PSF arg MAY be an unrecovered pending
+                            // call result. When this block has already WRITTEN that slot, it is
+                            // nothing of the sort — it is a plain local, and dropping the
+                            // construct loses a real value (`Texts.Add(FVoiceLine(local_4, …))`
+                            // vanished, leaving `local_4` unread and the module's defaults
+                            // frozen). Multi-parameter only: a one-parameter construct from a
+                            // same-typed PSF slot is the copy behaviour that `proven_psf_copy`
+                            // already rules on.
+                            // A one-parameter construct from a DIFFERENT type is a conversion
+                            // (`TSoftObjectPtr<X>(FSoftObjectPath)`), not the copy behaviour the
+                            // strict rule guards; a same-typed one stays with `proven_psf_copy`.
+                            let converts = params
+                                .and_then(|p| p.first())
+                                .map(|only| only.base_name(ctx.refs) != ty)
+                                .unwrap_or(false);
+                            let psf_args_written_here = (params.map(|p| p.len()).unwrap_or(0) >= 2
+                                || converts)
+                                && args.iter().filter(|a| a.is_psf).all(|a| {
+                                    out.iter().any(|statement| {
+                                        statement
+                                            .trim_start()
+                                            .strip_prefix(a.s.as_str())
+                                            .is_some_and(|rest| rest.starts_with(" = "))
+                                    })
+                                });
+                            if !args.is_empty()
+                                && (!any_psf_arg || proven_psf_copy || psf_args_written_here)
+                                && count_ok
+                            {
+                                let rendered = render_args(&args, params, ctx.refs, None);
                                 // Gate (d): a definite arg-type mismatch -> drop (keep prior
                                 // behaviour: slot unwritten) rather than emit the `\u{2}` sentinel
                                 // that would force-stub the whole function.
@@ -3570,7 +4242,19 @@ fn block_stmts_in(
                                     }
                                 }
                             }
-                            let rhs_ok = !rhs.is_psf
+                            // A PSF source is normally an unrecovered temporary, which is why it
+                            // was rejected. When this block has already WRITTEN that slot, it is
+                            // a plain local carrying a real value, and dropping the store loses
+                            // it: `FontHoldToSkip = local_12;` vanished from a constructor and
+                            // left the member default-constructed and empty.
+                            let psf_written_here = rhs.is_psf
+                                && out.iter().any(|statement| {
+                                    statement
+                                        .trim_start()
+                                        .strip_prefix(rhs.s.as_str())
+                                        .is_some_and(|rest| rest.starts_with(" = "))
+                                });
+                            let rhs_ok = (!rhs.is_psf || psf_written_here)
                                 && !rhs.s.is_empty()
                                 && rhs.s != UNRESOLVED
                                 && !rhs.s.starts_with('$')
@@ -3612,7 +4296,10 @@ fn block_stmts_in(
                         .or_else(|| ctx.refs.func_owner_by_ptr(ptr))
                         .or(ctx.class_name)
                         .unwrap_or("UObject");
-                    Some(format!("{cls}::StaticClass()"))
+                    Some(format!(
+                        "{}::StaticClass()",
+                        qualify_class_name(cls, ctx.refs)
+                    ))
                 } else {
                     pending_ty = ctx.refs.func_ret_by_ptr(ptr).map(|d| d.base_name(ctx.refs));
                     // batch-31e (capture.batch30-0705 ForceRemoveDamage regression): the T3
@@ -3796,6 +4483,30 @@ fn block_stmts_in(
                     let dst_is_int = dst_slot > 0 && ctx.slot_type(dst_slot).is_none();
                     let rhs = enum_to_int(p, pending_ty.as_deref(), dst_is_int);
                     out.push(format!("{} = {rhs};", name(dst_slot)));
+                } else if let Some(condition) = k
+                    .checked_sub(1)
+                    .map(|j| &insns[j])
+                    .filter(|prev| {
+                        matches!(prev.op.name, "TZ" | "TNZ" | "TS" | "TNS" | "TP" | "TNP")
+                    })
+                    .and(cmp.as_ref())
+                    .and_then(materialized_comparison)
+                {
+                    // The value register holds the RESULT of the comparison the `T*` op just
+                    // tested: the source read it as a value, not as a branch. Dropped, the slot
+                    // is never written and every read of it renders the declaration's default —
+                    // a wrong VALUE, not merely a different shape (measured: 124 functions, 30 of
+                    // them comparing against a non-zero constant we returned as zero).
+                    // AngelScript has no implicit bool-to-int, so an int-typed slot takes the
+                    // same explicit form the `NOT` rendering already uses.
+                    let dst = w(ins, 0);
+                    let value = if ctx.slot_type(dst).as_deref() == Some("bool") {
+                        condition
+                    } else {
+                        format!("int{condition}")
+                    };
+                    out.push(format!("{} = {value};", name(dst)));
+                    cmp = None;
                 } else if n == "CpyRtoV8" && ref_reg.is_some() {
                     // batch-32a (A5, specs/batch29-errortail.md §1.2 / illegal-op-round2.md A5):
                     // `LoadRObjR/LoadVObjR ; CpyRtoV8 wD` captures the member ADDRESS the load
@@ -4205,6 +4916,24 @@ fn block_stmts_in(
                     // a plain local is a legal handle assign. Additive: a copy that is neither a
                     // getter-compare nor an immediate null-guard was DROPPED before, so recovering
                     // it can only ADD the vanilla store back.
+                    // A CONST param, or `this`, copied for a COMPARISON. `param_src_ok` refuses
+                    // both — rightly, for a copy that is written through or handed on, where
+                    // const would not hold. A comparison cannot break it, and dropping the copy
+                    // is not a byte difference but a WRONG PROGRAM: the comparison then reads an
+                    // uninitialised slot, so `if (Node == OtherNode)` became `if (Node == null)`
+                    // and the function always returned false.
+                    let const_src_into_cmp = (top.s == "this"
+                        || (ctx.param_object_ref(&top.s) && ctx.param_is_const(&top.s)))
+                        && insns[k + 1..].iter().any(|nx| {
+                            nx.op.name == "CmpPtr"
+                                && (w(nx, 0) == dst_slot0 || w(nx, 1) == dst_slot0)
+                        })
+                        && !insns[k + 1..].iter().any(|nx| {
+                            matches!(
+                                nx.op.name,
+                                "RefCpyV" | "STOREOBJ" | "ClrVPtr" | "FreeNullV8"
+                            ) && w(nx, 0) == dst_slot0
+                        });
                     let param_into_later_use = ctx.param_src_ok(&top.s) && {
                         let mut consumed = false;
                         for j in (k + 1)..insns.len() {
@@ -4324,6 +5053,7 @@ fn block_stmts_in(
                             || getter_into_null_cmp
                             || param_into_cmp
                             || param_into_later_use
+                            || const_src_into_cmp
                             || getter_into_store_rhs);
                     if ok {
                         flush!();
@@ -4342,7 +5072,7 @@ fn block_stmts_in(
                                     .map(|st| provably_derived(&dt, st, ctx.refs))
                                     .unwrap_or(false) =>
                             {
-                                format!("Cast<{dt}>({})", top.s)
+                                format!("Cast<{}>({})", qualify_class_name(&dt, ctx.refs), top.s)
                             }
                             _ => top.s.clone(),
                         };
@@ -4353,12 +5083,19 @@ fn block_stmts_in(
                         // CONSTSTORE marker so the emitter declares the destination
                         // `const T` — the downcast() exact-type rule, mirrored for the
                         // RefCpyV member-read shape (CharacterAI_Gothic:3002).
-                        if top.nf_const.is_some()
-                            && top.nf_const.as_deref()
-                                == (dst_slot > 0)
-                                    .then(|| ctx.slot_type(dst_slot))
-                                    .flatten()
-                                    .as_deref()
+                        // a const source needs a const destination, or the declaration will
+                        // not hold what was copied into it
+                        // Always const: the copy exists only to be compared, and a const
+                        // destination holds a non-const source just as well as the other way
+                        // round would not.
+                        let const_source = const_src_into_cmp;
+                        if const_source
+                            || (top.nf_const.is_some()
+                                && top.nf_const.as_deref()
+                                    == (dst_slot > 0)
+                                        .then(|| ctx.slot_type(dst_slot))
+                                        .flatten()
+                                        .as_deref())
                         {
                             out.push(format!("{dst} = {CONSTSTORE}{rhs};"));
                             // batch-41d: the dest slot now holds a const object handle; a later
@@ -4436,6 +5173,15 @@ fn block_stmts_in(
                         && !src.s.contains('\u{1}')
                         && src.s != UNRESOLVED
                         && !src.s.starts_with('~');
+                    // A bare `this` stored into another object's member is the back-link an owner
+                    // hands to the thing it just made — `local_4.Owner = this;`. It was bailed for
+                    // caution over const-ness, and the caution cost whole statements: dropping it
+                    // returns an object with no way back, which is a wrong program and not a byte
+                    // difference. The caution is answered by the site itself — this store IS in
+                    // vanilla's bytecode, so the source wrote it and it compiled. Only our own
+                    // recovery of the DESTINATION could still be wrong, and that is a compile
+                    // error, not a silent one.
+                    let this_backlink = src.s == "this";
                     let src_ok = !src.s.is_empty()
                         && src.s != UNRESOLVED
                         && !src.s.contains('\u{2}')
@@ -4444,6 +5190,7 @@ fn block_stmts_in(
                             || src.s == "nullptr"
                             || member_src
                             || src_is_opindex_elem
+                            || this_backlink
                             || ctx.param_src_ok(&src.s));
                     // batch-41d (CLASS 1b): the source slot holds a CONST object handle (a
                     // const-returning call result / const member read). Storing it into a
@@ -4471,7 +5218,7 @@ fn block_stmts_in(
                                     .next()
                                     .unwrap_or(fty)
                                     .trim_start_matches("const ");
-                                format!("Cast<{head}>({})", src.s)
+                                format!("Cast<{}>({})", qualify_class_name(head, ctx.refs), src.s)
                             }
                             _ => src.s.clone(),
                         };
@@ -4584,7 +5331,10 @@ fn block_stmts_in(
                     let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
                     match resolve_cast_typeid(ctx.refs, tid) {
                         Some(ty) if ty.starts_with('U') || ty.starts_with('A') => {
-                            stack.push(Arg::typed(format!("Cast<{ty}>({})", src.s), Some(ty)));
+                            stack.push(Arg::typed(
+                                format!("Cast<{}>({})", qualify_class_name(&ty, ctx.refs), src.s),
+                                Some(ty),
+                            ));
                         }
                         _ => stack.push(src),
                     }
@@ -4675,8 +5425,96 @@ fn block_stmts_in(
         out.push(format!("{s};"));
     }
     out.retain(|s| !s.contains(UNRESOLVED)); // drop statements with an unresolved value
-                                             // no binary comparison but a bool value was tested -> use it as the branch condition so
-                                             // the jump renders `if (cond != 0)` instead of `if (? != ?)`.
+                                             // A temp that only ever held a DEFAULT-CONSTRUCTED value: `PSF t; CALLSYS $beh0(0-param)`
+                                             // builds it, and the construct behaviour has no source form of its own, so nothing declares
+                                             // `t` and every read of it dangles (`this.m_CameraBehaviour = local_40;` with no local_40).
+                                             // The Idiom-S arm above already recovers the `$beh0` copy-assign shape and consumes its
+                                             // record; what is left here is the RUNTIME `opAssign` shape and plain argument reads. Write
+                                             // the value where it is read — but only for a temp nothing else ever assigns, so the
+                                             // substituted `T()` is provably the only value it can hold.
+                                             // A `b<Upper>` field written from an INT LITERAL: UHT reserves that prefix for bool
+                                             // UPROPERTYs, whose generated accessor is `bool&`, so `bRunning = 1;` is "Can't implicitly
+                                             // convert from 'int' to 'bool&'". The store reaches here through several different arms
+                                             // (member write, property setter, chained lvalue), so the form is corrected once, on the
+                                             // finished statement. Only a literal — a bare slot may itself be declared bool, where
+                                             // `local != 0` would be the illegal form.
+    for statement in out.iter_mut() {
+        let Some((target, rhs)) = statement
+            .strip_suffix(';')
+            .and_then(|line| line.rsplit_once(" = "))
+        else {
+            continue;
+        };
+        if !is_ue_bool_field(target) {
+            continue;
+        }
+        // An int LITERAL always needs the form. A bare slot needs it unless the slot is itself
+        // declared `bool`, where `local != 0` would be the illegal one.
+        let int_slot = rhs
+            .strip_prefix("local_")
+            .and_then(|rest| rest.parse::<i32>().ok())
+            .is_some_and(|slot| ctx.slot_type(slot).as_deref() != Some("bool"));
+        if is_int_literal(rhs) || int_slot {
+            *statement = format!("{target} = ({rhs} != 0);");
+        }
+    }
+    if std::env::var_os("GORE_AS_DEFAULTS_DEBUG").is_some() && !default_ctor_temp.is_empty() {
+        eprintln!("[ctor-temp] {default_ctor_temp:?}");
+    }
+    for (slot, ty) in &default_ctor_temp {
+        // Any write to the slot — the whole value, or a member or element of it — is a write the
+        // substituted `T()` would throw away. Reading only whole-value assignments let a
+        // configured query be passed as a freshly default-constructed one (measured: the
+        // argument arrived empty where vanilla had filled it in).
+        let assigned = out.iter().any(|s| {
+            s.trim_start()
+                .strip_prefix(slot.as_str())
+                .is_some_and(|rest| {
+                    rest.starts_with(" = ")
+                        || rest.split_once(" = ").is_some_and(|(path, _)| {
+                            path.starts_with(['.', '['])
+                                && !path.contains('(')
+                                && !path.contains(' ')
+                        })
+                })
+        });
+        // A bare template head (`TArray`) is not a constructible type name, and a temporary
+        // cannot be passed by non-const reference or receive a non-const method call — so the
+        // substitution is limited to the one place it is provably a plain value: the right-hand
+        // side of a whole-value assignment.
+        if assigned || (ty.starts_with('T') && !ty.contains('<')) {
+            continue;
+        }
+        let value = format!("{ty}()");
+        // A slot the body mentions exactly once was never read back, which is what an `&out`
+        // parameter's caller does.
+        let sole_mention = out.iter().filter(|s| count_word(s, slot) > 0).count() == 1;
+        for statement in out.iter_mut() {
+            if let Some(lhs) = statement
+                .strip_suffix(&format!(" = {slot};"))
+                .filter(|lhs| count_word(lhs, slot) == 0)
+            {
+                *statement = format!("{lhs} = {value};");
+                continue;
+            }
+            // A container's own mutator takes its element by CONST reference, so a temporary is
+            // legal there too — `PursuedCrimes.Add(FCrimeEntry());` is what the source wrote.
+            // Proven per site from the receiver's own field type, never from the method name.
+            if let Some(rewritten) = temporary_argument_call(
+                statement,
+                slot,
+                ty,
+                &value,
+                ctx.refs,
+                sole_mention,
+                &resolved_params,
+            ) {
+                *statement = rewritten;
+            }
+        }
+    }
+    // no binary comparison but a bool value was tested -> use it as the branch condition so
+    // the jump renders `if (cond != 0)` instead of `if (? != ?)`.
     if cmp.is_none() {
         if let Some((c, is_bool)) = cond.take() {
             if !c.is_empty() && c != UNRESOLVED {
@@ -4740,20 +5578,49 @@ fn branch_cond(cmp: &Option<Cmp>, jump: &str) -> String {
 }
 
 fn negate(cond: &str) -> String {
-    // cheap structural negation for the common relational forms
-    for (op, neg) in [
-        (" <= ", " > "),
-        (" >= ", " < "),
-        (" < ", " >= "),
-        (" > ", " <= "),
-        (" == ", " != "),
-        (" != ", " == "),
-    ] {
-        if let Some(p) = cond.find(op) {
-            return format!("{}{}{}", &cond[..p], neg, &cond[p + op.len()..]);
+    // `!` is a VALUE operator in this language: it cannot fold into the jump, so every one that
+    // survives costs the compiler a spill — `CpyRtoV4; NOT; CpyVtoR1` in front of the branch that
+    // would otherwise have tested the result where it stood. Turning the comparison around is what
+    // vanilla wrote, and a `!(X)` that is already there comes off instead of doubling.
+    if let Some(inner) = cond.strip_prefix("!(").and_then(|c| c.strip_suffix(')')) {
+        if wraps_the_whole_condition(inner) {
+            return inner.to_owned();
+        }
+    }
+    // Not inside a short circuit: turning one relation of `a == b && c` negates only that half,
+    // and De Morgan would change which operand is evaluated first.
+    if !cond.contains("&&") && !cond.contains("||") {
+        for (op, neg) in [
+            (" <= ", " > "),
+            (" >= ", " < "),
+            (" < ", " >= "),
+            (" > ", " <= "),
+            (" == ", " != "),
+            (" != ", " == "),
+        ] {
+            if let Some(p) = cond.find(op) {
+                return format!("{}{}{}", &cond[..p], neg, &cond[p + op.len()..]);
+            }
         }
     }
     format!("!({cond})")
+}
+
+/// True when stripping one leading `!(` and its trailing `)` left a balanced expression — so the
+/// pair really wrapped the whole condition and did not close something inside it.
+fn wraps_the_whole_condition(inner: &str) -> bool {
+    let mut depth = 0i32;
+    for b in inner.bytes() {
+        match b {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            _ => {}
+        }
+        if depth < 0 {
+            return false;
+        }
+    }
+    depth == 0
 }
 
 struct Structurer<'a> {
@@ -5446,13 +6313,17 @@ impl Structurer<'_> {
                 let _ = writeln!(out, "{ind}}}");
                 next = test_idx + 1;
             } else if let Some(latch) = self.loop_latch(i, stop) {
-                let lcmp = block_stmts(
+                let (lstmts, lcmp) = block_stmts(
                     self.ctx,
                     self.g.blocks[latch].instr_lo,
                     self.g.blocks[latch].instr_hi,
-                )
-                .1;
+                );
                 let cond = branch_cond(&lcmp, self.jump_op(latch));
+                // The latch's own statements are part of the test, re-run on every iteration —
+                // see `fold_loop_header_store`. Dropped, they leave `while (local_1)` over a slot
+                // nothing fills.
+                loop_diag("latch", lstmts.as_slice(), &cond);
+                let cond = fold_loop_header_store(lstmts.as_slice(), &cond).unwrap_or(cond);
                 let _ = writeln!(out, "{ind}while ({cond})");
                 let _ = writeln!(out, "{ind}{{");
                 // batch-36 (Stage A): the loop body is blocks [i, latch) — block `i` (the loop
@@ -5518,28 +6389,57 @@ impl Structurer<'_> {
                 let taken = b.succs.first().copied();
                 let then_idx = fall.and_then(|o| self.idx_of.get(&o).copied());
                 let else_idx = taken.and_then(|o| self.idx_of.get(&o).copied());
-                let taken_cond = branch_cond(&cmp, jop);
-                let cond = cmp
-                    .as_ref()
-                    .and_then(|c| c.expr.as_deref())
-                    .and_then(|expr| {
-                        let slot = expr
-                            .strip_prefix("local_")
-                            .and_then(|digits| digits.parse::<i32>().ok());
-                        (matches!(jop, "JZ" | "JLowZ")
-                            && slot.and_then(|slot| self.ctx.slot_type(slot)).as_deref()
-                                == Some("bool"))
-                        .then(|| expr.to_string())
-                    })
-                    .unwrap_or_else(|| negate(&taken_cond));
+                let cond = self.fall_condition(&cmp, jop);
+                if let Some((straight, ret_idx)) = self.bool_return_diamond(then_idx, else_idx) {
+                    // A guarded return and a bare one after it — NOT an `else` branch, which would
+                    // make the second return jump to the shared exit instead of falling into it
+                    // (measured: one extra `JMP` per function).
+                    let _ = writeln!(out, "{ind}if ({cond})");
+                    let _ = writeln!(out, "{ind}{{");
+                    let _ = writeln!(out, "{ind}    return {straight};");
+                    let _ = writeln!(out, "{ind}}}");
+                    let _ = writeln!(out, "{ind}return {};", !straight);
+                    i = (ret_idx + 1).max(i + 1);
+                    continue;
+                }
                 let then_end = else_idx.unwrap_or(stop).min(stop).max(i + 1);
+                // A then-arm whose LAST block jumps unconditionally BACK to at-or-before this
+                // test is the latch of a loop the detectors could not take: they ask for a
+                // single-block header, and a short-circuited condition is computed across
+                // several. The latch has no rendering of its own, so the loop vanishes silently.
+                // Mark it instead, and let the emitter turn the pair into a `while` once it has
+                // folded the condition into one expression -- where it cannot, the mark is
+                // dropped and this stays the `if` it is today.
+                let latch_back = (then_end > i + 1
+                    && self.is_backward_jump(then_end - 1)
+                    && self.g.blocks[then_end - 1]
+                        .succs
+                        .first()
+                        .is_some_and(|&s| s <= b.start_dw))
+                .then_some(then_end - 1);
+                // The latch block is NOT excluded: its jump is only its terminator, and the
+                // statements before it are the body's last ones.
+                let then_end_body = then_end;
                 let _ = writeln!(out, "{ind}if ({cond})");
                 let _ = writeln!(out, "{ind}{{");
+                let then_body_at = out.len();
                 if let Some(t) = then_idx {
-                    if t > i && t <= then_end {
-                        self.emit_range(t, then_end, depth + 1, out);
+                    if t > i && t <= then_end_body {
+                        self.emit_range(t, then_end_body, depth + 1, out);
                     }
                 }
+                if latch_back.is_some() {
+                    let _ = writeln!(out, "{ind}    {LOOP_BACK_EDGE}");
+                }
+                // Whether the arm we just WROTE ends in a return. The bytecode saying the branch
+                // returns is not enough: a return this renderer cannot express — a void one, a
+                // handle one, an RVO one — leaves the arm empty, and dropping the `else` would
+                // then let what follows run on the path that was supposed to have left.
+                let then_arm_returns = out[then_body_at..]
+                    .lines()
+                    .rev()
+                    .find(|line| !line.trim().is_empty())
+                    .is_some_and(|line| line.trim_start().starts_with("return"));
                 let _ = writeln!(out, "{ind}}}");
                 next = then_end;
                 if let Some(ei) = else_idx {
@@ -5556,20 +6456,72 @@ impl Structurer<'_> {
                                 t == ls.break_off || t == ls.continue_off || self.is_bare_ret_off(t)
                             })
                     });
-                    if ei >= then_end && ei > 0 && self.jump_op(ei - 1) == "JMP" && !then_exits_loop
-                    {
-                        let after_idx = self.g.blocks[ei - 1]
+                    // Outside a loop the same fact holds on its own: a then-arm whose
+                    // terminator jumps to the function's bare `RET` RETURNS, so there is no join
+                    // and there is no `else` — the rest of the function is sequential. Writing
+                    // one costs a `JMP` to a join vanilla never had (measured: 301 functions
+                    // carry exactly that extra jump).
+                    let then_returns = ei > 0
+                        && self.jump_op(ei - 1) == "JMP"
+                        && self.g.blocks[ei - 1]
                             .succs
                             .first()
-                            .and_then(|o| self.idx_of.get(o).copied())
-                            .unwrap_or(stop)
-                            .min(stop);
+                            .is_some_and(|&t| self.is_bare_ret_off(t));
+                    // A test INSIDE the then-arm that fails to the same place this one does makes
+                    // that place a shared TAIL, not an else arm: the source nested two `if`s and
+                    // wrote the tail once behind them. Rendered as an `else`, the middle path — the
+                    // outer test true, the inner false — runs nothing at all, and rendered as
+                    // `A && B` it costs the carrier the compiler builds for a real `&&` (which
+                    // vanilla always has where the source wrote one). Let it fall through.
+                    let shares_the_tail = taken.is_some_and(|t| {
+                        (then_idx.unwrap_or(i + 1)..then_end).any(|b| {
+                            b < self.g.blocks.len()
+                                && is_cond_op(self.jump_op(b))
+                                && self.g.blocks[b].succs.first().copied() == Some(t)
+                        })
+                    });
+                    let after_idx = self.g.blocks[ei - 1]
+                        .succs
+                        .first()
+                        .and_then(|o| self.idx_of.get(o).copied())
+                        .unwrap_or(stop)
+                        .min(stop);
+                    // ... unless vanilla WROTE the `else` after all. A `return` that is the last
+                    // statement of the function's outermost block compiles to nothing but the
+                    // `RET`; the same `return` one block deep compiles to a jump to the epilogue.
+                    // So an else region whose last block `JMP`s to the bare `RET` row is one
+                    // vanilla nested — flattening it drops that jump (measured: 94 functions,
+                    // nearly all generated dialog `Act_Implementation`).
+                    let else_tail_returns_from_a_block = after_idx > ei
+                        && self.jump_op(after_idx - 1) == "JMP"
+                        && self.g.blocks[after_idx - 1]
+                            .succs
+                            .first()
+                            .is_some_and(|&t| self.is_bare_ret_off(t));
+                    if ei >= then_end
+                        && ei > 0
+                        && self.jump_op(ei - 1) == "JMP"
+                        && !then_exits_loop
+                        && !shares_the_tail
+                        && !(then_returns && then_arm_returns && !else_tail_returns_from_a_block)
+                    {
                         if after_idx > ei {
                             let _ = writeln!(out, "{ind}else");
                             let _ = writeln!(out, "{ind}{{");
                             self.emit_range(ei, after_idx, depth + 1, out);
                             let _ = writeln!(out, "{ind}}}");
                             next = after_idx;
+                            // Both arms left through a `return`, so the row they jump to is the
+                            // function's epilogue and not a statement of its own: rendering it
+                            // would put a `return;` after the `else` that no path can reach, and
+                            // this compiler treats unreachable code as an error.
+                            if then_returns
+                                && then_arm_returns
+                                && after_idx + 1 >= stop
+                                && self.is_bare_ret_off(self.g.blocks[after_idx].start_dw)
+                            {
+                                next = stop;
+                            }
                         }
                     }
                 }
@@ -5591,8 +6543,12 @@ impl Structurer<'_> {
             } else {
                 // (linear fallthrough-carry is out of scope — the plain arm's leftover is dropped.)
                 let ret_ref_tail = self.ctx.ret_is_ref() && self.flows_to_bare_ret(i);
-                let (stmts, _, _) =
+                let (mut stmts, _, _) =
                     block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, ret_ref_tail);
+                let plain_return = self.plain_return_exit_stmt(i).map(|exit| {
+                    let exit = fold_return_into_store(&mut stmts, exit);
+                    self.constant_return_exit(i, exit, &stmts)
+                });
                 for s in &stmts {
                     let _ = writeln!(out, "{ind}{s}");
                 }
@@ -5602,8 +6558,10 @@ impl Structurer<'_> {
                 // `loop_exit_stmt` renders a bare `JMP` to the loop break/continue offset (or to a
                 // bare-RET row inside the body) as `break;`/`continue;`/`return ...;`.
                 if let Some(x) = self.region_exit_stmt(i) {
-                    let _ = writeln!(out, "{ind}{x}");
+                    let _ = writeln!(out, "{ind}{}", self.constant_return_exit(i, x, &stmts));
                 } else if let Some(x) = self.loop_exit_stmt(i) {
+                    let _ = writeln!(out, "{ind}{}", self.constant_return_exit(i, x, &stmts));
+                } else if let Some(x) = plain_return {
                     let _ = writeln!(out, "{ind}{x}");
                 }
                 next = i + 1;
@@ -5636,12 +6594,18 @@ impl Structurer<'_> {
                 Some(j) if bi <= j => std::mem::take(&mut carry),
                 _ => Vec::new(),
             };
-            let (stmts, cmp, leftover) =
+            let (mut stmts, cmp, leftover) =
                 block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, false);
+            let plain_return = self.plain_return_exit_stmt(bi).map(|exit| {
+                let exit = fold_return_into_store(&mut stmts, exit);
+                self.constant_return_exit(bi, exit, &stmts)
+            });
             for s in &stmts {
                 let _ = writeln!(out, "{ind}{s}");
             }
             if let Some(x) = self.region_exit_stmt(bi) {
+                let _ = writeln!(out, "{ind}{}", self.constant_return_exit(bi, x, &stmts));
+            } else if let Some(x) = plain_return {
                 let _ = writeln!(out, "{ind}{x}");
             }
             match carry_until {
@@ -5734,6 +6698,181 @@ impl Structurer<'_> {
         }
         let (stmts, _) = block_stmts(self.ctx, b.instr_lo, b.instr_hi);
         single_clean_rvo_store(&stmts).is_some()
+    }
+
+    /// The compiler's bool-return normalization. `return <expr>;` out of a bool function does not
+    /// copy the expression straight into the value register: it branches on it and materializes a
+    /// literal 1 or 0 into a slot, copies THAT, and both arms end at one shared bare `RET`.
+    /// Written back arm by arm the returned expression is lost (`local_N = 1;` in one arm and a
+    /// literal `return false;` at the end), so recognize the shape and give the return its
+    /// condition back. `Some((true, ret))`: the THEN arm carries the 1, so the source is
+    /// `return <cond>;`; `Some((false, ret))`: the arms are the other way round.
+    fn bool_return_diamond(
+        &self,
+        then_idx: Option<usize>,
+        else_idx: Option<usize>,
+    ) -> Option<(bool, usize)> {
+        if self
+            .ctx
+            .ret_ty
+            .map(|t| t.base_name(self.ctx.refs))
+            .as_deref()
+            != Some("bool")
+        {
+            return None;
+        }
+        let (then_slot, then_val, ret_off) = self.bool_return_arm(then_idx?, true)?;
+        let (else_slot, else_val, else_ret) = self.bool_return_arm(else_idx?, false)?;
+        if then_slot != else_slot || ret_off != else_ret || then_val == else_val {
+            return None;
+        }
+        Some((then_val == 1, *self.idx_of.get(&ret_off)?))
+    }
+
+    /// One arm of [`Self::bool_return_diamond`]: `SetV1 wN, K` + `CpyVtoR{1,4} wN`, then either a
+    /// `JMP` into the shared bare `RET` row (the arm that has to jump over the other) or a plain
+    /// fall-through into it. Returns the slot, the literal and the `RET` row's offset.
+    fn bool_return_arm(&self, bi: usize, jumps: bool) -> Option<(u16, u32, usize)> {
+        let b = &self.g.blocks[bi];
+        if b.instr_hi - b.instr_lo != if jumps { 3 } else { 2 } {
+            return None;
+        }
+        let set = &self.ctx.instrs[b.instr_lo];
+        let copy = &self.ctx.instrs[b.instr_lo + 1];
+        if set.op.name != "SetV1" || !matches!(copy.op.name, "CpyVtoR1" | "CpyVtoR4") {
+            return None;
+        }
+        let slot = set.words.first().copied()?;
+        if copy.words.first().copied()? != slot {
+            return None;
+        }
+        let value = set.dwords.first().copied()?;
+        if value > 1 || (jumps && self.ctx.instrs[b.instr_hi - 1].op.name != "JMP") {
+            return None;
+        }
+        let target = *b.succs.first()?;
+        self.is_bare_ret_off(target)
+            .then_some((slot, value, target))
+    }
+
+    /// A block that copies its value into the value register and then jumps to the function's
+    /// single bare `RET` row IS a `return <expr>;`. Rendered without it the copy is dropped, the
+    /// store before it is left behind and the shared `RET` returns whatever the OTHER path put
+    /// in that slot. This is the plain-block counterpart of [`Self::region_exit_stmt`] and
+    /// [`Self::loop_exit_stmt`], and is consulted only after both of them.
+    fn plain_return_exit_stmt(&self, bi: usize) -> Option<String> {
+        if self.ctx.ret_via_rvo() || self.ctx.ret_is_ref() {
+            return None;
+        }
+        let b = &self.g.blocks[bi];
+        if b.instr_hi == b.instr_lo || self.ctx.instrs[b.instr_hi - 1].op.name != "JMP" {
+            return None;
+        }
+        // A VOID function's early return carries no value: the whole of it is the jump to the
+        // shared exit row. Rendered as nothing, the branch it sits in looks like it falls
+        // through — which is not a byte difference but a WRONG program, and it is what made
+        // `if (x == nullptr) { … }` run the null-dereferencing tail behind it.
+        if self.ctx.ret_ty.map(|t| t.token) == Some(0x52) {
+            return b
+                .succs
+                .first()
+                .is_some_and(|t| self.is_bare_ret_off(*t))
+                .then(|| "return;".to_owned());
+        }
+        if b.instr_hi - b.instr_lo < 2 {
+            return None;
+        }
+        // `LOADOBJ` is how a HANDLE return puts its value in place, exactly as `CpyVtoR*` does
+        // for a scalar — and `scan_back_retval_floor` already reads it. Without it a handle
+        // function's early return rendered as nothing, the same silence the void case had.
+        if !matches!(
+            self.ctx.instrs[b.instr_hi - 2].op.name,
+            "CpyVtoR1" | "CpyVtoR4" | "CpyVtoR8" | "LOADOBJ"
+        ) {
+            return None;
+        }
+        if !b.succs.first().is_some_and(|t| self.is_bare_ret_off(*t)) {
+            return None;
+        }
+        Some(self.ctx.return_stmt(scan_back_retval_floor(
+            self.ctx,
+            b.instr_hi - 1,
+            b.instr_lo,
+        )))
+    }
+
+    /// The condition under which the test FALLS THROUGH — the one an `if` is written with. A
+    /// bool slot tested for zero reads as itself; everything else is the taken condition negated.
+    fn fall_condition(&self, cmp: &Option<Cmp>, jop: &str) -> String {
+        cmp.as_ref()
+            .and_then(|c| c.expr.as_deref())
+            .and_then(|expr| {
+                let slot = expr
+                    .strip_prefix("local_")
+                    .and_then(|digits| digits.parse::<i32>().ok());
+                (matches!(jop, "JZ" | "JLowZ")
+                    && slot.and_then(|slot| self.ctx.slot_type(slot)).as_deref() == Some("bool"))
+                .then(|| expr.to_string())
+            })
+            .unwrap_or_else(|| negate(&branch_cond(cmp, jop)))
+    }
+
+    /// `return local_N;` where a `SetV1` wrote the slot the instruction before the return read
+    /// it returns THAT CONSTANT. `SetV*` registers a constant rather than rendering a statement,
+    /// so where no store was rendered for the store fold to take, the return kept the slot — and
+    /// the slot still carried the condition just tested. `if (!ok) { return false; }` came back
+    /// as `return <the condition>`, which is `true` there: not a byte difference, a wrong
+    /// program. Only applies when the fold left a bare slot behind.
+    fn constant_return_exit(&self, bi: usize, exit: String, stmts: &[String]) -> String {
+        let Some(name) = exit
+            .strip_prefix("return ")
+            .and_then(|v| v.strip_suffix(';'))
+            .filter(|v| v.starts_with("local_") && !v.contains(['.', '(', ' ', '[']))
+        else {
+            return exit;
+        };
+        if self.ctx.ret_ty.map(|t| t.token) != Some(0x41) {
+            return exit;
+        }
+        let b = &self.g.blocks[bi];
+        if b.instr_hi < b.instr_lo + 3 {
+            return exit;
+        }
+        let read = b.instr_hi - 2;
+        let slot = self.ctx.instrs[read].words.first().copied().map(s16);
+        if slot.map(|s| self.ctx.slot_name(s)).as_deref() != Some(name) {
+            return exit;
+        }
+        // The constant is not always the instruction before the read: a return inside a scope
+        // that owns a temporary has that temporary's destructor between the two. Scan back to the
+        // start of the block over the ops that cannot write this slot, and stop at anything else.
+        let mut wrote = None;
+        for at in (b.instr_lo..read).rev() {
+            let ins = &self.ctx.instrs[at];
+            match ins.op.name {
+                "SetV1" if ins.words.first().copied().map(s16) == slot => {
+                    wrote = Some(ins);
+                    break;
+                }
+                "PSF" | "CALLSYS" | "SUSPEND" => {}
+                "FreeNullV8" if ins.words.first().copied().map(s16) != slot => {}
+                _ => break,
+            }
+        }
+        let Some(prev) = wrote else { return exit };
+        // A rendered store of the SAME constant already carries it; a rendered store of anything
+        // else carries the condition that was tested, which is not what this return returns.
+        let bits = prev.dwords.first().copied().unwrap_or(0);
+        let literal = self.ctx.return_stmt(Some((bits as i32).to_string()));
+        let rendered_constant = literal
+            .strip_prefix("return ")
+            .and_then(|v| v.strip_suffix(';'))
+            .map(|v| format!("{name} = {v};"))
+            .unwrap_or_default();
+        if stmts.iter().any(|s| s.trim() == rendered_constant) {
+            return exit;
+        }
+        literal
     }
 
     /// The block at dword offset `off` is a bare `RET` row (exactly one instruction).
@@ -7591,8 +8730,16 @@ impl Structurer<'_> {
         if self.g.blocks[prev].succs.first().copied() != Some(b.start_dw) {
             return None;
         }
-        let cmp = block_stmts(self.ctx, b.instr_lo, b.instr_hi).1;
+        let (stmts, cmp) = block_stmts(self.ctx, b.instr_lo, b.instr_hi);
         let cond = negate(&branch_cond(&cmp, self.jump_op(i)));
+        // Whatever the header computes IS part of the condition — it is re-evaluated on every
+        // iteration, so it can be neither hoisted in front of the loop nor dropped. Dropped is
+        // what used to happen, and it leaves the test reading a slot nothing ever fills: a
+        // `while (!this.bDone)` came out as `bool local_1 = false; while (local_1)`, a loop that
+        // never runs. Fold the header's single store into the test where its shape allows it;
+        // anything else keeps the old rendering rather than risking a worse one.
+        loop_diag("top-test", stmts.as_slice(), &cond);
+        let cond = fold_loop_header_store(stmts.as_slice(), &cond).unwrap_or(cond);
         Some((taken_idx, cond))
     }
 

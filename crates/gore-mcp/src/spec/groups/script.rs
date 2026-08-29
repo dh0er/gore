@@ -161,15 +161,29 @@ const DECOMPILE_ARGS: &[ArgSpec] = &[
     .with_default("20"),
 ];
 
+/// Class `default` statements carry the values a data class is made of, so they are written by
+/// default. A module destined for `compile-module --op edit` needs them left out: authoring them
+/// makes the compiler regenerate `__InitDefaults`, which that path's remap cannot follow.
+const NO_DEFAULTS: ArgSpec = ArgSpec::new(
+    "no_defaults",
+    Switch("no-defaults"),
+    Bool,
+    "Omit class `default` statements. Needed for a module you intend to edit and splice back \
+     with `compile-module --op edit`, whose remap cannot follow a regenerated `__InitDefaults`; \
+     the defaults are preserved byte-exact for you in that case.",
+    false,
+);
+
 const EMIT_ALL_ARGS: &[ArgSpec] = &[
     CACHE_FILE,
     ArgSpec::new(
         "outdir",
         Positional { order: 1 },
         Path,
-        "Output directory; the ScriptRelativeFilename layout is mirrored below it.",
+            "Output directory; the ScriptRelativeFilename layout is mirrored below it.",
         true,
     ),
+    NO_DEFAULTS,
 ];
 
 const EMIT_ARGS: &[ArgSpec] = &[
@@ -186,6 +200,7 @@ const EMIT_ARGS: &[ArgSpec] = &[
         false,
     )
     .with_default("5"),
+    NO_DEFAULTS,
 ];
 
 const STATIC_NAMES_ARGS: &[ArgSpec] = &[

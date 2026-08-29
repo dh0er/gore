@@ -584,6 +584,57 @@ int QualificationNameProjection()
         source_engine->ShutDownAndRelease();
         return 9;
     }
+
+    constexpr std::int64_t static_name_key = 17;
+    const auto instruction_with_slot = [](const asEBCInstr opcode, const short slot) {
+        asDWORD word = static_cast<asDWORD>(opcode);
+        asBC_SWORDARG0(&word) = slot;
+        return static_cast<std::int32_t>(word);
+    };
+    const auto spilled_static_name = [&](const short set_slot, const short push_slot) {
+        precompiled::precompiled_function function;
+        function.byte_code = {
+            instruction_with_slot(asBC_SetV4, set_slot), 1,
+            instruction_with_slot(asBC_PshV4, push_slot),
+            static_cast<std::int32_t>(asBC_CALLSYS),
+            static_cast<std::int32_t>(static_name_key), 0,
+            static_cast<std::int32_t>(asBC_RET)};
+        return function;
+    };
+    precompiled::cache spilled_projection;
+    precompiled::function_reference static_name_reference;
+    static_name_reference.name.bytes = "__STATIC_NAME";
+    spilled_projection.function_references.emplace_back(
+        static_name_key, std::move(static_name_reference));
+    precompiled::precompiled_module spilled_module;
+    auto projected_defaults = spilled_static_name(7, 7);
+    projected_defaults.parameter_default_args = {
+        precompiled::archive_string{"__STATIC_NAME ( 1 )"},
+        precompiled::archive_string{"__STATIC_NAME(-1)"},
+        precompiled::archive_string{"__STATIC_NAME(1) + 2"}};
+    spilled_module.functions.push_back(std::move(projected_defaults));
+    spilled_module.functions.push_back(spilled_static_name(7, 8));
+    spilled_projection.modules.emplace_back(
+        module_key("SpilledStaticNames"), std::move(spilled_module));
+    const std::unordered_map<std::size_t, std::size_t> spilled_name_map{{1U, 0U}};
+    const auto spilled_rebase = precompiled::detail::rebase_projected_static_names(
+        spilled_projection, spilled_name_map);
+    if (!spilled_rebase.succeeded() ||
+        spilled_projection.modules[0].second.functions[0].byte_code[1] != 0 ||
+        spilled_projection.modules[0].second.functions[1].byte_code[1] != 1 ||
+        spilled_projection.modules[0].second.functions[0]
+                .parameter_default_args[0].bytes != "__STATIC_NAME ( 0 )" ||
+        spilled_projection.modules[0].second.functions[0]
+                .parameter_default_args[1].bytes != "__STATIC_NAME(-1)" ||
+        spilled_projection.modules[0].second.functions[0]
+                .parameter_default_args[2].bytes != "__STATIC_NAME(1) + 2") {
+        std::cerr << "qualification spilled static-name projection failed: "
+                  << spilled_rebase.detail << '\n';
+        qualification_engine->ShutDownAndRelease();
+        target_engine->ShutDownAndRelease();
+        source_engine->ShutDownAndRelease();
+        return 9;
+    }
     qualification_engine->ShutDownAndRelease();
 
     standalone::lexical_preprocess_result invalid_export_source = overlays;

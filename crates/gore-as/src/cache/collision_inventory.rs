@@ -448,6 +448,7 @@ mod tests {
         Func {
             name: name.to_owned(),
             namespace: String::new(),
+            param_defaults: Vec::new(),
             ret: DataType::default(),
             params: Vec::<Param>::new(),
             bytecode: Vec::new(),
@@ -464,6 +465,7 @@ mod tests {
             functions: vec![function(function_name)],
             classes: vec![Class {
                 name: format!("U{name}"),
+                namespace: String::new(),
                 super_class: Some("UBaseType".to_owned()),
                 fields: vec![Field {
                     name: "MemberValue".to_owned(),
@@ -481,8 +483,10 @@ mod tests {
             }],
             globals: vec![Global {
                 name: "GlobalValue".to_owned(),
+                namespace: String::new(),
                 ty: DataType::default(),
                 value: None,
+                init: None,
             }],
         }
     }

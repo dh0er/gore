@@ -9,12 +9,74 @@
 //! - global-ptr(QW) -> GlobalReferences[ptr].Name
 //! - member         -> PropertyReferences[(typeId<<1)|(offset<<33)|1].Name
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::header::CacheHeader;
 use super::types::DataType;
 use super::walk_modules::module_region_end;
 use super::wire::{Cursor, WireError};
+
+/// Drop every space from a tokenized source snippet so it can be compared against a packed
+/// render. `FGameplayTag :: Empty` and `FGameplayTag::Empty` are the same default; a string
+/// literal is left alone, since spaces inside it are content.
+/// Drop namespace qualifiers from every identifier in a rendered type
+/// (`TSubclassOf<G1R::AIGroup::UAIGroup_StateEvent>` -> `TSubclassOf<UAIGroup_StateEvent>`).
+/// A function's const-return verdict is per NAME AND per const qualifier: a class may declare
+/// both `T f()` and `const T f() const`, and those two rows are not in disagreement.
+/// `name/arity/const` — the shape `set_class_methods` stores.
+fn is_const_key(key: &str, method: &str) -> bool {
+    key.strip_prefix(method)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .is_some_and(|rest| rest.ends_with("/const"))
+}
+
+pub(crate) fn const_return_key(name: &str, is_const_method: bool) -> String {
+    format!("{name}/{}", if is_const_method { "const" } else { "" })
+}
+
+pub(crate) fn strip_namespaces(ty: &str) -> String {
+    let mut out = String::with_capacity(ty.len());
+    let mut token = String::new();
+    for ch in ty.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == ':' {
+            token.push(ch);
+            continue;
+        }
+        out.push_str(token.rsplit("::").next().unwrap_or(&token));
+        token.clear();
+        out.push(ch);
+    }
+    out.push_str(token.rsplit("::").next().unwrap_or(&token));
+    out
+}
+
+pub(crate) fn pack_tokens(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    for ch in value.chars() {
+        if in_string {
+            out.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => {
+                in_string = true;
+                out.push(ch);
+            }
+            c if c.is_whitespace() => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
 
 /// Complete serialized identity of one `TypeReferences` entry.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -29,6 +91,28 @@ pub struct TypeIdentity {
 pub struct RefResolver {
     type_by_ptr: HashMap<i64, String>,
     type_identity_by_ptr: HashMap<i64, TypeIdentity>,
+    /// Bare type name -> its declaring namespace, only while every row with that name agrees.
+    /// A name that appears in two namespaces cannot be qualified from the name alone, so it is
+    /// removed rather than guessed.
+    type_ns_by_name: HashMap<String, Option<String>>,
+    /// Enum name -> its entries, in declaration order. The cache carries the enumerator NAMES for
+    /// every script enum, and a constant written as its name is not the same expression as one
+    /// built with a conversion: the compiler stores a named constant where the destination is,
+    /// and builds a converted one before it goes looking.
+    enum_entries: HashMap<String, Vec<(String, i32)>>,
+    /// Class -> its methods that are NOT declared const (injected from the parsed modules).
+    non_const_methods: HashMap<String, HashSet<String>>,
+    /// Class -> the `name/arity` keys it declares ITSELF (not inherited). An override calling
+    /// the method it overrides was written `Super::`, and rendering it as `this.` would recurse.
+    class_methods: HashMap<String, HashSet<String>>,
+    /// Return type by function NAME, for the names every declaration agrees on. A name two
+    /// declarations disagree about carries no witness and is absent (see `names_returning`).
+    func_ret_names: HashMap<String, String>,
+    /// Method names the cache records a CONST overload for (see `names_a_const_method`).
+    const_method_names: HashSet<String>,
+    /// `(owner, function)` -> the declared default argument of each parameter, normalized.
+    /// An empty entry means that parameter has none. The owner is `""` for a free function.
+    param_defaults: HashMap<(String, String), Vec<String>>,
     func_by_ptr: HashMap<i64, String>,
     global_by_ptr: HashMap<i64, String>,
     prop_by_key: HashMap<i64, String>,
@@ -58,6 +142,37 @@ pub struct RefResolver {
     class_fields: HashMap<String, HashMap<String, String>>,
     /// FunctionReferences parameter DataTypes (for arg-type-driven casts at call sites).
     func_params: HashMap<i64, Vec<DataType>>,
+    /// Function names the cache records with a callable no-argument form — either a row with no
+    /// parameters at all, or one whose every parameter carries a default. A rendered `X()` whose
+    /// name is known but has no such form is a call that LOST its arguments.
+    zero_arg_names: HashSet<String>,
+    /// Every function name the cache records, so an unknown name can be told from a known one.
+    known_func_names: HashSet<String>,
+    /// `name/const` keys whose const return no caller can hold (see `unusable_const_returns`).
+    unusable_const_return_names: HashSet<String>,
+    /// Function pointers the cache records as CONST methods.
+    const_method_ptrs: HashSet<i64>,
+    /// Function names whose recorded rows DISAGREE about a const return. Re-emitting the
+    /// qualifier for those breaks the language's "must have the same return type as in the base
+    /// class" rule, so they keep the stripped form.
+    inconsistent_const_return_names: HashSet<String>,
+    /// Function name -> declared arity -> per-position "this parameter accepts a temporary" (by
+    /// value, or by const reference). Rows are kept per arity because a name can carry unrelated
+    /// overloads, and a call renders without the arguments that only restate a default, so the
+    /// lookup consults every declared arity from the rendered one upwards.
+    temporary_arg_positions: HashMap<String, HashMap<usize, Vec<bool>>>,
+    /// The same, for CONSTRUCTORS, keyed by the type they build. A constructor is recorded under
+    /// the behaviour name `$beh0`, not under the type's own name, so a call written as
+    /// `FThing(a, b)` finds nothing in the map above — and "nothing" is refused, not unknown.
+    ctor_arg_positions: HashMap<String, HashMap<usize, Vec<bool>>>,
+    /// `name/type` keys for one-parameter functions whose parameter accepts a TEMPORARY — by
+    /// value, or by const reference. A name is recorded only when EVERY one-parameter row of it
+    /// taking that type accepts one, so a single non-const-reference overload disqualifies it.
+    temporary_arg_methods: HashSet<String>,
+    /// `Type<Sub>::name/arity` keys the cache's own function table records, namespaces stripped.
+    /// Whether a value type has a default constructor, a copy constructor or an `opAssign` is
+    /// what decides which SHAPE a local of it has to be written in.
+    type_methods: HashSet<String>,
     /// FunctionReferences return DataType.
     func_ret: HashMap<i64, DataType>,
     /// FunctionReferences owning class name (from the ObjectType ptr) — disambiguates native
@@ -121,6 +236,16 @@ impl RefResolver {
             }
             r.type_names.insert(name.clone());
             r.type_by_ptr.insert(key, name.clone());
+            let declared = (!namespace.is_empty()).then(|| namespace.clone());
+            match r.type_ns_by_name.get(&name) {
+                Some(known) if *known != declared => {
+                    r.type_ns_by_name.insert(name.clone(), None);
+                }
+                Some(_) => {}
+                None => {
+                    r.type_ns_by_name.insert(name.clone(), declared);
+                }
+            }
             r.type_identity_by_ptr.insert(
                 key,
                 TypeIdentity {
@@ -139,6 +264,12 @@ impl RefResolver {
             r.typeid_to_ptr.insert(id, ptr);
         }
         // T3 FunctionReferences: int64 key + (Name, Module, Namespace, 3 bool, int64, params, ret)
+        // The owning-type keys are composed after the parse: composing one needs the finished
+        // type tables, which are still borrowed mutably here.
+        let mut owned_methods: Vec<(i64, String, usize)> = Vec::new();
+        let mut one_arg_params: Vec<(String, DataType, bool)> = Vec::new();
+        let mut ctor_params: Vec<(i64, Vec<bool>)> = Vec::new();
+        let mut const_returns: HashMap<String, bool> = HashMap::new();
         let function_reference_count = c.read_count("FunctionReferences")?;
         c.ensure_minimum_remaining(function_reference_count, 80, "FunctionReferences")?;
         for _ in 0..function_reference_count {
@@ -146,7 +277,7 @@ impl RefResolver {
             let name = c.read_sia()?;
             let module = c.read_sia()?; // Module (declaring module name, batch-25f)
             let ns = c.read_sia()?; // Namespace
-            c.skip(4)?; // bIsConst
+            let is_const_method = c.read_bool4()?; // bIsConst
             c.skip(4)?; // bIsImportedDecl
             let is_method = c.read_bool4()?;
             let objtype = c.read_i64()?; // ObjectType ptr (owning class)
@@ -163,6 +294,74 @@ impl RefResolver {
             }
             // Always record params — even an empty list — so the call-site arg-count check
             // can stub a zero-param method that was decompiled with phantom args.
+            r.known_func_names.insert(name.clone());
+            if params.is_empty() {
+                r.zero_arg_names.insert(name.clone());
+            }
+            if is_method && objtype != 0 {
+                owned_methods.push((objtype, name.clone(), params.len()));
+            }
+            // Keyed WITH the method's own const qualifier: `T f()` and `const T f() const` are
+            // an accessor pair, not a disagreement, and collapsing them stripped the qualifier
+            // from both halves.
+            let returns_const = ret.is_object_const || ret.is_read_only;
+            let const_key = const_return_key(&name, is_const_method);
+            match const_returns.get(&const_key) {
+                Some(seen) if *seen != returns_const => {
+                    r.inconsistent_const_return_names.insert(const_key);
+                }
+                None => {
+                    const_returns.insert(const_key, returns_const);
+                }
+                _ => {}
+            }
+            {
+                // Return type by name, for a caller that has been rendered to text and has the
+                // name and nothing else. Two declarations that disagree leave the name blank
+                // rather than guessing which one a call site meant.
+                let returned = ret.base_name(&r);
+                match r.func_ret_names.get(&name) {
+                    Some(seen) if *seen != returned => {
+                        r.func_ret_names.insert(name.clone(), String::new());
+                    }
+                    Some(_) => {}
+                    None => {
+                        r.func_ret_names.insert(name.clone(), returned);
+                    }
+                }
+            }
+            if is_const_method {
+                r.const_method_ptrs.insert(key);
+                // By NAME as well: a caller rendered as text has the name and nothing else, and
+                // a const call's result may not be thrown away.
+                r.const_method_names.insert(name.clone());
+            }
+            {
+                let accepts: Vec<bool> = params
+                    .iter()
+                    .map(|p| !p.is_reference || p.is_object_const || p.is_read_only)
+                    .collect();
+                if name == "$beh0" && objtype != 0 {
+                    ctor_params.push((objtype, accepts.clone()));
+                }
+                let by_arity = r.temporary_arg_positions.entry(name.clone()).or_default();
+                match by_arity.get_mut(&accepts.len()) {
+                    Some(seen) => {
+                        for (slot, accepted) in seen.iter_mut().zip(&accepts) {
+                            *slot &= *accepted;
+                        }
+                    }
+                    None => {
+                        by_arity.insert(accepts.len(), accepts);
+                    }
+                }
+            }
+            if let [only] = params.as_slice() {
+                // `!is_reference` is a by-value parameter; a reference one has to be const.
+                let accepts_temporary =
+                    !only.is_reference || only.is_object_const || only.is_read_only;
+                one_arg_params.push((name.clone(), only.clone(), accepts_temporary));
+            }
             r.func_params.insert(key, params);
             r.func_ret.insert(key, ret);
             if let Some(cls) = r.type_by_ptr.get(&objtype) {
@@ -230,6 +429,42 @@ impl RefResolver {
             r.prop_by_key.insert(key, name);
             r.prop_type_id.insert(key, old_type_id);
         }
+        let mut one_arg_verdict: HashMap<String, bool> = HashMap::new();
+        for (name, param, accepts_temporary) in one_arg_params {
+            let key = format!("{name}/{}", strip_namespaces(&param.base_name(&r)));
+            let entry = one_arg_verdict.entry(key).or_insert(true);
+            *entry &= accepts_temporary;
+        }
+        r.temporary_arg_methods = one_arg_verdict
+            .into_iter()
+            .filter_map(|(key, accepts)| accepts.then_some(key))
+            .collect();
+        for (objtype, accepts) in ctor_params {
+            let Some(owner) = r.composed_type_name(objtype) else {
+                continue;
+            };
+            let by_arity = r
+                .ctor_arg_positions
+                .entry(strip_namespaces(&owner).to_string())
+                .or_default();
+            match by_arity.get_mut(&accepts.len()) {
+                Some(seen) => {
+                    for (slot, accepted) in seen.iter_mut().zip(&accepts) {
+                        *slot &= *accepted;
+                    }
+                }
+                None => {
+                    by_arity.insert(accepts.len(), accepts);
+                }
+            }
+        }
+        for (objtype, name, arity) in owned_methods {
+            let Some(owner) = r.composed_type_name(objtype) else {
+                continue;
+            };
+            r.type_methods
+                .insert(format!("{}::{name}/{arity}", strip_namespaces(&owner)));
+        }
         let _ = CacheHeader::SIZE; // (header parsed elsewhere)
         Ok(r)
     }
@@ -279,6 +514,22 @@ impl RefResolver {
     /// Full module/namespace/name identity for an exact serialized type pointer.
     pub fn type_identity_by_ptr(&self, ptr: i64) -> Option<&TypeIdentity> {
         self.type_identity_by_ptr.get(&ptr)
+    }
+    /// Declaring AngelScript namespace of a type, empty at global scope. A reference from
+    /// another namespace has to spell it out (`G1R::UStoryG1R`), or the name does not resolve
+    /// and everything built on it degrades to `Unknown`.
+    /// Declaring namespace of a type looked up by BARE name, when unambiguous. Used where only
+    /// the rendered name survived and the pointer is long gone.
+    pub fn type_ns_by_name(&self, name: &str) -> Option<&str> {
+        self.type_ns_by_name
+            .get(name)
+            .and_then(|namespace| namespace.as_deref())
+    }
+    pub fn type_ns_by_ptr(&self, ptr: i64) -> Option<&str> {
+        self.type_identity_by_ptr
+            .get(&ptr)
+            .map(|identity| identity.namespace.as_str())
+            .filter(|namespace| !namespace.is_empty())
     }
     /// True if `name` is a known type (so a call to it is a constructor, not a method).
     pub fn is_type_name(&self, name: &str) -> bool {
@@ -759,6 +1010,28 @@ impl RefResolver {
             .as_ref()
             .and_then(|n| n.field_type(class, field))
     }
+    /// Declared VALUE type of a field of a NATIVE class or struct, from the loaded
+    /// `Binds.Cache` plain-field scan.
+    ///
+    /// This is the channel that answers for members the script cache structurally cannot type:
+    /// `PropertyReferences` stores only (name, OWNER OldTypeId), and a field declared on a
+    /// NATIVE base (`UItemDefinition::m_Value`, `UWeaponDefinition::m_SuperArmorDamageBase`)
+    /// appears in no script class-fields map, so both script-side channels resolve to `None`
+    /// and the owner name is all `member_type` can offer. Without this the decompiler cannot
+    /// tell a `WRTV4` of `0x0000000a` (int `10`) from one of `0x41200000` (float `10.0f`) and
+    /// drops the store instead of guessing — which silently lost every scalar class default on
+    /// a native base.
+    ///
+    /// Read-only evidence, deliberately ungated: it reports what the installed `Binds.Cache`
+    /// declares for ANY build. Cache MUTATION keeps requiring the sealed, audited witness in
+    /// [`Self::verified_native_default_field_type`]; this accessor must never be substituted
+    /// there. Absent `Binds.Cache`, this returns `None` and callers keep their prior behaviour.
+    pub fn native_field_value_type(&self, class: &str, field: &str) -> Option<&str> {
+        self.native
+            .as_ref()
+            .and_then(|native| native.plain_field_type(class, field))
+    }
+
     /// Native field type admissible as a cache-mutation witness. Unlike the decompiler's
     /// best-effort [`Self::native_field_type`], this succeeds only for a SHA-256-sealed,
     /// independently audited Binds.Cache profile paired with its audited script-cache GUID.
@@ -812,6 +1085,232 @@ impl RefResolver {
     /// `CastSpell(AI, int)` even if the method itself is never called).
     pub fn add_method_names<I: IntoIterator<Item = String>>(&mut self, names: I) {
         self.method_names.extend(names);
+    }
+    /// Install `class -> methods that are NOT declared const` from the parsed modules. A const
+    /// method may not call one of these on `this`, so the emitter needs the set to decide
+    /// whether re-emitting a `const` qualifier keeps the body compiling.
+    /// The enum tables, keyed by bare name. A name two modules disagree about is dropped rather
+    /// than guessed at, the same way the namespace table treats an ambiguous name.
+    pub fn set_enum_entries(&mut self, by_name: HashMap<String, Vec<(String, i32)>>) {
+        self.enum_entries = by_name;
+    }
+
+    /// The enumerator an enum gives a value, where the enum is known and exactly one entry has it.
+    pub fn enumerator_name(&self, ty: &str, value: i32) -> Option<&str> {
+        let entries = self.enum_entries.get(ty)?;
+        let mut hit = entries.iter().filter(|(_, entry)| *entry == value);
+        let (name, _) = hit.next()?;
+        hit.next().is_none().then_some(name.as_str())
+    }
+
+    pub fn set_non_const_methods(&mut self, by_class: HashMap<String, HashSet<String>>) {
+        self.non_const_methods = by_class;
+    }
+    /// Install `class -> its OWN declared `name/arity` keys` from the parsed modules.
+    pub fn set_class_methods(&mut self, by_class: HashMap<String, HashSet<String>>) {
+        self.const_method_names.extend(
+            by_class
+                .values()
+                .flatten()
+                .filter_map(|key| key.strip_suffix("/const"))
+                .filter_map(|key| key.rsplit_once('/').map(|(name, _)| name.to_owned())),
+        );
+        self.class_methods = by_class;
+    }
+
+    /// The return type every declaration of `name` agrees on, if they do agree.
+    pub fn names_returning(&self, name: &str) -> Option<&str> {
+        self.func_ret_names
+            .get(name)
+            .map(String::as_str)
+            .filter(|ty| !ty.is_empty())
+    }
+
+    /// True when the cache records a CONST method by this name. A const call has no side effect
+    /// to keep, so its result may not be thrown away ("Result of expression is unused", which
+    /// this compiler treats as an error).
+    pub fn names_a_const_method(&self, method: &str) -> bool {
+        self.const_method_names.contains(method)
+    }
+    /// True when `class` or an ancestor declares a CONST overload of `method`. A const method
+    /// calling it resolves to that overload, so the call does not make the caller non-const.
+    pub fn has_const_overload(&self, class: &str, method: &str) -> bool {
+        let mut current = Some(class.to_owned());
+        for _ in 0..64 {
+            let Some(name) = current else {
+                break;
+            };
+            if self
+                .class_methods
+                .get(&name)
+                .is_some_and(|methods| methods.iter().any(|key| is_const_key(key, method)))
+            {
+                return true;
+            }
+            current = self.class_super_of(&name).map(str::to_owned);
+        }
+        false
+    }
+
+    /// True when `class` declares `method` with that many parameters itself — an OVERRIDE. A
+    /// same-named method with a different parameter count is an overload, and a call to the
+    /// ancestor's version resolves to the ancestor either way.
+    pub fn class_overrides_method(&self, class: &str, method: &str, arity: usize) -> bool {
+        self.class_methods
+            .get(class)
+            .is_some_and(|methods| methods.contains(&format!("{method}/{arity}")))
+    }
+    /// Install `(owner, function) -> per-parameter default argument text` from the parsed
+    /// modules. Whitespace is normalized on the way in: the cache stores the defaults
+    /// TOKENIZED (`FGameplayTagContainer ( )`), the emitter renders them packed.
+    pub fn set_param_defaults(&mut self, defaults: HashMap<(String, String), Vec<String>>) {
+        self.param_defaults = defaults
+            .into_iter()
+            .map(|(key, values)| {
+                let packed: Vec<String> = values.iter().map(|value| pack_tokens(value)).collect();
+                // A function whose every parameter has a default can be written with no
+                // arguments at all, so it is a legitimate `X()` at a call site.
+                if !packed.is_empty() && packed.iter().all(|value| !value.is_empty()) {
+                    self.zero_arg_names.insert(key.1.clone());
+                }
+                (key, packed)
+            })
+            .collect();
+    }
+
+    /// The owning type's name with its template subtypes (`TSubclassOf<UItemDefinition>`).
+    fn composed_type_name(&self, ptr: i64) -> Option<String> {
+        let base = self.type_by_ptr.get(&ptr)?.clone();
+        match self.type_subtypes(ptr) {
+            Some(subs) if !subs.is_empty() => {
+                let inner: Vec<String> = subs.iter().map(|s| s.base_name(self)).collect();
+                Some(format!("{base}<{}>", inner.join(", ")))
+            }
+            _ => Some(base),
+        }
+    }
+
+    /// Install the names whose const return some caller cannot hold.
+    pub fn set_unusable_const_returns(&mut self, names: HashSet<String>) {
+        self.unusable_const_return_names = names;
+    }
+
+    /// True when the cache's rows for `name` disagree about returning a const value. An override
+    /// family has to declare ONE return type, so a re-emitted qualifier would not compile.
+    pub fn const_return_is_inconsistent(&self, name: &str, is_const_method: bool) -> bool {
+        let key = const_return_key(name, is_const_method);
+        self.inconsistent_const_return_names.contains(&key)
+            || self.unusable_const_return_names.contains(&key)
+    }
+
+    /// True when the cache records this function pointer as a CONST method.
+    pub fn is_const_method_by_ptr(&self, ptr: i64) -> bool {
+        self.const_method_ptrs.contains(&ptr)
+    }
+
+    /// True when the cache records this function id as a CONST method.
+    pub fn is_const_method_by_id(&self, id: i32) -> bool {
+        self.funcid_to_ptr
+            .get(&id)
+            .is_some_and(|ptr| self.const_method_ptrs.contains(ptr))
+    }
+
+    /// True when every declaration of `name` a call with `rendered` arguments could reach takes
+    /// parameter `position` by value or by const reference — the positions where a temporary
+    /// expression is legal. Declarations with fewer parameters than the call renders cannot be
+    /// the callee; ones with more are reachable through default arguments.
+    pub fn arg_position_accepts_temporary(
+        &self,
+        name: &str,
+        rendered: usize,
+        position: usize,
+    ) -> bool {
+        let Some(by_arity) = self
+            .temporary_arg_positions
+            .get(name)
+            .or_else(|| self.ctor_arg_positions.get(name))
+        else {
+            return false;
+        };
+        let mut reachable = by_arity
+            .iter()
+            .filter(|(arity, _)| **arity >= rendered)
+            .peekable();
+        reachable.peek().is_some()
+            && reachable.all(|(_, accepts)| accepts.get(position).copied().unwrap_or(false))
+    }
+
+    /// True when every declaration of `name` a call with `rendered` arguments could reach takes
+    /// parameter `position` by NON-CONST reference, so the callee writes through it. This is not
+    /// the negation of [`Self::arg_position_accepts_temporary`]: a name the cache does not know
+    /// proves nothing either way, and both answers stay `false` for it.
+    pub fn arg_position_is_written_through(
+        &self,
+        name: &str,
+        rendered: usize,
+        position: usize,
+    ) -> bool {
+        let Some(by_arity) = self.temporary_arg_positions.get(name) else {
+            return false;
+        };
+        let mut reachable = by_arity
+            .iter()
+            .filter(|(arity, _)| **arity >= rendered)
+            .peekable();
+        reachable.peek().is_some()
+            && reachable.all(|(_, accepts)| accepts.get(position).copied() == Some(false))
+    }
+
+    /// True when every one-parameter `name` in the cache that takes `ty` takes it by value or by
+    /// const reference — so a TEMPORARY may be written at that call site.
+    pub fn one_arg_call_accepts_temporary(&self, name: &str, ty: &str) -> bool {
+        self.temporary_arg_methods
+            .contains(&format!("{name}/{}", strip_namespaces(ty)))
+    }
+
+    /// True when the cache's own function table records `type::name` with that many parameters.
+    /// Namespaces are ignored on both sides — a rendered type carries them, the table does not.
+    pub fn type_has_method(&self, ty: &str, name: &str, arity: usize) -> bool {
+        self.type_methods
+            .contains(&format!("{}::{name}/{arity}", strip_namespaces(ty)))
+    }
+
+    /// True when a rendered `name()` can be a real call: the cache does not know the name at all
+    /// (nothing to check it against), or it knows a no-argument form of it.
+    pub fn zero_arg_call_is_plausible(&self, name: &str) -> bool {
+        !self.known_func_names.contains(name) || self.zero_arg_names.contains(name)
+    }
+    /// Declared default arguments of `owner::function`, if the cache recorded any. Walks the
+    /// script hierarchy, because a call's target type is often a subclass of the declarer.
+    pub fn param_defaults(&self, owner: &str, function: &str) -> Option<&[String]> {
+        let mut current = Some(owner.to_string());
+        for _ in 0..64 {
+            let name = current?;
+            if let Some(defaults) = self
+                .param_defaults
+                .get(&(name.clone(), function.to_string()))
+            {
+                return Some(defaults.as_slice());
+            }
+            current = self.class_super_of(&name).map(|s| s.to_string());
+        }
+        None
+    }
+    /// True when `method` is a known NON-const method of `class` or of any script ancestor.
+    pub fn calls_non_const_method(&self, class: &str, method: &str) -> bool {
+        let mut current = Some(class.to_string());
+        for _ in 0..64 {
+            let Some(name) = current else { break };
+            if self
+                .non_const_methods
+                .get(&name)
+                .is_some_and(|methods| methods.contains(method))
+            {
+                return true;
+            }
+            current = self.class_super_of(&name).map(|s| s.to_string());
+        }
+        false
     }
     /// batch-25f: install the cross-module free-fn rename map. `by_module` is
     /// `module name -> (original fn name -> renamed name)` — exactly the collision set the
@@ -1018,6 +1517,62 @@ impl RefResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_type_key_ignores_namespaces_on_both_sides() {
+        assert_eq!(
+            strip_namespaces("TSubclassOf<G1R::AIGroup::UAIGroup_StateEvent>"),
+            "TSubclassOf<UAIGroup_StateEvent>"
+        );
+        assert_eq!(strip_namespaces("TMap<A, G1R::B>"), "TMap<A, B>");
+        assert_eq!(strip_namespaces("FVector"), "FVector");
+    }
+
+    #[test]
+    fn a_types_recorded_methods_are_found_through_its_namespaced_spelling() {
+        let mut refs = RefResolver::default();
+        refs.type_methods
+            .insert("TSubclassOf<UAIGroup_StateEvent>::$beh0/0".to_owned());
+        assert!(refs.type_has_method("TSubclassOf<G1R::AIGroup::UAIGroup_StateEvent>", "$beh0", 0));
+        assert!(!refs.type_has_method("TSubclassOf<UAIGroup_StateEvent>", "$beh0", 1));
+    }
+
+    #[test]
+    fn a_const_return_is_kept_unless_the_rows_disagree_or_a_caller_cannot_hold_it() {
+        let mut refs = RefResolver::default();
+        refs.inconsistent_const_return_names
+            .insert(const_return_key("GetRootNode", false));
+        refs.set_unusable_const_returns(HashSet::from([const_return_key("GetSpawnedActor", true)]));
+        assert!(refs.const_return_is_inconsistent("GetRootNode", false));
+        assert!(refs.const_return_is_inconsistent("GetSpawnedActor", true));
+        // The same names under the OTHER qualifier are separate rows: `T f()` next to
+        // `const T f() const` is an accessor pair, not a disagreement.
+        assert!(!refs.const_return_is_inconsistent("GetRootNode", true));
+        assert!(!refs.const_return_is_inconsistent("GetSpawnedActor", false));
+        assert!(!refs.const_return_is_inconsistent("GetSelectedItem", false));
+    }
+
+    #[test]
+    fn a_one_argument_call_accepts_a_temporary_only_when_every_overload_does() {
+        let mut refs = RefResolver::default();
+        refs.temporary_arg_methods
+            .insert("Add/FCrimeSetup".to_owned());
+        assert!(refs.one_arg_call_accepts_temporary("Add", "FCrimeSetup"));
+        assert!(refs.one_arg_call_accepts_temporary("Add", "G1R::Crime::FCrimeSetup"));
+        assert!(!refs.one_arg_call_accepts_temporary("Add", "FOtherSetup"));
+        assert!(!refs.one_arg_call_accepts_temporary("Consume", "FCrimeSetup"));
+    }
+
+    #[test]
+    fn an_unknown_name_may_be_called_with_no_arguments_but_a_known_one_may_not() {
+        let mut refs = RefResolver::default();
+        refs.known_func_names.insert("RequireFalse".to_owned());
+        refs.known_func_names.insert("Num".to_owned());
+        refs.zero_arg_names.insert("Num".to_owned());
+        assert!(!refs.zero_arg_call_is_plausible("RequireFalse"));
+        assert!(refs.zero_arg_call_is_plausible("Num"));
+        assert!(refs.zero_arg_call_is_plausible("SomethingTheCacheNeverRecorded"));
+    }
 
     #[test]
     fn truncated_huge_tail_count_fails_before_resolver_allocation() {
