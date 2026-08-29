@@ -1540,6 +1540,8 @@ fn emit_function_ctor(
     );
     let body =
         fold_returned_temporaries(&body, &declared_locals, refs, &ret, returns_by_reference);
+    // Before the hoist counts which locals exist: a slot whose only write is dead has no name.
+    let body = drop_dead_stores_before_return(&body);
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
     // (a wrong type just becomes a compile error the in-game loop force-stubs, rather than the
     // whole function stubbing on an undeclared identifier).
@@ -11271,6 +11273,34 @@ fn fold_literal_null_returns(body: &str, witnessed: &HashSet<i32>, by_reference:
                 kept.push(lines[at].to_string());
                 at += 1;
             }
+        }
+    }
+    let mut joined = kept.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
+/// `local_N = K; return K;` — the store is DEAD. The very next statement leaves the function, so
+/// no path can read what it wrote.
+///
+/// The pair shows up where the structurer recovered a constant return literally: a scratch slot
+/// the compiler reused for two different constants cannot be one variable, so the return carries
+/// the constant itself. The fold that normally eats the store matches `local_N = K; return
+/// local_N;` and no longer sees it.
+fn drop_dead_stores_before_return(body: &str) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut kept: Vec<String> = Vec::with_capacity(lines.len());
+    for (at, line) in lines.iter().enumerate() {
+        let dead = (|| {
+            let (target, value) = slot_store(line)?;
+            let next = lines.get(at + 1)?;
+            (next.trim() == format!("return {value};") && indent_of(next) == indent_of(line))
+                .then_some(target)
+        })();
+        if dead.is_none() {
+            kept.push((*line).to_owned());
         }
     }
     let mut joined = kept.join("\n");

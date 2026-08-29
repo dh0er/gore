@@ -547,6 +547,56 @@ fn float_operand_slots(
 }
 
 impl Ctx<'_> {
+    /// The constant a `CpyVtoR4` at `at` returns LITERALLY.
+    ///
+    /// `return 1;` is `SetV4 vT,1; CpyVtoR4 vT` — the constant goes straight into the register's
+    /// slot and straight back out. `int x = 1; … return x;` cannot look like that: the name costs
+    /// a `CpyVtoV` between the store and the copy. So the adjacent pair — reading past the
+    /// `PSF vT; CALLSYS` cleanup a scope exit puts between them — IS the literal the source wrote,
+    /// whatever the emitter later decides to call the slot.
+    ///
+    /// Calling it something is how four achievements came to return the WRONG constant: the
+    /// compiler reuses one scratch slot for two different constant returns, and a single name over
+    /// both lives can only carry one of them.
+    fn const_return_literal(&self, at: usize) -> Option<String> {
+        if self.ret_ty.map(|ty| ty.base_name(self.refs))? != "int" {
+            return None;
+        }
+        let slot = self.instrs.get(at)?.words.first().map(|w| *w as i16 as i32)?;
+        let here = self.const_return_at(at, slot)?;
+        // ONE constant return through a slot is a name the source may well have written, and the
+        // folds behind us already turn `local_N = K; return local_N;` into `return K;` with no
+        // bytes to spare — measured: literalising those costs 19 records. TWO different constants
+        // through the same slot cannot be one variable, and that is the case a single name gets
+        // WRONG: it carries whichever constant the collapse happened to keep.
+        let mut others = self
+            .instrs
+            .iter()
+            .enumerate()
+            .filter(|(other, ins)| {
+                *other != at
+                    && ins.op.name == "CpyVtoR4"
+                    && ins.words.first().map(|w| *w as i16 as i32) == Some(slot)
+            })
+            .filter_map(|(other, _)| self.const_return_at(other, slot));
+        others.any(|value| value != here).then_some(here)
+    }
+
+    /// The constant an adjacent `SetV4` puts into `slot` just before the `CpyVtoR4` at `at`,
+    /// reading past the `PSF vT; CALLSYS` cleanup pairs a scope exit places between them.
+    fn const_return_at(&self, at: usize, slot: i32) -> Option<String> {
+        let mut back = at;
+        while back >= 2
+            && self.instrs[back - 1].op.name == "CALLSYS"
+            && self.instrs[back - 2].op.name == "PSF"
+        {
+            back -= 2;
+        }
+        let set = self.instrs.get(back.checked_sub(1)?)?;
+        (set.op.name == "SetV4" && set.words.first().map(|w| *w as i16 as i32) == Some(slot))
+            .then(|| (set.dwords.first().copied().unwrap_or(0) as i32).to_string())
+    }
+
     fn slot_name(&self, off: i32) -> String {
         if off > 0 {
             return format!("local_{off}");
@@ -908,7 +958,9 @@ fn scan_back_retval_floor(ctx: &Ctx, before: usize, floor: usize) -> Option<Stri
         let ins = &ctx.instrs[i];
         match ins.op.name {
             "CpyVtoR4" | "CpyVtoR8" | "CpyVtoR1" | "LOADOBJ" => {
-                return Some(ctx.slot_name(ins.words.first().copied().map(s16).unwrap_or(0)));
+                return Some(ctx.const_return_literal(i).unwrap_or_else(|| {
+                    ctx.slot_name(ins.words.first().copied().map(s16).unwrap_or(0))
+                }));
             }
             "RET" => return None,
             _ => {}
@@ -4589,7 +4641,10 @@ fn block_stmts_in(
                 // cant-convert errors). The one legitimate ret_val source for RVO functions is
                 // the CopyScript-to-`__return` capture below.
                 if !ctx.ret_via_rvo() {
-                    ret_val = pending.take().or_else(|| Some(name(w(ins, 0))));
+                    ret_val = pending
+                        .take()
+                        .or_else(|| ctx.const_return_literal(lo + k))
+                        .or_else(|| Some(name(w(ins, 0))));
                 }
             }
             "CpyVtoR1" => {
