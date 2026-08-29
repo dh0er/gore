@@ -3,12 +3,12 @@
   "schema_version": 1,
   "asset": "standalone-compiler-qualified-profiles.zip",
   "archive": {
-    "byte_len": 13793049,
-    "sha256": "2349b1e6f48a1d6164840cc358857c788a8618ca5be43e8ce660acc48203cae2"
+    "byte_len": 13793037,
+    "sha256": "c57bbc7398d51651cd7e7596e2d50f430f0998efa3766594d3d884cf9f94c4f0"
   },
   "compression": "deflate-9",
   "qualified_profiles": {
-    "manifest_sha256": "a89ef7780a393612f14b3d352d6adf84b65de81309214164aa9af4cecfb7637c",
+    "manifest_sha256": "5d566e0f54d6ae93b4cb9ba29027d9d57c2acd046951cb33dc3d0e69ecd113f9",
     "file_count": 46
   }
 }

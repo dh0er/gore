@@ -75,7 +75,7 @@ QUALIFIED_PROFILES_ARCHIVE_FILE = "standalone-compiler-qualified-profiles.zip"
 QUALIFIED_PROFILES_DESCRIPTOR_FILE = "standalone-compiler-qualified-profiles.json"
 PRODUCT_BUNDLE_SCHEMA = "gore.as.product-standalone-compiler-bundle"
 PRODUCT_BUNDLE_SCHEMA_VERSION = 1
-STANDALONE_COMPATIBILITY_ID = "gore-as-standalone-semantic-v1"
+STANDALONE_COMPATIBILITY_ID = "gore-as-standalone-semantic-v2"
 MAX_QUALIFIED_PROFILES_PACKAGE_BYTES = 128 * 1024 * 1024
 REQUIRED_NOTICES = (
     "UNREANGEL-LICENSE.md",

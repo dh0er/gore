@@ -2155,12 +2155,43 @@ fn render_params(f: &Func, refs: &RefResolver) -> String {
                 .param_defaults
                 .get(i)
                 .filter(|value| !value.is_empty())
-                .map(|value| format!(" = {}", super::refs::pack_tokens(value)))
+                .map(|value| {
+                    let packed = super::refs::pack_tokens(value);
+                    let rendered = if p.ty.base_name(refs) == "FName" {
+                        normalize_fname_parameter_default(packed, |id| refs.static_name(id))
+                    } else {
+                        packed
+                    };
+                    format!(" = {rendered}")
+                })
                 .unwrap_or_default();
             format!("{ty} {amp}{nm}{default}")
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn normalize_fname_parameter_default<'a>(
+    packed: String,
+    resolve: impl FnOnce(i64) -> Option<&'a str>,
+) -> String {
+    let Some(index) = packed
+        .strip_prefix("__STATIC_NAME(")
+        .and_then(|value| value.strip_suffix(')'))
+        .filter(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .and_then(|value| value.parse::<i64>().ok())
+    else {
+        return packed;
+    };
+    let Some(name) = resolve(index).filter(|name| {
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|character| character != '"' && character != '\\' && !character.is_control())
+    }) else {
+        return packed;
+    };
+    format!("n\"{name}\"")
 }
 
 /// Strip [`CONSTSTORE`] markers from a rendered body, returning the cleaned body plus the
@@ -12658,6 +12689,41 @@ fn is_generated(
     class_members
         .get(f.namespace.as_str())
         .is_some_and(|members| members.contains(f.name.as_str()))
+}
+
+#[cfg(test)]
+mod parameter_default_tests {
+    use super::normalize_fname_parameter_default;
+
+    #[test]
+    fn a_resolved_static_name_default_becomes_a_stable_literal() {
+        let rendered = normalize_fname_parameter_default(
+            "__STATIC_NAME(661)".to_owned(),
+            |index| (index == 661).then_some("None"),
+        );
+        assert_eq!(rendered, "n\"None\"");
+    }
+
+    #[test]
+    fn unresolved_or_non_exact_defaults_remain_unchanged() {
+        for value in [
+            "__STATIC_NAME(662)",
+            "__STATIC_NAME(-1)",
+            "__STATIC_NAME(661)+Other",
+            "__STATIC_NAME(Name)",
+        ] {
+            assert_eq!(
+                normalize_fname_parameter_default(value.to_owned(), |_| None),
+                value
+            );
+        }
+        assert_eq!(
+            normalize_fname_parameter_default("__STATIC_NAME(661)".to_owned(), |_| {
+                Some("unsafe\"name")
+            }),
+            "__STATIC_NAME(661)"
+        );
+    }
 }
 
 #[cfg(test)]

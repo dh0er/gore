@@ -21,7 +21,7 @@ execute_process(
     ERROR_VARIABLE capabilities_stderr
 )
 if(NOT capabilities_result EQUAL 0 OR
-   NOT capabilities_stdout MATCHES "\\\"compatibility_id\\\":\\\"gore-as-standalone-semantic-v1\\\"" OR
+   NOT capabilities_stdout MATCHES "\\\"compatibility_id\\\":\\\"gore-as-standalone-semantic-v2\\\"" OR
    NOT capabilities_stdout MATCHES "\\\"request_version\\\":2" OR
    NOT capabilities_stdout MATCHES "\\\"request_versions\\\":\\[1,2\\]" OR
    NOT capabilities_stdout MATCHES "\\\"response_version\\\":1" OR

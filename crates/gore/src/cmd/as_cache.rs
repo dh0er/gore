@@ -5627,6 +5627,7 @@ mod default_cli_tests {
 
         let class = |name: &str, super_class: Option<&str>| Class {
             name: name.to_owned(),
+            namespace: String::new(),
             super_class: super_class.map(str::to_owned),
             fields: Vec::new(),
             methods: Vec::new(),
