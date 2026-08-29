@@ -10330,27 +10330,35 @@ fn spilled_boolean_names(f: &Func, refs: &RefResolver) -> HashSet<i32> {
         if temporary_by_reference {
             continue;
         }
-        let short_circuit = instrs.get(at + 3).is_some_and(|arm| {
-            arm.op.name.starts_with("SetV")
-                && instrs.get(at + 4).is_some_and(|jump| {
-                    let Some(offset) = jump.dwords.first().map(|d| *d as i32) else {
-                        return false;
-                    };
-                    if jump.op.name != "JMP" {
-                        return false;
-                    }
-                    let target = jump.offset_dw as i64 + 2 + offset as i64;
-                    instrs
-                        .iter()
-                        .position(|other| other.offset_dw as i64 == target)
-                        .and_then(|merge| instrs.get(merge.checked_sub(1)?))
-                        .is_some_and(|before| {
-                            before.op.name.starts_with("CpyVtoV") && w0(before) == w0(arm)
-                        })
-                })
+        let short_circuit_carrier = instrs.get(at + 3).and_then(|arm| {
+            if !arm.op.name.starts_with("SetV") {
+                return None;
+            }
+            let jump = instrs.get(at + 4)?;
+            if jump.op.name != "JMP" {
+                return None;
+            }
+            let offset = jump.dwords.first().map(|d| *d as i32)?;
+            let target = jump.offset_dw as i64 + 2 + i64::from(offset);
+            let merge = instrs
+                .iter()
+                .position(|other| other.offset_dw as i64 == target)?;
+            let before = instrs.get(merge.checked_sub(1)?)?;
+            (before.op.name.starts_with("CpyVtoV") && w0(before) == w0(arm)).then(|| w0(arm))
         });
-        if !short_circuit {
-            out.insert(slot);
+        // The round trip proves the source NAMED something here. When the spill is the left
+        // operand of a short circuit, the thing it named is not the operand — it is the CARRIER
+        // the two arms merge into, which is what the source declared and tested. Attributing the
+        // name to the operand is what the subtraction was for; attributing it to nobody is what
+        // left 17 carriers unnamed.
+        match short_circuit_carrier {
+            Some(carrier) if carrier > 0 => {
+                out.insert(carrier);
+            }
+            Some(_) => {}
+            None => {
+                out.insert(slot);
+            }
         }
     }
     out
