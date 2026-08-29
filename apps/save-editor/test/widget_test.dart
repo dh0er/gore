@@ -892,6 +892,48 @@ void main() {
     );
   });
 
+  testWidgets(
+    'empty save name uses the slot fallback without creating an edit',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            coreServiceProvider.overrideWithValue(
+              _FakeCoreService(playerSaveName: ''),
+            ),
+            editorSettingsStoreProvider.overrideWithValue(
+              const NoopEditorSettingsStore(),
+            ),
+            uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+          ],
+          child: const GoresaveApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .widget<Text>(find.byKey(const ValueKey('selected-save-name')))
+            .data,
+        'G1R-001',
+      );
+      await tester.tap(find.byKey(const ValueKey('edit-save-name')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('confirm-save-name')));
+      await tester.pumpAndSettle();
+
+      expect(find.widgetWithText(FilledButton, 'Save (1)'), findsNothing);
+      expect(
+        tester
+            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Save'))
+            .onPressed,
+        isNull,
+      );
+    },
+  );
+
   testWidgets('Reset button discards pending and restores field text', (
     tester,
   ) async {

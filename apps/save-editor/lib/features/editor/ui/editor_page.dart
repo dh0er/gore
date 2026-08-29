@@ -1801,8 +1801,13 @@ class _SaveNameEditorState extends State<_SaveNameEditor> {
     _inspectionIdentity = widget.inspection;
     _path = widget.inspection.path;
     _canonicalName = canonicalName;
-    _draftName = canonicalName ?? widget.fallbackTitle;
+    _draftName = _effectiveName(canonicalName);
   }
+
+  String _effectiveName(String? canonicalName) =>
+      canonicalName == null || canonicalName.isEmpty
+      ? widget.fallbackTitle
+      : canonicalName;
 
   Future<void> _edit() async {
     final value = await showDialog<String>(
@@ -1812,7 +1817,7 @@ class _SaveNameEditorState extends State<_SaveNameEditor> {
     if (!mounted || value == null) return;
 
     setState(() => _draftName = value);
-    final original = widget.inspection.playerSaveName ?? widget.fallbackTitle;
+    final original = _effectiveName(widget.inspection.playerSaveName);
     if (value == original) {
       widget.notifier.clearPendingEdit('publicName');
     } else {
