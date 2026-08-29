@@ -476,10 +476,11 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
     final inventoryComplete =
         authoritative &&
         inventory.itemScope == 'player_inventory_region' &&
-        inventory.itemStackCount == inventory.items.length;
+        inventory.itemStackCount == inventory.items.length &&
+        inventory.items.every((item) => item.count != null);
     final totalItems = inventory.items.fold<int>(
       0,
-      (sum, item) => sum + (item.count ?? 1),
+      (sum, item) => sum + (item.count ?? 0),
     );
     final ore = inventory.items
         .where(
@@ -487,7 +488,7 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
               item.id.toLowerCase().contains('orenugget') ||
               item.path.toLowerCase().contains('orenugget'),
         )
-        .fold<int>(0, (sum, item) => sum + (item.count ?? 1));
+        .fold<int>(0, (sum, item) => sum + (item.count ?? 0));
     return _StatisticsSection(
       key: const ValueKey('statistics-section-inventory'),
       icon: Icons.backpack_outlined,
