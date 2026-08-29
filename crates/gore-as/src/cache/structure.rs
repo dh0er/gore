@@ -6287,7 +6287,12 @@ impl Structurer<'_> {
                 let saved = self.loop_scope;
                 self.loop_scope = Some(LoopScope {
                     continue_off: b.start_dw,
-                    break_off: usize::MAX,
+                    // The header's taken edge IS the loop exit. Only a block that is NOTHING but
+                    // the jump may spend it: an arm that does no work and only leaves is a
+                    // `break;`, and rendered as an empty arm it left four loops running forever.
+                    // A jump that also carries statements is a different question, and offering
+                    // `break;` there fires on six functions this build reproduces byte for byte.
+                    break_off: b.succs.first().copied().unwrap_or(usize::MAX),
                     continue_only: true,
                     latch_block: body_end.checked_sub(1),
                 });
@@ -7012,11 +7017,11 @@ impl Structurer<'_> {
             }
             return Some("continue;".into());
         }
+        if t == ls.break_off && (!ls.continue_only || b.instr_hi - b.instr_lo == 1) {
+            return Some("break;".into());
+        }
         if ls.continue_only {
             return None;
-        }
-        if t == ls.break_off {
-            return Some("break;".into());
         }
         // an in-body `return <expr>;` compiled as a JMP to the function's shared bare RET row —
         // recover the returned value from the block's trailing register write (scan floored to
