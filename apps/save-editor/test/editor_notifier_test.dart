@@ -5515,6 +5515,73 @@ void main() {
     expect(store.settings.deletedSaveRecovery, isNull);
   });
 
+  test('refresh keeps native recovery for an exact recreated target', () async {
+    final recoveryJson = <String, Object?>{
+      'version': 1,
+      'createdEpoch': 1,
+      'targetPath': r'C:\tmp\saves\G1R-006.sav',
+      'backupPath': r'C:\tmp\saves\goresave_backups\G1R-006.sav.bak.1',
+      'persistentPath': r'C:\tmp\saves\PersistentDataList.sav',
+      'persistentBackupPath':
+          r'C:\tmp\saves\goresave_backups\PersistentDataList.sav.bak.1',
+      'persistentPostDeleteSha1': 'post-delete-profile-sha',
+      'deletedSaveSha1': 'deleted-save-sha',
+      'deletedPersistentSha1': 'deleted-persistent-sha',
+    };
+    final core = _RecordingCoreService(
+      scanData: {
+        'saves': <Object?>[
+          {
+            'path': r'C:\tmp\saves\G1R-006.sav',
+            'slot': 'G1R-006',
+            'format': 'GSAV',
+            'fileSize': 1,
+            'sha1': 'deleted-save-sha',
+            'status': 'ok',
+          },
+        ],
+        'profiles': <Object?>[],
+        'deletedSaveRecovery': recoveryJson,
+      },
+    );
+
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await pumpEventQueue();
+
+    expect(notifier.state.deletedSaveRecovery, isNotNull);
+    expect(
+      notifier.state.deletedSaveRecovery?.targetPath,
+      r'C:\tmp\saves\G1R-006.sav',
+    );
+  });
+
+  test('dismiss clears a token even when native cleanup fails', () async {
+    final recovery = DeletedSaveRecovery(
+      targetPath: r'C:\tmp\saves\G1R-006.sav',
+      backupPath: r'C:\tmp\saves\goresave_backups\G1R-006.sav.bak.1',
+      persistentPostDeleteSha1: 'post-delete-profile-sha',
+      deletedSaveSha1: 'deleted-save-sha',
+      deletedPersistentSha1: 'deleted-persistent-sha',
+      message: 'Deleted',
+    );
+    final store = _MemoryEditorSettingsStore(
+      EditorSettings(deletedSaveRecovery: recovery),
+    );
+    final notifier = EditorNotifier(
+      _FailingDismissRecoveryCoreService(),
+      saveDir: r'C:\tmp\saves',
+      settingsStore: store,
+    );
+    await pumpEventQueue();
+
+    expect(notifier.state.deletedSaveRecovery, isNotNull);
+    await notifier.dismissDeletedSaveRecovery();
+
+    expect(notifier.state.deletedSaveRecovery, isNull);
+    expect(store.settings.deletedSaveRecovery, isNull);
+    expect(notifier.state.error, isNotNull);
+  });
+
   test(
     'selecting another save keeps deleted-save recovery reachable',
     () async {
@@ -6566,6 +6633,25 @@ class _RejectExternalInspectCoreService extends _RecordingCoreService {
       return {
         'ok': false,
         'error': {'message': 'invalid external file'},
+      };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+class _FailingDismissRecoveryCoreService extends _RecordingCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'dismiss_deleted_save_recovery') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': false,
+        'error': {'message': 'recovery manifest is inaccessible'},
       };
     }
     return super.execute(command, payload: payload);

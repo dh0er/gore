@@ -2304,8 +2304,10 @@ fn restore_backup(path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
 }
 
 /// Recreate a slot removed by [`delete_save`] from its exact paired backup.
-/// The target must still be absent; a game/cloud process that recreated it wins
-/// and is never overwritten.
+/// A missing target is the normal case. A target that already equals the
+/// deleted snapshot is also accepted so an interrupted two-file recovery (or
+/// deletion) can repair its profile half. Any different recreated save wins and
+/// is never overwritten.
 fn restore_deleted_save(
     path: &Path,
     backup_path: &Path,
@@ -2410,11 +2412,16 @@ where
 
     let original_snapshot = snapshot_file(path)?;
     let original = match &original_snapshot {
-        FileSnapshot::Present(_) if require_missing_target => {
-            return Err(CoreError::Update(format!(
-                "{} already exists; the recreated save was preserved",
-                path.display()
-            )));
+        FileSnapshot::Present(bytes) if require_missing_target => {
+            let is_interrupted_recovery =
+                expected_backup_sha1.is_some_and(|expected_sha1| sha1_hex(bytes) == expected_sha1);
+            if !is_interrupted_recovery {
+                return Err(CoreError::Update(format!(
+                    "{} already exists; the recreated save was preserved",
+                    path.display()
+                )));
+            }
+            Some(bytes.clone())
         }
         FileSnapshot::Present(bytes) => {
             inspect_bytes(bytes, Some(path), false)?;
@@ -3408,18 +3415,13 @@ fn validate_discovered_deleted_save_recovery(
     save_root: &Path,
     manifest_path: &Path,
     manifest: &DeletedSaveRecoveryManifest,
-) -> Result<(), CoreError> {
+) -> Result<String, CoreError> {
     if deleted_save_recovery_manifest_path(&manifest.backup_path)? != manifest_path {
         return Err(CoreError::Validation(
             "recovery manifest name does not match its slot backup".to_string(),
         ));
     }
     ensure_backup_belongs_to_save(&manifest.target_path, &manifest.backup_path)?;
-    if manifest.target_path.exists() {
-        return Err(CoreError::Validation(
-            "recovery target already exists".to_string(),
-        ));
-    }
     let canonical_root = fs::canonicalize(save_root)?;
     let target_parent = manifest
         .target_path
@@ -3475,12 +3477,43 @@ fn validate_discovered_deleted_save_recovery(
             ));
         }
     }
-    if sha1_hex(&fs::read(&manifest.persistent_path)?) != manifest.persistent_post_delete_sha1 {
+    let target_sha1 = match fs::symlink_metadata(&manifest.target_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Err(CoreError::Validation(
+                "recovery target is not a regular file".to_string(),
+            ));
+        }
+        Ok(_) => Some(sha1_hex(&fs::read(&manifest.target_path)?)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    if target_sha1
+        .as_deref()
+        .is_some_and(|sha1| sha1 != manifest.deleted_save_sha1.as_str())
+    {
         return Err(CoreError::Validation(
-            "the live profile changed after deletion".to_string(),
+            "the recovery target was recreated with different bytes".to_string(),
         ));
     }
-    Ok(())
+    let persistent_sha1 = sha1_hex(&fs::read(&manifest.persistent_path)?);
+    if persistent_sha1 == manifest.persistent_post_delete_sha1 {
+        return Ok(persistent_sha1);
+    }
+    // A crash before the profile replacement may already have claimed the
+    // slot while leaving the original profile live. The paired backup is still
+    // authoritative; let recovery reinstall the missing slot without falsely
+    // requiring post-delete profile bytes.
+    if target_sha1.is_none() && persistent_sha1 == manifest.deleted_persistent_sha1 {
+        return Ok(persistent_sha1);
+    }
+    if target_sha1.is_some() && persistent_sha1 == manifest.deleted_persistent_sha1 {
+        return Err(CoreError::Validation(
+            "the deleted save and profile are already restored".to_string(),
+        ));
+    }
+    Err(CoreError::Validation(
+        "the live profile changed after deletion".to_string(),
+    ))
 }
 
 fn discover_deleted_save_recovery(save_root: &Path) -> Result<Option<Value>, CoreError> {
@@ -3500,12 +3533,19 @@ fn discover_deleted_save_recovery(save_root: &Path) -> Result<Option<Value>, Cor
             continue;
         }
         let path = entry.path();
-        let Ok(manifest) = read_deleted_save_recovery_manifest(&path) else {
+        let Ok(mut manifest) = read_deleted_save_recovery_manifest(&path) else {
             continue;
         };
-        if validate_discovered_deleted_save_recovery(save_root, &path, &manifest).is_err() {
+        let Ok(expected_persistent_sha1) =
+            validate_discovered_deleted_save_recovery(save_root, &path, &manifest)
+        else {
             continue;
-        }
+        };
+        // `restore_deleted_save` compares this field with the currently live
+        // profile. For an early interrupted delete that is the original hash;
+        // for a committed delete or interrupted restore it is the post-delete
+        // hash stored in the manifest.
+        manifest.persistent_post_delete_sha1 = expected_persistent_sha1;
         let candidate = (manifest.created_epoch, file_name, manifest);
         if newest
             .as_ref()
@@ -3527,7 +3567,6 @@ fn dismiss_deleted_save_recovery(
     target_path: &Path,
     backup_path: &Path,
 ) -> Result<Value, CoreError> {
-    ensure_backup_belongs_to_save(target_path, backup_path)?;
     let manifest_path = deleted_save_recovery_manifest_path(backup_path)?;
     match fs::symlink_metadata(&manifest_path) {
         Ok(_) => {}
@@ -3536,11 +3575,19 @@ fn dismiss_deleted_save_recovery(
         }
         Err(error) => return Err(error.into()),
     }
-    let manifest = read_deleted_save_recovery_manifest(&manifest_path)?;
-    if manifest.target_path != target_path || manifest.backup_path != backup_path {
-        return Err(CoreError::InvalidRequest(
-            "recovery manifest does not belong to this deleted save".to_string(),
-        ));
+    ensure_backup_belongs_to_save(target_path, backup_path)?;
+    match read_deleted_save_recovery_manifest(&manifest_path) {
+        Ok(manifest) => {
+            if manifest.target_path != target_path || manifest.backup_path != backup_path {
+                return Err(CoreError::InvalidRequest(
+                    "recovery manifest does not belong to this deleted save".to_string(),
+                ));
+            }
+        }
+        // Once the derived path and backup ownership are validated, removing a
+        // malformed manifest is safer than leaving an undismissable token.
+        Err(CoreError::Parse(_) | CoreError::Validation(_)) => {}
+        Err(error) => return Err(error),
     }
     fs::remove_file(&manifest_path)?;
     Ok(json!({ "dismissed": true }))
@@ -17195,6 +17242,90 @@ mod tests {
     }
 
     #[test]
+    fn restore_deleted_save_repairs_an_interrupted_two_file_transaction() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-006";
+        let save_path = dir.path().join(format!("{slot}.sav"));
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let save_original = build_gsav(
+            2,
+            &public_payload_with_profile("Interrupted recovery", 0),
+            &minimal_stream(),
+            &[0, 0, 0, 0],
+        );
+        let persistent_original = assignment_persistent_data_list(slot, 0);
+        fs::write(&save_path, &save_original).unwrap();
+        fs::write(&persistent_path, &persistent_original).unwrap();
+
+        let deleted = delete_save(&save_path, &persistent_path, slot, 0, true).unwrap();
+        let backup_path = PathBuf::from(deleted["backupPath"].as_str().unwrap());
+        // State after either deletion crashes between profile replacement and
+        // final slot claim, or restore crashes between slot and profile writes.
+        fs::copy(&backup_path, &save_path).unwrap();
+
+        let discovered = discover_deleted_save_recovery(dir.path())
+            .unwrap()
+            .expect("the exact restored slot must keep recovery discoverable");
+        restore_deleted_save(
+            &save_path,
+            &backup_path,
+            discovered["persistentPostDeleteSha1"].as_str().unwrap(),
+            discovered["deletedSaveSha1"].as_str().unwrap(),
+            discovered["deletedPersistentSha1"].as_str().unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(fs::read(&save_path).unwrap(), save_original);
+        assert_eq!(fs::read(&persistent_path).unwrap(), persistent_original);
+        assert!(
+            discover_deleted_save_recovery(dir.path())
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn restore_deleted_save_repairs_an_early_interrupted_delete() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-006";
+        let save_path = dir.path().join(format!("{slot}.sav"));
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let save_original = build_gsav(
+            2,
+            &public_payload_with_profile("Interrupted delete", 0),
+            &minimal_stream(),
+            &[0, 0, 0, 0],
+        );
+        let persistent_original = assignment_persistent_data_list(slot, 0);
+        fs::write(&save_path, &save_original).unwrap();
+        fs::write(&persistent_path, &persistent_original).unwrap();
+
+        let deleted = delete_save(&save_path, &persistent_path, slot, 0, true).unwrap();
+        let backup_path = PathBuf::from(deleted["backupPath"].as_str().unwrap());
+        // State after the slot claim but before the profile replacement.
+        fs::write(&persistent_path, &persistent_original).unwrap();
+
+        let discovered = discover_deleted_save_recovery(dir.path())
+            .unwrap()
+            .expect("a missing slot with its original profile must be recoverable");
+        assert_eq!(
+            discovered["persistentPostDeleteSha1"],
+            deleted["deletedPersistentSha1"]
+        );
+        restore_deleted_save(
+            &save_path,
+            &backup_path,
+            discovered["persistentPostDeleteSha1"].as_str().unwrap(),
+            discovered["deletedSaveSha1"].as_str().unwrap(),
+            discovered["deletedPersistentSha1"].as_str().unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(fs::read(&save_path).unwrap(), save_original);
+        assert_eq!(fs::read(&persistent_path).unwrap(), persistent_original);
+    }
+
+    #[test]
     fn restore_deleted_save_preserves_a_newer_profile() {
         let dir = tempdir().unwrap();
         let slot = "G1R-006";
@@ -17382,6 +17513,52 @@ mod tests {
         assert!(backup_path.exists());
         assert!(persistent_backup_path.exists());
         assert!(!save_path.exists());
+    }
+
+    #[test]
+    fn dismiss_deleted_save_recovery_accepts_missing_backup_folder() {
+        let dir = tempdir().unwrap();
+        let save_path = dir.path().join("G1R-006.sav");
+        let backup_path = dir
+            .path()
+            .join("goresave_backups")
+            .join("G1R-006.sav.bak.1");
+
+        assert_eq!(
+            dismiss_deleted_save_recovery(&save_path, &backup_path).unwrap()["dismissed"],
+            false
+        );
+    }
+
+    #[test]
+    fn dismiss_deleted_save_recovery_removes_malformed_manifest() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-006";
+        let save_path = dir.path().join(format!("{slot}.sav"));
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        fs::write(
+            &save_path,
+            build_gsav(
+                2,
+                &public_payload_with_profile("Dismiss malformed", 0),
+                &minimal_stream(),
+                &[0, 0, 0, 0],
+            ),
+        )
+        .unwrap();
+        fs::write(&persistent_path, assignment_persistent_data_list(slot, 0)).unwrap();
+
+        let deleted = delete_save(&save_path, &persistent_path, slot, 0, true).unwrap();
+        let backup_path = PathBuf::from(deleted["backupPath"].as_str().unwrap());
+        let manifest_path = deleted_save_recovery_manifest_path(&backup_path).unwrap();
+        fs::write(&manifest_path, b"not json").unwrap();
+
+        assert_eq!(
+            dismiss_deleted_save_recovery(&save_path, &backup_path).unwrap()["dismissed"],
+            true
+        );
+        assert!(!manifest_path.exists());
+        assert!(backup_path.exists());
     }
 
     #[test]

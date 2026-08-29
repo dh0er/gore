@@ -990,21 +990,29 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final recovery = state.deletedSaveRecovery;
     if (recovery == null) return;
     await _withLoading(() async {
-      final response = await _execute(
-        'dismiss_deleted_save_recovery',
-        payload: {
-          'path': recovery.targetPath,
-          'backupPath': recovery.backupPath,
-        },
-      );
-      if (response['ok'] != true) {
-        state = state.copyWith(
-          error: _l10n.editorUnexpectedError(_errorDetails(response)),
+      try {
+        final response = await _execute(
+          'dismiss_deleted_save_recovery',
+          payload: {
+            'path': recovery.targetPath,
+            'backupPath': recovery.backupPath,
+          },
         );
-        return;
+        if (response['ok'] != true) {
+          state = state.copyWith(
+            error: _l10n.editorUnexpectedError(_errorDetails(response)),
+          );
+        }
+      } finally {
+        // Dismiss is an escape hatch, not a second destructive operation. A
+        // missing/corrupt/inaccessible native manifest must never leave this
+        // token blocking all later writes. Native discovery already ignores
+        // unusable manifests and can safely rehydrate a still-valid one.
+        if (_sameDeletedSaveRecovery(state.deletedSaveRecovery, recovery)) {
+          state = state.copyWith(clearDeletedSaveRecovery: true);
+          _persistSettings();
+        }
       }
-      state = state.copyWith(clearDeletedSaveRecovery: true);
-      _persistSettings();
     }, failureMessage: _l10n.editorUnexpectedError);
   }
 
