@@ -519,7 +519,7 @@ fn recover_module_defaults<'a>(
             Some(&fields),
             Some(&c.name),
         );
-        if std::env::var_os("GORE_AS_DEFAULTS_DEBUG").is_some() {
+        if diag_enabled("GORE_AS_DEFAULTS_DEBUG") {
             eprintln!(
                 "[defaults] ---- {} ----
 {rendered}",
@@ -731,7 +731,7 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver, defaults: Option<&[
             param_sig(m, refs),
             const_method
         )) {
-            if std::env::var_os("GORE_AS_DUP_DIAG").is_some() {
+            if diag_enabled("GORE_AS_DUP_DIAG") {
                 eprintln!(
                     "[dup] {}::{}({}) traits={:#x} const_method={} ret={} ret_const={}",
                     c.name,
@@ -1863,6 +1863,7 @@ fn emit_function_ctor(
                 refs,
                 &range_for_iterator_slots(f, refs),
                 &proceed_element_slots(f, refs),
+                &reference_locals,
             );
         // Before the declaration merge: a conversion naming the type the value already has hides
         // the copy-construction the merge is looking for.
@@ -3903,7 +3904,7 @@ fn reference_result_slots(f: &Func, refs: &RefResolver) -> HashMap<i32, bool> {
             }
             _ => None,
         };
-        if std::env::var_os("GORE_AS_REF_DIAG").is_some() {
+        if diag_enabled("GORE_AS_REF_DIAG") {
             eprintln!(
                 "[ref] {} slot={:?} ret={:?}",
                 call.op.name,
@@ -9197,7 +9198,7 @@ fn fold_compound_assignments(
             let value = unwrap_brackets(value);
             let rest = value.strip_prefix(target).or_else(|| {
                 let ty = type_of_member_path(target, fields, roots, refs);
-                if std::env::var_os("GORE_AS_COMPOUND_DIAG").is_some() {
+                if diag_enabled("GORE_AS_COMPOUND_DIAG") {
                     eprintln!("[compound] cast {ty:?} for {target} | {value}");
                 }
                 value.strip_prefix(&format!("{}({target})", ty?))
@@ -9215,7 +9216,7 @@ fn fold_compound_assignments(
         // Or through a carrier the decompiler put in: read the member, change it, write it back.
         // Three statements, one member path, and a local nothing else in the body touches.
         let refuse = |reason: &str| -> Option<String> {
-            if std::env::var_os("GORE_AS_COMPOUND_DIAG").is_some() {
+            if diag_enabled("GORE_AS_COMPOUND_DIAG") {
                 eprintln!("[compound] {reason} | {}", lines[at].trim());
             }
             None
@@ -10924,7 +10925,7 @@ fn fold_member_read_temporaries(
                 (Some("float" | "double"), Some("float32"))
             ) && !widened.contains(&slot);
             if locals.get(&slot) != member.as_ref() && !read_puts_it_there && !widens_only {
-                if std::env::var_os("GORE_AS_MEMBER_DIAG").is_some() {
+                if diag_enabled("GORE_AS_MEMBER_DIAG") {
                     eprintln!(
                         "[member] {} slot={:?} member={:?} | {}",
                         match member.is_none() {
@@ -11504,7 +11505,7 @@ fn parenthesize_mixed(part: &str, operator: &str) -> String {
 
 /// Why a short circuit was not folded, behind `GORE_AS_SC_DIAG`.
 fn sc_reject(reason: &str, line: &str) {
-    if std::env::var_os("GORE_AS_SC_DIAG").is_some() {
+    if diag_enabled("GORE_AS_SC_DIAG") {
         eprintln!("[sc-reject] {reason} | {}", line.trim());
     }
 }
@@ -11798,8 +11799,25 @@ fn strip_unreachable<'a>(lines: &[&'a str], at: &mut usize, kept: &mut Vec<&'a s
 }
 
 /// Diagnostic counter for why an argument could not be moved back into its call.
+/// Diagnostic flags, read once. These sit inside per-line loops over bodies with tens of
+/// thousands of statements, and an environment lookup there costs more than the work it guards.
+fn diag_enabled(name: &'static str) -> bool {
+    use std::collections::HashMap;
+    use std::sync::{OnceLock, RwLock};
+    static FLAGS: OnceLock<RwLock<HashMap<&'static str, bool>>> = OnceLock::new();
+    let flags = FLAGS.get_or_init(Default::default);
+    if let Some(known) = flags.read().ok().and_then(|map| map.get(name).copied()) {
+        return known;
+    }
+    let value = std::env::var_os(name).is_some();
+    if let Ok(mut map) = flags.write() {
+        map.insert(name, value);
+    }
+    value
+}
+
 fn inline_reject(reason: &str, callee: &str, temp: &str, statement: &str) {
-    if std::env::var_os("GORE_AS_INLINE_DIAG").is_some() {
+    if diag_enabled("GORE_AS_INLINE_DIAG") {
         eprintln!("[inline-reject] {reason} {callee} {temp} | {}", statement.trim());
     }
 }
@@ -12060,7 +12078,7 @@ fn is_value_struct_type(ty: &str) -> bool {
 /// One line per refused range-for, behind `GORE_AS_FOREACH_DIAG`, so the reasons can be counted
 /// over the whole corpus instead of guessed at from one example.
 fn foreach_reject(reason: &str) {
-    if std::env::var_os("GORE_AS_FOREACH_DIAG").is_some() {
+    if diag_enabled("GORE_AS_FOREACH_DIAG") {
         eprintln!("[foreach-reject] {reason}");
     }
 }
@@ -12071,6 +12089,7 @@ fn rewrite_foreach_loops(
     refs: &RefResolver,
     range_for: &HashSet<i32>,
     elements: &HashMap<i32, i32>,
+    reference_locals: &HashMap<i32, bool>,
 ) -> (String, HashSet<i32>) {
     let trailing_newline = body.ends_with('\n');
     let lines: Vec<&str> = body.lines().collect();
@@ -12169,12 +12188,22 @@ fn rewrite_foreach_loops(
         // The range-for element is READ-ONLY. A body that writes through it, or calls a method
         // the cache records as non-const, only compiles in the while-shape the structurer
         // recovered — so that loop keeps it.
-        if element_is_written_through(
-            &lines[i + 4..end],
-            &elem_ident,
-            locals.get(&elem).map(String::as_str),
-            refs,
-        ) {
+        // …unless the element is a REFERENCE. The refusal exists because a range-for element is
+        // read-only, which is true of a copied element and not of one the iterator hands back by
+        // reference — and vanilla settles which this is: it jumps STRAIGHT to the bottom test,
+        // the range-for shape, while writing through the element. A reference declaration on the
+        // `Proceed()` line is that same fact stated in the text.
+        // This pass runs before the declarations are written, so the fact is taken from the
+        // bytecode rather than from the text.
+        let element_by_reference = reference_locals.contains_key(&elem);
+        if !element_by_reference
+            && element_is_written_through(
+                &lines[i + 4..end],
+                &elem_ident,
+                locals.get(&elem).map(String::as_str),
+                refs,
+            )
+        {
             foreach_reject("element-written-through");
             continue;
         }
@@ -12191,7 +12220,13 @@ fn rewrite_foreach_loops(
             continue;
         }
         let indent = leading_indent(lines[i]);
-        replace[i] = Some(format!("{indent}for (auto {elem_ident} : {container})"));
+        // An element the body writes through has to be spelled as a reference: a plain `auto`
+        // element is a copy and read-only, which is what the refusal above is about.
+        let elem_head = match element_by_reference {
+            true => "auto&",
+            false => "auto",
+        };
+        replace[i] = Some(format!("{indent}for ({elem_head} {elem_ident} : {container})"));
         drop_line[i + 1] = true;
         match &inline_elem {
             // the element was read inside a larger expression: keep that statement, with the name
@@ -13633,6 +13668,7 @@ mod source_shape_tests {
                 &RefResolver::default(),
                 &std::collections::HashSet::new(),
                 &std::collections::HashMap::new(),
+                &std::collections::HashMap::new(),
             );
         assert_eq!(
             out,
@@ -13668,7 +13704,8 @@ mod source_shape_tests {
             &RefResolver::default(),
             &std::collections::HashSet::new(),
             &std::collections::HashMap::new(),
-        );
+                &std::collections::HashMap::new(),
+            );
         assert_eq!(
             out,
             concat!(
@@ -13702,6 +13739,7 @@ mod source_shape_tests {
                 &RefResolver::default(),
                 &std::collections::HashSet::new(),
                 &std::collections::HashMap::new(),
+                &std::collections::HashMap::new(),
             );
         assert_eq!(out, body);
         assert!(gone.is_empty());
@@ -13723,6 +13761,7 @@ mod source_shape_tests {
                 &locals(&[(16, "AActor")]),
                 &RefResolver::default(),
                 &std::collections::HashSet::new(),
+                &std::collections::HashMap::new(),
                 &std::collections::HashMap::new(),
             );
         assert_eq!(out, body);
