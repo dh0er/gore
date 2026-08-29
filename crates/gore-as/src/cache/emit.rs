@@ -6685,7 +6685,7 @@ fn inline_temporary_into(
                 // A `return` is refused because a returned REFERENCE may not be a temporary.
                 // A bool is not one, and the cache can say so.
                 || (lines[index].trim().starts_with("return ")
-                    && renders_a_bool(&value, locals, refs, fields)))
+                    && renders_a_bool(&value, locals, refs, fields, &HashMap::new())))
                 && (same_typed_own_field(&value, temp, locals, fields)
                     || is_call_result(&value)
                     || names_a_static_class(&value, temp, locals)
@@ -6705,7 +6705,7 @@ fn inline_temporary_into(
                 || same_typed_own_field(&value, temp, locals, fields)
                 || names_a_static_class(&value, temp, locals)
                 || (temporary_type(locals, temp) == Some("bool")
-                    && renders_a_bool(&value, locals, refs, fields))
+                    && renders_a_bool(&value, locals, refs, fields, &HashMap::new()))
         }
     };
     if !movable {
@@ -7342,7 +7342,7 @@ fn fold_condition_temporaries(
     // A field of the class carries its type in the class's own map, which `renders_a_bool` does
     // not read.
     let is_a_bool = |value: &str| {
-        renders_a_bool(value, locals, refs, fields)
+        renders_a_bool(value, locals, refs, fields, &HashMap::new())
             || value
                 .strip_prefix("this.")
                 .and_then(|field| fields?.get(field))
@@ -7383,7 +7383,7 @@ fn fold_condition_temporaries(
                 })
                 .filter(|_| {
                     temporary_type(locals, &name) == Some("bool")
-                        && renders_a_bool(&value, locals, refs, fields)
+                        && renders_a_bool(&value, locals, refs, fields, &HashMap::new())
                 });
             // Or the slot is an INT the emitter compares against zero to read as a bool. Where
             // the value is a bool, that comparison is the int slot's doing and nothing else's:
@@ -11710,7 +11710,7 @@ fn short_circuit(
     // A PARAMETER carries its type in the signature, not in the slot table: `const bool
     // bIsImmortal` is as much a bool as any local, and asking only the locals left the outer arm
     // of `A || bIsImmortal` standing as an if/else over a carrier.
-    let value_is_bool = renders_a_bool(&value, locals, refs, fields)
+    let value_is_bool = renders_a_bool(&value, locals, refs, fields, roots)
         || roots.get(value.as_str()).is_some_and(|ty| ty == "bool");
     if temporary_type(locals, &target) != Some("bool") || !value_is_bool {
         sc_reject(
@@ -11864,11 +11864,48 @@ fn turned_around(condition: &str) -> String {
 /// Whether a rendered value is a bool: a slot the type table calls one, a bool literal, or a call
 /// every declaration of that name returns bool from. An operand that is not one may not carry a
 /// `&&` — and the compiler does not merely refuse it, it goes down.
+/// The declared type a member PATH resolves to, walking it one segment at a time.
+///
+/// The first segment names either `this` — whose members are the class's own field map — or a
+/// local or parameter, whose type `roots` carries. Every further segment is a field of the type
+/// the previous one resolved to, answered by the script class table or, failing that, by the
+/// native field table. A segment that does not resolve ends the walk: this answers only what it
+/// can prove, because the caller uses the answer to decide whether a value may become an operand
+/// of `&&`, and an operand that is not a bool takes the compiler down.
+fn member_path_type(
+    value: &str,
+    roots: &HashMap<String, String>,
+    fields: Option<&HashMap<String, String>>,
+    refs: &RefResolver,
+) -> Option<String> {
+    if value.contains(['(', ')', '[', ']', ' ', '\u{1}', '\u{2}']) {
+        return None;
+    }
+    let mut parts = value.split('.');
+    let head = parts.next()?;
+    let mut ty = match head {
+        "this" => {
+            let first = parts.next()?;
+            fields?.get(first)?.clone()
+        }
+        _ => roots.get(head)?.clone(),
+    };
+    for field in parts {
+        ty = refs
+            .field_type_by_class(&ty, field)
+            .or_else(|| refs.native_field_value_type(&ty, field))
+            .or_else(|| refs.native_field_type(&ty, field))?
+            .to_owned();
+    }
+    Some(ty)
+}
+
 fn renders_a_bool(
     value: &str,
     locals: &BTreeMap<i32, String>,
     refs: &RefResolver,
     fields: Option<&HashMap<String, String>>,
+    roots: &HashMap<String, String>,
 ) -> bool {
     if matches!(value, "true" | "false") || temporary_type(locals, value) == Some("bool") {
         return true;
@@ -11880,16 +11917,23 @@ fn renders_a_bool(
             return true;
         }
     }
+    // …and a field of a STRUCT carries its type on that struct, which the same two tables answer
+    // once the path is walked segment by segment. Without the walk, `local_46.bWitnessIsGuildOwner`
+    // is an unknown, the arm stays an if/else over a carrier, and the copy that costs is ours.
+    // Measured: 86 such arms still stand, and only two of them are a bare `this.<field>`.
+    if member_path_type(value, roots, fields, refs).as_deref() == Some("bool") {
+        return true;
+    }
     // A negation and a comparison are bools whatever they wrap, and a fully parenthesized value
     // is whatever it holds.
     if let Some(negated) = value.strip_prefix('!') {
-        return renders_a_bool(negated, locals, refs, fields);
+        return renders_a_bool(negated, locals, refs, fields, roots);
     }
     if value.starts_with('(')
         && matching_paren(value, 0) == Some(value.len() - 1)
         && value.len() > 2
     {
-        return renders_a_bool(&value[1..value.len() - 1], locals, refs, fields);
+        return renders_a_bool(&value[1..value.len() - 1], locals, refs, fields, roots);
     }
     if [" == ", " != ", " < ", " > ", " <= ", " >= ", " && ", " || "]
         .iter()
