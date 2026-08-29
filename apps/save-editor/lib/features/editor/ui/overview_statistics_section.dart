@@ -456,9 +456,7 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
           label: l10n.statisticsMetric('openCrimes', 'Open crimes'),
           value: !widget.inspection.privateTypedVerified
               ? l10n.statisticsUnknown
-              : widget.inspection.privateFactions?.guilds
-                        .fold<int>(0, (sum, guild) => sum + guild.unforgiven)
-                        .toString() ??
+              : widget.inspection.privateFactions?.openCrimes?.toString() ??
                     l10n.statisticsUnknown,
         ),
       ],

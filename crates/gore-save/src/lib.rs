@@ -5933,7 +5933,7 @@ fn inspect_private_payload(
                 story_writable,
                 progression,
                 npc,
-                faction_guilds,
+                faction_summary,
             ) = std::thread::scope(|scope| {
                 let strings = scope.spawn(|| {
                     refs.iter()
@@ -5971,9 +5971,14 @@ fn inspect_private_payload(
                 // The forgive edit is advertised only when at least one guild has
                 // an unforgiven Hero crime (so write_save never rejects an
                 // advertised op).
-                let faction_guilds = scope.spawn(|| {
+                let faction_summary = scope.spawn(|| {
                     verified_root
-                        .map(factions::list_guild_crimes)
+                        .map(|root| {
+                            (
+                                factions::list_guild_crimes(root),
+                                factions::count_open_crimes(root),
+                            )
+                        })
                         .unwrap_or_default()
                 });
                 (
@@ -5988,7 +5993,7 @@ fn inspect_private_payload(
                     join(story_writable),
                     join(progression),
                     join(npc),
-                    join(faction_guilds),
+                    join(faction_summary),
                 )
             });
             let inventory = assemble_private_inventory(
@@ -5997,8 +6002,12 @@ fn inspect_private_payload(
                 armor_slot.as_ref(),
                 &misaligned,
             );
+            let (faction_guilds, open_crimes) = faction_summary;
             let any_unforgiven = faction_guilds.iter().any(|g| g.unforgiven > 0);
-            let factions = json!({ "guilds": faction_guilds });
+            let factions = json!({
+                "guilds": faction_guilds,
+                "openCrimes": open_crimes,
+            });
             let mut writable = vec!["private.replaceFString"];
             if typed_parse["status"] == "ok" {
                 writable.extend([
@@ -7463,10 +7472,10 @@ fn query_progression(
 /// The three NPC commands (`list_npcs_command`, `npc_attributes_command`,
 /// `npc_inventory_command`) share this exact sequence and differ only in what
 /// they build from the resulting root.
-/// `private.factions.list`: the player's crime counts per camp-level guild (plus
-/// an `Other` bucket for individual/unmappable crimes). Decodes the save through
-/// the same path as the NPC commands. Returns `{ guilds: [GuildCrimes] }` sorted
-/// by `unforgiven` desc.
+/// `private.factions.list`: the player's crime counts per camp-level guild.
+/// Decodes the save through the same path as the NPC commands. Returns
+/// `{ guilds: [GuildCrimes], openCrimes }`, with guilds sorted by `unforgiven`
+/// desc and the global count including unmappable crimes exactly once.
 fn list_guild_crimes_command(
     path: &Path,
     backend: Option<&dyn codec_backend::CodecBackend>,
@@ -7476,7 +7485,11 @@ fn list_guild_crimes_command(
     })?;
     let root = decode_private_root_cached(path, backend)?;
     let guilds = factions::list_guild_crimes(&root);
-    Ok(json!({ "guilds": guilds }))
+    let open_crimes = factions::count_open_crimes(&root);
+    Ok(json!({
+        "guilds": guilds,
+        "openCrimes": open_crimes,
+    }))
 }
 
 /// Parsing the decoded payload into the typed [`properties::RootObject`] tree is
@@ -27175,6 +27188,7 @@ mod tests {
         // inspect_save surfaces the faction block + advertises forgive.
         let value = inspect_save_with_codec_backend(&path, true, Some(&backend), None).unwrap();
         let guilds = value["private"]["factions"]["guilds"].as_array().unwrap();
+        assert_eq!(value["private"]["factions"]["openCrimes"], 2);
         let oc = guilds
             .iter()
             .find(|g| g["guild"] == "Guild.Human.OldCamp")
@@ -27192,6 +27206,7 @@ mod tests {
 
         // private.factions.list command.
         let listed = list_guild_crimes_command(&path, Some(&backend)).unwrap();
+        assert_eq!(listed["openCrimes"], 2);
         let lc = listed["guilds"]
             .as_array()
             .unwrap()

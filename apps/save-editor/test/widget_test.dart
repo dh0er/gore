@@ -1361,6 +1361,7 @@ void main() {
     expect(metricValue('Known NPCs'), '2');
     expect(metricValue('Known traders'), '2');
     expect(metricValue('Known teachers'), '2');
+    expect(metricValue('Open crimes'), '1');
     expect(
       find.descendant(
         of: find.byKey(const ValueKey('statistics-card-character')),
@@ -2314,15 +2315,27 @@ class _StatisticsCoreService extends _FakeCoreService {
       data.remove('screenshot');
       final private = (data['private'] as Map).cast<String, Object?>();
       private['factions'] = {
+        // One global crime implicates both guilds. The Overview must use the
+        // unique global count instead of summing the duplicated guild rows.
+        'openCrimes': 1,
         'guilds': [
           {
             'guild': 'Guild.Human.OldCamp',
             'label': 'OldCamp',
-            'total': 3,
-            'forgiven': 1,
-            'unforgiven': 2,
+            'total': 1,
+            'forgiven': 0,
+            'unforgiven': 1,
             'isHostile': true,
-            'crimes': {'assault': 1, 'theft': 1},
+            'crimes': {'assault': 1},
+          },
+          {
+            'guild': 'Guild.Human.NewCamp',
+            'label': 'NewCamp',
+            'total': 1,
+            'forgiven': 0,
+            'unforgiven': 1,
+            'isHostile': false,
+            'crimes': {'assault': 1},
           },
         ],
       };
@@ -2422,15 +2435,25 @@ class _StatisticsCoreService extends _FakeCoreService {
       return {
         'ok': true,
         'data': {
+          'openCrimes': 1,
           'guilds': [
             {
               'guild': 'Guild.Human.OldCamp',
               'label': 'OldCamp',
-              'total': 3,
-              'forgiven': 1,
-              'unforgiven': 2,
+              'total': 1,
+              'forgiven': 0,
+              'unforgiven': 1,
               'isHostile': true,
-              'crimes': {'assault': 1, 'theft': 1},
+              'crimes': {'assault': 1},
+            },
+            {
+              'guild': 'Guild.Human.NewCamp',
+              'label': 'NewCamp',
+              'total': 1,
+              'forgiven': 0,
+              'unforgiven': 1,
+              'isHostile': false,
+              'crimes': {'assault': 1},
             },
           ],
         },
