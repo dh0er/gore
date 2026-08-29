@@ -210,9 +210,8 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
     }
     return switch (catalog.categoryFor(event.affected)) {
       CharacterCategory.human => _TargetCategory.npc,
-      CharacterCategory.creature ||
-      CharacterCategory.other => _TargetCategory.monster,
-      null => null,
+      CharacterCategory.creature => _TargetCategory.monster,
+      CharacterCategory.other || null => null,
     };
   }
 

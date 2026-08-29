@@ -1355,6 +1355,9 @@ void main() {
     expect(find.text('Killed NPCs'), findsOneWidget);
     expect(find.text('Known NPCs'), findsOneWidget);
     expect(find.text('Known teachers'), findsOneWidget);
+    expect(metricValue('Killed monsters'), '1');
+    expect(metricValue('Defeated NPCs'), '1');
+    expect(metricValue('Killed NPCs'), '1');
     expect(metricValue('Known NPCs'), '2');
     expect(metricValue('Known traders'), '2');
     expect(metricValue('Known teachers'), '2');
@@ -2502,10 +2505,10 @@ class _StatisticsCoreService extends _FakeCoreService {
         'data': {
           'section': 'events',
           'character': 'Hero_Global',
-          'total': 5,
+          'total': 6,
           'offset': 0,
           'limit': payload['limit'] ?? 500,
-          'count': 5,
+          'count': 6,
           'events': [
             {
               'index': 0,
@@ -2538,6 +2541,13 @@ class _StatisticsCoreService extends _FakeCoreService {
               'index': 4,
               'tags': ['Memory.Guild.Joined', 'Guild.Human.NewCamp.Mercenary'],
               'affected': 'Hero',
+            },
+            {
+              'index': 5,
+              'tags': ['Memory.Character.Defeated.Kill'],
+              // `Human` is a real catch-all (`other`) catalog entry. It must
+              // stay unknown rather than inflating the monster count.
+              'affected': 'Human',
             },
           ],
           'arrayPath': [

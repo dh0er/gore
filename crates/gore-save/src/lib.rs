@@ -3390,22 +3390,25 @@ impl DeleteRecoveryManifestGuard {
             .write(true)
             .create_new(true)
             .open(&path)?;
+        let guard = Self { path, keep: false };
         file.write_all(&bytes)?;
         file.sync_all()?;
         drop(file);
-        let parent = path.parent().ok_or_else(|| {
+        let parent = guard.path.parent().ok_or_else(|| {
             CoreError::InvalidRequest("recovery manifest has no parent".to_string())
         })?;
+        let canonical_parent = fs::canonicalize(parent)?;
         // `sync_all` above flushes file contents, while this flush makes the
         // directory entries for both paired backups and this manifest durable
-        // before deletion touches either live path.
-        sync_directory(parent)?;
-        if let Some(save_root) = parent.parent() {
+        // before deletion touches either live path. Canonicalization makes a
+        // symlink/junction save path flush the directory that received them.
+        sync_directory(&canonical_parent)?;
+        if let Some(save_root) = canonical_parent.parent() {
             // `goresave_backups` itself may have been created by this delete;
             // flush its entry in the save directory as well.
             sync_directory(save_root)?;
         }
-        Ok(Self { path, keep: false })
+        Ok(guard)
     }
 
     fn keep(&mut self) {
@@ -17556,6 +17559,40 @@ mod tests {
         assert!(backup_path.exists());
         assert!(persistent_backup_path.exists());
         assert!(!save_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_recovery_flushes_the_canonical_save_directory() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let real_root = dir.path().join("real-saves");
+        let linked_root = dir.path().join("linked-saves");
+        fs::create_dir(&real_root).unwrap();
+        symlink(&real_root, &linked_root).unwrap();
+        let slot = "G1R-006";
+        let save_path = linked_root.join(format!("{slot}.sav"));
+        let persistent_path = linked_root.join("PersistentDataList.sav");
+        fs::write(
+            &save_path,
+            build_gsav(
+                2,
+                &public_payload_with_profile("Linked delete", 0),
+                &minimal_stream(),
+                &[0, 0, 0, 0],
+            ),
+        )
+        .unwrap();
+        fs::write(&persistent_path, assignment_persistent_data_list(slot, 0)).unwrap();
+
+        delete_save(&save_path, &persistent_path, slot, 0, true).unwrap();
+
+        assert!(
+            discover_deleted_save_recovery(&linked_root)
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
