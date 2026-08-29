@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 99.22% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 99.24% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -24,7 +24,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,723 functions | **99.22%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,723 functions | **99.24%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -38,7 +38,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,291 functions (0.78%) recompile to bytecode that differs semantically.** A semantic
+**1,254 functions (0.76%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -52,9 +52,10 @@ found them:
 * **Four loops the game leaves and our source does not.** The `break` is lost and the arm renders
   as `if (…) { } else { }`, so the loop runs forever:
   `UAIState_WaitInQueue::DoTask_Implementation`, `UAIState_WarnAggressor::DoTask_Implementation`,
-  and `UAIState_CombatEndActions_Human::Heal` twice. `loop_exit_stmt` already renders a `JMP` to
-  the loop's break offset as `break;` and `emit_range` already consults it — it returns `None`
-  there, so the loop scope is not set on the path that emits those arms.
+  and `UAIState_CombatEndActions_Human::Heal` twice. The mechanism is now known — the top-test arm
+  opened no loop scope, which is why `loop_exit_stmt` returned `None` there. That scope is set
+  now, but only for `continue;`: offering `break;` on the same path fires on six functions this
+  build reproduces byte for byte, so these four still need a witness that separates them.
 * **Nine float constants written as their own bit pattern.**
   `ULoadingScreenSetupTest::SetupGeneralLoadingScreen` emits
   `…SpecifiedColor.R = 1065287680;`, which is `0x3F7F0000` — the bits of `0.99609375f`. The
