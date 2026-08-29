@@ -177,6 +177,10 @@ standalone compile remains the syntax and type check.
 
 ## Adding a topic safely
 
+For a concise list containing only the remaining practical limits, separated
+into possible-but-unproven behavior and technically unsupported shapes, see
+[Practical limits only](dialog-authoring.md#practical-limits-only).
+
 The bounded new-topic mini-cache shape keeps both sides of the dependency in
 one existing conversation module:
 

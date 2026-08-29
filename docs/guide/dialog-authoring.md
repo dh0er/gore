@@ -24,6 +24,34 @@ of that page, not a second claim.
 | **Not qualified at all** | Steam build `24340829`, the exact frozen runtime-version-3 artifact for older build `24169431`, and game/UE4SS combinations other than the separately recorded proofs. |
 | **Unproven** | Automatic discovery: that a newly authored root class reaches an already constructed `ConversationTopicSet` without explicit registration. |
 
+## Practical limits only
+
+This section deliberately leaves out everything that already works. It separates
+possible-but-unproven game behavior from shapes the current GORE pipeline cannot
+produce.
+
+### Potentially possible, but not proven in game
+
+- A newly authored root dialog option actually appears and can be selected.
+- A newly authored sub-menu option actually opens and can be selected.
+- Quest, knowledge, inventory or other game-state effects authored for a new
+  option work correctly and persist in the save.
+- New recorded voice-over plays correctly on a newly authored line.
+- A manual restructuring of an already full or structurally complicated
+  sub-menu works reliably.
+
+### Not technically supported by the current GORE pipeline
+
+- Creating a complete conversation for an NPC that has no matching shipped
+  conversation.
+- Spreading one new dialog tree across multiple script modules and deploying it
+  as a normal mod bundle.
+- Creating a completely new multi-level sub-menu tree in which new topics open
+  further new topics. A new sub-topic must currently attach directly to a
+  shipped topic.
+- Changing the base class, fields, member set or method signatures of a shipped
+  topic.
+
 One consequence worth stating plainly, because it spans two guide pages:
 `gore voice add` writes a valid archive member, but nothing plays a brand-new
 voice path until a line exists that resolves to it — which is an authored topic,
