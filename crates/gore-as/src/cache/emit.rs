@@ -1582,6 +1582,15 @@ fn emit_function_ctor(
             locals.insert(*slot, "bool".into());
         }
     }
+    // A local vanilla constructs and never touches again leaves no trace in the text, so the
+    // hoist has to be told about it separately — with the type it already carries, never the
+    // `int` fallback below.
+    let mut used = used;
+    used.extend(
+        never_read_constructed_slots(f, refs)
+            .into_iter()
+            .filter(|slot| locals.contains_key(slot)),
+    );
     for &n in &used {
         locals.entry(n).or_insert_with(|| "int".to_string());
     }
@@ -2374,6 +2383,48 @@ fn used_idents(body: &str, prefix: &str) -> HashSet<i32> {
 }
 
 /// Slot indices of every `local_N` identifier referenced in a body.
+/// A value local the source DECLARED and then never touched.
+///
+/// It costs one thing and leaves one trace: the `PSF S; CALLSYS ::$beh0` that default-constructs
+/// it at entry. Its slot appears nowhere else in the whole function, so it appears nowhere in our
+/// text either, and the hoist — which reads the text — never learns it exists.
+///
+/// Measured: 6 such slots in 5 functions, every one of them divergent, none byte-faithful.
+fn never_read_constructed_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let mut out = HashSet::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if ins.op.name != "PSF" {
+            continue;
+        }
+        let slot = w0(ins);
+        if slot <= 0 {
+            continue;
+        }
+        let constructs = instrs.get(at + 1).is_some_and(|next| {
+            next.op.name == "CALLSYS"
+                && refs.func_by_ptr(next.qwords.first().copied().unwrap_or(0) as i64)
+                    == Some("$beh0")
+        });
+        if !constructs {
+            continue;
+        }
+        let sole = !instrs.iter().enumerate().any(|(other, ins)| {
+            other != at
+                && super::bytediff::addressed_slots(ins)
+                    .into_iter()
+                    .any(|other_slot| other_slot == slot)
+        });
+        if sole {
+            out.insert(slot);
+        }
+    }
+    out
+}
+
 fn used_locals(body: &str) -> HashSet<i32> {
     let mut out = HashSet::new();
     let b = body.as_bytes();
@@ -3937,6 +3988,36 @@ fn reference_result_slots(f: &Func, refs: &RefResolver) -> HashMap<i32, bool> {
                     // "Cannot initialize reference variable of type T& with an expression of
                     // type const T".
                     out.insert(slot, ret.is_read_only || ret.is_object_const);
+                }
+            }
+        }
+    }
+    // The same fact through the OTHER shape a reference return takes: the reference register is
+    // pushed, dereferenced and copied on — `CALL…; PshRPtr; RDSPtr; RefCpyV vE`. That is how a
+    // range-for element reaches its `Proceed()` result, and reading it as a value is what made
+    // the loop keep a `while` shape vanilla never had.
+    for (at, ins) in instrs.iter().enumerate() {
+        if ins.op.name != "RefCpyV" || at < 3 {
+            continue;
+        }
+        if instrs[at - 1].op.name != "RDSPtr" || instrs[at - 2].op.name != "PshRPtr" {
+            continue;
+        }
+        let call = &instrs[at - 3];
+        let returns = match call.op.name {
+            "CALLSYS" | "Thiscall1" => {
+                refs.func_ret_by_ptr(call.qwords.first().copied().unwrap_or(0) as i64)
+            }
+            "CALL" | "CALLINTF" | "CALLBND" => {
+                refs.func_ret_by_id(call.dwords.first().copied().unwrap_or(0) as i32)
+            }
+            _ => None,
+        };
+        if let Some(ret) = returns.filter(|ret| by_reference(ret)) {
+            if let Some(slot) = ins.words.first().map(|word| *word as i16 as i32) {
+                if slot > 0 {
+                    out.entry(slot)
+                        .or_insert(ret.is_read_only || ret.is_object_const);
                 }
             }
         }
@@ -12827,7 +12908,15 @@ fn element_is_written_through(
                 // `local_E.Field.Method(…)` reaches through the field. That only mutates when
                 // the method can: the cache records which ones are const, and a const call on a
                 // read-only range-for element is exactly what vanilla wrote.
-                if !refs.names_a_const_method(method) {
+                //
+                // …and a HANDLE element answers the same way it does one branch below: binding
+                // the handle says nothing about the object it points at, so reaching through it
+                // is not writing through the element. Without this the refusal fires and the
+                // loop keeps a `while (it.CanProceed)` shape — a shape vanilla has NOWHERE: all
+                // 626 `Iterator()` calls in the cache jump straight to the bottom test.
+                if !refs.names_a_const_method(method)
+                    && !ty.is_some_and(is_object_handle_type)
+                {
                     return true;
                 }
                 continue;
