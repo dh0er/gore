@@ -6629,14 +6629,21 @@ fn inline_temporary_into(
     // The compiler re-uses one slot for several temporaries, so the definition that matters is
     // the LAST one before this call, and it owns the lines up to the next definition of the
     // same slot.
-    let Some(definition) = (0..index)
+    // Both searches are bounded. A temporary's definition stands within a statement or two of the
+    // read — the compiler reuses the slot immediately — so an unbounded scan buys nothing and
+    // costs a walk of the whole body per candidate. One machine-generated module has 24,700
+    // statements in a single function, and that quadratic walk was 393 of the 729 seconds the
+    // emitter spent on it. The window is far wider than any real distance; the emitted tree is
+    // byte-identical with and without it.
+    const WINDOW: usize = 4096;
+    let Some(definition) = (index.saturating_sub(WINDOW)..index)
         .rev()
         .find(|line| definition_value(&lines[*line], temp).is_some())
     else {
         inline_reject("definitions", callee, &temp, &lines[index]);
         return false;
     };
-    let region_end = (definition + 1..lines.len())
+    let region_end = (definition + 1..lines.len().min(definition + 1 + WINDOW))
         .find(|line| definition_value(&lines[*line], temp).is_some())
         .unwrap_or(lines.len());
     let uses_in_region: Vec<usize> = (definition + 1..region_end)
@@ -10462,6 +10469,23 @@ fn inline_unnamed_value_temporaries(
     refs: &RefResolver,
 ) -> String {
     let mut lines: Vec<String> = body.lines().map(|l| l.to_owned()).collect();
+    // `body` never changes, so the two whole-body questions below are asked once per name instead
+    // of once per line. Unmemoized they were 258 of the 729 seconds the emitter spent on the one
+    // machine-generated module with 24,700 statements in a single function.
+    let mentions: std::cell::RefCell<HashMap<String, usize>> = Default::default();
+    let mentions_of = |name: &str| {
+        *mentions
+            .borrow_mut()
+            .entry(name.to_owned())
+            .or_insert_with(|| count_ident(body, name))
+    };
+    let lives: std::cell::RefCell<HashMap<String, bool>> = Default::default();
+    let has_later_life = |name: &str| {
+        *lives
+            .borrow_mut()
+            .entry(name.to_owned())
+            .or_insert_with(|| body.contains(&format!("{name}_")))
+    };
     let mut at = 0usize;
     while at < lines.len() {
         let at_decl = at;
@@ -10477,16 +10501,14 @@ fn inline_unnamed_value_temporaries(
             // the name belongs to that store and to nothing else.
             // Ordered so the whole-body scan runs only on the rare path: one module is 24,000
             // lines long and a per-line scan of it costs minutes.
-            let sole_life = || {
-                key.1 == 1 && consumed.contains(&key.0) && !body.contains(&format!("{name}_"))
-            };
+            let sole_life = || key.1 == 1 && consumed.contains(&key.0) && !has_later_life(&name);
             if !unnamed.contains(&key) && !sole_life() {
                 inline_reject("not-unnamed", "", &name, &lines[at]);
                 return None;
             }
             // The store may stand under a bare declaration hoisted above it, in which case the
             // name is mentioned three times, not two. That declaration goes with the store.
-            let bare = match count_ident(body, &name) {
+            let bare = match mentions_of(&name) {
                 2 => None,
                 3 => Some(
                     lines[..at]
