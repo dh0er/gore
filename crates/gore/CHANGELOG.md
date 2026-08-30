@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-30
+
+- Decompiled scripts recompile closer to the original: enum returns, increments,
+  copied values, loop bodies and construction order now come back the way the
+  game wrote them.
+- A standalone AngelScript compile that dies without answering now says how the
+  compiler process ended, instead of blaming its output.
+- Correct stale command flags, install paths and counts throughout the guide and
+  the reference docs.
+
 ## [0.2.2] - 2026-08-29
 
 - Fix standalone AngelScript compilation for patch 1.0.5.
