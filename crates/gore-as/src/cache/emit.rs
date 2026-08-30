@@ -9242,6 +9242,9 @@ fn split_gameplay_effect_chain(body: &str, slots: &[(i32, i32)], refs: &RefResol
     };
     let mut out: Vec<String> = Vec::new();
     let mut next = 0usize;
+    // Names this pass has already introduced. Scanning `body` alone cannot see them, so two
+    // chains sharing one spec slot would each emit its declaration.
+    let mut declared: HashSet<i32> = HashSet::new();
     for line in body.lines() {
         let Some(&(context, spec)) = slots.get(next) else {
             out.push(line.to_owned());
@@ -9258,8 +9261,9 @@ fn split_gameplay_effect_chain(body: &str, slots: &[(i32, i32)], refs: &RefResol
             // Vanilla may reuse one slot for two chains in the same function. Introducing the
             // name where the body already carries it declares the same local twice, which the
             // compiler does not survive — those functions keep the nested form.
-            let already_named = count_ident(body, &format!("local_{spec}")) != 0
-                && !line.contains(&format!("local_{spec} = "));
+            let already_named = (count_ident(body, &format!("local_{spec}")) != 0
+                && !line.contains(&format!("local_{spec} = ")))
+                || declared.contains(&spec);
             if already_named {
                 return None;
             }
@@ -9325,6 +9329,7 @@ fn split_gameplay_effect_chain(body: &str, slots: &[(i32, i32)], refs: &RefResol
             ))
         })();
         if rewritten.is_some() {
+            declared.insert(spec);
             next += 1;
         }
         out.push(rewritten.unwrap_or_else(|| line.to_owned()));
@@ -10730,7 +10735,7 @@ fn chain_inlined_cast_operands(f: &Func) -> HashSet<i32> {
 ///
 /// Measured tree-wide: the pattern occurs 40 times and fires on 13 byte-faithful functions, all
 /// 13 of which our text already writes in that order.
-fn adjacent_declaration_order(f: &Func, refs: &RefResolver) -> Vec<(i32, i32)> {
+fn adjacent_declaration_order(f: &Func, refs: &RefResolver) -> Vec<Vec<i32>> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return Vec::new();
     };
@@ -10744,41 +10749,66 @@ fn adjacent_declaration_order(f: &Func, refs: &RefResolver) -> Vec<(i32, i32)> {
         .filter(|slot| *slot > 0)
     };
     let mut out = Vec::new();
-    for at in 0..instrs.len().saturating_sub(3) {
-        if let (Some(first), Some(second)) = (constructs(at), constructs(at + 2)) {
-            if first != second {
-                out.push((first, second));
-            }
+    let mut at = 0usize;
+    while at + 1 < instrs.len() {
+        let Some(first) = constructs(at) else {
+            at += 1;
+            continue;
+        };
+        let mut run = vec![first];
+        let mut after = at + 2;
+        while let Some(slot) = constructs(after) {
+            run.push(slot);
+            after += 2;
         }
+        // A slot built twice in one run says nothing about the order of the others.
+        let distinct: HashSet<i32> = run.iter().copied().collect();
+        if run.len() > 1 && distinct.len() == run.len() {
+            out.push(run);
+        }
+        at = after.max(at + 1);
     }
     out
 }
 
-/// Write those two declarations in the order vanilla built them.
-fn order_adjacent_declarations(body: &str, pairs: &[(i32, i32)]) -> String {
-    if pairs.is_empty() {
+/// Write a run's declarations in the order vanilla built them.
+fn order_adjacent_declarations(body: &str, runs: &[Vec<i32>]) -> String {
+    if runs.is_empty() {
         return body.to_owned();
     }
     let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
-    for &(first, second) in pairs {
-        let find = |slot: i32| {
-            let ident = format!("local_{slot}");
-            lines
-                .iter()
-                .position(|line| bare_declaration(line).is_some_and(|(_, name)| name == ident))
-        };
-        let (Some(at_first), Some(at_second)) = (find(first), find(second)) else {
+    for run in runs {
+        let spots: Option<Vec<usize>> = run
+            .iter()
+            .map(|slot| {
+                let ident = format!("local_{slot}");
+                lines
+                    .iter()
+                    .position(|line| bare_declaration(line).is_some_and(|(_, name)| name == ident))
+            })
+            .collect();
+        let Some(spots) = spots else {
             continue;
         };
-        if at_second >= at_first {
+        if spots.windows(2).all(|pair| pair[0] < pair[1]) {
             continue;
         }
-        // Move the one vanilla built first up in front of the other, keeping the indentation of
-        // the place it lands in.
-        let indent = indent_of(&lines[at_second]);
-        let declaration = lines.remove(at_first);
-        let declaration = format!("{indent}{}", declaration.trim());
-        lines.insert(at_second, declaration);
+        // Lift the whole run out and lay it back down at its earliest line, in vanilla's order.
+        // One pair at a time cannot do this: a reversed run of three lands on a third order.
+        let target = spots.iter().copied().min().unwrap_or_default();
+        let indent = indent_of(&lines[target]);
+        let ordered: Vec<String> = spots
+            .iter()
+            .map(|&at| format!("{indent}{}", lines[at].trim()))
+            .collect();
+        let mut removals = spots.clone();
+        removals.sort_unstable_by(|a, b| b.cmp(a));
+        for at in removals {
+            lines.remove(at);
+        }
+        for (offset, declaration) in ordered.into_iter().enumerate() {
+            lines.insert(target + offset, declaration);
+        }
     }
     let mut out = lines.join("\n");
     if body.ends_with('\n') {
@@ -10832,6 +10862,12 @@ fn lead_with_the_declaration(body: &str, slot: Option<i32>) -> String {
         return body.to_owned();
     };
     if head >= at {
+        return body.to_owned();
+    }
+    // A declaration standing deeper than the first statement was sunk into a block. Leading with
+    // it would lift it back to function scope and lose the per-iteration construction the sink
+    // recovered.
+    if indent_of(&lines[at]).len() > indent_of(&lines[head]).len() {
         return body.to_owned();
     }
     let declaration = lines.remove(at);
@@ -12038,6 +12074,31 @@ fn fold_literal_null_returns(body: &str, witnessed: &HashSet<i32>, by_reference:
     joined
 }
 
+/// A rendered value that cannot run anything: a literal, or an enum written as a cast of one.
+fn is_constant_literal(value: &str) -> bool {
+    if matches!(value, "true" | "false" | "nullptr") {
+        return true;
+    }
+    let numeric = |s: &str| {
+        s.chars().any(|c| c.is_ascii_digit())
+            && s.chars()
+                .all(|c| c.is_ascii_hexdigit() || matches!(c, '.' | '-' | '+' | 'f' | 'u' | 'x'))
+    };
+    if numeric(value) {
+        return true;
+    }
+    value
+        .strip_suffix(')')
+        .and_then(|inner| inner.split_once('('))
+        .is_some_and(|(name, argument)| {
+            !name.is_empty()
+                && name
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || matches!(c, '_' | ':'))
+                && numeric(argument)
+        })
+}
+
 /// `local_N = K; return K;` — the store is DEAD. The very next statement leaves the function, so
 /// no path can read what it wrote.
 ///
@@ -12051,6 +12112,12 @@ fn drop_dead_stores_before_return(body: &str) -> String {
     for (at, line) in lines.iter().enumerate() {
         let dead = (|| {
             let (target, value) = slot_store(line)?;
+            // Only a CONSTANT is safe to drop. The two lines carrying the same text says nothing
+            // about a call: `local_2 = Consume(); return Consume();` calls twice on purpose, and
+            // dropping the store would drop the first call with it.
+            if !is_constant_literal(&value) {
+                return None;
+            }
             let next = lines.get(at + 1)?;
             (next.trim() == format!("return {value};") && indent_of(next) == indent_of(line))
                 .then_some(target)
