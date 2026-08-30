@@ -1919,7 +1919,7 @@ fn emit_function_ctor(
                 refs,
                 &already_declared_at_use,
                 &reference_locals,
-                &bare_declaration_slots(f),
+                &bare_declaration_slots(f, refs),
                 &call_result_declared_at_initializer(f),
             );
         let (body, first_write_suppressed) = rewrite_bare_decl_at_first_write(
@@ -9458,8 +9458,15 @@ fn split_gameplay_effect_chain(body: &str, slots: &[(i32, i32)], refs: &RefResol
                 "{indent}{context_ty} local_{context} = {context_expr};\n{indent}{spec_ty} local_{spec} = {spec_expr};\n{rest}"
             ))
         })();
+        // The pair belongs to the chain on this line whether or not the line is rewritten: a
+        // chain a function RETURNS is deliberately left alone, and leaving its pair unconsumed
+        // hands those slots to the next Apply chain, which then declares the wrong locals.
+        let carries_the_chain = line.contains(".MakeOutgoingSpec(")
+            && line.contains(".MakeEffectContext()");
         if rewritten.is_some() {
             declared.insert(spec);
+        }
+        if rewritten.is_some() || carries_the_chain {
             next += 1;
         }
         out.push(rewritten.unwrap_or_else(|| line.to_owned()));
@@ -14238,7 +14245,7 @@ fn rewrite_bare_decl_at_first_write(
 ///
 /// Measured: fires on 9 functions tree-wide, none of them byte-faithful. Every byte-faithful
 /// sole-copy local has its producer ADJACENT to the copy, which is what the gap separates.
-fn bare_declaration_slots(f: &Func) -> HashSet<i32> {
+fn bare_declaration_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
     };
@@ -14270,11 +14277,18 @@ fn bare_declaration_slots(f: &Func) -> HashSet<i32> {
         if at == producer + 1 {
             continue; // adjacent: the declaration took the temporary
         }
+        // Cleanup, and nothing that runs. `CALLSYS` alone is not a shape — the destructor
+        // behaviour is. Any other call in the gap can do work between the producer and the copy,
+        // and reading it as cleanup keeps the initializer from being restored.
         let cleanup_only = instrs[producer + 1..at].iter().all(|ins| {
-            matches!(
-                ins.op.name,
-                "PSF" | "CALLSYS" | "PshVPtr" | "STOREOBJ" | "PopPtr"
-            )
+            match ins.op.name {
+                "PSF" | "PshVPtr" | "STOREOBJ" | "PopPtr" => true,
+                "CALLSYS" => {
+                    refs.func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64)
+                        == Some("$beh2")
+                }
+                _ => false,
+            }
         });
         // …and the temporary is dead after the copy.
         let reused = instrs[at + 1..]
