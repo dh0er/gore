@@ -2103,6 +2103,11 @@ fn emit_function_ctor(
                         .into_iter()
                         .map(|slot| (slot, 1)),
                 )
+                .chain(
+                    return_expression_temporaries(f, refs)
+                        .into_iter()
+                        .flat_map(|slot| [(slot, 1), (slot, 2)]),
+                )
                 .collect(),
             &wholly_consumed_object_slots(f),
             &rvo_temporary_slots(f, refs),
@@ -2111,7 +2116,10 @@ fn emit_function_ctor(
         // Now that the operands carry no names of their own, an in-place update stands directly
         // under its declaration and the pair is one statement — which can expose another value.
         let rendered = merge_self_assignments(&rendered);
-        let rendered = inline_unnamed_value_temporaries(
+        let mut rendered = rendered;
+        // A returned expression folds one step per pass: three names in a chain need three.
+        for _ in 0..3 {
+        rendered = inline_unnamed_value_temporaries(
             &rendered,
             &unnamed_value_defs(f, refs)
                 .union(&immediately_consumed_defs(f))
@@ -2128,11 +2136,17 @@ fn emit_function_ctor(
                         .into_iter()
                         .map(|slot| (slot, 1)),
                 )
+                .chain(
+                    return_expression_temporaries(f, refs)
+                        .into_iter()
+                        .flat_map(|slot| [(slot, 1), (slot, 2)]),
+                )
                 .collect(),
             &wholly_consumed_object_slots(f),
             &rvo_temporary_slots(f, refs),
             refs,
         );
+        }
         let rendered =
             spell_out_argument_temporaries(
                 &rendered,
@@ -10827,6 +10841,57 @@ fn nested_expression_intermediates(f: &Func, refs: &RefResolver) -> HashSet<i32>
     out
 }
 
+/// The temporaries of a RETURN expression.
+///
+/// A function returning a value type ends by copy-constructing the return object out of the
+/// expression's last result — `PSF X; PshVPtr <return slot>; CALLSYS ::$beh0`. Whatever the
+/// compiler destroys immediately BEFORE that construction died with the expression, not with the
+/// scope: those slots are the steps of one returned expression, and the source named none of them.
+///
+/// The anchor is doing all the work, so it is required: a `void` function calling a method on a
+/// by-reference parameter has the same instruction triple, and reading that as a return
+/// expression names one byte-faithful slot wrongly.
+fn return_expression_temporaries(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    if f.ret.token == 0x52 {
+        return HashSet::new();
+    }
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let behaviour = |ins: &super::disasm::Instr, want: &str| {
+        ins.op.name == "CALLSYS"
+            && refs.func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64) == Some(want)
+    };
+    let mut out = HashSet::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if ins.op.name != "PSF" || at < 2 {
+            continue;
+        }
+        let anchored = instrs
+            .get(at + 1)
+            .is_some_and(|ins| ins.op.name == "PshVPtr" && w0(ins) < 0)
+            && instrs.get(at + 2).is_some_and(|ins| behaviour(ins, "$beh0"));
+        if !anchored {
+            continue;
+        }
+        // Walk back over the destructor pairs standing directly in front of it.
+        let mut back = at;
+        while back >= 2
+            && instrs[back - 1].op.name == "CALLSYS"
+            && behaviour(&instrs[back - 1], "$beh2")
+            && instrs[back - 2].op.name == "PSF"
+        {
+            let slot = w0(&instrs[back - 2]);
+            if slot > 0 {
+                out.insert(slot);
+            }
+            back -= 2;
+        }
+    }
+    out
+}
+
 /// A short-circuit carrier the source never named at all.
 ///
 /// The compiler materialises a branch condition into a slot and reloads it — `CpyRtoV4 S;
@@ -11264,9 +11329,13 @@ fn inline_unnamed_value_temporaries(
                 // An arithmetic operator IS a receiver position: `a - b` is `a.opSub(b)`, and the
                 // operator overloads of a value type are const, so a temporary binds to them. The
                 // `.method()` spelling below is the same question written the other way.
+                // Either side of an arithmetic operator. The left is the receiver (`a - b` is
+                // `a.opSub(b)`); the right is the operand, and a value type's operator overloads
+                // take it by CONST reference — which is the one parameter kind a temporary binds
+                // to. Vanilla's own bytecode shows the compiler accepting both.
                 let operator = [" + ", " - ", " * ", " / "]
                     .iter()
-                    .any(|op| rest.starts_with(op));
+                    .any(|op| rest.starts_with(op) || consumer[..at].ends_with(op));
                 let method = match operator {
                     true => String::new(),
                     false => rest
