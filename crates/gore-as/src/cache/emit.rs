@@ -12279,29 +12279,18 @@ fn fold_literal_null_returns(body: &str, witnessed: &HashSet<i32>, by_reference:
     joined
 }
 
-/// A rendered value that cannot run anything: a literal, or an enum written as a cast of one.
+/// A rendered value that cannot run anything.
+///
+/// Only bare literals. `Name(1)` was allowed here as an enum conversion, but nothing in the text
+/// separates that from a call taking a number — and this decides whether a line may be DELETED,
+/// so a call slipping through would take its effect with it. The constant this exists for comes
+/// out of a `SetV4` and is always a bare number anyway.
 fn is_constant_literal(value: &str) -> bool {
-    if matches!(value, "true" | "false" | "nullptr") {
-        return true;
-    }
-    let numeric = |s: &str| {
-        s.chars().any(|c| c.is_ascii_digit())
-            && s.chars()
-                .all(|c| c.is_ascii_hexdigit() || matches!(c, '.' | '-' | '+' | 'f' | 'u' | 'x'))
-    };
-    if numeric(value) {
-        return true;
-    }
-    value
-        .strip_suffix(')')
-        .and_then(|inner| inner.split_once('('))
-        .is_some_and(|(name, argument)| {
-            !name.is_empty()
-                && name
-                    .chars()
-                    .all(|c| c.is_alphanumeric() || matches!(c, '_' | ':'))
-                && numeric(argument)
-        })
+    matches!(value, "true" | "false" | "nullptr")
+        || (value.chars().any(|c| c.is_ascii_digit())
+            && value
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() || matches!(c, '.' | '-' | '+' | 'f' | 'u' | 'x')))
 }
 
 /// `local_N = K; return K;` — the store is DEAD. The very next statement leaves the function, so
