@@ -846,7 +846,8 @@ infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds t
 vanilla holds, where the largest finite float came back one ULP low every time. The belief that
 it could not was carried in this file for months and was never probed.
 
-**30 of the 7,308 modules cannot be spliced back** (99.59% can). Each is a template instantiation
+**30 of the modules cannot be spliced back** (99.59% can). That sweep ran on the earlier
+`D0AFAF90…` build, which had 7,308 modules against this one's 7,317; it has not been repeated. Each is a template instantiation
 or a behaviour the base cache never recorded — 14 `$beh0` constructors, 13 `TArray` iterators, and
 a tail of single cases (`opAssign`, `GetRootNode`, `AssertEquals`). They share the root
 cause of the ordering classes above: vanilla wrote the expression inline where the emitter
