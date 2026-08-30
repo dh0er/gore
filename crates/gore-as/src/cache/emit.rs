@@ -2097,6 +2097,7 @@ fn emit_function_ctor(
                         .into_iter()
                         .map(|slot| (slot, 1)),
                 )
+                .chain(chain_inlined_cast_operands(f).into_iter().map(|slot| (slot, 1)))
                 .collect(),
             &wholly_consumed_object_slots(f),
             &rvo_temporary_slots(f, refs),
@@ -2116,6 +2117,7 @@ fn emit_function_ctor(
                         .into_iter()
                         .map(|slot| (slot, 1)),
                 )
+                .chain(chain_inlined_cast_operands(f).into_iter().map(|slot| (slot, 1)))
                 .collect(),
             &wholly_consumed_object_slots(f),
             &rvo_temporary_slots(f, refs),
@@ -10650,6 +10652,45 @@ fn declared_at_initializer_carriers(f: &Func) -> HashSet<i32> {
         if consumed {
             out.insert(slot);
         }
+    }
+    out
+}
+
+/// The operand of a `Cast<T>` whose whole chain the source wrote inline.
+///
+/// A cast's destination slot is allocated fresh — unless the compiler has one free, and the only
+/// way a slot comes free mid-function is a temporary that died. So a cast whose out-slot is a slot
+/// vanilla RELEASED (`FreeNullV8`) says the value it casts came out of a chain of temporaries,
+/// with no name anywhere along it. Measured over the whole cache: the freeing shape occurs 10
+/// times, every one in a divergent function; the 785 sites where the cast takes a fresh slot are
+/// untouched.
+fn chain_inlined_cast_operands(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let freed: HashSet<i32> = instrs
+        .iter()
+        .filter(|ins| ins.op.name == "FreeNullV8")
+        .map(&w0)
+        .collect();
+    let mut out = HashSet::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if ins.op.name != "TYPEID" {
+            continue;
+        }
+        // `TYPEID T; PSF <destination>; PshVPtr <operand>; CALLSYS ::opCast`
+        let Some(destination) = instrs.get(at + 1).filter(|ins| ins.op.name == "PSF") else {
+            continue;
+        };
+        let Some(operand) = instrs.get(at + 2).filter(|ins| ins.op.name == "PshVPtr") else {
+            continue;
+        };
+        let operand = w0(operand);
+        if !freed.contains(&w0(destination)) || operand <= 0 {
+            continue;
+        }
+        out.insert(operand);
     }
     out
 }
