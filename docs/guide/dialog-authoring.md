@@ -17,11 +17,11 @@ of that page, not a second claim.
 
 | | |
 |---|---|
-| **Shown in game** | An authored topic rendered in a real conversation on Gothic 1 Remake **1.0.3**: caption independently confirmed, `RENDER_PASS`, the same object and exact class once each in both observed arrays. That historical version-1 proof restored the 123,394,250-byte shipping cache to its recorded SHA-256, with 92 of 93 saves byte-identical. On 2026-08-18, runtime version 3 also rendered `[Gore probe] UI fixture` on BuildID 24539464 and logged `ARMED`, `CHOICE_PASS`, and `RENDER_PASS` with `exact_count=1`; no topic was selected and no save was written. |
-| **Current offline compiler/package proof** | On BuildID `24878692`, `gore doctor` accepted the installed Shipping cache and complete Binds API. Strict standalone `compile-module --op edit --allow-new-symbols` produced same-module topic minis for Payfine (17,085-byte sub-topic), Charlotte (8,271-byte root topic), and Brannok (104,047-byte sub-topic). All three offline bundles built and passed inspection: Payfine and Brannok each have one component/three files; Charlotte has two components/five files. The Brannok bundle is 104,448 bytes. None was deployed and the game was not launched, so appearance and selection remain unproven. |
-| **Current-proof boundary** | The version-3 probe was GORE-authored and used the PR #91-fixed app-local Core DLL. Postflight restored the captured four-mod baseline loadout byte-for-byte and removed the temporary fixture. It does not qualify a third-party AngelScript mod or a three-way script conflict. |
-| **Not certified by that proof** | Selecting the topic. Authored knowledge or quest changes. **Recorded voice on an authored topic.** Save effects on the selection side. |
-| **Not qualified at all** | Steam build `24340829`, the exact frozen runtime-version-3 artifact for older build `24169431`, and game/UE4SS combinations other than the separately recorded proofs. |
+| **Shown in game on the current build** | On BuildID `24878692`, against pristine Shipping cache SHA-256 `7A18F954E32AF30FC24AE3A66EA35D3B5CB98560C8F5083C7846FC9CE1D77511`, a source-identical full recompile of Diego's complete conversation module ran normally in game. A second full-module edit changed only `UChoiceDiegoExitGamestart.Caption`; `[Forced Conversation]` was visible and selectable, selecting it ended the conversation, and player control returned. This proves the existing-module source round trip, one authored `Caption` default, selection, `EndConversation`, and control recovery for that fixture. |
+| **New same-module sub-topic** | On the same build, strict standalone compilation produced a 353,402-byte mini-cache, its bundle was 353,811 bytes, and Mod Manager deployed it successfully. Runtime selection of the new option was not observed. Compilation, packaging and deployment are proven; selection is not. |
+| **Earlier registration-adapter proof** | An authored root topic rendered in a real conversation on Gothic 1 Remake **1.0.3**. On 2026-08-18, runtime version 3 also rendered `[Gore probe] UI fixture` on BuildID `24539464` and logged `ARMED`, `CHOICE_PASS`, and `RENDER_PASS` with `exact_count=1`; neither proof selected the new fixture. |
+| **Not certified by the current Diego proof** | The individual runtime effect of authored `PriorityRank`, `Rules`, or topic flags; any newly authored root or sub-topic; authored knowledge, quest or inventory effects; recorded voice on a new topic; or selection-side persistence. |
+| **Not qualified at all** | Steam build `24340829`, the exact frozen runtime-version-3 artifact for older build `24169431`, other game builds, and — for the root-registration adapter only — game/UE4SS combinations other than the separately recorded proofs. Existing-topic edits and same-module sub-topics have no UE4SS dependency. |
 | **Unproven** | Automatic discovery: that a newly authored root class reaches an already constructed `ConversationTopicSet` without explicit registration. |
 
 ## Practical limits only
@@ -32,13 +32,19 @@ produce.
 
 ### Potentially possible, but not proven in game
 
-- A newly authored root dialog option actually appears and can be selected.
-- A newly authored sub-menu option actually opens and can be selected.
+- A root option produced by the current same-module authoring path actually
+  appears and can be selected.
+- A new same-module sub-menu option actually opens and can be selected.
+- An authored change to `PriorityRank`, `Rules` or a topic flag has the intended
+  gameplay effect. The same default-authoring path accepts these fields, but the
+  current live proof changed only `Caption`.
 - Quest, knowledge, inventory or other game-state effects authored for a new
   option work correctly and persist in the save.
 - New recorded voice-over plays correctly on a newly authored line.
 - A manual restructuring of an already full or structurally complicated
   sub-menu works reliably.
+- A newly authored root is discovered without explicit `dialog_topics`
+  registration.
 
 ### Not technically supported by the current GORE pipeline
 
@@ -79,6 +85,13 @@ emitter-omitted generated `__*` method, or changed existing class/member/callabl
 layout. The old byte-exact carry remains only for source with no authored
 defaults at all. It cannot be selected by deleting part of a normal checkout.
 
+For an existing declaration, compilation keeps the shipped `FunctionTraits`
+and complete Unreal-function descriptor while replacing the bytecode and its
+matching frame layout with the compiler's new output. This is what preserves
+the native `Act`/`IsVisible` event binding across a full-module edit. A genuinely
+new function has no shipped descriptor to inherit and therefore keeps the
+metadata authored by the compiler from its source declaration.
+
 For a new topic, add the class at the **end of the existing conversation
 namespace** in this same source file, before that namespace's closing brace.
 This example uses the conversation-private Diego base because the declaration
@@ -87,22 +100,36 @@ now has both the module and namespace identity where that base is visible:
 ```angelscript
 class UChoiceMyModDiego : UTopic_Hero__OC_STT_DIEGO
 {
+    default DebugId = 7700385383056303891;
     default Caption = LocText("MY_MOD_DIEGO_CAPTION");
     default PriorityRank = 2;
 
-    UFUNCTION()
-    bool IsVisible_Implementation()
+    UFUNCTION(BlueprintOverride)
+    bool IsVisible() const
     {
         return true;
     }
 
-    UFUNCTION()
-    void Act_Implementation()
+    UFUNCTION(BlueprintOverride)
+    void Act()
     {
         this.EndConversation();
     }
 }
 ```
+
+The spelling above is intentional. `BlueprintOverride` makes the AngelScript
+frontend publish the Unreal override metadata and lower the source methods
+`IsVisible` and `Act` to the compiled records
+`IsVisible_Implementation` and `Act_Implementation`. A brand-new class has no
+shipped function record from which that metadata could be copied, so writing
+`UFUNCTION()` plus an `_Implementation` source name is rejected by `dialog
+check`. `IsVisible` must remain `const`, and a new topic may not add another
+overload under either hook name. Each new topic also needs one authored nonzero
+signed 64-bit `DebugId`; `dialog new-topic` derives one deterministically and
+avoids values already present in the conversation module. Shipped continuation
+chains sometimes reuse a `DebugId`, so `dialog check` does not impose a blanket
+uniqueness rule on manually authored values.
 
 For a genuine sub-menu topic, also author its sub-topic flag and change the
 existing parent method's `Subdialog` call to reference the appended class.
@@ -155,15 +182,29 @@ writing into its install. Complete authored defaults are what make
 `--op edit --allow-new-symbols` safe: no stale `__InitDefaults` carry remains to
 depend on the old keyspace. A partial default set still fails closed.
 
-That exact path has now completed three times against installed BuildID
-`24878692`. The strict standalone compiler/remapper produced a 17,085-byte
+The current live qualification used BuildID `24878692` and pristine Shipping
+cache SHA-256
+`7A18F954E32AF30FC24AE3A66EA35D3B5CB98560C8F5083C7846FC9CE1D77511`.
+A source-identical strict standalone recompile of Diego's complete conversation
+module ran normally in game. A second recompile changed only the
+`UChoiceDiegoExitGamestart.Caption` default to `[Forced Conversation]`; the
+option appeared, was selected, ended the conversation, and returned control to
+the player. That is live evidence for a full existing-module recompile and one
+authored `Caption` change, not for the other default fields or a newly added
+topic.
+
+A separate new same-module sub-topic on that build strictly compiled to a
+353,402-byte mini-cache. Its bundle was 353,811 bytes and Mod Manager deployed
+it successfully. Runtime selection of the new topic was not observed, so the
+proof stops at deployment with respect to gameplay.
+
+Earlier offline compiler coverage on the same BuildID produced a 17,085-byte
 Payfine same-module sub-topic mini-cache, an 8,271-byte Charlotte same-module
 root-topic mini-cache, and a 104,047-byte Brannok same-module sub-topic
-mini-cache. Their offline bundles also built and passed inspection. Payfine and
+mini-cache. Their offline bundles built and passed inspection. Payfine and
 Brannok each have one component and three files; Charlotte has two components
-and five files. The Brannok bundle is 104,448 bytes. Nothing was deployed and
-the game was not started. This evidence does not show any option, exercise root
-registration, or prove selection.
+and five files. The Brannok bundle is 104,448 bytes. Those three earlier
+fixtures were not deployed or game-tested.
 
 The Brannok product oracle also covers the harder cached-module bridge shape:
 real decompiled `LocText` temporary `Say` calls, `Subdialog`, cross-module class
@@ -212,7 +253,9 @@ new direct topic must be exactly one of: registered once for the resolved NPC
 with that conversation's checked vanilla sentinel, or referenced once by a
 shipped class's `Subdialog` call. A stale class path, deleted registration,
 wrong participant/sentinel, duplicate row, or orphaned sub-topic is refused
-before staging.
+before staging. The same classification is bound to the authored flag: a
+`Subdialog` child must declare `default bIsSubTopic = true;`, while a registered
+root must not declare it true.
 
 The staged root spec has this shape:
 
@@ -268,9 +311,11 @@ gore mod deploy --bundle build\MyDialogMod --game $GAME
 
 `mod build` and `mod inspect` are offline packaging/validation steps. Deployment
 is a separate installation mutation handled transactionally by the bundle
-engine. The builder composes generated CDO overrides and dialog registration
-into one self-contained UE4SS Lua component; ambiguous multiple hand-authored
-roots are rejected.
+engine. Existing-topic edits and same-module sub-topics remain ordinary script
+mini-cache bundles and do **not** require UE4SS. Only a new root's explicit
+`dialog_topics` registration makes the builder add generated CDO overrides and
+the registration adapter as one self-contained UE4SS Lua component; ambiguous
+multiple hand-authored roots are rejected.
 
 Dialog registration is a transient topic-set mutation, so its component is
 marked `opaque`. The manager still reports ordinary target overlaps and an
@@ -285,18 +330,23 @@ advisory does not invent a later-wins result.
    untouched by definition.
 3. Parse the mini-cache, resolve its tail tables, and disassemble every new
    function. Build and inspect the bundle before deployment.
-4. Capture the installation/loadout and save baseline, deploy through the
-   bundle engine, and confirm the class/CDO is resident.
+4. Capture the installation/loadout and save baseline, then deploy through the
+   bundle engine.
 5. Open the NPC menu naturally on a backed-up or disposable save.
-6. For a topic expected to be visible in that state, require one `registration`
-   and `attempt` sequence that reaches `ARMED`, then `CHOICE_PASS`, then
-   `RENDER_PASS`, with one matching object identity and exact class in both
-   observed arrays. A conditional topic may instead end at `HIDDEN`; if every
-   armed topic is conditional and hidden, the batch also logs `CHOICE_EMPTY`.
-   That proves exact topic-set membership plus a clean UI zero-match, not visual
-   delivery. The same topic must still reach both PASS stages on a later state
-   where it is expected to be visible.
-7. Confirm the caption visually, select nothing, exit the game, and undeploy.
+6. For an existing-topic edit or same-module sub-topic, inspect the native menu
+   directly; no UE4SS registration telemetry exists or is required. For a new
+   root using the registration adapter, require one `registration` and `attempt`
+   sequence that reaches `ARMED`, then `CHOICE_PASS`, then `RENDER_PASS`, with
+   one matching object identity and exact class in both observed arrays. A
+   conditional root may instead end at `HIDDEN`; if every armed topic is
+   conditional and hidden, the batch also logs `CHOICE_EMPTY`. That proves exact
+   topic-set membership plus a clean UI zero-match, not visual delivery. The
+   same root must still reach both PASS stages in a later state where it is
+   expected to be visible.
+7. For a render-only check, confirm the caption visually and select nothing.
+   For a selection check, use a disposable save, select the exact fixture, and
+   verify its expected result such as conversation end and restored player
+   control. Exit the game and undeploy.
 8. Verify the pristine cache hash, absence of deployment residue, and compare
    saves to the pre-run snapshot.
 
