@@ -2134,6 +2134,7 @@ fn emit_function_ctor(
             spell_out_default_temporaries(&rendered, &default_only_construction_counts(f, refs));
         let rendered =
             split_gameplay_effect_chain(&rendered, &gameplay_effect_chain_slots(f, refs), refs);
+        let rendered = lead_with_the_declaration(&rendered, leading_declaration_slot(f));
         let rendered =
             merge_copy_constructed_declarations(&rendered, &copy_constructed_slots(f, refs));
         let rendered = drop_default_arguments(&rendered, refs);
@@ -10691,6 +10692,62 @@ fn chain_inlined_cast_operands(f: &Func) -> HashSet<i32> {
             continue;
         }
         out.insert(operand);
+    }
+    out
+}
+
+/// The local whose declaration was the function's FIRST statement.
+///
+/// A value type is constructed where it is declared, so a function whose very first instruction
+/// pair builds one is a function whose first statement is that declaration. Anything our text puts
+/// in front of it — a call, a store, another value's construction — is a statement vanilla ran
+/// later.
+///
+/// Bare declarations of object handles do not count as "in front": they emit nothing at all, and
+/// 11 byte-faithful functions carry one before the constructed local.
+fn leading_declaration_slot(f: &Func) -> Option<i32> {
+    let instrs = disassemble(&f.bytecode).ok()?;
+    let first = instrs.first()?;
+    if first.op.name != "PSF" {
+        return None;
+    }
+    matches!(
+        instrs.get(1)?.op.name,
+        "CALL" | "CALLSYS" | "CALLINTF" | "CALLBND"
+    )
+    .then(|| first.words.first().map(|w| *w as i16 as i32))
+    .flatten()
+    .filter(|slot| *slot > 0)
+}
+
+/// Put that declaration back in front.
+fn lead_with_the_declaration(body: &str, slot: Option<i32>) -> String {
+    let Some(slot) = slot else {
+        return body.to_owned();
+    };
+    let ident = format!("local_{slot}");
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let Some(at) = lines
+        .iter()
+        .position(|line| bare_declaration(line).is_some_and(|(_, name)| name == ident))
+    else {
+        return body.to_owned();
+    };
+    // The first line that emits something: anything that is not a bare declaration or blank.
+    let Some(head) = lines
+        .iter()
+        .position(|line| !line.trim().is_empty() && bare_declaration(line).is_none())
+    else {
+        return body.to_owned();
+    };
+    if head >= at {
+        return body.to_owned();
+    }
+    let declaration = lines.remove(at);
+    lines.insert(head, declaration);
+    let mut out = lines.join("\n");
+    if body.ends_with('\n') {
+        out.push('\n');
     }
     out
 }
