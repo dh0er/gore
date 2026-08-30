@@ -4763,6 +4763,41 @@ fn block_stmts_in(
                 {
                     v = scan_back_retval(ctx, lo + k).or(v);
                 }
+                // A reference return travels OUT THROUGH A SLOT. `CpyRtoV8 S ; PshVPtr S ;
+                // PopRPtr ; RET` stores the reference the expression produced and then returns
+                // that slot — which is a name the source wrote, not an anonymous step. The
+                // popped name is in `ref_reg` and nothing above consults it, so the value fell
+                // through to the scan-back; in `GAS/PerceptionEventMixins.as` that invented a
+                // `return OnSensedOther(Perception);` the original never calls, in 25 functions.
+                //
+                // Only where the `PopRPtr` is the RET's own immediate predecessor: further back
+                // it belongs to a member store (Idiom A), which is what `ref_reg` normally
+                // carries.
+                if non_void
+                    && !ctx.ret_via_rvo()
+                    && ctx.ret_is_ref()
+                    && (lo + k)
+                        .checked_sub(1)
+                        .and_then(|before| ctx.instrs.get(before))
+                        .is_some_and(|ins| ins.op.name == "PopRPtr")
+                {
+                    // …and only where the slot ALREADY stands in the text. Where the store was
+                    // folded away the name would have nothing behind it, and a bare
+                    // `return local_N;` for a reference return is the shape that takes the
+                    // compiler down without a diagnostic. Materialising the declaration is a
+                    // separate job; until it is done those functions keep what they had.
+                    if let Some(name) = ref_reg
+                        .clone()
+                        .filter(|name| name.starts_with("local_") && !name.contains('.'))
+                        .filter(|name| {
+                            out.iter().any(|line| {
+                                line.contains(&format!("{name} = ")) || line.contains(&format!(" {name};"))
+                            })
+                        })
+                    {
+                        v = Some(name);
+                    }
+                }
                 // value fix-ups (RVO-assign strip, declared-bool, int -> bool/enum cast) and
                 // the RVODEF default all live in the shared helper (also used by the switch
                 // recovery's `JMP -> RET-row` return exits).

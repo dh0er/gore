@@ -2103,6 +2103,7 @@ fn emit_function_ctor(
         let text: Vec<String> = rendered.lines().map(str::to_owned).collect();
         let a_third_life = slots_with_a_third_life(&text);
         let several_lives = slots_with_several_lives(&text);
+        let returned_by_reference = reference_return_slots(f);
         let rendered = inline_unnamed_value_temporaries(
             &rendered,
             &unnamed_value_defs(f, refs)
@@ -2127,6 +2128,7 @@ fn emit_function_ctor(
                         .filter(|slot| !a_third_life.contains(slot))
                         .flat_map(|slot| [(slot, 1), (slot, 2)]),
                 )
+                .filter(|(slot, _)| !returned_by_reference.contains(slot))
                 .collect(),
             &wholly_consumed_object_slots(f),
             &rvo_temporary_slots(f, refs),
@@ -2138,6 +2140,7 @@ fn emit_function_ctor(
         let mut rendered = rendered;
         // A returned expression folds one step per pass: three names in a chain need three.
         for _ in 0..3 {
+        let returned_by_reference = reference_return_slots(f);
         let text: Vec<String> = rendered.lines().map(str::to_owned).collect();
         let a_third_life = slots_with_a_third_life(&text);
         let several_lives = slots_with_several_lives(&text);
@@ -2165,6 +2168,7 @@ fn emit_function_ctor(
                         .filter(|slot| !a_third_life.contains(slot))
                         .flat_map(|slot| [(slot, 1), (slot, 2)]),
                 )
+                .filter(|(slot, _)| !returned_by_reference.contains(slot))
                 .collect(),
             &wholly_consumed_object_slots(f),
             &rvo_temporary_slots(f, refs),
@@ -13028,6 +13032,36 @@ fn renders_a_bool(
         return true;
     }
     outer_callee(value).is_some_and(|callee| refs.names_returning(&callee) == Some("bool"))
+}
+
+/// The slot a REFERENCE return travels out through.
+///
+/// `CpyRtoV8 S ; PshVPtr S ; PopRPtr ; RET` stores the reference an expression produced and then
+/// returns that slot. A value the compiler merely passes along does not go through a slot at all —
+/// it stays in the register — so the store is there because the source named it. The name has to
+/// survive: folded back into the return, the whole chain becomes one expression, and for a
+/// reference return that is a shape the compiler does not merely refuse, it goes down.
+fn reference_return_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let mut out = HashSet::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if ins.op.name != "CpyRtoV8" {
+            continue;
+        }
+        let slot = w0(ins);
+        let carried = instrs
+            .get(at + 1)
+            .is_some_and(|ins| ins.op.name == "PshVPtr" && w0(ins) == slot)
+            && instrs.get(at + 2).is_some_and(|ins| ins.op.name == "PopRPtr")
+            && instrs.get(at + 3).is_some_and(|ins| ins.op.name == "RET");
+        if carried && slot > 0 {
+            out.insert(slot);
+        }
+    }
+    out
 }
 
 /// The slots the text carries under more than one name.

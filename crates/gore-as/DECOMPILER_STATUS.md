@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 99.30% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 99.31% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -24,7 +24,7 @@ Everything except the splice test was measured on this build, over the **whole c
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,723 functions | **99.30%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,723 functions | **99.31%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | full corpus, earlier `D0AFAF90…` build | 7,278 of 7,308 (**99.59%**) |
 
@@ -39,7 +39,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,159 functions (0.70%) recompile to bytecode that differs semantically.** A semantic
+**1,134 functions (0.69%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -68,7 +68,7 @@ found them:
 
 The class table below is the last full classification, taken when the total stood at 3,511; its
 rows account for 2,926 of those functions. It says which shapes the work was aimed at, not what
-the remaining 1,159 are made of.
+the remaining 1,134 are made of.
 
 Classified over WHOLE functions — every instruction of both sides, not the window around the
 first divergence. An earlier revision of this document classified the window instead and reported
@@ -845,7 +845,7 @@ the rule was re-confirmed. 1,375 to 1,374.
 
 From there the run continued through the rules the sections above describe — the range-for
 container, the receiver pair, the split GAS chain, the return-expression temporary, the
-continue-only loop scope, and the declaration-order rules — down to the **1,159** the headline
+continue-only loop scope, and the declaration-order rules — down to the **1,134** the headline
 reports.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
