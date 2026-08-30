@@ -4000,6 +4000,11 @@ fn reference_result_slots(f: &Func, refs: &RefResolver) -> HashMap<i32, bool> {
         ty.is_reference && ty.token == 5 && !ty.is_object_handle
     };
     let mut out = HashMap::new();
+    // A pointer-sized slot outlives the value in it: the compiler hands the same frame word to a
+    // `const T&` in one scope and a mutable `T&` in another. One qualifier cannot describe both,
+    // and guessing costs a compile — so a slot whose observations disagree is dropped, and the
+    // rewriting simply does not happen there. Same shape as `call_result_types` below.
+    let mut conflicting: HashSet<i32> = HashSet::new();
     for (at, ins) in instrs.iter().enumerate() {
         if ins.op.name != "CpyRtoV8" || at == 0 {
             continue;
@@ -4028,7 +4033,10 @@ fn reference_result_slots(f: &Func, refs: &RefResolver) -> HashMap<i32, bool> {
                     // A const reference has to say so, or the initializer is refused:
                     // "Cannot initialize reference variable of type T& with an expression of
                     // type const T".
-                    out.insert(slot, ret.is_read_only || ret.is_object_const);
+                    let qualified = ret.is_read_only || ret.is_object_const;
+                    if out.insert(slot, qualified).is_some_and(|seen| seen != qualified) {
+                        conflicting.insert(slot);
+                    }
                 }
             }
         }
@@ -4057,11 +4065,22 @@ fn reference_result_slots(f: &Func, refs: &RefResolver) -> HashMap<i32, bool> {
         if let Some(ret) = returns.filter(|ret| by_reference(ret)) {
             if let Some(slot) = ins.words.first().map(|word| *word as i16 as i32) {
                 if slot > 0 {
-                    out.entry(slot)
-                        .or_insert(ret.is_read_only || ret.is_object_const);
+                    let qualified = ret.is_read_only || ret.is_object_const;
+                    match out.get(&slot) {
+                        Some(seen) if *seen != qualified => {
+                            conflicting.insert(slot);
+                        }
+                        Some(_) => {}
+                        None => {
+                            out.insert(slot, qualified);
+                        }
+                    }
                 }
             }
         }
+    }
+    for slot in conflicting {
+        out.remove(&slot);
     }
     out
 }
@@ -11609,6 +11628,23 @@ fn fold_assignment_receivers(body: &str, consumed: &HashSet<(i32, usize)>) -> St
             })
             .collect()
     };
+    // Slots the TEXT still carries under more than one name. The witness below is asked of the
+    // slot rather than the life, and where several lives survive it cannot say which one it
+    // names. Folding the wrong one moves a receiver across a right-hand side that also runs.
+    let ambiguous: HashSet<i32> = {
+        let mut lives: HashMap<i32, HashSet<usize>> = HashMap::new();
+        for line in &lines {
+            for token in line.split(|c: char| !c.is_alphanumeric() && c != '_') {
+                if let Some((slot, life)) = slot_and_life_any(token) {
+                    lives.entry(slot).or_default().insert(life);
+                }
+            }
+        }
+        lives
+            .into_iter()
+            .filter_map(|(slot, seen)| (seen.len() > 1).then_some(slot))
+            .collect()
+    };
     let mut at = 0usize;
     while at + 1 < lines.len() {
         let folded = (|| {
@@ -11625,6 +11661,9 @@ fn fold_assignment_receivers(body: &str, consumed: &HashSet<(i32, usize)>) -> St
             // earlier life was folded away, so the witness is asked of the slot: some life of it
             // is consumed where it is produced.
             let (slot, _) = slot_and_life_any(&name)?;
+            if ambiguous.contains(&slot) {
+                return None;
+            }
             if !consumed.iter().any(|(consumed, _)| *consumed == slot) {
                 return None;
             }
