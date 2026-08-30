@@ -2100,8 +2100,9 @@ fn emit_function_ctor(
         // same slot produced the value where it is consumed, so the source wrote that call inside
         // the expression. Held in a local instead, it is evaluated BEFORE the outer call's other
         // arguments — the same instructions in a different order.
-        let several_lives =
-            slots_with_a_third_life(&rendered.lines().map(str::to_owned).collect::<Vec<_>>());
+        let text: Vec<String> = rendered.lines().map(str::to_owned).collect();
+        let a_third_life = slots_with_a_third_life(&text);
+        let several_lives = slots_with_several_lives(&text);
         let rendered = inline_unnamed_value_temporaries(
             &rendered,
             &unnamed_value_defs(f, refs)
@@ -2111,6 +2112,7 @@ fn emit_function_ctor(
                 .chain(
                     fused_short_circuit_carriers(f)
                         .into_iter()
+                        .filter(|slot| !several_lives.contains(slot))
                         .map(|slot| (slot, 1)),
                 )
                 .chain(chain_inlined_cast_operands(f).into_iter().map(|slot| (slot, 1)))
@@ -2122,7 +2124,7 @@ fn emit_function_ctor(
                 .chain(
                     return_expression_temporaries(f, refs)
                         .into_iter()
-                        .filter(|slot| !several_lives.contains(slot))
+                        .filter(|slot| !a_third_life.contains(slot))
                         .flat_map(|slot| [(slot, 1), (slot, 2)]),
                 )
                 .collect(),
@@ -2136,8 +2138,9 @@ fn emit_function_ctor(
         let mut rendered = rendered;
         // A returned expression folds one step per pass: three names in a chain need three.
         for _ in 0..3 {
-        let several_lives =
-            slots_with_a_third_life(&rendered.lines().map(str::to_owned).collect::<Vec<_>>());
+        let text: Vec<String> = rendered.lines().map(str::to_owned).collect();
+        let a_third_life = slots_with_a_third_life(&text);
+        let several_lives = slots_with_several_lives(&text);
         rendered = inline_unnamed_value_temporaries(
             &rendered,
             &unnamed_value_defs(f, refs)
@@ -2147,6 +2150,7 @@ fn emit_function_ctor(
                 .chain(
                     fused_short_circuit_carriers(f)
                         .into_iter()
+                        .filter(|slot| !several_lives.contains(slot))
                         .map(|slot| (slot, 1)),
                 )
                 .chain(chain_inlined_cast_operands(f).into_iter().map(|slot| (slot, 1)))
@@ -2158,7 +2162,7 @@ fn emit_function_ctor(
                 .chain(
                     return_expression_temporaries(f, refs)
                         .into_iter()
-                        .filter(|slot| !several_lives.contains(slot))
+                        .filter(|slot| !a_third_life.contains(slot))
                         .flat_map(|slot| [(slot, 1), (slot, 2)]),
                 )
                 .collect(),

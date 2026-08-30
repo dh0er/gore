@@ -7027,7 +7027,10 @@ impl Structurer<'_> {
             }
             return Some("continue;".into());
         }
-        if t == ls.break_off && (!ls.continue_only || b.instr_hi - b.instr_lo == 1) {
+        // An unconditional jump to the loop exit IS the exit, whatever else the block did first.
+        // Restricting this to a one-instruction block dropped the jump from `DoWork(); break;` —
+        // the work was still written, and control then fell through into another iteration.
+        if t == ls.break_off {
             return Some("break;".into());
         }
         if ls.continue_only {
