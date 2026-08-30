@@ -21,7 +21,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   cache. The class is integrated into the existing conversation module. A root
   workspace and its staged spec are script-only and contain no automatic
   UE4SS/`dialog_topics` adapter; `--subdialog-of` instead wires one empty slot
-  in a shipped parent's single `Subdialog` call. Both compile as
+  in a shipped parent's single `Subdialog` call. Its default insertion keeps a
+  trailing `TEXT_BACK`/Zurück option last, while `--subdialog-position <N>`
+  selects any valid 1-based position and shifts existing children without
+  dropping one. Generated sub-topics use the shipped rank `0`. Both compile as
   `--op edit --allow-new-symbols`, not as an isolated cross-module `--op add`.
 - `dialog checkout` / `check` / `stage` — edit a shipped conversation's own
   AngelScript, including reconstructed defaults for `Caption`, `PriorityRank`,
@@ -45,11 +48,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   appeared, dispatched its new `Act`, ended the conversation and returned
   control. In the first root run the installed legacy adapter logged
   `sentinel-topic-missing` and skipped, proving that it did not insert the root.
-- Exercise a representative existing-menu rebuild in game on the same build.
-  An existing four-child Diego sub-menu became five entries; the renamed shipped
-  option retained and ran its long method body before returning to the menu, and
-  the new option was selectable. The fixture also changed caption and priority;
-  it does not isolate the ordering effect of `PriorityRank` alone.
+- Exercise Stage A's exact 20-sibling submenu in game on the same build. The
+  submenu rendered and multiple slots were selectable; the renamed shipped
+  option retained and ran its long method body before returning to the menu.
+- Exercise a new topic field and helper method in game. The authored
+  `default ProbeMarker = 24878692` field and helper were used successfully.
+- Exercise Stage B ordering in game. `PriorityRank = -100` appeared first,
+  `+100` appeared last, and rank-zero entries preserved authored order.
+- Prove placement on rebased current-head bundles. The default new sub-topic
+  appeared immediately before Zurück and was selectable; explicit
+  `--subdialog-position 1` appeared first while Zurück stayed last and was also
+  selectable.
+- Recheck the saturated Stage C rebuild. Its mini-cache (SHA-256 prefix
+  `C675BB55…`) is byte-identical to the already live-tested artifact, which
+  failed opening the reshaped 20-entry submenu with an array-capacity error.
+  Treat manual full-menu reshaping as technically unsupported/unsafe. Dialog
+  checks now reject every structural change to a pristine call that is already
+  full, while leaving its defaults, methods and `PriorityRank` editable.
 - Exercise authored gameplay state and persistence from new Diego options on
   the same build. One option changed ore inventory from 0 to 1 and the item
   remained after quicksave/restart. Another authored
@@ -63,14 +78,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `0.763` with the authored source recording. This is bounded evidence for that
   Diego fixture, not a general qualification of every voice path or game API.
 - Keep compile, packaging, deployment and runtime evidence separate. Independent
-  add/edit mini-caches still cannot depend on one another; FullGraph V2 can
-  compile coordinated cross-module changes to a complete cache offline. Manager
-  can import it only as a generic whole-file replacement; the normal dialog
-  stage/bundle workflow does not compose or deploy it, and that raw-cache path
-  has no runtime proof.
+  add/edit mini-caches still cannot depend on one another; FullGraph V2 resolves
+  coordinated cross-module references offline, but its output has 10,782
+  semantic deviations, including 81 in Diego, making it unsafe and not a
+  deployable dialog mini-patch. Normal cross-module dialog minis remain
+  technically unsupported.
+- A 20-topic ambient auto-open probe crashed as an artificial fixture; this is
+  not evidence that broad ambient flags are broken.
 - `gore_dialog` MCP tool for the same nine subcommands.
 
 ### Fixed
+
+- Reject AngelScript preprocessor directives before dialog default coverage is
+  accepted, both in `dialog check` and direct generated-default edit
+  preparation. Disabled `#if`/`#else` branches can no longer make partial
+  defaults look complete; directive spellings inside comments and strings are
+  ignored as ordinary text.
 
 - Preserve the shipped `FunctionTraits` and complete Unreal-function tail for
   every identity-matched existing declaration in an edited module, while

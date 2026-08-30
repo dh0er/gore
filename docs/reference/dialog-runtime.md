@@ -32,13 +32,23 @@ and one representative existing-menu rebuild:
   `Running` state after restart.
 - A newly added subtitle and voice asset played from the new topic. System
   loopback matched the authored source with normalized correlation `0.763`.
-- An existing four-child menu was rebuilt to five entries. The renamed shipped
-  topic still ran its original long `Act` and returned to the menu, and the new
-  topic was selectable.
+- Stage A rendered an exact 20-sibling submenu and multiple slots were
+  selectable. The renamed shipped topic still ran its original long `Act` and
+  returned to the menu.
+- A new topic field with `default ProbeMarker = 24878692` and a helper method
+  were authored and used successfully in game.
+- Stage B isolated `PriorityRank`: rank `-100` appeared first, rank `+100`
+  appeared last, and rank-zero entries preserved authored order.
+- Placement is proven on rebased current-head bundles: the default new
+  sub-topic appeared immediately before Zurück and was selectable; explicit
+  `--subdialog-position 1` appeared first, kept Zurück last, and was selectable.
+- The earlier 4→5 menu edit remains working. By contrast, current-head Stage C
+  (mini-cache SHA-256 prefix `C675BB55…`) is byte-identical to the live-tested
+  saturated artifact, which failed while opening the reshaped 20-entry menu
+  with an array-capacity error.
 
-These are fixture-specific runtime observations. In particular, the menu edit
-changed `PriorityRank` together with caption and structure, so it does not
-isolate that field's ordering effect.
+These are fixture-specific runtime observations. The saturated 20-slot reshape
+is therefore unsafe, while the separate 4→5 edit and placement variants work.
 
 ## Historical low-level registration-adapter boundary
 
@@ -147,8 +157,8 @@ The structural fixture changed one existing Diego menu from four children to
 five. It renamed a shipped entry, adjusted its priority, retained its long
 shipped `Act`, and appended a new option. In game the old `Act` completed and
 returned to the menu, and the new option was selectable. Because priority,
-caption and membership changed together, `PriorityRank` ordering remains
-unisolated.
+caption and membership changed together, that older fixture did not isolate
+`PriorityRank`; the later Stage B campaign above did.
 
 ## BuildID 24539464 version-3 live observation
 
@@ -333,23 +343,12 @@ historical low-level adapter surface.
 
 ### Potentially possible, but not proven in game
 
-- The isolated ordering effect of an authored `PriorityRank` change. The live
-  structural fixture changed several inputs together.
-- Several new sibling topics added in one edit to the same shipped module. The
-  current campaign proved one new root and one new direct sub-topic separately,
-  not a flat multi-new-topic set.
-- Topic-owned helper fields or additional helper methods on a new class. The
-  checked source/compiler path admits them, but no live fixture exercised them.
-- Runtime behavior of topic flags other than the `bIsSubTopic` placement used
-  by the proven direct sub-topic.
-- A manual reorder, removal or replacement inside an actually saturated
-  20-child `Subdialog` call. The live structural fixture was complicated but
-  had four shipped children before it was rebuilt to five.
-- Deploying and running the raw complete-cache output of FullGraph V2. Its
-  coordinated compilation is an offline compiler capability. Manager can
-  import the result as a generic whole-file replacement, but the normal dialog
-  stage/bundle workflow consumes independently base-bound minis and does not
-  compose that artifact; the raw-cache runtime path is unproven.
+- Ambient auto-open behavior, including a 20-topic probe. That artificial
+  fixture crashed, so it is not evidence that broad ambient flags are broken.
+- Deploying and running the raw complete-cache output of FullGraph V2. Offline
+  coordinated cross-module compilation resolves the references, but the output
+  has 10,782 semantic deviations, including 81 in Diego, so it is unsafe and
+  not a deployable dialog mini-patch.
 - Game builds other than BuildID `24878692`. Older adapter observations do not
   qualify the current native source path on those builds.
 
@@ -362,8 +361,12 @@ historical low-level adapter surface.
 - Creating a safe new-to-new multi-level tree in which one newly authored topic
   opens another newly authored topic; a new sub-topic must currently attach
   directly to a shipped parent.
-- Adding a 21st child to one `Subdialog` call, or automatically restructuring a
-  full 20-slot call with `dialog new-topic`.
+- Adding a 21st child to one `Subdialog` call.
+- Manually reshaping an already full 20-slot `Subdialog` call. Current-head
+  Stage C (mini-cache SHA-256 prefix `C675BB55…`) is byte-identical to the
+  live-tested artifact, which failed to open the reshaped menu with an
+  array-capacity error; this shape is technically unsupported and unsafe, and
+  `dialog check` rejects it before staging.
 - Changing the base class, fields, member set, or method signatures of a shipped
   topic.
 
@@ -425,7 +428,8 @@ historical low-level adapter surface.
   the pristine base; neither becomes authority for the other. Full-graph V2
   instead submits the complete sealed base graph and coordinated add/edit/delete
   changes to one standalone compile, so visible cross-module references can be
-  resolved together. It produces a complete cache and full-graph receipt. The
+  resolved together. Its output has 10,782 semantic deviations, including 81
+  in Diego, so it is unsafe and not a deployable dialog mini-patch. The
   ordinary bundle composer consumes module mini-caches, so that artifact is an
   offline compiler capability, not a dialog packaging or deployment recipe.
 - A new root appended to Diego's shipped conversation module was discovered,

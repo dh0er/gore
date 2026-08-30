@@ -4278,6 +4278,8 @@ fn prepare_generated_defaults_edit(
             omitted.len()
         ))
     };
+    crate::cache::default_source::reject_preprocessor_directives(overlay)
+        .map_err(|reason| refusal(&reason))?;
     if source_contains_default_token(overlay).map_err(|reason| refusal(&reason))? {
         // The overlay authors class defaults itself, so the compiler REGENERATES
         // `__InitDefaults` from that source and the carried copy is superseded — carrying it
@@ -11688,6 +11690,58 @@ mod tests {
         )
         .expect("complete authored defaults supersede carry before new-symbol remap");
         assert!(plan.is_none());
+    }
+
+    #[test]
+    fn preprocessor_defaults_cannot_supersede_generated_default_carry() {
+        let modules = vec![Module {
+            name: "QuestModule".into(),
+            file: "QuestModule.as".into(),
+            functions: Vec::new(),
+            classes: vec![Class {
+                name: "UQuestFixture".into(),
+                namespace: String::new(),
+                super_class: None,
+                fields: Vec::new(),
+                methods: vec![test_function("__InitDefaults")],
+                ctors: Vec::new(),
+                flags: 0,
+            }],
+            enums: Vec::new(),
+            globals: Vec::new(),
+        }];
+
+        let ordinary = prepare_generated_defaults_edit(
+            "edit",
+            &modules,
+            "QuestModule",
+            &[],
+            "class UQuestFixture { default PriorityRank = 42; }",
+            true,
+        )
+        .expect("ordinary authored defaults remain accepted");
+        assert!(ordinary.is_none());
+
+        for overlay in [
+            "class UQuestFixture { #if WITH_DEFAULT default PriorityRank = 42; #endif }",
+            "class UQuestFixture { #if KEEP_DEFAULT default PriorityRank = 1; #else default PriorityRank = 42; #endif }",
+        ] {
+            let error = prepare_generated_defaults_edit(
+                "edit",
+                &modules,
+                "QuestModule",
+                &[],
+                overlay,
+                true,
+            )
+            .expect_err("preprocessed defaults cannot supersede carried generated methods")
+            .to_string();
+            assert!(error.contains("preprocessor directive `#if`"), "{error}");
+            assert!(
+                error.contains("before compiler preprocessing"),
+                "{error}"
+            );
+        }
     }
 
     #[test]

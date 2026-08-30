@@ -18,8 +18,9 @@ of that page, not a second claim.
 | | |
 |---|---|
 | **Current native dialog path** | On BuildID `24878692`, against pristine Shipping cache SHA-256 `7A18F954E32AF30FC24AE3A66EA35D3B5CB98560C8F5083C7846FC9CE1D77511`, a source-identical full Diego-module recompile ran normally, and a `Caption` edit rendered and selected correctly. A new same-module root appeared and was selectable in two runs: first while a legacy UE4SS adapter was present but skipped the conversation as `sentinel-topic-missing`, then with the proxy removed. The root was therefore discovered by the shipped script path, not inserted by UE4SS. |
-| **New same-module sub-topic** | `[GORE TEST] Neuer Diego-Unterdialog` appeared in `UChoiceDiegoKolonie`, was selected, ran its newly compiled `Act` override, ended the conversation, and returned HUD and camera control. A later fixture rebuilt an existing four-child menu to five entries; the renamed shipped option's long `Act` still ran and returned to the menu, and the new option was selectable. |
+| **New same-module sub-topic** | `[GORE TEST] Neuer Diego-Unterdialog` appeared in `UChoiceDiegoKolonie`, was selected, ran its newly compiled `Act` override, ended the conversation, and returned HUD and camera control. Stage A also rendered an exact 20-sibling submenu and allowed multiple slots to be selected. The default placement appeared immediately before Zurück and was selectable; explicit position 1 appeared first while Zurück stayed last and was also selectable. The earlier 4→5 edit remains working. |
 | **Rules and persisted effects** | A new option added one ore nugget, changing inventory from 0 to 1; the item remained after quicksave and restart. Another option used `Rules.HideIfKnowsId` with `gore_diego_quest_knowledge_24878692`: it disappeared immediately after selection and remained absent after restart, while save-query found that exact ID on the hero. A new Stonehenge quest produced its toast and journal entry and remained `Running` after restart. |
+| **New field and helper** | A new topic field with `default ProbeMarker = 24878692` and a helper method were authored and used successfully in game. |
 | **New voice-over** | A new topic displayed its authored subtitle and played its new voice asset. System loopback matched the authored source with normalized correlation `0.763`. This proves that fixture's localization-to-voice lookup and audible playback, not every possible audio format or event. |
 | **Historical low-level adapter** | `BuildSpec.dialog_topics` still describes a separate UE4SS insertion adapter. Earlier Viper runs rendered a root through `AddTopic` and recorded `ARMED -> CHOICE_PASS -> RENDER_PASS`. It is historical low-level evidence, not part of the current `gore dialog new-topic` root workflow. |
 
@@ -31,23 +32,12 @@ produce.
 
 ### Potentially possible, but not proven in game
 
-- The isolated ordering effect of an authored `PriorityRank` change. The live
-  menu-rebuild fixture changed priority together with structure and caption, so
-  it cannot attribute the observed order to that field alone.
-- Several new sibling topics added to the same shipped module in one edit. One
-  new root and one new direct sub-topic have each been proven separately, but a
-  multi-new-topic flat set has not been exercised in game.
-- Topic-owned helper fields or additional helper methods on a new class. The
-  checked source/compiler path admits them, but no live fixture exercised them.
-- Runtime behavior of topic flags other than the `bIsSubTopic` placement used
-  by the proven direct sub-topic.
-- A manual reorder, removal or replacement inside an actually saturated
-  20-child `Subdialog` call. The live structural fixture was complicated but
-  had four shipped children before it was rebuilt to five.
-- Deploying and running a complete cache produced by FullGraph V2. The compiler
-  can produce the raw full-cache artifact offline, and Manager can import it as
-  a generic whole-file replacement, but the dialog stage/bundle workflow does
-  not compose or deploy that artifact and no such runtime run has been proven.
+- Ambient auto-open behavior, including a 20-topic probe. That artificial
+  fixture crashed, so it is not evidence that broad ambient flags are broken.
+- Deploying and running a complete cache produced by FullGraph V2. Coordinated
+  cross-module compilation works offline, but the output has 10,782 semantic
+  deviations, including 81 in Diego, so it is unsafe and not a deployable
+  dialog mini-patch.
 - The same behavior on game builds other than BuildID `24878692`. Historical
   adapter observations on older builds do not qualify the current native source
   workflow there.
@@ -62,8 +52,11 @@ produce.
 - Creating a safe new-to-new multi-level tree in which one newly authored topic
   opens another newly authored topic. A new sub-topic must currently attach
   directly to a shipped parent.
-- Adding a 21st child to one `Subdialog` call, or asking `dialog new-topic` to
-  restructure an already full 20-slot call automatically.
+- Adding a 21st child to one `Subdialog` call.
+- Manually reshaping an already full 20-slot `Subdialog` call. The current-head
+  Stage C bundle (mini-cache SHA-256 prefix `C675BB55…`) is byte-identical to
+  the live-tested artifact, which failed to open the reshaped menu with an
+  array-capacity error; treat this shape as technically unsupported and unsafe.
 - Changing the base class, fields, member set or method signatures of a shipped
   topic.
 
@@ -220,10 +213,13 @@ knowledge ID on the hero. A new Stonehenge quest produced its toast and journal
 entry and remained `Running` after restart. A new subtitle/voice pair played and
 matched its authored source in system loopback at correlation `0.763`.
 
-Finally, an existing four-child Diego menu was manually rebuilt to five
-entries. Its renamed shipped topic still ran the original long `Act` and
-returned to the menu; the appended new topic was also selectable. That proves
-the exercised structural edit, not every possible deep or saturated menu.
+Finally, Stage A rendered an exact 20-sibling Diego submenu. Its renamed
+shipped topic still ran the original long `Act` and returned to the menu, and
+multiple slots were selectable. That proves the exercised structural edit, not
+the currently unsupported and unsafe Stage C saturated reshape. `dialog check`
+therefore rejects every structural change to a call that was already full in
+the pristine module. Defaults, methods and `PriorityRank` remain editable when
+that full call itself is unchanged.
 
 Earlier offline compiler coverage on the same BuildID produced a 17,085-byte
 Payfine same-module sub-topic mini-cache, an 8,271-byte Charlotte same-module
@@ -246,12 +242,13 @@ the pristine base, and one mini never becomes symbol authority for the other.
 
 Full-graph V2 is a different compiler product. It gives one standalone compiler
 request the complete sealed base graph plus all coordinated add/edit/delete
-changes, so otherwise-visible cross-module references can resolve together. Its
-artifact is a complete regenerated script cache and a full-graph receipt, not a
-base-bound one-module mini-cache. The normal bundle composer consumes module
-minis and has no deployment recipe for that complete-cache artifact. For dialog
-mods, keeping the new topic and any `Subdialog` rewiring in the same existing
-conversation module is therefore the practical mini-bundle path.
+changes, so otherwise-visible cross-module references can resolve together
+offline. Its output has 10,782 semantic deviations, including 81 in Diego, so
+it is unsafe and not a deployable dialog mini-patch. The normal bundle composer
+consumes module minis and has no deployment recipe for that complete-cache
+artifact. For dialog mods, keeping the new topic and any `Subdialog` rewiring
+in the same existing conversation module is therefore the practical mini-bundle
+path.
 
 ## Root topics use native same-module discovery
 
@@ -267,10 +264,15 @@ gore dialog stage work --mod-name MyDialogMod
 ```
 
 For a real sub-menu addition, pass `--subdialog-of <existing-parent-topic>`.
-The command replaces one empty slot in that parent's single existing
-`Subdialog` call, adds `default bIsSubTopic = true`, and records no root
-registration. Ambiguous parents, multiple calls, or a full call with no empty
-slot fail closed.
+The command shifts that parent's single existing fixed-width `Subdialog` call,
+adds `default bIsSubTopic = true` and the shipped sub-topic `PriorityRank = 0`,
+and records no root registration. By default it inserts immediately before a
+trailing child whose caption key is `TEXT_BACK`, keeping Zurück/Back last; when
+there is no such proven trailing child, it appends. Use
+`--subdialog-position <N>` for an explicit 1-based position among the populated
+entries. Existing entries at and after `N` shift right, so no child is silently
+replaced. A stale source/graph order, a hole before a populated slot, an invalid
+position, ambiguous or multiple calls, and a full 20-child call all fail closed.
 
 `check` binds this intent back to the authored source and base graph. A direct
 root must not set `bIsSubTopic`; a new direct child must be referenced by one

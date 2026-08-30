@@ -423,7 +423,7 @@ not add a separate `subcommand` property. The tool schema already carries the
 ordinary arguments, so use help only when that schema is not specific enough;
 a blanket help call for every later step adds work without improving safety.
 
-Twenty tools rather than 89 leaves keeps a client's tool list navigable while
+Twenty-one tools rather than 98 leaves keeps a client's tool list navigable while
 still covering every command. The extra bundle-inspection and Manager-preflight
 routes exist because MCP annotations apply to a whole tool: mixed `gore_mod`
 and `gore_mgr` must advertise their install-changing worst cases, while

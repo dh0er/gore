@@ -196,13 +196,17 @@ one existing conversation module:
    this case.
 
 This combination passes the complete-default checker and the same-module
-new-class/remap/loadout oracles. Payfine, Charlotte and Brannok fixtures provide
+new-class/remap/loadout oracles. Stage A also rendered an exact 20-sibling
+submenu and allowed multiple slots to be selected. Payfine, Charlotte and Brannok fixtures provide
 additional strict-standalone compile and inspected-bundle coverage. On BuildID
 `24878692`, Diego fixtures also crossed the native runtime boundary: a new root
 appeared and was selected twice without adapter insertion; a new direct
-sub-topic appeared, selected and dispatched its override; and an existing
-four-child sub-menu was rebuilt to five entries while preserving a shipped long
-`Act` and its return to the menu.
+sub-topic appeared, selected and dispatched its override; and Stage A rendered
+an exact 20-sibling submenu with multiple selectable slots while preserving a
+shipped long `Act` and its return to the menu.
+The default insertion appeared immediately before Zurück and was selectable;
+explicit position 1 appeared first while Zurück stayed last and was selectable.
+The separate 4→5 edit also remains working.
 
 `gore dialog new-topic` creates that same-module edit workspace directly. For
 a **root topic**:
@@ -221,10 +225,28 @@ separate add/edit mini-caches cannot depend on one another.
 
 For a real sub-menu addition, add
 `--subdialog-of UExistingParentTopic`. The parent must contain exactly one
-`Subdialog` call with an empty topic slot; the command fills that slot and adds
-the new class with `bIsSubTopic`. It refuses ambiguous or full calls. One call
-has 20 child parameters, so there is no 21st slot, and the scaffold does not
+`Subdialog` call with an empty topic slot. The command adds the new class with
+`bIsSubTopic`, gives it the shipped sub-topic rank `0`, and shifts existing
+arguments instead of merely filling the first null. If the last child uses the
+language-independent `TEXT_BACK` caption key, the default insertion point is
+immediately before that Zurück/Back option so it remains last. Otherwise the
+new child appends after the existing entries.
+
+Pass `--subdialog-position <N>` to choose the 1-based position among populated
+entries explicitly. Position `1` is first; position `current count + 1` is
+after the current last entry, even when that is Back. Existing entries at and
+after `N` shift right. The option requires `--subdialog-of`, and a zero,
+out-of-range position, stale source/graph order, non-packed call, ambiguous
+call, or full call fails closed without dropping a child. One call has exactly
+20 child parameters, so there is no 21st slot, and the scaffold does not
 automatically restructure a saturated call.
+The current-head Stage C rebuild (mini-cache SHA-256 prefix `C675BB55…`) matches
+the live-tested artifact byte-for-byte,
+but that artifact failed to open the reshaped 20-entry menu with an
+array-capacity error; treat saturated reshaping as technically unsupported and
+unsafe. `dialog check` now rejects any structural change to a call that was
+already full in the pristine module; it still permits defaults, methods and
+`PriorityRank` edits when the full call itself is unchanged.
 
 A new root remains an ordinary same-module script edit. In the live Diego test
 it appeared and was selectable while a present legacy adapter skipped as
@@ -239,13 +261,16 @@ adapter surface for hand-authored bundles. It packages UE4SS insertion and its
 telemetry; it is not emitted as the normal `dialog new-topic` root recipe.
 
 Full-graph V2 gives one standalone compiler request the complete sealed base
-graph plus all coordinated add/edit/delete sources. That lets visible symbols in
-different modules resolve in one compilation, but its result is a complete
-regenerated cache plus a full-graph receipt. It is not a module mini-cache.
+graph plus all coordinated add/edit/delete sources, and offline compilation can
+resolve visible symbols in different modules together. Its output nevertheless
+has 10,782 semantic deviations, including 81 in Diego, so it is unsafe and not
+a deployable dialog mini-patch. It is not a module mini-cache.
 
 The normal dialog bundle path instead consumes independently base-bound module
 minis. One add mini cannot provide symbols to a separate edit mini, and the
-bundle composer does not turn a FullGraph cache into a dialog-mini deployment.
+FullGraph output has 10,782 semantic deviations, including 81 in Diego, so it
+is unsafe and not a deployable dialog mini-patch. The bundle composer does not
+turn it into a dialog-mini deployment.
 Keeping the new class and the rewired `Subdialog` in the same existing module is
 the supported mini-cache shape. Its compile/remap and offline packaging path is
 proven on Payfine and Brannok; Diego additionally proves native in-game
@@ -309,8 +334,10 @@ are the things that decide it", not as a condition you can evaluate.
 The current runtime proof includes the same rule family with an explicit ID:
 `Rules.HideIfKnowsId("gore_diego_quest_knowledge_24878692")` hid its option
 immediately after selection and after restart, and save-query found that exact
-knowledge ID on the hero. `PriorityRank` was changed only as part of a larger
-menu rebuild, so its isolated ordering effect remains unproven.
+knowledge ID on the hero. Stage B separately proved ordering: `PriorityRank`
+`-100` appeared first, `+100` last, and rank-zero entries preserved authored
+order. A new `ProbeMarker = 24878692` field and helper method were also used
+successfully in game.
 
 ## What the tree does not tell you
 
@@ -329,7 +356,8 @@ read 126 step(s), 87 of them typed
 ```
 
 Ambient topics are lines an NPC plays without being asked, so they have no menu
-caption; they show as `(ambient)`.
+caption; they show as `(ambient)`. A 20-topic auto-open probe crashed as an
+artificial fixture; that does not show that broad ambient flags are broken.
 
 ## JSON, for tooling
 

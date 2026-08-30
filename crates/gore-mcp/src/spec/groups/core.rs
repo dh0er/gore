@@ -768,6 +768,16 @@ const DIALOG_NEW_TOPIC_ARGS: &[ArgSpec] = &[
         false,
     ),
     ArgSpec::new(
+        "subdialog_position",
+        Long("subdialog-position"),
+        Int {
+            min: Some(1),
+            max: Some(20),
+        },
+        "Optional 1-based position among the parent's populated Subdialog entries. Existing entries at that position and later shift right. Requires subdialog_of. By default a recognized trailing TEXT_BACK entry stays last; otherwise the new child appends",
+        false,
+    ),
+    ArgSpec::new(
         "mod_name",
         Long("mod-name"),
         Str,

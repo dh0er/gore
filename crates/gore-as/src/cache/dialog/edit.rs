@@ -642,6 +642,7 @@ fn module_items(tokens: &[Token], pairs: &[Option<usize>]) -> Result<ModuleItems
 /// Read the declarations and class-scope defaults out of emitted or hand-edited module source.
 /// Comments and literals are lexed before braces are interpreted; malformed source fails closed.
 pub fn read_outline(source: &str) -> Result<SourceOutline, String> {
+    super::super::default_source::reject_preprocessor_directives(source)?;
     let tokens = tokenize(source)?;
     let pairs = brace_pairs(&tokens)?;
     let items = module_items(&tokens, &pairs)?;
@@ -1756,6 +1757,52 @@ class UChoiceOne : UTopic_Hero__NPC
             violation,
             Violation::MissingClassDefaults { class } if class == "UChoiceOne"
         )));
+    }
+
+    #[test]
+    fn preprocessor_conditionals_cannot_satisfy_authored_default_coverage() {
+        let conditional = PRISTINE
+            .replace(
+                "    default Caption = LocText(\"EXISTING_KEY\");",
+                "    #if WITH_DIALOG_CAPTION\n    default Caption = LocText(\"EXISTING_KEY\");\n    #endif",
+            );
+        let report = verify(&checkout(PRISTINE), &conditional, &known());
+        assert!(
+            report.violations.iter().any(|violation| matches!(
+                violation,
+                Violation::SourceInvalid { side: "authored", reason }
+                    if reason.contains("preprocessor directive `#if`")
+                        && reason.contains("before compiler preprocessing")
+            )),
+            "{:?}",
+            report.violations
+        );
+
+        let conditional_else = PRISTINE.replace(
+            "    default PriorityRank = 2;",
+            "    #if KEEP_SHIPPED_PRIORITY\n    default PriorityRank = 2;\n    #else\n    default PriorityRank = 9;\n    #endif",
+        );
+        let report = verify(&checkout(PRISTINE), &conditional_else, &known());
+        assert!(
+            report.violations.iter().any(|violation| matches!(
+                violation,
+                Violation::SourceInvalid { side: "authored", reason }
+                    if reason.contains("preprocessor directive `#if`")
+            )),
+            "{:?}",
+            report.violations
+        );
+    }
+
+    #[test]
+    fn preprocessor_spelling_in_comments_and_literals_remains_ordinary_source() {
+        let source = format!(
+            "// #if COMMENT_ONLY\n/* #else */\n{}\n// #endif\n",
+            PRISTINE.replace("EXISTING_KEY", "#if_LITERAL")
+        );
+        let outline = read_outline(&source).expect("comments and literals are not directives");
+        assert_eq!(outline.classes.len(), 1);
+        assert_eq!(outline.classes[0].defaults.len(), 4);
     }
 
     #[test]

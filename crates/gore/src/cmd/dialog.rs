@@ -116,6 +116,14 @@ pub enum DialogAction {
         /// Existing parent topic whose one Subdialog call should receive the new option
         #[arg(long, value_name = "TOPIC")]
         subdialog_of: Option<String>,
+        /// 1-based position among populated entries; default keeps a trailing TEXT_BACK last
+        #[arg(
+            long,
+            value_name = "N",
+            requires = "subdialog_of",
+            value_parser = clap::value_parser!(usize)
+        )]
+        subdialog_position: Option<usize>,
         /// Mod name, used for the default class name and the staged bundle
         #[arg(long, default_value = "MyDialogMod")]
         mod_name: String,
@@ -212,6 +220,7 @@ pub fn run(action: DialogAction) -> Result<()> {
             caption_key,
             class,
             subdialog_of,
+            subdialog_position,
             mod_name,
             out,
             cache,
@@ -222,6 +231,7 @@ pub fn run(action: DialogAction) -> Result<()> {
             caption_key,
             class,
             subdialog_of,
+            subdialog_position,
             mod_name,
             out,
             cache,
@@ -1580,6 +1590,8 @@ fn open_edit(
     let known = dialog::known_names(&bytes).context("collecting the cache's names")?;
     let report = dialog::verify(&taken, &authored, &known);
     if report.is_carryable() {
+        validate_saturated_subdialog_edits(&taken.source, &authored, &report.added_classes)
+            .context("the edited Subdialog shape is not runtime-qualified")?;
         validate_topic_registrations(&manifest, &report, &authored, &bytes)
             .context("the dialog registration manifest is not bound to this checked source")?;
     }
@@ -1587,7 +1599,28 @@ fn open_edit(
 }
 
 fn check(dir: &PathBuf, json: bool, cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<()> {
-    let (manifest, report, source_path) = open_edit(dir, cache, game)?;
+    let (manifest, report, source_path) = match open_edit(dir, cache, game) {
+        Ok(opened) => opened,
+        Err(error) if json => {
+            let document = serde_json::json!({
+                "module": serde_json::Value::Null,
+                "participant": serde_json::Value::Null,
+                "unchanged": false,
+                "safe": false,
+                "requires_new_symbols": false,
+                "changed": [],
+                "changed_defaults": [],
+                "added_classes": [],
+                "added_functions": [],
+                "new_strings": [],
+                "new_static_names": [],
+                "violations": [format!("{error:#}")],
+            });
+            println!("{}", serde_json::to_string_pretty(&document)?);
+            bail!("1 problem(s)");
+        }
+        Err(error) => return Err(error),
+    };
 
     if json {
         let document = serde_json::json!({
@@ -1817,6 +1850,7 @@ pub struct NewTopicRequest {
     pub caption_key: Option<String>,
     pub class: Option<String>,
     pub subdialog_of: Option<String>,
+    pub subdialog_position: Option<usize>,
     pub mod_name: String,
     pub out: PathBuf,
     pub cache: Option<PathBuf>,
@@ -2140,11 +2174,359 @@ fn append_to_class_namespace(source: &str, class: &str, addition: &str) -> Resul
     Ok(edited)
 }
 
-/// Add one class argument to the one `Subdialog` call in one existing topic class.
+const SUBDIALOG_TOPIC_SLOTS: usize = 20;
+const EMPTY_SUBDIALOG_SLOT: &str = "TSubclassOf<UConversationTopic>(nullptr)";
+const BACK_CAPTION_KEY: &str = "TEXT_BACK";
+
+type FixedSubdialogCalls = BTreeMap<String, Vec<Vec<Option<String>>>>;
+
+#[derive(Clone, Copy)]
+enum SubdialogCallShape {
+    Instance,
+    Global,
+}
+
+/// Bind a `Subdialog` identifier to one of the two source shapes emitted by the compiler.
+/// Merely finding the method name is not enough: rewriting another receiver, a free call, or a
+/// namespace-owned helper would silently edit code whose runtime meaning we have not qualified.
+fn subdialog_call_shape(
+    tokens: &[CodeToken],
+    call: usize,
+    class_open: usize,
+) -> Result<SubdialogCallShape> {
+    if call >= class_open + 3 && tokens[call - 2].text == "this" && tokens[call - 1].text == "." {
+        return Ok(SubdialogCallShape::Instance);
+    }
+
+    if call >= class_open + 3 && tokens[call - 2].text == ":" && tokens[call - 1].text == ":" {
+        // `Owner::Subdialog` is not the global `::Subdialog` form. The decompiler emits the
+        // supported call as a standalone statement, so an identifier immediately before the
+        // two colons proves that this is a different callee rather than global qualification.
+        if call >= class_open + 4 && is_angelscript_identifier(&tokens[call - 3].text) {
+            bail!(
+                "the Subdialog call is namespace- or owner-qualified; only `::Subdialog(this, 20 topic slots)` is supported"
+            );
+        }
+        return Ok(SubdialogCallShape::Global);
+    }
+
+    bail!(
+        "the Subdialog call has an unsupported receiver; only `this.Subdialog(20 topic slots)` or `::Subdialog(this, 20 topic slots)` is supported"
+    )
+}
+
+fn call_argument_ranges(
+    tokens: &[CodeToken],
+    open: usize,
+    close: usize,
+) -> Result<Vec<(usize, usize)>> {
+    if open + 1 == close {
+        return Ok(Vec::new());
+    }
+    let mut ranges = Vec::new();
+    let mut start = open + 1;
+    let mut nested = 0usize;
+    for index in (open + 1)..close {
+        match tokens[index].text.as_str() {
+            "(" | "[" | "{" => nested += 1,
+            ")" | "]" | "}" => {
+                nested = nested
+                    .checked_sub(1)
+                    .context("unmatched delimiter inside Subdialog arguments")?;
+            }
+            "," if nested == 0 => {
+                if start == index {
+                    bail!("the Subdialog call contains an empty argument");
+                }
+                ranges.push((start, index - 1));
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    if nested != 0 {
+        bail!("the Subdialog call contains an unclosed argument expression");
+    }
+    if start == close {
+        bail!("the Subdialog call has a trailing empty argument");
+    }
+    ranges.push((start, close - 1));
+    Ok(ranges)
+}
+
+fn is_empty_subdialog_slot(tokens: &[CodeToken], range: (usize, usize)) -> bool {
+    let expected = [
+        "TSubclassOf",
+        "<",
+        "UConversationTopic",
+        ">",
+        "(",
+        "nullptr",
+        ")",
+    ];
+    let (start, end) = range;
+    end - start + 1 == expected.len()
+        && expected
+            .iter()
+            .enumerate()
+            .all(|(offset, expected)| tokens[start + offset].text == *expected)
+}
+
+/// Accept the bare or namespace-qualified class values emitted for a populated topic slot.
+fn subdialog_class_name(tokens: &[CodeToken], range: (usize, usize)) -> Option<&str> {
+    let (start, end) = range;
+    let mut index = start;
+    if !is_angelscript_identifier(&tokens[index].text) {
+        return None;
+    }
+    let mut name = tokens[index].text.as_str();
+    index += 1;
+    while index <= end {
+        if index + 2 > end
+            || tokens[index].text != ":"
+            || tokens[index + 1].text != ":"
+            || !is_angelscript_identifier(&tokens[index + 2].text)
+        {
+            return None;
+        }
+        name = tokens[index + 2].text.as_str();
+        index += 3;
+    }
+    Some(name)
+}
+
+/// Inventory the fixed-width calls in each topic class without assigning meaning to their body.
 ///
-/// This is intentionally narrower than a source rewriter: ambiguity is a refusal, and the final
-/// `dialog check` independently verifies that no shipped declaration/default target was lost.
-fn wire_subdialog(source: &str, parent: &str, child: &str) -> Result<String> {
+/// `dialog check` already proves that bare class identities are unambiguous before this helper is
+/// called. Keeping the bare owner here therefore matches `subdialog_class_name`, which deliberately
+/// accepts both bare and namespace-qualified child values but returns the class leaf.
+fn fixed_subdialog_calls(source: &str) -> Result<FixedSubdialogCalls> {
+    let tokens = code_tokens(source)?;
+    let mut calls = BTreeMap::<String, Vec<Vec<Option<String>>>>::new();
+
+    for declaration in 0..tokens.len().saturating_sub(1) {
+        if tokens[declaration].text != "class" {
+            continue;
+        }
+        let owner = tokens[declaration + 1].text.clone();
+        let Some(class_open) = ((declaration + 2)..tokens.len())
+            .find(|candidate| matches!(tokens[*candidate].text.as_str(), "{" | ";"))
+        else {
+            bail!("class {owner} has no body or forward declaration terminator");
+        };
+        if tokens[class_open].text == ";" {
+            continue;
+        }
+        let class_close = matching_close(&tokens, class_open, "{", "}")?;
+
+        for call in (class_open + 1)..class_close.saturating_sub(1) {
+            if tokens[call].text != "Subdialog" || tokens[call + 1].text != "(" {
+                continue;
+            }
+            let open = call + 1;
+            let close = matching_close(&tokens, open, "(", ")")?;
+            if close >= class_close {
+                bail!("the Subdialog call in {owner} leaves its class body");
+            }
+            let shape = subdialog_call_shape(&tokens, call, class_open)
+                .with_context(|| format!("binding the Subdialog call in {owner}"))?;
+            let arguments = call_argument_ranges(&tokens, open, close)?;
+            let slots = match (shape, arguments.as_slice()) {
+                (SubdialogCallShape::Global, [owner_argument, slots @ ..])
+                    if arguments.len() == SUBDIALOG_TOPIC_SLOTS + 1 =>
+                {
+                    let (start, end) = *owner_argument;
+                    if start != end || tokens[start].text != "this" {
+                        bail!(
+                            "the Subdialog call in {owner} has 21 arguments but its first argument is not `this`"
+                        );
+                    }
+                    slots
+                }
+                (SubdialogCallShape::Instance, slots)
+                    if arguments.len() == SUBDIALOG_TOPIC_SLOTS =>
+                {
+                    slots
+                }
+                (SubdialogCallShape::Global, _) => bail!(
+                    "the global Subdialog call in {owner} must have `this` followed by exactly {SUBDIALOG_TOPIC_SLOTS} topic slots; found {} arguments",
+                    arguments.len()
+                ),
+                (SubdialogCallShape::Instance, _) => bail!(
+                    "the instance Subdialog call in {owner} must have exactly {SUBDIALOG_TOPIC_SLOTS} topic slots; found {} arguments",
+                    arguments.len()
+                ),
+            };
+
+            let children = slots
+                .iter()
+                .map(|range| {
+                    if is_empty_subdialog_slot(&tokens, *range) {
+                        Ok(None)
+                    } else {
+                        subdialog_class_name(&tokens, *range)
+                            .map(|name| Some(name.to_owned()))
+                            .with_context(|| {
+                                format!(
+                                    "the Subdialog call in {owner} contains a populated slot that is not a bare or namespace-qualified topic class"
+                                )
+                            })
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            calls.entry(owner.clone()).or_default().push(children);
+        }
+    }
+
+    Ok(calls)
+}
+
+/// Refuse the saturated structural shape that failed the current live runtime oracle.
+///
+/// A checked-out call that is already full may still have its topics' methods, defaults and ranks
+/// edited; changing or removing its 20-slot structure is refused. A smaller call may still grow to
+/// the proven Stage-A 20-sibling shape, but newly declared children must occur in source declaration
+/// order. Stage A also proves replacing the smaller call's old children entirely; old children that
+/// are retained may not be duplicated or relatively reordered, and every authored child must be
+/// either pristine or newly declared. Visible ordering remains freely controllable through the
+/// separately runtime-qualified `PriorityRank` path. This admits Stage A/B and ordinary insertion
+/// while rejecting the reversed, replaced Stage-C call which compiled cleanly but failed in game
+/// with `ArrayNum exceeds ArrayMax`.
+fn validate_saturated_subdialog_edits(
+    pristine: &str,
+    authored: &str,
+    added_classes: &[String],
+) -> Result<()> {
+    let pristine_calls = fixed_subdialog_calls(pristine)?;
+    let authored_calls = fixed_subdialog_calls(authored)?;
+    let added = added_classes
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let outline = dialog::read_outline(authored)
+        .map_err(|reason| anyhow::anyhow!("inventorying authored class order: {reason}"))?;
+    let declaration_order = outline
+        .classes
+        .iter()
+        .map(|class| class.name.as_str())
+        .filter(|class| added.contains(class))
+        .collect::<Vec<_>>();
+
+    let owners = pristine_calls
+        .keys()
+        .chain(authored_calls.keys())
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+
+    for owner in owners {
+        let pristine = pristine_calls.get(owner).map(Vec::as_slice).unwrap_or(&[]);
+        let edited = authored_calls.get(owner).map(Vec::as_slice).unwrap_or(&[]);
+
+        if pristine.iter().any(|call| call.iter().all(Option::is_some)) {
+            if pristine != edited {
+                bail!(
+                    "{owner} structurally changes or removes an already full 20-child Subdialog. That saturated reshape failed the current live runtime oracle; edit child defaults/methods or PriorityRank instead"
+                );
+            }
+            continue;
+        }
+
+        if pristine == edited || !edited.iter().any(|call| call.iter().all(Option::is_some)) {
+            continue;
+        }
+        let [edited_call] = edited else {
+            bail!(
+                "{owner} has a structurally changed saturated Subdialog plus {} source-level calls; exactly one call is required",
+                edited.len()
+            );
+        };
+        let [pristine_call] = pristine else {
+            bail!(
+                "{owner} changes to a saturated 20-child Subdialog, but its pristine source has {} calls; exactly one base call is required",
+                pristine.len()
+            );
+        };
+        let pristine_order = pristine_call
+            .iter()
+            .filter_map(Option::as_deref)
+            .collect::<Vec<_>>();
+        let pristine_children = pristine_order.iter().copied().collect::<BTreeSet<_>>();
+        let edited_children = edited_call
+            .iter()
+            .filter_map(Option::as_deref)
+            .collect::<Vec<_>>();
+
+        if let Some(foreign) = edited_children
+            .iter()
+            .copied()
+            .find(|class| !pristine_children.contains(class) && !added.contains(class))
+        {
+            bail!(
+                "{owner} fills a 20-child Subdialog with {foreign}, which is neither a pristine child nor a newly authored class"
+            );
+        }
+
+        let edited_pristine_order = edited_children
+            .iter()
+            .copied()
+            .filter(|class| pristine_children.contains(class))
+            .collect::<Vec<_>>();
+        let retained_pristine = edited_pristine_order
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        if retained_pristine.len() != edited_pristine_order.len() {
+            bail!(
+                "{owner} fills a 20-child Subdialog while duplicating a retained pristine child; each retained child may appear only once"
+            );
+        }
+        let expected_pristine_order = pristine_order
+            .iter()
+            .copied()
+            .filter(|class| retained_pristine.contains(class))
+            .collect::<Vec<_>>();
+        if edited_pristine_order != expected_pristine_order {
+            bail!(
+                "{owner} fills a 20-child Subdialog while reordering retained pristine children; keep their original relative order or replace them with newly authored topics"
+            );
+        }
+
+        let edited_new_order = edited_call
+            .iter()
+            .filter_map(Option::as_deref)
+            .filter(|class| added.contains(class))
+            .collect::<Vec<_>>();
+        let referenced = edited_new_order.iter().copied().collect::<BTreeSet<_>>();
+        let expected_new_order = declaration_order
+            .iter()
+            .copied()
+            .filter(|class| referenced.contains(class))
+            .collect::<Vec<_>>();
+        if edited_new_order != expected_new_order {
+            bail!(
+                "{owner} fills a 20-child Subdialog while permuting newly authored topics. The runtime-qualified saturated path keeps new children in declaration order; use PriorityRank for visible ordering or keep the call below 20 children"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Add one class argument to the one fixed-width `Subdialog` call in an existing topic class.
+///
+/// The source call is bound back to the graph's exact current child order before any rewrite.
+/// Existing children are shifted, never dropped. With no explicit position, a trailing topic whose
+/// caption is the language-independent `TEXT_BACK` key remains last; otherwise the child appends.
+/// This is intentionally narrower than a general source rewriter: ambiguity is a refusal, and the
+/// final `dialog check` independently verifies that no shipped declaration/default target was lost.
+fn wire_subdialog(
+    source: &str,
+    parent: &str,
+    child: &str,
+    expected_children: &[String],
+    trailing_back: Option<&str>,
+    requested_position: Option<usize>,
+) -> Result<String> {
     let tokens = code_tokens(source)?;
     let mut class_bodies = Vec::new();
     for index in 0..tokens.len().saturating_sub(1) {
@@ -2187,32 +2569,120 @@ fn wire_subdialog(source: &str, parent: &str, child: &str) -> Result<String> {
     if close >= *class_close {
         bail!("the Subdialog call in {parent} leaves its class body");
     }
-    let placeholder = ((open + 1)..close.saturating_sub(6)).find(|start| {
-        [
-            "TSubclassOf",
-            "<",
-            "UConversationTopic",
-            ">",
-            "(",
-            "nullptr",
-            ")",
-        ]
-        .iter()
-        .enumerate()
-        .all(|(offset, expected)| tokens[*start + offset].text == *expected)
-    });
-    let Some(placeholder) = placeholder else {
-        bail!("the Subdialog call in {parent} has no empty topic slot");
+
+    let call_shape = subdialog_call_shape(&tokens, *call, *class_open)
+        .with_context(|| format!("binding the Subdialog call in {parent}"))?;
+    let arguments = call_argument_ranges(&tokens, open, close)?;
+    let slot_ranges = match (call_shape, arguments.as_slice()) {
+        // Decompiled global calls carry the owning topic as their first argument.
+        (SubdialogCallShape::Global, [owner, slots @ ..])
+            if arguments.len() == SUBDIALOG_TOPIC_SLOTS + 1 =>
+        {
+            let (start, end) = *owner;
+            if start != end || tokens[start].text != "this" {
+                bail!(
+                    "the Subdialog call in {parent} has 21 arguments but its first argument is not `this`"
+                );
+            }
+            slots
+        }
+        (SubdialogCallShape::Instance, slots)
+            if arguments.len() == SUBDIALOG_TOPIC_SLOTS =>
+        {
+            slots
+        }
+        (SubdialogCallShape::Global, _) => bail!(
+            "the global Subdialog call in {parent} must have `this` followed by exactly {SUBDIALOG_TOPIC_SLOTS} topic slots; found {} arguments",
+            arguments.len()
+        ),
+        (SubdialogCallShape::Instance, _) => bail!(
+            "the instance Subdialog call in {parent} must have exactly {SUBDIALOG_TOPIC_SLOTS} topic slots; found {} arguments",
+            arguments.len()
+        ),
     };
+
+    let mut populated = Vec::<(String, String)>::new();
+    let mut saw_empty = false;
+    for range in slot_ranges {
+        if is_empty_subdialog_slot(&tokens, *range) {
+            saw_empty = true;
+            continue;
+        }
+        if saw_empty {
+            bail!(
+                "the Subdialog call in {parent} has a populated topic after an empty slot; refusing to guess its runtime order"
+            );
+        }
+        let Some(name) = subdialog_class_name(&tokens, *range) else {
+            bail!(
+                "the Subdialog call in {parent} contains a populated slot that is not a bare or namespace-qualified topic class"
+            );
+        };
+        let raw = source[tokens[range.0].start..tokens[range.1].end].to_owned();
+        populated.push((name.to_owned(), raw));
+    }
+
+    let source_children = populated
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect::<Vec<_>>();
+    let graph_children = expected_children
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    if source_children != graph_children {
+        bail!(
+            "the source-level Subdialog children in {parent} do not match the checked cache graph; refusing a stale or ambiguous rewrite"
+        );
+    }
+    if populated.len() == SUBDIALOG_TOPIC_SLOTS {
+        bail!("the Subdialog call in {parent} has no empty topic slot");
+    }
+
+    let insert_at = match requested_position {
+        Some(position) if position == 0 || position > populated.len() + 1 => bail!(
+            "--subdialog-position for {parent} must be between 1 and {}, inclusive; got {position}",
+            populated.len() + 1
+        ),
+        Some(position) => position - 1,
+        None => match trailing_back {
+            Some(back) => {
+                if populated.last().is_none_or(|(name, _)| name != back) {
+                    bail!(
+                        "the checked cache identifies {back} as the trailing Back option in {parent}, but the source call does not end with it"
+                    );
+                }
+                populated.len() - 1
+            }
+            None => populated.len(),
+        },
+    };
+
+    let mut rewritten = populated
+        .into_iter()
+        .map(|(_, raw)| raw)
+        .collect::<Vec<_>>();
+    rewritten.insert(insert_at, child.to_owned());
+    rewritten.resize(SUBDIALOG_TOPIC_SLOTS, EMPTY_SUBDIALOG_SLOT.to_owned());
+
     let mut edited = source.to_owned();
-    edited.replace_range(
-        tokens[placeholder].start..tokens[placeholder + 6].end,
-        child,
-    );
+    for (range, replacement) in slot_ranges.iter().zip(rewritten.iter()).rev() {
+        edited.replace_range(tokens[range.0].start..tokens[range.1].end, replacement);
+    }
     Ok(edited)
 }
 
 fn new_topic(request: NewTopicRequest) -> Result<()> {
+    if request.subdialog_position.is_some() && request.subdialog_of.is_none() {
+        bail!("--subdialog-position requires --subdialog-of");
+    }
+    if let Some(position) = request.subdialog_position {
+        if !(1..=SUBDIALOG_TOPIC_SLOTS).contains(&position) {
+            bail!(
+                "--subdialog-position must be between 1 and {SUBDIALOG_TOPIC_SLOTS}; got {position}"
+            );
+        }
+    }
     let (cache_path, bytes) = read_cache(request.cache, request.game)?;
     let graph = dialog::build(&bytes).context("reading dialog from the script cache")?;
     let conversation = resolve_one(&graph, &request.npc)?;
@@ -2275,6 +2745,10 @@ fn new_topic(request: NewTopicRequest) -> Result<()> {
     } else {
         ""
     };
+    // Shipped sub-topics use rank 0 and are ordered by their fixed Subdialog argument slots.
+    // Giving a newly wired child the root scaffold's rank 2 can move it past a trailing Back row
+    // even when the source call places it correctly.
+    let priority_rank = if request.subdialog_of.is_some() { 0 } else { 2 };
     let topic_source = format!(
         "// Generated by `gore dialog new-topic` for {participant}.\n\
          //\n\
@@ -2286,7 +2760,7 @@ fn new_topic(request: NewTopicRequest) -> Result<()> {
          {{\n\
          \x20   default DebugId = {debug_id};\n\
          {caption_line}\n\
-         \x20   default PriorityRank = 2;\n\
+         \x20   default PriorityRank = {priority_rank};\n\
          {subtopic_default}\
          \n\
          \x20   UFUNCTION(BlueprintOverride)\n\
@@ -2305,19 +2779,40 @@ fn new_topic(request: NewTopicRequest) -> Result<()> {
 
     let mut source = if let Some(parent_name) = request.subdialog_of.as_deref() {
         let parent = resolve_topic_in(conversation, parent_name)?;
-        let subdialog_count = parent
+        let subdialogs = parent
             .act
             .iter()
-            .filter(|step| matches!(step.kind, StepKind::Subdialog { .. }))
-            .count();
-        if subdialog_count != 1 {
+            .filter_map(|step| match &step.kind {
+                StepKind::Subdialog { children } => Some(children),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [children] = subdialogs.as_slice() else {
             bail!(
-                "{} has {subdialog_count} compiled Subdialog calls; --subdialog-of requires exactly one",
-                parent.class
+                "{} has {} compiled Subdialog calls; --subdialog-of requires exactly one",
+                parent.class,
+                subdialogs.len()
             );
-        }
-        wire_subdialog(&taken.source, &parent.class, &class)
-            .with_context(|| format!("wiring the new topic into {}", parent.class))?
+        };
+        let trailing_back = children.last().and_then(|last| {
+            conversation
+                .topic(last)
+                .and_then(|topic| match &topic.caption {
+                    Caption::LocKey { key } if key.eq_ignore_ascii_case(BACK_CAPTION_KEY) => {
+                        Some(last.as_str())
+                    }
+                    _ => None,
+                })
+        });
+        wire_subdialog(
+            &taken.source,
+            &parent.class,
+            &class,
+            children,
+            trailing_back,
+            request.subdialog_position,
+        )
+        .with_context(|| format!("wiring the new topic into {}", parent.class))?
     } else {
         taken.source.clone()
     };
@@ -2392,6 +2887,12 @@ fn new_topic(request: NewTopicRequest) -> Result<()> {
     println!("class     {class} : {root_class}");
     if let Some(parent) = request.subdialog_of.as_deref() {
         println!("subdialog {parent} (same module; no root registration)");
+        match request.subdialog_position {
+            Some(position) => println!("position  {position} (1-based; existing entries shifted)"),
+            None => {
+                println!("position  before trailing TEXT_BACK, otherwise after existing entries")
+            }
+        }
     } else {
         println!("native root (same module; no adapter registration)");
     }
@@ -2635,31 +3136,59 @@ mod tests {
         assert_eq!(render_args(&args), "Topic_Brannok_136200, n\"Hero\"");
     }
 
-    #[test]
-    fn a_subdialog_child_is_wired_only_into_the_named_class_code() {
-        let source = r#"
-// class UParent { Subdialog(UBogus::StaticClass()); }
-class UParent : UBase
-{
-    void Act_Implementation()
-    {
-        FString Example = "Subdialog(also not code)";
-        this.Subdialog(UFirst, TSubclassOf<UConversationTopic>(nullptr));
+    fn fixed_subdialog_arguments(children: &[&str]) -> String {
+        children
+            .iter()
+            .copied()
+            .map(str::to_owned)
+            .chain(
+                std::iter::repeat(EMPTY_SUBDIALOG_SLOT.to_owned())
+                    .take(SUBDIALOG_TOPIC_SLOTS - children.len()),
+            )
+            .collect::<Vec<_>>()
+            .join(", ")
     }
-}
+
+    fn graph_children(children: &[&str]) -> Vec<String> {
+        children.iter().map(|child| (*child).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_subdialog_child_appends_when_there_is_no_trailing_back() {
+        let parent_arguments = fixed_subdialog_arguments(&["UFirst"]);
+        let other_arguments = fixed_subdialog_arguments(&["UUntouched"]);
+        let source = format!(
+            r#"
+// class UParent {{ Subdialog(UBogus::StaticClass()); }}
+class UParent : UBase
+{{
+    void Act_Implementation()
+    {{
+        FString Example = "Subdialog(also not code)";
+        this.Subdialog({parent_arguments});
+    }}
+}}
 
 class UOther : UBase
-{
+{{
     void Act_Implementation()
-    {
-        this.Subdialog(UUntouched, TSubclassOf<UConversationTopic>(nullptr));
-    }
-}
-"#;
-        let edited = wire_subdialog(source, "UParent", "UNewChild").unwrap();
-        assert!(edited.contains("this.Subdialog(UFirst, UNewChild);"));
-        assert!(edited
-            .contains("this.Subdialog(UUntouched, TSubclassOf<UConversationTopic>(nullptr));"));
+    {{
+        this.Subdialog({other_arguments});
+    }}
+}}
+"#
+        );
+        let edited = wire_subdialog(
+            &source,
+            "UParent",
+            "UNewChild",
+            &graph_children(&["UFirst"]),
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(edited.contains("this.Subdialog(UFirst, UNewChild,"));
+        assert!(edited.contains(&format!("this.Subdialog({other_arguments});")));
         assert_eq!(edited.matches("UNewChild").count(), 1);
         assert_eq!(
             subdialog_reference_owners(&edited, "UNewChild").unwrap(),
@@ -2668,34 +3197,292 @@ class UOther : UBase
     }
 
     #[test]
-    fn ambiguous_subdialog_wiring_fails_closed() {
-        let source = r#"
-class UParent : UBase
-{
-    void Act_Implementation()
-    {
-        this.Subdialog(UA, TSubclassOf<UConversationTopic>(nullptr));
-        this.Subdialog(UB, TSubclassOf<UConversationTopic>(nullptr));
+    fn default_subdialog_placement_keeps_a_trailing_back_last() {
+        let arguments = fixed_subdialog_arguments(&["UFirst", "UBack"]);
+        let source = format!(
+            "class UParent : UBase {{ void Act_Implementation() {{ ::Subdialog(this, {arguments}); }} }}"
+        );
+        let edited = wire_subdialog(
+            &source,
+            "UParent",
+            "UNewChild",
+            &graph_children(&["UFirst", "UBack"]),
+            Some("UBack"),
+            None,
+        )
+        .unwrap();
+        assert!(edited.contains("::Subdialog(this, UFirst, UNewChild, UBack,"));
     }
-}
-"#;
-        let error = wire_subdialog(source, "UParent", "UNewChild").unwrap_err();
+
+    #[test]
+    fn an_explicit_one_based_position_can_place_the_child_anywhere() {
+        let arguments = fixed_subdialog_arguments(&["UFirst", "USecond", "UBack"]);
+        let source = format!(
+            "class UParent : UBase {{ void Act_Implementation() {{ this.Subdialog({arguments}); }} }}"
+        );
+        let children = graph_children(&["UFirst", "USecond", "UBack"]);
+
+        let first = wire_subdialog(
+            &source,
+            "UParent",
+            "UNewChild",
+            &children,
+            Some("UBack"),
+            Some(1),
+        )
+        .unwrap();
+        assert!(first.contains("this.Subdialog(UNewChild, UFirst, USecond, UBack,"));
+
+        let after_back = wire_subdialog(
+            &source,
+            "UParent",
+            "UNewChild",
+            &children,
+            Some("UBack"),
+            Some(4),
+        )
+        .unwrap();
+        assert!(after_back.contains("this.Subdialog(UFirst, USecond, UBack, UNewChild,"));
+    }
+
+    #[test]
+    fn an_out_of_range_subdialog_position_fails_closed() {
+        let arguments = fixed_subdialog_arguments(&["UFirst", "UBack"]);
+        let source = format!(
+            "class UParent : UBase {{ void Act_Implementation() {{ this.Subdialog({arguments}); }} }}"
+        );
+        let error = wire_subdialog(
+            &source,
+            "UParent",
+            "UNewChild",
+            &graph_children(&["UFirst", "UBack"]),
+            Some("UBack"),
+            Some(4),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("between 1 and 3"), "{error}");
+    }
+
+    #[test]
+    fn ambiguous_subdialog_wiring_fails_closed() {
+        let first = fixed_subdialog_arguments(&["UA"]);
+        let second = fixed_subdialog_arguments(&["UB"]);
+        let source = format!(
+            "class UParent : UBase {{ void Act_Implementation() {{ this.Subdialog({first}); this.Subdialog({second}); }} }}"
+        );
+        let error = wire_subdialog(
+            &source,
+            "UParent",
+            "UNewChild",
+            &graph_children(&["UA"]),
+            None,
+            None,
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("exactly one"), "{error}");
     }
 
     #[test]
-    fn a_full_subdialog_call_fails_closed() {
-        let source = r#"
-class UParent : UBase
-{
-    void Act_Implementation()
-    {
-        this.Subdialog(UA, UB);
+    fn wrong_subdialog_receivers_and_free_calls_fail_closed() {
+        let arguments = fixed_subdialog_arguments(&["UA"]);
+        for invocation in [
+            format!("other.Subdialog({arguments})"),
+            format!("Subdialog({arguments})"),
+            format!("Helpers::Subdialog(this, {arguments})"),
+        ] {
+            let source = format!(
+                "class UParent : UBase {{ void Act_Implementation() {{ {invocation}; }} }}"
+            );
+            let error = wire_subdialog(
+                &source,
+                "UParent",
+                "UNewChild",
+                &graph_children(&["UA"]),
+                None,
+                None,
+            )
+            .unwrap_err();
+            let message = format!("{error:#}");
+            assert!(
+                message.contains("unsupported receiver")
+                    || message.contains("namespace- or owner-qualified"),
+                "{invocation}: {message}"
+            );
+        }
     }
-}
-"#;
-        let error = wire_subdialog(source, "UParent", "UNewChild").unwrap_err();
+
+    #[test]
+    fn a_global_subdialog_call_requires_this_as_its_owner() {
+        let arguments = fixed_subdialog_arguments(&["UA"]);
+        let source = format!(
+            "class UParent : UBase {{ void Act_Implementation() {{ ::Subdialog(other, {arguments}); }} }}"
+        );
+        let error = wire_subdialog(
+            &source,
+            "UParent",
+            "UNewChild",
+            &graph_children(&["UA"]),
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("first argument is not `this`"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_full_subdialog_call_fails_closed() {
+        let names = (0..SUBDIALOG_TOPIC_SLOTS)
+            .map(|index| format!("UTopic{index}"))
+            .collect::<Vec<_>>();
+        let refs = names.iter().map(String::as_str).collect::<Vec<_>>();
+        let arguments = fixed_subdialog_arguments(&refs);
+        let source = format!(
+            "class UParent : UBase {{ void Act_Implementation() {{ this.Subdialog({arguments}); }} }}"
+        );
+        let error =
+            wire_subdialog(&source, "UParent", "UNewChild", &names, None, None).unwrap_err();
         assert!(error.to_string().contains("no empty topic slot"), "{error}");
+    }
+
+    fn subdialog_source(arguments: &str, declarations: &[String]) -> String {
+        format!(
+            "class UParent : UBase {{ void Act_Implementation() {{ this.Subdialog({arguments}); }} }}\n{}",
+            declarations
+                .iter()
+                .map(|name| format!("class {name} : UBase {{}}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    }
+
+    #[test]
+    fn a_new_saturated_subdialog_keeps_new_topics_in_declaration_order() {
+        let names = (1..=SUBDIALOG_TOPIC_SLOTS)
+            .map(|index| format!("UNew{index:02}"))
+            .collect::<Vec<_>>();
+        let refs = names.iter().map(String::as_str).collect::<Vec<_>>();
+        let pristine = subdialog_source(&fixed_subdialog_arguments(&["UExisting"]), &[]);
+        let authored = subdialog_source(&fixed_subdialog_arguments(&refs), &names);
+
+        validate_saturated_subdialog_edits(&pristine, &authored, &names).unwrap();
+    }
+
+    #[test]
+    fn a_new_saturated_subdialog_permutation_fails_closed() {
+        let names = (1..=SUBDIALOG_TOPIC_SLOTS)
+            .map(|index| format!("UNew{index:02}"))
+            .collect::<Vec<_>>();
+        let reversed = names.iter().rev().map(String::as_str).collect::<Vec<_>>();
+        let pristine = subdialog_source(&fixed_subdialog_arguments(&["UExisting"]), &[]);
+        let authored = subdialog_source(&fixed_subdialog_arguments(&reversed), &names);
+
+        let error = validate_saturated_subdialog_edits(&pristine, &authored, &names).unwrap_err();
+        assert!(error.to_string().contains("permuting"), "{error}");
+        assert!(error.to_string().contains("PriorityRank"), "{error}");
+    }
+
+    #[test]
+    fn a_saturated_subdialog_cannot_duplicate_a_retained_pristine_child() {
+        let names = (1..=SUBDIALOG_TOPIC_SLOTS - 2)
+            .map(|index| format!("UNew{index:02}"))
+            .collect::<Vec<_>>();
+        let mut authored_refs = vec!["UFirst", "UFirst"];
+        authored_refs.extend(names.iter().map(String::as_str));
+        let pristine = subdialog_source(&fixed_subdialog_arguments(&["UFirst", "USecond"]), &[]);
+        let authored = subdialog_source(&fixed_subdialog_arguments(&authored_refs), &names);
+
+        let error = validate_saturated_subdialog_edits(&pristine, &authored, &names).unwrap_err();
+        assert!(error.to_string().contains("duplicating"), "{error}");
+        assert!(error.to_string().contains("only once"), "{error}");
+    }
+
+    #[test]
+    fn a_saturated_subdialog_cannot_reorder_retained_pristine_children() {
+        let names = (1..=SUBDIALOG_TOPIC_SLOTS - 2)
+            .map(|index| format!("UNew{index:02}"))
+            .collect::<Vec<_>>();
+        let mut authored_refs = vec!["USecond", "UFirst"];
+        authored_refs.extend(names.iter().map(String::as_str));
+        let pristine = subdialog_source(&fixed_subdialog_arguments(&["UFirst", "USecond"]), &[]);
+        let authored = subdialog_source(&fixed_subdialog_arguments(&authored_refs), &names);
+
+        let error = validate_saturated_subdialog_edits(&pristine, &authored, &names).unwrap_err();
+        assert!(error.to_string().contains("reordering"), "{error}");
+        assert!(error.to_string().contains("relative order"), "{error}");
+    }
+
+    #[test]
+    fn a_saturated_subdialog_rejects_an_unqualified_child() {
+        let names = (1..=SUBDIALOG_TOPIC_SLOTS - 2)
+            .map(|index| format!("UNew{index:02}"))
+            .collect::<Vec<_>>();
+        let mut authored_refs = vec!["UFirst", "UForeign"];
+        authored_refs.extend(names.iter().map(String::as_str));
+        let pristine = subdialog_source(&fixed_subdialog_arguments(&["UFirst"]), &[]);
+        let authored = subdialog_source(&fixed_subdialog_arguments(&authored_refs), &names);
+
+        let error = validate_saturated_subdialog_edits(&pristine, &authored, &names).unwrap_err();
+        assert!(error.to_string().contains("UForeign"), "{error}");
+        assert!(error.to_string().contains("neither"), "{error}");
+    }
+
+    #[test]
+    fn changing_an_already_saturated_subdialog_fails_closed() {
+        let names = (1..=SUBDIALOG_TOPIC_SLOTS)
+            .map(|index| format!("UTopic{index:02}"))
+            .collect::<Vec<_>>();
+        let pristine_refs = names.iter().map(String::as_str).collect::<Vec<_>>();
+        let mut edited_refs = pristine_refs.clone();
+        edited_refs.swap(0, 1);
+        let pristine = subdialog_source(&fixed_subdialog_arguments(&pristine_refs), &[]);
+        let authored = subdialog_source(&fixed_subdialog_arguments(&edited_refs), &[]);
+
+        let error = validate_saturated_subdialog_edits(&pristine, &authored, &[]).unwrap_err();
+        assert!(error.to_string().contains("already full"), "{error}");
+        assert!(error.to_string().contains("PriorityRank"), "{error}");
+    }
+
+    #[test]
+    fn shrinking_an_already_saturated_subdialog_fails_closed() {
+        let names = (1..=SUBDIALOG_TOPIC_SLOTS)
+            .map(|index| format!("UTopic{index:02}"))
+            .collect::<Vec<_>>();
+        let pristine_refs = names.iter().map(String::as_str).collect::<Vec<_>>();
+        let partial_refs = pristine_refs[..SUBDIALOG_TOPIC_SLOTS - 1].to_vec();
+        let pristine = subdialog_source(&fixed_subdialog_arguments(&pristine_refs), &[]);
+        let authored = subdialog_source(&fixed_subdialog_arguments(&partial_refs), &[]);
+
+        let error = validate_saturated_subdialog_edits(&pristine, &authored, &[]).unwrap_err();
+        assert!(error.to_string().contains("already full"), "{error}");
+        assert!(error.to_string().contains("removes"), "{error}");
+    }
+
+    #[test]
+    fn removing_an_already_saturated_subdialog_call_fails_closed() {
+        let names = (1..=SUBDIALOG_TOPIC_SLOTS)
+            .map(|index| format!("UTopic{index:02}"))
+            .collect::<Vec<_>>();
+        let pristine_refs = names.iter().map(String::as_str).collect::<Vec<_>>();
+        let pristine = subdialog_source(&fixed_subdialog_arguments(&pristine_refs), &[]);
+        let authored = "class UParent : UBase { void Act_Implementation() { /* removed */ } }";
+
+        let error = validate_saturated_subdialog_edits(&pristine, authored, &[]).unwrap_err();
+        assert!(error.to_string().contains("already full"), "{error}");
+        assert!(error.to_string().contains("removes"), "{error}");
+    }
+
+    #[test]
+    fn ordinary_subdialog_insertion_remains_runtime_qualified() {
+        let pristine = subdialog_source(&fixed_subdialog_arguments(&["UFirst", "UBack"]), &[]);
+        let authored = subdialog_source(
+            &fixed_subdialog_arguments(&["UFirst", "UNew", "UBack"]),
+            &["UNew".to_owned()],
+        );
+
+        validate_saturated_subdialog_edits(&pristine, &authored, &["UNew".to_owned()]).unwrap();
     }
 
     #[test]
@@ -3049,6 +3836,7 @@ class UTopic_Hero__Npc : UConversationTopic
             caption_key: Some("GORE_DIALOG_NATIVE_ROOT_ORACLE".to_owned()),
             class: Some(class.to_owned()),
             subdialog_of: None,
+            subdialog_position: None,
             mod_name: "GoreNativeRootOracle".to_owned(),
             out: out.clone(),
             cache: Some(cache.clone()),
@@ -3090,6 +3878,78 @@ class UTopic_Hero__Npc : UConversationTopic
             2,
             "stage must stay script-only"
         );
+
+        // Exercise the shipped fixed-width form as well: Diego's teaching menu has a stable
+        // trailing TEXT_BACK child and therefore qualifies both default placement and the
+        // generated sub-topic defaults against the same real cache.
+        let sub_out = temp.path().join("teach-subtopic");
+        let sub_class = "UChoiceGoreTeachPlacementOracle";
+        new_topic(NewTopicRequest {
+            npc: npc.to_owned(),
+            caption: None,
+            caption_key: Some("GORE_DIALOG_TEACH_PLACEMENT_ORACLE".to_owned()),
+            class: Some(sub_class.to_owned()),
+            subdialog_of: Some("UChoiceDiegoTeach".to_owned()),
+            subdialog_position: None,
+            mod_name: "GoreTeachPlacementOracle".to_owned(),
+            out: sub_out.clone(),
+            cache: Some(cache.clone()),
+            game: None,
+        })
+        .unwrap();
+
+        let sub_manifest: EditManifest =
+            serde_json::from_slice(&fs::read(sub_out.join(MANIFEST_NAME)).unwrap()).unwrap();
+        assert!(sub_manifest.dialog_topics.is_empty());
+        let sub_authored = fs::read_to_string(sub_out.join(&sub_manifest.source_file)).unwrap();
+        let sub_outline = dialog::read_outline(&sub_authored).unwrap();
+        let sub_added = sub_outline
+            .classes
+            .iter()
+            .find(|candidate| candidate.name == sub_class)
+            .unwrap();
+        assert_eq!(
+            literal_bool_default(sub_added, "bIsSubTopic").unwrap(),
+            Some(true)
+        );
+        let priority = sub_added
+            .defaults
+            .iter()
+            .filter(|default| default.target == "PriorityRank")
+            .collect::<Vec<_>>();
+        let [priority] = priority.as_slice() else {
+            panic!(
+                "expected one authored PriorityRank default, got {}",
+                priority.len()
+            );
+        };
+        assert_eq!(
+            code_tokens(&priority.statement)
+                .unwrap()
+                .iter()
+                .map(|token| token.text.as_str())
+                .collect::<Vec<_>>(),
+            ["default", "PriorityRank", "=", "0", ";"]
+        );
+        assert!(
+            sub_authored.contains(&format!(
+                "{sub_class}, G1R::Conversation::UChoiceDiegoTeachBack,"
+            )),
+            "the new child must be immediately before Diego's trailing TEXT_BACK topic"
+        );
+
+        check(&sub_out, true, Some(cache.clone()), Some(fake_game.clone())).unwrap();
+        stage(
+            &sub_out,
+            "GoreTeachPlacementOracle",
+            Some(cache.clone()),
+            Some(fake_game.clone()),
+        )
+        .unwrap();
+        let sub_spec: serde_json::Value =
+            serde_json::from_slice(&fs::read(sub_out.join("spec.json")).unwrap()).unwrap();
+        assert!(sub_spec.get("dialog_topics").is_none());
+        assert_eq!(sub_spec["scripts"][0]["op"], "edit");
 
         // Old checked-out workspaces may still carry an explicit adapter row. Keep accepting that
         // shape when (and only when) its participant, new class, and sentinel bind to this cache.

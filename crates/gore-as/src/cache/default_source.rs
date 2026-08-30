@@ -690,6 +690,89 @@ fn first_temporary(statement: &str) -> Option<String> {
     None
 }
 
+/// Refuse source whose effective declarations depend on compiler preprocessing.
+///
+/// The safety inventories run on authored source before the standalone frontend. Until they can
+/// use that exact frontend configuration, accepting a directive would let disabled declarations
+/// satisfy a source-level completeness proof and then disappear from compiled output.
+pub(crate) fn reject_preprocessor_directives(source: &str) -> Result<(), String> {
+    let bytes = source.as_bytes();
+    let mut index = 0usize;
+    let mut line = 1usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\n' => {
+                line += 1;
+                index += 1;
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                index += 2;
+                while index < bytes.len() && !matches!(bytes[index], b'\r' | b'\n') {
+                    index += 1;
+                }
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                index += 2;
+                let mut closed = false;
+                while index < bytes.len() {
+                    if bytes[index] == b'\n' {
+                        line += 1;
+                    }
+                    if bytes[index] == b'*' && bytes.get(index + 1) == Some(&b'/') {
+                        index += 2;
+                        closed = true;
+                        break;
+                    }
+                    index += 1;
+                }
+                if !closed {
+                    return Err("source has an unterminated block comment".into());
+                }
+            }
+            quote @ (b'\'' | b'"') => {
+                index += 1;
+                let mut closed = false;
+                while index < bytes.len() {
+                    if bytes[index] == b'\\' {
+                        index = (index + 2).min(bytes.len());
+                    } else if bytes[index] == quote {
+                        index += 1;
+                        closed = true;
+                        break;
+                    } else {
+                        if bytes[index] == b'\n' {
+                            line += 1;
+                        }
+                        index += 1;
+                    }
+                }
+                if !closed {
+                    return Err("source has an unterminated quoted literal".into());
+                }
+            }
+            b'#' => {
+                let directive_line = line;
+                let start = index;
+                index += 1;
+                while index < bytes.len() && matches!(bytes[index], b' ' | b'\t') {
+                    index += 1;
+                }
+                while index < bytes.len()
+                    && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+                {
+                    index += 1;
+                }
+                let directive = source[start..index].trim_end();
+                return Err(format!(
+                    "line {directive_line}: preprocessor directive `{directive}` is unsupported: authored-default coverage is checked before compiler preprocessing"
+                ));
+            }
+            _ => index += 1,
+        }
+    }
+    Ok(())
+}
+
 /// The classes whose BODY declares at least one class-scope `default` statement.
 ///
 /// Class scope only: a `default` inside a method body is a switch label and sits at brace depth
@@ -702,6 +785,7 @@ fn first_temporary(statement: &str) -> Option<String> {
 pub(crate) fn classes_with_default_statements(
     source: &str,
 ) -> Result<std::collections::HashSet<String>, String> {
+    reject_preprocessor_directives(source)?;
     let bytes = source.as_bytes();
     let mut index = 0usize;
     // One entry per open brace: the class it opened, or `None` for a namespace or any other
