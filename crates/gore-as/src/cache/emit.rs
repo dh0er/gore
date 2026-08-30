@@ -2159,6 +2159,7 @@ fn emit_function_ctor(
         let rendered =
             split_gameplay_effect_chain(&rendered, &gameplay_effect_chain_slots(f, refs), refs);
         let rendered = lead_with_the_declaration(&rendered, leading_declaration_slot(f));
+        let rendered = order_adjacent_declarations(&rendered, &adjacent_declaration_order(f, refs));
         let rendered =
             merge_copy_constructed_declarations(&rendered, &copy_constructed_slots(f, refs));
         let rendered = drop_default_arguments(&rendered, refs);
@@ -10716,6 +10717,72 @@ fn chain_inlined_cast_operands(f: &Func) -> HashSet<i32> {
             continue;
         }
         out.insert(operand);
+    }
+    out
+}
+
+/// Two bare declarations that stood next to each other, and in which order.
+///
+/// `PSF vA; CALLSYS ::$beh0; PSF vB; CALLSYS ::$beh0` with nothing pushed in front of either is
+/// two default constructions back to back — two bare declarations, adjacent, in that order. The
+/// slot NUMBERS say nothing about it: this compiler reuses freed slots by size, so slot order is
+/// declaration order only within a size class.
+///
+/// Measured tree-wide: the pattern occurs 40 times and fires on 13 byte-faithful functions, all
+/// 13 of which our text already writes in that order.
+fn adjacent_declaration_order(f: &Func, refs: &RefResolver) -> Vec<(i32, i32)> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return Vec::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let constructs = |at: usize| -> Option<i32> {
+        let push = instrs.get(at).filter(|ins| ins.op.name == "PSF")?;
+        let call = instrs.get(at + 1)?;
+        (call.op.name == "CALLSYS"
+            && refs.func_by_ptr(call.qwords.first().copied().unwrap_or(0) as i64) == Some("$beh0"))
+        .then(|| w0(push))
+        .filter(|slot| *slot > 0)
+    };
+    let mut out = Vec::new();
+    for at in 0..instrs.len().saturating_sub(3) {
+        if let (Some(first), Some(second)) = (constructs(at), constructs(at + 2)) {
+            if first != second {
+                out.push((first, second));
+            }
+        }
+    }
+    out
+}
+
+/// Write those two declarations in the order vanilla built them.
+fn order_adjacent_declarations(body: &str, pairs: &[(i32, i32)]) -> String {
+    if pairs.is_empty() {
+        return body.to_owned();
+    }
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    for &(first, second) in pairs {
+        let find = |slot: i32| {
+            let ident = format!("local_{slot}");
+            lines
+                .iter()
+                .position(|line| bare_declaration(line).is_some_and(|(_, name)| name == ident))
+        };
+        let (Some(at_first), Some(at_second)) = (find(first), find(second)) else {
+            continue;
+        };
+        if at_second >= at_first {
+            continue;
+        }
+        // Move the one vanilla built first up in front of the other, keeping the indentation of
+        // the place it lands in.
+        let indent = indent_of(&lines[at_second]);
+        let declaration = lines.remove(at_first);
+        let declaration = format!("{indent}{}", declaration.trim());
+        lines.insert(at_second, declaration);
+    }
+    let mut out = lines.join("\n");
+    if body.ends_with('\n') {
+        out.push('\n');
     }
     out
 }
