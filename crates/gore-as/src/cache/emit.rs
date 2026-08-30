@@ -11198,8 +11198,14 @@ fn fold_assignment_receivers(body: &str, consumed: &HashSet<(i32, usize)>) -> St
     let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
     // A name that exists for NOTHING BUT receiver pairs: one hoisted declaration plus exactly two
     // mentions per pair, and not one more. See the cap below for why the count is taken up front.
-    let receiver_only: HashSet<String> = {
-        let mut pairs: HashMap<String, usize> = HashMap::new();
+    // name -> how many of its receiver pairs are COMPOUND assignments. A compound one through a
+    // call receiver (`this.GetG1R().Counter += 1;`) is a form the tree cannot carry — shipping 19
+    // of them took the compiler down with no diagnostic — so those pairs never fold. They still
+    // have to be COUNTED: a name whose other pairs are plain is eligible, and its declaration has
+    // to survive for the compound sites that keep using it.
+    let receiver_only: HashMap<String, usize> = {
+        let mut plain: HashMap<String, usize> = HashMap::new();
+        let mut compound: HashMap<String, usize> = HashMap::new();
         for at in 0..lines.len().saturating_sub(1) {
             let head = declaration_with_initializer(&lines[at]).or_else(|| {
                 let (target, value) = slot_store(&lines[at])?;
@@ -11215,26 +11221,27 @@ fn fold_assignment_receivers(body: &str, consumed: &HashSet<(i32, usize)>) -> St
             {
                 continue;
             }
-            // Only a PLAIN assignment. A compound one through a call receiver
-            // (`this.GetG1R().Counter += 1;`) is a form the tree had not carried before, and
-            // shipping 19 of them took the compiler down with no diagnostic at all. Counting the
-            // pair here is what lets the whole name fail the mention test below, so its
-            // declaration is never removed out from under a statement that still needs it.
-            if !lines[at + 1].trim().contains(" = ") {
-                continue;
+            let assigned = lines[at + 1].trim();
+            if assigned.contains(" = ") {
+                *plain.entry(name).or_default() += 1;
+            } else if [" += ", " -= ", " *= ", " /= ", " |= ", " &= ", " ^= "]
+                .iter()
+                .any(|op| assigned.contains(op))
+            {
+                *compound.entry(name).or_default() += 1;
             }
-            *pairs.entry(name).or_default() += 1;
         }
-        pairs
+        plain
             .into_iter()
-            .filter(|(name, count)| {
+            .filter_map(|(name, count)| {
+                let compounds = compound.get(&name).copied().unwrap_or(0);
                 let declared = lines
                     .iter()
-                    .any(|line| bare_declaration(line).is_some_and(|(_, n)| n == *name));
-                let mentions: usize = lines.iter().map(|line| count_ident(line, name)).sum();
-                mentions == usize::from(declared) + 2 * count
+                    .any(|line| bare_declaration(line).is_some_and(|(_, n)| n == name));
+                let mentions: usize = lines.iter().map(|line| count_ident(line, &name)).sum();
+                (mentions == usize::from(declared) + 2 * (count + compounds))
+                    .then_some((name, compounds))
             })
-            .map(|(name, _)| name)
             .collect()
     };
     let mut at = 0usize;
@@ -11265,9 +11272,7 @@ fn fold_assignment_receivers(body: &str, consumed: &HashSet<(i32, usize)>) -> St
             // the same tree compile). Kept to a name that is nothing BUT receiver pairs: one
             // conversation topic assigns six members of the same story object in a row, and
             // demanding a single pair is what left all six standing.
-            if !receiver_only.contains(&name) {
-                return None;
-            }
+            let compounds = *receiver_only.get(&name)?;
             let next = &lines[at + 1];
             if indent_of(next) != indent {
                 return None;
@@ -11280,7 +11285,12 @@ fn fold_assignment_receivers(body: &str, consumed: &HashSet<(i32, usize)>) -> St
             if !target.starts_with('.') || target.contains('(') {
                 return None;
             }
-            Some((format!("{indent}{init}{assigned};"), declaration))
+            // A name that still has compound pairs keeps its declaration: those statements go on
+            // using it.
+            Some((
+                format!("{indent}{init}{assigned};"),
+                declaration.filter(|_| compounds == 0),
+            ))
         })();
         match folded {
             Some((line, declaration)) => {
