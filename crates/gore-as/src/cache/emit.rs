@@ -2101,7 +2101,7 @@ fn emit_function_ctor(
         // the expression. Held in a local instead, it is evaluated BEFORE the outer call's other
         // arguments — the same instructions in a different order.
         let several_lives =
-            slots_with_several_lives(&rendered.lines().map(str::to_owned).collect::<Vec<_>>());
+            slots_with_a_third_life(&rendered.lines().map(str::to_owned).collect::<Vec<_>>());
         let rendered = inline_unnamed_value_temporaries(
             &rendered,
             &unnamed_value_defs(f, refs)
@@ -2137,7 +2137,7 @@ fn emit_function_ctor(
         // A returned expression folds one step per pass: three names in a chain need three.
         for _ in 0..3 {
         let several_lives =
-            slots_with_several_lives(&rendered.lines().map(str::to_owned).collect::<Vec<_>>());
+            slots_with_a_third_life(&rendered.lines().map(str::to_owned).collect::<Vec<_>>());
         rendered = inline_unnamed_value_temporaries(
             &rendered,
             &unnamed_value_defs(f, refs)
@@ -9483,7 +9483,7 @@ fn split_gameplay_effect_chain(body: &str, slots: &[(i32, i32)], refs: &RefResol
 /// writes through, and a temporary cannot bind to one.
 fn spell_out_default_temporaries(text: &str, defaults: &HashMap<i32, usize>) -> String {
     let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
-    let ambiguous = slots_with_several_lives(&lines);
+    let ambiguous = slots_whose_count_spans_lives(&lines);
     for index in 0..lines.len() {
         let Some((_, name, _)) = declaration_with_initializer(&lines[index]) else {
             continue;
@@ -13029,6 +13029,14 @@ fn renders_a_bool(
 /// declaration is moved, the wrong temporary loses its name, the wrong receiver is folded. Rules
 /// whose witness cannot pick out a life ask this first and stand down on the slots it names.
 fn slots_with_several_lives(lines: &[String]) -> HashSet<i32> {
+    observed_lives(lines)
+        .into_iter()
+        .filter_map(|(slot, seen)| (seen.len() > 1).then_some(slot))
+        .collect()
+}
+
+/// The life numbers the text still shows for each frame slot.
+fn observed_lives(lines: &[String]) -> HashMap<i32, HashSet<usize>> {
     let mut lives: HashMap<i32, HashSet<usize>> = HashMap::new();
     for line in lines {
         for token in line.split(|c: char| !c.is_alphanumeric() && c != '_') {
@@ -13038,8 +13046,28 @@ fn slots_with_several_lives(lines: &[String]) -> HashSet<i32> {
         }
     }
     lives
+}
+
+/// Slots a per-slot COUNT cannot be spent on, because the count includes lives the text no longer
+/// shows. Two names standing is one sign; so is a single name that is not the FIRST life — an
+/// earlier life folded away leaves its successor's number behind, and the count still counts it.
+fn slots_whose_count_spans_lives(lines: &[String]) -> HashSet<i32> {
+    observed_lives(lines)
         .into_iter()
-        .filter_map(|(slot, seen)| (seen.len() > 1).then_some(slot))
+        .filter_map(|(slot, seen)| {
+            (seen.len() > 1 || seen.iter().any(|life| *life > 1)).then_some(slot)
+        })
+        .collect()
+}
+
+/// Slots the text shows a life of beyond the second. A witness read off the slot is spent on
+/// lives 1 and 2, which covers a slot with two of them; a third is outside what it can say.
+fn slots_with_a_third_life(lines: &[String]) -> HashSet<i32> {
+    observed_lives(lines)
+        .into_iter()
+        .filter_map(|(slot, seen)| {
+            (seen.len() > 2 || seen.iter().any(|life| *life > 2)).then_some(slot)
+        })
         .collect()
 }
 
