@@ -9314,8 +9314,15 @@ fn gameplay_effect_chain_slots(f: &Func, refs: &RefResolver) -> Vec<(i32, i32)> 
         return Vec::new();
     };
     let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
-    // A call's hidden out-pointer is the last address pushed before it.
-    let destination = |at: usize| -> Option<i32> {
+    // A call's hidden out-pointer is the last address pushed before it — but only where none of
+    // the call's own parameters takes an address too. A by-reference argument is pushed AFTER the
+    // hidden destination, so where the callee declares one the last `PSF` is that argument, and
+    // reading it as the result would declare an argument slot as the handle.
+    let destination = |at: usize, ptr: i64| -> Option<i32> {
+        let params = refs.func_params_by_ptr(ptr)?;
+        if params.iter().any(|param| param.is_reference) {
+            return None;
+        }
         instrs[..at]
             .iter()
             .rposition(|ins| ins.op.name == "PSF")
@@ -9328,12 +9335,13 @@ fn gameplay_effect_chain_slots(f: &Func, refs: &RefResolver) -> Vec<(i32, i32)> 
         if ins.op.name != "CALLSYS" {
             continue;
         }
-        match refs.func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64) {
-            Some("MakeEffectContext") => context = destination(at),
+        let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
+        match refs.func_by_ptr(ptr) {
+            Some("MakeEffectContext") => context = destination(at, ptr),
             Some("MakeOutgoingSpec") => {
                 // One pair per chain, in program order. A function may carry several, and giving
                 // them all the FIRST pair's names declares the same local twice.
-                if let (Some(ctx), Some(spec)) = (context.take(), destination(at)) {
+                if let (Some(ctx), Some(spec)) = (context.take(), destination(at, ptr)) {
                     if ctx != spec {
                         pairs.push((ctx, spec));
                     }

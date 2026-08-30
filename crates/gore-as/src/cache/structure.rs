@@ -585,11 +585,21 @@ impl Ctx<'_> {
 
     /// The constant an adjacent `SetV4` puts into `slot` just before the `CpyVtoR4` at `at`,
     /// reading past the `PSF vT; CALLSYS` cleanup pairs a scope exit places between them.
+    ///
+    /// The pair has to BE cleanup. Any other call taking an address can write through it, and
+    /// `x = 1; Mutate(x); return x;` then reports a constant the function does not return. Only
+    /// the destructor behaviour is skipped, and only where the address it takes is not the return
+    /// slot itself.
     fn const_return_at(&self, at: usize, slot: i32) -> Option<String> {
         let mut back = at;
         while back >= 2
             && self.instrs[back - 1].op.name == "CALLSYS"
             && self.instrs[back - 2].op.name == "PSF"
+            && self
+                .refs
+                .func_by_ptr(self.instrs[back - 1].qwords.first().copied().unwrap_or(0) as i64)
+                == Some("$beh2")
+            && self.instrs[back - 2].words.first().map(|w| *w as i16 as i32) != Some(slot)
         {
             back -= 2;
         }
