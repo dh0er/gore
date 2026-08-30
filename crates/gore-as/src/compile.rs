@@ -7907,6 +7907,22 @@ where
         &overlay,
         opts.allow_new_symbols,
     )?;
+    let existing_function_metadata = if opts.op == "edit" {
+        Some(
+            crate::cache::generated_defaults::ExistingFunctionMetadataPlan::prepare(
+                &base,
+                &effective_module_name,
+            )
+            .map_err(|reason| {
+                CompileError::Other(format!(
+                    "refusing function-metadata preservation for edit module {:?}: {reason}",
+                    effective_module_name
+                ))
+            })?,
+        )
+    } else {
+        None
+    };
 
     // 1. Only after all base and authored target checks succeed, clear and rebuild the tree.
     let tree = reset_compile_tree(&opts.work_dir).map_err(CompileError::Other)?;
@@ -7976,10 +7992,32 @@ where
         .map_err(|e| CompileError::Other(format!("remap: {e}")))?
         .0
     };
+    if generated_defaults.is_some() {
+        let plan = existing_function_metadata.as_ref().ok_or_else(|| {
+            CompileError::Other(format!(
+                "internal error: generated-default carry for edit module {:?} has no function-metadata preservation plan",
+                effective_module_name
+            ))
+        })?;
+        mini = plan.apply_present(&mini).map_err(|reason| {
+            CompileError::Other(format!(
+                "refusing pre-carry function-metadata normalization for edit module {:?}: {reason}",
+                effective_module_name
+            ))
+        })?;
+    }
     if let Some(plan) = generated_defaults {
         mini = plan.apply(&mini).map_err(|reason| {
             CompileError::Other(format!(
                 "refusing generated-default carry for edit module {:?}: {reason}",
+                effective_module_name
+            ))
+        })?;
+    }
+    if let Some(plan) = existing_function_metadata {
+        mini = plan.apply(&mini).map_err(|reason| {
+            CompileError::Other(format!(
+                "refusing function-metadata preservation for edit module {:?}: {reason}",
                 effective_module_name
             ))
         })?;

@@ -1121,6 +1121,144 @@ fn subdialog_reference_owners(source: &str, class: &str) -> Result<Vec<String>> 
     Ok(owners)
 }
 
+fn class_debug_ids(class: &dialog::ClassOutline) -> Result<Vec<i64>> {
+    class
+        .defaults
+        .iter()
+        .filter(|default| default.target == "DebugId")
+        .map(|default| {
+            let compact = default
+                .statement
+                .chars()
+                .filter(|character| !character.is_whitespace())
+                .collect::<String>();
+            compact
+                .strip_prefix("defaultDebugId=")
+                .and_then(|value| value.strip_suffix(';'))
+                .and_then(|value| value.parse::<i64>().ok())
+                .with_context(|| {
+                    format!(
+                        "new topic {} has a DebugId that is not one signed 64-bit integer literal: {}",
+                        class.name, default.statement
+                    )
+                })
+        })
+        .collect()
+}
+
+fn member_method_name(member: &str) -> Option<&str> {
+    let tokens = member.split_whitespace().collect::<Vec<_>>();
+    let mut index = 0usize;
+    if tokens.first() == Some(&"UFUNCTION") && tokens.get(1) == Some(&"(") {
+        let mut depth = 1usize;
+        index = 2;
+        while index < tokens.len() && depth != 0 {
+            match tokens[index] {
+                "(" => depth += 1,
+                ")" => depth -= 1,
+                _ => {}
+            }
+            index += 1;
+        }
+        if depth != 0 {
+            return None;
+        }
+    }
+    let parameters = tokens[index..].iter().position(|token| *token == "(")? + index;
+    parameters
+        .checked_sub(1)
+        .and_then(|name| tokens.get(name).copied())
+}
+
+/// A new class has no shipped function record whose Unreal override metadata can be overlaid.
+fn validate_new_topic_source_contract(class: &dialog::ClassOutline) -> Result<()> {
+    const VISIBILITY: &str = "UFUNCTION ( BlueprintOverride ) bool IsVisible ( ) const";
+    const ACT: &str = "UFUNCTION ( BlueprintOverride ) void Act ( )";
+
+    for (hook, required) in [("IsVisible", VISIBILITY), ("Act", ACT)] {
+        let implementation = format!("{hook}_Implementation");
+        let declarations = class
+            .members
+            .iter()
+            .filter(|member| {
+                member_method_name(member)
+                    .is_some_and(|name| name == hook || name == implementation)
+            })
+            .collect::<Vec<_>>();
+        if declarations.len() != 1 || declarations[0].as_str() != required {
+            bail!(
+                "new topic {} must declare exactly one `{required}` and no other `{hook}` or `{implementation}` overload; found {:?}. New classes have no shipped Unreal function metadata to inherit",
+                class.name,
+                declarations,
+            );
+        }
+    }
+
+    let debug_ids = class_debug_ids(class)?;
+    let [debug_id] = debug_ids.as_slice() else {
+        bail!(
+            "new topic {} must author exactly one nonzero `default DebugId = <int64>;`; found {}",
+            class.name,
+            debug_ids.len()
+        );
+    };
+    if *debug_id == 0 {
+        bail!("new topic {} may not use the unset DebugId 0", class.name);
+    }
+    Ok(())
+}
+
+fn literal_bool_default(class: &dialog::ClassOutline, target: &str) -> Result<Option<bool>> {
+    let defaults = class
+        .defaults
+        .iter()
+        .filter(|default| default.target == target)
+        .collect::<Vec<_>>();
+    let ([] | [_]) = defaults.as_slice() else {
+        bail!(
+            "new topic {} must not declare more than one `default {target}`; found {}",
+            class.name,
+            defaults.len()
+        );
+    };
+    let Some(default) = defaults.first() else {
+        return Ok(None);
+    };
+    let tokens = code_tokens(&default.statement)?;
+    let spelling = tokens
+        .iter()
+        .map(|token| token.text.as_str())
+        .collect::<Vec<_>>();
+    if spelling == ["default", target, "=", "true", ";"] {
+        Ok(Some(true))
+    } else if spelling == ["default", target, "=", "false", ";"] {
+        Ok(Some(false))
+    } else {
+        bail!(
+            "new topic {} must spell `default {target}` as one literal true/false assignment; found {}",
+            class.name,
+            default.statement
+        )
+    }
+}
+
+fn validate_new_topic_placement(class: &dialog::ClassOutline, is_subdialog: bool) -> Result<()> {
+    let declares_subtopic = literal_bool_default(class, "bIsSubTopic")?.unwrap_or(false);
+    if declares_subtopic != is_subdialog {
+        let expected = if is_subdialog {
+            "declare `default bIsSubTopic = true;`"
+        } else {
+            "not declare `default bIsSubTopic = true;`"
+        };
+        bail!(
+            "new topic {} is wired as a {} and must {expected}",
+            class.name,
+            if is_subdialog { "Subdialog" } else { "root" }
+        );
+    }
+    Ok(())
+}
+
 /// Bind a staged root registration to the exact class and base conversation checked above.
 /// Without this gate an edited JSON manifest could point at a renamed/deleted class or another
 /// participant and still build successfully, failing only when the runtime adapter looks it up.
@@ -1181,6 +1319,17 @@ fn validate_topic_registrations(
         .map(|class| class.name.clone())
         .collect::<BTreeSet<_>>();
 
+    for class_name in &added_topics {
+        let class = outline
+            .classes
+            .iter()
+            .find(|class| &class.name == class_name)
+            .with_context(|| {
+                format!("new topic {class_name} disappeared from the source outline")
+            })?;
+        validate_new_topic_source_contract(class)?;
+    }
+
     let participants = conversation
         .npc_participants()
         .map(|participant| participant.to_ascii_lowercase())
@@ -1222,13 +1371,20 @@ fn validate_topic_registrations(
             .as_slice()
             .first()
             .is_some_and(|owner| !report.added_classes.contains(owner));
-        match (roots, owners.len(), subdialog_is_existing) {
-            (1, 0, false) | (0, 1, true) => {}
+        let is_subdialog = match (roots, owners.len(), subdialog_is_existing) {
+            (1, 0, false) => false,
+            (0, 1, true) => true,
             _ => bail!(
                 "new topic {class} must be either registered once as a root or referenced once by Subdialog from a shipped class; found {roots} registration(s) and references from {:?}",
                 owners
             ),
-        }
+        };
+        let outline = outline
+            .classes
+            .iter()
+            .find(|candidate| candidate.name == class)
+            .with_context(|| format!("new topic {class} disappeared from the source outline"))?;
+        validate_new_topic_placement(outline, is_subdialog)?;
     }
     Ok(())
 }
@@ -1653,6 +1809,35 @@ fn class_without_object_prefix(name: &str) -> &str {
     name.strip_prefix('U').unwrap_or(name)
 }
 
+/// Give a generated topic its own stable story-debug identity.
+fn generated_topic_debug_id(module: &str, class: &str, source: &str) -> i64 {
+    use sha2::{Digest, Sha256};
+
+    let used = source
+        .lines()
+        .filter_map(|line| {
+            let compact = line
+                .chars()
+                .filter(|character| !character.is_whitespace())
+                .collect::<String>();
+            compact
+                .strip_prefix("defaultDebugId=")
+                .and_then(|value| value.strip_suffix(';'))
+                .and_then(|value| value.parse::<i64>().ok())
+        })
+        .collect::<BTreeSet<_>>();
+    for nonce in 0u64.. {
+        let digest = Sha256::digest(format!("gore-dialog-topic\0{module}\0{class}\0{nonce}"));
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&digest[..8]);
+        let candidate = (u64::from_le_bytes(bytes) & i64::MAX as u64) as i64;
+        if candidate != 0 && !used.contains(&candidate) {
+            return candidate;
+        }
+    }
+    unreachable!("the finite DebugId space cannot be exhausted by one conversation module")
+}
+
 fn resolve_topic_in<'a>(conversation: &'a Conversation, wanted: &str) -> Result<&'a Topic> {
     let wanted = class_without_object_prefix(wanted).to_ascii_lowercase();
     let matches = conversation
@@ -1980,6 +2165,10 @@ fn new_topic(request: NewTopicRequest) -> Result<()> {
         bail!("the cache already declares a class called {class:?}. Pass a different --class");
     }
 
+    let taken = dialog::checkout(&bytes, &conversation.module, native_api(&cache_path))
+        .with_context(|| format!("taking {} out of the cache", conversation.module))?;
+    let debug_id = generated_topic_debug_id(&taken.module, &class, &taken.source);
+
     let helper = format!("{}Caption", class_without_object_prefix(&class));
     let caption_line = match (&request.caption, &request.caption_key) {
         (Some(text), _) => format!(
@@ -2014,26 +2203,25 @@ fn new_topic(request: NewTopicRequest) -> Result<()> {
          \n\
          {helper_block}class {class} : {root_class}\n\
          {{\n\
+         \x20   default DebugId = {debug_id};\n\
          {caption_line}\n\
          \x20   default PriorityRank = 2;\n\
          {subtopic_default}\
          \n\
-         \x20   UFUNCTION()\n\
-         \x20   bool IsVisible_Implementation()\n\
+         \x20   UFUNCTION(BlueprintOverride)\n\
+         \x20   bool IsVisible() const\n\
          \x20   {{\n\
          \x20       return true;\n\
          \x20   }}\n\
          \n\
-         \x20   UFUNCTION()\n\
-         \x20   void Act_Implementation()\n\
+         \x20   UFUNCTION(BlueprintOverride)\n\
+         \x20   void Act()\n\
          \x20   {{\n\
          \x20       this.EndConversation();\n\
          \x20   }}\n\
          }}\n"
     );
 
-    let taken = dialog::checkout(&bytes, &conversation.module, native_api(&cache_path))
-        .with_context(|| format!("taking {} out of the cache", conversation.module))?;
     let mut source = if let Some(parent_name) = request.subdialog_of.as_deref() {
         let parent = resolve_topic_in(conversation, parent_name)?;
         let subdialog_count = parent
@@ -2479,6 +2667,134 @@ class UTopic_Hero__Npc : UConversationTopic
         let error = append_to_class_namespace(duplicate, "UBase", "class UNew : UBase {}")
             .unwrap_err();
         assert!(error.to_string().contains("exactly one"), "{error}");
+    }
+
+    fn authored_topic(source: &str) -> dialog::ClassOutline {
+        dialog::read_outline(source).unwrap().classes.remove(0)
+    }
+
+    #[test]
+    fn a_new_topic_requires_real_unreal_overrides_and_a_nonzero_debug_id() {
+        let class = authored_topic(
+            r#"class UNew : UBase
+{
+    default DebugId = 42;
+    UFUNCTION(BlueprintOverride)
+    bool IsVisible() const { return true; }
+    UFUNCTION(BlueprintOverride)
+    void Act() { }
+}"#,
+        );
+        validate_new_topic_source_contract(&class).unwrap();
+
+        let old_spelling = authored_topic(
+            r#"class UNew : UBase
+{
+    default DebugId = 42;
+    UFUNCTION()
+    bool IsVisible_Implementation() { return true; }
+    UFUNCTION()
+    void Act_Implementation() { }
+}"#,
+        );
+        let error = validate_new_topic_source_contract(&old_spelling).unwrap_err();
+        assert!(error.to_string().contains("BlueprintOverride"), "{error}");
+
+        let mixed_spelling = authored_topic(
+            r#"class UNew : UBase
+{
+    default DebugId = 42;
+    UFUNCTION(BlueprintOverride)
+    bool IsVisible() const { return true; }
+    UFUNCTION(BlueprintOverride)
+    void Act() { }
+    UFUNCTION()
+    void Act_Implementation() { }
+}"#,
+        );
+        let error = validate_new_topic_source_contract(&mixed_spelling).unwrap_err();
+        assert!(error.to_string().contains("Act_Implementation"), "{error}");
+
+        let overloaded = authored_topic(
+            r#"class UNew : UBase
+{
+    default DebugId = 42;
+    UFUNCTION(BlueprintOverride)
+    bool IsVisible() const { return true; }
+    UFUNCTION(BlueprintOverride)
+    void Act() { }
+    void Act(int32 Value) { }
+}"#,
+        );
+        let error = validate_new_topic_source_contract(&overloaded).unwrap_err();
+        assert!(error.to_string().contains("overload"), "{error}");
+
+        let zero = authored_topic(
+            r#"class UNew : UBase
+{
+    default DebugId = 0;
+    UFUNCTION(BlueprintOverride)
+    bool IsVisible() const { return true; }
+    UFUNCTION(BlueprintOverride)
+    void Act() { }
+}"#,
+        );
+        let error = validate_new_topic_source_contract(&zero).unwrap_err();
+        assert!(error.to_string().contains("unset DebugId 0"), "{error}");
+
+        let outside_int64 = authored_topic(
+            r#"class UNew : UBase
+{
+    default DebugId = 9223372036854775808;
+    UFUNCTION(BlueprintOverride)
+    bool IsVisible() const { return true; }
+    UFUNCTION(BlueprintOverride)
+    void Act() { }
+}"#,
+        );
+        let error = validate_new_topic_source_contract(&outside_int64).unwrap_err();
+        assert!(error.to_string().contains("signed 64-bit"), "{error}");
+    }
+
+    #[test]
+    fn a_subdialog_topic_requires_the_subtopic_default() {
+        let missing = authored_topic("class UNew : UBase { default DebugId = 42; }");
+        let error = validate_new_topic_placement(&missing, true).unwrap_err();
+        assert!(error.to_string().contains("Subdialog"), "{error}");
+        assert!(error.to_string().contains("bIsSubTopic = true"), "{error}");
+
+        let authored = authored_topic(
+            "class UNew : UBase { default DebugId = 42; default bIsSubTopic = true; }",
+        );
+        validate_new_topic_placement(&authored, true).unwrap();
+    }
+
+    #[test]
+    fn a_root_topic_rejects_the_subtopic_default() {
+        let authored = authored_topic(
+            "class UNew : UBase { default DebugId = 42; default bIsSubTopic = true; }",
+        );
+        let error = validate_new_topic_placement(&authored, false).unwrap_err();
+        assert!(error.to_string().contains("root"), "{error}");
+        assert!(error.to_string().contains("bIsSubTopic = true"), "{error}");
+
+        let absent = authored_topic("class UNew : UBase { default DebugId = 42; }");
+        validate_new_topic_placement(&absent, false).unwrap();
+    }
+
+    #[test]
+    fn generated_topic_debug_ids_are_stable_and_avoid_the_module() {
+        let first = generated_topic_debug_id("Story.Dialog", "UChoiceNew", "");
+        assert_ne!(first, 0);
+        assert_eq!(
+            first,
+            generated_topic_debug_id("Story.Dialog", "UChoiceNew", "")
+        );
+        let occupied = format!("    default DebugId = {first};\n");
+        assert_ne!(
+            first,
+            generated_topic_debug_id("Story.Dialog", "UChoiceNew", &occupied)
+        );
     }
 
     fn command_manifest() -> EditManifest {

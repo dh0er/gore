@@ -101,6 +101,372 @@ pub(crate) struct GeneratedDefaultsPlan {
     generated_count: usize,
 }
 
+/// Shipping reflection metadata belongs to the existing declaration, not to the regenerated
+/// body. The source emitter cannot spell every Unreal/AngelScript trait back into source (most
+/// importantly UFUNCTION override/event flags), so an existing-module edit must restore that
+/// metadata after remap while retaining the compiler's new bytecode and frame layout.
+#[derive(Clone, Debug)]
+pub(crate) struct ExistingFunctionMetadataPlan {
+    module_name: String,
+    base_entry: Vec<u8>,
+    base: ModuleEntry,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct FunctionMetadataIdentity {
+    owner: String,
+    category: &'static str,
+    declaration: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+struct FunctionMetadataSite {
+    identity: FunctionMetadataIdentity,
+    function: FunctionRecord,
+}
+
+impl ExistingFunctionMetadataPlan {
+    pub(crate) fn prepare(base_cache: &[u8], module_name: &str) -> Result<Self, String> {
+        let header = CacheHeader::parse(base_cache)
+            .map_err(|error| format!("parsing function-metadata base header: {error}"))?;
+        let ranges = module_ranges(base_cache)
+            .map_err(|error| format!("walking function-metadata base modules: {error}"))?;
+        if ranges.len() != header.type_count as usize {
+            return Err(format!(
+                "function-metadata base header/walker module count mismatch: {}/{}",
+                header.type_count,
+                ranges.len()
+            ));
+        }
+        let matches = ranges
+            .iter()
+            .filter(|(key, _, _)| key == module_name)
+            .collect::<Vec<_>>();
+        let [(map_key, start, end)] = matches.as_slice() else {
+            return Err(format!(
+                "function-metadata preservation requires exactly one base module named \
+                 {module_name:?}, found {}",
+                matches.len()
+            ));
+        };
+        let base_entry = base_cache
+            .get(*start..*end)
+            .ok_or_else(|| "function-metadata base module range is out of bounds".to_string())?
+            .to_vec();
+        let base = parse_entry(&base_entry, "function-metadata base module")?;
+        if base.key != **map_key || base.name != module_name || base.key != base.name {
+            return Err(format!(
+                "function-metadata base identity mismatch: requested {module_name:?}, map \
+                 key/serialized key/name are {:?}/{:?}/{:?}",
+                map_key, base.key, base.name
+            ));
+        }
+        function_metadata_sites(&base_entry, &base, "base")?;
+        Ok(Self {
+            module_name: module_name.to_string(),
+            base_entry,
+            base,
+        })
+    }
+
+    pub(crate) fn apply(&self, remapped_mini: &[u8]) -> Result<Vec<u8>, String> {
+        self.apply_inner(remapped_mini, true)
+    }
+
+    /// Normalize the Shipping metadata of every existing declaration already present in a
+    /// regenerated mini. Missing base declarations are tolerated only for the intermediate
+    /// generated-default carry step, which restores compiler-omitted records before [`apply`]
+    /// performs the complete fail-closed check.
+    pub(crate) fn apply_present(&self, remapped_mini: &[u8]) -> Result<Vec<u8>, String> {
+        self.apply_inner(remapped_mini, false)
+    }
+
+    fn apply_inner(
+        &self,
+        remapped_mini: &[u8],
+        require_all_existing: bool,
+    ) -> Result<Vec<u8>, String> {
+        let header = CacheHeader::parse(remapped_mini)
+            .map_err(|error| format!("parsing remapped function-metadata mini: {error}"))?;
+        if header.type_count != 1 || module_count(remapped_mini) != 1 {
+            return Err(format!(
+                "function-metadata preservation requires a one-module mini, found {} modules",
+                header.type_count
+            ));
+        }
+        let module_end = module_region_end(remapped_mini)
+            .map_err(|error| format!("walking remapped function-metadata mini: {error}"))?;
+        let tables = parse_tail_tables(remapped_mini, module_end)
+            .map_err(|error| format!("parsing remapped function-metadata tail: {error}"))?;
+        if tables.end != remapped_mini.len() {
+            return Err(format!(
+                "remapped function-metadata mini tail ends at {:#x}, file ends at {:#x}",
+                tables.end,
+                remapped_mini.len()
+            ));
+        }
+        let regen_bytes = remapped_mini
+            .get(CacheHeader::SIZE..module_end)
+            .ok_or_else(|| "remapped function-metadata module range is invalid".to_string())?;
+        let regen = parse_entry(regen_bytes, "remapped function-metadata module")?;
+        if regen.key != self.base.key
+            || regen.name != self.base.name
+            || regen.file != self.base.file
+            || regen.name != self.module_name
+        {
+            return Err(format!(
+                "function-metadata module identity mismatch: base key/name/file \
+                 {:?}/{:?}/{:?}, regenerated {:?}/{:?}/{:?}",
+                self.base.key, self.base.name, self.base.file, regen.key, regen.name, regen.file
+            ));
+        }
+
+        let base_sites = function_metadata_sites(&self.base_entry, &self.base, "base")?;
+        let regen_sites = function_metadata_sites(regen_bytes, &regen, "regenerated")?;
+        let base_by_identity = base_sites
+            .iter()
+            .map(|site| (&site.identity, site))
+            .collect::<HashMap<_, _>>();
+        let regen_by_identity = regen_sites
+            .iter()
+            .map(|site| (&site.identity, site))
+            .collect::<HashMap<_, _>>();
+        if require_all_existing {
+            for base in &base_sites {
+                if !regen_by_identity.contains_key(&base.identity) {
+                    return Err(format!(
+                        "regenerated module is missing existing {} identity in {}",
+                        base.identity.category, base.identity.owner
+                    ));
+                }
+            }
+        }
+
+        let mut replacements = Vec::<(Range<usize>, Vec<u8>)>::new();
+        for regenerated in &regen_sites {
+            let Some(base) = base_by_identity.get(&regenerated.identity) else {
+                // A declaration absent from Shipping is genuinely new (including methods of a
+                // new class). Its compiler-authored traits and UFUNCTION tail remain untouched.
+                continue;
+            };
+            let mut replacement = Vec::new();
+            replacement.extend_from_slice(range_bytes(
+                regen_bytes,
+                regenerated.function.raw.start..regenerated.function.signature.end - 4,
+                "regenerated function declaration",
+            )?);
+            replacement.extend_from_slice(range_bytes(
+                &self.base_entry,
+                base.function.signature.end - 4..base.function.signature.end,
+                "base FunctionTraits",
+            )?);
+            replacement.extend_from_slice(range_bytes(
+                regen_bytes,
+                regenerated.function.signature.end..regenerated.function.ufunction_tail.start,
+                "regenerated function body/frame",
+            )?);
+            replacement.extend_from_slice(range_bytes(
+                &self.base_entry,
+                base.function.ufunction_tail.clone(),
+                "base UFUNCTION tail",
+            )?);
+            replacements.push((regenerated.function.raw.clone(), replacement));
+        }
+        replacements.sort_by_key(|(range, _)| range.start);
+        for pair in replacements.windows(2) {
+            if pair[0].0.end > pair[1].0.start {
+                return Err("function-metadata replacement ranges overlap".into());
+            }
+        }
+
+        let mut rebuilt = Vec::with_capacity(regen_bytes.len());
+        let mut cursor = 0usize;
+        for (range, replacement) in &replacements {
+            rebuilt.extend_from_slice(range_bytes(
+                regen_bytes,
+                cursor..range.start,
+                "function-metadata rebuild prefix",
+            )?);
+            rebuilt.extend_from_slice(replacement);
+            cursor = range.end;
+        }
+        rebuilt.extend_from_slice(range_bytes(
+            regen_bytes,
+            cursor..regen_bytes.len(),
+            "function-metadata rebuild suffix",
+        )?);
+
+        let mut out = Vec::with_capacity(
+            CacheHeader::SIZE + rebuilt.len() + remapped_mini.len() - module_end,
+        );
+        out.extend_from_slice(&remapped_mini[..CacheHeader::SIZE]);
+        out.extend_from_slice(&rebuilt);
+        out.extend_from_slice(&remapped_mini[module_end..]);
+        self.verify(regen_bytes, &regen_sites, &out, require_all_existing)?;
+        Ok(out)
+    }
+
+    fn verify(
+        &self,
+        regen_bytes: &[u8],
+        regen_sites: &[FunctionMetadataSite],
+        output: &[u8],
+        require_all_existing: bool,
+    ) -> Result<(), String> {
+        let output_end = module_region_end(output)
+            .map_err(|error| format!("walking function-metadata output: {error}"))?;
+        let output_header = CacheHeader::parse(output)
+            .map_err(|error| format!("parsing function-metadata output header: {error}"))?;
+        if output_header.type_count != 1 || module_count(output) != 1 {
+            return Err("function-metadata output is not a one-module mini".into());
+        }
+        let output_tables = parse_tail_tables(output, output_end)
+            .map_err(|error| format!("parsing function-metadata output tail: {error}"))?;
+        if output_tables.end != output.len() {
+            return Err(format!(
+                "function-metadata output tail ends at {:#x}, file ends at {:#x}",
+                output_tables.end,
+                output.len()
+            ));
+        }
+        let output_bytes = output
+            .get(CacheHeader::SIZE..output_end)
+            .ok_or_else(|| "function-metadata output module range is invalid".to_string())?;
+        let output_entry = parse_entry(output_bytes, "function-metadata output")?;
+        let output_sites = function_metadata_sites(output_bytes, &output_entry, "output")?;
+        let output_by_identity = output_sites
+            .iter()
+            .map(|site| (&site.identity, site))
+            .collect::<HashMap<_, _>>();
+        let base_sites =
+            function_metadata_sites(&self.base_entry, &self.base, "base verification")?;
+        let base_by_identity = base_sites
+            .iter()
+            .map(|site| (&site.identity, site))
+            .collect::<HashMap<_, _>>();
+        if require_all_existing {
+            for base in &base_sites {
+                if !output_by_identity.contains_key(&base.identity) {
+                    return Err(format!(
+                        "function-metadata output is missing existing {} identity in {}",
+                        base.identity.category, base.identity.owner
+                    ));
+                }
+            }
+        }
+
+        for regenerated in regen_sites {
+            let output = output_by_identity
+                .get(&regenerated.identity)
+                .ok_or_else(|| {
+                    format!(
+                        "function-metadata output lost {} {}",
+                        regenerated.identity.category, regenerated.identity.owner
+                    )
+                })?;
+            if let Some(base) = base_by_identity.get(&regenerated.identity) {
+                compare_range(
+                    &self.base_entry,
+                    &(base.function.signature.end - 4..base.function.signature.end),
+                    output_bytes,
+                    &(output.function.signature.end - 4..output.function.signature.end),
+                    "preserved FunctionTraits",
+                )?;
+                compare_range(
+                    &self.base_entry,
+                    &base.function.ufunction_tail,
+                    output_bytes,
+                    &output.function.ufunction_tail,
+                    "preserved UFUNCTION tail",
+                )?;
+                compare_range(
+                    regen_bytes,
+                    &(regenerated.function.signature.end
+                        ..regenerated.function.ufunction_tail.start),
+                    output_bytes,
+                    &(output.function.signature.end..output.function.ufunction_tail.start),
+                    "regenerated function body/frame",
+                )?;
+            } else {
+                compare_range(
+                    regen_bytes,
+                    &regenerated.function.raw,
+                    output_bytes,
+                    &output.function.raw,
+                    "new function record",
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn function_metadata_sites(
+    bytes: &[u8],
+    entry: &ModuleEntry,
+    context: &str,
+) -> Result<Vec<FunctionMetadataSite>, String> {
+    let mut sites = Vec::new();
+    let mut class_identities = HashSet::new();
+    for class in &entry.classes {
+        if !class_identities.insert((class.namespace.as_str(), class.name.as_str())) {
+            return Err(format!(
+                "function-metadata {context} contains duplicate class identity {}::{}",
+                class.namespace, class.name
+            ));
+        }
+    }
+    let mut add = |owner: String,
+                   category: &'static str,
+                   function: &FunctionRecord|
+     -> Result<(), String> {
+        sites.push(FunctionMetadataSite {
+            identity: FunctionMetadataIdentity {
+                owner,
+                category,
+                declaration: range_bytes(bytes, function.declaration.clone(), "function identity")?
+                    .to_vec(),
+            },
+            function: function.clone(),
+        });
+        Ok(())
+    };
+    for function in &entry.functions {
+        add(entry.name.clone(), "free function", function)?;
+    }
+    for class in &entry.classes {
+        let owner = format!("{}::{}", class.namespace, class.name);
+        for function in &class.methods {
+            add(owner.clone(), "method", function)?;
+        }
+        for function in &class.constructors {
+            add(owner.clone(), "constructor", function)?;
+        }
+        for function in &class.behaviors {
+            add(owner.clone(), "behavior", function)?;
+        }
+    }
+    for function in &entry.global_init_functions {
+        add(entry.name.clone(), "global initializer", function)?;
+    }
+    let mut identities = HashSet::new();
+    for site in &sites {
+        if !identities.insert(site.identity.clone()) {
+            return Err(format!(
+                "function-metadata {context} contains ambiguous duplicate {} identity in {}",
+                site.identity.category, site.identity.owner
+            ));
+        }
+    }
+    Ok(sites)
+}
+
+fn range_bytes<'a>(bytes: &'a [u8], range: Range<usize>, what: &str) -> Result<&'a [u8], String> {
+    bytes
+        .get(range)
+        .ok_or_else(|| format!("function-metadata {what} range is invalid"))
+}
+
 impl GeneratedDefaultsPlan {
     /// Build a plan for exactly one existing module. `None` means the module has no omitted
     /// generated methods and needs no carry-through.
@@ -1638,6 +2004,19 @@ mod tests {
         out
     }
 
+    fn ufunction(spec: &MethodSpec<'_>, unreal_name: &str, flags: [i32; 18]) -> Vec<u8> {
+        let mut out = function(spec);
+        out.truncate(out.len() - 4); // replace bIsUFunction=false
+        out.extend_from_slice(&1i32.to_le_bytes());
+        out.extend_from_slice(&sia(unreal_name));
+        out.extend_from_slice(&0i32.to_le_bytes()); // metadata specifiers
+        out.extend_from_slice(&0i32.to_le_bytes()); // metadata values
+        for flag in flags {
+            out.extend_from_slice(&flag.to_le_bytes());
+        }
+        out
+    }
+
     fn function_raw<'a>(bytes: &'a [u8], function: &FunctionRecord) -> &'a [u8] {
         &bytes[CacheHeader::SIZE + function.raw.start..CacheHeader::SIZE + function.raw.end]
     }
@@ -1705,6 +2084,35 @@ mod tests {
         for _ in behaviors {
             out.extend_from_slice(&0i32.to_le_bytes());
         }
+        out.extend_from_slice(&0i32.to_le_bytes()); // no preprocessor metadata
+        out
+    }
+
+    fn class_record_with_raw_methods(name: &str, methods: &[Vec<u8>]) -> Vec<u8> {
+        let mut out = sia(name);
+        out.extend_from_slice(&sia(""));
+        out.extend_from_slice(&0x1234i32.to_le_bytes()); // class flags
+        out.extend_from_slice(&1i32.to_le_bytes()); // properties
+        out.extend_from_slice(&sia("Value"));
+        out.extend_from_slice(&datatype(0, 0x44));
+        out.extend_from_slice(&0i32.to_le_bytes()); // private
+        out.extend_from_slice(&0i32.to_le_bytes()); // protected
+        out.extend_from_slice(&0i32.to_le_bytes()); // not UPROPERTY
+        out.extend_from_slice(&(methods.len() as i32).to_le_bytes());
+        for method in methods {
+            out.extend_from_slice(method);
+        }
+        out.extend_from_slice(&(methods.len() as i32).to_le_bytes());
+        for index in 0..methods.len() {
+            out.extend_from_slice(&(index as i32).to_le_bytes());
+        }
+        out.extend_from_slice(&0i64.to_le_bytes()); // DerivedFrom
+        out.extend_from_slice(&0i64.to_le_bytes()); // ShadowType
+        out.extend_from_slice(&0i32.to_le_bytes()); // constructors
+        out.extend_from_slice(&0i32.to_le_bytes()); // factory refs
+        out.extend_from_slice(&0i32.to_le_bytes()); // behavior refs
+        out.extend_from_slice(&0i32.to_le_bytes()); // behavior functions
+        out.extend_from_slice(&0i32.to_le_bytes()); // behavior types
         out.extend_from_slice(&0i32.to_le_bytes()); // no preprocessor metadata
         out
     }
@@ -1812,6 +2220,257 @@ mod tests {
         let modules = model::parse_modules(base).map_err(|error| error.to_string())?;
         GeneratedDefaultsPlan::prepare(base, &modules, MODULE)?
             .ok_or_else(|| "fixture unexpectedly has no defaults plan".to_string())
+    }
+
+    #[test]
+    fn existing_edit_preserves_shipping_function_and_unreal_traits_only() {
+        const PROPERTY_TRAIT: i32 = 0x200;
+        let act = MethodSpec {
+            name: "Act_Implementation",
+            traits: PROPERTY_TRAIT | 0x40,
+            code: &[10],
+        };
+        let mut shipping_flags = [0i32; 18];
+        shipping_flags[0] = 0; // BlueprintCallable
+        shipping_flags[1] = 1; // BlueprintOverride
+        shipping_flags[2] = 1; // BlueprintEvent
+        let base = cache(
+            &[class_record_with_raw_methods(
+                "UChoiceDiegoGamestart",
+                &[ufunction(&act, "Act", shipping_flags)],
+            )],
+            &[10],
+            1,
+        );
+
+        let regenerated_act = MethodSpec {
+            name: "Act_Implementation",
+            traits: 0,
+            code: &[2, 77, 10],
+        };
+        let added = MethodSpec {
+            name: "Added",
+            traits: 0x20,
+            code: &[2, 88, 10],
+        };
+        let new_class_act = MethodSpec {
+            name: "Act_Implementation",
+            traits: 0x20,
+            code: &[2, 99, 10],
+        };
+        let regen = cache(
+            &[
+                class_record_with_raw_methods(
+                    "UChoiceDiegoGamestart",
+                    &[
+                        ufunction(&regenerated_act, "WrongAct", [0; 18]),
+                        ufunction(&added, "Added", [1; 18]),
+                    ],
+                ),
+                class_record_with_raw_methods(
+                    "UNewTopic",
+                    &[ufunction(&new_class_act, "NewAct", [1; 18])],
+                ),
+            ],
+            &[2, 55, 10],
+            2,
+        );
+        let plan = ExistingFunctionMetadataPlan::prepare(&base, MODULE).unwrap();
+        let out = plan.apply(&regen).unwrap();
+
+        let parse = |bytes: &[u8], context| {
+            let end = module_region_end(bytes).unwrap();
+            parse_entry(&bytes[CacheHeader::SIZE..end], context).unwrap()
+        };
+        let base_entry = parse(&base, "metadata base");
+        let regen_entry = parse(&regen, "metadata regen");
+        let out_entry = parse(&out, "metadata output");
+        let base_act = &base_entry.classes[0].methods[0];
+        let regen_act = &regen_entry.classes[0].methods[0];
+        let out_act = &out_entry.classes[0].methods[0];
+        assert_eq!(out_act.traits, PROPERTY_TRAIT | 0x40);
+        assert_eq!(
+            &out[CacheHeader::SIZE + out_act.ufunction_tail.start
+                ..CacheHeader::SIZE + out_act.ufunction_tail.end],
+            &base[CacheHeader::SIZE + base_act.ufunction_tail.start
+                ..CacheHeader::SIZE + base_act.ufunction_tail.end]
+        );
+        assert_eq!(
+            &out[CacheHeader::SIZE + out_act.signature.end
+                ..CacheHeader::SIZE + out_act.ufunction_tail.start],
+            &regen[CacheHeader::SIZE + regen_act.signature.end
+                ..CacheHeader::SIZE + regen_act.ufunction_tail.start]
+        );
+        let mut tail = Cursor::new(
+            &out[CacheHeader::SIZE + out_act.ufunction_tail.start
+                ..CacheHeader::SIZE + out_act.ufunction_tail.end],
+        );
+        assert!(tail.read_bool4().unwrap());
+        assert_eq!(tail.read_sia().unwrap(), "Act");
+        assert_eq!(tail.read_i32().unwrap(), 0); // MetaSpec count
+        assert_eq!(tail.read_i32().unwrap(), 0); // MetaValues count
+        assert_eq!(tail.read_i32().unwrap(), 0); // Callable
+        assert_eq!(tail.read_i32().unwrap(), 1); // BlueprintOverride
+        assert_eq!(tail.read_i32().unwrap(), 1); // BlueprintEvent
+
+        // A new method on the old class and every method on a new class are byte-exact regen.
+        for (class_index, method_index) in [(0, 1), (1, 0)] {
+            let regenerated = &regen_entry.classes[class_index].methods[method_index];
+            let output = &out_entry.classes[class_index].methods[method_index];
+            assert_eq!(
+                &out[CacheHeader::SIZE + output.raw.start..CacheHeader::SIZE + output.raw.end],
+                &regen[CacheHeader::SIZE + regenerated.raw.start
+                    ..CacheHeader::SIZE + regenerated.raw.end]
+            );
+        }
+    }
+
+    #[test]
+    fn existing_edit_rejects_missing_or_ambiguous_shipping_function_identity() {
+        let base = cache(
+            &[class_record_with_raw_methods(
+                CLASS,
+                &[function(&MethodSpec {
+                    name: "Existing",
+                    traits: 0x200,
+                    code: &[10],
+                })],
+            )],
+            &[10],
+            1,
+        );
+        let plan = ExistingFunctionMetadataPlan::prepare(&base, MODULE).unwrap();
+        let missing = cache(&[class_record_with_raw_methods(CLASS, &[])], &[10], 2);
+        assert!(
+            plan.apply(&missing)
+                .unwrap_err()
+                .contains("missing existing method")
+        );
+
+        let duplicate_method = function(&MethodSpec {
+            name: "Existing",
+            traits: 0,
+            code: &[10],
+        });
+        let ambiguous = cache(
+            &[class_record_with_raw_methods(
+                CLASS,
+                &[duplicate_method.clone(), duplicate_method],
+            )],
+            &[10],
+            3,
+        );
+        assert!(
+            plan.apply(&ambiguous)
+                .unwrap_err()
+                .contains("ambiguous duplicate method")
+        );
+    }
+
+    #[test]
+    fn existing_metadata_normalization_composes_with_generated_default_carry() {
+        let mut shipping_flags = [0i32; 18];
+        shipping_flags[1] = 1; // BlueprintOverride
+        shipping_flags[2] = 1; // BlueprintEvent
+        let shipping_act = MethodSpec {
+            name: "Act_Implementation",
+            traits: 0x240,
+            code: &[10],
+        };
+        let init_defaults = MethodSpec {
+            name: "__InitDefaults",
+            traits: 0x40000,
+            code: &[2, 42, 10],
+        };
+        let base = cache(
+            &[class_record_with_raw_methods(
+                CLASS,
+                &[
+                    ufunction(&shipping_act, "Act", shipping_flags),
+                    function(&init_defaults),
+                ],
+            )],
+            &[10],
+            1,
+        );
+
+        let regenerated_act = MethodSpec {
+            name: "Act_Implementation",
+            traits: 0,
+            code: &[2, 77, 10],
+        };
+        let regen = cache(
+            &[class_record_with_raw_methods(
+                CLASS,
+                &[ufunction(&regenerated_act, "Act_Implementation", [0; 18])],
+            )],
+            &[2, 55, 10],
+            2,
+        );
+
+        let metadata = ExistingFunctionMetadataPlan::prepare(&base, MODULE).unwrap();
+        let defaults = prepare(&base).unwrap();
+        assert!(metadata
+            .apply(&regen)
+            .unwrap_err()
+            .contains("missing existing method"));
+        assert!(defaults
+            .apply(&regen)
+            .unwrap_err()
+            .contains("declaration/signature drift"));
+
+        let normalized = metadata.apply_present(&regen).unwrap();
+        let carried = defaults.apply(&normalized).unwrap();
+        let out = metadata.apply(&carried).unwrap();
+
+        let parse = |bytes: &[u8], context| {
+            let end = module_region_end(bytes).unwrap();
+            parse_entry(&bytes[CacheHeader::SIZE..end], context).unwrap()
+        };
+        let base_entry = parse(&base, "carry metadata base");
+        let regen_entry = parse(&regen, "carry metadata regen");
+        let out_entry = parse(&out, "carry metadata output");
+        let base_act = &base_entry.classes[0].methods[0];
+        let base_defaults = &base_entry.classes[0].methods[1];
+        let regen_act = &regen_entry.classes[0].methods[0];
+        let out_act = &out_entry.classes[0].methods[0];
+        let out_defaults = &out_entry.classes[0].methods[1];
+        assert_eq!(out_act.traits, shipping_act.traits);
+        assert_eq!(
+            &out[CacheHeader::SIZE + out_act.ufunction_tail.start
+                ..CacheHeader::SIZE + out_act.ufunction_tail.end],
+            &base[CacheHeader::SIZE + base_act.ufunction_tail.start
+                ..CacheHeader::SIZE + base_act.ufunction_tail.end]
+        );
+        assert_eq!(
+            &out[CacheHeader::SIZE + out_act.signature.end
+                ..CacheHeader::SIZE + out_act.ufunction_tail.start],
+            &regen[CacheHeader::SIZE + regen_act.signature.end
+                ..CacheHeader::SIZE + regen_act.ufunction_tail.start]
+        );
+        assert_eq!(
+            function_raw(&out, out_defaults),
+            function_raw(&base, base_defaults)
+        );
+    }
+
+    #[test]
+    #[ignore = "requires GORE_AS_CACHE and GORE_AS_DIALOG_MINI from a strict standalone edit"]
+    fn real_dialog_edit_has_complete_shipping_function_metadata() {
+        let base_path = std::env::var_os("GORE_AS_CACHE").expect("set GORE_AS_CACHE");
+        let mini_path =
+            std::env::var_os("GORE_AS_DIALOG_MINI").expect("set GORE_AS_DIALOG_MINI");
+        let module = std::env::var("GORE_AS_DIALOG_MODULE").unwrap_or_else(|_| {
+            "Story.G1R.Conversation.Conversation_OC_STT_DIEGO".to_string()
+        });
+        let base = std::fs::read(base_path).unwrap();
+        let mini = std::fs::read(mini_path).unwrap();
+        let plan = ExistingFunctionMetadataPlan::prepare(&base, &module).unwrap();
+
+        // `apply` verifies that every Shipping function identity is present, that its traits and
+        // complete Unreal descriptor equal the base, and that genuinely new records stay intact.
+        // A correctly produced mini is therefore an exact fixed point of the preservation pass.
+        assert_eq!(plan.apply(&mini).unwrap(), mini);
     }
 
     #[test]
@@ -1982,10 +2641,11 @@ mod tests {
             ],
             3,
         );
-        assert!(plan
-            .apply(&drift)
-            .unwrap_err()
-            .contains("compiler wrapper Get traits drift"));
+        assert!(
+            plan.apply(&drift)
+                .unwrap_err()
+                .contains("compiler wrapper Get traits drift")
+        );
     }
 
     #[test]
@@ -2111,10 +2771,11 @@ mod tests {
             &[10],
             0,
         );
-        assert!(plan
-            .apply(&changed_layout)
-            .unwrap_err()
-            .contains("flags/properties"));
+        assert!(
+            plan.apply(&changed_layout)
+                .unwrap_err()
+                .contains("flags/properties")
+        );
 
         let changed_namespace = cache(
             &[class_record(
@@ -2139,10 +2800,11 @@ mod tests {
             &[10],
             0,
         );
-        assert!(plan
-            .apply(&changed_namespace)
-            .unwrap_err()
-            .contains("class identity/order drift"));
+        assert!(
+            plan.apply(&changed_namespace)
+                .unwrap_err()
+                .contains("class identity/order drift")
+        );
 
         let changed_traits = cache(
             &[class_record(
@@ -2167,10 +2829,11 @@ mod tests {
             &[10],
             0,
         );
-        assert!(plan
-            .apply(&changed_traits)
-            .unwrap_err()
-            .contains("declaration/signature drift"));
+        assert!(
+            plan.apply(&changed_traits)
+                .unwrap_err()
+                .contains("declaration/signature drift")
+        );
 
         let mut changed_ufunction = regen_cache();
         let changed_end = module_region_end(&changed_ufunction).unwrap();
@@ -2189,16 +2852,18 @@ mod tests {
             CacheHeader::SIZE + tail.start..CacheHeader::SIZE + tail.end,
             replacement,
         );
-        assert!(plan
-            .apply(&changed_ufunction)
-            .unwrap_err()
-            .contains("UFUNCTION metadata drift"));
+        assert!(
+            plan.apply(&changed_ufunction)
+                .unwrap_err()
+                .contains("UFUNCTION metadata drift")
+        );
 
         let authored_defaults = base_cache();
-        assert!(plan
-            .apply(&authored_defaults)
-            .unwrap_err()
-            .contains("unexpectedly authored/generated __InitDefaults"));
+        assert!(
+            plan.apply(&authored_defaults)
+                .unwrap_err()
+                .contains("unexpectedly authored/generated __InitDefaults")
+        );
 
         let invalid_table = cache(
             &[class_record(
@@ -2223,10 +2888,11 @@ mod tests {
             &[10],
             0,
         );
-        assert!(plan
-            .apply(&invalid_table)
-            .unwrap_err()
-            .contains("invalid local method 99"));
+        assert!(
+            plan.apply(&invalid_table)
+                .unwrap_err()
+                .contains("invalid local method 99")
+        );
     }
 
     #[test]
@@ -2261,9 +2927,11 @@ mod tests {
             &[10],
             0,
         );
-        assert!(prepare(&duplicate)
-            .unwrap_err()
-            .contains("duplicate class identity"));
+        assert!(
+            prepare(&duplicate)
+                .unwrap_err()
+                .contains("duplicate class identity")
+        );
 
         let base = base_cache();
         let end = module_region_end(&base).unwrap();
@@ -2271,14 +2939,18 @@ mod tests {
         let mut malformed_entry = base[CacheHeader::SIZE..end].to_vec();
         malformed_entry[entry.classes[0].methods_count_pos..entry.classes[0].methods_count_pos + 4]
             .copy_from_slice(&((MAX_RECORDS as i32) + 1).to_le_bytes());
-        assert!(parse_entry(&malformed_entry, "malformed")
-            .unwrap_err()
-            .contains("exceeds carry limit"));
+        assert!(
+            parse_entry(&malformed_entry, "malformed")
+                .unwrap_err()
+                .contains("exceeds carry limit")
+        );
         malformed_entry[entry.classes[0].methods_count_pos..entry.classes[0].methods_count_pos + 4]
             .copy_from_slice(&(MAX_RECORDS as i32).to_le_bytes());
-        assert!(parse_entry(&malformed_entry, "malformed")
-            .unwrap_err()
-            .contains("requires at least"));
+        assert!(
+            parse_entry(&malformed_entry, "malformed")
+                .unwrap_err()
+                .contains("requires at least")
+        );
 
         // A default-initialized global has a 48-byte minimum (two empty SIAs, DataType, bool).
         // Ten such records plus the minimal module suffix used to trip a false 52-byte bound.
@@ -2328,9 +3000,11 @@ mod tests {
             &[10],
             0,
         );
-        assert!(prepare(&unresolved)
-            .unwrap_err()
-            .contains("references are unresolved"));
+        assert!(
+            prepare(&unresolved)
+                .unwrap_err()
+                .contains("references are unresolved")
+        );
     }
 
     #[test]
@@ -2340,21 +3014,27 @@ mod tests {
 
         let mut bad_magic = base.clone();
         bad_magic[16..20].copy_from_slice(&0u32.to_le_bytes());
-        assert!(GeneratedDefaultsPlan::prepare(&bad_magic, &modules, MODULE)
-            .unwrap_err()
-            .contains("base header"));
+        assert!(
+            GeneratedDefaultsPlan::prepare(&bad_magic, &modules, MODULE)
+                .unwrap_err()
+                .contains("base header")
+        );
 
         let mut trailing = base.clone();
         trailing.push(0x7f);
-        assert!(GeneratedDefaultsPlan::prepare(&trailing, &modules, MODULE)
-            .unwrap_err()
-            .contains("ending at EOF"));
+        assert!(
+            GeneratedDefaultsPlan::prepare(&trailing, &modules, MODULE)
+                .unwrap_err()
+                .contains("ending at EOF")
+        );
 
         let mut truncated = base.clone();
         truncated.truncate(truncated.len() - 4);
-        assert!(GeneratedDefaultsPlan::prepare(&truncated, &modules, MODULE)
-            .unwrap_err()
-            .contains("base tail"));
+        assert!(
+            GeneratedDefaultsPlan::prepare(&truncated, &modules, MODULE)
+                .unwrap_err()
+                .contains("base tail")
+        );
 
         let regen = regen_cache();
         let regen_end = module_region_end(&regen).unwrap();
@@ -2364,10 +3044,11 @@ mod tests {
         let mut plan = prepare(&base).unwrap();
         plan.outside_function_ids
             .insert(collision_id, "OtherModule::OtherFunction".into());
-        assert!(plan
-            .apply(&regen)
-            .unwrap_err()
-            .contains("cache-wide function Id collision"));
+        assert!(
+            plan.apply(&regen)
+                .unwrap_err()
+                .contains("cache-wide function Id collision")
+        );
 
         let base_end = module_region_end(&base).unwrap();
         let base_entry = parse_entry(&base[CacheHeader::SIZE..base_end], "first module").unwrap();

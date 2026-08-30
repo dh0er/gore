@@ -277,7 +277,9 @@ const string Literal = "import Not.A.Module;";
     standalone::preprocessor_options dialect;
     dialect.automatic_imports = true;
     dialect.static_classes = standalone::static_class_mode::deprecated;
-    dialect.default_function_blueprint_callable = false;
+    // The captured game profile defaults ordinary UFUNCTIONs to callable. BlueprintOverride
+    // must explicitly turn that off to match the engine event records used by dialog hooks.
+    dialect.default_function_blueprint_callable = true;
     dialect.default_property_edit =
         standalone::property_edit_specifier::edit_instance_only;
     dialect.default_struct_property_edit =
@@ -321,6 +323,11 @@ struct FState
 
 class AChild : AHero
 {
+    UFUNCTION(BlueprintOverride)
+    bool IsVisible() const { return true; }
+
+    UFUNCTION(BlueprintOverride)
+    void Act() { }
 }
 
 class UEditorTool : UEditorSubsystem
@@ -401,7 +408,20 @@ asset Settings of UMySettings
     const auto& child = dialect_module.classes[2];
     if (child.class_name != "AChild" || child.super_class != "AHero" ||
         child.super_is_code_class || child.code_super_class != "/Script/Engine.Actor" ||
-        child.code_super_kind != standalone::native_super_kind::actor) {
+        child.code_super_kind != standalone::native_super_kind::actor ||
+        child.methods.size() != 2U ||
+        child.methods[0].function_name != "IsVisible" ||
+        child.methods[0].script_function_name != "IsVisible_Implementation" ||
+        child.methods[0].blueprint_callable || !child.methods[0].blueprint_override ||
+        !child.methods[0].blueprint_event ||
+        child.methods[1].function_name != "Act" ||
+        child.methods[1].script_function_name != "Act_Implementation" ||
+        child.methods[1].blueprint_callable || !child.methods[1].blueprint_override ||
+        !child.methods[1].blueprint_event ||
+        dialect_module.code[0].conditioned_code.find("bool IsVisible_Implementation() const") ==
+            std::string::npos ||
+        dialect_module.code[0].conditioned_code.find("void Act_Implementation()") ==
+            std::string::npos) {
         return fail("script-to-script native root resolution drifted");
     }
     const auto& editor_tool = dialect_module.classes[3];
