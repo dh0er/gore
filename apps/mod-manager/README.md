@@ -33,10 +33,11 @@ itself, the portable zip points you at the download.
   packed game-file claims, and raw-file replacements — and show intended
   winners. Loose-file versus packed-file precedence is advisory, and an opaque
   UE4SS component cannot produce a complete target inventory. Each component
-  is graded Complete, Partial, Estimated, or Unknown so incomplete knowledge
-  stays visible; these grades do not claim the game's runtime priority is
-  proven. The grades and the per-component target lists live behind the
-  **Advanced details** setting.
+  says how completely GORE knows its targets — the full list, a list that may
+  be incomplete, hints that are not proof, or nothing at all — so incomplete
+  knowledge stays visible; these grades do not claim the game's runtime
+  priority is proven. The grades and the per-component target lists live behind
+  the **Advanced details** setting.
 - **Apply** declaratively: full-recompute the modded state from a pristine base
   and deploy the whole enabled set (backups first), or use the normal
   **Remove all from game** action to restore a validated Manager-owned

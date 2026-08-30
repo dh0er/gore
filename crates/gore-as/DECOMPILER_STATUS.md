@@ -11,12 +11,12 @@ was measured, and what is left.
 
 Measured 2026-08-29 against the shipped build whose script cache has SHA-256
 `7A18F954E32AF30FC24AE3A66EA35D3B5CB98560C8F5083C7846FC9CE1D77511` (GUID
-`7835bcc09c5eee488d72cb5ffb0fb0c3`). This build is not one of the audited generations, so the
-numbers qualify the DECOMPILER, not the build. Counts from the earlier `D0AFAF90…` build are not
+`7835bcc09c5eee488d72cb5ffb0fb0c3`). That is the audited generation `g1r-steam-24878692`, the
+Steam build shipped 2026-08-27/28. Counts from the earlier `D0AFAF90…` build are not
 comparable: that one had 7,308 modules and 164,607 aligned functions.
 
-Everything except the splice test runs over the **whole corpus** — all 7,317 modules, all 164,723
-functions the vanilla and regenerated caches align:
+Everything except the splice test was measured on this build, over the **whole corpus** — all
+7,317 modules, all 164,723 functions the vanilla and regenerated caches align:
 
 | Measurement | Scope | Result |
 |-------------|-------|--------|
@@ -26,11 +26,12 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
 | Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,723 functions | **99.29%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
-| Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
+| Splice back (`extract-remap`) | full corpus, earlier `D0AFAF90…` build | 7,278 of 7,308 (**99.59%**) |
 
-Every measurement now covers the whole corpus. The splice sweep takes about two hours (each run
+Every measurement covers the whole corpus. The splice sweep takes about two hours (each run
 re-reads both 100+ MB caches), which is why earlier revisions of this document reported it from a
-627-module sample; the sample and the sweep agree to within 0.1 points.
+627-module sample; the sample and the sweep agreed to within 0.1 points. That sweep has not been
+repeated on this build — its numbers are the earlier build's, which is why the row says so.
 
 The measurement needs the game's `Binds.Cache` next to the script cache it reads. Without it the
 native field table is empty, every native enum field falls back to the bool heuristic, and the
@@ -38,7 +39,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,169 functions (0.71%) recompile to bytecode that differs semantically.** A semantic
+**1,165 functions (0.71%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -65,26 +66,27 @@ found them:
 * **One `event` parameter rendered `int` where the thunk says `int32`**
   (`Story.Support.DialogImport.FStoryChapterChangedEvent::Broadcast`).
 
-The class table below is the last full classification, taken when the total stood at 3,511 — it
-says which shapes the work was aimed at, not what the remaining 1,344 are made of.
+The class table below is the last full classification, taken when the total stood at 3,511; its
+rows account for 2,926 of those functions. It says which shapes the work was aimed at, not what
+the remaining 1,165 are made of.
 
 Classified over WHOLE functions — every instruction of both sides, not the window around the
 first divergence. An earlier revision of this document classified the window instead and reported
-order as the largest class at 4,861; that number was an artifact of the window, and the real
-figure is 531:
+order as the largest class at 4,861; that number was an artifact of the window. The
+whole-function figure is the order row below. Shares are of the 2,926 the rows cover:
 
 | Class | Functions | Share |
 |-------|-----------|-------|
 | Different instructions on the two sides | 1,394 | 47.6% |
-| Same instructions, different order | 562 | 18.1% |
-| Other extra instructions | 469 | 15.1% |
-| One or more extra slot-to-slot copies, nothing else | 304 | 9.8% |
-| One or more extra handle aliases, nothing else | 138 | 4.4% |
-| Identical but for a slot number, or extra copies AND aliases | 59 | 1.9% |
+| Same instructions, different order | 562 | 19.2% |
+| Other extra instructions | 469 | 16.0% |
+| One or more extra slot-to-slot copies, nothing else | 304 | 10.4% |
+| One or more extra handle aliases, nothing else | 138 | 4.7% |
+| Identical but for a slot number, or extra copies AND aliases | 59 | 2.0% |
 
 The classes that used to dominate — a named temporary costing a copy or an alias — are now the
 small ones. Over this run's work the total went from 14,134 to 3,511, and `__InitDefaults`
-differences from 37 to 4.
+differences from 37 to 6.
 
 No single shape dominates any more: the largest signature inside the largest class is 38
 functions, where it was 754. The ones worth naming: 38 where an extra constructor and destructor
@@ -92,8 +94,8 @@ pair says the emitter named a value the source built at a call site, 31 and 30 w
 tested the other way round, 30 where a constant is written that vanilla copied, 28 where a
 `float32` value is compared without the widening to `float` vanilla performed first (the
 comparison then runs at the wrong width — the widening is rendered as a plain assignment, so the
-folds collapse it as if it were an alias), and 545 whose instructions match but run in a
-different order.
+folds collapse it as if it were an alias), and the order class above, whose instructions match
+but run in a different order.
 
 ### The loop whose condition is a short circuit — RECOVERED
 
@@ -841,6 +843,11 @@ bytecode rather than the text, and the element is spelled `auto&`. Spelled `auto
 not merely fail to compile — it kills the compiler outright, which is how the read-only half of
 the rule was re-confirmed. 1,375 to 1,374.
 
+From there the run continued through the rules the sections above describe — the range-for
+container, the receiver pair, the split GAS chain, the return-expression temporary, the
+continue-only loop scope, and the declaration-order rules — down to the **1,165** the headline
+reports.
+
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
 vanilla holds, where the largest finite float came back one ULP low every time. The belief that
@@ -949,7 +956,7 @@ requires reconstructing its body manually or first extending the decompiler.
 
 ## Class defaults
 
-Same run as "What is measured, and on what" above — full corpus, build `Build55_CL171864`.
+Full corpus on the earlier `D0AFAF90…` build (`Build55_CL171864`), not the run above.
 
 | Metric | Value |
 |--------|-------|
@@ -1020,7 +1027,7 @@ thumb: a type that has a copy constructor is declared with its initializer, a ty
 default constructor and an `opAssign` keeps the hoisted declaration and its assignment. Both
 shapes compile; only the one the base cache has a row for can be spliced back.
 
-Measured over the whole corpus, `extract-remap` against the base cache succeeds for 7,276 of 7,308
+Measured over the whole corpus, `extract-remap` against the base cache succeeds for 7,278 of 7,308
 modules (**99.59%**). The same measurement scored 43 of 60 before the identity work and 58 of 60
 after it, on the 60-module sample it started from.
 
@@ -1085,9 +1092,10 @@ after the first link and the next link took a leftover argument as its receiver.
 fixed — a temporary's destructor between two links no longer ends the statement — and the check
 stays as the general guard against any future dropped-argument shape.
 
-The 37 initializers that still differ after a faithful recompile are dominated by float constants
-the emitter cannot spell: AngelScript has no infinity literal, so `+inf` (`0x7F800000`) is written
-as the largest finite float and comes back one ULP low.
+Six initializers still differ after a faithful recompile, down from 37. The rest were float
+constants believed unspellable: `+inf` (`0x7F800000`) was written as the largest finite float and
+came back one ULP low. The language can spell it after all — an overflowing decimal literal
+(`1e39f`) parses and rounds to exactly the bit pattern vanilla holds.
 
 ## Root causes and next work
 

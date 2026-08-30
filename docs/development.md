@@ -142,6 +142,7 @@ gore/
 │  ├─ gore-asset/          USMAP + unversioned-property + lossless package primitives
 │  ├─ gore-tex/            UE5 IoStore texture extract/replace (Zen .utoc/.ucas/.pak)
 │  ├─ gore-authoring/      durable managed-project authoring primitives (Mod Studio)
+│  ├─ gore-generation/     audited game-generation table: one sealed row per shipped G1R build
 │  ├─ gore-story-catalog/  generation-sealed NPC + quest-parent catalogs
 │  ├─ gore-npc-catalog/    generation-sealed NPC archetype catalogs
 │  ├─ gore-story-build/    deterministic, non-publishing story build plans
@@ -161,6 +162,7 @@ gore/
 ├─ lua/                    gore-lua UE4SS helper library (deployed into the game's Mods/shared)
 ├─ mods/                   first-party UE4SS mod folders
 │  ├─ example/             sample mod using gore-lua
+│  ├─ g1r-hotbar-keys/     rebinds the three hotbar slots the Controls menu cannot reach
 │  └─ gore-dump/           generated dump mod (regen: `gore dump-mod`)
 ├─ vendor/
 │  └─ retoc/               vendored IoStore reader fork (Oodle decode routed to gore-oodle)
@@ -184,6 +186,7 @@ gore/
 | [`gore-asset`](../crates/gore-asset) | Rust lib | USMAP flattening, bounded read-only complex-property spans, unversioned primitive codec, and verified `.uasset`/`.uexp` carrier. |
 | [`gore-tex`](../crates/gore-tex) | Rust lib | IoStore texture extract/replace; cooks + packs a Zen triplet. Built on vendored [`retoc`](../vendor/retoc) + `gore-oodle`. |
 | [`gore-authoring`](../crates/gore-authoring) | Rust lib | Durable, deployment-independent authoring primitives for managed Mod Studio projects. |
+| [`gore-generation`](../crates/gore-generation) | Rust lib | The audited game-generation table: one sealed row per shipped G1R build; the leaf every generation-sealed crate depends on. |
 | [`gore-story-catalog`](../crates/gore-story-catalog) | Rust lib | Strict, generation-sealed NPC and quest-parent catalogs (`story_catalog.v1`). |
 | [`gore-npc-catalog`](../crates/gore-npc-catalog) | Rust lib | Generation-sealed NPC archetype catalogs and their structural linkage. |
 | [`gore-story-build`](../crates/gore-story-build) | Rust lib | Deterministic, non-publishing build plans over revision-3 story content. |

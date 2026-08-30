@@ -116,9 +116,9 @@ anybody in a new game.
 The **Create Quest** wizard captures the human-facing name, technical
 identity, parent, giver, description, and one to eight objectives, and creates
 the quest together with its generated script module in one step. A selected
-Quest has exactly four Story tabs: **Overview**, **Dialog & Voice**,
-**References**, and **Problems & Checks**. **Overview** hosts Journey and its
-three editing areas:
+Quest has exactly four Story tabs: **Journey**, **Dialog & Voice**,
+**References**, and **Problems & Checks**. **Journey** hosts its three
+editing areas:
 
 - **Outline** edits the display name, title, objective order, and objective
   titles; objectives keep their stable slots across reorders.

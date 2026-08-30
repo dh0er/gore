@@ -206,11 +206,12 @@ incomplete-knowledge warning, never as proof that the loadout is conflict-free.
 The grades themselves are shown while **Advanced details** is on in Settings;
 the incomplete-knowledge warning always appears when it applies.
 
-The CLI reports the same four grades under their wire names (`exact`,
-`partial`, `advisory`, `opaque`). When no recognized conflict rows exist but any
-enabled footprint is partial, advisory, or opaque, it prints the coverage-gap
-warning and counts for those grades instead of the unqualified phrase "no
-conflicts".
+The CLI names only the three incomplete grades, under their wire names. A
+zero-result analysis prints `no recognized conflicts`, and whenever any enabled
+footprint is partial, advisory, or opaque it adds
+`warning: conflict analysis is incomplete for enabled components (partial=…,
+advisory=…, opaque=…)` after that line. `exact` is never printed, and
+`gore mgr analyze` has no `--json`.
 
 The same view spells out the intended order — mods further down the list
 override the ones above them — while **Advanced details** is on. That order predicts winners only
