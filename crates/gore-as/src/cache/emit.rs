@@ -2130,6 +2130,8 @@ fn emit_function_ctor(
         let rendered =
             spell_out_default_temporaries(&rendered, &default_only_construction_counts(f, refs));
         let rendered =
+            split_gameplay_effect_chain(&rendered, &gameplay_effect_chain_slots(f, refs), refs);
+        let rendered =
             merge_copy_constructed_declarations(&rendered, &copy_constructed_slots(f, refs));
         let rendered = drop_default_arguments(&rendered, refs);
         let rendered = fold_returned_empty_values(&rendered, f, refs);
@@ -9122,6 +9124,159 @@ fn default_only_construction_counts(f: &Func, refs: &RefResolver) -> HashMap<i32
         }
     }
     counts
+}
+
+/// The two handles of a gameplay-effect chain, and the slots vanilla gave them.
+///
+/// `Apply…SpecTo*( …MakeOutgoingSpec(…, …MakeEffectContext()) )` written as ONE expression occurs
+/// 38 times in the tree and **not one of those functions is byte-faithful**; every function that
+/// gets the chain right writes it as two declarations. Both handles are released at the scope
+/// exit rather than after the call that took them, which is an order a deferred parameter cannot
+/// produce — the source named them.
+///
+/// Returns `(context slot, spec slot)`. Keyed on the two callees by name, because the general
+/// release-order rule fires on ten times as many slots as it should and cost 232 records.
+fn gameplay_effect_chain_slots(f: &Func, refs: &RefResolver) -> Vec<(i32, i32)> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return Vec::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    // A call's hidden out-pointer is the last address pushed before it.
+    let destination = |at: usize| -> Option<i32> {
+        instrs[..at]
+            .iter()
+            .rposition(|ins| ins.op.name == "PSF")
+            .map(|push| w0(&instrs[push]))
+            .filter(|slot| *slot > 0)
+    };
+    let mut pairs = Vec::new();
+    let mut context: Option<i32> = None;
+    for (at, ins) in instrs.iter().enumerate() {
+        if ins.op.name != "CALLSYS" {
+            continue;
+        }
+        match refs.func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64) {
+            Some("MakeEffectContext") => context = destination(at),
+            Some("MakeOutgoingSpec") => {
+                // One pair per chain, in program order. A function may carry several, and giving
+                // them all the FIRST pair's names declares the same local twice.
+                if let (Some(ctx), Some(spec)) = (context.take(), destination(at)) {
+                    if ctx != spec {
+                        pairs.push((ctx, spec));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    pairs
+}
+
+/// Split that chain back into the two declarations the source wrote.
+fn split_gameplay_effect_chain(body: &str, slots: &[(i32, i32)], refs: &RefResolver) -> String {
+    if slots.is_empty() {
+        return body.to_owned();
+    }
+    let (Some(context_ty), Some(spec_ty)) = (
+        refs.names_returning("MakeEffectContext"),
+        refs.names_returning("MakeOutgoingSpec"),
+    ) else {
+        return body.to_owned();
+    };
+    let mut out: Vec<String> = Vec::new();
+    let mut next = 0usize;
+    for line in body.lines() {
+        let Some(&(context, spec)) = slots.get(next) else {
+            out.push(line.to_owned());
+            continue;
+        };
+        let rewritten = (|| {
+            // Only where the chain is CONSUMED by an apply call. A function that returns the
+            // spec — `return ASC.MakeOutgoingSpec(…, ASC.MakeEffectContext());` — is a different
+            // statement, and vanilla does not split it: naming the two handles there broke ten
+            // records that were already right.
+            if !line.contains(".ApplyGameplayEffectSpecTo") {
+                return None;
+            }
+            // Vanilla may reuse one slot for two chains in the same function. Introducing the
+            // name where the body already carries it declares the same local twice, which the
+            // compiler does not survive — those functions keep the nested form.
+            let already_named = count_ident(body, &format!("local_{spec}")) != 0
+                && !line.contains(&format!("local_{spec} = "));
+            if already_named {
+                return None;
+            }
+            let call = line.find(".MakeOutgoingSpec(")?;
+            let context_at = line.find(".MakeEffectContext()")?;
+            if context_at < call {
+                return None;
+            }
+            let indent = indent_of(line);
+            // The receiver of each call reaches back over a path or a call chain.
+            let start = |end: usize| -> Option<usize> {
+                let bytes = line.as_bytes();
+                let mut at = end;
+                let mut depth = 0i32;
+                while at > 0 {
+                    match bytes[at - 1] {
+                        b')' | b']' => depth += 1,
+                        b'(' | b'[' if depth == 0 => break,
+                        b'(' | b'[' => depth -= 1,
+                        b',' | b' ' if depth == 0 => break,
+                        _ => {}
+                    }
+                    at -= 1;
+                }
+                (at < end).then_some(at)
+            };
+            let context_start = start(context_at)?;
+            let context_expr = &line[context_start..context_at + ".MakeEffectContext()".len()];
+            let call_end = matching_paren(line, call + ".MakeOutgoingSpec".len())?;
+            let spec_start = start(call)?;
+            let spec_expr = line[spec_start..=call_end].replace(context_expr, &format!("local_{context}"));
+            // Both halves have to be what they claim. A back-scan that overshoots produces
+            // `local_N = local_N;` — self-initialisation, which the compiler does not survive.
+            if spec_expr.contains(".MakeEffectContext()")
+                || !spec_expr.contains(".MakeOutgoingSpec(")
+                || !context_expr.ends_with(".MakeEffectContext()")
+                || context_expr.starts_with('.')
+                || spec_expr.starts_with('.')
+                || context_expr.contains('\u{1}')
+            {
+                return None;
+            }
+            // The statement may ALREADY be the spec's declaration — `FGameplayEffectSpecHandle
+            // local_40 = <chain>;`. Emitting a second one gives `local_40 = local_40;`, which the
+            // compiler does not survive; there only the context comes out and the initialiser is
+            // rewritten in place.
+            if declaration_with_initializer(line)
+                .is_some_and(|(_, name, _)| name == format!("local_{spec}"))
+            {
+                return Some(format!(
+                    "{indent}{context_ty} local_{context} = {context_expr};\n{}",
+                    line.replace(context_expr, &format!("local_{context}"))
+                ));
+            }
+            let rest = format!(
+                "{}{}{}",
+                &line[..spec_start],
+                format_args!("local_{spec}"),
+                &line[call_end + 1..]
+            );
+            Some(format!(
+                "{indent}{context_ty} local_{context} = {context_expr};\n{indent}{spec_ty} local_{spec} = {spec_expr};\n{rest}"
+            ))
+        })();
+        if rewritten.is_some() {
+            next += 1;
+        }
+        out.push(rewritten.unwrap_or_else(|| line.to_owned()));
+    }
+    let mut joined = out.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
 }
 
 /// The LAST uses of a named value that vanilla built fresh each time.
