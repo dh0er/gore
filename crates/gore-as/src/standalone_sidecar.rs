@@ -1743,6 +1743,17 @@ fn parse_sidecar_response(
     let stderr = redact_private_path_variants(stderr, private_root);
     let response: SidecarCompileResponseV1 = serde_json::from_slice(&completed.stdout.bytes)
         .map_err(|error| {
+            // An EMPTY stdout is not a protocol error, it is a dead compiler: the sidecar wrote
+            // nothing at all. Reporting that as "invalid JSON at line 1 column 0" sends the
+            // reader looking for a malformed response that does not exist, and hides the one
+            // fact that identifies the failure — how the process ended.
+            if completed.stdout.bytes.is_empty() {
+                return invalid_output(format!(
+                    "the sidecar compiler produced no output and {}{}",
+                    describe_exit(&completed.status),
+                    stderr_suffix(&stderr)
+                ));
+            }
             invalid_output(format!(
                 "invalid sidecar response JSON: {error}{}",
                 stderr_suffix(&stderr)
@@ -2253,6 +2264,16 @@ fn diagnostics_detail(
         .collect::<Vec<_>>()
         .join("; ");
     redact_private_path_variants(&detail, private_root)
+}
+
+/// How a sidecar process ended, in the words a reader needs: a normal exit carries a code, an
+/// abnormal one carries none and is the signature of a crash.
+fn describe_exit(status: &ExitStatus) -> String {
+    match status.code() {
+        Some(code) if code == 0 => "exited successfully".to_owned(),
+        Some(code) => format!("exited with code {code} (0x{code:08x})"),
+        None => "was terminated without an exit code — it crashed".to_owned(),
+    }
 }
 
 fn stderr_suffix(stderr: &str) -> String {
