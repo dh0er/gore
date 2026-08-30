@@ -63,7 +63,7 @@ backs the original up to `*.gore-bak` on deploy.
 
 | Flag | Command | Meaning |
 |---|---|---|
-| `--lcache <PATH>` | all | The `.lcache` to read/edit — optional everywhere; without it the install is auto-detected. May also name a game dir or a Steam library to search. |
+| `--lcache <PATH>` | `export`, `import`, `extract` | The `.lcache` to read/edit — optional on all three; without it the install is auto-detected. May also name a game dir or a Steam library to search. `status` takes no flags at all: it reports the shared catalog that is already built. |
 | `-o, --out <PATH>` | `export`, `import` | Output file. On `import`, defaults to overwriting the cache it read. |
 | `--edits <PATH>` | `import` | The `{id:{language:value}}` edit JSON. |
 | `--keep-empty` | `export` | Keep ids with no text instead of dropping them. |

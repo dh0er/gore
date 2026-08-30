@@ -232,6 +232,7 @@ pub fn body_statements_ctor(
         exit_scan_floor: 0,
         carry: None,
         loop_scope: None,
+        shared_return: None,
     };
     st.emit_range(0, g.blocks.len(), depth, &mut body);
     body
@@ -547,6 +548,66 @@ fn float_operand_slots(
 }
 
 impl Ctx<'_> {
+    /// The constant a `CpyVtoR4` at `at` returns LITERALLY.
+    ///
+    /// `return 1;` is `SetV4 vT,1; CpyVtoR4 vT` — the constant goes straight into the register's
+    /// slot and straight back out. `int x = 1; … return x;` cannot look like that: the name costs
+    /// a `CpyVtoV` between the store and the copy. So the adjacent pair — reading past the
+    /// `PSF vT; CALLSYS` cleanup a scope exit puts between them — IS the literal the source wrote,
+    /// whatever the emitter later decides to call the slot.
+    ///
+    /// Calling it something is how four achievements came to return the WRONG constant: the
+    /// compiler reuses one scratch slot for two different constant returns, and a single name over
+    /// both lives can only carry one of them.
+    fn const_return_literal(&self, at: usize) -> Option<String> {
+        if self.ret_ty.map(|ty| ty.base_name(self.refs))? != "int" {
+            return None;
+        }
+        let slot = self.instrs.get(at)?.words.first().map(|w| *w as i16 as i32)?;
+        let here = self.const_return_at(at, slot)?;
+        // ONE constant return through a slot is a name the source may well have written, and the
+        // folds behind us already turn `local_N = K; return local_N;` into `return K;` with no
+        // bytes to spare — measured: literalising those costs 19 records. TWO different constants
+        // through the same slot cannot be one variable, and that is the case a single name gets
+        // WRONG: it carries whichever constant the collapse happened to keep.
+        let mut others = self
+            .instrs
+            .iter()
+            .enumerate()
+            .filter(|(other, ins)| {
+                *other != at
+                    && ins.op.name == "CpyVtoR4"
+                    && ins.words.first().map(|w| *w as i16 as i32) == Some(slot)
+            })
+            .filter_map(|(other, _)| self.const_return_at(other, slot));
+        others.any(|value| value != here).then_some(here)
+    }
+
+    /// The constant an adjacent `SetV4` puts into `slot` just before the `CpyVtoR4` at `at`,
+    /// reading past the `PSF vT; CALLSYS` cleanup pairs a scope exit places between them.
+    ///
+    /// The pair has to BE cleanup. Any other call taking an address can write through it, and
+    /// `x = 1; Mutate(x); return x;` then reports a constant the function does not return. Only
+    /// the destructor behaviour is skipped, and only where the address it takes is not the return
+    /// slot itself.
+    fn const_return_at(&self, at: usize, slot: i32) -> Option<String> {
+        let mut back = at;
+        while back >= 2
+            && self.instrs[back - 1].op.name == "CALLSYS"
+            && self.instrs[back - 2].op.name == "PSF"
+            && self
+                .refs
+                .func_by_ptr(self.instrs[back - 1].qwords.first().copied().unwrap_or(0) as i64)
+                == Some("$beh2")
+            && self.instrs[back - 2].words.first().map(|w| *w as i16 as i32) != Some(slot)
+        {
+            back -= 2;
+        }
+        let set = self.instrs.get(back.checked_sub(1)?)?;
+        (set.op.name == "SetV4" && set.words.first().map(|w| *w as i16 as i32) == Some(slot))
+            .then(|| (set.dwords.first().copied().unwrap_or(0) as i32).to_string())
+    }
+
     fn slot_name(&self, off: i32) -> String {
         if off > 0 {
             return format!("local_{off}");
@@ -908,7 +969,9 @@ fn scan_back_retval_floor(ctx: &Ctx, before: usize, floor: usize) -> Option<Stri
         let ins = &ctx.instrs[i];
         match ins.op.name {
             "CpyVtoR4" | "CpyVtoR8" | "CpyVtoR1" | "LOADOBJ" => {
-                return Some(ctx.slot_name(ins.words.first().copied().map(s16).unwrap_or(0)));
+                return Some(ctx.const_return_literal(i).unwrap_or_else(|| {
+                    ctx.slot_name(ins.words.first().copied().map(s16).unwrap_or(0))
+                }));
             }
             "RET" => return None,
             _ => {}
@@ -4589,7 +4652,10 @@ fn block_stmts_in(
                 // cant-convert errors). The one legitimate ret_val source for RVO functions is
                 // the CopyScript-to-`__return` capture below.
                 if !ctx.ret_via_rvo() {
-                    ret_val = pending.take().or_else(|| Some(name(w(ins, 0))));
+                    ret_val = pending
+                        .take()
+                        .or_else(|| ctx.const_return_literal(lo + k))
+                        .or_else(|| Some(name(w(ins, 0))));
                 }
             }
             "CpyVtoR1" => {
@@ -5662,12 +5728,26 @@ struct Structurer<'a> {
     /// `break;` lands: the latch's non-back-edge successor). Saved/restored around the recursive
     /// body emission; nested loops push/pop so break/continue always bind to the innermost loop.
     loop_scope: Option<LoopScope>,
+    /// While a then-arm is being emitted: the offset the enclosing conditional jumps to when its
+    /// test fails. A constant-return block there is the tail BOTH guards share, and writing it
+    /// again inside the arm duplicates a `return` vanilla wrote once.
+    shared_return: Option<usize>,
 }
 
 #[derive(Clone, Copy)]
 struct LoopScope {
     continue_off: usize,
     break_off: usize,
+    /// A scope opened only so a back edge inside the body can be read as `continue;`.
+    ///
+    /// The top-test arm never set a scope at all, so an in-body jump back to the header rendered
+    /// as its own nested `while` — an extra `SUSPEND` and a moved back edge. Setting the scope
+    /// fixes that, but it also offers `break;` and `return …;` to bodies that never asked: those
+    /// two fire on byte-faithful functions (6 and 4), and this one does not fire on any.
+    continue_only: bool,
+    /// The body's LAST block, whose back edge is the loop's own latch. Control reaches the header
+    /// from there anyway, so writing `continue;` for it adds a statement the source never had.
+    latch_block: Option<usize>,
 }
 
 const COMPOUND_HEADER_MAX_BLOCKS: usize = 8;
@@ -6209,7 +6289,25 @@ impl Structurer<'_> {
                 // top-test loop: `header: <cmp> Jcc exit; body; JMP header`
                 let _ = writeln!(out, "{ind}while ({cond})");
                 let _ = writeln!(out, "{ind}{{");
+                // A body jump back to this header is a `continue;`. Without a scope it was read
+                // as a latch instead, and the guarded region in front of it became a nested
+                // `while` of its own — one extra `SUSPEND` and a back edge in the wrong place.
+                // The scope is continue-only on purpose: `break;` and `return …;` offered here
+                // fire on byte-faithful functions, this does not.
+                let saved = self.loop_scope;
+                self.loop_scope = Some(LoopScope {
+                    continue_off: b.start_dw,
+                    // The header's taken edge IS the loop exit. Only a block that is NOTHING but
+                    // the jump may spend it: an arm that does no work and only leaves is a
+                    // `break;`, and rendered as an empty arm it left four loops running forever.
+                    // A jump that also carries statements is a different question, and offering
+                    // `break;` there fires on six functions this build reproduces byte for byte.
+                    break_off: b.succs.first().copied().unwrap_or(usize::MAX),
+                    continue_only: true,
+                    latch_block: body_end.checked_sub(1),
+                });
                 self.emit_range(i + 1, body_end, depth + 1, out);
+                self.loop_scope = saved;
                 let _ = writeln!(out, "{ind}}}");
                 next = body_end;
             } else if let Some((latch, cond, cont_off, brk_off)) =
@@ -6231,6 +6329,8 @@ impl Structurer<'_> {
                 let ls = LoopScope {
                     continue_off: cont_off,
                     break_off: brk_off,
+                    continue_only: false,
+                    latch_block: None,
                 };
                 let saved = self.loop_scope;
                 self.loop_scope = Some(ls);
@@ -6250,6 +6350,8 @@ impl Structurer<'_> {
                 self.loop_scope = Some(LoopScope {
                     continue_off: cont_off,
                     break_off: brk_off,
+                    continue_only: false,
+                    latch_block: None,
                 });
                 self.emit_range(body, exit, depth + 1, out);
                 self.loop_scope = saved;
@@ -6305,6 +6407,8 @@ impl Structurer<'_> {
                 let ls = LoopScope {
                     continue_off: test_off,
                     break_off,
+                    continue_only: false,
+                    latch_block: None,
                 };
                 let saved = self.loop_scope;
                 self.loop_scope = Some(ls);
@@ -6344,6 +6448,8 @@ impl Structurer<'_> {
                     let ls = LoopScope {
                         continue_off: latch_off,
                         break_off,
+                        continue_only: false,
+                    latch_block: None,
                     };
                     // `loop_scope` must be set BEFORE Gate 2 — its nested-switch dry run
                     // (`switch_span` -> `try_emit_switch`) consults it to accept loop
@@ -6410,12 +6516,18 @@ impl Structurer<'_> {
                 // Mark it instead, and let the emitter turn the pair into a `while` once it has
                 // folded the condition into one expression -- where it cannot, the mark is
                 // dropped and this stays the `if` it is today.
+                // …and a jump back to the ENCLOSING loop's header is that loop's `continue;`,
+                // not a latch of this arm. Reading it as a latch invents a loop the source never
+                // wrote around the guarded region in front of it.
                 let latch_back = (then_end > i + 1
                     && self.is_backward_jump(then_end - 1)
                     && self.g.blocks[then_end - 1]
                         .succs
                         .first()
-                        .is_some_and(|&s| s <= b.start_dw))
+                        .is_some_and(|&s| {
+                            s <= b.start_dw
+                                && self.loop_scope.is_none_or(|ls| ls.continue_off != s)
+                        }))
                 .then_some(then_end - 1);
                 // The latch block is NOT excluded: its jump is only its terminator, and the
                 // statements before it are the body's last ones.
@@ -6425,7 +6537,9 @@ impl Structurer<'_> {
                 let then_body_at = out.len();
                 if let Some(t) = then_idx {
                     if t > i && t <= then_end_body {
+                        let outer = std::mem::replace(&mut self.shared_return, taken);
                         self.emit_range(t, then_end_body, depth + 1, out);
+                        self.shared_return = outer;
                     }
                 }
                 if latch_back.is_some() {
@@ -6721,6 +6835,15 @@ impl Structurer<'_> {
         {
             return None;
         }
+        // The else arm IS the tail the enclosing guard falls to: two guards in a row that both
+        // leave with the same constant. Writing the diamond here puts a second `return false;`
+        // inside the arm, where vanilla wrote one behind both.
+        if else_idx
+            .map(|ei| self.g.blocks[ei].start_dw)
+            .is_some_and(|start| self.shared_return == Some(start))
+        {
+            return None;
+        }
         let (then_slot, then_val, ret_off) = self.bool_return_arm(then_idx?, true)?;
         let (else_slot, else_val, else_ret) = self.bool_return_arm(else_idx?, false)?;
         if then_slot != else_slot || ret_off != else_ret || then_val == else_val {
@@ -6896,11 +7019,22 @@ impl Structurer<'_> {
             return None;
         }
         let t = *b.succs.first()?;
+        if t == ls.continue_off {
+            // …unless this IS the latch: control reaches the header from the body's last block
+            // anyway, and writing the keyword there adds a statement the source never had.
+            if ls.latch_block == Some(bi) {
+                return None;
+            }
+            return Some("continue;".into());
+        }
+        // An unconditional jump to the loop exit IS the exit, whatever else the block did first.
+        // Restricting this to a one-instruction block dropped the jump from `DoWork(); break;` —
+        // the work was still written, and control then fell through into another iteration.
         if t == ls.break_off {
             return Some("break;".into());
         }
-        if t == ls.continue_off {
-            return Some("continue;".into());
+        if ls.continue_only {
+            return None;
         }
         // an in-body `return <expr>;` compiled as a JMP to the function's shared bare RET row —
         // recover the returned value from the block's trailing register write (scan floored to
@@ -6941,10 +7075,20 @@ impl Structurer<'_> {
         if self.idx_of.get(&fall).copied() != Some(bi + 1) {
             return None;
         }
+        // A conditional whose TAKEN edge is the latch is NOT a `continue`. This compiler never
+        // folds a jump over a jump, so a source `continue` always spends an unconditional `JMP` to
+        // the latch — which `loop_exit_stmt` already recognises. Straight to the latch is the
+        // compiled form of a plain `if (<fall condition>) { <rest of the body> }`, and claiming it
+        // here costs an extra `JMP` and an inverted condition: a `NOT`, plus the store-and-reload
+        // where vanilla tested the register directly. The `is_cond` arm renders the fall condition
+        // positively and is what should take it.
+        //
+        // Vanilla witnesses the premise in its own stream — `TryUseFreepoint` carries both shapes,
+        // and its jump-over-jump guard is byte-identical on both sides while the direct-to-latch
+        // one is where the extra jump appears. The `break` arm keeps its claim: a conditional
+        // straight to the break target still leaves a fall-through that reaches the latch.
         let kw = if taken == ls.break_off {
             "break;"
-        } else if taken == ls.continue_off {
-            "continue;"
         } else {
             return None;
         };
@@ -7032,6 +7176,8 @@ impl Structurer<'_> {
                         let inner_ls = LoopScope {
                             continue_off: inner_off,
                             break_off: ib,
+                            continue_only: false,
+                    latch_block: None,
                         };
                         // the inner loop's exit must stay inside our body or be our own exit.
                         let ib_in_body = self
@@ -8682,6 +8828,8 @@ impl Structurer<'_> {
         let ls = LoopScope {
             continue_off,
             break_off,
+            continue_only: false,
+                    latch_block: None,
         };
         if !self.body_has_inner_branch(body, exit, ls) {
             return None;
@@ -8855,6 +9003,8 @@ impl Structurer<'_> {
         let ls = LoopScope {
             continue_off: test_off,
             break_off,
+            continue_only: false,
+                    latch_block: None,
         };
         let saved = self.loop_scope;
         self.loop_scope = Some(ls);
@@ -8967,6 +9117,8 @@ impl Structurer<'_> {
         let ls = LoopScope {
             continue_off: cont_off,
             break_off: brk_off,
+            continue_only: false,
+                    latch_block: None,
         };
         if !self.body_has_inner_branch(i + 1, latch, ls) {
             return None;
@@ -9296,6 +9448,7 @@ mod tests {
             exit_scan_floor: 0,
             carry: None,
             loop_scope: None,
+            shared_return: None,
         };
         let (start, stop) = if let Some((start, stop, scope)) = range {
             st.loop_scope = Some(scope);
@@ -9585,6 +9738,8 @@ mod tests {
         let scope = LoopScope {
             continue_off: break_target.labels["head"],
             break_off: break_target.labels["loop_exit"],
+            continue_only: false,
+                    latch_block: None,
         };
         let body = render_fixture_range(&break_target, Some(("switch", "loop_exit", scope)));
         assert!(
@@ -9598,6 +9753,8 @@ mod tests {
         let scope = LoopScope {
             continue_off: ambiguous.labels["head"],
             break_off: ambiguous.labels["alt_ret"],
+            continue_only: false,
+                    latch_block: None,
         };
         let body = render_fixture_range(&ambiguous, Some(("switch", "loop_exit", scope)));
         assert!(

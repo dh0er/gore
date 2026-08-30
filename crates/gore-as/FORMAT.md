@@ -1,7 +1,7 @@
 # PrecompiledScript_Shipping.Cache format
 
 These notes describe the cache parser currently implemented and tested by
-gore-as against the Gothic 1 Remake 1.0.3 hotfix.
+gore-as against Gothic 1 Remake patch 1.0.5 (Steam BuildID 24878692).
 
 ## Outer header
 
@@ -14,7 +14,7 @@ All fields are little-endian:
 | 0x14 | u32 | Number of entries in the Modules TMap. |
 | 0x18 | records | Ordered module-name/module-value pairs. |
 
-The current pristine cache has 7,305 modules. The public CacheHeader.hash and
+The current pristine cache has 7,317 modules. The public CacheHeader.hash and
 type_count field names predate the completed parser; their values are the build
 GUID and module count respectively.
 
@@ -88,7 +88,7 @@ difference.
 
 ## Validation status
 
-- The complete 7,305-module tree parses through the final tail-table byte.
+- The complete 7,317-module tree parses through the final tail-table byte.
 - Extract/remap/splice round-trips are covered by synthetic and real-cache
   tests, including independently composed class-bearing mini-caches and
   prepared absolute StaticNames operands with a missing-row refusal.
@@ -101,8 +101,10 @@ difference.
   with zero decompiler stubs. That historical measurement does not qualify a
   newer build; unsupported or unproved future bytecode shapes still fail
   visibly to signature-preserving stubs rather than being guessed.
-- Generated special methods such as __InitDefaults remain a separate coverage
-  gap and are not emitted as ordinary editable functions.
+- The generated __InitDefaults initializers are recovered as class-scope
+  `default` statements, with 0 modules suppressed across the full corpus. Only
+  the method form is still skipped: `__`-prefixed generated methods are not
+  emitted as ordinary editable functions.
 
 ## Companion data and versions
 

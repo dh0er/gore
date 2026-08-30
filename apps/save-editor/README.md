@@ -14,9 +14,9 @@ game install. For modding, use the [`gore` CLI](../../docs/guide/README.md) or
 - Player & NPCs: Edit stats, attributes, all talents/skills and much more;
   revive a dead NPC (restore health, strip the death state).
 - Position: Move the player to exact coordinates or a named location, with an
-  optional facing direction. NPC saved/spawn poses are shown read-only: the game
-  rebuilds NPC placement from world data when loading, so editing those save
-  records would not move the NPC in game.
+  optional facing direction. An NPC can be moved the same way, and his
+  daily routine switched off so he stays where he was put instead of walking
+  back; the editor records what it overwrote so the move can be undone.
 - Inventory: Change count of existing items; add new items from a bundled
   catalog with categorized browsing; remove items; detect and repair damaged
   slot IDs; reset an inventory to a clean starting state.
@@ -25,6 +25,8 @@ game install. For modding, use the [`gore` CLI](../../docs/guide/README.md) or
 - Glossary: Browse and edit NPC, creature, and location entries, including
   their individual text entries and NPC discovery states.
 - Progression: Edit quest markers, NPC knowledge and events
+- Trade: See what a merchant sells and how much ore he has to buy with; change
+  stock counts, add or remove lines, and edit the restock baseline.
 - Almost all data can be changed by changing the value of the internal property. Only for experimental use.
 - Backups: Create them automatically, give them optional display labels,
   restore them, or permanently delete them after confirmation. Deletion cannot

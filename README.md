@@ -27,8 +27,9 @@ not understand. Its core save editing is stable across game versions, although
 a future patch can add or change save fields or make the bundled item and
 location catalogs stale. Keep backups of important saves.
 
-**Mod Manager** and the **CLI** have been tested with Gothic 1 Remake **1.0.4a
-(CL171864)**. Neither uses a simple version-number lock. Mod Manager
+The **CLI** has been tested with Gothic 1 Remake **1.0.5 (Steam BuildID
+24878692)**; **Mod Manager** has been tested with **1.0.4a (CL171864)**.
+Neither uses a simple version-number lock. Mod Manager
 compatibility also depends on the individual mod and whether its target files,
 localization IDs, assets, and script targets exist in the installed game.
 Import validates the package, but cannot prove runtime compatibility; Apply
@@ -46,7 +47,7 @@ use the game's embedded compiler as a fallback.
 
 | Tool | Version | Release page |
 |---|---|---|
-| **CLI** | 0.2.2 | [gore-cli-v0.2.2](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.2.2) |
+| **CLI** | 0.3.0 | [gore-cli-v0.3.0](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.3.0) |
 | **Mod Manager** | 0.2.0 | [gore-mod-manager-v0.2.0](https://github.com/dh0er/gore/releases/tag/gore-mod-manager-v0.2.0) |
 | **Save Editor** | 1.3.0 | [gore-save-editor-v1.3.0](https://github.com/dh0er/gore/releases/tag/gore-save-editor-v1.3.0) |
 

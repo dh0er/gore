@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 99.13% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 99.30% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -9,27 +9,29 @@ was measured, and what is left.
 
 ## What is measured, and on what
 
-Measured 2026-08-23 against build `Build55_CL171864` (script cache SHA-256
-`D0AFAF909E62867FAEDC3678A1175F5E8DE5E784DC503A14FFBDE4726F297231`, GUID
-`be78fe0a46ac6643968597e85c7e5b3f`). This build is not one of the audited generations, so the
-numbers qualify the DECOMPILER, not the build.
+Measured 2026-08-29 against the shipped build whose script cache has SHA-256
+`7A18F954E32AF30FC24AE3A66EA35D3B5CB98560C8F5083C7846FC9CE1D77511` (GUID
+`7835bcc09c5eee488d72cb5ffb0fb0c3`). That is the audited generation `g1r-steam-24878692`, the
+Steam build shipped 2026-08-27/28. Counts from the earlier `D0AFAF90…` build are not
+comparable: that one had 7,308 modules and 164,607 aligned functions.
 
-Everything except the splice test runs over the **whole corpus** — all 7,308 modules, all 164,604
-functions the vanilla and regenerated caches align:
+Everything except the splice test was measured on this build, over the **whole corpus** — all
+7,317 modules, all 164,723 functions the vanilla and regenerated caches align:
 
 | Measurement | Scope | Result |
 |-------------|-------|--------|
-| Modules emitted, fallback stubs | full corpus | 7,308 modules, **0 stubs** |
+| Modules emitted, fallback stubs | full corpus | 7,317 modules, **0 stubs** |
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **99.13%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,723 functions | **99.30%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
-| Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
+| Splice back (`extract-remap`) | full corpus, earlier `D0AFAF90…` build | 7,278 of 7,308 (**99.59%**) |
 
-Every measurement now covers the whole corpus. The splice sweep takes about two hours (each run
+Every measurement covers the whole corpus. The splice sweep takes about two hours (each run
 re-reads both 100+ MB caches), which is why earlier revisions of this document reported it from a
-627-module sample; the sample and the sweep agree to within 0.1 points.
+627-module sample; the sample and the sweep agreed to within 0.1 points. That sweep has not been
+repeated on this build — its numbers are the earlier build's, which is why the row says so.
 
 The measurement needs the game's `Binds.Cache` next to the script cache it reads. Without it the
 native field table is empty, every native enum field falls back to the bool heuristic, and the
@@ -37,28 +39,54 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,431 functions (0.87%) recompile to bytecode that differs semantically.** A semantic
+**1,159 functions (0.70%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
 
+### Known wrong programs, found and not yet fixed
+
+A semantic difference is normally *not proven identical*, not *proven wrong*. These three are
+proven wrong, and they are recorded here rather than in a bug tracker because the same measurement
+found them:
+
+* **Four loops the game leaves and our source does not.** The `break` is lost and the arm renders
+  as `if (…) { } else { }`, so the loop runs forever:
+  `UAIState_WaitInQueue::DoTask_Implementation`, `UAIState_WarnAggressor::DoTask_Implementation`,
+  and `UAIState_CombatEndActions_Human::Heal` twice. The mechanism is now known — the top-test arm
+  opened no loop scope, which is why `loop_exit_stmt` returned `None` there. That scope is set
+  now, but only for `continue;`: offering `break;` on the same path fires on six functions this
+  build reproduces byte for byte, so these four still need a witness that separates them.
+* **Nine float constants written as their own bit pattern.**
+  `ULoadingScreenSetupTest::SetupGeneralLoadingScreen` emits
+  `…SpecifiedColor.R = 1065287680;`, which is `0x3F7F0000` — the bits of `0.99609375f`. The
+  compiler then converts that integer, so the colour comes out a billion times too bright. Neither
+  field-type channel resolves a deep NATIVE struct path, and the float rescue in `structure.rs`
+  only runs on a store that has already dropped.
+* **One `event` parameter rendered `int` where the thunk says `int32`**
+  (`Story.Support.DialogImport.FStoryChapterChangedEvent::Broadcast`).
+
+The class table below is the last full classification, taken when the total stood at 3,511; its
+rows account for 2,926 of those functions. It says which shapes the work was aimed at, not what
+the remaining 1,159 are made of.
+
 Classified over WHOLE functions — every instruction of both sides, not the window around the
 first divergence. An earlier revision of this document classified the window instead and reported
-order as the largest class at 4,861; that number was an artifact of the window, and the real
-figure is 531:
+order as the largest class at 4,861; that number was an artifact of the window. The
+whole-function figure is the order row below. Shares are of the 2,926 the rows cover:
 
 | Class | Functions | Share |
 |-------|-----------|-------|
 | Different instructions on the two sides | 1,394 | 47.6% |
-| Same instructions, different order | 562 | 18.1% |
-| Other extra instructions | 469 | 15.1% |
-| One or more extra slot-to-slot copies, nothing else | 304 | 9.8% |
-| One or more extra handle aliases, nothing else | 138 | 4.4% |
-| Identical but for a slot number, or extra copies AND aliases | 59 | 1.9% |
+| Same instructions, different order | 562 | 19.2% |
+| Other extra instructions | 469 | 16.0% |
+| One or more extra slot-to-slot copies, nothing else | 304 | 10.4% |
+| One or more extra handle aliases, nothing else | 138 | 4.7% |
+| Identical but for a slot number, or extra copies AND aliases | 59 | 2.0% |
 
 The classes that used to dominate — a named temporary costing a copy or an alias — are now the
 small ones. Over this run's work the total went from 14,134 to 3,511, and `__InitDefaults`
-differences from 37 to 4.
+differences from 37 to 6.
 
 No single shape dominates any more: the largest signature inside the largest class is 38
 functions, where it was 754. The ones worth naming: 38 where an extra constructor and destructor
@@ -66,8 +94,8 @@ pair says the emitter named a value the source built at a call site, 31 and 30 w
 tested the other way round, 30 where a constant is written that vanilla copied, 28 where a
 `float32` value is compared without the widening to `float` vanilla performed first (the
 comparison then runs at the wrong width — the widening is rendered as a plain assignment, so the
-folds collapse it as if it were an alias), and 545 whose instructions match but run in a
-different order.
+folds collapse it as if it were an alias), and the order class above, whose instructions match
+but run in a different order.
 
 ### The loop whose condition is a short circuit — RECOVERED
 
@@ -738,12 +766,95 @@ costs an `sbTOi` on the way in and an `iTOb` on the way out, and the enum cast t
 inside is what vanilla wrote instead. The enum test is what bounds it — the same syntax with an
 ordinary callee is a real argument conversion. 1,437 to 1,431, six fixed and none broken.
 
+**An alias carries no type, so the name it gives inherits the engine base.** `RefCpyV` is the
+instruction that says the source named a handle — and it propagates nothing about what that handle
+is. The slot therefore keeps whatever coarse type the cache recorded (`UObject`, `AActor`), and
+the structurer then has to write a `Cast<Owner>(recv)` at every call on it to keep the call legal:
+a cast vanilla never had, and eight extra opcodes. For an alias the producer is one hop away and
+its DECLARED type is in reach — the field's own type or the callee's return, never a declaring
+class, which is the weaker signal that once typed `APawn local_8 = Cast<AGothicCharacter>(…)`.
+
+Three clauses, all load-bearing. The recorded type must be an engine base; the alias must be the
+slot's ONLY object write, so nothing else can have been upcast into it; and the slot must be a
+RECEIVER — a `PshVPtr` immediately before a call, since this compiler pushes arguments first and
+the receiver last. Drop the last one and an `AActor local_6 = this.TargetEnemy;` that is only ever
+passed to `Add()` gets retyped, which vanilla's source really did widen.
+
+And the narrowing has to reach BOTH type maps. Landing it only in the structurer's view took the
+receiver wrap away while the declaration stayed at the base, and the whole tree stopped compiling
+with `No matching signatures to 'UObject::GetRelationship()'` — the same two-map mistake the cast
+narrowing made before it. 1,431 to 1,419, twelve fixed and none broken.
+
+**A chain the emitter computed into a carrier of its own belongs in its reader — and the two
+passes that put it there were never asked twice.** The fold chain is a fixed sequence, not a
+fixpoint, and for a whole class of bodies the shape those passes match on does not exist yet when
+they run: the outer chain is still an if/else over a slot, the store appears further down, and the
+pass that collapses `X = c; return X;` runs after that. One more pass over the finished text is
+the whole repair.
+
+The condition fold is restricted there to a value carrying a TOP-LEVEL `&&`/`||`. That shape
+occurs in none of the 54,366 byte-faithful bodies and in 109 slots of the divergent ones; without
+the restriction the late pass also takes `bool X; X = <call>; if (X)`, which vanilla wrote WITH
+the name — four byte-faithful bodies say so, and read-count does not separate them. The bracketing
+needed no change: both passes already wrap unless ONE pair spans the whole value, and the carrier
+is always the leftmost operand of the run that reads it, so the wrap costs no bytes.
+
+1,419 to 1,412, seven fixed and none broken.
+
+**A conditional whose taken edge is the latch is not a `continue`.** This compiler never folds a
+jump over a jump, so a source `continue` always spends an unconditional `JMP` to the latch — which
+the loop-exit rule already recognises. A conditional straight to the latch is instead the compiled
+form of a plain `if (<fall condition>) { <rest of the body> }`, and claiming it as a `continue`
+costs an extra `JMP` and an inverted condition: a `NOT`, plus the store-and-reload where vanilla
+tested the register directly.
+
+Vanilla witnesses the premise in its own stream. `UAIState_TryUseFreepoint` carries both shapes in
+one function, and the jump-over-jump guard is byte-identical on both sides while the
+direct-to-latch one is exactly where the extra jump appears. The `break` arm keeps its claim: a
+conditional straight to the break target still leaves a fall-through that reaches the latch.
+
+The one function this turns into an empty `if { }` was the named risk, and the corpus answers it —
+the tree already carried 154 such blocks and compiled. 1,412 to 1,386, twenty-six fixed and none
+broken.
+
+**A slot a `T&`-returning call fills holds a POINTER, not a `T`.** Rendered by value it costs a
+copy constructor and a scope-exit destructor that vanilla does not have. The type map must not
+carry the `&` — there are two of them and a qualifier in one poisons every comparison against the
+other — so the reference slots travel as their own set and the `&` is appended at the declaration
+sites only. A const return has to say `const T&`, or the initializer is refused outright.
+
+The other half of that lever — recovering `return <name>;` where the value travels as an address
+rather than through a register — is NOT in: it put a local out of scope in one function and made
+another return a reference into an expression the compiler refuses to keep alive. 1,386 to 1,384.
+
+**A value-type local is destroyed once per exit from the block it was declared in.** So vanilla
+spending ONE `$beh0` and TWO OR MORE `$beh2` for a slot, all of them inside a back edge's span, is
+the source declaring that local in the LOOP BODY: the constructor ran once per iteration and each
+`continue`, `break` and fall-through paid its own destructor. The sink refused every loop
+categorically; it now makes an exception for exactly that shape. One constructor is what makes it
+a declaration — two are two unnamed temporaries sharing a slot. 1,384 to 1,375.
+
+**A range-for whose element the body writes through is `for (auto& x : c)`.** The recovery
+refused any loop that wrote through its element, because a range-for element is read-only — true
+of a COPIED element, and not of one the iterator hands back by reference. Vanilla settles which
+this is: it jumps straight to the bottom test, the range-for shape, while writing through the
+element. The pass runs before the declarations are written, so the reference is read off the
+bytecode rather than the text, and the element is spelled `auto&`. Spelled `auto` the source does
+not merely fail to compile — it kills the compiler outright, which is how the read-only half of
+the rule was re-confirmed. 1,375 to 1,374.
+
+From there the run continued through the rules the sections above describe — the range-for
+container, the receiver pair, the split GAS chain, the return-expression temporary, the
+continue-only loop scope, and the declaration-order rules — down to the **1,159** the headline
+reports.
+
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
 vanilla holds, where the largest finite float came back one ULP low every time. The belief that
 it could not was carried in this file for months and was never probed.
 
-**30 of the 7,308 modules cannot be spliced back** (99.59% can). Each is a template instantiation
+**30 of the modules cannot be spliced back** (99.59% can). That sweep ran on the earlier
+`D0AFAF90…` build, which had 7,308 modules against this one's 7,317; it has not been repeated. Each is a template instantiation
 or a behaviour the base cache never recorded — 14 `$beh0` constructors, 13 `TArray` iterators, and
 a tail of single cases (`opAssign`, `GetRootNode`, `AssertEquals`). They share the root
 cause of the ordering classes above: vanilla wrote the expression inline where the emitter
@@ -845,7 +956,7 @@ requires reconstructing its body manually or first extending the decompiler.
 
 ## Class defaults
 
-Same run as "What is measured, and on what" above — full corpus, build `Build55_CL171864`.
+Full corpus on the earlier `D0AFAF90…` build (`Build55_CL171864`), not the run above.
 
 | Metric | Value |
 |--------|-------|
@@ -916,7 +1027,7 @@ thumb: a type that has a copy constructor is declared with its initializer, a ty
 default constructor and an `opAssign` keeps the hoisted declaration and its assignment. Both
 shapes compile; only the one the base cache has a row for can be spliced back.
 
-Measured over the whole corpus, `extract-remap` against the base cache succeeds for 7,276 of 7,308
+Measured over the whole corpus, `extract-remap` against the base cache succeeds for 7,278 of 7,308
 modules (**99.59%**). The same measurement scored 43 of 60 before the identity work and 58 of 60
 after it, on the 60-module sample it started from.
 
@@ -981,9 +1092,10 @@ after the first link and the next link took a leftover argument as its receiver.
 fixed — a temporary's destructor between two links no longer ends the statement — and the check
 stays as the general guard against any future dropped-argument shape.
 
-The 37 initializers that still differ after a faithful recompile are dominated by float constants
-the emitter cannot spell: AngelScript has no infinity literal, so `+inf` (`0x7F800000`) is written
-as the largest finite float and comes back one ULP low.
+Six initializers still differ after a faithful recompile, down from 37. The rest were float
+constants believed unspellable: `+inf` (`0x7F800000`) was written as the largest finite float and
+came back one ULP low. The language can spell it after all — an overflowing decimal literal
+(`1e39f`) parses and rounds to exactly the bit pattern vanilla holds.
 
 ## Root causes and next work
 

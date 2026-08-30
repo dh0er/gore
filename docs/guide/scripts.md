@@ -63,7 +63,10 @@ You can edit those statements and splice the module back with `compile-module
 --op edit`; the compiler regenerates the class defaults from your source and the
 old copies are dropped rather than carried. An overlay that declares defaults for
 only some of a module's classes is refused, because the classes it left out would
-lose theirs silently.
+lose theirs silently. If you would rather not author defaults at all, emit the
+module with `gore as emit --no-defaults` (or `emit-all --no-defaults`) and edit
+that: the module's existing defaults are then carried back byte-exact instead of
+being regenerated.
 
 Every module in the shipped game writes its defaults, down to the main map's
 worldpoint and item-spawn tables. Recovery stays all-or-nothing per module: if a

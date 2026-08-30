@@ -7,7 +7,7 @@ check a load order for conflicts.
 
 Every tool call runs a real `gore` subcommand as a child process and returns its
 output, with the exact command line shown first — whatever the agent did, you can
-re-run it in a shell yourself. All 87 leaf commands are reachable, and this guide
+re-run it in a shell yourself. All 89 leaf commands are reachable, and this guide
 ships inside the binary so the agent can read it before acting.
 
 ## Setup

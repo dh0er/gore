@@ -163,12 +163,13 @@ separate behavioral qualification because selecting its fixture can change
 quest/save state. The offline evidence qualifies its hotfix-remapped
 build/composition only, not selection, effects, persistence, or save/reload.
 
-The central generation registry also contains Steam build `24340829`, but only
-for its separately recorded bounded offline authoring evidence. No dialog-
-runtime candidate or qualification has been retained for `24340829`, and none
-of the `24169431` evidence carries across a generation boundary. Build
-`24539464` instead has the separate version-3 live observation recorded above;
-it does not convert either historical candidate into a qualified artifact.
+The central generation registry also contains Steam builds `24340829` and
+`24878692`, but only for their separately recorded bounded offline authoring
+evidence. No dialog-runtime candidate or qualification has been retained for
+either, and none of the `24169431` evidence carries across a generation
+boundary. Build `24539464` instead has the separate version-3 live observation
+recorded above; it does not convert either historical candidate into a
+qualified artifact.
 
 ## Discovery versus insertion
 
@@ -228,15 +229,18 @@ writes a save/quest/knowledge field.
   clean live visual proof. Runtime version 3 has both the current
   build-`24539464` GORE-fixture observation above and a frozen offline candidate
   for older build `24169431`; that older exact artifact never completed the
-  same live requalification. Build `24340829` has no dialog-runtime
-  qualification at all. Other game, UE4SS, and runtime combinations remain to
-  be qualified.
+  same live requalification. Builds `24340829` and `24878692` have no
+  dialog-runtime qualification at all. Other game, UE4SS, and runtime
+  combinations remain to be qualified.
 - Topic selection, authored knowledge/quest changes, recorded voice, and
   selection-side save effects are not certified by the insertion proof.
 - The exact native ordering of knowledge rules, `IsVisible_Implementation`,
   participant checks, and UI relevance is not recovered.
-- `emit-all` does not yet emit generated `__InitDefaults` methods as editable
-  source. `compile-module --op edit` carries an existing `__InitDefaults`
+- `emit` and `emit-all` now write a class's generated `__InitDefaults` back out
+  as class-scope `default` statements; recovery is all-or-nothing per module, a
+  module whose defaults cannot all be recovered says so in its header and keeps
+  them byte-exact on recompile, and `emit --no-defaults` still produces the
+  previous shape. `compile-module --op edit` carries an existing `__InitDefaults`
   record only through the strict, base-keyspace remap path and only when the
   complete class identity/layout, ordinary method signatures and UFUNCTION
   metadata, constructors, behavior declarations, module globals/imports, and

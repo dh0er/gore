@@ -77,10 +77,11 @@ gore doctor
 One read-only pass over everything the rest of this guide assumes. Ten checks,
 one line each: where the install is and which of the three sources above
 answered, whether that folder holds Gothic 1 Remake, whether [UE4SS](#ue4ss) is
-present, which UE4SS mods are enabled, what is deployed, what an interrupted run
-left behind, whether the executable is running, whether the authenticated
-standalone AngelScript compiler matches the installed cache/API, and whether
-the shared localized-text catalog still describes the installed `.lcache`.
+present, which UE4SS mods are enabled, what is deployed, whether the `~mods`
+override folder is there, what an interrupted run left behind, whether the
+executable is running, whether the authenticated standalone AngelScript
+compiler matches the installed cache/API, and whether the shared localized-text
+catalog still describes the installed `.lcache`.
 
 Every `problem` carries a `fix:` line. A `note` is informational; a `skipped`
 check can point to the earlier missing prerequisite instead. Abridged example:

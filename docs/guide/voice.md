@@ -351,15 +351,15 @@ in this toolkit ever listens, and no test in the suite checks any of it.
 
 | Flag | Commands | Meaning |
 |---|---|---|
-| `--archive <ZIP>` | all | Input voice ZIP. Never modified. |
-| `--json` | `list`, `match-line` | One JSON document instead of human-readable output. |
+| `--archive <ZIP>` | all but `validate` | Input voice ZIP. Never modified. |
+| `--json` | `list`, `match-line`, `validate` | One JSON document instead of human-readable output. |
 | `--filter <TEXT>` | `list` | Keep only entry paths containing this substring, case-insensitive. |
 | `--max <N>` | `list` | Max entries to print (default 100). The result says how many matched. `--max 0` lists nothing and reports only the counts. |
 | `--directories` | `list` | Also list directory entries, which carry no audio. |
 | `--loc-id <ID>` | `match-line` | Trimmed ASCII localization id, without `.ogg`. |
 | `--basename <NAME>` | `extract`, `replace` | Case-insensitive basename; only when unique. |
 | `--path <ARCHIVE_PATH>` | `extract`, `add`, `replace` | Exact, case-sensitive archive path. |
-| `--ogg <PATH>` | `add`, `replace` | Ogg file. Vorbis or Opus passes here; [encode Vorbis](#vorbis-or-opus). A WAV is refused with the ffmpeg line that converts it. |
+| `--ogg <PATH>` | `add`, `replace`, `validate` | Ogg file. Vorbis or Opus passes here; [encode Vorbis](#vorbis-or-opus). A WAV is refused with the ffmpeg line that converts it. |
 | `--manifest <PATH>` | `apply-manifest` | Versioned JSON manifest; Ogg paths relative to it. |
 | `-o, --out <PATH>` | all writing commands | Extraction root, or a new ZIP that must not exist. |
 

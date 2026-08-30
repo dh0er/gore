@@ -14,7 +14,7 @@ Only the guide ships in the CLI release zip, as Markdown plus a browsable
 
 ## Guide at a glance
 
-- [Getting started](guide/getting-started.md) · [CLI reference](guide/cli-reference.md) · [MCP server](guide/mcp.md)
+- [Getting started](guide/getting-started.md) · [CLI reference](guide/cli-reference.md) · [MCP server](guide/mcp.md) · [Finding things](guide/find.md)
 - Domains: [items](guide/items.md) · [text & dialogs](guide/text-and-dialogs.md) · [audio](guide/audio.md) · [voice](guide/voice.md) · [textures](guide/textures.md) · [DataAssets](guide/dataassets.md) · [scripts](guide/scripts.md)
 - AngelScript authoring: [dialogs](guide/dialog-authoring.md) · [defaults](guide/angelscript-defaults.md)
 - Shipping: [bundles](guide/bundles.md) · [many mods](guide/mod-manager.md)

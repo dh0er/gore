@@ -33,7 +33,7 @@ value_float = 1.5
   which is what you normally want — the retry loop described below already
   covers classes that are not resolvable that early.
 - Each `[[override]]` names one `class`, one `field`, and exactly one typed
-  value: `value_int`, `value_float`, or `value_bool`.
+  value: `value_int`, `value_float`, `value_bool`, or `value_str`.
 
 ## What m_Value does to prices
 

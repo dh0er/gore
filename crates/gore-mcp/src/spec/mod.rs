@@ -695,7 +695,7 @@ impl GroupSpec {
 
 /// Wall-clock caps. Three tiers rather than a number per command: the distinction that matters is
 /// "prints something", "rewrites some files" and "walks the entire game", and inventing a precise
-/// budget for each of 87 commands would be false precision.
+/// budget for each of 89 commands would be false precision.
 pub const T_FAST: u64 = 60;
 pub const T_NORMAL: u64 = 300;
 pub const T_LONG: u64 = 1800;

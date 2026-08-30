@@ -144,16 +144,17 @@ editor show accurate numbers), run the `gore-dump` UE4SS mod in game and fold
 its output back in:
 
 ```powershell
-# 1. generate the dump mod into the game's Mods dir
-gore dump-mod --model model.json --catalog item_catalog.json -o "$GAME\...\Mods"
+# 1. derive the GUI shape model, then generate the dump mod into the game's Mods dir
+gore gui-model --model model.json --catalog item_catalog.json -o gui_model.json
+gore dump-mod --model gui_model.json --catalog item_catalog.json -o "$GAME\...\Mods"
 
 # 2. launch the game once with it enabled → writes gore_game_data.json
 
-# 3. fold the runtime values back into the model
-gore sync --dump gore_game_data.json --catalog item_catalog.json -o model.json
+# 3. fold the runtime values back into the GUI model
+gore sync --dump gore_game_data.json --catalog item_catalog.json -o gui_model.json
 ```
 
-The catalog acts as the item allow-list in both steps. The mod source lives in
+The catalog acts as the item allow-list in every step. The mod source lives in
 [`mods/gore-dump`](../../mods/gore-dump/README.md).
 
 ## GUI shape model

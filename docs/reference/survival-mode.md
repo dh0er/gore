@@ -40,7 +40,7 @@ The system is built and wired, right up to the last step:
   `RecoveryRatePerHourOfSleep` = −0.125).
 - **The abilities are fully configured**, including the per-threshold effect
   lists.
-- **The UI row is deliberately hidden.** Of 7,308 AngelScript modules, exactly
+- **The UI row is deliberately hidden.** Of 7,317 AngelScript modules, exactly
   one mentions survival: `UI/UISettingsConfiguration.as`, which declares
   `USettingObject_Bool_SurvivalSettings_AS` whose entire generated
   `__InitDefaults` writes `false` into the inherited native `bool m_IsShown`.

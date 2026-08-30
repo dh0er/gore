@@ -22,7 +22,7 @@ gore --version
 | `mod` | `build` · `inspect` · `deploy` · `undeploy` | Build, validate, inspect, deploy, or undeploy a unified bundle. | [bundles](bundles.md) |
 | `mgr` | `import` · `list` · `remove` · `enable` · `disable` · `order` · `analyze` · `preflight` · `recover` · `apply` · `status` · `reset` | Multi-mod manager: library, load order, readiness/recovery, conflicts, composed deployment, status and Reset. | [mod-manager](mod-manager.md) |
 | `loc` | `extract` · `status` · `export` · `import` | Read/edit localized text & dialogs in the encrypted `.lcache`. | [text-and-dialogs](text-and-dialogs.md) |
-| `audio` | `list` · `extract` · `replace` · `restore` · `export-patch` · `apply-patch` | Read/replace FMOD `.bank` audio (PCM injection, `*.gore-bak`). | [audio](audio.md) |
+| `audio` | `banks` · `list` · `extract` · `replace` · `restore` · `export-patch` · `apply-patch` | Read/replace FMOD `.bank` audio (PCM injection, `*.gore-bak`). | [audio](audio.md) |
 | `voice` | `validate` · `list` (`index`) · `match-line` · `extract` · `add` · `replace` · `apply-manifest` (`apply`) | Validate/index/extract/copy-on-write edit voice-over ZIP archives. | [voice](voice.md) |
 | `texture` | `list` · `extract` · `replace` · `pack` · `deploy` · `index` · `undeploy` · `paklist` | Extract/replace IoStore textures → Zen triplet in `~mods`. | [textures](textures.md) |
 | `asset` | `extract` · `inspect` · `patch-fixed` · `pack` | Extract, inspect, copy-on-write patch, and offline-pack one cooked DataAsset. | [dataassets](dataassets.md) |
@@ -41,8 +41,9 @@ gore --version
 | `package` | — | Zip a mod folder into distributable UE4SS layout. | [bundles](bundles.md#other-helpers) |
 
 Commands that need the install (`deploy-shared`, `mod`, `mgr`, `texture`,
-`asset`, `as`, `loc`, `doctor`) resolve it from an explicit `--game` (or
-`--lcache` / `--exe`), then the configured game path, then Steam auto-detect.
+`asset`, `as`, `audio banks`, `loc`, `location-catalog`, `doctor`) resolve it
+from an explicit `--game` (or `--lcache` / `--exe` / an explicit source path),
+then the configured game path, then Steam auto-detect.
 
 ## `config`
 
@@ -160,7 +161,7 @@ and failing would bury the line explaining what was not searched.
 
 | Subcommand | Flags |
 |---|---|
-| `build` | `--spec <SPEC>` (asset paths resolve against its directory) · `-o, --out <OUT>` (bundle goes to `<out>/<mod-name>`) |
+| `build` | `--spec <SPEC>` (asset paths resolve against its directory) · `-o, --out <OUT>` (bundle goes to `<out>/<mod-name>`) · `--model <MODEL>` (validate field names/types; skipped if absent) |
 | `inspect <BUNDLE>` | bundle directory or ZIP · `--json`; read-only full offline validation plus a bounded metadata/component/hash report |
 | `deploy` | `--bundle <BUNDLE>` · `--game <GAME>` |
 | `undeploy` | `--game <GAME>` |
@@ -208,8 +209,9 @@ auto-detect are tried. The installed cache is
 
 | Subcommand | Flags |
 |---|---|
+| `banks` | `--game <GAME>` · `--json` · `--key <KEY>`; lists the install's `.bank` files and each one's sample count |
 | `list` | `--bank <BANK>` · `--filter <TEXT>` · `--max <N>` (default 100) · `--json` · `--key <KEY>` |
-| `extract` | `--bank` · `-o, --out <DIR>` · `--sample <NAME\|all>` · `--key` |
+| `extract` | `--bank` · `-o, --out <DIR>` · `--sample <NAME\|all>` · `--filter <TEXT>` · `--key` |
 | `replace` | `--map <MAP>` · `--bank` · `-o, --out <BANK>` · `--key` |
 | `restore` | `--bank` |
 | `export-patch` | `--map <MAP>` · `-o, --out <ZIP>` |
@@ -265,8 +267,8 @@ Output directories must not exist and are never placed in the game tree.
 | `walk <FILE>` | `--max <N>` (default 100) |
 | `decompile <FILE> [NEEDLE]` | `--max <N>` (default 20) |
 | `disasm <FILE> [NEEDLE]` | `--max <N>` (default 20) |
-| `emit <FILE> [NEEDLE]` | `--max <N>` (default 5) |
-| `emit-all <FILE> <OUTDIR>` | every module, mirroring `ScriptRelativeFilename` |
+| `emit <FILE> [NEEDLE]` | `--max <N>` (default 5) · `--no-defaults` (omit class `default` statements) |
+| `emit-all <FILE> <OUTDIR>` | `--no-defaults` (omit class `default` statements); every module, mirroring `ScriptRelativeFilename` |
 | `static-names <FILE> [INDICES]...` | no indices → count + first 10 |
 | `default-sites <CACHE>` | `--module` · `--class` · `--field` · `--json` |
 | `patch-default <CACHE>` | `--selector <JSON>` · `--expected-hex` · `--replacement-hex` · `-o, --out` · `--json` |
@@ -274,8 +276,8 @@ Output directories must not exist and are never placed in the game tree.
 | `patch-tag-map <CACHE>` | `--selector <JSON>` · `--expected-hex` · `--replacement-hex` · `-o, --out` · `--json` |
 | `qualify` | `--game` · `--usmap <FILE>` · `--catalog <JSON>` · `--id <ID>` · `--label <TEXT>` · `--json` |
 | `diagnostics-check` | `--exe <EXE>` · `--game <GAME>` |
-| `compile [SRC]` | `-o, --out` · `--game` · `--no-backup` · `--no-diagnostics` · `--diagnostics-hook <DLL>` · `--diagnostics-inject-delay-ms <MS>` |
-| `compile-module` | `--op add\|edit` · `--module` · `--rel-path` · `--source` · `--work-dir` · `--allow-new-symbols` · `-o, --out` · `--game` · diagnostics flags |
+| `compile <SRC>` | `-o, --out` · `--work-dir <DIR>` · `--game` · `--backend standalone\|game\|standalone-then-game` (default `standalone-then-game`) · `--generation-receipt <RECEIPT.json>` · `--no-diagnostics` · `--diagnostics-hook <DLL>` · `--diagnostics-inject-delay-ms <MS>` |
+| `compile-module` | `--op add\|edit` · `--module` · `--rel-path` · `--source` · `--work-dir` · `--allow-new-symbols` · `-o, --out` · `--game` · `--backend standalone\|game\|standalone-then-game` (default `standalone-then-game`) · `--generation-receipt <RECEIPT.json>` · diagnostics flags · five `--development-*` compiler-development overrides |
 | `replace <BASE> <MINI> <TARGET>` | `-o, --out` |
 | `splice <BASE> <MINI>` | `-o, --out` |
 | `extract <CACHE> <MODULE>` | `-o, --out` |

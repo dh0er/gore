@@ -39,16 +39,18 @@ cycle-free, and the target class must reach the declaring `field_owner` by exact
 chain reaches an unparsed native parent, that direct parent is a valid terminal owner, but ancestry
 above it is unknown and is not guessed. This keeps inherited and shadowed same-name fields distinct.
 Without additional evidence this deliberately leaves 5,197 otherwise exact Shipping scalar
-windows uneditable because their declaring owner lies above the first native parent. The current
-Shipping profile can recover that ancestry only when the cache semantic fingerprint, Binds bytes
-and bridge, and USMAP bytes and exact Class graph all match their one atomic sealed tuple.
+windows uneditable because their declaring owner lies above the first native parent. A Shipping
+profile can recover that ancestry only when the cache semantic fingerprint, Binds bytes and bridge,
+and USMAP bytes and exact Class graph all match one audited generation row's atomic sealed tuple;
+the table currently holds four such rows, and a mixture across two of them fails closed.
 
 Script-declared field types come from the parsed module model. Native field types are mutation
-evidence only when `Binds.Cache` matches both the sealed audited file identity
-`46e6629ad5cacc112b9922d48a1aa948f40572d7285705b981c3eca3dc615fea` and the audited extracted
-field-map identity `5ddf7fa6df36ac00d07bd068fcf19ad61a3f4b836133513966dc379b24241707`,
-and the inspected `PrecompiledScript_Shipping.Cache` header has the paired audited per-build GUID
-`450d65c04f0c014fbec568016378e69a`. All three identities must match. The CLI uses
+evidence only when the generation row named by the inspected `PrecompiledScript_Shipping.Cache`
+header's GUID seals exactly the `Binds.Cache` that was loaded, matching both that row's audited
+file identity and its audited extracted field-map identity. Generations do not all carry the same
+`Binds.Cache` — the four audited rows carry three distinct Binds seals, three distinct field-map
+digests and four distinct cache GUIDs — so a GUID that names one row can never admit another row's
+field map. All three identities must belong to the same row. The CLI uses
 `GORE_AS_BINDS` when set, otherwise `Binds.Cache` beside the input cache. An absent, unreadable,
 unknown, parser-drifted, or differently paired native profile supplies no native mutation
 evidence; its generic field information can still assist read-only decompilation.
