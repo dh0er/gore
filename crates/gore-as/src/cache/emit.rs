@@ -9523,6 +9523,15 @@ fn spell_out_default_temporaries(text: &str, defaults: &HashMap<i32, usize>) -> 
         if uses.len() <= fresh {
             continue; // the first use is the named value itself; there has to be one left
         }
+        // Taking the LAST `fresh` of them is an order argument, and an order argument only holds
+        // where the uses all run. Sitting in different arms they do not: a fresh default in the
+        // then arm and the named value in the else arm are not first and second, they are
+        // alternatives, and the count would rewrite the wrong one. Uses standing at the
+        // declaration's own indentation are the straight line this can read.
+        let indent = indent_of(&lines[index]);
+        if uses.iter().any(|at| indent_of(&lines[*at]) != indent) {
+            continue;
+        }
         for at in uses.into_iter().rev().take(fresh) {
             lines[at] = lines[at].replace(&format!("= {name};"), &format!("= {ty}();"));
         }
