@@ -1913,6 +1913,7 @@ fn emit_function_ctor(
                 &already_declared_at_use,
                 &reference_locals,
                 &bare_declaration_slots(f),
+                &call_result_declared_at_initializer(f),
             );
         let (body, first_write_suppressed) = rewrite_bare_decl_at_first_write(
             &body,
@@ -5348,6 +5349,34 @@ fn first_top_level_assignment_before_read(body: &str, slot: i32) -> bool {
     }
 
     false
+}
+
+/// True when the name's first reference is a plain write-only assignment and every later mention
+/// stands inside that assignment's own block — the condition that makes sinking the declaration
+/// onto it legal at any depth.
+fn assignment_block_owns_the_name(body: &str, slot: i32) -> bool {
+    let ident = format!("local_{slot}");
+    let lines: Vec<&str> = body.lines().collect();
+    let Some(store) = lines.iter().position(|line| count_ident(line, &ident) != 0) else {
+        return false;
+    };
+    let trimmed = lines[store].trim();
+    if !trimmed.starts_with(&format!("{ident} = "))
+        || !trimmed.ends_with(';')
+        || count_ident(lines[store], &ident) != 1
+    {
+        return false;
+    }
+    let mut depth = 0i32;
+    let mut end = lines.len();
+    for (offset, line) in lines[store + 1..].iter().enumerate() {
+        depth += brace_net(line);
+        if depth < 0 {
+            end = store + 1 + offset;
+            break;
+        }
+    }
+    lines[end..].iter().all(|line| count_ident(line, &ident) == 0)
 }
 
 /// Prove definite assignment for a compiler-reused primitive carrier in structured emitted source.
@@ -13550,6 +13579,37 @@ fn bare_declaration_slots(f: &Func) -> HashSet<i32> {
     out
 }
 
+/// A slot an 8-byte call result fills DIRECTLY — the source declared it at its initialiser.
+///
+/// A declaration that already stands cannot take the call's own destination: the value lands in a
+/// temporary and is copied on. So `CpyRtoV8 X` with no copy behind it says the declaration was
+/// written where the value arrives. Measured over the byte-faithful corpus: 15 such slots are
+/// declared at their initialiser in our text and 1 stands bare, with no case going the other way.
+fn call_result_declared_at_initializer(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let mut writes: HashMap<i32, (usize, bool)> = HashMap::new();
+    for ins in &instrs {
+        if !writes_destination(ins.op.name) {
+            continue;
+        }
+        let slot = w0(ins);
+        if slot <= 0 {
+            continue;
+        }
+        let entry = writes.entry(slot).or_insert((0, true));
+        entry.0 += 1;
+        entry.1 &= ins.op.name == "CpyRtoV8";
+    }
+    writes
+        .into_iter()
+        .filter(|(_, (count, direct))| *count == 1 && *direct)
+        .map(|(slot, _)| slot)
+        .collect()
+}
+
 /// Every remaining local whose first reference is the assignment that gives it its value: the
 /// source declared it there. Hoisting the declaration instead makes the compiler put the value in
 /// a temporary of its own and copy it into the declared slot.
@@ -13562,15 +13622,25 @@ fn rewrite_first_use_decl_init(
     already: &HashSet<i32>,
     reference_locals: &HashMap<i32, bool>,
     declared_bare: &HashSet<i32>,
+    at_initializer: &HashSet<i32>,
 ) -> (String, HashSet<i32>) {
     // Only where the assignment stands at the FUNCTION's own level. Inside a loop or a branch a
     // declaration is entered and left again with the block, and the compiler spends the slot's
     // construction and release on every pass — which vanilla, having hoisted it, does not
     // (measured: 94 functions lost against 46 gained when this was not required).
     let wanted = |slot: i32, _ty: &str| {
-        !already.contains(&slot)
-            && !declared_bare.contains(&slot)
-            && first_top_level_assignment_before_read(body, slot)
+        if already.contains(&slot) || declared_bare.contains(&slot) {
+            return false;
+        }
+        if first_top_level_assignment_before_read(body, slot) {
+            return true;
+        }
+        // …or the bytecode says the declaration stood at the initialiser, wherever that is. The
+        // depth gate exists because a declaration entered and left with a block costs its
+        // construction on every pass; a witness that reads vanilla answers the same question
+        // directly. Sinking still narrows the name's scope, so nothing after the assignment's own
+        // block may read it.
+        at_initializer.contains(&slot) && assignment_block_owns_the_name(body, slot)
     };
     rewrite_decl_at_assignment(body, locals, &wanted, &|slot, ty| {
         let head = qualify_decl_type(ty, refs);
