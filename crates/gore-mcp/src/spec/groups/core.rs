@@ -764,16 +764,7 @@ const DIALOG_NEW_TOPIC_ARGS: &[ArgSpec] = &[
         Long("subdialog-of"),
         Str,
         "Existing topic whose single `Subdialog(...)` call should receive the new same-module \
-         class. Omit this to scaffold a root topic and record its explicit `dialog_topics` \
-         registration",
-        false,
-    ),
-    ArgSpec::new(
-        "allow_hidden",
-        crate::spec::ArgForm::Switch("allow-hidden"),
-        crate::spec::ArgKind::Bool,
-        "Permit a state-dependent root topic to be cleanly hidden at runtime; incompatible with \
-         --subdialog-of",
+         class. Omit this to scaffold a natively discovered same-module root topic",
         false,
     ),
     ArgSpec::new(
@@ -868,7 +859,7 @@ const DIALOG_COMMANDS: &[CommandSpec] = &[
     // directory. The game install is only read.
     CommandSpec::new(
         "new-topic",
-        "Scaffold a new topic inside an NPC's existing conversation module: register it as a \
+        "Scaffold a new topic inside an NPC's existing conversation module: leave it as a native \
          root, or wire it into one existing Subdialog call with --subdialog-of",
         DIALOG_NEW_TOPIC_ARGS,
         Safety::write().writes_into(&["out"]),
@@ -892,7 +883,8 @@ pub const DIALOG: GroupSpec = GroupSpec {
     tool: "gore_dialog",
     title: "gore dialog reader and authoring guard",
     cli: "dialog",
-    summary: "Read the dialog trees declared by the installed script cache, edit method bodies and \
+    summary:
+        "Read the dialog trees declared by the installed script cache, edit method bodies and \
               complete reconstructed defaults, and stage checked same-module topic additions. \
               Localization, compilation, packaging, deployment, and runtime proof remain \
               separate steps; read commands report cache declarations, not save-state behavior.",

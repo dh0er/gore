@@ -212,8 +212,18 @@ the currently selected game language.
 
 A new id gets exactly the keys you give it and no others, so
 [the key choice](#which-language-key-to-write) applies here too — with nothing
-pre-existing to shadow it either way. Which German key a newly added id is read
-from was not tested; if you add one, check it in game before writing many.
+pre-existing to shadow it either way.
+
+One new-id path is now live-proven on BuildID `24878692`. A same-module Diego
+topic referenced the new spoken-line id
+`GORE_DIEGO_NEWVOICE_24878692_11_00`; the exact authored subtitle
+`[GORE-VOICE-TEST] Neue Diego-Sprachzeile mit neuem Voice-over.` appeared, and
+the matching newly added Ogg member played. Its system-loopback capture
+correlated `0.763` with the authored source recording. The new menu and spoken
+ids both carried the same value under `german` and `german_new`, so this proves
+that those exact new ids resolved but does not distinguish which German
+generation the game selected. Other ids, languages and builds still need their
+own runtime check.
 
 ## The shared catalog
 
@@ -232,7 +242,12 @@ gore loc status           # ids, languages, source of the currently shared catal
 
 Localization supplies **captions and spoken lines**. It does not by itself
 create a selectable conversation topic in the dialog UI. A new topic needs a
-compiled AngelScript topic class plus its guarded runtime registration — see
+compiled AngelScript class. The current `gore dialog new-topic` path places
+that class in the shipped conversation module and stages a script-only
+`--op edit --allow-new-symbols` bundle: roots use native script discovery and
+direct sub-topics use authored `Subdialog` wiring. It does not automatically
+generate a UE4SS/`dialog_topics` adapter. The separate low-level legacy adapter
+remains available for hand-authored bundle specs; see
 [AngelScript dialog authoring](dialog-authoring.md).
 
 ## Related

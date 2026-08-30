@@ -16,10 +16,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   from the shared localization catalog; `--lang` picks the language.
 - `dialog text` — one conversation's lines as a `gore loc import` edits
   document, each under the localization column the game actually reads.
-- `dialog new-topic` — scaffold a new root option with the conversation-private
-  base, participant, unused class identity and registration sentinel resolved
-  from the cache. The class is integrated into a checkout of that conversation
-  module; the scaffold is not an isolated cross-module `--op add` recipe.
+- `dialog new-topic` — scaffold a new native root or direct sub-topic with the
+  conversation-private base and an unused class identity resolved from the
+  cache. The class is integrated into the existing conversation module. A root
+  workspace and its staged spec are script-only and contain no automatic
+  UE4SS/`dialog_topics` adapter; `--subdialog-of` instead wires one empty slot
+  in a shipped parent's single `Subdialog` call. Both compile as
+  `--op edit --allow-new-symbols`, not as an isolated cross-module `--op add`.
 - `dialog checkout` / `check` / `stage` — edit a shipped conversation's own
   AngelScript, including reconstructed defaults for `Caption`, `PriorityRank`,
   `Rules` and flags. Checks reject partial default coverage, removed shipped
@@ -28,39 +31,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   authored defaults.
 - Checked edits can retain intentional new-symbol rows and append a new topic
   class inside the owning namespace of the same existing conversation module.
-  Qualified class identity and namespace residence are checked alongside the
-  complete-default contract. Same-module new-class/remap and cross-mini loadout
-  oracles cover that class together with existing `Subdialog` rewiring. On
-  BuildID `24878692`, Doctor accepted the installed cache/API. Strict standalone
-  compilation/remap produced a 17,085-byte Payfine sub-topic mini-cache and an
-  8,271-byte Charlotte root-topic mini-cache. Their offline bundles built and
-  passed inspection: one component/three files for Payfine and two
-  components/five files for Charlotte. A current Brannok checkout plus a new
-  same-module sub-topic produced a 104,047-byte mini-cache and an inspected
-  104,448-byte one-component/three-file bundle. Those three fixtures were not
-  deployed or game-tested. A later same-module sub-topic strictly compiled to a
-  353,402-byte mini-cache; its 353,811-byte bundle was deployed successfully
-  through Mod Manager. In game, `[GORE TEST] Neuer Diego-Unterdialog` appeared
-  in `UChoiceDiegoKolonie`'s native sub-menu, was selected, ran its new `Act`
-  override, ended the conversation and returned HUD and camera control. Separate
-  add/edit minis cannot depend on one another; full-graph
-  cross-module compilation emits a complete cache and is not a normal dialog-
-  bundle recipe.
-- New root topics still use explicit `dialog_topics` registration because
-  automatic topic-set discovery is unproven. Check/stage bind each row to the
-  exact new class, base participant and vanilla sentinel, and reject stale or
-  orphaned root/sub-topic intent. Offline source checking, strict
-  compilation, packaging, deployment and runtime evidence are reported as
-  separate stages. Runtime reachability and selection are proven for the Diego
-  same-module sub-topic fixture; newly authored roots remain render-only and
-  unselected in the current evidence.
-- Qualify existing-module dialog editing live on BuildID `24878692` against
+  Qualified class identity, namespace residence, native root/direct-sub-topic
+  placement and the complete-default contract are checked together. Legacy
+  workspaces may still carry the separate low-level `dialog_topics` adapter row;
+  its participant, class and sentinel remain fail-closed, but the current
+  high-level scaffold no longer emits one.
+- Qualify the native same-module dialog path live on BuildID `24878692` against
   pristine Shipping cache SHA-256
   `7A18F954E32AF30FC24AE3A66EA35D3B5CB98560C8F5083C7846FC9CE1D77511`.
-  A source-identical complete Diego recompile ran normally; a second recompile
-  changed only `UChoiceDiegoExitGamestart.Caption`, rendered `[Forced
-  Conversation]`, allowed it to be selected, ended the conversation and
-  returned player control.
+  A source-identical complete Diego recompile ran normally; a `Caption` edit was
+  visible and selectable; a newly compiled root appeared and was selectable in
+  two runs, including one with no UE4SS proxy; and a new direct sub-topic
+  appeared, dispatched its new `Act`, ended the conversation and returned
+  control. In the first root run the installed legacy adapter logged
+  `sentinel-topic-missing` and skipped, proving that it did not insert the root.
+- Exercise a representative existing-menu rebuild in game on the same build.
+  An existing four-child Diego sub-menu became five entries; the renamed shipped
+  option retained and ran its long method body before returning to the menu, and
+  the new option was selectable. The fixture also changed caption and priority;
+  it does not isolate the ordering effect of `PriorityRank` alone.
+- Exercise authored gameplay state and persistence from new Diego options on
+  the same build. One option changed ore inventory from 0 to 1 and the item
+  remained after quicksave/restart. Another authored
+  `Rules.HideIfKnowsId` for `gore_diego_quest_knowledge_24878692`, remembered
+  that exact knowledge id, started the Stonehenge quest, disappeared from the
+  menu, and remained absent after restart; save inspection found the id on the
+  hero and the quest remained `Running` in the journal.
+- Resolve a newly authored localization and voice identity end to end on the
+  same build. The new subtitle appeared exactly, the new Ogg member referenced
+  by the compiled `Say` call played, and a system-loopback capture correlated
+  `0.763` with the authored source recording. This is bounded evidence for that
+  Diego fixture, not a general qualification of every voice path or game API.
+- Keep compile, packaging, deployment and runtime evidence separate. Independent
+  add/edit mini-caches still cannot depend on one another; FullGraph V2 can
+  compile coordinated cross-module changes to a complete cache offline. Manager
+  can import it only as a generic whole-file replacement; the normal dialog
+  stage/bundle workflow does not compose or deploy it, and that raw-cache path
+  has no runtime proof.
 - `gore_dialog` MCP tool for the same nine subcommands.
 
 ### Fixed
@@ -80,7 +87,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   non-`int64` IDs. The generator avoids existing module IDs without forbidding
   intentional ID reuse in manually authored continuation chains. Check also
   binds `bIsSubTopic = true` to actual `Subdialog` wiring and rejects that flag
-  on a registered root.
+  on either a native or legacy-registered root.
 - Rehydrate cached modules for standalone mixed-source compilation with their
   `AutomaticImports` relationships intact after source reset, reconstruct const
   qualification from both cached const encodings, and publish cached script

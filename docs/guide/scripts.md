@@ -5,9 +5,10 @@ The game's compiled AngelScript lives in a precompiled cache,
 turns modules back into readable AngelScript, compiles complete source graphs or
 individual modules, and splices edited modules back in.
 
-This is reverse-engineering-stage tooling. It works, and the complete
-new-dialog path has been validated in game, but treat every step as
-experimental and keep backups.
+This is reverse-engineering-stage tooling. It works, and the current
+same-module Diego dialog path has been validated in game on BuildID `24878692`,
+but treat every step as experimental and keep backups. Compilation, bundle
+packaging, installation and observed runtime behavior remain separate claims.
 
 ## Reading the cache
 
@@ -251,6 +252,35 @@ gore as compile-module --op add --module MyMod.Dialog `
 | `--allow-new-symbols` | Retain minimal rows for classes/functions/names absent from the pristine cache. |
 | `-o, --out <PATH>` | The remapped 1-module mini-cache. |
 
+The high-level dialog scaffold uses the same compiler command in a more specific
+shape. A new root or direct sub-topic is appended to the **existing** shipped
+conversation module, so it is an edit with intentional new symbols:
+
+```powershell
+gore as compile-module --backend standalone --op edit `
+  --module Story.G1R.Conversation.Conversation_OC_STT_DIEGO `
+  --rel-path Story/G1R/Conversation/Conversation_OC_STT_DIEGO.as `
+  --source work/Conversation_OC_STT_DIEGO.as --work-dir work/.gore-as-work `
+  --allow-new-symbols -o work/MyDialogMod.mini.Cache --game "$GAME"
+```
+
+`gore dialog stage` prints that command and writes a script-only bundle spec.
+The current `dialog new-topic` root manifest contains no `dialog_topics` row and
+therefore adds no generated UE4SS component: the same-module root uses the
+game's native script discovery, while a direct sub-topic is reached through an
+authored `Subdialog` call in a shipped parent. The private conversation base is
+why neither shape should be turned into an isolated cross-module `--op add`.
+
+On BuildID `24878692`, strict standalone compilation, mini-cache packaging and
+deployment were followed by separate in-game observations of a selectable new
+Diego root and direct sub-topic. The same bounded campaign also observed a
+persisted inventory effect, explicit knowledge and quest state after save/load,
+a new localization/Ogg/`Say` path whose loopback correlated `0.763` with the
+source recording, and a manual rebuild of an existing four-child sub-menu. This
+qualifies those exact fixtures on that build, not arbitrary game APIs, other
+builds, or a complete-cache/cross-module deployment path. The practical limits
+are maintained in [AngelScript dialog authoring](dialog-authoring.md).
+
 `compile-module` is the CLI equivalent of Mod Studio's Compile action, and it
 uses the same `standalone-then-game` default. It resolves the embedded,
 catalogued package automatically. If fallback launches the game compiler, GORE
@@ -355,8 +385,9 @@ now preserves that distinction, reuses matching names, and fails closed if a
 prepared operand has no row. Do not rewrite those numeric operands by hand; the
 wire-level contract is in [`gore-as/FORMAT.md`](../../crates/gore-as/FORMAT.md#staticnames-indices-in-raw-and-prepared-minis).
 
-This composition path has one current live observation. On 2026-08-18 the
-GORE-authored Viper fixture rendered `[Gore probe] UI fixture`; `UE4SS.log`
+The separate low-level `dialog_topics` registration-adapter composition has one
+older live observation. On 2026-08-18 the GORE-authored Viper fixture rendered
+`[Gore probe] UI fixture`; `UE4SS.log`
 recorded `ARMED`, `CHOICE_PASS`, and `RENDER_PASS` with `exact_count=1`. The run
 used the PR #91-fixed app-local Core DLL. It was not a genuine third-party
 AngelScript mod or a three-way script conflict, and no save was written during
@@ -436,8 +467,8 @@ See [Bundling & deploying](bundles.md). Deploy splices the mini-cache into
 ## Related
 
 - [AngelScript dialog authoring](dialog-authoring.md) — the compiled topic
-  template, runtime evidence, safe test order, and the boundary between a
-  renderable new class and automatic topic discovery.
+  template, native same-module path, low-level legacy adapter, runtime evidence,
+  safe test order, and practical limits.
 - [Offline AngelScript default patching](angelscript-defaults.md) —
   `default-sites`, `patch-default`, `tag-map-sites`, `patch-tag-map`: changing
   proven scalar and GameplayTag-map defaults directly in the cache, without

@@ -191,6 +191,13 @@ gore voice add --archive "$VO" --path "GoreMods/MyMod/DIA_NEW.ogg" `
 - Unsafe paths, symlinks, encrypted entries, and resource-limit violations are
   rejected.
 
+One added Vorbis member is now proven beyond archive validation: the
+BuildID-`24878692` Diego fixture described under
+[Deployment reality check](#deployment-reality-check) resolved and played it
+from a newly authored `Say` line. That is evidence for that exact member and
+script/localization combination, not a promise that every invented path or
+codec will be selected by the game.
+
 These commands *create an archive*. They do not install it into the game — for
 that, use a [bundle](bundles.md).
 
@@ -307,15 +314,37 @@ gore voice replace --archive "$VO" `
 
 ## Deployment reality check
 
-`replace` targets an existing recording and is the established path. `add` is
-archive-safe, but whether the game actually resolves a brand-new voice path at
-runtime is still runtime-dependent — treat additions as experimental. Nothing
-below moves that: the run described here did not exercise `add` at all.
+Archive validation, bundle packaging, installation and audible runtime playback
+are separate claims. `replace` targets an existing recording; `add` creates a
+new archive member, which still needs authored script and localization that
+resolve that exact basename.
 
 A correct replacement is not the same as an audible one. The archive edit is
 verified; whether that recording is what the engine plays at the moment you are
 listening to is a separate question, and the intro above is the case where the
 answer is no.
+
+**Added member and newly authored line.**
+
+On BuildID `24878692`, one Diego same-module sub-topic crossed the complete
+path with two new localization ids and one new Vorbis member. Its compiled
+`Say` call referenced `GORE_DIEGO_NEWVOICE_24878692_11_00`; the bundle added
+
+`german_new/OldCamp/Diego/GORE_DIEGO_NEWVOICE_24878692_11_00.ogg`.
+
+Selecting the new option displayed the exact authored subtitle
+`[GORE-VOICE-TEST] Neue Diego-Sprachzeile mit neuem Voice-over.` and played the
+new recording. A system-loopback capture of that playback had normalized
+correlation `0.763` with the authored source recording. This is live evidence
+that this new localization-to-voice identity resolved and was audible on that
+build. It does not generalize to other archive directories, codecs, languages,
+speakers, game builds or arbitrary `Say` shapes.
+
+The menu id and spoken-line id each carried identical `german` and
+`german_new` text. The observation therefore proves the new ids were resolved,
+but it does not isolate which German generation won.
+
+**Existing replacements.**
 
 A replacement has now also been heard. On BuildID 24539464, with the game's
 voice language set to German, two entries of
@@ -344,8 +373,10 @@ and one install, with the toolkit built from commit 90940340. Two lines were
 checked, in German only — no other language, no other speaker, no second
 sitting. It establishes that the path works end to end on that build, on the
 two entries that were touched. It does not establish that a particular
-replacement of yours will be audible, and it says nothing about `add`. Nothing
-in this toolkit ever listens, and no test in the suite checks any of it.
+replacement of yours will be audible. The separate BuildID-`24878692` fixture
+above is the bounded evidence for `add`. GORE's archive and bundle commands do
+not listen automatically; that fixture's correlation came from an explicit
+live system-loopback capture, not from ordinary build or deploy success.
 
 ## Flag summary
 

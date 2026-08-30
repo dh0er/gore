@@ -196,17 +196,13 @@ one existing conversation module:
    this case.
 
 This combination passes the complete-default checker and the same-module
-new-class/remap/loadout oracles. On BuildID `24878692`, the real Payfine shape
-strictly compiled and remapped to a 17,085-byte mini-cache; its one-component,
-three-file offline bundle built and passed inspection. The corresponding
-Charlotte root-topic shape produced an 8,271-byte mini-cache and an inspected
-two-component, five-file offline bundle. Neither was deployed or started in the
-game. A current Brannok checkout plus a new same-module sub-topic likewise
-strictly compiled/remapped to a 104,047-byte mini-cache; its 104,448-byte,
-one-component, three-file offline bundle built and passed inspection. This
-Brannok oracle includes real decompiled `LocText` temporary `Say` calls,
-`Subdialog`, and cached cross-module class-value expressions. None of these
-topics has yet been shown or selected in game.
+new-class/remap/loadout oracles. Payfine, Charlotte and Brannok fixtures provide
+additional strict-standalone compile and inspected-bundle coverage. On BuildID
+`24878692`, Diego fixtures also crossed the native runtime boundary: a new root
+appeared and was selected twice without adapter insertion; a new direct
+sub-topic appeared, selected and dispatched its override; and an existing
+four-child sub-menu was rebuilt to five entries while preserving a shipped long
+`Act` and its return to the menu.
 
 `gore dialog new-topic` creates that same-module edit workspace directly. For
 a **root topic**:
@@ -216,27 +212,31 @@ gore dialog new-topic om_stt_viper_302 --caption-key STT_302_VIPER_WORK_INFO_15_
   --mod-name ViperWork -o ViperWork
 ```
 
-It resolves the conversation-private topic base, participant, an unused class
-name, and a vanilla sentinel; then it checks out the complete conversation,
-inserts the class into its owning namespace, and stores the registration in the
-edit manifest. Run
-`dialog check` and `dialog stage` on the output directory. The command does not
-emit an isolated `compile-module --op add` recipe: a private topic base from
-another module is not visible there, and separate add/edit mini-caches cannot
-depend on one another.
+It resolves the conversation-private topic base, participant and an unused
+class name; then it checks out the complete conversation and inserts the class
+into its owning namespace. Run `dialog check` and `dialog stage` on the output
+directory. The command does not emit an isolated `compile-module --op add`
+recipe: a private topic base from another module is not visible there, and
+separate add/edit mini-caches cannot depend on one another.
 
 For a real sub-menu addition, add
 `--subdialog-of UExistingParentTopic`. The parent must contain exactly one
 `Subdialog` call with an empty topic slot; the command fills that slot and adds
-the new class with `bIsSubTopic`. It refuses ambiguous or full calls.
+the new class with `bIsSubTopic`. It refuses ambiguous or full calls. One call
+has 20 child parameters, so there is no 21st slot, and the scaffold does not
+automatically restructure a saturated call.
 
-A new root class also needs its generated `dialog_topics` registration in the
-bundle spec. Automatic discovery of a new class into an already constructed
-`ConversationTopicSet` remains unproven; compilation alone does not register
-it. `check` binds that row to the exact newly added class, resolved participant
-and canonical vanilla sentinel. Conversely, every new direct topic must be
-either registered once or referenced once from a shipped `Subdialog` body, so
-renamed, deleted, duplicated or orphaned intent fails before `stage`.
+A new root remains an ordinary same-module script edit. In the live Diego test
+it appeared and was selectable while a present legacy adapter skipped as
+`sentinel-topic-missing`, then appeared again after the UE4SS proxy was removed.
+Native same-module discovery supplied it; `dialog_topics` registration is not a
+requirement of this workflow. `check` instead binds direct roots and sub-topics
+to their source shape: a root must not set `bIsSubTopic`, while a direct child
+must be referenced once from a shipped `Subdialog` body and set it true.
+
+`BuildSpec.dialog_topics` is retained as a separate historical low-level
+adapter surface for hand-authored bundles. It packages UE4SS insertion and its
+telemetry; it is not emitted as the normal `dialog new-topic` root recipe.
 
 Full-graph V2 gives one standalone compiler request the complete sealed base
 graph plus all coordinated add/edit/delete sources. That lets visible symbols in
@@ -275,14 +275,16 @@ These are distinct evidence steps:
    AngelScript with the compiler.
 2. `as compile-module --backend standalone` performs the strict offline compile
    and remap. It neither launches the game nor writes into the install.
-3. `mod build` packages the mini-cache, localization payload and, for a new
-   root, explicit registration. It does not deploy them.
+3. `mod build` packages the mini-cache and any separate localization or voice
+   payload. It does not deploy them. A native same-module root needs no UE4SS
+   component.
 4. `mod deploy` or Manager Apply changes the installation and requires the
    normal consent and recovery workflow.
-5. A natural in-game conversation is the runtime test. The Diego fixture proves
-   one same-module sub-menu path through selection and new override dispatch.
-   Existing root-adapter render evidence still does not prove root selection;
-   use a disposable or backed-up save and keep those claims separate.
+5. A natural in-game conversation is the runtime test. The Diego fixtures prove
+   a native same-module root, a direct new sub-topic, a representative four-to-
+   five-entry menu rebuild, one persistent inventory effect, one
+   `HideIfKnowsId` rule, one persistent quest and one new subtitle/voice pair.
+   Use a disposable or backed-up save and keep each observed effect separate.
 
 ## Conditions, in the game's own vocabulary
 
@@ -303,6 +305,12 @@ The rules are declarative and complete. The `visible when:` list is not a
 formula: it names what the script inspects, in the order it inspects it, and
 deliberately does not reconstruct the `and`/`or` between them. Read it as "these
 are the things that decide it", not as a condition you can evaluate.
+
+The current runtime proof includes the same rule family with an explicit ID:
+`Rules.HideIfKnowsId("gore_diego_quest_knowledge_24878692")` hid its option
+immediately after selection and after restart, and save-query found that exact
+knowledge ID on the hero. `PriorityRank` was changed only as part of a larger
+menu rebuild, so its isolated ordering effect remains unproven.
 
 ## What the tree does not tell you
 

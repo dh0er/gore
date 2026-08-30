@@ -250,7 +250,7 @@ TOOLS
   gore_find      Look an id, a class name or a display name up across every offline catalog.
   gore_catalog   Regenerate reflection models and item/NPC/knowledge catalogs from a game dump.
   gore_location  Check a waypoint or spot name before a script uses it. Offline, no install.
-  gore_dialog    Read and safely author dialog trees: full defaults, bodies, root/sub-menu topics.
+  gore_dialog    Read and safely author bounded same-module dialog edits: complete defaults, bodies, native roots/direct sub-topics.
   gore_project   Scaffold, compile and package a UE4SS Lua mod; install the shared Lua SDK.
   gore_loc       Localized text: decrypt the .lcache to JSON, edit it, re-encrypt.
   gore_audio     FMOD sound banks: list samples, extract to WAV, inject replacements, ship patches.

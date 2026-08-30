@@ -5,7 +5,42 @@ limits behind `gore as compile-module` dialog topics and the generated
 registration runtime. The user-facing authoring workflow is described in
 [Dialog authoring](../guide/dialog-authoring.md).
 
-## Proven runtime boundary
+## Current native runtime boundary
+
+On BuildID `24878692`, the tested new Diego root appended to its shipped
+conversation module was reached through the game's native script path. It was
+visible and selectable in two runs. In the first, a legacy UE4SS registration
+adapter was present but logged `sentinel-topic-missing` and never reached
+`ARMED`; in the second, the proxy was absent. The same root still appeared and
+selected normally. Current same-module root authoring therefore requires the
+script mini-cache, not `BuildSpec.dialog_topics` or UE4SS insertion.
+
+The same campaign also proved one new direct sub-topic, one persistent inventory
+effect, one explicit knowledge rule, one persistent quest, one new voice asset,
+and one representative existing-menu rebuild:
+
+- `[GORE TEST] Neuer Diego-Unterdialog` appeared in
+  `UChoiceDiegoKolonie`, selected, dispatched its new `Act` override, ended the
+  conversation and returned HUD/camera control.
+- A new option changed the hero's ore count from 0 to 1. The item was present
+  after quicksave and restart.
+- A topic guarded by
+  `Rules.HideIfKnowsId("gore_diego_quest_knowledge_24878692")` disappeared
+  immediately after selection and remained absent after restart. Save-query
+  found the exact knowledge ID on the hero.
+- A new Stonehenge quest displayed its toast and journal entry and remained in
+  `Running` state after restart.
+- A newly added subtitle and voice asset played from the new topic. System
+  loopback matched the authored source with normalized correlation `0.763`.
+- An existing four-child menu was rebuilt to five entries. The renamed shipped
+  topic still ran its original long `Act` and returned to the menu, and the new
+  topic was selectable.
+
+These are fixture-specific runtime observations. In particular, the menu edit
+changed `PriorityRank` together with caption and structure, so it does not
+isolate that field's ordering effect.
+
+## Historical low-level registration-adapter boundary
 
 The controlled Viper fixture and version 1 of the public
 `BuildSpec.dialog_topics` generator both validated this chain:
@@ -21,10 +56,10 @@ new UChoice subclass in the qualified fixture
   -> visible root-menu option
 ```
 
-That chain is runtime evidence for the registration adapter, not an isolated
-cross-module `--op add` recipe. The current deployable source workflow appends a
-new class to the existing conversation module and emits an edit mini-cache; the
-source/compile boundary is described below.
+That chain is historical runtime evidence for the low-level registration
+adapter, not an isolated cross-module `--op add` recipe and not a requirement of
+the current native root workflow. The current deployable source path appends a
+new class to the existing conversation module and emits an edit mini-cache.
 
 For one live conversation attempt the fail-closed observer recorded:
 
@@ -64,8 +99,7 @@ The next run changed only the authored `Caption` default of
 Conversation]`. The caption was visible, the option was selectable, selecting
 it ended the conversation, and player control returned. This proves that one
 reconstructed default survived checkout, strict compilation, remap, packaging,
-deployment and runtime selection. It does not by itself prove the gameplay
-semantics of `PriorityRank`, `Rules`, or the topic flags.
+deployment and runtime selection.
 
 Earlier failed runs exposed a full-module metadata bug rather than a dialog-
 default or new-symbol failure. Recompilation had replaced existing Unreal event
@@ -86,6 +120,35 @@ Neuer Diego-Unterdialog` option appeared in the native sub-menu opened by
 override, ended the conversation, and returned HUD and camera control. This is
 live compile, package, deployment, reachability, rendering, selection and
 override-dispatch evidence for that same-module sub-topic fixture.
+
+A new same-module root crossed the same boundary twice. During the first run a
+legacy registration adapter was installed, but it recorded
+`sentinel-topic-missing` and no `ARMED`, choice or render pass; the option was
+nevertheless visible and selectable. After removing the UE4SS proxy, the same
+option appeared and selected again. This isolates the shipped script system as
+the source of root discovery for this fixture.
+
+Three effect fixtures then exercised save state. An inventory option raised the
+hero's ore count from 0 to 1, and the item survived quicksave/restart. A
+knowledge option authored
+`Rules.HideIfKnowsId("gore_diego_quest_knowledge_24878692")`; it disappeared
+immediately after selection and remained absent after restart, and save-query
+found that exact ID on the hero. A Stonehenge quest option displayed its quest
+toast and journal entry and remained `Running` after restart. Together these
+prove the exercised `Rules`/flag and effect calls, not every possible native
+quest, inventory or knowledge API.
+
+The new-voice fixture displayed its authored subtitle and played its newly
+packaged voice member. A system-loopback capture had normalized correlation
+`0.763` with the authored source, establishing audible delivery rather than
+inferring playback from subtitle duration alone.
+
+The structural fixture changed one existing Diego menu from four children to
+five. It renamed a shipped entry, adjusted its priority, retained its long
+shipped `Act`, and appended a new option. In game the old `Act` completed and
+returned to the menu, and the new option was selectable. Because priority,
+caption and membership changed together, `PriorityRank` ordering remains
+unisolated.
 
 ## BuildID 24539464 version-3 live observation
 
@@ -214,11 +277,17 @@ boundary. Build `24539464` instead has the separate version-3 live observation
 recorded above; it does not convert either historical candidate into a
 qualified artifact.
 
-## Discovery versus insertion
+## Native discovery versus the historical insertion adapter
 
-The runtime proof establishes that the added class is valid and renderable. It
-does **not** establish that every class in a new module is automatically added
-to an already constructed NPC `ConversationTopicSet`.
+The current Diego proof establishes native discovery for a root class appended
+to that NPC's shipped conversation module. It does **not** establish discovery
+for a class in a brand-new module, a brand-new NPC conversation, or a symbol
+graph split across modules.
+
+The remainder of this section documents the separate historical
+`BuildSpec.dialog_topics` insertion adapter. It is retained as a low-level
+bundle surface and evidence record; it is not emitted as a prerequisite for the
+current `gore dialog new-topic` same-module root path.
 
 The reviewed fixture rules are now parameterized by `BuildSpec.dialog_topics`;
 there are no Viper or Asghan constants in the generated runtime. During each
@@ -258,36 +327,43 @@ writes a save/quest/knowledge field.
 This list deliberately omits the dialog edits and runtime behavior already
 shown to work.
 
-Existing-topic edits and same-module sub-topics are script-cache changes and do
-not require UE4SS. UE4SS is involved only when a new root uses GORE's explicit
-`dialog_topics` registration adapter.
+Existing-topic edits, same-module roots and same-module sub-topics are native
+script-cache changes and do not require UE4SS. `dialog_topics` is a separate
+historical low-level adapter surface.
 
 ### Potentially possible, but not proven in game
 
-- A new same-module root topic appears and can be selected on the current build,
-  even when GORE's explicit registration adapter is present.
-- Authored `PriorityRank`, `Rules`, and topic-flag changes have their intended
-  gameplay effect. The current live default-edit proof changed only `Caption`.
-- New-topic quest, knowledge, inventory, voice-over, and save-persistence
-  behavior works as authored.
-- A newly authored root is discovered without explicit registration.
-- A manually restructured full or unusually complicated sub-menu behaves
-  correctly.
-- The exact native ordering between knowledge rules, visibility checks,
-  participant checks, and UI relevance matches the inferred source model.
-- Game builds other than the separately recorded live proofs behave identically;
-  for the root-registration adapter, the same remains unproven for other UE4SS
-  builds and combinations.
+- The isolated ordering effect of an authored `PriorityRank` change. The live
+  structural fixture changed several inputs together.
+- Several new sibling topics added in one edit to the same shipped module. The
+  current campaign proved one new root and one new direct sub-topic separately,
+  not a flat multi-new-topic set.
+- Topic-owned helper fields or additional helper methods on a new class. The
+  checked source/compiler path admits them, but no live fixture exercised them.
+- Runtime behavior of topic flags other than the `bIsSubTopic` placement used
+  by the proven direct sub-topic.
+- A manual reorder, removal or replacement inside an actually saturated
+  20-child `Subdialog` call. The live structural fixture was complicated but
+  had four shipped children before it was rebuilt to five.
+- Deploying and running the raw complete-cache output of FullGraph V2. Its
+  coordinated compilation is an offline compiler capability. Manager can
+  import the result as a generic whole-file replacement, but the normal dialog
+  stage/bundle workflow consumes independently base-bound minis and does not
+  compose that artifact; the raw-cache runtime path is unproven.
+- Game builds other than BuildID `24878692`. Older adapter observations do not
+  qualify the current native source path on those builds.
 
 ### Not technically supported by the current GORE pipeline
 
 - Creating a complete conversation for an NPC that has no matching shipped
   conversation.
-- Packaging one new dialog tree across multiple script modules as a normal
-  deployable dialog bundle.
-- Creating a completely new multi-level sub-menu tree in which new topics open
-  further new topics; a new sub-topic must currently attach directly to a
-  shipped topic.
+- Packaging a normal deployable mini-cache dialog whose new symbol dependency
+  comes from another script module.
+- Creating a safe new-to-new multi-level tree in which one newly authored topic
+  opens another newly authored topic; a new sub-topic must currently attach
+  directly to a shipped parent.
+- Adding a 21st child to one `Subdialog` call, or automatically restructuring a
+  full 20-slot call with `dialog new-topic`.
 - Changing the base class, fields, member set, or method signatures of a shipped
   topic.
 
@@ -352,23 +428,22 @@ not require UE4SS. UE4SS is involved only when a new root uses GORE's explicit
   resolved together. It produces a complete cache and full-graph receipt. The
   ordinary bundle composer consumes module mini-caches, so that artifact is an
   offline compiler capability, not a dialog packaging or deployment recipe.
-- A newly compiled root topic is not automatically registered. Discovery into
-  an already constructed `ConversationTopicSet` remains unproven; a root needs
-  an explicit `dialog_topics` participant/topic/sentinel adapter. The
-  same-module sub-topic path uses authored `Subdialog` wiring; the Diego fixture
-  proves its in-game appearance, selection and new override dispatch. The
-  offline gate binds a
-  root row to the exact new class, base participant and selected vanilla
-  sentinel, and requires every new direct topic to be exactly one registered
-  root or one sub-topic referenced by a shipped class.
+- A new root appended to Diego's shipped conversation module was discovered,
+  rendered and selected natively with no adapter insertion, including one run
+  with the UE4SS proxy absent. A same-module sub-topic instead uses authored
+  `Subdialog` wiring, and the Diego fixture proves its in-game appearance,
+  selection and new override dispatch. The supported source gate distinguishes
+  these shapes by `bIsSubTopic` and a direct child reference from one shipped
+  parent. `BuildSpec.dialog_topics` remains only the separate low-level adapter
+  contract documented above.
 - Source checking, strict standalone compilation, bundle packaging, deployment
   and runtime observation are separate claims. On BuildID `24878692`, the
-  source-identical complete Diego recompile, the Caption-only edit and the new
-  same-module Diego sub-topic crossed the live runtime boundary. The earlier
-  Charlotte, Payfine and Brannok fixtures stop at offline build/inspection. The
-  historical registered-root fixture proves a separate render path. None of
-  these facts proves recorded voice or selection-side persistence for a new
-  topic.
+  source-identical complete Diego recompile, Caption edit, native root, direct
+  sub-topic, persistent ore/knowledge/quest effects, new voice asset and
+  four-to-five-entry menu rebuild all crossed the live boundary. Earlier
+  Charlotte, Payfine and Brannok fixtures stop at offline build/inspection, and
+  the historical registered-root fixture proves a separate adapter render
+  path. None of those older facts is needed to claim the current native root.
 - Existing vanilla defaults also retain the separate offline, copy-on-write
   [`default-sites` / `patch-default` scalar path](../guide/angelscript-defaults.md).
   It re-resolves exact selectors and admits only a unique branch-free direct
