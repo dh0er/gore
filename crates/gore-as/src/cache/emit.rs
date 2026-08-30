@@ -1428,7 +1428,7 @@ fn emit_function_ctor(
     };
     let (body, _) = rewrite_value_temporaries(&body, &inferred_locals);
     let body = drop_dead_stores(&body);
-    let body = fold_literal_temporaries(&body, refs);
+    let body = fold_literal_temporaries(&body, refs, &declared_locals);
     let body = fold_constant_comparisons(&body);
     let body = fold_double_negations(&body);
     let body = fold_negated_stores(&body);
@@ -1453,7 +1453,14 @@ fn emit_function_ctor(
     );
     // Runs after the producers have moved into their readers: only then is the value arm of a
     // short circuit the single assignment it was in source.
-    let body = fold_short_circuits(&body, &proven_locals, refs, fields, &HashMap::new());
+    let body = fold_short_circuits(
+        &body,
+        &proven_locals,
+        refs,
+        fields,
+        &HashMap::new(),
+        class_name,
+    );
     let body = join_short_circuit_chains(&body);
     // Again, now that the chain IS one expression: the negation fold ran before the short
     // circuits were recovered, so `X = A && B; X = !X;` was still two branches then. Left as two
@@ -2056,7 +2063,14 @@ fn emit_function_ctor(
         // Again on the joined text: a short circuit whose CONDITION is itself a short circuit is
         // only one condition once the inner one has folded, and the pass that folds it ran before
         // that happened. The outer arm then still stands as an if/else over a bool carrier.
-        let rendered = fold_short_circuits(&rendered, &proven_locals, refs, fields, &path_roots);
+        let rendered = fold_short_circuits(
+            &rendered,
+            &proven_locals,
+            refs,
+            fields,
+            &path_roots,
+            class_name,
+        );
         let rendered = join_short_circuit_chains(&rendered);
         let rendered = rejoin_short_circuit_chains(&rendered);
         let rendered =
@@ -6469,7 +6483,11 @@ fn expression_start(line: &str, end: usize) -> Option<usize> {
 /// a wider store plus a narrowing conversion (`SetV4` + `iTOb` where vanilla has `SetV1`). Fold
 /// the literal into its use. A literal has no side effect and no evaluation order, so the only
 /// thing this can change is which slot the recompiler allocates.
-fn fold_literal_temporaries(body: &str, refs: &RefResolver) -> String {
+fn fold_literal_temporaries(
+    body: &str,
+    refs: &RefResolver,
+    locals: &BTreeMap<i32, String>,
+) -> String {
     let trailing_newline = body.ends_with('\n');
     let lines: Vec<&str> = body.lines().collect();
     let mut folded: Vec<String> = lines.iter().map(|line| (*line).to_owned()).collect();
@@ -6516,6 +6534,37 @@ fn fold_literal_temporaries(body: &str, refs: &RefResolver) -> String {
             let literal = assignment_rhs_for(&folded[definition], &ident)
                 .expect("the definition matched above")
                 .to_owned();
+            // A loop carrying the next definition back to this read means the read does not see
+            // the literal on every pass. That only makes the slot a NAME the source wrote if what
+            // comes back is a value: a slot whose next store is another constant is the scratch
+            // the compiler reuses for two of them, and folding it in was right. So the witness is
+            // the carried write itself — `best = candidate;` and not `flag = 0;`.
+            let carries_a_value = folded.get(region_end).is_some_and(|line| {
+                assignment_rhs_for(line, &ident).is_some_and(|rhs| !is_foldable_literal(rhs))
+            });
+            // …and the read has to be the COMPARISON that running value exists for. A slot read
+            // as an argument is a flag the callee is handed, and a `true` folded into that
+            // argument is right however many times the loop runs.
+            let read_is_a_comparison = [" < ", " > ", " <= ", " >= "].iter().any(|operator| {
+                folded[use_line].contains(&format!("{ident}{operator}"))
+                    || folded[use_line].contains(&format!("{operator}{ident}"))
+            });
+            if carries_a_value
+                && read_is_a_comparison
+                && a_loop_carries_the_write_back_to_the_read(&folded, use_line, region_end)
+            {
+                let declaration_restates_it = folded[..definition]
+                    .iter()
+                    .all(|line| count_ident(line, &ident) == 0)
+                    && locals
+                        .get(&slot)
+                        .is_some_and(|ty| is_primitive(ty) && default_for(ty) == literal);
+                if declaration_restates_it {
+                    folded[definition].clear();
+                    dropped = true;
+                }
+                continue;
+            }
             folded[use_line] = rename_ident(&folded[use_line], &ident, &literal);
             folded[definition].clear();
             dropped = true;
@@ -6533,6 +6582,54 @@ fn fold_literal_temporaries(body: &str, refs: &RefResolver) -> String {
         joined.push('\n');
     }
     joined
+}
+
+/// True when a loop carries the write at `write` back around to the read at `read`.
+///
+/// [`fold_literal_temporaries`] owns a slot's value from one definition to the next by LINE
+/// NUMBER, and a loop's back edge runs through that span backwards: the write standing below the
+/// read is what the read sees on every pass after the first. The compiler agrees — it gave the
+/// compare the slot, not the literal a folded constant would need. Folding it in rewrites
+/// `if (best < candidate)` into `if (0.0 < candidate)`, which is a different program: five
+/// running-maximum functions in this tree, each a `float` seeded at zero and compared against the
+/// element it is looking for.
+///
+/// The braces are the emitter's own — a block opens and closes on lines that hold nothing else —
+/// so a standalone `{` behind a `for`/`while`/`do` header is a loop body and the matching `}` is
+/// where it ends. Braces that do not balance are braces this cannot read, and it refuses.
+fn a_loop_carries_the_write_back_to_the_read(lines: &[String], read: usize, write: usize) -> bool {
+    if write <= read {
+        return false;
+    }
+    let mut open: Vec<(usize, bool)> = Vec::new();
+    let mut heading: Option<usize> = None;
+    for (at, line) in lines.iter().enumerate() {
+        match brace_net(line) {
+            1 => {
+                let heads_a_loop = heading.is_some_and(|head| {
+                    let text = lines[head].trim_start();
+                    text.starts_with("for") || text.starts_with("while") || text.starts_with("do")
+                });
+                open.push((at, heads_a_loop));
+                heading = None;
+            }
+            -1 => {
+                let Some((start, heads_a_loop)) = open.pop() else {
+                    return true;
+                };
+                if heads_a_loop && start < read && at > write {
+                    return true;
+                }
+                heading = None;
+            }
+            _ => {
+                if !line.trim().is_empty() {
+                    heading = Some(at);
+                }
+            }
+        }
+    }
+    !open.is_empty()
 }
 
 /// True when the ident's only appearance is somewhere a literal is certainly legal: the whole
@@ -6861,7 +6958,7 @@ fn inline_temporary_into(
                 // A `return` is refused because a returned REFERENCE may not be a temporary.
                 // A bool is not one, and the cache can say so.
                 || (lines[index].trim().starts_with("return ")
-                    && renders_a_bool(&value, locals, refs, fields, &HashMap::new())))
+                    && renders_a_bool(&value, locals, refs, fields, &HashMap::new(), None)))
                 && (same_typed_own_field(&value, temp, locals, fields)
                     || is_call_result(&value)
                     || names_a_static_class(&value, temp, locals)
@@ -6881,7 +6978,7 @@ fn inline_temporary_into(
                 || same_typed_own_field(&value, temp, locals, fields)
                 || names_a_static_class(&value, temp, locals)
                 || (temporary_type(locals, temp) == Some("bool")
-                    && renders_a_bool(&value, locals, refs, fields, &HashMap::new()))
+                    && renders_a_bool(&value, locals, refs, fields, &HashMap::new(), None))
         }
     };
     if !movable {
@@ -7518,7 +7615,7 @@ fn fold_condition_temporaries(
     // A field of the class carries its type in the class's own map, which `renders_a_bool` does
     // not read.
     let is_a_bool = |value: &str| {
-        renders_a_bool(value, locals, refs, fields, &HashMap::new())
+        renders_a_bool(value, locals, refs, fields, &HashMap::new(), None)
             || value
                 .strip_prefix("this.")
                 .and_then(|field| fields?.get(field))
@@ -7559,7 +7656,7 @@ fn fold_condition_temporaries(
                 })
                 .filter(|_| {
                     temporary_type(locals, &name) == Some("bool")
-                        && renders_a_bool(&value, locals, refs, fields, &HashMap::new())
+                        && renders_a_bool(&value, locals, refs, fields, &HashMap::new(), None)
                 });
             // Or the slot is an INT the emitter compares against zero to read as a bool. Where
             // the value is a bool, that comparison is the int slot's doing and nothing else's:
@@ -10719,11 +10816,26 @@ fn chain_inlined_cast_operands(f: &Func) -> HashSet<i32> {
         return HashSet::new();
     };
     let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
-    let freed: HashSet<i32> = instrs
-        .iter()
-        .filter(|ins| ins.op.name == "FreeNullV8")
-        .map(&w0)
-        .collect();
+    // The release is what FREED the slot for this cast — a temporary died there, which is the
+    // whole witness — so it stands in front of the cast, not behind it. What ties it to this cast
+    // rather than to some other life of the same slot is that no OTHER cast wrote that slot: then
+    // the only cast the release can have made room for is this one. A slot two casts share is
+    // left alone.
+    let mut releases: HashMap<i32, Vec<usize>> = HashMap::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if ins.op.name == "FreeNullV8" {
+            releases.entry(w0(ins)).or_default().push(at);
+        }
+    }
+    let mut cast_destinations: HashMap<i32, usize> = HashMap::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if ins.op.name != "TYPEID" {
+            continue;
+        }
+        if let Some(destination) = instrs.get(at + 1).filter(|ins| ins.op.name == "PSF") {
+            *cast_destinations.entry(w0(destination)).or_default() += 1;
+        }
+    }
     let mut out = HashSet::new();
     for (at, ins) in instrs.iter().enumerate() {
         if ins.op.name != "TYPEID" {
@@ -10737,7 +10849,12 @@ fn chain_inlined_cast_operands(f: &Func) -> HashSet<i32> {
             continue;
         };
         let operand = w0(operand);
-        if !freed.contains(&w0(destination)) || operand <= 0 {
+        let destination = w0(destination);
+        let this_cast_owns_the_release = cast_destinations.get(&destination) == Some(&1)
+            && releases
+                .get(&destination)
+                .is_some_and(|at_list| at_list.iter().any(|release| *release < at));
+        if !this_cast_owns_the_release || operand <= 0 {
             continue;
         }
         out.insert(operand);
@@ -10887,6 +11004,14 @@ fn lead_with_the_declaration(body: &str, slot: Option<i32>) -> String {
     // it would lift it back to function scope and lose the per-iteration construction the sink
     // recovered.
     if indent_of(&lines[at]).len() > indent_of(&lines[head]).len() {
+        return body.to_owned();
+    }
+    // The witness names a SLOT, and the first instruction pair is the first life of it. Where the
+    // text still carries another life, that pair says nothing about which of them was declared
+    // first, and moving the wrong one runs a constructor ahead of the call it belongs behind.
+    if lines.iter().any(|line| {
+        count_ident(line, &format!("{ident}_2")) > 0 || count_ident(line, &format!("{ident}_3")) > 0
+    }) {
         return body.to_owned();
     }
     let declaration = lines.remove(at);
@@ -12468,12 +12593,15 @@ fn fold_short_circuits(
     refs: &RefResolver,
     fields: Option<&HashMap<String, String>>,
     roots: &HashMap<String, String>,
+    class_name: Option<&str>,
 ) -> String {
     let lines: Vec<&str> = body.lines().collect();
     let mut kept: Vec<String> = Vec::new();
     let mut at = 0usize;
     while at < lines.len() {
-        if let Some((folded, after)) = short_circuit(&lines, at, locals, refs, fields, roots) {
+        if let Some((folded, after)) =
+            short_circuit(&lines, at, locals, refs, fields, roots, class_name)
+        {
             kept.push(folded);
             at = after;
             continue;
@@ -12497,6 +12625,7 @@ fn short_circuit(
     refs: &RefResolver,
     fields: Option<&HashMap<String, String>>,
     roots: &HashMap<String, String>,
+    class_name: Option<&str>,
 ) -> Option<(String, usize)> {
     let condition = lines.get(at)?.trim().strip_prefix("if (")?.strip_suffix(')')?;
     if lines.get(at + 1)?.trim() != "{" {
@@ -12572,7 +12701,12 @@ fn short_circuit(
     // A PARAMETER carries its type in the signature, not in the slot table: `const bool
     // bIsImmortal` is as much a bool as any local, and asking only the locals left the outer arm
     // of `A || bIsImmortal` standing as an if/else over a carrier.
-    let value_is_bool = renders_a_bool(&value, locals, refs, fields, roots)
+    // And a field declared on a NATIVE ancestor carries its type in the Binds table, not in the
+    // class's own map: `this.bShouldExitState` is a bool `UCharacterAIState` wrote down, four
+    // script supers above the class that reads it, and asking only the script hierarchy left
+    // `A || this.bShouldExitState` standing as an if/else over a carrier in both overrides of
+    // `TryConfrontCriminal`.
+    let value_is_bool = renders_a_bool(&value, locals, refs, fields, roots, class_name)
         || roots.get(value.as_str()).is_some_and(|ty| ty == "bool");
     if temporary_type(locals, &target) != Some("bool") || !value_is_bool {
         sc_reject(
@@ -12723,13 +12857,50 @@ fn turned_around(condition: &str) -> String {
     format!("!({condition})")
 }
 
+/// The type of `this.<field>` where the field was declared not on the class but past the point
+/// where the script hierarchy ends. `class_field_types` already merges every ancestor the script
+/// cache knows, walking `super` until the name it is handed is one no module declares — so a
+/// field still missing from that map was written down in the engine, on the native class the last
+/// script super names. `bShouldExitState` is the case measured: `UAIState_InvestigateAlarm`
+/// climbs four script supers to `UGothicCharacterAIState`, whose super `UCharacterAIState` is a
+/// name and nothing else to the script cache. The Binds table is where that class is written
+/// down, and it is keyed by the exact class with no ancestry of its own, so the walk has to
+/// arrive at the right name before it asks.
+///
+/// Every step is a step the cache itself recorded, and the walk stops the moment it runs out of
+/// them: a class the hierarchy does not name, a class the Binds table has nothing to say about,
+/// or the 64 steps past which a super chain is not a chain. Where no Binds profile was loaded at
+/// all there is no table to ask and this answers nothing, which is the same silence. Nothing is
+/// guessed about a name that does not resolve, because the answer decides whether a value may
+/// become an operand of `||`, and an operand that is not a bool does not merely fail to
+/// compile — it takes the compiler down.
+fn inherited_native_field_type<'a>(
+    refs: &'a RefResolver,
+    class_name: Option<&str>,
+    field: &str,
+) -> Option<&'a str> {
+    let class = class_name?;
+    if let Some(ty) = refs.native_field_value_type(class, field) {
+        return Some(ty);
+    }
+    let mut current = refs.class_super_of(class)?;
+    for _ in 0..64 {
+        if let Some(ty) = refs.native_field_value_type(current, field) {
+            return Some(ty);
+        }
+        current = refs.class_super_of(current)?;
+    }
+    None
+}
+
 /// Whether a rendered value is a bool: a slot the type table calls one, a bool literal, or a call
 /// every declaration of that name returns bool from. An operand that is not one may not carry a
 /// `&&` — and the compiler does not merely refuse it, it goes down.
 /// The declared type a member PATH resolves to, walking it one segment at a time.
 ///
-/// The first segment names either `this` — whose members are the class's own field map — or a
-/// local or parameter, whose type `roots` carries. Every further segment is a field of the type
+/// The first segment names either `this` — whose members are the class's own field map, and
+/// failing that the native ancestor the map stops short of — or a local or parameter, whose type
+/// `roots` carries. Every further segment is a field of the type
 /// the previous one resolved to, answered by the script class table or, failing that, by the
 /// native field table. A segment that does not resolve ends the walk: this answers only what it
 /// can prove, because the caller uses the answer to decide whether a value may become an operand
@@ -12739,6 +12910,7 @@ fn member_path_type(
     roots: &HashMap<String, String>,
     fields: Option<&HashMap<String, String>>,
     refs: &RefResolver,
+    class_name: Option<&str>,
 ) -> Option<String> {
     if value.contains(['(', ')', '[', ']', ' ', '\u{1}', '\u{2}']) {
         return None;
@@ -12748,7 +12920,10 @@ fn member_path_type(
     let mut ty = match head {
         "this" => {
             let first = parts.next()?;
-            fields?.get(first)?.clone()
+            match fields.and_then(|map| map.get(first)) {
+                Some(ty) => ty.clone(),
+                None => inherited_native_field_type(refs, class_name, first)?.to_owned(),
+            }
         }
         _ => roots.get(head)?.clone(),
     };
@@ -12768,6 +12943,7 @@ fn renders_a_bool(
     refs: &RefResolver,
     fields: Option<&HashMap<String, String>>,
     roots: &HashMap<String, String>,
+    class_name: Option<&str>,
 ) -> bool {
     if matches!(value, "true" | "false") || temporary_type(locals, value) == Some("bool") {
         return true;
@@ -12783,19 +12959,26 @@ fn renders_a_bool(
     // once the path is walked segment by segment. Without the walk, `local_46.bWitnessIsGuildOwner`
     // is an unknown, the arm stays an if/else over a carrier, and the copy that costs is ours.
     // Measured: 86 such arms still stand, and only two of them are a bare `this.<field>`.
-    if member_path_type(value, roots, fields, refs).as_deref() == Some("bool") {
+    if member_path_type(value, roots, fields, refs, class_name).as_deref() == Some("bool") {
         return true;
     }
     // A negation and a comparison are bools whatever they wrap, and a fully parenthesized value
     // is whatever it holds.
     if let Some(negated) = value.strip_prefix('!') {
-        return renders_a_bool(negated, locals, refs, fields, roots);
+        return renders_a_bool(negated, locals, refs, fields, roots, class_name);
     }
     if value.starts_with('(')
         && matching_paren(value, 0) == Some(value.len() - 1)
         && value.len() > 2
     {
-        return renders_a_bool(&value[1..value.len() - 1], locals, refs, fields, roots);
+        return renders_a_bool(
+            &value[1..value.len() - 1],
+            locals,
+            refs,
+            fields,
+            roots,
+            class_name,
+        );
     }
     if [" == ", " != ", " < ", " > ", " <= ", " >= ", " && ", " || "]
         .iter()
