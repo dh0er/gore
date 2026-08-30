@@ -248,8 +248,8 @@ minis. One add mini cannot provide symbols to a separate edit mini, and the
 bundle composer does not turn a FullGraph cache into a dialog-mini deployment.
 Keeping the new class and the rewired `Subdialog` in the same existing module is
 the supported mini-cache shape. Its compile/remap and offline packaging path is
-proven on Payfine and Brannok; the new sub-topic's appearance and selection in
-game are not.
+proven on Payfine and Brannok; Diego additionally proves native in-game
+appearance, selection and new override dispatch.
 
 ## Compile, package, deploy, prove
 
@@ -279,9 +279,10 @@ These are distinct evidence steps:
    root, explicit registration. It does not deploy them.
 4. `mod deploy` or Manager Apply changes the installation and requires the
    normal consent and recovery workflow.
-5. A natural in-game conversation is the runtime test. Existing adapter render
-   evidence does not yet prove selection or the new sub-menu path; use a
-   disposable or backed-up save and keep those claims separate.
+5. A natural in-game conversation is the runtime test. The Diego fixture proves
+   one same-module sub-menu path through selection and new override dispatch.
+   Existing root-adapter render evidence still does not prove root selection;
+   use a disposable or backed-up save and keep those claims separate.
 
 ## Conditions, in the game's own vocabulary
 

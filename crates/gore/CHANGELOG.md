@@ -40,7 +40,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   104,448-byte one-component/three-file bundle. Those three fixtures were not
   deployed or game-tested. A later same-module sub-topic strictly compiled to a
   353,402-byte mini-cache; its 353,811-byte bundle was deployed successfully
-  through Mod Manager, but runtime selection was not observed. Separate
+  through Mod Manager. In game, `[GORE TEST] Neuer Diego-Unterdialog` appeared
+  in `UChoiceDiegoKolonie`'s native sub-menu, was selected, ran its new `Act`
+  override, ended the conversation and returned HUD and camera control. Separate
   add/edit minis cannot depend on one another; full-graph
   cross-module compilation emits a complete cache and is not a normal dialog-
   bundle recipe.
@@ -49,8 +51,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   exact new class, base participant and vanilla sentinel, and reject stale or
   orphaned root/sub-topic intent. Offline source checking, strict
   compilation, packaging, deployment and runtime evidence are reported as
-  separate stages; runtime reachability and selection of a newly authored topic
-  remain to be proven.
+  separate stages. Runtime reachability and selection are proven for the Diego
+  same-module sub-topic fixture; newly authored roots remain render-only and
+  unselected in the current evidence.
 - Qualify existing-module dialog editing live on BuildID `24878692` against
   pristine Shipping cache SHA-256
   `7A18F954E32AF30FC24AE3A66EA35D3B5CB98560C8F5083C7846FC9CE1D77511`.

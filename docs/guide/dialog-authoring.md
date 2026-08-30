@@ -18,9 +18,9 @@ of that page, not a second claim.
 | | |
 |---|---|
 | **Shown in game on the current build** | On BuildID `24878692`, against pristine Shipping cache SHA-256 `7A18F954E32AF30FC24AE3A66EA35D3B5CB98560C8F5083C7846FC9CE1D77511`, a source-identical full recompile of Diego's complete conversation module ran normally in game. A second full-module edit changed only `UChoiceDiegoExitGamestart.Caption`; `[Forced Conversation]` was visible and selectable, selecting it ended the conversation, and player control returned. This proves the existing-module source round trip, one authored `Caption` default, selection, `EndConversation`, and control recovery for that fixture. |
-| **New same-module sub-topic** | On the same build, strict standalone compilation produced a 353,402-byte mini-cache, its bundle was 353,811 bytes, and Mod Manager deployed it successfully. Runtime selection of the new option was not observed. Compilation, packaging and deployment are proven; selection is not. |
+| **New same-module sub-topic** | On the same build, strict standalone compilation produced a 353,402-byte mini-cache, its bundle was 353,811 bytes, and Mod Manager deployed it successfully. The new `[GORE TEST] Neuer Diego-Unterdialog` option appeared in `UChoiceDiegoKolonie`'s native sub-menu, was selected, ran its newly compiled `Act` override, ended the conversation, and returned HUD and camera control. This proves compilation, packaging, deployment, reachability, rendering, selection and override dispatch for that fixture. |
 | **Earlier registration-adapter proof** | An authored root topic rendered in a real conversation on Gothic 1 Remake **1.0.3**. On 2026-08-18, runtime version 3 also rendered `[Gore probe] UI fixture` on BuildID `24539464` and logged `ARMED`, `CHOICE_PASS`, and `RENDER_PASS` with `exact_count=1`; neither proof selected the new fixture. |
-| **Not certified by the current Diego proof** | The individual runtime effect of authored `PriorityRank`, `Rules`, or topic flags; any newly authored root or sub-topic; authored knowledge, quest or inventory effects; recorded voice on a new topic; or selection-side persistence. |
+| **Not certified by the current Diego proof** | The individual runtime effect of authored `PriorityRank`, `Rules`, or topic flags; any newly authored root; authored knowledge, quest or inventory effects; recorded voice on a new topic; or selection-side persistence. |
 | **Not qualified at all** | Steam build `24340829`, the exact frozen runtime-version-3 artifact for older build `24169431`, other game builds, and — for the root-registration adapter only — game/UE4SS combinations other than the separately recorded proofs. Existing-topic edits and same-module sub-topics have no UE4SS dependency. |
 | **Unproven** | Automatic discovery: that a newly authored root class reaches an already constructed `ConversationTopicSet` without explicit registration. |
 
@@ -34,7 +34,6 @@ produce.
 
 - A root option produced by the current same-module authoring path actually
   appears and can be selected.
-- A new same-module sub-menu option actually opens and can be selected.
 - An authored change to `PriorityRank`, `Rules` or a topic flag has the intended
   gameplay effect. The same default-authoring path accepts these fields, but the
   current live proof changed only `Caption`.
@@ -195,8 +194,11 @@ topic.
 
 A separate new same-module sub-topic on that build strictly compiled to a
 353,402-byte mini-cache. Its bundle was 353,811 bytes and Mod Manager deployed
-it successfully. Runtime selection of the new topic was not observed, so the
-proof stops at deployment with respect to gameplay.
+it successfully. The option `[GORE TEST] Neuer Diego-Unterdialog` appeared in
+the native sub-menu opened by `UChoiceDiegoKolonie`, was selected, ran the new
+topic's `Act` override, ended the conversation, and returned HUD and camera
+control. This is live evidence for the complete same-module sub-topic path on
+that fixture, including new-symbol remap and native override dispatch.
 
 Earlier offline compiler coverage on the same BuildID produced a 17,085-byte
 Payfine same-module sub-topic mini-cache, an 8,271-byte Charlotte same-module

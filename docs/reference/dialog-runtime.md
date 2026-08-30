@@ -80,9 +80,12 @@ declarations.
 
 A separate same-module new-sub-topic fixture on BuildID `24878692` completed
 strict standalone compilation to a 353,402-byte mini-cache. Its bundle was
-353,811 bytes, and Mod Manager deployed it successfully. Runtime
-selection of the option was not observed. This is compile, package and
-deployment evidence only; deployment does not prove selection.
+353,811 bytes, and Mod Manager deployed it successfully. The new `[GORE TEST]
+Neuer Diego-Unterdialog` option appeared in the native sub-menu opened by
+`UChoiceDiegoKolonie`. Selecting it dispatched the new topic's compiled `Act`
+override, ended the conversation, and returned HUD and camera control. This is
+live compile, package, deployment, reachability, rendering, selection and
+override-dispatch evidence for that same-module sub-topic fixture.
 
 ## BuildID 24539464 version-3 live observation
 
@@ -263,8 +266,6 @@ not require UE4SS. UE4SS is involved only when a new root uses GORE's explicit
 
 - A new same-module root topic appears and can be selected on the current build,
   even when GORE's explicit registration adapter is present.
-- The deployed new same-module sub-topic appears in its parent menu and can be
-  selected.
 - Authored `PriorityRank`, `Rules`, and topic-flag changes have their intended
   gameplay effect. The current live default-edit proof changed only `Caption`.
 - New-topic quest, knowledge, inventory, voice-over, and save-persistence
@@ -338,8 +339,9 @@ not require UE4SS. UE4SS is involved only when a new root uses GORE's explicit
   its 104,448-byte one-component/three-file offline bundle built and passed
   inspection. A later same-module sub-topic on the same build produced a
   353,402-byte mini-cache and a 353,811-byte bundle that Mod Manager deployed
-  successfully; its runtime selection was not observed. This does not
-  authorize reparenting or changing the
+  successfully. In game it appeared in `UChoiceDiegoKolonie`'s native sub-menu,
+  was selected, ran the new `Act` override, ended the conversation and returned
+  HUD and camera control. This does not authorize reparenting or changing the
   members/signatures of shipped classes.
 - Separate add and edit mini-caches cannot depend on one another: a new module
   cannot see the conversation-private root, and the edit mini cannot resolve a
@@ -353,19 +355,20 @@ not require UE4SS. UE4SS is involved only when a new root uses GORE's explicit
 - A newly compiled root topic is not automatically registered. Discovery into
   an already constructed `ConversationTopicSet` remains unproven; a root needs
   an explicit `dialog_topics` participant/topic/sentinel adapter. The
-  same-module sub-topic path uses authored `Subdialog` wiring, but its in-game
-  appearance and selection have not yet been proven. The offline gate binds a
+  same-module sub-topic path uses authored `Subdialog` wiring; the Diego fixture
+  proves its in-game appearance, selection and new override dispatch. The
+  offline gate binds a
   root row to the exact new class, base participant and selected vanilla
   sentinel, and requires every new direct topic to be exactly one registered
   root or one sub-topic referenced by a shipped class.
 - Source checking, strict standalone compilation, bundle packaging, deployment
   and runtime observation are separate claims. On BuildID `24878692`, the
-  source-identical complete Diego recompile and the Caption-only edit crossed
-  the live runtime boundary; the new same-module sub-topic stopped at successful
-  Manager deployment. The earlier Charlotte, Payfine and Brannok fixtures stop
-  at offline build/inspection. The historical registered-root fixture proves a
-  separate render path. None of these facts proves recorded voice or
-  selection-side persistence for a new topic.
+  source-identical complete Diego recompile, the Caption-only edit and the new
+  same-module Diego sub-topic crossed the live runtime boundary. The earlier
+  Charlotte, Payfine and Brannok fixtures stop at offline build/inspection. The
+  historical registered-root fixture proves a separate render path. None of
+  these facts proves recorded voice or selection-side persistence for a new
+  topic.
 - Existing vanilla defaults also retain the separate offline, copy-on-write
   [`default-sites` / `patch-default` scalar path](../guide/angelscript-defaults.md).
   It re-resolves exact selectors and admits only a unique branch-free direct
