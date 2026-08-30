@@ -9491,6 +9491,16 @@ fn spell_out_default_temporaries(text: &str, defaults: &HashMap<i32, usize>) -> 
         let Some(fresh) = defaults.get(&slot).copied().filter(|count| *count > 0) else {
             continue;
         };
+        // The count is of the raw SLOT, and the compiler hands one out again as soon as the value
+        // in it dies. Where the text still carries a second life of it, some of those
+        // constructions are that life's, and spending them here rewrites a named value the source
+        // meant to pass into a `T()` that is not the same value at all.
+        if lines.iter().any(|line| {
+            count_ident(line, &format!("local_{slot}_2")) > 0
+                || count_ident(line, &format!("local_{slot}_3")) > 0
+        }) {
+            continue;
+        }
         let head = lines[index].trim().split(" = ").next().unwrap_or("");
         let ty = head[..head.len().saturating_sub(name.len())].trim().to_owned();
         if ty.is_empty() {
