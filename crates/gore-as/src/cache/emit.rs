@@ -11074,10 +11074,25 @@ fn nested_expression_intermediates(f: &Func, refs: &RefResolver) -> HashSet<i32>
         {
             continue;
         }
+        // The block belongs to the call that comes NEXT in the same straight line of code. The
+        // calls in between are the receiver being built and belong to this expression, but a
+        // BRANCH does not — past one, the `GetSafeNormal` is a different statement's and the
+        // addresses in the window are its locals, whose declarations this would take away. A
+        // second default-argument block ends it too: that block owns the call, not this one.
         let Some(call) = instrs[at + 3..]
             .iter()
-            .position(|ins| callee(ins).is_some_and(|name| name.starts_with("GetSafeNormal")))
+            .enumerate()
+            .position(|(offset, ins)| {
+                let starts_a_block = ins.op.name == "PshGPtr"
+                    && instrs.get(at + 4 + offset).map(|ins| ins.op.name) == Some("PshC8");
+                ins.op.name.starts_with('J')
+                    || starts_a_block
+                    || callee(ins).is_some_and(|name| name.starts_with("GetSafeNormal"))
+            })
             .map(|offset| at + 3 + offset)
+            .filter(|call| {
+                callee(&instrs[*call]).is_some_and(|name| name.starts_with("GetSafeNormal"))
+            })
         else {
             continue;
         };
