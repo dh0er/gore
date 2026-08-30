@@ -292,7 +292,9 @@ qualified artifact.
 The current Diego proof establishes native discovery for a root class appended
 to that NPC's shipped conversation module. It does **not** establish discovery
 for a class in a brand-new module, a brand-new NPC conversation, or a symbol
-graph split across modules.
+graph split across modules. The checked compiler and package path now covers a
+single brand-new conversation module and an all-new topic graph kept inside it;
+that offline evidence does not close this native-discovery gap.
 
 The remainder of this section documents the separate historical
 `BuildSpec.dialog_topics` insertion adapter. It is retained as a low-level
@@ -337,30 +339,47 @@ writes a save/quest/knowledge field.
 This list deliberately omits the dialog edits and runtime behavior already
 shown to work.
 
-Existing-topic edits, same-module roots and same-module sub-topics are native
-script-cache changes and do not require UE4SS. `dialog_topics` is a separate
-historical low-level adapter surface.
+Existing-topic edits, same-module roots, same-module sub-topics and complete
+same-module conversation workspaces are native script-cache payloads. Their
+ordinary bundles contain no generated UE4SS component. Existing-topic edits,
+same-module roots and direct sub-topics have runtime evidence without UE4SS
+insertion; complete new conversations do not yet, so whether native discovery
+needs a bridge remains open. `dialog_topics` is a separate historical low-level
+adapter surface.
 
 ### Potentially possible, but not proven in game
 
-- Ambient auto-open behavior, including a 20-topic probe. That artificial
-  fixture crashed, so it is not evidence that broad ambient flags are broken.
-- Deploying and running the raw complete-cache output of FullGraph V2. Offline
-  coordinated cross-module compilation resolves the references, but the output
-  has 10,782 semantic deviations, including 81 in Diego, so it is unsafe and
-  not a deployable dialog mini-patch.
+- A complete conversation for an NPC with no current root topics. The offline
+  product path edits an exact shipped topicless module when one exists, or adds
+  one new conversation module when none exists. Both check, compile and package;
+  native runtime association and discovery remain unobserved.
+- A multi-level tree whose root, parents and children are all newly authored in
+  that one module. Its new-to-new `Subdialog` edges compile and package, but the
+  complete tree has not yet been opened and navigated in game.
+- Rendering or selecting an artificial 20-choice menu reached through an
+  automatic ambient opening. The fixture first entered
+  `State.AmbientConversation` with `GA_Human_Conversation_Ambient` active, which
+  proves automatic activation at that state/ability boundary; the forced menu
+  shape then crashed and remains unqualified.
+- Executing the intended cross-module dialog edge from the selective hybrid
+  complete cache. That cache booted and loaded a save, but the option itself has
+  not been observed or selected; this also does not qualify raw FullGraph
+  regeneration.
 - Game builds other than BuildID `24878692`. Older adapter observations do not
   qualify the current native source path on those builds.
 
 ### Not technically supported by the current GORE pipeline
 
-- Creating a complete conversation for an NPC that has no matching shipped
-  conversation.
 - Packaging a normal deployable mini-cache dialog whose new symbol dependency
   comes from another script module.
-- Creating a safe new-to-new multi-level tree in which one newly authored topic
-  opens another newly authored topic; a new sub-topic must currently attach
-  directly to a shipped parent.
+- Deriving one new topic from another new topic instead of deriving every new
+  option directly from the conversation's private topic base.
+- Making a newly authored submenu parent own an already shipped child. Existing
+  parents may receive new children; newly authored parents are limited to new
+  children from the same conversation module.
+- Treating the current raw FullGraph V2 output as a playable complete-cache mod.
+  Its exact bytes deployed successfully, but the resulting game reached a main
+  menu whose entries could not be activated by mouse click or Return.
 - Adding a 21st child to one `Subdialog` call.
 - Manually reshaping an already full 20-slot `Subdialog` call. Current-head
   Stage C (mini-cache SHA-256 prefix `C675BB55…`) is byte-identical to the
@@ -422,16 +441,40 @@ historical low-level adapter surface.
   was selected, ran the new `Act` override, ended the conversation and returned
   HUD and camera control. This does not authorize reparenting or changing the
   members/signatures of shipped classes.
+- `dialog new-conversation` keeps conversation settings, the private root and
+  every topic in one module. Exactly one shipped topicless module is an edit;
+  the absence of any conversation module is an add. The scaffold starts with
+  one direct choice, and further new classes may form new-to-new `Subdialog`
+  edges inside that same source. Those edges use the global
+  `::Subdialog(this, UChild, ...)` source form because the instance-method form
+  does not bind the newly declared child in a completely new module. Source
+  checking, strict standalone compilation
+  and bundle inspection cover both operations and an all-new multi-level tree.
+  They do not prove that the game associates a brand-new module with the NPC,
+  discovers its root, or permits navigation through the resulting tree. For an
+  add, the participant is validated only as a safe identifier and against
+  generated-name collisions; its existence in a shipped catalog or a separate
+  NPC payload is not known to this command.
 - Separate add and edit mini-caches cannot depend on one another: a new module
   cannot see the conversation-private root, and the edit mini cannot resolve a
   class supplied only by the add mini. Each mini is remapped independently to
   the pristine base; neither becomes authority for the other. Full-graph V2
   instead submits the complete sealed base graph and coordinated add/edit/delete
   changes to one standalone compile, so visible cross-module references can be
-  resolved together. Its output has 10,782 semantic deviations, including 81
-  in Diego, so it is unsafe and not a deployable dialog mini-patch. The
-  ordinary bundle composer consumes module mini-caches, so that artifact is an
-  offline compiler capability, not a dialog packaging or deployment recipe.
+  resolved together. Its raw output has 10,782 semantic deviations, including
+  81 in Diego. Mod Manager nevertheless installed that exact raw cache
+  (`62A2106966A06910376ABDF956FF7DFA83F0F366A91514EB1B3D51F227800CD9`) and
+  verified the installed bytes; the game reached its main menu, but neither
+  mouse clicks nor Return could activate an entry. This proves complete-cache
+  deployment and a concrete runtime incompatibility, not a playable product.
+  A separate hybrid cache
+  (`7C07974034F4D1CC8CF0CB4469FC97F9956B8F23924B9E4447927EF4F83B85EF`) kept
+  every untouched module pristine and replaced only Diego plus the new probe.
+  It booted and loaded a save, proving the replacement mechanism and selective
+  composition can reach gameplay. It does not qualify the raw regeneration or
+  prove appearance/selection of the cross-module option. The ordinary bundle
+  composer consumes independently base-bound module mini-caches, so neither
+  complete-cache experiment becomes a normal cross-module dialog mini-patch.
 - A new root appended to Diego's shipped conversation module was discovered,
   rendered and selected natively with no adapter insertion, including one run
   with the UE4SS proxy absent. A same-module sub-topic instead uses authored

@@ -26,8 +26,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   selects any valid 1-based position and shifts existing children without
   dropping one. Generated sub-topics use the shipped rank `0`. Both compile as
   `--op edit --allow-new-symbols`, not as an isolated cross-module `--op add`.
-- `dialog checkout` / `check` / `stage` — edit a shipped conversation's own
-  AngelScript, including reconstructed defaults for `Caption`, `PriorityRank`,
+- `dialog new-conversation` — scaffold settings, a private root and the first
+  direct choice for an NPC with no root topics. Exactly one matching shipped
+  topicless module is preserved and edited; when no conversation module exists,
+  one complete module is added. Every further topic and new-to-new `Subdialog`
+  level stays in that same source module. New topics remain direct subclasses
+  of the private root; a new parent may own only new same-conversation children.
+  Both operations and an all-new
+  multi-level tree are qualified through strict standalone compilation and
+  bundle inspection; native runtime association, discovery and navigation
+  remain unproven.
+- `dialog checkout` / `check` / `stage` — check out a shipped conversation, or
+  validate and stage that edit or a generated complete-conversation workspace.
+  Shipped source includes reconstructed defaults for `Caption`, `PriorityRank`,
   `Rules` and flags. Checks reject partial default coverage, removed shipped
   targets, unsupported generated-method loss and unsafe shipped-ABI drift before
   compilation; byte-exact default carry remains only for source without
@@ -79,13 +90,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Diego fixture, not a general qualification of every voice path or game API.
 - Keep compile, packaging, deployment and runtime evidence separate. Independent
   add/edit mini-caches still cannot depend on one another; FullGraph V2 resolves
-  coordinated cross-module references offline, but its output has 10,782
-  semantic deviations, including 81 in Diego, making it unsafe and not a
-  deployable dialog mini-patch. Normal cross-module dialog minis remain
+  coordinated cross-module references offline. Mod Manager deployed the raw
+  complete cache byte-for-byte, but its 10,782 semantic deviations (81 in
+  Diego) produced a main menu whose entries could not be activated. A selective
+  hybrid whole-cache product preserved all untouched modules, booted and loaded
+  a save; that proves complete-cache replacement, not the raw regeneration or
+  the cross-module dialog edge. Normal cross-module dialog minis remain
   technically unsupported.
-- A 20-topic ambient auto-open probe crashed as an artificial fixture; this is
-  not evidence that broad ambient flags are broken.
-- `gore_dialog` MCP tool for the same nine subcommands.
+- An ambient fixture entered `State.AmbientConversation` with
+  `GA_Human_Conversation_Ambient` active without player selection, proving the
+  automatic activation boundary. It crashed only after forcing an artificial
+  20-choice `Subdialog`; that menu shape remains unqualified and is not evidence
+  that broad ambient flags are broken.
+- `gore_dialog` MCP tool for the same ten subcommands.
 
 ### Fixed
 

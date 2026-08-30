@@ -16,7 +16,7 @@ are changing GORE itself and need to know what a boundary guarantees.
 | [Cooked DataAsset internals](dataassets-internals.md) | Selector seal semantics, receipts and source proofs, the no-clobber and power-loss boundary, the installed package browser, and the Mod Studio staging surface behind `gore asset`. |
 | [AngelScript default-patching internals](angelscript-internals.md) | Which scalar sites are admitted and why, opcode windows, sealed evidence, fail-closed transaction semantics, and receipt fields behind `gore as default-sites` / `patch-default` / `tag-map-*`. |
 | [Game updates](game-updates.md) | What a Steam patch invalidates, what keeps working, and the checklist for qualifying a new build. |
-| [Dialog runtime internals](dialog-runtime.md) | The proven runtime boundary for compiled dialog topics, the requalification evidence, hook-order contract, and current limits. |
+| [Dialog runtime internals](dialog-runtime.md) | The proven runtime boundary for compiled dialog topics, offline new-conversation evidence, requalification, hook-order contract, and current limits. |
 | [Mod Studio NPC and quest authoring internals](studio-authoring.md) | The offline logical-clone proof, the native archetype catalog, the revision-3 draft transaction, and the quest publication contract. |
 | [Mod Studio voice authoring internals](studio-voice.md) | Installed target resolution, the all-or-nothing sealed build, and the publication and failure boundaries. |
 | [Mod Studio project snapshot internals](studio-project-archive.md) | Snapshot V2 archive format, reachable closure, determinism, the import security model, wire limits, and stable failure codes. |

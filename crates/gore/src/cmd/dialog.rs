@@ -135,6 +135,34 @@ pub enum DialogAction {
         #[arg(long)]
         game: Option<PathBuf>,
     },
+    /// Scaffold the first option and private topic base for an NPC conversation
+    NewConversation {
+        /// Exact NPC identifier; syntax and collisions are checked, but NPC existence is not
+        npc: String,
+        /// The first menu option's text, as an untranslated literal
+        #[arg(
+            long,
+            conflicts_with = "caption_key",
+            required_unless_present = "caption_key"
+        )]
+        caption: Option<String>,
+        /// The first menu option's localization key, for a translatable option
+        #[arg(long)]
+        caption_key: Option<String>,
+        /// AngelScript class name for the first option
+        #[arg(long)]
+        class: Option<String>,
+        /// Mod name, used for the default class name and staged bundle
+        #[arg(long, default_value = "MyDialogMod")]
+        mod_name: String,
+        /// Output directory for source, pristine copy, and edit manifest
+        #[arg(short = 'o', long)]
+        out: PathBuf,
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        #[arg(long)]
+        game: Option<PathBuf>,
+    },
     /// Take one conversation's AngelScript, including class defaults, out for editing
     Checkout {
         /// Participant identifier (`om_stt_viper_302`), part of one, or a module name
@@ -237,6 +265,25 @@ pub fn run(action: DialogAction) -> Result<()> {
             cache,
             game,
         }),
+        DialogAction::NewConversation {
+            npc,
+            caption,
+            caption_key,
+            class,
+            mod_name,
+            out,
+            cache,
+            game,
+        } => new_conversation(NewConversationRequest {
+            npc,
+            caption,
+            caption_key,
+            class,
+            mod_name,
+            out,
+            cache,
+            game,
+        }),
         DialogAction::Checkout {
             npc,
             out,
@@ -313,6 +360,23 @@ fn matching<'a>(graph: &'a DialogGraph, needle: &str) -> Vec<&'a Conversation> {
                 .iter()
                 .any(|participant| participant.to_lowercase().contains(&needle))
                 || conversation.module.to_lowercase().contains(&needle)
+        })
+        .collect()
+}
+
+/// Exact participant lookup for commands that may create a brand-new module on no match.
+///
+/// Reusing [`matching`] here would be unsafe: its documented partial/module fallback is useful for
+/// read commands, but a unique substring could silently turn a requested new NPC into an edit of a
+/// different shipped conversation.
+fn exact_npc_matches<'a>(graph: &'a DialogGraph, npc: &str) -> Vec<&'a Conversation> {
+    graph
+        .conversations
+        .iter()
+        .filter(|conversation| {
+            conversation
+                .npc_participants()
+                .any(|participant| participant.eq_ignore_ascii_case(npc))
         })
         .collect()
 }
@@ -1044,6 +1108,9 @@ fn text_edits(
 /// What `checkout` records so `check` and `stage` need no arguments beyond the directory.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct EditManifest {
+    /// Existing workspaces predate this field and are ordinary module edits.
+    #[serde(default)]
+    operation: DialogModuleOperation,
     /// The Modules TMap key, for `compile-module --module`.
     module: String,
     /// Where the compiler expects the file, for `compile-module --rel-path`.
@@ -1055,10 +1122,37 @@ struct EditManifest {
     participant: String,
     /// The exact cache this edit is bound to. A game update invalidates the whole contract.
     cache_sha256: String,
+    /// `new-conversation` workspaces must retain the private root and at least one topic even when
+    /// their operation is an edit of a shipped topicless settings module. Ordinary/legacy
+    /// checkouts default to false and may remain topicless.
+    #[serde(default, skip_serializing_if = "is_false")]
+    requires_topic_scaffold: bool,
     /// Explicit root-topic registrations for the bundle spec. Subdialog topics are wired by the
     /// authored `Subdialog` call and need no transient root registration.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     dialog_topics: Vec<DialogTopicRegistration>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum DialogModuleOperation {
+    Edit,
+    Add,
+}
+
+impl Default for DialogModuleOperation {
+    fn default() -> Self {
+        Self::Edit
+    }
+}
+
+impl DialogModuleOperation {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Edit => "edit",
+            Self::Add => "add",
+        }
+    }
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -1085,42 +1179,6 @@ fn registered_topic_class(path: &str) -> Result<String> {
         .filter(|leaf| is_angelscript_identifier(leaf))
         .with_context(|| format!("invalid dialog topic class path {path:?}"))?;
     Ok(format!("U{leaf}"))
-}
-
-fn subdialog_reference_owners(source: &str, class: &str) -> Result<Vec<String>> {
-    let tokens = code_tokens(source)?;
-    let mut owners = Vec::new();
-    for declaration in 0..tokens.len().saturating_sub(1) {
-        if !matches!(tokens[declaration].text.as_str(), "class" | "struct") {
-            continue;
-        }
-        let Some(name) = tokens.get(declaration + 1).map(|token| token.text.clone()) else {
-            continue;
-        };
-        let Some(open) = ((declaration + 2)..tokens.len())
-            .find(|candidate| matches!(tokens[*candidate].text.as_str(), "{" | ";"))
-        else {
-            continue;
-        };
-        if tokens[open].text != "{" {
-            continue;
-        }
-        let class_close = matching_close(&tokens, open, "{", "}")?;
-        for call in (open + 1)..class_close.saturating_sub(1) {
-            if tokens[call].text != "Subdialog" || tokens[call + 1].text != "(" {
-                continue;
-            }
-            let close = matching_close(&tokens, call + 1, "(", ")")?;
-            if close < class_close
-                && tokens[call + 2..close]
-                    .iter()
-                    .any(|token| token.text == class)
-            {
-                owners.push(name.clone());
-            }
-        }
-    }
-    Ok(owners)
 }
 
 fn class_debug_ids(class: &dialog::ClassOutline) -> Result<Vec<i64>> {
@@ -1354,53 +1412,219 @@ fn direct_added_topic_classes(
     Ok(direct)
 }
 
-/// Bind each new topic to one native root, legacy adapter registration, or shipped Subdialog owner.
-/// Legacy `dialog_topics` rows remain supported for old workspaces, but new same-module roots need
-/// no adapter. Without this gate an edited JSON manifest could still point at a renamed/deleted
-/// class or another participant and fail only when the runtime adapter looks it up.
-fn validate_topic_registrations(
-    manifest: &EditManifest,
-    report: &dialog::EditReport,
-    authored: &str,
-    cache: &[u8],
-) -> Result<()> {
-    if report.added_classes.is_empty() && manifest.dialog_topics.is_empty() {
-        return Ok(());
+const CONVERSATION_NAMESPACE: &str = "G1R::Conversation";
+
+/// Native conversation parents are admitted only in their exact direct, unqualified class form.
+/// Looking only at the final `::Leaf` would let an authored surrogate impersonate a native base.
+fn directly_derives_native(class: &dialog::ClassOutline, parent: &str) -> bool {
+    class.kind == "class" && class.super_class.as_deref() == Some(parent)
+}
+
+fn expected_topic_root(participant: &str) -> String {
+    format!("UTopic_Hero__{participant}")
+}
+
+fn literal_name_default(class: &dialog::ClassOutline, target: &str) -> Result<Option<String>> {
+    let defaults = class
+        .defaults
+        .iter()
+        .filter(|default| default.target == target)
+        .collect::<Vec<_>>();
+    let ([] | [_]) = defaults.as_slice() else {
+        bail!(
+            "{} must not declare more than one `default {target}`; found {}",
+            class.name,
+            defaults.len()
+        );
+    };
+    let Some(default) = defaults.first() else {
+        return Ok(None);
+    };
+    let invalid = || {
+        anyhow::anyhow!(
+            "{} must spell `default {target}` as one FName literal; found {}",
+            class.name,
+            default.statement
+        )
+    };
+    let mut rest = default.statement.trim_start();
+    rest = rest.strip_prefix("default").ok_or_else(&invalid)?;
+    if !rest.chars().next().is_some_and(char::is_whitespace) {
+        return Err(invalid());
+    }
+    rest = rest.trim_start();
+    rest = rest.strip_prefix(target).ok_or_else(&invalid)?;
+    if rest
+        .chars()
+        .next()
+        .is_some_and(|character| !character.is_whitespace() && character != '=')
+    {
+        return Err(invalid());
+    }
+    rest = rest.trim_start();
+    rest = rest.strip_prefix('=').ok_or_else(&invalid)?.trim_start();
+    rest = rest.strip_prefix('n').ok_or_else(&invalid)?.trim_start();
+    if !rest.starts_with('"') {
+        return Err(invalid());
     }
 
-    let graph =
-        dialog::build(cache).context("re-reading the base dialog for registration checks")?;
-    let matches = graph
-        .conversations
-        .iter()
-        .filter(|conversation| conversation.module == manifest.module)
-        .collect::<Vec<_>>();
-    let [conversation] = matches.as_slice() else {
-        bail!(
-            "the edit module maps to {} base conversations; exactly one is required for a new topic",
-            matches.len()
-        );
-    };
-    let root_class = conversation
-        .root_class
-        .as_deref()
-        .context("the base conversation has no private root topic class")?;
-    let outline = dialog::read_outline(authored)
-        .map_err(|reason| anyhow::anyhow!("inventorying new topic classes: {reason}"))?;
-    let root_matches = outline
+    let bytes = rest.as_bytes();
+    let mut escaped = false;
+    let mut end = None;
+    for (index, byte) in bytes.iter().enumerate().skip(1) {
+        if escaped {
+            escaped = false;
+        } else if *byte == b'\\' {
+            escaped = true;
+        } else if *byte == b'"' {
+            end = Some(index + 1);
+            break;
+        }
+    }
+    let end = end.ok_or_else(&invalid)?;
+    if rest[end..].trim() != ";" {
+        return Err(invalid());
+    }
+    serde_json::from_str(&rest[..end])
+        .map(Some)
+        .with_context(|| format!("reading {}::default {target}", class.name))
+}
+
+fn validate_topicless_settings<'a>(
+    outline: &'a dialog::SourceOutline,
+    report: &dialog::EditReport,
+    participant: &str,
+) -> Result<&'a dialog::ClassOutline> {
+    let settings = outline
         .classes
         .iter()
-        .filter(|class| class.name == root_class)
+        .filter(|class| directly_derives_native(class, "UConversationCharacterSettings"))
         .collect::<Vec<_>>();
-    let [root_outline] = root_matches.as_slice() else {
+    let [settings] = settings.as_slice() else {
         bail!(
-            "the private root class {root_class} has {} source identities; exactly one is required",
-            root_matches.len()
+            "a topicless conversation edit must retain exactly one direct UConversationCharacterSettings class; found {}",
+            settings.len()
         );
     };
-    let added_topics = direct_added_topic_classes(&outline, &report.added_classes, root_outline)?;
+    if report.added_classes.contains(&settings.name) {
+        bail!(
+            "a topicless conversation edit may not replace its shipped settings class {}",
+            settings.name
+        );
+    }
+    if literal_name_default(settings, "ForCharacter")?.as_deref() != Some(participant) {
+        bail!(
+            "{} must retain `default ForCharacter = n{};`",
+            settings.name,
+            serde_json::to_string(participant)?
+        );
+    }
+    Ok(settings)
+}
 
-    for class_name in &added_topics {
+fn validate_new_conversation_base<'a>(
+    outline: &'a dialog::SourceOutline,
+    report: &dialog::EditReport,
+    participant: &str,
+    require_new_settings: bool,
+) -> Result<&'a dialog::ClassOutline> {
+    let expected_root = expected_topic_root(participant);
+    let native_roots = outline
+        .classes
+        .iter()
+        .filter(|class| {
+            report.added_classes.contains(&class.name)
+                && directly_derives_native(class, "UG1RDialogTopic")
+        })
+        .collect::<Vec<_>>();
+    let [root] = native_roots.as_slice() else {
+        bail!(
+            "a new conversation must declare exactly one new private topic base derived directly from UG1RDialogTopic; found {}",
+            native_roots.len()
+        );
+    };
+    if root.name != expected_root {
+        bail!(
+            "the private topic base for {participant} must be named {expected_root}, not {}",
+            root.name
+        );
+    }
+    let expected_namespace = if require_new_settings {
+        CONVERSATION_NAMESPACE
+    } else {
+        validate_topicless_settings(outline, report, participant)?
+            .namespace
+            .as_str()
+    };
+    if root.namespace != expected_namespace {
+        bail!(
+            "the private topic base {} must stay in namespace `{expected_namespace}`, not `{}`",
+            root.name,
+            root.namespace
+        );
+    }
+    if literal_name_default(root, "ForCharacter")?.as_deref() != Some(participant) {
+        bail!(
+            "{expected_root} must declare `default ForCharacter = n{};`",
+            serde_json::to_string(participant)?
+        );
+    }
+    if literal_name_default(root, "WithCharacter")?.as_deref() != Some("Hero") {
+        bail!("{expected_root} must declare `default WithCharacter = n\"Hero\";`");
+    }
+
+    if require_new_settings {
+        let expected_settings = format!("UConversationCharacterSettings_G1R_{participant}");
+        let settings = outline
+            .classes
+            .iter()
+            .filter(|class| {
+                report.added_classes.contains(&class.name)
+                    && directly_derives_native(class, "UConversationCharacterSettings")
+            })
+            .collect::<Vec<_>>();
+        let [settings] = settings.as_slice() else {
+            bail!(
+                "a new conversation module must declare exactly one new UConversationCharacterSettings class; found {}",
+                settings.len()
+            );
+        };
+        if settings.name != expected_settings {
+            bail!(
+                "the settings class for {participant} must be named {expected_settings}, not {}",
+                settings.name
+            );
+        }
+        if settings.namespace != CONVERSATION_NAMESPACE {
+            bail!(
+                "the settings class {expected_settings} must be declared in namespace `{CONVERSATION_NAMESPACE}`, not `{}`",
+                settings.namespace
+            );
+        }
+        if literal_name_default(settings, "ForCharacter")?.as_deref() != Some(participant) {
+            bail!(
+                "{expected_settings} must declare `default ForCharacter = n{};`",
+                serde_json::to_string(participant)?
+            );
+        }
+    }
+    Ok(root)
+}
+
+/// Qualify a complete graph of newly authored topics. Every new topic is either a native root or
+/// has exactly one Subdialog parent, and a Subdialog owned by a new topic may contain only other
+/// topics from the same new conversation. This makes all-new multi-level trees explicit instead
+/// of treating only shipped-parent insertion as safe.
+fn validate_new_topic_tree(
+    authored: &str,
+    outline: &dialog::SourceOutline,
+    report: &dialog::EditReport,
+    root: &dialog::ClassOutline,
+    added_topics: &BTreeSet<String>,
+    registrations: &BTreeMap<String, usize>,
+) -> Result<()> {
+    let mut debug_ids = BTreeMap::<i64, String>::new();
+    for class_name in added_topics {
         let class = outline
             .classes
             .iter()
@@ -1408,16 +1632,354 @@ fn validate_topic_registrations(
             .with_context(|| {
                 format!("new topic {class_name} disappeared from the source outline")
             })?;
+        if class.kind != "class" {
+            bail!("new topic {class_name} must be declared as a class, not a {}", class.kind);
+        }
+        if class.namespace != root.namespace {
+            bail!(
+                "new topic {class_name} must be declared beside its private root {} in namespace `{}`, not `{}`",
+                root.name,
+                root.namespace,
+                class.namespace
+            );
+        }
         validate_new_topic_source_contract(class)?;
+        let debug_id = class_debug_ids(class)?[0];
+        if let Some(other) = debug_ids.insert(debug_id, class_name.clone()) {
+            bail!(
+                "new topics {other} and {class_name} duplicate DebugId {debug_id}; every new topic needs a unique nonzero DebugId"
+            );
+        }
+    }
+
+    let (calls, call_shapes) = inventory_fixed_subdialog_calls(authored)?;
+    let mut parents = BTreeMap::<String, Vec<String>>::new();
+    let mut children = BTreeMap::<String, Vec<String>>::new();
+    let added_classes = report
+        .added_classes
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+
+    for (owner, owner_calls) in &calls {
+        let owner_is_new_topic = added_topics.contains(owner);
+        let references_new = owner_calls
+            .iter()
+            .flatten()
+            .flatten()
+            .any(|child| added_topics.contains(child));
+        if !owner_is_new_topic && !references_new {
+            continue;
+        }
+        if owner_is_new_topic
+            && call_shapes
+                .get(owner)
+                .into_iter()
+                .flatten()
+                .any(|shape| *shape != SubdialogCallShape::Global)
+        {
+            bail!(
+                "new topic {owner} must open its new children with the compiler-qualified global `::Subdialog(this, ...)` form; `this.Subdialog(...)` does not bind new child classes in a brand-new module"
+            );
+        }
+        let [slots] = owner_calls.as_slice() else {
+            bail!(
+                "{owner} participates in the new topic tree but has {} source-level Subdialog calls; exactly one is required",
+                owner_calls.len()
+            );
+        };
+        if !owner_is_new_topic && added_classes.contains(owner.as_str()) {
+            bail!(
+                "new topic(s) are referenced by added non-topic class {owner}; a Subdialog parent must itself be a topic"
+            );
+        }
+
+        let mut saw_hole = false;
+        let mut unique = BTreeSet::new();
+        for child in slots {
+            let Some(child) = child else {
+                saw_hole = true;
+                continue;
+            };
+            if saw_hole {
+                bail!(
+                    "the Subdialog call in {owner} has populated topic {child} after an empty slot"
+                );
+            }
+            if !unique.insert(child.as_str()) {
+                bail!("the Subdialog call in {owner} duplicates topic {child}");
+            }
+            if owner_is_new_topic && !added_topics.contains(child) {
+                bail!(
+                    "new topic {owner} references foreign Subdialog child {child}; an all-new tree may contain only topics declared for this conversation"
+                );
+            }
+            if added_topics.contains(child) {
+                parents
+                    .entry(child.clone())
+                    .or_default()
+                    .push(owner.clone());
+                if owner_is_new_topic {
+                    children
+                        .entry(owner.clone())
+                        .or_default()
+                        .push(child.clone());
+                }
+            }
+        }
+    }
+
+    for class in added_topics {
+        let topic_parents = parents.get(class).map(Vec::as_slice).unwrap_or(&[]);
+        if topic_parents.len() > 1 {
+            bail!(
+                "new topic {class} has multiple Subdialog parents: {}",
+                topic_parents.join(", ")
+            );
+        }
+        let registered_roots = registrations.get(class).copied().unwrap_or(0);
+        if registered_roots > 1 || (registered_roots == 1 && !topic_parents.is_empty()) {
+            bail!(
+                "new topic {class} must have one placement, but has {registered_roots} root registration(s) and Subdialog parent(s) {:?}",
+                topic_parents
+            );
+        }
+        let class_outline = outline
+            .classes
+            .iter()
+            .find(|candidate| candidate.name == *class)
+            .expect("added topic was resolved above");
+        validate_new_topic_placement(class_outline, !topic_parents.is_empty())?;
+    }
+
+    // Kahn's algorithm over new-to-new edges gives one deterministic cycle refusal.
+    let mut internal_indegree = added_topics
+        .iter()
+        .map(|class| (class.clone(), 0usize))
+        .collect::<BTreeMap<_, _>>();
+    for descendants in children.values() {
+        for child in descendants {
+            *internal_indegree
+                .get_mut(child)
+                .expect("new edge targets a new topic") += 1;
+        }
+    }
+    let mut ready = internal_indegree
+        .iter()
+        .filter(|(_, degree)| **degree == 0)
+        .map(|(class, _)| class.clone())
+        .collect::<Vec<_>>();
+    let mut visited = 0usize;
+    while let Some(class) = ready.pop() {
+        visited += 1;
+        for child in children.get(&class).map(Vec::as_slice).unwrap_or(&[]) {
+            let degree = internal_indegree
+                .get_mut(child)
+                .expect("new edge targets a new topic");
+            *degree -= 1;
+            if *degree == 0 {
+                ready.push(child.clone());
+            }
+        }
+    }
+    if visited != added_topics.len() {
+        let cycle = internal_indegree
+            .into_iter()
+            .filter(|(_, degree)| *degree != 0)
+            .map(|(class, _)| class)
+            .collect::<Vec<_>>();
+        bail!(
+            "new Subdialog tree contains a cycle involving {}",
+            cycle.join(", ")
+        );
+    }
+
+    let mut reachable = BTreeSet::new();
+    let mut pending = added_topics
+        .iter()
+        .filter(|class| {
+            registrations.get(*class).copied().unwrap_or(0) == 1
+                || parents.get(*class).is_none_or(Vec::is_empty)
+                || parents.get(*class).is_some_and(|owners| {
+                    owners
+                        .first()
+                        .is_some_and(|owner| !added_topics.contains(owner))
+                })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    while let Some(class) = pending.pop() {
+        if !reachable.insert(class.clone()) {
+            continue;
+        }
+        pending.extend(children.get(&class).into_iter().flatten().cloned());
+    }
+    let orphaned = added_topics
+        .difference(&reachable)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !orphaned.is_empty() {
+        bail!(
+            "new Subdialog tree contains unreachable/orphan topic(s): {}",
+            orphaned.join(", ")
+        );
+    }
+    Ok(())
+}
+
+/// Bind each new topic to one native root, legacy adapter registration, or one Subdialog parent.
+fn validate_topic_registrations(
+    manifest: &EditManifest,
+    report: &dialog::EditReport,
+    authored: &str,
+    cache: &[u8],
+) -> Result<()> {
+    let graph =
+        dialog::build(cache).context("re-reading the base dialog for registration checks")?;
+    let matches = graph
+        .conversations
+        .iter()
+        .filter(|conversation| conversation.module == manifest.module)
+        .collect::<Vec<_>>();
+    let conversation = match manifest.operation {
+        DialogModuleOperation::Edit => {
+            let [conversation] = matches.as_slice() else {
+                bail!(
+                    "the edit module maps to {} base conversations; exactly one is required",
+                    matches.len()
+                );
+            };
+            Some(*conversation)
+        }
+        DialogModuleOperation::Add => {
+            if !matches.is_empty() {
+                bail!("an added conversation must not already exist in the base dialog graph");
+            }
+            None
+        }
+    };
+    let outline = dialog::read_outline(authored)
+        .map_err(|reason| anyhow::anyhow!("inventorying new topic classes: {reason}"))?;
+
+    let added_settings = outline
+        .classes
+        .iter()
+        .filter(|class| {
+            report.added_classes.contains(&class.name)
+                && directly_derives_native(class, "UConversationCharacterSettings")
+        })
+        .collect::<Vec<_>>();
+    if manifest.operation == DialogModuleOperation::Edit && !added_settings.is_empty() {
+        bail!(
+            "an edited conversation may not add another UConversationCharacterSettings class: {}",
+            added_settings
+                .iter()
+                .map(|class| class.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    if report.added_classes.is_empty() && manifest.dialog_topics.is_empty() {
+        if manifest.operation == DialogModuleOperation::Add || manifest.requires_topic_scaffold {
+            bail!(
+                "a new conversation workspace must retain its private topic base and at least one direct topic option"
+            );
+        }
+        if let Some(conversation) = conversation.filter(|item| item.root_class.is_none()) {
+            let participants = conversation.npc_participants().collect::<Vec<_>>();
+            let [participant] = participants.as_slice() else {
+                bail!(
+                    "a topicless conversation must name exactly one NPC participant; found {}",
+                    participants.len()
+                );
+            };
+            validate_topicless_settings(&outline, report, participant)?;
+        }
+        return Ok(());
+    }
+
+    let (root_outline, participant) = match conversation.and_then(|item| {
+        item.root_class
+            .as_deref()
+            .map(|root| (item, root.to_owned()))
+    }) {
+        Some((conversation, root_class)) => {
+            let native_roots = outline
+                .classes
+                .iter()
+                .filter(|class| {
+                    report.added_classes.contains(&class.name)
+                        && directly_derives_native(class, "UG1RDialogTopic")
+                })
+                .collect::<Vec<_>>();
+            if !native_roots.is_empty() {
+                bail!(
+                    "{} already has private topic base {root_class}; a same-module edit may not add another UG1RDialogTopic root",
+                    manifest.module
+                );
+            }
+            let roots = outline
+                .classes
+                .iter()
+                .filter(|class| class.name == root_class)
+                .collect::<Vec<_>>();
+            let [root] = roots.as_slice() else {
+                bail!(
+                    "the private root class {root_class} has {} source identities; exactly one is required",
+                    roots.len()
+                );
+            };
+            let participant = conversation
+                .npc_participants()
+                .next()
+                .context("the base conversation names no NPC participant")?;
+            (*root, participant.to_owned())
+        }
+        None => {
+            let participant = match conversation {
+                Some(conversation) => {
+                    let participants = conversation.npc_participants().collect::<Vec<_>>();
+                    let [participant] = participants.as_slice() else {
+                        bail!(
+                            "a topicless conversation must name exactly one NPC participant; found {}",
+                            participants.len()
+                        );
+                    };
+                    (*participant).to_owned()
+                }
+                None => manifest.participant.clone(),
+            };
+            let root = validate_new_conversation_base(
+                &outline,
+                report,
+                &participant,
+                manifest.operation == DialogModuleOperation::Add,
+            )?;
+            (root, participant)
+        }
+    };
+    let added_topics = direct_added_topic_classes(&outline, &report.added_classes, root_outline)?;
+    if conversation.is_none() && added_topics.is_empty() {
+        bail!("a new conversation module must declare at least one direct topic option");
+    }
+    if conversation.is_some_and(|item| item.root_class.is_none()) && added_topics.is_empty() {
+        bail!("a topicless conversation edit must add at least one direct topic option");
     }
 
     let participants = conversation
-        .npc_participants()
-        .map(|participant| participant.to_ascii_lowercase())
-        .collect::<BTreeSet<_>>();
+        .map(|item| {
+            item.npc_participants()
+                .map(|value| value.to_ascii_lowercase())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_else(|| BTreeSet::from([participant.to_ascii_lowercase()]));
     let sentinel = if manifest.dialog_topics.is_empty() {
         None
     } else {
+        let conversation = conversation.context(
+            "dialog_topics cannot register a new or previously topicless conversation; native same-module discovery is required",
+        )?;
         Some(
             sentinel_of(conversation)
                 .map(|topic| reflected_topic_path(&topic.class))
@@ -1441,43 +2003,24 @@ fn validate_topic_registrations(
                 manifest.module
             );
         }
-        let sentinel = sentinel
-            .as_deref()
-            .expect("a registration list always resolves a sentinel first");
-        if registration.sentinel_class != sentinel {
+        if registration.sentinel_class != sentinel.as_deref().expect("resolved above") {
             bail!(
                 "dialog_topics sentinel {:?} is not this conversation's checked sentinel {:?}",
                 registration.sentinel_class,
-                sentinel
+                sentinel.as_deref().expect("resolved above")
             );
         }
         *registrations.entry(class).or_default() += 1;
     }
 
-    for class in added_topics {
-        let roots = registrations.get(&class).copied().unwrap_or(0);
-        let owners = subdialog_reference_owners(authored, &class)?;
-        let subdialog_is_existing = owners
-            .as_slice()
-            .first()
-            .is_some_and(|owner| !report.added_classes.contains(owner));
-        let is_subdialog = match (roots, owners.len(), subdialog_is_existing) {
-            (0, 0, false) => false,
-            (1, 0, false) => false,
-            (0, 1, true) => true,
-            _ => bail!(
-                "new topic {class} must be a native root, registered once by a legacy adapter, or referenced once by Subdialog from a shipped class; found {roots} registration(s) and references from {:?}",
-                owners
-            ),
-        };
-        let outline = outline
-            .classes
-            .iter()
-            .find(|candidate| candidate.name == class)
-            .with_context(|| format!("new topic {class} disappeared from the source outline"))?;
-        validate_new_topic_placement(outline, is_subdialog)?;
-    }
-    Ok(())
+    validate_new_topic_tree(
+        authored,
+        &outline,
+        report,
+        root_outline,
+        &added_topics,
+        &registrations,
+    )
 }
 
 const MANIFEST_NAME: &str = "gore-dialog-edit.json";
@@ -1502,12 +2045,6 @@ fn checkout(npc: &str, out: &PathBuf, cache: Option<PathBuf>, game: Option<PathB
     let (path, bytes) = read_cache(cache, game)?;
     let graph = dialog::build(&bytes).context("reading dialog from the script cache")?;
     let conversation = resolve_one(&graph, npc)?;
-    if conversation.topics.is_empty() {
-        bail!(
-            "{} declares no topics, so there is nothing to edit",
-            participant_label(conversation)
-        );
-    }
 
     let taken = dialog::checkout(&bytes, &conversation.module, native_api(&path))
         .with_context(|| format!("taking {} out of the cache", conversation.module))?;
@@ -1528,12 +2065,14 @@ fn checkout(npc: &str, out: &PathBuf, cache: Option<PathBuf>, game: Option<PathB
         .with_context(|| format!("writing {}", pristine_file.display()))?;
 
     let manifest = EditManifest {
+        operation: DialogModuleOperation::Edit,
         module: taken.module.clone(),
         relative_path: taken.relative_path.clone(),
         source_file: leaf.clone(),
         pristine_file: format!("pristine/{leaf}"),
         participant: participant_label(conversation),
         cache_sha256: digest_of(&bytes),
+        requires_topic_scaffold: false,
         dialog_topics: Vec::new(),
     };
     let manifest_path = out.join(MANIFEST_NAME);
@@ -1551,6 +2090,10 @@ fn checkout(npc: &str, out: &PathBuf, cache: Option<PathBuf>, game: Option<PathB
     println!("                PriorityRank, Rules and topic flags included");
     println!("you may add:    a same-module topic class, its own methods/defaults, and new");
     println!("                string/text ids; stage then selects --allow-new-symbols");
+    if conversation.topics.is_empty() {
+        println!("this module has no topics yet: use `gore dialog new-conversation` to scaffold");
+        println!("its private topic base and first option without replacing its settings");
+    }
     println!("you may not:    remove shipped defaults, classes, methods or fields, or change");
     println!("                the layout/signature of an existing class");
     println!();
@@ -1582,8 +2125,43 @@ fn open_edit(
         );
     }
 
-    let taken = dialog::checkout(&bytes, &manifest.module, native_api(&path))
-        .with_context(|| format!("re-reading {}", manifest.module))?;
+    let taken = match manifest.operation {
+        DialogModuleOperation::Edit => {
+            dialog::checkout(&bytes, &manifest.module, native_api(&path))
+                .with_context(|| format!("re-reading {}", manifest.module))?
+        }
+        DialogModuleOperation::Add => {
+            let (expected_module, expected_relative_path) =
+                new_conversation_module_names(&manifest.participant)?;
+            if manifest.module != expected_module
+                || manifest.relative_path != expected_relative_path
+            {
+                bail!(
+                    "an added conversation for {:?} must use module {} at {}; the manifest names {} at {}",
+                    manifest.participant,
+                    expected_module,
+                    expected_relative_path,
+                    manifest.module,
+                    manifest.relative_path
+                );
+            }
+            let modules = gore_as::cache::model::parse_modules(&bytes)
+                .map_err(|error| anyhow::anyhow!("parsing the script cache: {error}"))?;
+            gore_as::cache::emit_all::validate_add_module_target(
+                &modules,
+                &manifest.module,
+                &manifest.relative_path,
+            )
+            .map_err(|reason| anyhow::anyhow!("invalid add-module target: {reason}"))?;
+            dialog::Checkout {
+                module: manifest.module.clone(),
+                relative_path: manifest.relative_path.clone(),
+                source: String::new(),
+                default_classes: BTreeSet::new(),
+                unsupported_generated_methods: Vec::new(),
+            }
+        }
+    };
     let source_path = dir.join(&manifest.source_file);
     let authored = fs::read_to_string(&source_path)
         .with_context(|| format!("reading {}", source_path.display()))?;
@@ -1624,6 +2202,7 @@ fn check(dir: &PathBuf, json: bool, cache: Option<PathBuf>, game: Option<PathBuf
 
     if json {
         let document = serde_json::json!({
+            "operation": manifest.operation.as_str(),
             "module": manifest.module,
             "participant": manifest.participant,
             "unchanged": report.unchanged,
@@ -1720,7 +2299,7 @@ fn stage(
     let mut spec = serde_json::json!({
         "meta": { "name": mod_name, "version": "0.1.0", "author": "" },
         "scripts": [{
-            "op": "edit",
+            "op": manifest.operation.as_str(),
             "module_name": manifest.module,
             "mini_cache": mini,
         }],
@@ -1830,8 +2409,9 @@ fn compile_module_command(
         ""
     };
     format!(
-        "gore as compile-module --backend standalone --op edit --module {} --rel-path {} \
+        "gore as compile-module --backend standalone --op {} --module {} --rel-path {} \
          --source {} --work-dir {}{} -o {} --game {}",
+        manifest.operation.as_str(),
         powershell_quote_text(&manifest.module),
         powershell_quote_text(&manifest.relative_path),
         powershell_quote(source),
@@ -1855,6 +2435,30 @@ pub struct NewTopicRequest {
     pub out: PathBuf,
     pub cache: Option<PathBuf>,
     pub game: Option<PathBuf>,
+}
+
+pub struct NewConversationRequest {
+    pub npc: String,
+    pub caption: Option<String>,
+    pub caption_key: Option<String>,
+    pub class: Option<String>,
+    pub mod_name: String,
+    pub out: PathBuf,
+    pub cache: Option<PathBuf>,
+    pub game: Option<PathBuf>,
+}
+
+fn new_conversation_module_names(participant: &str) -> Result<(String, String)> {
+    if participant.eq_ignore_ascii_case("Hero") || !is_angelscript_identifier(participant) {
+        bail!(
+            "a new conversation NPC must be one exact AngelScript-safe identifier such as `NC_SLD_GORN_699FM`, not {participant:?}"
+        );
+    }
+    let leaf = format!("Conversation_{participant}");
+    Ok((
+        format!("Story.G1R.Conversation.{leaf}"),
+        format!("Story/G1R/Conversation/{leaf}.as"),
+    ))
 }
 
 /// Keep only the characters an AngelScript identifier may carry.
@@ -2179,8 +2783,9 @@ const EMPTY_SUBDIALOG_SLOT: &str = "TSubclassOf<UConversationTopic>(nullptr)";
 const BACK_CAPTION_KEY: &str = "TEXT_BACK";
 
 type FixedSubdialogCalls = BTreeMap<String, Vec<Vec<Option<String>>>>;
+type FixedSubdialogShapes = BTreeMap<String, Vec<SubdialogCallShape>>;
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SubdialogCallShape {
     Instance,
     Global,
@@ -2300,9 +2905,12 @@ fn subdialog_class_name(tokens: &[CodeToken], range: (usize, usize)) -> Option<&
 /// `dialog check` already proves that bare class identities are unambiguous before this helper is
 /// called. Keeping the bare owner here therefore matches `subdialog_class_name`, which deliberately
 /// accepts both bare and namespace-qualified child values but returns the class leaf.
-fn fixed_subdialog_calls(source: &str) -> Result<FixedSubdialogCalls> {
+fn inventory_fixed_subdialog_calls(
+    source: &str,
+) -> Result<(FixedSubdialogCalls, FixedSubdialogShapes)> {
     let tokens = code_tokens(source)?;
     let mut calls = BTreeMap::<String, Vec<Vec<Option<String>>>>::new();
+    let mut shapes = BTreeMap::<String, Vec<SubdialogCallShape>>::new();
 
     for declaration in 0..tokens.len().saturating_sub(1) {
         if tokens[declaration].text != "class" {
@@ -2374,11 +2982,16 @@ fn fixed_subdialog_calls(source: &str) -> Result<FixedSubdialogCalls> {
                     }
                 })
                 .collect::<Result<Vec<_>>>()?;
+            shapes.entry(owner.clone()).or_default().push(shape);
             calls.entry(owner.clone()).or_default().push(children);
         }
     }
 
-    Ok(calls)
+    Ok((calls, shapes))
+}
+
+fn fixed_subdialog_calls(source: &str) -> Result<FixedSubdialogCalls> {
+    Ok(inventory_fixed_subdialog_calls(source)?.0)
 }
 
 /// Refuse the saturated structural shape that failed the current live runtime oracle.
@@ -2672,6 +3285,345 @@ fn wire_subdialog(
     Ok(edited)
 }
 
+fn new_conversation(request: NewConversationRequest) -> Result<()> {
+    let participant_input = request.npc.trim();
+    let (_new_module, _new_relative_path) = new_conversation_module_names(participant_input)?;
+    let (cache_path, bytes) = read_cache(request.cache, request.game)?;
+    let graph = dialog::build(&bytes).context("reading dialog from the script cache")?;
+    let selected = exact_npc_matches(&graph, participant_input);
+    let existing = match selected.as_slice() {
+        [] => None,
+        [conversation] if conversation.root_class.is_none() && conversation.topics.is_empty() => {
+            Some(*conversation)
+        }
+        [conversation] => bail!(
+            "{} already has a conversation with topics; use `gore dialog new-topic` to add an option",
+            participant_label(conversation)
+        ),
+        conversations => {
+            let names = conversations
+                .iter()
+                .map(|conversation| participant_label(conversation))
+                .collect::<Vec<_>>();
+            bail!(
+                "{participant_input:?} matched {} conversations: {}. Name the NPC exactly",
+                conversations.len(),
+                names.join(", ")
+            )
+        }
+    };
+    let participant = match existing {
+        Some(conversation) => {
+            let participants = conversation.npc_participants().collect::<Vec<_>>();
+            let [participant] = participants.as_slice() else {
+                bail!(
+                    "a topicless conversation must name exactly one NPC participant; found {}",
+                    participants.len()
+                );
+            };
+            (*participant).to_owned()
+        }
+        None => participant_input.to_owned(),
+    };
+    let (new_module, new_relative_path) = new_conversation_module_names(&participant)?;
+
+    let slug = identifier(&request.mod_name);
+    if slug.is_empty() {
+        bail!("--mod-name has to contain at least one letter or digit");
+    }
+    let class = request
+        .class
+        .clone()
+        .unwrap_or_else(|| format!("UChoice{slug}"));
+    if !class.starts_with('U') {
+        bail!("an AngelScript topic class name has to start with `U`, unlike {class:?}");
+    }
+    if !is_angelscript_identifier(&class) {
+        bail!("{class:?} is not an AngelScript identifier");
+    }
+
+    let declared = declared_classes(&bytes)?;
+    let root_class = expected_topic_root(&participant);
+    let settings_class = format!("UConversationCharacterSettings_G1R_{participant}");
+    for generated in [&class, &root_class] {
+        if declared.contains(&generated.to_ascii_lowercase()) {
+            bail!(
+                "the cache already declares a class called {generated:?}; choose another NPC or --class"
+            );
+        }
+    }
+    if existing.is_none() && declared.contains(&settings_class.to_ascii_lowercase()) {
+        bail!(
+            "the cache already declares settings class {settings_class:?}; refusing to create a colliding conversation module"
+        );
+    }
+
+    let caption_helper = format!("{}Caption", class_without_object_prefix(&class));
+    let caption_line = match (&request.caption, &request.caption_key) {
+        (Some(text), _) => format!(
+            "    default Caption = {caption_helper}(n{});",
+            serde_json::to_string(text)?
+        ),
+        (_, Some(key)) => format!(
+            "    default Caption = LocText({});",
+            serde_json::to_string(key)?
+        ),
+        _ => bail!("pass --caption or --caption-key"),
+    };
+    let helper_block = if request.caption.is_some() {
+        format!(
+            "FText {caption_helper}(const FName Text)\n{{\n    return FText::FromString(Text.ToString());\n}}\n\n"
+        )
+    } else {
+        String::new()
+    };
+
+    let (
+        operation,
+        module,
+        relative_path,
+        pristine,
+        insertion_class,
+        default_classes,
+        unsupported_generated_methods,
+    ) = match existing {
+        Some(conversation) => {
+            let taken = dialog::checkout(&bytes, &conversation.module, native_api(&cache_path))
+                .with_context(|| format!("taking {} out of the cache", conversation.module))?;
+            let outline = dialog::read_outline(&taken.source)
+                .map_err(|reason| anyhow::anyhow!("inventorying topicless settings: {reason}"))?;
+            let settings_matches = outline
+                .classes
+                .iter()
+                .filter(|candidate| {
+                    directly_derives_native(candidate, "UConversationCharacterSettings")
+                })
+                .collect::<Vec<_>>();
+            let [settings] = settings_matches.as_slice() else {
+                bail!(
+                    "{} contains {} UConversationCharacterSettings classes; exactly one is required",
+                    conversation.module,
+                    settings_matches.len()
+                );
+            };
+            let insertion_class = settings.name.clone();
+            drop(settings_matches);
+            drop(outline);
+            (
+                DialogModuleOperation::Edit,
+                taken.module,
+                taken.relative_path,
+                taken.source,
+                Some(insertion_class),
+                taken.default_classes,
+                taken.unsupported_generated_methods,
+            )
+        }
+        None => {
+            let modules = gore_as::cache::model::parse_modules(&bytes)
+                .map_err(|error| anyhow::anyhow!("parsing the script cache: {error}"))?;
+            gore_as::cache::emit_all::validate_add_module_target(
+                &modules,
+                &new_module,
+                &new_relative_path,
+            )
+            .map_err(|reason| anyhow::anyhow!("cannot create the conversation module: {reason}"))?;
+            (
+                DialogModuleOperation::Add,
+                new_module,
+                new_relative_path,
+                String::new(),
+                None,
+                BTreeSet::new(),
+                Vec::new(),
+            )
+        }
+    };
+    let debug_id = generated_topic_debug_id(&module, &class, &pristine);
+    let getter = format!("Get{}", identifier(&participant));
+    let root_source = format!(
+        "class {root_class} : UG1RDialogTopic\n\
+         {{\n\
+         \x20   default ForCharacter = n{};\n\
+         \x20   default WithCharacter = n\"Hero\";\n\
+         \n\
+         \x20   {root_class}()\n\
+         \x20   {{\n\
+         \x20       super();\n\
+         \x20       return;\n\
+         \x20   }}\n\
+         \x20   AGothicCharacterState GetHero() const\n\
+         \x20   {{\n\
+         \x20       return this.GetCharacter(n\"Hero\");\n\
+         \x20   }}\n\
+         \x20   AGothicCharacterState {getter}() const\n\
+         \x20   {{\n\
+         \x20       return this.GetSelf();\n\
+         \x20   }}\n\
+         }}",
+        serde_json::to_string(&participant)?
+    );
+    let topic_source = format!(
+        "{helper_block}class {class} : {root_class}\n\
+         {{\n\
+         \x20   default DebugId = {debug_id};\n\
+         {caption_line}\n\
+         \x20   default PriorityRank = 2;\n\
+         \n\
+         \x20   UFUNCTION(BlueprintOverride)\n\
+         \x20   bool IsVisible() const\n\
+         \x20   {{\n\
+         \x20       return true;\n\
+         \x20   }}\n\
+         \n\
+         \x20   UFUNCTION(BlueprintOverride)\n\
+         \x20   void Act()\n\
+         \x20   {{\n\
+         \x20       this.EndConversation();\n\
+         \x20   }}\n\
+         }}"
+    );
+    let generated = format!(
+        "// Generated by `gore dialog new-conversation` for {participant}.\n\
+         // Add more direct choices beside the first one. A choice may open a fixed-width\n\
+         // Subdialog containing other newly declared choices from this same module; use the\n\
+         // global ::Subdialog(this, UChildClass, ...) form for new-to-new edges.\n\
+         \n\
+         {root_source}\n\n{topic_source}"
+    );
+    let source = match insertion_class {
+        Some(settings) => append_to_class_namespace(&pristine, &settings, &generated)
+            .with_context(|| format!("placing the new conversation beside {settings}"))?,
+        None => {
+            let settings_source = format!(
+                "class {settings_class} : UConversationCharacterSettings\n\
+                 {{\n\
+                 \x20   default ForCharacter = n{};\n\
+                 \n\
+                 \x20   {settings_class}()\n\
+                 \x20   {{\n\
+                 \x20       return;\n\
+                 \x20   }}\n\
+                 }}",
+                serde_json::to_string(&participant)?
+            );
+            format!(
+                "// GORE-authored conversation module: {module} ({relative_path})\n\n\
+                 namespace G1R::Conversation\n\
+                 {{\n\
+                 {settings_source}\n\n\
+                 {generated}\n\
+                 }}\n"
+            )
+        }
+    };
+
+    let manifest = EditManifest {
+        operation,
+        module,
+        relative_path,
+        source_file: String::new(),
+        pristine_file: String::new(),
+        participant: participant.clone(),
+        cache_sha256: digest_of(&bytes),
+        requires_topic_scaffold: true,
+        dialog_topics: Vec::new(),
+    };
+    let known = dialog::known_names(&bytes).context("collecting the cache's names")?;
+    let checkout = dialog::Checkout {
+        module: manifest.module.clone(),
+        relative_path: manifest.relative_path.clone(),
+        source: pristine.clone(),
+        default_classes,
+        unsupported_generated_methods,
+    };
+    let report = dialog::verify(&checkout, &source, &known);
+    if !report.is_carryable() {
+        let reasons = report
+            .violations
+            .iter()
+            .map(|violation| violation.explain())
+            .collect::<Vec<_>>()
+            .join("; ");
+        bail!("generated conversation did not pass the dialog edit contract: {reasons}");
+    }
+    validate_saturated_subdialog_edits(&pristine, &source, &report.added_classes)
+        .context("the generated Subdialog shape is not runtime-qualified")?;
+    validate_topic_registrations(&manifest, &report, &source, &bytes)
+        .context("the generated conversation tree is not safely connected")?;
+    if !report.requires_new_symbols() {
+        bail!("generated conversation was not recognized as a new-symbol edit");
+    }
+
+    if request.out.exists()
+        && fs::read_dir(&request.out)
+            .with_context(|| format!("reading {}", request.out.display()))?
+            .next()
+            .is_some()
+    {
+        bail!(
+            "{} is not empty; choose an empty --out directory so no stale spec or source survives",
+            request.out.display()
+        );
+    }
+    fs::create_dir_all(request.out.join("pristine"))
+        .with_context(|| format!("creating {}", request.out.display()))?;
+    let leaf = manifest
+        .relative_path
+        .rsplit('/')
+        .next()
+        .unwrap_or("module.as")
+        .to_owned();
+    let source_path = request.out.join(&leaf);
+    let pristine_path = request.out.join("pristine").join(&leaf);
+    fs::write(&source_path, &source)
+        .with_context(|| format!("writing {}", source_path.display()))?;
+    fs::write(&pristine_path, &pristine)
+        .with_context(|| format!("writing {}", pristine_path.display()))?;
+    let manifest = EditManifest {
+        source_file: leaf.clone(),
+        pristine_file: format!("pristine/{leaf}"),
+        ..manifest
+    };
+    let manifest_path = request.out.join(MANIFEST_NAME);
+    fs::write(
+        &manifest_path,
+        format!("{}\n", serde_json::to_string_pretty(&manifest)?),
+    )
+    .with_context(|| format!("writing {}", manifest_path.display()))?;
+
+    println!("{} — {}", manifest.participant, manifest.module);
+    println!("wrote     {}", source_path.display());
+    println!("as-was    {}", pristine_path.display());
+    println!("manifest  {}", manifest_path.display());
+    println!();
+    match manifest.operation {
+        DialogModuleOperation::Edit => {
+            println!("existing topicless module retained; private root and first choice added")
+        }
+        DialogModuleOperation::Add => {
+            println!("complete new same-module conversation scaffolded");
+            println!("NPC existence and runtime binding were not validated; use the exact NPC id")
+        }
+    }
+    println!("root      {root_class}");
+    println!("choice    {class}");
+    println!(
+        "stage     --op {} --allow-new-symbols",
+        manifest.operation.as_str()
+    );
+    println!();
+    println!("next:");
+    println!("  gore dialog check {}", powershell_quote(&request.out));
+    println!(
+        "  gore dialog stage {} --mod-name {}",
+        powershell_quote(&request.out),
+        powershell_quote_text(&request.mod_name),
+    );
+    println!("Compilation, packaging, deployment and runtime proof remain separate steps.");
+    Ok(())
+}
+
 fn new_topic(request: NewTopicRequest) -> Result<()> {
     if request.subdialog_position.is_some() && request.subdialog_of.is_none() {
         bail!("--subdialog-position requires --subdialog-of");
@@ -2689,7 +3641,7 @@ fn new_topic(request: NewTopicRequest) -> Result<()> {
 
     let Some(root_class) = conversation.root_class.clone() else {
         bail!(
-            "{} declares no dialog topics, so there is no base class to derive from",
+            "{} declares no dialog topics yet; use `gore dialog new-conversation` to add its private topic base and first option",
             participant_label(conversation)
         );
     };
@@ -2864,12 +3816,14 @@ fn new_topic(request: NewTopicRequest) -> Result<()> {
     fs::write(&pristine_path, &taken.source)
         .with_context(|| format!("writing {}", pristine_path.display()))?;
     let manifest = EditManifest {
+        operation: DialogModuleOperation::Edit,
         module: taken.module,
         relative_path: taken.relative_path,
         source_file: leaf.clone(),
         pristine_file: format!("pristine/{leaf}"),
         participant: participant_label(conversation),
         cache_sha256: digest_of(&bytes),
+        requires_topic_scaffold: false,
         dialog_topics,
     };
     let manifest_path = request.out.join(MANIFEST_NAME);
@@ -3064,6 +4018,29 @@ mod tests {
     }
 
     #[test]
+    fn a_new_conversation_never_turns_a_partial_or_module_match_into_an_edit() {
+        let graph = DialogGraph {
+            conversations: vec![Conversation {
+                module: "Story.G1R.Conversation.Conversation_NC_SLD_GORN_699FM".to_owned(),
+                root_class: None,
+                participants: vec!["Hero".to_owned(), "NC_SLD_GORN_699FM".to_owned()],
+                topics: Vec::new(),
+                roots: Vec::new(),
+                coverage: Default::default(),
+            }],
+        };
+
+        assert_eq!(
+            matching(&graph, "GORN").len(),
+            1,
+            "the read helper is intentionally broad"
+        );
+        assert!(exact_npc_matches(&graph, "GORN").is_empty());
+        assert!(exact_npc_matches(&graph, &graph.conversations[0].module).is_empty());
+        assert_eq!(exact_npc_matches(&graph, "nc_sld_gorn_699fm").len(), 1);
+    }
+
+    #[test]
     fn only_one_unreal_object_prefix_is_removed() {
         assert_eq!(class_without_object_prefix("UChoice"), "Choice");
         assert_eq!(class_without_object_prefix("UUFoo"), "UFoo");
@@ -3190,10 +4167,12 @@ class UOther : UBase
         assert!(edited.contains("this.Subdialog(UFirst, UNewChild,"));
         assert!(edited.contains(&format!("this.Subdialog({other_arguments});")));
         assert_eq!(edited.matches("UNewChild").count(), 1);
-        assert_eq!(
-            subdialog_reference_owners(&edited, "UNewChild").unwrap(),
-            ["UParent"]
-        );
+        let calls = fixed_subdialog_calls(&edited).unwrap();
+        assert!(calls["UParent"]
+            .iter()
+            .flatten()
+            .flatten()
+            .any(|child| child == "UNewChild"));
     }
 
     #[test]
@@ -3727,6 +4706,282 @@ class UTopic_Hero__Npc : UConversationTopic
         assert!(message.contains("USecond"), "{message}");
     }
 
+    fn new_tree_topic(name: &str, debug_id: i64, subtopic: bool, children: &[&str]) -> String {
+        let placement = if subtopic {
+            "    default bIsSubTopic = true;\n"
+        } else {
+            ""
+        };
+        let act = if children.is_empty() {
+            "        this.EndConversation();".to_owned()
+        } else {
+            format!(
+                "        ::Subdialog(this, {});",
+                fixed_subdialog_arguments(children)
+            )
+        };
+        format!(
+            r#"class {name} : URoot
+{{
+    default DebugId = {debug_id};
+{placement}    UFUNCTION(BlueprintOverride)
+    bool IsVisible() const {{ return true; }}
+    UFUNCTION(BlueprintOverride)
+    void Act() {{
+{act}
+    }}
+}}
+"#
+        )
+    }
+
+    fn new_tree_report(classes: &[&str]) -> dialog::EditReport {
+        dialog::EditReport {
+            violations: Vec::new(),
+            changed: Vec::new(),
+            changed_defaults: Vec::new(),
+            added_classes: classes.iter().map(|class| (*class).to_owned()).collect(),
+            added_functions: Vec::new(),
+            new_strings: Vec::new(),
+            new_static_names: Vec::new(),
+            unchanged: false,
+        }
+    }
+
+    fn check_new_tree(source: &str, classes: &[&str]) -> Result<()> {
+        let outline = dialog::read_outline(source).unwrap();
+        let root = outline
+            .classes
+            .iter()
+            .find(|class| class.name == "URoot")
+            .unwrap();
+        let topics = classes
+            .iter()
+            .map(|class| (*class).to_owned())
+            .collect::<BTreeSet<_>>();
+        validate_new_topic_tree(
+            source,
+            &outline,
+            &new_tree_report(classes),
+            root,
+            &topics,
+            &BTreeMap::new(),
+        )
+    }
+
+    #[test]
+    fn an_all_new_multilevel_topic_tree_is_accepted() {
+        let source = format!(
+            "class URoot : UG1RDialogTopic {{}}\n{}{}{}{}",
+            new_tree_topic("URootChoice", 1, false, &["ULevelOneA", "ULevelOneB"]),
+            new_tree_topic("ULevelOneA", 2, true, &["ULevelTwo"]),
+            new_tree_topic("ULevelOneB", 3, true, &[]),
+            new_tree_topic("ULevelTwo", 4, true, &[]),
+        );
+        check_new_tree(
+            &source,
+            &["URootChoice", "ULevelOneA", "ULevelOneB", "ULevelTwo"],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn an_all_new_parent_requires_the_compiler_qualified_global_subdialog_form() {
+        let source = format!(
+            "class URoot : UG1RDialogTopic {{}}\n{}{}",
+            new_tree_topic("UParent", 1, false, &["UChild"]),
+            new_tree_topic("UChild", 2, true, &[]),
+        )
+        .replace("::Subdialog(this, ", "this.Subdialog(");
+        let error = check_new_tree(&source, &["UParent", "UChild"]).unwrap_err();
+        assert!(error.to_string().contains("global `::Subdialog"), "{error}");
+    }
+
+    #[test]
+    fn every_new_topic_is_a_class_beside_its_private_root() {
+        let wrong_kind = "class URoot : UG1RDialogTopic {}\nstruct UChoice : URoot {\n    default DebugId = 1;\n    UFUNCTION(BlueprintOverride) bool IsVisible() const { return true; }\n    UFUNCTION(BlueprintOverride) void Act() { this.EndConversation(); }\n}\n";
+        let error = check_new_tree(wrong_kind, &["UChoice"]).unwrap_err();
+        assert!(error.to_string().contains("declared as a class"), "{error}");
+
+        let wrong_namespace = "namespace RootSpace { class URoot : UG1RDialogTopic {} }\nnamespace OtherSpace { class UChoice : RootSpace::URoot {\n    default DebugId = 1;\n    UFUNCTION(BlueprintOverride) bool IsVisible() const { return true; }\n    UFUNCTION(BlueprintOverride) void Act() { this.EndConversation(); }\n} }\n";
+        let outline = dialog::read_outline(wrong_namespace).unwrap();
+        let root = outline
+            .classes
+            .iter()
+            .find(|class| class.name == "URoot")
+            .unwrap();
+        let error = validate_new_topic_tree(
+            wrong_namespace,
+            &outline,
+            &new_tree_report(&["UChoice"]),
+            root,
+            &BTreeSet::from(["UChoice".to_owned()]),
+            &BTreeMap::new(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("beside its private root"), "{error}");
+    }
+
+    #[test]
+    fn all_new_topic_trees_reject_duplicates_holes_and_foreign_children() {
+        let duplicate = format!(
+            "class URoot : UG1RDialogTopic {{}}\n{}{}",
+            new_tree_topic("UA", 1, false, &["UB", "UB"]),
+            new_tree_topic("UB", 2, true, &[]),
+        );
+        let error = check_new_tree(&duplicate, &["UA", "UB"]).unwrap_err();
+        assert!(error.to_string().contains("duplicates topic UB"), "{error}");
+
+        let mut hole_slots = vec![
+            "UB".to_owned(),
+            EMPTY_SUBDIALOG_SLOT.to_owned(),
+            "UC".to_owned(),
+        ];
+        hole_slots.resize(SUBDIALOG_TOPIC_SLOTS, EMPTY_SUBDIALOG_SLOT.to_owned());
+        let hole_parent = new_tree_topic("UA", 1, false, &[]).replace(
+            "this.EndConversation();",
+            &format!("::Subdialog(this, {});", hole_slots.join(", ")),
+        );
+        let holes = format!(
+            "class URoot : UG1RDialogTopic {{}}\n{hole_parent}{}{}",
+            new_tree_topic("UB", 2, true, &[]),
+            new_tree_topic("UC", 3, true, &[]),
+        );
+        let error = check_new_tree(&holes, &["UA", "UB", "UC"]).unwrap_err();
+        assert!(error.to_string().contains("after an empty slot"), "{error}");
+
+        let foreign = format!(
+            "class URoot : UG1RDialogTopic {{}}\n{}",
+            new_tree_topic("UA", 1, false, &["UShippedElsewhere"]),
+        );
+        let error = check_new_tree(&foreign, &["UA"]).unwrap_err();
+        assert!(error.to_string().contains("foreign"), "{error}");
+    }
+
+    #[test]
+    fn all_new_topic_trees_reject_multi_parent_cycles_orphans_and_debug_id_reuse() {
+        let multi_parent = format!(
+            "class URoot : UG1RDialogTopic {{}}\n{}{}{}",
+            new_tree_topic("UA", 1, false, &["UC"]),
+            new_tree_topic("UB", 2, false, &["UC"]),
+            new_tree_topic("UC", 3, true, &[]),
+        );
+        let error = check_new_tree(&multi_parent, &["UA", "UB", "UC"]).unwrap_err();
+        assert!(
+            error.to_string().contains("multiple Subdialog parents"),
+            "{error}"
+        );
+
+        let cycle = format!(
+            "class URoot : UG1RDialogTopic {{}}\n{}{}",
+            new_tree_topic("UA", 1, true, &["UB"]),
+            new_tree_topic("UB", 2, true, &["UA"]),
+        );
+        let error = check_new_tree(&cycle, &["UA", "UB"]).unwrap_err();
+        assert!(error.to_string().contains("cycle"), "{error}");
+
+        let orphan = format!(
+            "class URoot : UG1RDialogTopic {{}}\n{}{}",
+            new_tree_topic("UA", 1, false, &[]),
+            new_tree_topic("UOrphan", 2, true, &[]),
+        );
+        let error = check_new_tree(&orphan, &["UA", "UOrphan"]).unwrap_err();
+        assert!(error.to_string().contains("wired as a root"), "{error}");
+
+        let duplicate_id = format!(
+            "class URoot : UG1RDialogTopic {{}}\n{}{}",
+            new_tree_topic("UA", 1, false, &[]),
+            new_tree_topic("UB", 1, false, &[]),
+        );
+        let error = check_new_tree(&duplicate_id, &["UA", "UB"]).unwrap_err();
+        assert!(error.to_string().contains("duplicate DebugId"), "{error}");
+    }
+
+    #[test]
+    fn a_new_conversation_base_binds_settings_root_and_participant() {
+        let source = r#"
+namespace G1R::Conversation
+{
+class UConversationCharacterSettings_G1R_NEW_NPC : UConversationCharacterSettings
+{
+    default ForCharacter = n"NEW_NPC";
+}
+class UTopic_Hero__NEW_NPC : UG1RDialogTopic
+{
+    default ForCharacter = n"NEW_NPC";
+    default WithCharacter = n"Hero";
+}
+class UFirst : UTopic_Hero__NEW_NPC { }
+}
+"#;
+        let outline = dialog::read_outline(source).unwrap();
+        let report = new_tree_report(&[
+            "UConversationCharacterSettings_G1R_NEW_NPC",
+            "UTopic_Hero__NEW_NPC",
+            "UFirst",
+        ]);
+        assert_eq!(
+            validate_new_conversation_base(&outline, &report, "NEW_NPC", true)
+                .unwrap()
+                .name,
+            "UTopic_Hero__NEW_NPC"
+        );
+
+        let spaced = source.replace("n\"NEW_NPC\"", "n\"N E W _ N P C\"");
+        let spaced_outline = dialog::read_outline(&spaced).unwrap();
+        let settings = spaced_outline
+            .classes
+            .iter()
+            .find(|class| class.name == "UConversationCharacterSettings_G1R_NEW_NPC")
+            .unwrap();
+        assert_eq!(
+            literal_name_default(settings, "ForCharacter").unwrap(),
+            Some("N E W _ N P C".to_owned()),
+            "whitespace inside the literal is content, not formatting"
+        );
+        assert!(
+            validate_new_conversation_base(&spaced_outline, &report, "NEW_NPC", true).is_err()
+        );
+
+        let wrong_namespace = source.replace("G1R::Conversation", "Other::Conversation");
+        let wrong_outline = dialog::read_outline(&wrong_namespace).unwrap();
+        let error =
+            validate_new_conversation_base(&wrong_outline, &report, "NEW_NPC", true).unwrap_err();
+        assert!(error.to_string().contains("namespace `G1R::Conversation`"), "{error}");
+    }
+
+    #[test]
+    fn a_topicless_edit_retains_one_bound_shipped_settings_class() {
+        let source = r#"
+namespace G1R::Conversation
+{
+class UConversationCharacterSettings_G1R_NEW_NPC : UConversationCharacterSettings
+{
+    default ForCharacter = n"NEW_NPC";
+}
+}
+"#;
+        let outline = dialog::read_outline(source).unwrap();
+        let report = new_tree_report(&[]);
+        assert_eq!(
+            validate_topicless_settings(&outline, &report, "NEW_NPC")
+                .unwrap()
+                .name,
+            "UConversationCharacterSettings_G1R_NEW_NPC"
+        );
+
+        let rebound = source.replace("n\"NEW_NPC\"", "n\"OTHER_NPC\"");
+        let rebound_outline = dialog::read_outline(&rebound).unwrap();
+        assert!(validate_topicless_settings(&rebound_outline, &report, "NEW_NPC").is_err());
+
+        let duplicate = source.replace(
+            "}\n}",
+            "}\nclass UExtraSettings : UConversationCharacterSettings { default ForCharacter = n\"NEW_NPC\"; }\n}",
+        );
+        let duplicate_outline = dialog::read_outline(&duplicate).unwrap();
+        assert!(validate_topicless_settings(&duplicate_outline, &report, "NEW_NPC").is_err());
+    }
+
     #[test]
     fn generated_topic_debug_ids_are_stable_and_avoid_the_module() {
         let first = generated_topic_debug_id("Story.Dialog", "UChoiceNew", "");
@@ -3744,14 +4999,31 @@ class UTopic_Hero__Npc : UConversationTopic
 
     fn command_manifest() -> EditManifest {
         EditManifest {
+            operation: DialogModuleOperation::Edit,
             module: "Story.G1R.Conversation.Test".to_owned(),
             relative_path: "Story/G1R/Conversation/Test.as".to_owned(),
             source_file: "Test.as".to_owned(),
             pristine_file: "pristine/Test.as".to_owned(),
             participant: "TestNpc".to_owned(),
             cache_sha256: "00".repeat(32),
+            requires_topic_scaffold: false,
             dialog_topics: Vec::new(),
         }
+    }
+
+    #[test]
+    fn old_dialog_manifests_default_to_edit_operation() {
+        let document = serde_json::json!({
+            "module": "Story.G1R.Conversation.Test",
+            "relative_path": "Story/G1R/Conversation/Test.as",
+            "source_file": "Test.as",
+            "pristine_file": "pristine/Test.as",
+            "participant": "TestNpc",
+            "cache_sha256": "00"
+        });
+        let manifest: EditManifest = serde_json::from_value(document).unwrap();
+        assert_eq!(manifest.operation, DialogModuleOperation::Edit);
+        assert!(!manifest.requires_topic_scaffold);
     }
 
     #[test]
@@ -3786,6 +5058,24 @@ class UTopic_Hero__Npc : UConversationTopic
         );
         assert!(command.contains("--backend standalone --op edit"));
         assert!(!command.contains("--allow-new-symbols"));
+    }
+
+    #[test]
+    fn a_new_conversation_stages_as_one_add_with_new_symbols() {
+        let mut manifest = command_manifest();
+        manifest.operation = DialogModuleOperation::Add;
+        manifest.module = "Story.G1R.Conversation.Conversation_NEW_NPC".to_owned();
+        manifest.relative_path = "Story/G1R/Conversation/Conversation_NEW_NPC.as".to_owned();
+        let command = compile_module_command(
+            &manifest,
+            Path::new("source.as"),
+            Path::new("compiler"),
+            Path::new("output.Cache"),
+            Path::new("game"),
+            true,
+        );
+        assert!(command.contains("--backend standalone --op add"));
+        assert!(command.contains("--allow-new-symbols"));
     }
 
     #[test]
@@ -3971,6 +5261,166 @@ class UTopic_Hero__Npc : UConversationTopic
         )
         .unwrap();
         check(&out, true, Some(cache), Some(fake_game)).unwrap();
+    }
+
+    #[test]
+    fn real_cache_new_conversation_scaffolds_add_and_topicless_edit_fail_closed() {
+        let Some(cache) = std::env::var_os("GORE_AS_REAL_CACHE").map(PathBuf::from) else {
+            eprintln!("skip: set GORE_AS_REAL_CACHE");
+            return;
+        };
+        assert!(cache.is_file(), "{} is not a script cache", cache.display());
+
+        let temp = tempfile::tempdir().unwrap();
+        let fake_game = temp.path().join("game");
+        let fake_cache = gore_mod::resolve_game_paths(&fake_game).script_cache;
+        fs::create_dir_all(fake_cache.parent().unwrap()).unwrap();
+        if fs::hard_link(&cache, &fake_cache).is_err() {
+            fs::copy(&cache, &fake_cache).unwrap();
+        }
+
+        let add_out = temp.path().join("brand-new");
+        let participant = "GORE_TEST_DIALOG_NPC";
+        let first_class = "UChoiceGoreBrandNewOracle";
+        new_conversation(NewConversationRequest {
+            npc: participant.to_owned(),
+            caption: None,
+            caption_key: Some("GORE_DIALOG_BRAND_NEW_ORACLE".to_owned()),
+            class: Some(first_class.to_owned()),
+            mod_name: "GoreBrandNewOracle".to_owned(),
+            out: add_out.clone(),
+            cache: Some(cache.clone()),
+            game: None,
+        })
+        .unwrap();
+        let add_manifest: EditManifest =
+            serde_json::from_slice(&fs::read(add_out.join(MANIFEST_NAME)).unwrap()).unwrap();
+        assert_eq!(add_manifest.operation, DialogModuleOperation::Add);
+        check(&add_out, true, Some(cache.clone()), Some(fake_game.clone())).unwrap();
+
+        // Extend the generated root option into a tree made solely from new topic classes. This
+        // runs through the product check/stage path, not just the graph helper tests above.
+        let source_path = add_out.join(&add_manifest.source_file);
+        let mut tree = fs::read_to_string(&source_path).unwrap();
+        let root_class = expected_topic_root(participant);
+        let children = fixed_subdialog_arguments(&["UChoiceGoreBrandNewChild"]);
+        tree = tree.replacen(
+            "        this.EndConversation();",
+            &format!("        ::Subdialog(this, {children});"),
+            1,
+        );
+        let extra = format!(
+            "\n{}{}",
+            new_tree_topic(
+                "UChoiceGoreBrandNewChild",
+                i64::MAX - 1,
+                true,
+                &["UChoiceGoreBrandNewGrandchild"],
+            )
+            .replace(": URoot", &format!(": {root_class}")),
+            new_tree_topic("UChoiceGoreBrandNewGrandchild", i64::MAX, true, &[],)
+                .replace(": URoot", &format!(": {root_class}")),
+        );
+        let namespace_end = tree.rfind('}').unwrap();
+        tree.insert_str(namespace_end, &extra);
+        fs::write(&source_path, &tree).unwrap();
+        check(&add_out, true, Some(cache.clone()), Some(fake_game.clone())).unwrap();
+        stage(
+            &add_out,
+            "GoreBrandNewOracle",
+            Some(cache.clone()),
+            Some(fake_game.clone()),
+        )
+        .unwrap();
+        let spec: serde_json::Value =
+            serde_json::from_slice(&fs::read(add_out.join("spec.json")).unwrap()).unwrap();
+        assert_eq!(spec["scripts"][0]["op"], "add");
+        assert!(spec.get("dialog_topics").is_none());
+
+        // Removing the scaffold must not turn an add workspace into an arbitrary helper module.
+        fs::write(
+            &source_path,
+            "namespace G1R::Conversation { void Helper() { return; } }\n",
+        )
+        .unwrap();
+        let error = match open_edit(&add_out, Some(cache.clone()), Some(fake_game.clone())) {
+            Ok(_) => panic!("a gutted add workspace was accepted"),
+            Err(error) => error,
+        };
+        assert!(
+            format!("{error:#}").contains("new conversation"),
+            "{error:#}"
+        );
+
+        let bytes = fs::read(&cache).unwrap();
+        let graph = dialog::build(&bytes).unwrap();
+        let topicless = graph
+            .conversations
+            .iter()
+            .find(|conversation| {
+                conversation.root_class.is_none()
+                    && conversation.topics.is_empty()
+                    && conversation.npc_participants().count() == 1
+            })
+            .expect("the real cache carries a topicless conversation oracle");
+        let topicless_participant = topicless.npc_participants().next().unwrap().to_owned();
+
+        // A plain checkout remains a valid settings-only workspace. Only the dedicated
+        // new-conversation manifest promises that a private root and first option must survive.
+        let plain_out = temp.path().join("topicless-plain-checkout");
+        checkout(
+            &topicless_participant,
+            &plain_out,
+            Some(cache.clone()),
+            None,
+        )
+        .unwrap();
+        let plain_manifest: EditManifest =
+            serde_json::from_slice(&fs::read(plain_out.join(MANIFEST_NAME)).unwrap()).unwrap();
+        assert!(!plain_manifest.requires_topic_scaffold);
+        check(
+            &plain_out,
+            true,
+            Some(cache.clone()),
+            Some(fake_game.clone()),
+        )
+        .unwrap();
+
+        let edit_out = temp.path().join("topicless-edit");
+        new_conversation(NewConversationRequest {
+            npc: topicless_participant,
+            caption: None,
+            caption_key: Some("GORE_DIALOG_TOPICLESS_ORACLE".to_owned()),
+            class: Some("UChoiceGoreTopiclessOracle".to_owned()),
+            mod_name: "GoreTopiclessOracle".to_owned(),
+            out: edit_out.clone(),
+            cache: Some(cache.clone()),
+            game: None,
+        })
+        .unwrap();
+        let edit_manifest: EditManifest =
+            serde_json::from_slice(&fs::read(edit_out.join(MANIFEST_NAME)).unwrap()).unwrap();
+        assert_eq!(edit_manifest.operation, DialogModuleOperation::Edit);
+        check(
+            &edit_out,
+            true,
+            Some(cache.clone()),
+            Some(fake_game.clone()),
+        )
+        .unwrap();
+
+        // Restoring only the pristine settings is not a valid "new conversation" edit: the
+        // manifest still promises a root and at least one option.
+        let pristine = fs::read(edit_out.join(&edit_manifest.pristine_file)).unwrap();
+        fs::write(edit_out.join(&edit_manifest.source_file), pristine).unwrap();
+        let error = match open_edit(&edit_out, Some(cache), Some(fake_game)) {
+            Ok(_) => panic!("a gutted topicless edit workspace was accepted"),
+            Err(error) => error,
+        };
+        assert!(
+            format!("{error:#}").contains("new conversation"),
+            "{error:#}"
+        );
     }
 
     #[test]

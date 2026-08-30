@@ -797,6 +797,58 @@ const DIALOG_NEW_TOPIC_ARGS: &[ArgSpec] = &[
     DIALOG_CACHE_ARGS[1],
 ];
 
+const DIALOG_NEW_CONVERSATION_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "npc",
+        Positional { order: 0 },
+        Str,
+        "Exact NPC identifier (for example `NC_SLD_GORN_699FM`) for the participant that \
+         should own the conversation; syntax and collisions are checked, but NPC existence and \
+         runtime binding are not",
+        true,
+    ),
+    ArgSpec::new(
+        "caption",
+        Long("caption"),
+        Str,
+        "The first option's menu text, as an untranslated literal",
+        false,
+    ),
+    ArgSpec::new(
+        "caption_key",
+        Long("caption-key"),
+        Str,
+        "The first option's localization key, for a translatable caption",
+        false,
+    ),
+    ArgSpec::new(
+        "class",
+        Long("class"),
+        Str,
+        "AngelScript class name for the first option",
+        false,
+    )
+    .with_default("UChoice<mod name>"),
+    ArgSpec::new(
+        "mod_name",
+        Long("mod-name"),
+        Str,
+        "Mod name, used for the default class name and the later staged bundle",
+        false,
+    )
+    .with_default("MyDialogMod"),
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Empty output directory for the same-module conversation source, its pristine/base \
+         material, and the checked manifest",
+        true,
+    ),
+    DIALOG_CACHE_ARGS[0],
+    DIALOG_CACHE_ARGS[1],
+];
+
 const DIALOG_COMMANDS: &[CommandSpec] = &[
     CommandSpec::new(
         "list",
@@ -847,8 +899,8 @@ const DIALOG_COMMANDS: &[CommandSpec] = &[
     .guide("dialog-trees"),
     CommandSpec::new(
         "check",
-        "Fail closed unless an edited conversation preserves every required class/default and \
-         satisfies the current edit/remap contract",
+        "Fail closed unless a conversation workspace preserves every required class/default and \
+         satisfies its add/edit remap contract",
         DIALOG_CHECK_ARGS,
         Safety::read(),
         T_NORMAL,
@@ -858,8 +910,8 @@ const DIALOG_COMMANDS: &[CommandSpec] = &[
     // One build spec inside the directory `checkout` already created.
     CommandSpec::new(
         "stage",
-        "Write the build spec for a checked edit and print its strict standalone `--op edit` \
-         compile command, adding `--allow-new-symbols` only when required",
+        "Write the build spec for a checked workspace and print its strict standalone `--op \
+         edit` or `--op add` compile command, adding `--allow-new-symbols` only when required",
         DIALOG_STAGE_ARGS,
         Safety::write().writes_into(&["dir"]),
         T_NORMAL,
@@ -872,6 +924,18 @@ const DIALOG_COMMANDS: &[CommandSpec] = &[
         "Scaffold a new topic inside an NPC's existing conversation module: leave it as a native \
          root, or wire it into one existing Subdialog call with --subdialog-of",
         DIALOG_NEW_TOPIC_ARGS,
+        Safety::write().writes_into(&["out"]),
+        T_NORMAL,
+    )
+    .exactly_one(&[&["caption", "caption_key"]])
+    .guide("dialog-trees"),
+    // One same-module conversation source plus its base material and manifest under a
+    // caller-picked empty directory. The game install is only read.
+    CommandSpec::new(
+        "new-conversation",
+        "Scaffold a complete conversation where the NPC has no root topic: extend its single \
+         shipped topicless module, or create a new module when none exists",
+        DIALOG_NEW_CONVERSATION_ARGS,
         Safety::write().writes_into(&["out"]),
         T_NORMAL,
     )
@@ -895,9 +959,10 @@ pub const DIALOG: GroupSpec = GroupSpec {
     cli: "dialog",
     summary:
         "Read the dialog trees declared by the installed script cache, edit method bodies and \
-              complete reconstructed defaults, and stage checked same-module topic additions. \
-              Localization, compilation, packaging, deployment, and runtime proof remain \
-              separate steps; read commands report cache declarations, not save-state behavior.",
+              complete reconstructed defaults, and stage checked same-module topic or complete \
+              conversation additions. Localization, compilation, packaging, deployment, and \
+              runtime proof remain separate steps; read commands report cache declarations, not \
+              save-state behavior.",
     shape: GroupShape::Nested,
     commands: DIALOG_COMMANDS,
 };

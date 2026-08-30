@@ -294,6 +294,17 @@ root was discovered and selected with no UE4SS proxy present; a prior run with
 the legacy adapter installed had skipped before insertion. A sub-topic is
 reached through the authored `Subdialog` call in the same module.
 
+`gore dialog new-conversation` is also script-only. It stages `--op edit` for
+one shipped topicless conversation module or `--op add` when the complete
+settings/root/topic graph is a new module. All-new submenu levels stay in that
+same mini-cache. Those new-conversation shapes compile and package offline, but
+their native runtime discovery and navigation have not yet been observed. The
+bundle therefore contains no generated UE4SS component; whether the game can
+discover every such conversation without a separate runtime bridge is still an
+open runtime question, not a packaging guarantee. For a new module, the NPC id
+is only syntax/collision-checked, so it must match the exact NPC id supplied by
+the catalog or another project payload.
+
 `dialog_topics` remains a separate low-level compatibility surface for old
 workspaces and explicitly hand-authored specs. Such an entry asks the generated
 UE4SS adapter to register an authored AngelScript topic at the target

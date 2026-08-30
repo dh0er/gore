@@ -250,6 +250,12 @@ generate a UE4SS/`dialog_topics` adapter. The separate low-level legacy adapter
 remains available for hand-authored bundle specs; see
 [AngelScript dialog authoring](dialog-authoring.md).
 
+For an NPC with no root topics, `gore dialog new-conversation` instead keeps
+settings, the private root and all topic classes in one module. It edits an
+exact shipped topicless module or adds a new module when none exists. That
+source/compile/package path, including new-to-new submenu levels, is supported;
+native in-game discovery and navigation remain to be proven separately.
+
 ## Related
 
 - [Voice-over](voice.md) — the recordings that go with the lines.

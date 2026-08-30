@@ -18,7 +18,7 @@ gore --version
 | `mcp` | `serve` · `tools` | Serve the whole CLI over the Model Context Protocol (stdio JSON-RPC) for AI assistants. | [mcp](mcp.md) |
 | `guide` | `search` · `html` | Search this guide and the reference from a shell, or render the guide into one self-contained HTML file. | [below](#guide) |
 | `find` | — | Search the bundled catalogs and the effect register: class names, ids, categories, display names, and what an id does in game. | [find](find.md) |
-| `dialog` | `list` · `tree` · `show` · `text` · `new-topic` · `checkout` · `check` · `stage` · `export` | Inspect dialog trees and prepare checked structural/default edits from the installed script cache. | [dialog-trees](dialog-trees.md) |
+| `dialog` | `list` · `tree` · `show` · `text` · `new-topic` · `new-conversation` · `checkout` · `check` · `stage` · `export` | Inspect dialog trees and prepare checked structural/default edits or complete same-module conversations from the installed script cache. | [dialog-trees](dialog-trees.md) |
 | `gen` | — | Compile `overrides.toml` → a UE4SS Lua override mod. | [items](items.md) |
 | `mod` | `build` · `inspect` · `deploy` · `undeploy` | Build, validate, inspect, deploy, or undeploy a unified bundle. | [bundles](bundles.md) |
 | `mgr` | `import` · `list` · `remove` · `enable` · `disable` · `order` · `analyze` · `preflight` · `recover` · `apply` · `status` · `reset` | Multi-mod manager: library, load order, readiness/recovery, conflicts, composed deployment, status and Reset. | [mod-manager](mod-manager.md) |
@@ -150,7 +150,7 @@ and failing would bury the line explaining what was not searched.
 
 ## `dialog`
 
-`gore dialog <list|tree|show|text|new-topic|checkout|check|stage|export> [OPTIONS]`
+`gore dialog <list|tree|show|text|new-topic|new-conversation|checkout|check|stage|export> [OPTIONS]`
 
 | Subcommand | Flags | Meaning |
 |---|---|---|
@@ -159,9 +159,10 @@ and failing would bury the line explaining what was not searched.
 | `show` | `<TOPIC>` · `--lang` | One topic class in full, with class names and localization keys. |
 | `text` | `<NPC>` · `--lang` · `--out <FILE>` | That conversation's lines as a `gore loc import` edits document, each under the column the game actually reads. |
 | `new-topic` | `<NPC>` · `--caption`/`--caption-key` · `--class` · `--subdialog-of <TOPIC>` · `--subdialog-position <N>` · `--mod-name` · `--out <DIR>` | Write a complete same-module edit workspace with the new class inserted into the conversation namespace. Without `--subdialog-of`, make a native direct root. With it, shift the named shipped parent's fixed 20-slot `Subdialog` entries and insert the child at optional 1-based position `N`; by default a trailing `TEXT_BACK`/Zurück entry stays last, otherwise the child appends. This is not an isolated `--op add` recipe and does not generate a UE4SS adapter. |
+| `new-conversation` | `<NPC>` · `--caption`/`--caption-key` · `--class` · `--mod-name` · `--out <DIR>` | Start a complete same-module conversation for an NPC with no root topics. Exactly one matching shipped topicless module becomes an edit; no matching module becomes an add containing settings, private root and first choice. An existing rooted or ambiguous match fails closed. In the no-match case `<NPC>` is checked syntactically and for generated-name collisions, but its existence/binding is not proved; use the exact catalog/project id. Further new topics and new-to-new `Subdialog` levels stay in this source module. |
 | `checkout` | `<NPC>` · `--out <DIR>` | The conversation module's compiler-ready AngelScript, including reconstructed class defaults, plus an untouched copy and a manifest bound to this game build. |
 | `check` | `<DIR>` | Check method/default edits, complete default supersession, fixed shipped ABI and intentional new symbols. Partial or loss-prone defaults fail closed. Offline; no compile. |
-| `stage` | `<DIR>` · `--mod-name` · `--cache` · `--game` | Write the build spec and strict standalone `compile-module --op edit` command. Adds `--allow-new-symbols` when required, includes the resolved `--game`, and refuses a cache hash that does not match that installation. |
+| `stage` | `<DIR>` · `--mod-name` · `--cache` · `--game` | Write the build spec and strict standalone `compile-module` command. It uses `--op edit` for a shipped/topicless module or `--op add` for a new conversation module, adds `--allow-new-symbols` when required, includes the resolved `--game`, and refuses a cache hash that does not match that installation. |
 | `export` | `--out <DIR>` | One JSON file per conversation. |
 
 Every subcommand also takes `--cache <PATH>` to read an exact script cache and
@@ -173,7 +174,7 @@ populated column of it, or an exact column name (`german_new`) to pin one. Text
 comes from the shared catalog, so it needs `gore loc extract` once; without it
 lines print as their localization keys and the output says so.
 
-`new-topic`, `checkout` and `stage` write files and read the install; they
+`new-topic`, `new-conversation`, `checkout` and `stage` write files and read the install; they
 compile and deploy nothing. `check` is read-only. Existing topics may change
 method bodies and the emitted `Caption`, `PriorityRank`, `Rules` and flag
 defaults. Every shipped default-bearing class and target must remain covered;
@@ -192,6 +193,16 @@ therefore has no automatic UE4SS component. Legacy workspaces may still carry a
 low-level explicit `dialog_topics` row; `check` accepts it only when its new
 class, participant and vanilla sentinel bind to the checked cache. The adapter's
 `allow_hidden` field belongs to that low-level bundle schema, not to this CLI.
+
+`new-conversation` is the same-module path for an NPC without root topics. Its
+workspace either edits the one shipped topicless module or adds one complete new
+module; settings, root, first choice and every manually added deeper topic stay
+together. Both operations and an all-new multi-level tree are covered through
+strict standalone compilation and bundle inspection, but their native runtime
+discovery/navigation is still unproven. The generated bundle has no automatic
+UE4SS component; this proves its packaging shape, not that runtime discovery
+cannot require a separate bridge. When no conversation matches, GORE also
+cannot prove that `<NPC>` exists in a shipped catalog or another mod payload.
 
 Separate add/edit mini-caches cannot depend on each other, so an isolated
 cross-module `--op add` is not the dialog recipe. Full detail, practical limits

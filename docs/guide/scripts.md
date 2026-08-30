@@ -254,9 +254,10 @@ gore as compile-module --op add --module MyMod.Dialog `
 | `--allow-new-symbols` | Retain minimal rows for classes/functions/names absent from the pristine cache. |
 | `-o, --out <PATH>` | The remapped 1-module mini-cache. |
 
-The high-level dialog scaffold uses the same compiler command in a more specific
-shape. A new root or direct sub-topic is appended to the **existing** shipped
-conversation module, so it is an edit with intentional new symbols:
+The high-level `dialog new-topic` scaffold uses the same compiler command in a
+more specific shape. A new root or direct sub-topic is appended to the
+**existing** shipped conversation module, so it is an edit with intentional new
+symbols:
 
 ```powershell
 gore as compile-module --backend standalone --op edit `
@@ -273,6 +274,19 @@ game's native script discovery, while a direct sub-topic is reached through an
 authored `Subdialog` call in a shipped parent. The private conversation base is
 why neither shape should be turned into an isolated cross-module `--op add`.
 
+`gore dialog new-conversation` is the corresponding path when an NPC has no
+root topic. If exactly one matching shipped topicless module exists, its staged
+command is also `--op edit`. If no module exists, settings, the private root and
+the first choice are authored together and the staged command is `--op add`.
+Further all-new levels stay in that same source module, so new-to-new
+`Subdialog` references do not depend on another mini-cache. Both variants and an
+all-new multi-level tree pass strict standalone compilation and bundle
+inspection; runtime association, discovery and navigation are still unproven.
+The no-match NPC id is checked for safe syntax and generated-name collisions,
+not against the existence of a shipped or separately authored NPC. The staged
+bundle contains no generated UE4SS component, but only a runtime observation can
+show whether native discovery works without a bridge.
+
 On BuildID `24878692`, strict standalone compilation, mini-cache packaging and
 deployment were followed by separate in-game observations of a selectable new
 Diego root and direct sub-topic. The same bounded campaign also observed a
@@ -280,8 +294,11 @@ persisted inventory effect, explicit knowledge and quest state after save/load,
 a new localization/Ogg/`Say` path whose loopback correlated `0.763` with the
 source recording, and a manual rebuild of an existing four-child sub-menu. This
 qualifies those exact fixtures on that build, not arbitrary game APIs, other
-builds, or a complete-cache/cross-module deployment path. The practical limits
-are maintained in [AngelScript dialog authoring](dialog-authoring.md).
+builds, or execution of a cross-module dialog edge. Separate complete-cache
+tests installed the raw FullGraph bytes but found unusable main-menu input; a
+selective hybrid cache booted and loaded a save without yet proving the intended
+cross-module option. The practical limits are maintained in
+[AngelScript dialog authoring](dialog-authoring.md).
 
 `compile-module` is the CLI equivalent of Mod Studio's Compile action, and it
 uses the same `standalone-then-game` default. It resolves the embedded,

@@ -1533,6 +1533,39 @@ pub(crate) fn validated_module_identities(
         .collect())
 }
 
+/// Validate one add-module name/path against the exact Windows collision policy used by the
+/// standalone overlay compiler. Dialog authoring calls this before it promises that a staged add
+/// can be compiled.
+pub fn validate_add_module_target(
+    mods: &[Module],
+    module_name: &str,
+    relative_path: &str,
+) -> Result<String, String> {
+    let layout = validate_module_layout(mods)?;
+    let requested_name = module_name_key(module_name)?;
+    if let Some(existing) = mods
+        .iter()
+        .find(|module| windows_casefold(&module.name) == requested_name)
+    {
+        return Err(format!(
+            "add module name {module_name:?} collides with base module {:?}",
+            existing.name
+        ));
+    }
+    let requested = normalize_output_path(relative_path)?;
+    if let Some((index, _)) = layout
+        .iter()
+        .enumerate()
+        .find(|(_, output)| path_keys_overlap(&output.key, &requested.key))
+    {
+        return Err(format!(
+            "add path {:?} collides with base module {:?} path {:?} as the same path or a file/directory ancestor",
+            requested.relative, mods[index].name, layout[index].relative
+        ));
+    }
+    Ok(requested.relative)
+}
+
 fn path_keys_overlap(left: &str, right: &str) -> bool {
     left == right
         || left
@@ -2034,5 +2067,41 @@ const FName Label = n"Shared() @Shared";
             .prepare_compile_overlay("edit", "Fixture", "dir\\FIXTURE.AS", "// replacement")
             .unwrap();
         assert_eq!(relative, "Dir/Fixture.as");
+    }
+
+    #[test]
+    fn add_target_validation_matches_casefold_and_path_overlap_rules() {
+        let modules = vec![Module {
+            name: "Story.Dialog.Existing".into(),
+            file: "Story/Dialog/Existing.as".into(),
+            functions: Vec::new(),
+            classes: Vec::new(),
+            enums: Vec::new(),
+            globals: Vec::new(),
+        }];
+        assert!(
+            validate_add_module_target(&modules, "story.dialog.existing", "Other/New.as")
+                .unwrap_err()
+                .contains("collides with base module")
+        );
+        assert!(validate_add_module_target(
+            &modules,
+            "Story.Dialog.New",
+            "story\\dialog\\EXISTING.as"
+        )
+        .unwrap_err()
+        .contains("same path"));
+        assert!(validate_add_module_target(
+            &modules,
+            "Story.Dialog.New",
+            "story\\dialog\\EXISTING.as/Child.as"
+        )
+        .unwrap_err()
+        .contains("file/directory ancestor"));
+        assert_eq!(
+            validate_add_module_target(&modules, "Story.Dialog.New", "Story\\Dialog\\New.as")
+                .unwrap(),
+            "Story/Dialog/New.as"
+        );
     }
 }

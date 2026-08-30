@@ -13,6 +13,7 @@ gore dialog tree brannok --lang german    # in German
 gore dialog show ChoiceStt302ViperMelt    # one option in full
 gore dialog text viper -o viper.json      # its lines, ready to edit and re-import
 gore dialog new-topic viper --caption-key K --mod-name MyMod -o MyMod   # root-topic scaffold
+gore dialog new-conversation MY_NEW_NPC --caption-key K -o NewNpcDialog # full conversation
 gore dialog checkout viper -o work        # editable AngelScript, including defaults
 gore dialog export -o dialog\             # every conversation as JSON
 ```
@@ -262,23 +263,71 @@ telemetry; it is not emitted as the normal `dialog new-topic` root recipe.
 
 Full-graph V2 gives one standalone compiler request the complete sealed base
 graph plus all coordinated add/edit/delete sources, and offline compilation can
-resolve visible symbols in different modules together. Its output nevertheless
-has 10,782 semantic deviations, including 81 in Diego, so it is unsafe and not
-a deployable dialog mini-patch. It is not a module mini-cache.
+resolve visible symbols in different modules together. Mod Manager installed
+the exact raw output bytes successfully, but that cache reached a main menu
+whose entries could not be activated by mouse click or Return. Its 10,782
+semantic deviations, including 81 in Diego, therefore correspond to a tested
+unusable runtime product, not just an offline warning. It is not a module
+mini-cache.
 
 The normal dialog bundle path instead consumes independently base-bound module
 minis. One add mini cannot provide symbols to a separate edit mini, and the
-FullGraph output has 10,782 semantic deviations, including 81 in Diego, so it
-is unsafe and not a deployable dialog mini-patch. The bundle composer does not
-turn it into a dialog-mini deployment.
+bundle composer does not turn a complete FullGraph cache into a dialog-mini
+deployment. A hybrid audit cache that preserved every untouched module and
+replaced only Diego plus the new probe did boot and load a save. That proves
+whole-cache replacement and selective composition, but not raw regeneration or
+the cross-module dialog option's appearance/selection.
 Keeping the new class and the rewired `Subdialog` in the same existing module is
 the supported mini-cache shape. Its compile/remap and offline packaging path is
 proven on Payfine and Brannok; Diego additionally proves native in-game
 appearance, selection and new override dispatch.
 
+## Starting a complete conversation
+
+`new-conversation` covers an NPC that has no current root topic:
+
+```powershell
+gore dialog new-conversation MY_NEW_NPC --caption-key MY_NEW_NPC_HELLO `
+  --class UChoiceMyNewNpcHello --mod-name MyNewNpcDialog -o work
+gore dialog check work
+gore dialog stage work --mod-name MyNewNpcDialog
+```
+
+When the cache has exactly one matching conversation module with settings but
+no topics, the command preserves it and prepares an edit. When no matching
+conversation module exists, it creates the settings, private root and first
+choice together in one new module and prepares an add. It refuses an existing
+rooted conversation (use `new-topic`) and any ambiguous match.
+
+For the add case, the supplied NPC value is checked only as a safe identifier
+and against generated-name collisions. GORE cannot tell whether it names a
+shipped NPC or a new NPC delivered by another project component. Copy/prove the
+exact identifier from that NPC's catalog or project definition first; a typo is
+otherwise a syntactically valid but unbound new conversation.
+
+More levels are authored by appending more topic classes to that same source
+module and wiring new parents to new children with `Subdialog`. Every class
+needed by the tree is therefore compiled and remapped as one unit; no second
+module or dependent mini-cache is involved. Use the global
+`::Subdialog(this, UChoiceChild, ...)` source form for a new-to-new edge; the
+instance-method form does not bind that child in a completely new module. The
+20-child limit still applies to each call. Every new option derives directly
+from the private topic base and stays in its namespace. A new parent may own
+only new children from this conversation; mixing a shipped child below that new
+parent is not supported.
+
+The existing-topicless edit, brand-new-module add and an all-new multi-level
+tree pass the offline source, strict standalone compile and bundle-inspection
+path. Runtime is a separate boundary: neither native association/discovery of a
+brand-new conversation nor navigation through the all-new tree has yet been
+observed in game. Their bundle is script-only and contains no generated UE4SS
+component; that packaging fact does not yet prove that native runtime discovery
+works without a bridge.
+
 ## Compile, package, deploy, prove
 
-`stage` writes `spec.json` and prints a strict standalone edit command. It adds
+`stage` writes `spec.json` and prints a strict standalone module command: edit
+for a shipped/topicless module, add for a brand-new conversation module. It adds
 `--allow-new-symbols` only when `check` found intentional new class, function or
 string rows. It also names the resolved game root and refuses to stage when its
 current script cache is not byte-identical to the checkout base; `compile-module`
@@ -356,8 +405,12 @@ read 126 step(s), 87 of them typed
 ```
 
 Ambient topics are lines an NPC plays without being asked, so they have no menu
-caption; they show as `(ambient)`. A 20-topic auto-open probe crashed as an
-artificial fixture; that does not show that broad ambient flags are broken.
+caption; they show as `(ambient)`. One fixture entered
+`State.AmbientConversation` with `GA_Human_Conversation_Ambient` active without
+player selection, proving automatic activation at that state/ability boundary.
+It then crashed only after forcing an artificial 20-choice `Subdialog`; that
+menu shape remains unqualified and does not show that broad ambient flags are
+broken.
 
 ## JSON, for tooling
 

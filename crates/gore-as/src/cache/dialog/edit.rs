@@ -26,13 +26,20 @@
 //! layout and callable identities stay fixed because no runtime ABI migration for live vanilla
 //! classes is proven.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::super::binds::NativeApi;
 use super::super::emit_all::PreparedEmit;
 use super::super::model::parse_modules;
 use super::super::refs::RefResolver;
 use super::graph::DialogError;
+
+/// Native parents admitted for a completely authored conversation module.
+///
+/// These are intentionally not treated as general cache types. The verifier admits them only as
+/// the direct parent of a newly declared class, and only when the target cache itself contains a
+/// shipped class with that exact direct parent. Every other native parent remains fail-closed.
+const NATIVE_CONVERSATION_BASES: [&str; 2] = ["UConversationCharacterSettings", "UG1RDialogTopic"];
 
 /// One shipped module, taken out for editing.
 #[derive(Debug, Clone, PartialEq)]
@@ -107,13 +114,19 @@ pub fn checkout_many(
         let expected_defaults = module
             .classes
             .iter()
-            .filter(|class| class.methods.iter().any(|method| method.name == "__InitDefaults"))
+            .filter(|class| {
+                class
+                    .methods
+                    .iter()
+                    .any(|method| method.name == "__InitDefaults")
+            })
             .map(|class| class.name.clone())
             .collect::<BTreeSet<_>>();
-        let default_classes = super::super::default_source::classes_with_default_statements(&source)
-            .map_err(DialogError::Parse)?
-            .into_iter()
-            .collect::<BTreeSet<_>>();
+        let default_classes =
+            super::super::default_source::classes_with_default_statements(&source)
+                .map_err(DialogError::Parse)?
+                .into_iter()
+                .collect::<BTreeSet<_>>();
         let missing = expected_defaults
             .difference(&default_classes)
             .cloned()
@@ -132,7 +145,9 @@ pub fn checkout_many(
                 class
                     .methods
                     .iter()
-                    .filter(|method| method.name.starts_with("__") && method.name != "__InitDefaults")
+                    .filter(|method| {
+                        method.name.starts_with("__") && method.name != "__InitDefaults"
+                    })
                     .map(|method| format!("{}::{}", class.name, method.name))
             })
             .collect();
@@ -151,6 +166,8 @@ pub fn checkout_many(
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KnownNames {
     pub types: BTreeSet<String>,
+    /// Audited native parents used directly by shipped classes in this exact cache generation.
+    pub native_conversation_bases: BTreeSet<String>,
     pub strings: BTreeSet<String>,
     pub static_names: BTreeSet<String>,
 }
@@ -170,16 +187,36 @@ pub fn known_names(cache: &[u8]) -> Result<KnownNames, DialogError> {
             .flat_map(|module| module.enums.iter())
             .map(|entry| entry.name.clone()),
     );
+    let native_conversation_bases = modules
+        .iter()
+        .flat_map(|module| module.classes.iter())
+        .filter_map(|class| class.super_class.as_deref())
+        .filter(|name| NATIVE_CONVERSATION_BASES.contains(name))
+        .map(str::to_owned)
+        .collect();
     Ok(KnownNames {
         strings: refs.string_globals().map(str::to_owned).collect(),
         static_names: refs.static_names().map(str::to_owned).collect(),
         types,
+        native_conversation_bases,
     })
 }
 
 impl KnownNames {
     fn has_type(&self, name: &str) -> bool {
         self.types.contains(name)
+    }
+
+    fn existing_type_case_insensitive(&self, name: &str) -> Option<&str> {
+        self.types
+            .iter()
+            .chain(self.native_conversation_bases.iter())
+            .find(|known| known.eq_ignore_ascii_case(name))
+            .map(String::as_str)
+    }
+
+    fn has_native_conversation_base(&self, name: &str) -> bool {
+        NATIVE_CONVERSATION_BASES.contains(&name) && self.native_conversation_bases.contains(name)
     }
 }
 
@@ -738,6 +775,16 @@ pub enum Violation {
     UnknownType {
         name: String,
     },
+    /// A newly declared class reuses a type identity already owned by the base cache.
+    ExistingTypeCollision {
+        name: String,
+        existing: String,
+    },
+    /// Two newly authored classes collapse to the same compiler identity under case folding.
+    NewTypeCollision {
+        first: String,
+        second: String,
+    },
 }
 
 impl Violation {
@@ -844,6 +891,13 @@ impl Violation {
                 "{name} is neither a type from the base cache nor a class declared by this \
                  overlay, so the compiler cannot resolve it"
             ),
+            Violation::ExistingTypeCollision { name, existing } => format!(
+                "new class {name} collides with existing cache type {existing} under \
+                 case-insensitive compiler identity matching"
+            ),
+            Violation::NewTypeCollision { first, second } => format!(
+                "new classes {first} and {second} collide under case-insensitive compiler identity matching"
+            ),
         }
     }
 }
@@ -928,12 +982,17 @@ fn added_parent_resolves(
     module_class_names: &BTreeSet<&str>,
     known: &KnownNames,
 ) -> bool {
+    let exact_native_parent = class.kind == "class"
+        && !parent.starts_with("::")
+        && !parent.contains("::")
+        && known.has_native_conversation_base(parent);
     let parent = parent.strip_prefix("::").unwrap_or(parent);
     if parent.contains("::") {
         declared_identities.contains(parent)
     } else {
         declared_identities.contains(&qualified_name(&class.namespace, parent))
-            || (!module_class_names.contains(parent) && known.has_type(parent))
+            || (!module_class_names.contains(parent)
+                && (known.has_type(parent) || exact_native_parent))
     }
 }
 
@@ -1005,8 +1064,14 @@ pub fn verify(checkout: &Checkout, authored: &str, known: &KnownNames) -> EditRe
         }
     }
 
-    let base_identities = base_identity_counts.keys().cloned().collect::<BTreeSet<_>>();
-    let edit_identities = edit_identity_counts.keys().cloned().collect::<BTreeSet<_>>();
+    let base_identities = base_identity_counts
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let edit_identities = edit_identity_counts
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
     let mut moved_names = BTreeSet::new();
     for base_class in &base.classes {
         let identity = class_identity(base_class);
@@ -1048,11 +1113,18 @@ pub fn verify(checkout: &Checkout, authored: &str, known: &KnownNames) -> EditRe
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    let edit_names: BTreeSet<&str> = edit.classes.iter().map(|class| class.name.as_str()).collect();
+    let edit_names: BTreeSet<&str> = edit
+        .classes
+        .iter()
+        .map(|class| class.name.as_str())
+        .collect();
 
     let mut remaining_functions = edit.functions.clone();
     for declaration in &base.functions {
-        if let Some(position) = remaining_functions.iter().position(|item| item == declaration) {
+        if let Some(position) = remaining_functions
+            .iter()
+            .position(|item| item == declaration)
+        {
             remaining_functions.remove(position);
         } else {
             violations.push(Violation::FunctionRemoved {
@@ -1191,9 +1263,29 @@ pub fn verify(checkout: &Checkout, authored: &str, known: &KnownNames) -> EditRe
         );
     }
 
-    for class in edit.classes.iter().filter(|class| {
-        added_identities.contains(&class_identity(class))
-    }) {
+    let mut added_casefold = BTreeMap::<String, String>::new();
+    for class in edit
+        .classes
+        .iter()
+        .filter(|class| added_identities.contains(&class_identity(class)))
+    {
+        let folded = class.name.to_ascii_lowercase();
+        if let Some(first) = added_casefold.get(&folded) {
+            if first != &class.name {
+                violations.push(Violation::NewTypeCollision {
+                    first: first.clone(),
+                    second: class.name.clone(),
+                });
+            }
+        } else {
+            added_casefold.insert(folded, class.name.clone());
+        }
+        if let Some(existing) = known.existing_type_case_insensitive(&class.name) {
+            violations.push(Violation::ExistingTypeCollision {
+                name: class.name.clone(),
+                existing: existing.to_owned(),
+            });
+        }
         if let Some(parent) = class.super_class.as_deref() {
             if !added_parent_resolves(class, parent, &edit_identities, &edit_names, known) {
                 violations.push(Violation::UnknownType {
@@ -1242,7 +1334,9 @@ fn changed_bodies(pristine: &str, authored: &str) -> Vec<(String, String)> {
 
 fn member_label(tokens: &[Token]) -> String {
     let mut start = 0usize;
-    if tokens.first().is_some_and(|token| token.text == "UFUNCTION")
+    if tokens
+        .first()
+        .is_some_and(|token| token.text == "UFUNCTION")
         && tokens.get(1).is_some_and(|token| token.text == "(")
     {
         let mut depth = 0usize;
@@ -1514,10 +1608,69 @@ class UChoiceOne : UTopic_Hero__NPC
             types: ["UChoiceOne".to_owned(), "UTopic_Hero__NPC".to_owned()]
                 .into_iter()
                 .collect(),
+            native_conversation_bases: NATIVE_CONVERSATION_BASES
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
             strings: ["EXISTING_KEY".to_owned()].into_iter().collect(),
             static_names: BTreeSet::new(),
         }
     }
+
+    fn empty_checkout() -> Checkout {
+        Checkout {
+            module: "Story.G1R.Conversation.Conversation_TEST_NPC".to_owned(),
+            relative_path: "Story/G1R/Conversation/Conversation_TEST_NPC.as".to_owned(),
+            source: String::new(),
+            default_classes: BTreeSet::new(),
+            unsupported_generated_methods: Vec::new(),
+        }
+    }
+
+    const NEW_CONVERSATION: &str = r#"
+namespace G1R::Conversation
+{
+class UConversationCharacterSettings_G1R_TEST_NPC : UConversationCharacterSettings
+{
+    UConversationCharacterSettings_G1R_TEST_NPC()
+    {
+        super();
+        return;
+    }
+}
+
+class UTopic_Hero__TEST_NPC : UG1RDialogTopic
+{
+}
+
+class UChoiceTestStart : UTopic_Hero__TEST_NPC
+{
+    default Caption = LocText("TEST_START");
+    default PriorityRank = 1;
+
+    UFUNCTION()
+    void Act_Implementation()
+    {
+        Subdialog(this, UChoiceTestChild::StaticClass());
+        return;
+    }
+}
+
+class UChoiceTestChild : UTopic_Hero__TEST_NPC
+{
+    default Caption = LocText("TEST_CHILD");
+    default PriorityRank = 1;
+    default bIsSubTopic = true;
+
+    UFUNCTION()
+    void Act_Implementation()
+    {
+        this.EndConversation();
+        return;
+    }
+}
+}
+"#;
 
     #[test]
     fn an_untouched_checkout_is_carryable_and_reports_nothing_changed() {
@@ -1695,11 +1848,15 @@ class UChoiceOne : UTopic_Hero__NPC
         ] {
             let edited = format!("{PRISTINE}\n{declaration}\n");
             let report = verify(&checkout(PRISTINE), &edited, &known());
-            assert!(report.violations.iter().any(|violation| matches!(
-                violation,
-                Violation::SourceInvalid { side: "authored", reason }
-                    if reason.contains("unsupported module-scope declaration")
-            )), "{declaration}: {:?}", report.violations);
+            assert!(
+                report.violations.iter().any(|violation| matches!(
+                    violation,
+                    Violation::SourceInvalid { side: "authored", reason }
+                        if reason.contains("unsupported module-scope declaration")
+                )),
+                "{declaration}: {:?}",
+                report.violations
+            );
         }
     }
 
@@ -1716,11 +1873,133 @@ class UChoiceOne : UTopic_Hero__NPC
     }
 
     #[test]
+    fn a_new_class_may_not_reuse_a_base_cache_type_case_insensitively() {
+        let edited = format!(
+            "{PRISTINE}\nclass uexistingcachetopic : UChoiceOne\n{{\n    default Caption = LocText(\"NEW_KEY\");\n}}\n"
+        );
+        let mut names = known();
+        names.types.insert("UExistingCacheTopic".to_owned());
+        let report = verify(&checkout(PRISTINE), &edited, &names);
+        assert!(report
+            .violations
+            .contains(&Violation::ExistingTypeCollision {
+                name: "uexistingcachetopic".to_owned(),
+                existing: "UExistingCacheTopic".to_owned(),
+            }));
+    }
+
+    #[test]
+    fn a_new_class_may_not_impersonate_an_admitted_native_conversation_base() {
+        let edited = format!(
+            "{PRISTINE}\nclass ug1rdialogtopic : UChoiceOne\n{{\n    default Caption = LocText(\"NEW_KEY\");\n}}\n"
+        );
+        let report = verify(&checkout(PRISTINE), &edited, &known());
+        assert!(
+            report
+                .violations
+                .contains(&Violation::ExistingTypeCollision {
+                    name: "ug1rdialogtopic".to_owned(),
+                    existing: "UG1RDialogTopic".to_owned(),
+                })
+        );
+    }
+
+    #[test]
+    fn two_new_classes_may_not_differ_only_by_case() {
+        let edited = format!(
+            "{PRISTINE}\nclass UNewTopic : UChoiceOne {{}}\nclass unewtopic : UChoiceOne {{}}\n"
+        );
+        let report = verify(&checkout(PRISTINE), &edited, &known());
+        assert!(
+            report.violations.contains(&Violation::NewTypeCollision {
+                first: "UNewTopic".to_owned(),
+                second: "unewtopic".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_complete_new_conversation_scaffold_accepts_only_proven_native_parents() {
+        let report = verify(&empty_checkout(), NEW_CONVERSATION, &known());
+        assert!(report.is_carryable(), "{:?}", report.violations);
+        assert_eq!(
+            report.added_classes,
+            [
+                "UChoiceTestChild",
+                "UChoiceTestStart",
+                "UConversationCharacterSettings_G1R_TEST_NPC",
+                "UTopic_Hero__TEST_NPC",
+            ]
+        );
+        assert_eq!(report.new_strings, ["TEST_CHILD", "TEST_START"]);
+        assert!(report.requires_new_symbols());
+    }
+
+    #[test]
+    fn a_new_conversation_refuses_a_native_parent_not_proven_by_the_target_cache() {
+        let mut names = known();
+        names
+            .native_conversation_bases
+            .remove("UConversationCharacterSettings");
+        let report = verify(&empty_checkout(), NEW_CONVERSATION, &names);
+        assert!(report.violations.contains(&Violation::UnknownType {
+            name: "UConversationCharacterSettings".to_owned()
+        }));
+    }
+
+    #[test]
+    fn arbitrary_native_parents_remain_refused_even_if_a_caller_labels_them_known() {
+        let mut names = known();
+        names
+            .native_conversation_bases
+            .insert("UInventedNativeBase".to_owned());
+        let source =
+            "class UTopic_Hero__TEST_NPC : UInventedNativeBase { default PriorityRank = 1; }";
+        let report = verify(&empty_checkout(), source, &names);
+        assert!(report.violations.contains(&Violation::UnknownType {
+            name: "UInventedNativeBase".to_owned()
+        }));
+    }
+
+    #[test]
+    fn native_conversation_parents_are_admitted_only_in_direct_base_position() {
+        let source = NEW_CONVERSATION.replace(
+            "this.EndConversation();",
+            "Subdialog(this, UConversationCharacterSettings::StaticClass());",
+        );
+        let report = verify(&empty_checkout(), &source, &known());
+        assert!(report.violations.contains(&Violation::UnknownType {
+            name: "UConversationCharacterSettings".to_owned()
+        }));
+    }
+
+    #[test]
+    fn a_struct_cannot_use_the_audited_native_conversation_parent_gate() {
+        let source = "struct UFakeSettings : UConversationCharacterSettings { }";
+        let report = verify(&empty_checkout(), source, &known());
+        assert!(report.violations.contains(&Violation::UnknownType {
+            name: "UConversationCharacterSettings".to_owned()
+        }));
+    }
+
+    #[test]
+    fn a_globally_qualified_native_parent_does_not_bypass_the_exact_gate() {
+        let source = "class UFakeSettings : ::UConversationCharacterSettings { }";
+        let report = verify(&empty_checkout(), source, &known());
+        assert!(report.violations.contains(&Violation::UnknownType {
+            name: "::UConversationCharacterSettings".to_owned()
+        }));
+    }
+
+    #[test]
     fn caption_priority_rules_and_flags_are_editable() {
         let edited = PRISTINE
             .replace("LocText(\"EXISTING_KEY\")", "LocText(\"NEW_KEY\")")
             .replace("PriorityRank = 2", "PriorityRank = 7")
-            .replace("Rules.HideIfKnows(this)", "Rules.AllowIfCharacterHasKnowledgeOf(this, n\"KNOWS\")")
+            .replace(
+                "Rules.HideIfKnows(this)",
+                "Rules.AllowIfCharacterHasKnowledgeOf(this, n\"KNOWS\")",
+            )
             .replace("bIsFollowupTopic = false", "bIsFollowupTopic = true");
         let report = verify(&checkout(PRISTINE), &edited, &known());
         assert!(report.is_carryable(), "{:?}", report.violations);
@@ -1873,20 +2152,14 @@ class UChoiceOne : UTopic_Hero__NPC
         names.strings.insert("SHARED_TEXT".to_owned());
         names.static_names.insert("KNOWN_FNAME".to_owned());
 
-        let invented = PRISTINE.replace(
-            "this.EndConversation();",
-            "Remember(n\"SHARED_TEXT\");",
-        );
+        let invented = PRISTINE.replace("this.EndConversation();", "Remember(n\"SHARED_TEXT\");");
         let report = verify(&checkout(PRISTINE), &invented, &names);
         assert!(report.is_carryable(), "{:?}", report.violations);
         assert!(report.new_strings.is_empty());
         assert_eq!(report.new_static_names, ["SHARED_TEXT"]);
         assert!(report.requires_new_symbols());
 
-        let shipped = PRISTINE.replace(
-            "this.EndConversation();",
-            "Remember(n\"KNOWN_FNAME\");",
-        );
+        let shipped = PRISTINE.replace("this.EndConversation();", "Remember(n\"KNOWN_FNAME\");");
         let report = verify(&checkout(PRISTINE), &shipped, &names);
         assert!(report.is_carryable(), "{:?}", report.violations);
         assert!(!report.requires_new_symbols());
