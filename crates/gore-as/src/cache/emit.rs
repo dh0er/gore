@@ -2098,6 +2098,11 @@ fn emit_function_ctor(
                         .map(|slot| (slot, 1)),
                 )
                 .chain(chain_inlined_cast_operands(f).into_iter().map(|slot| (slot, 1)))
+                .chain(
+                    nested_expression_intermediates(f, refs)
+                        .into_iter()
+                        .map(|slot| (slot, 1)),
+                )
                 .collect(),
             &wholly_consumed_object_slots(f),
             &rvo_temporary_slots(f, refs),
@@ -2118,6 +2123,11 @@ fn emit_function_ctor(
                         .map(|slot| (slot, 1)),
                 )
                 .chain(chain_inlined_cast_operands(f).into_iter().map(|slot| (slot, 1)))
+                .chain(
+                    nested_expression_intermediates(f, refs)
+                        .into_iter()
+                        .map(|slot| (slot, 1)),
+                )
                 .collect(),
             &wholly_consumed_object_slots(f),
             &rvo_temporary_slots(f, refs),
@@ -10752,6 +10762,71 @@ fn lead_with_the_declaration(body: &str, slot: Option<i32>) -> String {
     out
 }
 
+/// The intermediates of a vector expression the source wrote as ONE nested expression.
+///
+/// The compiler pushes a call's arguments before it evaluates the receiver, so a default-argument
+/// block that stands DETACHED from its own call — `PshGPtr <global>; PshC8 <tolerance>; PSF D`
+/// with something other than the receiver and the call behind it — says the receiver is still
+/// being computed. Everything the compiler fills between that block and the call is a temporary
+/// of the one expression.
+///
+/// Counted over every uniquely named function in the cache: 630 attached blocks in byte-faithful
+/// functions, and of the 76 DETACHED ones not a single byte-faithful case.
+///
+/// Only the address pushes count. A `PshVPtr` in that window is a receiver or an argument the
+/// source named elsewhere — the range-for element, for instance, which must keep its name.
+fn nested_expression_intermediates(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let callee = |ins: &super::disasm::Instr| {
+        (ins.op.name == "CALLSYS")
+            .then(|| refs.func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64))
+            .flatten()
+    };
+    let mut out = HashSet::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if ins.op.name != "PshGPtr" {
+            continue;
+        }
+        if instrs.get(at + 1).map(|ins| ins.op.name) != Some("PshC8") {
+            continue;
+        }
+        let Some(block) = instrs.get(at + 2).filter(|ins| ins.op.name == "PSF") else {
+            continue;
+        };
+        let _ = block;
+        // Attached: the receiver is already there and the call follows at once.
+        if instrs
+            .get(at + 4)
+            .and_then(callee)
+            .is_some_and(|name| name.starts_with("GetSafeNormal"))
+        {
+            continue;
+        }
+        let Some(call) = instrs[at + 3..]
+            .iter()
+            .position(|ins| callee(ins).is_some_and(|name| name.starts_with("GetSafeNormal")))
+            .map(|offset| at + 3 + offset)
+        else {
+            continue;
+        };
+        for ins in &instrs[at + 3..call] {
+            if ins.op.name != "PSF" {
+                continue;
+            }
+            // The destination is NOT excluded: the compiler reuses that very slot for the
+            // intermediate steps, which is what makes them temporaries of one expression.
+            let slot = w0(ins);
+            if slot > 0 {
+                out.insert(slot);
+            }
+        }
+    }
+    out
+}
+
 /// A short-circuit carrier the source never named at all.
 ///
 /// The compiler materialises a branch condition into a slot and reloads it — `CpyRtoV4 S;
@@ -11181,15 +11256,25 @@ fn inline_unnamed_value_temporaries(
                 // An operator result is a temporary the compiler builds for the expression, and
                 // handing it on as a receiver binds it to the method's non-const `this`. A call
                 // chain is what vanilla wrote inline; a bracketed operand is not.
-                if init.starts_with('(') || !init.ends_with(')') {
+                if !init.ends_with(')') {
                     return None;
                 }
                 let at = consumer.find(name.as_str())?;
-                let method = consumer[at + name.len()..]
-                    .strip_prefix('.')?
-                    .split(['(', '.', ' ', ')', ',', ';'])
-                    .next()?
-                    .to_owned();
+                let rest = &consumer[at + name.len()..];
+                // An arithmetic operator IS a receiver position: `a - b` is `a.opSub(b)`, and the
+                // operator overloads of a value type are const, so a temporary binds to them. The
+                // `.method()` spelling below is the same question written the other way.
+                let operator = [" + ", " - ", " * ", " / "]
+                    .iter()
+                    .any(|op| rest.starts_with(op));
+                let method = match operator {
+                    true => String::new(),
+                    false => rest
+                        .strip_prefix('.')?
+                        .split(['(', '.', ' ', ')', ',', ';'])
+                        .next()?
+                        .to_owned(),
+                };
                 // A NON-const method takes its receiver by non-const reference, so calling one on
                 // a temporary is the same refusal as passing one to a `T&` parameter.
                 let owned = bare.and_then(|_| declared_type(&lines, &name));
@@ -11198,9 +11283,19 @@ fn inline_unnamed_value_temporaries(
                     Some(ty) => ty,
                     None => head[..head.len().saturating_sub(name.len())].trim(),
                 };
-                if ty.is_empty()
-                    || refs.calls_non_const_method(super::structure::bare_type_name(ty), &method)
+                if !operator
+                    && (ty.is_empty()
+                        || refs
+                            .calls_non_const_method(super::structure::bare_type_name(ty), &method))
                 {
+                    return None;
+                }
+                // A BRACKETED initialiser is an operator result — a temporary the compiler builds
+                // for the expression. Binding it to a non-const `this` is what the refusal above
+                // is about; a const method takes it happily, and vanilla's own bytecode shows the
+                // compiler accepting `(a - b).GetSafeNormal2D(…)` wherever the source wrote the
+                // whole thing as one expression.
+                if init.starts_with('(') && !operator && !refs.names_a_const_method(&method) {
                     return None;
                 }
             }
