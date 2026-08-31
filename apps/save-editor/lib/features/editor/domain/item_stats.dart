@@ -30,6 +30,7 @@ class ItemStats {
     this.teaches = const [],
     this.writing = const [],
     this.ingredientFor = const [],
+    this.naturalWeapon = false,
   });
 
   factory ItemStats.fromJson(Map<String, Object?> json) {
@@ -43,6 +44,7 @@ class ItemStats {
       descriptionKey: json['descriptionKey'] as String? ?? '',
       damage: _numbers(json['damage']),
       requires: _requirements(json['requires']),
+      naturalWeapon: json['naturalWeapon'] == true,
       onEquip: _numbers(json['onEquip']),
       specs:
           (json['specs'] as List?)?.whereType<String>().toList(
@@ -120,6 +122,12 @@ class ItemStats {
   /// Item ids this one is an ingredient of. The only useful thing to say about
   /// a lump of iron is what can be made from it.
   final List<String> ingredientFor;
+
+  /// A creature's built-in weapon — a wolf's jaw, a harpy's claws, a
+  /// minecrawler's leg. It sits in the creature's weapon slot like a
+  /// mercenary's sword, but the game never shows it: it has no name, no icon
+  /// and no catalog entry, because the player can never hold one.
+  final bool naturalWeapon;
 
   bool get isEmpty =>
       // A description is content in its own right: two items carry nothing but

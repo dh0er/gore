@@ -304,7 +304,11 @@ ItemTooltip buildItemTooltip({
 
   return ItemTooltip(
     title: title,
-    subtitle: _itemTypeName(game, stats.itemType) ?? '',
+    // The game names no type for a jaw or a set of claws, and would leave the
+    // card headed by a bare id. Saying what the thing IS is the whole card.
+    subtitle: stats.naturalWeapon
+        ? l10n.itemNaturalWeapon
+        : (_itemTypeName(game, stats.itemType) ?? ''),
     stats: rows,
     protection: protection,
     protectionLabel: protection.isEmpty

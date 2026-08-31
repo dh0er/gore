@@ -245,6 +245,7 @@ class CharactersTab extends ConsumerWidget {
             reloadKey: inspection,
             locCatalog: locCatalog,
             lang: lang,
+            categories: ref.watch(characterCategoryCatalogProvider).value,
             showObjectIds: showObjectIds,
           ),
         ),

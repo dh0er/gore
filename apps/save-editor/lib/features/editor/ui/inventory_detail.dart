@@ -654,12 +654,23 @@ class _PrivateInventorySummaryCardState
           item.path.toLowerCase().contains(query) ||
           (name != null && name.toLowerCase().contains(query));
     }).toList();
+    // The game files an item by its own type tag; the bundled stats carry that
+    // tag and the very filter tables the game's inventory rail is built from,
+    // so the groups here are the ones the player sees in game. Without the
+    // stats (load failure) the class-name prefix decides, which lands in the
+    // same tab for every shipped item family.
+    final itemStats = ref.watch(itemStatsCatalogProvider).value;
     // What the row actually shows (see the ListTile title below): the localized
     // game name, falling back to id/path. Sorting by this keeps the browse list
     // and the flat search list ordered the way the user reads them, not by the
     // raw internal id.
     String nameOf(PrivateInventoryItem item) =>
         localizedGameName(locCatalog, lang, item.id) ??
+        // A creature's own jaw or claws: the game names none of them, because
+        // the player never holds one. `WolfJaw` read as an untranslated id.
+        (itemStats?.statsFor(item.id)?.naturalWeapon == true
+            ? l10n.itemNaturalWeapon
+            : null) ??
         itemDisplayNameFromId(
           item.id.isEmpty ? _itemDisplayFromPath(item.path) : item.id,
           fallback: l10n.fallbackItem,
@@ -675,12 +686,6 @@ class _PrivateInventorySummaryCardState
           itemDisplayNameFromId(classId, fallback: l10n.fallbackItem);
     }
 
-    // The game files an item by its own type tag; the bundled stats carry that
-    // tag and the very filter tables the game's inventory rail is built from,
-    // so the groups here are the ones the player sees in game. Without the
-    // stats (load failure) the class-name prefix decides, which lands in the
-    // same tab for every shipped item family.
-    final itemStats = ref.watch(itemStatsCatalogProvider).value;
     final groups = groupInventoryItems(
       items,
       displayNameOf: nameOf,
@@ -1227,6 +1232,23 @@ class _PrivateInventorySummaryCardState
                                                                 itemId: item.id,
                                                                 itemPath:
                                                                     item.path,
+                                                                // A creature's
+                                                                // own weapon
+                                                                // ships no
+                                                                // picture but
+                                                                // names the
+                                                                // creature
+                                                                // glyph
+                                                                // itself.
+                                                                fallbackGameIcon:
+                                                                    itemStats
+                                                                            ?.statsFor(
+                                                                              item.id,
+                                                                            )
+                                                                            ?.naturalWeapon ==
+                                                                        true
+                                                                    ? gameIconCreature
+                                                                    : null,
                                                                 // The same
                                                                 // classifier
                                                                 // the tabs

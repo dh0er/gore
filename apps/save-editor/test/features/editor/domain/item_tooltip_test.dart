@@ -456,4 +456,26 @@ void main() {
     // Nothing at all still counts as nothing.
     expect(const ItemTooltip().isEmpty, isTrue);
   });
+
+  test("a creature's own weapon says what it is", () {
+    // A wolf's jaw sits in its weapon slot like a mercenary's sword, but the
+    // game names no jaw and no `Item_Weapon_Jaw` type: the card was headed by
+    // the bare id with nothing under it.
+    const stats = ItemStats(
+      itemType: 'Item_Weapon_Jaw',
+      damage: {'Item_Damage_Physical_Edge': 9},
+      naturalWeapon: true,
+    );
+    final tooltip = buildItemTooltip(
+      title: 'Natural weapon',
+      stats: stats,
+      catalog: _catalog({'item_damage_physical_edge': 'Edge Dmg'}),
+      lang: lang,
+      l10n: l10n,
+    );
+
+    expect(tooltip.subtitle, 'Natural weapon');
+    expect(tooltip.isEmpty, isFalse);
+    expect(tooltip.stats.single.value, '9');
+  });
 }

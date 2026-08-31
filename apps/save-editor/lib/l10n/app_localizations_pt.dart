@@ -2102,6 +2102,9 @@ class AppLocalizationsPt extends AppLocalizations {
   String get fallbackItem => 'Item';
 
   @override
+  String get itemNaturalWeapon => 'Arma natural';
+
+  @override
   String get attributeSkillPointsFallback => 'Pontos de aprendizado (PA)';
 
   @override
@@ -5203,6 +5206,9 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get fallbackItem => 'Item';
+
+  @override
+  String get itemNaturalWeapon => 'Arma natural';
 
   @override
   String get attributeSkillPointsFallback => 'Pontos de aprendizado (PA)';

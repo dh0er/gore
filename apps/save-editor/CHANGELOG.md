@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A creature's own jaw or claws now read as a natural weapon with a picture and
+  a card, instead of a bare `WolfJaw` with nothing behind it.
+- A man and the monsters that share his name no longer fold into one row.
+
 ## [1.4.0] - 2026-08-31
 
 ### Added

@@ -2112,6 +2112,9 @@ class AppLocalizationsRu extends AppLocalizations {
   String get fallbackItem => 'Предмет';
 
   @override
+  String get itemNaturalWeapon => 'Природное оружие';
+
+  @override
   String get attributeSkillPointsFallback => 'Очки обучения (LP)';
 
   @override

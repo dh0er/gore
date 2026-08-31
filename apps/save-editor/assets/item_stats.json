@@ -232,6 +232,85 @@
     "Item_Property_Wereable"
    ]
   },
+  "BiterJaw": {
+   "superArmorDamage": 40,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Jaw",
+   "damage": {
+    "Item_Damage_Physical_Blunt": 9,
+    "Item_Damage_Physical_Edge": 9
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "BloodflySting": {
+   "superArmorDamage": 15,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Claw",
+   "damage": {
+    "Item_Damage_Physical_Point": 9
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Environment_Air_Flying",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "BloodhoundJaw": {
+   "superArmorDamage": 45,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Jaw",
+   "damage": {
+    "Item_Damage_Physical_Edge": 9
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "CorKalomDemon": {
+   "superArmorDamage": 70,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Claw",
+   "damage": {
+    "Item_Damage_Physical_Edge": 9
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Environment_Air_Flying",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "CorKalomDemonSleeperWeapon": {
+   "superArmorDamage": 20,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Claw",
+   "damage": {
+    "Item_Damage_Physical_Edge": 30
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Environment_Air_Flying",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
   "Crw_Armor_H": {
    "maxStack": 1,
    "itemType": "Item_Armor",
@@ -253,6 +332,38 @@
     "Resistance_Point": 15,
     "Resistance_Wind": 10
    }
+  },
+  "Demon": {
+   "superArmorDamage": 55,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Claw",
+   "damage": {
+    "Item_Damage_Physical_Edge": 60
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Environment_Air_Flying",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "DemonLordWeapon": {
+   "superArmorDamage": 20,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Claw",
+   "damage": {
+    "Item_Damage_Physical_Edge": 60
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Environment_Air_Flying",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
   },
   "Dmb_Armor_M": {
    "maxStack": 1,
@@ -347,6 +458,69 @@
     "Resistance_Wind": 5
    }
   },
+  "FireDemon_FlameThrower": {
+   "superArmorDamage": 0,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon",
+   "damage": {
+    "Item_Damage_Elemental_Fire": 1
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Long",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "FireGolemWeapon": {
+   "superArmorDamage": 50,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Jaw",
+   "damage": {
+    "Item_Damage_Elemental_Fire": 20,
+    "Item_Damage_Physical_Blunt": 20
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "FireLizard_FlameThrower": {
+   "superArmorDamage": 0,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon",
+   "damage": {
+    "Item_Damage_Elemental_Fire": 1
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Long",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "GolemWeapon": {
+   "superArmorDamage": 200,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Jaw",
+   "damage": {
+    "Item_Damage_Physical_Blunt": 20
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
   "Grd_Armor": {
    "maxStack": 1,
    "itemType": "Item_Armor",
@@ -415,6 +589,67 @@
     "Resistance_Point": 7,
     "Resistance_Wind": 15
    }
+  },
+  "HarpyClaws_Flying": {
+   "superArmorDamage": 30,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Claw_Flying",
+   "damage": {
+    "Item_Damage_Physical_Edge": 9
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Environment_Air_Flying",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "HarpyClaws_Grounded": {
+   "superArmorDamage": 30,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Claw_Grounded",
+   "damage": {
+    "Item_Damage_Physical_Edge": 9
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Character_CantStrafe",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "HellArmWeaponDefinition": {
+   "superArmorDamage": 0,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "damage": {
+    "Item_Damage_Elemental_Fire": 40
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "IceGolemWeapon": {
+   "superArmorDamage": 50,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Jaw",
+   "damage": {
+    "Item_Damage_Physical_Blunt": 20
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
   },
   "ItAm_Arrow": {
    "itemType": "Item_Projectile_Arrow",
@@ -16310,6 +16545,149 @@
     "Resistance_Point": 2
    }
   },
+  "LesserDemon": {
+   "superArmorDamage": 45,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Claw",
+   "damage": {
+    "Item_Damage_Physical_Edge": 9
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Environment_Air_Flying",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "LizardJaw": {
+   "superArmorDamage": 30,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Jaw",
+   "damage": {
+    "Item_Damage_Physical_Blunt": 9,
+    "Item_Damage_Physical_Edge": 9
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "LordDemon_Pyrolaser": {
+   "superArmorDamage": 50,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon",
+   "damage": {
+    "Item_Damage_Elemental_Fire": 50
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Long",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "LurkerJaw": {
+   "superArmorDamage": 25,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Jaw",
+   "damage": {
+    "Item_Damage_Physical_Blunt": 9,
+    "Item_Damage_Physical_Edge": 9
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "LurkerTail": {
+   "superArmorDamage": 25,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Swimming",
+   "damage": {
+    "Item_Damage_Physical_Blunt": 9
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Environment_Water_Swimming_Surface",
+    "Item_Property_Environment_Water_Swimming_Underwater",
+    "Item_Property_Equipable",
+    "Item_Property_MustForceUnequip",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "MCQueen_Legs": {
+   "superArmorDamage": 40,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_MinecrawlerLeg",
+   "damage": {
+    "Item_Damage_Physical_Edge": 10
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "MCQueen_Legs_Phase2": {
+   "superArmorDamage": 40,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_MinecrawlerLeg",
+   "damage": {
+    "Item_Damage_Physical_Edge": 10
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_MCQueenPhase2",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "MinecrawlerLeg": {
+   "superArmorDamage": 20,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_MinecrawlerLeg",
+   "damage": {
+    "Item_Damage_Physical_Edge": 10
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "MoleratJaw": {
+   "superArmorDamage": 8,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Jaw",
+   "damage": {
+    "Item_Damage_Physical_Edge": 10
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
   "NH_Armor": {
    "maxStack": 1,
    "itemType": "Item_Armor",
@@ -16342,6 +16720,22 @@
     "Resistance_Ice": 3,
     "Resistance_Wind": 3
    }
+  },
+  "OrcDogJaw": {
+   "superArmorDamage": 30,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Jaw",
+   "damage": {
+    "Item_Damage_Physical_Blunt": 17,
+    "Item_Damage_Physical_Edge": 17
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
   },
   "Ore_Armor_H": {
    "maxStack": 1,
@@ -16433,6 +16827,21 @@
     "Resistance_Wind": 1
    }
   },
+  "RazorJaw": {
+   "superArmorDamage": 35,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Jaw",
+   "damage": {
+    "Item_Damage_Physical_Edge": 9
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
   "Ryl_Armor": {
    "maxStack": 1,
    "itemType": "Item_Armor",
@@ -16455,6 +16864,22 @@
     "Resistance_Wind": 5
    }
   },
+  "ScavengerJaw": {
+   "superArmorDamage": 7,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Jaw",
+   "damage": {
+    "Item_Damage_Physical_Blunt": 14,
+    "Item_Damage_Physical_Edge": 14
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
   "Sfb_Armor_L": {
    "maxStack": 1,
    "itemType": "Item_Armor",
@@ -16474,6 +16899,37 @@
     "Resistance_Edge": 10,
     "Resistance_Fire": 5
    }
+  },
+  "ShadowBeastWeapon": {
+   "superArmorDamage": 70,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Jaw",
+   "damage": {
+    "Item_Damage_Physical_Blunt": 80,
+    "Item_Damage_Physical_Edge": 60
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "SkeletonWeapon": {
+   "superArmorDamage": 20,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Jaw",
+   "damage": {
+    "Item_Damage_Physical_Edge": 30
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
   },
   "Sld_Armor": {
    "maxStack": 1,
@@ -16498,6 +16954,51 @@
     "Resistance_Wind": 5
    }
   },
+  "SnapperJaw": {
+   "superArmorDamage": 35,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Jaw",
+   "damage": {
+    "Item_Damage_Physical_Edge": 9
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "StoneGolemWeapon": {
+   "superArmorDamage": 50,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Jaw",
+   "damage": {
+    "Item_Damage_Physical_Blunt": 20
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "StoneGolemWeapon_Small": {
+   "superArmorDamage": 50,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Jaw",
+   "damage": {
+    "Item_Damage_Physical_Blunt": 20
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
   "Stt_Armor": {
    "maxStack": 1,
    "itemType": "Item_Armor",
@@ -16521,6 +17022,51 @@
     "Resistance_Wind": 2
    }
   },
+  "SwampsharkJaw": {
+   "superArmorDamage": 70,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Jaw",
+   "damage": {
+    "Item_Damage_Physical_Edge": 9
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "TestMiniIceGolemWeapon": {
+   "superArmorDamage": 20,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Jaw",
+   "damage": {
+    "Item_Damage_Physical_Blunt": 10
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "TestSkMage_SoulWeapon": {
+   "superArmorDamage": 20,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Jaw",
+   "damage": {
+    "Item_Damage_Physical_Edge": 30
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
   "Tpl_Armor": {
    "maxStack": 1,
    "itemType": "Item_Armor",
@@ -16543,6 +17089,21 @@
     "Resistance_Ice": 6,
     "Resistance_Wind": 6
    }
+  },
+  "TrollWeapon": {
+   "superArmorDamage": 80,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Jaw",
+   "damage": {
+    "Item_Damage_Physical_Blunt": 9
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
   },
   "Vlk_Armor_L": {
    "maxStack": 1,
@@ -16583,6 +17144,52 @@
     "Resistance_Edge": 15,
     "Resistance_Fire": 5
    }
+  },
+  "Weapon_Pyrolaser_Base": {
+   "superArmorDamage": 20,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon",
+   "damage": {
+    "Item_Damage_Elemental_Fire": 50
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Long",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "WolfJaw": {
+   "superArmorDamage": 15,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Jaw",
+   "damage": {
+    "Item_Damage_Physical_Edge": 9
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
+  },
+  "ZombieWeapon": {
+   "superArmorDamage": 50,
+   "iconAsset": "/Game/UI/Textures/Common/Icons/T_Icon_Creatures.T_Icon_Creatures",
+   "itemType": "Item_Weapon_Claw",
+   "damage": {
+    "Item_Damage_Physical_Edge": 9
+   },
+   "specs": [
+    "Action_Pick_ToInventory",
+    "Item_Property_Equipable",
+    "Item_Property_NonLoot",
+    "Item_Range_Melee"
+   ],
+   "naturalWeapon": true
   }
  }
 }

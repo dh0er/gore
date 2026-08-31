@@ -3722,6 +3722,12 @@ abstract class AppLocalizations {
   /// **'Item'**
   String get fallbackItem;
 
+  /// Row label and card subtitle for a creature's built-in weapon — a wolf's jaw, a harpy's claws — which the game itself never names.
+  ///
+  /// In en, this message translates to:
+  /// **'Natural weapon'**
+  String get itemNaturalWeapon;
+
   /// No description provided for @attributeSkillPointsFallback.
   ///
   /// In en, this message translates to:

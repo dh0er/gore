@@ -214,4 +214,23 @@ void main() {
         .toList();
     expect(sentinels, isEmpty);
   });
+
+  test("the bundled catalog knows the creatures' own weapons", () async {
+    // Every creature carries its jaw, claws or sting in its weapon slot. No
+    // item catalog lists them — the player can never hold one — so a save's
+    // `WolfJaw` row had no name, no icon and no card.
+    final catalog = await ItemStatsCatalog.loadBundled();
+    for (final id in const ['WolfJaw', 'ScavengerJaw', 'LizardJaw']) {
+      final stats = catalog.statsFor(id);
+      expect(stats, isNotNull, reason: id);
+      expect(stats!.naturalWeapon, isTrue, reason: id);
+      expect(stats.damage, isNotEmpty, reason: id);
+    }
+    // And nothing the player can actually pick up is marked as one.
+    final worn = catalog.byItemId.entries
+        .where((e) => e.value.naturalWeapon && e.key.startsWith('it'))
+        .map((e) => e.key)
+        .toList();
+    expect(worn, isEmpty);
+  });
 }

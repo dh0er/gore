@@ -5,6 +5,7 @@ import 'package:goresave/features/editor/domain/game_icons.dart';
 import 'package:goresave/features/editor/ui/game_icon.dart';
 import 'package:goresave/features/editor/ui/glossary_portrait.dart';
 import 'package:goresave/features/editor/domain/actor.dart';
+import 'package:goresave/features/editor/domain/character_category_catalog.dart';
 import 'package:goresave/features/editor/domain/character_index.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
@@ -94,11 +95,14 @@ String _prettifyNpcKey(String key) {
 /// keystroke is a cheap substring scan over the cached strings rather than
 /// re-resolving every name.
 class _SearchableRow {
-  const _SearchableRow(this.row, this.name, this.search);
+  const _SearchableRow(this.row, this.name, this.search, this.kind);
 
   final CharacterRow row;
   final String name;
   final String search;
+
+  /// Human, creature or neither, as the character catalog files it.
+  final CharacterCategory? kind;
 }
 
 /// Entity-first master list of the characters in the save: the Player (pinned on
@@ -127,6 +131,7 @@ class CharacterMasterList extends StatefulWidget {
     required this.reloadKey,
     required this.locCatalog,
     required this.lang,
+    this.categories,
     this.showObjectIds = false,
   });
 
@@ -162,6 +167,11 @@ class CharacterMasterList extends StatefulWidget {
   /// The current game language, driving which loc set the name resolves from.
   final GameLang lang;
 
+  /// What each character IS, used to keep a man and a monster of the same name
+  /// out of one group. Null while the catalog loads; grouping then falls back
+  /// to the name alone.
+  final CharacterCategoryCatalog? categories;
+
   /// Whether raw GlobalIds / orphan knowledge keys are rendered as row
   /// subtitles. Search continues to match identifiers while they are hidden.
   final bool showObjectIds;
@@ -189,7 +199,8 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
 
   /// Display names whose group the user opened. Keyed by name so the state
   /// survives paging and re-filtering.
-  final Set<String> _expanded = <String>{};
+  final Set<(CharacterCategory?, String)> _expanded =
+      <(CharacterCategory?, String)>{};
   String? _error;
   String _query = '';
   // Client-side page cursor over the FILTERED actor list (an item offset).
@@ -207,10 +218,13 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
   @override
   void didUpdateWidget(covariant CharacterMasterList oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // Re-resolve cached names if the catalog or language changes (the loaded
-    // rows are unchanged, so no refetch — just recompute search strings).
+    // Re-resolve cached names if a catalog or the language changes (the loaded
+    // rows are unchanged, so no refetch — just recompute search strings). The
+    // character catalog counts too: it arrives after the first build, and until
+    // it does no row knows whether it is a man or a monster.
     if (oldWidget.locCatalog != widget.locCatalog ||
-        oldWidget.lang != widget.lang) {
+        oldWidget.lang != widget.lang ||
+        oldWidget.categories != widget.categories) {
       _actors = _decorate(_actors.map((e) => e.row).toList(growable: false));
       // The names the groups are keyed by just changed under them.
       _expanded.clear();
@@ -251,12 +265,22 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
         () {
           final key = row.globalId ?? row.uniqueName;
           final name = localizedNpcName(widget.locCatalog, widget.lang, key);
-          return _SearchableRow(row, name, '$key\n$name'.toLowerCase());
+          return _SearchableRow(
+            row,
+            name,
+            '$key\n$name'.toLowerCase(),
+            widget.categories?.categoryFor(key),
+          );
         }(),
     ];
     decorated.sort((a, b) {
       final byName = a.name.toLowerCase().compareTo(b.name.toLowerCase());
       if (byName != 0) return byName;
+      // A man and a monster can share a name — the mercenary Wolf and the
+      // sixty-six wolves. Keeping each kind's rows together is what lets the
+      // single grouping pass fold them into separate rows.
+      final byKind = (a.kind?.index ?? -1).compareTo(b.kind?.index ?? -1);
+      if (byKind != 0) return byKind;
       final aKey = a.row.globalId ?? a.row.uniqueName;
       final bKey = b.row.globalId ?? b.row.uniqueName;
       return aKey.compareTo(bKey);
@@ -323,7 +347,9 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
     final groups = <_CharacterGroup>[];
     for (var start = 0; start < rows.length;) {
       var end = start + 1;
-      while (end < rows.length && rows[end].name == rows[start].name) {
+      while (end < rows.length &&
+          rows[end].name == rows[start].name &&
+          rows[end].kind == rows[start].kind) {
         end++;
       }
       final members = rows.sublist(start, end);
@@ -535,7 +561,7 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
     ColorScheme scheme,
     AppLocalizations l10n,
   ) {
-    final open = _expanded.contains(group.name);
+    final open = _expanded.contains(group.key);
     final holdsSelection =
         !widget.selected.isPlayer &&
         group.members.any((e) => e.row.globalId == widget.selected.id);
@@ -558,7 +584,7 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
         selectedTileColor: scheme.primaryContainer,
         selectedColor: scheme.primary,
         onTap: () => setState(() {
-          if (!_expanded.remove(group.name)) _expanded.add(group.name);
+          if (!_expanded.remove(group.key)) _expanded.add(group.key);
         }),
       ),
       const Divider(height: 1),
@@ -629,6 +655,10 @@ class _CharacterGroup {
 
   _SearchableRow get first => members.first;
   String get name => first.name;
+
+  /// Identifies the group across paging and re-filtering. Name alone would let
+  /// opening the mercenary Wolf open the wolves too.
+  (CharacterCategory?, String) get key => (first.kind, first.name);
 
   /// Whether this renders as a plain row rather than an expandable group.
   bool get isSingle => members.length == 1;

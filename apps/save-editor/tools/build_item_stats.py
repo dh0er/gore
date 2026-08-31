@@ -148,6 +148,30 @@ def lineage(classes: dict[str, ScriptClass], name: str) -> list[ScriptClass]:
     return chain
 
 
+# The base every creature's built-in weapon derives from. A wolf's jaw, a
+# harpy's claws and a minecrawler's leg are ItemDefinitions like any other and
+# sit in the creature's MeleeSlot, but the game never shows them: they carry no
+# name, no icon and no catalog entry, because the player can never hold one.
+NATURAL_WEAPON_BASES = ("UMeleeWeaponBase_Creature", "URangedWeaponBase_Creature")
+
+
+def natural_weapons(classes: dict[str, ScriptClass]) -> list[str]:
+    """Every class whose lineage reaches a creature weapon base, id-first.
+
+    Keyed the way the save writes them — the class name without its leading
+    `U`, e.g. `ScavengerJaw`.
+    """
+    out = []
+    for name in classes:
+        chain = [entry.name for entry in lineage(classes, name)]
+        if name in NATURAL_WEAPON_BASES or not any(
+            base in chain for base in NATURAL_WEAPON_BASES
+        ):
+            continue
+        out.append(name)
+    return sorted(out)
+
+
 def resolve_item(
     classes: dict[str, ScriptClass],
     spell_configs: tuple[dict[str, str], dict[str, str]],
@@ -561,6 +585,18 @@ def main() -> int:
     for item_id, made in used_in.items():
         if item_id in items and not items[item_id].get("teaches"):
             items[item_id]["ingredientFor"] = sorted(made)
+
+    # The creatures' own weapons, which no item catalog lists. Without them a
+    # save's `WolfJaw` row had no name, no icon and no card at all.
+    for class_name in natural_weapons(classes):
+        item_id = class_name[1:] if class_name.startswith("U") else class_name
+        if item_id in items:
+            continue
+        resolved = resolve_item(classes, spell_configs, class_name)
+        if not resolved:
+            continue
+        resolved["naturalWeapon"] = True
+        items[item_id] = resolved
 
     filters = resolve_filters(classes)
     document = {
