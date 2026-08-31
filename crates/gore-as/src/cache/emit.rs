@@ -13418,6 +13418,17 @@ fn block_scoped_value_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
                 && refs.func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64) == Some(want)
         })
     };
+    // A release is written either way — the behaviour slot, or the generated `~Dtor` name. Asking
+    // only for the first misses the release entirely, and the slot then looks like it was never
+    // let go rather than like the block-scoped local it is.
+    let releases = |at: usize| {
+        instrs.get(at).is_some_and(|ins| {
+            ins.op.name == "CALLSYS"
+                && refs
+                    .func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64)
+                    .is_some_and(|name| name == "$beh2" || name.starts_with('~'))
+        })
+    };
     let calls = |at: usize| {
         instrs
             .get(at)
@@ -13431,7 +13442,7 @@ fn block_scoped_value_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
             .rposition(|ins| ins.op.name == "RET")
             .unwrap_or(instrs.len());
         while at >= 2
-            && behaviour(at - 1, "$beh2")
+            && releases(at - 1)
             && instrs[at - 2].op.name == "PSF"
         {
             at -= 2;
@@ -13445,7 +13456,7 @@ fn block_scoped_value_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
             continue;
         }
         let Some(release) = (at + 2..instrs.len()).find(|other| {
-            instrs[*other].op.name == "PSF" && w0(&instrs[*other]) == slot && behaviour(other + 1, "$beh2")
+            instrs[*other].op.name == "PSF" && w0(&instrs[*other]) == slot && releases(other + 1)
         }) else {
             continue;
         };
