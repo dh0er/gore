@@ -1097,6 +1097,29 @@ constants believed unspellable: `+inf` (`0x7F800000`) was written as the largest
 came back one ULP low. The language can spell it after all — an overflowing decimal literal
 (`1e39f`) parses and rounds to exactly the bit pattern vanilla holds.
 
+## What the remaining 1,114 are made of, and which parts are reachable
+
+Measured 2026-08-31 by classifying every record of the whole-corpus run. The point of this
+section is to stop the next attempt re-deriving it — three of these were probed by hand and came
+back with nothing, and that is worth more than the counts.
+
+| Family | n | Reachable? |
+|--------|---|-----------|
+| Naming / initialisation boundary | ~400 | Partly. The witnesses hold, but the name alone is not enough — the declaration also has to land where vanilla put it. Forcing names without placement measured 2 fixed / 16 broken. |
+| Evaluation order, no constructor moved | 99 | **No.** There is no pattern in the vanilla stream that says which spelling the source used. Four independent classifications reached this separately. |
+| Bool carried at the wrong width | ~180 | Partly. The crisp sub-case is smaller than it looks: of the eighty `return (int(x) != 0);` in the tree, exactly one has a return tail with no test in it. |
+| Return object built in place | 76 | **Not through the source.** Vanilla copy-constructs into the return slot (`PSF ret; PshVPtr src; $beh0`); we default-construct a temporary and `opAssign`. Writing `return T();` does not produce vanilla's shape — the compiler does not elide. This needs the construction lowered, not a different spelling. |
+| `ThrowException` never emitted | 13 | **No.** The construct appears zero times in the whole regenerated corpus; no source rewrite can reach it. |
+| Dead loop `while (i < 0)` | 22 | Not through the bound. Restoring `i < arr.Num()` compiles and fixes nothing: the loop FORM differs, not the operand. |
+| Pure slot renumbering | ~60 | Known dead end. |
+
+Two traps that cost measurements here, both environmental rather than emitter bugs. A stray
+`gore.exe` from an earlier run holds `target/release/gore.exe`, so the build fails silently and
+the next measurement scores the OLD binary — kill it first and never filter the build output. And
+copying the emitted tree with Python takes the better part of an hour; `robocopy /MT` takes
+seconds.
+
+
 ## Root causes and next work
 
 1. **Class defaults are authored; generated defaults are still the fallback, and direct scalars
