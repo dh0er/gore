@@ -2136,6 +2136,12 @@ fn emit_function_ctor(
                         .filter(|slot| !a_third_life.contains(slot))
                         .flat_map(|slot| [(slot, 1), (slot, 2)]),
                 )
+                // Both witnesses name one LIFE of a slot while the candidates are per life, so
+                // review asked these to stand down where the text carries several. Measured, that
+                // costs a function and buys none: `ABattleBarrierVisual::DoCheck` names an
+                // `FString` in a slot that has other lives, and standing down inlines it. Holding
+                // the name for every life of the slot is the conservative direction — it can leave
+                // a name where none was needed, which is a spelling; dropping one loses a value.
                 .filter(|(slot, _)| !returned_by_reference.contains(slot))
                 .filter(|(slot, _)| !block_scoped.contains(slot))
                 .collect(),
@@ -2178,6 +2184,12 @@ fn emit_function_ctor(
                         .filter(|slot| !a_third_life.contains(slot))
                         .flat_map(|slot| [(slot, 1), (slot, 2)]),
                 )
+                // Both witnesses name one LIFE of a slot while the candidates are per life, so
+                // review asked these to stand down where the text carries several. Measured, that
+                // costs a function and buys none: `ABattleBarrierVisual::DoCheck` names an
+                // `FString` in a slot that has other lives, and standing down inlines it. Holding
+                // the name for every life of the slot is the conservative direction — it can leave
+                // a name where none was needed, which is a spelling; dropping one loses a value.
                 .filter(|(slot, _)| !returned_by_reference.contains(slot))
                 .filter(|(slot, _)| !block_scoped.contains(slot))
                 .collect(),
@@ -13187,21 +13199,39 @@ fn renders_a_bool(
 /// from the TEXT — whether it could prove a write comes before every read — and defaulted to
 /// writing the initialiser when it could not. That default is a store the original does not have.
 ///
-/// Any write counts, not only an immediate one. A slot filled from a call result
-/// (`CpyRtoV4`) or copied from another slot has an initialiser as surely as one given a literal,
-/// and reading only the literal stores would call it uninitialised and drop the value. A slot NO
-/// instruction writes is the one vanilla declared bare: the callee writes through it, and there is
-/// no read in front for the uninitialised-variable warning to fire on.
+/// Any write counts, not only an immediate one: a slot filled from a call result (`CpyRtoV4`) or
+/// copied from another slot has an initialiser as surely as one given a literal, and reading only
+/// the literal stores would call it uninitialised and drop the value.
+///
+/// But only the FIRST thing that touches the slot decides it. A slot handed to a call by address
+/// and incremented afterwards is written twice over and declared bare all the same — the later
+/// writes are the body doing its work, not a declaration being given a value. So the question is
+/// which comes first, a write or a mention, and a slot whose first mention is not a write is the
+/// one vanilla declared bare: the callee fills it, and there is no read in front for the
+/// uninitialised-variable warning to fire on.
 fn slots_vanilla_initialises(f: &Func) -> HashSet<i32> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
     };
-    instrs
-        .iter()
-        .filter(|ins| writes_destination(ins.op.name))
-        .filter_map(|ins| ins.words.first().map(|w| *w as i16 as i32))
-        .filter(|slot| *slot > 0)
-        .collect()
+    let mut initialised = HashSet::new();
+    let mut seen: HashSet<i32> = HashSet::new();
+    for ins in &instrs {
+        let written = writes_destination(ins.op.name)
+            .then(|| ins.words.first().map(|w| *w as i16 as i32))
+            .flatten()
+            .filter(|slot| *slot > 0);
+        if let Some(slot) = written {
+            if seen.insert(slot) {
+                initialised.insert(slot);
+            }
+        }
+        for slot in super::bytediff::addressed_slots(ins) {
+            if slot > 0 {
+                seen.insert(slot);
+            }
+        }
+    }
+    initialised
 }
 
 /// Whether the first thing our own text does with the slot is hand it to a call as a whole
@@ -13374,6 +13404,11 @@ fn block_scoped_value_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
         // …and the release has to stand in the function's own trailing destructor run. A slot let
         // go mid-body outlived one statement and no more, which a temporary in a nested expression
         // also does; only a block-scoped local is still alive when the block ends.
+        // Review asked for a call AFTER the one that consumed the value, on the grounds that the
+        // consuming call sits inside this window and makes the test trivially true. Measured, that
+        // costs a function and buys none: `ABattleBarrierVisual::DoCheck` names an `FString`, hands
+        // it to the last call in the block and releases it in the epilogue. The epilogue is the
+        // witness; the call count only says the value reached a statement at all.
         if (last_use + 1..release).any(calls) && release >= epilogue {
             out.insert(slot);
         }
