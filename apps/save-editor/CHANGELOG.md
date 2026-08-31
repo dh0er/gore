@@ -12,66 +12,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Hovering an item opens a similar card the game opens: name, item type, damage or
+  spell levels, protection, requirements, value and description.
+- The glossary and character lists show the game's own pencil portraits.
+- Attributes explain themselves in the game's own words.
 - Appearance settings now offer Segoe UI, Podkova and Noto Serif as interface
-  fonts. Noto Serif includes dedicated Japanese and Simplified Chinese variants;
-  Podkova remains available for every other supported language.
-- The overview now combines compact save controls with responsive character,
-  quest, combat and inventory statistics. Save deletion includes a restorable
-  backup.
-- Labels now carry the game's own icons. Attributes, protection, skills and
-  inventory groups show the same glyph the game draws in front of them,
-  extracted from your installation next to the item images. Anything the game
-  has no icon for keeps the editor's own, and without a game installation
-  nothing changes.
-- Hovering an item opens the card the game opens: name, item type, damage or
-  spell levels, protection, requirements, value and description, laid out the
-  way the game lays it out.
-- Quests, the glossary and the character lists carry the game's own icons too:
-  the three camp crests, the colony and completed markers, and the glossary's
-  character, creature, location and tutorial glyphs.
-- The glossary shows the game's own pencil portraits — characters, creatures and
-  locations — read straight from your installation, and its own silhouette for
-  an entry that is still locked. Character lists show the same portraits, with
-  the game's person or creature mark for everyone it draws no picture of.
-- Attributes explain themselves in the game's own words. Health, mana,
-  strength, dexterity, experience, learning points and every protection value
-  now carry the description the game shows on its character screen, in your
-  language. Level, lockpicking and pickpocketing say where their value comes
-  from.
-- Blueprints show the whole chain they teach: what each step takes, what it
-  yields, and at which bench.
-- Books and letters show their own text. Raw materials say what can be made
-  from them.
-- Food and potions list what they do to you — how much, and for how long.
-- A character's detail page shows the trades the glossary files him under, and
-  marks a dead one.
+  fonts.
+- The overview page has been redesigned and now contains some statistics of character,
+  quest, combat and inventory.
+- Savegames can now be deleted.
 
 ### Changed
 
-- The inventory is grouped the way the game groups it, led by an "All" tab and
-  then Melee, Ranged, Magic, Wearables, Food, Potions, Materials, Documents,
-  Miscellaneous, Artefacts. Runes and scrolls share one tab, jewellery sits with
-  the armour, and trophies sit with the crafting materials — as in game. Trade
-  and the Add-item dialog follow the same tabs.
-- Actors sharing a name fold into one expandable row, and paging counts those
-  rows — a save's fifty guards cost one line instead of fifty.
-- A character's detail page shows the wide picture the glossary shows.
-- The Trade tab carries the same hover card and the same row layout as the
-  inventory.
-- Factions carry their camp's crest instead of a second hostile-or-not mark.
+- The inventory is grouped the way the game groups it.
+- Actors sharing a name fold into one expandable row.
+- Items and lots of other UI elements are now replaced with the game's own icons.
 
 ### Fixed
 
-- The player's inventory no longer lists the fist markers (`HumanFist …`) the
-  engine equips on every character. They are not items, nothing about them can
-  be edited, and the NPC view has always hidden them.
-- Spells that deal no damage — Light, Heal, the teleports, every transform
-  scroll — show their mana cost. Twenty-two of them showed none.
-- Characters the save never spawned are no longer listed. There was no actor
-  behind them to edit.
-- Monsters find their picture and are no longer drawn as people.
-- Forged blanks and heads sit with the materials, where the game files them,
-  instead of among the finished weapons.
+- The player's inventory no longer lists the useless fist markers (`HumanFist …`) the
+  engine equips on every character.
+- Characters with no actor behind them in the save are no longer listed.
 
 ## [1.3.1] - 2026-08-26
 
