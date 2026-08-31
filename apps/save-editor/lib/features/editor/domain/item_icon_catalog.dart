@@ -177,6 +177,17 @@ class _ItemIconCatalogRetention {
 /// when nothing is configured. The core resolves all of that; this hands the
 /// answer to the Dart side, which otherwise only has the raw setting. Null
 /// until the icons have been prepared once.
+/// The configured game path as last read off disk.
+///
+/// The setting lives in a file the CLI and the other apps rewrite, so a change
+/// to it reaches Riverpod through nothing at all. The resume check pushes what
+/// it read here, which is the same moment the item icons themselves check the
+/// world for changes. Everything keyed to the path hangs off this, so an
+/// unchanged path rebuilds nothing.
+final configuredGamePathProvider = StateProvider<String?>(
+  (ref) => ref.watch(sharedConfigProvider).gamePath(),
+);
+
 final resolvedGameRootProvider = Provider<String?>((ref) {
   // Reading the catalog is what makes this recompute once preparation lands.
   ref.watch(itemIconCatalogProvider);
@@ -185,8 +196,7 @@ final resolvedGameRootProvider = Provider<String?>((ref) {
   // failed preparation deliberately keeps the previous one. Once the setting
   // changes, answering with it would go on reading the old installation for as
   // long as preparing the new one keeps failing.
-  if (retention.requestedGamePath !=
-      ref.watch(sharedConfigProvider).gamePath()) {
+  if (retention.requestedGamePath != ref.watch(configuredGamePathProvider)) {
     return null;
   }
   final resolved = retention.sourceGamePath;
@@ -205,7 +215,7 @@ final resolvedGameRootProvider = Provider<String?>((ref) {
 final gameRootProvider = Provider<String?>((ref) {
   final resolved = ref.watch(resolvedGameRootProvider);
   if (resolved != null) return resolved;
-  return normalizeGameRoot(ref.watch(sharedConfigProvider).gamePath());
+  return normalizeGameRoot(ref.watch(configuredGamePathProvider));
 });
 
 final itemIconCatalogRefreshProvider = Provider<ItemIconCatalogRefresh>((ref) {
@@ -217,7 +227,7 @@ final itemIconCatalogRefreshProvider = Provider<ItemIconCatalogRefresh>((ref) {
     () => ref.read(itemIconCatalogNowProvider)(),
     retention,
     () => ref.read(itemIconCatalogReloadProvider.notifier).state++,
-    () => ref.invalidate(resolvedGameRootProvider),
+    (path) => ref.read(configuredGamePathProvider.notifier).state = path,
   );
 });
 
@@ -229,7 +239,7 @@ class ItemIconCatalogRefresh {
     this._now,
     this._retention,
     this._reload,
-    this._forgetGameRoot,
+    this._observeGamePath,
   );
 
   final GoresaveCoreService Function() _core;
@@ -239,10 +249,9 @@ class ItemIconCatalogRefresh {
   final _ItemIconCatalogRetention _retention;
   final void Function() _reload;
 
-  /// Drops the cached [gameRootProvider] answer. The configured path is a file
-  /// on disk that another tool can rewrite, and nothing about that reaches
-  /// Riverpod on its own.
-  final void Function() _forgetGameRoot;
+  /// Publishes the path just read off disk to [configuredGamePathProvider],
+  /// which is what everything keyed to the game path hangs off.
+  final void Function(String?) _observeGamePath;
 
   /// Check only source-file metadata on resume. Full PNG verification runs
   /// solely when this identity changed or a previously missing install appears.
@@ -251,12 +260,13 @@ class ItemIconCatalogRefresh {
     final core = _core();
     if (!core.isAvailable) return;
     final configuredGamePath = _gamePath();
+    // Publish it BEFORE anything can bail out, and whatever it says: a new
+    // installation that is momentarily unreadable returns no identity, and
+    // every path below that returns early. Comparing against the last
+    // PREPARED path would also miss a switch away and back again, which leaves
+    // that path equal while the root cached in between is not.
+    _observeGamePath(configuredGamePath);
     final selectionChanged = configuredGamePath != _retention.requestedGamePath;
-    // Do this BEFORE anything can bail out: a new installation that is
-    // momentarily unreadable returns no identity, and every path below that
-    // returns early. The cached root would then go on naming the old
-    // installation, and the portraits would go on reading pictures out of it.
-    if (selectionChanged) _forgetGameRoot();
     final retainedSourceDiffersFromRequest =
         _retention.sourceGamePath != _retention.requestedGamePath;
     final identity = await _readItemIconSourceIdentity(

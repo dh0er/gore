@@ -490,13 +490,26 @@ void main() {
     await container.read(itemIconCatalogProvider.future);
     expect(container.read(gameRootProvider), 'D:/installed-a');
 
+    final refresh = container.read(itemIconCatalogRefreshProvider);
     config.setGamePath('E:/installed-b');
-    await container
-        .read(itemIconCatalogRefreshProvider)
-        .refreshIfSourceChanged();
+    await refresh.refreshIfSourceChanged();
 
     expect(core.prepares, 1, reason: 'the unreadable install cannot prepare');
     expect(container.read(gameRootProvider), 'E:/installed-b');
+
+    // A second switch, now that the resolved root has already gone null:
+    // dropping THAT provider again recomputes null for null, which notifies
+    // nobody, so the root went on naming the first fallback.
+    config.setGamePath('F:/installed-c');
+    await refresh.refreshIfSourceChanged();
+    expect(container.read(gameRootProvider), 'F:/installed-c');
+
+    // And back to where it started. Measured against the last PREPARED path
+    // this looks like no change at all, while the root cached in between is a
+    // different installation entirely.
+    config.setGamePath('D:/installed-a');
+    await refresh.refreshIfSourceChanged();
+    expect(container.read(gameRootProvider), 'D:/installed-a');
   });
 }
 
