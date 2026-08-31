@@ -65,7 +65,7 @@ release yet — build it from source.
 | [Voice-over](docs/guide/voice.md) | Partly | Replace spoken lines | You can add audio for a brand-new line, but nobody has heard one play yet |
 | [Textures](docs/guide/textures.md) | Full | Replace textures | A few, like the mouse cursors, are stored somewhere this cannot reach |
 | [DataAssets](docs/guide/dataassets.md) | Partly | Edit cooked game data | Only assets the engine describes natively; Blueprint ones are refused |
-| [Scripts](docs/guide/scripts.md) | Partly | Read the game's script code, change it, add your own | Reverse-engineered and lossy — recompiled code is not always identical |
+| [Scripts](docs/guide/scripts.md) | 99% | Read the game's script code, change it, add your own | Splicing recompiles the WHOLE module, so it also rewrites functions you did not touch. 6,982 of 7,317 modules come back byte-identical; of the rest most only differ in wording, but 15 hold a loop that recompiles with a bound of zero and never runs — they sit in crime assessment, combat, fear and search AI. `emit` and `compile-module` name the module and the risk before you splice |
 | [Mods & load order](docs/guide/bundles.md) | Full | Ship all of the above as one mod, run many together, and install mods that GORE did not build — plain zips, pak files, UE4SS mod folders | Four Nexus mods have run through one real-install campaign; third-party AngelScript and three-way script conflicts remain unqualified |
 
 GORE will not edit your saves — that is the

@@ -1824,20 +1824,25 @@ fn qualified_target_pristine_script_cache(
     require_qualified_target_pristine_base(target.shipping_cache(), pristine)
 }
 
-/// The generation GUID in a cache file, read from its header alone.
+/// The seal of a cache file, read in a stream so the whole thing never has to be held.
 ///
-/// Reads the first few bytes rather than the whole 100-plus-megabyte file: the caller wants to
-/// warn about the module it is ABOUT to compile, and that has to happen before the slow work,
-/// not after it. A file that cannot be read this way simply yields no warning.
-fn cache_generation_guid(cache: &Path) -> Option<[u8; 16]> {
+/// It has to be the CONTENT, not the header: a spliced cache keeps the GUID of the build it was
+/// spliced into, so a header read would hand a measurement to a cache that was never measured. A
+/// file that cannot be read simply yields no warning.
+fn cache_seal_of(cache: &Path) -> Option<[u8; 32]> {
+    use sha2::{Digest, Sha256};
     use std::io::Read;
-    let mut head = [0u8; gore_as::cache::header::CacheHeader::SIZE];
-    std::fs::File::open(cache)
-        .and_then(|mut file| file.read_exact(&mut head))
-        .ok()?;
-    gore_as::cache::header::CacheHeader::parse(&head)
-        .ok()
-        .map(|header| header.hash)
+    let mut file = std::fs::File::open(cache).ok()?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 1 << 20];
+    loop {
+        let read = file.read(&mut buffer).ok()?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Some(hasher.finalize().into())
 }
 
 fn compiler_binds_path(game: &Path) -> PathBuf {
@@ -2584,14 +2589,12 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             );
             // A whole tree is not spliced, one module of it is — so the useful figure here is how
             // many of them an author could pick up without inheriting a difference.
-            let cache_guid = gore_as::cache::header::CacheHeader::parse(&bytes)
-                .map(|header| header.hash)
-                .unwrap_or_default();
-            if gore_as::cache::faithfulness::is_measured(&cache_guid) {
+            let cache_seal = gore_as::cache::faithfulness::cache_seal(&bytes);
+            if gore_as::cache::faithfulness::is_measured(&cache_seal) {
                 let listed = mods
                     .iter()
                     .filter(|module| {
-                        gore_as::cache::faithfulness::for_module(&cache_guid, &module.name)
+                        gore_as::cache::faithfulness::for_module(&cache_seal, &module.name)
                             .is_some_and(|known| known.divergent_functions > 0)
                     })
                     .count();
@@ -2619,9 +2622,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             )
             .context("prepare emitted modules")?
             .with_class_defaults(!no_defaults);
-            let cache_guid = gore_as::cache::header::CacheHeader::parse(&bytes)
-                .map(|header| header.hash)
-                .unwrap_or_default();
+            let cache_seal = gore_as::cache::faithfulness::cache_seal(&bytes);
             let mut n = 0;
             for (module_index, _) in mods
                 .iter()
@@ -2634,7 +2635,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 println!("{}", prepared.emit_module(module_index)?);
                 // Say it where the author first reads the source, not after the splice.
                 if let Some(warning) = gore_as::cache::faithfulness::warning_for_module(
-                    &cache_guid,
+                    &cache_seal,
                     &mods[module_index].name,
                 ) {
                     eprintln!("{warning}");
@@ -3152,8 +3153,8 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let binds_path = compiler_binds_path(&game);
             // Before anything heavy: splicing recompiles the WHOLE module, so say what
             // else comes along with the edit while there is still time to look.
-            if let Some(warning) = cache_generation_guid(&shipping_path).and_then(|guid| {
-                gore_as::cache::faithfulness::warning_for_module(&guid, &module)
+            if let Some(warning) = cache_seal_of(&shipping_path).and_then(|seal| {
+                gore_as::cache::faithfulness::warning_for_module(&seal, &module)
             }) {
                 eprintln!("{warning}");
             }

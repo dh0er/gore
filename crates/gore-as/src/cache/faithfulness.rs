@@ -26,26 +26,41 @@ const TABLES: &[(&str, &str)] = &[(
     include_str!("../../assets/byte-faithfulness/g1r-steam-24878692.tsv"),
 )];
 
-fn table_for(script_cache_guid: &[u8; 16]) -> Option<&'static str> {
-    let row = gore_generation::row_for_script_cache_guid(script_cache_guid)?;
+/// The measurement for a cache, found by what the cache CONTAINS.
+///
+/// Not by the header GUID. A spliced cache keeps the GUID of the build it was spliced into — that
+/// is the point of splicing — so the GUID would hand the vanilla measurement to a cache whose
+/// modules are no longer vanilla, and an edited module would be reported byte-faithful on the
+/// strength of a run it was never part of. The seal of the exact measured file is the only thing
+/// that can say the table still applies.
+fn table_for(cache_sha256: &[u8; 32]) -> Option<&'static str> {
+    let row = gore_generation::rows()
+        .iter()
+        .find(|row| &row.shipping_cache.sha256 == cache_sha256)?;
     TABLES
         .iter()
         .find(|(id, _)| *id == row.id)
         .map(|(_, table)| *table)
 }
 
+/// The seal of a cache held in memory.
+pub fn cache_seal(cache: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(cache).into()
+}
+
 /// True when a measurement exists for this cache at all. Without one, nothing below means
 /// "byte-faithful" — it means "not measured", and callers must say so rather than reassure.
-pub fn is_measured(script_cache_guid: &[u8; 16]) -> bool {
-    table_for(script_cache_guid).is_some()
+pub fn is_measured(cache_sha256: &[u8; 32]) -> bool {
+    table_for(cache_sha256).is_some()
 }
 
 /// What is known about `module`, or `None` where the cache was never measured.
 ///
 /// A module the table does not list was byte-faithful in that run: the table carries only the
 /// modules that were not, so absence is the positive answer and is reported as zero.
-pub fn for_module(script_cache_guid: &[u8; 16], module: &str) -> Option<ModuleFaithfulness> {
-    let table = table_for(script_cache_guid)?;
+pub fn for_module(cache_sha256: &[u8; 32], module: &str) -> Option<ModuleFaithfulness> {
+    let table = table_for(cache_sha256)?;
     for line in table.lines() {
         let line = line.trim_end();
         if line.is_empty() || line.starts_with('#') {
@@ -77,8 +92,8 @@ pub fn for_module(script_cache_guid: &[u8; 16], module: &str) -> Option<ModuleFa
 /// Deliberately says what it means for the reader rather than quoting a percentage: the risk is
 /// not that the module fails to compile (it does compile), it is that code the author did not
 /// touch comes out different.
-pub fn warning_for_module(script_cache_guid: &[u8; 16], module: &str) -> Option<String> {
-    let known = for_module(script_cache_guid, module)?;
+pub fn warning_for_module(cache_sha256: &[u8; 32], module: &str) -> Option<String> {
+    let known = for_module(cache_sha256, module)?;
     if known.divergent_functions == 0 {
         return None;
     }
@@ -110,20 +125,33 @@ pub fn warning_for_module(script_cache_guid: &[u8; 16], module: &str) -> Option<
 mod tests {
     use super::*;
 
-    fn measured_guid() -> [u8; 16] {
+    fn measured_guid() -> [u8; 32] {
         gore_generation::rows()
             .iter()
             .find(|row| row.id == "g1r-steam-24878692")
             .expect("the measured generation is in the table")
-            .script_cache_guid
+            .shipping_cache
+            .sha256
     }
 
     #[test]
     fn an_unmeasured_cache_makes_no_claim() {
-        let unknown = [0u8; 16];
+        let unknown = [0u8; 32];
         assert!(!is_measured(&unknown));
         assert_eq!(for_module(&unknown, "AI.CharacterAI_Gothic"), None);
         assert_eq!(warning_for_module(&unknown, "AI.CharacterAI_Gothic"), None);
+    }
+
+    #[test]
+    fn a_spliced_cache_is_not_the_measured_one() {
+        // Splicing preserves the header GUID and changes the content. Keying on content is what
+        // makes that visible; keying on the GUID would have handed it the vanilla measurement.
+        let measured = measured_guid();
+        let mut spliced = measured;
+        spliced[0] ^= 0xff;
+        assert!(is_measured(&measured));
+        assert!(!is_measured(&spliced));
+        assert_eq!(warning_for_module(&spliced, "AI.CharacterAI_Gothic"), None);
     }
 
     #[test]

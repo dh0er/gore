@@ -13196,8 +13196,13 @@ fn slots_vanilla_zero_initialises(f: &Func) -> HashSet<i32> {
     instrs
         .iter()
         .filter(|ins| matches!(ins.op.name, "SetV1" | "SetV4" | "SetV8"))
-        .filter(|ins| ins.dwords.first().copied().unwrap_or(1) == 0
-            && ins.qwords.first().copied().unwrap_or(1) == 0)
+        // The immediate lives in the operand vector the WIDTH picks: a `SetV8` carries it in the
+        // qwords and nothing in the dwords, and vice versa. Asking both to hold zero asks one of
+        // them to hold a value it never has, which no store can answer.
+        .filter(|ins| match ins.op.name {
+            "SetV8" => ins.qwords.first().copied() == Some(0),
+            _ => ins.dwords.first().copied() == Some(0),
+        })
         .filter_map(|ins| ins.words.first().map(|w| *w as i16 as i32))
         .filter(|slot| *slot > 0)
         .collect()
