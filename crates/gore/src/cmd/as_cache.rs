@@ -3305,7 +3305,11 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 .as_deref()
                 .map(gore_as::cache::faithfulness::cache_seal)
                 .or_else(|| {
-                    std::fs::read(&binds_path)
+                    // The same path compilation will read: `GORE_AS_BINDS` when it is set, and
+                    // the installed file otherwise. Hashing the installed one regardless would
+                    // seal an input the compile is not going to use.
+                    let path = native_api_path(&shipping_path)?;
+                    std::fs::read(path)
                         .ok()
                         .map(|bytes| gore_as::cache::faithfulness::cache_seal(&bytes))
                 });
