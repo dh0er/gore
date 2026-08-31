@@ -2192,6 +2192,8 @@ fn emit_function_ctor(
                 &argument_constructed_slots(f, refs),
                 refs,
             );
+        let rendered =
+            restore_named_argument_temporaries(&rendered, &declared_argument_constructions(f, refs));
         let rendered = fold_widening_aliases(&rendered, &declared_locals, &path_roots, &widened);
         let rendered =
             spell_out_default_temporaries(&rendered, &default_only_construction_counts(f, refs));
@@ -9134,6 +9136,106 @@ fn argument_constructed_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
                 out.insert(slot);
             }
         }
+    }
+    out
+}
+
+/// The other side of that witness: a value vanilla built BEFORE the argument run.
+///
+/// The compiler pushes arguments in order, so a construction standing among them was written
+/// among them — that is [`argument_constructed_slots`]. A construction standing in FRONT of the
+/// first push was a statement of its own, and the argument that follows is the name it gave.
+/// `AFirewallBoundaryChecker::ApplyGameplayEffectToTarget` builds `v144` and only then pushes
+/// `null`; we push `null` first and build `v144` among the arguments, which is the same
+/// instructions in the order the source did not write them.
+///
+/// Returns the slot with the type name the construction's owner carries, because the text has to
+/// be able to spell the declaration. Only where the slot is pushed again afterwards — a value
+/// built and never handed anywhere is a different shape and none of this rule's business.
+fn declared_argument_constructions(f: &Func, refs: &RefResolver) -> Vec<(i32, String)> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return Vec::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let pushes = |name: &str| {
+        matches!(
+            name,
+            "PshV4" | "PshV8" | "PshVPtr" | "PshC4" | "PshC8" | "PshGPtr" | "PshNull" | "PSF"
+        )
+    };
+    let mut out = Vec::new();
+    for at in 1..instrs.len().saturating_sub(1) {
+        if instrs[at].op.name != "PSF" || instrs[at + 1].op.name != "CALLSYS" {
+            continue;
+        }
+        let ptr = instrs[at + 1].qwords.first().copied().unwrap_or(0) as i64;
+        if refs.func_by_ptr(ptr) != Some("$beh0")
+            || refs.func_params_by_ptr(ptr).map(|p| p.len()) != Some(0)
+        {
+            continue;
+        }
+        let slot = w0(&instrs[at]);
+        if slot <= 0 || pushes(instrs[at - 1].op.name) {
+            continue;
+        }
+        // The construction has to come before the argument RUN, not merely before its own push.
+        // Where the slot's push follows the construction immediately, the arguments in front of
+        // it were pushed first and the value was built among them — an inline temporary, whatever
+        // stands before it. `UCM_QuickShot` builds its event data one instruction before handing
+        // it over, and reading that as a declaration moved the construction across a receiver
+        // that runs.
+        let own_push = instrs[at + 2..]
+            .iter()
+            .take(12)
+            .position(|ins| ins.op.name == "PSF" && w0(ins) == slot);
+        let handed_on = own_push.is_some_and(|offset| offset > 0);
+        let Some(ty) = refs.func_owner_by_ptr(ptr) else {
+            continue;
+        };
+        if handed_on && matches!(ty.bytes().next(), Some(b'F') | Some(b'T')) {
+            out.push((slot, ty.to_owned()));
+        }
+    }
+    out
+}
+
+/// Give those constructions back their name.
+///
+/// The inline spelling is `T()` standing where an argument goes. It becomes a declaration on its
+/// own line in front of the statement, and the argument becomes the name — which is what the
+/// bytecode above says the source wrote. One site per slot: a second `T()` of the same type in
+/// the same statement cannot be told apart from the first, and guessing which is which would move
+/// a construction across an argument that also runs.
+fn restore_named_argument_temporaries(body: &str, declared: &[(i32, String)]) -> String {
+    if declared.is_empty() {
+        return body.to_owned();
+    }
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    for (slot, ty) in declared {
+        let ident = format!("local_{slot}");
+        if lines.iter().any(|line| count_ident(line, &ident) > 0) {
+            continue; // the name already stands; nothing to restore
+        }
+        let inline = format!("{ty}()");
+        let sites: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| {
+                line.matches(inline.as_str()).count() == 1
+                    && (line.contains(&format!("({inline}")) || line.contains(&format!(", {inline}")))
+            })
+            .map(|(at, _)| at)
+            .collect();
+        let [at] = sites[..] else {
+            continue;
+        };
+        let indent = indent_of(&lines[at]);
+        lines[at] = lines[at].replacen(inline.as_str(), &ident, 1);
+        lines.insert(at, format!("{indent}{ty} {ident};"));
+    }
+    let mut out = lines.join("\n");
+    if body.ends_with('\n') {
+        out.push('\n');
     }
     out
 }
