@@ -286,6 +286,12 @@ void main() {
         ),
         root.path,
       );
+      // However deep below the install the setting points: the CLI accepts any
+      // descendant, so a depth limit would give up on a path it resolves.
+      final deep = Directory(
+        p.join(root.path, 'G1R', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'),
+      )..createSync(recursive: true);
+      expect(normalizeGameRoot(deep.path), root.path);
     });
 
     test('a bare G1R folder is not taken for an install', () {

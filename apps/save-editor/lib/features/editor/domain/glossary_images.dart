@@ -25,18 +25,20 @@ const _glossaryImageDirectory = 'Story/Conversation/images/Glossary';
 String? normalizeGameRoot(String? gamePath) {
   final trimmed = gamePath?.trim();
   if (trimmed == null || trimmed.isEmpty) return null;
+  // Every ancestor, the way `normalize_root` does it: the CLI accepts any
+  // descendant of the install, and a depth limit would give up on a path that
+  // it still resolves.
   var directory = Directory(trimmed);
-  for (var i = 0; i < 8; i++) {
+  while (true) {
     if (Directory(
       p.join(directory.path, 'G1R', _glossaryImageDirectory.split('/').first),
     ).existsSync()) {
       return directory.path;
     }
     final parent = directory.parent;
-    if (parent.path == directory.path) break;
+    if (parent.path == directory.path) return trimmed;
     directory = parent;
   }
-  return trimmed;
 }
 
 /// Which of a portrait's two sizes to read.
