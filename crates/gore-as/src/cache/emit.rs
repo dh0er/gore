@@ -12865,13 +12865,30 @@ fn short_circuit(
     // script supers above the class that reads it, and asking only the script hierarchy left
     // `A || this.bShouldExitState` standing as an if/else over a carrier in both overrides of
     // `TryConfrontCriminal`.
+    // A carrier the slot table calls `int` is still a bool wherever every value it takes is one.
+    // This build holds a bool in an int-sized slot, so the type table cannot tell the two apart —
+    // but our own `int(...)` wrap can: it is there BECAUSE the value inside it is a bool.
+    // `AssessmentBits::WitnessIsPersonalVictimOfCrime` carries
+    // `int(local_2.bWitnessIsPersonalVictim)` through an if/else that vanilla wrote as one `&&`,
+    // and the carrier's declared `int` was the only thing refusing it.
+    let unwrapped = value
+        .strip_prefix("int(")
+        .filter(|_| matching_paren(&value, 3) == Some(value.len() - 1))
+        .and_then(|rest| rest.strip_suffix(')'))
+        .map(str::to_owned)
+        .filter(|inner| renders_a_bool(inner, locals, refs, fields, roots, class_name));
+    let carrier_is_int = temporary_type(locals, &target) == Some("int");
+    let value = unwrapped.clone().unwrap_or(value);
     let value_is_bool = renders_a_bool(&value, locals, refs, fields, roots, class_name)
         || roots.get(value.as_str()).is_some_and(|ty| ty == "bool");
-    if temporary_type(locals, &target) != Some("bool") || !value_is_bool {
+    let target_is_bool = temporary_type(locals, &target) == Some("bool")
+        || (carrier_is_int && unwrapped.is_some());
+    if !target_is_bool || !value_is_bool {
         sc_reject(
-            match temporary_type(locals, &target) {
-                Some("bool") => "value-not-bool",
-                _ => "target-not-bool",
+            if target_is_bool {
+                "value-not-bool"
+            } else {
+                "target-not-bool"
             },
             lines[at],
         );
@@ -13070,6 +13087,7 @@ fn member_path_type(
     fields: Option<&HashMap<String, String>>,
     refs: &RefResolver,
     class_name: Option<&str>,
+    locals: &BTreeMap<i32, String>,
 ) -> Option<String> {
     if value.contains(['(', ')', '[', ']', ' ', '\u{1}', '\u{2}']) {
         return None;
@@ -13084,7 +13102,19 @@ fn member_path_type(
                 None => inherited_native_field_type(refs, class_name, first)?.to_owned(),
             }
         }
-        _ => roots.get(head)?.clone(),
+        // `roots` carries the paths the renderer built; a plain `local_N` head is often not one
+        // of them, and its type is sitting in the slot table the caller already holds. Without
+        // this the walk stopped at the head and `local_2.bWitnessIsPersonalVictim` was an unknown,
+        // which left `A && <that field>` standing as an if/else over a carrier.
+        _ => match roots.get(head) {
+            Some(ty) => ty.clone(),
+            None => head
+                .strip_prefix("local_")
+                .and_then(|rest| rest.split('_').next())
+                .and_then(|rest| rest.parse::<i32>().ok())
+                .and_then(|slot| locals.get(&slot))?
+                .clone(),
+        },
     };
     for field in parts {
         ty = refs
@@ -13118,7 +13148,8 @@ fn renders_a_bool(
     // once the path is walked segment by segment. Without the walk, `local_46.bWitnessIsGuildOwner`
     // is an unknown, the arm stays an if/else over a carrier, and the copy that costs is ours.
     // Measured: 86 such arms still stand, and only two of them are a bare `this.<field>`.
-    if member_path_type(value, roots, fields, refs, class_name).as_deref() == Some("bool") {
+    if member_path_type(value, roots, fields, refs, class_name, locals).as_deref() == Some("bool")
+    {
         return true;
     }
     // A negation and a comparison are bools whatever they wrap, and a fully parenthesized value
