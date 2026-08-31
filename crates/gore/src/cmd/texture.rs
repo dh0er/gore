@@ -384,7 +384,11 @@ pub fn run(action: TextureAction) -> Result<()> {
             filter,
             absolute,
         } => {
-            let game = gore_loc::config::game_root(game)?;
+            // `game_root` keeps whatever it was given, so a relative `--game .`
+            // would make `--absolute` print `./G1R/...`. Absolutize without
+            // touching the filesystem: `canonicalize` would hand back a
+            // verbatim path on Windows, which no other command prints.
+            let game = std::path::absolute(gore_loc::config::game_root(game)?)?;
             let images = gore_tex::story_images::list_story_images(&game, filter.as_deref())?;
             for image in &images {
                 if absolute {
