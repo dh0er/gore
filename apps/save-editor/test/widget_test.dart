@@ -7,6 +7,7 @@ import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/app/ui/goresave_app.dart';
 import 'package:goresave/features/editor/domain/character_category_catalog.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
+import 'package:goresave/features/editor/domain/item_stats.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/features/editor/domain/item_icon_catalog.dart';
@@ -1200,6 +1201,11 @@ void main() {
           ),
           uiSettingsStoreProvider.overrideWithValue(
             TestUiSettingsStore(showObjectIds: true),
+          ),
+          // The editor offers no removal until the stats have said what each
+          // row IS. Answer for them here rather than wait on the bundle.
+          itemStatsCatalogProvider.overrideWith(
+            (ref) async => const ItemStatsCatalog(),
           ),
         ],
         child: const GoresaveApp(),

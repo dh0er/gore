@@ -96,6 +96,12 @@ void main() {
     expect(find.widgetWithText(TextField, 'Count'), findsNWidgets(2));
 
     // Queue removal of the FIRST stack (slot 0).
+    // The bundled item stats decide what a row IS, and until they answer the
+    // editor offers no removal — reading them needs real async.
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.delete_outline).first);
     await tester.pumpAndSettle();
 

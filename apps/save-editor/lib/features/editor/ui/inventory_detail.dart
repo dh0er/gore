@@ -644,7 +644,13 @@ class _PrivateInventorySummaryCardState
     // so the groups here are the ones the player sees in game. Without the
     // stats (load failure) the class-name prefix decides, which lands in the
     // same tab for every shipped item family.
-    final itemStats = ref.watch(itemStatsCatalogProvider).value;
+    final itemStatsAsync = ref.watch(itemStatsCatalogProvider);
+    final itemStats = itemStatsAsync.value;
+    // Until the stats have answered once, nothing here can be told apart: a
+    // creature's jaw looks like any other row, delete button and all. Waiting
+    // is a few milliseconds off a bundled asset, and queueing a removal in
+    // that window would disarm the creature.
+    final awaitingStats = itemStatsAsync.isLoading && itemStats == null;
     // What the row actually shows (see the ListTile title below): the localized
     // game name, falling back to id/path. Sorting by this keeps the browse list
     // and the flat search list ordered the way the user reads them, not by the
@@ -770,7 +776,11 @@ class _PrivateInventorySummaryCardState
     final hasPendingReset = _pendingReset;
     final hasPendingChanges =
         hasPendingCount || hasPendingAdd || hasPendingRemove || hasPendingReset;
-    final canRemove = widget.canRemoveItem;
+    // Removal waits for the stats. Until they answer, a creature's jaw looks
+    // like any other row, and the one irreversible control on it would disarm
+    // the creature — a few milliseconds off a bundled asset is worth not
+    // offering that.
+    final canRemove = widget.canRemoveItem && !awaitingStats;
     // Structural edits (add/remove) and count edits are kept mutually exclusive
     // in the UI: count editing is blocked while a structural edit is pending, and
     // queuing a remove is blocked while counts are pending. Multiple ADDS may be

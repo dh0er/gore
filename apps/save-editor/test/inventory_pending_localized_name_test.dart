@@ -103,6 +103,12 @@ void main() {
     await pumpApp(tester, _NpcInventoryCoreService());
     await openNpcInventory(tester);
 
+    // The bundled item stats decide what a row IS, and until they answer the
+    // editor offers no removal — reading them needs real async.
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.delete_outline).first);
     await tester.pumpAndSettle();
 
@@ -136,6 +142,12 @@ void main() {
     await tester.pumpAndSettle();
     await openNpcInventory(tester);
 
+    // The bundled item stats decide what a row IS, and until they answer the
+    // editor offers no removal — reading them needs real async.
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.delete_outline).first);
     await tester.pumpAndSettle();
 

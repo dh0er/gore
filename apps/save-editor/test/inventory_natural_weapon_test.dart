@@ -62,6 +62,26 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  testWidgets('nothing is removable before the stats can tell rows apart', (
+    tester,
+  ) async {
+    // Deliberately WITHOUT the real-async step openNpcInventory takes: the
+    // bundled stats have not answered yet, so a creature's jaw cannot be told
+    // from anything else. Queueing a removal in that window would disarm the
+    // creature.
+    await pumpApp(tester);
+    await tester.tap(find.widgetWithText(Tab, 'Characters'));
+    await tester.pumpAndSettle();
+    await tester.tap(detailTab('Inventory'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Wolf').first);
+    await tester.pumpAndSettle();
+
+    // The rows are there — they are simply not removable yet.
+    expect(find.text('Wheel of Cheese'), findsOneWidget);
+    expect(find.byIcon(Icons.delete_outline), findsNothing);
+  });
+
   testWidgets('a creature whose only item is its weapon carries nothing', (
     tester,
   ) async {
