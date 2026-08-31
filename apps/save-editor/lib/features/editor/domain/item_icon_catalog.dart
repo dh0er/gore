@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
+import 'package:goresave/features/editor/domain/glossary_images.dart';
 import 'package:goresave/providers/data_providers.dart';
 import 'package:path/path.dart' as p;
 
@@ -190,6 +191,21 @@ final resolvedGameRootProvider = Provider<String?>((ref) {
   }
   final resolved = retention.sourceGamePath;
   return resolved != null && resolved.trim().isNotEmpty ? resolved : null;
+});
+
+/// The root to read loose game files from — the resolved one once the icons
+/// have been prepared, the normalized setting until then.
+///
+/// Held by a provider rather than worked out where it is needed: both halves
+/// touch the disk. Reading the setting opens and parses the shared
+/// `config.json`, and normalizing it probes every ancestor for the story
+/// folder. A character page builds a hundred portraits, so doing that per
+/// portrait meant hundreds of blocking checks on the UI thread for one answer
+/// that only changes when the setting or the preparation does.
+final gameRootProvider = Provider<String?>((ref) {
+  final resolved = ref.watch(resolvedGameRootProvider);
+  if (resolved != null) return resolved;
+  return normalizeGameRoot(ref.watch(sharedConfigProvider).gamePath());
 });
 
 final itemIconCatalogRefreshProvider = Provider<ItemIconCatalogRefresh>((ref) {

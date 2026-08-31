@@ -158,10 +158,9 @@ class GlossaryPortrait extends StatelessWidget {
         size: size,
         // What the core resolved when it prepared the item icons — it has
         // already normalized the configured path and found a Steam install if
-        // none was configured. Falls back to normalizing the setting here.
-        gamePath:
-            ref.watch(resolvedGameRootProvider) ??
-            normalizeGameRoot(ref.watch(sharedConfigProvider).gamePath()),
+        // none was configured; the provider falls back to the setting until
+        // then, and works both out once instead of once per portrait.
+        gamePath: ref.watch(gameRootProvider),
       ),
       kind,
       // An entry was asked for and the LOADED catalog draws none of it: that
