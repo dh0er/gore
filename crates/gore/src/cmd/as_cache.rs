@@ -1824,6 +1824,22 @@ fn qualified_target_pristine_script_cache(
     require_qualified_target_pristine_base(target.shipping_cache(), pristine)
 }
 
+/// The generation GUID in a cache file, read from its header alone.
+///
+/// Reads the first few bytes rather than the whole 100-plus-megabyte file: the caller wants to
+/// warn about the module it is ABOUT to compile, and that has to happen before the slow work,
+/// not after it. A file that cannot be read this way simply yields no warning.
+fn cache_generation_guid(cache: &Path) -> Option<[u8; 16]> {
+    use std::io::Read;
+    let mut head = [0u8; gore_as::cache::header::CacheHeader::SIZE];
+    std::fs::File::open(cache)
+        .and_then(|mut file| file.read_exact(&mut head))
+        .ok()?;
+    gore_as::cache::header::CacheHeader::parse(&head)
+        .ok()
+        .map(|header| header.hash)
+}
+
 fn compiler_binds_path(game: &Path) -> PathBuf {
     let g1r = if game.file_name().is_some_and(|name| name == "G1R") {
         game.to_path_buf()
@@ -2566,6 +2582,26 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 stats.stubbed,
                 stats.stubbed_functions
             );
+            // A whole tree is not spliced, one module of it is — so the useful figure here is how
+            // many of them an author could pick up without inheriting a difference.
+            let cache_guid = gore_as::cache::header::CacheHeader::parse(&bytes)
+                .map(|header| header.hash)
+                .unwrap_or_default();
+            if gore_as::cache::faithfulness::is_measured(&cache_guid) {
+                let listed = mods
+                    .iter()
+                    .filter(|module| {
+                        gore_as::cache::faithfulness::for_module(&cache_guid, &module.name)
+                            .is_some_and(|known| known.divergent_functions > 0)
+                    })
+                    .count();
+                eprintln!(
+                    "{} of {} modules are byte-faithful; the other {} carry functions this build does not reproduce exactly — `gore as emit <cache> <module>` names them",
+                    mods.len() - listed,
+                    mods.len(),
+                    listed
+                );
+            }
         }
         AsCmd::Emit {
             file,
@@ -2583,6 +2619,9 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             )
             .context("prepare emitted modules")?
             .with_class_defaults(!no_defaults);
+            let cache_guid = gore_as::cache::header::CacheHeader::parse(&bytes)
+                .map(|header| header.hash)
+                .unwrap_or_default();
             let mut n = 0;
             for (module_index, _) in mods
                 .iter()
@@ -2593,6 +2632,13 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     break;
                 }
                 println!("{}", prepared.emit_module(module_index)?);
+                // Say it where the author first reads the source, not after the splice.
+                if let Some(warning) = gore_as::cache::faithfulness::warning_for_module(
+                    &cache_guid,
+                    &mods[module_index].name,
+                ) {
+                    eprintln!("{warning}");
+                }
                 n += 1;
             }
             eprintln!("({n} module(s))");
@@ -3104,6 +3150,13 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let executable_path = compiler_executable_path(&game);
             let shipping_path = compiler_shipping_path(&game);
             let binds_path = compiler_binds_path(&game);
+            // Before anything heavy: splicing recompiles the WHOLE module, so say what
+            // else comes along with the edit while there is still time to look.
+            if let Some(warning) = cache_generation_guid(&shipping_path).and_then(|guid| {
+                gore_as::cache::faithfulness::warning_for_module(&guid, &module)
+            }) {
+                eprintln!("{warning}");
+            }
             let target_paths = gore_as::compiler_target::CompilerTargetInputPathsV1 {
                 executable: &executable_path,
                 shipping_cache: &shipping_path,

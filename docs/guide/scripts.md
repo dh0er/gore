@@ -372,6 +372,30 @@ gore as bytediff vanilla.Cache regen.Cache --json scoreboard.json --fail-on-sema
 | `--json <PATH>` | Machine-readable scoreboard (per-verdict counts + alignment loss). |
 | `--fail-on-semantic` | Exit non-zero on any semantic diff — the CI gate. |
 
+### What the module you are editing carries
+
+Splicing recompiles the **whole** module from the emitted source, not only the function you
+changed. So a module holding a function the decompiler does not reproduce exactly hands that
+difference to the game as well, in code you never touched.
+
+`emit` and `compile-module` say so before you get that far, using a table measured against the
+shipped build:
+
+```
+warning: AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CreepingEvaluationContext carries
+3 functions the decompiler does not reproduce byte-for-byte. Splicing this module recompiles all
+of it, so those come out changed as well, and 1 loop in it recompiles with a bound of zero, so
+the body never runs. Check that before shipping.
+```
+
+Silence is the good case: **6,982 of the 7,317 modules are byte-faithful**, and for those there is
+nothing to inherit. The remaining 335 mostly differ only in spelling — same program, different
+text — but 15 of them contain a loop that recompiles with a bound of zero and therefore never
+runs its body. Those 15 are the ones to read before shipping.
+
+The table is keyed by the generation the measurement was taken on. Point the tools at a build it
+does not cover and no warning appears — that means *not measured*, not *byte-faithful*.
+
 ## Shipping a script mod
 
 A compiled mini-cache is folded into a deployable bundle:

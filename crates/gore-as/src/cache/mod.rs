@@ -15,6 +15,7 @@ pub(crate) mod default_source;
 pub(crate) mod default_tag_map;
 pub mod disasm;
 pub mod emit;
+pub mod faithfulness;
 pub mod emit_all;
 pub(crate) mod generated_defaults;
 pub mod header;
