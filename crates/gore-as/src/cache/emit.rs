@@ -1929,6 +1929,8 @@ fn emit_function_ctor(
             &already_declared_at_use,
             &first_use_suppressed,
         );
+        // What vanilla actually stores, rather than what our text can prove about its own reads.
+        let zero_initialised = slots_vanilla_zero_initialises(f);
         // Where the declarations start, so the whole block plus the body it heads can be handed
         // to the sink below: a declaration only moves once it stands next to the code that uses
         // it, and the two are written from different places.
@@ -1971,7 +1973,12 @@ fn emit_function_ctor(
                 // restricted to proven-enum functions with several assignments; the proof does
                 // not depend on either.
                 && (first_top_level_assignment_before_read(&body, *slot)
-                    || all_reads_lexically_dominated_by_assignment(&body, *slot))
+                    || all_reads_lexically_dominated_by_assignment(&body, *slot)
+                    // …or vanilla never stores a zero into it AND our text hands it straight to
+                    // a call. Vanilla's silence settles what the two proofs above are reaching
+                    // for; the argument position is what makes a bare primitive legal at all.
+                    || (!zero_initialised.contains(slot)
+                        && first_mention_is_a_bare_argument(&body, *slot)))
             {
                 let _ = writeln!(s, "{ind}    {ty} local_{slot};");
             } else if is_primitive(ty) {
@@ -2216,6 +2223,7 @@ fn emit_function_ctor(
         // After the carrier chains are whole: the source declared a witnessed carrier on its
         // initialiser, and the initialiser is only one statement once the arms have rejoined.
         let rendered = sink_carrier_declarations(&rendered, &declared_at_initializer_carriers(f));
+        let rendered = unwrap_untested_bool_return(&rendered, f);
         let rendered = fold_literal_null_returns(
             &rendered,
             &literal_null_return_slots(f),
@@ -13032,6 +13040,115 @@ fn renders_a_bool(
         return true;
     }
     outer_callee(value).is_some_and(|callee| refs.names_returning(&callee) == Some("bool"))
+}
+
+/// The slots vanilla itself stores a ZERO into.
+///
+/// An initialiser is a store, and the store is in the bytecode or it is not. `float d = 0.0f;`
+/// leaves a `SetV4 d, i4:0` in the prologue; a bare `float d;` leaves nothing, and AngelScript is
+/// content because the callee writes it before anything reads it. The hoist was deciding this
+/// from the TEXT — whether it could prove a write comes before every read — and defaulted to
+/// writing the initialiser when it could not. That default is a store the original does not have.
+///
+/// Only an immediate zero counts. A slot the source seeded with something else keeps its
+/// initialiser, and a slot no `SetV` touches at all was declared bare.
+fn slots_vanilla_zero_initialises(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    instrs
+        .iter()
+        .filter(|ins| matches!(ins.op.name, "SetV1" | "SetV4" | "SetV8"))
+        .filter(|ins| ins.dwords.first().copied().unwrap_or(1) == 0
+            && ins.qwords.first().copied().unwrap_or(1) == 0)
+        .filter_map(|ins| ins.words.first().map(|w| *w as i16 as i32))
+        .filter(|slot| *slot > 0)
+        .collect()
+}
+
+/// Whether the first thing our own text does with the slot is hand it to a call as a whole
+/// argument.
+///
+/// That is the one position where an uninitialised primitive is not merely legal but expected:
+/// the callee writes through it, and there is no read in front for the uninitialised-variable
+/// warning to fire on. `this.TauntCooldown_ByType.Find(TauntTypeTag, local_1)` is the measured
+/// shape. Anywhere else a bare declaration is a guess about our own text rather than a reading of
+/// vanilla's, and the compiler does not survive being wrong about it.
+fn first_mention_is_a_bare_argument(body: &str, slot: i32) -> bool {
+    let ident = format!("local_{slot}");
+    let Some(line) = body.lines().find(|line| count_ident(line, &ident) > 0) else {
+        return false;
+    };
+    [
+        format!("({ident},"),
+        format!("({ident})"),
+        format!(", {ident},"),
+        format!(", {ident})"),
+    ]
+    .iter()
+    .any(|shape| line.contains(shape.as_str()))
+}
+
+/// `return (int(x) != 0);` where vanilla never tested anything.
+///
+/// A bool carried in a one-byte slot reaches the return register directly — `RDR1 v ; CpyVtoR4 v ;
+/// RET`. Writing `!= 0` around it makes the compiler materialise the comparison it never had:
+/// `CMPIi v, i4:0 ; TNZ ; CpyRtoV4`. So the test instruction IS the witness. A function whose
+/// bytecode contains no `TNZ` at all did not test its returned value, and the wrap is ours.
+///
+/// The rewrite is deliberately narrow: only the return statement, only where the whole value is
+/// `int(<expr>) != 0`, and only where the expression is not itself a comparison.
+fn unwrap_untested_bool_return(body: &str, f: &Func) -> String {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return body.to_owned();
+    };
+    // The question is about THIS return, not about the function: a body that tests something on
+    // the way is still free to hand back its bool untested at the end. So the window is the tail
+    // that materialises the returned value — the instructions between the last call and the RET.
+    let Some(ret) = instrs.iter().rposition(|ins| ins.op.name == "RET") else {
+        return body.to_owned();
+    };
+    let tail = ret.saturating_sub(8);
+    if instrs[tail..ret]
+        .iter()
+        .any(|ins| matches!(ins.op.name, "TZ" | "TNZ"))
+    {
+        return body.to_owned();
+    }
+    // Only the LAST such return is the one the tail witnesses; an earlier one leaves by a jump
+    // and its own test is somewhere this cannot see.
+    let last = body
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| {
+            let t = line.trim();
+            t.starts_with("return (int(") && t.ends_with(") != 0);")
+        })
+        .map(|(at, _)| at)
+        .last();
+    let mut out: Vec<String> = Vec::new();
+    for (at, line) in body.lines().enumerate() {
+        let rewritten = (|| {
+            if Some(at) != last {
+                return None;
+            }
+            let indent = indent_of(line);
+            let inner = line
+                .trim()
+                .strip_prefix("return (int(")?
+                .strip_suffix(") != 0);")?;
+            // `int(` has to close where the comparison begins, or the value is something else
+            // wearing the same ending.
+            (matching_paren(&format!("({inner})"), 0) == Some(inner.len() + 1))
+                .then(|| format!("{indent}return {inner};"))
+        })();
+        out.push(rewritten.unwrap_or_else(|| line.to_owned()));
+    }
+    let mut joined = out.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
 }
 
 /// The slot a REFERENCE return travels out through.
