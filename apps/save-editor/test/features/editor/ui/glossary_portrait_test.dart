@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -53,6 +55,41 @@ void main() {
     // The panel passes no document class while the entry is locked.
     await tester.pumpWidget(_portrait());
     await tester.pumpAndSettle();
+    expect(_glyph(tester), 'T_CharacterImageSmall_Missing');
+  });
+
+  testWidgets('a catalog still loading is not mistaken for one that drew '
+      'nothing', (tester) async {
+    // Everything is undrawn while the catalog is on its way. Answering with a
+    // section glyph there flashed one over every row before the portraits
+    // arrived.
+    final ready = Completer<GlossaryImageCatalog>();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          glossaryImageCatalogProvider.overrideWith((ref) => ready.future),
+        ],
+        child: const MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: GlossaryPortrait(
+                documentClass: 'Document_Glossary_OC_STT_DIEGO',
+                standInOnPaper: true,
+                undrawnGameIcon: 'T_Icon_Tutorials',
+                fallbackIcon: Icons.school_outlined,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(_glyph(tester), 'T_CharacterImageSmall_Missing');
+
+    ready.complete(_catalog);
+    await tester.pumpAndSettle();
+    // Diego IS drawn, so nothing changes to the section glyph on arrival — no
+    // game path is configured here, so the stand-in stays what it was.
     expect(_glyph(tester), 'T_CharacterImageSmall_Missing');
   });
 }

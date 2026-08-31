@@ -155,9 +155,11 @@ class GlossaryPortrait extends StatelessWidget {
             normalizeGameRoot(ref.watch(sharedConfigProvider).gamePath()),
       ),
       kind,
-      // An entry was asked for and the catalog draws none of it: that is not
-      // the same as a locked one.
-      undrawn: documentClass != null && image == null,
+      // An entry was asked for and the LOADED catalog draws none of it: that
+      // is not the same as a locked one. A catalog still on its way draws
+      // nothing for anything, and answering with a section glyph there would
+      // flash one over every row before the portraits arrive.
+      undrawn: documentClass != null && artwork != null && image == null,
     );
   }
 
