@@ -169,6 +169,20 @@ class _ItemIconCatalogRetention {
   String? sourceIdentityReadGamePath;
 }
 
+/// The game root the core actually used when it prepared the item icons.
+///
+/// The configured `game_path` is not necessarily the root: the CLI accepts the
+/// executable and any folder below it, and finds a Steam install on its own
+/// when nothing is configured. The core resolves all of that; this hands the
+/// answer to the Dart side, which otherwise only has the raw setting. Null
+/// until the icons have been prepared once.
+final resolvedGameRootProvider = Provider<String?>((ref) {
+  // Reading the catalog is what makes this recompute once preparation lands.
+  ref.watch(itemIconCatalogProvider);
+  final resolved = ref.watch(_itemIconCatalogRetentionProvider).sourceGamePath;
+  return resolved != null && resolved.trim().isNotEmpty ? resolved : null;
+});
+
 final itemIconCatalogRefreshProvider = Provider<ItemIconCatalogRefresh>((ref) {
   final retention = ref.read(_itemIconCatalogRetentionProvider);
   return ItemIconCatalogRefresh._(

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/editor/domain/character_category_catalog.dart';
 import 'package:goresave/features/editor/domain/game_icons.dart';
 import 'package:goresave/features/editor/domain/glossary_images.dart';
+import 'package:goresave/features/editor/domain/item_icon_catalog.dart';
 import 'package:goresave/features/editor/ui/game_icon.dart';
 import 'package:goresave/providers/data_providers.dart';
 
@@ -140,7 +141,12 @@ class GlossaryPortrait extends StatelessWidget {
       artwork?.pathForArtwork(
         image: image,
         size: size,
-        gamePath: ref.watch(sharedConfigProvider).gamePath(),
+        // What the core resolved when it prepared the item icons — it has
+        // already normalized the configured path and found a Steam install if
+        // none was configured. Falls back to normalizing the setting here.
+        gamePath:
+            ref.watch(resolvedGameRootProvider) ??
+            normalizeGameRoot(ref.watch(sharedConfigProvider).gamePath()),
       ),
       kind,
     );

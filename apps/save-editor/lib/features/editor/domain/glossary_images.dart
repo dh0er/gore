@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
@@ -6,6 +7,37 @@ import 'package:path/path.dart' as p;
 
 /// Where the glossary artwork sits inside a game installation.
 const _glossaryImageDirectory = 'Story/Conversation/images/Glossary';
+
+/// The install folder the artwork can be read from, given a configured game
+/// path.
+///
+/// The setting is not necessarily the root: the CLI accepts the executable
+/// (`…/G1R/Binaries/Win64/G1R-Win64-Shipping.exe`) and any folder below the
+/// install, so joining the raw setting would build `<exe>/G1R/Story/…` and find
+/// nothing. Walks up to the folder that holds the story files, the way
+/// `normalize_root` in `gore_loc::config` walks up to the one holding `G1R`.
+///
+/// Stricter than that one on purpose: the game keeps its savegames under
+/// `%LOCALAPPDATA%/G1R`, so a bare `G1R` folder is not proof of an install and
+/// would resolve any path under AppData to the wrong place. Returns the setting
+/// unchanged when nothing along the way looks like an install — the caller
+/// treats a path with no artwork behind it as "no portraits" either way.
+String? normalizeGameRoot(String? gamePath) {
+  final trimmed = gamePath?.trim();
+  if (trimmed == null || trimmed.isEmpty) return null;
+  var directory = Directory(trimmed);
+  for (var i = 0; i < 8; i++) {
+    if (Directory(
+      p.join(directory.path, 'G1R', _glossaryImageDirectory.split('/').first),
+    ).existsSync()) {
+      return directory.path;
+    }
+    final parent = directory.parent;
+    if (parent.path == directory.path) break;
+    directory = parent;
+  }
+  return trimmed;
+}
 
 /// Which of a portrait's two sizes to read.
 enum GlossaryImageSize {

@@ -261,4 +261,49 @@ void main() {
       expect(catalog.byArtworkName, isNotEmpty);
     });
   });
+
+  group('the configured game path', () {
+    test('resolves to the folder that actually holds G1R', () {
+      final temp = Directory.systemTemp.createTempSync('gore-root');
+      addTearDown(() => temp.deleteSync(recursive: true));
+      final root = Directory(p.join(temp.path, 'Gothic 1 Remake'))
+        ..createSync(recursive: true);
+      Directory(
+        p.join(root.path, 'G1R', 'Binaries', 'Win64'),
+      ).createSync(recursive: true);
+      Directory(p.join(root.path, 'G1R', 'Story')).createSync(recursive: true);
+
+      // The CLI accepts the executable and any folder below the install; the
+      // editor has to reach the same root or it builds `<exe>/G1R/Story/…`.
+      expect(normalizeGameRoot(root.path), root.path);
+      expect(
+        normalizeGameRoot(p.join(root.path, 'G1R', 'Binaries', 'Win64')),
+        root.path,
+      );
+      expect(
+        normalizeGameRoot(
+          p.join(root.path, 'G1R', 'Binaries', 'Win64', 'G1R-Win64-Shipping'),
+        ),
+        root.path,
+      );
+    });
+
+    test('a bare G1R folder is not taken for an install', () {
+      // The game keeps its savegames under `%LOCALAPPDATA%/G1R`; walking up to
+      // the first folder holding a `G1R` would resolve half of AppData to it.
+      final temp = Directory.systemTemp.createTempSync('gore-saves');
+      addTearDown(() => temp.deleteSync(recursive: true));
+      final saves = Directory(p.join(temp.path, 'G1R', 'Saved', 'SaveGames'))
+        ..createSync(recursive: true);
+      expect(normalizeGameRoot(saves.path), saves.path);
+    });
+
+    test('an unset or unrecognizable path is left as it came', () {
+      expect(normalizeGameRoot(null), isNull);
+      expect(normalizeGameRoot('   '), isNull);
+      final temp = Directory.systemTemp.createTempSync('gore-nowhere');
+      addTearDown(() => temp.deleteSync(recursive: true));
+      expect(normalizeGameRoot(temp.path), temp.path);
+    });
+  });
 }
