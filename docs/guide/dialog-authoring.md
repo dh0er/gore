@@ -45,10 +45,11 @@ produce.
 - Rendering or selecting an artificial 20-choice menu reached through an
   automatic ambient opening. Automatic activation itself reached the ambient
   conversation state and ability, but the forced menu shape then crashed.
-- Running the intended cross-module dialog change from a semantically selective
-  complete-cache product. The hybrid audit cache booted and loaded a save, but
-  that proves the replacement/deployment mechanism, not selection or execution
-  of the cross-module dialog edge and not the raw FullGraph regeneration.
+- Running the intended cross-module dialog change from `gore as compile`'s
+  selective complete-cache product. Its dependency resolution and Add/Edit
+  composition are supported offline, and the earlier hybrid audit cache booted
+  and loaded a save, but appearance, selection and execution of the intended
+  cross-module dialog edge have not yet been observed.
 - The same behavior on game builds other than BuildID `24878692`. Historical
   adapter observations on older builds do not qualify the current native source
   workflow there.
@@ -57,7 +58,14 @@ produce.
 
 - Making one deployable mini-cache dialog patch depend on a new symbol supplied
   by another script module. Each module mini is remapped against the pristine
-  base independently.
+  base independently; use the separate complete-cache compile path for an
+  acyclic coordinated Add/Edit graph.
+- Building a complete-cache mod that deletes an existing script module. A
+  missing base source file requests Delete, which fails closed until GORE can
+  prune the global tail and prove that retained modules do not reference it.
+- Coordinating new modules whose dependencies form a cycle. Selective
+  composition can order an acyclic provider-to-consumer chain, but cannot safely
+  seed a cycle and therefore rejects it.
 - Deriving one new topic class from another new topic class. Every new option
   must derive directly from the conversation's private topic base; shared
   behavior has to live in helpers rather than an inherited topic hierarchy.
@@ -65,11 +73,11 @@ produce.
   shipped parent may receive a new child, and a new parent may contain new
   same-conversation children, but the checker does not admit a mixed child list
   owned by that new parent.
-- Using the current raw FullGraph V2 result as a playable complete-cache mod.
-  Mod Manager installed its exact bytes successfully, but the game reached a
-  main menu whose input could not activate any entry. The raw product still has
-  10,782 semantic deviations, including 81 in Diego; byte-exact deployment is
-  not runtime compatibility.
+- Publishing the raw whole-tree compiler regeneration as a playable cache.
+  GORE deliberately withholds it and publishes only the selective product. An
+  earlier manually deployed raw result had 10,782 semantic deviations,
+  including 81 in Diego, and reached a main menu whose input could not activate
+  any entry; byte-exact deployment was not runtime compatibility.
 - Adding a 21st child to one `Subdialog` call.
 - Manually reshaping an already full 20-slot `Subdialog` call. The current-head
   Stage C bundle (mini-cache SHA-256 prefix `C675BB55…`) is byte-identical to
@@ -262,23 +270,30 @@ complete new conversation does not need that unsupported arrangement because
 its settings, root and every topic live in its single added module.
 
 Full-graph V2 is a different compiler product. It gives one standalone compiler
-request the complete sealed base graph plus all coordinated add/edit/delete
-changes, so otherwise-visible cross-module references can resolve together
-offline. The current raw output has 10,782 semantic deviations, including 81 in
-Diego. Mod Manager installed that exact complete-cache file byte-for-byte, but
-the game then reached a main menu whose entries highlighted without accepting a
-mouse click or Return. The raw regeneration is therefore deployed but unusable,
-not merely untested.
+request the complete sealed base graph plus all coordinated Add/Edit sources,
+so otherwise-visible cross-module references can resolve together. The raw
+whole-tree regeneration is only dependency evidence and is never the published
+cache. GORE starts from the exact pristine cache, then remaps and composes only
+the source-classified Add/Edit modules in dependency order. Every untouched
+module and every pre-existing global-tail record remain pristine; only records
+required by new symbols are appended. Missing base sources request Delete and
+fail closed because safe tail pruning and retained-reference proof are not
+available; cyclic dependencies among new modules also fail closed.
 
-A separate hybrid audit cache retained pristine bytes for every untouched
-module and replaced only Diego plus the new cross-module probe. That complete
-cache booted and loaded a save normally. It proves that GORE can deploy a whole
-cache and that this selective composition can reach gameplay; it does not prove
-the raw FullGraph result, nor that the cross-module dialog option appears or
-runs. The normal dialog bundle composer still consumes independently base-bound
-module minis, so it cannot turn either complete-cache experiment into a normal
+This selective publication rule is based on two earlier live findings. A raw
+regeneration with 10,782 semantic deviations, including 81 in Diego, installed
+byte-for-byte but produced a main menu that would not accept mouse click or
+Return. A manually composed hybrid cache retained pristine bytes for every
+untouched module, replaced only Diego plus the new cross-module probe, and
+booted and loaded a save normally. The product now automates that selective
+architecture, but the intended cross-module dialog option still has not been
+observed or selected in game.
+
+The normal dialog bundle composer continues to consume independently base-bound
+module minis, so it cannot package the coordinated graph as a normal
 cross-module dialog mini-patch. Keeping the new topic and any `Subdialog`
-rewiring in one conversation module remains the practical mini-bundle path.
+rewiring in one conversation module remains the practical mini-bundle path;
+use `gore as compile` when an acyclic cross-module dependency is essential.
 
 ## Root topics use native same-module discovery
 

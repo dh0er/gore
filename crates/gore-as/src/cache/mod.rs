@@ -29,6 +29,7 @@ pub mod refs;
 pub mod remap;
 pub mod scan;
 pub mod semantic_observer;
+pub(crate) mod selective_fullgraph;
 pub mod splice;
 pub mod structure;
 pub mod tables;

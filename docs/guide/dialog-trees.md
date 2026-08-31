@@ -262,21 +262,28 @@ adapter surface for hand-authored bundles. It packages UE4SS insertion and its
 telemetry; it is not emitted as the normal `dialog new-topic` root recipe.
 
 Full-graph V2 gives one standalone compiler request the complete sealed base
-graph plus all coordinated add/edit/delete sources, and offline compilation can
-resolve visible symbols in different modules together. Mod Manager installed
-the exact raw output bytes successfully, but that cache reached a main menu
-whose entries could not be activated by mouse click or Return. Its 10,782
-semantic deviations, including 81 in Diego, therefore correspond to a tested
-unusable runtime product, not just an offline warning. It is not a module
-mini-cache.
+graph plus all coordinated Add/Edit sources, so visible symbols in different
+modules can resolve together. Its raw whole-tree regeneration is intermediate
+dependency evidence, not a deployable output. GORE publishes a complete cache
+by retaining the exact pristine base and selectively composing only the
+source-classified Add/Edit modules in dependency order; untouched modules and
+all pre-existing global-tail records remain pristine, while records required by
+new symbols may be appended. A missing base source requests unsupported Delete
+and is rejected until safe tail pruning and retained-reference proof exist.
+Cyclic dependencies among new modules also fail closed.
+
+That design follows two live observations. An earlier raw regeneration with
+10,782 semantic deviations, including 81 in Diego, installed successfully but
+reached a main menu whose entries could not be activated. A manually composed
+hybrid that preserved every untouched module and replaced only Diego plus the
+new probe did boot and load a save. The product now uses the latter selective
+architecture, but the intended cross-module dialog option still has not been
+observed or selected.
 
 The normal dialog bundle path instead consumes independently base-bound module
 minis. One add mini cannot provide symbols to a separate edit mini, and the
-bundle composer does not turn a complete FullGraph cache into a dialog-mini
-deployment. A hybrid audit cache that preserved every untouched module and
-replaced only Diego plus the new probe did boot and load a save. That proves
-whole-cache replacement and selective composition, but not raw regeneration or
-the cross-module dialog option's appearance/selection.
+bundle composer does not turn the selective complete cache into a dialog-mini
+deployment.
 Keeping the new class and the rewired `Subdialog` in the same existing module is
 the supported mini-cache shape. Its compile/remap and offline packaging path is
 proven on Payfine and Brannok; Diego additionally proves native in-game

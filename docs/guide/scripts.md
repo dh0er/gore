@@ -122,15 +122,29 @@ shown before GORE uses the game's embedded compiler as a fallback. That fallback
 launches the shipping executable with **`-as-generate-precompiled-data`** and
 temporarily stages loose `.as` files under `<install>\G1R\Script\`.
 
-`gore as compile` takes one complete authoritative source tree and always
-publishes a separate complete cache. It never installs that output implicitly.
+`gore as compile` takes one complete source tree and resolves all authored
+modules together, so visible references between changed modules can bind in one
+compiler run. The compiler's raw whole-tree regeneration is only intermediate
+dependency evidence: GORE never publishes those raw bytes. Instead it starts
+from the exact target cache and selectively composes only source-classified
+Add/Edit modules. Every untouched module and every pre-existing global-tail
+record remain pristine; only records required by new symbols are appended to
+the separately published complete cache. The command never installs that output
+implicitly.
+
+Start from a current `emit-all` tree. A byte-identical emitted file is base;
+changing or adding a file requests Edit or Add. Omitting a base file requests
+Delete, which currently fails closed because GORE cannot yet prove safe tail
+pruning and absence of retained references. A dependency chain such as a new
+provider module followed by an edited consumer can be composed in order;
+cyclic dependencies among new modules remain unsupported and fail closed.
 
 ```powershell
 # dump the vanilla modules as an editable tree
 gore as emit-all "$GAME\G1R\Script\PrecompiledScript_Shipping.Cache" out_as
 # …edit modules in out_as…
 
-# compile to a new no-clobber cache file
+# resolve the full graph and publish a selectively composed no-clobber cache
 New-Item -ItemType Directory -Force .gore-as-work | Out-Null
 gore as compile out_as -o regen.Cache --work-dir .gore-as-work --game "$GAME"
 ```
@@ -294,10 +308,12 @@ persisted inventory effect, explicit knowledge and quest state after save/load,
 a new localization/Ogg/`Say` path whose loopback correlated `0.763` with the
 source recording, and a manual rebuild of an existing four-child sub-menu. This
 qualifies those exact fixtures on that build, not arbitrary game APIs, other
-builds, or execution of a cross-module dialog edge. Separate complete-cache
-tests installed the raw FullGraph bytes but found unusable main-menu input; a
-selective hybrid cache booted and loaded a save without yet proving the intended
-cross-module option. The practical limits are maintained in
+builds, or execution of a cross-module dialog edge. Earlier complete-cache tests
+found that a raw FullGraph regeneration produced unusable main-menu input while
+a manually selective hybrid booted and loaded a save. `gore as compile` now
+publishes only the corresponding selective Add/Edit product, but the intended
+cross-module dialog option has not yet been observed in game. The practical
+limits are maintained in
 [AngelScript dialog authoring](dialog-authoring.md).
 
 `compile-module` is the CLI equivalent of Mod Studio's Compile action, and it

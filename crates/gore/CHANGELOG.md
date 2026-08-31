@@ -89,14 +89,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `0.763` with the authored source recording. This is bounded evidence for that
   Diego fixture, not a general qualification of every voice path or game API.
 - Keep compile, packaging, deployment and runtime evidence separate. Independent
-  add/edit mini-caches still cannot depend on one another; FullGraph V2 resolves
-  coordinated cross-module references offline. Mod Manager deployed the raw
-  complete cache byte-for-byte, but its 10,782 semantic deviations (81 in
-  Diego) produced a main menu whose entries could not be activated. A selective
-  hybrid whole-cache product preserved all untouched modules, booted and loaded
-  a save; that proves complete-cache replacement, not the raw regeneration or
-  the cross-module dialog edge. Normal cross-module dialog minis remain
-  technically unsupported.
+  add/edit mini-caches still cannot depend on one another. FullGraph V2 resolves
+  coordinated Add/Edit modules together, then publishes a complete cache by
+  selectively composing those modules into the pristine base; untouched modules
+  and all pre-existing global-tail records are preserved, with only required new
+  symbol records appended, instead of publishing the raw regeneration.
+  Module deletion and cyclic dependencies among new modules fail closed. An
+  earlier manually deployed raw cache had 10,782 semantic deviations (81 in
+  Diego) and unusable main-menu input; a selective hybrid audit cache booted and
+  loaded a save, but did not prove execution of the cross-module dialog edge.
+  Normal cross-module dialog minis remain technically unsupported.
 - An ambient fixture entered `State.AmbientConversation` with
   `GA_Human_Conversation_Ambient` active without player selection, proving the
   automatic activation boundary. It crashed only after forcing an artificial
@@ -180,8 +182,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Bundle the qualified standalone AngelScript compiler with gore-cli. Script
   builds and `as compile-module` can now compile without starting the game.
-- Compile the complete script project in one standalone run, including added,
-  edited, and deleted modules, cross-module references, and emitted sources
+- Compile the complete script project in one standalone run, including added
+  and edited modules, cross-module references, and emitted sources
   whose global function names collide across modules.
 - Stage only authored script changes and reuse already authenticated compiler
   inputs instead of exporting and copying the full 7,000-plus-module base tree

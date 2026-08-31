@@ -282,10 +282,13 @@ pub enum AsCmd {
         #[arg(long)]
         game: Option<PathBuf>,
     },
-    /// Compile one complete AngelScript source tree into a new full precompiled cache. The final
-    /// output is always outside the game installation and is never installed implicitly.
+    /// Resolve one complete AngelScript source tree as a coordinated graph, then publish a new
+    /// full cache that preserves untouched pristine modules and selectively composes authored
+    /// additions and edits. The output is never installed implicitly.
     Compile {
-        /// Complete authoritative `.as` source tree. Missing base modules are explicit deletes.
+        /// Complete `.as` tree emitted from the target cache and then edited. Added or changed
+        /// modules become authored additions or edits; missing base modules request an unsupported
+        /// delete and are rejected.
         src: PathBuf,
         /// Publish the complete cache here with atomic no-clobber semantics. Must be outside the
         /// game installation.
@@ -2072,7 +2075,11 @@ fn compile_full_graph_command(
             };
         (base, binds)
     };
-    let plan = match gore_as::full_graph_plan::plan_complete_source_tree_v1(&base_cache, &src) {
+    let plan = match gore_as::full_graph_plan::plan_complete_source_tree_with_emitted_base_v1(
+        &base_cache,
+        &binds_cache,
+        &src,
+    ) {
         Ok(plan) => plan,
         Err(error) => {
             let error = anyhow::Error::new(error).context("planning the complete source graph");

@@ -351,6 +351,14 @@ Output directories must not exist and are never placed in the game tree.
 | `extract-remap <REGEN> <MODULE> <BASE>` | `--allow-new-symbols` · `-o, --out` |
 | `bytediff <VANILLA> <REGEN>` | `--module` · `--func` · `--verdict` · `--show-benign` · `--context <N>` · `--norm-slots` · `--no-norm-scope` · `--no-norm-reguard` · `--json <PATH>` · `--fail-on-semantic` |
 
+`compile <SRC>` resolves the complete source graph, but publishes a selective
+complete-cache product: only source-classified Add/Edit modules replace or join
+the exact target cache, while untouched modules and every pre-existing global
+tail record remain pristine; only records required by new symbols are appended.
+Start from a current `emit-all` tree. Missing base sources request
+Delete and are rejected; cyclic dependencies among new modules also fail
+closed. The raw whole-tree compiler regeneration is never the published cache.
+
 `patch-default`, `patch-tag-map` and `asset patch-fixed` never overwrite an
 existing output path. The `as` extract/splice family — `replace`, `splice`,
 `extract`, `extract-remap` — writes over whatever is at `-o`.

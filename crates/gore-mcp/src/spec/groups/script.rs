@@ -341,7 +341,9 @@ const COMPILE_ARGS: &[ArgSpec] = &[
         "src",
         Positional { order: 0 },
         Path,
-        "Complete authoritative `.as` source tree. Missing base modules are explicit deletes.",
+        "Complete `.as` tree emitted from the target cache and then edited. Added or changed \
+         modules become authored additions or edits; missing base modules request an unsupported \
+         delete and are rejected.",
         true,
     ),
     ArgSpec::new(
@@ -495,7 +497,9 @@ const STANDALONE_COMPILE_ARGS: &[ArgSpec] = &[
         "src",
         Positional { order: 0 },
         Path,
-        "Complete authoritative `.as` source tree. Missing base modules are explicit deletes.",
+        "Complete `.as` tree emitted from the target cache and then edited. Added or changed \
+         modules become authored additions or edits; missing base modules request an unsupported \
+         delete and are rejected.",
         true,
     ),
     ArgSpec::new(
@@ -924,8 +928,9 @@ const AS_COMMANDS: &[CommandSpec] = &[
     .guide("scripts"),
     CommandSpec::new(
         "compile",
-        "Compile a complete authoritative AngelScript tree into a new precompiled cache. Uses the \
-         requested standalone/game policy; only game or explicit fallback may launch the game.",
+        "Resolve a complete AngelScript tree as one graph, then publish a full cache that preserves \
+         untouched pristine modules and selectively composes authored additions and edits. Uses \
+         the requested standalone/game policy; only game or explicit fallback may launch the game.",
         COMPILE_ARGS,
         Safety::game_launch_except("backend", "standalone")
             .also_writes(&[("work_dir", Derived::Child("tree"))]),
@@ -1010,7 +1015,7 @@ pub const AS: GroupSpec = GroupSpec {
 
 const STANDALONE_COMPILE_COMMANDS: &[CommandSpec] = &[CommandSpec::new(
     "compile",
-    "Compile a complete AngelScript tree with GORE's bundled standalone compiler. This never starts the game or stages files in the installation; a fresh workspace needs no consent, while replacing an existing generated work tree remains protected.",
+    "Resolve a complete AngelScript tree with GORE's bundled standalone compiler, then publish a full cache that preserves untouched pristine modules and selectively composes authored additions and edits. This never starts the game or stages files in the installation; a fresh workspace needs no consent, while replacing an existing generated work tree remains protected.",
     STANDALONE_COMPILE_ARGS,
     Safety::write().also_writes(&[("work_dir", Derived::Child("tree"))]),
     T_COMPILE,
@@ -1027,7 +1032,7 @@ pub const AS_COMPILE: GroupSpec = GroupSpec {
     tool: "gore_as_compile",
     title: "gore as compile (standalone)",
     cli: "as",
-    summary: "Strict standalone full-tree AngelScript compilation with native diagnostics, no game-launch consent, and install-write protection only for an occupied generated work tree.",
+    summary: "Strict standalone full-tree AngelScript resolution with selective Add/Edit cache composition, native diagnostics, no game-launch consent, and install-write protection only for an occupied generated work tree.",
     shape: GroupShape::Nested,
     commands: STANDALONE_COMPILE_COMMANDS,
 };

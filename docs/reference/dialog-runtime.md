@@ -361,25 +361,32 @@ adapter surface.
   `State.AmbientConversation` with `GA_Human_Conversation_Ambient` active, which
   proves automatic activation at that state/ability boundary; the forced menu
   shape then crashed and remains unqualified.
-- Executing the intended cross-module dialog edge from the selective hybrid
-  complete cache. That cache booted and loaded a save, but the option itself has
-  not been observed or selected; this also does not qualify raw FullGraph
-  regeneration.
+- Executing the intended cross-module dialog edge from `gore as compile`'s
+  selective complete cache. The dependency graph resolves and the declared
+  Add/Edit modules compose offline, while an earlier hybrid audit cache booted
+  and loaded a save; the option itself has not been observed or selected.
 - Game builds other than BuildID `24878692`. Older adapter observations do not
   qualify the current native source path on those builds.
 
 ### Not technically supported by the current GORE pipeline
 
 - Packaging a normal deployable mini-cache dialog whose new symbol dependency
-  comes from another script module.
+  comes from another script module. The selective complete-cache compile is the
+  separate path for an acyclic coordinated Add/Edit graph.
+- Deleting an existing module through the complete source tree. Missing base
+  source requests Delete and fails closed because safe tail pruning and proof
+  that retained modules no longer reference it are not available.
+- Selectively composing a dependency cycle among newly added modules. An
+  acyclic provider-to-consumer chain is supported; a cycle cannot be seeded
+  safely and is rejected.
 - Deriving one new topic from another new topic instead of deriving every new
   option directly from the conversation's private topic base.
 - Making a newly authored submenu parent own an already shipped child. Existing
   parents may receive new children; newly authored parents are limited to new
   children from the same conversation module.
-- Treating the current raw FullGraph V2 output as a playable complete-cache mod.
-  Its exact bytes deployed successfully, but the resulting game reached a main
-  menu whose entries could not be activated by mouse click or Return.
+- Publishing the raw FullGraph backend regeneration as a playable cache. GORE
+  does not expose it as the product output; an earlier manual deployment reached
+  a main menu whose entries could not be activated by mouse click or Return.
 - Adding a 21st child to one `Subdialog` call.
 - Manually reshaping an already full 20-slot `Subdialog` call. Current-head
   Stage C (mini-cache SHA-256 prefix `C675BB55…`) is byte-identical to the
@@ -459,20 +466,29 @@ adapter surface.
   cannot see the conversation-private root, and the edit mini cannot resolve a
   class supplied only by the add mini. Each mini is remapped independently to
   the pristine base; neither becomes authority for the other. Full-graph V2
-  instead submits the complete sealed base graph and coordinated add/edit/delete
+  instead submits the complete sealed base graph and coordinated Add/Edit
   changes to one standalone compile, so visible cross-module references can be
-  resolved together. Its raw output has 10,782 semantic deviations, including
-  81 in Diego. Mod Manager nevertheless installed that exact raw cache
+  resolved together. The raw regenerated cache is retained only as dependency
+  evidence. Publication starts from the exact pristine cache and selectively
+  remaps and composes the declared Add/Edit modules in dependency order;
+  untouched modules and all pre-existing global-tail records remain byte-exact,
+  while records required by new symbols may be appended. Missing base source
+  requests Delete and is rejected until safe tail pruning and retained-reference
+  proof exist. Cyclic dependencies among new modules likewise fail closed.
+  An earlier raw output had 10,782 semantic deviations, including 81 in Diego.
+  Mod Manager nevertheless installed that exact raw cache manually
   (`62A2106966A06910376ABDF956FF7DFA83F0F366A91514EB1B3D51F227800CD9`) and
   verified the installed bytes; the game reached its main menu, but neither
   mouse clicks nor Return could activate an entry. This proves complete-cache
-  deployment and a concrete runtime incompatibility, not a playable product.
+  deployment and a concrete runtime incompatibility, which is why raw backend
+  bytes are no longer publishable product output.
   A separate hybrid cache
   (`7C07974034F4D1CC8CF0CB4469FC97F9956B8F23924B9E4447927EF4F83B85EF`) kept
   every untouched module pristine and replaced only Diego plus the new probe.
   It booted and loaded a save, proving the replacement mechanism and selective
-  composition can reach gameplay. It does not qualify the raw regeneration or
-  prove appearance/selection of the cross-module option. The ordinary bundle
+  architecture can reach gameplay. The product now automates that architecture,
+  but the live observation does not prove appearance/selection of the
+  cross-module option. The ordinary bundle
   composer consumes independently base-bound module mini-caches, so neither
   complete-cache experiment becomes a normal cross-module dialog mini-patch.
 - A new root appended to Diego's shipped conversation module was discovered,
