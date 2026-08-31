@@ -179,7 +179,16 @@ class _ItemIconCatalogRetention {
 final resolvedGameRootProvider = Provider<String?>((ref) {
   // Reading the catalog is what makes this recompute once preparation lands.
   ref.watch(itemIconCatalogProvider);
-  final resolved = ref.watch(_itemIconCatalogRetentionProvider).sourceGamePath;
+  final retention = ref.watch(_itemIconCatalogRetentionProvider);
+  // The retained root belongs to the setting it was resolved FROM, and a
+  // failed preparation deliberately keeps the previous one. Once the setting
+  // changes, answering with it would go on reading the old installation for as
+  // long as preparing the new one keeps failing.
+  if (retention.requestedGamePath !=
+      ref.watch(sharedConfigProvider).gamePath()) {
+    return null;
+  }
+  final resolved = retention.sourceGamePath;
   return resolved != null && resolved.trim().isNotEmpty ? resolved : null;
 });
 
