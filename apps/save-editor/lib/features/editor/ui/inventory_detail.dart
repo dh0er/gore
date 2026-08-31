@@ -639,21 +639,6 @@ class _PrivateInventorySummaryCardState
     final showObjectIds = ref.watch(showObjectIdsProvider);
     final inventory = widget.inventory;
     final query = _query.trim().toLowerCase();
-    final items = inventory.items.where((item) {
-      // A pending removal hides ONLY the specific slot queued for removal (it is
-      // represented by the pending card above), matched by the same slot-aware
-      // key as count edits — so duplicate-path stacks, or the same item in
-      // another container, are not all hidden when only one slot will be removed.
-      if (_pendingRemove != null &&
-          _inventoryItemKey(item) == _inventoryItemKey(_pendingRemove!)) {
-        return false;
-      }
-      if (query.isEmpty) return true;
-      final name = localizedGameName(locCatalog, lang, item.id);
-      return item.id.toLowerCase().contains(query) ||
-          item.path.toLowerCase().contains(query) ||
-          (name != null && name.toLowerCase().contains(query));
-    }).toList();
     // The game files an item by its own type tag; the bundled stats carry that
     // tag and the very filter tables the game's inventory rail is built from,
     // so the groups here are the ones the player sees in game. Without the
@@ -675,6 +660,29 @@ class _PrivateInventorySummaryCardState
           item.id.isEmpty ? _itemDisplayFromPath(item.path) : item.id,
           fallback: l10n.fallbackItem,
         );
+    // A creature's own weapon ships no picture but names the creature glyph
+    // itself. Resolved once for both copies of the row visual.
+    String? naturalWeaponGlyph(PrivateInventoryItem item) =>
+        itemStats?.statsFor(item.id)?.naturalWeapon == true
+        ? gameIconCreature
+        : null;
+    // Search matches what the row SHOWS as well as what it is: a creature's
+    // jaw reads "Natural weapon", a label the game itself never carries, and
+    // typing it found nothing.
+    final items = inventory.items.where((item) {
+      // A pending removal hides ONLY the specific slot queued for removal (it is
+      // represented by the pending card above), matched by the same slot-aware
+      // key as count edits — so duplicate-path stacks, or the same item in
+      // another container, are not all hidden when only one slot will be removed.
+      if (_pendingRemove != null &&
+          _inventoryItemKey(item) == _inventoryItemKey(_pendingRemove!)) {
+        return false;
+      }
+      if (query.isEmpty) return true;
+      return item.id.toLowerCase().contains(query) ||
+          item.path.toLowerCase().contains(query) ||
+          nameOf(item).toLowerCase().contains(query);
+    }).toList();
     // Same resolution for the pending structural cards below, which are
     // addressed by asset path (adds) or by a slot whose id may be empty
     // (removes): recover the class id from the path so a queued row reads like
@@ -1232,23 +1240,10 @@ class _PrivateInventorySummaryCardState
                                                                 itemId: item.id,
                                                                 itemPath:
                                                                     item.path,
-                                                                // A creature's
-                                                                // own weapon
-                                                                // ships no
-                                                                // picture but
-                                                                // names the
-                                                                // creature
-                                                                // glyph
-                                                                // itself.
                                                                 fallbackGameIcon:
-                                                                    itemStats
-                                                                            ?.statsFor(
-                                                                              item.id,
-                                                                            )
-                                                                            ?.naturalWeapon ==
-                                                                        true
-                                                                    ? gameIconCreature
-                                                                    : null,
+                                                                    naturalWeaponGlyph(
+                                                                      item,
+                                                                    ),
                                                                 // The same
                                                                 // classifier
                                                                 // the tabs
@@ -1294,6 +1289,10 @@ class _PrivateInventorySummaryCardState
                                                                         item.id,
                                                                     itemPath:
                                                                         item.path,
+                                                                    fallbackGameIcon:
+                                                                        naturalWeaponGlyph(
+                                                                          item,
+                                                                        ),
                                                                     fallbackIcon: iconForItemCategory(
                                                                       itemCategoryFor(
                                                                         item.id.isEmpty

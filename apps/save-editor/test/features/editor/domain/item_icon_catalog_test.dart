@@ -458,6 +458,46 @@ void main() {
     expect(core.prepares, 2);
     expect(core.identityReads, 1);
   });
+  test('a new game path drops the root even when it cannot be read', () async {
+    // The configured path is a file another tool rewrites; nothing about that
+    // reaches Riverpod. A new installation that is momentarily unreadable
+    // returns no identity and the resume path bails out — leaving the cached
+    // root naming the OLD installation, which the portraits then read from.
+    final root = Directory.systemTemp.createTempSync('gore_item_icons_root');
+    addTearDown(() => root.deleteSync(recursive: true));
+    final manifest = File(p.join(root.path, 'manifest.json'))
+      ..writeAsStringSync(
+        jsonEncode({
+          'schema': 1,
+          'buildId': 'generation-a',
+          'itemCount': 1,
+          'items': {'ItFo_Apple': 'ItFo_Apple.png'},
+        }),
+      );
+    final core = _UnreadableAfterPrepareCore(manifest.path, 'D:/installed-a');
+    final config = SharedConfig(File(p.join(root.path, 'config.json')))
+      ..setGamePath('D:/installed-a');
+    final container = ProviderContainer(
+      overrides: [
+        itemIconCoreServiceProvider.overrideWithValue(core),
+        sharedConfigProvider.overrideWithValue(config),
+      ],
+    );
+    addTearDown(container.dispose);
+    final sub = container.listen(itemIconCatalogProvider, (_, _) {});
+    addTearDown(sub.close);
+
+    await container.read(itemIconCatalogProvider.future);
+    expect(container.read(gameRootProvider), 'D:/installed-a');
+
+    config.setGamePath('E:/installed-b');
+    await container
+        .read(itemIconCatalogRefreshProvider)
+        .refreshIfSourceChanged();
+
+    expect(core.prepares, 1, reason: 'the unreadable install cannot prepare');
+    expect(container.read(gameRootProvider), 'E:/installed-b');
+  });
 }
 
 class _ItemIconCore implements GoresaveCoreService {
@@ -654,6 +694,50 @@ class _SourceChangeItemIconCore implements GoresaveCoreService {
       return {
         'ok': true,
         'data': {'sourceIdentity': identities[identityReads++]},
+      };
+    }
+    return {
+      'ok': true,
+      'data': {'released': true},
+    };
+  }
+}
+
+/// A core that prepares once and then refuses every identity read, the way a
+/// newly selected installation does while it is unreachable.
+class _UnreadableAfterPrepareCore implements GoresaveCoreService {
+  _UnreadableAfterPrepareCore(this.manifestPath, this.sourceGamePath);
+
+  final String manifestPath;
+  final String sourceGamePath;
+  int prepares = 0;
+
+  @override
+  String get description => 'unreadable-after-prepare-test-core';
+
+  @override
+  bool get isAvailable => true;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'item_icons_prepare') {
+      prepares++;
+      return {
+        'ok': true,
+        'data': {
+          'manifestPath': manifestPath,
+          'sourceIdentity': 'source-a',
+          'sourceGamePath': sourceGamePath,
+        },
+      };
+    }
+    if (command == 'item_icons_source_identity') {
+      return {
+        'ok': false,
+        'error': {'message': 'installation unavailable'},
       };
     }
     return {

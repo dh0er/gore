@@ -217,6 +217,7 @@ final itemIconCatalogRefreshProvider = Provider<ItemIconCatalogRefresh>((ref) {
     () => ref.read(itemIconCatalogNowProvider)(),
     retention,
     () => ref.read(itemIconCatalogReloadProvider.notifier).state++,
+    () => ref.invalidate(resolvedGameRootProvider),
   );
 });
 
@@ -228,6 +229,7 @@ class ItemIconCatalogRefresh {
     this._now,
     this._retention,
     this._reload,
+    this._forgetGameRoot,
   );
 
   final GoresaveCoreService Function() _core;
@@ -237,6 +239,11 @@ class ItemIconCatalogRefresh {
   final _ItemIconCatalogRetention _retention;
   final void Function() _reload;
 
+  /// Drops the cached [gameRootProvider] answer. The configured path is a file
+  /// on disk that another tool can rewrite, and nothing about that reaches
+  /// Riverpod on its own.
+  final void Function() _forgetGameRoot;
+
   /// Check only source-file metadata on resume. Full PNG verification runs
   /// solely when this identity changed or a previously missing install appears.
   Future<void> refreshIfSourceChanged() async {
@@ -245,6 +252,11 @@ class ItemIconCatalogRefresh {
     if (!core.isAvailable) return;
     final configuredGamePath = _gamePath();
     final selectionChanged = configuredGamePath != _retention.requestedGamePath;
+    // Do this BEFORE anything can bail out: a new installation that is
+    // momentarily unreadable returns no identity, and every path below that
+    // returns early. The cached root would then go on naming the old
+    // installation, and the portraits would go on reading pictures out of it.
+    if (selectionChanged) _forgetGameRoot();
     final retainedSourceDiffersFromRequest =
         _retention.sourceGamePath != _retention.requestedGamePath;
     final identity = await _readItemIconSourceIdentity(
