@@ -171,4 +171,22 @@ void main() {
       }
     },
   );
+
+  test('an item that carries only a description is not empty', () {
+    // Two of the bundled entries have nothing but a description key. Counting
+    // them as empty made `buildItemTooltip` return before it ever resolved the
+    // text, so hovering them showed no card.
+    const described = ItemStats(descriptionKey: 'FocusStoneBridgeItem');
+    expect(described.isEmpty, isFalse);
+    expect(const ItemStats().isEmpty, isTrue);
+  });
+
+  test('the bundled catalog has a card for every entry it describes', () async {
+    final catalog = await ItemStatsCatalog.loadBundled();
+    final silent = catalog.byItemId.entries
+        .where((e) => e.value.descriptionKey.isNotEmpty && e.value.isEmpty)
+        .map((e) => e.key)
+        .toList();
+    expect(silent, isEmpty);
+  });
 }

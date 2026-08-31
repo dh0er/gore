@@ -121,6 +121,9 @@ class ItemStats {
   final List<String> ingredientFor;
 
   bool get isEmpty =>
+      // A description is content in its own right: two items carry nothing but
+      // one, and calling them empty meant hovering them showed no card at all.
+      descriptionKey.isEmpty &&
       itemType.isEmpty &&
       value == null &&
       damage.isEmpty &&
