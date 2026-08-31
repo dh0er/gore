@@ -383,15 +383,20 @@ shipped build:
 
 ```
 warning: AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CreepingEvaluationContext carries
-3 functions the decompiler does not reproduce byte-for-byte. Splicing this module recompiles all
-of it, so those come out changed as well, and 1 loop in it recompiles with a bound of zero, so
+3 functions the decompiler does not reproduce as the same program. Splicing this module recompiles
+all of it, so those come out changed as well, and 1 loop in it recompiles with a bound of zero, so
 the body never runs. Check that before shipping.
 ```
 
-Silence is the good case: **6,982 of the 7,317 modules are byte-faithful**, and for those there is
-nothing to inherit. The remaining 335 mostly differ only in spelling — same program, different
-text — but 15 of them contain a loop that recompiles with a bound of zero and therefore never
-runs its body. Those 15 are the ones to read before shipping.
+Silence is the good case: **6,982 of the 7,317 modules recompile with no known semantic
+difference**, and for those there is nothing to inherit. That is the property worth having, and it
+is not the same as byte-identical — the oracle normalises reference keys, jump absolutes, constant
+encodings and slot numbers away before judging, so a module can pass and still assemble to
+different bytes while running the same program.
+
+The remaining 335 mostly differ only in spelling — same program, different text — but 15 of them
+contain a loop that recompiles with a bound of zero and therefore never runs its body. Those 15
+are the ones to read before shipping.
 
 The table is keyed by the generation the measurement was taken on. Point the tools at a build it
 does not cover and no warning appears — that means *not measured*, not *byte-faithful*.

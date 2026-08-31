@@ -2584,7 +2584,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     })
                     .count();
                 eprintln!(
-                    "{} of {} modules are byte-faithful; the other {} carry functions this build does not reproduce exactly — `gore as emit <cache> <module>` names them",
+                    "{} of {} modules recompile with no known semantic difference; the other {} carry functions this build does not reproduce as the same program — `gore as emit <cache> <module>` names them",
                     mods.len() - listed,
                     mods.len(),
                     listed

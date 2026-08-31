@@ -1,4 +1,4 @@
-//! What the decompiler is known not to reproduce byte-for-byte, per module.
+//! Where the decompiler is known to produce a DIFFERENT PROGRAM, per module.
 //!
 //! Splicing a module recompiles ALL of it from the emitted source, not only the function that was
 //! edited. So a module carrying a function the decompiler does not reproduce hands that function's
@@ -9,11 +9,17 @@
 //! The table is measured, not inferred — one whole-tree emit, recompile and per-function bytecode
 //! diff against the shipped cache, for one exact build. It is therefore keyed by the generation
 //! that was measured: a cache this table has nothing to say about gets no claim, not a guess.
+//!
+//! What it lists is the functions the oracle calls SEMANTIC-DIFF. It says nothing about raw bytes:
+//! the diff normalises reference keys, jump absolutes, constant encodings and slot numbers away
+//! first, so a function it passes may still assemble to different bytes and run the same program.
+//! Absence from this table therefore means "no known semantic difference", which is the property
+//! a modder needs — not "byte-identical", which would be a stronger claim than was measured.
 
 /// What is known about one module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModuleFaithfulness {
-    /// Functions whose recompiled bytecode is not provably identical to the shipped one.
+    /// Functions whose recompiled bytecode is not provably the same PROGRAM as the shipped one.
     pub divergent_functions: usize,
     /// Of those, the ones known to be a different PROGRAM rather than a different spelling.
     /// Today this counts loops whose bound came out as a literal zero, so the body never runs.
@@ -63,8 +69,9 @@ pub fn is_measured(cache_sha256: &[u8; 32], binds_sha256: Option<&[u8; 32]>) -> 
 
 /// What is known about `module`, or `None` where the cache was never measured.
 ///
-/// A module the table does not list was byte-faithful in that run: the table carries only the
-/// modules that were not, so absence is the positive answer and is reported as zero.
+/// A module the table does not list came through that run with no semantic difference: the table
+/// carries only the modules that did not, so absence is the positive answer and is reported as
+/// zero. It is not a claim that the bytes match.
 pub fn for_module(
     cache_sha256: &[u8; 32],
     binds_sha256: Option<&[u8; 32]>,
@@ -117,8 +124,8 @@ pub fn warning_for_module(
         format!("{} functions", known.divergent_functions)
     };
     let mut line = format!(
-        "warning: {module} carries {functions} the decompiler does not reproduce byte-for-byte. \
-         Splicing this module recompiles all of it, so those come out changed as well"
+        "warning: {module} carries {functions} the decompiler does not reproduce as the same \
+         program. Splicing this module recompiles all of it, so those come out changed as well"
     );
     if known.behaviour_risks > 0 {
         let loops = if known.behaviour_risks == 1 {
@@ -221,7 +228,7 @@ mod tests {
         let warning =
             warning_for_module(&guid, Some(&binds), "AI.States.FightAI.SearchState.AIState_Search")
                 .expect("warns");
-        assert!(warning.contains("does not reproduce byte-for-byte"));
+        assert!(warning.contains("does not reproduce as the same program"));
     }
 
     #[test]
