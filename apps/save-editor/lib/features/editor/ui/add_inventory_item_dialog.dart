@@ -243,7 +243,15 @@ class _AddInventoryItemDialogState
                       // item's category so the selection stays visible instead
                       // of being silently dropped.
                       if (_selected != null) {
-                        _selectedCategory = itemCategoryFromId(_selected!.id);
+                        // The SAME classifier the grouping uses. The game's own
+                        // tag overrides the id prefix — ore nuggets are filed
+                        // under Materials, not Miscellaneous — so reading the
+                        // category off the id alone opened the wrong tab and
+                        // hid the very row it was meant to reveal.
+                        _selectedCategory = itemCategoryFor(
+                          _selected!.id,
+                          stats: itemStats,
+                        );
                       }
                     } else if (_selected != null &&
                         !(_selected!.id.toLowerCase().contains(q) ||
@@ -267,7 +275,7 @@ class _AddInventoryItemDialogState
                         itemId: _selected!.id,
                         itemPath: _selected!.path,
                         fallbackIcon: iconForItemCategory(
-                          itemCategoryFromId(_selected!.id),
+                          itemCategoryFor(_selected!.id, stats: itemStats),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -375,6 +383,7 @@ class _AddInventoryItemDialogState
                                             locCatalog,
                                             lang,
                                             showObjectIds,
+                                            itemStats,
                                           ),
                                     ),
                             ),
@@ -405,6 +414,7 @@ class _AddInventoryItemDialogState
     Map<String, Map<String, String>> catalog,
     GameLang lang,
     bool showObjectIds,
+    ItemStatsCatalog? stats,
   ) {
     final isSelected = _selected == entry;
     // Same hover block as the inventory, so the item can be judged before it is
@@ -423,7 +433,9 @@ class _AddInventoryItemDialogState
           key: ValueKey(('catalog-item-image', entry.id)),
           itemId: entry.id,
           itemPath: entry.path,
-          fallbackIcon: iconForItemCategory(itemCategoryFromId(entry.id)),
+          fallbackIcon: iconForItemCategory(
+            itemCategoryFor(entry.id, stats: stats),
+          ),
         ),
         title: Text(
           _displayName(catalog, lang, entry.id),

@@ -190,4 +190,34 @@ void main() {
       expect(mark.fallbackGameIcon, isNull);
     },
   );
+
+  testWidgets('the role chips stay inside the header at the smallest window', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      wrapWithL10n(
+        Scaffold(
+          body: SizedBox(
+            // The narrowest window the editor supports, minus the sidebar.
+            width: 480,
+            child: ActorDetailHeader(
+              actor: const Actor.npc(
+                id: 'SC_NOV_Darrion_1312',
+                name: 'Darrion',
+                uniqueName: 'SC_NOV_Darrion_1312',
+                isDead: true,
+              ),
+              locCatalog: const {},
+              lang: kGameLangs.first,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // A Row hands a child with no flex unbounded width; the chips have to be
+    // capped or they push the name out and overflow.
+    expect(tester.takeException(), isNull);
+  });
 }
