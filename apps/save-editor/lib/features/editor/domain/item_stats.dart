@@ -325,15 +325,29 @@ class ItemStatsCatalog {
   /// not always on case.
   ItemStats? statsFor(String itemId) => byItemId[itemId.trim().toLowerCase()];
 
-  /// The filter the game would file [itemId] under, or null when its type tag
-  /// belongs to no tab (the game then shows it only under "All").
+  /// The filter the game would file [itemId] under, or null when nothing it
+  /// carries belongs to a tab (the game then shows it only under "All").
+  ///
+  /// A filter that claims one of the item's PROPERTY tags outranks one that
+  /// only claims its type. The game marks its forged blanks and heads
+  /// `Item_Property_Forge` and the Materials tab claims that tag, but every one
+  /// of them still carries a weapon type — so matching on the type alone left
+  /// that criterion unreachable and filed seventy-six pieces of smithing stock
+  /// under Melee.
   InventoryFilter? filterFor(String itemId) {
-    final type = statsFor(itemId)?.itemType ?? '';
-    if (type.isEmpty) return null;
+    final stats = statsFor(itemId);
+    if (stats == null) return null;
+    InventoryFilter? byType;
     for (final filter in filters) {
-      if (!filter.isAll && filter.claims(type)) return filter;
+      if (filter.isAll) continue;
+      if (stats.specs.any(filter.claims)) return filter;
+      if (byType == null &&
+          stats.itemType.isNotEmpty &&
+          filter.claims(stats.itemType)) {
+        byType = filter;
+      }
     }
-    return null;
+    return byType;
   }
 
   static ItemStatsCatalog fromJsonString(String json) {

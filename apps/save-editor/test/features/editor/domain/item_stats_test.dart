@@ -127,4 +127,48 @@ void main() {
     expect(filter.claims('Item_Weapon_Runestone'), isFalse);
     expect(filter.claims('Item_Weapon_Scroll'), isFalse);
   });
+
+  test('a forged blank is filed with the materials, not the weapons', () {
+    // The game marks its smithing stock `Item_Property_Forge` and the Materials
+    // tab claims that tag — but every blank still carries a weapon type, so
+    // matching on the type alone left the criterion unreachable and filed all
+    // seventy-six of them under Melee.
+    final catalog = ItemStatsCatalog.fromJsonString('''
+{"schema": 1,
+ "filters": [
+   {"id": "G1R_All", "sortOrder": 1, "itemTags": []},
+   {"id": "G1R_MeleeWeapons", "sortOrder": 2,
+    "itemTags": ["Item_Weapon_Sword_OneHand"]},
+   {"id": "G1R_Materials", "sortOrder": 8,
+    "itemTags": ["Item_Material", "Item_Property_Forge"]}
+ ],
+ "items": {
+   "ItMi_Smith_Blade_Arming": {"itemType": "Item_Weapon_Sword_OneHand",
+     "specs": ["Item_Property_Forge"]},
+   "ItMw_1H_Sword_02": {"itemType": "Item_Weapon_Sword_OneHand"},
+   "ItMi_Smith_Iron": {"itemType": "Item_Material"}
+ }}
+''');
+
+    expect(catalog.filterFor('ItMi_Smith_Blade_Arming')?.id, 'G1R_Materials');
+    // A finished weapon has no forge tag and stays where it was.
+    expect(catalog.filterFor('ItMw_1H_Sword_02')?.id, 'G1R_MeleeWeapons');
+    expect(catalog.filterFor('ItMi_Smith_Iron')?.id, 'G1R_Materials');
+    expect(catalog.filterFor('NothingKnown'), isNull);
+  });
+
+  test(
+    'the bundled catalog files every forged piece under Materials',
+    () async {
+      final catalog = await ItemStatsCatalog.loadBundled();
+      final forged = catalog.byItemId.entries
+          .where((e) => e.value.specs.contains('Item_Property_Forge'))
+          .map((e) => e.key)
+          .toList();
+      expect(forged, isNotEmpty);
+      for (final id in forged) {
+        expect(catalog.filterFor(id)?.id, 'G1R_Materials', reason: id);
+      }
+    },
+  );
 }

@@ -70,6 +70,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Characters the save never spawned are no longer listed. There was no actor
   behind them to edit.
 - Monsters find their picture and are no longer drawn as people.
+- Forged blanks and heads sit with the materials, where the game files them,
+  instead of among the finished weapons.
 
 ## [1.3.1] - 2026-08-26
 
