@@ -2204,8 +2204,17 @@ fn emit_function_ctor(
                 &argument_constructed_slots(f, refs),
                 refs,
             );
-        let rendered =
-            restore_named_argument_temporaries(&rendered, &declared_argument_constructions(f, refs));
+        // The witness names one LIFE of a slot while the search inside is textual and global, so
+        // for a slot the text carries several lives of, it could restore the `T()` belonging to a
+        // different one — moving an unrelated construction across the arguments beside it. Those
+        // slots stand down.
+        let reused =
+            slots_with_several_lives(&rendered.lines().map(str::to_owned).collect::<Vec<_>>());
+        let declared_arguments: Vec<(i32, String)> = declared_argument_constructions(f, refs)
+            .into_iter()
+            .filter(|(slot, _)| !reused.contains(slot))
+            .collect();
+        let rendered = restore_named_argument_temporaries(&rendered, &declared_arguments);
         let rendered = fold_widening_aliases(&rendered, &declared_locals, &path_roots, &widened);
         let rendered =
             spell_out_default_temporaries(&rendered, &default_only_construction_counts(f, refs));

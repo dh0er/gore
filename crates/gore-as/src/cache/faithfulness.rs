@@ -24,6 +24,10 @@ pub struct ModuleFaithfulness {
     /// Of those, the ones known to be a different PROGRAM rather than a different spelling.
     /// Today this counts loops whose bound came out as a literal zero, so the body never runs.
     pub behaviour_risks: usize,
+    /// Of those, the generated `__InitDefaults` methods. They are counted apart because they are
+    /// not always recompiled: an overlay that omits its `default` statements has them carried
+    /// over from the base cache byte-for-byte, and then the difference does not travel.
+    pub generated_methods: usize,
 }
 
 /// One measured table per generation, keyed by the generation row's id.
@@ -84,9 +88,12 @@ pub fn for_module(
             continue;
         }
         let mut columns = line.split('\t');
-        let (Some(name), Some(divergent), Some(risks)) =
-            (columns.next(), columns.next(), columns.next())
-        else {
+        let (Some(name), Some(divergent), Some(risks), Some(generated)) = (
+            columns.next(),
+            columns.next(),
+            columns.next(),
+            columns.next(),
+        ) else {
             continue;
         };
         if name != module {
@@ -95,11 +102,13 @@ pub fn for_module(
         return Some(ModuleFaithfulness {
             divergent_functions: divergent.parse().unwrap_or(0),
             behaviour_risks: risks.parse().unwrap_or(0),
+            generated_methods: generated.parse().unwrap_or(0),
         });
     }
     Some(ModuleFaithfulness {
         divergent_functions: 0,
         behaviour_risks: 0,
+        generated_methods: 0,
     })
 }
 
@@ -136,6 +145,20 @@ pub fn warning_for_module(
         line.push_str(&format!(
             ", and {loops} with a bound of zero, so the body never runs. Check that before \
              shipping"
+        ));
+    }
+    if known.generated_methods > 0 {
+        let generated = if known.generated_methods == 1 {
+            "One of them is a generated `__InitDefaults` method".to_owned()
+        } else {
+            format!(
+                "{} of them are generated `__InitDefaults` methods",
+                known.generated_methods
+            )
+        };
+        line.push_str(&format!(
+            ". {generated}, which an overlay that omits its `default` statements carries over \
+             byte-for-byte instead of recompiling"
         ));
     }
     line.push('.');
@@ -254,11 +277,13 @@ mod tests {
                 continue;
             }
             let columns: Vec<&str> = line.trim_end().split('\t').collect();
-            assert_eq!(columns.len(), 3, "row shape: {line}");
+            assert_eq!(columns.len(), 4, "row shape: {line}");
             let divergent: usize = columns[1].parse().expect("divergent count");
             let risks: usize = columns[2].parse().expect("risk count");
+            let generated: usize = columns[3].parse().expect("generated count");
             assert!(divergent > 0, "a listed module has something to report: {line}");
             assert!(risks <= divergent, "risks are a subset: {line}");
+            assert!(generated <= divergent, "generated are a subset: {line}");
             listed += 1;
         }
         assert!(listed > 0);

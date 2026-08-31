@@ -1,336 +1,336 @@
-# module	divergent-functions	behaviour-risks
-AI.AIAgent.Creature.Demon.Fire.Firewall.DemonAreaFirewallVisual	2	0
-AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Base.Barrier.FireDemon_HellArms_Barrier	1	0
-AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Base.FireDemon_HellArm_Base	1	0
-AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Base.FireDemon_HellArmsArea_Base	1	0
-AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachStraight.FireDemon_HellArms_BreachStraight	2	0
-AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachZigZag.FireDemon_HellArmsArea_BreachZigZag	2	0
-AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachZigZag.FireDemon_HellArmsArea_BreachZigZag_Fire	2	0
-AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_Barrier_Ring	3	0
-AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_RingFireTest	6	0
-AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.FireDemon_HellArmsArea_Ring	7	0
-AI.AIAgent.Creature.Demon.Spells.Area.DemonAreaVisual	2	0
-AI.AIAgent.Creature.Golem.Fire.Spells.BreakFloor.BreakFloorSpellVisual	1	0
-AI.AIAgent.Creature.Golem.Fire.Spells.BreakFloor.BreakFloorSpellVisualBox	1	0
-AI.AIAgent.Creature.Golem.Fire.Spells.BreakFloor.GA_Spell_BreakFloor_FireGolem	2	0
-AI.AIAgent.Creature.Golem.Fire.Spells.FireGolemArenaDetector.FireGolem_PlayerArenaDetectorVisual	1	0
-AI.AIAgent.Creature.Golem.Fire.Spells.FloorSinking.GA_FireGolem_EnvironmentAttack_ArenaFloorSinking	1	0
-AI.AIAgent.Creature.Golem.Fire.Spells.Heated.GA_FireGolem_SpecialState_Heated	1	0
-AI.AIAgent.Creature.Golem.Fire.Spells.LavaStream.GA_FireGolem_EnvironmentAttack_ArenaLavaStreams	1	0
-AI.AIAgent.Creature.Golem.Ice.Spells.Icebolt.GA_Spell_IceGolem_IceBolt	2	0
-AI.AIAgent.Creature.Golem.Ice.Spells.SummonMiniGolems.GA_IceGolem_SpecialState_SummonMiniGolem	3	0
-AI.AIAgent.Creature.Harpy.AIState_Warning_Harpy	2	0
-AI.AIAgent.Creature.Meatbug.GEs_Meatbug	1	0
-AI.AIAgent.Creature.Minecrawler.QueenPh2.Summon.GA_Summon_MCQueen_Sleeper	1	0
-AI.AIAgent.Creature.Molerat.CombatSituations_Molerat	1	0
-AI.AIAgent.Creature.Molerat.DiggableTerrainSubsystem	2	0
-AI.AIAgent.Creature.Scavenger.Living.LivingAI_Scavenger_Rideable	2	0
-AI.AIAgent.Creature.Scavenger.Rideable.Components.GothicMountComponentAS	2	0
-AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.MagicBeam.GA_Spell_MagicBeam	1	0
-AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.MagicBeam.MagicBeamVisual	1	0
-AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.SoulHarvest.GA_Spell_SoulHarvest_SkeletonMage	2	0
-AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.SoulHarvest.SoulHarvest_Visual	4	0
-AI.AIAgent.Creature.Troll.JuvenileTroll.AM_JuvenileTroll_01.AIAgentConfig_AM_JuvenileTroll_01	3	0
-AI.AIAgent.Creature.Troll.TC_TrollAdult_01.CombatMoves_TrollAdult	2	0
-AI.AIAgent.Human.AIAgentConfig_Navigation_Human	1	0
-AI.AIAgent.Human.Config.OCR_GRD_Scatty_210.DailyRoutine_OCR_GRD_Scatty_210	5	0
-AI.AIAgent.Orc.Combat.Staff.Spells.BallLighting.GA_Spell_BallLightning_Orc	2	0
-AI.AIAgent.Orc.Combat.Staff.Spells.BreathOfDeath.GA_Spell_BreathOfDeath_Orc	1	0
-AI.AIAgent.Orc.Combat.Staff.Spells.Fireball.GA_Spell_FireBall_Orc	2	0
-AI.AIAgent.Orc.Combat.Staff.Spells.StormOfFire.GA_Spell_StormOfFire_Orc	1	0
-AI.AIAgent.Orc.Generic.AIState_Combat_Orc_Generic	1	0
-AI.AIAgent.Orc.Living.AbilityTask_Interaction_Orc	1	0
-AI.AIAgent.Orc.Living.LivingAI_Orc	2	0
-AI.AIItemScoring	13	0
-AI.AssessmentResponseSystem.AssessmentBits	26	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	7	2
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CreepingEvaluationContext	3	1
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeDefinitions	3	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	3	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingResponse	4	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	43	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeScoring	7	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.LastSeenPlayerContext	1	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.PickpocketEvaluationContext	3	1
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.TheftEvaluationContext	3	1
-AI.AssessmentResponseSystem.EventResponses	21	0
-AI.CharacterAI_Gothic	13	0
-AI.CharacterAI_Human	1	0
-AI.CharacterAI_Orc	2	0
-AI.DailyRoutines.DailyRoutines_OG	3	0
-AI.Interactions.AbilityTask_Interaction_Human	1	0
-AI.NativeAICommands	15	0
-AI.NearbyCharacterAICommands	2	0
-AI.Relationship.PersonalRelationshipModifiers	5	0
-AI.States.AIState_AmbientConversation	2	0
-AI.States.AIState_CarryObject	3	0
-AI.States.AIState_DailyRoutine	3	0
-AI.States.AIState_FollowCharacterAggressive	6	0
-AI.States.AIState_FollowCreator	1	0
-AI.States.AIState_FoundSomeoneInMyBed	1	0
-AI.States.AIState_GuideCharacter	10	1
-AI.States.AIState_InteractWinchGate	2	0
-AI.States.AIState_MoveTogether	1	0
-AI.States.AIState_UseFreepoint	1	0
-AI.States.AIState_WaitInQueue	1	0
-AI.States.AIState_WanderAimlessly	1	0
-AI.States.AIState_WanderAimlessly_Run	1	0
-AI.States.AIState_WanderAimlessly_Sprint	1	0
-AI.States.AIState_WarnAggressor	1	0
-AI.States.FightAI.AIGroup_ConflictInstance	5	1
-AI.States.FightAI.AIGroup_StateEvent	2	0
-AI.States.FightAI.AIState_Defeated	1	0
-AI.States.FightAI.AIState_PerceptionResponse	3	0
-AI.States.FightAI.AssessGoToDailyRoutineState.UAIState_AssessGoToDailyRoutine	2	0
-AI.States.FightAI.CharmedState.AIState_Charmed	1	0
-AI.States.FightAI.CombatEndActionsState.AIState_AcceptDefeat	1	0
-AI.States.FightAI.CombatEndActionsState.AIState_ClaimVictory	1	0
-AI.States.FightAI.CombatEndActionsState.AIState_CombatEndActions	7	0
-AI.States.FightAI.CombatState.AICombatBehaviorTree	27	2
-AI.States.FightAI.CombatState.AICombatBehaviorTreeGenerators	1	0
-AI.States.FightAI.CombatState.AICombatFitnessMultipliers	2	0
-AI.States.FightAI.CombatState.AICombatRoleSystem	5	0
-AI.States.FightAI.CombatState.AICombatTargetScoring	3	0
-AI.States.FightAI.CombatState.AIGroup_Attackers	6	0
-AI.States.FightAI.CombatState.AIGroup_Combat	12	0
-AI.States.FightAI.CombatState.AIState_Combat	6	0
-AI.States.FightAI.CombatState.AIState_Combat_Creature	4	0
-AI.States.FightAI.CombatState.AIState_Combat_Human	1	0
-AI.States.FightAI.CombatState.AIState_Combat_Humanoid	2	0
-AI.States.FightAI.CombatState.AIState_OGCombat	26	0
-AI.States.FightAI.CombatState.CombatBehaviorSets.CombatBehaviorSet	3	0
-AI.States.FightAI.CombatState.CombatBehaviorSets.UnreachableEnemy.CombatBehaviorSet_UnreachableEnemy	4	0
-AI.States.FightAI.CombatState.CombatMoves	70	2
-AI.States.FightAI.CombatState.CombatOperations	2	0
-AI.States.FightAI.CombatState.CombatSituations	19	0
-AI.States.FightAI.CombatState.CombatTestClasses	1	0
-AI.States.FightAI.CombatState.Positioning.AICombat_Positioning	17	0
-AI.States.FightAI.CombatState.TauntOptionPresets	1	0
-AI.States.FightAI.ControlledState.AIState_Controlled	1	0
-AI.States.FightAI.DisengageBehavior.AIState_Disengage	2	0
-AI.States.FightAI.FearState.AIState_Fear	4	1
-AI.States.FightAI.FleeState.AIState_Flee	2	0
-AI.States.FightAI.FollowPerceivedCharacterState.AIState_FollowPerceivedCharacter	1	0
-AI.States.FightAI.GoGetGuardState.AIState_GoGetGuard	3	0
-AI.States.FightAI.ItemInteractionStates.AIState_InteractWithItem	2	0
-AI.States.FightAI.ManagedFightSubsystem	7	0
-AI.States.FightAI.ParalizedState.AIState_Paralyzed	1	0
-AI.States.FightAI.ReactionInteractions.AbilityTask_Interaction_Human_SearchAround	1	0
-AI.States.FightAI.SearchState.AIState_Search	26	2
-AI.States.FightAI.SleeperFight.Common.Abilities.GA_CheckDialogBlocker	1	0
-AI.States.FightAI.SleeperFight.CorKalom_Sleeper.LordDemon.Components.MadCorKalomDemonFightComponent	1	0
-AI.States.FightAI.SleeperFight.CorKalom_Sleeper.LordDemon.GEs_CorKalomDemon_Sleeper	2	0
-AI.States.FightAI.SleeperFight.CorKalom_Sleeper.LordDemon.Spell.Pyrolaser.GA_LordDemon_Pyrolaser	2	0
-AI.States.FightAI.SleeperFight.NC_SLD_Gorn_699_Sleeper.Abilities.ElectrifiedArenaDefinition_GornSleeper	1	0
-AI.States.FightAI.SleeperFight.NC_SLD_Gorn_699_Sleeper.Abilities.GornSleeper_ElectrifiedArea	3	0
-AI.States.FightAI.SleeperFight.OC_KDF_Milten_Sleeper.Environment.MiltenSleeper_Brazier	2	0
-AI.States.FightAI.SleeperFight.OC_KDF_Milten_Sleeper.Spells.Fireball.GA_Spell_FireBall_MiltenSleeper	1	0
-AI.States.FightAI.SleeperFight.OC_VLK_Mud_574_Sleeper.Gameplay.RegionTrait_MudSleeper_TeleportToEnd_RegionTrait	1	0
-AI.States.FightAI.SleeperFight.SC_NOV_Lester_Sleeper.SleeperFight_LesterCombat	4	0
-AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.GA_ForcePlayerSightPerceptionOnStart	1	1
-AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.GA_Summon_XardasSleeper_Skeleton	1	0
-AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.GA_Xardas_Sleeper_FightManager	2	0
-AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.GA_Xardas_Sleeper_HealthMonitor	1	0
-AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.Spells.Teleport.GA_Teleport_XardasSleeper	1	0
-AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.Spells.Teleport.XardasSleeperTeleportComponent	2	0
-AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.CombatMoves_Xardas_Sleeper	1	0
-AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpotManager	1	0
-AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpot_XardasSleeper	4	0
-AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.TraceTarget_XardasSleeper	1	0
-AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.Xardas_Sleeper_Minion_BillboardComponent	1	0
-AI.States.FightAI.WaitStates.AIState_Observe_Creeping	2	0
-AI.States.FightAI.WaitStates.AIState_WaitForBlockedPath	7	0
-AI.States.FightAI.WaitStates.AIState_WaitForDefeatedIntruderToLeave	1	0
-AI.States.FightAI.WaitStates.AIState_WaitWaryOfNearbyPerceivedCharacter	2	0
-AI.States.FightAI.WarnedCharacterSubsystem	3	0
-AI.States.FightAI.WarningState.AIGroup_Warning_Base	1	0
-AI.States.FightAI.WarningState.AIState_Warning	4	0
-AI.States.FightAI.WarningState.AIState_Warning_Creature	2	0
-AI.States.FightAI.WarningState.AIState_Warning_Crime	35	0
-AI.States.FightAI.WarningState.AIState_Warning_Human	1	0
-AI.States.FightAI.WatchFightState.AIGroup_WatchFight	3	3
-AI.States.FightAI.WatchFightState.AIState_WatchFight	24	2
-AI.States.FightAI.WatchFightState.AIState_WatchHostile	1	0
-AI.Test.Test_DailyRoutines	2	0
-Camera.ConversationCameraConfig	1	0
-Environment.GothicUltraDynamicControlerAS	9	0
-FX.DepthOfField.DepthOfFieldController	1	0
-Formulas.LevelFormula	2	0
-GAS.Abilities.Combat.AttackLoop.Base.GA_AttackLoop	3	0
-GAS.Abilities.Combat.AttackLoop.Capsule.GA_AttackLoopCapsule	2	0
-GAS.Abilities.Combat.AttackLoop.Capsule.PyrolaserHitCapsuleComponent	1	0
-GAS.Abilities.Combat.AttackLoop.Cone.GA_AttackLoopCone	2	0
-GAS.Abilities.Combat.GA_AllowStrafeOnNonStrafableCreatures	1	0
-GAS.Abilities.Combat.GA_AttackThrow	1	0
-GAS.Abilities.HUD.GA_BossHealthBar	1	0
-GAS.Abilities.Interact.GA_Human_CallInteractFunction	1	0
-GAS.Abilities.Interact.GA_Human_Lever	1	0
-GAS.Abilities.Interact.GA_Human_Loot	8	0
-GAS.Abilities.Interact.GA_Human_SmashMeatBug	1	0
-GAS.Abilities.Interact.GA_Human_StationTeleport	1	0
-GAS.Abilities.Interact.Sleep.Base.GA_Human_Sleep	1	0
-GAS.Abilities.Locomotion.GA_Defeated	1	0
-GAS.Abilities.Locomotion.GA_Dodge	1	0
-GAS.Abilities.Locomotion.GA_Falling	3	0
-GAS.Abilities.Locomotion.GA_FallingRagdoll	1	0
-GAS.Abilities.Locomotion.GA_Swim	1	0
-GAS.Abilities.Locomotion.Target.Config.Base.CharacterTargetConfig	1	0
-GAS.Abilities.Locomotion.Target.GA_TargetEnemy	1	0
-GAS.Abilities.Memory.GA_RememberDamage	2	0
-GAS.Abilities.Passive.Drugs.Base.GA_DrugDebuffBase	1	0
-GAS.Abilities.Passive.Drugs.Derived.Alcohol.GA_AlcoholDebuff	1	0
-GAS.Abilities.Passive.Drugs.Derived.Swampweed.GA_Swampweed	2	0
-GAS.Abilities.Passive.GA_PlayerPerception_CrimeRegistration	7	0
-GAS.Abilities.Spells.CastSpell.Base.GA_CastSpell_Default	1	0
-GAS.Abilities.Spells.CastSpell.Base.GA_CastSpell_Rechargeable	1	0
-GAS.Abilities.Spells.CastSpell.Base.GA_CastSpell_RechargeableWithoutTransitions	1	0
-GAS.Abilities.Spells.CastSpell.Base.Targetable.GA_CastSpell_Targetable	1	0
-GAS.Abilities.Spells.CastSpell.Base.Targetable.GA_CastSpell_Targetable_Mandatory	1	0
-GAS.Abilities.Spells.CastSpell.Derived.AlteredStates.GA_CastSpell_Control	2	0
-GAS.Abilities.Spells.CastSpell.Derived.Summon.Base.GA_CastSpell_SummonBase	1	0
-GAS.Abilities.Spells.CastSpell.Derived.Summon.GA_CastSpell_Summon_Skeletons	1	0
-GAS.Abilities.Spells.CastSpell.Derived.Transform.GA_CastSpell_Transform_Base	1	0
-GAS.Abilities.Spells.ExecutionValidator.Derived.Base.CastSpell_ExecutionValidator_Default	1	0
-GAS.Abilities.Spells.ExecutionValidator.Derived.Base.CastSpell_ExecutionValidator_TargetableBase	1	0
-GAS.Abilities.Spells.ExecutionValidator.Derived.Spell.ChainLightning.CastSpell_ExecutionValidator_ChainLightning	1	0
-GAS.Abilities.Spells.ExecutionValidator.Derived.Spell.Telekinesis.CastSpell_ExecutionValidator_Telekinesis	2	0
-GAS.Abilities.Spells.GA_FreezeTimeForScreenshots	1	0
-GAS.Abilities.Spells.Spells.Base.GA_Spell_BasicWithTarget	1	0
-GAS.Abilities.Spells.Spells.Base.GA_Spell_SpawnRechargeableProjectile	2	0
-GAS.Abilities.Spells.Spells.Base.GA_Spell_Targetable	2	0
-GAS.Abilities.Spells.Spells.Control.GA_Spell_UnControl	1	0
-GAS.Abilities.Spells.Spells.Creature.Common.SummonCreatureByHealth.CreatureSummonVisual	2	0
-GAS.Abilities.Spells.Spells.Creature.FireDemon.GA_HellArms_Damage_Loop	1	0
-GAS.Abilities.Spells.Spells.Electric.ChainLightning.GA_Spell_ChainLightning	12	1
-GAS.Abilities.Spells.Spells.Electric.GA_Spell_BallLightning	1	0
-GAS.Abilities.Spells.Spells.Fire.GA_Spell_Fireball	2	0
-GAS.Abilities.Spells.Spells.Fire.GA_Spell_StormOfFire	1	0
-GAS.Abilities.Spells.Spells.Heal.GA_Spell_Heal	1	0
-GAS.Abilities.Spells.Spells.Pyrokinesis.GA_Spell_Pyrokinesis	1	0
-GAS.Abilities.Spells.Spells.Summon.Base.GA_Spell_Summon	3	0
-GAS.Abilities.Spells.Spells.Summon.Derived.StoneHengeSkeletonsSummon.GA_Summon_SH_Skeleton	1	0
-GAS.Abilities.Spells.Spells.Summon.Derived.VarragSummon.GA_Summon_Varrag	1	0
-GAS.Abilities.Spells.Spells.Summon.SpawnHelper.Base.SummonSpawnPlaceHelper	2	0
-GAS.Abilities.Spells.Spells.Summon.SpawnHelper.CircleSummonSpawnPlaceHelper	4	1
-GAS.Abilities.Spells.Spells.Telekinesis.GA_Spell_Telekinesis	2	0
-GAS.Abilities.Spells.Spells.Telekinesis.GA_Spell_Telekinesis_FocusStoneBridge	1	0
-GAS.Abilities.Spells.Spells.Telekinesis.TelekinesisItemMovementVisual	1	0
-GAS.Abilities.Spells.Spells.Teleport.TeleportSpotVisual	1	0
-GAS.Abilities.Spells.Spells.Transform.GA_Spell_Transform	2	0
-GAS.Abilities.Spells.Spells.Wind.GA_Spell_StormFist	1	0
-GAS.Abilities.Spells.Visuals.DeathToTheUndead.DeathToTheUndeadVisual	1	0
-GAS.Abilities.Spells.Visuals.Electric.LightningRayVisual	5	0
-GAS.Abilities.Spells.Visuals.Environment.ElectrifiedArea_FocusStonePuzzle	3	0
-GAS.Abilities.Spells.Visuals.Fire.FireRainVisual	8	0
-GAS.Abilities.Spells.Visuals.Fire.InnosPrayVisual	4	0
-GAS.Abilities.Spells.Visuals.Fire.StormOfFireVisual	1	0
-GAS.Abilities.Spells.Visuals.Ice.IceBlockVisual	1	0
-GAS.Abilities.Spells.Visuals.Ice.IceWaterSurface	2	0
-GAS.Abilities.Spells.Visuals.Light.LightVisual	4	0
-GAS.Abilities.Spells.Visuals.Projectile.Base.ProjectileDamageExplosionVisual	1	0
-GAS.Abilities.Spells.Visuals.ProjectileVisual	2	0
-GAS.Abilities.Spells.Visuals.SphereExplosion.SphereExplosionSpellVisual	1	0
-GAS.Abilities.Spells.Visuals.UrizielWaveOfDeath.UrizielWaveOfDeathVisual	4	0
-GAS.Abilities.Spells.Visuals.VisualShapes.CollisionShapeVisual	1	0
-GAS.Abilities.Spells.Visuals.Wind.StormFistVisual	1	0
-GAS.Abilities.TraceTarget.Base.GA_TraceTarget_Base	2	0
-GAS.Abilities.TraceTarget.Derived.GA_TraceTarget_Item	2	0
-GAS.Calculations.Damage	8	0
-GAS.Calculations.Damage_FocusStonePuzzle	1	0
-GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Drugs.Base.DrugDebuffEffectComponentBase	3	0
-GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Sleep.GA_SleepDebuffEffectGameplayAbility	1	0
-GAS.Effects.Debuffs.EffectStateComponent.DebuffEffectActors.SlowdownDebuffEffectActor	1	0
-GAS.Effects.Debuffs.GE_Damage	1	0
-GAS.Effects.Items.EquipAbilitesSpell.FloatingItem.GA_GameplayAbilityFloatingItem	1	0
-GAS.Effects.Skills.GE_Skills_Helpers	1	0
-GAS.Effects.Tests.Effect_GiveExperience	1	0
-GAS.GASCharacterMixins	9	0
-GAS.GASCharacterStateMixins	25	0
-GAS.PerceptionEventMixins	3	0
-Gameplay.Environment.Base.EnvironmentGenericInteractionComponent	2	0
-Gameplay.Environment.BattleBlockingBarrier.BattleBarrierVisual	1	0
-Gameplay.Environment.BattleBlockingBarrier.BattleBlockingBarrierManager	2	0
-Gameplay.Environment.BattleBlockingBarrier.StageBarrierVisual	1	0
-Gameplay.Environment.Fire.FireVisualComponentAS	2	0
-Gameplay.Environment.FocusStoneBridge.TelekinesisFocusStoneBridge	1	0
-Gameplay.Environment.Lava.EnvironmentLavaInteractionComponent	2	0
-Gameplay.Environment.Lava.Environment_LavaDefinition	1	0
-Gameplay.Environment.MCQueen.CeilingMinionSpawner.MCQueen_MinionCeilingSpawner	3	0
-Gameplay.Environment.SleeperDreams.Mine.ForcedMudTeleportPlayerDetectionActor	1	0
-Gameplay.Environment.StageManager.InExtremoBanner	2	0
-Gameplay.Environment.ThrowItem.ThrowItemDamageVisual	1	0
-Gameplay.Environment.WeatherLightingMagnet.WeatherLightingMagnet	1	0
-Gameplay.Magic.Components.Creatures.Base.CreatureTeleportComponent	1	0
-Gameplay.Magic.Components.Damage.PercentageDamageLimiterComponent	1	0
-Gameplay.Magic.Components.Damage.WaterDamageLimiterComponent	1	0
-Gameplay.Magic.Components.InExtremo.InExtremoPropComponent	3	0
-Gameplay.Magic.Components.Spell.Summon.SummonManagerComponent	1	0
-InteractiveObjects.CinematicInteractives	1	0
-InteractiveObjects.GothicTriggerVolume	1	0
-InteractiveObjects.MixedObjectsPresets	1	0
-InteractiveObjects.PuzlesBlood	1	0
-InteractiveObjects.Puzzles	1	0
-InteractiveObjects.PuzzlesFiresMage	5	0
-InteractiveObjects.PuzzlesWaterMage	4	0
-InteractiveObjects.RandomLockPools	2	0
-Items.Environment.CustomPointLight	1	0
-Items.GenericItems.TraderConfigBase	1	0
-Items.Projectiles	4	0
-Items.Visual.Projectile.Arrow.Base.ArrowProjectileVisual_Base	3	0
-LevelScripts.Map_x2_y1_OldCamp_AI_script	1	0
-LevelScripts.Tundra_AI	1	0
-LevelScripts.WorldDefinition	1	0
-LoadingScreen.LoadingScreenChapterBase	2	0
-LoadingScreen.LoadingScreenSetupTest	2	0
-LoadingScreen.LoadingScreens.LoadingScreen_BlackScreen	1	0
-LoadingScreen.LoadingScreens.LoadingScreen_GeneralHints	1	0
-LoadingScreen.LoadingScreens.LoadingScreen_Intro	1	0
-LoadingScreen.StreamingLoadingScreenSetup	1	0
-Player.PlayerConfig	1	0
-Player.PuzzlesConfig	4	0
-Regions.Ownership.OCCastle.Ownership_OCCastle_BeforeFireMagesDead	3	0
-Regions.Traits.GameplayEffect.Damage.Base.DamageTraits	1	0
-Regions.Traits.GameplayEffect.Damage.FireDamageTraits	1	0
-Regions.Traits.GameplayEffect.GameplayEffectTraits	1	0
-Regions.Traits.QuestRelatedTraits	14	0
-Sound.BackgroundMusicConfig	1	0
-Sound.FXDefinitions.FXDefinitions_AttackImpact	3	0
-Sound.FXDefinitions.FXDefinitions_Footsteps	1	0
-Sound.FXDefinitions.FXDefinitions_Orc	2	0
-Sound.FXDefinitions.FXDefinitions_Projectiles	1	0
-Sound.MusicRegions	2	0
-Spawning.TriggerSpawner	2	0
-Story.Achievements	12	0
-Story.G1R.Conversation.Conversation_Generic_AboutCamp_NC_ORG	6	0
-Story.G1R.Conversation.Conversation_NC_BAU_RICELORD_900	1	0
-Story.G1R.Conversation.Conversation_NC_ORG_DRAX_819	1	0
-Story.G1R.Conversation.Conversation_NC_ORG_LEFTY_844	1	0
-Story.G1R.Conversation.Conversation_NC_ORG_ROSCOE_840	1	0
-Story.G1R.Conversation.Conversation_NC_SLD_LEE_700	1	0
-Story.G1R.Conversation.Conversation_OC_GRD_ORRY_254	1	0
-Story.G1R.Conversation.Conversation_OC_GRD_THORUS_200	1	0
-Story.G1R.Conversation.Conversation_OC_KDF_CORRISTO_402	1	0
-Story.G1R.Conversation.Conversation_OC_ORG_MORDRAG_826	1	0
-Story.G1R.Conversation.Conversation_OC_STT_DIEGO	1	0
-Story.G1R.Conversation.Conversation_OC_VLK_GRIM_580	1	0
-Story.G1R.Conversation.Conversation_OC_WOC_VELAYA_108	1	0
-Story.G1R.Conversation.Conversation_OW_OSM_URNAZKROG_2401	1	0
-Story.G1R.Conversation.Conversation_OW_OWR_TOCHURNAGG_2403	1	0
-Story.G1R.Conversation.Conversation_SC_GUR_YBERION_1200	1	0
-Story.G1R.Conversation.Conversation_SC_NOV_DARRION_1312	1	0
-Story.G1R.Conversation.Conversation_SC_NOV_LESTER	2	0
-Story.G1R.Conversation.Conversation_SC_NOV_NYRAS_1303	1	0
-Story.G1R.Conversation.Conversation_SC_NOV_TALAS_1300	1	0
-Story.G1R.Conversation.Conversation_UL_ORG_AIDAN_859	1	0
-Story.G1R.Conversation.Conversation_UL_ORG_BLACKMAILER_888	3	0
-Story.G1R.Conversation.Conversation_UL_ORG_ROGUE03_1503	1	0
-Story.G1R.Conversation.Conversation_UL_OSL_UrShak_2200	1	0
-Story.G1R.Conversation.Conversation_UL_STT_CAVALORN_336	1	0
-Story.G1R.Conversation.Conversation_UNITTEST_UNITTEST_UNITTEST_2203	9	0
-Story.G1R.Conversation.Conversation_XT_DMB_XARDAS_404	1	0
-Story.G1R.GenericVoiclines	2	0
-Story.Support.DialogImport	5	0
-Story.Support.DialogTeaching	4	0
-Story.Support.G1R.Cinematics	6	0
-Story.Support.G1R.StoryFunctions	19	0
-UI.UIHelperScript	1	0
+# module	divergent-functions	behaviour-risks	generated-methods
+AI.AIAgent.Creature.Demon.Fire.Firewall.DemonAreaFirewallVisual	2	0	0
+AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Base.Barrier.FireDemon_HellArms_Barrier	1	0	0
+AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Base.FireDemon_HellArm_Base	1	0	0
+AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Base.FireDemon_HellArmsArea_Base	1	0	0
+AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachStraight.FireDemon_HellArms_BreachStraight	2	0	0
+AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachZigZag.FireDemon_HellArmsArea_BreachZigZag	2	0	0
+AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachZigZag.FireDemon_HellArmsArea_BreachZigZag_Fire	2	0	0
+AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_Barrier_Ring	3	0	0
+AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_RingFireTest	6	0	0
+AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.FireDemon_HellArmsArea_Ring	7	0	0
+AI.AIAgent.Creature.Demon.Spells.Area.DemonAreaVisual	2	0	0
+AI.AIAgent.Creature.Golem.Fire.Spells.BreakFloor.BreakFloorSpellVisual	1	0	0
+AI.AIAgent.Creature.Golem.Fire.Spells.BreakFloor.BreakFloorSpellVisualBox	1	0	0
+AI.AIAgent.Creature.Golem.Fire.Spells.BreakFloor.GA_Spell_BreakFloor_FireGolem	2	0	0
+AI.AIAgent.Creature.Golem.Fire.Spells.FireGolemArenaDetector.FireGolem_PlayerArenaDetectorVisual	1	0	0
+AI.AIAgent.Creature.Golem.Fire.Spells.FloorSinking.GA_FireGolem_EnvironmentAttack_ArenaFloorSinking	1	0	0
+AI.AIAgent.Creature.Golem.Fire.Spells.Heated.GA_FireGolem_SpecialState_Heated	1	0	0
+AI.AIAgent.Creature.Golem.Fire.Spells.LavaStream.GA_FireGolem_EnvironmentAttack_ArenaLavaStreams	1	0	0
+AI.AIAgent.Creature.Golem.Ice.Spells.Icebolt.GA_Spell_IceGolem_IceBolt	2	0	0
+AI.AIAgent.Creature.Golem.Ice.Spells.SummonMiniGolems.GA_IceGolem_SpecialState_SummonMiniGolem	3	0	0
+AI.AIAgent.Creature.Harpy.AIState_Warning_Harpy	2	0	0
+AI.AIAgent.Creature.Meatbug.GEs_Meatbug	1	0	0
+AI.AIAgent.Creature.Minecrawler.QueenPh2.Summon.GA_Summon_MCQueen_Sleeper	1	0	0
+AI.AIAgent.Creature.Molerat.CombatSituations_Molerat	1	0	0
+AI.AIAgent.Creature.Molerat.DiggableTerrainSubsystem	2	0	0
+AI.AIAgent.Creature.Scavenger.Living.LivingAI_Scavenger_Rideable	2	0	0
+AI.AIAgent.Creature.Scavenger.Rideable.Components.GothicMountComponentAS	2	0	0
+AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.MagicBeam.GA_Spell_MagicBeam	1	0	0
+AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.MagicBeam.MagicBeamVisual	1	0	0
+AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.SoulHarvest.GA_Spell_SoulHarvest_SkeletonMage	2	0	0
+AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.SoulHarvest.SoulHarvest_Visual	4	0	0
+AI.AIAgent.Creature.Troll.JuvenileTroll.AM_JuvenileTroll_01.AIAgentConfig_AM_JuvenileTroll_01	3	0	0
+AI.AIAgent.Creature.Troll.TC_TrollAdult_01.CombatMoves_TrollAdult	2	0	0
+AI.AIAgent.Human.AIAgentConfig_Navigation_Human	1	0	0
+AI.AIAgent.Human.Config.OCR_GRD_Scatty_210.DailyRoutine_OCR_GRD_Scatty_210	5	0	0
+AI.AIAgent.Orc.Combat.Staff.Spells.BallLighting.GA_Spell_BallLightning_Orc	2	0	0
+AI.AIAgent.Orc.Combat.Staff.Spells.BreathOfDeath.GA_Spell_BreathOfDeath_Orc	1	0	0
+AI.AIAgent.Orc.Combat.Staff.Spells.Fireball.GA_Spell_FireBall_Orc	2	0	0
+AI.AIAgent.Orc.Combat.Staff.Spells.StormOfFire.GA_Spell_StormOfFire_Orc	1	0	0
+AI.AIAgent.Orc.Generic.AIState_Combat_Orc_Generic	1	0	0
+AI.AIAgent.Orc.Living.AbilityTask_Interaction_Orc	1	0	0
+AI.AIAgent.Orc.Living.LivingAI_Orc	2	0	0
+AI.AIItemScoring	13	0	0
+AI.AssessmentResponseSystem.AssessmentBits	26	0	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	7	2	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CreepingEvaluationContext	3	1	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeDefinitions	3	0	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	3	0	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingResponse	4	0	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	43	0	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeScoring	7	0	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.LastSeenPlayerContext	1	0	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.PickpocketEvaluationContext	3	1	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.TheftEvaluationContext	3	1	0
+AI.AssessmentResponseSystem.EventResponses	21	0	0
+AI.CharacterAI_Gothic	13	0	0
+AI.CharacterAI_Human	1	0	0
+AI.CharacterAI_Orc	2	0	0
+AI.DailyRoutines.DailyRoutines_OG	3	0	0
+AI.Interactions.AbilityTask_Interaction_Human	1	0	0
+AI.NativeAICommands	15	0	0
+AI.NearbyCharacterAICommands	2	0	0
+AI.Relationship.PersonalRelationshipModifiers	5	0	0
+AI.States.AIState_AmbientConversation	2	0	0
+AI.States.AIState_CarryObject	3	0	0
+AI.States.AIState_DailyRoutine	3	0	0
+AI.States.AIState_FollowCharacterAggressive	6	0	0
+AI.States.AIState_FollowCreator	1	0	0
+AI.States.AIState_FoundSomeoneInMyBed	1	0	0
+AI.States.AIState_GuideCharacter	10	1	0
+AI.States.AIState_InteractWinchGate	2	0	0
+AI.States.AIState_MoveTogether	1	0	0
+AI.States.AIState_UseFreepoint	1	0	0
+AI.States.AIState_WaitInQueue	1	0	0
+AI.States.AIState_WanderAimlessly	1	0	0
+AI.States.AIState_WanderAimlessly_Run	1	0	0
+AI.States.AIState_WanderAimlessly_Sprint	1	0	0
+AI.States.AIState_WarnAggressor	1	0	0
+AI.States.FightAI.AIGroup_ConflictInstance	5	1	0
+AI.States.FightAI.AIGroup_StateEvent	2	0	0
+AI.States.FightAI.AIState_Defeated	1	0	0
+AI.States.FightAI.AIState_PerceptionResponse	3	0	0
+AI.States.FightAI.AssessGoToDailyRoutineState.UAIState_AssessGoToDailyRoutine	2	0	0
+AI.States.FightAI.CharmedState.AIState_Charmed	1	0	0
+AI.States.FightAI.CombatEndActionsState.AIState_AcceptDefeat	1	0	0
+AI.States.FightAI.CombatEndActionsState.AIState_ClaimVictory	1	0	0
+AI.States.FightAI.CombatEndActionsState.AIState_CombatEndActions	7	0	0
+AI.States.FightAI.CombatState.AICombatBehaviorTree	27	2	0
+AI.States.FightAI.CombatState.AICombatBehaviorTreeGenerators	1	0	0
+AI.States.FightAI.CombatState.AICombatFitnessMultipliers	2	0	0
+AI.States.FightAI.CombatState.AICombatRoleSystem	5	0	0
+AI.States.FightAI.CombatState.AICombatTargetScoring	3	0	0
+AI.States.FightAI.CombatState.AIGroup_Attackers	6	0	0
+AI.States.FightAI.CombatState.AIGroup_Combat	12	0	0
+AI.States.FightAI.CombatState.AIState_Combat	6	0	0
+AI.States.FightAI.CombatState.AIState_Combat_Creature	4	0	0
+AI.States.FightAI.CombatState.AIState_Combat_Human	1	0	0
+AI.States.FightAI.CombatState.AIState_Combat_Humanoid	2	0	0
+AI.States.FightAI.CombatState.AIState_OGCombat	26	0	0
+AI.States.FightAI.CombatState.CombatBehaviorSets.CombatBehaviorSet	3	0	0
+AI.States.FightAI.CombatState.CombatBehaviorSets.UnreachableEnemy.CombatBehaviorSet_UnreachableEnemy	4	0	0
+AI.States.FightAI.CombatState.CombatMoves	70	2	0
+AI.States.FightAI.CombatState.CombatOperations	2	0	0
+AI.States.FightAI.CombatState.CombatSituations	19	0	0
+AI.States.FightAI.CombatState.CombatTestClasses	1	0	0
+AI.States.FightAI.CombatState.Positioning.AICombat_Positioning	17	0	0
+AI.States.FightAI.CombatState.TauntOptionPresets	1	0	0
+AI.States.FightAI.ControlledState.AIState_Controlled	1	0	0
+AI.States.FightAI.DisengageBehavior.AIState_Disengage	2	0	0
+AI.States.FightAI.FearState.AIState_Fear	4	1	0
+AI.States.FightAI.FleeState.AIState_Flee	2	0	0
+AI.States.FightAI.FollowPerceivedCharacterState.AIState_FollowPerceivedCharacter	1	0	0
+AI.States.FightAI.GoGetGuardState.AIState_GoGetGuard	3	0	0
+AI.States.FightAI.ItemInteractionStates.AIState_InteractWithItem	2	0	0
+AI.States.FightAI.ManagedFightSubsystem	7	0	0
+AI.States.FightAI.ParalizedState.AIState_Paralyzed	1	0	0
+AI.States.FightAI.ReactionInteractions.AbilityTask_Interaction_Human_SearchAround	1	0	0
+AI.States.FightAI.SearchState.AIState_Search	26	2	0
+AI.States.FightAI.SleeperFight.Common.Abilities.GA_CheckDialogBlocker	1	0	0
+AI.States.FightAI.SleeperFight.CorKalom_Sleeper.LordDemon.Components.MadCorKalomDemonFightComponent	1	0	0
+AI.States.FightAI.SleeperFight.CorKalom_Sleeper.LordDemon.GEs_CorKalomDemon_Sleeper	2	0	0
+AI.States.FightAI.SleeperFight.CorKalom_Sleeper.LordDemon.Spell.Pyrolaser.GA_LordDemon_Pyrolaser	2	0	0
+AI.States.FightAI.SleeperFight.NC_SLD_Gorn_699_Sleeper.Abilities.ElectrifiedArenaDefinition_GornSleeper	1	0	0
+AI.States.FightAI.SleeperFight.NC_SLD_Gorn_699_Sleeper.Abilities.GornSleeper_ElectrifiedArea	3	0	0
+AI.States.FightAI.SleeperFight.OC_KDF_Milten_Sleeper.Environment.MiltenSleeper_Brazier	2	0	0
+AI.States.FightAI.SleeperFight.OC_KDF_Milten_Sleeper.Spells.Fireball.GA_Spell_FireBall_MiltenSleeper	1	0	0
+AI.States.FightAI.SleeperFight.OC_VLK_Mud_574_Sleeper.Gameplay.RegionTrait_MudSleeper_TeleportToEnd_RegionTrait	1	0	0
+AI.States.FightAI.SleeperFight.SC_NOV_Lester_Sleeper.SleeperFight_LesterCombat	4	0	0
+AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.GA_ForcePlayerSightPerceptionOnStart	1	1	0
+AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.GA_Summon_XardasSleeper_Skeleton	1	0	0
+AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.GA_Xardas_Sleeper_FightManager	2	0	0
+AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.GA_Xardas_Sleeper_HealthMonitor	1	0	0
+AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.Spells.Teleport.GA_Teleport_XardasSleeper	1	0	0
+AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.Spells.Teleport.XardasSleeperTeleportComponent	2	0	0
+AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.CombatMoves_Xardas_Sleeper	1	0	0
+AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpotManager	1	0	0
+AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpot_XardasSleeper	4	0	0
+AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.TraceTarget_XardasSleeper	1	0	0
+AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.Xardas_Sleeper_Minion_BillboardComponent	1	0	0
+AI.States.FightAI.WaitStates.AIState_Observe_Creeping	2	0	0
+AI.States.FightAI.WaitStates.AIState_WaitForBlockedPath	7	0	0
+AI.States.FightAI.WaitStates.AIState_WaitForDefeatedIntruderToLeave	1	0	0
+AI.States.FightAI.WaitStates.AIState_WaitWaryOfNearbyPerceivedCharacter	2	0	0
+AI.States.FightAI.WarnedCharacterSubsystem	3	0	0
+AI.States.FightAI.WarningState.AIGroup_Warning_Base	1	0	0
+AI.States.FightAI.WarningState.AIState_Warning	4	0	0
+AI.States.FightAI.WarningState.AIState_Warning_Creature	2	0	0
+AI.States.FightAI.WarningState.AIState_Warning_Crime	35	0	0
+AI.States.FightAI.WarningState.AIState_Warning_Human	1	0	0
+AI.States.FightAI.WatchFightState.AIGroup_WatchFight	3	3	0
+AI.States.FightAI.WatchFightState.AIState_WatchFight	24	2	0
+AI.States.FightAI.WatchFightState.AIState_WatchHostile	1	0	0
+AI.Test.Test_DailyRoutines	2	0	0
+Camera.ConversationCameraConfig	1	0	0
+Environment.GothicUltraDynamicControlerAS	9	0	0
+FX.DepthOfField.DepthOfFieldController	1	0	0
+Formulas.LevelFormula	2	0	0
+GAS.Abilities.Combat.AttackLoop.Base.GA_AttackLoop	3	0	0
+GAS.Abilities.Combat.AttackLoop.Capsule.GA_AttackLoopCapsule	2	0	0
+GAS.Abilities.Combat.AttackLoop.Capsule.PyrolaserHitCapsuleComponent	1	0	0
+GAS.Abilities.Combat.AttackLoop.Cone.GA_AttackLoopCone	2	0	0
+GAS.Abilities.Combat.GA_AllowStrafeOnNonStrafableCreatures	1	0	0
+GAS.Abilities.Combat.GA_AttackThrow	1	0	0
+GAS.Abilities.HUD.GA_BossHealthBar	1	0	0
+GAS.Abilities.Interact.GA_Human_CallInteractFunction	1	0	0
+GAS.Abilities.Interact.GA_Human_Lever	1	0	0
+GAS.Abilities.Interact.GA_Human_Loot	8	0	0
+GAS.Abilities.Interact.GA_Human_SmashMeatBug	1	0	0
+GAS.Abilities.Interact.GA_Human_StationTeleport	1	0	0
+GAS.Abilities.Interact.Sleep.Base.GA_Human_Sleep	1	0	0
+GAS.Abilities.Locomotion.GA_Defeated	1	0	0
+GAS.Abilities.Locomotion.GA_Dodge	1	0	0
+GAS.Abilities.Locomotion.GA_Falling	3	0	0
+GAS.Abilities.Locomotion.GA_FallingRagdoll	1	0	0
+GAS.Abilities.Locomotion.GA_Swim	1	0	0
+GAS.Abilities.Locomotion.Target.Config.Base.CharacterTargetConfig	1	0	0
+GAS.Abilities.Locomotion.Target.GA_TargetEnemy	1	0	0
+GAS.Abilities.Memory.GA_RememberDamage	2	0	0
+GAS.Abilities.Passive.Drugs.Base.GA_DrugDebuffBase	1	0	0
+GAS.Abilities.Passive.Drugs.Derived.Alcohol.GA_AlcoholDebuff	1	0	0
+GAS.Abilities.Passive.Drugs.Derived.Swampweed.GA_Swampweed	2	0	0
+GAS.Abilities.Passive.GA_PlayerPerception_CrimeRegistration	7	0	0
+GAS.Abilities.Spells.CastSpell.Base.GA_CastSpell_Default	1	0	0
+GAS.Abilities.Spells.CastSpell.Base.GA_CastSpell_Rechargeable	1	0	0
+GAS.Abilities.Spells.CastSpell.Base.GA_CastSpell_RechargeableWithoutTransitions	1	0	0
+GAS.Abilities.Spells.CastSpell.Base.Targetable.GA_CastSpell_Targetable	1	0	0
+GAS.Abilities.Spells.CastSpell.Base.Targetable.GA_CastSpell_Targetable_Mandatory	1	0	0
+GAS.Abilities.Spells.CastSpell.Derived.AlteredStates.GA_CastSpell_Control	2	0	0
+GAS.Abilities.Spells.CastSpell.Derived.Summon.Base.GA_CastSpell_SummonBase	1	0	0
+GAS.Abilities.Spells.CastSpell.Derived.Summon.GA_CastSpell_Summon_Skeletons	1	0	0
+GAS.Abilities.Spells.CastSpell.Derived.Transform.GA_CastSpell_Transform_Base	1	0	0
+GAS.Abilities.Spells.ExecutionValidator.Derived.Base.CastSpell_ExecutionValidator_Default	1	0	0
+GAS.Abilities.Spells.ExecutionValidator.Derived.Base.CastSpell_ExecutionValidator_TargetableBase	1	0	0
+GAS.Abilities.Spells.ExecutionValidator.Derived.Spell.ChainLightning.CastSpell_ExecutionValidator_ChainLightning	1	0	0
+GAS.Abilities.Spells.ExecutionValidator.Derived.Spell.Telekinesis.CastSpell_ExecutionValidator_Telekinesis	2	0	0
+GAS.Abilities.Spells.GA_FreezeTimeForScreenshots	1	0	0
+GAS.Abilities.Spells.Spells.Base.GA_Spell_BasicWithTarget	1	0	0
+GAS.Abilities.Spells.Spells.Base.GA_Spell_SpawnRechargeableProjectile	2	0	0
+GAS.Abilities.Spells.Spells.Base.GA_Spell_Targetable	2	0	0
+GAS.Abilities.Spells.Spells.Control.GA_Spell_UnControl	1	0	1
+GAS.Abilities.Spells.Spells.Creature.Common.SummonCreatureByHealth.CreatureSummonVisual	2	0	0
+GAS.Abilities.Spells.Spells.Creature.FireDemon.GA_HellArms_Damage_Loop	1	0	0
+GAS.Abilities.Spells.Spells.Electric.ChainLightning.GA_Spell_ChainLightning	12	1	0
+GAS.Abilities.Spells.Spells.Electric.GA_Spell_BallLightning	1	0	0
+GAS.Abilities.Spells.Spells.Fire.GA_Spell_Fireball	2	0	0
+GAS.Abilities.Spells.Spells.Fire.GA_Spell_StormOfFire	1	0	0
+GAS.Abilities.Spells.Spells.Heal.GA_Spell_Heal	1	0	0
+GAS.Abilities.Spells.Spells.Pyrokinesis.GA_Spell_Pyrokinesis	1	0	0
+GAS.Abilities.Spells.Spells.Summon.Base.GA_Spell_Summon	3	0	0
+GAS.Abilities.Spells.Spells.Summon.Derived.StoneHengeSkeletonsSummon.GA_Summon_SH_Skeleton	1	0	0
+GAS.Abilities.Spells.Spells.Summon.Derived.VarragSummon.GA_Summon_Varrag	1	0	0
+GAS.Abilities.Spells.Spells.Summon.SpawnHelper.Base.SummonSpawnPlaceHelper	2	0	0
+GAS.Abilities.Spells.Spells.Summon.SpawnHelper.CircleSummonSpawnPlaceHelper	4	1	0
+GAS.Abilities.Spells.Spells.Telekinesis.GA_Spell_Telekinesis	2	0	0
+GAS.Abilities.Spells.Spells.Telekinesis.GA_Spell_Telekinesis_FocusStoneBridge	1	0	0
+GAS.Abilities.Spells.Spells.Telekinesis.TelekinesisItemMovementVisual	1	0	0
+GAS.Abilities.Spells.Spells.Teleport.TeleportSpotVisual	1	0	0
+GAS.Abilities.Spells.Spells.Transform.GA_Spell_Transform	2	0	0
+GAS.Abilities.Spells.Spells.Wind.GA_Spell_StormFist	1	0	0
+GAS.Abilities.Spells.Visuals.DeathToTheUndead.DeathToTheUndeadVisual	1	0	0
+GAS.Abilities.Spells.Visuals.Electric.LightningRayVisual	5	0	0
+GAS.Abilities.Spells.Visuals.Environment.ElectrifiedArea_FocusStonePuzzle	3	0	0
+GAS.Abilities.Spells.Visuals.Fire.FireRainVisual	8	0	0
+GAS.Abilities.Spells.Visuals.Fire.InnosPrayVisual	4	0	0
+GAS.Abilities.Spells.Visuals.Fire.StormOfFireVisual	1	0	0
+GAS.Abilities.Spells.Visuals.Ice.IceBlockVisual	1	0	0
+GAS.Abilities.Spells.Visuals.Ice.IceWaterSurface	2	0	0
+GAS.Abilities.Spells.Visuals.Light.LightVisual	4	0	0
+GAS.Abilities.Spells.Visuals.Projectile.Base.ProjectileDamageExplosionVisual	1	0	0
+GAS.Abilities.Spells.Visuals.ProjectileVisual	2	0	0
+GAS.Abilities.Spells.Visuals.SphereExplosion.SphereExplosionSpellVisual	1	0	0
+GAS.Abilities.Spells.Visuals.UrizielWaveOfDeath.UrizielWaveOfDeathVisual	4	0	0
+GAS.Abilities.Spells.Visuals.VisualShapes.CollisionShapeVisual	1	0	0
+GAS.Abilities.Spells.Visuals.Wind.StormFistVisual	1	0	0
+GAS.Abilities.TraceTarget.Base.GA_TraceTarget_Base	2	0	0
+GAS.Abilities.TraceTarget.Derived.GA_TraceTarget_Item	2	0	0
+GAS.Calculations.Damage	8	0	0
+GAS.Calculations.Damage_FocusStonePuzzle	1	0	0
+GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Drugs.Base.DrugDebuffEffectComponentBase	3	0	0
+GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Sleep.GA_SleepDebuffEffectGameplayAbility	1	0	0
+GAS.Effects.Debuffs.EffectStateComponent.DebuffEffectActors.SlowdownDebuffEffectActor	1	0	0
+GAS.Effects.Debuffs.GE_Damage	1	0	0
+GAS.Effects.Items.EquipAbilitesSpell.FloatingItem.GA_GameplayAbilityFloatingItem	1	0	0
+GAS.Effects.Skills.GE_Skills_Helpers	1	0	0
+GAS.Effects.Tests.Effect_GiveExperience	1	0	0
+GAS.GASCharacterMixins	9	0	0
+GAS.GASCharacterStateMixins	25	0	0
+GAS.PerceptionEventMixins	3	0	0
+Gameplay.Environment.Base.EnvironmentGenericInteractionComponent	2	0	0
+Gameplay.Environment.BattleBlockingBarrier.BattleBarrierVisual	1	0	0
+Gameplay.Environment.BattleBlockingBarrier.BattleBlockingBarrierManager	2	0	0
+Gameplay.Environment.BattleBlockingBarrier.StageBarrierVisual	1	0	0
+Gameplay.Environment.Fire.FireVisualComponentAS	2	0	0
+Gameplay.Environment.FocusStoneBridge.TelekinesisFocusStoneBridge	1	0	0
+Gameplay.Environment.Lava.EnvironmentLavaInteractionComponent	2	0	0
+Gameplay.Environment.Lava.Environment_LavaDefinition	1	0	0
+Gameplay.Environment.MCQueen.CeilingMinionSpawner.MCQueen_MinionCeilingSpawner	3	0	0
+Gameplay.Environment.SleeperDreams.Mine.ForcedMudTeleportPlayerDetectionActor	1	0	0
+Gameplay.Environment.StageManager.InExtremoBanner	2	0	0
+Gameplay.Environment.ThrowItem.ThrowItemDamageVisual	1	0	0
+Gameplay.Environment.WeatherLightingMagnet.WeatherLightingMagnet	1	0	0
+Gameplay.Magic.Components.Creatures.Base.CreatureTeleportComponent	1	0	0
+Gameplay.Magic.Components.Damage.PercentageDamageLimiterComponent	1	0	0
+Gameplay.Magic.Components.Damage.WaterDamageLimiterComponent	1	0	0
+Gameplay.Magic.Components.InExtremo.InExtremoPropComponent	3	0	0
+Gameplay.Magic.Components.Spell.Summon.SummonManagerComponent	1	0	0
+InteractiveObjects.CinematicInteractives	1	0	0
+InteractiveObjects.GothicTriggerVolume	1	0	0
+InteractiveObjects.MixedObjectsPresets	1	0	0
+InteractiveObjects.PuzlesBlood	1	0	0
+InteractiveObjects.Puzzles	1	0	0
+InteractiveObjects.PuzzlesFiresMage	5	0	0
+InteractiveObjects.PuzzlesWaterMage	4	0	0
+InteractiveObjects.RandomLockPools	2	0	0
+Items.Environment.CustomPointLight	1	0	0
+Items.GenericItems.TraderConfigBase	1	0	0
+Items.Projectiles	4	0	0
+Items.Visual.Projectile.Arrow.Base.ArrowProjectileVisual_Base	3	0	0
+LevelScripts.Map_x2_y1_OldCamp_AI_script	1	0	0
+LevelScripts.Tundra_AI	1	0	0
+LevelScripts.WorldDefinition	1	0	0
+LoadingScreen.LoadingScreenChapterBase	2	0	0
+LoadingScreen.LoadingScreenSetupTest	2	0	0
+LoadingScreen.LoadingScreens.LoadingScreen_BlackScreen	1	0	0
+LoadingScreen.LoadingScreens.LoadingScreen_GeneralHints	1	0	0
+LoadingScreen.LoadingScreens.LoadingScreen_Intro	1	0	0
+LoadingScreen.StreamingLoadingScreenSetup	1	0	0
+Player.PlayerConfig	1	0	0
+Player.PuzzlesConfig	4	0	0
+Regions.Ownership.OCCastle.Ownership_OCCastle_BeforeFireMagesDead	3	0	0
+Regions.Traits.GameplayEffect.Damage.Base.DamageTraits	1	0	0
+Regions.Traits.GameplayEffect.Damage.FireDamageTraits	1	0	0
+Regions.Traits.GameplayEffect.GameplayEffectTraits	1	0	0
+Regions.Traits.QuestRelatedTraits	14	0	0
+Sound.BackgroundMusicConfig	1	0	0
+Sound.FXDefinitions.FXDefinitions_AttackImpact	3	0	0
+Sound.FXDefinitions.FXDefinitions_Footsteps	1	0	0
+Sound.FXDefinitions.FXDefinitions_Orc	2	0	0
+Sound.FXDefinitions.FXDefinitions_Projectiles	1	0	0
+Sound.MusicRegions	2	0	0
+Spawning.TriggerSpawner	2	0	0
+Story.Achievements	12	0	0
+Story.G1R.Conversation.Conversation_Generic_AboutCamp_NC_ORG	6	0	0
+Story.G1R.Conversation.Conversation_NC_BAU_RICELORD_900	1	0	0
+Story.G1R.Conversation.Conversation_NC_ORG_DRAX_819	1	0	0
+Story.G1R.Conversation.Conversation_NC_ORG_LEFTY_844	1	0	0
+Story.G1R.Conversation.Conversation_NC_ORG_ROSCOE_840	1	0	0
+Story.G1R.Conversation.Conversation_NC_SLD_LEE_700	1	0	0
+Story.G1R.Conversation.Conversation_OC_GRD_ORRY_254	1	0	0
+Story.G1R.Conversation.Conversation_OC_GRD_THORUS_200	1	0	0
+Story.G1R.Conversation.Conversation_OC_KDF_CORRISTO_402	1	0	0
+Story.G1R.Conversation.Conversation_OC_ORG_MORDRAG_826	1	0	0
+Story.G1R.Conversation.Conversation_OC_STT_DIEGO	1	0	0
+Story.G1R.Conversation.Conversation_OC_VLK_GRIM_580	1	0	0
+Story.G1R.Conversation.Conversation_OC_WOC_VELAYA_108	1	0	0
+Story.G1R.Conversation.Conversation_OW_OSM_URNAZKROG_2401	1	0	0
+Story.G1R.Conversation.Conversation_OW_OWR_TOCHURNAGG_2403	1	0	0
+Story.G1R.Conversation.Conversation_SC_GUR_YBERION_1200	1	0	0
+Story.G1R.Conversation.Conversation_SC_NOV_DARRION_1312	1	0	0
+Story.G1R.Conversation.Conversation_SC_NOV_LESTER	2	0	0
+Story.G1R.Conversation.Conversation_SC_NOV_NYRAS_1303	1	0	0
+Story.G1R.Conversation.Conversation_SC_NOV_TALAS_1300	1	0	0
+Story.G1R.Conversation.Conversation_UL_ORG_AIDAN_859	1	0	0
+Story.G1R.Conversation.Conversation_UL_ORG_BLACKMAILER_888	3	0	0
+Story.G1R.Conversation.Conversation_UL_ORG_ROGUE03_1503	1	0	0
+Story.G1R.Conversation.Conversation_UL_OSL_UrShak_2200	1	0	0
+Story.G1R.Conversation.Conversation_UL_STT_CAVALORN_336	1	0	0
+Story.G1R.Conversation.Conversation_UNITTEST_UNITTEST_UNITTEST_2203	9	0	0
+Story.G1R.Conversation.Conversation_XT_DMB_XARDAS_404	1	0	0
+Story.G1R.GenericVoiclines	2	0	0
+Story.Support.DialogImport	5	0	0
+Story.Support.DialogTeaching	4	0	0
+Story.Support.G1R.Cinematics	6	0	0
+Story.Support.G1R.StoryFunctions	19	0	0
+UI.UIHelperScript	1	0	0
