@@ -13325,11 +13325,15 @@ fn unwrap_untested_bool_return(body: &str, f: &Func, refs: &RefResolver) -> Stri
     // that produced it. A fixed count of instructions is not that window — a value type's
     // destructors alone can fill it, and a real test then falls outside and goes unseen. The
     // destructors are skipped by name, because they are calls too.
+    // Both spellings of a destructor: the behaviour slot and the generated `~Dtor` name the
+    // cache also carries. Skipping only one leaves the other looking like the call that produced
+    // the value, which starts the tail past a test the function really performed.
     let destructor = |at: usize| {
         instrs.get(at).is_some_and(|ins| {
             ins.op.name == "CALLSYS"
-                && refs.func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64)
-                    == Some("$beh2")
+                && refs
+                    .func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64)
+                    .is_some_and(|name| name == "$beh2" || name.starts_with('~'))
         })
     };
     let tail = instrs[..ret]
