@@ -127,15 +127,50 @@ pub fn warning_for_module(
     if known.divergent_functions == 0 {
         return None;
     }
-    let functions = if known.divergent_functions == 1 {
-        "1 function".to_owned()
-    } else {
-        format!("{} functions", known.divergent_functions)
+    let count = |n: usize, noun: &str| {
+        if n == 1 {
+            format!("1 {noun}")
+        } else {
+            format!("{n} {noun}s")
+        }
     };
-    let mut line = format!(
-        "warning: {module} carries {functions} the decompiler does not reproduce as the same \
-         program. Splicing this module recompiles all of it, so those come out changed as well"
-    );
+    // Generated `__InitDefaults` methods are conditional: an overlay that omits its `default`
+    // statements has them carried over from the base cache byte-for-byte and they do not travel,
+    // while one that authors them recompiles them and they do. Where they are ALL a module has,
+    // saying flatly that its functions come out changed contradicts the caveat that follows.
+    let recompiled = known.divergent_functions - known.generated_methods;
+    let mut line = if recompiled == 0 {
+        format!(
+            "warning: {module} carries {} the decompiler does not reproduce as the same program. \
+             An overlay that omits its `default` statements carries {} over byte-for-byte and \
+             nothing changes; one that authors them recompiles {}",
+            count(known.generated_methods, "generated `__InitDefaults` method"),
+            if known.generated_methods == 1 {
+                "it"
+            } else {
+                "them"
+            },
+            if known.generated_methods == 1 {
+                "it"
+            } else {
+                "them"
+            },
+        )
+    } else {
+        let mut line = format!(
+            "warning: {module} carries {} the decompiler does not reproduce as the same program. \
+             Splicing this module recompiles all of it, so those come out changed as well",
+            count(recompiled, "function"),
+        );
+        if known.generated_methods > 0 {
+            line.push_str(&format!(
+                ". It also carries {}, which an overlay that omits its `default` statements \
+                 carries over byte-for-byte instead of recompiling",
+                count(known.generated_methods, "generated `__InitDefaults` method"),
+            ));
+        }
+        line
+    };
     if known.behaviour_risks > 0 {
         let loops = if known.behaviour_risks == 1 {
             "1 loop in it recompiles".to_owned()
@@ -145,20 +180,6 @@ pub fn warning_for_module(
         line.push_str(&format!(
             ", and {loops} with a bound of zero, so the body never runs. Check that before \
              shipping"
-        ));
-    }
-    if known.generated_methods > 0 {
-        let generated = if known.generated_methods == 1 {
-            "One of them is a generated `__InitDefaults` method".to_owned()
-        } else {
-            format!(
-                "{} of them are generated `__InitDefaults` methods",
-                known.generated_methods
-            )
-        };
-        line.push_str(&format!(
-            ". {generated}, which an overlay that omits its `default` statements carries over \
-             byte-for-byte instead of recompiling"
         ));
     }
     line.push('.');
