@@ -110,6 +110,43 @@ impl BcType {
 /// CallPtr.
 pub const STACK_INC_VARIABLE: i32 = 0xFFFF;
 
+impl BcType {
+    /// Whether the first word operand is a DESTINATION this instruction writes.
+    ///
+    /// The `wW` in the format name is exactly that claim — AngelScript's own naming, carried
+    /// through from `asBCInfo`. Reading it here beats keeping a list of mnemonics by hand: the
+    /// width conversions alone (`uTOi64`, `i64TOf`, `u64TOd`, and their kin) are two dozen
+    /// opcodes that write a destination, and a list that forgets one silently reports the slot
+    /// as never written.
+    pub fn writes_first_word(self) -> bool {
+        matches!(
+            self,
+            BcType::wW_ARG
+                | BcType::wW_rW_rW_ARG
+                | BcType::wW_QW_ARG
+                | BcType::wW_rW_ARG
+                | BcType::wW_DW_ARG
+                | BcType::wW_rW_DW_ARG
+                | BcType::wW_W_ARG
+        )
+    }
+}
+
+impl OpInfo {
+    /// Whether this instruction hands control to another function.
+    ///
+    /// The table already says so. Every call form carries the runtime stack-delta sentinel,
+    /// because how much it pops depends on the callee that answers; `RET` shares the sentinel for
+    /// the same reason and is the one exception. `Thiscall1` is the fork's own call and carries a
+    /// fixed delta instead, so it is named.
+    ///
+    /// Written once here because the alternative is a list of mnemonics per site, and four such
+    /// lists in this crate each turned out to be missing a different member.
+    pub fn is_call(&self) -> bool {
+        (self.stack_inc == STACK_INC_VARIABLE && self.name != "RET") || self.name == "Thiscall1"
+    }
+}
+
 /// One row of the `asBCInfo[256]` table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OpInfo {

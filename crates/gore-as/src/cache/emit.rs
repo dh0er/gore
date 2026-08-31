@@ -1929,6 +1929,8 @@ fn emit_function_ctor(
             &already_declared_at_use,
             &first_use_suppressed,
         );
+        // What vanilla actually stores, rather than what our text can prove about its own reads.
+        let vanilla_initialises = slots_vanilla_initialises(f);
         // Where the declarations start, so the whole block plus the body it heads can be handed
         // to the sink below: a declaration only moves once it stands next to the code that uses
         // it, and the two are written from different places.
@@ -1971,7 +1973,12 @@ fn emit_function_ctor(
                 // restricted to proven-enum functions with several assignments; the proof does
                 // not depend on either.
                 && (first_top_level_assignment_before_read(&body, *slot)
-                    || all_reads_lexically_dominated_by_assignment(&body, *slot))
+                    || all_reads_lexically_dominated_by_assignment(&body, *slot)
+                    // …or vanilla never stores a zero into it AND our text hands it straight to
+                    // a call. Vanilla's silence settles what the two proofs above are reaching
+                    // for; the argument position is what makes a bare primitive legal at all.
+                    || (!vanilla_initialises.contains(slot)
+                        && first_mention_is_a_bare_argument(&body, *slot)))
             {
                 let _ = writeln!(s, "{ind}    {ty} local_{slot};");
             } else if is_primitive(ty) {
@@ -2103,6 +2110,8 @@ fn emit_function_ctor(
         let text: Vec<String> = rendered.lines().map(str::to_owned).collect();
         let a_third_life = slots_with_a_third_life(&text);
         let several_lives = slots_with_several_lives(&text);
+        let returned_by_reference = reference_return_slots(f);
+        let block_scoped = block_scoped_value_slots(f, refs);
         let rendered = inline_unnamed_value_temporaries(
             &rendered,
             &unnamed_value_defs(f, refs)
@@ -2127,6 +2136,14 @@ fn emit_function_ctor(
                         .filter(|slot| !a_third_life.contains(slot))
                         .flat_map(|slot| [(slot, 1), (slot, 2)]),
                 )
+                // Both witnesses name one LIFE of a slot while the candidates are per life, so
+                // review asked these to stand down where the text carries several. Measured, that
+                // costs a function and buys none: `ABattleBarrierVisual::DoCheck` names an
+                // `FString` in a slot that has other lives, and standing down inlines it. Holding
+                // the name for every life of the slot is the conservative direction — it can leave
+                // a name where none was needed, which is a spelling; dropping one loses a value.
+                .filter(|(slot, _)| !returned_by_reference.contains(slot))
+                .filter(|(slot, _)| !block_scoped.contains(slot))
                 .collect(),
             &wholly_consumed_object_slots(f),
             &rvo_temporary_slots(f, refs),
@@ -2138,6 +2155,8 @@ fn emit_function_ctor(
         let mut rendered = rendered;
         // A returned expression folds one step per pass: three names in a chain need three.
         for _ in 0..3 {
+        let returned_by_reference = reference_return_slots(f);
+        let block_scoped = block_scoped_value_slots(f, refs);
         let text: Vec<String> = rendered.lines().map(str::to_owned).collect();
         let a_third_life = slots_with_a_third_life(&text);
         let several_lives = slots_with_several_lives(&text);
@@ -2165,6 +2184,14 @@ fn emit_function_ctor(
                         .filter(|slot| !a_third_life.contains(slot))
                         .flat_map(|slot| [(slot, 1), (slot, 2)]),
                 )
+                // Both witnesses name one LIFE of a slot while the candidates are per life, so
+                // review asked these to stand down where the text carries several. Measured, that
+                // costs a function and buys none: `ABattleBarrierVisual::DoCheck` names an
+                // `FString` in a slot that has other lives, and standing down inlines it. Holding
+                // the name for every life of the slot is the conservative direction — it can leave
+                // a name where none was needed, which is a spelling; dropping one loses a value.
+                .filter(|(slot, _)| !returned_by_reference.contains(slot))
+                .filter(|(slot, _)| !block_scoped.contains(slot))
                 .collect(),
             &wholly_consumed_object_slots(f),
             &rvo_temporary_slots(f, refs),
@@ -2177,6 +2204,21 @@ fn emit_function_ctor(
                 &argument_constructed_slots(f, refs),
                 refs,
             );
+        // The witness names one LIFE of a slot while the search inside is textual and global, so
+        // for a reused slot it could restore the `T()` belonging to a different life — moving an
+        // unrelated construction across the arguments beside it. Those slots stand down.
+        //
+        // Asked of the BYTECODE, not of the text: this pass exists for slots whose name the folds
+        // already took away, so counting `local_N` identifiers would find one life left and call
+        // the slot single-lived exactly where it is not.
+        let declared_arguments: Vec<(i32, String)> = {
+            let reused = slots_constructed_more_than_once(f, refs);
+            declared_argument_constructions(f, refs)
+                .into_iter()
+                .filter(|(slot, _)| !reused.contains(slot))
+                .collect()
+        };
+        let rendered = restore_named_argument_temporaries(&rendered, &declared_arguments);
         let rendered = fold_widening_aliases(&rendered, &declared_locals, &path_roots, &widened);
         let rendered =
             spell_out_default_temporaries(&rendered, &default_only_construction_counts(f, refs));
@@ -2212,6 +2254,7 @@ fn emit_function_ctor(
         // After the carrier chains are whole: the source declared a witnessed carrier on its
         // initialiser, and the initialiser is only one statement once the arms have rejoined.
         let rendered = sink_carrier_declarations(&rendered, &declared_at_initializer_carriers(f));
+        let rendered = unwrap_untested_bool_return(&rendered, f, refs);
         let rendered = fold_literal_null_returns(
             &rendered,
             &literal_null_return_slots(f),
@@ -9095,12 +9138,10 @@ fn argument_constructed_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
     };
-    let pushes = |name: &str| {
-        matches!(
-            name,
-            "PshV4" | "PshV8" | "PshVPtr" | "PshC4" | "PshC8" | "PshGPtr" | "PshNull" | "PSF"
-        )
-    };
+    // Every push, by the family name rather than by a list of members. `PshG4` and `PshRPtr` are
+    // pushes as much as `PshV4` is, and a list that omits them says the argument run had not
+    // started when it had — which moves a construction ahead of the whole call.
+    let pushes = |name: &str| name.starts_with("Psh") || name == "PSF";
     let mut out = HashSet::new();
     for (at, pair) in instrs.windows(2).enumerate() {
         if pair[0].op.name != "PSF" || pair[1].op.name != "CALLSYS" || at == 0 {
@@ -9118,6 +9159,137 @@ fn argument_constructed_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
                 out.insert(slot);
             }
         }
+    }
+    out
+}
+
+/// The other side of that witness: a value vanilla built BEFORE the argument run.
+///
+/// The compiler pushes arguments in order, so a construction standing among them was written
+/// among them — that is [`argument_constructed_slots`]. A construction standing in FRONT of the
+/// first push was a statement of its own, and the argument that follows is the name it gave.
+/// `AFirewallBoundaryChecker::ApplyGameplayEffectToTarget` builds `v144` and only then pushes
+/// `null`; we push `null` first and build `v144` among the arguments, which is the same
+/// instructions in the order the source did not write them.
+///
+/// Returns the slot with the type name the construction's owner carries, because the text has to
+/// be able to spell the declaration. Only where the slot is pushed again afterwards — a value
+/// built and never handed anywhere is a different shape and none of this rule's business.
+/// Slots the function constructs more than once.
+///
+/// Two constructions of one frame slot are two lives of it, whatever the rendered text still
+/// calls them. This is the reuse question asked where it can be answered: the folds take names
+/// away, so a text that shows one `local_N` may be showing the last life standing rather than the
+/// only one there ever was.
+fn slots_constructed_more_than_once(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let mut seen: HashMap<i32, usize> = HashMap::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if ins.op.name != "PSF" {
+            continue;
+        }
+        let constructs = instrs.get(at + 1).is_some_and(|call| {
+            call.op.name == "CALLSYS"
+                && refs.func_by_ptr(call.qwords.first().copied().unwrap_or(0) as i64)
+                    == Some("$beh0")
+        });
+        if !constructs {
+            continue;
+        }
+        if let Some(slot) = ins.words.first().map(|w| *w as i16 as i32).filter(|s| *s > 0) {
+            *seen.entry(slot).or_default() += 1;
+        }
+    }
+    seen.into_iter()
+        .filter(|(_, count)| *count > 1)
+        .map(|(slot, _)| slot)
+        .collect()
+}
+
+fn declared_argument_constructions(f: &Func, refs: &RefResolver) -> Vec<(i32, String)> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return Vec::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    // Every push, by the family name rather than by a list of members. `PshG4` and `PshRPtr` are
+    // pushes as much as `PshV4` is, and a list that omits them says the argument run had not
+    // started when it had — which moves a construction ahead of the whole call.
+    let pushes = |name: &str| name.starts_with("Psh") || name == "PSF";
+    let mut out = Vec::new();
+    for at in 1..instrs.len().saturating_sub(1) {
+        if instrs[at].op.name != "PSF" || instrs[at + 1].op.name != "CALLSYS" {
+            continue;
+        }
+        let ptr = instrs[at + 1].qwords.first().copied().unwrap_or(0) as i64;
+        if refs.func_by_ptr(ptr) != Some("$beh0")
+            || refs.func_params_by_ptr(ptr).map(|p| p.len()) != Some(0)
+        {
+            continue;
+        }
+        let slot = w0(&instrs[at]);
+        if slot <= 0 || pushes(instrs[at - 1].op.name) {
+            continue;
+        }
+        // The construction has to come before the argument RUN, not merely before its own push.
+        // Where the slot's push follows the construction immediately, the arguments in front of
+        // it were pushed first and the value was built among them — an inline temporary, whatever
+        // stands before it. `UCM_QuickShot` builds its event data one instruction before handing
+        // it over, and reading that as a declaration moved the construction across a receiver
+        // that runs.
+        let own_push = instrs[at + 2..]
+            .iter()
+            .take(12)
+            .position(|ins| ins.op.name == "PSF" && w0(ins) == slot);
+        let handed_on = own_push.is_some_and(|offset| offset > 0);
+        let Some(ty) = refs.func_owner_by_ptr(ptr) else {
+            continue;
+        };
+        if handed_on && matches!(ty.bytes().next(), Some(b'F') | Some(b'T')) {
+            out.push((slot, ty.to_owned()));
+        }
+    }
+    out
+}
+
+/// Give those constructions back their name.
+///
+/// The inline spelling is `T()` standing where an argument goes. It becomes a declaration on its
+/// own line in front of the statement, and the argument becomes the name — which is what the
+/// bytecode above says the source wrote. One site per slot: a second `T()` of the same type in
+/// the same statement cannot be told apart from the first, and guessing which is which would move
+/// a construction across an argument that also runs.
+fn restore_named_argument_temporaries(body: &str, declared: &[(i32, String)]) -> String {
+    if declared.is_empty() {
+        return body.to_owned();
+    }
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    for (slot, ty) in declared {
+        let ident = format!("local_{slot}");
+        if lines.iter().any(|line| count_ident(line, &ident) > 0) {
+            continue; // the name already stands; nothing to restore
+        }
+        let inline = format!("{ty}()");
+        let sites: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| {
+                line.matches(inline.as_str()).count() == 1
+                    && (line.contains(&format!("({inline}")) || line.contains(&format!(", {inline}")))
+            })
+            .map(|(at, _)| at)
+            .collect();
+        let [at] = sites[..] else {
+            continue;
+        };
+        let indent = indent_of(&lines[at]);
+        lines[at] = lines[at].replacen(inline.as_str(), &ident, 1);
+        lines.insert(at, format!("{indent}{ty} {ident};"));
+    }
+    let mut out = lines.join("\n");
+    if body.ends_with('\n') {
+        out.push('\n');
     }
     out
 }
@@ -12747,13 +12919,30 @@ fn short_circuit(
     // script supers above the class that reads it, and asking only the script hierarchy left
     // `A || this.bShouldExitState` standing as an if/else over a carrier in both overrides of
     // `TryConfrontCriminal`.
+    // A carrier the slot table calls `int` is still a bool wherever every value it takes is one.
+    // This build holds a bool in an int-sized slot, so the type table cannot tell the two apart —
+    // but our own `int(...)` wrap can: it is there BECAUSE the value inside it is a bool.
+    // `AssessmentBits::WitnessIsPersonalVictimOfCrime` carries
+    // `int(local_2.bWitnessIsPersonalVictim)` through an if/else that vanilla wrote as one `&&`,
+    // and the carrier's declared `int` was the only thing refusing it.
+    let unwrapped = value
+        .strip_prefix("int(")
+        .filter(|_| matching_paren(&value, 3) == Some(value.len() - 1))
+        .and_then(|rest| rest.strip_suffix(')'))
+        .map(str::to_owned)
+        .filter(|inner| renders_a_bool(inner, locals, refs, fields, roots, class_name));
+    let carrier_is_int = temporary_type(locals, &target) == Some("int");
+    let value = unwrapped.clone().unwrap_or(value);
     let value_is_bool = renders_a_bool(&value, locals, refs, fields, roots, class_name)
         || roots.get(value.as_str()).is_some_and(|ty| ty == "bool");
-    if temporary_type(locals, &target) != Some("bool") || !value_is_bool {
+    let target_is_bool = temporary_type(locals, &target) == Some("bool")
+        || (carrier_is_int && unwrapped.is_some());
+    if !target_is_bool || !value_is_bool {
         sc_reject(
-            match temporary_type(locals, &target) {
-                Some("bool") => "value-not-bool",
-                _ => "target-not-bool",
+            if target_is_bool {
+                "value-not-bool"
+            } else {
+                "target-not-bool"
             },
             lines[at],
         );
@@ -12952,6 +13141,7 @@ fn member_path_type(
     fields: Option<&HashMap<String, String>>,
     refs: &RefResolver,
     class_name: Option<&str>,
+    locals: &BTreeMap<i32, String>,
 ) -> Option<String> {
     if value.contains(['(', ')', '[', ']', ' ', '\u{1}', '\u{2}']) {
         return None;
@@ -12966,7 +13156,19 @@ fn member_path_type(
                 None => inherited_native_field_type(refs, class_name, first)?.to_owned(),
             }
         }
-        _ => roots.get(head)?.clone(),
+        // `roots` carries the paths the renderer built; a plain `local_N` head is often not one
+        // of them, and its type is sitting in the slot table the caller already holds. Without
+        // this the walk stopped at the head and `local_2.bWitnessIsPersonalVictim` was an unknown,
+        // which left `A && <that field>` standing as an if/else over a carrier.
+        _ => match roots.get(head) {
+            Some(ty) => ty.clone(),
+            None => head
+                .strip_prefix("local_")
+                .and_then(|rest| rest.split('_').next())
+                .and_then(|rest| rest.parse::<i32>().ok())
+                .and_then(|slot| locals.get(&slot))?
+                .clone(),
+        },
     };
     for field in parts {
         ty = refs
@@ -13000,7 +13202,8 @@ fn renders_a_bool(
     // once the path is walked segment by segment. Without the walk, `local_46.bWitnessIsGuildOwner`
     // is an unknown, the arm stays an if/else over a carrier, and the copy that costs is ours.
     // Measured: 86 such arms still stand, and only two of them are a bare `this.<field>`.
-    if member_path_type(value, roots, fields, refs, class_name).as_deref() == Some("bool") {
+    if member_path_type(value, roots, fields, refs, class_name, locals).as_deref() == Some("bool")
+    {
         return true;
     }
     // A negation and a comparison are bools whatever they wrap, and a fully parenthesized value
@@ -13028,6 +13231,280 @@ fn renders_a_bool(
         return true;
     }
     outer_callee(value).is_some_and(|callee| refs.names_returning(&callee) == Some("bool"))
+}
+
+/// The slots vanilla itself puts a value into before anything reads them.
+///
+/// An initialiser is a store, and the store is in the bytecode or it is not. `float d = 0.0f;`
+/// leaves a `SetV4 d, i4:0` in the prologue; a bare `float d;` leaves nothing, and AngelScript is
+/// content because the callee writes it before anything reads it. The hoist was deciding this
+/// from the TEXT — whether it could prove a write comes before every read — and defaulted to
+/// writing the initialiser when it could not. That default is a store the original does not have.
+///
+/// Any write counts, not only an immediate one: a slot filled from a call result (`CpyRtoV4`) or
+/// copied from another slot has an initialiser as surely as one given a literal, and reading only
+/// the literal stores would call it uninitialised and drop the value.
+///
+/// But only the FIRST thing that touches the slot decides it. A slot handed to a call by address
+/// and incremented afterwards is written twice over and declared bare all the same — the later
+/// writes are the body doing its work, not a declaration being given a value. So the question is
+/// which comes first, a write or a mention, and a slot whose first mention is not a write is the
+/// one vanilla declared bare: the callee fills it, and there is no read in front for the
+/// uninitialised-variable warning to fire on.
+fn slots_vanilla_initialises(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let mut initialised = HashSet::new();
+    let mut seen: HashSet<i32> = HashSet::new();
+    for ins in &instrs {
+        // Asked of the opcode FORMAT, not of a list of names: `wW` is the ISA's own word for "the
+        // first word operand is a destination I write", and a hand-kept list that forgets one
+        // reports the slot as never written and drops its value.
+        let written = (writes_destination(ins.op.name) || ins.op.fmt.writes_first_word())
+            .then(|| ins.words.first().map(|w| *w as i16 as i32))
+            .flatten()
+            .filter(|slot| *slot > 0);
+        if let Some(slot) = written {
+            if seen.insert(slot) {
+                initialised.insert(slot);
+            }
+        }
+        for slot in super::bytediff::addressed_slots(ins) {
+            if slot > 0 {
+                seen.insert(slot);
+            }
+        }
+    }
+    initialised
+}
+
+/// Whether the first thing our own text does with the slot is hand it to a call as a whole
+/// argument.
+///
+/// That is the one position where an uninitialised primitive is not merely legal but expected:
+/// the callee writes through it, and there is no read in front for the uninitialised-variable
+/// warning to fire on. `this.TauntCooldown_ByType.Find(TauntTypeTag, local_1)` is the measured
+/// shape. Anywhere else a bare declaration is a guess about our own text rather than a reading of
+/// vanilla's, and the compiler does not survive being wrong about it.
+fn first_mention_is_a_bare_argument(body: &str, slot: i32) -> bool {
+    let ident = format!("local_{slot}");
+    let Some(line) = body.lines().find(|line| count_ident(line, &ident) > 0) else {
+        return false;
+    };
+    [
+        format!("({ident},"),
+        format!("({ident})"),
+        format!(", {ident},"),
+        format!(", {ident})"),
+    ]
+    .iter()
+    .any(|shape| line.contains(shape.as_str()))
+}
+
+/// `return (int(x) != 0);` where vanilla never tested anything.
+///
+/// A bool carried in a one-byte slot reaches the return register directly — `RDR1 v ; CpyVtoR4 v ;
+/// RET`. Writing `!= 0` around it makes the compiler materialise the comparison it never had:
+/// `CMPIi v, i4:0 ; TNZ ; CpyRtoV4`. So the test instruction IS the witness. A function whose
+/// bytecode contains no `TNZ` at all did not test its returned value, and the wrap is ours.
+///
+/// The rewrite is deliberately narrow: only the return statement, only where the whole value is
+/// `int(<expr>) != 0`, and only where the expression is not itself a comparison.
+fn unwrap_untested_bool_return(body: &str, f: &Func, refs: &RefResolver) -> String {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return body.to_owned();
+    };
+    // The question is about THIS return, not about the function: a body that tests something on
+    // the way is still free to hand back its bool untested at the end. So the window is the tail
+    // that materialises the returned value — the instructions between the last call and the RET.
+    let Some(ret) = instrs.iter().rposition(|ins| ins.op.name == "RET") else {
+        return body.to_owned();
+    };
+    // The window is the tail that materialises the returned value: everything after the call
+    // that produced it. A fixed count of instructions is not that window — a value type's
+    // destructors alone can fill it, and a real test then falls outside and goes unseen. The
+    // destructors are skipped by name, because they are calls too.
+    // Both spellings of a destructor: the behaviour slot and the generated `~Dtor` name the
+    // cache also carries. Skipping only one leaves the other looking like the call that produced
+    // the value, which starts the tail past a test the function really performed.
+    let destructor = |at: usize| {
+        instrs.get(at).is_some_and(|ins| {
+            ins.op.name == "CALLSYS"
+                && refs
+                    .func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64)
+                    .is_some_and(|name| name == "$beh2" || name.starts_with('~'))
+        })
+    };
+    let tail = instrs[..ret]
+        .iter()
+        .enumerate()
+        .rposition(|(at, ins)| ins.op.is_call() && !destructor(at))
+        .map_or(0, |call| call + 1);
+    if instrs[tail..ret]
+        .iter()
+        .any(|ins| matches!(ins.op.name, "TZ" | "TNZ"))
+    {
+        return body.to_owned();
+    }
+    // Only the FINAL return is the one the tail witnesses. The last line of this shape is not
+    // necessarily that: a function can test a bool early and leave by another return entirely,
+    // and rewriting the early one against the terminal tail drops a comparison its own bytecode
+    // really performed. So the candidate has to be the last return in the body, full stop.
+    let last = body
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| {
+            let t = line.trim();
+            t.starts_with("return (int(") && t.ends_with(") != 0);")
+        })
+        .map(|(at, _)| at)
+        .last()
+        .filter(|at| {
+            body.lines()
+                .skip(at + 1)
+                .all(|line| !line.trim_start().starts_with("return"))
+        });
+    let mut out: Vec<String> = Vec::new();
+    for (at, line) in body.lines().enumerate() {
+        let rewritten = (|| {
+            if Some(at) != last {
+                return None;
+            }
+            let indent = indent_of(line);
+            let inner = line
+                .trim()
+                .strip_prefix("return (int(")?
+                .strip_suffix(") != 0);")?;
+            // `int(` has to close where the comparison begins, or the value is something else
+            // wearing the same ending.
+            (matching_paren(&format!("({inner})"), 0) == Some(inner.len() + 1))
+                .then(|| format!("{indent}return {inner};"))
+        })();
+        out.push(rewritten.unwrap_or_else(|| line.to_owned()));
+    }
+    let mut joined = out.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
+/// Value-type slots that OUTLIVED the statement they were used in.
+///
+/// A temporary dies where the expression that made it ends: the compiler releases it as soon as
+/// the call that took it returns. A slot whose release stands past a LATER call was still alive
+/// across that call, which only a named local with block scope is — and vanilla is explicit about
+/// it. `UAIState_Warning_Creature::BeginWarning` builds an `FString` in `w4`, hands it to one
+/// call, runs `Super::BeginWarning()`, and only then releases `w4`: the string is a declared local
+/// and not an argument spelled in place.
+///
+/// Both ends have to be there. A construction with no matching release says nothing, and a release
+/// with nothing between it and the last use is exactly the temporary this distinguishes itself
+/// from.
+fn block_scoped_value_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let behaviour = |at: usize, want: &str| {
+        instrs.get(at).is_some_and(|ins| {
+            ins.op.name == "CALLSYS"
+                && refs.func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64) == Some(want)
+        })
+    };
+    // A release is written either way — the behaviour slot, or the generated `~Dtor` name. Asking
+    // only for the first misses the release entirely, and the slot then looks like it was never
+    // let go rather than like the block-scoped local it is.
+    let releases = |at: usize| {
+        instrs.get(at).is_some_and(|ins| {
+            ins.op.name == "CALLSYS"
+                && refs
+                    .func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64)
+                    .is_some_and(|name| name == "$beh2" || name.starts_with('~'))
+        })
+    };
+    // Asked of the table rather than of a list. A value consumed by a call form this did not name
+    // looked like it reached no statement at all, and `Thiscall1` then `CallPtr` were each found
+    // missing in turn.
+    let calls = |at: usize| instrs.get(at).is_some_and(|ins| ins.op.is_call());
+    // Where the trailing run of releases begins: walk back from the final RET over the
+    // `PSF S; CALLSYS $beh2` pairs the compiler groups there.
+    let epilogue = {
+        let mut at = instrs
+            .iter()
+            .rposition(|ins| ins.op.name == "RET")
+            .unwrap_or(instrs.len());
+        while at >= 2
+            && releases(at - 1)
+            && instrs[at - 2].op.name == "PSF"
+        {
+            at -= 2;
+        }
+        at
+    };
+    let mut out = HashSet::new();
+    for at in 0..instrs.len() {
+        let slot = w0(&instrs[at]);
+        if instrs[at].op.name != "PSF" || slot <= 0 || !behaviour(at + 1, "$beh0") {
+            continue;
+        }
+        let Some(release) = (at + 2..instrs.len()).find(|other| {
+            instrs[*other].op.name == "PSF" && w0(&instrs[*other]) == slot && releases(other + 1)
+        }) else {
+            continue;
+        };
+        let Some(last_use) = (at + 2..release)
+            .filter(|other| {
+                matches!(instrs[*other].op.name, "PSF" | "PshVPtr") && w0(&instrs[*other]) == slot
+            })
+            .last()
+        else {
+            continue;
+        };
+        // …and the release has to stand in the function's own trailing destructor run. A slot let
+        // go mid-body outlived one statement and no more, which a temporary in a nested expression
+        // also does; only a block-scoped local is still alive when the block ends.
+        // Review asked for a call AFTER the one that consumed the value, on the grounds that the
+        // consuming call sits inside this window and makes the test trivially true. Measured, that
+        // costs a function and buys none: `ABattleBarrierVisual::DoCheck` names an `FString`, hands
+        // it to the last call in the block and releases it in the epilogue. The epilogue is the
+        // witness; the call count only says the value reached a statement at all.
+        if (last_use + 1..release).any(calls) && release >= epilogue {
+            out.insert(slot);
+        }
+    }
+    out
+}
+
+/// The slot a REFERENCE return travels out through.
+///
+/// `CpyRtoV8 S ; PshVPtr S ; PopRPtr ; RET` stores the reference an expression produced and then
+/// returns that slot. A value the compiler merely passes along does not go through a slot at all —
+/// it stays in the register — so the store is there because the source named it. The name has to
+/// survive: folded back into the return, the whole chain becomes one expression, and for a
+/// reference return that is a shape the compiler does not merely refuse, it goes down.
+fn reference_return_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let mut out = HashSet::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if ins.op.name != "CpyRtoV8" {
+            continue;
+        }
+        let slot = w0(ins);
+        let carried = instrs
+            .get(at + 1)
+            .is_some_and(|ins| ins.op.name == "PshVPtr" && w0(ins) == slot)
+            && instrs.get(at + 2).is_some_and(|ins| ins.op.name == "PopRPtr")
+            && instrs.get(at + 3).is_some_and(|ins| ins.op.name == "RET");
+        if carried && slot > 0 {
+            out.insert(slot);
+        }
+    }
+    out
 }
 
 /// The slots the text carries under more than one name.

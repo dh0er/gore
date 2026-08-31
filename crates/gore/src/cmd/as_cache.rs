@@ -2548,10 +2548,12 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let bytes = read_module_cache(&file)?;
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
+            let loaded_binds = load_native_api_with_proof(&file);
+            let binds_seal = loaded_binds.as_ref().map(|loaded| loaded.sha256);
             let stats = gore_as::cache::emit_all::PreparedEmit::new(
                 &mods,
                 &mut refs,
-                load_native_api(&file),
+                loaded_binds.map(|loaded| loaded.native),
             )
             .context("prepare emitted modules")?
             .with_class_defaults(!no_defaults)
@@ -2566,6 +2568,28 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 stats.stubbed,
                 stats.stubbed_functions
             );
+            // A whole tree is not spliced, one module of it is — so the useful figure here is how
+            // many of them an author could pick up without inheriting a difference.
+            let cache_seal = gore_as::cache::faithfulness::cache_seal(&bytes);
+            if gore_as::cache::faithfulness::is_measured(&cache_seal, binds_seal.as_ref()) {
+                let listed = mods
+                    .iter()
+                    .filter(|module| {
+                        gore_as::cache::faithfulness::for_module(
+                            &cache_seal,
+                            binds_seal.as_ref(),
+                            &module.name,
+                        )
+                            .is_some_and(|known| known.divergent_functions > 0)
+                    })
+                    .count();
+                eprintln!(
+                    "{} of {} modules recompile with no known semantic difference; the other {} carry functions this build does not reproduce as the same program — `gore as emit <cache> <module>` names them",
+                    mods.len() - listed,
+                    mods.len(),
+                    listed
+                );
+            }
         }
         AsCmd::Emit {
             file,
@@ -2576,13 +2600,16 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let bytes = read_module_cache(&file)?;
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
+            let loaded_binds = load_native_api_with_proof(&file);
+            let binds_seal = loaded_binds.as_ref().map(|loaded| loaded.sha256);
             let prepared = gore_as::cache::emit_all::PreparedEmit::new(
                 &mods,
                 &mut refs,
-                load_native_api(&file),
+                loaded_binds.map(|loaded| loaded.native),
             )
             .context("prepare emitted modules")?
             .with_class_defaults(!no_defaults);
+            let cache_seal = gore_as::cache::faithfulness::cache_seal(&bytes);
             let mut n = 0;
             for (module_index, _) in mods
                 .iter()
@@ -2593,6 +2620,14 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     break;
                 }
                 println!("{}", prepared.emit_module(module_index)?);
+                // Say it where the author first reads the source, not after the splice.
+                if let Some(warning) = gore_as::cache::faithfulness::warning_for_module(
+                    &cache_seal,
+                    binds_seal.as_ref(),
+                    &mods[module_index].name,
+                ) {
+                    eprintln!("{warning}");
+                }
                 n += 1;
             }
             eprintln!("({n} module(s))");
@@ -3262,6 +3297,37 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let binds_override = standalone_target
                 .as_ref()
                 .map(|target| target.binds_cache().to_vec());
+            // Splicing recompiles the WHOLE module, so say what else comes along with the
+            // edit. Asked of the cache that will ACTUALLY be recompiled: where script mods are
+            // deployed, that is the pristine backup selected above and not the live file, and
+            // hashing the live one would have found no measurement and said nothing.
+            let binds_seal = binds_override
+                .as_deref()
+                .map(gore_as::cache::faithfulness::cache_seal)
+                .or_else(|| {
+                    // The same path compilation will read: `GORE_AS_BINDS` when it is set, and
+                    // the installed file otherwise. Hashing the installed one regardless would
+                    // seal an input the compile is not going to use.
+                    let path = native_api_path(&shipping_path)?;
+                    std::fs::read(path)
+                        .ok()
+                        .map(|bytes| gore_as::cache::faithfulness::cache_seal(&bytes))
+                });
+            // Only an EDIT recompiles a module the base cache already has. An `add` derives its
+            // identity from the relative path and brings a module of its own, so the name given
+            // here can collide with a vanilla one and mean nothing by it.
+            if let Some(warning) = (op == "edit")
+                .then(|| {
+                    gore_as::cache::faithfulness::warning_for_module(
+                        &gore_as::cache::faithfulness::cache_seal(&base_override),
+                        binds_seal.as_ref(),
+                        &module,
+                    )
+                })
+                .flatten()
+            {
+                eprintln!("{warning}");
+            }
             let opts = gore_as::compile::CompileOpts {
                 game_dir: game,
                 op,

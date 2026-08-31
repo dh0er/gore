@@ -3297,12 +3297,19 @@ fn block_stmts_in(
                 // a reference — a value-returning opIndex would be a temp, never an lvalue), and
                 // the pending is a RESOLVED `.opIndex(` call expr (ends ')', no sentinel/unresolved)
                 // — so the lvalue is provable and the store cannot target a garbage receiver.
+                //
+                // The same rescue holds for ANY call that returns a reference, not only
+                // `opIndex`. `this.FModEvent.EventParameters.FindOrAdd(n"TrollShrunk") = 1.0f;`
+                // lowers exactly the same way, and dropping the WRTV left the parameter at its
+                // default — the troll's shrink FX never changed. What proves the lvalue is
+                // `pending_is_ref`, which the cache's own return type decides; the callee's NAME
+                // proves nothing and was only ever standing in for it.
                 let opindex_lvalue = if ref_reg.is_none() && pending_is_ref {
                     pending
                         .as_deref()
                         .filter(|p| {
-                            p.contains(".opIndex(")
-                                && p.ends_with(')')
+                            p.ends_with(')')
+                                && p.contains('(')
                                 && !p.contains('\u{2}')
                                 && !p.contains('\u{1}')
                                 && *p != UNRESOLVED
@@ -3315,12 +3322,15 @@ fn block_stmts_in(
                     // consume the pending (do NOT flush it as a bare statement) and set it as the
                     // write destination; a following field-typed cast is not needed for an element
                     // write (the element type is the array's, matched by the value's own decl).
+                    // The written WIDTH comes from what the call returns: a constant slot stored
+                    // through a float reference carries IEEE-754 bits, not an integer.
+                    let written_ty = pending_ty.clone();
                     pending = None;
                     pending_ty = None;
                     pending_is_ref = false;
                     let slot = w(ins, 0);
                     let raw = name(slot);
-                    let rhs = match ref_reg_ty.as_deref() {
+                    let rhs = match ref_reg_ty.as_deref().or(written_ty.as_deref()) {
                         Some("float32") => {
                             float_lit(&set_consts, slot, false).unwrap_or(raw.clone())
                         }
@@ -4762,6 +4772,41 @@ fn block_stmts_in(
                     })
                 {
                     v = scan_back_retval(ctx, lo + k).or(v);
+                }
+                // A reference return travels OUT THROUGH A SLOT. `CpyRtoV8 S ; PshVPtr S ;
+                // PopRPtr ; RET` stores the reference the expression produced and then returns
+                // that slot — which is a name the source wrote, not an anonymous step. The
+                // popped name is in `ref_reg` and nothing above consults it, so the value fell
+                // through to the scan-back; in `GAS/PerceptionEventMixins.as` that invented a
+                // `return OnSensedOther(Perception);` the original never calls, in 25 functions.
+                //
+                // Only where the `PopRPtr` is the RET's own immediate predecessor: further back
+                // it belongs to a member store (Idiom A), which is what `ref_reg` normally
+                // carries.
+                if non_void
+                    && !ctx.ret_via_rvo()
+                    && ctx.ret_is_ref()
+                    && (lo + k)
+                        .checked_sub(1)
+                        .and_then(|before| ctx.instrs.get(before))
+                        .is_some_and(|ins| ins.op.name == "PopRPtr")
+                {
+                    // …and only where the slot ALREADY stands in the text. Where the store was
+                    // folded away the name would have nothing behind it, and a bare
+                    // `return local_N;` for a reference return is the shape that takes the
+                    // compiler down without a diagnostic. Materialising the declaration is a
+                    // separate job; until it is done those functions keep what they had.
+                    if let Some(name) = ref_reg
+                        .clone()
+                        .filter(|name| name.starts_with("local_") && !name.contains('.'))
+                        .filter(|name| {
+                            out.iter().any(|line| {
+                                line.contains(&format!("{name} = ")) || line.contains(&format!(" {name};"))
+                            })
+                        })
+                    {
+                        v = Some(name);
+                    }
                 }
                 // value fix-ups (RVO-assign strip, declared-bool, int -> bool/enum cast) and
                 // the RVODEF default all live in the shared helper (also used by the switch

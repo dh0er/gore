@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 99.30% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 99.32% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -24,7 +24,7 @@ Everything except the splice test was measured on this build, over the **whole c
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,723 functions | **99.30%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,723 functions | **99.32%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | full corpus, earlier `D0AFAF90…` build | 7,278 of 7,308 (**99.59%**) |
 
@@ -39,7 +39,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,159 functions (0.70%) recompile to bytecode that differs semantically.** A semantic
+**1,114 functions (0.68%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -68,7 +68,7 @@ found them:
 
 The class table below is the last full classification, taken when the total stood at 3,511; its
 rows account for 2,926 of those functions. It says which shapes the work was aimed at, not what
-the remaining 1,159 are made of.
+the remaining 1,114 are made of.
 
 Classified over WHOLE functions — every instruction of both sides, not the window around the
 first divergence. An earlier revision of this document classified the window instead and reported
@@ -845,7 +845,7 @@ the rule was re-confirmed. 1,375 to 1,374.
 
 From there the run continued through the rules the sections above describe — the range-for
 container, the receiver pair, the split GAS chain, the return-expression temporary, the
-continue-only loop scope, and the declaration-order rules — down to the **1,159** the headline
+continue-only loop scope, and the declaration-order rules — down to the **1,114** the headline
 reports.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
@@ -1096,6 +1096,29 @@ Six initializers still differ after a faithful recompile, down from 37. The rest
 constants believed unspellable: `+inf` (`0x7F800000`) was written as the largest finite float and
 came back one ULP low. The language can spell it after all — an overflowing decimal literal
 (`1e39f`) parses and rounds to exactly the bit pattern vanilla holds.
+
+## What the remaining 1,114 are made of, and which parts are reachable
+
+Measured 2026-08-31 by classifying every record of the whole-corpus run. The point of this
+section is to stop the next attempt re-deriving it — three of these were probed by hand and came
+back with nothing, and that is worth more than the counts.
+
+| Family | n | Reachable? |
+|--------|---|-----------|
+| Naming / initialisation boundary | ~400 | Partly. The witnesses hold, but the name alone is not enough — the declaration also has to land where vanilla put it. Forcing names without placement measured 2 fixed / 16 broken. |
+| Evaluation order, no constructor moved | 99 | **No.** There is no pattern in the vanilla stream that says which spelling the source used. Four independent classifications reached this separately. |
+| Bool carried at the wrong width | ~180 | Partly. The crisp sub-case is smaller than it looks: of the eighty `return (int(x) != 0);` in the tree, exactly one has a return tail with no test in it. |
+| Return object built in place | 76 | **Not through the source.** Vanilla copy-constructs into the return slot (`PSF ret; PshVPtr src; $beh0`); we default-construct a temporary and `opAssign`. Writing `return T();` does not produce vanilla's shape — the compiler does not elide. This needs the construction lowered, not a different spelling. |
+| `ThrowException` never emitted | 13 | **No.** The construct appears zero times in the whole regenerated corpus; no source rewrite can reach it. |
+| Dead loop `while (i < 0)` | 22 | Not through the bound. Restoring `i < arr.Num()` compiles and fixes nothing: the loop FORM differs, not the operand. |
+| Pure slot renumbering | ~60 | Known dead end. |
+
+Two traps that cost measurements here, both environmental rather than emitter bugs. A stray
+`gore.exe` from an earlier run holds `target/release/gore.exe`, so the build fails silently and
+the next measurement scores the OLD binary — kill it first and never filter the build output. And
+copying the emitted tree with Python takes the better part of an hour; `robocopy /MT` takes
+seconds.
+
 
 ## Root causes and next work
 
