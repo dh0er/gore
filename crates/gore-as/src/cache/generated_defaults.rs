@@ -2314,7 +2314,7 @@ fn existing_free_function_subsequence_indices(
                 next += 1;
                 break;
             }
-            if !is_new_class_compiler_helper(regenerated, new_classes) {
+            if !is_new_class_compiler_helper(right_bytes, regenerated, new_classes)? {
                 return Err(format!(
                     "module-structure {what} inserted unsupported declaration before existing \
                      base index {index}: {}::{}",
@@ -2327,13 +2327,47 @@ fn existing_free_function_subsequence_indices(
     Ok(matches)
 }
 
-fn is_new_class_compiler_helper(function: &FunctionRecord, new_classes: &[ClassRecord]) -> bool {
-    // FullGraph evidence for an appended dialog topic shows exactly this generated free helper:
-    // `NewClass::StaticClass`.  Do not turn a merely similarly named authored free function into
-    // an exception to the existing-function ordering proof.
-    new_classes.iter().any(|class| {
+fn is_new_class_compiler_helper(
+    bytes: &[u8],
+    function: &FunctionRecord,
+    new_classes: &[ClassRecord],
+) -> Result<bool, String> {
+    // FullGraph produces two relevant helpers for an appended topic. `NewClass::StaticClass` is
+    // the reflection accessor. The free `NewClass()` factory is equally compiler-generated: it
+    // has the exact new class name, global namespace, a zero-argument object-handle return, FINAL
+    // wrapper traits, and no UFUNCTION payload.  Do not permit arbitrary authored free functions
+    // merely because their spelling resembles a class constructor.
+    if new_classes.iter().any(|class| {
         function.name == "StaticClass" && function.namespace == class.name
-    })
+    }) {
+        return Ok(true);
+    }
+    let Some(_) = new_classes
+        .iter()
+        .find(|class| function.name == class.name && function.namespace.is_empty())
+    else {
+        return Ok(false);
+    };
+    if !matches!(function.traits, 32 | 33) {
+        return Ok(false);
+    }
+    let declaration = bytes
+        .get(function.declaration.clone())
+        .ok_or_else(|| "module-structure new-class factory declaration range is invalid".to_string())?;
+    let mut cursor = Cursor::new(declaration);
+    read_sia(&mut cursor, "new-class factory", "Function.Name")?;
+    read_sia(&mut cursor, "new-class factory", "Function.Namespace")?;
+    let return_type = super::types::DataType::read(&mut cursor)
+        .map_err(|error| format!("parsing new-class factory return type: {error}"))?;
+    let parameter_count = bounded_count(&mut cursor, "Function.ParameterTypes", "new-class factory")?;
+    let ufunction_tail = bytes
+        .get(function.ufunction_tail.clone())
+        .ok_or_else(|| "module-structure new-class factory UFUNCTION range is invalid".to_string())?;
+    Ok(return_type.is_object_handle
+        && !return_type.is_reference
+        && return_type.token == 5
+        && parameter_count == 0
+        && ufunction_tail == [0, 0, 0, 0])
 }
 
 fn function_declaration_matches(
@@ -3475,6 +3509,15 @@ mod tests {
             },
             TOPIC,
         );
+        let new_factory = function_with_return_and_id(
+            &MethodSpec {
+                name: TOPIC,
+                traits: 32,
+                code: &[2, 76, 10],
+            },
+            &object_handle_datatype(),
+            0x6a6a_0002,
+        );
         let wrapper_regen = function_with_return(
             &MethodSpec {
                 name: "Get",
@@ -3498,7 +3541,7 @@ mod tests {
                     )],
                 ),
             ],
-            &[ordinary_regen, new_static_class, wrapper_regen],
+            &[ordinary_regen, new_factory, new_static_class, wrapper_regen],
             2,
         );
         let carried = plan.apply(&regen).unwrap();
@@ -3517,10 +3560,15 @@ mod tests {
         assert_eq!(
             function_raw(&carried, &carried_entry.functions[1]),
             function_raw(&regen, &regen_entry.functions[1]),
-            "new-class StaticClass remains compiler-authored"
+            "new-class factory remains compiler-authored"
         );
         assert_eq!(
             function_raw(&carried, &carried_entry.functions[2]),
+            function_raw(&regen, &regen_entry.functions[2]),
+            "new-class StaticClass remains compiler-authored"
+        );
+        assert_eq!(
+            function_raw(&carried, &carried_entry.functions[3]),
             function_raw(&base, &base_entry.functions[1]),
             "existing emitter-omitted Get wrapper remains byte-exact"
         );
@@ -3950,7 +3998,7 @@ mod tests {
     }
 
     #[test]
-    fn existing_module_structure_allows_only_new_class_static_class_helper_between_free_functions() {
+    fn existing_module_structure_allows_only_generated_new_class_helpers_between_free_functions() {
         let first = MethodSpec {
             name: "First",
             traits: 0,
@@ -3972,6 +4020,15 @@ mod tests {
             &[class_record(topic, "", "Caption", &[], &[], &[10])],
             &[
                 function(&first),
+                function_with_return_and_id(
+                    &MethodSpec {
+                        name: topic,
+                        traits: 32,
+                        code: &[10],
+                    },
+                    &object_handle_datatype(),
+                    0x6a6a_0003,
+                ),
                 function_with_namespace(&helper, topic),
                 function(&second),
             ],
@@ -3979,6 +4036,28 @@ mod tests {
         );
         let plan = ExistingModuleStructurePlan::prepare(&base, MODULE).unwrap();
         plan.verify(&regen).unwrap();
+
+        let bad_factory = cache_with_functions(
+            &[class_record(topic, "", "Caption", &[], &[], &[10])],
+            &[
+                function(&first),
+                function_with_return_and_id(
+                    &MethodSpec {
+                        name: topic,
+                        traits: 32,
+                        code: &[10],
+                    },
+                    &datatype(0, 0x52),
+                    0x6a6a_0003,
+                ),
+                function(&second),
+            ],
+            0x2222,
+        );
+        assert!(plan
+            .verify(&bad_factory)
+            .unwrap_err()
+            .contains("inserted unsupported declaration"));
     }
 
     #[test]
