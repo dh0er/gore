@@ -1181,7 +1181,13 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
                             : null,
                         // A locked entry shows the game's own silhouette on the
                         // same sheet an unlocked one shows its portrait on.
+                        // An unlocked one the game draws no picture of — the
+                        // tutorials — shows its section's glyph, not that
+                        // silhouette.
                         standInOnPaper: true,
+                        undrawnGameIcon: gameIconForGlossaryCamp(
+                          document.section.name,
+                        ),
                         fallbackIcon: document.isNpc
                             ? Icons.person_outline
                             : _sectionIcon(document.section),
@@ -1330,6 +1336,7 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
               width: glossaryBannerWidth,
               height: glossaryBannerHeight,
               standInOnPaper: true,
+              undrawnGameIcon: gameIconForGlossaryCamp(document.section.name),
               fallbackIcon: document.isNpc
                   ? Icons.person_outline
                   : _sectionIcon(document.section),

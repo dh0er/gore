@@ -44,6 +44,7 @@ class GlossaryPortrait extends StatelessWidget {
     this.width = glossaryPortraitWidth,
     this.height = glossaryPortraitHeight,
     this.fallbackGameIcon,
+    this.undrawnGameIcon,
     this.fallbackIcon = Icons.person_outline,
     this.color,
     this.standInOnPaper = false,
@@ -65,6 +66,11 @@ class GlossaryPortrait extends StatelessWidget {
   /// Glyph to stand in with, overriding the mark chosen for the character's
   /// kind. A creature or location entry wants its own section glyph here.
   final String? fallbackGameIcon;
+
+  /// Glyph for an entry the reader HAS unlocked but the game draws no picture
+  /// of — the tutorials, above all. Without it those wore the silhouette that
+  /// means "still locked".
+  final String? undrawnGameIcon;
   final IconData fallbackIcon;
 
   /// Ink for the stand-in glyph. Defaults to the theme's own icon colour.
@@ -149,16 +155,24 @@ class GlossaryPortrait extends StatelessWidget {
             normalizeGameRoot(ref.watch(sharedConfigProvider).gamePath()),
       ),
       kind,
+      // An entry was asked for and the catalog draws none of it: that is not
+      // the same as a locked one.
+      undrawn: documentClass != null && image == null,
     );
   }
 
-  Widget _frame(BuildContext context, String? path, CharacterCategory? kind) {
+  Widget _frame(
+    BuildContext context,
+    String? path,
+    CharacterCategory? kind, {
+    bool undrawn = false,
+  }) {
     return SizedBox(
       width: width,
       height: height,
       child: Center(
         child: path == null && !standInOnPaper
-            ? _standIn(context, kind, height)
+            ? _standIn(context, kind, height, undrawn)
             : ClipRRect(
                 borderRadius: BorderRadius.circular(3),
                 child: ColoredBox(
@@ -167,7 +181,9 @@ class GlossaryPortrait extends StatelessWidget {
                       ? SizedBox(
                           width: width,
                           height: height,
-                          child: Center(child: _standIn(context, kind, height)),
+                          child: Center(
+                            child: _standIn(context, kind, height, undrawn),
+                          ),
                         )
                       : Image.file(
                           File(path),
@@ -181,7 +197,7 @@ class GlossaryPortrait extends StatelessWidget {
                                   .ceil(),
                           excludeFromSemantics: true,
                           errorBuilder: (context, _, _) =>
-                              _standIn(context, kind, height),
+                              _standIn(context, kind, height, undrawn),
                         ),
                 ),
               ),
@@ -193,12 +209,14 @@ class GlossaryPortrait extends StatelessWidget {
     BuildContext context,
     CharacterCategory? kind,
     double height,
+    bool undrawn,
   ) {
     // On the sheet, the stand-in is the game's own "no portrait" silhouette,
-    // inked for paper. Off it, it is the mark for the character's kind in the
-    // theme's own icon colour.
+    // inked for paper — but only where a picture is what is missing. An
+    // unlocked entry the game draws none of gets its section's glyph instead.
     final name =
         fallbackGameIcon ??
+        (undrawn ? undrawnGameIcon : null) ??
         (standInOnPaper
             ? (size == GlossaryImageSize.banner
                   ? 'T_CharacterImageMedium_Missing'
