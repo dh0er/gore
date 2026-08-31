@@ -132,6 +132,21 @@ impl BcType {
     }
 }
 
+impl OpInfo {
+    /// Whether this instruction hands control to another function.
+    ///
+    /// The table already says so. Every call form carries the runtime stack-delta sentinel,
+    /// because how much it pops depends on the callee that answers; `RET` shares the sentinel for
+    /// the same reason and is the one exception. `Thiscall1` is the fork's own call and carries a
+    /// fixed delta instead, so it is named.
+    ///
+    /// Written once here because the alternative is a list of mnemonics per site, and four such
+    /// lists in this crate each turned out to be missing a different member.
+    pub fn is_call(&self) -> bool {
+        (self.stack_inc == STACK_INC_VARIABLE && self.name != "RET") || self.name == "Thiscall1"
+    }
+}
+
 /// One row of the `asBCInfo[256]` table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OpInfo {

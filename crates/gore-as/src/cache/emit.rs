@@ -13339,12 +13339,7 @@ fn unwrap_untested_bool_return(body: &str, f: &Func, refs: &RefResolver) -> Stri
     let tail = instrs[..ret]
         .iter()
         .enumerate()
-        .rposition(|(at, ins)| {
-            matches!(
-                ins.op.name,
-                "CALL" | "CALLSYS" | "CALLINTF" | "CALLBND" | "Thiscall1"
-            ) && !destructor(at)
-        })
+        .rposition(|(at, ins)| ins.op.is_call() && !destructor(at))
         .map_or(0, |call| call + 1);
     if instrs[tail..ret]
         .iter()
@@ -13429,17 +13424,10 @@ fn block_scoped_value_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
                     .is_some_and(|name| name == "$beh2" || name.starts_with('~'))
         })
     };
-    // `Thiscall1` is a call as much as the rest — the Hazelight fork's own opcode for one, and
-    // treated as such everywhere else here. Leaving it out means a value consumed by it looks
-    // like it reached no statement at all.
-    let calls = |at: usize| {
-        instrs.get(at).is_some_and(|ins| {
-            matches!(
-                ins.op.name,
-                "CALL" | "CALLSYS" | "CALLINTF" | "CALLBND" | "Thiscall1"
-            )
-        })
-    };
+    // Asked of the table rather than of a list. A value consumed by a call form this did not name
+    // looked like it reached no statement at all, and `Thiscall1` then `CallPtr` were each found
+    // missing in turn.
+    let calls = |at: usize| instrs.get(at).is_some_and(|ins| ins.op.is_call());
     // Where the trailing run of releases begins: walk back from the final RET over the
     // `PSF S; CALLSYS $beh2` pairs the compiler groups there.
     let epilogue = {
