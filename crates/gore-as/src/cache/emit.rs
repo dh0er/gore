@@ -2111,6 +2111,7 @@ fn emit_function_ctor(
         let a_third_life = slots_with_a_third_life(&text);
         let several_lives = slots_with_several_lives(&text);
         let returned_by_reference = reference_return_slots(f);
+        let block_scoped = block_scoped_value_slots(f, refs);
         let rendered = inline_unnamed_value_temporaries(
             &rendered,
             &unnamed_value_defs(f, refs)
@@ -2136,6 +2137,7 @@ fn emit_function_ctor(
                         .flat_map(|slot| [(slot, 1), (slot, 2)]),
                 )
                 .filter(|(slot, _)| !returned_by_reference.contains(slot))
+                .filter(|(slot, _)| !block_scoped.contains(slot))
                 .collect(),
             &wholly_consumed_object_slots(f),
             &rvo_temporary_slots(f, refs),
@@ -2148,6 +2150,7 @@ fn emit_function_ctor(
         // A returned expression folds one step per pass: three names in a chain need three.
         for _ in 0..3 {
         let returned_by_reference = reference_return_slots(f);
+        let block_scoped = block_scoped_value_slots(f, refs);
         let text: Vec<String> = rendered.lines().map(str::to_owned).collect();
         let a_third_life = slots_with_a_third_life(&text);
         let several_lives = slots_with_several_lives(&text);
@@ -2176,6 +2179,7 @@ fn emit_function_ctor(
                         .flat_map(|slot| [(slot, 1), (slot, 2)]),
                 )
                 .filter(|(slot, _)| !returned_by_reference.contains(slot))
+                .filter(|(slot, _)| !block_scoped.contains(slot))
                 .collect(),
             &wholly_consumed_object_slots(f),
             &rvo_temporary_slots(f, refs),
@@ -13149,6 +13153,78 @@ fn unwrap_untested_bool_return(body: &str, f: &Func) -> String {
         joined.push('\n');
     }
     joined
+}
+
+/// Value-type slots that OUTLIVED the statement they were used in.
+///
+/// A temporary dies where the expression that made it ends: the compiler releases it as soon as
+/// the call that took it returns. A slot whose release stands past a LATER call was still alive
+/// across that call, which only a named local with block scope is — and vanilla is explicit about
+/// it. `UAIState_Warning_Creature::BeginWarning` builds an `FString` in `w4`, hands it to one
+/// call, runs `Super::BeginWarning()`, and only then releases `w4`: the string is a declared local
+/// and not an argument spelled in place.
+///
+/// Both ends have to be there. A construction with no matching release says nothing, and a release
+/// with nothing between it and the last use is exactly the temporary this distinguishes itself
+/// from.
+fn block_scoped_value_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let behaviour = |at: usize, want: &str| {
+        instrs.get(at).is_some_and(|ins| {
+            ins.op.name == "CALLSYS"
+                && refs.func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64) == Some(want)
+        })
+    };
+    let calls = |at: usize| {
+        instrs
+            .get(at)
+            .is_some_and(|ins| matches!(ins.op.name, "CALL" | "CALLSYS" | "CALLINTF" | "CALLBND"))
+    };
+    // Where the trailing run of releases begins: walk back from the final RET over the
+    // `PSF S; CALLSYS $beh2` pairs the compiler groups there.
+    let epilogue = {
+        let mut at = instrs
+            .iter()
+            .rposition(|ins| ins.op.name == "RET")
+            .unwrap_or(instrs.len());
+        while at >= 2
+            && behaviour(at - 1, "$beh2")
+            && instrs[at - 2].op.name == "PSF"
+        {
+            at -= 2;
+        }
+        at
+    };
+    let mut out = HashSet::new();
+    for at in 0..instrs.len() {
+        let slot = w0(&instrs[at]);
+        if instrs[at].op.name != "PSF" || slot <= 0 || !behaviour(at + 1, "$beh0") {
+            continue;
+        }
+        let Some(release) = (at + 2..instrs.len()).find(|other| {
+            instrs[*other].op.name == "PSF" && w0(&instrs[*other]) == slot && behaviour(other + 1, "$beh2")
+        }) else {
+            continue;
+        };
+        let Some(last_use) = (at + 2..release)
+            .filter(|other| {
+                matches!(instrs[*other].op.name, "PSF" | "PshVPtr") && w0(&instrs[*other]) == slot
+            })
+            .last()
+        else {
+            continue;
+        };
+        // …and the release has to stand in the function's own trailing destructor run. A slot let
+        // go mid-body outlived one statement and no more, which a temporary in a nested expression
+        // also does; only a block-scoped local is still alive when the block ends.
+        if (last_use + 1..release).any(calls) && release >= epilogue {
+            out.insert(slot);
+        }
+    }
+    out
 }
 
 /// The slot a REFERENCE return travels out through.
