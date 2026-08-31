@@ -44,12 +44,15 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  Future<void> openNpcInventory(WidgetTester tester) async {
+  Future<void> openNpcInventory(
+    WidgetTester tester, [
+    String name = 'Wolf',
+  ]) async {
     await tester.tap(find.widgetWithText(Tab, 'Characters'));
     await tester.pumpAndSettle();
     await tester.tap(detailTab('Inventory'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Wolf').first);
+    await tester.tap(find.text(name).first);
     await tester.pumpAndSettle();
     // The bundled item stats are read through rootBundle, which needs real
     // async to complete; they are what identifies a natural weapon.
@@ -58,6 +61,23 @@ void main() {
     );
     await tester.pumpAndSettle();
   }
+
+  testWidgets('a creature whose only item is its weapon carries nothing', (
+    tester,
+  ) async {
+    // A wolf carries ONLY its jaw. Asking the raw list whether there is
+    // anything here still said yes, so the pane showed the one message it has
+    // for a list that emptied out — "the pending removal hides every item" —
+    // with nothing pending at all.
+    await pumpApp(tester);
+    await openNpcInventory(tester, 'Warg');
+
+    expect(
+      find.textContaining('pending removal hides every item'),
+      findsNothing,
+    );
+    expect(find.text(_jawId), findsNothing);
+  });
 
   testWidgets('a creature carries no rows for its own weapon', (tester) async {
     await pumpApp(tester);
@@ -171,11 +191,19 @@ class _NaturalWeaponCoreService implements GoresaveCoreService {
         return {
           'ok': true,
           'data': {
-            'total': 1,
+            'total': 2,
             'characters': [
               {
                 'globalId': 'Wolf-A',
                 'uniqueName': 'Wolf',
+                'isDead': false,
+                'hasInventory': true,
+                'hasKnowledge': false,
+                'hasEvents': false,
+              },
+              {
+                'globalId': 'Warg-B',
+                'uniqueName': 'Warg',
                 'isDead': false,
                 'hasInventory': true,
                 'hasKnowledge': false,
@@ -188,12 +216,13 @@ class _NaturalWeaponCoreService implements GoresaveCoreService {
         return {
           'ok': true,
           'data': {
-            'total': 1,
+            'total': 2,
             'offset': 0,
             'limit': payload['limit'] ?? 100,
-            'count': 1,
+            'count': 2,
             'npcs': [
               {'id': 'Wolf-A', 'name': 'Wolf A'},
+              {'id': 'Warg-B', 'name': 'Warg B'},
             ],
           },
         };
@@ -202,7 +231,7 @@ class _NaturalWeaponCoreService implements GoresaveCoreService {
           'ok': true,
           'data': {
             'id': payload['id'],
-            'itemStackCount': 2,
+            'itemStackCount': payload['id'] == 'Warg-B' ? 1 : 2,
             'items': [
               {
                 'id': _jawId,
@@ -212,14 +241,15 @@ class _NaturalWeaponCoreService implements GoresaveCoreService {
                 'slotId': 0,
                 'containerType': 'MeleeSlot',
               },
-              {
-                'id': _cheeseId,
-                'path': _cheesePath,
-                'count': 3,
-                'removable': true,
-                'slotId': 0,
-                'containerType': 'MainContainer',
-              },
+              if (payload['id'] != 'Warg-B')
+                {
+                  'id': _cheeseId,
+                  'path': _cheesePath,
+                  'count': 3,
+                  'removable': true,
+                  'slotId': 0,
+                  'containerType': 'MainContainer',
+                },
             ],
             'mainContainerPaths': [_cheesePath],
             'writable': [

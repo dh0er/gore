@@ -407,5 +407,11 @@ class ItemStatsCatalog {
   }
 
   static Future<ItemStatsCatalog> loadBundled() async =>
-      fromJsonString(await rootBundle.loadString('assets/item_stats.json'));
+      // `cache: false` for the same reason the character catalog asks for it:
+      // Flutter's AssetBundle otherwise retains a Future belonging to whichever
+      // widget asked first, and a later reader inherits its failure. The
+      // provider that reads this holds the parsed result anyway.
+      fromJsonString(
+        await rootBundle.loadString('assets/item_stats.json', cache: false),
+      );
 }

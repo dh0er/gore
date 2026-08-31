@@ -655,13 +655,17 @@ class _PrivateInventorySummaryCardState
           item.id.isEmpty ? _itemDisplayFromPath(item.path) : item.id,
           fallback: l10n.fallbackItem,
         );
-    final items = inventory.items.where((item) {
-      // A creature's built-in weapon — its jaw, its claws, its sting — is an
-      // item in its weapon slot, but not one anybody can do anything with: the
-      // game names none of them, draws none of them, and never lets the player
-      // hold one. Nothing here is worth an editable row, and removing one only
-      // disarms the creature.
-      if (itemStats?.statsFor(item.id)?.naturalWeapon == true) return false;
+    // What the creature actually carries, as far as the editor is concerned. A
+    // creature's built-in weapon — its jaw, its claws, its sting — is an item
+    // in its weapon slot, but not one anybody can do anything with: the game
+    // names none of them, draws none of them, and never lets the player hold
+    // one. Nothing there is worth an editable row, and removing one only
+    // disarms the creature. A wolf carries ONLY its jaw, so this is what the
+    // pane asks about having anything at all, not the raw list.
+    final carried = inventory.items
+        .where((item) => itemStats?.statsFor(item.id)?.naturalWeapon != true)
+        .toList();
+    final items = carried.where((item) {
       // A pending removal hides ONLY the specific slot queued for removal (it is
       // represented by the pending card above), matched by the same slot-aware
       // key as count edits — so duplicate-path stacks, or the same item in
@@ -759,7 +763,7 @@ class _PrivateInventorySummaryCardState
     final searching = query.isNotEmpty;
     final shownItems = searching ? allItems : selectedTab.items;
 
-    final hasItems = inventory.items.isNotEmpty;
+    final hasItems = carried.isNotEmpty;
     final hasPendingAdd = _pendingAdds.isNotEmpty;
     final hasPendingRemove = _pendingRemovePath != null;
     final hasPendingCount = _pendingCountChanges.isNotEmpty;
