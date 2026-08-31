@@ -2205,15 +2205,19 @@ fn emit_function_ctor(
                 refs,
             );
         // The witness names one LIFE of a slot while the search inside is textual and global, so
-        // for a slot the text carries several lives of, it could restore the `T()` belonging to a
-        // different one — moving an unrelated construction across the arguments beside it. Those
-        // slots stand down.
-        let reused =
-            slots_with_several_lives(&rendered.lines().map(str::to_owned).collect::<Vec<_>>());
-        let declared_arguments: Vec<(i32, String)> = declared_argument_constructions(f, refs)
-            .into_iter()
-            .filter(|(slot, _)| !reused.contains(slot))
-            .collect();
+        // for a reused slot it could restore the `T()` belonging to a different life — moving an
+        // unrelated construction across the arguments beside it. Those slots stand down.
+        //
+        // Asked of the BYTECODE, not of the text: this pass exists for slots whose name the folds
+        // already took away, so counting `local_N` identifiers would find one life left and call
+        // the slot single-lived exactly where it is not.
+        let declared_arguments: Vec<(i32, String)> = {
+            let reused = slots_constructed_more_than_once(f, refs);
+            declared_argument_constructions(f, refs)
+                .into_iter()
+                .filter(|(slot, _)| !reused.contains(slot))
+                .collect()
+        };
         let rendered = restore_named_argument_temporaries(&rendered, &declared_arguments);
         let rendered = fold_widening_aliases(&rendered, &declared_locals, &path_roots, &widened);
         let rendered =
@@ -9171,6 +9175,39 @@ fn argument_constructed_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
 /// Returns the slot with the type name the construction's owner carries, because the text has to
 /// be able to spell the declaration. Only where the slot is pushed again afterwards — a value
 /// built and never handed anywhere is a different shape and none of this rule's business.
+/// Slots the function constructs more than once.
+///
+/// Two constructions of one frame slot are two lives of it, whatever the rendered text still
+/// calls them. This is the reuse question asked where it can be answered: the folds take names
+/// away, so a text that shows one `local_N` may be showing the last life standing rather than the
+/// only one there ever was.
+fn slots_constructed_more_than_once(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let mut seen: HashMap<i32, usize> = HashMap::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if ins.op.name != "PSF" {
+            continue;
+        }
+        let constructs = instrs.get(at + 1).is_some_and(|call| {
+            call.op.name == "CALLSYS"
+                && refs.func_by_ptr(call.qwords.first().copied().unwrap_or(0) as i64)
+                    == Some("$beh0")
+        });
+        if !constructs {
+            continue;
+        }
+        if let Some(slot) = ins.words.first().map(|w| *w as i16 as i32).filter(|s| *s > 0) {
+            *seen.entry(slot).or_default() += 1;
+        }
+    }
+    seen.into_iter()
+        .filter(|(_, count)| *count > 1)
+        .map(|(slot, _)| slot)
+        .collect()
+}
+
 fn declared_argument_constructions(f: &Func, refs: &RefResolver) -> Vec<(i32, String)> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return Vec::new();
