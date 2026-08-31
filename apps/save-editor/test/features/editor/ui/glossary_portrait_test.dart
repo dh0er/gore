@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:goresave/features/editor/domain/glossary_images.dart';
 import 'package:goresave/features/editor/ui/game_icon.dart';
 import 'package:goresave/features/editor/ui/glossary_portrait.dart';
+import 'package:goresave/features/editor/domain/item_icon_catalog.dart';
 import 'package:goresave/providers/data_providers.dart';
 import 'package:goresave/utils/shared_config.dart';
 import 'package:path/path.dart' as p;
@@ -155,5 +156,43 @@ void main() {
     final one = await _configReadsFor(tester, 1);
     final many = await _configReadsFor(tester, 20);
     expect(many, one);
+  });
+
+  testWidgets('a picture that will not load is not a locked entry', (
+    tester,
+  ) async {
+    // An installation the glossary has a mapping for but no readable file in —
+    // an older or incomplete one — took the silhouette that means "not found
+    // yet", on entries the reader HAS found.
+    final empty = Directory.systemTemp.createTempSync('gore_no_artwork');
+    addTearDown(() => empty.deleteSync(recursive: true));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          glossaryImageCatalogProvider.overrideWith((ref) async => _catalog),
+          resolvedGameRootProvider.overrideWithValue(empty.path),
+        ],
+        child: const MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: GlossaryPortrait(
+                documentClass: 'Document_Glossary_OC_STT_DIEGO',
+                standInOnPaper: true,
+                undrawnGameIcon: 'T_Icon_Tutorials',
+                fallbackIcon: Icons.school_outlined,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // Reading the file is real I/O; the failure only reaches the builder once
+    // it has actually been attempted.
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pumpAndSettle();
+    expect(_glyph(tester), 'T_Icon_Tutorials');
   });
 }

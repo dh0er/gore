@@ -207,8 +207,13 @@ class GlossaryPortrait extends StatelessWidget {
                               (width * MediaQuery.devicePixelRatioOf(context))
                                   .ceil(),
                           excludeFromSemantics: true,
+                          // A picture that will not load is not a locked
+                          // entry: the silhouette says the reader has not
+                          // found this yet, and an unreadable installation
+                          // said it of everything. Only a mapped entry ever
+                          // reaches this, and a mapped entry is unlocked.
                           errorBuilder: (context, _, _) =>
-                              _standIn(context, kind, height, undrawn),
+                              _standIn(context, kind, height, true),
                         ),
                 ),
               ),
