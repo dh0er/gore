@@ -1227,13 +1227,25 @@ class _PrivateInventorySummaryCardState
                                                                 itemId: item.id,
                                                                 itemPath:
                                                                     item.path,
+                                                                // The same
+                                                                // classifier
+                                                                // the tabs
+                                                                // group by, or
+                                                                // an ore
+                                                                // nugget sits
+                                                                // in Materials
+                                                                // wearing the
+                                                                // Miscellaneous
+                                                                // icon.
                                                                 fallbackIcon: iconForItemCategory(
-                                                                  itemCategoryFromId(
+                                                                  itemCategoryFor(
                                                                     item.id.isEmpty
                                                                         ? _itemDisplayFromPath(
                                                                             item.path,
                                                                           )
                                                                         : item.id,
+                                                                    stats:
+                                                                        itemStats,
                                                                   ),
                                                                 ),
                                                                 size:
@@ -1261,12 +1273,14 @@ class _PrivateInventorySummaryCardState
                                                                     itemPath:
                                                                         item.path,
                                                                     fallbackIcon: iconForItemCategory(
-                                                                      itemCategoryFromId(
+                                                                      itemCategoryFor(
                                                                         item.id.isEmpty
                                                                             ? _itemDisplayFromPath(
                                                                                 item.path,
                                                                               )
                                                                             : item.id,
+                                                                        stats:
+                                                                            itemStats,
                                                                       ),
                                                                     ),
                                                                     size: 24,
