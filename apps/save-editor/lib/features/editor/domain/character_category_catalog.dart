@@ -144,6 +144,16 @@ class CharacterCategoryCatalog {
       caseSensitive: false,
     ).firstMatch(value);
     if (guid != null && guid.group(1)!.isNotEmpty) yield guid.group(1)!;
+    // Last, the leading segment on its own — the definition name the save
+    // spawned this actor from. Every rule above reads a particular id SHAPE,
+    // so whether a character resolved at all came down to which shape it had:
+    // `Wolf-WP_…` resolved through the waypoint rule while `Wolf-OW_…_WP-1`
+    // resolved through nothing, and the same animal came out a creature 57
+    // times and an unknown 9 times. Yielded last, so a more specific candidate
+    // still wins — the mercenary `NC_ORG_Wolf_855-WorldPointActor_wolf` is a
+    // man before his waypoint's name can make him a wolf.
+    final firstSegment = value.indexOf('-');
+    if (firstSegment > 0) yield value.substring(0, firstSegment);
   }
 }
 

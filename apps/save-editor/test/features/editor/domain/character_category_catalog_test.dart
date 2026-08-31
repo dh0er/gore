@@ -89,6 +89,29 @@ void main() {
       }
     });
 
+    test('the same species resolves whatever shape its id has', () async {
+      // Every rule reads a particular id SHAPE, so whether a character
+      // resolved at all came down to which shape it had. In one real save that
+      // made the same animal a creature 57 times and an unknown 9 times, and
+      // the list drew it as two species — "Wolf (9)" beside "Wolf (57)", and
+      // the same for the blood flies, the meatbugs, the diggers and the
+      // guards.
+      for (final id in const [
+        'Wolf-WP_OW_WOLF_SPAWN_01-1',
+        'Wolf-OW_PATH_075_GUARD9_WP-1',
+        'Meatbug-OC_MEATBUG_SPAWN_02-1',
+        'Bloodfly-OW_BLOODFLY_SPAWN_01-1',
+      ]) {
+        expect(catalog.categoryFor(id), CharacterCategory.creature, reason: id);
+      }
+      // And the mercenary of the same name is still a man: the rule that names
+      // him runs before the one that would read his waypoint.
+      expect(
+        catalog.categoryFor('NC_ORG_Wolf_855-WorldPointActor_wolf'),
+        CharacterCategory.human,
+      );
+    });
+
     test('an ambiguous stripped id is left unresolved, not guessed', () {
       // Two definitions of different kinds sharing a stripped key must not
       // decide the species between them.
