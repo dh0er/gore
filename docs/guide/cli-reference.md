@@ -177,9 +177,11 @@ lines print as their localization keys and the output says so.
 `new-topic`, `new-conversation`, `checkout` and `stage` write files and read the install; they
 compile and deploy nothing. `check` is read-only. Existing topics may change
 method bodies and the emitted `Caption`, `PriorityRank`, `Rules` and flag
-defaults. Every shipped default-bearing class and target must remain covered;
-the byte-exact carry is only the fallback for source with no authored defaults.
-Existing shipped class/member/callable ABI remains fixed.
+defaults. If any existing class authors defaults, every shipped
+default-bearing class and semantic target must remain covered. Otherwise the
+byte-exact carry may preserve existing initializers while an appended class
+authors new defaults under `--allow-new-symbols`. Matching `Binds.Cache` type
+evidence and the existing shipped class/member/callable ABI remain mandatory.
 
 A checked edit may append a new topic class at the end of the same existing
 conversation module and wire it from an existing `Subdialog` body. New classes,

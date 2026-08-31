@@ -115,6 +115,15 @@ pub(crate) struct GeneratedDefaultsPlan {
     /// any of them; Function.Id is cache-wide in the shipping cache, not module-local.
     outside_function_ids: HashMap<i32, String>,
     generated_count: usize,
+    carry_mode: GeneratedDefaultsCarryMode,
+}
+
+/// Whether a defaults carry can use the historical strict keyspace or must retain the minimal
+/// rows needed by an appended, authored class.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GeneratedDefaultsCarryMode {
+    Strict,
+    HybridNewClass,
 }
 
 /// Shipping reflection metadata belongs to the existing declaration, not to the regenerated
@@ -936,17 +945,57 @@ impl GeneratedDefaultsPlan {
             generated_free_indices,
             outside_function_ids,
             generated_count,
+            carry_mode: GeneratedDefaultsCarryMode::Strict,
         }))
+    }
+
+    /// Prepare a carry for a source overlay that adds defaults only for appended classes.
+    /// Existing base classes remain byte-exact carries; their authored defaults would make that
+    /// carry stale and are therefore a hard error rather than an implicit mixed policy.
+    pub(crate) fn prepare_hybrid(
+        base_cache: &[u8],
+        modules: &[model::Module],
+        module_name: &str,
+        authored_defaults: &HashSet<String>,
+    ) -> Result<Option<Self>, String> {
+        let mut plan = match Self::prepare(base_cache, modules, module_name)? {
+            Some(plan) => plan,
+            None => return Ok(None),
+        };
+        if let Some(class) = plan
+            .base
+            .classes
+            .iter()
+            .find(|class| authored_defaults.contains(&class.name))
+        {
+            return Err(format!(
+                "hybrid default carry refuses authored defaults for existing base class {}::{}",
+                module_name, class.name
+            ));
+        }
+        plan.carry_mode = GeneratedDefaultsCarryMode::HybridNewClass;
+        Ok(Some(plan))
     }
 
     pub(crate) fn generated_count(&self) -> usize {
         self.generated_count
     }
 
+    pub(crate) fn allows_new_symbols(&self) -> bool {
+        self.carry_mode == GeneratedDefaultsCarryMode::HybridNewClass
+    }
+
     /// Carry base generated records into a one-module mini after strict remap. Every declaration,
     /// class-layout, and metadata gate is checked before output construction; post-parse then
     /// proves exact generated/non-generated record provenance and MethodTable preservation.
     pub(crate) fn apply(&self, remapped_mini: &[u8]) -> Result<Vec<u8>, String> {
+        match self.carry_mode {
+            GeneratedDefaultsCarryMode::Strict => self.apply_strict(remapped_mini),
+            GeneratedDefaultsCarryMode::HybridNewClass => self.apply_hybrid(remapped_mini),
+        }
+    }
+
+    fn apply_strict(&self, remapped_mini: &[u8]) -> Result<Vec<u8>, String> {
         let mini_header = CacheHeader::parse(remapped_mini)
             .map_err(|error| format!("parsing remapped defaults mini header: {error}"))?;
         if mini_header.type_count != 1 || module_count(remapped_mini) != 1 {
@@ -1116,6 +1165,397 @@ impl GeneratedDefaultsPlan {
         Ok(out)
     }
 
+    /// Carry only the omitted generated records of pre-existing classes.  Appended classes and
+    /// their generated `__InitDefaults` remain exactly as the compiler produced them, as do the
+    /// minimal new-symbol rows in the mini tail.
+    fn apply_hybrid(&self, remapped_mini: &[u8]) -> Result<Vec<u8>, String> {
+        let mini_header = CacheHeader::parse(remapped_mini)
+            .map_err(|error| format!("parsing hybrid defaults mini header: {error}"))?;
+        if mini_header.type_count != 1 || module_count(remapped_mini) != 1 {
+            return Err(format!(
+                "hybrid generated-default carry requires a one-module mini, found {} modules",
+                mini_header.type_count
+            ));
+        }
+        let module_end = module_region_end(remapped_mini)
+            .map_err(|error| format!("walking hybrid defaults mini: {error}"))?;
+        let tables = parse_tail_tables(remapped_mini, module_end)
+            .map_err(|error| format!("parsing hybrid defaults mini tail: {error}"))?;
+        if tables.end != remapped_mini.len() {
+            return Err(format!(
+                "hybrid defaults mini tail ends at {:#x}, file ends at {:#x}",
+                tables.end,
+                remapped_mini.len()
+            ));
+        }
+        let regen_entry_bytes = remapped_mini
+            .get(CacheHeader::SIZE..module_end)
+            .ok_or_else(|| "hybrid defaults module range is out of bounds".to_string())?;
+        let regen = parse_entry(regen_entry_bytes, "hybrid-remapped module")?;
+        let free_matches = self.validate_hybrid_regenerated(regen_entry_bytes, &regen)?;
+
+        let generated_method_bytes = self
+            .base
+            .classes
+            .iter()
+            .flat_map(|class| class.methods.iter())
+            .filter(|method| method.name.starts_with("__"))
+            .try_fold(0usize, |total, method| total.checked_add(method.raw.len()))
+            .ok_or_else(|| "hybrid defaults generated-method size overflow".to_string())?;
+        let behavior_bytes = self
+            .base
+            .classes
+            .iter()
+            .try_fold(0usize, |total, class| {
+                total.checked_add(class.behaviors_block.len())
+            })
+            .ok_or_else(|| "hybrid defaults behavior size overflow".to_string())?;
+        let rebuild_capacity = regen_entry_bytes
+            .len()
+            .checked_add(generated_method_bytes)
+            .and_then(|value| value.checked_add(behavior_bytes))
+            .ok_or_else(|| "hybrid defaults rebuild capacity overflow".to_string())?;
+        let mut rebuilt_entry = Vec::new();
+        rebuilt_entry
+            .try_reserve_exact(rebuild_capacity)
+            .map_err(|error| {
+                format!("reserving hybrid defaults rebuild ({rebuild_capacity} bytes): {error}")
+            })?;
+
+        let mut cursor = 0usize;
+        if !self.generated_free_indices.is_empty() {
+            rebuilt_entry.extend_from_slice(
+                regen_entry_bytes
+                    .get(..regen.functions_count_pos)
+                    .ok_or_else(|| "hybrid defaults rebuild function prefix is invalid".to_string())?,
+            );
+            let function_count = i32::try_from(regen.functions.len())
+                .map_err(|_| "hybrid defaults regenerated free-function count does not fit i32".to_string())?;
+            rebuilt_entry.extend_from_slice(&function_count.to_le_bytes());
+            let mut base_at_regen = vec![None; regen.functions.len()];
+            for (base_index, &regen_index) in free_matches.iter().enumerate() {
+                let slot = base_at_regen.get_mut(regen_index).ok_or_else(|| {
+                    "hybrid defaults matched free-function index is out of bounds".to_string()
+                })?;
+                if slot.replace(base_index).is_some() {
+                    return Err("hybrid defaults matched one regenerated free function twice".into());
+                }
+            }
+            for (regen_index, regen_function) in regen.functions.iter().enumerate() {
+                let (source, range) = match base_at_regen[regen_index] {
+                    Some(base_index) if self.generated_free_indices.contains(&base_index) => {
+                        (self.base_entry.as_slice(), &self.base.functions[base_index].raw)
+                    }
+                    _ => (regen_entry_bytes, &regen_function.raw),
+                };
+                rebuilt_entry.extend_from_slice(source.get(range.clone()).ok_or_else(|| {
+                    "hybrid defaults rebuild free-function range is invalid".to_string()
+                })?);
+            }
+            cursor = regen.functions_end;
+        }
+        for (base_class, regen_class) in self.base.classes.iter().zip(&regen.classes) {
+            let carries_defaults = base_class
+                .methods
+                .iter()
+                .any(|method| method.name.starts_with("__"));
+            if carries_defaults {
+                rebuilt_entry.extend_from_slice(
+                    regen_entry_bytes
+                        .get(cursor..regen_class.methods_count_pos)
+                        .ok_or_else(|| {
+                            "hybrid defaults rebuild class prefix range is invalid".to_string()
+                        })?,
+                );
+                let method_count = i32::try_from(base_class.methods.len())
+                    .map_err(|_| "hybrid defaults base method count does not fit i32".to_string())?;
+                rebuilt_entry.extend_from_slice(&method_count.to_le_bytes());
+                let mut regen_non_generated = regen_class.methods.iter();
+                for base_method in &base_class.methods {
+                    let (source, range) = if base_method.name.starts_with("__") {
+                        (self.base_entry.as_slice(), &base_method.raw)
+                    } else {
+                        let regen_method = regen_non_generated.next().ok_or_else(|| {
+                            "hybrid defaults rebuild ran out of regenerated non-generated methods"
+                                .to_string()
+                        })?;
+                        (regen_entry_bytes, &regen_method.raw)
+                    };
+                    rebuilt_entry.extend_from_slice(source.get(range.clone()).ok_or_else(|| {
+                        "hybrid defaults rebuild method range is invalid".to_string()
+                    })?);
+                }
+                if regen_non_generated.next().is_some() {
+                    return Err(
+                        "hybrid defaults rebuild left unconsumed regenerated non-generated methods"
+                            .into(),
+                    );
+                }
+                rebuilt_entry.extend_from_slice(
+                    self.base_entry
+                        .get(base_class.method_table.clone())
+                        .ok_or_else(|| {
+                            "hybrid defaults base MethodTable range is invalid".to_string()
+                        })?,
+                );
+                cursor = regen_class.method_table.end;
+            }
+            if !base_class.behaviors.is_empty() {
+                rebuilt_entry.extend_from_slice(
+                    regen_entry_bytes
+                        .get(cursor..regen_class.behaviors_block.start)
+                        .ok_or_else(|| {
+                            "hybrid defaults rebuild behavior prefix is invalid".to_string()
+                        })?,
+                );
+                rebuilt_entry.extend_from_slice(
+                    self.base_entry
+                        .get(base_class.behaviors_block.clone())
+                        .ok_or_else(|| {
+                            "hybrid defaults base behavior block range is invalid".to_string()
+                        })?,
+                );
+                cursor = regen_class.behaviors_block.end;
+            }
+        }
+        rebuilt_entry.extend_from_slice(
+            regen_entry_bytes
+                .get(cursor..)
+                .ok_or_else(|| "hybrid defaults rebuild final module range is invalid".to_string())?,
+        );
+
+        let mut out = Vec::with_capacity(
+            CacheHeader::SIZE + rebuilt_entry.len() + (remapped_mini.len() - module_end),
+        );
+        out.extend_from_slice(&remapped_mini[..CacheHeader::SIZE]);
+        out.extend_from_slice(&rebuilt_entry);
+        out.extend_from_slice(&remapped_mini[module_end..]);
+        self.verify_hybrid_output(remapped_mini, regen_entry_bytes, &out, &free_matches)?;
+        Ok(out)
+    }
+
+    fn validate_hybrid_regenerated(
+        &self,
+        regen_bytes: &[u8],
+        regen: &ModuleEntry,
+    ) -> Result<Vec<usize>, String> {
+        if regen.key != self.base.key
+            || regen.name != self.base.name
+            || regen.file != self.base.file
+        {
+            return Err(format!(
+                "hybrid defaults module identity drift: base key/name/file {:?}/{:?}/{:?}, \
+                 regenerated {:?}/{:?}/{:?}",
+                self.base.key, self.base.name, self.base.file, regen.key, regen.name, regen.file
+            ));
+        }
+        if regen.classes.len() < self.base.classes.len() {
+            return Err(format!(
+                "hybrid defaults class count shrank in {:?}: base {}, regenerated {}",
+                self.module_name,
+                self.base.classes.len(),
+                regen.classes.len()
+            ));
+        }
+        validate_unique_function_ids(regen, "hybrid regenerated")?;
+        let free_matches = self.validate_hybrid_module_functions(regen_bytes, regen)?;
+        let mut class_names = HashSet::new();
+        for class in &regen.classes {
+            if !class_names.insert((class.namespace.as_str(), class.name.as_str())) {
+                return Err(format!(
+                    "hybrid regenerated module contains duplicate class {}::{}",
+                    class.namespace, class.name
+                ));
+            }
+        }
+        for (base_class, regen_class) in self.base.classes.iter().zip(&regen.classes) {
+            if base_class.name != regen_class.name || base_class.namespace != regen_class.namespace
+            {
+                return Err(format!(
+                    "hybrid defaults class identity/order drift: base {}::{}, regenerated {}::{}",
+                    base_class.namespace, base_class.name, regen_class.namespace, regen_class.name
+                ));
+            }
+            if let Some(method) = regen_class
+                .methods
+                .iter()
+                .find(|method| method.name.starts_with("__"))
+            {
+                return Err(format!(
+                    "hybrid defaults refuses existing class {} authored/generated {}",
+                    regen_class.name, method.name
+                ));
+            }
+            let base_non_generated = base_class
+                .methods
+                .iter()
+                .filter(|method| !method.name.starts_with("__"))
+                .collect::<Vec<_>>();
+            if base_non_generated.len() != regen_class.methods.len() {
+                return Err(format!(
+                    "hybrid defaults method count drift in {}: base has {} non-generated, regenerated has {}",
+                    base_class.name,
+                    base_non_generated.len(),
+                    regen_class.methods.len()
+                ));
+            }
+            for (index, (base_method, regen_method)) in base_non_generated
+                .iter()
+                .zip(&regen_class.methods)
+                .enumerate()
+            {
+                compare_function(
+                    &self.base_entry,
+                    base_method,
+                    regen_bytes,
+                    regen_method,
+                    &format!("hybrid {} method {index}", base_class.name),
+                )?;
+            }
+            validate_method_table(regen_class, "hybrid regenerated")?;
+        }
+        Ok(free_matches)
+    }
+
+    fn verify_hybrid_output(
+        &self,
+        original_mini: &[u8],
+        regen_entry_bytes: &[u8],
+        output: &[u8],
+        free_matches: &[usize],
+    ) -> Result<(), String> {
+        if module_count(output) != 1 {
+            return Err("hybrid defaults postcondition changed module count".into());
+        }
+        let output_end = module_region_end(output)
+            .map_err(|error| format!("walking hybrid defaults output: {error}"))?;
+        let output_tables = parse_tail_tables(output, output_end)
+            .map_err(|error| format!("parsing hybrid defaults output tail: {error}"))?;
+        if output_tables.end != output.len() {
+            return Err("hybrid defaults output tail does not end at EOF".into());
+        }
+        let original_end = module_region_end(original_mini)
+            .map_err(|error| format!("re-walking original hybrid mini: {error}"))?;
+        if output[output_end..] != original_mini[original_end..] {
+            return Err("hybrid defaults carry changed new-symbol tail bytes".into());
+        }
+        let output_entry_bytes = output
+            .get(CacheHeader::SIZE..output_end)
+            .ok_or_else(|| "hybrid defaults output module range is invalid".to_string())?;
+        let carried = parse_entry(output_entry_bytes, "hybrid carried output")?;
+        let regen = parse_entry(regen_entry_bytes, "hybrid postcondition regen")?;
+        validate_unique_function_ids(&carried, "hybrid carried output")?;
+        validate_function_ids_against_outside(
+            &carried,
+            &self.outside_function_ids,
+            "hybrid carried output",
+        )?;
+        if carried.functions.len() != regen.functions.len()
+            || carried.classes.len() != regen.classes.len()
+            || carried.classes.len() < self.base.classes.len()
+        {
+            return Err("hybrid defaults carried record counts are inconsistent".into());
+        }
+        if free_matches.len() != self.base.functions.len() {
+            return Err("hybrid defaults postcondition has incomplete base free-function mapping".into());
+        }
+        let mut base_at_regen = vec![None; regen.functions.len()];
+        for (base_index, &regen_index) in free_matches.iter().enumerate() {
+            let slot = base_at_regen.get_mut(regen_index).ok_or_else(|| {
+                "hybrid defaults postcondition free-function mapping is out of bounds".to_string()
+            })?;
+            if slot.replace(base_index).is_some() {
+                return Err("hybrid defaults postcondition mapped one regenerated free function twice".into());
+            }
+        }
+        for (regen_index, (regen_function, out_function)) in regen
+            .functions
+            .iter()
+            .zip(&carried.functions)
+            .enumerate()
+        {
+            let (expected_bytes, expected_range) = match base_at_regen[regen_index] {
+                Some(base_index) if self.generated_free_indices.contains(&base_index) => {
+                    (self.base_entry.as_slice(), &self.base.functions[base_index].raw)
+                }
+                _ => (regen_entry_bytes, &regen_function.raw),
+            };
+            compare_range(
+                expected_bytes,
+                expected_range,
+                output_entry_bytes,
+                &out_function.raw,
+                "hybrid free function",
+            )?;
+        }
+        for ((base_class, regen_class), out_class) in self
+            .base
+            .classes
+            .iter()
+            .zip(&regen.classes)
+            .zip(&carried.classes)
+        {
+            if base_class.name != out_class.name || base_class.namespace != out_class.namespace {
+                return Err("hybrid defaults carried existing class identity changed".into());
+            }
+            if base_class.methods.len() != out_class.methods.len() {
+                return Err(format!(
+                    "hybrid defaults carried method count mismatch in {}",
+                    base_class.name
+                ));
+            }
+            let mut regen_methods = regen_class.methods.iter();
+            for (base_method, out_method) in base_class.methods.iter().zip(&out_class.methods) {
+                let (expected_bytes, expected_range) = if base_method.name.starts_with("__") {
+                    (self.base_entry.as_slice(), &base_method.raw)
+                } else {
+                    let regen_method = regen_methods.next().ok_or_else(|| {
+                        "hybrid defaults postcondition exhausted regenerated methods".to_string()
+                    })?;
+                    (regen_entry_bytes, &regen_method.raw)
+                };
+                compare_range(
+                    expected_bytes,
+                    expected_range,
+                    output_entry_bytes,
+                    &out_method.raw,
+                    &format!("hybrid {}::{}", base_class.name, base_method.name),
+                )?;
+            }
+            if regen_methods.next().is_some() {
+                return Err("hybrid defaults postcondition left regenerated methods".into());
+            }
+            let expected_table = self
+                .base_entry
+                .get(base_class.method_table.clone())
+                .ok_or_else(|| "hybrid defaults expected MethodTable range is invalid".to_string())?;
+            let actual_table = output_entry_bytes
+                .get(out_class.method_table.clone())
+                .ok_or_else(|| "hybrid defaults output MethodTable range is invalid".to_string())?;
+            if expected_table != actual_table {
+                return Err(format!(
+                    "hybrid defaults postcondition changed {} MethodTable",
+                    base_class.name
+                ));
+            }
+        }
+        for (regen_class, out_class) in regen
+            .classes
+            .iter()
+            .skip(self.base.classes.len())
+            .zip(carried.classes.iter().skip(self.base.classes.len()))
+        {
+            compare_range(
+                regen_entry_bytes,
+                &(regen_class.prefix.start..regen_class.preprocessor_tail.end),
+                output_entry_bytes,
+                &(out_class.prefix.start..out_class.preprocessor_tail.end),
+                "hybrid appended class",
+            )?;
+        }
+        Ok(())
+    }
+
     fn compare_module_functions(
         &self,
         regen_bytes: &[u8],
@@ -1141,45 +1581,95 @@ impl GeneratedDefaultsPlan {
                 )?;
                 continue;
             }
-            if base.name != regenerated.name || base.namespace != regenerated.namespace {
-                return Err(format!(
-                    "generated-default compiler wrapper identity drift at module function \
-                     {index}: {}::{}/{}::{}",
-                    base.namespace, base.name, regenerated.namespace, regenerated.name
-                ));
-            }
-            compare_range(
-                &self.base_entry,
-                &base.declaration,
-                regen_bytes,
-                &regenerated.declaration,
-                &format!("module compiler wrapper {index} declaration"),
-            )?;
-            compare_range(
-                &self.base_entry,
-                &base.ufunction_tail,
-                regen_bytes,
-                &regenerated.ufunction_tail,
-                &format!("module compiler wrapper {index} UFUNCTION metadata"),
-            )?;
-            // The qualified hotfix compiler adds trait bit 0 to class-name factory wrappers while
-            // the shipped record has FINAL (32) alone. This exact 32 -> 33 transition is the only
-            // accepted wrapper drift; output restores the base wrapper byte-exact.
-            let class_factory = self
-                .base
-                .classes
-                .iter()
-                .any(|class| class.name == base.name);
-            if base.traits != regenerated.traits
-                && !(class_factory && base.traits == 32 && regenerated.traits == 33)
-            {
-                return Err(format!(
-                    "generated-default compiler wrapper {} traits drift: base {}, regenerated {}",
-                    base.name, base.traits, regenerated.traits
-                ));
-            }
+            self.compare_generated_free_function(regen_bytes, base, regenerated, index)?;
         }
         Ok(())
+    }
+
+    /// The source emitter omits a handful of compiler-generated free wrappers.  Their bodies are
+    /// carried byte-exact, but only after their declaration and shipping metadata prove that this
+    /// is the same wrapper.  The narrow 32 -> 33 factory trait transition is observed compiler
+    /// behavior; every other drift is rejected before the carry.
+    fn compare_generated_free_function(
+        &self,
+        regen_bytes: &[u8],
+        base: &FunctionRecord,
+        regenerated: &FunctionRecord,
+        base_index: usize,
+    ) -> Result<(), String> {
+        if base.name != regenerated.name || base.namespace != regenerated.namespace {
+            return Err(format!(
+                "generated-default compiler wrapper identity drift at module function \
+                 {base_index}: {}::{}/{}::{}",
+                base.namespace, base.name, regenerated.namespace, regenerated.name
+            ));
+        }
+        compare_range(
+            &self.base_entry,
+            &base.declaration,
+            regen_bytes,
+            &regenerated.declaration,
+            &format!("module compiler wrapper {base_index} declaration"),
+        )?;
+        compare_range(
+            &self.base_entry,
+            &base.ufunction_tail,
+            regen_bytes,
+            &regenerated.ufunction_tail,
+            &format!("module compiler wrapper {base_index} UFUNCTION metadata"),
+        )?;
+        let class_factory = self
+            .base
+            .classes
+            .iter()
+            .any(|class| class.name == base.name);
+        if base.traits != regenerated.traits
+            && !(class_factory && base.traits == 32 && regenerated.traits == 33)
+        {
+            return Err(format!(
+                "generated-default compiler wrapper {} traits drift: base {}, regenerated {}",
+                base.name, base.traits, regenerated.traits
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_hybrid_module_functions(
+        &self,
+        regen_bytes: &[u8],
+        regen: &ModuleEntry,
+    ) -> Result<Vec<usize>, String> {
+        let matches = existing_free_function_subsequence_indices(
+            &self.base_entry,
+            &self.base.functions,
+            regen_bytes,
+            regen,
+            self.base.classes.len(),
+            "hybrid module free functions",
+        )?;
+        for (base_index, (base, &regen_index)) in self
+            .base
+            .functions
+            .iter()
+            .zip(&matches)
+            .enumerate()
+        {
+            let regenerated = regen.functions.get(regen_index).ok_or_else(|| {
+                "hybrid defaults matched free-function index is out of bounds".to_string()
+            })?;
+            if self.generated_free_indices.contains(&base_index) {
+                self.compare_generated_free_function(regen_bytes, base, regenerated, base_index)?;
+            } else {
+                compare_function(
+                    &self.base_entry,
+                    base,
+                    regen_bytes,
+                    regenerated,
+                    &format!("hybrid module free functions[{base_index}]"),
+                )?;
+            }
+        }
+        Ok(matches)
     }
 
     fn validate_regenerated(&self, regen_bytes: &[u8], regen: &ModuleEntry) -> Result<(), String> {
@@ -1783,10 +2273,33 @@ fn compare_existing_free_function_subsequence(
     base_class_count: usize,
     what: &str,
 ) -> Result<(), String> {
+    existing_free_function_subsequence_indices(
+        left_bytes,
+        left,
+        right_bytes,
+        regenerated_module,
+        base_class_count,
+        what,
+    )
+    .map(|_| ())
+}
+
+/// Return the regenerated position of every existing free function, preserving declaration order.
+/// Entries skipped between two existing declarations must be the one empirically established
+/// compiler helper for an appended class; arbitrary authored functions never qualify.
+fn existing_free_function_subsequence_indices(
+    left_bytes: &[u8],
+    left: &[FunctionRecord],
+    right_bytes: &[u8],
+    regenerated_module: &ModuleEntry,
+    base_class_count: usize,
+    what: &str,
+) -> Result<Vec<usize>, String> {
     let right = &regenerated_module.functions;
     let new_classes =
         &regenerated_module.classes[base_class_count.min(regenerated_module.classes.len())..];
     let mut next = 0usize;
+    let mut matches = Vec::with_capacity(left.len());
     for (index, base) in left.iter().enumerate() {
         loop {
             let Some(regenerated) = right.get(next) else {
@@ -1797,6 +2310,7 @@ fn compare_existing_free_function_subsequence(
                 ));
             };
             if function_declaration_matches(left_bytes, base, right_bytes, regenerated)? {
+                matches.push(next);
                 next += 1;
                 break;
             }
@@ -1810,7 +2324,7 @@ fn compare_existing_free_function_subsequence(
             next += 1;
         }
     }
-    Ok(())
+    Ok(matches)
 }
 
 fn is_new_class_compiler_helper(function: &FunctionRecord, new_classes: &[ClassRecord]) -> bool {
@@ -2823,6 +3337,248 @@ mod tests {
         let modules = model::parse_modules(base).map_err(|error| error.to_string())?;
         GeneratedDefaultsPlan::prepare(base, &modules, MODULE)?
             .ok_or_else(|| "fixture unexpectedly has no defaults plan".to_string())
+    }
+
+    #[test]
+    fn hybrid_carry_preserves_existing_defaults_and_retains_appended_class_defaults() {
+        let base = base_cache();
+        let modules = model::parse_modules(&base).unwrap();
+        let authored = HashSet::from(["UNewDialogTopic".to_owned()]);
+        let plan = GeneratedDefaultsPlan::prepare_hybrid(&base, &modules, MODULE, &authored)
+            .unwrap()
+            .expect("base fixture has generated defaults");
+        assert!(plan.allows_new_symbols());
+
+        let regen = cache(
+            &[
+                class_record(
+                    CLASS,
+                    "",
+                    "Value",
+                    &[
+                        MethodSpec {
+                            name: "Before",
+                            traits: 0,
+                            code: &[2, 7, 10],
+                        },
+                        MethodSpec {
+                            name: "After",
+                            traits: 4,
+                            code: &[2, 9, 10],
+                        },
+                    ],
+                    &[-1, 0, -1, 1],
+                    &[2, 3, 10],
+                ),
+                class_record_with_raw_methods(
+                    "UNewDialogTopic",
+                    &[function_with_id(
+                        &MethodSpec {
+                            name: "__InitDefaults",
+                            traits: 0x40000,
+                            code: &[2, 99, 10],
+                        },
+                        0x6a6a_0001,
+                    )],
+                ),
+            ],
+            &[2, 5, 10],
+            0x2222,
+        );
+        let out = plan.apply(&regen).unwrap();
+        let parse = |bytes: &[u8], context| {
+            let end = module_region_end(bytes).unwrap();
+            parse_entry(&bytes[CacheHeader::SIZE..end], context).unwrap()
+        };
+        let base_entry = parse(&base, "hybrid base");
+        let regen_entry = parse(&regen, "hybrid regen");
+        let out_entry = parse(&out, "hybrid out");
+        let base_defaults = &base_entry.classes[0].methods[1];
+        let out_defaults = &out_entry.classes[0].methods[1];
+        assert_eq!(
+            function_raw(&out, out_defaults),
+            function_raw(&base, base_defaults),
+            "the existing class keeps its byte-exact base defaults"
+        );
+        let regen_new_defaults = &regen_entry.classes[1].methods[0];
+        let out_new_defaults = &out_entry.classes[1].methods[0];
+        assert_eq!(
+            function_raw(&out, out_new_defaults),
+            function_raw(&regen, regen_new_defaults),
+            "the appended class keeps compiler-authored defaults"
+        );
+    }
+
+    #[test]
+    fn hybrid_carry_rejects_authored_defaults_for_an_existing_base_class() {
+        let base = base_cache();
+        let modules = model::parse_modules(&base).unwrap();
+        let authored = HashSet::from([CLASS.to_owned(), "UNewDialogTopic".to_owned()]);
+        let error = GeneratedDefaultsPlan::prepare_hybrid(&base, &modules, MODULE, &authored)
+            .unwrap_err();
+        assert!(
+            error.contains("refuses authored defaults for existing base class"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn hybrid_carry_preserves_existing_generated_free_wrapper_and_new_static_class() {
+        const TOPIC: &str = "UGoreDialogTopic";
+        let base_class = class_record(
+            CLASS,
+            "",
+            "Value",
+            &[MethodSpec {
+                name: "__InitDefaults",
+                traits: 0x40000,
+                code: &[2, 42, 10],
+            }],
+            &[0],
+            &[10],
+        );
+        let ordinary_base = function(&MethodSpec {
+            name: "FreeFunction",
+            traits: 0,
+            code: &[10],
+        });
+        let wrapper_base = function_with_return(
+            &MethodSpec {
+                name: "Get",
+                traits: 0,
+                code: &[2, 41, 10],
+            },
+            &object_handle_datatype(),
+        );
+        let base = cache_with_functions(&[base_class], &[ordinary_base, wrapper_base], 1);
+        let modules = model::parse_modules(&base).unwrap();
+        let plan = GeneratedDefaultsPlan::prepare_hybrid(
+            &base,
+            &modules,
+            MODULE,
+            &HashSet::from([TOPIC.to_owned()]),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(plan.generated_free_indices, HashSet::from([1]));
+
+        let ordinary_regen = function(&MethodSpec {
+            name: "FreeFunction",
+            traits: 0,
+            code: &[2, 7, 10],
+        });
+        let new_static_class = function_with_namespace(
+            &MethodSpec {
+                name: "StaticClass",
+                traits: 0,
+                code: &[2, 77, 10],
+            },
+            TOPIC,
+        );
+        let wrapper_regen = function_with_return(
+            &MethodSpec {
+                name: "Get",
+                traits: 0,
+                code: &[2, 99, 10],
+            },
+            &object_handle_datatype(),
+        );
+        let regen = cache_with_functions(
+            &[
+                class_record(CLASS, "", "Value", &[], &[], &[2, 8, 10]),
+                class_record_with_raw_methods(
+                    TOPIC,
+                    &[function_with_id(
+                        &MethodSpec {
+                            name: "__InitDefaults",
+                            traits: 0x40000,
+                            code: &[2, 99, 10],
+                        },
+                        0x6a6a_0001,
+                    )],
+                ),
+            ],
+            &[ordinary_regen, new_static_class, wrapper_regen],
+            2,
+        );
+        let carried = plan.apply(&regen).unwrap();
+        let parse = |bytes: &[u8], context| {
+            let end = module_region_end(bytes).unwrap();
+            parse_entry(&bytes[CacheHeader::SIZE..end], context).unwrap()
+        };
+        let base_entry = parse(&base, "hybrid wrapper base");
+        let regen_entry = parse(&regen, "hybrid wrapper regen");
+        let carried_entry = parse(&carried, "hybrid wrapper carried");
+        assert_eq!(
+            function_raw(&carried, &carried_entry.functions[0]),
+            function_raw(&regen, &regen_entry.functions[0]),
+            "ordinary existing free function remains regenerated"
+        );
+        assert_eq!(
+            function_raw(&carried, &carried_entry.functions[1]),
+            function_raw(&regen, &regen_entry.functions[1]),
+            "new-class StaticClass remains compiler-authored"
+        );
+        assert_eq!(
+            function_raw(&carried, &carried_entry.functions[2]),
+            function_raw(&base, &base_entry.functions[1]),
+            "existing emitter-omitted Get wrapper remains byte-exact"
+        );
+    }
+
+    #[test]
+    fn hybrid_carry_output_fails_structure_plan_when_existing_property_changes() {
+        const TOPIC: &str = "UGoreDialogTopic";
+        let base = base_cache();
+        let modules = model::parse_modules(&base).unwrap();
+        let carry = GeneratedDefaultsPlan::prepare_hybrid(
+            &base,
+            &modules,
+            MODULE,
+            &HashSet::from([TOPIC.to_owned()]),
+        )
+        .unwrap()
+        .unwrap();
+        let structure = ExistingModuleStructurePlan::prepare(&base, MODULE).unwrap();
+        let regen = cache(
+            &[
+                class_record(
+                    CLASS,
+                    "",
+                    "ChangedValue",
+                    &[
+                        MethodSpec {
+                            name: "Before",
+                            traits: 0,
+                            code: &[2, 7, 10],
+                        },
+                        MethodSpec {
+                            name: "After",
+                            traits: 4,
+                            code: &[2, 9, 10],
+                        },
+                    ],
+                    &[-1, 0, -1, 1],
+                    &[2, 3, 10],
+                ),
+                class_record_with_raw_methods(
+                    TOPIC,
+                    &[function_with_id(
+                        &MethodSpec {
+                            name: "__InitDefaults",
+                            traits: 0x40000,
+                            code: &[2, 99, 10],
+                        },
+                        0x6a6a_0001,
+                    )],
+                ),
+            ],
+            &[2, 5, 10],
+            0x2222,
+        );
+        let carried = carry.apply(&regen).unwrap();
+        let error = structure.verify(&carried).unwrap_err();
+        assert!(error.contains("flags/properties"), "{error}");
     }
 
     #[test]

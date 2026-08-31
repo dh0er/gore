@@ -33,9 +33,11 @@ re-reads both 100+ MB caches), which is why earlier revisions of this document r
 627-module sample; the sample and the sweep agreed to within 0.1 points. That sweep has not been
 repeated on this build — its numbers are the earlier build's, which is why the row says so.
 
-The measurement needs the game's `Binds.Cache` next to the script cache it reads. Without it the
-native field table is empty, every native enum field falls back to the bool heuristic, and the
-tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, not of the emitter.
+The measurement needs the matching game's `Binds.Cache` next to the script cache it reads. An
+older run without it let native enum fields fall back to the bool heuristic and then stopped with
+1,474 `bool` to `E*&` errors. Current emission fails closed earlier: if a generated initializer's
+native scalar target cannot be typed, it suppresses authored defaults for that whole module so a
+later edit can use byte-exact carry instead of compiling a partial or mistyped default set.
 
 ## What is left
 
@@ -1054,10 +1056,11 @@ type the base has no `Iterator` row for at all, from a NATIVE getter whose signa
 cannot see (it runs without `Binds.Cache`). `GORE_AS_REMAP_DIAG=1` prints the two identities
 behind any unresolved or ambiguous reference.
 
-Recovery is all-or-nothing per module, because `generated_defaults` can only carry an omitted
-`__InitDefaults` byte-exact for a module that authors no defaults at all. A module that recovered
-only some of its classes would silently drop the rest, so one unrecovered class would suppress the
-whole module and its header would record the class and the reason. **No module in the shipped
+Recovery is all-or-nothing per module. A module that recovered only some of its classes would
+silently drop the rest, so one unrecovered class suppresses the whole module and its header records
+the class and reason. A defaults-free edit carries existing initializers byte-exact; a bounded
+new-symbol hybrid may additionally author defaults on appended classes, but not on a subset of
+existing classes. **No module in the shipped
 corpus is suppressed any more.** Closing the last of them needed six recovery fixes:
 
 - An in-place update (`local_4 = local_4 * local_6;`) READS the definition above it. That read
@@ -1127,8 +1130,10 @@ seconds.
    `default` statements, so an edit goes through the source. `compile-module --op edit` still
    carries existing `__InitDefaults` plus every emitter-omitted executable record for a module
    that authors none, and only after exact header/tail/reference, declaration/layout,
-   method-table, and cache-wide collision proofs. A new-symbol remap, unsupported `__*` shape, or
-   any metadata drift fails closed before publishing a mini-cache. `gore as default-sites` and `patch-default` can
+   method-table, and cache-wide collision proofs. A bounded new-symbol hybrid may add defaults on
+   appended classes while keeping all existing generated records byte-exact; authored defaults on
+   only a subset of existing classes, an unsupported `__*` shape, or any metadata drift fails
+   closed before publishing a mini-cache. `gore as default-sites` and `patch-default` can
    inspect and copy-on-write patch only a unique, branch-free
    `SetV{1,2,4,8} / LoadThisR / WRTV{1,2,4,8}` scalar assignment with exact field-type evidence
    (including parsed-kind proof for script enums),

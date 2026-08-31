@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use thiserror::Error;
 
+use super::default_targets::ExistingDefaultTargetPlan;
 use super::generated_defaults::{
     ExistingFunctionMetadataPlan, ExistingModuleStructurePlan, GeneratedDefaultsPlan,
 };
@@ -25,14 +26,16 @@ const MAX_MODULE_NAME_BYTES: usize = 4_096;
 
 /// Compiler-derived preservation state for one existing module.
 ///
-/// `generated_defaults` is present only for the legacy defaults-free source path. Such a module
-/// must use strict remap before byte-exact carry; an authored-default edit instead uses new-symbol
-/// remap and only restores the existing Unreal function metadata.
+/// `generated_defaults` is present for either the legacy defaults-free source path (strict
+/// remap) or a hybrid edit whose defaults belong exclusively to appended classes (new-symbol
+/// remap). An existing-class authored-default edit instead regenerates every existing default and
+/// only restores the existing Unreal function metadata.
 #[derive(Clone, Debug)]
 pub(crate) struct SelectiveFullGraphEditPreservation {
     metadata: ExistingFunctionMetadataPlan,
     structure: ExistingModuleStructurePlan,
     generated_defaults: Option<GeneratedDefaultsPlan>,
+    default_targets: Option<ExistingDefaultTargetPlan>,
 }
 
 impl SelectiveFullGraphEditPreservation {
@@ -40,11 +43,13 @@ impl SelectiveFullGraphEditPreservation {
         metadata: ExistingFunctionMetadataPlan,
         structure: ExistingModuleStructurePlan,
         generated_defaults: Option<GeneratedDefaultsPlan>,
+        default_targets: Option<ExistingDefaultTargetPlan>,
     ) -> Self {
         Self {
             metadata,
             structure,
             generated_defaults,
+            default_targets,
         }
     }
 }
@@ -342,7 +347,10 @@ fn attempt_change(
     let allow_new_symbols = match change {
         SelectiveFullGraphChange::Add { .. } => true,
         SelectiveFullGraphChange::Edit { preservation, .. } => {
-            preservation.generated_defaults.is_none()
+            preservation
+                .generated_defaults
+                .as_ref()
+                .map_or(true, GeneratedDefaultsPlan::allows_new_symbols)
         }
         SelectiveFullGraphChange::Delete { .. } => unreachable!("deletes fail during preflight"),
     };
@@ -382,6 +390,15 @@ fn attempt_change(
                 reason,
             })
         })?;
+        if let Some(default_targets) = &preservation.default_targets {
+            default_targets.verify(&mini).map_err(|reason| {
+                AttemptFailure::Fatal(SelectiveFullGraphError::Preservation {
+                    module_name: module_name.to_owned(),
+                    stage: "existing default targets",
+                    reason,
+                })
+            })?;
+        }
         preservation.structure.verify(&mini).map_err(|reason| {
             AttemptFailure::Fatal(SelectiveFullGraphError::Preservation {
                 module_name: module_name.to_owned(),

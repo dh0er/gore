@@ -152,8 +152,8 @@ An authored default block replaces the compiler-generated `__InitDefaults`
 record; it is not a patch layered over it. Therefore `check` requires all of
 the following before compilation:
 
-- Every shipped class in the module that had `__InitDefaults` must still author
-  defaults.
+- If any shipped class authors defaults, every shipped class in the module that
+  had `__InitDefaults` must still author defaults.
 - Every shipped default target must remain present at least as often as in the
   checkout. Values and arguments may change, and new defaults may be added, but
   deleting a target cannot silently reset it to an engine value.
@@ -162,10 +162,18 @@ the following before compilation:
 - Existing classes, parents, member layouts and callable signatures remain
   fixed. Method bodies may change; existing declarations may not disappear.
 
-The byte-exact generated-default carry still exists, but only as an
-all-or-nothing fallback for a module whose source authors no defaults. Deleting
-defaults from a normal dialog checkout does not opt into that fallback. A
-partial or ambiguous source is refused before an output mini-cache is written.
+The byte-exact generated-default carry still exists as the fallback when no
+existing class authors defaults. With `--allow-new-symbols`, appended classes
+may author their own defaults while existing initializers and compiler wrappers
+remain byte-exact. Deleting defaults from a normal dialog checkout does not opt
+into that fallback. A mixture containing authored defaults for only some
+existing classes, or any other partial or ambiguous source, is refused before
+an output mini-cache is written.
+
+Checkout must have the matching `Binds.Cache` for the selected game build.
+Without enough native type evidence the emitter writes no authored defaults for
+the affected module, rather than exposing a partial set whose recompilation
+could reset hidden values.
 
 `check` reports changed method bodies and changed default targets. It also
 reports added classes, free functions and string-table entries as requiring

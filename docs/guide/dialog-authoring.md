@@ -108,8 +108,15 @@ authored defaults completely supersede the compiler-generated
 `__InitDefaults`; they are not a partial overlay. `check` therefore rejects a
 missing default-bearing class, a removed shipped default target, another
 emitter-omitted generated `__*` method, or changed existing class/member/callable
-layout. The old byte-exact carry remains only for source with no authored
-defaults at all. It cannot be selected by deleting part of a normal checkout.
+layout. Checkout uses the matching game-build `Binds.Cache`; if native field
+types cannot be proven, the emitter suppresses defaults for that entire module
+instead of producing a partial editable set.
+
+The byte-exact carry remains the fallback when no existing class authors
+defaults. With `--allow-new-symbols`, an appended class may author its own
+defaults while every existing initializer and compiler wrapper is still carried
+byte-exact. It cannot be selected by deleting part of a normal checkout, nor can
+it mix authored defaults from only some existing classes with carried ones.
 
 For an existing declaration, compilation keeps the shipped `FunctionTraits`
 and complete Unreal-function descriptor while replacing the bytecode and its
@@ -206,9 +213,12 @@ gore as compile-module --backend standalone --op edit `
 ```
 
 The strict standalone backend compiles and remaps without launching the game or
-writing into its install. Complete authored defaults are what make
-`--op edit --allow-new-symbols` safe: no stale `__InitDefaults` carry remains to
-depend on the old keyspace. A partial default set still fails closed.
+writing into its install. Complete authored defaults make the normal checkout
+form of `--op edit --allow-new-symbols` safe: every existing initializer is
+regenerated from source and every old semantic target is checked after remap. A
+partial default set still fails closed. The separate no-existing-defaults hybrid
+keeps existing initializers byte-exact and permits defaults only on appended
+classes.
 
 The current live qualification used BuildID `24878692` and pristine Shipping
 cache SHA-256

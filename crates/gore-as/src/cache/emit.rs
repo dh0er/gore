@@ -507,6 +507,21 @@ fn recover_module_defaults<'a>(
                 )),
             );
         }
+        // A direct scalar store names only its declaring owner + byte offset in the script
+        // cache. For a field declared on a native base/struct, Binds.Cache is the only source of
+        // the VALUE type. Rendering without it used to do two unsafe things at once: omit stores
+        // whose width was ambiguous (DebugId/PriorityRank), and spell one-byte native enums as
+        // bools (`RangeType = (3 != 0)`). That is a partial authored default set, and once one
+        // `default` statement is present the compiler regenerates __InitDefaults instead of the
+        // edit path carrying the old method.
+        //
+        // Refuse the whole module's authored defaults before rendering when one of the exact
+        // scalar-store destinations has no declared value type. The ordinary no-defaults carry
+        // path then remains byte-exact, while placing Binds.Cache beside the input (or setting
+        // GORE_AS_BINDS) recovers the complete editable set.
+        if let Err(reason) = require_typed_default_scalar_stores(init, refs) {
+            return (HashMap::new(), Some(format!("{} ({reason})", c.name)));
+        }
         let fields = class_field_types(c, refs);
         let mut rendered = String::new();
         emit_function_ctor(
@@ -549,6 +564,62 @@ fn recover_module_defaults<'a>(
         }
     }
     (recovered, None)
+}
+
+/// Prove the value type of every scalar member destination whose bytecode exposes the standard
+/// generated-default store shape.
+///
+/// `LoadThisR; WRTV*` stores directly into a class field. `ADDSi; PopRPtr; WRTV*` is the nested
+/// native-struct form (`this.ForceSettings.RangeType = ...`). The PropertyReferences row tells us
+/// the owner and field name, but for native declarations it deliberately does not carry the
+/// field's value type; that comes from Binds.Cache. A missing type is therefore missing recovery
+/// evidence, not permission to infer `bool` from WRTV1 or to discard a wider store.
+fn require_typed_default_scalar_stores(f: &Func, refs: &RefResolver) -> Result<(), String> {
+    let instrs = disassemble(&f.bytecode)
+        .map_err(|error| format!("initializer bytecode cannot be inspected: {error}"))?;
+
+    for (at, store) in instrs.iter().enumerate() {
+        if !matches!(store.op.name, "WRTV1" | "WRTV2" | "WRTV4" | "WRTV8") {
+            continue;
+        }
+        let destination = match at.checked_sub(1).and_then(|index| instrs.get(index)) {
+            Some(load) if load.op.name == "LoadThisR" => Some(load),
+            Some(pop) if pop.op.name == "PopRPtr" => at
+                .checked_sub(2)
+                .and_then(|index| instrs.get(index))
+                .filter(|member| member.op.name == "ADDSi"),
+            _ => None,
+        };
+        let Some(destination) = destination else {
+            continue;
+        };
+        let offset = destination
+            .words
+            .first()
+            .map(|word| *word as i16 as i32)
+            .ok_or_else(|| "default scalar store has no member offset".to_owned())?;
+        let type_id = destination
+            .dwords
+            .first()
+            .copied()
+            .map(|word| word as i32)
+            .ok_or_else(|| "default scalar store has no declaring type id".to_owned())?;
+        let owner = refs.type_by_id(type_id).ok_or_else(|| {
+            format!("default scalar store has unknown declaring type id {type_id:#x}")
+        })?;
+        let field = refs.member(type_id, offset).ok_or_else(|| {
+            format!("default scalar store has unknown member {type_id:#x}+{offset}")
+        })?;
+        let typed = refs.field_type_by_class(owner, field).is_some()
+            || refs.native_field_value_type(owner, field).is_some()
+            || refs.native_field_type(owner, field).is_some();
+        if !typed {
+            return Err(format!(
+                "default scalar field {owner}.{field} has no declared value type; load the matching Binds.Cache to author this module's defaults"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Field name -> base type name for a class, including every INHERITED script field, so the body
@@ -15234,6 +15305,54 @@ fn is_generated(
     class_members
         .get(f.namespace.as_str())
         .is_some_and(|members| members.contains(f.name.as_str()))
+}
+
+#[cfg(test)]
+mod default_binds_regression_tests {
+    use super::*;
+    use crate::cache::binds::NativeApi;
+    use crate::cache::emit_all::PreparedEmit;
+    use crate::cache::model::parse_modules;
+
+    const DIEGO: &str = "Story.G1R.Conversation.Conversation_OC_STT_DIEGO";
+
+    fn emitted_diego(cache: &[u8], native: Option<NativeApi>) -> String {
+        let modules = parse_modules(cache).expect("parse Shipping cache");
+        let index = modules
+            .iter()
+            .position(|module| module.name == DIEGO)
+            .expect("Diego module");
+        let mut refs = RefResolver::build(cache).expect("parse Shipping references");
+        PreparedEmit::new(&modules, &mut refs, native)
+            .expect("prepare emitter")
+            .with_class_defaults(true)
+            .emit_module(index)
+            .expect("emit Diego")
+    }
+
+    #[test]
+    #[ignore = "requires GORE_AS_CACHE and GORE_AS_BINDS Shipping fixtures"]
+    fn diego_defaults_fail_closed_without_binds_and_are_complete_with_them() {
+        let cache = std::fs::read(std::env::var_os("GORE_AS_CACHE").expect("set GORE_AS_CACHE"))
+            .expect("read Shipping cache");
+        let binds = std::fs::read(std::env::var_os("GORE_AS_BINDS").expect("set GORE_AS_BINDS"))
+            .expect("read Binds.Cache");
+
+        let without = emitted_diego(&cache, None);
+        assert_eq!(without.matches("    default ").count(), 0);
+        assert!(without.contains("load the matching Binds.Cache"));
+
+        let with = emitted_diego(
+            &cache,
+            Some(NativeApi::from_bytes(&binds).expect("parse Binds.Cache")),
+        );
+        assert_eq!(with.matches("    default ").count(), 441);
+        assert!(with.contains("default DebugId = -1370378632990835844;"));
+        assert!(with.contains("default PriorityRank = 3;"));
+        assert!(with.contains("default ForceSettings.RangeType = EConversationForceRangeType(3);"));
+        assert!(with.contains("default ForceSettings.ApproachBy = EConversationForceWalk(2);"));
+        assert!(!with.contains("ForceSettings.RangeType = (3 != 0)"));
+    }
 }
 
 #[cfg(test)]

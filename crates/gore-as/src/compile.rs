@@ -3748,14 +3748,33 @@ fn prepare_full_graph_request_v1(
     let mut selective_changes = Vec::with_capacity(prepared_edits.len() + prepared_adds.len());
     for (base_index, (_, source)) in &prepared_edits {
         let module_name = &base_manifest[*base_index].module_name;
+        let overlay_authors_defaults = source_contains_default_token(source).map_err(|reason| {
+            CompileError::Other(format!(
+                "checking FullGraph edit defaults for module {module_name:?}: {reason}"
+            ))
+        })?;
         let generated_defaults = prepare_generated_defaults_edit(
             "edit",
             &base_modules,
             module_name,
             &opts.base_cache,
             source,
-            false,
+            overlay_authors_defaults,
         )?;
+        let default_targets = if overlay_authors_defaults {
+            crate::cache::default_targets::ExistingDefaultTargetPlan::prepare(
+                &opts.base_cache,
+                module_name,
+                source,
+            )
+            .map_err(|reason| {
+                CompileError::Other(format!(
+                    "refusing default-target preservation for FullGraph edit module {module_name:?}: {reason}"
+                ))
+            })?
+        } else {
+            None
+        };
         let metadata =
             crate::cache::generated_defaults::ExistingFunctionMetadataPlan::prepare(
                 &opts.base_cache,
@@ -3782,6 +3801,7 @@ fn prepare_full_graph_request_v1(
                     metadata,
                     structure,
                     generated_defaults,
+                    default_targets,
                 ),
             ),
         );
@@ -4377,6 +4397,34 @@ fn prepare_generated_defaults_edit(
         // authored overlay would silently lose the classes it left out.
         let authored = crate::cache::default_source::classes_with_default_statements(overlay)
             .map_err(|reason| refusal(&reason))?;
+        let base_module = mods
+            .iter()
+            .find(|module| module.name == module_name)
+            .expect("generated-default inventory already proved one base module");
+        let authored_existing = authored
+            .iter()
+            .filter(|class| base_module.classes.iter().any(|base| base.name == **class))
+            .cloned()
+            .collect::<Vec<_>>();
+        if authored_existing.is_empty() && !authored.is_empty() {
+            if !allow_new_symbols {
+                return Err(refusal(
+                    "defaults belong only to appended classes, so preserving existing defaults \
+                     requires new-symbol remap; enable --allow-new-symbols",
+                ));
+            }
+            return crate::cache::generated_defaults::GeneratedDefaultsPlan::prepare_hybrid(
+                base,
+                mods,
+                module_name,
+                &authored,
+            )
+            .map_err(|reason| {
+                refusal(&format!(
+                    "hybrid existing-default carry is unproven: {reason}"
+                ))
+            });
+        }
         let mut unsuperseded = Vec::new();
         for entry in &omitted {
             match entry.strip_suffix("::__InitDefaults") {
@@ -7998,6 +8046,21 @@ where
         &overlay,
         opts.allow_new_symbols,
     )?;
+    let existing_default_targets = if opts.op == "edit" && baseline_defaults {
+        crate::cache::default_targets::ExistingDefaultTargetPlan::prepare(
+            &base,
+            &effective_module_name,
+            &overlay,
+        )
+        .map_err(|reason| {
+            CompileError::Other(format!(
+                "refusing default-target preservation for edit module {:?}: {reason}",
+                effective_module_name
+            ))
+        })?
+    } else {
+        None
+    };
     let existing_function_metadata = if opts.op == "edit" {
         Some(
             crate::cache::generated_defaults::ExistingFunctionMetadataPlan::prepare(
@@ -8007,6 +8070,25 @@ where
             .map_err(|reason| {
                 CompileError::Other(format!(
                     "refusing function-metadata preservation for edit module {:?}: {reason}",
+                    effective_module_name
+                ))
+            })?,
+        )
+    } else {
+        None
+    };
+    // An edit may append whole classes, but it must not silently alter the reflection/layout of
+    // an existing one.  Verify this only after all qualified repairs (defaults, function metadata
+    // and authored-default targets) have completed; the plan copies no base structure itself.
+    let existing_module_structure = if opts.op == "edit" {
+        Some(
+            crate::cache::generated_defaults::ExistingModuleStructurePlan::prepare(
+                &base,
+                &effective_module_name,
+            )
+            .map_err(|reason| {
+                CompileError::Other(format!(
+                    "refusing structure preservation for edit module {:?}: {reason}",
                     effective_module_name
                 ))
             })?,
@@ -8109,6 +8191,22 @@ where
         mini = plan.apply(&mini).map_err(|reason| {
             CompileError::Other(format!(
                 "refusing function-metadata preservation for edit module {:?}: {reason}",
+                effective_module_name
+            ))
+        })?;
+    }
+    if let Some(plan) = existing_default_targets {
+        plan.verify(&mini).map_err(|reason| {
+            CompileError::Other(format!(
+                "refusing default-target preservation for edit module {:?}: {reason}",
+                effective_module_name
+            ))
+        })?;
+    }
+    if let Some(plan) = existing_module_structure {
+        plan.verify(&mini).map_err(|reason| {
+            CompileError::Other(format!(
+                "refusing structure preservation for edit module {:?}: {reason}",
                 effective_module_name
             ))
         })?;

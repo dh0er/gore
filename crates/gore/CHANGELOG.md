@@ -41,8 +41,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Shipped source includes reconstructed defaults for `Caption`, `PriorityRank`,
   `Rules` and flags. Checks reject partial default coverage, removed shipped
   targets, unsupported generated-method loss and unsafe shipped-ABI drift before
-  compilation; byte-exact default carry remains only for source without
-  authored defaults.
+  compilation. Matching `Binds.Cache` evidence is required before native
+  scalar/enum defaults are exposed for authoring. Byte-exact carry remains for
+  existing classes when none of them authors defaults, including the bounded
+  `--allow-new-symbols` case where only appended classes add defaults.
 - Checked edits can retain intentional new-symbol rows and append a new topic
   class inside the owning namespace of the same existing conversation module.
   Qualified class identity, namespace residence, native root/direct-sub-topic

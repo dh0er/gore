@@ -408,17 +408,20 @@ adapter surface.
   bytecode and its frame metadata remain paired and are not copied back from
   Shipping. A genuinely new function has no base record to inherit and keeps
   the compiler-authored metadata produced from its source declaration.
-- Authored defaults are an all-or-nothing supersession. Every base class with
-  `__InitDefaults` must still author defaults, and every shipped default target
-  must remain present at least as often as in the checkout. A different value,
-  call argument or additional target is allowed; a missing class or target,
+- Authored defaults for existing classes are an all-or-nothing supersession.
+  Once one base class authors defaults, every base class with `__InitDefaults`
+  must still author them, and every shipped semantic default target must remain
+  present at least as often as in the base bytecode. A different value, call
+  argument or additional target is allowed; a missing class or target,
   malformed/ambiguous source, or another emitter-omitted generated `__*` method
   fails closed before a mini-cache is written. Existing class ancestry,
   property layout and callable identities also remain fixed because no runtime
   ABI migration for shipped classes is proven.
-- Byte-exact generated-method carry remains an all-or-nothing fallback only
-  when the overlay authors no defaults. It uses strict base-keyspace remapping,
-  cannot be combined with `--allow-new-symbols`, and requires exact class
+- Byte-exact generated-method carry remains the fallback when no existing class
+  authors defaults. The ordinary form uses strict base-keyspace remapping. A
+  bounded hybrid may use `--allow-new-symbols` only so appended classes can own
+  new defaults; every existing initializer and compiler-generated wrapper still
+  comes byte-for-byte from the base. Both forms require exact class
   identity/layout, ordinary and UFUNCTION signatures, constructors, behavior
   declarations, module globals/imports and source identity. The generated
   record, emitter-omitted factory/spawn/accessor wrappers, every
@@ -427,6 +430,10 @@ adapter surface.
   are reparsed, function ids must remain unique, and a strict self-remap first
   proves every copied vanilla reference resolves uniquely. Removing part of an
   authored checkout cannot opt into carry; the partial overlay is rejected.
+- Default reconstruction itself requires the matching game-build
+  `Binds.Cache`. If a native scalar or enum target cannot be typed, GORE
+  suppresses authored defaults for that whole module so this carry path remains
+  available; it never presents the known subset as a complete editable source.
 - Once every generated default is superseded by authored source,
   `compile-module --op edit --allow-new-symbols` may retain the minimal new
   class, function, name and string rows. The bounded dialog edit shape appends a

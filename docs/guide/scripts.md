@@ -41,9 +41,12 @@ mirrors each module's `ScriptRelativeFilename` into the output tree.
 entries; pass indices to print specific ones. These are the literals that
 `__STATIC_NAME(Id)` resolves against.
 
-Decompilation and emit resolve native-call arities and native field types from a
-`Binds.Cache` placed next to the input cache, or from the path in
-`GORE_AS_BINDS`.
+Decompilation and emit resolve native-call arities and native field types from
+the **matching** `Binds.Cache` placed next to the input cache, or from the path
+in `GORE_AS_BINDS`. Keep both caches from the same game build. Without that
+type evidence GORE does not guess native enum or scalar field types: if such a
+store occurs in `__InitDefaults`, it suppresses authored defaults for the whole
+module and leaves recompilation to the byte-exact carry fallback.
 
 Emitted classes carry their `default` statements — the class-scope statements
 that give an item its name, value and damage, an NPC its config, a camera its
@@ -62,14 +65,20 @@ class UItMw_1H_Sword_Old_01 : USword1H
 
 You can edit those statements and splice the module back with `compile-module
 --op edit`; the compiler regenerates the class defaults from your source and the
-old copies are dropped rather than carried. An overlay that declares defaults for
-only some of a module's classes is refused, because the classes it left out would
-lose theirs silently. Authored-default edits containing preprocessor directives
-are also refused: coverage is checked before compiler preprocessing, so a disabled
-branch must not count as a surviving default. If you would rather not author
-defaults at all, emit the module with `gore as emit --no-defaults` (or `emit-all
---no-defaults`) and edit that: the module's existing defaults are then carried
-back byte-exact instead of being regenerated.
+old copies are dropped rather than carried. Every existing default-bearing class
+and every existing semantic target must remain represented at least as often as
+in the base cache; values and call arguments may change, but a partial overlay is
+refused instead of silently losing defaults. Authored-default edits containing
+preprocessor directives are also refused: coverage is checked before compiler
+preprocessing, so a disabled branch must not count as a surviving default.
+
+If you would rather not author defaults for existing classes, emit the module
+with `gore as emit --no-defaults` (or `emit-all --no-defaults`) and edit that:
+the module's existing defaults are carried back byte-exact instead of being
+regenerated. With `--allow-new-symbols`, that fallback also permits defaults on
+appended classes while continuing to carry every existing class initializer and
+compiler wrapper byte-exact. It does not permit a mixture in which only some
+existing classes author their defaults.
 
 Every module in the shipped game writes its defaults, down to the main map's
 worldpoint and item-spawn tables. Recovery stays all-or-nothing per module: if a
