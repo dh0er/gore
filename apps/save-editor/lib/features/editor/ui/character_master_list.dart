@@ -122,6 +122,7 @@ class CharacterMasterList extends StatefulWidget {
     super.key,
     required this.selected,
     required this.onSelect,
+    this.onSelectedStatusChanged,
     required this.load,
     required this.reloadKey,
     required this.locCatalog,
@@ -135,6 +136,11 @@ class CharacterMasterList extends StatefulWidget {
 
   /// Called when the user taps the Player row, an NPC row, or an orphan row.
   final void Function(Actor) onSelect;
+
+  /// Called after a reload when the freshly loaded row disagrees with the
+  /// selection about whether that character is dead — reviving one otherwise
+  /// left the detail header marking it dead until it was selected again.
+  final void Function(String id, bool isDead)? onSelectedStatusChanged;
 
   /// Loads the full unified character index (called once). Returns EVERY
   /// character in a single unpaginated response (e.g.
@@ -282,6 +288,21 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
             .toList(growable: false),
       );
     });
+    _reconcileSelectedStatus(page.characters);
+  }
+
+  /// The selection carries what the row said when it was tapped. A revive
+  /// changes that, and nothing else replaces it, so tell the owner whenever a
+  /// reload disagrees.
+  void _reconcileSelectedStatus(List<CharacterRow> rows) {
+    final report = widget.onSelectedStatusChanged;
+    final id = widget.selected.id;
+    if (report == null || widget.selected.isPlayer || id == null) return;
+    for (final row in rows) {
+      if (row.globalId != id) continue;
+      if (row.isDead != widget.selected.isDead) report(id, row.isDead);
+      return;
+    }
   }
 
   /// The current filtered ACTOR list (case-insensitive substring of id OR the

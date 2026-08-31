@@ -51,12 +51,7 @@ bool detailTabsCanCarryLabels(double width) =>
 /// in the node's `tooltip`, which platforms surface as help text rather than as
 /// the control's name, so the tab would read out as "Tab 3 of 6" — the
 /// [Icon.semanticLabel] is what puts the name where a labelled tab has it.
-Tab _detailTab(
-  IconData icon,
-  String label,
-  bool labelled, {
-  String? gameIcon,
-}) {
+Tab _detailTab(IconData icon, String label, bool labelled, {String? gameIcon}) {
   final mark = GameIcon(name: gameIcon, fallbackIcon: icon, size: 24);
   return Tab(
     icon: labelled
@@ -241,6 +236,8 @@ class CharactersTab extends ConsumerWidget {
           child: CharacterMasterList(
             selected: selected,
             onSelect: notifier.selectActor,
+            onSelectedStatusChanged: (id, isDead) =>
+                notifier.refreshSelectedActorStatus(id: id, isDead: isDead),
             load: notifier.loadAllCharacters,
             // Reload the character list when the inspected save changes (new
             // inspection identity from a save/refresh), so it never shows the

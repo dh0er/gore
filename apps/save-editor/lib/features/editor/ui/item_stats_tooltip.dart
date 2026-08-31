@@ -47,7 +47,14 @@ class ItemStatsTooltip extends ConsumerStatefulWidget {
 
 class _ItemStatsTooltipState extends ConsumerState<ItemStatsTooltip> {
   final _portal = OverlayPortalController();
-  Rect _anchor = Rect.zero;
+
+  /// Where the row sits, in the overlay's own coordinates. A notifier rather
+  /// than a field: a wheel scroll moves the row without the pointer leaving it,
+  /// so the card has to follow without a rebuild of this widget.
+  final _anchor = ValueNotifier<Rect>(Rect.zero);
+
+  /// The list this row scrolls in, while the card is up.
+  ScrollPosition? _scroll;
   bool _hovering = false;
 
   /// Whether the last build put an [OverlayPortal] in the tree. Showing a
@@ -62,8 +69,22 @@ class _ItemStatsTooltipState extends ConsumerState<ItemStatsTooltip> {
   }
 
   void _showCard() {
+    if (!_measure()) return;
+    // Follow the row while the list scrolls under a pointer that never moves —
+    // otherwise the card kept the position it was opened at and ended up
+    // beside a different row.
+    _scroll = Scrollable.maybeOf(context)?.position?..addListener(_followRow);
+    _portal.show();
+  }
+
+  void _followRow() {
+    if (!mounted || !_portal.isShowing) return;
+    _measure();
+  }
+
+  bool _measure() {
     final box = context.findRenderObject() as RenderBox?;
-    if (box == null || !box.hasSize) return;
+    if (box == null || !box.hasSize) return false;
     // Measure against the overlay the card is placed in, NOT the screen. The
     // whole UI sits inside a scale transform, so screen coordinates are the
     // scaled ones while the overlay lays out in unscaled space — anchoring on
@@ -72,13 +93,23 @@ class _ItemStatsTooltipState extends ConsumerState<ItemStatsTooltip> {
     final overlay =
         Overlay.of(context, rootOverlay: true).context.findRenderObject()
             as RenderBox?;
-    _anchor = box.localToGlobal(Offset.zero, ancestor: overlay) & box.size;
-    _portal.show();
+    _anchor.value =
+        box.localToGlobal(Offset.zero, ancestor: overlay) & box.size;
+    return true;
   }
 
   void _exit() {
     if (_hovering) setState(() => _hovering = false);
+    _scroll?.removeListener(_followRow);
+    _scroll = null;
     if (_portal.isShowing) _portal.hide();
+  }
+
+  @override
+  void dispose() {
+    _scroll?.removeListener(_followRow);
+    _anchor.dispose();
+    super.dispose();
   }
 
   @override
@@ -134,8 +165,12 @@ class _ItemStatsTooltipState extends ConsumerState<ItemStatsTooltip> {
               // hover it is showing for and flicker itself away.
               overlayChildBuilder: (context) => Positioned.fill(
                 child: IgnorePointer(
-                  child: CustomSingleChildLayout(
-                    delegate: _BesideAnchor(_anchor),
+                  child: ValueListenableBuilder<Rect>(
+                    valueListenable: _anchor,
+                    builder: (context, anchor, card) => CustomSingleChildLayout(
+                      delegate: _BesideAnchor(anchor),
+                      child: card,
+                    ),
                     child: ItemTooltipCard(tooltip: tooltip),
                   ),
                 ),

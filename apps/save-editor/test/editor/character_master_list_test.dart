@@ -772,4 +772,49 @@ void main() {
     expect(alphaY, lessThan(mangoY));
     expect(mangoY, lessThan(zetaY));
   });
+
+  testWidgets('a reload that revives the selection is reported back', (
+    tester,
+  ) async {
+    // The selection carries what the row said when it was tapped. Nothing
+    // replaced it for the same id, so reviving an NPC left the detail header
+    // marking it dead until it was selected again.
+    final reported = <(String, bool)>[];
+    var rows = <CharacterRow>[_actor('Diego-WP_A', isDead: true)];
+    Future<CharacterIndexPage> load() async =>
+        CharacterIndexPage(characters: rows, total: rows.length);
+
+    Widget pump(Object key) => wrapWithL10n(
+      Scaffold(
+        body: SizedBox(
+          width: 380,
+          height: 600,
+          child: CharacterMasterList(
+            selected: const Actor.npc(
+              id: 'Diego-WP_A',
+              name: 'Diego',
+              uniqueName: 'Diego',
+              isDead: true,
+            ),
+            onSelect: (_) {},
+            onSelectedStatusChanged: (id, isDead) => reported.add((id, isDead)),
+            load: load,
+            reloadKey: key,
+            locCatalog: const {},
+            lang: kGameLangs.first,
+          ),
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(pump('before'));
+    await tester.pumpAndSettle();
+    // The row still agrees with the selection, so there is nothing to report.
+    expect(reported, isEmpty);
+
+    rows = <CharacterRow>[_actor('Diego-WP_A')];
+    await tester.pumpWidget(pump('after-save'));
+    await tester.pumpAndSettle();
+    expect(reported, [('Diego-WP_A', false)]);
+  });
 }
