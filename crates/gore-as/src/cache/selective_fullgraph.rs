@@ -390,15 +390,6 @@ fn attempt_change(
                 reason,
             })
         })?;
-        if let Some(default_targets) = &preservation.default_targets {
-            default_targets.verify(&mini).map_err(|reason| {
-                AttemptFailure::Fatal(SelectiveFullGraphError::Preservation {
-                    module_name: module_name.to_owned(),
-                    stage: "existing default targets",
-                    reason,
-                })
-            })?;
-        }
         preservation.structure.verify(&mini).map_err(|reason| {
             AttemptFailure::Fatal(SelectiveFullGraphError::Preservation {
                 module_name: module_name.to_owned(),
@@ -430,6 +421,17 @@ fn attempt_change(
             source,
         })
     })?;
+    if let SelectiveFullGraphChange::Edit { preservation, .. } = change {
+        if let Some(default_targets) = &preservation.default_targets {
+            default_targets.verify(&updated).map_err(|reason| {
+                AttemptFailure::Fatal(SelectiveFullGraphError::Preservation {
+                    module_name: module_name.to_owned(),
+                    stage: "existing default targets in composed cache",
+                    reason,
+                })
+            })?;
+        }
+    }
     if matches!(change, SelectiveFullGraphChange::Edit { .. }) {
         let before = exact_module_entry(running, module_name).map_err(|reason| {
             AttemptFailure::Fatal(SelectiveFullGraphError::EffectiveEditProof {

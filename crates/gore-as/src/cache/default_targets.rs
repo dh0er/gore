@@ -763,6 +763,24 @@ mod tests {
         let plan = ExistingDefaultTargetPlan::prepare(&cache, &module, &source)
             .expect("authored defaults must cover the raw target inventory")
             .expect("real oracle source did not author any existing default-bearing class");
+        let extracted = super::super::splice::extract_module(&cache, &module)
+            .expect("extract real default-target module");
+        let mini = super::super::splice::remap_module_to_base(&extracted, &cache)
+            .expect("strict-remap real default-target module");
+        let isolated_error = plan
+            .verify(&mini)
+            .expect_err("an isolated strict mini cannot resolve base-only references");
+        assert!(
+            isolated_error.contains("cannot resolve"),
+            "{isolated_error}"
+        );
+        let mut guard = super::super::splice::SequentialMiniGuard::new(&cache)
+            .expect("prepare real default-target composition guard");
+        let composed = guard
+            .compose_edit(&cache, &mini, &module)
+            .expect("compose real default-target module over its sealed base");
+        plan.verify(&composed)
+            .expect("composed cache resolves every base-only default reference");
         if let Some(regen_path) = std::env::var_os("GORE_AS_REGEN") {
             let regen = std::fs::read(regen_path).expect("read GORE_AS_REGEN");
             plan.verify(&regen)

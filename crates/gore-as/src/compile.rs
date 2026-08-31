@@ -8195,14 +8195,6 @@ where
             ))
         })?;
     }
-    if let Some(plan) = existing_default_targets {
-        plan.verify(&mini).map_err(|reason| {
-            CompileError::Other(format!(
-                "refusing default-target preservation for edit module {:?}: {reason}",
-                effective_module_name
-            ))
-        })?;
-    }
     if let Some(plan) = existing_module_structure {
         plan.verify(&mini).map_err(|reason| {
             CompileError::Other(format!(
@@ -8212,6 +8204,28 @@ where
         })?;
     }
     canonicalize_mini_guid(&mut mini, &base).map_err(CompileError::Other)?;
+    if let Some(plan) = existing_default_targets.as_ref() {
+        let mut guard = splice::SequentialMiniGuard::new(&base).map_err(|error| {
+            CompileError::Other(format!(
+                "preparing composed default-target verification for edit module {:?}: {error}",
+                effective_module_name
+            ))
+        })?;
+        let composed = guard
+            .compose_edit(&base, &mini, &effective_module_name)
+            .map_err(|error| {
+                CompileError::Other(format!(
+                    "composing default-target verification cache for edit module {:?}: {error}",
+                    effective_module_name
+                ))
+            })?;
+        plan.verify(&composed).map_err(|reason| {
+            CompileError::Other(format!(
+                "refusing default-target preservation for edit module {:?}: {reason}",
+                effective_module_name
+            ))
+        })?;
+    }
 
     let mini_path = opts.work_dir.join("module.cache");
     let artifact = write_compiled_artifact(mini_path.clone(), &mini)?;
