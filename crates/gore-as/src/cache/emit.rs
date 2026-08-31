@@ -13187,17 +13187,18 @@ fn renders_a_bool(
 /// from the TEXT — whether it could prove a write comes before every read — and defaulted to
 /// writing the initialiser when it could not. That default is a store the original does not have.
 ///
-/// Any immediate counts, not only zero. A slot seeded with `5` has an initialiser as much as one
-/// seeded with `0`, and asking only about zero would drop the `5` and pass an undefined value.
-/// A slot no store touches at all is the one vanilla declared bare: the callee writes through it,
-/// and there is no read in front for the uninitialised-variable warning to fire on.
+/// Any write counts, not only an immediate one. A slot filled from a call result
+/// (`CpyRtoV4`) or copied from another slot has an initialiser as surely as one given a literal,
+/// and reading only the literal stores would call it uninitialised and drop the value. A slot NO
+/// instruction writes is the one vanilla declared bare: the callee writes through it, and there is
+/// no read in front for the uninitialised-variable warning to fire on.
 fn slots_vanilla_initialises(f: &Func) -> HashSet<i32> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
     };
     instrs
         .iter()
-        .filter(|ins| matches!(ins.op.name, "SetV1" | "SetV4" | "SetV8"))
+        .filter(|ins| writes_destination(ins.op.name))
         .filter_map(|ins| ins.words.first().map(|w| *w as i16 as i32))
         .filter(|slot| *slot > 0)
         .collect()

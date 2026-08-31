@@ -1824,27 +1824,6 @@ fn qualified_target_pristine_script_cache(
     require_qualified_target_pristine_base(target.shipping_cache(), pristine)
 }
 
-/// The seal of a cache file, read in a stream so the whole thing never has to be held.
-///
-/// It has to be the CONTENT, not the header: a spliced cache keeps the GUID of the build it was
-/// spliced into, so a header read would hand a measurement to a cache that was never measured. A
-/// file that cannot be read simply yields no warning.
-fn cache_seal_of(cache: &Path) -> Option<[u8; 32]> {
-    use sha2::{Digest, Sha256};
-    use std::io::Read;
-    let mut file = std::fs::File::open(cache).ok()?;
-    let mut hasher = Sha256::new();
-    let mut buffer = vec![0u8; 1 << 20];
-    loop {
-        let read = file.read(&mut buffer).ok()?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Some(hasher.finalize().into())
-}
-
 fn compiler_binds_path(game: &Path) -> PathBuf {
     let g1r = if game.file_name().is_some_and(|name| name == "G1R") {
         game.to_path_buf()
@@ -3151,13 +3130,6 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let executable_path = compiler_executable_path(&game);
             let shipping_path = compiler_shipping_path(&game);
             let binds_path = compiler_binds_path(&game);
-            // Before anything heavy: splicing recompiles the WHOLE module, so say what
-            // else comes along with the edit while there is still time to look.
-            if let Some(warning) = cache_seal_of(&shipping_path).and_then(|seal| {
-                gore_as::cache::faithfulness::warning_for_module(&seal, &module)
-            }) {
-                eprintln!("{warning}");
-            }
             let target_paths = gore_as::compiler_target::CompilerTargetInputPathsV1 {
                 executable: &executable_path,
                 shipping_cache: &shipping_path,
@@ -3313,6 +3285,16 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 let (base, guard) = guarded_pristine_script_cache(&game)?;
                 (base, Some(guard))
             };
+            // Splicing recompiles the WHOLE module, so say what else comes along with the
+            // edit. Asked of the cache that will ACTUALLY be recompiled: where script mods are
+            // deployed, that is the pristine backup selected above and not the live file, and
+            // hashing the live one would have found no measurement and said nothing.
+            if let Some(warning) = gore_as::cache::faithfulness::warning_for_module(
+                &gore_as::cache::faithfulness::cache_seal(&base_override),
+                &module,
+            ) {
+                eprintln!("{warning}");
+            }
             let binds_override = standalone_target
                 .as_ref()
                 .map(|target| target.binds_cache().to_vec());
