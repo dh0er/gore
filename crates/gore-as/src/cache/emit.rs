@@ -13302,8 +13302,10 @@ fn unwrap_untested_bool_return(body: &str, f: &Func, refs: &RefResolver) -> Stri
     {
         return body.to_owned();
     }
-    // Only the LAST such return is the one the tail witnesses; an earlier one leaves by a jump
-    // and its own test is somewhere this cannot see.
+    // Only the FINAL return is the one the tail witnesses. The last line of this shape is not
+    // necessarily that: a function can test a bool early and leave by another return entirely,
+    // and rewriting the early one against the terminal tail drops a comparison its own bytecode
+    // really performed. So the candidate has to be the last return in the body, full stop.
     let last = body
         .lines()
         .enumerate()
@@ -13312,7 +13314,12 @@ fn unwrap_untested_bool_return(body: &str, f: &Func, refs: &RefResolver) -> Stri
             t.starts_with("return (int(") && t.ends_with(") != 0);")
         })
         .map(|(at, _)| at)
-        .last();
+        .last()
+        .filter(|at| {
+            body.lines()
+                .skip(at + 1)
+                .all(|line| !line.trim_start().starts_with("return"))
+        });
     let mut out: Vec<String> = Vec::new();
     for (at, line) in body.lines().enumerate() {
         let rewritten = (|| {
