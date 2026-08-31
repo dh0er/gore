@@ -458,6 +458,110 @@ void main() {
     expect(core.prepares, 2);
     expect(core.identityReads, 1);
   });
+  test('a new game path reaches the root while a load is in flight', () async {
+    // The resume check gives up while a load is running, and gives up again
+    // when the core is not there. Everything the portraits read hangs off the
+    // published path, so each of those exits left the old installation
+    // standing — and finishing the load did not look at the setting either.
+    final root = Directory.systemTemp.createTempSync(
+      'gore_item_icons_inflight',
+    );
+    addTearDown(() => root.deleteSync(recursive: true));
+    final manifest = File(p.join(root.path, 'manifest.json'))
+      ..writeAsStringSync(
+        jsonEncode({
+          'schema': 1,
+          'buildId': 'generation-a',
+          'itemCount': 1,
+          'items': {'ItFo_Apple': 'ItFo_Apple.png'},
+        }),
+      );
+    final core = _OverlappingItemIconCore();
+    final config = SharedConfig(File(p.join(root.path, 'config.json')))
+      ..setGamePath('D:/installed-a');
+    final container = ProviderContainer(
+      overrides: [
+        itemIconCoreServiceProvider.overrideWithValue(core),
+        sharedConfigProvider.overrideWithValue(config),
+      ],
+    );
+    addTearDown(container.dispose);
+    final sub = container.listen(itemIconCatalogProvider, (_, _) {});
+    addTearDown(sub.close);
+    final loading = container.read(itemIconCatalogProvider.future);
+    await pumpEventQueue();
+    expect(core.prepares, hasLength(1));
+    // Read it here, so there IS a cached answer to go stale.
+    expect(container.read(gameRootProvider), 'D:/installed-a');
+
+    // Another tool rewrites the setting mid-load.
+    config.setGamePath('E:/installed-b');
+    await container
+        .read(itemIconCatalogRefreshProvider)
+        .refreshIfSourceChanged();
+    expect(container.read(gameRootProvider), 'E:/installed-b');
+
+    // And the load that was already running lands against the OLD path.
+    core.prepares.single.complete({
+      'ok': true,
+      'data': {
+        'manifestPath': manifest.path,
+        'sourceIdentity': 'source-a',
+        'sourceGamePath': 'D:/installed-a',
+      },
+    });
+    await loading;
+    expect(container.read(gameRootProvider), 'E:/installed-b');
+  });
+
+  test('a load that lands looks at the setting again', () async {
+    // Nothing resumes here: the setting is rewritten while the load runs and
+    // the only thing that happens afterwards is the load finishing. Reading
+    // the setting once at the start of the load left the old installation
+    // standing for as long as the app kept running.
+    final root = Directory.systemTemp.createTempSync('gore_item_icons_landed');
+    addTearDown(() => root.deleteSync(recursive: true));
+    final manifest = File(p.join(root.path, 'manifest.json'))
+      ..writeAsStringSync(
+        jsonEncode({
+          'schema': 1,
+          'buildId': 'generation-a',
+          'itemCount': 1,
+          'items': {'ItFo_Apple': 'ItFo_Apple.png'},
+        }),
+      );
+    final core = _OverlappingItemIconCore();
+    final config = SharedConfig(File(p.join(root.path, 'config.json')))
+      ..setGamePath('D:/installed-a');
+    final container = ProviderContainer(
+      overrides: [
+        itemIconCoreServiceProvider.overrideWithValue(core),
+        sharedConfigProvider.overrideWithValue(config),
+      ],
+    );
+    addTearDown(container.dispose);
+    final sub = container.listen(itemIconCatalogProvider, (_, _) {});
+    addTearDown(sub.close);
+    final loading = container.read(itemIconCatalogProvider.future);
+    await pumpEventQueue();
+    expect(container.read(gameRootProvider), 'D:/installed-a');
+
+    config.setGamePath('E:/installed-b');
+    core.prepares.single.complete({
+      'ok': true,
+      'data': {
+        'manifestPath': manifest.path,
+        'sourceIdentity': 'source-a',
+        'sourceGamePath': 'D:/installed-a',
+      },
+    });
+    await loading;
+
+    // The catalog that landed belongs to the old installation, so the resolved
+    // root does not answer for the new one — but the setting does.
+    expect(container.read(gameRootProvider), 'E:/installed-b');
+  });
+
   test('a new game path drops the root even when it cannot be read', () async {
     // The configured path is a file another tool rewrites; nothing about that
     // reaches Riverpod. A new installation that is momentarily unreadable

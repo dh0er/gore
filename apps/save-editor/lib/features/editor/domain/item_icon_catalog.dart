@@ -256,16 +256,18 @@ class ItemIconCatalogRefresh {
   /// Check only source-file metadata on resume. Full PNG verification runs
   /// solely when this identity changed or a previously missing install appears.
   Future<void> refreshIfSourceChanged() async {
+    // Read and publish the setting FIRST, before any of the reasons this can
+    // give up: a load in flight, a core that is not there, an installation
+    // that is momentarily unreadable. Everything the portraits read hangs off
+    // the published path, and each of those exits used to leave it behind.
+    // Comparing against the last PREPARED path would also miss a switch away
+    // and back again, which leaves that path equal while the root cached in
+    // between is another installation.
+    final configuredGamePath = _gamePath();
+    _observeGamePath(configuredGamePath);
     if (_catalogIsLoading()) return;
     final core = _core();
     if (!core.isAvailable) return;
-    final configuredGamePath = _gamePath();
-    // Publish it BEFORE anything can bail out, and whatever it says: a new
-    // installation that is momentarily unreadable returns no identity, and
-    // every path below that returns early. Comparing against the last
-    // PREPARED path would also miss a switch away and back again, which leaves
-    // that path equal while the root cached in between is not.
-    _observeGamePath(configuredGamePath);
     final selectionChanged = configuredGamePath != _retention.requestedGamePath;
     final retainedSourceDiffersFromRequest =
         _retention.sourceGamePath != _retention.requestedGamePath;
@@ -370,6 +372,13 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
           : null;
       retention.requestedGamePath = gamePath;
     }
+    // The setting could have been rewritten while this load was in flight, and
+    // the resume check that would have seen it gave up because a load was
+    // running. Read it again now rather than leave the old installation
+    // standing until the next resume.
+    ref.read(configuredGamePathProvider.notifier).state = ref
+        .read(sharedConfigProvider)
+        .gamePath();
     retention.attemptedSourceIdentity = null;
     retention.attemptedRequestedGamePath = null;
     retention.attemptedFailures = 0;
