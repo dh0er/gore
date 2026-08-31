@@ -88,10 +88,17 @@ void main() {
       );
     });
 
-    test('a type tag no filter claims falls back to the prefix', () {
-      expect(stats.filterFor('ItMi_Gold'), isNull);
-      expect(itemCategoryFor('ItMi_Gold', stats: stats), ItemCategory.misc);
-    });
+    test(
+      'a type tag no filter claims lands in Other, not in the prefix tab',
+      () {
+        // The filters and the item types come out of the same script cache, so a
+        // type nothing claims means the game files it nowhere and shows it only
+        // under "All". Reading the tab off the id prefix would contradict the
+        // game's own answer for an item it has one for.
+        expect(stats.filterFor('ItMi_Gold'), isNull);
+        expect(itemCategoryFor('ItMi_Gold', stats: stats), ItemCategory.other);
+      },
+    );
 
     test('an id the stats do not know falls back to the prefix', () {
       expect(
@@ -145,5 +152,37 @@ void main() {
       'ItMi_Gold',
       'ItMi_Orenugget',
     ]); // sorted by id within group
+  });
+
+  test('an item no filter claims goes to Other, not to the prefix guess', () {
+    // The game shows an orc two-hander under "All" and nowhere else: no filter
+    // claims `Item_Weapon_Mace_TwoHand`. Reading `ItMw_` off the name filed it
+    // among the melee weapons instead.
+    final stats = ItemStatsCatalog.fromJsonString('''
+{"schema": 1,
+ "filters": [
+   {"id": "G1R_All", "sortOrder": 1, "itemTags": []},
+   {"id": "G1R_MeleeWeapons", "sortOrder": 2,
+    "itemTags": ["Item_Weapon_Sword_OneHand", "Item_Weapon_Orc_TwoHand"]}
+ ],
+ "items": {
+   "ItMw_2H_Mace_Orc_01_vOrc": {"itemType": "Item_Weapon_Mace_TwoHand"},
+   "ItMw_1H_Sword_02": {"itemType": "Item_Weapon_Sword_OneHand"}
+ }}
+''');
+
+    expect(
+      itemCategoryFor('ItMw_2H_Mace_Orc_01_vOrc', stats: stats),
+      ItemCategory.other,
+    );
+    expect(
+      itemCategoryFor('ItMw_1H_Sword_02', stats: stats),
+      ItemCategory.meleeWeapon,
+    );
+    // An id the catalog has never heard of still falls back to its prefix.
+    expect(
+      itemCategoryFor('ItMw_Something_New', stats: stats),
+      ItemCategory.meleeWeapon,
+    );
   });
 }

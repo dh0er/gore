@@ -98,10 +98,17 @@ ItemCategory? itemCategoryFromFilterId(String filterId) {
 /// tag the tab is exactly the one the game would open it under. Without it (an
 /// id added by a newer game build, or a test) the class-name prefix decides,
 /// which lands in the same tab for every shipped item family.
+///
+/// An item the catalog DOES know but no filter claims goes to [other], not to
+/// the prefix guess: the game shows those seven — orc weapons, a claw, a tail —
+/// under "All" and nowhere else, and reading `ItMw_` off the name would file
+/// them among the melee weapons against the game's own answer.
 ItemCategory itemCategoryFor(String id, {ItemStatsCatalog? stats}) {
+  final known = stats?.statsFor(id);
+  if (known == null) return itemCategoryFromId(id);
   final filter = stats?.filterFor(id);
   final category = filter == null ? null : itemCategoryFromFilterId(filter.id);
-  return category ?? itemCategoryFromId(id);
+  return category ?? ItemCategory.other;
 }
 
 /// Fallback classifier from the Angelscript class-name prefix, used when the
