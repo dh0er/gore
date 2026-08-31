@@ -330,10 +330,9 @@ void main() {
   group('Handel tab', () {
     // The ore card, addressed through its own title: the first Card on the page
     // is the price note, and the first TextField is the character search.
-    final oreCard = find.ancestor(
-      of: find.text('Ore (purchasing power)'),
-      matching: find.byType(Card),
-    );
+    // By key, not by the nearest Card: the whole panel sits on one sheet now,
+    // so a Card ancestor is every row in the tab.
+    final oreCard = find.byKey(const ValueKey('trader-ore-card'));
     Future<void> pumpApp(
       WidgetTester tester,
       GoresaveCoreService core, {

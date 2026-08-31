@@ -195,120 +195,127 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
         if (!(showOreCard && item.isOre) && !removals.contains(item.path)) item,
     ];
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-      child: LayoutBuilder(
-        builder: (context, pane) => Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // The notes, the map switch and the ore card scroll among themselves
-            // once the pane gets short, so they can never squeeze the browser out
-            // of the column — which they did, by 8px, at 620px tall.
-            ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: _headCap(pane.maxHeight)),
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    // First, because it qualifies every number below it — the ore as much
-                    // as the stock counts.
-                    if (unsupported) ...[
-                      _NoteCard(
-                        text: incomplete
-                            ? l10n.traderRecordIncomplete
-                            : l10n.traderDifficultyStockUnsupported,
-                        tone: _NoteTone.warning,
-                      ),
-                      const SizedBox(height: 12),
-                    ],
-                    _NoteCard(text: l10n.traderPriceWarning),
-                    // The core drops setStock from `writable` when no shop
-                    // holds a line while still offering addItem, so "read only"
-                    // has to mean none of the three is available — not merely
-                    // that one of them is missing.
-                    if (widget.editable &&
-                        !unsupported &&
-                        !canSet &&
-                        !canAdd &&
-                        !canRemove) ...[
-                      const SizedBox(height: 12),
-                      Text(
-                        l10n.traderReadOnlyCore,
-                        style: theme.textTheme.bodySmall,
-                      ),
-                    ],
-                    const SizedBox(height: 16),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: SegmentedButton<TraderStockMap>(
-                        segments: [
-                          ButtonSegment(
-                            value: TraderStockMap.current,
-                            icon: const Icon(Icons.storefront_outlined),
-                            label: Text(l10n.traderStockCurrent),
-                          ),
-                          ButtonSegment(
-                            value: TraderStockMap.base,
-                            icon: const Icon(Icons.inventory_outlined),
-                            label: Text(l10n.traderStockBase),
-                          ),
-                        ],
-                        selected: {_map},
-                        onSelectionChanged: (selection) =>
-                            setState(() => _map = selection.first),
-                      ),
-                    ),
-                    if (_map == TraderStockMap.base) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        l10n.traderStockBaseHint,
-                        style: theme.textTheme.bodySmall,
-                      ),
-                    ],
-                    if (showOreCard) ...[
+    // One sheet for the whole tab. Every other detail pane puts its content on
+    // a card; this one had its blocks lying on the bare background, which made
+    // Trade the odd tab out.
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: LayoutBuilder(
+          builder: (context, pane) => Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // The notes, the map switch and the ore card scroll among themselves
+              // once the pane gets short, so they can never squeeze the browser out
+              // of the column — which they did, by 8px, at 620px tall.
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: _headCap(pane.maxHeight),
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // First, because it qualifies every number below it — the ore as much
+                      // as the stock counts.
+                      if (unsupported) ...[
+                        _NoteCard(
+                          text: incomplete
+                              ? l10n.traderRecordIncomplete
+                              : l10n.traderDifficultyStockUnsupported,
+                          tone: _NoteTone.warning,
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+                      _NoteCard(text: l10n.traderPriceWarning),
+                      // The core drops setStock from `writable` when no shop
+                      // holds a line while still offering addItem, so "read only"
+                      // has to mean none of the three is available — not merely
+                      // that one of them is missing.
+                      if (widget.editable &&
+                          !unsupported &&
+                          !canSet &&
+                          !canAdd &&
+                          !canRemove) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          l10n.traderReadOnlyCore,
+                          style: theme.textTheme.bodySmall,
+                        ),
+                      ],
                       const SizedBox(height: 16),
-                      _OreCard(
-                        detail: detail,
-                        editable: canSet,
-                        canRemove: canRemove,
-                        removalPending: removals.contains(kTraderOrePath),
-                        onChanged: (value) =>
-                            _queueSet(_map, kTraderOrePath, value),
-                        onRevert: () => _revert(_map, kTraderOrePath),
-                        onRemove: () => _queueRemove(_map, kTraderOrePath),
-                        pending: _pendingCountFor(_map, kTraderOrePath),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: SegmentedButton<TraderStockMap>(
+                          segments: [
+                            ButtonSegment(
+                              value: TraderStockMap.current,
+                              icon: const Icon(Icons.storefront_outlined),
+                              label: Text(l10n.traderStockCurrent),
+                            ),
+                            ButtonSegment(
+                              value: TraderStockMap.base,
+                              icon: const Icon(Icons.inventory_outlined),
+                              label: Text(l10n.traderStockBase),
+                            ),
+                          ],
+                          selected: {_map},
+                          onSelectionChanged: (selection) =>
+                              setState(() => _map = selection.first),
+                        ),
                       ),
+                      if (_map == TraderStockMap.base) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          l10n.traderStockBaseHint,
+                          style: theme.textTheme.bodySmall,
+                        ),
+                      ],
+                      if (showOreCard) ...[
+                        const SizedBox(height: 16),
+                        _OreCard(
+                          detail: detail,
+                          editable: canSet,
+                          canRemove: canRemove,
+                          removalPending: removals.contains(kTraderOrePath),
+                          onChanged: (value) =>
+                              _queueSet(_map, kTraderOrePath, value),
+                          onRevert: () => _revert(_map, kTraderOrePath),
+                          onRemove: () => _queueRemove(_map, kTraderOrePath),
+                          pending: _pendingCountFor(_map, kTraderOrePath),
+                        ),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: 16),
-            Expanded(
-              child: _StockSection(
-                map: _map,
-                items: rows,
-                lineCount: detail.stock(_map).length,
-                pendingAdds: _pendingAdds(_map),
-                pendingRemovals: [
-                  for (final item in detail.stock(_map))
-                    if (removals.contains(item.path)) item,
-                ],
-                canSet: canSet,
-                canAdd: canAdd,
-                canRemove: canRemove,
-                selectedCategory: _category,
-                onSelectCategory: (category) =>
-                    setState(() => _category = category),
-                pendingOf: _pendingCountFor,
-                onChanged: _queueSet,
-                onRevert: _revert,
-                onRemove: _queueRemove,
-                onRevertAdd: _revertAdd,
-                onAdd: () => _addItem(_map, detail),
+              const SizedBox(height: 16),
+              Expanded(
+                child: _StockSection(
+                  map: _map,
+                  items: rows,
+                  lineCount: detail.stock(_map).length,
+                  pendingAdds: _pendingAdds(_map),
+                  pendingRemovals: [
+                    for (final item in detail.stock(_map))
+                      if (removals.contains(item.path)) item,
+                  ],
+                  canSet: canSet,
+                  canAdd: canAdd,
+                  canRemove: canRemove,
+                  selectedCategory: _category,
+                  onSelectCategory: (category) =>
+                      setState(() => _category = category),
+                  pendingOf: _pendingCountFor,
+                  onChanged: _queueSet,
+                  onRevert: _revert,
+                  onRemove: _queueRemove,
+                  onRevertAdd: _revertAdd,
+                  onAdd: () => _addItem(_map, detail),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -512,8 +519,14 @@ class _OreCard extends ConsumerWidget {
             onPressed: removalPending ? null : onRemove,
           )
         : null;
-    return Card(
-      margin: EdgeInsets.zero,
+    return DecoratedBox(
+      // Named so a test can reach this block without matching on the sheet
+      // every panel now sits on.
+      key: const ValueKey('trader-ore-card'),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: LayoutBuilder(
@@ -579,9 +592,14 @@ class _NoteCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isWarning = tone == _NoteTone.warning;
-    return Card(
-      margin: EdgeInsets.zero,
-      color: isWarning ? theme.colorScheme.errorContainer : null,
+    // A block ON the sheet, not a second card lying on top of it.
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: isWarning
+            ? theme.colorScheme.errorContainer
+            : theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Row(
@@ -848,22 +866,33 @@ class _StockSection extends ConsumerWidget {
                         child: ListView.builder(
                           padding: const EdgeInsets.symmetric(vertical: 4),
                           itemCount: rows.length,
-                          itemBuilder: (context, index) => _StockRow(
-                            // The map belongs in the key: the same item exists in
-                            // both, so keying on the path alone reused one row's
-                            // field across a map switch — and with the focused
-                            // guard skipping the sync, the old count stayed on
-                            // screen while keystrokes went to the other map.
-                            key: ValueKey((map, rows[index].path)),
-                            item: rows[index],
-                            map: map,
-                            canSet: canSet,
-                            canRemove: canRemove,
-                            pending: pendingOf(map, rows[index].path),
-                            onChanged: (v) =>
-                                onChanged(map, rows[index].path, v),
-                            onRevert: () => onRevert(map, rows[index].path),
-                            onRemove: () => onRemove(map, rows[index].path),
+                          // The same upper bound the inventory rows carry: a
+                          // ListTile otherwise runs across the whole detail
+                          // pane and pins its count field to the far edge,
+                          // half a screen from the name it belongs to. Only a
+                          // bound — a narrow pane still gets the full width.
+                          itemBuilder: (context, index) => Align(
+                            alignment: Alignment.centerLeft,
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 560),
+                              child: _StockRow(
+                                // The map belongs in the key: the same item exists in
+                                // both, so keying on the path alone reused one row's
+                                // field across a map switch — and with the focused
+                                // guard skipping the sync, the old count stayed on
+                                // screen while keystrokes went to the other map.
+                                key: ValueKey((map, rows[index].path)),
+                                item: rows[index],
+                                map: map,
+                                canSet: canSet,
+                                canRemove: canRemove,
+                                pending: pendingOf(map, rows[index].path),
+                                onChanged: (v) =>
+                                    onChanged(map, rows[index].path, v),
+                                onRevert: () => onRevert(map, rows[index].path),
+                                onRemove: () => onRemove(map, rows[index].path),
+                              ),
+                            ),
                           ),
                         ),
                       ),
