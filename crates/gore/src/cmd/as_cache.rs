@@ -3309,11 +3309,19 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                         .ok()
                         .map(|bytes| gore_as::cache::faithfulness::cache_seal(&bytes))
                 });
-            if let Some(warning) = gore_as::cache::faithfulness::warning_for_module(
-                &gore_as::cache::faithfulness::cache_seal(&base_override),
-                binds_seal.as_ref(),
-                &module,
-            ) {
+            // Only an EDIT recompiles a module the base cache already has. An `add` derives its
+            // identity from the relative path and brings a module of its own, so the name given
+            // here can collide with a vanilla one and mean nothing by it.
+            if let Some(warning) = (op == "edit")
+                .then(|| {
+                    gore_as::cache::faithfulness::warning_for_module(
+                        &gore_as::cache::faithfulness::cache_seal(&base_override),
+                        binds_seal.as_ref(),
+                        &module,
+                    )
+                })
+                .flatten()
+            {
                 eprintln!("{warning}");
             }
             let opts = gore_as::compile::CompileOpts {
