@@ -27,6 +27,12 @@ import 'package:goresave/ui/design/app_theme.dart';
 /// The NPC name is resolved with the SAME [localizedNpcName] (loc catalog +
 /// prettify fallback) the actor list tiles use, so the header and the list
 /// always agree on the name.
+/// Below this width the header stacks the role chips under the identity block
+/// instead of putting them beside the name. Measured against the narrowest
+/// detail pane the editor can produce, where the picture alone leaves a single
+/// chip no room.
+const _badgesFitBesideName = 420.0;
+
 class ActorDetailHeader extends StatelessWidget {
   const ActorDetailHeader({
     super.key,
@@ -80,78 +86,97 @@ class ActorDetailHeader extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
       child: LayoutBuilder(
-        builder: (context, box) => Row(
-          // The name — with its id under it where there is one — sits level with
-          // the middle of the picture, not hung from its top edge.
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            // The same picture the list row carries, so the detail pane and the
-            // list agree on who is selected — here in the wide cut the game draws
-            // for a detail view, the way the glossary shows it. A killed
-            // character keeps his own face: death is a badge on the status row,
-            // not an identity.
-            GlossaryPortrait(
-              npcUniqueName: isPlayer || isOrphan ? null : id,
-              fallbackGameIcon: isOrphan || !isPlayer
-                  ? null
-                  : gameIconCharacter,
-              fallbackIcon: isOrphan
-                  ? Icons.help_outline
-                  : Icons.person_outline,
-              color: scheme.primary,
-              // The banner artwork is 500x264, shown at the size the glossary's
-              // own detail view shows it, so a character looks the same wherever
-              // the editor puts him.
-              size: GlossaryImageSize.banner,
-              width: glossaryBannerWidth,
-              height: glossaryBannerHeight,
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    name,
-                    style: theme.textTheme.titleMedium,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  // NPC GlobalIds are always visible and wrap in full. Optional
-                  // orphan ids expose the real knowledge key, not the synthetic
-                  // `orphan:` selection sentinel.
-                  if (showTechnicalId)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: SelectableText(
-                        technicalId,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                          fontFamily: uiAwareMonospaceFontFamily(context),
+        builder: (context, box) {
+          // What the glossary files this character as — the shops he runs, the
+          // skills he teaches, the armour he makes.
+          final badges = !isPlayer && !isOrphan && id != null
+              ? NpcRoleBadges(npcUniqueName: id, isDead: actor.isDead)
+              : null;
+          // At the smallest supported window the detail pane is barely wider
+          // than the picture, and a single chip beside the name already
+          // overflows it. There the chips go under the identity block, where
+          // they have the whole width to wrap into.
+          final besideTheName = box.maxWidth >= _badgesFitBesideName;
+
+          final identity = Row(
+            // The name — with its id under it where there is one — sits level
+            // with the middle of the picture, not hung from its top edge.
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // The same picture the list row carries, so the detail pane and
+              // the list agree on who is selected — here in the wide cut the
+              // game draws for a detail view, the way the glossary shows it. A
+              // killed character keeps his own face: death is a badge on the
+              // status row, not an identity.
+              GlossaryPortrait(
+                npcUniqueName: isPlayer || isOrphan ? null : id,
+                fallbackGameIcon: isOrphan || !isPlayer
+                    ? null
+                    : gameIconCharacter,
+                fallbackIcon: isOrphan
+                    ? Icons.help_outline
+                    : Icons.person_outline,
+                color: scheme.primary,
+                // The banner artwork is 500x264, shown at the size the
+                // glossary's own detail view shows it, so a character looks the
+                // same wherever the editor puts him.
+                size: GlossaryImageSize.banner,
+                width: glossaryBannerWidth,
+                height: glossaryBannerHeight,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      name,
+                      style: theme.textTheme.titleMedium,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    // NPC GlobalIds are always visible and wrap in full.
+                    // Optional orphan ids expose the real knowledge key, not
+                    // the synthetic `orphan:` selection sentinel.
+                    if (showTechnicalId)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: SelectableText(
+                          technicalId,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                            fontFamily: uiAwareMonospaceFontFamily(context),
+                          ),
                         ),
                       ),
-                    ),
-                ],
-              ),
-            ),
-            // What the glossary files this character as — the shops he runs, the
-            // skills he teaches, the armour he makes. The list rows have no room
-            // to name them; the space beside the name does.
-            if (!isPlayer && !isOrphan && id != null)
-              Padding(
-                padding: const EdgeInsets.only(left: 12, top: 2),
-                child: ConstrainedBox(
-                  // A Row hands a child with no flex unbounded width, so the
-                  // chips would lay out on one line however narrow the window
-                  // is, push the name aside and finally overflow. Capped, they
-                  // wrap instead.
-                  constraints: BoxConstraints(maxWidth: box.maxWidth * 0.45),
-                  child: NpcRoleBadges(npcUniqueName: id, isDead: actor.isDead),
+                  ],
                 ),
               ),
-          ],
-        ),
+              if (badges != null && besideTheName)
+                Padding(
+                  padding: const EdgeInsets.only(left: 12, top: 2),
+                  child: ConstrainedBox(
+                    // A Row hands a child with no flex unbounded width, so the
+                    // chips would lay out on one line however narrow the window
+                    // is and push the name aside. Capped, they wrap.
+                    constraints: BoxConstraints(maxWidth: box.maxWidth * 0.45),
+                    child: badges,
+                  ),
+                ),
+            ],
+          );
+
+          if (badges == null || besideTheName) return identity;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              identity,
+              Padding(padding: const EdgeInsets.only(top: 8), child: badges),
+            ],
+          );
+        },
       ),
     );
   }

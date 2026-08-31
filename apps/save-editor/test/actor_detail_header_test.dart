@@ -4,6 +4,7 @@ import 'package:goresave/features/editor/domain/actor.dart';
 import 'package:goresave/features/editor/domain/glossary_images.dart';
 import 'package:goresave/features/editor/ui/actor_detail_header.dart';
 import 'package:goresave/features/editor/ui/glossary_portrait.dart';
+import 'package:goresave/features/editor/ui/npc_role_badges.dart';
 import 'package:goresave/loc/game_lang.dart';
 
 import 'support/l10n_test_app.dart';
@@ -191,33 +192,37 @@ void main() {
     },
   );
 
-  testWidgets('the role chips stay inside the header at the smallest window', (
+  testWidgets('the role chips never overflow, however narrow the pane', (
     tester,
   ) async {
-    await tester.pumpWidget(
-      wrapWithL10n(
-        Scaffold(
-          body: SizedBox(
-            // The narrowest window the editor supports, minus the sidebar.
-            width: 480,
-            child: ActorDetailHeader(
-              actor: const Actor.npc(
-                id: 'SC_NOV_Darrion_1312',
-                name: 'Darrion',
-                uniqueName: 'SC_NOV_Darrion_1312',
-                isDead: true,
+    // At the 960px window minimum the detail pane is only about 228px once
+    // both sidebars have taken theirs — narrower than the picture plus a
+    // single chip. Measured, not assumed: at 228 the old layout overflowed by
+    // 39 pixels.
+    for (final width in <double>[228, 300, 419, 421, 700, 1200]) {
+      await tester.pumpWidget(
+        wrapWithL10n(
+          Scaffold(
+            body: SizedBox(
+              width: width,
+              child: ActorDetailHeader(
+                actor: const Actor.npc(
+                  id: 'SC_NOV_Darrion_1312',
+                  name: 'Darrion',
+                  uniqueName: 'SC_NOV_Darrion_1312',
+                  isDead: true,
+                ),
+                locCatalog: const {},
+                lang: kGameLangs.first,
               ),
-              locCatalog: const {},
-              lang: kGameLangs.first,
             ),
           ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    // A Row hands a child with no flex unbounded width; the chips have to be
-    // capped or they push the name out and overflow.
-    expect(tester.takeException(), isNull);
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: 'overflowed at $width');
+      // The chips are shown either way — beside the name, or under it.
+      expect(find.byType(NpcRoleBadges), findsOneWidget, reason: '$width');
+    }
   });
 }
