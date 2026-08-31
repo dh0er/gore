@@ -13216,7 +13216,10 @@ fn slots_vanilla_initialises(f: &Func) -> HashSet<i32> {
     let mut initialised = HashSet::new();
     let mut seen: HashSet<i32> = HashSet::new();
     for ins in &instrs {
-        let written = writes_destination(ins.op.name)
+        // Asked of the opcode FORMAT, not of a list of names: `wW` is the ISA's own word for "the
+        // first word operand is a destination I write", and a hand-kept list that forgets one
+        // reports the slot as never written and drops its value.
+        let written = (writes_destination(ins.op.name) || ins.op.fmt.writes_first_word())
             .then(|| ins.words.first().map(|w| *w as i16 as i32))
             .flatten()
             .filter(|slot| *slot > 0);

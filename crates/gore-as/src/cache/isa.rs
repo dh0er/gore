@@ -110,6 +110,28 @@ impl BcType {
 /// CallPtr.
 pub const STACK_INC_VARIABLE: i32 = 0xFFFF;
 
+impl BcType {
+    /// Whether the first word operand is a DESTINATION this instruction writes.
+    ///
+    /// The `wW` in the format name is exactly that claim — AngelScript's own naming, carried
+    /// through from `asBCInfo`. Reading it here beats keeping a list of mnemonics by hand: the
+    /// width conversions alone (`uTOi64`, `i64TOf`, `u64TOd`, and their kin) are two dozen
+    /// opcodes that write a destination, and a list that forgets one silently reports the slot
+    /// as never written.
+    pub fn writes_first_word(self) -> bool {
+        matches!(
+            self,
+            BcType::wW_ARG
+                | BcType::wW_rW_rW_ARG
+                | BcType::wW_QW_ARG
+                | BcType::wW_rW_ARG
+                | BcType::wW_DW_ARG
+                | BcType::wW_rW_DW_ARG
+                | BcType::wW_W_ARG
+        )
+    }
+}
+
 /// One row of the `asBCInfo[256]` table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OpInfo {
