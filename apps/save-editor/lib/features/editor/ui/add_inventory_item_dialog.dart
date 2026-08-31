@@ -147,6 +147,19 @@ class _AddInventoryItemDialogState
     // File the catalog by the game's own inventory tabs, so the dialog reads
     // like the inventory it adds to.
     final itemStats = ref.watch(itemStatsCatalogProvider).value;
+    // The dialog can be opened before the catalog is there, and then groups by
+    // the id prefix. When it arrives, items move — an ore nugget goes from
+    // Miscellaneous to Materials — while the remembered tab still exists, so
+    // the selection quietly vanished from the list it was picked in.
+    ref.listen(itemStatsCatalogProvider, (previous, next) {
+      final stats = next.value;
+      final selected = _selected;
+      if (stats == null || selected == null || previous?.value != null) return;
+      final moved = itemCategoryFor(selected.id, stats: stats);
+      if (moved != _selectedCategory) {
+        setState(() => _selectedCategory = moved);
+      }
+    });
     // The game's own "All" filter is not a category — it collects everything —
     // so it is deliberately absent here.
     final filtersById = <ItemCategory, InventoryFilter>{

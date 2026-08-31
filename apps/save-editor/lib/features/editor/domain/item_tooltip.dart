@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:goresave/features/editor/domain/game_icons.dart';
 import 'package:goresave/features/editor/domain/item_stats.dart';
 import 'package:goresave/l10n/app_localizations.dart';
@@ -54,8 +55,8 @@ class ItemTooltip {
   final List<ItemTooltipRow> ingredientFor;
   final String ingredientForLabel;
 
-  /// A writing's own text, paragraph by paragraph.
-  final List<String> writing;
+  /// A writing's own text, paragraph by paragraph, headings marked as such.
+  final List<ItemTooltipParagraph> writing;
 
   /// What the hero needs to use the item, under [requirementsLabel].
   final List<ItemTooltipRow> requirements;
@@ -75,6 +76,15 @@ class ItemTooltip {
       writing.isEmpty &&
       requirements.isEmpty &&
       description.isEmpty;
+}
+
+/// One passage of a writing: a chapter heading, or a paragraph of its text.
+@immutable
+class ItemTooltipParagraph {
+  const ItemTooltipParagraph(this.text, {this.isHeading = false});
+
+  final String text;
+  final bool isHeading;
 }
 
 /// One line of the card: an optional game glyph, a label, and the value the
@@ -285,11 +295,11 @@ ItemTooltip buildItemTooltip({
 
   // A writing's own text, where it has one. Most carry no description at all —
   // the text IS the item.
-  final written = <String>[];
+  final written = <ItemTooltipParagraph>[];
   for (final part in stats.writing) {
     final text = game(part.id.toLowerCase());
     if (text == null || text.trim().isEmpty) continue;
-    written.add(part.isHeading ? text.trim() : text.trim());
+    written.add(ItemTooltipParagraph(text.trim(), isHeading: part.isHeading));
   }
 
   return ItemTooltip(

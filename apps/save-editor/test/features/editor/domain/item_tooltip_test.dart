@@ -428,10 +428,13 @@ void main() {
       l10n: l10n,
     );
 
-    expect(tooltip.writing, [
+    // The asset records which passages are chapter headings; flattening them
+    // into the body threw the document's own structure away.
+    expect(tooltip.writing.map((p) => p.text), [
       'The Circles of Magic',
       'Magic is the gift of the gods.',
     ]);
+    expect(tooltip.writing.map((p) => p.isHeading), [true, false]);
     expect(tooltip.description, 'A heavy tome.');
   });
 

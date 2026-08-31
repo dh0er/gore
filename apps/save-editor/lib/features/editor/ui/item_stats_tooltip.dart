@@ -311,14 +311,19 @@ class ItemTooltipCard extends StatelessWidget {
                   accent: accent,
                 ),
               // A writing's own text, set like the flavour line below it but
-              // paragraph by paragraph.
+              // paragraph by paragraph. A chapter heading keeps its rank: the
+              // asset records which passages are headings, and flattening them
+              // into the body threw the document's structure away.
               for (final paragraph in tooltip.writing) ...[
                 const SizedBox(height: 8),
                 Text(
-                  paragraph,
+                  paragraph.text,
                   style: theme.textTheme.bodySmall?.copyWith(
-                    color: muted,
-                    fontStyle: FontStyle.italic,
+                    color: paragraph.isHeading ? accent : muted,
+                    fontStyle: paragraph.isHeading
+                        ? FontStyle.normal
+                        : FontStyle.italic,
+                    fontWeight: paragraph.isHeading ? FontWeight.w600 : null,
                     height: 1.35,
                   ),
                 ),
