@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:goresave/features/editor/ui/game_icon.dart';
 import 'package:goresave/features/editor/domain/item_icon_catalog.dart';
 
 /// Shows the matching image extracted from the user's game, with the existing
@@ -13,7 +12,6 @@ class InventoryItemVisual extends ConsumerWidget {
     required this.itemId,
     this.itemPath = '',
     this.fallbackIcon = Icons.category_outlined,
-    this.fallbackGameIcon,
     this.fallbackColor,
     this.size = 40,
   });
@@ -21,11 +19,6 @@ class InventoryItemVisual extends ConsumerWidget {
   final String itemId;
   final String itemPath;
   final IconData fallbackIcon;
-
-  /// A game glyph to stand in with instead of [fallbackIcon]. The creatures'
-  /// own weapons ship no item picture but do name a glyph themselves, and a
-  /// question mark said nothing about what a `WolfJaw` is.
-  final String? fallbackGameIcon;
   final Color? fallbackColor;
   final double size;
 
@@ -39,16 +32,8 @@ class InventoryItemVisual extends ConsumerWidget {
         .clamp(1.0, size)
         .toDouble();
 
-    Widget standIn() => fallbackGameIcon == null
-        ? Icon(fallbackIcon, color: fallbackColor, size: imageSize * 0.6)
-        : GameIcon(
-            name: fallbackGameIcon!,
-            fallbackIcon: fallbackIcon,
-            color: fallbackColor,
-            size: imageSize * 0.75,
-          );
     final content = path == null
-        ? standIn()
+        ? Icon(fallbackIcon, color: fallbackColor, size: imageSize * 0.6)
         : Image.file(
             File(path),
             fit: BoxFit.contain,
@@ -59,7 +44,8 @@ class InventoryItemVisual extends ConsumerWidget {
             cacheHeight: (imageSize * MediaQuery.devicePixelRatioOf(context))
                 .ceil(),
             excludeFromSemantics: true,
-            errorBuilder: (_, _, _) => standIn(),
+            errorBuilder: (_, _, _) =>
+                Icon(fallbackIcon, color: fallbackColor, size: imageSize * 0.6),
           );
 
     return SizedBox.square(

@@ -2101,9 +2101,6 @@ class AppLocalizationsDe extends AppLocalizations {
   String get fallbackItem => 'Gegenstand';
 
   @override
-  String get itemNaturalWeapon => 'Natürliche Waffe';
-
-  @override
   String get attributeSkillPointsFallback => 'Lernpunkte (LP)';
 
   @override

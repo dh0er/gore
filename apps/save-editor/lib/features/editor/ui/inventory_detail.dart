@@ -651,25 +651,17 @@ class _PrivateInventorySummaryCardState
     // raw internal id.
     String nameOf(PrivateInventoryItem item) =>
         localizedGameName(locCatalog, lang, item.id) ??
-        // A creature's own jaw or claws: the game names none of them, because
-        // the player never holds one. `WolfJaw` read as an untranslated id.
-        (itemStats?.statsFor(item.id)?.naturalWeapon == true
-            ? l10n.itemNaturalWeapon
-            : null) ??
         itemDisplayNameFromId(
           item.id.isEmpty ? _itemDisplayFromPath(item.path) : item.id,
           fallback: l10n.fallbackItem,
         );
-    // A creature's own weapon ships no picture but names the creature glyph
-    // itself. Resolved once for both copies of the row visual.
-    String? naturalWeaponGlyph(PrivateInventoryItem item) =>
-        itemStats?.statsFor(item.id)?.naturalWeapon == true
-        ? gameIconCreature
-        : null;
-    // Search matches what the row SHOWS as well as what it is: a creature's
-    // jaw reads "Natural weapon", a label the game itself never carries, and
-    // typing it found nothing.
     final items = inventory.items.where((item) {
+      // A creature's built-in weapon — its jaw, its claws, its sting — is an
+      // item in its weapon slot, but not one anybody can do anything with: the
+      // game names none of them, draws none of them, and never lets the player
+      // hold one. Nothing here is worth an editable row, and removing one only
+      // disarms the creature.
+      if (itemStats?.statsFor(item.id)?.naturalWeapon == true) return false;
       // A pending removal hides ONLY the specific slot queued for removal (it is
       // represented by the pending card above), matched by the same slot-aware
       // key as count edits — so duplicate-path stacks, or the same item in
@@ -1240,10 +1232,6 @@ class _PrivateInventorySummaryCardState
                                                                 itemId: item.id,
                                                                 itemPath:
                                                                     item.path,
-                                                                fallbackGameIcon:
-                                                                    naturalWeaponGlyph(
-                                                                      item,
-                                                                    ),
                                                                 // The same
                                                                 // classifier
                                                                 // the tabs
@@ -1289,10 +1277,6 @@ class _PrivateInventorySummaryCardState
                                                                         item.id,
                                                                     itemPath:
                                                                         item.path,
-                                                                    fallbackGameIcon:
-                                                                        naturalWeaponGlyph(
-                                                                          item,
-                                                                        ),
                                                                     fallbackIcon: iconForItemCategory(
                                                                       itemCategoryFor(
                                                                         item.id.isEmpty

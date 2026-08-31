@@ -10,8 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- A creature's own jaw or claws now read as a natural weapon with a picture and
-  a card, instead of a bare `WolfJaw` with nothing behind it.
+- A creature's own jaw or claws are no longer listed among what it carries.
+  Nobody can hold one, and removing one only disarms the creature.
 - A man and the monsters that share his name no longer fold into one row.
 
 ## [1.4.0] - 2026-08-31

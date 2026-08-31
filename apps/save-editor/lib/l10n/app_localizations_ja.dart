@@ -2047,9 +2047,6 @@ class AppLocalizationsJa extends AppLocalizations {
   String get fallbackItem => 'アイテム';
 
   @override
-  String get itemNaturalWeapon => '生来の武器';
-
-  @override
   String get attributeSkillPointsFallback => 'スキルポイント（LP）';
 
   @override

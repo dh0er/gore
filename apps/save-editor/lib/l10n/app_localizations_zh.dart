@@ -2018,9 +2018,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String get fallbackItem => '物品';
 
   @override
-  String get itemNaturalWeapon => '天生武器';
-
-  @override
   String get attributeSkillPointsFallback => '学习点数（LP）';
 
   @override
@@ -4992,9 +4989,6 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get fallbackItem => '物品';
-
-  @override
-  String get itemNaturalWeapon => '天生武器';
 
   @override
   String get attributeSkillPointsFallback => '学习点数（LP）';
