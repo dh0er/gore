@@ -9125,12 +9125,10 @@ fn argument_constructed_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
     };
-    let pushes = |name: &str| {
-        matches!(
-            name,
-            "PshV4" | "PshV8" | "PshVPtr" | "PshC4" | "PshC8" | "PshGPtr" | "PshNull" | "PSF"
-        )
-    };
+    // Every push, by the family name rather than by a list of members. `PshG4` and `PshRPtr` are
+    // pushes as much as `PshV4` is, and a list that omits them says the argument run had not
+    // started when it had — which moves a construction ahead of the whole call.
+    let pushes = |name: &str| name.starts_with("Psh") || name == "PSF";
     let mut out = HashSet::new();
     for (at, pair) in instrs.windows(2).enumerate() {
         if pair[0].op.name != "PSF" || pair[1].op.name != "CALLSYS" || at == 0 {
@@ -9169,12 +9167,10 @@ fn declared_argument_constructions(f: &Func, refs: &RefResolver) -> Vec<(i32, St
         return Vec::new();
     };
     let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
-    let pushes = |name: &str| {
-        matches!(
-            name,
-            "PshV4" | "PshV8" | "PshVPtr" | "PshC4" | "PshC8" | "PshGPtr" | "PshNull" | "PSF"
-        )
-    };
+    // Every push, by the family name rather than by a list of members. `PshG4` and `PshRPtr` are
+    // pushes as much as `PshV4` is, and a list that omits them says the argument run had not
+    // started when it had — which moves a construction ahead of the whole call.
+    let pushes = |name: &str| name.starts_with("Psh") || name == "PSF";
     let mut out = Vec::new();
     for at in 1..instrs.len().saturating_sub(1) {
         if instrs[at].op.name != "PSF" || instrs[at + 1].op.name != "CALLSYS" {
