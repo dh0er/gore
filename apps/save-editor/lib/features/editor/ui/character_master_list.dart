@@ -95,14 +95,20 @@ String _prettifyNpcKey(String key) {
 /// keystroke is a cheap substring scan over the cached strings rather than
 /// re-resolving every name.
 class _SearchableRow {
-  const _SearchableRow(this.row, this.name, this.search, this.kind);
+  const _SearchableRow(this.row, this.name, this.search, this.isHuman);
 
   final CharacterRow row;
   final String name;
   final String search;
 
-  /// Human, creature or neither, as the character catalog files it.
-  final CharacterCategory? kind;
+  /// Whether the character catalog calls this one a person.
+  ///
+  /// Deliberately coarser than the catalog's own three kinds. Whether a
+  /// creature resolves at all depends on the shape of its save id — the 57
+  /// wolves spawned at a `-WP_` waypoint resolve to `Creature_Wolf`, the other
+  /// 9 resolve to nothing — so creature and unknown are the same answer here.
+  /// Splitting on the raw kind gave one species two rows.
+  final bool isHuman;
 }
 
 /// Entity-first master list of the characters in the save: the Player (pinned on
@@ -168,8 +174,8 @@ class CharacterMasterList extends StatefulWidget {
   final GameLang lang;
 
   /// What each character IS, used to keep a man and a monster of the same name
-  /// out of one group. Null while the catalog loads; grouping then falls back
-  /// to the name alone.
+  /// out of one group. Null while the catalog loads; nobody counts as a person
+  /// until it lands, and grouping falls back to the name alone.
   final CharacterCategoryCatalog? categories;
 
   /// Whether raw GlobalIds / orphan knowledge keys are rendered as row
@@ -199,8 +205,7 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
 
   /// Display names whose group the user opened. Keyed by name so the state
   /// survives paging and re-filtering.
-  final Set<(CharacterCategory?, String)> _expanded =
-      <(CharacterCategory?, String)>{};
+  final Set<(bool, String)> _expanded = <(bool, String)>{};
   String? _error;
   String _query = '';
   // Client-side page cursor over the FILTERED actor list (an item offset).
@@ -269,7 +274,7 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
             row,
             name,
             '$key\n$name'.toLowerCase(),
-            widget.categories?.categoryFor(key),
+            widget.categories?.isHuman(key) ?? false,
           );
         }(),
     ];
@@ -277,10 +282,9 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
       final byName = a.name.toLowerCase().compareTo(b.name.toLowerCase());
       if (byName != 0) return byName;
       // A man and a monster can share a name — the mercenary Wolf and the
-      // sixty-six wolves. Keeping each kind's rows together is what lets the
-      // single grouping pass fold them into separate rows.
-      final byKind = (a.kind?.index ?? -1).compareTo(b.kind?.index ?? -1);
-      if (byKind != 0) return byKind;
+      // sixty-six wolves. Keeping the people together is what lets the single
+      // grouping pass fold them into separate rows.
+      if (a.isHuman != b.isHuman) return a.isHuman ? -1 : 1;
       final aKey = a.row.globalId ?? a.row.uniqueName;
       final bKey = b.row.globalId ?? b.row.uniqueName;
       return aKey.compareTo(bKey);
@@ -349,7 +353,7 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
       var end = start + 1;
       while (end < rows.length &&
           rows[end].name == rows[start].name &&
-          rows[end].kind == rows[start].kind) {
+          rows[end].isHuman == rows[start].isHuman) {
         end++;
       }
       final members = rows.sublist(start, end);
@@ -658,7 +662,7 @@ class _CharacterGroup {
 
   /// Identifies the group across paging and re-filtering. Name alone would let
   /// opening the mercenary Wolf open the wolves too.
-  (CharacterCategory?, String) get key => (first.kind, first.name);
+  (bool, String) get key => (first.isHuman, first.name);
 
   /// Whether this renders as a plain row rather than an expandable group.
   bool get isSingle => members.length == 1;

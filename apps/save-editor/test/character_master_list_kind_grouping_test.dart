@@ -62,9 +62,9 @@ void main() {
   testWidgets('a man and the monsters that share his name are separate rows', (
     tester,
   ) async {
-    // Without the kind in the grouping key the mercenary was folded in with the
-    // pack: one row reading "Wolf (4)", wearing his face, that opened to show
-    // three animals under it.
+    // Without the person in the grouping key the mercenary was folded in with
+    // the pack: one row reading "Wolf (4)", wearing his face, that opened to
+    // show three animals under it.
     await tester.pumpWidget(
       pump([
         _row('NC_SLD_Wolf_701-WP_1'),
@@ -77,5 +77,26 @@ void main() {
     expect(find.text('Wolf (3)'), findsOneWidget);
     expect(find.text('Wolf (4)'), findsNothing);
     expect(find.text('Wolf'), findsOneWidget);
+  });
+
+  testWidgets('one species stays one row even where the catalog cannot place '
+      'it', (tester) async {
+    // Whether a creature resolves at all depends on the shape of its save id.
+    // Splitting on the catalog's raw kind therefore gave the same animal two
+    // rows — "Wolf (9)" beside "Wolf (57)", and the same for the blood flies
+    // and the meatbugs.
+    await tester.pumpWidget(
+      pump([
+        // Spawned at a waypoint, which is the form the catalog can place...
+        for (var i = 1; i <= 3; i++) _row('Wolf-WP_PATH_$i'),
+        // ...and the form it cannot.
+        for (var i = 1; i <= 2; i++) _row('Wolf-OW_PATH_${i}_WP-1'),
+      ]),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Wolf (5)'), findsOneWidget);
+    expect(find.text('Wolf (3)'), findsNothing);
+    expect(find.text('Wolf (2)'), findsNothing);
   });
 }
