@@ -58,6 +58,10 @@ class _ItemStatsTooltipState extends ConsumerState<ItemStatsTooltip> {
   void _enter() {
     if (!_hovering) setState(() => _hovering = true);
     if (!_hasCard) return;
+    _showCard();
+  }
+
+  void _showCard() {
     final box = context.findRenderObject() as RenderBox?;
     if (box == null || !box.hasSize) return;
     // Measure against the overlay the card is placed in, NOT the screen. The
@@ -108,7 +112,17 @@ class _ItemStatsTooltipState extends ConsumerState<ItemStatsTooltip> {
             l10n: AppLocalizations.of(context),
           );
 
+    final hadCard = _hasCard;
     _hasCard = !tooltip.isEmpty;
+    if (_hovering && _hasCard && !hadCard) {
+      // The pointer was already on the row while the item stats were still
+      // loading, so there was no portal to show. It exists from this build on;
+      // without this the card stayed away until the row was left and entered
+      // again.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _hovering && _hasCard) _showCard();
+      });
+    }
     return MouseRegion(
       onEnter: (_) => _enter(),
       onExit: (_) => _exit(),

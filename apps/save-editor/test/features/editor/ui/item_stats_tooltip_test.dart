@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -18,9 +19,7 @@ const _tooltip = ItemTooltip(
     ItemTooltipRow('Edge', '+90', iconName: 'T_Icon_Resistance_Edge'),
   ],
   protectionLabel: 'Protection',
-  requirements: [
-    ItemTooltipRow('Strength', '23', iconName: 'T_Icon_Strength'),
-  ],
+  requirements: [ItemTooltipRow('Strength', '23', iconName: 'T_Icon_Strength')],
   requirementsLabel: 'Requirements:',
   description: 'Heavy, and it shows.',
 );
@@ -111,6 +110,52 @@ void main() {
       await tester.pumpAndSettle();
       return gesture;
     }
+
+    testWidgets('the card appears when the stats land under the pointer', (
+      tester,
+    ) async {
+      // Hovering while the catalog is still loading left no portal to show; it
+      // only appeared once the row was left and entered again.
+      final ready = Completer<ItemStatsCatalog>();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            itemStatsCatalogProvider.overrideWith((ref) => ready.future),
+          ],
+          child: MaterialApp(
+            localizationsDelegates: testLocalizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: const Scaffold(
+              body: Center(
+                child: ItemStatsTooltip(
+                  itemId: 'ItMw_1H_Sword_01',
+                  title: 'Battle Sword',
+                  child: SizedBox(width: 200, height: 40, child: Text('row')),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await gesture.addPointer(location: Offset.zero);
+      addTearDown(gesture.removePointer);
+      await tester.pump();
+      await gesture.moveTo(tester.getCenter(find.text('row')));
+      await tester.pump();
+      expect(find.byType(ItemTooltipCard), findsNothing);
+
+      ready.complete(
+        ItemStatsCatalog.fromJsonString('''
+{"schema": 1, "filters": [], "items": {
+  "ItMw_1H_Sword_01": {"itemType": "Item_Weapon_Sword_OneHand", "value": 31}}}
+'''),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(ItemTooltipCard), findsOneWidget);
+    });
 
     testWidgets('shows the card, then takes it away again', (tester) async {
       final stats = ItemStatsCatalog.fromJsonString('''

@@ -65,6 +65,9 @@ class ItemTooltip {
   final String description;
 
   bool get isEmpty =>
+      // The item type alone is a card worth showing — a key or a guard's
+      // second armour has nothing else, and the game names its kind too.
+      subtitle.isEmpty &&
       stats.isEmpty &&
       protection.isEmpty &&
       recipe.isEmpty &&

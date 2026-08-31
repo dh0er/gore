@@ -434,4 +434,23 @@ void main() {
     ]);
     expect(tooltip.description, 'A heavy tome.');
   });
+
+  test('the item type alone is a card worth showing', () {
+    // A key and a guard's second armour carry nothing but their type. The card
+    // still names the item and its kind, so suppressing it showed nothing at
+    // all on hover.
+    const stats = ItemStats(itemType: 'Item_Key');
+    final tooltip = buildItemTooltip(
+      title: 'Key',
+      stats: stats,
+      catalog: _catalog({'item_key': 'Key'}),
+      lang: lang,
+      l10n: l10n,
+    );
+
+    expect(tooltip.subtitle, 'Key');
+    expect(tooltip.isEmpty, isFalse);
+    // Nothing at all still counts as nothing.
+    expect(const ItemTooltip().isEmpty, isTrue);
+  });
 }
