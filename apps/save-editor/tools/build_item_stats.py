@@ -231,6 +231,16 @@ def resolve_item(
             else:
                 requirements[stat] = resolved
 
+    # A negative level is the game's "none needed" sentinel, not a requirement:
+    # the teleport runes all carry RequiredMagicCircleLevel = -1. Kept it would
+    # read as "Magic circle -1" on the card.
+    for stat, value in list(requirements.items()):
+        if isinstance(value, (int, float)) and value < 0:
+            requirements.pop(stat)
+    for key in ("magicCircle",):
+        if isinstance(out.get(key), (int, float)) and out[key] < 0:
+            out.pop(key)
+
     if damage:
         out["damage"] = {k: _trim(v) for k, v in sorted(damage.items())}
     if requirements:

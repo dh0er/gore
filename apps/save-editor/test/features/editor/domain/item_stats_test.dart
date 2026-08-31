@@ -189,4 +189,29 @@ void main() {
         .toList();
     expect(silent, isEmpty);
   });
+
+  test('a negative level is no requirement at all', () {
+    // The five teleport runes carry RequiredMagicCircleLevel = -1, the game's
+    // way of saying it asks for none. Read straight through, their cards
+    // claimed they needed magic circle -1.
+    final sentinel = ItemStats.fromJson(const {
+      'magicCircle': -1,
+      'requires': {'MagicianLevel': -1, 'Strength': 20},
+    });
+    expect(sentinel.magicCircle, isNull);
+    expect(sentinel.requires, const {'Strength': 20});
+  });
+
+  test('no bundled entry asks for a level below one', () async {
+    final catalog = await ItemStatsCatalog.loadBundled();
+    final sentinels = catalog.byItemId.entries
+        .where(
+          (e) =>
+              (e.value.magicCircle ?? 1) < 1 ||
+              e.value.requires.values.any((level) => level < 1),
+        )
+        .map((e) => e.key)
+        .toList();
+    expect(sentinels, isEmpty);
+  });
 }

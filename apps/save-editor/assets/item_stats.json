@@ -1043,13 +1043,9 @@
   },
   "ItAr_Rune_TeleportToMagiciansOfFire": {
    "itemType": "Item_Weapon_Rune_Teleport",
-   "magicCircle": -1,
    "iconAsset": "/Game/UI/Textures/ItemIcons/T_ItemIcon_ItAr_Rune_TeleportToMagiciansOfFire.T_ItemIcon_ItAr_Rune_TeleportToMagiciansOfFire",
    "maxStack": 1,
    "descriptionKey": "ItAr_Rune_TeleportToMagiciansOfFire_description",
-   "requires": {
-    "MagicianLevel": -1
-   },
    "specs": [
     "AISpellKeywords_Usage_Teleport",
     "Item_Property_Equipable",
@@ -1064,13 +1060,9 @@
   },
   "ItAr_Rune_TeleportToMagiciansOfWater": {
    "itemType": "Item_Weapon_Rune_Teleport",
-   "magicCircle": -1,
    "iconAsset": "/Game/UI/Textures/ItemIcons/T_ItemIcon_ItAr_Rune_TeleportToMagiciansOfWater.T_ItemIcon_ItAr_Rune_TeleportToMagiciansOfWater",
    "maxStack": 1,
    "descriptionKey": "ItAr_Rune_TeleportToMagiciansOfWater_description",
-   "requires": {
-    "MagicianLevel": -1
-   },
    "specs": [
     "AISpellKeywords_Usage_Teleport",
     "Item_Property_Equipable",
@@ -1085,13 +1077,9 @@
   },
   "ItAr_Rune_TeleportToNecromancer": {
    "itemType": "Item_Weapon_Rune_Teleport",
-   "magicCircle": -1,
    "iconAsset": "/Game/UI/Textures/ItemIcons/T_ItemIcon_ItAr_Rune_TeleportToNecromancer.T_ItemIcon_ItAr_Rune_TeleportToNecromancer",
    "maxStack": 1,
    "descriptionKey": "ItAr_Rune_TeleportToNecromancer_description",
-   "requires": {
-    "MagicianLevel": -1
-   },
    "specs": [
     "AISpellKeywords_Usage_Teleport",
     "Item_Property_Equipable",
@@ -1106,13 +1094,9 @@
   },
   "ItAr_Rune_TeleportToSunkenTower": {
    "itemType": "Item_Weapon_Rune_Teleport",
-   "magicCircle": -1,
    "iconAsset": "/Game/UI/Textures/ItemIcons/T_ItemIcon_ItAr_Rune_TeleportToSunkenTower.T_ItemIcon_ItAr_Rune_TeleportToSunkenTower",
    "maxStack": 1,
    "descriptionKey": "ItAr_Rune_TeleportToSunkenTower_description",
-   "requires": {
-    "MagicianLevel": -1
-   },
    "specs": [
     "AISpellKeywords_Usage_Teleport",
     "Item_Property_Equipable",
@@ -1127,13 +1111,9 @@
   },
   "ItAr_Rune_TeleportToSwampCamp": {
    "itemType": "Item_Weapon_Rune_Teleport",
-   "magicCircle": -1,
    "iconAsset": "/Game/UI/Textures/ItemIcons/T_ItemIcon_ItAr_Rune_TeleportToSwampCamp.T_ItemIcon_ItAr_Rune_TeleportToSwampCamp",
    "maxStack": 1,
    "descriptionKey": "ItAr_Rune_TeleportToSwampCamp_description",
-   "requires": {
-    "MagicianLevel": -1
-   },
    "specs": [
     "AISpellKeywords_Usage_Teleport",
     "Item_Property_Equipable",

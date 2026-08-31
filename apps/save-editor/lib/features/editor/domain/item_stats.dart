@@ -39,10 +39,10 @@ class ItemStats {
       maxStack: _number(json['maxStack']),
       weight: _number(json['weight']),
       superArmorDamage: _number(json['superArmorDamage']),
-      magicCircle: _number(json['magicCircle']),
+      magicCircle: _positive(_number(json['magicCircle'])),
       descriptionKey: json['descriptionKey'] as String? ?? '',
       damage: _numbers(json['damage']),
-      requires: _numbers(json['requires']),
+      requires: _requirements(json['requires']),
       onEquip: _numbers(json['onEquip']),
       specs:
           (json['specs'] as List?)?.whereType<String>().toList(
@@ -78,6 +78,7 @@ class ItemStats {
   final num? superArmorDamage;
 
   /// Magic circle a rune requires. Mirrored in [requires] as `MagicianLevel`.
+  /// Absent where the game asks for none — see [_requirements].
   final num? magicCircle;
 
   /// Loc-catalog id of the flavour text, e.g. `ItAr_Rune_BallLightning_description`.
@@ -87,7 +88,7 @@ class ItemStats {
   final Map<String, num> damage;
 
   /// Attribute id -> the value needed to use the item (`Strength`, `Dexterity`,
-  /// `MagicianLevel`).
+  /// `MagicianLevel`). Only real requirements — see [_requirements].
   final Map<String, num> requires;
 
   /// Attribute id -> what wearing this adds (armour protection, ring bonuses).
@@ -136,6 +137,23 @@ class ItemStats {
       spellLevels.isEmpty;
 
   static num? _number(Object? value) => value is num ? value : null;
+
+  /// Requirements, minus the game's "none needed" sentinel.
+  ///
+  /// A negative level means the item asks for nothing — every teleport rune
+  /// carries `RequiredMagicCircleLevel = -1`. Read straight through, a card
+  /// claimed those runes needed magic circle -1.
+  static Map<String, num> _requirements(Object? value) {
+    final numbers = _numbers(value);
+    if (numbers.values.every((entry) => entry > 0)) return numbers;
+    return Map.unmodifiable({
+      for (final entry in numbers.entries)
+        if (entry.value > 0) entry.key: entry.value,
+    });
+  }
+
+  static num? _positive(num? value) =>
+      value != null && value > 0 ? value : null;
 
   static Map<String, num> _numbers(Object? value) {
     if (value is! Map) return const {};
