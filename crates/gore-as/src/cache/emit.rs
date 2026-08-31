@@ -1930,7 +1930,7 @@ fn emit_function_ctor(
             &first_use_suppressed,
         );
         // What vanilla actually stores, rather than what our text can prove about its own reads.
-        let zero_initialised = slots_vanilla_zero_initialises(f);
+        let vanilla_initialises = slots_vanilla_initialises(f);
         // Where the declarations start, so the whole block plus the body it heads can be handed
         // to the sink below: a declaration only moves once it stands next to the code that uses
         // it, and the two are written from different places.
@@ -1977,7 +1977,7 @@ fn emit_function_ctor(
                     // …or vanilla never stores a zero into it AND our text hands it straight to
                     // a call. Vanilla's silence settles what the two proofs above are reaching
                     // for; the argument position is what makes a bare primitive legal at all.
-                    || (!zero_initialised.contains(slot)
+                    || (!vanilla_initialises.contains(slot)
                         && first_mention_is_a_bare_argument(&body, *slot)))
             {
                 let _ = writeln!(s, "{ind}    {ty} local_{slot};");
@@ -2229,7 +2229,7 @@ fn emit_function_ctor(
         // After the carrier chains are whole: the source declared a witnessed carrier on its
         // initialiser, and the initialiser is only one statement once the arms have rejoined.
         let rendered = sink_carrier_declarations(&rendered, &declared_at_initializer_carriers(f));
-        let rendered = unwrap_untested_bool_return(&rendered, f);
+        let rendered = unwrap_untested_bool_return(&rendered, f, refs);
         let rendered = fold_literal_null_returns(
             &rendered,
             &literal_null_return_slots(f),
@@ -13179,7 +13179,7 @@ fn renders_a_bool(
     outer_callee(value).is_some_and(|callee| refs.names_returning(&callee) == Some("bool"))
 }
 
-/// The slots vanilla itself stores a ZERO into.
+/// The slots vanilla itself puts a value into before anything reads them.
 ///
 /// An initialiser is a store, and the store is in the bytecode or it is not. `float d = 0.0f;`
 /// leaves a `SetV4 d, i4:0` in the prologue; a bare `float d;` leaves nothing, and AngelScript is
@@ -13187,22 +13187,17 @@ fn renders_a_bool(
 /// from the TEXT — whether it could prove a write comes before every read — and defaulted to
 /// writing the initialiser when it could not. That default is a store the original does not have.
 ///
-/// Only an immediate zero counts. A slot the source seeded with something else keeps its
-/// initialiser, and a slot no `SetV` touches at all was declared bare.
-fn slots_vanilla_zero_initialises(f: &Func) -> HashSet<i32> {
+/// Any immediate counts, not only zero. A slot seeded with `5` has an initialiser as much as one
+/// seeded with `0`, and asking only about zero would drop the `5` and pass an undefined value.
+/// A slot no store touches at all is the one vanilla declared bare: the callee writes through it,
+/// and there is no read in front for the uninitialised-variable warning to fire on.
+fn slots_vanilla_initialises(f: &Func) -> HashSet<i32> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
     };
     instrs
         .iter()
         .filter(|ins| matches!(ins.op.name, "SetV1" | "SetV4" | "SetV8"))
-        // The immediate lives in the operand vector the WIDTH picks: a `SetV8` carries it in the
-        // qwords and nothing in the dwords, and vice versa. Asking both to hold zero asks one of
-        // them to hold a value it never has, which no store can answer.
-        .filter(|ins| match ins.op.name {
-            "SetV8" => ins.qwords.first().copied() == Some(0),
-            _ => ins.dwords.first().copied() == Some(0),
-        })
         .filter_map(|ins| ins.words.first().map(|w| *w as i16 as i32))
         .filter(|slot| *slot > 0)
         .collect()
@@ -13240,7 +13235,7 @@ fn first_mention_is_a_bare_argument(body: &str, slot: i32) -> bool {
 ///
 /// The rewrite is deliberately narrow: only the return statement, only where the whole value is
 /// `int(<expr>) != 0`, and only where the expression is not itself a comparison.
-fn unwrap_untested_bool_return(body: &str, f: &Func) -> String {
+fn unwrap_untested_bool_return(body: &str, f: &Func, refs: &RefResolver) -> String {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return body.to_owned();
     };
@@ -13250,7 +13245,27 @@ fn unwrap_untested_bool_return(body: &str, f: &Func) -> String {
     let Some(ret) = instrs.iter().rposition(|ins| ins.op.name == "RET") else {
         return body.to_owned();
     };
-    let tail = ret.saturating_sub(8);
+    // The window is the tail that materialises the returned value: everything after the call
+    // that produced it. A fixed count of instructions is not that window — a value type's
+    // destructors alone can fill it, and a real test then falls outside and goes unseen. The
+    // destructors are skipped by name, because they are calls too.
+    let destructor = |at: usize| {
+        instrs.get(at).is_some_and(|ins| {
+            ins.op.name == "CALLSYS"
+                && refs.func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64)
+                    == Some("$beh2")
+        })
+    };
+    let tail = instrs[..ret]
+        .iter()
+        .enumerate()
+        .rposition(|(at, ins)| {
+            matches!(
+                ins.op.name,
+                "CALL" | "CALLSYS" | "CALLINTF" | "CALLBND" | "Thiscall1"
+            ) && !destructor(at)
+        })
+        .map_or(0, |call| call + 1);
     if instrs[tail..ret]
         .iter()
         .any(|ins| matches!(ins.op.name, "TZ" | "TNZ"))
