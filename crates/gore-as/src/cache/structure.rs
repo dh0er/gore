@@ -3297,12 +3297,19 @@ fn block_stmts_in(
                 // a reference — a value-returning opIndex would be a temp, never an lvalue), and
                 // the pending is a RESOLVED `.opIndex(` call expr (ends ')', no sentinel/unresolved)
                 // — so the lvalue is provable and the store cannot target a garbage receiver.
+                //
+                // The same rescue holds for ANY call that returns a reference, not only
+                // `opIndex`. `this.FModEvent.EventParameters.FindOrAdd(n"TrollShrunk") = 1.0f;`
+                // lowers exactly the same way, and dropping the WRTV left the parameter at its
+                // default — the troll's shrink FX never changed. What proves the lvalue is
+                // `pending_is_ref`, which the cache's own return type decides; the callee's NAME
+                // proves nothing and was only ever standing in for it.
                 let opindex_lvalue = if ref_reg.is_none() && pending_is_ref {
                     pending
                         .as_deref()
                         .filter(|p| {
-                            p.contains(".opIndex(")
-                                && p.ends_with(')')
+                            p.ends_with(')')
+                                && p.contains('(')
                                 && !p.contains('\u{2}')
                                 && !p.contains('\u{1}')
                                 && *p != UNRESOLVED
@@ -3315,12 +3322,15 @@ fn block_stmts_in(
                     // consume the pending (do NOT flush it as a bare statement) and set it as the
                     // write destination; a following field-typed cast is not needed for an element
                     // write (the element type is the array's, matched by the value's own decl).
+                    // The written WIDTH comes from what the call returns: a constant slot stored
+                    // through a float reference carries IEEE-754 bits, not an integer.
+                    let written_ty = pending_ty.clone();
                     pending = None;
                     pending_ty = None;
                     pending_is_ref = false;
                     let slot = w(ins, 0);
                     let raw = name(slot);
-                    let rhs = match ref_reg_ty.as_deref() {
+                    let rhs = match ref_reg_ty.as_deref().or(written_ty.as_deref()) {
                         Some("float32") => {
                             float_lit(&set_consts, slot, false).unwrap_or(raw.clone())
                         }

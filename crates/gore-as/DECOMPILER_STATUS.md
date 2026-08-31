@@ -39,7 +39,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,125 functions (0.68%) recompile to bytecode that differs semantically.** A semantic
+**1,120 functions (0.68%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -68,7 +68,7 @@ found them:
 
 The class table below is the last full classification, taken when the total stood at 3,511; its
 rows account for 2,926 of those functions. It says which shapes the work was aimed at, not what
-the remaining 1,125 are made of.
+the remaining 1,120 are made of.
 
 Classified over WHOLE functions — every instruction of both sides, not the window around the
 first divergence. An earlier revision of this document classified the window instead and reported
@@ -845,7 +845,7 @@ the rule was re-confirmed. 1,375 to 1,374.
 
 From there the run continued through the rules the sections above describe — the range-for
 container, the receiver pair, the split GAS chain, the return-expression temporary, the
-continue-only loop scope, and the declaration-order rules — down to the **1,125** the headline
+continue-only loop scope, and the declaration-order rules — down to the **1,120** the headline
 reports.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
