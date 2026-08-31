@@ -225,4 +225,31 @@ void main() {
       expect(find.byType(NpcRoleBadges), findsOneWidget, reason: '$width');
     }
   });
+
+  testWidgets('a stand-in glyph takes a compact width, not the banner frame', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      wrapWithL10n(
+        Scaffold(
+          body: SizedBox(
+            width: 600,
+            child: ActorDetailHeader(
+              actor: const Actor.player(),
+              locCatalog: const {},
+              lang: kGameLangs.first,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // The player has no portrait, so the header shows a glyph. Stretching it
+    // across the banner's frame left a gap wider than the mark itself.
+    final box = tester.getSize(find.byType(GlossaryPortrait));
+    expect(box.height, glossaryBannerHeight);
+    expect(box.width, lessThan(glossaryBannerWidth));
+    expect(box.width, glossaryBannerHeight);
+  });
 }

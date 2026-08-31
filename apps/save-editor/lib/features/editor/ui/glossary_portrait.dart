@@ -45,6 +45,7 @@ class GlossaryPortrait extends StatelessWidget {
     this.height = glossaryPortraitHeight,
     this.fallbackGameIcon,
     this.undrawnGameIcon,
+    this.standInWidth,
     this.fallbackIcon = Icons.person_outline,
     this.color,
     this.standInOnPaper = false,
@@ -71,6 +72,14 @@ class GlossaryPortrait extends StatelessWidget {
   /// of — the tutorials, above all. Without it those wore the silhouette that
   /// means "still locked".
   final String? undrawnGameIcon;
+
+  /// The width a STAND-IN takes, where that differs from [width].
+  ///
+  /// A picture wants the wide frame the game draws it in; a glyph standing in
+  /// for one does not, and stretching it to the same width left a gap wider
+  /// than the mark itself. Defaults to [width], which is what a list wants —
+  /// there every row has to start its name at the same place.
+  final double? standInWidth;
   final IconData fallbackIcon;
 
   /// Ink for the stand-in glyph. Defaults to the theme's own icon colour.
@@ -169,8 +178,9 @@ class GlossaryPortrait extends StatelessWidget {
     CharacterCategory? kind, {
     bool undrawn = false,
   }) {
+    final showsStandIn = path == null && !standInOnPaper;
     return SizedBox(
-      width: width,
+      width: showsStandIn ? (standInWidth ?? width) : width,
       height: height,
       child: Center(
         child: path == null && !standInOnPaper

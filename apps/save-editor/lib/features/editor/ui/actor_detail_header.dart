@@ -123,6 +123,9 @@ class ActorDetailHeader extends StatelessWidget {
                 size: GlossaryImageSize.banner,
                 width: glossaryBannerWidth,
                 height: glossaryBannerHeight,
+                // The player and everyone the game draws no picture of get a
+                // glyph, and a glyph in the banner's frame is mostly gap.
+                standInWidth: glossaryBannerHeight,
               ),
               const SizedBox(width: 10),
               Expanded(
