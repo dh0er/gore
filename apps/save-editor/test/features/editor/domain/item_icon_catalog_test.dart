@@ -560,6 +560,11 @@ void main() {
     // The catalog that landed belongs to the old installation, so the resolved
     // root does not answer for the new one — but the setting does.
     expect(container.read(gameRootProvider), 'E:/installed-b');
+
+    // And the icons that landed are the old installation's, so preparing
+    // against the new one is enqueued rather than left for the next resume.
+    await pumpEventQueue();
+    expect(core.prepares, hasLength(2));
   });
 
   test('a new game path drops the root even when it cannot be read', () async {

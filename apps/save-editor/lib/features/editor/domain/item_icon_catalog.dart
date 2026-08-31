@@ -306,6 +306,9 @@ class ItemIconCatalogRefresh {
 /// manifest. PNG bytes stay on disk and are decoded at widget size by Flutter.
 final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
   ref.watch(itemIconCatalogReloadProvider);
+  // Held before the first await: asking for it again once this load has landed
+  // would be a read on a provider that may already be on its way out.
+  final reloads = ref.read(itemIconCatalogReloadProvider.notifier);
   final retention = ref.read(_itemIconCatalogRetentionProvider);
   final now = ref.read(itemIconCatalogNowProvider);
   final requestSequence = ++retention.requestSequence;
@@ -376,9 +379,8 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
     // the resume check that would have seen it gave up because a load was
     // running. Read it again now rather than leave the old installation
     // standing until the next resume.
-    ref.read(configuredGamePathProvider.notifier).state = ref
-        .read(sharedConfigProvider)
-        .gamePath();
+    final rereadGamePath = ref.read(sharedConfigProvider).gamePath();
+    ref.read(configuredGamePathProvider.notifier).state = rereadGamePath;
     retention.attemptedSourceIdentity = null;
     retention.attemptedRequestedGamePath = null;
     retention.attemptedFailures = 0;
@@ -386,6 +388,24 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
     final previousManifestPath = retention.value?.manifestPath;
     retention.value = catalog;
     requestSucceeded = true;
+    // These icons belong to the installation this load asked for, which is no
+    // longer the one configured. Publishing the new path told the portraits;
+    // the icons need preparing against it, or they stay the old install's
+    // until something else happens to reload them. Next turn, not this one:
+    // asking for a reload while the load it would replace is still completing
+    // throws that completion away and nothing ever finishes.
+    if (rereadGamePath != gamePath) {
+      unawaited(
+        Future<void>.delayed(Duration.zero, () {
+          try {
+            reloads.state++;
+          } catch (_) {
+            // The container went away with the screen that asked. Nothing to
+            // reload into.
+          }
+        }),
+      );
+    }
     if (previousManifestPath != null && previousManifestPath.isNotEmpty) {
       // Publish the new catalog first. Widgets can still paint the retained
       // AsyncData for the rest of this event turn, so release its native lease
