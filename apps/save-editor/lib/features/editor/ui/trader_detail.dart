@@ -195,126 +195,145 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
         if (!(showOreCard && item.isOre) && !removals.contains(item.path)) item,
     ];
 
-    // One sheet for the whole tab. Every other detail pane puts its content on
-    // a card; this one had its blocks lying on the bare background, which made
-    // Trade the odd tab out.
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: LayoutBuilder(
-          builder: (context, pane) => Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // The notes, the map switch and the ore card scroll among themselves
-              // once the pane gets short, so they can never squeeze the browser out
-              // of the column — which they did, by 8px, at 620px tall.
-              ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxHeight: _headCap(pane.maxHeight),
-                ),
-                child: SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      // First, because it qualifies every number below it — the ore as much
-                      // as the stock counts.
-                      if (unsupported) ...[
-                        _NoteCard(
-                          text: incomplete
-                              ? l10n.traderRecordIncomplete
-                              : l10n.traderDifficultyStockUnsupported,
-                          tone: _NoteTone.warning,
-                        ),
-                        const SizedBox(height: 12),
-                      ],
-                      _NoteCard(text: l10n.traderPriceWarning),
-                      // The core drops setStock from `writable` when no shop
-                      // holds a line while still offering addItem, so "read only"
-                      // has to mean none of the three is available — not merely
-                      // that one of them is missing.
-                      if (widget.editable &&
-                          !unsupported &&
-                          !canSet &&
-                          !canAdd &&
-                          !canRemove) ...[
-                        const SizedBox(height: 12),
-                        Text(
-                          l10n.traderReadOnlyCore,
-                          style: theme.textTheme.bodySmall,
-                        ),
-                      ],
-                      const SizedBox(height: 16),
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: SegmentedButton<TraderStockMap>(
-                          segments: [
-                            ButtonSegment(
-                              value: TraderStockMap.current,
-                              icon: const Icon(Icons.storefront_outlined),
-                              label: Text(l10n.traderStockCurrent),
+    // The sub-tab layout every other detail pane uses, documented on
+    // CharactersTab: outer 20/top 8, one card, 16 inside it. Trade used to lay
+    // its blocks on the bare background, which made it the odd tab out.
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: LayoutBuilder(
+            builder: (context, pane) {
+              // The pane is under 200px wide at the smallest supported window,
+              // where two labelled segments overflow.
+              final labelled = pane.maxWidth >= _labelledActionsAbove;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // The notes, the map switch and the ore card scroll among themselves
+                  // once the pane gets short, so they can never squeeze the browser out
+                  // of the column — which they did, by 8px, at 620px tall.
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight: _headCap(pane.maxHeight),
+                    ),
+                    child: SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // First, because it qualifies every number below it — the ore as much
+                          // as the stock counts.
+                          if (unsupported) ...[
+                            _NoteCard(
+                              text: incomplete
+                                  ? l10n.traderRecordIncomplete
+                                  : l10n.traderDifficultyStockUnsupported,
+                              tone: _NoteTone.warning,
                             ),
-                            ButtonSegment(
-                              value: TraderStockMap.base,
-                              icon: const Icon(Icons.inventory_outlined),
-                              label: Text(l10n.traderStockBase),
+                            const SizedBox(height: 12),
+                          ],
+                          _NoteCard(text: l10n.traderPriceWarning),
+                          // The core drops setStock from `writable` when no shop
+                          // holds a line while still offering addItem, so "read only"
+                          // has to mean none of the three is available — not merely
+                          // that one of them is missing.
+                          if (widget.editable &&
+                              !unsupported &&
+                              !canSet &&
+                              !canAdd &&
+                              !canRemove) ...[
+                            const SizedBox(height: 12),
+                            Text(
+                              l10n.traderReadOnlyCore,
+                              style: theme.textTheme.bodySmall,
                             ),
                           ],
-                          selected: {_map},
-                          onSelectionChanged: (selection) =>
-                              setState(() => _map = selection.first),
-                        ),
+                          const SizedBox(height: 16),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: SegmentedButton<TraderStockMap>(
+                              segments: [
+                                ButtonSegment(
+                                  value: TraderStockMap.current,
+                                  icon: const Icon(Icons.storefront_outlined),
+                                  label: labelled
+                                      ? Text(l10n.traderStockCurrent)
+                                      : null,
+                                  tooltip: labelled
+                                      ? null
+                                      : l10n.traderStockCurrent,
+                                ),
+                                ButtonSegment(
+                                  value: TraderStockMap.base,
+                                  icon: const Icon(Icons.inventory_outlined),
+                                  label: labelled
+                                      ? Text(l10n.traderStockBase)
+                                      : null,
+                                  tooltip: labelled
+                                      ? null
+                                      : l10n.traderStockBase,
+                                ),
+                              ],
+                              selected: {_map},
+                              onSelectionChanged: (selection) =>
+                                  setState(() => _map = selection.first),
+                            ),
+                          ),
+                          if (_map == TraderStockMap.base) ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              l10n.traderStockBaseHint,
+                              style: theme.textTheme.bodySmall,
+                            ),
+                          ],
+                          if (showOreCard) ...[
+                            const SizedBox(height: 16),
+                            _OreCard(
+                              detail: detail,
+                              editable: canSet,
+                              canRemove: canRemove,
+                              removalPending: removals.contains(kTraderOrePath),
+                              onChanged: (value) =>
+                                  _queueSet(_map, kTraderOrePath, value),
+                              onRevert: () => _revert(_map, kTraderOrePath),
+                              onRemove: () =>
+                                  _queueRemove(_map, kTraderOrePath),
+                              pending: _pendingCountFor(_map, kTraderOrePath),
+                            ),
+                          ],
+                        ],
                       ),
-                      if (_map == TraderStockMap.base) ...[
-                        const SizedBox(height: 8),
-                        Text(
-                          l10n.traderStockBaseHint,
-                          style: theme.textTheme.bodySmall,
-                        ),
-                      ],
-                      if (showOreCard) ...[
-                        const SizedBox(height: 16),
-                        _OreCard(
-                          detail: detail,
-                          editable: canSet,
-                          canRemove: canRemove,
-                          removalPending: removals.contains(kTraderOrePath),
-                          onChanged: (value) =>
-                              _queueSet(_map, kTraderOrePath, value),
-                          onRevert: () => _revert(_map, kTraderOrePath),
-                          onRemove: () => _queueRemove(_map, kTraderOrePath),
-                          pending: _pendingCountFor(_map, kTraderOrePath),
-                        ),
-                      ],
-                    ],
+                    ),
                   ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Expanded(
-                child: _StockSection(
-                  map: _map,
-                  items: rows,
-                  lineCount: detail.stock(_map).length,
-                  pendingAdds: _pendingAdds(_map),
-                  pendingRemovals: [
-                    for (final item in detail.stock(_map))
-                      if (removals.contains(item.path)) item,
-                  ],
-                  canSet: canSet,
-                  canAdd: canAdd,
-                  canRemove: canRemove,
-                  selectedCategory: _category,
-                  onSelectCategory: (category) =>
-                      setState(() => _category = category),
-                  pendingOf: _pendingCountFor,
-                  onChanged: _queueSet,
-                  onRevert: _revert,
-                  onRemove: _queueRemove,
-                  onRevertAdd: _revertAdd,
-                  onAdd: () => _addItem(_map, detail),
-                ),
-              ),
-            ],
+                  const SizedBox(height: 16),
+                  Expanded(
+                    child: _StockSection(
+                      map: _map,
+                      items: rows,
+                      lineCount: detail.stock(_map).length,
+                      pendingAdds: _pendingAdds(_map),
+                      pendingRemovals: [
+                        for (final item in detail.stock(_map))
+                          if (removals.contains(item.path)) item,
+                      ],
+                      canSet: canSet,
+                      canAdd: canAdd,
+                      canRemove: canRemove,
+                      selectedCategory: _category,
+                      onSelectCategory: (category) =>
+                          setState(() => _category = category),
+                      pendingOf: _pendingCountFor,
+                      onChanged: _queueSet,
+                      onRevert: _revert,
+                      onRemove: _queueRemove,
+                      onRevertAdd: _revertAdd,
+                      onAdd: () => _addItem(_map, detail),
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
         ),
       ),
@@ -461,6 +480,10 @@ const double _oreStackBelow = 320;
 /// moves under it. A ListTile gives its trailing whatever width it asks for, so
 /// the row has to stop using one.
 const double _rowStackBelow = 300;
+
+/// From this pane width the switch and the add action carry their labels; under
+/// it they overflow the row, so they show icons with tooltips instead.
+const double _labelledActionsAbove = 320;
 
 class _OreCard extends ConsumerWidget {
   const _OreCard({
@@ -651,7 +674,14 @@ class _StockSection extends ConsumerWidget {
   /// Below this width the sidebar would leave the list unusably narrow, so the
   /// categories collapse into one flat list instead. Same threshold the
   /// inventory browser uses.
-  static const double _compactBelow = 600;
+  /// Below this the category rail folds away and the lines are shown flat.
+  ///
+  /// The rail costs 200 plus a 16 gap, and a line stays horizontal down to
+  /// [_rowStackBelow], so 560 still leaves the lines more room than they need.
+  /// Deliberately under 600: the shared sub-tab padding takes 40 of the pane,
+  /// which at a 1400-wide window left 588 and folded the rail away on a screen
+  /// with room for it.
+  static const double _compactBelow = 560;
 
   /// The share of the pane the queued-change banners may claim before they
   /// scroll among themselves, so the stock browser stays visible below them.
@@ -764,12 +794,20 @@ class _StockSection extends ConsumerWidget {
                   ),
                 ),
               ),
+              // The label goes when the pane cannot carry it: at the smallest
+              // supported window this button alone is wider than the row.
               if (canAdd)
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.add),
-                  label: Text(l10n.traderAddItem),
-                  onPressed: onAdd,
-                ),
+                pane.maxWidth >= _labelledActionsAbove
+                    ? OutlinedButton.icon(
+                        icon: const Icon(Icons.add),
+                        label: Text(l10n.traderAddItem),
+                        onPressed: onAdd,
+                      )
+                    : IconButton.outlined(
+                        icon: const Icon(Icons.add),
+                        tooltip: l10n.traderAddItem,
+                        onPressed: onAdd,
+                      ),
             ],
           ),
           // Queued changes sit ABOVE the list: they are what the next save will
