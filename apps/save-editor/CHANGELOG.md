@@ -33,14 +33,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The player's inventory no longer lists the useless fist markers (`HumanFist …`) the
   engine equips on every character.
 - Characters with no actor behind them in the save are no longer listed.
-- A creature's own jaw or claws are no longer listed among what it carries.
-  Nobody can hold one, and removing one only disarms the creature.
-- One creature is one row again. Wolves, blood flies, meatbugs, diggers, guards,
-  novices and shadows were each split across two.
-- A man and the monsters that share his name stay apart — the mercenary Wolf is
-  not one of the wolves.
-- Creatures the editor could not place showed the person mark. Most of them are
-  now recognized, portraits included.
+- A creature's own weapon is no longer listed among what it carries.
+- One creature is one row again.
 
 ## [1.3.1] - 2026-08-26
 
