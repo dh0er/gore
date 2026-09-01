@@ -23,7 +23,10 @@ of that page, not a second claim.
 | **Rules and persisted effects** | A new option added one ore nugget, changing inventory from 0 to 1; the item remained after quicksave and restart. Another option used `Rules.HideIfKnowsId` with `gore_diego_quest_knowledge_24878692`: it disappeared immediately after selection and remained absent after restart, while save-query found that exact ID on the hero. A new Stonehenge quest produced its toast and journal entry and remained `Running` after restart. |
 | **New field and helper** | A new topic field with `default ProbeMarker = 24878692` and a helper method were authored and used successfully in game. |
 | **New voice-over** | A new topic displayed its authored subtitle and played its new voice asset. System loopback matched the authored source with normalized correlation `0.763`. This proves that fixture's localization-to-voice lookup and audible playback, not every possible audio format or event. |
-| **Automatic opening** | An ambient fixture entered `State.AmbientConversation` with `GA_Human_Conversation_Ambient` active without player selection. That proves automatic conversation activation at the state/ability boundary. The later crash occurred only after the fixture forced an artificial 20-choice `Subdialog`, so it does not qualify that menu shape or disprove ordinary ambient topics. |
+| **Complete new conversation** | A shipped Guard with no previous dialog topics received a private root and wholly new choices inside that NPC's already-loaded conversation-settings module. The final run used `dialog new-conversation` → `check` → `stage` → standalone compile → bundle/deploy, then opened automatically, spoke a shipped oracle line, displayed and selected both nested choices in sequence, and returned HUD/control cleanly. A separate unreferenced conversation Add module compiled and deployed but was not discovered; `new-conversation` therefore requires the loaded per-NPC settings anchor and stages an edit. |
+| **All-new multi-level tree** | A wholly new three-level Diego tree rendered Root → level 2 → level 3, played a real `Say` between the two nested transitions, accepted the final choice and ended cleanly. Two directly consecutive, actionless `Subdialog` transitions instead soft-locked; `dialog check` now requires an unconditional top-level `Say` before one of those transitions. |
+| **Automatic opening** | The new Guard conversation opened without player selection and completed normally. A separate ambient fixture also entered `State.AmbientConversation` with `GA_Human_Conversation_Ambient` active. These prove automatic conversation activation; they do not qualify every force condition or the separate artificial 20-choice ambient fixture. |
+| **Selective complete cache** | A `gore as compile` product containing coordinated changes in multiple modules booted, loaded gameplay and executed the intended cross-module provider call. Its new same-module root was visible and selectable, the shipped automatic topic called the provider's new code, the line played and the conversation returned control. This is the complete-cache path, not two dependent mini-caches. |
 | **Historical low-level adapter** | `BuildSpec.dialog_topics` still describes a separate UE4SS insertion adapter. Earlier Viper runs rendered a root through `AddTopic` and recorded `ARMED -> CHOICE_PASS -> RENDER_PASS`. It is historical low-level evidence, not part of the current `gore dialog new-topic` root workflow. |
 
 ## Practical limits only
@@ -34,57 +37,54 @@ produce.
 
 ### Potentially possible, but not proven in game
 
-- A complete conversation for an NPC with no current root topics. The checked
-  source, strict standalone compile and bundle path are supported: GORE edits an
-  exact shipped topicless conversation module when one exists, or adds one new
-  module when none exists. Native runtime association and discovery have not
-  yet been observed for either shape.
-- A multi-level tree made entirely from new topics. Its root, children and
-  `Subdialog` wiring can compile and package together in one conversation
-  module, but navigating such an all-new tree has not yet been observed in game.
 - Rendering or selecting an artificial 20-choice menu reached through an
-  automatic ambient opening. Automatic activation itself reached the ambient
-  conversation state and ability, but the forced menu shape then crashed.
-- Running the intended cross-module dialog change from `gore as compile`'s
-  selective complete-cache product. Its dependency resolution and Add/Edit
-  composition are supported offline, and the earlier hybrid audit cache booted
-  and loaded a save, but appearance, selection and execution of the intended
-  cross-module dialog edge have not yet been observed.
+  automatic ambient opening. Ordinary automatic opening and a separate
+  20-choice submenu both work, but that combined artificial fixture crashed
+  before its menu became usable.
 - The same behavior on game builds other than BuildID `24878692`. Historical
   adapter observations on older builds do not qualify the current native source
   workflow there.
+- Voice playback beyond the qualified new 48 kHz mono Vorbis member: Opus and
+  other sample-rate/channel layouts may pass lower-level validation, but have
+  not been heard in this new-dialog path. Automatic lip/facial synchronization
+  for arbitrary new recordings is likewise not runtime-proven.
 
 ### Not technically supported by the current GORE pipeline
 
+- Giving an NPC a first conversation when the shipped cache has no exact,
+  already-loaded per-NPC conversation-settings module for it. A completely new,
+  unreferenced conversation module is not discovered by the game. In content
+  terms, `gore dialog` alone therefore cannot yet give a wholly new NPC its
+  first conversation; another NPC pipeline would first have to provide a
+  runtime-loaded settings anchor.
 - Making one deployable mini-cache dialog patch depend on a new symbol supplied
-  by another script module. Each module mini is remapped against the pristine
-  base independently; use the separate complete-cache compile path for an
-  acyclic coordinated Add/Edit graph.
-- Building a complete-cache mod that deletes an existing script module. A
-  missing base source file requests Delete, which fails closed until GORE can
-  prune the global tail and prove that retained modules do not reference it.
-- Coordinating new modules whose dependencies form a cycle. Selective
-  composition can order an acyclic provider-to-consumer chain, but cannot safely
-  seed a cycle and therefore rejects it.
-- Deriving one new topic class from another new topic class. Every new option
-  must derive directly from the conversation's private topic base; shared
-  behavior has to live in helpers rather than an inherited topic hierarchy.
+  by another script module. That content works through the selectively composed
+  complete-cache path, but cannot currently ship as two small, independently
+  composable dialog minis. This is a module-dependency limit, not a complexity
+  limit: a large multi-level tree kept in one conversation/settings module still
+  ships as one mini-cache, and several modules without new cross-references may
+  ship as independent minis.
 - Putting an already shipped option below a newly authored submenu parent. A
   shipped parent may receive a new child, and a new parent may contain new
-  same-conversation children, but the checker does not admit a mixed child list
-  owned by that new parent.
-- Publishing the raw whole-tree compiler regeneration as a playable cache.
-  GORE deliberately withholds it and publishes only the selective product. An
-  earlier manually deployed raw result had 10,782 semantic deviations,
-  including 81 in Diego, and reached a main menu whose input could not activate
-  any entry; byte-exact deployment was not runtime compatibility.
-- Adding a 21st child to one `Subdialog` call.
-- Manually reshaping an already full 20-slot `Subdialog` call. The current-head
-  Stage C bundle (mini-cache SHA-256 prefix `C675BB55…`) is byte-identical to
-  the live-tested artifact, which failed to open the reshaped menu with an
-  array-capacity error; treat this shape as technically unsupported and unsafe.
-- Changing the base class, fields, member set or method signatures of a shipped
-  topic.
+  same-conversation children, but you cannot move/reuse a vanilla option as a
+  child of that new parent.
+- Opening another new submenu immediately from a new submenu without an
+  unconditional top-level `Say` before either transition. That actionless
+  two-hop shape soft-locks in game; declarations, assignments, empty blocks and
+  conditional calls do not satisfy `dialog check`. The new-tree `Subdialog`
+  must appear directly in `Act`/`Act_Implementation`; hiding it behind a helper
+  is not a qualified workaround.
+- Putting more than 20 immediate choices in one submenu, or changing the child
+  layout of a vanilla submenu that already uses all 20 slots. A large tree can
+  use further action-bearing submenu levels, but one menu cannot gain a 21st
+  entry and a saturated shipped menu cannot be reshaped safely.
+- Changing the fundamental class structure of a shipped topic: its base class,
+  stored fields, member set and method signatures stay fixed. Its existing
+  defaults and method bodies remain editable, and wholly new topics may define
+  their own fields and helpers.
+- Feeding WAV, MP3, FLAC or other non-Ogg payloads directly into `gore voice`.
+  Convert them first; the CLI archive path accepts Ogg/Vorbis or Ogg/Opus, while
+  the currently qualified Studio and in-game path is Vorbis.
 
 `gore voice add` can supply the new archive member referenced by an authored
 topic. The current Diego fixture proves one such new subtitle/voice pair through
@@ -188,16 +188,16 @@ displayed its new subtitle and played its new voice asset; a system-loopback
 recording matched the authored source at normalized correlation `0.763`.
 
 For an untranslated smoke test, `gore dialog new-topic --caption` and
-`new-conversation --caption` emit a small `FText::FromString` helper. For a
-distributable mod, prefer `--caption-key` and real localized rows. Each command
-keeps the topic and its private base in one conversation source module.
+`new-conversation --caption` emit an inline `FText::FromString(...)` default.
+For a distributable mod, prefer `--caption-key` and real localized rows. Each
+command keeps the topic and its private base in one conversation source module.
 
 ## Strict standalone compilation
 
 After `check`, `gore dialog stage` writes the build spec and prints the exact
-compile command. A shipped or topicless module uses `--op edit`; a genuinely
-new conversation module uses `--op add`. A new class or string makes it include
-`--allow-new-symbols`; a body/default-only edit does not need that flag. The
+compile command. Dialog workspaces use `--op edit`; a new class or string makes
+it include `--allow-new-symbols`, while a body/default-only edit does not need
+that flag. The
 command includes the resolved `--game` root, and `stage` first proves that this
 installation's current script cache has the checkout hash. An arbitrary
 `--cache` with no matching installation is valid for inspection, but cannot be
@@ -276,8 +276,9 @@ Do not turn a generated topic scaffold into an isolated
 a separate module cannot derive from it. Nor can separate add and edit
 mini-caches depend on one another: each mini is independently remapped against
 the pristine base, and one mini never becomes symbol authority for the other. A
-complete new conversation does not need that unsupported arrangement because
-its settings, root and every topic live in its single added module.
+complete first conversation does not need that unsupported arrangement because
+its private root and every topic stay in the NPC's one already-loaded settings
+module.
 
 Full-graph V2 is a different compiler product. It gives one standalone compiler
 request the complete sealed base graph plus all coordinated Add/Edit sources,
@@ -296,8 +297,11 @@ byte-for-byte but produced a main menu that would not accept mouse click or
 Return. A manually composed hybrid cache retained pristine bytes for every
 untouched module, replaced only Diego plus the new cross-module probe, and
 booted and loaded a save normally. The product now automates that selective
-architecture, but the intended cross-module dialog option still has not been
-observed or selected in game.
+architecture. Its current BuildID `24878692` fixture crossed the full runtime
+boundary: the complete cache booted and loaded gameplay, a new same-module root
+appeared and was selected, and an edited shipped automatic topic invoked a new
+provider from another module. The provider's line played and the conversation
+returned control.
 
 The normal dialog bundle composer continues to consume independently base-bound
 module minis, so it cannot package the coordinated graph as a normal
@@ -318,6 +322,13 @@ gore dialog check work
 gore dialog stage work --mod-name MyDialogMod
 ```
 
+For a root, omit `--priority-rank` to choose a normal rank immediately before
+the smallest recognized `TEXT_DIALOG_END`/`TEXT_BACK` rank. If no such caption
+exists, the current last root-rank group is the fallback anchor. Automatic
+selection never emits `-1`, because the game treats that as a forced topic.
+Pass `--priority-rank <N>` only when you want the exact rank, including an
+intentional forced `-1`.
+
 For a real sub-menu addition, pass `--subdialog-of <existing-parent-topic>`.
 The command shifts that parent's single existing fixed-width `Subdialog` call,
 adds `default bIsSubTopic = true` and the shipped sub-topic `PriorityRank = 0`,
@@ -328,6 +339,9 @@ there is no such proven trailing child, it appends. Use
 entries. Existing entries at and after `N` shift right, so no child is silently
 replaced. A stale source/graph order, a hole before a populated slot, an invalid
 position, ambiguous or multiple calls, and a full 20-child call all fail closed.
+Sub-topics default to `PriorityRank = 0`; equal-rank entries retain this slot
+order. An explicit `--priority-rank <N>` overrides the rank without changing the
+chosen slot.
 
 `check` binds this intent back to the authored source and base graph. A direct
 root must not set `bIsSubTopic`; a new direct child must be referenced by one
@@ -353,42 +367,57 @@ must not be presented as a prerequisite for current root authoring.
 Use `new-conversation` only when the participant has no existing root topic:
 
 ```powershell
-gore dialog new-conversation MY_NEW_NPC --caption-key MY_NEW_NPC_HELLO `
-  --class UChoiceMyNewNpcHello --mod-name MyNewNpcDialog -o work
+gore dialog new-conversation OC_GRD_Guard30_281N --caption-key MY_GUARD_HELLO `
+  --class UChoiceMyGuardHello --mod-name MyGuardDialog -o work
 gore dialog check work
-gore dialog stage work --mod-name MyNewNpcDialog
+gore dialog stage work --mod-name MyGuardDialog
 ```
 
-The command checks that the participant is one syntactically safe AngelScript
-identifier and that generated module/class names do not collide with the base
-cache. It can resolve one existing conversation match and refuses ambiguous or
-already rooted matches. If there is no conversation match, however, GORE cannot
-prove that this identifier belongs to a shipped NPC or to a new NPC authored in
-another project payload: it uses the exact supplied identifier for the new
-module. Prove or copy the NPC id from the catalog/project first; spelling and
-runtime binding are the modder's responsibility. Exactly one shipped topicless
-module is preserved and staged as an edit; no matching module becomes an add.
+The command resolves the participant exactly and requires one already-loaded
+per-NPC conversation-settings module from the shipped cache. It refuses partial
+names, ambiguous matches, an already rooted conversation, a missing settings
+anchor, or an anchor whose participant/default shape does not match. It keeps
+that shipped settings class untouched and appends the private root and choices
+under `G1R::Conversation` in the same loaded module. Staging therefore uses
+`--op edit --allow-new-symbols`; there is no deployable Add-module fallback.
+The first choice defaults to `PriorityRank = 2`. Pass
+`--priority-rank <N>` for an exact alternative; `-1` intentionally requests the
+game's forced-topic semantics and is never inferred.
+
+This anchor is a runtime requirement, not just a conservative naming rule. A
+separate new `Story.G1R.Conversation` module for the same shipped Guard passed
+source checks, strict standalone compilation, packaging and deployment, yet the
+game never discovered it. Placing the same new conversation classes in the
+Guard's loaded settings module made the conversation open automatically and run
+normally. For a wholly new NPC, `gore dialog` can only add the conversation once
+some other NPC-authoring path supplies an exact settings module that the game
+actually loads.
 
 The generated source contains the conversation settings, its private root and
 one direct choice. To author a deeper tree, append every additional topic to
 that same source module and wire each parent to its children with `Subdialog`.
 This includes new-parent-to-new-child edges: they no longer need a shipped
 parent. For those edges, use the global
-`::Subdialog(this, UChoiceChild, ...)` source form. The instance-method form
-cannot bind a newly declared child in a completely new module. The fixed width
-still permits at most 20 children per individual `Subdialog` call. Every new
-topic must derive directly from the private topic base and stay beside it in the
-same namespace; a new parent may own only new children from this conversation,
-and no topic may come from a second new module.
+`::Subdialog(this, UChoiceChild, ...)` source form. The fixed width still
+permits at most 20 children per individual `Subdialog` call. Every new topic
+must derive directly from the private topic base and stay beside it in the same
+namespace; a new parent may own only new children from this conversation, and
+no topic may come from a second new module.
 
-Source checking, strict standalone compilation and script-only bundle
-inspection cover both the existing-topicless edit and brand-new-module add
-shapes, including an all-new multi-level tree. That is compile/package evidence,
-not runtime evidence. GORE has not yet observed whether the game associates a
-brand-new module with the intended NPC, discovers its root, or navigates the
-complete all-new tree. The generated bundle contains no UE4SS component, and
-none is needed to compile or package it offline. Whether successful runtime
-discovery needs a bridge is exactly the still-open in-game question.
+Do not chain two otherwise actionless `Subdialog` Acts. The live three-level
+fixture soft-locked when level 1 opened level 2 and level 2 immediately opened
+level 3 without a line in between. With one unconditional top-level `Say`
+before the second transition, Root -> level 2 -> level 3 rendered, selected and
+ended cleanly. `dialog check` recognizes and rejects the unsafe consecutive
+shape; declarations, assignments, empty blocks and conditional calls do not
+stand in for the proven `Say` separator.
+
+Source checking, strict standalone compilation, script-only bundle inspection,
+deployment and runtime now cover the anchored first-conversation edit and an
+all-new multi-level tree. The Guard fixture opened automatically, spoke a
+shipped line, rendered two wholly new choices and returned control after the
+first was selected. The generated bundle contains no UE4SS component; native
+discovery comes from residence in the already-loaded settings module.
 
 ## Package and deploy
 
@@ -404,9 +433,10 @@ is a separate installation mutation handled transactionally by the bundle
 engine. Existing-topic edits, same-module roots, same-module sub-topics and
 complete same-module conversation workspaces are ordinary script mini-cache
 bundles and ship no automatic UE4SS component. Existing-topic, same-module-root
-and direct-sub-topic fixtures are proven without UE4SS insertion. For complete
-new conversations and all-new trees, native discovery without a bridge remains
-unproven rather than guaranteed.
+and direct-sub-topic fixtures are proven without UE4SS insertion, as are the
+anchored first-conversation and all-new-tree fixtures. A standalone new
+conversation module is not an equivalent package: it deploys, but the game does
+not discover it.
 
 If a hand-authored low-level bundle deliberately includes legacy
 `dialog_topics`, its transient registration component remains `opaque`. The
@@ -424,10 +454,10 @@ shares the loadout; that advisory does not invent a later-wins result.
 4. Capture the installation/loadout and save baseline, then deploy through the
    bundle engine.
 5. Open the NPC menu naturally on a backed-up or disposable save.
-6. Inspect an existing-topic edit, same-module root or same-module sub-topic in
-   the native menu directly. For a complete new conversation, first test the
-   script-only bundle without an insertion bridge; that observation decides
-   whether native discovery works. If separately
+6. Inspect an existing-topic edit, same-module root, same-module sub-topic or
+   anchored first conversation in the native menu directly. For a new
+   multi-level tree, put an unconditional top-level `Say` before one of two
+   consecutive nested `Subdialog` transitions. If separately
    qualifying a hand-authored legacy `dialog_topics` adapter, require its
    `ARMED -> CHOICE_PASS -> RENDER_PASS` sequence and exact identity/class
    counts, then still confirm the option visually.

@@ -158,11 +158,11 @@ and failing would bury the line explaining what was not searched.
 | `tree` | `<NPC>` · `--lang` · `--depth <N>` · `--ids` | One NPC's complete dialog tree: options in menu order, their rules and `IsVisible` checks, the lines each side speaks, the effects, and nested sub-menus. |
 | `show` | `<TOPIC>` · `--lang` | One topic class in full, with class names and localization keys. |
 | `text` | `<NPC>` · `--lang` · `--out <FILE>` | That conversation's lines as a `gore loc import` edits document, each under the column the game actually reads. |
-| `new-topic` | `<NPC>` · `--caption`/`--caption-key` · `--class` · `--subdialog-of <TOPIC>` · `--subdialog-position <N>` · `--mod-name` · `--out <DIR>` | Write a complete same-module edit workspace with the new class inserted into the conversation namespace. Without `--subdialog-of`, make a native direct root. With it, shift the named shipped parent's fixed 20-slot `Subdialog` entries and insert the child at optional 1-based position `N`; by default a trailing `TEXT_BACK`/Zurück entry stays last, otherwise the child appends. This is not an isolated `--op add` recipe and does not generate a UE4SS adapter. |
-| `new-conversation` | `<NPC>` · `--caption`/`--caption-key` · `--class` · `--mod-name` · `--out <DIR>` | Start a complete same-module conversation for an NPC with no root topics. Exactly one matching shipped topicless module becomes an edit; no matching module becomes an add containing settings, private root and first choice. An existing rooted or ambiguous match fails closed. In the no-match case `<NPC>` is checked syntactically and for generated-name collisions, but its existence/binding is not proved; use the exact catalog/project id. Further new topics and new-to-new `Subdialog` levels stay in this source module. |
+| `new-topic` | `<NPC>` · `--caption`/`--caption-key` · `--class` · `--subdialog-of <TOPIC>` · `--subdialog-position <N>` · `--priority-rank <N>` · `--mod-name` · `--out <DIR>` | Write a complete same-module edit workspace with the new class inserted into the conversation namespace. Without `--subdialog-of`, make a native direct root and automatically choose a normal rank before the recognized final End/Back row (or the current last root-rank group). With it, shift the named shipped parent's fixed 20-slot `Subdialog` entries and insert the child at optional 1-based position `N`; by default a trailing `TEXT_BACK`/Zurück entry stays last, otherwise the child appends. Sub-topics default to rank 0, so equal-rank slot order is preserved. An explicit rank wins exactly; `-1` intentionally requests the game's forced-topic behavior and is never chosen automatically. This is not an isolated `--op add` recipe and does not generate a UE4SS adapter. |
+| `new-conversation` | `<NPC>` · `--caption`/`--caption-key` · `--class` · `--priority-rank <N>` · `--mod-name` · `--out <DIR>` | Start a complete conversation for an exact NPC with no root topics. The command requires that NPC's one already-loaded per-NPC conversation-settings module, preserves its settings class, and appends the private root plus first choice in the same module. The first choice defaults to rank 2; an explicit rank wins, and `-1` should be passed only for an intentionally forced topic. A partial/ambiguous NPC, existing rooted conversation, or missing/malformed settings anchor fails closed; there is no unreferenced Add-module fallback. Further new topics and new-to-new `Subdialog` levels stay in this source module. |
 | `checkout` | `<NPC>` · `--out <DIR>` | The conversation module's compiler-ready AngelScript, including reconstructed class defaults, plus an untouched copy and a manifest bound to this game build. |
-| `check` | `<DIR>` | Check method/default edits, complete default supersession, fixed shipped ABI and intentional new symbols. Partial or loss-prone defaults fail closed. Offline; no compile. |
-| `stage` | `<DIR>` · `--mod-name` · `--cache` · `--game` | Write the build spec and strict standalone `compile-module` command. It uses `--op edit` for a shipped/topicless module or `--op add` for a new conversation module, adds `--allow-new-symbols` when required, includes the resolved `--game`, and refuses a cache hash that does not match that installation. |
+| `check` | `<DIR>` | Check method/default edits, complete default supersession, fixed shipped ABI and intentional new symbols. Partial or loss-prone defaults and consecutive actionless new-to-new `Subdialog` transitions fail closed. Offline; no compile. |
+| `stage` | `<DIR>` · `--mod-name` · `--cache` · `--game` | Write the build spec and strict standalone `compile-module` command. It uses `--op edit`, adds `--allow-new-symbols` when required, includes the resolved `--game`, and refuses a cache hash that does not match that installation. |
 | `export` | `--out <DIR>` | One JSON file per conversation. |
 
 Every subcommand also takes `--cache <PATH>` to read an exact script cache and
@@ -197,14 +197,15 @@ class, participant and vanilla sentinel bind to the checked cache. The adapter's
 `allow_hidden` field belongs to that low-level bundle schema, not to this CLI.
 
 `new-conversation` is the same-module path for an NPC without root topics. Its
-workspace either edits the one shipped topicless module or adds one complete new
-module; settings, root, first choice and every manually added deeper topic stay
-together. Both operations and an all-new multi-level tree are covered through
-strict standalone compilation and bundle inspection, but their native runtime
-discovery/navigation is still unproven. The generated bundle has no automatic
-UE4SS component; this proves its packaging shape, not that runtime discovery
-cannot require a separate bridge. When no conversation matches, GORE also
-cannot prove that `<NPC>` exists in a shipped catalog or another mod payload.
+workspace edits the NPC's exact already-loaded conversation-settings module;
+the shipped settings class, private root, first choice and every manually added
+deeper topic stay together. On BuildID `24878692`, that shape opened
+automatically for a previously dialogless shipped Guard, rendered two new
+submenu choices, accepted one and returned control. A separate unreferenced Add
+module was not discovered and is therefore refused. An all-new three-level tree
+also ran end to end when an unconditional top-level `Say` separated consecutive
+nested menu transitions; `check` rejects the actionless two-hop shape that
+soft-locked. The generated bundle has no automatic UE4SS component.
 
 Separate add/edit mini-caches cannot depend on each other, so an isolated
 cross-module `--op add` is not the dialog recipe. Full detail, practical limits
@@ -360,6 +361,10 @@ tail record remain pristine; only records required by new symbols are appended.
 Start from a current `emit-all` tree. Missing base sources request
 Delete and are rejected; cyclic dependencies among new modules also fail
 closed. The raw whole-tree compiler regeneration is never the published cache.
+On BuildID `24878692`, one published selective product booted and loaded
+gameplay, rendered and selected its new same-module root, and executed a new
+provider call across modules from a shipped automatic topic. This runtime proof
+does not turn two dependent module minis into a supported package shape.
 
 `patch-default`, `patch-tag-map` and `asset patch-fixed` never overwrite an
 existing output path. The `as` extract/splice family — `replace`, `splice`,

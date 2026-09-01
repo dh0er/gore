@@ -124,6 +124,9 @@ pub enum DialogAction {
             value_parser = clap::value_parser!(usize)
         )]
         subdialog_position: Option<usize>,
+        /// Menu-order rank. Roots choose an automatic rank before a recognized final End/Back entry, otherwise before the trailing rank group; sub-topics default to 0 and keep equal-rank order from --subdialog-position. Pass a value to override it; -1 has the game's forced-topic semantics and is never chosen automatically
+        #[arg(long, value_name = "N", allow_negative_numbers = true)]
+        priority_rank: Option<i32>,
         /// Mod name, used for the default class name and the staged bundle
         #[arg(long, default_value = "MyDialogMod")]
         mod_name: String,
@@ -137,7 +140,7 @@ pub enum DialogAction {
     },
     /// Scaffold the first option and private topic base for an NPC conversation
     NewConversation {
-        /// Exact NPC identifier; syntax and collisions are checked, but NPC existence is not
+        /// Exact NPC identifier with one loaded per-NPC conversation-settings module; a separate unbound add module is refused
         npc: String,
         /// The first menu option's text, as an untranslated literal
         #[arg(
@@ -152,6 +155,14 @@ pub enum DialogAction {
         /// AngelScript class name for the first option
         #[arg(long)]
         class: Option<String>,
+        /// Menu-order rank for the first option. Pass -1 only when intentionally authoring a forced topic
+        #[arg(
+            long,
+            value_name = "N",
+            default_value_t = 2,
+            allow_negative_numbers = true
+        )]
+        priority_rank: i32,
         /// Mod name, used for the default class name and staged bundle
         #[arg(long, default_value = "MyDialogMod")]
         mod_name: String,
@@ -249,6 +260,7 @@ pub fn run(action: DialogAction) -> Result<()> {
             class,
             subdialog_of,
             subdialog_position,
+            priority_rank,
             mod_name,
             out,
             cache,
@@ -260,6 +272,7 @@ pub fn run(action: DialogAction) -> Result<()> {
             class,
             subdialog_of,
             subdialog_position,
+            priority_rank,
             mod_name,
             out,
             cache,
@@ -270,6 +283,7 @@ pub fn run(action: DialogAction) -> Result<()> {
             caption,
             caption_key,
             class,
+            priority_rank,
             mod_name,
             out,
             cache,
@@ -279,6 +293,7 @@ pub fn run(action: DialogAction) -> Result<()> {
             caption,
             caption_key,
             class,
+            priority_rank,
             mod_name,
             out,
             cache,
@@ -364,7 +379,7 @@ fn matching<'a>(graph: &'a DialogGraph, needle: &str) -> Vec<&'a Conversation> {
         .collect()
 }
 
-/// Exact participant lookup for commands that may create a brand-new module on no match.
+/// Exact participant lookup for commands that may scaffold into a loaded settings anchor.
 ///
 /// Reusing [`matching`] here would be unsafe: its documented partial/module fallback is useful for
 /// read commands, but a unique substring could silently turn a requested new NPC into an edit of a
@@ -1122,9 +1137,8 @@ struct EditManifest {
     participant: String,
     /// The exact cache this edit is bound to. A game update invalidates the whole contract.
     cache_sha256: String,
-    /// `new-conversation` workspaces must retain the private root and at least one topic even when
-    /// their operation is an edit of a shipped topicless settings module. Ordinary/legacy
-    /// checkouts default to false and may remain topicless.
+    /// `new-conversation` workspaces edit a loaded per-NPC settings anchor and must retain the
+    /// private root plus at least one topic. Ordinary/legacy checkouts default to false.
     #[serde(default, skip_serializing_if = "is_false")]
     requires_topic_scaffold: bool,
     /// Explicit root-topic registrations for the bundle spec. Subdialog topics are wired by the
@@ -1495,6 +1509,23 @@ fn validate_topicless_settings<'a>(
     report: &dialog::EditReport,
     participant: &str,
 ) -> Result<&'a dialog::ClassOutline> {
+    let settings = validate_settings_anchor_source(outline, participant)?;
+    if report.added_classes.contains(&settings.name) {
+        bail!(
+            "a conversation-settings anchor edit may not replace its shipped settings class {}",
+            settings.name
+        );
+    }
+    Ok(settings)
+}
+
+/// The shipped per-NPC settings declaration that makes a newly added conversation discoverable.
+/// Its authored source must remain present and bound to the exact participant; the runtime-proven
+/// path only appends topic declarations in another namespace of this already loaded module.
+fn validate_settings_anchor_source<'a>(
+    outline: &'a dialog::SourceOutline,
+    participant: &str,
+) -> Result<&'a dialog::ClassOutline> {
     let settings = outline
         .classes
         .iter()
@@ -1502,16 +1533,10 @@ fn validate_topicless_settings<'a>(
         .collect::<Vec<_>>();
     let [settings] = settings.as_slice() else {
         bail!(
-            "a topicless conversation edit must retain exactly one direct UConversationCharacterSettings class; found {}",
+            "a conversation-settings anchor must retain exactly one direct UConversationCharacterSettings class; found {}",
             settings.len()
         );
     };
-    if report.added_classes.contains(&settings.name) {
-        bail!(
-            "a topicless conversation edit may not replace its shipped settings class {}",
-            settings.name
-        );
-    }
     if literal_name_default(settings, "ForCharacter")?.as_deref() != Some(participant) {
         bail!(
             "{} must retain `default ForCharacter = n{};`",
@@ -1520,6 +1545,37 @@ fn validate_topicless_settings<'a>(
         );
     }
     Ok(settings)
+}
+
+fn validate_settings_anchor_declarations_unchanged(report: &dialog::EditReport) -> Result<()> {
+    let added = report
+        .added_classes
+        .iter()
+        .map(|class| class.as_str())
+        .collect::<BTreeSet<_>>();
+    let changed_bodies = report
+        .changed
+        .iter()
+        .filter(|change| !added.contains(change.class.rsplit("::").next().unwrap_or(&change.class)))
+        .map(|change| format!("{}::{}", change.class, change.member))
+        .collect::<Vec<_>>();
+    let changed_defaults = report
+        .changed_defaults
+        .iter()
+        .filter(|change| !added.contains(change.class.rsplit("::").next().unwrap_or(&change.class)))
+        .map(|change| format!("{}::default {}", change.class, change.target))
+        .collect::<Vec<_>>();
+    if !changed_bodies.is_empty() || !changed_defaults.is_empty() {
+        bail!(
+            "a new-conversation settings-anchor edit must leave every shipped declaration unchanged; changed: {}",
+            changed_bodies
+                .into_iter()
+                .chain(changed_defaults)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    Ok(())
 }
 
 fn validate_new_conversation_base<'a>(
@@ -1549,13 +1605,10 @@ fn validate_new_conversation_base<'a>(
             root.name
         );
     }
-    let expected_namespace = if require_new_settings {
-        CONVERSATION_NAMESPACE
-    } else {
-        validate_topicless_settings(outline, report, participant)?
-            .namespace
-            .as_str()
-    };
+    if !require_new_settings {
+        validate_topicless_settings(outline, report, participant)?;
+    }
+    let expected_namespace = CONVERSATION_NAMESPACE;
     if root.namespace != expected_namespace {
         bail!(
             "the private topic base {} must stay in namespace `{expected_namespace}`, not `{}`",
@@ -1633,7 +1686,10 @@ fn validate_new_topic_tree(
                 format!("new topic {class_name} disappeared from the source outline")
             })?;
         if class.kind != "class" {
-            bail!("new topic {class_name} must be declared as a class, not a {}", class.kind);
+            bail!(
+                "new topic {class_name} must be declared as a class, not a {}",
+                class.kind
+            );
         }
         if class.namespace != root.namespace {
             bail!(
@@ -1653,6 +1709,7 @@ fn validate_new_topic_tree(
     }
 
     let (calls, call_shapes) = inventory_fixed_subdialog_calls(authored)?;
+    let direct_act_calls = direct_act_subdialog_call_counts(authored)?;
     let mut parents = BTreeMap::<String, Vec<String>>::new();
     let mut children = BTreeMap::<String, Vec<String>>::new();
     let added_classes = report
@@ -1679,7 +1736,7 @@ fn validate_new_topic_tree(
                 .any(|shape| *shape != SubdialogCallShape::Global)
         {
             bail!(
-                "new topic {owner} must open its new children with the compiler-qualified global `::Subdialog(this, ...)` form; `this.Subdialog(...)` does not bind new child classes in a brand-new module"
+                "new topic {owner} must open its new children with the compiler-qualified global `::Subdialog(this, ...)` form; `this.Subdialog(...)` does not bind newly appended child classes on the qualified all-new-tree path"
             );
         }
         let [slots] = owner_calls.as_slice() else {
@@ -1688,6 +1745,11 @@ fn validate_new_topic_tree(
                 owner_calls.len()
             );
         };
+        if direct_act_calls.get(owner).copied().unwrap_or(0) != 1 {
+            bail!(
+                "the Subdialog call in {owner} that owns new topics must appear directly in `Act` or `Act_Implementation`; helper-indirect menu transitions are not runtime-qualified"
+            );
+        }
         if !owner_is_new_topic && added_classes.contains(owner.as_str()) {
             bail!(
                 "new topic(s) are referenced by added non-topic class {owner}; a Subdialog parent must itself be a topic"
@@ -1750,6 +1812,24 @@ fn validate_new_topic_tree(
             .find(|candidate| candidate.name == *class)
             .expect("added topic was resolved above");
         validate_new_topic_placement(class_outline, !topic_parents.is_empty())?;
+    }
+
+    // `Subdialog` is a blocking ability task. The live all-new-tree oracle soft-locked when one
+    // topic's otherwise-empty Act selected a child whose otherwise-empty Act immediately opened
+    // the next menu. The same bytecode and new-symbol references work once either transition has
+    // an unconditional `Say` first, and the shipped corpus contains no consecutive actionless
+    // pair. Only that spoken-line form is runtime-qualified: declarations, assignments, empty
+    // blocks and control-flow wrappers must not accidentally bypass this fail-closed guard.
+    let immediate_subdialog_acts = immediate_subdialog_acts(authored)?;
+    for (child, owners) in &parents {
+        for owner in owners {
+            if immediate_subdialog_acts.contains(owner) && immediate_subdialog_acts.contains(child)
+            {
+                bail!(
+                    "new topic tree edge {owner} -> {child} chains two actionless `Subdialog` Acts; this menu-to-menu transition soft-locks at runtime. Add an unconditional top-level `::Say(...)` before either Subdialog call"
+                );
+            }
+        }
     }
 
     // Kahn's algorithm over new-to-new edges gives one deterministic cycle refusal.
@@ -1827,6 +1907,33 @@ fn validate_new_topic_tree(
     Ok(())
 }
 
+/// Refuse the pre-anchor first-conversation shape independently of a mutable manifest flag.
+///
+/// Some shipped Story modules contain settings but no topic root. They can be checked out like a
+/// normal conversation, but the live oracle proved that adding a private root there does not make
+/// the game discover it. A first conversation must instead come from `new-conversation`, which
+/// edits the NPC's already-loaded AI settings anchor.
+fn validate_topicless_module_is_not_scaffolded(
+    conversation: Option<&Conversation>,
+    outline: &dialog::SourceOutline,
+    report: &dialog::EditReport,
+) -> Result<()> {
+    let Some(conversation) = conversation.filter(|item| item.root_class.is_none()) else {
+        return Ok(());
+    };
+    let adds_private_root = outline.classes.iter().any(|class| {
+        report.added_classes.contains(&class.name)
+            && directly_derives_native(class, "UG1RDialogTopic")
+    });
+    if adds_private_root {
+        bail!(
+            "{} is a shipped topicless conversation module, but that module shape is not discovered as a first conversation at runtime; use `gore dialog new-conversation` so the exact loaded per-NPC settings anchor is edited instead",
+            conversation.module
+        );
+    }
+    Ok(())
+}
+
 /// Bind each new topic to one native root, legacy adapter registration, or one Subdialog parent.
 fn validate_topic_registrations(
     manifest: &EditManifest,
@@ -1834,6 +1941,7 @@ fn validate_topic_registrations(
     authored: &str,
     cache: &[u8],
 ) -> Result<()> {
+    validate_manifest_settings_anchor(cache, manifest)?;
     let graph =
         dialog::build(cache).context("re-reading the base dialog for registration checks")?;
     let matches = graph
@@ -1842,15 +1950,14 @@ fn validate_topic_registrations(
         .filter(|conversation| conversation.module == manifest.module)
         .collect::<Vec<_>>();
     let conversation = match manifest.operation {
-        DialogModuleOperation::Edit => {
-            let [conversation] = matches.as_slice() else {
-                bail!(
-                    "the edit module maps to {} base conversations; exactly one is required",
-                    matches.len()
-                );
-            };
-            Some(*conversation)
-        }
+        DialogModuleOperation::Edit => match matches.as_slice() {
+            [conversation] => Some(*conversation),
+            [] if manifest.requires_topic_scaffold => None,
+            _ => bail!(
+                "the edit module maps to {} base conversations; exactly one is required",
+                matches.len()
+            ),
+        },
         DialogModuleOperation::Add => {
             if !matches.is_empty() {
                 bail!("an added conversation must not already exist in the base dialog graph");
@@ -1860,6 +1967,10 @@ fn validate_topic_registrations(
     };
     let outline = dialog::read_outline(authored)
         .map_err(|reason| anyhow::anyhow!("inventorying new topic classes: {reason}"))?;
+    validate_topicless_module_is_not_scaffolded(conversation, &outline, report)?;
+    if manifest.requires_topic_scaffold {
+        validate_settings_anchor_declarations_unchanged(report)?;
+    }
 
     let added_settings = outline
         .classes
@@ -2124,11 +2235,22 @@ fn open_edit(
             &digest[..12.min(digest.len())]
         );
     }
+    validate_manifest_settings_anchor(&bytes, &manifest)
+        .context("the new-conversation manifest is not bound to one loaded NPC settings module")?;
 
     let taken = match manifest.operation {
         DialogModuleOperation::Edit => {
-            dialog::checkout(&bytes, &manifest.module, native_api(&path))
-                .with_context(|| format!("re-reading {}", manifest.module))?
+            let taken = dialog::checkout(&bytes, &manifest.module, native_api(&path))
+                .with_context(|| format!("re-reading {}", manifest.module))?;
+            if manifest.relative_path != taken.relative_path {
+                bail!(
+                    "the edit manifest redirects {} from its cache path {} to {}; take a fresh checkout",
+                    manifest.module,
+                    taken.relative_path,
+                    manifest.relative_path
+                );
+            }
+            taken
         }
         DialogModuleOperation::Add => {
             let (expected_module, expected_relative_path) =
@@ -2359,7 +2481,7 @@ fn stage(
         println!("strict remapping is sufficient because this edit introduces no new symbols.");
     }
     println!("Complete authored defaults are regenerated by the compiler; byte-for-byte default");
-    println!("carry is only the fallback for sources that author no defaults at all.");
+    println!("carry is only the fallback when no existing class authors defaults.");
     println!();
     println!("Building writes only below this edit directory. Deployment is a separate,");
     println!("installation-writing step and is intentionally not run or suggested as automatic.");
@@ -2431,6 +2553,7 @@ pub struct NewTopicRequest {
     pub class: Option<String>,
     pub subdialog_of: Option<String>,
     pub subdialog_position: Option<usize>,
+    pub priority_rank: Option<i32>,
     pub mod_name: String,
     pub out: PathBuf,
     pub cache: Option<PathBuf>,
@@ -2442,10 +2565,36 @@ pub struct NewConversationRequest {
     pub caption: Option<String>,
     pub caption_key: Option<String>,
     pub class: Option<String>,
+    pub priority_rank: i32,
     pub mod_name: String,
     pub out: PathBuf,
     pub cache: Option<PathBuf>,
     pub game: Option<PathBuf>,
+}
+
+fn caption_default_line(caption: Option<&str>, caption_key: Option<&str>) -> Result<String> {
+    match (caption, caption_key) {
+        (Some(text), _) => Ok(format!(
+            "    default Caption = FText::FromString(n{}.ToString());",
+            serde_json::to_string(text)?
+        )),
+        (_, Some(key)) => Ok(format!(
+            "    default Caption = LocText({});",
+            serde_json::to_string(key)?
+        )),
+        _ => bail!("pass --caption or --caption-key"),
+    }
+}
+
+fn new_topic_caption_line(caption: Option<&str>, caption_key: Option<&str>) -> Result<String> {
+    caption_default_line(caption, caption_key)
+}
+
+fn new_conversation_caption_line(
+    caption: Option<&str>,
+    caption_key: Option<&str>,
+) -> Result<String> {
+    caption_default_line(caption, caption_key)
 }
 
 fn new_conversation_module_names(participant: &str) -> Result<(String, String)> {
@@ -2459,6 +2608,127 @@ fn new_conversation_module_names(participant: &str) -> Result<(String, String)> 
         format!("Story.G1R.Conversation.{leaf}"),
         format!("Story/G1R/Conversation/{leaf}.as"),
     ))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConversationSettingsAnchor {
+    module: String,
+    participant: String,
+}
+
+/// Recognize only the per-NPC AI settings module shape observed to be loaded by the runtime.
+/// Merely finding some `UConversationCharacterSettings` subclass is not enough: those classes
+/// occur in unrelated modules too, and a fuzzy participant match could bind a new conversation to
+/// the wrong NPC.
+fn conversation_settings_anchor_identity(module: &str) -> Option<ConversationSettingsAnchor> {
+    let parts = module.split('.').collect::<Vec<_>>();
+    let [ai, agent, human, config, participant, leaf] = parts.as_slice() else {
+        return None;
+    };
+    if !ai.eq_ignore_ascii_case("AI")
+        || !agent.eq_ignore_ascii_case("AIAgent")
+        || !human.eq_ignore_ascii_case("Human")
+        || !config.eq_ignore_ascii_case("Config")
+    {
+        return None;
+    }
+    let suffix = leaf.strip_prefix("ConversationCharacterSettings_")?;
+    if !suffix.eq_ignore_ascii_case(participant) {
+        return None;
+    }
+    Some(ConversationSettingsAnchor {
+        module: module.to_owned(),
+        participant: (*participant).to_owned(),
+    })
+}
+
+fn select_exact_settings_anchor<'a>(
+    requested_participant: &str,
+    candidates: &'a [ConversationSettingsAnchor],
+) -> Result<&'a ConversationSettingsAnchor> {
+    let matches = candidates
+        .iter()
+        .filter(|anchor| {
+            anchor
+                .participant
+                .eq_ignore_ascii_case(requested_participant)
+        })
+        .collect::<Vec<_>>();
+    let [anchor] = matches.as_slice() else {
+        if matches.is_empty() {
+            bail!(
+                "no loaded per-NPC conversation-settings anchor exactly matches {requested_participant:?}; a separate new Story.G1R.Conversation module compiles but is not discovered by the game, so it cannot be staged safely"
+            );
+        }
+        bail!(
+            "{requested_participant:?} has {} matching conversation-settings anchors: {}. Refusing an ambiguous NPC binding",
+            matches.len(),
+            matches
+                .iter()
+                .map(|anchor| anchor.module.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    };
+    Ok(*anchor)
+}
+
+/// Resolve one exact, already present settings anchor. A standalone Add module compiles, but the
+/// live game does not discover it; therefore absence and ambiguity both fail closed here.
+fn resolve_conversation_settings_anchor(
+    cache: &[u8],
+    requested_participant: &str,
+) -> Result<ConversationSettingsAnchor> {
+    new_conversation_module_names(requested_participant)?;
+    let modules = gore_as::cache::model::parse_modules(cache)
+        .map_err(|error| anyhow::anyhow!("parsing the script cache: {error}"))?;
+    let candidates = modules
+        .iter()
+        .filter_map(|module| conversation_settings_anchor_identity(&module.name))
+        .collect::<Vec<_>>();
+    let anchor = select_exact_settings_anchor(requested_participant, &candidates)?.clone();
+    let module = modules
+        .iter()
+        .find(|module| module.name == anchor.module)
+        .expect("the selected anchor came from this module list");
+    let settings_count = module
+        .classes
+        .iter()
+        .filter(|class| class.super_class.as_deref() == Some("UConversationCharacterSettings"))
+        .count();
+    if settings_count != 1 {
+        bail!(
+            "loaded conversation-settings anchor {} declares {settings_count} direct UConversationCharacterSettings classes; exactly one is required",
+            anchor.module
+        );
+    }
+    Ok(anchor)
+}
+
+fn validate_manifest_settings_anchor(cache: &[u8], manifest: &EditManifest) -> Result<()> {
+    if manifest.operation == DialogModuleOperation::Add {
+        bail!(
+            "this legacy dialog workspace uses --op add, but a separate conversation module is not discovered by the game; create a fresh new-conversation workspace for an NPC with one loaded conversation-settings anchor"
+        );
+    }
+    if !manifest.requires_topic_scaffold {
+        if conversation_settings_anchor_identity(&manifest.module).is_some() {
+            bail!(
+                "a dialog workspace targeting a loaded per-NPC conversation-settings module must retain `requires_topic_scaffold = true`; refusing a manifest that disables its anchor checks"
+            );
+        }
+        return Ok(());
+    }
+    let anchor = resolve_conversation_settings_anchor(cache, &manifest.participant)?;
+    if anchor.module != manifest.module {
+        bail!(
+            "the new conversation for {:?} must edit its loaded settings anchor {}, not {}",
+            manifest.participant,
+            anchor.module,
+            manifest.module
+        );
+    }
+    Ok(())
 }
 
 /// Keep only the characters an AngelScript identifier may carry.
@@ -2778,9 +3048,93 @@ fn append_to_class_namespace(source: &str, class: &str, addition: &str) -> Resul
     Ok(edited)
 }
 
+/// Append declarations in an explicit namespace without rewriting any byte of the shipped source
+/// prefix. The live new-conversation oracle used this exact arrangement: the global per-NPC
+/// settings class remains untouched, while its new private root and topics live under the normal
+/// `G1R::Conversation` identity inside the same already-loaded module.
+fn append_conversation_namespace(source: &str, addition: &str) -> String {
+    let mut edited = source.to_owned();
+    if !edited.ends_with('\n') {
+        edited.push('\n');
+    }
+    edited.push_str("\nnamespace G1R::Conversation\n{\n");
+    edited.push_str(addition.trim_end());
+    edited.push_str("\n}\n");
+    edited
+}
+
 const SUBDIALOG_TOPIC_SLOTS: usize = 20;
 const EMPTY_SUBDIALOG_SLOT: &str = "TSubclassOf<UConversationTopic>(nullptr)";
 const BACK_CAPTION_KEY: &str = "TEXT_BACK";
+const END_CAPTION_KEY: &str = "TEXT_DIALOG_END";
+const DEFAULT_ROOT_PRIORITY_RANK: i32 = 2;
+const DEFAULT_SUBDIALOG_PRIORITY_RANK: i32 = 0;
+
+fn is_closing_caption(caption: &Caption) -> bool {
+    matches!(
+        caption,
+        Caption::LocKey { key }
+            if key.eq_ignore_ascii_case(END_CAPTION_KEY)
+                || key.eq_ignore_ascii_case(BACK_CAPTION_KEY)
+    )
+}
+
+fn rank_before(anchor: i32) -> Result<i32> {
+    let candidate = anchor
+        .checked_sub(1)
+        .context("the trailing root topic already uses the smallest supported PriorityRank")?;
+    if candidate == -1 {
+        // Rank -1 has native forced-topic semantics. It is available as an explicit override, but
+        // an ordinary root scaffold must never opt into it merely because the trailing row is 0.
+        return anchor
+            .checked_sub(2)
+            .context("no ordinary PriorityRank exists before the trailing root topic");
+    }
+    Ok(candidate)
+}
+
+/// Pick an ordinary root-menu rank that leaves a closing row after the new option.
+///
+/// Prefer the first rank before every root End/Back row the cache identifies. Older or unusual
+/// conversations sometimes use a custom caption for their final row; there the graph's already
+/// ordered last root is the conservative anchor. The fixed rank 2 is only for the otherwise
+/// impossible no-root fallback (a normal topicless conversation uses `new-conversation`).
+fn automatic_root_priority_rank(conversation: &Conversation) -> Result<i32> {
+    let closing_rank = conversation
+        .roots
+        .iter()
+        .filter_map(|class| conversation.topic(class))
+        .filter(|topic| is_closing_caption(&topic.caption))
+        .map(|topic| topic.priority.unwrap_or(0))
+        .min();
+    let anchor = match closing_rank {
+        Some(rank) => Some(rank),
+        None => conversation
+            .roots
+            .last()
+            .and_then(|class| conversation.topic(class))
+            .map(|topic| topic.priority.unwrap_or(0)),
+    };
+    let Some(anchor) = anchor else {
+        return Ok(DEFAULT_ROOT_PRIORITY_RANK);
+    };
+    let anchor = i32::try_from(anchor).with_context(|| {
+        format!("the trailing root topic has unsupported PriorityRank {anchor}")
+    })?;
+    rank_before(anchor)
+}
+
+fn new_topic_priority_rank(
+    conversation: &Conversation,
+    subdialog: bool,
+    requested: Option<i32>,
+) -> Result<i32> {
+    match requested {
+        Some(rank) => Ok(rank),
+        None if subdialog => Ok(DEFAULT_SUBDIALOG_PRIORITY_RANK),
+        None => automatic_root_priority_rank(conversation),
+    }
+}
 
 type FixedSubdialogCalls = BTreeMap<String, Vec<Vec<Option<String>>>>;
 type FixedSubdialogShapes = BTreeMap<String, Vec<SubdialogCallShape>>;
@@ -2992,6 +3346,184 @@ fn inventory_fixed_subdialog_calls(
 
 fn fixed_subdialog_calls(source: &str) -> Result<FixedSubdialogCalls> {
     Ok(inventory_fixed_subdialog_calls(source)?.0)
+}
+
+/// Count source-level Subdialog calls lexically inside each class's Act override.
+///
+/// Class-wide inventory is still used to validate the fixed call itself, but an edge into a newly
+/// authored topic must not hide that call in a synchronous helper. That shape would evade the
+/// actionless-transition guard without providing the runtime-qualified `Say` separator.
+fn direct_act_subdialog_call_counts(source: &str) -> Result<BTreeMap<String, usize>> {
+    let tokens = code_tokens(source)?;
+    let mut counts = BTreeMap::new();
+
+    for declaration in 0..tokens.len().saturating_sub(1) {
+        if tokens[declaration].text != "class" {
+            continue;
+        }
+        let owner = tokens[declaration + 1].text.clone();
+        let Some(class_open) = ((declaration + 2)..tokens.len())
+            .find(|candidate| matches!(tokens[*candidate].text.as_str(), "{" | ";"))
+        else {
+            bail!("class {owner} has no body or forward declaration terminator");
+        };
+        if tokens[class_open].text == ";" {
+            continue;
+        }
+        let class_close = matching_close(&tokens, class_open, "{", "}")?;
+        let mut item_start = class_open + 1;
+        let mut index = item_start;
+        while index < class_close {
+            match tokens[index].text.as_str() {
+                "{" => {
+                    let body_close = matching_close(&tokens, index, "{", "}")?;
+                    let declaration_tokens = &tokens[item_start..index];
+                    let is_act = declaration_tokens.windows(2).any(|pair| {
+                        matches!(pair[0].text.as_str(), "Act" | "Act_Implementation")
+                            && pair[1].text == "("
+                    });
+                    if is_act {
+                        let count = (index + 1..body_close.saturating_sub(1))
+                            .filter(|call| {
+                                tokens[*call].text == "Subdialog"
+                                    && tokens[*call + 1].text == "("
+                            })
+                            .count();
+                        *counts.entry(owner.clone()).or_default() += count;
+                    }
+                    index = body_close + 1;
+                    item_start = index;
+                }
+                ";" => {
+                    index += 1;
+                    item_start = index;
+                }
+                _ => index += 1,
+            }
+        }
+    }
+
+    Ok(counts)
+}
+
+/// Topic Acts that open a Subdialog before an unconditional, top-level `::Say(...)`.
+///
+/// `Say` is the transition separator proven by the live three-level oracle. Debug markers,
+/// declarations, assignments, empty blocks and control flow are not allowed to masquerade as that
+/// proof. A `Say` nested in a branch is likewise insufficient because it may not execute. Anything
+/// after `Subdialog` is too late to prevent the re-entrant start.
+fn immediate_subdialog_acts(source: &str) -> Result<BTreeSet<String>> {
+    let tokens = code_tokens(source)?;
+    let mut acts = BTreeSet::new();
+
+    for declaration in 0..tokens.len().saturating_sub(1) {
+        if tokens[declaration].text != "class" {
+            continue;
+        }
+        let owner = tokens[declaration + 1].text.clone();
+        let Some(class_open) = ((declaration + 2)..tokens.len())
+            .find(|candidate| matches!(tokens[*candidate].text.as_str(), "{" | ";"))
+        else {
+            bail!("class {owner} has no body or forward declaration terminator");
+        };
+        if tokens[class_open].text == ";" {
+            continue;
+        }
+        let class_close = matching_close(&tokens, class_open, "{", "}")?;
+        let mut item_start = class_open + 1;
+        let mut index = item_start;
+        while index < class_close {
+            match tokens[index].text.as_str() {
+                "{" => {
+                    let body_close = matching_close(&tokens, index, "{", "}")?;
+                    let declaration_tokens = &tokens[item_start..index];
+                    let is_act = declaration_tokens.windows(2).any(|pair| {
+                        matches!(pair[0].text.as_str(), "Act" | "Act_Implementation")
+                            && pair[1].text == "("
+                    });
+                    if is_act && immediate_subdialog_body(&tokens, index, body_close)? {
+                        acts.insert(owner.clone());
+                    }
+                    index = body_close + 1;
+                    item_start = index;
+                }
+                ";" => {
+                    index += 1;
+                    item_start = index;
+                }
+                _ => index += 1,
+            }
+        }
+    }
+
+    Ok(acts)
+}
+
+fn immediate_subdialog_body(
+    tokens: &[CodeToken],
+    body_open: usize,
+    body_close: usize,
+) -> Result<bool> {
+    let mut index = body_open + 1;
+    let mut block_depth = 0usize;
+    let mut statement_start = true;
+    let mut saw_qualified_say = false;
+    while index < body_close {
+        let global_subdialog = tokens.get(index).is_some_and(|token| token.text == ":")
+            && tokens.get(index + 1).is_some_and(|token| token.text == ":")
+            && tokens
+                .get(index + 2)
+                .is_some_and(|token| token.text == "Subdialog")
+            && tokens.get(index + 3).is_some_and(|token| token.text == "(");
+        let instance_subdialog = tokens.get(index).is_some_and(|token| token.text == "this")
+            && tokens.get(index + 1).is_some_and(|token| token.text == ".")
+            && tokens
+                .get(index + 2)
+                .is_some_and(|token| token.text == "Subdialog")
+            && tokens.get(index + 3).is_some_and(|token| token.text == "(");
+        if global_subdialog || instance_subdialog {
+            let open = index + 3;
+            let close = matching_close(tokens, open, "(", ")")?;
+            if close >= body_close || tokens.get(close + 1).is_none_or(|token| token.text != ";") {
+                return Ok(false);
+            }
+            return Ok(!saw_qualified_say);
+        }
+
+        let direct_global_say = block_depth == 0
+            && statement_start
+            && tokens.get(index).is_some_and(|token| token.text == ":")
+            && tokens.get(index + 1).is_some_and(|token| token.text == ":")
+            && tokens
+                .get(index + 2)
+                .is_some_and(|token| token.text == "Say")
+            && tokens.get(index + 3).is_some_and(|token| token.text == "(");
+        if direct_global_say {
+            let close = matching_close(tokens, index + 3, "(", ")")?;
+            if close < body_close && tokens.get(close + 1).is_some_and(|token| token.text == ";") {
+                saw_qualified_say = true;
+                index = close + 2;
+                statement_start = true;
+                continue;
+            }
+        }
+
+        match tokens[index].text.as_str() {
+            "{" => {
+                block_depth += 1;
+                statement_start = true;
+            }
+            "}" => {
+                block_depth = block_depth.saturating_sub(1);
+                statement_start = block_depth == 0;
+            }
+            ";" if block_depth == 0 => statement_start = true,
+            _ if block_depth == 0 => statement_start = false,
+            _ => {}
+        }
+        index += 1;
+    }
+    Ok(false)
 }
 
 /// Refuse the saturated structural shape that failed the current live runtime oracle.
@@ -3291,11 +3823,9 @@ fn new_conversation(request: NewConversationRequest) -> Result<()> {
     let (cache_path, bytes) = read_cache(request.cache, request.game)?;
     let graph = dialog::build(&bytes).context("reading dialog from the script cache")?;
     let selected = exact_npc_matches(&graph, participant_input);
-    let existing = match selected.as_slice() {
-        [] => None,
-        [conversation] if conversation.root_class.is_none() && conversation.topics.is_empty() => {
-            Some(*conversation)
-        }
+    match selected.as_slice() {
+        [] => {}
+        [conversation] if conversation.root_class.is_none() && conversation.topics.is_empty() => {}
         [conversation] => bail!(
             "{} already has a conversation with topics; use `gore dialog new-topic` to add an option",
             participant_label(conversation)
@@ -3312,20 +3842,8 @@ fn new_conversation(request: NewConversationRequest) -> Result<()> {
             )
         }
     };
-    let participant = match existing {
-        Some(conversation) => {
-            let participants = conversation.npc_participants().collect::<Vec<_>>();
-            let [participant] = participants.as_slice() else {
-                bail!(
-                    "a topicless conversation must name exactly one NPC participant; found {}",
-                    participants.len()
-                );
-            };
-            (*participant).to_owned()
-        }
-        None => participant_input.to_owned(),
-    };
-    let (new_module, new_relative_path) = new_conversation_module_names(&participant)?;
+    let anchor = resolve_conversation_settings_anchor(&bytes, participant_input)?;
+    let participant = anchor.participant.clone();
 
     let slug = identifier(&request.mod_name);
     if slug.is_empty() {
@@ -3344,7 +3862,6 @@ fn new_conversation(request: NewConversationRequest) -> Result<()> {
 
     let declared = declared_classes(&bytes)?;
     let root_class = expected_topic_root(&participant);
-    let settings_class = format!("UConversationCharacterSettings_G1R_{participant}");
     for generated in [&class, &root_class] {
         if declared.contains(&generated.to_ascii_lowercase()) {
             bail!(
@@ -3352,93 +3869,24 @@ fn new_conversation(request: NewConversationRequest) -> Result<()> {
             );
         }
     }
-    if existing.is_none() && declared.contains(&settings_class.to_ascii_lowercase()) {
-        bail!(
-            "the cache already declares settings class {settings_class:?}; refusing to create a colliding conversation module"
-        );
-    }
 
-    let caption_helper = format!("{}Caption", class_without_object_prefix(&class));
-    let caption_line = match (&request.caption, &request.caption_key) {
-        (Some(text), _) => format!(
-            "    default Caption = {caption_helper}(n{});",
-            serde_json::to_string(text)?
-        ),
-        (_, Some(key)) => format!(
-            "    default Caption = LocText({});",
-            serde_json::to_string(key)?
-        ),
-        _ => bail!("pass --caption or --caption-key"),
-    };
-    let helper_block = if request.caption.is_some() {
-        format!(
-            "FText {caption_helper}(const FName Text)\n{{\n    return FText::FromString(Text.ToString());\n}}\n\n"
-        )
-    } else {
-        String::new()
-    };
+    let caption_line =
+        new_conversation_caption_line(request.caption.as_deref(), request.caption_key.as_deref())?;
+    let priority_rank = request.priority_rank;
 
-    let (
-        operation,
-        module,
-        relative_path,
-        pristine,
-        insertion_class,
-        default_classes,
-        unsupported_generated_methods,
-    ) = match existing {
-        Some(conversation) => {
-            let taken = dialog::checkout(&bytes, &conversation.module, native_api(&cache_path))
-                .with_context(|| format!("taking {} out of the cache", conversation.module))?;
-            let outline = dialog::read_outline(&taken.source)
-                .map_err(|reason| anyhow::anyhow!("inventorying topicless settings: {reason}"))?;
-            let settings_matches = outline
-                .classes
-                .iter()
-                .filter(|candidate| {
-                    directly_derives_native(candidate, "UConversationCharacterSettings")
-                })
-                .collect::<Vec<_>>();
-            let [settings] = settings_matches.as_slice() else {
-                bail!(
-                    "{} contains {} UConversationCharacterSettings classes; exactly one is required",
-                    conversation.module,
-                    settings_matches.len()
-                );
-            };
-            let insertion_class = settings.name.clone();
-            drop(settings_matches);
-            drop(outline);
-            (
-                DialogModuleOperation::Edit,
-                taken.module,
-                taken.relative_path,
-                taken.source,
-                Some(insertion_class),
-                taken.default_classes,
-                taken.unsupported_generated_methods,
-            )
-        }
-        None => {
-            let modules = gore_as::cache::model::parse_modules(&bytes)
-                .map_err(|error| anyhow::anyhow!("parsing the script cache: {error}"))?;
-            gore_as::cache::emit_all::validate_add_module_target(
-                &modules,
-                &new_module,
-                &new_relative_path,
-            )
-            .map_err(|reason| anyhow::anyhow!("cannot create the conversation module: {reason}"))?;
-            (
-                DialogModuleOperation::Add,
-                new_module,
-                new_relative_path,
-                String::new(),
-                None,
-                BTreeSet::new(),
-                Vec::new(),
-            )
-        }
-    };
+    let taken = dialog::checkout(&bytes, &anchor.module, native_api(&cache_path))
+        .with_context(|| format!("taking {} out of the cache", anchor.module))?;
+    let outline = dialog::read_outline(&taken.source).map_err(|reason| {
+        anyhow::anyhow!("inventorying the conversation-settings anchor: {reason}")
+    })?;
+    validate_settings_anchor_source(&outline, &participant)
+        .with_context(|| format!("validating {}", anchor.module))?;
+    let operation = DialogModuleOperation::Edit;
+    let module = taken.module;
+    let relative_path = taken.relative_path;
+    let pristine = taken.source;
+    let default_classes = taken.default_classes;
+    let unsupported_generated_methods = taken.unsupported_generated_methods;
     let debug_id = generated_topic_debug_id(&module, &class, &pristine);
     let getter = format!("Get{}", identifier(&participant));
     let root_source = format!(
@@ -3464,11 +3912,11 @@ fn new_conversation(request: NewConversationRequest) -> Result<()> {
         serde_json::to_string(&participant)?
     );
     let topic_source = format!(
-        "{helper_block}class {class} : {root_class}\n\
+        "class {class} : {root_class}\n\
          {{\n\
          \x20   default DebugId = {debug_id};\n\
          {caption_line}\n\
-         \x20   default PriorityRank = 2;\n\
+         \x20   default PriorityRank = {priority_rank};\n\
          \n\
          \x20   UFUNCTION(BlueprintOverride)\n\
          \x20   bool IsVisible() const\n\
@@ -3491,32 +3939,7 @@ fn new_conversation(request: NewConversationRequest) -> Result<()> {
          \n\
          {root_source}\n\n{topic_source}"
     );
-    let source = match insertion_class {
-        Some(settings) => append_to_class_namespace(&pristine, &settings, &generated)
-            .with_context(|| format!("placing the new conversation beside {settings}"))?,
-        None => {
-            let settings_source = format!(
-                "class {settings_class} : UConversationCharacterSettings\n\
-                 {{\n\
-                 \x20   default ForCharacter = n{};\n\
-                 \n\
-                 \x20   {settings_class}()\n\
-                 \x20   {{\n\
-                 \x20       return;\n\
-                 \x20   }}\n\
-                 }}",
-                serde_json::to_string(&participant)?
-            );
-            format!(
-                "// GORE-authored conversation module: {module} ({relative_path})\n\n\
-                 namespace G1R::Conversation\n\
-                 {{\n\
-                 {settings_source}\n\n\
-                 {generated}\n\
-                 }}\n"
-            )
-        }
-    };
+    let source = append_conversation_namespace(&pristine, &generated);
 
     let manifest = EditManifest {
         operation,
@@ -3597,17 +4020,10 @@ fn new_conversation(request: NewConversationRequest) -> Result<()> {
     println!("as-was    {}", pristine_path.display());
     println!("manifest  {}", manifest_path.display());
     println!();
-    match manifest.operation {
-        DialogModuleOperation::Edit => {
-            println!("existing topicless module retained; private root and first choice added")
-        }
-        DialogModuleOperation::Add => {
-            println!("complete new same-module conversation scaffolded");
-            println!("NPC existence and runtime binding were not validated; use the exact NPC id")
-        }
-    }
+    println!("loaded per-NPC settings module retained; private root and first choice added");
     println!("root      {root_class}");
     println!("choice    {class}");
+    println!("priority  {priority_rank}");
     println!(
         "stage     --op {} --allow-new-symbols",
         manifest.operation.as_str()
@@ -3672,35 +4088,19 @@ fn new_topic(request: NewTopicRequest) -> Result<()> {
         .with_context(|| format!("taking {} out of the cache", conversation.module))?;
     let debug_id = generated_topic_debug_id(&taken.module, &class, &taken.source);
 
-    let helper = format!("{}Caption", class_without_object_prefix(&class));
-    let caption_line = match (&request.caption, &request.caption_key) {
-        (Some(text), _) => format!(
-            "    default Caption = {helper}(n{});",
-            serde_json::to_string(text)?
-        ),
-        (_, Some(key)) => format!(
-            "    default Caption = LocText({});",
-            serde_json::to_string(key)?
-        ),
-        _ => bail!("pass --caption or --caption-key"),
-    };
-    let helper_block = if request.caption.is_some() {
-        format!(
-            "FText {helper}(const FName Text)\n{{\n    return FText::FromString(Text.ToString());\n}}\n\n"
-        )
-    } else {
-        String::new()
-    };
+    let caption_line =
+        new_topic_caption_line(request.caption.as_deref(), request.caption_key.as_deref())?;
 
-    let subtopic_default = if request.subdialog_of.is_some() {
+    let is_subdialog = request.subdialog_of.is_some();
+    let subtopic_default = if is_subdialog {
         "    default bIsSubTopic = true;\n"
     } else {
         ""
     };
     // Shipped sub-topics use rank 0 and are ordered by their fixed Subdialog argument slots.
-    // Giving a newly wired child the root scaffold's rank 2 can move it past a trailing Back row
-    // even when the source call places it correctly.
-    let priority_rank = if request.subdialog_of.is_some() { 0 } else { 2 };
+    // Giving a newly wired child a root-menu rank can move it past a trailing Back row even when
+    // the source call places it correctly.
+    let priority_rank = new_topic_priority_rank(conversation, is_subdialog, request.priority_rank)?;
     let topic_source = format!(
         "// Generated by `gore dialog new-topic` for {participant}.\n\
          //\n\
@@ -3708,7 +4108,7 @@ fn new_topic(request: NewTopicRequest) -> Result<()> {
          // separate add-module cannot derive from the module-private topic base. Spoken lines, conditions\n\
          // and effects are yours to add; `gore dialog show <topic>` displays shipped examples.\n\
          \n\
-         {helper_block}class {class} : {root_class}\n\
+         class {class} : {root_class}\n\
          {{\n\
          \x20   default DebugId = {debug_id};\n\
          {caption_line}\n\
@@ -3839,6 +4239,13 @@ fn new_topic(request: NewTopicRequest) -> Result<()> {
     println!("manifest  {}", manifest_path.display());
     println!();
     println!("class     {class} : {root_class}");
+    match (request.priority_rank, is_subdialog) {
+        (Some(_), _) => println!("priority  {priority_rank} (explicit)"),
+        (None, true) => println!(
+            "priority  {priority_rank} (subdialog default; equal ranks follow slot position)"
+        ),
+        (None, false) => println!("priority  {priority_rank} (automatic root rank)"),
+    }
     if let Some(parent) = request.subdialog_of.as_deref() {
         println!("subdialog {parent} (same module; no root registration)");
         match request.subdialog_position {
@@ -4015,6 +4422,111 @@ mod tests {
             "non-ascii is dropped, not transliterated"
         );
         assert_eq!(identifier("---"), "");
+    }
+
+    #[test]
+    fn a_root_scaffold_stays_before_the_closing_rank_without_implicitly_forcing() {
+        let ranked = |class: &str, caption: &str, priority: Option<i64>| {
+            let mut topic = topic(class, caption, Vec::new());
+            topic.priority = priority;
+            topic
+        };
+        let conversation = |topics: Vec<Topic>, roots: Vec<&str>| Conversation {
+            module: "M".to_owned(),
+            root_class: Some("URoot".to_owned()),
+            participants: vec!["Hero".to_owned(), "NPC".to_owned()],
+            topics,
+            roots: roots.into_iter().map(str::to_owned).collect(),
+            coverage: Default::default(),
+        };
+
+        let end_at_five = conversation(
+            vec![
+                ranked("UQuestion", "QUESTION", Some(1)),
+                ranked("UEnd", END_CAPTION_KEY, Some(5)),
+            ],
+            vec!["UQuestion", "UEnd"],
+        );
+        assert_eq!(automatic_root_priority_rank(&end_at_five).unwrap(), 4);
+
+        let custom_trailing_row = conversation(
+            vec![ranked("UCustomExit", "CUSTOM_EXIT", Some(3))],
+            vec!["UCustomExit"],
+        );
+        assert_eq!(
+            automatic_root_priority_rank(&custom_trailing_row).unwrap(),
+            2
+        );
+
+        let negative_end = conversation(
+            vec![ranked("UNegativeEnd", END_CAPTION_KEY, Some(-100))],
+            vec!["UNegativeEnd"],
+        );
+        assert_eq!(automatic_root_priority_rank(&negative_end).unwrap(), -101);
+
+        let engine_default_end =
+            conversation(vec![ranked("UEnd", END_CAPTION_KEY, None)], vec!["UEnd"]);
+        assert_eq!(
+            automatic_root_priority_rank(&engine_default_end).unwrap(),
+            -2,
+            "automatic selection must skip rank -1's forced-topic semantics"
+        );
+        assert_eq!(
+            new_topic_priority_rank(&end_at_five, true, None).unwrap(),
+            DEFAULT_SUBDIALOG_PRIORITY_RANK
+        );
+        assert_eq!(
+            new_topic_priority_rank(&end_at_five, false, Some(-1)).unwrap(),
+            -1,
+            "an explicit expert override remains exact"
+        );
+    }
+
+    #[test]
+    fn new_topic_plain_caption_is_an_inline_default_expression() {
+        let request = NewTopicRequest {
+            npc: "NPC".to_owned(),
+            caption: Some("Sag \"Los\\geht's\"\nJetzt".to_owned()),
+            caption_key: None,
+            class: None,
+            subdialog_of: None,
+            subdialog_position: None,
+            priority_rank: None,
+            mod_name: "Test".to_owned(),
+            out: PathBuf::new(),
+            cache: None,
+            game: None,
+        };
+
+        assert_eq!(
+            new_topic_caption_line(request.caption.as_deref(), request.caption_key.as_deref())
+                .unwrap(),
+            r#"    default Caption = FText::FromString(n"Sag \"Los\\geht's\"\nJetzt".ToString());"#
+        );
+    }
+
+    #[test]
+    fn new_conversation_plain_caption_is_an_inline_default_expression() {
+        let request = NewConversationRequest {
+            npc: "NEW_NPC".to_owned(),
+            caption: Some("Neue Unterhaltung".to_owned()),
+            caption_key: None,
+            class: None,
+            priority_rank: DEFAULT_ROOT_PRIORITY_RANK,
+            mod_name: "Test".to_owned(),
+            out: PathBuf::new(),
+            cache: None,
+            game: None,
+        };
+
+        assert_eq!(
+            new_conversation_caption_line(
+                request.caption.as_deref(),
+                request.caption_key.as_deref(),
+            )
+            .unwrap(),
+            r#"    default Caption = FText::FromString(n"Neue Unterhaltung".ToString());"#
+        );
     }
 
     #[test]
@@ -4769,8 +5281,101 @@ class UTopic_Hero__Npc : UConversationTopic
         )
     }
 
+    fn add_say_before_subdialog(topic: String) -> String {
+        topic.replacen(
+            "        ::Subdialog",
+            "        ::Say(this.GetHero().GetAI(), ::LocText(\"GORE_TEST_LINE\"), GameplayTag::Expression_Neutral, nullptr, false, NAME_None, NAME_None, FGameplayTag::Empty);\n        ::Subdialog",
+            1,
+        )
+    }
+
+    fn add_say_after_subdialog(topic: String) -> String {
+        topic.replacen(
+            "\n    }\n}\n",
+            "\n        ::Say(this.GetHero().GetAI(), ::LocText(\"GORE_TEST_LINE\"), GameplayTag::Expression_Neutral, nullptr, false, NAME_None, NAME_None, FGameplayTag::Empty);\n    }\n}\n",
+            1,
+        )
+    }
+
+    fn move_subdialog_to_helper(topic: String) -> String {
+        let call_start = topic.find("        ::Subdialog").unwrap();
+        let call_end = call_start + topic[call_start..].find(";\n").unwrap();
+        let call = topic[call_start..=call_end].to_owned();
+        let mut edited = format!(
+            "{}        OpenMenu();{}",
+            &topic[..call_start],
+            &topic[call_end + 1..]
+        );
+        let class_close = edited.rfind("\n}\n").unwrap();
+        edited.insert_str(
+            class_close,
+            &format!("\n    void OpenMenu() {{\n{call}\n    }}"),
+        );
+        edited
+    }
+
     #[test]
-    fn an_all_new_multilevel_topic_tree_is_accepted() {
+    fn an_all_new_multilevel_topic_tree_accepts_an_unconditional_say_before_either_transition() {
+        for say_in_root in [false, true] {
+            let mut root = new_tree_topic("URootChoice", 1, false, &["ULevelOneA", "ULevelOneB"]);
+            let mut level_one = new_tree_topic("ULevelOneA", 2, true, &["ULevelTwo"]);
+            if say_in_root {
+                root = add_say_before_subdialog(root);
+            } else {
+                level_one = add_say_before_subdialog(level_one);
+            }
+            let source = format!(
+                "class URoot : UG1RDialogTopic {{}}\n{root}{level_one}{}{}",
+                new_tree_topic("ULevelOneB", 3, true, &[]),
+                new_tree_topic("ULevelTwo", 4, true, &[]),
+            );
+            check_new_tree(
+                &source,
+                &["URootChoice", "ULevelOneA", "ULevelOneB", "ULevelTwo"],
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn only_an_unconditional_top_level_say_separates_nested_menu_transitions() {
+        let is_immediate = |body: &str| {
+            let source = format!("class UTopic {{ void Act() {{ {body} }} }}");
+            immediate_subdialog_acts(&source)
+                .unwrap()
+                .contains("UTopic")
+        };
+        let subdialog = "::Subdialog(this, UChild);";
+
+        assert!(is_immediate(&format!("if (true) {{ {subdialog} }}")));
+        assert!(is_immediate(&format!("{{}} {subdialog}")));
+        assert!(is_immediate(&format!("int Local = 0; {subdialog}")));
+        assert!(is_immediate(&format!(
+            "if (true) ::Say(this, ::LocText(\"LINE\")); {subdialog}"
+        )));
+        assert!(!is_immediate(&format!(
+            "::Say(this, ::LocText(\"LINE\")); {subdialog}"
+        )));
+    }
+
+    #[test]
+    fn an_all_new_topic_tree_rejects_helper_indirect_subdialog_edges() {
+        let source = format!(
+            "class URoot : UG1RDialogTopic {{}}\n{}{}",
+            move_subdialog_to_helper(new_tree_topic(
+                "URootChoice",
+                1,
+                false,
+                &["UChild"],
+            )),
+            new_tree_topic("UChild", 2, true, &[]),
+        );
+        let error = check_new_tree(&source, &["URootChoice", "UChild"]).unwrap_err();
+        assert!(error.to_string().contains("helper-indirect"), "{error}");
+    }
+
+    #[test]
+    fn an_all_new_multilevel_topic_tree_rejects_consecutive_actionless_subdialogs() {
         let source = format!(
             "class URoot : UG1RDialogTopic {{}}\n{}{}{}{}",
             new_tree_topic("URootChoice", 1, false, &["ULevelOneA", "ULevelOneB"]),
@@ -4778,11 +5383,31 @@ class UTopic_Hero__Npc : UConversationTopic
             new_tree_topic("ULevelOneB", 3, true, &[]),
             new_tree_topic("ULevelTwo", 4, true, &[]),
         );
-        check_new_tree(
+        let error = check_new_tree(
             &source,
             &["URootChoice", "ULevelOneA", "ULevelOneB", "ULevelTwo"],
         )
-        .unwrap();
+        .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("URootChoice -> ULevelOneA"), "{message}");
+        assert!(message.contains("actionless `Subdialog`"), "{message}");
+        assert!(message.contains("`::Say(...)`"), "{message}");
+
+        let action_after_transition = format!(
+            "class URoot : UG1RDialogTopic {{}}\n{}{}{}",
+            new_tree_topic("URootChoice", 1, false, &["ULevelOne"]),
+            add_say_after_subdialog(new_tree_topic("ULevelOne", 2, true, &["ULevelTwo"],)),
+            new_tree_topic("ULevelTwo", 3, true, &[]),
+        );
+        let error = check_new_tree(
+            &action_after_transition,
+            &["URootChoice", "ULevelOne", "ULevelTwo"],
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("URootChoice -> ULevelOne"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -4819,7 +5444,10 @@ class UTopic_Hero__Npc : UConversationTopic
             &BTreeMap::new(),
         )
         .unwrap_err();
-        assert!(error.to_string().contains("beside its private root"), "{error}");
+        assert!(
+            error.to_string().contains("beside its private root"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -4874,7 +5502,7 @@ class UTopic_Hero__Npc : UConversationTopic
 
         let cycle = format!(
             "class URoot : UG1RDialogTopic {{}}\n{}{}",
-            new_tree_topic("UA", 1, true, &["UB"]),
+            add_say_before_subdialog(new_tree_topic("UA", 1, true, &["UB"])),
             new_tree_topic("UB", 2, true, &["UA"]),
         );
         let error = check_new_tree(&cycle, &["UA", "UB"]).unwrap_err();
@@ -4939,15 +5567,16 @@ class UFirst : UTopic_Hero__NEW_NPC { }
             Some("N E W _ N P C".to_owned()),
             "whitespace inside the literal is content, not formatting"
         );
-        assert!(
-            validate_new_conversation_base(&spaced_outline, &report, "NEW_NPC", true).is_err()
-        );
+        assert!(validate_new_conversation_base(&spaced_outline, &report, "NEW_NPC", true).is_err());
 
         let wrong_namespace = source.replace("G1R::Conversation", "Other::Conversation");
         let wrong_outline = dialog::read_outline(&wrong_namespace).unwrap();
         let error =
             validate_new_conversation_base(&wrong_outline, &report, "NEW_NPC", true).unwrap_err();
-        assert!(error.to_string().contains("namespace `G1R::Conversation`"), "{error}");
+        assert!(
+            error.to_string().contains("namespace `G1R::Conversation`"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -4980,6 +5609,101 @@ class UConversationCharacterSettings_G1R_NEW_NPC : UConversationCharacterSetting
         );
         let duplicate_outline = dialog::read_outline(&duplicate).unwrap();
         assert!(validate_topicless_settings(&duplicate_outline, &report, "NEW_NPC").is_err());
+    }
+
+    #[test]
+    fn a_topicless_story_module_cannot_be_turned_into_a_first_conversation() {
+        let outline = dialog::read_outline(
+            "class USettings : UConversationCharacterSettings {}\n\
+             class UTopic_Hero__NEW_NPC : UG1RDialogTopic {}\n",
+        )
+        .unwrap();
+        let conversation = Conversation {
+            module: "Story.G1R.Conversation.Conversation_NEW_NPC".to_owned(),
+            root_class: None,
+            participants: vec!["Hero".to_owned(), "NEW_NPC".to_owned()],
+            topics: Vec::new(),
+            roots: Vec::new(),
+            coverage: Default::default(),
+        };
+        let report = new_tree_report(&["UTopic_Hero__NEW_NPC"]);
+        let error =
+            validate_topicless_module_is_not_scaffolded(Some(&conversation), &outline, &report)
+                .unwrap_err();
+        assert!(error.to_string().contains("not discovered"), "{error}");
+        assert!(error.to_string().contains("new-conversation"), "{error}");
+    }
+
+    #[test]
+    fn a_settings_anchor_keeps_global_settings_and_places_topics_in_the_conversation_namespace() {
+        let pristine = r#"class UConversationCharacterSettings_Ambient_NEW_NPC : UConversationCharacterSettings
+{
+    default ForCharacter = n"NEW_NPC";
+}
+"#;
+        let generated = r#"class UTopic_Hero__NEW_NPC : UG1RDialogTopic
+{
+    default ForCharacter = n"NEW_NPC";
+    default WithCharacter = n"Hero";
+}
+class UFirst : UTopic_Hero__NEW_NPC { }
+"#;
+        let source = append_conversation_namespace(pristine, generated);
+        assert!(source.starts_with(pristine));
+        let outline = dialog::read_outline(&source).unwrap();
+        let report = new_tree_report(&["UTopic_Hero__NEW_NPC", "UFirst"]);
+        assert_eq!(
+            validate_new_conversation_base(&outline, &report, "NEW_NPC", false)
+                .unwrap()
+                .namespace,
+            CONVERSATION_NAMESPACE
+        );
+        let settings = validate_settings_anchor_source(&outline, "NEW_NPC").unwrap();
+        assert_eq!(settings.namespace, "");
+
+        let mut changed = report;
+        changed.changed.push(dialog::ChangedBody {
+            class: "UConversationCharacterSettings_Ambient_NEW_NPC".to_owned(),
+            member: "UConversationCharacterSettings_Ambient_NEW_NPC()".to_owned(),
+        });
+        let error = validate_settings_anchor_declarations_unchanged(&changed).unwrap_err();
+        assert!(error.to_string().contains("shipped declaration"), "{error}");
+    }
+
+    #[test]
+    fn settings_anchor_identity_is_exact_and_case_insensitive_only_for_the_npc() {
+        let module = "AI.AIAgent.Human.Config.OC_GRD_Guard30_281N.ConversationCharacterSettings_OC_GRD_Guard30_281N";
+        let anchor = conversation_settings_anchor_identity(module).unwrap();
+        assert_eq!(anchor.module, module);
+        assert_eq!(anchor.participant, "OC_GRD_Guard30_281N");
+        assert!(anchor
+            .participant
+            .eq_ignore_ascii_case("oc_grd_guard30_281n"));
+        assert!(conversation_settings_anchor_identity(
+            "Story.G1R.Conversation.Conversation_OC_GRD_Guard30_281N"
+        )
+        .is_none());
+        assert!(conversation_settings_anchor_identity(
+            "AI.AIAgent.Human.Config.OC_GRD_Guard30_281N.ConversationCharacterSettings_OTHER"
+        )
+        .is_none());
+
+        let duplicate = ConversationSettingsAnchor {
+            module: module.to_ascii_lowercase(),
+            participant: "oc_grd_guard30_281n".to_owned(),
+        };
+        let error =
+            select_exact_settings_anchor("OC_GRD_Guard30_281N", &[anchor.clone(), duplicate])
+                .unwrap_err();
+        assert!(
+            error.to_string().contains("ambiguous NPC binding"),
+            "{error}"
+        );
+        let error = select_exact_settings_anchor("OTHER", &[anchor]).unwrap_err();
+        assert!(
+            error.to_string().contains("not discovered by the game"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -5027,6 +5751,34 @@ class UConversationCharacterSettings_G1R_NEW_NPC : UConversationCharacterSetting
     }
 
     #[test]
+    fn legacy_add_manifests_cannot_bypass_the_loaded_anchor_contract() {
+        let mut manifest = command_manifest();
+        manifest.operation = DialogModuleOperation::Add;
+        manifest.requires_topic_scaffold = false;
+        let error = validate_manifest_settings_anchor(&[], &manifest).unwrap_err();
+        assert!(
+            error.to_string().contains("not discovered by the game"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_settings_anchor_manifest_cannot_disable_its_scaffold_checks() {
+        let mut manifest = command_manifest();
+        manifest.module =
+            "AI.AIAgent.Human.Config.NEW_NPC.ConversationCharacterSettings_NEW_NPC".to_owned();
+        manifest.participant = "NEW_NPC".to_owned();
+        manifest.requires_topic_scaffold = false;
+        let error = validate_manifest_settings_anchor(&[], &manifest).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("must retain `requires_topic_scaffold = true`"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn stage_uses_the_strict_standalone_edit_contract() {
         let command = compile_module_command(
             &command_manifest(),
@@ -5061,11 +5813,13 @@ class UConversationCharacterSettings_G1R_NEW_NPC : UConversationCharacterSetting
     }
 
     #[test]
-    fn a_new_conversation_stages_as_one_add_with_new_symbols() {
+    fn a_new_conversation_stages_as_one_settings_anchor_edit_with_new_symbols() {
         let mut manifest = command_manifest();
-        manifest.operation = DialogModuleOperation::Add;
-        manifest.module = "Story.G1R.Conversation.Conversation_NEW_NPC".to_owned();
-        manifest.relative_path = "Story/G1R/Conversation/Conversation_NEW_NPC.as".to_owned();
+        manifest.requires_topic_scaffold = true;
+        manifest.module =
+            "AI.AIAgent.Human.Config.NEW_NPC.ConversationCharacterSettings_NEW_NPC".to_owned();
+        manifest.relative_path =
+            "AI/AIAgent/Human/Config/NEW_NPC/ConversationCharacterSettings_NEW_NPC.as".to_owned();
         let command = compile_module_command(
             &manifest,
             Path::new("source.as"),
@@ -5074,7 +5828,7 @@ class UConversationCharacterSettings_G1R_NEW_NPC : UConversationCharacterSetting
             Path::new("game"),
             true,
         );
-        assert!(command.contains("--backend standalone --op add"));
+        assert!(command.contains("--backend standalone --op edit"));
         assert!(command.contains("--allow-new-symbols"));
     }
 
@@ -5120,6 +5874,11 @@ class UConversationCharacterSettings_G1R_NEW_NPC : UConversationCharacterSetting
         let out = temp.path().join("native-root");
         let class = "UChoiceGoreNativeRootOracle";
         let npc = "Story.G1R.Conversation.Conversation_OC_STT_DIEGO";
+        let bytes = fs::read(&cache).unwrap();
+        let graph = dialog::build(&bytes).unwrap();
+        let conversation = resolve_one(&graph, npc).unwrap();
+        let expected_root_priority = automatic_root_priority_rank(conversation).unwrap();
+        assert_ne!(expected_root_priority, -1);
         new_topic(NewTopicRequest {
             npc: npc.to_owned(),
             caption: None,
@@ -5127,6 +5886,7 @@ class UConversationCharacterSettings_G1R_NEW_NPC : UConversationCharacterSetting
             class: Some(class.to_owned()),
             subdialog_of: None,
             subdialog_position: None,
+            priority_rank: None,
             mod_name: "GoreNativeRootOracle".to_owned(),
             out: out.clone(),
             cache: Some(cache.clone()),
@@ -5150,6 +5910,31 @@ class UConversationCharacterSettings_G1R_NEW_NPC : UConversationCharacterSetting
             .find(|candidate| candidate.name == class)
             .unwrap();
         assert_eq!(literal_bool_default(added, "bIsSubTopic").unwrap(), None);
+        let root_priority = added
+            .defaults
+            .iter()
+            .filter(|default| default.target == "PriorityRank")
+            .collect::<Vec<_>>();
+        let [root_priority] = root_priority.as_slice() else {
+            panic!(
+                "expected one authored PriorityRank default, got {}",
+                root_priority.len()
+            );
+        };
+        assert_eq!(
+            code_tokens(&root_priority.statement)
+                .unwrap()
+                .into_iter()
+                .map(|token| token.text)
+                .collect::<Vec<_>>(),
+            vec![
+                "default".to_owned(),
+                "PriorityRank".to_owned(),
+                "=".to_owned(),
+                expected_root_priority.to_string(),
+                ";".to_owned(),
+            ]
+        );
 
         check(&out, true, Some(cache.clone()), Some(fake_game.clone())).unwrap();
         stage(
@@ -5181,6 +5966,7 @@ class UConversationCharacterSettings_G1R_NEW_NPC : UConversationCharacterSetting
             class: Some(sub_class.to_owned()),
             subdialog_of: Some("UChoiceDiegoTeach".to_owned()),
             subdialog_position: None,
+            priority_rank: None,
             mod_name: "GoreTeachPlacementOracle".to_owned(),
             out: sub_out.clone(),
             cache: Some(cache.clone()),
@@ -5243,9 +6029,6 @@ class UConversationCharacterSettings_G1R_NEW_NPC : UConversationCharacterSetting
 
         // Old checked-out workspaces may still carry an explicit adapter row. Keep accepting that
         // shape when (and only when) its participant, new class, and sentinel bind to this cache.
-        let bytes = fs::read(&cache).unwrap();
-        let graph = dialog::build(&bytes).unwrap();
-        let conversation = resolve_one(&graph, npc).unwrap();
         let participant = conversation.npc_participants().next().unwrap();
         let sentinel = sentinel_of(conversation).unwrap();
         manifest.dialog_topics.push(DialogTopicRegistration {
@@ -5264,7 +6047,7 @@ class UConversationCharacterSettings_G1R_NEW_NPC : UConversationCharacterSetting
     }
 
     #[test]
-    fn real_cache_new_conversation_scaffolds_add_and_topicless_edit_fail_closed() {
+    fn real_cache_new_conversation_edits_one_loaded_settings_anchor_and_fails_closed() {
         let Some(cache) = std::env::var_os("GORE_AS_REAL_CACHE").map(PathBuf::from) else {
             eprintln!("skip: set GORE_AS_REAL_CACHE");
             return;
@@ -5279,28 +6062,90 @@ class UConversationCharacterSettings_G1R_NEW_NPC : UConversationCharacterSetting
             fs::copy(&cache, &fake_cache).unwrap();
         }
 
-        let add_out = temp.path().join("brand-new");
-        let participant = "GORE_TEST_DIALOG_NPC";
-        let first_class = "UChoiceGoreBrandNewOracle";
+        let bytes = fs::read(&cache).unwrap();
+        let missing_out = temp.path().join("unbound-add");
+        let missing_error = new_conversation(NewConversationRequest {
+            npc: "GORE_TEST_DIALOG_NPC".to_owned(),
+            caption: None,
+            caption_key: Some("GORE_DIALOG_UNBOUND_ORACLE".to_owned()),
+            class: Some("UChoiceGoreUnboundOracle".to_owned()),
+            priority_rank: DEFAULT_ROOT_PRIORITY_RANK,
+            mod_name: "GoreUnboundOracle".to_owned(),
+            out: missing_out.clone(),
+            cache: Some(cache.clone()),
+            game: None,
+        })
+        .unwrap_err();
+        assert!(
+            format!("{missing_error:#}").contains("not discovered by the game"),
+            "{missing_error:#}"
+        );
+        assert!(!missing_out.exists());
+
+        // This exact settings anchor is the live runtime oracle: editing it made the forced
+        // opening, spoken line, new Subdialog menu and clean end execute for the Guard.
+        let participant = "OC_GRD_Guard30_281N";
+        let anchor = resolve_conversation_settings_anchor(&bytes, participant).unwrap();
+        assert_eq!(
+            anchor.module,
+            "AI.AIAgent.Human.Config.OC_GRD_Guard30_281N.ConversationCharacterSettings_OC_GRD_Guard30_281N"
+        );
+        let out = temp.path().join("settings-anchor-edit");
+        let first_class = "UChoiceGoreSettingsAnchorOracle";
+        let first_priority = 7;
         new_conversation(NewConversationRequest {
             npc: participant.to_owned(),
             caption: None,
-            caption_key: Some("GORE_DIALOG_BRAND_NEW_ORACLE".to_owned()),
+            caption_key: Some("GORE_DIALOG_SETTINGS_ANCHOR_ORACLE".to_owned()),
             class: Some(first_class.to_owned()),
-            mod_name: "GoreBrandNewOracle".to_owned(),
-            out: add_out.clone(),
+            priority_rank: first_priority,
+            mod_name: "GoreSettingsAnchorOracle".to_owned(),
+            out: out.clone(),
             cache: Some(cache.clone()),
             game: None,
         })
         .unwrap();
-        let add_manifest: EditManifest =
-            serde_json::from_slice(&fs::read(add_out.join(MANIFEST_NAME)).unwrap()).unwrap();
-        assert_eq!(add_manifest.operation, DialogModuleOperation::Add);
-        check(&add_out, true, Some(cache.clone()), Some(fake_game.clone())).unwrap();
+        let manifest_path = out.join(MANIFEST_NAME);
+        let manifest: EditManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        assert_eq!(manifest.operation, DialogModuleOperation::Edit);
+        assert!(manifest.requires_topic_scaffold);
+        assert_eq!(manifest.module, anchor.module);
+        let pristine = fs::read_to_string(out.join(&manifest.pristine_file)).unwrap();
+        let source_path = out.join(&manifest.source_file);
+        let authored = fs::read_to_string(&source_path).unwrap();
+        assert!(
+            authored.starts_with(&pristine),
+            "the shipped settings source must remain an exact prefix"
+        );
+        let outline = dialog::read_outline(&authored).unwrap();
+        let settings = validate_settings_anchor_source(&outline, participant).unwrap();
+        assert_eq!(settings.namespace, "");
+        let root = outline
+            .classes
+            .iter()
+            .find(|class| class.name == expected_topic_root(participant))
+            .unwrap();
+        assert_eq!(root.namespace, CONVERSATION_NAMESPACE);
+        let first = outline
+            .classes
+            .iter()
+            .find(|class| class.name == first_class)
+            .unwrap();
+        assert!(first.defaults.iter().any(|default| {
+            default.target == "PriorityRank"
+                && code_tokens(&default.statement).is_ok_and(|tokens| {
+                    tokens
+                        .iter()
+                        .map(|token| token.text.as_str())
+                        .collect::<Vec<_>>()
+                        == ["default", "PriorityRank", "=", "7", ";"]
+                })
+        }));
+        check(&out, true, Some(cache.clone()), Some(fake_game.clone())).unwrap();
 
         // Extend the generated root option into a tree made solely from new topic classes. This
         // runs through the product check/stage path, not just the graph helper tests above.
-        let source_path = add_out.join(&add_manifest.source_file);
         let mut tree = fs::read_to_string(&source_path).unwrap();
         let root_class = expected_topic_root(participant);
         let children = fixed_subdialog_arguments(&["UChoiceGoreBrandNewChild"]);
@@ -5311,12 +6156,12 @@ class UConversationCharacterSettings_G1R_NEW_NPC : UConversationCharacterSetting
         );
         let extra = format!(
             "\n{}{}",
-            new_tree_topic(
+            add_say_before_subdialog(new_tree_topic(
                 "UChoiceGoreBrandNewChild",
                 i64::MAX - 1,
                 true,
                 &["UChoiceGoreBrandNewGrandchild"],
-            )
+            ))
             .replace(": URoot", &format!(": {root_class}")),
             new_tree_topic("UChoiceGoreBrandNewGrandchild", i64::MAX, true, &[],)
                 .replace(": URoot", &format!(": {root_class}")),
@@ -5324,97 +6169,57 @@ class UConversationCharacterSettings_G1R_NEW_NPC : UConversationCharacterSetting
         let namespace_end = tree.rfind('}').unwrap();
         tree.insert_str(namespace_end, &extra);
         fs::write(&source_path, &tree).unwrap();
-        check(&add_out, true, Some(cache.clone()), Some(fake_game.clone())).unwrap();
+        check(&out, true, Some(cache.clone()), Some(fake_game.clone())).unwrap();
         stage(
-            &add_out,
-            "GoreBrandNewOracle",
+            &out,
+            "GoreSettingsAnchorOracle",
             Some(cache.clone()),
             Some(fake_game.clone()),
         )
         .unwrap();
         let spec: serde_json::Value =
-            serde_json::from_slice(&fs::read(add_out.join("spec.json")).unwrap()).unwrap();
-        assert_eq!(spec["scripts"][0]["op"], "add");
+            serde_json::from_slice(&fs::read(out.join("spec.json")).unwrap()).unwrap();
+        assert_eq!(spec["scripts"][0]["op"], "edit");
+        assert_eq!(spec["scripts"][0]["module_name"], anchor.module);
         assert!(spec.get("dialog_topics").is_none());
 
-        // Removing the scaffold must not turn an add workspace into an arbitrary helper module.
+        // A manifest cannot redirect the scaffold to a separate Story module or resurrect the
+        // old unbound --op add path.
+        let safe_module = anchor.module.clone();
+        let safe_relative_path = manifest.relative_path.clone();
+        let mut tampered = manifest;
+        tampered.operation = DialogModuleOperation::Add;
+        tampered.module = "Story.G1R.Conversation.Conversation_OC_GRD_Guard30_281N".to_owned();
+        tampered.relative_path =
+            "Story/G1R/Conversation/Conversation_OC_GRD_Guard30_281N.as".to_owned();
         fs::write(
-            &source_path,
-            "namespace G1R::Conversation { void Helper() { return; } }\n",
+            &manifest_path,
+            format!("{}\n", serde_json::to_string_pretty(&tampered).unwrap()),
         )
         .unwrap();
-        let error = match open_edit(&add_out, Some(cache.clone()), Some(fake_game.clone())) {
-            Ok(_) => panic!("a gutted add workspace was accepted"),
+        let error = match open_edit(&out, Some(cache.clone()), Some(fake_game.clone())) {
+            Ok(_) => panic!("an unbound add manifest was accepted"),
             Err(error) => error,
         };
         assert!(
-            format!("{error:#}").contains("new conversation"),
+            format!("{error:#}").contains("not discovered by the game"),
             "{error:#}"
         );
 
-        let bytes = fs::read(&cache).unwrap();
-        let graph = dialog::build(&bytes).unwrap();
-        let topicless = graph
-            .conversations
-            .iter()
-            .find(|conversation| {
-                conversation.root_class.is_none()
-                    && conversation.topics.is_empty()
-                    && conversation.npc_participants().count() == 1
-            })
-            .expect("the real cache carries a topicless conversation oracle");
-        let topicless_participant = topicless.npc_participants().next().unwrap().to_owned();
-
-        // A plain checkout remains a valid settings-only workspace. Only the dedicated
-        // new-conversation manifest promises that a private root and first option must survive.
-        let plain_out = temp.path().join("topicless-plain-checkout");
-        checkout(
-            &topicless_participant,
-            &plain_out,
-            Some(cache.clone()),
-            None,
-        )
-        .unwrap();
-        let plain_manifest: EditManifest =
-            serde_json::from_slice(&fs::read(plain_out.join(MANIFEST_NAME)).unwrap()).unwrap();
-        assert!(!plain_manifest.requires_topic_scaffold);
-        check(
-            &plain_out,
-            true,
-            Some(cache.clone()),
-            Some(fake_game.clone()),
+        tampered.operation = DialogModuleOperation::Edit;
+        tampered.module = safe_module;
+        tampered.relative_path = safe_relative_path;
+        fs::write(
+            &manifest_path,
+            format!("{}\n", serde_json::to_string_pretty(&tampered).unwrap()),
         )
         .unwrap();
 
-        let edit_out = temp.path().join("topicless-edit");
-        new_conversation(NewConversationRequest {
-            npc: topicless_participant,
-            caption: None,
-            caption_key: Some("GORE_DIALOG_TOPICLESS_ORACLE".to_owned()),
-            class: Some("UChoiceGoreTopiclessOracle".to_owned()),
-            mod_name: "GoreTopiclessOracle".to_owned(),
-            out: edit_out.clone(),
-            cache: Some(cache.clone()),
-            game: None,
-        })
-        .unwrap();
-        let edit_manifest: EditManifest =
-            serde_json::from_slice(&fs::read(edit_out.join(MANIFEST_NAME)).unwrap()).unwrap();
-        assert_eq!(edit_manifest.operation, DialogModuleOperation::Edit);
-        check(
-            &edit_out,
-            true,
-            Some(cache.clone()),
-            Some(fake_game.clone()),
-        )
-        .unwrap();
-
-        // Restoring only the pristine settings is not a valid "new conversation" edit: the
-        // manifest still promises a root and at least one option.
-        let pristine = fs::read(edit_out.join(&edit_manifest.pristine_file)).unwrap();
-        fs::write(edit_out.join(&edit_manifest.source_file), pristine).unwrap();
-        let error = match open_edit(&edit_out, Some(cache), Some(fake_game)) {
-            Ok(_) => panic!("a gutted topicless edit workspace was accepted"),
+        // Restoring only the pristine settings is not a valid new-conversation edit: the
+        // manifest still promises a private root and at least one option.
+        fs::write(&source_path, pristine).unwrap();
+        let error = match open_edit(&out, Some(cache), Some(fake_game)) {
+            Ok(_) => panic!("a gutted settings-anchor workspace was accepted"),
             Err(error) => error,
         };
         assert!(

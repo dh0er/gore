@@ -24,18 +24,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   in a shipped parent's single `Subdialog` call. Its default insertion keeps a
   trailing `TEXT_BACK`/Zurück option last, while `--subdialog-position <N>`
   selects any valid 1-based position and shifts existing children without
-  dropping one. Generated sub-topics use the shipped rank `0`. Both compile as
+  dropping one. Generated sub-topics use the shipped rank `0`, preserving slot
+  order among equal ranks. Roots automatically choose a normal rank before a
+  recognized final End/Back row (or the current last root-rank group).
+  `--priority-rank <N>` overrides either rank exactly; automatic selection
+  never emits forced-topic rank `-1`. Both compile as
   `--op edit --allow-new-symbols`, not as an isolated cross-module `--op add`.
-- `dialog new-conversation` — scaffold settings, a private root and the first
-  direct choice for an NPC with no root topics. Exactly one matching shipped
-  topicless module is preserved and edited; when no conversation module exists,
-  one complete module is added. Every further topic and new-to-new `Subdialog`
-  level stays in that same source module. New topics remain direct subclasses
-  of the private root; a new parent may own only new same-conversation children.
-  Both operations and an all-new
-  multi-level tree are qualified through strict standalone compilation and
-  bundle inspection; native runtime association, discovery and navigation
-  remain unproven.
+- `dialog new-conversation` — scaffold a private root and the first
+  direct choice for an exact NPC with no root topics. The command requires one
+  already-loaded per-NPC conversation-settings module, preserves its shipped
+  settings class, and appends the private root and all topics under
+  `G1R::Conversation` in that module. It stages
+  `--op edit --allow-new-symbols`; a partial/ambiguous participant, rooted
+  conversation, or missing/malformed settings anchor fails closed instead of
+  producing an unreferenced Add module. New topics remain direct subclasses of
+  the private root, and a new parent may own only new same-conversation children.
+  Its first choice defaults to rank 2; `--priority-rank <N>` overrides it, with
+  `-1` reserved for an intentionally forced topic.
 - `dialog checkout` / `check` / `stage` — check out a shipped conversation, or
   validate and stage that edit or a generated complete-conversation workspace.
   Shipped source includes reconstructed defaults for `Caption`, `PriorityRank`,
@@ -61,6 +66,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   appeared, dispatched its new `Act`, ended the conversation and returned
   control. In the first root run the installed legacy adapter logged
   `sentinel-topic-missing` and skipped, proving that it did not insert the root.
+- Qualify a complete first conversation for a previously dialogless shipped
+  Guard. The anchored edit opened automatically, spoke a shipped oracle line,
+  rendered the wholly new nested choices, accepted both in sequence and
+  returned HUD/control. The final rerun generated that anchored source through
+  `dialog new-conversation`, passed `check` and `stage`, compiled it with the
+  standalone backend, bundled and deployed it, then completed the same
+  three-level runtime sequence. The same classes in a separate unreferenced
+  conversation Add module compiled, packaged and deployed but were not
+  discovered, establishing the loaded per-NPC settings-module requirement.
+- Qualify an all-new three-level topic tree. Root -> level 2 -> level 3 rendered,
+  spoke, selected and ended cleanly when one real `Say` separated the nested
+  transitions. Two consecutive actionless `Subdialog` Acts instead soft-locked;
+  dialog checks now reject exactly that unsafe re-entrant shape.
 - Exercise Stage A's exact 20-sibling submenu in game on the same build. The
   submenu rendered and multiple slots were selectable; the renamed shipped
   option retained and ran its long method body before returning to the menu.
@@ -99,17 +117,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Module deletion and cyclic dependencies among new modules fail closed. An
   earlier manually deployed raw cache had 10,782 semantic deviations (81 in
   Diego) and unusable main-menu input; a selective hybrid audit cache booted and
-  loaded a save, but did not prove execution of the cross-module dialog edge.
-  Normal cross-module dialog minis remain technically unsupported.
-- An ambient fixture entered `State.AmbientConversation` with
+  loaded a save. The current selective product then booted, loaded gameplay,
+  rendered and selected its new same-module root, and executed a new provider
+  call across modules from an edited shipped automatic topic; its line played
+  and the conversation returned control. Normal cross-module dialog minis
+  remain technically unsupported.
+- Automatic opening crossed the live boundary twice: an ambient fixture entered
+  `State.AmbientConversation` with
   `GA_Human_Conversation_Ambient` active without player selection, proving the
-  automatic activation boundary. It crashed only after forcing an artificial
-  20-choice `Subdialog`; that menu shape remains unqualified and is not evidence
-  that broad ambient flags are broken.
+  state/ability boundary, and the anchored Guard's wholly new conversation
+  opened and completed normally. The ambient fixture crashed only after forcing
+  an artificial 20-choice `Subdialog`; that combined shape remains unqualified
+  and is not evidence that broad ambient flags are broken.
 - `gore_dialog` MCP tool for the same ten subcommands.
 
 ### Fixed
 
+- Anchor `dialog new-conversation` to one exact loaded per-NPC settings module
+  and reject legacy/unreferenced Add workspaces, because the live game does not
+  discover that separate module shape. Keep the shipped settings class in place
+  while adding conversation classes under the normal namespace.
+- Reject two consecutive otherwise actionless new-to-new `Subdialog` Acts. The
+  exact shape soft-locks in game; an unconditional top-level `Say` before either
+  transition remains supported and is the runtime-proven separator. Empty
+  blocks, declarations, assignments and conditional calls cannot bypass the
+  check; a new-tree `Subdialog` must also occur directly in `Act` or
+  `Act_Implementation`, not behind a synchronous helper.
+- Preserve signed fixed-width immediates while extracting dialog defaults, so
+  an existing negative `PriorityRank` remains negative for automatic placement
+  instead of widening to a large positive rank.
+- Generate literal `--caption` values as inline `FText::FromString(...)`
+  defaults instead of a free helper function, so the same-module new-symbol
+  compiler contract accepts the scaffold.
 - Reject AngelScript preprocessor directives before dialog default coverage is
   accepted, both in `dialog check` and direct generated-default edit
   preparation. Disabled `#if`/`#else` branches can no longer make partial

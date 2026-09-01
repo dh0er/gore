@@ -296,19 +296,29 @@ therefore adds no generated UE4SS component: the same-module root uses the
 game's native script discovery, while a direct sub-topic is reached through an
 authored `Subdialog` call in a shipped parent. The private conversation base is
 why neither shape should be turned into an isolated cross-module `--op add`.
+Root scaffolds automatically choose an ordinary rank before the recognized
+End/Back row, while sub-topics default to rank 0 and retain equal-rank slot
+order. `--priority-rank` is the exact override; `-1` is intentionally forced and
+is never selected automatically.
 
 `gore dialog new-conversation` is the corresponding path when an NPC has no
-root topic. If exactly one matching shipped topicless module exists, its staged
-command is also `--op edit`. If no module exists, settings, the private root and
-the first choice are authored together and the staged command is `--op add`.
-Further all-new levels stay in that same source module, so new-to-new
-`Subdialog` references do not depend on another mini-cache. Both variants and an
-all-new multi-level tree pass strict standalone compilation and bundle
-inspection; runtime association, discovery and navigation are still unproven.
-The no-match NPC id is checked for safe syntax and generated-name collisions,
-not against the existence of a shipped or separately authored NPC. The staged
-bundle contains no generated UE4SS component, but only a runtime observation can
-show whether native discovery works without a bridge.
+root topic. It requires one exact, already-loaded per-NPC conversation-settings
+module, keeps its shipped settings class intact, and appends the private root
+and choices under `G1R::Conversation` in that module. Its staged command is
+`--op edit --allow-new-symbols`; a missing or ambiguous settings anchor fails
+closed instead of producing an unreferenced Add module. Further all-new levels
+stay in the same source module, so new-to-new `Subdialog` references do not
+depend on another mini-cache. The first choice defaults to rank 2;
+`--priority-rank` overrides it exactly.
+
+On BuildID `24878692`, the anchored Guard fixture opened automatically, spoke a
+shipped line, rendered two wholly new choices, accepted the first and returned
+control. A separate new conversation Add module for the same Guard compiled,
+packaged and deployed but was never discovered, which is why it is no longer a
+staged product shape. A wholly new three-level tree also ran end to end when a
+real `Say` separated consecutive nested menu transitions. Two actionless direct
+`Subdialog` transitions soft-locked, so `dialog check` now refuses that narrow
+shape. These bundles are script-only and need no UE4SS insertion.
 
 On BuildID `24878692`, strict standalone compilation, mini-cache packaging and
 deployment were followed by separate in-game observations of a selectable new
@@ -317,12 +327,13 @@ persisted inventory effect, explicit knowledge and quest state after save/load,
 a new localization/Ogg/`Say` path whose loopback correlated `0.763` with the
 source recording, and a manual rebuild of an existing four-child sub-menu. This
 qualifies those exact fixtures on that build, not arbitrary game APIs, other
-builds, or execution of a cross-module dialog edge. Earlier complete-cache tests
+builds, or every possible conversation action. Earlier complete-cache tests
 found that a raw FullGraph regeneration produced unusable main-menu input while
 a manually selective hybrid booted and loaded a save. `gore as compile` now
-publishes only the corresponding selective Add/Edit product, but the intended
-cross-module dialog option has not yet been observed in game. The practical
-limits are maintained in
+publishes only the corresponding selective Add/Edit product. Its current live
+fixture booted and loaded gameplay, rendered and selected a new same-module
+root, and executed a new cross-module provider call from an edited shipped
+automatic topic before returning control. The practical limits are maintained in
 [AngelScript dialog authoring](dialog-authoring.md).
 
 `compile-module` is the CLI equivalent of Mod Studio's Compile action, and it

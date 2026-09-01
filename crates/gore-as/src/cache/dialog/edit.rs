@@ -5,14 +5,14 @@
 //! Editing a vanilla module means recompiling it and splicing the result back onto the shipping
 //! cache. The current emitter reconstructs `__InitDefaults` as class-scope `default` statements,
 //! so an ordinary checkout authors every class default and the compiler regenerates those
-//! methods. The old byte-exact carry remains only as an all-or-nothing fallback for a module that
-//! authors no defaults at all.
+//! methods. The old byte-exact carry remains only as a fallback when no existing class authors
+//! defaults. Newly appended classes may still author their own defaults in that hybrid mode.
 //!
 //! That distinction is security-relevant. Once one class authors a default, every base class with
 //! an `__InitDefaults` record must still be covered and every default target the checkout carried
 //! must remain present; otherwise recompilation could silently replace an omitted value with an
-//! engine default. A fully authored module may opt into the remapper's minimal new-symbol rows.
-//! The fallback carry may not.
+//! engine default. A fully authored module may opt into the remapper's minimal new-symbol rows;
+//! hybrid carry may retain the rows required only by newly appended classes.
 //!
 //! Every one of those refusals arrives after a two-minute compile that drives the game's own
 //! compiler. This module answers the same questions offline, in milliseconds, from the same base

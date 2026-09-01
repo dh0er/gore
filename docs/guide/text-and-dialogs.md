@@ -251,10 +251,12 @@ remains available for hand-authored bundle specs; see
 [AngelScript dialog authoring](dialog-authoring.md).
 
 For an NPC with no root topics, `gore dialog new-conversation` instead keeps
-settings, the private root and all topic classes in one module. It edits an
-exact shipped topicless module or adds a new module when none exists. That
-source/compile/package path, including new-to-new submenu levels, is supported;
-native in-game discovery and navigation remain to be proven separately.
+the shipped settings class, private root and all topic classes in one exact,
+already-loaded per-NPC settings module. It refuses a missing anchor instead of
+adding an unreferenced module. On BuildID `24878692`, this script-only shape
+opened automatically for a previously dialogless Guard and navigated new
+choices; an all-new three-level tree also ran when an unconditional top-level
+`Say` separated consecutive nested menu transitions.
 
 ## Related
 

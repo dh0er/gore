@@ -13,7 +13,7 @@ gore dialog tree brannok --lang german    # in German
 gore dialog show ChoiceStt302ViperMelt    # one option in full
 gore dialog text viper -o viper.json      # its lines, ready to edit and re-import
 gore dialog new-topic viper --caption-key K --mod-name MyMod -o MyMod   # root-topic scaffold
-gore dialog new-conversation MY_NEW_NPC --caption-key K -o NewNpcDialog # full conversation
+gore dialog new-conversation OC_GRD_Guard30_281N --caption-key K -o GuardDialog # first conversation
 gore dialog checkout viper -o work        # editable AngelScript, including defaults
 gore dialog export -o dialog\             # every conversation as JSON
 ```
@@ -50,7 +50,9 @@ body means that line only plays on some branch of the option. A sub-menu is
 printed as `opens a sub-menu:` with its options nested underneath.
 
 Options appear in the order the game declares (`PriorityRank`), which is what
-puts "End." last.
+puts "End." last. Equal-rank subtopics retain their authored `Subdialog` slot
+order. Rank `-1` is special: it requests the game's forced-topic behavior rather
+than an ordinary menu position.
 
 ## Naming a conversation
 
@@ -232,6 +234,13 @@ directory. The command does not emit an isolated `compile-module --op add`
 recipe: a private topic base from another module is not visible there, and
 separate add/edit mini-caches cannot depend on one another.
 
+Without `--priority-rank`, a root scaffold chooses a normal rank immediately
+before the smallest recognized `TEXT_DIALOG_END`/`TEXT_BACK` root rank. When no
+such caption exists, it places the new root before the current last root-rank
+group; an empty fallback uses rank 2. Automatic selection skips `-1`, because
+that rank has forced-topic semantics. Pass `--priority-rank <N>` when you want
+an exact rank, including an intentional `-1`.
+
 For a real sub-menu addition, add
 `--subdialog-of UExistingParentTopic`. The parent must contain exactly one
 `Subdialog` call with an empty topic slot. The command adds the new class with
@@ -239,7 +248,9 @@ For a real sub-menu addition, add
 arguments instead of merely filling the first null. If the last child uses the
 language-independent `TEXT_BACK` caption key, the default insertion point is
 immediately before that Zurück/Back option so it remains last. Otherwise the
-new child appends after the existing entries.
+new child appends after the existing entries. At the default equal rank, that
+slot order is the visible order. `--priority-rank <N>` overrides the rank
+exactly; use it only when rank ordering, rather than slot ordering, is intended.
 
 Pass `--subdialog-position <N>` to choose the 1-based position among populated
 entries explicitly. Position `1` is first; position `current count + 1` is
@@ -285,8 +296,10 @@ That design follows two live observations. An earlier raw regeneration with
 reached a main menu whose entries could not be activated. A manually composed
 hybrid that preserved every untouched module and replaced only Diego plus the
 new probe did boot and load a save. The product now uses the latter selective
-architecture, but the intended cross-module dialog option still has not been
-observed or selected.
+architecture. On BuildID `24878692`, its complete-cache product booted and
+loaded gameplay, showed and selected the new same-module root, and let an edited
+shipped automatic topic call a new provider in another module. The provider's
+line played and the conversation returned control.
 
 The normal dialog bundle path instead consumes independently base-bound module
 minis. One add mini cannot provide symbols to a separate edit mini, and the
@@ -302,47 +315,58 @@ appearance, selection and new override dispatch.
 `new-conversation` covers an NPC that has no current root topic:
 
 ```powershell
-gore dialog new-conversation MY_NEW_NPC --caption-key MY_NEW_NPC_HELLO `
-  --class UChoiceMyNewNpcHello --mod-name MyNewNpcDialog -o work
+gore dialog new-conversation OC_GRD_Guard30_281N --caption-key MY_GUARD_HELLO `
+  --class UChoiceMyGuardHello --mod-name MyGuardDialog -o work
 gore dialog check work
-gore dialog stage work --mod-name MyNewNpcDialog
+gore dialog stage work --mod-name MyGuardDialog
 ```
 
-When the cache has exactly one matching conversation module with settings but
-no topics, the command preserves it and prepares an edit. When no matching
-conversation module exists, it creates the settings, private root and first
-choice together in one new module and prepares an add. It refuses an existing
-rooted conversation (use `new-topic`) and any ambiguous match.
+The command requires one exact, already-loaded per-NPC conversation-settings
+module from the shipped cache. It preserves that settings class, appends the
+private root and first choice under `G1R::Conversation` in the same module, and
+prepares `--op edit --allow-new-symbols`. An existing rooted conversation (use
+`new-topic`), a partial/ambiguous NPC name, or a missing/malformed settings
+anchor fails closed.
 
-For the add case, the supplied NPC value is checked only as a safe identifier
-and against generated-name collisions. GORE cannot tell whether it names a
-shipped NPC or a new NPC delivered by another project component. Copy/prove the
-exact identifier from that NPC's catalog or project definition first; a typo is
-otherwise a syntactically valid but unbound new conversation.
+The first choice uses `PriorityRank = 2` unless
+`--priority-rank <N>` is passed. An explicit `-1` intentionally creates a forced
+topic; it is never an implicit default.
+
+That loaded-module rule comes from runtime evidence. A separate new
+`Story.G1R.Conversation` module for a shipped Guard compiled, packaged and
+deployed but was not discovered. The same classes inside the Guard's loaded
+settings module opened automatically and ran normally. `gore dialog` therefore
+does not yet give a wholly new NPC its first conversation unless another
+NPC-authoring path first supplies a settings module that the game loads.
 
 More levels are authored by appending more topic classes to that same source
 module and wiring new parents to new children with `Subdialog`. Every class
 needed by the tree is therefore compiled and remapped as one unit; no second
 module or dependent mini-cache is involved. Use the global
 `::Subdialog(this, UChoiceChild, ...)` source form for a new-to-new edge; the
-instance-method form does not bind that child in a completely new module. The
 20-child limit still applies to each call. Every new option derives directly
 from the private topic base and stays in its namespace. A new parent may own
 only new children from this conversation; mixing a shipped child below that new
 parent is not supported.
 
-The existing-topicless edit, brand-new-module add and an all-new multi-level
-tree pass the offline source, strict standalone compile and bundle-inspection
-path. Runtime is a separate boundary: neither native association/discovery of a
-brand-new conversation nor navigation through the all-new tree has yet been
-observed in game. Their bundle is script-only and contains no generated UE4SS
-component; that packaging fact does not yet prove that native runtime discovery
-works without a bridge.
+Put an unconditional top-level `Say` before one of two consecutive nested menu
+transitions. A synthetic three-level tree with two actionless `Subdialog` Acts
+soft-locked. Adding that `Say` before the second transition made Root -> level 2
+-> level 3 render, select and end cleanly; the shipped corpus likewise contains
+no consecutive actionless pair. `dialog check` rejects declarations,
+assignments, empty blocks and conditional calls as substitutes for this proven
+separator.
+
+The anchored first-conversation edit and the action-bearing all-new tree now
+pass source checking, strict standalone compilation, script-only packaging,
+deployment and runtime selection. The Guard fixture opened automatically,
+spoke a shipped line, rendered two wholly new submenu choices and returned
+control after selection. No UE4SS component inserted the conversation.
 
 ## Compile, package, deploy, prove
 
-`stage` writes `spec.json` and prints a strict standalone module command: edit
-for a shipped/topicless module, add for a brand-new conversation module. It adds
+`stage` writes `spec.json` and prints a strict standalone module edit command.
+It adds
 `--allow-new-symbols` only when `check` found intentional new class, function or
 string rows. It also names the resolved game root and refuses to stage when its
 current script cache is not byte-identical to the checkout base; `compile-module`
@@ -373,7 +397,10 @@ These are distinct evidence steps:
    a native same-module root, a direct new sub-topic, a representative four-to-
    five-entry menu rebuild, one persistent inventory effect, one
    `HideIfKnowsId` rule, one persistent quest and one new subtitle/voice pair.
-   Use a disposable or backed-up save and keep each observed effect separate.
+   The Guard fixture proves an automatically opened first conversation anchored
+   in a loaded settings module; the three-level Diego fixture proves an
+   action-bearing all-new tree. Use a disposable or backed-up save and keep each
+   observed effect separate.
 
 ## Conditions, in the game's own vocabulary
 
@@ -423,9 +450,10 @@ Ambient topics are lines an NPC plays without being asked, so they have no menu
 caption; they show as `(ambient)`. One fixture entered
 `State.AmbientConversation` with `GA_Human_Conversation_Ambient` active without
 player selection, proving automatic activation at that state/ability boundary.
-It then crashed only after forcing an artificial 20-choice `Subdialog`; that
-menu shape remains unqualified and does not show that broad ambient flags are
-broken.
+The anchored Guard fixture separately opened a wholly new conversation
+automatically and completed normally. An artificial 20-choice ambient fixture
+crashed before its menu became usable; that combined shape remains unqualified
+and does not show that ordinary ambient or forced topics are broken.
 
 ## JSON, for tooling
 

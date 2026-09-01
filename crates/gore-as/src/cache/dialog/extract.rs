@@ -142,7 +142,18 @@ fn is_value_call(instructions: &[Instr], index: usize) -> bool {
 /// Constant immediate carried by a `SetV*`/`PshC*` instruction.
 fn immediate(instruction: &Instr) -> Option<i64> {
     match instruction.op.name {
-        "SetV1" | "SetV2" | "SetV4" | "PshC4" => instruction.dwords.first().map(|v| *v as i64),
+        "SetV1" => instruction
+            .dwords
+            .first()
+            .map(|value| (*value as u8 as i8) as i64),
+        "SetV2" => instruction
+            .dwords
+            .first()
+            .map(|value| (*value as u16 as i16) as i64),
+        "SetV4" | "PshC4" => instruction
+            .dwords
+            .first()
+            .map(|value| (*value as i32) as i64),
         "SetV8" | "PshC8" => instruction.qwords.first().map(|v| *v as i64),
         _ => None,
     }
@@ -471,10 +482,10 @@ fn apply_default(
             }
         }
         "Caption" => {}
-        // `PriorityRank` orders the menu; the engine default arrives as the unsigned spelling
-        // of -1, which is an absent rank rather than the largest one.
+        // `PriorityRank` orders the menu; the engine default arrives as -1, which is an absent
+        // rank rather than the largest one.
         "PriorityRank" => {
-            result.priority = value.filter(|rank| *rank != u32::MAX as i64);
+            result.priority = value.filter(|rank| *rank != -1);
         }
         // Story-debugger instrumentation, like the `DC`/`DB` calls it pairs with.
         "DebugId" => {}
@@ -987,6 +998,26 @@ mod tests {
             instruction("SetV1", &[1], &[3], &[]),
         ];
         assert!(!is_value_call(&instructions, 0));
+    }
+
+    #[test]
+    fn fixed_width_immediates_preserve_their_signed_value() {
+        assert_eq!(
+            immediate(&instruction("SetV4", &[], &[(-100_i32) as u32], &[])),
+            Some(-100)
+        );
+        assert_eq!(
+            immediate(&instruction("PshC4", &[], &[u32::MAX], &[])),
+            Some(-1)
+        );
+        assert_eq!(
+            immediate(&instruction("SetV2", &[], &[u16::MAX as u32], &[])),
+            Some(-1)
+        );
+        assert_eq!(
+            immediate(&instruction("SetV1", &[], &[u8::MAX as u32], &[])),
+            Some(-1)
+        );
     }
 
     #[test]

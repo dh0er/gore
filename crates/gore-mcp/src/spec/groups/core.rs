@@ -778,6 +778,16 @@ const DIALOG_NEW_TOPIC_ARGS: &[ArgSpec] = &[
         false,
     ),
     ArgSpec::new(
+        "priority_rank",
+        Long("priority-rank"),
+        Int {
+            min: Some(-2_147_483_648),
+            max: Some(2_147_483_647),
+        },
+        "Menu-order rank. Roots choose an automatic rank before a recognized final End/Back entry, otherwise before the trailing rank group; sub-topics default to 0 and keep equal-rank order from --subdialog-position. Pass a value to override it; -1 has the game's forced-topic semantics and is never chosen automatically",
+        false,
+    ),
+    ArgSpec::new(
         "mod_name",
         Long("mod-name"),
         Str,
@@ -802,9 +812,7 @@ const DIALOG_NEW_CONVERSATION_ARGS: &[ArgSpec] = &[
         "npc",
         Positional { order: 0 },
         Str,
-        "Exact NPC identifier (for example `NC_SLD_GORN_699FM`) for the participant that \
-         should own the conversation; syntax and collisions are checked, but NPC existence and \
-         runtime binding are not",
+        "Exact NPC identifier with one loaded per-NPC conversation-settings module; a separate unbound add module is refused",
         true,
     ),
     ArgSpec::new(
@@ -829,6 +837,17 @@ const DIALOG_NEW_CONVERSATION_ARGS: &[ArgSpec] = &[
         false,
     )
     .with_default("UChoice<mod name>"),
+    ArgSpec::new(
+        "priority_rank",
+        Long("priority-rank"),
+        Int {
+            min: Some(-2_147_483_648),
+            max: Some(2_147_483_647),
+        },
+        "Menu-order rank for the first option. Pass -1 only when intentionally authoring a forced topic",
+        false,
+    )
+    .with_default("2"),
     ArgSpec::new(
         "mod_name",
         Long("mod-name"),
@@ -900,7 +919,7 @@ const DIALOG_COMMANDS: &[CommandSpec] = &[
     CommandSpec::new(
         "check",
         "Fail closed unless a conversation workspace preserves every required class/default and \
-         satisfies its add/edit remap contract",
+         satisfies the supported edit/remap contract",
         DIALOG_CHECK_ARGS,
         Safety::read(),
         T_NORMAL,
@@ -911,7 +930,7 @@ const DIALOG_COMMANDS: &[CommandSpec] = &[
     CommandSpec::new(
         "stage",
         "Write the build spec for a checked workspace and print its strict standalone `--op \
-         edit` or `--op add` compile command, adding `--allow-new-symbols` only when required",
+         edit` compile command, adding `--allow-new-symbols` only when required",
         DIALOG_STAGE_ARGS,
         Safety::write().writes_into(&["dir"]),
         T_NORMAL,
@@ -933,8 +952,8 @@ const DIALOG_COMMANDS: &[CommandSpec] = &[
     // caller-picked empty directory. The game install is only read.
     CommandSpec::new(
         "new-conversation",
-        "Scaffold a complete conversation where the NPC has no root topic: extend its single \
-         shipped topicless module, or create a new module when none exists",
+        "Scaffold a complete conversation where the NPC has no root topic by extending its exact \
+         already-loaded per-NPC conversation-settings module; refuse an unbound new module",
         DIALOG_NEW_CONVERSATION_ARGS,
         Safety::write().writes_into(&["out"]),
         T_NORMAL,
