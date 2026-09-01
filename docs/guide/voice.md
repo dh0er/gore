@@ -196,7 +196,8 @@ BuildID-`24878692` Diego fixture described under
 [Deployment reality check](#deployment-reality-check) resolved and played it
 from a newly authored `Say` line. That is evidence for that exact member and
 script/localization combination, not a promise that every invented path or
-codec will be selected by the game.
+codec will be selected by the game. Automatic lip or facial synchronization for
+arbitrary new recordings has not been runtime-qualified.
 
 These commands *create an archive*. They do not install it into the game — for
 that, use a [bundle](bundles.md).

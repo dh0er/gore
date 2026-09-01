@@ -201,11 +201,12 @@ workspace edits the NPC's exact already-loaded conversation-settings module;
 the shipped settings class, private root, first choice and every manually added
 deeper topic stay together. On BuildID `24878692`, that shape opened
 automatically for a previously dialogless shipped Guard, rendered two new
-submenu choices, accepted one and returned control. A separate unreferenced Add
-module was not discovered and is therefore refused. An all-new three-level tree
-also ran end to end when an unconditional top-level `Say` separated consecutive
-nested menu transitions; `check` rejects the actionless two-hop shape that
-soft-locked. The generated bundle has no automatic UE4SS component.
+submenu choices, accepted both in sequence and returned control. A separate
+unreferenced Add module was not discovered and is therefore refused. An all-new
+three-level tree also ran end to end when an unconditional top-level `Say`
+separated consecutive nested menu transitions; `check` rejects the actionless
+two-hop shape that soft-locked. The generated bundle has no automatic UE4SS
+component.
 
 Separate add/edit mini-caches cannot depend on each other, so an isolated
 cross-module `--op add` is not the dialog recipe. Full detail, practical limits

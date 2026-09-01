@@ -142,7 +142,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   transition remains supported and is the runtime-proven separator. Empty
   blocks, declarations, assignments and conditional calls cannot bypass the
   check; a new-tree `Subdialog` must also occur directly in `Act` or
-  `Act_Implementation`, not behind a synchronous helper.
+  `Act_Implementation`, not behind a synchronous helper. A module-local free
+  function named `Say` cannot shadow the shipped separator with a no-op.
+- Use the shared VM call classifier for generated-default target proof and
+  dialog extraction. `Thiscall1`, `CallPtr`, `ALLOC` and the ordinary call
+  families can no longer slip past those fail-closed scans.
 - Preserve signed fixed-width immediates while extracting dialog defaults, so
   an existing negative `PriorityRank` remains negative for automatic placement
   instead of widening to a large positive rank.

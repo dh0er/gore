@@ -83,10 +83,7 @@ fn is_predicate_call(instructions: &[Instr], index: usize) -> bool {
 }
 
 fn is_call(instruction: &Instr) -> bool {
-    matches!(
-        instruction.op.name,
-        "CALL" | "CALLBND" | "CALLINTF" | "CALLSYS"
-    )
+    instruction.op.is_call()
 }
 
 fn call_params<'a>(

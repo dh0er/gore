@@ -312,11 +312,11 @@ depend on another mini-cache. The first choice defaults to rank 2;
 `--priority-rank` overrides it exactly.
 
 On BuildID `24878692`, the anchored Guard fixture opened automatically, spoke a
-shipped line, rendered two wholly new choices, accepted the first and returned
-control. A separate new conversation Add module for the same Guard compiled,
-packaged and deployed but was never discovered, which is why it is no longer a
-staged product shape. A wholly new three-level tree also ran end to end when a
-real `Say` separated consecutive nested menu transitions. Two actionless direct
+shipped line, rendered and accepted both wholly new choices in sequence, then
+returned control. A separate new conversation Add module for the same Guard
+compiled, packaged and deployed but was never discovered, which is why it is no
+longer a staged product shape. A wholly new three-level tree also ran end to end
+when a real `Say` separated consecutive nested menu transitions. Two actionless direct
 `Subdialog` transitions soft-locked, so `dialog check` now refuses that narrow
 shape. These bundles are script-only and need no UE4SS insertion.
 

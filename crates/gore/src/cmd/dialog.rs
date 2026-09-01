@@ -1676,6 +1676,16 @@ fn validate_new_topic_tree(
     added_topics: &BTreeSet<String>,
     registrations: &BTreeMap<String, usize>,
 ) -> Result<()> {
+    if outline
+        .functions
+        .iter()
+        .any(|declaration| free_function_has_name(declaration, "Say"))
+    {
+        bail!(
+            "an all-new topic tree may not declare a module-local free function named `Say`; the qualified `::Say(...)` separator must resolve to the shipped dialog function"
+        );
+    }
+
     let mut debug_ids = BTreeMap::<i64, String>::new();
     for class_name in added_topics {
         let class = outline
@@ -1905,6 +1915,13 @@ fn validate_new_topic_tree(
         );
     }
     Ok(())
+}
+
+fn free_function_has_name(declaration: &str, expected: &str) -> bool {
+    let tokens = declaration.split_whitespace().collect::<Vec<_>>();
+    tokens
+        .windows(2)
+        .any(|pair| pair[0] == expected && pair[1] == "(")
 }
 
 /// Refuse the pre-anchor first-conversation shape independently of a mutable manifest flag.
@@ -3385,8 +3402,7 @@ fn direct_act_subdialog_call_counts(source: &str) -> Result<BTreeMap<String, usi
                     if is_act {
                         let count = (index + 1..body_close.saturating_sub(1))
                             .filter(|call| {
-                                tokens[*call].text == "Subdialog"
-                                    && tokens[*call + 1].text == "("
+                                tokens[*call].text == "Subdialog" && tokens[*call + 1].text == "("
                             })
                             .count();
                         *counts.entry(owner.clone()).or_default() += count;
@@ -5359,15 +5375,27 @@ class UTopic_Hero__Npc : UConversationTopic
     }
 
     #[test]
+    fn an_all_new_topic_tree_rejects_a_shadowing_free_say_function() {
+        let root =
+            add_say_before_subdialog(new_tree_topic("URootChoice", 1, false, &["ULevelOne"]));
+        let level_one = new_tree_topic("ULevelOne", 2, true, &["ULevelTwo"]);
+        let source = format!(
+            "void Say() {{}}\nclass URoot : UG1RDialogTopic {{}}\n{root}{level_one}{}",
+            new_tree_topic("ULevelTwo", 3, true, &[]),
+        );
+        let error =
+            check_new_tree(&source, &["URootChoice", "ULevelOne", "ULevelTwo"]).unwrap_err();
+        assert!(
+            error.to_string().contains("free function named `Say`"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn an_all_new_topic_tree_rejects_helper_indirect_subdialog_edges() {
         let source = format!(
             "class URoot : UG1RDialogTopic {{}}\n{}{}",
-            move_subdialog_to_helper(new_tree_topic(
-                "URootChoice",
-                1,
-                false,
-                &["UChild"],
-            )),
+            move_subdialog_to_helper(new_tree_topic("URootChoice", 1, false, &["UChild"],)),
             new_tree_topic("UChild", 2, true, &[]),
         );
         let error = check_new_tree(&source, &["URootChoice", "UChild"]).unwrap_err();

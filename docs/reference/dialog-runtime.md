@@ -52,6 +52,9 @@ and one representative existing-menu rebuild:
   the wholly new nested choices, accepted both in sequence and returned
   HUD/control.
   The same classes in a separate unreferenced Add module were not discovered.
+- A separate automatic-opening fixture entered `State.AmbientConversation`
+  with `GA_Human_Conversation_Ambient` active. This proves that activation path,
+  not the failed combined artificial 20-choice ambient fixture.
 - A wholly new three-level Diego tree rendered and navigated Root -> level 2 ->
   level 3 when a real `Say` separated the nested transitions. The same graph
   with two consecutive actionless `Subdialog` Acts soft-locked; `dialog check`
@@ -436,6 +439,8 @@ shapes that the current pipeline cannot produce safely.
   top-level `Say` before either transition is the supported and runtime-proven
   separator. The owning `Subdialog` must occur directly in
   `Act`/`Act_Implementation`; a synchronous helper is not a qualified bypass.
+  A module-local free function named `Say` is rejected so the separator cannot
+  be shadowed by a no-op helper.
 - Publishing the raw FullGraph backend regeneration as a playable cache. GORE
   does not expose it as the product output; an earlier manual deployment reached
   a main menu whose entries could not be activated by mouse click or Return.

@@ -1752,4 +1752,30 @@ mod tests {
         assert!(op_info(213).is_none());
         assert!(op_info(250).is_none());
     }
+
+    #[test]
+    fn call_classification_covers_every_vm_call_family_but_not_return() {
+        for name in [
+            "CALL",
+            "CALLSYS",
+            "CALLBND",
+            "CALLINTF",
+            "ALLOC",
+            "CallPtr",
+            "Thiscall1",
+        ] {
+            let op = OPCODES.iter().find(|op| op.name == name).unwrap();
+            assert!(op.is_call(), "{name}");
+        }
+        assert!(!OPCODES
+            .iter()
+            .find(|op| op.name == "RET")
+            .unwrap()
+            .is_call());
+        assert!(!OPCODES
+            .iter()
+            .find(|op| op.name == "FinConstruct")
+            .unwrap()
+            .is_call());
+    }
 }

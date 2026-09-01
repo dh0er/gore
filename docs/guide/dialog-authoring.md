@@ -68,12 +68,16 @@ produce.
   shipped parent may receive a new child, and a new parent may contain new
   same-conversation children, but you cannot move/reuse a vanilla option as a
   child of that new parent.
+- Deriving a new topic from another new topic. Every new option must derive
+  directly from the conversation's private topic base; nesting is expressed by
+  `Subdialog`, not by class inheritance.
 - Opening another new submenu immediately from a new submenu without an
   unconditional top-level `Say` before either transition. That actionless
   two-hop shape soft-locks in game; declarations, assignments, empty blocks and
   conditional calls do not satisfy `dialog check`. The new-tree `Subdialog`
   must appear directly in `Act`/`Act_Implementation`; hiding it behind a helper
-  is not a qualified workaround.
+  is not a qualified workaround. A module-local free function named `Say` is
+  likewise rejected so it cannot impersonate the proven dialog separator.
 - Putting more than 20 immediate choices in one submenu, or changing the child
   layout of a vanilla submenu that already uses all 20 slots. A large tree can
   use further action-bearing submenu levels, but one menu cannot gain a 21st
@@ -415,8 +419,8 @@ stand in for the proven `Say` separator.
 Source checking, strict standalone compilation, script-only bundle inspection,
 deployment and runtime now cover the anchored first-conversation edit and an
 all-new multi-level tree. The Guard fixture opened automatically, spoke a
-shipped line, rendered two wholly new choices and returned control after the
-first was selected. The generated bundle contains no UE4SS component; native
+shipped line, rendered and selected both wholly new nested choices in sequence,
+then returned control. The generated bundle contains no UE4SS component; native
 discovery comes from residence in the already-loaded settings module.
 
 ## Package and deploy

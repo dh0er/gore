@@ -258,10 +258,7 @@ fn resolve_member(instruction: &Instr, refs: &RefResolver) -> Option<String> {
 }
 
 fn is_call(instruction: &Instr) -> bool {
-    matches!(
-        instruction.op.name,
-        "CALL" | "CALLBND" | "CALLINTF" | "CALLSYS"
-    )
+    instruction.op.is_call()
 }
 
 fn call_symbol(instruction: &Instr, refs: &RefResolver) -> Option<String> {
