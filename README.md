@@ -49,7 +49,7 @@ use the game's embedded compiler as a fallback.
 |---|---|---|
 | **CLI** | 0.2.3 | [gore-cli-v0.2.3](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.2.3) |
 | **Mod Manager** | 0.2.0 | [gore-mod-manager-v0.2.0](https://github.com/dh0er/gore/releases/tag/gore-mod-manager-v0.2.0) |
-| **Save Editor** | 1.3.0 | [gore-save-editor-v1.3.0](https://github.com/dh0er/gore/releases/tag/gore-save-editor-v1.3.0) |
+| **Save Editor** | 1.4.0 | [gore-save-editor-v1.4.0](https://github.com/dh0er/gore/releases/tag/gore-save-editor-v1.4.0) |
 
 Every release page lists its own assets and changes. The full history is on the
 [releases page](https://github.com/dh0er/gore/releases). Mod Studio has no
