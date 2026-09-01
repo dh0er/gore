@@ -891,46 +891,60 @@ class AppLocalizationsJa extends AppLocalizations {
   }
 
   @override
+  String get itemTooltipIngredientFor => '素材';
+
+  @override
+  String itemTooltipTeaches(String item) {
+    return '習得: $item';
+  }
+
+  @override
+  String get itemTooltipValue => '価値';
+
+  @override
+  String get itemTooltipProtection => '防御';
+
+  @override
+  String get itemTooltipRequirements => '必要条件:';
+
+  @override
+  String get itemTooltipManaCost => 'マナ消費';
+
+  @override
+  String get itemTooltipManaUpkeep => 'チャージマナ消費';
+
+  @override
+  String get itemCategoryAll => 'すべて';
+
+  @override
   String get itemCategoryMeleeWeapon => '近接武器';
 
   @override
-  String get itemCategoryRangedWeapon => '遠隔武器';
+  String get itemCategoryRangedWeapon => '遠距離武器';
 
   @override
-  String get itemCategoryAmmunition => '弾薬';
+  String get itemCategoryMagic => '魔法';
 
   @override
-  String get itemCategoryArmor => '鎧';
+  String get itemCategoryWearable => '装備品';
 
   @override
-  String get itemCategoryRune => 'ルーン';
+  String get itemCategoryFood => '食料';
 
   @override
-  String get itemCategoryScroll => '呪文の巻物';
+  String get itemCategoryPotion => 'ポーション';
 
   @override
-  String get itemCategoryFood => '食料・ポーション';
+  String get itemCategoryMaterial => '素材';
 
   @override
-  String get itemCategoryMisc => 'その他雑貨';
+  String get itemCategoryDocument => '書物';
 
   @override
-  String get itemCategoryAmulet => 'アミュレット';
+  String get itemCategoryMisc => 'その他';
 
   @override
-  String get itemCategoryRing => '指輪';
-
-  @override
-  String get itemCategoryTrophy => '動物の戦利品';
-
-  @override
-  String get itemCategoryWriting => '書物';
-
-  @override
-  String get itemCategoryMission => 'クエストアイテム';
-
-  @override
-  String get itemCategoryKey => '鍵';
+  String get itemCategoryArtefact => 'アーティファクト';
 
   @override
   String get itemCategoryOther => 'その他';
@@ -1741,7 +1755,7 @@ class AppLocalizationsJa extends AppLocalizations {
       'ダイビングを習得すると、ゲームはセーブデータを読み込むたびに息とその回復をスキル側の値に戻します。毎秒の消費量は設定したまま残ります。';
 
   @override
-  String get heroGroupSleep => '睡眠と休息';
+  String get heroGroupSleep => '睡眠';
 
   @override
   String get heroGroupIntoxication => '酩酊';
@@ -1831,6 +1845,18 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get glossaryFilterTeachers => '教師';
+
+  @override
+  String get roleTrader => '商人';
+
+  @override
+  String get roleDead => '死亡';
+
+  @override
+  String get roleTeacher => '教師';
+
+  @override
+  String get roleArmorer => '防具職人';
 
   @override
   String get glossaryFilterArmorers => '防具職人';
@@ -2050,6 +2076,10 @@ class AppLocalizationsJa extends AppLocalizations {
       'SwampweedDepletionRate': '酔いが抜ける速さ',
       'XPExecutedBounty': 'とどめで得る経験値',
       'XPKillOrDefeatBounty': '撃破で得る経験値',
+      'Level': 'レベル',
+      'LockpickDurability': 'ピックの耐久',
+      'LockpickPrecision': 'ピックの精度',
+      'PickPocketing': 'スリ',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -2083,6 +2113,10 @@ class AppLocalizationsJa extends AppLocalizations {
       'XPExecutedBounty': 'すでに倒れて動けないこのキャラクターに、とどめを刺して得られる経験値。',
       'XPKillOrDefeatBounty':
           'このキャラクターを打ち倒したときに得られる経験値で、そのまま死んでも気絶して倒れただけでも入る。',
+      'Level': 'キャラクターのレベル。経験値で上がり、学習ポイントを与える。',
+      'LockpickDurability': '鍵開けスキルで決まる: 未習得2、習得4、熟練6。',
+      'LockpickPrecision': '鍵開けスキルで決まる: 未習得0、習得1、熟練2。',
+      'PickPocketing': 'スリスキルで決まる: 未習得-30、習得-10、熟練+10。',
       'other': '?',
     });
     return '$_temp0';

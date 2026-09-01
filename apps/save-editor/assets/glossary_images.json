@@ -1,0 +1,1539 @@
+{
+ "schema": 1,
+ "images": {
+  "Document_Glossary_AbandonedMine": {
+   "kind": "Locations",
+   "name": "AbandonedMine"
+  },
+  "Document_Glossary_BC_BAN_ARLIN": {
+   "kind": "Characters",
+   "name": "Arlin"
+  },
+  "Document_Glossary_BC_BAN_BRANNOK": {
+   "kind": "Characters",
+   "name": "Brannok"
+  },
+  "Document_Glossary_BC_BAN_QUENTIN": {
+   "kind": "Characters",
+   "name": "Quentin"
+  },
+  "Document_Glossary_BC_BAN_TORIK": {
+   "kind": "Characters",
+   "name": "Torik"
+  },
+  "Document_Glossary_BanditsCamp": {
+   "kind": "Locations",
+   "name": "BanditCamp"
+  },
+  "Document_Glossary_Biter": {
+   "kind": "Creatures",
+   "name": "Biter"
+  },
+  "Document_Glossary_Bloodfly": {
+   "kind": "Creatures",
+   "name": "Bloodfly"
+  },
+  "Document_Glossary_Bloodhound": {
+   "kind": "Creatures",
+   "name": "Bloodhound"
+  },
+  "Document_Glossary_CastleRuins": {
+   "kind": "Locations",
+   "name": "CastleRuins"
+  },
+  "Document_Glossary_Demon": {
+   "kind": "Creatures",
+   "name": "LesserDemon"
+  },
+  "Document_Glossary_DemonLord": {
+   "kind": "Creatures",
+   "name": "DemonLord01"
+  },
+  "Document_Glossary_ExchangeZone": {
+   "kind": "Locations",
+   "name": "ExchangeZone"
+  },
+  "Document_Glossary_FM_OSL_TARROK": {
+   "kind": "Characters",
+   "name": "Tarrok"
+  },
+  "Document_Glossary_FM_SFB_SWINEY": {
+   "kind": "Characters",
+   "name": "Swiney"
+  },
+  "Document_Glossary_FM_SLD_BALORO": {
+   "kind": "Characters",
+   "name": "Baloro"
+  },
+  "Document_Glossary_FM_SLD_OKYL": {
+   "kind": "Characters",
+   "name": "Okyl"
+  },
+  "Document_Glossary_FireDemon": {
+   "kind": "Creatures",
+   "name": "FireDemon"
+  },
+  "Document_Glossary_FireGolem": {
+   "kind": "Creatures",
+   "name": "FireGolem"
+  },
+  "Document_Glossary_FireLizard": {
+   "kind": "Creatures",
+   "name": "FireLizard"
+  },
+  "Document_Glossary_FreeMine": {
+   "kind": "Locations",
+   "name": "FreeMine"
+  },
+  "Document_Glossary_Goblin": {
+   "kind": "Creatures",
+   "name": "Goblin_02"
+  },
+  "Document_Glossary_Harpy": {
+   "kind": "Creatures",
+   "name": "Harpy"
+  },
+  "Document_Glossary_IceGolem": {
+   "kind": "Creatures",
+   "name": "Ice_Golem"
+  },
+  "Document_Glossary_Lizard": {
+   "kind": "Creatures",
+   "name": "Lizard"
+  },
+  "Document_Glossary_Lurker": {
+   "kind": "Creatures",
+   "name": "Lurker"
+  },
+  "Document_Glossary_Meatbug": {
+   "kind": "Creatures",
+   "name": "Meatbug"
+  },
+  "Document_Glossary_Minecrawler": {
+   "kind": "Creatures",
+   "name": "Crawler"
+  },
+  "Document_Glossary_Molerat": {
+   "kind": "Creatures",
+   "name": "Molerat"
+  },
+  "Document_Glossary_MonasteryRuins": {
+   "kind": "Locations",
+   "name": "MonasteryRuins"
+  },
+  "Document_Glossary_MountainFortress": {
+   "kind": "Locations",
+   "name": "MountainFortress"
+  },
+  "Document_Glossary_NC_BAU_HOMER": {
+   "kind": "Characters",
+   "name": "Homer"
+  },
+  "Document_Glossary_NC_BAU_HORATIO": {
+   "kind": "Characters",
+   "name": "Horatio"
+  },
+  "Document_Glossary_NC_BAU_JAN": {
+   "kind": "Characters",
+   "name": "Jan"
+  },
+  "Document_Glossary_NC_BAU_JEREMIAH": {
+   "kind": "Characters",
+   "name": "Jeremiah"
+  },
+  "Document_Glossary_NC_BAU_MALON": {
+   "kind": "Characters",
+   "name": "Malon"
+  },
+  "Document_Glossary_NC_BAU_POCK": {
+   "kind": "Characters",
+   "name": "Pock"
+  },
+  "Document_Glossary_NC_BAU_RAYK": {
+   "kind": "Characters",
+   "name": "Rayk"
+  },
+  "Document_Glossary_NC_BAU_RICELORD": {
+   "kind": "Characters",
+   "name": "Ricelord"
+  },
+  "Document_Glossary_NC_BAU_RUFUS": {
+   "kind": "Characters",
+   "name": "Rufus"
+  },
+  "Document_Glossary_NC_KDW_CRONOS": {
+   "kind": "Characters",
+   "name": "Cronos"
+  },
+  "Document_Glossary_NC_KDW_MERDARION": {
+   "kind": "Characters",
+   "name": "Merdarion"
+  },
+  "Document_Glossary_NC_KDW_MYXIR": {
+   "kind": "Characters",
+   "name": "Myxir"
+  },
+  "Document_Glossary_NC_KDW_NEFARIUS": {
+   "kind": "Characters",
+   "name": "Nefarius"
+  },
+  "Document_Glossary_NC_KDW_RIORDIAN": {
+   "kind": "Characters",
+   "name": "Riordian"
+  },
+  "Document_Glossary_NC_KDW_SATURAS": {
+   "kind": "Characters",
+   "name": "Saturnas"
+  },
+  "Document_Glossary_NC_NOV_BAALISIDRO": {
+   "kind": "Characters",
+   "name": "BaalIsidro"
+  },
+  "Document_Glossary_NC_NOV_BAALKAGAN": {
+   "kind": "Characters",
+   "name": "BaalKagan"
+  },
+  "Document_Glossary_NC_ORG_BUSTER": {
+   "kind": "Characters",
+   "name": "Buster"
+  },
+  "Document_Glossary_NC_ORG_BUTCH": {
+   "kind": "Characters",
+   "name": "Butch"
+  },
+  "Document_Glossary_NC_ORG_CIPHER": {
+   "kind": "Characters",
+   "name": "Cipher"
+  },
+  "Document_Glossary_NC_ORG_DRAX": {
+   "kind": "Characters",
+   "name": "Drax"
+  },
+  "Document_Glossary_NC_ORG_LARES": {
+   "kind": "Characters",
+   "name": "Lares"
+  },
+  "Document_Glossary_NC_ORG_LEFTY": {
+   "kind": "Characters",
+   "name": "Lefty"
+  },
+  "Document_Glossary_NC_ORG_RATFORD": {
+   "kind": "Characters",
+   "name": "Ratford"
+  },
+  "Document_Glossary_NC_ORG_ROSCOE": {
+   "kind": "Characters",
+   "name": "Roscoe"
+  },
+  "Document_Glossary_NC_ORG_SHARKY": {
+   "kind": "Characters",
+   "name": "Sharky"
+  },
+  "Document_Glossary_NC_ORG_SHRIKE": {
+   "kind": "Characters",
+   "name": "Shrike"
+  },
+  "Document_Glossary_NC_ORG_SILAS": {
+   "kind": "Characters",
+   "name": "Silas"
+  },
+  "Document_Glossary_NC_ORG_ULMAR": {
+   "kind": "Characters",
+   "name": "Ulmar"
+  },
+  "Document_Glossary_NC_ORG_WEDGE": {
+   "kind": "Characters",
+   "name": "Wedge"
+  },
+  "Document_Glossary_NC_ORG_WOLF": {
+   "kind": "Characters",
+   "name": "CWolf"
+  },
+  "Document_Glossary_NC_SFB_SENYAN": {
+   "kind": "Characters",
+   "name": "Senyan"
+  },
+  "Document_Glossary_NC_SLD_CORD": {
+   "kind": "Characters",
+   "name": "Cord"
+  },
+  "Document_Glossary_NC_SLD_GORN": {
+   "kind": "Characters",
+   "name": "Gorn"
+  },
+  "Document_Glossary_NC_SLD_HAENNO": {
+   "kind": "Characters",
+   "name": "Haenno"
+  },
+  "Document_Glossary_NC_SLD_JARVIS": {
+   "kind": "Characters",
+   "name": "Jarvis"
+  },
+  "Document_Glossary_NC_SLD_LEE": {
+   "kind": "Characters",
+   "name": "Lee"
+  },
+  "Document_Glossary_NC_SLD_TORLOF": {
+   "kind": "Characters",
+   "name": "Torlof"
+  },
+  "Document_Glossary_NewCamp": {
+   "kind": "Locations",
+   "name": "NewCamp"
+  },
+  "Document_Glossary_OCR_GRD_BLOODWYN": {
+   "kind": "Characters",
+   "name": "Bloodwyn"
+  },
+  "Document_Glossary_OCR_GRD_SCATTY": {
+   "kind": "Characters",
+   "name": "Scatty"
+  },
+  "Document_Glossary_OCR_GRD_SKIP": {
+   "kind": "Characters",
+   "name": "Skip"
+  },
+  "Document_Glossary_OCR_GRD_STONE": {
+   "kind": "Characters",
+   "name": "Stone"
+  },
+  "Document_Glossary_OC_EBR_ARTO": {
+   "kind": "Characters",
+   "name": "Arto"
+  },
+  "Document_Glossary_OC_EBR_BARTHOLO": {
+   "kind": "Characters",
+   "name": "Bartholo"
+  },
+  "Document_Glossary_OC_EBR_GOMEZ": {
+   "kind": "Characters",
+   "name": "Gomez"
+  },
+  "Document_Glossary_OC_EBR_RAVEN": {
+   "kind": "Characters",
+   "name": "Raven"
+  },
+  "Document_Glossary_OC_EBR_SCAR": {
+   "kind": "Characters",
+   "name": "Scar"
+  },
+  "Document_Glossary_OC_GRD_BULLIT": {
+   "kind": "Characters",
+   "name": "Bullit"
+  },
+  "Document_Glossary_OC_GRD_CUTTER": {
+   "kind": "Characters",
+   "name": "Cutter"
+  },
+  "Document_Glossary_OC_GRD_FLETCHER": {
+   "kind": "Characters",
+   "name": "Fletcher"
+  },
+  "Document_Glossary_OC_GRD_JACKAL": {
+   "kind": "Characters",
+   "name": "Jackal"
+  },
+  "Document_Glossary_OC_GRD_KIRGO": {
+   "kind": "Characters",
+   "name": "Kirgo"
+  },
+  "Document_Glossary_OC_GRD_ORRY": {
+   "kind": "Characters",
+   "name": "Orry"
+  },
+  "Document_Glossary_OC_GRD_PACHO": {
+   "kind": "Characters",
+   "name": "Pacho"
+  },
+  "Document_Glossary_OC_GRD_SCORPIO": {
+   "kind": "Characters",
+   "name": "Scorpio"
+  },
+  "Document_Glossary_OC_GRD_THORUS": {
+   "kind": "Characters",
+   "name": "Thorus"
+  },
+  "Document_Glossary_OC_KDF_CORRISTO": {
+   "kind": "Characters",
+   "name": "Corristo"
+  },
+  "Document_Glossary_OC_KDF_DAMAROK": {
+   "kind": "Characters",
+   "name": "Damarok"
+  },
+  "Document_Glossary_OC_KDF_DRAGO": {
+   "kind": "Characters",
+   "name": "Drago"
+  },
+  "Document_Glossary_OC_KDF_MILTEN": {
+   "kind": "Characters",
+   "name": "Milten"
+  },
+  "Document_Glossary_OC_KDF_RODRIGUEZ": {
+   "kind": "Characters",
+   "name": "Rodriguez"
+  },
+  "Document_Glossary_OC_KDF_TORREZ": {
+   "kind": "Characters",
+   "name": "Torrez"
+  },
+  "Document_Glossary_OC_NOV_BAALPARVEZ": {
+   "kind": "Characters",
+   "name": "BaalParvez"
+  },
+  "Document_Glossary_OC_NOV_BAALTARAN": {
+   "kind": "Characters",
+   "name": "BaalTaran"
+  },
+  "Document_Glossary_OC_ORG_MORDRAG": {
+   "kind": "Characters",
+   "name": "Mordrag"
+  },
+  "Document_Glossary_OC_SLD_KHARIM": {
+   "kind": "Characters",
+   "name": "Kharim"
+  },
+  "Document_Glossary_OC_STT_DEXTER": {
+   "kind": "Characters",
+   "name": "Dexter"
+  },
+  "Document_Glossary_OC_STT_DIEGO": {
+   "kind": "Characters",
+   "name": "Diego"
+  },
+  "Document_Glossary_OC_STT_FINGERS": {
+   "kind": "Characters",
+   "name": "Fingers"
+  },
+  "Document_Glossary_OC_STT_FISK": {
+   "kind": "Characters",
+   "name": "Fisk"
+  },
+  "Document_Glossary_OC_STT_SLY": {
+   "kind": "Characters",
+   "name": "Sly"
+  },
+  "Document_Glossary_OC_STT_Whistler": {
+   "kind": "Characters",
+   "name": "Whistler"
+  },
+  "Document_Glossary_OC_VLK_DUSTY": {
+   "kind": "Characters",
+   "name": "Dusty"
+  },
+  "Document_Glossary_OC_VLK_GRAHAM": {
+   "kind": "Characters",
+   "name": "Graham"
+  },
+  "Document_Glossary_OC_VLK_GRAVO": {
+   "kind": "Characters",
+   "name": "Gravo"
+  },
+  "Document_Glossary_OC_VLK_GRIM": {
+   "kind": "Characters",
+   "name": "Grim"
+  },
+  "Document_Glossary_OC_VLK_GUY": {
+   "kind": "Characters",
+   "name": "Guy"
+  },
+  "Document_Glossary_OC_VLK_HEREK": {
+   "kind": "Characters",
+   "name": "Herek"
+  },
+  "Document_Glossary_OC_VLK_HUNO": {
+   "kind": "Characters",
+   "name": "Huno"
+  },
+  "Document_Glossary_OC_VLK_JESSE": {
+   "kind": "Characters",
+   "name": "Jesse"
+  },
+  "Document_Glossary_OC_VLK_KYLE": {
+   "kind": "Characters",
+   "name": "Kyle"
+  },
+  "Document_Glossary_OC_VLK_MUD": {
+   "kind": "Characters",
+   "name": "Mud"
+  },
+  "Document_Glossary_OC_VLK_SNAF": {
+   "kind": "Characters",
+   "name": "Snaf"
+  },
+  "Document_Glossary_OC_WOC_SERAPHIA": {
+   "kind": "Characters",
+   "name": "Seraphia"
+  },
+  "Document_Glossary_OC_WOC_SYRA": {
+   "kind": "Characters",
+   "name": "Syra"
+  },
+  "Document_Glossary_OC_WOC_VELAYA": {
+   "kind": "Characters",
+   "name": "Velaya"
+  },
+  "Document_Glossary_OG_GUR_BAALLUKOR": {
+   "kind": "Characters",
+   "name": "BaalLukor"
+  },
+  "Document_Glossary_OG_TPL_GORNAZAR": {
+   "kind": "Characters",
+   "name": "GorNazar"
+  },
+  "Document_Glossary_OM_GRD_AARON": {
+   "kind": "Characters",
+   "name": "Aaron"
+  },
+  "Document_Glossary_OM_GRD_ASGHAN": {
+   "kind": "Characters",
+   "name": "Asgha"
+  },
+  "Document_Glossary_OM_GRD_BRANDICK": {
+   "kind": "Characters",
+   "name": "Brandick"
+  },
+  "Document_Glossary_OM_GRD_DRAKE": {
+   "kind": "Characters",
+   "name": "Drake"
+  },
+  "Document_Glossary_OM_GRD_ULBERT": {
+   "kind": "Characters",
+   "name": "Ulbert"
+  },
+  "Document_Glossary_OM_STT_ALBERTO": {
+   "kind": "Characters",
+   "name": "Alberto"
+  },
+  "Document_Glossary_OM_STT_IAN": {
+   "kind": "Characters",
+   "name": "Ian"
+  },
+  "Document_Glossary_OM_STT_SANTINO": {
+   "kind": "Characters",
+   "name": "Santino"
+  },
+  "Document_Glossary_OM_STT_VIPER": {
+   "kind": "Characters",
+   "name": "Viper"
+  },
+  "Document_Glossary_OM_TPL_GORNABAR": {
+   "kind": "Characters",
+   "name": "GorNabar"
+  },
+  "Document_Glossary_OM_TPL_GORNAKOSH": {
+   "kind": "Characters",
+   "name": "GorNakosh"
+  },
+  "Document_Glossary_OM_TPL_GORNAVID": {
+   "kind": "Characters",
+   "name": "GorNavid"
+  },
+  "Document_Glossary_OM_VLK_ALEPH": {
+   "kind": "Characters",
+   "name": "Aleph"
+  },
+  "Document_Glossary_OM_VLK_GARP": {
+   "kind": "Characters",
+   "name": "Garp"
+  },
+  "Document_Glossary_OM_VLK_GLEN": {
+   "kind": "Characters",
+   "name": "Glen"
+  },
+  "Document_Glossary_OM_VLK_GRIMES": {
+   "kind": "Characters",
+   "name": "Grimes"
+  },
+  "Document_Glossary_OM_VLK_SNIPES": {
+   "kind": "Characters",
+   "name": "Snipes"
+  },
+  "Document_Glossary_OW_OPS_MUK": {
+   "kind": "Characters",
+   "name": "Muk"
+  },
+  "Document_Glossary_OW_OPS_UMAKHAL": {
+   "kind": "Characters",
+   "name": "Umakhal"
+  },
+  "Document_Glossary_OW_OSM_URNAZKROG": {
+   "kind": "Characters",
+   "name": "Urnazkrog"
+  },
+  "Document_Glossary_OW_OWR_CHOKTA": {
+   "kind": "Characters",
+   "name": "Chokta"
+  },
+  "Document_Glossary_OW_OWR_GRAZKRAK": {
+   "kind": "Characters",
+   "name": "Grazkrak"
+  },
+  "Document_Glossary_OW_OWR_KRASHOK": {
+   "kind": "Characters",
+   "name": "Krashok"
+  },
+  "Document_Glossary_OW_OWR_TOCHURNAGG": {
+   "kind": "Characters",
+   "name": "Tochurnagg"
+  },
+  "Document_Glossary_OW_OWR_UMOSH": {
+   "kind": "Characters",
+   "name": "Umosh"
+  },
+  "Document_Glossary_OldCamp": {
+   "kind": "Locations",
+   "name": "OldCamp"
+  },
+  "Document_Glossary_OldMine": {
+   "kind": "Locations",
+   "name": "OldMine"
+  },
+  "Document_Glossary_OrcDog": {
+   "kind": "Creatures",
+   "name": "Orcdog"
+  },
+  "Document_Glossary_OrcEnclave": {
+   "kind": "Locations",
+   "name": "OrcEnclave"
+  },
+  "Document_Glossary_OrcTerritory": {
+   "kind": "Locations",
+   "name": "OrcTerritory"
+  },
+  "Document_Glossary_Razor": {
+   "kind": "Creatures",
+   "name": "Razor"
+  },
+  "Document_Glossary_SC_GUR_BAALCADAR": {
+   "kind": "Characters",
+   "name": "BaalCadar"
+  },
+  "Document_Glossary_SC_GUR_BAALNAMIB": {
+   "kind": "Characters",
+   "name": "BaalNamib"
+  },
+  "Document_Glossary_SC_GUR_BAALORUN": {
+   "kind": "Characters",
+   "name": "BaalOrun"
+  },
+  "Document_Glossary_SC_GUR_BAALTONDRAL": {
+   "kind": "Characters",
+   "name": "BaalTondral"
+  },
+  "Document_Glossary_SC_GUR_BAALTYON": {
+   "kind": "Characters",
+   "name": "BaalTyon"
+  },
+  "Document_Glossary_SC_GUR_CORANGAR": {
+   "kind": "Characters",
+   "name": "CorAngar"
+  },
+  "Document_Glossary_SC_GUR_CORKALOM": {
+   "kind": "Characters",
+   "name": "CorKalom"
+  },
+  "Document_Glossary_SC_GUR_YBERION": {
+   "kind": "Characters",
+   "name": "YBerion"
+  },
+  "Document_Glossary_SC_NOV_BAALNETBEK": {
+   "kind": "Characters",
+   "name": "BaalNetbek"
+  },
+  "Document_Glossary_SC_NOV_BALOR": {
+   "kind": "Characters",
+   "name": "Balor"
+  },
+  "Document_Glossary_SC_NOV_CAINE": {
+   "kind": "Characters",
+   "name": "Caine"
+  },
+  "Document_Glossary_SC_NOV_DARRION": {
+   "kind": "Characters",
+   "name": "Darrion"
+  },
+  "Document_Glossary_SC_NOV_FORTUNO": {
+   "kind": "Characters",
+   "name": "Fortuno"
+  },
+  "Document_Glossary_SC_NOV_GHORIM": {
+   "kind": "Characters",
+   "name": "Ghorim"
+  },
+  "Document_Glossary_SC_NOV_HARLOK": {
+   "kind": "Characters",
+   "name": "Harlok"
+  },
+  "Document_Glossary_SC_NOV_JORU": {
+   "kind": "Characters",
+   "name": "Joru"
+  },
+  "Document_Glossary_SC_NOV_LESTER": {
+   "kind": "Characters",
+   "name": "Lester"
+  },
+  "Document_Glossary_SC_NOV_NYRAS": {
+   "kind": "Characters",
+   "name": "Nyras"
+  },
+  "Document_Glossary_SC_NOV_SHRAT": {
+   "kind": "Characters",
+   "name": "Shrat"
+  },
+  "Document_Glossary_SC_NOV_TALAS": {
+   "kind": "Characters",
+   "name": "Talas"
+  },
+  "Document_Glossary_SC_NOV_THERON": {
+   "kind": "Characters",
+   "name": "Theron"
+  },
+  "Document_Glossary_SC_NOV_VIRAN": {
+   "kind": "Characters",
+   "name": "Viran"
+  },
+  "Document_Glossary_SC_TPL_GORHANIS": {
+   "kind": "Characters",
+   "name": "GorHanis"
+  },
+  "Document_Glossary_SC_TPL_GORNADRAK": {
+   "kind": "Characters",
+   "name": "GorNadrak"
+  },
+  "Document_Glossary_SC_TPL_GORNADUN": {
+   "kind": "Characters",
+   "name": "GorNadun"
+  },
+  "Document_Glossary_SC_TPL_GORNARAN": {
+   "kind": "Characters",
+   "name": "GorNaran"
+  },
+  "Document_Glossary_SC_TPL_GORNATOTH": {
+   "kind": "Characters",
+   "name": "GorNaToth"
+  },
+  "Document_Glossary_SC_VLK_MELVIN": {
+   "kind": "Characters",
+   "name": "Melvin"
+  },
+  "Document_Glossary_SC_WSC_CHANI": {
+   "kind": "Characters",
+   "name": "Chani"
+  },
+  "Document_Glossary_SC_WSC_NATALIA": {
+   "kind": "Characters",
+   "name": "Natalia"
+  },
+  "Document_Glossary_Scavenger": {
+   "kind": "Creatures",
+   "name": "ScavengerYoung"
+  },
+  "Document_Glossary_Shadowbeast": {
+   "kind": "Creatures",
+   "name": "Shadowbeast"
+  },
+  "Document_Glossary_Skeleton": {
+   "kind": "Creatures",
+   "name": "Skeleton"
+  },
+  "Document_Glossary_SkeletonMage": {
+   "kind": "Creatures",
+   "name": "Skeleton_Mage"
+  },
+  "Document_Glossary_SleeperTemple": {
+   "kind": "Locations",
+   "name": "SleeperTemple"
+  },
+  "Document_Glossary_Snapper": {
+   "kind": "Creatures",
+   "name": "Snapper"
+  },
+  "Document_Glossary_StoneGolem": {
+   "kind": "Creatures",
+   "name": "Stone_Golem"
+  },
+  "Document_Glossary_Stonehenge": {
+   "kind": "Locations",
+   "name": "Stonehenge"
+  },
+  "Document_Glossary_SwampCamp": {
+   "kind": "Locations",
+   "name": "SwampCamp"
+  },
+  "Document_Glossary_Swampshark": {
+   "kind": "Creatures",
+   "name": "Swampshark"
+  },
+  "Document_Glossary_Troll": {
+   "kind": "Creatures",
+   "name": "JuvenileTroll"
+  },
+  "Document_Glossary_TrollCanyon": {
+   "kind": "Locations",
+   "name": "TrollCanyon"
+  },
+  "Document_Glossary_UL_NON_GILBERT": {
+   "kind": "Characters",
+   "name": "Gilbert"
+  },
+  "Document_Glossary_UL_OLS_URSHAK": {
+   "kind": "Characters",
+   "name": "UrShak"
+  },
+  "Document_Glossary_UL_ORG_AIDAN": {
+   "kind": "Characters",
+   "name": "Aidan"
+  },
+  "Document_Glossary_UL_ORG_JACKO": {
+   "kind": "Characters",
+   "name": "Jacko"
+  },
+  "Document_Glossary_UL_ORG_KILLIAN": {
+   "kind": "Characters",
+   "name": "Killian"
+  },
+  "Document_Glossary_UL_ORG_RENYU": {
+   "kind": "Characters",
+   "name": "Renyu"
+  },
+  "Document_Glossary_UL_STT_CAVALORN": {
+   "kind": "Characters",
+   "name": "Cavalorn"
+  },
+  "Document_Glossary_UL_STT_COHSEL": {
+   "kind": "Characters",
+   "name": "Cohsel"
+  },
+  "Document_Glossary_Wolf": {
+   "kind": "Creatures",
+   "name": "Wolf"
+  },
+  "Document_Glossary_XT_DMB_XARDAS": {
+   "kind": "Characters",
+   "name": "Xardas"
+  },
+  "Document_Glossary_XardasSunkenTower": {
+   "kind": "Locations",
+   "name": "XardasSunken"
+  },
+  "Document_Glossary_XardasTower": {
+   "kind": "Locations",
+   "name": "XardasTower"
+  },
+  "Document_Glossary_Zombie": {
+   "kind": "Creatures",
+   "name": "Zombie"
+  }
+ },
+ "artwork": {
+  "Aaron": {
+   "kind": "Characters"
+  },
+  "AbandonedMine": {
+   "kind": "Locations"
+  },
+  "Aidan": {
+   "kind": "Characters"
+  },
+  "Alberto": {
+   "kind": "Characters"
+  },
+  "Aleph": {
+   "kind": "Characters"
+  },
+  "Arlin": {
+   "kind": "Characters"
+  },
+  "Arto": {
+   "kind": "Characters"
+  },
+  "Asgha": {
+   "kind": "Characters"
+  },
+  "BaalCadar": {
+   "kind": "Characters"
+  },
+  "BaalIsidro": {
+   "kind": "Characters"
+  },
+  "BaalKagan": {
+   "kind": "Characters"
+  },
+  "BaalLukor": {
+   "kind": "Characters"
+  },
+  "BaalNamib": {
+   "kind": "Characters"
+  },
+  "BaalNetbek": {
+   "kind": "Characters"
+  },
+  "BaalOrun": {
+   "kind": "Characters"
+  },
+  "BaalParvez": {
+   "kind": "Characters"
+  },
+  "BaalTaran": {
+   "kind": "Characters"
+  },
+  "BaalTondral": {
+   "kind": "Characters"
+  },
+  "BaalTyon": {
+   "kind": "Characters"
+  },
+  "Balam": {
+   "kind": "Characters"
+  },
+  "Balor": {
+   "kind": "Characters"
+  },
+  "Baloro": {
+   "kind": "Characters"
+  },
+  "BanditCamp": {
+   "kind": "Locations"
+  },
+  "Bartholo": {
+   "kind": "Characters"
+  },
+  "Biter": {
+   "kind": "Creatures"
+  },
+  "Blackmailer": {
+   "kind": "Characters"
+  },
+  "Blade": {
+   "kind": "Characters"
+  },
+  "Bloodfly": {
+   "kind": "Creatures"
+  },
+  "Bloodhound": {
+   "kind": "Creatures"
+  },
+  "Bloodwyn": {
+   "kind": "Characters"
+  },
+  "Brandick": {
+   "kind": "Characters"
+  },
+  "Brannok": {
+   "kind": "Characters"
+  },
+  "Bruce": {
+   "kind": "Characters"
+  },
+  "Bullit": {
+   "kind": "Characters"
+  },
+  "Buster": {
+   "kind": "Characters"
+  },
+  "Butch": {
+   "kind": "Characters"
+  },
+  "CWolf": {
+   "kind": "Characters"
+  },
+  "Caine": {
+   "kind": "Characters"
+  },
+  "CastleRuins": {
+   "kind": "Locations"
+  },
+  "Cavalorn": {
+   "kind": "Characters"
+  },
+  "Chani": {
+   "kind": "Characters"
+  },
+  "Chokta": {
+   "kind": "Characters"
+  },
+  "Cipher": {
+   "kind": "Characters"
+  },
+  "CoBlackmailer": {
+   "kind": "Characters"
+  },
+  "Cohsel": {
+   "kind": "Characters"
+  },
+  "CorAngar": {
+   "kind": "Characters"
+  },
+  "CorKalom": {
+   "kind": "Characters"
+  },
+  "Cord": {
+   "kind": "Characters"
+  },
+  "Corristo": {
+   "kind": "Characters"
+  },
+  "Crawler": {
+   "kind": "Creatures"
+  },
+  "Crawler_Queen": {
+   "kind": "Creatures"
+  },
+  "Crawler_Temple": {
+   "kind": "Creatures"
+  },
+  "Crawler_Warrior": {
+   "kind": "Creatures"
+  },
+  "Cronos": {
+   "kind": "Characters"
+  },
+  "Cutter": {
+   "kind": "Characters"
+  },
+  "Damarok": {
+   "kind": "Characters"
+  },
+  "Darrion": {
+   "kind": "Characters"
+  },
+  "DemonKalom": {
+   "kind": "Creatures"
+  },
+  "DemonLord01": {
+   "kind": "Creatures"
+  },
+  "DemonLord02": {
+   "kind": "Creatures"
+  },
+  "DemonLord03": {
+   "kind": "Creatures"
+  },
+  "DemonLord04": {
+   "kind": "Creatures"
+  },
+  "Dexter": {
+   "kind": "Characters"
+  },
+  "Diego": {
+   "kind": "Characters"
+  },
+  "Drago": {
+   "kind": "Characters"
+  },
+  "Drake": {
+   "kind": "Characters"
+  },
+  "Drax": {
+   "kind": "Characters"
+  },
+  "Dusty": {
+   "kind": "Characters"
+  },
+  "EggSac": {
+   "kind": "Creatures"
+  },
+  "ExchangeZone": {
+   "kind": "Locations"
+  },
+  "Fingers": {
+   "kind": "Characters"
+  },
+  "FireDemon": {
+   "kind": "Creatures"
+  },
+  "FireGolem": {
+   "kind": "Creatures"
+  },
+  "FireLizard": {
+   "kind": "Creatures"
+  },
+  "FireLizardPrime": {
+   "kind": "Creatures"
+  },
+  "Fisk": {
+   "kind": "Characters"
+  },
+  "Fletcher": {
+   "kind": "Characters"
+  },
+  "Fortuno": {
+   "kind": "Characters"
+  },
+  "FreeMine": {
+   "kind": "Locations"
+  },
+  "Garp": {
+   "kind": "Characters"
+  },
+  "Ghorim": {
+   "kind": "Characters"
+  },
+  "Gilbert": {
+   "kind": "Characters"
+  },
+  "Glen": {
+   "kind": "Characters"
+  },
+  "Goblin_01": {
+   "kind": "Creatures"
+  },
+  "Goblin_02": {
+   "kind": "Creatures"
+  },
+  "Goblin_03": {
+   "kind": "Creatures"
+  },
+  "Gomez": {
+   "kind": "Characters"
+  },
+  "GorBoba": {
+   "kind": "Characters"
+  },
+  "GorHanis": {
+   "kind": "Characters"
+  },
+  "GorNaToth": {
+   "kind": "Characters"
+  },
+  "GorNabar": {
+   "kind": "Characters"
+  },
+  "GorNadrak": {
+   "kind": "Characters"
+  },
+  "GorNadun": {
+   "kind": "Characters"
+  },
+  "GorNakosh": {
+   "kind": "Characters"
+  },
+  "GorNaran": {
+   "kind": "Characters"
+  },
+  "GorNavid": {
+   "kind": "Characters"
+  },
+  "GorNazar": {
+   "kind": "Characters"
+  },
+  "Gorn": {
+   "kind": "Characters"
+  },
+  "Graham": {
+   "kind": "Characters"
+  },
+  "Gravo": {
+   "kind": "Characters"
+  },
+  "Grazkrak": {
+   "kind": "Characters"
+  },
+  "Grim": {
+   "kind": "Characters"
+  },
+  "Grimes": {
+   "kind": "Characters"
+  },
+  "Guy": {
+   "kind": "Characters"
+  },
+  "Haenno": {
+   "kind": "Characters"
+  },
+  "Harlok": {
+   "kind": "Characters"
+  },
+  "Harpy": {
+   "kind": "Creatures"
+  },
+  "Herek": {
+   "kind": "Characters"
+  },
+  "Homer": {
+   "kind": "Characters"
+  },
+  "Horatio": {
+   "kind": "Characters"
+  },
+  "Huno": {
+   "kind": "Characters"
+  },
+  "Ian": {
+   "kind": "Characters"
+  },
+  "Ice_Golem": {
+   "kind": "Creatures"
+  },
+  "Jackal": {
+   "kind": "Characters"
+  },
+  "Jacko": {
+   "kind": "Characters"
+  },
+  "Jan": {
+   "kind": "Characters"
+  },
+  "Jarvis": {
+   "kind": "Characters"
+  },
+  "Jeremiah": {
+   "kind": "Characters"
+  },
+  "Jesse": {
+   "kind": "Characters"
+  },
+  "Joru": {
+   "kind": "Characters"
+  },
+  "JuvenileTroll": {
+   "kind": "Creatures"
+  },
+  "Kharim": {
+   "kind": "Characters"
+  },
+  "Killian": {
+   "kind": "Characters"
+  },
+  "Kirgo": {
+   "kind": "Characters"
+  },
+  "Krashok": {
+   "kind": "Characters"
+  },
+  "Kyle": {
+   "kind": "Characters"
+  },
+  "Lares": {
+   "kind": "Characters"
+  },
+  "Lee": {
+   "kind": "Characters"
+  },
+  "Lefty": {
+   "kind": "Characters"
+  },
+  "LesserDemon": {
+   "kind": "Creatures"
+  },
+  "Lester": {
+   "kind": "Characters"
+  },
+  "Lizard": {
+   "kind": "Creatures"
+  },
+  "Lurker": {
+   "kind": "Creatures"
+  },
+  "MadCorKalom": {
+   "kind": "Characters"
+  },
+  "Malon": {
+   "kind": "Characters"
+  },
+  "Meatbug": {
+   "kind": "Creatures"
+  },
+  "Melvin": {
+   "kind": "Characters"
+  },
+  "Merdarion": {
+   "kind": "Characters"
+  },
+  "Milten": {
+   "kind": "Characters"
+  },
+  "Molerat": {
+   "kind": "Creatures"
+  },
+  "MonasteryRuins": {
+   "kind": "Locations"
+  },
+  "Mordrag": {
+   "kind": "Characters"
+  },
+  "MountainFortress": {
+   "kind": "Locations"
+  },
+  "Mud": {
+   "kind": "Characters"
+  },
+  "Muk": {
+   "kind": "Characters"
+  },
+  "Myxir": {
+   "kind": "Characters"
+  },
+  "Natalia": {
+   "kind": "Characters"
+  },
+  "Nefarius": {
+   "kind": "Characters"
+  },
+  "Nek": {
+   "kind": "Characters"
+  },
+  "NewCamp": {
+   "kind": "Locations"
+  },
+  "Nyras": {
+   "kind": "Characters"
+  },
+  "Okyl": {
+   "kind": "Characters"
+  },
+  "OldCamp": {
+   "kind": "Locations"
+  },
+  "OldMine": {
+   "kind": "Locations"
+  },
+  "Omid": {
+   "kind": "Characters"
+  },
+  "OrcEnclave": {
+   "kind": "Locations"
+  },
+  "OrcTerritory": {
+   "kind": "Locations"
+  },
+  "Orcdog": {
+   "kind": "Creatures"
+  },
+  "Orik": {
+   "kind": "Characters"
+  },
+  "Orry": {
+   "kind": "Characters"
+  },
+  "Pacho": {
+   "kind": "Characters"
+  },
+  "Pock": {
+   "kind": "Characters"
+  },
+  "Quentin": {
+   "kind": "Characters"
+  },
+  "Ratford": {
+   "kind": "Characters"
+  },
+  "Raven": {
+   "kind": "Characters"
+  },
+  "Rayk": {
+   "kind": "Characters"
+  },
+  "Razor": {
+   "kind": "Creatures"
+  },
+  "Renyu": {
+   "kind": "Characters"
+  },
+  "Ricelord": {
+   "kind": "Characters"
+  },
+  "Riordian": {
+   "kind": "Characters"
+  },
+  "Rodriguez": {
+   "kind": "Characters"
+  },
+  "Roscoe": {
+   "kind": "Characters"
+  },
+  "Rufus": {
+   "kind": "Characters"
+  },
+  "Santino": {
+   "kind": "Characters"
+  },
+  "Saturnas": {
+   "kind": "Characters"
+  },
+  "Scar": {
+   "kind": "Characters"
+  },
+  "Scatty": {
+   "kind": "Characters"
+  },
+  "Scavenger": {
+   "kind": "Creatures"
+  },
+  "ScavengerMed": {
+   "kind": "Creatures"
+  },
+  "ScavengerYoung": {
+   "kind": "Creatures"
+  },
+  "Scorpio": {
+   "kind": "Characters"
+  },
+  "Senyan": {
+   "kind": "Characters"
+  },
+  "Seraphia": {
+   "kind": "Characters"
+  },
+  "Shadowbeast": {
+   "kind": "Creatures"
+  },
+  "ShadowbeastPrime": {
+   "kind": "Creatures"
+  },
+  "Sharky": {
+   "kind": "Characters"
+  },
+  "Shrat": {
+   "kind": "Characters"
+  },
+  "Shrike": {
+   "kind": "Characters"
+  },
+  "Silas": {
+   "kind": "Characters"
+  },
+  "Skeleton": {
+   "kind": "Creatures"
+  },
+  "SkeletonScout": {
+   "kind": "Creatures"
+  },
+  "SkeletonWarrior": {
+   "kind": "Creatures"
+  },
+  "Skeleton_Mage": {
+   "kind": "Creatures"
+  },
+  "Skip": {
+   "kind": "Characters"
+  },
+  "Sleeper": {
+   "kind": "Creatures"
+  },
+  "SleeperTemple": {
+   "kind": "Locations"
+  },
+  "Sly": {
+   "kind": "Characters"
+  },
+  "Snaf": {
+   "kind": "Characters"
+  },
+  "Snapper": {
+   "kind": "Creatures"
+  },
+  "Snipes": {
+   "kind": "Characters"
+  },
+  "Stone": {
+   "kind": "Characters"
+  },
+  "Stone_Golem": {
+   "kind": "Creatures"
+  },
+  "Stonehenge": {
+   "kind": "Locations"
+  },
+  "SwampCamp": {
+   "kind": "Locations"
+  },
+  "Swampshark": {
+   "kind": "Creatures"
+  },
+  "Swiney": {
+   "kind": "Characters"
+  },
+  "Syra": {
+   "kind": "Characters"
+  },
+  "Talas": {
+   "kind": "Characters"
+  },
+  "Tarrok": {
+   "kind": "Characters"
+  },
+  "Theron": {
+   "kind": "Characters"
+  },
+  "Thorus": {
+   "kind": "Characters"
+  },
+  "Tochurnagg": {
+   "kind": "Characters"
+  },
+  "Torik": {
+   "kind": "Characters"
+  },
+  "Torlof": {
+   "kind": "Characters"
+  },
+  "Torrez": {
+   "kind": "Characters"
+  },
+  "Troll": {
+   "kind": "Creatures"
+  },
+  "TrollCanyon": {
+   "kind": "Locations"
+  },
+  "TrollPrime": {
+   "kind": "Creatures"
+  },
+  "Ulbert": {
+   "kind": "Characters"
+  },
+  "Ulmar": {
+   "kind": "Characters"
+  },
+  "Umakhal": {
+   "kind": "Characters"
+  },
+  "Umosh": {
+   "kind": "Characters"
+  },
+  "UrShak": {
+   "kind": "Characters"
+  },
+  "Urnazkrog": {
+   "kind": "Characters"
+  },
+  "Velaya": {
+   "kind": "Characters"
+  },
+  "Viper": {
+   "kind": "Characters"
+  },
+  "Viran": {
+   "kind": "Characters"
+  },
+  "Wedge": {
+   "kind": "Characters"
+  },
+  "Whistler": {
+   "kind": "Characters"
+  },
+  "Wolf": {
+   "kind": "Creatures"
+  },
+  "Xardas": {
+   "kind": "Characters"
+  },
+  "XardasRaven": {
+   "kind": "Creatures"
+  },
+  "XardasSunken": {
+   "kind": "Locations"
+  },
+  "XardasTower": {
+   "kind": "Locations"
+  },
+  "YBerion": {
+   "kind": "Characters"
+  },
+  "Zombie": {
+   "kind": "Creatures"
+  }
+ }
+}

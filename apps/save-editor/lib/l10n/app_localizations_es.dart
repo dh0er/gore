@@ -913,46 +913,60 @@ class AppLocalizationsEs extends AppLocalizations {
   }
 
   @override
+  String get itemTooltipIngredientFor => 'Ingrediente para';
+
+  @override
+  String itemTooltipTeaches(String item) {
+    return 'Enseña: $item';
+  }
+
+  @override
+  String get itemTooltipValue => 'Valor';
+
+  @override
+  String get itemTooltipProtection => 'Protección';
+
+  @override
+  String get itemTooltipRequirements => 'Requisitos:';
+
+  @override
+  String get itemTooltipManaCost => 'Coste de maná';
+
+  @override
+  String get itemTooltipManaUpkeep => 'Coste de maná por carga';
+
+  @override
+  String get itemCategoryAll => 'Todo';
+
+  @override
   String get itemCategoryMeleeWeapon => 'Armas cuerpo a cuerpo';
 
   @override
   String get itemCategoryRangedWeapon => 'Armas a distancia';
 
   @override
-  String get itemCategoryAmmunition => 'Munición';
+  String get itemCategoryMagic => 'Magia';
 
   @override
-  String get itemCategoryArmor => 'Armaduras';
+  String get itemCategoryWearable => 'Equipo';
 
   @override
-  String get itemCategoryRune => 'Runas';
+  String get itemCategoryFood => 'Comida';
 
   @override
-  String get itemCategoryScroll => 'Pergaminos de hechizo';
+  String get itemCategoryPotion => 'Pociones';
 
   @override
-  String get itemCategoryFood => 'Comida y pociones';
+  String get itemCategoryMaterial => 'Materiales';
 
   @override
-  String get itemCategoryMisc => 'Misceláneos';
+  String get itemCategoryDocument => 'Documentos';
 
   @override
-  String get itemCategoryAmulet => 'Amuletos';
+  String get itemCategoryMisc => 'Miscelánea';
 
   @override
-  String get itemCategoryRing => 'Anillos';
-
-  @override
-  String get itemCategoryTrophy => 'Trofeos de animales';
-
-  @override
-  String get itemCategoryWriting => 'Escritos';
-
-  @override
-  String get itemCategoryMission => 'Objetos de misión';
-
-  @override
-  String get itemCategoryKey => 'Llaves';
+  String get itemCategoryArtefact => 'Artefactos';
 
   @override
   String get itemCategoryOther => 'Otros';
@@ -1790,7 +1804,7 @@ class AppLocalizationsEs extends AppLocalizations {
       'Una vez aprendido Buceo, el juego restablece el aire y la recuperación a los valores de la habilidad cada vez que carga la partida. El aire consumido por segundo se mantiene como lo dejes.';
 
   @override
-  String get heroGroupSleep => 'Sueño y descanso';
+  String get heroGroupSleep => 'Sueño';
 
   @override
   String get heroGroupIntoxication => 'Embriaguez';
@@ -1880,6 +1894,18 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get glossaryFilterTeachers => 'Instructores';
+
+  @override
+  String get roleTrader => 'Comerciante';
+
+  @override
+  String get roleDead => 'Muerto';
+
+  @override
+  String get roleTeacher => 'Maestro';
+
+  @override
+  String get roleArmorer => 'Armero';
 
   @override
   String get glossaryFilterArmorers => 'Armeros';
@@ -2104,6 +2130,10 @@ class AppLocalizationsEs extends AppLocalizations {
       'SwampweedDepletionRate': 'Velocidad del bajón',
       'XPExecutedBounty': 'EXP por rematar en el suelo',
       'XPKillOrDefeatBounty': 'EXP por derrotar',
+      'Level': 'Nivel',
+      'LockpickDurability': 'Resistencia de la ganzúa',
+      'LockpickPrecision': 'Precisión de la ganzúa',
+      'PickPocketing': 'Robo de bolsillos',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -2159,6 +2189,14 @@ class AppLocalizationsEs extends AppLocalizations {
           'Experiencia por matar a este personaje cuando ya yace derrotado en el suelo.',
       'XPKillOrDefeatBounty':
           'Experiencia por derribar a este personaje, tanto si muere como si solo queda inconsciente.',
+      'Level':
+          'El nivel del personaje. Sube con la experiencia y otorga puntos de aprendizaje.',
+      'LockpickDurability':
+          'Proviene de la habilidad de forzar cerraduras: 2 sin instrucción, 4 entrenado, 6 maestro.',
+      'LockpickPrecision':
+          'Proviene de la habilidad de forzar cerraduras: 0 sin instrucción, 1 entrenado, 2 maestro.',
+      'PickPocketing':
+          'Proviene de la habilidad de robar bolsillos: -30 sin instrucción, -10 entrenado, +10 maestro.',
       'other': '?',
     });
     return '$_temp0';

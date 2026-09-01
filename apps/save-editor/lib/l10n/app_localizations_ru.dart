@@ -912,46 +912,60 @@ class AppLocalizationsRu extends AppLocalizations {
   }
 
   @override
+  String get itemTooltipIngredientFor => 'Ингредиент для';
+
+  @override
+  String itemTooltipTeaches(String item) {
+    return 'Обучает: $item';
+  }
+
+  @override
+  String get itemTooltipValue => 'Стоимость';
+
+  @override
+  String get itemTooltipProtection => 'Защита';
+
+  @override
+  String get itemTooltipRequirements => 'Требования:';
+
+  @override
+  String get itemTooltipManaCost => 'Расход маны';
+
+  @override
+  String get itemTooltipManaUpkeep => 'Расход маны при зарядке';
+
+  @override
+  String get itemCategoryAll => 'Всё';
+
+  @override
   String get itemCategoryMeleeWeapon => 'Оружие ближнего боя';
 
   @override
   String get itemCategoryRangedWeapon => 'Дальнобойное оружие';
 
   @override
-  String get itemCategoryAmmunition => 'Боеприпасы';
+  String get itemCategoryMagic => 'Магия';
 
   @override
-  String get itemCategoryArmor => 'Броня';
+  String get itemCategoryWearable => 'Одежда и украшения';
 
   @override
-  String get itemCategoryRune => 'Руны';
+  String get itemCategoryFood => 'Еда';
 
   @override
-  String get itemCategoryScroll => 'Свитки заклинаний';
+  String get itemCategoryPotion => 'Зелья';
 
   @override
-  String get itemCategoryFood => 'Еда и зелья';
+  String get itemCategoryMaterial => 'Материалы';
+
+  @override
+  String get itemCategoryDocument => 'Документы';
 
   @override
   String get itemCategoryMisc => 'Разное';
 
   @override
-  String get itemCategoryAmulet => 'Амулеты';
-
-  @override
-  String get itemCategoryRing => 'Кольца';
-
-  @override
-  String get itemCategoryTrophy => 'Трофеи животных';
-
-  @override
-  String get itemCategoryWriting => 'Записи';
-
-  @override
-  String get itemCategoryMission => 'Квестовые предметы';
-
-  @override
-  String get itemCategoryKey => 'Ключи';
+  String get itemCategoryArtefact => 'Артефакты';
 
   @override
   String get itemCategoryOther => 'Прочее';
@@ -1801,7 +1815,7 @@ class AppLocalizationsRu extends AppLocalizations {
       'После изучения ныряния игра при каждой загрузке возвращает запас воздуха и его восстановление к значениям навыка. Расход в секунду остаётся таким, каким вы его зададите.';
 
   @override
-  String get heroGroupSleep => 'Сон и отдых';
+  String get heroGroupSleep => 'Сон';
 
   @override
   String get heroGroupIntoxication => 'Опьянение';
@@ -1891,6 +1905,18 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get glossaryFilterTeachers => 'Учителя';
+
+  @override
+  String get roleTrader => 'Торговец';
+
+  @override
+  String get roleDead => 'Мёртв';
+
+  @override
+  String get roleTeacher => 'Учитель';
+
+  @override
+  String get roleArmorer => 'Бронник';
 
   @override
   String get glossaryFilterArmorers => 'Бронники';
@@ -2115,6 +2141,10 @@ class AppLocalizationsRu extends AppLocalizations {
       'SwampweedDepletionRate': 'Скорость выветривания',
       'XPExecutedBounty': 'Опыт за добивание',
       'XPKillOrDefeatBounty': 'Опыт за победу',
+      'Level': 'Уровень',
+      'LockpickDurability': 'Прочность отмычки',
+      'LockpickPrecision': 'Точность отмычки',
+      'PickPocketing': 'Карманная кража',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -2171,6 +2201,13 @@ class AppLocalizationsRu extends AppLocalizations {
           'Опыт за то, чтобы добить этого персонажа, пока он уже лежит поверженным на земле.',
       'XPKillOrDefeatBounty':
           'Опыт за то, чтобы одолеть этого персонажа: убить его или просто оставить лежать без сознания.',
+      'Level': 'Уровень персонажа. Растёт с опытом и даёт очки обучения.',
+      'LockpickDurability':
+          'Задаётся навыком взлома замков: 2 без подготовки, 4 обучен, 6 мастер.',
+      'LockpickPrecision':
+          'Задаётся навыком взлома замков: 0 без подготовки, 1 обучен, 2 мастер.',
+      'PickPocketing':
+          'Задаётся навыком карманной кражи: -30 без подготовки, -10 обучен, +10 мастер.',
       'other': '?',
     });
     return '$_temp0';

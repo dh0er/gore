@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/app/domain/ui_settings.dart';
+import 'package:goresave/features/editor/ui/game_icon.dart';
+import 'package:goresave/features/editor/ui/glossary_portrait.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
@@ -10,6 +12,8 @@ import 'package:goresave/ui/design/app_theme.dart';
 import '../domain/character_index.dart';
 import '../domain/editor_models.dart';
 import '../domain/editor_notifier.dart';
+import '../domain/game_icons.dart';
+import '../domain/glossary_images.dart';
 import '../domain/glossary_models.dart';
 import '../domain/glossary_npc_catalog.dart';
 import '../domain/glossary_segment_text_catalog.dart';
@@ -403,6 +407,16 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
   bool _documentVisible(_GlossaryDocument document) =>
       document.segments.any(_effectiveSegment);
 
+  /// Whether this entry shows its own artwork rather than the silhouette.
+  ///
+  /// An NPC reveals its portrait through a segment carrying the portrait role,
+  /// the way the game does. Creatures and locations have no roles at all — they
+  /// are not people — so for them the entry counts as discovered once any
+  /// segment is known.
+  bool _artworkVisible(_GlossaryDocument document) => document.isNpc
+      ? _hasEffectiveRole(document, NpcGlossaryRole.portrait)
+      : document.segments.any(_effectiveSegment);
+
   bool _hasEffectiveRole(_GlossaryDocument document, NpcGlossaryRole role) =>
       document.segments.any(
         (segment) => segment.roles.contains(role) && _effectiveSegment(segment),
@@ -758,7 +772,11 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
             selected: _section == section,
             selectedTileColor: widget.theme.colorScheme.primaryContainer,
             selectedColor: widget.theme.colorScheme.primary,
-            leading: Icon(_sectionIcon(section), size: 19),
+            leading: GameIcon(
+              name: _sectionGameIcon(section),
+              fallbackIcon: _sectionIcon(section),
+              size: 19,
+            ),
             title: Text(
               _sectionLabel(l10n, section),
               maxLines: 1,
@@ -785,7 +803,11 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
               value: section,
               child: Row(
                 children: [
-                  Icon(_sectionIcon(section), size: 18),
+                  GameIcon(
+                    name: _sectionGameIcon(section),
+                    fallbackIcon: _sectionIcon(section),
+                    size: 18,
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -1145,24 +1167,31 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
                     final unlockedCount = document.segments
                         .where(_effectiveSegment)
                         .length;
-                    final portraitUnlocked =
-                        document.isNpc &&
-                        _hasEffectiveRole(document, NpcGlossaryRole.portrait);
+                    final portraitUnlocked = _artworkVisible(document);
                     return ListTile(
                       dense: true,
                       selected:
                           _selectedDocumentClass == document.documentClass,
-                      leading: document.isNpc
-                          ? CircleAvatar(
-                              radius: 17,
-                              child: Icon(
-                                portraitUnlocked
-                                    ? Icons.person
-                                    : Icons.person_outline,
-                                size: 20,
-                              ),
-                            )
-                          : Icon(_sectionIcon(document.section)),
+                      // The game's own pencil portrait, and its own silhouette
+                      // while the entry is still locked — which is exactly what
+                      // the player sees for this entry.
+                      leading: GlossaryPortrait(
+                        documentClass: portraitUnlocked
+                            ? document.documentClass
+                            : null,
+                        // A locked entry shows the game's own silhouette on the
+                        // same sheet an unlocked one shows its portrait on.
+                        // An unlocked one the game draws no picture of — the
+                        // tutorials — shows its section's glyph, not that
+                        // silhouette.
+                        standInOnPaper: true,
+                        undrawnGameIcon: gameIconForGlossaryCamp(
+                          document.section.name,
+                        ),
+                        fallbackIcon: document.isNpc
+                            ? Icons.person_outline
+                            : _sectionIcon(document.section),
+                      ),
                       title: Text(
                         document.displayName(catalog, lang),
                         maxLines: 1,
@@ -1287,8 +1316,7 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
     bool showObjectIds,
   ) {
     final name = document.displayName(catalog, lang);
-    final portraitUnlocked =
-        document.isNpc && _hasEffectiveRole(document, NpcGlossaryRole.portrait);
+    final portraitUnlocked = _artworkVisible(document);
     final statusRoles = <NpcGlossaryRole>[
       NpcGlossaryRole.trader,
       NpcGlossaryRole.teacher,
@@ -1302,19 +1330,18 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (document.isNpc) ...[
-              CircleAvatar(
-                radius: 28,
-                child: Icon(
-                  portraitUnlocked ? Icons.person : Icons.person_outline,
-                  size: 34,
-                ),
-              ),
-              const SizedBox(width: 12),
-            ] else ...[
-              Icon(_sectionIcon(document.section), size: 42),
-              const SizedBox(width: 12),
-            ],
+            GlossaryPortrait(
+              documentClass: portraitUnlocked ? document.documentClass : null,
+              size: GlossaryImageSize.banner,
+              width: glossaryBannerWidth,
+              height: glossaryBannerHeight,
+              standInOnPaper: true,
+              undrawnGameIcon: gameIconForGlossaryCamp(document.section.name),
+              fallbackIcon: document.isNpc
+                  ? Icons.person_outline
+                  : _sectionIcon(document.section),
+            ),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1357,7 +1384,11 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
               for (final role in statusRoles)
                 Chip(
                   visualDensity: VisualDensity.compact,
-                  avatar: Icon(_roleIcon(role), size: 16),
+                  avatar: GameIcon(
+                    name: gameIconForNpcRole(role),
+                    fallbackIcon: _roleIcon(role),
+                    size: 16,
+                  ),
                   label: Text(_roleLabel(l10n, role)),
                 ),
               if (_isHostile(document))
@@ -1749,6 +1780,10 @@ class _GlossaryEmptyDetail extends StatelessWidget {
 
 String _segmentKey(String documentClass, String segmentClass) =>
     '$documentClass\u0000$segmentClass';
+
+/// The glyph the game's own glossary puts on this tab.
+String? _sectionGameIcon(_GlossarySection section) =>
+    gameIconForGlossaryCamp(section.name);
 
 IconData _sectionIcon(_GlossarySection section) => switch (section) {
   _GlossarySection.oldCamp => Icons.fort_outlined,

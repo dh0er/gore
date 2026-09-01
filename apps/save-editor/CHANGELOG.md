@@ -8,14 +8,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-08-31
+
 ### Added
 
+- Hovering an item opens a similar card the game opens: name, item type, damage or
+  spell levels, protection, requirements, value and description.
+- The glossary and character lists show the game's own pencil portraits.
+- Attributes explain themselves in the game's own words.
 - Appearance settings now offer Segoe UI, Podkova and Noto Serif as interface
-  fonts. Noto Serif includes dedicated Japanese and Simplified Chinese variants;
-  Podkova remains available for every other supported language.
-- The overview now combines compact save controls with responsive character,
-  quest, combat and inventory statistics. Save deletion includes a restorable
-  backup.
+  fonts.
+- The overview page has been redesigned and now contains some statistics of character,
+  quest, combat and inventory.
+- Savegames can now be deleted.
+
+### Changed
+
+- The inventory is grouped the way the game groups it.
+- Actors sharing a name fold into one expandable row.
+- Items and lots of other UI elements are now replaced with the game's own icons.
+
+### Fixed
+
+- The player's inventory no longer lists the useless fist markers (`HumanFist …`) the
+  engine equips on every character.
+- Characters with no actor behind them in the save are no longer listed.
 
 ## [1.3.1] - 2026-08-26
 

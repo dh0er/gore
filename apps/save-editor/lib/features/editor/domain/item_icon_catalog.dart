@@ -6,10 +6,15 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
+import 'package:goresave/features/editor/domain/glossary_images.dart';
 import 'package:goresave/providers/data_providers.dart';
 import 'package:path/path.dart' as p;
 
 const _maximumItemCount = 4096;
+
+/// Reserved manifest-key prefix for the shared `Common/Icons` UI glyphs.
+/// Mirrors `UI_ICON_KEY_PREFIX` in gore-save.
+const uiIconKeyPrefix = 'ui:';
 const _maximumManifestBytes = 8 * 1024 * 1024;
 const _preparationRetryDelays = [
   Duration(minutes: 1),
@@ -41,6 +46,17 @@ class ItemIconCatalog {
       if (path != null) return path;
     }
     return null;
+  }
+
+  /// Path of a shared game UI glyph (`T_Icon_Mana`, `T_Icon_Resistance_Fire`,
+  /// …), or null when this generation does not carry it. Native publishes the
+  /// glyphs under a reserved `ui:` key so they cannot collide with an item id,
+  /// and it is allowed to omit one the installed build no longer ships — every
+  /// caller therefore needs its own fallback icon.
+  String? uiPathFor(String iconName) {
+    final trimmed = iconName.trim();
+    if (trimmed.isEmpty) return null;
+    return pathByItemId['$uiIconKeyPrefix$trimmed'.toLowerCase()];
   }
 
   @visibleForTesting
@@ -154,6 +170,54 @@ class _ItemIconCatalogRetention {
   String? sourceIdentityReadGamePath;
 }
 
+/// The game root the core actually used when it prepared the item icons.
+///
+/// The configured `game_path` is not necessarily the root: the CLI accepts the
+/// executable and any folder below it, and finds a Steam install on its own
+/// when nothing is configured. The core resolves all of that; this hands the
+/// answer to the Dart side, which otherwise only has the raw setting. Null
+/// until the icons have been prepared once.
+/// The configured game path as last read off disk.
+///
+/// The setting lives in a file the CLI and the other apps rewrite, so a change
+/// to it reaches Riverpod through nothing at all. The resume check pushes what
+/// it read here, which is the same moment the item icons themselves check the
+/// world for changes. Everything keyed to the path hangs off this, so an
+/// unchanged path rebuilds nothing.
+final configuredGamePathProvider = StateProvider<String?>(
+  (ref) => ref.watch(sharedConfigProvider).gamePath(),
+);
+
+final resolvedGameRootProvider = Provider<String?>((ref) {
+  // Reading the catalog is what makes this recompute once preparation lands.
+  ref.watch(itemIconCatalogProvider);
+  final retention = ref.watch(_itemIconCatalogRetentionProvider);
+  // The retained root belongs to the setting it was resolved FROM, and a
+  // failed preparation deliberately keeps the previous one. Once the setting
+  // changes, answering with it would go on reading the old installation for as
+  // long as preparing the new one keeps failing.
+  if (retention.requestedGamePath != ref.watch(configuredGamePathProvider)) {
+    return null;
+  }
+  final resolved = retention.sourceGamePath;
+  return resolved != null && resolved.trim().isNotEmpty ? resolved : null;
+});
+
+/// The root to read loose game files from — the resolved one once the icons
+/// have been prepared, the normalized setting until then.
+///
+/// Held by a provider rather than worked out where it is needed: both halves
+/// touch the disk. Reading the setting opens and parses the shared
+/// `config.json`, and normalizing it probes every ancestor for the story
+/// folder. A character page builds a hundred portraits, so doing that per
+/// portrait meant hundreds of blocking checks on the UI thread for one answer
+/// that only changes when the setting or the preparation does.
+final gameRootProvider = Provider<String?>((ref) {
+  final resolved = ref.watch(resolvedGameRootProvider);
+  if (resolved != null) return resolved;
+  return normalizeGameRoot(ref.watch(configuredGamePathProvider));
+});
+
 final itemIconCatalogRefreshProvider = Provider<ItemIconCatalogRefresh>((ref) {
   final retention = ref.read(_itemIconCatalogRetentionProvider);
   return ItemIconCatalogRefresh._(
@@ -163,6 +227,7 @@ final itemIconCatalogRefreshProvider = Provider<ItemIconCatalogRefresh>((ref) {
     () => ref.read(itemIconCatalogNowProvider)(),
     retention,
     () => ref.read(itemIconCatalogReloadProvider.notifier).state++,
+    (path) => ref.read(configuredGamePathProvider.notifier).state = path,
   );
 });
 
@@ -174,6 +239,7 @@ class ItemIconCatalogRefresh {
     this._now,
     this._retention,
     this._reload,
+    this._observeGamePath,
   );
 
   final GoresaveCoreService Function() _core;
@@ -183,13 +249,25 @@ class ItemIconCatalogRefresh {
   final _ItemIconCatalogRetention _retention;
   final void Function() _reload;
 
+  /// Publishes the path just read off disk to [configuredGamePathProvider],
+  /// which is what everything keyed to the game path hangs off.
+  final void Function(String?) _observeGamePath;
+
   /// Check only source-file metadata on resume. Full PNG verification runs
   /// solely when this identity changed or a previously missing install appears.
   Future<void> refreshIfSourceChanged() async {
+    // Read and publish the setting FIRST, before any of the reasons this can
+    // give up: a load in flight, a core that is not there, an installation
+    // that is momentarily unreadable. Everything the portraits read hangs off
+    // the published path, and each of those exits used to leave it behind.
+    // Comparing against the last PREPARED path would also miss a switch away
+    // and back again, which leaves that path equal while the root cached in
+    // between is another installation.
+    final configuredGamePath = _gamePath();
+    _observeGamePath(configuredGamePath);
     if (_catalogIsLoading()) return;
     final core = _core();
     if (!core.isAvailable) return;
-    final configuredGamePath = _gamePath();
     final selectionChanged = configuredGamePath != _retention.requestedGamePath;
     final retainedSourceDiffersFromRequest =
         _retention.sourceGamePath != _retention.requestedGamePath;
@@ -228,6 +306,9 @@ class ItemIconCatalogRefresh {
 /// manifest. PNG bytes stay on disk and are decoded at widget size by Flutter.
 final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
   ref.watch(itemIconCatalogReloadProvider);
+  // Held before the first await: asking for it again once this load has landed
+  // would be a read on a provider that may already be on its way out.
+  final reloads = ref.read(itemIconCatalogReloadProvider.notifier);
   final retention = ref.read(_itemIconCatalogRetentionProvider);
   final now = ref.read(itemIconCatalogNowProvider);
   final requestSequence = ++retention.requestSequence;
@@ -294,6 +375,12 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
           : null;
       retention.requestedGamePath = gamePath;
     }
+    // The setting could have been rewritten while this load was in flight, and
+    // the resume check that would have seen it gave up because a load was
+    // running. Read it again now rather than leave the old installation
+    // standing until the next resume.
+    final rereadGamePath = ref.read(sharedConfigProvider).gamePath();
+    ref.read(configuredGamePathProvider.notifier).state = rereadGamePath;
     retention.attemptedSourceIdentity = null;
     retention.attemptedRequestedGamePath = null;
     retention.attemptedFailures = 0;
@@ -301,6 +388,24 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
     final previousManifestPath = retention.value?.manifestPath;
     retention.value = catalog;
     requestSucceeded = true;
+    // These icons belong to the installation this load asked for, which is no
+    // longer the one configured. Publishing the new path told the portraits;
+    // the icons need preparing against it, or they stay the old install's
+    // until something else happens to reload them. Next turn, not this one:
+    // asking for a reload while the load it would replace is still completing
+    // throws that completion away and nothing ever finishes.
+    if (rereadGamePath != gamePath) {
+      unawaited(
+        Future<void>.delayed(Duration.zero, () {
+          try {
+            reloads.state++;
+          } catch (_) {
+            // The container went away with the screen that asked. Nothing to
+            // reload into.
+          }
+        }),
+      );
+    }
     if (previousManifestPath != null && previousManifestPath.isNotEmpty) {
       // Publish the new catalog first. Widgets can still paint the retained
       // AsyncData for the rest of this event turn, so release its native lease

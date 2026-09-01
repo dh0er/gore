@@ -249,8 +249,7 @@ void main() {
   );
 
   testWidgets(
-    'an orphan selection shows the no-actor empty state on Events, not the '
-    'select-a-character prompt',
+    'a character with no in-world actor is not offered for selection',
     (tester) async {
       final core = _HeroEventsCoreService();
       await pumpApp(tester, core);
@@ -266,35 +265,15 @@ void main() {
           )
           .length;
       // The player's own events legitimately load in the background (the tab
-      // prefetch). Count from here, so what follows measures only what
-      // selecting the orphan caused.
-      final beforeOrphan = eventsQueries();
+      // prefetch). Count from here.
+      final before = eventsQueries();
 
-      // Select the knowledge-only orphan from the trailing "Other" group.
-      await tester.tap(find.text('Ghostvoice'));
-      await tester.pumpAndSettle();
-
-      await tester.tap(detailTab('Events'));
-      await tester.pumpAndSettle();
-
-      // The Ereignisse pane shows the same clean no-actor empty state
-      // Attribute/Inventar use (the kept-alive Attribute pane shows it too,
-      // hence findsWidgets) — NOT the detail's "select a character" prompt.
-      expect(
-        find.text(
-          'This character has no in-world actor, so it has no attributes, '
-          'inventory, or events.',
-        ),
-        findsWidgets,
-      );
-      expect(find.text('Select a character to see events'), findsNothing);
-      // And no events query was issued for the orphan: it has no GlobalId, so
-      // there is nothing to ask with.
-      expect(
-        eventsQueries(),
-        beforeOrphan,
-        reason: 'selecting the orphan issued an events query',
-      );
+      // The knowledge-only character never spawned, so the list leaves it out
+      // along with the "Other" group that used to hold it — there is no actor
+      // behind it to give attributes, inventory or events.
+      expect(find.text('Ghostvoice'), findsNothing);
+      expect(find.text('Other'), findsNothing);
+      expect(eventsQueries(), before);
     },
   );
 }

@@ -911,46 +911,60 @@ class AppLocalizationsDe extends AppLocalizations {
   }
 
   @override
+  String get itemTooltipIngredientFor => 'Zutat für';
+
+  @override
+  String itemTooltipTeaches(String item) {
+    return 'Lehrt: $item';
+  }
+
+  @override
+  String get itemTooltipValue => 'Wert';
+
+  @override
+  String get itemTooltipProtection => 'Schutz';
+
+  @override
+  String get itemTooltipRequirements => 'Voraussetzung:';
+
+  @override
+  String get itemTooltipManaCost => 'Manakosten';
+
+  @override
+  String get itemTooltipManaUpkeep => 'Mana-Aufladungskosten';
+
+  @override
+  String get itemCategoryAll => 'Alle';
+
+  @override
   String get itemCategoryMeleeWeapon => 'Nahkampfwaffen';
 
   @override
   String get itemCategoryRangedWeapon => 'Fernkampfwaffen';
 
   @override
-  String get itemCategoryAmmunition => 'Munition';
+  String get itemCategoryMagic => 'Magie';
 
   @override
-  String get itemCategoryArmor => 'Rüstungen';
+  String get itemCategoryWearable => 'Kleidung & Schmuck';
 
   @override
-  String get itemCategoryRune => 'Runen';
+  String get itemCategoryFood => 'Nahrung';
 
   @override
-  String get itemCategoryScroll => 'Zauberschriftrollen';
+  String get itemCategoryPotion => 'Tränke';
 
   @override
-  String get itemCategoryFood => 'Essen & Tränke';
+  String get itemCategoryMaterial => 'Materialien';
+
+  @override
+  String get itemCategoryDocument => 'Dokumente';
 
   @override
   String get itemCategoryMisc => 'Verschiedenes';
 
   @override
-  String get itemCategoryAmulet => 'Amulette';
-
-  @override
-  String get itemCategoryRing => 'Ringe';
-
-  @override
-  String get itemCategoryTrophy => 'Tiertrophäen';
-
-  @override
-  String get itemCategoryWriting => 'Schriften';
-
-  @override
-  String get itemCategoryMission => 'Questgegenstände';
-
-  @override
-  String get itemCategoryKey => 'Schlüssel';
+  String get itemCategoryArtefact => 'Artefakte';
 
   @override
   String get itemCategoryOther => 'Sonstiges';
@@ -1789,7 +1803,7 @@ class AppLocalizationsDe extends AppLocalizations {
       'Sobald Tauchen gelernt ist, setzt das Spiel Atemvorrat und Erholung bei jedem Laden auf die Werte der Fähigkeit zurück. Der Verbrauch pro Sekunde bleibt so, wie du ihn einstellst.';
 
   @override
-  String get heroGroupSleep => 'Schlafen & Rasten';
+  String get heroGroupSleep => 'Schlafen';
 
   @override
   String get heroGroupIntoxication => 'Rausch';
@@ -1879,6 +1893,18 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get glossaryFilterTeachers => 'Lehrer';
+
+  @override
+  String get roleTrader => 'Händler';
+
+  @override
+  String get roleDead => 'Tot';
+
+  @override
+  String get roleTeacher => 'Lehrer';
+
+  @override
+  String get roleArmorer => 'Rüstungsbauer';
 
   @override
   String get glossaryFilterArmorers => 'Rüstungsbauer';
@@ -2104,6 +2130,10 @@ class AppLocalizationsDe extends AppLocalizations {
       'SwampweedDepletionRate': 'Abbautempo',
       'XPExecutedBounty': 'EP fürs Töten am Boden',
       'XPKillOrDefeatBounty': 'EP fürs Besiegen',
+      'Level': 'Stufe',
+      'LockpickDurability': 'Dietrich-Haltbarkeit',
+      'LockpickPrecision': 'Dietrich-Präzision',
+      'PickPocketing': 'Taschendiebstahl',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -2157,6 +2187,14 @@ class AppLocalizationsDe extends AppLocalizations {
           'Erfahrung dafür, diese Figur zu töten, während sie bereits besiegt am Boden liegt.',
       'XPKillOrDefeatBounty':
           'Erfahrung dafür, diese Figur niederzustrecken, ob sie dabei stirbt oder nur bewusstlos liegen bleibt.',
+      'Level':
+          'Die Stufe der Figur. Sie steigt mit Erfahrung und bringt Lernpunkte.',
+      'LockpickDurability':
+          'Kommt aus dem Talent Schlösserknacken: 2 ungelernt, 4 gelernt, 6 gemeistert.',
+      'LockpickPrecision':
+          'Kommt aus dem Talent Schlösserknacken: 0 ungelernt, 1 gelernt, 2 gemeistert.',
+      'PickPocketing':
+          'Kommt aus dem Talent Taschendiebstahl: -30 ungelernt, -10 gelernt, +10 gemeistert.',
       'other': '?',
     });
     return '$_temp0';

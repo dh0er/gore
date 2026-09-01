@@ -16,7 +16,13 @@ void main() {
   bool resetEnabled(WidgetTester tester) =>
       tester.widget<FilledButton>(resetButton()).onPressed != null;
 
+  /// Every fixture id here prettifies to the same display name, so the list
+  /// folds them into one expandable row — open it before reaching for an id.
   Future<void> select(WidgetTester tester, String id) async {
+    if (find.text(id).evaluate().isEmpty) {
+      await tester.tap(find.textContaining(RegExp(r'^Npc \(\d+\)$')));
+      await tester.pumpAndSettle();
+    }
     await tester.tap(find.text(id));
     await tester.pumpAndSettle();
   }

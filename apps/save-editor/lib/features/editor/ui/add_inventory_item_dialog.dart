@@ -3,13 +3,17 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
+import 'package:goresave/features/editor/domain/game_icons.dart';
 import 'package:goresave/features/editor/domain/item_catalog.dart';
 import 'package:goresave/features/editor/domain/item_categories.dart';
+import 'package:goresave/features/editor/domain/item_stats.dart';
 import 'package:goresave/features/editor/ui/inventory_item_visual.dart';
+import 'package:goresave/features/editor/ui/item_stats_tooltip.dart';
 import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/providers/data_providers.dart';
 import 'package:goresave/ui/design/app_theme.dart';
 
 /// Dialog that lets the user pick an item from the bundled catalog and specify
@@ -116,10 +120,15 @@ class _AddInventoryItemDialogState
     ).pop(InventoryItemAdd(path: entry.path, count: parsed));
   }
 
-  List<_CatalogGroup> _group(List<ItemCatalogEntry> entries) {
+  List<_CatalogGroup> _group(
+    List<ItemCatalogEntry> entries,
+    ItemStatsCatalog? stats,
+  ) {
     final byCategory = <ItemCategory, List<ItemCatalogEntry>>{};
     for (final entry in entries) {
-      byCategory.putIfAbsent(itemCategoryFromId(entry.id), () => []).add(entry);
+      byCategory
+          .putIfAbsent(itemCategoryFor(entry.id, stats: stats), () => [])
+          .add(entry);
     }
     return [
       for (final cat in ItemCategory.values)
@@ -135,6 +144,36 @@ class _AddInventoryItemDialogState
     final lang = ref.watch(currentGameLangProvider);
     final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
     final showObjectIds = ref.watch(showObjectIdsProvider);
+    // File the catalog by the game's own inventory tabs, so the dialog reads
+    // like the inventory it adds to.
+    final itemStats = ref.watch(itemStatsCatalogProvider).value;
+    // The dialog can be opened before the catalog is there, and then groups by
+    // the id prefix. When it arrives, items move — an ore nugget goes from
+    // Miscellaneous to Materials — while the remembered tab still exists, so
+    // the selection quietly vanished from the list it was picked in.
+    ref.listen(itemStatsCatalogProvider, (previous, next) {
+      final stats = next.value;
+      final selected = _selected;
+      if (stats == null || selected == null || previous?.value != null) return;
+      final moved = itemCategoryFor(selected.id, stats: stats);
+      if (moved != _selectedCategory) {
+        setState(() => _selectedCategory = moved);
+      }
+    });
+    // The game's own "All" filter is not a category — it collects everything —
+    // so it is deliberately absent here.
+    final filtersById = <ItemCategory, InventoryFilter>{
+      for (final filter in itemStats?.filters ?? const <InventoryFilter>[])
+        ?itemCategoryFromFilterId(filter.id): filter,
+    };
+    String categoryLabel(ItemCategory category) {
+      final key = filtersById[category]?.nameKey ?? '';
+      final fromGame = key.isEmpty
+          ? null
+          : resolveGameText(locCatalog, key, lang);
+      return fromGame ?? localizedItemCategoryLabel(l10n, category);
+    }
+
     return AlertDialog(
       title: Text(l10n.addItemDialogTitle),
       contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
@@ -167,7 +206,7 @@ class _AddInventoryItemDialogState
                           _displayName(locCatalog, lang, b.id).toLowerCase(),
                         ),
                   );
-            final groups = _group(available);
+            final groups = _group(available, itemStats);
 
             // Resolve the selected category (fall back to first available).
             var selectedCat = _selectedCategory;
@@ -217,7 +256,15 @@ class _AddInventoryItemDialogState
                       // item's category so the selection stays visible instead
                       // of being silently dropped.
                       if (_selected != null) {
-                        _selectedCategory = itemCategoryFromId(_selected!.id);
+                        // The SAME classifier the grouping uses. The game's own
+                        // tag overrides the id prefix — ore nuggets are filed
+                        // under Materials, not Miscellaneous — so reading the
+                        // category off the id alone opened the wrong tab and
+                        // hid the very row it was meant to reveal.
+                        _selectedCategory = itemCategoryFor(
+                          _selected!.id,
+                          stats: itemStats,
+                        );
                       }
                     } else if (_selected != null &&
                         !(_selected!.id.toLowerCase().contains(q) ||
@@ -241,7 +288,7 @@ class _AddInventoryItemDialogState
                         itemId: _selected!.id,
                         itemPath: _selected!.path,
                         fallbackIcon: iconForItemCategory(
-                          itemCategoryFromId(_selected!.id),
+                          itemCategoryFor(_selected!.id, stats: itemStats),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -313,11 +360,13 @@ class _AddInventoryItemDialogState
                                       for (final g in groups)
                                         SidebarTile(
                                           icon: iconForItemCategory(g.category),
+                                          gameIcon:
+                                              filtersById[g.category]?.icon ??
+                                              gameIconForItemCategory(
+                                                g.category,
+                                              ),
                                           label: l10n.categoryWithCount(
-                                            localizedItemCategoryLabel(
-                                              l10n,
-                                              g.category,
-                                            ),
+                                            categoryLabel(g.category),
                                             g.entries.length,
                                           ),
                                           selected:
@@ -347,6 +396,7 @@ class _AddInventoryItemDialogState
                                             locCatalog,
                                             lang,
                                             showObjectIds,
+                                            itemStats,
                                           ),
                                     ),
                             ),
@@ -377,29 +427,41 @@ class _AddInventoryItemDialogState
     Map<String, Map<String, String>> catalog,
     GameLang lang,
     bool showObjectIds,
+    ItemStatsCatalog? stats,
   ) {
     final isSelected = _selected == entry;
-    return ListTile(
-      dense: true,
-      selected: isSelected,
-      selectedTileColor: theme.colorScheme.primaryContainer,
-      leading: InventoryItemVisual(
-        key: ValueKey(('catalog-item-image', entry.id)),
-        itemId: entry.id,
-        itemPath: entry.path,
-        fallbackIcon: iconForItemCategory(itemCategoryFromId(entry.id)),
+    // Same hover block as the inventory, so the item can be judged before it is
+    // added rather than after.
+    return ItemStatsTooltip(
+      itemId: entry.id,
+      title: _displayName(catalog, lang, entry.id),
+      // The tile is tappable and brings its own hover colour; a second tint on
+      // top of it would only muddy the selected row.
+      highlightOnHover: false,
+      child: ListTile(
+        dense: true,
+        selected: isSelected,
+        selectedTileColor: theme.colorScheme.primaryContainer,
+        leading: InventoryItemVisual(
+          key: ValueKey(('catalog-item-image', entry.id)),
+          itemId: entry.id,
+          itemPath: entry.path,
+          fallbackIcon: iconForItemCategory(
+            itemCategoryFor(entry.id, stats: stats),
+          ),
+        ),
+        title: Text(
+          _displayName(catalog, lang, entry.id),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        subtitle: showObjectIds
+            ? Text(entry.id, maxLines: 1, overflow: TextOverflow.ellipsis)
+            : null,
+        onTap: () => setState(() {
+          _selected = isSelected ? null : entry;
+        }),
       ),
-      title: Text(
-        _displayName(catalog, lang, entry.id),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      subtitle: showObjectIds
-          ? Text(entry.id, maxLines: 1, overflow: TextOverflow.ellipsis)
-          : null,
-      onTap: () => setState(() {
-        _selected = isSelected ? null : entry;
-      }),
     );
   }
 }

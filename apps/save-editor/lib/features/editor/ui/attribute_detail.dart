@@ -108,8 +108,13 @@ class AttributeDetail extends ConsumerWidget {
           setClass: setClass,
           l10n: l10n,
         );
-    String attributeTooltipFor(String id, String? setClass) =>
-        attributeTooltip(id, setClass: setClass, l10n: l10n);
+    String attributeTooltipFor(String id, String? setClass) => attributeTooltip(
+      id,
+      setClass: setClass,
+      l10n: l10n,
+      catalog: locCatalog,
+      lang: lang,
+    );
 
     if (selected.isPlayer) {
       final body = _PrivatePanel(

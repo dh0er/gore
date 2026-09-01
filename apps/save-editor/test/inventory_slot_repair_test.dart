@@ -145,6 +145,12 @@ void main() {
 
     await tester.tap(find.text('Lizard-A'));
     await tester.pumpAndSettle();
+    // The bundled item stats decide what a row IS, and until they answer the
+    // editor offers no removal — reading them needs real async.
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.delete_outline).first);
     await tester.pumpAndSettle();
 

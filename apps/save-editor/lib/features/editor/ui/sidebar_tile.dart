@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:goresave/features/editor/domain/item_categories.dart';
+import 'package:goresave/features/editor/ui/game_icon.dart';
 
 /// A selectable left-sidebar row, matching the Player/Progression tab style.
 class SidebarTile extends StatelessWidget {
@@ -10,9 +11,14 @@ class SidebarTile extends StatelessWidget {
     required this.label,
     required this.selected,
     required this.onTap,
+    this.gameIcon,
   });
 
   final IconData icon;
+
+  /// Shared game glyph shown instead of [icon] when the user's install has been
+  /// read. Null (or a glyph this game build lacks) keeps [icon].
+  final String? gameIcon;
   final String label;
   final bool selected;
   final VoidCallback onTap;
@@ -58,8 +64,9 @@ class SidebarTile extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
             child: Row(
               children: [
-                Icon(
-                  icon,
+                GameIcon(
+                  name: gameIcon,
+                  fallbackIcon: icon,
                   size: 18,
                   color: selected ? scheme.primary : scheme.onSurfaceVariant,
                 ),
@@ -89,29 +96,21 @@ IconData iconForItemCategory(ItemCategory category) {
       return Icons.gavel;
     case ItemCategory.rangedWeapon:
       return Icons.gps_fixed;
-    case ItemCategory.armor:
-      return Icons.shield_outlined;
-    case ItemCategory.ammunition:
-      return Icons.arrow_outward;
-    case ItemCategory.rune:
+    case ItemCategory.magic:
       return Icons.auto_awesome;
-    case ItemCategory.scroll:
-      return Icons.description_outlined;
+    case ItemCategory.wearable:
+      return Icons.shield_outlined;
     case ItemCategory.food:
       return Icons.restaurant;
+    case ItemCategory.potion:
+      return Icons.science_outlined;
+    case ItemCategory.material:
+      return Icons.diamond_outlined;
+    case ItemCategory.document:
+      return Icons.menu_book_outlined;
     case ItemCategory.misc:
       return Icons.category_outlined;
-    case ItemCategory.amulet:
-      return Icons.diamond_outlined;
-    case ItemCategory.ring:
-      return Icons.radio_button_unchecked;
-    case ItemCategory.trophy:
-      return Icons.pets;
-    case ItemCategory.writing:
-      return Icons.menu_book_outlined;
-    case ItemCategory.mission:
-      return Icons.flag_outlined;
-    case ItemCategory.key:
+    case ItemCategory.artefact:
       return Icons.vpn_key_outlined;
     case ItemCategory.other:
       return Icons.help_outline;

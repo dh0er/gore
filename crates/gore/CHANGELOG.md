@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- `gore texture story-images` lists the loose story images — the glossary
+  artwork, tutorial pictures and writings — that live outside the asset
+  container.
+
 ## [0.3.0] - 2026-08-30
 
 - Decompiled scripts recompile closer to the original: enum returns, increments,

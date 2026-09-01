@@ -7,6 +7,7 @@ import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/app/ui/goresave_app.dart';
 import 'package:goresave/features/editor/domain/character_category_catalog.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
+import 'package:goresave/features/editor/domain/item_stats.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/features/editor/domain/item_icon_catalog.dart';
@@ -362,12 +363,29 @@ void main() {
     await tester.tap(detailTab('Inventory'));
     await tester.pumpAndSettle();
 
-    // Stacks are grouped by category in a sidebar; Food is selected first
-    // (it precedes Miscellaneous in category order), so Cheese is visible and
-    // the misc Ore stack lives behind its own category tile.
-    expect(find.text('Food & potions (1)'), findsOneWidget);
+    // Stacks are grouped by the game's own inventory tabs in a sidebar, led by
+    // "All" — the tab the game opens on — so both stacks are listed at once and
+    // each also lives behind its own tile.
+    //
+    // The bundled item stats — which would file the nugget under Materials,
+    // the way the game does — are loaded from the asset bundle, and that is
+    // real I/O the fake async of a widget test never completes. This asserts
+    // the class-name fallback the editor uses until they arrive.
+    expect(find.text('All (2)'), findsOneWidget);
+    expect(find.text('Food (1)'), findsOneWidget);
     expect(find.text('Miscellaneous (1)'), findsOneWidget);
     expect(find.text('ItFo_Cheese'), findsOneWidget);
+    expect(find.text('ItMi_Orenugget'), findsOneWidget);
+
+    // Picking a category narrows the list to it; "All" brings everything back.
+    await tester.tap(find.text('Food (1)'));
+    await tester.pumpAndSettle();
+    expect(find.text('ItFo_Cheese'), findsOneWidget);
+    expect(find.text('ItMi_Orenugget'), findsNothing);
+    await tester.tap(find.text('All (2)'));
+    await tester.pumpAndSettle();
+    expect(find.text('ItFo_Cheese'), findsOneWidget);
+    expect(find.text('ItMi_Orenugget'), findsOneWidget);
 
     // No old per-item save buttons.
     expect(find.byTooltip('Save ItFo_Cheese count'), findsNothing);
@@ -1183,6 +1201,11 @@ void main() {
           ),
           uiSettingsStoreProvider.overrideWithValue(
             TestUiSettingsStore(showObjectIds: true),
+          ),
+          // The editor offers no removal until the stats have said what each
+          // row IS. Answer for them here rather than wait on the bundle.
+          itemStatsCatalogProvider.overrideWith(
+            (ref) async => const ItemStatsCatalog(),
           ),
         ],
         child: const GoresaveApp(),

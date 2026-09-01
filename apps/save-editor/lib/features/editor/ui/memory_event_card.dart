@@ -66,6 +66,16 @@ class MemoryEventCard extends StatelessWidget {
           key: ValueKey('memory-event-${event.index}'),
           tilePadding: const EdgeInsets.fromLTRB(12, 4, 8, 4),
           childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+          // An ExpansionTile centres what it reveals. Everything here is
+          // read left to right — the headings, the facts, the coordinates,
+          // the tags — so it starts at the left edge like the rest of the
+          // editor, instead of each block floating in the middle of its row.
+          expandedAlignment: AlignmentDirectional.centerStart,
+          expandedCrossAxisAlignment: CrossAxisAlignment.start,
+          // An ExpansionTile centres what it reveals. Everything here is
+          // read left to right — the headings, the facts, the coordinates,
+          // the tags — so it starts at the left edge like the rest of the
+          // editor, instead of each block floating in the middle of its row.
           leading: Container(
             width: 40,
             height: 40,
@@ -139,15 +149,7 @@ class MemoryEventCard extends StatelessWidget {
           ),
           children: [
             Divider(height: 16, color: scheme.outlineVariant),
-            Align(
-              alignment: AlignmentDirectional.centerStart,
-              child: Text(
-                l10n.memoryEventDetails,
-                style: theme.textTheme.labelLarge?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
-            ),
+            _SectionLabel(label: l10n.memoryEventDetails),
             const SizedBox(height: 8),
             LayoutBuilder(
               builder: (context, constraints) {
@@ -204,29 +206,26 @@ class MemoryEventCard extends StatelessWidget {
               const SizedBox(height: 14),
               _SectionLabel(label: l10n.memoryEventTags),
               const SizedBox(height: 6),
-              Align(
-                alignment: AlignmentDirectional.centerStart,
-                child: Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    for (final tag in presentation.tags)
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: scheme.surfaceContainerHighest,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: SelectableText(
-                          tag,
-                          style: theme.textTheme.bodySmall,
-                        ),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final tag in presentation.tags)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
                       ),
-                  ],
-                ),
+                      decoration: BoxDecoration(
+                        color: scheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: SelectableText(
+                        tag,
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    ),
+                ],
               ),
             ],
             if (showObjectIds) ...[
@@ -326,13 +325,10 @@ class _SectionLabel extends StatelessWidget {
   final String label;
 
   @override
-  Widget build(BuildContext context) => Align(
-    alignment: AlignmentDirectional.centerStart,
-    child: Text(
-      label,
-      style: Theme.of(context).textTheme.labelLarge?.copyWith(
-        color: Theme.of(context).colorScheme.onSurfaceVariant,
-      ),
+  Widget build(BuildContext context) => Text(
+    label,
+    style: Theme.of(context).textTheme.labelLarge?.copyWith(
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
     ),
   );
 }

@@ -11,16 +11,101 @@ enum CharacterCategory { human, creature, other }
 /// catalog lets statistics distinguish human NPCs from monsters without
 /// guessing from display names.
 class CharacterCategoryCatalog {
-  const CharacterCategoryCatalog(this._categories, this._teachers);
+  CharacterCategoryCatalog(this._categories, this._teachers)
+    : _unprefixed = _strippedIndex(_categories, compact: false),
+      _unprefixedCompact = _strippedIndex(_categories, compact: true),
+      _unnumbered = _strippedIndex(
+        _categories,
+        compact: false,
+        unnumbered: true,
+      );
 
   final Map<String, CharacterCategory> _categories;
   final Set<String> _teachers;
 
+  /// The same table with each definition's leading kind segment removed —
+  /// `Creature_Bloodfly` also under `bloodfly`, `Orc_OW_OPS_OrcPeasantM01_2068`
+  /// under `ow_ops_orcpeasantm01_2068`. That is the form the save writes.
+  final Map<String, CharacterCategory> _unprefixed;
+
+  /// The same again folded to letters and digits only, for the ids that dropped
+  /// the underscores (`LizardFire` for `Creature_Lizard_Fire`) or spell
+  /// themselves out with spaces (`Minecrawler Nymph`).
+  final Map<String, CharacterCategory> _unprefixedCompact;
+
+  /// The same again with the definition's trailing instance number removed —
+  /// `OC_GRD_Guard18_238` also under `grd_guard18`. A save can carry the same
+  /// character under a different number (`FM_GRD_Guard18_300N`), which no
+  /// exact form ever matches.
+  final Map<String, CharacterCategory> _unnumbered;
+
+  /// A definition's trailing instance number, e.g. `_238` or `_300N`.
+  static final RegExp _instanceNumber = RegExp(r'_\d+n?$');
+
+  /// Letters and digits only, lowercased.
+  static String _fold(String value) =>
+      value.toLowerCase().replaceAll(RegExp('[^a-z0-9]'), '');
+
+  /// A stripped key that two definitions of DIFFERENT kinds would share is left
+  /// out: guessing there would mark somebody the wrong species.
+  static Map<String, CharacterCategory> _strippedIndex(
+    Map<String, CharacterCategory> categories, {
+    required bool compact,
+    bool unnumbered = false,
+  }) {
+    final seen = <String, CharacterCategory>{};
+    final ambiguous = <String>{};
+    for (final entry in categories.entries) {
+      final cut = entry.key.indexOf('_');
+      if (cut <= 0 || cut == entry.key.length - 1) continue;
+      var key = entry.key.substring(cut + 1);
+      if (unnumbered) {
+        final trimmed = key.replaceFirst(_instanceNumber, '');
+        if (trimmed == key || trimmed.isEmpty) continue;
+        key = trimmed;
+      }
+      if (compact) key = _fold(key);
+      final previous = seen[key];
+      if (previous != null && previous != entry.value) {
+        ambiguous.add(key);
+      } else {
+        seen[key] = entry.value;
+      }
+    }
+    for (final key in ambiguous) {
+      seen.remove(key);
+    }
+    return seen;
+  }
+
+  /// A reference reduced to the form [_unnumbered] is keyed by: everything
+  /// after the leading segment, without the trailing instance number. Empty
+  /// when the reference carries neither, so it can never match.
+  static String _unnumberedKey(String lower) {
+    final cut = lower.indexOf('_');
+    if (cut <= 0 || cut == lower.length - 1) return '';
+    final tail = lower.substring(cut + 1);
+    final trimmed = tail.replaceFirst(_instanceNumber, '');
+    return trimmed == tail ? '' : trimmed;
+  }
+
   CharacterCategory? categoryFor(String? reference) {
     if (reference == null) return null;
     for (final candidate in _referenceCandidates(reference)) {
-      final category = _categories[candidate.toLowerCase()];
+      final lower = candidate.toLowerCase();
+      final category = _categories[lower];
       if (category != null) return category;
+      // A save id drops the definition's leading kind segment — `Lizard-WP_…`
+      // for `Creature_Lizard`, `OW_OPS_OrcPeasantM01_2068-…` for the `Orc_`
+      // definition of the same name — and sometimes its underscores too
+      // (`LizardFire` for `Creature_Lizard_Fire`).
+      final stripped = _unprefixed[lower] ?? _unprefixedCompact[_fold(lower)];
+      if (stripped != null) return stripped;
+      // Last resort, the same key without its own leading segment and without
+      // the instance number: the save's `FM_GRD_Guard18_300N` is the catalog's
+      // `OC_GRD_Guard18_238` — same guard, different world, different number.
+      final unnumbered = _unnumbered[_unnumberedKey(lower)];
+      if (unnumbered != null) return unnumbered;
     }
     return null;
   }
@@ -59,6 +144,16 @@ class CharacterCategoryCatalog {
       caseSensitive: false,
     ).firstMatch(value);
     if (guid != null && guid.group(1)!.isNotEmpty) yield guid.group(1)!;
+    // Last, the leading segment on its own — the definition name the save
+    // spawned this actor from. Every rule above reads a particular id SHAPE,
+    // so whether a character resolved at all came down to which shape it had:
+    // `Wolf-WP_…` resolved through the waypoint rule while `Wolf-OW_…_WP-1`
+    // resolved through nothing, and the same animal came out a creature 57
+    // times and an unknown 9 times. Yielded last, so a more specific candidate
+    // still wins — the mercenary `NC_ORG_Wolf_855-WorldPointActor_wolf` is a
+    // man before his waypoint's name can make him a wolf.
+    final firstSegment = value.indexOf('-');
+    if (firstSegment > 0) yield value.substring(0, firstSegment);
   }
 }
 

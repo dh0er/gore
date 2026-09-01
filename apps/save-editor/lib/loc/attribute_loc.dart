@@ -99,15 +99,64 @@ String readableAttributeName(
 /// One-sentence explanation of what an attribute does in the game, for the
 /// tooltip on its label. Empty when we have nothing worth saying, in which case
 /// the caller shows no tooltip at all.
+///
+/// The game writes its own description for every attribute it shows on its
+/// character screen, under `attributeset_<set>_<id>_description`, in all its
+/// languages — that is the text the player already knows, so it wins whenever
+/// the user's install has been extracted. The manual table below it covers the
+/// attributes the game never puts on screen (poise, breath, sleep, booze) and
+/// is the fallback before anything has been extracted.
 String attributeTooltip(
   String attributeId, {
   String? setClass,
   AppLocalizations? l10n,
+  Map<String, Map<String, String>> catalog = const {},
+  GameLang? lang,
 }) {
+  final fromGame = gameAttributeDescription(
+    catalog,
+    lang,
+    attributeId,
+    setClass: setClass,
+  );
+  if (fromGame != null) return fromGame;
   if (l10n == null) return '';
   final key = heroAttributeKey(attributeId.trim(), setClass);
   final text = l10n.attributeManualTooltip(key);
   return text == '?' ? '' : text;
+}
+
+/// The game's own description of an attribute, or null when it has none.
+/// Resolved exactly like [localizedAttributeName], one key deeper.
+String? gameAttributeDescription(
+  Map<String, Map<String, String>> catalog,
+  GameLang? lang,
+  String attributeId, {
+  String? setClass,
+}) {
+  if (catalog.isEmpty || lang == null) return null;
+  final id = _catalogPart(attributeId);
+  if (id.isEmpty) return null;
+
+  final set = _attributeSetName(setClass);
+  if (set != null) {
+    final exact = resolveGameText(
+      catalog,
+      'attributeset_${set}_${id}_description',
+      lang,
+    );
+    if (_nonBlank(exact) case final value?) return value;
+  }
+  final knownSet = _knownAttributeSets[id];
+  if (knownSet != null) {
+    final known = resolveGameText(
+      catalog,
+      'attributeset_${knownSet}_${id}_description',
+      lang,
+    );
+    if (_nonBlank(known) case final value?) return value;
+  }
+  return null;
 }
 
 String? _attributeSetName(String? setClass) {

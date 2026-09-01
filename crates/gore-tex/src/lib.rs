@@ -8,6 +8,7 @@ pub mod installed_package_index;
 pub mod item_icons;
 pub mod package_index;
 pub mod paths;
+pub mod story_images;
 pub mod texdata;
 pub mod vt;
 

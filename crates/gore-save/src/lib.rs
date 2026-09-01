@@ -9917,6 +9917,15 @@ fn summarize_private_inventory_items(
         if !looks_item_definition_path(&path_ref.value) {
             continue;
         }
+        // The engine equips a fist "weapon" on every character and parks a
+        // watch-fight placeholder next to it. They sit in the player's own
+        // equipment containers, inside the scanned region, but they are not
+        // items: nothing about them can be edited and the game never shows
+        // them. Skipped before the count, so the stack total the overview
+        // compares against still matches the rows listed here.
+        if is_non_lootable_marker(&item_id_from_path(&path_ref.value)) {
+            continue;
+        }
         total += 1;
         if items.len() >= limit {
             continue;
@@ -10076,12 +10085,14 @@ fn looks_item_definition_path(value: &str) -> bool {
     value.starts_with("/Script/Angelscript.") || looks_inventory_candidate(value)
 }
 
-/// Non-lootable equipment markers an NPC carries that are not real inventory: the
-/// fist "weapons" every humanoid equips (`HumanFist_*`) and the watch/idle fight
-/// weapon placeholder (`WatchFightWeapon`). These occupy equipment-slot
-/// containers (e.g. MeleeSlot) but are engine-internal markers, never loot, so
-/// they are hidden from the NPC inventory view. Matched on the short item id (the
-/// tail of the m_ItemDefinition path, as produced by [`item_id_from_path`]).
+/// Non-lootable equipment markers a character carries that are not real
+/// inventory: the fist "weapons" every humanoid equips (`HumanFist_*`) and the
+/// watch/idle fight weapon placeholder (`WatchFightWeapon`). These occupy
+/// equipment-slot containers (e.g. MeleeSlot) but are engine-internal markers,
+/// never loot, and nothing about them is editable — so they are hidden from the
+/// inventory view of the player and of every NPC alike. Matched on the short
+/// item id (the tail of the m_ItemDefinition path, as produced by
+/// [`item_id_from_path`]).
 fn is_non_lootable_marker(id: &str) -> bool {
     id.starts_with("HumanFist") || id == "WatchFightWeapon"
 }
@@ -10097,6 +10108,125 @@ struct ItemIconCatalogEntry {
     id: String,
     icon: String,
 }
+
+/// Key prefix under which the shared UI glyphs are published in the icon
+/// manifest, so they can never collide with a real item id. Save Editor looks
+/// them up as `ui:<texture name>`.
+pub const UI_ICON_KEY_PREFIX: &str = "ui:";
+
+/// Every glyph in the shipped `/Game/UI/Textures/Common/Icons` folder: the
+/// attribute, resistance, skill, item-category, equip-slot and relationship
+/// icons the game draws next to its own labels. Save Editor shows these in
+/// front of the matching label and falls back to its own icon for anything
+/// missing, so listing the whole folder costs nothing but a few extra decodes
+/// and keeps later UI work from needing a native change.
+///
+/// Missing entries are tolerated by the cache (they are `IconKind::Ui`), so a
+/// renamed glyph in a future game build cannot take the item previews down.
+const UI_ICON_IDS: &[&str] = &[
+    "T_Icon_1handed",
+    "T_Icon_2Handed",
+    "T_Icon_Acrobatics",
+    "T_Icon_AllItems",
+    "T_Icon_Angry",
+    "T_Icon_Armor",
+    "T_Icon_Armorer",
+    "T_Icon_Arrows",
+    "T_Icon_Beginner",
+    "T_Icon_Book",
+    "T_Icon_Book_Small",
+    "T_Icon_Bow",
+    "T_Icon_Characters",
+    "T_Icon_Circle",
+    "T_Icon_Commpleted",
+    "T_Icon_Creatures",
+    "T_Icon_Crossbow",
+    "T_Icon_Dead",
+    "T_Icon_Dexterity",
+    "T_Icon_Dexterity_Small",
+    "T_Icon_Dive",
+    "T_Icon_Enemy",
+    "T_Icon_Eye",
+    "T_Icon_Fist",
+    "T_Icon_Food",
+    "T_Icon_Friendly",
+    "T_Icon_Health",
+    "T_Icon_Health_Small",
+    "T_Icon_Hostile",
+    "T_Icon_Hunting",
+    "T_Icon_Key",
+    "T_Icon_Legs",
+    "T_Icon_Location",
+    "T_Icon_Lock",
+    "T_Icon_LockNoKey",
+    "T_Icon_Magic",
+    "T_Icon_MagicCircle",
+    "T_Icon_Mana",
+    "T_Icon_Mana_Small",
+    "T_Icon_Master",
+    "T_Icon_Materials",
+    "T_Icon_Melee",
+    "T_Icon_Minus",
+    "T_Icon_MinusRed",
+    "T_Icon_Misc",
+    "T_Icon_NewCamp",
+    "T_Icon_OldCamp",
+    "T_Icon_OrcWeapon",
+    "T_Icon_Orchist",
+    "T_Icon_Plus",
+    "T_Icon_Potion",
+    "T_Icon_Resistance_Blunt",
+    "T_Icon_Resistance_Edge",
+    "T_Icon_Resistance_Energy",
+    "T_Icon_Resistance_Fire",
+    "T_Icon_Resistance_Ice",
+    "T_Icon_Resistance_Point",
+    "T_Icon_Resistance_Wind",
+    "T_Icon_Ride",
+    "T_Icon_Ring",
+    "T_Icon_Shop",
+    "T_Icon_SideQuest",
+    "T_Icon_SkillPoints",
+    "T_Icon_Squash",
+    "T_Icon_Stolen",
+    "T_Icon_StoryQuest",
+    "T_Icon_Strength",
+    "T_Icon_Strength_Small",
+    "T_Icon_SwampCamp",
+    "T_Icon_Talisman",
+    "T_Icon_Torch",
+    "T_Icon_Torso",
+    "T_Icon_Toughness",
+    "T_Icon_Trained",
+    "T_Icon_Trainer",
+    "T_Icon_Tutorials",
+    "T_Icon_Unskilled",
+    "T_Icon_Waist",
+    "T_Icon_Weapon",
+    "T_Icon_Weight",
+    "T_Interact_Forge",
+    "T_Interaction_Alchemy",
+    "T_Interaction_Climb",
+    "T_Interaction_ClimbWall",
+    "T_Interaction_Cooking",
+    "T_Interaction_Door",
+    "T_Interaction_Execute",
+    "T_Interaction_Inscription",
+    "T_Interaction_Light",
+    "T_Interaction_Lockpick",
+    "T_Interaction_Loot",
+    "T_Interaction_Mine",
+    "T_Interaction_Sleep",
+    "T_Interaction_Steal",
+    "T_Interaction_Talk",
+    "T_Interaction_Use",
+    "T_ItemIcon_Claws",
+    "T_ItemIcon_Teeth",
+    // Not in the common icon folder but next to the glossary artwork: the
+    // silhouette the game shows for a character it has no portrait for.
+    "T_CharacterImageMedium_Missing",
+    "T_CharacterImageSmall_Missing",
+];
 
 fn item_icons_prepare(payload: &Value) -> Result<Value, CoreError> {
     let mut source_identity = None;
@@ -10190,6 +10320,9 @@ where
     let items = catalog
         .into_iter()
         .map(|entry| gore_tex::item_icons::ItemIconSpec::new(entry.id, entry.icon))
+        .chain(UI_ICON_IDS.iter().map(|icon| {
+            gore_tex::item_icons::ItemIconSpec::ui(format!("{UI_ICON_KEY_PREFIX}{icon}"), *icon)
+        }))
         .collect::<Vec<_>>();
     let game_root = resolve_game_root(explicit)?;
     let (manifest_path, source_game_path) = match prepare(&game_root, &items) {
@@ -14245,13 +14378,15 @@ fn inventory_main_container_view(
         }
     }
     // Row emission diverges by actor:
-    //   - Player (`actor_id == None`): MainContainer-only, byte-for-byte the
-    //     historical behaviour (the player edit paths can only address
-    //     MainContainer). Every row is tagged `MainContainer`.
+    //   - Player (`actor_id == None`): MainContainer-only (the player edit paths
+    //     can only address MainContainer). Every row is tagged `MainContainer`.
     //   - NPC (`actor_id.is_some()`): ALL containers, so an equipped weapon
     //     (MeleeSlot) or ore (Pouch) is visible. Each row is tagged with its own
-    //     container's short label and non-lootable equipment markers (fists,
-    //     watch-fight weapon) are hidden.
+    //     container's short label.
+    // Both hide the non-lootable equipment markers (fists, watch-fight weapon).
+    // Rows are addressed by id/path and slot, never by their position here, so
+    // leaving them out changes nothing an edit can reach; the summary that gates
+    // add/remove is built from the raw slots above and is unaffected.
     let short_container_label = |index: usize| -> String {
         keys.get(index)
             .and_then(|element| match element {
@@ -14286,7 +14421,7 @@ fn inventory_main_container_view(
     match actor_id {
         None => {
             let main_label = short_enum_label(MAIN_CONTAINER_ENUM_LABEL);
-            push_slot_rows(&mut rows, &main_slots, main_label, false);
+            push_slot_rows(&mut rows, &main_slots, main_label, true);
         }
         Some(_) => {
             if let Some(properties::PropertyValue::Array {
@@ -16613,11 +16748,25 @@ mod tests {
         let prepared = prepared.borrow();
         let (game_root, items) = prepared.as_ref().unwrap();
         assert_eq!(game_root, &PathBuf::from("D:/resolved-game"));
-        assert_eq!(items.len(), 3, "aliases remain three manifest items");
+        assert_eq!(
+            items.len(),
+            3 + UI_ICON_IDS.len(),
+            "aliases remain three manifest items, then the shared UI glyphs"
+        );
         assert_eq!(items[0].item_id, "ItMi_One");
         assert_eq!(items[0].icon_id, "Shared");
         assert_eq!(items[1].icon_id, "Shared");
         assert_eq!(items[2].icon_id, "Food");
+        for spec in &items[..3] {
+            assert_eq!(spec.kind, gore_tex::item_icons::IconKind::Item);
+        }
+        // The UI glyphs are appended under their own key namespace and resolve
+        // against the shared-icon folder, never the item-preview folder.
+        for (spec, icon) in items[3..].iter().zip(UI_ICON_IDS) {
+            assert_eq!(spec.kind, gore_tex::item_icons::IconKind::Ui);
+            assert_eq!(spec.icon_id, *icon);
+            assert_eq!(spec.item_id, format!("ui:{icon}"));
+        }
         assert_eq!(
             response,
             json!({
@@ -16744,6 +16893,7 @@ mod tests {
 
     #[test]
     fn embedded_item_icon_catalog_passes_all_831_items_to_native_prepare() {
+        let expected = 831 + UI_ICON_IDS.len();
         let response = item_icons_prepare_with(
             &json!({"gamePath": "C:/fixture"}),
             ITEM_CATALOG_JSON,
@@ -16752,13 +16902,22 @@ mod tests {
                 Ok(PathBuf::from("C:/resolved"))
             },
             |_, items| {
-                assert_eq!(items.len(), 831);
+                assert_eq!(items.len(), expected);
                 let unique_ids = items
                     .iter()
                     .map(|item| item.item_id.as_str())
                     .collect::<std::collections::HashSet<_>>();
-                assert_eq!(unique_ids.len(), 831);
+                assert_eq!(unique_ids.len(), expected);
                 assert!(items.iter().all(|item| !item.icon_id.is_empty()));
+                // The shared UI glyphs are the only optional part of the
+                // catalog; every item preview stays mandatory.
+                assert_eq!(
+                    items
+                        .iter()
+                        .filter(|item| item.kind == gore_tex::item_icons::IconKind::Ui)
+                        .count(),
+                    UI_ICON_IDS.len()
+                );
                 Ok(PathBuf::from("cache/manifest.json"))
             },
             || panic!("successful prepare must not discover Steam"),
@@ -25233,6 +25392,43 @@ mod tests {
 
     // ── Task 17 (private.npc.inventory) ──────────────────────────────────────
 
+    /// The player carries the same engine-internal fist markers every NPC does,
+    /// in the same MainContainer as real loot. Nothing about them is editable,
+    /// so the player view hides them exactly as the NPC view does — while the
+    /// summary that gates add/remove still sees the raw slots they occupy.
+    #[test]
+    fn actor_inventory_summary_player_hides_non_lootable_markers() {
+        let ore = "/Script/Angelscript.ItMi_Orenugget";
+        let fist = "/Script/Angelscript.HumanFist_NoWeapon";
+        let watch = "/Script/Angelscript.WatchFightWeapon";
+        let main_slots = vec![
+            inv_item_slot(1, INV_MAIN_LABEL, ore, 5, &inv_empty_payload_map()),
+            inv_item_slot(2, INV_MAIN_LABEL, fist, 1, &inv_empty_payload_map()),
+            inv_item_slot(3, INV_MAIN_LABEL, watch, 1, &inv_empty_payload_map()),
+        ];
+        let payload = typed_inventory_private_payload(&[], &main_slots);
+        let root = properties::parse_private_root(&payload).unwrap();
+
+        let summary = actor_inventory_summary(&root, None);
+        let ids = summary["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_str().unwrap_or("").to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["ItMi_Orenugget".to_string()]);
+        // The markers still occupy their slots, so the container summary — what
+        // decides whether an item can be added or removed — must still list them.
+        assert!(
+            summary["mainContainerPaths"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|path| path == fist),
+            "hiding a row must not hide the slot it occupies: {summary:?}"
+        );
+    }
+
     /// The shared typed-tree builder, pointed at the controlled player
     /// (`actor_id = None`), emits the displayable summary shape over the
     /// synthetic MainContainer: one removable item row plus the structural-edit
@@ -28975,6 +29171,60 @@ mod tests {
         apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap();
 
         assert_eq!(inv_slot_ids(&payload, 1), vec![0, 1, 2]);
+    }
+
+    /// The player's scanned region spans their equipment containers too, which
+    /// is where the engine parks the fist "weapons" and the watch-fight
+    /// placeholder. They are not items, so neither the rows nor the stack count
+    /// may include them — the overview calls the inventory truncated when those
+    /// two disagree.
+    #[test]
+    fn inventory_summary_hides_non_lootable_markers_from_rows_and_count() {
+        let main_slots = vec![
+            inv_item_slot(
+                0,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItMi_Orenugget",
+                5,
+                &inv_empty_payload_map(),
+            ),
+            inv_item_slot(
+                1,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.HumanFist_NoWeapon",
+                1,
+                &inv_empty_payload_map(),
+            ),
+            inv_item_slot(
+                2,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.HumanFist_NoWeapon_Swimming",
+                1,
+                &inv_empty_payload_map(),
+            ),
+            inv_item_slot(
+                3,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.WatchFightWeapon",
+                1,
+                &inv_empty_payload_map(),
+            ),
+        ];
+        let payload = typed_inventory_private_payload(&[], &main_slots);
+        let refs = scan_fstrings(&payload, 0);
+        let summary = summarize_private_inventory_payload(&payload, &refs, None, None, &[]);
+
+        let ids = summary["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_str().unwrap_or("").to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["ItMi_Orenugget".to_string()]);
+        assert_eq!(
+            summary["itemStackCount"], 1,
+            "a hidden marker must not be counted either"
+        );
     }
 
     #[test]

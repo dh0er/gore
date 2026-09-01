@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:goresave/features/editor/domain/actor.dart';
+import 'package:goresave/features/editor/domain/glossary_images.dart';
 import 'package:goresave/features/editor/ui/actor_detail_header.dart';
+import 'package:goresave/features/editor/ui/glossary_portrait.dart';
+import 'package:goresave/features/editor/ui/npc_role_badges.dart';
 import 'package:goresave/loc/game_lang.dart';
 
 import 'support/l10n_test_app.dart';
@@ -150,5 +153,103 @@ void main() {
 
     expect(find.text('ST_VLK_Mud_Sleeper'), findsOneWidget);
     expect(find.text('orphan:ST_VLK_Mud_Sleeper'), findsNothing);
+  });
+
+  testWidgets(
+    'the detail picture is the wide cut, and death is not an identity',
+    (tester) async {
+      await tester.pumpWidget(
+        wrapWithL10n(
+          Scaffold(
+            body: SizedBox(
+              width: 600,
+              child: ActorDetailHeader(
+                actor: const Actor.npc(
+                  id: 'Diego-WP_A',
+                  name: 'Diego',
+                  uniqueName: 'Diego',
+                  isDead: true,
+                ),
+                locCatalog: const {},
+                lang: kGameLangs.first,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final mark = tester.widget<GlossaryPortrait>(
+        find.byType(GlossaryPortrait),
+      );
+      // The banner artwork is 500x264; the box keeps that shape.
+      expect(mark.size, GlossaryImageSize.banner);
+      expect(mark.width / mark.height, closeTo(500 / 264, 0.05));
+      // A killed character keeps his own face here — the status row says he is
+      // dead, the picture says who he is.
+      expect(mark.npcUniqueName, 'Diego-WP_A');
+      expect(mark.fallbackGameIcon, isNull);
+    },
+  );
+
+  testWidgets('the role chips never overflow, however narrow the pane', (
+    tester,
+  ) async {
+    // At the 960px window minimum the detail pane is only about 228px once
+    // both sidebars have taken theirs — narrower than the picture plus a
+    // single chip. Measured, not assumed: at 228 the old layout overflowed by
+    // 39 pixels.
+    for (final width in <double>[228, 300, 419, 421, 700, 1200]) {
+      await tester.pumpWidget(
+        wrapWithL10n(
+          Scaffold(
+            body: SizedBox(
+              width: width,
+              child: ActorDetailHeader(
+                actor: const Actor.npc(
+                  id: 'SC_NOV_Darrion_1312',
+                  name: 'Darrion',
+                  uniqueName: 'SC_NOV_Darrion_1312',
+                  isDead: true,
+                ),
+                locCatalog: const {},
+                lang: kGameLangs.first,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: 'overflowed at $width');
+      // The chips are shown either way — beside the name, or under it.
+      expect(find.byType(NpcRoleBadges), findsOneWidget, reason: '$width');
+    }
+  });
+
+  testWidgets('a stand-in glyph takes a compact width, not the banner frame', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      wrapWithL10n(
+        Scaffold(
+          body: SizedBox(
+            width: 600,
+            child: ActorDetailHeader(
+              actor: const Actor.player(),
+              locCatalog: const {},
+              lang: kGameLangs.first,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // The player has no portrait, so the header shows a glyph. Stretching it
+    // across the banner's frame left a gap wider than the mark itself.
+    final box = tester.getSize(find.byType(GlossaryPortrait));
+    expect(box.height, glossaryBannerHeight);
+    expect(box.width, lessThan(glossaryBannerWidth));
+    expect(box.width, glossaryBannerHeight);
   });
 }

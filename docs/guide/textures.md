@@ -17,6 +17,22 @@ gore texture list --game "$GAME" --filter T_Hardware    # substring filter on th
 
 Asset paths look like `/Game/UI/Textures/Common/T_HardwareCursor`.
 
+Not every picture the game shows is in that container. The glossary portraits,
+the tutorial pictures, the writings and the loading-screen art are **loose**
+PNG/JPG files under `G1R\Story\Conversation\images`, next to the localization
+cache and the voice-over archives. `list` scans the container and will never
+show them, however you filter — list those separately:
+
+```powershell
+gore texture story-images --game "$GAME"                            # all of them
+gore texture story-images --game "$GAME" --filter Glossary/Creatures
+gore texture story-images --game "$GAME" --absolute                 # full paths
+```
+
+They are ordinary image files: read them where they are, no extraction step.
+Replacing one is a loose-file edit, not a container triplet, so none of the
+commands below apply to them.
+
 For a quick Diego smoke test, the armor atlas observed in the shipped game is
 `/Game/Assets/Characters/Humans/Clothes/OC_Shadow/Textures/T_HM_OC_Atlas_02_Diego_D`.
 Try an exact `extract` first. A successful extraction proves the asset identity

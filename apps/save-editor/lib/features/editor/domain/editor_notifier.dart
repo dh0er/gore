@@ -1169,6 +1169,30 @@ class EditorNotifier extends StateNotifier<EditorState> {
     state = state.copyWith(selectedActor: actor, invalidEditKeys: invalid);
   }
 
+  /// Update what the selection says about the NPC it already points at.
+  ///
+  /// `selectedActor` is a snapshot taken when the row was tapped, and nothing
+  /// replaced it for the same id — reviving an NPC left the detail header
+  /// showing the death mark until it was selected again. Deliberately not
+  /// [selectActor]: this is the same actor, so its invalid-edit blocks must
+  /// survive.
+  void refreshSelectedActorStatus({required String id, required bool isDead}) {
+    final selected = state.selectedActor;
+    if (selected.isPlayer ||
+        selected.id != id ||
+        selected.isDead == isDead) {
+      return;
+    }
+    state = state.copyWith(
+      selectedActor: Actor.npc(
+        id: id,
+        name: selected.name,
+        uniqueName: selected.uniqueName,
+        isDead: isDead,
+      ),
+    );
+  }
+
   /// Mark (`pendingKey`) or clear (`null`) the NPC attribute panel's invalid
   /// field state. While set, global Save is disabled ([EditorState.hasInvalidNpcEdit])
   /// so a now-stale stored draft is never written behind an invalid field; the

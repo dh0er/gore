@@ -1,7 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:goresave/features/editor/domain/game_icons.dart';
+import 'package:goresave/features/editor/ui/game_icon.dart';
+import 'package:goresave/features/editor/ui/glossary_portrait.dart';
 import 'package:goresave/features/editor/domain/actor.dart';
+import 'package:goresave/features/editor/domain/character_category_catalog.dart';
 import 'package:goresave/features/editor/domain/character_index.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
@@ -91,17 +95,32 @@ String _prettifyNpcKey(String key) {
 /// keystroke is a cheap substring scan over the cached strings rather than
 /// re-resolving every name.
 class _SearchableRow {
-  const _SearchableRow(this.row, this.name, this.search);
+  const _SearchableRow(this.row, this.name, this.search, this.isHuman);
 
   final CharacterRow row;
   final String name;
   final String search;
+
+  /// Whether the character catalog calls this one a person.
+  ///
+  /// Deliberately coarser than the catalog's own three kinds. Whether a
+  /// creature resolves at all depends on the shape of its save id — the 57
+  /// wolves spawned at a `-WP_` waypoint resolve to `Creature_Wolf`, the other
+  /// 9 resolve to nothing — so creature and unknown are the same answer here.
+  /// Splitting on the raw kind gave one species two rows.
+  final bool isHuman;
 }
 
-/// Entity-first master list of all characters in the save: the Player (pinned on
-/// top), every spawned actor (searchable + paginated), and a trailing group of
-/// knowledge-only "orphans" (characters with no GlobalId). Selecting an entry
+/// Entity-first master list of the characters in the save: the Player (pinned on
+/// top) and every spawned actor, searchable and paginated. Selecting an entry
 /// calls [onSelect]; the parent owns which actor is [selected] and re-passes it.
+///
+/// Characters the save knows of but never spawned — knowledge-only entries with
+/// no GlobalId — are left out entirely: there is no actor to edit behind them.
+///
+/// Actors sharing a display name collapse into one expandable row carrying the
+/// count, so the fifty guards and the forty scavengers a save spawns cost one
+/// line each instead of ninety.
 ///
 /// The full list is fetched ONCE (one save decompress) and cached; search and
 /// pagination then run entirely CLIENT-SIDE. This makes search instant and lets
@@ -113,10 +132,12 @@ class CharacterMasterList extends StatefulWidget {
     super.key,
     required this.selected,
     required this.onSelect,
+    this.onSelectedStatusChanged,
     required this.load,
     required this.reloadKey,
     required this.locCatalog,
     required this.lang,
+    this.categories,
     this.showObjectIds = false,
   });
 
@@ -126,6 +147,11 @@ class CharacterMasterList extends StatefulWidget {
 
   /// Called when the user taps the Player row, an NPC row, or an orphan row.
   final void Function(Actor) onSelect;
+
+  /// Called after a reload when the freshly loaded row disagrees with the
+  /// selection about whether that character is dead — reviving one otherwise
+  /// left the detail header marking it dead until it was selected again.
+  final void Function(String id, bool isDead)? onSelectedStatusChanged;
 
   /// Loads the full unified character index (called once). Returns EVERY
   /// character in a single unpaginated response (e.g.
@@ -147,6 +173,11 @@ class CharacterMasterList extends StatefulWidget {
   /// The current game language, driving which loc set the name resolves from.
   final GameLang lang;
 
+  /// What each character IS, used to keep a man and a monster of the same name
+  /// out of one group. Null while the catalog loads; nobody counts as a person
+  /// until it lands, and grouping falls back to the name alone.
+  final CharacterCategoryCatalog? categories;
+
   /// Whether raw GlobalIds / orphan knowledge keys are rendered as row
   /// subtitles. Search continues to match identifiers while they are hidden.
   final bool showObjectIds;
@@ -158,6 +189,10 @@ class CharacterMasterList extends StatefulWidget {
 class _CharacterMasterListState extends State<CharacterMasterList> {
   static const _pageSize = 100;
 
+  /// How many actors must share a name before they fold into one row. Hiding
+  /// two rows behind a click buys nothing; hiding forty scavengers does.
+  static const _groupThreshold = 3;
+
   final TextEditingController _search = TextEditingController();
   // Debounce live search. No core call is made per keystroke (the full list is
   // cached) — this only throttles the cheap client-side re-filter so a fast
@@ -167,7 +202,10 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
   // The full, cached rows with precomputed search strings + display names,
   // split into spawned actors and knowledge-only orphans. Fetched once.
   List<_SearchableRow> _actors = const [];
-  List<_SearchableRow> _orphans = const [];
+
+  /// Display names whose group the user opened. Keyed by name so the state
+  /// survives paging and re-filtering.
+  final Set<(bool, String)> _expanded = <(bool, String)>{};
   String? _error;
   String _query = '';
   // Client-side page cursor over the FILTERED actor list (an item offset).
@@ -185,12 +223,16 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
   @override
   void didUpdateWidget(covariant CharacterMasterList oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // Re-resolve cached names if the catalog or language changes (the loaded
-    // rows are unchanged, so no refetch — just recompute search strings).
+    // Re-resolve cached names if a catalog or the language changes (the loaded
+    // rows are unchanged, so no refetch — just recompute search strings). The
+    // character catalog counts too: it arrives after the first build, and until
+    // it does no row knows whether it is a man or a monster.
     if (oldWidget.locCatalog != widget.locCatalog ||
-        oldWidget.lang != widget.lang) {
+        oldWidget.lang != widget.lang ||
+        oldWidget.categories != widget.categories) {
       _actors = _decorate(_actors.map((e) => e.row).toList(growable: false));
-      _orphans = _decorate(_orphans.map((e) => e.row).toList(growable: false));
+      // The names the groups are keyed by just changed under them.
+      _expanded.clear();
     }
     // A new loader OR a new reloadKey (a different save/inspection) means the
     // cached list is stale: reset search/cursor/lists and re-fetch against the
@@ -201,7 +243,7 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
       _query = '';
       _offset = 0;
       _actors = const [];
-      _orphans = const [];
+      _expanded.clear();
       _error = null;
       _loadAll();
     }
@@ -228,12 +270,21 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
         () {
           final key = row.globalId ?? row.uniqueName;
           final name = localizedNpcName(widget.locCatalog, widget.lang, key);
-          return _SearchableRow(row, name, '$key\n$name'.toLowerCase());
+          return _SearchableRow(
+            row,
+            name,
+            '$key\n$name'.toLowerCase(),
+            widget.categories?.isHuman(key) ?? false,
+          );
         }(),
     ];
     decorated.sort((a, b) {
       final byName = a.name.toLowerCase().compareTo(b.name.toLowerCase());
       if (byName != 0) return byName;
+      // A man and a monster can share a name — the mercenary Wolf and the
+      // sixty-six wolves. Keeping the people together is what lets the single
+      // grouping pass fold them into separate rows.
+      if (a.isHuman != b.isHuman) return a.isHuman ? -1 : 1;
       final aKey = a.row.globalId ?? a.row.uniqueName;
       final bKey = b.row.globalId ?? b.row.uniqueName;
       return aKey.compareTo(bKey);
@@ -248,9 +299,9 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
   static bool _isHeroRow(CharacterRow row) =>
       row.globalId != null && row.uniqueName.toLowerCase() == 'hero';
 
-  /// Fetch the ENTIRE character index once and cache it, split into actors
-  /// (`!isOrphan`, minus the [_isHeroRow] the pinned Player row represents) and
-  /// orphans (`isOrphan`).
+  /// Fetch the ENTIRE character index once and cache it, keeping the spawned
+  /// actors (minus the [_isHeroRow] the pinned Player row represents). A
+  /// character with no GlobalId never spawned; there is nothing to select.
   Future<void> _loadAll() async {
     final epoch = ++_epoch;
     setState(() => _loading = true);
@@ -264,10 +315,22 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
             .where((r) => !r.isOrphan && !_isHeroRow(r))
             .toList(growable: false),
       );
-      _orphans = _decorate(
-        page.characters.where((r) => r.isOrphan).toList(growable: false),
-      );
     });
+    _reconcileSelectedStatus(page.characters);
+  }
+
+  /// The selection carries what the row said when it was tapped. A revive
+  /// changes that, and nothing else replaces it, so tell the owner whenever a
+  /// reload disagrees.
+  void _reconcileSelectedStatus(List<CharacterRow> rows) {
+    final report = widget.onSelectedStatusChanged;
+    final id = widget.selected.id;
+    if (report == null || widget.selected.isPlayer || id == null) return;
+    for (final row in rows) {
+      if (row.globalId != id) continue;
+      if (row.isDead != widget.selected.isDead) report(id, row.isDead);
+      return;
+    }
   }
 
   /// The current filtered ACTOR list (case-insensitive substring of id OR the
@@ -278,14 +341,30 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
     return _actors.where((e) => e.search.contains(q)).toList(growable: false);
   }
 
-  /// The current filtered ORPHAN list — the SAME id|name predicate as
-  /// [_filtered], applied to the trailing orphan group so a search query
-  /// narrows the whole list, not just the spawned actors. Empty query → the
-  /// full orphan list. (Orphans stay unpaginated; only the filter applies.)
-  List<_SearchableRow> get _filteredOrphans {
-    final q = _query;
-    if (q.isEmpty) return _orphans;
-    return _orphans.where((e) => e.search.contains(q)).toList(growable: false);
+  /// The filtered list folded into one entry per display name.
+  ///
+  /// [_decorate] sorts by resolved name, so rows sharing one are already
+  /// adjacent — a single pass groups them. Fewer than [_groupThreshold] of a
+  /// name stay separate rows. Pagination then counts a group as the one line it
+  /// occupies while collapsed.
+  List<_CharacterGroup> _groups(List<_SearchableRow> rows) {
+    final groups = <_CharacterGroup>[];
+    for (var start = 0; start < rows.length;) {
+      var end = start + 1;
+      while (end < rows.length &&
+          rows[end].name == rows[start].name &&
+          rows[end].isHuman == rows[start].isHuman) {
+        end++;
+      }
+      final members = rows.sublist(start, end);
+      if (members.length < _groupThreshold) {
+        groups.addAll(members.map((row) => _CharacterGroup([row])));
+      } else {
+        groups.add(_CharacterGroup(members));
+      }
+      start = end;
+    }
+    return groups;
   }
 
   void _onSearchChanged(String _) {
@@ -306,17 +385,16 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
 
-    // Filter (id|name) then paginate the ACTOR list, both client-side. The
-    // orphan group gets the same filter (no pagination — it renders in full
-    // after the paginated actors).
-    final filtered = _filtered;
-    final orphans = _filteredOrphans;
-    final total = filtered.length;
+    // Filter (id|name), fold same-named actors into one group, then paginate —
+    // all client-side. Paging counts groups, so the numbers match the lines the
+    // user sees; an opened group then adds its members beyond the page size.
+    final groups = _groups(_filtered);
+    final total = groups.length;
     // Clamp the cursor: a shrinking filtered set may leave it past the end.
     final offset = total == 0
         ? 0
         : (_offset >= total ? ((total - 1) ~/ _pageSize) * _pageSize : _offset);
-    final pageItems = filtered.skip(offset).take(_pageSize).toList();
+    final pageItems = groups.skip(offset).take(_pageSize).toList();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -329,9 +407,15 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
           // Default one-line mode keeps every row equally compact.
           contentPadding: EdgeInsets.symmetric(
             horizontal: 16,
-            vertical: widget.showObjectIds ? 8 : 0,
+            vertical: widget.showObjectIds ? 12 : 6,
           ),
-          leading: const Icon(Icons.person_outline),
+          // The game draws no portrait of the nameless hero, so the player
+          // takes the same silhouette it uses for a character it has none for.
+          leading: const GlossaryPortrait(),
+          // The player row carries no id, so it is a one-line tile with a
+          // leading taller than its text — without this the name hangs from the
+          // top of the picture instead of sitting level with it.
+          titleAlignment: ListTileTitleAlignment.center,
           title: Text(
             l10n.tabPlayer,
             style: const TextStyle(fontWeight: FontWeight.bold),
@@ -403,27 +487,17 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
           child: ClipRect(
             child: Material(
               type: MaterialType.transparency,
-              child: _loading && _actors.isEmpty && _orphans.isEmpty
+              child: _loading && _actors.isEmpty
                   ? const Center(child: CircularProgressIndicator())
                   : ListView(
                       children: [
-                        for (final entry in pageItems) ...[
-                          _npcTile(entry, scheme, l10n),
-                          const Divider(height: 1),
-                        ],
-                        // Orphan group: rendered ONLY when non-empty after the
-                        // query filter — when a search matches no orphan the
-                        // header disappears with the rows.
-                        if (orphans.isNotEmpty) ...[
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                            child: Text(l10n.characterOrphanGroup),
-                          ),
-                          for (final entry in orphans) ...[
-                            _orphanTile(entry, scheme, l10n),
-                            const Divider(height: 1),
-                          ],
-                        ],
+                        for (final group in pageItems)
+                          ...(group.isSingle
+                              ? [
+                                  _npcTile(group.first, scheme, l10n),
+                                  const Divider(height: 1),
+                                ]
+                              : _groupTiles(group, scheme, l10n)),
                       ],
                     ),
             ),
@@ -433,26 +507,33 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
     );
   }
 
-  /// A spawned-actor row: dead/alive leading icon, display-name title, GlobalId
-  /// subtitle, and compact aspect badges (knowledge / events) as the trailing.
+  /// A spawned-actor row: the character's picture, its display name, the
+  /// GlobalId when ids are shown, and compact aspect badges as the trailing.
+  ///
+  /// [indent] pushes a row that sits inside an opened group in from the group
+  /// header above it.
   Widget _npcTile(
     _SearchableRow entry,
     ColorScheme scheme,
-    AppLocalizations l10n,
-  ) {
+    AppLocalizations l10n, {
+    bool indent = false,
+  }) {
     final row = entry.row;
     final name = entry.name;
     final isSelected =
         !widget.selected.isPlayer && widget.selected.id == row.globalId;
     return ListTile(
       dense: true,
-      // Death is encoded in the leading avatar: a deathly icon ONLY for a KILLED
-      // character (isDead), the normal face otherwise. (Reviving is done on the
-      // status row; this is just a glance indicator.)
-      leading: Icon(
-        row.isDead ? Icons.dangerous : Icons.face_outlined,
-        color: row.isDead ? scheme.error : null,
-      ),
+      contentPadding: EdgeInsets.only(left: indent ? 32 : 16, right: 16),
+      // Everyone shows the pencil portrait the glossary holds for them, or the
+      // mark for their kind when there is none: a person for every generic
+      // worker, bandit and guard, a creature for every monster. Death is a
+      // trailing badge — it says something ABOUT the character, it is not who
+      // the character is.
+      leading: GlossaryPortrait(npcUniqueName: row.globalId),
+      // A one-line row would otherwise hang its text from the top of a leading
+      // taller than itself.
+      titleAlignment: ListTileTitleAlignment.center,
       title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: widget.showObjectIds
           ? Text(
@@ -477,84 +558,114 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
     );
   }
 
-  /// A knowledge-only orphan row: no GlobalId, so it is built with an
-  /// `orphan:<uniqueName>` id sentinel (see [Actor.isOrphan]).
-  Widget _orphanTile(
-    _SearchableRow entry,
+  /// One expandable row standing for every actor sharing a display name, and —
+  /// while it is open — the rows themselves.
+  List<Widget> _groupTiles(
+    _CharacterGroup group,
     ColorScheme scheme,
     AppLocalizations l10n,
   ) {
-    final row = entry.row;
-    // Fall back to the uniqueName if the resolved display name is blank.
-    final name = entry.name.trim().isEmpty ? row.uniqueName : entry.name;
-    final isSelected =
+    final open = _expanded.contains(group.key);
+    final holdsSelection =
         !widget.selected.isPlayer &&
-        widget.selected.id == 'orphan:${row.uniqueName}';
-    return ListTile(
-      dense: true,
-      leading: const Icon(Icons.help_outline),
-      title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: widget.showObjectIds
-          ? Text(
-              row.uniqueName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 11),
-            )
-          : null,
-      // The same badges a spawned actor gets. An orphan can own a shop — a
-      // trader row is keyed by name, not by actor — so hand-rolling just the
-      // knowledge icon here would hide the merchants the core does flag.
-      trailing: _aspectBadges(row, scheme, l10n),
-      selected: isSelected,
-      selectedTileColor: scheme.primaryContainer,
-      selectedColor: scheme.primary,
-      onTap: () => widget.onSelect(
-        Actor.npc(
-          id: 'orphan:${row.uniqueName}',
-          name: name,
-          uniqueName: row.uniqueName,
+        group.members.any((e) => e.row.globalId == widget.selected.id);
+    return [
+      ListTile(
+        dense: true,
+        // The first member's picture stands for the group: they are the same
+        // character over and over, so any of them draws the same one.
+        leading: GlossaryPortrait(npcUniqueName: group.first.row.globalId),
+        titleAlignment: ListTileTitleAlignment.center,
+        title: Text(
+          '${group.name} (${group.members.length})',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         ),
+        trailing: Icon(open ? Icons.expand_less : Icons.expand_more, size: 20),
+        // Highlighted while it holds the selection, so a collapsed group still
+        // shows where the user is.
+        selected: holdsSelection && !open,
+        selectedTileColor: scheme.primaryContainer,
+        selectedColor: scheme.primary,
+        onTap: () => setState(() {
+          if (!_expanded.remove(group.key)) _expanded.add(group.key);
+        }),
       ),
-    );
+      const Divider(height: 1),
+      if (open)
+        for (final entry in group.members) ...[
+          _npcTile(entry, scheme, l10n, indent: true),
+          const Divider(height: 1),
+        ],
+    ];
   }
 
-  /// Compact trailing badges for an actor row: a book when it has captured
-  /// knowledge, a history glyph when it has recorded events, a storefront when
-  /// he runs a shop. No inventory badge — nearly every actor has one.
+  /// Compact trailing badges for an actor row: what the row says ABOUT a
+  /// character, in the game's own glyphs — captured dialogue knowledge, the
+  /// shop he runs, and last the death mark for a killed one. Null when it says
+  /// nothing, so a row without badges gives its whole width to the id.
+  ///
+  /// Deliberately short: the roles the glossary files a character under belong
+  /// on the detail page beside his name, where there is room to name them. No
+  /// inventory badge and no event badge either — nearly every actor has both,
+  /// so neither told the reader anything.
   Widget? _aspectBadges(
     CharacterRow row,
     ColorScheme scheme,
     AppLocalizations l10n,
   ) {
+    Widget badge(
+      String message,
+      String gameIcon,
+      IconData fallback, [
+      Color? color,
+    ]) {
+      return Tooltip(
+        message: message,
+        child: GameIcon(
+          name: gameIcon,
+          fallbackIcon: fallback,
+          size: 18,
+          color: color ?? scheme.onSurfaceVariant,
+        ),
+      );
+    }
+
     final badges = <Widget>[
       if (row.hasKnowledge)
-        Tooltip(
-          message: l10n.dialogKnowledge,
-          child: Icon(
-            Icons.menu_book_outlined,
-            size: 18,
-            color: scheme.onSurfaceVariant,
-          ),
+        badge(
+          l10n.dialogKnowledge,
+          gameIconKnowledge,
+          Icons.menu_book_outlined,
         ),
-      if (row.hasEvents)
-        Tooltip(
-          message: l10n.sectionEvents,
-          child: Icon(Icons.history, size: 18, color: scheme.onSurfaceVariant),
-        ),
+      // The shop comes from the trader array itself, not from the glossary:
+      // that is the record the editor can actually change.
       if (row.isTrader)
-        Tooltip(
-          message: l10n.tabTrade,
-          child: Icon(
-            Icons.storefront_outlined,
-            size: 18,
-            color: scheme.onSurfaceVariant,
-          ),
-        ),
+        badge(l10n.tabTrade, gameIconTrade, Icons.storefront_outlined),
+      if (row.isDead)
+        badge(l10n.npcStatusDead, gameIconDead, Icons.dangerous, scheme.error),
     ];
     if (badges.isEmpty) return null;
     return Wrap(spacing: 4, children: badges);
   }
+}
+
+/// Every actor sharing one resolved display name. A group of one renders as a
+/// plain row; a bigger one folds into an expandable header.
+class _CharacterGroup {
+  _CharacterGroup(this.members);
+
+  final List<_SearchableRow> members;
+
+  _SearchableRow get first => members.first;
+  String get name => first.name;
+
+  /// Identifies the group across paging and re-filtering. Name alone would let
+  /// opening the mercenary Wolf open the wolves too.
+  (bool, String) get key => (first.isHuman, first.name);
+
+  /// Whether this renders as a plain row rather than an expandable group.
+  bool get isSingle => members.length == 1;
 }
 
 /// Compact prev/next pagination row for the actor list. Mirrors the retired

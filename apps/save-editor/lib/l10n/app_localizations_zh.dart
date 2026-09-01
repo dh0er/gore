@@ -873,46 +873,60 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
+  String get itemTooltipIngredientFor => '用于制作';
+
+  @override
+  String itemTooltipTeaches(String item) {
+    return '传授: $item';
+  }
+
+  @override
+  String get itemTooltipValue => '价值';
+
+  @override
+  String get itemTooltipProtection => '防御';
+
+  @override
+  String get itemTooltipRequirements => '需求：';
+
+  @override
+  String get itemTooltipManaCost => '法力消耗';
+
+  @override
+  String get itemTooltipManaUpkeep => '蓄力法力消耗';
+
+  @override
+  String get itemCategoryAll => '全部';
+
+  @override
   String get itemCategoryMeleeWeapon => '近战武器';
 
   @override
   String get itemCategoryRangedWeapon => '远程武器';
 
   @override
-  String get itemCategoryAmmunition => '弹药';
+  String get itemCategoryMagic => '魔法';
 
   @override
-  String get itemCategoryArmor => '护甲';
+  String get itemCategoryWearable => '穿戴装备';
 
   @override
-  String get itemCategoryRune => '符文';
+  String get itemCategoryFood => '食物';
 
   @override
-  String get itemCategoryScroll => '法术卷轴';
+  String get itemCategoryPotion => '药水';
 
   @override
-  String get itemCategoryFood => '食物与药水';
+  String get itemCategoryMaterial => '材料';
+
+  @override
+  String get itemCategoryDocument => '文件';
 
   @override
   String get itemCategoryMisc => '杂项';
 
   @override
-  String get itemCategoryAmulet => '护身符';
-
-  @override
-  String get itemCategoryRing => '戒指';
-
-  @override
-  String get itemCategoryTrophy => '动物战利品';
-
-  @override
-  String get itemCategoryWriting => '文书';
-
-  @override
-  String get itemCategoryMission => '任务物品';
-
-  @override
-  String get itemCategoryKey => '钥匙';
+  String get itemCategoryArtefact => '神器';
 
   @override
   String get itemCategoryOther => '其他';
@@ -1714,7 +1728,7 @@ class AppLocalizationsZh extends AppLocalizations {
       '学会潜水后，游戏每次读取存档都会把屏息量和恢复速度重置为技能自带的数值。每秒消耗量则保持你设定的值。';
 
   @override
-  String get heroGroupSleep => '睡眠与休息';
+  String get heroGroupSleep => '睡眠';
 
   @override
   String get heroGroupIntoxication => '醉酒';
@@ -1804,6 +1818,18 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get glossaryFilterTeachers => '导师';
+
+  @override
+  String get roleTrader => '商人';
+
+  @override
+  String get roleDead => '已死亡';
+
+  @override
+  String get roleTeacher => '导师';
+
+  @override
+  String get roleArmorer => '护甲匠';
 
   @override
   String get glossaryFilterArmorers => '护甲匠';
@@ -2021,6 +2047,10 @@ class AppLocalizationsZh extends AppLocalizations {
       'SwampweedDepletionRate': '药性消退速度',
       'XPExecutedBounty': '倒地处决获得的经验',
       'XPKillOrDefeatBounty': '击败获得的经验',
+      'Level': '等级',
+      'LockpickDurability': '开锁器耐久',
+      'LockpickPrecision': '开锁精度',
+      'PickPocketing': '扒窃',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -2053,6 +2083,10 @@ class AppLocalizationsZh extends AppLocalizations {
       'SwampweedDepletionRate': '沼泽草带来的迷幻劲头消退得有多快。',
       'XPExecutedBounty': '在这名角色已经被打倒在地时再将其杀死，所能拿到的经验值。',
       'XPKillOrDefeatBounty': '把这名角色打倒时所能拿到的经验值，不管对方是当场毙命还是只被打晕在地。',
+      'Level': '角色等级。随经验提升，并带来学习点数。',
+      'LockpickDurability': '由开锁技能决定：未学2、已学4、精通6。',
+      'LockpickPrecision': '由开锁技能决定：未学0、已学1、精通2。',
+      'PickPocketing': '由扒窃技能决定：未学-30、已学-10、精通+10。',
       'other': '?',
     });
     return '$_temp0';
@@ -3812,46 +3846,60 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   }
 
   @override
+  String get itemTooltipIngredientFor => '用于制作';
+
+  @override
+  String itemTooltipTeaches(String item) {
+    return '传授: $item';
+  }
+
+  @override
+  String get itemTooltipValue => '价值';
+
+  @override
+  String get itemTooltipProtection => '防御';
+
+  @override
+  String get itemTooltipRequirements => '需求：';
+
+  @override
+  String get itemTooltipManaCost => '法力消耗';
+
+  @override
+  String get itemTooltipManaUpkeep => '蓄力法力消耗';
+
+  @override
+  String get itemCategoryAll => '全部';
+
+  @override
   String get itemCategoryMeleeWeapon => '近战武器';
 
   @override
   String get itemCategoryRangedWeapon => '远程武器';
 
   @override
-  String get itemCategoryAmmunition => '弹药';
+  String get itemCategoryMagic => '魔法';
 
   @override
-  String get itemCategoryArmor => '护甲';
+  String get itemCategoryWearable => '穿戴装备';
 
   @override
-  String get itemCategoryRune => '符文';
+  String get itemCategoryFood => '食物';
 
   @override
-  String get itemCategoryScroll => '法术卷轴';
+  String get itemCategoryPotion => '药水';
 
   @override
-  String get itemCategoryFood => '食物与药水';
+  String get itemCategoryMaterial => '材料';
+
+  @override
+  String get itemCategoryDocument => '文件';
 
   @override
   String get itemCategoryMisc => '杂项';
 
   @override
-  String get itemCategoryAmulet => '护身符';
-
-  @override
-  String get itemCategoryRing => '戒指';
-
-  @override
-  String get itemCategoryTrophy => '动物战利品';
-
-  @override
-  String get itemCategoryWriting => '文书';
-
-  @override
-  String get itemCategoryMission => '任务物品';
-
-  @override
-  String get itemCategoryKey => '钥匙';
+  String get itemCategoryArtefact => '神器';
 
   @override
   String get itemCategoryOther => '其他';
@@ -4653,7 +4701,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
       '学会潜水后，游戏每次读取存档都会把屏息量和恢复速度重置为技能自带的数值。每秒消耗量则保持你设定的值。';
 
   @override
-  String get heroGroupSleep => '睡眠与休息';
+  String get heroGroupSleep => '睡眠';
 
   @override
   String get heroGroupIntoxication => '醉酒';
@@ -4743,6 +4791,18 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get glossaryFilterTeachers => '导师';
+
+  @override
+  String get roleTrader => '商人';
+
+  @override
+  String get roleDead => '已死亡';
+
+  @override
+  String get roleTeacher => '导师';
+
+  @override
+  String get roleArmorer => '护甲匠';
 
   @override
   String get glossaryFilterArmorers => '护甲匠';
@@ -4960,6 +5020,10 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
       'SwampweedDepletionRate': '药性消退速度',
       'XPExecutedBounty': '倒地处决获得的经验',
       'XPKillOrDefeatBounty': '击败获得的经验',
+      'Level': '等级',
+      'LockpickDurability': '开锁器耐久',
+      'LockpickPrecision': '开锁精度',
+      'PickPocketing': '扒窃',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -4992,6 +5056,10 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
       'SwampweedDepletionRate': '沼泽草带来的迷幻劲头消退得有多快。',
       'XPExecutedBounty': '在这名角色已经被打倒在地时再将其杀死，所能拿到的经验值。',
       'XPKillOrDefeatBounty': '把这名角色打倒时所能拿到的经验值，不管对方是当场毙命还是只被打晕在地。',
+      'Level': '角色等级。随经验提升，并带来学习点数。',
+      'LockpickDurability': '由开锁技能决定：未学2、已学4、精通6。',
+      'LockpickPrecision': '由开锁技能决定：未学0、已学1、精通2。',
+      'PickPocketing': '由扒窃技能决定：未学-30、已学-10、精通+10。',
       'other': '?',
     });
     return '$_temp0';

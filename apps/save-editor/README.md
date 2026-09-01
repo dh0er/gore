@@ -18,8 +18,14 @@ game install. For modding, use the [`gore` CLI](../../docs/guide/README.md) or
   daily routine switched off so he stays where he was put instead of walking
   back; the editor records what it overwrote so the move can be undone.
 - Inventory: Change count of existing items; add new items from a bundled
-  catalog with categorized browsing; remove items; detect and repair damaged
-  slot IDs; reset an inventory to a clean starting state.
+  catalog, grouped by the game's own inventory tabs; remove items; detect and
+  repair damaged slot IDs; reset an inventory to a clean starting state.
+  Hovering an item shows the stat block the game shows: type, damage or spell
+  levels, protection, requirements, value and description.
+- Game images: With the game installed, item pictures and the game's own
+  attribute, protection, skill, quest and category icons are extracted from your
+  installation and shown next to their labels, and the glossary shows the game's
+  own character portraits. Everything works without them.
 - Faction crimes: Clear an NPC's crimes to reset the hostility its guild holds
   against you.
 - Glossary: Browse and edit NPC, creature, and location entries, including
@@ -47,9 +53,21 @@ game install. For modding, use the [`gore` CLI](../../docs/guide/README.md) or
 ## Compatibility
 
 Tested with Steam game version CL168781. Other game versions are not guaranteed:
-the bundled item and named-location catalogs come from specific game cooks and
-can become stale when a patch moves, renames or changes game data. Keep backups
-and use a Save Editor build qualified for the updated game version.
+the bundled item, item-stat and named-location catalogs come from specific game
+cooks and can become stale when a patch moves, renames or changes game data.
+Keep backups and use a Save Editor build qualified for the updated game
+version.
+
+The bundled item stats (`assets/item_stats.json`) carry what the shipped script
+cache says about every item — its type tag, damage, requirements, value and
+description key — plus the game's own inventory filter tables.
+`assets/glossary_images.json` maps each glossary entry to its portrait file.
+Regenerate both after a game update with the scripts in
+`apps/save-editor/tools/`; each file header documents the commands.
+
+The glossary portraits themselves are not bundled: they are loose PNGs in the
+installation under `G1R/Story/Conversation/images/Glossary/`, read from there
+directly.
 
 ## Installation & Updates
 

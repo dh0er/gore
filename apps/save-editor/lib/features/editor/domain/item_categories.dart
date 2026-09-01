@@ -1,25 +1,29 @@
 import 'package:goresave/features/editor/domain/editor_models.dart';
+import 'package:goresave/features/editor/domain/item_stats.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 
-/// Item categories for Gothic 1 Remake inventory items, derived from the
-/// Angelscript class-name prefix (e.g. `ItMi_Orenugget` -> misc).
+/// The inventory categories Gothic 1 Remake itself uses.
 ///
-/// Prefix set verified against the UE4SS object dump of 2026-06-12.
+/// These are the tabs on the game's own inventory rail, in its own order, taken
+/// from the `UInventoryFilter_G1R_*` tables in the shipped script cache — the
+/// same tables the game consults when it files an item. `other` is not a game
+/// tab: it collects the few items whose type tag no filter claims, which the
+/// game only ever shows under "All".
+///
+/// Which tab an item belongs to is decided by its `Item_*` type tag (see
+/// [ItemStatsCatalog]); [itemCategoryFromId] is the fallback for ids the
+/// bundled stats do not cover.
 enum ItemCategory {
-  meleeWeapon('Melee weapons'),
-  rangedWeapon('Ranged weapons'),
-  armor('Armor'),
-  ammunition('Ammunition'),
-  rune('Runes'),
-  scroll('Spell scrolls'),
-  food('Food & potions'),
+  meleeWeapon('Melee'),
+  rangedWeapon('Ranged'),
+  magic('Magic'),
+  wearable('Wearables'),
+  food('Food'),
+  potion('Potions'),
+  material('Materials'),
+  document('Documents'),
   misc('Miscellaneous'),
-  amulet('Amulets'),
-  ring('Rings'),
-  trophy('Animal trophies'),
-  writing('Writings'),
-  mission('Mission items'),
-  key('Keys'),
+  artefact('Artefacts'),
   other('Other');
 
   const ItemCategory(this.label);
@@ -30,6 +34,10 @@ enum ItemCategory {
 /// Returns the localized display label for [category]. The English
 /// [ItemCategory.label] is kept as a stable identifier / fallback; this is what
 /// should be shown to the user.
+///
+/// The game's own wording for these tabs is in the extracted loc catalog under
+/// the filter's `nameKey`, so callers that have the catalog should prefer that
+/// and use this only when nothing has been extracted yet.
 String localizedItemCategoryLabel(
   AppLocalizations l10n,
   ItemCategory category,
@@ -39,55 +47,100 @@ String localizedItemCategoryLabel(
       return l10n.itemCategoryMeleeWeapon;
     case ItemCategory.rangedWeapon:
       return l10n.itemCategoryRangedWeapon;
-    case ItemCategory.armor:
-      return l10n.itemCategoryArmor;
-    case ItemCategory.ammunition:
-      return l10n.itemCategoryAmmunition;
-    case ItemCategory.rune:
-      return l10n.itemCategoryRune;
-    case ItemCategory.scroll:
-      return l10n.itemCategoryScroll;
+    case ItemCategory.magic:
+      return l10n.itemCategoryMagic;
+    case ItemCategory.wearable:
+      return l10n.itemCategoryWearable;
     case ItemCategory.food:
       return l10n.itemCategoryFood;
+    case ItemCategory.potion:
+      return l10n.itemCategoryPotion;
+    case ItemCategory.material:
+      return l10n.itemCategoryMaterial;
+    case ItemCategory.document:
+      return l10n.itemCategoryDocument;
     case ItemCategory.misc:
       return l10n.itemCategoryMisc;
-    case ItemCategory.amulet:
-      return l10n.itemCategoryAmulet;
-    case ItemCategory.ring:
-      return l10n.itemCategoryRing;
-    case ItemCategory.trophy:
-      return l10n.itemCategoryTrophy;
-    case ItemCategory.writing:
-      return l10n.itemCategoryWriting;
-    case ItemCategory.mission:
-      return l10n.itemCategoryMission;
-    case ItemCategory.key:
-      return l10n.itemCategoryKey;
+    case ItemCategory.artefact:
+      return l10n.itemCategoryArtefact;
     case ItemCategory.other:
       return l10n.itemCategoryOther;
   }
 }
 
+/// The tab a `UInventoryFilter_G1R_*` id stands for, or null when it is not one
+/// of ours.
+///
+/// Null covers the game's own "All" filter — which collects everything and is
+/// no category — and any tab a future game build adds. Both must stay out of
+/// [ItemCategory.other]: that is the editor's catch-all for items no tab
+/// claims, and letting a filter land on it would rename and re-icon the group
+/// after the wrong thing.
+ItemCategory? itemCategoryFromFilterId(String filterId) {
+  return switch (filterId) {
+    'G1R_MeleeWeapons' => ItemCategory.meleeWeapon,
+    'G1R_RangedWeapons' => ItemCategory.rangedWeapon,
+    'G1R_Magic' => ItemCategory.magic,
+    'G1R_Wereables' => ItemCategory.wearable,
+    'G1R_Food' => ItemCategory.food,
+    'G1R_Potions' => ItemCategory.potion,
+    'G1R_Materials' => ItemCategory.material,
+    'G1R_Documents' => ItemCategory.document,
+    'G1R_Miscellaneous' => ItemCategory.misc,
+    'G1R_Artefacts' => ItemCategory.artefact,
+    _ => null,
+  };
+}
+
+/// Category of an item, preferring the game's own answer.
+///
+/// [stats] is the bundled item-stats catalog; when it knows this item's type
+/// tag the tab is exactly the one the game would open it under. Without it (an
+/// id added by a newer game build, or a test) the class-name prefix decides,
+/// which lands in the same tab for every shipped item family.
+///
+/// An item the catalog DOES know but no filter claims goes to [other], not to
+/// the prefix guess: the game shows those seven — orc weapons, a claw, a tail —
+/// under "All" and nowhere else, and reading `ItMw_` off the name would file
+/// them among the melee weapons against the game's own answer.
+ItemCategory itemCategoryFor(String id, {ItemStatsCatalog? stats}) {
+  final known = stats?.statsFor(id);
+  if (known == null) return itemCategoryFromId(id);
+  final filter = stats?.filterFor(id);
+  final category = filter == null ? null : itemCategoryFromFilterId(filter.id);
+  return category ?? ItemCategory.other;
+}
+
+/// Fallback classifier from the Angelscript class-name prefix, used when the
+/// bundled item stats do not know the id. Prefix set verified against the UE4SS
+/// object dump of 2026-06-12; the tabs are the game's.
 ItemCategory itemCategoryFromId(String id) {
-  if (_isArmorId(id)) return ItemCategory.armor;
+  if (_isArmorId(id)) return ItemCategory.wearable;
   if (id.startsWith('ItMw_')) return ItemCategory.meleeWeapon;
   if (id.startsWith('ItRw_')) return ItemCategory.rangedWeapon;
   // ItAm_ is ammunition (ItAm_Arrow/ItAm_Bolt); amulets live under ItAt_.
-  if (id.startsWith('ItAm_')) return ItemCategory.ammunition;
-  if (id.startsWith('ItAr_Rune_')) return ItemCategory.rune;
-  if (id.startsWith('ItAr_Scroll_')) return ItemCategory.scroll;
+  if (id.startsWith('ItAm_')) return ItemCategory.rangedWeapon;
+  if (id.startsWith('ItAr_Rune_') || id.startsWith('ItAr_Scroll_')) {
+    return ItemCategory.magic;
+  }
+  if (id.startsWith('ItFo_Potion_') || id.startsWith('ItFo_Booze')) {
+    return ItemCategory.potion;
+  }
   if (id.startsWith('ItFo_')) return ItemCategory.food;
+  if (id.startsWith('ItAt_Amulet_') || id.startsWith('ItAt_Ring_')) {
+    return ItemCategory.wearable;
+  }
+  // Everything else under ItAt_ is a hunting trophy, which the game files with
+  // the crafting materials rather than on its own tab.
+  if (id.startsWith('ItAt_')) return ItemCategory.material;
   if (id.startsWith('ItMi_')) return ItemCategory.misc;
-  if (id.startsWith('ItAt_Amulet_')) return ItemCategory.amulet;
-  if (id.startsWith('ItAt_Ring_')) return ItemCategory.ring;
-  if (id.startsWith('ItAt_')) return ItemCategory.trophy;
-  if (id.startsWith('ItWr_')) return ItemCategory.writing;
-  if (id.startsWith('ItMs_')) return ItemCategory.mission;
+  if (id.startsWith('ItWr_')) return ItemCategory.document;
+  if (id.startsWith('ItMs_')) return ItemCategory.artefact;
   if (id.startsWith('ItKe_') ||
       id.startsWith('ItKey') ||
       id.startsWith('ItChestKey') ||
       id.startsWith('ItDoorKey')) {
-    return ItemCategory.key;
+    return ItemCategory.artefact;
   }
   return ItemCategory.other;
 }
@@ -185,10 +238,13 @@ class InventoryItemGroup {
 List<InventoryItemGroup> groupInventoryItems(
   List<PrivateInventoryItem> items, {
   String Function(PrivateInventoryItem item)? displayNameOf,
+  ItemStatsCatalog? stats,
 }) {
   final byCategory = <ItemCategory, List<PrivateInventoryItem>>{};
   for (final item in items) {
-    byCategory.putIfAbsent(itemCategoryFromId(item.id), () => []).add(item);
+    byCategory
+        .putIfAbsent(itemCategoryFor(item.id, stats: stats), () => [])
+        .add(item);
   }
   int compare(PrivateInventoryItem a, PrivateInventoryItem b) {
     if (displayNameOf != null) {

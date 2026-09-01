@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:goresave/features/editor/ui/game_icon.dart';
 
 /// One pane in a [GroupedAttributeSidebar]: a sidebar tile (icon + label) and
 /// the detail content shown when that tile is selected. [id] identifies the
@@ -11,11 +12,16 @@ class SidebarPane {
     required this.label,
     required this.icon,
     required this.detail,
+    this.gameIcon,
   });
 
   final Object id;
   final String label;
   final IconData icon;
+
+  /// Shared game glyph shown instead of [icon] once the user's install has been
+  /// read; null keeps [icon].
+  final String? gameIcon;
   final Widget detail;
 }
 
@@ -73,6 +79,7 @@ class GroupedAttributeSidebar extends StatelessWidget {
                     _SidebarTile(
                       label: pane.label,
                       icon: pane.icon,
+                      gameIcon: pane.gameIcon,
                       selected: pane.id == effective,
                       onTap: () => onSelect(pane.id),
                     ),
@@ -106,12 +113,14 @@ class _SidebarTile extends StatelessWidget {
   const _SidebarTile({
     required this.label,
     required this.icon,
+    required this.gameIcon,
     required this.selected,
     required this.onTap,
   });
 
   final String label;
   final IconData icon;
+  final String? gameIcon;
   final bool selected;
   final VoidCallback onTap;
 
@@ -130,8 +139,9 @@ class _SidebarTile extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
             child: Row(
               children: [
-                Icon(
-                  icon,
+                GameIcon(
+                  name: gameIcon,
+                  fallbackIcon: icon,
                   size: 18,
                   color: selected ? scheme.primary : scheme.onSurfaceVariant,
                 ),

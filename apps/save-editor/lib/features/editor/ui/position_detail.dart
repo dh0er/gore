@@ -279,13 +279,16 @@ class NpcPositionPanel extends StatefulWidget {
 
 class _NpcPositionPanelState extends State<NpcPositionPanel> {
   NpcPose? _pose;
+
   /// The whole load result, kept for its routine half. [_pose] stays as its own
   /// field because every coordinate path already reads it.
   NpcPoseResult? _result;
+
   /// Whether the move should also pin the NPC by putting him on the inert
   /// routine. On by default: a move that the routine undoes within seconds is
   /// not what anyone means by moving an NPC.
   bool _stayInPlace = true;
+
   /// Set by "take the move back" and cleared by any other change. While set, the
   /// routine write targets the RECORDED original class instead of the inert one.
   bool _restoring = false;
@@ -593,7 +596,9 @@ class _NpcPositionPanelState extends State<NpcPositionPanel> {
     final rotation = _currentRotation();
     final rotationBefore = pose.rotation;
     final movesRotation =
-        rotation != null && rotationBefore != null && rotation != rotationBefore;
+        rotation != null &&
+        rotationBefore != null &&
+        rotation != rotationBefore;
     return NpcPlacementDraft(
       edits: edits,
       routineClassPath: result.routineClassPath,
@@ -757,18 +762,6 @@ class _NpcPositionPanelState extends State<NpcPositionPanel> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              const Icon(Icons.place_outlined),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  l10n.heroTransform,
-                  style: theme.textTheme.titleSmall,
-                ),
-              ),
-            ],
-          ),
           if (_error != null) ...[
             const SizedBox(height: 6),
             Text(_error!, style: TextStyle(color: theme.colorScheme.error)),

@@ -4,13 +4,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/actor.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
+import 'package:goresave/features/editor/domain/game_icons.dart';
 import 'package:goresave/features/editor/domain/item_categories.dart';
+import 'package:goresave/features/editor/domain/item_stats.dart';
 import 'package:goresave/features/editor/domain/trader_models.dart';
 import 'package:goresave/features/editor/ui/add_inventory_item_dialog.dart';
 import 'package:goresave/features/editor/ui/inventory_item_visual.dart';
+import 'package:goresave/features/editor/ui/item_stats_tooltip.dart';
 import 'package:goresave/features/editor/ui/pending_structural_row.dart';
 import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 import 'package:goresave/l10n/app_localizations.dart';
+import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
 import 'package:goresave/providers/data_providers.dart';
 
@@ -191,120 +195,146 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
         if (!(showOreCard && item.isOre) && !removals.contains(item.path)) item,
     ];
 
+    // The sub-tab layout every other detail pane uses, documented on
+    // CharactersTab: outer 20/top 8, one card, 16 inside it. Trade used to lay
+    // its blocks on the bare background, which made it the odd tab out.
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-      child: LayoutBuilder(
-        builder: (context, pane) => Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // The notes, the map switch and the ore card scroll among themselves
-            // once the pane gets short, so they can never squeeze the browser out
-            // of the column — which they did, by 8px, at 620px tall.
-            ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: _headCap(pane.maxHeight)),
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    // First, because it qualifies every number below it — the ore as much
-                    // as the stock counts.
-                    if (unsupported) ...[
-                      _NoteCard(
-                        text: incomplete
-                            ? l10n.traderRecordIncomplete
-                            : l10n.traderDifficultyStockUnsupported,
-                        tone: _NoteTone.warning,
-                      ),
-                      const SizedBox(height: 12),
-                    ],
-                    _NoteCard(text: l10n.traderPriceWarning),
-                    // The core drops setStock from `writable` when no shop
-                    // holds a line while still offering addItem, so "read only"
-                    // has to mean none of the three is available — not merely
-                    // that one of them is missing.
-                    if (widget.editable &&
-                        !unsupported &&
-                        !canSet &&
-                        !canAdd &&
-                        !canRemove) ...[
-                      const SizedBox(height: 12),
-                      Text(
-                        l10n.traderReadOnlyCore,
-                        style: theme.textTheme.bodySmall,
-                      ),
-                    ],
-                    const SizedBox(height: 16),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: SegmentedButton<TraderStockMap>(
-                        segments: [
-                          ButtonSegment(
-                            value: TraderStockMap.current,
-                            icon: const Icon(Icons.storefront_outlined),
-                            label: Text(l10n.traderStockCurrent),
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: LayoutBuilder(
+            builder: (context, pane) {
+              // The pane is under 200px wide at the smallest supported window,
+              // where two labelled segments overflow.
+              final labelled = pane.maxWidth >= _labelledActionsAbove;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // The notes, the map switch and the ore card scroll among themselves
+                  // once the pane gets short, so they can never squeeze the browser out
+                  // of the column — which they did, by 8px, at 620px tall.
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight: _headCap(pane.maxHeight),
+                    ),
+                    child: SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // First, because it qualifies every number below it — the ore as much
+                          // as the stock counts.
+                          if (unsupported) ...[
+                            _NoteCard(
+                              text: incomplete
+                                  ? l10n.traderRecordIncomplete
+                                  : l10n.traderDifficultyStockUnsupported,
+                              tone: _NoteTone.warning,
+                            ),
+                            const SizedBox(height: 12),
+                          ],
+                          _NoteCard(text: l10n.traderPriceWarning),
+                          // The core drops setStock from `writable` when no shop
+                          // holds a line while still offering addItem, so "read only"
+                          // has to mean none of the three is available — not merely
+                          // that one of them is missing.
+                          if (widget.editable &&
+                              !unsupported &&
+                              !canSet &&
+                              !canAdd &&
+                              !canRemove) ...[
+                            const SizedBox(height: 12),
+                            Text(
+                              l10n.traderReadOnlyCore,
+                              style: theme.textTheme.bodySmall,
+                            ),
+                          ],
+                          const SizedBox(height: 16),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: SegmentedButton<TraderStockMap>(
+                              segments: [
+                                ButtonSegment(
+                                  value: TraderStockMap.current,
+                                  icon: const Icon(Icons.storefront_outlined),
+                                  label: labelled
+                                      ? Text(l10n.traderStockCurrent)
+                                      : null,
+                                  tooltip: labelled
+                                      ? null
+                                      : l10n.traderStockCurrent,
+                                ),
+                                ButtonSegment(
+                                  value: TraderStockMap.base,
+                                  icon: const Icon(Icons.inventory_outlined),
+                                  label: labelled
+                                      ? Text(l10n.traderStockBase)
+                                      : null,
+                                  tooltip: labelled
+                                      ? null
+                                      : l10n.traderStockBase,
+                                ),
+                              ],
+                              selected: {_map},
+                              onSelectionChanged: (selection) =>
+                                  setState(() => _map = selection.first),
+                            ),
                           ),
-                          ButtonSegment(
-                            value: TraderStockMap.base,
-                            icon: const Icon(Icons.inventory_outlined),
-                            label: Text(l10n.traderStockBase),
-                          ),
+                          if (_map == TraderStockMap.base) ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              l10n.traderStockBaseHint,
+                              style: theme.textTheme.bodySmall,
+                            ),
+                          ],
+                          if (showOreCard) ...[
+                            const SizedBox(height: 16),
+                            _OreCard(
+                              detail: detail,
+                              editable: canSet,
+                              canRemove: canRemove,
+                              removalPending: removals.contains(kTraderOrePath),
+                              onChanged: (value) =>
+                                  _queueSet(_map, kTraderOrePath, value),
+                              onRevert: () => _revert(_map, kTraderOrePath),
+                              onRemove: () =>
+                                  _queueRemove(_map, kTraderOrePath),
+                              pending: _pendingCountFor(_map, kTraderOrePath),
+                            ),
+                          ],
                         ],
-                        selected: {_map},
-                        onSelectionChanged: (selection) =>
-                            setState(() => _map = selection.first),
                       ),
                     ),
-                    if (_map == TraderStockMap.base) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        l10n.traderStockBaseHint,
-                        style: theme.textTheme.bodySmall,
-                      ),
-                    ],
-                    if (showOreCard) ...[
-                      const SizedBox(height: 16),
-                      _OreCard(
-                        detail: detail,
-                        editable: canSet,
-                        canRemove: canRemove,
-                        removalPending: removals.contains(kTraderOrePath),
-                        onChanged: (value) =>
-                            _queueSet(_map, kTraderOrePath, value),
-                        onRevert: () => _revert(_map, kTraderOrePath),
-                        onRemove: () => _queueRemove(_map, kTraderOrePath),
-                        pending: _pendingCountFor(_map, kTraderOrePath),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Expanded(
-              child: _StockSection(
-                map: _map,
-                items: rows,
-                lineCount: detail.stock(_map).length,
-                pendingAdds: _pendingAdds(_map),
-                pendingRemovals: [
-                  for (final item in detail.stock(_map))
-                    if (removals.contains(item.path)) item,
+                  ),
+                  const SizedBox(height: 16),
+                  Expanded(
+                    child: _StockSection(
+                      map: _map,
+                      items: rows,
+                      lineCount: detail.stock(_map).length,
+                      pendingAdds: _pendingAdds(_map),
+                      pendingRemovals: [
+                        for (final item in detail.stock(_map))
+                          if (removals.contains(item.path)) item,
+                      ],
+                      canSet: canSet,
+                      canAdd: canAdd,
+                      canRemove: canRemove,
+                      selectedCategory: _category,
+                      onSelectCategory: (category) =>
+                          setState(() => _category = category),
+                      pendingOf: _pendingCountFor,
+                      onChanged: _queueSet,
+                      onRevert: _revert,
+                      onRemove: _queueRemove,
+                      onRevertAdd: _revertAdd,
+                      onAdd: () => _addItem(_map, detail),
+                    ),
+                  ),
                 ],
-                canSet: canSet,
-                canAdd: canAdd,
-                canRemove: canRemove,
-                selectedCategory: _category,
-                onSelectCategory: (category) =>
-                    setState(() => _category = category),
-                pendingOf: _pendingCountFor,
-                onChanged: _queueSet,
-                onRevert: _revert,
-                onRemove: _queueRemove,
-                onRevertAdd: _revertAdd,
-                onAdd: () => _addItem(_map, detail),
-              ),
-            ),
-          ],
+              );
+            },
+          ),
         ),
       ),
     );
@@ -451,6 +481,10 @@ const double _oreStackBelow = 320;
 /// the row has to stop using one.
 const double _rowStackBelow = 300;
 
+/// From this pane width the switch and the add action carry their labels; under
+/// it they overflow the row, so they show icons with tooltips instead.
+const double _labelledActionsAbove = 320;
+
 class _OreCard extends ConsumerWidget {
   const _OreCard({
     required this.detail,
@@ -508,8 +542,14 @@ class _OreCard extends ConsumerWidget {
             onPressed: removalPending ? null : onRemove,
           )
         : null;
-    return Card(
-      margin: EdgeInsets.zero,
+    return DecoratedBox(
+      // Named so a test can reach this block without matching on the sheet
+      // every panel now sits on.
+      key: const ValueKey('trader-ore-card'),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: LayoutBuilder(
@@ -575,9 +615,14 @@ class _NoteCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isWarning = tone == _NoteTone.warning;
-    return Card(
-      margin: EdgeInsets.zero,
-      color: isWarning ? theme.colorScheme.errorContainer : null,
+    // A block ON the sheet, not a second card lying on top of it.
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: isWarning
+            ? theme.colorScheme.errorContainer
+            : theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Row(
@@ -629,7 +674,14 @@ class _StockSection extends ConsumerWidget {
   /// Below this width the sidebar would leave the list unusably narrow, so the
   /// categories collapse into one flat list instead. Same threshold the
   /// inventory browser uses.
-  static const double _compactBelow = 600;
+  /// Below this the category rail folds away and the lines are shown flat.
+  ///
+  /// The rail costs 200 plus a 16 gap, and a line stays horizontal down to
+  /// [_rowStackBelow], so 560 still leaves the lines more room than they need.
+  /// Deliberately under 600: the shared sub-tab padding takes 40 of the pane,
+  /// which at a 1400-wide window left 588 and folded the rail away on a screen
+  /// with room for it.
+  static const double _compactBelow = 560;
 
   /// The share of the pane the queued-change banners may claim before they
   /// scroll among themselves, so the stock browser stays visible below them.
@@ -692,7 +744,24 @@ class _StockSection extends ConsumerWidget {
     final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
     String nameOf(TraderItem item) =>
         localizedGameName(locCatalog, lang, item.id) ?? item.id;
-    final groups = _grouped(items, displayNameOf: nameOf);
+    // The trader's stock is inventory too, so it is filed by the same tabs the
+    // game's own inventory rail uses.
+    final itemStats = ref.watch(itemStatsCatalogProvider).value;
+    final groups = _grouped(items, displayNameOf: nameOf, stats: itemStats);
+    // The game's own "All" filter is not a category — it collects everything —
+    // so it is deliberately absent here.
+    final filtersById = <ItemCategory, InventoryFilter>{
+      for (final filter in itemStats?.filters ?? const <InventoryFilter>[])
+        ?itemCategoryFromFilterId(filter.id): filter,
+    };
+    String categoryLabel(ItemCategory category) {
+      final key = filtersById[category]?.nameKey ?? '';
+      final fromGame = key.isEmpty
+          ? null
+          : resolveGameText(locCatalog, key, lang);
+      return fromGame ?? localizedItemCategoryLabel(l10n, category);
+    }
+
     // The compact pane has no sidebar, so it lists every line at once. The core
     // hands them over in class-id order, which in most languages is not the
     // order of the names on screen — sort them the way the groups are sorted.
@@ -725,12 +794,20 @@ class _StockSection extends ConsumerWidget {
                   ),
                 ),
               ),
+              // The label goes when the pane cannot carry it: at the smallest
+              // supported window this button alone is wider than the row.
               if (canAdd)
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.add),
-                  label: Text(l10n.traderAddItem),
-                  onPressed: onAdd,
-                ),
+                pane.maxWidth >= _labelledActionsAbove
+                    ? OutlinedButton.icon(
+                        icon: const Icon(Icons.add),
+                        label: Text(l10n.traderAddItem),
+                        onPressed: onAdd,
+                      )
+                    : IconButton.outlined(
+                        icon: const Icon(Icons.add),
+                        tooltip: l10n.traderAddItem,
+                        onPressed: onAdd,
+                      ),
             ],
           ),
           // Queued changes sit ABOVE the list: they are what the next save will
@@ -803,11 +880,13 @@ class _StockSection extends ConsumerWidget {
                                   for (final group in groups)
                                     SidebarTile(
                                       icon: iconForItemCategory(group.category),
+                                      gameIcon:
+                                          filtersById[group.category]?.icon ??
+                                          gameIconForItemCategory(
+                                            group.category,
+                                          ),
                                       label: l10n.categoryWithCount(
-                                        localizedItemCategoryLabel(
-                                          l10n,
-                                          group.category,
-                                        ),
+                                        categoryLabel(group.category),
                                         group.items.length,
                                       ),
                                       selected: group.category == selected,
@@ -825,22 +904,33 @@ class _StockSection extends ConsumerWidget {
                         child: ListView.builder(
                           padding: const EdgeInsets.symmetric(vertical: 4),
                           itemCount: rows.length,
-                          itemBuilder: (context, index) => _StockRow(
-                            // The map belongs in the key: the same item exists in
-                            // both, so keying on the path alone reused one row's
-                            // field across a map switch — and with the focused
-                            // guard skipping the sync, the old count stayed on
-                            // screen while keystrokes went to the other map.
-                            key: ValueKey((map, rows[index].path)),
-                            item: rows[index],
-                            map: map,
-                            canSet: canSet,
-                            canRemove: canRemove,
-                            pending: pendingOf(map, rows[index].path),
-                            onChanged: (v) =>
-                                onChanged(map, rows[index].path, v),
-                            onRevert: () => onRevert(map, rows[index].path),
-                            onRemove: () => onRemove(map, rows[index].path),
+                          // The same upper bound the inventory rows carry: a
+                          // ListTile otherwise runs across the whole detail
+                          // pane and pins its count field to the far edge,
+                          // half a screen from the name it belongs to. Only a
+                          // bound — a narrow pane still gets the full width.
+                          itemBuilder: (context, index) => Align(
+                            alignment: Alignment.centerLeft,
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 560),
+                              child: _StockRow(
+                                // The map belongs in the key: the same item exists in
+                                // both, so keying on the path alone reused one row's
+                                // field across a map switch — and with the focused
+                                // guard skipping the sync, the old count stayed on
+                                // screen while keystrokes went to the other map.
+                                key: ValueKey((map, rows[index].path)),
+                                item: rows[index],
+                                map: map,
+                                canSet: canSet,
+                                canRemove: canRemove,
+                                pending: pendingOf(map, rows[index].path),
+                                onChanged: (v) =>
+                                    onChanged(map, rows[index].path, v),
+                                onRevert: () => onRevert(map, rows[index].path),
+                                onRemove: () => onRemove(map, rows[index].path),
+                              ),
+                            ),
                           ),
                         ),
                       ),
@@ -882,10 +972,13 @@ int Function(TraderItem, TraderItem) _byDisplayName(
 List<_StockGroup> _grouped(
   List<TraderItem> items, {
   required String Function(TraderItem item) displayNameOf,
+  ItemStatsCatalog? stats,
 }) {
   final byCategory = <ItemCategory, List<TraderItem>>{};
   for (final item in items) {
-    byCategory.putIfAbsent(itemCategoryFromId(item.id), () => []).add(item);
+    byCategory
+        .putIfAbsent(itemCategoryFor(item.id, stats: stats), () => [])
+        .add(item);
   }
   final compare = _byDisplayName(displayNameOf);
 
@@ -1009,48 +1102,66 @@ class _StockRow extends ConsumerWidget {
       ],
     );
 
+    // Hovering a row shows what the game shows when the player hovers the item,
+    // the same card the inventory rows carry. Ore is the shop's buying power
+    // rather than a stocked item, so it has no card.
+    Widget hoverable(Widget row) => item.isOre
+        ? row
+        : ItemStatsTooltip(itemId: item.id, title: label, child: row);
+
     return LayoutBuilder(
       builder: (context, box) {
         // A ListTile keeps its trailing at full width, and the field plus the
         // delete button want ~180px — more than the whole row gets at the
         // smallest supported window. There the value moves under the name.
         if (box.maxWidth >= _rowStackBelow) {
-          return ListTile(
-            dense: true,
-            leading: icon,
-            title: Text(label),
-            subtitle: subtitle.isEmpty
-                ? null
-                : Text(subtitle, style: theme.textTheme.bodySmall),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                SizedBox(width: 130, child: field),
-                ?delete,
-              ],
-            ),
-          );
-        }
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+          return hoverable(
+            ListTile(
+              dense: true,
+              // Matched to the inventory rows: the count editor is a 48px
+              // control, and dropping the tile's own vertical padding keeps
+              // neighbouring rows compact without shrinking it.
+              minTileHeight: 48,
+              minVerticalPadding: 0,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+              horizontalTitleGap: 8,
+              leading: icon,
+              title: Text(label),
+              subtitle: subtitle.isEmpty
+                  ? null
+                  : Text(subtitle, style: theme.textTheme.bodySmall),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  icon,
-                  const SizedBox(width: 12),
-                  Expanded(child: text),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(child: field),
+                  SizedBox(width: 132, child: field),
                   ?delete,
                 ],
               ),
-            ],
+            ),
+          );
+        }
+        return hoverable(
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    icon,
+                    const SizedBox(width: 12),
+                    Expanded(child: text),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(child: field),
+                    ?delete,
+                  ],
+                ),
+              ],
+            ),
           ),
         );
       },
@@ -1190,25 +1301,30 @@ class _CountFieldState extends State<_CountField> {
   @override
   Widget build(BuildContext context) {
     final dirty = widget.pending != null && widget.pending != widget.value;
-    return TextField(
-      controller: _controller,
-      focusNode: _focus,
-      enabled: widget.enabled,
-      keyboardType: TextInputType.number,
-      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-      textAlign: TextAlign.end,
-      decoration: InputDecoration(
-        isDense: true,
-        border: const OutlineInputBorder(),
-        errorText: _error,
-        suffixIcon: dirty
-            ? IconButton(
-                icon: const Icon(Icons.undo, size: 16),
-                onPressed: _undo,
-              )
-            : null,
+    // The same field the inventory rows carry: named, theme-bordered and left
+    // aligned. A stock count and an inventory count are the same kind of
+    // number, and the two lists sit one tab apart.
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 48),
+      child: TextField(
+        controller: _controller,
+        focusNode: _focus,
+        enabled: widget.enabled,
+        keyboardType: TextInputType.number,
+        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+        decoration: InputDecoration(
+          labelText: AppLocalizations.of(context).count,
+          isDense: true,
+          errorText: _error,
+          suffixIcon: dirty
+              ? IconButton(
+                  icon: const Icon(Icons.undo, size: 16),
+                  onPressed: _undo,
+                )
+              : null,
+        ),
+        onChanged: _onChanged,
       ),
-      onChanged: _onChanged,
     );
   }
 }

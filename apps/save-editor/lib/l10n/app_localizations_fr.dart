@@ -918,46 +918,60 @@ class AppLocalizationsFr extends AppLocalizations {
   }
 
   @override
+  String get itemTooltipIngredientFor => 'Ingrédient pour';
+
+  @override
+  String itemTooltipTeaches(String item) {
+    return 'Apprend: $item';
+  }
+
+  @override
+  String get itemTooltipValue => 'Valeur';
+
+  @override
+  String get itemTooltipProtection => 'Protection';
+
+  @override
+  String get itemTooltipRequirements => 'Prérequis :';
+
+  @override
+  String get itemTooltipManaCost => 'Coût en mana';
+
+  @override
+  String get itemTooltipManaUpkeep => 'Coût de charge en mana';
+
+  @override
+  String get itemCategoryAll => 'Tout';
+
+  @override
   String get itemCategoryMeleeWeapon => 'Armes de mêlée';
 
   @override
   String get itemCategoryRangedWeapon => 'Armes à distance';
 
   @override
-  String get itemCategoryAmmunition => 'Munitions';
+  String get itemCategoryMagic => 'Magie';
 
   @override
-  String get itemCategoryArmor => 'Armures';
+  String get itemCategoryWearable => 'Équipement porté';
 
   @override
-  String get itemCategoryRune => 'Runes';
+  String get itemCategoryFood => 'Nourriture';
 
   @override
-  String get itemCategoryScroll => 'Parchemins de sort';
+  String get itemCategoryPotion => 'Potions';
 
   @override
-  String get itemCategoryFood => 'Nourriture et potions';
+  String get itemCategoryMaterial => 'Matériaux';
+
+  @override
+  String get itemCategoryDocument => 'Documents';
 
   @override
   String get itemCategoryMisc => 'Divers';
 
   @override
-  String get itemCategoryAmulet => 'Amulettes';
-
-  @override
-  String get itemCategoryRing => 'Anneaux';
-
-  @override
-  String get itemCategoryTrophy => 'Trophées d\'animaux';
-
-  @override
-  String get itemCategoryWriting => 'Écrits';
-
-  @override
-  String get itemCategoryMission => 'Objets de quête';
-
-  @override
-  String get itemCategoryKey => 'Clés';
+  String get itemCategoryArtefact => 'Artéfacts';
 
   @override
   String get itemCategoryOther => 'Autres';
@@ -1800,7 +1814,7 @@ class AppLocalizationsFr extends AppLocalizations {
       'Une fois la Plongée apprise, le jeu réinitialise le souffle et la récupération aux valeurs de la compétence à chaque chargement. L\'air consommé par seconde reste tel que vous le réglez.';
 
   @override
-  String get heroGroupSleep => 'Sommeil et repos';
+  String get heroGroupSleep => 'Sommeil';
 
   @override
   String get heroGroupIntoxication => 'Ivresse';
@@ -1890,6 +1904,18 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get glossaryFilterTeachers => 'Enseignants';
+
+  @override
+  String get roleTrader => 'Marchand';
+
+  @override
+  String get roleDead => 'Mort';
+
+  @override
+  String get roleTeacher => 'Professeur';
+
+  @override
+  String get roleArmorer => 'Armurier';
 
   @override
   String get glossaryFilterArmorers => 'Armuriers';
@@ -2117,6 +2143,10 @@ class AppLocalizationsFr extends AppLocalizations {
       'SwampweedDepletionRate': 'Vitesse de dissipation',
       'XPExecutedBounty': 'XP pour le coup de grâce',
       'XPKillOrDefeatBounty': 'XP pour vaincre',
+      'Level': 'Niveau',
+      'LockpickDurability': 'Solidité du crochet',
+      'LockpickPrecision': 'Précision du crochet',
+      'PickPocketing': 'Vol à la tire',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -2172,6 +2202,14 @@ class AppLocalizationsFr extends AppLocalizations {
           'Expérience obtenue en achevant ce personnage alors qu\'il est déjà vaincu, à terre.',
       'XPKillOrDefeatBounty':
           'Expérience obtenue en mettant ce personnage à terre, qu\'il en meure ou qu\'il reste seulement assommé.',
+      'Level':
+          'Le niveau du personnage. Il monte avec l’expérience et donne des points d’apprentissage.',
+      'LockpickDurability':
+          'Vient du talent de crochetage : 2 novice, 4 entraîné, 6 maître.',
+      'LockpickPrecision':
+          'Vient du talent de crochetage : 0 novice, 1 entraîné, 2 maître.',
+      'PickPocketing':
+          'Vient du talent de vol à la tire : -30 novice, -10 entraîné, +10 maître.',
       'other': '?',
     });
     return '$_temp0';
