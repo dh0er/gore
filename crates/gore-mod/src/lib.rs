@@ -523,7 +523,7 @@ fn lower_voice_component(
         retained_ogg_bytes = retained_ogg_bytes
             .checked_add(ogg.len() as u64)
             .ok_or_else(|| ModError::Other("voice Ogg memory budget overflow".into()))?;
-        gore_vo::validate_ogg(&ogg, &voice_limits)
+        gore_vo::validate_deployable_ogg(&ogg, &voice_limits)
             .map_err(|e| ModError::Voice(format!("{source_label}: {e}")))?;
         // Formats 1 and 2 are committed compatibility contracts. In particular format 2 carries
         // archive observations exactly as before; payload seals belong exclusively to format 3.
@@ -559,9 +559,9 @@ fn lower_voice_component(
 /// source file paths.
 ///
 /// Every edit is structurally a sealed replacement. Archive/member safety, exact `Present`
-/// observations, per-Ogg limits, the aggregate voice memory budget, and Ogg validity are checked
-/// before a [`Bundle`] is returned. This function only assembles an in-memory bundle; it performs
-/// no deployment or game writes.
+/// observations, per-Ogg limits, the aggregate voice memory budget, and deployable Vorbis validity
+/// are checked before a [`Bundle`] is returned. This function only assembles an in-memory bundle;
+/// it performs no deployment or game writes.
 pub fn build_sealed_voice_bundle(
     meta: ModMeta,
     executable_generation: VoiceExecutableGenerationSeal,
@@ -1033,7 +1033,7 @@ fn validate_sealed_voice_bundle_memory(bundle: &Bundle) -> Result<()> {
         retained_ogg_bytes = retained_ogg_bytes
             .checked_add(ogg.len() as u64)
             .ok_or_else(|| ModError::Other("voice Ogg memory budget overflow".into()))?;
-        gore_vo::validate_ogg(ogg, &voice_limits)
+        gore_vo::validate_deployable_ogg(ogg, &voice_limits)
             .map_err(|e| ModError::Voice(format!("{payload}: {e}")))?;
         require_voice_payload_seal(edit, ogg)?;
     }
@@ -1940,7 +1940,7 @@ pub fn verify_sealed_voice_bundle(dir: &Path) -> Result<()> {
         retained_ogg_bytes = retained_ogg_bytes
             .checked_add(ogg.len() as u64)
             .ok_or_else(|| ModError::Other("voice Ogg memory budget overflow".into()))?;
-        gore_vo::validate_ogg(&ogg, &voice_limits)
+        gore_vo::validate_deployable_ogg(&ogg, &voice_limits)
             .map_err(|e| ModError::Voice(format!("{expected_payload}: {e}")))?;
         require_voice_payload_seal(edit, &ogg)?;
     }
@@ -2733,7 +2733,7 @@ pub(crate) fn merge_voice_component(
             "voice Ogg payload",
             (voice_limits.max_ogg_bytes as u64).min(remaining),
         )?;
-        gore_vo::validate_ogg(&ogg, &voice_limits)
+        gore_vo::validate_deployable_ogg(&ogg, &voice_limits)
             .map_err(|e| ModError::Voice(format!("{}: {e}", edit.ogg)))?;
         if payload_sealed {
             require_voice_payload_seal(&edit, &ogg)?;
@@ -12544,9 +12544,12 @@ fn restore_record(
 
         completed_restores += 1;
         if completed_restores == 1
-            && record.recovery_transaction.as_ref().is_some_and(|transaction| {
-                transaction.operation == ManagerMutationOperation::Undeploy
-            })
+            && record
+                .recovery_transaction
+                .as_ref()
+                .is_some_and(|transaction| {
+                    transaction.operation == ManagerMutationOperation::Undeploy
+                })
         {
             manager_crash_test_checkpoint(game_root, "undeploy.after_first_restore_durable");
         }
@@ -14796,8 +14799,7 @@ mod tests {
             plan.loc_skipped
         );
         assert!(
-            plan.loc_skipped[0].contains("itfo_cheese")
-                && plan.loc_skipped[0].contains("english"),
+            plan.loc_skipped[0].contains("itfo_cheese") && plan.loc_skipped[0].contains("english"),
             "the warning names the id and the language: {:?}",
             plan.loc_skipped
         );
@@ -15834,6 +15836,54 @@ mod tests {
         invalid.voice[1].archive = "German.zip".into();
         invalid.voice[1].archive_path = "NPC/LPT².ogg".into();
         assert!(build_bundle(&invalid).is_err());
+    }
+
+    #[test]
+    fn voice_bundle_builders_reject_structurally_valid_opus() {
+        let dir = tempfile::tempdir().unwrap();
+        let opus = include_bytes!("../../gore-vo/testdata/tiny-opus.ogg").to_vec();
+        assert!(matches!(
+            gore_vo::validate_ogg(&opus, &gore_vo::Limits::default())
+                .unwrap()
+                .codec,
+            gore_vo::OggCodec::Opus { .. }
+        ));
+
+        let opus_path = dir.path().join("line.ogg");
+        std::fs::write(&opus_path, &opus).unwrap();
+        let error = build_bundle(&test_voice_replace_spec("OpusVoice", &opus_path, None))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("structurally valid")
+                && error.contains("not qualified")
+                && error.contains("require Vorbis"),
+            "unexpected error: {error}"
+        );
+
+        let observation = VoiceArchiveObservation {
+            archive_size: 1,
+            archive_sha256: "0".repeat(64),
+            member_proof: VoiceMemberProof::Present {
+                uncompressed_size: 1,
+                crc32: 1,
+            },
+        };
+        let error = build_sealed_voice_bundle(
+            test_sealed_voice_meta(),
+            test_voice_generation(),
+            vec![test_sealed_voice_replace(
+                "NPC/Hero/hello.ogg",
+                opus,
+                observation,
+            )],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("not qualified") && error.contains("require Vorbis"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

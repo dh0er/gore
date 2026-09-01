@@ -70,6 +70,10 @@ pub enum Error {
     ArchiveChanged,
     #[error("output verification failed: {0}")]
     Verification(String),
+    #[error(
+        "{codec} Ogg is structurally valid but is not qualified for Gothic 1 Remake voice playback; deployable voice edits require Vorbis"
+    )]
+    UnqualifiedVoiceCodec { codec: &'static str },
     #[error(transparent)]
     InvalidOgg(#[from] OggError),
 }

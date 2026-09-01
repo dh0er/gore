@@ -21,7 +21,8 @@ Nothing below applies until that is fixed.
 ## Before you touch anything
 
 Call `gore_guide` for the page that covers your domain: `textures`, `audio`,
-`voice`, `text-and-dialogs`, `items`, `scripts`, `bundles`, `mod-manager`. Use
+`voice`, `text-and-dialogs`, `dialog-trees`, `dialog-authoring`, `items`,
+`scripts`, `bundles`, `mod-manager`. Use
 `action: "search"` once without `page` — it ranks single sections globally
 across the guide and reference, so never repeat the same search for candidate
 pages. If the page and section are already known, use `read` directly.
@@ -139,6 +140,38 @@ Diego line that appeared in no listing, and it happened to exist. The failure
 mode when it does not is `mod build` accepting the spec and `mod deploy` refusing
 it afterwards, which costs you the whole build.
 
+## Author dialogs through checked same-module workspaces
+
+Read `dialog-trees` to identify the exact participant, module, topic and menu
+position, then read `dialog-authoring` before changing source. Its capability
+table and "Practical limits only" section are the authority for what is
+supported, live-proven or still unproven on a particular game build.
+
+Use `gore_dialog`, not a hand-built isolated Add module:
+
+- `list`, `tree`, `show`, `text` and `export` inspect shipped conversations or
+  prepare their separate localization edit.
+- `checkout` -> edit -> `check` -> `stage` covers existing method bodies and
+  complete reconstructed defaults, including `Caption`, `PriorityRank`, `Rules`
+  and flags; new same-module topics may add their own fields and helpers.
+- `new-topic` scaffolds a native root or one child of a shipped `Subdialog`;
+  `subdialog_position` and `priority_rank` control placement and ordering.
+- `new-conversation` requires an NPC with no root and one exact already-loaded
+  per-NPC settings module. It edits that anchor; there is no discovered Add
+  fallback.
+
+Deeper all-new trees stay in that generated module and must pass `check`, which
+guards the private-base, same-module, shipped-ABI, 20-slot and action-bearing
+tree contracts. Cross-module new-symbol dependencies use the guide's selective
+complete-cache `gore as compile` path, not dependent mini-caches. `caption_key`
+only references localization; add the row separately. Voice is a third payload:
+structural validation can inspect Vorbis or Opus, but playable publication is
+fail-closed to Ogg/Vorbis because live Opus was silent. New lines receive the
+game's generic facial placeholder; accurate line-specific lip sync needs
+separate cooked facial-animation assets that GORE cannot yet author.
+Compilation, bundle inspection, deployment and runtime proof remain separate
+steps.
+
 ## Compile AngelScript offline unless the user chooses a game fallback
 
 For ordinary authoring, use the dedicated `gore_as_compile` or
@@ -163,11 +196,13 @@ qualification are three separate answers. A native diagnostic such as
 `Identifier 'UTopic_…' is not a data type in global namespace` means that the
 shipped AngelScript class is private to another script module; it is not a game
 version mismatch and does not make the standalone compiler generally
-incompatible. In particular, do not present a new Diego topic derived from
+incompatible. Do not present a new Diego topic derived from
 `UTopic_Hero__OC_STT_DIEGO` as an isolated `compile-module --op add` recipe.
-Stop that script lane, explain the module-visibility limit, and omit it honestly
-from a mixed smoke-test bundle. Do not try an unrelated base class, a full-tree
-compile, or a game fallback unless the user separately asks for that work.
+Use `gore_dialog new-topic` so the new class is compiled inside the existing
+conversation module, or `new-conversation` inside a qualified loaded settings
+anchor. Do not try an unrelated base class or a game fallback; use full-graph
+compilation only for an explicitly requested cross-module dependency and only
+through its documented selective complete-cache workflow.
 
 ## The consent gate
 

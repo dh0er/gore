@@ -338,7 +338,9 @@ Full template, runtime evidence, and safe test order:
 ## Voice packaging details
 
 Voice entries are packaged into a versioned format-1 `voice/manifest.json` with
-bundle-relative, validated Ogg payloads.
+bundle-relative, validated Ogg/Vorbis payloads. `gore voice validate` can inspect
+Ogg/Opus structurally, but Opus is not accepted into a deployable archive or
+bundle: the live 48 kHz mono and stereo fixtures were both silent.
 
 - `archive` must be one `.zip` filename under `G1R\Story\VoiceOver`.
 - `archive_path` is a forward-slash `.ogg` member path.

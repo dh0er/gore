@@ -495,8 +495,9 @@ const VOICE_ADD_ARGS: &[ArgSpec] = &[
         "ogg",
         Long("ogg"),
         Path,
-        "Ogg file to add — Vorbis or Opus. A WAV needs converting first: ffmpeg -i line.wav -c:a \
-         libvorbis -ar 48000 -ac 1 -q:a 5 line.ogg",
+        "Vorbis Ogg file to add. Opus is structurally inspectable with `voice validate` but is not \
+         qualified for game voice playback. A WAV needs converting first: ffmpeg -i line.wav \
+         -c:a libvorbis -ar 48000 -ac 1 -q:a 5 line.ogg",
         true,
     ),
     VOICE_OUT_ZIP,
@@ -510,7 +511,8 @@ const VOICE_REPLACE_ARGS: &[ArgSpec] = &[
         "ogg",
         Long("ogg"),
         Path,
-        "Ogg replacement file — Vorbis or Opus. A WAV needs converting first: ffmpeg -i \
+        "Vorbis Ogg replacement file. Opus is structurally inspectable with `voice validate` but \
+         is not qualified for game voice playback. A WAV needs converting first: ffmpeg -i \
          line.wav -c:a libvorbis -ar 48000 -ac 1 -q:a 5 line.ogg",
         true,
     ),
@@ -523,7 +525,7 @@ const VOICE_APPLY_MANIFEST_ARGS: &[ArgSpec] = &[
         "manifest",
         Long("manifest"),
         Path,
-        "Versioned JSON manifest; Ogg paths are relative to this file",
+        "Versioned JSON manifest of Vorbis edits; Ogg paths are relative to this file",
         true,
     ),
     VOICE_OUT_ZIP,
@@ -532,7 +534,7 @@ const VOICE_APPLY_MANIFEST_ARGS: &[ArgSpec] = &[
 const VOICE_COMMANDS: &[CommandSpec] = &[
     CommandSpec::new(
         "validate",
-        "Validate one Ogg voice file and report its codec, shape, and exact duration",
+        "Structurally inspect one Ogg voice file and report its codec, shape, and exact duration",
         VOICE_VALIDATE_ARGS,
         Safety::read(),
         T_FAST,
@@ -575,7 +577,7 @@ const VOICE_COMMANDS: &[CommandSpec] = &[
     .guide("voice"),
     CommandSpec::new(
         "add",
-        "Append a validated Ogg file to a new archive",
+        "Append a qualified Vorbis Ogg file to a new archive",
         VOICE_ADD_ARGS,
         Safety::write().installs_via(&["out"]),
         T_NORMAL,
@@ -583,7 +585,7 @@ const VOICE_COMMANDS: &[CommandSpec] = &[
     .guide("voice"),
     CommandSpec::new(
         "replace",
-        "Replace one entry with a validated Ogg file in a new archive",
+        "Replace one entry with a qualified Vorbis Ogg file in a new archive",
         VOICE_REPLACE_ARGS,
         Safety::write().installs_via(&["out"]),
         T_NORMAL,
@@ -592,7 +594,7 @@ const VOICE_COMMANDS: &[CommandSpec] = &[
     .guide("voice"),
     CommandSpec::new(
         "apply-manifest",
-        "Apply a versioned JSON edit manifest to a new archive in one pass",
+        "Apply a versioned JSON manifest of qualified Vorbis edits to a new archive in one pass",
         VOICE_APPLY_MANIFEST_ARGS,
         Safety::write().installs_via(&["out"]),
         T_LONG,
@@ -697,5 +699,37 @@ mod tests {
         let add = VOICE.command("add").expect("add exists");
         assert!(add.arg("path").expect("path").required);
         assert!(add.exactly_one_of.is_empty());
+    }
+
+    #[test]
+    fn voice_codec_help_separates_structural_inspection_from_deployable_edits() {
+        let validate = VOICE.command("validate").expect("validate exists");
+        assert!(validate.summary.starts_with("Structurally inspect"));
+        assert_eq!(
+            validate.arg("ogg").expect("validate takes an Ogg").help,
+            "Ogg file to validate — Vorbis or Opus"
+        );
+
+        for subcommand in ["add", "replace"] {
+            let help = VOICE
+                .command(subcommand)
+                .and_then(|command| command.arg("ogg"))
+                .expect("archive edit takes an Ogg")
+                .help;
+            assert!(
+                help.starts_with("Vorbis Ogg"),
+                "unexpected {subcommand} help: {help}"
+            );
+            assert!(help.contains("structurally inspectable with `voice validate`"));
+            assert!(help.contains("not qualified for game voice playback"));
+            assert!(!help.contains("Vorbis or Opus"));
+        }
+
+        let manifest_help = VOICE
+            .command("apply-manifest")
+            .and_then(|command| command.arg("manifest"))
+            .expect("apply-manifest takes a manifest")
+            .help;
+        assert!(manifest_help.contains("manifest of Vorbis edits"));
     }
 }

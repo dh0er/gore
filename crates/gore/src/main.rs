@@ -73,7 +73,7 @@ enum Commands {
         #[command(subcommand)]
         action: cmd::location::LocationAction,
     },
-    /// Read the game's dialog trees: who says what, what unlocks it, and which menu it sits in
+    /// Read and safely author the game's dialog trees, topics, and complete conversations
     Dialog {
         #[command(subcommand)]
         action: cmd::dialog::DialogAction,

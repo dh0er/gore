@@ -32,6 +32,11 @@ and one representative existing-menu rebuild:
   `Running` state after restart.
 - A newly added subtitle and voice asset played from the new topic. System
   loopback matched the authored source with normalized correlation `0.763`.
+- A five-choice voice-format follow-up played 48 kHz mono, 44.1 kHz mono and 48
+  kHz stereo Vorbis fully. The 48 kHz mono and stereo Opus choices were silent.
+  All five returned to the menu without a hang or crash and moved Diego's lips;
+  those facials are generic placeholder animation independent of successful
+  audio playback, not accurate audio-derived lip sync.
 - Stage A rendered an exact 20-sibling submenu and multiple slots were
   selectable. The renamed shipped topic still ran its original long `Act` and
   returned to the menu.
@@ -53,8 +58,7 @@ and one representative existing-menu rebuild:
   HUD/control.
   The same classes in a separate unreferenced Add module were not discovered.
 - A separate automatic-opening fixture entered `State.AmbientConversation`
-  with `GA_Human_Conversation_Ambient` active. This proves that activation path,
-  not the failed combined artificial 20-choice ambient fixture.
+  with `GA_Human_Conversation_Ambient` active. This proves that activation path.
 - A wholly new three-level Diego tree rendered and navigated Root -> level 2 ->
   level 3 when a real `Say` separated the nested transitions. The same graph
   with two consecutive actionless `Subdialog` Acts soft-locked; `dialog check`
@@ -68,6 +72,13 @@ These are fixture-specific runtime observations. The saturated 20-slot reshape
 and consecutive actionless menu transition are therefore unsafe, while the
 separate 4→5 edit, placement variants, anchored first conversation and
 action-bearing three-level tree work.
+
+### Diagnostic-only evidence
+
+An artificial ambient stress fixture combined automatic opening with a
+20-choice menu and crashed before its menu became usable. Automatic opening and
+a normal 20-choice submenu each have separate live evidence, so this result is
+retained for diagnosis only; it is not a practical capability limit.
 
 ## Historical low-level registration-adapter boundary
 
@@ -171,6 +182,21 @@ The new-voice fixture displayed its authored subtitle and played its newly
 packaged voice member. A system-loopback capture had normalized correlation
 `0.763` with the authored source, establishing audible delivery rather than
 inferring playback from subtitle duration alone.
+
+A later five-choice fixture on the same build recorded the format boundary:
+
+| Payload | Audible | Lips | Completion |
+|---|---|---|---|
+| Vorbis, 48 kHz, mono (control) | Full line | Moved | No hang or crash; menu returned |
+| Vorbis, 44.1 kHz, mono | Full line | Moved | No hang or crash; menu returned |
+| Vorbis, 48 kHz, stereo | Full line | Moved | No hang or crash; menu returned |
+| Opus, 48 kHz, mono | Silent | Moved | No hang or crash; menu returned |
+| Opus, 48 kHz, stereo | Silent | Moved | No hang or crash; menu returned |
+
+The Opus rows are known-silent results despite clean menu completion. Lip
+movement across all five, including those silent rows, proves only generic
+placeholder facials independent of successful audio playback; it is not accurate
+audio-derived lip sync.
 
 The structural fixture changed one existing Diego menu from four children to
 five. It renamed a shipped entry, adjusted its priority, retained its long
@@ -405,10 +431,6 @@ shapes that the current pipeline cannot produce safely.
 
 ### Potentially possible, but not proven in game
 
-- Rendering or selecting an artificial 20-choice menu reached through an
-  automatic ambient opening. Ordinary automatic opening and a separate
-  20-choice submenu both have runtime evidence, but that combined artificial
-  fixture crashed before its menu became usable.
 - Game builds other than BuildID `24878692`. Older adapter observations do not
   qualify the current native source path on those builds.
 
@@ -419,6 +441,11 @@ shapes that the current pipeline cannot produce safely.
   compiled and deployed but was not discovered. In practical content terms,
   `gore dialog` alone cannot yet give a wholly new NPC its first conversation;
   another NPC pipeline must first supply a settings module that the game loads.
+- Generating accurate, line-specific lip sync for a new recording. The generic
+  placeholder facial moved for every live voice fixture, including silent Opus,
+  while shipped accurate facials live as separate cooked `FA_<text-id>` assets
+  in language-specific `G1R_DialogFacials_*` containers. GORE does not yet
+  author or package that animation asset path.
 - Packaging a normal deployable mini-cache dialog whose new symbol dependency
   comes from another script module. The same content works through the proven
   selective complete-cache path, but not as two small independently composable
@@ -576,8 +603,9 @@ shapes that the current pipeline cannot produce safely.
 - Source checking, strict standalone compilation, bundle packaging, deployment
   and runtime observation are separate claims. On BuildID `24878692`, the
   source-identical complete Diego recompile, Caption edit, native root, direct
-  sub-topic, persistent ore/knowledge/quest effects, new voice asset and
-  four-to-five-entry menu rebuild all crossed the live boundary. The selective
+  sub-topic, persistent ore/knowledge/quest effects, new voice asset, five-case
+  Vorbis/Opus matrix and four-to-five-entry menu rebuild all crossed the live
+  boundary. The selective
   multi-module product, anchored Guard first conversation, automatic opening and
   action-bearing all-new three-level tree crossed it too. Earlier Charlotte,
   Payfine and Brannok fixtures stop at offline build/inspection, and the

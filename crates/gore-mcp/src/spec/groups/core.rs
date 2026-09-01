@@ -915,7 +915,7 @@ const DIALOG_COMMANDS: &[CommandSpec] = &[
         Safety::write().writes_into(&["out"]),
         T_NORMAL,
     )
-    .guide("dialog-trees"),
+    .guide("dialog-authoring"),
     CommandSpec::new(
         "check",
         "Fail closed unless a conversation workspace preserves every required class/default and \
@@ -925,7 +925,7 @@ const DIALOG_COMMANDS: &[CommandSpec] = &[
         T_NORMAL,
     )
     .json(JsonSupport::Stdout)
-    .guide("dialog-trees"),
+    .guide("dialog-authoring"),
     // One build spec inside the directory `checkout` already created.
     CommandSpec::new(
         "stage",
@@ -935,7 +935,7 @@ const DIALOG_COMMANDS: &[CommandSpec] = &[
         Safety::write().writes_into(&["dir"]),
         T_NORMAL,
     )
-    .guide("dialog-trees"),
+    .guide("dialog-authoring"),
     // A same-module editable source, pristine copy, and manifest under a caller-picked empty
     // directory. The game install is only read.
     CommandSpec::new(
@@ -947,7 +947,7 @@ const DIALOG_COMMANDS: &[CommandSpec] = &[
         T_NORMAL,
     )
     .exactly_one(&[&["caption", "caption_key"]])
-    .guide("dialog-trees"),
+    .guide("dialog-authoring"),
     // One same-module conversation source plus its base material and manifest under a
     // caller-picked empty directory. The game install is only read.
     CommandSpec::new(
@@ -959,7 +959,7 @@ const DIALOG_COMMANDS: &[CommandSpec] = &[
         T_NORMAL,
     )
     .exactly_one(&[&["caption", "caption_key"]])
-    .guide("dialog-trees"),
+    .guide("dialog-authoring"),
     // One JSON file per conversation, named after the module, in a directory the caller picks.
     // Nothing else is touched, and the game install is only read.
     CommandSpec::new(

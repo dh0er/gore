@@ -26,7 +26,7 @@ const MAX_LOC_ID_BYTES: usize = 512;
 
 #[derive(Debug, Subcommand)]
 pub enum VoiceAction {
-    /// Validate one Ogg voice file and report its codec, shape, and exact duration
+    /// Structurally inspect one Ogg voice file and report its codec, shape, and exact duration
     Validate {
         /// Ogg file to validate — Vorbis or Opus
         #[arg(long)]
@@ -78,7 +78,7 @@ pub enum VoiceAction {
         #[arg(short = 'o', long)]
         out: PathBuf,
     },
-    /// Append a validated Ogg file to a new archive
+    /// Append a qualified Vorbis Ogg file to a new archive
     Add {
         /// Input voice ZIP (never modified)
         #[arg(long)]
@@ -86,34 +86,34 @@ pub enum VoiceAction {
         /// Full path for the new entry inside the archive
         #[arg(long, value_name = "ARCHIVE_PATH")]
         path: String,
-        /// Ogg file to add — Vorbis or Opus. A WAV needs converting first: ffmpeg -i line.wav -c:a libvorbis -ar 48000 -ac 1 -q:a 5 line.ogg
+        /// Vorbis Ogg file to add. Opus is structurally inspectable with `voice validate` but is not qualified for game voice playback. A WAV needs converting first: ffmpeg -i line.wav -c:a libvorbis -ar 48000 -ac 1 -q:a 5 line.ogg
         #[arg(long)]
         ogg: PathBuf,
         /// New output ZIP; must not already exist
         #[arg(short = 'o', long)]
         out: PathBuf,
     },
-    /// Replace one entry with a validated Ogg file in a new archive
+    /// Replace one entry with a qualified Vorbis Ogg file in a new archive
     Replace {
         /// Input voice ZIP (never modified)
         #[arg(long)]
         archive: PathBuf,
         #[command(flatten)]
         selector: VoiceSelector,
-        /// Ogg replacement file — Vorbis or Opus. A WAV needs converting first: ffmpeg -i line.wav -c:a libvorbis -ar 48000 -ac 1 -q:a 5 line.ogg
+        /// Vorbis Ogg replacement file. Opus is structurally inspectable with `voice validate` but is not qualified for game voice playback. A WAV needs converting first: ffmpeg -i line.wav -c:a libvorbis -ar 48000 -ac 1 -q:a 5 line.ogg
         #[arg(long)]
         ogg: PathBuf,
         /// New output ZIP; must not already exist
         #[arg(short = 'o', long)]
         out: PathBuf,
     },
-    /// Apply a versioned JSON edit manifest to a new archive in one pass
+    /// Apply a versioned JSON manifest of qualified Vorbis edits to a new archive in one pass
     #[command(visible_alias = "apply")]
     ApplyManifest {
         /// Input voice ZIP (never modified)
         #[arg(long)]
         archive: PathBuf,
-        /// Versioned JSON manifest; Ogg paths are relative to this file
+        /// Versioned JSON manifest of Vorbis edits; Ogg paths are relative to this file
         #[arg(long)]
         manifest: PathBuf,
         /// New output ZIP; must not already exist
@@ -243,7 +243,11 @@ fn validate(path: &Path, json: bool) -> Result<()> {
         );
     } else {
         let seconds = report.duration_sample_frames as f64 / f64::from(report.duration_timebase_hz);
-        println!("Valid {} Ogg: {}", codec_name(report.codec), path.display());
+        println!(
+            "Structurally valid {} Ogg: {}",
+            codec_name(report.codec),
+            path.display()
+        );
         println!(
             "  Stream: {} channel(s), declared {} Hz",
             report.channels, report.declared_sample_rate_hz
@@ -952,7 +956,7 @@ fn read_manifest_ogg(
         &format!("manifest-relative Ogg file {manifest_value:?}"),
         max_bytes,
     )?;
-    gore_vo::validate_ogg(&ogg, limits)
+    gore_vo::validate_deployable_ogg(&ogg, limits)
         .with_context(|| format!("validating manifest-relative Ogg file {manifest_value:?}"))?;
     Ok(ogg)
 }
@@ -1284,6 +1288,81 @@ mod tests {
         let exact = dir.path().join("exact.ogg");
         fs::write(&exact, b"OggS").unwrap();
         assert_eq!(read_ogg_with_limit(&exact, 4).unwrap(), b"OggS");
+    }
+
+    #[test]
+    fn deployable_archive_edit_commands_reject_structurally_valid_opus() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("source.zip");
+        let original = include_bytes!("../../../gore-vo/testdata/tiny-vorbis.ogg");
+        let opus = include_bytes!("../../../gore-vo/testdata/tiny-opus.ogg");
+        write_match_archive(
+            &archive,
+            &[("NPC/Hero/line.ogg", CompressionMethod::Stored, original)],
+        );
+        let opus_path = dir.path().join("opus.ogg");
+        fs::write(&opus_path, opus).unwrap();
+        validate(&opus_path, true).expect("voice validate remains a structural Opus inspector");
+        assert!(matches!(
+            gore_vo::validate_ogg(opus, &Limits::default())
+                .unwrap()
+                .codec,
+            OggCodec::Opus { .. }
+        ));
+
+        let assert_rejected = |error: anyhow::Error, output: &Path| {
+            let chain = format!("{error:#}");
+            assert!(
+                chain.contains("structurally valid")
+                    && chain.contains("not qualified")
+                    && chain.contains("require Vorbis"),
+                "unexpected error: {chain}"
+            );
+            assert!(
+                !output.exists(),
+                "failed edit published {}",
+                output.display()
+            );
+        };
+
+        let add_output = dir.path().join("add.zip");
+        assert_rejected(
+            add(&archive, "GORE/opus.ogg", &opus_path, &add_output).unwrap_err(),
+            &add_output,
+        );
+
+        let replace_output = dir.path().join("replace.zip");
+        assert_rejected(
+            replace(
+                &archive,
+                &VoiceSelector {
+                    basename: None,
+                    path: Some("NPC/Hero/line.ogg".into()),
+                },
+                &opus_path,
+                &replace_output,
+            )
+            .unwrap_err(),
+            &replace_output,
+        );
+
+        let manifest = dir.path().join("manifest.json");
+        fs::write(
+            &manifest,
+            serde_json::to_vec(&serde_json::json!({
+                "format": 1,
+                "edits": [
+                    {"op": "replace", "path": "NPC/Hero/line.ogg", "ogg": "opus.ogg"}
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let manifest_output = dir.path().join("manifest.zip");
+        assert_rejected(
+            apply_manifest(&archive, &manifest, &manifest_output).unwrap_err(),
+            &manifest_output,
+        );
     }
 
     #[test]

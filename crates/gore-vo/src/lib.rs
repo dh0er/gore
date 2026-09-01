@@ -27,3 +27,20 @@ pub use ogg::{
     validate_ogg, validate_ogg_with_timing, OggCodec, OggInfo, OggTiming, OggValidation,
 };
 pub use source_format::SourceFormat;
+
+/// Validate an Ogg payload for an artifact that can be deployed as game voice-over.
+///
+/// [`validate_ogg`] deliberately remains a codec-structural inspector and accepts both Vorbis and
+/// Opus. The game's voice-over path has only qualified Vorbis, so archive rewrites and bundle
+/// publishers use this narrower policy boundary rather than treating structural Opus validity as
+/// playback support.
+pub fn validate_deployable_ogg(data: &[u8], limits: &Limits) -> Result<OggInfo> {
+    let info = validate_ogg(data, limits)?;
+    match &info.codec {
+        OggCodec::Vorbis { .. } => Ok(info),
+        OggCodec::Opus { .. } => Err(Error::UnqualifiedVoiceCodec { codec: "Opus" }),
+        OggCodec::Unknown => {
+            Err(OggError::Identification("validated Ogg has no recognized audio codec").into())
+        }
+    }
+}

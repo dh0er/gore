@@ -108,6 +108,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   by the compiled `Say` call played, and a system-loopback capture correlated
   `0.763` with the authored source recording. This is bounded evidence for that
   Diego fixture, not a general qualification of every voice path or game API.
+- Qualify the authored voice path across five live payloads on BuildID
+  `24878692`: 48 kHz mono, 44.1 kHz mono and 48 kHz stereo Vorbis played fully;
+  48 kHz mono and stereo Opus were silent. All five returned cleanly and moved
+  the generic placeholder facial, which is independent of successful playback
+  and is not accurate line-specific lip sync. Keep Opus available to structural
+  `voice validate`, but reject it from archive rewrites, bundles, import/deploy
+  and Mod Studio publication; deployable voice edits require Vorbis.
 - Keep compile, packaging, deployment and runtime evidence separate. Independent
   add/edit mini-caches still cannot depend on one another. FullGraph V2 resolves
   coordinated Add/Edit modules together, then publishes a complete cache by
@@ -127,8 +134,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `GA_Human_Conversation_Ambient` active without player selection, proving the
   state/ability boundary, and the anchored Guard's wholly new conversation
   opened and completed normally. The ambient fixture crashed only after forcing
-  an artificial 20-choice `Subdialog`; that combined shape remains unqualified
-  and is not evidence that broad ambient flags are broken.
+  an artificial 20-choice `Subdialog`. A normal exact 20-choice submenu
+  separately rendered and accepted multiple selections, so the crashed combined
+  stress shape is retained only as diagnostic evidence and is not a practical
+  dialog-authoring limit.
 - `gore_dialog` MCP tool for the same ten subcommands.
 
 ### Fixed

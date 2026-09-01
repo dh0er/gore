@@ -61,8 +61,9 @@ release yet — build it from source.
 |---|---|---|---|
 | [Item & stat values](docs/guide/items.md) | Full | Change what items are worth, what weapons do, what NPCs have | Needs UE4SS, which GORE does not install |
 | [Text & dialogs](docs/guide/text-and-dialogs.md) | Full | Replace any text in the game, in any of its 19 languages | An id can carry several language versions and the game shows the newest |
+| [Dialog authoring](docs/guide/dialog-authoring.md) | Partly | Edit shipped topics and build new roots, submenus, multi-level trees and complete conversations with game effects | A first conversation needs an already-loaded per-NPC settings module; cross-module new-symbol dependencies ship through a complete cache, not dependent minis |
 | [Audio](docs/guide/audio.md) | Full | Replace music and sound effects | Finding which sound plays where is guesswork |
-| [Voice-over](docs/guide/voice.md) | Partly | Replace spoken lines | You can add audio for a brand-new line, but nobody has heard one play yet |
+| [Voice-over](docs/guide/voice.md) | Partly | Replace spoken lines and add voice to authored new lines | Deployable payloads require Vorbis; live proof covers three Vorbis layouts on one build |
 | [Textures](docs/guide/textures.md) | Full | Replace textures | A few, like the mouse cursors, are stored somewhere this cannot reach |
 | [DataAssets](docs/guide/dataassets.md) | Partly | Edit cooked game data | Only assets the engine describes natively; Blueprint ones are refused |
 | [Scripts](docs/guide/scripts.md) | 99% | Read the game's script code, change it, add your own | Splicing recompiles the WHOLE module, so it also rewrites functions you did not touch. 6,982 of 7,317 modules recompile with no known semantic difference; of the rest most only differ in wording, but 15 hold a loop that recompiles with a bound of zero and never runs — they sit in crime assessment, combat, fear and search AI. `emit` and `compile-module` name the module and the risk before you splice |

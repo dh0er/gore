@@ -56,7 +56,7 @@ not the plugin. Fix that and restart the client.
 | | |
 |---|---|
 | `.mcp.json`, `mcp.json` | the server: every `gore` command, dedicated offline standalone-compile tools, read-only bundle-inspection and Manager-preflight aliases, plus `gore_guide` and `gore_help`. Both files carry the same server map under the `mcpServers` wrapper expected by their clients |
-| `skills/gore-modding/` | when to reach for which tool, the consent gate, and what a deploy does and does not prove |
+| `skills/gore-modding/` | when to reach for which tool, the checked dialog-authoring workflow, the consent gate, and what a deploy does and does not prove |
 | `.claude-plugin/`, `.codex-plugin/`, `.cursor-plugin/` | the same plugin, described the way each client wants it |
 
 Enabling the plugin in Claude Code asks whether GORE may change your game
@@ -69,7 +69,8 @@ settings are off unless you say otherwise; they map to
 `GORE_MCP_ALLOW_WRITE` and `GORE_MCP_ALLOW_GAME_LAUNCH`, which is also how to set
 them on a client that does not ask.
 
-The skill deliberately carries no asset paths, ids or sample names. Everything
-factual lives in the guide compiled into `gore.exe`, which is therefore always
-the version you are actually running; a skill that restated any of it would drift
-the first time the game updated.
+The skill deliberately carries no volatile asset paths, ids or sample names. It
+routes dialog work through the checked MCP surface and names only the durable
+safety boundaries needed to choose that workflow. Detailed capability evidence
+and build-specific facts live in the guide compiled into `gore.exe`, which is
+therefore the version you are actually running.

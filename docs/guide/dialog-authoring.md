@@ -22,12 +22,19 @@ of that page, not a second claim.
 | **New same-module sub-topic** | `[GORE TEST] Neuer Diego-Unterdialog` appeared in `UChoiceDiegoKolonie`, was selected, ran its newly compiled `Act` override, ended the conversation, and returned HUD and camera control. Stage A also rendered an exact 20-sibling submenu and allowed multiple slots to be selected. The default placement appeared immediately before Zurück and was selectable; explicit position 1 appeared first while Zurück stayed last and was also selectable. The earlier 4→5 edit remains working. |
 | **Rules and persisted effects** | A new option added one ore nugget, changing inventory from 0 to 1; the item remained after quicksave and restart. Another option used `Rules.HideIfKnowsId` with `gore_diego_quest_knowledge_24878692`: it disappeared immediately after selection and remained absent after restart, while save-query found that exact ID on the hero. A new Stonehenge quest produced its toast and journal entry and remained `Running` after restart. |
 | **New field and helper** | A new topic field with `default ProbeMarker = 24878692` and a helper method were authored and used successfully in game. |
-| **New voice-over** | A new topic displayed its authored subtitle and played its new voice asset. System loopback matched the authored source with normalized correlation `0.763`. This proves that fixture's localization-to-voice lookup and audible playback, not every possible audio format or event. |
+| **New voice-over and formats** | A new topic displayed its authored subtitle and played its new voice asset; system loopback matched the source with normalized correlation `0.763`. A five-choice follow-up played 48 kHz mono, 44.1 kHz mono and 48 kHz stereo Vorbis fully; 48 kHz mono and stereo Opus were silent. All five returned to the menu without a hang or crash and moved Diego's lips, proving generic placeholder facials independent of successful audio playback, not accurate audio-derived lip sync. |
 | **Complete new conversation** | A shipped Guard with no previous dialog topics received a private root and wholly new choices inside that NPC's already-loaded conversation-settings module. The final run used `dialog new-conversation` → `check` → `stage` → standalone compile → bundle/deploy, then opened automatically, spoke a shipped oracle line, displayed and selected both nested choices in sequence, and returned HUD/control cleanly. A separate unreferenced conversation Add module compiled and deployed but was not discovered; `new-conversation` therefore requires the loaded per-NPC settings anchor and stages an edit. |
 | **All-new multi-level tree** | A wholly new three-level Diego tree rendered Root → level 2 → level 3, played a real `Say` between the two nested transitions, accepted the final choice and ended cleanly. Two directly consecutive, actionless `Subdialog` transitions instead soft-locked; `dialog check` now requires an unconditional top-level `Say` before one of those transitions. |
-| **Automatic opening** | The new Guard conversation opened without player selection and completed normally. A separate ambient fixture also entered `State.AmbientConversation` with `GA_Human_Conversation_Ambient` active. These prove automatic conversation activation; they do not qualify every force condition or the separate artificial 20-choice ambient fixture. |
+| **Automatic opening** | The new Guard conversation opened without player selection and completed normally. A separate ambient fixture also entered `State.AmbientConversation` with `GA_Human_Conversation_Ambient` active. A normal 20-choice submenu separately rendered and allowed multiple selections. The crashed artificial fixture combining those two proven capabilities is diagnostic-only evidence, not a practical capability limit. |
 | **Selective complete cache** | A `gore as compile` product containing coordinated changes in multiple modules booted, loaded gameplay and executed the intended cross-module provider call. Its new same-module root was visible and selectable, the shipped automatic topic called the provider's new code, the line played and the conversation returned control. This is the complete-cache path, not two dependent mini-caches. |
 | **Historical low-level adapter** | `BuildSpec.dialog_topics` still describes a separate UE4SS insertion adapter. Earlier Viper runs rendered a root through `AddTopic` and recorded `ARMED -> CHOICE_PASS -> RENDER_PASS`. It is historical low-level evidence, not part of the current `gore dialog new-topic` root workflow. |
+
+### Diagnostic-only evidence
+
+An artificial ambient stress fixture combined automatic opening with a
+20-choice menu and crashed before its menu became usable. Automatic opening and
+a normal 20-choice submenu each work in separate live fixtures, so this result
+is retained for diagnosis only; it does not define a practical authoring limit.
 
 ## Practical limits only
 
@@ -37,17 +44,12 @@ produce.
 
 ### Potentially possible, but not proven in game
 
-- Rendering or selecting an artificial 20-choice menu reached through an
-  automatic ambient opening. Ordinary automatic opening and a separate
-  20-choice submenu both work, but that combined artificial fixture crashed
-  before its menu became usable.
 - The same behavior on game builds other than BuildID `24878692`. Historical
   adapter observations on older builds do not qualify the current native source
   workflow there.
-- Voice playback beyond the qualified new 48 kHz mono Vorbis member: Opus and
-  other sample-rate/channel layouts may pass lower-level validation, but have
-  not been heard in this new-dialog path. Automatic lip/facial synchronization
-  for arbitrary new recordings is likewise not runtime-proven.
+- Vorbis playback in layouts other than the live-proven 48 kHz mono, 44.1 kHz
+  mono and 48 kHz stereo cases. Other sample rates and channel layouts remain
+  unproven.
 
 ### Not technically supported by the current GORE pipeline
 
@@ -86,9 +88,16 @@ produce.
   stored fields, member set and method signatures stay fixed. Its existing
   defaults and method bodies remain editable, and wholly new topics may define
   their own fields and helpers.
-- Feeding WAV, MP3, FLAC or other non-Ogg payloads directly into `gore voice`.
-  Convert them first; the CLI archive path accepts Ogg/Vorbis or Ogg/Opus, while
-  the currently qualified Studio and in-game path is Vorbis.
+- Publishing Opus, WAV, MP3, FLAC or other non-Vorbis payloads as voice edits.
+  `gore voice validate` can inspect Ogg/Vorbis and Ogg/Opus structurally, but
+  archive rewrites, bundles and Studio publication require Ogg/Vorbis. The two
+  live 48 kHz Opus cases were silent; convert source recordings to Vorbis.
+- Authoring accurate, line-specific lip sync for a new recording. New lines do
+  receive the game's generic placeholder facial animation, but the shipped
+  accurate facials are separate cooked `FA_<text-id>` animation assets, not
+  generated from the Ogg at runtime. GORE does not currently create or package
+  those facial assets; doing so requires a separate facial-authoring and Unreal
+  cooking pipeline.
 
 `gore voice add` can supply the new archive member referenced by an authored
 topic. The current Diego fixture proves one such new subtitle/voice pair through

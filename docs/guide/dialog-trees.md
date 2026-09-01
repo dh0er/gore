@@ -451,9 +451,12 @@ caption; they show as `(ambient)`. One fixture entered
 `State.AmbientConversation` with `GA_Human_Conversation_Ambient` active without
 player selection, proving automatic activation at that state/ability boundary.
 The anchored Guard fixture separately opened a wholly new conversation
-automatically and completed normally. An artificial 20-choice ambient fixture
-crashed before its menu became usable; that combined shape remains unqualified
-and does not show that ordinary ambient or forced topics are broken.
+automatically and completed normally. A normal 20-choice Diego submenu
+separately rendered and allowed multiple selections. An artificial ambient
+stress fixture combined those two capabilities and crashed before its menu
+became usable; that result is retained as diagnostic-only evidence, not a
+practical capability limit or evidence that ordinary ambient/forced topics or
+20-choice menus are broken.
 
 ## JSON, for tooling
 

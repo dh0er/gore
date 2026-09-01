@@ -5784,7 +5784,7 @@ fn goremod_components(
                         total_ogg_bytes,
                         limits.max_voice_ogg_total_bytes,
                     )?;
-                    gore_vo::validate_ogg(&ogg, &voice_limits)
+                    gore_vo::validate_deployable_ogg(&ogg, &voice_limits)
                         .map_err(|e| ModError::Voice(format!("{}: {e}", edit.ogg)))?;
                     let target = format!("{}|{}", edit.archive, edit.archive_path);
                     targets.insert(portable_windows_key(&target), target);
@@ -8068,6 +8068,23 @@ mod tests {
         fs::write(bdir.join(&manifest.edits[0].ogg), b"not an Ogg stream").unwrap();
         let error = import(&lib, &bdir).unwrap_err().to_string();
         assert!(error.contains("voice archive"), "unexpected error: {error}");
+        assert!(list(&lib).unwrap().is_empty());
+
+        let bdir = mk_goremod_bundle(tmp.path());
+        let manifest: crate::VoicePatchManifest =
+            serde_json::from_slice(&fs::read(bdir.join("voice/manifest.json")).unwrap()).unwrap();
+        fs::write(
+            bdir.join(&manifest.edits[0].ogg),
+            include_bytes!("../../../gore-vo/testdata/tiny-opus.ogg"),
+        )
+        .unwrap();
+        let error = import(&lib, &bdir).unwrap_err().to_string();
+        assert!(
+            error.contains("structurally valid")
+                && error.contains("not qualified")
+                && error.contains("require Vorbis"),
+            "unexpected error: {error}"
+        );
         assert!(list(&lib).unwrap().is_empty());
     }
 
