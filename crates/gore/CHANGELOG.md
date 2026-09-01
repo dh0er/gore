@@ -8,12 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-31
+
 - `gore texture story-images` lists the loose story images — the glossary
   artwork, tutorial pictures and writings — that live outside the asset
   container.
-
-## [0.3.0] - 2026-08-30
-
+- Before you change a script, `as emit` and `as compile-module` say what else
+  that module carries. Editing one function recompiles the whole file, so
+  anything else in it the decompiler cannot reproduce exactly is rewritten too.
+  Most modules stay silent because there is nothing to report — 6,982 of 7,317 —
+  and the fifteen that contain a loop coming back broken say so by name.
+- A class's default values are counted separately in that warning: they are only
+  rebuilt if your edited file spells them out, and are otherwise copied over
+  unchanged.
+- Three script differences turned out to be a different program rather than
+  different wording: one file called a function the game never calls, a value
+  written through a returned reference never arrived, and a "largest so far"
+  comparison picked the last positive value instead of the largest.
 - Decompiled scripts recompile closer to the original: enum returns, increments,
   copied values, loop bodies and construction order now come back the way the
   game wrote them.
