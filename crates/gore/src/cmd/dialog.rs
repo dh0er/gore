@@ -368,6 +368,34 @@ fn containing<'a>(graph: &'a DialogGraph, needle: &str) -> Vec<&'a Conversation>
         .collect()
 }
 
+fn npc_identity(conversation: &Conversation) -> Vec<String> {
+    conversation
+        .npc_participants()
+        .map(str::to_ascii_lowercase)
+        .collect()
+}
+
+/// A newly anchored first conversation leaves the shipped topicless Story module in the cache.
+/// For an exact participant lookup, the rooted module is the usable continuation of that same
+/// identity; keep the placeholder addressable by its exact module name and preserve real
+/// multi-conversation ambiguity.
+fn prefer_rooted_conversations<'a>(selected: Vec<&'a Conversation>) -> Vec<&'a Conversation> {
+    let rooted_identities = selected
+        .iter()
+        .filter(|conversation| conversation.root_class.is_some())
+        .map(|conversation| npc_identity(conversation))
+        .filter(|identity| !identity.is_empty())
+        .collect::<BTreeSet<_>>();
+
+    selected
+        .into_iter()
+        .filter(|conversation| {
+            conversation.root_class.is_some()
+                || !rooted_identities.contains(&npc_identity(conversation))
+        })
+        .collect()
+}
+
 /// Prefer exact participant/module matches when resolving one conversation, then fall back to
 /// the broad substring lookup used by read commands.
 fn matching<'a>(graph: &'a DialogGraph, needle: &str) -> Vec<&'a Conversation> {
@@ -383,9 +411,9 @@ fn matching<'a>(graph: &'a DialogGraph, needle: &str) -> Vec<&'a Conversation> {
         })
         .collect();
     if !exact.is_empty() {
-        return exact;
+        return prefer_rooted_conversations(exact);
     }
-    containing(graph, needle)
+    prefer_rooted_conversations(containing(graph, needle))
 }
 
 /// Exact participant lookup for commands that may scaffold into a loaded settings anchor.
@@ -394,7 +422,7 @@ fn matching<'a>(graph: &'a DialogGraph, needle: &str) -> Vec<&'a Conversation> {
 /// read commands, but a unique substring could silently turn a requested new NPC into an edit of a
 /// different shipped conversation.
 fn exact_npc_matches<'a>(graph: &'a DialogGraph, npc: &str) -> Vec<&'a Conversation> {
-    graph
+    let selected = graph
         .conversations
         .iter()
         .filter(|conversation| {
@@ -402,7 +430,8 @@ fn exact_npc_matches<'a>(graph: &'a DialogGraph, npc: &str) -> Vec<&'a Conversat
                 .npc_participants()
                 .any(|participant| participant.eq_ignore_ascii_case(npc))
         })
-        .collect()
+        .collect();
+    prefer_rooted_conversations(selected)
 }
 
 // ─── Localization ────────────────────────────────────────────────────────────
@@ -1814,18 +1843,24 @@ fn validate_settings_anchor_declarations_unchanged(report: &dialog::EditReport) 
     let changed_bodies = report
         .changed
         .iter()
-        .filter(|change| !added.contains(change.class.rsplit("::").next().unwrap_or(&change.class)))
+        .filter(|change| {
+            !added.contains(change.class.rsplit("::").next().unwrap_or(&change.class))
+                && !is_conversation_namespace_declaration(&change.class)
+        })
         .map(|change| format!("{}::{}", change.class, change.member))
         .collect::<Vec<_>>();
     let changed_defaults = report
         .changed_defaults
         .iter()
-        .filter(|change| !added.contains(change.class.rsplit("::").next().unwrap_or(&change.class)))
+        .filter(|change| {
+            !added.contains(change.class.rsplit("::").next().unwrap_or(&change.class))
+                && !is_conversation_namespace_declaration(&change.class)
+        })
         .map(|change| format!("{}::default {}", change.class, change.target))
         .collect::<Vec<_>>();
     if !changed_bodies.is_empty() || !changed_defaults.is_empty() {
         bail!(
-            "a new-conversation settings-anchor edit must leave every shipped declaration unchanged; changed: {}",
+            "a new-conversation settings-anchor edit may change topic declarations in {CONVERSATION_NAMESPACE}, but must leave every shipped declaration outside that namespace unchanged; changed: {}",
             changed_bodies
                 .into_iter()
                 .chain(changed_defaults)
@@ -1834,6 +1869,12 @@ fn validate_settings_anchor_declarations_unchanged(report: &dialog::EditReport) 
         );
     }
     Ok(())
+}
+
+fn is_conversation_namespace_declaration(identity: &str) -> bool {
+    identity
+        .strip_prefix(&format!("{CONVERSATION_NAMESPACE}::"))
+        .is_some_and(|name| !name.is_empty() && !name.contains("::"))
 }
 
 fn validate_new_conversation_base<'a>(
@@ -2209,6 +2250,14 @@ fn validate_topicless_module_is_not_scaffolded(
     Ok(())
 }
 
+fn requires_initial_topic_scaffold(
+    manifest: &EditManifest,
+    conversation: Option<&Conversation>,
+) -> bool {
+    manifest.operation == DialogModuleOperation::Add
+        || (manifest.requires_topic_scaffold && conversation.is_none())
+}
+
 /// Bind each new topic to one native root, legacy adapter registration, or one Subdialog parent.
 fn validate_topic_registrations(
     manifest: &EditManifest,
@@ -2267,7 +2316,7 @@ fn validate_topic_registrations(
     }
 
     if report.added_classes.is_empty() && manifest.dialog_topics.is_empty() {
-        if manifest.operation == DialogModuleOperation::Add || manifest.requires_topic_scaffold {
+        if requires_initial_topic_scaffold(manifest, conversation) {
             bail!(
                 "a new conversation workspace must retain its private topic base and at least one direct topic option"
             );
@@ -2497,6 +2546,7 @@ fn checkout(npc: &str, out: &PathBuf, cache: Option<PathBuf>, game: Option<PathB
     fs::write(&pristine_file, &taken.source)
         .with_context(|| format!("writing {}", pristine_file.display()))?;
 
+    let requires_topic_scaffold = requires_topic_scaffold_for_module(&taken.module);
     let manifest = EditManifest {
         operation: DialogModuleOperation::Edit,
         module: taken.module.clone(),
@@ -2505,7 +2555,7 @@ fn checkout(npc: &str, out: &PathBuf, cache: Option<PathBuf>, game: Option<PathB
         pristine_file: format!("pristine/{leaf}"),
         participant: participant_label(conversation),
         cache_sha256: digest_of(&bytes),
-        requires_topic_scaffold: false,
+        requires_topic_scaffold,
         dialog_topics: Vec::new(),
     };
     let manifest_path = out.join(MANIFEST_NAME);
@@ -3152,6 +3202,10 @@ fn conversation_settings_anchor_identity(module: &str) -> Option<ConversationSet
         module: module.to_owned(),
         participant: (*participant).to_owned(),
     })
+}
+
+fn requires_topic_scaffold_for_module(module: &str) -> bool {
+    conversation_settings_anchor_identity(module).is_some()
 }
 
 fn select_exact_settings_anchor<'a>(
@@ -4723,6 +4777,7 @@ fn new_topic(request: NewTopicRequest) -> Result<()> {
         .with_context(|| format!("writing {}", source_path.display()))?;
     fs::write(&pristine_path, &taken.source)
         .with_context(|| format!("writing {}", pristine_path.display()))?;
+    let requires_topic_scaffold = requires_topic_scaffold_for_module(&taken.module);
     let manifest = EditManifest {
         operation: DialogModuleOperation::Edit,
         module: taken.module,
@@ -4731,7 +4786,7 @@ fn new_topic(request: NewTopicRequest) -> Result<()> {
         pristine_file: format!("pristine/{leaf}"),
         participant: participant_label(conversation),
         cache_sha256: digest_of(&bytes),
-        requires_topic_scaffold: false,
+        requires_topic_scaffold,
         dialog_topics,
     };
     let manifest_path = request.out.join(MANIFEST_NAME);
@@ -4937,6 +4992,49 @@ mod tests {
         assert_eq!(containing(&graph, "DiEgO").len(), 3);
         assert_eq!(matching(&graph, "DiEgO").len(), 1);
         assert_eq!(matching(&graph, "DiEgO")[0].module, "Story.Exact");
+    }
+
+    #[test]
+    fn exact_participant_resolution_prefers_the_rooted_anchor_over_its_placeholder() {
+        let topicless =
+            empty_conversation("Story.G1R.Conversation.Conversation_NEW_NPC", "NEW_NPC");
+        let mut rooted = empty_conversation(
+            "AI.AIAgent.Human.Config.NEW_NPC.ConversationCharacterSettings_NEW_NPC",
+            "NEW_NPC",
+        );
+        rooted.root_class = Some("UTopic_Hero__NEW_NPC".to_owned());
+        rooted
+            .topics
+            .push(topic("UChoiceNewNpc", "CAP_NEW_NPC", Vec::new()));
+        rooted.roots.push("UChoiceNewNpc".to_owned());
+
+        let graph = DialogGraph {
+            conversations: vec![topicless.clone(), rooted.clone()],
+        };
+        assert_eq!(containing(&graph, "NEW_NPC").len(), 2);
+        assert_eq!(matching(&graph, "NEW_NPC"), vec![&rooted]);
+        assert_eq!(matching(&graph, "NEW_"), vec![&rooted]);
+        assert_eq!(exact_npc_matches(&graph, "new_npc"), vec![&rooted]);
+        assert_eq!(
+            matching(&graph, &topicless.module),
+            vec![&topicless],
+            "the exact placeholder module remains directly addressable"
+        );
+
+        let mut second_rooted = rooted.clone();
+        second_rooted.module = "AI.Other.RootedConversation".to_owned();
+        let ambiguous = DialogGraph {
+            conversations: vec![topicless.clone(), rooted.clone(), second_rooted],
+        };
+        assert_eq!(matching(&ambiguous, "NEW_NPC").len(), 2);
+
+        let mut different_identity = rooted;
+        different_identity.module = "AI.Other.MultiParticipantConversation".to_owned();
+        different_identity.participants.push("OTHER_NPC".to_owned());
+        let distinct = DialogGraph {
+            conversations: vec![topicless, different_identity],
+        };
+        assert_eq!(matching(&distinct, "NEW_NPC").len(), 2);
     }
 
     #[test]
@@ -6480,6 +6578,21 @@ class UFirst : UTopic_Hero__NEW_NPC { }
         });
         let error = validate_settings_anchor_declarations_unchanged(&changed).unwrap_err();
         assert!(error.to_string().contains("shipped declaration"), "{error}");
+
+        let mut topic_edit = new_tree_report(&[]);
+        topic_edit.changed.push(dialog::ChangedBody {
+            class: "G1R::Conversation::UFirst".to_owned(),
+            member: "void Act_Implementation()".to_owned(),
+        });
+        topic_edit.changed_defaults.push(dialog::ChangedDefault {
+            class: "G1R::Conversation::UFirst".to_owned(),
+            target: "Caption".to_owned(),
+        });
+        validate_settings_anchor_declarations_unchanged(&topic_edit).unwrap();
+
+        topic_edit.changed[0].class = "Other::Conversation::UFirst".to_owned();
+        let error = validate_settings_anchor_declarations_unchanged(&topic_edit).unwrap_err();
+        assert!(error.to_string().contains("Other::Conversation::UFirst"));
     }
 
     #[test]
@@ -6499,6 +6612,10 @@ class UFirst : UTopic_Hero__NEW_NPC { }
             "AI.AIAgent.Human.Config.OC_GRD_Guard30_281N.ConversationCharacterSettings_OTHER"
         )
         .is_none());
+        assert!(requires_topic_scaffold_for_module(module));
+        assert!(!requires_topic_scaffold_for_module(
+            "Story.G1R.Conversation.Conversation_OC_GRD_Guard30_281N"
+        ));
 
         let duplicate = ConversationSettingsAnchor {
             module: module.to_ascii_lowercase(),
@@ -6726,6 +6843,20 @@ class UFirst : UTopic_Hero__NEW_NPC { }
                 .contains("must retain `requires_topic_scaffold = true`"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn a_rooted_settings_anchor_allows_follow_up_edits_without_readding_topics() {
+        let mut manifest = command_manifest();
+        manifest.requires_topic_scaffold = true;
+        let mut rooted = empty_conversation(&manifest.module, &manifest.participant);
+        rooted.root_class = Some("UTopic_Hero__TestNpc".to_owned());
+
+        assert!(requires_initial_topic_scaffold(&manifest, None));
+        assert!(!requires_initial_topic_scaffold(&manifest, Some(&rooted)));
+
+        manifest.operation = DialogModuleOperation::Add;
+        assert!(requires_initial_topic_scaffold(&manifest, Some(&rooted)));
     }
 
     #[test]

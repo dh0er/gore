@@ -26,8 +26,8 @@ pub struct Conversation {
     pub participants: Vec<String>,
     /// Every topic in the module, ordered by class name.
     pub topics: Vec<Topic>,
-    /// Topic classes that are not reached through any `Subdialog`, ordered by `PriorityRank` and
-    /// then by their module declaration order for equal ranks.
+    /// Topic classes that are neither marked as sub-topics nor reached through any `Subdialog`,
+    /// ordered by `PriorityRank` and then by their module declaration order for equal ranks.
     pub roots: Vec<String>,
     pub coverage: Coverage,
 }

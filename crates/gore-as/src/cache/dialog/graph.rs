@@ -108,7 +108,7 @@ fn instructions(
 fn ordered_root_classes(topics: &[Topic], children_seen: &BTreeSet<String>) -> Vec<String> {
     let mut ordered: Vec<&Topic> = topics
         .iter()
-        .filter(|topic| !children_seen.contains(&topic.class))
+        .filter(|topic| !topic.flags.is_sub_topic && !children_seen.contains(&topic.class))
         .collect();
     ordered.sort_by_key(|topic| topic.priority.unwrap_or(0));
     ordered
@@ -281,7 +281,10 @@ mod tests {
 
     #[test]
     fn equal_rank_roots_keep_module_declaration_order() {
+        let mut orphaned_subtopic = topic("UOrphanedSubtopic", Some(-2));
+        orphaned_subtopic.flags.is_sub_topic = true;
         let topics = vec![
+            orphaned_subtopic,
             topic("UImplicit", None),
             topic("UForced", Some(-1)),
             topic("UZebra", Some(0)),
