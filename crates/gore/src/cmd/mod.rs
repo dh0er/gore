@@ -43,34 +43,12 @@ pub fn contains_case_insensitive(haystack: &str, lowercase_needle: &str) -> bool
     haystack.to_lowercase().contains(lowercase_needle)
 }
 
-/// Validate that `name` is a safe single-component mod name that can be
-/// appended to a path without escaping the parent directory.
-/// Rejects: empty names, names containing path separators (`/` or `\`),
-/// the special component `..`, and anything that `Path::components()` treats
-/// as more than one component or a non-normal component.
+/// Apply the canonical bundle/mod-name contract everywhere the CLI writes a mod directory.
+///
+/// Keeping this as a small adapter preserves the command-specific `anyhow` contexts while making
+/// scaffolding, Lua generation, packaging, bundle building, and dialog staging agree on portability.
 pub fn validate_mod_name(name: &str) -> anyhow::Result<()> {
-    use std::path::Component;
-    if name.is_empty() {
-        anyhow::bail!("mod name must not be empty");
-    }
-    // Control characters (newline, tab, …) are never valid in a mod/dir name,
-    // and a newline embedded in generated Lua/scaffold output could terminate a
-    // comment and inject executable code.
-    if name.chars().any(char::is_control) {
-        anyhow::bail!("mod name must not contain control characters: {name:?}");
-    }
-    if name.contains('/') || name.contains('\\') {
-        anyhow::bail!("mod name must not contain path separators: '{name}'");
-    }
-    let path = std::path::Path::new(name);
-    let components: Vec<_> = path.components().collect();
-    if components.len() != 1 {
-        anyhow::bail!("mod name must be a single path component: '{name}'");
-    }
-    match components[0] {
-        Component::Normal(_) => Ok(()),
-        _ => anyhow::bail!("mod name is not a valid directory name: '{name}'"),
-    }
+    gore_mod::validate_mod_name(name).map_err(anyhow::Error::from)
 }
 
 /// Validate override class/field names against a reflection model.
@@ -158,6 +136,16 @@ mod mod_name_tests {
     #[test]
     fn path_with_prefix_rejected() {
         assert!(validate_mod_name("subdir/MyMod").is_err());
+    }
+
+    #[test]
+    fn portable_mod_name_byte_limit_matches_bundle_engine() {
+        assert!(validate_mod_name(&"a".repeat(198)).is_ok());
+        let error = validate_mod_name(&"a".repeat(199)).unwrap_err();
+        assert!(
+            error.to_string().contains("at most 198 UTF-8 bytes"),
+            "{error}"
+        );
     }
 }
 

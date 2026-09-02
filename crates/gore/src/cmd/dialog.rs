@@ -6960,8 +6960,15 @@ class UFirst : UTopic_Hero__NEW_NPC { }
         let temp = tempfile::tempdir().unwrap();
         let workspace = temp.path().join("missing-workspace");
 
-        for name in ["../escape", r"C:\escape", "CON", "name.", "name:stream"] {
-            let error = stage(&workspace, name, None, None).unwrap_err();
+        for name in [
+            "../escape".to_owned(),
+            r"C:\escape".to_owned(),
+            "CON".to_owned(),
+            "name.".to_owned(),
+            "name:stream".to_owned(),
+            "x".repeat(256),
+        ] {
+            let error = stage(&workspace, &name, None, None).unwrap_err();
             assert!(
                 error.to_string().contains("invalid --mod-name"),
                 "unexpected error for {name:?}: {error}"

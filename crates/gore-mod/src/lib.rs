@@ -44,6 +44,9 @@ const MAX_UE4SS_TREE_ENTRIES: u64 = 250_000;
 const MAX_UE4SS_FILE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_UE4SS_TREE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_GAME_EXECUTABLE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// Leave enough of a portable 255-byte filename component for the longest generated container
+/// decoration: `zzz_gm999_<name>_<hash>_<usize component>_files_1000_P.pak`.
+const MAX_PORTABLE_MOD_NAME_BYTES: usize = 198;
 
 // ── Errors ───────────────────────────────────────────────────────────────────
 #[derive(Debug, thiserror::Error)]
@@ -2133,8 +2136,8 @@ fn sanitize(s: &str) -> String {
 /// Validate a mod name against the portable single-component contract used by bundle building.
 ///
 /// Besides traversal and separators, this rejects Windows device aliases, alternate data-stream
-/// syntax, and trailing dots/spaces so a name accepted while scaffolding cannot fail later when
-/// the bundle is built or published.
+/// syntax, trailing dots/spaces, and names too long for GORE's decorated output filenames, so a
+/// name accepted while scaffolding cannot fail later when the bundle is built or published.
 pub fn validate_mod_name(name: &str) -> std::result::Result<(), ModError> {
     if is_safe_mod_name(name) {
         Ok(())
@@ -2142,7 +2145,7 @@ pub fn validate_mod_name(name: &str) -> std::result::Result<(), ModError> {
         Err(ModError::Other(format!(
             "invalid mod name {name:?}: must be one portable path component with no separators, \
              '..', control characters, Windows device aliases, alternate data streams, or \
-             trailing dots/spaces"
+             trailing dots/spaces, and at most {MAX_PORTABLE_MOD_NAME_BYTES} UTF-8 bytes"
         )))
     }
 }
@@ -2150,14 +2153,14 @@ pub fn validate_mod_name(name: &str) -> std::result::Result<(), ModError> {
 /// A safe mod name is a single normal path component: non-empty, no path separators, no `..`,
 /// no control characters — so it can't escape the bundle/UE4SS Mods directory.
 fn is_safe_mod_name(name: &str) -> bool {
-    !name.contains('/')
-        && !name.contains('\\')
-        && gore_vo::validate_archive_entry_path(name, &gore_vo::Limits::default()).is_ok()
+    name.len() <= MAX_PORTABLE_MOD_NAME_BYTES && is_safe_filename(name)
 }
 
 /// A safe single filename: non-empty, no separators, no `..`, no control chars.
 fn is_safe_filename(name: &str) -> bool {
-    is_safe_mod_name(name)
+    !name.contains('/')
+        && !name.contains('\\')
+        && gore_vo::validate_archive_entry_path(name, &gore_vo::Limits::default()).is_ok()
 }
 
 /// A safe relative path inside the bundle: non-empty, not absolute, every component a normal
@@ -6224,6 +6227,7 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
     )?;
     let manifest: ModManifest = serde_json::from_slice(&manifest_bytes)?;
     validate_mod_manifest_format(&manifest)?;
+    validate_mod_name(&manifest.mod_meta.name)?;
     // An empty bundle has nothing to apply; deploying it would only retire the active mod.
     if manifest.components.is_empty() {
         return Err(ModError::Other("bundle has no components to deploy".into()));
@@ -18481,6 +18485,22 @@ mod tests {
         assert!(!is_safe_rel_path("payload\\file.bin"));
         assert!(is_safe_mod_name("Normal-Mod_1"));
         assert!(is_safe_rel_path("payload/sub/file.bin"));
+        assert!(is_safe_mod_name(&"a".repeat(MAX_PORTABLE_MOD_NAME_BYTES)));
+        assert!(!is_safe_mod_name(
+            &"a".repeat(MAX_PORTABLE_MOD_NAME_BYTES + 1)
+        ));
+        let longest_generated_name = format!(
+            "zzz_gm999_{}_deadbeef_18446744073709551615_files_1000_P.pak",
+            "a".repeat(MAX_PORTABLE_MOD_NAME_BYTES)
+        );
+        assert_eq!(longest_generated_name.len(), 255);
+        let error = validate_mod_name(&"a".repeat(MAX_PORTABLE_MOD_NAME_BYTES + 1)).unwrap_err();
+        assert!(
+            error.to_string().contains(&format!(
+                "at most {MAX_PORTABLE_MOD_NAME_BYTES} UTF-8 bytes"
+            )),
+            "{error}"
+        );
     }
 
     #[test]
@@ -18521,6 +18541,33 @@ mod tests {
         assert!(
             !game.exists(),
             "an unknown format must fail before resolving or writing the game tree"
+        );
+
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_vec(&serde_json::json!({
+                "format": 1,
+                "mod": {
+                    "name": "x".repeat(MAX_PORTABLE_MOD_NAME_BYTES + 1),
+                    "version": "",
+                    "author": ""
+                },
+                "components": []
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let overlong = deploy(&bundle, &game).unwrap_err();
+        assert!(
+            overlong.to_string().contains("invalid mod name")
+                && overlong.to_string().contains(&format!(
+                    "at most {MAX_PORTABLE_MOD_NAME_BYTES} UTF-8 bytes"
+                )),
+            "unexpected error: {overlong}"
+        );
+        assert!(
+            !game.exists(),
+            "an invalid mod name must fail before resolving or writing the game tree"
         );
     }
 

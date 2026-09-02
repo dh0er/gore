@@ -1027,9 +1027,15 @@ fn library_ids_equal(left: &str, right: &str) -> bool {
 }
 
 fn proposed_import_id(name: &str, canonical_source: &Path) -> String {
+    const HASH_SUFFIX_BYTES: usize = 1 + 8;
+    let mut stem = slug(name);
+    stem.truncate(crate::MAX_PORTABLE_MOD_NAME_BYTES - HASH_SUFFIX_BYTES);
+    while stem.ends_with('-') {
+        stem.pop();
+    }
     let proposed = format!(
         "{}-{}",
-        slug(name),
+        stem,
         crate::name_hash(&format!("{name}\0{}", canonical_source.display()))
     );
     proposed_import_id_override(proposed)
@@ -9360,6 +9366,18 @@ mod tests {
         );
         assert_eq!(visible_library_snapshot(&lib), before);
         assert_no_import_residue(&lib);
+    }
+
+    #[test]
+    fn proposed_import_id_reserves_room_for_its_hash_suffix() {
+        let name = "A".repeat(crate::MAX_PORTABLE_MOD_NAME_BYTES + 100);
+        let source = Path::new("C:/mods/example_P.pak");
+        let id = proposed_import_id(&name, source);
+        let hash = crate::name_hash(&format!("{name}\0{}", source.display()));
+
+        assert_eq!(id.len(), crate::MAX_PORTABLE_MOD_NAME_BYTES);
+        assert!(id.ends_with(&format!("-{hash}")), "{id}");
+        assert!(crate::is_safe_mod_name(&id));
     }
 
     #[test]
