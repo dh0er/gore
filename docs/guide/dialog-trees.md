@@ -137,7 +137,8 @@ gore dialog stage work --mod-name ViperEdit
 ```
 
 `checkout` writes the compiler-ready source, an untouched copy under
-`pristine\`, and a manifest bound to the exact base cache. The source includes
+`pristine\`, and a manifest bound to the exact base cache. Its output directory
+must be absent or empty, so another checkout cannot overwrite an edit in progress. The source includes
 the reconstructed class-scope `default` statements. They are authored source,
 so existing topics may change their `Caption`, `PriorityRank`, `Rules` and
 flags such as `bIsSubTopic`, `bIsAmbientTopic` and `bIsFollowupTopic`, as well

@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use gore_as::cache::dialog::{self, Caption, DialogGraph, StepKind};
+use gore_as::cache::dialog::{self, Arg, Caption, DialogGraph, StepKind};
 use gore_as::cache::knowledge_metadata::extract_knowledge_metadata;
 
 fn real_cache() -> Option<Vec<u8>> {
@@ -238,6 +238,29 @@ fn nothing_is_read_away_silently() {
         total.steps_typed,
         total.steps
     );
+}
+
+/// Nested native-struct stores use a different address shape from direct topic fields. This
+/// shipping topic is a stable witness that `ForceSettings.RangeType` survives into the public
+/// dialog model rather than disappearing between authored-default recovery and `dialog show`.
+#[test]
+fn nested_force_settings_survive_default_extraction() {
+    let Some(graph) = graph() else {
+        eprintln!("skip: set GORE_AS_REAL_CACHE");
+        return;
+    };
+    let topic = graph
+        .conversations
+        .iter()
+        .flat_map(|conversation| &conversation.topics)
+        .find(|topic| topic.class == "UChoiceDiego105716")
+        .expect("shipping Diego force-conversation topic");
+    let setting = topic
+        .settings
+        .iter()
+        .find(|setting| setting.target == "ForceSettings.RangeType")
+        .expect("nested ForceSettings.RangeType default");
+    assert_eq!(setting.args, vec![Arg::Int { value: 3 }]);
 }
 
 /// A checkout nobody has touched must contain complete authored defaults and check cleanly, for

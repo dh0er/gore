@@ -45,6 +45,11 @@ const CAPTION_WINDOW: usize = 16;
 /// How far past a call a branch may sit for the call to count as its condition.
 const PREDICATE_LOOKAHEAD: usize = 6;
 
+/// Maximum contiguous receiver-address instructions accepted before a default call. Real nested
+/// member paths are tiny; the bound prevents malformed bytecode from turning every call into an
+/// unbounded backward scan.
+const MAX_RECEIVER_INSTRUCTIONS: usize = 32;
+
 /// Resolve a call instruction to its symbol name.
 pub(super) fn call_symbol<'a>(instruction: &Instr, refs: &'a RefResolver) -> Option<&'a str> {
     match instruction.op.name {
@@ -52,6 +57,23 @@ pub(super) fn call_symbol<'a>(instruction: &Instr, refs: &'a RefResolver) -> Opt
         "CALLSYS" => refs.func_by_ptr(*instruction.qwords.first()? as i64),
         _ => None,
     }
+}
+
+fn qualify_call_name(name: &str, namespace: Option<&str>) -> String {
+    match namespace {
+        Some(namespace) if !namespace.is_empty() => format!("{namespace}::{name}"),
+        _ => name.to_owned(),
+    }
+}
+
+fn qualified_call_symbol(instruction: &Instr, refs: &RefResolver) -> Option<String> {
+    let name = call_symbol(instruction, refs)?;
+    let namespace = match instruction.op.name {
+        "CALL" | "CALLBND" | "CALLINTF" => refs.func_ns_by_id(*instruction.dwords.first()? as i32),
+        "CALLSYS" => refs.func_ns_by_ptr(*instruction.qwords.first()? as i64),
+        _ => None,
+    };
+    Some(qualify_call_name(name, namespace))
 }
 
 /// A generated operator or lifetime helper (`$beh2`, `~FText`, `$opAssign`) rather than anything
@@ -96,6 +118,20 @@ fn call_params<'a>(
         }
         "CALLSYS" => refs.func_params_by_ptr(*instruction.qwords.first()? as i64),
         _ => None,
+    }
+}
+
+fn call_is_method(instruction: &Instr, refs: &RefResolver) -> bool {
+    match instruction.op.name {
+        "CALL" | "CALLBND" | "CALLINTF" => instruction
+            .dwords
+            .first()
+            .is_some_and(|id| refs.is_method_by_id(*id as i32)),
+        "CALLSYS" => instruction
+            .qwords
+            .first()
+            .is_some_and(|pointer| refs.is_method_by_ptr(*pointer as i64)),
+        _ => false,
     }
 }
 
@@ -226,6 +262,16 @@ fn coerce_arguments(args: &mut [Arg], call: &Instr, refs: &RefResolver) {
 /// Operands are pushed right to left, so the collected sequence is reversed. `n"..."` literals
 /// arrive as a `__STATIC_NAME(<id>)` call whose result is re-pushed, and are resolved here.
 fn arguments(instructions: &[Instr], start: usize, index: usize, refs: &RefResolver) -> Vec<Arg> {
+    collect_arguments(instructions, start, index, refs, false)
+}
+
+fn collect_arguments(
+    instructions: &[Instr],
+    start: usize,
+    index: usize,
+    refs: &RefResolver,
+    include_variable_pointers: bool,
+) -> Vec<Arg> {
     let mut collected = Vec::new();
     let mut position = start;
     while position < index {
@@ -243,6 +289,16 @@ fn arguments(instructions: &[Instr], start: usize, index: usize, refs: &RefResol
                     }
                 }
             }
+            position += 1;
+            continue;
+        }
+        if include_variable_pointers && instruction.op.name == "PshVPtr" {
+            collected.push(match instruction.words.first() {
+                Some(&0) => Arg::Symbol {
+                    name: "this".to_owned(),
+                },
+                _ => Arg::Opaque,
+            });
             position += 1;
             continue;
         }
@@ -278,21 +334,110 @@ fn statement_start(instructions: &[Instr], index: usize) -> usize {
     floor
 }
 
-/// The receiver member of a call written as `this.<member>...`, e.g. `Rules` in
-/// `this.Rules.HideIfKnows(...)`.
-fn receiver_member<'a>(
+/// The contiguous member-address operands immediately before a call written on `this`. `CHKREF`
+/// is bookkeeping and multiple `ADDSi` instructions represent a nested path such as
+/// `this.ForceSettings.RangeType`.
+fn receiver_member_operands(
     instructions: &[Instr],
     index: usize,
-    refs: &'a RefResolver,
-) -> Option<&'a str> {
-    let member = instructions.get(index.checked_sub(1)?)?;
-    let this = instructions.get(index.checked_sub(2)?)?;
-    if member.op.name != "ADDSi" || this.op.name != "PshVPtr" || this.words.first() != Some(&0) {
+) -> Option<(usize, Vec<(i32, i32)>)> {
+    let floor = index.saturating_sub(MAX_RECEIVER_INSTRUCTIONS);
+    let mut position = index;
+    let mut reversed = Vec::new();
+    while position > floor {
+        position -= 1;
+        let instruction = &instructions[position];
+        match instruction.op.name {
+            "CHKREF" => {}
+            "ADDSi" => {
+                let offset = *instruction.words.first()? as i32;
+                let type_id = *instruction.dwords.first()? as i32;
+                reversed.push((type_id, offset));
+            }
+            "PshVPtr" if instruction.words.first() == Some(&0) && !reversed.is_empty() => {
+                reversed.reverse();
+                return Some((position, reversed));
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// The member-address operands targeted by a terminal `WRTV*`. Direct fields use `LoadThisR`;
+/// nested native-struct fields use `PshVPtr this; ADDSi...; PopRPtr`.
+fn store_member_operands(instructions: &[Instr], index: usize) -> Option<Vec<(i32, i32)>> {
+    let mut position = index.checked_sub(1)?;
+    let before = instructions.get(position)?;
+    if before.op.name == "LoadThisR" {
+        return Some(vec![(
+            *before.dwords.first()? as i32,
+            *before.words.first()? as i32,
+        )]);
+    }
+    if before.op.name != "PopRPtr" {
         return None;
     }
-    let offset = *member.words.first()? as i32;
-    let type_id = *member.dwords.first()? as i32;
-    refs.member(type_id, offset)
+    position = position.checked_sub(1)?;
+    let floor = index.saturating_sub(MAX_RECEIVER_INSTRUCTIONS);
+    let mut reversed = Vec::new();
+    loop {
+        let instruction = instructions.get(position)?;
+        match instruction.op.name {
+            "CHKREF" => {}
+            "ADDSi" => reversed.push((
+                *instruction.dwords.first()? as i32,
+                *instruction.words.first()? as i32,
+            )),
+            "PshVPtr" if instruction.words.first() == Some(&0) && !reversed.is_empty() => {
+                reversed.reverse();
+                return Some(reversed);
+            }
+            _ => return None,
+        }
+        if position == floor {
+            return None;
+        }
+        position = position.checked_sub(1)?;
+    }
+}
+
+fn member_path(operands: Vec<(i32, i32)>, refs: &RefResolver) -> Option<String> {
+    let mut path = String::new();
+    for (type_id, offset) in operands {
+        let member = refs.member(type_id, offset)?;
+        if !path.is_empty() {
+            path.push('.');
+        }
+        path.push_str(member);
+    }
+    Some(path)
+}
+
+fn receiver_member_path(
+    instructions: &[Instr],
+    index: usize,
+    refs: &RefResolver,
+) -> Option<(usize, String)> {
+    let (start, operands) = receiver_member_operands(instructions, index)?;
+    Some((start, member_path(operands, refs)?))
+}
+
+/// A method called directly on `this` has no `ADDSi` member path, but its receiver is still
+/// semantically proven. Accept only the contiguous compiler shape, with optional null checks.
+fn direct_this_receiver_start(instructions: &[Instr], index: usize) -> Option<usize> {
+    let floor = index.saturating_sub(MAX_RECEIVER_INSTRUCTIONS);
+    let mut position = index;
+    while position > floor {
+        position -= 1;
+        let instruction = &instructions[position];
+        match instruction.op.name {
+            "CHKREF" => {}
+            "PshVPtr" if instruction.words.first() == Some(&0) => return Some(position),
+            _ => return None,
+        }
+    }
+    None
 }
 
 /// Everything `__InitDefaults` declares for one topic class.
@@ -302,6 +447,8 @@ pub(super) struct Defaults {
     pub flags: TopicFlags,
     pub rules: Vec<Rule>,
     pub settings: Vec<Setting>,
+    pub suppressed: usize,
+    pub unresolved: usize,
 }
 
 impl Default for Defaults {
@@ -312,6 +459,8 @@ impl Default for Defaults {
             flags: TopicFlags::default(),
             rules: Vec::new(),
             settings: Vec::new(),
+            suppressed: 0,
+            unresolved: 0,
         }
     }
 }
@@ -362,25 +511,29 @@ pub(super) fn defaults(instructions: &[Instr], refs: &RefResolver) -> Defaults {
             }
         }
 
-        if instruction.op.name == "LoadThisR" {
-            let Some(write) = instructions.get(index + 1) else {
+        if instruction.op.name.starts_with("WRTV") {
+            let Some(slot) = instruction.words.first() else {
+                result.unresolved += 1;
                 continue;
             };
-            if !write.op.name.starts_with("WRTV") {
-                continue;
-            }
-            let (Some(offset), Some(type_id), Some(slot)) = (
-                instruction.words.first(),
-                instruction.dwords.first(),
-                write.words.first(),
-            ) else {
-                continue;
-            };
-            let Some(member) = refs.member(*type_id as i32, *offset as i32) else {
+            let Some(target) = store_member_operands(instructions, index)
+                .and_then(|operands| member_path(operands, refs))
+            else {
+                result.unresolved += 1;
                 continue;
             };
             let value = slots.get(slot).copied();
-            apply_default(&mut result, member, value, instructions, index, refs);
+            if target.contains('.') {
+                if value.is_none() {
+                    result.unresolved += 1;
+                }
+                result.settings.push(Setting {
+                    target,
+                    args: vec![value.map_or(Arg::Opaque, |value| Arg::Int { value })],
+                });
+            } else if !apply_default(&mut result, &target, value, instructions, index, refs) {
+                result.unresolved += 1;
+            }
             continue;
         }
 
@@ -388,25 +541,54 @@ pub(super) fn defaults(instructions: &[Instr], refs: &RefResolver) -> Defaults {
             continue;
         }
         let Some(name) = call_symbol(instruction, refs) else {
+            result.unresolved += 1;
             continue;
         };
-        if name == STATIC_NAME {
+        if INSTRUMENTATION.contains(&name) || name == STATIC_NAME {
+            result.suppressed += 1;
             continue;
         }
-        let Some(member) = receiver_member(instructions, index, refs) else {
+
+        let Some((receiver_start, member)) = receiver_member_path(instructions, index, refs) else {
+            if is_argument_constructor(instructions, index)
+                || is_value_call(instructions, index)
+                || is_compiler_internal(name)
+            {
+                result.suppressed += 1;
+                continue;
+            }
+            let start = statement_start(instructions, index);
+            let method_call = call_is_method(instruction, refs);
+            let direct_this = method_call
+                .then(|| direct_this_receiver_start(instructions, index))
+                .flatten();
+            let args = match direct_this {
+                Some(receiver_start) => arguments(instructions, start, receiver_start, refs),
+                None if !method_call => collect_arguments(instructions, start, index, refs, true),
+                None => arguments(instructions, start, index, refs),
+            };
+            result.settings.push(Setting {
+                target: qualified_call_symbol(instruction, refs).unwrap_or_else(|| name.to_owned()),
+                args,
+            });
+            if direct_this.is_none() && method_call {
+                // Keep the resolved symbol visible, but report that its receiver was not proven.
+                result.unresolved += 1;
+            }
             continue;
         };
         if member == "Caption" {
             if let Some(caption) = caption_at(instructions, index, refs) {
                 result.caption = caption;
+            } else {
+                result.unresolved += 1;
             }
             continue;
         }
-        let member = member.to_owned();
         let name = name.to_owned();
         let start = statement_start(instructions, index);
-        // The receiver push sits between the arguments and the call and is not an argument.
-        let args = arguments(instructions, start, index.saturating_sub(2), refs);
+        // The receiver path sits between the arguments and the call and is not an argument.
+        let args = arguments(instructions, start, receiver_start, refs);
         if member == "Rules" {
             let kind = rule_kind(&name);
             let mut args = args;
@@ -465,27 +647,40 @@ fn apply_default(
     instructions: &[Instr],
     index: usize,
     refs: &RefResolver,
-) {
+) -> bool {
     match member {
-        "bIsSubTopic" => result.flags.is_sub_topic = value.unwrap_or(0) != 0,
-        "bIsAmbientTopic" => result.flags.is_ambient = value.unwrap_or(0) != 0,
-        "bIsFollowupTopic" => result.flags.is_followup = value.unwrap_or(0) != 0,
+        "bIsSubTopic" => {
+            let Some(value) = value else { return false };
+            result.flags.is_sub_topic = value != 0;
+        }
+        "bIsAmbientTopic" => {
+            let Some(value) = value else { return false };
+            result.flags.is_ambient = value != 0;
+        }
+        "bIsFollowupTopic" => {
+            let Some(value) = value else { return false };
+            result.flags.is_followup = value != 0;
+        }
         "ForCharacter" | "WithCharacter" => {
             let name = nearest_static_name(instructions, index, refs);
+            if name.is_none() {
+                return false;
+            }
             if member == "ForCharacter" {
                 result.flags.for_character = name;
             } else {
                 result.flags.with_character = name;
             }
         }
-        "Caption" => {}
+        "Caption" => return false,
         // `PriorityRank` orders the menu; the engine default arrives as -1, which is an absent
         // rank rather than the largest one.
         "PriorityRank" => {
-            result.priority = value.filter(|rank| *rank != -1);
+            let Some(value) = value else { return false };
+            result.priority = (value != -1).then_some(value);
         }
         // Story-debugger instrumentation, like the `DC`/`DB` calls it pairs with.
-        "DebugId" => {}
+        "DebugId" => return value.is_some(),
         _ => {
             let args = match value {
                 Some(value) => vec![Arg::Int { value }],
@@ -495,8 +690,10 @@ fn apply_default(
                 target: member.to_owned(),
                 args,
             });
+            return value.is_some();
         }
     }
+    true
 }
 
 /// The FName literal resolved closest before `index`.
@@ -1022,6 +1219,94 @@ mod tests {
         assert!(ends_statement(&instruction("WRTV4", &[7], &[], &[])));
         assert!(ends_statement(&instruction("RET", &[2], &[], &[])));
         assert!(!ends_statement(&instruction("PshNull", &[], &[], &[])));
+    }
+
+    #[test]
+    fn default_receiver_paths_accept_checked_nested_members() {
+        let instructions = vec![
+            instruction("PshVPtr", &[0], &[], &[]),
+            instruction("ADDSi", &[4], &[10], &[]),
+            instruction("CHKREF", &[], &[], &[]),
+            instruction("ADDSi", &[8], &[20], &[]),
+            instruction("CALLSYS", &[], &[], &[1]),
+        ];
+        assert_eq!(
+            receiver_member_operands(&instructions, 4),
+            Some((0, vec![(10, 4), (20, 8)]))
+        );
+
+        let mut not_this = instructions;
+        not_this[0] = instruction("PshVPtr", &[1], &[], &[]);
+        assert_eq!(receiver_member_operands(&not_this, 4), None);
+    }
+
+    #[test]
+    fn direct_this_default_receivers_are_proven_without_a_member_path() {
+        let instructions = vec![
+            instruction("PshVPtr", &[0], &[], &[]),
+            instruction("CHKREF", &[], &[], &[]),
+            instruction("CALLSYS", &[], &[], &[1]),
+        ];
+        assert_eq!(direct_this_receiver_start(&instructions, 2), Some(0));
+
+        let mut not_this = instructions;
+        not_this[0] = instruction("PshVPtr", &[1], &[], &[]);
+        assert_eq!(direct_this_receiver_start(&not_this, 2), None);
+    }
+
+    #[test]
+    fn default_store_paths_accept_direct_and_checked_nested_members() {
+        let direct = vec![
+            instruction("LoadThisR", &[4], &[10], &[]),
+            instruction("WRTV4", &[2], &[], &[]),
+        ];
+        assert_eq!(store_member_operands(&direct, 1), Some(vec![(10, 4)]));
+
+        let nested = vec![
+            instruction("PshVPtr", &[0], &[], &[]),
+            instruction("ADDSi", &[4], &[10], &[]),
+            instruction("CHKREF", &[], &[], &[]),
+            instruction("ADDSi", &[8], &[20], &[]),
+            instruction("PopRPtr", &[], &[], &[]),
+            instruction("WRTV1", &[2], &[], &[]),
+        ];
+        assert_eq!(
+            store_member_operands(&nested, 5),
+            Some(vec![(10, 4), (20, 8)])
+        );
+
+        let mut not_this = nested;
+        not_this[0] = instruction("PshVPtr", &[1], &[], &[]);
+        assert_eq!(store_member_operands(&not_this, 5), None);
+    }
+
+    #[test]
+    fn unresolved_default_calls_are_counted() {
+        let instructions = vec![instruction("CALL", &[], &[999], &[])];
+        let read = defaults(&instructions, &RefResolver::default());
+        assert_eq!(read.unresolved, 1);
+        assert!(read.settings.is_empty());
+    }
+
+    #[test]
+    fn generic_default_calls_keep_their_namespace() {
+        assert_eq!(qualify_call_name("Register", Some("G1R")), "G1R::Register");
+        assert_eq!(qualify_call_name("Register", None), "Register");
+    }
+
+    #[test]
+    fn receiverless_default_calls_keep_this_as_an_argument() {
+        let instructions = vec![
+            instruction("PshVPtr", &[0], &[], &[]),
+            instruction("CALLSYS", &[], &[], &[1]),
+        ];
+        assert_eq!(
+            collect_arguments(&instructions, 0, 1, &RefResolver::default(), true),
+            vec![Arg::Symbol {
+                name: "this".to_owned()
+            }]
+        );
+        assert!(arguments(&instructions, 0, 1, &RefResolver::default()).is_empty());
     }
 
     #[test]

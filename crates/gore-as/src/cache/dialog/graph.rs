@@ -102,6 +102,21 @@ fn instructions(
     })
 }
 
+/// Root menu order is rank first and module declaration order for equal ranks. The cache's class
+/// array is the authored order the game preserves; class-name sorting is only for the public
+/// `topics` inventory and must not become a menu-order tie-breaker.
+fn ordered_root_classes(topics: &[Topic], children_seen: &BTreeSet<String>) -> Vec<String> {
+    let mut ordered: Vec<&Topic> = topics
+        .iter()
+        .filter(|topic| !children_seen.contains(&topic.class))
+        .collect();
+    ordered.sort_by_key(|topic| topic.priority.unwrap_or(0));
+    ordered
+        .into_iter()
+        .map(|topic| topic.class.clone())
+        .collect()
+}
+
 /// The conversation settings class a module declares, if any.
 fn settings_class(module: &Module) -> Option<&Class> {
     module
@@ -158,6 +173,8 @@ fn conversation(module: &Module, refs: &RefResolver) -> Result<Option<Conversati
             let decoded = instructions(module, class, initializer)?;
             defaults = extract::defaults(&decoded, refs);
         }
+        coverage.calls_suppressed += defaults.suppressed;
+        coverage.calls_unresolved += defaults.unresolved;
 
         let visibility = match method(class, "IsVisible_Implementation") {
             Some(function) => {
@@ -209,8 +226,6 @@ fn conversation(module: &Module, refs: &RefResolver) -> Result<Option<Conversati
         });
     }
 
-    topics.sort_by(|left, right| left.class.cmp(&right.class));
-
     let declared: BTreeSet<&str> = topics.iter().map(|topic| topic.class.as_str()).collect();
     coverage.dangling_children = children_seen
         .iter()
@@ -221,18 +236,12 @@ fn conversation(module: &Module, refs: &RefResolver) -> Result<Option<Conversati
         .filter(|topic| topic.flags.is_sub_topic != children_seen.contains(&topic.class))
         .count();
 
-    // Menu order follows the declared rank, which is what puts the exit option last.
-    let mut ordered: Vec<&Topic> = topics
-        .iter()
-        .filter(|topic| !children_seen.contains(&topic.class))
-        .collect();
-    ordered.sort_by(|left, right| {
-        left.priority
-            .unwrap_or(0)
-            .cmp(&right.priority.unwrap_or(0))
-            .then_with(|| left.class.cmp(&right.class))
-    });
-    let roots: Vec<String> = ordered.iter().map(|topic| topic.class.clone()).collect();
+    // Menu order follows declared rank; equal ranks retain module declaration order.
+    let roots = ordered_root_classes(&topics, &children_seen);
+
+    // Keep the complete inventory deterministic without changing the independently captured menu
+    // order above.
+    topics.sort_by(|left, right| left.class.cmp(&right.class));
 
     let participants = match root {
         Some(root) => participants(&root.name),
@@ -253,7 +262,38 @@ fn conversation(module: &Module, refs: &RefResolver) -> Result<Option<Conversati
 
 #[cfg(test)]
 mod tests {
+    use super::super::model::Caption;
     use super::*;
+
+    fn topic(class: &str, priority: i64) -> Topic {
+        Topic {
+            class: class.to_owned(),
+            super_class: None,
+            caption: Caption::Unresolved,
+            priority: Some(priority),
+            flags: Default::default(),
+            rules: Vec::new(),
+            settings: Vec::new(),
+            visibility: Visibility::Always,
+            act: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn equal_rank_roots_keep_module_declaration_order() {
+        let topics = vec![
+            topic("UZebra", 0),
+            topic("UChild", 0),
+            topic("UAlpha", 0),
+            topic("UEnd", 5),
+        ];
+        let children = BTreeSet::from(["UChild".to_owned()]);
+
+        assert_eq!(
+            ordered_root_classes(&topics, &children),
+            vec!["UZebra".to_owned(), "UAlpha".to_owned(), "UEnd".to_owned()]
+        );
+    }
 
     #[test]
     fn participants_come_from_the_root_class_name() {

@@ -2130,6 +2130,23 @@ fn sanitize(s: &str) -> String {
         .collect()
 }
 
+/// Validate a mod name against the portable single-component contract used by bundle building.
+///
+/// Besides traversal and separators, this rejects Windows device aliases, alternate data-stream
+/// syntax, and trailing dots/spaces so a name accepted while scaffolding cannot fail later when
+/// the bundle is built or published.
+pub fn validate_mod_name(name: &str) -> std::result::Result<(), ModError> {
+    if is_safe_mod_name(name) {
+        Ok(())
+    } else {
+        Err(ModError::Other(format!(
+            "invalid mod name {name:?}: must be one portable path component with no separators, \
+             '..', control characters, Windows device aliases, alternate data streams, or \
+             trailing dots/spaces"
+        )))
+    }
+}
+
 /// A safe mod name is a single normal path component: non-empty, no path separators, no `..`,
 /// no control characters — so it can't escape the bundle/UE4SS Mods directory.
 fn is_safe_mod_name(name: &str) -> bool {

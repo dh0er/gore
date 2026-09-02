@@ -178,7 +178,7 @@ pub enum DialogAction {
     Checkout {
         /// Participant identifier (`om_stt_viper_302`), part of one, or a module name
         npc: String,
-        /// Working directory for the source, its pristine copy, and the manifest
+        /// Empty working directory for the source, its pristine copy, and the manifest
         #[arg(short = 'o', long)]
         out: PathBuf,
         #[arg(long)]
@@ -202,7 +202,7 @@ pub enum DialogAction {
     Stage {
         /// The directory `checkout` wrote
         dir: PathBuf,
-        /// Mod name for the bundle this edit ships in
+        /// Portable single-component mod name for the bundle this edit ships in
         #[arg(long, default_value = "MyDialogEdit")]
         mod_name: String,
         #[arg(long)]
@@ -657,7 +657,7 @@ fn print_conversation(conversation: &Conversation, text: &Text, depth: Option<us
         );
     }
     if coverage.calls_unresolved > 0 {
-        print!("; {} unresolved call(s)", coverage.calls_unresolved);
+        print!("; {} unresolved operation(s)", coverage.calls_unresolved);
     }
     if coverage.dangling_children > 0 {
         print!(
@@ -2153,6 +2153,25 @@ fn validate_topic_registrations(
 
 const MANIFEST_NAME: &str = "gore-dialog-edit.json";
 
+fn ensure_empty_dialog_workspace(out: &Path) -> Result<()> {
+    if !out.exists() {
+        return Ok(());
+    }
+    let mut entries = fs::read_dir(out).with_context(|| format!("reading {}", out.display()))?;
+    if entries
+        .next()
+        .transpose()
+        .with_context(|| format!("reading {}", out.display()))?
+        .is_some()
+    {
+        bail!(
+            "{} is not empty; choose an empty --out directory so no stale spec or source survives",
+            out.display()
+        );
+    }
+    Ok(())
+}
+
 fn digest_of(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let digest: [u8; 32] = Sha256::digest(bytes).into();
@@ -2170,6 +2189,7 @@ fn native_api(cache_path: &std::path::Path) -> Option<gore_as::cache::binds::Nat
 }
 
 fn checkout(npc: &str, out: &PathBuf, cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<()> {
+    ensure_empty_dialog_workspace(out)?;
     let (path, bytes) = read_cache(cache, game)?;
     let graph = dialog::build(&bytes).context("reading dialog from the script cache")?;
     let conversation = resolve_one(&graph, npc)?;
@@ -2417,6 +2437,7 @@ fn stage(
     cache: Option<PathBuf>,
     game: Option<PathBuf>,
 ) -> Result<()> {
+    gore_mod::validate_mod_name(mod_name).context("invalid --mod-name")?;
     let compiler_game_arg = game.clone();
     let (manifest, report, source_path) = open_edit(dir, cache, game)?;
     if !report.is_carryable() {
@@ -3994,17 +4015,7 @@ fn new_conversation(request: NewConversationRequest) -> Result<()> {
         bail!("generated conversation was not recognized as a new-symbol edit");
     }
 
-    if request.out.exists()
-        && fs::read_dir(&request.out)
-            .with_context(|| format!("reading {}", request.out.display()))?
-            .next()
-            .is_some()
-    {
-        bail!(
-            "{} is not empty; choose an empty --out directory so no stale spec or source survives",
-            request.out.display()
-        );
-    }
+    ensure_empty_dialog_workspace(&request.out)?;
     fs::create_dir_all(request.out.join("pristine"))
         .with_context(|| format!("creating {}", request.out.display()))?;
     let leaf = manifest
@@ -4206,17 +4217,7 @@ fn new_topic(request: NewTopicRequest) -> Result<()> {
         bail!("generated topic was not recognized as a same-module new-symbol edit");
     }
 
-    if request.out.exists()
-        && fs::read_dir(&request.out)
-            .with_context(|| format!("reading {}", request.out.display()))?
-            .next()
-            .is_some()
-    {
-        bail!(
-            "{} is not empty; choose an empty --out directory so no stale spec or source survives",
-            request.out.display()
-        );
-    }
+    ensure_empty_dialog_workspace(&request.out)?;
     fs::create_dir_all(request.out.join("pristine"))
         .with_context(|| format!("creating {}", request.out.display()))?;
     let leaf = taken
@@ -5858,6 +5859,37 @@ class UFirst : UTopic_Hero__NEW_NPC { }
         );
         assert!(command.contains("--backend standalone --op edit"));
         assert!(command.contains("--allow-new-symbols"));
+    }
+
+    #[test]
+    fn checkout_refuses_to_overwrite_an_existing_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        let out = temp.path().join("dialog-edit");
+        fs::create_dir_all(&out).unwrap();
+        let sentinel = out.join("authored-work.as");
+        fs::write(&sentinel, b"keep this edit").unwrap();
+
+        let error =
+            checkout("NPC", &out, Some(temp.path().join("missing.Cache")), None).unwrap_err();
+
+        assert!(error.to_string().contains("is not empty"), "{error}");
+        assert_eq!(fs::read(&sentinel).unwrap(), b"keep this edit");
+    }
+
+    #[test]
+    fn stage_rejects_nonportable_mod_names_before_opening_the_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("missing-workspace");
+
+        for name in ["../escape", r"C:\escape", "CON", "name.", "name:stream"] {
+            let error = stage(&workspace, name, None, None).unwrap_err();
+            assert!(
+                error.to_string().contains("invalid --mod-name"),
+                "unexpected error for {name:?}: {error}"
+            );
+        }
+        assert!(!workspace.exists());
+        assert!(!temp.path().join("escape.mini.Cache").exists());
     }
 
     #[test]

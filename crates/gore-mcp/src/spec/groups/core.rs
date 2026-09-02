@@ -662,8 +662,8 @@ const DIALOG_CHECKOUT_ARGS: &[ArgSpec] = &[
         "out",
         Long("out"),
         Path,
-        "Working directory for the editable source (including complete reconstructed class \
-         defaults), its pristine copy, and the manifest",
+        "Empty working directory for the editable source (including complete reconstructed class \
+         defaults), its pristine copy, and the manifest; existing work is never overwritten",
         true,
     ),
     DIALOG_CACHE_ARGS[0],
@@ -694,7 +694,7 @@ const DIALOG_STAGE_ARGS: &[ArgSpec] = &[
         "mod_name",
         Long("mod-name"),
         Str,
-        "Mod name for the mini-cache and bundle spec this edit stages",
+        "Portable single-component mod name for the mini-cache and bundle spec this edit stages",
         false,
     )
     .with_default("MyDialogEdit"),

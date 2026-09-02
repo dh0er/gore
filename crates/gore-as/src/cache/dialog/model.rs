@@ -26,7 +26,8 @@ pub struct Conversation {
     pub participants: Vec<String>,
     /// Every topic in the module, ordered by class name.
     pub topics: Vec<Topic>,
-    /// Topic classes that are not reached through any `Subdialog`, ordered by class name.
+    /// Topic classes that are not reached through any `Subdialog`, ordered by `PriorityRank` and
+    /// then by their module declaration order for equal ranks.
     pub roots: Vec<String>,
     pub coverage: Coverage,
 }
@@ -236,7 +237,8 @@ pub enum Arg {
     Name {
         value: String,
     },
-    /// A reference to a named global, e.g. `GameplayTag::Expression_Neutral`.
+    /// A symbolic expression, e.g. `GameplayTag::Expression_Neutral` or `this` where a generic
+    /// default call uses the current topic as an argument.
     Symbol {
         name: String,
     },
@@ -271,7 +273,7 @@ pub struct Coverage {
     pub says_incomplete: usize,
     /// Calls suppressed as instrumentation or as part of a recognized composite.
     pub calls_suppressed: usize,
-    /// Call sites whose symbol could not be resolved at all.
+    /// Call sites or generated-default operations whose semantic target could not be resolved.
     pub calls_unresolved: usize,
     /// Topics that declare `bIsSubTopic` but are reached by no `Subdialog`, and topics reached
     /// by a `Subdialog` without declaring it.

@@ -404,23 +404,35 @@ fn strip_comment(line: &str) -> &str {
 }
 
 fn default_target(tokens: &[Token]) -> Result<String, String> {
-    let mut target = String::new();
-    for token in tokens {
-        match token.text.as_str() {
-            "=" | "(" => break,
-            "." | "::" => target.push_str(&token.text),
-            _ if token.word => target.push_str(&token.text),
-            _ => {}
-        }
+    let mut at = 0usize;
+    if tokens.get(at).map(|token| token.text.as_str()) == Some(":")
+        && tokens.get(at + 1).map(|token| token.text.as_str()) == Some(":")
+    {
+        at += 2;
     }
-    if target.is_empty() {
-        return Err("class default has no assignment or call target".into());
+    if tokens.get(at).map(|token| token.text.as_str()) == Some("this")
+        && tokens.get(at + 1).map(|token| token.text.as_str()) == Some(".")
+    {
+        at += 2;
     }
-    if target.starts_with("Rules.") {
-        Ok("Rules".to_owned())
-    } else {
-        Ok(target)
+    let first = tokens
+        .get(at)
+        .filter(|token| token.word)
+        .ok_or_else(|| "class default has no semantic target".to_owned())?;
+    let mut target = first.text.clone();
+    at += 1;
+    while tokens.get(at).map(|token| token.text.as_str()) == Some(":")
+        && tokens.get(at + 1).map(|token| token.text.as_str()) == Some(":")
+    {
+        let segment = tokens
+            .get(at + 2)
+            .filter(|token| token.word)
+            .ok_or_else(|| "class default has an incomplete qualified target".to_owned())?;
+        target.push_str("::");
+        target.push_str(&segment.text);
+        at += 3;
     }
+    Ok(target)
 }
 
 fn parse_class(
@@ -1570,6 +1582,27 @@ fn static_name_literals(source: &str) -> BTreeSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parsed_default_target(statement: &str) -> Result<String, String> {
+        let tokens = tokenize(statement)?;
+        default_target(&tokens[1..tokens.len() - 1])
+    }
+
+    #[test]
+    fn class_default_targets_use_the_compilers_semantic_root() {
+        assert_eq!(
+            parsed_default_target("default this.Rules.HideIfKnows(this);").unwrap(),
+            "Rules"
+        );
+        assert_eq!(
+            parsed_default_target("default G1R::Register(this);").unwrap(),
+            "G1R::Register"
+        );
+        assert_eq!(
+            parsed_default_target("default ::G1R::Register(this);").unwrap(),
+            "G1R::Register"
+        );
+    }
 
     const PRISTINE: &str = r#"
 class UChoiceOne : UTopic_Hero__NPC
