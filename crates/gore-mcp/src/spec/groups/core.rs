@@ -643,7 +643,7 @@ const DIALOG_EXPORT_ARGS: &[ArgSpec] = &[
         "out",
         Long("out"),
         Path,
-        "Output directory. Created if absent; existing files are overwritten",
+        "Empty output directory. Created if absent; existing files are never overwritten",
         true,
     ),
     DIALOG_CACHE_ARGS[0],
@@ -963,12 +963,12 @@ const DIALOG_COMMANDS: &[CommandSpec] = &[
     .exactly_one(&[&["caption", "caption_key"]])
     .guide("dialog-authoring"),
     // One JSON file per conversation, under data-derived collision-free names, in a directory the
-    // caller picks. An occupied directory must therefore pass the write gate.
+    // caller picks. The CLI refuses occupied directories and per-file collisions itself.
     CommandSpec::new(
         "export",
         "Write every conversation to a directory, one JSON file each",
         DIALOG_EXPORT_ARGS,
-        Safety::write().clobbers_dir(&["out"]),
+        Safety::write().writes_into(&["out"]),
         T_NORMAL,
     )
     .guide("dialog-trees"),
@@ -1186,5 +1186,9 @@ mod tests {
         let stubs = CATALOG.command("stubs").expect("exists");
         assert!(!stubs.safety.worst_case().needs_write_permission());
         assert_eq!(stubs.safety.clobbers_dir, &["out"]);
+
+        let dialog_export = DIALOG.command("export").expect("exists");
+        assert_eq!(dialog_export.safety.writes_into, &["out"]);
+        assert!(dialog_export.safety.clobbers_dir.is_empty());
     }
 }

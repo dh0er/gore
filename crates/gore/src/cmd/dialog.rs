@@ -214,7 +214,7 @@ pub enum DialogAction {
     },
     /// Write every conversation to a directory, one JSON file each
     Export {
-        /// Output directory. Created if absent; existing files are overwritten
+        /// Empty output directory. Created if absent; existing files are never overwritten
         #[arg(short = 'o', long)]
         out: PathBuf,
         #[arg(long)]
@@ -2667,6 +2667,33 @@ fn write_stage_spec_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+fn prepare_stage_work_dir(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => match fs::create_dir(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("creating {}", path.display()));
+            }
+        },
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("reading dialog compiler workspace {}", path.display()));
+        }
+    }
+
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("reading dialog compiler workspace {}", path.display()))?;
+    if !metadata.is_dir() || dialog_metadata_is_link(&metadata) {
+        bail!(
+            "dialog compiler workspace must be a real, non-reparse directory: {}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
 fn open_edit(
     dir: &PathBuf,
     cache: Option<PathBuf>,
@@ -2875,6 +2902,8 @@ fn stage(
         bail!("the file is unchanged, so there is nothing to build");
     }
     let compiler_game = compiler_game_for(&manifest, compiler_game_arg)?;
+    let work_dir = dir.join(".gore-as-work");
+    prepare_stage_work_dir(&work_dir)?;
 
     let mini = format!("{mod_name}.mini.Cache");
     let mut spec = serde_json::json!({
@@ -2895,8 +2924,6 @@ fn stage(
         format!("{}\n", serde_json::to_string_pretty(&spec)?).as_bytes(),
     )?;
 
-    let work_dir = dir.join(".gore-as-work");
-    fs::create_dir_all(&work_dir).with_context(|| format!("creating {}", work_dir.display()))?;
     let mini_path = dir.join(&mini);
 
     println!("wrote {}", spec_path.display());
@@ -4746,13 +4773,55 @@ fn export_file_name(position: usize, module: &str) -> String {
 }
 
 fn write_export_files(out: &Path, graph: &DialogGraph) -> Result<usize> {
-    fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
+    match fs::symlink_metadata(out) {
+        Ok(metadata) => {
+            if !metadata.is_dir() || dialog_metadata_is_link(&metadata) {
+                bail!(
+                    "dialog export output must be a real, non-reparse directory: {}",
+                    out.display()
+                );
+            }
+            if fs::read_dir(out)
+                .with_context(|| format!("reading {}", out.display()))?
+                .next()
+                .transpose()
+                .with_context(|| format!("reading {}", out.display()))?
+                .is_some()
+            {
+                bail!(
+                    "{} is not empty; choose an empty --out directory so no stale dialog export survives",
+                    out.display()
+                );
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
+            let metadata = fs::symlink_metadata(out)
+                .with_context(|| format!("reading dialog export output {}", out.display()))?;
+            if !metadata.is_dir() || dialog_metadata_is_link(&metadata) {
+                bail!(
+                    "dialog export output must be a real, non-reparse directory: {}",
+                    out.display()
+                );
+            }
+        }
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("reading dialog export output {}", out.display()));
+        }
+    }
     for (position, conversation) in graph.conversations.iter().enumerate() {
         // The ordinal makes names unique even on case-insensitive filesystems and when two module
         // identities sanitize to the same display stem. The complete identity remains in JSON.
         let path = out.join(export_file_name(position, &conversation.module));
         let json = serde_json::to_string_pretty(conversation)?;
-        fs::write(&path, json).with_context(|| format!("writing {}", path.display()))?;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .with_context(|| format!("creating {} without overwriting", path.display()))?;
+        file.write_all(json.as_bytes())
+            .with_context(|| format!("writing {}", path.display()))?;
     }
     Ok(graph.conversations.len())
 }
@@ -4879,6 +4948,10 @@ mod tests {
                 "story.a_b".to_owned()
             ]
         );
+
+        let error = write_export_files(temp.path(), &graph).unwrap_err();
+        assert!(error.to_string().contains("is not empty"), "{error:#}");
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 3);
     }
 
     fn topic(class: &str, caption: &str, act: Vec<StepKind>) -> gore_as::cache::dialog::Topic {
@@ -6712,6 +6785,37 @@ class UFirst : UTopic_Hero__NEW_NPC { }
 
         assert_eq!(fs::read(&spec).unwrap(), b"new spec");
         assert_eq!(fs::read(&outside).unwrap(), b"keep this file");
+    }
+
+    #[test]
+    fn stage_work_dir_must_be_a_real_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let work = temp.path().join(".gore-as-work");
+
+        prepare_stage_work_dir(&work).unwrap();
+        prepare_stage_work_dir(&work).unwrap();
+        assert!(work.is_dir());
+
+        let outside = temp.path().join("outside");
+        let linked = temp.path().join("linked-work");
+        fs::create_dir(&outside).unwrap();
+        fs::create_dir(outside.join("tree")).unwrap();
+        fs::write(outside.join("tree").join("marker"), b"keep").unwrap();
+        #[cfg(unix)]
+        let link_result = std::os::unix::fs::symlink(&outside, &linked);
+        #[cfg(windows)]
+        let link_result = std::os::windows::fs::symlink_dir(&outside, &linked);
+        if let Err(error) = link_result {
+            eprintln!("skip: this account cannot create a directory symlink: {error}");
+            return;
+        }
+
+        let error = prepare_stage_work_dir(&linked).unwrap_err();
+        assert!(error.to_string().contains("non-reparse"), "{error:#}");
+        assert_eq!(
+            fs::read(outside.join("tree").join("marker")).unwrap(),
+            b"keep"
+        );
     }
 
     #[test]

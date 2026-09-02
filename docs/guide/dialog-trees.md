@@ -471,7 +471,8 @@ gore dialog export -o dialog\
 
 Export filenames start with a stable sequence number so distinct module identities cannot
 overwrite one another on case-insensitive filesystems. The complete module identity remains in
-each JSON document.
+each JSON document. The output directory must be absent or empty. Export never overwrites an
+existing file or merges an old snapshot into a new one; use a fresh directory when refreshing it.
 
 The `tree`/`show` JSON is a presentation projection, not the export schema. It
 applies the requested language and, for `tree`, `--depth` exactly like the human

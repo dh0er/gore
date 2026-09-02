@@ -1407,8 +1407,8 @@ mod tests {
         );
         std::fs::write(export.join("000001_manual.json"), b"keep").expect("write export fixture");
         assert!(
-            asks_about_a_write(question("gore_dialog", "export", export_call, &options())),
-            "an occupied export directory must pass the write gate"
+            question("gore_dialog", "export", export_call, &options()).is_none(),
+            "the CLI refuses an occupied export directory instead of overwriting it"
         );
     }
 

@@ -150,7 +150,8 @@ supported, live-proven or still unproven on a particular game build.
 Use `gore_dialog`, not a hand-built isolated Add module:
 
 - `list`, `tree`, `show`, `text` and `export` inspect shipped conversations or
-  prepare their separate localization edit.
+  prepare their separate localization edit. `export` requires an absent or
+  empty output directory so an old snapshot cannot leak stale JSON into a new one.
 - `checkout` -> edit -> `check` -> `stage` covers existing method bodies and
   complete reconstructed defaults, including `Caption`, `PriorityRank`, `Rules`
   and flags; new same-module topics may add their own fields and helpers.

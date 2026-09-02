@@ -2305,6 +2305,17 @@ fn validate_compiler_work_dir(work_dir: &Path, game: &Path) -> Result<()> {
     Ok(())
 }
 
+fn resolve_compile_module_work_dir(work_dir: PathBuf, game: &Path) -> Result<PathBuf> {
+    let work_dir = absolute_cli_path(work_dir, "compiler workspace")?;
+    // Validate the path the caller supplied before canonicalization. Otherwise a symlink or
+    // Windows reparse point is resolved to its target and becomes indistinguishable from the real
+    // directory that compile-tree cleanup may modify.
+    validate_compiler_work_dir(&work_dir, game)?;
+    work_dir
+        .canonicalize()
+        .with_context(|| format!("resolving compiler workspace {}", work_dir.display()))
+}
+
 fn validate_auxiliary_output_path(path: &Path, game: &Path, label: &'static str) -> Result<()> {
     match std::fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -3134,10 +3145,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             compiler,
         } => {
             let game = gore_loc::config::game_root(game).context("resolving game path")?;
-            let work_dir = work_dir
-                .canonicalize()
-                .with_context(|| format!("resolving compiler workspace {}", work_dir.display()))?;
-            validate_compiler_work_dir(&work_dir, &game)?;
+            let work_dir = resolve_compile_module_work_dir(work_dir, &game)?;
             let source_bytes = read_regular_bounded(
                 &source,
                 gore_as::generation_receipt::MAX_GENERATION_SOURCE_FILE_BYTES_V1 as u64,
@@ -5694,6 +5702,45 @@ fn qualify_count(
 #[cfg(test)]
 mod default_cli_tests {
     use super::*;
+
+    #[test]
+    fn compile_module_work_dir_is_resolved_after_validation() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let work = root.path().join("work");
+        std::fs::create_dir(&game).unwrap();
+        std::fs::create_dir(&work).unwrap();
+
+        assert_eq!(
+            resolve_compile_module_work_dir(work.clone(), &game).unwrap(),
+            work.canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn compile_module_work_dir_rejects_a_link_before_resolution() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let outside = root.path().join("outside");
+        let linked = root.path().join("linked-work");
+        std::fs::create_dir(&game).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+
+        #[cfg(unix)]
+        let link_result = std::os::unix::fs::symlink(&outside, &linked);
+        #[cfg(windows)]
+        let link_result = std::os::windows::fs::symlink_dir(&outside, &linked);
+        if let Err(error) = link_result {
+            eprintln!("skip: this account cannot create a directory symlink: {error}");
+            return;
+        }
+
+        let error = resolve_compile_module_work_dir(linked, &game).unwrap_err();
+        assert!(
+            error.to_string().contains("non-reparse directory"),
+            "got: {error:#}"
+        );
+    }
 
     #[test]
     fn qualify_native_bases_ignore_the_empty_non_inheriting_sentinel() {

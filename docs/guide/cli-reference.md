@@ -163,7 +163,7 @@ and failing would bury the line explaining what was not searched.
 | `checkout` | `<NPC>` · `--out <DIR>` | The conversation module's compiler-ready AngelScript, including reconstructed class defaults, plus an untouched copy and a manifest bound to this game build. `<DIR>` must be absent or empty; existing work is never overwritten. |
 | `check` | `<DIR>` | Check method/default edits, complete default supersession, fixed shipped ABI and intentional new symbols. Partial or loss-prone defaults and consecutive actionless new-to-new `Subdialog` transitions fail closed. Offline; no compile. |
 | `stage` | `<DIR>` · `--mod-name` · `--cache` · `--game` | Write the build spec and strict standalone `compile-module` command. The mod name must be one portable path component. Stage uses `--op edit`, adds `--allow-new-symbols` when required, includes the resolved `--game`, and refuses a cache hash that does not match that installation. |
-| `export` | `--out <DIR>` | One JSON file per conversation. |
+| `export` | `--out <DIR>` | One JSON file per conversation. `<DIR>` must be absent or empty; existing files are never overwritten and old snapshots are never merged into a new one. |
 
 Every subcommand also takes `--cache <PATH>` to read an exact script cache and
 `--game <ROOT>` to pick the install; without either, the configured game path is

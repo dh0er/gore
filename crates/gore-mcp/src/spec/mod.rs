@@ -1385,10 +1385,10 @@ mod tests {
             // from the bank, but auditioning candidates into one directory is the workflow, so the
             // whole-directory rule fired on the second extract of a normal session. The CLI refuses
             // the individual file it would replace instead.
+            // `gore_dialog export` also refuses a nonempty directory and creates each JSON file
+            // without replacement, so its caller-selected output is covered by `writes_into`.
             // One `.lua` per class, named from the model file.
             ("gore_catalog", "stubs", &["out"]),
-            // One JSON file per conversation, named from cache data.
-            ("gore_dialog", "export", &["out"]),
             // One `.as` per module, laid out by the cache's own ScriptRelativeFilename.
             ("gore_as", "emit-all", &["outdir"]),
         ];
