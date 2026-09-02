@@ -60,13 +60,13 @@ release yet — build it from source.
 | Area | Status | What you can do | The catch |
 |---|---|---|---|
 | [Item & stat values](docs/guide/items.md) | Full | Change what items are worth, what weapons do, what NPCs have | Needs UE4SS, which GORE does not install |
-| [Text & dialogs](docs/guide/text-and-dialogs.md) | Full | Replace any text in the game, in any of its 19 languages | An id can carry several language versions and the game shows the newest |
-| [Dialog authoring](docs/guide/dialog-authoring.md) | Partly | Edit shipped topics and build new roots, submenus, multi-level trees and complete conversations with game effects | A first conversation needs an already-loaded per-NPC settings module; cross-module new-symbol dependencies ship through a complete cache, not dependent minis |
+| [Text & dialogs](docs/guide/text-and-dialogs.md) | Full | Replace localized game text across all 19 catalog slots | Twelve slots are ordinary languages; German and English use multiple generations, while `foreign` and `stagedirections` are not languages |
+| [Dialog authoring](docs/guide/dialog-authoring.md) | Mostly | Edit shipped topics and build new roots, submenus, multi-level trees and complete conversations with game effects | A first conversation needs an exact already-loaded per-NPC settings module; cross-module new-symbol dependencies need a separate selective complete-cache compile, not dialog minis |
 | [Audio](docs/guide/audio.md) | Full | Replace music and sound effects | Finding which sound plays where is guesswork |
-| [Voice-over](docs/guide/voice.md) | Partly | Replace spoken lines and add voice to authored new lines | Deployable payloads require Vorbis; live proof covers three Vorbis layouts on one build |
+| [Voice-over](docs/guide/voice.md) | Mostly | Replace spoken lines and add voice to authored new lines | Publication requires Vorbis; a new member also needs matching script and localization, and receives generic lip movement rather than exact new lip sync |
 | [Textures](docs/guide/textures.md) | Full | Replace textures | A few, like the mouse cursors, are stored somewhere this cannot reach |
 | [DataAssets](docs/guide/dataassets.md) | Partly | Edit cooked game data | Only assets the engine describes natively; Blueprint ones are refused |
-| [Scripts](docs/guide/scripts.md) | 99% | Read the game's script code, change it, add your own | Splicing recompiles the WHOLE module, so it also rewrites functions you did not touch. 6,982 of 7,317 modules recompile with no known semantic difference; of the rest most only differ in wording, but 15 hold a loop that recompiles with a bound of zero and never runs — they sit in crime assessment, combat, fear and search AI. `emit` and `compile-module` name the module and the risk before you splice |
+| [Scripts](docs/guide/scripts.md) | Mostly | Read the game's script code, change it, add your own | Splicing recompiles the WHOLE module, so it also rewrites functions you did not touch. 6,982 of 7,317 modules recompile with no known semantic difference; of the rest most only differ in wording, but 15 hold a loop that recompiles with a bound of zero and never runs — they sit in crime assessment, combat, fear and search AI. `emit` and `compile-module` name the module and the risk before you splice |
 | [Mods & load order](docs/guide/bundles.md) | Full | Ship all of the above as one mod, run many together, and install mods that GORE did not build — plain zips, pak files, UE4SS mod folders | Four Nexus mods have run through one real-install campaign; third-party AngelScript and three-way script conflicts remain unqualified |
 
 GORE will not edit your saves — that is the
@@ -177,6 +177,7 @@ Everything lives in [`docs/`](docs/README.md).
 | 🏁 [Getting started](docs/guide/getting-started.md) | Install, configure, first mod, which tool for which job |
 | 🍎 [Item & stat values](docs/guide/items.md) | `overrides.toml` → UE4SS Lua CDO override mod |
 | 💬 [Text & dialogs](docs/guide/text-and-dialogs.md) | Decrypt, edit, re-encrypt the localization `.lcache` |
+| 🌳 [Dialog trees](docs/guide/dialog-trees.md) · ✍️ [Dialog authoring](docs/guide/dialog-authoring.md) | Inspect conversations; edit defaults and behavior; add roots, submenus, multi-level trees and complete conversations |
 | 🔊 [Audio](docs/guide/audio.md) · 🎙️ [Voice-over](docs/guide/voice.md) | FMOD bank samples; voice-over ZIP archives |
 | 🖼️ [Textures](docs/guide/textures.md) · 📦 [DataAssets](docs/guide/dataassets.md) | Additive UE5 IoStore Zen triplets |
 | 📜 [Scripts](docs/guide/scripts.md) | Decompile, recompile, and splice the AngelScript cache |
