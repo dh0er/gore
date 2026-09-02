@@ -384,7 +384,7 @@ Two more flags tune behaviour rather than permissions:
 
 ## The tools
 
-Eighteen CLI-backed tools mirror the CLI's command families and safe aliases. Namespace tools take a
+Nineteen CLI-backed tools mirror the CLI's command families and safe aliases. Namespace tools take a
 `subcommand` plus an `args` object. `gore_doctor` and `gore_find`, plus the
 dedicated `gore_mod_inspect`, `gore_mgr_preflight`, `gore_as_compile`, and
 `gore_as_compile_module` aliases, already
@@ -423,7 +423,7 @@ not add a separate `subcommand` property. The tool schema already carries the
 ordinary arguments, so use help only when that schema is not specific enough;
 a blanket help call for every later step adds work without improving safety.
 
-Twenty-one tools rather than 98 leaves keeps a client's tool list navigable while
+Twenty-one tools rather than 99 leaves keeps a client's tool list navigable while
 still covering every command. The extra bundle-inspection and Manager-preflight
 routes exist because MCP annotations apply to a whole tool: mixed `gore_mod`
 and `gore_mgr` must advertise their install-changing worst cases, while
