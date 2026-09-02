@@ -723,9 +723,9 @@ fn json_topic_node(
     text: &Text,
     menu_depth: usize,
     depth: Option<usize>,
-    printed: &mut BTreeSet<String>,
+    rendered_depths: &mut BTreeMap<String, usize>,
 ) -> Result<serde_json::Value> {
-    if !printed.insert(topic.class.clone()) {
+    if !topic_needs_render(&topic.class, menu_depth, depth, rendered_depths) {
         return Ok(serde_json::json!({
             "class": topic.class,
             "status": "already_shown",
@@ -754,7 +754,7 @@ fn json_topic_node(
                     text,
                     next_menu_depth,
                     depth,
-                    printed,
+                    rendered_depths,
                 )?,
                 None => serde_json::json!({
                     "class": child,
@@ -783,11 +783,13 @@ fn tree_json_document(
     depth: Option<usize>,
 ) -> Result<serde_json::Value> {
     let reachable = structurally_reachable_topic_classes(conversation);
-    let mut printed = BTreeSet::new();
+    let mut rendered_depths = BTreeMap::new();
     let mut roots = Vec::new();
     for root in &conversation.roots {
         roots.push(match conversation.topic(root) {
-            Some(topic) => json_topic_node(conversation, topic, text, 0, depth, &mut printed)?,
+            Some(topic) => {
+                json_topic_node(conversation, topic, text, 0, depth, &mut rendered_depths)?
+            }
             None => serde_json::json!({
                 "class": root,
                 "status": "declared_elsewhere",
@@ -827,7 +829,7 @@ fn show_json_document(
     text: &Text,
     lang: &str,
 ) -> Result<serde_json::Value> {
-    let mut printed = BTreeSet::new();
+    let mut rendered_depths = BTreeMap::new();
     Ok(serde_json::json!({
         "module": conversation.module,
         "participants": conversation.participants,
@@ -838,7 +840,7 @@ fn show_json_document(
             text,
             0,
             Some(SHOW_SUBDIALOG_DEPTH),
-            &mut printed,
+            &mut rendered_depths,
         )?,
     }))
 }
@@ -861,10 +863,19 @@ fn print_conversation(conversation: &Conversation, text: &Text, depth: Option<us
     println!();
 
     let reachable = structurally_reachable_topic_classes(conversation);
-    let mut printed = BTreeSet::new();
+    let mut rendered_depths = BTreeMap::new();
     for root in &conversation.roots {
         if let Some(topic) = conversation.topic(root) {
-            print_topic(conversation, topic, text, 0, 0, depth, ids, &mut printed);
+            print_topic(
+                conversation,
+                topic,
+                text,
+                0,
+                0,
+                depth,
+                ids,
+                &mut rendered_depths,
+            );
         }
     }
 
@@ -939,9 +950,9 @@ fn print_topic(
     menu_depth: usize,
     depth: Option<usize>,
     ids: bool,
-    printed: &mut BTreeSet<String>,
+    rendered_depths: &mut BTreeMap<String, usize>,
 ) {
-    if !printed.insert(topic.class.clone()) {
+    if !topic_needs_render(&topic.class, menu_depth, depth, rendered_depths) {
         println!(
             "{}- {} (already shown)",
             pad(level),
@@ -974,7 +985,7 @@ fn print_topic(
             menu_depth,
             depth,
             ids,
-            printed,
+            rendered_depths,
         );
     }
 }
@@ -1090,7 +1101,7 @@ fn print_step(
     menu_depth: usize,
     depth: Option<usize>,
     ids: bool,
-    printed: &mut BTreeSet<String>,
+    rendered_depths: &mut BTreeMap<String, usize>,
 ) {
     let indent = pad(level);
     let mark = if step.guard.conditional { "? " } else { "  " };
@@ -1141,7 +1152,7 @@ fn print_step(
                         next_menu_depth,
                         depth,
                         ids,
-                        printed,
+                        rendered_depths,
                     ),
                     None => println!("{}- {child} (declared elsewhere)", pad(next_level)),
                 }
@@ -1161,6 +1172,28 @@ fn print_step(
 
 fn subdialog_within_limit(menu_depth: usize, limit: Option<usize>) -> bool {
     limit.map_or(true, |limit| menu_depth < limit)
+}
+
+/// Avoid cycles and repeated full branches, but revisit a shared topic when a finite depth limit
+/// first reached it through a longer path. The shallower occurrence can expose descendants that
+/// were legitimately truncated at the earlier occurrence.
+fn topic_needs_render(
+    class: &str,
+    menu_depth: usize,
+    limit: Option<usize>,
+    rendered_depths: &mut BTreeMap<String, usize>,
+) -> bool {
+    match rendered_depths.get_mut(class) {
+        None => {
+            rendered_depths.insert(class.to_owned(), menu_depth);
+            true
+        }
+        Some(shallowest) if limit.is_some() && menu_depth < *shallowest => {
+            *shallowest = menu_depth;
+            true
+        }
+        Some(_) => false,
+    }
 }
 
 fn render_args(args: &[Arg]) -> String {
@@ -1235,7 +1268,7 @@ fn show(
         println!("note: {note}");
     }
     println!();
-    let mut printed = BTreeSet::new();
+    let mut rendered_depths = BTreeMap::new();
     print_topic(
         conversation,
         found,
@@ -1244,7 +1277,7 @@ fn show(
         0,
         Some(SHOW_SUBDIALOG_DEPTH),
         true,
-        &mut printed,
+        &mut rendered_depths,
     );
     Ok(())
 }
@@ -5192,6 +5225,55 @@ mod tests {
             shown["localization"]["lines"]["LINE_DE"],
             "Gesprochene Zeile"
         );
+    }
+
+    #[test]
+    fn shared_topics_reopen_at_the_shallowest_depth_limit() {
+        let submenu = |children: &[&str]| StepKind::Subdialog {
+            children: children.iter().map(|child| (*child).to_owned()).collect(),
+        };
+        let conversation = Conversation {
+            module: "M".to_owned(),
+            root_class: None,
+            participants: vec!["Hero".to_owned(), "NPC".to_owned()],
+            topics: vec![
+                topic("A", "CAP_A", vec![submenu(&["B"])]),
+                topic("B", "CAP_B", vec![submenu(&["Shared"])]),
+                topic("C", "CAP_C", vec![submenu(&["Shared"])]),
+                topic("Shared", "CAP_SHARED", vec![submenu(&["Leaf"])]),
+                topic("Leaf", "CAP_LEAF", Vec::new()),
+            ],
+            roots: vec!["A".to_owned(), "C".to_owned()],
+            coverage: Default::default(),
+        };
+        let text = Text {
+            lines: BTreeMap::new(),
+            note: None,
+        };
+
+        let tree = tree_json_document(&conversation, &text, "english", Some(2)).unwrap();
+        let deep_shared =
+            &tree["roots"][0]["subdialogs"][0]["children"][0]["subdialogs"][0]["children"][0];
+        assert_eq!(deep_shared["topic"]["class"], "Shared");
+        assert_eq!(deep_shared["subdialogs"][0]["depth_limited"], 1);
+
+        let shallow_shared = &tree["roots"][1]["subdialogs"][0]["children"][0];
+        assert_eq!(shallow_shared["topic"]["class"], "Shared");
+        assert_eq!(
+            shallow_shared["subdialogs"][0]["children"][0]["topic"]["class"],
+            "Leaf"
+        );
+
+        let mut finite = BTreeMap::new();
+        assert!(topic_needs_render("Shared", 2, Some(2), &mut finite));
+        assert!(!topic_needs_render("Shared", 2, Some(2), &mut finite));
+        assert!(!topic_needs_render("Shared", 3, Some(2), &mut finite));
+        assert!(topic_needs_render("Shared", 1, Some(2), &mut finite));
+        assert!(!topic_needs_render("Shared", 2, Some(2), &mut finite));
+
+        let mut unlimited = BTreeMap::new();
+        assert!(topic_needs_render("Shared", 2, None, &mut unlimited));
+        assert!(!topic_needs_render("Shared", 1, None, &mut unlimited));
     }
 
     #[test]
