@@ -637,7 +637,7 @@ fn print_conversation(conversation: &Conversation, text: &Text, depth: Option<us
     let mut printed = BTreeSet::new();
     for root in &conversation.roots {
         if let Some(topic) = conversation.topic(root) {
-            print_topic(conversation, topic, text, 0, depth, ids, &mut printed);
+            print_topic(conversation, topic, text, 0, 0, depth, ids, &mut printed);
         }
     }
 
@@ -709,6 +709,7 @@ fn print_topic(
     topic: &Topic,
     text: &Text,
     level: usize,
+    menu_depth: usize,
     depth: Option<usize>,
     ids: bool,
     printed: &mut BTreeSet<String>,
@@ -738,7 +739,16 @@ fn print_topic(
     }
 
     for step in &topic.act {
-        print_step(conversation, step, text, level + 1, depth, ids, printed);
+        print_step(
+            conversation,
+            step,
+            text,
+            level + 1,
+            menu_depth,
+            depth,
+            ids,
+            printed,
+        );
     }
 }
 
@@ -850,6 +860,7 @@ fn print_step(
     step: &Step,
     text: &Text,
     level: usize,
+    menu_depth: usize,
     depth: Option<usize>,
     ids: bool,
     printed: &mut BTreeSet<String>,
@@ -883,17 +894,29 @@ fn print_step(
         }
         StepKind::Subdialog { children } => {
             println!("{indent}{mark}opens a sub-menu:");
-            let next = level + 1;
-            if depth.is_some_and(|limit| next > limit) {
-                println!("{}… {} option(s) not shown", pad(next), children.len());
+            let next_level = level + 1;
+            if !subdialog_within_limit(menu_depth, depth) {
+                println!(
+                    "{}… {} option(s) not shown",
+                    pad(next_level),
+                    children.len()
+                );
                 return;
             }
+            let next_menu_depth = menu_depth.saturating_add(1);
             for child in children {
                 match conversation.topic(child) {
-                    Some(topic) => {
-                        print_topic(conversation, topic, text, next, depth, ids, printed)
-                    }
-                    None => println!("{}- {child} (declared elsewhere)", pad(next)),
+                    Some(topic) => print_topic(
+                        conversation,
+                        topic,
+                        text,
+                        next_level,
+                        next_menu_depth,
+                        depth,
+                        ids,
+                        printed,
+                    ),
+                    None => println!("{}- {child} (declared elsewhere)", pad(next_level)),
                 }
             }
         }
@@ -907,6 +930,10 @@ fn print_step(
             println!("{line}");
         }
     }
+}
+
+fn subdialog_within_limit(menu_depth: usize, limit: Option<usize>) -> bool {
+    limit.map_or(true, |limit| menu_depth < limit)
 }
 
 fn render_args(args: &[Arg]) -> String {
@@ -981,7 +1008,16 @@ fn show(
     }
     println!();
     let mut printed = BTreeSet::new();
-    print_topic(conversation, found, &text, 0, Some(1), true, &mut printed);
+    print_topic(
+        conversation,
+        found,
+        &text,
+        0,
+        0,
+        Some(1),
+        true,
+        &mut printed,
+    );
     Ok(())
 }
 
@@ -4367,6 +4403,15 @@ mod tests {
     #[test]
     fn an_exact_column_is_used_as_given() {
         assert_eq!(columns_for("polish"), vec!["polish"]);
+    }
+
+    #[test]
+    fn tree_depth_counts_submenus_instead_of_visual_indentation() {
+        assert!(!subdialog_within_limit(0, Some(0)));
+        assert!(subdialog_within_limit(0, Some(1)));
+        assert!(!subdialog_within_limit(1, Some(1)));
+        assert!(subdialog_within_limit(1, Some(2)));
+        assert!(subdialog_within_limit(usize::MAX, None));
     }
 
     #[test]
