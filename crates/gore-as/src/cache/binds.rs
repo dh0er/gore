@@ -220,8 +220,7 @@ impl NativeApi {
 
     /// True if `name` appears as ANY native function/method signature name in the printable-run
     /// scan — `contains_key`, NOT `arity_by_name`: ambiguous-arity overloads still count as
-    /// "exists". Batch-24b shadow gate (a script global sharing a name with any native member
-    /// must be `::`-qualified inside classes).
+    /// "exists". Used when reserving authored free-function identities against native names.
     pub fn has_name(&self, name: &str) -> bool {
         self.by_name.contains_key(name)
     }

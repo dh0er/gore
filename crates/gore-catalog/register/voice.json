@@ -5,7 +5,7 @@
     {
       "id": "german_new/OldCamp/Diego/INFO_DIEGO_GAMESTART_11_00.ogg",
       "effect": "Diego's first spoken line in a new game (vanilla: \"Ich bin Diego.\"), about a minute or two after the intro.",
-      "note": "The cheapest audible voice target there is: it needs a new game and no play beyond walking up to Diego. Replaced with an Orcish take lifted out of `foreign.zip`, because the machine had no Ogg encoder — another language's recording is unmistakable in a way a synthesized tone is not. Game voice language German. Its subtitle is the separate loc id `info_diego_gamestart_11_00`; changing one without the other gives a line that reads one way and sounds another. Only `replace` was exercised — `add` was not touched in this campaign and remains experimental.",
+      "note": "The cheapest audible voice target there is: it needs a new game and no play beyond walking up to Diego. Replaced with an Orcish take lifted out of `foreign.zip`, because the machine had no Ogg encoder — another language's recording is unmistakable in a way a synthesized tone is not. Game voice language German. Its subtitle is the separate loc id `info_diego_gamestart_11_00`; changing one without the other gives a line that reads one way and sounds another. Only `replace` was exercised in this 2026-08-07 campaign. A separate BuildID 24878692 Diego fixture later proved one bounded `add` path with a new localization id, `Say` call and Ogg member; that does not qualify every new voice path.",
       "observations": [
         {
           "date": "2026-08-07",

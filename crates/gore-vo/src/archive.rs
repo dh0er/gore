@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use zip::read::{ArchiveOffset, Config as ReadConfig};
 use zip::{DateTime, ZipArchive, ZipWriter};
 
-use crate::{validate_ogg, Error, Limits, OggInfo, Result};
+use crate::{validate_deployable_ogg, Error, Limits, OggInfo, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchiveEntry {
@@ -1354,7 +1354,7 @@ impl ArchiveIndex {
         self.extract_indices(&indices, output_root.as_ref())
     }
 
-    /// Copy the archive and add or replace one validated Ogg entry.
+    /// Copy the archive and add or replace one deployable Vorbis Ogg entry.
     ///
     /// `output` must differ from the input and must not already exist. Unchanged entries are
     /// raw-copied in their original order; their compressed bytes, method, CRC, timestamp, and
@@ -1369,7 +1369,7 @@ impl ArchiveIndex {
         Ok(reports.pop().expect("one edit was supplied"))
     }
 
-    /// Copy the archive and atomically apply a batch of validated Ogg edits in one pass.
+    /// Copy the archive and atomically apply a batch of deployable Vorbis Ogg edits in one pass.
     ///
     /// Every selector, target, Ogg stream, and aggregate limit is resolved before a temporary
     /// output is created. Replacements keep their original positions; additions are appended in
@@ -1654,7 +1654,7 @@ impl ArchiveIndex {
                 ogg.len() as u64,
                 self.limits.max_entry_uncompressed_bytes,
             )?;
-            let ogg_info = validate_ogg(ogg, &self.limits)?;
+            let ogg_info = validate_deployable_ogg(ogg, &self.limits)?;
             let folded_target = target_key(&archive_path);
             if let Some(first) = targets.insert(folded_target, archive_path.clone()) {
                 return Err(Error::ConflictingEdits {
@@ -2534,7 +2534,7 @@ fn hash_reader(reader: &mut impl Read) -> io::Result<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ogg::tests::vorbis_ogg;
+    use crate::ogg::tests::{opus_ogg, vorbis_ogg};
     use tempfile::TempDir;
     use zip::write::SimpleFileOptions;
 
@@ -3450,6 +3450,47 @@ mod tests {
                 }
             ),
             Err(Error::InputOutputSame(_))
+        ));
+    }
+
+    #[test]
+    fn archive_rewrite_rejects_structurally_valid_opus_without_publishing_output() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.path().join("input.zip");
+        let output = temp.path().join("output.zip");
+        let original = vorbis_ogg(48_000);
+        let opus = opus_ogg(48_000);
+        make_archive(
+            &input,
+            &[FixtureEntry {
+                name: "line.ogg",
+                bytes: &original,
+                method: zip::CompressionMethod::Stored,
+            }],
+        );
+        let archive = ArchiveIndex::open(&input, Limits::default()).unwrap();
+
+        let error = archive
+            .write_edited(
+                &output,
+                ArchiveEdit::Replace {
+                    basename: "line.ogg",
+                    exact_path: None,
+                    ogg: &opus,
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::UnqualifiedVoiceCodec { codec: "Opus" }
+        ));
+        assert!(!output.exists());
+        assert!(matches!(
+            crate::validate_ogg(&opus, &Limits::default())
+                .unwrap()
+                .codec,
+            crate::OggCodec::Opus { .. }
         ));
     }
 

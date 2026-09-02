@@ -5,9 +5,10 @@ The game's compiled AngelScript lives in a precompiled cache,
 turns modules back into readable AngelScript, compiles complete source graphs or
 individual modules, and splices edited modules back in.
 
-This is reverse-engineering-stage tooling. It works, and the complete
-new-dialog path has been validated in game, but treat every step as
-experimental and keep backups.
+This is reverse-engineering-stage tooling. It works, and the current
+same-module Diego dialog path has been validated in game on BuildID `24878692`,
+but treat every step as experimental and keep backups. Compilation, bundle
+packaging, installation and observed runtime behavior remain separate claims.
 
 ## Reading the cache
 
@@ -40,9 +41,12 @@ mirrors each module's `ScriptRelativeFilename` into the output tree.
 entries; pass indices to print specific ones. These are the literals that
 `__STATIC_NAME(Id)` resolves against.
 
-Decompilation and emit resolve native-call arities and native field types from a
-`Binds.Cache` placed next to the input cache, or from the path in
-`GORE_AS_BINDS`.
+Decompilation and emit resolve native-call arities and native field types from
+the **matching** `Binds.Cache` placed next to the input cache, or from the path
+in `GORE_AS_BINDS`. Keep both caches from the same game build. Without that
+type evidence GORE does not guess native enum or scalar field types: if such a
+store occurs in `__InitDefaults`, it suppresses authored defaults for the whole
+module and leaves recompilation to the byte-exact carry fallback.
 
 Emitted classes carry their `default` statements — the class-scope statements
 that give an item its name, value and damage, an NPC its config, a camera its
@@ -61,12 +65,20 @@ class UItMw_1H_Sword_Old_01 : USword1H
 
 You can edit those statements and splice the module back with `compile-module
 --op edit`; the compiler regenerates the class defaults from your source and the
-old copies are dropped rather than carried. An overlay that declares defaults for
-only some of a module's classes is refused, because the classes it left out would
-lose theirs silently. If you would rather not author defaults at all, emit the
-module with `gore as emit --no-defaults` (or `emit-all --no-defaults`) and edit
-that: the module's existing defaults are then carried back byte-exact instead of
-being regenerated.
+old copies are dropped rather than carried. Every existing default-bearing class
+and every existing semantic target must remain represented at least as often as
+in the base cache; values and call arguments may change, but a partial overlay is
+refused instead of silently losing defaults. Authored-default edits containing
+preprocessor directives are also refused: coverage is checked before compiler
+preprocessing, so a disabled branch must not count as a surviving default.
+
+If you would rather not author defaults for existing classes, emit the module
+with `gore as emit --no-defaults` (or `emit-all --no-defaults`) and edit that:
+the module's existing defaults are carried back byte-exact instead of being
+regenerated. With `--allow-new-symbols`, that fallback also permits defaults on
+appended classes while continuing to carry every existing class initializer and
+compiler wrapper byte-exact. It does not permit a mixture in which only some
+existing classes author their defaults.
 
 Every module in the shipped game writes its defaults, down to the main map's
 worldpoint and item-spawn tables. Recovery stays all-or-nothing per module: if a
@@ -98,6 +110,20 @@ bytes while a separate semantic ABI links it to the historical qualification
 reference. Rebuilding or signing may therefore change the EXE hash without
 turning either Steam tuple or whole executable into a runtime gate.
 
+The mixed cached/source compiler rehydrates unchanged modules from the sealed
+base instead of recompiling their source. Its current rehydration restores the
+compiler metadata authored overlays depend on: automatic-import relationships
+are wired after a source module reset when `AutomaticImports` is enabled,
+cached const qualification is reconstructed from both object-const and
+const-handle flags,
+and cached script enums are published in the engine-wide script-type registry.
+Cached `__StaticType` globals are also available through engine-wide automatic
+imports, reconstructed script-class type IDs retain their `SCRIPT_OBJECT`,
+`TEMPLATE` and `APPOBJECT` kind, and cached mixin globals are exposed only while
+source binding runs before their original traits are restored. Those are
+compiler-resolution fixes; they do not by themselves prove deployment or game
+runtime behavior.
+
 The default policy is `standalone-then-game`: GORE tries the qualified
 standalone compiler first. If the package is absent, the selected game's cache
 format or API is incompatible, or the standalone result is rejected, the reason is retained and
@@ -105,15 +131,29 @@ shown before GORE uses the game's embedded compiler as a fallback. That fallback
 launches the shipping executable with **`-as-generate-precompiled-data`** and
 temporarily stages loose `.as` files under `<install>\G1R\Script\`.
 
-`gore as compile` takes one complete authoritative source tree and always
-publishes a separate complete cache. It never installs that output implicitly.
+`gore as compile` takes one complete source tree and resolves all authored
+modules together, so visible references between changed modules can bind in one
+compiler run. The compiler's raw whole-tree regeneration is only intermediate
+dependency evidence: GORE never publishes those raw bytes. Instead it starts
+from the exact target cache and selectively composes only source-classified
+Add/Edit modules. Every untouched module and every pre-existing global-tail
+record remain pristine; only records required by new symbols are appended to
+the separately published complete cache. The command never installs that output
+implicitly.
+
+Start from a current `emit-all` tree. A byte-identical emitted file is base;
+changing or adding a file requests Edit or Add. Omitting a base file requests
+Delete, which currently fails closed because GORE cannot yet prove safe tail
+pruning and absence of retained references. A dependency chain such as a new
+provider module followed by an edited consumer can be composed in order;
+cyclic dependencies among new modules remain unsupported and fail closed.
 
 ```powershell
 # dump the vanilla modules as an editable tree
 gore as emit-all "$GAME\G1R\Script\PrecompiledScript_Shipping.Cache" out_as
 # …edit modules in out_as…
 
-# compile to a new no-clobber cache file
+# resolve the full graph and publish a selectively composed no-clobber cache
 New-Item -ItemType Directory -Force .gore-as-work | Out-Null
 gore as compile out_as -o regen.Cache --work-dir .gore-as-work --game "$GAME"
 ```
@@ -237,6 +277,65 @@ gore as compile-module --op add --module MyMod.Dialog `
 | `--allow-new-symbols` | Retain minimal rows for classes/functions/names absent from the pristine cache. |
 | `-o, --out <PATH>` | The remapped 1-module mini-cache. |
 
+The high-level `dialog new-topic` scaffold uses the same compiler command in a
+more specific shape. A new root or direct sub-topic is appended to the
+**existing** shipped conversation module, so it is an edit with intentional new
+symbols:
+
+```powershell
+gore as compile-module --backend standalone --op edit `
+  --module Story.G1R.Conversation.Conversation_OC_STT_DIEGO `
+  --rel-path Story/G1R/Conversation/Conversation_OC_STT_DIEGO.as `
+  --source work/Conversation_OC_STT_DIEGO.as --work-dir work/.gore-as-work `
+  --allow-new-symbols -o work/MyDialogMod.mini.Cache --game "$GAME"
+```
+
+`gore dialog stage` prints that command and writes a script-only bundle spec.
+The current `dialog new-topic` root manifest contains no `dialog_topics` row and
+therefore adds no generated UE4SS component: the same-module root uses the
+game's native script discovery, while a direct sub-topic is reached through an
+authored `Subdialog` call in a shipped parent. The private conversation base is
+why neither shape should be turned into an isolated cross-module `--op add`.
+Root scaffolds automatically choose an ordinary rank before the recognized
+End/Back row, while sub-topics default to rank 0 and retain equal-rank slot
+order. `--priority-rank` is the exact override; `-1` is intentionally forced and
+is never selected automatically.
+
+`gore dialog new-conversation` is the corresponding path when an NPC has no
+root topic. It requires one exact, already-loaded per-NPC conversation-settings
+module, keeps its shipped settings class intact, and appends the private root
+and choices under `G1R::Conversation` in that module. Its staged command is
+`--op edit --allow-new-symbols`; a missing or ambiguous settings anchor fails
+closed instead of producing an unreferenced Add module. Further all-new levels
+stay in the same source module, so new-to-new `Subdialog` references do not
+depend on another mini-cache. The first choice defaults to rank 2;
+`--priority-rank` overrides it exactly.
+
+On BuildID `24878692`, the anchored Guard fixture opened automatically, spoke a
+shipped line, rendered and accepted both wholly new choices in sequence, then
+returned control. A separate new conversation Add module for the same Guard
+compiled, packaged and deployed but was never discovered, which is why it is no
+longer a staged product shape. A wholly new three-level tree also ran end to end
+when a real `Say` separated consecutive nested menu transitions. Two actionless direct
+`Subdialog` transitions soft-locked, so `dialog check` now refuses that narrow
+shape. These bundles are script-only and need no UE4SS insertion.
+
+On BuildID `24878692`, strict standalone compilation, mini-cache packaging and
+deployment were followed by separate in-game observations of a selectable new
+Diego root and direct sub-topic. The same bounded campaign also observed a
+persisted inventory effect, explicit knowledge and quest state after save/load,
+a new localization/Ogg/`Say` path whose loopback correlated `0.763` with the
+source recording, and a manual rebuild of an existing four-child sub-menu. This
+qualifies those exact fixtures on that build, not arbitrary game APIs, other
+builds, or every possible conversation action. Earlier complete-cache tests
+found that a raw FullGraph regeneration produced unusable main-menu input while
+a manually selective hybrid booted and loaded a save. `gore as compile` now
+publishes only the corresponding selective Add/Edit product. Its current live
+fixture booted and loaded gameplay, rendered and selected a new same-module
+root, and executed a new cross-module provider call from an edited shipped
+automatic topic before returning control. The practical limits are maintained in
+[AngelScript dialog authoring](dialog-authoring.md).
+
 `compile-module` is the CLI equivalent of Mod Studio's Compile action, and it
 uses the same `standalone-then-game` default. It resolves the embedded,
 catalogued package automatically. If fallback launches the game compiler, GORE
@@ -302,6 +401,13 @@ Mod Studio defaults it **on** for a new module and **off** for an edit; an
 existing-module edit can enable it explicitly when it intentionally adds a class
 or function.
 
+Portable-identity construction remains bounded. The remapper permits at most
+four times the composed input size, clamped to a 512 MiB hard ceiling; the
+namespace-tolerant comparison work is separately limited to four times the
+materialized identity footprint with the same ceiling. The larger ceiling lets
+a legitimate allow-new edit hold both the pristine and regenerated identity
+graphs without turning malformed input into unbounded memory or comparison work.
+
 The remapped mini-cache is bound to the exact target cache GUID. Apply checks
 that binding again and validates every executable reference and retained symbol
 dependency against the effective base-plus-mini tables before it creates a game
@@ -334,8 +440,9 @@ now preserves that distinction, reuses matching names, and fails closed if a
 prepared operand has no row. Do not rewrite those numeric operands by hand; the
 wire-level contract is in [`gore-as/FORMAT.md`](../../crates/gore-as/FORMAT.md#staticnames-indices-in-raw-and-prepared-minis).
 
-This composition path has one current live observation. On 2026-08-18 the
-GORE-authored Viper fixture rendered `[Gore probe] UI fixture`; `UE4SS.log`
+The separate low-level `dialog_topics` registration-adapter composition has one
+older live observation. On 2026-08-18 the GORE-authored Viper fixture rendered
+`[Gore probe] UI fixture`; `UE4SS.log`
 recorded `ARMED`, `CHOICE_PASS`, and `RENDER_PASS` with `exact_count=1`. The run
 used the PR #91-fixed app-local Core DLL. It was not a genuine third-party
 AngelScript mod or a three-way script conflict, and no save was written during
@@ -415,8 +522,8 @@ See [Bundling & deploying](bundles.md). Deploy splices the mini-cache into
 ## Related
 
 - [AngelScript dialog authoring](dialog-authoring.md) — the compiled topic
-  template, runtime evidence, safe test order, and the boundary between a
-  renderable new class and automatic topic discovery.
+  template, native same-module path, low-level legacy adapter, runtime evidence,
+  safe test order, and practical limits.
 - [Offline AngelScript default patching](angelscript-defaults.md) —
   `default-sites`, `patch-default`, `tag-map-sites`, `patch-tag-map`: changing
   proven scalar and GameplayTag-map defaults directly in the cache, without

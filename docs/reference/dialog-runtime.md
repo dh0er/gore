@@ -5,15 +5,89 @@ limits behind `gore as compile-module` dialog topics and the generated
 registration runtime. The user-facing authoring workflow is described in
 [Dialog authoring](../guide/dialog-authoring.md).
 
-## Proven runtime boundary
+## Current native runtime boundary
+
+On BuildID `24878692`, the tested new Diego root appended to its shipped
+conversation module was reached through the game's native script path. It was
+visible and selectable in two runs. In the first, a legacy UE4SS registration
+adapter was present but logged `sentinel-topic-missing` and never reached
+`ARMED`; in the second, the proxy was absent. The same root still appeared and
+selected normally. Current same-module root authoring therefore requires the
+script mini-cache, not `BuildSpec.dialog_topics` or UE4SS insertion.
+
+The same campaign also proved one new direct sub-topic, one persistent inventory
+effect, one explicit knowledge rule, one persistent quest, one new voice asset,
+and one representative existing-menu rebuild:
+
+- `[GORE TEST] Neuer Diego-Unterdialog` appeared in
+  `UChoiceDiegoKolonie`, selected, dispatched its new `Act` override, ended the
+  conversation and returned HUD/camera control.
+- A new option changed the hero's ore count from 0 to 1. The item was present
+  after quicksave and restart.
+- A topic guarded by
+  `Rules.HideIfKnowsId("gore_diego_quest_knowledge_24878692")` disappeared
+  immediately after selection and remained absent after restart. Save-query
+  found the exact knowledge ID on the hero.
+- A new Stonehenge quest displayed its toast and journal entry and remained in
+  `Running` state after restart.
+- A newly added subtitle and voice asset played from the new topic. System
+  loopback matched the authored source with normalized correlation `0.763`.
+- A five-choice voice-format follow-up played 48 kHz mono, 44.1 kHz mono and 48
+  kHz stereo Vorbis fully. The 48 kHz mono and stereo Opus choices were silent.
+  All five returned to the menu without a hang or crash and moved Diego's lips;
+  those facials are generic placeholder animation independent of successful
+  audio playback, not accurate audio-derived lip sync.
+- Stage A rendered an exact 20-sibling submenu and multiple slots were
+  selectable. The renamed shipped topic still ran its original long `Act` and
+  returned to the menu.
+- A new topic field with `default ProbeMarker = 24878692` and a helper method
+  were authored and used successfully in game.
+- Stage B isolated `PriorityRank`: rank `-100` appeared first, rank `+100`
+  appeared last, and rank-zero entries preserved authored order.
+- Placement is proven on rebased current-head bundles: the default new
+  sub-topic appeared immediately before Zurück and was selectable; explicit
+  `--subdialog-position 1` appeared first, kept Zurück last, and was selectable.
+- A selective FullGraph V2 complete-cache product booted, loaded gameplay,
+  rendered and selected its new same-module root, and let an edited shipped
+  automatic topic call a newly added provider in another module. The provider's
+  line played and the conversation returned control.
+- A shipped Guard with no prior dialog topics received a private root and new
+  topic tree inside its already-loaded per-NPC conversation-settings module.
+  The conversation opened automatically, spoke a shipped oracle line, rendered
+  the wholly new nested choices, accepted both in sequence and returned
+  HUD/control.
+  The same classes in a separate unreferenced Add module were not discovered.
+- A separate automatic-opening fixture entered `State.AmbientConversation`
+  with `GA_Human_Conversation_Ambient` active. This proves that activation path.
+- A wholly new three-level Diego tree rendered and navigated Root -> level 2 ->
+  level 3 when a real `Say` separated the nested transitions. The same graph
+  with two consecutive actionless `Subdialog` Acts soft-locked; `dialog check`
+  now refuses that narrow shape.
+- The earlier 4→5 menu edit remains working. By contrast, current-head Stage C
+  (mini-cache SHA-256 prefix `C675BB55…`) is byte-identical to the live-tested
+  saturated artifact, which failed while opening the reshaped 20-entry menu
+  with an array-capacity error.
+
+These are fixture-specific runtime observations. The saturated 20-slot reshape
+and consecutive actionless menu transition are therefore unsafe, while the
+separate 4→5 edit, placement variants, anchored first conversation and
+action-bearing three-level tree work.
+
+### Diagnostic-only evidence
+
+An artificial ambient stress fixture combined automatic opening with a
+20-choice menu and crashed before its menu became usable. Automatic opening and
+a normal 20-choice submenu each have separate live evidence, so this result is
+retained for diagnosis only; it is not a practical capability limit.
+
+## Historical low-level registration-adapter boundary
 
 The controlled Viper fixture and version 1 of the public
 `BuildSpec.dialog_topics` generator both validated this chain:
 
 ```text
-new UChoice subclass
-  -> gore as compile-module --allow-new-symbols
-  -> additive mini-cache
+new UChoice subclass in the qualified fixture
+  -> prepared mini-cache with new-symbol rows
   -> gore-mod script-cache deployment
   -> resident /Script/Angelscript class
   -> ConversationTopicSet::AddTopic
@@ -21,6 +95,11 @@ new UChoice subclass
   -> ConversationWidget::OnShowTopicSelection
   -> visible root-menu option
 ```
+
+That chain is historical runtime evidence for the low-level registration
+adapter, not an isolated cross-module `--op add` recipe and not a requirement of
+the current native root workflow. The current deployable source path appends a
+new class to the existing conversation module and emits an edit mini-cache.
 
 For one live conversation attempt the fail-closed observer recorded:
 
@@ -44,7 +123,126 @@ byte-identical. The only difference was three ASCII digits in the already-known
 `/Engine/Transient.GothicScreenshotsSave_*` object name in
 `PersistentDataList.sav`; its other bytes and every slot save were unchanged.
 
-## Current version-3 live observation
+## Current BuildID 24878692 full-module proof
+
+The current existing-topic proof used Steam BuildID `24878692` and pristine
+Shipping cache SHA-256
+`7A18F954E32AF30FC24AE3A66EA35D3B5CB98560C8F5083C7846FC9CE1D77511`.
+First, the complete Diego conversation module was checked out, recompiled from
+source without an authored change, deployed, and exercised in game. The
+conversation ran normally. This is a live round-trip proof for a source-
+identical full-module recompile, not merely a cache parser or compiler-backend
+comparison.
+
+The next run changed only the authored `Caption` default of
+`UChoiceDiegoExitGamestart` to the already-existing text `[Forced
+Conversation]`. The caption was visible, the option was selectable, selecting
+it ended the conversation, and player control returned. This proves that one
+reconstructed default survived checkout, strict compilation, remap, packaging,
+deployment and runtime selection.
+
+Earlier failed runs exposed a full-module metadata bug rather than a dialog-
+default or new-symbol failure. Recompilation had replaced existing Unreal event
+descriptors with ordinary callable functions, so native conversation dispatch
+could enter its camera/input state without reaching the choice UI. The current
+edit path preserves each identity-matched existing function's shipped
+`FunctionTraits` and complete Unreal-function tail, while retaining the
+compiler's regenerated bytecode and matching frame metadata. Functions that do
+not exist in the shipped module keep their compiler-authored metadata instead;
+new dialog methods therefore need source-correct `BlueprintOverride`
+declarations.
+
+A separate same-module new-sub-topic fixture on BuildID `24878692` completed
+strict standalone compilation to a 353,402-byte mini-cache. Its bundle was
+353,811 bytes, and Mod Manager deployed it successfully. The new `[GORE TEST]
+Neuer Diego-Unterdialog` option appeared in the native sub-menu opened by
+`UChoiceDiegoKolonie`. Selecting it dispatched the new topic's compiled `Act`
+override, ended the conversation, and returned HUD and camera control. This is
+live compile, package, deployment, reachability, rendering, selection and
+override-dispatch evidence for that same-module sub-topic fixture.
+
+A new same-module root crossed the same boundary twice. During the first run a
+legacy registration adapter was installed, but it recorded
+`sentinel-topic-missing` and no `ARMED`, choice or render pass; the option was
+nevertheless visible and selectable. After removing the UE4SS proxy, the same
+option appeared and selected again. This isolates the shipped script system as
+the source of root discovery for this fixture.
+
+Three effect fixtures then exercised save state. An inventory option raised the
+hero's ore count from 0 to 1, and the item survived quicksave/restart. A
+knowledge option authored
+`Rules.HideIfKnowsId("gore_diego_quest_knowledge_24878692")`; it disappeared
+immediately after selection and remained absent after restart, and save-query
+found that exact ID on the hero. A Stonehenge quest option displayed its quest
+toast and journal entry and remained `Running` after restart. Together these
+prove the exercised `Rules` and effect calls, not every possible native
+quest, inventory or knowledge API.
+
+The new-voice fixture displayed its authored subtitle and played its newly
+packaged voice member. A system-loopback capture had normalized correlation
+`0.763` with the authored source, establishing audible delivery rather than
+inferring playback from subtitle duration alone.
+
+A later five-choice fixture on the same build recorded the format boundary:
+
+| Payload | Audible | Lips | Completion |
+|---|---|---|---|
+| Vorbis, 48 kHz, mono (control) | Full line | Moved | No hang or crash; menu returned |
+| Vorbis, 44.1 kHz, mono | Full line | Moved | No hang or crash; menu returned |
+| Vorbis, 48 kHz, stereo | Full line | Moved | No hang or crash; menu returned |
+| Opus, 48 kHz, mono | Silent | Moved | No hang or crash; menu returned |
+| Opus, 48 kHz, stereo | Silent | Moved | No hang or crash; menu returned |
+
+The Opus rows are known-silent results despite clean menu completion. Lip
+movement across all five, including those silent rows, proves only generic
+placeholder facials independent of successful audio playback; it is not accurate
+audio-derived lip sync.
+
+The structural fixture changed one existing Diego menu from four children to
+five. It renamed a shipped entry, adjusted its priority, retained its long
+shipped `Act`, and appended a new option. In game the old `Act` completed and
+returned to the menu, and the new option was selectable. Because priority,
+caption and membership changed together, that older fixture did not isolate
+`PriorityRank`; the later Stage B campaign above did.
+
+The complete-cache campaign then exercised the selective FullGraph V2 product,
+not the raw compiler regeneration. Compilation resolved one new provider module
+and an edited consumer together. Publication began with the pristine cache,
+replaced only the classified changes and retained untouched modules/tail rows.
+The resulting complete cache packaged and deployed as a whole, booted, loaded
+gameplay, rendered and selected its new same-module root, and executed the
+provider call from an edited shipped automatic topic. The provider's spoken
+line ran and the conversation returned control. These observations separately
+establish compile, complete-cache packaging/deployment, and runtime execution;
+they do not make two interdependent mini-caches valid.
+
+The first-conversation campaign compared two products for the same shipped,
+previously dialogless Guard. A new unreferenced
+`Story.G1R.Conversation.Conversation_OC_GRD_Guard30_281N` module compiled,
+packaged, deployed and allowed the game to boot, but it produced neither an
+automatic opening nor a discoverable option. The same new private root and
+topics appended under `G1R::Conversation` in the Guard's already-loaded
+`AI.AIAgent.Human.Config.<NPC>.ConversationCharacterSettings_<NPC>` module were
+discovered. That anchored edit opened automatically, spoke a shipped oracle
+line, rendered the all-new nested choices, accepted both in sequence and
+returned HUD/control. The final qualification rerun generated the anchored source with
+`dialog new-conversation`, passed `dialog check` and `dialog stage`, compiled
+through the standalone backend, bundled/deployed the result and completed the
+same three-level runtime sequence. This is why `new-conversation` requires an
+exact settings anchor and no longer stages the unreferenced Add-module shape.
+
+The all-new-tree campaign isolated a separate runtime rule. Root -> level 2 ->
+level 3 compiled, packaged and remapped in one existing conversation module.
+When both transitions were otherwise actionless `Subdialog` Acts, choosing the
+second transition produced a blank, input-blocking conversation. The new class
+and reference tables were present, and the same level-3 classes worked when
+reached directly. Adding one real shipped `Say` before the second transition
+made the entire three-level tree render, speak, select and end cleanly. The
+shipped corpus contains no consecutive actionless nested transition, so the
+source checker now rejects only that observed re-entrant shape rather than
+rejecting multi-level new trees.
+
+## BuildID 24539464 version-3 live observation
 
 On 2026-08-18, on Steam BuildID `24539464`, the version-3 Viper registration
 runtime crossed the live render boundary again as part of the Mod Manager
@@ -164,18 +362,33 @@ quest/save state. The offline evidence qualifies its hotfix-remapped
 build/composition only, not selection, effects, persistence, or save/reload.
 
 The central generation registry also contains Steam builds `24340829` and
-`24878692`, but only for their separately recorded bounded offline authoring
-evidence. No dialog-runtime candidate or qualification has been retained for
-either, and none of the `24169431` evidence carries across a generation
-boundary. Build `24539464` instead has the separate version-3 live observation
-recorded above; it does not convert either historical candidate into a
-qualified artifact.
+`24878692`, but no **version-3 adapter** candidate or qualification has been
+retained for either, and none of the `24169431` adapter evidence carries across
+a generation boundary. Build `24539464` instead has the separate version-3 live
+observation recorded above. Build `24878692` has the independent native-source
+runtime qualifications recorded earlier on this page; those do not retroactively
+qualify a historical version-3 adapter artifact.
 
-## Discovery versus insertion
+## Native discovery versus the historical insertion adapter
 
-The runtime proof establishes that the added class is valid and renderable. It
-does **not** establish that every class in a new module is automatically added
-to an already constructed NPC `ConversationTopicSet`.
+Native discovery is now proven for two loaded-module shapes: a root appended to
+Diego's shipped conversation module, and a complete first conversation appended
+to a shipped Guard's already-loaded per-NPC conversation-settings module. The
+latter opened automatically and navigated wholly new choices. Native discovery
+is also proven alongside a selective complete-cache cross-module call, because
+that product booted, rendered its root and executed its provider.
+
+Residence matters. A completely new, unreferenced conversation Add module for
+the same Guard compiled, packaged and deployed but was not discovered at
+runtime. That is a negative runtime result, not an offline uncertainty.
+`new-conversation` therefore resolves the exact shipped settings anchor and
+stages an edit; it does not claim that an arbitrary new module, or a wholly new
+NPC without a runtime-loaded settings anchor, will be discovered.
+
+The remainder of this section documents the separate historical
+`BuildSpec.dialog_topics` insertion adapter. It is retained as a low-level
+bundle surface and evidence record; it is not emitted as a prerequisite for the
+current `gore dialog new-topic` same-module root path.
 
 The reviewed fixture rules are now parameterized by `BuildSpec.dialog_topics`;
 there are no Viper or Asghan constants in the generated runtime. During each
@@ -210,65 +423,202 @@ The runtime never selects or removes a topic, scans global objects, starts a
 conversation, uses a timer or console command, grants/activates an ability, or
 writes a save/quest/knowledge field.
 
-## Current limits
+## Practical limits
 
-- Automatic discovery for a new module remains unproven.
-- The controlled visual proof currently covers Gothic 1 Remake 1.0.3 with
-  UE4SS 3.0.1. That version string does not identify a build: RE-UE4SS's stable
-  tag `v3.0.1` is from February 2024, and its rolling `experimental-latest`
-  assets are also named `UE4SS_v3.0.1-<n>-g<sha>`, so only the git SHA tells the
-  two apart (see the UE4SS section of [getting-started](../guide/getting-started.md)).
-  The build installed on the machine that ran this proof reports git `272ce2f8`,
-  whose commit is dated 7 June 2026 — an experimental one, not the stable tag.
-  That it is also the build the proof ran under rests on the maintainer stating
-  UE4SS was installed once and never replaced; the `UE4SS.dll` on disk carries a
-  9 June 2026 build timestamp, which is consistent with that, and a file
-  creation date of 7 August 2026, which is not evidence either way because
-  re-extracting the same archive resets it. Both the reviewed v0.4 fixture and version 1 of the exact adapter
-  emitted by the parameterized production generator completed the original
-  clean live visual proof. Runtime version 3 has both the current
-  build-`24539464` GORE-fixture observation above and a frozen offline candidate
-  for older build `24169431`; that older exact artifact never completed the
-  same live requalification. Builds `24340829` and `24878692` have no
-  dialog-runtime qualification at all. Other game, UE4SS, and runtime
-  combinations remain to be qualified.
-- Topic selection, authored knowledge/quest changes, recorded voice, and
-  selection-side save effects are not certified by the insertion proof.
-- The exact native ordering of knowledge rules, `IsVisible_Implementation`,
-  participant checks, and UI relevance is not recovered.
-- `emit` and `emit-all` now write a class's generated `__InitDefaults` back out
-  as class-scope `default` statements; recovery is all-or-nothing per module, a
-  module whose defaults cannot all be recovered says so in its header and keeps
-  them byte-exact on recompile, and `emit --no-defaults` still produces the
-  previous shape. `compile-module --op edit` carries an existing `__InitDefaults`
-  record only through the strict, base-keyspace remap path and only when the
-  complete class identity/layout, ordinary method signatures and UFUNCTION
-  metadata, constructors, behavior declarations, module globals/imports, and
-  source identity remain exact. The vanilla generated record, emitter-omitted
-  factory/spawn/accessor wrappers, every `Class.BehaviorFunctions` record, and
-  the full local `Class.MethodTable` are then restored byte-for-byte and
-  reparsed as a postcondition. The base header, complete module region, all
-  seven tail tables, and EOF must parse exactly; the mixed result's serialized
-  function IDs must stay unique both locally and against every untouched base
-  module. A strict self-remap first proves that every copied vanilla reference
-  resolves uniquely. `--allow-new-symbols`, an authored CDO `default`
-  statement (ordinary switch `default:` labels are allowed), another generated
-  `__*` shape, malformed/ambiguous identities, or
-  any regenerated metadata/layout drift fails closed without writing a mini;
-  base/source failures are rejected before rebuilding the source tree or
-  launching the game compiler. Newly authored modules remain supported through
-  `--op add`, including explicit `default` statements.
-- Existing vanilla defaults now also have a separate offline, copy-on-write
+This list deliberately omits the dialog edits and runtime behavior already
+shown to work. It contains only possible-but-unproven behavior and content
+shapes that the current pipeline cannot produce safely.
+
+### Potentially possible, but not proven in game
+
+- Game builds other than BuildID `24878692`. Older adapter observations do not
+  qualify the current native source path on those builds.
+
+### Not technically supported by the current GORE pipeline
+
+- Giving an NPC a first conversation when no exact already-loaded per-NPC
+  conversation-settings module exists for it. The separate new-module fixture
+  compiled and deployed but was not discovered. In practical content terms,
+  `gore dialog` alone cannot yet give a wholly new NPC its first conversation;
+  another NPC pipeline must first supply a settings module that the game loads.
+- Generating accurate, line-specific lip sync for a new recording. The generic
+  placeholder facial moved for every live voice fixture, including silent Opus,
+  while shipped accurate facials live as separate cooked `FA_<text-id>` assets
+  in language-specific `G1R_DialogFacials_*` containers. GORE does not yet
+  author or package that animation asset path.
+- Packaging a normal deployable mini-cache dialog whose new symbol dependency
+  comes from another script module. The same content works through the proven
+  selective complete-cache path, but not as two small independently composable
+  minis.
+- Deleting an existing module through the complete source tree. Missing base
+  source requests Delete and fails closed because safe tail pruning and proof
+  that retained modules no longer reference it are not available.
+- Selectively composing a dependency cycle among newly added modules. An
+  acyclic provider-to-consumer chain is supported; a cycle cannot be seeded
+  safely and is rejected.
+- Deriving one new topic from another new topic instead of deriving every new
+  option directly from the conversation's private topic base.
+- Making a newly authored submenu parent own an already shipped child. Existing
+  parents may receive new children; newly authored parents are limited to new
+  children from the same conversation module.
+- Chaining two new, otherwise actionless `Subdialog` transitions. That exact
+  menu-to-menu re-entry soft-locks; `dialog check` rejects it. An unconditional
+  top-level `Say` before either transition is the supported and runtime-proven
+  separator. The owning `Subdialog` must occur directly in
+  `Act`/`Act_Implementation`; a synchronous helper is not a qualified bypass.
+  A module-local free function named `Say` is rejected so the separator cannot
+  be shadowed by a no-op helper.
+- Publishing the raw FullGraph backend regeneration as a playable cache. GORE
+  does not expose it as the product output; an earlier manual deployment reached
+  a main menu whose entries could not be activated by mouse click or Return.
+- Adding a 21st child to one `Subdialog` call.
+- Manually reshaping an already full 20-slot `Subdialog` call. Current-head
+  Stage C (mini-cache SHA-256 prefix `C675BB55…`) is byte-identical to the
+  live-tested artifact, which failed to open the reshaped menu with an
+  array-capacity error; this shape is technically unsupported and unsafe, and
+  `dialog check` rejects it before staging.
+- Changing the base class, fields, member set, or method signatures of a shipped
+  topic.
+
+## Current compiler and preservation contract
+
+- Dialog checkout now emits every reconstructed `__InitDefaults` record as
+  class-scope `default` statements. Those statements are compiler input, so
+  `Caption`, `PriorityRank`, `Rules` and topic flags can change along with
+  method bodies. The compiler regenerates `__InitDefaults`; it does not restore
+  the old record over authored values.
+- For each identity-matched existing function, the edit pipeline preserves the
+  shipped `FunctionTraits` and complete Unreal-function tail. The regenerated
+  bytecode and its frame metadata remain paired and are not copied back from
+  Shipping. A genuinely new function has no base record to inherit and keeps
+  the compiler-authored metadata produced from its source declaration.
+- Authored defaults for existing classes are an all-or-nothing supersession.
+  Once one base class authors defaults, every base class with `__InitDefaults`
+  must still author them, and every shipped semantic default target must remain
+  present at least as often as in the base bytecode. A different value, call
+  argument or additional target is allowed; a missing class or target,
+  malformed/ambiguous source, or another emitter-omitted generated `__*` method
+  fails closed before a mini-cache is written. Existing class ancestry,
+  property layout and callable identities also remain fixed because no runtime
+  ABI migration for shipped classes is proven.
+- Byte-exact generated-method carry remains the fallback when no existing class
+  authors defaults. The ordinary form uses strict base-keyspace remapping. A
+  bounded hybrid may use `--allow-new-symbols` only so appended classes can own
+  new defaults; every existing initializer and compiler-generated wrapper still
+  comes byte-for-byte from the base. Both forms require exact class
+  identity/layout, ordinary and UFUNCTION signatures, constructors, behavior
+  declarations, module globals/imports and source identity. The generated
+  record, emitter-omitted factory/spawn/accessor wrappers, every
+  `Class.BehaviorFunctions` record and the local `Class.MethodTable` are then
+  restored byte-for-byte. The complete mixed module and all seven tail tables
+  are reparsed, function ids must remain unique, and a strict self-remap first
+  proves every copied vanilla reference resolves uniquely. Removing part of an
+  authored checkout cannot opt into carry; the partial overlay is rejected.
+- Default reconstruction itself requires the matching game-build
+  `Binds.Cache`. If a native scalar or enum target cannot be typed, GORE
+  suppresses authored defaults for that whole module so this carry path remains
+  available; it never presents the known subset as a complete editable source.
+- Once every generated default is superseded by authored source,
+  `compile-module --op edit --allow-new-symbols` may retain the minimal new
+  class, function, name and string rows. The bounded dialog edit shape appends a
+  new topic class inside the owning namespace of the same existing conversation
+  module and changes an existing `Subdialog` body to reference it. Qualified
+  class identity and namespace residence are part of the fail-closed check.
+  Complete-default, same-module new-class/remap and cross-mini loadout oracles
+  cover that shape. On BuildID `24878692`, Doctor accepted the installed
+  Shipping cache and complete Binds API. Strict standalone compilation/remap
+  produced a 17,085-byte Payfine same-module sub-topic mini-cache and an
+  8,271-byte Charlotte same-module root-topic mini-cache. Their offline bundles
+  built and passed inspection: Payfine has one component/three files and
+  Charlotte has two components/five files. A current Brannok checkout plus a new
+  same-module sub-topic also strictly compiled/remapped to a 104,047-byte mini;
+  its 104,448-byte one-component/three-file offline bundle built and passed
+  inspection. A later same-module sub-topic on the same build produced a
+  353,402-byte mini-cache and a 353,811-byte bundle that Mod Manager deployed
+  successfully. In game it appeared in `UChoiceDiegoKolonie`'s native sub-menu,
+  was selected, ran the new `Act` override, ended the conversation and returned
+  HUD and camera control. This does not authorize reparenting or changing the
+  members/signatures of shipped classes.
+- `dialog new-conversation` resolves one exact already-loaded per-NPC
+  conversation-settings module, preserves its shipped settings class and
+  appends the private root plus every topic under `G1R::Conversation` in that
+  module. The scaffold is always an edit with intentional new symbols; absence,
+  ambiguity, an existing rooted conversation or a malformed participant/default
+  binding fails closed. Further classes may form new-to-new `Subdialog` edges
+  inside that same source through the global
+  `::Subdialog(this, UChild, ...)` form. Two consecutive otherwise actionless
+  edges are refused because that exact shape soft-locked; an unconditional
+  top-level `Say` before either transition is admitted and runtime-proven.
+  Declarations, assignments, empty blocks and conditional calls do not count as
+  that separator. The anchored Guard edit crossed checking, strict standalone
+  compilation, packaging, deployment, automatic discovery, menu selection and
+  clean completion. Its final rerun began with the public
+  `dialog new-conversation` scaffold and followed the printed product sequence.
+  A separate unreferenced Add module for the same Guard stopped at deployment and
+  was not discovered, so it is not a product fallback.
+- Separate add and edit mini-caches cannot depend on one another: a new module
+  cannot see the conversation-private root, and the edit mini cannot resolve a
+  class supplied only by the add mini. Each mini is remapped independently to
+  the pristine base; neither becomes authority for the other. Full-graph V2
+  instead submits the complete sealed base graph and coordinated Add/Edit
+  changes to one standalone compile, so visible cross-module references can be
+  resolved together. The raw regenerated cache is retained only as dependency
+  evidence. Publication starts from the exact pristine cache and selectively
+  remaps and composes the declared Add/Edit modules in dependency order;
+  untouched modules and all pre-existing global-tail records remain byte-exact,
+  while records required by new symbols may be appended. Missing base source
+  requests Delete and is rejected until safe tail pruning and retained-reference
+  proof exist. Cyclic dependencies among new modules likewise fail closed.
+  An earlier raw output had 10,782 semantic deviations, including 81 in Diego.
+  Mod Manager nevertheless installed that exact raw cache manually
+  (`62A2106966A06910376ABDF956FF7DFA83F0F366A91514EB1B3D51F227800CD9`) and
+  verified the installed bytes; the game reached its main menu, but neither
+  mouse clicks nor Return could activate an entry. This proves complete-cache
+  deployment and a concrete runtime incompatibility, which is why raw backend
+  bytes are no longer publishable product output.
+  A separate hybrid cache
+  (`7C07974034F4D1CC8CF0CB4469FC97F9956B8F23924B9E4447927EF4F83B85EF`) kept
+  every untouched module pristine and replaced only Diego plus the new probe.
+  It booted and loaded a save, proving the replacement mechanism and selective
+  architecture can reach gameplay. The product now automates that architecture.
+  Its current selective output booted and loaded gameplay, rendered and selected
+  the new same-module root, and executed a new provider call across modules from
+  an edited shipped automatic topic; the provider line played and control
+  returned. The ordinary bundle composer still consumes independently
+  base-bound module mini-caches, so this complete-cache proof does not become a
+  normal cross-module dialog mini-patch.
+- A new root appended to Diego's shipped conversation module was discovered,
+  rendered and selected natively with no adapter insertion, including one run
+  with the UE4SS proxy absent. A same-module sub-topic instead uses authored
+  `Subdialog` wiring, and the Diego fixture proves its in-game appearance,
+  selection and new override dispatch. The supported source gate distinguishes
+  these shapes by `bIsSubTopic` and a direct child reference from one shipped
+  parent. Root scaffolding selects the ordinary rank immediately before the
+  smallest recognized End/Back rank, or before the current last root-rank group
+  when no closing key is known; it skips forced rank `-1`. Sub-topics default to
+  rank 0 so equal-rank `Subdialog` slot order remains authoritative. Explicit
+  `--priority-rank` values win exactly, including an intentional `-1`.
+  `BuildSpec.dialog_topics` remains only the separate low-level adapter contract
+  documented above.
+- Source checking, strict standalone compilation, bundle packaging, deployment
+  and runtime observation are separate claims. On BuildID `24878692`, the
+  source-identical complete Diego recompile, Caption edit, native root, direct
+  sub-topic, persistent ore/knowledge/quest effects, new voice asset, five-case
+  Vorbis/Opus matrix and four-to-five-entry menu rebuild all crossed the live
+  boundary. The selective
+  multi-module product, anchored Guard first conversation, automatic opening and
+  action-bearing all-new three-level tree crossed it too. Earlier Charlotte,
+  Payfine and Brannok fixtures stop at offline build/inspection, and the
+  historical registered-root fixture proves a separate adapter render path.
+- Existing vanilla defaults also retain the separate offline, copy-on-write
   [`default-sites` / `patch-default` scalar path](../guide/angelscript-defaults.md).
-  It re-resolves exact module/class/declaring-owner/field selectors, proves the
-  target-to-owner ancestry, requires the complete current operand as a raw
-  compare-and-swap guard, and changes no save or live runtime state. This does
-  not make `__InitDefaults` source-editable: only a unique branch-free direct
-  primitive/enum assignment in a one-terminal-`RET` initializer is admitted.
-  Calls, computed expressions, structs, object handles, and containers remain
-  unsupported by that scalar workflow. The separately sealed `tag-map-sites` /
-  `patch-tag-map` workflow can patch only an already-present native
-  `GameplayTag`-to-`float32` entry; it cannot add keys or maps, resize bytecode,
-  or make generated defaults source-editable.
-- Decompiled `Say` calls can omit the prepared `FText` argument. Use only a
-  signature verified against `Binds.Cache` or a known compiling source template.
+  It re-resolves exact selectors and admits only a unique branch-free direct
+  primitive/enum assignment guarded by the complete current operand. Calls,
+  computed expressions, structs, handles and containers remain outside that
+  narrow workflow. `tag-map-sites` / `patch-tag-map` likewise changes only an
+  already-present native `GameplayTag`-to-`float32` entry. Neither scalar path
+  bypasses the complete-default contract for a source edit.
+- Real decompiled Payfine and Brannok `Say` calls that pass prepared `LocText`
+  temporaries compile in the current strict standalone path. The Brannok product
+  oracle additionally covers `Subdialog`, cached cross-module class-value
+  expressions, cached mixins, and reconstructed script-class type identities.

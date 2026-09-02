@@ -1533,6 +1533,39 @@ pub(crate) fn validated_module_identities(
         .collect())
 }
 
+/// Validate one add-module name/path against the exact Windows collision policy used by the
+/// standalone overlay compiler. Dialog authoring calls this before it promises that a staged add
+/// can be compiled.
+pub fn validate_add_module_target(
+    mods: &[Module],
+    module_name: &str,
+    relative_path: &str,
+) -> Result<String, String> {
+    let layout = validate_module_layout(mods)?;
+    let requested_name = module_name_key(module_name)?;
+    if let Some(existing) = mods
+        .iter()
+        .find(|module| windows_casefold(&module.name) == requested_name)
+    {
+        return Err(format!(
+            "add module name {module_name:?} collides with base module {:?}",
+            existing.name
+        ));
+    }
+    let requested = normalize_output_path(relative_path)?;
+    if let Some((index, _)) = layout
+        .iter()
+        .enumerate()
+        .find(|(_, output)| path_keys_overlap(&output.key, &requested.key))
+    {
+        return Err(format!(
+            "add path {:?} collides with base module {:?} path {:?} as the same path or a file/directory ancestor",
+            requested.relative, mods[index].name, layout[index].relative
+        ));
+    }
+    Ok(requested.relative)
+}
+
 fn path_keys_overlap(left: &str, right: &str) -> bool {
     left == right
         || left
@@ -1590,12 +1623,22 @@ impl<'a> PreparedEmit<'a> {
     }
 
     /// Emit one module using the same full-cache resolver and collision plan as `emit_tree`.
-    /// Write class `default` statements. OFF unless opted into: emitted source is also hashed
-    /// into sealed evidence and fed back to the compiler, and both need the historical shape.
-    /// Turn it on for source a person is going to read.
+    /// Write class `default` statements when opted into. Complete authored defaults are valid
+    /// compiler input and regenerate `__InitDefaults`; the defaults-free shape remains useful for
+    /// historical evidence and the byte-exact carry fallback.
     pub fn with_class_defaults(mut self, class_defaults: bool) -> Self {
         self.class_defaults = class_defaults;
         self
+    }
+
+    /// The path this module is emitted at, relative to the compiler's `Script/` tree.
+    ///
+    /// This is the value `compile-module --op edit` demands as `--rel-path`, so callers that
+    /// prepare an edit read it here instead of growing a second path policy.
+    pub fn module_relative_path(&self, module_index: usize) -> Option<&str> {
+        self.layout
+            .get(module_index)
+            .map(|layout| layout.relative.as_str())
     }
 
     pub fn emit_module(&self, module_index: usize) -> Result<String, EmitAllError> {
@@ -2024,5 +2067,41 @@ const FName Label = n"Shared() @Shared";
             .prepare_compile_overlay("edit", "Fixture", "dir\\FIXTURE.AS", "// replacement")
             .unwrap();
         assert_eq!(relative, "Dir/Fixture.as");
+    }
+
+    #[test]
+    fn add_target_validation_matches_casefold_and_path_overlap_rules() {
+        let modules = vec![Module {
+            name: "Story.Dialog.Existing".into(),
+            file: "Story/Dialog/Existing.as".into(),
+            functions: Vec::new(),
+            classes: Vec::new(),
+            enums: Vec::new(),
+            globals: Vec::new(),
+        }];
+        assert!(
+            validate_add_module_target(&modules, "story.dialog.existing", "Other/New.as")
+                .unwrap_err()
+                .contains("collides with base module")
+        );
+        assert!(validate_add_module_target(
+            &modules,
+            "Story.Dialog.New",
+            "story\\dialog\\EXISTING.as"
+        )
+        .unwrap_err()
+        .contains("same path"));
+        assert!(validate_add_module_target(
+            &modules,
+            "Story.Dialog.New",
+            "story\\dialog\\EXISTING.as/Child.as"
+        )
+        .unwrap_err()
+        .contains("file/directory ancestor"));
+        assert_eq!(
+            validate_add_module_target(&modules, "Story.Dialog.New", "Story\\Dialog\\New.as")
+                .unwrap(),
+            "Story/Dialog/New.as"
+        );
     }
 }

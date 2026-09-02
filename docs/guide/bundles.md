@@ -2,8 +2,8 @@
 
 A **bundle** combines every deployable domain — item overrides, localized text,
 audio, voice archives, textures/assets, loose or packed files, scripts, and
-dialog topics — into one mod that deploys and undeploys as a unit. This is the
-same engine
+low-level dialog-topic registration adapters — into one mod that deploys and
+undeploys as a unit. This is the same engine
 [Mod Studio](../../apps/mod-studio/README.md) drives.
 
 ## The build spec
@@ -20,8 +20,7 @@ Write a `spec.json`:
   "texture": [ { "asset": "/Game/UI/.../T_Foo", "image_path": "foo.png" } ],
   "files":   [ { "game_path": "G1R/Content/Splash/Splash.bmp", "source_path": "Splash.bmp" } ],
   "pak_files": [ { "game_path": "G1R/Content/Slate/Cursors/Normal/Normal.PNG", "source_path": "Normal.PNG" } ],
-  "scripts": [ { "op": "add", "module_name": "MyModule", "mini_cache": "MyModule.cache" } ],
-  "dialog_topics": [ { "id": "diego-test", "participant_name": "oc_stt_diego", "topic_class": "/Script/Angelscript.ChoiceMyModDiego", "sentinel_class": "/Script/Angelscript.ChoiceDiegoExitGamestart" } ]
+  "scripts": [ { "op": "add", "module_name": "MyModule", "mini_cache": "MyModule.cache" } ]
 }
 ```
 
@@ -142,7 +141,7 @@ What deploy does per domain:
 | `files` | in-place replacement of a loose game file, original backed up to `*.gore-bak` |
 | `pak_files` | packs the same files into an override `.pak` in `~mods\` (additive) |
 | `scripts` | splices the mini-caches into the script cache, backed up to `*.gore-bak` |
-| `dialog_topics` | guarded runtime topic registration |
+| `dialog_topics` | low-level legacy UE4SS topic-registration adapter |
 
 `gore mod undeploy` restores every backup and removes every additive container.
 
@@ -192,6 +191,16 @@ a screen and a log file: more evidence than existed before, and not a test
 suite. Nothing re-checks it, and nothing in this toolkit ever observes the
 screen — a deploy that reports success still says only that the bytes are in
 place.
+
+A later Diego campaign on BuildID `24878692` separately crossed the live
+boundary for current same-module dialog bundles: a new native root, a new
+direct sub-topic, persisted inventory and explicit knowledge/quest effects, a
+new localization/voice pair, and a manual rebuild of an existing four-child
+sub-menu were each observed in game. Those fixtures prove their exact
+script-plus-payload combinations on that build; build, inspection and deploy
+success alone still prove none of those runtime results. The precise scope and
+remaining limits are kept on [AngelScript dialog authoring](dialog-authoring.md)
+rather than generalized here.
 
 ## Loose files
 
@@ -278,14 +287,50 @@ safety gate.
 
 ## Dialog topics
 
-A `dialog_topics` entry registers an authored AngelScript topic at the target
+Current `gore dialog new-topic` workspaces do **not** use `dialog_topics`.
+Both a same-module root and a direct sub-topic stage as one script-only
+`--op edit --allow-new-symbols` mini-cache. On BuildID `24878692`, the new Diego
+root was discovered and selected with no UE4SS proxy present; a prior run with
+the legacy adapter installed had skipped before insertion. A sub-topic is
+reached through the authored `Subdialog` call in the same module.
+
+`gore dialog new-conversation` is also script-only. It stages `--op edit` for
+one exact, already-loaded per-NPC conversation-settings module; there is no
+unreferenced `--op add` fallback. The shipped settings class, private root and
+all-new submenu levels stay in that same mini-cache. On BuildID `24878692`, the
+anchored Guard conversation opened automatically, rendered and selected new
+choices, and ended cleanly without a generated UE4SS component. A separate new
+conversation Add module compiled, packaged and deployed but was not discovered,
+which is why the command now refuses a missing settings anchor.
+
+`dialog_topics` remains a separate low-level compatibility surface for old
+workspaces and explicitly hand-authored specs. Such an entry asks the generated
+UE4SS adapter to register an authored AngelScript topic at the target
 conversation's natural UI boundary. It needs explicit identities: the
-participant, your authored `topic_class`, and a vanilla `sentinel_class`.
+participant, the authored `topic_class`, and a vanilla `sentinel_class`:
+
+```json
+{
+  "dialog_topics": [
+    {
+      "id": "legacy-diego-test",
+      "participant_name": "oc_stt_diego",
+      "topic_class": "/Script/Angelscript.ChoiceMyModDiego",
+      "sentinel_class": "/Script/Angelscript.ChoiceDiegoExitGamestart"
+    }
+  ]
+}
+```
 
 For a state-dependent choice, add `"allow_hidden": true`. A clean zero-match
 after `IsVisible_Implementation` is then accepted as conditional, while
 duplicates and mixed identity/class matches still fail closed. The default
 remains strict: the registered topic must reach both UI proof stages.
+
+That `allow_hidden` flag belongs to this low-level adapter schema; it is not a
+`gore dialog new-topic` CLI option. Compilation and script-only packaging do
+not require UE4SS. The adapter's older runtime evidence does not replace the
+native current-path evidence or qualify other builds.
 
 Full template, runtime evidence, and safe test order:
 [AngelScript dialog authoring](dialog-authoring.md).
@@ -293,15 +338,21 @@ Full template, runtime evidence, and safe test order:
 ## Voice packaging details
 
 Voice entries are packaged into a versioned format-1 `voice/manifest.json` with
-bundle-relative, validated Ogg payloads.
+bundle-relative, validated Ogg/Vorbis payloads. `gore voice validate` can inspect
+Ogg/Opus structurally, but Opus is not accepted into a deployable archive or
+bundle: the live 48 kHz mono and stereo fixtures were both silent.
 
 - `archive` must be one `.zip` filename under `G1R\Story\VoiceOver`.
 - `archive_path` is a forward-slash `.ogg` member path.
 - `replace` requires that member's exact, case-sensitive stored path.
 - `add` requires that the path does **not** exist.
 
-`add` is archive-safe, but whether the game resolves a brand-new voice path is
-still runtime-dependent; replacements are the established deployment path.
+`add` is archive-safe; actual playback still depends on a matching authored
+line. One new Diego member and `Say` identity was audibly resolved on BuildID
+`24878692`, with system-loopback correlation `0.763` to its source recording.
+That is bounded evidence for that fixture, while replacements retain their
+separate established path. See [Voice-over archives](voice.md) for the exact
+member and proof boundary.
 
 Direct deploy and manager apply group edits into one verified rewrite per ZIP
 and always rebuild from the pristine or prior-backup archive. A referenced

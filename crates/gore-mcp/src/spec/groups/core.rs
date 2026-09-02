@@ -546,6 +546,449 @@ pub const LOCATION: GroupSpec = GroupSpec {
 };
 
 // ---------------------------------------------------------------------------------------------
+// gore_dialog
+// ---------------------------------------------------------------------------------------------
+
+/// Shared by every leaf: which cache to read, and where the game is.
+const DIALOG_CACHE_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "cache",
+        Long("cache"),
+        Path,
+        "Exact script cache to read. Defaults to the one in the resolved game install",
+        false,
+    )
+    .with_default("the script cache of the resolved game install"),
+    ArgSpec::new(
+        "game",
+        Long("game"),
+        Path,
+        "Game install root (the folder containing `G1R/`)",
+        false,
+    )
+    .with_default("the configured game path, then Steam auto-detect"),
+];
+
+const DIALOG_LIST_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "filter",
+        Positional { order: 0 },
+        Str,
+        "Keep only conversations whose participant or module contains this text",
+        false,
+    ),
+    DIALOG_CACHE_ARGS[0],
+    DIALOG_CACHE_ARGS[1],
+];
+
+const DIALOG_TREE_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "npc",
+        Positional { order: 0 },
+        Str,
+        "Participant identifier (`om_stt_viper_302`), part of one, or a module name",
+        true,
+    ),
+    ArgSpec::new(
+        "lang",
+        Long("lang"),
+        Str,
+        "Localization column, or a language family (`german`, `english`)",
+        false,
+    )
+    .with_default("english"),
+    ArgSpec::new(
+        "depth",
+        Long("depth"),
+        Int {
+            min: Some(0),
+            max: None,
+        },
+        "Stop after this much sub-dialog nesting",
+        false,
+    ),
+    ArgSpec::new(
+        "ids",
+        crate::spec::ArgForm::Switch("ids"),
+        crate::spec::ArgKind::Bool,
+        "Print class names and localization keys next to the text",
+        false,
+    ),
+    DIALOG_CACHE_ARGS[0],
+    DIALOG_CACHE_ARGS[1],
+];
+
+const DIALOG_SHOW_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "topic",
+        Positional { order: 0 },
+        Str,
+        "Topic class name, with or without the generated `U` prefix",
+        true,
+    ),
+    ArgSpec::new(
+        "lang",
+        Long("lang"),
+        Str,
+        "Localization column, or a language family (`german`, `english`)",
+        false,
+    )
+    .with_default("english"),
+    DIALOG_CACHE_ARGS[0],
+    DIALOG_CACHE_ARGS[1],
+];
+
+const DIALOG_EXPORT_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Empty output directory. Created if absent; existing files are never overwritten",
+        true,
+    ),
+    DIALOG_CACHE_ARGS[0],
+    DIALOG_CACHE_ARGS[1],
+];
+
+const DIALOG_CHECKOUT_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "npc",
+        Positional { order: 0 },
+        Str,
+        "Participant identifier (`om_stt_viper_302`), part of one, or a module name",
+        true,
+    ),
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Empty working directory for the editable source (including complete reconstructed class \
+         defaults), its pristine copy, and the manifest; existing work is never overwritten",
+        true,
+    ),
+    DIALOG_CACHE_ARGS[0],
+    DIALOG_CACHE_ARGS[1],
+];
+
+const DIALOG_CHECK_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "dir",
+        Positional { order: 0 },
+        Path,
+        "The directory `checkout` wrote",
+        true,
+    ),
+    DIALOG_CACHE_ARGS[0],
+    DIALOG_CACHE_ARGS[1],
+];
+
+const DIALOG_STAGE_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "dir",
+        Positional { order: 0 },
+        Path,
+        "The directory `checkout` wrote",
+        true,
+    ),
+    ArgSpec::new(
+        "mod_name",
+        Long("mod-name"),
+        Str,
+        "Portable single-component mod name for the mini-cache and bundle spec this edit stages",
+        false,
+    )
+    .with_default("MyDialogEdit"),
+    DIALOG_CACHE_ARGS[0],
+    DIALOG_CACHE_ARGS[1],
+];
+
+const DIALOG_TEXT_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "npc",
+        Positional { order: 0 },
+        Str,
+        "Participant identifier (`om_stt_viper_302`), part of one, or a module name",
+        true,
+    ),
+    ArgSpec::new(
+        "lang",
+        Long("lang"),
+        Str,
+        "Localization column, or a language family (`german`, `english`)",
+        false,
+    )
+    .with_default("german"),
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Output edits JSON, ready for `gore loc import --edits`",
+        true,
+    ),
+    DIALOG_CACHE_ARGS[0],
+    DIALOG_CACHE_ARGS[1],
+];
+
+const DIALOG_NEW_TOPIC_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "npc",
+        Positional { order: 0 },
+        Str,
+        "Participant identifier (`om_stt_viper_302`), part of one, or a module name",
+        true,
+    ),
+    ArgSpec::new(
+        "caption",
+        Long("caption"),
+        Str,
+        "The menu text, as an untranslated literal",
+        false,
+    ),
+    ArgSpec::new(
+        "caption_key",
+        Long("caption-key"),
+        Str,
+        "The menu text's localization key, for a translatable option",
+        false,
+    ),
+    ArgSpec::new(
+        "class",
+        Long("class"),
+        Str,
+        "AngelScript class name for the new option",
+        false,
+    )
+    .with_default("UChoice<mod name>"),
+    ArgSpec::new(
+        "subdialog_of",
+        Long("subdialog-of"),
+        Str,
+        "Existing topic whose single `Subdialog(...)` call should receive the new same-module \
+         class. Omit this to scaffold a natively discovered same-module root topic",
+        false,
+    ),
+    ArgSpec::new(
+        "subdialog_position",
+        Long("subdialog-position"),
+        Int {
+            min: Some(1),
+            max: Some(20),
+        },
+        "Optional 1-based position among the parent's populated Subdialog entries. Existing entries at that position and later shift right. Requires subdialog_of. By default a recognized trailing TEXT_BACK entry stays last; otherwise the new child appends",
+        false,
+    ),
+    ArgSpec::new(
+        "priority_rank",
+        Long("priority-rank"),
+        Int {
+            min: Some(-2_147_483_648),
+            max: Some(2_147_483_647),
+        },
+        "Menu-order rank. Roots choose an automatic rank before a recognized final End/Back entry, otherwise before the trailing rank group; sub-topics default to 0 and keep equal-rank order from --subdialog-position. Pass a value to override it; -1 has the game's forced-topic semantics and is never chosen automatically",
+        false,
+    ),
+    ArgSpec::new(
+        "mod_name",
+        Long("mod-name"),
+        Str,
+        "Mod name, used for the default class name and the later staged bundle",
+        false,
+    )
+    .with_default("MyDialogMod"),
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Empty output directory for the edited same-module source, its pristine copy, and the \
+         edit manifest",
+        true,
+    ),
+    DIALOG_CACHE_ARGS[0],
+    DIALOG_CACHE_ARGS[1],
+];
+
+const DIALOG_NEW_CONVERSATION_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "npc",
+        Positional { order: 0 },
+        Str,
+        "Exact NPC identifier with one loaded per-NPC conversation-settings module; a separate unbound add module is refused",
+        true,
+    ),
+    ArgSpec::new(
+        "caption",
+        Long("caption"),
+        Str,
+        "The first option's menu text, as an untranslated literal",
+        false,
+    ),
+    ArgSpec::new(
+        "caption_key",
+        Long("caption-key"),
+        Str,
+        "The first option's localization key, for a translatable caption",
+        false,
+    ),
+    ArgSpec::new(
+        "class",
+        Long("class"),
+        Str,
+        "AngelScript class name for the first option",
+        false,
+    )
+    .with_default("UChoice<mod name>"),
+    ArgSpec::new(
+        "priority_rank",
+        Long("priority-rank"),
+        Int {
+            min: Some(-2_147_483_648),
+            max: Some(2_147_483_647),
+        },
+        "Menu-order rank for the first option. Pass -1 only when intentionally authoring a forced topic",
+        false,
+    )
+    .with_default("2"),
+    ArgSpec::new(
+        "mod_name",
+        Long("mod-name"),
+        Str,
+        "Mod name, used for the default class name and the later staged bundle",
+        false,
+    )
+    .with_default("MyDialogMod"),
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Empty output directory for the same-module conversation source, its pristine/base \
+         material, and the checked manifest",
+        true,
+    ),
+    DIALOG_CACHE_ARGS[0],
+    DIALOG_CACHE_ARGS[1],
+];
+
+const DIALOG_COMMANDS: &[CommandSpec] = &[
+    CommandSpec::new(
+        "list",
+        "List the conversations the game ships, with their participants and size",
+        DIALOG_LIST_ARGS,
+        Safety::read(),
+        T_NORMAL,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("dialog-trees"),
+    CommandSpec::new(
+        "tree",
+        "Print one NPC's complete dialog tree",
+        DIALOG_TREE_ARGS,
+        Safety::read(),
+        T_NORMAL,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("dialog-trees"),
+    CommandSpec::new(
+        "show",
+        "Print one topic in full: caption, rules, visibility, and body",
+        DIALOG_SHOW_ARGS,
+        Safety::read(),
+        T_NORMAL,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("dialog-trees"),
+    // One edits document at a path the caller picks, overwritten if it is already there.
+    CommandSpec::new(
+        "text",
+        "Write one NPC's dialog text as a `gore loc import` edits document",
+        DIALOG_TEXT_ARGS,
+        Safety::write_truncating(&["out"]),
+        T_NORMAL,
+    )
+    .guide("dialog-trees"),
+    // The module's source, an untouched copy of it, and a manifest, under a directory the caller
+    // picks. The game install is only read.
+    CommandSpec::new(
+        "checkout",
+        "Check out one conversation as editable AngelScript, including complete reconstructed \
+         defaults for Caption, PriorityRank, Rules, and topic flags",
+        DIALOG_CHECKOUT_ARGS,
+        Safety::write().writes_into(&["out"]),
+        T_NORMAL,
+    )
+    .guide("dialog-authoring"),
+    CommandSpec::new(
+        "check",
+        "Fail closed unless a conversation workspace preserves every required class/default and \
+         satisfies the supported edit/remap contract",
+        DIALOG_CHECK_ARGS,
+        Safety::read(),
+        T_NORMAL,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("dialog-authoring"),
+    // One build spec inside the directory `checkout` already created.
+    CommandSpec::new(
+        "stage",
+        "Write the build spec for a checked workspace and print its strict standalone `--op \
+         edit` compile command, adding `--allow-new-symbols` only when required",
+        DIALOG_STAGE_ARGS,
+        Safety::write()
+            .also_writes(&[("dir", Derived::Child("spec.json"))])
+            .writes_into(&["dir"]),
+        T_NORMAL,
+    )
+    .guide("dialog-authoring"),
+    // A same-module editable source, pristine copy, and manifest under a caller-picked empty
+    // directory. The game install is only read.
+    CommandSpec::new(
+        "new-topic",
+        "Scaffold a new topic inside an NPC's existing conversation module: leave it as a native \
+         root, or wire it into one existing Subdialog call with --subdialog-of",
+        DIALOG_NEW_TOPIC_ARGS,
+        Safety::write().writes_into(&["out"]),
+        T_NORMAL,
+    )
+    .exactly_one(&[&["caption", "caption_key"]])
+    .guide("dialog-authoring"),
+    // One same-module conversation source plus its base material and manifest under a
+    // caller-picked empty directory. The game install is only read.
+    CommandSpec::new(
+        "new-conversation",
+        "Scaffold a complete conversation where the NPC has no root topic by extending its exact \
+         already-loaded per-NPC conversation-settings module; refuse an unbound new module",
+        DIALOG_NEW_CONVERSATION_ARGS,
+        Safety::write().writes_into(&["out"]),
+        T_NORMAL,
+    )
+    .exactly_one(&[&["caption", "caption_key"]])
+    .guide("dialog-authoring"),
+    // One JSON file per conversation, under data-derived collision-free names, in a directory the
+    // caller picks. The CLI refuses occupied directories and per-file collisions itself.
+    CommandSpec::new(
+        "export",
+        "Write every conversation to a directory, one JSON file each",
+        DIALOG_EXPORT_ARGS,
+        Safety::write().writes_into(&["out"]),
+        T_NORMAL,
+    )
+    .guide("dialog-trees"),
+];
+
+pub const DIALOG: GroupSpec = GroupSpec {
+    tool: "gore_dialog",
+    title: "gore dialog reader and authoring guard",
+    cli: "dialog",
+    summary:
+        "Read the dialog trees declared by the installed script cache, edit method bodies and \
+              complete reconstructed defaults, and stage checked same-module topic or complete \
+              conversation additions. Localization, compilation, packaging, deployment, and \
+              runtime proof remain separate steps; read commands report cache declarations, not \
+              save-state behavior.",
+    shape: GroupShape::Nested,
+    commands: DIALOG_COMMANDS,
+};
+
+// ---------------------------------------------------------------------------------------------
 // gore_project  (synthetic: making and shipping a UE4SS Lua mod)
 // ---------------------------------------------------------------------------------------------
 
@@ -743,5 +1186,9 @@ mod tests {
         let stubs = CATALOG.command("stubs").expect("exists");
         assert!(!stubs.safety.worst_case().needs_write_permission());
         assert_eq!(stubs.safety.clobbers_dir, &["out"]);
+
+        let dialog_export = DIALOG.command("export").expect("exists");
+        assert_eq!(dialog_export.safety.writes_into, &["out"]);
+        assert!(dialog_export.safety.clobbers_dir.is_empty());
     }
 }

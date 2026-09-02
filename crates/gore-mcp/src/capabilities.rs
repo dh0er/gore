@@ -250,6 +250,7 @@ TOOLS
   gore_find      Look an id, a class name or a display name up across every offline catalog.
   gore_catalog   Regenerate reflection models and item/NPC/knowledge catalogs from a game dump.
   gore_location  Check a waypoint or spot name before a script uses it. Offline, no install.
+  gore_dialog    Read and safely author bounded same-module dialog edits: complete defaults, bodies, topics, and new conversations.
   gore_project   Scaffold, compile and package a UE4SS Lua mod; install the shared Lua SDK.
   gore_loc       Localized text: decrypt the .lcache to JSON, edit it, re-encrypt.
   gore_audio     FMOD sound banks: list samples, extract to WAV, inject replacements, ship patches.
@@ -263,7 +264,6 @@ TOOLS
   gore_as_compile  Strict standalone full-tree compilation. No game launch; a fresh work tree needs no consent.
   gore_as_compile_module  Strict standalone one-module compilation. No game launch; a fresh work tree and outside-install outputs need no consent.
   gore_as        AngelScript cache: inspect, decompile, patch defaults, recompile modules.
-
 `gore_doctor`, `gore_find`, `gore_mod_inspect`, `gore_mgr_preflight`, `gore_as_compile`, and
 `gore_as_compile_module` each select one command
 already: pass their typed arguments directly, with no redundant `subcommand`. The other CLI tools

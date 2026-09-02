@@ -728,8 +728,13 @@ public:
         asCDataType& output,
         const bool add_ref,
         std::string& detail) {
+        const bool value_is_const = input.is_object_const || input.is_const_handle;
         if (input.is_auto) {
-            output = asCDataType::CreateAuto(input.is_object_const);
+            // For non-handles the shipping cache may encode value constness through either bit.
+            // Once `auto` is a handle the two bits are distinct again: bIsObjectConst describes
+            // the pointee while bIsConstHandle describes the handle itself.
+            output = asCDataType::CreateAuto(
+                input.is_object_handle ? input.is_object_const : value_is_const);
             if (input.is_object_handle) {
                 output.MakeHandle(true);
                 output.MakeReadOnly(input.is_const_handle);
@@ -748,7 +753,7 @@ public:
                 output = asCDataType::CreateObjectHandle(type, input.is_const_handle);
                 output.MakeHandleToConst(input.is_object_const);
             } else {
-                output = asCDataType::CreateType(type, input.is_object_const);
+                output = asCDataType::CreateType(type, value_is_const);
             }
             if (input.is_reference) {
                 output.MakeReference(true);
@@ -763,7 +768,7 @@ public:
         }
         if (input.token_type == static_cast<std::int32_t>(ttQuestion) &&
             is_parameter_type(input)) {
-            output = asCDataType::CreatePrimitive(ttQuestion, input.is_object_const);
+            output = asCDataType::CreatePrimitive(ttQuestion, value_is_const);
             output.MakeReference(true);
             return true;
         }
@@ -772,7 +777,7 @@ public:
             return false;
         }
         output = asCDataType::CreatePrimitive(
-            static_cast<eTokenType>(input.token_type), input.is_object_const);
+            static_cast<eTokenType>(input.token_type), value_is_const);
         if (input.is_reference) {
             output.MakeReference(true);
         }
@@ -1520,11 +1525,18 @@ asCObjectType* create_class_shell(
     asCModule& module,
     const precompiled_class& input) {
     asCObjectType* type = asNEW(asCObjectType)(&engine);
+    type->flags = static_cast<asDWORD>(input.flags);
     type->typeId = engine.typeIdSeqNbr++;
+    if ((type->flags & asOBJ_SCRIPT_OBJECT) != 0U) {
+        type->typeId |= asTYPEID_SCRIPTOBJECT;
+    } else if ((type->flags & asOBJ_TEMPLATE) != 0U) {
+        type->typeId |= asTYPEID_TEMPLATE;
+    } else if ((type->flags & asOBJ_ENUM) == 0U) {
+        type->typeId |= asTYPEID_APPOBJECT;
+    }
     engine.mapTypeIdToTypeInfo.Add(type->typeId, type);
     type->name = input.class_name.bytes.c_str();
     type->nameSpace = name_space(engine, input.name_space);
-    type->flags = static_cast<asDWORD>(input.flags);
     type->size = -1;
     type->module = &module;
     module.classTypes.PushLast(type);
@@ -1968,6 +1980,7 @@ void create_enum(
     type->nameSpace = name_space(engine, input.name_space);
     module.enumTypes.PushLast(type);
     module.allLocalTypes.Add(type);
+    engine.allScriptDeclaredTypes.Add(type);
     type->enumValues.SetLength(static_cast<asUINT>(input.names.size()));
     for (asUINT index = 0U; index < type->enumValues.GetLength(); ++index) {
         type->enumValues[index] = asNEW(asSEnumValue)();
@@ -1990,6 +2003,13 @@ bool create_global(
     }
     asCGlobalProperty* property =
         module.AllocateGlobalProperty(input.name.bytes.c_str(), type, name_space(engine, input.name_space));
+    // Mirror the source builder's AutomaticImports publication rule. Class-value expressions
+    // (`Namespace::USomeClass`) resolve through the generated `__StaticType_USomeClass` global,
+    // not through the class shell alone.
+    if (property->nameSpace != module.defaultNamespace ||
+        property->name.StartsWith("__StaticType_")) {
+        engine.allScriptGlobalVariables.Add(property);
+    }
     if (input.is_pure_constant) {
         property->isPureConstant = true;
         property->storage = input.pure_constant_value;
@@ -2793,6 +2813,32 @@ private:
     std::vector<asCModule*> modules_;
 };
 
+// Cached mixin functions are authored by the donor as extension-style declarations, but the
+// decompiler emits their calls as ordinary globals with the receiver made explicit. The source
+// compiler intentionally excludes MIXIN candidates from ordinary global overload resolution.
+// Expose cached global mixins only while source bodies bind, then restore their exact saved traits
+// before the graph can be exported. The guard also restores them on every early-return path.
+class cached_global_mixin_exposure final {
+public:
+    void expose(asCScriptFunction& function) {
+        if (!function.IsMixin()) return;
+        functions_.emplace_back(&function, function.traits.traits);
+        function.SetMixin(false);
+    }
+
+    void restore() noexcept {
+        for (const auto& [function, traits] : functions_) {
+            function->traits.traits = traits;
+        }
+        functions_.clear();
+    }
+
+    ~cached_global_mixin_exposure() { restore(); }
+
+private:
+    std::vector<std::pair<asCScriptFunction*, asDWORD>> functions_;
+};
+
 struct mixed_module_state {
     asCModule* module = nullptr;
     const precompiled_module* cached = nullptr;
@@ -3560,6 +3606,13 @@ engine_bridge_result compile_mixed_cache_checkpoint(
                 is_editor_only_module_name(state.source->module_name);
         }
 
+        // Imports belong to the fresh authored-module state. Wire them after reset
+        // instead of relying on InternalReset retaining importedModules.
+        for (mixed_module_state& state : states) {
+            if (state.source == nullptr || state.module->builder == nullptr) continue;
+            state.module->InternalReset();
+        }
+
         for (std::size_t index = 0U; index < states.size(); ++index) {
             const auto import_one = [&](const std::string& imported) -> bool {
                 asIScriptModule* const dependency =
@@ -3613,7 +3666,6 @@ engine_bridge_result compile_mixed_cache_checkpoint(
         for (std::size_t index = 0U; index < states.size(); ++index) {
             mixed_module_state& state = states[index];
             if (state.source == nullptr || state.module->builder == nullptr) continue;
-            state.module->InternalReset();
             const int code = state.module->builder->BuildParallelParseScripts();
             if (code != asSUCCESS) {
                 return failure(
@@ -3662,6 +3714,8 @@ engine_bridge_result compile_mixed_cache_checkpoint(
                 std::move(detail), asERROR);
         }
 
+        cached_global_mixin_exposure cached_mixins;
+
         // Publish every cached function declaration before source Stage 2 so
         // added/edited modules can compile declarations against unchanged
         // precompiled providers regardless of final module order.
@@ -3693,6 +3747,8 @@ engine_bridge_result compile_mixed_cache_checkpoint(
                 state.module->AddScriptFunction(function);
                 state.module->globalFunctions.Add(function);
                 state.module->globalFunctionList.PushLast(function);
+                engine.allScriptGlobalFunctions.Add(function);
+                cached_mixins.expose(*function);
             }
             for (std::size_t class_index = 0U;
                  class_index < state.cached->classes.size(); ++class_index) {
@@ -3718,7 +3774,6 @@ engine_bridge_result compile_mixed_cache_checkpoint(
                     "source function generation failed in mixed graph", code);
             }
         }
-
         failed_module = kNoModule;
         detail.clear();
         if (!types.process_all(failed_module, detail)) {
@@ -3836,6 +3891,7 @@ engine_bridge_result compile_mixed_cache_checkpoint(
                 }
             }
         }
+        cached_mixins.restore();
 
         asCBuilder validator(&engine, nullptr);
         validator.Reset();

@@ -1772,6 +1772,7 @@ fn map_voice_error(error: Error) -> VoiceFailure {
         Error::UnsupportedCompression { .. } => "VOICE_COMPRESSION_UNSUPPORTED",
         Error::ArchiveChanged => "VOICE_ARCHIVE_CHANGED",
         Error::Verification(_) => "VOICE_VERIFICATION_FAILED",
+        Error::UnqualifiedVoiceCodec { .. } => "VOICE_CODEC_UNQUALIFIED",
         Error::InvalidOgg(_) => "VOICE_OGG_INVALID",
     };
     VoiceFailure::new(code, error.to_string())
@@ -3101,11 +3102,17 @@ mod tests {
         let verification =
             map_voice_error(Error::Verification("edited entry hash mismatch".to_owned()))
                 .response();
+        let unqualified_codec =
+            map_voice_error(Error::UnqualifiedVoiceCodec { codec: "Opus" }).response();
 
         assert_eq!(source["error"]["code"], "VOICE_SOURCE_IO");
         assert_eq!(output["error"]["code"], "VOICE_OUTPUT_IO");
         assert_eq!(archive_data["error"]["code"], "VOICE_ARCHIVE_INVALID");
         assert_eq!(verification["error"]["code"], "VOICE_VERIFICATION_FAILED");
+        assert_eq!(
+            unqualified_codec["error"]["code"],
+            "VOICE_CODEC_UNQUALIFIED"
+        );
     }
 
     /// Optional real-install qualification for the exact Mod Studio FFI path. The source archive

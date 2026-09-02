@@ -2107,6 +2107,7 @@ where
         opts,
         diagnostics,
         mode,
+        FullGraphResultPolicyV1::SelectivePublication,
         standalone,
         Some(guard),
         closing_audit,
@@ -2133,6 +2134,7 @@ where
         opts,
         diagnostics,
         mode,
+        FullGraphResultPolicyV1::SelectivePublication,
         standalone,
         Some(guard),
         closing_audit,
@@ -2158,6 +2160,7 @@ where
         opts,
         &crate::diagnostics::DiagnosticsOptions::default(),
         CompilerBackendModeV1::Standalone,
+        FullGraphResultPolicyV1::SelectivePublication,
         Some(standalone),
         None,
         closing_audit,
@@ -2180,6 +2183,7 @@ where
         opts,
         &crate::diagnostics::DiagnosticsOptions::default(),
         CompilerBackendModeV1::Standalone,
+        FullGraphResultPolicyV1::SelectivePublication,
         Some(standalone),
         None,
         closing_audit,
@@ -2187,11 +2191,71 @@ where
     )
 }
 
+/// Internal full-tree qualification entrypoint for the guarded embedded compiler.
+///
+/// This is intentionally not a product publication API. It accepts only an exact Edit-with-source
+/// for every module in the sealed base and retains the already validated complete compiler output
+/// so the full-tree verifier can compare compiler implementations without selective composition.
+#[doc(hidden)]
+pub fn compile_full_graph_qualification_with_backend_v1_with_guard_and_target<A>(
+    opts: &FullGraphCompileOptsV1,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+    guard: InstallMutationGuard,
+    closing_audit: A,
+    target: ValidatedCompilerTargetInputsV1,
+) -> FullGraphCompileReportV1
+where
+    A: FnOnce() -> Result<(), String>,
+{
+    compile_full_graph_with_backend_v1_with_guard_and_optional_target(
+        opts,
+        diagnostics,
+        CompilerBackendModeV1::Game,
+        FullGraphResultPolicyV1::CompleteQualification,
+        None,
+        Some(guard),
+        closing_audit,
+        Some(target),
+    )
+}
+
+/// Internal full-tree qualification entrypoint for the strict standalone compiler.
+///
+/// See [`compile_full_graph_qualification_with_backend_v1_with_guard_and_target`].
+#[doc(hidden)]
+pub fn compile_full_graph_qualification_standalone_v1_with_target<A>(
+    opts: &FullGraphCompileOptsV1,
+    standalone: &mut dyn StandaloneCompilerRunnerV1,
+    closing_audit: A,
+    target: ValidatedCompilerTargetInputsV1,
+) -> FullGraphCompileReportV1
+where
+    A: FnOnce() -> Result<(), String>,
+{
+    compile_full_graph_with_backend_v1_with_guard_and_optional_target(
+        opts,
+        &crate::diagnostics::DiagnosticsOptions::default(),
+        CompilerBackendModeV1::Standalone,
+        FullGraphResultPolicyV1::CompleteQualification,
+        Some(standalone),
+        None,
+        closing_audit,
+        Some(target),
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FullGraphResultPolicyV1 {
+    SelectivePublication,
+    CompleteQualification,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn compile_full_graph_with_backend_v1_with_guard_and_optional_target<A>(
     opts: &FullGraphCompileOptsV1,
     diagnostics: &crate::diagnostics::DiagnosticsOptions,
     mode: CompilerBackendModeV1,
+    result_policy: FullGraphResultPolicyV1,
     mut standalone: Option<&mut dyn StandaloneCompilerRunnerV1>,
     guard: Option<InstallMutationGuard>,
     closing_audit: A,
@@ -2230,6 +2294,17 @@ where
             }
             _ => {}
         }
+        match result_policy {
+            FullGraphResultPolicyV1::SelectivePublication => {
+                crate::cache::selective_fullgraph::validate_selective_full_graph_change_count(
+                    opts.changes.len(),
+                )
+                .map_err(|error| CompileError::Other(error.to_string()))?;
+            }
+            FullGraphResultPolicyV1::CompleteQualification => {
+                validate_complete_full_graph_qualification_opts_v1(opts)?;
+            }
+        }
         preflight_full_graph_path_layout_v1(opts)?;
         preflight_full_graph_publication_v1(opts)?;
         if let Some(target) = target.borrow().as_ref() {
@@ -2246,8 +2321,14 @@ where
                 ));
             }
         }
-        let prepared =
-            prepare_full_graph_request_v1(opts, mode != CompilerBackendModeV1::Standalone)?;
+        let mut prepared = prepare_full_graph_request_v1(
+            opts,
+            mode != CompilerBackendModeV1::Standalone,
+            result_policy,
+        )?;
+        if result_policy == FullGraphResultPolicyV1::CompleteQualification {
+            validate_prepared_complete_full_graph_qualification_v1(&prepared)?;
+        }
         let tree_seal = ProjectSourceTreeSeal::capture(&prepared.source_tree).map_err(|error| {
             CompileError::Other(format!(
                 "sealing the prepared full-graph source tree: {error}"
@@ -2460,7 +2541,48 @@ where
         selected_backend.set((!terminal_preflight).then_some(backend));
         *fallback_reason.borrow_mut() = fallback;
         let bytes = selected_result.map_err(|failure| CompileError::Other(failure.to_string()))?;
-        Ok((bytes, prepared))
+        let publication_bytes = match result_policy {
+            FullGraphResultPolicyV1::CompleteQualification => bytes,
+            FullGraphResultPolicyV1::SelectivePublication => {
+                let selective_changes = std::mem::take(&mut prepared.selective_changes);
+                let selective = crate::cache::selective_fullgraph::compose_selective_full_graph(
+                    &opts.base_cache,
+                    &bytes,
+                    selective_changes,
+                )
+                .map_err(|error| {
+                    CompileError::Other(format!(
+                        "selectively composing the validated FullGraph result onto the sealed base: {error}"
+                    ))
+                })?;
+                let mut expected_applied = prepared
+                    .changes
+                    .iter()
+                    .filter(|change| change.operation != FullGraphCompileOperationV1::Delete)
+                    .map(|change| change.module_name.as_str())
+                    .collect::<Vec<_>>();
+                let mut actual_applied = selective
+                    .applied_modules
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>();
+                expected_applied.sort_unstable();
+                actual_applied.sort_unstable();
+                if actual_applied != expected_applied {
+                    return Err(CompileError::Other(format!(
+                        "selective FullGraph composition applied modules {actual_applied:?}, expected {expected_applied:?}"
+                    )));
+                }
+                validate_full_graph_regen_manifest_v1(&prepared.final_identities, &selective.cache)
+                    .map_err(|error| {
+                        CompileError::Other(format!(
+                            "validating the selectively composed FullGraph result: {error}"
+                        ))
+                    })?;
+                selective.cache
+            }
+        };
+        Ok((publication_bytes, prepared))
     })();
 
     // Strict standalone owns no install guard, but its read-only closing audit remains mandatory.
@@ -3434,13 +3556,64 @@ struct PreparedFullGraphRequestV1 {
     final_identities: Vec<FullGraphFinalModuleV1>,
     changes: Vec<FullGraphChangeManifestEntryV1>,
     deleted_modules: Vec<FullGraphDeletedModuleV1>,
+    selective_changes: Vec<crate::cache::selective_fullgraph::SelectiveFullGraphChange>,
     base_cache_sha256: Sha256Digest,
     game_source_rebuild_preflight: Option<String>,
+}
+
+fn validate_complete_full_graph_qualification_opts_v1(
+    opts: &FullGraphCompileOptsV1,
+) -> Result<(), CompileError> {
+    if opts.changes.len() != opts.final_manifest.len() {
+        return Err(CompileError::Other(format!(
+            "complete FullGraph qualification requires exactly one Edit per final module, got {} changes for {} final modules",
+            opts.changes.len(),
+            opts.final_manifest.len()
+        )));
+    }
+    for change in &opts.changes {
+        if change.operation != FullGraphCompileOperationV1::Edit || change.source.is_none() {
+            return Err(CompileError::Other(format!(
+                "complete FullGraph qualification requires an Edit with sealed source bytes for every base module; {:?} is {:?} with source={}",
+                change.module_name,
+                change.operation,
+                change.source.is_some()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_prepared_complete_full_graph_qualification_v1(
+    prepared: &PreparedFullGraphRequestV1,
+) -> Result<(), CompileError> {
+    let complete = prepared.deleted_modules.is_empty()
+        && prepared.selective_changes.is_empty()
+        && prepared.changes.len() == prepared.final_identities.len()
+        && prepared.changes.iter().all(|change| {
+            change.operation == FullGraphCompileOperationV1::Edit
+                && change.source_byte_len.is_some()
+                && change.source_sha256.is_some()
+        })
+        && prepared.final_manifest.len() == prepared.final_identities.len()
+        && prepared.final_manifest.iter().all(|entry| {
+            entry.disposition == FullGraphSourceDispositionV1::Edited
+                && entry.source_byte_len.is_some()
+                && entry.source_sha256.is_some()
+        });
+    if !complete {
+        return Err(CompileError::Other(
+            "complete FullGraph qualification preparation did not cover the exact sealed base module universe with Edit sources"
+                .to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn prepare_full_graph_request_v1(
     opts: &FullGraphCompileOptsV1,
     emit_game_source_tree: bool,
+    result_policy: FullGraphResultPolicyV1,
 ) -> Result<PreparedFullGraphRequestV1, CompileError> {
     validate_full_graph_compile_bounds_v1(opts)?;
     validate_generated_cache(&opts.base_cache)
@@ -3581,6 +3754,13 @@ fn prepare_full_graph_request_v1(
         }
     }
 
+    if let Some(deleted) = deleted_indices.values().next() {
+        return Err(CompileError::Other(format!(
+            "refusing FullGraph Delete for module {:?}: selective publication can currently prove only Add/Edit composition onto the sealed base; safe deletion requires declaration-tail pruning and proof that no retained module references the removed declarations",
+            deleted.module_name
+        )));
+    }
+
     // The native request-v2 backend carries unchanged Base modules directly from the sealed cache
     // and consumes sources only for explicit Add/Edit changes. The game backend instead rebuilds
     // this emitted source tree, whose compatibility emitter deliberately omits compiler-generated
@@ -3702,6 +3882,79 @@ fn prepare_full_graph_request_v1(
             .then_with(|| left.relative_path.cmp(&right.relative_path))
     });
 
+    let selective_changes = if result_policy == FullGraphResultPolicyV1::SelectivePublication {
+        let mut selective_changes = Vec::with_capacity(prepared_edits.len() + prepared_adds.len());
+        for (base_index, (_, source)) in &prepared_edits {
+            let module_name = &base_manifest[*base_index].module_name;
+            let overlay_authors_defaults =
+                source_contains_default_token(source).map_err(|reason| {
+                    CompileError::Other(format!(
+                        "checking FullGraph edit defaults for module {module_name:?}: {reason}"
+                    ))
+                })?;
+            let generated_defaults = prepare_generated_defaults_edit(
+                "edit",
+                &base_modules,
+                module_name,
+                &opts.base_cache,
+                source,
+                overlay_authors_defaults,
+            )?;
+            let default_targets = if overlay_authors_defaults {
+                crate::cache::default_targets::ExistingDefaultTargetPlan::prepare(
+                    &opts.base_cache,
+                    module_name,
+                    source,
+                )
+                .map_err(|reason| {
+                    CompileError::Other(format!(
+                        "refusing default-target preservation for FullGraph edit module {module_name:?}: {reason}"
+                    ))
+                })?
+            } else {
+                None
+            };
+            let metadata =
+                crate::cache::generated_defaults::ExistingFunctionMetadataPlan::prepare(
+                    &opts.base_cache,
+                    module_name,
+                )
+                .map_err(|reason| {
+                    CompileError::Other(format!(
+                        "refusing function-metadata preservation for FullGraph edit module {module_name:?}: {reason}"
+                    ))
+                })?;
+            let structure = crate::cache::generated_defaults::ExistingModuleStructurePlan::prepare(
+                &opts.base_cache,
+                module_name,
+            )
+            .map_err(|reason| {
+                CompileError::Other(format!(
+                    "refusing structure preservation for FullGraph edit module {module_name:?}: {reason}"
+                ))
+            })?;
+            selective_changes.push(
+                crate::cache::selective_fullgraph::SelectiveFullGraphChange::edit(
+                    module_name.clone(),
+                    crate::cache::selective_fullgraph::SelectiveFullGraphEditPreservation::new(
+                        metadata,
+                        structure,
+                        generated_defaults,
+                        default_targets,
+                    ),
+                ),
+            );
+        }
+        selective_changes.extend(prepared_adds.iter().map(|module| {
+            crate::cache::selective_fullgraph::SelectiveFullGraphChange::add(
+                module.module_name.clone(),
+            )
+        }));
+        selective_changes
+    } else {
+        Vec::new()
+    };
+
     // Only after all source, operation, and final-manifest preflight has succeeded may the private
     // source tree be reset and repopulated.
     // Re-resolve the path layout immediately before the destructive tree reset; the earlier outer
@@ -3778,6 +4031,7 @@ fn prepare_full_graph_request_v1(
         final_identities,
         changes: change_manifest,
         deleted_modules,
+        selective_changes,
         base_cache_sha256: sha256_digest(&opts.base_cache),
         game_source_rebuild_preflight,
     })
@@ -4187,11 +4441,11 @@ fn validate_full_graph_regen_manifest_v1(
     Ok(())
 }
 
-/// Return the compiler-generated class methods that the source emitter deliberately omits.
-/// Replacing an existing module without carrying these records forward would silently erase CDO
-/// defaults (NPC/quest/dialog configuration among them), so `edit` must fail closed until the
-/// records can be preserved byte-for-byte. `PreparedEmit::prepare_compile_overlay` has already
-/// proved that `module_name` identifies exactly one base module before this helper is called.
+/// Return the compiler-generated class methods whose bodies the source emitter omits. Complete
+/// class-scope `default` statements safely regenerate `__InitDefaults`; an edit that authors no
+/// defaults instead needs byte-exact carry. Any partial supersession or other omitted `__*` method
+/// must fail closed. `PreparedEmit::prepare_compile_overlay` has already proved that `module_name`
+/// identifies exactly one base module before this helper is called.
 fn omitted_generated_methods(
     mods: &[model::Module],
     module_name: &str,
@@ -4278,12 +4532,8 @@ fn prepare_generated_defaults_edit(
             omitted.len()
         ))
     };
-    if allow_new_symbols {
-        return Err(refusal(
-            "generated-default carry requires strict base-keyspace remap; disable \
-             --allow-new-symbols or use `add` for a new module",
-        ));
-    }
+    crate::cache::default_source::reject_preprocessor_directives(overlay)
+        .map_err(|reason| refusal(&reason))?;
     if source_contains_default_token(overlay).map_err(|reason| refusal(&reason))? {
         // The overlay authors class defaults itself, so the compiler REGENERATES
         // `__InitDefaults` from that source and the carried copy is superseded — carrying it
@@ -4292,6 +4542,34 @@ fn prepare_generated_defaults_edit(
         // authored overlay would silently lose the classes it left out.
         let authored = crate::cache::default_source::classes_with_default_statements(overlay)
             .map_err(|reason| refusal(&reason))?;
+        let base_module = mods
+            .iter()
+            .find(|module| module.name == module_name)
+            .expect("generated-default inventory already proved one base module");
+        let authored_existing = authored
+            .iter()
+            .filter(|class| base_module.classes.iter().any(|base| base.name == **class))
+            .cloned()
+            .collect::<Vec<_>>();
+        if authored_existing.is_empty() && !authored.is_empty() {
+            if !allow_new_symbols {
+                return Err(refusal(
+                    "defaults belong only to appended classes, so preserving existing defaults \
+                     requires new-symbol remap; enable --allow-new-symbols",
+                ));
+            }
+            return crate::cache::generated_defaults::GeneratedDefaultsPlan::prepare_hybrid(
+                base,
+                mods,
+                module_name,
+                &authored,
+            )
+            .map_err(|reason| {
+                refusal(&format!(
+                    "hybrid existing-default carry is unproven: {reason}"
+                ))
+            });
+        }
         let mut unsuperseded = Vec::new();
         for entry in &omitted {
             match entry.strip_suffix("::__InitDefaults") {
@@ -4306,13 +4584,21 @@ fn prepare_generated_defaults_edit(
             return Err(refusal(&format!(
                 "the authored overlay declares `default` statements, which makes the compiler \
                  regenerate the class defaults and the carried copies stale, but it does not \
-                 supersede {} of them ({}); author defaults for every class, or emit the module \
-                 with `--no-defaults` and edit that",
+                 supersede {} of them ({}); author defaults for every default-bearing class, or \
+                 use `--no-defaults` only for an edit that needs no new symbols and deliberately \
+                 relies on byte-exact carry",
                 unsuperseded.len(),
                 unsuperseded.join(", ")
             )));
         }
         return Ok(None);
+    }
+    if allow_new_symbols {
+        return Err(refusal(
+            "generated-default carry requires strict base-keyspace remap; disable \
+             --allow-new-symbols, or author complete defaults for every default-bearing class \
+             before using new-symbol remap",
+        ));
     }
     let plan =
         crate::cache::generated_defaults::GeneratedDefaultsPlan::prepare(base, mods, module_name)
@@ -7905,6 +8191,56 @@ where
         &overlay,
         opts.allow_new_symbols,
     )?;
+    let existing_default_targets = if opts.op == "edit" && baseline_defaults {
+        crate::cache::default_targets::ExistingDefaultTargetPlan::prepare(
+            &base,
+            &effective_module_name,
+            &overlay,
+        )
+        .map_err(|reason| {
+            CompileError::Other(format!(
+                "refusing default-target preservation for edit module {:?}: {reason}",
+                effective_module_name
+            ))
+        })?
+    } else {
+        None
+    };
+    let existing_function_metadata = if opts.op == "edit" {
+        Some(
+            crate::cache::generated_defaults::ExistingFunctionMetadataPlan::prepare(
+                &base,
+                &effective_module_name,
+            )
+            .map_err(|reason| {
+                CompileError::Other(format!(
+                    "refusing function-metadata preservation for edit module {:?}: {reason}",
+                    effective_module_name
+                ))
+            })?,
+        )
+    } else {
+        None
+    };
+    // An edit may append whole classes, but it must not silently alter the reflection/layout of
+    // an existing one.  Verify this only after all qualified repairs (defaults, function metadata
+    // and authored-default targets) have completed; the plan copies no base structure itself.
+    let existing_module_structure = if opts.op == "edit" {
+        Some(
+            crate::cache::generated_defaults::ExistingModuleStructurePlan::prepare(
+                &base,
+                &effective_module_name,
+            )
+            .map_err(|reason| {
+                CompileError::Other(format!(
+                    "refusing structure preservation for edit module {:?}: {reason}",
+                    effective_module_name
+                ))
+            })?,
+        )
+    } else {
+        None
+    };
 
     // 1. Only after all base and authored target checks succeed, clear and rebuild the tree.
     let tree = reset_compile_tree(&opts.work_dir).map_err(CompileError::Other)?;
@@ -7974,6 +8310,20 @@ where
         .map_err(|e| CompileError::Other(format!("remap: {e}")))?
         .0
     };
+    if generated_defaults.is_some() {
+        let plan = existing_function_metadata.as_ref().ok_or_else(|| {
+            CompileError::Other(format!(
+                "internal error: generated-default carry for edit module {:?} has no function-metadata preservation plan",
+                effective_module_name
+            ))
+        })?;
+        mini = plan.apply_present(&mini).map_err(|reason| {
+            CompileError::Other(format!(
+                "refusing pre-carry function-metadata normalization for edit module {:?}: {reason}",
+                effective_module_name
+            ))
+        })?;
+    }
     if let Some(plan) = generated_defaults {
         mini = plan.apply(&mini).map_err(|reason| {
             CompileError::Other(format!(
@@ -7982,7 +8332,45 @@ where
             ))
         })?;
     }
+    if let Some(plan) = existing_function_metadata {
+        mini = plan.apply(&mini).map_err(|reason| {
+            CompileError::Other(format!(
+                "refusing function-metadata preservation for edit module {:?}: {reason}",
+                effective_module_name
+            ))
+        })?;
+    }
+    if let Some(plan) = existing_module_structure {
+        plan.verify(&mini).map_err(|reason| {
+            CompileError::Other(format!(
+                "refusing structure preservation for edit module {:?}: {reason}",
+                effective_module_name
+            ))
+        })?;
+    }
     canonicalize_mini_guid(&mut mini, &base).map_err(CompileError::Other)?;
+    if let Some(plan) = existing_default_targets.as_ref() {
+        let mut guard = splice::SequentialMiniGuard::new(&base).map_err(|error| {
+            CompileError::Other(format!(
+                "preparing composed default-target verification for edit module {:?}: {error}",
+                effective_module_name
+            ))
+        })?;
+        let composed = guard
+            .compose_edit(&base, &mini, &effective_module_name)
+            .map_err(|error| {
+                CompileError::Other(format!(
+                    "composing default-target verification cache for edit module {:?}: {error}",
+                    effective_module_name
+                ))
+            })?;
+        plan.verify(&composed).map_err(|reason| {
+            CompileError::Other(format!(
+                "refusing default-target preservation for edit module {:?}: {reason}",
+                effective_module_name
+            ))
+        })?;
+    }
 
     let mini_path = opts.work_dir.join("module.cache");
     let artifact = write_compiled_artifact(mini_path.clone(), &mini)?;
@@ -11620,6 +12008,152 @@ mod tests {
     }
 
     #[test]
+    fn edit_preflight_allows_new_symbols_after_complete_authored_default_supersession() {
+        let modules = vec![Module {
+            name: "QuestModule".into(),
+            file: "QuestModule.as".into(),
+            functions: Vec::new(),
+            classes: vec![Class {
+                name: "UQuestFixture".into(),
+                namespace: String::new(),
+                super_class: None,
+                fields: Vec::new(),
+                methods: vec![test_function("__InitDefaults")],
+                ctors: Vec::new(),
+                flags: 0,
+            }],
+            enums: Vec::new(),
+            globals: Vec::new(),
+        }];
+
+        let plan = prepare_generated_defaults_edit(
+            "edit",
+            &modules,
+            "QuestModule",
+            &[],
+            "class UQuestFixture { default PriorityRank = 42; }",
+            true,
+        )
+        .expect("complete authored defaults supersede carry before new-symbol remap");
+        assert!(plan.is_none());
+    }
+
+    #[test]
+    fn preprocessor_defaults_cannot_supersede_generated_default_carry() {
+        let modules = vec![Module {
+            name: "QuestModule".into(),
+            file: "QuestModule.as".into(),
+            functions: Vec::new(),
+            classes: vec![Class {
+                name: "UQuestFixture".into(),
+                namespace: String::new(),
+                super_class: None,
+                fields: Vec::new(),
+                methods: vec![test_function("__InitDefaults")],
+                ctors: Vec::new(),
+                flags: 0,
+            }],
+            enums: Vec::new(),
+            globals: Vec::new(),
+        }];
+
+        let ordinary = prepare_generated_defaults_edit(
+            "edit",
+            &modules,
+            "QuestModule",
+            &[],
+            "class UQuestFixture { default PriorityRank = 42; }",
+            true,
+        )
+        .expect("ordinary authored defaults remain accepted");
+        assert!(ordinary.is_none());
+
+        for overlay in [
+            "class UQuestFixture { #if WITH_DEFAULT default PriorityRank = 42; #endif }",
+            "class UQuestFixture { #if KEEP_DEFAULT default PriorityRank = 1; #else default PriorityRank = 42; #endif }",
+        ] {
+            let error = prepare_generated_defaults_edit(
+                "edit",
+                &modules,
+                "QuestModule",
+                &[],
+                overlay,
+                true,
+            )
+            .expect_err("preprocessed defaults cannot supersede carried generated methods")
+            .to_string();
+            assert!(error.contains("preprocessor directive `#if`"), "{error}");
+            assert!(
+                error.contains("before compiler preprocessing"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn edit_preflight_rejects_partial_defaults_and_other_generated_methods_with_new_symbols() {
+        let class = |name: &str, methods: Vec<Func>| Class {
+            name: name.into(),
+            namespace: String::new(),
+            super_class: None,
+            fields: Vec::new(),
+            methods,
+            ctors: Vec::new(),
+            flags: 0,
+        };
+        let module = |classes| {
+            vec![Module {
+                name: "QuestModule".into(),
+                file: "QuestModule.as".into(),
+                functions: Vec::new(),
+                classes,
+                enums: Vec::new(),
+                globals: Vec::new(),
+            }]
+        };
+
+        let partial = module(vec![
+            class("UQuestFixture", vec![test_function("__InitDefaults")]),
+            class("UQuestOther", vec![test_function("__InitDefaults")]),
+        ]);
+        let error = prepare_generated_defaults_edit(
+            "edit",
+            &partial,
+            "QuestModule",
+            &[],
+            "class UQuestFixture { default PriorityRank = 42; }",
+            true,
+        )
+        .expect_err("new-symbol remap must not make partial authored defaults safe")
+        .to_string();
+        assert!(error.contains("does not supersede 1 of them"), "{error}");
+        assert!(error.contains("UQuestOther::__InitDefaults"), "{error}");
+
+        let other_generated = module(vec![class(
+            "UQuestFixture",
+            vec![
+                test_function("__InitDefaults"),
+                test_function("__GeneratedHelper"),
+            ],
+        )]);
+        let error = prepare_generated_defaults_edit(
+            "edit",
+            &other_generated,
+            "QuestModule",
+            &[],
+            "class UQuestFixture { default PriorityRank = 42; }",
+            true,
+        )
+        .expect_err("default statements cannot supersede another generated method")
+        .to_string();
+        assert!(
+            error.contains("UQuestFixture::__GeneratedHelper"),
+            "{error}"
+        );
+        assert!(error.contains("does not supersede 1 of them"), "{error}");
+    }
+
+    #[test]
     fn edit_preflight_never_treats_ambiguous_identities_as_an_empty_inventory() {
         let module = |classes| Module {
             name: "QuestModule".into(),
@@ -12892,6 +13426,16 @@ mod tests {
         out
     }
 
+    fn set_empty_module_code_hash(cache: &mut [u8], module_name: &str, code_hash: i64) {
+        let ranges = crate::cache::walk_modules::module_ranges(cache).unwrap();
+        let (_, start, _) = ranges
+            .iter()
+            .find(|(name, _, _)| name == module_name)
+            .expect("empty test module exists");
+        let code_hash_at = *start + (module_name.len() + 5) * 2 + 5 * 4;
+        cache[code_hash_at..code_hash_at + 8].copy_from_slice(&code_hash.to_le_bytes());
+    }
+
     fn push_binds_cstr(output: &mut Vec<u8>, value: &str) {
         output.extend_from_slice(&((value.len() + 1) as u32).to_le_bytes());
         output.extend_from_slice(value.as_bytes());
@@ -12932,6 +13476,9 @@ mod tests {
     struct TestFullGraphRunner {
         output_path: PathBuf,
         output_bytes: Vec<u8>,
+        expected_change_count: usize,
+        expected_delete_count: usize,
+        expected_final_module_count: usize,
         expected_present: Vec<(String, Vec<u8>)>,
         expected_absent: Vec<String>,
         create_raced_destination: Option<(PathBuf, Vec<u8>)>,
@@ -12954,16 +13501,19 @@ mod tests {
             inputs: StandaloneFullGraphCompilerInputsV1<'_>,
         ) -> Result<StandaloneCompilerOutputV1, CompilerBackendFailureV1> {
             self.calls.set(self.calls.get().saturating_add(1));
-            assert_eq!(inputs.changes.len(), 3);
+            assert_eq!(inputs.changes.len(), self.expected_change_count);
             assert_eq!(
                 inputs
                     .changes
                     .iter()
                     .filter(|change| change.operation == FullGraphCompileOperationV1::Delete)
                     .count(),
-                1
+                self.expected_delete_count
             );
-            assert_eq!(inputs.final_manifest.len(), 3);
+            assert_eq!(
+                inputs.final_manifest.len(),
+                self.expected_final_module_count
+            );
             for (path, expected) in &self.expected_present {
                 assert_eq!(
                     std::fs::read(inputs.source_tree.join(path)).unwrap(),
@@ -12996,12 +13546,6 @@ mod tests {
             output_path: root.join("output").join("published.cache"),
             changes: vec![
                 FullGraphCompileChangeV1 {
-                    operation: FullGraphCompileOperationV1::Delete,
-                    module_name: "DeleteMe".to_owned(),
-                    relative_path: "DeleteMe.as".to_owned(),
-                    source: None,
-                },
-                FullGraphCompileChangeV1 {
                     operation: FullGraphCompileOperationV1::Add,
                     module_name: "Added".to_owned(),
                     relative_path: "Added.as".to_owned(),
@@ -13024,6 +13568,10 @@ mod tests {
                     relative_path: "EditMe.as".to_owned(),
                 },
                 FullGraphFinalModuleV1 {
+                    module_name: "DeleteMe".to_owned(),
+                    relative_path: "DeleteMe.as".to_owned(),
+                },
+                FullGraphFinalModuleV1 {
                     module_name: "Added".to_owned(),
                     relative_path: "Added.as".to_owned(),
                 },
@@ -13037,6 +13585,55 @@ mod tests {
         }
     }
 
+    fn complete_qualification_opts(
+        root: &Path,
+        module_count: usize,
+    ) -> (FullGraphCompileOptsV1, Vec<u8>) {
+        let owned = (0..module_count)
+            .map(|index| {
+                (
+                    format!("Qualification.Module{index:03}"),
+                    format!("Qualification/Module{index:03}.as"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let borrowed = owned
+            .iter()
+            .map(|(name, path)| (name.as_str(), path.as_str()))
+            .collect::<Vec<_>>();
+        let base_cache = cache_with_empty_modules(&borrowed);
+        let changes = owned
+            .iter()
+            .map(|(module_name, relative_path)| FullGraphCompileChangeV1 {
+                operation: FullGraphCompileOperationV1::Edit,
+                module_name: module_name.clone(),
+                relative_path: relative_path.clone(),
+                source: Some(b"void Qualified() {}\n".to_vec()),
+            })
+            .collect::<Vec<_>>();
+        let final_manifest = owned
+            .into_iter()
+            .map(|(module_name, relative_path)| FullGraphFinalModuleV1 {
+                module_name,
+                relative_path,
+            })
+            .collect::<Vec<_>>();
+        let mut raw_complete_cache = base_cache.clone();
+        raw_complete_cache[..16].fill(0x6d);
+        (
+            FullGraphCompileOptsV1 {
+                game_dir: root.join("game"),
+                work_dir: root.join("work"),
+                output_path: root.join("output").join("qualified.cache"),
+                changes,
+                final_manifest,
+                base_cache,
+                binds_cache: minimal_binds_cache(),
+            },
+            raw_complete_cache,
+        )
+    }
+
     fn full_graph_test_runner(
         root: &Path,
         output_bytes: Vec<u8>,
@@ -13045,6 +13642,9 @@ mod tests {
         TestFullGraphRunner {
             output_path: root.join("private-runner.cache"),
             output_bytes,
+            expected_change_count: 2,
+            expected_delete_count: 0,
+            expected_final_module_count: 4,
             expected_present: vec![
                 ("Added.as".to_owned(), b"void AddedFn() {}\n".to_vec()),
                 ("EditMe.as".to_owned(), b"void EditedFn() {}\n".to_vec()),
@@ -13056,17 +13656,22 @@ mod tests {
     }
 
     #[test]
-    fn full_graph_retains_validated_add_edit_delete_output_and_canonical_evidence() {
+    fn full_graph_publishes_only_validated_add_edit_changes_on_the_sealed_base() {
         let root = unique_test_root("full-graph-retained");
         std::fs::create_dir_all(root.join("game")).unwrap();
         let opts = full_graph_opts(&root);
-        let expected_output = cache_with_empty_modules(&[
+        let mut expected_output = cache_with_empty_modules(&[
             ("Keep", "Keep.as"),
             ("EditMe", "EditMe.as"),
+            ("DeleteMe", "DeleteMe.as"),
             ("Added", "Added.as"),
         ]);
+        set_empty_module_code_hash(&mut expected_output, "EditMe", 0x1234);
+        let mut raw_full_graph = expected_output.clone();
+        raw_full_graph[..16].fill(0xa5);
+        assert_ne!(raw_full_graph, expected_output);
         let calls = std::rc::Rc::new(std::cell::Cell::new(0));
-        let mut runner = full_graph_test_runner(&root, expected_output.clone(), calls.clone());
+        let mut runner = full_graph_test_runner(&root, raw_full_graph, calls.clone());
         let audit_calls = std::cell::Cell::new(0u8);
         let report = compile_full_graph_standalone_v1(&opts, &mut runner, || {
             audit_calls.set(audit_calls.get().saturating_add(1));
@@ -13097,7 +13702,7 @@ mod tests {
         assert_eq!(artifact.path(), opts.output_path);
         assert_eq!(artifact.byte_len(), expected_output.len() as u64);
         assert_eq!(artifact.sha256(), sha256_digest(&expected_output));
-        assert_eq!(artifact.module_count(), 3);
+        assert_eq!(artifact.module_count(), 4);
         assert_eq!(
             artifact.base_cache_sha256(),
             sha256_digest(&opts.base_cache)
@@ -13110,13 +13715,13 @@ mod tests {
                 .collect::<Vec<_>>(),
             [
                 ("Added", FullGraphSourceDispositionV1::Added),
+                ("DeleteMe", FullGraphSourceDispositionV1::Base),
                 ("EditMe", FullGraphSourceDispositionV1::Edited),
                 ("Keep", FullGraphSourceDispositionV1::Base),
             ]
         );
-        assert_eq!(artifact.changes().len(), 3);
-        assert_eq!(artifact.deleted_modules().len(), 1);
-        assert_eq!(artifact.deleted_modules()[0].module_name, "DeleteMe");
+        assert_eq!(artifact.changes().len(), 2);
+        assert!(artifact.deleted_modules().is_empty());
         artifact.validate_retained_artifact().unwrap();
         let mut cursor_witness = artifact.file.try_clone().unwrap();
         cursor_witness.seek(SeekFrom::Start(7)).unwrap();
@@ -13144,6 +13749,189 @@ mod tests {
         drop(artifact);
         std::fs::remove_file(published).unwrap();
         assert!(!install_mutation_lock_path(&opts.game_dir).exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn full_graph_complete_qualification_retains_raw_graph_without_loosening_selective_limit() {
+        const MODULES: usize = 257;
+        let root = unique_test_root("full-graph-complete-qualification");
+        std::fs::create_dir_all(root.join("game")).unwrap();
+        let (opts, raw_complete_cache) = complete_qualification_opts(&root, MODULES);
+
+        let selective_calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut selective_runner = TestFullGraphRunner {
+            output_path: root.join("selective-private.cache"),
+            output_bytes: raw_complete_cache.clone(),
+            expected_change_count: MODULES,
+            expected_delete_count: 0,
+            expected_final_module_count: MODULES,
+            expected_present: Vec::new(),
+            expected_absent: Vec::new(),
+            create_raced_destination: None,
+            calls: selective_calls.clone(),
+        };
+        let selective = compile_full_graph_standalone_v1(&opts, &mut selective_runner, || Ok(()));
+        let FullGraphCompileOutcomeV1::Failed(ref error) = selective.outcome else {
+            panic!("normal selective publication accepted more than 256 changes")
+        };
+        assert!(
+            error.to_string().contains("change limit exceeded"),
+            "{error}"
+        );
+        assert_eq!(selective_calls.get(), 0);
+        assert_eq!(selective.runner_invocations(), 0);
+        assert!(!selective.standalone_attempted());
+        assert_eq!(selective.backend_name(), None);
+        assert!(!opts.output_path.exists());
+
+        let qualification_calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut qualification_runner = TestFullGraphRunner {
+            output_path: root.join("qualification-private.cache"),
+            output_bytes: raw_complete_cache.clone(),
+            expected_change_count: MODULES,
+            expected_delete_count: 0,
+            expected_final_module_count: MODULES,
+            expected_present: Vec::new(),
+            expected_absent: Vec::new(),
+            create_raced_destination: None,
+            calls: qualification_calls.clone(),
+        };
+        let qualification = compile_full_graph_with_backend_v1_with_guard_and_optional_target(
+            &opts,
+            &crate::diagnostics::DiagnosticsOptions::default(),
+            CompilerBackendModeV1::Standalone,
+            FullGraphResultPolicyV1::CompleteQualification,
+            Some(&mut qualification_runner),
+            None,
+            || Ok(()),
+            None,
+        );
+        assert_eq!(qualification_calls.get(), 1);
+        let FullGraphCompileOutcomeV1::Compiled(artifact) = qualification.outcome else {
+            panic!("complete qualification did not retain its compiler graph")
+        };
+        assert_eq!(artifact.changes().len(), MODULES);
+        assert!(artifact
+            .final_manifest()
+            .iter()
+            .all(|entry| entry.disposition == FullGraphSourceDispositionV1::Edited));
+        assert_eq!(
+            crate::generation_receipt_v2::read_full_graph_compile_output_bytes_v2(&artifact)
+                .unwrap(),
+            raw_complete_cache
+        );
+        let published = artifact.path().to_path_buf();
+        drop(artifact);
+        std::fs::remove_file(published).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn full_graph_complete_qualification_rejects_non_complete_plans_before_runner() {
+        let root = unique_test_root("full-graph-incomplete-qualification");
+        std::fs::create_dir_all(root.join("game")).unwrap();
+        let (mut opts, raw_complete_cache) = complete_qualification_opts(&root, 3);
+        opts.changes.pop();
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut runner = TestFullGraphRunner {
+            output_path: root.join("must-not-run.cache"),
+            output_bytes: raw_complete_cache,
+            expected_change_count: 0,
+            expected_delete_count: 0,
+            expected_final_module_count: 0,
+            expected_present: Vec::new(),
+            expected_absent: Vec::new(),
+            create_raced_destination: None,
+            calls: calls.clone(),
+        };
+        let report = compile_full_graph_with_backend_v1_with_guard_and_optional_target(
+            &opts,
+            &crate::diagnostics::DiagnosticsOptions::default(),
+            CompilerBackendModeV1::Standalone,
+            FullGraphResultPolicyV1::CompleteQualification,
+            Some(&mut runner),
+            None,
+            || Ok(()),
+            None,
+        );
+        let FullGraphCompileOutcomeV1::Failed(ref error) = report.outcome else {
+            panic!("incomplete qualification plan reached the runner")
+        };
+        assert!(error.to_string().contains("exactly one Edit"), "{error}");
+        assert_eq!(calls.get(), 0);
+        assert_eq!(report.runner_invocations(), 0);
+        assert!(!opts.work_dir.exists());
+        assert!(!opts.output_path.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn full_graph_no_change_publication_is_byte_exact_pristine() {
+        let root = unique_test_root("full-graph-no-change");
+        std::fs::create_dir_all(root.join("game")).unwrap();
+        let mut opts = full_graph_opts(&root);
+        opts.changes.clear();
+        opts.final_manifest = base_full_graph_manifest_v1(&opts.base_cache).unwrap();
+        let mut raw_full_graph = opts.base_cache.clone();
+        raw_full_graph[..16].fill(0x5a);
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut runner = TestFullGraphRunner {
+            output_path: root.join("private-runner.cache"),
+            output_bytes: raw_full_graph,
+            expected_change_count: 0,
+            expected_delete_count: 0,
+            expected_final_module_count: 3,
+            expected_present: Vec::new(),
+            expected_absent: vec![
+                "Keep.as".to_owned(),
+                "EditMe.as".to_owned(),
+                "DeleteMe.as".to_owned(),
+            ],
+            create_raced_destination: None,
+            calls: calls.clone(),
+        };
+        let report = compile_full_graph_standalone_v1(&opts, &mut runner, || Ok(()));
+        assert_eq!(calls.get(), 1);
+        let FullGraphCompileOutcomeV1::Compiled(artifact) = report.outcome else {
+            panic!("no-change FullGraph did not retain an artifact")
+        };
+        assert_eq!(
+            crate::generation_receipt_v2::read_full_graph_compile_output_bytes_v2(&artifact)
+                .unwrap(),
+            opts.base_cache
+        );
+        assert!(artifact.changes().is_empty());
+        let published = artifact.path().to_path_buf();
+        drop(artifact);
+        std::fs::remove_file(published).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn full_graph_rejects_a_backend_that_silently_ignores_an_edit() {
+        let root = unique_test_root("full-graph-ignored-edit");
+        std::fs::create_dir_all(root.join("game")).unwrap();
+        let opts = full_graph_opts(&root);
+        let raw_full_graph = cache_with_empty_modules(&[
+            ("Keep", "Keep.as"),
+            ("EditMe", "EditMe.as"),
+            ("DeleteMe", "DeleteMe.as"),
+            ("Added", "Added.as"),
+        ]);
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut runner = full_graph_test_runner(&root, raw_full_graph, calls.clone());
+        let report = compile_full_graph_standalone_v1(&opts, &mut runner, || Ok(()));
+        assert_eq!(calls.get(), 1);
+        let FullGraphCompileOutcomeV1::Failed(ref error) = report.outcome else {
+            panic!("backend-ignored FullGraph edit was published")
+        };
+        assert!(error.to_string().contains("byte-identical"), "{error}");
+        assert_eq!(
+            report.publication_disposition(),
+            FullGraphPublicationDispositionV1::NotPublished
+        );
+        assert!(!opts.output_path.exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -13368,6 +14156,7 @@ mod tests {
             &opts,
             &crate::diagnostics::DiagnosticsOptions::default(),
             CompilerBackendModeV1::Game,
+            FullGraphResultPolicyV1::SelectivePublication,
             None,
             None,
             || {
@@ -13404,6 +14193,7 @@ mod tests {
         let output = cache_with_empty_modules(&[
             ("Keep", "Keep.as"),
             ("EditMe", "EditMe.as"),
+            ("DeleteMe", "DeleteMe.as"),
             ("Added", "Added.as"),
         ]);
         let mut runner = full_graph_test_runner(&root, output, calls.clone());
@@ -13424,52 +14214,41 @@ mod tests {
     }
 
     #[test]
-    fn full_graph_delete_uses_only_explicit_game_fallback_and_keeps_reason() {
-        let root = unique_test_root("full-graph-explicit-game-fallback");
+    fn full_graph_delete_is_rejected_before_any_backend_attempt() {
+        let root = unique_test_root("full-graph-delete-preflight");
         std::fs::create_dir_all(root.join("game")).unwrap();
-        let opts = full_graph_opts(&root);
-        let script = g1r_dir(&opts.game_dir).join("Script");
-        std::fs::create_dir_all(&script).unwrap();
-        std::fs::write(
-            script.join("PrecompiledScript_Shipping.Cache"),
-            &opts.base_cache,
-        )
-        .unwrap();
-        std::fs::write(script.join("Binds.Cache"), &opts.binds_cache).unwrap();
-        let legacy_calls = std::cell::Cell::new(0u8);
-        let mut legacy_standalone = |_inputs: StandaloneCompilerInputsV1<'_>| {
-            legacy_calls.set(legacy_calls.get().saturating_add(1));
+        let mut opts = full_graph_opts(&root);
+        opts.changes.insert(
+            0,
+            FullGraphCompileChangeV1 {
+                operation: FullGraphCompileOperationV1::Delete,
+                module_name: "DeleteMe".to_owned(),
+                relative_path: "DeleteMe.as".to_owned(),
+                source: None,
+            },
+        );
+        opts.final_manifest
+            .retain(|entry| entry.module_name != "DeleteMe");
+        let calls = std::cell::Cell::new(0u8);
+        let mut standalone = |_inputs: StandaloneCompilerInputsV1<'_>| {
+            calls.set(calls.get().saturating_add(1));
             Err(CompilerBackendFailureV1::new(
                 CompilerBackendFailureKindV1::Internal,
-                "legacy runner must not receive a Delete request",
+                "Delete request reached the backend",
             ))
         };
-        let guard = InstallMutationGuard::acquire(&opts.game_dir, "gore-as:compile").unwrap();
-        let report = compile_full_graph_with_backend_v1_with_guard(
-            &opts,
-            &crate::diagnostics::DiagnosticsOptions::default(),
-            CompilerBackendModeV1::StandaloneThenGame,
-            Some(&mut legacy_standalone),
-            guard,
-            || Ok(()),
-        );
+        let report = compile_full_graph_standalone_v1(&opts, &mut standalone, || Ok(()));
         let FullGraphCompileOutcomeV1::Failed(ref error) = report.outcome else {
-            panic!("fake install without a game executable unexpectedly compiled")
+            panic!("FullGraph Delete unexpectedly compiled")
         };
-        assert!(error.to_string().contains("game exe not found"), "{error}");
-        assert_eq!(legacy_calls.get(), 0);
-        assert!(report.standalone_attempted());
-        assert!(report.game_attempted());
-        assert_eq!(report.runner_invocations(), 2);
-        let fallback = report
-            .fallback_reason()
-            .expect("explicit fallback must retain the standalone refusal");
-        assert_eq!(fallback.failed_backend(), CompilerBackendNameV1::Standalone);
-        assert_eq!(
-            fallback.failure_kind(),
-            CompilerBackendFailureKindV1::Unavailable
+        assert!(
+            error.to_string().contains("declaration-tail pruning"),
+            "{error}"
         );
-        assert!(fallback.detail().contains("Delete semantics"));
+        assert_eq!(calls.get(), 0);
+        assert!(!report.standalone_attempted());
+        assert!(!report.game_attempted());
+        assert_eq!(report.runner_invocations(), 0);
         assert!(!install_mutation_lock_path(&opts.game_dir).exists());
         assert!(!opts.output_path.exists());
         std::fs::remove_dir_all(root).unwrap();
@@ -13507,11 +14286,13 @@ mod tests {
         let race_root = unique_test_root("full-graph-no-clobber-race");
         std::fs::create_dir_all(race_root.join("game")).unwrap();
         let raced = full_graph_opts(&race_root);
-        let expected_output = cache_with_empty_modules(&[
+        let mut expected_output = cache_with_empty_modules(&[
             ("Keep", "Keep.as"),
             ("EditMe", "EditMe.as"),
+            ("DeleteMe", "DeleteMe.as"),
             ("Added", "Added.as"),
         ]);
+        set_empty_module_code_hash(&mut expected_output, "EditMe", 0x1234);
         let calls = std::rc::Rc::new(std::cell::Cell::new(0));
         let mut runner = full_graph_test_runner(&race_root, expected_output, calls.clone());
         runner.create_raced_destination =
@@ -13583,6 +14364,8 @@ mod tests {
             base_cache: base_cache.clone(),
             binds_cache: minimal_binds_cache(),
         };
+        let mut rebuilt_cache = base_cache.clone();
+        set_empty_module_code_hash(&mut rebuilt_cache, &owned[0].0, 0x1234);
         let private = root.join("large-private.cache");
         let cleanup = private.clone();
         let calls = std::cell::Cell::new(0u8);
@@ -13590,7 +14373,7 @@ mod tests {
             calls.set(calls.get().saturating_add(1));
             assert_eq!(inputs.overlays.len(), 1);
             assert!(!inputs.source_tree.join("Module07308.as").exists());
-            std::fs::write(&private, &base_cache).unwrap();
+            std::fs::write(&private, &rebuilt_cache).unwrap();
             let cleanup = cleanup.clone();
             Ok(StandaloneCompilerOutputV1::with_cleanup(
                 private.clone(),

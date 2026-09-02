@@ -73,6 +73,11 @@ enum Commands {
         #[command(subcommand)]
         action: cmd::location::LocationAction,
     },
+    /// Read and safely author the game's dialog trees, topics, and complete conversations
+    Dialog {
+        #[command(subcommand)]
+        action: cmd::dialog::DialogAction,
+    },
     /// Search the bundled catalogs and the effect register: class names, ids, and what they do
     Find {
         /// Words to search for; several words all have to match, so no quoting is needed
@@ -504,6 +509,7 @@ fn run_cli() {
         } => cmd::story_catalog::run(exe, cache, binds, out),
         Commands::LocationCatalog { source, out } => cmd::location_catalog::run(source, out),
         Commands::Location { action } => cmd::location::run(action),
+        Commands::Dialog { action } => cmd::dialog::run(action),
         Commands::Find {
             query,
             domain,

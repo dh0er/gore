@@ -44,6 +44,9 @@ const MAX_UE4SS_TREE_ENTRIES: u64 = 250_000;
 const MAX_UE4SS_FILE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_UE4SS_TREE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_GAME_EXECUTABLE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// Leave enough of a portable 255-byte filename component for the longest generated container
+/// decoration: `zzz_gm999_<name>_<hash>_<usize component>_files_1000_P.pak`.
+const MAX_PORTABLE_MOD_NAME_BYTES: usize = 198;
 
 // ── Errors ───────────────────────────────────────────────────────────────────
 #[derive(Debug, thiserror::Error)]
@@ -523,7 +526,7 @@ fn lower_voice_component(
         retained_ogg_bytes = retained_ogg_bytes
             .checked_add(ogg.len() as u64)
             .ok_or_else(|| ModError::Other("voice Ogg memory budget overflow".into()))?;
-        gore_vo::validate_ogg(&ogg, &voice_limits)
+        gore_vo::validate_deployable_ogg(&ogg, &voice_limits)
             .map_err(|e| ModError::Voice(format!("{source_label}: {e}")))?;
         // Formats 1 and 2 are committed compatibility contracts. In particular format 2 carries
         // archive observations exactly as before; payload seals belong exclusively to format 3.
@@ -559,9 +562,9 @@ fn lower_voice_component(
 /// source file paths.
 ///
 /// Every edit is structurally a sealed replacement. Archive/member safety, exact `Present`
-/// observations, per-Ogg limits, the aggregate voice memory budget, and Ogg validity are checked
-/// before a [`Bundle`] is returned. This function only assembles an in-memory bundle; it performs
-/// no deployment or game writes.
+/// observations, per-Ogg limits, the aggregate voice memory budget, and deployable Vorbis validity
+/// are checked before a [`Bundle`] is returned. This function only assembles an in-memory bundle;
+/// it performs no deployment or game writes.
 pub fn build_sealed_voice_bundle(
     meta: ModMeta,
     executable_generation: VoiceExecutableGenerationSeal,
@@ -1033,7 +1036,7 @@ fn validate_sealed_voice_bundle_memory(bundle: &Bundle) -> Result<()> {
         retained_ogg_bytes = retained_ogg_bytes
             .checked_add(ogg.len() as u64)
             .ok_or_else(|| ModError::Other("voice Ogg memory budget overflow".into()))?;
-        gore_vo::validate_ogg(ogg, &voice_limits)
+        gore_vo::validate_deployable_ogg(ogg, &voice_limits)
             .map_err(|e| ModError::Voice(format!("{payload}: {e}")))?;
         require_voice_payload_seal(edit, ogg)?;
     }
@@ -1940,7 +1943,7 @@ pub fn verify_sealed_voice_bundle(dir: &Path) -> Result<()> {
         retained_ogg_bytes = retained_ogg_bytes
             .checked_add(ogg.len() as u64)
             .ok_or_else(|| ModError::Other("voice Ogg memory budget overflow".into()))?;
-        gore_vo::validate_ogg(&ogg, &voice_limits)
+        gore_vo::validate_deployable_ogg(&ogg, &voice_limits)
             .map_err(|e| ModError::Voice(format!("{expected_payload}: {e}")))?;
         require_voice_payload_seal(edit, &ogg)?;
     }
@@ -2130,17 +2133,34 @@ fn sanitize(s: &str) -> String {
         .collect()
 }
 
+/// Validate a mod name against the portable single-component contract used by bundle building.
+///
+/// Besides traversal and separators, this rejects Windows device aliases, alternate data-stream
+/// syntax, trailing dots/spaces, and names too long for GORE's decorated output filenames, so a
+/// name accepted while scaffolding cannot fail later when the bundle is built or published.
+pub fn validate_mod_name(name: &str) -> std::result::Result<(), ModError> {
+    if is_safe_mod_name(name) {
+        Ok(())
+    } else {
+        Err(ModError::Other(format!(
+            "invalid mod name {name:?}: must be one portable path component with no separators, \
+             '..', control characters, Windows device aliases, alternate data streams, or \
+             trailing dots/spaces, and at most {MAX_PORTABLE_MOD_NAME_BYTES} UTF-8 bytes"
+        )))
+    }
+}
+
 /// A safe mod name is a single normal path component: non-empty, no path separators, no `..`,
 /// no control characters — so it can't escape the bundle/UE4SS Mods directory.
 fn is_safe_mod_name(name: &str) -> bool {
-    !name.contains('/')
-        && !name.contains('\\')
-        && gore_vo::validate_archive_entry_path(name, &gore_vo::Limits::default()).is_ok()
+    name.len() <= MAX_PORTABLE_MOD_NAME_BYTES && is_safe_filename(name)
 }
 
 /// A safe single filename: non-empty, no separators, no `..`, no control chars.
 fn is_safe_filename(name: &str) -> bool {
-    is_safe_mod_name(name)
+    !name.contains('/')
+        && !name.contains('\\')
+        && gore_vo::validate_archive_entry_path(name, &gore_vo::Limits::default()).is_ok()
 }
 
 /// A safe relative path inside the bundle: non-empty, not absolute, every component a normal
@@ -2733,7 +2753,7 @@ pub(crate) fn merge_voice_component(
             "voice Ogg payload",
             (voice_limits.max_ogg_bytes as u64).min(remaining),
         )?;
-        gore_vo::validate_ogg(&ogg, &voice_limits)
+        gore_vo::validate_deployable_ogg(&ogg, &voice_limits)
             .map_err(|e| ModError::Voice(format!("{}: {e}", edit.ogg)))?;
         if payload_sealed {
             require_voice_payload_seal(&edit, &ogg)?;
@@ -6207,6 +6227,7 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
     )?;
     let manifest: ModManifest = serde_json::from_slice(&manifest_bytes)?;
     validate_mod_manifest_format(&manifest)?;
+    validate_mod_name(&manifest.mod_meta.name)?;
     // An empty bundle has nothing to apply; deploying it would only retire the active mod.
     if manifest.components.is_empty() {
         return Err(ModError::Other("bundle has no components to deploy".into()));
@@ -12544,9 +12565,12 @@ fn restore_record(
 
         completed_restores += 1;
         if completed_restores == 1
-            && record.recovery_transaction.as_ref().is_some_and(|transaction| {
-                transaction.operation == ManagerMutationOperation::Undeploy
-            })
+            && record
+                .recovery_transaction
+                .as_ref()
+                .is_some_and(|transaction| {
+                    transaction.operation == ManagerMutationOperation::Undeploy
+                })
         {
             manager_crash_test_checkpoint(game_root, "undeploy.after_first_restore_durable");
         }
@@ -14796,8 +14820,7 @@ mod tests {
             plan.loc_skipped
         );
         assert!(
-            plan.loc_skipped[0].contains("itfo_cheese")
-                && plan.loc_skipped[0].contains("english"),
+            plan.loc_skipped[0].contains("itfo_cheese") && plan.loc_skipped[0].contains("english"),
             "the warning names the id and the language: {:?}",
             plan.loc_skipped
         );
@@ -15834,6 +15857,54 @@ mod tests {
         invalid.voice[1].archive = "German.zip".into();
         invalid.voice[1].archive_path = "NPC/LPT².ogg".into();
         assert!(build_bundle(&invalid).is_err());
+    }
+
+    #[test]
+    fn voice_bundle_builders_reject_structurally_valid_opus() {
+        let dir = tempfile::tempdir().unwrap();
+        let opus = include_bytes!("../../gore-vo/testdata/tiny-opus.ogg").to_vec();
+        assert!(matches!(
+            gore_vo::validate_ogg(&opus, &gore_vo::Limits::default())
+                .unwrap()
+                .codec,
+            gore_vo::OggCodec::Opus { .. }
+        ));
+
+        let opus_path = dir.path().join("line.ogg");
+        std::fs::write(&opus_path, &opus).unwrap();
+        let error = build_bundle(&test_voice_replace_spec("OpusVoice", &opus_path, None))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("structurally valid")
+                && error.contains("not qualified")
+                && error.contains("require Vorbis"),
+            "unexpected error: {error}"
+        );
+
+        let observation = VoiceArchiveObservation {
+            archive_size: 1,
+            archive_sha256: "0".repeat(64),
+            member_proof: VoiceMemberProof::Present {
+                uncompressed_size: 1,
+                crc32: 1,
+            },
+        };
+        let error = build_sealed_voice_bundle(
+            test_sealed_voice_meta(),
+            test_voice_generation(),
+            vec![test_sealed_voice_replace(
+                "NPC/Hero/hello.ogg",
+                opus,
+                observation,
+            )],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("not qualified") && error.contains("require Vorbis"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -18414,6 +18485,22 @@ mod tests {
         assert!(!is_safe_rel_path("payload\\file.bin"));
         assert!(is_safe_mod_name("Normal-Mod_1"));
         assert!(is_safe_rel_path("payload/sub/file.bin"));
+        assert!(is_safe_mod_name(&"a".repeat(MAX_PORTABLE_MOD_NAME_BYTES)));
+        assert!(!is_safe_mod_name(
+            &"a".repeat(MAX_PORTABLE_MOD_NAME_BYTES + 1)
+        ));
+        let longest_generated_name = format!(
+            "zzz_gm999_{}_deadbeef_18446744073709551615_files_1000_P.pak",
+            "a".repeat(MAX_PORTABLE_MOD_NAME_BYTES)
+        );
+        assert_eq!(longest_generated_name.len(), 255);
+        let error = validate_mod_name(&"a".repeat(MAX_PORTABLE_MOD_NAME_BYTES + 1)).unwrap_err();
+        assert!(
+            error.to_string().contains(&format!(
+                "at most {MAX_PORTABLE_MOD_NAME_BYTES} UTF-8 bytes"
+            )),
+            "{error}"
+        );
     }
 
     #[test]
@@ -18454,6 +18541,33 @@ mod tests {
         assert!(
             !game.exists(),
             "an unknown format must fail before resolving or writing the game tree"
+        );
+
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_vec(&serde_json::json!({
+                "format": 1,
+                "mod": {
+                    "name": "x".repeat(MAX_PORTABLE_MOD_NAME_BYTES + 1),
+                    "version": "",
+                    "author": ""
+                },
+                "components": []
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let overlong = deploy(&bundle, &game).unwrap_err();
+        assert!(
+            overlong.to_string().contains("invalid mod name")
+                && overlong.to_string().contains(&format!(
+                    "at most {MAX_PORTABLE_MOD_NAME_BYTES} UTF-8 bytes"
+                )),
+            "unexpected error: {overlong}"
+        );
+        assert!(
+            !game.exists(),
+            "an invalid mod name must fail before resolving or writing the game tree"
         );
     }
 

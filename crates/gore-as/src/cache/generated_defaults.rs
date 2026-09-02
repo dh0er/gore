@@ -1,10 +1,12 @@
 //! Fail-closed carry-through for compiler-generated class-default methods.
 //!
-//! The source emitter deliberately omits `__InitDefaults`. Recompiling an emitted vanilla module
-//! therefore removes both that raw function record and its local `Class.MethodTable` slot. This
-//! module restores those pieces, plus every other executable record omitted by the emitter inside
-//! the same module, only when the regenerated/remapped module proves that every surrounding
-//! identity and layout is unchanged. It never decompiles or synthesizes defaults.
+//! The source emitter never writes compiler-generated method bodies. When an edit authors no
+//! class-scope `default` statements at all, recompilation therefore omits `__InitDefaults` and its
+//! local `Class.MethodTable` slot. This fallback restores those pieces, plus every other executable
+//! record omitted by the emitter inside the same module, only when the regenerated/remapped module
+//! proves that every surrounding identity and layout is unchanged. Complete authored defaults
+//! instead regenerate `__InitDefaults` and bypass this carry path. This module never decompiles or
+//! synthesizes defaults.
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -68,6 +70,14 @@ struct ClassRecord {
 }
 
 #[derive(Clone, Debug)]
+struct GlobalRecord {
+    /// Declaration through the Global.HasInitFunction discriminator.  A present initializer body
+    /// is represented separately as a FunctionRecord and is intentionally not structural.
+    declaration: Range<usize>,
+    initializer: Option<FunctionRecord>,
+}
+
+#[derive(Clone, Debug)]
 struct ModuleEntry {
     key: String,
     name: String,
@@ -77,9 +87,17 @@ struct ModuleEntry {
     functions_end: usize,
     classes: Vec<ClassRecord>,
     enums: Range<usize>,
+    enum_entries: Vec<Range<usize>>,
     globals: Range<usize>,
+    global_entries: Vec<GlobalRecord>,
     global_init_functions: Vec<FunctionRecord>,
     imports: Range<usize>,
+    import_entries: Vec<Range<usize>>,
+    imported_modules: Vec<Range<usize>>,
+    statics_class: Range<usize>,
+    declared_events: Vec<Range<usize>>,
+    declared_delegates: Vec<Range<usize>>,
+    post_init_functions: Vec<Range<usize>>,
     /// Everything after CodeHash (imports/statics/events/delegates/file/post-init names).
     post_code_hash: Range<usize>,
 }
@@ -97,6 +115,643 @@ pub(crate) struct GeneratedDefaultsPlan {
     /// any of them; Function.Id is cache-wide in the shipping cache, not module-local.
     outside_function_ids: HashMap<i32, String>,
     generated_count: usize,
+    carry_mode: GeneratedDefaultsCarryMode,
+}
+
+/// Whether a defaults carry can use the historical strict keyspace or must retain the minimal
+/// rows needed by an appended, authored class.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GeneratedDefaultsCarryMode {
+    Strict,
+    HybridNewClass,
+}
+
+/// Shipping reflection metadata belongs to the existing declaration, not to the regenerated
+/// body. The source emitter cannot spell every Unreal/AngelScript trait back into source (most
+/// importantly UFUNCTION override/event flags), so an existing-module edit must restore that
+/// metadata after remap while retaining the compiler's new bytecode and frame layout.
+#[derive(Clone, Debug)]
+pub(crate) struct ExistingFunctionMetadataPlan {
+    module_name: String,
+    base_entry: Vec<u8>,
+    base: ModuleEntry,
+}
+
+/// A fail-closed structural guard for an existing-module edit.
+///
+/// The source emitter deliberately cannot reproduce every Shipping reflection detail.  Function
+/// traits and UFUNCTION descriptors are repaired by [`ExistingFunctionMetadataPlan`], but that
+/// leaves class and property metadata outside its scope.  A selective FullGraph edit may append
+/// whole new classes/functions, yet it must not silently turn an edit of an existing class into a
+/// reflection/layout edit.  This plan therefore proves that every pre-existing class remains the
+/// unchanged ordered prefix of the regenerated module.  It copies nothing from the base: a drift
+/// is an error.  New classes must be appended, which keeps their compiler-authored structure
+/// intact while making an accidental rewrite of an old class unrepresentable.
+#[derive(Clone, Debug)]
+pub(crate) struct ExistingModuleStructurePlan {
+    module_name: String,
+    base_entry: Vec<u8>,
+    base: ModuleEntry,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct FunctionMetadataIdentity {
+    owner: String,
+    category: &'static str,
+    declaration: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+struct FunctionMetadataSite {
+    identity: FunctionMetadataIdentity,
+    function: FunctionRecord,
+}
+
+impl ExistingModuleStructurePlan {
+    pub(crate) fn prepare(base_cache: &[u8], module_name: &str) -> Result<Self, String> {
+        let header = CacheHeader::parse(base_cache)
+            .map_err(|error| format!("parsing module-structure base header: {error}"))?;
+        let ranges = module_ranges(base_cache)
+            .map_err(|error| format!("walking module-structure base modules: {error}"))?;
+        if ranges.len() != header.type_count as usize {
+            return Err(format!(
+                "module-structure base header/walker module count mismatch: {}/{}",
+                header.type_count,
+                ranges.len()
+            ));
+        }
+        let matches = ranges
+            .iter()
+            .filter(|(key, _, _)| key == module_name)
+            .collect::<Vec<_>>();
+        let [(map_key, start, end)] = matches.as_slice() else {
+            return Err(format!(
+                "module-structure preservation requires exactly one base module named \
+                 {module_name:?}, found {}",
+                matches.len()
+            ));
+        };
+        let base_entry = base_cache
+            .get(*start..*end)
+            .ok_or_else(|| "module-structure base module range is out of bounds".to_string())?
+            .to_vec();
+        let base = parse_entry(&base_entry, "module-structure base module")?;
+        if base.key != **map_key || base.name != module_name || base.key != base.name {
+            return Err(format!(
+                "module-structure base identity mismatch: requested {module_name:?}, map \
+                 key/serialized key/name are {:?}/{:?}/{:?}",
+                map_key, base.key, base.name
+            ));
+        }
+        Ok(Self {
+            module_name: module_name.to_string(),
+            base_entry,
+            base,
+        })
+    }
+
+    /// Verify the fully remapped mini.  Call this after generated-default carry and function
+    /// metadata normalization: those qualified repairs may restore a Shipping method table, but
+    /// this plan itself never writes stale base bytes into the regenerated module.
+    pub(crate) fn verify(&self, mini: &[u8]) -> Result<(), String> {
+        let header = CacheHeader::parse(mini)
+            .map_err(|error| format!("parsing module-structure mini header: {error}"))?;
+        if header.type_count != 1 || module_count(mini) != 1 {
+            return Err(format!(
+                "module-structure preservation requires a one-module mini, found {} modules",
+                header.type_count
+            ));
+        }
+        let module_end = module_region_end(mini)
+            .map_err(|error| format!("walking module-structure mini: {error}"))?;
+        let tables = parse_tail_tables(mini, module_end)
+            .map_err(|error| format!("parsing module-structure mini tail: {error}"))?;
+        if tables.end != mini.len() {
+            return Err(format!(
+                "module-structure mini tail ends at {:#x}, file ends at {:#x}",
+                tables.end,
+                mini.len()
+            ));
+        }
+        let regen_bytes = mini
+            .get(CacheHeader::SIZE..module_end)
+            .ok_or_else(|| "module-structure mini module range is invalid".to_string())?;
+        let regen = parse_entry(regen_bytes, "module-structure mini module")?;
+        if regen.key != self.base.key
+            || regen.name != self.base.name
+            || regen.file != self.base.file
+            || regen.name != self.module_name
+        {
+            return Err(format!(
+                "module-structure identity mismatch: base key/name/file {:?}/{:?}/{:?}, \
+                 regenerated {:?}/{:?}/{:?}",
+                self.base.key, self.base.name, self.base.file, regen.key, regen.name, regen.file
+            ));
+        }
+        if regen.classes.len() < self.base.classes.len() {
+            return Err(format!(
+                "module-structure class count shrank in {:?}: base {}, regenerated {}",
+                self.module_name,
+                self.base.classes.len(),
+                regen.classes.len()
+            ));
+        }
+        if regen.functions.len() < self.base.functions.len() {
+            return Err(format!(
+                "module-structure free-function count shrank in {:?}: base {}, regenerated {}",
+                self.module_name,
+                self.base.functions.len(),
+                regen.functions.len()
+            ));
+        }
+
+        // A new complete class/function is legal. The compiler may place compiler-generated
+        // free helpers (notably StaticClass) between Shipping functions, so free functions need
+        // a stable-subsequence proof rather than an artificial append-only rule. Existing
+        // declarations still may neither disappear nor reorder.
+        compare_existing_free_function_subsequence(
+            &self.base_entry,
+            &self.base.functions,
+            regen_bytes,
+            &regen,
+            self.base.classes.len(),
+            "module free functions",
+        )?;
+        compare_structure_record_prefix(
+            &self.base_entry,
+            &self.base.enum_entries,
+            regen_bytes,
+            &regen.enum_entries,
+            "module enums",
+        )?;
+        compare_global_record_prefix(
+            &self.base_entry,
+            &self.base.global_entries,
+            regen_bytes,
+            &regen.global_entries,
+            "module globals",
+        )?;
+        compare_structure_record_prefix(
+            &self.base_entry,
+            &self.base.import_entries,
+            regen_bytes,
+            &regen.import_entries,
+            "module imports",
+        )?;
+        compare_structure_record_prefix(
+            &self.base_entry,
+            &self.base.imported_modules,
+            regen_bytes,
+            &regen.imported_modules,
+            "module imported-modules",
+        )?;
+        compare_structure_range(
+            &self.base_entry,
+            &self.base.statics_class,
+            regen_bytes,
+            &regen.statics_class,
+            "module statics-class",
+        )?;
+        compare_structure_record_prefix(
+            &self.base_entry,
+            &self.base.declared_events,
+            regen_bytes,
+            &regen.declared_events,
+            "module declared-events",
+        )?;
+        compare_structure_record_prefix(
+            &self.base_entry,
+            &self.base.declared_delegates,
+            regen_bytes,
+            &regen.declared_delegates,
+            "module declared-delegates",
+        )?;
+        compare_structure_record_prefix(
+            &self.base_entry,
+            &self.base.post_init_functions,
+            regen_bytes,
+            &regen.post_init_functions,
+            "module post-init-functions",
+        )?;
+        for (index, (base_class, regen_class)) in
+            self.base.classes.iter().zip(&regen.classes).enumerate()
+        {
+            if base_class.name != regen_class.name || base_class.namespace != regen_class.namespace
+            {
+                return Err(format!(
+                    "module-structure class identity/order drift at index {index}: base {}::{}, \
+                     regenerated {}::{}",
+                    base_class.namespace, base_class.name, regen_class.namespace, regen_class.name
+                ));
+            }
+            compare_structure_range(
+                &self.base_entry,
+                &base_class.prefix,
+                regen_bytes,
+                &regen_class.prefix,
+                &format!("class {} flags/properties", base_class.name),
+            )?;
+            compare_function_declarations(
+                &self.base_entry,
+                &base_class.methods,
+                regen_bytes,
+                &regen_class.methods,
+                &format!("class {} methods", base_class.name),
+            )?;
+            compare_structure_range(
+                &self.base_entry,
+                &base_class.method_table,
+                regen_bytes,
+                &regen_class.method_table,
+                &format!("class {} MethodTable", base_class.name),
+            )?;
+            compare_structure_range(
+                &self.base_entry,
+                &base_class.derived_and_shadow,
+                regen_bytes,
+                &regen_class.derived_and_shadow,
+                &format!("class {} DerivedFrom/ShadowType", base_class.name),
+            )?;
+            compare_function_declarations(
+                &self.base_entry,
+                &base_class.constructors,
+                regen_bytes,
+                &regen_class.constructors,
+                &format!("class {} constructors", base_class.name),
+            )?;
+            compare_structure_range(
+                &self.base_entry,
+                &base_class.factory_and_behavior_refs,
+                regen_bytes,
+                &regen_class.factory_and_behavior_refs,
+                &format!("class {} factory/behavior refs", base_class.name),
+            )?;
+            compare_function_declarations(
+                &self.base_entry,
+                &base_class.behaviors,
+                regen_bytes,
+                &regen_class.behaviors,
+                &format!("class {} behavior functions", base_class.name),
+            )?;
+            compare_structure_range(
+                &self.base_entry,
+                &base_class.behavior_types,
+                regen_bytes,
+                &regen_class.behavior_types,
+                &format!("class {} behavior function types", base_class.name),
+            )?;
+            compare_structure_range(
+                &self.base_entry,
+                &base_class.preprocessor_tail,
+                regen_bytes,
+                &regen_class.preprocessor_tail,
+                &format!("class {} preprocessor metadata", base_class.name),
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl ExistingFunctionMetadataPlan {
+    pub(crate) fn prepare(base_cache: &[u8], module_name: &str) -> Result<Self, String> {
+        let header = CacheHeader::parse(base_cache)
+            .map_err(|error| format!("parsing function-metadata base header: {error}"))?;
+        let ranges = module_ranges(base_cache)
+            .map_err(|error| format!("walking function-metadata base modules: {error}"))?;
+        if ranges.len() != header.type_count as usize {
+            return Err(format!(
+                "function-metadata base header/walker module count mismatch: {}/{}",
+                header.type_count,
+                ranges.len()
+            ));
+        }
+        let matches = ranges
+            .iter()
+            .filter(|(key, _, _)| key == module_name)
+            .collect::<Vec<_>>();
+        let [(map_key, start, end)] = matches.as_slice() else {
+            return Err(format!(
+                "function-metadata preservation requires exactly one base module named \
+                 {module_name:?}, found {}",
+                matches.len()
+            ));
+        };
+        let base_entry = base_cache
+            .get(*start..*end)
+            .ok_or_else(|| "function-metadata base module range is out of bounds".to_string())?
+            .to_vec();
+        let base = parse_entry(&base_entry, "function-metadata base module")?;
+        if base.key != **map_key || base.name != module_name || base.key != base.name {
+            return Err(format!(
+                "function-metadata base identity mismatch: requested {module_name:?}, map \
+                 key/serialized key/name are {:?}/{:?}/{:?}",
+                map_key, base.key, base.name
+            ));
+        }
+        function_metadata_sites(&base_entry, &base, "base")?;
+        Ok(Self {
+            module_name: module_name.to_string(),
+            base_entry,
+            base,
+        })
+    }
+
+    pub(crate) fn apply(&self, remapped_mini: &[u8]) -> Result<Vec<u8>, String> {
+        self.apply_inner(remapped_mini, true)
+    }
+
+    /// Normalize the Shipping metadata of every existing declaration already present in a
+    /// regenerated mini. Missing base declarations are tolerated only for the intermediate
+    /// generated-default carry step, which restores compiler-omitted records before [`apply`]
+    /// performs the complete fail-closed check.
+    pub(crate) fn apply_present(&self, remapped_mini: &[u8]) -> Result<Vec<u8>, String> {
+        self.apply_inner(remapped_mini, false)
+    }
+
+    fn apply_inner(
+        &self,
+        remapped_mini: &[u8],
+        require_all_existing: bool,
+    ) -> Result<Vec<u8>, String> {
+        let header = CacheHeader::parse(remapped_mini)
+            .map_err(|error| format!("parsing remapped function-metadata mini: {error}"))?;
+        if header.type_count != 1 || module_count(remapped_mini) != 1 {
+            return Err(format!(
+                "function-metadata preservation requires a one-module mini, found {} modules",
+                header.type_count
+            ));
+        }
+        let module_end = module_region_end(remapped_mini)
+            .map_err(|error| format!("walking remapped function-metadata mini: {error}"))?;
+        let tables = parse_tail_tables(remapped_mini, module_end)
+            .map_err(|error| format!("parsing remapped function-metadata tail: {error}"))?;
+        if tables.end != remapped_mini.len() {
+            return Err(format!(
+                "remapped function-metadata mini tail ends at {:#x}, file ends at {:#x}",
+                tables.end,
+                remapped_mini.len()
+            ));
+        }
+        let regen_bytes = remapped_mini
+            .get(CacheHeader::SIZE..module_end)
+            .ok_or_else(|| "remapped function-metadata module range is invalid".to_string())?;
+        let regen = parse_entry(regen_bytes, "remapped function-metadata module")?;
+        if regen.key != self.base.key
+            || regen.name != self.base.name
+            || regen.file != self.base.file
+            || regen.name != self.module_name
+        {
+            return Err(format!(
+                "function-metadata module identity mismatch: base key/name/file \
+                 {:?}/{:?}/{:?}, regenerated {:?}/{:?}/{:?}",
+                self.base.key, self.base.name, self.base.file, regen.key, regen.name, regen.file
+            ));
+        }
+
+        let base_sites = function_metadata_sites(&self.base_entry, &self.base, "base")?;
+        let regen_sites = function_metadata_sites(regen_bytes, &regen, "regenerated")?;
+        let base_by_identity = base_sites
+            .iter()
+            .map(|site| (&site.identity, site))
+            .collect::<HashMap<_, _>>();
+        let regen_by_identity = regen_sites
+            .iter()
+            .map(|site| (&site.identity, site))
+            .collect::<HashMap<_, _>>();
+        if require_all_existing {
+            for base in &base_sites {
+                if !regen_by_identity.contains_key(&base.identity) {
+                    return Err(format!(
+                        "regenerated module is missing existing {} identity in {}",
+                        base.identity.category, base.identity.owner
+                    ));
+                }
+            }
+        }
+
+        let mut replacements = Vec::<(Range<usize>, Vec<u8>)>::new();
+        for regenerated in &regen_sites {
+            let Some(base) = base_by_identity.get(&regenerated.identity) else {
+                // A declaration absent from Shipping is genuinely new (including methods of a
+                // new class). Its compiler-authored traits and UFUNCTION tail remain untouched.
+                continue;
+            };
+            let mut replacement = Vec::new();
+            replacement.extend_from_slice(range_bytes(
+                regen_bytes,
+                regenerated.function.raw.start..regenerated.function.signature.end - 4,
+                "regenerated function declaration",
+            )?);
+            replacement.extend_from_slice(range_bytes(
+                &self.base_entry,
+                base.function.signature.end - 4..base.function.signature.end,
+                "base FunctionTraits",
+            )?);
+            replacement.extend_from_slice(range_bytes(
+                regen_bytes,
+                regenerated.function.signature.end..regenerated.function.ufunction_tail.start,
+                "regenerated function body/frame",
+            )?);
+            replacement.extend_from_slice(range_bytes(
+                &self.base_entry,
+                base.function.ufunction_tail.clone(),
+                "base UFUNCTION tail",
+            )?);
+            replacements.push((regenerated.function.raw.clone(), replacement));
+        }
+        replacements.sort_by_key(|(range, _)| range.start);
+        for pair in replacements.windows(2) {
+            if pair[0].0.end > pair[1].0.start {
+                return Err("function-metadata replacement ranges overlap".into());
+            }
+        }
+
+        let mut rebuilt = Vec::with_capacity(regen_bytes.len());
+        let mut cursor = 0usize;
+        for (range, replacement) in &replacements {
+            rebuilt.extend_from_slice(range_bytes(
+                regen_bytes,
+                cursor..range.start,
+                "function-metadata rebuild prefix",
+            )?);
+            rebuilt.extend_from_slice(replacement);
+            cursor = range.end;
+        }
+        rebuilt.extend_from_slice(range_bytes(
+            regen_bytes,
+            cursor..regen_bytes.len(),
+            "function-metadata rebuild suffix",
+        )?);
+
+        let mut out = Vec::with_capacity(
+            CacheHeader::SIZE + rebuilt.len() + remapped_mini.len() - module_end,
+        );
+        out.extend_from_slice(&remapped_mini[..CacheHeader::SIZE]);
+        out.extend_from_slice(&rebuilt);
+        out.extend_from_slice(&remapped_mini[module_end..]);
+        self.verify(regen_bytes, &regen_sites, &out, require_all_existing)?;
+        Ok(out)
+    }
+
+    fn verify(
+        &self,
+        regen_bytes: &[u8],
+        regen_sites: &[FunctionMetadataSite],
+        output: &[u8],
+        require_all_existing: bool,
+    ) -> Result<(), String> {
+        let output_end = module_region_end(output)
+            .map_err(|error| format!("walking function-metadata output: {error}"))?;
+        let output_header = CacheHeader::parse(output)
+            .map_err(|error| format!("parsing function-metadata output header: {error}"))?;
+        if output_header.type_count != 1 || module_count(output) != 1 {
+            return Err("function-metadata output is not a one-module mini".into());
+        }
+        let output_tables = parse_tail_tables(output, output_end)
+            .map_err(|error| format!("parsing function-metadata output tail: {error}"))?;
+        if output_tables.end != output.len() {
+            return Err(format!(
+                "function-metadata output tail ends at {:#x}, file ends at {:#x}",
+                output_tables.end,
+                output.len()
+            ));
+        }
+        let output_bytes = output
+            .get(CacheHeader::SIZE..output_end)
+            .ok_or_else(|| "function-metadata output module range is invalid".to_string())?;
+        let output_entry = parse_entry(output_bytes, "function-metadata output")?;
+        let output_sites = function_metadata_sites(output_bytes, &output_entry, "output")?;
+        let output_by_identity = output_sites
+            .iter()
+            .map(|site| (&site.identity, site))
+            .collect::<HashMap<_, _>>();
+        let base_sites =
+            function_metadata_sites(&self.base_entry, &self.base, "base verification")?;
+        let base_by_identity = base_sites
+            .iter()
+            .map(|site| (&site.identity, site))
+            .collect::<HashMap<_, _>>();
+        if require_all_existing {
+            for base in &base_sites {
+                if !output_by_identity.contains_key(&base.identity) {
+                    return Err(format!(
+                        "function-metadata output is missing existing {} identity in {}",
+                        base.identity.category, base.identity.owner
+                    ));
+                }
+            }
+        }
+
+        for regenerated in regen_sites {
+            let output = output_by_identity
+                .get(&regenerated.identity)
+                .ok_or_else(|| {
+                    format!(
+                        "function-metadata output lost {} {}",
+                        regenerated.identity.category, regenerated.identity.owner
+                    )
+                })?;
+            if let Some(base) = base_by_identity.get(&regenerated.identity) {
+                compare_range(
+                    &self.base_entry,
+                    &(base.function.signature.end - 4..base.function.signature.end),
+                    output_bytes,
+                    &(output.function.signature.end - 4..output.function.signature.end),
+                    "preserved FunctionTraits",
+                )?;
+                compare_range(
+                    &self.base_entry,
+                    &base.function.ufunction_tail,
+                    output_bytes,
+                    &output.function.ufunction_tail,
+                    "preserved UFUNCTION tail",
+                )?;
+                compare_range(
+                    regen_bytes,
+                    &(regenerated.function.signature.end
+                        ..regenerated.function.ufunction_tail.start),
+                    output_bytes,
+                    &(output.function.signature.end..output.function.ufunction_tail.start),
+                    "regenerated function body/frame",
+                )?;
+            } else {
+                compare_range(
+                    regen_bytes,
+                    &regenerated.function.raw,
+                    output_bytes,
+                    &output.function.raw,
+                    "new function record",
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn function_metadata_sites(
+    bytes: &[u8],
+    entry: &ModuleEntry,
+    context: &str,
+) -> Result<Vec<FunctionMetadataSite>, String> {
+    let mut sites = Vec::new();
+    let mut class_identities = HashSet::new();
+    for class in &entry.classes {
+        if !class_identities.insert((class.namespace.as_str(), class.name.as_str())) {
+            return Err(format!(
+                "function-metadata {context} contains duplicate class identity {}::{}",
+                class.namespace, class.name
+            ));
+        }
+    }
+    let mut add = |owner: String,
+                   category: &'static str,
+                   function: &FunctionRecord|
+     -> Result<(), String> {
+        sites.push(FunctionMetadataSite {
+            identity: FunctionMetadataIdentity {
+                owner,
+                category,
+                declaration: range_bytes(bytes, function.declaration.clone(), "function identity")?
+                    .to_vec(),
+            },
+            function: function.clone(),
+        });
+        Ok(())
+    };
+    for function in &entry.functions {
+        add(entry.name.clone(), "free function", function)?;
+    }
+    for class in &entry.classes {
+        let owner = format!("{}::{}", class.namespace, class.name);
+        for function in &class.methods {
+            add(owner.clone(), "method", function)?;
+        }
+        for function in &class.constructors {
+            add(owner.clone(), "constructor", function)?;
+        }
+        for function in &class.behaviors {
+            add(owner.clone(), "behavior", function)?;
+        }
+    }
+    for function in &entry.global_init_functions {
+        add(entry.name.clone(), "global initializer", function)?;
+    }
+    let mut identities = HashSet::new();
+    for site in &sites {
+        if !identities.insert(site.identity.clone()) {
+            return Err(format!(
+                "function-metadata {context} contains ambiguous duplicate {} identity in {}",
+                site.identity.category, site.identity.owner
+            ));
+        }
+    }
+    Ok(sites)
+}
+
+fn range_bytes<'a>(bytes: &'a [u8], range: Range<usize>, what: &str) -> Result<&'a [u8], String> {
+    bytes
+        .get(range)
+        .ok_or_else(|| format!("function-metadata {what} range is invalid"))
 }
 
 impl GeneratedDefaultsPlan {
@@ -290,17 +945,57 @@ impl GeneratedDefaultsPlan {
             generated_free_indices,
             outside_function_ids,
             generated_count,
+            carry_mode: GeneratedDefaultsCarryMode::Strict,
         }))
+    }
+
+    /// Prepare a carry for a source overlay that adds defaults only for appended classes.
+    /// Existing base classes remain byte-exact carries; their authored defaults would make that
+    /// carry stale and are therefore a hard error rather than an implicit mixed policy.
+    pub(crate) fn prepare_hybrid(
+        base_cache: &[u8],
+        modules: &[model::Module],
+        module_name: &str,
+        authored_defaults: &HashSet<String>,
+    ) -> Result<Option<Self>, String> {
+        let mut plan = match Self::prepare(base_cache, modules, module_name)? {
+            Some(plan) => plan,
+            None => return Ok(None),
+        };
+        if let Some(class) = plan
+            .base
+            .classes
+            .iter()
+            .find(|class| authored_defaults.contains(&class.name))
+        {
+            return Err(format!(
+                "hybrid default carry refuses authored defaults for existing base class {}::{}",
+                module_name, class.name
+            ));
+        }
+        plan.carry_mode = GeneratedDefaultsCarryMode::HybridNewClass;
+        Ok(Some(plan))
     }
 
     pub(crate) fn generated_count(&self) -> usize {
         self.generated_count
     }
 
+    pub(crate) fn allows_new_symbols(&self) -> bool {
+        self.carry_mode == GeneratedDefaultsCarryMode::HybridNewClass
+    }
+
     /// Carry base generated records into a one-module mini after strict remap. Every declaration,
     /// class-layout, and metadata gate is checked before output construction; post-parse then
     /// proves exact generated/non-generated record provenance and MethodTable preservation.
     pub(crate) fn apply(&self, remapped_mini: &[u8]) -> Result<Vec<u8>, String> {
+        match self.carry_mode {
+            GeneratedDefaultsCarryMode::Strict => self.apply_strict(remapped_mini),
+            GeneratedDefaultsCarryMode::HybridNewClass => self.apply_hybrid(remapped_mini),
+        }
+    }
+
+    fn apply_strict(&self, remapped_mini: &[u8]) -> Result<Vec<u8>, String> {
         let mini_header = CacheHeader::parse(remapped_mini)
             .map_err(|error| format!("parsing remapped defaults mini header: {error}"))?;
         if mini_header.type_count != 1 || module_count(remapped_mini) != 1 {
@@ -470,6 +1165,397 @@ impl GeneratedDefaultsPlan {
         Ok(out)
     }
 
+    /// Carry only the omitted generated records of pre-existing classes.  Appended classes and
+    /// their generated `__InitDefaults` remain exactly as the compiler produced them, as do the
+    /// minimal new-symbol rows in the mini tail.
+    fn apply_hybrid(&self, remapped_mini: &[u8]) -> Result<Vec<u8>, String> {
+        let mini_header = CacheHeader::parse(remapped_mini)
+            .map_err(|error| format!("parsing hybrid defaults mini header: {error}"))?;
+        if mini_header.type_count != 1 || module_count(remapped_mini) != 1 {
+            return Err(format!(
+                "hybrid generated-default carry requires a one-module mini, found {} modules",
+                mini_header.type_count
+            ));
+        }
+        let module_end = module_region_end(remapped_mini)
+            .map_err(|error| format!("walking hybrid defaults mini: {error}"))?;
+        let tables = parse_tail_tables(remapped_mini, module_end)
+            .map_err(|error| format!("parsing hybrid defaults mini tail: {error}"))?;
+        if tables.end != remapped_mini.len() {
+            return Err(format!(
+                "hybrid defaults mini tail ends at {:#x}, file ends at {:#x}",
+                tables.end,
+                remapped_mini.len()
+            ));
+        }
+        let regen_entry_bytes = remapped_mini
+            .get(CacheHeader::SIZE..module_end)
+            .ok_or_else(|| "hybrid defaults module range is out of bounds".to_string())?;
+        let regen = parse_entry(regen_entry_bytes, "hybrid-remapped module")?;
+        let free_matches = self.validate_hybrid_regenerated(regen_entry_bytes, &regen)?;
+
+        let generated_method_bytes = self
+            .base
+            .classes
+            .iter()
+            .flat_map(|class| class.methods.iter())
+            .filter(|method| method.name.starts_with("__"))
+            .try_fold(0usize, |total, method| total.checked_add(method.raw.len()))
+            .ok_or_else(|| "hybrid defaults generated-method size overflow".to_string())?;
+        let behavior_bytes = self
+            .base
+            .classes
+            .iter()
+            .try_fold(0usize, |total, class| {
+                total.checked_add(class.behaviors_block.len())
+            })
+            .ok_or_else(|| "hybrid defaults behavior size overflow".to_string())?;
+        let rebuild_capacity = regen_entry_bytes
+            .len()
+            .checked_add(generated_method_bytes)
+            .and_then(|value| value.checked_add(behavior_bytes))
+            .ok_or_else(|| "hybrid defaults rebuild capacity overflow".to_string())?;
+        let mut rebuilt_entry = Vec::new();
+        rebuilt_entry
+            .try_reserve_exact(rebuild_capacity)
+            .map_err(|error| {
+                format!("reserving hybrid defaults rebuild ({rebuild_capacity} bytes): {error}")
+            })?;
+
+        let mut cursor = 0usize;
+        if !self.generated_free_indices.is_empty() {
+            rebuilt_entry.extend_from_slice(
+                regen_entry_bytes
+                    .get(..regen.functions_count_pos)
+                    .ok_or_else(|| "hybrid defaults rebuild function prefix is invalid".to_string())?,
+            );
+            let function_count = i32::try_from(regen.functions.len())
+                .map_err(|_| "hybrid defaults regenerated free-function count does not fit i32".to_string())?;
+            rebuilt_entry.extend_from_slice(&function_count.to_le_bytes());
+            let mut base_at_regen = vec![None; regen.functions.len()];
+            for (base_index, &regen_index) in free_matches.iter().enumerate() {
+                let slot = base_at_regen.get_mut(regen_index).ok_or_else(|| {
+                    "hybrid defaults matched free-function index is out of bounds".to_string()
+                })?;
+                if slot.replace(base_index).is_some() {
+                    return Err("hybrid defaults matched one regenerated free function twice".into());
+                }
+            }
+            for (regen_index, regen_function) in regen.functions.iter().enumerate() {
+                let (source, range) = match base_at_regen[regen_index] {
+                    Some(base_index) if self.generated_free_indices.contains(&base_index) => {
+                        (self.base_entry.as_slice(), &self.base.functions[base_index].raw)
+                    }
+                    _ => (regen_entry_bytes, &regen_function.raw),
+                };
+                rebuilt_entry.extend_from_slice(source.get(range.clone()).ok_or_else(|| {
+                    "hybrid defaults rebuild free-function range is invalid".to_string()
+                })?);
+            }
+            cursor = regen.functions_end;
+        }
+        for (base_class, regen_class) in self.base.classes.iter().zip(&regen.classes) {
+            let carries_defaults = base_class
+                .methods
+                .iter()
+                .any(|method| method.name.starts_with("__"));
+            if carries_defaults {
+                rebuilt_entry.extend_from_slice(
+                    regen_entry_bytes
+                        .get(cursor..regen_class.methods_count_pos)
+                        .ok_or_else(|| {
+                            "hybrid defaults rebuild class prefix range is invalid".to_string()
+                        })?,
+                );
+                let method_count = i32::try_from(base_class.methods.len())
+                    .map_err(|_| "hybrid defaults base method count does not fit i32".to_string())?;
+                rebuilt_entry.extend_from_slice(&method_count.to_le_bytes());
+                let mut regen_non_generated = regen_class.methods.iter();
+                for base_method in &base_class.methods {
+                    let (source, range) = if base_method.name.starts_with("__") {
+                        (self.base_entry.as_slice(), &base_method.raw)
+                    } else {
+                        let regen_method = regen_non_generated.next().ok_or_else(|| {
+                            "hybrid defaults rebuild ran out of regenerated non-generated methods"
+                                .to_string()
+                        })?;
+                        (regen_entry_bytes, &regen_method.raw)
+                    };
+                    rebuilt_entry.extend_from_slice(source.get(range.clone()).ok_or_else(|| {
+                        "hybrid defaults rebuild method range is invalid".to_string()
+                    })?);
+                }
+                if regen_non_generated.next().is_some() {
+                    return Err(
+                        "hybrid defaults rebuild left unconsumed regenerated non-generated methods"
+                            .into(),
+                    );
+                }
+                rebuilt_entry.extend_from_slice(
+                    self.base_entry
+                        .get(base_class.method_table.clone())
+                        .ok_or_else(|| {
+                            "hybrid defaults base MethodTable range is invalid".to_string()
+                        })?,
+                );
+                cursor = regen_class.method_table.end;
+            }
+            if !base_class.behaviors.is_empty() {
+                rebuilt_entry.extend_from_slice(
+                    regen_entry_bytes
+                        .get(cursor..regen_class.behaviors_block.start)
+                        .ok_or_else(|| {
+                            "hybrid defaults rebuild behavior prefix is invalid".to_string()
+                        })?,
+                );
+                rebuilt_entry.extend_from_slice(
+                    self.base_entry
+                        .get(base_class.behaviors_block.clone())
+                        .ok_or_else(|| {
+                            "hybrid defaults base behavior block range is invalid".to_string()
+                        })?,
+                );
+                cursor = regen_class.behaviors_block.end;
+            }
+        }
+        rebuilt_entry.extend_from_slice(
+            regen_entry_bytes
+                .get(cursor..)
+                .ok_or_else(|| "hybrid defaults rebuild final module range is invalid".to_string())?,
+        );
+
+        let mut out = Vec::with_capacity(
+            CacheHeader::SIZE + rebuilt_entry.len() + (remapped_mini.len() - module_end),
+        );
+        out.extend_from_slice(&remapped_mini[..CacheHeader::SIZE]);
+        out.extend_from_slice(&rebuilt_entry);
+        out.extend_from_slice(&remapped_mini[module_end..]);
+        self.verify_hybrid_output(remapped_mini, regen_entry_bytes, &out, &free_matches)?;
+        Ok(out)
+    }
+
+    fn validate_hybrid_regenerated(
+        &self,
+        regen_bytes: &[u8],
+        regen: &ModuleEntry,
+    ) -> Result<Vec<usize>, String> {
+        if regen.key != self.base.key
+            || regen.name != self.base.name
+            || regen.file != self.base.file
+        {
+            return Err(format!(
+                "hybrid defaults module identity drift: base key/name/file {:?}/{:?}/{:?}, \
+                 regenerated {:?}/{:?}/{:?}",
+                self.base.key, self.base.name, self.base.file, regen.key, regen.name, regen.file
+            ));
+        }
+        if regen.classes.len() < self.base.classes.len() {
+            return Err(format!(
+                "hybrid defaults class count shrank in {:?}: base {}, regenerated {}",
+                self.module_name,
+                self.base.classes.len(),
+                regen.classes.len()
+            ));
+        }
+        validate_unique_function_ids(regen, "hybrid regenerated")?;
+        let free_matches = self.validate_hybrid_module_functions(regen_bytes, regen)?;
+        let mut class_names = HashSet::new();
+        for class in &regen.classes {
+            if !class_names.insert((class.namespace.as_str(), class.name.as_str())) {
+                return Err(format!(
+                    "hybrid regenerated module contains duplicate class {}::{}",
+                    class.namespace, class.name
+                ));
+            }
+        }
+        for (base_class, regen_class) in self.base.classes.iter().zip(&regen.classes) {
+            if base_class.name != regen_class.name || base_class.namespace != regen_class.namespace
+            {
+                return Err(format!(
+                    "hybrid defaults class identity/order drift: base {}::{}, regenerated {}::{}",
+                    base_class.namespace, base_class.name, regen_class.namespace, regen_class.name
+                ));
+            }
+            if let Some(method) = regen_class
+                .methods
+                .iter()
+                .find(|method| method.name.starts_with("__"))
+            {
+                return Err(format!(
+                    "hybrid defaults refuses existing class {} authored/generated {}",
+                    regen_class.name, method.name
+                ));
+            }
+            let base_non_generated = base_class
+                .methods
+                .iter()
+                .filter(|method| !method.name.starts_with("__"))
+                .collect::<Vec<_>>();
+            if base_non_generated.len() != regen_class.methods.len() {
+                return Err(format!(
+                    "hybrid defaults method count drift in {}: base has {} non-generated, regenerated has {}",
+                    base_class.name,
+                    base_non_generated.len(),
+                    regen_class.methods.len()
+                ));
+            }
+            for (index, (base_method, regen_method)) in base_non_generated
+                .iter()
+                .zip(&regen_class.methods)
+                .enumerate()
+            {
+                compare_function(
+                    &self.base_entry,
+                    base_method,
+                    regen_bytes,
+                    regen_method,
+                    &format!("hybrid {} method {index}", base_class.name),
+                )?;
+            }
+            validate_method_table(regen_class, "hybrid regenerated")?;
+        }
+        Ok(free_matches)
+    }
+
+    fn verify_hybrid_output(
+        &self,
+        original_mini: &[u8],
+        regen_entry_bytes: &[u8],
+        output: &[u8],
+        free_matches: &[usize],
+    ) -> Result<(), String> {
+        if module_count(output) != 1 {
+            return Err("hybrid defaults postcondition changed module count".into());
+        }
+        let output_end = module_region_end(output)
+            .map_err(|error| format!("walking hybrid defaults output: {error}"))?;
+        let output_tables = parse_tail_tables(output, output_end)
+            .map_err(|error| format!("parsing hybrid defaults output tail: {error}"))?;
+        if output_tables.end != output.len() {
+            return Err("hybrid defaults output tail does not end at EOF".into());
+        }
+        let original_end = module_region_end(original_mini)
+            .map_err(|error| format!("re-walking original hybrid mini: {error}"))?;
+        if output[output_end..] != original_mini[original_end..] {
+            return Err("hybrid defaults carry changed new-symbol tail bytes".into());
+        }
+        let output_entry_bytes = output
+            .get(CacheHeader::SIZE..output_end)
+            .ok_or_else(|| "hybrid defaults output module range is invalid".to_string())?;
+        let carried = parse_entry(output_entry_bytes, "hybrid carried output")?;
+        let regen = parse_entry(regen_entry_bytes, "hybrid postcondition regen")?;
+        validate_unique_function_ids(&carried, "hybrid carried output")?;
+        validate_function_ids_against_outside(
+            &carried,
+            &self.outside_function_ids,
+            "hybrid carried output",
+        )?;
+        if carried.functions.len() != regen.functions.len()
+            || carried.classes.len() != regen.classes.len()
+            || carried.classes.len() < self.base.classes.len()
+        {
+            return Err("hybrid defaults carried record counts are inconsistent".into());
+        }
+        if free_matches.len() != self.base.functions.len() {
+            return Err("hybrid defaults postcondition has incomplete base free-function mapping".into());
+        }
+        let mut base_at_regen = vec![None; regen.functions.len()];
+        for (base_index, &regen_index) in free_matches.iter().enumerate() {
+            let slot = base_at_regen.get_mut(regen_index).ok_or_else(|| {
+                "hybrid defaults postcondition free-function mapping is out of bounds".to_string()
+            })?;
+            if slot.replace(base_index).is_some() {
+                return Err("hybrid defaults postcondition mapped one regenerated free function twice".into());
+            }
+        }
+        for (regen_index, (regen_function, out_function)) in regen
+            .functions
+            .iter()
+            .zip(&carried.functions)
+            .enumerate()
+        {
+            let (expected_bytes, expected_range) = match base_at_regen[regen_index] {
+                Some(base_index) if self.generated_free_indices.contains(&base_index) => {
+                    (self.base_entry.as_slice(), &self.base.functions[base_index].raw)
+                }
+                _ => (regen_entry_bytes, &regen_function.raw),
+            };
+            compare_range(
+                expected_bytes,
+                expected_range,
+                output_entry_bytes,
+                &out_function.raw,
+                "hybrid free function",
+            )?;
+        }
+        for ((base_class, regen_class), out_class) in self
+            .base
+            .classes
+            .iter()
+            .zip(&regen.classes)
+            .zip(&carried.classes)
+        {
+            if base_class.name != out_class.name || base_class.namespace != out_class.namespace {
+                return Err("hybrid defaults carried existing class identity changed".into());
+            }
+            if base_class.methods.len() != out_class.methods.len() {
+                return Err(format!(
+                    "hybrid defaults carried method count mismatch in {}",
+                    base_class.name
+                ));
+            }
+            let mut regen_methods = regen_class.methods.iter();
+            for (base_method, out_method) in base_class.methods.iter().zip(&out_class.methods) {
+                let (expected_bytes, expected_range) = if base_method.name.starts_with("__") {
+                    (self.base_entry.as_slice(), &base_method.raw)
+                } else {
+                    let regen_method = regen_methods.next().ok_or_else(|| {
+                        "hybrid defaults postcondition exhausted regenerated methods".to_string()
+                    })?;
+                    (regen_entry_bytes, &regen_method.raw)
+                };
+                compare_range(
+                    expected_bytes,
+                    expected_range,
+                    output_entry_bytes,
+                    &out_method.raw,
+                    &format!("hybrid {}::{}", base_class.name, base_method.name),
+                )?;
+            }
+            if regen_methods.next().is_some() {
+                return Err("hybrid defaults postcondition left regenerated methods".into());
+            }
+            let expected_table = self
+                .base_entry
+                .get(base_class.method_table.clone())
+                .ok_or_else(|| "hybrid defaults expected MethodTable range is invalid".to_string())?;
+            let actual_table = output_entry_bytes
+                .get(out_class.method_table.clone())
+                .ok_or_else(|| "hybrid defaults output MethodTable range is invalid".to_string())?;
+            if expected_table != actual_table {
+                return Err(format!(
+                    "hybrid defaults postcondition changed {} MethodTable",
+                    base_class.name
+                ));
+            }
+        }
+        for (regen_class, out_class) in regen
+            .classes
+            .iter()
+            .skip(self.base.classes.len())
+            .zip(carried.classes.iter().skip(self.base.classes.len()))
+        {
+            compare_range(
+                regen_entry_bytes,
+                &(regen_class.prefix.start..regen_class.preprocessor_tail.end),
+                output_entry_bytes,
+                &(out_class.prefix.start..out_class.preprocessor_tail.end),
+                "hybrid appended class",
+            )?;
+        }
+        Ok(())
+    }
+
     fn compare_module_functions(
         &self,
         regen_bytes: &[u8],
@@ -495,45 +1581,95 @@ impl GeneratedDefaultsPlan {
                 )?;
                 continue;
             }
-            if base.name != regenerated.name || base.namespace != regenerated.namespace {
-                return Err(format!(
-                    "generated-default compiler wrapper identity drift at module function \
-                     {index}: {}::{}/{}::{}",
-                    base.namespace, base.name, regenerated.namespace, regenerated.name
-                ));
-            }
-            compare_range(
-                &self.base_entry,
-                &base.declaration,
-                regen_bytes,
-                &regenerated.declaration,
-                &format!("module compiler wrapper {index} declaration"),
-            )?;
-            compare_range(
-                &self.base_entry,
-                &base.ufunction_tail,
-                regen_bytes,
-                &regenerated.ufunction_tail,
-                &format!("module compiler wrapper {index} UFUNCTION metadata"),
-            )?;
-            // The qualified hotfix compiler adds trait bit 0 to class-name factory wrappers while
-            // the shipped record has FINAL (32) alone. This exact 32 -> 33 transition is the only
-            // accepted wrapper drift; output restores the base wrapper byte-exact.
-            let class_factory = self
-                .base
-                .classes
-                .iter()
-                .any(|class| class.name == base.name);
-            if base.traits != regenerated.traits
-                && !(class_factory && base.traits == 32 && regenerated.traits == 33)
-            {
-                return Err(format!(
-                    "generated-default compiler wrapper {} traits drift: base {}, regenerated {}",
-                    base.name, base.traits, regenerated.traits
-                ));
-            }
+            self.compare_generated_free_function(regen_bytes, base, regenerated, index)?;
         }
         Ok(())
+    }
+
+    /// The source emitter omits a handful of compiler-generated free wrappers.  Their bodies are
+    /// carried byte-exact, but only after their declaration and shipping metadata prove that this
+    /// is the same wrapper.  The narrow 32 -> 33 factory trait transition is observed compiler
+    /// behavior; every other drift is rejected before the carry.
+    fn compare_generated_free_function(
+        &self,
+        regen_bytes: &[u8],
+        base: &FunctionRecord,
+        regenerated: &FunctionRecord,
+        base_index: usize,
+    ) -> Result<(), String> {
+        if base.name != regenerated.name || base.namespace != regenerated.namespace {
+            return Err(format!(
+                "generated-default compiler wrapper identity drift at module function \
+                 {base_index}: {}::{}/{}::{}",
+                base.namespace, base.name, regenerated.namespace, regenerated.name
+            ));
+        }
+        compare_range(
+            &self.base_entry,
+            &base.declaration,
+            regen_bytes,
+            &regenerated.declaration,
+            &format!("module compiler wrapper {base_index} declaration"),
+        )?;
+        compare_range(
+            &self.base_entry,
+            &base.ufunction_tail,
+            regen_bytes,
+            &regenerated.ufunction_tail,
+            &format!("module compiler wrapper {base_index} UFUNCTION metadata"),
+        )?;
+        let class_factory = self
+            .base
+            .classes
+            .iter()
+            .any(|class| class.name == base.name);
+        if base.traits != regenerated.traits
+            && !(class_factory && base.traits == 32 && regenerated.traits == 33)
+        {
+            return Err(format!(
+                "generated-default compiler wrapper {} traits drift: base {}, regenerated {}",
+                base.name, base.traits, regenerated.traits
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_hybrid_module_functions(
+        &self,
+        regen_bytes: &[u8],
+        regen: &ModuleEntry,
+    ) -> Result<Vec<usize>, String> {
+        let matches = existing_free_function_subsequence_indices(
+            &self.base_entry,
+            &self.base.functions,
+            regen_bytes,
+            regen,
+            self.base.classes.len(),
+            "hybrid module free functions",
+        )?;
+        for (base_index, (base, &regen_index)) in self
+            .base
+            .functions
+            .iter()
+            .zip(&matches)
+            .enumerate()
+        {
+            let regenerated = regen.functions.get(regen_index).ok_or_else(|| {
+                "hybrid defaults matched free-function index is out of bounds".to_string()
+            })?;
+            if self.generated_free_indices.contains(&base_index) {
+                self.compare_generated_free_function(regen_bytes, base, regenerated, base_index)?;
+            } else {
+                compare_function(
+                    &self.base_entry,
+                    base,
+                    regen_bytes,
+                    regenerated,
+                    &format!("hybrid module free functions[{base_index}]"),
+                )?;
+            }
+        }
+        Ok(matches)
     }
 
     fn validate_regenerated(&self, regen_bytes: &[u8], regen: &ModuleEntry) -> Result<(), String> {
@@ -1081,6 +2217,248 @@ fn compare_functions(
     Ok(())
 }
 
+fn compare_function_declarations(
+    left_bytes: &[u8],
+    left: &[FunctionRecord],
+    right_bytes: &[u8],
+    right: &[FunctionRecord],
+    what: &str,
+) -> Result<(), String> {
+    if left.len() != right.len() {
+        return Err(format!(
+            "module-structure {what} count drift: base {}, regenerated {}",
+            left.len(),
+            right.len()
+        ));
+    }
+    for (index, (left, right)) in left.iter().zip(right).enumerate() {
+        compare_function_declaration(
+            left_bytes,
+            left,
+            right_bytes,
+            right,
+            &format!("{what}[{index}]"),
+        )?;
+    }
+    Ok(())
+}
+
+fn compare_function_declaration(
+    left_bytes: &[u8],
+    left: &FunctionRecord,
+    right_bytes: &[u8],
+    right: &FunctionRecord,
+    what: &str,
+) -> Result<(), String> {
+    if left.name != right.name || left.namespace != right.namespace {
+        return Err(format!(
+            "module-structure {what} identity drift: {:?}::{:?}/{}::{:?}",
+            left.namespace, left.name, right.namespace, right.name
+        ));
+    }
+    compare_structure_range(
+        left_bytes,
+        &left.declaration,
+        right_bytes,
+        &right.declaration,
+        &format!("{what} declaration"),
+    )
+}
+
+fn compare_existing_free_function_subsequence(
+    left_bytes: &[u8],
+    left: &[FunctionRecord],
+    right_bytes: &[u8],
+    regenerated_module: &ModuleEntry,
+    base_class_count: usize,
+    what: &str,
+) -> Result<(), String> {
+    existing_free_function_subsequence_indices(
+        left_bytes,
+        left,
+        right_bytes,
+        regenerated_module,
+        base_class_count,
+        what,
+    )
+    .map(|_| ())
+}
+
+/// Return the regenerated position of every existing free function, preserving declaration order.
+/// Entries skipped between two existing declarations must be the one empirically established
+/// compiler helper for an appended class; arbitrary authored functions never qualify.
+fn existing_free_function_subsequence_indices(
+    left_bytes: &[u8],
+    left: &[FunctionRecord],
+    right_bytes: &[u8],
+    regenerated_module: &ModuleEntry,
+    base_class_count: usize,
+    what: &str,
+) -> Result<Vec<usize>, String> {
+    let right = &regenerated_module.functions;
+    let new_classes =
+        &regenerated_module.classes[base_class_count.min(regenerated_module.classes.len())..];
+    let mut next = 0usize;
+    let mut matches = Vec::with_capacity(left.len());
+    for (index, base) in left.iter().enumerate() {
+        loop {
+            let Some(regenerated) = right.get(next) else {
+                return Err(format!(
+                    "module-structure {what} lost or reordered existing declaration at base \
+                     index {index}: {}::{}",
+                    base.namespace, base.name
+                ));
+            };
+            if function_declaration_matches(left_bytes, base, right_bytes, regenerated)? {
+                matches.push(next);
+                next += 1;
+                break;
+            }
+            if !is_new_class_compiler_helper(right_bytes, regenerated, new_classes)? {
+                return Err(format!(
+                    "module-structure {what} inserted unsupported declaration before existing \
+                     base index {index}: {}::{}",
+                    regenerated.namespace, regenerated.name
+                ));
+            }
+            next += 1;
+        }
+    }
+    Ok(matches)
+}
+
+fn is_new_class_compiler_helper(
+    bytes: &[u8],
+    function: &FunctionRecord,
+    new_classes: &[ClassRecord],
+) -> Result<bool, String> {
+    // FullGraph produces two relevant helpers for an appended topic. `NewClass::StaticClass` is
+    // the reflection accessor. The free `NewClass()` factory is equally compiler-generated: it
+    // has the exact new class name, global namespace, a zero-argument object-handle return, FINAL
+    // wrapper traits, and no UFUNCTION payload.  Do not permit arbitrary authored free functions
+    // merely because their spelling resembles a class constructor.
+    if new_classes.iter().any(|class| {
+        function.name == "StaticClass" && function.namespace == class.name
+    }) {
+        return Ok(true);
+    }
+    let Some(_) = new_classes
+        .iter()
+        .find(|class| function.name == class.name && function.namespace.is_empty())
+    else {
+        return Ok(false);
+    };
+    if !matches!(function.traits, 32 | 33) {
+        return Ok(false);
+    }
+    let declaration = bytes
+        .get(function.declaration.clone())
+        .ok_or_else(|| "module-structure new-class factory declaration range is invalid".to_string())?;
+    let mut cursor = Cursor::new(declaration);
+    read_sia(&mut cursor, "new-class factory", "Function.Name")?;
+    read_sia(&mut cursor, "new-class factory", "Function.Namespace")?;
+    let return_type = super::types::DataType::read(&mut cursor)
+        .map_err(|error| format!("parsing new-class factory return type: {error}"))?;
+    let parameter_count = bounded_count(&mut cursor, "Function.ParameterTypes", "new-class factory")?;
+    let ufunction_tail = bytes
+        .get(function.ufunction_tail.clone())
+        .ok_or_else(|| "module-structure new-class factory UFUNCTION range is invalid".to_string())?;
+    Ok(return_type.is_object_handle
+        && !return_type.is_reference
+        && return_type.token == 5
+        && parameter_count == 0
+        && ufunction_tail == [0, 0, 0, 0])
+}
+
+fn function_declaration_matches(
+    left_bytes: &[u8],
+    left: &FunctionRecord,
+    right_bytes: &[u8],
+    right: &FunctionRecord,
+) -> Result<bool, String> {
+    if left.name != right.name || left.namespace != right.namespace {
+        return Ok(false);
+    }
+    let left = left_bytes
+        .get(left.declaration.clone())
+        .ok_or_else(|| "module-structure base function declaration range is invalid".to_string())?;
+    let right = right_bytes.get(right.declaration.clone()).ok_or_else(|| {
+        "module-structure regenerated function declaration range is invalid".to_string()
+    })?;
+    Ok(left == right)
+}
+
+fn compare_structure_range(
+    left_bytes: &[u8],
+    left: &Range<usize>,
+    right_bytes: &[u8],
+    right: &Range<usize>,
+    what: &str,
+) -> Result<(), String> {
+    let left = left_bytes
+        .get(left.clone())
+        .ok_or_else(|| format!("module-structure {what} base range is invalid"))?;
+    let right = right_bytes
+        .get(right.clone())
+        .ok_or_else(|| format!("module-structure {what} regenerated range is invalid"))?;
+    if left != right {
+        return Err(format!("module-structure {what} drift"));
+    }
+    Ok(())
+}
+
+fn compare_global_record_prefix(
+    left_bytes: &[u8],
+    left: &[GlobalRecord],
+    right_bytes: &[u8],
+    right: &[GlobalRecord],
+    what: &str,
+) -> Result<(), String> {
+    if right.len() < left.len() {
+        return Err(format!(
+            "module-structure {what} count shrank: base {}, regenerated {}",
+            left.len(),
+            right.len()
+        ));
+    }
+    for (index, (left, right)) in left.iter().zip(right).enumerate() {
+        compare_structure_range(
+            left_bytes,
+            &left.declaration,
+            right_bytes,
+            &right.declaration,
+            &format!("{what}[{index}]"),
+        )?;
+    }
+    Ok(())
+}
+
+fn compare_structure_record_prefix(
+    left_bytes: &[u8],
+    left: &[Range<usize>],
+    right_bytes: &[u8],
+    right: &[Range<usize>],
+    what: &str,
+) -> Result<(), String> {
+    if right.len() < left.len() {
+        return Err(format!(
+            "module-structure {what} count shrank: base {}, regenerated {}",
+            left.len(),
+            right.len()
+        ));
+    }
+    for (index, (left, right)) in left.iter().zip(right).enumerate() {
+        compare_structure_range(
+            left_bytes,
+            left,
+            right_bytes,
+            right,
+            &format!("{what}[{index}]"),
+        )?;
+    }
+    Ok(())
+}
+
 fn compare_function(
     left_bytes: &[u8],
     left: &FunctionRecord,
@@ -1157,11 +2535,14 @@ fn parse_entry(bytes: &[u8], context: &str) -> Result<ModuleEntry, String> {
     let enums_start = cursor.pos();
     let enum_count =
         bounded_count_with_minimum(&mut cursor, "Module.Enums", context, MIN_ENUM_BYTES)?;
+    let mut enum_entries = reserved_vec(enum_count, "Module.Enums", context)?;
     for _ in 0..enum_count {
+        let start = cursor.pos();
         read_sia(&mut cursor, context, "Enum.Name")?;
         read_sia(&mut cursor, context, "Enum.Namespace")?;
         skip_sia_array(&mut cursor, "Enum.Names", context)?;
         skip_fixed_array(&mut cursor, 4, "Enum.Values", context)?;
+        enum_entries.push(start..cursor.pos());
     }
     let enums = enums_start..cursor.pos();
 
@@ -1172,11 +2553,14 @@ fn parse_entry(bytes: &[u8], context: &str) -> Result<ModuleEntry, String> {
         context,
         MIN_GLOBAL_BYTES,
     )?;
+    let mut global_entries = reserved_vec(global_count, "Module.GlobalVariables", context)?;
     let mut global_init_functions = Vec::new();
     for _ in 0..global_count {
-        if let Some(function) = parse_global(&mut cursor, context)? {
+        let global = parse_global(&mut cursor, context)?;
+        if let Some(function) = global.initializer.clone() {
             global_init_functions.push(function);
         }
+        global_entries.push(global);
     }
     let globals = globals_start..cursor.pos();
 
@@ -1187,7 +2571,9 @@ fn parse_entry(bytes: &[u8], context: &str) -> Result<ModuleEntry, String> {
         context,
         MIN_IMPORT_BYTES,
     )?;
+    let mut import_entries = reserved_vec(import_count, "Module.FunctionImports", context)?;
     for _ in 0..import_count {
+        let start = cursor.pos();
         read_sia(&mut cursor, context, "Import.Module")?;
         read_sia(&mut cursor, context, "Import.Name")?;
         read_sia(&mut cursor, context, "Import.Namespace")?;
@@ -1200,17 +2586,22 @@ fn parse_entry(bytes: &[u8], context: &str) -> Result<ModuleEntry, String> {
         skip_fixed_array(&mut cursor, 4, "Import.ParameterFlags", context)?;
         skip_sia_array(&mut cursor, "Import.ParameterDefaults", context)?;
         skip(&mut cursor, DATA_TYPE_SIZE, context, "Import.ReturnType")?;
+        import_entries.push(start..cursor.pos());
     }
     let imports = imports_start..cursor.pos();
 
     skip(&mut cursor, 8, context, "Module.CodeHash")?;
     let post_start = cursor.pos();
-    skip_sia_array(&mut cursor, "Module.ImportedModules", context)?;
+    let imported_modules = read_sia_array_ranges(&mut cursor, "Module.ImportedModules", context)?;
+    let statics_start = cursor.pos();
     read_sia(&mut cursor, context, "Module.StaticsClassName")?;
-    skip_sia_array(&mut cursor, "Module.DeclaredEvents", context)?;
-    skip_sia_array(&mut cursor, "Module.DeclaredDelegates", context)?;
+    let statics_class = statics_start..cursor.pos();
+    let declared_events = read_sia_array_ranges(&mut cursor, "Module.DeclaredEvents", context)?;
+    let declared_delegates =
+        read_sia_array_ranges(&mut cursor, "Module.DeclaredDelegates", context)?;
     let file = read_sia(&mut cursor, context, "Module.ScriptRelativeFilename")?;
-    skip_sia_array(&mut cursor, "Module.PostInitFunctions", context)?;
+    let post_init_functions =
+        read_sia_array_ranges(&mut cursor, "Module.PostInitFunctions", context)?;
     let post_code_hash = post_start..cursor.pos();
     if cursor.pos() != bytes.len() {
         return Err(format!(
@@ -1228,9 +2619,17 @@ fn parse_entry(bytes: &[u8], context: &str) -> Result<ModuleEntry, String> {
         functions_end,
         classes,
         enums,
+        enum_entries,
         globals,
+        global_entries,
         global_init_functions,
         imports,
+        import_entries,
+        imported_modules,
+        statics_class,
+        declared_events,
+        declared_delegates,
+        post_init_functions,
         post_code_hash,
     })
 }
@@ -1417,7 +2816,8 @@ fn parse_function(cursor: &mut Cursor<'_>, context: &str) -> Result<FunctionReco
     })
 }
 
-fn parse_global(cursor: &mut Cursor<'_>, context: &str) -> Result<Option<FunctionRecord>, String> {
+fn parse_global(cursor: &mut Cursor<'_>, context: &str) -> Result<GlobalRecord, String> {
+    let start = cursor.pos();
     read_sia(cursor, context, "Global.Name")?;
     read_sia(cursor, context, "Global.Namespace")?;
     skip(cursor, DATA_TYPE_SIZE, context, "Global.Type")?;
@@ -1434,13 +2834,18 @@ fn parse_global(cursor: &mut Cursor<'_>, context: &str) -> Result<Option<Functio
             let has_init = cursor
                 .read_bool4()
                 .map_err(|error| format!("parsing {context} Global.HasInitFunction: {error}"))?;
+            let declaration = start..cursor.pos();
             let function = parse_function(cursor, context)?;
-            if has_init {
-                return Ok(Some(function));
-            }
+            return Ok(GlobalRecord {
+                declaration,
+                initializer: has_init.then_some(function),
+            });
         }
     }
-    Ok(None)
+    Ok(GlobalRecord {
+        declaration: start..cursor.pos(),
+        initializer: None,
+    })
 }
 
 fn bounded_count(
@@ -1516,6 +2921,21 @@ fn skip_sia_array(
         read_sia(cursor, context, field)?;
     }
     Ok(())
+}
+
+fn read_sia_array_ranges(
+    cursor: &mut Cursor<'_>,
+    field: &'static str,
+    context: &str,
+) -> Result<Vec<Range<usize>>, String> {
+    let count = bounded_count_with_minimum(cursor, field, context, 4)?;
+    let mut ranges = reserved_vec(count, field, context)?;
+    for _ in 0..count {
+        let start = cursor.pos();
+        read_sia(cursor, context, field)?;
+        ranges.push(start..cursor.pos());
+    }
+    Ok(ranges)
 }
 
 fn skip_product(
@@ -1601,6 +3021,15 @@ mod tests {
         function_with_return_and_id(spec, &datatype(0, 0x52), id)
     }
 
+    fn function_with_namespace(spec: &MethodSpec<'_>, namespace: &str) -> Vec<u8> {
+        function_with_return_id_and_namespace(
+            spec,
+            &datatype(0, 0x52),
+            fixture_function_id(spec.name),
+            namespace,
+        )
+    }
+
     fn fixture_function_id(name: &str) -> i32 {
         name.bytes().fold(0x1357_2468u32, |hash, byte| {
             hash.rotate_left(5) ^ u32::from(byte)
@@ -1608,8 +3037,17 @@ mod tests {
     }
 
     fn function_with_return_and_id(spec: &MethodSpec<'_>, return_type: &[u8], id: i32) -> Vec<u8> {
+        function_with_return_id_and_namespace(spec, return_type, id, "")
+    }
+
+    fn function_with_return_id_and_namespace(
+        spec: &MethodSpec<'_>,
+        return_type: &[u8],
+        id: i32,
+        namespace: &str,
+    ) -> Vec<u8> {
         let mut out = sia(spec.name);
-        out.extend_from_slice(&sia(""));
+        out.extend_from_slice(&sia(namespace));
         out.extend_from_slice(return_type);
         out.extend_from_slice(&0i32.to_le_bytes()); // parameter types
         out.extend_from_slice(&0i32.to_le_bytes()); // parameter names
@@ -1633,6 +3071,19 @@ mod tests {
         out.extend_from_slice(&0i32.to_le_bytes()); // declared at
         out.extend_from_slice(&0i32.to_le_bytes()); // line numbers
         out.extend_from_slice(&0i32.to_le_bytes()); // is UFUNCTION
+        out
+    }
+
+    fn ufunction(spec: &MethodSpec<'_>, unreal_name: &str, flags: [i32; 18]) -> Vec<u8> {
+        let mut out = function(spec);
+        out.truncate(out.len() - 4); // replace bIsUFunction=false
+        out.extend_from_slice(&1i32.to_le_bytes());
+        out.extend_from_slice(&sia(unreal_name));
+        out.extend_from_slice(&0i32.to_le_bytes()); // metadata specifiers
+        out.extend_from_slice(&0i32.to_le_bytes()); // metadata values
+        for flag in flags {
+            out.extend_from_slice(&flag.to_le_bytes());
+        }
         out
     }
 
@@ -1707,6 +3158,35 @@ mod tests {
         out
     }
 
+    fn class_record_with_raw_methods(name: &str, methods: &[Vec<u8>]) -> Vec<u8> {
+        let mut out = sia(name);
+        out.extend_from_slice(&sia(""));
+        out.extend_from_slice(&0x1234i32.to_le_bytes()); // class flags
+        out.extend_from_slice(&1i32.to_le_bytes()); // properties
+        out.extend_from_slice(&sia("Value"));
+        out.extend_from_slice(&datatype(0, 0x44));
+        out.extend_from_slice(&0i32.to_le_bytes()); // private
+        out.extend_from_slice(&0i32.to_le_bytes()); // protected
+        out.extend_from_slice(&0i32.to_le_bytes()); // not UPROPERTY
+        out.extend_from_slice(&(methods.len() as i32).to_le_bytes());
+        for method in methods {
+            out.extend_from_slice(method);
+        }
+        out.extend_from_slice(&(methods.len() as i32).to_le_bytes());
+        for index in 0..methods.len() {
+            out.extend_from_slice(&(index as i32).to_le_bytes());
+        }
+        out.extend_from_slice(&0i64.to_le_bytes()); // DerivedFrom
+        out.extend_from_slice(&0i64.to_le_bytes()); // ShadowType
+        out.extend_from_slice(&0i32.to_le_bytes()); // constructors
+        out.extend_from_slice(&0i32.to_le_bytes()); // factory refs
+        out.extend_from_slice(&0i32.to_le_bytes()); // behavior refs
+        out.extend_from_slice(&0i32.to_le_bytes()); // behavior functions
+        out.extend_from_slice(&0i32.to_le_bytes()); // behavior types
+        out.extend_from_slice(&0i32.to_le_bytes()); // no preprocessor metadata
+        out
+    }
+
     fn cache(classes: &[Vec<u8>], free_code: &[i32], code_hash: i64) -> Vec<u8> {
         cache_with_functions(
             classes,
@@ -1737,6 +3217,87 @@ mod tests {
         out.extend_from_slice(&0i32.to_le_bytes()); // globals
         out.extend_from_slice(&0i32.to_le_bytes()); // imports
         out.extend_from_slice(&code_hash.to_le_bytes());
+        out.extend_from_slice(&0i32.to_le_bytes()); // imported modules
+        out.extend_from_slice(&sia("")); // statics class
+        out.extend_from_slice(&0i32.to_le_bytes()); // events
+        out.extend_from_slice(&0i32.to_le_bytes()); // delegates
+        out.extend_from_slice(&sia(FILE));
+        out.extend_from_slice(&0i32.to_le_bytes()); // post-init functions
+        for _ in 0..super::super::tables::N_TABLES {
+            out.extend_from_slice(&0i32.to_le_bytes());
+        }
+        out
+    }
+
+    fn import_record(module: &str, name: &str, namespace: &str) -> Vec<u8> {
+        let mut out = sia(module);
+        out.extend_from_slice(&sia(name));
+        out.extend_from_slice(&sia(namespace));
+        out.extend_from_slice(&0i32.to_le_bytes()); // parameter types
+        out.extend_from_slice(&0i32.to_le_bytes()); // parameter flags
+        out.extend_from_slice(&0i32.to_le_bytes()); // parameter defaults
+        out.extend_from_slice(&datatype(0, 0x44)); // return type
+        out
+    }
+
+    fn cache_with_imports(imports: &[Vec<u8>], imported_modules: &[&str]) -> Vec<u8> {
+        let mut out = vec![0u8; 16];
+        out.extend_from_slice(&CACHE_MAGIC.to_le_bytes());
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring(MODULE));
+        out.extend_from_slice(&sia(MODULE));
+        out.extend_from_slice(&1i32.to_le_bytes()); // functions
+        out.extend_from_slice(&function(&MethodSpec {
+            name: "FreeFunction",
+            traits: 0,
+            code: &[10],
+        }));
+        out.extend_from_slice(&0i32.to_le_bytes()); // classes
+        out.extend_from_slice(&0i32.to_le_bytes()); // enums
+        out.extend_from_slice(&0i32.to_le_bytes()); // globals
+        out.extend_from_slice(&(imports.len() as i32).to_le_bytes());
+        for import in imports {
+            out.extend_from_slice(import);
+        }
+        out.extend_from_slice(&0i64.to_le_bytes()); // code hash
+        out.extend_from_slice(&(imported_modules.len() as i32).to_le_bytes());
+        for module in imported_modules {
+            out.extend_from_slice(&sia(module));
+        }
+        out.extend_from_slice(&sia("")); // statics class
+        out.extend_from_slice(&0i32.to_le_bytes()); // events
+        out.extend_from_slice(&0i32.to_le_bytes()); // delegates
+        out.extend_from_slice(&sia(FILE));
+        out.extend_from_slice(&0i32.to_le_bytes()); // post-init functions
+        for _ in 0..super::super::tables::N_TABLES {
+            out.extend_from_slice(&0i32.to_le_bytes());
+        }
+        out
+    }
+
+    fn global_record(name: &str) -> Vec<u8> {
+        let mut out = sia(name);
+        out.extend_from_slice(&sia(""));
+        out.extend_from_slice(&datatype(0, 0x44)); // int
+        out.extend_from_slice(&1i32.to_le_bytes()); // default initialization
+        out
+    }
+
+    fn cache_with_globals(globals: &[Vec<u8>]) -> Vec<u8> {
+        let mut out = vec![0u8; 16];
+        out.extend_from_slice(&CACHE_MAGIC.to_le_bytes());
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring(MODULE));
+        out.extend_from_slice(&sia(MODULE));
+        out.extend_from_slice(&0i32.to_le_bytes()); // functions
+        out.extend_from_slice(&0i32.to_le_bytes()); // classes
+        out.extend_from_slice(&0i32.to_le_bytes()); // enums
+        out.extend_from_slice(&(globals.len() as i32).to_le_bytes());
+        for global in globals {
+            out.extend_from_slice(global);
+        }
+        out.extend_from_slice(&0i32.to_le_bytes()); // imports
+        out.extend_from_slice(&0i64.to_le_bytes()); // code hash
         out.extend_from_slice(&0i32.to_le_bytes()); // imported modules
         out.extend_from_slice(&sia("")); // statics class
         out.extend_from_slice(&0i32.to_le_bytes()); // events
@@ -1810,6 +3371,792 @@ mod tests {
         let modules = model::parse_modules(base).map_err(|error| error.to_string())?;
         GeneratedDefaultsPlan::prepare(base, &modules, MODULE)?
             .ok_or_else(|| "fixture unexpectedly has no defaults plan".to_string())
+    }
+
+    #[test]
+    fn hybrid_carry_preserves_existing_defaults_and_retains_appended_class_defaults() {
+        let base = base_cache();
+        let modules = model::parse_modules(&base).unwrap();
+        let authored = HashSet::from(["UNewDialogTopic".to_owned()]);
+        let plan = GeneratedDefaultsPlan::prepare_hybrid(&base, &modules, MODULE, &authored)
+            .unwrap()
+            .expect("base fixture has generated defaults");
+        assert!(plan.allows_new_symbols());
+
+        let regen = cache(
+            &[
+                class_record(
+                    CLASS,
+                    "",
+                    "Value",
+                    &[
+                        MethodSpec {
+                            name: "Before",
+                            traits: 0,
+                            code: &[2, 7, 10],
+                        },
+                        MethodSpec {
+                            name: "After",
+                            traits: 4,
+                            code: &[2, 9, 10],
+                        },
+                    ],
+                    &[-1, 0, -1, 1],
+                    &[2, 3, 10],
+                ),
+                class_record_with_raw_methods(
+                    "UNewDialogTopic",
+                    &[function_with_id(
+                        &MethodSpec {
+                            name: "__InitDefaults",
+                            traits: 0x40000,
+                            code: &[2, 99, 10],
+                        },
+                        0x6a6a_0001,
+                    )],
+                ),
+            ],
+            &[2, 5, 10],
+            0x2222,
+        );
+        let out = plan.apply(&regen).unwrap();
+        let parse = |bytes: &[u8], context| {
+            let end = module_region_end(bytes).unwrap();
+            parse_entry(&bytes[CacheHeader::SIZE..end], context).unwrap()
+        };
+        let base_entry = parse(&base, "hybrid base");
+        let regen_entry = parse(&regen, "hybrid regen");
+        let out_entry = parse(&out, "hybrid out");
+        let base_defaults = &base_entry.classes[0].methods[1];
+        let out_defaults = &out_entry.classes[0].methods[1];
+        assert_eq!(
+            function_raw(&out, out_defaults),
+            function_raw(&base, base_defaults),
+            "the existing class keeps its byte-exact base defaults"
+        );
+        let regen_new_defaults = &regen_entry.classes[1].methods[0];
+        let out_new_defaults = &out_entry.classes[1].methods[0];
+        assert_eq!(
+            function_raw(&out, out_new_defaults),
+            function_raw(&regen, regen_new_defaults),
+            "the appended class keeps compiler-authored defaults"
+        );
+    }
+
+    #[test]
+    fn hybrid_carry_rejects_authored_defaults_for_an_existing_base_class() {
+        let base = base_cache();
+        let modules = model::parse_modules(&base).unwrap();
+        let authored = HashSet::from([CLASS.to_owned(), "UNewDialogTopic".to_owned()]);
+        let error = GeneratedDefaultsPlan::prepare_hybrid(&base, &modules, MODULE, &authored)
+            .unwrap_err();
+        assert!(
+            error.contains("refuses authored defaults for existing base class"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn hybrid_carry_preserves_existing_generated_free_wrapper_and_new_static_class() {
+        const TOPIC: &str = "UGoreDialogTopic";
+        let base_class = class_record(
+            CLASS,
+            "",
+            "Value",
+            &[MethodSpec {
+                name: "__InitDefaults",
+                traits: 0x40000,
+                code: &[2, 42, 10],
+            }],
+            &[0],
+            &[10],
+        );
+        let ordinary_base = function(&MethodSpec {
+            name: "FreeFunction",
+            traits: 0,
+            code: &[10],
+        });
+        let wrapper_base = function_with_return(
+            &MethodSpec {
+                name: "Get",
+                traits: 0,
+                code: &[2, 41, 10],
+            },
+            &object_handle_datatype(),
+        );
+        let base = cache_with_functions(&[base_class], &[ordinary_base, wrapper_base], 1);
+        let modules = model::parse_modules(&base).unwrap();
+        let plan = GeneratedDefaultsPlan::prepare_hybrid(
+            &base,
+            &modules,
+            MODULE,
+            &HashSet::from([TOPIC.to_owned()]),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(plan.generated_free_indices, HashSet::from([1]));
+
+        let ordinary_regen = function(&MethodSpec {
+            name: "FreeFunction",
+            traits: 0,
+            code: &[2, 7, 10],
+        });
+        let new_static_class = function_with_namespace(
+            &MethodSpec {
+                name: "StaticClass",
+                traits: 0,
+                code: &[2, 77, 10],
+            },
+            TOPIC,
+        );
+        let new_factory = function_with_return_and_id(
+            &MethodSpec {
+                name: TOPIC,
+                traits: 32,
+                code: &[2, 76, 10],
+            },
+            &object_handle_datatype(),
+            0x6a6a_0002,
+        );
+        let wrapper_regen = function_with_return(
+            &MethodSpec {
+                name: "Get",
+                traits: 0,
+                code: &[2, 99, 10],
+            },
+            &object_handle_datatype(),
+        );
+        let regen = cache_with_functions(
+            &[
+                class_record(CLASS, "", "Value", &[], &[], &[2, 8, 10]),
+                class_record_with_raw_methods(
+                    TOPIC,
+                    &[function_with_id(
+                        &MethodSpec {
+                            name: "__InitDefaults",
+                            traits: 0x40000,
+                            code: &[2, 99, 10],
+                        },
+                        0x6a6a_0001,
+                    )],
+                ),
+            ],
+            &[ordinary_regen, new_factory, new_static_class, wrapper_regen],
+            2,
+        );
+        let carried = plan.apply(&regen).unwrap();
+        let parse = |bytes: &[u8], context| {
+            let end = module_region_end(bytes).unwrap();
+            parse_entry(&bytes[CacheHeader::SIZE..end], context).unwrap()
+        };
+        let base_entry = parse(&base, "hybrid wrapper base");
+        let regen_entry = parse(&regen, "hybrid wrapper regen");
+        let carried_entry = parse(&carried, "hybrid wrapper carried");
+        assert_eq!(
+            function_raw(&carried, &carried_entry.functions[0]),
+            function_raw(&regen, &regen_entry.functions[0]),
+            "ordinary existing free function remains regenerated"
+        );
+        assert_eq!(
+            function_raw(&carried, &carried_entry.functions[1]),
+            function_raw(&regen, &regen_entry.functions[1]),
+            "new-class factory remains compiler-authored"
+        );
+        assert_eq!(
+            function_raw(&carried, &carried_entry.functions[2]),
+            function_raw(&regen, &regen_entry.functions[2]),
+            "new-class StaticClass remains compiler-authored"
+        );
+        assert_eq!(
+            function_raw(&carried, &carried_entry.functions[3]),
+            function_raw(&base, &base_entry.functions[1]),
+            "existing emitter-omitted Get wrapper remains byte-exact"
+        );
+    }
+
+    #[test]
+    fn hybrid_carry_output_fails_structure_plan_when_existing_property_changes() {
+        const TOPIC: &str = "UGoreDialogTopic";
+        let base = base_cache();
+        let modules = model::parse_modules(&base).unwrap();
+        let carry = GeneratedDefaultsPlan::prepare_hybrid(
+            &base,
+            &modules,
+            MODULE,
+            &HashSet::from([TOPIC.to_owned()]),
+        )
+        .unwrap()
+        .unwrap();
+        let structure = ExistingModuleStructurePlan::prepare(&base, MODULE).unwrap();
+        let regen = cache(
+            &[
+                class_record(
+                    CLASS,
+                    "",
+                    "ChangedValue",
+                    &[
+                        MethodSpec {
+                            name: "Before",
+                            traits: 0,
+                            code: &[2, 7, 10],
+                        },
+                        MethodSpec {
+                            name: "After",
+                            traits: 4,
+                            code: &[2, 9, 10],
+                        },
+                    ],
+                    &[-1, 0, -1, 1],
+                    &[2, 3, 10],
+                ),
+                class_record_with_raw_methods(
+                    TOPIC,
+                    &[function_with_id(
+                        &MethodSpec {
+                            name: "__InitDefaults",
+                            traits: 0x40000,
+                            code: &[2, 99, 10],
+                        },
+                        0x6a6a_0001,
+                    )],
+                ),
+            ],
+            &[2, 5, 10],
+            0x2222,
+        );
+        let carried = carry.apply(&regen).unwrap();
+        let error = structure.verify(&carried).unwrap_err();
+        assert!(error.contains("flags/properties"), "{error}");
+    }
+
+    #[test]
+    fn existing_edit_preserves_shipping_function_and_unreal_traits_only() {
+        const PROPERTY_TRAIT: i32 = 0x200;
+        let act = MethodSpec {
+            name: "Act_Implementation",
+            traits: PROPERTY_TRAIT | 0x40,
+            code: &[10],
+        };
+        let mut shipping_flags = [0i32; 18];
+        shipping_flags[0] = 0; // BlueprintCallable
+        shipping_flags[1] = 1; // BlueprintOverride
+        shipping_flags[2] = 1; // BlueprintEvent
+        let base = cache(
+            &[class_record_with_raw_methods(
+                "UChoiceDiegoGamestart",
+                &[ufunction(&act, "Act", shipping_flags)],
+            )],
+            &[10],
+            1,
+        );
+
+        let regenerated_act = MethodSpec {
+            name: "Act_Implementation",
+            traits: 0,
+            code: &[2, 77, 10],
+        };
+        let added = MethodSpec {
+            name: "Added",
+            traits: 0x20,
+            code: &[2, 88, 10],
+        };
+        let new_class_act = MethodSpec {
+            name: "Act_Implementation",
+            traits: 0x20,
+            code: &[2, 99, 10],
+        };
+        let regen = cache(
+            &[
+                class_record_with_raw_methods(
+                    "UChoiceDiegoGamestart",
+                    &[
+                        ufunction(&regenerated_act, "WrongAct", [0; 18]),
+                        ufunction(&added, "Added", [1; 18]),
+                    ],
+                ),
+                class_record_with_raw_methods(
+                    "UNewTopic",
+                    &[ufunction(&new_class_act, "NewAct", [1; 18])],
+                ),
+            ],
+            &[2, 55, 10],
+            2,
+        );
+        let plan = ExistingFunctionMetadataPlan::prepare(&base, MODULE).unwrap();
+        let out = plan.apply(&regen).unwrap();
+
+        let parse = |bytes: &[u8], context| {
+            let end = module_region_end(bytes).unwrap();
+            parse_entry(&bytes[CacheHeader::SIZE..end], context).unwrap()
+        };
+        let base_entry = parse(&base, "metadata base");
+        let regen_entry = parse(&regen, "metadata regen");
+        let out_entry = parse(&out, "metadata output");
+        let base_act = &base_entry.classes[0].methods[0];
+        let regen_act = &regen_entry.classes[0].methods[0];
+        let out_act = &out_entry.classes[0].methods[0];
+        assert_eq!(out_act.traits, PROPERTY_TRAIT | 0x40);
+        assert_eq!(
+            &out[CacheHeader::SIZE + out_act.ufunction_tail.start
+                ..CacheHeader::SIZE + out_act.ufunction_tail.end],
+            &base[CacheHeader::SIZE + base_act.ufunction_tail.start
+                ..CacheHeader::SIZE + base_act.ufunction_tail.end]
+        );
+        assert_eq!(
+            &out[CacheHeader::SIZE + out_act.signature.end
+                ..CacheHeader::SIZE + out_act.ufunction_tail.start],
+            &regen[CacheHeader::SIZE + regen_act.signature.end
+                ..CacheHeader::SIZE + regen_act.ufunction_tail.start]
+        );
+        let mut tail = Cursor::new(
+            &out[CacheHeader::SIZE + out_act.ufunction_tail.start
+                ..CacheHeader::SIZE + out_act.ufunction_tail.end],
+        );
+        assert!(tail.read_bool4().unwrap());
+        assert_eq!(tail.read_sia().unwrap(), "Act");
+        assert_eq!(tail.read_i32().unwrap(), 0); // MetaSpec count
+        assert_eq!(tail.read_i32().unwrap(), 0); // MetaValues count
+        assert_eq!(tail.read_i32().unwrap(), 0); // Callable
+        assert_eq!(tail.read_i32().unwrap(), 1); // BlueprintOverride
+        assert_eq!(tail.read_i32().unwrap(), 1); // BlueprintEvent
+
+        // A new method on the old class and every method on a new class are byte-exact regen.
+        for (class_index, method_index) in [(0, 1), (1, 0)] {
+            let regenerated = &regen_entry.classes[class_index].methods[method_index];
+            let output = &out_entry.classes[class_index].methods[method_index];
+            assert_eq!(
+                &out[CacheHeader::SIZE + output.raw.start..CacheHeader::SIZE + output.raw.end],
+                &regen[CacheHeader::SIZE + regenerated.raw.start
+                    ..CacheHeader::SIZE + regenerated.raw.end]
+            );
+        }
+    }
+
+    #[test]
+    fn existing_edit_rejects_missing_or_ambiguous_shipping_function_identity() {
+        let base = cache(
+            &[class_record_with_raw_methods(
+                CLASS,
+                &[function(&MethodSpec {
+                    name: "Existing",
+                    traits: 0x200,
+                    code: &[10],
+                })],
+            )],
+            &[10],
+            1,
+        );
+        let plan = ExistingFunctionMetadataPlan::prepare(&base, MODULE).unwrap();
+        let missing = cache(&[class_record_with_raw_methods(CLASS, &[])], &[10], 2);
+        assert!(plan
+            .apply(&missing)
+            .unwrap_err()
+            .contains("missing existing method"));
+
+        let duplicate_method = function(&MethodSpec {
+            name: "Existing",
+            traits: 0,
+            code: &[10],
+        });
+        let ambiguous = cache(
+            &[class_record_with_raw_methods(
+                CLASS,
+                &[duplicate_method.clone(), duplicate_method],
+            )],
+            &[10],
+            3,
+        );
+        assert!(plan
+            .apply(&ambiguous)
+            .unwrap_err()
+            .contains("ambiguous duplicate method"));
+    }
+
+    #[test]
+    fn existing_metadata_normalization_composes_with_generated_default_carry() {
+        let mut shipping_flags = [0i32; 18];
+        shipping_flags[1] = 1; // BlueprintOverride
+        shipping_flags[2] = 1; // BlueprintEvent
+        let shipping_act = MethodSpec {
+            name: "Act_Implementation",
+            traits: 0x240,
+            code: &[10],
+        };
+        let init_defaults = MethodSpec {
+            name: "__InitDefaults",
+            traits: 0x40000,
+            code: &[2, 42, 10],
+        };
+        let base = cache(
+            &[class_record_with_raw_methods(
+                CLASS,
+                &[
+                    ufunction(&shipping_act, "Act", shipping_flags),
+                    function(&init_defaults),
+                ],
+            )],
+            &[10],
+            1,
+        );
+
+        let regenerated_act = MethodSpec {
+            name: "Act_Implementation",
+            traits: 0,
+            code: &[2, 77, 10],
+        };
+        let regen = cache(
+            &[class_record_with_raw_methods(
+                CLASS,
+                &[ufunction(&regenerated_act, "Act_Implementation", [0; 18])],
+            )],
+            &[2, 55, 10],
+            2,
+        );
+
+        let metadata = ExistingFunctionMetadataPlan::prepare(&base, MODULE).unwrap();
+        let defaults = prepare(&base).unwrap();
+        assert!(metadata
+            .apply(&regen)
+            .unwrap_err()
+            .contains("missing existing method"));
+        assert!(defaults
+            .apply(&regen)
+            .unwrap_err()
+            .contains("declaration/signature drift"));
+
+        let normalized = metadata.apply_present(&regen).unwrap();
+        let carried = defaults.apply(&normalized).unwrap();
+        let out = metadata.apply(&carried).unwrap();
+
+        let parse = |bytes: &[u8], context| {
+            let end = module_region_end(bytes).unwrap();
+            parse_entry(&bytes[CacheHeader::SIZE..end], context).unwrap()
+        };
+        let base_entry = parse(&base, "carry metadata base");
+        let regen_entry = parse(&regen, "carry metadata regen");
+        let out_entry = parse(&out, "carry metadata output");
+        let base_act = &base_entry.classes[0].methods[0];
+        let base_defaults = &base_entry.classes[0].methods[1];
+        let regen_act = &regen_entry.classes[0].methods[0];
+        let out_act = &out_entry.classes[0].methods[0];
+        let out_defaults = &out_entry.classes[0].methods[1];
+        assert_eq!(out_act.traits, shipping_act.traits);
+        assert_eq!(
+            &out[CacheHeader::SIZE + out_act.ufunction_tail.start
+                ..CacheHeader::SIZE + out_act.ufunction_tail.end],
+            &base[CacheHeader::SIZE + base_act.ufunction_tail.start
+                ..CacheHeader::SIZE + base_act.ufunction_tail.end]
+        );
+        assert_eq!(
+            &out[CacheHeader::SIZE + out_act.signature.end
+                ..CacheHeader::SIZE + out_act.ufunction_tail.start],
+            &regen[CacheHeader::SIZE + regen_act.signature.end
+                ..CacheHeader::SIZE + regen_act.ufunction_tail.start]
+        );
+        assert_eq!(
+            function_raw(&out, out_defaults),
+            function_raw(&base, base_defaults)
+        );
+    }
+
+    #[test]
+    fn existing_module_structure_allows_an_appended_dialog_topic_class() {
+        let methods = [MethodSpec {
+            name: "Act",
+            traits: 0,
+            code: &[10],
+        }];
+        let base = cache(
+            &[class_record(CLASS, "", "Value", &methods, &[0], &[10])],
+            &[10],
+            0x1111,
+        );
+        // This is the shape used by a new topic in an existing conversation module: the old
+        // class stays intact and the compiler appends a complete new class.
+        let regen = cache(
+            &[
+                class_record(CLASS, "", "Value", &methods, &[0], &[77, 10]),
+                class_record("UGoreDialogTopic", "", "Caption", &methods, &[0], &[10]),
+            ],
+            &[77, 10],
+            0x2222,
+        );
+        let plan = ExistingModuleStructurePlan::prepare(&base, MODULE).unwrap();
+        plan.verify(&regen).unwrap();
+    }
+
+    #[test]
+    fn existing_module_structure_rejects_existing_property_or_class_flag_drift() {
+        let methods = [MethodSpec {
+            name: "Act",
+            traits: 0,
+            code: &[10],
+        }];
+        let base = cache(
+            &[class_record(CLASS, "", "Value", &methods, &[0], &[10])],
+            &[10],
+            0x1111,
+        );
+        let plan = ExistingModuleStructurePlan::prepare(&base, MODULE).unwrap();
+
+        let property_changed = cache(
+            &[class_record(CLASS, "", "Different", &methods, &[0], &[10])],
+            &[10],
+            0x1111,
+        );
+        assert!(plan
+            .verify(&property_changed)
+            .unwrap_err()
+            .contains("flags/properties drift"));
+
+        let mut flags_changed = base.clone();
+        let old = 0x1234i32.to_le_bytes();
+        let pos = flags_changed
+            .windows(old.len())
+            .position(|window| window == old)
+            .expect("fixture class flags");
+        flags_changed[pos..pos + old.len()].copy_from_slice(&0x1235i32.to_le_bytes());
+        assert!(plan
+            .verify(&flags_changed)
+            .unwrap_err()
+            .contains("flags/properties drift"));
+    }
+
+    #[test]
+    fn existing_module_structure_rejects_existing_method_table_drift() {
+        let methods = [MethodSpec {
+            name: "Act",
+            traits: 0,
+            code: &[10],
+        }];
+        let base = cache(
+            &[class_record(CLASS, "", "Value", &methods, &[0], &[10])],
+            &[10],
+            0x1111,
+        );
+        let drifted = cache(
+            &[class_record(CLASS, "", "Value", &methods, &[-1], &[10])],
+            &[10],
+            0x1111,
+        );
+        let plan = ExistingModuleStructurePlan::prepare(&base, MODULE).unwrap();
+        assert!(plan
+            .verify(&drifted)
+            .unwrap_err()
+            .contains("MethodTable drift"));
+    }
+
+    #[test]
+    fn existing_module_structure_allows_appended_imports_but_rejects_reordering() {
+        let old_import = import_record("Shipping.Provider", "OldFunction", "");
+        let new_import = import_record("Gore.NewProvider", "NewFunction", "");
+        let base = cache_with_imports(&[old_import.clone()], &["Shipping.Provider"]);
+        let appended = cache_with_imports(
+            &[old_import.clone(), new_import.clone()],
+            &["Shipping.Provider", "Gore.NewProvider"],
+        );
+        let reordered = cache_with_imports(
+            &[new_import, old_import],
+            &["Gore.NewProvider", "Shipping.Provider"],
+        );
+        let plan = ExistingModuleStructurePlan::prepare(&base, MODULE).unwrap();
+        plan.verify(&appended).unwrap();
+        assert!(plan
+            .verify(&reordered)
+            .unwrap_err()
+            .contains("module imports[0] drift"));
+    }
+
+    #[test]
+    fn existing_module_structure_allows_appended_globals_but_rejects_prepend_or_interleave() {
+        let old_first = global_record("OldFirst");
+        let old_second = global_record("OldSecond");
+        let new_global = global_record("NewGlobal");
+        let base = cache_with_globals(&[old_first.clone(), old_second.clone()]);
+        let appended = cache_with_globals(&[
+            old_first.clone(),
+            old_second.clone(),
+            new_global.clone(),
+        ]);
+        let prepended = cache_with_globals(&[
+            new_global.clone(),
+            old_first.clone(),
+            old_second.clone(),
+        ]);
+        let interleaved = cache_with_globals(&[old_first, new_global, old_second]);
+        let plan = ExistingModuleStructurePlan::prepare(&base, MODULE).unwrap();
+
+        plan.verify(&appended).unwrap();
+        assert!(plan
+            .verify(&prepended)
+            .unwrap_err()
+            .contains("module globals[0] drift"));
+        assert!(plan
+            .verify(&interleaved)
+            .unwrap_err()
+            .contains("module globals[1] drift"));
+    }
+
+    #[test]
+    fn existing_module_structure_allows_only_generated_new_class_helpers_between_free_functions() {
+        let first = MethodSpec {
+            name: "First",
+            traits: 0,
+            code: &[10],
+        };
+        let second = MethodSpec {
+            name: "Second",
+            traits: 0,
+            code: &[10],
+        };
+        let helper = MethodSpec {
+            name: "StaticClass",
+            traits: 0,
+            code: &[10],
+        };
+        let topic = "UGoreDialogTopic";
+        let base = cache_with_functions(&[], &[function(&first), function(&second)], 0x1111);
+        let regen = cache_with_functions(
+            &[class_record(topic, "", "Caption", &[], &[], &[10])],
+            &[
+                function(&first),
+                function_with_return_and_id(
+                    &MethodSpec {
+                        name: topic,
+                        traits: 32,
+                        code: &[10],
+                    },
+                    &object_handle_datatype(),
+                    0x6a6a_0003,
+                ),
+                function_with_namespace(&helper, topic),
+                function(&second),
+            ],
+            0x2222,
+        );
+        let plan = ExistingModuleStructurePlan::prepare(&base, MODULE).unwrap();
+        plan.verify(&regen).unwrap();
+
+        let bad_factory = cache_with_functions(
+            &[class_record(topic, "", "Caption", &[], &[], &[10])],
+            &[
+                function(&first),
+                function_with_return_and_id(
+                    &MethodSpec {
+                        name: topic,
+                        traits: 32,
+                        code: &[10],
+                    },
+                    &datatype(0, 0x52),
+                    0x6a6a_0003,
+                ),
+                function(&second),
+            ],
+            0x2222,
+        );
+        assert!(plan
+            .verify(&bad_factory)
+            .unwrap_err()
+            .contains("inserted unsupported declaration"));
+    }
+
+    #[test]
+    fn existing_module_structure_rejects_authored_new_class_function_between_free_functions() {
+        let first = MethodSpec {
+            name: "First",
+            traits: 0,
+            code: &[10],
+        };
+        let second = MethodSpec {
+            name: "Second",
+            traits: 0,
+            code: &[10],
+        };
+        let sneaky = MethodSpec {
+            name: "Sneaky",
+            traits: 0,
+            code: &[10],
+        };
+        let topic = "UGoreDialogTopic";
+        let base = cache_with_functions(&[], &[function(&first), function(&second)], 0x1111);
+        let regen = cache_with_functions(
+            &[class_record(topic, "", "Caption", &[sneaky.clone()], &[0], &[10])],
+            &[
+                function(&first),
+                function_with_namespace(&sneaky, topic),
+                function(&second),
+            ],
+            0x2222,
+        );
+        let plan = ExistingModuleStructurePlan::prepare(&base, MODULE).unwrap();
+        assert!(plan
+            .verify(&regen)
+            .unwrap_err()
+            .contains("inserted unsupported declaration"));
+    }
+
+    #[test]
+    #[ignore = "requires GORE_AS_CACHE and GORE_AS_FULL_GRAPH safe-cross-module fixtures"]
+    fn real_full_graph_cross_module_dialog_preserves_existing_structure() {
+        use crate::cache::remap::RemapOptions;
+        use crate::cache::splice::{
+            extract_module, remap_module_to_base_with_options, SequentialMiniGuard,
+        };
+
+        const PROVIDER: &str = "Gore.FullGraph.DiegoProbe";
+        const DIALOG: &str = "Story.G1R.Conversation.Conversation_OC_STT_DIEGO";
+        let base =
+            std::fs::read(std::env::var_os("GORE_AS_CACHE").expect("set GORE_AS_CACHE")).unwrap();
+        let full_graph =
+            std::fs::read(std::env::var_os("GORE_AS_FULL_GRAPH").expect("set GORE_AS_FULL_GRAPH"))
+                .unwrap();
+
+        // The edit imports the new provider.  Compose the provider first, exactly as the
+        // fixed-point selective FullGraph path does before retrying the dependent dialog edit.
+        let provider = extract_module(&full_graph, PROVIDER).unwrap();
+        let provider = remap_module_to_base_with_options(
+            &provider,
+            &base,
+            RemapOptions {
+                allow_new_symbols: true,
+            },
+        )
+        .unwrap();
+        let mut guard = SequentialMiniGuard::new(&base).unwrap();
+        let running = guard.compose_add(&base, &provider).unwrap();
+
+        let dialog = extract_module(&full_graph, DIALOG).unwrap();
+        let dialog = remap_module_to_base_with_options(
+            &dialog,
+            &running,
+            RemapOptions {
+                allow_new_symbols: true,
+            },
+        )
+        .unwrap();
+        let metadata = ExistingFunctionMetadataPlan::prepare(&base, DIALOG).unwrap();
+        let structure = ExistingModuleStructurePlan::prepare(&base, DIALOG).unwrap();
+        let dialog = metadata.apply(&dialog).unwrap();
+        structure.verify(&dialog).unwrap();
+        guard = SequentialMiniGuard::new(&running).unwrap();
+        guard.compose_edit(&running, &dialog, DIALOG).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires GORE_AS_CACHE and GORE_AS_DIALOG_MINI from a strict standalone edit"]
+    fn real_dialog_edit_has_complete_shipping_function_metadata() {
+        let base_path = std::env::var_os("GORE_AS_CACHE").expect("set GORE_AS_CACHE");
+        let mini_path = std::env::var_os("GORE_AS_DIALOG_MINI").expect("set GORE_AS_DIALOG_MINI");
+        let module = std::env::var("GORE_AS_DIALOG_MODULE")
+            .unwrap_or_else(|_| "Story.G1R.Conversation.Conversation_OC_STT_DIEGO".to_string());
+        let base = std::fs::read(base_path).unwrap();
+        let mini = std::fs::read(mini_path).unwrap();
+        let plan = ExistingFunctionMetadataPlan::prepare(&base, &module).unwrap();
+
+        // `apply` verifies that every Shipping function identity is present, that its traits and
+        // complete Unreal descriptor equal the base, and that genuinely new records stay intact.
+        // A correctly produced mini is therefore an exact fixed point of the preservation pass.
+        assert_eq!(plan.apply(&mini).unwrap(), mini);
     }
 
     #[test]

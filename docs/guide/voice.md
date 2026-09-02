@@ -111,9 +111,10 @@ gore voice validate --ogg line.ogg --json
 ```
 
 This performs the same bounded structural and timing validation used by the
-archive and bundle paths. Vorbis is decoded completely to PCM; Opus packet and
-timing structure is checked without decoding its audio payload. It does not
-claim that a recording sounds good or has been heard in the game.
+archive and bundle paths before their additional Vorbis-only deployability
+gate. Vorbis is decoded completely to PCM; Opus packet and timing structure is
+checked without decoding its audio payload. It does not claim that a recording
+sounds good or has been heard in the game.
 
 Flag by flag: `-c:a libvorbis` writes Vorbis, `-ar 48000` resamples to 48 kHz,
 `-ac 1` mixes down to mono, `-q:a 5` sets the encoder's quality (libvorbis
@@ -128,10 +129,11 @@ ffmpeg's own option documentation, and that the Ogg fixtures the test suite
 validates were themselves produced by the same `-c:a libvorbis -ac 1` encode at
 48 kHz (`crates/gore-vo/testdata/README.md`).
 
-**What is required is the container and the codec.** `gore voice` accepts an
-Ogg carrying Vorbis or Opus and refuses everything else. Skipping the conversion
-is the ordinary first mistake, and the refusal names the format you handed over
-and gives the line back:
+**What is required is the container and the codec.** `gore voice validate`
+accepts an Ogg carrying Vorbis or Opus for structural inspection. A deployable
+archive edit requires Ogg/Vorbis; every non-Ogg payload is refused. Skipping the
+conversion is the ordinary first mistake, and the refusal names the format you
+handed over and gives the line back:
 
 ```text
 error: replacing voice entry: the payload is a WAV file (RIFF/WAVE), not an Ogg
@@ -148,27 +150,26 @@ still hands over the command.
 Ogg entries across the five archives under `G1R\Story\VoiceOver` —
 `german_new`, `english_newer`, `foreign`, `polish`, `russian` — is mono 48 kHz
 Vorbis, each declaring a nominal bitrate of 80 kbit/s. That is a full scan of
-every entry, not a sample. Nothing here has tested whether the engine also plays
-44.1 kHz or stereo, and the validator accepts both; matching what ships is
-simply the choice that needs no test.
+every entry, not a sample. A later BuildID-`24878692` fixture also played 44.1
+kHz mono and 48 kHz stereo Vorbis fully; the exact matrix is recorded under
+[Deployment reality check](#deployment-reality-check). Matching the shipped 48
+kHz mono layout remains the conservative default.
 
 ### Vorbis or Opus?
 
-Encode Vorbis. Opus is accepted in more places than it is qualified, and the two
-layers disagree:
+Encode Vorbis. Structural inspection and deployable publication deliberately
+have different boundaries:
 
-- `gore voice add`, `replace` and `apply-manifest`, and the `voice` entries of a
-  `gore mod` bundle, run one shared validator that accepts **Vorbis or Opus**.
-- Mod Studio does not. Its project build refuses a selected take whose codec is
-  not Vorbis and raises a `selected_take_codec_unqualified` blocker rather than
-  guessing (`crates/gore-authoring/src/revision3_voice_build.rs`).
+- `gore voice validate` accepts **Vorbis or Opus**. It fully decodes Vorbis to
+  PCM; for Opus it checks packet framing and timing without decoding the audio.
+- `add`, `replace`, `apply-manifest`, bundle build/verification/import/deploy and
+  Mod Studio publication require **Vorbis**. Studio reports
+  `selected_take_codec_unqualified` for an Opus take.
 
-So an Opus take can go into an archive through the CLI and then block the Studio
-build of the same project. Both statements you may have read are true; they are
-about different layers. This is read off the code, not off a listening test —
-no Opus payload has been heard in game, and the one replacement that has been
-([Deployment reality check](#deployment-reality-check)) was Vorbis, because it
-was lifted out of a shipped archive.
+The split now has live evidence behind it. On BuildID `24878692`, structurally
+valid 48 kHz mono and stereo Opus fixtures both ran silently, while the three
+Vorbis controls/layout variants were fully audible. Structural Opus validity is
+therefore not playback qualification.
 
 ### Step 3 — build the edited archive
 
@@ -186,10 +187,29 @@ gore voice add --archive "$VO" --path "GoreMods/MyMod/DIA_NEW.ogg" `
 - The input is never modified.
 - `-o` must be a path that does **not** already exist.
 - The Ogg stream and the completed ZIP are validated before the output is
-  published. Vorbis and Opus both pass here — see
-  [Vorbis or Opus?](#vorbis-or-opus) above before you pick Opus.
+  published. Only Vorbis can be published; Opus remains available to the
+  inspection-only `validate` command.
 - Unsafe paths, symlinks, encrypted entries, and resource-limit violations are
   rejected.
+
+One added Vorbis member is now proven beyond archive validation: the
+BuildID-`24878692` Diego fixture described under
+[Deployment reality check](#deployment-reality-check) resolved and played it
+from a newly authored `Say` line. That is evidence for that exact member and
+script/localization combination, not a promise that every invented path or
+Vorbis layout will be selected by the game. A five-format follow-up also showed
+lip movement for both audible Vorbis and silent Opus. That is generic placeholder
+facial animation independent of successful audio playback, not accurate
+audio-derived lip sync.
+
+Accurate shipped lip sync is a separate asset path. The language-specific
+`G1R_DialogFacials_*` containers carry cooked `FA_<text-id>` animation assets,
+and the game looks one up independently from the voice recording. A brand-new
+text id has no matching animation, so the placeholder above is the current
+result. GORE does not synthesize or package those facial animations. Supporting
+accurate new lip sync would require an offline facial-authoring pipeline (the
+game build exposes an SGX import path), the matching character rig, Unreal
+animation cooking and new package support; it is not a cheap audio conversion.
 
 These commands *create an archive*. They do not install it into the game — for
 that, use a [bundle](bundles.md).
@@ -307,15 +327,56 @@ gore voice replace --archive "$VO" `
 
 ## Deployment reality check
 
-`replace` targets an existing recording and is the established path. `add` is
-archive-safe, but whether the game actually resolves a brand-new voice path at
-runtime is still runtime-dependent — treat additions as experimental. Nothing
-below moves that: the run described here did not exercise `add` at all.
+Archive validation, bundle packaging, installation and audible runtime playback
+are separate claims. `replace` targets an existing recording; `add` creates a
+new archive member, which still needs authored script and localization that
+resolve that exact basename.
 
 A correct replacement is not the same as an audible one. The archive edit is
 verified; whether that recording is what the engine plays at the moment you are
 listening to is a separate question, and the intro above is the case where the
 answer is no.
+
+**Added member and newly authored line.**
+
+On BuildID `24878692`, one Diego same-module sub-topic crossed the complete
+path with two new localization ids and one new Vorbis member. Its compiled
+`Say` call referenced `GORE_DIEGO_NEWVOICE_24878692_11_00`; the bundle added
+
+`german_new/OldCamp/Diego/GORE_DIEGO_NEWVOICE_24878692_11_00.ogg`.
+
+Selecting the new option displayed the exact authored subtitle
+`[GORE-VOICE-TEST] Neue Diego-Sprachzeile mit neuem Voice-over.` and played the
+new recording. A system-loopback capture of that playback had normalized
+correlation `0.763` with the authored source recording. This is live evidence
+that this new localization-to-voice identity resolved and was audible on that
+build. It does not generalize to other archive directories, codecs, languages,
+speakers, game builds or arbitrary `Say` shapes.
+
+The menu id and spoken-line id each carried identical `german` and
+`german_new` text. The observation therefore proves the new ids were resolved,
+but it does not isolate which German generation won.
+
+**Codec and layout matrix.**
+
+A later five-choice Diego fixture on the same build exercised the same authored
+voice path:
+
+| Payload | Audible | Lips | Completion |
+|---|---|---|---|
+| Vorbis, 48 kHz, mono (control) | Full line | Moved | No hang or crash; menu returned |
+| Vorbis, 44.1 kHz, mono | Full line | Moved | No hang or crash; menu returned |
+| Vorbis, 48 kHz, stereo | Full line | Moved | No hang or crash; menu returned |
+| Opus, 48 kHz, mono | Silent | Moved | No hang or crash; menu returned |
+| Opus, 48 kHz, stereo | Silent | Moved | No hang or crash; menu returned |
+
+The two silent rows are known runtime failures, not merely untested formats,
+which is why deployable voice edits require Vorbis even though `validate` can
+inspect Opus structurally. Lip movement in all five cases isolates the facial
+motion from successful audio playback: it is generic placeholder animation,
+not accurate audio-derived lip sync.
+
+**Existing replacements.**
 
 A replacement has now also been heard. On BuildID 24539464, with the game's
 voice language set to German, two entries of
@@ -344,8 +405,10 @@ and one install, with the toolkit built from commit 90940340. Two lines were
 checked, in German only — no other language, no other speaker, no second
 sitting. It establishes that the path works end to end on that build, on the
 two entries that were touched. It does not establish that a particular
-replacement of yours will be audible, and it says nothing about `add`. Nothing
-in this toolkit ever listens, and no test in the suite checks any of it.
+replacement of yours will be audible. The separate BuildID-`24878692` fixture
+above is the bounded evidence for `add`. GORE's archive and bundle commands do
+not listen automatically; that fixture's correlation came from an explicit
+live system-loopback capture, not from ordinary build or deploy success.
 
 ## Flag summary
 
@@ -359,7 +422,7 @@ in this toolkit ever listens, and no test in the suite checks any of it.
 | `--loc-id <ID>` | `match-line` | Trimmed ASCII localization id, without `.ogg`. |
 | `--basename <NAME>` | `extract`, `replace` | Case-insensitive basename; only when unique. |
 | `--path <ARCHIVE_PATH>` | `extract`, `add`, `replace` | Exact, case-sensitive archive path. |
-| `--ogg <PATH>` | `add`, `replace`, `validate` | Ogg file. Vorbis or Opus passes here; [encode Vorbis](#vorbis-or-opus). A WAV is refused with the ffmpeg line that converts it. |
+| `--ogg <PATH>` | `add`, `replace`, `validate` | Ogg file. `validate` structurally accepts Vorbis or Opus; deployable `add`/`replace` require Vorbis. A WAV is refused with the ffmpeg line that converts it. |
 | `--manifest <PATH>` | `apply-manifest` | Versioned JSON manifest; Ogg paths relative to it. |
 | `-o, --out <PATH>` | all writing commands | Extraction root, or a new ZIP that must not exist. |
 

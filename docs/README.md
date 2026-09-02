@@ -16,6 +16,7 @@ Only the guide ships in the CLI release zip, as Markdown plus a browsable
 
 - [Getting started](guide/getting-started.md) · [CLI reference](guide/cli-reference.md) · [MCP server](guide/mcp.md) · [Finding things](guide/find.md)
 - Domains: [items](guide/items.md) · [text & dialogs](guide/text-and-dialogs.md) · [audio](guide/audio.md) · [voice](guide/voice.md) · [textures](guide/textures.md) · [DataAssets](guide/dataassets.md) · [scripts](guide/scripts.md)
+- Reading and editing the game: [find](guide/find.md) · [dialog trees and structure](guide/dialog-trees.md)
 - AngelScript authoring: [dialogs](guide/dialog-authoring.md) · [defaults](guide/angelscript-defaults.md)
 - Shipping: [bundles](guide/bundles.md) · [many mods](guide/mod-manager.md)
 - Also: [Mod Studio](guide/mod-studio.md) · [catalogs & data models](guide/catalogs-and-models.md)

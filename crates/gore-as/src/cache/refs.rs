@@ -89,6 +89,9 @@ pub struct TypeIdentity {
 /// Resolved-name lookup built from a cache's tail tables.
 #[derive(Debug, Default)]
 pub struct RefResolver {
+    /// GUID copied from the script cache this resolver was built from. Native field types may
+    /// authorize cache mutation only when the loaded Binds.Cache is sealed for this exact GUID.
+    script_cache_guid: Option<[u8; 16]>,
     type_by_ptr: HashMap<i64, String>,
     type_identity_by_ptr: HashMap<i64, TypeIdentity>,
     /// Bare type name -> its declaring namespace, only while every row with that name agrees.
@@ -215,7 +218,10 @@ impl RefResolver {
         super::remap::preflight_tail_tables(bytes)?;
         let tail = module_region_end(bytes)?;
         let mut c = Cursor::at(bytes, tail);
-        let mut r = RefResolver::default();
+        let mut r = RefResolver {
+            script_cache_guid: CacheHeader::parse(bytes).ok().map(|header| header.hash),
+            ..RefResolver::default()
+        };
 
         // T1 TypeReferences: int64 key + (Name, Module, Namespace, TArray<DataType>)
         let type_reference_count = c.read_count("TypeReferences")?;
@@ -465,7 +471,6 @@ impl RefResolver {
             r.type_methods
                 .insert(format!("{}::{name}/{arity}", strip_namespaces(&owner)));
         }
-        let _ = CacheHeader::SIZE; // (header parsed elsewhere)
         Ok(r)
     }
 
@@ -777,6 +782,11 @@ impl RefResolver {
     /// exact (member-load type-id -> owner, member) pair observed at enum stores/argument pushes.
     /// The Binds field-type table (when loaded, dev runs) extends coverage as a fallback.
     pub fn native_field_type(&self, class: &str, field: &str) -> Option<&str> {
+        // Keep authored-default rendering on the same sealed evidence that admitted mutation.
+        // Unqualified generations still fall through to the read-only sources below.
+        if let Some(verified) = self.verified_source_cache_native_default_field_type(class, field) {
+            return Some(verified);
+        }
         const KNOWN_NATIVE_FIELD_TYPES: &[(&str, &str, &str)] = &[
             (
                 "FWidgetAlignment",
@@ -1027,9 +1037,12 @@ impl RefResolver {
     /// [`Self::verified_native_default_field_type`]; this accessor must never be substituted
     /// there. Absent `Binds.Cache`, this returns `None` and callers keep their prior behaviour.
     pub fn native_field_value_type(&self, class: &str, field: &str) -> Option<&str> {
-        self.native
-            .as_ref()
-            .and_then(|native| native.plain_field_type(class, field))
+        self.verified_source_cache_native_default_field_type(class, field)
+            .or_else(|| {
+                self.native
+                    .as_ref()
+                    .and_then(|native| native.plain_field_type(class, field))
+            })
     }
 
     /// Native field type admissible as a cache-mutation witness. Unlike the decompiler's
@@ -1046,6 +1059,18 @@ impl RefResolver {
         self.native
             .as_ref()
             .and_then(|native| native.verified_default_field_type(script_cache_guid, class, field))
+    }
+
+    /// Native field type admissible for authoring defaults from the cache that built this
+    /// resolver. A synthetic resolver, invalid header, or foreign Binds.Cache has no witness.
+    pub(crate) fn verified_source_cache_native_default_field_type(
+        &self,
+        class: &str,
+        field: &str,
+    ) -> Option<&str> {
+        self.script_cache_guid
+            .as_ref()
+            .and_then(|guid| self.verified_native_default_field_type(guid, class, field))
     }
     /// batch-32d: CONST object-handle fields of NATIVE structs — the live compiler treats a
     /// read of these as `const U*`, so a plain store into a same-typed local fails "Can't
@@ -1346,16 +1371,11 @@ impl RefResolver {
             .and_then(|p| self.free_fn_renames.get(p))
             .map(|s| s.as_str())
     }
-    /// True if `name` exists as a MEMBER anywhere: T3 method names (native or script, referenced
-    /// by bytecode), injected script-class method declarations, or any Binds native signature
-    /// name. The production emit runs WITHOUT Binds (JOURNAL: binds-arity emit regressed), so the
-    /// cache-derived sets are the load-bearing sources; Binds adds coverage when loaded.
-    /// batch-32b (N6, spec batch31-nomatch-illegalop §1.10): universal UObject members shadow a
-    /// same-named free script global inside EVERY class body (all script classes derive UObject),
-    /// but are invisible to the cache-derived sets unless some bytecode call references them as a
-    /// T3 method — `GetName(EPerceptionCharacterType)` resolved against the inherited
-    /// `FName UObject::GetName() const` instead of the free script fn (EventResponses ×2).
-    /// Static list; `::`-over-qualification of a non-shadowed global stays harmless.
+    /// True if `name` exists as a member in cached/script/native evidence.
+    ///
+    /// The bytecode emitter now globally qualifies every structurally proven free script global
+    /// inside a class, because a production cache without Binds cannot make this inventory
+    /// complete. Keep the query for collision planning, diagnostics and evidence tests.
     pub fn member_name_exists(&self, name: &str) -> bool {
         const UNIVERSAL_UOBJECT_MEMBERS: [&str; 5] =
             ["GetName", "GetClass", "GetOuter", "GetWorld", "GetFName"];
@@ -1371,6 +1391,17 @@ impl RefResolver {
         self.global_ns.get(&ptr).map(|s| s.as_str())
     }
     /// True if the global at `ptr` is actually a string literal (Name = the text).
+    /// Every string literal the cache's tables carry.
+    ///
+    /// A strict base-keyspace remap can only resolve strings that are already here, so an edit
+    /// that introduces a brand-new literal cannot be carried back onto this cache. Callers use
+    /// this to say so before a compile rather than after one.
+    pub(super) fn string_globals(&self) -> impl Iterator<Item = &str> {
+        self.global_is_string
+            .iter()
+            .filter_map(|pointer| self.global_by_ptr.get(pointer).map(String::as_str))
+    }
+
     pub fn global_is_string(&self, ptr: i64) -> bool {
         self.global_is_string.contains(&ptr)
     }
@@ -1392,6 +1423,13 @@ impl RefResolver {
             .ok()
             .and_then(|i| self.static_names.get(i))
             .map(|s| s.as_str())
+    }
+    /// Every FName-literal text carried by the StaticNames tail table.
+    ///
+    /// This is deliberately separate from [`Self::string_globals`]: `n"..."` and ordinary
+    /// string literals occupy different remap domains even when their text is identical.
+    pub(super) fn static_names(&self) -> impl Iterator<Item = &str> {
+        self.static_names.iter().map(String::as_str)
     }
     /// Number of StaticNames entries (debug aid).
     pub fn static_name_count(&self) -> usize {
@@ -1638,25 +1676,81 @@ mod tests {
     }
 
     #[test]
-    fn unknown_cache_guid_hides_mutation_fields_but_not_decompiler_fields() {
-        let refs = RefResolver {
-            native: Some(super::super::binds::NativeApi::from_test_field_types(
-                &[("UItemDefinition", "m_Value", "int")],
+    fn source_cache_guid_gates_mutation_types_but_not_read_only_evidence() {
+        fn empty_cache(guid: [u8; 16], magic: u32) -> Vec<u8> {
+            let mut bytes = guid.to_vec();
+            bytes.extend_from_slice(&magic.to_le_bytes());
+            bytes.extend_from_slice(&0u32.to_le_bytes());
+            for _ in 0..7 {
+                bytes.extend_from_slice(&0u32.to_le_bytes());
+            }
+            bytes
+        }
+
+        fn attach_test_binds(refs: &mut RefResolver) {
+            refs.set_native_api(super::super::binds::NativeApi::from_test_field_types(
+                &[("UItemDefinition", "m_Value", "bool")],
                 &[("UItemDefinition", "m_Value", "int")],
                 Some(gore_generation::GENERATION_ROWS[0].binds_cache.sha256),
-            )),
-            ..Default::default()
-        };
+            ));
+        }
+
+        let row = &gore_generation::GENERATION_ROWS[0];
+        let mut refs = RefResolver::build(&empty_cache(
+            row.script_cache_guid,
+            super::super::header::CACHE_MAGIC,
+        ))
+        .expect("build exact-pair resolver");
+        attach_test_binds(&mut refs);
 
         assert_eq!(
             refs.verified_native_default_field_type(&[0; 16], "UItemDefinition", "m_Value",),
             None
         );
         assert_eq!(
+            refs.verified_source_cache_native_default_field_type(
+                "UItemDefinition",
+                "m_Value"
+            ),
+            Some("int"),
+            "the source-cache channel accepts the exactly paired generation"
+        );
+        assert_eq!(
             refs.native_field_type("UItemDefinition", "m_Value"),
             Some("int"),
-            "generic decompiler evidence must remain independent of the mutation GUID gate"
+            "rendering must prefer the sealed type that admitted authored defaults"
         );
+        assert_eq!(
+            refs.native_field_value_type("UItemDefinition", "m_Value"),
+            Some("int")
+        );
+
+        let mut foreign_guid = row.script_cache_guid;
+        foreign_guid[0] ^= 1;
+        let mut foreign = RefResolver::build(&empty_cache(
+            foreign_guid,
+            super::super::header::CACHE_MAGIC,
+        ))
+        .expect("build foreign-generation resolver");
+        attach_test_binds(&mut foreign);
+        assert_eq!(
+            foreign.verified_source_cache_native_default_field_type(
+                "UItemDefinition",
+                "m_Value"
+            ),
+            None,
+            "a foreign script-cache GUID must not authorize default authoring"
+        );
+        assert_eq!(
+            foreign.native_field_value_type("UItemDefinition", "m_Value"),
+            Some("bool"),
+            "read-only decompilation keeps its best-effort Binds evidence"
+        );
+        assert_eq!(
+            foreign.native_field_type("UItemDefinition", "m_Value"),
+            Some("bool")
+        );
+
     }
 
     #[test]

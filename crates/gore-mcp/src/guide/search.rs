@@ -78,7 +78,7 @@ const MAX_BODY_HITS: u32 = 3;
 const REFERENCE_OFF_TOPIC: f64 = 0.5;
 
 /// How far past neutral a query's vocabulary must lean before it counts as a question about
-/// internals: a fifth of the way from what an ordinary word leans to what a reference-only word
+/// internals: a tenth of the way from what an ordinary word leans to what a reference-only word
 /// leans.
 ///
 /// A margin rather than a bare comparison, because the thing being compared moves. Neutral is
@@ -88,12 +88,12 @@ const REFERENCE_OFF_TOPIC: f64 = 0.5;
 /// of maintainer internals back at the front of his results, for an edit to a page he was never
 /// going to read.
 ///
-/// A fifth is where the two kinds of query stop being close. Measured over the sets in
+/// A tenth is where the two kinds of query stop being close. Measured over the sets in
 /// `symptom_queries_and_internals_queries_fall_on_opposite_sides_of_the_line`, symptom phrasings
-/// ran 0.12–0.42 and internals phrasings 0.47–0.71, so the threshold sits in the gap rather than in
+/// ran 0.12–0.34 and internals phrasings 0.47–0.71, so the threshold sits in the gap rather than in
 /// the crowd. That test re-measures both sets on every run and is the canary if the corpus drifts
 /// far enough to close it.
-const INTERNALS_MARGIN: f64 = 0.2;
+const INTERNALS_MARGIN: f64 = 0.1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hit {

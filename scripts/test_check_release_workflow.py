@@ -81,10 +81,10 @@ class DownloadTableContractTest(unittest.TestCase):
 
     def test_release_tag_must_match_the_advertised_version(self) -> None:
         self.assertEqual(
-            validate_download_table(self.readme, "gore-save-editor-v1.3.0"), []
+            validate_download_table(self.readme, "gore-save-editor-v1.4.0"), []
         )
         self.assert_invalid(
-            self.readme, "gore-save-editor-v1.4.0", "the release tag is"
+            self.readme, "gore-save-editor-v1.3.0", "the release tag is"
         )
 
     def test_releasing_an_unreleased_product_requires_a_row(self) -> None:
@@ -98,7 +98,7 @@ class DownloadTableContractTest(unittest.TestCase):
         self.assert_invalid(
             replace_once(
                 self.readme,
-                "releases/tag/gore-cli-v0.2.3)",
+                "releases/tag/gore-cli-v0.3.0)",
                 # Deliberately wrong test-only version: the checker must reject this link.
                 "releases/tag/gore-cli-v9.9.9)",
             ),
@@ -108,7 +108,7 @@ class DownloadTableContractTest(unittest.TestCase):
 
     def test_link_text_must_be_the_release_tag(self) -> None:
         self.assert_invalid(
-            replace_once(self.readme, "[gore-cli-v0.2.3]", "[latest]"),
+            replace_once(self.readme, "[gore-cli-v0.3.0]", "[latest]"),
             None,
             "link text must be the release tag",
         )
@@ -135,7 +135,7 @@ class DownloadTableContractTest(unittest.TestCase):
 
     def test_unreadable_and_unknown_rows_fail_closed(self) -> None:
         self.assert_invalid(
-            replace_once(self.readme, "| **CLI** | 0.2.3 |", "| **CLI** | v0.2.3 |"),
+            replace_once(self.readme, "| **CLI** | 0.3.0 |", "| **CLI** | v0.3.0 |"),
             None,
             "unreadable download row",
         )

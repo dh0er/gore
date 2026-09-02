@@ -1027,9 +1027,15 @@ fn library_ids_equal(left: &str, right: &str) -> bool {
 }
 
 fn proposed_import_id(name: &str, canonical_source: &Path) -> String {
+    const HASH_SUFFIX_BYTES: usize = 1 + 8;
+    let mut stem = slug(name);
+    stem.truncate(crate::MAX_PORTABLE_MOD_NAME_BYTES - HASH_SUFFIX_BYTES);
+    while stem.ends_with('-') {
+        stem.pop();
+    }
     let proposed = format!(
         "{}-{}",
-        slug(name),
+        stem,
         crate::name_hash(&format!("{name}\0{}", canonical_source.display()))
     );
     proposed_import_id_override(proposed)
@@ -5784,7 +5790,7 @@ fn goremod_components(
                         total_ogg_bytes,
                         limits.max_voice_ogg_total_bytes,
                     )?;
-                    gore_vo::validate_ogg(&ogg, &voice_limits)
+                    gore_vo::validate_deployable_ogg(&ogg, &voice_limits)
                         .map_err(|e| ModError::Voice(format!("{}: {e}", edit.ogg)))?;
                     let target = format!("{}|{}", edit.archive, edit.archive_path);
                     targets.insert(portable_windows_key(&target), target);
@@ -8069,6 +8075,23 @@ mod tests {
         let error = import(&lib, &bdir).unwrap_err().to_string();
         assert!(error.contains("voice archive"), "unexpected error: {error}");
         assert!(list(&lib).unwrap().is_empty());
+
+        let bdir = mk_goremod_bundle(tmp.path());
+        let manifest: crate::VoicePatchManifest =
+            serde_json::from_slice(&fs::read(bdir.join("voice/manifest.json")).unwrap()).unwrap();
+        fs::write(
+            bdir.join(&manifest.edits[0].ogg),
+            include_bytes!("../../../gore-vo/testdata/tiny-opus.ogg"),
+        )
+        .unwrap();
+        let error = import(&lib, &bdir).unwrap_err().to_string();
+        assert!(
+            error.contains("structurally valid")
+                && error.contains("not qualified")
+                && error.contains("require Vorbis"),
+            "unexpected error: {error}"
+        );
+        assert!(list(&lib).unwrap().is_empty());
     }
 
     #[test]
@@ -9343,6 +9366,18 @@ mod tests {
         );
         assert_eq!(visible_library_snapshot(&lib), before);
         assert_no_import_residue(&lib);
+    }
+
+    #[test]
+    fn proposed_import_id_reserves_room_for_its_hash_suffix() {
+        let name = "A".repeat(crate::MAX_PORTABLE_MOD_NAME_BYTES + 100);
+        let source = Path::new("C:/mods/example_P.pak");
+        let id = proposed_import_id(&name, source);
+        let hash = crate::name_hash(&format!("{name}\0{}", source.display()));
+
+        assert_eq!(id.len(), crate::MAX_PORTABLE_MOD_NAME_BYTES);
+        assert!(id.ends_with(&format!("-{hash}")), "{id}");
+        assert!(crate::is_safe_mod_name(&id));
     }
 
     #[test]

@@ -169,9 +169,9 @@ pub enum AsCmd {
     EmitAll {
         file: PathBuf,
         outdir: PathBuf,
-        /// Omit class `default` statements. Needed for a module you intend to edit and splice
-        /// back with `compile-module --op edit`, whose remap cannot follow a regenerated
-        /// `__InitDefaults`; the defaults are preserved byte-exact for you in that case.
+        /// Omit every class `default` statement. Use only for an edit that intentionally authors
+        /// no defaults and can use the strict-remap, byte-exact `__InitDefaults` carry fallback;
+        /// ordinary `compile-module --op edit` inputs should retain the complete emitted defaults.
         #[arg(long)]
         no_defaults: bool,
     },
@@ -182,9 +182,9 @@ pub enum AsCmd {
         needle: String,
         #[arg(long, default_value_t = 5)]
         max: usize,
-        /// Omit class `default` statements. Needed for a module you intend to edit and splice
-        /// back with `compile-module --op edit`, whose remap cannot follow a regenerated
-        /// `__InitDefaults`; the defaults are preserved byte-exact for you in that case.
+        /// Omit every class `default` statement. Use only for an edit that intentionally authors
+        /// no defaults and can use the strict-remap, byte-exact `__InitDefaults` carry fallback;
+        /// ordinary `compile-module --op edit` inputs should retain the complete emitted defaults.
         #[arg(long)]
         no_defaults: bool,
     },
@@ -282,10 +282,13 @@ pub enum AsCmd {
         #[arg(long)]
         game: Option<PathBuf>,
     },
-    /// Compile one complete AngelScript source tree into a new full precompiled cache. The final
-    /// output is always outside the game installation and is never installed implicitly.
+    /// Resolve one complete AngelScript source tree as a coordinated graph, then publish a new
+    /// full cache that preserves untouched pristine modules and selectively composes authored
+    /// additions and edits. The output is never installed implicitly.
     Compile {
-        /// Complete authoritative `.as` source tree. Missing base modules are explicit deletes.
+        /// Complete `.as` tree emitted from the target cache and then edited. Added or changed
+        /// modules become authored additions or edits; missing base modules request an unsupported
+        /// delete and are rejected.
         src: PathBuf,
         /// Publish the complete cache here with atomic no-clobber semantics. Must be outside the
         /// game installation.
@@ -340,7 +343,8 @@ pub enum AsCmd {
         #[arg(long)]
         work_dir: PathBuf,
         /// Explicitly retain minimal rows for classes/functions/names absent from the pristine
-        /// cache. Normally used with `--op add`; strict remapping remains the default.
+        /// cache. Used for `--op add` and for intentional new symbols in a safe `--op edit`;
+        /// strict remapping remains the default.
         #[arg(long)]
         allow_new_symbols: bool,
         /// Output path for the remapped 1-module mini-cache.
@@ -2071,7 +2075,11 @@ fn compile_full_graph_command(
             };
         (base, binds)
     };
-    let plan = match gore_as::full_graph_plan::plan_complete_source_tree_v1(&base_cache, &src) {
+    let plan = match gore_as::full_graph_plan::plan_complete_source_tree_with_emitted_base_v1(
+        &base_cache,
+        &binds_cache,
+        &src,
+    ) {
         Ok(plan) => plan,
         Err(error) => {
             let error = anyhow::Error::new(error).context("planning the complete source graph");
@@ -2295,6 +2303,17 @@ fn validate_compiler_work_dir(work_dir: &Path, game: &Path) -> Result<()> {
         bail!("compiler workspace must be outside the game installation");
     }
     Ok(())
+}
+
+fn resolve_compile_module_work_dir(work_dir: PathBuf, game: &Path) -> Result<PathBuf> {
+    let work_dir = absolute_cli_path(work_dir, "compiler workspace")?;
+    // Validate the path the caller supplied before canonicalization. Otherwise a symlink or
+    // Windows reparse point is resolved to its target and becomes indistinguishable from the real
+    // directory that compile-tree cleanup may modify.
+    validate_compiler_work_dir(&work_dir, game)?;
+    work_dir
+        .canonicalize()
+        .with_context(|| format!("resolving compiler workspace {}", work_dir.display()))
 }
 
 fn validate_auxiliary_output_path(path: &Path, game: &Path, label: &'static str) -> Result<()> {
@@ -3126,10 +3145,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             compiler,
         } => {
             let game = gore_loc::config::game_root(game).context("resolving game path")?;
-            let work_dir = work_dir
-                .canonicalize()
-                .with_context(|| format!("resolving compiler workspace {}", work_dir.display()))?;
-            validate_compiler_work_dir(&work_dir, &game)?;
+            let work_dir = resolve_compile_module_work_dir(work_dir, &game)?;
             let source_bytes = read_regular_bounded(
                 &source,
                 gore_as::generation_receipt::MAX_GENERATION_SOURCE_FILE_BYTES_V1 as u64,
@@ -5686,6 +5702,45 @@ fn qualify_count(
 #[cfg(test)]
 mod default_cli_tests {
     use super::*;
+
+    #[test]
+    fn compile_module_work_dir_is_resolved_after_validation() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let work = root.path().join("work");
+        std::fs::create_dir(&game).unwrap();
+        std::fs::create_dir(&work).unwrap();
+
+        assert_eq!(
+            resolve_compile_module_work_dir(work.clone(), &game).unwrap(),
+            work.canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn compile_module_work_dir_rejects_a_link_before_resolution() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let outside = root.path().join("outside");
+        let linked = root.path().join("linked-work");
+        std::fs::create_dir(&game).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+
+        #[cfg(unix)]
+        let link_result = std::os::unix::fs::symlink(&outside, &linked);
+        #[cfg(windows)]
+        let link_result = std::os::windows::fs::symlink_dir(&outside, &linked);
+        if let Err(error) = link_result {
+            eprintln!("skip: this account cannot create a directory symlink: {error}");
+            return;
+        }
+
+        let error = resolve_compile_module_work_dir(linked, &game).unwrap_err();
+        assert!(
+            error.to_string().contains("non-reparse directory"),
+            "got: {error:#}"
+        );
+    }
 
     #[test]
     fn qualify_native_bases_ignore_the_empty_non_inheriting_sentinel() {

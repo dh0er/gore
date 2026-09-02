@@ -909,10 +909,10 @@ fn name_in_json(path: &str, pointer: &str) -> Result<String, SourceProblem> {
 
 /// The child's rule for a bundle directory name, restated.
 ///
-/// `gore_mod::is_safe_mod_name` is `!contains('/') && !contains('\\')` plus
-/// `gore_vo::validate_archive_entry_path` for one component, and this crate cannot call either:
-/// it depends on `serde` alone and reaches the toolkit by spawning it. Restating the rule is the
-/// cost of that, so it is restated in full rather than in part.
+/// `gore_mod::is_safe_mod_name` is the 198-UTF-8-byte limit plus `!contains('/') &&
+/// !contains('\\')` and `gore_vo::validate_archive_entry_path` for one component. This crate
+/// cannot call either validator: it depends on `serde` alone and reaches the toolkit by spawning
+/// it. Restating the rule is the cost of that, so it is restated in full rather than in part.
 ///
 /// An earlier version kept only the escape-relevant half — separators, `..`, drive letters — on
 /// the grounds that a rule copied imperfectly could refuse a call the child accepts. The half left
@@ -920,11 +920,10 @@ fn name_in_json(path: &str, pointer: &str) -> Result<String, SourceProblem> {
 /// directory, the occupancy gate finds it, and a client that answers its own dialogs turns a spec
 /// defect into a refusal about permission. The tests below pin both directions, which is what makes
 /// restating it safe.
-///
-/// Not mirrored: the child's byte-length limit. A name long enough to trip it is pathological, and
-/// omitting a bound can only let a call through to the child's own error — never refuse a good one.
 fn is_safe_mod_name(name: &str) -> bool {
-    if name.is_empty() || name == "." || name == ".." {
+    const MAX_PORTABLE_MOD_NAME_BYTES: usize = 198;
+
+    if name.is_empty() || name.len() > MAX_PORTABLE_MOD_NAME_BYTES || name == "." || name == ".." {
         return false;
     }
     if name.contains(['/', '\\', ':', '\0'])
@@ -1381,6 +1380,38 @@ mod tests {
     }
 
     #[test]
+    fn dialog_writers_gate_only_the_targets_they_can_overwrite() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace = dir.path().join("checkout");
+        std::fs::create_dir_all(&workspace).expect("mkdir workspace");
+        std::fs::write(workspace.join("dialog-edit.json"), b"{}").expect("write manifest fixture");
+        let stage_call = json!({ "dir": workspace.to_string_lossy() });
+
+        assert!(
+            question("gore_dialog", "stage", stage_call.clone(), &options()).is_none(),
+            "an occupied checkout is expected; only its derived spec.json may collide"
+        );
+        std::fs::write(workspace.join("spec.json"), b"manual edits").expect("write staged spec");
+        assert!(
+            asks_about_a_write(question("gore_dialog", "stage", stage_call, &options())),
+            "rerunning stage must ask before replacing spec.json"
+        );
+
+        let export = dir.path().join("export");
+        std::fs::create_dir_all(&export).expect("mkdir export");
+        let export_call = json!({ "out": export.to_string_lossy() });
+        assert!(
+            question("gore_dialog", "export", export_call.clone(), &options()).is_none(),
+            "an empty export directory has nothing to overwrite"
+        );
+        std::fs::write(export.join("000001_manual.json"), b"keep").expect("write export fixture");
+        assert!(
+            question("gore_dialog", "export", export_call, &options()).is_none(),
+            "the CLI refuses an occupied export directory instead of overwriting it"
+        );
+    }
+
+    #[test]
     fn packing_into_the_game_tree_is_a_deployment_and_is_gated() {
         // `texture pack -o ./build` is an artifact; `texture pack -o <game>/G1R/Content/Paks/~mods`
         // is the live override the game mounts, which is what `texture deploy` needs a flag for.
@@ -1652,6 +1683,23 @@ mod tests {
                 "the message must say this is not a permission problem: {rendered}"
             );
         }
+    }
+
+    #[test]
+    fn bundle_name_mirror_enforces_the_utf8_byte_limit() {
+        let ascii_at_limit = "a".repeat(198);
+        let ascii_over_limit = "a".repeat(199);
+        assert!(is_safe_mod_name(&ascii_at_limit));
+        assert!(!is_safe_mod_name(&ascii_over_limit));
+
+        // The child counts serialized UTF-8 bytes, not Unicode scalar values. Ninety-nine two-byte
+        // characters fit exactly; appending one ASCII byte crosses the same 198/199 boundary.
+        let utf8_at_limit = "é".repeat(99);
+        let utf8_over_limit = format!("{utf8_at_limit}a");
+        assert_eq!(utf8_at_limit.len(), 198);
+        assert_eq!(utf8_over_limit.len(), 199);
+        assert!(is_safe_mod_name(&utf8_at_limit));
+        assert!(!is_safe_mod_name(&utf8_over_limit));
     }
 
     #[test]

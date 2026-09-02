@@ -36,6 +36,7 @@ pages! {
     Guide / "getting-started"      => "guide/getting-started.md",
     Guide / "cli-reference"        => "guide/cli-reference.md",
     Guide / "find"                 => "guide/find.md",
+    Guide / "dialog-trees"         => "guide/dialog-trees.md",
     Guide / "mcp"                  => "guide/mcp.md",
     // Modding domains
     Guide / "items"                => "guide/items.md",
