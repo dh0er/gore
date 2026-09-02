@@ -2476,6 +2476,78 @@ fn checkout(npc: &str, out: &PathBuf, cache: Option<PathBuf>, game: Option<PathB
 }
 
 /// Read the manifest and re-derive everything the check needs from the same cache.
+fn dialog_workspace_source(dir: &Path, value: &str) -> Result<PathBuf> {
+    gore_vo::validate_archive_entry_path(value, &gore_vo::Limits::default()).with_context(|| {
+        "dialog manifest source_file must be a normalized portable path relative to the workspace"
+    })?;
+    let relative = value.split('/').collect::<PathBuf>();
+
+    let root_metadata = fs::symlink_metadata(dir)
+        .with_context(|| format!("reading dialog workspace metadata {}", dir.display()))?;
+    if !root_metadata.is_dir() || dialog_metadata_is_link(&root_metadata) {
+        bail!(
+            "dialog workspace must be a plain directory, not a symbolic link or reparse point: {}",
+            dir.display()
+        );
+    }
+    let canonical_root = fs::canonicalize(dir)
+        .with_context(|| format!("resolving dialog workspace {}", dir.display()))?;
+
+    let components = relative.components().collect::<Vec<_>>();
+    let mut candidate = dir.to_path_buf();
+    for (index, component) in components.iter().enumerate() {
+        candidate.push(component.as_os_str());
+        let metadata = fs::symlink_metadata(&candidate).with_context(|| {
+            format!("reading dialog source metadata {}", candidate.display())
+        })?;
+        if dialog_metadata_is_link(&metadata) {
+            bail!(
+                "dialog manifest source_file crosses a symbolic link or reparse point: {}",
+                candidate.display()
+            );
+        }
+        if index + 1 == components.len() {
+            if !metadata.is_file() {
+                bail!(
+                    "dialog manifest source_file is not a regular file: {}",
+                    candidate.display()
+                );
+            }
+        } else if !metadata.is_dir() {
+            bail!(
+                "dialog manifest source_file crosses a non-directory component: {}",
+                candidate.display()
+            );
+        }
+    }
+
+    let canonical_source = fs::canonicalize(&candidate)
+        .with_context(|| format!("resolving dialog source {}", candidate.display()))?;
+    if !canonical_source.starts_with(&canonical_root) {
+        bail!(
+            "dialog manifest source_file resolves outside the workspace: {}",
+            candidate.display()
+        );
+    }
+    Ok(canonical_source)
+}
+
+fn dialog_metadata_is_link(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return true;
+        }
+    }
+    false
+}
+
 fn open_edit(
     dir: &PathBuf,
     cache: Option<PathBuf>,
@@ -2487,6 +2559,7 @@ fn open_edit(
             .with_context(|| format!("reading {}", manifest_path.display()))?,
     )
     .with_context(|| format!("parsing {}", manifest_path.display()))?;
+    let source_path = dialog_workspace_source(dir, &manifest.source_file)?;
 
     let (path, bytes) = read_cache(cache, game)?;
     let digest = digest_of(&bytes);
@@ -2547,7 +2620,6 @@ fn open_edit(
             }
         }
     };
-    let source_path = dir.join(&manifest.source_file);
     let authored = fs::read_to_string(&source_path)
         .with_context(|| format!("reading {}", source_path.display()))?;
     let known = dialog::known_names(&bytes).context("collecting the cache's names")?;
@@ -6201,6 +6273,63 @@ class UFirst : UTopic_Hero__NEW_NPC { }
             requires_topic_scaffold: false,
             dialog_topics: Vec::new(),
         }
+    }
+
+    #[test]
+    fn manifest_source_is_a_normalized_file_inside_the_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        let nested = workspace.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        let source = nested.join("Topic.as");
+        fs::write(&source, "class UTopic {}\n").unwrap();
+
+        assert_eq!(
+            dialog_workspace_source(&workspace, "nested/Topic.as").unwrap(),
+            fs::canonicalize(&source).unwrap()
+        );
+
+        let outside = temp.path().join("outside.as");
+        fs::write(&outside, "private local contents").unwrap();
+        for unsafe_path in [
+            "../outside.as".to_owned(),
+            "nested/../../outside.as".to_owned(),
+            outside.to_string_lossy().into_owned(),
+            "C:/outside.as".to_owned(),
+            "//server/share/outside.as".to_owned(),
+            r"\\server\share\outside.as".to_owned(),
+        ] {
+            let error = dialog_workspace_source(&workspace, &unsafe_path).unwrap_err();
+            assert!(
+                format!("{error:#}").contains("normalized portable path"),
+                "unexpected error for {unsafe_path:?}: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_source_rejects_a_symbolic_link_or_reparse_point() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+        let outside = temp.path().join("outside.as");
+        fs::write(&outside, "private local contents").unwrap();
+        let linked = workspace.join("Topic.as");
+
+        #[cfg(unix)]
+        let link_result = std::os::unix::fs::symlink(&outside, &linked);
+        #[cfg(windows)]
+        let link_result = std::os::windows::fs::symlink_file(&outside, &linked);
+        if let Err(error) = link_result {
+            eprintln!("skip: this account cannot create a file symlink: {error}");
+            return;
+        }
+
+        let error = dialog_workspace_source(&workspace, "Topic.as").unwrap_err();
+        assert!(
+            error.to_string().contains("symbolic link or reparse point"),
+            "{error:#}"
+        );
     }
 
     #[test]
