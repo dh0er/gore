@@ -469,6 +469,10 @@ gore dialog tree om_stt_viper_302 --json
 gore dialog export -o dialog\
 ```
 
+Export filenames start with a stable sequence number so distinct module identities cannot
+overwrite one another on case-insensitive filesystems. The complete module identity remains in
+each JSON document.
+
 The JSON carries everything the human view summarizes — every rule with its
 arguments, every check, every step with its guard, plus a per-conversation
 `coverage` block — so a tool downstream can tell what was read from what was

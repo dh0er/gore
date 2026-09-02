@@ -25,7 +25,7 @@ use gore_as::cache::dialog::{
     Topic, Visibility,
 };
 
-use super::find::{load_name_index, NameIndexState};
+use super::find::{load_name_index, Name, NameIndexState};
 
 /// Localization columns to read a line from, newest first, per language family.
 const GERMAN_COLUMNS: &[&str] = &["german_new", "german"];
@@ -350,22 +350,9 @@ fn read_graph(cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<DialogGra
     dialog::build(&bytes).with_context(|| format!("reading dialog from {}", path.display()))
 }
 
-/// Conversations whose participants or module match `needle`, matched case-insensitively.
-fn matching<'a>(graph: &'a DialogGraph, needle: &str) -> Vec<&'a Conversation> {
+/// Every conversation whose participant or module contains `needle`, case-insensitively.
+fn containing<'a>(graph: &'a DialogGraph, needle: &str) -> Vec<&'a Conversation> {
     let needle = needle.to_lowercase();
-    let exact: Vec<&Conversation> = graph
-        .conversations
-        .iter()
-        .filter(|conversation| {
-            conversation
-                .npc_participants()
-                .any(|participant| participant.to_lowercase() == needle)
-                || conversation.module.to_lowercase() == needle
-        })
-        .collect();
-    if !exact.is_empty() {
-        return exact;
-    }
     graph
         .conversations
         .iter()
@@ -377,6 +364,26 @@ fn matching<'a>(graph: &'a DialogGraph, needle: &str) -> Vec<&'a Conversation> {
                 || conversation.module.to_lowercase().contains(&needle)
         })
         .collect()
+}
+
+/// Prefer exact participant/module matches when resolving one conversation, then fall back to
+/// the broad substring lookup used by read commands.
+fn matching<'a>(graph: &'a DialogGraph, needle: &str) -> Vec<&'a Conversation> {
+    let folded = needle.to_lowercase();
+    let exact: Vec<&Conversation> = graph
+        .conversations
+        .iter()
+        .filter(|conversation| {
+            conversation
+                .npc_participants()
+                .any(|participant| participant.to_lowercase() == folded)
+                || conversation.module.to_lowercase() == folded
+        })
+        .collect();
+    if !exact.is_empty() {
+        return exact;
+    }
+    containing(graph, needle)
 }
 
 /// Exact participant lookup for commands that may scaffold into a loaded settings anchor.
@@ -419,6 +426,14 @@ fn columns_for(lang: &str) -> Vec<String> {
     }
 }
 
+fn name_in_columns<'a>(names: &'a [Name], columns: &[String]) -> Option<&'a Name> {
+    columns.iter().find_map(|column| {
+        names
+            .iter()
+            .find(|name| name.language.eq_ignore_ascii_case(column))
+    })
+}
+
 /// Load the text for `keys` in the first populated column of `lang`'s chain.
 fn load_text(keys: &HashSet<String>, lang: &str) -> Text {
     let columns = columns_for(lang);
@@ -429,14 +444,7 @@ fn load_text(keys: &HashSet<String>, lang: &str) -> Text {
                 let Some(names) = index.names_for(key) else {
                     continue;
                 };
-                let chosen = columns
-                    .iter()
-                    .find_map(|column| {
-                        names
-                            .iter()
-                            .find(|name| name.language.eq_ignore_ascii_case(column))
-                    })
-                    .or_else(|| names.first());
+                let chosen = name_in_columns(names, &columns);
                 if let Some(name) = chosen {
                     lines.insert(key.to_lowercase(), name.text.clone());
                 }
@@ -504,7 +512,7 @@ fn list(
 ) -> Result<()> {
     let graph = read_graph(cache, game)?;
     let selected: Vec<&Conversation> = match filter {
-        Some(needle) => matching(&graph, needle),
+        Some(needle) => containing(&graph, needle),
         None => graph.conversations.iter().collect(),
     };
 
@@ -1068,11 +1076,7 @@ fn text_edits(
     let mut used: BTreeMap<String, usize> = BTreeMap::new();
     for key in &keys {
         let names = index.names_for(key).unwrap_or(&[]);
-        let chosen = columns.iter().find_map(|column| {
-            names
-                .iter()
-                .find(|name| name.language.eq_ignore_ascii_case(column))
-        });
+        let chosen = name_in_columns(names, &columns);
         let (column, value) = match chosen {
             Some(name) => (name.language.clone(), name.text.clone()),
             None => {
@@ -4294,20 +4298,37 @@ fn new_topic(request: NewTopicRequest) -> Result<()> {
 
 // ─── export ──────────────────────────────────────────────────────────────────
 
-fn export(out: &PathBuf, cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<()> {
-    let graph = read_graph(cache, game)?;
+fn export_file_name(position: usize, module: &str) -> String {
+    let stem: String = module
+        .chars()
+        .take(96)
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("{:06}_{stem}.json", position + 1)
+}
+
+fn write_export_files(out: &Path, graph: &DialogGraph) -> Result<usize> {
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
-    for conversation in &graph.conversations {
-        let name = format!("{}.json", conversation.module.replace('.', "_"));
-        let path = out.join(name);
+    for (position, conversation) in graph.conversations.iter().enumerate() {
+        // The ordinal makes names unique even on case-insensitive filesystems and when two module
+        // identities sanitize to the same display stem. The complete identity remains in JSON.
+        let path = out.join(export_file_name(position, &conversation.module));
         let json = serde_json::to_string_pretty(conversation)?;
         fs::write(&path, json).with_context(|| format!("writing {}", path.display()))?;
     }
-    println!(
-        "wrote {} conversation(s) to {}",
-        graph.conversations.len(),
-        out.display()
-    );
+    Ok(graph.conversations.len())
+}
+
+fn export(out: &PathBuf, cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<()> {
+    let graph = read_graph(cache, game)?;
+    let written = write_export_files(out, &graph)?;
+    println!("wrote {} conversation(s) to {}", written, out.display());
     Ok(())
 }
 
@@ -4327,6 +4348,96 @@ mod tests {
     #[test]
     fn an_exact_column_is_used_as_given() {
         assert_eq!(columns_for("polish"), vec!["polish"]);
+    }
+
+    #[test]
+    fn localized_names_never_fall_back_to_another_language() {
+        let names = vec![
+            Name {
+                language: "german".to_owned(),
+                text: "Deutsch".to_owned(),
+            },
+            Name {
+                language: "english".to_owned(),
+                text: "Old".to_owned(),
+            },
+            Name {
+                language: "english_new".to_owned(),
+                text: "New".to_owned(),
+            },
+        ];
+
+        assert_eq!(
+            name_in_columns(&names, &columns_for("english")).map(|name| name.text.as_str()),
+            Some("New")
+        );
+        assert!(name_in_columns(&names, &columns_for("polish")).is_none());
+        assert!(name_in_columns(&names, &["english_newer".to_owned()]).is_none());
+    }
+
+    fn empty_conversation(module: &str, participant: &str) -> Conversation {
+        Conversation {
+            module: module.to_owned(),
+            root_class: None,
+            participants: vec!["Hero".to_owned(), participant.to_owned()],
+            topics: Vec::new(),
+            roots: Vec::new(),
+            coverage: Default::default(),
+        }
+    }
+
+    #[test]
+    fn list_filter_keeps_all_substring_matches_while_single_resolution_prefers_exact() {
+        let graph = DialogGraph {
+            conversations: vec![
+                empty_conversation("Story.Exact", "DIEGO"),
+                empty_conversation("Story.Guard", "DIEGO_GUARD"),
+                empty_conversation("Story.Diego.Extra", "OTHER"),
+            ],
+        };
+
+        assert_eq!(containing(&graph, "DiEgO").len(), 3);
+        assert_eq!(matching(&graph, "DiEgO").len(), 1);
+        assert_eq!(matching(&graph, "DiEgO")[0].module, "Story.Exact");
+    }
+
+    #[test]
+    fn export_names_cannot_overwrite_sanitization_or_case_collisions() {
+        let graph = DialogGraph {
+            conversations: vec![
+                empty_conversation("Story.A_B", "ONE"),
+                empty_conversation("Story_A.B", "TWO"),
+                empty_conversation("story.a_b", "THREE"),
+            ],
+        };
+        let temp = tempfile::tempdir().unwrap();
+
+        assert_eq!(write_export_files(temp.path(), &graph).unwrap(), 3);
+        let mut modules = Vec::new();
+        let mut names = Vec::new();
+        for entry in fs::read_dir(temp.path()).unwrap() {
+            let entry = entry.unwrap();
+            names.push(entry.file_name().to_string_lossy().to_lowercase());
+            let value: serde_json::Value =
+                serde_json::from_slice(&fs::read(entry.path()).unwrap()).unwrap();
+            modules.push(value["module"].as_str().unwrap().to_owned());
+        }
+        names.sort();
+        names.dedup();
+        modules.sort();
+
+        assert_eq!(names.len(), 3);
+        assert!(names.iter().all(|name| {
+            name.len() < 120 && !name.contains('/') && !name.contains('\\') && !name.contains(':')
+        }));
+        assert_eq!(
+            modules,
+            vec![
+                "Story.A_B".to_owned(),
+                "Story_A.B".to_owned(),
+                "story.a_b".to_owned()
+            ]
+        );
     }
 
     fn topic(class: &str, caption: &str, act: Vec<StepKind>) -> gore_as::cache::dialog::Topic {
