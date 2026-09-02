@@ -610,9 +610,10 @@ fn require_typed_default_scalar_stores(f: &Func, refs: &RefResolver) -> Result<(
         let field = refs.member(type_id, offset).ok_or_else(|| {
             format!("default scalar store has unknown member {type_id:#x}+{offset}")
         })?;
-        let typed = refs.field_type_by_class(owner, field).is_some()
-            || refs.native_field_value_type(owner, field).is_some()
-            || refs.native_field_type(owner, field).is_some();
+        let typed = refs.own_field_type_by_class(owner, field).is_some()
+            || refs
+                .verified_source_cache_native_default_field_type(owner, field)
+                .is_some();
         if !typed {
             return Err(format!(
                 "default scalar field {owner}.{field} has no declared value type; load the matching Binds.Cache to author this module's defaults"
@@ -15352,6 +15353,15 @@ mod default_binds_regression_tests {
         assert!(with.contains("default ForceSettings.RangeType = EConversationForceRangeType(3);"));
         assert!(with.contains("default ForceSettings.ApproachBy = EConversationForceWalk(2);"));
         assert!(!with.contains("ForceSettings.RangeType = (3 != 0)"));
+
+        let mut foreign_generation = cache.clone();
+        foreign_generation[0] ^= 1;
+        let foreign = emitted_diego(
+            &foreign_generation,
+            Some(NativeApi::from_bytes(&binds).expect("parse Binds.Cache again")),
+        );
+        assert_eq!(foreign.matches("    default ").count(), 0);
+        assert!(foreign.contains("load the matching Binds.Cache"));
     }
 }
 
