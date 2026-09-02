@@ -16,6 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -2409,6 +2410,9 @@ fn validate_topic_registrations(
 }
 
 const MANIFEST_NAME: &str = "gore-dialog-edit.json";
+const MAX_DIALOG_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_DIALOG_SOURCE_BYTES: u64 =
+    gore_as::compile::MAX_PROJECT_COMPILER_CHECK_SOURCE_BYTES as u64;
 
 fn ensure_empty_dialog_workspace(out: &Path) -> Result<()> {
     if !out.exists() {
@@ -2579,17 +2583,103 @@ fn dialog_metadata_is_link(metadata: &fs::Metadata) -> bool {
     false
 }
 
+fn read_dialog_workspace_text(path: &Path, label: &str, max_bytes: u64) -> Result<String> {
+    let file =
+        fs::File::open(path).with_context(|| format!("opening {label} {}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("reading {label} metadata {}", path.display()))?;
+    if !metadata.is_file() {
+        bail!("{label} is not a regular file: {}", path.display());
+    }
+    if metadata.len() > max_bytes {
+        bail!(
+            "{label} is too large: {} bytes (limit: {max_bytes}): {}",
+            metadata.len(),
+            path.display()
+        );
+    }
+
+    // Metadata prevents a known-oversize allocation. The capped reader also catches a file that
+    // grows after the metadata check.
+    let capacity = usize::try_from(metadata.len())
+        .unwrap_or(usize::MAX)
+        .min(usize::try_from(max_bytes).unwrap_or(usize::MAX));
+    let mut text = String::with_capacity(capacity);
+    file.take(max_bytes.saturating_add(1))
+        .read_to_string(&mut text)
+        .with_context(|| format!("reading {label} {}", path.display()))?;
+    if text.len() as u64 > max_bytes {
+        bail!(
+            "{label} grew beyond the {max_bytes}-byte limit while it was read: {}",
+            path.display()
+        );
+    }
+    Ok(text)
+}
+
+fn validate_stage_spec_target(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if dialog_metadata_is_link(&metadata) => bail!(
+            "dialog stage refuses a symbolic link or reparse point at its spec output: {}",
+            path.display()
+        ),
+        Ok(metadata) if !metadata.is_file() => bail!(
+            "dialog stage spec output is not a regular file: {}",
+            path.display()
+        ),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error)
+            .with_context(|| format!("reading dialog stage output metadata {}", path.display())),
+    }
+}
+
+fn write_stage_spec_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("dialog stage output has no parent: {}", path.display()))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent).with_context(|| {
+        format!(
+            "creating temporary dialog stage output in {}",
+            parent.display()
+        )
+    })?;
+    temporary.write_all(bytes).with_context(|| {
+        format!(
+            "writing temporary dialog stage output for {}",
+            path.display()
+        )
+    })?;
+    temporary.flush().with_context(|| {
+        format!(
+            "flushing temporary dialog stage output for {}",
+            path.display()
+        )
+    })?;
+    temporary.persist(path).map_err(|error| {
+        anyhow::anyhow!(
+            "publishing dialog stage output {} atomically: {}",
+            path.display(),
+            error.error
+        )
+    })?;
+    Ok(())
+}
+
 fn open_edit(
     dir: &PathBuf,
     cache: Option<PathBuf>,
     game: Option<PathBuf>,
 ) -> Result<(EditManifest, dialog::EditReport, PathBuf)> {
-    let manifest_path = dir.join(MANIFEST_NAME);
-    let manifest: EditManifest = serde_json::from_str(
-        &fs::read_to_string(&manifest_path)
-            .with_context(|| format!("reading {}", manifest_path.display()))?,
-    )
-    .with_context(|| format!("parsing {}", manifest_path.display()))?;
+    let manifest_path = dialog_workspace_source(dir, MANIFEST_NAME)?;
+    let manifest_text = read_dialog_workspace_text(
+        &manifest_path,
+        "dialog edit manifest",
+        MAX_DIALOG_MANIFEST_BYTES,
+    )?;
+    let manifest: EditManifest = serde_json::from_str(&manifest_text)
+        .with_context(|| format!("parsing {}", manifest_path.display()))?;
     let source_path = dialog_workspace_source(dir, &manifest.source_file)?;
 
     let (path, bytes) = read_cache(cache, game)?;
@@ -2651,8 +2741,8 @@ fn open_edit(
             }
         }
     };
-    let authored = fs::read_to_string(&source_path)
-        .with_context(|| format!("reading {}", source_path.display()))?;
+    let authored =
+        read_dialog_workspace_text(&source_path, "dialog source", MAX_DIALOG_SOURCE_BYTES)?;
     let known = dialog::known_names(&bytes).context("collecting the cache's names")?;
     let report = dialog::verify(&taken, &authored, &known);
     if report.is_carryable() {
@@ -2767,6 +2857,8 @@ fn stage(
     game: Option<PathBuf>,
 ) -> Result<()> {
     gore_mod::validate_mod_name(mod_name).context("invalid --mod-name")?;
+    let spec_path = dir.join("spec.json");
+    validate_stage_spec_target(&spec_path)?;
     let compiler_game_arg = game.clone();
     let (manifest, report, source_path) = open_edit(dir, cache, game)?;
     if !report.is_carryable() {
@@ -2796,12 +2888,12 @@ fn stage(
     if !manifest.dialog_topics.is_empty() {
         spec["dialog_topics"] = serde_json::to_value(&manifest.dialog_topics)?;
     }
-    let spec_path = dir.join("spec.json");
-    fs::write(
+    // Replacing a fresh temporary file atomically never truncates an existing symlink or hard-link
+    // target. The earlier check still gives a useful error before workspace parsing.
+    write_stage_spec_atomic(
         &spec_path,
-        format!("{}\n", serde_json::to_string_pretty(&spec)?),
-    )
-    .with_context(|| format!("writing {}", spec_path.display()))?;
+        format!("{}\n", serde_json::to_string_pretty(&spec)?).as_bytes(),
+    )?;
 
     let work_dir = dir.join(".gore-as-work");
     fs::create_dir_all(&work_dir).with_context(|| format!("creating {}", work_dir.display()))?;
@@ -6412,6 +6504,60 @@ class UFirst : UTopic_Hero__NEW_NPC { }
     }
 
     #[test]
+    fn dialog_workspace_text_is_read_through_a_hard_byte_limit() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("Topic.as");
+        fs::write(&source, b"four").unwrap();
+
+        assert_eq!(
+            read_dialog_workspace_text(&source, "dialog source", 4).unwrap(),
+            "four"
+        );
+        let error = read_dialog_workspace_text(&source, "dialog source", 3).unwrap_err();
+        assert!(error.to_string().contains("too large"), "{error:#}");
+    }
+
+    #[test]
+    fn open_edit_rejects_an_oversized_manifest_before_opening_the_cache() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+        fs::File::create(workspace.join(MANIFEST_NAME))
+            .unwrap()
+            .set_len(MAX_DIALOG_MANIFEST_BYTES + 1)
+            .unwrap();
+
+        let error = match open_edit(
+            &workspace,
+            Some(temp.path().join("missing-script-cache")),
+            None,
+        ) {
+            Ok(_) => panic!("an oversized dialog manifest was accepted"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("too large"), "{error:#}");
+        assert!(
+            format!("{error:#}").contains("dialog edit manifest"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn dialog_source_uses_the_compiler_source_file_limit() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("Topic.as");
+        fs::File::create(&source)
+            .unwrap()
+            .set_len(MAX_DIALOG_SOURCE_BYTES + 1)
+            .unwrap();
+
+        let error = read_dialog_workspace_text(&source, "dialog source", MAX_DIALOG_SOURCE_BYTES)
+            .unwrap_err();
+        assert!(error.to_string().contains("too large"), "{error:#}");
+        assert!(format!("{error:#}").contains("dialog source"), "{error:#}");
+    }
+
+    #[test]
     fn old_dialog_manifests_default_to_edit_operation() {
         let document = serde_json::json!({
             "module": "Story.G1R.Conversation.Test",
@@ -6537,6 +6683,61 @@ class UFirst : UTopic_Hero__NEW_NPC { }
         }
         assert!(!workspace.exists());
         assert!(!temp.path().join("escape.mini.Cache").exists());
+    }
+
+    #[test]
+    fn stage_spec_target_accepts_an_absent_or_plain_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let spec = temp.path().join("spec.json");
+
+        validate_stage_spec_target(&spec).unwrap();
+        write_stage_spec_atomic(&spec, b"existing plain spec").unwrap();
+        validate_stage_spec_target(&spec).unwrap();
+        assert_eq!(fs::read(&spec).unwrap(), b"existing plain spec");
+
+        write_stage_spec_atomic(&spec, b"replacement").unwrap();
+        assert_eq!(fs::read(&spec).unwrap(), b"replacement");
+    }
+
+    #[test]
+    fn stage_spec_atomic_write_replaces_a_hard_link_without_touching_its_peer() {
+        let temp = tempfile::tempdir().unwrap();
+        let outside = temp.path().join("outside.json");
+        let spec = temp.path().join("spec.json");
+        fs::write(&outside, b"keep this file").unwrap();
+        fs::hard_link(&outside, &spec).unwrap();
+
+        validate_stage_spec_target(&spec).unwrap();
+        write_stage_spec_atomic(&spec, b"new spec").unwrap();
+
+        assert_eq!(fs::read(&spec).unwrap(), b"new spec");
+        assert_eq!(fs::read(&outside).unwrap(), b"keep this file");
+    }
+
+    #[test]
+    fn stage_rejects_a_symlinked_spec_before_opening_the_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+        let outside = temp.path().join("outside.json");
+        fs::write(&outside, b"keep this file").unwrap();
+        let linked_spec = workspace.join("spec.json");
+
+        #[cfg(unix)]
+        let link_result = std::os::unix::fs::symlink(&outside, &linked_spec);
+        #[cfg(windows)]
+        let link_result = std::os::windows::fs::symlink_file(&outside, &linked_spec);
+        if let Err(error) = link_result {
+            eprintln!("skip: this account cannot create a file symlink: {error}");
+            return;
+        }
+
+        let error = stage(&workspace, "SafeDialogMod", None, None).unwrap_err();
+        assert!(
+            error.to_string().contains("symbolic link or reparse point"),
+            "{error:#}"
+        );
+        assert_eq!(fs::read(&outside).unwrap(), b"keep this file");
     }
 
     #[test]

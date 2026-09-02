@@ -14,6 +14,7 @@ use super::model;
 use super::refs::RefResolver;
 
 const MAX_AUTHORED_DEFAULTS: usize = 250_000;
+const MAX_CALL_RECEIVER_INSTRUCTIONS: usize = 32;
 
 type TargetCounts = BTreeMap<String, usize>;
 type ClassTargets = BTreeMap<ClassIdentity, TargetCounts>;
@@ -188,15 +189,25 @@ fn bytecode_targets(bytecode: &[i32], refs: &RefResolver) -> Result<TargetCounts
                 instruction.op.name, instruction.offset_dw
             )
         })?;
-        if let Some(member) = call_receiver_member_operand(&instructions, index) {
-            let target = resolve_member(member, refs).ok_or_else(|| {
-                format!(
-                    "cannot resolve call receiver target at dword {}",
+        match proven_call_member_receiver(&instructions, index, is_method_call(instruction, refs)) {
+            Ok(Some(member)) => {
+                let target = resolve_member(member, refs).ok_or_else(|| {
+                    format!(
+                        "cannot resolve call receiver target at dword {}",
+                        instruction.offset_dw
+                    )
+                })?;
+                increment(&mut targets, target)?;
+                continue;
+            }
+            Err(()) if is_compiler_internal(&symbol) => continue,
+            Err(()) => {
+                return Err(format!(
+                    "cannot prove receiver target for method call {symbol} at dword {}",
                     instruction.offset_dw
-                )
-            })?;
-            increment(&mut targets, target)?;
-            continue;
+                ));
+            }
+            Ok(None) => {}
         }
         if is_compiler_internal(&symbol) {
             continue;
@@ -232,15 +243,63 @@ fn store_member_operand(instructions: &[Instr], index: usize) -> Option<&Instr> 
         .then_some(root?)
 }
 
-fn call_receiver_member_operand(instructions: &[Instr], index: usize) -> Option<&Instr> {
-    let mut at = index.checked_sub(1)?;
+enum CallReceiver<'a> {
+    DirectThis,
+    Member(&'a Instr),
+    Unproven,
+}
+
+/// Prove only a direct receiver rooted in `this`. `CHKREF` may decorate a nested member chain,
+/// but a receiver produced through locals, globals, or another call stays unproven so a fluent
+/// expression can never be mistaken for a free call target.
+fn call_receiver(instructions: &[Instr], index: usize) -> CallReceiver<'_> {
+    let floor = index.saturating_sub(MAX_CALL_RECEIVER_INSTRUCTIONS);
+    let mut at = index;
     let mut root = None;
-    while instructions.get(at)?.op.name == "ADDSi" {
-        root = instructions.get(at);
-        at = at.checked_sub(1)?;
+    while at > floor {
+        at -= 1;
+        let Some(instruction) = instructions.get(at) else {
+            return CallReceiver::Unproven;
+        };
+        match instruction.op.name {
+            "CHKREF" => {}
+            "ADDSi" => root = Some(instruction),
+            "PshVPtr" if instruction.words.first() == Some(&0) => {
+                return root.map_or(CallReceiver::DirectThis, CallReceiver::Member);
+            }
+            _ => return CallReceiver::Unproven,
+        }
     }
-    (instructions.get(at)?.op.name == "PshVPtr" && instructions.get(at)?.words.first() == Some(&0))
-        .then_some(root?)
+    CallReceiver::Unproven
+}
+
+fn proven_call_member_receiver(
+    instructions: &[Instr],
+    index: usize,
+    is_method: bool,
+) -> Result<Option<&Instr>, ()> {
+    if !is_method {
+        return Ok(None);
+    }
+    match call_receiver(instructions, index) {
+        CallReceiver::Member(member) => Ok(Some(member)),
+        CallReceiver::DirectThis => Ok(None),
+        CallReceiver::Unproven => Err(()),
+    }
+}
+
+fn is_method_call(instruction: &Instr, refs: &RefResolver) -> bool {
+    match instruction.op.name {
+        "CALL" | "CALLBND" | "CALLINTF" => instruction
+            .dwords
+            .first()
+            .is_some_and(|id| refs.is_method_by_id(*id as i32)),
+        "CALLSYS" => instruction
+            .qwords
+            .first()
+            .is_some_and(|pointer| refs.is_method_by_ptr(*pointer as i64)),
+        _ => false,
+    }
 }
 
 fn is_unclassified_store(instruction: &Instr) -> bool {
@@ -713,11 +772,45 @@ mod tests {
             instruction("ADDSi", &[10], &[1]),
             instruction("PshVPtr", &[0], &[]),
             instruction("ADDSi", &[30], &[3]),
+            instruction("CHKREF", &[], &[]),
+            instruction("ADDSi", &[40], &[4]),
             instruction("CALLSYS", &[], &[]),
         ];
-        let selected =
-            call_receiver_member_operand(&call, 4).expect("contiguous call receiver target");
+        let selected = proven_call_member_receiver(&call, 6, true)
+            .expect("checked method receiver is proven")
+            .expect("checked method receiver has a member root");
         assert_eq!(selected.words, vec![30]);
+    }
+
+    #[test]
+    fn call_receiver_classification_fails_closed_outside_this() {
+        let direct = vec![
+            instruction("PshVPtr", &[0], &[]),
+            instruction("CHKREF", &[], &[]),
+            instruction("CALLSYS", &[], &[]),
+        ];
+        assert!(matches!(
+            call_receiver(&direct, 2),
+            CallReceiver::DirectThis
+        ));
+
+        let foreign = vec![
+            instruction("PshVPtr", &[4], &[]),
+            instruction("ADDSi", &[30], &[3]),
+            instruction("CALLSYS", &[], &[]),
+        ];
+        assert!(matches!(call_receiver(&foreign, 2), CallReceiver::Unproven));
+        assert!(proven_call_member_receiver(&foreign, 2, true).is_err());
+
+        let trailing_member_argument = vec![
+            instruction("PshVPtr", &[0], &[]),
+            instruction("ADDSi", &[30], &[3]),
+            instruction("CALLSYS", &[], &[]),
+        ];
+        assert!(matches!(
+            proven_call_member_receiver(&trailing_member_argument, 2, false),
+            Ok(None)
+        ));
     }
 
     #[test]
