@@ -4333,6 +4333,7 @@ fn wire_subdialog(
 }
 
 fn new_conversation(request: NewConversationRequest) -> Result<()> {
+    gore_mod::validate_mod_name(&request.mod_name).context("invalid --mod-name")?;
     let participant_input = request.npc.trim();
     let (_new_module, _new_relative_path) = new_conversation_module_names(participant_input)?;
     let (cache_path, bytes) = read_cache(request.cache, request.game)?;
@@ -4546,6 +4547,7 @@ fn new_conversation(request: NewConversationRequest) -> Result<()> {
 }
 
 fn new_topic(request: NewTopicRequest) -> Result<()> {
+    gore_mod::validate_mod_name(&request.mod_name).context("invalid --mod-name")?;
     if request.subdialog_position.is_some() && request.subdialog_of.is_none() {
         bail!("--subdialog-position requires --subdialog-of");
     }
@@ -6798,6 +6800,54 @@ class UFirst : UTopic_Hero__NEW_NPC { }
         }
         assert!(!workspace.exists());
         assert!(!temp.path().join("escape.mini.Cache").exists());
+    }
+
+    #[test]
+    fn scaffolds_reject_nonportable_mod_names_before_opening_the_cache_or_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        let missing_cache = temp.path().join("missing.Cache");
+        let topic_out = temp.path().join("topic-workspace");
+        let conversation_out = temp.path().join("conversation-workspace");
+
+        let topic_error = new_topic(NewTopicRequest {
+            npc: "NPC".to_owned(),
+            caption: Some("Test".to_owned()),
+            caption_key: None,
+            class: None,
+            subdialog_of: None,
+            subdialog_position: None,
+            priority_rank: None,
+            mod_name: "../Demo".to_owned(),
+            out: topic_out.clone(),
+            cache: Some(missing_cache.clone()),
+            game: None,
+        })
+        .unwrap_err();
+        assert!(
+            topic_error.to_string().contains("invalid --mod-name"),
+            "{topic_error:#}"
+        );
+
+        let conversation_error = new_conversation(NewConversationRequest {
+            npc: "NEW_NPC".to_owned(),
+            caption: Some("Test".to_owned()),
+            caption_key: None,
+            class: None,
+            priority_rank: DEFAULT_ROOT_PRIORITY_RANK,
+            mod_name: "CON".to_owned(),
+            out: conversation_out.clone(),
+            cache: Some(missing_cache),
+            game: None,
+        })
+        .unwrap_err();
+        assert!(
+            conversation_error
+                .to_string()
+                .contains("invalid --mod-name"),
+            "{conversation_error:#}"
+        );
+        assert!(!topic_out.exists());
+        assert!(!conversation_out.exists());
     }
 
     #[test]
