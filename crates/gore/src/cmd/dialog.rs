@@ -30,6 +30,7 @@ use super::find::{load_name_index, Name, NameIndexState};
 /// Localization columns to read a line from, newest first, per language family.
 const GERMAN_COLUMNS: &[&str] = &["german_new", "german"];
 const ENGLISH_COLUMNS: &[&str] = &["english_newer", "english_new", "english"];
+const SHOW_SUBDIALOG_DEPTH: usize = 0;
 
 #[derive(Subcommand)]
 pub enum DialogAction {
@@ -1014,7 +1015,7 @@ fn show(
         &text,
         0,
         0,
-        Some(1),
+        Some(SHOW_SUBDIALOG_DEPTH),
         true,
         &mut printed,
     );
@@ -4407,7 +4408,7 @@ mod tests {
 
     #[test]
     fn tree_depth_counts_submenus_instead_of_visual_indentation() {
-        assert!(!subdialog_within_limit(0, Some(0)));
+        assert!(!subdialog_within_limit(0, Some(SHOW_SUBDIALOG_DEPTH)));
         assert!(subdialog_within_limit(0, Some(1)));
         assert!(!subdialog_within_limit(1, Some(1)));
         assert!(subdialog_within_limit(1, Some(2)));
