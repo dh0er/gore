@@ -174,6 +174,10 @@ populated column of it, or an exact column name (`german_new`) to pin one. Text
 comes from the shared catalog, so it needs `gore loc extract` once; without it
 lines print as their localization keys and the output says so.
 
+With `--json`, `tree` and `show` return the same localized presentation as a
+structured projection; `tree --depth` limits recursive node expansion there as
+well. `export` is the separate lossless flat conversation schema.
+
 `new-topic`, `new-conversation`, `checkout` and `stage` write files and read the install; they
 compile and deploy nothing. `check` is read-only. Existing topics may change
 method bodies and the emitted `Caption`, `PriorityRank`, `Rules` and flag

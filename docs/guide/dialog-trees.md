@@ -473,10 +473,13 @@ Export filenames start with a stable sequence number so distinct module identiti
 overwrite one another on case-insensitive filesystems. The complete module identity remains in
 each JSON document.
 
-The JSON carries everything the human view summarizes — every rule with its
-arguments, every check, every step with its guard, plus a per-conversation
-`coverage` block — so a tool downstream can tell what was read from what was
-not.
+The `tree`/`show` JSON is a presentation projection, not the export schema. It
+applies the requested language and, for `tree`, `--depth` exactly like the human
+view: expanded nodes keep their complete raw topic (rules, checks, guarded steps
+and ids), resolved text is carried under `localization`, and a depth-limited
+sub-menu reports how many children were not expanded. `unreached` keeps the same
+concise summary as the human tree. `export` remains the lossless flat
+conversation model, including the per-conversation `coverage` block.
 
 ## Related
 

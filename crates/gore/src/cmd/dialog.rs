@@ -607,15 +607,156 @@ fn tree(
 ) -> Result<()> {
     let graph = read_graph(cache, game)?;
     let conversation = resolve_one(&graph, npc)?;
+    let text = load_text(&keys_of(conversation), lang);
 
     if json {
-        println!("{}", serde_json::to_string_pretty(conversation)?);
+        let document = tree_json_document(conversation, &text, lang, depth)?;
+        println!("{}", serde_json::to_string_pretty(&document)?);
         return Ok(());
     }
 
-    let text = load_text(&keys_of(conversation), lang);
     print_conversation(conversation, &text, depth, ids);
     Ok(())
+}
+
+fn localization_json(text: &Text, lang: &str) -> serde_json::Value {
+    serde_json::json!({
+        "language": lang,
+        "lines": &text.lines,
+        "note": &text.note,
+    })
+}
+
+fn resolved_caption_json(topic: &Topic, text: &Text) -> serde_json::Value {
+    match &topic.caption {
+        Caption::LocKey { key } => text
+            .get(key)
+            .map_or(serde_json::Value::Null, |line| line.into()),
+        Caption::Literal { text } => text.as_str().into(),
+        Caption::Unresolved => serde_json::Value::Null,
+    }
+}
+
+fn json_topic_node(
+    conversation: &Conversation,
+    topic: &Topic,
+    text: &Text,
+    menu_depth: usize,
+    depth: Option<usize>,
+    printed: &mut BTreeSet<String>,
+) -> Result<serde_json::Value> {
+    if !printed.insert(topic.class.clone()) {
+        return Ok(serde_json::json!({
+            "class": topic.class,
+            "status": "already_shown",
+        }));
+    }
+
+    let mut subdialogs = Vec::new();
+    for (step_index, step) in topic.act.iter().enumerate() {
+        let StepKind::Subdialog { children } = &step.kind else {
+            continue;
+        };
+        if !subdialog_within_limit(menu_depth, depth) {
+            subdialogs.push(serde_json::json!({
+                "step_index": step_index,
+                "depth_limited": children.len(),
+            }));
+            continue;
+        }
+        let next_menu_depth = menu_depth.saturating_add(1);
+        let mut projected_children = Vec::with_capacity(children.len());
+        for child in children {
+            projected_children.push(match conversation.topic(child) {
+                Some(child_topic) => json_topic_node(
+                    conversation,
+                    child_topic,
+                    text,
+                    next_menu_depth,
+                    depth,
+                    printed,
+                )?,
+                None => serde_json::json!({
+                    "class": child,
+                    "status": "declared_elsewhere",
+                }),
+            });
+        }
+        subdialogs.push(serde_json::json!({
+            "step_index": step_index,
+            "children": projected_children,
+        }));
+    }
+
+    Ok(serde_json::json!({
+        "topic": topic,
+        "resolved_caption": resolved_caption_json(topic, text),
+        "conditions": condition_lines(topic, text),
+        "subdialogs": subdialogs,
+    }))
+}
+
+fn tree_json_document(
+    conversation: &Conversation,
+    text: &Text,
+    lang: &str,
+    depth: Option<usize>,
+) -> Result<serde_json::Value> {
+    let mut printed = BTreeSet::new();
+    let mut roots = Vec::new();
+    for root in &conversation.roots {
+        roots.push(match conversation.topic(root) {
+            Some(topic) => json_topic_node(conversation, topic, text, 0, depth, &mut printed)?,
+            None => serde_json::json!({
+                "class": root,
+                "status": "declared_elsewhere",
+            }),
+        });
+    }
+    let unreached = conversation
+        .topics
+        .iter()
+        .filter(|topic| !printed.contains(&topic.class))
+        .map(|topic| {
+            serde_json::json!({
+                "class": topic.class,
+                "resolved_caption": resolved_caption_json(topic, text),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(serde_json::json!({
+        "module": conversation.module,
+        "root_class": conversation.root_class,
+        "participants": conversation.participants,
+        "depth": depth,
+        "localization": localization_json(text, lang),
+        "roots": roots,
+        "unreached": unreached,
+        "coverage": conversation.coverage,
+    }))
+}
+
+fn show_json_document(
+    conversation: &Conversation,
+    topic: &Topic,
+    text: &Text,
+    lang: &str,
+) -> Result<serde_json::Value> {
+    let mut printed = BTreeSet::new();
+    Ok(serde_json::json!({
+        "module": conversation.module,
+        "participants": conversation.participants,
+        "localization": localization_json(text, lang),
+        "topic": json_topic_node(
+            conversation,
+            topic,
+            text,
+            0,
+            Some(SHOW_SUBDIALOG_DEPTH),
+            &mut printed,
+        )?,
+    }))
 }
 
 fn print_conversation(conversation: &Conversation, text: &Text, depth: Option<usize>, ids: bool) {
@@ -995,13 +1136,14 @@ fn show(
     let Some((conversation, found)) = found else {
         bail!("no topic class matched {topic:?}");
     };
+    let text = load_text(&keys_of(conversation), lang);
 
     if json {
-        println!("{}", serde_json::to_string_pretty(found)?);
+        let document = show_json_document(conversation, found, &text, lang)?;
+        println!("{}", serde_json::to_string_pretty(&document)?);
         return Ok(());
     }
 
-    let text = load_text(&keys_of(conversation), lang);
     println!("{}", found.class);
     println!("in {}", conversation.module);
     if let Some(note) = &text.note {
@@ -4533,6 +4675,75 @@ mod tests {
             loc_key: Some(key.to_owned()),
             expression: None,
         }
+    }
+
+    #[test]
+    fn json_tree_and_show_apply_language_and_subdialog_depth() {
+        let conversation = Conversation {
+            module: "M".to_owned(),
+            root_class: Some("URoot".to_owned()),
+            participants: vec!["Hero".to_owned(), "NPC".to_owned()],
+            topics: vec![
+                topic(
+                    "URootTopic",
+                    "CAP_ROOT",
+                    vec![StepKind::Subdialog {
+                        children: vec!["UChild".to_owned()],
+                    }],
+                ),
+                topic(
+                    "UChild",
+                    "CAP_CHILD",
+                    vec![StepKind::Subdialog {
+                        children: vec!["UGrandchild".to_owned()],
+                    }],
+                ),
+                topic("UGrandchild", "CAP_GRANDCHILD", vec![say("LINE_DE")]),
+                topic("UOrphan", "CAP_ORPHAN", vec![]),
+            ],
+            roots: vec!["URootTopic".to_owned()],
+            coverage: Default::default(),
+        };
+        let text = Text {
+            lines: BTreeMap::from([
+                ("cap_root".to_owned(), "Wurzel".to_owned()),
+                ("cap_child".to_owned(), "Kind".to_owned()),
+                ("cap_grandchild".to_owned(), "Enkel".to_owned()),
+                ("line_de".to_owned(), "Gesprochene Zeile".to_owned()),
+            ]),
+            note: None,
+        };
+
+        let tree = tree_json_document(&conversation, &text, "german", Some(1)).unwrap();
+        assert_eq!(tree["localization"]["language"], "german");
+        assert_eq!(
+            tree["localization"]["lines"]["line_de"],
+            "Gesprochene Zeile"
+        );
+        assert_eq!(tree["roots"][0]["resolved_caption"], "Wurzel");
+        let child = &tree["roots"][0]["subdialogs"][0]["children"][0];
+        assert_eq!(child["resolved_caption"], "Kind");
+        assert_eq!(child["subdialogs"][0]["depth_limited"], 1);
+        let unreached = tree["unreached"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|topic| topic["class"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(unreached, ["UGrandchild", "UOrphan"]);
+
+        let shown = show_json_document(
+            &conversation,
+            conversation.topic("UGrandchild").unwrap(),
+            &text,
+            "german",
+        )
+        .unwrap();
+        assert_eq!(shown["topic"]["resolved_caption"], "Enkel");
+        assert_eq!(
+            shown["localization"]["lines"]["line_de"],
+            "Gesprochene Zeile"
+        );
     }
 
     #[test]
