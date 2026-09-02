@@ -47,7 +47,7 @@ use the game's embedded compiler as a fallback.
 
 | Tool | Version | Release page |
 |---|---|---|
-| **CLI** | 0.2.3 | [gore-cli-v0.2.3](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.2.3) |
+| **CLI** | 0.3.0 | [gore-cli-v0.3.0](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.3.0) |
 | **Mod Manager** | 0.2.0 | [gore-mod-manager-v0.2.0](https://github.com/dh0er/gore/releases/tag/gore-mod-manager-v0.2.0) |
 | **Save Editor** | 1.4.0 | [gore-save-editor-v1.4.0](https://github.com/dh0er/gore/releases/tag/gore-save-editor-v1.4.0) |
 
