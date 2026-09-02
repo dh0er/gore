@@ -255,6 +255,7 @@ fn nested_force_settings_survive_default_extraction() {
         .flat_map(|conversation| &conversation.topics)
         .find(|topic| topic.class == "UChoiceDiego105716")
         .expect("shipping Diego force-conversation topic");
+    assert_eq!(topic.priority, Some(-1));
     let setting = topic
         .settings
         .iter()
@@ -358,9 +359,9 @@ fn every_conversation_checkout_has_authored_defaults_and_checks_cleanly() {
         .any(|value| value == "GORE_DIALOG_REAL_CACHE_ORACLE_CAPTION"));
     assert!(caption.requires_new_symbols());
 
-    // The shipping corpus currently carries no authored PriorityRank statement. Setting its
-    // previously implicit value is therefore an added default on an existing topic, not a
-    // replacement; all shipped defaults in that class must still remain present.
+    // This selected caption-bearing class carries no authored PriorityRank statement. Setting its
+    // previously implicit value is therefore an added default, not a replacement; all shipped
+    // defaults in that class must still remain present.
     let priority = verify_real_default_edit(
         &taken,
         &known,

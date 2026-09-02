@@ -56,8 +56,8 @@ pub struct Topic {
     /// The menu entry's text source.
     pub caption: Caption,
     /// `default PriorityRank`, which orders the options in the menu. Ascending: sub-topics carry
-    /// `0` and the exit option almost always carries the highest observed rank. `None` where the
-    /// class leaves it at the engine default.
+    /// `0` and the exit option almost always carries the highest observed rank. `Some(-1)` retains
+    /// the game's forced-topic semantics; `None` means no rank store was proven for this class.
     pub priority: Option<i64>,
     pub flags: TopicFlags,
     /// Declarative `Rules.*` from the generated defaults, in declaration order.

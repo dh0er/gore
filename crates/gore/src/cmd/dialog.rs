@@ -658,6 +658,35 @@ fn resolved_caption_json(topic: &Topic, text: &Text) -> serde_json::Value {
     }
 }
 
+/// Every local topic connected to a declared root, independent of presentation depth.
+fn structurally_reachable_topic_classes(conversation: &Conversation) -> BTreeSet<String> {
+    let topics = conversation
+        .topics
+        .iter()
+        .map(|topic| (topic.class.as_str(), topic))
+        .collect::<BTreeMap<_, _>>();
+    let mut reachable = BTreeSet::new();
+    let mut pending = conversation
+        .roots
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    while let Some(class) = pending.pop() {
+        let Some(topic) = topics.get(class).copied() else {
+            continue;
+        };
+        if !reachable.insert(topic.class.clone()) {
+            continue;
+        }
+        for step in &topic.act {
+            if let StepKind::Subdialog { children } = &step.kind {
+                pending.extend(children.iter().map(String::as_str));
+            }
+        }
+    }
+    reachable
+}
+
 fn json_topic_node(
     conversation: &Conversation,
     topic: &Topic,
@@ -723,6 +752,7 @@ fn tree_json_document(
     lang: &str,
     depth: Option<usize>,
 ) -> Result<serde_json::Value> {
+    let reachable = structurally_reachable_topic_classes(conversation);
     let mut printed = BTreeSet::new();
     let mut roots = Vec::new();
     for root in &conversation.roots {
@@ -737,7 +767,7 @@ fn tree_json_document(
     let unreached = conversation
         .topics
         .iter()
-        .filter(|topic| !printed.contains(&topic.class))
+        .filter(|topic| !reachable.contains(&topic.class))
         .map(|topic| {
             serde_json::json!({
                 "class": topic.class,
@@ -800,6 +830,7 @@ fn print_conversation(conversation: &Conversation, text: &Text, depth: Option<us
     }
     println!();
 
+    let reachable = structurally_reachable_topic_classes(conversation);
     let mut printed = BTreeSet::new();
     for root in &conversation.roots {
         if let Some(topic) = conversation.topic(root) {
@@ -810,7 +841,7 @@ fn print_conversation(conversation: &Conversation, text: &Text, depth: Option<us
     let unreached: Vec<&Topic> = conversation
         .topics
         .iter()
-        .filter(|topic| !printed.contains(&topic.class))
+        .filter(|topic| !reachable.contains(&topic.class))
         .collect();
     if !unreached.is_empty() {
         println!();
@@ -4826,6 +4857,14 @@ mod tests {
         };
 
         let tree = tree_json_document(&conversation, &text, "german", Some(1)).unwrap();
+        assert_eq!(
+            structurally_reachable_topic_classes(&conversation),
+            BTreeSet::from([
+                "UChild".to_owned(),
+                "UGrandchild".to_owned(),
+                "URootTopic".to_owned(),
+            ])
+        );
         assert_eq!(tree["localization"]["language"], "german");
         assert_eq!(
             tree["localization"]["lines"]["LINE_DE"],
@@ -4845,10 +4884,10 @@ mod tests {
             .iter()
             .map(|topic| topic["class"].as_str().unwrap())
             .collect::<Vec<_>>();
-        assert_eq!(unreached, ["UGrandchild", "UOrphan"]);
-        assert_eq!(tree["unreached"][1]["caption"]["key"], "CAP_ORPHAN");
-        assert_eq!(tree["unreached"][1]["display_caption"], "<CAP_ORPHAN>");
-        assert_eq!(tree["unreached"][1]["flags"]["is_ambient"], false);
+        assert_eq!(unreached, ["UOrphan"]);
+        assert_eq!(tree["unreached"][0]["caption"]["key"], "CAP_ORPHAN");
+        assert_eq!(tree["unreached"][0]["display_caption"], "<CAP_ORPHAN>");
+        assert_eq!(tree["unreached"][0]["flags"]["is_ambient"], false);
 
         let shown = show_json_document(
             &conversation,

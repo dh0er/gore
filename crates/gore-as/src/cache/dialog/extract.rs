@@ -673,11 +673,11 @@ fn apply_default(
             }
         }
         "Caption" => return false,
-        // `PriorityRank` orders the menu; the engine default arrives as -1, which is an absent
-        // rank rather than the largest one.
+        // `PriorityRank` orders the menu. Preserve -1 exactly: although it is also the engine
+        // default, an authored -1 has forced-topic semantics and is distinct from no proven store.
         "PriorityRank" => {
             let Some(value) = value else { return false };
-            result.priority = (value != -1).then_some(value);
+            result.priority = Some(value);
         }
         // Story-debugger instrumentation, like the `DC`/`DB` calls it pairs with.
         "DebugId" => return value.is_some(),
@@ -1212,6 +1212,20 @@ mod tests {
             immediate(&instruction("SetV1", &[], &[u8::MAX as u32], &[])),
             Some(-1)
         );
+    }
+
+    #[test]
+    fn an_explicit_forced_priority_rank_is_not_collapsed_to_absent() {
+        let mut result = Defaults::default();
+        assert!(apply_default(
+            &mut result,
+            "PriorityRank",
+            Some(-1),
+            &[],
+            0,
+            &RefResolver::default(),
+        ));
+        assert_eq!(result.priority, Some(-1));
     }
 
     #[test]

@@ -265,12 +265,12 @@ mod tests {
     use super::super::model::Caption;
     use super::*;
 
-    fn topic(class: &str, priority: i64) -> Topic {
+    fn topic(class: &str, priority: Option<i64>) -> Topic {
         Topic {
             class: class.to_owned(),
             super_class: None,
             caption: Caption::Unresolved,
-            priority: Some(priority),
+            priority,
             flags: Default::default(),
             rules: Vec::new(),
             settings: Vec::new(),
@@ -282,16 +282,24 @@ mod tests {
     #[test]
     fn equal_rank_roots_keep_module_declaration_order() {
         let topics = vec![
-            topic("UZebra", 0),
-            topic("UChild", 0),
-            topic("UAlpha", 0),
-            topic("UEnd", 5),
+            topic("UImplicit", None),
+            topic("UForced", Some(-1)),
+            topic("UZebra", Some(0)),
+            topic("UChild", Some(0)),
+            topic("UAlpha", None),
+            topic("UEnd", Some(5)),
         ];
         let children = BTreeSet::from(["UChild".to_owned()]);
 
         assert_eq!(
             ordered_root_classes(&topics, &children),
-            vec!["UZebra".to_owned(), "UAlpha".to_owned(), "UEnd".to_owned()]
+            vec![
+                "UForced".to_owned(),
+                "UImplicit".to_owned(),
+                "UZebra".to_owned(),
+                "UAlpha".to_owned(),
+                "UEnd".to_owned()
+            ]
         );
     }
 

@@ -478,8 +478,10 @@ applies the requested language and, for `tree`, `--depth` exactly like the human
 view: expanded nodes keep their complete raw topic (rules, checks, guarded steps
 and ids), resolved text is carried under `localization`, and a depth-limited
 sub-menu reports how many children were not expanded. `unreached` keeps the same
-concise summary as the human tree. `export` remains the lossless flat
-conversation model, including the per-conversation `coverage` block.
+concise summary as the human tree and is computed from the complete graph, so a
+topic hidden only by `--depth` is not mislabeled as unreachable. `export`
+remains the lossless flat conversation model, including the per-conversation
+`coverage` block.
 
 ## Related
 
