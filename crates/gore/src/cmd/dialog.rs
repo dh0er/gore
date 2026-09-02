@@ -619,10 +619,31 @@ fn tree(
     Ok(())
 }
 
-fn localization_json(text: &Text, lang: &str) -> serde_json::Value {
+fn localization_json(conversation: &Conversation, text: &Text, lang: &str) -> serde_json::Value {
+    let mut original_keys = BTreeSet::new();
+    for topic in &conversation.topics {
+        if let Some(key) = topic.caption.loc_key() {
+            original_keys.insert(key.to_owned());
+        }
+        for rule in &topic.rules {
+            original_keys.extend(rule_text_keys(rule).map(str::to_owned));
+        }
+        for step in &topic.act {
+            if let StepKind::Say {
+                loc_key: Some(key), ..
+            } = &step.kind
+            {
+                original_keys.insert(key.clone());
+            }
+        }
+    }
+    let lines = original_keys
+        .into_iter()
+        .filter_map(|key| text.get(&key).map(|line| (key, line.to_owned())))
+        .collect::<BTreeMap<_, _>>();
     serde_json::json!({
         "language": lang,
-        "lines": &text.lines,
+        "lines": lines,
         "note": &text.note,
     })
 }
@@ -720,7 +741,10 @@ fn tree_json_document(
         .map(|topic| {
             serde_json::json!({
                 "class": topic.class,
+                "caption": topic.caption,
                 "resolved_caption": resolved_caption_json(topic, text),
+                "display_caption": caption_of(topic, text),
+                "flags": topic.flags,
             })
         })
         .collect::<Vec<_>>();
@@ -730,7 +754,7 @@ fn tree_json_document(
         "root_class": conversation.root_class,
         "participants": conversation.participants,
         "depth": depth,
-        "localization": localization_json(text, lang),
+        "localization": localization_json(conversation, text, lang),
         "roots": roots,
         "unreached": unreached,
         "coverage": conversation.coverage,
@@ -747,7 +771,7 @@ fn show_json_document(
     Ok(serde_json::json!({
         "module": conversation.module,
         "participants": conversation.participants,
-        "localization": localization_json(text, lang),
+        "localization": localization_json(conversation, text, lang),
         "topic": json_topic_node(
             conversation,
             topic,
@@ -4699,7 +4723,7 @@ mod tests {
                     }],
                 ),
                 topic("UGrandchild", "CAP_GRANDCHILD", vec![say("LINE_DE")]),
-                topic("UOrphan", "CAP_ORPHAN", vec![]),
+                topic("UOrphan", "CAP_ORPHAN", vec![say("line_de")]),
             ],
             roots: vec!["URootTopic".to_owned()],
             coverage: Default::default(),
@@ -4717,6 +4741,10 @@ mod tests {
         let tree = tree_json_document(&conversation, &text, "german", Some(1)).unwrap();
         assert_eq!(tree["localization"]["language"], "german");
         assert_eq!(
+            tree["localization"]["lines"]["LINE_DE"],
+            "Gesprochene Zeile"
+        );
+        assert_eq!(
             tree["localization"]["lines"]["line_de"],
             "Gesprochene Zeile"
         );
@@ -4731,6 +4759,9 @@ mod tests {
             .map(|topic| topic["class"].as_str().unwrap())
             .collect::<Vec<_>>();
         assert_eq!(unreached, ["UGrandchild", "UOrphan"]);
+        assert_eq!(tree["unreached"][1]["caption"]["key"], "CAP_ORPHAN");
+        assert_eq!(tree["unreached"][1]["display_caption"], "<CAP_ORPHAN>");
+        assert_eq!(tree["unreached"][1]["flags"]["is_ambient"], false);
 
         let shown = show_json_document(
             &conversation,
@@ -4741,7 +4772,7 @@ mod tests {
         .unwrap();
         assert_eq!(shown["topic"]["resolved_caption"], "Enkel");
         assert_eq!(
-            shown["localization"]["lines"]["line_de"],
+            shown["localization"]["lines"]["LINE_DE"],
             "Gesprochene Zeile"
         );
     }
