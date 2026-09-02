@@ -341,6 +341,11 @@ fn tokenize(source: &str) -> Result<Vec<Token>, String> {
                     word: true,
                 });
             }
+            byte if !byte.is_ascii() => {
+                return Err(format!(
+                    "line {line}: source contains a non-ASCII character outside comments or quoted literals"
+                ));
+            }
             _ => {
                 let token_line = line;
                 let start = index;
@@ -1891,6 +1896,25 @@ class UChoiceTestChild : UTopic_Hero__TEST_NPC
                 report.violations
             );
         }
+    }
+
+    #[test]
+    fn non_ascii_outside_comments_and_literals_fails_closed_without_panicking() {
+        let authored = format!("\u{feff}{PRISTINE}");
+        let report = verify(&checkout(PRISTINE), &authored, &known());
+        assert!(report.violations.iter().any(|violation| matches!(
+            violation,
+            Violation::SourceInvalid { side: "authored", reason }
+                if reason.contains("non-ASCII character") && reason.contains("line 1")
+        )));
+
+        let ordinary = format!(
+            "// Grüße\n/* Käse */\n{}",
+            PRISTINE.replace("EXISTING_KEY", "GRÜSSE")
+        );
+        let outline = read_outline(&ordinary).expect("comments and literals may contain Unicode");
+        assert_eq!(outline.classes.len(), 1);
+        assert_eq!(outline.classes[0].defaults.len(), 4);
     }
 
     #[test]

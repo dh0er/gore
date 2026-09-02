@@ -168,6 +168,18 @@ pub(crate) enum SelectiveFullGraphError {
     },
 }
 
+pub(crate) fn validate_selective_full_graph_change_count(
+    actual: usize,
+) -> Result<(), SelectiveFullGraphError> {
+    if actual > MAX_SELECTIVE_FULLGRAPH_CHANGES {
+        return Err(SelectiveFullGraphError::TooManyChanges {
+            actual,
+            limit: MAX_SELECTIVE_FULLGRAPH_CHANGES,
+        });
+    }
+    Ok(())
+}
+
 /// A pristine-bound cache containing only the declared changes, in deterministic applied order.
 #[derive(Debug)]
 pub(crate) struct SelectiveFullGraphOutput {
@@ -250,12 +262,7 @@ pub(crate) fn compose_selective_full_graph(
             source,
         }
     })?;
-    if changes.len() > MAX_SELECTIVE_FULLGRAPH_CHANGES {
-        return Err(SelectiveFullGraphError::TooManyChanges {
-            actual: changes.len(),
-            limit: MAX_SELECTIVE_FULLGRAPH_CHANGES,
-        });
-    }
+    validate_selective_full_graph_change_count(changes.len())?;
 
     let pristine_names = module_name_counts(pristine, "pristine")?;
     let rebuilt_names = module_name_counts(full_graph, "rebuilt")?;
@@ -520,6 +527,18 @@ mod tests {
         name: &'static str,
         requires: &'static [&'static str],
         fatal: bool,
+    }
+
+    #[test]
+    fn selective_change_count_accepts_the_limit_and_rejects_the_next_change() {
+        assert!(validate_selective_full_graph_change_count(256).is_ok());
+        assert!(matches!(
+            validate_selective_full_graph_change_count(257),
+            Err(SelectiveFullGraphError::TooManyChanges {
+                actual: 257,
+                limit: 256
+            })
+        ));
     }
 
     #[test]

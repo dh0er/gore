@@ -2294,8 +2294,16 @@ where
             }
             _ => {}
         }
-        if result_policy == FullGraphResultPolicyV1::CompleteQualification {
-            validate_complete_full_graph_qualification_opts_v1(opts)?;
+        match result_policy {
+            FullGraphResultPolicyV1::SelectivePublication => {
+                crate::cache::selective_fullgraph::validate_selective_full_graph_change_count(
+                    opts.changes.len(),
+                )
+                .map_err(|error| CompileError::Other(error.to_string()))?;
+            }
+            FullGraphResultPolicyV1::CompleteQualification => {
+                validate_complete_full_graph_qualification_opts_v1(opts)?;
+            }
         }
         preflight_full_graph_path_layout_v1(opts)?;
         preflight_full_graph_publication_v1(opts)?;
@@ -13771,7 +13779,10 @@ mod tests {
             error.to_string().contains("change limit exceeded"),
             "{error}"
         );
-        assert_eq!(selective_calls.get(), 1);
+        assert_eq!(selective_calls.get(), 0);
+        assert_eq!(selective.runner_invocations(), 0);
+        assert!(!selective.standalone_attempted());
+        assert_eq!(selective.backend_name(), None);
         assert!(!opts.output_path.exists());
 
         let qualification_calls = std::rc::Rc::new(std::cell::Cell::new(0));
