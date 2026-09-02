@@ -18,11 +18,11 @@ use gore_as::cache::semantic_observer::{
     observe_whole_cache_semantics_v1, WholeCacheSemanticObservationV1,
 };
 use gore_as::compile::{
-    acquire_compile_install_mutation, compile_full_graph_standalone_v1_with_target,
-    compile_full_graph_with_backend_v1_with_guard_and_target, CompilerBackendModeV1,
-    CompilerBackendNameV1, FullGraphCompileArtifactV1, FullGraphCompileOperationV1,
-    FullGraphCompileOptsV1, FullGraphCompileOutcomeV1, FullGraphPublicationDispositionV1,
-    InstallMutationGuard, InstallRestoreDisposition, ProjectCompilerClosingAuditDisposition,
+    acquire_compile_install_mutation, compile_full_graph_qualification_standalone_v1_with_target,
+    compile_full_graph_qualification_with_backend_v1_with_guard_and_target, CompilerBackendNameV1,
+    FullGraphCompileArtifactV1, FullGraphCompileOperationV1, FullGraphCompileOptsV1,
+    FullGraphCompileOutcomeV1, FullGraphPublicationDispositionV1, InstallMutationGuard,
+    InstallRestoreDisposition, ProjectCompilerClosingAuditDisposition,
 };
 use gore_as::compiler_profile::capture::PROFILE_MANIFEST_FILE_V1;
 use gore_as::compiler_profile::manifest::Sha256Digest;
@@ -144,11 +144,9 @@ fn run() -> Result<()> {
         audit_exact_input(&audit_binds, MAX_BINDS_BYTES, "Binds.Cache", binds_seal)
     };
 
-    let game_report = compile_full_graph_with_backend_v1_with_guard_and_target(
+    let game_report = compile_full_graph_qualification_with_backend_v1_with_guard_and_target(
         &game_opts,
         &DiagnosticsOptions::default(),
-        CompilerBackendModeV1::Game,
-        None,
         guard,
         closing_audit,
         target,
@@ -199,7 +197,7 @@ fn run() -> Result<()> {
         )?;
         audit_exact_input(&audit_binds, MAX_BINDS_BYTES, "Binds.Cache", binds_seal)
     };
-    let standalone_report = compile_full_graph_standalone_v1_with_target(
+    let standalone_report = compile_full_graph_qualification_standalone_v1_with_target(
         &standalone_opts,
         &mut runner,
         closing_audit,
