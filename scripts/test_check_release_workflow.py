@@ -81,10 +81,10 @@ class DownloadTableContractTest(unittest.TestCase):
 
     def test_release_tag_must_match_the_advertised_version(self) -> None:
         self.assertEqual(
-            validate_download_table(self.readme, "gore-save-editor-v1.3.0"), []
+            validate_download_table(self.readme, "gore-save-editor-v1.4.0"), []
         )
         self.assert_invalid(
-            self.readme, "gore-save-editor-v1.4.0", "the release tag is"
+            self.readme, "gore-save-editor-v1.3.0", "the release tag is"
         )
 
     def test_releasing_an_unreleased_product_requires_a_row(self) -> None:
