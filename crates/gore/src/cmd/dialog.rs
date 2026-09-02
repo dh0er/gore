@@ -477,6 +477,22 @@ fn load_text(keys: &HashSet<String>, lang: &str) -> Text {
 
 /// Every localization key one conversation refers to, folded the way the shared catalog's
 /// loader wants them: it keeps only ids that match its lowercase `wanted` set.
+fn rule_text_keys(rule: &Rule) -> impl Iterator<Item = &str> {
+    let carries_localized_line = matches!(
+        rule.kind,
+        RuleKind::RequireCharacterHasListenedTo | RuleKind::RequireCharacterHasNotListenedTo
+    );
+    rule.args.iter().filter_map(move |arg| {
+        if !carries_localized_line {
+            return None;
+        }
+        match arg {
+            Arg::Text { value } => Some(value.as_str()),
+            _ => None,
+        }
+    })
+}
+
 fn keys_of(conversation: &Conversation) -> HashSet<String> {
     let mut keys = HashSet::new();
     for topic in &conversation.topics {
@@ -492,10 +508,8 @@ fn keys_of(conversation: &Conversation) -> HashSet<String> {
             }
         }
         for rule in &topic.rules {
-            for arg in &rule.args {
-                if let Arg::Text { value } = arg {
-                    keys.insert(value.to_lowercase());
-                }
+            for key in rule_text_keys(rule) {
+                keys.insert(key.to_lowercase());
             }
         }
     }
@@ -999,6 +1013,11 @@ fn ordered_keys(conversation: &Conversation) -> Vec<String> {
         }
         if let Some(key) = topic.caption.loc_key() {
             push(key, keys, seen);
+        }
+        for rule in &topic.rules {
+            for key in rule_text_keys(rule) {
+                push(key, keys, seen);
+            }
         }
         for step in &topic.act {
             match &step.kind {
@@ -4472,22 +4491,42 @@ mod tests {
 
     #[test]
     fn text_keys_follow_the_tree_and_repeat_nothing() {
+        let mut root = topic(
+            "URootTopic",
+            "CAP_ROOT",
+            vec![
+                say("LINE_ONE"),
+                StepKind::Subdialog {
+                    children: vec!["UChild".to_owned()],
+                },
+                say("LINE_ONE"),
+            ],
+        );
+        root.rules.push(Rule {
+            kind: RuleKind::RequireCharacterHasListenedTo,
+            args: vec![
+                Arg::Name {
+                    value: "Hero".to_owned(),
+                },
+                Arg::Text {
+                    value: "RULE_ONLY_LINE".to_owned(),
+                },
+            ],
+        });
+        root.rules.push(Rule {
+            kind: RuleKind::Other {
+                name: "CustomStringRule".to_owned(),
+            },
+            args: vec![Arg::Text {
+                value: "NOT_A_LOCALIZATION_KEY".to_owned(),
+            }],
+        });
         let conversation = Conversation {
             module: "M".to_owned(),
             root_class: Some("URoot".to_owned()),
             participants: vec!["Hero".to_owned(), "NPC".to_owned()],
             topics: vec![
-                topic(
-                    "URootTopic",
-                    "CAP_ROOT",
-                    vec![
-                        say("LINE_ONE"),
-                        StepKind::Subdialog {
-                            children: vec!["UChild".to_owned()],
-                        },
-                        say("LINE_ONE"),
-                    ],
-                ),
+                root,
                 topic("UChild", "CAP_CHILD", vec![say("LINE_TWO")]),
                 topic("UOrphan", "CAP_ORPHAN", vec![]),
             ],
@@ -4499,6 +4538,7 @@ mod tests {
             ordered_keys(&conversation),
             vec![
                 "CAP_ROOT".to_owned(),
+                "RULE_ONLY_LINE".to_owned(),
                 "LINE_ONE".to_owned(),
                 "CAP_CHILD".to_owned(),
                 "LINE_TWO".to_owned(),
