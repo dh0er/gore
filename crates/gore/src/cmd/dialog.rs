@@ -2439,6 +2439,19 @@ fn digest_of(bytes: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn validate_cache_sha256(value: &str) -> Result<()> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        bail!(
+            "dialog edit manifest `cache_sha256` must be exactly 64 lowercase hexadecimal characters"
+        );
+    }
+    Ok(())
+}
+
 /// The Binds cache beside the script cache, resolved the way the compiler resolves it, so an
 /// emitted checkout is byte-identical to the tree the compiler will build.
 fn native_api(cache_path: &std::path::Path) -> Option<gore_as::cache::binds::NativeApi> {
@@ -2707,6 +2720,8 @@ fn open_edit(
     )?;
     let manifest: EditManifest = serde_json::from_str(&manifest_text)
         .with_context(|| format!("parsing {}", manifest_path.display()))?;
+    validate_cache_sha256(&manifest.cache_sha256)
+        .with_context(|| format!("validating {}", manifest_path.display()))?;
     let source_path = dialog_workspace_source(dir, &manifest.source_file)?;
 
     let (path, bytes) = read_cache(cache, game)?;
@@ -6611,6 +6626,33 @@ class UFirst : UTopic_Hero__NEW_NPC { }
         assert!(error.to_string().contains("too large"), "{error:#}");
         assert!(
             format!("{error:#}").contains("dialog edit manifest"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn open_edit_rejects_a_noncanonical_cache_digest_before_opening_the_cache() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+        let mut manifest = command_manifest();
+        manifest.cache_sha256 = "a€€€€".to_owned();
+        fs::write(
+            workspace.join(MANIFEST_NAME),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let error = match open_edit(
+            &workspace,
+            Some(temp.path().join("missing-script-cache")),
+            None,
+        ) {
+            Ok(_) => panic!("a noncanonical dialog cache digest was accepted"),
+            Err(error) => error,
+        };
+        assert!(
+            format!("{error:#}").contains("64 lowercase hexadecimal"),
             "{error:#}"
         );
     }
