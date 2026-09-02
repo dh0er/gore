@@ -1147,16 +1147,16 @@ fn show(
     game: Option<PathBuf>,
 ) -> Result<()> {
     let graph = read_graph(cache, game)?;
-    let wanted = class_without_object_prefix(topic).to_lowercase();
-    let found = graph.conversations.iter().find_map(|conversation| {
-        conversation
-            .topics
-            .iter()
-            .find(|candidate| {
-                class_without_object_prefix(&candidate.class).to_lowercase() == wanted
-            })
-            .map(|candidate| (conversation, candidate))
-    });
+    let find = |prefixless: bool| {
+        graph.conversations.iter().find_map(|conversation| {
+            conversation
+                .topics
+                .iter()
+                .find(|candidate| topic_name_matches(&candidate.class, topic, prefixless))
+                .map(|candidate| (conversation, candidate))
+        })
+    };
+    let found = find(false).or_else(|| find(true));
     let Some((conversation, found)) = found else {
         bail!("no topic class matched {topic:?}");
     };
@@ -3132,6 +3132,14 @@ fn class_without_object_prefix(name: &str) -> &str {
     name.strip_prefix('U').unwrap_or(name)
 }
 
+fn topic_name_matches(class: &str, wanted: &str, prefixless: bool) -> bool {
+    if prefixless {
+        class_without_object_prefix(class).eq_ignore_ascii_case(wanted)
+    } else {
+        class.eq_ignore_ascii_case(wanted)
+    }
+}
+
 /// Give a generated topic its own stable story-debug identity.
 fn generated_topic_debug_id(module: &str, class: &str, source: &str) -> i64 {
     use sha2::{Digest, Sha256};
@@ -3162,12 +3170,19 @@ fn generated_topic_debug_id(module: &str, class: &str, source: &str) -> i64 {
 }
 
 fn resolve_topic_in<'a>(conversation: &'a Conversation, wanted: &str) -> Result<&'a Topic> {
-    let wanted = class_without_object_prefix(wanted).to_ascii_lowercase();
-    let matches = conversation
-        .topics
-        .iter()
-        .filter(|topic| class_without_object_prefix(&topic.class).eq_ignore_ascii_case(&wanted))
-        .collect::<Vec<_>>();
+    let matching = |prefixless: bool| {
+        conversation
+            .topics
+            .iter()
+            .filter(|topic| topic_name_matches(&topic.class, wanted, prefixless))
+            .collect::<Vec<_>>()
+    };
+    let exact = matching(false);
+    let matches = if exact.is_empty() {
+        matching(true)
+    } else {
+        exact
+    };
     match matches.as_slice() {
         [topic] => Ok(topic),
         [] => bail!(
@@ -5088,6 +5103,31 @@ mod tests {
         assert_eq!(
             registered_topic_class(&reflected_topic_path("UUFoo")).unwrap(),
             "UUFoo"
+        );
+    }
+
+    #[test]
+    fn topic_lookup_prefers_exact_names_before_the_prefixless_form() {
+        let mut conversation = Conversation {
+            module: "M".to_owned(),
+            root_class: Some("URoot".to_owned()),
+            participants: vec!["Hero".to_owned(), "NPC".to_owned()],
+            topics: vec![topic("UUFoo", "DOUBLE_U", Vec::new())],
+            roots: vec!["UUFoo".to_owned()],
+            coverage: Default::default(),
+        };
+
+        assert!(topic_name_matches("UUFoo", "UFoo", true));
+        assert!(!topic_name_matches("UUFoo", "UFoo", false));
+        assert_eq!(resolve_topic_in(&conversation, "UFoo").unwrap().class, "UUFoo");
+
+        conversation
+            .topics
+            .push(topic("UFoo", "SINGLE_U", Vec::new()));
+        assert_eq!(
+            resolve_topic_in(&conversation, "UFoo").unwrap().class,
+            "UFoo",
+            "an exact class must win over another class's prefixless spelling"
         );
     }
 
