@@ -552,6 +552,20 @@ int main() {
         source_engine->ShutDownAndRelease();
         return 4;
     }
+    const auto exported_auto_handle = std::find_if(
+        exported.functions.begin(), exported.functions.end(),
+        [](const precompiled::precompiled_function& function) {
+            return function.function_name.bytes == "CallGeneric";
+        });
+    if (exported_auto_handle == exported.functions.end()) {
+        std::cerr << "exported auto-handle probe function was not found\n";
+        source_engine->ShutDownAndRelease();
+        return 4;
+    }
+    exported_auto_handle->return_type = {};
+    exported_auto_handle->return_type.is_auto = true;
+    exported_auto_handle->return_type.is_object_handle = true;
+    exported_auto_handle->return_type.is_const_handle = true;
     const precompiled::data_type int_type = exported_add->return_type;
     precompiled::precompiled_class base_class;
     base_class.class_name.bytes = "BaseCounter";
@@ -659,11 +673,19 @@ int main() {
     asIScriptFunction* provider_add = loaded.empty()
         ? nullptr
         : loaded[0]->GetFunctionByName("Add");
+    asCScriptFunction* auto_handle_probe = loaded.empty()
+        ? nullptr
+        : static_cast<asCScriptFunction*>(loaded[0]->GetFunctionByName("CallGeneric"));
+    const bool auto_handle_constness_preserved = auto_handle_probe != nullptr &&
+        auto_handle_probe->returnType.IsAuto() &&
+        auto_handle_probe->returnType.IsObjectHandle() &&
+        auto_handle_probe->returnType.IsReadOnly() &&
+        !auto_handle_probe->returnType.IsHandleToConst();
     const int bind_result = imported_count == 1U && provider_add != nullptr
         ? loaded[1]->BindImportedFunction(0U, provider_add)
         : asERROR;
     if (!load_result.succeeded() || loaded.size() != 2U ||
-        imported_count != 1U || bind_result < 0 ||
+        imported_count != 1U || bind_result < 0 || !auto_handle_constness_preserved ||
         !execute_function(*target_engine, *loaded[0], "Add", true) ||
         !execute_function(*target_engine, *loaded[0], "CallAdd", false) ||
         !execute_function(*target_engine, *loaded[0], "ReadSeed", false) ||
@@ -673,7 +695,8 @@ int main() {
         std::cerr << "cache rehydration failed: " << load_result.detail
                   << "; modules=" << loaded.size()
                   << "; imports=" << imported_count
-                  << "; bind=" << bind_result << '\n';
+                  << "; bind=" << bind_result
+                  << "; auto-handle-constness=" << auto_handle_constness_preserved << '\n';
         if (loaded.size() == 2U && imported_count == 1U) {
             std::cerr << "imported declaration: "
                       << loaded[1]->GetImportedFunctionDeclaration(0U) << '\n';

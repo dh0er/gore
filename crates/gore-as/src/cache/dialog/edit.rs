@@ -580,6 +580,28 @@ fn unsupported_scope_declaration(tokens: &[Token]) -> String {
     )
 }
 
+fn is_free_function_header(tokens: &[Token]) -> bool {
+    let mut paren_depth = 0usize;
+    let mut saw_parameters = false;
+    for token in tokens {
+        match token.text.as_str() {
+            "(" => {
+                paren_depth += 1;
+                saw_parameters = true;
+            }
+            ")" => {
+                let Some(depth) = paren_depth.checked_sub(1) else {
+                    return false;
+                };
+                paren_depth = depth;
+            }
+            "=" if paren_depth == 0 => return false,
+            _ => {}
+        }
+    }
+    saw_parameters && paren_depth == 0
+}
+
 fn scan_scope(
     tokens: &[Token],
     pairs: &[Option<usize>],
@@ -655,8 +677,7 @@ fn scan_scope(
                 open,
                 close,
             });
-        } else if header.iter().any(|token| token.text == "(")
-            && !header.iter().any(|token| token.text == "=")
+        } else if is_free_function_header(header)
             && !header
                 .iter()
                 .any(|token| matches!(token.text.as_str(), "class" | "struct"))
@@ -1858,6 +1879,30 @@ class UChoiceTestChild : UTopic_Hero__TEST_NPC
             violation,
             Violation::DuplicateFunctionIdentity { declaration, expected: 1, found: 2 }
                 if declaration.starts_with("G1R::Conversation::FText Caption")
+        )));
+    }
+
+    #[test]
+    fn free_function_default_arguments_are_inventoried_without_admitting_assignments() {
+        let pristine = format!(
+            "namespace G1R::Conversation {{\nvoid Helper(int Count = 1, FName Key = n\"KEY\") {{ return; }}\n{PRISTINE}\n}}"
+        );
+        let outline =
+            read_outline(&pristine).expect("default arguments are part of a function header");
+        assert_eq!(
+            outline.functions,
+            ["G1R::Conversation::void Helper ( int Count = 1 , FName Key = n \"KEY\" )"]
+        );
+        let untouched = verify(&checkout(&pristine), &pristine, &known());
+        assert!(untouched.is_carryable(), "{:?}", untouched.violations);
+
+        let assigned =
+            format!("{PRISTINE}\nvoid HiddenFactory(int Count = 1) = Factory() {{ return; }}\n");
+        let report = verify(&checkout(PRISTINE), &assigned, &known());
+        assert!(report.violations.iter().any(|violation| matches!(
+            violation,
+            Violation::SourceInvalid { side: "authored", reason }
+                if reason.contains("unsupported module-scope declaration")
         )));
     }
 

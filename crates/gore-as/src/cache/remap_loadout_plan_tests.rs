@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::*;
 use crate::cache::header::CACHE_MAGIC;
@@ -213,11 +213,22 @@ fn cache_with_module_globals(
     module_globals: &[Vec<u8>],
     rows: TailRows,
 ) -> Vec<u8> {
+    cache_with_module_identity(module, module, functions, classes, module_globals, rows)
+}
+
+fn cache_with_module_identity(
+    outer_module: &str,
+    runtime_module: &str,
+    functions: &[Vec<u8>],
+    classes: &[Vec<u8>],
+    module_globals: &[Vec<u8>],
+    rows: TailRows,
+) -> Vec<u8> {
     let mut out = vec![0u8; 16];
     out.extend_from_slice(&CACHE_MAGIC.to_le_bytes());
     out.extend_from_slice(&1u32.to_le_bytes());
-    out.extend_from_slice(&fstring(module));
-    out.extend_from_slice(&sia(module));
+    out.extend_from_slice(&fstring(outer_module));
+    out.extend_from_slice(&sia(runtime_module));
     out.extend_from_slice(&(functions.len() as i32).to_le_bytes());
     for function in functions {
         out.extend_from_slice(function);
@@ -237,7 +248,7 @@ fn cache_with_module_globals(
     out.extend_from_slice(&sia("")); // statics class
     out.extend_from_slice(&0i32.to_le_bytes()); // events
     out.extend_from_slice(&0i32.to_le_bytes()); // delegates
-    out.extend_from_slice(&sia(&format!("{module}.as")));
+    out.extend_from_slice(&sia(&format!("{outer_module}.as")));
     out.extend_from_slice(&0i32.to_le_bytes()); // post-init functions
     append_rows(&mut out, &rows.types);
     append_rows(&mut out, &rows.type_ids);
@@ -1701,6 +1712,121 @@ fn successor_allocator_wraps_and_reports_small_domain_exhaustion() {
             kind: "function-id"
         })
     ));
+}
+
+#[test]
+fn selective_fullgraph_wakes_strict_consumer_by_inner_provider_identity() {
+    use crate::cache::selective_fullgraph::{
+        compose_selective_full_graph, SelectiveFullGraphChange,
+    };
+    use crate::cache::splice::{extract_module, splice_case_a, SequentialMiniGuard};
+
+    const PROVIDER_OUTER: &str = "Z.ProviderOuter";
+    const PROVIDER_RUNTIME: &str = "Runtime.Provider";
+    const CONSUMER_OUTER: &str = "A.ConsumerOuter";
+    const CONSUMER_RUNTIME: &str = "Runtime.Consumer";
+    const PROVIDER_PTR: i64 = 0x7310;
+    const PROVIDER_ID: i32 = 0x0800_7310;
+    const CONSUMER_FUNC_PTR: i64 = 0x7420;
+    const CONSUMER_FUNC_ID: i32 = 0x1742;
+
+    let pristine = empty_base();
+    let provider = cache_with_module_identity(
+        PROVIDER_OUTER,
+        PROVIDER_RUNTIME,
+        &[],
+        &[class_record("ProviderType")],
+        &[],
+        TailRows {
+            types: vec![type_row(PROVIDER_PTR, "ProviderType", PROVIDER_RUNTIME)],
+            type_ids: vec![id_row(PROVIDER_ID, PROVIDER_PTR)],
+            ..TailRows::default()
+        },
+    );
+    let consumer = cache_with_module_identity(
+        CONSUMER_OUTER,
+        CONSUMER_RUNTIME,
+        &[function_record_with_code(
+            "UseProvider",
+            &[],
+            0x0500_1742,
+            &[76, PROVIDER_ID, 10],
+        )],
+        &[],
+        &[],
+        TailRows {
+            funcs: vec![function_tail_row(
+                CONSUMER_FUNC_PTR,
+                "UseProvider",
+                CONSUMER_RUNTIME,
+                &[],
+            )],
+            func_ids: vec![id_row(CONSUMER_FUNC_ID, CONSUMER_FUNC_PTR)],
+            ..TailRows::default()
+        },
+    );
+    let full_graph = splice_case_a(&provider, &consumer).unwrap();
+    let requested_modules = HashSet::from([PROVIDER_OUTER.to_owned(), CONSUMER_OUTER.to_owned()]);
+    let dependency_index = RemapDependencyIndex::build(&full_graph, &requested_modules).unwrap();
+    assert_eq!(
+        dependency_index.providers_for_outer_module(PROVIDER_OUTER),
+        [PROVIDER_RUNTIME]
+    );
+
+    let consumer_extracted = extract_module(&full_graph, CONSUMER_OUTER).unwrap();
+    let strict_error = remap_module_to_base_with_options(
+        &consumer_extracted,
+        &pristine,
+        RemapOptions {
+            allow_new_symbols: false,
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(
+        strict_error,
+        RemapError::Unresolved {
+            kind: "type-id",
+            op: "TYPEID",
+            key: PROVIDER_PTR,
+            ..
+        }
+    ));
+    assert_eq!(
+        dependency_index.retry_provider(&strict_error).as_deref(),
+        Some(PROVIDER_RUNTIME)
+    );
+
+    let provider_extracted = extract_module(&full_graph, PROVIDER_OUTER).unwrap();
+    let provider_mini = remap_module_to_base_with_options(
+        &provider_extracted,
+        &pristine,
+        RemapOptions {
+            allow_new_symbols: true,
+        },
+    )
+    .unwrap()
+    .0;
+    let mut guard = SequentialMiniGuard::new(&pristine).unwrap();
+    let running = guard.compose_add(&pristine, &provider_mini).unwrap();
+    remap_module_to_base_with_options(
+        &consumer_extracted,
+        &running,
+        RemapOptions {
+            allow_new_symbols: false,
+        },
+    )
+    .expect("strict consumer resolves after its runtime provider is composed");
+
+    let output = compose_selective_full_graph(
+        &pristine,
+        &full_graph,
+        vec![
+            SelectiveFullGraphChange::add(CONSUMER_OUTER),
+            SelectiveFullGraphChange::add(PROVIDER_OUTER),
+        ],
+    )
+    .unwrap();
+    assert_eq!(output.applied_modules, [PROVIDER_OUTER, CONSUMER_OUTER]);
 }
 
 #[test]

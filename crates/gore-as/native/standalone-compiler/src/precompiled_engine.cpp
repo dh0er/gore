@@ -730,7 +730,11 @@ public:
         std::string& detail) {
         const bool value_is_const = input.is_object_const || input.is_const_handle;
         if (input.is_auto) {
-            output = asCDataType::CreateAuto(value_is_const);
+            // For non-handles the shipping cache may encode value constness through either bit.
+            // Once `auto` is a handle the two bits are distinct again: bIsObjectConst describes
+            // the pointee while bIsConstHandle describes the handle itself.
+            output = asCDataType::CreateAuto(
+                input.is_object_handle ? input.is_object_const : value_is_const);
             if (input.is_object_handle) {
                 output.MakeHandle(true);
                 output.MakeReadOnly(input.is_const_handle);

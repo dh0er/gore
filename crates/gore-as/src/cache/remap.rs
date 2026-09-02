@@ -2122,6 +2122,226 @@ impl TailMetadata {
     }
 }
 
+/// Compact lookup used by selective FullGraph composition to distinguish a genuine dependency on
+/// another rebuilt module from a malformed mini-cache. The index is built once from the rebuilt
+/// cache; individual module extractions all carry the same global tail-table generation.
+pub(crate) struct RemapDependencyIndex {
+    providers: Vec<String>,
+    providers_by_outer_module: HashMap<String, Vec<usize>>,
+    type_provider_by_ptr: HashMap<i64, usize>,
+    function_provider_by_ptr: HashMap<i64, usize>,
+    global_provider_by_ptr: HashMap<i64, usize>,
+    property_provider_by_key: HashMap<i64, usize>,
+}
+
+impl RemapDependencyIndex {
+    pub(crate) fn build(
+        bytes: &[u8],
+        requested_outer_modules: &HashSet<String>,
+    ) -> Result<Self, RemapError> {
+        fn intern_provider(
+            module: &str,
+            providers: &mut Vec<String>,
+            provider_by_name: &mut HashMap<String, usize>,
+        ) -> Option<usize> {
+            if module.is_empty() || module == "$__T__" {
+                return None;
+            }
+            if let Some(&provider) = provider_by_name.get(module) {
+                return Some(provider);
+            }
+            let provider = providers.len();
+            providers.push(module.to_owned());
+            provider_by_name.insert(module.to_owned(), provider);
+            Some(provider)
+        }
+
+        preflight_cache_module_work(bytes)?;
+        let meta = TailMetadata::build(bytes)?;
+        let mut providers = Vec::new();
+        let mut provider_by_name = HashMap::new();
+        let mut providers_by_outer_module = HashMap::<String, Vec<usize>>::new();
+        let mut outer_names = HashSet::new();
+        let mut inner_names = HashSet::new();
+        for (outer, start, _) in super::walk_modules::module_ranges(bytes)? {
+            if !outer_names.insert(outer.clone()) {
+                return Err(RemapError::ModuleNameCollision { name: outer });
+            }
+            let mut cursor = Cursor::at(bytes, start);
+            cursor.read_fstring()?;
+            let inner = cursor.read_sia()?;
+            if !inner.is_empty() && !inner_names.insert(inner.clone()) {
+                return Err(RemapError::ModuleNameCollision { name: inner });
+            }
+            if requested_outer_modules.contains(&outer) {
+                let Some(provider) = intern_provider(&inner, &mut providers, &mut provider_by_name)
+                else {
+                    continue;
+                };
+                providers_by_outer_module
+                    .entry(outer)
+                    .or_default()
+                    .push(provider);
+            }
+        }
+
+        let mut type_provider_by_ptr = HashMap::new();
+        let syms = SymTables::build(bytes)?;
+        let mut comparison_budget =
+            IdentityComparisonBudget::new(bytes.len().saturating_add(syms.identity_bytes));
+        let declarations =
+            collect_declaration_inventory(bytes, &syms, None, None, &meta, &mut comparison_budget)?
+                .declarations;
+        for row in &meta.types {
+            if !row.type_deps.is_empty() || row.module.is_empty() || row.module == "$__T__" {
+                continue;
+            }
+            let Some(&provider) = provider_by_name.get(&row.module) else {
+                continue;
+            };
+            let identity = DeclarationIdentity {
+                module: row.module.clone(),
+                namespace: row.namespace.clone(),
+                name: row.name.clone(),
+            };
+            if match_declaration_identities(
+                &[&declarations],
+                &identity,
+                DeclarationSetKind::Type,
+                &mut comparison_budget,
+            )? == FunctionDeclarationMatch::Unique
+            {
+                type_provider_by_ptr.insert(row.key, provider);
+            }
+        }
+        let mut type_provider_by_id = HashMap::new();
+        let mut type_ptr_by_id = HashMap::new();
+        for row in &meta.type_ids {
+            type_ptr_by_id.insert(row.id, row.ptr);
+            if let Some(&provider) = type_provider_by_ptr.get(&row.ptr) {
+                type_provider_by_id.insert(i64::from(row.id), provider);
+            }
+        }
+
+        let mut function_provider_by_ptr = HashMap::new();
+        for row in &meta.funcs {
+            if row.is_imported {
+                continue;
+            }
+            let provider = if row.is_method {
+                type_provider_by_ptr.get(&row.owner_dep.1).copied()
+            } else {
+                provider_by_name.get(&row.module).copied()
+            };
+            let Some(provider) = provider else {
+                continue;
+            };
+            let Some(identity) = syms.func_ident_of_ptr.get(&row.key) else {
+                continue;
+            };
+            if match_function_declarations(&[&declarations], identity, &mut comparison_budget)?
+                != FunctionDeclarationMatch::Unique
+            {
+                continue;
+            }
+            function_provider_by_ptr.insert(row.key, provider);
+        }
+
+        let mut global_provider_by_ptr = HashMap::new();
+        for row in &meta.globals {
+            if row.is_string || row.module.is_empty() {
+                continue;
+            }
+            let Some(&provider) = provider_by_name.get(&row.module) else {
+                continue;
+            };
+            let identity = DeclarationIdentity {
+                module: row.module.clone(),
+                namespace: row.namespace.clone(),
+                name: row.name.clone(),
+            };
+            if match_declaration_identities(
+                &[&declarations],
+                &identity,
+                DeclarationSetKind::Global,
+                &mut comparison_budget,
+            )? == FunctionDeclarationMatch::Unique
+            {
+                global_provider_by_ptr.insert(row.key, provider);
+            }
+        }
+
+        let mut property_provider_by_key = HashMap::new();
+        for row in &meta.properties {
+            let Some(&owner_ptr) = type_ptr_by_id.get(&row.old_type_id) else {
+                continue;
+            };
+            let Some(owner) = meta.type_row(owner_ptr).map(type_declaration_descriptor) else {
+                continue;
+            };
+            if owner.kind != TypeDeclarationKind::ScriptLeaf {
+                continue;
+            }
+            let property = PropertyDeclarationIdentity {
+                owner: owner.identity,
+                name: row.name.clone(),
+            };
+            if match_property_declarations(&[&declarations], &property, &mut comparison_budget)?
+                == FunctionDeclarationMatch::Unique
+            {
+                if let Some(&provider) = type_provider_by_id.get(&i64::from(row.old_type_id)) {
+                    property_provider_by_key.insert(row.key, provider);
+                }
+            }
+        }
+
+        Ok(Self {
+            providers,
+            providers_by_outer_module,
+            type_provider_by_ptr,
+            function_provider_by_ptr,
+            global_provider_by_ptr,
+            property_provider_by_key,
+        })
+    }
+
+    pub(crate) fn providers_for_outer_module(&self, module: &str) -> Vec<String> {
+        self.providers_by_outer_module
+            .get(module)
+            .into_iter()
+            .flatten()
+            .filter_map(|&provider| self.providers.get(provider).cloned())
+            .collect()
+    }
+
+    pub(crate) fn retry_provider(&self, error: &RemapError) -> Option<String> {
+        let provider = match error {
+            RemapError::Unresolved { kind, key, .. } => match *kind {
+                "global" => self.global_provider_by_ptr.get(key),
+                "function" | "function-id" | "function-id(embed)" => {
+                    self.function_provider_by_ptr.get(key)
+                }
+                "type" | "type-id" | "type(embed)" => self.type_provider_by_ptr.get(key),
+                _ => None,
+            },
+            RemapError::InvalidTailRow {
+                table,
+                row_key,
+                kind: "module authority" | "declaration membership",
+                ..
+            } => match *table {
+                0 => self.type_provider_by_ptr.get(row_key),
+                2 => self.function_provider_by_ptr.get(row_key),
+                4 => self.global_provider_by_ptr.get(row_key),
+                6 => self.property_provider_by_key.get(row_key),
+                _ => None,
+            },
+            _ => None,
+        }?;
+        self.providers.get(*provider).cloned()
+    }
+}
+
 /// Collect the authoritative module identities used by runtime symbol lookup. `Modules` is a
 /// TMap, but its outer FString key is only a container key/alias; tail rows bind to the inner
 /// `FAngelscriptPrecompiledModule::ModuleName` instead.
