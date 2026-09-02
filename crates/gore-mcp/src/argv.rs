@@ -1381,6 +1381,38 @@ mod tests {
     }
 
     #[test]
+    fn dialog_writers_gate_only_the_targets_they_can_overwrite() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace = dir.path().join("checkout");
+        std::fs::create_dir_all(&workspace).expect("mkdir workspace");
+        std::fs::write(workspace.join("dialog-edit.json"), b"{}").expect("write manifest fixture");
+        let stage_call = json!({ "dir": workspace.to_string_lossy() });
+
+        assert!(
+            question("gore_dialog", "stage", stage_call.clone(), &options()).is_none(),
+            "an occupied checkout is expected; only its derived spec.json may collide"
+        );
+        std::fs::write(workspace.join("spec.json"), b"manual edits").expect("write staged spec");
+        assert!(
+            asks_about_a_write(question("gore_dialog", "stage", stage_call, &options())),
+            "rerunning stage must ask before replacing spec.json"
+        );
+
+        let export = dir.path().join("export");
+        std::fs::create_dir_all(&export).expect("mkdir export");
+        let export_call = json!({ "out": export.to_string_lossy() });
+        assert!(
+            question("gore_dialog", "export", export_call.clone(), &options()).is_none(),
+            "an empty export directory has nothing to overwrite"
+        );
+        std::fs::write(export.join("000001_manual.json"), b"keep").expect("write export fixture");
+        assert!(
+            asks_about_a_write(question("gore_dialog", "export", export_call, &options())),
+            "an occupied export directory must pass the write gate"
+        );
+    }
+
+    #[test]
     fn packing_into_the_game_tree_is_a_deployment_and_is_gated() {
         // `texture pack -o ./build` is an artifact; `texture pack -o <game>/G1R/Content/Paks/~mods`
         // is the live override the game mounts, which is what `texture deploy` needs a flag for.

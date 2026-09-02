@@ -1312,6 +1312,11 @@ mod tests {
                 &[("out", Derived::Child("gore-dump"))],
             ),
             (
+                "gore_dialog",
+                "stage",
+                &[("dir", Derived::Child("spec.json"))],
+            ),
+            (
                 "gore_mod",
                 "build",
                 &[(
@@ -1382,6 +1387,8 @@ mod tests {
             // the individual file it would replace instead.
             // One `.lua` per class, named from the model file.
             ("gore_catalog", "stubs", &["out"]),
+            // One JSON file per conversation, named from cache data.
+            ("gore_dialog", "export", &["out"]),
             // One `.as` per module, laid out by the cache's own ScriptRelativeFilename.
             ("gore_as", "emit-all", &["outdir"]),
         ];

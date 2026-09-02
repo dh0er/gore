@@ -932,7 +932,9 @@ const DIALOG_COMMANDS: &[CommandSpec] = &[
         "Write the build spec for a checked workspace and print its strict standalone `--op \
          edit` compile command, adding `--allow-new-symbols` only when required",
         DIALOG_STAGE_ARGS,
-        Safety::write().writes_into(&["dir"]),
+        Safety::write()
+            .also_writes(&[("dir", Derived::Child("spec.json"))])
+            .writes_into(&["dir"]),
         T_NORMAL,
     )
     .guide("dialog-authoring"),
@@ -960,13 +962,13 @@ const DIALOG_COMMANDS: &[CommandSpec] = &[
     )
     .exactly_one(&[&["caption", "caption_key"]])
     .guide("dialog-authoring"),
-    // One JSON file per conversation, named after the module, in a directory the caller picks.
-    // Nothing else is touched, and the game install is only read.
+    // One JSON file per conversation, under data-derived collision-free names, in a directory the
+    // caller picks. An occupied directory must therefore pass the write gate.
     CommandSpec::new(
         "export",
         "Write every conversation to a directory, one JSON file each",
         DIALOG_EXPORT_ARGS,
-        Safety::write().writes_into(&["out"]),
+        Safety::write().clobbers_dir(&["out"]),
         T_NORMAL,
     )
     .guide("dialog-trees"),
