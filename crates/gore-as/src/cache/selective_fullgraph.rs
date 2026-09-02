@@ -23,7 +23,6 @@ use super::walk_modules::{module_names, module_ranges};
 
 const MAX_SELECTIVE_FULLGRAPH_CHANGES: usize = 256;
 const MAX_MODULE_NAME_BYTES: usize = 4_096;
-const MAX_FIXED_POINT_ATTEMPTS_PER_CHANGE: usize = 8;
 
 /// Compiler-derived preservation state for one existing module.
 ///
@@ -240,6 +239,11 @@ fn apply_at_fixed_point<Item, State, Deferred, Fatal>(
     }
 
     let pending_len = pending.len();
+    // One failed attempt can only be retried after a different declared change lands. Including
+    // the initial attempt, an item can therefore need at most one attempt per pending item. Keep
+    // that graph-derived ceiling as a defensive invariant rather than rejecting valid broad
+    // dependency sets at an unrelated fixed constant.
+    let max_attempts_per_item = pending_len.max(1);
     let mut declared = HashSet::new();
     let mut ready = VecDeque::with_capacity(pending_len);
     for (ordinal, item) in pending.into_iter().enumerate() {
@@ -288,11 +292,11 @@ fn apply_at_fixed_point<Item, State, Deferred, Fatal>(
                     terminal.push((queued.ordinal, error));
                     continue;
                 }
-                if queued.attempts >= MAX_FIXED_POINT_ATTEMPTS_PER_CHANGE {
+                if queued.attempts >= max_attempts_per_item {
                     return Err(FixedPointFailure::RetryLimit {
                         item_name,
                         attempts: queued.attempts,
-                        limit: MAX_FIXED_POINT_ATTEMPTS_PER_CHANGE,
+                        limit: max_attempts_per_item,
                     });
                 }
                 waiting
@@ -831,14 +835,15 @@ mod tests {
     }
 
     #[test]
-    fn fixed_point_bounds_staggered_multi_provider_discovery() {
+    fn fixed_point_allows_staggered_multi_provider_discovery_within_the_change_bound() {
         #[derive(Clone)]
         struct StaggeredChange {
             name: String,
             requires: Vec<String>,
         }
 
-        let stages = MAX_FIXED_POINT_ATTEMPTS_PER_CHANGE + 1;
+        // More than the old fixed limit of eight providers, exposed one at a time.
+        let stages = 9;
         let mut items = vec![StaggeredChange {
             name: "Consumer".to_owned(),
             requires: (1..=stages)
@@ -866,7 +871,7 @@ mod tests {
         }
         let total_items = items.len();
         let mut attempts = 0usize;
-        let error = apply_at_fixed_point(
+        let result = apply_at_fixed_point(
             HashSet::<String>::new(),
             items,
             |item| item.name.clone(),
@@ -888,17 +893,11 @@ mod tests {
                 Ok(updated)
             },
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(attempts <= total_items * MAX_FIXED_POINT_ATTEMPTS_PER_CHANGE);
-        assert!(matches!(
-            error,
-            FixedPointFailure::RetryLimit {
-                item_name,
-                attempts: MAX_FIXED_POINT_ATTEMPTS_PER_CHANGE,
-                limit: MAX_FIXED_POINT_ATTEMPTS_PER_CHANGE,
-            } if item_name == "Consumer"
-        ));
+        assert_eq!(result.0.len(), total_items);
+        assert_eq!(result.1.last().map(String::as_str), Some("Consumer"));
+        assert!(attempts <= total_items * total_items);
     }
 
     #[test]
