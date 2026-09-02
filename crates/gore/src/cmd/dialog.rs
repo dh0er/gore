@@ -2415,8 +2415,19 @@ const MAX_DIALOG_SOURCE_BYTES: u64 =
     gore_as::compile::MAX_PROJECT_COMPILER_CHECK_SOURCE_BYTES as u64;
 
 fn ensure_empty_dialog_workspace(out: &Path) -> Result<()> {
-    if !out.exists() {
-        return Ok(());
+    let metadata = match fs::symlink_metadata(out) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("reading dialog output workspace {}", out.display()));
+        }
+    };
+    if !metadata.is_dir() || dialog_metadata_is_link(&metadata) {
+        bail!(
+            "dialog output workspace must be a real, non-reparse directory: {}",
+            out.display()
+        );
     }
     let mut entries = fs::read_dir(out).with_context(|| format!("reading {}", out.display()))?;
     if entries
@@ -6784,6 +6795,33 @@ class UFirst : UTopic_Hero__NEW_NPC { }
 
         assert!(error.to_string().contains("is not empty"), "{error}");
         assert_eq!(fs::read(&sentinel).unwrap(), b"keep this edit");
+    }
+
+    #[test]
+    fn checkout_rejects_a_linked_output_workspace_before_opening_the_cache() {
+        let temp = tempfile::tempdir().unwrap();
+        let outside = temp.path().join("outside");
+        let linked = temp.path().join("dialog-edit");
+        fs::create_dir(&outside).unwrap();
+
+        #[cfg(unix)]
+        let link_result = std::os::unix::fs::symlink(&outside, &linked);
+        #[cfg(windows)]
+        let link_result = std::os::windows::fs::symlink_dir(&outside, &linked);
+        if let Err(error) = link_result {
+            eprintln!("skip: this account cannot create a directory symlink: {error}");
+            return;
+        }
+
+        let error = checkout(
+            "NPC",
+            &linked,
+            Some(temp.path().join("missing.Cache")),
+            None,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("non-reparse"), "{error:#}");
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
     }
 
     #[test]
