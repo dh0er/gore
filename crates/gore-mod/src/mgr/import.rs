@@ -5710,18 +5710,31 @@ fn goremod_components(
                 // Conflict targets are every module the mini actually carries: a multi-module
                 // mini names only one of them in its manifest entry. Fall back to the manifest
                 // name when the payload cannot be read here; inspection validates it later.
+                // Each distinct payload is read once and the whole scan shares the aggregate
+                // script budget, so a short manifest pointing many entries at one large mini
+                // cannot turn this best-effort pass into unbounded I/O.
                 let mut targets: Vec<String> = Vec::new();
+                let mut scanned: BTreeMap<String, Option<Vec<String>>> = BTreeMap::new();
+                let mut scan_bytes = 0u64;
                 for e in &entries {
-                    let carried = read_bounded_bundle_file(
-                        bundle_dir,
-                        Path::new(&e.mini),
-                        "script mini-cache payload",
-                        crate::MAX_SCRIPT_MINI_BYTES,
-                    )
-                    .ok()
-                    .and_then(|mini| gore_as::cache::walk_modules::module_names(&mini).ok())
-                    .filter(|names| !names.is_empty());
-                    match carried {
+                    if !scanned.contains_key(&e.mini) {
+                        let remaining =
+                            crate::MAX_SCRIPT_MINI_TOTAL_BYTES.saturating_sub(scan_bytes);
+                        let carried = read_bounded_bundle_file(
+                            bundle_dir,
+                            Path::new(&e.mini),
+                            "script mini-cache target scan",
+                            crate::MAX_SCRIPT_MINI_BYTES.min(remaining),
+                        )
+                        .ok()
+                        .and_then(|mini| {
+                            scan_bytes = scan_bytes.saturating_add(mini.len() as u64);
+                            gore_as::cache::walk_modules::module_names(&mini).ok()
+                        })
+                        .filter(|names| !names.is_empty());
+                        scanned.insert(e.mini.clone(), carried);
+                    }
+                    match scanned.get(&e.mini).and_then(Clone::clone) {
                         Some(names) => targets.extend(names),
                         None => targets.push(e.module.clone()),
                     }
