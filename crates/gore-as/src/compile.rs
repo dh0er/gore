@@ -6920,10 +6920,18 @@ struct FullGraphPublicationFailureV1 {
 }
 
 fn preflight_full_graph_path_layout_v1(opts: &FullGraphCompileOptsV1) -> Result<(), CompileError> {
-    if !opts.game_dir.is_absolute()
-        || !opts.work_dir.is_absolute()
-        || !opts.output_path.is_absolute()
-    {
+    preflight_full_graph_path_layout_paths_v1(&opts.game_dir, &opts.work_dir, &opts.output_path)
+}
+
+/// The complete full-graph path-layout preflight on bare paths, so a front end can refuse a
+/// layout the compiler would reject before it plans the complete source graph (a multi-minute
+/// step on the shipped tree). Identical to the check the compiler repeats before running.
+pub fn preflight_full_graph_path_layout_paths_v1(
+    game_dir: &Path,
+    work_dir: &Path,
+    output_path: &Path,
+) -> Result<(), CompileError> {
+    if !game_dir.is_absolute() || !work_dir.is_absolute() || !output_path.is_absolute() {
         return Err(CompileError::Other(
             "full-graph game, work, and output paths must be absolute".to_owned(),
         ));
@@ -6936,24 +6944,22 @@ fn preflight_full_graph_path_layout_v1(opts: &FullGraphCompileOptsV1) -> Result<
             )
         })
     };
-    if contains_dot_component(&opts.work_dir) || contains_dot_component(&opts.output_path) {
+    if contains_dot_component(work_dir) || contains_dot_component(output_path) {
         return Err(CompileError::Other(
             "full-graph work/output paths must not contain `.` or `..` components".to_owned(),
         ));
     }
-    let requested_output_parent = opts
-        .output_path
+    let requested_output_parent = output_path
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
         .ok_or_else(|| {
             CompileError::Other("full-graph output has no parent directory".to_owned())
         })?;
-    let game_root = opts
-        .game_dir
+    let game_root = game_dir
         .canonicalize()
         .map_err(|error| CompileError::Io(format!("resolving game root: {error}")))?;
     let projected_work_root =
-        resolve_missing_path_via_existing_ancestor_v1(&opts.work_dir, "full-graph work directory")?;
+        resolve_missing_path_via_existing_ancestor_v1(work_dir, "full-graph work directory")?;
     let projected_output_parent = resolve_missing_path_via_existing_ancestor_v1(
         requested_output_parent,
         "full-graph output parent",
@@ -6984,13 +6990,13 @@ fn preflight_full_graph_path_layout_v1(opts: &FullGraphCompileOptsV1) -> Result<
         ));
     }
 
-    ensure_real_directory(&opts.work_dir).map_err(|error| {
+    ensure_real_directory(work_dir).map_err(|error| {
         CompileError::Io(format!("preparing full-graph work directory: {error}"))
     })?;
     ensure_real_directory(requested_output_parent).map_err(|error| {
         CompileError::Io(format!("preparing full-graph output parent: {error}"))
     })?;
-    let work_root = opts.work_dir.canonicalize().map_err(|error| {
+    let work_root = work_dir.canonicalize().map_err(|error| {
         CompileError::Io(format!("resolving full-graph work directory: {error}"))
     })?;
     let output_parent = requested_output_parent.canonicalize().map_err(|error| {

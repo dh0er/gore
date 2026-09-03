@@ -294,6 +294,11 @@ pub enum AsCmd {
         /// game installation.
         #[arg(short, long)]
         out: PathBuf,
+        /// Also publish a deployable multi-module mini-cache holding only the authored Add/Edit
+        /// modules, remapped to the pristine cache. This is the artifact a bundle spec's
+        /// `scripts[].mini_cache` should point at when a mod spans several modules.
+        #[arg(long, value_name = "PATH")]
+        mini: Option<PathBuf>,
         /// Existing private workspace outside the game installation. GORE recreates only its
         /// fixed `tree` child and uses this root for isolated standalone scratch directories.
         #[arg(long, value_name = "DIR")]
@@ -1918,6 +1923,7 @@ impl gore_as::compile::StandaloneCompilerRunnerV1 for CompileModuleStandaloneRun
 fn compile_full_graph_command(
     src: PathBuf,
     out: PathBuf,
+    mini: Option<PathBuf>,
     work_dir: PathBuf,
     game: Option<PathBuf>,
     no_diagnostics: bool,
@@ -1940,6 +1946,11 @@ fn compile_full_graph_command(
     if out == work_dir || out.starts_with(&work_dir) {
         bail!("full-graph output must not be inside the compiler workspace");
     }
+    // The compiler repeats this preflight only after the complete source graph has been
+    // planned, which takes many minutes on the shipped tree. Run the identical check up front.
+    gore_as::compile::preflight_full_graph_path_layout_paths_v1(&game, &work_dir, &out)
+        .map_err(anyhow::Error::new)
+        .context("full-graph path layout")?;
     let receipt_path = compiler
         .generation_receipt
         .map(|path| absolute_cli_path(path, "generation receipt"))
@@ -1949,6 +1960,21 @@ fn compile_full_graph_command(
     }
     if let Some(path) = receipt_path.as_ref() {
         validate_auxiliary_output_path(path, &game, "generation receipt")?;
+    }
+    let mini_path = mini
+        .map(|path| absolute_cli_path(path, "multi-module mini-cache"))
+        .transpose()?;
+    if let Some(path) = mini_path.as_ref() {
+        if path == &out || receipt_path.as_ref().is_some_and(|receipt| receipt == path) {
+            bail!("mini-cache path must differ from the compiled cache and receipt paths");
+        }
+        if path == &work_dir || path.starts_with(&work_dir) {
+            bail!("mini-cache output must not be inside the compiler workspace");
+        }
+        validate_auxiliary_output_path(path, &game, "multi-module mini-cache")?;
+        if path.exists() {
+            bail!("mini-cache output already exists: {}", path.display());
+        }
     }
 
     let executable_path = compiler_executable_path(&game);
@@ -2250,6 +2276,78 @@ fn compile_full_graph_command(
         artifact.module_count(),
         artifact.byte_len(),
         artifact.sha256()
+    );
+    if let Some(mini_path) = mini_path {
+        publish_full_graph_mini(&artifact, &opts.base_cache, &mini_path)?;
+    }
+    Ok(())
+}
+
+/// Reduce a selectively composed complete cache to a deployable multi-module mini-cache: the
+/// authored Add/Edit modules are extracted with the composed tail and remapped against the
+/// sealed pristine base, so the mini carries only its own new rows and is bound to the base GUID.
+fn publish_full_graph_mini(
+    artifact: &gore_as::compile::FullGraphCompileArtifactV1,
+    base_cache: &[u8],
+    mini_path: &Path,
+) -> Result<()> {
+    use gore_as::compile::FullGraphCompileOperationV1;
+    let authored: Vec<(&str, FullGraphCompileOperationV1)> = artifact
+        .changes()
+        .iter()
+        .filter(|change| change.operation != FullGraphCompileOperationV1::Delete)
+        .map(|change| (change.module_name.as_str(), change.operation))
+        .collect();
+    if authored.is_empty() {
+        bail!("no authored Add/Edit module to place in a mini-cache");
+    }
+    let composed = std::fs::read(artifact.path())
+        .with_context(|| format!("reading the composed cache {}", artifact.path().display()))?;
+    let names: Vec<&str> = authored.iter().map(|(name, _)| *name).collect();
+    let extracted = gore_as::cache::splice::extract_modules(&composed, &names)
+        .context("extracting the authored modules from the composed cache")?;
+    let (mini, _counts) = gore_as::cache::remap::remap_module_to_base_with_options(
+        &extracted,
+        base_cache,
+        gore_as::cache::remap::RemapOptions {
+            allow_new_symbols: true,
+        },
+    )
+    .context("remapping the authored modules to the pristine cache")?;
+    // Prove the mini composes back onto the sealed base before publishing it.
+    let mut guard = gore_as::cache::splice::SequentialMiniGuard::new(base_cache)
+        .context("validating the pristine base for the mini-cache self-check")?;
+    guard
+        .compose_upsert(base_cache, &mini)
+        .context("multi-module mini-cache does not compose onto the pristine base")?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(mini_path)
+        .with_context(|| format!("creating {}", mini_path.display()))?;
+    std::io::Write::write_all(&mut file, &mini)
+        .and_then(|()| file.sync_all())
+        .with_context(|| format!("writing {}", mini_path.display()))?;
+    let has_edit = authored
+        .iter()
+        .any(|(_, op)| *op == FullGraphCompileOperationV1::Edit);
+    println!(
+        "multi-module mini-cache -> {} ({} modules, {} bytes)",
+        mini_path.display(),
+        names.len(),
+        mini.len()
+    );
+    for (name, op) in &authored {
+        println!("  {:<4} {name}", format!("{op:?}").to_lowercase());
+    }
+    println!(
+        "bundle spec entry: {{ \"op\": \"{}\", \"module_name\": \"{}\", \"mini_cache\": \"{}\" }}",
+        if has_edit { "edit" } else { "add" },
+        names[0],
+        mini_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
     );
     Ok(())
 }
@@ -3112,6 +3210,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
         AsCmd::Compile {
             src,
             out,
+            mini,
             work_dir,
             game,
             no_diagnostics,
@@ -3122,6 +3221,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             compile_full_graph_command(
                 src,
                 out,
+                mini,
                 work_dir,
                 game,
                 no_diagnostics,

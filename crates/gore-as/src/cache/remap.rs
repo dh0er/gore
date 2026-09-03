@@ -35,7 +35,7 @@ pub enum RemapError {
     Wire(#[from] WireError),
     #[error("disasm error: {0}")]
     Disasm(String),
-    #[error("mini-cache must contain exactly 1 module, found {0}")]
+    #[error("mini-cache must contain at least 1 module, found {0}")]
     NotSingle(u32),
     #[error(
         "unresolved {kind} ref in op {op} (regen key {key:#x}, name {name:?}): \
@@ -3195,16 +3195,15 @@ impl StaticNameRebaseContext {
 ///
 /// T6 is identity-by-text. Existing names (including duplicates inside this mini) are therefore
 /// safely deduplicated; genuinely new rows retain their source order. Bytecode is patched in every
-/// function-like record collected by [`collect_module_spans`] (`Functions`, methods, constructors,
-/// behavior functions, and global init functions).
+/// function-like record of every module collected by [`collect_module_spans`] (`Functions`,
+/// methods, constructors, behavior functions, and global init functions).
 pub(super) fn rebase_static_names_for_composition(
     mini: &[u8],
     context: &StaticNameRebaseContext,
     prior_contributions: &[String],
 ) -> Result<(Vec<u8>, Vec<String>), RemapError> {
-    let mini_n = super::walk_modules::module_count(mini);
-    if mini_n != 1 {
-        return Err(RemapError::NotSingle(mini_n));
+    if super::walk_modules::module_count(mini) == 0 {
+        return Err(RemapError::NotSingle(0));
     }
 
     let meta = TailMetadata::build(mini)?;
@@ -5609,18 +5608,20 @@ pub(super) fn validate_composed_module_records(bytes: &[u8]) -> Result<(), Remap
     validate_composed_module_records_with_pristine(bytes, None)
 }
 
-/// Walk the single module entry in `mini` (TMap key + module value) and collect every
-/// function's ByteCode span + every embedded int64 ref. Mirrors `walk_modules::read_module_c`
-/// but records byte offsets.
+/// Walk every module entry in `mini` (TMap key + module value) and collect every function's
+/// ByteCode span + every embedded int64 ref into one span set with absolute offsets. Mirrors
+/// `walk_modules::read_module_c` but records byte offsets. A multi-module mini is one rewrite
+/// unit, so its modules share one span set; `module`/`inner_module` name the last module read.
 fn collect_module_spans(mini: &[u8]) -> Result<ModuleSpans, WireError> {
     preflight_mini_module_work(mini)?;
     let mut c = Cursor::at(mini, CacheHeader::SIZE);
-    let module = c.read_fstring()?; // TMap key
-    let mut spans = ModuleSpans {
-        module,
-        ..ModuleSpans::default()
-    };
-    read_module_spans(&mut c, mini, &mut spans, None, None)?;
+    let count = super::walk_modules::module_count(mini) as usize;
+    c.ensure_minimum_remaining(count, 60, "Modules")?;
+    let mut spans = ModuleSpans::default();
+    for _ in 0..count {
+        spans.module = c.read_fstring()?; // TMap key
+        read_module_spans(&mut c, mini, &mut spans, None, None)?;
+    }
     Ok(spans)
 }
 
@@ -7597,10 +7598,18 @@ fn analyze_bytecode_for_new_symbols(
 }
 
 fn target_module_names(mini: &[u8]) -> Result<HashSet<String>, WireError> {
-    let mut c = Cursor::at(mini, CacheHeader::SIZE);
-    c.read_fstring()?; // outer TMap key is not a declaring-module identity
-    let inner = c.read_sia()?;
-    Ok([inner].into_iter().filter(|s| !s.is_empty()).collect())
+    // Every module of the mini declares symbols; the outer TMap keys are not declaring-module
+    // identities, the inner `ModuleName` of each entry is.
+    let mut names = HashSet::new();
+    for (_, start, _) in super::walk_modules::module_ranges(mini)? {
+        let mut c = Cursor::at(mini, start);
+        c.read_fstring()?;
+        let inner = c.read_sia()?;
+        if !inner.is_empty() {
+            names.insert(inner);
+        }
+    }
+    Ok(names)
 }
 
 fn close_type_dependencies(
@@ -9436,7 +9445,7 @@ fn finish_new_symbol_remap(
     // A prepared mini is generation-bound to the exact target cache. This also makes the
     // low-level extract-remap output directly consumable by the strict sequential guard.
     out.extend_from_slice(&pristine_header[..0x14]);
-    out.extend_from_slice(&1u32.to_le_bytes());
+    out.extend_from_slice(&super::walk_modules::module_count(extracted_mini).to_le_bytes());
     out.extend_from_slice(&module_bytes);
     out.extend_from_slice(&tail);
     Ok((out, total))
@@ -9506,8 +9515,8 @@ impl LoadoutScriptIdPlanBuilder {
                 mini: header.hash,
             });
         }
-        if header.type_count != 1 {
-            return Err(RemapError::NotSingle(header.type_count));
+        if header.type_count == 0 {
+            return Err(RemapError::NotSingle(0));
         }
         let next_minis =
             self.inspected_count
@@ -9656,8 +9665,8 @@ pub(super) fn remap_module_to_base_with_loadout_plan(
             mini: mini_header.hash,
         });
     }
-    if mini_header.type_count != 1 {
-        return Err(RemapError::NotSingle(mini_header.type_count));
+    if mini_header.type_count == 0 {
+        return Err(RemapError::NotSingle(0));
     }
     let bound_identity_fingerprint = loadout
         .inspected_minis
@@ -9698,9 +9707,8 @@ fn remap_module_allow_new(
     extracted_mini: &[u8],
     base: &[u8],
 ) -> Result<(Vec<u8>, RemapCounts), RemapError> {
-    let mini_n = super::walk_modules::module_count(extracted_mini);
-    if mini_n != 1 {
-        return Err(RemapError::NotSingle(mini_n));
+    if super::walk_modules::module_count(extracted_mini) == 0 {
+        return Err(RemapError::NotSingle(0));
     }
     preflight_mini_module_work(extracted_mini)?;
     preflight_cache_module_work(base)?;
@@ -9726,8 +9734,8 @@ pub fn remap_module_to_base(
     preflight_mini_module_work(extracted_mini)?;
     preflight_cache_module_work(base)?;
     let mini_n = super::walk_modules::module_count(extracted_mini);
-    if mini_n != 1 {
-        return Err(RemapError::NotSingle(mini_n));
+    if mini_n == 0 {
+        return Err(RemapError::NotSingle(0));
     }
 
     let regen = SymTables::build(extracted_mini)?;
@@ -9842,12 +9850,12 @@ pub fn remap_module_to_base(
         });
     }
 
-    // Emit: FGuid+magic (from mini) + Modules count=1 + module bytes + 7 empty tables.
+    // Emit: FGuid+magic (from base) + Modules count + module bytes + 7 empty tables.
     let mut out = Vec::with_capacity(CacheHeader::SIZE + module_bytes.len() + 28);
     // Canonicalize the prepared artifact to the exact target generation. Callers that use this
     // low-level API directly therefore receive the same generation binding as compile-module.
     out.extend_from_slice(&base[..0x14]); // target FGuid + magic
-    out.extend_from_slice(&1u32.to_le_bytes()); // Modules count = 1
+    out.extend_from_slice(&mini_n.to_le_bytes()); // Modules count, unchanged from the input
     out.extend_from_slice(&module_bytes);
     out.extend_from_slice(&[0u8; 28]); // 7 tables × int32 count 0
     Ok((out, total))

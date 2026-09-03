@@ -351,7 +351,7 @@ Output directories must not exist and are never placed in the game tree.
 | `patch-tag-map <CACHE>` | `--selector <JSON>` · `--expected-hex` · `--replacement-hex` · `-o, --out` · `--json` |
 | `qualify` | `--game` · `--usmap <FILE>` · `--catalog <JSON>` · `--id <ID>` · `--label <TEXT>` · `--json` |
 | `diagnostics-check` | `--exe <EXE>` · `--game <GAME>` |
-| `compile <SRC>` | `-o, --out` · `--work-dir <DIR>` · `--game` · `--backend standalone\|game\|standalone-then-game` (default `standalone-then-game`) · `--generation-receipt <RECEIPT.json>` · `--no-diagnostics` · `--diagnostics-hook <DLL>` · `--diagnostics-inject-delay-ms <MS>` |
+| `compile <SRC>` | `-o, --out` · `--mini <PATH>` · `--work-dir <DIR>` · `--game` · `--backend standalone\|game\|standalone-then-game` (default `standalone-then-game`) · `--generation-receipt <RECEIPT.json>` · `--no-diagnostics` · `--diagnostics-hook <DLL>` · `--diagnostics-inject-delay-ms <MS>` |
 | `compile-module` | `--op add\|edit` · `--module` · `--rel-path` · `--source` · `--work-dir` · `--allow-new-symbols` · `-o, --out` · `--game` · `--backend standalone\|game\|standalone-then-game` (default `standalone-then-game`) · `--generation-receipt <RECEIPT.json>` · diagnostics flags · five `--development-*` compiler-development overrides |
 | `replace <BASE> <MINI> <TARGET>` | `-o, --out` |
 | `splice <BASE> <MINI>` | `-o, --out` |
@@ -368,8 +368,10 @@ Delete and are rejected; cyclic dependencies among new modules also fail
 closed. The raw whole-tree compiler regeneration is never the published cache.
 On BuildID `24878692`, one published selective product booted and loaded
 gameplay, rendered and selected its new same-module root, and executed a new
-provider call across modules from a shipped automatic topic. This runtime proof
-does not turn two dependent module minis into a supported package shape.
+provider call across modules from a shipped automatic topic. `--mini <PATH>`
+additionally publishes those Add/Edit modules as one multi-module mini-cache
+bound to the pristine cache, which bundles and the Manager compose as one unit;
+two independent module minis still cannot depend on one another.
 
 `patch-default`, `patch-tag-map` and `asset patch-fixed` never overwrite an
 existing output path. The `as` extract/splice family — `replace`, `splice`,

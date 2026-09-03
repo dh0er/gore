@@ -8308,6 +8308,14 @@ fn prepare(
                                     ModError::Other(format!("splice {}: {err}", e.module))
                                 })?
                         }
+                        // A multi-module mini edits and adds its modules as one unit.
+                        "edit" if gore_as::cache::walk_modules::module_count(&mini) > 1 => {
+                            script_merge_guard
+                                .compose_upsert(&running, &mini)
+                                .map_err(|err| {
+                                    ModError::Other(format!("replace {}: {err}", e.module))
+                                })?
+                        }
                         "edit" => script_merge_guard
                             .compose_edit(&running, &mini, &e.module)
                             .map_err(|err| {

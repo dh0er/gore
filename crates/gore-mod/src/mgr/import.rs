@@ -5707,8 +5707,27 @@ fn goremod_components(
                     limits.max_manifest_bytes,
                 )?;
                 let entries: Vec<ScriptEntry> = serde_json::from_slice(&bytes)?;
-                let mut targets: Vec<String> = entries.iter().map(|e| e.module.clone()).collect();
+                // Conflict targets are every module the mini actually carries: a multi-module
+                // mini names only one of them in its manifest entry. Fall back to the manifest
+                // name when the payload cannot be read here; inspection validates it later.
+                let mut targets: Vec<String> = Vec::new();
+                for e in &entries {
+                    let carried = read_bounded_bundle_file(
+                        bundle_dir,
+                        Path::new(&e.mini),
+                        "script mini-cache payload",
+                        crate::MAX_SCRIPT_MINI_BYTES,
+                    )
+                    .ok()
+                    .and_then(|mini| gore_as::cache::walk_modules::module_names(&mini).ok())
+                    .filter(|names| !names.is_empty());
+                    match carried {
+                        Some(names) => targets.extend(names),
+                        None => targets.push(e.module.clone()),
+                    }
+                }
                 targets.sort();
+                targets.dedup();
                 ComponentInfo::AngelScriptPatch {
                     rel: join_rel(prefix, path),
                     targets,
@@ -6088,7 +6107,13 @@ fn validate_inspected_gore_bundle(
                                 entry.mini
                             ))
                         })?;
-                    if module_names.as_slice() != [entry.module.as_str()] {
+                    // A multi-module mini names one of its modules in the manifest; a
+                    // single-module mini must name exactly that module.
+                    let manifest_names_mini = match module_names.as_slice() {
+                        [only] => only == &entry.module,
+                        names => names.iter().any(|name| name == &entry.module),
+                    };
+                    if !manifest_names_mini {
                         return Err(ModError::Other(format!(
                             "script mini-cache {:?} declares modules {module_names:?}, but its manifest names {:?}",
                             entry.mini, entry.module

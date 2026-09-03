@@ -24,6 +24,11 @@ Write a `spec.json`:
 }
 ```
 
+**A `scripts` entry may point at a multi-module mini-cache** (`gore as compile
+--mini`). Use `"op": "edit"` when any carried module edits a shipped one and
+`"add"` when all are new; `module_name` names one of the carried modules. See
+[scripts](scripts.md#multi-module-mini-caches).
+
 **Asset paths are resolved relative to the spec file's own directory.**
 `wav_path`, `ogg_path`, `image_path`, `mini_cache` and `source_path` may be
 written as bare filenames beside the spec, whatever directory you run `gore mod
