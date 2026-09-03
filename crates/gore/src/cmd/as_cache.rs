@@ -391,13 +391,17 @@ pub enum AsCmd {
         #[arg(short, long)]
         out: PathBuf,
     },
-    /// Splice a base-bound mini-cache module into a base cache.
+    /// Splice the modules of a base-bound mini-cache into a base cache.
     Splice {
         /// Base cache (e.g. PrecompiledScript_Shipping.Cache).
         base: PathBuf,
-        /// Base-bound mini-cache from `compile-module` or `extract-remap`; raw generator output
-        /// has a fresh GUID and is refused until it is remapped to this exact base.
+        /// Base-bound mini-cache from `compile-module`, `compile --mini` or `extract-remap`; raw
+        /// generator output has a fresh GUID and is refused until it is remapped to this exact base.
         mini: PathBuf,
+        /// Replace modules that already exist in the base in place instead of refusing them; new
+        /// modules are still appended. Needed for a multi-module mini that edits a shipped module.
+        #[arg(long)]
+        upsert: bool,
         /// Output path for the spliced cache.
         #[arg(short, long)]
         out: PathBuf,
@@ -3732,16 +3736,28 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 out.display()
             );
         }
-        AsCmd::Splice { base, mini, out } => {
+        AsCmd::Splice {
+            base,
+            mini,
+            upsert,
+            out,
+        } => {
             let base_b = read_module_cache(&base)?;
             let mini_b = read_module_cache(&mini)?;
             let before = module_count(&base_b);
             let mut guard = gore_as::cache::splice::SequentialMiniGuard::new(&base_b)
                 .context("validating splice base")?;
-            let spliced = guard.compose_add(&base_b, &mini_b).context("splicing")?;
+            let spliced = if upsert {
+                guard
+                    .compose_upsert(&base_b, &mini_b)
+                    .context("splicing (upsert)")?
+            } else {
+                guard.compose_add(&base_b, &mini_b).context("splicing")?
+            };
             std::fs::write(&out, &spliced).with_context(|| format!("writing {}", out.display()))?;
             println!(
-                "spliced: {} modules -> {} ; {} -> {} bytes ; wrote {}",
+                "spliced{}: {} modules -> {} ; {} -> {} bytes ; wrote {}",
+                if upsert { " (upsert)" } else { "" },
                 before,
                 module_count(&spliced),
                 base_b.len(),

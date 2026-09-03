@@ -354,7 +354,7 @@ Output directories must not exist and are never placed in the game tree.
 | `compile <SRC>` | `-o, --out` · `--mini <PATH>` · `--work-dir <DIR>` · `--game` · `--backend standalone\|game\|standalone-then-game` (default `standalone-then-game`) · `--generation-receipt <RECEIPT.json>` · `--no-diagnostics` · `--diagnostics-hook <DLL>` · `--diagnostics-inject-delay-ms <MS>` |
 | `compile-module` | `--op add\|edit` · `--module` · `--rel-path` · `--source` · `--work-dir` · `--allow-new-symbols` · `-o, --out` · `--game` · `--backend standalone\|game\|standalone-then-game` (default `standalone-then-game`) · `--generation-receipt <RECEIPT.json>` · diagnostics flags · five `--development-*` compiler-development overrides |
 | `replace <BASE> <MINI> <TARGET>` | `-o, --out` |
-| `splice <BASE> <MINI>` | `-o, --out` |
+| `splice <BASE> <MINI>` | `--upsert` · `-o, --out` |
 | `extract <CACHE> <MODULE>` | `-o, --out` |
 | `extract-remap <REGEN> <MODULE> <BASE>` | `--allow-new-symbols` · `-o, --out` |
 | `bytediff <VANILLA> <REGEN>` | `--module` · `--func` · `--verdict` · `--show-benign` · `--context <N>` · `--norm-slots` · `--no-norm-scope` · `--no-norm-reguard` · `--json <PATH>` · `--fail-on-semantic` |

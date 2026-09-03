@@ -638,8 +638,16 @@ const SPLICE_ARGS: &[ArgSpec] = &[
         "mini",
         Positional { order: 1 },
         Path,
-        "Mini-cache from -as-generate-precompiled-data (one primitive-only module).",
+        "Base-bound mini-cache from `compile-module`, `compile --mini` or `extract-remap`.",
         true,
+    ),
+    ArgSpec::new(
+        "upsert",
+        Switch("upsert"),
+        Bool,
+        "Replace modules that already exist in the base in place instead of refusing them; new \
+         modules are still appended. Needed for a multi-module mini that edits a shipped module.",
+        false,
     ),
     ArgSpec::new(
         "out",

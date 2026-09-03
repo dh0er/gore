@@ -383,8 +383,9 @@ new; `module_name` names one of the carried modules. The command prints the
 exact entry. `gore mod build`, `deploy` and the Manager compose such a mini as
 one unit: in a loadout it is shadowed only as a whole, and a later mod that
 re-targets some but not all of its modules is refused rather than partially
-overridden. The low-level `gore as splice` only appends, so it accepts a mini
-whose modules are all new and refuses one that edits a shipped module.
+overridden. The low-level `gore as splice` appends by default and refuses a
+mini that edits a shipped module; `gore as splice --upsert` replaces the
+existing modules in place and appends the new ones, like deploy does.
 
 Qualified in game on 2026-09-03: a two-module mini (new provider module plus
 an edited Diego conversation whose new root topic takes its caption from the

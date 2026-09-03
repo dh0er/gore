@@ -7,8 +7,9 @@ uses the matching version section as the GitHub release notes.
 
 - Support multi-module mini-caches: `gore as compile --mini` publishes the
   authored modules as one deployable mini, and build, deploy, the Manager and
-  `as splice` compose it as one unit. Qualified in game with a two-module
-  Diego dialog fixture whose topic text comes from a new provider module.
+  `as splice --upsert` compose it as one unit. Qualified in game with a
+  two-module Diego dialog fixture whose topic text comes from a new provider
+  module.
 - `gore as compile` refuses an invalid work-directory/output layout before it
   plans the complete source graph instead of minutes later.
 
