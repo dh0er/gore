@@ -1505,9 +1505,12 @@ fn apply_loadout_with_limits(
                     .compose_add(&acc, &mini)
                     .map_err(|e| ModError::Other(format!("splice {module}: {e}")))?,
                 // A multi-module mini edits and adds its modules as one unit.
-                "edit" if gore_as::cache::walk_modules::module_count(&mini) > 1 => merge_guard
-                    .compose_upsert(&acc, &mini)
-                    .map_err(|e| ModError::Other(format!("replace {module}: {e}")))?,
+                "edit" if gore_as::cache::walk_modules::module_count(&mini) > 1 => {
+                    crate::require_multi_module_edit_target(&acc, &mini, module)?;
+                    merge_guard
+                        .compose_upsert(&acc, &mini)
+                        .map_err(|e| ModError::Other(format!("replace {module}: {e}")))?
+                }
                 "edit" if winner_edits_after_add.contains(module) => merge_guard
                     .compose_edit_or_add(&acc, &mini, module)
                     .map_err(|e| ModError::Other(format!("replace or splice {module}: {e}")))?,

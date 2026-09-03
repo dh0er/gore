@@ -2382,6 +2382,13 @@ fn publish_full_graph_mini(
     let has_edit = authored
         .iter()
         .any(|(_, op)| *op == FullGraphCompileOperationV1::Edit);
+    // Name an edited shipped module in the spec entry when there is one: deploy requires an
+    // `edit` mini to carry at least one module that exists in the cache.
+    let spec_module = authored
+        .iter()
+        .find(|(_, op)| *op == FullGraphCompileOperationV1::Edit)
+        .map(|(name, _)| *name)
+        .unwrap_or(names[0]);
     let mut report = String::new();
     let _ = writeln!(
         report,
@@ -2397,7 +2404,7 @@ fn publish_full_graph_mini(
         report,
         "bundle spec entry: {{ \"op\": \"{}\", \"module_name\": \"{}\", \"mini_cache\": \"{}\" }}",
         if has_edit { "edit" } else { "add" },
-        names[0],
+        spec_module,
         mini_path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
