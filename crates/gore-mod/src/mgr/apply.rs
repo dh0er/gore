@@ -1508,6 +1508,12 @@ fn apply_loadout_with_limits(
                 &mut canonical_read_bytes,
                 limits.max_mini_total_bytes,
             )?;
+            // Every multi-module entry must name one of its carried modules, whatever its op;
+            // an edit additionally needs an existing target, checked in its arm, which knows
+            // about targets an earlier shadowed add introduced.
+            if gore_as::cache::walk_modules::module_count(&mini) > 1 {
+                crate::require_multi_module_carried_target(&mini, op, module)?;
+            }
             acc = match op.as_str() {
                 "add" => merge_guard
                     .compose_add(&acc, &mini)

@@ -1968,10 +1968,35 @@ fn compile_full_graph_command(
     let mini_path = mini
         .map(|path| absolute_cli_path(path, "multi-module mini-cache"))
         .transpose()?;
-    if let Some(path) = mini_path.as_ref() {
-        if path == &out || receipt_path.as_ref().is_some_and(|receipt| receipt == path) {
-            bail!("mini-cache path must differ from the compiled cache and receipt paths");
+    // Two side outputs may name the same file, or nest inside one another, through different
+    // spellings of the same directory. Compare the projected paths before any preflight creates a
+    // directory, so a bad layout cannot surface only after the expensive graph work.
+    {
+        let mut resolved: Vec<(&'static str, PathBuf)> = Vec::new();
+        for (label, path) in [
+            ("compiled cache", Some(&out)),
+            ("multi-module mini-cache", mini_path.as_ref()),
+            ("generation receipt", receipt_path.as_ref()),
+        ] {
+            let Some(path) = path else { continue };
+            let projected = gore_as::compile::resolve_projected_output_path_v1(path, label)
+                .map_err(anyhow::Error::new)
+                .with_context(|| format!("resolving the {label} destination"))?;
+            for (other_label, other) in &resolved {
+                if gore_as::compile::resolved_path_is_within_v1(&projected, other)
+                    || gore_as::compile::resolved_path_is_within_v1(other, &projected)
+                {
+                    bail!(
+                        "the {label} and {other_label} destinations resolve to the same path or nest inside one another: {} vs {}",
+                        projected.display(),
+                        other.display()
+                    );
+                }
+            }
+            resolved.push((label, projected));
         }
+    }
+    if let Some(path) = mini_path.as_ref() {
         // The same resolved layout check the compiled cache gets: a lexical comparison would
         // accept an aliased or symlinked spelling of the workspace, and the next compile's tree
         // reset would then delete the published mini.

@@ -7073,6 +7073,20 @@ fn resolve_missing_path_via_existing_ancestor_v1(
     }
 }
 
+/// Resolve a full-graph side-output path (compiled cache, mini-cache, receipt) the way the
+/// path-layout preflight does, without creating anything: existing ancestors are canonicalized and
+/// the missing suffix is appended lexically. Front ends compare the results to reject two outputs
+/// that name the same file, or nest inside one another, through different spellings.
+pub fn resolve_projected_output_path_v1(path: &Path, label: &str) -> Result<PathBuf, CompileError> {
+    resolve_missing_path_via_existing_ancestor_v1(path, label)
+}
+
+/// Whether `path` is `root` or lives inside it, using the same case/UNC folding as the full-graph
+/// containment checks. Both inputs should already be resolved.
+pub fn resolved_path_is_within_v1(path: &Path, root: &Path) -> bool {
+    path_is_within_v1(path, root)
+}
+
 fn preflight_full_graph_publication_v1(opts: &FullGraphCompileOptsV1) -> Result<(), CompileError> {
     let (parent, destination, pending) = full_graph_publication_paths_v1(&opts.output_path)?;
     let game_root = opts
