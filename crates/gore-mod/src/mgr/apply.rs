@@ -2735,8 +2735,10 @@ mod tests {
         )
         .unwrap_err()
         .to_string();
+        // Mini reads are bounded in several phases (target scan, inventory, canonicalization) and
+        // each names its own budget. Assert the condition, not which phase happens to run first.
         assert!(
-            error.contains("script mini-cache payloads exceeds the 4 byte limit"),
+            error.contains("script mini-cache") && error.contains("exceeds the 4 byte limit"),
             "{error}"
         );
         assert_no_apply_artifacts(&script_game, &script_game.script_cache(), &base);
