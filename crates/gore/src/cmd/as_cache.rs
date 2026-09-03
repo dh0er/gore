@@ -2235,6 +2235,25 @@ fn compile_full_graph_command(
         "full-graph compiler succeeded without identifying the backend that produced the cache",
     )?;
 
+    // The mini is part of this command's product: derive it before the receipt and before any
+    // success line, and neutralize the already published complete cache when it cannot be
+    // produced, exactly like a failed generation receipt, so a retry is not blocked by a
+    // half-finished no-clobber output. Nothing else has been published at this point.
+    let mini_report = match mini_path.as_ref() {
+        Some(mini_path) => match publish_full_graph_mini(&artifact, &opts.base_cache, mini_path) {
+            Ok(report) => Some(report),
+            Err(error) => {
+                return fail_after_full_graph_side_output_error(
+                    &artifact,
+                    "MINI_CACHE",
+                    None,
+                    format!("publishing {}: {error:#}", mini_path.display()),
+                );
+            }
+        },
+        None => None,
+    };
+
     if let Some(receipt_path) = receipt_path.as_ref() {
         let authority = receipt_authority
             .as_ref()
@@ -2257,8 +2276,10 @@ fn compile_full_graph_command(
             ) {
                 Ok(receipt) => receipt,
                 Err(error) => {
-                    return fail_after_full_graph_receipt_error(
+                    return fail_after_full_graph_side_output_error(
                         &artifact,
+                        "GENERATION_RECEIPT",
+                        mini_path.as_deref(),
                         format!("building {}: {error}", receipt_path.display()),
                     );
                 }
@@ -2266,8 +2287,10 @@ fn compile_full_graph_command(
         if let Err(error) =
             gore_as::generation_receipt_v2::publish_generation_receipt_v2(receipt_path, &receipt)
         {
-            return fail_after_full_graph_receipt_error(
+            return fail_after_full_graph_side_output_error(
                 &artifact,
+                "GENERATION_RECEIPT",
+                mini_path.as_deref(),
                 format!("publishing {}: {error}", receipt_path.display()),
             );
         }
@@ -2282,22 +2305,6 @@ fn compile_full_graph_command(
             fallback.detail()
         );
     }
-    // The mini is part of this command's product: derive it before reporting success, and
-    // neutralize the already published complete cache when it cannot be produced, exactly like a
-    // failed generation receipt, so a retry is not blocked by a half-finished no-clobber output.
-    let mini_report = match mini_path.as_ref() {
-        Some(mini_path) => match publish_full_graph_mini(&artifact, &opts.base_cache, mini_path) {
-            Ok(report) => Some(report),
-            Err(error) => {
-                return fail_after_full_graph_side_output_error(
-                    &artifact,
-                    "MINI_CACHE",
-                    format!("publishing {}: {error:#}", mini_path.display()),
-                );
-            }
-        },
-        None => None,
-    };
     println!(
         "compiled complete graph with {} -> {} ({} modules, {} bytes, sha256 {})",
         used_backend,
@@ -2392,29 +2399,28 @@ fn publish_full_graph_mini(
     Ok(report)
 }
 
-fn fail_after_full_graph_receipt_error<T>(
-    artifact: &gore_as::compile::FullGraphCompileArtifactV1,
-    primary: String,
-) -> Result<T> {
-    fail_after_full_graph_side_output_error(artifact, "GENERATION_RECEIPT", primary)
-}
-
-/// A side output of the full-graph command (receipt, mini-cache) could not be produced after the
+/// A side output of the full-graph command (mini-cache, receipt) could not be produced after the
 /// complete cache was already published. The command's product is all-or-nothing: reduce the
 /// retained cache to zero bytes so the next run is not blocked by a no-clobber destination that
-/// looks like a usable result.
+/// looks like a usable result, and remove an already published mini-cache that would otherwise
+/// describe the neutralized cache.
 fn fail_after_full_graph_side_output_error<T>(
     artifact: &gore_as::compile::FullGraphCompileArtifactV1,
     label: &str,
+    published_mini: Option<&Path>,
     primary: String,
 ) -> Result<T> {
+    let mini_cleanup = published_mini
+        .and_then(|path| std::fs::remove_file(path).err().map(|error| (path, error)))
+        .map(|(path, error)| format!("; removing the published mini-cache {} failed too: {error}", path.display()))
+        .unwrap_or_default();
     match artifact.neutralize() {
         Ok(()) => bail!(
-            "{label}_PUBLICATION_FAILED_OUTPUT_NEUTRALIZED: {primary}; the exact retained cache at {} was reduced to zero bytes and must be removed before retrying",
+            "{label}_PUBLICATION_FAILED_OUTPUT_NEUTRALIZED: {primary}; the exact retained cache at {} was reduced to zero bytes and must be removed before retrying{mini_cleanup}",
             artifact.path().display()
         ),
         Err(cleanup) => bail!(
-            "{label}_RECOVERY_REQUIRED: {primary}; failed to neutralize the retained cache at {}: {cleanup}",
+            "{label}_RECOVERY_REQUIRED: {primary}; failed to neutralize the retained cache at {}: {cleanup}{mini_cleanup}",
             artifact.path().display()
         ),
     }

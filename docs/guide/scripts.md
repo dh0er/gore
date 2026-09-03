@@ -381,7 +381,9 @@ entry: `op` is `edit` when any module edits a shipped one (existing modules are
 replaced in place, new ones appended, as one unit), `add` when every module is
 new; `module_name` names one of the carried modules. The command prints the
 exact entry. `gore mod build`, `deploy` and the Manager compose such a mini as
-one unit. The low-level `gore as splice` only appends, so it accepts a mini
+one unit: in a loadout it is shadowed only as a whole, and a later mod that
+re-targets some but not all of its modules is refused rather than partially
+overridden. The low-level `gore as splice` only appends, so it accepts a mini
 whose modules are all new and refuses one that edits a shipped module.
 
 Qualified in game on 2026-09-03: a two-module mini (new provider module plus
