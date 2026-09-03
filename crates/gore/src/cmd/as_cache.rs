@@ -2342,7 +2342,10 @@ fn publish_full_graph_mini(
     if authored.is_empty() {
         bail!("no authored Add/Edit module to place in a mini-cache");
     }
-    let composed = std::fs::read(artifact.path())
+    // Read the exact retained handle, never the path: the output directory may be writable by
+    // another process, and a swapped file must not become the source of the mini.
+    let composed = gore_as::generation_receipt_v2::read_full_graph_compile_output_bytes_v2(artifact)
+        .map_err(anyhow::Error::new)
         .with_context(|| format!("reading the composed cache {}", artifact.path().display()))?;
     let names: Vec<&str> = authored.iter().map(|(name, _)| *name).collect();
     let extracted = gore_as::cache::splice::extract_modules(&composed, &names)
