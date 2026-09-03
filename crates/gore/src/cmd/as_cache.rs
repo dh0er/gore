@@ -2116,6 +2116,19 @@ fn compile_full_graph_command(
         }
     };
     let (changes, final_manifest) = plan.into_parts();
+    if mini_path.is_some()
+        && !changes.iter().any(|change| {
+            change.operation != gore_as::compile::FullGraphCompileOperationV1::Delete
+        })
+    {
+        let error = anyhow::anyhow!(
+            "--mini needs at least one added or edited module, but the source tree matches the target cache"
+        );
+        return match guard.take() {
+            Some(guard) => Err(release_compile_guard_after_error(guard, error)),
+            None => Err(error),
+        };
+    }
     let opts = FullGraphCompileOptsV1 {
         game_dir: game.clone(),
         work_dir: work_dir.clone(),
@@ -2269,6 +2282,22 @@ fn compile_full_graph_command(
             fallback.detail()
         );
     }
+    // The mini is part of this command's product: derive it before reporting success, and
+    // neutralize the already published complete cache when it cannot be produced, exactly like a
+    // failed generation receipt, so a retry is not blocked by a half-finished no-clobber output.
+    let mini_report = match mini_path.as_ref() {
+        Some(mini_path) => match publish_full_graph_mini(&artifact, &opts.base_cache, mini_path) {
+            Ok(report) => Some(report),
+            Err(error) => {
+                return fail_after_full_graph_side_output_error(
+                    &artifact,
+                    "MINI_CACHE",
+                    format!("publishing {}: {error:#}", mini_path.display()),
+                );
+            }
+        },
+        None => None,
+    };
     println!(
         "compiled complete graph with {} -> {} ({} modules, {} bytes, sha256 {})",
         used_backend,
@@ -2277,8 +2306,8 @@ fn compile_full_graph_command(
         artifact.byte_len(),
         artifact.sha256()
     );
-    if let Some(mini_path) = mini_path {
-        publish_full_graph_mini(&artifact, &opts.base_cache, &mini_path)?;
+    if let Some(report) = mini_report {
+        print!("{report}");
     }
     Ok(())
 }
@@ -2290,8 +2319,9 @@ fn publish_full_graph_mini(
     artifact: &gore_as::compile::FullGraphCompileArtifactV1,
     base_cache: &[u8],
     mini_path: &Path,
-) -> Result<()> {
+) -> Result<String> {
     use gore_as::compile::FullGraphCompileOperationV1;
+    use std::fmt::Write as _;
     let authored: Vec<(&str, FullGraphCompileOperationV1)> = artifact
         .changes()
         .iter()
@@ -2325,22 +2355,32 @@ fn publish_full_graph_mini(
         .create_new(true)
         .open(mini_path)
         .with_context(|| format!("creating {}", mini_path.display()))?;
-    std::io::Write::write_all(&mut file, &mini)
-        .and_then(|()| file.sync_all())
-        .with_context(|| format!("writing {}", mini_path.display()))?;
+    if let Err(error) = std::io::Write::write_all(&mut file, &mini).and_then(|()| file.sync_all()) {
+        // Never leave a truncated artifact behind: it would block the no-clobber preflight of
+        // the next run and could be mistaken for a usable mini-cache.
+        drop(file);
+        let cleanup = std::fs::remove_file(mini_path)
+            .err()
+            .map(|remove| format!("; removing the partial file failed too: {remove}"))
+            .unwrap_or_default();
+        bail!("writing {}: {error}{cleanup}", mini_path.display());
+    }
     let has_edit = authored
         .iter()
         .any(|(_, op)| *op == FullGraphCompileOperationV1::Edit);
-    println!(
+    let mut report = String::new();
+    let _ = writeln!(
+        report,
         "multi-module mini-cache -> {} ({} modules, {} bytes)",
         mini_path.display(),
         names.len(),
         mini.len()
     );
     for (name, op) in &authored {
-        println!("  {:<4} {name}", format!("{op:?}").to_lowercase());
+        let _ = writeln!(report, "  {:<4} {name}", format!("{op:?}").to_lowercase());
     }
-    println!(
+    let _ = writeln!(
+        report,
         "bundle spec entry: {{ \"op\": \"{}\", \"module_name\": \"{}\", \"mini_cache\": \"{}\" }}",
         if has_edit { "edit" } else { "add" },
         names[0],
@@ -2349,20 +2389,32 @@ fn publish_full_graph_mini(
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default()
     );
-    Ok(())
+    Ok(report)
 }
 
 fn fail_after_full_graph_receipt_error<T>(
     artifact: &gore_as::compile::FullGraphCompileArtifactV1,
     primary: String,
 ) -> Result<T> {
+    fail_after_full_graph_side_output_error(artifact, "GENERATION_RECEIPT", primary)
+}
+
+/// A side output of the full-graph command (receipt, mini-cache) could not be produced after the
+/// complete cache was already published. The command's product is all-or-nothing: reduce the
+/// retained cache to zero bytes so the next run is not blocked by a no-clobber destination that
+/// looks like a usable result.
+fn fail_after_full_graph_side_output_error<T>(
+    artifact: &gore_as::compile::FullGraphCompileArtifactV1,
+    label: &str,
+    primary: String,
+) -> Result<T> {
     match artifact.neutralize() {
         Ok(()) => bail!(
-            "GENERATION_RECEIPT_PUBLICATION_FAILED_OUTPUT_NEUTRALIZED: {primary}; the exact retained cache at {} was reduced to zero bytes and must be removed before retrying",
+            "{label}_PUBLICATION_FAILED_OUTPUT_NEUTRALIZED: {primary}; the exact retained cache at {} was reduced to zero bytes and must be removed before retrying",
             artifact.path().display()
         ),
         Err(cleanup) => bail!(
-            "GENERATION_RECEIPT_RECOVERY_REQUIRED: {primary}; failed to neutralize the retained cache at {}: {cleanup}",
+            "{label}_RECOVERY_REQUIRED: {primary}; failed to neutralize the retained cache at {}: {cleanup}",
             artifact.path().display()
         ),
     }
