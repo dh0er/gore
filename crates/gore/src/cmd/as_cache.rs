@@ -1972,13 +1972,14 @@ fn compile_full_graph_command(
         if path == &out || receipt_path.as_ref().is_some_and(|receipt| receipt == path) {
             bail!("mini-cache path must differ from the compiled cache and receipt paths");
         }
-        if path == &work_dir || path.starts_with(&work_dir) {
-            bail!("mini-cache output must not be inside the compiler workspace");
-        }
+        // The same resolved layout check the compiled cache gets: a lexical comparison would
+        // accept an aliased or symlinked spelling of the workspace, and the next compile's tree
+        // reset would then delete the published mini.
+        gore_as::compile::preflight_full_graph_path_layout_paths_v1(&game, &work_dir, path)
+            .map_err(anyhow::Error::new)
+            .context("multi-module mini-cache path layout")?;
+        // Also covers no-clobber: an existing destination is refused here.
         validate_auxiliary_output_path(path, &game, "multi-module mini-cache")?;
-        if path.exists() {
-            bail!("mini-cache output already exists: {}", path.display());
-        }
     }
 
     let executable_path = compiler_executable_path(&game);
