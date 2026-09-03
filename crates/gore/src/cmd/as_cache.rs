@@ -1950,27 +1950,17 @@ fn compile_full_graph_command(
     if out == work_dir || out.starts_with(&work_dir) {
         bail!("full-graph output must not be inside the compiler workspace");
     }
-    // The compiler repeats this preflight only after the complete source graph has been
-    // planned, which takes many minutes on the shipped tree. Run the identical check up front.
-    gore_as::compile::preflight_full_graph_path_layout_paths_v1(&game, &work_dir, &out)
-        .map_err(anyhow::Error::new)
-        .context("full-graph path layout")?;
     let receipt_path = compiler
         .generation_receipt
         .map(|path| absolute_cli_path(path, "generation receipt"))
         .transpose()?;
-    if receipt_path.as_ref().is_some_and(|path| path == &out) {
-        bail!("generation receipt path must differ from the compiled cache path");
-    }
-    if let Some(path) = receipt_path.as_ref() {
-        validate_auxiliary_output_path(path, &game, "generation receipt")?;
-    }
     let mini_path = mini
         .map(|path| absolute_cli_path(path, "multi-module mini-cache"))
         .transpose()?;
     // Two side outputs may name the same file, or nest inside one another, through different
-    // spellings of the same directory. Compare the projected paths before any preflight creates a
-    // directory, so a bad layout cannot surface only after the expensive graph work.
+    // spellings of the same directory. Compare the projected paths before ANY preflight below,
+    // because those create the output parents: an accepted nesting would otherwise leave a
+    // directory where a corrected retry wants its file.
     {
         let mut resolved: Vec<(&'static str, PathBuf)> = Vec::new();
         for (label, path) in [
@@ -1995,6 +1985,14 @@ fn compile_full_graph_command(
             }
             resolved.push((label, projected));
         }
+    }
+    // The compiler repeats this preflight only after the complete source graph has been
+    // planned, which takes many minutes on the shipped tree. Run the identical check up front.
+    gore_as::compile::preflight_full_graph_path_layout_paths_v1(&game, &work_dir, &out)
+        .map_err(anyhow::Error::new)
+        .context("full-graph path layout")?;
+    if let Some(path) = receipt_path.as_ref() {
+        validate_auxiliary_output_path(path, &game, "generation receipt")?;
     }
     if let Some(path) = mini_path.as_ref() {
         // The same resolved layout check the compiled cache gets: a lexical comparison would
@@ -2270,7 +2268,13 @@ fn compile_full_graph_command(
     // produced, exactly like a failed generation receipt, so a retry is not blocked by a
     // half-finished no-clobber output. Nothing else has been published at this point.
     let published_mini = match mini_path.as_ref() {
-        Some(mini_path) => match publish_full_graph_mini(&artifact, &opts.base_cache, mini_path) {
+        Some(mini_path) => match publish_full_graph_mini(
+            &artifact,
+            &opts.base_cache,
+            &game,
+            &work_dir,
+            mini_path,
+        ) {
             Ok(published) => Some(published),
             Err(error) => {
                 return fail_after_full_graph_side_output_error(
@@ -2372,6 +2376,8 @@ impl PublishedMini {
 fn publish_full_graph_mini(
     artifact: &gore_as::compile::FullGraphCompileArtifactV1,
     base_cache: &[u8],
+    game: &Path,
+    work_dir: &Path,
     mini_path: &Path,
 ) -> Result<PublishedMini> {
     use gore_as::compile::FullGraphCompileOperationV1;
@@ -2407,10 +2413,29 @@ fn publish_full_graph_mini(
     guard
         .compose_upsert(base_cache, &mini)
         .context("multi-module mini-cache does not compose onto the pristine base")?;
+    // Compilation takes minutes, and the layout checks ran before it. Re-resolve the destination
+    // now and repeat them, then create the file at the resolved path so a parent that was renamed
+    // or replaced with a symlink in the meantime cannot redirect the mini into the workspace or
+    // the game tree.
+    let file_name = mini_path
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("mini-cache path has no file name"))?;
+    let parent = mini_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("mini-cache path has no parent directory"))?;
+    let destination = parent
+        .canonicalize()
+        .with_context(|| format!("resolving the mini-cache parent {}", parent.display()))?
+        .join(file_name);
+    gore_as::compile::preflight_full_graph_path_layout_paths_v1(game, work_dir, &destination)
+        .map_err(anyhow::Error::new)
+        .context("multi-module mini-cache path layout changed during compilation")?;
+    validate_auxiliary_output_path(&destination, game, "multi-module mini-cache")?;
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(mini_path)
+        .open(&destination)
         .with_context(|| format!("creating {}", mini_path.display()))?;
     if let Err(error) = std::io::Write::write_all(&mut file, &mini).and_then(|()| file.sync_all()) {
         // Never leave a truncated artifact behind that could be mistaken for a usable mini-cache.
