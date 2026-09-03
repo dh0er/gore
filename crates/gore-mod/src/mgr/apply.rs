@@ -1409,16 +1409,19 @@ fn apply_loadout_with_limits(
             ModError::Other(format!("cannot reserve script target lists: {error}"))
         })?;
         for (_, module, mini_payload) in &scripts {
-            let carried = read_pending_payload(
+            // A read or budget failure is fatal here: swallowing it would let a later mini hide
+            // the modules it carries from winner reduction. Only an unparseable payload falls
+            // back to its manifest name; inspection reports that payload with its real error.
+            let mini = read_pending_payload(
                 mini_payload,
                 "script mini-cache target scan",
                 limits.max_mini_bytes,
                 &mut target_scan_bytes,
                 limits.max_mini_total_bytes,
-            )
-            .ok()
-            .and_then(|mini| gore_as::cache::walk_modules::module_names(&mini).ok())
-            .filter(|names| names.iter().any(|name| name == module));
+            )?;
+            let carried = gore_as::cache::walk_modules::module_names(&mini)
+                .ok()
+                .filter(|names| names.iter().any(|name| name == module));
             targets.push(carried.unwrap_or_else(|| vec![module.clone()]));
         }
         let (winning_scripts, winner_edits_after_add, shadowed_add_targets) =

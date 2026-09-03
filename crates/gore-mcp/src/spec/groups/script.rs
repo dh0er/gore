@@ -519,6 +519,15 @@ const STANDALONE_COMPILE_ARGS: &[ArgSpec] = &[
         true,
     ),
     ArgSpec::new(
+        "mini",
+        Long("mini"),
+        Path,
+        "Also publish a deployable multi-module mini-cache holding only the authored Add/Edit \
+         modules, remapped to the pristine cache. Point a bundle spec's `scripts[].mini_cache` \
+         at it when a mod spans several modules.",
+        false,
+    ),
+    ArgSpec::new(
         "work_dir",
         Long("work-dir"),
         Path,
