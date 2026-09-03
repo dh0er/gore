@@ -2075,11 +2075,23 @@ fn compile_full_graph_command(
             };
         (base, binds)
     };
-    let plan = match gore_as::full_graph_plan::plan_complete_source_tree_with_emitted_base_v1(
-        &base_cache,
-        &binds_cache,
-        &src,
-    ) {
+    // Measurement path, deliberately not a public flag: `GORE_AS_COMPLETE_QUALIFICATION=1`
+    // treats EVERY module of the tree as an edit and publishes the complete rebuilt graph, which
+    // is what a byte-faithfulness measurement diffs against the shipped cache. The selective
+    // publication would hand back pristine bytes for every module whose text equals the
+    // emitter's own output, and say nothing about them.
+    let complete_qualification = std::env::var_os("GORE_AS_COMPLETE_QUALIFICATION").is_some()
+        && requested_mode == CompilerBackendModeV1::Standalone;
+    let planned = if complete_qualification {
+        gore_as::full_graph_plan::plan_complete_source_tree_v1(&base_cache, &src)
+    } else {
+        gore_as::full_graph_plan::plan_complete_source_tree_with_emitted_base_v1(
+            &base_cache,
+            &binds_cache,
+            &src,
+        )
+    };
+    let plan = match planned {
         Ok(plan) => plan,
         Err(error) => {
             let error = anyhow::Error::new(error).context("planning the complete source graph");
@@ -2109,6 +2121,19 @@ fn compile_full_graph_command(
     let audit_binds = opts.binds_cache.clone();
     let closing_audit = move || audit_full_graph_inputs(&audit_game, &audit_base, &audit_binds);
     let report = match requested_mode {
+        CompilerBackendModeV1::Standalone if complete_qualification => {
+            gore_as::compile::compile_full_graph_qualification_standalone_v1_with_target(
+                &opts,
+                standalone_runner
+                    .as_mut()
+                    .expect("strict standalone runner was checked")
+                    as &mut dyn StandaloneCompilerRunnerV1,
+                closing_audit,
+                target
+                    .take()
+                    .expect("product standalone runner has a target proof"),
+            )
+        }
         CompilerBackendModeV1::Standalone => {
             gore_as::compile::compile_full_graph_standalone_v1_with_target(
                 &opts,

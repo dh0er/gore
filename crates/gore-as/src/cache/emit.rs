@@ -856,6 +856,7 @@ fn emit_function_ctor(
     fields: Option<&HashMap<String, String>>,
     class_name: Option<&str>,
 ) {
+    TRACE_FUNCTION.with(|name| *name.borrow_mut() = f.name.clone());
     let ind = "    ".repeat(depth);
     // The return type keeps its `const`: it is part of the method identity the base cache
     // recorded, and a caller that stores such a value declares its local const to match (see
@@ -1017,6 +1018,11 @@ fn emit_function_ctor(
     // takes its condition, and nothing else reads a slot that way. Typing such a merge slot int
     // writes the short circuit vanilla merged into one condition as an int carrier over two arms.
     bool_overrides.extend(byte_read_slots(f));
+    // A slot filled by a one-byte read of a member the type tables call `bool` is a bool:
+    // `ADDSi Config; ADDSi bUseTestTauntCooldown; PopRPtr; RDR1 v4`. Typed int, the read is
+    // spelled `int local_4 = <field>; (local_4 != 0)` and the `&&` vanilla wrote around it
+    // cannot fold.
+    bool_overrides.extend(bool_field_read_slots(f, refs, fields));
     // A slot the function itself writes a 4- or 8-byte literal into is not a bool: the compiler
     // stores a bool with the 1-byte `SetV1`. That store is the slot's own width evidence, and it
     // outranks both rules above — where they disagree the compiler reused one slot for two
@@ -1328,6 +1334,7 @@ fn emit_function_ctor(
     // Cast site failed "No conversion from 'const X' to 'X'"). Vanilla declared these locals
     // `const`; strip the marker and const-qualify the declaration below.
     let (body, const_slots) = strip_const_store_markers(&body);
+    pass_trace("structured", &body);
     // CASCADE GATE: a const handle can't be COPIED into a non-const local / `__return` /
     // member (handle assignment preserves const), so any slot consumed as a bare copy-RHS
     // keeps its non-const declaration (the store keeps the status-quo error) unless the copy
@@ -1499,15 +1506,30 @@ fn emit_function_ctor(
             .collect();
         rewrite_adjacent_value_temporaries(&body, &candidates).0
     };
+    pass_trace("rewrite_adjacent_value_temporaries", &body);
     let (body, _) = rewrite_value_temporaries(&body, &inferred_locals);
+    pass_trace("rewrite_value_temporaries", &body);
     let body = drop_dead_stores(&body);
-    let body = fold_literal_temporaries(&body, refs, &declared_locals);
+    pass_trace("drop_dead_stores", &body);
+    let body =
+        fold_literal_temporaries(&body, refs, &declared_locals, &value_pushed_literal_slots(f));
+    pass_trace("fold_literal_temporaries", &body);
     let body = fold_constant_comparisons(&body);
+    pass_trace("fold_constant_comparisons", &body);
     let body = fold_double_negations(&body);
+    pass_trace("fold_double_negations", &body);
     let body = fold_negated_stores(&body);
+    pass_trace("fold_negated_stores", &body);
     // `__InitDefaults` is where the class's values live, and their recovery is fail-closed: a
     // temporary left without a reader there costs the whole class its `default` statements
     // (measured: 358 classes). Move only what a call reads there, never a plain operand.
+    // `local_N = A; local_N = <expr with local_N>;` is one value built in steps — a constant
+    // materialised and then multiplied in place (`SetV8 v12, 2π; MULd v12, v12, v6`). Joined
+    // here, the inliner below can carry it into its one reader; left as two statements the
+    // second reads the slot and the value stays a name, evaluated before the member read that
+    // vanilla did first.
+    let body = merge_self_stores(&body);
+    pass_trace("merge_self_stores", &body);
     let body = inline_call_argument_temporaries(
         &body,
         refs,
@@ -1524,6 +1546,7 @@ fn emit_function_ctor(
         &hoisted,
         &spilled,
     );
+    pass_trace("inline_call_argument_temporaries", &body);
     // Runs after the producers have moved into their readers: only then is the value arm of a
     // short circuit the single assignment it was in source.
     let body = fold_short_circuits(
@@ -1534,13 +1557,24 @@ fn emit_function_ctor(
         &HashMap::new(),
         class_name,
     );
+    pass_trace("fold_short_circuits", &body);
     let body = join_short_circuit_chains(&body);
+    pass_trace("join_short_circuit_chains", &body);
+    // A value chosen by a branch — `if (c) { x = a; } else { x = b; }` — is `x = c ? a : b;`,
+    // and vanilla's bytecode says so: the arms write the DECLARED slot straight (a member read
+    // through its temporary, a literal with a direct store) and both arm temporaries stay
+    // allocated until the expression ends. Written as two statements the slot became a variable
+    // assigned twice, and the passes behind this one took the else-arm's literal for its only
+    // value. Bool carriers are the short circuits folded above and are left alone.
+    let body = fold_conditional_values(&body, &proven_locals, refs, fields, class_name);
+    pass_trace("fold_conditional_values", &body);
     // Again, now that the chain IS one expression: the negation fold ran before the short
     // circuits were recovered, so `X = A && B; X = !X;` was still two branches then. Left as two
     // statements the negation costs a copy out, a `NOT` and a copy back where vanilla applied
     // `NOT` in place — and the named result stops the compiler folding the chain's own left test
     // into its branch.
     let body = fold_negated_stores(&body);
+    pass_trace("fold_negated_stores", &body);
     // Again, now that a short circuit IS an expression. The sweep above ran before the folds,
     // so a value the source wrote inside a call's argument as `A && B` was still an `if`/`else`
     // over a named local when the producers moved, and nothing looked at it afterwards. Writing
@@ -1562,8 +1596,11 @@ fn emit_function_ctor(
         &hoisted,
         &spilled,
     );
+    pass_trace("inline_call_argument_temporaries", &body);
     let body = rewrite_operator_calls(&body);
+    pass_trace("rewrite_operator_calls", &body);
     let body = fold_cast_diamonds(&body);
+    pass_trace("fold_cast_diamonds", &body);
     // A third time, now that a cast IS an expression. Until the diamond folded, the cast stood as
     // a branch over a named slot and the producer feeding it stood on a line of its own — a line
     // between a temporary and its reader that does not feed that reader, which is what the sweep
@@ -1586,16 +1623,22 @@ fn emit_function_ctor(
         &hoisted,
         &spilled,
     );
+    pass_trace("inline_call_argument_temporaries", &body);
     let body = drop_unreachable_statements(&body);
+    pass_trace("drop_unreachable_statements", &body);
     // All three run before the declarations are hoisted, so a temporary they empty out never
     // gets one.
     // A function that returns by REFERENCE keeps its named local: the name is what makes the
     // returned thing outlive the expression (same condition as `ref_ret` below).
     let returns_by_reference = f.ret.is_reference && f.ret.token == 5 && !f.ret.is_object_handle;
     let body = fold_condition_temporaries(&body, &declared_locals, refs, fields, &spilled_boolean_names(f, refs), false);
+    pass_trace("fold_condition_temporaries", &body);
     let body = fold_alias_copies(&body, &declared_locals);
+    pass_trace("fold_alias_copies", &body);
     let body = fold_copy_out_temporaries(&body, &declared_locals, &const_result_slots, fields);
+    pass_trace("fold_copy_out_temporaries", &body);
     let body = fold_cast_operands(&body, &declared_locals, &call_result_types);
+    pass_trace("fold_cast_operands", &body);
     // What a member path can start from: a local the declarations will name, or one of the
     // function's own parameters. Both carry their type in a table; neither needs an inference.
     let path_roots: HashMap<String, String> = declared_locals
@@ -1609,6 +1652,7 @@ fn emit_function_ctor(
         )
         .collect();
     let body = fold_enum_round_trips(&body, fields, &path_roots, refs);
+    pass_trace("fold_enum_round_trips", &body);
     let body = fold_member_read_temporaries(
         &body,
         &widened,
@@ -1618,10 +1662,12 @@ fn emit_function_ctor(
         refs,
         &member_read_slots(f),
     );
+    pass_trace("fold_member_read_temporaries", &body);
     let body =
         fold_returned_temporaries(&body, &declared_locals, refs, &ret, returns_by_reference);
     // Before the hoist counts which locals exist: a slot whose only write is dead has no name.
     let body = drop_dead_stores_before_return(&body);
+    pass_trace("drop_dead_stores_before_return", &body);
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
     // (a wrong type just becomes a compile error the in-game loop force-stubs, rather than the
     // whole function stubbing on an undeclared identifier).
@@ -1929,7 +1975,9 @@ fn emit_function_ctor(
         // return copy-constructs — it never goes through the non-const `opAssign` the split
         // exists to avoid. Folded first, there is no assignment left for the split to name.
         let body = fold_return_slot_stores(&body);
+        pass_trace("fold_return_slot_stores", &body);
         let body = fold_return_slot_arms(&body);
+        pass_trace("fold_return_slot_arms", &body);
         // Only where vanilla let the arm FALL THROUGH into the rest of the function. Where the
         // last thing before the epilogue is a jump INTO it, both arms jumped to a common join —
         // which is what an `else` behind a returning arm compiles to, and dropping it emits one
@@ -1939,7 +1987,18 @@ fn emit_function_ctor(
         } else {
             drop_else_after_returning_arm(&body)
         };
+        // Again, now that a lifted else-arm stands at the depth of what follows it: a literal
+        // stored in that arm and read after it was refused while the arm was still a branch
+        // (`local_12 = 4;` … `return ECBT_NodeStatus(local_12);`), and folds now.
+        let body = fold_literal_temporaries(
+            &body,
+            refs,
+            &declared_locals,
+            &value_pushed_literal_slots(f),
+        );
+        pass_trace("fold_literal_temporaries#2", &body);
         let body = rewrite_no_assign_residual_assigns(&body, &locals, &ret);
+        pass_trace("rewrite_no_assign_residual_assigns", &body);
         // Iterator locals have no default ctor either; declare them at their `Iterator()` call.
         let (body, iter_suppressed) = rewrite_iterator_decl_init(&body, &locals);
         // Same for value-type temporaries: declaring one bare and assigning afterwards asks for
@@ -1960,6 +2019,7 @@ fn emit_function_ctor(
         // Before the declaration merge: a conversion naming the type the value already has hides
         // the copy-construction the merge is looking for.
         let body = drop_redundant_conversions(&body, fields, &path_roots, refs);
+        pass_trace("drop_redundant_conversions", &body);
         let (body, value_suppressed) =
             rewrite_value_decl_init(&body, &locals, refs, &copy_constructed_slots(f, refs), &reference_locals);
         // A local that receives a CONST call result has to be const as well, and a const local is
@@ -1995,13 +2055,40 @@ fn emit_function_ctor(
                 &bare_declaration_slots(f, refs),
                 &call_result_declared_at_initializer(f),
             );
+        // A primitive or enum whose every write takes its value STRAIGHT — `CpyRtoV4 v22`,
+        // `SetV4 v56, 2` — was declared at each of those writes, one declaration per life, in
+        // whatever block the write stands: an assignment to a variable that already exists goes
+        // through the compiler's temporary and copies on. Hoisted, such a slot needed an
+        // initialiser the source never wrote (`ECBT_ExecutionResult local_22 = …(0);`) so that
+        // a branch-only first write would not trip the warning, and that initialiser is a store
+        // vanilla does not have.
+        let placed_so_far: HashSet<i32> = already_declared_at_use
+            .iter()
+            .chain(first_use_suppressed.iter())
+            .copied()
+            .collect();
+        let (body, life_suppressed) = rewrite_primitive_lives_decl_init(
+            &body,
+            &locals,
+            refs,
+            &placed_so_far,
+            &slots_with_assignment_writes(f),
+            &enum_overrides,
+            &reference_locals,
+        );
+        let placed_so_far: HashSet<i32> =
+            placed_so_far.union(&life_suppressed).copied().collect();
         let (body, first_write_suppressed) = rewrite_bare_decl_at_first_write(
             &body,
             &locals,
             refs,
             &already_declared_at_use,
-            &first_use_suppressed,
+            &placed_so_far,
         );
+        let first_write_suppressed: HashSet<i32> = first_write_suppressed
+            .union(&life_suppressed)
+            .copied()
+            .collect();
         // What vanilla actually stores, rather than what our text can prove about its own reads.
         let vanilla_initialises = slots_vanilla_initialises(f);
         // Where the declarations start, so the whole block plus the body it heads can be handed
@@ -2096,8 +2183,11 @@ fn emit_function_ctor(
         // Before the compound-assignment fold, which would rewrite the middle line out of the
         // shape this one matches on.
         let body = collapse_single_use_accumulators(&body, &widened);
+        pass_trace("collapse_single_use_accumulators", &body);
         let body = fold_enum_call_round_trips(&body, &call_result_types, fields, &path_roots, refs, returns_by_reference, has_enum_conversions(f));
+        pass_trace("fold_enum_call_round_trips", &body);
         let body = fold_compound_assignments(&body, fields, &path_roots, refs);
+        pass_trace("fold_compound_assignments", &body);
         let uses_return_slot = body.contains("__return");
         if uses_return_slot {
             let _ = writeln!(s, "{ind}    {ret} __return;");
@@ -2130,16 +2220,23 @@ fn emit_function_ctor(
             &touched_after_branch,
             &slots_built_once_per_iteration(f, refs),
         );
+        pass_trace("sink_declarations_into_their_block", &rendered);
         // Same text, same reason as the sink: the declaration lives in `s`, its uses in `body`.
         let rendered = spell_out_repeated_temporaries(&rendered, &constructions);
+        pass_trace("spell_out_repeated_temporaries", &rendered);
         let rendered = sink_declarations_to_first_use(&rendered, &late_constructed_slots(f, refs));
+        pass_trace("sink_declarations_to_first_use", &rendered);
         // And once more here, for the same reason: an accumulator whose declaration was hoisted
         // has its `T X;` in this text and its `X = ...` lines in the body, so the split form is
         // only whole once the two are joined.
         let rendered = collapse_single_use_accumulators(&rendered, &widened);
+        pass_trace("collapse_single_use_accumulators", &rendered);
         let rendered = fold_enum_call_round_trips(&rendered, &call_result_types, fields, &path_roots, refs, returns_by_reference, has_enum_conversions(f));
+        pass_trace("fold_enum_call_round_trips", &rendered);
         let rendered = fold_member_read_modify_write(&rendered);
+        pass_trace("fold_member_read_modify_write", &rendered);
         let rendered = fold_compound_assignments(&rendered, fields, &path_roots, refs);
+        pass_trace("fold_compound_assignments", &rendered);
         // Again on the joined text: a short circuit whose CONDITION is itself a short circuit is
         // only one condition once the inner one has folded, and the pass that folds it ran before
         // that happened. The outer arm then still stands as an if/else over a bool carrier.
@@ -2151,31 +2248,48 @@ fn emit_function_ctor(
             &path_roots,
             class_name,
         );
+        pass_trace("fold_short_circuits", &rendered);
         let rendered = join_short_circuit_chains(&rendered);
+        pass_trace("join_short_circuit_chains", &rendered);
         let rendered = rejoin_short_circuit_chains(&rendered);
+        pass_trace("rejoin_short_circuit_chains", &rendered);
         let rendered =
             fold_returned_temporaries(&rendered, &declared_locals, refs, &ret, returns_by_reference);
         let rendered = recover_condition_loops(&rendered);
+        pass_trace("recover_condition_loops", &rendered);
         let rendered = fold_negated_stores(&rendered);
+        pass_trace("fold_negated_stores", &rendered);
         let rendered = fold_assigned_temporaries(&rendered, fields, &path_roots, refs);
+        pass_trace("fold_assigned_temporaries", &rendered);
         // Before the folds move anything: a struct handed on by address is only recognisable
         // while its declaration and the call that takes it stand in the same text.
         let rendered = restore_dropped_struct_arguments(&rendered, &address_push_counts(f));
+        pass_trace("restore_dropped_struct_arguments", &rendered);
         // The rest of the fold chain, for the same reason as the passes above it: each of these
         // asks about a declaration, and until the hoist has been joined back on there is nothing
         // for them to ask about.
         let rendered = fold_condition_temporaries(&rendered, &declared_locals, refs, fields, &spilled_boolean_names(f, refs), false);
+        pass_trace("fold_condition_temporaries", &rendered);
         let rendered = fold_alias_copies(&rendered, &declared_locals);
+        pass_trace("fold_alias_copies", &rendered);
         let rendered = fold_assignment_receivers(&rendered, &immediately_consumed_defs(f));
+        pass_trace("fold_assignment_receivers", &rendered);
         let rendered =
             fold_copy_out_temporaries(&rendered, &declared_locals, &const_result_slots, fields);
         let rendered = fold_cast_operands(&rendered, &declared_locals, &call_result_types);
+        pass_trace("fold_cast_operands", &rendered);
         let rendered = fold_enum_round_trips(&rendered, fields, &path_roots, refs);
+        pass_trace("fold_enum_round_trips", &rendered);
         let rendered = inline_single_use_literals(&rendered);
+        pass_trace("inline_single_use_literals", &rendered);
         let rendered = collapse_single_use_accumulators(&rendered, &widened);
+        pass_trace("collapse_single_use_accumulators", &rendered);
         let rendered = inline_bool_chain_into_next_condition(&rendered);
+        pass_trace("inline_bool_chain_into_next_condition", &rendered);
         let rendered = fold_bool_member_comparisons(&rendered, fields, &path_roots, refs);
+        pass_trace("fold_bool_member_comparisons", &rendered);
         let rendered = drop_redundant_conversions(&rendered, fields, &path_roots, refs);
+        pass_trace("drop_redundant_conversions", &rendered);
         // Object temporaries belong here too: a `STOREOBJ` whose very next instruction pushes the
         // same slot produced the value where it is consumed, so the source wrote that call inside
         // the expression. Held in a local instead, it is evaluated BEFORE the outer call's other
@@ -2222,9 +2336,11 @@ fn emit_function_ctor(
             &rvo_temporary_slots(f, refs),
             refs,
         );
+        pass_trace("inline_unnamed_value_temporaries", &rendered);
         // Now that the operands carry no names of their own, an in-place update stands directly
         // under its declaration and the pair is one statement — which can expose another value.
         let rendered = merge_self_assignments(&rendered);
+        pass_trace("merge_self_assignments", &rendered);
         let mut rendered = rendered;
         // A returned expression folds one step per pass: three names in a chain need three.
         for _ in 0..3 {
@@ -2270,6 +2386,7 @@ fn emit_function_ctor(
             &rvo_temporary_slots(f, refs),
             refs,
         );
+        pass_trace("inline_unnamed_value_temporaries", &rendered);
         }
         let rendered =
             spell_out_argument_temporaries(
@@ -2292,18 +2409,27 @@ fn emit_function_ctor(
                 .collect()
         };
         let rendered = restore_named_argument_temporaries(&rendered, &declared_arguments);
+        pass_trace("restore_named_argument_temporaries", &rendered);
         let rendered = fold_widening_aliases(&rendered, &declared_locals, &path_roots, &widened);
+        pass_trace("fold_widening_aliases", &rendered);
         let rendered =
             spell_out_default_temporaries(&rendered, &default_only_construction_counts(f, refs));
         let rendered =
             split_gameplay_effect_chain(&rendered, &gameplay_effect_chain_slots(f, refs), refs);
         let rendered = lead_with_the_declaration(&rendered, leading_declaration_slot(f));
+        pass_trace("lead_with_the_declaration", &rendered);
         let rendered = order_adjacent_declarations(&rendered, &adjacent_declaration_order(f, refs));
+        pass_trace("order_adjacent_declarations", &rendered);
         let rendered =
             merge_copy_constructed_declarations(&rendered, &copy_constructed_slots(f, refs));
         let rendered = drop_default_arguments(&rendered, refs);
+        pass_trace("drop_default_arguments", &rendered);
         let rendered = fold_returned_empty_values(&rendered, f, refs);
+        pass_trace("fold_returned_empty_values", &rendered);
+        let rendered = drop_empty_else(&rendered);
+        pass_trace("drop_empty_else", &rendered);
         let rendered = drop_unused_declarations(&rendered);
+        pass_trace("drop_unused_declarations", &rendered);
         let rendered = fold_member_read_temporaries(
             &rendered,
             &widened,
@@ -2313,10 +2439,13 @@ fn emit_function_ctor(
             refs,
             &member_read_slots(f),
         );
+        pass_trace("fold_member_read_temporaries", &rendered);
         // Last: the pass looks for a release standing directly before the closing brace, and the
         // folds above can delete the statement that stood between the two.
         let rendered = drop_int_inside_enum_cast(&rendered);
+        pass_trace("drop_int_inside_enum_cast", &rendered);
         let rendered = drop_block_end_handle_releases(&rendered);
+        pass_trace("drop_block_end_handle_releases", &rendered);
         let rendered = rejoin_logical_carriers(
             &rendered,
             &declared_locals,
@@ -2324,15 +2453,19 @@ fn emit_function_ctor(
             fields,
             &spilled_boolean_names(f, refs),
         );
+        pass_trace("rejoin_logical_carriers", &rendered);
         // After the carrier chains are whole: the source declared a witnessed carrier on its
         // initialiser, and the initialiser is only one statement once the arms have rejoined.
         let rendered = sink_carrier_declarations(&rendered, &declared_at_initializer_carriers(f));
+        pass_trace("sink_carrier_declarations", &rendered);
         let rendered = unwrap_untested_bool_return(&rendered, f, refs);
+        pass_trace("unwrap_untested_bool_return", &rendered);
         let rendered = fold_literal_null_returns(
             &rendered,
             &literal_null_return_slots(f),
             returns_by_reference,
         );
+        pass_trace("fold_literal_null_returns", &rendered);
         s.truncate(declarations_at);
         s.push_str(&rendered);
     } else {
@@ -3682,7 +3815,7 @@ fn rewrite_const_decl_init(
     let want = |slot: i32, _ty: &str| const_slots.contains(&slot);
     rewrite_decl_at_assignment(body, locals, &want, &|_, ty| {
         format!("const {}", qualify_decl_type(ty, refs))
-    })
+    }, true)
 }
 
 fn infer_call_result_types(
@@ -6613,12 +6746,19 @@ fn fold_literal_temporaries(
     body: &str,
     refs: &RefResolver,
     locals: &BTreeMap<i32, String>,
+    pushed_by_value: &HashSet<i32>,
 ) -> String {
     let trailing_newline = body.ends_with('\n');
     let lines: Vec<&str> = body.lines().collect();
     let mut folded: Vec<String> = lines.iter().map(|line| (*line).to_owned()).collect();
     let mut dropped = false;
     for slot in used_locals(body) {
+        // A literal the compiler hands to a call goes as an immediate (`PshC8 1.0`); a slot
+        // holding a literal that is PUSHED BY VALUE (`SetV8 v18, 1.0` … `PshV8 v18`) is a name
+        // the source wrote, and folding the literal into the argument drops the variable.
+        if pushed_by_value.contains(&slot) {
+            continue;
+        }
         let ident = format!("local_{slot}");
         // Definitions in order, and the region each one owns: up to the next definition of the
         // same slot. The compiler re-uses one slot for several constants, so a slot with three
@@ -6651,6 +6791,13 @@ fn fold_literal_temporaries(
             let [use_line] = uses[..] else {
                 continue;
             };
+            // A literal stored INSIDE a branch and read after the join is one arm's value: the
+            // other arm defines the slot too, and folding this one in makes it the value on
+            // every path — `local_75 >= local_56` became `local_75 >= 2` and a threshold read
+            // from a tuning asset was a constant.
+            if indent_of(&folded[definition]).len() > indent_of(&folded[use_line]).len() {
+                continue;
+            }
             if count_ident(&folded[use_line], &ident) != 1
                 || assignment_target_is_rooted_at_ident(&folded[use_line], &ident)
                 || !sole_use_is_a_conversion(&folded[use_line], &ident, refs)
@@ -7054,6 +7201,16 @@ fn inline_temporary_into(
         inline_reject("definitions", callee, &temp, &lines[index]);
         return false;
     };
+    // A definition standing DEEPER than its reader is on one path only, and the reader after
+    // the join may be reached from another arm that defines the same slot: `local_56 = 2;` in
+    // an else-arm was the last definition in the text, and taking it as the only one turned
+    // `local_75 >= local_56` into `local_75 >= 2` on every path — the then-arm's value was
+    // dropped and a real threshold read from a tuning asset became a constant. A temporary the
+    // compiler built for one expression is never defined in one block and read outside it.
+    if indent_of(&lines[definition]).len() > indent_of(&lines[index]).len() {
+        inline_reject("branch", callee, &temp, &lines[index]);
+        return false;
+    }
     let region_end = (definition + 1..lines.len().min(definition + 1 + WINDOW))
         .find(|line| definition_value(&lines[*line], temp).is_some())
         .unwrap_or(lines.len());
@@ -12777,24 +12934,16 @@ fn fold_return_slot_arms(body: &str) -> String {
     if last == 0 || lines[last - 1].trim() != "}" {
         return body.to_owned();
     }
-    let stores: Vec<usize> = (0..last)
-        .filter(|at| lines[*at].trim().starts_with("__return = "))
-        .collect();
-    // Exactly the two arms of the if/else the shared return closes, and nothing else. A store
-    // nested deeper leaves a path that reaches the shared return without a value — one such
-    // function ("Not all paths return a value") is what a looser rule costs.
-    // Each store is the last statement of its arm, the two arms are the two halves of ONE
-    // if/else, and that if/else is the last thing in the function. The arms may hold anything
-    // else before their store; requiring them to hold nothing else missed most of the shape.
-    let two_arms = matches!(stores.as_slice(), [then, other]
-        if lines.get(then + 1).is_some_and(|line| line.trim() == "}")
-            && lines.get(then + 2).is_some_and(|line| line.trim() == "else")
-            && lines.get(then + 3).is_some_and(|line| line.trim() == "{")
-            && *other > then + 3
-            && lines.get(other + 1).is_some_and(|line| line.trim() == "}")
-            && other + 2 == last);
-    if !two_arms || body.matches("__return").count() != stores.len() + usize::from(names_the_slot)
-    {
+    // Every path through the if/else the shared return closes has to END in a store: the two
+    // arms, or — where an arm is itself an if/else — each of ITS arms, and so on down. A path
+    // that reaches the shared return without a store keeps the slot ("Not all paths return a
+    // value" is what a looser rule costs). The arms may hold anything else before their store.
+    let mut stores: Vec<usize> = Vec::new();
+    if !tail_stores_of_block(&lines, 0, last, &mut stores) {
+        return body.to_owned();
+    }
+    stores.sort_unstable();
+    if body.matches("__return").count() != stores.len() + usize::from(names_the_slot) {
         return body.to_owned();
     }
     let mut kept: Vec<String> = Vec::with_capacity(lines.len());
@@ -12815,6 +12964,69 @@ fn fold_return_slot_arms(body: &str) -> String {
         joined.push('\n');
     }
     joined
+}
+
+/// The `__return = <val>;` stores that end EVERY path through the block `lines[lo..hi]`, pushed
+/// onto `out`: the block's last statement is such a store, or it is an if/else each of whose
+/// arms satisfies the same. False where some path leaves the block without one.
+fn tail_stores_of_block(lines: &[&str], lo: usize, hi: usize, out: &mut Vec<usize>) -> bool {
+    let Some(last) = (lo..hi).rev().find(|at| !lines[*at].trim().is_empty()) else {
+        return false;
+    };
+    let tail = lines[last].trim();
+    if tail.starts_with("__return = ") && tail.ends_with(';') {
+        out.push(last);
+        return true;
+    }
+    if tail != "}" {
+        return false;
+    }
+    let Some(else_open) = matching_open_brace(lines, last) else {
+        return false;
+    };
+    if else_open == 0
+        || else_open <= lo
+        || lines[else_open].trim() != "{"
+        || lines[else_open - 1].trim() != "else"
+        || else_open < 2
+    {
+        return false;
+    }
+    let then_close = else_open - 2;
+    if lines[then_close].trim() != "}" {
+        return false;
+    }
+    let Some(then_open) = matching_open_brace(lines, then_close) else {
+        return false;
+    };
+    if then_open == 0
+        || then_open <= lo
+        || lines[then_open].trim() != "{"
+        || !lines[then_open - 1].trim_start().starts_with("if (")
+    {
+        return false;
+    }
+    tail_stores_of_block(lines, then_open + 1, then_close, out)
+        && tail_stores_of_block(lines, else_open + 1, last, out)
+}
+
+/// The line holding the `{` that the `}` on line `close` closes, where braces stand on lines
+/// of their own.
+fn matching_open_brace(lines: &[&str], close: usize) -> Option<usize> {
+    let mut depth = 0i32;
+    for at in (0..=close).rev() {
+        match lines[at].trim() {
+            "}" => depth += 1,
+            "{" => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(at);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// `__return = <val>;` immediately before `return __return;` is one `return <val>;`. The hidden
@@ -13059,6 +13271,385 @@ fn parenthesize_mixed(part: &str, operator: &str) -> String {
     }
 }
 
+/// Behind `GORE_AS_PASS_TRACE=<ident>`: after every pass, the lines mentioning the identifier,
+/// printed only when they changed — so the pass that rewrote a name is found without reading
+/// them all.
+fn pass_trace(pass: &str, body: &str) {
+    use std::sync::OnceLock;
+    static WANT: OnceLock<Option<String>> = OnceLock::new();
+    let Some(ident) = WANT.get_or_init(|| std::env::var("GORE_AS_PASS_TRACE").ok()) else {
+        return;
+    };
+    thread_local! {
+        static LAST: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+    }
+    let now: String = body
+        .lines()
+        .filter(|line| count_ident(line, ident) > 0)
+        .map(|line| format!("{line}
+"))
+        .collect();
+    LAST.with(|last| {
+        if *last.borrow() != now {
+            let function = TRACE_FUNCTION.with(|name| name.borrow().clone());
+            eprintln!("[pass] {function} after {pass}:
+{now}");
+            *last.borrow_mut() = now;
+        }
+    });
+}
+
+thread_local! {
+    /// The function whose body the passes are working on, for `pass_trace` headers.
+    static TRACE_FUNCTION: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
+/// Slots that hold a literal (`SetV*`) and are pushed BY VALUE (`PshV*`) somewhere in the
+/// function. The compiler pushes a literal argument as an immediate, so a slot pushed this way
+/// is a variable the source named.
+fn value_pushed_literal_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32);
+    // The push has to be the store's own width. A one-byte constant pushed four bytes wide
+    // (`SetV1 v17, 1` … `PshV4 v17`) is an enum or bool literal the compiler widened through a
+    // temporary, and naming it is what broke `UCBT_Node::GetDisplayName`.
+    let width = |name: &str| name.as_bytes().last().copied();
+    let stored: HashMap<i32, u8> = instrs
+        .iter()
+        .filter(|ins| matches!(ins.op.name, "SetV4" | "SetV8"))
+        .filter_map(|ins| w0(ins).zip(width(ins.op.name)))
+        .filter(|(slot, _)| *slot > 0)
+        .collect();
+    instrs
+        .iter()
+        .filter(|ins| matches!(ins.op.name, "PshV4" | "PshV8"))
+        .filter_map(|ins| w0(ins).zip(width(ins.op.name)))
+        .filter(|(slot, w)| stored.get(slot) == Some(w))
+        .map(|(slot, _)| slot)
+        .collect()
+}
+
+/// `else` over an empty block is a jump to the next instruction: the then-arm ends in a `JMP`
+/// over nothing. Vanilla wrote no such arm, so it is dropped.
+fn drop_empty_else(body: &str) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut kept: Vec<&str> = Vec::new();
+    let mut at = 0usize;
+    while at < lines.len() {
+        let indent = indent_of(lines[at]);
+        if lines[at].trim() == "else"
+            && lines.get(at + 1).map(|l| l.trim()) == Some("{")
+            && lines.get(at + 2).map(|l| l.trim()) == Some("}")
+            && lines.get(at + 1).is_some_and(|l| indent_of(l) == indent)
+            && lines.get(at + 2).is_some_and(|l| indent_of(l) == indent)
+        {
+            at += 3;
+            continue;
+        }
+        kept.push(lines[at]);
+        at += 1;
+    }
+    let mut joined = kept.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
+/// Slots filled by a ONE-BYTE read of a member whose declared type is `bool`.
+fn bool_field_read_slots(
+    f: &Func,
+    refs: &RefResolver,
+    fields: Option<&HashMap<String, String>>,
+) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w = |ins: &super::disasm::Instr, i: usize| ins.words.get(i).map(|w| *w as i16 as i32);
+    let d0 = |ins: &super::disasm::Instr| ins.dwords.first().map(|d| *d as i32);
+    let field_is_bool = |tid: i32, off: i32, this_class: bool| -> bool {
+        let Some(field) = refs.member(tid, off) else {
+            return false;
+        };
+        let ty = refs
+            .type_by_id(tid)
+            .and_then(|cls| {
+                refs.field_type_by_class(cls, field)
+                    .or_else(|| refs.native_field_value_type(cls, field))
+                    .or_else(|| refs.native_field_type(cls, field))
+            })
+            .map(str::to_owned)
+            .or_else(|| {
+                this_class
+                    .then(|| fields.and_then(|map| map.get(field)).cloned())
+                    .flatten()
+            });
+        ty.as_deref() == Some("bool")
+    };
+    let mut out = HashSet::new();
+    // The member address most recently formed, as (type id, offset, formed on `this`).
+    let mut last: Option<(i32, i32, bool)> = None;
+    for ins in &instrs {
+        match ins.op.name {
+            "ADDSi" => last = d0(ins).zip(w(ins, 0)).map(|(tid, off)| (tid, off, false)),
+            "LoadThisR" => last = d0(ins).zip(w(ins, 0)).map(|(tid, off)| (tid, off, true)),
+            "LoadRObjR" | "LoadVObjR" => {
+                last = d0(ins).zip(w(ins, 1)).map(|(tid, off)| (tid, off, false))
+            }
+            "PopRPtr" | "CHKREF" | "ChkRefS" => {}
+            "RDR1" => {
+                if let (Some((tid, off, this_class)), Some(slot)) = (last, w(ins, 0)) {
+                    if slot > 0 && field_is_bool(tid, off, this_class) {
+                        out.insert(slot);
+                    }
+                }
+                last = None;
+            }
+            _ => last = None,
+        }
+    }
+    out
+}
+
+/// `if (c) { x = a; } else { x = b; }` over one decompiler local, both arms a single store, is
+/// `x = c ? a : b;`. Only where both arms have the slot's own type — the compiler wants the two
+/// to agree — and neither is a bool, a handle or null: bools are short circuits, and a handle
+/// conditional is spelled differently.
+fn fold_conditional_values(
+    body: &str,
+    locals: &BTreeMap<i32, String>,
+    refs: &RefResolver,
+    fields: Option<&HashMap<String, String>>,
+    class_name: Option<&str>,
+) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut kept: Vec<String> = Vec::new();
+    let mut at = 0usize;
+    while at < lines.len() {
+        let folded = (|| {
+            let condition = lines.get(at)?.trim().strip_prefix("if (")?.strip_suffix(')')?;
+            if lines.get(at + 1)?.trim() != "{" || block_end(&lines, at + 1)? != at + 3 {
+                return None;
+            }
+            if lines.get(at + 4)?.trim() != "else"
+                || lines.get(at + 5)?.trim() != "{"
+                || block_end(&lines, at + 5)? != at + 7
+            {
+                return None;
+            }
+            let (target, first) = slot_store(lines[at + 2])?;
+            let (other, second) = slot_store(lines[at + 6])?;
+            if target != other || !is_decompiler_local(&target) {
+                return None;
+            }
+            if condition.contains('?')
+                || [first.as_str(), second.as_str()]
+                    .iter()
+                    .any(|arm| arm.contains(" ? ") || *arm == "nullptr" || arm.contains(" = "))
+            {
+                return None;
+            }
+            let slot_ty = temporary_type(locals, &target)?;
+            if slot_ty == "bool" || is_object_handle_type(slot_ty) {
+                return None;
+            }
+            let empty = HashMap::new();
+            for arm in [first.as_str(), second.as_str()] {
+                if renders_a_bool(arm, locals, refs, fields, &empty, class_name) {
+                    return None;
+                }
+                if conditional_arm_type(arm, locals, refs, fields, class_name).as_deref()
+                    != Some(slot_ty)
+                {
+                    return None;
+                }
+            }
+            let indent = indent_of(lines[at]);
+            Some(format!("{indent}{target} = {condition} ? {first} : {second};"))
+        })();
+        match folded {
+            Some(line) => {
+                kept.push(line);
+                at += 8;
+            }
+            None => {
+                kept.push(lines[at].to_owned());
+                at += 1;
+            }
+        }
+    }
+    let mut joined = kept.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
+/// The type an arm of a conditional renders as, where it can be told: a literal, a cast, a
+/// local, a member path, a call with a known return type, or a value constructed `T()`.
+fn conditional_arm_type(
+    value: &str,
+    locals: &BTreeMap<i32, String>,
+    refs: &RefResolver,
+    fields: Option<&HashMap<String, String>>,
+    class_name: Option<&str>,
+) -> Option<String> {
+    let value = unwrap_brackets(value);
+    if value.parse::<i64>().is_ok() {
+        return Some("int".to_owned());
+    }
+    if let Some(head) = value.strip_suffix('f') {
+        if head.parse::<f64>().is_ok() && head.contains('.') {
+            return Some("float32".to_owned());
+        }
+    }
+    if value.parse::<f64>().is_ok() && value.contains('.') {
+        return Some("float".to_owned());
+    }
+    for (prefix, ty) in [("int(", "int"), ("float(", "float"), ("float32(", "float32")] {
+        if value.starts_with(prefix)
+            && value.ends_with(')')
+            && matching_paren(value, prefix.len() - 1) == Some(value.len() - 1)
+        {
+            return Some(ty.to_owned());
+        }
+    }
+    if is_decompiler_local(value) {
+        return temporary_type(locals, value).map(str::to_owned);
+    }
+    if let Some(ty) = member_path_type(value, &HashMap::new(), fields, refs, class_name, locals) {
+        return Some(ty);
+    }
+    if let Some(head) = value.strip_suffix("()") {
+        if head.starts_with('F') && head.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+            return Some(head.to_owned());
+        }
+    }
+    outer_callee(value).and_then(|callee| refs.names_returning(&callee).map(str::to_owned))
+}
+
+/// The header of an iterator loop the structurer wrote: `while (local_N.CanProceed)`, or the
+/// `for (; local_N.CanProceed;)` it writes for the test-first layout.
+fn is_can_proceed_header(line: &str, iter: i32) -> bool {
+    line == format!("while (local_{iter}.CanProceed)")
+        || line == format!("for (; local_{iter}.CanProceed;)")
+}
+
+/// `local_N = A; local_N = <expr reading local_N once>;` on adjacent lines at one depth, with
+/// `A` not reading the slot, is `local_N = <expr with A in the slot's place>;`. The untyped
+/// twin of [`merge_self_assignments`], for the body before declarations exist.
+fn merge_self_stores(body: &str) -> String {
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut at = 0usize;
+    while at + 1 < lines.len() {
+        let merged = (|| {
+            let (name, init) = slot_store(&lines[at])?;
+            let indent = indent_of(&lines[at]);
+            // The update need not stand on the very next line: the compiler evaluates the other
+            // operand in between (`SetV8 v12, 2pi; iTOd v6, v1; MULd v12, v12, v6`). A LITERAL
+            // has no order to lose, so it may move past such stores; anything else past none.
+            let literal = init.parse::<f64>().is_ok()
+                || init.strip_suffix('f').is_some_and(|h| h.parse::<f64>().is_ok());
+            // Only a literal: joining a CALL into the update moved `it.Proceed()` into a
+            // division, which then let the range-for fold see an element written through and
+            // took the compiler down (`NormalizeWeights`).
+            if !literal {
+                return None;
+            }
+            let mut next_at = at + 1;
+            while literal
+                && next_at < lines.len()
+                && next_at < at + 4
+                && indent_of(&lines[next_at]) == indent
+                && count_ident(&lines[next_at], &name) == 0
+                && slot_store(&lines[next_at]).is_some()
+            {
+                next_at += 1;
+            }
+            let next = lines.get(next_at)?;
+            if indent_of(next) != indent {
+                return None;
+            }
+            let (target, value) = next.trim().strip_suffix(';')?.split_once(" = ")?;
+            if target != name
+                || count_ident(value, &name) != 1
+                || init.contains(['\u{1}', '\u{2}'])
+            {
+                return None;
+            }
+            let operand = if init.contains(' ') && !wraps_whole_expression(&init) {
+                format!("({init})")
+            } else {
+                init.clone()
+            };
+            Some((next_at, format!("{indent}{name} = {};", rename_ident(value, &name, &operand))))
+        })();
+        match merged {
+            Some((next_at, line)) => {
+                lines[next_at] = line;
+                lines.remove(at);
+            }
+            None => at += 1,
+        }
+    }
+    let mut text = lines.join("\n");
+    if body.ends_with('\n') {
+        text.push('\n');
+    }
+    text
+}
+
+/// Slots written by an ASSIGNMENT to a variable that already exists: `CpyVtoV{4,8} slot, tmp`
+/// right behind the instruction that wrote `tmp`. A declaration takes its value straight into
+/// the slot; only an assignment to a declared variable goes through the compiler's temporary
+/// and copies on.
+fn slots_with_assignment_writes(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w = |ins: &super::disasm::Instr, i: usize| ins.words.get(i).map(|w| *w as i16 as i32);
+    let mut out = HashSet::new();
+    for at in 1..instrs.len() {
+        let ins = &instrs[at];
+        if !matches!(ins.op.name, "CpyVtoV4" | "CpyVtoV8") {
+            continue;
+        }
+        let (Some(dst), Some(src)) = (w(ins, 0), w(ins, 1)) else {
+            continue;
+        };
+        let prev = &instrs[at - 1];
+        let prev_writes_src =
+            (prev.op.fmt.writes_first_word() || writes_destination(prev.op.name)) && w(prev, 0) == Some(src);
+        if dst > 0 && prev_writes_src {
+            out.insert(dst);
+        }
+    }
+    out
+}
+
+/// Every primitive or enum local whose writes are all declarations — none of them the
+/// through-a-temporary form of an assignment — is declared at each write that starts a life,
+/// in the block that holds it. See the call site for why.
+fn rewrite_primitive_lives_decl_init(
+    body: &str,
+    locals: &BTreeMap<i32, String>,
+    refs: &RefResolver,
+    already: &HashSet<i32>,
+    assigned: &HashSet<i32>,
+    enums: &HashMap<i32, String>,
+    reference_locals: &HashMap<i32, bool>,
+) -> (String, HashSet<i32>) {
+    let wanted = |slot: i32, ty: &str| {
+        !already.contains(&slot)
+            && !assigned.contains(&slot)
+            && !reference_locals.contains_key(&slot)
+            && (is_primitive(ty) || enums.get(&slot).is_some_and(|enum_ty| enum_ty == ty))
+    };
+    rewrite_decl_at_assignment(body, locals, &wanted, &|_, ty| qualify_decl_type(ty, refs), false)
+}
+
 /// Why a short circuit was not folded, behind `GORE_AS_SC_DIAG`.
 fn sc_reject(reason: &str, line: &str) {
     if diag_enabled("GORE_AS_SC_DIAG") {
@@ -13216,42 +13807,98 @@ fn member_path_type(
     class_name: Option<&str>,
     locals: &BTreeMap<i32, String>,
 ) -> Option<String> {
-    if value.contains(['(', ')', '[', ']', ' ', '\u{1}', '\u{2}']) {
+    if value.contains(['(', ')', '\u{1}', '\u{2}']) {
         return None;
     }
-    let mut parts = value.split('.');
-    let head = parts.next()?;
+    // A segment may index an array: `local_28[local_31].bIsSuppressed` walks from the ELEMENT
+    // type of `local_28`. Without that the whole path was an unknown, and an `A || <that
+    // field>` stayed an if/else over a carrier — in every loop that filters a crime array.
+    let segments = path_segments(value)?;
+    let mut it = segments.into_iter();
+    let (head, head_indexed) = it.next()?;
     let mut ty = match head {
         "this" => {
-            let first = parts.next()?;
-            match fields.and_then(|map| map.get(first)) {
+            if head_indexed {
+                return None;
+            }
+            let (first, first_indexed) = it.next()?;
+            let ty = match fields.and_then(|map| map.get(first)) {
                 Some(ty) => ty.clone(),
                 None => inherited_native_field_type(refs, class_name, first)?.to_owned(),
+            };
+            match first_indexed {
+                true => element_type(&ty)?.to_owned(),
+                false => ty,
             }
         }
         // `roots` carries the paths the renderer built; a plain `local_N` head is often not one
         // of them, and its type is sitting in the slot table the caller already holds. Without
         // this the walk stopped at the head and `local_2.bWitnessIsPersonalVictim` was an unknown,
         // which left `A && <that field>` standing as an if/else over a carrier.
-        _ => match roots.get(head) {
-            Some(ty) => ty.clone(),
-            None => head
-                .strip_prefix("local_")
-                .and_then(|rest| rest.split('_').next())
-                .and_then(|rest| rest.parse::<i32>().ok())
-                .and_then(|slot| locals.get(&slot))?
-                .clone(),
-        },
+        _ => {
+            let ty = match roots.get(head) {
+                Some(ty) => ty.clone(),
+                None => head
+                    .strip_prefix("local_")
+                    .and_then(|rest| rest.split('_').next())
+                    .and_then(|rest| rest.parse::<i32>().ok())
+                    .and_then(|slot| locals.get(&slot))?
+                    .clone(),
+            };
+            match head_indexed {
+                true => element_type(&ty)?.to_owned(),
+                false => ty,
+            }
+        }
     };
-    for field in parts {
+    for (field, indexed) in it {
         ty = refs
             .field_type_by_class(&ty, field)
             .or_else(|| refs.native_field_value_type(&ty, field))
             .or_else(|| refs.native_field_type(&ty, field))?
             .to_owned();
+        if indexed {
+            ty = element_type(&ty)?.to_owned();
+        }
     }
     Some(ty)
 }
+
+/// The segments of a member path, each with whether it is indexed: `a.b[i].c` is `[(a, false),
+/// (b, true), (c, false)]`. The index itself may hold anything; the names may not.
+fn path_segments(value: &str) -> Option<Vec<(&str, bool)>> {
+    let mut segments = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    for (at, b) in value.bytes().enumerate() {
+        match b {
+            b'[' => depth += 1,
+            b']' => depth -= 1,
+            b'.' if depth == 0 => {
+                segments.push(segment(&value[start..at])?);
+                start = at + 1;
+            }
+            _ => {}
+        }
+        if depth < 0 {
+            return None;
+        }
+    }
+    if depth != 0 {
+        return None;
+    }
+    segments.push(segment(&value[start..])?);
+    Some(segments)
+}
+
+/// One segment of a member path: its name and whether it carries an index.
+fn segment(text: &str) -> Option<(&str, bool)> {
+    match text.find('[') {
+        Some(open) => text.ends_with(']').then(|| (&text[..open], true)),
+        None => (!text.is_empty() && !text.contains([' ', ']'])).then_some((text, false)),
+    }
+}
+
 
 fn renders_a_bool(
     value: &str,
@@ -14093,7 +14740,7 @@ fn rewrite_foreach_loops(
         .filter(|i| i + 3 < lines.len())
         .filter_map(|i| {
             let (iter, _) = iterator_decl(lines[i], range_for)?;
-            (lines[i + 1].trim() == format!("while (local_{iter}.CanProceed)")
+            (is_can_proceed_header(lines[i + 1].trim(), iter)
                 && lines[i + 2].trim() == "{")
             .then_some(())?;
             let elem = proceed_assignment(lines[i + 3], iter)
@@ -14110,7 +14757,7 @@ fn rewrite_foreach_loops(
         let Some((iter, container)) = iterator_decl(lines[i], range_for) else {
             continue;
         };
-        if lines[i + 1].trim() != format!("while (local_{iter}.CanProceed)")
+        if !is_can_proceed_header(lines[i + 1].trim(), iter)
             || lines[i + 2].trim() != "{"
         {
             foreach_reject("not-the-idiom-shape");
@@ -14665,7 +15312,7 @@ fn rewrite_iterator_decl_init(
         )
     };
     // `auto`, not the inferred iterator head — see the render comment below.
-    rewrite_decl_at_assignment(body, locals, &is_iter, &|_, _| "auto".to_string())
+    rewrite_decl_at_assignment(body, locals, &is_iter, &|_, _| "auto".to_string(), true)
 }
 
 /// A VALUE-type local (`F*`/`T*`) that is hoisted and then assigned costs two symbols vanilla
@@ -14721,7 +15368,7 @@ fn rewrite_value_decl_init(
             Some(false) => format!("{ty}&"),
             None => ty.to_string(),
         }
-    })
+    }, true)
 }
 
 /// A local whose first reference WRITES it through a member or an element — `local_N.Field = …;`
@@ -14925,7 +15572,7 @@ fn rewrite_first_use_decl_init(
             Some(false) => format!("{head}&"),
             None => head,
         }
-    })
+    }, true)
 }
 
 /// Shared engine for both: declare a local at the assignment that first gives it a value,
@@ -14953,6 +15600,7 @@ fn rewrite_decl_at_assignment(
     locals: &BTreeMap<i32, String>,
     want: &dyn Fn(i32, &str) -> bool,
     decl_head: &dyn Fn(i32, &str) -> String,
+    split_at_every_definition: bool,
 ) -> (String, HashSet<i32>) {
     let mut suppressed: HashSet<i32> = HashSet::new();
     let mut out = body.to_string();
@@ -14998,7 +15646,14 @@ fn rewrite_decl_at_assignment(
             // slot for two source temporaries in the same block, and swallowing the second
             // definition as a member left it a bare `local_N = …` — an `opAssign` the base
             // cache has no row for. It becomes its own group (and its own declaration) instead.
-            while k < refs.len() && refs[k] < end && !is_definition_line(lines[refs[k]], &ident) {
+            // For a primitive, a definition INSIDE the first assignment's own block is the
+            // same variable assigned again — `x = f();` in a loop the declaration heads — and
+            // splitting it into a fresh name would leave the loop's test reading the old one.
+            // Only a definition outside that span starts a life of its own.
+            while k < refs.len()
+                && refs[k] < end
+                && !(split_at_every_definition && is_definition_line(lines[refs[k]], &ident))
+            {
                 members.push(refs[k]);
                 k += 1;
             }

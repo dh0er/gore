@@ -964,6 +964,123 @@ fn bool_literal(value: bool) -> String {
     }
 }
 
+/// `text` with every whole-word `word` replaced by `with`.
+fn replace_word(text: &str, word: &str, with: &str) -> String {
+    let positions = word_positions(text, word);
+    if positions.is_empty() {
+        return text.to_owned();
+    }
+    let mut out = String::with_capacity(text.len() + with.len());
+    let mut at = 0usize;
+    for p in positions {
+        out.push_str(&text[at..p]);
+        out.push_str(with);
+        at = p + word.len();
+    }
+    out.push_str(&text[at..]);
+    out
+}
+
+/// True when one bracket pair spans the whole of `expr`.
+fn wraps_whole_expr(expr: &str) -> bool {
+    if !expr.starts_with('(') || !expr.ends_with(')') {
+        return false;
+    }
+    let mut depth = 0i32;
+    for (at, b) in expr.bytes().enumerate() {
+        match b {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            _ => {}
+        }
+        if depth == 0 && at + 1 != expr.len() {
+            return false;
+        }
+    }
+    depth == 0
+}
+
+/// A value put in place of the name that held it: bracketed where it carries an operator, so it
+/// binds as the one operand the name was.
+fn as_operand(value: &str) -> String {
+    if value.contains(' ') && !wraps_whole_expr(value) {
+        format!("({value})")
+    } else {
+        value.to_owned()
+    }
+}
+
+/// A loop test that builds SEVERAL values in temporaries before comparing — `local_32 =
+/// local_28.Num();` and then `local_31 < local_32` — is the one expression `local_31 <
+/// local_28.Num()`, which is what the source wrote and what the compiler re-evaluates on every
+/// iteration. Each temporary is read exactly once, in a later header statement or in the test,
+/// and every statement is consumed: a value nothing in the header reads was not a temporary of
+/// the test, and the fold stands down rather than guess. Purely textual; the caller proves the
+/// slots are dead outside the header.
+fn fold_loop_header_temps(stmts: &[String], cond: &str) -> Option<String> {
+    if stmts.is_empty() {
+        return None;
+    }
+    let is_local = |name: &str| {
+        name.strip_prefix("local_")
+            .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+    };
+    // (slot, value) in definition order; a slot leaves the list when its one read consumes it.
+    let mut pending: Vec<(String, String)> = Vec::new();
+    let substitute = |pending: &mut Vec<(String, String)>, text: &str| -> Option<String> {
+        let mut text = text.to_owned();
+        let mut k = 0usize;
+        while k < pending.len() {
+            match count_word(&text, &pending[k].0) {
+                0 => k += 1,
+                1 => {
+                    let (slot, value) = pending.remove(k);
+                    text = replace_word(&text, &slot, &as_operand(&value));
+                }
+                _ => return None,
+            }
+        }
+        Some(text)
+    };
+    for stmt in stmts {
+        let (target, rhs) = stmt.trim().strip_suffix(';')?.split_once(" = ")?;
+        if !is_local(target) || rhs.is_empty() {
+            return None;
+        }
+        let rhs = substitute(&mut pending, rhs)?;
+        // Written again while its earlier value is still unread: that value was dropped, which
+        // a condition never does.
+        if pending.iter().any(|(slot, _)| slot == target) {
+            return None;
+        }
+        pending.push((target.to_owned(), rhs));
+    }
+    let cond = substitute(&mut pending, cond)?;
+    if !pending.is_empty() || cond.contains('?') {
+        return None;
+    }
+    Some(cond)
+}
+
+/// `++local_N;`, `--local_N;` or `local_N = local_N <op> <expr>;` — a local updated in place,
+/// which is the form a `for` increment takes.
+fn in_place_update(stmt: &str) -> bool {
+    let is_local = |name: &str| {
+        name.strip_prefix("local_")
+            .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+    };
+    let s = stmt.trim().trim_end_matches(';');
+    if let Some(name) = s.strip_prefix("++").or_else(|| s.strip_prefix("--")) {
+        return is_local(name);
+    }
+    if let Some((target, rhs)) = s.split_once(" = ") {
+        return is_local(target)
+            && count_word(rhs, target) == 1
+            && (rhs.starts_with(&format!("{target} + ")) || rhs.starts_with(&format!("{target} - ")));
+    }
+    false
+}
+
 fn scan_back_retval_floor(ctx: &Ctx, before: usize, floor: usize) -> Option<String> {
     for i in (floor..before).rev() {
         let ins = &ctx.instrs[i];
@@ -6330,8 +6447,11 @@ impl Structurer<'_> {
                 // recovered compiler switch idiom (guards + JMPP dispatch); the whole
                 // construct was emitted, continue after its JOIN.
                 next = after;
-            } else if let Some((body_end, cond)) = self.top_test_while(i, stop) {
+            } else if let Some((body_end, cond, prefix)) = self.top_test_while(i, stop) {
                 // top-test loop: `header: <cmp> Jcc exit; body; JMP header`
+                for s in &prefix {
+                    let _ = writeln!(out, "{ind}{s}");
+                }
                 let _ = writeln!(out, "{ind}while ({cond})");
                 let _ = writeln!(out, "{ind}{{");
                 // A body jump back to this header is a `continue;`. Without a scope it was read
@@ -6446,7 +6566,11 @@ impl Structurer<'_> {
                 for s in &stmts {
                     let _ = writeln!(out, "{ind}{s}");
                 }
-                let _ = writeln!(out, "{ind}while ({cond})");
+                // The test stands at the BOTTOM, entered by the jump in block `i`, with the
+                // `SUSPEND` at the head of the body: that is the `for` layout, not `while`'s
+                // (test on top, `SUSPEND` after it, jump back). A `for` with an empty initialiser
+                // and increment is the spelling that compiles back to it.
+                let _ = writeln!(out, "{ind}for (; {cond};)");
                 let _ = writeln!(out, "{ind}{{");
                 let test_off = self.g.blocks[test_idx].start_dw;
                 let ls = LoopScope {
@@ -6458,6 +6582,39 @@ impl Structurer<'_> {
                 let saved = self.loop_scope;
                 self.loop_scope = Some(ls);
                 self.emit_range(body_head, test_idx, depth + 1, out);
+                self.loop_scope = saved;
+                let _ = writeln!(out, "{ind}}}");
+                next = test_idx + 1;
+            } else if let Some((test_idx, cond, body_end, increment, continue_off, break_off)) =
+                self.for_loop(i, stop)
+            {
+                // A counted `for`: block `i` is the entry `JMP` to the bottom test, whose
+                // statements come before the loop exactly as the source wrote them (the loop
+                // variable's initialiser among them — `int i = 0; for (; i < n; ++i)` compiles to
+                // the bytes `for (int i = 0; …)` does). The test block IS the condition, folded to
+                // the one expression the compiler re-evaluates each time round, and the block the
+                // body's `continue`s target is the increment clause. See `for_loop`.
+                let (stmts, _, _) = block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, false);
+                for s in &stmts {
+                    let _ = writeln!(out, "{ind}{s}");
+                }
+                let _ = writeln!(out, "{ind}for (; {cond}; {increment})");
+                let _ = writeln!(out, "{ind}{{");
+                let ls = LoopScope {
+                    continue_off,
+                    break_off,
+                    continue_only: false,
+                    latch_block: None,
+                };
+                let saved = self.loop_scope;
+                self.loop_scope = Some(ls);
+                if self.body_has_inner_branch(i + 1, body_end, ls)
+                    && self.loop_body_recoverable(i + 1, body_end, ls)
+                {
+                    self.emit_range(i + 1, body_end, depth + 1, out);
+                } else {
+                    self.emit_linear(i + 1, body_end, depth + 1, out, false);
+                }
                 self.loop_scope = saved;
                 let _ = writeln!(out, "{ind}}}");
                 next = test_idx + 1;
@@ -8659,6 +8816,43 @@ impl Structurer<'_> {
         true
     }
 
+    /// Whether everything the single header block `head` writes is a temporary of its own test:
+    /// no parameter is written, every read of a written slot inside the block follows its write,
+    /// and nothing reachable from the loop body head `body` or the loop exit `exit` reads a
+    /// written slot before overwriting it. This is what lets the header's statements be folded
+    /// into the condition as the temporaries they are.
+    /// The slots the single header block `head` writes that are its own temporaries — no
+    /// parameter written, read only after being written inside the block, and dead on every path
+    /// from the body head and the exit — as a set, or None where a parameter is written.
+    fn header_dead_temps(
+        &self,
+        head: usize,
+        body: usize,
+        exit: usize,
+    ) -> Option<std::collections::BTreeSet<i32>> {
+        let written = self.compound_header_written_slots(head, head + 1)?;
+        if !self.compound_header_writes_are_path_local(head, head + 1, &written) {
+            return None;
+        }
+        Some(
+            written
+                .into_iter()
+                .filter(|slot| {
+                    let one = std::collections::BTreeSet::from([*slot]);
+                    self.compound_header_writes_are_dead(head, body, exit, &one)
+                })
+                .collect(),
+        )
+    }
+
+    fn header_temps_dead(&self, head: usize, body: usize, exit: usize) -> bool {
+        let Some(written) = self.compound_header_written_slots(head, head + 1) else {
+            return false;
+        };
+        self.compound_header_writes_are_path_local(head, head + 1, &written)
+            && self.compound_header_writes_are_dead(head, body, exit, &written)
+    }
+
     /// Recover the condition of a bounded, acyclic materialized header `[head, body)`. Every
     /// path must terminate at exactly `body_off` or `exit_off`; path-local values are retained so
     /// a compiler temporary assigned on both arms can feed the final low-register test.
@@ -8902,8 +9096,12 @@ impl Structurer<'_> {
     }
 
     /// Detect a top-test loop headed at block `i`:
-    /// `header: <cmp> Jcc exit; body...; JMP header`. Returns (body_end_idx, condition).
-    fn top_test_while(&self, i: usize, stop: usize) -> Option<(usize, String)> {
+    /// `header: <cmp> Jcc exit; body...; JMP header`. Returns (body_end_idx, condition, prefix):
+    /// the prefix holds statements of the header block that are NOT the test's own temporaries
+    /// and run once, in front of the loop — non-empty only for a body the compiler marked with
+    /// `SUSPEND` but never jumps back into, whose "header" block reaches back to the function's
+    /// prologue.
+    fn top_test_while(&self, i: usize, stop: usize) -> Option<(usize, String, Vec<String>)> {
         if !self.is_cond(i) {
             return None;
         }
@@ -8916,15 +9114,71 @@ impl Structurer<'_> {
             return None;
         }
         let prev = taken_idx.checked_sub(1)?;
-        if prev <= i || self.jump_op(prev) != "JMP" {
+        if prev <= i {
             return None;
         }
-        // last body block must JMP back to the header's start offset
-        if self.g.blocks[prev].succs.first().copied() != Some(b.start_dw) {
+        // last body block must JMP back to the header's start offset …
+        let jumps_back = self.jump_op(prev) == "JMP"
+            && self.g.blocks[prev].succs.first().copied() == Some(b.start_dw);
+        // … unless the body is one the compiler marked as a loop body anyway. A `SUSPEND` stands
+        // at the head of every loop body and nowhere else behind a test. Where every path through
+        // the body leaves the function, the back edge was dead and the compiler dropped it: the
+        // body's last block then returns or jumps out, never falling into the exit. Rendered as
+        // an `if` the `SUSPEND` is lost (`UCBT_Sequence::Tick`).
+        // A jump BACK to a block before `i` is a latch of an enclosing loop, or the real head of
+        // a compound test (`while (A && B)`) whose merge block this is — never an exit.
+        let suspended_body = !jumps_back
+            && self.ctx.instrs[self.g.blocks[i + 1].instr_lo].op.name == "SUSPEND"
+            && {
+                let last = &self.g.blocks[prev];
+                match self.jump_op(prev) {
+                    "RET" => true,
+                    "JMP" => last.succs.first().is_some_and(|&t| {
+                        t != taken && self.idx_of.get(&t).copied().is_none_or(|ti| ti > taken_idx)
+                    }),
+                    _ => false,
+                }
+            };
+        if !jumps_back && !suspended_body {
             return None;
         }
-        let (stmts, cmp) = block_stmts(self.ctx, b.instr_lo, b.instr_hi);
+        let (mut stmts, cmp) = block_stmts(self.ctx, b.instr_lo, b.instr_hi);
         let cond = negate(&branch_cond(&cmp, self.jump_op(i)));
+        // Where nothing jumps back to this block, it reaches back to whatever came before the
+        // test — the function's prologue, for a loop that opens the body. Those statements run
+        // once, in front of the loop. Only a TRAILING run of stores into slots that die with the
+        // test is the test's own; the rest is the prefix.
+        let mut prefix: Vec<String> = Vec::new();
+        if suspended_body {
+            // A slot the BODY writes is a variable of the loop, whatever the walk from the body
+            // head says: the write kills the header's value on that path, but the test reads it
+            // again on the next pass that the missing back edge hides. Folding it made
+            // `while (Result == Success)` into `while (int(Success) == 0)`, a constant the
+            // compiler then went down on.
+            let written_in_body = self
+                .compound_header_written_slots(i + 1, taken_idx)
+                .unwrap_or_default();
+            let mut dead = self.header_dead_temps(i, i + 1, taken_idx).unwrap_or_default();
+            dead.retain(|slot| !written_in_body.contains(slot));
+            let is_local = |name: &str| {
+                name.strip_prefix("local_")
+                    .and_then(|rest| rest.parse::<i32>().ok())
+            };
+            let mut keep = stmts.len();
+            while keep > 0 {
+                let target = stmts[keep - 1]
+                    .trim()
+                    .strip_suffix(';')
+                    .and_then(|s| s.split_once(" = "))
+                    .and_then(|(t, _)| is_local(t));
+                if target.is_some_and(|slot| dead.contains(&slot)) {
+                    keep -= 1;
+                } else {
+                    break;
+                }
+            }
+            prefix = stmts.drain(..keep).collect();
+        }
         // Whatever the header computes IS part of the condition — it is re-evaluated on every
         // iteration, so it can be neither hoisted in front of the loop nor dropped. Dropped is
         // what used to happen, and it leaves the test reading a slot nothing ever fills: a
@@ -8932,8 +9186,19 @@ impl Structurer<'_> {
         // never runs. Fold the header's single store into the test where its shape allows it;
         // anything else keeps the old rendering rather than risking a worse one.
         loop_diag("top-test", stmts.as_slice(), &cond);
-        let cond = fold_loop_header_store(stmts.as_slice(), &cond).unwrap_or(cond);
-        Some((taken_idx, cond))
+        // Several temporaries in the header are the one expression they build — provided they
+        // are the test's own, dead once the loop is entered or left, and the block is the test
+        // rather than the head of a `while (true)` body, which starts with the `SUSPEND`.
+        let starts_with_suspend = self.ctx.instrs[b.instr_lo].op.name == "SUSPEND";
+        let cond = fold_loop_header_store(stmts.as_slice(), &cond)
+            .or_else(|| {
+                (!starts_with_suspend
+                    && (suspended_body || self.header_temps_dead(i, i + 1, taken_idx)))
+                    .then(|| fold_loop_header_temps(stmts.as_slice(), &cond))
+                    .flatten()
+            })
+            .unwrap_or(cond);
+        Some((taken_idx, cond, prefix))
     }
 
     /// batch-44b (E2, specs/loop-body-cfg-ext.md §2.2): the `it.CanProceed` top-test condition of
@@ -9059,6 +9324,136 @@ impl Structurer<'_> {
             return None;
         }
         Some((test_idx, cond, body_head, break_off))
+    }
+
+    /// A counted `for` loop, entered at block `e`.
+    ///
+    /// This compiler lays a `for` out as `init; JMP test; body: SUSPEND …; incr; test: <cond>;
+    /// Jcc body` — the test at the BOTTOM, entered by a jump, with the `SUSPEND` at the head of
+    /// the body. A `while` is the other way round (`test: <cond>; Jcc exit; SUSPEND …; JMP
+    /// test`), so the two spellings are not interchangeable: rendered as `while`, every one of
+    /// these came back with the test in front, one `SUSPEND` moved and the bound the test
+    /// computes thrown away. Signature (all required, any deviation ⇒ None ⇒ status quo):
+    ///   1. block `e` ends in a bare single-successor `JMP` to a block `c` later in the range;
+    ///   2. block `e + 1` starts with `SUSPEND` — the body head;
+    ///   3. `c` is the test: a backward conditional whose back edge lands exactly on `e + 1`, with
+    ///      its other edge the exit, past `c` and inside the range;
+    ///   4. nothing else jumps back to at-or-before the body head, and nothing outside
+    ///      `[e, c]` jumps into `(e, c]`;
+    ///   5. the test's own statements fold into its condition as temporaries proven dead
+    ///      outside the block, or it has none;
+    ///   6. the block before `c` is either not a jump target — then whatever it holds stays in
+    ///      the body, which compiles the same — or it is the target of the body's `continue`s
+    ///      and holds nothing but in-place updates of locals, which become the increment clause.
+    /// Returns `(test_idx, cond, body_end, increment, continue_off, break_off)`.
+    fn for_loop(
+        &self,
+        e: usize,
+        stop: usize,
+    ) -> Option<(usize, String, usize, String, usize, usize)> {
+        if self.jump_op(e) != "JMP" {
+            return None;
+        }
+        let eb = &self.g.blocks[e];
+        if eb.succs.len() != 1 {
+            return None;
+        }
+        let c = *self.idx_of.get(&eb.succs[0])?;
+        if c <= e + 1 || c >= stop {
+            return None;
+        }
+        let head = e + 1;
+        let head_off = self.g.blocks[head].start_dw;
+        if self.ctx.instrs[self.g.blocks[head].instr_lo].op.name != "SUSPEND" {
+            return None;
+        }
+        let cb = &self.g.blocks[c];
+        if !self.is_backward_cond(c) || cb.succs.len() != 2 {
+            return None;
+        }
+        let back = *cb.succs.iter().find(|&&s| s <= cb.start_dw)?;
+        if back != head_off {
+            return None;
+        }
+        let break_off = *cb.succs.iter().find(|&&s| s > cb.start_dw)?;
+        let exit_idx = *self.idx_of.get(&break_off)?;
+        if exit_idx <= c || exit_idx > stop {
+            return None;
+        }
+        // 4. reducible, single entry: the only edge to the head is the test's back edge.
+        for bi in head..c {
+            if self.g.blocks[bi].succs.iter().any(|&s| s <= head_off) {
+                return None;
+            }
+        }
+        let lo_off = head_off;
+        let hi_off = cb.start_dw;
+        for (src, block) in self.g.blocks.iter().enumerate() {
+            if src >= e && src <= c {
+                continue;
+            }
+            if block.succs.iter().any(|&s| s >= lo_off && s <= hi_off) {
+                return None;
+            }
+        }
+        // 5. the condition, re-evaluated every time round, with its temporaries folded back in.
+        let (stmts, cmp) = block_stmts(self.ctx, cb.instr_lo, cb.instr_hi);
+        let raw = branch_cond(&cmp, self.jump_op(c));
+        loop_diag("for", stmts.as_slice(), &raw);
+        let refused = |why: &str| {
+            loop_diag(&format!("for-refused:{why}"), stmts.as_slice(), &raw);
+        };
+        let cond = if stmts.is_empty() {
+            raw.clone()
+        } else {
+            let Some(folded) = fold_loop_header_store(stmts.as_slice(), &raw)
+                .or_else(|| fold_loop_header_temps(stmts.as_slice(), &raw))
+            else {
+                refused("fold");
+                return None;
+            };
+            if !self.header_temps_dead(c, head, exit_idx) {
+                refused("temps-not-dead");
+                return None;
+            }
+            folded
+        };
+        if cond.contains('?') {
+            refused("unrendered");
+            return None;
+        }
+        // 6. the increment.
+        let inc = c - 1;
+        let inc_off = self.g.blocks[inc].start_dw;
+        let inc_is_target = (head..inc).any(|bi| self.g.blocks[bi].succs.contains(&inc_off));
+        let falls_into_test = |bi: usize| {
+            let b = &self.g.blocks[bi];
+            let term = self.ctx.instrs[b.instr_hi - 1].op.name;
+            term != "JMP" && term != "RET" && term != "JMPP" && !is_cond_op(term)
+        };
+        // A block the body jumps INTO that holds nothing but in-place updates is the increment
+        // clause: a `continue` lands on the increment, and this is where it lands. A block that
+        // holds other statements in front of them was jumped into as a join — the end of an
+        // `if` — not as a `continue` (a `continue` lands on the increment's first instruction,
+        // which would then start a block of its own), so the increment may stay in the body:
+        // `for (; c;) { s; ++i; }` and `for (; c; ++i) { s; }` compile to the same bytes.
+        let increment_only = inc_is_target && inc > head && falls_into_test(inc) && {
+            let (istmts, icmp) =
+                block_stmts(self.ctx, self.g.blocks[inc].instr_lo, self.g.blocks[inc].instr_hi);
+            icmp.is_none() && !istmts.is_empty() && istmts.iter().all(|s| in_place_update(s))
+        };
+        if increment_only {
+            let (istmts, _) =
+                block_stmts(self.ctx, self.g.blocks[inc].instr_lo, self.g.blocks[inc].instr_hi);
+            let increment = istmts
+                .iter()
+                .map(|s| s.trim().trim_end_matches(';').to_owned())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some((c, cond, inc, increment, inc_off, break_off))
+        } else {
+            Some((c, cond, c, String::new(), cb.start_dw, break_off))
+        }
     }
 
     fn is_backward_cond(&self, bi: usize) -> bool {
