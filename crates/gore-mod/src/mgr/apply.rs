@@ -400,14 +400,19 @@ fn snapshot_raw_payload(
 /// module it carries and is dropped when a later entry re-targets all of them; a mini that would
 /// lose only some of its modules is refused, because a multi-module mini composes as one unit and
 /// its stale rows for the replaced module would otherwise stay in the ID plan and the tail. The
-/// returned set records winning edits whose target was introduced by an earlier, now-shadowed add;
+/// returned sets record winning edits whose target was introduced by an earlier, now-shadowed add,
+/// plus every module such shadowed adds carried;
 /// composition may retry those winners as adds if the effective base does not already contain the
 /// target. `analyze` uses the same target strings as `ScriptModule` identity, so this intentionally
 /// does not case-fold names.
 fn retain_last_script_target_winners(
     scripts: Vec<(String, String, PendingPayload)>,
     targets: Vec<Vec<String>>,
-) -> crate::Result<(Vec<(String, String, PendingPayload)>, BTreeSet<String>)> {
+) -> crate::Result<(
+    Vec<(String, String, PendingPayload)>,
+    BTreeSet<String>,
+    BTreeSet<String>,
+)> {
     debug_assert_eq!(scripts.len(), targets.len());
     let mut last_by_target = BTreeMap::<String, usize>::new();
     for (index, entry_targets) in targets.iter().enumerate() {
@@ -446,7 +451,7 @@ fn retain_last_script_target_winners(
             )));
         }
     }
-    Ok((winners, winner_edits_after_add))
+    Ok((winners, winner_edits_after_add, prior_add_targets))
 }
 
 fn validate_standalone_script_candidate(
@@ -1416,7 +1421,7 @@ fn apply_loadout_with_limits(
             .filter(|names| names.iter().any(|name| name == module));
             targets.push(carried.unwrap_or_else(|| vec![module.clone()]));
         }
-        let (winning_scripts, winner_edits_after_add) =
+        let (winning_scripts, winner_edits_after_add, shadowed_add_targets) =
             retain_last_script_target_winners(scripts, targets)?;
         scripts = winning_scripts;
         let (base, pristine_source) =
@@ -1504,9 +1509,19 @@ fn apply_loadout_with_limits(
                 "add" => merge_guard
                     .compose_add(&acc, &mini)
                     .map_err(|e| ModError::Other(format!("splice {module}: {e}")))?,
-                // A multi-module mini edits and adds its modules as one unit.
+                // A multi-module mini edits and adds its modules as one unit. A module that an
+                // earlier, now-shadowed add introduced satisfies the edit-target requirement the
+                // same way a single-module edit may retry as an add after a shadowed add.
                 "edit" if gore_as::cache::walk_modules::module_count(&mini) > 1 => {
-                    crate::require_multi_module_edit_target(&acc, &mini, module)?;
+                    let carried = gore_as::cache::walk_modules::module_names(&mini).map_err(|e| {
+                        ModError::Other(format!("reading script mini modules for {module}: {e}"))
+                    })?;
+                    if !carried
+                        .iter()
+                        .any(|name| shadowed_add_targets.contains(name))
+                    {
+                        crate::require_multi_module_edit_target(&acc, &mini, module)?;
+                    }
                     merge_guard
                         .compose_upsert(&acc, &mini)
                         .map_err(|e| ModError::Other(format!("replace {module}: {e}")))?

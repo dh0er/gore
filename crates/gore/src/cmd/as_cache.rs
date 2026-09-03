@@ -2243,9 +2243,9 @@ fn compile_full_graph_command(
     // success line, and neutralize the already published complete cache when it cannot be
     // produced, exactly like a failed generation receipt, so a retry is not blocked by a
     // half-finished no-clobber output. Nothing else has been published at this point.
-    let mini_report = match mini_path.as_ref() {
+    let published_mini = match mini_path.as_ref() {
         Some(mini_path) => match publish_full_graph_mini(&artifact, &opts.base_cache, mini_path) {
-            Ok(report) => Some(report),
+            Ok(published) => Some(published),
             Err(error) => {
                 return fail_after_full_graph_side_output_error(
                     &artifact,
@@ -2283,7 +2283,7 @@ fn compile_full_graph_command(
                     return fail_after_full_graph_side_output_error(
                         &artifact,
                         "GENERATION_RECEIPT",
-                        mini_path.as_deref(),
+                        published_mini.as_ref(),
                         format!("building {}: {error}", receipt_path.display()),
                     );
                 }
@@ -2294,7 +2294,7 @@ fn compile_full_graph_command(
             return fail_after_full_graph_side_output_error(
                 &artifact,
                 "GENERATION_RECEIPT",
-                mini_path.as_deref(),
+                published_mini.as_ref(),
                 format!("publishing {}: {error}", receipt_path.display()),
             );
         }
@@ -2317,10 +2317,27 @@ fn compile_full_graph_command(
         artifact.byte_len(),
         artifact.sha256()
     );
-    if let Some(report) = mini_report {
-        print!("{report}");
+    if let Some(published) = published_mini {
+        print!("{}", published.report);
     }
     Ok(())
+}
+
+/// A published multi-module mini-cache retained through its exact creation handle, so a later
+/// failure of this command can neutralize the bytes it wrote without trusting the path again.
+struct PublishedMini {
+    path: PathBuf,
+    file: std::fs::File,
+    report: String,
+}
+
+impl PublishedMini {
+    /// Reduce the written mini to zero bytes through the retained handle. A zero-byte file at the
+    /// destination is never a usable mini-cache and is reported for removal before a retry.
+    fn neutralize(&self) -> std::io::Result<()> {
+        self.file.set_len(0)?;
+        self.file.sync_all()
+    }
 }
 
 /// Reduce a selectively composed complete cache to a deployable multi-module mini-cache: the
@@ -2330,7 +2347,7 @@ fn publish_full_graph_mini(
     artifact: &gore_as::compile::FullGraphCompileArtifactV1,
     base_cache: &[u8],
     mini_path: &Path,
-) -> Result<String> {
+) -> Result<PublishedMini> {
     use gore_as::compile::FullGraphCompileOperationV1;
     use std::fmt::Write as _;
     let authored: Vec<(&str, FullGraphCompileOperationV1)> = artifact
@@ -2370,13 +2387,14 @@ fn publish_full_graph_mini(
         .open(mini_path)
         .with_context(|| format!("creating {}", mini_path.display()))?;
     if let Err(error) = std::io::Write::write_all(&mut file, &mini).and_then(|()| file.sync_all()) {
-        // Never leave a truncated artifact behind: it would block the no-clobber preflight of
-        // the next run and could be mistaken for a usable mini-cache.
-        drop(file);
-        let cleanup = std::fs::remove_file(mini_path)
-            .err()
-            .map(|remove| format!("; removing the partial file failed too: {remove}"))
-            .unwrap_or_default();
+        // Never leave a truncated artifact behind that could be mistaken for a usable mini-cache.
+        // Neutralize through the exact handle just created: the path may already point at a
+        // different file when another process can write to the destination directory.
+        let cleanup = file
+            .set_len(0)
+            .and_then(|()| file.sync_all())
+            .map(|()| "; the partial file was reduced to zero bytes and must be removed before retrying".to_owned())
+            .unwrap_or_else(|neutralize| format!("; neutralizing the partial file failed too: {neutralize}"));
         bail!("writing {}: {error}{cleanup}", mini_path.display());
     }
     let has_edit = authored
@@ -2410,23 +2428,35 @@ fn publish_full_graph_mini(
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default()
     );
-    Ok(report)
+    Ok(PublishedMini {
+        path: mini_path.to_path_buf(),
+        file,
+        report,
+    })
 }
 
 /// A side output of the full-graph command (mini-cache, receipt) could not be produced after the
 /// complete cache was already published. The command's product is all-or-nothing: reduce the
 /// retained cache to zero bytes so the next run is not blocked by a no-clobber destination that
-/// looks like a usable result, and remove an already published mini-cache that would otherwise
-/// describe the neutralized cache.
+/// looks like a usable result, and neutralize an already published mini-cache through its retained
+/// handle so it cannot describe the neutralized cache.
 fn fail_after_full_graph_side_output_error<T>(
     artifact: &gore_as::compile::FullGraphCompileArtifactV1,
     label: &str,
-    published_mini: Option<&Path>,
+    published_mini: Option<&PublishedMini>,
     primary: String,
 ) -> Result<T> {
     let mini_cleanup = published_mini
-        .and_then(|path| std::fs::remove_file(path).err().map(|error| (path, error)))
-        .map(|(path, error)| format!("; removing the published mini-cache {} failed too: {error}", path.display()))
+        .map(|mini| match mini.neutralize() {
+            Ok(()) => format!(
+                "; the published mini-cache at {} was reduced to zero bytes and must be removed before retrying",
+                mini.path.display()
+            ),
+            Err(error) => format!(
+                "; neutralizing the published mini-cache at {} failed too: {error}",
+                mini.path.display()
+            ),
+        })
         .unwrap_or_default();
     match artifact.neutralize() {
         Ok(()) => bail!(
