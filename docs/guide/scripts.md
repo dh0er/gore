@@ -362,6 +362,36 @@ V1 build record produced only after the normal package was authenticated for
 that run; unlike the full-graph V2 receipt, it does not itself carry the product
 catalog identity. Normal users should not set the development overrides.
 
+## Multi-module mini-caches
+
+A mini-cache may carry more than one module. When a mod spans several
+modules — a new provider module plus an edited shipped module that calls it —
+compile them together and let `gore as compile` publish the mini next to the
+complete cache:
+
+```powershell
+gore as compile out_as -o full.Cache --mini MyMod.mini.Cache `
+  --work-dir .gore-as-work --backend standalone --game "$GAME"
+```
+
+The mini holds only the authored Add/Edit modules, remapped to the pristine
+cache like a `compile-module` output, so references between its own modules
+resolve inside the one file. Reference it from a bundle spec with a single
+entry: `op` is `edit` when any module edits a shipped one (existing modules are
+replaced in place, new ones appended, as one unit), `add` when every module is
+new; `module_name` names one of the carried modules. The command prints the
+exact entry. `gore mod build`, `deploy` and the Manager compose such a mini as
+one unit: in a loadout it is shadowed only as a whole, and a later mod that
+re-targets some but not all of its modules is refused rather than partially
+overridden. The low-level `gore as splice` appends by default and refuses a
+mini that edits a shipped module; `gore as splice --upsert` replaces the
+existing modules in place and appends the new ones, like deploy does.
+
+Qualified in game on 2026-09-03: a two-module mini (new provider module plus
+an edited Diego conversation whose new root topic takes its caption from the
+provider) compiled standalone, deployed, showed the provider's text as a
+selectable Diego topic at game start, and ended the conversation cleanly.
+
 ## Low-level splicing
 
 For debugging or custom pipelines the individual stages remain available:

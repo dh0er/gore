@@ -294,6 +294,11 @@ pub enum AsCmd {
         /// game installation.
         #[arg(short, long)]
         out: PathBuf,
+        /// Also publish a deployable multi-module mini-cache holding only the authored Add/Edit
+        /// modules, remapped to the pristine cache. This is the artifact a bundle spec's
+        /// `scripts[].mini_cache` should point at when a mod spans several modules.
+        #[arg(long, value_name = "PATH")]
+        mini: Option<PathBuf>,
         /// Existing private workspace outside the game installation. GORE recreates only its
         /// fixed `tree` child and uses this root for isolated standalone scratch directories.
         #[arg(long, value_name = "DIR")]
@@ -386,13 +391,17 @@ pub enum AsCmd {
         #[arg(short, long)]
         out: PathBuf,
     },
-    /// Splice a base-bound mini-cache module into a base cache.
+    /// Splice the modules of a base-bound mini-cache into a base cache.
     Splice {
         /// Base cache (e.g. PrecompiledScript_Shipping.Cache).
         base: PathBuf,
-        /// Base-bound mini-cache from `compile-module` or `extract-remap`; raw generator output
-        /// has a fresh GUID and is refused until it is remapped to this exact base.
+        /// Base-bound mini-cache from `compile-module`, `compile --mini` or `extract-remap`; raw
+        /// generator output has a fresh GUID and is refused until it is remapped to this exact base.
         mini: PathBuf,
+        /// Replace modules that already exist in the base in place instead of refusing them; new
+        /// modules are still appended. Needed for a multi-module mini that edits a shipped module.
+        #[arg(long)]
+        upsert: bool,
         /// Output path for the spliced cache.
         #[arg(short, long)]
         out: PathBuf,
@@ -1918,6 +1927,7 @@ impl gore_as::compile::StandaloneCompilerRunnerV1 for CompileModuleStandaloneRun
 fn compile_full_graph_command(
     src: PathBuf,
     out: PathBuf,
+    mini: Option<PathBuf>,
     work_dir: PathBuf,
     game: Option<PathBuf>,
     no_diagnostics: bool,
@@ -1944,11 +1954,55 @@ fn compile_full_graph_command(
         .generation_receipt
         .map(|path| absolute_cli_path(path, "generation receipt"))
         .transpose()?;
-    if receipt_path.as_ref().is_some_and(|path| path == &out) {
-        bail!("generation receipt path must differ from the compiled cache path");
+    let mini_path = mini
+        .map(|path| absolute_cli_path(path, "multi-module mini-cache"))
+        .transpose()?;
+    // Two side outputs may name the same file, or nest inside one another, through different
+    // spellings of the same directory. Compare the projected paths before ANY preflight below,
+    // because those create the output parents: an accepted nesting would otherwise leave a
+    // directory where a corrected retry wants its file.
+    {
+        let mut resolved: Vec<(&'static str, PathBuf)> = Vec::new();
+        for (label, path) in [
+            ("compiled cache", Some(&out)),
+            ("multi-module mini-cache", mini_path.as_ref()),
+            ("generation receipt", receipt_path.as_ref()),
+        ] {
+            let Some(path) = path else { continue };
+            let projected = gore_as::compile::resolve_projected_output_path_v1(path, label)
+                .map_err(anyhow::Error::new)
+                .with_context(|| format!("resolving the {label} destination"))?;
+            for (other_label, other) in &resolved {
+                if gore_as::compile::resolved_path_is_within_v1(&projected, other)
+                    || gore_as::compile::resolved_path_is_within_v1(other, &projected)
+                {
+                    bail!(
+                        "the {label} and {other_label} destinations resolve to the same path or nest inside one another: {} vs {}",
+                        projected.display(),
+                        other.display()
+                    );
+                }
+            }
+            resolved.push((label, projected));
+        }
     }
+    // The compiler repeats this preflight only after the complete source graph has been
+    // planned, which takes many minutes on the shipped tree. Run the identical check up front.
+    gore_as::compile::preflight_full_graph_path_layout_paths_v1(&game, &work_dir, &out)
+        .map_err(anyhow::Error::new)
+        .context("full-graph path layout")?;
     if let Some(path) = receipt_path.as_ref() {
         validate_auxiliary_output_path(path, &game, "generation receipt")?;
+    }
+    if let Some(path) = mini_path.as_ref() {
+        // The same resolved layout check the compiled cache gets: a lexical comparison would
+        // accept an aliased or symlinked spelling of the workspace, and the next compile's tree
+        // reset would then delete the published mini.
+        gore_as::compile::preflight_full_graph_path_layout_paths_v1(&game, &work_dir, path)
+            .map_err(anyhow::Error::new)
+            .context("multi-module mini-cache path layout")?;
+        // Also covers no-clobber: an existing destination is refused here.
+        validate_auxiliary_output_path(path, &game, "multi-module mini-cache")?;
     }
 
     let executable_path = compiler_executable_path(&game);
@@ -2090,6 +2144,19 @@ fn compile_full_graph_command(
         }
     };
     let (changes, final_manifest) = plan.into_parts();
+    if mini_path.is_some()
+        && !changes.iter().any(|change| {
+            change.operation != gore_as::compile::FullGraphCompileOperationV1::Delete
+        })
+    {
+        let error = anyhow::anyhow!(
+            "--mini needs at least one added or edited module, but the source tree matches the target cache"
+        );
+        return match guard.take() {
+            Some(guard) => Err(release_compile_guard_after_error(guard, error)),
+            None => Err(error),
+        };
+    }
     let opts = FullGraphCompileOptsV1 {
         game_dir: game.clone(),
         work_dir: work_dir.clone(),
@@ -2196,6 +2263,31 @@ fn compile_full_graph_command(
         "full-graph compiler succeeded without identifying the backend that produced the cache",
     )?;
 
+    // The mini is part of this command's product: derive it before the receipt and before any
+    // success line, and neutralize the already published complete cache when it cannot be
+    // produced, exactly like a failed generation receipt, so a retry is not blocked by a
+    // half-finished no-clobber output. Nothing else has been published at this point.
+    let published_mini = match mini_path.as_ref() {
+        Some(mini_path) => match publish_full_graph_mini(
+            &artifact,
+            &opts.base_cache,
+            &game,
+            &work_dir,
+            mini_path,
+        ) {
+            Ok(published) => Some(published),
+            Err(error) => {
+                return fail_after_full_graph_side_output_error(
+                    &artifact,
+                    "MINI_CACHE",
+                    None,
+                    format!("publishing {}: {error:#}", mini_path.display()),
+                );
+            }
+        },
+        None => None,
+    };
+
     if let Some(receipt_path) = receipt_path.as_ref() {
         let authority = receipt_authority
             .as_ref()
@@ -2218,8 +2310,10 @@ fn compile_full_graph_command(
             ) {
                 Ok(receipt) => receipt,
                 Err(error) => {
-                    return fail_after_full_graph_receipt_error(
+                    return fail_after_full_graph_side_output_error(
                         &artifact,
+                        "GENERATION_RECEIPT",
+                        published_mini.as_ref(),
                         format!("building {}: {error}", receipt_path.display()),
                     );
                 }
@@ -2227,8 +2321,10 @@ fn compile_full_graph_command(
         if let Err(error) =
             gore_as::generation_receipt_v2::publish_generation_receipt_v2(receipt_path, &receipt)
         {
-            return fail_after_full_graph_receipt_error(
+            return fail_after_full_graph_side_output_error(
                 &artifact,
+                "GENERATION_RECEIPT",
+                published_mini.as_ref(),
                 format!("publishing {}: {error}", receipt_path.display()),
             );
         }
@@ -2251,20 +2347,175 @@ fn compile_full_graph_command(
         artifact.byte_len(),
         artifact.sha256()
     );
+    if let Some(published) = published_mini {
+        print!("{}", published.report);
+    }
     Ok(())
 }
 
-fn fail_after_full_graph_receipt_error<T>(
+/// A published multi-module mini-cache retained through its exact creation handle, so a later
+/// failure of this command can neutralize the bytes it wrote without trusting the path again.
+struct PublishedMini {
+    path: PathBuf,
+    file: std::fs::File,
+    report: String,
+}
+
+impl PublishedMini {
+    /// Reduce the written mini to zero bytes through the retained handle. A zero-byte file at the
+    /// destination is never a usable mini-cache and is reported for removal before a retry.
+    fn neutralize(&self) -> std::io::Result<()> {
+        self.file.set_len(0)?;
+        self.file.sync_all()
+    }
+}
+
+/// Reduce a selectively composed complete cache to a deployable multi-module mini-cache: the
+/// authored Add/Edit modules are extracted with the composed tail and remapped against the
+/// sealed pristine base, so the mini carries only its own new rows and is bound to the base GUID.
+fn publish_full_graph_mini(
     artifact: &gore_as::compile::FullGraphCompileArtifactV1,
+    base_cache: &[u8],
+    game: &Path,
+    work_dir: &Path,
+    mini_path: &Path,
+) -> Result<PublishedMini> {
+    use gore_as::compile::FullGraphCompileOperationV1;
+    use std::fmt::Write as _;
+    let authored: Vec<(&str, FullGraphCompileOperationV1)> = artifact
+        .changes()
+        .iter()
+        .filter(|change| change.operation != FullGraphCompileOperationV1::Delete)
+        .map(|change| (change.module_name.as_str(), change.operation))
+        .collect();
+    if authored.is_empty() {
+        bail!("no authored Add/Edit module to place in a mini-cache");
+    }
+    // Read the exact retained handle, never the path: the output directory may be writable by
+    // another process, and a swapped file must not become the source of the mini.
+    let composed = gore_as::generation_receipt_v2::read_full_graph_compile_output_bytes_v2(artifact)
+        .map_err(anyhow::Error::new)
+        .with_context(|| format!("reading the composed cache {}", artifact.path().display()))?;
+    let names: Vec<&str> = authored.iter().map(|(name, _)| *name).collect();
+    let extracted = gore_as::cache::splice::extract_modules(&composed, &names)
+        .context("extracting the authored modules from the composed cache")?;
+    let (mini, _counts) = gore_as::cache::remap::remap_module_to_base_with_options(
+        &extracted,
+        base_cache,
+        gore_as::cache::remap::RemapOptions {
+            allow_new_symbols: true,
+        },
+    )
+    .context("remapping the authored modules to the pristine cache")?;
+    // Prove the mini composes back onto the sealed base before publishing it.
+    let mut guard = gore_as::cache::splice::SequentialMiniGuard::new(base_cache)
+        .context("validating the pristine base for the mini-cache self-check")?;
+    guard
+        .compose_upsert(base_cache, &mini)
+        .context("multi-module mini-cache does not compose onto the pristine base")?;
+    // Compilation takes minutes, and the layout checks ran before it. Re-resolve the destination
+    // now and repeat them, then create the file at the resolved path so a parent that was renamed
+    // or replaced with a symlink in the meantime cannot redirect the mini into the workspace or
+    // the game tree.
+    let file_name = mini_path
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("mini-cache path has no file name"))?;
+    let parent = mini_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("mini-cache path has no parent directory"))?;
+    let destination = parent
+        .canonicalize()
+        .with_context(|| format!("resolving the mini-cache parent {}", parent.display()))?
+        .join(file_name);
+    gore_as::compile::preflight_full_graph_path_layout_paths_v1(game, work_dir, &destination)
+        .map_err(anyhow::Error::new)
+        .context("multi-module mini-cache path layout changed during compilation")?;
+    validate_auxiliary_output_path(&destination, game, "multi-module mini-cache")?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&destination)
+        .with_context(|| format!("creating {}", mini_path.display()))?;
+    if let Err(error) = std::io::Write::write_all(&mut file, &mini).and_then(|()| file.sync_all()) {
+        // Never leave a truncated artifact behind that could be mistaken for a usable mini-cache.
+        // Neutralize through the exact handle just created: the path may already point at a
+        // different file when another process can write to the destination directory.
+        let cleanup = file
+            .set_len(0)
+            .and_then(|()| file.sync_all())
+            .map(|()| "; the partial file was reduced to zero bytes and must be removed before retrying".to_owned())
+            .unwrap_or_else(|neutralize| format!("; neutralizing the partial file failed too: {neutralize}"));
+        bail!("writing {}: {error}{cleanup}", mini_path.display());
+    }
+    let has_edit = authored
+        .iter()
+        .any(|(_, op)| *op == FullGraphCompileOperationV1::Edit);
+    // Name an edited shipped module in the spec entry when there is one: deploy requires an
+    // `edit` mini to carry at least one module that exists in the cache.
+    let spec_module = authored
+        .iter()
+        .find(|(_, op)| *op == FullGraphCompileOperationV1::Edit)
+        .map(|(name, _)| *name)
+        .unwrap_or(names[0]);
+    let mut report = String::new();
+    let _ = writeln!(
+        report,
+        "multi-module mini-cache -> {} ({} modules, {} bytes)",
+        mini_path.display(),
+        names.len(),
+        mini.len()
+    );
+    for (name, op) in &authored {
+        let _ = writeln!(report, "  {:<4} {name}", format!("{op:?}").to_lowercase());
+    }
+    let _ = writeln!(
+        report,
+        "bundle spec entry: {{ \"op\": \"{}\", \"module_name\": \"{}\", \"mini_cache\": \"{}\" }}",
+        if has_edit { "edit" } else { "add" },
+        spec_module,
+        mini_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    );
+    Ok(PublishedMini {
+        path: mini_path.to_path_buf(),
+        file,
+        report,
+    })
+}
+
+/// A side output of the full-graph command (mini-cache, receipt) could not be produced after the
+/// complete cache was already published. The command's product is all-or-nothing: reduce the
+/// retained cache to zero bytes so the next run is not blocked by a no-clobber destination that
+/// looks like a usable result, and neutralize an already published mini-cache through its retained
+/// handle so it cannot describe the neutralized cache.
+fn fail_after_full_graph_side_output_error<T>(
+    artifact: &gore_as::compile::FullGraphCompileArtifactV1,
+    label: &str,
+    published_mini: Option<&PublishedMini>,
     primary: String,
 ) -> Result<T> {
+    let mini_cleanup = published_mini
+        .map(|mini| match mini.neutralize() {
+            Ok(()) => format!(
+                "; the published mini-cache at {} was reduced to zero bytes and must be removed before retrying",
+                mini.path.display()
+            ),
+            Err(error) => format!(
+                "; neutralizing the published mini-cache at {} failed too: {error}",
+                mini.path.display()
+            ),
+        })
+        .unwrap_or_default();
     match artifact.neutralize() {
         Ok(()) => bail!(
-            "GENERATION_RECEIPT_PUBLICATION_FAILED_OUTPUT_NEUTRALIZED: {primary}; the exact retained cache at {} was reduced to zero bytes and must be removed before retrying",
+            "{label}_PUBLICATION_FAILED_OUTPUT_NEUTRALIZED: {primary}; the exact retained cache at {} was reduced to zero bytes and must be removed before retrying{mini_cleanup}",
             artifact.path().display()
         ),
         Err(cleanup) => bail!(
-            "GENERATION_RECEIPT_RECOVERY_REQUIRED: {primary}; failed to neutralize the retained cache at {}: {cleanup}",
+            "{label}_RECOVERY_REQUIRED: {primary}; failed to neutralize the retained cache at {}: {cleanup}{mini_cleanup}",
             artifact.path().display()
         ),
     }
@@ -3112,6 +3363,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
         AsCmd::Compile {
             src,
             out,
+            mini,
             work_dir,
             game,
             no_diagnostics,
@@ -3122,6 +3374,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             compile_full_graph_command(
                 src,
                 out,
+                mini,
                 work_dir,
                 game,
                 no_diagnostics,
@@ -3574,16 +3827,28 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 out.display()
             );
         }
-        AsCmd::Splice { base, mini, out } => {
+        AsCmd::Splice {
+            base,
+            mini,
+            upsert,
+            out,
+        } => {
             let base_b = read_module_cache(&base)?;
             let mini_b = read_module_cache(&mini)?;
             let before = module_count(&base_b);
             let mut guard = gore_as::cache::splice::SequentialMiniGuard::new(&base_b)
                 .context("validating splice base")?;
-            let spliced = guard.compose_add(&base_b, &mini_b).context("splicing")?;
+            let spliced = if upsert {
+                guard
+                    .compose_upsert(&base_b, &mini_b)
+                    .context("splicing (upsert)")?
+            } else {
+                guard.compose_add(&base_b, &mini_b).context("splicing")?
+            };
             std::fs::write(&out, &spliced).with_context(|| format!("writing {}", out.display()))?;
             println!(
-                "spliced: {} modules -> {} ; {} -> {} bytes ; wrote {}",
+                "spliced{}: {} modules -> {} ; {} -> {} bytes ; wrote {}",
+                if upsert { " (upsert)" } else { "" },
                 before,
                 module_count(&spliced),
                 base_b.len(),

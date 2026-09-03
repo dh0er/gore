@@ -5413,6 +5413,47 @@ fn charge_script_phase_bytes(
     Ok(())
 }
 
+/// A multi-module entry's `module_name` must name one of the modules the mini carries, whatever
+/// its op: otherwise a mistyped target is ignored while composition rewrites whatever the mini
+/// happens to hold, and the same bundle that deploys here is rejected by Manager import.
+pub(crate) fn require_multi_module_carried_target(
+    mini: &[u8],
+    op: &str,
+    manifest_module: &str,
+) -> Result<()> {
+    let carried = gore_as::cache::walk_modules::module_names(mini)
+        .map_err(|error| ModError::Other(format!("reading script mini modules: {error}")))?;
+    if carried.iter().any(|name| name == manifest_module) {
+        return Ok(());
+    }
+    Err(ModError::Other(format!(
+        "script {op} {manifest_module:?} names a module the mini does not carry (it carries {carried:?})"
+    )))
+}
+
+/// A multi-module `edit` composes as an upsert, so it must really edit something: refuse a mini
+/// none of whose modules exists in the running cache, exactly as a single-module edit of a missing
+/// target fails. An all-new mini is declared with op `add`.
+pub(crate) fn require_multi_module_edit_target(
+    running: &[u8],
+    mini: &[u8],
+    manifest_module: &str,
+) -> Result<()> {
+    let carried = gore_as::cache::walk_modules::module_names(mini)
+        .map_err(|error| ModError::Other(format!("reading script mini modules: {error}")))?;
+    let existing: std::collections::HashSet<String> =
+        gore_as::cache::walk_modules::module_names(running)
+            .map_err(|error| ModError::Other(format!("reading script cache modules: {error}")))?
+            .into_iter()
+            .collect();
+    if carried.iter().any(|name| existing.contains(name)) {
+        return Ok(());
+    }
+    Err(ModError::Other(format!(
+        "script edit {manifest_module:?} carries modules {carried:?}, none of which exists in the script cache; declare an all-new mini with op \"add\""
+    )))
+}
+
 /// Persist one canonicalized mini without retaining its bytes in memory. `used` is a phase-local
 /// disk-output budget, deliberately separate from both source-read passes.
 pub(crate) fn seal_script_mini(
@@ -8300,12 +8341,26 @@ fn prepare(
                         &mut canonical_read_bytes,
                         MAX_SCRIPT_MINI_TOTAL_BYTES,
                     )?;
+                    // Every multi-module entry must name one of its carried modules, whatever
+                    // its op; an edit additionally needs an existing target.
+                    if gore_as::cache::walk_modules::module_count(&mini) > 1 {
+                        require_multi_module_carried_target(&mini, &e.op, &e.module)?;
+                    }
                     running = match e.op.as_str() {
                         "add" => {
                             script_merge_guard
                                 .compose_add(&running, &mini)
                                 .map_err(|err| {
                                     ModError::Other(format!("splice {}: {err}", e.module))
+                                })?
+                        }
+                        // A multi-module mini edits and adds its modules as one unit.
+                        "edit" if gore_as::cache::walk_modules::module_count(&mini) > 1 => {
+                            require_multi_module_edit_target(&running, &mini, &e.module)?;
+                            script_merge_guard
+                                .compose_upsert(&running, &mini)
+                                .map_err(|err| {
+                                    ModError::Other(format!("replace {}: {err}", e.module))
                                 })?
                         }
                         "edit" => script_merge_guard
