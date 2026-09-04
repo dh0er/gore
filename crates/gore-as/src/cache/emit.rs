@@ -967,10 +967,21 @@ fn emit_function_ctor(
     for (slot, ty) in enum_field_copy_slots(f, refs, fields) {
         enum_overrides.entry(slot).or_insert(ty);
     }
-    // (Slots pushed into enum parameters — `enum_argument_slots` — are NOT typed here: an
-    // enum-typed local still reads as an int in the comparisons and stores around it, and the
-    // recompile refused the first tree that carried them. Measured: crash.)
-    let _ = enum_argument_slots(f, refs);
+    // Slots pushed straight into ENUM parameters carry that enum. So does everything a raw
+    // four-byte copy connects them to — the literal temporary copied in (`SetV1 v2, 0;
+    // CpyVtoV4 v1, v2`), the local copied on (`CpyVtoV4 v12, v11`) — as ONE class: typing a
+    // slot without its copy partners made the first two attempts crash ("Can't implicitly
+    // convert from 'const ECBT_NodeStatus' to 'int'"). The class is typed after the retain
+    // below, all of it or none of it.
+    // Gated: measured as a net loss (832 -> 920, an extra `CpyVtoV4` per typed argument in 89
+    // functions) — the seed is right about the TYPE, wrong about the NAME: vanilla passes the
+    // enumerator through a compiler temporary, not through a declared local. Kept for the
+    // experiment behind GORE_AS_ENUM_ARGS.
+    let argument_enums = if std::env::var_os("GORE_AS_ENUM_ARGS").is_some() {
+        enum_argument_slots(f, refs)
+    } else {
+        HashMap::new()
+    };
     enum_overrides.retain(|slot, ty| {
         !numkinds.contains_key(slot)
             && !float_args.contains_key(slot)
@@ -980,6 +991,121 @@ fn emit_function_ctor(
             && outref_overrides.get(slot).is_none_or(|other| other == ty)
             && slot_overrides.get(slot).is_none_or(|other| other == ty)
     });
+    if !argument_enums.is_empty() {
+        if let Ok(instrs) = disassemble(&f.bytecode) {
+            let w = |ins: &super::disasm::Instr, i: usize| ins.words.get(i).map(|w| *w as i16 as i32);
+            // Every slot's opcode profile must be enum-compatible: a slot that is also used in
+            // arithmetic, as an address or through a float op is an int the source declared.
+            let profile_ok = |slot: i32| {
+                instrs.iter().all(|ins| {
+                    ins.words.iter().enumerate().all(|(wi, &word)| {
+                        if word as i16 as i32 != slot {
+                            return true;
+                        }
+                        match ins.op.name {
+                            "SetV1" | "SetV2" | "SetV4" | "CpyRtoV4" | "CpyVtoR4" | "PshV4" => wi == 0,
+                            "CpyVtoV4" => wi < 2,
+                            "sbTOi" | "swTOi" | "ubTOi" | "uwTOi" => wi == 1,
+                            "CMPIi" | "CMPi" => true,
+                            _ => false,
+                        }
+                    })
+                })
+            };
+            let edges: Vec<(i32, i32)> = instrs
+                .iter()
+                .filter(|ins| ins.op.name == "CpyVtoV4")
+                .filter_map(|ins| w(ins, 0).zip(w(ins, 1)))
+                .filter(|(a, b)| *a > 0 && *b > 0)
+                .collect();
+            for (seed, ty) in &argument_enums {
+                let mut class: HashSet<i32> = HashSet::from([*seed]);
+                loop {
+                    let before = class.len();
+                    for (a, b) in &edges {
+                        if class.contains(a) || class.contains(b) {
+                            class.insert(*a);
+                            class.insert(*b);
+                        }
+                    }
+                    if class.len() == before {
+                        break;
+                    }
+                }
+                let verdict = |slot: &i32| -> Option<&'static str> {
+                    if !profile_ok(*slot) {
+                        return Some("profile");
+                    }
+                    if numkinds.contains_key(slot) {
+                        return Some("numkind");
+                    }
+                    if float_args.contains_key(slot) {
+                        return Some("float-arg");
+                    }
+                    // `keep_ints` holds the slot BECAUSE it was pushed into the enum parameter
+                    // (the structurer's cast-wrapper hint): the seed itself is exempt, its copy
+                    // partners are not.
+                    if keep_ints.contains(slot) && !argument_enums.contains_key(slot) {
+                        return Some("keep-int");
+                    }
+                    if int_refs.contains(slot) {
+                        return Some("int-ref");
+                    }
+                    if small_args.contains_key(slot) {
+                        return Some("small-arg");
+                    }
+                    if outref_overrides.get(slot).is_some_and(|other| other != ty) {
+                        return Some("outref");
+                    }
+                    if slot_overrides.get(slot).is_some_and(|other| other != ty) {
+                        return Some("slot-override");
+                    }
+                    if enum_overrides.get(slot).is_some_and(|have| have != ty) {
+                        return Some("other-enum");
+                    }
+                    if argument_enums.get(slot).is_some_and(|other| other != ty) {
+                        return Some("other-seed");
+                    }
+                    // A call result landing in the slot must be of this enum: an `int` (or
+                    // another enum) result typed by a copy partner is "Can't implicitly
+                    // convert from 'int' to 'EWeather'" (measured).
+                    for (at, ins) in instrs.iter().enumerate() {
+                        if ins.op.name != "CpyRtoV4" || w(ins, 0) != Some(*slot) {
+                            continue;
+                        }
+                        let Some(call) = instrs[..at].iter().rev().find(|c| c.op.is_call()) else {
+                            return Some("call-return");
+                        };
+                        let returned = match call.op.name {
+                            "CALLSYS" | "Thiscall1" => refs
+                                .func_ret_by_ptr(call.qwords.first().copied().unwrap_or(0) as i64)
+                                .map(|d| d.base_name(refs)),
+                            _ => refs
+                                .func_ret_by_id(call.dwords.first().copied().unwrap_or(0) as i32)
+                                .map(|d| d.base_name(refs)),
+                        };
+                        if returned.as_deref() != Some(ty.as_str()) {
+                            return Some("call-return");
+                        }
+                    }
+                    None
+                };
+                let failing: Vec<(i32, &str)> = class
+                    .iter()
+                    .filter_map(|slot| verdict(slot).map(|why| (*slot, why)))
+                    .collect();
+                if diag_enabled("GORE_AS_ENUM_DIAG") {
+                    eprintln!("[enum-class] seed={seed} ty={ty} class={class:?} failing={failing:?}");
+                }
+                let consistent = failing.is_empty();
+                if consistent {
+                    for slot in class {
+                        enum_overrides.entry(slot).or_insert_with(|| ty.clone());
+                    }
+                }
+            }
+        }
+    }
     // Keep the bool refinement scoped to the same proven enum state-machine slice. This is the
     // only place it is required for semantic lowering, and avoids changing unrelated constructor
     // scratch solely because it happens to initialize a bool field.
