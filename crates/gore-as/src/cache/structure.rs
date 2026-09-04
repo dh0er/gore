@@ -560,10 +560,14 @@ impl Ctx<'_> {
     /// compiler reuses one scratch slot for two different constant returns, and a single name over
     /// both lives can only carry one of them.
     fn const_return_literal(&self, at: usize) -> Option<String> {
-        if self.ret_ty.map(|ty| ty.base_name(self.refs))? != "int" {
+        // Every primitive return type: an `int`-only fold LOST the float and bool constants
+        // (`case 1: return -55.0;` came out as `return local_4;` with the declaration's zero).
+        let ret = self.ret_ty.map(|ty| ty.base_name(self.refs))?;
+        if !matches!(ret.as_str(), "int" | "float" | "float32" | "bool") {
             return None;
         }
-        let slot = self.instrs.get(at)?.words.first().map(|w| *w as i16 as i32)?;
+        let read = self.instrs.get(at)?;
+        let slot = read.words.first().map(|w| *w as i16 as i32)?;
         let here = self.const_return_at(at, slot)?;
         // ONE constant return through a slot is a name the source may well have written, and the
         // folds behind us already turn `local_N = K; return local_N;` into `return K;` with no
@@ -576,7 +580,7 @@ impl Ctx<'_> {
             .enumerate()
             .filter(|(other, ins)| {
                 *other != at
-                    && ins.op.name == "CpyVtoR4"
+                    && ins.op.name == read.op.name
                     && ins.words.first().map(|w| *w as i16 as i32) == Some(slot)
             })
             .filter_map(|(other, _)| self.const_return_at(other, slot));
@@ -604,8 +608,27 @@ impl Ctx<'_> {
             back -= 2;
         }
         let set = self.instrs.get(back.checked_sub(1)?)?;
-        (set.op.name == "SetV4" && set.words.first().map(|w| *w as i16 as i32) == Some(slot))
-            .then(|| (set.dwords.first().copied().unwrap_or(0) as i32).to_string())
+        if set.words.first().map(|w| *w as i16 as i32) != Some(slot) {
+            return None;
+        }
+        let ret = self.ret_ty.map(|ty| ty.base_name(self.refs))?;
+        match (set.op.name, ret.as_str()) {
+            ("SetV4", "int") => {
+                Some((set.dwords.first().copied().unwrap_or(0) as i32).to_string())
+            }
+            ("SetV4", "float32") => Some(fmt_float(
+                ConstBits::W4(set.dwords.first().copied().unwrap_or(0)),
+                false,
+            )),
+            ("SetV8", "float") => Some(fmt_float(
+                ConstBits::W8(set.qwords.first().copied().unwrap_or(0)),
+                true,
+            )),
+            ("SetV1", "bool") | ("SetV4", "bool") => {
+                Some((set.dwords.first().copied().unwrap_or(0) != 0).to_string())
+            }
+            _ => None,
+        }
     }
 
     fn slot_name(&self, off: i32) -> String {
@@ -4288,8 +4311,70 @@ fn block_stmts_in(
                                         && n.words.first().map(|w| *w as i16 as i32)
                                             == slot_num.parse::<i32>().ok()
                                 });
-                                if !consumed_next && slot_num.parse::<i32>().is_ok() {
+                                // Pushed at once as an argument, but read again once the call
+                                // has returned: a temporary would be destroyed right after the
+                                // call, so this is the variable the source declared here.
+                                let reused_after_call = consumed_next
+                                    && slot_num.parse::<i32>().ok().is_some_and(|slot| {
+                                        let rest = &ctx.instrs[lo + k + 2..];
+                                        let Some(call_at) = rest.iter().position(|n| {
+                                            matches!(
+                                                n.op.name,
+                                                "CALL" | "CALLSYS" | "CALLINTF" | "CALLBND"
+                                            )
+                                        }) else {
+                                            return false;
+                                        };
+                                        let after = &rest[call_at + 1..];
+                                        let mut j = 0usize;
+                                        while j < after.len() {
+                                            let n = &after[j];
+                                            let destructor = n.op.name == "PSF"
+                                                && n.words.first().map(|w| *w as i16 as i32)
+                                                    == Some(slot)
+                                                && after.get(j + 1).is_some_and(|d| {
+                                                    d.op.name == "CALLSYS"
+                                                        && ctx
+                                                            .refs
+                                                            .func_by_ptr(
+                                                                d.qwords.first().copied().unwrap_or(0)
+                                                                    as i64,
+                                                            )
+                                                            .is_some_and(|name| name.starts_with("$beh2"))
+                                                });
+                                            if destructor {
+                                                j += 2;
+                                                continue;
+                                            }
+                                            if super::bytediff::addressed_slots(n).contains(&slot) {
+                                                return true;
+                                            }
+                                            j += 1;
+                                        }
+                                        false
+                                    });
+                                if (!consumed_next || reused_after_call)
+                                    && slot_num.parse::<i32>().is_ok()
+                                {
                                     out.push(format!("{CTOR_SITE} {slot_num}"));
+                                } else if consumed_next
+                                    && stack.len() >= 2
+                                    && top
+                                        .ty
+                                        .as_deref()
+                                        .and_then(|t| t.bytes().next())
+                                        .is_some_and(|b| matches!(b, b'F' | b'T'))
+                                {
+                                    // Operands of the consuming expression already stand below
+                                    // the receiver: the source wrote the construction IN the
+                                    // expression (`FString().Append(…)` after the arguments were
+                                    // evaluated). A declaration would construct before them.
+                                    let name = top.s.clone();
+                                    let ty = top.ty.clone().unwrap_or_default();
+                                    stack.pop();
+                                    flush!();
+                                    out.push(format!("{name} = {ty}();"));
+                                    continue;
                                 }
                             }
                         }
@@ -4425,6 +4510,15 @@ fn block_stmts_in(
                                 // behaviour: slot unwritten) rather than emit the `\u{2}` sentinel
                                 // that would force-stub the whole function.
                                 if !rendered.contains('\u{2}') {
+                                    if let Some(slot) = recv
+                                        .s
+                                        .strip_prefix("local_")
+                                        .and_then(|rest| rest.parse::<i32>().ok())
+                                    {
+                                        RVO_PRODUCERS.with(|v| {
+                                            v.borrow_mut().push((slot, CUR_INSTR.with(|c| c.get())))
+                                        });
+                                    }
                                     flush!();
                                     out.push(format!("{} = {ty}({rendered});", recv.s));
                                 }
@@ -5481,7 +5575,12 @@ fn block_stmts_in(
                         .strip_prefix("local_")
                         .and_then(|d| d.parse::<i32>().ok());
                     let src_is_const = src_slot.is_some_and(|n| const_obj_slots.contains(&n));
-                    if dst_ok && src_ok && !src_is_const {
+                    // A const-typed local assigned to a field of `this` keeps the statement:
+                    // vanilla compiled that assignment, so the field takes what the local
+                    // holds, and the const reading of the slot was ours. Dropping it lost the
+                    // field's value (`this.SearchTerritory = this.AI.GetCurrentTerritory();`).
+                    let const_into_own_field = src_is_const && dst.s.starts_with("this.");
+                    if dst_ok && src_ok && (!src_is_const || const_into_own_field) {
                         flush!();
                         // batch-41d (CLASS 2): the member field type PROVABLY derives from the
                         // source's type (`this.ActiveActionTask (UAITask_CombatMove) =
@@ -6839,10 +6938,13 @@ impl Structurer<'_> {
                     // outer test true, the inner false — runs nothing at all, and rendered as
                     // `A && B` it costs the carrier the compiler builds for a real `&&` (which
                     // vanilla always has where the source wrote one). Let it fall through.
+                    // The same holds for an UNCONDITIONAL jump out of the then-arm to that
+                    // place: `if (A) { if (B) X(); else return R; }` — the `X()` path jumps to
+                    // what follows the outer `if`, so what follows is not its else.
                     let shares_the_tail = taken.is_some_and(|t| {
                         (then_idx.unwrap_or(i + 1)..then_end).any(|b| {
                             b < self.g.blocks.len()
-                                && is_cond_op(self.jump_op(b))
+                                && (is_cond_op(self.jump_op(b)) || self.jump_op(b) == "JMP")
                                 && self.g.blocks[b].succs.first().copied() == Some(t)
                         })
                     });
@@ -8021,11 +8123,13 @@ impl Structurer<'_> {
             } else if is_cond_op(lt) {
                 return None;
             } else {
-                // plain fallthrough: only into a physically adjacent JOIN
+                // plain fallthrough: only into a physically adjacent JOIN. The source's last
+                // case ended without a `break` — writing one costs a `JMP` to the very next
+                // instruction that vanilla does not have.
                 if end != join_idx {
                     return None;
                 }
-                append_break = true;
+                append_break = false;
             }
             let is_def = b == def_off;
             let trap = trap_ops && end - start == 1;

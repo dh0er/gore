@@ -745,7 +745,16 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver, defaults: Option<&[
         // Drop a leading `const`: UE-AS UPROPERTY members aren't const-assignable, yet the
         // generated constructor assigns them — keeping `const` causes "Cannot assign" errors.
         let ty = f.ty.render(refs);
-        let ty = ty.strip_prefix("const ").unwrap_or(&ty);
+        // A handle to a CONST OBJECT keeps its `const`: the handle itself is re-pointable, and
+        // vanilla assigns it (`SearchTerritory = AI.GetCurrentTerritory();` returns a const
+        // handle; without the qualifier on the field that assignment does not compile). Only a
+        // const VALUE or a read-only handle drops the qualifier, which the generated
+        // constructor could not assign ("Cannot assign, variable is const").
+        let keeps_const = f.ty.is_object_const
+            && !f.ty.is_read_only
+            && f.ty.token == 5
+            && is_object_handle_type(&ty);
+        let ty = if keeps_const { ty.as_str() } else { ty.strip_prefix("const ").unwrap_or(&ty) };
         if f.is_uproperty {
             let _ = writeln!(s, "    UPROPERTY()");
         }
@@ -955,6 +964,9 @@ fn emit_function_ctor(
         &num_anti,
     );
     let mut enum_overrides = infer_enum_flow(f, refs);
+    for (slot, ty) in enum_field_copy_slots(f, refs, fields) {
+        enum_overrides.entry(slot).or_insert(ty);
+    }
     enum_overrides.retain(|slot, ty| {
         !numkinds.contains_key(slot)
             && !float_args.contains_key(slot)
@@ -1054,12 +1066,14 @@ fn emit_function_ctor(
     // int-family hints below only describe how a value is passed.
     let mut proven_bool = not_operand_slots(f);
     proven_bool.extend(comparison_result_slots(f));
+    proven_bool.extend(copied_bool_slots(f));
     proven_bool.extend(
         call_result_types
             .iter()
             .filter(|(_, ty)| *ty == "bool")
             .map(|(slot, _)| *slot),
     );
+    bool_overrides.extend(copied_bool_slots(f));
     bool_overrides.retain(|slot| {
         let proven = proven_bool.contains(slot);
         !enum_overrides.contains_key(slot)
@@ -1351,11 +1365,9 @@ fn emit_function_ctor(
     // that call's argument run — a statement (`FVector Dir = -Fwd;` in front of
     // `CanMoveStraightInDirection(…, Dir, …)`), where the inline spelling evaluates it among
     // the arguments and in another order.
-    statement_producers.extend(rvo_statement_producers(
-        f,
-        refs,
-        &super::structure::take_rvo_producers(),
-    ));
+    let (rvo_statements, inline_callees) =
+        rvo_statement_producers(f, refs, &super::structure::take_rvo_producers());
+    statement_producers.extend(rvo_statements);
     // The structurer left a marker wherever it met a default construction of a local that was
     // not consumed at once — the source's own declaration, at its own position. For a value
     // struct vanilla builds only behind a branch, the marker becomes that declaration and the
@@ -1540,7 +1552,13 @@ fn emit_function_ctor(
     let body = drop_dead_stores(&body);
     pass_trace("drop_dead_stores", &body);
     let body =
-        fold_literal_temporaries(&body, refs, &declared_locals, &value_pushed_literal_slots(f));
+        fold_literal_temporaries(
+            &body,
+            refs,
+            &declared_locals,
+            &value_pushed_literal_slots(f),
+            &slots_vanilla_initialises(f),
+        );
     pass_trace("fold_literal_temporaries", &body);
     let body = fold_constant_comparisons(&body);
     pass_trace("fold_constant_comparisons", &body);
@@ -1573,6 +1591,7 @@ fn emit_function_ctor(
         &copied_on,
         &hoisted,
         &spilled,
+        &inline_callees,
     );
     pass_trace("inline_call_argument_temporaries", &body);
     // Runs after the producers have moved into their readers: only then is the value arm of a
@@ -1623,6 +1642,7 @@ fn emit_function_ctor(
         &copied_on,
         &hoisted,
         &spilled,
+        &inline_callees,
     );
     pass_trace("inline_call_argument_temporaries", &body);
     let body = rewrite_operator_calls(&body);
@@ -1650,6 +1670,7 @@ fn emit_function_ctor(
         &copied_on,
         &hoisted,
         &spilled,
+        &inline_callees,
     );
     pass_trace("inline_call_argument_temporaries", &body);
     let body = drop_unreachable_statements(&body);
@@ -1663,7 +1684,13 @@ fn emit_function_ctor(
     pass_trace("fold_condition_temporaries", &body);
     let body = fold_alias_copies(&body, &declared_locals);
     pass_trace("fold_alias_copies", &body);
-    let body = fold_copy_out_temporaries(&body, &declared_locals, &const_result_slots, fields);
+    let body = fold_copy_out_temporaries(
+        &body,
+        &declared_locals,
+        &const_result_slots,
+        fields,
+        &call_result_copies(f),
+    );
     pass_trace("fold_copy_out_temporaries", &body);
     let body = fold_cast_operands(&body, &declared_locals, &call_result_types);
     pass_trace("fold_cast_operands", &body);
@@ -1986,13 +2013,16 @@ fn emit_function_ctor(
             }
         }
         let (body, suppressed) = rewrite_ctor_only_locals(&body, &locals);
+        pass_trace("rewrite_ctor_only_locals", &body);
         // FAbilityTaskExecutor's opAssign takes a NON-const reference, so assigning a by-value
         // call result to a declared local ('local = DrawMeleeWeapon(AI);') fails "Cannot pass a
         // temporary value into non-const reference parameter" (2841 in-game errors). The only
         // legal form is declaration-with-initializer (copy-construction). Rewrite qualifying
         // executor locals to decl-init at their assignment sites.
         let (body, na_suppressed) = rewrite_no_assign_locals(&body, &locals);
+        pass_trace("rewrite_no_assign_locals", &body);
         let (body, discarded) = drop_unread_call_results(&body, &locals, refs);
+        pass_trace("drop_unread_call_results", &body);
         // Batch-20 Class A residue: executor locals whose reference shape failed the decl-init
         // gates above (multi-assign with reads, read-before-assign, cross-block reads) still
         // carry `local_N = <call>;` assignments — temporary into non-const opAssign. Split each
@@ -2034,6 +2064,7 @@ fn emit_function_ctor(
             refs,
             &declared_locals,
             &value_pushed_literal_slots(f),
+            &slots_vanilla_initialises(f),
         );
         pass_trace("fold_literal_temporaries#2", &body);
         let body = rewrite_no_assign_residual_assigns(&body, &locals, &ret);
@@ -2061,10 +2092,12 @@ fn emit_function_ctor(
         pass_trace("drop_redundant_conversions", &body);
         let (body, value_suppressed) =
             rewrite_value_decl_init(&body, &locals, refs, &copy_constructed_slots(f, refs), &reference_locals);
+        pass_trace("rewrite_value_decl_init", &body);
         // A local that receives a CONST call result has to be const as well, and a const local is
         // declared where it gets its value.
         let (body, const_suppressed) =
             rewrite_const_decl_init(&body, &locals, &const_result_slots, refs);
+        pass_trace("rewrite_const_decl_init", &body);
         // Everything left: a local whose first reference is the assignment that gives it its
         // value was DECLARED there in the source. Hoisting the declaration and assigning
         // afterwards makes the compiler spend its own temporary for the value and copy it into
@@ -2092,8 +2125,9 @@ fn emit_function_ctor(
                 &already_declared_at_use,
                 &reference_locals,
                 &bare_declaration_slots(f, refs),
-                &call_result_declared_at_initializer(f),
+                &call_result_declared_at_initializer(f, refs),
             );
+        pass_trace("rewrite_first_use_decl_init", &body);
         // A primitive or enum whose every write takes its value STRAIGHT — `CpyRtoV4 v22`,
         // `SetV4 v56, 2` — was declared at each of those writes, one declaration per life, in
         // whatever block the write stands: an assignment to a variable that already exists goes
@@ -2116,6 +2150,7 @@ fn emit_function_ctor(
             &enum_overrides,
             &reference_locals,
         );
+        pass_trace("rewrite_primitive_lives_decl_init", &body);
         let placed_so_far: HashSet<i32> =
             placed_so_far.union(&life_suppressed).copied().collect();
         let (body, first_write_suppressed) = rewrite_bare_decl_at_first_write(
@@ -2125,6 +2160,7 @@ fn emit_function_ctor(
             &already_declared_at_use,
             &placed_so_far,
         );
+        pass_trace("rewrite_bare_decl_at_first_write", &body);
         let first_write_suppressed: HashSet<i32> = first_write_suppressed
             .union(&life_suppressed)
             .copied()
@@ -2165,7 +2201,18 @@ fn emit_function_ctor(
                 // first source-level reference is a whole-function-scope, write-only assignment;
                 // otherwise initialize it to the underlying zero value so branch-only writes do
                 // not trip warnings-as-errors in the game compiler.
-                let _ = writeln!(s, "{ind}    {ty} local_{slot} = {ty}(0);");
+                // …and only where vanilla's first touch of the slot is a write of its own: a
+                // slot it never stores at entry was declared bare, and the initialiser would be
+                // a store vanilla does not have.
+                // `vanilla_initialises` = vanilla's first touch of the slot is a WRITE: no read
+                // runs ahead of it, so the declaration stands bare, exactly as the source's did
+                // (the compiler stores nothing for a bare enum). A slot read first needs the
+                // value the source must have given it.
+                if all_reads_lexically_dominated_by_assignment(&body, *slot) {
+                    let _ = writeln!(s, "{ind}    {ty} local_{slot};");
+                } else {
+                    let _ = writeln!(s, "{ind}    {ty} local_{slot} = {ty}(0);");
+                }
             } else if is_primitive(ty)
                 // A local vanilla never initialized shows up as a `SetV4 v, 0` prologue the
                 // original does not have. The eager initializer is only needed where the value
@@ -2269,7 +2316,16 @@ fn emit_function_ctor(
         // Same text, same reason as the sink: the declaration lives in `s`, its uses in `body`.
         let rendered = spell_out_repeated_temporaries(&rendered, &constructions);
         pass_trace("spell_out_repeated_temporaries", &rendered);
-        let rendered = sink_declarations_to_first_use(&rendered, &late_constructed_slots(f, refs));
+        // A declaration the structurer's construction-site marker placed already stands where
+        // vanilla built the value; sinking it to the first use would carry it past a statement
+        // vanilla evaluated after the construction.
+        let late_but_not_placed: HashSet<i32> = late_constructed_slots(f, refs)
+            .difference(&declared_at_site)
+            .copied()
+            .collect();
+        let rendered = sink_declarations_to_first_use(&rendered, &late_but_not_placed);
+        let rendered = merge_conditional_into_declaration(&rendered);
+        pass_trace("merge_conditional_into_declaration", &rendered);
         pass_trace("sink_declarations_to_first_use", &rendered);
         // And once more here, for the same reason: an accumulator whose declaration was hoisted
         // has its `T X;` in this text and its `X = ...` lines in the body, so the split form is
@@ -2320,7 +2376,13 @@ fn emit_function_ctor(
         let rendered = fold_assignment_receivers(&rendered, &immediately_consumed_defs(f));
         pass_trace("fold_assignment_receivers", &rendered);
         let rendered =
-            fold_copy_out_temporaries(&rendered, &declared_locals, &const_result_slots, fields);
+            fold_copy_out_temporaries(
+                &rendered,
+                &declared_locals,
+                &const_result_slots,
+                fields,
+                &call_result_copies(f),
+            );
         let rendered = fold_cast_operands(&rendered, &declared_locals, &call_result_types);
         pass_trace("fold_cast_operands", &rendered);
         let rendered = fold_enum_round_trips(&rendered, fields, &path_roots, refs);
@@ -2382,6 +2444,7 @@ fn emit_function_ctor(
             refs,
             &arithmetic_temporaries(f),
             &statement_producers,
+            &inline_callees,
         );
         pass_trace("inline_unnamed_value_temporaries", &rendered);
         // Now that the operands carry no names of their own, an in-place update stands directly
@@ -2434,6 +2497,7 @@ fn emit_function_ctor(
             refs,
             &arithmetic_temporaries(f),
             &statement_producers,
+            &inline_callees,
         );
         pass_trace("inline_unnamed_value_temporaries", &rendered);
         }
@@ -2703,7 +2767,14 @@ fn stub_reason(
             };
             return Some(reason.into());
         }
-        if t.contains("(? ") || t.contains(" ?)") || t.contains(" ? ") {
+        // `c ? a : b` is a conditional expression the emitter wrote; the unresolved-operand
+        // placeholder never comes with the `:` of one.
+        let conditional = t.contains(" ? ") && t.contains(" : ");
+        if t.contains("(? ") || t.contains(" ?)") || (t.contains(" ? ") && !conditional) {
+            if diag_enabled("GORE_AS_STUB_DIAG") {
+                let function = TRACE_FUNCTION.with(|name| name.borrow().clone());
+                eprintln!("[stub] {function} unresolved-operand | {t}");
+            }
             return Some("unresolved-operand".into());
         }
     }
@@ -5103,6 +5174,33 @@ fn is_conditional_jump(name: &str) -> bool {
     )
 }
 
+/// Slots a bool VARIABLE lives in: the compiler reads such a variable into a temporary and
+/// applies `NOT` to that, or tests the copy (`CpyVtoV4 t, x; NOT t` / `CpyVtoV4 t, x; CpyVtoR1
+/// t`). Only a bool takes `NOT`, and a 4-byte copy that is tested one byte wide is a bool as
+/// well — typed `int` from its copies alone, `bool Done = false; while (!Done)` came out as
+/// `int Done = false`, which does not compile.
+fn copied_bool_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w = |ins: &super::disasm::Instr, i: usize| ins.words.get(i).map(|w| *w as i16 as i32);
+    let mut out = HashSet::new();
+    for pair in instrs.windows(2) {
+        let (copy, test) = (&pair[0], &pair[1]);
+        if copy.op.name != "CpyVtoV4" {
+            continue;
+        }
+        let (Some(dst), Some(src)) = (w(copy, 0), w(copy, 1)) else {
+            continue;
+        };
+        let tests_the_copy = matches!(test.op.name, "NOT" | "CpyVtoR1") && w(test, 0) == Some(dst);
+        if tests_the_copy && src > 0 {
+            out.insert(src);
+        }
+    }
+    out
+}
+
 /// Slots `NOT` is applied to — AngelScript's logical not, which only takes a bool variable.
 fn not_operand_slots(f: &Func) -> HashSet<i32> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
@@ -6796,6 +6894,7 @@ fn fold_literal_temporaries(
     refs: &RefResolver,
     locals: &BTreeMap<i32, String>,
     pushed_by_value: &HashSet<i32>,
+    vanilla_writes_first: &HashSet<i32>,
 ) -> String {
     let trailing_newline = body.ends_with('\n');
     let lines: Vec<&str> = body.lines().collect();
@@ -6875,9 +6974,13 @@ fn fold_literal_temporaries(
                 && read_is_a_comparison
                 && a_loop_carries_the_write_back_to_the_read(&folded, use_line, region_end)
             {
+                // …and only where the hoisted declaration WILL carry that default: a slot
+                // vanilla's own first touch writes is declared bare (the store here is
+                // vanilla's), and dropping it would leave the accumulator uninitialised.
                 let declaration_restates_it = folded[..definition]
                     .iter()
                     .all(|line| count_ident(line, &ident) == 0)
+                    && !vanilla_writes_first.contains(&slot)
                     && locals
                         .get(&slot)
                         .is_some_and(|ty| is_primitive(ty) && default_for(ty) == literal);
@@ -7038,6 +7141,7 @@ fn inline_call_argument_temporaries(
     copied_on: &HashSet<i32>,
     hoisted: &HashSet<i32>,
     spilled: &HashSet<i32>,
+    inline_callees: &HashMap<i32, Vec<String>>,
 ) -> String {
     const MAX_ARGUMENT_INLINE_PASSES: usize = 8;
     let trailing_newline = body.ends_with('\n');
@@ -7078,6 +7182,12 @@ fn inline_call_argument_temporaries(
             candidates.extend(
                 receiver_temporary(&lines[index]).map(|temp| (temp, Position::Receiver)),
             );
+            // `local_18.Field = value;` — the object a member write runs on is a receiver as
+            // much as a call's: `Cast<T>(x).Field = v;` is how vanilla wrote the member on the
+            // cast's own temporary.
+            candidates.extend(
+                member_write_receiver(&lines[index]).map(|temp| (temp, Position::Receiver)),
+            );
             // A temporary is not only a call's argument or receiver: it is any operand the
             // statement reads (`if (local_14 >= local_10)`). Those move only with type evidence
             // — see the gate in `inline_temporary_into`.
@@ -7096,7 +7206,7 @@ fn inline_call_argument_temporaries(
                 if inline_temporary_into(
                     &mut lines, index, &temp, &callee, position, locals, refs, fields, call_types,
                     statement_producers, temporary_receivers, loop_elements, widened, aliased,
-                    copied_on, hoisted, spilled,
+                    copied_on, hoisted, spilled, inline_callees,
                 ) {
                     changed = true;
                     moved = true;
@@ -7141,6 +7251,7 @@ fn inline_temporary_into(
     copied_on: &HashSet<i32>,
     hoisted: &HashSet<i32>,
     spilled: &HashSet<i32>,
+    inline_callees: &HashMap<i32, Vec<String>>,
 ) -> bool {
     let receiver = position == Position::Receiver;
     // A loop header is evaluated once per ITERATION, and this producer stands before the loop.
@@ -7176,13 +7287,27 @@ fn inline_temporary_into(
         inline_reject("spilled", callee, temp, &lines[index]);
         return false;
     }
-    if temp
-        .strip_prefix("local_")
-        .and_then(|slot| slot.parse::<i32>().ok())
-        .is_some_and(|slot| statement_producers.contains(&slot))
-    {
-        inline_reject("order", callee, &temp, &lines[index]);
-        return false;
+    if let Some(slot) = temp.strip_prefix("local_").and_then(|slot| slot.parse::<i32>().ok()) {
+        if statement_producers.contains(&slot) {
+            // The verdict is per slot and the compiler reuses a slot for several values: where
+            // the slot also has producers that were inline, and THIS definition is one of those
+            // calls, the statement verdict belongs to another life of the slot.
+            let this_definition = (index.saturating_sub(4096)..index)
+                .rev()
+                .find_map(|line| definition_value(&lines[line], temp));
+            let this_definition_inline = inline_callees.get(&slot).is_some_and(|names| {
+                this_definition
+                    .and_then(outermost_callee)
+                    .is_some_and(|callee| names.iter().any(|name| name == callee))
+            });
+            // A LITERAL lands in a temporary right before its use whichever way it is written:
+            // the witness speaks about calls the compiler ran early, not about constants.
+            let literal = this_definition.is_some_and(is_plain_literal);
+            if !this_definition_inline && !literal {
+                inline_reject("order", callee, &temp, &lines[index]);
+                return false;
+            }
+        }
     }
     // The slot's declaration converts whenever the captured call's return type is not the type
     // the slot was declared with. Where they agree, the read is plain and the value may take its
@@ -7270,6 +7395,39 @@ fn inline_temporary_into(
         inline_reject("uses", callee, &temp, &lines[index]);
         return false; // this call has to be the only reader of that definition
     }
+    // A redefinition DEEPER than the definition is on one path only. A read after that block, at
+    // the definition's own level, sees the first value on the other path — the slot is a
+    // variable whose value flows past the branch (`Center = A; if (Center == 0) Center = B;
+    // if (Center == 0) …`), not a temporary the compiler retired at the branch.
+    let definition_depth = indent_of(&lines[definition]).len();
+    if region_end < lines.len() && indent_of(&lines[region_end]).len() > definition_depth {
+        let shallow_end = (region_end + 1..lines.len().min(definition + 1 + WINDOW))
+            .find(|line| {
+                definition_value(&lines[*line], temp).is_some()
+                    && indent_of(&lines[*line]).len() <= definition_depth
+            })
+            .unwrap_or(lines.len());
+        let flows_past = (region_end + 1..shallow_end).any(|line| {
+            count_ident(&lines[line], temp) > 0
+                && indent_of(&lines[line]).len() <= definition_depth
+                && definition_value(&lines[line], temp).is_none()
+        });
+        // …unless the redefinition's block has an `else`: then the other arm writes the slot
+        // too (the carrier of a short circuit — `if (c) { x = false; } else { x = b; }
+        // if (x)`), and nothing of the first value survives the join.
+        let inner_depth = indent_of(&lines[region_end]).len();
+        let block_close = (region_end + 1..lines.len())
+            .find(|line| indent_of(&lines[*line]).len() < inner_depth);
+        let has_else = block_close.is_some_and(|close| {
+            (close + 1..lines.len())
+                .find(|line| !lines[*line].trim().is_empty())
+                .is_some_and(|next| lines[next].trim_start().starts_with("else"))
+        });
+        if flows_past && !has_else {
+            inline_reject("flows-past-branch", callee, &temp, &lines[index]);
+            return false;
+        }
+    }
     let value = definition_value(&lines[definition], temp)
         .expect("the definition matched above")
         .to_owned();
@@ -7280,6 +7438,11 @@ fn inline_temporary_into(
     let movable = match position {
         Position::Operand => {
             (operand_read_takes_a_value(&lines[index])
+                // A value STRUCT reached through a call carries no conversion in its
+                // declaration — arithmetic on it is an operator overload taking the value as
+                // it is, like an argument.
+                || (temporary_type(locals, temp).is_some_and(is_value_struct_type)
+                    && is_call_result(&value))
                 // A returned expression whose operands vanilla cleaned up BEFORE building the
                 // return object was written inline: the cleanup is the deferred-argument kind,
                 // which only a temporary gets.
@@ -7958,7 +8121,9 @@ fn fold_condition_temporaries(
     let mut at = 0usize;
     while at < lines.len() {
         let folded = (|| {
-            let (name, value) = slot_store(lines[at])?;
+            // The carrier may already be declared at its store (`bool local_10 = A && B;`):
+            // the declaration goes with the fold, the condition takes the value.
+            let (name, value) = carrier_store(lines[at])?;
             if logical_only && top_level_logical_operator(&value).is_none() {
                 return None;
             }
@@ -8043,9 +8208,25 @@ fn read_once_at(lines: &[&str], at: usize, reader: usize, name: &str) -> bool {
     // the other the reads that follow still want what this store put there. Folding the store
     // away then loses the value those reads were meant to see.
     let store_indent = indent_of(lines[at]).len();
-    for line in &lines[reader + 1..] {
-        if is_definition_line(line, name) && indent_of(line).len() <= store_indent {
-            break;
+    // A redefinition DEEPER than the store shadows the value inside its own block: the reads
+    // that follow it there read what it wrote (the compiler's temporary reused one level
+    // down). Past the block's end the reads may see either value and count again.
+    let mut shadowed_until: Option<usize> = None;
+    for (offset, line) in lines[reader + 1..].iter().enumerate() {
+        let index = reader + 1 + offset;
+        if shadowed_until.is_some_and(|end| index < end) {
+            continue;
+        }
+        shadowed_until = None;
+        if is_definition_line(line, name) {
+            if indent_of(line).len() <= store_indent {
+                break;
+            }
+            let depth = indent_of(line).len();
+            shadowed_until = (index + 1..lines.len())
+                .find(|k| indent_of(lines[*k]).len() < depth)
+                .or(Some(lines.len()));
+            continue;
         }
         if count_ident(line, name) > 0 {
             return false;
@@ -8156,6 +8337,7 @@ fn fold_copy_out_temporaries(
     locals: &BTreeMap<i32, String>,
     const_slots: &HashSet<i32>,
     fields: Option<&HashMap<String, String>>,
+    assigned: &HashSet<i32>,
 ) -> String {
     let lines: Vec<&str> = body.lines().collect();
     let mut kept: Vec<String> = Vec::new();
@@ -8166,6 +8348,12 @@ fn fold_copy_out_temporaries(
             let copy = lines.get(at + 1)?.trim().strip_suffix(';')?;
             let (target, copied) = copy.split_once(" = ")?;
             if copied != carrier || target == carrier {
+                return None;
+            }
+            // Where vanilla itself copied the value on — `CpyRtoV8 t; CpyVtoV8 x, t` — the
+            // target was a variable that already stood, and folding the carrier away makes the
+            // recompile land the call in the variable straight.
+            if slot_of(target).is_some_and(|b| assigned.contains(&b)) && is_call_result(&value) {
                 return None;
             }
             let a = slot_of(&carrier)?;
@@ -9149,8 +9337,12 @@ fn drop_one_block_end_handle_release(text: &str) -> String {
     };
     let mut drop: Vec<bool> = vec![false; lines.len()];
     for (index, line) in lines.iter().enumerate() {
-        let Some((_, name)) = bare_declaration(line) else {
-            continue;
+        let name = match bare_declaration(line) {
+            Some((_, name)) => name,
+            None => match declaration_with_initializer(line) {
+                Some((_, name, _)) => name,
+                None => continue,
+            },
         };
         if depths[index] <= body_depth {
             continue;
@@ -9345,14 +9537,17 @@ fn inline_bool_chain_into_next_condition(body: &str) -> String {
             if !(value.contains("&&") || value.contains("||")) {
                 continue;
             }
-            if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != 2 {
-                continue;
-            }
             let reader = index + 1;
             let trimmed = lines[reader].trim_start();
             if count_ident(&lines[reader], &name) != 1
                 || !(trimmed.starts_with("if (") || trimmed.starts_with("return "))
             {
+                continue;
+            }
+            // Read once WITHIN THIS LIFE: the compiler reuses the slot for later carriers, and
+            // a later life of the same name is not a second reader of this value.
+            let view: Vec<&str> = lines.iter().map(String::as_str).collect();
+            if !read_once_at(&view, index, reader, &name) {
                 continue;
             }
             lines[reader] = rename_ident(&lines[reader], &name, &format!("({value})"));
@@ -10049,6 +10244,9 @@ fn recover_condition_loops(text: &str) -> String {
         let Some(head) = (0..mark).rev().find(|at| {
             lines[*at].trim_start().starts_with("if (") && indent_of(&lines[*at]).len() < indent
         }) else {
+            if diag_enabled("GORE_AS_LOOP_DIAG") {
+                eprintln!("[loop] back-edge mark at {mark} (indent {indent}) found no `if` head");
+            }
             changed = true;
             continue; // mark dropped, nothing else to do
         };
@@ -10065,18 +10263,35 @@ fn recover_condition_loops(text: &str) -> String {
         // A bare name at the head has its producer on the line before, and that producer belongs
         // IN the head: left outside, it is computed once and the loop never ends.
         if is_decompiler_local(&cond) {
-            let producer = head.checked_sub(1).filter(|at| {
-                lines[*at]
-                    .trim()
-                    .strip_suffix(';')
-                    .and_then(|statement| statement.split_once(" = "))
-                    .is_some_and(|(target, value)| target == cond && !value.contains(&cond))
-            });
+            // A bare declaration between the two is one the sink put in front of its first
+            // use — the loop — and it stays in front; the producer is the statement above it.
+            let producer = (0..head)
+                .rev()
+                .find(|at| bare_declaration(&lines[*at]).is_none())
+                .filter(|at| {
+                    let assignment = lines[*at]
+                        .trim()
+                        .strip_suffix(';')
+                        .and_then(|statement| statement.split_once(" = "))
+                        .map(|(target, value)| (target.to_owned(), value.to_owned()));
+                    let declaration = declaration_with_initializer(&lines[*at])
+                        .map(|(_, name, init)| (name, init));
+                    assignment
+                        .filter(|(target, _)| *target == cond)
+                        .or(declaration)
+                        .is_some_and(|(target, value)| target == cond && !value.contains(&cond))
+                });
             let Some(producer) = producer else {
+                if diag_enabled("GORE_AS_LOOP_DIAG") {
+                    eprintln!("[loop] back-edge head `if ({cond})` has no producer right above it");
+                }
                 changed = true;
                 continue;
             };
             if lines.iter().map(|line| count_ident(line, &cond)).sum::<usize>() != 2 {
+                if diag_enabled("GORE_AS_LOOP_DIAG") {
+                    eprintln!("[loop] back-edge head `if ({cond})`: carrier mentioned elsewhere");
+                }
                 changed = true;
                 continue;
             }
@@ -12018,6 +12233,7 @@ fn inline_unnamed_value_temporaries(
     refs: &RefResolver,
     arithmetic_temps: &HashSet<i32>,
     statement_producers: &HashSet<i32>,
+    inline_callees: &HashMap<i32, Vec<String>>,
 ) -> String {
     let mut lines: Vec<String> = body.lines().map(|l| l.to_owned()).collect();
     // `body` never changes, so the two whole-body questions below are asked once per name instead
@@ -12070,7 +12286,10 @@ fn inline_unnamed_value_temporaries(
             // Where the bytecode says the source evaluated this producer BEFORE the rest of
             // the expression that reads it, it was a statement whatever else says it was a
             // temporary: the reader's other operands were computed after it.
-            if statement_producers.contains(&key.0) {
+            let this_definition_inline = inline_callees.get(&key.0).is_some_and(|names| {
+                outermost_callee(&init).is_some_and(|callee| names.iter().any(|n| n == callee))
+            });
+            if statement_producers.contains(&key.0) && !this_definition_inline && !is_plain_literal(&init) {
                 inline_reject("order", "", &name, &lines[at]);
                 return None;
             }
@@ -12235,9 +12454,16 @@ fn immediately_consumed_defs(f: &Func) -> HashSet<(i32, usize)> {
     let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
     let mut lives: HashMap<i32, usize> = HashMap::new();
     let mut out = HashSet::new();
+    let integer_arithmetic = |name: &str| {
+        matches!(
+            name,
+            "ADDi" | "SUBi" | "MULi" | "DIVi" | "MODi" | "ADDIi" | "SUBIi" | "MULIi" | "NEGi"
+        )
+    };
     for (i, ins) in instrs.iter().enumerate() {
         let dst = w0(ins);
-        if dst <= 0 || !matches!(ins.op.name, "STOREOBJ" | "RefCpyV") {
+        if dst <= 0 || !(matches!(ins.op.name, "STOREOBJ" | "RefCpyV") || integer_arithmetic(ins.op.name))
+        {
             continue;
         }
         let life = lives.entry(dst).or_default();
@@ -12245,7 +12471,14 @@ fn immediately_consumed_defs(f: &Func) -> HashSet<(i32, usize)> {
         // Consumed where produced: pushed as an operand, or dereferenced for a member the very
         // next instruction — `LoadRObjR` is how a member read-modify-write takes its receiver.
         let at_once = ins.op.name == "STOREOBJ" && consumed_next(&instrs, i, dst);
-        if at_once {
+        // An integer arithmetic result pushed by value the very next instruction was computed
+        // in the argument run (`Mid(Pos + 1, …)`); named, the recompile computes it a
+        // statement earlier (`+ADDIi` before the run).
+        let pushed_at_once = integer_arithmetic(ins.op.name)
+            && instrs
+                .get(i + 1)
+                .is_some_and(|next| next.op.name == "PshV4" && w0(next) == dst);
+        if at_once || pushed_at_once {
             out.insert((dst, *life));
         }
     }
@@ -13233,7 +13466,7 @@ fn short_circuit(
     let value = match else_end - (then_end + 3) {
         1 => value,
         2 => {
-            let (carrier, carried) = slot_store(lines.get(then_end + 3)?)?;
+            let (carrier, carried) = carrier_store(lines.get(then_end + 3)?)?;
             let arm = lines[then_end + 3..else_end].join("\n");
             if count_ident(&arm, &carrier) != 2 {
                 sc_reject("carrier", lines[at]);
@@ -13272,8 +13505,36 @@ fn short_circuit(
             }
         }
         _ => {
-            sc_reject("else-arm", lines[at]);
-            return None;
+            // Several steps: each carrier is written once and read once further down the arm,
+            // and folding them back in from the last one up leaves the arm one expression.
+            let arm = lines[then_end + 3..else_end].join("\n");
+            let mut value = value;
+            let mut ok = true;
+            for step in (then_end + 3..else_end - 1).rev() {
+                let Some((carrier, carried)) = carrier_store(lines[step]) else {
+                    ok = false;
+                    break;
+                };
+                if count_ident(&arm, &carrier) != 2 || count_ident(&value, &carrier) != 1 {
+                    ok = false;
+                    break;
+                }
+                let bare = value.trim_matches(['(', ')']);
+                if bare == format!("{carrier} != 0") || bare == format!("{carrier} == 0") {
+                    ok = false;
+                    break;
+                }
+                let carried = match carried.contains(' ') {
+                    true => format!("({carried})"),
+                    false => carried,
+                };
+                value = rename_ident(&value, &carrier, &carried);
+            }
+            if !ok || !value.contains(['=', '<', '>', '(']) {
+                sc_reject("else-arm", lines[at]);
+                return None;
+            }
+            value
         }
     };
     if target != else_target {
@@ -13371,8 +13632,9 @@ fn pass_trace(pass: &str, body: &str) {
     }
     let now: String = body
         .lines()
-        .filter(|line| count_ident(line, ident) > 0)
-        .map(|line| format!("{line}
+        .enumerate()
+        .filter(|(_, line)| count_ident(line, ident) > 0)
+        .map(|(at, line)| format!("{at:4}| {line}
 "))
         .collect();
     LAST.with(|last| {
@@ -13557,7 +13819,24 @@ fn fold_conditional_values(
         })();
         match folded {
             Some(line) => {
-                kept.push(line);
+                // `T x; x = c ? a : b;` is `T x = c ? a : b;` — the compiler evaluates the
+                // chosen arm into the declared slot, where the assignment form builds the
+                // value in a temporary of its own first.
+                let merged = kept.last().and_then(|previous| {
+                    let (_, name) = bare_declaration(previous)?;
+                    let statement = line.trim_start();
+                    let value = statement.strip_prefix(&format!("{name} = "))?;
+                    let head = previous.trim().strip_suffix(';')?;
+                    (indent_of(previous) == indent_of(&line))
+                        .then(|| format!("{}{head} = {value}", indent_of(previous)))
+                });
+                match merged {
+                    Some(declared) => {
+                        kept.pop();
+                        kept.push(declared);
+                    }
+                    None => kept.push(line),
+                }
                 at += 8;
             }
             None => {
@@ -13708,8 +13987,37 @@ fn slots_with_assignment_writes(f: &Func) -> HashSet<i32> {
         let prev = &instrs[at - 1];
         let prev_writes_src =
             (prev.op.fmt.writes_first_word() || writes_destination(prev.op.name)) && w(prev, 0) == Some(src);
-        if dst > 0 && prev_writes_src {
+        // `fTOd t, x; CpyVtoV8 v, t` is how a declaration takes a value of another width:
+        // the conversion lands in a temporary and the declared slot is filled from it. Only a
+        // copy behind a result that could have gone straight into the slot says the slot
+        // already stood.
+        let converts = prev.op.name.contains("TO");
+        if dst > 0 && prev_writes_src && !converts {
             out.insert(dst);
+        }
+    }
+    out
+}
+
+/// Slots filled by copying a CALL RESULT on: `CpyRtoV{4,8} t; CpyVtoV{4,8} slot, t`. A declaration
+/// with that call as its initialiser takes the result straight into the declared slot, so the
+/// copy says the slot already stood when the call returned. A literal, a `NOT` or an arithmetic
+/// result reaches a declared slot through a temporary and a copy either way, and says nothing.
+fn call_result_copies(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w = |ins: &super::disasm::Instr, i: usize| ins.words.get(i).map(|w| *w as i16 as i32);
+    let mut out = HashSet::new();
+    for pair in instrs.windows(2) {
+        let (producer, copy) = (&pair[0], &pair[1]);
+        if !producer.op.name.starts_with("CpyRtoV") || !copy.op.name.starts_with("CpyVtoV") {
+            continue;
+        }
+        if let (Some(dst), Some(src), Some(result)) = (w(copy, 0), w(copy, 1), w(producer, 0)) {
+            if src == result && dst > 0 {
+                out.insert(dst);
+            }
         }
     }
     out
@@ -13970,12 +14278,20 @@ fn rvo_statement_producers(
     f: &Func,
     refs: &RefResolver,
     producers: &[(i32, usize)],
-) -> HashSet<i32> {
+) -> (HashSet<i32>, HashMap<i32, Vec<String>>) {
     let Ok(instrs) = disassemble(&f.bytecode) else {
-        return HashSet::new();
+        return (HashSet::new(), HashMap::new());
     };
     let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32);
     let pushes = |name: &str| name.starts_with("Psh") || name == "PSF";
+    let callee_of = |at: usize| {
+        instrs
+            .get(at)
+            .and_then(|ins| refs.func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64))
+            .map(str::to_owned)
+    };
+    let mut statement_names: HashMap<i32, HashSet<String>> = HashMap::new();
+    let mut inline_names: HashMap<i32, HashSet<String>> = HashMap::new();
     let behaviour = |ins: &super::disasm::Instr| {
         ins.op.name == "CALLSYS"
             && refs
@@ -14011,13 +14327,34 @@ fn rvo_statement_producers(
                 let last_push = instrs.get(idx + 1).is_some_and(|after| is_call(after.op.name));
                 if others > 0 && !last_push {
                     out.insert(slot);
+                    if let Some(name) = callee_of(at) {
+                        statement_names.entry(slot).or_default().insert(name);
+                    }
+                } else if let Some(name) = callee_of(at) {
+                    inline_names.entry(slot).or_default().insert(name);
                 }
                 break;
             }
             others += 1;
         }
     }
-    out
+    // The compiler reuses one slot for several values. Where a slot carries a statement AND an
+    // inline producer, the emitter tells the lives apart by the call that produced each — only
+    // a callee that never produced a statement into the slot may stand for an inline life.
+    let inline_only: HashMap<i32, Vec<String>> = out
+        .iter()
+        .filter_map(|slot| {
+            let inline = inline_names.get(slot)?;
+            let statements = statement_names.get(slot);
+            let names: Vec<String> = inline
+                .iter()
+                .filter(|name| !statements.is_some_and(|s| s.contains(*name)))
+                .cloned()
+                .collect();
+            (!names.is_empty()).then_some((*slot, names))
+        })
+        .collect();
+    (out, inline_only)
 }
 
 /// Turn the structurer's construction-site markers into declarations, or drop them.
@@ -14041,6 +14378,7 @@ fn resolve_ctor_site_markers(
     let owned: Vec<String> = lines.iter().map(|l| (*l).to_owned()).collect();
     let depths = block_depths(&owned);
     let mut placed: HashSet<i32> = HashSet::new();
+    let mut placed_at: Vec<(i32, usize, usize)> = Vec::new();
     let mut kept: Vec<String> = Vec::with_capacity(lines.len());
     for (at, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
@@ -14055,20 +14393,26 @@ fn resolve_ctor_site_markers(
         let mentions: Vec<usize> = (0..lines.len())
             .filter(|k| !lines[*k].contains(marker) && count_ident(lines[*k], &ident) > 0)
             .collect();
-        // The declaration has to be visible from every mention: none before it, and none after
-        // the block it stands in has closed. A slot constructed in one arm and used in another
-        // keeps its hoisted declaration.
+        // The declaration serves the mentions inside its block. The compiler reuses a slot
+        // for several values, so mentions BEFORE the marker belong to an earlier life, and
+        // mentions after the block may belong to a later one — provided the first of them
+        // DEFINES the slot anew. A read there would want this block's value, which has gone
+        // out of scope: then the hoisted declaration stays.
         let depth = depths[at];
         let block_end = (at + 1..lines.len())
             .find(|k| depths[*k] < depth)
             .unwrap_or(lines.len());
+        // A later life of the slot after the block would be an ASSIGNMENT to a name that has
+        // gone out of scope (the placement takes the slot away from the declaration rewrites),
+        // so the declaration serves only a slot whose every mention lies inside the block.
+        // (Measured: allowing a later definition cost 12 out-of-scope reads.)
         let visible = mentions.iter().all(|m| *m > at && *m < block_end)
             && mentions.iter().all(|m| depths[*m] >= depth);
+        let shadowed = placed_at
+            .iter()
+            .any(|(other, open, close)| *other == slot && *open <= at && at < *close);
         let ty = locals.get(&slot);
-        let wanted = !placed.contains(&slot)
-            && !mentions.is_empty()
-            && visible
-            && ty.is_some_and(|ty| is_value_struct_type(ty));
+        let wanted = !mentions.is_empty() && visible && !shadowed && ty.is_some();
         if wanted {
             let indent = indent_of(line);
             kept.push(format!(
@@ -14076,6 +14420,7 @@ fn resolve_ctor_site_markers(
                 qualify_decl_type(ty.expect("checked"), refs)
             ));
             placed.insert(slot);
+            placed_at.push((slot, at, block_end));
         }
     }
     let mut joined = kept.join("\n");
@@ -14083,6 +14428,202 @@ fn resolve_ctor_site_markers(
         joined.push('\n');
     }
     (joined, placed)
+}
+
+/// A `break;` that ends the LAST case of a switch jumps to the instruction right behind it, and
+/// the compiler writes that jump out (`JMP ->[next]`); vanilla, whose last case simply fell out
+/// of the switch, has no such jump. The case block's `}` is followed by the switch's own `}`.
+#[allow(dead_code)]
+fn drop_last_case_break(body: &str) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut kept: Vec<&str> = Vec::with_capacity(lines.len());
+    for (at, line) in lines.iter().enumerate() {
+        if line.trim() == "break;" {
+            let indent = indent_of(line).len();
+            let mut after = lines[at + 1..].iter().filter(|l| !l.trim().is_empty());
+            let closes_case = after
+                .next()
+                .is_some_and(|l| l.trim() == "}" && indent_of(l).len() + 4 == indent);
+            let closes_switch = after.next().is_some_and(|l| l.trim() == "}");
+            if closes_case && closes_switch {
+                continue;
+            }
+        }
+        kept.push(line);
+    }
+    let mut out = kept.join("\n");
+    if body.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// Slots that take the value of an ENUM field straight: `LoadRObjR/LoadThisR <field>; RDR1 t;
+/// CpyVtoV4 slot, t` — the byte read is the field's own width, and the copy into a 4-byte slot is
+/// the enum variable the source declared (`EAbilityTaskResult Result = Task.TaskResult;`). An
+/// `int` there converts (`sbTOi`) where vanilla copies.
+fn enum_field_copy_slots(
+    f: &Func,
+    refs: &RefResolver,
+    fields: Option<&HashMap<String, String>>,
+) -> HashMap<i32, String> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashMap::new();
+    };
+    let w = |ins: &super::disasm::Instr, i: usize| ins.words.get(i).map(|w| *w as i16 as i32);
+    let d0 = |ins: &super::disasm::Instr| ins.dwords.first().map(|d| *d as i32);
+    let field_enum = |tid: i32, off: i32, this_class: bool| -> Option<String> {
+        let field = refs.member(tid, off)?;
+        let ty = refs
+            .type_by_id(tid)
+            .and_then(|cls| {
+                refs.field_type_by_class(cls, field)
+                    .or_else(|| refs.native_field_value_type(cls, field))
+                    .or_else(|| refs.native_field_type(cls, field))
+            })
+            .map(str::to_owned)
+            .or_else(|| {
+                this_class
+                    .then(|| fields.and_then(|map| map.get(field)).cloned())
+                    .flatten()
+            })?;
+        is_enum(&ty).then_some(ty)
+    };
+    let mut out = HashMap::new();
+    let mut last: Option<(i32, i32, bool)> = None;
+    let mut read: Option<(i32, String)> = None;
+    for ins in &instrs {
+        match ins.op.name {
+            "ADDSi" => last = d0(ins).zip(w(ins, 0)).map(|(tid, off)| (tid, off, false)),
+            "LoadThisR" => last = d0(ins).zip(w(ins, 0)).map(|(tid, off)| (tid, off, true)),
+            "LoadRObjR" | "LoadVObjR" => {
+                last = d0(ins).zip(w(ins, 1)).map(|(tid, off)| (tid, off, false))
+            }
+            "PopRPtr" | "CHKREF" | "ChkRefS" => {}
+            "RDR1" => {
+                read = last
+                    .and_then(|(tid, off, this_class)| field_enum(tid, off, this_class))
+                    .zip(w(ins, 0))
+                    .map(|(ty, slot)| (slot, ty));
+                last = None;
+                continue;
+            }
+            "CpyVtoV4" => {
+                if let (Some((src, ty)), Some(dst), Some(from)) = (read.take(), w(ins, 0), w(ins, 1)) {
+                    if from == src && dst > 0 {
+                        out.insert(src, ty.clone());
+                        out.insert(dst, ty);
+                    }
+                }
+                last = None;
+                continue;
+            }
+            _ => last = None,
+        }
+        read = None;
+    }
+    out
+}
+
+/// The function a value's OUTERMOST call names: `a.b(c).GetSafeNormal(d)` is `GetSafeNormal`,
+/// `FVector(x)` is `FVector`; an operator expression names none.
+fn outermost_callee(value: &str) -> Option<&str> {
+    let value = value.trim();
+    let inner = value.strip_suffix(')')?;
+    let mut depth = 1usize;
+    let mut open = None;
+    for (at, c) in inner.char_indices().rev() {
+        match c {
+            ')' => depth += 1,
+            '(' => {
+                depth -= 1;
+                if depth == 0 {
+                    open = Some(at);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let head = &inner[..open?];
+    let start = head
+        .rfind(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .map(|at| at + 1)
+        .unwrap_or(0);
+    let name = &head[start..];
+    (!name.is_empty()).then_some(name)
+}
+
+/// A carrier's store, whether the emitter has already declared the carrier at it
+/// (`bool local_4 = <value>;`) or not (`local_4 = <value>;`).
+fn carrier_store(line: &str) -> Option<(String, String)> {
+    slot_store(line).or_else(|| declaration_with_initializer(line).map(|(_, name, init)| (name, init)))
+}
+
+/// The temporary a member write runs on: `local_18.Field = value;` names `local_18`.
+fn member_write_receiver(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let (target, _) = trimmed.strip_suffix(';')?.split_once(" = ")?;
+    let (object, field) = target.split_once('.')?;
+    if !object.starts_with("local_") || object.contains(['(', '[', ' ']) || field.contains(['(', '[']) {
+        return None;
+    }
+    slot_and_life(object).map(|_| object.to_owned())
+}
+
+/// `T x;` immediately above `x = c ? a : b;` is `T x = c ? a : b;`: the compiler evaluates the
+/// chosen arm into the declared slot, where the assignment builds the value in a temporary of its
+/// own and copies it on (`+PSF,$beh0` for the temporary). The early fold sees no declaration yet
+/// — the hoist writes it later and the sink carries it down to this line.
+fn merge_conditional_into_declaration(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut kept: Vec<String> = Vec::with_capacity(lines.len());
+    let mut at = 0usize;
+    while at < lines.len() {
+        let merged = (|| {
+            let (indent, name) = bare_declaration(lines[at])?;
+            let next = lines.get(at + 1)?;
+            if indent_of(next) != indent {
+                return None;
+            }
+            let statement = next.trim_start().strip_suffix(';')?;
+            let value = statement.strip_prefix(&format!("{name} = "))?;
+            if !(value.contains(" ? ") && value.contains(" : ")) || value.contains(&name) {
+                return None;
+            }
+            let head = lines[at].trim().strip_suffix(';')?;
+            Some(format!("{indent}{head} = {value};"))
+        })();
+        match merged {
+            Some(line) => {
+                kept.push(line);
+                at += 2;
+            }
+            None => {
+                kept.push(lines[at].to_owned());
+                at += 1;
+            }
+        }
+    }
+    let mut out = kept.join("\n");
+    if text.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// `1.0`, `-55.0`, `30.0f`, `7`, `true`, `false`: a constant the compiler materialises where it
+/// is used.
+fn is_plain_literal(value: &str) -> bool {
+    let value = value.trim();
+    if matches!(value, "true" | "false") {
+        return true;
+    }
+    let body = value.strip_prefix('-').unwrap_or(value);
+    let body = body.strip_suffix('f').unwrap_or(body);
+    !body.is_empty()
+        && body.chars().all(|c| c.is_ascii_digit() || c == '.' || c == 'e' || c == 'E' || c == '-' || c == '+')
+        && body.chars().next().is_some_and(|c| c.is_ascii_digit())
 }
 
 /// Why a short circuit was not folded, behind `GORE_AS_SC_DIAG`.
@@ -15943,7 +16484,7 @@ fn bare_declaration_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
 /// temporary and is copied on. So `CpyRtoV8 X` with no copy behind it says the declaration was
 /// written where the value arrives. Measured over the byte-faithful corpus: 15 such slots are
 /// declared at their initialiser in our text and 1 stands bare, with no case going the other way.
-fn call_result_declared_at_initializer(f: &Func) -> HashSet<i32> {
+fn call_result_declared_at_initializer(f: &Func, refs: &RefResolver) -> HashSet<i32> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
     };
@@ -15961,10 +16502,36 @@ fn call_result_declared_at_initializer(f: &Func) -> HashSet<i32> {
         entry.0 += 1;
         entry.1 &= ins.op.name == "CpyRtoV8";
     }
+    // A HANDLE declared at its initialiser takes the call's object straight (`STOREOBJ X`); a
+    // declaration standing elsewhere gets the object through a temporary and a reference copy
+    // (`RefCpyV X`). The cast diamond's `ClrVPtr` and the scope-end release are not copies.
+    let mut handle_writes: HashMap<i32, (bool, bool)> = HashMap::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        let slot = w0(ins);
+        if slot <= 0 {
+            continue;
+        }
+        // A cast writes its target through the slot pushed in front of it: `PSF X; PshVPtr
+        // src; CALLSYS opCast` — the declared handle takes the cast's result straight.
+        // (A cast's out-slot is the cast's own temporary: a declared handle taking a cast is
+        // filled through a `RefCpyV` like any other assignment, so it is no witness here.)
+        let _ = at;
+        match ins.op.name {
+            "STOREOBJ" => handle_writes.entry(slot).or_insert((false, false)).0 = true,
+            "RefCpyV" | "REFCPY" => handle_writes.entry(slot).or_insert((false, false)).1 = true,
+            _ => {}
+        }
+    }
     writes
         .into_iter()
         .filter(|(_, (count, direct))| *count == 1 && *direct)
         .map(|(slot, _)| slot)
+        .chain(
+            handle_writes
+                .into_iter()
+                .filter(|(_, (stored, copied))| *stored && !*copied)
+                .map(|(slot, _)| slot),
+        )
         .collect()
 }
 
@@ -16008,6 +16575,68 @@ fn rewrite_first_use_decl_init(
             None => head,
         }
     }, true)
+}
+
+/// Whether the value a definition inside a nested block writes is read after that block closes
+/// — before another definition at the outer level replaces it — within the group's block ending
+/// at `group_end`. A definition whose every read stays inside its own block is a life of its
+/// own (the compiler's temporary reused one level down); one read after the join is the
+/// variable assigned on one path.
+fn flows_out_of_its_block(lines: &[&str], definition: usize, group_end: usize, ident: &str) -> bool {
+    let (_, mut close) = block_span(lines, definition);
+    let outer_depth = indent_of(lines[definition]).len();
+    loop {
+        let Some(next) = (close + 1..group_end.min(lines.len()))
+            .find(|at| count_ident(lines[*at], ident) > 0)
+        else {
+            return false;
+        };
+        if !is_definition_line(lines[next], ident) {
+            return true;
+        }
+        // Another arm assigning the same slot: look past its block as well.
+        if indent_of(lines[next]).len() >= outer_depth {
+            close = block_span(lines, next).1;
+            continue;
+        }
+        return false;
+    }
+}
+
+/// The innermost `for`/`while` block around line `at`: the index of its `{` and of its `}`.
+fn enclosing_loop_span(lines: &[&str], at: usize) -> Option<(usize, usize)> {
+    let mut depth = indent_of(lines[at]).len();
+    for open in (0..at).rev() {
+        if lines[open].trim() != "{" || indent_of(lines[open]).len() >= depth {
+            continue;
+        }
+        depth = indent_of(lines[open]).len();
+        let header = (0..open)
+            .rev()
+            .find(|k| !lines[*k].trim().is_empty())
+            .map(|k| lines[k].trim_start())
+            .unwrap_or("");
+        if header.starts_with("for (") || header.starts_with("while (") || header.starts_with("for(")
+        {
+            // The span starts at the HEADER: a mention in the condition is read on every pass
+            // round as much as one in the body.
+            let header_at = (0..open)
+                .rev()
+                .find(|k| !lines[*k].trim().is_empty())
+                .unwrap_or(open);
+            return block_end(lines, open).map(|close| (header_at, close));
+        }
+    }
+    None
+}
+
+/// A definition inside a loop body that one of the group's earlier mentions shares does not
+/// start a life of its own: the value it writes is what that mention reads on the next pass
+/// round (`Best = MAX; for (…) { if (d >= Best) continue; … Best = d; }`). Splitting it into a
+/// fresh name would leave the comparison reading the initial value forever.
+fn definition_is_loop_carried(lines: &[&str], definition: usize, members: &[usize]) -> bool {
+    enclosing_loop_span(lines, definition)
+        .is_some_and(|(open, close)| members.iter().any(|m| *m >= open && *m < close))
 }
 
 /// Shared engine for both: declare a local at the assignment that first gives it a value,
@@ -16085,9 +16714,18 @@ fn rewrite_decl_at_assignment(
             // same variable assigned again — `x = f();` in a loop the declaration heads — and
             // splitting it into a fresh name would leave the loop's test reading the old one.
             // Only a definition outside that span starts a life of its own.
+            // A definition DEEPER than the group's own — inside a branch or a loop of its
+            // block — assigns the variable on one path; the reads after that block see the
+            // join, so it cannot start a life of its own. Only a definition at the group's
+            // level, or above it, does.
+            let group_depth = indent_of(lines[i]).len();
             while k < refs.len()
                 && refs[k] < end
-                && !(split_at_every_definition && is_definition_line(lines[refs[k]], &ident))
+                && !(split_at_every_definition
+                    && is_definition_line(lines[refs[k]], &ident)
+                    && (indent_of(lines[refs[k]]).len() <= group_depth
+                        || !flows_out_of_its_block(&lines, refs[k], end, &ident))
+                    && !definition_is_loop_carried(&lines, refs[k], &members))
             {
                 members.push(refs[k]);
                 k += 1;
