@@ -987,9 +987,20 @@ fn emit_function_ctor(
     // dead store and was deleted outright. One missing fact, three symptoms.
     let reference_locals = reference_result_slots(f, refs);
     // Producers the SOURCE kept as statements of their own — see `statement_producer_slots`.
-    let statement_producers = statement_producer_slots(f);
+    let mut statement_producers = statement_producer_slots(f);
+    // …and an operand produced BEFORE the operand on its left was: the compiler evaluates a
+    // binary expression's left side first, so a right operand whose value already stood when
+    // the left was computed was a statement of its own (`int n = Max(1, Count()); return x +
+    // (2pi * i) / n;` — vanilla called `Max` before it read `x`).
+    statement_producers.extend(statement_operand_slots(f));
     // Where vanilla destroyed a value slot mid-expression it was calling on a temporary there.
-    let temporary_receivers = temporary_receiver_slots(f, refs);
+    // A by-value call result pushed again straight after the call is consumed where it was
+    // produced — the temporary of a fluent chain (`AI.FearHere(…).While(n"…")`): vanilla ran
+    // the method on it, so the const question is settled for that slot as well.
+    let temporary_receivers: HashSet<i32> = temporary_receiver_slots(f, refs)
+        .union(&rvo_temporary_slots(f, refs))
+        .copied()
+        .collect();
     // The elements of a range-for: released once per iteration, and what the loop fold matches.
     let loop_elements = loop_element_slots(f);
     // Where a widening's result was copied ON, the source named it; folding that name away
@@ -1335,6 +1346,23 @@ fn emit_function_ctor(
     // `const`; strip the marker and const-qualify the declaration below.
     let (body, const_slots) = strip_const_store_markers(&body);
     pass_trace("structured", &body);
+    // By-value call results the structurer popped as hidden out-slots: one pushed on again
+    // only after other operands of its consuming call went on the stack was computed before
+    // that call's argument run — a statement (`FVector Dir = -Fwd;` in front of
+    // `CanMoveStraightInDirection(…, Dir, …)`), where the inline spelling evaluates it among
+    // the arguments and in another order.
+    statement_producers.extend(rvo_statement_producers(
+        f,
+        refs,
+        &super::structure::take_rvo_producers(),
+    ));
+    // The structurer left a marker wherever it met a default construction of a local that was
+    // not consumed at once — the source's own declaration, at its own position. For a value
+    // struct vanilla builds only behind a branch, the marker becomes that declaration and the
+    // hoist and the sink below leave the slot alone; every other marker goes.
+    let (body, declared_at_site) =
+        resolve_ctor_site_markers(&body, &infer_locals(f, refs), refs, &touched_after_branch);
+    pass_trace("resolve_ctor_site_markers", &body);
     // CASCADE GATE: a const handle can't be COPIED into a non-const local / `__return` /
     // member (handle assignment preserves const), so any slot consumed as a bare copy-RHS
     // keeps its non-const declaration (the store keeps the status-quo error) unless the copy
@@ -1985,7 +2013,18 @@ fn emit_function_ctor(
         let body = if epilogue_is_joined(f) {
             body
         } else {
-            drop_else_after_returning_arm(&body)
+            // To a fixed point: a lifted else-arm may itself be an if/else whose then-arm
+            // returns, and one pass pushes the lifted lines through without looking at them
+            // (`if A { return x; } else { if B { return y; } else { return z; } }`).
+            let mut body = body;
+            for _ in 0..8 {
+                let again = drop_else_after_returning_arm(&body);
+                if again == body {
+                    break;
+                }
+                body = again;
+            }
+            body
         };
         // Again, now that a lifted else-arm stands at the depth of what follows it: a literal
         // stored in that arm and read after it was refused while the arm was still a branch
@@ -2065,6 +2104,7 @@ fn emit_function_ctor(
         let placed_so_far: HashSet<i32> = already_declared_at_use
             .iter()
             .chain(first_use_suppressed.iter())
+            .chain(declared_at_site.iter())
             .copied()
             .collect();
         let (body, life_suppressed) = rewrite_primitive_lives_decl_init(
@@ -2088,6 +2128,7 @@ fn emit_function_ctor(
         let first_write_suppressed: HashSet<i32> = first_write_suppressed
             .union(&life_suppressed)
             .copied()
+            .chain(declared_at_site.iter().copied())
             .collect();
         // What vanilla actually stores, rather than what our text can prove about its own reads.
         let vanilla_initialises = slots_vanilla_initialises(f);
@@ -2215,9 +2256,13 @@ fn emit_function_ctor(
         // Declarations and body are one text now. A struct declared at function scope costs a
         // constructor at entry and a destructor on every path out; where vanilla touched the slot
         // only after it had branched, the declaration stood in the block that touches it.
+        let sinkable: HashSet<i32> = touched_after_branch
+            .difference(&declared_at_site)
+            .copied()
+            .collect();
         let rendered = sink_declarations_into_their_block(
             &s[declarations_at..],
-            &touched_after_branch,
+            &sinkable,
             &slots_built_once_per_iteration(f, refs),
         );
         pass_trace("sink_declarations_into_their_block", &rendered);
@@ -2335,6 +2380,8 @@ fn emit_function_ctor(
             &wholly_consumed_object_slots(f),
             &rvo_temporary_slots(f, refs),
             refs,
+            &arithmetic_temporaries(f),
+            &statement_producers,
         );
         pass_trace("inline_unnamed_value_temporaries", &rendered);
         // Now that the operands carry no names of their own, an in-place update stands directly
@@ -2385,6 +2432,8 @@ fn emit_function_ctor(
             &wholly_consumed_object_slots(f),
             &rvo_temporary_slots(f, refs),
             refs,
+            &arithmetic_temporaries(f),
+            &statement_producers,
         );
         pass_trace("inline_unnamed_value_temporaries", &rendered);
         }
@@ -8620,6 +8669,24 @@ fn sink_declarations_into_their_block(
         let to = if to > from { to - 1 } else { to };
         lines.insert(to, text);
     }
+    // A declaration whose mentions live in SEVERAL sibling blocks, none at its own level, was
+    // one declaration per block in the source: the compiler constructs the value where each
+    // block enters and releases it where the block leaves, which vanilla's constructor
+    // positions show (`FearAndFlee` builds its `FAbilityTaskExecutor` inside each arm that uses
+    // one). Hoisted, the value is built once at entry and every arm assigns into it.
+    for _ in 0..lines.len() {
+        let Some((from, opens, text)) =
+            next_declaration_to_split(&lines, after_branch, built_per_iteration)
+        else {
+            break;
+        };
+        for open in opens.into_iter().rev() {
+            let extra = "    ".repeat(1);
+            let indent = indent_of(&lines[open]);
+            lines.insert(open + 1, format!("{indent}{extra}{}", text.trim()));
+        }
+        lines.remove(from);
+    }
     let mut out = lines.join("\n");
     if body.ends_with('\n') {
         out.push('\n');
@@ -11949,6 +12016,8 @@ fn inline_unnamed_value_temporaries(
     consumed: &HashSet<i32>,
     receiver_only: &HashSet<i32>,
     refs: &RefResolver,
+    arithmetic_temps: &HashSet<i32>,
+    statement_producers: &HashSet<i32>,
 ) -> String {
     let mut lines: Vec<String> = body.lines().map(|l| l.to_owned()).collect();
     // `body` never changes, so the two whole-body questions below are asked once per name instead
@@ -11984,8 +12053,25 @@ fn inline_unnamed_value_temporaries(
             // Ordered so the whole-body scan runs only on the rare path: one module is 24,000
             // lines long and a per-line scan of it costs minutes.
             let sole_life = || key.1 == 1 && consumed.contains(&key.0) && !has_later_life(&name);
-            if !unnamed.contains(&key) && !sole_life() {
+            // A primitive the compiler computed with arithmetic and read once as an arithmetic
+            // operand is the scratch of a sub-expression: vanilla evaluated it INSIDE the
+            // expression, in that expression's order (`this.X + (2pi * i) / n` reads the member
+            // first). Only a pure initialiser moves — one without a call to reorder.
+            let arithmetic = || {
+                key.1 == 1
+                    && arithmetic_temps.contains(&key.0)
+                    && !has_later_life(&name)
+                    && !init.contains(['(', '"'])
+            };
+            if !unnamed.contains(&key) && !sole_life() && !arithmetic() {
                 inline_reject("not-unnamed", "", &name, &lines[at]);
+                return None;
+            }
+            // Where the bytecode says the source evaluated this producer BEFORE the rest of
+            // the expression that reads it, it was a statement whatever else says it was a
+            // temporary: the reader's other operands were computed after it.
+            if statement_producers.contains(&key.0) {
+                inline_reject("order", "", &name, &lines[at]);
                 return None;
             }
             // The store may stand under a bare declaration hoisted above it, in which case the
@@ -13648,6 +13734,355 @@ fn rewrite_primitive_lives_decl_init(
             && (is_primitive(ty) || enums.get(&slot).is_some_and(|enum_ty| enum_ty == ty))
     };
     rewrite_decl_at_assignment(body, locals, &wanted, &|_, ty| qualify_decl_type(ty, refs), false)
+}
+
+/// Primitive slots the compiler used as arithmetic scratch: every write is a literal store, a
+/// numeric cast or an arithmetic result into the slot, and the ONE read is an operand of an
+/// arithmetic or comparison instruction — never pushed, copied on, or moved to the return
+/// register, which is how a named value leaves.
+fn arithmetic_temporaries(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let arithmetic = |name: &str| {
+        matches!(
+            name,
+            "ADDi" | "SUBi" | "MULi" | "DIVi" | "MODi" | "ADDf" | "SUBf" | "MULf" | "DIVf"
+                | "MODf" | "ADDd" | "SUBd" | "MULd" | "DIVd" | "MODd" | "ADDi64" | "SUBi64"
+                | "MULi64" | "DIVi64" | "MODi64" | "ADDIi" | "SUBIi" | "MULIi" | "ADDIf"
+                | "SUBIf" | "MULIf" | "NEGi" | "NEGf" | "NEGd" | "CMPi" | "CMPu" | "CMPf"
+                | "CMPd" | "CMPi64" | "CMPu64" | "CMPIi" | "CMPIf" | "CMPIu"
+        ) || super::structure::is_numeric_cast(name)
+    };
+    let mut reads: HashMap<i32, usize> = HashMap::new();
+    let mut disqualified: HashSet<i32> = HashSet::new();
+    let mut written: HashSet<i32> = HashSet::new();
+    for ins in &instrs {
+        let mut slots: Vec<i32> = super::bytediff::addressed_slots(ins)
+            .into_iter()
+            .filter(|slot| *slot > 0)
+            .collect();
+        // once per slot: an in-place update names its slot twice (`MULd v12, v12, v6`)
+        slots.sort_unstable();
+        slots.dedup();
+        if slots.is_empty() {
+            continue;
+        }
+        let dst = ins.words.first().map(|w| *w as i16 as i32);
+        let writes_first = ins.op.fmt.writes_first_word() || writes_destination(ins.op.name);
+        for slot in slots {
+            let is_dst = writes_first && dst == Some(slot);
+            if is_dst {
+                if matches!(ins.op.name, "SetV1" | "SetV2" | "SetV4" | "SetV8") || arithmetic(ins.op.name) {
+                    written.insert(slot);
+                } else {
+                    disqualified.insert(slot);
+                }
+            }
+            // an in-place arithmetic op reads its destination too (`MULd v12, v12, v6`)
+            let reads_it = !is_dst || ins.words.iter().skip(1).any(|w| *w as i16 as i32 == slot);
+            if reads_it {
+                if arithmetic(ins.op.name) {
+                    *reads.entry(slot).or_default() += 1;
+                } else {
+                    disqualified.insert(slot);
+                }
+            }
+        }
+    }
+    written
+        .into_iter()
+        .filter(|slot| !disqualified.contains(slot))
+        .filter(|slot| {
+            // one read that is not the slot's own in-place update
+            let own_updates = instrs
+                .iter()
+                .filter(|ins| {
+                    arithmetic(ins.op.name)
+                        && ins.words.first().map(|w| *w as i16 as i32) == Some(*slot)
+                        && ins.words.iter().skip(1).any(|w| *w as i16 as i32 == *slot)
+                })
+                .count();
+            reads.get(slot).copied().unwrap_or(0) == own_updates + 1
+        })
+        .collect()
+}
+
+/// The first bare declaration whose mentions fall into two or more sibling blocks opened below
+/// it, as `(declaration line, block-opening lines, text)`. Every mention has to sit inside such
+/// a block — one at the declaration's own level keeps the hoist — and each block has to be a
+/// brace of its own that is not a loop body, unless vanilla built the value once per pass.
+fn next_declaration_to_split(
+    lines: &[String],
+    after_branch: &HashSet<i32>,
+    built_per_iteration: &HashSet<i32>,
+) -> Option<(usize, Vec<usize>, String)> {
+    let depths = block_depths(lines);
+    let opens_block = |at: usize| lines[at].trim() == "{";
+    for (index, line) in lines.iter().enumerate() {
+        let Some((_, name)) = bare_declaration(line) else {
+            continue;
+        };
+        let Some(slot) = name
+            .strip_prefix("local_")
+            .and_then(|rest| rest.split('_').next())
+            .and_then(|rest| rest.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        if !after_branch.contains(&slot) {
+            continue;
+        }
+        if lines
+            .iter()
+            .filter(|line| {
+                bare_declaration(line).is_some_and(|(_, other)| other == name)
+                    || declaration_with_initializer(line)
+                        .is_some_and(|(_, other, _)| other == name)
+            })
+            .count()
+            != 1
+        {
+            continue;
+        }
+        let mentions: Vec<usize> = (0..lines.len())
+            .filter(|at| *at != index && count_ident(&lines[*at], &name) > 0)
+            .collect();
+        if mentions.len() < 2 || mentions.iter().any(|m| *m < index) {
+            continue;
+        }
+        let level = depths[index];
+        // The sibling block holding each mention: the nearest `{` above it at the declaration's
+        // own level that is still open where the mention stands.
+        let mut opens: Vec<usize> = Vec::new();
+        let mut ok = true;
+        for &m in &mentions {
+            if depths[m] <= level {
+                ok = false;
+                break;
+            }
+            let Some(open) = (index + 1..m).rev().find(|at| depths[*at] == level && opens_block(*at))
+            else {
+                ok = false;
+                break;
+            };
+            // still open at the mention: no line between them drops back to the level
+            if (open + 1..m).any(|at| depths[at] <= level) {
+                ok = false;
+                break;
+            }
+            let heads_a_loop = lines[..open]
+                .iter()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .is_some_and(|line| {
+                    let head = line.trim_start();
+                    head.starts_with("for") || head.starts_with("while") || head.starts_with("do")
+                });
+            if heads_a_loop && !built_per_iteration.contains(&slot) {
+                ok = false;
+                break;
+            }
+            if !opens.contains(&open) {
+                opens.push(open);
+            }
+        }
+        if !ok || opens.len() < 2 {
+            continue;
+        }
+        opens.sort_unstable();
+        return Some((index, opens, line.clone()));
+    }
+    None
+}
+
+/// Slots read as the RIGHT operand of a two-register arithmetic or comparison instruction whose
+/// value was produced BEFORE the left operand's. The compiler evaluates left to right inside an
+/// expression, so such a right operand was computed by a statement of its own.
+fn statement_operand_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w = |ins: &super::disasm::Instr, i: usize| ins.words.get(i).map(|w| *w as i16 as i32);
+    let writes = |ins: &super::disasm::Instr| {
+        (ins.op.fmt.writes_first_word() || writes_destination(ins.op.name)).then(|| w(ins, 0)).flatten()
+    };
+    let last_write_before = |slot: i32, at: usize| -> Option<usize> {
+        (0..at).rev().find(|k| writes(&instrs[*k]) == Some(slot))
+    };
+    let mut out = HashSet::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if !matches!(ins.op.fmt, super::isa::BcType::wW_rW_rW_ARG) && !matches!(ins.op.name, "CMPi" | "CMPu" | "CMPf" | "CMPd" | "CMPi64" | "CMPu64") {
+            continue;
+        }
+        let (left, right) = match ins.op.fmt {
+            super::isa::BcType::wW_rW_rW_ARG => (w(ins, 1), w(ins, 2)),
+            _ => (w(ins, 0), w(ins, 1)),
+        };
+        let (Some(left), Some(right)) = (left, right) else {
+            continue;
+        };
+        if right <= 0 || left <= 0 || left == right {
+            continue;
+        }
+        let (Some(wl), Some(mut wr)) = (last_write_before(left, at), last_write_before(right, at))
+        else {
+            continue;
+        };
+        // The right operand's producer must be a CALL result or a member read — something the
+        // source could have named — reached through the numeric casts the expression applies
+        // to it (`iTOd w14, w9` converts the named `w9`). A literal standing early is the
+        // compiler's own order.
+        let mut named = right;
+        for _ in 0..4 {
+            let producer = &instrs[wr];
+            if super::structure::is_numeric_cast(producer.op.name) {
+                let Some(src) = w(producer, 1) else {
+                    break;
+                };
+                let Some(earlier) = last_write_before(src, wr) else {
+                    break;
+                };
+                named = src;
+                wr = earlier;
+            } else {
+                break;
+            }
+        }
+        let producer = &instrs[wr];
+        let named_kind = matches!(
+            producer.op.name,
+            "CpyRtoV4" | "CpyRtoV8" | "CpyRtoV1" | "RDR1" | "RDR2" | "RDR4" | "RDR8"
+        );
+        if wr < wl && named_kind && named > 0 {
+            out.insert(named);
+        }
+    }
+    out
+}
+
+/// Of the by-value results `producers` names (slot, index of the producing call), those whose
+/// own push comes only after OTHER pushes — the value stood before the consuming call's
+/// argument run began. A constructor or destructor of a temporary between the two is argument
+/// evaluation and does not end the walk; any other call does, and so does a branch or a read of
+/// the slot that is not its push.
+fn rvo_statement_producers(
+    f: &Func,
+    refs: &RefResolver,
+    producers: &[(i32, usize)],
+) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32);
+    let pushes = |name: &str| name.starts_with("Psh") || name == "PSF";
+    let behaviour = |ins: &super::disasm::Instr| {
+        ins.op.name == "CALLSYS"
+            && refs
+                .func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64)
+                .is_some_and(|name| name.starts_with('$') || name.starts_with('~'))
+    };
+    let is_call = |name: &str| matches!(name, "CALL" | "CALLSYS" | "CALLINTF" | "CALLBND");
+    let mut out = HashSet::new();
+    for &(slot, at) in producers {
+        let mut others = 0usize;
+        for (idx, next) in instrs.iter().enumerate().skip(at + 1) {
+            if next.op.name.starts_with('J') || next.op.name == "RET" {
+                break;
+            }
+            if behaviour(next) {
+                continue;
+            }
+            if is_call(next.op.name) {
+                break;
+            }
+            if !pushes(next.op.name) {
+                if super::bytediff::addressed_slots(next).contains(&slot) {
+                    break;
+                }
+                continue;
+            }
+            if next.op.name == "PSF" && w0(next) == Some(slot) {
+                // The RECEIVER of a method is evaluated first and pushed last, so the method's
+                // own arguments stand between its production and its push: a push the call
+                // follows at once is inline whatever went on the stack before it. Only a value
+                // pushed as an EARLIER argument, with the call's later arguments still to come,
+                // stood before the argument run — a statement.
+                let last_push = instrs.get(idx + 1).is_some_and(|after| is_call(after.op.name));
+                if others > 0 && !last_push {
+                    out.insert(slot);
+                }
+                break;
+            }
+            others += 1;
+        }
+    }
+    out
+}
+
+/// Turn the structurer's construction-site markers into declarations, or drop them.
+///
+/// A marker names a slot by number. It becomes `T local_N;` on its own line when the slot is a
+/// value struct vanilla touches only after its first branch (so the declaration did not stand at
+/// the top) and the text mentions the local. One declaration per slot: a second marker for the
+/// same slot — the compiler reusing it — is dropped.
+fn resolve_ctor_site_markers(
+    body: &str,
+    locals: &BTreeMap<i32, String>,
+    refs: &RefResolver,
+    after_branch: &HashSet<i32>,
+) -> (String, HashSet<i32>) {
+    let marker = super::structure::CTOR_SITE;
+    if !body.contains(marker) {
+        return (body.to_owned(), HashSet::new());
+    }
+    let _ = after_branch;
+    let lines: Vec<&str> = body.lines().collect();
+    let owned: Vec<String> = lines.iter().map(|l| (*l).to_owned()).collect();
+    let depths = block_depths(&owned);
+    let mut placed: HashSet<i32> = HashSet::new();
+    let mut kept: Vec<String> = Vec::with_capacity(lines.len());
+    for (at, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix(marker) else {
+            kept.push((*line).to_owned());
+            continue;
+        };
+        let Some(slot) = rest.trim().parse::<i32>().ok() else {
+            continue;
+        };
+        let ident = format!("local_{slot}");
+        let mentions: Vec<usize> = (0..lines.len())
+            .filter(|k| !lines[*k].contains(marker) && count_ident(lines[*k], &ident) > 0)
+            .collect();
+        // The declaration has to be visible from every mention: none before it, and none after
+        // the block it stands in has closed. A slot constructed in one arm and used in another
+        // keeps its hoisted declaration.
+        let depth = depths[at];
+        let block_end = (at + 1..lines.len())
+            .find(|k| depths[*k] < depth)
+            .unwrap_or(lines.len());
+        let visible = mentions.iter().all(|m| *m > at && *m < block_end)
+            && mentions.iter().all(|m| depths[*m] >= depth);
+        let ty = locals.get(&slot);
+        let wanted = !placed.contains(&slot)
+            && !mentions.is_empty()
+            && visible
+            && ty.is_some_and(|ty| is_value_struct_type(ty));
+        if wanted {
+            let indent = indent_of(line);
+            kept.push(format!(
+                "{indent}{} {ident};",
+                qualify_decl_type(ty.expect("checked"), refs)
+            ));
+            placed.insert(slot);
+        }
+    }
+    let mut joined = kept.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    (joined, placed)
 }
 
 /// Why a short circuit was not folded, behind `GORE_AS_SC_DIAG`.

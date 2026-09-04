@@ -892,6 +892,21 @@ fn scan_back_retval(ctx: &Ctx, before: usize) -> Option<String> {
 /// [`scan_back_retval`] bounded below by `floor` (instruction index): used by the switch
 /// recovery's synthesized `return`s so a case's value never leaks in from a PRECEDING case
 /// region (the linear scan would otherwise cross the region boundary).
+thread_local! {
+    /// Absolute index of the instruction the statement builder is rendering.
+    static CUR_INSTR: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// `(slot, call index)` for every by-value call result the builder popped as the call's
+    /// hidden out-slot. The emitter reads it once the body is built: a value pushed on again
+    /// only after other operands went on the stack was a statement of its own.
+    static RVO_PRODUCERS: std::cell::RefCell<Vec<(i32, usize)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The out-slot producers recorded since the last call, in order.
+pub(crate) fn take_rvo_producers() -> Vec<(i32, usize)> {
+    RVO_PRODUCERS.with(|v| std::mem::take(&mut *v.borrow_mut()))
+}
+
 /// Which loop shape produced a condition, and what its test block carried, behind
 /// `GORE_AS_LOOP_DIAG`.
 fn loop_diag(path: &str, stmts: &[String], cond: &str) {
@@ -1161,7 +1176,7 @@ pub(crate) fn resolve_cast_typeid(refs: &RefResolver, tid: i32) -> Option<String
 
 /// A primitive numeric-conversion opcode (`dst = (cast) src`); the cast is implicit in
 /// type-erased AngelScript source, so we render the plain copy `dst = src`.
-fn is_numeric_cast(n: &str) -> bool {
+pub(crate) fn is_numeric_cast(n: &str) -> bool {
     matches!(
         n,
         "iTOf"
@@ -1418,6 +1433,17 @@ fn build_call(
                 slot.is_psf && slot.ty.as_deref().map(tyhead) == ret_ty.map(tyhead)
             }
         };
+    if rvo_slot {
+        let idx = if is_method { 2 } else { 1 };
+        let out_slot = stack[stack.len() - idx]
+            .s
+            .strip_prefix("local_")
+            .and_then(|rest| rest.split('_').next())
+            .and_then(|rest| rest.parse::<i32>().ok());
+        if let Some(slot) = out_slot {
+            RVO_PRODUCERS.with(|v| v.borrow_mut().push((slot, CUR_INSTR.with(|c| c.get()))));
+        }
+    }
     let need = trusted_arity.map(|n| n + is_method as usize + rvo_slot as usize);
     let collected: Vec<Arg> = take_call_frame(stack, need);
     // Implicit `__WorldContext` markers occupied a stack slot so the split arithmetic matched the
@@ -2356,6 +2382,8 @@ pub(crate) fn bare_type_name(tyname: &str) -> &str {
 /// emitter turns the pair into a `while` once the condition is one expression, and drops the
 /// mark when it cannot -- leaving exactly the `if` that stood here before.
 pub(crate) const LOOP_BACK_EDGE: &str = "//__gore_back_edge";
+/// `//__gore_ctor <slot>`: a default construction of a local the structurer met at this point.
+pub(crate) const CTOR_SITE: &str = "//__gore_ctor";
 
 /// NAMESPACE access, which fails with "Namespace 'UStoryG1R' doesn't exist".
 pub(crate) fn qualify_class_name(name: &str, refs: &RefResolver) -> String {
@@ -2864,6 +2892,7 @@ fn block_stmts_in(
     let insns = &ctx.instrs[lo..hi];
     for k in 0..insns.len() {
         let ins = &insns[k];
+        CUR_INSTR.with(|c| c.set(lo + k));
         let n = ins.op.name;
         let flushed_by_behaviour = behaviour_flushed.take();
         // Invalidate a cached SetV* constant when this op overwrites that slot with a
@@ -4240,6 +4269,27 @@ fn block_stmts_in(
                                     ) {
                                         default_ctor_temp.insert(top.s.clone(), owner.to_string());
                                     }
+                                }
+                            }
+                        }
+                    }
+                    // A 0-param construction of a PSF'd LOCAL that the next instruction does not
+                    // push on again is a DECLARATION in the source — `FInGameTime local_16;` stood
+                    // right here, between the statements around it. Leave a marker naming the slot
+                    // (as a number, so it is not a mention of the local); the emitter turns it into
+                    // the declaration at this position where the local has no other declaration,
+                    // and drops it otherwise.
+                    if ctx.refs.func_params_by_ptr(ptr).map(|p| p.len()) == Some(0) {
+                        if let Some(top) = stack.last() {
+                            if top.is_psf && top.s.starts_with("local_") {
+                                let slot_num = top.s.strip_prefix("local_").unwrap_or("");
+                                let consumed_next = insns.get(k + 1).is_some_and(|n| {
+                                    matches!(n.op.name, "PSF" | "PshVPtr")
+                                        && n.words.first().map(|w| *w as i16 as i32)
+                                            == slot_num.parse::<i32>().ok()
+                                });
+                                if !consumed_next && slot_num.parse::<i32>().is_ok() {
+                                    out.push(format!("{CTOR_SITE} {slot_num}"));
                                 }
                             }
                         }
