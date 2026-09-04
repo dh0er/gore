@@ -58,9 +58,14 @@ pub fn parse_classes(source: &str) -> Vec<EmittedClass> {
 pub fn static_class_target(expression: &str) -> Option<&str> {
     let at = expression.find("::StaticClass()")?;
     let head = &expression[..at];
+    // Über die Zeichenlänge zurückspringen, nicht über ein Byte: `parse_classes` läuft über alle
+    // 7317 Module, und ein mehrbyte-Zeichen direkt vor dem Ausdruck würde sonst mitten in einem
+    // Zeichen schneiden und den Aufrufer abstürzen lassen statt `None` zu liefern.
     let start = head
-        .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-        .map_or(0, |i| i + 1);
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '_'))
+        .map_or(0, |(index, c)| index + c.len_utf8());
     let name = &head[start..];
     (!name.is_empty()).then_some(name)
 }
@@ -150,5 +155,16 @@ class UVisualFeatures_OC_STT_Diego : UCharacterVisualFeaturesDefinition
         );
         assert_eq!(static_class_target("4"), None);
         assert_eq!(static_class_target("n\"OC_STT_Diego\""), None);
+    }
+
+    #[test]
+    fn a_multi_byte_character_before_the_expression_does_not_panic() {
+        // Der Parser läuft über jedes Modul des Spiels; ein Absturz hier legt das ganze Kommando
+        // lahm, also muss auch eine Zeile, die so nie emittiert würde, eine Antwort liefern.
+        assert_eq!(static_class_target("ä::StaticClass()"), None);
+        assert_eq!(
+            static_class_target("\"Präzision\" + UFoo::StaticClass()"),
+            Some("UFoo")
+        );
     }
 }
