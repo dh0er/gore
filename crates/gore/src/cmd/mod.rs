@@ -18,6 +18,7 @@ pub mod location_catalog;
 pub mod mcp;
 pub mod mgr;
 pub mod modcmd;
+pub mod npc;
 pub mod package;
 pub mod scaffold;
 pub mod story_catalog;
