@@ -5,6 +5,13 @@ uses the matching version section as the GitHub release notes.
 
 ## [Unreleased]
 
+- `gore as`: 832 of 164,723 script functions still recompile to a semantically
+  different program (from 1,114); 7,043 of 7,317 modules carry none, and no
+  recompiled loop has a bound of zero any more.
+- `gore as emit-all --skip <module>` leaves a module out of the tree.
+- `GORE_AS_SIDECAR_TRACE=1` prints compiler errors as they happen, so a crashed
+  compile still names the module and line.
+
 ## [0.3.0] - 2026-09-02
 
 - Add `gore dialog list`, `tree`, `show`, `export` and `text` for inspecting

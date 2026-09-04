@@ -18167,12 +18167,16 @@ mod declaration_sink_tests {
     }
 
     #[test]
-    fn mentions_in_two_blocks_stay_at_function_scope() {
+    fn mentions_in_two_blocks_get_a_life_each() {
+        // The witness says the slot is constructed inside a block: the compiler reuses one
+        // frame slot for a value that lives in each sibling block on its own, constructed
+        // and destroyed there. One declaration at function scope costs a construction the
+        // shipped bytecode does not have (measured tree-wide).
         let body = "    FThing local_9;\n    if (A())\n    {\n        Use(local_9);\n    }\n    if (B())\n    {\n        Use(local_9);\n    }\n";
         assert_eq!(
             sink_declarations_into_their_block(body, &HashSet::from([9]), &HashSet::new()),
-            body,
-            "no single block holds every mention, so nothing can hold the declaration"
+            "    if (A())\n    {\n        FThing local_9;\n        Use(local_9);\n    }\n    if (B())\n    {\n        FThing local_9;\n        Use(local_9);\n    }\n",
+            "each block that uses the slot declares its own life"
         );
     }
 }
@@ -18813,18 +18817,18 @@ mod source_shape_tests {
     #[test]
     fn drops_a_store_the_rendered_source_never_reads() {
         let body = "    local_2 = 1045220557;\n    this.Weight = 0.2f;\n";
-        assert_eq!(drop_dead_stores(body), "    this.Weight = 0.2f;\n");
+        assert_eq!(drop_dead_stores(body, &std::collections::HashSet::from([2])), "    this.Weight = 0.2f;\n");
     }
 
     #[test]
     fn keeps_a_store_whose_value_is_read_back() {
         let body = "    local_2 = 3;\n    this.Weight = local_2;\n";
-        assert_eq!(drop_dead_stores(body), body);
+        assert_eq!(drop_dead_stores(body, &std::collections::HashSet::from([2])), body);
     }
 
     #[test]
     fn keeps_an_unread_store_that_could_have_run_a_call() {
         let body = "    local_2 = this.Consume();\n    return;\n";
-        assert_eq!(drop_dead_stores(body), body);
+        assert_eq!(drop_dead_stores(body, &std::collections::HashSet::from([2])), body);
     }
 }

@@ -41,7 +41,7 @@ later edit can use byte-exact carry instead of compiling a partial or mistyped d
 
 ## What is left
 
-**1,114 functions (0.68%) recompile to bytecode that differs semantically.** A semantic
+**832 functions (0.51%) recompile to bytecode that differs semantically** (1,114 on 2026-08-31). A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.

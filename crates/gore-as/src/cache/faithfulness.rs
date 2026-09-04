@@ -124,6 +124,11 @@ pub fn warning_for_module(
     module: &str,
 ) -> Option<String> {
     let known = for_module(cache_sha256, binds_sha256, module)?;
+    render_warning(module, known)
+}
+
+/// The warning text for one measured row, or nothing where the row records no difference.
+fn render_warning(module: &str, known: ModuleFaithfulness) -> Option<String> {
     if known.divergent_functions == 0 {
         return None;
     }
@@ -276,15 +281,26 @@ mod tests {
     }
 
     #[test]
-    fn a_dead_loop_module_says_the_body_never_runs() {
+    fn a_dead_loop_row_says_the_body_never_runs() {
+        // The measured table carries no such row any more (the zero-bound loops are gone), so
+        // the rendering is exercised on a synthetic row.
+        let known = ModuleFaithfulness {
+            divergent_functions: 3,
+            behaviour_risks: 1,
+            generated_methods: 0,
+        };
+        let warning = render_warning("Some.Module", known).expect("warns");
+        assert!(warning.contains("3 functions"));
+        assert!(warning.contains("1 loop in it recompiles with a bound of zero, so the body never runs"));
+    }
+
+    #[test]
+    fn no_measured_module_carries_a_dead_loop_any_more() {
         let guid = measured_guid();
         let binds = measured_binds();
         let module = "AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CreepingEvaluationContext";
         let known = for_module(&guid, Some(&binds), module).expect("measured");
-        assert!(known.behaviour_risks > 0);
-        assert!(warning_for_module(&guid, Some(&binds), module)
-            .expect("warns")
-            .contains("never runs"));
+        assert_eq!(known.behaviour_risks, 0);
     }
 
     #[test]
