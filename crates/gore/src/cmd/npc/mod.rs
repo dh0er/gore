@@ -4,6 +4,7 @@
 //! AngelScript-Klassen; alles hier löst diese Kette über den emittierten Quelltext auf, nicht
 //! über Bytecode, damit die Kernfunktionen rein und ohne Spielinstallation prüfbar bleiben.
 
+pub mod chain;
 pub mod defaults;
 pub mod render;
 
