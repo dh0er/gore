@@ -174,6 +174,10 @@ pub enum AsCmd {
         /// ordinary `compile-module --op edit` inputs should retain the complete emitted defaults.
         #[arg(long)]
         no_defaults: bool,
+        /// Module names to leave out of the tree (repeatable). The tree is still prepared whole;
+        /// a measurement copies the skipped, slow modules from an earlier emitted tree.
+        #[arg(long = "skip")]
+        skip: Vec<String>,
     },
     /// Emit recompilable .as for modules whose name contains <needle>.
     Emit {
@@ -2588,6 +2592,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             file,
             outdir,
             no_defaults,
+            skip,
         } => {
             let bytes = read_module_cache(&file)?;
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
@@ -2601,6 +2606,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             )
             .context("prepare emitted modules")?
             .with_class_defaults(!no_defaults)
+            .skipping(skip)
             .emit_tree(&outdir)
             .with_context(|| format!("emitting to {}", outdir.display()))?;
             eprintln!(

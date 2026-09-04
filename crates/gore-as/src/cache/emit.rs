@@ -2399,6 +2399,21 @@ fn emit_function_ctor(
             );
         let rendered = fold_cast_operands(&rendered, &declared_locals, &call_result_types);
         pass_trace("fold_cast_operands", &rendered);
+        // Once more: an else-arm that was several carrier steps is one expression only now, and
+        // `if (X) { b = true; } else { b = Y; }` over it is `b = X || Y;` — evaluated straight
+        // into the named bool, where the if/else costs a literal temporary and a copy.
+        let rendered = fold_short_circuits(
+            &rendered,
+            &proven_locals,
+            refs,
+            fields,
+            &path_roots,
+            class_name,
+        );
+        pass_trace("fold_short_circuits#late", &rendered);
+        let rendered = join_short_circuit_chains(&rendered);
+        let rendered = rejoin_short_circuit_chains(&rendered);
+        pass_trace("rejoin_short_circuit_chains#late", &rendered);
         let rendered = fold_enum_round_trips(&rendered, fields, &path_roots, refs);
         pass_trace("fold_enum_round_trips", &rendered);
         let rendered = inline_single_use_literals(&rendered);
@@ -2465,7 +2480,7 @@ fn emit_function_ctor(
         pass_trace("inline_unnamed_value_temporaries", &rendered);
         // Now that the operands carry no names of their own, an in-place update stands directly
         // under its declaration and the pair is one statement — which can expose another value.
-        let rendered = merge_self_assignments(&rendered);
+        let rendered = merge_self_assignments(&rendered, &declared_locals);
         pass_trace("merge_self_assignments", &rendered);
         let mut rendered = rendered;
         // A returned expression folds one step per pass: three names in a chain need three.
@@ -7538,8 +7553,10 @@ fn inline_temporary_into(
     // change. "Feeds this call" is checked against the line as it stands, so a temporary that an
     // already-inlined argument still refers to counts.
     let between_feeds_this_call = (definition + 1..index).all(|line| {
-        // A line already consumed by an earlier inlining is gone, not in the way.
+        // A line already consumed by an earlier inlining is gone, not in the way; so is a
+        // construction-site marker — a declaration, not a side effect.
         lines[line].is_empty()
+            || lines[line].trim_start().starts_with(super::structure::CTOR_SITE)
             || defined_temporary(&lines[line])
                 .is_some_and(|feeder| count_ident(&lines[index], &feeder) > 0)
     });
@@ -7736,10 +7753,25 @@ fn is_call_result(value: &str) -> bool {
             '(' => {
                 depth -= 1;
                 if depth == 0 {
-                    return inner[..at]
-                        .chars()
-                        .next_back()
-                        .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '>');
+                    // The callee path before the argument list carries no operator of its
+                    // own: `local_4 && Foo()` ends in a call but IS a chain, and moving it as
+                    // the call's result loses the name the chain was given.
+                    let callee = &inner[..at];
+                    let mut nested = 0usize;
+                    let operator_outside = callee.chars().any(|c| {
+                        match c {
+                            '(' => nested += 1,
+                            ')' => nested = nested.saturating_sub(1),
+                            ' ' if nested == 0 => return true,
+                            _ => {}
+                        }
+                        false
+                    });
+                    return !operator_outside
+                        && callee
+                            .chars()
+                            .next_back()
+                            .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '>');
                 }
             }
             _ => {}
@@ -10960,7 +10992,7 @@ fn rvo_temporary_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
 /// renders the two steps as two statements. Vanilla wrote one — the initial value is not a value
 /// of its own, it is the left operand. Folding the pair costs nothing and lets the value-life
 /// rules see the whole expression, which is what says whether the slot was ever named.
-fn merge_self_assignments(body: &str) -> String {
+fn merge_self_assignments(body: &str, locals: &BTreeMap<i32, String>) -> String {
     let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
     let mut at = 0usize;
     while at + 1 < lines.len() {
@@ -10989,7 +11021,10 @@ fn merge_self_assignments(body: &str) -> String {
             // `iTOf` before the update, and `x = x / n` divides floats. Merged, `(a - b) / n`
             // divides integers ("Integer division causes precision loss") and converts after.
             // Only an initialiser that is floating on its own may move.
-            if matches!(ty, "float" | "double" | "float32") && !floating_on_its_own(&init) {
+            if matches!(ty, "float" | "double" | "float32")
+                && integer_on_its_own(&init, locals)
+                && !floating_on_its_own(&init, locals)
+            {
                 return None;
             }
             Some(format!(
@@ -14982,10 +15017,52 @@ fn drop_dead_literal_stores(text: &str) -> String {
     joined
 }
 
+/// An expression that carries an INTEGER operand: an integer literal, or a local declared with
+/// an integer type. Members are no witness either way — their types live in other tables.
+fn integer_on_its_own(expr: &str, locals: &BTreeMap<i32, String>) -> bool {
+    if used_locals(expr).iter().any(|slot| {
+        locals.get(slot).is_some_and(|ty| {
+            matches!(
+                ty.as_str(),
+                "int" | "int8" | "int16" | "int64" | "uint" | "uint8" | "uint16" | "uint64"
+            )
+        })
+    }) {
+        return true;
+    }
+    let bytes = expr.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit()
+            && (i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_'))
+        {
+            let mut j = i;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            let float_tail = bytes.get(j).is_some_and(|b| matches!(b, b'.' | b'f' | b'e' | b'E'));
+            if !float_tail {
+                return true;
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
 /// An expression that is floating whatever its operands' declared types: it carries a floating
 /// literal (`0.5`, `2.0f`) or an explicit conversion to a floating type.
-fn floating_on_its_own(expr: &str) -> bool {
+fn floating_on_its_own(expr: &str, locals: &BTreeMap<i32, String>) -> bool {
     if ["float(", "float32(", "double("].iter().any(|c| expr.contains(c)) {
+        return true;
+    }
+    if used_locals(expr).iter().any(|slot| {
+        locals
+            .get(slot)
+            .is_some_and(|ty| matches!(ty.as_str(), "float" | "float32" | "double"))
+    }) {
         return true;
     }
     let bytes = expr.as_bytes();

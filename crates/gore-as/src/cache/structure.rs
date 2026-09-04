@@ -2779,6 +2779,10 @@ fn block_stmts_in(
                                                  // order gate for the stale-cmp-vs-live-bool-pending decision at conditional jumps.
     let mut test_after_call = true;
     let mut stack: Vec<Arg> = init; // pushed pointer/value expressions
+    // Default-constructed locals pushed straight as an argument, with a provisional
+    // construction-site marker in `out`: (slot, name). Settled at the loop head once the
+    // consuming call has taken the operand off the stack.
+    let mut pending_temp_markers: Vec<(i32, String, usize)> = Vec::new();
     let mut value_reg: Option<String> = None;
     let mut obj_reg: Option<String> = None;
     let mut ref_reg: Option<String> = None; // Idiom-B member address
@@ -2917,6 +2921,75 @@ fn block_stmts_in(
         let ins = &insns[k];
         CUR_INSTR.with(|c| c.set(lo + k));
         let n = ins.op.name;
+        if !pending_temp_markers.is_empty() {
+            let is_destructor_of = |at: usize| -> Option<i32> {
+                let n = ctx.instrs.get(at)?;
+                let d = ctx.instrs.get(at + 1)?;
+                (n.op.name == "PSF"
+                    && d.op.name == "CALLSYS"
+                    && ctx
+                        .refs
+                        .func_by_ptr(d.qwords.first().copied().unwrap_or(0) as i64)
+                        .is_some_and(|name| name.starts_with("$beh2")))
+                .then(|| n.words.first().map(|w| *w as i16 as i32))
+                .flatten()
+            };
+            let mut settled: Vec<usize> = Vec::new();
+            for (index, (slot, name, pushed_at)) in pending_temp_markers.iter().enumerate() {
+                // The construction pops its receiver before the argument push is processed:
+                // only once the push has gone by can an absent operand mean "consumed".
+                if k <= *pushed_at || stack.iter().any(|arg| &arg.s == name) {
+                    continue; // still waiting for its call
+                }
+                // The consuming call: the nearest call processed since the push.
+                let consumer = (pushed_at + 1..k).rev().find(|j| insns[*j].op.is_call());
+                let temporary = consumer.is_some_and(|j| {
+                    // A temporary is released right after the call — behind the result's copy
+                    // out of the register and other temporaries' releases; anything else first
+                    // (another statement's instruction, the slot addressed again) is the life
+                    // of a declared local.
+                    let mut at = lo + j + 1;
+                    loop {
+                        if let Some(destroyed) = is_destructor_of(at) {
+                            if destroyed == *slot {
+                                break true;
+                            }
+                            at += 2;
+                            continue;
+                        }
+                        match ctx.instrs.get(at) {
+                            Some(next)
+                                if matches!(
+                                    next.op.name,
+                                    "CpyRtoV4" | "CpyRtoV8" | "STOREOBJ" | "PopPtr" | "PopRPtr"
+                                ) =>
+                            {
+                                at += 1;
+                            }
+                            _ => break false,
+                        }
+                    }
+                });
+                let marker = format!("{CTOR_SITE} {slot}");
+                if std::env::var_os("GORE_AS_MARKER_DIAG").is_some() {
+                    let names: Vec<&str> = stack.iter().map(|arg| arg.s.as_str()).collect();
+                    eprintln!(
+                        "[marker] slot={slot} name={name} pushed_at={pushed_at} k={k} consumer={consumer:?} temporary={temporary} stack={names:?}"
+                    );
+                }
+                if temporary {
+                    if let Some(pos) = out.iter().rposition(|line| *line == marker) {
+                        out.remove(pos);
+                    }
+                } else {
+                    default_ctor_temp.remove(name);
+                }
+                settled.push(index);
+            }
+            for index in settled.into_iter().rev() {
+                pending_temp_markers.remove(index);
+            }
+        }
         let flushed_by_behaviour = behaviour_flushed.take();
         // Invalidate a cached SetV* constant when this op overwrites that slot with a
         // NON-constant value (copy, call-result deref, arithmetic, conversion). Otherwise a
@@ -4311,48 +4384,6 @@ fn block_stmts_in(
                                         && n.words.first().map(|w| *w as i16 as i32)
                                             == slot_num.parse::<i32>().ok()
                                 });
-                                // Pushed at once as an argument, but read again once the call
-                                // has returned: a temporary would be destroyed right after the
-                                // call, so this is the variable the source declared here.
-                                let reused_after_call = consumed_next
-                                    && slot_num.parse::<i32>().ok().is_some_and(|slot| {
-                                        let rest = &ctx.instrs[lo + k + 2..];
-                                        let Some(call_at) = rest.iter().position(|n| {
-                                            matches!(
-                                                n.op.name,
-                                                "CALL" | "CALLSYS" | "CALLINTF" | "CALLBND"
-                                            )
-                                        }) else {
-                                            return false;
-                                        };
-                                        let after = &rest[call_at + 1..];
-                                        let mut j = 0usize;
-                                        while j < after.len() {
-                                            let n = &after[j];
-                                            let destructor = n.op.name == "PSF"
-                                                && n.words.first().map(|w| *w as i16 as i32)
-                                                    == Some(slot)
-                                                && after.get(j + 1).is_some_and(|d| {
-                                                    d.op.name == "CALLSYS"
-                                                        && ctx
-                                                            .refs
-                                                            .func_by_ptr(
-                                                                d.qwords.first().copied().unwrap_or(0)
-                                                                    as i64,
-                                                            )
-                                                            .is_some_and(|name| name.starts_with("$beh2"))
-                                                });
-                                            if destructor {
-                                                j += 2;
-                                                continue;
-                                            }
-                                            if super::bytediff::addressed_slots(n).contains(&slot) {
-                                                return true;
-                                            }
-                                            j += 1;
-                                        }
-                                        false
-                                    });
                                 // `PSF src; PSF dst; $beh0; PSF dst; CALLSYS opAssign` is a
                                 // declaration WITH initialiser the compiler builds as
                                 // construct-then-assign (`TArray<T> x = <value>;`): the push
@@ -4366,7 +4397,7 @@ fn block_stmts_in(
                                                 .func_by_ptr(c.qwords.first().copied().unwrap_or(0) as i64)
                                                 == Some("opAssign")
                                     });
-                                if (!consumed_next || reused_after_call || assigned_next)
+                                if (!consumed_next || assigned_next)
                                     && slot_num.parse::<i32>().is_ok()
                                 {
                                     out.push(format!("{CTOR_SITE} {slot_num}"));
@@ -4388,6 +4419,20 @@ fn block_stmts_in(
                                     flush!();
                                     out.push(format!("{name} = {ty}();"));
                                     continue;
+                                } else if consumed_next {
+                                    // Pushed at once as an argument. Whether the source wrote a
+                                    // temporary (`Foo(T())`) or a declared local (`T x; Foo(x);`)
+                                    // is decided by where the DESTRUCTOR stands — right after
+                                    // the consuming call, or later — and the consuming call is
+                                    // known only once the structurer's own stack hands the
+                                    // operand to it. Leave a provisional marker; the loop head
+                                    // settles it (see `pending_temp_markers`).
+                                    if let Ok(slot) = slot_num.parse::<i32>() {
+                                        out.push(format!("{CTOR_SITE} {slot_num}"));
+                                        // The argument push stands at `k + 1`; the operand it
+                                        // puts on the stack is what the consuming call takes.
+                                        pending_temp_markers.push((slot, top.s.clone(), k + 1));
+                                    }
                                 }
                             }
                         }
@@ -5914,6 +5959,14 @@ fn block_stmts_in(
                     ..Default::default()
                 });
             }
+        }
+    }
+    // Provisional markers whose consuming call lies in a later block: the argument is rendered
+    // there, as the temporary it was taken for.
+    for (slot, _, _) in pending_temp_markers.drain(..) {
+        let marker = format!("{CTOR_SITE} {slot}");
+        if let Some(pos) = out.iter().rposition(|line| *line == marker) {
+            out.remove(pos);
         }
     }
     (out, cmp, stack)
