@@ -14,6 +14,28 @@ pub struct Site {
 
 pub const WORLD_POINT_BASE: &str = "UWorldPointScript";
 
+/// Präfix jeder Spawn-Definition. Das Unterstrich-Zeichen gehört dazu: die nackte Basisklasse
+/// `USpawnAIAgentDefinition` steht als Typparameter in `TSubclassOf<…>` und ist keine Definition.
+const SPAWN_DEFINITION_PREFIX: &str = "USpawnAIAgentDefinition_";
+
+/// Die Spawn-Definition eines `SpawnAIAgent`-Aufrufs, in beiden ausgelieferten Schreibweisen.
+///
+/// Die gewöhnliche Form wickelt sie in `TSubclassOf<…>(… ::StaticClass())`. 14 der 1764 Aufrufe
+/// im Spiel übergeben stattdessen eine nackte Klassenreferenz — alles Kreaturen in der Alten
+/// Feste und der Freien Mine. Wer nur die erste Form liest, verschweigt diese Fundstellen, statt
+/// sie zu melden.
+fn spawn_definition_in(call: &str) -> Option<&str> {
+    if let Some(target) = super::defaults::static_class_target(call) {
+        return Some(target);
+    }
+    let at = call.find(SPAWN_DEFINITION_PREFIX)?;
+    let rest = &call[at..];
+    let end = rest
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .unwrap_or(rest.len());
+    Some(&rest[..end])
+}
+
 /// Jede Spawn-Stelle eines emittierten Levelskripts.
 pub fn parse_sites(module: &str, source: &str) -> Vec<Site> {
     let mut out = Vec::new();
@@ -35,9 +57,7 @@ pub fn parse_sites(module: &str, source: &str) -> Vec<Site> {
         if !trimmed.contains("SpawnAIAgent(") {
             continue;
         }
-        let Some(spawn_definition) =
-            super::defaults::static_class_target(trimmed).map(str::to_string)
-        else {
+        let Some(spawn_definition) = spawn_definition_in(trimmed).map(str::to_string) else {
             continue;
         };
         out.push(Site {
@@ -114,6 +134,31 @@ class UNotAWorldPoint : USomethingElse
     #[test]
     fn a_module_without_spawns_yields_nothing() {
         assert!(parse_sites("LevelScripts.Empty", "class UX : UY\n{\n}\n").is_empty());
+    }
+
+    #[test]
+    fn a_naked_class_reference_is_a_site_too() {
+        // 14 der 1764 Aufrufe im Spiel sehen so aus, alles Kreaturen in der Alten Feste und der
+        // Freien Mine. Wörtlich aus `Map_x3_y1_FreeMine_AI_script.as`.
+        let source = "class UWP_FM : UWorldPointScript\n{\n    void OnWorldStart()\n    {\n        this.SpawnAIAgent(USpawnAIAgentDefinition_LizardFire_Prime, nullptr);\n    }\n}\n";
+        let sites = parse_sites("LevelScripts.Map_x3_y1_FreeMine_AI_script", source);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(
+            sites[0].spawn_definition,
+            "USpawnAIAgentDefinition_LizardFire_Prime"
+        );
+    }
+
+    #[test]
+    fn the_generic_type_parameter_is_not_mistaken_for_a_definition() {
+        // `TSubclassOf<USpawnAIAgentDefinition>` trägt die nackte Basisklasse. Sie hat keinen
+        // Unterstrich-Zusatz und darf nie als Fundstelle durchgehen.
+        assert_eq!(
+            spawn_definition_in(
+                "this.SpawnAIAgent(TSubclassOf<USpawnAIAgentDefinition>(x), nullptr);"
+            ),
+            None
+        );
     }
 
     #[test]
