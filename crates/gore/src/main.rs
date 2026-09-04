@@ -78,6 +78,11 @@ enum Commands {
         #[command(subcommand)]
         action: cmd::dialog::DialogAction,
     },
+    /// Read the game's characters, and author bounded changes to them
+    Npc {
+        #[command(subcommand)]
+        action: cmd::npc::NpcAction,
+    },
     /// Search the bundled catalogs and the effect register: class names, ids, and what they do
     Find {
         /// Words to search for; several words all have to match, so no quoting is needed
@@ -510,6 +515,7 @@ fn run_cli() {
         Commands::LocationCatalog { source, out } => cmd::location_catalog::run(source, out),
         Commands::Location { action } => cmd::location::run(action),
         Commands::Dialog { action } => cmd::dialog::run(action),
+        Commands::Npc { action } => cmd::npc::run(action),
         Commands::Find {
             query,
             domain,
