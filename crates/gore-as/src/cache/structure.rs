@@ -1124,8 +1124,31 @@ fn scan_back_retval_floor(ctx: &Ctx, before: usize, floor: usize) -> Option<Stri
         let ins = &ctx.instrs[i];
         match ins.op.name {
             "CpyVtoR4" | "CpyVtoR8" | "CpyVtoR1" | "LOADOBJ" => {
+                // `FreeNullV8 v4; LOADOBJ v4` returns a handle the compiler just nulled: that
+                // is `return nullptr;` through a scratch slot, not a declared handle returned
+                // (which loads the slot without freeing it first).
+                let slot = ins.words.first().copied().map(s16);
+                // Only when the free FLOWS into the load: a load that is a jump target joins
+                // paths, and the free before it in the listing belongs to another arm
+                // (measured: `ClrVPtr v6` of an else-arm made a cast's result `nullptr`).
+                let joined_from_elsewhere = ctx.instrs.iter().any(|jump| {
+                    jump.op.name.starts_with('J')
+                        && jump
+                            .dwords
+                            .first()
+                            .map(|off| jump.offset_dw as i64 + 2 + *off as i32 as i64)
+                            == Some(ins.offset_dw as i64)
+                });
+                if ins.op.name == "LOADOBJ"
+                    && i > floor
+                    && !joined_from_elsewhere
+                    && matches!(ctx.instrs[i - 1].op.name, "FreeNullV8" | "ClrVPtr")
+                    && ctx.instrs[i - 1].words.first().copied().map(s16) == slot
+                {
+                    return Some("nullptr".to_string());
+                }
                 return Some(ctx.const_return_literal(i).unwrap_or_else(|| {
-                    ctx.slot_name(ins.words.first().copied().map(s16).unwrap_or(0))
+                    ctx.slot_name(slot.unwrap_or(0))
                 }));
             }
             "RET" => return None,
@@ -2710,7 +2733,7 @@ fn temporary_argument_call(
 
 /// UHT reserves the `b<Uppercase>` prefix for bool UPROPERTYs, so the last path segment of a
 /// member reference tells whether the field is one even when no type channel resolved it.
-fn is_ue_bool_field(reference: &str) -> bool {
+pub(crate) fn is_ue_bool_field(reference: &str) -> bool {
     let field = reference.rsplit(['.', ':']).next().unwrap_or("");
     let bytes = field.as_bytes();
     bytes.len() >= 2 && bytes[0] == b'b' && bytes[1].is_ascii_uppercase()
@@ -2943,7 +2966,28 @@ fn block_stmts_in(
                 }
                 // The consuming call: the nearest call processed since the push.
                 let consumer = (pushed_at + 1..k).rev().find(|j| insns[*j].op.is_call());
-                let temporary = consumer.is_some_and(|j| {
+                // `T x; return x;` for a type without a copy constructor: x is constructed,
+                // THEN the return slot is default-constructed (`PshVPtr v-2; $beh0` with no
+                // operand pushed before it), then x is assigned into it. A temporary returned
+                // (`return T();`) constructs the return slot FIRST, and a copy-constructible
+                // type copies straight from the temporary — one temp slot reused per return
+                // site, which is what naming it would lose.
+                let return_slot_built_between = consumer.is_some_and(|j| {
+                    (pushed_at + 1..j).any(|at| {
+                        at + 1 < insns.len()
+                            && insns[at].op.name == "PshVPtr"
+                            && insns[at].words.first().map(|w| *w as i16 as i32) == Some(-2)
+                            && insns[at + 1].op.name == "CALLSYS"
+                            && ctx
+                                .refs
+                                .func_by_ptr(insns[at + 1].qwords.first().copied().unwrap_or(0) as i64)
+                                .is_some_and(|name| name.starts_with("$beh0"))
+                            && !(at > 0
+                                && (insns[at - 1].op.name.starts_with("Psh")
+                                    || insns[at - 1].op.name == "PSF"))
+                    })
+                });
+                let temporary = !return_slot_built_between && consumer.is_some_and(|j| {
                     // A temporary is released right after the call — behind the result's copy
                     // out of the register and other temporaries' releases; anything else first
                     // (another statement's instruction, the slot addressed again) is the life
@@ -4210,6 +4254,31 @@ fn block_stmts_in(
                     // argument arity remains confined to CALLSYS/Thiscall1 below.
                     let na = None;
                     let trusted = ctx.refs.func_params_by_id(id).map(|p| p.len());
+                    // The same per-position row the CALLSYS arm records: a script callee's
+                    // `const T &inout` takes a temporary as well, and without the row the
+                    // default-constructed argument stayed a named local (`FInGameTime local_12;`).
+                    if let Some(params) = ctx.refs.func_params_by_id(id) {
+                        let name = ctx
+                            .refs
+                            .func_by_id(id)
+                            .and_then(|name| name.rsplit("::").next())
+                            .unwrap_or("call?")
+                            .to_string();
+                        let accepts: Vec<bool> = params
+                            .iter()
+                            .map(|p| !p.is_reference || p.is_object_const || p.is_read_only)
+                            .collect();
+                        match resolved_params.get_mut(&(name.clone(), accepts.len())) {
+                            Some(seen) => {
+                                for (slot, accepted) in seen.iter_mut().zip(&accepts) {
+                                    *slot &= *accepted;
+                                }
+                            }
+                            None => {
+                                resolved_params.insert((name, accepts.len()), accepts);
+                            }
+                        }
+                    }
                     let owner = ctx.refs.func_owner_by_id(id);
                     let ret_is_ref = ctx
                         .refs
@@ -4363,7 +4432,24 @@ fn block_stmts_in(
                                         owner.bytes().next(),
                                         Some(b'F') | Some(b'T') | Some(b'E')
                                     ) {
-                                        default_ctor_temp.insert(top.s.clone(), owner.to_string());
+                                        // The behaviour's owner is the bare template head
+                                        // (`TArray`); the slot's own type carries the instance
+                                        // (`TArray<AGothicCharacter>`), the only spelling that
+                                        // constructs. Without it the substitution refused and
+                                        // `return TArray<T>();` became a local declared at the top.
+                                        // Only a ONE-argument instance: the expression parser
+                                        // does not take `TMap<A, B>()` (measured: "Expected ','
+                                        // or ';' — Instead found '>'"), so a two-argument
+                                        // template keeps the bare head and stays unsubstituted.
+                                        let spelled = top
+                                            .ty
+                                            .as_deref()
+                                            .filter(|ty| {
+                                                ty.contains('<') && !ty.contains(',') && ty.starts_with(owner)
+                                            })
+                                            .unwrap_or(owner)
+                                            .to_string();
+                                        default_ctor_temp.insert(top.s.clone(), spelled);
                                     }
                                 }
                             }
@@ -4400,7 +4486,17 @@ fn block_stmts_in(
                                 if (!consumed_next || assigned_next)
                                     && slot_num.parse::<i32>().is_ok()
                                 {
-                                    out.push(format!("{CTOR_SITE} {slot_num}"));
+                                    // `init`: constructed AFTER its value was evaluated (the
+                                    // `PSF src; PSF dst; $beh0; opAssign` shape) — the one
+                                    // declaration the emitter may merge with the assignment
+                                    // that follows it. A bare marker stood BEFORE the value:
+                                    // `T x; x = f();` constructs first, and merging it moves
+                                    // the construction behind the call.
+                                    if assigned_next {
+                                        out.push(format!("{CTOR_SITE} {slot_num} init"));
+                                    } else {
+                                        out.push(format!("{CTOR_SITE} {slot_num}"));
+                                    }
                                 } else if consumed_next
                                     && stack.len() >= 2
                                     && top
