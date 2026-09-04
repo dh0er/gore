@@ -7,6 +7,7 @@
 pub mod chain;
 pub mod defaults;
 pub mod render;
+pub mod sites;
 
 use anyhow::Result;
 use clap::Subcommand;
