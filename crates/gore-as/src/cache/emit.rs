@@ -967,6 +967,10 @@ fn emit_function_ctor(
     for (slot, ty) in enum_field_copy_slots(f, refs, fields) {
         enum_overrides.entry(slot).or_insert(ty);
     }
+    // (Slots pushed into enum parameters — `enum_argument_slots` — are NOT typed here: an
+    // enum-typed local still reads as an int in the comparisons and stores around it, and the
+    // recompile refused the first tree that carried them. Measured: crash.)
+    let _ = enum_argument_slots(f, refs);
     enum_overrides.retain(|slot, ty| {
         !numkinds.contains_key(slot)
             && !float_args.contains_key(slot)
@@ -1691,6 +1695,12 @@ fn emit_function_ctor(
         fields,
         &call_result_copies(f),
     );
+    // A slot the structurer's marker declared right before its own assignment (`$beh0` then
+    // `opAssign`) was a declaration WITH that initialiser: the compiler builds `T x = <value>;`
+    // as construct-then-assign — but only after evaluating the value. Declared bare above the
+    // statement, the construction runs first.
+    let body = merge_site_declaration_with_assignment(&body, &declared_at_site);
+    pass_trace("merge_site_declaration_with_assignment", &body);
     pass_trace("fold_copy_out_temporaries", &body);
     let body = fold_cast_operands(&body, &declared_locals, &call_result_types);
     pass_trace("fold_cast_operands", &body);
@@ -2146,7 +2156,10 @@ fn emit_function_ctor(
             &locals,
             refs,
             &placed_so_far,
-            &slots_with_assignment_writes(f),
+            &slots_with_assignment_writes(f)
+                .union(&literal_temporary_slots(f))
+                .copied()
+                .collect(),
             &enum_overrides,
             &reference_locals,
         );
@@ -2389,6 +2402,8 @@ fn emit_function_ctor(
         pass_trace("fold_enum_round_trips", &rendered);
         let rendered = inline_single_use_literals(&rendered);
         pass_trace("inline_single_use_literals", &rendered);
+        let rendered = drop_dead_literal_stores(&rendered);
+        pass_trace("drop_dead_literal_stores", &rendered);
         let rendered = collapse_single_use_accumulators(&rendered, &widened);
         pass_trace("collapse_single_use_accumulators", &rendered);
         let rendered = inline_bool_chain_into_next_condition(&rendered);
@@ -8343,9 +8358,22 @@ fn fold_copy_out_temporaries(
     let mut kept: Vec<String> = Vec::new();
     let mut at = 0usize;
     while at < lines.len() {
+        // The target's own bare declaration may stand between the carrier's store and the
+        // copy (`T tmp = <value>; T x; x = tmp;`): the declaration stays, the copy takes the
+        // value — construct-then-assign is exactly what vanilla built for `T x = <value>;`.
+        let declared_between = lines
+            .get(at + 1)
+            .and_then(|line| bare_declaration(line))
+            .filter(|(_, name)| {
+                lines.get(at + 2).is_some_and(|copy| {
+                    copy.trim().strip_suffix(';').and_then(|c| c.split_once(" = ")).is_some_and(|(t, _)| t == name)
+                })
+            })
+            .is_some();
+        let copy_at = if declared_between { at + 2 } else { at + 1 };
         let folded = (|| {
             let (carrier, value) = slot_store(lines[at])?;
-            let copy = lines.get(at + 1)?.trim().strip_suffix(';')?;
+            let copy = lines.get(copy_at)?.trim().strip_suffix(';')?;
             let (target, copied) = copy.split_once(" = ")?;
             if copied != carrier || target == carrier {
                 return None;
@@ -8371,8 +8399,8 @@ fn fold_copy_out_temporaries(
                 None => fields?.get(target.strip_prefix("this.")?),
             };
             if target_type != Some(carrier_type)
-                || indent_of(lines[at]) != indent_of(lines[at + 1])
-                || !read_once_at(&lines, at, at + 1, &carrier)
+                || indent_of(lines[at]) != indent_of(lines[copy_at])
+                || !read_once_at(&lines, at, copy_at, &carrier)
             {
                 return None;
             }
@@ -8380,8 +8408,11 @@ fn fold_copy_out_temporaries(
         })();
         match folded {
             Some(replacement) => {
+                if declared_between {
+                    kept.push(lines[at + 1].to_string());
+                }
                 kept.push(replacement);
-                at += 2;
+                at = copy_at + 1;
             }
             None => {
                 kept.push(lines[at].to_string());
@@ -9545,9 +9576,19 @@ fn inline_bool_chain_into_next_condition(body: &str) -> String {
                 continue;
             }
             // Read once WITHIN THIS LIFE: the compiler reuses the slot for later carriers, and
-            // a later life of the same name is not a second reader of this value.
+            // a later life of the same name is not a second reader of this value — provided
+            // every later life DECLARES itself: a plain `local_1 = …;` further down relies on
+            // this declaration, and taking it into the condition leaves that store undeclared
+            // (measured: an out-of-scope read in CrimeScoring::SeverityMultiplier).
             let view: Vec<&str> = lines.iter().map(String::as_str).collect();
             if !read_once_at(&view, index, reader, &name) {
+                continue;
+            }
+            let later_lives_declare_themselves = lines[reader + 1..].iter().all(|line| {
+                count_ident(line, &name) == 0
+                    || declaration_with_initializer(line).is_some_and(|(_, n, _)| n == name)
+            });
+            if !later_lives_declare_themselves {
                 continue;
             }
             lines[reader] = rename_ident(&lines[reader], &name, &format!("({value})"));
@@ -14023,6 +14064,56 @@ fn call_result_copies(f: &Func) -> HashSet<i32> {
     out
 }
 
+/// Slots that only ever hold a LITERAL the compiler consumes at once: `SetV1 v8, 2; WRTV1 v8`
+/// (written through to a member), `SetV1 v11, 0; CpyVtoV4 v10, v11` (copied on), or pushed
+/// one width wider than it was set (`SetV1` … `PshV4`, an enum or bool constant). None of
+/// these is a name the source wrote; declaring one per life costs the copy vanilla never made.
+/// A literal pushed at its own width is a named variable (see `value_pushed_literal_slots`).
+fn literal_temporary_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w = |ins: &super::disasm::Instr, i: usize| ins.words.get(i).map(|w| *w as i16 as i32);
+    let mut consumed_at_once: HashSet<i32> = HashSet::new();
+    let mut other_writes: HashSet<i32> = HashSet::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        let Some(slot) = w(ins, 0).filter(|s| *s > 0) else {
+            continue;
+        };
+        if matches!(ins.op.name, "SetV1" | "SetV4" | "SetV8") {
+            let width = &ins.op.name[4..];
+            // The member a literal is written to is addressed AFTER the literal is set:
+            // `SetV8 v16, -1; LoadThisR <field>; WRTV8 v16` — step over the address forming.
+            let mut next_at = at + 1;
+            while instrs.get(next_at).is_some_and(|n| {
+                matches!(
+                    n.op.name,
+                    "LoadThisR" | "LoadRObjR" | "LoadVObjR" | "PshVPtr" | "ADDSi" | "PopRPtr"
+                        | "RDSPtr" | "CHKREF" | "ChkRefS"
+                ) && w(n, 0) != Some(slot)
+            }) && next_at < at + 6
+            {
+                next_at += 1;
+            }
+            let at_once = instrs.get(next_at).is_some_and(|next| {
+                (next.op.name.starts_with("WRTV") && w(next, 0) == Some(slot))
+                    || (next.op.name.starts_with("CpyVtoV") && w(next, 1) == Some(slot))
+                    || (next.op.name.starts_with("PshV")
+                        && w(next, 0) == Some(slot)
+                        && &next.op.name[4..] != width)
+            });
+            if at_once {
+                consumed_at_once.insert(slot);
+            } else {
+                other_writes.insert(slot);
+            }
+        } else if writes_destination(ins.op.name) || ins.op.fmt.writes_first_word() {
+            other_writes.insert(slot);
+        }
+    }
+    consumed_at_once.difference(&other_writes).copied().collect()
+}
+
 /// Every primitive or enum local whose writes are all declarations — none of them the
 /// through-a-temporary form of an assignment — is declared at each write that starts a life,
 /// in the block that holds it. See the call site for why.
@@ -14624,6 +14715,182 @@ fn is_plain_literal(value: &str) -> bool {
     !body.is_empty()
         && body.chars().all(|c| c.is_ascii_digit() || c == '.' || c == 'e' || c == 'E' || c == '-' || c == '+')
         && body.chars().next().is_some_and(|c| c.is_ascii_digit())
+}
+
+/// Slots pushed by value straight into an ENUM parameter: `PshV4 x; PshVPtr this; CALLSYS
+/// SetWalkSpeed` with `SetWalkSpeed(EWalkSpeed)` names `x` an `EWalkSpeed`. Typed `int`, the
+/// emitter spells the argument `EWalkSpeed(x)` and every literal stored into `x` as an `int`
+/// (`SetV4`) where vanilla stored the enumerator (`SetV1`).
+///
+/// Only frames of plain pushes: an argument evaluated inside the frame (a nested call) would
+/// shift the positions, so such calls are left alone.
+fn enum_argument_slots(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashMap::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32);
+    let is_push = |name: &str| name.starts_with("Psh") || name == "PSF";
+    let mut out = HashMap::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        let params: Option<&[super::types::DataType]> = match ins.op.name {
+            "CALLSYS" | "Thiscall1" => {
+                refs.func_params_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64)
+            }
+            "CALL" | "CALLINTF" => {
+                refs.func_params_by_id(ins.dwords.first().copied().unwrap_or(0) as i32)
+            }
+            _ => None,
+        };
+        let Some(params) = params else {
+            continue;
+        };
+        if params.is_empty() {
+            continue;
+        }
+        // The frame: the pushes standing directly before the call, latest first. A method's
+        // receiver is pushed last (`PshVPtr v0`); the parameter list does not carry it.
+        let mut frame: Vec<&super::disasm::Instr> = Vec::new();
+        let mut k = at;
+        while k > 0 && is_push(instrs[k - 1].op.name) {
+            k -= 1;
+            frame.push(&instrs[k]);
+        }
+        let receiver = frame.first().is_some_and(|top| top.op.name == "PshVPtr" && w0(top) == Some(0));
+        let args: Vec<&super::disasm::Instr> = frame.into_iter().skip(receiver as usize).collect();
+        if args.len() != params.len() {
+            continue;
+        }
+        for (param, push) in params.iter().zip(args.iter()) {
+            if push.op.name != "PshV4" {
+                continue;
+            }
+            let ty = param.base_name(refs);
+            if !is_enum(&ty) || param.is_reference {
+                continue;
+            }
+            if let Some(slot) = w0(push).filter(|s| *s > 0) {
+                out.entry(slot).or_insert(ty);
+            }
+        }
+    }
+    out
+}
+
+/// `T x;` (a construction-site declaration) directly above `x = <value>;` is `T x = <value>;`.
+fn merge_site_declaration_with_assignment(body: &str, declared_at_site: &HashSet<i32>) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut kept: Vec<String> = Vec::with_capacity(lines.len());
+    let mut at = 0usize;
+    while at < lines.len() {
+        let merged = (|| {
+            let (indent, name) = bare_declaration(lines[at])?;
+            if !slot_of(&name).is_some_and(|slot| declared_at_site.contains(&slot)) {
+                return None;
+            }
+            let next = lines.get(at + 1)?;
+            if indent_of(next) != indent {
+                return None;
+            }
+            let value = next.trim_start().strip_suffix(';')?.strip_prefix(&format!("{name} = "))?;
+            if value.contains(&name) || value.chars().any(char::is_control) {
+                return None;
+            }
+            let head = lines[at].trim().strip_suffix(';')?;
+            Some(format!("{indent}{head} = {value};"))
+        })();
+        match merged {
+            Some(line) => {
+                kept.push(line);
+                at += 2;
+            }
+            None => {
+                kept.push(lines[at].to_owned());
+                at += 1;
+            }
+        }
+    }
+    let mut out = kept.join("\n");
+    if body.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// A literal store (`x = -1.0;`, or a declaration `float x = 0.0;`) that nothing reads before
+/// the slot is written again is the temporary whose value the folds already carried to its
+/// reader (`this.StuckStartTime = -1.0;`); left standing it costs a `SetV` vanilla never had.
+/// A dead DECLARATION hands its head to the next store at its own depth (`float x = Size();`),
+/// so the name stays declared where its first live value arrives.
+///
+/// A definition deeper than the store does not end the life — the other path still reads the
+/// store's value — and any read before a definition at the store's depth keeps it.
+fn drop_dead_literal_stores(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out: Vec<Option<String>> = lines.iter().map(|l| Some((*l).to_owned())).collect();
+    for at in 0..lines.len() {
+        let (name, declared_head) = match declaration_with_initializer(lines[at]) {
+            Some((_, name, init)) if is_foldable_literal(&init) => {
+                let head = lines[at].trim().split(&format!(" {name} = ")).next().unwrap_or("").to_owned();
+                (name, Some(head))
+            }
+            _ => match slot_store(lines[at]) {
+                Some((name, value)) if is_foldable_literal(&value) && is_decompiler_local(&name) => {
+                    (name, None)
+                }
+                _ => continue,
+            },
+        };
+        let depth = indent_of(lines[at]).len();
+        // A store inside a branch writes a variable of the enclosing scope: its reader may
+        // stand after the branch closes (`if (c) { x = true; } … if (x)`), so the scan runs
+        // past the block's brace and stops only at a definition at the store's depth or above.
+        // Nothing found within the window is treated as a read: keeping a store is free of
+        // risk, dropping one is not.
+        const WINDOW: usize = 2048;
+        let mut next_definition: Option<usize> = None;
+        let mut read = true;
+        // A redefinition in a SIBLING block (`if (c) { x = 1; } else { x = 0; }`) is another
+        // path, not the end of this store's life: once a brace below the store's depth has
+        // closed, only a definition at a depth ABOVE the store's (the scope the store wrote)
+        // retires it.
+        let mut crossed = false;
+        for (offset, line) in lines[at + 1..lines.len().min(at + 1 + WINDOW)].iter().enumerate() {
+            let k = at + 1 + offset;
+            if count_ident(line, &name) == 0 {
+                if line.trim() == "}" && indent_of(line).len() < depth {
+                    crossed = true;
+                }
+                continue;
+            }
+            let line_depth = indent_of(line).len();
+            let retires = is_definition_line(line, &name)
+                && line_depth <= depth
+                && (!crossed || line_depth < depth);
+            if retires {
+                next_definition = Some(k);
+                read = false;
+            }
+            break;
+        }
+        if read {
+            continue;
+        }
+        match (declared_head, next_definition) {
+            (None, _) => out[at] = None,
+            (Some(head), Some(k)) if indent_of(lines[k]).len() == depth => {
+                if let Some(rest) = lines[k].trim_start().strip_prefix(&format!("{name} = ")) {
+                    out[k] = Some(format!("{}{head} {name} = {rest}", indent_of(lines[k])));
+                    out[at] = None;
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut joined = out.into_iter().flatten().collect::<Vec<_>>().join("\n");
+    if text.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
 }
 
 /// Why a short circuit was not folded, behind `GORE_AS_SC_DIAG`.
@@ -15569,6 +15836,16 @@ fn fold_constant_comparisons(body: &str) -> String {
 fn is_foldable_literal(value: &str) -> bool {
     if value == "true" || value == "false" {
         return true;
+    }
+    // An enumerator (`EGuideAbandonPhase::ReturningToTerminus`) is a constant like any other:
+    // the compiler materialises it in a temporary right where it is read.
+    if let Some((scope, name)) = value.split_once("::") {
+        let ident = |s: &str| {
+            !s.is_empty()
+                && s.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        };
+        return ident(scope) && ident(name);
     }
     let digits = value.strip_prefix('-').unwrap_or(value);
     let digits = digits

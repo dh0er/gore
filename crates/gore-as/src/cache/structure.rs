@@ -4353,7 +4353,20 @@ fn block_stmts_in(
                                         }
                                         false
                                     });
-                                if (!consumed_next || reused_after_call)
+                                // `PSF src; PSF dst; $beh0; PSF dst; CALLSYS opAssign` is a
+                                // declaration WITH initialiser the compiler builds as
+                                // construct-then-assign (`TArray<T> x = <value>;`): the push
+                                // that follows is the assignment's receiver, not an operand
+                                // of an expression around it.
+                                let assigned_next = consumed_next
+                                    && insns.get(k + 2).is_some_and(|c| {
+                                        c.op.name == "CALLSYS"
+                                            && ctx
+                                                .refs
+                                                .func_by_ptr(c.qwords.first().copied().unwrap_or(0) as i64)
+                                                == Some("opAssign")
+                                    });
+                                if (!consumed_next || reused_after_call || assigned_next)
                                     && slot_num.parse::<i32>().is_ok()
                                 {
                                     out.push(format!("{CTOR_SITE} {slot_num}"));
