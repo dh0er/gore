@@ -1726,6 +1726,7 @@ fn emit_function_ctor(
         &path_roots,
         refs,
         &member_read_slots(f),
+        returns_by_reference,
     );
     pass_trace("fold_member_read_temporaries", &body);
     let body =
@@ -2566,6 +2567,7 @@ fn emit_function_ctor(
             &path_roots,
             refs,
             &member_read_slots(f),
+            f.ret.is_reference && f.ret.token == 5 && !f.ret.is_object_handle,
         );
         pass_trace("fold_member_read_temporaries", &rendered);
         // Last: the pass looks for a release standing directly before the closing brace, and the
@@ -6467,6 +6469,12 @@ fn drop_unread_call_results(
     let mut dropped: HashSet<i32> = HashSet::new();
     let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
     for slot in locals.keys() {
+        // A PRIMITIVE result reaches a slot only through `CpyRtoV4/8` — the store the source
+        // wrote. Discarded, the compiler leaves it in the register; and most bound functions
+        // returning one are `nodiscard` (`Math::Sign`: "Result of function Sign() is unused").
+        if locals.get(slot).is_some_and(|ty| is_primitive(ty)) {
+            continue;
+        }
         let ident = format!("local_{slot}");
         let mut sites: Vec<usize> = Vec::new();
         let mut every_use_is_a_discard = true;
@@ -8137,8 +8145,17 @@ fn fold_condition_temporaries(
     while at < lines.len() {
         let folded = (|| {
             // The carrier may already be declared at its store (`bool local_10 = A && B;`):
-            // the declaration goes with the fold, the condition takes the value.
+            // the declaration goes with the fold, the condition takes the value — so no later
+            // plain store may still lean on that declaration (measured: an out-of-scope read).
             let (name, value) = carrier_store(lines[at])?;
+            if declaration_with_initializer(lines[at]).is_some()
+                && lines[at + 2..].iter().any(|line| {
+                    count_ident(line, &name) > 0
+                        && declaration_with_initializer(line).is_none_or(|(_, n, _)| n != name)
+                })
+            {
+                return None;
+            }
             if logical_only && top_level_logical_operator(&value).is_none() {
                 return None;
             }
@@ -10968,6 +10985,13 @@ fn merge_self_assignments(body: &str) -> String {
             };
             let head = lines[at].trim().trim_end_matches(';');
             let ty = head[..head.len() - name.len() - init.len() - 3].trim();
+            // A floating carrier CONVERTS its first store: `float x = a - b;` over two ints is
+            // `iTOf` before the update, and `x = x / n` divides floats. Merged, `(a - b) / n`
+            // divides integers ("Integer division causes precision loss") and converts after.
+            // Only an initialiser that is floating on its own may move.
+            if matches!(ty, "float" | "double" | "float32") && !floating_on_its_own(&init) {
+                return None;
+            }
             Some(format!(
                 "{indent}{ty} {name} = {};",
                 rename_ident(value, &name, &operand)
@@ -12783,6 +12807,7 @@ fn fold_member_read_temporaries(
     roots: &HashMap<String, String>,
     refs: &RefResolver,
     direct_reads: &HashMap<i32, u8>,
+    returns_by_reference: bool,
 ) -> String {
     // A path, not a literal: `5.0f` also contains a dot, and reading it as a member path made
     // every float constant look like an unresolvable member.
@@ -12878,6 +12903,15 @@ fn fold_member_read_temporaries(
             if !read_once_at(&lines, at, reader, &name) {
                 return None;
             }
+            // A `return` of a REFERENCE may not read through a local value object: the compiler
+            // refuses "Resulting reference cannot be returned. The expression uses objects that
+            // during cleanup may invalidate it." — the source named the member's value first.
+            if returns_by_reference
+                && lines[reader].trim_start().starts_with("return ")
+                && path.split('.').next().is_some_and(is_decompiler_local)
+            {
+                return None;
+            }
             // The name may be a COPY the source made on purpose: a value read out of a const
             // member and then changed. Moving the read back puts the change on the member itself
             // — "Non-const method call on read-only object reference".
@@ -12905,6 +12939,18 @@ fn fold_member_read_temporaries(
             }
             let mut out: Vec<String> =
                 lines[at + 1..reader].iter().map(|l| (*l).to_owned()).collect();
+            // A DECLARATION that later plain stores lean on stays behind, bare: the read moves
+            // to its reader, the name keeps its scope (measured: two out-of-scope stores).
+            if let Some((indent, _, _)) = declaration_with_initializer(lines[at]) {
+                let later_plain_store = lines[reader + 1..].iter().any(|line| {
+                    count_ident(line, &name) > 0
+                        && declaration_with_initializer(line).is_none_or(|(_, n, _)| n != name)
+                });
+                if later_plain_store {
+                    let head = lines[at].trim().split(&format!(" {name} = ")).next().unwrap_or("").to_owned();
+                    out.insert(0, format!("{indent}{head} {name};"));
+                }
+            }
             out.push(rename_ident(lines[reader], &name, &path));
             Some((out, reader + 1))
         })();
@@ -13711,13 +13757,44 @@ fn value_pushed_literal_slots(f: &Func) -> HashSet<i32> {
         .filter_map(|ins| w0(ins).zip(width(ins.op.name)))
         .filter(|(slot, _)| *slot > 0)
         .collect();
-    instrs
-        .iter()
-        .filter(|ins| matches!(ins.op.name, "PshV4" | "PshV8"))
-        .filter_map(|ins| w0(ins).zip(width(ins.op.name)))
-        .filter(|(slot, w)| stored.get(slot) == Some(w))
-        .map(|(slot, _)| slot)
-        .collect()
+    // The compiler parks a literal argument in a slot ITSELF when a call is evaluated between
+    // the store and the push (`SetV4 v13, 0` … `CALLSYS GetCharacter` … `PshV4 v13`): the
+    // earlier argument must not sit on the stack across the call. Such a push names no source
+    // variable — only a push the store reaches without a call in between does.
+    let mut out = HashSet::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if !matches!(ins.op.name, "PshV4" | "PshV8") {
+            continue;
+        }
+        let Some((slot, w)) = w0(ins).zip(width(ins.op.name)) else {
+            continue;
+        };
+        if stored.get(&slot) != Some(&w) {
+            continue;
+        }
+        // The store this push reads is the NEAREST write to the slot. A narrower one (`SetV1
+        // v13, 0` … `PshV4 v13`) is the compiler widening a bool or enum literal through a
+        // temporary, whatever same-width store the slot carries elsewhere (measured: the `&&`
+        // chain's own `SetV4 v13, 0` two instructions up, behind a `JMP`).
+        let mut crossed_a_call = false;
+        let mut same_width_store = false;
+        for earlier in instrs[..at].iter().rev() {
+            if w0(earlier) == Some(slot)
+                && (earlier.op.fmt.writes_first_word() || writes_destination(earlier.op.name))
+            {
+                same_width_store = matches!(earlier.op.name, "SetV4" | "SetV8")
+                    && width(earlier.op.name) == Some(w);
+                break;
+            }
+            if earlier.op.is_call() {
+                crossed_a_call = true;
+            }
+        }
+        if same_width_store && !crossed_a_call {
+            out.insert(slot);
+        }
+    }
+    out
 }
 
 /// `else` over an empty block is a jump to the next instruction: the then-arm ends in a `JMP`
@@ -13842,6 +13919,18 @@ fn fold_conditional_values(
             }
             let slot_ty = temporary_type(locals, &target)?;
             if slot_ty == "bool" || is_object_handle_type(slot_ty) {
+                return None;
+            }
+            // Two discarded results parked in the same temporary slot are not a conditional
+            // value: nothing reads the slot after the join. Folded, the arms become a bare
+            // `c ? a() : b();` once the unread target is stripped — a statement the compiler
+            // rejects (and crashes on).
+            let read_after_join = lines[at + 8..].iter().any(|line| {
+                count_ident(line, &target) > 0
+                    && bare_declaration(line).is_none()
+                    && !slot_store(line).is_some_and(|(n, v)| n == target && count_ident(&v, &target) == 0)
+            });
+            if !read_after_join {
                 return None;
             }
             let empty = HashMap::new();
@@ -14891,6 +14980,22 @@ fn drop_dead_literal_stores(text: &str) -> String {
         joined.push('\n');
     }
     joined
+}
+
+/// An expression that is floating whatever its operands' declared types: it carries a floating
+/// literal (`0.5`, `2.0f`) or an explicit conversion to a floating type.
+fn floating_on_its_own(expr: &str) -> bool {
+    if ["float(", "float32(", "double("].iter().any(|c| expr.contains(c)) {
+        return true;
+    }
+    let bytes = expr.as_bytes();
+    (1..bytes.len().saturating_sub(1)).any(|i| {
+        bytes[i] == b'.' && bytes[i - 1].is_ascii_digit() && bytes[i + 1].is_ascii_digit()
+    }) || (1..bytes.len()).any(|i| {
+        bytes[i] == b'f'
+            && bytes[i - 1].is_ascii_digit()
+            && bytes.get(i + 1).is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_')
+    })
 }
 
 /// Why a short circuit was not folded, behind `GORE_AS_SC_DIAG`.

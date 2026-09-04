@@ -14,6 +14,8 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <cstdlib>
+#include <iostream>
 #include <array>
 #include <cctype>
 #include <cwctype>
@@ -1569,6 +1571,22 @@ std::string source_module_name(std::string path) {
 
 void message_callback(const asSMessageInfo* message, void* parameter) {
     auto& diagnostics = *static_cast<std::vector<compiler_diagnostic>*>(parameter);
+    // GORE_AS_SIDECAR_TRACE: echo every engine message to stderr as it arrives, flushed. The
+    // collected diagnostics die with the process when a source error crashes the compiler's
+    // recovery (0xc0000005 with no output); the echoed lines survive in the caller's stderr
+    // capture and name the module, the row and the error.
+    // Errors always; warnings too when the variable is "all" (the caller's capture is 64 KiB).
+    static const char* trace_value = std::getenv("GORE_AS_SIDECAR_TRACE");
+    static const bool trace = trace_value != nullptr;
+    static const bool trace_warnings = trace && std::strcmp(trace_value, "all") == 0;
+    if (trace && message != nullptr &&
+        (message->type == asMSGTYPE_ERROR || (trace_warnings && message->type == asMSGTYPE_WARNING))) {
+        std::cerr << (message->section == nullptr ? "(?)" : message->section) << ':' << message->row
+                  << ':' << message->col << ": "
+                  << (message->type == asMSGTYPE_ERROR ? "error" :
+                      (message->type == asMSGTYPE_WARNING ? "warning" : "info"))
+                  << ": " << (message->message == nullptr ? "" : message->message) << std::endl;
+    }
     if (message == nullptr || diagnostics.size() >= wire::kMaxDiagnostics) return;
     const std::string text = message->message == nullptr ? "" : message->message;
     // The game hook records only non-empty messages.
