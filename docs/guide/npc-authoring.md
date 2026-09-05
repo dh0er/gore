@@ -261,6 +261,41 @@ A character placed from more than one level script is refused rather than half
 removed — one bundle entry carries one edited level script, so that would take
 one mod per script — and the message names the scripts.
 
+### `npc checkout` — change a shipped character's values
+
+```
+$ gore npc checkout OC_STT_Diego -o work/diego
+checked OC_STT_Diego out into work/diego
+  CharacterDefinition_OC_STT_Diego.as  1 classes from AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego
+  translation: measured, no known difference
+  edit the values; class names and their parents have to stay as they are, because they are the character's identity in the cache
+next: gore npc check work/diego
+```
+
+What comes out is the module that declares the character's
+`CharacterDefinition` — its level, health, resistances, strength and dexterity,
+its starting inventory, its guild parent, its skills, its personality and its
+combat AI. For Diego that is 44 `default` statements. Edit the values and run
+`check`.
+
+Two parts of a character are deliberately **not** checked out: its appearance
+lives in `InteractiveObjects/NpcVisualLibrary.as` and its spawn definition in
+`Spawning/SpawningDefinition_Human.as`, each shared by hundreds of characters.
+Replacing one of those to change a single character would put a module every
+other character depends on into your mod.
+
+The guard here is the mirror image of the one for authoring. Values may change
+freely — that is the whole point. Class names and their parent classes may not:
+
+```
+$ gore npc check work/diego
+  [blocking] class UCharacterDefinition_Human_OC_STT_Diego is gone. A shipped class may change its values, but removing or renaming it produces a different symbol that no longer matches the base cache
+  [blocking] class UCharacterDefinition_Human_RENAMED is new. Checking a shipped character out is for changing its values; a new class needs `gore npc new`, which carries the contract for one
+```
+
+A checkout touches one shipped module, so `stage` sends it down the fast
+`compile-module` route — no source tree, no fifteen-minute wait.
+
 ### `npc check` — the diff guard
 
 ```
@@ -398,9 +433,10 @@ That is also what `check` and `stage` say in the lines they end with:
 somebody builds one of these, deploys it and looks, the honest description of an
 authored character is source that compiles.
 
-Editing an existing character — its chain, its guild, its routine, its
-conversation settings or its visuals — is a separate thing again and has no
-command here. Use the surfaces that do:
+Changing a shipped character's values is `npc checkout`, described above, and
+carries the same offline-only status. What it does not reach: visuals and the
+spawn definition, which live in modules hundreds of characters share, and what
+a character says. Use the surfaces that do:
 [Dialog authoring](dialog-authoring.md) for what a character says,
 [Offline default patching](angelscript-defaults.md) for a single class default,
 and [Scripts (AngelScript)](scripts.md) for the general emit/recompile/splice
