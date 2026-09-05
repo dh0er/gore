@@ -26,6 +26,13 @@ pub struct NewNpc {
     pub modular_visuals: bool,
     /// `true` fügt eine leere Händlerkonfiguration hinzu.
     pub trader: bool,
+    /// Die aufgelösten `default`-Zeilen der Vorlage, ausgeschrieben statt geerbt.
+    ///
+    /// Leer heißt ableiten: die neue Klasse nennt nur ihre Identität und erbt alles andere
+    /// stillschweigend. Gefüllt heißt klonen: jeder Wert steht in der Datei und ist änderbar,
+    /// ohne dass man erst wissen muss, wo er herkommt. Identitätszeilen (`m_UniqueName`,
+    /// `m_CharacterVisualsDefinition`) gehören nicht hierher — die setzt der Generator selbst.
+    pub inherited_defaults: Vec<String>,
 }
 
 /// Der Modulname einer verfassten Figur.
@@ -81,15 +88,17 @@ pub fn source(npc: &NewNpc) -> String {
         Some(guild) => format!("UCharacterDefinition_Human_{guild}"),
         None => format!("UCharacterDefinition_Human_{from}"),
     };
+    let mut definition_defaults = vec![
+        format!("m_UniqueName = n\"{id}\""),
+        format!(
+            "m_CharacterVisualsDefinition = UCharacterVisualsDefinition_Human_{id}::StaticClass()"
+        ),
+    ];
+    definition_defaults.extend(npc.inherited_defaults.iter().cloned());
     out.push_str(&class_block(
         &format!("UCharacterDefinition_Human_{id}"),
         &definition_parent,
-        &[
-            format!("m_UniqueName = n\"{id}\""),
-            format!(
-                "m_CharacterVisualsDefinition = UCharacterVisualsDefinition_Human_{id}::StaticClass()"
-            ),
-        ],
+        &definition_defaults,
     ));
     out.push('\n');
 
@@ -195,6 +204,7 @@ mod tests {
             voice_tag: Some("VoiceType_G1R_Voice05_Diego".to_string()),
             modular_visuals: false,
             trader: false,
+            inherited_defaults: Vec::new(),
         }
     }
 
@@ -336,6 +346,30 @@ mod tests {
         // Der Compiler legt sie selbst an. Eine handgeschriebene wäre eine weitere Stelle, an der
         // die Neuübersetzung vom Ausgelieferten abweichen könnte.
         assert!(!source(&diego_clone()).contains("MY_NPC()"));
+    }
+
+    #[test]
+    fn without_inherited_defaults_the_definition_only_states_its_identity() {
+        let source = source(&diego_clone());
+        assert!(!source.contains("SetAttributeValue"));
+    }
+
+    #[test]
+    fn inherited_defaults_are_written_out_below_the_identity() {
+        // Der Unterschied zwischen Ableiten und Klonen: hier stehen die Werte in der Datei und
+        // sind aenderbar, statt unsichtbar von der Vorlage zu kommen.
+        let mut npc = diego_clone();
+        npc.inherited_defaults = vec![
+            "SetAttributeValue(\"AttributeSet_Health.Health\", 540.0f, TSubclassOf<UDifficultySettings>(nullptr))".to_string(),
+            "m_Personality = UGothicCharacterPersonality_Brave_Archer_Patient::StaticClass()".to_string(),
+        ];
+        let source = source(&npc);
+        assert!(source.contains("default SetAttributeValue(\"AttributeSet_Health.Health\", 540.0f"));
+        assert!(source.contains("default m_Personality = UGothicCharacterPersonality_Brave_Archer_Patient::StaticClass();"));
+        // Die Identitaet steht weiterhin zuerst und wird nicht ueberschrieben.
+        let unique = source.find("m_UniqueName").expect("unique name");
+        let health = source.find("AttributeSet_Health").expect("health");
+        assert!(unique < health);
     }
 
     #[test]

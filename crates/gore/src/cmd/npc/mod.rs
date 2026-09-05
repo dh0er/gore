@@ -160,6 +160,35 @@ pub enum NpcAction {
         #[arg(short, long)]
         out: PathBuf,
     },
+    /// Clone a shipped character, writing its values out so they can be changed
+    Clone {
+        /// The shipped character to copy
+        source: String,
+        /// Id of the new character, for example MY_NPC
+        #[arg(long)]
+        id: String,
+        /// Replace the faction with this guild base, for example OldCamp_Guard
+        #[arg(long)]
+        guild: Option<String>,
+        /// World point to spawn at, from `gore npc sites`
+        #[arg(long)]
+        at: String,
+        /// Waypoint for the daily routine
+        #[arg(long)]
+        waypoint: Option<String>,
+        /// Add an empty trader configuration
+        #[arg(long)]
+        trader: bool,
+        /// Read this script cache instead of the installed one
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        /// Game install root. Falls back to configured path, then Steam auto-detect
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// Output workspace directory; must not exist
+        #[arg(short, long)]
+        out: PathBuf,
+    },
     /// List the world points the level scripts spawn characters from
     Sites {
         /// Keep only sites whose level-script module contains this text
@@ -217,6 +246,7 @@ pub fn run(action: NpcAction) -> Result<()> {
                 waypoint,
                 trader,
                 modular_visuals,
+                expand: false,
             },
             cache,
             game,
@@ -248,6 +278,31 @@ pub fn run(action: NpcAction) -> Result<()> {
             game,
             out,
         } => checkout(&npc, cache, game, &out),
+        NpcAction::Clone {
+            source,
+            id,
+            guild,
+            at,
+            waypoint,
+            trader,
+            cache,
+            game,
+            out,
+        } => author(
+            &NewRequest {
+                id,
+                from: source,
+                guild,
+                at,
+                waypoint,
+                trader,
+                modular_visuals: false,
+                expand: true,
+            },
+            cache,
+            game,
+            &out,
+        ),
         NpcAction::Sites {
             level,
             npc,
@@ -268,6 +323,8 @@ pub struct NewRequest {
     pub waypoint: Option<String>,
     pub trader: bool,
     pub modular_visuals: bool,
+    /// `true` schreibt die aufgeloesten Werte der Vorlage aus, statt sie zu erben.
+    pub expand: bool,
 }
 
 // ─── Reading the cache ───────────────────────────────────────────
@@ -722,6 +779,11 @@ fn author(
         voice_tag: voice_of(&path, &request.from)?,
         modular_visuals: request.modular_visuals,
         trader: request.trader,
+        inherited_defaults: if request.expand {
+            resolved_defaults_of(&emitted, &request.from)
+        } else {
+            Vec::new()
+        },
     };
     let routine = generate::routine_class(&npc);
     let edited = edit::add_spawn(pristine, &request.at, &new_spawn, routine.as_deref())
@@ -1243,6 +1305,29 @@ fn checkout(npc: &str, cache: Option<PathBuf>, game: Option<PathBuf>, out: &Path
     );
     println!("next: gore npc check {}", out.display());
     Ok(())
+}
+
+/// Die `default`-Zeilen der Figurendefinition einer Vorlage, ohne ihre Identitaetszeilen.
+///
+/// Was ein Klon ausschreibt statt zu erben. `m_UniqueName` und
+/// `m_CharacterVisualsDefinition` bleiben draussen: die gehoeren der neuen Figur und werden vom
+/// Generator gesetzt; sie mitzukopieren hiesse, dem Klon den Namen der Vorlage zu geben.
+fn resolved_defaults_of(emitted: &Emitted, template: &str) -> Vec<String> {
+    const IDENTITY: &[&str] = &["m_UniqueName", "m_CharacterVisualsDefinition"];
+    let Some(class) = emitted
+        .classes
+        .get(&format!("UCharacterDefinition_Human_{template}"))
+    else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = class
+        .assignments
+        .iter()
+        .filter(|(lhs, _)| !IDENTITY.contains(&lhs.as_str()))
+        .map(|(lhs, rhs)| format!("{lhs} = {rhs}"))
+        .collect();
+    out.extend(class.calls.iter().cloned());
+    out
 }
 
 #[cfg(test)]
