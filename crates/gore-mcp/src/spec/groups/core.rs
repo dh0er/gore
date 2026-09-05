@@ -1167,6 +1167,25 @@ const NPC_DELETE_ARGS: &[ArgSpec] = &[
     ),
 ];
 
+const NPC_CHECKOUT_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "npc",
+        Positional { order: 0 },
+        Str,
+        "The character to edit, for example OC_STT_Diego",
+        true,
+    ),
+    NPC_CACHE_ARGS[0],
+    NPC_CACHE_ARGS[1],
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Output workspace directory; must not exist",
+        true,
+    ),
+];
+
 const NPC_CHECK_ARGS: &[ArgSpec] = &[
     ArgSpec::new(
         "dir",
@@ -1283,6 +1302,14 @@ const NPC_COMMANDS: &[CommandSpec] = &[
         "delete",
         "Stop a shipped character from being placed in the world",
         NPC_DELETE_ARGS,
+        Safety::write().writes_into(&["out"]),
+        T_NORMAL,
+    )
+    .guide("npc-authoring"),
+    CommandSpec::new(
+        "checkout",
+        "Take a shipped character's own module out for editing",
+        NPC_CHECKOUT_ARGS,
         Safety::write().writes_into(&["out"]),
         T_NORMAL,
     )
