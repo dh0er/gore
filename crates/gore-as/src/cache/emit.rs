@@ -2738,7 +2738,11 @@ fn emit_function_ctor(
             split_gameplay_effect_chain(&rendered, &gameplay_effect_chain_slots(f, refs), refs);
         let rendered = lead_with_the_declaration(&rendered, leading_declaration_slot(f));
         pass_trace("lead_with_the_declaration", &rendered);
-        let rendered = order_adjacent_declarations(&rendered, &adjacent_declaration_order(f, refs));
+        let rendered = order_adjacent_declarations(
+            &rendered,
+            &adjacent_declaration_order(f, refs),
+            &release_declaration_order(f, refs),
+        );
         pass_trace("order_adjacent_declarations", &rendered);
         let rendered =
             merge_copy_constructed_declarations(&rendered, &copy_constructed_slots(f, refs));
@@ -12272,9 +12276,60 @@ fn adjacent_declaration_order(f: &Func, refs: &RefResolver) -> Vec<Vec<i32>> {
     out
 }
 
-/// Write a run's declarations in the order vanilla built them.
-fn order_adjacent_declarations(body: &str, runs: &[Vec<i32>]) -> String {
-    if runs.is_empty() {
+/// The reverse of a block's release run: the compiler releases a block's locals in the reverse
+/// order of their declaration, handles (`FreeNullV8 h`) and values (`PSF v; $beh2`) in one run.
+/// A run may span an inner block's locals and the outer block's when both end on the same row,
+/// so the emitter applies these only as a permutation of declarations that already stand
+/// together (`LearnSkill`: the player-state handle was released before the struct — declared
+/// after it — and our text had the two the other way round).
+fn release_declaration_order(f: &Func, refs: &RefResolver) -> Vec<Vec<i32>> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return Vec::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let releases = |at: usize| -> Option<(i32, usize)> {
+        let ins = instrs.get(at)?;
+        if ins.op.name == "FreeNullV8" {
+            return Some((w0(ins), 1)).filter(|(slot, _)| *slot > 0);
+        }
+        if ins.op.name == "PSF"
+            && instrs.get(at + 1).is_some_and(|d| {
+                d.op.name == "CALLSYS"
+                    && refs.func_by_ptr(d.qwords.first().copied().unwrap_or(0) as i64) == Some("$beh2")
+            })
+        {
+            return Some((w0(ins), 2)).filter(|(slot, _)| *slot > 0);
+        }
+        None
+    };
+    let mut out = Vec::new();
+    let mut at = 0usize;
+    while at < instrs.len() {
+        let Some((first, width)) = releases(at) else {
+            at += 1;
+            continue;
+        };
+        let mut run = vec![first];
+        let mut after = at + width;
+        while let Some((slot, width)) = releases(after) {
+            run.push(slot);
+            after += width;
+        }
+        let distinct: HashSet<i32> = run.iter().copied().collect();
+        if run.len() > 1 && distinct.len() == run.len() {
+            run.reverse();
+            out.push(run);
+        }
+        at = after.max(at + 1);
+    }
+    out
+}
+
+/// Write a run's declarations in the order vanilla built them. `permutations` are runs that may
+/// only REORDER declarations already standing together (consecutive bare declarations at one
+/// indentation), never lift one out of its block.
+fn order_adjacent_declarations(body: &str, runs: &[Vec<i32>], permutations: &[Vec<i32>]) -> String {
+    if runs.is_empty() && permutations.is_empty() {
         return body.to_owned();
     }
     let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
@@ -12282,7 +12337,12 @@ fn order_adjacent_declarations(body: &str, runs: &[Vec<i32>]) -> String {
     // FIRST life of that slot. Where a later life exists, the run may be that one's, and lifting
     // the first life's declaration moves a constructor across statements it belongs behind.
     let ambiguous = slots_with_several_lives(&lines);
-    for run in runs {
+    let tagged: Vec<(&Vec<i32>, bool)> = runs
+        .iter()
+        .map(|run| (run, false))
+        .chain(permutations.iter().map(|run| (run, true)))
+        .collect();
+    for (run, permutation_only) in tagged {
         if run.iter().any(|slot| ambiguous.contains(slot)) {
             continue;
         }
@@ -12300,6 +12360,14 @@ fn order_adjacent_declarations(body: &str, runs: &[Vec<i32>]) -> String {
         };
         if spots.windows(2).all(|pair| pair[0] < pair[1]) {
             continue;
+        }
+        if permutation_only {
+            let (lo, hi) = (spots.iter().copied().min().unwrap_or(0), spots.iter().copied().max().unwrap_or(0));
+            let same_indent = spots.iter().all(|&at| indent_of(&lines[at]) == indent_of(&lines[lo]));
+            let only_declarations = (lo..=hi).all(|at| bare_declaration(&lines[at]).is_some());
+            if !same_indent || !only_declarations || hi - lo + 1 != spots.len() {
+                continue;
+            }
         }
         // Lift the whole run out and lay it back down at its earliest line, in vanilla's order.
         // One pair at a time cannot do this: a reversed run of three lands on a third order.
