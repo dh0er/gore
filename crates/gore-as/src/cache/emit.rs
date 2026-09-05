@@ -9458,6 +9458,9 @@ fn next_declaration_to_sink(
             continue;
         }
         // One block holds them all when nothing between them ever leaves the depth they sit at.
+        // (The innermost COMMON block of mentions in two sibling sub-blocks was tried as the
+        // target: 0 gained, 2 lost — the value then stood in front of statements it belongs
+        // behind.)
         let depth = depths[*first];
         if depth <= depths[index] || (*first..=*last).any(|at| depths[at] < depth) {
             continue;
@@ -9473,17 +9476,22 @@ fn next_declaration_to_sink(
         if open <= index || lines[open].trim() != "{" {
             continue;
         }
-        let heads_a_loop = lines[..open]
+        let header = lines[..open]
             .iter()
             .rev()
             .find(|line| !line.trim().is_empty())
-            .is_some_and(|line| {
-                let head = line.trim_start();
-                head.starts_with("for") || head.starts_with("while") || head.starts_with("do")
-            });
+            .map(|line| line.trim_start().to_owned())
+            .unwrap_or_default();
+        let heads_a_loop =
+            header.starts_with("for") || header.starts_with("while") || header.starts_with("do");
         // …unless vanilla built it once per iteration and released it on every exit, which is
         // the source declaring it in the body.
         if heads_a_loop && !built_per_iteration.contains(&slot) {
+            continue;
+        }
+        // A switch body holds `case` labels, not statements: a declaration there does not
+        // parse ("Expected one of: case, default" — the common block of two case arms).
+        if header.starts_with("switch") {
             continue;
         }
         let extra = "    ".repeat(depth - depths[index]);
@@ -12258,6 +12266,9 @@ fn adjacent_declaration_order(f: &Func, refs: &RefResolver) -> Vec<Vec<i32>> {
         }
         at = after.max(at + 1);
     }
+    // (Release runs at a block's end — reverse declaration order — were tried as a second
+    // source: a run spans the inner block's locals AND the outer block's when both end on the
+    // same row, and the ordering pass then lifted a declaration into the wrong block.)
     out
 }
 
@@ -18376,6 +18387,9 @@ fn rvo_declared_at_initializer(instrs: &[super::disasm::Instr], refs: &RefResolv
                     // another temporary's destructor: step over its `PSF` as well
                     continue;
                 }
+                // (A construction between consumer and release — the return value copied
+                // out of a local — read as a statement boundary put a `TSet` declaration into
+                // the wrong block through the sink, 2 out-of-scope reads; left as a call.)
                 // Released behind a call: a temporary. (Asking WHICH call consumed it, by a
                 // stack-depth count over parameters, receiver and hidden return pointer,
                 // named 98 temporaries — `FText t = LocText(…)` — and freed a declared spec
