@@ -11,6 +11,7 @@ pub mod edit;
 pub mod generate;
 pub mod render;
 pub mod sites;
+pub mod stage;
 pub mod workspace;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -114,6 +115,23 @@ pub enum NpcAction {
         #[arg(long)]
         game: Option<PathBuf>,
     },
+    /// Build the source tree and print the commands that compile an authored character
+    Stage {
+        /// The workspace directory written by `new` or `delete`
+        dir: PathBuf,
+        /// Where to keep the emitted source tree between runs. Required for a new character
+        #[arg(long)]
+        tree: Option<PathBuf>,
+        /// Name of the mod being built
+        #[arg(long, default_value = "MyNpcMod")]
+        mod_name: String,
+        /// Read this script cache instead of the installed one
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        /// Game install root. Falls back to configured path, then Steam auto-detect
+        #[arg(long)]
+        game: Option<PathBuf>,
+    },
     /// List the world points the level scripts spawn characters from
     Sites {
         /// Keep only sites whose level-script module contains this text
@@ -183,6 +201,13 @@ pub fn run(action: NpcAction) -> Result<()> {
             out,
         } => suppress(&npc, cache, game, &out),
         NpcAction::Check { dir, cache, game } => check_workspace(&dir, cache, game),
+        NpcAction::Stage {
+            dir,
+            tree,
+            mod_name,
+            cache,
+            game,
+        } => stage_workspace(&dir, tree.as_deref(), &mod_name, cache, game),
         NpcAction::Sites {
             level,
             npc,
@@ -908,6 +933,139 @@ fn check_workspace(dir: &Path, cache: Option<PathBuf>, game: Option<PathBuf>) ->
     }
     println!("{} warning(s), nothing blocking", findings.len());
     println!("next: gore npc stage {}", dir.display());
+    Ok(())
+}
+
+/// Den Quellbaum vorhalten: einmal emittieren, danach an der Cache-Kennung wiedererkennen.
+///
+/// Der Lauf kostet rund 19 Minuten, davon das meiste ein einziges Modul
+/// (`Map.MainMap.WorldPointManagerConfig_MainMap`). Ihn bei jedem `stage` zu wiederholen waere
+/// nicht zumutbar, also bekommt der Baum einen Stempel und wird wiederverwendet.
+fn ensure_tree(tree: &Path, cache_sha256: &str, path: &Path) -> Result<()> {
+    let stamp_path = tree.join(stage::TREE_STAMP_NAME);
+    if let Ok(text) = fs::read_to_string(&stamp_path) {
+        if let Ok(stamp) = serde_json::from_str::<stage::TreeStamp>(&text) {
+            if stamp.cache_sha256 == cache_sha256 {
+                println!(
+                    "reusing the source tree in {} ({} modules)",
+                    tree.display(),
+                    stamp.modules
+                );
+                return Ok(());
+            }
+        }
+        bail!(
+            "the source tree in {} was emitted from a different script cache. Delete it and let \
+             this command write a fresh one",
+            tree.display()
+        );
+    }
+    if tree.exists() && fs::read_dir(tree)?.next().is_some() {
+        bail!(
+            "{} is not empty and carries no tree stamp. Point --tree at a fresh directory",
+            tree.display()
+        );
+    }
+
+    println!(
+        "emitting the source tree into {} — this takes around 19 minutes, once per game version",
+        tree.display()
+    );
+    let bytes = read_module_cache(path)?;
+    let mut resolver = RefResolver::build(&bytes).context("building the reference resolver")?;
+    let modules = model::parse_modules(&bytes).context("parsing modules")?;
+    let loaded = load_native_api_with_proof(path);
+    let prepared = PreparedEmit::new(&modules, &mut resolver, loaded.map(|l| l.native))
+        .context("preparing the emitted modules")?
+        .with_class_defaults(true);
+    fs::create_dir_all(tree).with_context(|| format!("creating {}", tree.display()))?;
+    prepared
+        .emit_tree(tree)
+        .with_context(|| format!("emitting the tree into {}", tree.display()))?;
+    let stamp = stage::TreeStamp {
+        cache_sha256: cache_sha256.to_string(),
+        modules: modules.len(),
+    };
+    fs::write(
+        &stamp_path,
+        format!("{}\n", serde_json::to_string_pretty(&stamp)?),
+    )
+    .with_context(|| format!("writing {}", stamp_path.display()))?;
+    println!("emitted {} modules", modules.len());
+    Ok(())
+}
+
+/// Die verfassten Dateien an ihre Stellen im Baum kopieren.
+fn overlay_authored(dir: &Path, tree: &Path, manifest: &workspace::Manifest) -> Result<()> {
+    for edit in &manifest.modules {
+        let target = tree.join(&edit.relative_path);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+        }
+        let source = dir.join(&edit.source_file);
+        fs::copy(&source, &target)
+            .with_context(|| format!("copying {} to {}", source.display(), target.display()))?;
+    }
+    Ok(())
+}
+
+/// `gore npc stage` — Baum herrichten, Spec schreiben, Bau-Kommandos drucken.
+fn stage_workspace(
+    dir: &Path,
+    tree: Option<&Path>,
+    mod_name: &str,
+    cache: Option<PathBuf>,
+    game: Option<PathBuf>,
+) -> Result<()> {
+    gore_mod::validate_mod_name(mod_name).context("invalid --mod-name")?;
+    let manifest = read_manifest(dir)?;
+    let path = cache_path(cache, game.clone())?;
+    let route = stage::route_of(&manifest);
+
+    let tree_display = match (route, tree) {
+        (stage::Route::FullTree, None) => bail!(
+            "authoring a new character needs a source tree: pass --tree <dir>. It is emitted once \
+             per game version and reused after that"
+        ),
+        (stage::Route::FullTree, Some(tree)) => {
+            ensure_tree(tree, &manifest.cache_sha256, &path)?;
+            overlay_authored(dir, tree, &manifest)?;
+            tree.display().to_string()
+        }
+        // Der Ein-Modul-Weg overlayt die Quelle selbst; ein Baum waere verschenkte Zeit.
+        (stage::Route::SingleModule, _) => "(not needed)".to_string(),
+    };
+
+    let spec = stage::spec_json(&manifest, mod_name);
+    let spec_path = dir.join("spec.json");
+    fs::write(
+        &spec_path,
+        format!("{}\n", serde_json::to_string_pretty(&spec)?),
+    )
+    .with_context(|| format!("writing {}", spec_path.display()))?;
+
+    let game_arg = game.as_ref().map(|path| path.display().to_string());
+    let commands = stage::build_commands(
+        &manifest,
+        &dir.display().to_string(),
+        &tree_display,
+        mod_name,
+        game_arg.as_deref(),
+    );
+
+    println!("wrote {}", spec_path.display());
+    println!("now run:");
+    for command in &commands {
+        println!("  {command}");
+    }
+    println!(
+        "then: gore mod deploy --bundle {}/build/{mod_name}",
+        dir.display()
+    );
+    println!(
+        "offline-prepared only: whether this character appears in game is decided by that run, \
+         not by this one"
+    );
     Ok(())
 }
 
