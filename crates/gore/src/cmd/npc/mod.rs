@@ -160,7 +160,7 @@ pub enum NpcAction {
         #[arg(short, long)]
         out: PathBuf,
     },
-    /// Clone a shipped character, writing its values out so they can be changed
+    /// Clone a shipped character. Same result as `new`, named for what it does
     Clone {
         /// The shipped character to copy
         source: String,
@@ -189,11 +189,17 @@ pub enum NpcAction {
         #[arg(short, long)]
         out: PathBuf,
     },
-    /// List the world points the level scripts spawn characters from
+    /// List the world points the level scripts can place characters at
     Sites {
         /// Keep only sites whose level-script module contains this text
         #[arg(long)]
         level: Option<String>,
+        /// Keep only world points nobody is spawned at
+        #[arg(long, conflicts_with = "occupied")]
+        free: bool,
+        /// Keep only world points that already spawn somebody
+        #[arg(long)]
+        occupied: bool,
         /// Keep only sites that spawn this character
         #[arg(long)]
         npc: Option<String>,
@@ -246,7 +252,6 @@ pub fn run(action: NpcAction) -> Result<()> {
                 waypoint,
                 trader,
                 modular_visuals,
-                expand: false,
             },
             cache,
             game,
@@ -297,7 +302,6 @@ pub fn run(action: NpcAction) -> Result<()> {
                 waypoint,
                 trader,
                 modular_visuals: false,
-                expand: true,
             },
             cache,
             game,
@@ -305,12 +309,25 @@ pub fn run(action: NpcAction) -> Result<()> {
         ),
         NpcAction::Sites {
             level,
+            free,
+            occupied,
             npc,
             max,
             cache,
             game,
             json,
-        } => list_sites(level.as_deref(), npc.as_deref(), max, cache, game, json),
+        } => list_sites(
+            &SitesFilter {
+                level,
+                free,
+                occupied,
+                npc,
+            },
+            max,
+            cache,
+            game,
+            json,
+        ),
     }
 }
 
@@ -323,8 +340,6 @@ pub struct NewRequest {
     pub waypoint: Option<String>,
     pub trader: bool,
     pub modular_visuals: bool,
-    /// `true` schreibt die aufgeloesten Werte der Vorlage aus, statt sie zu erben.
-    pub expand: bool,
 }
 
 // ─── Reading the cache ───────────────────────────────────────────
@@ -337,6 +352,9 @@ pub struct Emitted {
     /// Der emittierte Quelltext je Levelskript. Sie werden für die Spawn-Stellen ohnehin
     /// emittiert; sie hier zu behalten erspart dem Verfassen einen zweiten Durchlauf.
     pub level_sources: BTreeMap<String, String>,
+    /// Jeder Weltpunkt, belegt oder frei. `sites` sind nur die belegten; wer eine Figur setzt,
+    /// will fast immer einen freien, und die sind mit 2729 von 3939 in der Ueberzahl.
+    pub world_points: Vec<sites::WorldPoint>,
     /// Wie viele Klassen im Spiel von einer Klasse erben. Aus dem geparsten Modell, ohne Emit.
     ///
     /// Der Compiler erklärt das erzeugte `__InitDefaults` einer Klasse **ohne Unterklassen** für
@@ -417,6 +435,7 @@ fn emit_index(
 
     let mut classes = BTreeMap::new();
     let mut found = Vec::new();
+    let mut points = Vec::new();
     let mut level_sources = BTreeMap::new();
     for (index, module) in modules.iter().enumerate() {
         if !module.name.starts_with(LEVEL_SCRIPT_PREFIX) {
@@ -424,6 +443,7 @@ fn emit_index(
         }
         let source = emit(index)?;
         found.extend(sites::parse_sites(&module.name, &source));
+        points.extend(sites::parse_world_points(&module.name, &source));
         level_sources.insert(module.name.clone(), source);
     }
 
@@ -462,6 +482,7 @@ fn emit_index(
     Ok(Emitted {
         classes,
         sites: found,
+        world_points: points,
         level_sources,
         subclass_counts,
         cache_seal: faithfulness::cache_seal(&bytes),
@@ -601,35 +622,51 @@ fn show(npc: &str, cache: Option<PathBuf>, game: Option<PathBuf>, json: bool) ->
     Ok(())
 }
 
+/// Wonach `gore npc sites` einschraenkt.
+pub struct SitesFilter {
+    pub level: Option<String>,
+    pub free: bool,
+    pub occupied: bool,
+    pub npc: Option<String>,
+}
+
 fn list_sites(
-    level: Option<&str>,
-    npc: Option<&str>,
+    filter: &SitesFilter,
     max: usize,
     cache: Option<PathBuf>,
     game: Option<PathBuf>,
     json: bool,
 ) -> Result<()> {
     let emitted = emit_index(cache, game, None)?;
-    let wanted_spawn = npc.map(|npc| format!("USpawnAIAgentDefinition_{npc}"));
-    let hits: Vec<&Site> = emitted
-        .sites
+    let wanted_spawn = filter.npc.as_deref().map(|npc| generate::spawn_class(npc));
+    let hits: Vec<&sites::WorldPoint> = emitted
+        .world_points
         .iter()
-        .filter(|site| level.is_none_or(|needle| site.module.contains(needle)))
-        .filter(|site| {
+        .filter(|point| {
+            filter
+                .level
+                .as_deref()
+                .is_none_or(|needle| point.module.contains(needle))
+        })
+        .filter(|point| !filter.free || !point.is_occupied())
+        .filter(|point| !filter.occupied || point.is_occupied())
+        .filter(|point| {
             wanted_spawn
                 .as_deref()
-                .is_none_or(|wanted| site.spawn_definition == wanted)
+                .is_none_or(|wanted| point.occupants.iter().any(|o| o == wanted))
         })
         .collect();
+
     if json {
         let rows: Vec<serde_json::Value> = hits
             .iter()
             .take(max)
-            .map(|site| {
+            .map(|point| {
                 serde_json::json!({
-                    "world_point": site.world_point,
-                    "module": site.module,
-                    "spawn_definition": site.spawn_definition,
+                    "world_point": point.name,
+                    "module": point.module,
+                    "occupants": point.occupants,
+                    "free": !point.is_occupied(),
                 })
             })
             .collect();
@@ -638,18 +675,27 @@ fn list_sites(
             serde_json::to_string_pretty(&serde_json::json!({
                 "matched": hits.len(),
                 "listed": rows.len(),
+                "free": hits.iter().filter(|p| !p.is_occupied()).count(),
                 "sites": rows,
             }))?
         );
         return Ok(());
     }
-    for site in hits.iter().take(max) {
-        println!(
-            "{}  {}  {}",
-            site.world_point, site.spawn_definition, site.module
-        );
+
+    for point in hits.iter().take(max) {
+        let who = if point.is_occupied() {
+            point.occupants.join(", ")
+        } else {
+            "(free)".to_string()
+        };
+        println!("{}  {}  {}", point.name, who, point.module);
     }
-    println!("{} of {} shown", hits.len().min(max), hits.len());
+    let free = hits.iter().filter(|p| !p.is_occupied()).count();
+    println!(
+        "{} of {} shown, {free} of them free",
+        hits.len().min(max),
+        hits.len()
+    );
     Ok(())
 }
 
@@ -766,23 +812,37 @@ fn author(
         );
     }
 
-    let Some(site) = emitted
-        .sites
+    let Some(point) = emitted
+        .world_points
         .iter()
-        .find(|site| site.world_point == request.at)
+        .find(|point| point.name == request.at)
     else {
         let near = nearest(
-            emitted.sites.iter().map(|site| site.world_point.as_str()),
+            emitted.world_points.iter().map(|point| point.name.as_str()),
             &request.at,
         );
         let hint = if near.is_empty() {
-            "`gore npc sites` lists them".to_string()
+            "`gore npc sites --free` lists the empty ones".to_string()
         } else {
             format!("did you mean one of: {}", near.join(", "))
         };
         bail!("no world point {} in this game — {hint}", request.at);
     };
-    let level_module = site.module.clone();
+    let level_module = point.module.clone();
+    // Zwei Koerper an einem Punkt stehen ineinander: der Fokus greift nur einen, und je nach
+    // Blickwinkel verschwindet der andere. Im Spiel gesehen, nicht vermutet.
+    let occupied_warning = point.is_occupied().then(|| {
+        format!(
+            "{} already spawns {}. Two characters at one world point stand inside each other: \
+             only one can be focused and the other flickers depending on where you look from. \
+             `gore npc sites --free --level {}` lists points with nobody on them",
+            request.at,
+            point.occupants.join(", "),
+            level_module
+                .strip_prefix(LEVEL_SCRIPT_PREFIX)
+                .unwrap_or(&level_module),
+        )
+    });
 
     let Some(pristine) = emitted.level_sources.get(&level_module) else {
         bail!("no emitted source for {level_module}");
@@ -889,6 +949,9 @@ fn author(
     println!("  {module_leaf}  the character, {class_count} classes");
     println!("  {level_leaf}  one added spawn line at {}", request.at);
     println!("  {}", render::translation_line(&emitted, &level_module));
+    if let Some(warning) = &occupied_warning {
+        println!("  WARNING: {warning}");
+    }
     if request.modular_visuals {
         println!(
             "  NOTE: --modular-visuals has no shipped precedent; check the comment in {module_leaf}"
@@ -1423,29 +1486,6 @@ fn derivable_parent(
     (current, collected)
 }
 
-/// Die `default`-Zeilen der Figurendefinition einer Vorlage, ohne ihre Identitaetszeilen.
-///
-/// Was ein Klon ausschreibt statt zu erben. `m_UniqueName` und
-/// `m_CharacterVisualsDefinition` bleiben draussen: die gehoeren der neuen Figur und werden vom
-/// Generator gesetzt; sie mitzukopieren hiesse, dem Klon den Namen der Vorlage zu geben.
-fn resolved_defaults_of(emitted: &Emitted, template: &str) -> Vec<String> {
-    const IDENTITY: &[&str] = &["m_UniqueName", "m_CharacterVisualsDefinition"];
-    let Some(class) = emitted
-        .classes
-        .get(&format!("UCharacterDefinition_Human_{template}"))
-    else {
-        return Vec::new();
-    };
-    let mut out: Vec<String> = class
-        .assignments
-        .iter()
-        .filter(|(lhs, _)| !IDENTITY.contains(&lhs.as_str()))
-        .map(|(lhs, rhs)| format!("{lhs} = {rhs}"))
-        .collect();
-    out.extend(class.calls.iter().cloned());
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1562,6 +1602,7 @@ mod tests {
             classes: BTreeMap::new(),
             sites,
             level_sources: BTreeMap::new(),
+            world_points: Vec::new(),
             subclass_counts: BTreeMap::new(),
             cache_seal: [0u8; 32],
             binds_seal: None,
