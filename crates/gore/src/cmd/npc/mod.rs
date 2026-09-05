@@ -948,6 +948,29 @@ fn author(
         .count();
     println!("  {module_leaf}  the character, {class_count} classes");
     println!("  {level_leaf}  one added spawn line at {}", request.at);
+    // Wo die Figur am Ende steht, ist nicht der Weltpunkt, sondern ihr Wegpunkt: der Tagesablauf
+    // teleportiert sie dorthin. Und nur der Wegpunkt hat Koordinaten, die jemand ansteuern kann —
+    // ein Weltpunkt steht in keinem Katalog. Ohne diese Zeile sucht man die eigene Figur.
+    match (
+        &request.waypoint,
+        gore_catalog::location::LocationCatalog::bundled(),
+    ) {
+        (Some(waypoint), Ok(spots)) => match spots.resolve(waypoint) {
+            Some(spot) => println!(
+                "  it ends up at {waypoint} in {} — x {:.0}  y {:.0}  z {:.0}",
+                spot.a, spot.x, spot.y, spot.z
+            ),
+            None => println!(
+                "  WARNING: {waypoint} is not a known spot, so the character stays at its world \
+                 point — and no catalog says where that is"
+            ),
+        },
+        (None, _) => println!(
+            "  no --waypoint given, so it stays at its world point. No catalog says where that \
+             is; pass --waypoint to put it somewhere you can find"
+        ),
+        (Some(_), Err(_)) => {}
+    }
     println!("  {}", render::translation_line(&emitted, &level_module));
     if let Some(warning) = &occupied_warning {
         println!("  WARNING: {warning}");

@@ -185,10 +185,17 @@ pub fn source(npc: &NewNpc) -> String {
         out.push_str(&class_block(
             &format!("UDailyRoutine_{id}_Start"),
             "UAIState_DailyRoutine_Human",
-            &[format!(
-                "Schedule(0, 0, UAIState_Stand(), n\"{waypoint}\", 1000.0f, \
-                 TSubclassOf<UNavArea>(nullptr), nullptr)"
-            )],
+            &[
+                format!(
+                    "Schedule(0, 0, UAIState_Stand(), n\"{waypoint}\", 1000.0f, \
+                     TSubclassOf<UNavArea>(nullptr), nullptr)"
+                ),
+                // Ohne das steht die Figur an ihrem Weltpunkt, und wo der liegt weiss niemand:
+                // Weltpunkte stehen nicht im Ortskatalog. Mit Teleport landet sie am Wegpunkt,
+                // und der hat Koordinaten, die man nachschlagen und ansteuern kann.
+                // 280 ausgelieferte Tagesablaeufe machen es genauso.
+                "TeleportToCurrentTaskWhen = EDailyRoutineTeleportMode(1)".to_string(),
+            ],
         ));
     }
 
@@ -333,6 +340,22 @@ mod tests {
         npc.waypoint = None;
         assert!(!source(&npc).contains("UDailyRoutine_MY_NPC_Start"));
         assert_eq!(routine_class(&npc), None);
+    }
+
+    #[test]
+    fn a_routine_teleports_the_character_to_its_waypoint() {
+        // Sonst steht sie an ihrem Weltpunkt, und dessen Lage kennt niemand — Weltpunkte stehen
+        // nicht im Ortskatalog. Am Wegpunkt ist sie auffindbar, weil der Koordinaten hat.
+        // Im Spiel gelernt: die erste Testfigur war schlicht nicht zu finden.
+        assert!(source(&diego_clone())
+            .contains("default TeleportToCurrentTaskWhen = EDailyRoutineTeleportMode(1);"));
+    }
+
+    #[test]
+    fn without_a_waypoint_there_is_nothing_to_teleport_to() {
+        let mut npc = diego_clone();
+        npc.waypoint = None;
+        assert!(!source(&npc).contains("TeleportToCurrentTaskWhen"));
     }
 
     #[test]
