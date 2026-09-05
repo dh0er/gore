@@ -2839,7 +2839,7 @@ fn block_stmts_in(
     // Default-constructed locals pushed straight as an argument, with a provisional
     // construction-site marker in `out`: (slot, name). Settled at the loop head once the
     // consuming call has taken the operand off the stack.
-    let mut pending_temp_markers: Vec<(i32, String, usize)> = Vec::new();
+    let mut pending_temp_markers: Vec<(i32, String, usize, bool)> = Vec::new();
     let mut value_reg: Option<String> = None;
     let mut obj_reg: Option<String> = None;
     let mut ref_reg: Option<String> = None; // Idiom-B member address
@@ -2992,7 +2992,7 @@ fn block_stmts_in(
                 .flatten()
             };
             let mut settled: Vec<usize> = Vec::new();
-            for (index, (slot, name, pushed_at)) in pending_temp_markers.iter().enumerate() {
+            for (index, (slot, name, pushed_at, from_reference)) in pending_temp_markers.iter().enumerate() {
                 // The construction pops its receiver before the argument push is processed:
                 // only once the push has gone by can an absent operand mean "consumed".
                 if k <= *pushed_at || stack.iter().any(|arg| &arg.s == name) {
@@ -3052,7 +3052,7 @@ fn block_stmts_in(
                 if std::env::var_os("GORE_AS_MARKER_DIAG").is_some() {
                     let names: Vec<&str> = stack.iter().map(|arg| arg.s.as_str()).collect();
                     eprintln!(
-                        "[marker] slot={slot} name={name} pushed_at={pushed_at} k={k} consumer={consumer:?} temporary={temporary} stack={names:?}"
+                        "[marker] slot={slot} name={name} pushed_at={pushed_at} k={k} consumer={consumer:?} temporary={temporary} from_reference={from_reference} stack={names:?}"
                     );
                 }
                 if temporary {
@@ -3061,6 +3061,11 @@ fn block_stmts_in(
                     }
                 } else {
                     default_ctor_temp.remove(name);
+                    if *from_reference {
+                        if let Some(pos) = out.iter().rposition(|line| *line == marker) {
+                            out[pos] = format!("{marker} init");
+                        }
+                    }
                 }
                 settled.push(index);
             }
@@ -4244,6 +4249,60 @@ fn block_stmts_in(
                     pending_is_pure_elem = false;
                     continue;
                 }
+                // A SCRIPT struct's default construction of a local (`PSF s; CALL FPayload;
+                // TYPEID`) is the declaration standing at that point, exactly like a `$beh0`
+                // of a native value: leave the construction-site marker the emitter resolves
+                // into `T local_N;` where the mentions are (`RegisterJoinWarning`: vanilla
+                // built the handle behind the guard, the hoisted declaration built it at
+                // entry). A slot pushed again at once is a temporary and gets no marker.
+                let script_ctor_site: Option<i32> = if ctx.refs.is_type_name(&f)
+                    && ctx.refs.func_params_by_id(id).is_some_and(|p| p.is_empty())
+                {
+                    stack
+                        .last()
+                        .filter(|top| top.is_psf)
+                        .and_then(|top| top.s.strip_prefix("local_"))
+                        .and_then(|rest| rest.split('_').next())
+                        .and_then(|rest| rest.parse::<i32>().ok())
+                        .filter(|slot| *slot > 0)
+                        .filter(|slot| {
+                            let mut next = k + 1;
+                            while insns.get(next).is_some_and(|n| n.op.name == "TYPEID") {
+                                next += 1;
+                            }
+                            let pushed_at_once = insns.get(next).is_some_and(|n| {
+                                matches!(n.op.name, "PSF" | "PshVPtr")
+                                    && n.words.first().map(|w| *w as i16 as i32) == Some(*slot)
+                            });
+                            if !pushed_at_once {
+                                return true;
+                            }
+                            // Pushed at once into a call that WRITES through a reference
+                            // parameter: an out-argument has to be a named local
+                            // (`FStoryEventPayload Payload; Event.Payload.Get(Payload);` —
+                            // five `HasStoryEventInMemory*` built it per iteration). A call
+                            // taking only values or const references took a temporary.
+                            let call = (next + 1..insns.len().min(next + 12))
+                                .find(|j| insns[*j].op.is_call());
+                            let Some(call) = call else {
+                                return false;
+                            };
+                            let callee = &insns[call];
+                            let params = match callee.op.name {
+                                "CALLSYS" | "Thiscall1" => ctx
+                                    .refs
+                                    .func_params_by_ptr(callee.qwords.first().copied().unwrap_or(0) as i64),
+                                _ => ctx
+                                    .refs
+                                    .func_params_by_id(callee.dwords.first().copied().unwrap_or(0) as i32),
+                            };
+                            params.is_some_and(|p| {
+                                p.iter().any(|param| param.is_reference && !param.is_object_const && !param.is_read_only)
+                            })
+                        })
+                } else {
+                    None
+                };
                 pending = if f == "StaticClass" {
                     // Fix b1 — StaticClass takes 0 operands; the stack holds the ENCLOSING call's
                     // already-pushed args. Do NOT clear it (clearing destroys those args).
@@ -4379,6 +4438,11 @@ fn block_stmts_in(
                 };
                 pending_is_static_name = false;
                 pending_is_pure_elem = false;
+                if let Some(slot) = script_ctor_site {
+                    if pending.is_none() {
+                        out.push(format!("{CTOR_SITE} {slot}"));
+                    }
+                }
             }
             "CALLSYS" | "Thiscall1" => {
                 test_after_call = false;
@@ -4561,7 +4625,14 @@ fn block_stmts_in(
                                         out.push(format!("{CTOR_SITE} {slot_num}"));
                                         // The argument push stands at `k + 1`; the operand it
                                         // puts on the stack is what the consuming call takes.
-                                        pending_temp_markers.push((slot, top.s.clone(), k + 1));
+                                        // A copy out of the reference register (`PshRPtr; PSF
+                                        // dst; $beh0`) is a declaration WITH that value —
+                                        // `TArray<T> x = Ref();` — should the marker settle
+                                        // as a declaration.
+                                        let from_reference = k >= 2
+                                            && insns[k - 1].op.name == "PSF"
+                                            && insns[k - 2].op.name == "PshRPtr";
+                                        pending_temp_markers.push((slot, top.s.clone(), k + 1, from_reference));
                                     }
                                 }
                             }
@@ -6124,7 +6195,7 @@ fn block_stmts_in(
     }
     // Provisional markers whose consuming call lies in a later block: the argument is rendered
     // there, as the temporary it was taken for.
-    for (slot, _, _) in pending_temp_markers.drain(..) {
+    for (slot, _, _, _) in pending_temp_markers.drain(..) {
         let marker = format!("{CTOR_SITE} {slot}");
         if let Some(pos) = out.iter().rposition(|line| *line == marker) {
             out.remove(pos);

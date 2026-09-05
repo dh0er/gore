@@ -1180,6 +1180,13 @@ fn emit_function_ctor(
     // and no handle at function scope, only a block's own locals at the block's end.
     let released_handles = released_handle_slots(f, refs);
     hoisted.extend(released_handles.iter().copied());
+    // A call result copied out of the register's slot into a local (`CpyRtoV4 t; CpyVtoV4 x,
+    // t`) is an assignment to a name the source wrote: the inliners leave it alone
+    // (`AIState_WaitForBlockedPath::DoTask`: `bStillBlocking = IsCharacterStillBlocking…();
+    // if (!bStillBlocking)` was folded into `if (!Call())`, losing the copy).
+    hoisted.extend(copied_call_result_slots(f));
+    let named_iterated = named_iterated_containers(f, refs);
+    hoisted.extend(named_iterated.iter().copied());
     let spilled = spilled_boolean_names(f, refs);
     let named_arithmetic = named_arithmetic_slots(f);
     let named_sites = named_value_sites(f, refs);
@@ -1547,6 +1554,11 @@ fn emit_function_ctor(
     // hoist and the sink below leave the slot alone; every other marker goes.
     let (body, declared_at_site, declared_with_init) =
         resolve_ctor_site_markers(&body, &infer_locals(f, refs), refs, &touched_after_branch);
+    // A local declared at its construction site is a name: the argument inliner would fold
+    // its assignment into the call that reads it and leave the declaration empty
+    // (`ClearTargetingBy`: the container copied out of a reference-returning call, iterated
+    // by name — probed).
+    hoisted.extend(declared_at_site.iter().copied());
     pass_trace("resolve_ctor_site_markers", &body);
     // CASCADE GATE: a const handle can't be COPIED into a non-const local / `__return` /
     // member (handle assignment preserves const), so any slot consumed as a bare copy-RHS
@@ -1905,6 +1917,7 @@ fn emit_function_ctor(
         refs,
         &member_read_slots(f),
         returns_by_reference,
+            &member_copy_named_slots(f),
     );
     pass_trace("fold_member_read_temporaries", &body);
     let body =
@@ -2237,7 +2250,7 @@ fn emit_function_ctor(
             // (`if A { return x; } else { if B { return y; } else { return z; } }`).
             let mut body = body;
             for _ in 0..8 {
-                let again = drop_else_after_returning_arm(&body);
+                let again = drop_else_after_returning_arm(&body, &released_handles);
                 if again == body {
                     break;
                 }
@@ -2377,6 +2390,7 @@ fn emit_function_ctor(
             .collect();
         // What vanilla actually stores, rather than what our text can prove about its own reads.
         let vanilla_initialises = slots_vanilla_initialises(f);
+        let first_touch_literal = slots_first_touched_by_a_literal(f);
         // Where the declarations start, so the whole block plus the body it heads can be handed
         // to the sink below: a declaration only moves once it stands next to the code that uses
         // it, and the two are written from different places.
@@ -2435,7 +2449,13 @@ fn emit_function_ctor(
                     // a call. Vanilla's silence settles what the two proofs above are reaching
                     // for; the argument position is what makes a bare primitive legal at all.
                     || (!vanilla_initialises.contains(slot)
-                        && first_mention_is_a_bare_argument(&body, *slot)))
+                        && first_mention_is_a_bare_argument(&body, *slot))
+                    // …or vanilla stored no literal into the slot at its first write and our
+                    // text assigns it on every path before every read — the compiler's own
+                    // "may not be initialized" question, asked of the text (leaving every
+                    // such slot bare without the flow proof was measured: CombatMoves).
+                    || (!first_touch_literal.contains(slot)
+                        && all_reads_definitely_assigned(&body, *slot)))
             {
                 let _ = writeln!(s, "{ind}    {ty} local_{slot};");
             } else if is_primitive(ty) {
@@ -2479,7 +2499,7 @@ fn emit_function_ctor(
         // evaluating it twice is not the same as evaluating it once.
         // Before the compound-assignment fold, which would rewrite the middle line out of the
         // shape this one matches on.
-        let body = collapse_single_use_accumulators(&body, &widened);
+        let body = collapse_single_use_accumulators(&body, &widened, &locals);
         pass_trace("collapse_single_use_accumulators", &body);
         let body = fold_enum_call_round_trips(&body, &call_result_types, fields, &path_roots, refs, returns_by_reference, has_enum_conversions(f));
         pass_trace("fold_enum_call_round_trips", &body);
@@ -2539,7 +2559,7 @@ fn emit_function_ctor(
         // And once more here, for the same reason: an accumulator whose declaration was hoisted
         // has its `T X;` in this text and its `X = ...` lines in the body, so the split form is
         // only whole once the two are joined.
-        let rendered = collapse_single_use_accumulators(&rendered, &widened);
+        let rendered = collapse_single_use_accumulators(&rendered, &widened, &locals);
         pass_trace("collapse_single_use_accumulators", &rendered);
         let rendered = fold_enum_call_round_trips(&rendered, &call_result_types, fields, &path_roots, refs, returns_by_reference, has_enum_conversions(f));
         pass_trace("fold_enum_call_round_trips", &rendered);
@@ -2616,7 +2636,7 @@ fn emit_function_ctor(
         pass_trace("inline_single_use_literals", &rendered);
         let rendered = drop_dead_literal_stores(&rendered);
         pass_trace("drop_dead_literal_stores", &rendered);
-        let rendered = collapse_single_use_accumulators(&rendered, &widened);
+        let rendered = collapse_single_use_accumulators(&rendered, &widened, &locals);
         pass_trace("collapse_single_use_accumulators", &rendered);
         let rendered = inline_bool_chain_into_next_condition(&rendered);
         pass_trace("inline_bool_chain_into_next_condition", &rendered);
@@ -2637,8 +2657,11 @@ fn emit_function_ctor(
         // whatever the push behind its producer says: `HasEquippedRangedWeapon` released the
         // array behind the compare that read `Num()`, not behind `Num()` — a local destroyed
         // at the `return`, and inlining it moved the destructor in front of the compare.
-        let rvo_temporaries: HashSet<i32> =
-            rvo_temporary_slots(f, refs).difference(&rvo_declared).copied().collect();
+        let rvo_temporaries: HashSet<i32> = rvo_temporary_slots(f, refs)
+            .difference(&rvo_declared)
+            .copied()
+            .filter(|slot| !named_iterated.contains(slot))
+            .collect();
         let rendered = inline_unnamed_value_temporaries(
             &rendered,
             &unnamed_value_defs(f, refs, &rvo_producers, &rvo_consumers)
@@ -2794,6 +2817,7 @@ fn emit_function_ctor(
             refs,
             &member_read_slots(f),
             f.ret.is_reference && f.ret.token == 5 && !f.ret.is_object_handle,
+            &member_copy_named_slots(f),
         );
         pass_trace("fold_member_read_temporaries", &rendered);
         // Last: the pass looks for a release standing directly before the closing brace, and the
@@ -5100,6 +5124,40 @@ fn scope_released_handles(body: &str, released: &HashSet<i32>) -> String {
         text.push('\n');
     }
     text
+}
+
+/// Containers a range-for iterates through a NON-CONST iterator (`TArrayIterator<T>`, not
+/// `TArrayConstIterator<T>`): the `Iterator()` overload the compiler picked says the receiver
+/// was a mutable variable, and a temporary — a call result iterated in place — is const and
+/// gets the const iterator (`GetCharacterThisCharacterIsDirectlyFacing`: vanilla named the
+/// sensed-character array, our inlined call iterated it as a const temporary).
+fn named_iterated_containers(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let mut out = HashSet::new();
+    for pair in instrs.windows(2) {
+        let (receiver, call) = (&pair[0], &pair[1]);
+        if receiver.op.name != "PSF" || call.op.name != "CALLSYS" {
+            continue;
+        }
+        let ptr = call.qwords.first().copied().unwrap_or(0) as i64;
+        if refs.func_by_ptr(ptr) != Some("Iterator") {
+            continue;
+        }
+        let Some(ret) = refs.func_ret_by_ptr(ptr) else {
+            continue;
+        };
+        let name = ret.base_name(refs);
+        if name.starts_with("TArrayIterator") || name.starts_with("TMapIterator") || name.starts_with("TSetIterator") {
+            let slot = w0(receiver);
+            if slot > 0 {
+                out.insert(slot);
+            }
+        }
+    }
+    out
 }
 
 /// Handles vanilla PARKED: the source gave them a name.
@@ -9304,6 +9362,38 @@ fn fold_enum_round_trips(
     let mut at = 0usize;
     while at < lines.len() {
         let folded = (|| {
+            // `int local_N = int(P);` / `local_N = int(P);` read ONCE by the next line's
+            // comparison with an integer literal is that comparison reading `int(P)`: the
+            // name costs the copy out of the member's temporary (`IsVisible_Implementation`
+            // of the generated dialog: `this.DB(id, int(this.GetG1R().Permission) == 0)`,
+            // 15 single-use sites in the tree, all in dialog modules).
+            if let Some((_, name, value)) = declaration_with_initializer(lines[at])
+                .filter(|(_, _, _)| lines[at].trim_start().starts_with("int "))
+                .or_else(|| slot_store(lines[at]).map(|(name, value)| (String::new(), name, value)))
+            {
+                if let Some(read) = value.strip_prefix("int(").and_then(|v| v.strip_suffix(')')) {
+                    let reader = lines.get(at + 1)?;
+                    let compared = [" == ", " != "].iter().find_map(|op| {
+                        let needle = format!("({name}{op}");
+                        let start = reader.find(&needle)?;
+                        let rest = &reader[start + needle.len()..];
+                        let end = rest.find(')')?;
+                        rest[..end].trim().parse::<i64>().ok().map(|_| (start, needle.len(), *op))
+                    });
+                    if let Some((start, needle_len, op)) = compared {
+                        if !read.contains(' ')
+                            && !read.contains('=')
+                            && count_ident(reader, &name) == 1
+                            && read_once_at(&lines, at, at + 1, &name)
+                            && is_decompiler_local(&name)
+                        {
+                            let mut replacement = reader.to_string();
+                            replacement.replace_range(start..start + needle_len, &format!("(int({read}){op}"));
+                            return Some(replacement);
+                        }
+                    }
+                }
+            }
             let (name, value) = slot_store(lines[at])?;
             let read = value.strip_prefix("int(")?.strip_suffix(')')?;
             let declared = &enum_of_member_path(read, fields, roots, refs)?;
@@ -9359,7 +9449,47 @@ fn fold_enum_round_trips(
 /// after the accumulation is its last, and `X` is not one of the slots `widened_slots` proves the
 /// source NAMED — there the copy IS the declaration and taking it out changes the width the
 /// arithmetic happens at.
-fn collapse_single_use_accumulators(body: &str, widened: &HashSet<i32>) -> String {
+fn collapse_single_use_accumulators(body: &str, widened: &HashSet<i32>, locals: &BTreeMap<i32, String>) -> String {
+    // The declaration's type may WIDEN the initialiser: `float x = a - b;` with integer `a`
+    // and `b` subtracts in integers and converts, and `x = x / c` divides in floats. Folded,
+    // `(a - b) / c` divides in integers — a different program, and a warning this compiler
+    // treats as an error (GA_Human_Loot). Where the declared type is a float and the
+    // initialiser reads an integer local and no float one, the fold writes the conversion
+    // out: `float32(a - b) / c`.
+    let float_type = |ty: &str| matches!(ty, "float" | "float32" | "float64" | "double");
+    let int_type = |ty: &str| {
+        matches!(
+            ty,
+            "int" | "int8" | "int16" | "int32" | "int64" | "uint" | "uint8" | "uint16" | "uint32" | "uint64"
+        )
+    };
+    let widens_integers = |declared: Option<&String>, init: &str| -> bool {
+        let Some(declared) = declared else { return false };
+        if !float_type(declared) {
+            return false;
+        }
+        // A bare integer local widened into the declaration converts at the fold's use
+        // as well (`float32 x = n; x = x / 2.0f` is `n / 2.0f`, measured byte-faithful);
+        // only an integer ARITHMETIC in the initialiser changes its width when folded.
+        if !init.contains(" + ") && !init.contains(" - ") && !init.contains(" * ") && !init.contains(" / ") {
+            return false;
+        }
+        let mut has_int = false;
+        let mut has_float = false;
+        for token in init.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+            if !is_decompiler_local(token) {
+                continue;
+            }
+            if let Some(ty) = slot_of(token).and_then(|s| locals.get(&s)) {
+                if int_type(ty) {
+                    has_int = true;
+                } else if float_type(ty) {
+                    has_float = true;
+                }
+            }
+        }
+        has_int && !has_float
+    };
     let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
     let mut changed = true;
     while changed {
@@ -9394,13 +9524,57 @@ fn collapse_single_use_accumulators(body: &str, widened: &HashSet<i32>) -> Strin
             {
                 continue;
             }
+            // The declaration's type may WIDEN the initialiser (see above): the conversion the
+            // declaration did is written out where it stood — `float32(a + b) * 0.5f` — and
+            // the width of every operation stays what it was (`InsertSortedByDistanceToSelf`:
+            // vanilla converted the integer sum and halved the float in the temporary).
+            let declared = slot_of(&name).and_then(|s| locals.get(&s)).cloned();
+            let (init, cast_wrapped) = if widens_integers(declared.as_ref(), &init) {
+                (format!("{}({init})", declared.as_deref().unwrap_or("float32")), true)
+            } else {
+                (init, false)
+            };
+            // Operand temporaries standing between the declaration and the accumulation: a
+            // right operand computed into a name the first accumulation reads once
+            // (`float X = float(A); R = Call(); X = X * R;`). Vanilla computed the call
+            // INSIDE the expression, behind the left operand — the same order — and the
+            // name costs the copy of the widened left operand into its declared slot
+            // (`GetFallDistanceDamageMultipier`).
+            let mut operands: Vec<(String, String)> = Vec::new();
+            while let Some(line) = lines.get(index + span + operands.len()) {
+                let Some((target, value)) = declaration_with_initializer(line)
+                    .map(|(_, target, value)| (target, value))
+                    .or_else(|| slot_store(line))
+                else {
+                    break;
+                };
+                if target == name || !is_decompiler_local(&target) || indent_of(line) != indent {
+                    break;
+                }
+                let mentions: usize = lines.iter().map(|l| count_ident(l, &target)).sum();
+                let consumer = lines.get(index + span + operands.len() + 1).map(|l| l.trim());
+                if mentions != 2
+                    || !consumer.is_some_and(|c| c.starts_with(&format!("{name} = ")) && count_ident(c, &target) == 1)
+                {
+                    break;
+                }
+                operands.push((target, value));
+            }
+            let span = span + operands.len();
             let Some(accumulate) = lines.get(index + span).map(|line| line.trim()) else {
                 continue;
             };
             let _ = accumulate;
             // A CHAIN of accumulations, not just one: `X = X + a; X = X + b;` is a single
             // expression in vanilla, and it accumulates in the slot the value landed in.
-            let mut folded_value = init.clone();
+            // The initialiser becomes the LEFT operand of the accumulation: bracketed unless it
+            // already is one, or `A - b / c` reads as `A - (b / c)` (GA_Human_Loot: an integer
+            // division the source never wrote, and a warning this compiler treats as an error).
+            let mut folded_value = if init.contains(' ') && !wraps_whole_expression(&init) && !cast_wrapped {
+                format!("({init})")
+            } else {
+                init.clone()
+            };
             let mut steps = 0usize;
             while let Some(line) = lines.get(index + span + steps).map(|line| line.trim()) {
                 let Some(value) = line
@@ -9413,6 +9587,21 @@ fn collapse_single_use_accumulators(body: &str, widened: &HashSet<i32>) -> Strin
                 // `X = Radius + X` are both the compiler accumulating into the slot it read
                 // into. The written order is kept, so a non-commutative operator stays what it
                 // was.
+                // the operand temporaries stand in for their initialisers
+                let substitute = |text: &str| -> String {
+                    let mut text = text.to_owned();
+                    for (target, init) in &operands {
+                        if count_ident(&text, target) == 1 {
+                            let wrapped = if init.contains(' ') && !wraps_whole_expression(init) {
+                                format!("({init})")
+                            } else {
+                                init.clone()
+                            };
+                            text = rename_ident(&text, target, &wrapped);
+                        }
+                    }
+                    text
+                };
                 let next = if let Some(rest) = value.strip_prefix(&format!("{name} ")) {
                     let Some((op, right)) = rest.split_once(' ') else {
                         break;
@@ -9420,7 +9609,7 @@ fn collapse_single_use_accumulators(body: &str, widened: &HashSet<i32>) -> Strin
                     if !matches!(op, "+" | "-" | "*" | "/") || right.contains(&name) {
                         break;
                     }
-                    format!("({folded_value} {op} {right})")
+                    format!("({folded_value} {op} {})", substitute(right))
                 } else if let Some(head) = value.strip_suffix(&format!(" {name}")) {
                     let Some((left, op)) = head.rsplit_once(' ') else {
                         break;
@@ -9428,7 +9617,7 @@ fn collapse_single_use_accumulators(body: &str, widened: &HashSet<i32>) -> Strin
                     if !matches!(op, "+" | "-" | "*" | "/") || left.contains(&name) {
                         break;
                     }
-                    format!("({left} {op} {folded_value})")
+                    format!("({} {op} {folded_value})", substitute(left))
                 } else {
                     break;
                 };
@@ -9440,7 +9629,7 @@ fn collapse_single_use_accumulators(body: &str, widened: &HashSet<i32>) -> Strin
             }
             // The declaration, twice per accumulation, and the single read that consumes it —
             // plus, where the declaration is split from its first write, that write's mention.
-            let expected = 2 * steps + if span == 1 { 2 } else { 3 };
+            let expected = 2 * steps + if span - operands.len() == 1 { 2 } else { 3 };
             if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != expected {
                 continue;
             }
@@ -11306,7 +11495,20 @@ fn fold_compound_assignments(
             })?;
             let operator = OPERATORS.iter().find(|op| rest.starts_with(**op))?;
             let addend = &rest[operator.len()..];
-            (!addend.is_empty() && !addend.contains(target))
+            // A literal addend is materialised BEFORE the member is loaded in the compound
+            // spelling and after it in the written-out one (`X.Z += 30.0` vs `X.Z = X.Z +
+            // 30.0`: `SetV8` in front of `LoadVObjR` or behind it). Vanilla wrote the latter
+            // wherever the two were measured (StormFist, the Waynet defaults).
+            // …a FLOAT literal, that is: an integer literal adds through `ADDIi`, with no
+            // store of its own, and the compound form is what the generated dialog code
+            // wrote (`RecruitedDiggers += 1`, 92 functions measured).
+            let float_literal_addend = (addend.contains('.') || addend.ends_with('f'))
+                && addend
+                    .strip_suffix('f')
+                    .unwrap_or(addend)
+                    .parse::<f64>()
+                    .is_ok();
+            (!addend.is_empty() && !addend.contains(target) && !float_literal_addend)
                 .then(|| format!("{}{target} {}= {addend};", indent_of(lines[at]), operator.trim()))
         })();
         if let Some(replacement) = direct {
@@ -13189,6 +13391,10 @@ fn unnamed_value_defs(
     }
     for (slot, life, at) in defs {
         let ins = &instrs[at];
+        // (Shifting the life number past earlier lives the copy-out fold takes out of the text
+        // was measured twice and reverted twice: the text numbers only the lives it NAMES, and
+        // a literal store consumed by a member write vanishes from it as well — the shifted
+        // key then named the wrong life and inlined `false` into an `&out` argument.)
         // An arithmetic result (not an in-place update of a named slot: `MULd v12, v12, v6`)
         // whose one read is an arithmetic or comparison operand is the scratch of a
         // sub-expression, in whatever life of the slot it stands (`SeverityMultiplier`: the
@@ -13782,6 +13988,31 @@ fn path_prefixes(path: &str) -> Vec<String> {
     out
 }
 
+/// Slots a member read was COPIED into: `RDR4 t; CpyVtoV4 N, t`. A member read the source used
+/// in an expression lands in the temporary the instruction reads; a copy behind it is the
+/// variable the source assigned (`int Threshold = Data.Member; if (Threshold >= x)` —
+/// `ShouldBlockingPathSkipWaitToWarning` and ten more lost that copy to the fold).
+fn member_copy_named_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w = |ins: &super::disasm::Instr, i: usize| ins.words.get(i).map(|w| *w as i16 as i32);
+    let mut out = HashSet::new();
+    for pair in instrs.windows(2) {
+        let (read, copy) = (&pair[0], &pair[1]);
+        if !matches!(read.op.name, "RDR1" | "RDR2" | "RDR4" | "RDR8")
+            || !matches!(copy.op.name, "CpyVtoV4" | "CpyVtoV8")
+            || w(copy, 1) != w(read, 0)
+        {
+            continue;
+        }
+        if let Some(named) = w(copy, 0).filter(|s| *s > 0) {
+            out.insert(named);
+        }
+    }
+    out
+}
+
 fn fold_member_read_temporaries(
     body: &str,
     widened: &HashSet<i32>,
@@ -13792,6 +14023,7 @@ fn fold_member_read_temporaries(
     refs: &RefResolver,
     direct_reads: &HashMap<i32, u8>,
     returns_by_reference: bool,
+    member_copy_named: &HashSet<i32>,
 ) -> String {
     // A path, not a literal: `5.0f` also contains a dot, and reading it as a member path made
     // every float constant look like an unresolvable member.
@@ -13825,6 +14057,10 @@ fn fold_member_read_temporaries(
             })?;
             let slot = slot_of(&name)?;
             if !pure_path(&path) {
+                return None;
+            }
+            // Vanilla copied the read INTO this slot: the source named the value.
+            if member_copy_named.contains(&slot) {
                 return None;
             }
             // Either the type tables agree that the declaration converts nothing, or the
@@ -14272,7 +14508,7 @@ fn epilogue_is_joined(f: &Func) -> bool {
     target == instrs[ret].offset_dw as i64
 }
 
-fn drop_else_after_returning_arm(body: &str) -> String {
+fn drop_else_after_returning_arm(body: &str, released: &HashSet<i32>) -> String {
     let lines: Vec<&str> = body.lines().collect();
     let mut kept: Vec<String> = Vec::new();
     let mut at = 0usize;
@@ -14307,6 +14543,20 @@ fn drop_else_after_returning_arm(body: &str) -> String {
                 }
             }
             let close = close?;
+            // An else whose last statement is a handle release is a block the source wrote:
+            // the release is the compiler's own, at the end of the block that declared the
+            // handle (`scope_released_handles`), and lifting the body loses that block end.
+            if lines[at + 3..close]
+                .iter()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .is_some_and(|line| {
+                    is_handle_release(line)
+                        && slot_and_life_any(release_name(line)).is_some_and(|(slot, _)| released.contains(&slot))
+                })
+            {
+                return None;
+            }
             let body: Vec<String> = lines[at + 3..close]
                 .iter()
                 .map(|line| line.strip_prefix("    ").unwrap_or(line).to_owned())
@@ -15365,18 +15615,35 @@ fn arithmetic_temporaries(f: &Func) -> HashSet<i32> {
     // the value stood: the source computed it in a statement of its own
     // (`SetWalkSpeedBasedOnDistance`: the product stood before the out-parameter's push).
     let pushed_before_read = |slot: i32| -> bool {
-        let Some(last_write) = instrs.iter().rposition(|ins| {
+        // The FIRST life is the one the text's `local_N` names (the inliner takes this witness
+        // for life 1 only): its first write, followed through the in-place updates that
+        // continue it (`MULd v12, v12, v10`), up to the read that consumes it. A later life
+        // of the slot says nothing about this one (`SetupPerceptions`: a second widening
+        // into the slot, behind an argument push, kept the first from being inlined).
+        let Some(first_write) = instrs.iter().position(|ins| {
             let is_dst = ins.op.fmt.writes_first_word() || writes_destination(ins.op.name);
             is_dst && ins.words.first().map(|w| *w as i16 as i32) == Some(slot)
         }) else {
             return false;
         };
-        for later in &instrs[last_write + 1..] {
-            if super::bytediff::addressed_slots(later).contains(&slot) {
-                return false;
+        let mut pushed = false;
+        for later in &instrs[first_write + 1..] {
+            let is_dst = (later.op.fmt.writes_first_word() || writes_destination(later.op.name))
+                && later.words.first().map(|w| *w as i16 as i32) == Some(slot);
+            let reads_it = later.words.iter().skip(usize::from(is_dst)).any(|w| *w as i16 as i32 == slot);
+            if is_dst && reads_it {
+                // an in-place update continues the life; the pushes before it were its own operands
+                pushed = false;
+                continue;
+            }
+            if is_dst {
+                return false; // a new life
+            }
+            if reads_it {
+                return pushed;
             }
             if later.op.name.starts_with("Psh") || later.op.name == "PSF" {
-                return true;
+                pushed = true;
             }
         }
         false
@@ -15703,7 +15970,25 @@ fn fold_carrier_if_else(body: &str) -> String {
             if then_target != else_target || !is_decompiler_local(&then_target) {
                 return None;
             }
-            let test = lines.get(at + 8)?;
+            // …possibly accumulated further before the test (`x = x || D;`): the chain went
+            // on, one operand per statement (`AElectrifiedArea::ApplyGameplayEffectToTarget`).
+            let mut accumulated: Vec<(String, String)> = Vec::new();
+            let mut test_at = at + 8;
+            while let Some((target, value)) = lines.get(test_at).and_then(|l| slot_store(l)) {
+                if target != then_target || indent_of(&lines[test_at]) != indent {
+                    break;
+                }
+                let joined = [" || ", " && "].iter().find_map(|op| {
+                    value
+                        .strip_prefix(&format!("{then_target}{op}"))
+                        .filter(|rest| !rest.contains(&then_target))
+                        .map(|rest| (op.trim().to_owned(), rest.to_owned()))
+                });
+                let Some((op, rest)) = joined else { break };
+                accumulated.push((op, rest));
+                test_at += 1;
+            }
+            let test = lines.get(test_at)?;
             if indent_of(test) != indent || test.trim() != format!("if ({then_target})") {
                 return None;
             }
@@ -15714,31 +15999,42 @@ fn fold_carrier_if_else(body: &str) -> String {
                 _ => return None,
             };
             let (other, literal_in_else) = other;
-            // the carrier is mentioned nowhere else: its declaration, the two arms, the test
+            // the carrier is mentioned nowhere else: its declaration, the two arms, the test,
+            // and twice per accumulation
             let mentions: usize = lines.iter().map(|line| count_ident(line, &then_target)).sum();
             let declaration = lines.iter().position(|line| {
                 bare_declaration(line).is_some_and(|(_, name)| name == then_target)
             });
-            if mentions != 4 || declaration.is_none() {
+            if mentions != 4 + 2 * accumulated.len() || declaration.is_none() {
                 return None;
             }
-            let group = |text: &str| -> String {
-                if text.contains(" || ") || text.contains(" && ") { format!("({text})") } else { text.to_owned() }
+            // Brackets only where the operators MIX: `(A || B) || C` is a chain of its own
+            // inside the outer one and costs a carrier copy the flat `A || B || C` has not
+            // (measured: 8 of the 11 carrier shapes kept a `CpyVtoV4` from the brackets).
+            let group = |text: &str, joined_by: &str| -> String {
+                let other = if joined_by == " || " { " && " } else { " || " };
+                if text.contains(other) { format!("({text})") } else { text.to_owned() }
             };
-            let combined = match (literal, literal_in_else) {
-                ("true", false) => format!("{} || {}", group(condition), group(&other)),
-                ("false", false) => format!("!({}) && {}", condition, group(&other)),
-                ("true", true) => format!("!({}) || {}", condition, group(&other)),
-                ("false", true) => format!("{} && {}", group(condition), group(&other)),
+            let (mut combined, mut last_op) = match (literal, literal_in_else) {
+                ("true", false) => (format!("{} || {}", group(condition, " || "), group(&other, " || ")), "||"),
+                ("false", false) => (format!("!({}) && {}", condition, group(&other, " && ")), "&&"),
+                ("true", true) => (format!("!({}) || {}", condition, group(&other, " || ")), "||"),
+                ("false", true) => (format!("{} && {}", group(condition, " && "), group(&other, " && ")), "&&"),
                 _ => return None,
             };
-            Some((format!("{indent}if ({combined})"), declaration?))
+            for (op, rest) in &accumulated {
+                let joined_by = format!(" {op} ");
+                let left = if op == last_op { combined.clone() } else { format!("({combined})") };
+                combined = format!("{left}{joined_by}{}", group(rest, &joined_by));
+                last_op = if op == "||" { "||" } else { "&&" };
+            }
+            Some((format!("{indent}if ({combined})"), declaration?, test_at - at + 1))
         })();
         match folded {
-            Some((replacement, declaration)) => {
+            Some((replacement, declaration, consumed)) => {
                 dropped_declarations.push(lines[declaration].to_owned());
                 kept.push(replacement);
-                at += 9;
+                at += consumed;
             }
             None => {
                 kept.push(lines[at].to_owned());
@@ -15868,6 +16164,13 @@ fn resolve_ctor_site_markers(
             .any(|(other, open, close)| *other == slot && *open <= at && at < *close);
         let ty = locals.get(&slot);
         let wanted = !mentions.is_empty() && visible && !shadowed && ty.is_some();
+        if diag_enabled("GORE_AS_MARKER_DIAG") {
+            eprintln!(
+                "[ctor-site] slot={slot} at={at} mentions={} visible={visible} shadowed={shadowed} typed={} init={init_kind}",
+                mentions.len(),
+                ty.is_some()
+            );
+        }
         if wanted {
             let indent = indent_of(line);
             kept.push(format!(
@@ -15927,18 +16230,19 @@ fn enum_call_result_slots(f: &Func, refs: &RefResolver) -> HashMap<i32, String> 
         return HashMap::new();
     };
     let w = |ins: &super::disasm::Instr, i: usize| ins.words.get(i).map(|w| *w as i16 as i32);
-    let enum_return = |ins: &super::disasm::Instr| -> Option<String> {
+    let enum_return_with = |ins: &super::disasm::Instr, by_reference: bool| -> Option<String> {
         let ret = match ins.op.name {
             "CALLSYS" | "Thiscall1" => refs.func_ret_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64),
             "CALL" | "CALLINTF" | "CALLBND" => refs.func_ret_by_id(ins.dwords.first().copied().unwrap_or(0) as i32),
             _ => None,
         }?;
-        if ret.is_reference || ret.token != 5 {
+        if ret.is_reference != by_reference || ret.token != 5 {
             return None;
         }
         let name = ret.base_name(refs);
         is_enum(&name).then_some(name)
     };
+    let enum_return = |ins: &super::disasm::Instr| enum_return_with(ins, false);
     let byte_read: HashSet<i32> = instrs
         .iter()
         .filter(|ins| ins.op.name == "sbTOi")
@@ -15946,6 +16250,29 @@ fn enum_call_result_slots(f: &Func, refs: &RefResolver) -> HashMap<i32, String> 
         .filter(|slot| *slot > 0)
         .collect();
     let mut out = HashMap::new();
+    // A getter that returns the enum BY REFERENCE (`GetResult()` on a task handle): the byte is
+    // read out of the reference (`RDR1 t`) and copied into the variable (`CpyVtoV4 N, t`). An
+    // `int` declared from it converts (`sbTOi`) where vanilla copies the byte
+    // (`AIState_CarryObject::DoLeaveObject`, `GuideCharacterForward`: 17 functions carry a
+    // conversion vanilla does not).
+    for at in 0..instrs.len().saturating_sub(2) {
+        let Some(ty) = enum_return_with(&instrs[at], true) else {
+            continue;
+        };
+        let read = &instrs[at + 1];
+        if read.op.name != "RDR1" {
+            continue;
+        }
+        let Some(temp) = w(read, 0).filter(|slot| *slot > 0) else {
+            continue;
+        };
+        out.entry(temp).or_insert_with(|| ty.clone());
+        if let Some(copy) = instrs.get(at + 2).filter(|c| c.op.name == "CpyVtoV4" && w(c, 1) == Some(temp)) {
+            if let Some(named) = w(copy, 0).filter(|slot| *slot > 0) {
+                out.entry(named).or_insert_with(|| ty.clone());
+            }
+        }
+    }
     for at in 0..instrs.len().saturating_sub(1) {
         let Some(ty) = enum_return(&instrs[at]) else {
             continue;
@@ -17119,6 +17446,202 @@ fn renders_a_bool(
 /// which comes first, a write or a mention, and a slot whose first mention is not a write is the
 /// one vanilla declared bare: the callee fills it, and there is no read in front for the
 /// uninitialised-variable warning to fire on.
+/// Whether every read of `local_N` is preceded by a write on EVERY path from the top of the
+/// body: the compiler's "may not be initialized" analysis, asked of our text. An `if` assigns
+/// definitely only when both arms do (an arm that leaves through `return`/`continue`/`break`
+/// does not reach the join and counts as assigning), a loop body assigns nothing for the code
+/// behind it, a `switch` neither.
+fn all_reads_definitely_assigned(body: &str, slot: i32) -> bool {
+    let ident = format!("local_{slot}");
+    let lines: Vec<&str> = body.lines().collect();
+    // Walks the statements of one block from `at` (the first line inside it) to its closing
+    // brace at `indent` (or the end); returns (index after the block, assigned on fall-through,
+    // every read seen assigned, the block leaves through return/continue/break).
+    fn walk(lines: &[&str], mut at: usize, indent: usize, ident: &str, mut assigned: bool) -> (usize, bool, bool, bool) {
+        let mut ok = true;
+        let mut leaves = false;
+        while at < lines.len() {
+            let line = lines[at];
+            let trimmed = line.trim();
+            let depth = line.len() - line.trim_start().len();
+            if trimmed.is_empty() {
+                at += 1;
+                continue;
+            }
+            if depth < indent || (depth == indent && trimmed == "}") {
+                break; // the enclosing block closes
+            }
+            let reads = |text: &str| count_ident(text, ident) > 0;
+            let is_write = slot_store(line).is_some_and(|(t, _)| t == ident)
+                || declaration_with_initializer(line).is_some_and(|(_, n, _)| n == ident);
+            if trimmed.starts_with("if (") || trimmed.starts_with("else if (") || trimmed.starts_with("while (") || trimmed.starts_with("for (") || trimmed.starts_with("switch (") {
+                if reads(trimmed) && !assigned && !trimmed.starts_with("for (auto") {
+                    ok = false;
+                }
+                let is_loop = trimmed.starts_with("while (") || trimmed.starts_with("for (");
+                let is_switch = trimmed.starts_with("switch (");
+                // the block opens on the next line
+                let open = at + 1;
+                if lines.get(open).map(|l| l.trim()) != Some("{") {
+                    at += 1;
+                    continue;
+                }
+                if is_switch {
+                    // Every arm starts from the state at the switch head — an arm's assignment
+                    // never reaches the next arm (measured: `CombatMoves::GetDistanceToKeep`,
+                    // `local_8` written in one case and returned in the next) — and nothing an
+                    // arm assigns counts behind the switch. The arms' braces stand at the same
+                    // indent as the switch's own, so the arms are consumed here one by one and
+                    // the first stray `}` closes the switch.
+                    let entry = assigned;
+                    let mut cursor = open + 1;
+                    while cursor < lines.len() {
+                        let l = lines[cursor];
+                        let t = l.trim();
+                        let d = l.len() - l.trim_start().len();
+                        if t.is_empty() {
+                            cursor += 1;
+                            continue;
+                        }
+                        if d < indent || (d == indent && t == "}") {
+                            break;
+                        }
+                        if d == indent && (t.starts_with("case ") || t == "default:") {
+                            cursor += 1;
+                            continue;
+                        }
+                        if d == indent && t == "{" {
+                            let (after, _, arm_ok, _) = walk(lines, cursor + 1, indent + 4, ident, entry);
+                            ok &= arm_ok;
+                            cursor = after + 1;
+                        } else {
+                            // an arm without braces: its statements stand deeper
+                            let (after, _, arm_ok, _) = walk(lines, cursor, indent + 4, ident, entry);
+                            ok &= arm_ok;
+                            cursor = after.max(cursor + 1);
+                        }
+                    }
+                    at = cursor + 1; // past the switch's closing brace
+                    continue;
+                }
+                let (after, arm_assigned, arm_ok, arm_leaves) = walk(lines, open + 1, indent + 4, ident, assigned);
+                ok &= arm_ok;
+                let mut arm_join_assigned = arm_assigned || arm_leaves;
+                let mut next = after + 1; // past the closing brace
+                if is_loop {
+                    // nothing inside counts for the code behind it
+                    at = next;
+                    continue;
+                }
+                // an `else` chain: every arm has to assign for the join to be assigned
+                let mut all_arms_assign = arm_join_assigned;
+                let mut has_else = false;
+                while lines.get(next).is_some_and(|l| l.trim() == "else" || l.trim().starts_with("else if (")) {
+                    let head = lines[next].trim();
+                    if head.starts_with("else if (") {
+                        if reads(head) && !assigned {
+                            ok = false;
+                        }
+                    } else {
+                        has_else = true;
+                    }
+                    let open = next + 1;
+                    if lines.get(open).map(|l| l.trim()) != Some("{") {
+                        break;
+                    }
+                    let (after, a, arm_ok, arm_leaves) = walk(lines, open + 1, indent + 4, ident, assigned);
+                    ok &= arm_ok;
+                    arm_join_assigned = a || arm_leaves;
+                    all_arms_assign &= arm_join_assigned;
+                    next = after + 1;
+                }
+                if has_else && all_arms_assign {
+                    assigned = true;
+                }
+                at = next;
+                continue;
+            }
+            if trimmed == "{" {
+                let (after, a, arm_ok, _) = walk(lines, at + 1, indent + 4, ident, assigned);
+                ok &= arm_ok;
+                assigned = a;
+                at = after + 1;
+                continue;
+            }
+            if trimmed.starts_with("return") || trimmed == "continue;" || trimmed == "break;" {
+                if reads(trimmed) && !assigned {
+                    ok = false;
+                }
+                leaves = true;
+                at += 1;
+                // whatever follows in this block is unreachable for the analysis
+                while at < lines.len() {
+                    let l = lines[at];
+                    let d = l.len() - l.trim_start().len();
+                    if !l.trim().is_empty() && (d < indent || (d == indent && l.trim() == "}")) {
+                        break;
+                    }
+                    at += 1;
+                }
+                break;
+            }
+            if is_write {
+                // the right-hand side may read the slot before this write assigns it
+                if let Some((_, value)) = slot_store(line) {
+                    if reads(&value) && !assigned {
+                        ok = false;
+                    }
+                }
+                assigned = true;
+            } else if reads(trimmed) {
+                if !assigned {
+                    ok = false;
+                }
+            }
+            at += 1;
+        }
+        (at, assigned, ok, leaves)
+    }
+    let (_, _, ok, _) = walk(&lines, 0, lines.first().map(|l| l.len() - l.trim_start().len()).unwrap_or(0), &ident, false);
+    ok
+}
+
+/// Slots whose FIRST touch is a literal store (`SetV1/4/8 slot, K`, or the literal copied on:
+/// `SetV1 t, K; CpyVtoV4 slot, t`): the source gave them a value where it declared them.
+fn slots_first_touched_by_a_literal(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w = |ins: &super::disasm::Instr, i: usize| ins.words.get(i).map(|w| *w as i16 as i32);
+    let mut seen: HashSet<i32> = HashSet::new();
+    let mut out = HashSet::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        let literal = matches!(ins.op.name, "SetV1" | "SetV2" | "SetV4" | "SetV8");
+        if literal {
+            if let Some(slot) = w(ins, 0).filter(|s| *s > 0) {
+                if !seen.contains(&slot) {
+                    out.insert(slot);
+                }
+                if let Some(copy) = instrs.get(at + 1) {
+                    if copy.op.name.starts_with("CpyVtoV") && w(copy, 1) == Some(slot) {
+                        if let Some(named) = w(copy, 0).filter(|s| *s > 0) {
+                            if !seen.contains(&named) {
+                                out.insert(named);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for slot in super::bytediff::addressed_slots(ins) {
+            if slot > 0 {
+                seen.insert(slot);
+            }
+        }
+    }
+    out
+}
+
 fn slots_vanilla_initialises(f: &Func) -> HashSet<i32> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
@@ -19036,6 +19559,33 @@ fn rvo_declared_at_initializer(
                     frontier.push(next);
                 }
             }
+            // A REFERENCE the call returned, pushed as the next call's receiver (`PshRPtr`
+            // right behind the call, before any member address is formed): that call runs
+            // on the same object and continues the chain — `Filter().WithTag(t).GetCount()`
+            // returns the filter by reference and the temporary dies behind `GetCount`
+            // (measured: 56 such chains named when the walk stopped at the second link).
+            let mut j = call + 1;
+            let mut pushed_reference = false;
+            while j < release {
+                let ins = &instrs[j];
+                if ins.op.name == "PshRPtr" && !pushed_reference {
+                    pushed_reference = true;
+                } else if ins.op.is_call() {
+                    if pushed_reference && !behaviour(ins, "$beh") {
+                        frontier.push(j);
+                    }
+                    break;
+                } else if !(ins.op.name.starts_with("Psh")
+                    || matches!(
+                        ins.op.name,
+                        "PSF" | "PGA" | "CpyRtoV4" | "CpyRtoV8" | "STOREOBJ" | "ADDSi" | "RDSPtr"
+                            | "TYPEID" | "SetV1" | "SetV4" | "SetV8" | "CHKREF"
+                    ))
+                {
+                    break;
+                }
+                j += 1;
+            }
         }
         let mut k = release;
         let mut temporary = false;
@@ -19056,6 +19606,10 @@ fn rvo_declared_at_initializer(
                     // another temporary's destructor: step over its `PSF` as well
                     continue;
                 }
+                // (Stepping over a copy-construction or an `opAssign` between consumer and
+                // release under the chain verdict was measured at 7 fixed / 98 regressed: the
+                // copy IS the boundary far more often than the return-value copy it was meant
+                // for. Left as the boundary it always was.)
                 // (A construction between consumer and release — the return value copied
                 // out of a local — read as a statement boundary put a `TSet` declaration into
                 // the wrong block through the sink, 2 out-of-scope reads; left as a call.)
@@ -19079,6 +19633,7 @@ fn rvo_declared_at_initializer(
                 ins.op.name,
                 "CpyRtoV4" | "CpyRtoV8" | "STOREOBJ" | "PopPtr" | "PopRPtr" | "ADDSi" | "RDSPtr"
                     | "RDR1" | "RDR2" | "RDR4" | "RDR8" | "LoadRObjR" | "LoadVObjR" | "PshRPtr"
+                    | "WRTV1" | "WRTV2" | "WRTV4" | "WRTV8"
             ) || ins.op.name.starts_with("Psh")
                 || ins.op.name == "PSF"
             {
@@ -19854,7 +20409,7 @@ mod accumulator_tests {
 
     #[test]
     fn accumulator_collapses_into_its_single_reader() {
-        let folded = collapse_single_use_accumulators(BODY, &HashSet::new());
+        let folded = collapse_single_use_accumulators(BODY, &HashSet::new(), &std::collections::BTreeMap::new());
         assert_eq!(
             folded, "    return Use((Thing.GetRadius() * Multiplier));\n",
             "declare, accumulate, read once is one expression: {folded}"
@@ -19865,16 +20420,31 @@ mod accumulator_tests {
     fn accumulator_read_twice_keeps_its_name() {
         let body = "    float local_10 = Thing.GetRadius();\n    local_10 = local_10 * Multiplier;\n    return Use(local_10, local_10);\n";
         assert_eq!(
-            collapse_single_use_accumulators(body, &HashSet::new()),
+            collapse_single_use_accumulators(body, &HashSet::new(), &std::collections::BTreeMap::new()),
             body,
             "a value read twice has to keep the name it is read through"
         );
     }
 
     #[test]
+    fn an_integer_initialiser_is_converted_where_the_declaration_did() {
+        let body = "    float32 local_7 = local_2 + local_3;\n    local_7 = local_7 * 0.5f;\n    int local_5 = Math::FloorToInt(local_7);\n";
+        let locals = std::collections::BTreeMap::from([
+            (7, "float32".to_owned()),
+            (2, "int".to_owned()),
+            (3, "int".to_owned()),
+        ]);
+        assert_eq!(
+            collapse_single_use_accumulators(body, &HashSet::new(), &locals),
+            "    int local_5 = Math::FloorToInt((float32(local_2 + local_3) * 0.5f));\n",
+            "the declaration's conversion stands where the declaration stood"
+        );
+    }
+
+    #[test]
     fn accumulator_on_a_named_widening_keeps_its_name() {
         assert_eq!(
-            collapse_single_use_accumulators(BODY, &HashSet::from([10])),
+            collapse_single_use_accumulators(BODY, &HashSet::from([10]), &std::collections::BTreeMap::new()),
             BODY,
             "where the copy IS the declaration, folding it changes the width of the arithmetic"
         );
@@ -20495,7 +21065,7 @@ mod carrier_if_else_tests {
 ";
         assert_eq!(
             fold_carrier_if_else(body),
-            "    if ((a == nullptr || (b == nullptr)) || (this.Weapon == nullptr))
+            "    if (a == nullptr || (b == nullptr) || (this.Weapon == nullptr))
     {
         return;
     }
@@ -20585,3 +21155,125 @@ mod released_handle_tests {
         assert_eq!(scope_released_handles(body), body);
     }
 }
+
+#[cfg(test)]
+mod definite_assignment_tests {
+    use super::all_reads_definitely_assigned;
+
+    #[test]
+    fn a_write_in_both_arms_covers_the_read_behind_them() {
+        let body = "    if (a)
+    {
+        local_4 = 1.0;
+    }
+    else
+    {
+        local_4 = 2.0;
+    }
+    return local_4;
+";
+        assert!(all_reads_definitely_assigned(body, 4));
+    }
+
+    #[test]
+    fn a_write_in_one_arm_does_not() {
+        let body = "    if (a)
+    {
+        local_4 = 1.0;
+    }
+    return local_4;
+";
+        assert!(!all_reads_definitely_assigned(body, 4));
+    }
+
+    #[test]
+    fn a_returning_arm_counts_as_assigning() {
+        let body = "    if (a)
+    {
+        return 0.0;
+    }
+    else
+    {
+        local_4 = 2.0;
+    }
+    return local_4;
+";
+        assert!(all_reads_definitely_assigned(body, 4));
+    }
+
+    #[test]
+    fn a_loop_body_assigns_nothing_for_the_code_behind_it() {
+        let body = "    for (auto x : xs)
+    {
+        local_4 = 1.0;
+    }
+    return local_4;
+";
+        assert!(!all_reads_definitely_assigned(body, 4));
+    }
+
+    #[test]
+    fn a_case_arm_assigns_nothing_for_the_next_arm() {
+        let body = "    switch (int(x))
+    {
+    case 1:
+    {
+        local_8 = 1.0;
+        return 0.0;
+    }
+    case 2:
+    {
+        return local_8;
+    }
+    default:
+    {
+        return 0.0;
+    }
+    }
+";
+        assert!(!all_reads_definitely_assigned(body, 8));
+    }
+
+    #[test]
+    fn the_code_behind_a_switch_is_still_checked() {
+        let body = "    switch (int(x))
+    {
+    case 1:
+    {
+        local_8 = 1.0;
+        break;
+    }
+    }
+    return local_8;
+";
+        assert!(!all_reads_definitely_assigned(body, 8));
+    }
+
+    #[test]
+    fn a_write_before_the_switch_covers_its_arms_and_what_follows() {
+        let body = "    local_8 = 1.0;
+    switch (int(x))
+    {
+    case 1:
+    {
+        return local_8;
+    }
+    }
+    return local_8;
+";
+        assert!(all_reads_definitely_assigned(body, 8));
+    }
+
+    #[test]
+    fn a_straight_write_before_the_read_is_fine() {
+        let body = "    local_4 = Get();
+    if (local_4 > 1.0)
+    {
+        return local_4;
+    }
+    return 0.0;
+";
+        assert!(all_reads_definitely_assigned(body, 4));
+    }
+}
+
