@@ -222,6 +222,45 @@ launched, and the tree describes
 what the cache declares rather than what a given save would show. Full detail in
 [Reading and editing dialog trees](dialog-trees.md).
 
+## `npc`
+
+`gore npc <list|show|sites> [OPTIONS]`
+
+| Subcommand | Flags | Meaning |
+|---|---|---|
+| `list` | `[FILTER]` · `--category <NAME>` · `--max <N>` · `--json` | The characters the game ships. `FILTER` keeps the rows whose id or class contains it; `--category` takes one of `human`, `creature`, `other`. Answered from the catalog compiled into `gore.exe`, so it needs no game install. |
+| `show` | `<NPC>` · `--cache` · `--game` · `--json` | One character in full: the spawn definition, AI agent config, character definition, the guild base it derives from, its unique name, and every world point that spawns it with what is known about recompiling that level script. `<NPC>` is the exact id, not a filter. |
+| `sites` | `--level <TEXT>` · `--npc <ID>` · `--max <N>` · `--cache` · `--game` · `--json` | The world points the level scripts spawn characters from: world point, spawn definition, level-script module. `--level` matches the module name by substring; `--npc` keeps only the sites that spawn one character. |
+
+A character is not a data record in this game but a chain of AngelScript
+classes: a spawn definition names an AI agent config, which names a character
+definition, whose **super class** is the guild. `show` is where that chain gets
+walked, out of the emitted source rather than bytecode. Placement is separate
+again — a `SpawnAIAgent` call in one of the level scripts — and that is what
+`sites` reads, in both the ordinary `TSubclassOf<>(…::StaticClass())` form and
+the 14 bare class references the shipped scripts also use.
+
+`show` and `sites` take `--cache <PATH>` to read an exact script cache and
+`--game <ROOT>` to pick the install; without either, the configured game path is
+used, then Steam auto-detect. `list` reads neither. `--max` caps the printed
+rows while the closing line still reports how many matched.
+
+`show` emits only the modules it needs — the 29 in the `LevelScripts.`
+namespace plus the few that declare the classes in the chain. Emitting the
+whole tree is never right here: `Map.MainMap.WorldPointManagerConfig_MainMap`
+alone needs over five minutes to recover its class defaults, against about two
+seconds for an ordinary module.
+
+Each site `show` prints carries a `translation:` line about its level script,
+in one of exactly three states: `measured, no known difference`,
+`N divergent function(s), M behaviour risk(s)`, or
+`NOT MEASURED for this game version`. The last one means nobody measured that
+game build; it is an absence of evidence, not reassurance.
+
+**Read-only, and this release reads only.** Creating, editing, cloning or
+removing a character, and spawning one, are not in this release. Full detail in
+[Characters](npc-authoring.md).
+
 ## `gen`
 
 `gore gen [OPTIONS] --out <OUT> <OVERRIDES>`

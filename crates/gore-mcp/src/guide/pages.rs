@@ -40,6 +40,7 @@ pages! {
     Guide / "mcp"                  => "guide/mcp.md",
     // Modding domains
     Guide / "items"                => "guide/items.md",
+    Guide / "npc-authoring"        => "guide/npc-authoring.md",
     Guide / "text-and-dialogs"     => "guide/text-and-dialogs.md",
     Guide / "audio"                => "guide/audio.md",
     Guide / "voice"                => "guide/voice.md",

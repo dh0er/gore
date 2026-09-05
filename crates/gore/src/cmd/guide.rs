@@ -781,7 +781,13 @@ mod tests {
         // The two bodies answer different questions, and a shell user picking a hit off this list
         // is entitled to know which one they are about to open: the guide says which command to
         // reach for, the reference says why one refused.
-        let query = "npc authoring";
+        //
+        // The query has to be one no single page owns outright. A page slug is scored for
+        // every section on that page, so once a guide page is called `npc-authoring`,
+        // "npc authoring" returns eight sections of it and nothing else — the ranking
+        // working, not a labelling regression. "dialog runtime" spans both bodies as that
+        // one used to.
+        let query = "dialog runtime";
         let hits = guide::search::search(query, 8);
         let listing = search_listing(query, &hits);
         assert!(listing.contains("reference · docs/reference/"), "{listing}");
