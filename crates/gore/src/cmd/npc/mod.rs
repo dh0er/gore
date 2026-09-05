@@ -1180,13 +1180,28 @@ fn stage_workspace(
     gore_mod::validate_mod_name(mod_name).context("invalid --mod-name")?;
     let manifest = read_manifest(dir)?;
     let path = cache_path(cache, game.clone())?;
-    let route = stage::route_of(&manifest);
+    // Der Weg haengt auch am Inhalt: ein Modul mit Klassen-Defaults lehnt `compile-module` ab.
+    let edited_source = match manifest.level_edit() {
+        Some(edit) => fs::read_to_string(dir.join(&edit.source_file))
+            .with_context(|| format!("reading {}", edit.source_file))?,
+        None => String::new(),
+    };
+    let route = stage::route_of(&manifest, &edited_source);
 
     let tree_display = match (route, tree) {
-        (stage::Route::FullTree, None) => bail!(
-            "authoring a new character needs a source tree: pass --tree <dir>. It is emitted once \
-             per game version and reused after that"
-        ),
+        (stage::Route::FullTree, None) => {
+            let why = if manifest.authored_module().is_some() {
+                "a new character brings a module of its own that the level script calls, and the \
+                 two only compile together"
+            } else {
+                "this module carries class defaults, and `compile-module` refuses those: it \
+                 cannot inventory their `__InitDefaults` and says so rather than guessing"
+            };
+            bail!(
+                "this work needs a source tree: pass --tree <dir>. {why}. The tree is emitted \
+                 once per game version and reused after that"
+            )
+        }
         (stage::Route::FullTree, Some(tree)) => {
             ensure_tree(tree, &manifest.cache_sha256, &path)?;
             overlay_authored(dir, tree, &manifest)?;
@@ -1213,6 +1228,7 @@ fn stage_workspace(
     let game_arg = game.as_ref().map(|path| path.display().to_string());
     let commands = stage::build_commands(
         &manifest,
+        &edited_source,
         &dir.display().to_string(),
         &tree_display,
         mod_name,
