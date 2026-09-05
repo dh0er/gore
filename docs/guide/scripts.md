@@ -494,13 +494,13 @@ reproduce as the same program. Splicing this module recompiles all of it, so tho
 changed as well.
 ```
 
-Silence is the good case: **7,043 of the 7,317 modules recompile with no known semantic
+Silence is the good case: **7,061 of the 7,317 modules recompile with no known semantic
 difference**, and for those there is nothing to inherit. That is the property worth having, and it
 is not the same as byte-identical — the oracle normalises reference keys, jump absolutes, constant
 encodings and slot numbers away before judging, so a module can pass and still assemble to
 different bytes while running the same program.
 
-The remaining 274 differ only in spelling — same program, different text. The loops that once
+The remaining 256 differ only in spelling — same program, different text. The loops that once
 recompiled with a bound of zero are gone; the table records a behaviour risk of 0 for every module,
 and the warning would name one if it returned.
 
