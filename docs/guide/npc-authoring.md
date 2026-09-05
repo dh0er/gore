@@ -261,6 +261,41 @@ A character placed from more than one level script is refused rather than half
 removed — one bundle entry carries one edited level script, so that would take
 one mod per script — and the message names the scripts.
 
+### `npc clone` — the same character, with its numbers on the table
+
+`new` derives: the generated class states its identity and inherits everything
+else without saying so. That is right for a fresh character, and useless when
+the point is to change something, because nothing is there to change.
+
+```
+$ gore npc clone OC_STT_Diego --id DIEGO_TWIN --at UOW_XT_DEMON_LESSER_SPAWN_WP -o work/twin
+authored DIEGO_TWIN in work/twin
+  DIEGO_TWIN.as  the character, 5 classes
+  XardasTower_AI.as  one added spawn line at UOW_XT_DEMON_LESSER_SPAWN_WP
+```
+
+`clone` writes the template's resolved defaults into the file — 51 lines for
+Diego: his level, his health, every resistance, his whole starting inventory,
+his skills, his personality, his combat AI. Change what you want and leave the
+rest.
+
+```angelscript
+class UCharacterDefinition_Human_DIEGO_TWIN : UCharacterDefinition_Human_OC_STT_Diego
+{
+    default m_UniqueName = n"DIEGO_TWIN";
+    default m_CharacterVisualsDefinition = UCharacterVisualsDefinition_Human_DIEGO_TWIN::StaticClass();
+    default m_CharacterType = GameplayTag::AIAgent_Human_Shadow;
+    default m_InitialGuildEffect = UGE_Guild_Human_OldCamp_ShadowLeader::StaticClass();
+    default m_Personality = UGothicCharacterPersonality_Brave_Archer_Patient::StaticClass();
+    default SetAttributeValue("AttributeSet_LevelProgression.Level", 100.0f, TSubclassOf<UDifficultySettings>(nullptr));
+    …
+}
+```
+
+The two identity lines stay the generator's. Copying `m_UniqueName` across
+would give the clone the template's name, and the save keys a character by that
+name.
+
 ### `npc checkout` — change a shipped character's values
 
 ```
