@@ -989,6 +989,152 @@ pub const DIALOG: GroupSpec = GroupSpec {
 };
 
 // ---------------------------------------------------------------------------------------------
+// gore_npc
+// ---------------------------------------------------------------------------------------------
+
+/// Shared by the two leaves that read the script cache. `list` is not one of them: it answers from
+/// the catalog bundled in this binary and never looks at an installation.
+const NPC_CACHE_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "cache",
+        Long("cache"),
+        Path,
+        "Read this script cache instead of the installed one",
+        false,
+    )
+    .with_default("the script cache of the resolved game install"),
+    // No `with_default` here, unlike `DIALOG_CACHE_ARGS`: this help text already names the
+    // fallback chain, and a hint would render the same sentence twice in a row.
+    ArgSpec::new(
+        "game",
+        Long("game"),
+        Path,
+        "Game install root. Falls back to configured path, then Steam auto-detect",
+        false,
+    ),
+];
+
+const NPC_LIST_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "filter",
+        Positional { order: 0 },
+        Str,
+        "Keep only entries whose id or class contains this text",
+        false,
+    ),
+    ArgSpec::new(
+        "category",
+        Long("category"),
+        Str,
+        "Keep only one category (human, creature, other)",
+        false,
+    ),
+    ArgSpec::new(
+        "max",
+        Long("max"),
+        Int {
+            min: Some(0),
+            max: None,
+        },
+        "Max rows to print",
+        false,
+    )
+    .with_default("50"),
+];
+
+const NPC_SHOW_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "npc",
+        Positional { order: 0 },
+        Str,
+        "Exact NPC id, for example OC_STT_Diego",
+        true,
+    ),
+    NPC_CACHE_ARGS[0],
+    NPC_CACHE_ARGS[1],
+];
+
+const NPC_SITES_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "level",
+        Long("level"),
+        Str,
+        "Keep only sites whose level-script module contains this text",
+        false,
+    ),
+    ArgSpec::new(
+        "npc",
+        Long("npc"),
+        Str,
+        "Keep only sites that spawn this character",
+        false,
+    ),
+    ArgSpec::new(
+        "max",
+        Long("max"),
+        Int {
+            min: Some(0),
+            max: None,
+        },
+        "Max rows to print",
+        false,
+    )
+    .with_default("50"),
+    NPC_CACHE_ARGS[0],
+    NPC_CACHE_ARGS[1],
+];
+
+const NPC_COMMANDS: &[CommandSpec] = &[
+    // Answered from the catalog compiled into this binary, like `find`, so it needs no install.
+    CommandSpec::new(
+        "list",
+        "List the characters the game ships",
+        NPC_LIST_ARGS,
+        Safety::read(),
+        T_FAST,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("npc-authoring"),
+    // Resolves the class chain out of the emitted source, which means emitting the few modules
+    // that carry it — seconds, not the minutes a whole-tree emit would cost.
+    CommandSpec::new(
+        "show",
+        "Print one character in full: its class chain, where it spawns, and what it inherits",
+        NPC_SHOW_ARGS,
+        Safety::read(),
+        T_NORMAL,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("npc-authoring"),
+    CommandSpec::new(
+        "sites",
+        "List the world points the level scripts spawn characters from",
+        NPC_SITES_ARGS,
+        Safety::read(),
+        T_NORMAL,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("npc-authoring"),
+];
+
+/// The read half of the character surface. A character is not a record in this game but a chain of
+/// AngelScript classes — a spawn definition names an AI config, which names a character definition
+/// — so the question "what is this NPC" is only answerable by walking that chain, and `show` is
+/// where it gets walked. `sites` answers the other half, where the level scripts place them.
+pub const NPC: GroupSpec = GroupSpec {
+    tool: "gore_npc",
+    title: "gore character reader",
+    cli: "npc",
+    summary: "Read the game's characters from the class chain the script cache declares: which \
+              ones exist, what one of them inherits from its AI config and character definition, \
+              and which world points the level scripts spawn it from. `list` answers from the \
+              catalog bundled in this binary and needs no installation; `show` and `sites` read \
+              the script cache. All three only read — nothing here authors or spawns anything.",
+    shape: GroupShape::Nested,
+    commands: NPC_COMMANDS,
+};
+
+// ---------------------------------------------------------------------------------------------
 // gore_project  (synthetic: making and shipping a UE4SS Lua mod)
 // ---------------------------------------------------------------------------------------------
 

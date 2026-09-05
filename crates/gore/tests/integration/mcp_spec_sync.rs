@@ -347,12 +347,7 @@ fn the_table_covers_the_expected_number_of_leaves() {
 /// `guide` renders the guide to an HTML file for a human to read in a browser. An agent already has
 /// strictly better access to the same pages through the `gore_guide` tool, and cannot read the file
 /// it would produce, so exposing it would add surface for no capability.
-///
-/// `npc` is the one entry here that is "not yet" rather than "deliberately never". The family is
-/// being built out a slice at a time and currently reads the bundled catalog only; advertising a
-/// tool now would describe a surface that changes under an agent between releases. Give it a real
-/// MCP group once the authoring commands land, and delete this line then.
-const UNEXPOSED_TOP_LEVEL: &[&str] = &["mcp", "guide", "help", "npc"];
+const UNEXPOSED_TOP_LEVEL: &[&str] = &["mcp", "guide", "help"];
 
 #[test]
 fn no_top_level_command_family_is_missing_from_the_table() {
