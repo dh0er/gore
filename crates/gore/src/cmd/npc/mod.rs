@@ -8,6 +8,7 @@ pub mod chain;
 pub mod defaults;
 pub mod render;
 pub mod sites;
+pub mod workspace;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
