@@ -1,10 +1,16 @@
 # Characters (NPCs)
 
-`gore npc` reads the game's characters: which ones exist, what one of them is
-made of, and which world points spawn it. This release is the read surface.
-Creating, editing, cloning or removing a character, and spawning one, are a
-later slice and are not in this release — see
-[What is proven, and what is not](#what-is-proven-and-what-is-not).
+`gore npc` reads the game's characters — which ones exist, what one of them is
+made of, and which world points spawn it — and writes the AngelScript that adds
+a new character to the world or stops a shipped one being placed. Everything on
+this page happens offline. The authoring commands write source, a manifest and a
+build spec; compiling, packaging and deploying are separate steps you run
+afterwards, and this group launches nothing.
+
+The read half is proven. The authoring half is checked offline and **has never
+been run in game** — read
+[What is proven, and what is not](#what-is-proven-and-what-is-not) before you
+build anything on it.
 
 ## The class chain
 
@@ -167,6 +173,203 @@ verdict forward. `--json` returns the same three states as
 The same risk model backs `gore as emit` and `gore as compile-module`; the
 module-level detail is in [Scripts (AngelScript)](scripts.md).
 
+## Authoring a character
+
+Four commands make one path, and each one prints the next:
+
+| Command | What it does |
+|---|---|
+| `gore npc new <ID> --from <NPC> --at <POINT> -o <DIR>` | Write a workspace: the new character's module, and the level script one spawn line longer. |
+| `gore npc delete <NPC> -o <DIR>` | The other opening move: take a shipped character's spawn line out again. |
+| `gore npc check <DIR>` | Read that workspace back and refuse anything outside the contract. |
+| `gore npc stage <DIR>` | Write the build spec, and print the commands that compile and package it. |
+
+`gore npc text` stands beside them and writes the display name. None of the four
+compiles, packages, deploys or launches anything — `stage` prints the commands
+that do, and you run them.
+
+### `npc new` — derive a character and place it
+
+```
+$ gore npc new GORE_TEST_NPC --from OC_STT_Diego --at UOW_XT_DEMON_LESSER_SPAWN_WP --waypoint FP_OC_SMALLTALK_33 -o work/npc
+authored GORE_TEST_NPC in work/npc
+  GORE_TEST_NPC.as  the character, 6 classes
+  XardasTower_AI.as  one added spawn line at UOW_XT_DEMON_LESSER_SPAWN_WP
+  translation: measured, no known difference
+next: gore npc check work/npc
+```
+
+The workspace it writes:
+
+```
+work/npc/
+  GORE_TEST_NPC.as                 the character: all its classes in one module
+  XardasTower_AI.as                the level script, one line longer
+  pristine/XardasTower_AI.as       the untouched copy check compares against
+  gore-npc-edit.json               the manifest
+```
+
+The six classes are the chain from the top of this page plus the parts hanging
+off it: character definition, visuals, AI agent config, spawn definition, the
+conversation settings the voice comes from, and — with `--waypoint` — a daily
+routine. Vanilla spreads those across four modules plus two shared ones
+(`Spawning/SpawningDefinition_Human.as`, `InteractiveObjects/NpcVisualLibrary.as`).
+Putting all six in one module of the character's own is what keeps the mod off
+those shared files, and it costs nothing: AngelScript registers classes
+globally, so which module a class lives in is free.
+
+`-o` must name a directory that does not exist. `--at` takes a world point from
+`gore npc sites`; an unknown one is refused, with the nearest names it was not.
+
+**`--from` takes a character, not a guild.** The 16 guild bases carry the
+faction and nothing else — no model, no stats, no voice — so a character derived
+straight from one would stand in the world with no appearance at all. `--from`
+is what gives the new character its looks, stats and voice. `--guild <BASE>`
+then swaps *only* the faction, by changing which class the character definition
+derives from: `--from OC_STT_Diego --guild OldCamp_Guard` is Diego's body in the
+guards' faction.
+
+**The appearance is borrowed, not built.** 817 shipped characters carry a
+prebaked model and not one of them assembles its looks from parts at runtime. A
+new id has no prebaked model of its own, so the generated visuals class keeps
+the template's — `default m_PreBakedName = "OC_STT_Diego"`. `--modular-visuals`
+takes the other path instead, and the source it generates says in a comment of
+its own that nothing ships that way and it is unproven.
+
+`--trader` adds an empty trader configuration. `--waypoint` gives the character
+a daily routine that sends it to one spot; without it, the character has no
+routine at all. `check` looks that waypoint up in the bundled location catalog,
+because the game ignores an unknown one without a word.
+
+### `npc delete` — stop a shipped character being placed
+
+```
+$ gore npc delete XT_XardasDemon -o work/demon
+XT_XardasDemon will no longer be placed, from work/demon
+  removed from UOW_XT_DEMON_LESSER_SPAWN_WP
+  translation: measured, no known difference
+  NOTE: this only stops future placement. A save that already spawned XT_XardasDemon still carries that body
+next: gore npc check work/demon
+```
+
+Read that note literally. Removing the spawn line changes what the level script
+does at world start; it does not reach into a save. A character a save has
+already seen is a body in that save and stays one. Only a new game starts
+without it.
+
+A character placed from more than one level script is refused rather than half
+removed — one bundle entry carries one edited level script, so that would take
+one mod per script — and the message names the scripts.
+
+### `npc check` — the diff guard
+
+```
+$ gore npc check work/npc
+translation: measured, no known difference
+no problems found in work/npc
+offline-checked only: that this character appears, keeps its routine and survives a save is not proven in game
+next: gore npc stage work/npc
+```
+
+The guard exists because of the company a spawn line keeps. The Old Camp level
+script places 401 characters, and splicing recompiles the whole module — so a
+line that moved by accident would surface in game as somebody else's character
+misbehaving, a long way from anything you edited. `check` diffs the edited
+level script against the `pristine/` copy line by line and blocks on every
+change that is not a spawn line of the character being authored, naming the
+line number and quoting what was on it.
+
+It also blocks on:
+
+- a workspace authored against a different script cache than the installed one
+  — a game patch, or a different `--cache`. Checking against the wrong cache is
+  not checking;
+- an id the game already ships, whose authored module would collide with the
+  shipped one;
+- a level script that did not change at all, which has nothing to build.
+
+An unresolvable waypoint is a warning rather than a block: the character is
+still valid, it simply never goes there.
+
+### `npc stage` — the build spec and the commands
+
+```
+$ gore npc stage work/npc --tree work/tree --mod-name GoreTestNpc
+reusing the source tree in work/tree (7317 modules)
+wrote work/npc/spec.json
+now run:
+  gore as compile "work/tree" -o "work/npc/full.Cache" --mini "work/npc/GoreTestNpc.mini.Cache" --work-dir "work/npc.work" --backend standalone
+  gore mod build --spec "work/npc/spec.json" -o "work/npc/build"
+then: gore mod deploy --bundle work/npc/build/GoreTestNpc
+```
+
+**There are two speed classes, and `stage` picks — you do not.** A new
+character touches two modules, one new and one shipped, and the shipped one
+refers to the new one. Separate mini-caches cannot depend on each other, so
+those two have to be compiled together, which is the complete-tree route above.
+A suppression touches exactly one shipped module and goes through
+`gore as compile-module`, which is many times faster and needs no tree at all:
+
+```
+$ gore npc stage work/demon --mod-name NoDemon
+wrote work/demon/spec.json
+now run:
+  gore as compile-module --backend standalone --op edit --module "LevelScripts.XardasTower_AI" --rel-path "LevelScripts/XardasTower_AI.as" --source "work/demon/XardasTower_AI.as" --work-dir "work/demon.work" -o "work/demon/NoDemon.mini.Cache"
+  gore mod build --spec "work/demon/spec.json" -o "work/demon/build"
+then: gore mod deploy --bundle work/demon/build/NoDemon
+```
+
+That is why `--tree` is required for a new character and pointless for a
+suppression. Emitting all 7317 modules takes around 19 minutes, nearly all of it
+one module (`Map.MainMap.WorldPointManagerConfig_MainMap`). The tree is
+therefore written once per game version, stamped with the cache it came from,
+and reused — which is what the `reusing` line reports. A tree stamped with a
+different cache is refused rather than quietly mixed with a newer one.
+
+`stage` runs neither command itself. A quarter of an hour is not something a
+tool should start without being asked.
+
+### `npc text` — the name above the lines
+
+A character's localization id is its id in lowercase, so the display name needs
+no lookup and no installation:
+
+```
+$ gore npc text GORE_TEST_NPC --name "Hannes" -o work/name.json
+wrote work/name.json
+  gore_test_npc -> "Hannes" in both German columns
+next: gore loc import --edits work/name.json
+```
+
+```json
+{
+  "gore_test_npc": {
+    "german": "Hannes",
+    "german_new": "Hannes"
+  }
+}
+```
+
+Both German columns, deliberately. Where `german_new` exists it wins over
+`german`, so a document that sets only `german` is a silent no-op — a mistake
+that has cost this project time before. `--english <NAME>` fills the three
+English columns the same way. The file goes into the game through
+`gore loc import --edits`, like any other text edit; see
+[Text & dialogs](text-and-dialogs.md).
+
+### Two NPC mods for the same world section do not run together
+
+Every authored character carries its own compiled copy of one level script, and
+that script is the whole world section. Two mods that both place a character in
+the Old Camp each carry a complete version of the same module, so installing
+both would mean taking one copy and discarding the other, silently losing
+whichever character lost. The Manager refuses that rather than installing the
+mix: a mini that would keep only some of the modules it carries is rejected with
+*a multi-module mini composes as one unit*. `gore mgr analyze` names the shared
+module as a hard conflict before it gets that far. Two NPC mods in *different*
+world sections touch different modules and coexist normally — see
+[Running many mods](mod-manager.md).
+
 ## What is proven, and what is not
 
 Read this before you build on it.
@@ -174,24 +377,31 @@ Read this before you build on it.
 | | |
 |---|---|
 | **The three read commands** | Everything `list`, `show` and `sites` report is proven and produced entirely offline. `list` needs no installation at all; `show` and `sites` read a script cache and launch nothing. |
+| **What `check` verifies** | Proven, offline, about the workspace in front of it: that the edited level script differs from its pristine copy in nothing but spawn lines of the character being authored, that the workspace was authored against the installed script cache, that the id is not one the game already ships, and that the routine's waypoint is a spot the bundled catalog knows. That is a statement about source text, not about the game. |
 | **Recompiling a level script does not disturb its neighbours** | On the measured game build, BuildID `24878692`, the complete script tree emitted and recompiled unchanged produces a **byte-identical** cache: SHA-256 `7A18F954E32AF30FC24AE3A66EA35D3B5CB98560C8F5083C7846FC9CE1D77511`, 124,459,412 bytes, 7317 modules. On that build, recompiling a level script therefore cannot change code the author did not touch. |
 | **Per-module translation** | Whether one particular level script survives its own recompile is the separate, per-module judgement the `translation:` line reports. Byte-identity of the whole tree does not answer it for a build nobody measured. |
 
-### Not in this release
+### Not proven in game
 
-None of the following works today. They are a later slice, and nothing on this
-page should be read as a hint that they already work:
+The authoring path has never been through the game. None of the following has
+been observed even once, and nothing on this page should be read as a hint that
+it works:
 
-- Creating a character.
-- Editing an existing character — its chain, its guild, its routine, its
-  conversation settings or its visuals.
-- Cloning a character.
-- Removing a character.
-- Spawning one: adding, moving or deleting a `SpawnAIAgent` call in a level
-  script.
+- That an authored character appears in the world at all.
+- That it looks like the character it was derived from.
+- That it keeps its daily routine, or goes anywhere.
+- That it survives a save and a reload.
+- That its save key — the identity a save file records it under — works.
 
-To change something about an NPC today, use the surfaces that already have an
-authoring path: [Dialog authoring](dialog-authoring.md) for what it says,
+That is also what `check` and `stage` say in the lines they end with:
+*offline-checked only* and *offline-prepared only*. Those are not modesty. Until
+somebody builds one of these, deploys it and looks, the honest description of an
+authored character is source that compiles.
+
+Editing an existing character — its chain, its guild, its routine, its
+conversation settings or its visuals — is a separate thing again and has no
+command here. Use the surfaces that do:
+[Dialog authoring](dialog-authoring.md) for what a character says,
 [Offline default patching](angelscript-defaults.md) for a single class default,
 and [Scripts (AngelScript)](scripts.md) for the general emit/recompile/splice
 route with its own risk reporting.
@@ -202,6 +412,11 @@ route with its own risk reporting.
 - [Dialog authoring](dialog-authoring.md) — authoring that conversation
 - [Scripts (AngelScript)](scripts.md) — emit, recompile and splice a module,
   and the risk report behind the `translation:` line
+- [Bundling & deploying](bundles.md) — what `stage` writes a spec for, and what
+  `gore mod build` and `gore mod deploy` then do with it
+- [Running many mods](mod-manager.md) — load order and the conflict report that
+  names two mods over one level script
+- [Text & dialogs](text-and-dialogs.md) — where an `npc text` document goes
 - [Finding things](find.md) — `gore find --domain npc` searches the same
   catalog `npc list` reads, alongside every other id namespace
 - [Catalogs & data models](catalogs-and-models.md) — regenerating that catalog
