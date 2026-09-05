@@ -971,11 +971,11 @@ fn load_native_api(cache_file: &std::path::Path) -> Option<gore_as::cache::binds
 }
 
 /// A parsed `Binds.Cache` together with the measurements a refusal has to be able to quote.
-struct LoadedBinds {
-    native: gore_as::cache::binds::NativeApi,
+pub(super) struct LoadedBinds {
+    pub(super) native: gore_as::cache::binds::NativeApi,
     proof: EvidenceFileProofJson,
     len: usize,
-    sha256: [u8; 32],
+    pub(super) sha256: [u8; 32],
 }
 
 fn native_api_path(cache_file: &Path) -> Option<PathBuf> {
@@ -985,7 +985,7 @@ fn native_api_path(cache_file: &Path) -> Option<PathBuf> {
     })
 }
 
-fn load_native_api_with_proof(cache_file: &Path) -> Option<LoadedBinds> {
+pub(super) fn load_native_api_with_proof(cache_file: &Path) -> Option<LoadedBinds> {
     let path = native_api_path(cache_file)?;
     let bytes = match read_regular_bounded(&path, DEFAULT_BINDS_MAX_BYTES, "AS_DEFAULT_BINDS") {
         Ok(bytes) => bytes,
@@ -1171,7 +1171,7 @@ fn read_validated_cache(path: &Path, label: &'static str) -> Result<Vec<u8>> {
 
 /// Read a module cache and prove its outer header. The single entry point for every subcommand that
 /// walks the `Modules` TMap or the seven global tail tables.
-fn read_module_cache(path: &Path) -> Result<Vec<u8>> {
+pub(super) fn read_module_cache(path: &Path) -> Result<Vec<u8>> {
     read_validated_cache(path, "AS_CACHE_INPUT")
 }
 
