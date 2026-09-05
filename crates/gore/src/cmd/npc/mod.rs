@@ -12,7 +12,9 @@ pub mod render;
 pub mod sites;
 pub mod workspace;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
@@ -53,6 +55,53 @@ pub enum NpcAction {
         #[arg(long)]
         json: bool,
     },
+    /// Author a new character derived from a shipped one
+    New {
+        /// Id of the new character, for example MY_NPC
+        id: String,
+        /// The shipped character to derive from: its looks, stats and voice
+        #[arg(long)]
+        from: String,
+        /// Replace the faction with this guild base, for example OldCamp_Guard
+        #[arg(long)]
+        guild: Option<String>,
+        /// World point to spawn at, from `gore npc sites`
+        #[arg(long)]
+        at: String,
+        /// Waypoint for the daily routine
+        #[arg(long)]
+        waypoint: Option<String>,
+        /// Add an empty trader configuration
+        #[arg(long)]
+        trader: bool,
+        /// Build the looks from parts at runtime instead of borrowing a prebaked model. No shipped
+        /// character does this; unproven
+        #[arg(long)]
+        modular_visuals: bool,
+        /// Read this script cache instead of the installed one
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        /// Game install root. Falls back to configured path, then Steam auto-detect
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// Output workspace directory; must not exist
+        #[arg(short, long)]
+        out: PathBuf,
+    },
+    /// Stop a shipped character from being placed in the world
+    Delete {
+        /// The character to remove
+        npc: String,
+        /// Read this script cache instead of the installed one
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        /// Game install root. Falls back to configured path, then Steam auto-detect
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// Output workspace directory; must not exist
+        #[arg(short, long)]
+        out: PathBuf,
+    },
     /// List the world points the level scripts spawn characters from
     Sites {
         /// Keep only sites whose level-script module contains this text
@@ -90,6 +139,37 @@ pub fn run(action: NpcAction) -> Result<()> {
             game,
             json,
         } => show(&npc, cache, game, json),
+        NpcAction::New {
+            id,
+            from,
+            guild,
+            at,
+            waypoint,
+            trader,
+            modular_visuals,
+            cache,
+            game,
+            out,
+        } => author(
+            &NewRequest {
+                id,
+                from,
+                guild,
+                at,
+                waypoint,
+                trader,
+                modular_visuals,
+            },
+            cache,
+            game,
+            &out,
+        ),
+        NpcAction::Delete {
+            npc,
+            cache,
+            game,
+            out,
+        } => suppress(&npc, cache, game, &out),
         NpcAction::Sites {
             level,
             npc,
@@ -101,6 +181,17 @@ pub fn run(action: NpcAction) -> Result<()> {
     }
 }
 
+/// Was `gore npc new` verlangt. Eigener Typ, weil clap sonst über die Argumentzahl klagt.
+pub struct NewRequest {
+    pub id: String,
+    pub from: String,
+    pub guild: Option<String>,
+    pub at: String,
+    pub waypoint: Option<String>,
+    pub trader: bool,
+    pub modular_visuals: bool,
+}
+
 // ─── Reading the cache ───────────────────────────────────────────
 
 /// Der emittierte Baum, einmal aufgebaut: jede Klasse nach Namen, jede Spawn-Stelle, plus die
@@ -108,8 +199,18 @@ pub fn run(action: NpcAction) -> Result<()> {
 pub struct Emitted {
     pub classes: BTreeMap<String, defaults::EmittedClass>,
     pub sites: Vec<Site>,
+    /// Der emittierte Quelltext je Levelskript. Sie werden für die Spawn-Stellen ohnehin
+    /// emittiert; sie hier zu behalten erspart dem Verfassen einen zweiten Durchlauf.
+    pub level_sources: BTreeMap<String, String>,
     pub cache_seal: [u8; 32],
     pub binds_seal: Option<[u8; 32]>,
+}
+
+impl Emitted {
+    /// Die Cache-Kennung als Kleinbuchstaben-Hex, wie sie ins Manifest geht.
+    pub fn cache_sha256(&self) -> String {
+        self.cache_seal.iter().map(|b| format!("{b:02x}")).collect()
+    }
 }
 
 /// The script cache to read: the one named, else the one in the resolved install.
@@ -174,11 +275,14 @@ fn emit_index(
 
     let mut classes = BTreeMap::new();
     let mut found = Vec::new();
+    let mut level_sources = BTreeMap::new();
     for (index, module) in modules.iter().enumerate() {
         if !module.name.starts_with(LEVEL_SCRIPT_PREFIX) {
             continue;
         }
-        found.extend(sites::parse_sites(&module.name, &emit(index)?));
+        let source = emit(index)?;
+        found.extend(sites::parse_sites(&module.name, &source));
+        level_sources.insert(module.name.clone(), source);
     }
 
     // Der Kette Glied für Glied folgen: jedes Modul erst suchen, dann emittieren. Ein fehlendes
@@ -207,9 +311,32 @@ fn emit_index(
     Ok(Emitted {
         classes,
         sites: found,
+        level_sources,
         cache_seal: faithfulness::cache_seal(&bytes),
         binds_seal,
     })
+}
+
+/// Den Quelltext eines beliebigen Moduls emittieren, an seinem Namen.
+///
+/// Für Stücke, die außerhalb der Klassenkette liegen — die Gesprächseinstellungen der Vorlage
+/// etwa, aus denen die Stimme kommt. Emittiert genau ein Modul, nicht den Baum.
+fn emit_named_module(path: &std::path::Path, module_name: &str) -> Result<Option<String>> {
+    let bytes = read_module_cache(path)?;
+    let mut resolver = RefResolver::build(&bytes).context("building the reference resolver")?;
+    let modules = model::parse_modules(&bytes).context("parsing modules")?;
+    let Some(index) = modules.iter().position(|module| module.name == module_name) else {
+        return Ok(None);
+    };
+    let loaded = load_native_api_with_proof(path);
+    let prepared = PreparedEmit::new(&modules, &mut resolver, loaded.map(|l| l.native))
+        .context("preparing the emitted modules")?
+        .with_class_defaults(true);
+    Ok(Some(
+        prepared
+            .emit_module(index)
+            .with_context(|| format!("emitting {module_name}"))?,
+    ))
 }
 
 /// Every bundled NPC row, narrowed by `filter` and `category`.
@@ -374,6 +501,291 @@ fn list_sites(
     Ok(())
 }
 
+// ─── Authoring ───────────────────────────────────────────────────
+
+/// Wie tief `check` und die Fehlermeldungen nach Namensvorschlägen suchen.
+const SUGGESTION_LIMIT: usize = 5;
+
+/// Ein Bezeichner, den AngelScript als Klassennamensteil trägt.
+fn is_valid_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Die Namen, die `needle` am ehesten gemeint haben könnte.
+fn nearest<'a>(candidates: impl Iterator<Item = &'a str>, needle: &str) -> Vec<String> {
+    let lower = needle.to_lowercase();
+    let mut hits: Vec<String> = candidates
+        .filter(|name| name.to_lowercase().contains(&lower))
+        .map(str::to_string)
+        .collect();
+    hits.sort();
+    hits.dedup();
+    hits.truncate(SUGGESTION_LIMIT);
+    hits
+}
+
+/// Das Verzeichnis anlegen — und sich weigern, in ein vorhandenes zu schreiben.
+fn create_workspace(out: &Path) -> Result<()> {
+    if out.exists() {
+        bail!(
+            "{} already exists. Point -o at a directory that does not exist yet, so nothing of \
+             yours is overwritten",
+            out.display()
+        );
+    }
+    fs::create_dir_all(out.join("pristine"))
+        .with_context(|| format!("creating {}", out.display()))?;
+    Ok(())
+}
+
+/// Den Dateinamen eines Moduls im Arbeitsverzeichnis: sein letztes Pfadstück.
+fn leaf_of(relative_path: &str) -> &str {
+    relative_path.rsplit('/').next().unwrap_or(relative_path)
+}
+
+/// Die Stimme der Vorlage, aus ihren Gesprächseinstellungen.
+///
+/// Die liegen außerhalb der Klassenkette, in einem eigenen Modul neben der Figur. Findet sich
+/// keines, bekommt die neue Figur keine Stimme eingetragen — das ist eine Lücke, die der Autor
+/// selbst füllen kann, kein Grund abzubrechen.
+fn voice_of(path: &Path, template: &str) -> Result<Option<String>> {
+    let module =
+        format!("AI.AIAgent.Human.Config.{template}.ConversationCharacterSettings_{template}");
+    let Some(source) = emit_named_module(path, &module)? else {
+        return Ok(None);
+    };
+    // Die Stimme steht als Aufruf da, nicht als Zuweisung:
+    // `default VoiceTypeSubsets.Add(FVoiceTypeSubset(GameplayTag::VoiceType_...));`
+    for class in defaults::parse_classes(&source) {
+        for call in &class.calls {
+            if let Some(at) = call.find("GameplayTag::") {
+                let rest = &call[at + "GameplayTag::".len()..];
+                let end = rest
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                    .unwrap_or(rest.len());
+                if rest[..end].starts_with("VoiceType") {
+                    return Ok(Some(rest[..end].to_string()));
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// `gore npc new` — eine Figur verfassen und das Arbeitsverzeichnis schreiben.
+fn author(
+    request: &NewRequest,
+    cache: Option<PathBuf>,
+    game: Option<PathBuf>,
+    out: &Path,
+) -> Result<()> {
+    if !is_valid_id(&request.id) {
+        bail!(
+            "{:?} is not a usable character id: it becomes part of a class name, so it may hold \
+             only letters, digits and underscores, and may not start with a digit",
+            request.id
+        );
+    }
+
+    let path = cache_path(cache.clone(), game.clone())?;
+    let template_spawn = generate::spawn_class(&request.from);
+    let emitted = emit_index(cache, game, Some(&template_spawn))?;
+
+    // Erst prüfen, dann schreiben. Ein halb angelegtes Arbeitsverzeichnis wäre schlimmer als eine
+    // Fehlermeldung.
+    if !emitted.classes.contains_key(&template_spawn) {
+        bail!(
+            "no character {} in this cache — {template_spawn} is not declared. \
+             `gore npc list {}` shows the ids that exist",
+            request.from,
+            request.from
+        );
+    }
+    let new_spawn = generate::spawn_class(&request.id);
+    if emitted.classes.contains_key(&new_spawn) {
+        bail!(
+            "{} is already a character in this game. Pick an id nothing ships under",
+            request.id
+        );
+    }
+
+    let Some(site) = emitted
+        .sites
+        .iter()
+        .find(|site| site.world_point == request.at)
+    else {
+        let near = nearest(
+            emitted.sites.iter().map(|site| site.world_point.as_str()),
+            &request.at,
+        );
+        let hint = if near.is_empty() {
+            "`gore npc sites` lists them".to_string()
+        } else {
+            format!("did you mean one of: {}", near.join(", "))
+        };
+        bail!("no world point {} in this game — {hint}", request.at);
+    };
+    let level_module = site.module.clone();
+
+    let Some(pristine) = emitted.level_sources.get(&level_module) else {
+        bail!("no emitted source for {level_module}");
+    };
+
+    let npc = generate::NewNpc {
+        id: request.id.clone(),
+        derived_from: request.from.clone(),
+        guild: request.guild.clone(),
+        waypoint: request.waypoint.clone(),
+        voice_tag: voice_of(&path, &request.from)?,
+        modular_visuals: request.modular_visuals,
+        trader: request.trader,
+    };
+    let routine = generate::routine_class(&npc);
+    let edited = edit::add_spawn(pristine, &request.at, &new_spawn, routine.as_deref())
+        .with_context(|| format!("adding the spawn line to {level_module}"))?;
+
+    create_workspace(out)?;
+
+    let module_relative = generate::relative_path(&request.id);
+    let module_leaf = leaf_of(&module_relative).to_string();
+    fs::write(out.join(&module_leaf), generate::source(&npc))
+        .with_context(|| format!("writing {module_leaf}"))?;
+
+    let level_relative = format!("{}.as", level_module.replace('.', "/"));
+    let level_leaf = leaf_of(&level_relative).to_string();
+    fs::write(out.join(&level_leaf), &edited).with_context(|| format!("writing {level_leaf}"))?;
+    fs::write(out.join("pristine").join(&level_leaf), pristine)
+        .with_context(|| format!("writing pristine/{level_leaf}"))?;
+
+    let manifest = workspace::Manifest {
+        operation: workspace::Operation::New,
+        npc_id: request.id.clone(),
+        derived_from: Some(request.from.clone()),
+        modules: vec![
+            workspace::ModuleEdit {
+                module: generate::module_name(&request.id),
+                relative_path: module_relative,
+                source_file: module_leaf.clone(),
+                pristine_file: None,
+                op: "add".to_string(),
+            },
+            workspace::ModuleEdit {
+                module: level_module.clone(),
+                relative_path: level_relative,
+                source_file: level_leaf.clone(),
+                pristine_file: Some(format!("pristine/{level_leaf}")),
+                op: "edit".to_string(),
+            },
+        ],
+        world_points: vec![request.at.clone()],
+        level_module: level_module.clone(),
+        cache_sha256: emitted.cache_sha256(),
+        modular_visuals: request.modular_visuals,
+    };
+    write_manifest(out, &manifest)?;
+
+    println!("authored {} in {}", request.id, out.display());
+    let class_count = generate::source(&npc)
+        .lines()
+        .filter(|line| line.starts_with("class "))
+        .count();
+    println!("  {module_leaf}  the character, {class_count} classes");
+    println!("  {level_leaf}  one added spawn line at {}", request.at);
+    println!("  {}", render::translation_line(&emitted, &level_module));
+    if request.modular_visuals {
+        println!(
+            "  NOTE: --modular-visuals has no shipped precedent; check the comment in {module_leaf}"
+        );
+    }
+    println!("next: gore npc check {}", out.display());
+    Ok(())
+}
+
+/// `gore npc delete` — eine ausgelieferte Figur nicht mehr setzen lassen.
+fn suppress(npc: &str, cache: Option<PathBuf>, game: Option<PathBuf>, out: &Path) -> Result<()> {
+    let spawn_class = generate::spawn_class(npc);
+    let emitted = emit_index(cache, game, Some(&spawn_class))?;
+    if !emitted.classes.contains_key(&spawn_class) {
+        bail!(
+            "no character {npc} in this cache — {spawn_class} is not declared. \
+             `gore npc list {npc}` shows the ids that exist"
+        );
+    }
+    let mine = sites_for(&emitted, &spawn_class);
+    if mine.is_empty() {
+        bail!(
+            "{npc} is never placed by a level script, so there is no spawn line to remove. \
+             Characters spawned another way cannot be suppressed this way"
+        );
+    }
+    let modules: BTreeSet<&str> = mine.iter().map(|site| site.module.as_str()).collect();
+    if modules.len() > 1 {
+        bail!(
+            "{npc} is placed from {} level scripts ({}). One bundle entry carries one edited \
+             level script, so suppressing this character would need one mod per script",
+            modules.len(),
+            modules.into_iter().collect::<Vec<_>>().join(", ")
+        );
+    }
+    let level_module = mine[0].module.clone();
+    let Some(pristine) = emitted.level_sources.get(&level_module) else {
+        bail!("no emitted source for {level_module}");
+    };
+    let edited = edit::remove_spawn(pristine, &spawn_class)
+        .with_context(|| format!("removing the spawn lines from {level_module}"))?;
+
+    create_workspace(out)?;
+    let level_relative = format!("{}.as", level_module.replace('.', "/"));
+    let level_leaf = leaf_of(&level_relative).to_string();
+    fs::write(out.join(&level_leaf), &edited).with_context(|| format!("writing {level_leaf}"))?;
+    fs::write(out.join("pristine").join(&level_leaf), pristine)
+        .with_context(|| format!("writing pristine/{level_leaf}"))?;
+
+    let manifest = workspace::Manifest {
+        operation: workspace::Operation::Suppress,
+        npc_id: npc.to_string(),
+        derived_from: None,
+        modules: vec![workspace::ModuleEdit {
+            module: level_module.clone(),
+            relative_path: level_relative,
+            source_file: level_leaf.clone(),
+            pristine_file: Some(format!("pristine/{level_leaf}")),
+            op: "edit".to_string(),
+        }],
+        world_points: mine.iter().map(|site| site.world_point.clone()).collect(),
+        level_module: level_module.clone(),
+        cache_sha256: emitted.cache_sha256(),
+        modular_visuals: false,
+    };
+    write_manifest(out, &manifest)?;
+
+    println!("{npc} will no longer be placed, from {}", out.display());
+    for site in &mine {
+        println!("  removed from {}", site.world_point);
+    }
+    println!("  {}", render::translation_line(&emitted, &level_module));
+    // Der Körper steht schon in jedem Spielstand, der ihn einmal gesehen hat. Das muss dastehen,
+    // sonst hält jemand den Mod für kaputt.
+    println!(
+        "  NOTE: this only stops future placement. A save that already spawned {npc} still \
+         carries that body"
+    );
+    println!("next: gore npc check {}", out.display());
+    Ok(())
+}
+
+/// Das Manifest atomar genug schreiben: eine frische Datei in einem frischen Verzeichnis.
+fn write_manifest(out: &Path, manifest: &workspace::Manifest) -> Result<()> {
+    let json = serde_json::to_string_pretty(manifest).context("serializing the manifest")?;
+    fs::write(out.join(workspace::MANIFEST_NAME), format!("{json}\n"))
+        .with_context(|| format!("writing {}", workspace::MANIFEST_NAME))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -489,6 +901,7 @@ mod tests {
         Emitted {
             classes: BTreeMap::new(),
             sites,
+            level_sources: BTreeMap::new(),
             cache_seal: [0u8; 32],
             binds_seal: None,
         }
