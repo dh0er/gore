@@ -8470,9 +8470,19 @@ fn read_once_at(lines: &[&str], at: usize, reader: usize, name: &str) -> bool {
             continue;
         }
         if block_end(lines, start + 1).is_some_and(|end| end > at) {
-            return !lines[start + 1..at]
-                .iter()
-                .any(|line| count_ident(line, name) > 0);
+            // Only up to the first REDEFINITION on the way in: a store before this one kills
+            // the carried value, so the reads after it (and this store's own reader) see that
+            // store, not the previous pass (measured: `local_6 = Max(…); x = local_6; local_6
+            // = Min(…); y = local_6;` in a loop is two lives, each read once).
+            for line in &lines[start + 1..at] {
+                if is_definition_line(line, name) {
+                    return true;
+                }
+                if count_ident(line, name) > 0 {
+                    return false;
+                }
+            }
+            return true;
         }
         break;
     }
@@ -8590,6 +8600,11 @@ fn fold_copy_out_temporaries(
             if copied != carrier || target == carrier {
                 return None;
             }
+            let reject = |why: &str| {
+                if diag_enabled("GORE_AS_COPYOUT_DIAG") {
+                    eprintln!("[copyout-reject] {why} | {} | {}", lines[at].trim(), copy);
+                }
+            };
             // Where vanilla itself copied the value on — `CpyRtoV8 t; CpyVtoV8 x, t` — the
             // target was a variable that already stood, and folding the carrier away makes the
             // recompile land the call in the variable straight.
@@ -8605,26 +8620,37 @@ fn fold_copy_out_temporaries(
                 && is_call_result(&value)
                 && first_write
             {
+                reject("first-write-of-copied-target");
                 return None;
             }
             let a = slot_of(&carrier)?;
-            let carrier_type = locals.get(&a)?;
+            let Some(carrier_type) = locals.get(&a) else {
+                reject("carrier-untyped");
+                return None;
+            };
             // The target says what it holds either through the slot table or, for a member of
             // this class, through the class's own field map. Anything else — an index, a member
             // of something else — has no type here and keeps its carrier.
             let target_type = match slot_of(target) {
                 Some(b) => {
                     if const_slots.contains(&a) != const_slots.contains(&b) {
+                        reject("constness");
                         return None;
                     }
                     locals.get(&b)
                 }
                 None => fields?.get(target.strip_prefix("this.")?),
             };
-            if target_type != Some(carrier_type)
-                || indent_of(lines[at]) != indent_of(lines[copy_at])
-                || !read_once_at(&lines, at, copy_at, &carrier)
-            {
+            if target_type != Some(carrier_type) {
+                reject(&format!("types {:?} vs {:?}", target_type, carrier_type));
+                return None;
+            }
+            if indent_of(lines[at]) != indent_of(lines[copy_at]) {
+                reject("indent");
+                return None;
+            }
+            if !read_once_at(&lines, at, copy_at, &carrier) {
+                reject("not-read-once");
                 return None;
             }
             Some(format!("{}{target} = {value};", indent_of(lines[at])))
