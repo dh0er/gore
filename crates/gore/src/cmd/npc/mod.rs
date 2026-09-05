@@ -337,6 +337,13 @@ pub struct Emitted {
     /// Der emittierte Quelltext je Levelskript. Sie werden für die Spawn-Stellen ohnehin
     /// emittiert; sie hier zu behalten erspart dem Verfassen einen zweiten Durchlauf.
     pub level_sources: BTreeMap<String, String>,
+    /// Wie viele Klassen im Spiel von einer Klasse erben. Aus dem geparsten Modell, ohne Emit.
+    ///
+    /// Der Compiler erklärt das erzeugte `__InitDefaults` einer Klasse **ohne Unterklassen** für
+    /// `final`. Von so einer Klasse abzuleiten und eigene `default`-Zeilen mitzubringen wird mit
+    /// „declared as final and cannot be overridden" abgelehnt. Diese Zählung ist deshalb keine
+    /// Statistik, sondern die Frage, ob eine Klasse als Elternklasse überhaupt in Frage kommt.
+    pub subclass_counts: BTreeMap<String, usize>,
     pub cache_seal: [u8; 32],
     pub binds_seal: Option<[u8; 32]>,
 }
@@ -443,10 +450,20 @@ fn emit_index(
             .map(str::to_string);
     }
 
+    let mut subclass_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for module in &modules {
+        for class in &module.classes {
+            if let Some(parent) = &class.super_class {
+                *subclass_counts.entry(parent.clone()).or_insert(0) += 1;
+            }
+        }
+    }
+
     Ok(Emitted {
         classes,
         sites: found,
         level_sources,
+        subclass_counts,
         cache_seal: faithfulness::cache_seal(&bytes),
         binds_seal,
     })
@@ -771,6 +788,40 @@ fn author(
         bail!("no emitted source for {level_module}");
     };
 
+    // Fuer jedes Glied die naechste ableitbare Elternklasse suchen. Von der Vorlage selbst geht
+    // es nicht: ihr `__InitDefaults` ist `final`, weil nichts von ihr erbt.
+    let counts = &emitted.subclass_counts;
+    let (definition_parent, definition_defaults) = derivable_parent(
+        &emitted.classes,
+        counts,
+        &format!("UCharacterDefinition_Human_{}", request.from),
+    );
+    let (config_parent, _) = derivable_parent(
+        &emitted.classes,
+        counts,
+        &format!("UAIAgentConfig_Human_{}", request.from),
+    );
+    let (spawn_parent, _) = derivable_parent(&emitted.classes, counts, &template_spawn);
+
+    // Die Aussehensklasse liegt nicht in der Kette, sondern in einem geteilten Modul. Sie wird
+    // hier einzeln nachgeschlagen; findet sich keine, bleibt die Vorlage stehen und der Compiler
+    // sagt es deutlicher, als eine Vermutung hier es könnte.
+    let visuals_class = format!("UCharacterVisualsDefinition_Human_{}", request.from);
+    let mut visuals_classes = emitted.classes.clone();
+    if let Some(index) = model::parse_modules(&read_module_cache(&path)?)
+        .ok()
+        .and_then(|modules| module_of_class(&modules, &visuals_class).map(|i| (modules, i)))
+    {
+        let (modules, i) = index;
+        if let Some(source) = emit_named_module(&path, &modules[i].name)? {
+            for class in defaults::parse_classes(&source) {
+                visuals_classes.insert(class.name.clone(), class);
+            }
+        }
+    }
+    let (visuals_parent, visuals_defaults) =
+        derivable_parent(&visuals_classes, counts, &visuals_class);
+
     let npc = generate::NewNpc {
         id: request.id.clone(),
         derived_from: request.from.clone(),
@@ -779,11 +830,12 @@ fn author(
         voice_tag: voice_of(&path, &request.from)?,
         modular_visuals: request.modular_visuals,
         trader: request.trader,
-        inherited_defaults: if request.expand {
-            resolved_defaults_of(&emitted, &request.from)
-        } else {
-            Vec::new()
-        },
+        definition_parent,
+        definition_defaults,
+        visuals_parent,
+        visuals_defaults,
+        config_parent,
+        spawn_parent,
     };
     let routine = generate::routine_class(&npc);
     let edited = edit::add_spawn(pristine, &request.at, &new_spawn, routine.as_deref())
@@ -1307,6 +1359,54 @@ fn checkout(npc: &str, cache: Option<PathBuf>, game: Option<PathBuf>, out: &Path
     Ok(())
 }
 
+/// Von welcher Klasse abgeleitet werden darf, und welche Werte dabei mitkommen müssen.
+///
+/// Der Compiler erklärt das erzeugte `__InitDefaults` einer Klasse ohne Unterklassen für `final`.
+/// Eine ausgelieferte Figur ist fast immer so ein Blatt, also ist „von Diego ableiten" kein
+/// gangbarer Weg — der Versuch endet in
+/// `Method '…::__InitDefaults()' declared as final and cannot be overridden`.
+///
+/// Deshalb wird von hier aus aufwärts gegangen, bis eine Klasse mit Geschwistern kommt, und alles,
+/// was dabei übersprungen wird, wird ausgeschrieben. Die Reihenfolge bleibt dabei die des Spiels:
+/// je näher an der Vorlage, desto später steht der Wert und desto stärker gewinnt er.
+fn derivable_parent(
+    classes: &BTreeMap<String, defaults::EmittedClass>,
+    subclass_counts: &BTreeMap<String, usize>,
+    class_name: &str,
+) -> (String, Vec<String>) {
+    const MAX_CLIMB: usize = 8;
+    const IDENTITY: &[&str] = &["m_UniqueName", "m_CharacterVisualsDefinition"];
+
+    let mut collected: Vec<String> = Vec::new();
+    let mut current = class_name.to_string();
+    for _ in 0..MAX_CLIMB {
+        if subclass_counts.get(&current).copied().unwrap_or(0) > 0 {
+            return (current, collected);
+        }
+        let Some(class) = classes.get(&current) else {
+            // Ohne emittierte Quelle ist nichts auszuschreiben; dann bleibt nur, es zu versuchen.
+            return (current, collected);
+        };
+        let mut own: Vec<String> = class
+            .assignments
+            .iter()
+            .filter(|(lhs, _)| !IDENTITY.contains(&lhs.as_str()))
+            .map(|(lhs, rhs)| format!("{lhs} = {rhs}"))
+            .collect();
+        own.extend(class.calls.iter().cloned());
+        // Die Werte der übersprungenen Klasse gehören vor die schon gesammelten: die stammen von
+        // einer näheren Nachfahrin und müssen später stehen.
+        own.extend(collected);
+        collected = own;
+
+        let Some(parent) = class.super_class.clone() else {
+            return (current, collected);
+        };
+        current = parent;
+    }
+    (current, collected)
+}
+
 /// Die `default`-Zeilen der Figurendefinition einer Vorlage, ohne ihre Identitaetszeilen.
 ///
 /// Was ein Klon ausschreibt statt zu erben. `m_UniqueName` und
@@ -1446,6 +1546,7 @@ mod tests {
             classes: BTreeMap::new(),
             sites,
             level_sources: BTreeMap::new(),
+            subclass_counts: BTreeMap::new(),
             cache_seal: [0u8; 32],
             binds_seal: None,
         }

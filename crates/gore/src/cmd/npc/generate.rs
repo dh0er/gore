@@ -26,13 +26,22 @@ pub struct NewNpc {
     pub modular_visuals: bool,
     /// `true` fügt eine leere Händlerkonfiguration hinzu.
     pub trader: bool,
-    /// Die aufgelösten `default`-Zeilen der Vorlage, ausgeschrieben statt geerbt.
+    /// Die Elternklasse der Figurendefinition, und die Werte, die dabei ausgeschrieben werden.
     ///
-    /// Leer heißt ableiten: die neue Klasse nennt nur ihre Identität und erbt alles andere
-    /// stillschweigend. Gefüllt heißt klonen: jeder Wert steht in der Datei und ist änderbar,
-    /// ohne dass man erst wissen muss, wo er herkommt. Identitätszeilen (`m_UniqueName`,
-    /// `m_CharacterVisualsDefinition`) gehören nicht hierher — die setzt der Generator selbst.
-    pub inherited_defaults: Vec<String>,
+    /// Nicht die Vorlage selbst: der Compiler erklärt das erzeugte `__InitDefaults` einer Klasse
+    /// **ohne Unterklassen** für `final`, und eine ausgelieferte Figur ist fast immer ein solches
+    /// Blatt. Von ihr abzuleiten scheitert mit
+    /// `declared as final and cannot be overridden`. Also wird von ihrem nächsten Vorfahren mit
+    /// Geschwistern abgeleitet und alles Übersprungene hier ausgeschrieben.
+    pub definition_parent: String,
+    pub definition_defaults: Vec<String>,
+    /// Dasselbe für das Aussehen.
+    pub visuals_parent: String,
+    pub visuals_defaults: Vec<String>,
+    /// Dasselbe für Bindeglied und Spawn-Handle. Die tragen keine eigenen Werte ausser dem
+    /// Verweis auf das jeweils nächste Glied.
+    pub config_parent: String,
+    pub spawn_parent: String,
 }
 
 /// Der Modulname einer verfassten Figur.
@@ -83,10 +92,10 @@ pub fn source(npc: &NewNpc) -> String {
     );
 
     // Die Fraktion ist keine Eigenschaft, sondern die Elternklasse. `--guild` tauscht genau die
-    // aus und lässt die übrigen Glieder der Vorlage folgen.
+    // aus; sonst gilt die vom Aufrufer ermittelte ableitbare Elternklasse.
     let definition_parent = match &npc.guild {
         Some(guild) => format!("UCharacterDefinition_Human_{guild}"),
-        None => format!("UCharacterDefinition_Human_{from}"),
+        None => npc.definition_parent.clone(),
     };
     let mut definition_defaults = vec![
         format!("m_UniqueName = n\"{id}\""),
@@ -94,7 +103,7 @@ pub fn source(npc: &NewNpc) -> String {
             "m_CharacterVisualsDefinition = UCharacterVisualsDefinition_Human_{id}::StaticClass()"
         ),
     ];
-    definition_defaults.extend(npc.inherited_defaults.iter().cloned());
+    definition_defaults.extend(npc.definition_defaults.iter().cloned());
     out.push_str(&class_block(
         &format!("UCharacterDefinition_Human_{id}"),
         &definition_parent,
@@ -109,27 +118,37 @@ pub fn source(npc: &NewNpc) -> String {
              // there (the hero reassembles on every armour change), but this path has no precedent\n\
              // in the game's own data. Prove it in game before shipping it.\n",
         );
+        let mut visuals = npc.visuals_defaults.clone();
+        visuals.retain(|line| {
+            !line.starts_with("m_PreBakedName") && !line.starts_with("m_HasPreBakedSK")
+        });
+        visuals.push("m_HasPreBakedSK = false".to_string());
         out.push_str(&class_block(
             &format!("UCharacterVisualsDefinition_Human_{id}"),
-            &format!("UCharacterVisualsDefinition_Human_{from}"),
-            &["m_HasPreBakedSK = false".to_string()],
+            &npc.visuals_parent,
+            &visuals,
         ));
     } else {
+        let mut visuals = npc.visuals_defaults.clone();
+        visuals.retain(|line| {
+            !line.starts_with("Person =")
+                && !line.starts_with("m_PreBakedName")
+                && !line.starts_with("m_HasPreBakedSK")
+        });
+        visuals.push(format!("Person = \"{from}\""));
+        visuals.push(format!("m_PreBakedName = \"{from}\""));
+        visuals.push("m_HasPreBakedSK = true".to_string());
         out.push_str(&class_block(
             &format!("UCharacterVisualsDefinition_Human_{id}"),
-            &format!("UCharacterVisualsDefinition_Human_{from}"),
-            &[
-                format!("Person = \"{from}\""),
-                format!("m_PreBakedName = \"{from}\""),
-                "m_HasPreBakedSK = true".to_string(),
-            ],
+            &npc.visuals_parent,
+            &visuals,
         ));
     }
     out.push('\n');
 
     out.push_str(&class_block(
         &format!("UAIAgentConfig_Human_{id}"),
-        &format!("UAIAgentConfig_Human_{from}"),
+        &npc.config_parent,
         &[format!(
             "m_CharacterDefinition = UCharacterDefinition_Human_{id}::StaticClass()"
         )],
@@ -138,7 +157,7 @@ pub fn source(npc: &NewNpc) -> String {
 
     out.push_str(&class_block(
         &spawn_class(id),
-        &format!("USpawnAIAgentDefinition_{from}"),
+        &npc.spawn_parent,
         &[format!(
             "AIAgentConfigClass = UAIAgentConfig_Human_{id}::StaticClass()"
         )],
@@ -204,7 +223,12 @@ mod tests {
             voice_tag: Some("VoiceType_G1R_Voice05_Diego".to_string()),
             modular_visuals: false,
             trader: false,
-            inherited_defaults: Vec::new(),
+            definition_parent: "UCharacterDefinition_Human_OldCamp_Shadow".to_string(),
+            definition_defaults: Vec::new(),
+            visuals_parent: "UArmorVisualsDefinition_MaleNPC".to_string(),
+            visuals_defaults: Vec::new(),
+            config_parent: "UAIAgentConfig_Human".to_string(),
+            spawn_parent: "USpawnAIAgentDefinition".to_string(),
         }
     }
 
@@ -224,17 +248,14 @@ mod tests {
     fn the_chain_links_the_three_classes_to_each_other() {
         let source = source(&diego_clone());
         assert!(source.contains(
-            "class UCharacterDefinition_Human_MY_NPC : UCharacterDefinition_Human_OC_STT_Diego"
+            "class UCharacterDefinition_Human_MY_NPC : UCharacterDefinition_Human_OldCamp_Shadow"
         ));
         assert!(source.contains(r#"default m_UniqueName = n"MY_NPC";"#));
-        assert!(source
-            .contains("class UAIAgentConfig_Human_MY_NPC : UAIAgentConfig_Human_OC_STT_Diego"));
+        assert!(source.contains("class UAIAgentConfig_Human_MY_NPC : UAIAgentConfig_Human"));
         assert!(source.contains(
             "default m_CharacterDefinition = UCharacterDefinition_Human_MY_NPC::StaticClass();"
         ));
-        assert!(source.contains(
-            "class USpawnAIAgentDefinition_MY_NPC : USpawnAIAgentDefinition_OC_STT_Diego"
-        ));
+        assert!(source.contains("class USpawnAIAgentDefinition_MY_NPC : USpawnAIAgentDefinition"));
         assert!(source
             .contains("default AIAgentConfigClass = UAIAgentConfig_Human_MY_NPC::StaticClass();"));
     }
@@ -247,16 +268,15 @@ mod tests {
         assert!(source.contains(
             "class UCharacterDefinition_Human_MY_NPC : UCharacterDefinition_Human_OldCamp_Guard"
         ));
-        // Die übrigen Glieder folgen weiter der Vorlage — nur die Fraktion wechselt.
-        assert!(source
-            .contains("class UAIAgentConfig_Human_MY_NPC : UAIAgentConfig_Human_OC_STT_Diego"));
+        // Die übrigen Glieder bleiben, wie der Aufrufer sie ermittelt hat.
+        assert!(source.contains("class UAIAgentConfig_Human_MY_NPC : UAIAgentConfig_Human"));
     }
 
     #[test]
     fn the_borrowed_prebaked_model_is_the_default() {
         let source = source(&diego_clone());
         assert!(source.contains(
-            "class UCharacterVisualsDefinition_Human_MY_NPC : UCharacterVisualsDefinition_Human_OC_STT_Diego"
+            "class UCharacterVisualsDefinition_Human_MY_NPC : UArmorVisualsDefinition_MaleNPC"
         ));
         assert!(source.contains(r#"default m_PreBakedName = "OC_STT_Diego";"#));
         assert!(source.contains("default m_HasPreBakedSK = true;"));
@@ -359,7 +379,7 @@ mod tests {
         // Der Unterschied zwischen Ableiten und Klonen: hier stehen die Werte in der Datei und
         // sind aenderbar, statt unsichtbar von der Vorlage zu kommen.
         let mut npc = diego_clone();
-        npc.inherited_defaults = vec![
+        npc.definition_defaults = vec![
             "SetAttributeValue(\"AttributeSet_Health.Health\", 540.0f, TSubclassOf<UDifficultySettings>(nullptr))".to_string(),
             "m_Personality = UGothicCharacterPersonality_Brave_Archer_Patient::StaticClass()".to_string(),
         ];
@@ -370,6 +390,26 @@ mod tests {
         let unique = source.find("m_UniqueName").expect("unique name");
         let health = source.find("AttributeSet_Health").expect("health");
         assert!(unique < health);
+    }
+
+    #[test]
+    fn the_generator_never_derives_from_the_template_itself() {
+        // Der Compiler erklaert das erzeugte `__InitDefaults` einer Klasse ohne Unterklassen fuer
+        // `final`. Eine ausgelieferte Figur ist so ein Blatt, und von ihr abzuleiten scheitert mit
+        // `declared as final and cannot be overridden` — nach 32 Minuten Uebersetzung, nicht
+        // sofort. Der Aufrufer sucht deshalb den naechsten Vorfahren mit Geschwistern; dieser Test
+        // haelt fest, dass der Generator wirklich nur den benutzt, was ihm gegeben wurde.
+        let source = source(&diego_clone());
+        for leaf in [
+            "UCharacterDefinition_Human_OC_STT_Diego",
+            "UAIAgentConfig_Human_OC_STT_Diego",
+            "USpawnAIAgentDefinition_OC_STT_Diego",
+        ] {
+            assert!(
+                !source.contains(&format!(": {leaf}")),
+                "derives from the template leaf {leaf}"
+            );
+        }
     }
 
     #[test]
