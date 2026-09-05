@@ -5,6 +5,7 @@
 //! über Bytecode, damit die Kernfunktionen rein und ohne Spielinstallation prüfbar bleiben.
 
 pub mod chain;
+pub mod check;
 pub mod defaults;
 pub mod edit;
 pub mod generate;
@@ -102,6 +103,17 @@ pub enum NpcAction {
         #[arg(short, long)]
         out: PathBuf,
     },
+    /// Check an authored workspace against the current compile contract
+    Check {
+        /// The workspace directory written by `new` or `delete`
+        dir: PathBuf,
+        /// Read this script cache instead of the installed one
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        /// Game install root. Falls back to configured path, then Steam auto-detect
+        #[arg(long)]
+        game: Option<PathBuf>,
+    },
     /// List the world points the level scripts spawn characters from
     Sites {
         /// Keep only sites whose level-script module contains this text
@@ -170,6 +182,7 @@ pub fn run(action: NpcAction) -> Result<()> {
             game,
             out,
         } => suppress(&npc, cache, game, &out),
+        NpcAction::Check { dir, cache, game } => check_workspace(&dir, cache, game),
         NpcAction::Sites {
             level,
             npc,
@@ -784,6 +797,118 @@ fn write_manifest(out: &Path, manifest: &workspace::Manifest) -> Result<()> {
     let json = serde_json::to_string_pretty(manifest).context("serializing the manifest")?;
     fs::write(out.join(workspace::MANIFEST_NAME), format!("{json}\n"))
         .with_context(|| format!("writing {}", workspace::MANIFEST_NAME))
+}
+
+/// Das Manifest eines Arbeitsverzeichnisses lesen.
+fn read_manifest(dir: &Path) -> Result<workspace::Manifest> {
+    let path = dir.join(workspace::MANIFEST_NAME);
+    let text = fs::read_to_string(&path).with_context(|| {
+        format!(
+            "reading {}. Is {} a workspace written by `gore npc new` or `gore npc delete`?",
+            path.display(),
+            dir.display()
+        )
+    })?;
+    serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+}
+
+/// `gore npc check` — das Arbeitsverzeichnis gegen den Vertrag prüfen.
+fn check_workspace(dir: &Path, cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<()> {
+    let manifest = read_manifest(dir)?;
+    let spawn_class = generate::spawn_class(&manifest.npc_id);
+    let emitted = emit_index(cache, game, Some(&spawn_class))?;
+
+    let mut findings: Vec<check::Finding> = Vec::new();
+
+    // Die Grundlage zuerst: gegen eine andere Cache zu prüfen hiesse, gar nicht zu pruefen.
+    if emitted.cache_sha256() != manifest.cache_sha256 {
+        findings.push(check::Finding {
+            severity: check::Severity::Blocking,
+            message: format!(
+                "this workspace was authored against script cache {} but the installed one is {}. \
+                 The game was patched or another cache is configured; author it again",
+                &manifest.cache_sha256[..16],
+                &emitted.cache_sha256()[..16]
+            ),
+        });
+    }
+
+    let Some(level) = manifest.level_edit() else {
+        bail!("the manifest names no edited level script");
+    };
+    let edited = fs::read_to_string(dir.join(&level.source_file))
+        .with_context(|| format!("reading {}", level.source_file))?;
+    let pristine_rel = level
+        .pristine_file
+        .as_deref()
+        .unwrap_or("pristine/missing.as");
+    let pristine = fs::read_to_string(dir.join(pristine_rel))
+        .with_context(|| format!("reading {pristine_rel}"))?;
+    findings.extend(check::guard_level_diff(&pristine, &edited, &spawn_class));
+
+    if let Some(authored) = manifest.authored_module() {
+        let source = fs::read_to_string(dir.join(&authored.source_file))
+            .with_context(|| format!("reading {}", authored.source_file))?;
+        findings.extend(check::guard_authored_module(&source, &manifest.npc_id));
+
+        if emitted.classes.contains_key(&spawn_class) {
+            findings.push(check::Finding {
+                severity: check::Severity::Blocking,
+                message: format!(
+                    "{} is already a character in this game. The authored module would collide \
+                     with the shipped one",
+                    manifest.npc_id
+                ),
+            });
+        }
+
+        let spots = gore_catalog::location::LocationCatalog::bundled()
+            .context("reading the bundled location catalog")?;
+        for waypoint in check::scheduled_waypoints(&source) {
+            if spots.resolve(&waypoint).is_none() {
+                findings.push(check::Finding {
+                    severity: check::Severity::Warning,
+                    message: format!(
+                        "the routine sends the character to {waypoint:?}, which is not a known \
+                         spot. The game ignores an unknown waypoint without a word, so the \
+                         character would simply never go there"
+                    ),
+                });
+            }
+        }
+    }
+
+    println!(
+        "{}",
+        render::translation_line(&emitted, &manifest.level_module)
+    );
+    if findings.is_empty() {
+        println!("no problems found in {}", dir.display());
+        println!(
+            "offline-checked only: that this character appears, keeps its routine and survives a \
+             save is not proven in game"
+        );
+        println!("next: gore npc stage {}", dir.display());
+        return Ok(());
+    }
+
+    let blocking = findings
+        .iter()
+        .filter(|f| f.severity == check::Severity::Blocking)
+        .count();
+    for finding in &findings {
+        let tag = match finding.severity {
+            check::Severity::Blocking => "blocking",
+            check::Severity::Warning => "warning",
+        };
+        println!("  [{tag}] {}", finding.message);
+    }
+    if blocking > 0 {
+        bail!("{blocking} blocking problem(s) in {}", dir.display());
+    }
+    println!("{} warning(s), nothing blocking", findings.len());
+    println!("next: gore npc stage {}", dir.display());
+    Ok(())
 }
 
 #[cfg(test)]
