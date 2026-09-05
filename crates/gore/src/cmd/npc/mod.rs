@@ -146,6 +146,20 @@ pub enum NpcAction {
         #[arg(short, long)]
         out: PathBuf,
     },
+    /// Take a shipped character's own module out for editing
+    Checkout {
+        /// The character to edit, for example OC_STT_Diego
+        npc: String,
+        /// Read this script cache instead of the installed one
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        /// Game install root. Falls back to configured path, then Steam auto-detect
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// Output workspace directory; must not exist
+        #[arg(short, long)]
+        out: PathBuf,
+    },
     /// List the world points the level scripts spawn characters from
     Sites {
         /// Keep only sites whose level-script module contains this text
@@ -228,6 +242,12 @@ pub fn run(action: NpcAction) -> Result<()> {
             english,
             out,
         } => write_display_name(&id, &name, english.as_deref(), &out),
+        NpcAction::Checkout {
+            npc,
+            cache,
+            game,
+            out,
+        } => checkout(&npc, cache, game, &out),
         NpcAction::Sites {
             level,
             npc,
@@ -889,7 +909,13 @@ fn check_workspace(dir: &Path, cache: Option<PathBuf>, game: Option<PathBuf>) ->
         .unwrap_or("pristine/missing.as");
     let pristine = fs::read_to_string(dir.join(pristine_rel))
         .with_context(|| format!("reading {pristine_rel}"))?;
-    findings.extend(check::guard_level_diff(&pristine, &edited, &spawn_class));
+    // Ein Checkout aendert Werte im eigenen Modul der Figur; ein Verfassen aendert Spawn-Zeilen
+    // in einem fremden Levelskript. Zwei Absichten, zwei Waechter.
+    if manifest.operation == workspace::Operation::Checkout {
+        findings.extend(check::guard_checkout_diff(&pristine, &edited));
+    } else {
+        findings.extend(check::guard_level_diff(&pristine, &edited, &spawn_class));
+    }
 
     if let Some(authored) = manifest.authored_module() {
         let source = fs::read_to_string(dir.join(&authored.source_file))
@@ -1140,6 +1166,82 @@ fn write_display_name(id: &str, name: &str, english: Option<&str>, out: &Path) -
     println!("wrote {}", out.display());
     println!("  {} -> {name:?} in both German columns", id.to_lowercase());
     println!("next: gore loc import --edits {}", out.display());
+    Ok(())
+}
+
+/// `gore npc checkout` — das eigene Modul einer ausgelieferten Figur zum Bearbeiten herausnehmen.
+///
+/// Herausgenommen wird das Modul, das ihre `CharacterDefinition` deklariert: dort stehen Werte,
+/// Inventar, Fraktion und Faehigkeiten. Aussehen und Spawn-Definition liegen in geteilten Modulen
+/// (`InteractiveObjects/NpcVisualLibrary.as`, `Spawning/SpawningDefinition_Human.as`) und bleiben
+/// bewusst aussen vor — sie mitzunehmen hiesse, ein von hunderten Figuren geteiltes Modul zu
+/// ersetzen, um eine einzige zu aendern.
+fn checkout(npc: &str, cache: Option<PathBuf>, game: Option<PathBuf>, out: &Path) -> Result<()> {
+    let spawn_class = generate::spawn_class(npc);
+    let path = cache_path(cache.clone(), game.clone())?;
+    let emitted = emit_index(cache, game, Some(&spawn_class))?;
+    if !emitted.classes.contains_key(&spawn_class) {
+        bail!(
+            "no character {npc} in this cache — {spawn_class} is not declared. \
+             `gore npc list {npc}` shows the ids that exist"
+        );
+    }
+    let chain = chain::resolve(&emitted.classes, &spawn_class);
+    let Some(definition) = chain.character_definition.as_deref() else {
+        bail!(
+            "the chain of {npc} does not reach a character definition, so there is nothing to \
+             check out. `gore npc show {npc}` shows where it breaks"
+        );
+    };
+
+    let bytes = read_module_cache(&path)?;
+    let modules = model::parse_modules(&bytes).context("parsing modules")?;
+    let Some(index) = module_of_class(&modules, definition) else {
+        bail!("no module declares {definition}");
+    };
+    let module_name = modules[index].name.clone();
+    let Some(source) = emit_named_module(&path, &module_name)? else {
+        bail!("no emitted source for {module_name}");
+    };
+
+    let relative_path = format!("{}.as", module_name.replace('.', "/"));
+    let leaf = leaf_of(&relative_path).to_string();
+
+    create_workspace(out)?;
+    fs::write(out.join(&leaf), &source).with_context(|| format!("writing {leaf}"))?;
+    fs::write(out.join("pristine").join(&leaf), &source)
+        .with_context(|| format!("writing pristine/{leaf}"))?;
+
+    let manifest = workspace::Manifest {
+        operation: workspace::Operation::Checkout,
+        npc_id: npc.to_string(),
+        derived_from: None,
+        modules: vec![workspace::ModuleEdit {
+            module: module_name.clone(),
+            relative_path,
+            source_file: leaf.clone(),
+            pristine_file: Some(format!("pristine/{leaf}")),
+            op: "edit".to_string(),
+        }],
+        world_points: sites_for(&emitted, &spawn_class)
+            .iter()
+            .map(|site| site.world_point.clone())
+            .collect(),
+        level_module: module_name.clone(),
+        cache_sha256: emitted.cache_sha256(),
+        modular_visuals: false,
+    };
+    write_manifest(out, &manifest)?;
+
+    let class_count = defaults::parse_classes(&source).len();
+    println!("checked {npc} out into {}", out.display());
+    println!("  {leaf}  {class_count} classes from {module_name}");
+    println!("  {}", render::translation_line(&emitted, &module_name));
+    println!(
+        "  edit the values; class names and their parents have to stay as they are, because they \
+         are the character's identity in the cache"
+    );
+    println!("next: gore npc check {}", out.display());
     Ok(())
 }
 

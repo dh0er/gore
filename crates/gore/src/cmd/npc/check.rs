@@ -205,6 +205,55 @@ pub fn guard_authored_module(source: &str, npc_id: &str) -> Vec<Finding> {
     findings
 }
 
+/// Der Wächter für eine ausgecheckte Figur: was das Modul deklariert, bleibt, wie es war.
+///
+/// Werte und Rümpfe dürfen sich ändern — genau dafür checkt man aus. Die Klassenstruktur nicht:
+/// eine ausgelieferte Klasse zu entfernen, umzubenennen oder ihre Elternklasse zu tauschen
+/// erzeugt ein anderes Symbol, und dann trifft der Remap gegen die Basis-Cache ins Leere. Eine
+/// neue Klasse ist ebenfalls nichts für diesen Weg; sie verlangt den Vertrag, den `new` benutzt.
+pub fn guard_checkout_diff(pristine: &str, edited: &str) -> Vec<Finding> {
+    let before = defaults::parse_classes(pristine);
+    let after = defaults::parse_classes(edited);
+    let mut findings = Vec::new();
+
+    for class in &before {
+        match after.iter().find(|other| other.name == class.name) {
+            None => findings.push(Finding::blocking(format!(
+                "class {} is gone. A shipped class may change its values, but removing or \
+                 renaming it produces a different symbol that no longer matches the base cache",
+                class.name
+            ))),
+            Some(other) if other.super_class != class.super_class => {
+                findings.push(Finding::blocking(format!(
+                    "class {} now derives from {} instead of {}. The parent is part of the \
+                     class's identity, so changing it makes it a different class",
+                    class.name,
+                    other.super_class.as_deref().unwrap_or("nothing"),
+                    class.super_class.as_deref().unwrap_or("nothing")
+                )));
+            }
+            Some(_) => {}
+        }
+    }
+
+    for class in &after {
+        if !before.iter().any(|other| other.name == class.name) {
+            findings.push(Finding::blocking(format!(
+                "class {} is new. Checking a shipped character out is for changing its values; a \
+                 new class needs `gore npc new`, which carries the contract for one",
+                class.name
+            )));
+        }
+    }
+
+    if before == after {
+        findings.push(Finding::blocking(
+            "the module is unchanged, so there is nothing to build",
+        ));
+    }
+    findings
+}
+
 /// Die Wegpunkte, die der Tagesablauf anspricht.
 pub fn scheduled_waypoints(source: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -367,6 +416,48 @@ class UDailyRoutine_MINE_Start : UAIState_DailyRoutine_Human
         assert!(findings
             .iter()
             .any(|f| f.severity == Severity::Blocking && f.message.contains("ForCharacter")));
+    }
+
+    #[test]
+    fn a_changed_value_in_a_checked_out_module_passes() {
+        let edited = AUTHORED.replace("1000.0f", "500.0f");
+        assert!(guard_checkout_diff(AUTHORED, &edited).is_empty());
+    }
+
+    #[test]
+    fn an_unchanged_checked_out_module_is_blocking() {
+        let findings = guard_checkout_diff(AUTHORED, AUTHORED);
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].message.contains("unchanged"));
+    }
+
+    #[test]
+    fn removing_a_shipped_class_is_blocking() {
+        let edited = AUTHORED.replace(
+            "class UDailyRoutine_MINE_Start : UAIState_DailyRoutine_Human",
+            "class UNothing : UAIState_DailyRoutine_Human",
+        );
+        let findings = guard_checkout_diff(AUTHORED, &edited);
+        assert!(findings
+            .iter()
+            .any(|f| f.message.contains("UDailyRoutine_MINE_Start") && f.message.contains("gone")));
+        assert!(findings
+            .iter()
+            .any(|f| f.message.contains("UNothing") && f.message.contains("is new")));
+    }
+
+    #[test]
+    fn swapping_a_parent_class_is_blocking() {
+        // Die Elternklasse gehoert zur Identitaet: ein Tausch macht daraus ein anderes Symbol,
+        // und der Remap gegen die Basis-Cache trifft ins Leere.
+        let edited = AUTHORED.replace(
+            "UCharacterDefinition_Human_MINE : UCharacterDefinition_Human_OC_STT_Diego",
+            "UCharacterDefinition_Human_MINE : UCharacterDefinition_Human_OldCamp_Guard",
+        );
+        let findings = guard_checkout_diff(AUTHORED, &edited);
+        assert!(findings
+            .iter()
+            .any(|f| f.severity == Severity::Blocking && f.message.contains("derives from")));
     }
 
     #[test]
