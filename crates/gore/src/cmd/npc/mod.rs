@@ -132,6 +132,20 @@ pub enum NpcAction {
         #[arg(long)]
         game: Option<PathBuf>,
     },
+    /// Write a character's display name as a `gore loc import --edits` document
+    Text {
+        /// The character id, for example MY_NPC
+        id: String,
+        /// The name to show above the character's dialog lines
+        #[arg(long)]
+        name: String,
+        /// Also set the English columns to this name
+        #[arg(long)]
+        english: Option<String>,
+        /// Output file; must not exist
+        #[arg(short, long)]
+        out: PathBuf,
+    },
     /// List the world points the level scripts spawn characters from
     Sites {
         /// Keep only sites whose level-script module contains this text
@@ -208,6 +222,12 @@ pub fn run(action: NpcAction) -> Result<()> {
             cache,
             game,
         } => stage_workspace(&dir, tree.as_deref(), &mod_name, cache, game),
+        NpcAction::Text {
+            id,
+            name,
+            english,
+            out,
+        } => write_display_name(&id, &name, english.as_deref(), &out),
         NpcAction::Sites {
             level,
             npc,
@@ -1069,6 +1089,54 @@ fn stage_workspace(
     Ok(())
 }
 
+/// Die deutschen Spalten, in die ein Anzeigename gehoert.
+///
+/// Beide, nicht nur eine: wo `german_new` existiert, gewinnt sie gegen `german`. Ein Dokument,
+/// das nur `german` setzt, ist dort ein stiller Fehlschlag — ein Fehler, der in diesem Projekt
+/// schon einmal Zeit gekostet hat. Fuer eine neue Id existiert keine von beiden, beide zu setzen
+/// ist also richtig und schadet nirgends.
+const GERMAN_COLUMNS_OUT: &[&str] = &["german", "german_new"];
+
+/// Die englischen Spalten, nach derselben Regel.
+const ENGLISH_COLUMNS_OUT: &[&str] = &["english", "english_new", "english_newer"];
+
+/// Das Bearbeitungsdokument fuer einen Anzeigenamen.
+///
+/// Die Lokalisierungs-Id einer Figur ist ihre Id in Kleinbuchstaben — `oc_stt_diego` fuer
+/// `OC_STT_Diego`.
+pub fn display_name_edits(id: &str, german: &str, english: Option<&str>) -> serde_json::Value {
+    let mut columns = serde_json::Map::new();
+    for column in GERMAN_COLUMNS_OUT {
+        columns.insert((*column).to_string(), serde_json::json!(german));
+    }
+    if let Some(english) = english {
+        for column in ENGLISH_COLUMNS_OUT {
+            columns.insert((*column).to_string(), serde_json::json!(english));
+        }
+    }
+    serde_json::json!({ id.to_lowercase(): columns })
+}
+
+/// `gore npc text` — den Anzeigenamen als `gore loc import --edits`-Dokument schreiben.
+fn write_display_name(id: &str, name: &str, english: Option<&str>, out: &Path) -> Result<()> {
+    if out.exists() {
+        bail!(
+            "{} already exists. Point -o at a file that does not exist yet",
+            out.display()
+        );
+    }
+    let document = display_name_edits(id, name, english);
+    fs::write(
+        out,
+        format!("{}\n", serde_json::to_string_pretty(&document)?),
+    )
+    .with_context(|| format!("writing {}", out.display()))?;
+    println!("wrote {}", out.display());
+    println!("  {} -> {name:?} in both German columns", id.to_lowercase());
+    println!("next: gore loc import --edits {}", out.display());
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1243,5 +1311,38 @@ mod tests {
         ] {
             assert!(hits.iter().all(|entry| entry.domain == "npc"), "{hits:?}");
         }
+    }
+
+    #[test]
+    fn a_display_name_document_is_keyed_by_the_lowercased_id() {
+        let document = display_name_edits("MY_NPC", "Hannes", None);
+        assert!(document.get("my_npc").is_some());
+        assert!(document.get("MY_NPC").is_none());
+    }
+
+    #[test]
+    fn both_german_columns_are_written() {
+        // `german_new` gewinnt, wo sie existiert. Nur `german` zu setzen waere dort ein stiller
+        // Fehlschlag, und der sieht aus wie ein kaputtes Werkzeug.
+        let document = display_name_edits("MY_NPC", "Hannes", None);
+        let columns = &document["my_npc"];
+        assert_eq!(columns["german"], "Hannes");
+        assert_eq!(columns["german_new"], "Hannes");
+    }
+
+    #[test]
+    fn english_is_written_to_every_english_column_when_asked_for() {
+        let document = display_name_edits("MY_NPC", "Hannes", Some("Hank"));
+        let columns = &document["my_npc"];
+        for column in ["english", "english_new", "english_newer"] {
+            assert_eq!(columns[column], "Hank", "{column}");
+        }
+    }
+
+    #[test]
+    fn without_an_english_name_no_english_column_is_touched() {
+        let document = display_name_edits("MY_NPC", "Hannes", None);
+        let columns = document["my_npc"].as_object().expect("columns");
+        assert!(columns.keys().all(|key| key.starts_with("german")));
     }
 }
