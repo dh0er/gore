@@ -125,8 +125,34 @@ fn cache_path(cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<PathBuf> 
     Ok(paths.script_cache)
 }
 
-/// Emit every module once and index what the NPC commands need out of it.
-fn emit_index(cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<Emitted> {
+/// Namensraum der Levelskripte. Nur diese 29 Module tragen Spawn-Stellen.
+const LEVEL_SCRIPT_PREFIX: &str = "LevelScripts.";
+
+/// Wie viele Glieder die Klassenkette höchstens hat: Spawn → AIAgentConfig → CharacterDefinition.
+const CHAIN_HOPS: usize = 3;
+
+/// Das Modul, das `class_name` deklariert — aus dem geparsten Modell, ohne zu emittieren.
+fn module_of_class(modules: &[model::Module], class_name: &str) -> Option<usize> {
+    modules
+        .iter()
+        .position(|module| module.classes.iter().any(|class| class.name == class_name))
+}
+
+/// Den Baum für ein Kommando aufbauen — und **nur** die Module emittieren, die es braucht.
+///
+/// Den ganzen Baum zu emittieren ist nie richtig: `Map.MainMap.WorldPointManagerConfig_MainMap`
+/// braucht allein viele Minuten, um seine Klassen-Defaults zurückzugewinnen (ein gewöhnliches
+/// Modul braucht gut zwei Sekunden, `emit-all` über alle 7317 dauert 19 Minuten). Ein Kommando,
+/// das darauf wartet, antwortet nicht. Die Levelskripte allein sind in gut zwei Sekunden da, und
+/// die Klassenkette findet ihre Module über das geparste Modell, ohne dafür zu emittieren.
+///
+/// `spawn_class` verlangt zusätzlich die Kette ab dieser Spawn-Definition; ohne sie werden nur
+/// die Spawn-Stellen gesammelt.
+fn emit_index(
+    cache: Option<PathBuf>,
+    game: Option<PathBuf>,
+    spawn_class: Option<&str>,
+) -> Result<Emitted> {
     let path = cache_path(cache, game)?;
     let bytes = read_module_cache(&path)?;
     let mut resolver = RefResolver::build(&bytes).context("building the reference resolver")?;
@@ -137,19 +163,44 @@ fn emit_index(cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<Emitted> 
         .context("preparing the emitted modules")?
         .with_class_defaults(true);
 
+    let emit = |index: usize| -> Result<String> {
+        prepared
+            .emit_module(index)
+            .with_context(|| format!("emitting {}", modules[index].name))
+    };
+
     let mut classes = BTreeMap::new();
     let mut found = Vec::new();
     for (index, module) in modules.iter().enumerate() {
-        let source = prepared
-            .emit_module(index)
-            .with_context(|| format!("emitting {}", module.name))?;
-        if module.name.starts_with("LevelScripts.") {
-            found.extend(sites::parse_sites(&module.name, &source));
+        if !module.name.starts_with(LEVEL_SCRIPT_PREFIX) {
+            continue;
         }
-        for class in defaults::parse_classes(&source) {
+        found.extend(sites::parse_sites(&module.name, &emit(index)?));
+    }
+
+    // Der Kette Glied für Glied folgen: jedes Modul erst suchen, dann emittieren. Ein fehlendes
+    // Glied bricht ab statt zu raten — `chain::resolve` berichtet die Lücke dann als `None`.
+    let mut wanted = spawn_class.map(str::to_string);
+    for _ in 0..CHAIN_HOPS {
+        let Some(class_name) = wanted.take() else {
+            break;
+        };
+        let Some(index) = module_of_class(&modules, &class_name) else {
+            break;
+        };
+        for class in defaults::parse_classes(&emit(index)?) {
             classes.insert(class.name.clone(), class);
         }
+        wanted = classes
+            .get(&class_name)
+            .and_then(|class| {
+                chain::assigned(class, chain::SPAWN_AI_FIELD)
+                    .or_else(|| chain::assigned(class, chain::AI_CHARACTER_FIELD))
+            })
+            .and_then(defaults::static_class_target)
+            .map(str::to_string);
     }
+
     Ok(Emitted {
         classes,
         sites: found,
@@ -228,8 +279,8 @@ fn sites_for<'a>(emitted: &'a Emitted, spawn_class: &str) -> Vec<&'a Site> {
 }
 
 fn show(npc: &str, cache: Option<PathBuf>, game: Option<PathBuf>, json: bool) -> Result<()> {
-    let emitted = emit_index(cache, game)?;
     let spawn_class = format!("USpawnAIAgentDefinition_{npc}");
+    let emitted = emit_index(cache, game, Some(&spawn_class))?;
     if !emitted.classes.contains_key(&spawn_class) {
         bail!(
             "no character {npc} in this cache — {spawn_class} is not declared. \
@@ -276,7 +327,7 @@ fn list_sites(
     game: Option<PathBuf>,
     json: bool,
 ) -> Result<()> {
-    let emitted = emit_index(cache, game)?;
+    let emitted = emit_index(cache, game, None)?;
     let wanted_spawn = npc.map(|npc| format!("USpawnAIAgentDefinition_{npc}"));
     let hits: Vec<&Site> = emitted
         .sites
