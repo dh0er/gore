@@ -38,10 +38,16 @@ pub struct NewNpc {
     /// Dasselbe für das Aussehen.
     pub visuals_parent: String,
     pub visuals_defaults: Vec<String>,
-    /// Dasselbe für Bindeglied und Spawn-Handle. Die tragen keine eigenen Werte ausser dem
-    /// Verweis auf das jeweils nächste Glied.
+    /// Dasselbe für Bindeglied und Spawn-Handle.
+    ///
+    /// Sie tragen sehr wohl eigene Werte, und einer davon ist tragend: die Spawn-Definition nennt
+    /// mit `AIAgentCharacterClass` den Actor-Blueprint, der einer Figur ihren Körper gibt. Ohne
+    /// ihn entsteht ein Agent ohne Darsteller — im Spielstand vorhanden, in der Welt ohne
+    /// Skelett, ohne Animation, nicht fokussierbar. Im Spiel gesehen, nicht vermutet.
     pub config_parent: String,
+    pub config_defaults: Vec<String>,
     pub spawn_parent: String,
+    pub spawn_defaults: Vec<String>,
 }
 
 /// Der Modulname einer verfassten Figur.
@@ -146,21 +152,35 @@ pub fn source(npc: &NewNpc) -> String {
     }
     out.push('\n');
 
+    let mut config_defaults = vec![format!(
+        "m_CharacterDefinition = UCharacterDefinition_Human_{id}::StaticClass()"
+    )];
+    config_defaults.extend(
+        npc.config_defaults
+            .iter()
+            .filter(|line| !line.starts_with("m_CharacterDefinition"))
+            .cloned(),
+    );
     out.push_str(&class_block(
         &format!("UAIAgentConfig_Human_{id}"),
         &npc.config_parent,
-        &[format!(
-            "m_CharacterDefinition = UCharacterDefinition_Human_{id}::StaticClass()"
-        )],
+        &config_defaults,
     ));
     out.push('\n');
 
+    let mut spawn_defaults = vec![format!(
+        "AIAgentConfigClass = UAIAgentConfig_Human_{id}::StaticClass()"
+    )];
+    spawn_defaults.extend(
+        npc.spawn_defaults
+            .iter()
+            .filter(|line| !line.starts_with("AIAgentConfigClass"))
+            .cloned(),
+    );
     out.push_str(&class_block(
         &spawn_class(id),
         &npc.spawn_parent,
-        &[format!(
-            "AIAgentConfigClass = UAIAgentConfig_Human_{id}::StaticClass()"
-        )],
+        &spawn_defaults,
     ));
     out.push('\n');
 
@@ -235,7 +255,12 @@ mod tests {
             visuals_parent: "UArmorVisualsDefinition_MaleNPC".to_string(),
             visuals_defaults: Vec::new(),
             config_parent: "UAIAgentConfig_Human".to_string(),
+            config_defaults: Vec::new(),
             spawn_parent: "USpawnAIAgentDefinition".to_string(),
+            spawn_defaults: vec![
+                "AIAgentCharacterClass = n\"Blueprint'/Game/AI/AIAgent/Human/AIAgentCharacter_Human_Base.AIAgentCharacter_Human_Base_C'\""
+                    .to_string(),
+            ],
         }
     }
 
@@ -433,6 +458,34 @@ mod tests {
                 "derives from the template leaf {leaf}"
             );
         }
+    }
+
+    #[test]
+    fn the_spawn_definition_names_the_actor_blueprint() {
+        // Das Stueck, dessen Fehlen im Spiel als "stocksteif, keine Animation, verschwindet beim
+        // Naeherkommen" ankam: ohne `AIAgentCharacterClass` bekommt der Agent keinen Darsteller.
+        // Er steht dann im Spielstand und hat trotzdem keinen Koerper.
+        let source = source(&diego_clone());
+        assert!(source.contains("default AIAgentCharacterClass = n\"Blueprint'/Game/AI/AIAgent/Human/AIAgentCharacter_Human_Base.AIAgentCharacter_Human_Base_C'\";"));
+    }
+
+    #[test]
+    fn our_own_link_wins_over_the_carried_one() {
+        // Die mitgeschleppten Werte der Vorlage duerfen die Kette nicht zurueckbiegen: der Verweis
+        // auf das naechste Glied gehoert der neuen Figur.
+        let mut npc = diego_clone();
+        npc.spawn_defaults = vec![
+            "AIAgentConfigClass = UAIAgentConfig_Human_OC_STT_Diego::StaticClass()".to_string(),
+        ];
+        npc.config_defaults = vec![
+            "m_CharacterDefinition = UCharacterDefinition_Human_OC_STT_Diego::StaticClass()"
+                .to_string(),
+        ];
+        let source = source(&npc);
+        assert!(!source.contains("AIAgentConfigClass = UAIAgentConfig_Human_OC_STT_Diego"));
+        assert!(!source.contains("m_CharacterDefinition = UCharacterDefinition_Human_OC_STT_Diego"));
+        assert!(source
+            .contains("default AIAgentConfigClass = UAIAgentConfig_Human_MY_NPC::StaticClass();"));
     }
 
     #[test]
