@@ -261,6 +261,33 @@ A character placed from more than one level script is refused rather than half
 removed — one bundle entry carries one edited level script, so that would take
 one mod per script — and the message names the scripts.
 
+### Why an authored character does not derive from its template
+
+A character's own class is almost always a leaf: nothing in the shipped game
+derives from `UCharacterDefinition_Human_OC_STT_Diego`. The compiler declares
+the generated `__InitDefaults()` of such a class **final**, and a subclass that
+brings its own `default` statements needs its own `__InitDefaults`. So the
+obvious shape does not compile:
+
+```
+GORE_AS_COMPILER_ERROR: Method 'void UCharacterDefinition_Human_OC_STT_Diego::__InitDefaults()'
+declared as final and cannot be overridden
+```
+
+`new` and `clone` therefore climb from the template to the nearest ancestor
+that has siblings, and write everything skipped along the way into the file.
+For Diego that ancestor is `UCharacterDefinition_Human_OldCamp_Shadow`, which
+29 characters share, and the file carries his 44 values.
+
+That is why the generated header says `derived from OC_STT_Diego` while the
+class line names the guild base: the character is Diego's, the parent is what
+the compiler allows.
+
+One class needs no climb — `UCharacterVisualsDefinition_Human_OC_STT_Diego` is
+not a leaf, because Diego's Sleeper variant derives from it. That single
+difference is what separated the one class that compiled from the three that
+did not, the first time this was built for real.
+
 ### `npc clone` — the same character, with its numbers on the table
 
 `new` derives: the generated class states its identity and inherits everything
