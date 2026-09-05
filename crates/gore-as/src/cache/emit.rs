@@ -2799,6 +2799,8 @@ fn emit_function_ctor(
             returns_by_reference,
         );
         pass_trace("fold_literal_null_returns", &rendered);
+        let rendered = fold_carrier_if_else(&rendered);
+        pass_trace("fold_carrier_if_else", &rendered);
         let rendered = expand_if_false_markers(&rendered);
         s.truncate(declarations_at);
         s.push_str(&rendered);
@@ -15323,6 +15325,103 @@ fn rvo_statement_producers(
     (out, inline_only)
 }
 
+/// A short circuit whose last operand the structurer could not fold — a compare through a
+/// value temporary (`m_WeaponDefinition == nullptr` on a `TSubclassOf` copy) — comes out as an
+/// if/else that assigns the chain's carrier in both arms and a test of the carrier behind it:
+///
+/// ```text
+/// bool local_3;
+/// if (A || B) { local_3 = true; } else { local_3 = C; }
+/// if (local_3) { … }
+/// ```
+///
+/// That spelling stores the literal through a temporary the chain never had (measured: one
+/// `CpyVtoV4` per function, 11 of them). The chain it stands for: `if (A || B || C)`; with the
+/// literal on the other side, `if (!(A || B) && C)`, and the same for `false`.
+fn fold_carrier_if_else(body: &str) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut kept: Vec<String> = Vec::with_capacity(lines.len());
+    let mut dropped_declarations: Vec<String> = Vec::new();
+    let mut at = 0usize;
+    while at < lines.len() {
+        let folded = (|| {
+            let head = lines[at].trim();
+            let condition = head.strip_prefix("if (")?.strip_suffix(')')?;
+            let indent = indent_of(lines[at]);
+            let arm = |k: usize| -> Option<(String, String)> {
+                // `{`, `NAME = VALUE;`, `}` at the arm's own indent
+                if lines.get(k)?.trim() != "{" || lines.get(k + 2)?.trim() != "}" {
+                    return None;
+                }
+                let (target, value) = slot_store(lines.get(k + 1)?)?;
+                (indent_of(lines[k + 1]).len() == indent.len() + 4).then_some((target, value))
+            };
+            let (then_target, then_value) = arm(at + 1)?;
+            if lines.get(at + 4)?.trim() != "else" {
+                return None;
+            }
+            let (else_target, else_value) = arm(at + 5)?;
+            if then_target != else_target || !is_decompiler_local(&then_target) {
+                return None;
+            }
+            let test = lines.get(at + 8)?;
+            if indent_of(test) != indent || test.trim() != format!("if ({then_target})") {
+                return None;
+            }
+            // exactly one literal arm, the other free of the carrier
+            let (literal, other) = match (then_value.as_str(), else_value.as_str()) {
+                ("true" | "false", other) if !other.contains(&then_target) => (then_value.as_str(), (other.to_owned(), false)),
+                (other, "true" | "false") if !other.contains(&then_target) => (else_value.as_str(), (other.to_owned(), true)),
+                _ => return None,
+            };
+            let (other, literal_in_else) = other;
+            // the carrier is mentioned nowhere else: its declaration, the two arms, the test
+            let mentions: usize = lines.iter().map(|line| count_ident(line, &then_target)).sum();
+            let declaration = lines.iter().position(|line| {
+                bare_declaration(line).is_some_and(|(_, name)| name == then_target)
+            });
+            if mentions != 4 || declaration.is_none() {
+                return None;
+            }
+            let group = |text: &str| -> String {
+                if text.contains(" || ") || text.contains(" && ") { format!("({text})") } else { text.to_owned() }
+            };
+            let combined = match (literal, literal_in_else) {
+                ("true", false) => format!("{} || {}", group(condition), group(&other)),
+                ("false", false) => format!("!({}) && {}", condition, group(&other)),
+                ("true", true) => format!("!({}) || {}", condition, group(&other)),
+                ("false", true) => format!("{} && {}", group(condition), group(&other)),
+                _ => return None,
+            };
+            Some((format!("{indent}if ({combined})"), declaration?))
+        })();
+        match folded {
+            Some((replacement, declaration)) => {
+                dropped_declarations.push(lines[declaration].to_owned());
+                kept.push(replacement);
+                at += 9;
+            }
+            None => {
+                kept.push(lines[at].to_owned());
+                at += 1;
+            }
+        }
+    }
+    if dropped_declarations.is_empty() {
+        return body.to_owned();
+    }
+    let mut out: Vec<String> = kept
+        .into_iter()
+        .filter(|line| !dropped_declarations.iter().any(|d| d == line))
+        .collect();
+    let mut joined = out.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    out.clear();
+    joined
+}
+
 /// The structurer's marker for a jump to the next instruction becomes the statement that
 /// compiles to it: `if (false) { } else { }`, at the marker's own indentation.
 fn expand_if_false_markers(body: &str) -> String {
@@ -18379,9 +18478,20 @@ fn rvo_declared_at_initializer(
         })
         .collect();
     let mut out = Vec::new();
+    let skip = |at: usize, why: &str| {
+        if diag_enabled("GORE_AS_RVO_DIAG") {
+            eprintln!("[rvo-skip] n={} call@{at} {why}", instrs.len());
+        }
+    };
     for at in 1..instrs.len() {
         let call = &instrs[at];
-        if !call.op.is_call() || behaviour(call, "$beh") || !returns_value_object(call) {
+        if !call.op.is_call() || behaviour(call, "$beh") {
+            continue;
+        }
+        if !returns_value_object(call) {
+            if instrs.get(at + 1).is_some_and(|n| n.op.name == "PSF") {
+                skip(at, "not-a-value-return");
+            }
             continue;
         }
         // The hidden return slot, by the call's shape. A free function without parameters
@@ -18419,6 +18529,7 @@ fn rvo_declared_at_initializer(
         {
             w0(&instrs[at + 1])
         } else {
+            skip(at, "no-out-slot");
             continue;
         };
         if slot <= 0 {
@@ -18426,6 +18537,7 @@ fn rvo_declared_at_initializer(
         }
         // …and the value is read somewhere after the call, or there is nothing to name.
         if !(at + 1..instrs.len()).any(|k| super::bytediff::addressed_slots(&instrs[k]).contains(&slot)) {
+            skip(at, "never-read");
             continue;
         }
         // Never constructed by a behaviour of its own (that is the marker's business).
@@ -18531,7 +18643,8 @@ fn rvo_declared_at_initializer(
         }
         if diag_enabled("GORE_AS_RVO_DIAG") {
             eprintln!(
-                "[rvo] slot={slot} call@{at} consumer={consumer:?} chain={chain:?} release@{release} stop@{k} {} temporary={temporary} undecided={undecided}",
+                "[rvo] n={} slot={slot} call@{at} consumer={consumer:?} chain={chain:?} release@{release} stop@{k} {} temporary={temporary} undecided={undecided}",
+                instrs.len(),
                 instrs[k].op.name
             );
         }
@@ -19912,5 +20025,78 @@ mod source_shape_tests {
     fn keeps_an_unread_store_that_could_have_run_a_call() {
         let body = "    local_2 = this.Consume();\n    return;\n";
         assert_eq!(drop_dead_stores(body, &std::collections::HashSet::from([2])), body);
+    }
+}
+
+#[cfg(test)]
+mod carrier_if_else_tests {
+    use super::fold_carrier_if_else;
+
+    #[test]
+    fn a_literal_then_arm_and_a_tested_carrier_fold_into_one_chain() {
+        let body = "    bool local_3;
+    if (a == nullptr || (b == nullptr))
+    {
+        local_3 = true;
+    }
+    else
+    {
+        local_3 = (this.Weapon == nullptr);
+    }
+    if (local_3)
+    {
+        return;
+    }
+";
+        assert_eq!(
+            fold_carrier_if_else(body),
+            "    if ((a == nullptr || (b == nullptr)) || (this.Weapon == nullptr))
+    {
+        return;
+    }
+"
+        );
+    }
+
+    #[test]
+    fn a_false_literal_in_the_else_arm_is_a_conjunction() {
+        let body = "    bool local_3;
+    if (a)
+    {
+        local_3 = b;
+    }
+    else
+    {
+        local_3 = false;
+    }
+    if (local_3)
+    {
+        return;
+    }
+";
+        assert_eq!(fold_carrier_if_else(body), "    if (a && b)
+    {
+        return;
+    }
+");
+    }
+
+    #[test]
+    fn a_carrier_read_elsewhere_stays() {
+        let body = "    bool local_3;
+    if (a)
+    {
+        local_3 = true;
+    }
+    else
+    {
+        local_3 = b;
+    }
+    if (local_3)
+    {
+        Use(local_3);
+    }
+";
+        assert_eq!(fold_carrier_if_else(body), body);
     }
 }
