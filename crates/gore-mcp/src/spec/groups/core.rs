@@ -13,8 +13,8 @@
 //! comment so that a reviewer can diff this file against `crates/gore/src/main.rs` by eye.
 
 use crate::spec::{
-    ArgForm::{Long, Positional, PositionalRepeated},
-    ArgKind::{Enum, Int, Path, Str, StrList},
+    ArgForm::{Long, Positional, PositionalRepeated, Switch},
+    ArgKind::{Bool, Enum, Int, Path, Str, StrList},
     ArgSpec, CommandSpec, Derived, GroupShape, GroupSpec, JsonSupport, Safety, T_FAST, T_LONG,
     T_NORMAL,
 };
@@ -1167,6 +1167,60 @@ const NPC_DELETE_ARGS: &[ArgSpec] = &[
     ),
 ];
 
+const NPC_CLONE_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "source",
+        Positional { order: 0 },
+        Str,
+        "The shipped character to copy",
+        true,
+    ),
+    ArgSpec::new(
+        "id",
+        Long("id"),
+        Str,
+        "Id of the new character, for example MY_NPC",
+        true,
+    ),
+    ArgSpec::new(
+        "guild",
+        Long("guild"),
+        Str,
+        "Replace the faction with this guild base, for example OldCamp_Guard",
+        false,
+    ),
+    ArgSpec::new(
+        "at",
+        Long("at"),
+        Str,
+        "World point to spawn at, from `gore npc sites`",
+        true,
+    ),
+    ArgSpec::new(
+        "waypoint",
+        Long("waypoint"),
+        Str,
+        "Waypoint for the daily routine",
+        false,
+    ),
+    ArgSpec::new(
+        "trader",
+        Switch("trader"),
+        Bool,
+        "Add an empty trader configuration",
+        false,
+    ),
+    NPC_CACHE_ARGS[0],
+    NPC_CACHE_ARGS[1],
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Output workspace directory; must not exist",
+        true,
+    ),
+];
+
 const NPC_CHECKOUT_ARGS: &[ArgSpec] = &[
     ArgSpec::new(
         "npc",
@@ -1302,6 +1356,14 @@ const NPC_COMMANDS: &[CommandSpec] = &[
         "delete",
         "Stop a shipped character from being placed in the world",
         NPC_DELETE_ARGS,
+        Safety::write().writes_into(&["out"]),
+        T_NORMAL,
+    )
+    .guide("npc-authoring"),
+    CommandSpec::new(
+        "clone",
+        "Clone a shipped character, writing its values out so they can be changed",
+        NPC_CLONE_ARGS,
         Safety::write().writes_into(&["out"]),
         T_NORMAL,
     )
