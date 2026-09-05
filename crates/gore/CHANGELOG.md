@@ -10,6 +10,8 @@ uses the matching version section as the GitHub release notes.
   backup.
 - `--expect-base <CACHE>` / `--expect-base-sha256 <HEX>` on `gore as compile`
   and `compile-module` refuse to compile against any original but the given one.
+- `gore npc list|show|sites`: read the game's characters, their class chain,
+  and where they spawn.
 - Support multi-module mini-caches: `gore as compile --mini` publishes the
   authored modules as one deployable mini, and build, deploy, the Manager and
   `as splice --upsert` compose it as one unit. Qualified in game with a

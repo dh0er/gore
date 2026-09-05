@@ -60,6 +60,7 @@ release yet — build it from source.
 | Area | Status | What you can do | The catch |
 |---|---|---|---|
 | [Item & stat values](docs/guide/items.md) | Full | Change what items are worth, what weapons do, what NPCs have | Needs UE4SS, which GORE does not install |
+| [Characters](docs/guide/npc-authoring.md) | Read only | See which characters the game ships, the class chain one is made of, and which world points spawn it | This release reads; creating, editing, cloning, removing and spawning a character are a later slice |
 | [Text & dialogs](docs/guide/text-and-dialogs.md) | Full | Replace localized game text across all 19 catalog slots | Twelve slots are ordinary languages; German and English use multiple generations, while `foreign` and `stagedirections` are not languages |
 | [Dialog authoring](docs/guide/dialog-authoring.md) | Mostly | Edit shipped topics and build new roots, submenus, multi-level trees and complete conversations with game effects | A first conversation needs an exact already-loaded per-NPC settings module; cross-module new-symbol dependencies need a separate selective complete-cache compile, not dialog minis |
 | [Audio](docs/guide/audio.md) | Full | Replace music and sound effects | Finding which sound plays where is guesswork |
@@ -176,6 +177,7 @@ Everything lives in [`docs/`](docs/README.md).
 |---|---|
 | 🏁 [Getting started](docs/guide/getting-started.md) | Install, configure, first mod, which tool for which job |
 | 🍎 [Item & stat values](docs/guide/items.md) | `overrides.toml` → UE4SS Lua CDO override mod |
+| 🧍 [Characters](docs/guide/npc-authoring.md) | `gore npc`: which characters exist, what one is made of, where it spawns |
 | 💬 [Text & dialogs](docs/guide/text-and-dialogs.md) | Decrypt, edit, re-encrypt the localization `.lcache` |
 | 🌳 [Dialog trees](docs/guide/dialog-trees.md) · ✍️ [Dialog authoring](docs/guide/dialog-authoring.md) | Inspect conversations; edit defaults and behavior; add roots, submenus, multi-level trees and complete conversations |
 | 🔊 [Audio](docs/guide/audio.md) · 🎙️ [Voice-over](docs/guide/voice.md) | FMOD bank samples; voice-over ZIP archives |
