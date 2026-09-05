@@ -930,6 +930,19 @@ pub(crate) fn take_rvo_producers() -> Vec<(i32, usize)> {
     RVO_PRODUCERS.with(|v| std::mem::take(&mut *v.borrow_mut()))
 }
 
+thread_local! {
+    /// `(slot, call index)` for every local pushed BY ADDRESS into a call's frame — the call
+    /// that consumed the value. Only the builder's own operand stack knows which call took a
+    /// push: the arguments evaluated after it stand between the push and its call.
+    static RVO_CONSUMERS: std::cell::RefCell<Vec<(i32, usize)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The consumers recorded since the last call, in order.
+pub(crate) fn take_rvo_consumers() -> Vec<(i32, usize)> {
+    RVO_CONSUMERS.with(|v| std::mem::take(&mut *v.borrow_mut()))
+}
+
 /// Which loop shape produced a condition, and what its test block carried, behind
 /// `GORE_AS_LOOP_DIAG`.
 fn loop_diag(path: &str, stmts: &[String], cond: &str) {
@@ -1492,6 +1505,25 @@ fn build_call(
     }
     let need = trusted_arity.map(|n| n + is_method as usize + rvo_slot as usize);
     let collected: Vec<Arg> = take_call_frame(stack, need);
+    // Every local handed to this call by address (a value argument, a value receiver) has this
+    // call as its consumer; the hidden out-slot is the call's destination, not its operand.
+    {
+        let out_index = rvo_slot.then(|| collected.len().checked_sub(if is_method { 2 } else { 1 })).flatten();
+        let here = CUR_INSTR.with(|c| c.get());
+        for (i, arg) in collected.iter().enumerate() {
+            if Some(i) == out_index || !arg.is_psf {
+                continue;
+            }
+            if let Some(slot) = arg
+                .s
+                .strip_prefix("local_")
+                .and_then(|rest| rest.split('_').next())
+                .and_then(|rest| rest.parse::<i32>().ok())
+            {
+                RVO_CONSUMERS.with(|v| v.borrow_mut().push((slot, here)));
+            }
+        }
+    }
     // Implicit `__WorldContext` markers occupied a stack slot so the split arithmetic matched the
     // native's real frame (whose declared arity counts the hidden WorldContextObject param). They
     // are NOT source args — the UE-AngelScript compiler auto-injects the world context — so strip

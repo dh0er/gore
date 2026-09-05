@@ -1176,10 +1176,6 @@ fn emit_function_ctor(
     let aliased = handle_alias_slots(f);
     let copied_on = copied_on_slots(f);
     let mut hoisted = hoisted_handle_slots(f);
-    // A value object a call built straight into a slot vanilla kept alive past its first
-    // consumer was a declared local (`TArray<…> Items = Get…(); return Items.Num() > 0;`): the
-    // compiler frees a temporary right behind the method it ran on it.
-    hoisted.extend(rvo_declared_at_initializer(&disassemble(&f.bytecode).unwrap_or_default(), refs));
     let spilled = spilled_boolean_names(f, refs);
     let named_arithmetic = named_arithmetic_slots(f);
     let named_sites = named_value_sites(f, refs);
@@ -1522,9 +1518,20 @@ fn emit_function_ctor(
     // that call's argument run — a statement (`FVector Dir = -Fwd;` in front of
     // `CanMoveStraightInDirection(…, Dir, …)`), where the inline spelling evaluates it among
     // the arguments and in another order.
-    let (rvo_statements, inline_callees) =
-        rvo_statement_producers(f, refs, &super::structure::take_rvo_producers());
+    let rvo_producers = super::structure::take_rvo_producers();
+    let rvo_consumers = super::structure::take_rvo_consumers();
+    let (rvo_statements, inline_callees) = rvo_statement_producers(f, refs, &rvo_producers);
     statement_producers.extend(rvo_statements);
+    // A value object a call built straight into a slot vanilla kept alive past its consumer
+    // was a declared local (`TArray<…> Items = Get…(); return Items.Num() > 0;`): the
+    // compiler frees a temporary right behind the call that took it — or behind the last call
+    // of the chain its result fed (`Outer(Inner(Tmp))`).
+    hoisted.extend(rvo_declared_at_initializer(
+        &disassemble(&f.bytecode).unwrap_or_default(),
+        refs,
+        &rvo_producers,
+        &rvo_consumers,
+    ));
     // The structurer left a marker wherever it met a default construction of a local that was
     // not consumed at once — the source's own declaration, at its own position. For a value
     // struct vanilla builds only behind a branch, the marker becomes that declaration and the
@@ -2300,7 +2307,7 @@ fn emit_function_ctor(
                 &already_declared_at_use,
                 &reference_locals,
                 &bare_declaration_slots(f, refs),
-                &call_result_declared_at_initializer(f, refs),
+                &call_result_declared_at_initializer(f, refs, &rvo_producers, &rvo_consumers),
                 &assigned_tail,
             );
         pass_trace("rewrite_first_use_decl_init", &body);
@@ -2613,7 +2620,7 @@ fn emit_function_ctor(
         let block_scoped = block_scoped_value_slots(f, refs);
         let rendered = inline_unnamed_value_temporaries(
             &rendered,
-            &unnamed_value_defs(f, refs)
+            &unnamed_value_defs(f, refs, &rvo_producers, &rvo_consumers)
                 .union(&immediately_consumed_defs(f))
                 .copied()
                 .chain(rvo_temporary_slots(f, refs).into_iter().map(|slot| (slot, 1)))
@@ -2667,7 +2674,7 @@ fn emit_function_ctor(
         let several_lives = slots_with_several_lives(&text);
         rendered = inline_unnamed_value_temporaries(
             &rendered,
-            &unnamed_value_defs(f, refs)
+            &unnamed_value_defs(f, refs, &rvo_producers, &rvo_consumers)
                 .union(&immediately_consumed_defs(f))
                 .copied()
                 .chain(rvo_temporary_slots(f, refs).into_iter().map(|slot| (slot, 1)))
@@ -12853,7 +12860,12 @@ fn writes_destination(op: &str) -> bool {
         )
 }
 
-fn unnamed_value_defs(f: &Func, refs: &RefResolver) -> HashSet<(i32, usize)> {
+fn unnamed_value_defs(
+    f: &Func,
+    refs: &RefResolver,
+    rvo_producers: &[(i32, usize)],
+    rvo_consumers: &[(i32, usize)],
+) -> HashSet<(i32, usize)> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
     };
@@ -12867,7 +12879,8 @@ fn unnamed_value_defs(f: &Func, refs: &RefResolver) -> HashSet<(i32, usize)> {
     // ...and a value object a call built into a slot vanilla released at its block's end rather
     // than behind the consuming call (`TArray<T> Items = Get...(); return Items.Num() > 0;`):
     // a declared local by the same reading the argument inliner uses.
-    let rvo_declared: HashSet<i32> = rvo_declared_at_initializer(&instrs, refs).into_iter().collect();
+    let rvo_declared: HashSet<i32> =
+        rvo_declared_at_initializer(&instrs, refs, rvo_producers, rvo_consumers).into_iter().collect();
     let spilled = spilled_boolean_names(f, refs);
     // every definition of every slot, in program order — each is its own life
     let mut lives: HashMap<i32, usize> = HashMap::new();
@@ -18269,7 +18282,12 @@ fn bare_declaration_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
 /// temporary and is copied on. So `CpyRtoV8 X` with no copy behind it says the declaration was
 /// written where the value arrives. Measured over the byte-faithful corpus: 15 such slots are
 /// declared at their initialiser in our text and 1 stands bare, with no case going the other way.
-fn call_result_declared_at_initializer(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+fn call_result_declared_at_initializer(
+    f: &Func,
+    refs: &RefResolver,
+    rvo_producers: &[(i32, usize)],
+    rvo_consumers: &[(i32, usize)],
+) -> HashSet<i32> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
     };
@@ -18317,7 +18335,7 @@ fn call_result_declared_at_initializer(f: &Func, refs: &RefResolver) -> HashSet<
                 .filter(|(_, (stored, copied))| *stored && !*copied)
                 .map(|(slot, _)| slot),
         )
-        .chain(rvo_declared_at_initializer(&instrs, refs))
+        .chain(rvo_declared_at_initializer(&instrs, refs, rvo_producers, rvo_consumers))
         .collect()
 }
 
@@ -18327,7 +18345,12 @@ fn call_result_declared_at_initializer(f: &Func, refs: &RefResolver) -> HashSet<
 /// call that consumed it. `TSet<T> local_26 = GetCharacters(…);` hands the compiler the variable
 /// as the hidden return pointer; declared bare and assigned, it costs a construction, a
 /// temporary, an `opAssign` and a release the shipped bytecode never had.
-fn rvo_declared_at_initializer(instrs: &[super::disasm::Instr], refs: &RefResolver) -> Vec<i32> {
+fn rvo_declared_at_initializer(
+    instrs: &[super::disasm::Instr],
+    refs: &RefResolver,
+    rvo_producers: &[(i32, usize)],
+    rvo_consumers: &[(i32, usize)],
+) -> Vec<i32> {
     let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
     let behaviour = |ins: &super::disasm::Instr, prefix: &str| {
         ins.op.name == "CALLSYS"
@@ -18436,6 +18459,32 @@ fn rvo_declared_at_initializer(instrs: &[super::disasm::Instr], refs: &RefResolv
         }) else {
             continue;
         };
+        // The call the builder saw take this value, and the chain of calls its result fed on
+        // (`Outer(Inner(Tmp))`: the release stands behind `Outer`, and `Tmp` is a temporary).
+        // Without a record — the value went into a copy-construction, say — the old reading
+        // stands: a release behind any call is a temporary.
+        let consumer = rvo_consumers
+            .iter()
+            .filter(|(s, c)| *s == slot && *c > at)
+            .map(|(_, c)| *c)
+            .min();
+        let mut chain: HashSet<usize> = HashSet::new();
+        let mut frontier: Vec<usize> = consumer.into_iter().collect();
+        while let Some(call) = frontier.pop() {
+            if !chain.insert(call) {
+                continue;
+            }
+            for (result, produced_at) in rvo_producers.iter().filter(|(_, p)| *p == call) {
+                if let Some(next) = rvo_consumers
+                    .iter()
+                    .filter(|(s, c)| s == result && *c > *produced_at)
+                    .map(|(_, c)| *c)
+                    .min()
+                {
+                    frontier.push(next);
+                }
+            }
+        }
         let mut k = release;
         let mut temporary = false;
         let mut undecided = false;
@@ -18458,10 +18507,13 @@ fn rvo_declared_at_initializer(instrs: &[super::disasm::Instr], refs: &RefResolv
                 // (A construction between consumer and release — the return value copied
                 // out of a local — read as a statement boundary put a `TSet` declaration into
                 // the wrong block through the sink, 2 out-of-scope reads; left as a call.)
-                // Released behind a call: a temporary. (Asking WHICH call consumed it, by a
-                // stack-depth count over parameters, receiver and hidden return pointer,
-                // named 98 temporaries — `FText t = LocText(…)` — and freed a declared spec
-                // handle; the structurer's own stack is the only account that knows.)
+                // Released behind the call that took it, or behind the chain its result fed:
+                // a temporary. Behind some other call — a later statement — a declared local
+                // (`ApplyKnockback`: the effect context lives on past `MakeOutgoingSpec`).
+                // (A stack-depth recount of the consumer, without the builder's record, named
+                // 98 temporaries; only the builder's own stack knows which call took a push.)
+                // (The builder-recorded consumer as the verdict named 2,636 temporaries —
+                // measured on b144; kept as a diagnostic until the record is understood.)
                 temporary = true;
                 break;
             }
@@ -18476,6 +18528,12 @@ fn rvo_declared_at_initializer(instrs: &[super::disasm::Instr], refs: &RefResolv
                 continue;
             }
             break;
+        }
+        if diag_enabled("GORE_AS_RVO_DIAG") {
+            eprintln!(
+                "[rvo] slot={slot} call@{at} consumer={consumer:?} chain={chain:?} release@{release} stop@{k} {} temporary={temporary} undecided={undecided}",
+                instrs[k].op.name
+            );
         }
         if !temporary && !undecided {
             out.push(slot);
