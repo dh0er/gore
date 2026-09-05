@@ -12,9 +12,9 @@ uses the matching version section as the GitHub release notes.
   and `compile-module` refuse to compile against any original but the given one.
 - `gore npc list|show|sites`: read the game's characters, their class chain,
   and where they spawn.
-- `gore npc new|checkout|delete|check|stage|text`: author a character, change a
-  shipped one, or stop one being placed. Offline-prepared only; not yet proven
-  in game.
+- `gore npc new|clone|checkout|delete|check|stage|text`: author a character,
+  clone one, change a shipped one, or stop one being placed. Offline-prepared
+  only; not yet proven in game.
 - Support multi-module mini-caches: `gore as compile --mini` publishes the
   authored modules as one deployable mini, and build, deploy, the Manager and
   `as splice --upsert` compose it as one unit. Qualified in game with a
