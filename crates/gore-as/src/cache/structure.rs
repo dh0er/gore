@@ -2430,6 +2430,8 @@ pub(crate) fn bare_type_name(tyname: &str) -> &str {
 pub(crate) const LOOP_BACK_EDGE: &str = "//__gore_back_edge";
 /// `//__gore_ctor <slot>`: a default construction of a local the structurer met at this point.
 pub(crate) const CTOR_SITE: &str = "//__gore_ctor";
+/// A `JMP` to the next instruction: `if (false) { } else { }`, spelled out by the emitter.
+pub(crate) const IF_FALSE_MARKER: &str = "//__gore_if_false";
 
 /// NAMESPACE access, which fails with "Namespace 'UStoryG1R' doesn't exist".
 pub(crate) fn qualify_class_name(name: &str, refs: &RefResolver) -> String {
@@ -5917,10 +5919,41 @@ fn block_stmts_in(
             // — they're unmodeled control transfers, and `cfg.rs` leaves JMPP successors unknown.
             // They fall through to the `// opcode` marker below so `stub_reason` stubs the body
             // rather than emitting recompilable source with the throw/switch silently dropped.
+            // A `JMP` to the very next instruction is what `if (false) { } else { }` leaves:
+            // the compiler drops the then-arm of a constant-false condition and keeps the jump
+            // over the (empty) else. Generated dialog code carries 21 of them (probed: that
+            // spelling reproduces the bytes, an empty `else` behind a real `if` does not).
+            "JMP" => {
+                // …but not the jump a `return` takes to a `RET` standing right behind it,
+                // and not a then-arm's jump over an empty else, whose landing row is the
+                // condition's own target: those the if/else and return renderers write
+                // (measured: 157 regressions when they were marked as well).
+                if ins.dwords.first().copied() == Some(0) {
+                    let landing = ins.offset_dw + 2;
+                    let lands_on_ret = ctx
+                        .instrs
+                        .iter()
+                        .find(|other| other.offset_dw == landing)
+                        .is_some_and(|other| other.op.name == "RET");
+                    let landing_is_a_target = ctx.instrs.iter().any(|other| {
+                        other.op.name.starts_with('J')
+                            && other.offset_dw != ins.offset_dw
+                            && other
+                                .dwords
+                                .first()
+                                .map(|off| other.offset_dw as i64 + 2 + *off as i32 as i64)
+                                == Some(landing as i64)
+                    });
+                    if !lands_on_ret && !landing_is_a_target {
+                        flush!();
+                        out.push(IF_FALSE_MARKER.to_string());
+                    }
+                }
+            }
             "SUSPEND" | "JitEntry" | "PopPtr" | "SwapPtr" | "ClrHi" | "ClrVPtr" | "FREE"
             | "FinConstruct" | "CHKREF" | "ChkRefS" | "ChkNullV" | "ChkNullS"
             | "DestructScript" | "SaveReturnValue" | "ResolveObjectPtr" | "GETOBJ"
-            | "GETOBJREF" | "GETREF" | "JMP" => {}
+            | "GETOBJREF" | "GETREF" => {}
             // (CopyScript/COPY are handled above as `dest = src;`. FinConstruct/DestructScript
             // stay ignored: implicit AS construct/destruct that appear in nearly every function —
             // emitting/stubbing them would be wrong.) Any genuinely unmodeled opcode falls through
@@ -7067,6 +7100,50 @@ impl Structurer<'_> {
                     .rev()
                     .find(|line| !line.trim().is_empty())
                     .is_some_and(|line| line.trim_start().starts_with("return"));
+                // The arm's terminator jumps to the function's bare `RET` and the arm's last
+                // statement fills the hidden return slot: that is `return <value>;`, and it has
+                // to be written, or the function falls through to the default return behind
+                // the `if` (measured: `GetMontageName` assigned `__return = n"Magic"` and then
+                // returned `n"None"` on every path — a wrong program, not a byte difference).
+                // The flag itself stays as it was: the else emission and the shared exit
+                // below are tuned to an arm that is NOT read as returning, and an arm whose
+                // return is still spelled `__return = …` + jump keeps that shape's handling
+                // (measured: flipping it dropped the shared `return __return;` behind seven
+                // if/else pairs whose else-arm also stores — "Not all paths return a value").
+                let _rewrote = (then_end > i + 1
+                        && self.jump_op(then_end - 1) == "JMP"
+                        && self.g.blocks[then_end - 1]
+                            .succs
+                            .first()
+                            .is_some_and(|&t| self.is_bare_ret_off(t))
+                        && {
+                            let tail_at = out[then_body_at..]
+                                .rfind(|c: char| !c.is_whitespace())
+                                .map(|end| then_body_at + end + 1);
+                            let last_line_start = tail_at
+                                .and_then(|end| out[..end].rfind('\n').map(|nl| nl + 1))
+                                .unwrap_or(then_body_at);
+                            let last = out[last_line_start..].trim().to_owned();
+                            match last.strip_prefix("__return = ").and_then(|v| v.strip_suffix(';')) {
+                                Some(value)
+                                    if !value.is_empty()
+                                        && !value.contains("__return")
+                                        && !value.contains(RVODEF)
+                                        && !value.contains('\u{1}')
+                                        && !value.contains('\u{2}') =>
+                                {
+                                    let indent: String = out[last_line_start..]
+                                        .chars()
+                                        .take_while(|c| c.is_whitespace() && *c != '\n')
+                                        .collect();
+                                    let value = value.to_owned();
+                                    out.truncate(last_line_start);
+                                    let _ = writeln!(out, "{indent}return {value};");
+                                    true
+                                }
+                                _ => false,
+                            }
+                        });
                 let _ = writeln!(out, "{ind}}}");
                 next = then_end;
                 if let Some(ei) = else_idx {
@@ -7108,6 +7185,12 @@ impl Structurer<'_> {
                             b < self.g.blocks.len()
                                 && (is_cond_op(self.jump_op(b)) || self.jump_op(b) == "JMP")
                                 && self.g.blocks[b].succs.first().copied() == Some(t)
+                                // The then-arm's OWN terminator jumping there is not a shared
+                                // tail but an `else` with nothing in it: the compiler emits
+                                // that jump only for an `else` it was told about (`if (c) { X;
+                                // } else { }`, 23 functions carry the `Jcc ->X; …; JMP ->X`
+                                // pair). A jump out of a test NESTED in the arm is the tail.
+                                && !(self.jump_op(b) == "JMP" && b + 1 == ei)
                         })
                     });
                     let after_idx = self.g.blocks[ei - 1]
@@ -7128,6 +7211,13 @@ impl Structurer<'_> {
                             .succs
                             .first()
                             .is_some_and(|&t| self.is_bare_ret_off(t));
+                    if std::env::var_os("GORE_AS_IF_DIAG").is_some() {
+                        eprintln!(
+                            "[if] block={i} ei={ei} then_end={then_end} after_idx={after_idx} jump={} exits_loop={then_exits_loop} shares_tail={shares_the_tail} then_returns={then_returns} arm_returns={then_arm_returns} else_tail_returns={else_tail_returns_from_a_block} start_dw={}",
+                            self.jump_op(ei.saturating_sub(1)),
+                            self.g.blocks[i].start_dw
+                        );
+                    }
                     if ei >= then_end
                         && ei > 0
                         && self.jump_op(ei - 1) == "JMP"
@@ -7152,6 +7242,15 @@ impl Structurer<'_> {
                             {
                                 next = stop;
                             }
+                        } else if after_idx == ei {
+                            // The then-arm's `JMP` lands on the very next row: an `else` with
+                            // nothing in it. The source wrote `if (c) { } else { }` (a debug
+                            // body compiled out, in generated dialog code) and the compiler
+                            // keeps the jump for the else it was told about — 23 functions
+                            // carry exactly this `Jcc ->X; JMP ->X` pair.
+                            let _ = writeln!(out, "{ind}else");
+                            let _ = writeln!(out, "{ind}{{");
+                            let _ = writeln!(out, "{ind}}}");
                         }
                     }
                 }
