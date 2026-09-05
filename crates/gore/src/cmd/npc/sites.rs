@@ -36,6 +36,59 @@ fn spawn_definition_in(call: &str) -> Option<&str> {
     Some(&rest[..end])
 }
 
+/// Ein Weltpunkt und ob dort schon jemand steht.
+///
+/// Der Unterschied ist im Spiel sichtbar geworden: zwei Figuren an demselben Punkt stehen
+/// ineinander, der Fokus greift nur eine, und die andere flackert je nach Blickwinkel. Wer eine
+/// Figur setzen will, will fast immer einen freien Punkt — und von denen gibt es mehr als doppelt
+/// so viele wie belegte.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorldPoint {
+    pub name: String,
+    pub module: String,
+    /// Die Spawn-Definitionen, die dieser Punkt heute setzt. Leer heißt frei.
+    pub occupants: Vec<String>,
+}
+
+impl WorldPoint {
+    /// Steht hier schon jemand?
+    pub fn is_occupied(&self) -> bool {
+        !self.occupants.is_empty()
+    }
+}
+
+/// Jeder Weltpunkt eines emittierten Levelskripts, belegt oder nicht.
+///
+/// `parse_sites` sieht nur die belegten, weil es die Spawn-Zeilen liest. Diese Funktion geht von
+/// den Klassen aus und findet deshalb auch die 2729 leeren.
+pub fn parse_world_points(module: &str, source: &str) -> Vec<WorldPoint> {
+    let mut out: Vec<WorldPoint> = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("class ") {
+            match rest.split_once(':') {
+                Some((name, base)) if base.trim() == WORLD_POINT_BASE => out.push(WorldPoint {
+                    name: name.trim().to_string(),
+                    module: module.to_string(),
+                    occupants: Vec::new(),
+                }),
+                _ => {}
+            }
+            continue;
+        }
+        if !trimmed.contains("SpawnAIAgent(") {
+            continue;
+        }
+        let Some(point) = out.last_mut() else {
+            continue;
+        };
+        if let Some(definition) = spawn_definition_in(trimmed) {
+            point.occupants.push(definition.to_string());
+        }
+    }
+    out
+}
+
 /// Jede Spawn-Stelle eines emittierten Levelskripts.
 pub fn parse_sites(module: &str, source: &str) -> Vec<Site> {
     let mut out = Vec::new();
@@ -159,6 +212,43 @@ class UNotAWorldPoint : USomethingElse
             ),
             None
         );
+    }
+
+    #[test]
+    fn parse_world_points_finds_the_empty_ones_too() {
+        // Der Grund, warum es diese Funktion gibt: `parse_sites` liest Spawn-Zeilen und sieht
+        // deshalb nur belegte Punkte. Wer eine Figur setzen will, braucht die freien.
+        let source = format!(
+            "{SOURCE}\nclass UWP_EMPTY : UWorldPointScript\n{{\n    void OnWorldStart()\n    {{\n    }}\n}}\n"
+        );
+        let points = parse_world_points("LevelScripts.Demo", &source);
+        assert_eq!(points.len(), 3);
+        let empty = points
+            .iter()
+            .find(|p| p.name == "UWP_EMPTY")
+            .expect("the empty point");
+        assert!(!empty.is_occupied());
+        assert!(empty.occupants.is_empty());
+    }
+
+    #[test]
+    fn an_occupied_point_lists_everyone_it_sets() {
+        let points = parse_world_points("LevelScripts.Demo", SOURCE);
+        let two = points
+            .iter()
+            .find(|p| p.name == "UWP_EZ_TWO")
+            .expect("the busy point");
+        assert!(two.is_occupied());
+        assert_eq!(
+            two.occupants,
+            vec!["USpawnAIAgentDefinition_A", "USpawnAIAgentDefinition_B"]
+        );
+    }
+
+    #[test]
+    fn a_class_that_is_not_a_world_point_is_no_point_at_all() {
+        let points = parse_world_points("LevelScripts.Demo", SOURCE);
+        assert!(points.iter().all(|p| p.name != "UNotAWorldPoint"));
     }
 
     #[test]

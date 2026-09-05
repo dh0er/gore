@@ -1065,6 +1065,20 @@ const NPC_SITES_ARGS: &[ArgSpec] = &[
         false,
     ),
     ArgSpec::new(
+        "free",
+        Switch("free"),
+        Bool,
+        "Keep only world points nobody is spawned at",
+        false,
+    ),
+    ArgSpec::new(
+        "occupied",
+        Switch("occupied"),
+        Bool,
+        "Keep only world points that already spawn somebody",
+        false,
+    ),
+    ArgSpec::new(
         "npc",
         Long("npc"),
         Str,
@@ -1334,7 +1348,7 @@ const NPC_COMMANDS: &[CommandSpec] = &[
     .guide("npc-authoring"),
     CommandSpec::new(
         "sites",
-        "List the world points the level scripts spawn characters from",
+        "List the world points the level scripts can place characters at",
         NPC_SITES_ARGS,
         Safety::read(),
         T_NORMAL,
@@ -1362,7 +1376,7 @@ const NPC_COMMANDS: &[CommandSpec] = &[
     .guide("npc-authoring"),
     CommandSpec::new(
         "clone",
-        "Clone a shipped character, writing its values out so they can be changed",
+        "Clone a shipped character. Same result as `new`, named for what it does",
         NPC_CLONE_ARGS,
         Safety::write().writes_into(&["out"]),
         T_NORMAL,
