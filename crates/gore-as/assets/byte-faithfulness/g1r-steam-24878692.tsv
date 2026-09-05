@@ -1,5 +1,5 @@
 # module	divergent-functions	behaviour-risks	generated-methods
-AI.AIAgent.Creature.Demon.Fire.Firewall.DemonAreaFirewallVisual	2	0	0
+AI.AIAgent.Creature.Demon.Fire.Firewall.DemonAreaFirewallVisual	1	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Base.Barrier.FireDemon_HellArms_Barrier	1	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Base.FireDemon_HellArmsArea_Base	1	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachStraight.FireDemon_HellArms_BreachStraight	1	0	0
@@ -37,7 +37,7 @@ AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeDefinitions	2	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	2	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingResponse	2	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	29	0	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeScoring	4	0	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeScoring	3	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.TheftEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.EventResponses	17	0	0
 AI.CharacterAI_Gothic	10	0	0
@@ -69,14 +69,14 @@ AI.States.FightAI.CombatState.AICombatFitnessMultipliers	2	0	0
 AI.States.FightAI.CombatState.AICombatRoleSystem	4	0	0
 AI.States.FightAI.CombatState.AICombatTargetScoring	3	0	0
 AI.States.FightAI.CombatState.AIGroup_Attackers	5	0	0
-AI.States.FightAI.CombatState.AIGroup_Combat	8	0	0
+AI.States.FightAI.CombatState.AIGroup_Combat	7	0	0
 AI.States.FightAI.CombatState.AIState_Combat	2	0	0
 AI.States.FightAI.CombatState.AIState_Combat_Creature	3	0	0
 AI.States.FightAI.CombatState.AIState_Combat_Humanoid	2	0	0
 AI.States.FightAI.CombatState.AIState_OGCombat	18	0	0
 AI.States.FightAI.CombatState.CombatBehaviorSets.CombatBehaviorSet	2	0	0
 AI.States.FightAI.CombatState.CombatBehaviorSets.UnreachableEnemy.CombatBehaviorSet_UnreachableEnemy	4	0	0
-AI.States.FightAI.CombatState.CombatMoves	33	0	0
+AI.States.FightAI.CombatState.CombatMoves	32	0	0
 AI.States.FightAI.CombatState.CombatOperations	1	0	0
 AI.States.FightAI.CombatState.CombatSituations	11	0	0
 AI.States.FightAI.CombatState.CombatTestClasses	1	0	0
@@ -152,8 +152,6 @@ GAS.Abilities.Spells.ExecutionValidator.Derived.Spell.Telekinesis.CastSpell_Exec
 GAS.Abilities.Spells.Spells.Base.GA_Spell_BasicWithTarget	2	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_SpawnRechargeableProjectile	2	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_Targetable	1	0	0
-GAS.Abilities.Spells.Spells.Creature.FireDemon.FireExplosion.GA_FireDemon_FireExplosion	1	0	0
-GAS.Abilities.Spells.Spells.Creature.FireDemon.FireExplosion.GA_FireDemon_FireExplosion_Fire	1	0	0
 GAS.Abilities.Spells.Spells.Electric.ChainLightning.GA_Spell_ChainLightning	9	0	0
 GAS.Abilities.Spells.Spells.Electric.GA_Spell_BallLightning	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_Fireball	1	0	0
@@ -182,7 +180,7 @@ GAS.Abilities.Spells.Visuals.VisualShapes.CollisionShapeVisual	2	0	0
 GAS.Abilities.Spells.Visuals.Wind.StormFistVisual	1	0	0
 GAS.Abilities.TraceTarget.Base.GA_TraceTarget_Base	1	0	0
 GAS.Abilities.TraceTarget.Derived.GA_TraceTarget_Item	2	0	0
-GAS.Calculations.Damage	8	0	0
+GAS.Calculations.Damage	7	0	0
 GAS.Calculations.Damage_FocusStonePuzzle	1	0	0
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Drugs.Base.DrugDebuffEffectComponentBase	3	0	0
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Sleep.GA_SleepDebuffEffectGameplayAbility	1	0	0
@@ -190,7 +188,7 @@ GAS.Effects.Debuffs.EffectStateComponent.DebuffEffectActors.SlowdownDebuffEffect
 GAS.Effects.Debuffs.GE_Damage	1	0	0
 GAS.Effects.Tests.Effect_GiveExperience	1	0	0
 GAS.GASCharacterMixins	7	0	0
-GAS.GASCharacterStateMixins	22	0	0
+GAS.GASCharacterStateMixins	21	0	0
 GAS.PerceptionEventMixins	3	0	0
 Gameplay.Environment.BattleBlockingBarrier.BattleBarrierVisual	1	0	0
 Gameplay.Environment.BattleBlockingBarrier.BattleBlockingBarrierManager	2	0	0

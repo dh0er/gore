@@ -1526,12 +1526,15 @@ fn emit_function_ctor(
     // was a declared local (`TArray<…> Items = Get…(); return Items.Num() > 0;`): the
     // compiler frees a temporary right behind the call that took it — or behind the last call
     // of the chain its result fed (`Outer(Inner(Tmp))`).
-    hoisted.extend(rvo_declared_at_initializer(
+    let rvo_declared: HashSet<i32> = rvo_declared_at_initializer(
         &disassemble(&f.bytecode).unwrap_or_default(),
         refs,
         &rvo_producers,
         &rvo_consumers,
-    ));
+    )
+    .into_iter()
+    .collect();
+    hoisted.extend(rvo_declared.iter().copied());
     // The structurer left a marker wherever it met a default construction of a local that was
     // not consumed at once — the source's own declaration, at its own position. For a value
     // struct vanilla builds only behind a branch, the marker becomes that declaration and the
@@ -2618,12 +2621,18 @@ fn emit_function_ctor(
         let several_lives = slots_with_several_lives(&text);
         let returned_by_reference = reference_return_slots(f);
         let block_scoped = block_scoped_value_slots(f, refs);
+        // A by-value result the release witness read as declared is no receiver temporary,
+        // whatever the push behind its producer says: `HasEquippedRangedWeapon` released the
+        // array behind the compare that read `Num()`, not behind `Num()` — a local destroyed
+        // at the `return`, and inlining it moved the destructor in front of the compare.
+        let rvo_temporaries: HashSet<i32> =
+            rvo_temporary_slots(f, refs).difference(&rvo_declared).copied().collect();
         let rendered = inline_unnamed_value_temporaries(
             &rendered,
             &unnamed_value_defs(f, refs, &rvo_producers, &rvo_consumers)
                 .union(&immediately_consumed_defs(f))
                 .copied()
-                .chain(rvo_temporary_slots(f, refs).into_iter().map(|slot| (slot, 1)))
+                .chain(rvo_temporaries.iter().copied().map(|slot| (slot, 1)))
                 .chain(
                     fused_short_circuit_carriers(f)
                         .into_iter()
@@ -2652,7 +2661,7 @@ fn emit_function_ctor(
                 .filter(|(slot, _)| !block_scoped.contains(slot))
                 .collect(),
             &wholly_consumed_object_slots(f),
-            &rvo_temporary_slots(f, refs),
+            &rvo_temporaries,
             refs,
             &arithmetic_temporaries(f),
             &statement_producers,
@@ -2677,7 +2686,7 @@ fn emit_function_ctor(
             &unnamed_value_defs(f, refs, &rvo_producers, &rvo_consumers)
                 .union(&immediately_consumed_defs(f))
                 .copied()
-                .chain(rvo_temporary_slots(f, refs).into_iter().map(|slot| (slot, 1)))
+                .chain(rvo_temporaries.iter().copied().map(|slot| (slot, 1)))
                 .chain(
                     fused_short_circuit_carriers(f)
                         .into_iter()
@@ -2706,7 +2715,7 @@ fn emit_function_ctor(
                 .filter(|(slot, _)| !block_scoped.contains(slot))
                 .collect(),
             &wholly_consumed_object_slots(f),
-            &rvo_temporary_slots(f, refs),
+            &rvo_temporaries,
             refs,
             &arithmetic_temporaries(f),
             &statement_producers,
@@ -12898,7 +12907,16 @@ fn unnamed_value_defs(
     }
     for (slot, life, at) in defs {
         let ins = &instrs[at];
-        if !produces_value(ins.op.name) {
+        // An arithmetic result (not an in-place update of a named slot: `MULd v12, v12, v6`)
+        // whose one read is an arithmetic or comparison operand is the scratch of a
+        // sub-expression, in whatever life of the slot it stands (`SeverityMultiplier`: the
+        // product lives in the slot a member read used before it, and the per-slot witness
+        // wants every write to be arithmetic). The ORDER question — was the member on its
+        // left read first — is `statement_operand_slots`', which reads the same producers.
+        let arithmetic_def = is_arithmetic_op(ins.op.name)
+            && !super::structure::is_numeric_cast(ins.op.name)
+            && !ins.words.iter().skip(1).any(|w| *w as i16 as i32 == slot);
+        if !produces_value(ins.op.name) && !arithmetic_def {
             continue;
         }
         // The element of a range-for is stored right after `Proceed()`, and it IS named — by the
@@ -12931,16 +12949,28 @@ fn unnamed_value_defs(
         }
         // exactly one read, and it must come before the slot holds anything else
         let mut reads = 0usize;
+        let mut arithmetic_reader = false;
+        // A push between an arithmetic result and its read is an argument run that began
+        // AFTER the value stood: the source computed it in a statement of its own, and inline
+        // it moves behind the push (`GetMovingCircleEnemyFormationOffsetForCharacter`: the
+        // product stood before `PshC8 2pi`, inlined it followed it).
+        let mut pushed_before_read = false;
         for other in &instrs[at + 1..] {
             if w0(other) == slot && writes_destination(other.op.name) {
                 break;
             }
-            reads += super::bytediff::addressed_slots(other)
+            let here = super::bytediff::addressed_slots(other)
                 .into_iter()
                 .filter(|s| *s == slot)
                 .count();
+            if here > 0 {
+                reads += here;
+                arithmetic_reader = is_arithmetic_op(other.op.name);
+            } else if reads == 0 && (other.op.name.starts_with("Psh") || other.op.name == "PSF") {
+                pushed_before_read = true;
+            }
         }
-        if reads == 1 {
+        if reads == 1 && (!arithmetic_def || (arithmetic_reader && !pushed_before_read)) {
             out.insert((slot, life));
         }
     }
@@ -14991,6 +15021,19 @@ fn rewrite_primitive_lives_decl_init(
     rewrite_decl_at_assignment(body, locals, &wanted, &|_, ty| qualify_decl_type(ty, refs), false, &HashMap::new())
 }
 
+/// An arithmetic, comparison or numeric-cast instruction: what an unnamed scratch value is
+/// computed by and read by.
+fn is_arithmetic_op(name: &str) -> bool {
+    matches!(
+        name,
+        "ADDi" | "SUBi" | "MULi" | "DIVi" | "MODi" | "ADDf" | "SUBf" | "MULf" | "DIVf"
+            | "MODf" | "ADDd" | "SUBd" | "MULd" | "DIVd" | "MODd" | "ADDi64" | "SUBi64"
+            | "MULi64" | "DIVi64" | "MODi64" | "ADDIi" | "SUBIi" | "MULIi" | "ADDIf"
+            | "SUBIf" | "MULIf" | "NEGi" | "NEGf" | "NEGd" | "CMPi" | "CMPu" | "CMPf"
+            | "CMPd" | "CMPi64" | "CMPu64" | "CMPIi" | "CMPIf" | "CMPIu"
+    ) || super::structure::is_numeric_cast(name)
+}
+
 /// Primitive slots the compiler used as arithmetic scratch: every write is a literal store, a
 /// numeric cast or an arithmetic result into the slot, and the ONE read is an operand of an
 /// arithmetic or comparison instruction — never pushed, copied on, or moved to the return
@@ -14999,16 +15042,7 @@ fn arithmetic_temporaries(f: &Func) -> HashSet<i32> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
     };
-    let arithmetic = |name: &str| {
-        matches!(
-            name,
-            "ADDi" | "SUBi" | "MULi" | "DIVi" | "MODi" | "ADDf" | "SUBf" | "MULf" | "DIVf"
-                | "MODf" | "ADDd" | "SUBd" | "MULd" | "DIVd" | "MODd" | "ADDi64" | "SUBi64"
-                | "MULi64" | "DIVi64" | "MODi64" | "ADDIi" | "SUBIi" | "MULIi" | "ADDIf"
-                | "SUBIf" | "MULIf" | "NEGi" | "NEGf" | "NEGd" | "CMPi" | "CMPu" | "CMPf"
-                | "CMPd" | "CMPi64" | "CMPu64" | "CMPIi" | "CMPIf" | "CMPIu"
-        ) || super::structure::is_numeric_cast(name)
-    };
+    let arithmetic = is_arithmetic_op;
     let mut reads: HashMap<i32, usize> = HashMap::new();
     let mut disqualified: HashSet<i32> = HashSet::new();
     let mut written: HashSet<i32> = HashSet::new();
@@ -15213,10 +15247,12 @@ fn statement_operand_slots(f: &Func) -> HashSet<i32> {
             }
         }
         let producer = &instrs[wr];
+        // …or an arithmetic result: `float p = a * b; return Min + p;` computes the product
+        // before the member read, `return Min + a * b` reads the member first.
         let named_kind = matches!(
             producer.op.name,
             "CpyRtoV4" | "CpyRtoV8" | "CpyRtoV1" | "RDR1" | "RDR2" | "RDR4" | "RDR8"
-        );
+        ) || (is_arithmetic_op(producer.op.name) && !super::structure::is_numeric_cast(producer.op.name));
         if wr < wl && named_kind && named > 0 {
             out.insert(named);
         }
