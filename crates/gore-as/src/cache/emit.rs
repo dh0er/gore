@@ -1846,7 +1846,7 @@ fn emit_function_ctor(
     let returns_by_reference = f.ret.is_reference && f.ret.token == 5 && !f.ret.is_object_handle;
     let body = fold_condition_temporaries(&body, &declared_locals, refs, fields, &spilled_boolean_names(f, refs), &named_value_sites(f, refs), false);
     pass_trace("fold_condition_temporaries", &body);
-    let body = fold_alias_copies(&body, &declared_locals);
+    let body = fold_alias_copies(&body, &declared_locals, &widened);
     pass_trace("fold_alias_copies", &body);
     let body = fold_copy_out_temporaries(
         &body,
@@ -1854,6 +1854,7 @@ fn emit_function_ctor(
         &const_result_slots,
         fields,
         &call_result_copies(f),
+        &widened,
     );
     // A slot the structurer's marker declared right before its own assignment (`$beh0` then
     // `opAssign`) was a declaration WITH that initialiser: the compiler builds `T x = <value>;`
@@ -2557,7 +2558,7 @@ fn emit_function_ctor(
         // for them to ask about.
         let rendered = fold_condition_temporaries(&rendered, &declared_locals, refs, fields, &spilled_boolean_names(f, refs), &named_value_sites(f, refs), false);
         pass_trace("fold_condition_temporaries", &rendered);
-        let rendered = fold_alias_copies(&rendered, &declared_locals);
+        let rendered = fold_alias_copies(&rendered, &declared_locals, &widened);
         pass_trace("fold_alias_copies", &rendered);
         let rendered = fold_assignment_receivers(&rendered, &immediately_consumed_defs(f));
         pass_trace("fold_assignment_receivers", &rendered);
@@ -2568,6 +2569,7 @@ fn emit_function_ctor(
                 &const_result_slots,
                 fields,
                 &call_result_copies(f),
+                &widened,
             );
         let rendered = fold_cast_operands(&rendered, &declared_locals, &call_result_types);
         pass_trace("fold_cast_operands", &rendered);
@@ -7857,8 +7859,15 @@ fn inline_temporary_into(
     // `WithMagnitude(float32(this.Chapter))` came out as `iTOf` where vanilla widened to
     // double and narrowed back (`iTOd; dTOf`). Spell the widening out where the copy read a
     // slot or an own field of a narrower type.
+    // Only an INTEGER source needs the spelling: `float32(float(i))` and `float32(i)` differ
+    // (`iTOd; dTOf` against `iTOf`), while a `float32` widened to `float` converts the same way
+    // wherever the compiler meets it (measured: wrapping those reshaped two conditions).
     let value = match (temporary_type(locals, temp), numeric_type_of(&value, locals, fields)) {
-        (Some(wide), Some(narrow)) if wide != narrow && is_numeric_type(wide) && is_numeric_type(&narrow) => {
+        (Some(wide), Some(narrow))
+            if wide != narrow
+                && matches!(wide, "float" | "double")
+                && matches!(narrow.as_str(), "int" | "int8" | "int16" | "int32" | "int64" | "uint" | "uint8" | "uint16" | "uint32" | "uint64") =>
+        {
             format!("{wide}({value})")
         }
         _ => value,
@@ -8729,7 +8738,7 @@ fn read_once_at(lines: &[&str], at: usize, reader: usize, name: &str) -> bool {
 /// Only an alias of the SAME declared type: a copy between different handle types is an implicit
 /// cast, and the reader would then see the other type. And only a slot read exactly once, on the
 /// line right after the copy — anything further away could see `local_B` reassigned in between.
-fn fold_alias_copies(body: &str, locals: &BTreeMap<i32, String>) -> String {
+fn fold_alias_copies(body: &str, locals: &BTreeMap<i32, String>, keep: &HashSet<i32>) -> String {
     let lines: Vec<&str> = body.lines().collect();
     let mut kept: Vec<String> = Vec::new();
     let mut at = 0usize;
@@ -8737,6 +8746,13 @@ fn fold_alias_copies(body: &str, locals: &BTreeMap<i32, String>) -> String {
         let folded = (|| {
             let (target, source) = slot_store(lines[at])?;
             if !is_local_ident(&source) || source == target {
+                return None;
+            }
+            // The target is the name vanilla wrote (a widened value copied INTO it): folding
+            // the copy away hands the reader the temporary's name, and the temporary's
+            // definition then travels where the variable stood (`GuardsNearby`: `float Reach =
+            // Radius;` became `float32(Radius)`, the widen-and-narrow pair gone).
+            if slot_and_life_any(&target).is_some_and(|(slot, _)| keep.contains(&slot)) {
                 return None;
             }
             let ty = temporary_type(locals, &target)?;
@@ -8808,6 +8824,7 @@ fn fold_copy_out_temporaries(
     const_slots: &HashSet<i32>,
     fields: Option<&HashMap<String, String>>,
     assigned: &HashSet<i32>,
+    named_carriers: &HashSet<i32>,
 ) -> String {
     let lines: Vec<&str> = body.lines().collect();
     let mut kept: Vec<String> = Vec::new();
@@ -8838,6 +8855,13 @@ fn fold_copy_out_temporaries(
                     eprintln!("[copyout-reject] {why} | {} | {}", lines[at].trim(), copy);
                 }
             };
+            // The CARRIER is the name vanilla wrote (a widened value the declaration took):
+            // folding it into its copy's target hands the declaration to the temporary
+            // (`float Age = GetAge(); float Neg = -Age;` came out as `-GetAge()`).
+            if slot_of(&carrier).is_some_and(|slot| named_carriers.contains(&slot)) {
+                reject("named-carrier");
+                return None;
+            }
             // Where vanilla itself copied the value on — `CpyRtoV8 t; CpyVtoV8 x, t` — the
             // target was a variable that already stood, and folding the carrier away makes the
             // recompile land the call in the variable straight.
@@ -11141,6 +11165,40 @@ fn slots_built_once_per_iteration(f: &Func, refs: &RefResolver) -> HashSet<i32> 
             back.push((start, at));
         }
     }
+    // A SCRIPT struct is built by its own constructor (`PSF slot; CALL FPayload; TYPEID …`)
+    // and has no destructor behaviour to release it: one such construction inside a loop's
+    // span, and none anywhere else, is the declaration in the loop body
+    // (`HasStoryEventInMemory`: `FStoryEventPayload Payload;` re-built per iteration, 5
+    // functions hoisted it to the top).
+    let mut script_ctors: HashMap<i32, Vec<usize>> = HashMap::new();
+    for at in 0..instrs.len().saturating_sub(2) {
+        if instrs[at].op.name == "PSF"
+            && instrs[at + 1].op.name == "CALL"
+            && instrs[at + 2].op.name == "TYPEID"
+        {
+            // A constructor and nothing else: the callee is named like its owner
+            // (`FStoryEventPayload::FStoryEventPayload`). A struct-typed call that happens to
+            // carry a `TYPEID` argument is not a construction (measured: a range-for element
+            // and a distance temporary read as "built per iteration", 3 regressions).
+            let id = instrs[at + 1].dwords.first().copied().unwrap_or(0) as i32;
+            let is_ctor = match (refs.func_by_id(id), refs.func_owner_by_id(id)) {
+                (Some(name), Some(owner)) => name.rsplit("::").next() == Some(owner),
+                _ => false,
+            };
+            if !is_ctor {
+                continue;
+            }
+            if let Some(slot) = instrs[at].words.first().map(|w| *w as i16 as i32).filter(|s| *s > 0) {
+                script_ctors.entry(slot).or_default().push(at);
+            }
+        }
+    }
+    let script_built: Vec<i32> = script_ctors
+        .iter()
+        .filter(|(slot, sites)| sites.len() == 1 && !ctors.contains_key(*slot))
+        .filter(|(_, sites)| back.iter().any(|(start, end)| (start..=end).contains(&&sites[0])))
+        .map(|(slot, _)| *slot)
+        .collect();
     ctors
         .into_iter()
         .filter(|(_, sites)| sites.len() == 1)
@@ -11154,6 +11212,7 @@ fn slots_built_once_per_iteration(f: &Func, refs: &RefResolver) -> HashSet<i32> 
             })
         })
         .map(|(slot, _, _)| slot)
+        .chain(script_built)
         .collect()
 }
 
@@ -15104,6 +15163,10 @@ fn rvo_statement_producers(
     let mut out = HashSet::new();
     for &(slot, at) in producers {
         let mut others = 0usize;
+        // A value the structurer saw CONSTRUCTED into its slot (`$beh0`, the copy-construction
+        // of a declaration) is a statement whatever follows; only a call's result asks where
+        // its push stands.
+        let constructed = instrs.get(at).is_some_and(behaviour);
         for (idx, next) in instrs.iter().enumerate().skip(at + 1) {
             if next.op.name.starts_with('J') || next.op.name == "RET" {
                 break;
@@ -15114,8 +15177,10 @@ fn rvo_statement_producers(
             // The receiver push of a destructor (`PSF t; CALLSYS $beh2`) is that behaviour's,
             // not an argument standing before ours: counted as one, every chain temporary
             // released between production and push turned the push into a "statement"
-            // (`CheckForSkill`: `RequestDirectParent()` released before the copy-construct).
-            if next.op.name == "PSF" && instrs.get(idx + 1).is_some_and(|after| behaviour(after)) {
+            // (`TurnToWaypoint`: the spot handle released before the location is pushed —
+            // 6 functions). Not for a constructed value: `FString Name = FString(chain);
+            // return FName(Name);` releases the chain temporary in exactly that place.
+            if !constructed && next.op.name == "PSF" && instrs.get(idx + 1).is_some_and(|after| behaviour(after)) {
                 continue;
             }
             if is_call(next.op.name) {
@@ -16071,7 +16136,44 @@ fn named_value_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, String)> {
             usize::try_from(ins.offset_dw as i64 + 2 + off).ok()
         })
         .collect();
+    let callee_of = |call: &super::disasm::Instr| -> Option<String> {
+        match call.op.name {
+            "CALLSYS" | "Thiscall1" => refs.func_by_ptr(call.qwords.first().copied().unwrap_or(0) as i64),
+            _ => refs.func_by_id(call.dwords.first().copied().unwrap_or(0) as i32),
+        }
+        .and_then(|name| name.rsplit("::").next())
+        .map(str::to_owned)
+    };
     let mut out = HashSet::new();
+    // Second shape: the result copied into a slot and RELOADED as a bool for the test right
+    // away (`CALL; CpyRtoV4 N; CpyVtoR1 N; JLowNZ`). A call tested directly reads the register
+    // (`CALL; JLowZ`, vanilla's plain `if (IsGornReady(Gorn))`); the reload is a variable's
+    // (`bool bReady = IsGornReady(Gorn); if (bReady && …)`). Not where the slot is the chain's
+    // own carrier — the constant on the short-circuit path writes it (`SetV4 N, 0; JMP`).
+    for at in 1..instrs.len().saturating_sub(2) {
+        let (call, result, reload, test) = (&instrs[at - 1], &instrs[at], &instrs[at + 1], &instrs[at + 2]);
+        if !call.op.is_call() || result.op.name != "CpyRtoV4" || reload.op.name != "CpyVtoR1" {
+            continue;
+        }
+        if !test.op.name.starts_with('J') || test.op.name == "JMP" {
+            continue;
+        }
+        let Some(named) = w(result, 0).filter(|slot| *slot > 0) else {
+            continue;
+        };
+        if w(reload, 0) != Some(named) {
+            continue;
+        }
+        let carrier_is_named = instrs.get(at + 3).is_some_and(|c| {
+            matches!(c.op.name, "SetV1" | "SetV4") && w(c, 0) == Some(named)
+        });
+        if carrier_is_named {
+            continue;
+        }
+        if let Some(callee) = callee_of(call) {
+            out.insert((named, callee));
+        }
+    }
     for at in 2..instrs.len().saturating_sub(1) {
         let (call, result, copy, next) = (&instrs[at - 2], &instrs[at - 1], &instrs[at], &instrs[at + 1]);
         if !call.op.is_call() || result.op.name != "CpyRtoV4" || copy.op.name != "CpyVtoV4" {
@@ -16097,6 +16199,27 @@ fn named_value_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, String)> {
                 | "sbTOi" | "swTOi" | "ubTOi" | "uwTOi" | "iTOb" | "iTOw"
         ) && w(next, 0) == Some(dst);
         if !in_place {
+            continue;
+        }
+        // The first operand of a short circuit is copied into a temporary and negated there
+        // as well (`!GetWorldFloatData(…) || x <= 0.5`): the test that follows the negation
+        // then lands on a chain constant, `SetV1 c, K; JMP merge`, on one of its two paths.
+        // A named variable's test leads into a statement.
+        let test_at = (at + 2..(at + 5).min(instrs.len()))
+            .find(|k| instrs[*k].op.name.starts_with('J') && instrs[*k].op.name != "JMP");
+        let chain_constant_at = |k: usize| {
+            instrs.get(k).is_some_and(|c| matches!(c.op.name, "SetV1" | "SetV4"))
+                && instrs.get(k + 1).is_some_and(|j| j.op.name == "JMP")
+        };
+        let short_circuit = test_at.is_some_and(|k| {
+            let taken = instrs[k]
+                .dwords
+                .first()
+                .and_then(|off| usize::try_from(instrs[k].offset_dw as i64 + 2 + *off as i32 as i64).ok())
+                .and_then(|dw| instrs.iter().position(|ins| ins.offset_dw == dw));
+            chain_constant_at(k + 1) || taken.is_some_and(chain_constant_at)
+        });
+        if short_circuit {
             continue;
         }
         let callee = match call.op.name {
@@ -18249,15 +18372,24 @@ fn rvo_declared_at_initializer(instrs: &[super::disasm::Instr], refs: &RefResolv
                 break;
             }
             if ins.op.is_call() {
-                temporary = !behaviour(ins, "$beh2");
-                if !temporary {
+                if behaviour(ins, "$beh2") {
                     // another temporary's destructor: step over its `PSF` as well
                     continue;
                 }
+                // Released behind a call: a temporary. (Asking WHICH call consumed it, by a
+                // stack-depth count over parameters, receiver and hidden return pointer,
+                // named 98 temporaries — `FText t = LocText(…)` — and freed a declared spec
+                // handle; the structurer's own stack is the only account that knows.)
+                temporary = true;
                 break;
             }
+            // Result copies, the pushes that hand a result on (`PSF r; PSF d; $beh0` copies
+            // the outer call's value into its declaration before the argument temporaries
+            // are released — `ActivateStrangerDreams`) and other temporaries' destructors
+            // stand between a call and the release of its argument temporaries.
             if matches!(ins.op.name, "CpyRtoV4" | "CpyRtoV8" | "STOREOBJ" | "PopPtr" | "PopRPtr")
-                || (ins.op.name == "PSF" && instrs.get(k + 1).is_some_and(|d| behaviour(d, "$beh2")))
+                || ins.op.name.starts_with("Psh")
+                || ins.op.name == "PSF"
             {
                 continue;
             }
