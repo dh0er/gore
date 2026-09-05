@@ -856,12 +856,15 @@ fn author(
         counts,
         &format!("UCharacterDefinition_Human_{}", request.from),
     );
-    let (config_parent, _) = derivable_parent(
+    // Die mitgeschleppten Werte NICHT wegwerfen: in der Spawn-Definition steckt
+    // `AIAgentCharacterClass`, der Actor-Blueprint. Ohne ihn hat die Figur keinen Koerper.
+    let (config_parent, config_defaults) = derivable_parent(
         &emitted.classes,
         counts,
         &format!("UAIAgentConfig_Human_{}", request.from),
     );
-    let (spawn_parent, _) = derivable_parent(&emitted.classes, counts, &template_spawn);
+    let (spawn_parent, spawn_defaults) =
+        derivable_parent(&emitted.classes, counts, &template_spawn);
 
     // Die Aussehensklasse liegt nicht in der Kette, sondern in einem geteilten Modul. Sie wird
     // hier einzeln nachgeschlagen; findet sich keine, bleibt die Vorlage stehen und der Compiler
@@ -895,7 +898,9 @@ fn author(
         visuals_parent,
         visuals_defaults,
         config_parent,
+        config_defaults,
         spawn_parent,
+        spawn_defaults,
     };
     let routine = generate::routine_class(&npc);
     let edited = edit::add_spawn(pristine, &request.at, &new_spawn, routine.as_deref())
