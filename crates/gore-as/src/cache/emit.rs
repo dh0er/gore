@@ -8334,15 +8334,21 @@ fn fold_condition_temporaries(
                     eprintln!("[cond-reject] {why} | {}", lines[at].trim());
                 }
             };
-            if declaration_with_initializer(lines[at]).is_some()
-                && lines[at + 2..].iter().any(|line| {
-                    count_ident(line, &name) > 0
-                        && declaration_with_initializer(line).is_none_or(|(_, n, _)| n != name)
+            // A declared carrier that later plain stores lean on keeps a BARE declaration in
+            // its place: the condition takes the value, the name keeps its scope. A bare
+            // primitive declaration is no code, so the fold stays byte-neutral (measured: the
+            // refusal left 44 + 75 conditions unfolded in two modules).
+            let keep_bare_declaration = declaration_with_initializer(lines[at])
+                .filter(|_| {
+                    lines[at + 2..].iter().any(|line| {
+                        count_ident(line, &name) > 0
+                            && declaration_with_initializer(line).is_none_or(|(_, n, _)| n != name)
+                    })
                 })
-            {
-                reject("later-store");
-                return None;
-            }
+                .map(|(indent, _, _)| {
+                    let head = lines[at].trim().split(&format!(" {name} = ")).next().unwrap_or("").to_owned();
+                    format!("{indent}{head} {name};")
+                });
             if logical_only && top_level_logical_operator(&value).is_none() {
                 reject("logical-only");
                 return None;
@@ -8398,7 +8404,12 @@ fn fold_condition_temporaries(
                 reject("not-bool");
                 return None;
             };
-            Some(format!("{}if {folded}", indent_of(lines[at + 1])))
+            let condition_line = format!("{}if {folded}", indent_of(lines[at + 1]));
+            Some(match keep_bare_declaration {
+                Some(declaration) => format!("{declaration}
+{condition_line}"),
+                None => condition_line,
+            })
         })();
         match folded {
             Some(replacement) => {
