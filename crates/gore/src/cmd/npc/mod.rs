@@ -6,6 +6,7 @@
 
 pub mod chain;
 pub mod defaults;
+pub mod generate;
 pub mod render;
 pub mod sites;
 pub mod workspace;
