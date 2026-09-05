@@ -151,7 +151,7 @@ GAS.Abilities.Spells.ExecutionValidator.Derived.Spell.ChainLightning.CastSpell_E
 GAS.Abilities.Spells.ExecutionValidator.Derived.Spell.Telekinesis.CastSpell_ExecutionValidator_Telekinesis	1	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_BasicWithTarget	2	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_SpawnRechargeableProjectile	2	0	0
-GAS.Abilities.Spells.Spells.Base.GA_Spell_Targetable	2	0	0
+GAS.Abilities.Spells.Spells.Base.GA_Spell_Targetable	1	0	0
 GAS.Abilities.Spells.Spells.Creature.FireDemon.FireExplosion.GA_FireDemon_FireExplosion	1	0	0
 GAS.Abilities.Spells.Spells.Creature.FireDemon.FireExplosion.GA_FireDemon_FireExplosion_Fire	1	0	0
 GAS.Abilities.Spells.Spells.Electric.ChainLightning.GA_Spell_ChainLightning	9	0	0
@@ -188,7 +188,6 @@ GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Drugs.Base.DrugDebuf
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Sleep.GA_SleepDebuffEffectGameplayAbility	1	0	0
 GAS.Effects.Debuffs.EffectStateComponent.DebuffEffectActors.SlowdownDebuffEffectActor	1	0	0
 GAS.Effects.Debuffs.GE_Damage	1	0	0
-GAS.Effects.Items.EquipAbilitesSpell.FloatingItem.GA_GameplayAbilityFloatingItem	1	0	0
 GAS.Effects.Tests.Effect_GiveExperience	1	0	0
 GAS.GASCharacterMixins	7	0	0
 GAS.GASCharacterStateMixins	22	0	0
