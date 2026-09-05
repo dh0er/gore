@@ -491,27 +491,51 @@ Read this before you build on it.
 | **Recompiling a level script does not disturb its neighbours** | On the measured game build, BuildID `24878692`, the complete script tree emitted and recompiled unchanged produces a **byte-identical** cache: SHA-256 `7A18F954E32AF30FC24AE3A66EA35D3B5CB98560C8F5083C7846FC9CE1D77511`, 124,459,412 bytes, 7317 modules. On that build, recompiling a level script therefore cannot change code the author did not touch. |
 | **Per-module translation** | Whether one particular level script survives its own recompile is the separate, per-module judgement the `translation:` line reports. Byte-identity of the whole tree does not answer it for a build nobody measured. |
 
+### Observed in game
+
+On 2026-09-05, on BuildID `24878692`, two authored characters were built,
+deployed and watched. Both were derived from Diego and placed at free world
+points at Xardas' Tower; they differed in one field, the appearance mode.
+
+| | |
+|---|---|
+| **A character that never shipped appears in the world** | Both stood at their world points after a load. |
+| **It has a body** | Both animate like any shipped NPC, can be focused, and can be spoken to. Each answered *"Nicht jetzt"* — the correct refusal for a character with no conversation, which is what these two are. |
+| **The borrowed look works** | `A`, carrying Diego's prebaked model, looks like Diego. |
+| **The save records it** | Both appear in the save under `GORE_TEST_A-WP_WarningFlock_XT_01` and `GORE_TEST_B-WP_WarningFlock_XT_02` — `<unique name>-<world point script without its leading U>`, exactly the shape a shipped character uses. |
+| **Nothing else moved** | In an earlier run the character was added to a world point that already spawned Xardas' lesser demon. The demon was still there, unchanged. |
+
+What that took, and what each cost, is worth knowing before authoring:
+
+- **`AIAgentCharacterClass` is not optional.** It names the actor blueprint that
+  gives a character its skeleton, animation, collision and focus. Without it the
+  agent still spawns and still reaches the save, but has no body: stock still, no
+  animation, unfocusable, and gone as the player walks up. `new` carries it from
+  the template; nothing else has to be done.
+- **Two characters at one world point stand inside each other.** Only one can be
+  focused and the other flickers with the viewing angle. Use `sites --free`.
+
 ### Not proven in game
 
-The authoring path has never been through the game. None of the following has
-been observed even once, and nothing on this page should be read as a hint that
-it works:
-
-- That an authored character appears in the world at all.
-- That it looks like the character it was derived from.
-- That it keeps its daily routine, or goes anywhere.
-- That it survives a save and a reload.
-- That its save key — the identity a save file records it under — works.
-
-That is also what `check` and `stage` say in the lines they end with:
-*offline-checked only* and *offline-prepared only*. Those are not modesty. Until
-somebody builds one of these, deploys it and looks, the honest description of an
-authored character is source that compiles.
+- **`--modular-visuals` does not reproduce the template's look.** `B` was built
+  that way and came out looking like the player character, not like Diego. The
+  path produces a working body — so it is no longer unproven in the sense of
+  "might not render" — but it does not carry the parts across. Prefer the
+  default borrowed model until somebody works out why.
+- **The daily routine does not move the character.** Both stayed at their world
+  point; `location` and `spawnLocation` in the save were identical. The routine
+  compiles and the character carries it, but nothing observed it running, and
+  `TeleportToCurrentTaskWhen` did not relocate anyone.
+- **Voice is unconfirmed.** Both spoke, both sounded the same, and neither was
+  identifiable as the template's voice.
+- **Save and reload across sessions**, and anything about quests, knowledge or
+  relationships for an authored identity.
 
 Changing a shipped character's values is `npc checkout`, described above, and
-carries the same offline-only status. What it does not reach: visuals and the
-spawn definition, which live in modules hundreds of characters share, and what
-a character says. Use the surfaces that do:
+that one has **not** been through the game at all — only the authoring path has.
+What checkout does not reach either: visuals and the spawn definition, which
+live in modules hundreds of characters share, and what a character says. Use the
+surfaces that do:
 [Dialog authoring](dialog-authoring.md) for what a character says,
 [Offline default patching](angelscript-defaults.md) for a single class default,
 and [Scripts (AngelScript)](scripts.md) for the general emit/recompile/splice

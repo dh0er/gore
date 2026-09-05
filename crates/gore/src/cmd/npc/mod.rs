@@ -960,22 +960,31 @@ fn author(
         &request.waypoint,
         gore_catalog::location::LocationCatalog::bundled(),
     ) {
+        // Bewusst zurueckhaltend. Eine fruehere Fassung sagte hier "it ends up at <waypoint>";
+        // im Spiel nachgemessen stimmte das nicht — die Figur blieb an ihrem Weltpunkt, und
+        // `location` und `spawnLocation` im Spielstand waren gleich. Der Tagesablauf uebersetzt
+        // und wird getragen; dass er die Figur bewegt, hat noch kein Lauf gesehen.
         (Some(waypoint), Ok(spots)) => match spots.resolve(waypoint) {
             Some(spot) => println!(
-                "  it ends up at {waypoint} in {} — x {:.0}  y {:.0}  z {:.0}",
+                "  its routine schedules {waypoint} in {} — x {:.0}  y {:.0}  z {:.0}, but no run \
+                 has yet seen a character move to its scheduled spot",
                 spot.a, spot.x, spot.y, spot.z
             ),
             None => println!(
-                "  WARNING: {waypoint} is not a known spot, so the character stays at its world \
-                 point — and no catalog says where that is"
+                "  WARNING: {waypoint} is not a known spot. The game ignores an unknown waypoint \
+                 without a word, so the routine has nowhere to send anyone"
             ),
         },
-        (None, _) => println!(
-            "  no --waypoint given, so it stays at its world point. No catalog says where that \
-             is; pass --waypoint to put it somewhere you can find"
-        ),
+        (None, _) => println!("  no --waypoint given, so it carries no routine"),
         (Some(_), Err(_)) => {}
     }
+    // Wo eine Figur wirklich steht, weiss nur der Spielstand: Weltpunkte stehen in keinem
+    // Katalog. `cargo run -p gore-save --example probe -- <save> private.npc.position "" id=<key>`
+    // liest die Koordinate aus, sobald sie einmal erschienen ist.
+    println!(
+        "  it spawns at {}, whose position no catalog knows — read it from a save once it is there",
+        request.at
+    );
     println!("  {}", render::translation_line(&emitted, &level_module));
     if let Some(warning) = &occupied_warning {
         println!("  WARNING: {warning}");

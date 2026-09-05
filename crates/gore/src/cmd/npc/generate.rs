@@ -119,10 +119,10 @@ pub fn source(npc: &NewNpc) -> String {
 
     if npc.modular_visuals {
         out.push_str(
-            "// UNPROVEN: no shipped character builds its looks from parts at runtime — all 817 of\n\
-             // them carry a prebaked model instead, and none exists for a new id. The machinery is\n\
-             // there (the hero reassembles on every armour change), but this path has no precedent\n\
-             // in the game's own data. Prove it in game before shipping it.\n",
+            "// Built from parts at runtime instead of borrowing a baked model. Measured in game on\n\
+             // 2026-09-05: this renders a working, animated, focusable body — but it came out\n\
+             // looking like the player character, not like the template. The parts do not carry\n\
+             // across. Prefer the borrowed model unless you know why you want this.\n",
         );
         let mut visuals = npc.visuals_defaults.clone();
         visuals.retain(|line| {
@@ -326,7 +326,7 @@ mod tests {
         assert!(!source.contains("m_PreBakedName"));
         // 817 ausgelieferte Figuren tragen ein vorgebackenes Modell, null bauen sich zur Laufzeit
         // zusammen. Wer diesen Weg nimmt, muss das in der Quelle lesen können.
-        assert!(source.contains("UNPROVEN"));
+        assert!(source.contains("looking like the player character"));
     }
 
     #[test]

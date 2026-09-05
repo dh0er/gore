@@ -97,13 +97,20 @@ installed game.
 
 ## Spawn and placement
 
-Putting a character into the world, or moving one that is already standing in
-it, has no supported path anywhere in GORE — vanilla or authored, Studio or
-CLI. What is proven is offline only: an authored NPC class chain compiles and
-composes into the script cache, and a Draft persists in a project, while class
-residence, a spawn hook, and a distinct save identity all remain open questions
-— and calling a *vanilla* spawn definition a second time would only produce
-another body sharing the vanilla identity, not a new character
+Putting a character into the world has a supported path since 2026-09-05, and
+it is `gore npc` on the command line, not Studio. Two authored characters were
+built, deployed and observed in game: they stand at their world points, animate,
+can be focused and spoken to, and the save records them under their own
+identity. [NPC authoring](npc-authoring.md) is that workflow; Studio's NPC Draft
+is still the offline-only thing described below.
+
+Moving a character that is already standing in the world remains a different
+question, and the answer is still the
+[save editor](../../apps/save-editor/README.md).
+
+Calling a *vanilla* spawn definition a second time would still only produce
+another body sharing the vanilla identity — which is why an authored character
+brings its own definition chain
 ([the contract](../reference/studio-authoring.md#remaining-runtime-gates)).
 `gore location resolve` confirms that a waypoint name exists, which is not the
 same as being able to send anyone to it. The one thing that does move a
