@@ -1056,6 +1056,12 @@ fn stage_workspace(
         (stage::Route::SingleModule, _) => "(not needed)".to_string(),
     };
 
+    // Der Compiler verlangt einen **vorhandenen** privaten Arbeitsordner und bricht sonst mit
+    // "reading compiler workspace metadata" ab. Ihn hier anzulegen erspart dem Nutzer ein
+    // Kommando, das aussieht, als sei es vollständig, und dann scheitert.
+    let work = PathBuf::from(format!("{}.work", dir.display()));
+    fs::create_dir_all(&work).with_context(|| format!("creating {}", work.display()))?;
+
     let spec = stage::spec_json(&manifest, mod_name);
     let spec_path = dir.join("spec.json");
     fs::write(
