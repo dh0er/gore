@@ -124,3 +124,7 @@ path = "tests/integration/audio_test.rs"
 [[test]]
 name = "modcmd_test"
 path = "tests/integration/modcmd_test.rs"
+
+[[test]]
+name = "npc_test"
+path = "tests/integration/npc_test.rs"
