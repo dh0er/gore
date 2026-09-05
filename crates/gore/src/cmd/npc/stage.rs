@@ -34,13 +34,30 @@ pub enum Route {
     SingleModule,
 }
 
-/// Der Weg, den ein Manifest verlangt.
-pub fn route_of(manifest: &Manifest) -> Route {
-    if manifest.authored_module().is_some() {
+/// Der Weg, den diese Arbeit verlangt.
+///
+/// Zwei Gründe zwingen zum Voll-Baum, und die Modulanzahl ist nur der erste:
+///
+/// 1. Eine neue Figur bringt ein zusätzliches Modul mit, das ein ausgeliefertes aufruft. Das geht
+///    nur als Multi-Modul-Mini, und die entsteht beim Voll-Baum-Lauf.
+/// 2. `compile-module` weigert sich, ein Modul zu übersetzen, dessen `__InitDefaults` es nicht
+///    vollständig inventarisieren kann — gemessen an Diegos Figurendefinition:
+///    `unsupported store opcode STOREOBJ at dword 336; default-target coverage is unproven`.
+///    Ein Levelskript trägt keine Klassen-Defaults und geht in 37 Sekunden durch; ein Modul mit
+///    Defaults wird abgelehnt. Wer Defaults ändert, nimmt deshalb den Voll-Baum.
+pub fn route_of(manifest: &Manifest, edited_source: &str) -> Route {
+    if manifest.authored_module().is_some() || carries_class_defaults(edited_source) {
         Route::FullTree
     } else {
         Route::SingleModule
     }
+}
+
+/// Trägt dieser Quelltext `default`-Zeilen auf Klassenebene?
+fn carries_class_defaults(source: &str) -> bool {
+    source
+        .lines()
+        .any(|line| line.trim_start().starts_with("default "))
 }
 
 /// Der Bundle-Spec-Eintrag für diese Arbeit.
@@ -64,6 +81,7 @@ pub fn spec_json(manifest: &Manifest, mod_name: &str) -> serde_json::Value {
 /// das den ungefragt startet, nimmt dem Nutzer die Entscheidung ab, wann er wartet.
 pub fn build_commands(
     manifest: &Manifest,
+    edited_source: &str,
     dir: &str,
     tree: &str,
     mod_name: &str,
@@ -77,7 +95,7 @@ pub fn build_commands(
     // liegt er bewusst daneben statt darin.
     let work = format!("{dir}.work");
     let mut out = Vec::new();
-    match route_of(manifest) {
+    match route_of(manifest, edited_source) {
         Route::FullTree => {
             out.push(format!(
                 "gore as compile \"{tree}\" -o \"{dir}/full.Cache\" \
@@ -155,14 +173,30 @@ mod tests {
 
     #[test]
     fn a_new_character_takes_the_full_tree_route() {
-        assert_eq!(route_of(&authored()), Route::FullTree);
+        assert_eq!(route_of(&authored(), ""), Route::FullTree);
     }
 
     #[test]
     fn a_suppression_takes_the_single_module_route() {
         // Sie berührt genau ein ausgeliefertes Modul. Sie über den Voll-Baum zu schicken hiesse,
         // eine Viertelstunde für eine entfernte Zeile zu warten.
-        assert_eq!(route_of(&suppression()), Route::SingleModule);
+        assert_eq!(route_of(&suppression(), ""), Route::SingleModule);
+    }
+
+    #[test]
+    fn a_module_with_class_defaults_takes_the_full_tree_route() {
+        // `compile-module` weigert sich hier: es kann `__InitDefaults` nicht vollstaendig
+        // inventarisieren und lehnt mit `unsupported store opcode STOREOBJ` ab. Gemessen an
+        // Diegos Figurendefinition; ein Levelskript ohne Defaults geht in 37 Sekunden durch.
+        let source = "class UX : UY\n{\n    default m_Health = 540.0f;\n}\n";
+        assert_eq!(route_of(&suppression(), source), Route::FullTree);
+    }
+
+    #[test]
+    fn a_module_without_class_defaults_stays_on_the_fast_route() {
+        let source =
+            "class UWP_A : UWorldPointScript\n{\n    void OnWorldStart()\n    {\n    }\n}\n";
+        assert_eq!(route_of(&suppression(), source), Route::SingleModule);
     }
 
     #[test]
@@ -181,7 +215,7 @@ mod tests {
 
     #[test]
     fn the_full_tree_route_asks_for_a_multi_module_mini() {
-        let commands = build_commands(&authored(), "ws", "tree", "MyMod", Some("G"));
+        let commands = build_commands(&authored(), "", "ws", "tree", "MyMod", Some("G"));
         assert!(commands[0].starts_with("gore as compile \"tree\""));
         assert!(commands[0].contains("--mini \"ws/MyMod.mini.Cache\""));
         assert!(commands[0].contains("--backend standalone"));
@@ -190,7 +224,7 @@ mod tests {
 
     #[test]
     fn the_single_module_route_names_the_module_and_its_source() {
-        let commands = build_commands(&suppression(), "ws", "tree", "MyMod", None);
+        let commands = build_commands(&suppression(), "", "ws", "tree", "MyMod", None);
         assert!(commands[0].starts_with("gore as compile-module"));
         assert!(commands[0].contains("--module \"LevelScripts.XardasTower_AI\""));
         assert!(commands[0].contains("--rel-path \"LevelScripts/XardasTower_AI.as\""));
@@ -203,7 +237,7 @@ mod tests {
         // Sonst bricht der Preflight des Compilers ab: work-dir und Ausgabe-Elternverzeichnis
         // müssen disjunkt sein.
         for manifest in [authored(), suppression()] {
-            let commands = build_commands(&manifest, "ws", "tree", "MyMod", None);
+            let commands = build_commands(&manifest, "", "ws", "tree", "MyMod", None);
             assert!(commands[0].contains("--work-dir \"ws.work\""));
             assert!(!commands[0].contains("--work-dir \"ws/"));
         }
@@ -212,7 +246,7 @@ mod tests {
     #[test]
     fn both_routes_end_with_the_bundle_build() {
         for manifest in [authored(), suppression()] {
-            let commands = build_commands(&manifest, "ws", "tree", "MyMod", None);
+            let commands = build_commands(&manifest, "", "ws", "tree", "MyMod", None);
             assert_eq!(commands.len(), 2);
             assert!(commands[1].starts_with("gore mod build --spec \"ws/spec.json\""));
         }

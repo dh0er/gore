@@ -355,8 +355,21 @@ $ gore npc check work/diego
   [blocking] class UCharacterDefinition_Human_RENAMED is new. Checking a shipped character out is for changing its values; a new class needs `gore npc new`, which carries the contract for one
 ```
 
-A checkout touches one shipped module, so `stage` sends it down the fast
-`compile-module` route — no source tree, no fifteen-minute wait.
+A checkout still needs the full-tree route, and not because of how many modules
+it touches. `compile-module` refuses a module whose class defaults it cannot
+inventory:
+
+```
+refusing default-target preservation for edit module
+"…CharacterDefinition_OC_STT_Diego": unsupported store opcode STOREOBJ at
+dword 336; default-target coverage is unproven
+```
+
+A character definition is nothing but class defaults, so it always lands there.
+A level script carries none — which is why suppressing a character compiles in
+37 seconds while changing one takes the long road. `stage` picks by what the
+edited module contains, not by counting modules, and says which of the two
+reasons applies when it asks for `--tree`.
 
 ### `npc check` — the diff guard
 
