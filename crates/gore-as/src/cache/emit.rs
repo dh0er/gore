@@ -1176,6 +1176,10 @@ fn emit_function_ctor(
     let aliased = handle_alias_slots(f);
     let copied_on = copied_on_slots(f);
     let mut hoisted = hoisted_handle_slots(f);
+    // A handle vanilla RELEASED was a declared local: this compiler frees no handle temporary
+    // and no handle at function scope, only a block's own locals at the block's end.
+    let released_handles = released_handle_slots(f, refs);
+    hoisted.extend(released_handles.iter().copied());
     let spilled = spilled_boolean_names(f, refs);
     let named_arithmetic = named_arithmetic_slots(f);
     let named_sites = named_value_sites(f, refs);
@@ -1513,6 +1517,8 @@ fn emit_function_ctor(
     // `const`; strip the marker and const-qualify the declaration below.
     let (body, const_slots) = strip_const_store_markers(&body);
     pass_trace("structured", &body);
+    let body = scope_released_handles(&body, &released_handles);
+    pass_trace("scope_released_handles", &body);
     // By-value call results the structurer popped as hidden out-slots: one pushed on again
     // only after other operands of its consuming call went on the stack was computed before
     // that call's argument run — a statement (`FVector Dir = -Fwd;` in front of
@@ -2302,6 +2308,12 @@ fn emit_function_ctor(
         .flatten()
         .copied()
         .collect();
+        // A local written ONCE, by the copy of a call result out of the register's slot right
+        // behind the call (`CpyRtoV8 t; CpyVtoV8 x, t`), was declared elsewhere and assigned
+        // here: a declaration at the call takes the register straight (`CpyRtoV8 x`), which
+        // the copy-out witness reads as "declared at the initialiser" wherever there is no copy.
+        let mut declared_bare_slots = bare_declaration_slots(f, refs);
+        declared_bare_slots.extend(copied_call_result_slots(f));
         let (body, first_use_suppressed) =
             rewrite_first_use_decl_init(
                 &body,
@@ -2309,7 +2321,7 @@ fn emit_function_ctor(
                 refs,
                 &already_declared_at_use,
                 &reference_locals,
-                &bare_declaration_slots(f, refs),
+                &declared_bare_slots,
                 &call_result_declared_at_initializer(f, refs, &rvo_producers, &rvo_consumers),
                 &assigned_tail,
             );
@@ -2659,6 +2671,7 @@ fn emit_function_ctor(
                 // a name where none was needed, which is a spelling; dropping one loses a value.
                 .filter(|(slot, _)| !returned_by_reference.contains(slot))
                 .filter(|(slot, _)| !block_scoped.contains(slot))
+                .filter(|(slot, _)| !released_handles.contains(slot))
                 .collect(),
             &wholly_consumed_object_slots(f),
             &rvo_temporaries,
@@ -2713,6 +2726,7 @@ fn emit_function_ctor(
                 // a name where none was needed, which is a spelling; dropping one loses a value.
                 .filter(|(slot, _)| !returned_by_reference.contains(slot))
                 .filter(|(slot, _)| !block_scoped.contains(slot))
+                .filter(|(slot, _)| !released_handles.contains(slot))
                 .collect(),
             &wholly_consumed_object_slots(f),
             &rvo_temporaries,
@@ -2768,7 +2782,7 @@ fn emit_function_ctor(
         pass_trace("fold_returned_empty_values", &rendered);
         let rendered = drop_empty_else(&rendered);
         pass_trace("drop_empty_else", &rendered);
-        let rendered = drop_unused_declarations(&rendered);
+        let rendered = drop_unused_declarations(&rendered, &dead_literal_declaration_slots(f));
         pass_trace("drop_unused_declarations", &rendered);
         let rendered = fold_member_read_temporaries(
             &rendered,
@@ -4843,6 +4857,251 @@ fn statement_producer_slots(f: &Func) -> HashSet<i32> {
 /// temporary — which means vanilla ran that method on a temporary at that exact site, and so may
 /// we. That is a stronger answer than `has_const_overload`, whose table has nothing to say about
 /// most native value types.
+/// Handle slots the compiler RELEASES (`FreeNullV8 h`) — other than in the `return nullptr`
+/// idiom (`FreeNullV8 h; LOADOBJ h`) and a loop's per-iteration cleanup. Vanilla frees no
+/// native-handle TEMPORARY (the `GetOwner()` operand of a compare, a call's argument, a `Cast`
+/// out-slot: none of them is released) and no handle local at FUNCTION scope; what it frees is
+/// a handle local at the end of the BLOCK that declared it. So a release names the slot
+/// (`OnNewTarget`: the argument vanilla freed behind the call was a declared local — probed)
+/// and, through its position, places the declaration's block (`scope_released_handles`).
+fn released_handle_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let per_iteration = loop_element_slots(f);
+    let destructor = |ins: &super::disasm::Instr| {
+        ins.op.name == "CALLSYS"
+            && refs.func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64) == Some("$beh2")
+    };
+    // The cleanup run right behind a loop's latch releases the temporaries of the range-for's
+    // container expression, which live through the loop (`HasEquippedMeleeWeapon`: the
+    // `GetInventory()` receiver of the container call, freed behind the loop next to the
+    // container itself; 49 functions named such a temporary). That run is no block end.
+    let behind_a_latch = |at: usize| -> bool {
+        let mut k = at;
+        while k > 0 {
+            k -= 1;
+            let ins = &instrs[k];
+            if ins.op.name == "FreeNullV8" {
+                continue;
+            }
+            if destructor(ins) && k > 0 && instrs[k - 1].op.name == "PSF" {
+                k -= 1;
+                continue;
+            }
+            if !ins.op.name.starts_with('J') {
+                return false;
+            }
+            let Some(offset) = ins.dwords.first().map(|d| *d as i32) else {
+                return false;
+            };
+            return (ins.offset_dw as i64 + 2 + offset as i64) < ins.offset_dw as i64;
+        }
+        false
+    };
+    // A handle temporary that served as a method's RECEIVER is released right behind that
+    // call — behind the result's store — while an argument temporary is not (its reference
+    // moves into the callee's parameter): `Perception.Instigator.GetCharacter().GetActorInstigator()`
+    // frees the `GetCharacter()` temporary behind `GetActorInstigator` (`HowMuchDoILike`,
+    // `IsIntentionalAttack`: 7 functions named such a receiver). That release is no block end.
+    let receiver_release = |at: usize| -> bool {
+        let slot = w0(&instrs[at]);
+        let mut k = at;
+        while k > 0 {
+            k -= 1;
+            let ins = &instrs[k];
+            if matches!(ins.op.name, "STOREOBJ" | "CpyRtoV4" | "CpyRtoV8" | "PopPtr" | "PopRPtr") {
+                continue;
+            }
+            if !ins.op.is_call() || k == 0 {
+                return false;
+            }
+            let receiver = &instrs[k - 1];
+            return receiver.op.name == "PshVPtr" && w0(receiver) == slot;
+        }
+        false
+    };
+    let mut out = HashSet::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if ins.op.name != "FreeNullV8" {
+            continue;
+        }
+        let slot = w0(ins);
+        if slot <= 0 || per_iteration.contains(&slot) || behind_a_latch(at) || receiver_release(at) {
+            continue;
+        }
+        if instrs.get(at + 1).is_some_and(|n| n.op.name == "LOADOBJ" && w0(n) == slot) {
+            continue;
+        }
+        if instrs[..at]
+            .iter()
+            .any(|p| matches!(p.op.name, "STOREOBJ" | "RefCpyV") && w0(p) == slot)
+        {
+            out.insert(slot);
+        }
+    }
+    out
+}
+
+/// The name a `local_N = nullptr;` line releases.
+fn release_name(line: &str) -> &str {
+    line.trim().strip_suffix(" = nullptr;").unwrap_or("")
+}
+
+/// A `FreeNullV8 h` is the compiler's release of a handle local at the end of the block that
+/// declared it: a temporary is never released, a `return` releases nothing, a function-scope
+/// local is released nowhere (vanilla, throughout). The structurer renders it `local_h =
+/// nullptr;`, and its POSITION says where a block ended. Two shapes the structurer reads as
+/// something else:
+///
+/// * the release stands in front of the `return;` that ends a then-arm: the arm's jump to
+///   `RET` is not a return but the jump over an ELSE — vanilla wrote `if (c) { … } else
+///   { <the rest> }`, and the rest ran up to the `RET` (`NotifyInteractActor`, probed);
+/// * the release stands at its own level behind an `if` whose arm returns: the region from
+///   that `if` to the release is the `if`'s else-arm (`AIceBlock::OnBeginOverlap`, probed).
+///
+/// The release line stays where it is: once the declaration is sunk into the block the
+/// block-end pass drops it, and where it is not sunk the statement IS the release vanilla has.
+fn scope_released_handles(body: &str, released: &HashSet<i32>) -> String {
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut done: HashSet<String> = HashSet::new();
+    // only the releases the bytecode witness read as block ends
+    let witnessed = |line: &str| {
+        slot_and_life_any(release_name(line)).is_some_and(|(slot, _)| released.contains(&slot))
+    };
+    for _ in 0..16 {
+        let Some(at) = lines
+            .iter()
+            .position(|line| is_handle_release(line) && witnessed(line) && !done.contains(release_name(line)))
+        else {
+            break;
+        };
+        let indent = indent_of(&lines[at]);
+        // the run of releases this one starts (`local_10 = nullptr; local_8 = nullptr;`)
+        let mut run_end = at;
+        while lines
+            .get(run_end + 1)
+            .is_some_and(|l| is_handle_release(l) && indent_of(l) == indent)
+        {
+            run_end += 1;
+        }
+        let names: Vec<String> = (at..=run_end).map(|k| release_name(&lines[k]).to_owned()).collect();
+        done.extend(names.iter().cloned());
+        // a block end: nothing reads them afterwards
+        if names
+            .iter()
+            .any(|n| lines[run_end + 1..].iter().any(|l| count_ident(l, n) > 0))
+        {
+            continue;
+        }
+        let first_write = |n: &str| {
+            lines[..at].iter().position(|l| {
+                slot_store(l).is_some_and(|(t, _)| t == n)
+                    || declaration_with_initializer(l).is_some_and(|(_, t, _)| t == n)
+            })
+        };
+        let opens_an_if_arm = |open: usize, outer: &str| {
+            lines[open].trim() == "{"
+                && indent_of(&lines[open]) == outer
+                && open > 0
+                && lines[open - 1].trim_start().starts_with("if (")
+                && indent_of(&lines[open - 1]) == outer
+        };
+        // (A) the run closes a then-arm together with a `return;`
+        if lines
+            .get(run_end + 1)
+            .is_some_and(|l| l.trim() == "return;" && indent_of(l) == indent)
+            && lines
+                .get(run_end + 2)
+                .is_some_and(|l| l.trim() == "}" && indent_of(l).len() + 4 == indent.len())
+        {
+            let close = run_end + 2;
+            let outer = indent_of(&lines[close]);
+            let Some(open) = (0..close)
+                .rev()
+                .find(|k| lines[*k].trim() == "{" && indent_of(&lines[*k]) == outer)
+            else {
+                continue;
+            };
+            if !opens_an_if_arm(open, &outer) {
+                continue;
+            }
+            if !names.iter().all(|n| first_write(n).is_some_and(|w| w > open)) {
+                continue;
+            }
+            // the enclosing block ends with the `return;` the arm's jump went to
+            let end = (close + 1..lines.len())
+                .find(|k| !lines[*k].trim().is_empty() && indent_of(&lines[*k]).len() < outer.len())
+                .unwrap_or(lines.len());
+            let Some(last) = (close + 1..end)
+                .rev()
+                .find(|k| !lines[*k].trim().is_empty())
+                .filter(|k| lines[*k].trim() == "return;" && indent_of(&lines[*k]) == outer)
+            else {
+                continue;
+            };
+            let mut rebuilt: Vec<String> = Vec::with_capacity(lines.len() + 3);
+            rebuilt.extend_from_slice(&lines[..=run_end]);
+            rebuilt.push(lines[close].clone());
+            rebuilt.push(format!("{outer}else"));
+            rebuilt.push(format!("{outer}{{"));
+            for line in &lines[close + 1..last] {
+                rebuilt.push(if line.trim().is_empty() { line.clone() } else { format!("    {line}") });
+            }
+            rebuilt.push(format!("{outer}}}"));
+            rebuilt.extend_from_slice(&lines[last..]);
+            lines = rebuilt;
+            continue;
+        }
+        // (B) the run at its own level, behind an `if` whose arm returns
+        let Some(earliest) = names.iter().filter_map(|n| first_write(n)).min() else {
+            continue;
+        };
+        if names.iter().any(|n| first_write(n).is_none()) || indent_of(&lines[earliest]) != indent {
+            continue;
+        }
+        let Some(close) = (0..earliest)
+            .rev()
+            .find(|k| lines[*k].trim() == "}" && indent_of(&lines[*k]) == indent)
+        else {
+            continue;
+        };
+        if close == 0
+            || !(lines[close - 1].trim_start().starts_with("return") && indent_of(&lines[close - 1]).len() == indent.len() + 4)
+        {
+            continue;
+        }
+        let Some(open) = (0..close)
+            .rev()
+            .find(|k| lines[*k].trim() == "{" && indent_of(&lines[*k]) == indent)
+        else {
+            continue;
+        };
+        if !opens_an_if_arm(open, &indent) {
+            continue;
+        }
+        if names.iter().any(|n| lines[..=close].iter().any(|l| count_ident(l, n) > 0)) {
+            continue;
+        }
+        let mut rebuilt: Vec<String> = Vec::with_capacity(lines.len() + 3);
+        rebuilt.extend_from_slice(&lines[..=close]);
+        rebuilt.push(format!("{indent}else"));
+        rebuilt.push(format!("{indent}{{"));
+        for line in &lines[close + 1..=run_end] {
+            rebuilt.push(if line.trim().is_empty() { line.clone() } else { format!("    {line}") });
+        }
+        rebuilt.push(format!("{indent}}}"));
+        rebuilt.extend_from_slice(&lines[run_end + 1..]);
+        lines = rebuilt;
+    }
+    let mut text = lines.join("\n");
+    if body.ends_with('\n') {
+        text.push('\n');
+    }
+    text
+}
+
 /// Handles vanilla PARKED: the source gave them a name.
 ///
 /// A producer writes slot S, exactly one later instruction reads S, and that read is a plain
@@ -5241,8 +5500,24 @@ fn widened_slots(f: &Func) -> HashSet<i32> {
         let (Some(dest), Some(src)) = (slot(ins.words.first()), slot(ins.words.get(1))) else {
             continue;
         };
+        // Only a copy of the widened VALUE: the slot's last write before this copy has to be
+        // the widening. The compiler reuses a slot for unrelated values, and a later `CpyRtoV8
+        // w6; CpyVtoV8 w14, w6` — a call result copied out through the same slot — is no
+        // reading of the widened one (`GetDistanceToEnemyRatio`: naming it cost a copy per
+        // `Max`/`Min` and a declaration for the conversion temporary).
+        let widened_here = (0..at).rev().find(|k| {
+            let earlier = &instrs[*k];
+            (earlier.op.fmt.writes_first_word() || writes_destination(earlier.op.name))
+                && slot(earlier.words.first()) == Some(src)
+        });
+        let widened_here = widened_here.is_some_and(|k| {
+            matches!(instrs[k].op.name, "fTOd" | "iTOd" | "uTOd" | "i64TOd" | "u64TOd")
+        });
         if dest > 0 && widened.contains(&src) {
             named.insert(dest);
+            if !widened_here {
+                continue;
+            }
             // The copy RIGHT BEHIND the widening is a declaration taking the converted value
             // (`fTOd t, m; CpyVtoV8 x, t` is `float x = Member;`): `x` is the name, `t` the
             // compiler's temporary, which the same slot carries again as a bare compare operand
@@ -9847,13 +10122,20 @@ fn fold_assigned_temporaries(
 /// The declarations are written from the set of names the body used BEFORE the folds ran; a fold
 /// that takes the last mention away leaves the declaration behind, and an unused local still
 /// costs the slot the compiler allocates for it.
-fn drop_unused_declarations(text: &str) -> String {
+fn drop_unused_declarations(text: &str, keep: &HashSet<i32>) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let mut kept: Vec<String> = Vec::with_capacity(lines.len());
     for (index, line) in lines.iter().enumerate() {
         let dead = bare_declaration(line)
             .or_else(|| declaration_with_initializer(line).map(|(indent, name, _)| (indent, name)))
             .is_some_and(|(_, name)| {
+                // A literal vanilla stored and never read is a declaration the source wrote
+                // and left unused (`bool bFound = false;`): its store is the program.
+                if declaration_with_initializer(line).is_some()
+                    && slot_and_life_any(&name).is_some_and(|(slot, _)| keep.contains(&slot))
+                {
+                    return false;
+                }
                 // A bare declaration may go, and so may one whose initializer is a plain LITERAL:
                 // there is nothing to lose by not running it, and the constant it materializes is
                 // a store vanilla does not have. Anything else may be running a call.
@@ -14511,7 +14793,7 @@ fn pass_trace(pass: &str, body: &str) {
     let now: String = body
         .lines()
         .enumerate()
-        .filter(|(_, line)| count_ident(line, ident) > 0)
+        .filter(|(_, line)| ident == "*" || count_ident(line, ident) > 0)
         .map(|(at, line)| format!("{at:4}| {line}
 "))
         .collect();
@@ -15079,6 +15361,26 @@ fn arithmetic_temporaries(f: &Func) -> HashSet<i32> {
             }
         }
     }
+    // A push between the slot's last write and its read is an argument run that began after
+    // the value stood: the source computed it in a statement of its own
+    // (`SetWalkSpeedBasedOnDistance`: the product stood before the out-parameter's push).
+    let pushed_before_read = |slot: i32| -> bool {
+        let Some(last_write) = instrs.iter().rposition(|ins| {
+            let is_dst = ins.op.fmt.writes_first_word() || writes_destination(ins.op.name);
+            is_dst && ins.words.first().map(|w| *w as i16 as i32) == Some(slot)
+        }) else {
+            return false;
+        };
+        for later in &instrs[last_write + 1..] {
+            if super::bytediff::addressed_slots(later).contains(&slot) {
+                return false;
+            }
+            if later.op.name.starts_with("Psh") || later.op.name == "PSF" {
+                return true;
+            }
+        }
+        false
+    };
     written
         .into_iter()
         .filter(|slot| !disqualified.contains(slot))
@@ -15094,6 +15396,7 @@ fn arithmetic_temporaries(f: &Func) -> HashSet<i32> {
                 .count();
             reads.get(slot).copied().unwrap_or(0) == own_updates + 1
         })
+        .filter(|slot| !pushed_before_read(*slot))
         .collect()
 }
 
@@ -16103,6 +16406,41 @@ fn floating_on_its_own(expr: &str, locals: &BTreeMap<i32, String>) -> bool {
             && bytes[i - 1].is_ascii_digit()
             && bytes.get(i + 1).is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_')
     })
+}
+
+/// Slots the source declared with a literal and never read (`bool bFound = false;` left
+/// unused, `float e = 2.718…;`): vanilla stores the constant — `SetV8 N, K`, or `SetV1 t, K;
+/// CpyVtoV4 N, t` — and nothing reads `N`. Our text drops an unused declaration, and with it
+/// the store vanilla has (families `-SetV1,CpyVtoV4`, `-SetV8`).
+fn dead_literal_declaration_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w = |ins: &super::disasm::Instr, i: usize| ins.words.get(i).map(|w| *w as i16 as i32);
+    let reads = vanilla_read_slots(f);
+    let mut out = HashSet::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if !matches!(ins.op.name, "SetV1" | "SetV4" | "SetV8") {
+            continue;
+        }
+        let Some(literal) = w(ins, 0).filter(|s| *s > 0) else {
+            continue;
+        };
+        if !reads.contains(&literal) {
+            out.insert(literal);
+            continue;
+        }
+        if let Some(copy) = instrs.get(at + 1) {
+            if matches!(copy.op.name, "CpyVtoV4" | "CpyVtoV8") && w(copy, 1) == Some(literal) {
+                if let Some(named) = w(copy, 0).filter(|s| *s > 0) {
+                    if !reads.contains(&named) {
+                        out.insert(named);
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Slots vanilla READS somewhere: every slot operand that is not the instruction's own written
@@ -18344,6 +18682,40 @@ fn assignment_write_counts(f: &Func, refs: &RefResolver) -> HashMap<i32, usize> 
     out
 }
 
+/// Slots whose only write is the copy of a call result out of the register's slot, right
+/// behind the call: `CpyRtoV8 t; CpyVtoV8 x, t`. A declaration at the call takes the register
+/// straight (`float x = Call();` is `CpyRtoV8 x`), so the copy says the declaration stood
+/// earlier and this is an assignment (`UCS_EnemyInsideSelectedSpellRange::IsInSituation`).
+fn copied_call_result_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w = |ins: &super::disasm::Instr, i: usize| ins.words.get(i).map(|w| *w as i16 as i32);
+    let mut out = HashSet::new();
+    for pair in instrs.windows(2) {
+        let (producer, copy) = (&pair[0], &pair[1]);
+        let widths = matches!(
+            (producer.op.name, copy.op.name),
+            ("CpyRtoV8", "CpyVtoV8") | ("CpyRtoV4", "CpyVtoV4")
+        );
+        if !widths || w(copy, 1) != w(producer, 0) {
+            continue;
+        }
+        let Some(dst) = w(copy, 0).filter(|s| *s > 0) else {
+            continue;
+        };
+        let written_once = instrs
+            .iter()
+            .filter(|ins| w(ins, 0) == Some(dst) && writes_destination(ins.op.name))
+            .count()
+            == 1;
+        if written_once {
+            out.insert(dst);
+        }
+    }
+    out
+}
+
 /// A local the source declared BARE and assigned afterwards.
 ///
 /// A declaration-with-initialiser adopts the initialiser's temporary as the variable's own slot —
@@ -18471,6 +18843,27 @@ fn call_result_declared_at_initializer(
                 .map(|(slot, _)| slot),
         )
         .chain(rvo_declared_at_initializer(&instrs, refs, rvo_producers, rvo_consumers))
+        // A value object a call built straight into a slot nothing had touched before — no
+        // write, no construction, no push but the call's own out-slot push — was declared at
+        // that call, if the source named it at all: declared bare and assigned it would have
+        // been constructed first and taken the value through a temporary and an `opAssign`
+        // (`IsCreatureTargetingUsInCombat`: the range-for's container, sunk into its block
+        // as a bare declaration and an assignment).
+        .chain(rvo_producers.iter().filter_map(|(slot, call)| {
+            if *slot <= 0 || rvo_producers.iter().filter(|(s, _)| s == slot).count() != 1 {
+                return None;
+            }
+            let opening = (call.saturating_sub(24)..*call)
+                .rev()
+                .find(|k| instrs[*k].op.name == "PSF" && w0(&instrs[*k]) == *slot)?;
+            let untouched_before = instrs[..opening]
+                .iter()
+                .all(|ins| !super::bytediff::addressed_slots(ins).contains(slot));
+            let never_written = instrs
+                .iter()
+                .all(|ins| !(writes_destination(ins.op.name) && w0(ins) == *slot));
+            (untouched_before && never_written).then_some(*slot)
+        }))
         .collect()
 }
 
@@ -18551,7 +18944,14 @@ fn rvo_declared_at_initializer(
             continue;
         };
         let before = |k: usize| instrs.get(at.wrapping_sub(k));
-        let slot = if params == 0 && owner.is_none() && before(1).is_some_and(|p| p.op.name == "PSF") {
+        // The builder popped the hidden out-slot itself and recorded it; the shapes below
+        // stand in only where no record exists (a body the structurer stubbed). The shape
+        // rules miss a call whose result is pushed to an `Iterator` right behind it: the
+        // push after the call is the iterator's own out-slot (`IsCreatureTargetingUsInCombat`).
+        let recorded = rvo_producers.iter().find(|(_, p)| *p == at).map(|(s, _)| *s);
+        let slot = if let Some(slot) = recorded {
+            slot
+        } else if params == 0 && owner.is_none() && before(1).is_some_and(|p| p.op.name == "PSF") {
             w0(before(1).expect("checked"))
         } else if params == 0
             && before(1).is_some_and(|p| p.op.name == "PshVPtr")
@@ -18611,9 +19011,13 @@ fn rvo_declared_at_initializer(
         // (`Outer(Inner(Tmp))`: the release stands behind `Outer`, and `Tmp` is a temporary).
         // Without a record — the value went into a copy-construction, say — the old reading
         // stands: a release behind any call is a temporary.
+        // …and BEFORE the release: a later record belongs to a later life of the slot (a
+        // discarded result, `WaitUntilNoLongerSpeaking();`, is released right behind its call,
+        // and the slot serves the next call's out-slot afterwards — measured: 62 such slots
+        // named when the later record counted as the consumer).
         let consumer = rvo_consumers
             .iter()
-            .filter(|(s, c)| *s == slot && *c > at)
+            .filter(|(s, c)| *s == slot && *c > at && *c < release)
             .map(|(_, c)| *c)
             .min();
         let mut chain: HashSet<usize> = HashSet::new();
@@ -18625,7 +19029,7 @@ fn rvo_declared_at_initializer(
             for (result, produced_at) in rvo_producers.iter().filter(|(_, p)| *p == call) {
                 if let Some(next) = rvo_consumers
                     .iter()
-                    .filter(|(s, c)| s == result && *c > *produced_at)
+                    .filter(|(s, c)| s == result && *c > *produced_at && *c < release)
                     .map(|(_, c)| *c)
                     .min()
                 {
@@ -18662,15 +19066,20 @@ fn rvo_declared_at_initializer(
                 // 98 temporaries; only the builder's own stack knows which call took a push.)
                 // (The builder-recorded consumer as the verdict named 2,636 temporaries —
                 // measured on b144; kept as a diagnostic until the record is understood.)
-                temporary = true;
+                temporary = !diag_enabled("GORE_AS_RVO_CHAIN") || consumer.is_none() || chain.contains(&k);
                 break;
             }
             // Result copies, the pushes that hand a result on (`PSF r; PSF d; $beh0` copies
             // the outer call's value into its declaration before the argument temporaries
             // are released — `ActivateStrangerDreams`) and other temporaries' destructors
             // stand between a call and the release of its argument temporaries.
-            if matches!(ins.op.name, "CpyRtoV4" | "CpyRtoV8" | "STOREOBJ" | "PopPtr" | "PopRPtr")
-                || ins.op.name.starts_with("Psh")
+            // …and a member read of the value (`Now().TotalSeconds`: `ADDSi; PopRPtr; RDR8`
+            // in front of the release — the temporary died behind the read, `TryConvoyCleanup`).
+            if matches!(
+                ins.op.name,
+                "CpyRtoV4" | "CpyRtoV8" | "STOREOBJ" | "PopPtr" | "PopRPtr" | "ADDSi" | "RDSPtr"
+                    | "RDR1" | "RDR2" | "RDR4" | "RDR8" | "LoadRObjR" | "LoadVObjR" | "PshRPtr"
+            ) || ins.op.name.starts_with("Psh")
                 || ins.op.name == "PSF"
             {
                 continue;
@@ -20134,5 +20543,45 @@ mod carrier_if_else_tests {
     }
 ";
         assert_eq!(fold_carrier_if_else(body), body);
+    }
+}
+
+#[cfg(test)]
+mod released_handle_tests {
+    use super::scope_released_handles as scope;
+    use std::collections::HashSet;
+
+    fn scope_released_handles(body: &str) -> String {
+        scope(body, &HashSet::from([8, 10, 18, 38]))
+    }
+
+    #[test]
+    fn a_release_before_the_arm_s_return_turns_the_rest_into_an_else() {
+        let body = "    AActor local_4 = Cast<AActor>(Other);\n    if (local_4 != nullptr)\n    {\n        local_10 = local_4.Get();\n        Use(local_10);\n        local_10 = nullptr;\n        return;\n    }\n    local_18 = Find(Other);\n    Use(local_18);\n    local_18 = nullptr;\n    return;\n";
+        assert_eq!(
+            scope_released_handles(body),
+            "    AActor local_4 = Cast<AActor>(Other);\n    if (local_4 != nullptr)\n    {\n        local_10 = local_4.Get();\n        Use(local_10);\n        local_10 = nullptr;\n    }\n    else\n    {\n        local_18 = Find(Other);\n        Use(local_18);\n        local_18 = nullptr;\n    }\n    return;\n"
+        );
+    }
+
+    #[test]
+    fn a_release_behind_a_returning_arm_closes_that_arm_s_else() {
+        let body = "    if (local_26 != nullptr)\n    {\n        Use(local_26);\n        return;\n    }\n    local_38 = Find(Other);\n    if (local_38 != nullptr)\n    {\n        Use(local_38);\n        return;\n    }\n    local_38 = nullptr;\n    Later();\n    return;\n";
+        assert_eq!(
+            scope_released_handles(body),
+            "    if (local_26 != nullptr)\n    {\n        Use(local_26);\n        return;\n    }\n    else\n    {\n        local_38 = Find(Other);\n        if (local_38 != nullptr)\n        {\n            Use(local_38);\n            return;\n        }\n        local_38 = nullptr;\n    }\n    Later();\n    return;\n"
+        );
+    }
+
+    #[test]
+    fn a_release_that_already_ends_its_own_block_stays() {
+        let body = "    if (a)\n    {\n        local_8 = Get();\n        if (local_8 == b)\n        {\n            return true;\n        }\n        local_8 = nullptr;\n    }\n    return false;\n";
+        assert_eq!(scope_released_handles(body), body);
+    }
+
+    #[test]
+    fn a_handle_read_after_its_release_is_no_block_end() {
+        let body = "    if (a)\n    {\n        local_8 = Get();\n        local_8 = nullptr;\n        return;\n    }\n    Use(local_8);\n    return;\n";
+        assert_eq!(scope_released_handles(body), body);
     }
 }
