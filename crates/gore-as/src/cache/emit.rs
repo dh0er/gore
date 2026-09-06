@@ -1250,7 +1250,9 @@ fn emit_function_ctor(
     // `CpyVtoR1 v5` is a bool the compiler happened to clear four bytes of. Typing it int writes
     // the short circuit vanilla merged into one condition as an int carrier over two arms.
     let read_as_bool = byte_read_slots(f);
-    bool_overrides.retain(|slot| !wide_stores.contains(slot) || read_as_bool.contains(slot));
+    // The whole-profile bool-return proof also permits a four-byte zero.
+    bool_overrides.retain(|slot| !wide_stores.contains(slot)
+        || read_as_bool.contains(slot) || returned_bools.contains(slot));
     // `NOT` proves the slot is a bool outright, so it outranks the int-family USE hints (a slot
     // pushed into an int parameter): those describe how a value is passed, not what it is, and
     // leaving them in charge writes `local = int(local == 0);` for a plain `!`. Contradicting
@@ -2742,6 +2744,7 @@ fn emit_function_ctor(
             &unnamed_value_defs(f, refs, &rvo_producers, &rvo_consumers)
                 .union(&immediately_consumed_defs(f))
                 .copied()
+                .chain(pushed_bool_literal_defs(f, &rendered))
                 .chain(rvo_temporaries.iter().copied().map(|slot| (slot, 1)))
                 .chain(
                     fused_short_circuit_carriers(f)
@@ -2800,6 +2803,7 @@ fn emit_function_ctor(
             &unnamed_value_defs(f, refs, &rvo_producers, &rvo_consumers)
                 .union(&immediately_consumed_defs(f))
                 .copied()
+                .chain(pushed_bool_literal_defs(f, &rendered))
                 .chain(rvo_temporaries.iter().copied().map(|slot| (slot, 1)))
                 .chain(
                     fused_short_circuit_carriers(f)
@@ -4714,17 +4718,36 @@ fn infer_enum_flow(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
 }
 
 /// A bool return carrier may be read four bytes wide. Its every write must still
-/// be a canonical bool: a byte literal or the immediately materialized comparison.
+/// be canonical: a byte literal, a materialized comparison, or a proven bool field.
+/// A four-byte zero is accepted only when that same carrier also receives a bool field.
 fn canonical_bool_return_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
     if f.ret.base_name(refs) != "bool" { return HashSet::new(); }
     let Ok(instrs) = disassemble(&f.bytecode) else { return HashSet::new(); };
     let slot = |ins: &super::disasm::Instr, at: usize|
         ins.words.get(at).map(|word| *word as i16 as i32);
+    // The existing field lookup proves at least one RDR1 on each returned slot.
+    // Require exactly one such write and copies out only, so an enum/unknown
+    // field in another life cannot inherit that bool-field provenance.
+    let mut bool_fields = bool_field_read_slots(f, refs, None);
+    let mut field_reads = HashSet::new();
+    for ins in &instrs {
+        for source in super::bytediff::addressed_slots(ins) {
+            if !bool_fields.contains(&source) { continue; }
+            let safe = match ins.op.name {
+                "RDR1" => slot(ins, 0) == Some(source) && field_reads.insert(source),
+                "CpyVtoV4" => slot(ins, 1) == Some(source) && slot(ins, 0) != Some(source),
+                _ => false,
+            };
+            if !safe { bool_fields.remove(&source); }
+        }
+    }
     let candidates: HashSet<i32> = instrs.windows(2)
         .filter(|pair| pair[0].op.name == "CpyVtoR4" && pair[1].op.name == "RET")
         .filter_map(|pair| slot(&pair[0], 0)).filter(|slot| *slot > 0).collect();
     candidates.into_iter().filter(|candidate| {
         let mut written = false;
+        let mut wide_zero = false;
+        let mut field_copy = false;
         let safe = instrs.iter().enumerate().all(|(at, ins)| {
             if !super::bytediff::addressed_slots(ins).contains(candidate) { return true; }
             match ins.op.name {
@@ -4732,19 +4755,29 @@ fn canonical_bool_return_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
                     written = true;
                     slot(ins, 0) == Some(*candidate) && ins.dwords.first().is_some_and(|v| *v <= 1)
                 }
+                "SetV4" => {
+                    written = true;
+                    wide_zero = true;
+                    slot(ins, 0) == Some(*candidate) && ins.dwords.first() == Some(&0)
+                }
                 "CpyVtoV4" => {
                     written = true;
-                    slot(ins, 0) == Some(*candidate) && at >= 2
+                    if slot(ins, 0) != Some(*candidate) { return false; }
+                    let from_field = at > 0 && instrs[at - 1].op.name == "RDR1"
+                        && slot(ins, 1) == slot(&instrs[at - 1], 0)
+                        && slot(ins, 1).is_some_and(|source| bool_fields.contains(&source));
+                    field_copy |= from_field;
+                    from_field || (at >= 2
                         && matches!(instrs[at - 2].op.name, "TZ" | "TNZ" | "TS" | "TNS" | "TP" | "TNP")
                         && instrs[at - 1].op.name == "CpyRtoV4"
-                        && slot(ins, 1) == slot(&instrs[at - 1], 0)
+                        && slot(ins, 1) == slot(&instrs[at - 1], 0))
                 }
                 "CpyVtoR4" => slot(ins, 0) == Some(*candidate)
                     && instrs.get(at + 1).is_some_and(|next| next.op.name == "RET"),
                 _ => false,
             }
         });
-        written && safe
+        written && safe && (!wide_zero || field_copy)
     }).collect()
 }
 
@@ -14279,6 +14312,40 @@ fn writes_destination(op: &str) -> bool {
                 | "fTOi64"
                 | "fTOu64"
         )
+}
+
+/// A literal stored directly into its by-value push is an argument expression.
+/// Match the rendered literal and its full name; other slot lives may be calls,
+/// but a named copy, wider literal or address use makes the slot ambiguous.
+fn pushed_bool_literal_defs(f: &Func, body: &str) -> HashSet<(i32, usize)> {
+    let Ok(instrs) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    let w0 = |ins: &Instr| ins.words.first().map(|w| *w as i16 as i32);
+    let mut literals = HashSet::new();
+    let mut refused = HashSet::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        let Some(slot) = w0(ins).filter(|s| *s > 0) else { continue; };
+        if ins.op.name == "PSF" || ins.op.name.starts_with("CpyVtoV")
+            || matches!(ins.op.name, "SetV2" | "SetV4" | "SetV8")
+        { refused.insert(slot); }
+        if ins.op.name != "SetV1" { continue; }
+        let value = ins.dwords.first().copied();
+        if !value.is_some_and(|v| v <= 1)
+            || !instrs.get(at + 1).is_some_and(|next| next.op.name == "PshV4" && w0(next) == Some(slot))
+        { refused.insert(slot); continue; }
+        literals.insert((slot, value == Some(1)));
+    }
+    if literals.is_empty() { return HashSet::new(); }
+    let lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    lines.iter().filter_map(|line| {
+        let (name, value) = declaration_with_initializer(line).map(|(_, n, v)| (n, v))
+            .or_else(|| slot_store(line))?;
+        let key = slot_and_life(&name)?;
+        if !matches!(value.as_str(), "true" | "false") || refused.contains(&key.0)
+            || !literals.contains(&(key.0, value == "true"))
+            || declared_type(&lines, &name).as_deref() != Some("bool")
+        { return None; }
+        Some(key)
+    }).collect()
 }
 
 fn unnamed_value_defs(
@@ -23823,6 +23890,32 @@ mod member_arithmetic_lifetime_tests {
 
 
     #[test]
+    fn literal_bool_arguments_do_not_borrow_another_lifes_permission() {
+        let ops: Vec<(&str, &[u16])> = vec![
+            ("CpyRtoV4", &[3]), ("NOT", &[3]), ("SetV1", &[3]), ("PshV4", &[3]),
+        ];
+        let body = "    bool local_3 = false;\n    Trace(local_3);\n";
+        let f = function(&ops);
+        let candidates = super::pushed_bool_literal_defs(&f, body);
+        assert_eq!(candidates, HashSet::from([(3, 1)]));
+        let folded = inline_unnamed_value_temporaries(body, &candidates, &HashSet::new(),
+            &HashSet::new(), &RefResolver::default(), &HashSet::new(), &HashSet::new(),
+            &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
+        assert_eq!(folded, "    Trace(false);\n");
+        for source in [body.replace("false", "true"), body.replace("bool ", "int ")] {
+            assert!(super::pushed_bool_literal_defs(&f, &source).is_empty());
+        }
+        for extra in [("PSF", &[3][..]), ("SetV4", &[3][..]), ("CpyVtoV4", &[3, 4][..])] {
+            let mut other = ops.clone(); other.push(extra);
+            assert!(super::pushed_bool_literal_defs(&function(&other), body).is_empty());
+        }
+        let mut delayed = ops.clone(); delayed.insert(3, ("PshC4", &[]));
+        assert!(super::pushed_bool_literal_defs(&function(&delayed), body).is_empty());
+        let mut address = ops; address[3] = ("PSF", &[3]);
+        assert!(super::pushed_bool_literal_defs(&function(&address), body).is_empty());
+    }
+
+    #[test]
     fn copied_widening_negation_requires_its_whole_physical_slot_profile() {
         let code: Vec<(&str, &[u16])> = vec![
             ("fTOd", &[10, 7]), ("CpyVtoV8", &[6, 10]),
@@ -23857,6 +23950,80 @@ mod member_arithmetic_lifetime_tests {
             let mut other=code.clone(); other.push(extra);
             assert!(!super::strict_f64_arithmetic_temp_slots(&function(&other)).contains(&10));
         }
+    }
+
+    fn bool_field_return_fixture(field: &str, field_type: Option<&str>) -> (Func, RefResolver) {
+        // The real AssessmentBits branch tail: wide zero in one arm, a byte bool
+        // field copied in the other, then CpyVtoR4/RET. A null guard substitutes
+        // for IsValid here so the test needs no unrelated native-call metadata.
+        let code: Vec<(&str, &[u16])> = vec![
+            ("CmpPtrNull", &[0]), ("JNZ", &[]), ("SetV4", &[5]), ("JMP", &[]),
+            ("LoadRObjR", &[0, 0]), ("RDR1", &[6]), ("CpyVtoV4", &[5, 6]),
+            ("CpyVtoR4", &[5]), ("RET", &[2]),
+        ];
+        let mut f = function(&code);
+        f.ret.token = 0x41;
+        f.params.push(crate::cache::model::Param {
+            name: "Value".into(), flags: 0,
+            ty: DataType { token: 5, type_info: 1, is_object_handle: true, ..Default::default() },
+        });
+        let ins = super::disassemble(&f.bytecode).unwrap();
+        f.bytecode[ins[4].offset_dw + 2] = 1; // exact field owner type id
+        for (from, to) in [(1, 4), (3, 7)] {
+            f.bytecode[ins[from].offset_dw + 1] =
+                ins[to].offset_dw as i32 - ins[from].offset_dw as i32 - 2;
+        }
+        let mut refs = RefResolver::from_test_member_chain(&[("UAIValueSet_Crime", field)]);
+        if let Some(ty) = field_type {
+            refs.set_class_fields(HashMap::from([("UAIValueSet_Crime".into(),
+                HashMap::from([(field.into(), ty.into())]))]));
+        }
+        (f, refs)
+    }
+
+    #[test]
+    fn bool_field_return_merges_keep_their_type_through_the_wide_store_veto() {
+        for field in ["bWitnessIsPersonalVictim", "bWitnessIsAreaEnforcer", "bVictimIsOutgroup",
+            "bIsReputationEscalated", "bIsReputationAtExecuteLevel"]
+        {
+            let (f, refs) = bool_field_return_fixture(field, Some("bool"));
+            assert_eq!(super::canonical_bool_return_slots(&f, &refs), HashSet::from([5]));
+            let mut source = String::new();
+            super::emit_function(&mut source, &f, &refs, false, false, 0);
+            assert!(source.contains(&format!("Value.{field}")), "{source}");
+            assert!(!source.contains("int local_5") && !source.contains("!= 0"), "{source}");
+        }
+    }
+
+    #[test]
+    fn bool_field_return_proof_rejects_unknown_types_and_other_slot_lives() {
+        for ty in [None, Some("EByteStatus"), Some("uint8"), Some("int")] {
+            let (f, refs) = bool_field_return_fixture("bWitnessIsPersonalVictim", ty);
+            assert!(super::canonical_bool_return_slots(&f, &refs).is_empty(), "{ty:?}");
+        }
+        let (f, refs) = bool_field_return_fixture("bWitnessIsPersonalVictim", Some("bool"));
+        for value in [1, 2, 256] {
+            let mut other = f.clone();
+            let ins = super::disassemble(&other.bytecode).unwrap();
+            other.bytecode[ins[2].offset_dw + 1] = value;
+            assert!(super::canonical_bool_return_slots(&other, &refs).is_empty());
+        }
+        for extra in [
+            ("RDR1", &[6][..]), // another unproved field-read life of the source
+            ("SetV1", &[6][..]),
+            ("CpyVtoV4", &[6, 8][..]),
+            ("PSF", &[6][..]),
+            ("PshV4", &[5][..]), // a non-return consumer of the merge slot
+        ] {
+            let mut other = f.clone();
+            other.bytecode.extend(function(&[extra]).bytecode);
+            assert!(super::canonical_bool_return_slots(&other, &refs).is_empty(), "{extra:?}");
+        }
+        let mut separated = f.clone();
+        let ins = super::disassemble(&separated.bytecode).unwrap();
+        separated.bytecode.splice(ins[6].offset_dw..ins[6].offset_dw,
+            function(&[("SUSPEND", &[])]).bytecode);
+        assert!(super::canonical_bool_return_slots(&separated, &refs).is_empty());
     }
 
     #[test]

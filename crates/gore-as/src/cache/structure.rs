@@ -4269,6 +4269,21 @@ fn block_stmts_in(
                 // so a chained statement call (e.g. MakeRequirement then Add) isn't silently
                 // overwritten. Drops sentinel/unresolved pendings (see flush_b2 doc).
                 flush_b2!();
+                // A null equality followed only by pointer argument pushes has no
+                // register consumer before CALL replaces its result. Preserve the
+                // ignored expression (RandomSelector::OnChildNodeCancelled).
+                // Other tests, pushes, calls, branches and register uses stay excluded.
+                let pointer_args = insns[..k].iter().rev()
+                    .take_while(|prev| prev.op.name == "PshVPtr").count();
+                if n == "CALL" && pointer_args > 0 && k >= pointer_args + 2
+                    && insns[k - pointer_args - 2].op.name == "CmpPtrNull"
+                    && insns[k - pointer_args - 1].op.name == "TZ"
+                {
+                    if let Some(condition) = cmp.as_ref().and_then(materialized_comparison) {
+                        out.push(format!("{condition};"));
+                        cmp = None;
+                    }
+                }
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let orig = ctx.refs.func_by_id(id).unwrap_or("func?").to_string();
                 // batch-25f: a free fn whose declaration was collision-renamed (`Name_g<mi>`)
@@ -10487,6 +10502,74 @@ mod tests {
                 offset += op.size_dwords as usize;
             }
             CompoundFixture { instrs, labels }
+        }
+    }
+
+    fn ignored_null_comparison_fixture(
+        test_op: &'static str, intervening: Option<&'static str>, call_op: &'static str,
+    ) -> (Vec<String>, Option<Cmp>) {
+        let mut a = TestAssembler::default();
+        // The actual ten-instruction RandomSelector shape. Callee resolution is
+        // intentionally irrelevant to whether CALL discards the comparison value.
+        a.op("PshVPtr", &[0], &[]);
+        a.op("ADDSi", &[0], &[1]);
+        a.op("RDSPtr", &[], &[]);
+        a.op("RefCpyV", &[2], &[]);
+        a.op("CmpPtrNull", &[2], &[]);
+        a.op(test_op, &[], &[]);
+        if let Some(op) = intervening { a.op(op, &[3], &[0]); }
+        a.op("PshVPtr", &[(-2i16) as u16], &[]);
+        a.op("PshVPtr", &[0], &[]);
+        a.op(call_op, &[], &[1]);
+        a.op("RET", &[4], &[]);
+        let fixture = a.finish();
+        let refs = RefResolver::from_test_member_chain(&[("UCBT_RandomSelector", "CurrentNode")]);
+        let f = FuncCode {
+            func: "UCBT_RandomSelector::OnChildNodeCancelled".into(), is_method: true,
+            param_names: vec!["CancelledNode".into()],
+            param_types: vec![DataType { token: 5, type_info: 1,
+                is_object_handle: true, ..Default::default() }],
+            ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new(),
+        };
+        let locals = HashMap::from([(2, "UCBT_Node".into()), (3, "bool".into())]);
+        let ctx = Ctx {
+            f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret),
+            fields: None, param_types: None, class_name: Some("UCBT_RandomSelector"),
+            local_types: Some(&locals), float_slots: Default::default(),
+            param_off_map: HashMap::from([(-2, 0)]), rvo_off: None, keep_ints: None,
+            rvo_switch_region: std::cell::Cell::new(false),
+        };
+        block_stmts(&ctx, 0, fixture.instrs.len())
+    }
+
+    #[test]
+    fn ignored_null_equality_survives_before_the_pointer_only_script_call() {
+        let (stmts, cmp) = ignored_null_comparison_fixture("TZ", None, "CALL");
+        let member = stmts.iter().position(|s| s == "local_2 = this.CurrentNode;").unwrap();
+        let comparison = stmts.iter().position(|s| s == "(local_2 == nullptr);").unwrap();
+        let call = stmts.iter().position(|s| s.contains("func?(" )).unwrap();
+        assert!(member < comparison && comparison < call, "{stmts:?}");
+        assert_eq!(stmts.iter().filter(|s| *s == "(local_2 == nullptr);").count(), 1);
+        assert!(cmp.is_none(), "the discarded comparison must not become a later condition");
+    }
+
+    #[test]
+    fn used_or_nonadjacent_null_tests_are_not_emitted_as_ignored_expressions() {
+        let (copied, cmp) = ignored_null_comparison_fixture("TZ", Some("CpyRtoV4"), "CALL");
+        assert!(copied.iter().any(|s| s == "local_3 = (local_2 == nullptr);"), "{copied:?}");
+        assert!(!copied.iter().any(|s| s == "(local_2 == nullptr);"));
+        assert!(cmp.is_none());
+        for (test_op, between, call_op) in [
+            ("TZ", Some("JZ"), "CALL"),
+            ("TZ", Some("CpyVtoR4"), "CALL"),
+            ("TZ", Some("SUSPEND"), "CALL"),
+            ("TZ", Some("PshV4"), "CALL"),
+            ("TNZ", None, "CALL"),
+            ("TZ", None, "CALLINTF"),
+        ] {
+            let (stmts, _) = ignored_null_comparison_fixture(test_op, between, call_op);
+            assert!(!stmts.iter().any(|s| s == "(local_2 == nullptr);" || s == "(local_2 != nullptr);"),
+                "{test_op}/{between:?}/{call_op}: {stmts:?}");
         }
     }
 

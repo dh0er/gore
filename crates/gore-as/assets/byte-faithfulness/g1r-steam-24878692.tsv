@@ -27,7 +27,7 @@ AI.AIAgent.Orc.Combat.Staff.Spells.StormOfFire.GA_Spell_StormOfFire_Orc	1	0	0
 AI.AIAgent.Orc.Living.AbilityTask_Interaction_Orc	1	0	0
 AI.AIAgent.Orc.Living.LivingAI_Orc	2	0	0
 AI.AIItemScoring	5	0	0
-AI.AssessmentResponseSystem.AssessmentBits	19	0	0
+AI.AssessmentResponseSystem.AssessmentBits	14	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	7	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeDefinitions	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	0
@@ -57,7 +57,7 @@ AI.States.FightAI.CharmedState.AIState_Charmed	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_AcceptDefeat	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_ClaimVictory	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_CombatEndActions	4	0	0
-AI.States.FightAI.CombatState.AICombatBehaviorTree	8	0	0
+AI.States.FightAI.CombatState.AICombatBehaviorTree	7	0	0
 AI.States.FightAI.CombatState.AICombatFitnessMultipliers	2	0	0
 AI.States.FightAI.CombatState.AICombatRoleSystem	5	0	0
 AI.States.FightAI.CombatState.AICombatTargetScoring	2	0	0
@@ -153,7 +153,7 @@ GAS.Abilities.Spells.Spells.Telekinesis.TelekinesisItemMovementVisual	1	0	0
 GAS.Abilities.Spells.Spells.Transform.GA_Spell_Transform	2	0	0
 GAS.Abilities.Spells.Visuals.DeathToTheUndead.DeathToTheUndeadVisual	1	0	0
 GAS.Abilities.Spells.Visuals.Environment.ElectrifiedArea_FocusStonePuzzle	2	0	0
-GAS.Abilities.Spells.Visuals.Fire.FireRainVisual	4	0	0
+GAS.Abilities.Spells.Visuals.Fire.FireRainVisual	3	0	0
 GAS.Abilities.Spells.Visuals.Fire.InnosPrayVisual	3	0	0
 GAS.Abilities.Spells.Visuals.Light.LightVisual	2	0	0
 GAS.Abilities.Spells.Visuals.Projectile.Base.ProjectileDamageExplosionVisual	1	0	0
