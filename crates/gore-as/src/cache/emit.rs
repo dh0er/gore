@@ -2679,6 +2679,11 @@ fn emit_function_ctor(
             );
         let rendered = fold_cast_operands(&rendered, &declared_locals, &call_result_types);
         pass_trace("fold_cast_operands", &rendered);
+        // Member/copy folds can leave a now-unused declaration inside a bool arm.
+        // Remove it before asking whether that arm is a single expression; retain
+        // the existing witnesses for literal declarations actually present in bytecode.
+        let rendered = drop_unused_declarations(&rendered, &dead_literal_declaration_slots(f));
+        pass_trace("drop_unused_declarations#before-bool", &rendered);
         // Once more: an else-arm that was several carrier steps is one expression only now, and
         // `if (X) { b = true; } else { b = Y; }` over it is `b = X || Y;` — evaluated straight
         // into the named bool, where the if/else costs a literal temporary and a copy.
@@ -9363,7 +9368,13 @@ fn fold_condition_temporaries(
             // The carrier may already be declared at its store (`bool local_10 = A && B;`):
             // the declaration goes with the fold, the condition takes the value — so no later
             // plain store may still lean on that declaration (measured: an out-of-scope read).
-            let (name, value) = carrier_store(lines[at])?;
+            let (name, value) = carrier_store(lines[at]).or_else(|| {
+                // Only this late bool fold accepts a plain assignment to a numbered life.
+                let (target, value) = lines[at].trim().strip_suffix(';')?.split_once(" = ")?;
+                (is_decompiler_local(target) && slot_and_life(target).is_some()
+                    && count_ident(value, target) == 0 && !value.is_empty())
+                    .then(|| (target.to_owned(), value.to_owned()))
+            })?;
             let reject = |why: &str| {
                 if diag_enabled("GORE_AS_COND_DIAG") {
                     eprintln!("[cond-reject] {why} | {}", lines[at].trim());
@@ -9425,7 +9436,7 @@ fn fold_condition_temporaries(
                     false => format!("(!({value}))"),
                 })
                 .filter(|_| {
-                    temporary_type(locals, &name) == Some("bool")
+                    logical_carrier_type(&lines, locals, &name) == Some("bool")
                         && (renders_a_bool(&value, locals, refs, fields, &HashMap::new(), None)
                             || is_bool_by_construction(&value))
                 });
@@ -14492,7 +14503,11 @@ fn inline_unnamed_value_temporaries(
                         || (init.split(' ').count() == 3 && init.split(' ').nth(2).is_some_and(is_plain_literal)))
             };
             let double_arithmetic = || f64_arithmetic_temps.contains(&key.0)
-                && is_pure_arithmetic(&init);
+                && (is_pure_arithmetic(&init)
+                    // The arithmetic parser requires two atoms. A witnessed NEGd
+                    // of one plain local is the same anonymous scalar expression.
+                    || init.strip_prefix("-(").and_then(|s| s.strip_suffix(')'))
+                        .is_some_and(|inner| slot_and_life(inner).is_some()));
             if !unnamed.contains(&key) && !sole_life() && !arithmetic() && !literal_seeded() && !member_read() && !double_arithmetic() {
                 inline_reject("not-unnamed", "", &name, &lines[at]);
                 return None;
@@ -15903,6 +15918,26 @@ fn fold_return_slot_stores(body: &str) -> String {
     joined
 }
 
+/// Boolean folds run after life splitting: the exact declaration owns the type.
+/// Only an unsuffixed first name may fall back to the physical slot table.
+fn logical_carrier_type<'a>(
+    lines: &[&'a str], locals: &'a BTreeMap<i32, String>, name: &str,
+) -> Option<&'a str> {
+    let mut declared = None;
+    for line in lines {
+        let Some(head) = line.trim().strip_suffix(';') else { continue; };
+        let head = head.split_once(" = ").map_or(head, |(head, _)| head);
+        let Some((ty, target)) = head.rsplit_once(' ') else { continue; };
+        if target != name || ty.is_empty() || ty.contains('(')
+            || matches!(ty.trim(), "return" | "continue" | "break" | "case" | "default" | "else")
+        { continue; }
+        let ty = ty.trim().trim_start_matches("const ");
+        if declared.is_some_and(|previous| previous != ty) { return None; }
+        declared = Some(ty);
+    }
+    declared.or_else(|| is_local_ident(name).then(|| temporary_type(locals, name)).flatten())
+}
+
 /// AngelScript's `&&` and `||` do not evaluate their right side when the left already decides the
 /// answer, and the compiler lowers that to a branch that writes the deciding CONSTANT straight
 /// into the expression's result slot — a 4-byte store for `&&`'s `false`, a 1-byte one for
@@ -15973,11 +16008,19 @@ fn short_circuit(
         sc_reject("then-arm", lines[at]);
         return None;
     }
-    let (target, deciding) = slot_store(lines.get(at + 2)?)?;
+    // Late declaration splitting has already named local_N_2 lives here.
+    // Keep the shared early-pass parsers unchanged and preserve the full target name.
+    let store = |line: &str| -> Option<(String, String)> {
+        let (target, value) = line.trim().strip_suffix(';')?.split_once(" = ")?;
+        (is_decompiler_local(target) && slot_and_life(target).is_some()
+            && count_ident(value, target) == 0 && !value.is_empty())
+            .then(|| (target.to_owned(), value.to_owned()))
+    };
+    let (target, deciding) = store(lines.get(at + 2)?)?;
     // The value arm ends in the store to the same slot. Where it takes a step through a
     // temporary of its own first — which is how the compiler evaluates the right-hand operand —
     // that step IS the value, and vanilla spends the same slot for it.
-    let (else_target, value) = slot_store(lines.get(else_end - 1)?)?;
+    let (else_target, value) = store(lines.get(else_end - 1)?)?;
     let value = match else_end - (then_end + 3) {
         1 => value,
         2 => {
@@ -16078,12 +16121,13 @@ fn short_circuit(
         .and_then(|rest| rest.strip_suffix(')'))
         .map(str::to_owned)
         .filter(|inner| renders_a_bool(inner, locals, refs, fields, roots, class_name));
-    let carrier_is_int = temporary_type(locals, &target) == Some("int");
+    let target_type = logical_carrier_type(lines, locals, &target);
+    let carrier_is_int = target_type == Some("int");
     let value = unwrapped.clone().unwrap_or(value);
     let value_is_bool = renders_a_bool(&value, locals, refs, fields, roots, class_name)
         || roots.get(value.as_str()).is_some_and(|ty| ty == "bool")
         || is_bool_by_construction(&value);
-    let target_is_bool = temporary_type(locals, &target) == Some("bool")
+    let target_is_bool = target_type == Some("bool")
         || (carrier_is_int && unwrapped.is_some());
     if !target_is_bool || !value_is_bool {
         sc_reject(
@@ -19623,7 +19667,13 @@ fn slot_store(line: &str) -> Option<(String, String)> {
 fn fold_negated_stores(body: &str, widened: &HashSet<i32>) -> String {
     let mut kept: Vec<String> = Vec::new();
     for line in body.lines() {
-        let folded = negated_self_store(line)
+        let folded = negated_self_store(line).or_else(|| {
+                // The suffix extension is boolean-only; numeric widening guards stay as-is.
+                let (target, value) = line.trim().strip_suffix(';')?.split_once(" = ")?;
+                (is_decompiler_local(target) && slot_and_life(target).is_some()
+                    && value.strip_prefix('!') == Some(target))
+                    .then(|| (target.to_owned(), '!'))
+            })
             .and_then(|(slot, operator)| {
                 let previous = kept.last()?;
                 let (target, value) = previous.trim().strip_suffix(';')?.split_once(" = ")?;
@@ -23780,6 +23830,19 @@ mod member_arithmetic_lifetime_tests {
         ];
         let f = function(&code);
         assert!(super::strict_f64_arithmetic_temp_slots(&f).contains(&10));
+        let body = "    float local_10;\n    float local_6 = ReadAge();\n    local_10 = -(local_6);\n    this.Held = Math::Max(0.0, local_10);\n";
+        let fold = |text: &str, witnesses: &HashSet<i32>| inline_unnamed_value_temporaries(
+            text, &HashSet::new(), &HashSet::new(), &HashSet::new(), &RefResolver::default(),
+            &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(),
+            &HashSet::new(), &HashSet::new(), witnesses);
+        let witnesses = super::strict_f64_arithmetic_temp_slots(&f);
+        assert_eq!(fold(body, &witnesses),
+            "    float local_6 = ReadAge();\n    this.Held = Math::Max(0.0, -(local_6));\n");
+        assert_eq!(fold(body, &HashSet::new()), body);
+        let call = body.replace("-(local_6)", "-(ReadAge())");
+        assert_eq!(fold(&call, &witnesses), call);
+        let separated = body.replace("    this.Held", "    Observe();\n    this.Held");
+        assert_eq!(fold(&separated, &witnesses), separated);
         for (at, replacement) in [
             (0, ("fTOd", &[10, 10][..])),
             (1, ("CpyVtoV8", &[6, 12][..])),
@@ -24185,5 +24248,145 @@ mod unary_double_chain_tests {
         ] {
             assert_eq!(fold_witnessed_unary_double_chain(&source, &witness()), source);
         }
+    }
+}
+
+#[cfg(test)]
+mod late_boolean_declaration_tests {
+    use super::*;
+
+    #[test]
+    fn unused_member_carrier_no_longer_blocks_short_circuit_recovery() {
+        let body = concat!(
+            "    bool local_3;\n",
+            "    if (source == nullptr)\n",
+            "    {\n",
+            "        local_3 = true;\n",
+            "    }\n",
+            "    else\n",
+            "    {\n",
+            "        TSubclassOf<UWeaponDefinition> local_6;\n",
+            "        local_3 = (this.Weapon == nullptr);\n",
+            "    }\n",
+            "    if (local_3)\n",
+            "    {\n",
+            "        return;\n",
+            "    }\n",
+        );
+        let fold = |text: &str| fold_short_circuits(text,
+            &BTreeMap::from([(3, "bool".into())]), &RefResolver::default(),
+            None, &HashMap::new(), None);
+        assert_eq!(fold(body), body);
+        let cleaned = drop_unused_declarations(body, &HashSet::new());
+        let folded = fold(&cleaned);
+        assert!(folded.contains("local_3 = source == nullptr || (this.Weapon == nullptr);"), "{folded}");
+
+        // Initializers with work and bytecode-witnessed unused literals stay in the arm.
+        for (declaration, keep) in [
+            ("TSubclassOf<UWeaponDefinition> local_6 = MakeClass();", HashSet::new()),
+            ("float local_6 = 1.0;", HashSet::from([6])),
+        ] {
+            let source = body.replace("TSubclassOf<UWeaponDefinition> local_6;", declaration);
+            let cleaned = drop_unused_declarations(&source, &keep);
+            assert_eq!(cleaned, source);
+            assert_eq!(fold(&cleaned), source);
+        }
+    }
+}
+
+#[cfg(test)]
+mod short_circuit_life_name_tests {
+    use super::*;
+
+    fn source(name: &str, other: &str) -> String {
+        format!(concat!(
+            "    if ({0} && Other != nullptr)\n",
+            "    {{\n",
+            "        {0} = true;\n",
+            "    }}\n",
+            "    else\n",
+            "    {{\n",
+            "        {1} = Me != nullptr && Other != nullptr;\n",
+            "    }}\n",
+        ), name, other)
+    }
+
+    fn fold(body: &str, locals: &BTreeMap<i32, String>) -> String {
+        fold_short_circuits(body, locals, &RefResolver::default(), None, &HashMap::new(), None)
+    }
+
+    #[test]
+    fn late_bool_carriers_fold_with_their_full_life_name() {
+        let locals = BTreeMap::from([(3, "bool".to_owned())]);
+        for name in ["local_3", "local_3_2", "local_3_12"] {
+            let body = format!("    bool {name};\n{}", source(name, name));
+            assert_eq!(fold(&body, &locals), format!(
+                "    bool {name};\n    {name} = ({name} && Other != nullptr) || (Me != nullptr && Other != nullptr);\n"
+            ));
+        }
+    }
+
+    #[test]
+    fn suffix_support_keeps_boolean_and_exact_target_guards() {
+        let body = source("local_3_2", "local_3_2");
+        for locals in [BTreeMap::new(), BTreeMap::from([(3, "int".to_owned())])] {
+            assert_eq!(fold(&body, &locals), body);
+        }
+        let locals = BTreeMap::from([(3, "bool".to_owned())]);
+        for body in [
+            source("local_3_2", "local_3_3"),
+            source("local_3_2_extra", "local_3_2_extra"),
+            source("local_3_2", "local_3_2").replace(
+                "Me != nullptr && Other != nullptr", "local_3_2 && Other != nullptr"),
+        ] {
+            let body = format!("    bool local_3_2;\n{body}");
+            assert_eq!(fold(&body, &locals), body);
+        }
+    }
+
+    #[test]
+    fn later_life_uses_its_declaration_and_never_inherits_the_first_type() {
+        for (first, later, folds) in [("int", "bool", true), ("bool", "int", false)] {
+            let locals = BTreeMap::from([(3, first.to_owned())]);
+            let body = format!("    {first} local_3;\n    {later} local_3_2;\n{}",
+                source("local_3_2", "local_3_2"));
+            assert_eq!(!fold(&body, &locals).contains("else"), folds);
+            let condition = format!("    {first} local_3;\n    {later} local_3_2 = Me != nullptr;\n    if (local_3_2)\n    {{\n        return false;\n    }}\n");
+            let folded = fold_condition_temporaries(&condition, &locals, &RefResolver::default(),
+                None, &HashSet::new(), &HashSet::new(), false);
+            assert_eq!(!folded.contains("if (local_3_2)"), folds);
+        }
+        let locals = BTreeMap::from([(3, "bool".to_owned())]);
+        let unknown = source("local_3_2", "local_3_2");
+        assert_eq!(fold(&unknown, &locals), unknown);
+        let unknown = "    local_3_2 = Me != nullptr;\n    if (local_3_2)\n    {\n        return false;\n    }\n";
+        assert_eq!(fold_condition_temporaries(unknown, &locals, &RefResolver::default(),
+            None, &HashSet::new(), &HashSet::new(), false), unknown);
+    }
+
+    #[test]
+    fn existing_bool_passes_accept_a_suffixed_diamond_and_negation() {
+        let locals = BTreeMap::from([(3, "bool".to_owned())]);
+        let input = format!("    bool local_3_2 = Me != nullptr && Ready != nullptr;\n{}    local_3_2 = !local_3_2;\n    if (local_3_2)\n    {{\n        return false;\n    }}\n",
+            source("local_3_2", "local_3_2"));
+        // Existing merge_self_assignments understands life suffixes already. The
+        // type check of the following whole-condition fold was the next blocker.
+        let combined = merge_self_assignments(&fold(&input, &locals), &locals);
+        let output = fold_condition_temporaries(&combined, &locals, &RefResolver::default(),
+            None, &HashSet::new(), &HashSet::new(), false);
+        assert!(!output.contains("local_3_2"), "{output}");
+        assert!(output.contains("if (!("), "{output}");
+        assert!(output.contains(" || "), "{output}");
+        assert_eq!(fold_condition_temporaries(&combined, &locals, &RefResolver::default(),
+            None, &HashSet::from([3]), &HashSet::new(), false), combined);
+    }
+
+    #[test]
+    fn suffixed_boolean_negation_does_not_enable_numeric_negation() {
+        let input = "    local_3_2 = Me != nullptr || Other != nullptr;\n    local_3_2 = !local_3_2;\n";
+        let output = fold_negated_stores(input, &HashSet::new());
+        assert_eq!(output, "    local_3_2 = !(Me != nullptr || Other != nullptr);\n");
+        let numeric = "    local_3_2 = Value();\n    local_3_2 = -local_3_2;\n";
+        assert_eq!(fold_negated_stores(numeric, &HashSet::new()), numeric);
     }
 }

@@ -1492,6 +1492,22 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_member_chain(owners: &[(&str, &str)]) -> Self {
+        let mut r = Self::default();
+        for (index, (owner, field)) in owners.iter().enumerate() {
+            let id = index as i32 + 1;
+            r.typeid_to_ptr.insert(id, id as i64);
+            r.type_by_ptr.insert(id as i64, (*owner).to_owned());
+            r.type_names.insert((*owner).to_owned());
+            if !field.is_empty() {
+                // Each synthetic owner has its one property at byte offset zero.
+                r.prop_by_key.insert(((id as i64) << 1) | 1, (*field).to_owned());
+            }
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_collision_names(names: &[&str]) -> Self {
         let mut resolver = Self::default();
         for (index, name) in names.iter().enumerate() {

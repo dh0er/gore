@@ -33,10 +33,9 @@ AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeDefinitions	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingResponse	2	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	24	0	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeScoring	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.TheftEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.EventResponses	14	0	0
-AI.CharacterAI_Gothic	10	0	0
+AI.CharacterAI_Gothic	9	0	0
 AI.CharacterAI_Human	1	0	0
 AI.CharacterAI_Orc	2	0	0
 AI.DailyRoutines.DailyRoutines_OG	2	0	0
@@ -101,7 +100,7 @@ AI.States.FightAI.WarnedCharacterSubsystem	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning	2	0	0
 AI.States.FightAI.WarningState.AIState_Warning_ComplainAboutBlockedPath	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_Creature	2	0	0
-AI.States.FightAI.WarningState.AIState_Warning_Crime	15	0	0
+AI.States.FightAI.WarningState.AIState_Warning_Crime	14	0	0
 AI.States.FightAI.WatchFightState.AIGroup_WatchFight	2	0	0
 AI.States.FightAI.WatchFightState.AIState_WatchFight	18	0	0
 AI.States.Test.TestCharacters_Navigation	1	0	0
@@ -138,7 +137,6 @@ GAS.Abilities.Spells.CastSpell.Derived.Transform.GA_CastSpell_Transform_Base	1	0
 GAS.Abilities.Spells.ExecutionValidator.Derived.Base.CastSpell_ExecutionValidator_Default	1	0	0
 GAS.Abilities.Spells.ExecutionValidator.Derived.Spell.ChainLightning.CastSpell_ExecutionValidator_ChainLightning	1	0	0
 GAS.Abilities.Spells.ExecutionValidator.Derived.Spell.Telekinesis.CastSpell_ExecutionValidator_Telekinesis	1	0	0
-GAS.Abilities.Spells.Spells.Base.GA_Spell_BasicWithTarget	1	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_SpawnRechargeableProjectile	2	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_Targetable	1	0	0
 GAS.Abilities.Spells.Spells.Electric.ChainLightning.GA_Spell_ChainLightning	8	0	0
@@ -154,13 +152,12 @@ GAS.Abilities.Spells.Spells.Telekinesis.GA_Spell_Telekinesis_FocusStoneBridge	1	
 GAS.Abilities.Spells.Spells.Telekinesis.TelekinesisItemMovementVisual	1	0	0
 GAS.Abilities.Spells.Spells.Transform.GA_Spell_Transform	2	0	0
 GAS.Abilities.Spells.Visuals.DeathToTheUndead.DeathToTheUndeadVisual	1	0	0
-GAS.Abilities.Spells.Visuals.Environment.ElectrifiedArea_FocusStonePuzzle	3	0	0
-GAS.Abilities.Spells.Visuals.Fire.FireRainVisual	5	0	0
+GAS.Abilities.Spells.Visuals.Environment.ElectrifiedArea_FocusStonePuzzle	2	0	0
+GAS.Abilities.Spells.Visuals.Fire.FireRainVisual	4	0	0
 GAS.Abilities.Spells.Visuals.Fire.InnosPrayVisual	3	0	0
-GAS.Abilities.Spells.Visuals.Ice.IceBlockVisual	1	0	0
 GAS.Abilities.Spells.Visuals.Light.LightVisual	2	0	0
 GAS.Abilities.Spells.Visuals.Projectile.Base.ProjectileDamageExplosionVisual	1	0	0
-GAS.Abilities.Spells.Visuals.SphereExplosion.SphereExplosionSpellVisual	2	0	0
+GAS.Abilities.Spells.Visuals.SphereExplosion.SphereExplosionSpellVisual	1	0	0
 GAS.Abilities.Spells.Visuals.UrizielWaveOfDeath.UrizielWaveOfDeathVisual	1	0	0
 GAS.Abilities.Spells.Visuals.VisualShapes.CollisionShapeVisual	2	0	0
 GAS.Abilities.Spells.Visuals.Wind.StormFistVisual	1	0	0
@@ -176,7 +173,6 @@ GAS.GASCharacterStateMixins	18	0	0
 GAS.PerceptionEventMixins	1	0	0
 Gameplay.Environment.BattleBlockingBarrier.BattleBarrierVisual	1	0	0
 Gameplay.Environment.BattleBlockingBarrier.BattleBlockingBarrierManager	2	0	0
-Gameplay.Environment.Fire.FireVisualComponentAS	1	0	0
 Gameplay.Environment.MCQueen.CeilingMinionSpawner.MCQueen_MinionCeilingSpawner	1	0	0
 Gameplay.Environment.StageManager.InExtremoBanner	2	0	0
 Gameplay.Environment.WeatherLightingMagnet.WeatherLightingMagnet	1	0	0
@@ -199,7 +195,7 @@ LoadingScreen.LoadingScreens.LoadingScreen_Intro	1	0	0
 LoadingScreen.StreamingLoadingScreenSetup	1	0	0
 Player.PlayerConfig	1	0	0
 Regions.Ownership.OCCastle.Ownership_OCCastle_BeforeFireMagesDead	3	0	0
-Regions.Traits.QuestRelatedTraits	9	0	0
+Regions.Traits.QuestRelatedTraits	8	0	0
 Sound.FXDefinitions.FXDefinitions_AttackImpact	2	0	0
 Sound.FXDefinitions.FXDefinitions_Footsteps	1	0	0
 Sound.MusicRegions	3	0	0
@@ -217,7 +213,6 @@ Story.G1R.Conversation.Conversation_UL_ORG_BLACKMAILER_888	2	0	0
 Story.G1R.Conversation.Conversation_UL_OSL_UrShak_2200	1	0	0
 Story.G1R.Conversation.Conversation_UL_STT_CAVALORN_336	1	0	0
 Story.G1R.Conversation.Conversation_XT_DMB_XARDAS_404	1	0	0
-Story.G1R.GenericVoiclines	2	0	0
 Story.Support.DialogImport	3	0	0
 Story.Support.G1R.Cinematics	2	0	0
 Story.Support.G1R.StoryFunctions	1	0	0

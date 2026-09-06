@@ -5565,30 +5565,30 @@ fn block_stmts_in(
                         && !top.s.contains('(')
                         && !top.s.contains('\u{2}')
                         && top.s != UNRESOLVED;
-                    // batch-41e (CASE B): BAIL when this const native-field member read would
-                    // become the function's RETURNED value, forcing an object-const RETURN type.
-                    // A const-member getter body (`return this.<constMember>;`) makes emit.rs render
-                    // `const T GetX()`; every caller then needs a `const T` slot, and the script
-                    // CALL arm cannot const-propagate (the return DataType flag is unreliable —
-                    // GetG1R carries is_object_const=true identically yet is legitimately non-const,
-                    // so flagging on it cascades const to ~900 unrelated call sites). Rather than a
-                    // fragile, wide const-cascade, keep the ONE getter stubbed (its pre-batch-41
-                    // state): dropping this store leaves the returned slot undeclared, so the
-                    // LOADOBJ..RET stubs the whole function (1 stub, ZERO caller cascade).
-                    // Precise gate: source is a const native-field read (`top.nf_const`) AND the
-                    // enclosing function returns an object-const handle of the SAME type. This
-                    // matches ONLY GetSelectedItem (`const UItemDefinition` return). It does NOT
-                    // touch GetSelectedItemAction (return is non-const UActionKeywords) nor the
-                    // CharacterAI_Gothic const-member READS that feed null-checks / GetClass()
-                    // receivers (their functions return FItemActionHandler / bool / void, never an
-                    // object-const handle of the member's type) — those keep their batch-32d/41
-                    // `const T` local recovery.
+                    // Keep the historical const-member getter gate for ordinary local
+                    // stores. Only the exact terminal handle-return shape below can avoid
+                    // the mutable intermediate while preserving the declared const return.
                     let const_ret_getter = top.nf_const.is_some()
                         && ctx.ret_ty.is_some_and(|d| {
                             d.is_object_handle
                                 && d.is_object_const
                                 && d.base_name(ctx.refs) == *top.nf_const.as_deref().unwrap_or("")
                         });
+                    // RefCpyV s; LOADOBJ s; RET returns this exact const handle.
+                    // Capture it in the existing return-value channel; LOADOBJ's slot
+                    // fallback then cannot replace it. No const local or caller policy changes.
+                    if const_ret_getter && member_src && !ctx.ret_is_ref()
+                        && !top.s.chars().any(char::is_control)
+                        && lo + k + 3 == ctx.instrs.len()
+                        && insns.get(k + 1).is_some_and(|next| {
+                            next.op.name == "LOADOBJ" && w(next, 0) == w(ins, 0)
+                        })
+                        && insns.get(k + 2).is_some_and(|next| next.op.name == "RET")
+                    {
+                        flush!();
+                        ret_val = Some(top.s);
+                        continue;
+                    }
                     // batch-43 (Fix 1, switch-rvo-return.md §4.1): accept a CALL-EXPRESSION
                     // source ONLY when the destination is the function's return out-slot — the
                     // object/struct being popped INTO the return value (`<out> = arr.opIndex(0)`
@@ -11511,6 +11511,64 @@ mod namespaced_script_constructor_tests {
         ] {
             let source = render_ctor(&refs, 1, ty, args, unknown);
             assert!(!source.contains("local_8 ="), "unsafe constructor recovered: {source}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod direct_const_member_return_tests {
+    use super::*;
+
+    fn getter(intervening_op: Option<&str>, load_slot: u16, by_reference: bool) -> String {
+        let refs = RefResolver::from_test_member_chain(&[
+            ("UGothicCharacterAIState", "AI"),
+            ("UGameplayAbility_CharacterAI_Gothic", "SelectedItemAction"),
+            ("FItemActionHandler", "ItemDefinition"),
+            ("UItemDefinition", ""),
+        ]);
+        let mut code = Vec::new();
+        let mut push = |name: &str, word: u16, dword: Option<i32>| {
+            let op = super::super::isa::OPCODES.iter().find(|op| op.name == name).unwrap();
+            let mut encoded = vec![0i32; op.size_dwords as usize];
+            encoded[0] = op.opcode as i32 | ((word as i32) << 16);
+            if let Some(dword) = dword { encoded[1] = dword; }
+            code.extend(encoded);
+        };
+        // The real GetSelectedItem nine-instruction shape, including its full
+        // three-owner field chain. The native const-field table supplies provenance.
+        push("PshVPtr", 0, None);
+        push("ADDSi", 0, Some(1));
+        push("RDSPtr", 0, None);
+        push("ADDSi", 0, Some(2));
+        push("ADDSi", 0, Some(3));
+        push("RDSPtr", 0, None);
+        push("RefCpyV", 2, None);
+        if let Some(op) = intervening_op { push(op, 0, None); }
+        push("LOADOBJ", load_slot, None);
+        push("RET", 2, None);
+        let ret = DataType {
+            token: 5, type_info: 4, is_object_handle: true, is_object_const: true,
+            is_reference: by_reference, ..Default::default()
+        };
+        let f = FuncCode {
+            func: "UGothicCharacterAIState::GetSelectedItem".into(), is_method: true,
+            param_names: Vec::new(), param_types: Vec::new(), ret: ret.clone(), bytecode: code,
+        };
+        let locals = HashMap::from([(2, "UItemDefinition".into()), (3, "UItemDefinition".into())]);
+        body_statements_ctor(&f, &refs, 0, None, Some(&ret), None, None,
+            Some("UGothicCharacterAIState"), Some(&locals), None)
+    }
+
+    #[test]
+    fn selected_item_returns_the_const_native_member_path() {
+        assert_eq!(getter(None, 2, false).trim(),
+            "return this.AI.SelectedItemAction.ItemDefinition;");
+    }
+
+    #[test]
+    fn const_member_exception_requires_the_same_immediate_value_return() {
+        for source in [getter(Some("SUSPEND"), 2, false), getter(None, 3, false), getter(None, 2, true)] {
+            assert!(!source.contains("return this.AI.SelectedItemAction.ItemDefinition;"), "{source}");
         }
     }
 }
