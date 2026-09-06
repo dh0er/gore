@@ -181,6 +181,8 @@ pub struct RefResolver {
     /// FunctionReferences owning class name (from the ObjectType ptr) — disambiguates native
     /// method overloads when looking up arity in the Binds.Cache native API.
     func_owner: HashMap<i64, String>,
+    /// Exact ObjectType pointer for methods named after their owning script type.
+    script_ctor_owner: HashMap<i64, i64>,
     /// FunctionReferences namespace (e.g. `Gameplay`, `Math`, `System`) for free/static native
     /// functions — a call must be qualified `Namespace::func(...)` or the global-scope lookup
     /// fails with "No matching signatures". Empty for un-namespaced globals and for methods.
@@ -372,6 +374,9 @@ impl RefResolver {
             r.func_ret.insert(key, ret);
             if let Some(cls) = r.type_by_ptr.get(&objtype) {
                 r.func_owner.insert(key, cls.clone());
+                if is_method && cls == &name {
+                    r.script_ctor_owner.insert(key, objtype);
+                }
             }
             // Only a non-method (free/static) function needs namespace qualification; a method is
             // rendered via its receiver. Record the namespace so the call site can prefix it.
@@ -512,6 +517,13 @@ impl RefResolver {
             .get(&id)
             .and_then(|p| self.func_owner.get(p))
             .map(|s| s.as_str())
+    }
+    /// Exact owner identity of a named script constructor; never a bare-name lookup.
+    pub(crate) fn script_constructor_type_by_id(&self, id: i32) -> Option<&TypeIdentity> {
+        self.funcid_to_ptr
+            .get(&id)
+            .and_then(|p| self.script_ctor_owner.get(p))
+            .and_then(|p| self.type_identity_by_ptr.get(p))
     }
     pub fn type_by_ptr(&self, ptr: i64) -> Option<&str> {
         self.type_by_ptr.get(&ptr).map(|s| s.as_str())
@@ -1452,6 +1464,31 @@ impl RefResolver {
                     .map(|(_, name)| name.as_str()),
             )
             .chain(self.prop_by_key.values().map(String::as_str))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_script_constructors(
+        namespaces: &[&str], name: &str, params: &[DataType],
+    ) -> Self {
+        let mut r = Self::default();
+        r.type_names.insert(name.to_owned());
+        for (index, namespace) in namespaces.iter().enumerate() {
+            let key = index as i64 + 1;
+            let owner = key + 100;
+            r.type_by_ptr.insert(owner, name.to_owned());
+            r.type_identity_by_ptr.insert(owner, TypeIdentity {
+                name: name.to_owned(), module: "Synthetic".to_owned(),
+                namespace: (*namespace).to_owned(),
+            });
+            r.funcid_to_ptr.insert(key as i32, key);
+            r.func_by_ptr.insert(key, name.to_owned());
+            r.func_is_method.insert(key);
+            r.func_owner.insert(key, name.to_owned());
+            r.script_ctor_owner.insert(key, owner);
+            r.func_params.insert(key, params.to_vec());
+            r.func_ret.insert(key, DataType { token: 0x52, ..Default::default() });
+        }
+        r
     }
 
     #[cfg(test)]

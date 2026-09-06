@@ -4325,7 +4325,15 @@ fn block_stmts_in(
                         break 'idiom_c false;
                     };
                     let np = params.len();
-                    // out-slot = stack TOP: a PSF'd slot whose type head == the struct name and
+                    let Some(owner) = ctx.refs.script_constructor_type_by_id(id) else {
+                        break 'idiom_c false;
+                    };
+                    let ctor_name = if owner.namespace.is_empty() {
+                        owner.name.clone()
+                    } else {
+                        format!("{}::{}", owner.namespace, owner.name)
+                    };
+                    // out-slot = stack TOP: a PSF'd slot whose full type head == this owner and
                     // whose name is a plain local/member lvalue (never a sentinel). is_lvalue_arg
                     // rejects PSF outright (it targets the non-PSF member-store receiver), so the
                     // out-slot's plain-name check is inlined here.
@@ -4345,7 +4353,7 @@ fn block_stmts_in(
                         .last()
                         .map(|r| {
                             r.is_psf
-                                && r.ty.as_deref().map(head) == Some(f.as_str())
+                                && r.ty.as_deref().map(head) == Some(ctor_name.as_str())
                                 && plain_lvalue(&r.s)
                         })
                         .unwrap_or(false);
@@ -4388,7 +4396,7 @@ fn block_stmts_in(
                     let out_s = stack[stack.len() - 1].s.clone();
                     stack.truncate(base);
                     flush!();
-                    out.push(format!("{out_s} = {f}({rendered});"));
+                    out.push(format!("{out_s} = {ctor_name}({rendered});"));
                     true
                 };
                 if idiom_c_done {
@@ -11430,5 +11438,79 @@ mod tests {
             "__return = local_32;".to_string(),
         ];
         assert_eq!(single_clean_rvo_store(&duplicate), None);
+    }
+}
+
+#[cfg(test)]
+mod namespaced_script_constructor_tests {
+    use super::*;
+
+    fn render_ctor(
+        refs: &RefResolver, id: u32, out_type: &str, args: &[u32], unknown_arg: bool,
+    ) -> String {
+        let mut instrs = Vec::new();
+        let mut offset_dw = 0;
+        let mut push = |name: &str, words: Vec<u16>, dwords: Vec<u32>| {
+            let op = super::super::isa::OPCODES.iter().find(|op| op.name == name).unwrap();
+            instrs.push(Instr { offset_dw, op, words, dwords, qwords: Vec::new() });
+            offset_dw += op.size_dwords as usize;
+        };
+        // Source arguments are pushed in reverse order, followed by the output address.
+        for (index, value) in args.iter().rev().enumerate() {
+            if unknown_arg && index == 0 {
+                push("PSF", vec![7], vec![]);
+            } else {
+                push("PshC4", vec![], vec![*value]);
+            }
+        }
+        push("PSF", vec![8], vec![]);
+        push("CALL", vec![], vec![id]);
+        let f = FuncCode {
+            func: "Synthetic::SetItemToBePickedUp".into(), is_method: false,
+            param_names: Vec::new(), param_types: Vec::new(),
+            ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new(),
+        };
+        let locals = HashMap::from([(8, out_type.to_owned())]);
+        let ctx = Ctx {
+            f: &f, refs, instrs: &instrs, super_ctor: None, ret_ty: Some(&f.ret),
+            fields: None, param_types: None, class_name: None, local_types: Some(&locals),
+            float_slots: Default::default(), param_off_map: HashMap::new(),
+            rvo_off: None, keep_ints: None, rvo_switch_region: std::cell::Cell::new(false),
+        };
+        block_stmts(&ctx, 0, instrs.len()).0.join("\n")
+    }
+
+    fn fixture() -> RefResolver {
+        RefResolver::from_test_script_constructors(
+            &["Warning_Crime_Theft", "Other", ""], "FItemPickupHandle",
+            &vec![DataType { token: 0x44, ..Default::default() }; 4],
+        )
+    }
+
+    #[test]
+    fn script_constructor_uses_exact_owner_namespace() {
+        let refs = fixture();
+        for (id, ty) in [
+            (1, "Warning_Crime_Theft::FItemPickupHandle"),
+            (2, "Other::FItemPickupHandle"),
+            (3, "FItemPickupHandle"),
+        ] {
+            let source = render_ctor(&refs, id, ty, &[111, 222, 333, 444], false);
+            assert_eq!(source, format!("local_8 = {ty}(111, 222, 333, 444);"));
+        }
+    }
+
+    #[test]
+    fn script_constructor_rejects_wrong_owner_and_incomplete_arguments() {
+        let refs = fixture();
+        for (ty, args, unknown) in [
+            ("Other::FItemPickupHandle", &[111, 222, 333, 444][..], false),
+            ("FItemPickupHandle", &[111, 222, 333, 444][..], false),
+            ("Warning_Crime_Theft::FItemPickupHandle", &[111, 222, 333][..], false),
+            ("Warning_Crime_Theft::FItemPickupHandle", &[111, 222, 333, 444][..], true),
+        ] {
+            let source = render_ctor(&refs, 1, ty, args, unknown);
+            assert!(!source.contains("local_8 ="), "unsafe constructor recovered: {source}");
+        }
     }
 }

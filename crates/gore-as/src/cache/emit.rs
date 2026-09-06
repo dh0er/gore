@@ -1796,7 +1796,7 @@ fn emit_function_ctor(
     pass_trace("fold_constant_comparisons", &body);
     let body = fold_double_negations(&body);
     pass_trace("fold_double_negations", &body);
-    let body = fold_negated_stores(&body);
+    let body = fold_negated_stores(&body, &widened);
     pass_trace("fold_negated_stores", &body);
     // `__InitDefaults` is where the class's values live, and their recovery is fail-closed: a
     // temporary left without a reader there costs the whole class its `default` statements
@@ -1854,7 +1854,7 @@ fn emit_function_ctor(
     // statements the negation costs a copy out, a `NOT` and a copy back where vanilla applied
     // `NOT` in place — and the named result stops the compiler folding the chain's own left test
     // into its branch.
-    let body = fold_negated_stores(&body);
+    let body = fold_negated_stores(&body, &widened);
     pass_trace("fold_negated_stores", &body);
     // Again, now that a short circuit IS an expression. The sweep above ran before the folds,
     // so a value the source wrote inside a call's argument as `A && B` was still an `if`/`else`
@@ -2651,9 +2651,9 @@ fn emit_function_ctor(
             fold_returned_temporaries(&rendered, &declared_locals, refs, &ret, returns_by_reference, &copied_widened_returns);
         let rendered = recover_condition_loops(&rendered);
         pass_trace("recover_condition_loops", &rendered);
-        let rendered = fold_negated_stores(&rendered);
+        let rendered = fold_negated_stores(&rendered, &widened);
         pass_trace("fold_negated_stores", &rendered);
-        let rendered = fold_assigned_temporaries(&rendered, fields, &path_roots, refs);
+        let rendered = fold_assigned_temporaries(&rendered, fields, &path_roots, refs, &widened);
         pass_trace("fold_assigned_temporaries", &rendered);
         // Before the folds move anything: a struct handed on by address is only recognisable
         // while its declaration and the call that takes it stand in the same text.
@@ -10738,6 +10738,7 @@ fn fold_assigned_temporaries(
     fields: Option<&HashMap<String, String>>,
     roots: &HashMap<String, String>,
     refs: &RefResolver,
+    widened: &HashSet<i32>,
 ) -> String {
     let lines: Vec<&str> = body.lines().collect();
     let mut kept: Vec<String> = Vec::new();
@@ -10745,6 +10746,9 @@ fn fold_assigned_temporaries(
     while at < lines.len() {
         let folded = (|| {
             let (_, name, init) = declaration_with_initializer(lines[at])?;
+            if slot_and_life_any(&name).is_some_and(|(s, _)| widened.contains(&s)) {
+                return None;
+            }
             let declared = {
                 let head = lines[at].trim().split(" = ").next()?;
                 head[..head.len() - name.len()].trim().to_owned()
@@ -19492,21 +19496,25 @@ fn slot_store(line: &str) -> Option<(String, String)> {
 /// `local_N = <expr>; local_N = !local_N;` is one `local_N = !(<expr>);`. The slot is the
 /// compiler's own temporary for the negation, and the round trip through it costs a copy in and
 /// a copy out that vanilla never spent — it applies `NOT` to the value where it already sits.
-fn fold_negated_stores(body: &str) -> String {
+fn fold_negated_stores(body: &str, widened: &HashSet<i32>) -> String {
     let mut kept: Vec<String> = Vec::new();
     for line in body.lines() {
         let folded = negated_self_store(line)
-            .and_then(|slot| {
+            .and_then(|(slot, operator)| {
                 let previous = kept.last()?;
                 let (target, value) = previous.trim().strip_suffix(';')?.split_once(" = ")?;
                 let declares = target.split_whitespace().last()? == slot.as_str();
+                // A copied widened value was named; numeric negation operates on
+                // its anonymous copy. Retain the source name and fold that copy only.
+                if operator == '-' && !slot_and_life_any(value)
+                    .is_some_and(|(s, _)| widened.contains(&s)) { return None; }
                 // A value that is ALREADY a negation folds too: `X = !(e); X = !X;` is the
                 // double negation vanilla wrote, and it emits `NOT` twice on the one slot. Kept
                 // apart, the two negations travel through a name and cost a copy each way.
                 (declares && count_ident(value, &slot) == 0).then(|| {
                     let indent: String =
                         previous.chars().take_while(|c| c.is_whitespace()).collect();
-                    format!("{indent}{target} = !({value});")
+                    format!("{indent}{target} = {operator}({value});")
                 })
             });
         match folded {
@@ -19525,10 +19533,11 @@ fn fold_negated_stores(body: &str) -> String {
 }
 
 /// The slot a statement negates in place (`local_5 = !local_5;`).
-fn negated_self_store(line: &str) -> Option<String> {
+fn negated_self_store(line: &str) -> Option<(String, char)> {
     let (target, value) = line.trim().strip_suffix(';')?.split_once(" = ")?;
-    let negated = value.strip_prefix('!')?;
-    (is_local_ident(target) && negated == target).then(|| target.to_owned())
+    let operator = value.chars().next().filter(|c| matches!(c, '!' | '-'))?;
+    let negated = &value[1..];
+    (is_local_ident(target) && negated == target).then(|| (target.to_owned(), operator))
 }
 
 /// Drop what follows a statement that always leaves the block. Recovering a branch's own return
@@ -23912,5 +23921,26 @@ mod retained_void_consumer_cleanup_tests {
         assert!(!(immediate_value_cleanup_end(&code, 1, destructor) < 3));
         let ordinary_call = vec![ins("PSF", Some(16), None), ins("CALLSYS", None, Some(3))];
         assert_eq!(immediate_value_cleanup_end(&ordinary_call, 0, destructor), 0);
+    }
+}
+
+#[cfg(test)]
+mod widened_negation_tests {
+    use super::*;
+
+    #[test]
+    fn widened_source_keeps_its_name_and_only_its_numeric_copy_folds() {
+        let widened = HashSet::from([6]);
+        let roots = HashMap::from([("local_6".into(), "float".into()),
+            ("local_10".into(), "float".into())]);
+        let body = "float local_6 = GetAge();\nlocal_10 = local_6;\nlocal_10 = -local_10;\n";
+        assert_eq!(fold_assigned_temporaries(body, None, &roots, &RefResolver::default(), &widened), body);
+        assert_eq!(fold_negated_stores(body, &widened),
+            "float local_6 = GetAge();\nlocal_10 = -(local_6);\n");
+        assert_eq!(fold_negated_stores(body, &HashSet::new()), body);
+        let effect = "local_10 = GetAge();\nlocal_10 = -local_10;\n";
+        assert_eq!(fold_negated_stores(effect, &widened), effect);
+        assert_eq!(fold_negated_stores("local_10 = Ready();\nlocal_10 = !local_10;\n", &widened),
+            "local_10 = !(Ready());\n");
     }
 }

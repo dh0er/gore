@@ -101,7 +101,7 @@ AI.States.FightAI.WarnedCharacterSubsystem	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning	2	0	0
 AI.States.FightAI.WarningState.AIState_Warning_ComplainAboutBlockedPath	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_Creature	2	0	0
-AI.States.FightAI.WarningState.AIState_Warning_Crime	19	0	0
+AI.States.FightAI.WarningState.AIState_Warning_Crime	15	0	0
 AI.States.FightAI.WatchFightState.AIGroup_WatchFight	2	0	0
 AI.States.FightAI.WatchFightState.AIState_WatchFight	18	0	0
 AI.States.Test.TestCharacters_Navigation	1	0	0
