@@ -2462,6 +2462,32 @@ pub(crate) fn bare_type_name(tyname: &str) -> &str {
 pub(crate) const LOOP_BACK_EDGE: &str = "//__gore_back_edge";
 /// `//__gore_ctor <slot>`: a default construction of a local the structurer met at this point.
 pub(crate) const CTOR_SITE: &str = "//__gore_ctor";
+
+/// Preserve a single default construction whose cleanup appears on multiple paths.
+/// Counting constructors as well as destructors excludes separate temporary lives
+/// that reuse a slot, including a fresh `return T()` in each return arm.
+fn shared_default_constructions(instrs: &[Instr], refs: &RefResolver) -> std::collections::HashSet<i32> {
+    let mut sites: HashMap<i32, (usize, usize)> = HashMap::new();
+    for pair in instrs.windows(2) {
+        if pair[0].op.name != "PSF" || pair[1].op.name != "CALLSYS" {
+            continue;
+        }
+        let Some(slot) = pair[0].words.first().map(|word| *word as i16 as i32).filter(|slot| *slot > 0) else {
+            continue;
+        };
+        let Some(ptr) = pair[1].qwords.first() else {
+            continue;
+        };
+        match refs.func_by_ptr(*ptr as i64) {
+            Some("$beh0") => sites.entry(slot).or_default().0 += 1,
+            Some("$beh2") => sites.entry(slot).or_default().1 += 1,
+            _ => {}
+        }
+    }
+    sites.into_iter().filter_map(|(slot, (constructs, destroys))| {
+        (constructs == 1 && destroys > 1).then_some(slot)
+    }).collect()
+}
 /// A `JMP` to the next instruction: `if (false) { } else { }`, spelled out by the emitter.
 pub(crate) const IF_FALSE_MARKER: &str = "//__gore_if_false";
 
@@ -6128,7 +6154,13 @@ fn block_stmts_in(
     if std::env::var_os("GORE_AS_DEFAULTS_DEBUG").is_some() && !default_ctor_temp.is_empty() {
         eprintln!("[ctor-temp] {default_ctor_temp:?}");
     }
+    let shared_constructions = shared_default_constructions(ctx.instrs, ctx.refs);
     for (slot, ty) in &default_ctor_temp {
+        if slot.strip_prefix("local_").and_then(|slot| slot.parse::<i32>().ok())
+            .is_some_and(|slot| shared_constructions.contains(&slot))
+        {
+            continue;
+        }
         // Any write to the slot — the whole value, or a member or element of it — is a write the
         // substituted `T()` would throw away. Reading only whole-value assignments let a
         // configured query be passed as a freshly default-constructed one (measured: the

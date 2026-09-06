@@ -177,7 +177,6 @@ GAS.Calculations.Damage_FocusStonePuzzle	1	0	0
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Drugs.Base.DrugDebuffEffectComponentBase	3	0	0
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Sleep.GA_SleepDebuffEffectGameplayAbility	1	0	0
 GAS.Effects.Debuffs.EffectStateComponent.DebuffEffectActors.SlowdownDebuffEffectActor	1	0	0
-GAS.Effects.Debuffs.GE_Damage	1	0	0
 GAS.Effects.Tests.Effect_GiveExperience	1	0	0
 GAS.GASCharacterMixins	7	0	0
 GAS.GASCharacterStateMixins	19	0	0
@@ -239,4 +238,4 @@ Story.G1R.GenericVoiclines	6	0	0
 Story.G1R.Quest.Quest_OldCamp_OCCHAPTER3_DREAMEDLAND	1	0	0
 Story.Support.DialogImport	3	0	0
 Story.Support.G1R.Cinematics	2	0	0
-Story.Support.G1R.StoryFunctions	2	0	0
+Story.Support.G1R.StoryFunctions	1	0	0

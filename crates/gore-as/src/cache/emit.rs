@@ -20103,24 +20103,23 @@ fn rewrite_first_use_decl_init(
         if declared_behind.contains(&slot) && assignment_block_owns_the_name(body, slot) {
             return true;
         }
+        // A handle vanilla released at a block's end (`FreeNullV8 h`, rendered `local_N =
+        // nullptr;` as the block's last statement) was declared IN that block, whatever the
+        // write that filled it looks like — a cast's `RefCpyV` is no initialiser witness, the
+        // release is (`IsAnyFriendlyInvolved`: the conflict group cast inside the loop body,
+        // hoisted to the top, took the slot the first temporaries had, and every slot number
+        // behind it moved). What stands after the block is a new life, declared on its own
+        // (`CrimeScoring::SeverityMultiplier`: `FindByGlobalId` once inside the guard, once
+        // behind it).
+        if released.contains(&slot) && lives_end_with_block_releases(body, slot) {
+            return true;
+        }
         // …or the bytecode says the declaration stood at the initialiser, wherever that is. The
         // depth gate exists because a declaration entered and left with a block costs its
         // construction on every pass; a witness that reads vanilla answers the same question
         // directly. Sinking still narrows the name's scope, so nothing after the assignment's own
-        // block may read it…
-        if !at_initializer.contains(&slot) {
-            return false;
-        }
-        if assignment_block_owns_the_name(body, slot) {
-            return true;
-        }
-        // …unless what stands after the block is a NEW life: vanilla released the handle at the
-        // block's end (`FreeNullV8 h`, rendered `local_N = nullptr;` as the block's last
-        // statement), so the block declared it, and the next assignment outside is a
-        // declaration of its own (`CrimeScoring::SeverityMultiplier`: `FindByGlobalId` once
-        // inside the guard, once behind it; hoisted into one name, the slot the second life
-        // took changed which temporary the compiler dropped its register test for).
-        released.contains(&slot) && lives_end_with_block_releases(body, slot)
+        // block may read it.
+        at_initializer.contains(&slot) && assignment_block_owns_the_name(body, slot)
     };
     rewrite_decl_at_assignment(body, locals, &wanted, &|slot, ty| {
         let head = qualify_decl_type(ty, refs);
