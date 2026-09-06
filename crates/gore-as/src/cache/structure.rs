@@ -456,6 +456,21 @@ pub fn decompile(f: &FuncCode, refs: &RefResolver) -> String {
     )
 }
 
+/// Keep the explicit copy when the next expression immediately takes its address.
+/// Such a value can be an argument temporary that later inlining moves into a field
+/// assignment (`WeaponUsed = TSubclassOf<T>(member)`). Removing its constructor now
+/// would erase that construction. This only declines an optimization; it does not
+/// claim every immediate use is a temporary.
+fn copy_receiver_is_immediately_pushed(next: Option<&Instr>, receiver: &str) -> bool {
+    let Some(slot) = receiver.strip_prefix("local_").and_then(|s| s.parse::<i32>().ok()) else {
+        return false;
+    };
+    next.is_some_and(|ins| {
+        ins.op.name == "PSF"
+            && ins.words.first().map(|word| *word as i16 as i32) == Some(slot)
+    })
+}
+
 struct Ctx<'a> {
     f: &'a FuncCode,
     refs: &'a RefResolver,
@@ -4805,7 +4820,48 @@ fn block_stmts_in(
                                         });
                                     }
                                     flush!();
-                                    out.push(format!("{} = {ty}({rendered});", recv.s));
+                                    // A copy from a plain local/member can initialize the slot
+                                    // directly. Keep explicit constructors for literals, indexing,
+                                    // conversions and call results (including RVO temporaries).
+                                    let same_type_copy = match args.as_slice() {
+                                        [arg] if rendered == arg.s && is_lvalue_arg(arg) => {
+                                            let arg_type = arg.ty.clone().or_else(|| {
+                                                let (head, field) = rendered.rsplit_once('.')?;
+                                                if head.contains('.') {
+                                                    return None;
+                                                }
+                                                let class = if head == "this" {
+                                                    ctx.class_name?.to_owned()
+                                                } else {
+                                                    ctx.slot_type(
+                                                        head.strip_prefix("local_")?
+                                                            .parse::<i32>()
+                                                            .ok()?,
+                                                    )?
+                                                };
+                                                let class = bare_type_name(&class);
+                                                ctx.refs
+                                                    .field_type_by_class(class, field)
+                                                    .or_else(|| ctx.refs.native_field_type(class, field))
+                                                    .or_else(|| ctx.refs.native_field_value_type(class, field))
+                                                    .map(str::to_owned)
+                                            });
+                                            params.is_some_and(|p| {
+                                                matches!(p, [param] if param.base_name(ctx.refs) == ty)
+                                            }) && arg_type.as_deref() == Some(ty.as_str())
+                                        }
+                                        _ => false,
+                                    };
+                                    if same_type_copy
+                                        && !copy_receiver_is_immediately_pushed(
+                                            ctx.instrs.get(lo + k + 1),
+                                            &recv.s,
+                                        )
+                                    {
+                                        out.push(format!("{} = {rendered};", recv.s));
+                                    } else {
+                                        out.push(format!("{} = {ty}({rendered});", recv.s));
+                                    }
                                 }
                             }
                             continue;
@@ -10776,6 +10832,36 @@ mod tests {
             Some("FContainingStruct".into())
         );
         assert_eq!(member_ref_push_type(None, None, None), None);
+    }
+
+    #[test]
+    fn copy_constructor_guard_keeps_forwarded_value_but_allows_credit_declaration() {
+        // GA_Falling after constructing v148: its address is immediately forwarded
+        // into the WeaponUsed opAssign. Keep TSubclassOf<T>(member) for inlining.
+        let mut falling = TestAssembler::default();
+        falling.op("PSF", &[148], &[]);
+        falling.op("PSF", &[146], &[]);
+        falling.op("ADDSi", &[0], &[0]);
+        falling.op("CALLSYS", &[], &[]);
+        let falling = falling.finish();
+        assert!(copy_receiver_is_immediately_pushed(
+            falling.instrs.first(), "local_148"
+        ));
+        assert!(!copy_receiver_is_immediately_pushed(
+            falling.instrs.first(), "local_146"
+        ));
+
+        // CreditMusicMode first pushes nullptr for its equality comparison.
+        // Its named copy declaration remains eligible for direct initialization.
+        let mut credit = TestAssembler::default();
+        credit.op("PshNull", &[], &[]);
+        credit.op("PSF", &[12], &[]);
+        credit.op("CALLSYS", &[], &[]);
+        let credit = credit.finish();
+        assert!(!copy_receiver_is_immediately_pushed(
+            credit.instrs.first(), "local_12"
+        ));
+        assert!(!copy_receiver_is_immediately_pushed(None, "local_148"));
     }
 
     #[test]

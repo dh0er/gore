@@ -6,7 +6,7 @@ AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachStraight.FireDemon_HellArms
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachZigZag.FireDemon_HellArmsArea_BreachZigZag	1	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachZigZag.FireDemon_HellArmsArea_BreachZigZag_Fire	1	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_Barrier_Ring	2	0	0
-AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_RingFireTest	6	0	0
+AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_RingFireTest	5	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.FireDemon_HellArmsArea_Ring	7	0	0
 AI.AIAgent.Creature.Demon.Spells.Area.DemonAreaVisual	2	0	0
 AI.AIAgent.Creature.Golem.Fire.Spells.BreakFloor.BreakFloorSpellVisualBox	1	0	0
@@ -34,7 +34,7 @@ AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	7	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeDefinitions	2	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingResponse	2	0	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	25	0	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	24	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeScoring	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.TheftEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.EventResponses	16	0	0
@@ -60,12 +60,12 @@ AI.States.FightAI.CharmedState.AIState_Charmed	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_AcceptDefeat	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_ClaimVictory	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_CombatEndActions	4	0	0
-AI.States.FightAI.CombatState.AICombatBehaviorTree	11	0	0
+AI.States.FightAI.CombatState.AICombatBehaviorTree	10	0	0
 AI.States.FightAI.CombatState.AICombatFitnessMultipliers	2	0	0
 AI.States.FightAI.CombatState.AICombatRoleSystem	5	0	0
 AI.States.FightAI.CombatState.AICombatTargetScoring	3	0	0
 AI.States.FightAI.CombatState.AIGroup_Attackers	5	0	0
-AI.States.FightAI.CombatState.AIGroup_Combat	6	0	0
+AI.States.FightAI.CombatState.AIGroup_Combat	5	0	0
 AI.States.FightAI.CombatState.AIState_Combat	2	0	0
 AI.States.FightAI.CombatState.AIState_OGCombat	17	0	0
 AI.States.FightAI.CombatState.CombatBehaviorSets.CombatBehaviorSet	2	0	0
@@ -105,7 +105,7 @@ AI.States.FightAI.WarningState.AIState_Warning_ComplainAboutBlockedPath	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_Creature	2	0	0
 AI.States.FightAI.WarningState.AIState_Warning_Crime	20	0	0
 AI.States.FightAI.WatchFightState.AIGroup_WatchFight	2	0	0
-AI.States.FightAI.WatchFightState.AIState_WatchFight	19	0	0
+AI.States.FightAI.WatchFightState.AIState_WatchFight	18	0	0
 AI.States.Test.TestCharacters_Navigation	1	0	0
 Camera.ConversationCameraConfig	1	0	0
 Environment.GothicUltraDynamicControlerAS	4	0	0
@@ -154,7 +154,7 @@ GAS.Abilities.Spells.Spells.Summon.SpawnHelper.Base.SummonSpawnPlaceHelper	3	0	0
 GAS.Abilities.Spells.Spells.Summon.SpawnHelper.CircleSummonSpawnPlaceHelper	3	0	0
 GAS.Abilities.Spells.Spells.Telekinesis.GA_Spell_Telekinesis	2	0	0
 GAS.Abilities.Spells.Spells.Telekinesis.GA_Spell_Telekinesis_FocusStoneBridge	1	0	0
-GAS.Abilities.Spells.Spells.Telekinesis.TelekinesisItemMovementVisual	2	0	0
+GAS.Abilities.Spells.Spells.Telekinesis.TelekinesisItemMovementVisual	1	0	0
 GAS.Abilities.Spells.Spells.Transform.GA_Spell_Transform	2	0	0
 GAS.Abilities.Spells.Visuals.DeathToTheUndead.DeathToTheUndeadVisual	1	0	0
 GAS.Abilities.Spells.Visuals.Environment.ElectrifiedArea_FocusStonePuzzle	3	0	0
@@ -170,7 +170,7 @@ GAS.Abilities.Spells.Visuals.VisualShapes.CollisionShapeVisual	2	0	0
 GAS.Abilities.Spells.Visuals.Wind.StormFistVisual	1	0	0
 GAS.Abilities.TraceTarget.Base.GA_TraceTarget_Base	1	0	0
 GAS.Abilities.TraceTarget.Derived.GA_TraceTarget_Item	2	0	0
-GAS.Calculations.Damage	7	0	0
+GAS.Calculations.Damage	6	0	0
 GAS.Calculations.Damage_FocusStonePuzzle	1	0	0
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Drugs.Base.DrugDebuffEffectComponentBase	3	0	0
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Sleep.GA_SleepDebuffEffectGameplayAbility	1	0	0
@@ -178,7 +178,7 @@ GAS.Effects.Debuffs.EffectStateComponent.DebuffEffectActors.SlowdownDebuffEffect
 GAS.Effects.Tests.Effect_GiveExperience	1	0	0
 GAS.GASCharacterMixins	7	0	0
 GAS.GASCharacterStateMixins	19	0	0
-GAS.PerceptionEventMixins	2	0	0
+GAS.PerceptionEventMixins	1	0	0
 Gameplay.Environment.BattleBlockingBarrier.BattleBarrierVisual	1	0	0
 Gameplay.Environment.BattleBlockingBarrier.BattleBlockingBarrierManager	2	0	0
 Gameplay.Environment.Fire.FireVisualComponentAS	1	0	0
@@ -208,7 +208,6 @@ Player.PlayerConfig	1	0	0
 Player.PuzzlesConfig	3	0	0
 Regions.Ownership.OCCastle.Ownership_OCCastle_BeforeFireMagesDead	3	0	0
 Regions.Traits.QuestRelatedTraits	9	0	0
-Sound.BackgroundMusicConfig	1	0	0
 Sound.FXDefinitions.FXDefinitions_AttackImpact	2	0	0
 Sound.FXDefinitions.FXDefinitions_Footsteps	1	0	0
 Sound.MusicRegions	3	0	0
@@ -219,7 +218,6 @@ Story.G1R.Conversation.Conversation_NC_BAU_HORATIO_901	1	0	0
 Story.G1R.Conversation.Conversation_NC_BAU_POCK_902	1	0	0
 Story.G1R.Conversation.Conversation_NC_BAU_RICELORD_900	1	0	0
 Story.G1R.Conversation.Conversation_NC_BAU_RUFUS_903	1	0	0
-Story.G1R.Conversation.Conversation_NC_ORG_DRAX_819	1	0	0
 Story.G1R.Conversation.Conversation_NC_ORG_LEFTY_844	1	0	0
 Story.G1R.Conversation.Conversation_NC_SLD_LEE_700	1	0	0
 Story.G1R.Conversation.Conversation_OC_GRD_ORRY_254	1	0	0
@@ -227,13 +225,11 @@ Story.G1R.Conversation.Conversation_OC_GRD_THORUS_200	1	0	0
 Story.G1R.Conversation.Conversation_SC_NOV_DARRION_1312	1	0	0
 Story.G1R.Conversation.Conversation_SC_NOV_LESTER	2	0	0
 Story.G1R.Conversation.Conversation_SC_NOV_TALAS_1300	1	0	0
-Story.G1R.Conversation.Conversation_UL_ORG_AIDAN_859	1	0	0
 Story.G1R.Conversation.Conversation_UL_ORG_BLACKMAILER_888	2	0	0
 Story.G1R.Conversation.Conversation_UL_OSL_UrShak_2200	1	0	0
 Story.G1R.Conversation.Conversation_UL_STT_CAVALORN_336	1	0	0
 Story.G1R.Conversation.Conversation_XT_DMB_XARDAS_404	1	0	0
-Story.G1R.GenericVoiclines	6	0	0
-Story.G1R.Quest.Quest_OldCamp_OCCHAPTER3_DREAMEDLAND	1	0	0
+Story.G1R.GenericVoiclines	2	0	0
 Story.Support.DialogImport	3	0	0
 Story.Support.G1R.Cinematics	2	0	0
 Story.Support.G1R.StoryFunctions	1	0	0
