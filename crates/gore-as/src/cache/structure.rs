@@ -67,6 +67,10 @@ struct Arg {
     /// arbitrary calls that could mutate the container, so such entries must not pass the
     /// relaxed carry gate. Static-name FName literals stay `false` (pure literals).
     reeval: bool,
+    /// A pending default constructor carried by this exact operand: physical slot,
+    /// concrete constructor type, and absolute argument-push instruction index.
+    /// The raw `s` remains a slot until the actual consumer and cleanup settle it.
+    default_ctor: Option<(i32, String, usize)>,
 }
 impl Arg {
     fn int(s: String) -> Arg {
@@ -121,6 +125,24 @@ impl Arg {
         self.carryable = true;
         self
     }
+}
+
+/// A carried default value stops being a replacement candidate if this block
+/// addresses or writes its slot again. Keep the ordinary operand and its identity.
+fn invalidate_carried_defaults(stack: &mut [Arg], ins: &Instr) -> Vec<String> {
+    if !stack.iter().any(|arg| arg.default_ctor.is_some()) {
+        return Vec::new();
+    }
+    let touched = super::bytediff::addressed_slots(ins);
+    stack.iter_mut().filter_map(|arg| {
+        let (slot, _, _) = arg.default_ctor.as_ref()?;
+        if !touched.contains(slot) {
+            return None;
+        }
+        arg.default_ctor = None;
+        arg.reeval = false; // it is once again only the original plain PSF operand
+        Some(arg.s.clone())
+    }).collect()
 }
 
 const AS_PTR_SIZE: i32 = 2;
@@ -471,6 +493,19 @@ fn copy_receiver_is_immediately_pushed(next: Option<&Instr>, receiver: &str) -> 
     })
 }
 
+/// Parameter field metadata comes from its resolved owner, never this-class fields.
+/// Require the declared parameter class to match that owner for this narrow path.
+fn enum_parameter_field_type(
+    refs: &RefResolver, parameter_type: &str, owner: &str, field: &str,
+) -> Option<String> {
+    if bare_type_name(parameter_type) != bare_type_name(owner) {
+        return None;
+    }
+    refs.field_type_by_class(owner, field)
+        .filter(|ty| is_enum_name(ty))
+        .map(str::to_owned)
+}
+
 /// Provenance for the exact byte-wide enum carrier immediately before CMPIi.
 /// PropertyReferences OldTypeId is an owner, never a field-value type witness.
 fn widened_switch_enum_selector(
@@ -495,18 +530,28 @@ fn widened_switch_enum_selector(
     }
     let load_at = read_at.checked_sub(1).filter(|at| *at >= floor)?;
     let load = ctx.instrs.get(load_at)?;
-    if load.op.name != "LoadThisR" || !ctx.f.is_method {
+    let (receiver, offset) = match load.op.name {
+        "LoadThisR" => (0, *load.words.first()? as i32),
+        "LoadRObjR" => (s16(*load.words.first()?), *load.words.get(1)? as i32),
+        _ => return None,
+    };
+    let is_this = load.op.name == "LoadThisR" && ctx.f.is_method;
+    if !is_this && !ctx.param_off_map.contains_key(&receiver) {
         return None;
     }
-    let offset = *load.words.first()? as i32;
     let owner_id = *load.dwords.first()? as i32;
     let field = ctx.refs.member(owner_id, offset)?;
-    let ty = ctx.fields.and_then(|fields| fields.get(field).cloned())
-        .or_else(|| ctx.refs.type_by_id(owner_id)
-            .and_then(|owner| ctx.refs.field_type_by_class(owner, field))
-            .map(str::to_owned))
-        .filter(|ty| is_enum_name(ty))?;
-    Some((ty, format!("this.{field}"), load_at))
+    let ty = if is_this {
+        ctx.fields.and_then(|fields| fields.get(field).cloned())
+            .or_else(|| ctx.refs.type_by_id(owner_id)
+                .and_then(|owner| ctx.refs.field_type_by_class(owner, field))
+                .map(str::to_owned))
+            .filter(|ty| is_enum_name(ty))?
+    } else {
+        enum_parameter_field_type(ctx.refs, &ctx.slot_type(receiver)?,
+            ctx.refs.type_by_id(owner_id)?, field)?
+    };
+    Some((ty, format!("{}.{field}", ctx.slot_name(receiver)), load_at))
 }
 
 struct Ctx<'a> {
@@ -2915,10 +2960,13 @@ fn block_stmts_in(
                                                  // order gate for the stale-cmp-vs-live-bool-pending decision at conditional jumps.
     let mut test_after_call = true;
     let mut stack: Vec<Arg> = init; // pushed pointer/value expressions
-    // Default-constructed locals pushed straight as an argument, with a provisional
-    // construction-site marker in `out`: (slot, name). Settled at the loop head once the
-    // consuming call has taken the operand off the stack.
-    let mut pending_temp_markers: Vec<(i32, String, usize, bool)> = Vec::new();
+    // Pending default arguments: (slot, name, absolute push index, from_reference).
+    // Incoming operands restore only their own construction witness; settlement still
+    // waits for the actual consuming call and its immediate cleanup.
+    let mut pending_temp_markers: Vec<(i32, String, usize, bool)> = stack.iter()
+        .filter_map(|arg| arg.default_ctor.as_ref().map(|(slot, _, pushed)| {
+            (*slot, arg.s.clone(), *pushed, false)
+        })).collect();
     let mut value_reg: Option<String> = None;
     let mut obj_reg: Option<String> = None;
     let mut ref_reg: Option<String> = None; // Idiom-B member address
@@ -2971,7 +3019,9 @@ fn block_stmts_in(
     // triad to an empty ctor body. Keyed on the CONSTRUCT owner type so the copy-assign only fires
     // when the source temp was default-built of the SAME value type. Cleared when the slot is
     // overwritten by any non-construct producer.
-    let mut default_ctor_temp: HashMap<String, String> = HashMap::new();
+    let mut default_ctor_temp: HashMap<String, String> = stack.iter()
+        .filter_map(|arg| arg.default_ctor.as_ref().map(|(_, ty, _)| (arg.s.clone(), ty.clone())))
+        .collect();
     // Per-call parameter flags read from the pointer the call ACTUALLY uses, keyed by name and
     // arity. The global by-name table merges every overload in the cache and answers the
     // constness question wrongly for a name the engine reuses; the pointer names one row.
@@ -3074,11 +3124,11 @@ fn block_stmts_in(
             for (index, (slot, name, pushed_at, from_reference)) in pending_temp_markers.iter().enumerate() {
                 // The construction pops its receiver before the argument push is processed:
                 // only once the push has gone by can an absent operand mean "consumed".
-                if k <= *pushed_at || stack.iter().any(|arg| &arg.s == name) {
+                if lo + k <= *pushed_at || stack.iter().any(|arg| &arg.s == name) {
                     continue; // still waiting for its call
                 }
                 // The consuming call: the nearest call processed since the push.
-                let consumer = (pushed_at + 1..k).rev().find(|j| insns[*j].op.is_call());
+                let consumer = (pushed_at + 1..lo + k).rev().find(|j| ctx.instrs[*j].op.is_call());
                 // `T x; return x;` for a type without a copy constructor: x is constructed,
                 // THEN the return slot is default-constructed (`PshVPtr v-2; $beh0` with no
                 // operand pushed before it), then x is assigned into it. A temporary returned
@@ -3087,25 +3137,28 @@ fn block_stmts_in(
                 // site, which is what naming it would lose.
                 let return_slot_built_between = consumer.is_some_and(|j| {
                     (pushed_at + 1..j).any(|at| {
-                        at + 1 < insns.len()
-                            && insns[at].op.name == "PshVPtr"
-                            && insns[at].words.first().map(|w| *w as i16 as i32) == Some(-2)
-                            && insns[at + 1].op.name == "CALLSYS"
+                        at + 1 < ctx.instrs.len()
+                            && ctx.instrs[at].op.name == "PshVPtr"
+                            && ctx.instrs[at].words.first().map(|w| *w as i16 as i32) == Some(-2)
+                            && ctx.instrs[at + 1].op.name == "CALLSYS"
                             && ctx
                                 .refs
-                                .func_by_ptr(insns[at + 1].qwords.first().copied().unwrap_or(0) as i64)
+                                .func_by_ptr(ctx.instrs[at + 1].qwords.first().copied().unwrap_or(0) as i64)
                                 .is_some_and(|name| name.starts_with("$beh0"))
                             && !(at > 0
-                                && (insns[at - 1].op.name.starts_with("Psh")
-                                    || insns[at - 1].op.name == "PSF"))
+                                && (ctx.instrs[at - 1].op.name.starts_with("Psh")
+                                    || ctx.instrs[at - 1].op.name == "PSF"))
                     })
                 });
                 let temporary = !return_slot_built_between && consumer.is_some_and(|j| {
+                    if *pushed_at < lo && j + 1 != lo + k {
+                        return false;
+                    }
                     // A temporary is released right after the call — behind the result's copy
                     // out of the register and other temporaries' releases; anything else first
                     // (another statement's instruction, the slot addressed again) is the life
                     // of a declared local.
-                    let mut at = lo + j + 1;
+                    let mut at = j + 1;
                     loop {
                         if let Some(destroyed) = is_destructor_of(at) {
                             if destroyed == *slot {
@@ -3151,6 +3204,10 @@ fn block_stmts_in(
             for index in settled.into_iter().rev() {
                 pending_temp_markers.remove(index);
             }
+        }
+        for name in invalidate_carried_defaults(&mut stack, ins) {
+            default_ctor_temp.remove(&name);
+            pending_temp_markers.retain(|(_, pending_name, _, _)| pending_name != &name);
         }
         let flushed_by_behaviour = behaviour_flushed.take();
         // Invalidate a cached SetV* constant when this op overwrites that slot with a
@@ -4711,7 +4768,7 @@ fn block_stmts_in(
                                         let from_reference = k >= 2
                                             && insns[k - 1].op.name == "PSF"
                                             && insns[k - 2].op.name == "PshRPtr";
-                                        pending_temp_markers.push((slot, top.s.clone(), k + 1, from_reference));
+                                        pending_temp_markers.push((slot, top.s.clone(), lo + k + 1, from_reference));
                                     }
                                 }
                             }
@@ -6248,6 +6305,14 @@ fn block_stmts_in(
     if std::env::var_os("GORE_AS_DEFAULTS_DEBUG").is_some() && !default_ctor_temp.is_empty() {
         eprintln!("[ctor-temp] {default_ctor_temp:?}");
     }
+    // An incoming operand consumed by the block's final call has not reached
+    // another loop-head settlement. Without its destructor proof, retain the
+    // original argument; never infer a temporary from this block's sole mention.
+    for (_, name, pushed_at, _) in &pending_temp_markers {
+        if *pushed_at < lo && !stack.iter().any(|arg| &arg.s == name) {
+            default_ctor_temp.remove(name);
+        }
+    }
     let shared_constructions = shared_default_constructions(ctx.instrs, ctx.refs);
     for (slot, ty) in &default_ctor_temp {
         if slot.strip_prefix("local_").and_then(|slot| slot.parse::<i32>().ok())
@@ -6319,9 +6384,27 @@ fn block_stmts_in(
             }
         }
     }
-    // Provisional markers whose consuming call lies in a later block: the argument is rendered
-    // there, as the temporary it was taken for.
-    for (slot, _, _, _) in pending_temp_markers.drain(..) {
+    // Keep only the constructor witness on an operand still waiting across this
+    // block boundary. The ordinary name/stack identity and marker drain stay unchanged.
+    for (slot, name, pushed_at, from_reference) in pending_temp_markers.drain(..) {
+        if !from_reference && !shared_constructions.contains(&slot) {
+            if let Some(ty) = default_ctor_temp.get(&name)
+                .filter(|ty| !ty.starts_with('T') || ty.contains('<'))
+            {
+                // This also checks the constructor's own block, where metadata was not
+                // attached yet: another use/address/write makes it a named or changed value.
+                let untouched = ctx.instrs[(pushed_at + 1).max(lo)..hi].iter()
+                    .all(|ins| !super::bytediff::addressed_slots(ins).contains(&slot));
+                if untouched && stack.iter().filter(|arg| arg.s == name).count() == 1 {
+                    if let Some(arg) = stack.iter_mut().find(|arg| arg.s == name && arg.is_psf) {
+                        arg.default_ctor = Some((slot, ty.clone(), pushed_at));
+                        // Default construction must not move across a relaxed diamond's
+                        // arbitrary calls. The existing classic Cast proof still applies.
+                        arg.reeval = true;
+                    }
+                }
+            }
+        }
         let marker = format!("{CTOR_SITE} {slot}");
         if let Some(pos) = out.iter().rposition(|line| *line == marker) {
             out.remove(pos);
@@ -10533,6 +10616,52 @@ mod tests {
         assert!(numeric.contains("case 0:"), "{numeric}");
         assert!(numeric.trim_end().ends_with("return;"),
             "numeric trap fallback lost its join:\n{numeric}");
+    }
+
+    #[test]
+    fn addressing_or_writing_carried_default_drops_only_its_candidate() {
+        let ins = |name, slot| Instr {
+            offset_dw: 0,
+            op: crate::cache::isa::OPCODES.iter().find(|op| op.name == name).unwrap(),
+            words: vec![slot], dwords: Vec::new(), qwords: Vec::new(),
+        };
+        for name in ["PSF", "PshVPtr", "RDR4", "STOREOBJ"] {
+            let mut arg = Arg::psf("local_26".to_owned(), Some("FGameplayTagContainer".to_owned())).carry();
+            arg.default_ctor = Some((26, "FGameplayTagContainer".to_owned(), 138));
+            arg.reeval = true;
+            let mut stack = vec![arg];
+            assert!(invalidate_carried_defaults(&mut stack, &ins(name, 14)).is_empty());
+            assert!(stack[0].default_ctor.is_some());
+            assert_eq!(invalidate_carried_defaults(&mut stack, &ins(name, 26)), vec!["local_26"]);
+            assert!(stack[0].default_ctor.is_none());
+            assert_eq!(stack[0].s, "local_26");
+            assert_eq!(stack[0].ty.as_deref(), Some("FGameplayTagContainer"));
+            assert!(stack[0].is_psf && stack[0].carryable && !stack[0].reeval);
+        }
+    }
+
+
+    #[test]
+    fn parameter_field_enum_requires_matching_owner_and_the_actual_field_value_type() {
+        let mut refs = RefResolver::default();
+        refs.set_class_fields(HashMap::from([
+            ("UAIState_PerceptionResponse".to_owned(), HashMap::from([
+                ("SwitchAIStateMode".to_owned(), "ESwitchAIStateMode".to_owned()),
+                ("Priority".to_owned(), "int".to_owned()),
+            ])),
+            // An identically named field on the current class is no foreign witness.
+            ("UAIEventResponse_SwitchState".to_owned(), HashMap::from([
+                ("SwitchAIStateMode".to_owned(), "EOtherMode".to_owned()),
+            ])),
+        ]));
+        assert_eq!(enum_parameter_field_type(&refs, "const UAIState_PerceptionResponse",
+            "UAIState_PerceptionResponse", "SwitchAIStateMode").as_deref(), Some("ESwitchAIStateMode"));
+        assert_eq!(enum_parameter_field_type(&refs, "UAIEventResponse_SwitchState",
+            "UAIState_PerceptionResponse", "SwitchAIStateMode"), None);
+        assert_eq!(enum_parameter_field_type(&refs, "UAIState_PerceptionResponse",
+            "UAIState_PerceptionResponse", "Priority"), None);
+        assert_eq!(enum_parameter_field_type(&refs, "UAIState_PerceptionResponse",
+            "UAIState_PerceptionResponse", "MissingField"), None);
     }
 
     fn compound_switch_fixture() -> CompoundFixture {

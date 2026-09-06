@@ -2560,7 +2560,7 @@ fn emit_function_ctor(
         pass_trace("collapse_single_use_accumulators", &body);
         let body = fold_enum_call_round_trips(&body, &call_result_types, fields, &path_roots, refs, returns_by_reference, has_enum_conversions(f));
         pass_trace("fold_enum_call_round_trips", &body);
-        let body = fold_compound_assignments(&body, fields, &path_roots, refs);
+        let body = fold_compound_assignments(&body, fields, &path_roots, refs, false);
         pass_trace("fold_compound_assignments", &body);
         let uses_return_slot = body.contains("__return");
         if uses_return_slot {
@@ -2622,7 +2622,7 @@ fn emit_function_ctor(
         pass_trace("fold_enum_call_round_trips", &rendered);
         let rendered = fold_member_read_modify_write(&rendered);
         pass_trace("fold_member_read_modify_write", &rendered);
-        let rendered = fold_compound_assignments(&rendered, fields, &path_roots, refs);
+        let rendered = fold_compound_assignments(&rendered, fields, &path_roots, refs, false);
         pass_trace("fold_compound_assignments", &rendered);
         // Again on the joined text: a short circuit whose CONDITION is itself a short circuit is
         // only one condition once the inner one has folded, and the pass that folds it ran before
@@ -2765,6 +2765,7 @@ fn emit_function_ctor(
             &inline_callees,
             &named_sites,
             &literal_seeded_arithmetic_temps(f),
+            &member_read_temp_slots(f),
         );
         pass_trace("inline_unnamed_value_temporaries", &rendered);
         // Now that the operands carry no names of their own, an in-place update stands directly
@@ -2821,9 +2822,16 @@ fn emit_function_ctor(
             &inline_callees,
             &named_sites,
             &literal_seeded_arithmetic_temps(f),
+            &member_read_temp_slots(f),
         );
         pass_trace("inline_unnamed_value_temporaries", &rendered);
         }
+        // The final inline rounds expose X.F = (X.F + 1) only after the earlier
+        // compound/receiver passes. Preserve their existing guards and order.
+        let rendered = fold_compound_assignments(&rendered, fields, &path_roots, refs, true);
+        pass_trace("fold_compound_assignments", &rendered);
+        let rendered = fold_assignment_receivers(&rendered, &immediately_consumed_defs(f));
+        pass_trace("fold_assignment_receivers", &rendered);
         let rendered =
             spell_out_argument_temporaries(
                 &rendered,
@@ -12038,6 +12046,7 @@ fn fold_compound_assignments(
     fields: Option<&HashMap<String, String>>,
     roots: &HashMap<String, String>,
     refs: &RefResolver,
+    literal_only: bool,
 ) -> String {
     const OPERATORS: [&str; 7] = [" + ", " - ", " * ", " / ", " | ", " & ", " ^ "];
     let pure_member_path = |path: &str| {
@@ -12073,6 +12082,12 @@ fn fold_compound_assignments(
             })?;
             let operator = OPERATORS.iter().find(|op| rest.starts_with(**op))?;
             let addend = &rest[operator.len()..];
+            // The late pass sees expressions the inliner has just reconstructed.
+            // Compound assignment evaluates a computed addend before the member,
+            // so only the proven immediate integer updates may fold there.
+            if literal_only && (!matches!(operator.trim(), "+" | "-") || addend.parse::<i32>().is_err()) {
+                return None;
+            }
             // A literal addend is materialised BEFORE the member is loaded in the compound
             // spelling and after it in the written-out one (`X.Z += 30.0` vs `X.Z = X.Z +
             // 30.0`: `SetV8` in front of `LoadVObjR` or behind it). Vanilla wrote the latter
@@ -12136,6 +12151,12 @@ fn fold_compound_assignments(
                 return refuse("operator");
             };
             let addend = &rest[operator.len()..];
+            // The late pass sees expressions the inliner has just reconstructed.
+            // Compound assignment evaluates a computed addend before the member,
+            // so only the proven immediate integer updates may fold there.
+            if literal_only && (!matches!(operator.trim(), "+" | "-") || addend.parse::<i32>().is_err()) {
+                return None;
+            }
             // `X.F = local_N;` — the target is a member path, which `slot_store` also refuses.
             let (written, back) = lines
                 .get(at + 2)?
@@ -14078,6 +14099,7 @@ fn inline_unnamed_value_temporaries(
     inline_callees: &HashMap<i32, Vec<String>>,
     named_sites: &HashSet<(i32, String)>,
     literal_seeded_temps: &HashSet<i32>,
+    member_read_temps: &HashSet<i32>,
 ) -> String {
     let mut lines: Vec<String> = body.lines().map(|l| l.to_owned()).collect();
     // `body` never changes, so the two whole-body questions below are asked once per name instead
@@ -14097,13 +14119,20 @@ fn inline_unnamed_value_temporaries(
             .entry(name.to_owned())
             .or_insert_with(|| body.contains(&format!("{name}_")))
     };
+    // This pass runs after lifetime splitting, so assignments also carry
+    // names such as local_24_2. The early-pass slot parser accepts digits only.
+    let life_store = |line: &str| -> Option<(String, String)> {
+        let (target, value) = line.trim().strip_suffix(';')?.split_once(" = ")?;
+        (is_decompiler_local(target) && count_ident(value, target) == 0 && !value.is_empty())
+            .then(|| (target.to_owned(), value.to_owned()))
+    };
     let mut at = 0usize;
     while at < lines.len() {
         let at_decl = at;
         let mut redeclare: Option<(usize, String)> = None;
         let folded = (|| {
             let (indent, name, init) = declaration_with_initializer(&lines[at]).or_else(|| {
-                let (target, value) = slot_store(&lines[at])?;
+                let (target, value) = life_store(&lines[at])?;
                 is_decompiler_local(&target).then(|| (indent_of(&lines[at]), target, value))
             })?;
             let key = slot_and_life(&name)?;
@@ -14135,7 +14164,17 @@ fn inline_unnamed_value_temporaries(
                     && init.split(' ').next().is_some_and(is_plain_literal)
                     && !init.contains(['(', '"'])
             };
-            if !unnamed.contains(&key) && !sole_life() && !arithmetic() && !literal_seeded() {
+            // A member read consumed once — `int t = X.F + 1; X.F = t;` — is the compiler's
+            // temporary in whatever life of the slot the text names it (the same life-number
+            // question as above: `Conversation_NC_BAU_HORATIO_901`, the second increment).
+            let member_read = || {
+                member_read_temps.contains(&key.0)
+                    && !init.contains(['(', '"', '['])
+                    && init.split(' ').next().is_some_and(|head| head.contains('.') && !head.starts_with('.'))
+                    && (init.split(' ').count() == 1
+                        || (init.split(' ').count() == 3 && init.split(' ').nth(2).is_some_and(is_plain_literal)))
+            };
+            if !unnamed.contains(&key) && !sole_life() && !arithmetic() && !literal_seeded() && !member_read() {
                 inline_reject("not-unnamed", "", &name, &lines[at]);
                 return None;
             }
@@ -14179,7 +14218,7 @@ fn inline_unnamed_value_temporaries(
                     // Arithmetic witnesses name a physical slot. Its later life may be a
                     // named argument evaluated before the call's other arguments, even when
                     // an earlier life was an unnamed arithmetic operand.
-                    if is_pure_arithmetic(&init) && !literal_seeded() {
+                    if is_pure_arithmetic(&init) && !literal_seeded() && !member_read() {
                         inline_reject("life-arithmetic", "", &name, &lines[at]);
                         return None;
                     }
@@ -14208,7 +14247,7 @@ fn inline_unnamed_value_temporaries(
                     // block without a declaration.
                     if declaration_with_initializer(&lines[at]).is_some() && region_end < lines.len() {
                         let next = &lines[region_end];
-                        if slot_store(next).is_none() {
+                        if life_store(next).is_none() {
                             inline_reject("life-scope", "", &name, &lines[at]);
                             return None;
                         }
@@ -14228,7 +14267,7 @@ fn inline_unnamed_value_temporaries(
             while reader < lines.len() && count_ident(&lines[reader], &name) == 0 {
                 let sibling = declaration_with_initializer(&lines[reader])
                     .or_else(|| {
-                        let (target, value) = slot_store(&lines[reader])?;
+                        let (target, value) = life_store(&lines[reader])?;
                         is_decompiler_local(&target)
                             .then(|| (indent_of(&lines[reader]), target, value))
                     })
@@ -14319,7 +14358,7 @@ fn inline_unnamed_value_temporaries(
             // compiler takes `intSlot = boolLocal;` and refuses `intSlot = false;`. Where the
             // destination is declared with the literal's own type there is nothing to lose.
             if matches!(init.as_str(), "true" | "false") {
-                if let Some((target, value)) = slot_store(consumer) {
+                if let Some((target, value)) = life_store(consumer) {
                     if value == name && declared_type(&lines, &target).as_deref() != Some("bool") {
                         return None;
                     }
@@ -14427,8 +14466,8 @@ fn fold_assignment_receivers(body: &str, consumed: &HashSet<(i32, usize)>) -> St
     // mentions per pair, and not one more. See the cap below for why the count is taken up front.
     // name -> how many of its receiver pairs are COMPOUND assignments. A compound one through a
     // call receiver (`this.GetG1R().Counter += 1;`) is a form the tree cannot carry — shipping 19
-    // of them took the compiler down with no diagnostic — so those pairs never fold. They still
-    // have to be COUNTED: a name whose other pairs are plain is eligible, and its declaration has
+    // of them took the compiler down with no diagnostic. Only the single literal update below
+    // is eligible; other compound pairs are still counted so the name's declaration has
     // to survive for the compound sites that keep using it.
     let receiver_only: HashMap<String, usize> = {
         let mut plain: HashMap<String, usize> = HashMap::new();
@@ -14505,16 +14544,23 @@ fn fold_assignment_receivers(body: &str, consumed: &HashSet<(i32, usize)>) -> St
             // the same tree compile). Kept to a name that is nothing BUT receiver pairs: one
             // conversation topic assigns six members of the same story object in a row, and
             // demanding a single pair is what left all six standing.
-            let compounds = *receiver_only.get(&name)?;
             let next = &lines[at + 1];
             if indent_of(next) != indent {
                 return None;
             }
             let assigned = next.trim().strip_prefix(name.as_str())?.strip_suffix(';')?;
-            // `= ` or any compound form: the receiver is evaluated once either way.
-            // A compound assignment through a call receiver is refused outright: see the
-            // pre-pass. Only the plain form folds.
-            let (target, _) = assigned.split_once(" = ")?;
+            // A single directly declared receiver and an integer literal update
+            // do not move another evaluation across this call. Keep all other
+            // compound pairs under the existing conservative restriction.
+            let compound_literal = declaration_with_initializer(&lines[at]).is_some()
+                && lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() == 2;
+            let compound = [" += ", " -= "].iter().find_map(|op| {
+                let (target, rhs) = assigned.split_once(op)?;
+                (compound_literal && rhs.parse::<i32>().is_ok()).then_some((target, rhs))
+            });
+            let compounds = receiver_only.get(&name).copied()
+                .or_else(|| compound.map(|_| 0))?;
+            let (target, _) = assigned.split_once(" = ").or(compound)?;
             if !target.starts_with('.') || target.contains('(') {
                 return None;
             }
@@ -16303,6 +16349,61 @@ fn is_arithmetic_op(name: &str) -> bool {
             | "SUBIf" | "MULIf" | "NEGi" | "NEGf" | "NEGd" | "CMPi" | "CMPu" | "CMPf"
             | "CMPd" | "CMPi64" | "CMPu64" | "CMPIi" | "CMPIf" | "CMPIu"
     ) || super::structure::is_numeric_cast(name)
+}
+
+/// Slots a member read (`RDR1/2/4/8 s`) lands in and, followed through in-place arithmetic, is
+/// consumed exactly once — written back through a member (`WRTV*`) or read as an arithmetic
+/// operand — with no push between and nothing copying the value on: the compiler's temporary
+/// for one member expression, in whatever life of the slot the text names it.
+fn member_read_temp_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let mut out = HashSet::new();
+    let mut refused = HashSet::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if !matches!(ins.op.name, "RDR1" | "RDR2" | "RDR4" | "RDR8") {
+            continue;
+        }
+        let slot = w0(ins);
+        if slot <= 0 {
+            continue;
+        }
+        let mut reads = 0usize;
+        let mut consumer_ok = false;
+        let mut pushed = false;
+        let mut copied_on = false;
+        for other in &instrs[at + 1..] {
+            let is_dst = (writes_destination(other.op.name) || other.op.fmt.writes_first_word())
+                && w0(other) == slot;
+            let reads_it = super::bytediff::addressed_slots(other)
+                .into_iter()
+                .skip(usize::from(is_dst))
+                .any(|s| s == slot);
+            if is_dst && reads_it && is_arithmetic_op(other.op.name) && !super::structure::is_numeric_cast(other.op.name) {
+                continue; // an in-place update continues the life
+            }
+            if reads_it {
+                reads += 1;
+                consumer_ok = is_arithmetic_op(other.op.name) || other.op.name.starts_with("WRTV");
+                copied_on |= other.op.name.starts_with("CpyVtoV") || other.op.name.starts_with("CpyVtoR");
+            } else if reads == 0 && (other.op.name.starts_with("Psh") || other.op.name == "PSF") {
+                pushed = true;
+            }
+            if is_dst {
+                break;
+            }
+        }
+        if reads == 1 && consumer_ok && !pushed && !copied_on {
+            out.insert(slot);
+        } else {
+            refused.insert(slot);
+        }
+    }
+    // one life that is no temporary makes the whole slot's witness unsafe
+    out.retain(|slot| !refused.contains(slot));
+    out
 }
 
 /// Slots the compiler computed `K op x` in — a literal store followed by an in-place arithmetic
@@ -22488,7 +22589,7 @@ mod condition_identifier_tests {
         inline_unnamed_value_temporaries(
             body, &HashSet::from([(1, 1)]), &HashSet::new(), &HashSet::new(),
             &RefResolver::default(), &HashSet::new(), &HashSet::new(),
-            &HashMap::new(), &HashSet::new(), &HashSet::new(),
+            &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
         )
     }
 
@@ -23200,5 +23301,114 @@ mod known_const_member_type_tests {
         assert_eq!(type_of_member_path("EventData.OptionalObject", None, &roots, &refs).as_deref(), Some("UObject"));
         assert_eq!(type_of_member_path("EventData.Unknown", None, &roots, &refs), None);
         assert_eq!(type_of_member_path("Unknown.Instigator", None, &roots, &refs), None);
+    }
+}
+
+#[cfg(test)]
+mod member_arithmetic_lifetime_tests {
+    use super::{member_read_temp_slots, inline_unnamed_value_temporaries, Func};
+    use crate::cache::{isa::OPCODES, refs::RefResolver, types::DataType};
+    use std::collections::{HashMap, HashSet};
+
+    fn function(ops: &[(&str, &[u16])]) -> Func {
+        let bytecode = ops.iter().flat_map(|(name, words)| {
+            let op = OPCODES.iter().find(|op| op.name == *name).unwrap();
+            let mut row = vec![0i32; op.size_dwords as usize];
+            row[0] = op.opcode as i32;
+            for (index, word) in words.iter().enumerate() {
+                let at = index + 1;
+                row[at / 2] |= ((*word as u32) << ((at % 2) * 16)) as i32;
+            }
+            row
+        }).collect();
+        Func { name: "Fixture".into(), param_defaults: Vec::new(), namespace: String::new(),
+            ret: DataType::default(), params: Vec::new(), bytecode, obj_locals: Vec::new(),
+            is_ufunction: false, traits: 0 }
+    }
+
+    #[test]
+    fn every_member_lifetime_must_have_one_arithmetic_or_member_write_consumer() {
+        let prefix: Vec<(&str, &[u16])> = vec![
+            ("RDR8", &[12]), ("SUBd", &[12, 12, 14]), ("WRTV8", &[12]),
+            ("RDR8", &[12]),
+        ];
+        let mut valid = prefix.clone();
+        valid.push(("ADDd", &[18, 12, 20]));
+        assert_eq!(member_read_temp_slots(&function(&valid)), HashSet::from([12]));
+        for tail in [
+            vec![("PshV8", &[12][..])],
+            vec![("CpyVtoV8", &[20, 12][..])],
+            vec![("PSF", &[24][..]), ("WRTV8", &[12][..])],
+            vec![("WRTV8", &[12][..]), ("WRTV8", &[12][..])],
+        ] {
+            let mut rejected = prefix.clone();
+            rejected.extend(tail);
+            assert!(member_read_temp_slots(&function(&rejected)).is_empty());
+        }
+    }
+
+    #[test]
+    fn member_life_folds_without_authorizing_a_later_nonmember_argument() {
+        for name in ["local_12", "local_12_2"] {
+            let body = format!("    float {name} = this.Max - 1.0;\n    this.Value = {name};\n    {name} = Scale * Value;\n    Clamp({name}, Min, Max);\n");
+            let folded = inline_unnamed_value_temporaries(&body, &HashSet::new(), &HashSet::new(),
+                &HashSet::new(), &RefResolver::default(), &HashSet::new(), &HashSet::new(),
+                &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::from([12]));
+            assert!(folded.contains("this.Value = (this.Max - 1.0);"), "{folded}");
+            assert!(folded.contains(&format!("float {name} = Scale * Value;")), "{folded}");
+            assert!(folded.contains(&format!("Clamp({name}, Min, Max);")), "{folded}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod literal_compound_receiver_tests {
+    use super::fold_assignment_receivers;
+    use std::collections::HashSet;
+
+    #[test]
+    fn one_consumed_receiver_keeps_the_integer_update_in_its_statement() {
+        let body = "    UStory local_28 = this.GetStory();
+    local_28.Counter += 1;
+";
+        assert_eq!(fold_assignment_receivers(body, &HashSet::from([(28, 1)])),
+                   "    this.GetStory().Counter += 1;
+");
+        assert_eq!(fold_assignment_receivers(body, &HashSet::new()), body);
+    }
+
+    #[test]
+    fn an_evaluated_addend_or_reused_receiver_stays_named() {
+        for body in [
+            "    UStory local_28 = this.GetStory();
+    local_28.Counter += Compute();
+",
+            "    UStory local_28 = this.GetStory();
+    local_28.Counter += 1;
+    Use(local_28);
+",
+            "    UStory local_28;
+    local_28 = this.GetStory();
+    local_28.Counter += 1;
+",
+        ] {
+            assert_eq!(fold_assignment_receivers(body, &HashSet::from([(28, 1)])), body);
+        }
+    }
+}
+
+#[cfg(test)]
+mod late_compound_order_tests {
+    use super::fold_compound_assignments;
+    use crate::cache::refs::RefResolver;
+    use std::collections::HashMap;
+
+    #[test]
+    fn late_integer_updates_fold_but_computed_addends_keep_the_original_read_order() {
+        let body = "    local_40.Z = local_40.Z + (local_8.Height * 0.5);\n    local_28.Counter = (local_28.Counter + 1);\n";
+        let actual = fold_compound_assignments(body, None, &HashMap::new(), &RefResolver::default(), true);
+        assert_eq!(actual, "    local_40.Z = local_40.Z + (local_8.Height * 0.5);\n    local_28.Counter += 1;\n");
+        let carried = "    float local_4 = local_40.Z;\n    local_4 = local_4 + Compute();\n    local_40.Z = local_4;\n";
+        assert_eq!(fold_compound_assignments(carried, None, &HashMap::new(), &RefResolver::default(), true), carried);
     }
 }
