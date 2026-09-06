@@ -452,12 +452,37 @@ fn is_argument_constructor(instructions: &[Instr], index: usize) -> bool {
 }
 
 fn is_value_call(instructions: &[Instr], index: usize) -> bool {
-    instructions.get(index + 1).is_some_and(|next| {
-        matches!(
-            next.op.name,
-            "STOREOBJ" | "PshRPtr" | "CpyRtoV4" | "CpyRtoV8"
-        )
-    })
+    let Some(next) = instructions.get(index + 1) else {
+        return false;
+    };
+    let push_index = match next.op.name {
+        "STOREOBJ" | "CpyRtoV4" | "CpyRtoV8" => {
+            let Some(push) = instructions.get(index + 2) else {
+                return false;
+            };
+            let loads_result = match next.op.name {
+                "STOREOBJ" => matches!(push.op.name, "PshVPtr" | "PSF"),
+                "CpyRtoV4" => push.op.name == "PshV4",
+                "CpyRtoV8" => push.op.name == "PshV8",
+                _ => unreachable!(),
+            };
+            if !loads_result || next.words.first().is_none() || next.words != push.words {
+                return false;
+            }
+            index + 2
+        }
+        "PshRPtr" => index + 1,
+        _ => return false,
+    };
+    // CompileExpressionStatement discards an unused object result with PopPtr.
+    // OptimizeLocally removes the matching push/pop, leaving STOREOBJ in place:
+    // a local result store alone therefore cannot hide the producing default call.
+    // Require the same result to be pushed onwards, and reject an unoptimized discard
+    // too. Delayed/branching result loads stay on the ordinary call-target path.
+    instructions[push_index + 1..]
+        .iter()
+        .find(|instruction| !matches!(instruction.op.name, "CHKREF" | "RDSPtr"))
+        .is_some_and(|instruction| !matches!(instruction.op.name, "PopPtr" | "RET"))
 }
 
 #[derive(Clone, Debug)]
@@ -917,6 +942,44 @@ mod tests {
     fn word_code(name: &str, slot: u16) -> i32 {
         let op = instruction(name, &[slot], &[]);
         (u32::from(slot) << 16 | u32::from(op.op.opcode)) as i32
+    }
+
+    #[test]
+    fn discarded_local_results_cannot_hide_default_calls() {
+        for (store, push) in [
+            ("STOREOBJ", "PshVPtr"),
+            ("STOREOBJ", "PSF"),
+            ("CpyRtoV8", "PshV8"),
+        ] {
+            // Optimized standalone Factory(): its result is stored but never read.
+            let mut code = vec![word_code("CALL", 0), 1, word_code(store, 2)];
+            let error = bytecode_targets(&code, 2, &RefResolver::default()).unwrap_err();
+            assert!(error.contains("cannot resolve CALL"), "{error}");
+
+            // The unoptimized push/pop must not turn the same call into a value call.
+            code.extend([word_code(push, 2), word_code("PopPtr", 0)]);
+            let error = bytecode_targets(&code, 2, &RefResolver::default()).unwrap_err();
+            assert!(error.contains("cannot resolve CALL"), "{error}");
+        }
+    }
+
+    #[test]
+    fn local_result_calls_require_a_load_of_the_same_result() {
+        for (store, push) in [
+            ("STOREOBJ", "PshVPtr"),
+            ("STOREOBJ", "PSF"),
+            ("CpyRtoV8", "PshV8"),
+        ] {
+            let mut code = vec![
+                instruction("CALL", &[], &[1]),
+                instruction(store, &[2], &[]),
+                instruction(push, &[2], &[]),
+                instruction("CALL", &[], &[2]),
+            ];
+            assert!(is_value_call(&code, 0));
+            code[2].words[0] = 4;
+            assert!(!is_value_call(&code, 0));
+        }
     }
 
     #[test]
