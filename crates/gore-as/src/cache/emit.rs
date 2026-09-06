@@ -962,8 +962,8 @@ fn emit_function_ctor(
     // mis-typed default/optional-arg slots — FName->UAIState_DailyRoutine, TSubclassOf<X>->X).
     // outref_overrides: PSF slots feeding float-family REFERENCE params (declaration-only, below).
     // float_args/keep_ints (batch-25g): numeric BY-VALUE arg slots — see structure::ArgSlotHints.
-    let (slot_overrides, outref_overrides, float_args, keep_ints, int_refs, small_args) =
-        infer_slot_types(f, refs);
+    let (slot_overrides, outref_overrides, float_args, keep_ints, int_refs, small_args,
+        enum_value_uses) = infer_slot_types(f, refs);
     // batch-28 (specs/batch27-floatwarnings.md §2): unified numeric-kind dataflow pass.
     // Anti-seed imports: slots value-pushed into int-family params (keep_ints), PSF-bound to
     // int-family reference params (int_refs), or bool&-bound (outref "bool") hold int/bool
@@ -1086,10 +1086,12 @@ fn emit_function_ctor(
                     if float_args.contains_key(slot) {
                         return Some("float-arg");
                     }
-                    // `keep_ints` holds the slot BECAUSE it was pushed into the enum parameter
-                    // (the structurer's cast-wrapper hint): the seed itself is exempt, its copy
-                    // partners are not.
-                    if keep_ints.contains(slot) && !argument_enums.contains_key(slot) {
+                    // Enum arguments also earn keep-int. A copy partner may share that
+                    // exemption only when every paired value use names this same enum.
+                    if keep_ints.contains(slot)
+                        && !argument_enums.contains_key(slot)
+                        && enum_value_uses.get(slot) != Some(ty)
+                    {
                         return Some("keep-int");
                     }
                     if int_refs.contains(slot) {
@@ -1179,6 +1181,9 @@ fn emit_function_ctor(
     // the left was computed was a statement of its own (`int n = Max(1, Count()); return x +
     // (2pi * i) / n;` — vanilla called `Max` before it read `x`).
     statement_producers.extend(statement_operand_slots(f));
+    let copied_widened_returns = copied_widened_return_slots(f, refs);
+    statement_producers.extend(copied_widened_returns.iter().copied());
+    statement_producers.extend(receivers_built_before_their_rvo_push(f, refs));
     // Where vanilla destroyed a value slot mid-expression it was calling on a temporary there.
     // A by-value call result pushed again straight after the call is consumed where it was
     // produced — the temporary of a fluent chain (`AI.FearHere(…).While(n"…")`): vanilla ran
@@ -1559,6 +1564,10 @@ fn emit_function_ctor(
     // the arguments and in another order.
     let rvo_producers = super::structure::take_rvo_producers();
     let rvo_consumers = super::structure::take_rvo_consumers();
+    let named_by_direct_store =
+        values_named_by_a_direct_handle_store(f, refs, &rvo_producers, &rvo_consumers);
+    hoisted.extend(named_by_direct_store.iter().copied());
+    statement_producers.extend(named_by_direct_store.iter().copied());
     let (rvo_statements, inline_callees) = rvo_statement_producers(f, refs, &rvo_producers);
     statement_producers.extend(rvo_statements);
     // A value object a call built straight into a slot vanilla kept alive past its consumer
@@ -1951,7 +1960,7 @@ fn emit_function_ctor(
     );
     pass_trace("fold_member_read_temporaries", &body);
     let body =
-        fold_returned_temporaries(&body, &declared_locals, refs, &ret, returns_by_reference);
+        fold_returned_temporaries(&body, &declared_locals, refs, &ret, returns_by_reference, &copied_widened_returns);
     // Before the hoist counts which locals exist: a slot whose only write is dead has no name.
     let body = drop_dead_stores_before_return(&body);
     pass_trace("drop_dead_stores_before_return", &body);
@@ -2632,7 +2641,7 @@ fn emit_function_ctor(
         let rendered = rejoin_short_circuit_chains(&rendered);
         pass_trace("rejoin_short_circuit_chains", &rendered);
         let rendered =
-            fold_returned_temporaries(&rendered, &declared_locals, refs, &ret, returns_by_reference);
+            fold_returned_temporaries(&rendered, &declared_locals, refs, &ret, returns_by_reference, &copied_widened_returns);
         let rendered = recover_condition_loops(&rendered);
         pass_trace("recover_condition_loops", &rendered);
         let rendered = fold_negated_stores(&rendered);
@@ -2690,7 +2699,7 @@ fn emit_function_ctor(
         pass_trace("drop_dead_literal_stores", &rendered);
         let rendered = collapse_single_use_accumulators(&rendered, &widened, &locals);
         pass_trace("collapse_single_use_accumulators", &rendered);
-        let rendered = inline_bool_chain_into_next_condition(&rendered);
+        let rendered = inline_bool_chain_into_next_condition(&rendered, &named_sites);
         pass_trace("inline_bool_chain_into_next_condition", &rendered);
         let rendered = fold_bool_member_comparisons(&rendered, fields, &path_roots, refs);
         pass_trace("fold_bool_member_comparisons", &rendered);
@@ -3234,6 +3243,30 @@ fn ret_is_struct(ty: &str) -> bool {
     )
 }
 
+/// A value argument can explain an enum copy partner's keep-int hint only when
+/// every paired value use has the same enum type. A conflicting use stays poisoned,
+/// including uses paired by the constructor path in infer_slot_types.
+fn record_enum_value_use(
+    uses: &mut HashMap<i32, Option<String>>,
+    slot: i32,
+    param: &super::types::DataType,
+    refs: &RefResolver,
+) {
+    if slot <= 0 {
+        return;
+    }
+    let candidate = (param.token == 5 && !param.is_reference && !param.is_object_handle)
+        .then(|| param.base_name(refs))
+        .filter(|ty| super::structure::is_enum_name(ty));
+    uses.entry(slot)
+        .and_modify(|known| {
+            if known.as_ref() != candidate.as_ref() {
+                *known = None;
+            }
+        })
+        .or_insert(candidate);
+}
+
 /// Returns (consumer-typed object-slot overrides, out-ref primitive DECLARATION overrides).
 ///
 /// The second map (batch19 class 3): a slot whose ADDRESS (`PSF`) feeds a `float32&`/`float&`/
@@ -3255,6 +3288,7 @@ fn infer_slot_types(
     HashSet<i32>,
     HashSet<i32>,
     HashMap<i32, String>,
+    HashMap<i32, String>,
 ) {
     let instrs = match disassemble(&f.bytecode) {
         Ok(i) => i,
@@ -3265,6 +3299,7 @@ fn infer_slot_types(
                 HashMap::new(),
                 HashSet::new(),
                 HashSet::new(),
+                HashMap::new(),
                 HashMap::new(),
             );
         }
@@ -3323,11 +3358,13 @@ fn infer_slot_types(
     let mut sarg: HashMap<i32, Option<String>> = HashMap::new();
     // shared numeric BY-VALUE channel (used by both ordinary-call pairing and the $beh0
     // ctor-arg pairing): float params -> farg, int-family params -> ikeep (+ sarg small-ints).
+    let enum_value_uses = std::cell::RefCell::<HashMap<i32, Option<String>>>::default();
     let val_arg = |s: i32,
                    pt: &super::types::DataType,
                    farg: &mut HashMap<i32, Option<String>>,
                    ikeep: &mut HashSet<i32>,
                    sarg: &mut HashMap<i32, Option<String>>| {
+        record_enum_value_use(&mut enum_value_uses.borrow_mut(), s, pt, refs);
         match pt.token {
             0x50 | 0x51 | 0x5E => {
                 let kw = super::types::token_keyword(pt.token).to_string();
@@ -3758,7 +3795,12 @@ fn infer_slot_types(
             }
         }
     }
-    (obj, outref, float_args, ikeep, iref, small_args)
+    let enum_value_uses = enum_value_uses
+        .into_inner()
+        .into_iter()
+        .filter_map(|(slot, ty)| ty.map(|ty| (slot, ty)))
+        .collect();
+    (obj, outref, float_args, ikeep, iref, small_args, enum_value_uses)
 }
 
 /// Member-access-driven slot typing: a `LoadRObjR`/`LoadVObjR base, off, tid` reads field
@@ -4957,7 +4999,16 @@ fn released_handle_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
         return HashSet::new();
     };
     let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
-    let per_iteration = loop_element_slots(f);
+    // A body-local cast may be released on every iteration too. Protect actual
+    // Proceed results instead; an unknown result shape retains the previous gate.
+    let proceed_calls = instrs.iter().enumerate().filter_map(|(at, ins)| {
+        (ins.op.name == "CALLSYS"
+            && refs.func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64)
+                == Some("Proceed"))
+            .then_some(at)
+    });
+    let per_iteration = known_proceed_element_slots(&instrs, proceed_calls)
+        .unwrap_or_else(|| loop_element_slots(f));
     let destructor = |ins: &super::disasm::Instr| {
         ins.op.name == "CALLSYS"
             && refs.func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64) == Some("$beh2")
@@ -5030,6 +5081,54 @@ fn released_handle_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
         }
     }
     out
+}
+
+/// Protect every recognized Proceed result, including borrowed elements and reused
+/// iterator slots. Unknown lowering preserves the previous broad loop exclusion.
+/// Calls are selected by the resolver; the helper reuses the caller's disassembly.
+fn known_proceed_element_slots(
+    instrs: &[super::disasm::Instr],
+    proceed_calls: impl IntoIterator<Item = usize>,
+) -> Option<HashSet<i32>> {
+    let slot = |ins: &super::disasm::Instr| {
+        ins.words.first().map(|w| *w as i16 as i32).filter(|s| *s > 0)
+    };
+    let mut out = HashSet::new();
+    for at in proceed_calls {
+        let receiver = instrs.get(at.checked_sub(1)?)?;
+        if !matches!(receiver.op.name, "PSF" | "PshVPtr") || slot(receiver).is_none() {
+            return None;
+        }
+        let next = instrs.get(at + 1)?;
+        if matches!(next.op.name, "STOREOBJ" | "RefCpyV" | "CpyRtoV4" | "CpyRtoV8") {
+            out.insert(slot(next)?);
+            continue;
+        }
+        if next.op.name == "PshRPtr"
+            && instrs.get(at + 2).is_some_and(|n| n.op.name == "RDSPtr")
+        {
+            let store = instrs.get(at + 3).filter(|n| n.op.name == "RefCpyV")?;
+            out.insert(slot(store)?);
+            continue;
+        }
+        if matches!(next.op.name, "RDR1" | "RDR2" | "RDR4" | "RDR8") {
+            let read_slot = slot(next)?;
+            out.insert(read_slot);
+            // Numeric/enum iterators also occur alongside handle iterators. Keep
+            // both the scratch and its immediate copied/converted result; neither
+            // can turn a later handle life of the same slot into a release witness.
+            if let Some(copy) = instrs.get(at + 2).filter(|n| {
+                (n.op.name.starts_with("CpyVtoV")
+                    || matches!(n.op.name, "sbTOi" | "ubTOi"))
+                    && n.words.get(1).map(|w| *w as i16 as i32) == Some(read_slot)
+            }) {
+                out.insert(slot(copy)?);
+            }
+            continue;
+        }
+        return None;
+    }
+    Some(out)
 }
 
 /// The name a `local_N = nullptr;` line releases.
@@ -6567,9 +6666,89 @@ fn is_block_end_release(lines: &[&str], at: usize, ident: &str) -> bool {
             next += 1;
             continue;
         }
-        return trimmed.starts_with('}');
+        // Only one exact scalar increment directly before the closing brace.
+        // Do not skip arbitrary updates, calls, or a following return expression.
+        if is_loop_increment(trimmed) && count_ident(trimmed, ident) == 0 {
+            return lines[next + 1..].iter().find(|line| !line.trim().is_empty())
+                .is_some_and(|line| line.trim() == "}");
+        }
+        return trimmed.starts_with('}')
+            || matches!(trimmed, "continue;" | "break;" | "return;")
+            || trimmed
+                .strip_prefix("return ")
+                .and_then(|rest| rest.strip_suffix(';'))
+                .is_some_and(|expr| !expr.trim().is_empty() && count_ident(expr, ident) == 0);
     }
     false
+}
+
+/// A scalar VM increment rendered at the end of a counted loop's body.
+fn is_loop_increment(trimmed: &str) -> bool {
+    let Some(body) = trimmed.strip_suffix(';') else { return false; };
+    body.strip_prefix("++").or_else(|| body.strip_prefix("--"))
+        .is_some_and(is_decompiler_local)
+}
+
+/// Sinking a handle into a block adds implicit cleanup at every break/continue.
+/// Require that each such edge already releases this handle last. A later
+/// explicit release of another handle would move before the implicit cleanup.
+/// Only edges leaving the candidate block count; return epilogues are separate.
+fn block_life_exits_preserve_handle_release(body: &str, slot: i32) -> bool {
+    let ident = format!("local_{slot}");
+    let release = format!("{ident} = nullptr;");
+    let lines: Vec<&str> = body.lines().collect();
+    let body_depth = lines.iter()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| indent_of(line).len())
+        .min().unwrap_or(0);
+    let mut at = 0usize;
+    while let Some(start) = (at..lines.len()).find(|i| count_ident(lines[*i], &ident) > 0) {
+        // A final function-level life does not gain nested block cleanup.
+        if indent_of(lines[start]).len() == body_depth {
+            return true;
+        }
+        let (_, end) = block_span(&lines, start);
+        if end >= lines.len() {
+            return false;
+        }
+        for exit in start + 1..end {
+            if !matches!(lines[exit].trim(), "break;" | "continue;") {
+                continue;
+            }
+            // A nested loop keeps this outer life alive on both exit forms.
+            // A switch does so for break only; continue still targets a loop.
+            let mut scope = exit;
+            let mut stays_inside = false;
+            loop {
+                let (open, _) = block_span(&lines, scope);
+                if open <= start || open >= scope {
+                    break;
+                }
+                let header = lines[..open].iter().rev()
+                    .find(|line| !line.trim().is_empty())
+                    .map(|line| line.trim()).unwrap_or("");
+                if header.starts_with("for (") || header.starts_with("while (")
+                    || header == "do"
+                    || (lines[exit].trim() == "break;" && header.starts_with("switch ("))
+                {
+                    stays_inside = true;
+                    break;
+                }
+                scope = open;
+            }
+            if stays_inside {
+                continue;
+            }
+            if lines[start + 1..exit].iter().rev()
+                .find(|line| !line.trim().is_empty())
+                .is_none_or(|line| line.trim() != release)
+            {
+                return false;
+            }
+        }
+        at = end + 1;
+    }
+    true
 }
 
 /// Whether every life of `local_N` inside a block ends with the block's release of it: the first
@@ -6608,10 +6787,16 @@ fn lives_end_with_block_releases(body: &str, slot: i32) -> bool {
         }
         let mut k = end;
         let mut found = false;
+        let mut past_increment = false;
         while k > start {
             k -= 1;
             let line = lines[k];
             if line.trim().is_empty() {
+                continue;
+            }
+            // a counted loop's increment stands behind the body's release run
+            if !past_increment && !found && is_loop_increment(line.trim()) {
+                past_increment = true;
                 continue;
             }
             if !is_handle_release(line) {
@@ -10593,6 +10778,43 @@ fn drop_unused_declarations(text: &str, keep: &HashSet<i32>) -> String {
     joined
 }
 
+/// Vanilla released the body locals before incrementing the counted-loop index.
+/// Put that update in the for header before replacing explicit cleanup with scope
+/// cleanup. Refuse continues because moving the update could change their target.
+fn move_counted_update_after_cleanup(text: &str) -> String {
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    let mut removed = std::collections::HashSet::new();
+    for head in 0..lines.len().saturating_sub(3) {
+        let Some(condition) = lines[head].trim().strip_prefix("for (; ")
+            .and_then(|rest| rest.strip_suffix("; )")).map(str::to_owned) else { continue; };
+        if lines[head + 1].trim() != "{" { continue; }
+        let mut depth = 1;
+        let Some(close) = (head + 2..lines.len()).find(|at| {
+            depth += brace_net(&lines[*at]);
+            depth == 0
+        }) else { continue; };
+        let Some(tail) = (head + 2..close).rev().find(|at| !lines[*at].trim().is_empty()) else { continue; };
+        let update = lines[tail].trim().to_owned();
+        if !is_loop_increment(&update) { continue; }
+        let counter = &update[2..update.len() - 1];
+        if count_ident(&condition, counter) == 0
+            || lines[head + 2..tail].iter().any(|line| line.trim() == "continue;")
+            || !(head + 2..tail).rev().find(|at| !lines[*at].trim().is_empty())
+                .is_some_and(|at| is_handle_release(&lines[at]))
+        { continue; }
+        // An index declared inside this body cannot be moved into its header.
+        if lines[head + 2..tail].iter().any(|line| {
+            bare_declaration(line).is_some_and(|(_, name)| name == counter)
+                || declaration_with_initializer(line).is_some_and(|(_, name, _)| name == counter)
+        }) { continue; }
+        lines[head] = format!("{}for (; {condition}; {})", indent_of(&lines[head]), update.trim_end_matches(';'));
+        removed.insert(tail);
+    }
+    let mut out = lines.into_iter().enumerate().filter_map(|(i, line)| (!removed.contains(&i)).then_some(line)).collect::<Vec<_>>().join("\n");
+    if text.ends_with('\n') { out.push('\n'); }
+    out
+}
+
 /// Drops the handle release a BLOCK already performs.
 ///
 /// A handle declared inside a block is released by the compiler when the block ends. Rendering
@@ -10604,7 +10826,7 @@ fn drop_unused_declarations(text: &str, keep: &HashSet<i32>) -> String {
 fn drop_block_end_handle_releases(text: &str) -> String {
     // A block that declares two handles ends with two releases, and only the last of them stands
     // directly before the brace: dropping one uncovers the next.
-    let mut text = text.to_owned();
+    let mut text = move_counted_update_after_cleanup(text);
     for _ in 0..8 {
         let next = drop_one_block_end_handle_release(&text);
         if next == text {
@@ -10638,8 +10860,11 @@ fn drop_one_block_end_handle_release(text: &str) -> String {
         let Some(close) = (index + 1..lines.len()).find(|at| depths[*at] < depths[index]) else {
             continue;
         };
-        if close > 0 && lines[close - 1].trim() == release {
-            drop[close - 1] = true;
+        // Only remove a release at the actual scope boundary. Counted updates
+        // that can move safely were already placed in the for header.
+        let tail = close;
+        if tail > 0 && lines[tail - 1].trim() == release {
+            drop[tail - 1] = true;
         }
         // The compiler releases the block's handles on every way OUT of it as well: a
         // `continue`, `break` or `return` inside the block is preceded by the same releases
@@ -10827,7 +11052,10 @@ fn drop_redundant_conversions(
 /// materialize the value into a slot and read it back one byte wide before the branch. The value
 /// travels in brackets, so a chain mixing `&&` and `||` keeps the grouping it had — mixing them
 /// without brackets is a warning here, and warnings are errors.
-fn inline_bool_chain_into_next_condition(body: &str) -> String {
+fn inline_bool_chain_into_next_condition(
+    body: &str,
+    named_sites: &HashSet<(i32, String)>,
+) -> String {
     let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
     let mut changed = true;
     while changed {
@@ -10841,6 +11069,15 @@ fn inline_bool_chain_into_next_condition(body: &str) -> String {
             }
             if !(value.contains("&&") || value.contains("||")) {
                 continue;
+            }
+            // A read-back of this call's result witnesses a named bool, even after
+            // short-circuit folding has joined its initializer into one expression.
+            if let (Some((slot, _)), Some(callee)) =
+                (slot_and_life_any(&name), outer_callee(&value))
+            {
+                if named_sites.contains(&(slot, callee)) {
+                    continue;
+                }
             }
             let reader = index + 1;
             let trimmed = lines[reader].trim_start();
@@ -13793,6 +14030,19 @@ fn unnamed_value_defs(
         let mut pushed_before_read = false;
         for other in &instrs[at + 1..] {
             if w0(other) == slot && writes_destination(other.op.name) {
+                // An in-place arithmetic update (`SUBd s, s, x`) continues the life: the value
+                // it leaves is the same expression, one step further (`AIItemScoring`: the
+                // member read seeding `(Max - Min) * (1.0 - d)` is read once, by the addition
+                // behind the chain).
+                let in_place = other.words.iter().skip(1).any(|w| *w as i16 as i32 == slot);
+                // …but not for a LITERAL-seeded life: `int n = 0; n += A(); n += B(); return
+                // n;` is the named accumulator vanilla wrote — inlined, the leading constant
+                // becomes an immediate (`ADDIi`) instead of its store (measured:
+                // `HitsDealtInTheLastSeconds`).
+                let literal_seeded_life = matches!(ins.op.name, "SetV1" | "SetV2" | "SetV4" | "SetV8");
+                if in_place && !literal_seeded_life && is_arithmetic_op(other.op.name) && !super::structure::is_numeric_cast(other.op.name) {
+                    continue;
+                }
                 break;
             }
             let here = super::bytediff::addressed_slots(other)
@@ -14376,9 +14626,11 @@ fn type_of_member_path(
             // A field declared by a NATIVE class appears in no script class-fields map — the
             // installed `Binds.Cache` is what declares it, and it is read-only evidence.
             .or_else(|| refs.native_field_value_type(&ty, step))
+            .or_else(|| refs.native_field_const_object(&ty, step))
             .or_else(|| refs.field_type_by_class(&bare, step))
             .or_else(|| refs.native_field_type(&bare, step))
-            .or_else(|| refs.native_field_value_type(&bare, step))?
+            .or_else(|| refs.native_field_value_type(&bare, step))
+            .or_else(|| refs.native_field_const_object(&bare, step))?
             .to_owned();
         if indexed {
             ty = element_type(&ty)?.to_owned();
@@ -14827,6 +15079,62 @@ fn drop_dead_stores_before_return(body: &str) -> String {
     joined
 }
 
+/// Preserve the one named return copy vanilla made after widening float32 to float.
+/// The destination has exactly one write and reaches the return register through
+/// cleanup only. Folding it into the return loses CpyVtoV8 (drug normalization).
+fn copied_widened_return_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    if f.ret.token != 0x51 || f.ret.is_reference {
+        return HashSet::new();
+    }
+    let Ok(instrs) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    let w = |ins: &Instr, n: usize| ins.words.get(n).map(|s| *s as i16 as i32);
+    let mut writes: HashMap<i32, usize> = HashMap::new();
+    for ins in &instrs {
+        if writes_destination(ins.op.name) || ins.op.fmt.writes_first_word() {
+            if let Some(slot) = w(ins, 0) {
+                *writes.entry(slot).or_default() += 1;
+            }
+        }
+    }
+    let mut out = HashSet::new();
+    for (at, pair) in instrs.windows(2).enumerate() {
+        if pair[0].op.name != "fTOd" || pair[1].op.name != "CpyVtoV8"
+            || w(&pair[0], 0) != w(&pair[1], 1)
+        {
+            continue;
+        }
+        let Some(slot) = w(&pair[1], 0).filter(|s| *s > 0) else { continue; };
+        if writes.get(&slot) != Some(&1) || w(&pair[0], 0) == Some(slot) {
+            continue;
+        }
+        let mut next = at + 2;
+        while next < instrs.len() {
+            let ins = &instrs[next];
+            if ins.op.name == "FreeNullV8" && w(ins, 0) != Some(slot) {
+                next += 1;
+                continue;
+            }
+            if ins.op.name == "PSF" && w(ins, 0) != Some(slot)
+                && instrs.get(next + 1).is_some_and(|call| {
+                    call.op.name == "CALLSYS" && refs.func_by_ptr(
+                        call.qwords.first().copied().unwrap_or(0) as i64
+                    ) == Some("$beh2")
+                })
+            {
+                next += 2;
+                continue;
+            }
+            if ins.op.name == "CpyVtoR8" && w(ins, 0) == Some(slot)
+                && instrs.get(next + 1).is_some_and(|ret| ret.op.name == "RET")
+            {
+                out.insert(slot);
+            }
+            break;
+        }
+    }
+    out
+}
+
 /// `local_N = <expr>; return local_N;` is `return <expr>;`. The name is the whole cost: a
 /// declaration, a store, a copy back out, and for a value type a destructor that sinks to the end
 /// of the function. The source returned the expression.
@@ -14840,6 +15148,7 @@ fn fold_returned_temporaries(
     refs: &RefResolver,
     ret: &str,
     returns_by_reference: bool,
+    copied_widened_returns: &HashSet<i32>,
 ) -> String {
     if returns_by_reference {
         return body.to_owned();
@@ -14848,6 +15157,9 @@ fn fold_returned_temporaries(
         let Some(slot) = ident.strip_prefix("local_").and_then(|s| s.parse::<i32>().ok()) else {
             return false;
         };
+        if copied_widened_returns.contains(&slot) {
+            return false;
+        }
         // Both names have to be spelled the same way before they can be compared. The slot table
         // holds the BARE class name — the opCast retype writes what `type_by_id` returns — while
         // the return type is rendered with its namespace, so the comparison was dead for every
@@ -16245,6 +16557,62 @@ fn next_declaration_to_split(
     None
 }
 
+/// A constructor followed by a separate return-slot push and a zero-argument method call
+/// evaluated its receiver before that call began. Preserve the named value so inlining
+/// does not move the return-slot push ahead of the construction (FVector::ToString).
+/// Only adjacent instructions and a single construction qualify; do not scan past calls
+/// or infer anything about a different lifetime of a reused slot.
+fn receivers_built_before_their_rvo_push(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let slot = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32);
+    let ctor_ptr = |ins: &super::disasm::Instr| {
+        let ptr = ins.qwords.first().copied()? as i64;
+        (ins.op.name == "CALLSYS" && refs.func_by_ptr(ptr) == Some("$beh0")).then_some(ptr)
+    };
+    let mut counts: HashMap<i32, usize> = HashMap::new();
+    for pair in instrs.windows(2) {
+        if pair[0].op.name == "PSF" && ctor_ptr(&pair[1]).is_some() {
+            if let Some(s) = slot(&pair[0]).filter(|s| *s > 0) {
+                *counts.entry(s).or_default() += 1;
+            }
+        }
+    }
+    let mut out = HashSet::new();
+    for run in instrs.windows(5) {
+        if run[0].op.name != "PSF" || run[2].op.name != "PSF" || run[3].op.name != "PSF" {
+            continue;
+        }
+        let Some(s) = slot(&run[0]).filter(|s| *s > 0) else { continue; };
+        if counts.get(&s) != Some(&1) || slot(&run[3]) != Some(s) || slot(&run[2]) == Some(s) {
+            continue;
+        }
+        let Some(ctor) = ctor_ptr(&run[1]) else { continue; };
+        let Some(owner) = refs.func_owner_by_ptr(ctor) else { continue; };
+        let call = &run[4];
+        let (ret, params, method_owner, is_method) = match call.op.name {
+            "CALLSYS" | "Thiscall1" => {
+                let ptr = call.qwords.first().copied().unwrap_or(0) as i64;
+                (refs.func_ret_by_ptr(ptr), refs.func_params_by_ptr(ptr),
+                 refs.func_owner_by_ptr(ptr), refs.is_method_by_ptr(ptr))
+            }
+            "CALL" | "CALLINTF" => {
+                let id = call.dwords.first().copied().unwrap_or(0) as i32;
+                (refs.func_ret_by_id(id), refs.func_params_by_id(id),
+                 refs.func_owner_by_id(id), refs.is_method_by_id(id))
+            }
+            _ => continue,
+        };
+        if is_method && method_owner == Some(owner) && params.is_some_and(|p| p.is_empty())
+            && ret.is_some_and(|r| r.token == 5 && !r.is_object_handle && !r.is_reference)
+        {
+            out.insert(s);
+        }
+    }
+    out
+}
+
 /// Slots read as the RIGHT operand of a two-register arithmetic or comparison instruction whose
 /// value was produced BEFORE the left operand's. The compiler evaluates left to right inside an
 /// expression, so such a right operand was computed by a statement of its own.
@@ -16312,6 +16680,117 @@ fn statement_operand_slots(f: &Func) -> HashSet<i32> {
     out
 }
 
+/// A copied reference immediately used as a zero-argument value receiver can
+/// require its own name. Ordinary value arguments and RVO receivers give no such proof.
+fn values_named_by_a_direct_handle_store(
+    f: &Func,
+    refs: &RefResolver,
+    producers: &[(i32, usize)],
+    consumers: &[(i32, usize)],
+) -> HashSet<i32> {
+    if consumers.is_empty() {
+        return HashSet::new();
+    }
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let slot_of = |ins: &super::disasm::Instr| {
+        ins.words.first().map(|w| *w as i16 as i32).filter(|s| *s > 0)
+    };
+    let mut sites: HashMap<i32, HashSet<usize>> = HashMap::new();
+    for &(slot, at) in producers {
+        sites.entry(slot).or_default().insert(at);
+    }
+    let mut first_write = HashMap::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if writes_destination(ins.op.name) || ins.op.fmt.writes_first_word() {
+            if let Some(slot) = slot_of(ins) {
+                first_write.entry(slot).or_insert(at);
+            }
+        }
+        // Count every constructor, even an unresolved-owner one, so another life
+        // cannot hide behind the candidate's precise metadata.
+        if ins.op.name == "CALLSYS"
+            && refs.func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64) == Some("$beh0")
+        {
+            if let Some(slot) = at.checked_sub(1).and_then(|i| instrs.get(i))
+                .filter(|prev| prev.op.name == "PSF").and_then(slot_of)
+            {
+                sites.entry(slot).or_default().insert(at);
+            }
+        }
+    }
+    let mut out = HashSet::new();
+    for &(recorded_slot, consumer) in consumers {
+        let Some((slot, ctor, destination)) = adjacent_copy_receiver(&instrs, consumer) else {
+            continue;
+        };
+        if slot != recorded_slot || first_write.contains_key(&slot)
+            || first_write.get(&destination) != Some(&(consumer + 1))
+            || !sites.get(&slot).is_some_and(|defs| defs.len() == 1 && defs.contains(&ctor))
+        {
+            continue;
+        }
+        let ctor_ptr = instrs[ctor].qwords.first().copied().unwrap_or(0) as i64;
+        let call_ptr = instrs[consumer].qwords.first().copied().unwrap_or(0) as i64;
+        if refs.func_by_ptr(ctor_ptr) != Some("$beh0")
+            || !refs.is_method_by_ptr(ctor_ptr) || !refs.is_method_by_ptr(call_ptr)
+        {
+            continue;
+        }
+        let (Some(owner), Some(params), Some(call_owner), Some(call_params), Some(ret)) = (
+            refs.func_owner_by_ptr(ctor_ptr), refs.func_params_by_ptr(ctor_ptr),
+            refs.func_owner_by_ptr(call_ptr), refs.func_params_by_ptr(call_ptr),
+            refs.func_ret_by_ptr(call_ptr),
+        ) else { continue; };
+        if same_type_copy_receiver_metadata(owner, params, call_owner, call_params, ret, refs) {
+            out.insert(slot);
+        }
+    }
+    out
+}
+
+/// PshRPtr; PSF value; copy-ctor; PSF value; native method; STOREOBJ handle.
+/// Keeping this exact removes the need to reconstruct another argument window.
+fn adjacent_copy_receiver(
+    instrs: &[super::disasm::Instr],
+    consumer: usize,
+) -> Option<(i32, usize, i32)> {
+    let start = consumer.checked_sub(4)?;
+    let end = consumer.checked_add(2)?;
+    let [source, destination, ctor, receiver, call, store] = instrs.get(start..end)? else {
+        return None;
+    };
+    if source.op.name != "PshRPtr" || destination.op.name != "PSF"
+        || ctor.op.name != "CALLSYS" || receiver.op.name != "PSF"
+        || call.op.name != "CALLSYS" || store.op.name != "STOREOBJ"
+    {
+        return None;
+    }
+    let slot = *destination.words.first()? as i16 as i32;
+    let handle = *store.words.first()? as i16 as i32;
+    (slot > 0 && handle > 0 && handle != slot
+        && receiver.words.first().map(|w| *w as i16 as i32) == Some(slot))
+        .then_some((slot, consumer - 2, handle))
+}
+
+fn same_type_copy_receiver_metadata(
+    owner: &str,
+    params: &[super::types::DataType],
+    call_owner: &str,
+    call_params: &[super::types::DataType],
+    ret: &super::types::DataType,
+    refs: &RefResolver,
+) -> bool {
+    let [source] = params else { return false; };
+    matches!(super::structure::bare_type_name(owner).bytes().next(), Some(b'F' | b'T'))
+        && source.token == 5 && source.is_reference && !source.is_object_handle
+        && (source.is_object_const || source.is_read_only)
+        && refs.type_by_ptr(source.type_info) == Some(owner)
+        && call_owner == owner && call_params.is_empty()
+        && ret.token == 5 && ret.is_object_handle && !ret.is_reference
+}
+
 /// Of the by-value results `producers` names (slot, index of the producing call), those whose
 /// own push comes only after OTHER pushes — the value stood before the consuming call's
 /// argument run began. A constructor or destructor of a temporary between the two is argument
@@ -16326,7 +16805,7 @@ fn rvo_statement_producers(
         return (HashSet::new(), HashMap::new());
     };
     let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32);
-    let pushes = |name: &str| name.starts_with("Psh") || name == "PSF";
+    let pushes = |name: &str| name.starts_with("Psh") || matches!(name, "PSF" | "PGA");
     let callee_of = |at: usize| {
         instrs
             .get(at)
@@ -17080,7 +17559,14 @@ fn enum_argument_slots(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
         return HashMap::new();
     };
     let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32);
-    let is_push = |name: &str| name.starts_with("Psh") || name == "PSF";
+    let is_push = |name: &str| name.starts_with("Psh") || name == "PSF" || name == "PGA";
+    let constructor = |ins: &super::disasm::Instr| -> Option<usize> {
+        if ins.op.name != "CALLSYS" {
+            return None;
+        }
+        let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
+        (refs.func_by_ptr(ptr) == Some("$beh0")).then(|| refs.func_params_by_ptr(ptr).map(|p| p.len()))?
+    };
     let mut out = HashMap::new();
     for (at, ins) in instrs.iter().enumerate() {
         let params: Option<&[super::types::DataType]> = match ins.op.name {
@@ -17099,16 +17585,65 @@ fn enum_argument_slots(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
             continue;
         }
         // The frame: the pushes standing directly before the call, latest first. A method's
-        // receiver is pushed last (`PshVPtr v0`); the parameter list does not carry it.
+        // receiver is pushed last (`PshVPtr v0`); the parameter list does not carry it. A
+        // literal materialised right in front of its push (`SetV1 t, 1; PshV4 t`) and a
+        // temporary constructed for an argument (`PGA s; PSF t; CALLSYS $beh0` — the push of
+        // `t` behind it is the argument) stand inside the run without shifting a position;
+        // any other instruction ends it (`LineTraceMultiByProfile`: an `FName` built in the run
+        // hid the `EDrawDebugTrace` argument from the seed).
         let mut frame: Vec<usize> = Vec::new();
         let mut k = at;
-        while k > 0 && is_push(instrs[k - 1].op.name) {
-            k -= 1;
-            frame.push(k);
+        let mut broken = false;
+        while k > 0 {
+            let prev = &instrs[k - 1];
+            if is_push(prev.op.name) {
+                k -= 1;
+                frame.push(k);
+                if k > 0
+                    && prev.op.name == "PshV4"
+                    && matches!(instrs[k - 1].op.name, "SetV1" | "SetV2" | "SetV4")
+                    && w0(&instrs[k - 1]) == w0(prev)
+                {
+                    k -= 1;
+                }
+                continue;
+            }
+            if let Some(ctor_args) = constructor(prev) {
+                // the receiver's `PSF t` stands right in front of the behaviour; its own
+                // arguments are plain pushes below that
+                if k < 2 || instrs[k - 2].op.name != "PSF" {
+                    broken = true;
+                    break;
+                }
+                let mut j = k - 2;
+                for _ in 0..ctor_args {
+                    if j == 0 || !is_push(instrs[j - 1].op.name) {
+                        broken = true;
+                        break;
+                    }
+                    j -= 1;
+                }
+                if broken {
+                    break;
+                }
+                k = j;
+                continue;
+            }
+            break;
         }
-        let receiver = frame
-            .first()
-            .is_some_and(|top| instrs[*top].op.name == "PshVPtr" && w0(&instrs[*top]) == Some(0));
+        if broken {
+            continue;
+        }
+        // The signature identifies an instance call even when its receiver is a local
+        // rather than `this`. A static call's last pointer argument is not a receiver.
+        let is_method = match ins.op.name {
+            "CALLSYS" | "Thiscall1" => refs.is_method_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64),
+            "CALL" | "CALLINTF" => refs.is_method_by_id(ins.dwords.first().copied().unwrap_or(0) as i32),
+            _ => false,
+        };
+        let receiver = is_method && frame.first().is_some_and(|top| {
+            matches!(instrs[*top].op.name, "PshVPtr" | "PSF")
+        });
         let args: Vec<usize> = frame.into_iter().skip(receiver as usize).collect();
         if args.len() != params.len() {
             continue;
@@ -17645,6 +18180,41 @@ fn named_value_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, String)> {
         }
         if let Some(callee) = callee_of(call) {
             out.insert((named, callee));
+        }
+    }
+    // Third shape: the result copied INTO a slot and copied back OUT of it at once
+    // (`CALL; CpyRtoV4 t; CpyVtoV4 N, t; CpyVtoV4 t2, N`): the source read a name it had just
+    // assigned (`AIState_WaitForBlockedPath::DoTask`: `bool bStill = A && Call(); if (!bStill)`).
+    // The downstream key has no lifetime component. A repeated callee could give
+    // an earlier DB(id, chain) the later named condition's witness on the same slot.
+    let mut callee_counts = HashMap::<String, usize>::new();
+    for callee in instrs.iter().filter_map(&callee_of) {
+        *callee_counts.entry(callee).or_default() += 1;
+    }
+    for at in 2..instrs.len().saturating_sub(1) {
+        let (call, result, store, reload) = (&instrs[at - 2], &instrs[at - 1], &instrs[at], &instrs[at + 1]);
+        if !call.op.is_call() || result.op.name != "CpyRtoV4" || store.op.name != "CpyVtoV4" || reload.op.name != "CpyVtoV4" {
+            continue;
+        }
+        let (Some(temp), Some(named), Some(from)) = (w(result, 0), w(store, 0), w(store, 1)) else {
+            continue;
+        };
+        if temp <= 0 || named <= 0 || from != temp || w(reload, 1) != Some(named) {
+            continue;
+        }
+        // …and the copy out is negated or tested at once: a chain's accumulator copied on
+        // into a call argument is no name (measured: 34 dialog `DB(id, A && B)` sites).
+        let used = instrs.get(at + 2);
+        let negated_or_tested = used.is_some_and(|u| {
+            (u.op.name == "NOT" || u.op.name == "CpyVtoR1") && w(u, 0) == w(reload, 0)
+        });
+        if !negated_or_tested {
+            continue;
+        }
+        if let Some(callee) = callee_of(call) {
+            if callee_counts.get(&callee) == Some(&1) {
+                out.insert((named, callee));
+            }
         }
     }
     for at in 2..instrs.len().saturating_sub(1) {
@@ -20356,6 +20926,11 @@ fn rewrite_first_use_decl_init(
         if first_top_level_assignment_before_read(body, slot) {
             return true;
         }
+        // All three nested declaration witnesses below can narrow a released
+        // handle's lifetime. Preserve the cleanup on its break/continue edges.
+        if released.contains(&slot) && !block_life_exits_preserve_handle_release(body, slot) {
+            return false;
+        }
         // A handle the block's closing release run places BEHIND another of its locals was
         // declared further down than our hoist: at its first assignment, where the name's
         // block owns it (`GA_Falling::ApplyDamageTo`: released between two value locals).
@@ -22055,6 +22630,111 @@ mod default_return_tests {
 }
 
 #[cfg(test)]
+mod nested_handle_exit_cleanup_tests {
+    use super::block_life_exits_preserve_handle_release;
+
+    #[test]
+    fn inner_convoy_loop_continue_preserves_the_outer_handle_life() {
+        let body = r#"    for (auto& local_22 : local_4)
+    {
+        local_36 = Cast<UAIGroup_ConflictInstance>(FindGroup(local_22));
+        if (!(IsValid(local_36)))
+        {
+            local_36 = nullptr;
+            continue;
+        }
+        for (auto& local_52 : local_4)
+        {
+            if (local_52 == local_22)
+            {
+                continue;
+            }
+            Use(local_36, local_52);
+        }
+        local_36 = nullptr;
+    }
+    return false;
+"#;
+        assert!(block_life_exits_preserve_handle_release(body, 36));
+        let unsafe_outer = body.replace(
+            "            local_36 = nullptr;\n            continue;",
+            "            continue;");
+        assert!(!block_life_exits_preserve_handle_release(&unsafe_outer, 36));
+    }
+
+    #[test]
+    fn nested_switch_break_stays_inside_but_continue_leaves_the_handle_life() {
+        let body = r#"    for (auto local_2 : Items)
+    {
+        local_36 = FindGroup(local_2);
+        switch (Code)
+        {
+        case 0:
+        {
+            break;
+        }
+        }
+        Use(local_36);
+        local_36 = nullptr;
+    }
+    return;
+"#;
+        assert!(block_life_exits_preserve_handle_release(body, 36));
+        assert!(!block_life_exits_preserve_handle_release(
+            &body.replace("            break;", "            continue;"), 36));
+    }
+
+
+    #[test]
+    fn area_reaction_break_must_already_release_the_cast_handle() {
+        let body = r#"    for (auto& local_18 : this.AreaEventReactions)
+    {
+        local_20 = Cast<UAIState_Human_ReactToAreaEvent>(local_18.Get().GetDefaultObject());
+        if (Perception.Origin.Tags.HasTag(local_20.AreaEventTag))
+        {
+            this.DoInterruptStateOfClass(local_18);
+            break;
+        }
+        local_20 = nullptr;
+    }
+    return;
+"#;
+        assert!(!block_life_exits_preserve_handle_release(body, 20));
+        let released_break = body.replace("            break;",
+            "            local_20 = nullptr;\n            break;");
+        assert!(block_life_exits_preserve_handle_release(&released_break, 20));
+    }
+
+    #[test]
+    fn hostility_continue_must_not_reverse_a_later_handle_release() {
+        let body = r#"    for (auto local_22 : Source.Modifiers)
+    {
+        local_28 = Cast<UActivePersonalRelationshipModifier_Enemy>(local_22);
+        if (IsValid(local_28))
+        {
+            local_24 = local_28.GetTargetCharacter();
+        }
+        if (!(IsValid(local_24)))
+        {
+            local_28 = nullptr;
+            local_24 = nullptr;
+            continue;
+        }
+        Record(local_24);
+        local_28 = nullptr;
+        local_24 = nullptr;
+    }
+    return;
+"#;
+        assert!(!block_life_exits_preserve_handle_release(body, 28));
+        let release_last = body.replace(
+            "            local_28 = nullptr;\n            local_24 = nullptr;\n            continue;",
+            "            local_24 = nullptr;\n            local_28 = nullptr;\n            continue;");
+        assert!(block_life_exits_preserve_handle_release(&release_last, 28));
+    }
+}
+
+#[cfg(test)]
 mod block_release_lives_tests {
     use super::lives_end_with_block_releases;
 
@@ -22216,5 +22896,309 @@ mod definite_assignment_tests {
     return 0.0;
 ";
         assert!(all_reads_definitely_assigned(body, 4));
+    }
+}
+
+
+#[cfg(test)]
+mod r31_safe_release_tests {
+    use super::{drop_block_end_handle_releases, is_block_end_release, known_proceed_element_slots};
+    use crate::cache::disasm::Instr;
+    use std::collections::HashSet;
+
+    fn ins(name: &str, words: &[u16]) -> Instr {
+        Instr {
+            offset_dw: 0,
+            op: crate::cache::isa::OPCODES.iter().find(|op| op.name == name).unwrap(),
+            words: words.to_vec(),
+            dwords: Vec::new(),
+            qwords: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn iterator_elements_are_protected_but_unrelated_body_handle_is_not() {
+        for store in ["STOREOBJ", "RefCpyV", "CpyRtoV4", "CpyRtoV8"] {
+            let code = vec![ins("PSF", &[24]), ins("CALLSYS", &[]), ins(store, &[32]),
+                            ins("FreeNullV8", &[38])];
+            assert_eq!(known_proceed_element_slots(&code, [1]), Some(HashSet::from([32])));
+        }
+    }
+
+    #[test]
+    fn borrowed_elements_and_reused_iterator_slots_keep_all_result_slots() {
+        let code = vec![
+            ins("PSF", &[24]), ins("CALLSYS", &[]), ins("PshRPtr", &[]),
+            ins("RDSPtr", &[]), ins("RefCpyV", &[32]),
+            ins("PSF", &[24]), ins("CALLSYS", &[]), ins("CpyRtoV8", &[52]),
+        ];
+        assert_eq!(known_proceed_element_slots(&code, [1, 6]), Some(HashSet::from([32, 52])));
+        let numeric = vec![ins("PSF", &[24]), ins("CALLSYS", &[]),
+                           ins("RDR1", &[70]), ins("sbTOi", &[71, 70])];
+        assert_eq!(known_proceed_element_slots(&numeric, [1]), Some(HashSet::from([70, 71])));
+    }
+
+    #[test]
+    fn unknown_or_truncated_proceed_lowering_requests_previous_protection() {
+        let code = vec![ins("PSF", &[24]), ins("CALLSYS", &[]), ins("JMP", &[])];
+        assert_eq!(known_proceed_element_slots(&code, [1]), None);
+        assert_eq!(known_proceed_element_slots(&code[..2], [1]), None);
+        assert_eq!(known_proceed_element_slots(&code, [0]), None);
+    }
+
+    #[test]
+    fn release_exit_detection_is_exact_and_does_not_hide_a_return_read() {
+        for exit in ["continue;", "break;", "return;", "return false;", "return local_80;"] {
+            assert!(is_block_end_release(&["local_8 = nullptr;", exit], 0, "local_8"), "{exit}");
+        }
+        for exit in ["return local_8;", "return local_8.IsValid();", "return Call(local_8);",
+                     "returnValue();", "return ;", "return false", "continueWork();", "breakLoop();"] {
+            assert!(!is_block_end_release(&["local_8 = nullptr;", exit], 0, "local_8"), "{exit}");
+        }
+        assert!(!is_block_end_release(
+            &["local_8 = nullptr;", "local_10 = nullptr;", "return local_8;"], 0, "local_8"
+        ));
+    }
+
+    #[test]
+    fn return_cleanup_exception_is_preserved() {
+        for expression in ["false", "local_8.IsValid()"] {
+            let body = format!("    if (flag)\n    {{\n        AActor local_8 = Find();\n        local_8 = nullptr;\n        return {expression};\n    }}\n");
+            assert_eq!(drop_block_end_handle_releases(&body), body);
+        }
+    }
+
+    #[test]
+    fn gather_style_body_declaration_uses_implicit_continue_and_tail_cleanup() {
+        let body = "    for (auto local_32 : Values)\n    {\n        UWeaponBehaviorSet local_38 = Cast<UWeaponBehaviorSet>(local_32);\n        if (Bad(local_38))\n        {\n            local_38 = nullptr;\n            continue;\n        }\n        FString local_70;\n        Use(local_38, local_70);\n        local_38 = nullptr;\n    }\n";
+        let expected = "    for (auto local_32 : Values)\n    {\n        UWeaponBehaviorSet local_38 = Cast<UWeaponBehaviorSet>(local_32);\n        if (Bad(local_38))\n        {\n            continue;\n        }\n        FString local_70;\n        Use(local_38, local_70);\n    }\n";
+        assert_eq!(drop_block_end_handle_releases(body), expected);
+    }
+}
+
+
+#[cfg(test)]
+mod r36_copy_receiver_tests {
+    use super::{adjacent_copy_receiver, same_type_copy_receiver_metadata};
+    use crate::cache::{disasm::Instr, refs::RefResolver, types::DataType};
+
+    fn ins(name: &str, slot: Option<u16>) -> Instr {
+        Instr {
+            offset_dw: 0,
+            op: crate::cache::isa::OPCODES.iter().find(|op| op.name == name).unwrap(),
+            words: slot.into_iter().collect(), dwords: Vec::new(), qwords: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn receiver_shape_rejects_arguments_rvo_and_intervening_work() {
+        let code = vec![ins("PshRPtr", None), ins("PSF", Some(46)), ins("CALLSYS", None),
+            ins("PSF", Some(46)), ins("CALLSYS", None), ins("STOREOBJ", Some(50))];
+        assert_eq!(adjacent_copy_receiver(&code, 4), Some((46, 2, 50)));
+        for (at, replacement) in [
+            (0, ins("PshVPtr", Some(0))), // RVO/ordinary operand setup, not a reference copy
+            (3, ins("PSF", Some(48))), // a different receiver
+            (3, ins("PshVPtr", Some(0))), // value is an argument below an object receiver
+            (4, ins("CALLINTF", None)), // SpawnArms script-argument path stays excluded
+            (5, ins("CpyRtoV4", Some(50))),
+            (5, ins("STOREOBJ", Some(46))),
+        ] {
+            let mut changed = code.clone();
+            changed[at] = replacement;
+            assert!(adjacent_copy_receiver(&changed, 4).is_none());
+        }
+        for barrier in ["CALLSYS", "JMP"] {
+            let mut changed = code.clone();
+            changed.insert(3, ins(barrier, None));
+            assert!(adjacent_copy_receiver(&changed, 5).is_none());
+        }
+        assert!(adjacent_copy_receiver(&code, 0).is_none());
+        assert!(adjacent_copy_receiver(&code[..5], 4).is_none());
+    }
+
+    #[test]
+    fn receiver_metadata_requires_exact_const_copy_and_zero_arg_handle_method() {
+        let refs = RefResolver::from_test_collision_names(&["TSubclassOf<UThing>", "FName"]);
+        let owner = "TSubclassOf<UThing>";
+        let copy = DataType { token: 5, type_info: 1, is_reference: true,
+            is_object_const: true, ..Default::default() };
+        let ret = DataType { token: 5, is_object_handle: true, ..Default::default() };
+        let valid = |params: &[DataType], call_owner, call_params: &[DataType], result: &DataType| {
+            same_type_copy_receiver_metadata(owner, params, call_owner, call_params, result, &refs)
+        };
+        assert!(valid(&[copy.clone()], owner, &[], &ret));
+        for rejected in [
+            DataType { type_info: 2, ..copy.clone() }, // conversion from FName, not a copy
+            DataType { type_info: 99, ..copy.clone() }, // unresolved source type
+            DataType { is_reference: false, ..copy.clone() },
+            DataType { is_object_const: false, ..copy.clone() },
+            DataType { is_object_handle: true, ..copy.clone() },
+        ] {
+            assert!(!valid(&[rejected], owner, &[], &ret));
+        }
+        assert!(!valid(&[], owner, &[], &ret));
+        assert!(!valid(&[copy.clone(), copy.clone()], owner, &[], &ret));
+        assert!(!valid(&[copy.clone()], "FName", &[], &ret));
+        assert!(!valid(&[copy.clone()], owner, &[DataType::default()], &ret));
+        assert!(!valid(&[copy.clone()], owner, &[], &DataType { is_object_handle: false, ..ret.clone() }));
+        assert!(!valid(&[copy], owner, &[], &DataType { is_reference: true, ..ret }));
+    }
+}
+
+#[cfg(test)]
+mod enum_value_consensus_tests {
+    use super::record_enum_value_use;
+    use crate::cache::{refs::RefResolver, types::DataType};
+    use std::collections::HashMap;
+
+    fn refs() -> RefResolver {
+        RefResolver::from_test_collision_names(&["EStencilsUsage", "EOtherUsage", "FValue"])
+    }
+
+    fn enumeration(type_info: i64) -> DataType {
+        DataType { token: 5, type_info, ..Default::default() }
+    }
+
+    #[test]
+    fn repeated_literal_and_copied_enum_argument_uses_agree() {
+        let refs = refs();
+        let mut uses = HashMap::new();
+        // UpdateOutliner reuses 13 for two literal arguments, then copies it to 14.
+        // Both physical slots have only EStencilsUsage value consumers.
+        for slot in [13, 13, 14] {
+            record_enum_value_use(&mut uses, slot, &enumeration(1), &refs);
+        }
+        assert_eq!(uses, HashMap::from([
+            (13, Some("EStencilsUsage".to_owned())),
+            (14, Some("EStencilsUsage".to_owned())),
+        ]));
+    }
+
+    #[test]
+    fn numeric_and_other_enum_conflicts_cannot_be_revived_by_later_enum_uses() {
+        let refs = refs();
+        let mut conflicts: Vec<DataType> = [
+            0x41, 0x44, 0x45, 0x46, 0x47, 0x4B, 0x4C, 0x4D, 0x4E, 0x50, 0x51, 0x5E,
+        ].into_iter().map(|token| DataType { token, ..Default::default() }).collect();
+        conflicts.push(enumeration(2));
+        for conflict in conflicts {
+            for conflict_first in [false, true] {
+                let mut uses = HashMap::new();
+                if !conflict_first {
+                    record_enum_value_use(&mut uses, 13, &enumeration(1), &refs);
+                }
+                // The shared val_arg channel records ordinary and constructor arguments.
+                record_enum_value_use(&mut uses, 13, &conflict, &refs);
+                record_enum_value_use(&mut uses, 13, &enumeration(1), &refs);
+                record_enum_value_use(&mut uses, 13, &enumeration(1), &refs);
+                assert_eq!(uses.get(&13), Some(&None), "{conflict:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_or_non_value_enum_metadata_cannot_witness_a_copy_partner() {
+        let refs = refs();
+        for rejected in [
+            enumeration(999),
+            enumeration(3),
+            DataType { is_reference: true, ..enumeration(1) },
+            DataType { is_object_handle: true, ..enumeration(1) },
+        ] {
+            let mut uses = HashMap::new();
+            record_enum_value_use(&mut uses, 13, &rejected, &refs);
+            record_enum_value_use(&mut uses, 13, &enumeration(1), &refs);
+            record_enum_value_use(&mut uses, 14, &enumeration(1), &refs);
+            assert_eq!(uses.get(&13), Some(&None), "{rejected:?}");
+            assert_eq!(uses.get(&14).and_then(Option::as_deref), Some("EStencilsUsage"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod counted_loop_release_tests {
+    use super::{drop_block_end_handle_releases, is_block_end_release, is_loop_increment};
+
+    #[test]
+    fn only_exact_scalar_increment_statements_qualify() {
+        for good in ["++local_1;", "--local_12_2;"] {
+            assert!(is_loop_increment(good));
+        }
+        for bad in ["++local_1", "++local_1.Member;", "++Get();", "local_1 += Call();"] {
+            assert!(!is_loop_increment(bad));
+        }
+    }
+
+    #[test]
+    fn increment_must_be_the_single_final_statement_and_not_read_the_handle() {
+        assert!(is_block_end_release(&["local_8 = nullptr;", "++local_1;", "}"], 0, "local_8"));
+        for tail in [vec!["++local_8;", "}"], vec!["++local_1;", "return local_8;"],
+                     vec!["++local_1;", "++local_2;", "}"], vec!["++local_1;", "Use();", "}"]] {
+            let mut lines = vec!["local_8 = nullptr;"];
+            lines.extend(tail);
+            assert!(!is_block_end_release(&lines, 0, "local_8"));
+        }
+    }
+
+    #[test]
+    fn body_local_cleanup_before_counted_loop_update_becomes_implicit() {
+        let body = "    for (; local_1 < Limit; )\n    {\n        AActor local_18 = Spawn();\n        Use(local_18);\n        local_18 = nullptr;\n        ++local_1;\n    }\n";
+        let result = drop_block_end_handle_releases(body);
+        assert!(result.contains("for (; local_1 < Limit; ++local_1)"));
+        assert!(!result.contains("local_18 = nullptr"));
+    }
+
+
+}
+
+#[cfg(test)]
+mod named_bool_condition_tests {
+    use super::inline_bool_chain_into_next_condition;
+    use std::collections::HashSet;
+
+    #[test]
+    fn witnessed_chain_keeps_its_readback_before_the_condition() {
+        let body = "    bool local_18 = local_4 && this.IsBlocked();\n    if (!(local_18))\n    {\n        Stop();\n    }\n";
+        let named = HashSet::from([(18, "IsBlocked".to_owned())]);
+        assert_eq!(inline_bool_chain_into_next_condition(body, &named), body);
+        assert!(!inline_bool_chain_into_next_condition(body, &HashSet::new()).contains("local_18"));
+    }
+
+    #[test]
+    fn a_different_callee_on_the_same_slot_does_not_gain_the_witness() {
+        let body = "    bool local_18 = local_4 && this.IsReady();\n    if (!(local_18))\n    {\n        Stop();\n    }\n";
+        let named = HashSet::from([(18, "IsBlocked".to_owned())]);
+        assert_eq!(inline_bool_chain_into_next_condition(body, &named),
+                   inline_bool_chain_into_next_condition(body, &HashSet::new()));
+    }
+}
+
+#[cfg(test)]
+mod counted_update_order_tests {
+    use super::move_counted_update_after_cleanup;
+
+    #[test]
+    fn continue_or_missing_cleanup_keeps_the_update_in_the_body() {
+        for middle in ["        continue;\n        local_18 = nullptr;", "        Use(local_18);"] {
+            let body = format!("    for (; local_1 < Limit; )\n    {{\n{middle}\n        ++local_1;\n    }}\n");
+            assert_eq!(move_counted_update_after_cleanup(&body), body);
+        }
+    }
+}
+
+#[cfg(test)]
+mod known_const_member_type_tests {
+    use super::type_of_member_path;
+    use crate::cache::refs::RefResolver;
+    use std::collections::HashMap;
+
+    #[test]
+    fn existing_const_handle_metadata_supplies_the_missing_base_type() {
+        let refs = RefResolver::default();
+        let roots = HashMap::from([("EventData".to_owned(), "FGameplayEventData".to_owned())]);
+        assert_eq!(type_of_member_path("EventData.Instigator", None, &roots, &refs).as_deref(), Some("AActor"));
+        assert_eq!(type_of_member_path("EventData.OptionalObject", None, &roots, &refs).as_deref(), Some("UObject"));
+        assert_eq!(type_of_member_path("EventData.Unknown", None, &roots, &refs), None);
+        assert_eq!(type_of_member_path("Unknown.Instigator", None, &roots, &refs), None);
     }
 }

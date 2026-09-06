@@ -494,15 +494,18 @@ reproduce as the same program. Splicing this module recompiles all of it, so tho
 changed as well.
 ```
 
-Silence is the good case: **7,083 of the 7,317 modules recompile with no known semantic
-difference**, and for those there is nothing to inherit. That is the property worth having, and it
-is not the same as byte-identical — the oracle normalises reference keys, jump absolutes, constant
-encodings and slot numbers away before judging, so a module can pass and still assemble to
-different bytes while running the same program.
+The current measurement finds no semantic difference among aligned functions in
+**7,088 of the 7,317 modules**. The remaining 229 contain unresolved semantic differences;
+they are not established to be harmless source-text variations. The oracle normalises
+reference keys, slot numbers and other supported encoding differences before comparing.
+Passing that comparison is useful evidence, but does not by itself prove behavior equivalence.
 
-The remaining 234 differ only in spelling — same program, different text. The loops that once
-recompiled with a bound of zero are gone; the table records a behaviour risk of 0 for every module,
-and the warning would name one if it returned.
+The recompiled cache also lacks one vanilla function:
+`GAS.Abilities.Spells.Spells.Control.GA_Spell_UnControl.UGA_Spell_UnControl::__InitDefaults`.
+The current per-module warning table counts divergent aligned functions and does not cover
+that missing function. Full round-trip completeness has therefore not been established.
+The table's zero behaviour-risk count refers to its specific detected risk patterns;
+it does not clear unresolved differences or missing functions.
 
 The table is keyed by the generation the measurement was taken on. Point the tools at a build it
 does not cover and no warning appears — that means *not measured*, not *byte-faithful*.

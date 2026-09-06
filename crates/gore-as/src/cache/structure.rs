@@ -471,6 +471,44 @@ fn copy_receiver_is_immediately_pushed(next: Option<&Instr>, receiver: &str) -> 
     })
 }
 
+/// Provenance for the exact byte-wide enum carrier immediately before CMPIi.
+/// PropertyReferences OldTypeId is an owner, never a field-value type witness.
+fn widened_switch_enum_selector(
+    ctx: &Ctx<'_>, floor: usize, compare: usize, selector: i32,
+) -> Option<(String, String, usize)> {
+    let cast_at = compare.checked_sub(1).filter(|at| *at >= floor)?;
+    let cast = ctx.instrs.get(cast_at)?;
+    if !matches!(cast.op.name, "sbTOi" | "ubTOi")
+        || s16(*cast.words.first()?) != selector
+    {
+        return None;
+    }
+    let source = s16(*cast.words.get(1)?);
+    if ctx.param_off_map.contains_key(&source) {
+        let ty = ctx.slot_type(source).filter(|ty| is_enum_name(ty))?;
+        return Some((ty, ctx.slot_name(source), cast_at));
+    }
+    let read_at = cast_at.checked_sub(1).filter(|at| *at >= floor)?;
+    let read = ctx.instrs.get(read_at)?;
+    if read.op.name != "RDR1" || s16(*read.words.first()?) != source {
+        return None;
+    }
+    let load_at = read_at.checked_sub(1).filter(|at| *at >= floor)?;
+    let load = ctx.instrs.get(load_at)?;
+    if load.op.name != "LoadThisR" || !ctx.f.is_method {
+        return None;
+    }
+    let offset = *load.words.first()? as i32;
+    let owner_id = *load.dwords.first()? as i32;
+    let field = ctx.refs.member(owner_id, offset)?;
+    let ty = ctx.fields.and_then(|fields| fields.get(field).cloned())
+        .or_else(|| ctx.refs.type_by_id(owner_id)
+            .and_then(|owner| ctx.refs.field_type_by_class(owner, field))
+            .map(str::to_owned))
+        .filter(|ty| is_enum_name(ty))?;
+    Some((ty, format!("this.{field}"), load_at))
+}
+
 struct Ctx<'a> {
     f: &'a FuncCode,
     refs: &'a RefResolver,
@@ -8686,23 +8724,46 @@ impl Structurer<'_> {
         }
         // ---- emission (validated: no bail past this point) ----
         let ind = "    ".repeat(depth);
-        let (stmts, _) = block_stmts(ctx, b0.instr_lo, b0.instr_hi);
-        for s in &stmts {
-            let _ = writeln!(out, "{ind}{s}");
-        }
+        let (mut stmts, _) = block_stmts(ctx, b0.instr_lo, b0.instr_hi);
         let sel_raw = ctx.slot_name(wv);
-        // an enum selector needs the explicit int() (mirrors the CMPIi arm: AS has no
-        // implicit enum<->int, and the case labels are int literals)
-        let sel = if ctx
-            .slot_type(wv)
-            .as_deref()
-            .map(is_enum_name)
-            .unwrap_or(false)
-        {
+        let slot_type = ctx.slot_type(wv);
+        let widened = widened_switch_enum_selector(ctx, b0.instr_lo, b0.instr_hi - 2, wv)
+            .and_then(|(ty, expression, start)| {
+                let (carriers, _) = block_stmts(ctx, start, b0.instr_hi - 2);
+                // Only this exact final pure instruction sequence can disappear.
+                // Earlier definitions of the same physical slots remain untouched.
+                (!carriers.is_empty() && stmts.ends_with(&carriers))
+                    .then_some((ty, expression, carriers.len()))
+            });
+        let selector_type = widened.as_ref().map(|(ty, _, _)| ty.clone())
+            .or_else(|| slot_type.clone());
+        // A compiler trap default can represent a typed enum switch. Require every
+        // numeric case to resolve uniquely before changing either selector or labels.
+        let enum_cases: Option<Vec<String>> = selector_type.as_deref()
+            .filter(|ty| is_enum_name(ty) && regions.iter().any(|r| r.is_def && r.trap))
+            .and_then(|ty| {
+                let bare = bare_type_name(ty);
+                (0..targets.len()).map(|k| {
+                    ctx.refs.enumerator_name(bare, lo_c + k as i32)
+                        .map(|name| format!("{bare}::{name}"))
+                }).collect()
+            });
+        let typed_trap = enum_cases.is_some();
+        let sel = if typed_trap {
+            if let Some((_, expression, count)) = widened {
+                stmts.truncate(stmts.len() - count);
+                expression
+            } else {
+                sel_raw
+            }
+        } else if slot_type.as_deref().is_some_and(is_enum_name) {
             format!("int({sel_raw})")
         } else {
             sel_raw
         };
+        for s in &stmts {
+            let _ = writeln!(out, "{ind}{s}");
+        }
         let _ = writeln!(out, "{ind}switch ({sel})");
         let _ = writeln!(out, "{ind}{{");
         let saved = (
@@ -8719,7 +8780,9 @@ impl Structurer<'_> {
             }
             for (k, &tg) in targets.iter().enumerate() {
                 if tg == r.off {
-                    let _ = writeln!(out, "{ind}case {}:", lo_c + k as i32);
+                    let label = enum_cases.as_ref().map(|labels| labels[k].clone())
+                        .unwrap_or_else(|| (lo_c + k as i32).to_string());
+                    let _ = writeln!(out, "{ind}case {label}:");
                 }
             }
             if r.is_def {
@@ -8772,18 +8835,17 @@ impl Structurer<'_> {
         }
         let _ = writeln!(out, "{ind}}}");
         // batch-30b (C9 'Unreachable code', specs/batch29-errortail.md §9): when the JOIN is
-        // the shared bare RET row, a REAL `default:` region was emitted, and every region
-        // leaves by RETURNING (terminator RET, or JMP rendered as `return ...;` by the exit
+        // the shared bare RET row, a real default or typed enum trap covers unmatched values,
+        // and every emitted region RETURNS (RET, or JMP rendered as `return ...;` by the exit
         // hook — never an appended `break;`), control cannot fall out of the switch. Emitting
         // the RET row after it is dead code the compiler flags ("Unreachable code" [W],
         // a module-killer under warnings-as-errors) — skip the row. Conservative gates:
-        // a trap DEF (no `default:` emitted) keeps the row (a non-matching selector falls
-        // through in the recompiled source), as does any external jump to the row (another
-        // path may rely on its emission).
+        // a trap DEF keeps the row unless the fully resolved typed enum switch restores
+        // the compiler's trap. An external jump keeps the row except for a typed void
+        // switch: those early exits already render return;, and void ends implicitly in RET.
         if join_is_ret && switch_end == join_idx && join_idx < stop {
-            let every_region_returns = regions.iter().all(|r| {
-                !r.trap
-                    && !r.append_break
+            let every_region_returns = regions.iter().filter(|r| !r.trap).all(|r| {
+                !r.append_break
                     && matches!(
                         ctx.instrs[blocks[r.end - 1].instr_hi - 1].op.name,
                         "JMP" | "RET"
@@ -8794,7 +8856,9 @@ impl Structurer<'_> {
                 .iter()
                 .enumerate()
                 .any(|(bi2, bb)| (bi2 < i || bi2 >= switch_end) && bb.succs.contains(&join_off));
-            if every_region_returns && has_real_default && !externally_referenced {
+            if every_region_returns && (has_real_default || typed_trap)
+                && (!externally_referenced || (typed_trap && !non_void))
+            {
                 return Some(join_idx + 1);
             }
         }
@@ -10310,6 +10374,167 @@ mod tests {
         }
     }
 
+    fn trap_switch_fixture(trap: bool) -> CompoundFixture {
+        trap_switch_fixture_after(trap, TestAssembler::default())
+    }
+
+    fn trap_switch_fixture_after(trap: bool, a: TestAssembler) -> CompoundFixture {
+        trap_switch_fixture_with_return(trap, a, true)
+    }
+
+    fn trap_switch_fixture_with_return(
+        trap: bool, mut a: TestAssembler, returns_value: bool,
+    ) -> CompoundFixture {
+        a.label("switch");
+        a.op("CMPIi", &[4], &[2]);
+        a.jump("JP", "default");
+        a.op("CMPIi", &[4], &[0]);
+        a.jump("JS", "default");
+        a.op("SUBIi", &[6, 4], &[0]);
+        a.op("JMPP", &[6], &[2]);
+        a.jump("JMP", "case_zero");
+        a.jump("JMP", "case_one");
+        for (label, value) in [("case_two", 2), ("case_zero", 0), ("case_one", 1)] {
+            a.label(label);
+            a.op("SetV1", &[5], &[value]);
+            if returns_value {
+                a.op("CpyVtoR4", &[5], &[]);
+            }
+            a.jump("JMP", "shared_ret");
+        }
+        a.label("default");
+        if trap {
+            a.op("ThrowException", &[0], &[]);
+        } else {
+            a.op("SetV1", &[5], &[3]);
+            if returns_value {
+                a.op("CpyVtoR4", &[5], &[]);
+            }
+            a.jump("JMP", "shared_ret");
+        }
+        a.label("shared_ret");
+        a.op("RET", &[0], &[]);
+        a.finish()
+    }
+
+    #[test]
+    fn typed_trap_switch_uses_enumerators_and_omits_unreachable_return() {
+        let mut refs = RefResolver::default();
+        refs.set_enum_entries(HashMap::from([("EHeaderStatus".to_owned(), vec![
+            ("Zero".to_owned(), 0), ("One".to_owned(), 1), ("Two".to_owned(), 2),
+        ])]));
+        let src = render_fixture_range_with_selector(&trap_switch_fixture(true), None, &refs, "EHeaderStatus");
+        assert!(src.contains("switch (local_4)"), "{src}");
+        for label in ["Zero", "One", "Two"] {
+            assert!(src.contains(&format!("case EHeaderStatus::{label}:")), "{src}");
+        }
+        assert!(!src.contains("default:"), "{src}");
+        assert_eq!(src.matches("return ").count(), 3, "{src}");
+        assert!(src.trim_end().ends_with('}'), "unreachable join return survived:\n{src}");
+    }
+
+    #[test]
+    fn trap_switch_keeps_numeric_fallback_for_unknown_ambiguous_or_non_enum_cases() {
+        let full = vec![("Zero".to_owned(), 0), ("One".to_owned(), 1), ("Two".to_owned(), 2)];
+        for (selector, entries) in [
+            ("int", full.clone()),
+            ("EHeaderStatus", full[..2].to_vec()),
+            ("EHeaderStatus", vec![("Zero".to_owned(), 0), ("Alias".to_owned(), 0),
+                ("One".to_owned(), 1), ("Two".to_owned(), 2)]),
+        ] {
+            let mut refs = RefResolver::default();
+            refs.set_enum_entries(HashMap::from([("EHeaderStatus".to_owned(), entries)]));
+            let src = render_fixture_range_with_selector(&trap_switch_fixture(true), None, &refs, selector);
+            assert!(src.contains("case 0:"), "{src}");
+            assert!(!src.contains("case EHeaderStatus::"), "{src}");
+            if selector != "int" {
+                assert!(src.contains("switch (int(local_4))"), "{src}");
+            }
+            assert!(src.lines().last().unwrap().trim_start().starts_with("return"), "{src}");
+        }
+        let mut refs = RefResolver::default();
+        refs.set_enum_entries(HashMap::from([("EHeaderStatus".to_owned(), full)]));
+        let src = render_fixture_range_with_selector(&trap_switch_fixture(false), None, &refs, "EHeaderStatus");
+        assert!(src.contains("switch (int(local_4))"), "{src}");
+        assert!(src.contains("case 0:") && src.contains("default:"), "{src}");
+    }
+
+
+    #[test]
+    fn trap_switch_recovers_an_adjacent_widened_enum_parameter() {
+        let mut refs = RefResolver::default();
+        refs.set_enum_entries(HashMap::from([("EHeaderStatus".to_owned(), vec![
+            ("Zero".to_owned(), 0), ("One".to_owned(), 1), ("Two".to_owned(), 2),
+        ])]));
+        for widening in ["sbTOi", "ubTOi"] {
+            let mut prefix = TestAssembler::default();
+            // An earlier life of the same physical carrier is not the suffix.
+            prefix.op("SetV4", &[4], &[99]);
+            prefix.op(widening, &[4, (-2i16) as u16], &[]);
+            let fixture = trap_switch_fixture_after(true, prefix);
+            let src = render_fixture_range_with_parameter(
+                &fixture, None, &refs, "int", Some("EHeaderStatus"));
+            assert!(src.contains("switch (newState)"), "{src}");
+            assert!(src.contains("case EHeaderStatus::Two:"), "{src}");
+            assert!(src.contains("local_4 = 99;"), "{src}");
+            assert!(!src.contains("local_4 = int(newState);"), "{src}");
+            assert_eq!(src.matches("newState").count(), 1, "{src}");
+            assert_eq!(src.matches("return ").count(), 3, "{src}");
+        }
+    }
+
+    #[test]
+    fn widened_switch_requires_adjacent_enum_metadata_and_trap() {
+        let mut refs = RefResolver::default();
+        refs.set_enum_entries(HashMap::from([("EHeaderStatus".to_owned(), vec![
+            ("Zero".to_owned(), 0), ("One".to_owned(), 1), ("Two".to_owned(), 2),
+        ])]));
+        for (parameter, gap, trap) in [
+            ("int", false, true), ("EHeaderStatus", true, true),
+            ("EHeaderStatus", false, false),
+        ] {
+            let mut prefix = TestAssembler::default();
+            prefix.op("sbTOi", &[4, (-2i16) as u16], &[]);
+            if gap {
+                prefix.op("SUSPEND", &[], &[]);
+            }
+            let fixture = trap_switch_fixture_after(trap, prefix);
+            let src = render_fixture_range_with_parameter(
+                &fixture, None, &refs, "int", Some(parameter));
+            assert!(src.contains("switch (local_4)"), "{src}");
+            assert!(src.contains("case 0:"), "{src}");
+            assert!(!src.contains("case EHeaderStatus::"), "{src}");
+            assert!(src.contains("local_4 = "), "{src}");
+        }
+    }
+
+
+    #[test]
+    fn typed_void_switch_omits_join_return_also_targeted_by_an_early_return() {
+        let mut refs = RefResolver::default();
+        refs.set_enum_entries(HashMap::from([("EHeaderStatus".to_owned(), vec![
+            ("Zero".to_owned(), 0), ("One".to_owned(), 1), ("Two".to_owned(), 2),
+        ])]));
+        let mut prefix = TestAssembler::default();
+        prefix.op("CpyVtoR1", &[7], &[]);
+        prefix.jump("JLowZ", "switch");
+        prefix.jump("JMP", "shared_ret");
+        let fixture = trap_switch_fixture_with_return(true, prefix, false);
+        let src = render_fixture_range_with_return(
+            &fixture, None, &refs, "EHeaderStatus", None, 0x52);
+        assert!(src.contains("switch (local_4)"), "{src}");
+        assert!(src.contains("case EHeaderStatus::Two:"), "{src}");
+        let switch_at = src.find("switch (").unwrap();
+        assert!(src[..switch_at].contains("return;"), "early return lost:\n{src}");
+        assert_eq!(src.matches("return;").count(), 4, "{src}");
+        assert!(src.trim_end().ends_with('}'), "unreachable join survived:\n{src}");
+        let numeric = render_fixture_range_with_return(
+            &fixture, None, &refs, "int", None, 0x52);
+        assert!(numeric.contains("case 0:"), "{numeric}");
+        assert!(numeric.trim_end().ends_with("return;"),
+            "numeric trap fallback lost its join:\n{numeric}");
+    }
+
     fn compound_switch_fixture() -> CompoundFixture {
         let mut a = TestAssembler::default();
         a.label("preheader");
@@ -10445,20 +10670,50 @@ mod tests {
         fixture: &CompoundFixture,
         range: Option<(&'static str, &'static str, LoopScope)>,
     ) -> String {
+        render_fixture_range_with_selector(fixture, range, &RefResolver::default(), "EHeaderStatus")
+    }
+
+    fn render_fixture_range_with_selector(
+        fixture: &CompoundFixture,
+        range: Option<(&'static str, &'static str, LoopScope)>,
+        refs: &RefResolver,
+        selector_type: &str,
+    ) -> String {
+        render_fixture_range_with_parameter(fixture, range, refs, selector_type, None)
+    }
+
+    fn render_fixture_range_with_parameter(
+        fixture: &CompoundFixture,
+        range: Option<(&'static str, &'static str, LoopScope)>,
+        refs: &RefResolver,
+        selector_type: &str,
+        parameter_type: Option<&str>,
+    ) -> String {
+        render_fixture_range_with_return(fixture, range, refs, selector_type, parameter_type, 0x44)
+    }
+
+    fn render_fixture_range_with_return(
+        fixture: &CompoundFixture,
+        range: Option<(&'static str, &'static str, LoopScope)>,
+        refs: &RefResolver,
+        selector_type: &str,
+        parameter_type: Option<&str>,
+        return_token: i32,
+    ) -> String {
+        let parameter_types: Vec<String> = parameter_type.into_iter().map(str::to_owned).collect();
         let f = FuncCode {
             func: "Synthetic::CompoundLoopSwitch".into(),
-            is_method: false,
-            param_names: Vec::new(),
+            is_method: parameter_type.is_some(),
+            param_names: parameter_type.map(|_| vec!["newState".to_owned()]).unwrap_or_default(),
             param_types: Vec::new(),
             ret: DataType {
-                token: 0x44,
+                token: return_token,
                 ..Default::default()
             },
             bytecode: Vec::new(),
         };
-        let refs = RefResolver::default();
         let local_types =
-            HashMap::from([(4, "EHeaderStatus".to_string()), (7, "bool".to_string())]);
+            HashMap::from([(4, selector_type.to_string()), (7, "bool".to_string())]);
         let g = cfg::build(&fixture.instrs);
         let idx_of: HashMap<usize, usize> = g
             .blocks
@@ -10468,16 +10723,16 @@ mod tests {
             .collect();
         let ctx = Ctx {
             f: &f,
-            refs: &refs,
+            refs,
             instrs: &fixture.instrs,
             super_ctor: None,
             ret_ty: Some(&f.ret),
             fields: None,
-            param_types: None,
+            param_types: Some(&parameter_types),
             class_name: None,
             local_types: Some(&local_types),
             float_slots: std::collections::HashSet::new(),
-            param_off_map: HashMap::new(),
+            param_off_map: parameter_type.map(|_| HashMap::from([(-2, 0)])).unwrap_or_default(),
             rvo_off: None,
             keep_ints: None,
             rvo_switch_region: std::cell::Cell::new(false),
