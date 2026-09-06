@@ -921,6 +921,25 @@ fn emit_function_ctor(
     // call-arg (`slot_overrides`) pass so that pass cannot widen a slot below a type that
     // provably has an accessed member. `member_widen_below` below turns it into a guard.
     let member_overrides = infer_slot_types_from_members(f, refs, fields, class_name);
+    // Native inheritance metadata can omit the path to UObject. An instance call whose
+    // owner exactly matches the recorded local type independently proves that type is
+    // needed; a generic argument such as IsValid(UObject) must not erase it.
+    let concrete_method_receivers: HashSet<i32> = disassemble(&f.bytecode)
+        .unwrap_or_default()
+        .windows(2)
+        .filter_map(|pair| {
+            let (receiver, call) = (&pair[0], &pair[1]);
+            if receiver.op.name != "PshVPtr" || !matches!(call.op.name, "CALLSYS" | "Thiscall1") {
+                return None;
+            }
+            let slot = *receiver.words.first()? as i16 as i32;
+            let ptr = *call.qwords.first()? as i64;
+            let vanilla = vanilla_obj_types.get(&slot)?;
+            (slot > 0 && refs.is_method_by_ptr(ptr)
+                && refs.func_owner_by_ptr(ptr) == Some(vanilla.as_str()))
+                .then_some(slot)
+        })
+        .collect();
     // A candidate `cand` for `slot` widens BELOW a member lower-bound iff the slot has member
     // evidence `lb` that the VANILLA type provably satisfies (`is_subclass(vanilla, lb)`) while
     // `cand` does NOT provably satisfy it (`!is_subclass(cand, lb)`). Comparing against the
@@ -1294,6 +1313,9 @@ fn emit_function_ctor(
         // AActor slips past it. Anchoring on the member's declaring class vs the vanilla type
         // closes that gap (the `.CapsuleComponent`-on-AActor regressions).
         if member_widen_below(slot, ty) {
+            continue;
+        }
+        if ty == "UObject" && concrete_method_receivers.contains(slot) {
             continue;
         }
         local_types.insert(*slot, ty.clone());
@@ -2021,6 +2043,9 @@ fn emit_function_ctor(
             // call-arg candidate must not widen the declaration below a member's declaring
             // class (keeps `AGothicCharacter local_N;` where the body reads `.CapsuleComponent`).
             if member_widen_below(slot, ty) {
+                continue;
+            }
+            if ty == "UObject" && concrete_method_receivers.contains(slot) {
                 continue;
             }
             locals.insert(*slot, ty.clone());
@@ -2878,6 +2903,8 @@ fn emit_function_ctor(
         let rendered = fold_carrier_if_else(&rendered);
         pass_trace("fold_carrier_if_else", &rendered);
         let rendered = expand_if_false_markers(&rendered);
+        let rendered = unwrap_fstring_literal_declarations(&rendered);
+        pass_trace("unwrap_fstring_literal_declarations", &rendered);
         s.truncate(declarations_at);
         s.push_str(&rendered);
     } else {
@@ -9845,6 +9872,27 @@ fn declaration_with_initializer(line: &str) -> Option<(String, String, String)> 
         return None;
     }
     Some((indent, name.to_owned(), init.to_owned()))
+}
+
+/// A literal already constructs the declared FString. Wrapping it in FString(...) adds
+/// a temporary and its destructor. Limit this to declarations, never call arguments.
+fn unwrap_fstring_literal_declarations(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    for line in body.split_inclusive('\n') {
+        let literal_decl = declaration_with_initializer(line).and_then(|(indent, name, init)| {
+            if !line.trim_start().starts_with("FString ") {
+                return None;
+            }
+            let literal = init.strip_prefix("FString(")?.strip_suffix(')')?;
+            let inner = literal.strip_prefix('"')?.strip_suffix('"')?;
+            if inner.contains('"') {
+                return None;
+            }
+            Some(format!("{indent}FString {name} = {literal};{}", if line.ends_with('\n') { "\n" } else { "" }))
+        });
+        out.push_str(literal_decl.as_deref().unwrap_or(line));
+    }
+    out
 }
 
 /// A name the decompiler handed out: `local_12`, or its versioned form `local_12_2`.
@@ -21639,6 +21687,22 @@ mod bool_literal_temporary_tests {
 #[cfg(test)]
 mod condition_identifier_tests {
     use super::*;
+
+    #[test]
+    fn fstring_literal_declarations_keep_argument_and_expression_construction() {
+        let body = concat!(
+            "    FString local_12_2 = FString(\"QuestTag\");\n",
+            "    FString local_14 = FString(\"\");\n",
+            "    FString local_16 = FString(\"a\" + \"b\");\n",
+            "    Use(FString(\"QuestTag\"));\n",
+            "    local_12_2 = FString(\"QuestTag\");\n",
+            "    FString local_18 = FString(\"a\\\"b\");\n",
+        );
+        let expected = body
+            .replacen("FString(\"QuestTag\")", "\"QuestTag\"", 1)
+            .replacen("FString(\"\")", "\"\"", 1);
+        assert_eq!(unwrap_fstring_literal_declarations(body), expected);
+    }
 
     #[test]
     fn condition_folding_distinguishes_prefixes_from_self_references() {

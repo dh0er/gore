@@ -22,7 +22,7 @@ AI.AIAgent.Creature.Molerat.DiggableTerrainSubsystem	1	0	0
 AI.AIAgent.Creature.Scavenger.Rideable.Components.GothicMountComponentAS	2	0	0
 AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.SoulHarvest.GA_Spell_SoulHarvest_SkeletonMage	2	0	0
 AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.SoulHarvest.SoulHarvest_Visual	3	0	0
-AI.AIAgent.Creature.Troll.JuvenileTroll.AM_JuvenileTroll_01.AIAgentConfig_AM_JuvenileTroll_01	2	0	0
+AI.AIAgent.Creature.Troll.JuvenileTroll.AM_JuvenileTroll_01.AIAgentConfig_AM_JuvenileTroll_01	1	0	0
 AI.AIAgent.Creature.Troll.TC_TrollAdult_01.CombatMoves_TrollAdult	1	0	0
 AI.AIAgent.Human.Config.OCR_GRD_Scatty_210.DailyRoutine_OCR_GRD_Scatty_210	4	0	0
 AI.AIAgent.Orc.Combat.Staff.Spells.StormOfFire.GA_Spell_StormOfFire_Orc	1	0	0
@@ -79,10 +79,8 @@ AI.States.FightAI.DisengageBehavior.AIState_Disengage	2	0	0
 AI.States.FightAI.FearState.AIState_Fear	2	0	0
 AI.States.FightAI.FleeState.AIState_Flee	2	0	0
 AI.States.FightAI.GoGetGuardState.AIState_GoGetGuard	2	0	0
-AI.States.FightAI.ItemInteractionStates.AIState_InteractWithItem	1	0	0
 AI.States.FightAI.ManagedFightSubsystem	5	0	0
 AI.States.FightAI.SearchState.AIState_Search	10	0	0
-AI.States.FightAI.SleeperFight.Common.Abilities.GA_CheckDialogBlocker	1	0	0
 AI.States.FightAI.SleeperFight.CorKalom_Sleeper.LordDemon.Components.MadCorKalomDemonFightComponent	1	0	0
 AI.States.FightAI.SleeperFight.CorKalom_Sleeper.LordDemon.GEs_CorKalomDemon_Sleeper	1	0	0
 AI.States.FightAI.SleeperFight.CorKalom_Sleeper.LordDemon.Spell.Pyrolaser.GA_LordDemon_Pyrolaser	2	0	0
