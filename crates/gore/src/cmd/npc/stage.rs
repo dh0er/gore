@@ -9,6 +9,11 @@
 //! Der Voll-Baum kostet einmal rund 19 Minuten. Er wird deshalb neben dem Arbeitsverzeichnis
 //! vorgehalten und an der Cache-Kennung wiedererkannt, statt bei jedem Lauf neu zu entstehen.
 
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use anyhow::{bail, Context, Result};
+use gore_as::cache::faithfulness;
 use serde::{Deserialize, Serialize};
 
 use super::workspace::Manifest;
@@ -45,6 +50,38 @@ pub fn route_of(manifest: &Manifest) -> Route {
     } else {
         Route::SingleModule
     }
+}
+
+/// `compile-module` reads the resolved installation, so both it and the selected cache must
+/// match the workspace base before staging can print a command for that installation.
+pub fn compiler_game_for(
+    manifest: &Manifest,
+    cache: &Path,
+    game: Option<PathBuf>,
+) -> Result<PathBuf> {
+    let root = gore_loc::config::game_root(game).context("resolving compiler game path")?;
+    let script_cache = gore_mod::resolve_game_paths(&root).script_cache;
+    for path in [cache, script_cache.as_path()] {
+        let bytes = fs::read(path).with_context(|| {
+            format!(
+                "reading compiler base cache {}. `compile-module` requires a matching game installation",
+                path.display()
+            )
+        })?;
+        let digest: String = faithfulness::cache_seal(&bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        if digest != manifest.cache_sha256 {
+            bail!(
+                "the cache at {} is not the cache this workspace was authored against. \
+                 `stage` cannot print a safe compile command for a different or arbitrary \
+                 --cache file; pass --game pointing to a matching installation",
+                path.display()
+            );
+        }
+    }
+    Ok(root)
 }
 
 /// Der Bundle-Spec-Eintrag für diese Arbeit.

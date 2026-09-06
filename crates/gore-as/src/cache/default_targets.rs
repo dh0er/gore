@@ -461,7 +461,9 @@ fn is_value_call(instructions: &[Instr], index: usize) -> bool {
                 return false;
             };
             let loads_result = match next.op.name {
-                "STOREOBJ" => matches!(push.op.name, "PshVPtr" | "PSF"),
+                // PSF only takes the slot's address: it may instead be the next
+                // statement's constructor destination after temporary-slot reuse.
+                "STOREOBJ" => push.op.name == "PshVPtr",
                 "CpyRtoV4" => push.op.name == "PshV4",
                 "CpyRtoV8" => push.op.name == "PshV8",
                 _ => unreachable!(),
@@ -965,11 +967,7 @@ mod tests {
 
     #[test]
     fn local_result_calls_require_a_load_of_the_same_result() {
-        for (store, push) in [
-            ("STOREOBJ", "PshVPtr"),
-            ("STOREOBJ", "PSF"),
-            ("CpyRtoV8", "PshV8"),
-        ] {
+        for (store, push) in [("STOREOBJ", "PshVPtr"), ("CpyRtoV8", "PshV8")] {
             let mut code = vec![
                 instruction("CALL", &[], &[1]),
                 instruction(store, &[2], &[]),
@@ -980,6 +978,35 @@ mod tests {
             code[2].words[0] = 4;
             assert!(!is_value_call(&code, 0));
         }
+    }
+
+    #[test]
+    fn an_address_of_a_reused_slot_does_not_prove_a_result_read() {
+        // Factory(); then construction of the next statement's temporary in slot 2.
+        // PSF supplies the constructor destination, not the discarded Factory value.
+        let code = [
+            word_code("CALL", 0),
+            1,
+            word_code("STOREOBJ", 2),
+            word_code("PSF", 2),
+            word_code("CALL", 0),
+            2,
+            word_code("PSF", 2),
+        ];
+        let error = bytecode_targets(&code, 2, &RefResolver::default()).unwrap_err();
+        assert!(error.contains("cannot resolve CALL at dword 0"), "{error}");
+
+        // An address followed by `this` may also be a reused hidden return buffer.
+        // Without a proven read, keep the producer in the target inventory.
+        let argument = vec![
+            instruction("CALL", &[], &[1]),
+            instruction("STOREOBJ", &[2], &[]),
+            instruction("PSF", &[2], &[]),
+            instruction("PshVPtr", &[0], &[]),
+            instruction("ADDSi", &[8], &[1]),
+            instruction("CALL", &[], &[2]),
+        ];
+        assert!(!is_value_call(&argument, 0));
     }
 
     #[test]

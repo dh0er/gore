@@ -1281,6 +1281,10 @@ fn stage_workspace(
     let manifest = read_manifest(dir)?;
     let path = cache_path(cache, game.clone())?;
     let route = stage::route_of(&manifest);
+    let game = match route {
+        stage::Route::SingleModule => Some(stage::compiler_game_for(&manifest, &path, game)?),
+        stage::Route::FullTree => game,
+    };
 
     let tree_display = match (route, tree) {
         (stage::Route::FullTree, None) => {
