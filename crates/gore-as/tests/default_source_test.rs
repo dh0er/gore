@@ -24,6 +24,7 @@ fn init_defaults(bytecode: Vec<i32>) -> Func {
         ret: void_type(),
         params: Vec::new(),
         bytecode,
+        variable_space: 0,
         obj_locals: Vec::new(),
         is_ufunction: false,
         traits: 0,

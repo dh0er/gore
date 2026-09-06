@@ -452,6 +452,7 @@ mod tests {
             ret: DataType::default(),
             params: Vec::<Param>::new(),
             bytecode: Vec::new(),
+            variable_space: 0,
             obj_locals: Vec::new(),
             is_ufunction: false,
             traits: 0,

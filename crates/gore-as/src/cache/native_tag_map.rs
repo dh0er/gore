@@ -679,6 +679,7 @@ mod tests {
                     },
                     params: Vec::new(),
                     bytecode: Vec::new(),
+                    variable_space: 0,
                     obj_locals: Vec::new(),
                     is_ufunction: false,
                     traits: 0x20,

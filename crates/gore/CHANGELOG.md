@@ -16,8 +16,9 @@ uses the matching version section as the GitHub release notes.
   clone one, change a shipped one, or stop one being placed. An authored
   character was built, deployed and seen in game: it stands, animates, can be
   focused and spoken to, and the save records it under its own identity.
-  `checkout` reads a shipped character: the compiler refuses to build an edit of
-  a character definition, and both `checkout` and `check` say so up front.
+  `checkout` edits shipped character defaults through the single-module standalone
+  route. Local temporary stores are proved within their frame bounds and object
+  member stores retain their default targets; unproven writes still refuse.
 - Support multi-module mini-caches: `gore as compile --mini` publishes the
   authored modules as one deployable mini, and build, deploy, the Manager and
   `as splice --upsert` compose it as one unit. Qualified in game with a

@@ -135,6 +135,8 @@ pub struct Func {
     pub ret: DataType,
     pub params: Vec<Param>,
     pub bytecode: Vec<i32>,
+    /// Local stack-frame size in dwords; inactive function records may store a negative sentinel.
+    pub variable_space: i32,
     /// (slot offset, type-ptr) for object-typed locals.
     pub obj_locals: Vec<(i32, i64)>,
     pub is_ufunction: bool,
@@ -295,8 +297,8 @@ fn read_function(c: &mut Cursor) -> Result<Func, WireError> {
     let traits = c.read_i32()?; // FunctionTraits (asSFunctionTraits bitfield)
     let bytecode = read_tarray_i32_checked(c, "ByteCode")?;
     skip_tarray_fixed_checked(c, 4, "ByteCodeReferences")?;
-    c.skip(4)?; // VariableSpace
-                // ObjVariableTypes: TArray<int64 ref>; ObjVariablePos: TArray<int32>
+    let variable_space = c.read_i32()?;
+    // ObjVariableTypes: TArray<int64 ref>; ObjVariablePos: TArray<int32>
     let nobj = bounded_count(c, "ObjVariableTypes", 8)?;
     let mut obj_types = Vec::with_capacity(nobj);
     for _ in 0..nobj {
@@ -339,6 +341,7 @@ fn read_function(c: &mut Cursor) -> Result<Func, WireError> {
         params,
         param_defaults,
         bytecode,
+        variable_space,
         obj_locals,
         is_ufunction,
         traits,

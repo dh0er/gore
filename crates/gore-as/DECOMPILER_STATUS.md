@@ -39,6 +39,44 @@ older run without it let native enum fields fall back to the bool heuristic and 
 native scalar target cannot be typed, it suppresses authored defaults for that whole module so a
 later edit can use byte-exact carry instead of compiling a partial or mistyped default set.
 
+## Default-target store coverage (2026-09-06)
+
+On the same `7A18F954…` Shipping cache, the preservation guard now classifies the
+three formerly unsupported store opcodes that actually occur in class initializers:
+
+| Opcode | Occurrences | Initializers | Proof |
+|---|---:|---:|---|
+| `STOREOBJ` | 49,810 | 11,406 | Direct pointer write entirely inside `VariableSpace` |
+| `REFCPY` | 27 | 19 | Stack destination is a resolved `this` member chain; count its root |
+| `CpyRtoV8` | 1 | 1 | Direct eight-byte write entirely inside `VariableSpace` |
+| `CpyVtoV4`, `CpyVtoV8`, `CpyRtoV4`, `CpyGtoV4` | 0 | 0 | Still refused |
+
+The disassembly census covers all 30,013 `__InitDefaults`. `STOREOBJ` has 119
+opcode-context patterns (two instructions on either side, truncated at function
+boundaries), with destination slots 2 through 1122. `REFCPY` has 26 direct-member
+stores and one embedded-member chain; the one `CpyRtoV8` captures a call result
+in `UCBT_Tree_StayAway`. These counts classify stores, not complete module buildability.
+
+The VM evidence is the vendored `as_context.cpp`: `STOREOBJ` writes the object
+register directly to `frame - signed_slot`; `CpyRtoV8` independently writes the
+value register there. Both require `2 <= slot <= VariableSpace` on Win64, avoiding
+`this` overlap at slot 1. `REFCPY` instead writes through a stack address. Local
+aliases, register-only destinations and jump entry into its apparent member
+chain remain unproven. Source and regenerated-cache target multiplicities are
+still checked separately.
+
+Reproduce the cache proof with `GORE_AS_CACHE` set to the Shipping cache:
+
+```powershell
+cargo test -p gore-as --lib real_shipped_store_population_is_classified -- --ignored --nocapture
+```
+
+The four edited character modules (Diego, Viper, Bandit, Fingers) compiled through
+strict standalone in 38–50 seconds each. The deployed Diego fixture was played
+in a new game by the user: the resulting save records both base/current Health
+and MaxHealth as 1234 under `OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN`. This is a
+runtime-to-save observation of the health edit, not a runtime census of all defaults.
+
 ## What is left
 
 **1,114 functions (0.68%) recompile to bytecode that differs semantically.** A semantic

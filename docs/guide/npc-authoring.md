@@ -355,34 +355,39 @@ $ gore npc check work/diego
   [blocking] class UCharacterDefinition_Human_RENAMED is new. Checking a shipped character out is for changing its values; a new class needs `gore npc new`, which carries the contract for one
 ```
 
-**A checkout cannot be built today**, and both `checkout` and `check` say so
-before you spend any time on it. The compiler refuses an *edit* of a module
-whose class defaults it cannot inventory:
+A checkout builds through the single-module standalone route. After editing a
+value, run:
 
+```powershell
+gore npc check work/diego
+gore npc stage work/diego --mod-name ToughDiego
+# Run the printed compile-module and mod build commands.
 ```
-refusing default-target preservation for edit module
-"…CharacterDefinition_OC_STT_Diego": unsupported store opcode STOREOBJ at
-dword 336; default-target coverage is unproven
-```
 
-Measured on 2026-09-06 against four shipped character definitions — Diego,
-Viper, a bandit, Fingers — **four refusals**. On both routes: `compile-module`
-gives up in seconds, the full tree only after 23 minutes. A character
-definition is nothing but object-valued defaults, so it lands there every time.
-A **new** module with defaults is unaffected, because an add has nothing to
-preserve — which is why `new` builds and `checkout` does not.
+No emitted full tree is needed for this one-module edit. Both compiler routes
+require every shipped default target to remain at least as often in the source
+and in the regenerated module. Keep all 44 Diego defaults when changing his
+health or inventory; removing an existing assignment or call is refused.
 
-The narrow thing that does still work is `gore as patch-default`, which
-rewrites one plain scalar field in place. It is narrow: `gore as default-sites
---class UCharacterDefinition_Human_OC_STT_Diego` reports exactly **one**
-patchable field on Diego, `m_LightType`. Everything an attribute sets — health,
-strength, resistances — goes through a `SetAttributeValue(...)` call rather than
-a field store and is out of reach.
+The default-target proof distinguishes temporary values from member writes:
+`STOREOBJ` and `CpyRtoV8` are accepted only when their entire destination lies
+inside the function's local frame. `REFCPY` must resolve a member chain rooted
+in `this`, and that member counts as a preserved target. Unknown destinations
+still refuse. The four other previously unsupported copy opcodes remain
+unsupported; none occurs in the measured shipped initializers.
 
-So what is `checkout` for today? Reading. It gives you the character's complete
-definition, every value in one place, which is more than `show` prints. Use it
-to see what a character is made of, and derive from it with `clone` when you
-want to change something.
+`check` validates the workspace and class structure; the compiler performs the
+bytecode preservation proof before publishing a result. A successful offline
+build alone does not prove that the edited values appeared in a new game.
+
+The `ToughDiego` fixture crossed that boundary on 2026-09-06, BuildID `24878692`:
+checkout, edit both health defaults from 540 to 1234, compile-module, build,
+inspect, deploy, then a new game played and saved by the user. Reading that save
+with `private.npc.attributes` found `Health` and `MaxHealth` both at **1234**,
+for both base and current values, under
+`OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN`. This proves the edited health reached
+runtime and serialization; it does not establish save/reload behavior or every
+other default's runtime effect.
 
 ### `npc check` — the diff guard
 
@@ -552,8 +557,9 @@ What that took, and what each cost, is worth knowing before authoring:
 - **Save and reload across sessions**, and anything about quests, knowledge or
   relationships for an authored identity.
 
-Changing a shipped character's values is `npc checkout`, described above, and
-that one has **not** been through the game at all — only the authoring path has.
+Changing a shipped character's values is `npc checkout`, described above. The
+Diego health edit has been verified in a user-created new-game save; broader
+value edits and loading that save in another session remain untested.
 What checkout does not reach either: visuals and the spawn definition, which
 live in modules hundreds of characters share, and what a character says. Use the
 surfaces that do:
