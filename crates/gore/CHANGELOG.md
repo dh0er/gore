@@ -5,7 +5,7 @@ uses the matching version section as the GitHub release notes.
 
 ## [Unreleased]
 
-- `gore as`: 670 of 164,723 script functions still recompile to a semantically
+- `gore as`: 667 of 164,723 script functions still recompile to a semantically
   different program (from 1,114); 7,076 of 7,317 modules carry none, and no
   recompiled loop has a bound of zero any more.
 - `gore as emit-all --skip <module>` leaves a module out of the tree.

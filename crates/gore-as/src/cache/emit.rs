@@ -9124,7 +9124,8 @@ fn fold_condition_temporaries(
             }
             let tested = lines.get(at + 1)?.trim();
             let condition = tested.strip_prefix("if (")?.strip_suffix(')')?;
-            if value.contains(&name)
+            // Shared prefixes such as `local_1` and `local_12` are distinct identifiers.
+            if count_ident(&value, &name) > 0
                 || value.chars().any(char::is_control)
                 || count_ident(tested, &name) != 1
                 || !read_once_by_the_next_line(&lines, at, &name)
@@ -9683,7 +9684,7 @@ fn collapse_single_use_accumulators(body: &str, widened: &HashSet<i32>, locals: 
                         .map(|line| line.trim())
                         .and_then(|line| line.strip_prefix(&format!("{name} = ")))
                         .and_then(|line| line.strip_suffix(';'))
-                        .filter(|init| !init.contains(&name))
+                        .filter(|init| count_ident(init, &name) == 0)
                     else {
                         continue;
                     };
@@ -9780,7 +9781,7 @@ fn collapse_single_use_accumulators(body: &str, widened: &HashSet<i32>, locals: 
                     let Some((op, right)) = rest.split_once(' ') else {
                         break;
                     };
-                    if !matches!(op, "+" | "-" | "*" | "/") || right.contains(&name) {
+                    if !matches!(op, "+" | "-" | "*" | "/") || count_ident(right, &name) > 0 {
                         break;
                     }
                     format!("({folded_value} {op} {})", substitute(right))
@@ -9788,7 +9789,7 @@ fn collapse_single_use_accumulators(body: &str, widened: &HashSet<i32>, locals: 
                     let Some((left, op)) = head.rsplit_once(' ') else {
                         break;
                     };
-                    if !matches!(op, "+" | "-" | "*" | "/") || left.contains(&name) {
+                    if !matches!(op, "+" | "-" | "*" | "/") || count_ident(left, &name) > 0 {
                         break;
                     }
                     format!("({} {op} {folded_value})", substitute(left))
@@ -10863,7 +10864,7 @@ fn inline_bool_literal_temporary(
     let plain_rhs = read
         .strip_suffix(';')
         .and_then(|rest| rest.split_once(" = "))
-        .is_some_and(|(target, rhs)| rhs == name && !target.contains(&name) && !target.contains('('));
+        .is_some_and(|(target, rhs)| rhs == name && count_ident(target, &name) == 0 && !target.contains('('));
     let operand = ["==", "!=", "&&", "||"]
         .iter()
         .any(|op| read.contains(&format!(" {op} {name}")) || read.contains(&format!("{name} {op} ")));
@@ -14756,7 +14757,7 @@ fn fold_returned_temporaries(
                 let usable = !value.is_empty()
                     && !value.contains('\u{1}')
                     && !value.contains('\u{2}')
-                    && !value.contains(name)
+                    && count_ident(value, name) == 0
                     && !value.contains("__return")
                     && !value.contains(RVODEF)
                     && indent_of(lines[at]) == indent_of(lines[at + 1]);
@@ -16794,7 +16795,7 @@ fn merge_conditional_into_declaration(text: &str) -> String {
             }
             let statement = next.trim_start().strip_suffix(';')?;
             let value = statement.strip_prefix(&format!("{name} = "))?;
-            if !(value.contains(" ? ") && value.contains(" : ")) || value.contains(&name) {
+            if !(value.contains(" ? ") && value.contains(" : ")) || count_ident(value, &name) > 0 {
                 return None;
             }
             let head = lines[at].trim().strip_suffix(';')?;
@@ -16955,7 +16956,7 @@ fn merge_site_declaration_with_assignment(body: &str, declared_at_site: &HashSet
                 return None;
             }
             let value = next.trim_start().strip_suffix(';')?.strip_prefix(&format!("{name} = "))?;
-            if value.contains(&name) || value.chars().any(char::is_control) {
+            if count_ident(value, &name) > 0 || value.chars().any(char::is_control) {
                 return None;
             }
             let head = lines[at].trim().strip_suffix(';')?;
@@ -21637,6 +21638,35 @@ mod bool_literal_temporary_tests {
 }
 
 #[cfg(test)]
+mod condition_identifier_tests {
+    use super::*;
+
+    #[test]
+    fn condition_folding_distinguishes_prefixes_from_self_references() {
+        let locals = BTreeMap::from([
+            (1, "bool".to_owned()),
+            (12, "bool".to_owned()),
+            (13, "bool".to_owned()),
+        ]);
+        for (value, should_fold) in [
+            ("local_12 && local_13", true),
+            ("local_1 && local_12", false),
+        ] {
+            let body = format!("    bool local_1 = {value};\n    if (local_1)\n    {{\n        return;\n    }}\n");
+            let folded = fold_condition_temporaries(
+                &body, &locals, &RefResolver::default(), None,
+                &HashSet::new(), &HashSet::new(), false,
+            );
+            if should_fold {
+                assert_eq!(folded, format!("    if ({value})\n    {{\n        return;\n    }}\n"));
+            } else {
+                assert_eq!(folded, body);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod block_release_lives_tests {
     use super::lives_end_with_block_releases;
 
@@ -21800,4 +21830,3 @@ mod definite_assignment_tests {
         assert!(all_reads_definitely_assigned(body, 4));
     }
 }
-

@@ -29,7 +29,7 @@ AI.AIAgent.Orc.Combat.Staff.Spells.StormOfFire.GA_Spell_StormOfFire_Orc	1	0	0
 AI.AIAgent.Orc.Living.AbilityTask_Interaction_Orc	1	0	0
 AI.AIAgent.Orc.Living.LivingAI_Orc	2	0	0
 AI.AIItemScoring	9	0	0
-AI.AssessmentResponseSystem.AssessmentBits	22	0	0
+AI.AssessmentResponseSystem.AssessmentBits	19	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	7	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeDefinitions	2	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	0
