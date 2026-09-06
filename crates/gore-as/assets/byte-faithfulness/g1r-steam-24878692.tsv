@@ -26,10 +26,10 @@ AI.AIAgent.Human.Config.OCR_GRD_Scatty_210.DailyRoutine_OCR_GRD_Scatty_210	4	0	0
 AI.AIAgent.Orc.Combat.Staff.Spells.StormOfFire.GA_Spell_StormOfFire_Orc	1	0	0
 AI.AIAgent.Orc.Living.AbilityTask_Interaction_Orc	1	0	0
 AI.AIAgent.Orc.Living.LivingAI_Orc	2	0	0
-AI.AIItemScoring	8	0	0
+AI.AIItemScoring	6	0	0
 AI.AssessmentResponseSystem.AssessmentBits	19	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	7	0	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeDefinitions	2	0	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeDefinitions	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingResponse	2	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	24	0	0
@@ -65,10 +65,10 @@ AI.States.FightAI.CombatState.AICombatTargetScoring	3	0	0
 AI.States.FightAI.CombatState.AIGroup_Attackers	5	0	0
 AI.States.FightAI.CombatState.AIGroup_Combat	5	0	0
 AI.States.FightAI.CombatState.AIState_Combat	1	0	0
-AI.States.FightAI.CombatState.AIState_OGCombat	16	0	0
+AI.States.FightAI.CombatState.AIState_OGCombat	15	0	0
 AI.States.FightAI.CombatState.CombatBehaviorSets.CombatBehaviorSet	1	0	0
-AI.States.FightAI.CombatState.CombatBehaviorSets.UnreachableEnemy.CombatBehaviorSet_UnreachableEnemy	2	0	0
-AI.States.FightAI.CombatState.CombatMoves	30	0	0
+AI.States.FightAI.CombatState.CombatBehaviorSets.UnreachableEnemy.CombatBehaviorSet_UnreachableEnemy	1	0	0
+AI.States.FightAI.CombatState.CombatMoves	29	0	0
 AI.States.FightAI.CombatState.CombatOperations	1	0	0
 AI.States.FightAI.CombatState.CombatSituations	7	0	0
 AI.States.FightAI.CombatState.CombatTestClasses	1	0	0
@@ -167,7 +167,6 @@ GAS.Abilities.Spells.Visuals.Wind.StormFistVisual	1	0	0
 GAS.Abilities.TraceTarget.Base.GA_TraceTarget_Base	1	0	0
 GAS.Abilities.TraceTarget.Derived.GA_TraceTarget_Item	1	0	0
 GAS.Calculations.Damage	6	0	0
-GAS.Calculations.Damage_FocusStonePuzzle	1	0	0
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Drugs.Base.DrugDebuffEffectComponentBase	2	0	0
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Sleep.GA_SleepDebuffEffectGameplayAbility	1	0	0
 GAS.Effects.Debuffs.EffectStateComponent.DebuffEffectActors.SlowdownDebuffEffectActor	1	0	0

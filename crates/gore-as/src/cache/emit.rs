@@ -2723,6 +2723,7 @@ fn emit_function_ctor(
             .copied()
             .filter(|slot| !named_iterated.contains(slot))
             .collect();
+        let f64_arithmetic_temps = strict_f64_arithmetic_temp_slots(f);
         let rendered = inline_unnamed_value_temporaries(
             &rendered,
             &unnamed_value_defs(f, refs, &rvo_producers, &rvo_consumers)
@@ -2766,6 +2767,7 @@ fn emit_function_ctor(
             &named_sites,
             &literal_seeded_arithmetic_temps(f),
             &member_read_temp_slots(f),
+            &f64_arithmetic_temps,
         );
         pass_trace("inline_unnamed_value_temporaries", &rendered);
         // Now that the operands carry no names of their own, an in-place update stands directly
@@ -2823,6 +2825,7 @@ fn emit_function_ctor(
             &named_sites,
             &literal_seeded_arithmetic_temps(f),
             &member_read_temp_slots(f),
+            &f64_arithmetic_temps,
         );
         pass_trace("inline_unnamed_value_temporaries", &rendered);
         }
@@ -8629,6 +8632,13 @@ fn inline_temporary_into(
         }
         _ => value,
     };
+    // Replacing one arithmetic operand must preserve the producer's grouping:
+    // a / temp with temp = b + c means a / (b + c), not a / b + c.
+    let value = if position == Position::Operand
+        && is_pure_arithmetic(&value) && !wraps_whole_expression(&value)
+    {
+        format!("({value})")
+    } else { value };
     lines[index] = rename_ident(&lines[index], temp, &value);
     lines[definition].clear();
     true
@@ -14100,6 +14110,7 @@ fn inline_unnamed_value_temporaries(
     named_sites: &HashSet<(i32, String)>,
     literal_seeded_temps: &HashSet<i32>,
     member_read_temps: &HashSet<i32>,
+    f64_arithmetic_temps: &HashSet<i32>,
 ) -> String {
     let mut lines: Vec<String> = body.lines().map(|l| l.to_owned()).collect();
     // `body` never changes, so the two whole-body questions below are asked once per name instead
@@ -14174,7 +14185,9 @@ fn inline_unnamed_value_temporaries(
                     && (init.split(' ').count() == 1
                         || (init.split(' ').count() == 3 && init.split(' ').nth(2).is_some_and(is_plain_literal)))
             };
-            if !unnamed.contains(&key) && !sole_life() && !arithmetic() && !literal_seeded() && !member_read() {
+            let double_arithmetic = || f64_arithmetic_temps.contains(&key.0)
+                && is_pure_arithmetic(&init);
+            if !unnamed.contains(&key) && !sole_life() && !arithmetic() && !literal_seeded() && !member_read() && !double_arithmetic() {
                 inline_reject("not-unnamed", "", &name, &lines[at]);
                 return None;
             }
@@ -14218,7 +14231,7 @@ fn inline_unnamed_value_temporaries(
                     // Arithmetic witnesses name a physical slot. Its later life may be a
                     // named argument evaluated before the call's other arguments, even when
                     // an earlier life was an unnamed arithmetic operand.
-                    if is_pure_arithmetic(&init) && !literal_seeded() && !member_read() {
+                    if is_pure_arithmetic(&init) && !literal_seeded() && !member_read() && !double_arithmetic() {
                         inline_reject("life-arithmetic", "", &name, &lines[at]);
                         return None;
                     }
@@ -16459,6 +16472,69 @@ fn literal_seeded_arithmetic_temps(f: &Func) -> HashSet<i32> {
         }
     }
     out
+}
+
+/// Every physical-slot life must be one uninterrupted double subexpression.
+fn strict_f64_arithmetic_temp_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    strict_f64_arithmetic_slots(&instrs, matches!(f.ret.token, 0x51 | 0x5e))
+}
+
+fn strict_f64_arithmetic_slots(instrs: &[super::disasm::Instr], returns_f64: bool) -> HashSet<i32> {
+    let ret_offsets: HashSet<usize> = instrs.iter().filter(|ins| ins.op.name == "RET")
+        .map(|ins| ins.offset_dw).collect();
+    let mut epoch = 0usize;
+    let mut lives: HashMap<i32, (usize, bool)> = HashMap::new();
+    let mut refused = HashSet::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        let op = ins.op.name;
+        let arithmetic = matches!(op, "ADDd" | "SUBd" | "MULd" | "DIVd" | "MODd" | "NEGd");
+        let write = arithmetic || matches!(op, "RDR8" | "SetV8");
+        let dst = ins.words.first().map(|w| *w as i16 as i32);
+        let returned = returns_f64 && op == "CpyVtoR8" && instrs.get(at + 1).is_some_and(|next| {
+            next.op.name == "RET" || (next.op.name == "JMP" && next.dwords.first().is_some_and(|d| {
+                let target = next.offset_dw as i64 + 2 + *d as i32 as i64;
+                target >= 0 && ret_offsets.contains(&(target as usize))
+            }))
+        });
+        // A single global epoch lazily invalidates every still-unconsumed life.
+        if ins.op.is_call() || op.starts_with('J') || op.starts_with("Psh")
+            || matches!(op, "PSF" | "PGA" | "TYPEID" | "RET" | "SUSPEND")
+        {
+            epoch += 1;
+        }
+        let mut slots = super::bytediff::addressed_slots(ins);
+        slots.sort_unstable();
+        slots.dedup();
+        for slot in slots.into_iter().filter(|slot| *slot > 0) {
+            if refused.contains(&slot) { continue; }
+            if write && dst == Some(slot) {
+                let in_place = arithmetic && (op == "NEGd"
+                    || ins.words.iter().skip(1).any(|w| *w as i16 as i32 == slot));
+                if in_place {
+                    if !lives.get(&slot).is_some_and(|(born, used)| *born == epoch && !used) {
+                        refused.insert(slot);
+                    }
+                } else {
+                    if lives.get(&slot).is_some_and(|(_, used)| !used) {
+                        refused.insert(slot);
+                    }
+                    lives.insert(slot, (epoch, false));
+                }
+            } else if arithmetic || returned {
+                match lives.get_mut(&slot) {
+                    Some((born, used)) if *born == epoch && !*used => *used = true,
+                    _ => { refused.insert(slot); }
+                }
+            } else {
+                // Includes copies, call results, casts, pushes and non-double reads.
+                refused.insert(slot);
+            }
+        }
+    }
+    lives.into_iter().filter_map(|(slot, (_, used))| {
+        (used && !refused.contains(&slot)).then_some(slot)
+    }).collect()
 }
 
 /// Primitive slots the compiler used as arithmetic scratch: every write is a literal store, a
@@ -22589,7 +22665,7 @@ mod condition_identifier_tests {
         inline_unnamed_value_temporaries(
             body, &HashSet::from([(1, 1)]), &HashSet::new(), &HashSet::new(),
             &RefResolver::default(), &HashSet::new(), &HashSet::new(),
-            &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
+            &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
         )
     }
 
@@ -23305,8 +23381,38 @@ mod known_const_member_type_tests {
 }
 
 #[cfg(test)]
+mod arithmetic_inline_grouping_tests {
+    use super::*;
+
+    #[test]
+    fn arithmetic_operand_substitution_preserves_the_original_expression_group() {
+        for (value, consumer, expected) in [
+            ("local_2 + local_10", "local_6 = local_8 / local_4;",
+                "local_6 = local_8 / (local_2 + local_10);"),
+            ("local_2 - local_10", "local_6 = local_8 * local_4;",
+                "local_6 = local_8 * (local_2 - local_10);"),
+            ("local_2 - local_10", "local_6 = local_8 - local_4;",
+                "local_6 = local_8 - (local_2 - local_10);"),
+            ("local_2 * local_10", "local_6 = local_8 / local_4;",
+                "local_6 = local_8 / (local_2 * local_10);"),
+        ] {
+            let mut lines = vec![format!("    local_4 = {value};"), format!("    {consumer}")];
+            let locals = [2, 4, 6, 8, 10].into_iter().map(|slot| (slot, "float".into())).collect();
+            assert!(inline_temporary_into(&mut lines, 1, "local_4", "<receiver>",
+                Position::Operand, &locals, &RefResolver::default(), None,
+                &HashMap::from([(4, "float".into())]), &HashSet::new(), &HashSet::new(),
+                &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
+                &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(),
+                &HashSet::new()));
+            assert!(lines[0].is_empty());
+            assert_eq!(lines[1].trim(), expected);
+        }
+    }
+}
+
+#[cfg(test)]
 mod member_arithmetic_lifetime_tests {
-    use super::{member_read_temp_slots, inline_unnamed_value_temporaries, Func};
+    use super::{member_read_temp_slots, inline_unnamed_value_temporaries, strict_f64_arithmetic_temp_slots, Func};
     use crate::cache::{isa::OPCODES, refs::RefResolver, types::DataType};
     use std::collections::{HashMap, HashSet};
 
@@ -23324,6 +23430,56 @@ mod member_arithmetic_lifetime_tests {
         Func { name: "Fixture".into(), param_defaults: Vec::new(), namespace: String::new(),
             ret: DataType::default(), params: Vec::new(), bytecode, obj_locals: Vec::new(),
             is_ufunction: false, traits: 0 }
+    }
+
+
+    #[test]
+    fn double_arithmetic_reuses_slots_only_after_one_consumer_and_folds_life_suffixes() {
+        let ops: Vec<(&str, &[u16])> = vec![
+            ("RDR8", &[12]), ("SetV8", &[14]), ("SUBd", &[12, 12, 14]),
+            ("MULd", &[24, 12, 10]), ("CpyVtoR8", &[24]), ("JMP", &[]), ("RET", &[0]),
+            ("RDR8", &[12]), ("SetV8", &[14]), ("SUBd", &[12, 12, 14]),
+            ("MULd", &[12, 12, 10]), ("CpyVtoR8", &[12]), ("RET", &[0]),
+        ];
+        let mut f = function(&ops);
+        f.ret.token = 0x51;
+        let witnessed = strict_f64_arithmetic_temp_slots(&f);
+        assert!(witnessed.contains(&12) && witnessed.contains(&24), "{witnessed:?}");
+        for name in ["local_12", "local_12_2", "local_12_3"] {
+            let body = format!("    float {name} = (this.Max - this.Min) * Ratio;\n    return this.Min + {name};\n");
+            let folded = inline_unnamed_value_temporaries(&body, &HashSet::new(), &HashSet::new(),
+                &HashSet::new(), &RefResolver::default(), &HashSet::new(), &HashSet::new(),
+                &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &witnessed);
+            assert!(!folded.contains(name), "{folded}");
+            assert!(folded.contains("return this.Min + ((this.Max - this.Min) * Ratio);"), "{folded}");
+        }
+    }
+
+    #[test]
+    fn one_unsafe_double_life_rejects_the_whole_physical_slot() {
+        let prefix: Vec<(&str, &[u16])> = vec![
+            ("RDR8", &[12]), ("ADDd", &[24, 12, 18]), ("RDR8", &[12]),
+        ];
+        for bad in [
+            vec![("CpyVtoV8", &[20, 12][..])],
+            vec![("CpyRtoV8", &[12][..])],
+            vec![("fTOd", &[12, 18][..])],
+            vec![("RDR4", &[12][..])],
+            vec![("PSF", &[30][..])], // unrelated push still precedes consumption
+            vec![("CALLSYS", &[][..])],
+            vec![("JMP", &[][..])],
+            vec![("ADDd", &[20, 12, 18][..])], // a second external consumer follows
+        ] {
+            let mut ops = prefix.clone();
+            ops.extend(bad);
+            ops.push(("ADDd", &[22, 12, 18]));
+            let mut f = function(&ops);
+            f.ret.token = 0x51;
+            assert!(!strict_f64_arithmetic_temp_slots(&f).contains(&12), "{ops:?}");
+        }
+        let mut f = function(&[("RDR8", &[12]), ("CpyVtoR8", &[12]), ("RET", &[0])]);
+        f.ret.token = 0x44; // an integer return supplies no direct double-return witness
+        assert!(!strict_f64_arithmetic_temp_slots(&f).contains(&12));
     }
 
     #[test]
@@ -23353,7 +23509,7 @@ mod member_arithmetic_lifetime_tests {
             let body = format!("    float {name} = this.Max - 1.0;\n    this.Value = {name};\n    {name} = Scale * Value;\n    Clamp({name}, Min, Max);\n");
             let folded = inline_unnamed_value_temporaries(&body, &HashSet::new(), &HashSet::new(),
                 &HashSet::new(), &RefResolver::default(), &HashSet::new(), &HashSet::new(),
-                &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::from([12]));
+                &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::from([12]), &HashSet::new());
             assert!(folded.contains("this.Value = (this.Max - 1.0);"), "{folded}");
             assert!(folded.contains(&format!("float {name} = Scale * Value;")), "{folded}");
             assert!(folded.contains(&format!("Clamp({name}, Min, Max);")), "{folded}");

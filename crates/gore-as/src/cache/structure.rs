@@ -506,6 +506,17 @@ fn enum_parameter_field_type(
         .map(str::to_owned)
 }
 
+fn addressed_field_widening(instrs: &[Instr], at: usize) -> bool {
+    let Some(previous) = at.checked_sub(1).and_then(|i| instrs.get(i)) else { return false; };
+    let Some(convert) = instrs.get(at) else { return false; };
+    let Some(next) = instrs.get(at + 1) else { return false; };
+    previous.op.name == "RDR4" && convert.op.name == "fTOd" && next.op.name == "PSF"
+        && convert.words.first().is_some_and(|w| s16(*w) > 0)
+        && previous.words.first().is_some()
+        && previous.words.first() == convert.words.get(1)
+        && next.words.first() == convert.words.first()
+}
+
 /// Provenance for the exact byte-wide enum carrier immediately before CMPIi.
 /// PropertyReferences OldTypeId is an owner, never a field-value type witness.
 fn widened_switch_enum_selector(
@@ -6066,7 +6077,12 @@ fn block_stmts_in(
                 } else {
                     src
                 };
-                match narrowing_cast_target(n2) {
+                // A widened field value addressed immediately is the call's
+                // materialized conversion temporary. An implicit initializer adds
+                // a copy before the PSF; an explicit cast writes that slot directly.
+                let cast = narrowing_cast_target(n2).or_else(||
+                    addressed_field_widening(ctx.instrs, lo + k).then_some("float"));
+                match cast {
                     Some(t) => out.push(format!("{dst} = {t}({src});")),
                     None => out.push(format!("{dst} = {src};")),
                 }
@@ -10662,6 +10678,31 @@ mod tests {
             "UAIState_PerceptionResponse", "Priority"), None);
         assert_eq!(enum_parameter_field_type(&refs, "UAIState_PerceptionResponse",
             "UAIState_PerceptionResponse", "MissingField"), None);
+    }
+
+    #[test]
+    fn a_field_widening_keeps_its_cast_only_when_the_destination_is_addressed_next() {
+        let ins = |name, words: &[u16]| Instr {
+            offset_dw: 0,
+            op: crate::cache::isa::OPCODES.iter().find(|op| op.name == name).unwrap(),
+            words: words.to_vec(), dwords: Vec::new(), qwords: Vec::new(),
+        };
+        let code = vec![ins("RDR4", &[105]), ins("fTOd", &[26, 105]), ins("PSF", &[26])];
+        assert!(addressed_field_widening(&code, 1));
+        for (at, replacement) in [
+            (0, ins("RDR4", &[104])),
+            (0, ins("CpyRtoV4", &[105])),
+            (1, ins("iTOd", &[26, 105])),
+            (2, ins("PSF", &[28])),
+            (2, ins("CpyVtoV8", &[30, 26])),
+            (2, ins("PshV8", &[26])),
+        ] {
+            let mut other = code.clone();
+            other[at] = replacement;
+            assert!(!addressed_field_widening(&other, 1));
+        }
+        assert!(!addressed_field_widening(&code, 0));
+        assert!(!addressed_field_widening(&code[..2], 1));
     }
 
     fn compound_switch_fixture() -> CompoundFixture {
