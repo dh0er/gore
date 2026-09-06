@@ -1384,7 +1384,7 @@ const NPC_COMMANDS: &[CommandSpec] = &[
     .guide("npc-authoring"),
     CommandSpec::new(
         "checkout",
-        "Take a shipped character's own module out for editing",
+        "Read a shipped character's own module in full; the compiler refuses to build an edit of it",
         NPC_CHECKOUT_ARGS,
         Safety::write().writes_into(&["out"]),
         T_NORMAL,
