@@ -33,19 +33,18 @@ AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingResponse	2	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	24	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.TheftEvaluationContext	1	0	0
-AI.AssessmentResponseSystem.EventResponses	10	0	0
+AI.AssessmentResponseSystem.EventResponses	9	0	0
 AI.CharacterAI_Gothic	6	0	0
 AI.CharacterAI_Human	1	0	0
 AI.CharacterAI_Orc	2	0	0
 AI.DailyRoutines.DailyRoutines_OG	2	0	0
 AI.Interactions.AbilityTask_Interaction_Human	1	0	0
 AI.NativeAICommands	6	0	0
-AI.NearbyCharacterAICommands	2	0	0
 AI.Relationship.PersonalRelationshipModifiers	3	0	0
 AI.States.AIState_DailyRoutine	2	0	0
 AI.States.AIState_FollowCharacterAggressive	2	0	0
 AI.States.AIState_FollowCreator	1	0	0
-AI.States.AIState_GuideCharacter	5	0	0
+AI.States.AIState_GuideCharacter	4	0	0
 AI.States.AIState_InteractWinchGate	1	0	0
 AI.States.AIState_UseFreepoint	1	0	0
 AI.States.FightAI.AIGroup_ConflictInstance	2	0	0
@@ -66,7 +65,7 @@ AI.States.FightAI.CombatState.AIState_Combat	1	0	0
 AI.States.FightAI.CombatState.AIState_OGCombat	12	0	0
 AI.States.FightAI.CombatState.CombatBehaviorSets.CombatBehaviorSet	1	0	0
 AI.States.FightAI.CombatState.CombatBehaviorSets.UnreachableEnemy.CombatBehaviorSet_UnreachableEnemy	1	0	0
-AI.States.FightAI.CombatState.CombatMoves	28	0	0
+AI.States.FightAI.CombatState.CombatMoves	27	0	0
 AI.States.FightAI.CombatState.CombatOperations	1	0	0
 AI.States.FightAI.CombatState.CombatSituations	4	0	0
 AI.States.FightAI.CombatState.CombatTestClasses	1	0	0
@@ -87,7 +86,7 @@ AI.States.FightAI.SleeperFight.OC_KDF_Milten_Sleeper.Spells.Fireball.GA_Spell_Fi
 AI.States.FightAI.SleeperFight.OC_VLK_Mud_574_Sleeper.Gameplay.RegionTrait_MudSleeper_TeleportToEnd_RegionTrait	1	0	0
 AI.States.FightAI.SleeperFight.SC_NOV_Lester_Sleeper.SleeperFight_LesterCombat	2	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.GA_Summon_XardasSleeper_Skeleton	1	0	0
-AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.GA_Xardas_Sleeper_FightManager	3	0	0
+AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.GA_Xardas_Sleeper_FightManager	2	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpotManager	1	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpot_XardasSleeper	3	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.TraceTarget_XardasSleeper	1	0	0
@@ -98,7 +97,7 @@ AI.States.FightAI.WaitStates.AIState_WaitWaryOfNearbyPerceivedCharacter	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning	2	0	0
 AI.States.FightAI.WarningState.AIState_Warning_ComplainAboutBlockedPath	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_Creature	2	0	0
-AI.States.FightAI.WarningState.AIState_Warning_Crime	14	0	0
+AI.States.FightAI.WarningState.AIState_Warning_Crime	13	0	0
 AI.States.FightAI.WatchFightState.AIGroup_WatchFight	2	0	0
 AI.States.FightAI.WatchFightState.AIState_WatchFight	18	0	0
 AI.States.Test.TestCharacters_Navigation	1	0	0
@@ -133,7 +132,7 @@ GAS.Abilities.Spells.ExecutionValidator.Derived.Base.CastSpell_ExecutionValidato
 GAS.Abilities.Spells.ExecutionValidator.Derived.Spell.Telekinesis.CastSpell_ExecutionValidator_Telekinesis	1	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_SpawnRechargeableProjectile	2	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_Targetable	1	0	0
-GAS.Abilities.Spells.Spells.Electric.ChainLightning.GA_Spell_ChainLightning	7	0	0
+GAS.Abilities.Spells.Spells.Electric.ChainLightning.GA_Spell_ChainLightning	6	0	0
 GAS.Abilities.Spells.Spells.Electric.GA_Spell_BallLightning	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_Fireball	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_StormOfFire	1	0	0
@@ -163,7 +162,7 @@ GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Sleep.GA_SleepDebuff
 GAS.Effects.Debuffs.EffectStateComponent.DebuffEffectActors.SlowdownDebuffEffectActor	1	0	0
 GAS.Effects.Tests.Effect_GiveExperience	1	0	0
 GAS.GASCharacterMixins	6	0	0
-GAS.GASCharacterStateMixins	18	0	0
+GAS.GASCharacterStateMixins	13	0	0
 GAS.PerceptionEventMixins	1	0	0
 Gameplay.Environment.BattleBlockingBarrier.BattleBarrierVisual	1	0	0
 Gameplay.Environment.BattleBlockingBarrier.BattleBlockingBarrierManager	2	0	0
@@ -187,7 +186,7 @@ LoadingScreen.LoadingScreens.LoadingScreen_Intro	1	0	0
 LoadingScreen.StreamingLoadingScreenSetup	1	0	0
 Player.PlayerConfig	1	0	0
 Regions.Traits.QuestRelatedTraits	8	0	0
-Sound.FXDefinitions.FXDefinitions_AttackImpact	2	0	0
+Sound.FXDefinitions.FXDefinitions_AttackImpact	1	0	0
 Sound.FXDefinitions.FXDefinitions_Footsteps	1	0	0
 Sound.MusicRegions	3	0	0
 Spawning.TriggerSpawner	1	0	0

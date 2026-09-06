@@ -1592,6 +1592,20 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_retained_receiver(result_token: i32, is_method: bool) -> Self {
+        let mut r = Self::default();
+        for (id, name, token) in [(1, "Create", 5), (2, "Count", result_token),
+            (3, "$beh2", 0x52), (4, "Act", 0x52)] {
+            r.func_by_ptr.insert(id, name.into());
+            r.func_ret.insert(id, DataType { token, ..Default::default() });
+            r.func_params.insert(id, Vec::new());
+        }
+        r.func_owner.insert(2, "FValue".into());
+        if is_method { r.func_is_method.insert(2); }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_pointer_comparison_call(ret: DataType) -> Self {
         let mut r = Self::from_test_collision_names(&["AActor", "APawn"]);
         r.func_by_ptr.insert(1, "GetPawn".into());
@@ -1664,6 +1678,36 @@ impl RefResolver {
             r.func_ret.insert(id as i64, DataType { token, ..Default::default() });
             r.func_params.insert(id as i64, vec![]);
         }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_reference_copy_initializers(by_ref: bool, same_type: bool) -> Self {
+        let mut r = Self::default();
+        r.type_by_ptr.insert(101, "FBox".into());
+        r.type_by_ptr.insert(102, "FOther".into());
+        for (ptr, name) in [(1, "First"), (3, "Second")] {
+            r.func_by_ptr.insert(ptr, name.into());
+            r.func_ret.insert(ptr, DataType { token: 5, type_info: 101, is_reference: by_ref, ..Default::default() });
+        }
+        r.func_by_ptr.insert(2, "$beh0".into());
+        r.func_owner.insert(2, "FBox".into());
+        r.func_is_method.insert(2);
+        r.func_ret.insert(2, DataType { token: 0x52, ..Default::default() });
+        r.func_params.insert(2, vec![DataType { token: 5, type_info: if same_type { 101 } else { 102 },
+            is_reference: true, is_object_const: true, ..Default::default() }]);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_handle_iterator(by_ref: bool, handle: bool, method: bool) -> Self {
+        let mut r = Self::default();
+        r.func_by_ptr.insert(1, "Proceed".into());
+        r.func_owner.insert(1, "TArrayIterator<AActor>".into());
+        r.func_params.insert(1, Vec::new());
+        r.func_ret.insert(1, DataType { token: 5, type_info: 101,
+            is_reference: by_ref, is_object_handle: handle, ..Default::default() });
+        if method { r.func_is_method.insert(1); }
         r
     }
 
