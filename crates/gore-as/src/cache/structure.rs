@@ -1374,6 +1374,80 @@ fn script_default_member_copy(
     Some(format!("{ty}()"))
 }
 
+
+struct LocalLvalueSelection {
+    head: usize,
+    statement: String,
+}
+
+/// The compiler selects an existing lvalue's address, then reads/copies it at
+/// the join. The arms have no side effects. Require the exact two-arm layout,
+/// a same-typed pair, immediate consumption, and no other entry into the region.
+fn local_lvalue_selection(ctx: &Ctx<'_>, join: usize) -> Option<LocalLvalueSelection> {
+    let head = join.checked_sub(5)?;
+    let code = ctx.instrs.get(head..join + 2)?;
+    let word = |op: &Instr, at: usize| op.words.get(at).map(|v| *v as i16 as i32);
+    let target = |op: &Instr| op.dwords.first().map(|v| op.offset_dw as i64 + 2 + *v as i32 as i64);
+    if code[0].op.name != "CMPIi" || !matches!(code[1].op.name, "JZ" | "JNZ")
+        || !matches!(code[2].op.name, "LDV" | "PSF") || code[3].op.name != "JMP"
+        || code[4].op.name != code[2].op.name
+        || target(&code[1]) != Some(code[4].offset_dw as i64)
+        || target(&code[3]) != Some(code[5].offset_dw as i64)
+    { return None; }
+    // No alternative predecessor may supply a different register/stack value.
+    // JMPP entries are not explicit ordinary jumps, so leave those functions out.
+    for (at, op) in ctx.instrs.iter().enumerate() {
+        if op.op.name == "JMPP" { return None; }
+        if (is_cond_op(op.op.name) || op.op.name == "JMP")
+            && at != head + 1 && at != head + 3
+            && target(op).is_some_and(|to| to > code[0].offset_dw as i64
+                && to <= code[6].offset_dw as i64)
+        { return None; }
+    }
+    let test = word(&code[0], 0)?;
+    let yes = word(&code[2], 0)?;
+    let no = word(&code[4], 0)?;
+    // CMPIi tests signed integer bits in both selection forms. A known bool,
+    // enum, float or object test must not become an ordinary source comparison.
+    if test <= 0 || ctx.float_slots.contains(&test)
+        || ctx.slot_type(test).is_some_and(|ty| ty != "int" && ty != "int32")
+    { return None; }
+    let dst;
+    if code[2].op.name == "LDV" {
+        if code[5].op.name != "RDR4" || code[6].op.name != "CpyVtoV4"
+            || word(&code[5], 0) != word(&code[6], 1)
+        { return None; }
+        dst = word(&code[6], 0)?;
+        let temporary = word(&code[5], 0)?;
+        if temporary <= 0 || temporary == dst
+            || ctx.instrs.iter().filter(|op| super::bytediff::addressed_slots(op).contains(&temporary)).count() != 2
+        { return None; }
+        if [yes, no, dst].iter().any(|slot| *slot <= 0
+            || ctx.float_slots.contains(slot)
+            || ctx.slot_type(*slot).is_some_and(|ty| ty != "int" && ty != "int32"))
+        { return None; }
+    } else {
+        if code[5].op.name != "RDSPtr" || code[6].op.name != "RefCpyV" { return None; }
+        dst = word(&code[6], 0)?;
+        let param = |slot| ctx.param_off_map.get(&slot).and_then(|i| ctx.f.param_types.get(*i));
+        let left = param(yes)?;
+        let right = param(no)?;
+        if dst <= 0 || yes >= 0 || no >= 0
+            || [left, right].iter().any(|ty| ty.token != 5 || !ty.is_object_handle
+                || ty.is_reference || ty.is_object_const || ty.is_read_only)
+            || left.type_info != right.type_info
+            || ctx.slot_type(dst).as_deref() != Some(left.base_name(ctx.refs).as_str())
+        { return None; }
+    }
+    let sense = if code[1].op.name == "JZ" { "!=" } else { "==" };
+    let immediate = *code[0].dwords.first()? as i32;
+    Some(LocalLvalueSelection {
+        head,
+        statement: format!("{} = ({} {sense} {immediate} ? {} : {});",
+            ctx.slot_name(dst), ctx.slot_name(test), ctx.slot_name(yes), ctx.slot_name(no)),
+    })
+}
+
 /// Conditional-jump opcode (mirrors `cfg::is_cond_jump`, which is private to that module).
 fn is_cond_op(n: &str) -> bool {
     matches!(
@@ -2703,6 +2777,11 @@ fn float_field_type(refs: &RefResolver, tid: i32, field: &str) -> Option<String>
         // instead of `= 0.1f;` — the compiler then coerces the int and the value is off by ten
         // orders of magnitude.
         .or_else(|| refs.native_field_value_type(cls, field))
+        // FLinearColor is registered as an intrinsic, outside Binds.Cache's
+        // reflected class records. The registration trace declares all four
+        // components as float32 (offsets 0/4/8/12), including alpha.
+        .or_else(|| (cls == "FLinearColor" && matches!(field, "R" | "G" | "B" | "A"))
+            .then_some("float32"))
         .filter(|t| matches!(*t, "float" | "float32" | "double"))
         .map(|s| s.to_string())
 }
@@ -3172,7 +3251,10 @@ fn block_stmts_in(
     // can take the statement back and carry the chain on.
     let mut behaviour_flushed: Option<usize> = None;
     let insns = &ctx.instrs[lo..hi];
-    for k in 0..insns.len() {
+    let selection = stack.is_empty().then(|| local_lvalue_selection(ctx, lo)).flatten()
+        .filter(|_| insns.len() >= 2);
+    let skip = if let Some(selection) = selection { out.push(selection.statement); 2 } else { 0 };
+    for k in skip..insns.len() {
         let ins = &insns[k];
         CUR_INSTR.with(|c| c.set(lo + k));
         let n = ins.op.name;
@@ -7454,6 +7536,16 @@ impl Structurer<'_> {
                 let then_idx = fall.and_then(|o| self.idx_of.get(&o).copied());
                 let else_idx = taken.and_then(|o| self.idx_of.get(&o).copied());
                 let cond = self.fall_condition(&cmp, jop);
+                let selection_join = i + 3;
+                if leftover.is_empty() && selection_join < stop
+                    && then_idx == Some(i + 1) && else_idx == Some(i + 2)
+                    && local_lvalue_selection(self.ctx, self.g.blocks[selection_join].instr_lo)
+                        .is_some_and(|selection| selection.head + 2 == b.instr_hi)
+                {
+                    // The join emits the assignment once from the selected lvalue.
+                    i = selection_join;
+                    continue;
+                }
                 if let Some((straight, ret_idx)) = self.bool_return_diamond(then_idx, else_idx) {
                     // A guarded return and a bare one after it — NOT an `else` branch, which would
                     // make the second return jump to the shared exit instead of falling into it
@@ -10694,6 +10786,89 @@ mod tests {
             .contains("this.Value ="));
     }
 
+
+    fn render_lvalue_selection(handle: bool, extra_entry: bool, wrong_type: bool, jump: &'static str, test_type: Option<&str>) -> String {
+        let mut a = TestAssembler::default();
+        if extra_entry { a.jump("JZ", "join"); }
+        a.op("CMPIi", &[7], &[u32::MAX]);
+        a.jump(jump, "else");
+        let op = if handle { "PSF" } else { "LDV" };
+        a.op(op, &[if handle { (-2i16) as u16 } else { 7 }], &[]);
+        a.jump("JMP", "join");
+        a.label("else");
+        a.op(op, &[if handle { (-4i16) as u16 } else { 8 }], &[]);
+        a.label("join");
+        if handle {
+            a.op("RDSPtr", &[], &[]); a.op("RefCpyV", &[22], &[]);
+        } else {
+            a.op("RDR4", &[19], &[]); a.op("CpyVtoV4", &[11, 19], &[]);
+        }
+        a.op("RET", &[0], &[]);
+        let fixture = a.finish();
+        let refs = RefResolver::from_test_collision_names(&["AActor", "APawn"]);
+        let f = FuncCode {
+            func: "Synthetic::Select".into(), is_method: true,
+            param_names: vec!["Left".into(), "Right".into()],
+            param_types: vec![1, if wrong_type { 2 } else { 1 }].into_iter().map(|type_info|
+                DataType { token: 5, type_info, is_object_handle: true, ..Default::default() }).collect(),
+            ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new(),
+        };
+        let mut locals = HashMap::from([(22, "AActor".into())]);
+        if let Some(ty) = test_type { locals.insert(7, ty.into()); }
+        let ctx = Ctx {
+            f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret),
+            fields: None, param_types: None, class_name: None, local_types: Some(&locals),
+            float_slots: if wrong_type && !handle { [8].into_iter().collect() } else { Default::default() },
+            param_off_map: HashMap::from([(-2, 0), (-4, 1)]), rvo_off: None, keep_ints: None,
+            rvo_switch_region: std::cell::Cell::new(false),
+        };
+        let g = cfg::build(&fixture.instrs);
+        let idx_of = g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
+        let mut st = Structurer {
+            ctx: &ctx, g: &g, idx_of: &idx_of,
+            exit_join: None, exit_join_is_ret: false, exit_ret_rows_ok: false,
+            exit_rvo_return: false, exit_mixed_rvo_ret_rows_ok: false, exit_scan_floor: 0,
+            carry: None, loop_scope: None, shared_return: None,
+        };
+        let mut out = String::new();
+        st.emit_range(0, g.blocks.len(), 0, &mut out);
+        out
+    }
+
+    #[test]
+    fn local_lvalue_diamonds_recover_integer_and_handle_selections() {
+        for (handle, statement) in [(false, "local_11 = (local_7 != -1 ? local_7 : local_8);"),
+            (true, "local_22 = (local_7 != -1 ? Left : Right);")]
+        {
+            let body = render_lvalue_selection(handle, false, false, "JZ", None);
+            assert!(body.contains(statement), "{body}");
+            assert!(!body.contains("if (") && !body.contains("// LDV"), "{body}");
+            assert!(render_lvalue_selection(handle, false, false, "JNZ", None).contains("local_7 == -1 ?"));
+        }
+    }
+
+    #[test]
+    fn local_lvalue_diamonds_reject_other_predecessors_types_and_branch_tests() {
+        for handle in [false, true] {
+            for (extra_entry, wrong_type, jump) in [(true, false, "JZ"), (false, true, "JZ"), (false, false, "JLowZ")] {
+                let body = render_lvalue_selection(handle, extra_entry, wrong_type, jump, None);
+                assert!(!body.contains(" ? "), "{body}");
+            }
+        }
+    }
+
+    #[test]
+    fn handle_lvalue_selection_rejects_noninteger_test_independently_of_handle_types() {
+        // Both handle parameters and the destination still have the same type;
+        // only the CMPIi test's known type changes.
+        for ty in ["bool", "EState", "float32", "AActor", "uint"] {
+            let body = render_lvalue_selection(true, false, false, "JZ", Some(ty));
+            assert!(!body.contains(" ? "), "{ty}: {body}");
+        }
+        assert!(render_lvalue_selection(true, false, false, "JZ", Some("int"))
+            .contains("local_22 = (local_7 != -1 ? Left : Right);"));
+    }
+
     #[test]
     fn script_default_copy_requires_temporary_destructor_order_and_exact_type() {
         let make = |copy_type: u32, named: bool, extra_use: bool| {
@@ -10723,6 +10898,40 @@ mod tests {
             assert!(script_default_member_copy(&good.instrs, 5, &refs, source, target).is_none());
         }
         assert!(script_default_member_copy(&good.instrs, 5, &RefResolver::default(), "local_50", "this.Value").is_none());
+    }
+
+    #[test]
+    fn intrinsic_color_component_stores_decode_float_bits_without_binds() {
+        for component in ["R", "G", "B", "A"] {
+            let refs = RefResolver::from_test_member_chain(&[("FLinearColor", component)]);
+            let mut a = TestAssembler::default();
+            a.op("SetV4", &[4], &[1.0f32.to_bits()]);
+            a.op("PshVPtr", &[0], &[]);
+            a.op("ADDSi", &[0], &[1]);
+            a.op("PopRPtr", &[], &[]);
+            a.op("WRTV4", &[4], &[]);
+            let fixture = a.finish();
+            let f = FuncCode {
+                func: "WriteColor".into(), is_method: false,
+                param_names: vec!["Color".into()],
+                param_types: vec![DataType { token: 5, type_info: 1,
+                    is_reference: true, ..Default::default() }],
+                ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new(),
+            };
+            let ctx = Ctx {
+                f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret),
+                fields: None, param_types: None, class_name: None,
+                local_types: None, float_slots: Default::default(),
+                param_off_map: HashMap::from([(0, 0)]), rvo_off: None, keep_ints: None,
+                rvo_switch_region: std::cell::Cell::new(false),
+            };
+            let (stmts, _) = block_stmts(&ctx, 0, fixture.instrs.len());
+            assert!(stmts.iter().any(|s| s == &format!("Color.{component} = 1.0f;")), "{stmts:?}");
+        }
+        for (owner, field) in [("FColor", "R"), ("FLinearColor", "Other"), ("OtherColor", "R")] {
+            let refs = RefResolver::from_test_member_chain(&[(owner, field)]);
+            assert_eq!(float_field_type(&refs, 1, field), None);
+        }
     }
 
     #[test]

@@ -25,9 +25,8 @@ AI.AIAgent.Creature.Troll.TC_TrollAdult_01.CombatMoves_TrollAdult	1	0	0
 AI.AIAgent.Human.Config.OCR_GRD_Scatty_210.DailyRoutine_OCR_GRD_Scatty_210	2	0	0
 AI.AIAgent.Orc.Combat.Staff.Spells.StormOfFire.GA_Spell_StormOfFire_Orc	1	0	0
 AI.AIAgent.Orc.Living.AbilityTask_Interaction_Orc	1	0	0
-AI.AIAgent.Orc.Living.LivingAI_Orc	2	0	0
 AI.AIItemScoring	1	0	0
-AI.AssessmentResponseSystem.AssessmentBits	14	0	0
+AI.AssessmentResponseSystem.AssessmentBits	10	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	7	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeDefinitions	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	0
@@ -35,7 +34,7 @@ AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingResponse	2	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	24	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.TheftEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.EventResponses	10	0	0
-AI.CharacterAI_Gothic	9	0	0
+AI.CharacterAI_Gothic	6	0	0
 AI.CharacterAI_Human	1	0	0
 AI.CharacterAI_Orc	2	0	0
 AI.DailyRoutines.DailyRoutines_OG	2	0	0
@@ -76,7 +75,7 @@ AI.States.FightAI.DisengageBehavior.AIState_Disengage	2	0	0
 AI.States.FightAI.FearState.AIState_Fear	2	0	0
 AI.States.FightAI.FleeState.AIState_Flee	2	0	0
 AI.States.FightAI.GoGetGuardState.AIState_GoGetGuard	2	0	0
-AI.States.FightAI.ManagedFightSubsystem	4	0	0
+AI.States.FightAI.ManagedFightSubsystem	3	0	0
 AI.States.FightAI.SearchState.AIState_Search	10	0	0
 AI.States.FightAI.SleeperFight.CorKalom_Sleeper.LordDemon.Components.MadCorKalomDemonFightComponent	1	0	0
 AI.States.FightAI.SleeperFight.CorKalom_Sleeper.LordDemon.GEs_CorKalomDemon_Sleeper	1	0	0
@@ -182,7 +181,6 @@ Items.Projectiles	2	0	0
 Items.Visual.Projectile.Arrow.Base.ArrowProjectileVisual_Base	3	0	0
 LevelScripts.Map_x2_y1_OldCamp_AI_script	1	0	0
 LoadingScreen.LoadingScreenChapterBase	2	0	0
-LoadingScreen.LoadingScreenSetupTest	1	0	0
 LoadingScreen.LoadingScreens.LoadingScreen_BlackScreen	1	0	0
 LoadingScreen.LoadingScreens.LoadingScreen_GeneralHints	1	0	0
 LoadingScreen.LoadingScreens.LoadingScreen_Intro	1	0	0
@@ -207,5 +205,4 @@ Story.G1R.Conversation.Conversation_UL_OSL_UrShak_2200	1	0	0
 Story.G1R.Conversation.Conversation_UL_STT_CAVALORN_336	1	0	0
 Story.G1R.Conversation.Conversation_XT_DMB_XARDAS_404	1	0	0
 Story.Support.DialogImport	3	0	0
-Story.Support.G1R.Cinematics	2	0	0
 Story.Support.G1R.StoryFunctions	1	0	0

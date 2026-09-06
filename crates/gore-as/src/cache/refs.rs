@@ -1625,6 +1625,49 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_assignment_order_calls() -> Self {
+        let mut r = Self::from_test_collision_names(&["UStorage"]);
+        for (ptr, name, ret) in [
+            (1, "MakeStorage", DataType { token: 5, type_info: 1, is_object_handle: true, ..Default::default() }),
+            (2, "Now", DataType { token: 0x51, ..Default::default() }),
+            (3, "At", DataType { token: 0x51, is_reference: true, ..Default::default() }),
+        ] {
+            r.func_by_ptr.insert(ptr, name.into());
+            r.func_ret.insert(ptr, ret);
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_fname_global_copy(source_namespace: &str, source_name: &str, copy_type: i64) -> Self {
+        let mut r = Self::from_test_collision_names(&["FName", "FVector"]);
+        r.global_by_ptr.insert(10, "Anywhere".into());
+        r.global_ns.insert(10, "Location".into());
+        r.global_by_ptr.insert(20, source_name.into());
+        if !source_namespace.is_empty() { r.global_ns.insert(20, source_namespace.into()); }
+        r.funcid_to_ptr.insert(30, 30);
+        r.func_by_ptr.insert(30, "$beh0".into());
+        r.func_owner.insert(30, "FName".into());
+        r.func_params.insert(30, vec![DataType {
+            token: 5, type_info: copy_type, is_reference: true,
+            is_object_const: true, ..Default::default()
+        }]);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_eager_bool_calls(saved_token: i32) -> Self {
+        let mut r = Self::default();
+        for (id, name, token) in [(101, "Saved", saved_token), (102, "Other", 0x41)] {
+            r.funcid_to_ptr.insert(id, id as i64);
+            r.func_by_ptr.insert(id as i64, name.into());
+            r.func_ret.insert(id as i64, DataType { token, ..Default::default() });
+            r.func_params.insert(id as i64, vec![]);
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_collision_names(names: &[&str]) -> Self {
         let mut resolver = Self::default();
         for (index, name) in names.iter().enumerate() {
