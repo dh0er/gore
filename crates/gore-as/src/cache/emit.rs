@@ -980,7 +980,11 @@ fn emit_function_ctor(
     // literal's temporary took the enum while the variable it fed kept `int` (the retain vetoed
     // one half of the copy class), and a compare of a typed element against an `int(...)`
     // wrapped call failed as "different enum types" — the class logic below is what they need.
-    if std::env::var_os("GORE_AS_ENUM_ARGS").is_some() {
+    // Measured with the seeds on (b174, fa101): 25 functions fixed, none regressed, once the
+    // argument seed left the literal temporaries alone and the adjacent-value elimination
+    // left the spilled bools alone. `GORE_AS_NO_ENUM_ARGS` switches the seeds off again.
+    let enum_seeds_on = std::env::var_os("GORE_AS_NO_ENUM_ARGS").is_none();
+    if enum_seeds_on {
         for (slot, ty) in enum_call_result_slots(f, refs) {
             enum_overrides.entry(slot).or_insert(ty);
         }
@@ -994,11 +998,11 @@ fn emit_function_ctor(
     // slot without its copy partners made the first two attempts crash ("Can't implicitly
     // convert from 'const ECBT_NodeStatus' to 'int'"). The class is typed after the retain
     // below, all of it or none of it.
-    // Gated: measured as a net loss (832 -> 920, an extra `CpyVtoV4` per typed argument in 89
-    // functions) — the seed is right about the TYPE, wrong about the NAME: vanilla passes the
-    // enumerator through a compiler temporary, not through a declared local. Kept for the
-    // experiment behind GORE_AS_ENUM_ARGS.
-    let argument_enums = if std::env::var_os("GORE_AS_ENUM_ARGS").is_some() {
+    // The argument seed once measured as a net loss (an extra `CpyVtoV4` per typed argument):
+    // right about the TYPE, wrong about the NAME, because vanilla passes an enumerator through
+    // a compiler temporary. It now leaves the literal temporaries alone (`enum_argument_slots`)
+    // and is on with the other seeds; `GORE_AS_NO_ENUM_ARGS` switches all three off.
+    let argument_enums = if enum_seeds_on {
         enum_argument_slots(f, refs)
     } else {
         HashMap::new()
@@ -1713,6 +1717,10 @@ fn emit_function_ctor(
     } else {
         let candidates: HashSet<i32> = used_locals(&body)
             .into_iter()
+            // A call result the source spent a `bool` on keeps its name here as well: folded
+            // into its condition, the store and the reload vanilla has are gone (measured
+            // with the enum seeds on: 9 `if (bX)` sites, all named by vanilla).
+            .filter(|slot| !spilled.contains(slot))
             .filter(|slot| {
                 let typed_state =
                     enum_overrides.contains_key(slot) || bool_overrides.contains(slot);
@@ -2325,8 +2333,21 @@ fn emit_function_ctor(
         // behind the call (`CpyRtoV8 t; CpyVtoV8 x, t`), was declared elsewhere and assigned
         // here: a declaration at the call takes the register straight (`CpyRtoV8 x`), which
         // the copy-out witness reads as "declared at the initialiser" wherever there is no copy.
+        // The compiler's temporary for a bool literal, named after a later life of its slot,
+        // stands in front of that life's own first assignment and hides it from the placement
+        // below (`HandlePathBlockedByPlayer`: `if (Flag) { Flag = false; }` before `bool
+        // bInteracting = IsValid(...) && ...` in the same slot — the chain's first operand
+        // lands in the declared slot straight, an assignment copies it on).
+        let body = inline_bool_literal_temporaries(&body, &slots_with_direct_bool_literal_stores(f));
+        pass_trace("inline_bool_literal_temporaries", &body);
         let mut declared_bare_slots = bare_declaration_slots(f, refs);
         declared_bare_slots.extend(copied_call_result_slots(f));
+        // Handles vanilla released BEFORE another local of their block: declared behind it,
+        // not at the block's top.
+        let declared_behind: HashSet<i32> = handles_declared_behind_a_block_local(f, refs)
+            .intersection(&released_handles)
+            .copied()
+            .collect();
         let (body, first_use_suppressed) =
             rewrite_first_use_decl_init(
                 &body,
@@ -2337,6 +2358,8 @@ fn emit_function_ctor(
                 &declared_bare_slots,
                 &call_result_declared_at_initializer(f, refs, &rvo_producers, &rvo_consumers),
                 &assigned_tail,
+                &released_handles,
+                &declared_behind,
             );
         pass_trace("rewrite_first_use_decl_init", &body);
         // A primitive or enum whose every write takes its value STRAIGHT — `CpyRtoV4 v22`,
@@ -2632,7 +2655,11 @@ fn emit_function_ctor(
         pass_trace("rejoin_short_circuit_chains#late", &rendered);
         let rendered = fold_enum_round_trips(&rendered, fields, &path_roots, refs);
         pass_trace("fold_enum_round_trips", &rendered);
-        let rendered = inline_single_use_literals(&rendered, &named_literal_slots(f));
+        let rendered = inline_single_use_literals(
+            &rendered,
+            &named_literal_slots(f),
+            &slots_with_direct_bool_literal_stores(f),
+        );
         pass_trace("inline_single_use_literals", &rendered);
         let rendered = drop_dead_literal_stores(&rendered);
         pass_trace("drop_dead_literal_stores", &rendered);
@@ -2703,6 +2730,7 @@ fn emit_function_ctor(
             &statement_producers,
             &inline_callees,
             &named_sites,
+            &literal_seeded_arithmetic_temps(f),
         );
         pass_trace("inline_unnamed_value_temporaries", &rendered);
         // Now that the operands carry no names of their own, an in-place update stands directly
@@ -2758,6 +2786,7 @@ fn emit_function_ctor(
             &statement_producers,
             &inline_callees,
             &named_sites,
+            &literal_seeded_arithmetic_temps(f),
         );
         pass_trace("inline_unnamed_value_temporaries", &rendered);
         }
@@ -6419,6 +6448,151 @@ fn first_top_level_assignment_before_read(body: &str, slot: i32) -> bool {
     }
 
     false
+}
+
+/// The bool-literal temporaries of a body, inlined into their single read (see
+/// [`inline_bool_literal_temporary`]).
+fn inline_bool_literal_temporaries(body: &str, direct_bool_stores: &HashSet<i32>) -> String {
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let none = HashSet::new();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for index in 0..lines.len() {
+            if inline_bool_literal_temporary(&mut lines, index, &none, direct_bool_stores) {
+                changed = true;
+                break;
+            }
+        }
+    }
+    let mut out = lines.join("\n");
+    if body.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// Handle locals vanilla declared BEHIND another local of the same block: in the block's closing
+/// release run — releases and destructors in reverse declaration order — the handle is released
+/// before some other local is. A declaration hoisted to the block's top is released last of
+/// all, so the position says the source declared the handle further down.
+fn handles_declared_behind_a_block_local(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let destructor = |ins: &super::disasm::Instr| {
+        ins.op.name == "CALLSYS"
+            && refs.func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64) == Some("$beh2")
+    };
+    let mut out = HashSet::new();
+    let mut at = 0usize;
+    while at < instrs.len() {
+        // one run: `FreeNullV8 s` and `PSF s; CALLSYS $beh2` pairs, back to back
+        let mut run: Vec<(i32, bool)> = Vec::new(); // (slot, is_handle)
+        let mut k = at;
+        loop {
+            let Some(ins) = instrs.get(k) else { break };
+            if ins.op.name == "FreeNullV8" && w0(ins) > 0 {
+                run.push((w0(ins), true));
+                k += 1;
+                continue;
+            }
+            if ins.op.name == "PSF" && instrs.get(k + 1).is_some_and(destructor) && w0(ins) > 0 {
+                run.push((w0(ins), false));
+                k += 2;
+                continue;
+            }
+            break;
+        }
+        if run.len() < 2 {
+            at = k.max(at + 1);
+            continue;
+        }
+        for (position, (slot, is_handle)) in run.iter().enumerate() {
+            if *is_handle && run[position + 1..].iter().any(|(other, _)| other != slot) {
+                out.insert(*slot);
+            }
+        }
+        at = k;
+    }
+    out
+}
+
+/// `local_N = nullptr;` standing among the release run that closes a block: the next lines up to
+/// the closing brace are releases as well.
+fn is_block_end_release(lines: &[&str], at: usize, ident: &str) -> bool {
+    if lines[at].trim() != format!("{ident} = nullptr;") {
+        return false;
+    }
+    let mut next = at + 1;
+    while next < lines.len() {
+        let trimmed = lines[next].trim();
+        if trimmed.is_empty() || is_handle_release(lines[next]) {
+            next += 1;
+            continue;
+        }
+        return trimmed.starts_with('}');
+    }
+    false
+}
+
+/// Whether every life of `local_N` inside a block ends with the block's release of it: the first
+/// mention is a write-only assignment inside a block whose closing release run names the slot,
+/// what follows the block starts over with an assignment of its own, and so on — a life at the
+/// function's own level is the last there is. Such lives are declarations, one per block.
+fn lives_end_with_block_releases(body: &str, slot: i32) -> bool {
+    let ident = format!("local_{slot}");
+    let lines: Vec<&str> = body.lines().collect();
+    let body_depth = lines
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| indent_of(line).len())
+        .min()
+        .unwrap_or(0);
+    let assignment = format!("{ident} = ");
+    let release = format!("{ident} = nullptr;");
+    let mut at = 0usize;
+    let mut lives = 0usize;
+    while let Some(start) = (at..lines.len()).find(|i| count_ident(lines[*i], &ident) > 0) {
+        let trimmed = lines[start].trim();
+        if !trimmed.starts_with(&assignment)
+            || !trimmed.ends_with(';')
+            || count_ident(lines[start], &ident) != 1
+            || trimmed == release
+        {
+            return false;
+        }
+        if indent_of(lines[start]).len() == body_depth {
+            // the function-level life: whatever follows assigns this one
+            return true;
+        }
+        let (_, end) = block_span(&lines, start);
+        if end >= lines.len() {
+            return false;
+        }
+        let mut k = end;
+        let mut found = false;
+        while k > start {
+            k -= 1;
+            let line = lines[k];
+            if line.trim().is_empty() {
+                continue;
+            }
+            if !is_handle_release(line) {
+                break;
+            }
+            if line.trim() == release {
+                found = true;
+            }
+        }
+        if !found {
+            return false;
+        }
+        lives += 1;
+        at = end + 1;
+    }
+    lives > 0
 }
 
 /// True when the name's first reference is a plain write-only assignment and every later mention
@@ -10640,18 +10814,121 @@ fn inline_bool_chain_into_next_condition(body: &str) -> String {
     out
 }
 
+/// The ASSIGNMENT form of a single-use literal: `local_N = true|false;` into a hoisted slot, read
+/// by the very next statement as a plain value (`X.Flag = local_N;`, an operand), and dead behind
+/// it — the slot's next mention, if any, is a definition at the same or a shallower depth that
+/// does not read it, and the literal's line is the slot's first mention after its declaration.
+///
+/// A bool literal written to a MEMBER goes `SetV1 t, K; WRTV1 t`; assigned to a bool variable it
+/// goes through a temporary and a copy (`SetV1 t, K; CpyVtoV4 X, t`). So a slot vanilla stores a
+/// bool literal into STRAIGHT was the compiler's temporary for that literal, given a name in our
+/// text because a later life of the slot has one (`HandlePathBlockedByPlayer`: `if (Flag) { Flag
+/// = false; }` and, further down, `bool bInteracting = IsValid(...) && ...` in the same slot).
+fn inline_bool_literal_temporary(
+    lines: &mut Vec<String>,
+    index: usize,
+    _named: &HashSet<i32>,
+    direct_bool_stores: &HashSet<i32>,
+) -> bool {
+    let Some((name, value)) = slot_store(&lines[index]) else {
+        return false;
+    };
+    if !matches!(value.as_str(), "true" | "false") || !is_decompiler_local(&name) {
+        return false;
+    }
+    let Some(slot) = slot_of(&name) else {
+        return false;
+    };
+    // (Not gated on `named_literal_slots`: the member-address load between the store and
+    // the write reads as "unrelated work" there. The direct store IS the witness for a bool.)
+    if !direct_bool_stores.contains(&slot) {
+        return false;
+    }
+    let indent = indent_of(&lines[index]).len();
+    // the slot's first mention after a bare declaration of it, if any
+    let before_ok = lines[..index].iter().all(|line| {
+        count_ident(line, &name) == 0 || bare_declaration(line).is_some_and(|(_, n)| n == name)
+    });
+    if !before_ok {
+        return false;
+    }
+    let Some(reader) = (index + 1..lines.len()).find(|at| !lines[*at].trim().is_empty()) else {
+        return false;
+    };
+    let read = lines[reader].trim();
+    if indent_of(&lines[reader]).len() != indent || count_ident(read, &name) != 1 {
+        return false;
+    }
+    // a plain value position: the whole right-hand side of a store, or an operand
+    let plain_rhs = read
+        .strip_suffix(';')
+        .and_then(|rest| rest.split_once(" = "))
+        .is_some_and(|(target, rhs)| rhs == name && !target.contains(&name) && !target.contains('('));
+    let operand = ["==", "!=", "&&", "||"]
+        .iter()
+        .any(|op| read.contains(&format!(" {op} {name}")) || read.contains(&format!("{name} {op} ")));
+    if !plain_rhs && !operand {
+        return false;
+    }
+    // dead behind the read: the next mention is a write-only definition no deeper than this line
+    if let Some(next) = (reader + 1..lines.len()).find(|at| count_ident(&lines[*at], &name) > 0) {
+        let line = &lines[next];
+        let definition = is_definition_line(line, &name)
+            && slot_store(line)
+                .map(|(_, rhs)| count_ident(&rhs, &name) == 0)
+                .or_else(|| declaration_with_initializer(line).map(|(_, _, init)| count_ident(&init, &name) == 0))
+                .unwrap_or(false);
+        if !definition || indent_of(line).len() > indent {
+            return false;
+        }
+    }
+    lines[reader] = rename_ident(&lines[reader], &name, &value);
+    lines.remove(index);
+    true
+}
+
+/// Slots vanilla stores a bool literal into STRAIGHT (`SetV1 slot, K` not copied on): the
+/// compiler's temporary for a literal written to a member or handed to a call, never a bool
+/// variable, which takes its literal through a temporary and a copy.
+fn slots_with_direct_bool_literal_stores(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w = |ins: &super::disasm::Instr, i: usize| ins.words.get(i).map(|w| *w as i16 as i32);
+    let mut out = HashSet::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if ins.op.name != "SetV1" {
+            continue;
+        }
+        let Some(slot) = w(ins, 0).filter(|slot| *slot > 0) else {
+            continue;
+        };
+        let copied_on = instrs
+            .get(at + 1)
+            .is_some_and(|next| next.op.name.starts_with("CpyVtoV") && w(next, 1) == Some(slot));
+        if !copied_on {
+            out.insert(slot);
+        }
+    }
+    out
+}
+
 /// A declaration whose value is a LITERAL and which is read exactly once is that literal.
 ///
 /// The compiler materializes a constant into a slot wherever it is used, with or without a name,
 /// so moving it costs nothing and cannot reorder anything — but the name standing between a value
 /// and the statement that accumulates into it hides the accumulation from the fold that would
 /// take the name away.
-fn inline_single_use_literals(body: &str, named: &HashSet<i32>) -> String {
+fn inline_single_use_literals(body: &str, named: &HashSet<i32>, direct_bool_stores: &HashSet<i32>) -> String {
     let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
     let mut changed = true;
     while changed {
         changed = false;
         for index in 0..lines.len() {
+            if inline_bool_literal_temporary(&mut lines, index, named, direct_bool_stores) {
+                changed = true;
+                break;
+            }
             let Some((_, name, init)) = declaration_with_initializer(&lines[index]) else {
                 continue;
             };
@@ -13401,9 +13678,16 @@ fn unnamed_value_defs(
         // product lives in the slot a member read used before it, and the per-slot witness
         // wants every write to be arithmetic). The ORDER question — was the member on its
         // left read first — is `statement_operand_slots`', which reads the same producers.
+        let in_place = ins.words.iter().skip(1).any(|w| *w as i16 as i32 == slot);
+        // `SetV8 s, K; SUBd s, s, x` is ONE expression, `K - x`, computed in the slot the
+        // literal was materialised in: the in-place op continues the literal's life.
+        let literal_seeded = in_place
+            && at > 0
+            && matches!(instrs[at - 1].op.name, "SetV1" | "SetV2" | "SetV4" | "SetV8")
+            && w0(&instrs[at - 1]) == slot;
         let arithmetic_def = is_arithmetic_op(ins.op.name)
             && !super::structure::is_numeric_cast(ins.op.name)
-            && !ins.words.iter().skip(1).any(|w| *w as i16 as i32 == slot);
+            && (!in_place || literal_seeded);
         if !produces_value(ins.op.name) && !arithmetic_def {
             continue;
         }
@@ -13479,6 +13763,7 @@ fn inline_unnamed_value_temporaries(
     statement_producers: &HashSet<i32>,
     inline_callees: &HashMap<i32, Vec<String>>,
     named_sites: &HashSet<(i32, String)>,
+    literal_seeded_temps: &HashSet<i32>,
 ) -> String {
     let mut lines: Vec<String> = body.lines().map(|l| l.to_owned()).collect();
     // `body` never changes, so the two whole-body questions below are asked once per name instead
@@ -13524,7 +13809,18 @@ fn inline_unnamed_value_temporaries(
                     && !has_later_life(&name)
                     && !init.contains(['(', '"'])
             };
-            if !unnamed.contains(&key) && !sole_life() && !arithmetic() {
+            // A literal-seeded arithmetic (`1.0 - d`: `SetV8 s, K; SUBd s, s, d`) read once as
+            // an operand is the scratch of a sub-expression whatever life of the slot the text
+            // calls it: the text numbers the lives it names, the bytecode every write, and the
+            // two need not line up (`AIItemScoring`: the member read the slot carried first was
+            // folded, and so was the sum it carried last).
+            let literal_seeded = || {
+                literal_seeded_temps.contains(&key.0)
+                    && init.split(' ').count() == 3
+                    && init.split(' ').next().is_some_and(is_plain_literal)
+                    && !init.contains(['(', '"'])
+            };
+            if !unnamed.contains(&key) && !sole_life() && !arithmetic() && !literal_seeded() {
                 inline_reject("not-unnamed", "", &name, &lines[at]);
                 return None;
             }
@@ -13549,6 +13845,9 @@ fn inline_unnamed_value_temporaries(
             }
             // The store may stand under a bare declaration hoisted above it, in which case the
             // name is mentioned three times, not two. That declaration goes with the store.
+            // A literal-seeded store of a name the text still uses for an EARLIER life (the
+            // member read that life took, folded away only later) counts its mentions within
+            // its own life: from the store to the next definition of the name.
             let bare = match mentions_of(&name) {
                 2 => None,
                 3 => Some(
@@ -13556,6 +13855,17 @@ fn inline_unnamed_value_temporaries(
                         .iter()
                         .rposition(|line| bare_declaration(line).is_some_and(|(_, n)| n == name))?,
                 ),
+                _ if literal_seeded() && slot_store(&lines[at]).is_some() => {
+                    let region_end = (at + 1..lines.len())
+                        .find(|k| is_definition_line(&lines[*k], &name))
+                        .unwrap_or(lines.len());
+                    let within: usize = lines[at..region_end].iter().map(|l| count_ident(l, &name)).sum();
+                    if within != 2 {
+                        inline_reject("life-mentions", "", &name, &lines[at]);
+                        return None;
+                    }
+                    None
+                }
                 _ => return None,
             };
             // The reader is not always the line below: several temporaries of ONE call stand in a
@@ -15566,6 +15876,61 @@ fn is_arithmetic_op(name: &str) -> bool {
     ) || super::structure::is_numeric_cast(name)
 }
 
+/// Slots the compiler computed `K op x` in — a literal store followed by an in-place arithmetic
+/// on the same slot (`SetV8 s, 1.0; SUBd s, s, d`) — read exactly once, as an arithmetic operand,
+/// with no push between the computation and the read and nothing copying the value on: the
+/// scratch of a sub-expression, in whatever life of the slot the text names it
+/// (`AIItemScoring::CalculateScore`: `(Max - Min) * (1.0 - d)`, the factor named because the
+/// slot's other lives were folded and the life numbers no longer lined up).
+fn literal_seeded_arithmetic_temps(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let mut out = HashSet::new();
+    for at in 1..instrs.len() {
+        let ins = &instrs[at];
+        let slot = w0(ins);
+        if slot <= 0
+            || !is_arithmetic_op(ins.op.name)
+            || super::structure::is_numeric_cast(ins.op.name)
+            || !ins.words.iter().skip(1).any(|w| *w as i16 as i32 == slot)
+        {
+            continue;
+        }
+        let seed = &instrs[at - 1];
+        if !matches!(seed.op.name, "SetV1" | "SetV2" | "SetV4" | "SetV8") || w0(seed) != slot {
+            continue;
+        }
+        let mut reads = 0usize;
+        let mut arithmetic_reader = false;
+        let mut pushed = false;
+        let mut copied_on = false;
+        for other in &instrs[at + 1..] {
+            let is_dst = (writes_destination(other.op.name) || other.op.fmt.writes_first_word())
+                && w0(other) == slot;
+            let reads_it = super::bytediff::addressed_slots(other)
+                .into_iter()
+                .skip(usize::from(is_dst))
+                .any(|s| s == slot);
+            if reads_it {
+                reads += 1;
+                arithmetic_reader = is_arithmetic_op(other.op.name);
+                copied_on |= other.op.name.starts_with("CpyVtoV") || other.op.name.starts_with("CpyVtoR");
+            } else if reads == 0 && (other.op.name.starts_with("Psh") || other.op.name == "PSF") {
+                pushed = true;
+            }
+            if is_dst {
+                break;
+            }
+        }
+        if reads == 1 && arithmetic_reader && !pushed && !copied_on {
+            out.insert(slot);
+        }
+    }
+    out
+}
+
 /// Primitive slots the compiler used as arithmetic scratch: every write is a literal store, a
 /// numeric cast or an arithmetic result into the slot, and the ONE read is an operand of an
 /// arithmetic or comparison instruction — never pushed, copied on, or moved to the return
@@ -16533,18 +16898,21 @@ fn enum_argument_slots(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
         }
         // The frame: the pushes standing directly before the call, latest first. A method's
         // receiver is pushed last (`PshVPtr v0`); the parameter list does not carry it.
-        let mut frame: Vec<&super::disasm::Instr> = Vec::new();
+        let mut frame: Vec<usize> = Vec::new();
         let mut k = at;
         while k > 0 && is_push(instrs[k - 1].op.name) {
             k -= 1;
-            frame.push(&instrs[k]);
+            frame.push(k);
         }
-        let receiver = frame.first().is_some_and(|top| top.op.name == "PshVPtr" && w0(top) == Some(0));
-        let args: Vec<&super::disasm::Instr> = frame.into_iter().skip(receiver as usize).collect();
+        let receiver = frame
+            .first()
+            .is_some_and(|top| instrs[*top].op.name == "PshVPtr" && w0(&instrs[*top]) == Some(0));
+        let args: Vec<usize> = frame.into_iter().skip(receiver as usize).collect();
         if args.len() != params.len() {
             continue;
         }
-        for (param, push) in params.iter().zip(args.iter()) {
+        for (param, push_at) in params.iter().zip(args.iter()) {
+            let push = &instrs[*push_at];
             if push.op.name != "PshV4" {
                 continue;
             }
@@ -16552,9 +16920,20 @@ fn enum_argument_slots(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
             if !is_enum(&ty) || param.is_reference {
                 continue;
             }
-            if let Some(slot) = w0(push).filter(|s| *s > 0) {
-                out.entry(slot).or_insert(ty);
+            let Some(slot) = w0(push).filter(|s| *s > 0) else {
+                continue;
+            };
+            // The enumerator pushed straight from the temporary it was materialised in
+            // (`SetV1 t, K; PshV4 t`) is no variable: typed, it took a name the source never
+            // gave it and the compiler copied the constant on (measured: 99 functions).
+            let literal_temporary = instrs[..*push_at]
+                .iter()
+                .rposition(|ins| (writes_destination(ins.op.name) || ins.op.fmt.writes_first_word()) && w0(ins) == Some(slot))
+                .is_some_and(|last| matches!(instrs[last].op.name, "SetV1" | "SetV2" | "SetV4"));
+            if literal_temporary {
+                continue;
             }
+            out.entry(slot).or_insert(ty);
         }
     }
     out
@@ -19387,7 +19766,41 @@ fn call_result_declared_at_initializer(
                 .all(|ins| !(writes_destination(ins.op.name) && w0(ins) == *slot));
             (untouched_before && never_written).then_some(*slot)
         }))
+        // A PRIMITIVE whose first write is the call's own result, straight behind the call
+        // (`CALLINTF f; CpyRtoV4 X`): the declaration took the call's temporary over. Declared
+        // bare and assigned, the result lands in a temporary and is copied on (`CpyRtoV4 t;
+        // CpyVtoV4 X, t` — `GA_Falling::ApplyDamageTo`, measured on both sides). Later writes
+        // are assignments and say nothing about where the declaration stood.
+        .chain(first_write_is_a_call_result(&instrs))
         .collect()
+}
+
+/// Slots whose first write is `CpyRtoV4/8 slot` right behind a call, and not copied on at once.
+fn first_write_is_a_call_result(instrs: &[super::disasm::Instr]) -> Vec<i32> {
+    let w = |ins: &super::disasm::Instr, i: usize| ins.words.get(i).map(|w| *w as i16 as i32);
+    let mut seen: HashSet<i32> = HashSet::new();
+    let mut out = Vec::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if !(writes_destination(ins.op.name) || ins.op.fmt.writes_first_word()) {
+            continue;
+        }
+        let Some(slot) = w(ins, 0).filter(|slot| *slot > 0) else {
+            continue;
+        };
+        if !seen.insert(slot) {
+            continue;
+        }
+        if !matches!(ins.op.name, "CpyRtoV4" | "CpyRtoV8") || at == 0 || !instrs[at - 1].op.is_call() {
+            continue;
+        }
+        let copied_on = instrs
+            .get(at + 1)
+            .is_some_and(|next| next.op.name.starts_with("CpyVtoV") && w(next, 1) == Some(slot));
+        if !copied_on {
+            out.push(slot);
+        }
+    }
+    out
 }
 
 /// A VALUE object a call builds straight into a declared local: `PSF X; CALL f` with `X` never
@@ -19669,6 +20082,8 @@ fn rewrite_first_use_decl_init(
     declared_bare: &HashSet<i32>,
     at_initializer: &HashSet<i32>,
     assigned_tail: &HashMap<i32, usize>,
+    released: &HashSet<i32>,
+    declared_behind: &HashSet<i32>,
 ) -> (String, HashSet<i32>) {
     // Only where the assignment stands at the FUNCTION's own level. Inside a loop or a branch a
     // declaration is entered and left again with the block, and the compiler spends the slot's
@@ -19681,12 +20096,30 @@ fn rewrite_first_use_decl_init(
         if first_top_level_assignment_before_read(body, slot) {
             return true;
         }
+        // A handle the block's closing release run places BEHIND another of its locals was
+        // declared further down than our hoist: at its first assignment, where the name's
+        // block owns it (`GA_Falling::ApplyDamageTo`: released between two value locals).
+        if declared_behind.contains(&slot) && assignment_block_owns_the_name(body, slot) {
+            return true;
+        }
         // …or the bytecode says the declaration stood at the initialiser, wherever that is. The
         // depth gate exists because a declaration entered and left with a block costs its
         // construction on every pass; a witness that reads vanilla answers the same question
         // directly. Sinking still narrows the name's scope, so nothing after the assignment's own
-        // block may read it.
-        at_initializer.contains(&slot) && assignment_block_owns_the_name(body, slot)
+        // block may read it…
+        if !at_initializer.contains(&slot) {
+            return false;
+        }
+        if assignment_block_owns_the_name(body, slot) {
+            return true;
+        }
+        // …unless what stands after the block is a NEW life: vanilla released the handle at the
+        // block's end (`FreeNullV8 h`, rendered `local_N = nullptr;` as the block's last
+        // statement), so the block declared it, and the next assignment outside is a
+        // declaration of its own (`CrimeScoring::SeverityMultiplier`: `FindByGlobalId` once
+        // inside the guard, once behind it; hoisted into one name, the slot the second life
+        // took changed which temporary the compiler dropped its register test for).
+        released.contains(&slot) && lives_end_with_block_releases(body, slot)
     };
     rewrite_decl_at_assignment(body, locals, &wanted, &|slot, ty| {
         let head = qualify_decl_type(ty, refs);
@@ -19881,6 +20314,8 @@ fn rewrite_decl_at_assignment(
                 && refs[k] < end
                 && !(split_at_every_definition
                     && is_definition_line(lines[refs[k]], &ident)
+                    // the block's own release of the handle, not a value it takes
+                    && !is_block_end_release(&lines, refs[k], &ident)
                     && !assignments.contains(&refs[k])
                     && (indent_of(lines[refs[k]]).len() <= group_depth
                         || !flows_out_of_its_block(&lines, refs[k], end, &ident))
@@ -21153,6 +21588,95 @@ mod released_handle_tests {
     fn a_handle_read_after_its_release_is_no_block_end() {
         let body = "    if (a)\n    {\n        local_8 = Get();\n        local_8 = nullptr;\n        return;\n    }\n    Use(local_8);\n    return;\n";
         assert_eq!(scope_released_handles(body), body);
+    }
+}
+
+#[cfg(test)]
+mod bool_literal_temporary_tests {
+    use super::inline_bool_literal_temporaries;
+    use std::collections::HashSet;
+
+    #[test]
+    fn a_literal_read_once_by_the_next_statement_is_inlined() {
+        let body = "    bool local_7;
+    if (Flag)
+    {
+        local_7 = false;
+        Store.Flag = local_7;
+    }
+    local_7 = IsValid(x) && Other(x);
+    return local_7;
+";
+        let out = inline_bool_literal_temporaries(body, &HashSet::from([7]));
+        assert!(out.contains("        Store.Flag = false;\n"), "{out}");
+        assert!(!out.contains("local_7 = false"), "{out}");
+    }
+
+    #[test]
+    fn without_the_direct_store_witness_nothing_moves() {
+        let body = "    bool local_7;
+    local_7 = false;
+    Store.Flag = local_7;
+";
+        assert_eq!(inline_bool_literal_temporaries(body, &HashSet::new()), body);
+    }
+
+    #[test]
+    fn a_deeper_later_write_keeps_the_value_alive() {
+        let body = "    bool local_7;
+    local_7 = false;
+    Store.Flag = local_7;
+    if (c)
+    {
+        local_7 = true;
+    }
+    return local_7;
+";
+        assert_eq!(inline_bool_literal_temporaries(body, &HashSet::from([7])), body);
+    }
+}
+
+#[cfg(test)]
+mod block_release_lives_tests {
+    use super::lives_end_with_block_releases;
+
+    #[test]
+    fn a_life_released_at_its_block_end_and_one_behind_it() {
+        let body = "    if (a)
+    {
+        local_14 = Find(x);
+        if (IsValid(local_14))
+        {
+            return 0.0;
+        }
+        local_14 = nullptr;
+    }
+    local_14 = Find(y);
+    return Use(local_14);
+";
+        assert!(lives_end_with_block_releases(body, 14));
+    }
+
+    #[test]
+    fn a_block_that_keeps_the_handle_alive_is_no_life_of_its_own() {
+        let body = "    if (a)
+    {
+        local_14 = Find(x);
+    }
+    return Use(local_14);
+";
+        assert!(!lives_end_with_block_releases(body, 14));
+    }
+
+    #[test]
+    fn a_read_before_the_first_assignment_fails() {
+        let body = "    if (IsValid(local_14))
+    {
+        local_14 = Find(x);
+        local_14 = nullptr;
+    }
+";
+        assert!(!lives_end_with_block_releases(body, 14));
     }
 }
 
