@@ -146,7 +146,7 @@ pub enum NpcAction {
         #[arg(short, long)]
         out: PathBuf,
     },
-    /// Read a shipped character's own module in full; the compiler refuses to build an edit of it
+    /// Check out a shipped character's own module for edits that preserve its existing default targets
     Checkout {
         /// The character to edit, for example OC_STT_Diego
         npc: String,
