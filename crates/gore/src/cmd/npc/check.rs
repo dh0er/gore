@@ -194,9 +194,10 @@ pub fn guard_authored_module(source: &str, npc_id: &str) -> Vec<Finding> {
                  new id has none of its own, so it has to borrow one",
             )),
             (Some("false"), _) => findings.push(Finding::warning(
-                "m_HasPreBakedSK is false: the looks are built from parts at runtime. No shipped \
-                 character does this — 817 carry a baked model instead — so this is unproven and \
-                 wants a look in game",
+                "m_HasPreBakedSK is false: the looks are built from parts at runtime. Measured in \
+                 game — this renders a working body, but it comes out looking like the player \
+                 character rather than the template, whose part fields it inherits and does not \
+                 use. Borrow a baked model instead unless you know why you want this",
             )),
             _ => {}
         }
