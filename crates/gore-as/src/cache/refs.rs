@@ -1579,6 +1579,19 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_native_default_constructor(owner: &str, params: usize, returns_void: bool) -> Self {
+        let mut r = Self::default();
+        r.type_by_ptr.insert(101, owner.into());
+        r.type_names.insert(owner.into());
+        r.func_by_ptr.insert(1, "$beh0".into());
+        r.func_owner.insert(1, owner.into());
+        r.func_is_method.insert(1);
+        r.func_params.insert(1, vec![DataType { token: 0x44, ..Default::default() }; params]);
+        r.func_ret.insert(1, DataType { token: if returns_void { 0x52 } else { 0x41 }, ..Default::default() });
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_collision_names(names: &[&str]) -> Self {
         let mut resolver = Self::default();
         for (index, name) in names.iter().enumerate() {

@@ -1166,7 +1166,9 @@ fn emit_function_ctor(
     bool_overrides.extend(not_operand_slots(f));
     bool_overrides.extend(bool_call_result_slots(f, refs));
     bool_overrides.extend(comparison_result_slots(f));
-    let returned_bools = canonical_bool_return_slots(f, refs);
+    let (copied_return_bools, named_bool_returns) = copied_bool_return_carriers(f, refs);
+    let mut returned_bools = canonical_bool_return_slots(f, refs);
+    returned_bools.extend(copied_return_bools);
     bool_overrides.extend(returned_bools.iter().copied());
     // The type each slot's captured call result actually has — the witness the operand gates
     // need to tell a plain read from a read the declaration converts.
@@ -1183,8 +1185,9 @@ fn emit_function_ctor(
     // the left was computed was a statement of its own (`int n = Max(1, Count()); return x +
     // (2pi * i) / n;` — vanilla called `Max` before it read `x`).
     statement_producers.extend(statement_operand_slots(f));
-    let copied_widened_returns = copied_widened_return_slots(f, refs);
-    statement_producers.extend(copied_widened_returns.iter().copied());
+    let mut retained_return_copies = copied_widened_return_slots(f, refs);
+    retained_return_copies.extend(named_bool_returns.iter().copied());
+    statement_producers.extend(retained_return_copies.iter().copied());
     statement_producers.extend(receivers_built_before_their_rvo_push(f, refs));
     // Where vanilla destroyed a value slot mid-expression it was calling on a temporary there.
     // A by-value call result pushed again straight after the call is consumed where it was
@@ -1199,6 +1202,7 @@ fn emit_function_ctor(
     // Where a widening's result was copied ON, the source named it; folding that name away
     // changes the width the arithmetic behind it happens at.
     let widened = widened_slots(f);
+    let alias_copy_keep = widened.union(&named_bool_returns).copied().collect();
     // Slots the function does not touch until it has branched: their declaration lives in the
     // block that touches them, not at the top.
     let touched_after_branch = slots_touched_only_after_a_branch(f);
@@ -1595,8 +1599,12 @@ fn emit_function_ctor(
     // not consumed at once — the source's own declaration, at its own position. For a value
     // struct vanilla builds only behind a branch, the marker becomes that declaration and the
     // hoist and the sink below leave the slot alone; every other marker goes.
+    let unused_constructions = never_read_constructed_slots(f, refs);
     let (body, declared_at_site, declared_with_init) =
-        resolve_ctor_site_markers(&body, &infer_locals(f, refs), refs, &touched_after_branch);
+        resolve_ctor_site_markers(&body, &infer_locals(f, refs), refs, &touched_after_branch, &unused_constructions);
+    // Retain only declarations placed at their actual bytecode construction site.
+    let retained_unused_constructions: HashSet<i32> = unused_constructions
+        .intersection(&declared_at_site).copied().collect();
     // A local declared at its construction site is a name: the argument inliner would fold
     // its assignment into the call that reads it and leave the declaration empty
     // (`ClearTargetingBy`: the container copied out of a reference-returning call, iterated
@@ -1922,7 +1930,7 @@ fn emit_function_ctor(
     let returns_by_reference = f.ret.is_reference && f.ret.token == 5 && !f.ret.is_object_handle;
     let body = fold_condition_temporaries(&body, &declared_locals, refs, fields, &spilled_boolean_names(f, refs), &named_value_sites(f, refs), false);
     pass_trace("fold_condition_temporaries", &body);
-    let body = fold_alias_copies(&body, &declared_locals, &widened);
+    let body = fold_alias_copies(&body, &declared_locals, &alias_copy_keep);
     pass_trace("fold_alias_copies", &body);
     let body = fold_copy_out_temporaries(
         &body,
@@ -1969,7 +1977,7 @@ fn emit_function_ctor(
     );
     pass_trace("fold_member_read_temporaries", &body);
     let body =
-        fold_returned_temporaries(&body, &declared_locals, refs, &ret, returns_by_reference, &copied_widened_returns);
+        fold_returned_temporaries(&body, &declared_locals, refs, &ret, returns_by_reference, &retained_return_copies);
     // Before the hoist counts which locals exist: a slot whose only write is dead has no name.
     let body = drop_dead_stores_before_return(&body);
     pass_trace("drop_dead_stores_before_return", &body);
@@ -2018,8 +2026,7 @@ fn emit_function_ctor(
     // `int` fallback below.
     let mut used = used;
     used.extend(
-        never_read_constructed_slots(f, refs)
-            .into_iter()
+        unused_constructions.iter().copied()
             .filter(|slot| locals.contains_key(slot)),
     );
     for &n in &used {
@@ -2650,7 +2657,7 @@ fn emit_function_ctor(
         let rendered = rejoin_short_circuit_chains(&rendered);
         pass_trace("rejoin_short_circuit_chains", &rendered);
         let rendered =
-            fold_returned_temporaries(&rendered, &declared_locals, refs, &ret, returns_by_reference, &copied_widened_returns);
+            fold_returned_temporaries(&rendered, &declared_locals, refs, &ret, returns_by_reference, &retained_return_copies);
         let rendered = recover_condition_loops(&rendered);
         pass_trace("recover_condition_loops", &rendered);
         let rendered = fold_negated_stores(&rendered, &widened);
@@ -2666,7 +2673,7 @@ fn emit_function_ctor(
         // for them to ask about.
         let rendered = fold_condition_temporaries(&rendered, &declared_locals, refs, fields, &spilled_boolean_names(f, refs), &named_value_sites(f, refs), false);
         pass_trace("fold_condition_temporaries", &rendered);
-        let rendered = fold_alias_copies(&rendered, &declared_locals, &widened);
+        let rendered = fold_alias_copies(&rendered, &declared_locals, &alias_copy_keep);
         pass_trace("fold_alias_copies", &rendered);
         let rendered = fold_assignment_receivers(&rendered, &immediately_consumed_defs(f));
         pass_trace("fold_assignment_receivers", &rendered);
@@ -2684,7 +2691,7 @@ fn emit_function_ctor(
         // Member/copy folds can leave a now-unused declaration inside a bool arm.
         // Remove it before asking whether that arm is a single expression; retain
         // the existing witnesses for literal declarations actually present in bytecode.
-        let rendered = drop_unused_declarations(&rendered, &dead_literal_declaration_slots(f));
+        let rendered = drop_unused_declarations(&rendered, &dead_literal_declaration_slots(f), &retained_unused_constructions);
         pass_trace("drop_unused_declarations#before-bool", &rendered);
         // Once more: an else-arm that was several carrier steps is one expression only now, and
         // `if (X) { b = true; } else { b = Y; }` over it is `b = X || Y;` — evaluated straight
@@ -2709,7 +2716,7 @@ fn emit_function_ctor(
             &slots_with_direct_bool_literal_stores(f),
         );
         pass_trace("inline_single_use_literals", &rendered);
-        let rendered = drop_dead_literal_stores(&rendered);
+        let rendered = drop_dead_literal_stores(&rendered, &named_bool_returns);
         pass_trace("drop_dead_literal_stores", &rendered);
         let rendered = collapse_single_use_accumulators(&rendered, &widened, &locals);
         pass_trace("collapse_single_use_accumulators", &rendered);
@@ -2898,7 +2905,7 @@ fn emit_function_ctor(
         pass_trace("fold_returned_empty_values", &rendered);
         let rendered = drop_empty_else(&rendered);
         pass_trace("drop_empty_else", &rendered);
-        let rendered = drop_unused_declarations(&rendered, &dead_literal_declaration_slots(f));
+        let rendered = drop_unused_declarations(&rendered, &dead_literal_declaration_slots(f), &retained_unused_constructions);
         pass_trace("drop_unused_declarations", &rendered);
         let rendered = fold_member_read_temporaries(
             &rendered,
@@ -3198,6 +3205,8 @@ fn used_idents(body: &str, prefix: &str) -> HashSet<i32> {
 ///
 /// Measured: 6 such slots in 5 functions, every one of them divergent, none byte-faithful.
 fn never_read_constructed_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    // Default return objects use the hidden RVO destination, not this source-local proof.
+    if super::model::returns_struct_by_value(&f.ret, refs) { return HashSet::new(); }
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
     };
@@ -3211,10 +3220,16 @@ fn never_read_constructed_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
         if slot <= 0 {
             continue;
         }
+        let mut object_types = f.obj_locals.iter().filter(|(offset, _)| *offset == slot);
+        let Some((_, object_type)) = object_types.next() else { continue; };
+        if object_types.next().is_some() { continue; }
+        let Some(owner) = refs.type_by_ptr(*object_type) else { continue; };
         let constructs = instrs.get(at + 1).is_some_and(|next| {
-            next.op.name == "CALLSYS"
-                && refs.func_by_ptr(next.qwords.first().copied().unwrap_or(0) as i64)
-                    == Some("$beh0")
+            let ptr = next.qwords.first().copied().unwrap_or(0) as i64;
+            next.op.name == "CALLSYS" && refs.func_by_ptr(ptr) == Some("$beh0")
+                && refs.is_method_by_ptr(ptr) && refs.func_owner_by_ptr(ptr) == Some(owner)
+                && refs.func_params_by_ptr(ptr).is_some_and(|params| params.is_empty())
+                && refs.func_ret_by_ptr(ptr).is_some_and(|ret| ret.token == 0x52)
         });
         if !constructs {
             continue;
@@ -4715,6 +4730,53 @@ fn infer_enum_flow(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
             .map(|slot| (*slot, ret_enum.clone())),
     );
     propagate_proven_enum_slots(&instrs, seeds)
+}
+
+/// A named bool starts with a byte literal copied from scratch and finishes
+/// with another copy from the same scratch into the returned local. Across all
+/// lives, accept only canonical literals/comparisons in scratch and these copies.
+fn copied_bool_return_carriers(f: &Func, refs: &RefResolver) -> (HashSet<i32>, HashSet<i32>) {
+    let mut proven = HashSet::new();
+    let mut named = HashSet::new();
+    if f.ret.base_name(refs) != "bool" { return (proven, named); }
+    let Ok(ins) = disassemble(&f.bytecode) else { return (proven, named); };
+    let w = |op: &Instr, n: usize| op.words.get(n).map(|v| *v as i16 as i32);
+    for pair in ins.windows(2) {
+        if pair[0].op.name != "SetV1" || pair[1].op.name != "CpyVtoV4"
+            || !pair[0].dwords.first().is_some_and(|v| *v <= 1)
+            || w(&pair[0], 0) != w(&pair[1], 1)
+        { continue; }
+        let (Some(source), Some(target)) = (w(&pair[0], 0), w(&pair[1], 0)) else { continue; };
+        if source <= 0 || target <= 0 || source == target { continue; }
+        if !ins.windows(3).any(|tail| tail[0].op.name == "CpyVtoV4"
+            && w(&tail[0], 0) == Some(target) && w(&tail[0], 1) == Some(source)
+            && tail[1].op.name == "CpyVtoR4" && w(&tail[1], 0) == Some(target)
+            && tail[2].op.name == "RET") { continue; }
+        let mut comparison = false;
+        let safe = ins.iter().enumerate().all(|(at, op)| {
+            let touched = super::bytediff::addressed_slots(op);
+            if !touched.contains(&source) && !touched.contains(&target) { return true; }
+            match op.op.name {
+                "SetV1" => w(op, 0) == Some(source) && op.dwords.first().is_some_and(|v| *v <= 1),
+                "SetV4" => w(op, 0) == Some(source) && op.dwords.first() == Some(&0),
+                "CpyVtoV4" if w(op, 0) == Some(target) => w(op, 1) == Some(source),
+                "CpyVtoV4" => {
+                    let materialized = w(op, 0) == Some(source)
+                        && w(op, 1).is_some_and(|s| s > 0 && s != source && s != target)
+                        && at >= 2 && ins[at - 1].op.name == "CpyRtoV4"
+                        && w(&ins[at - 1], 0) == w(op, 1)
+                        && matches!(ins[at - 2].op.name, "TZ" | "TNZ" | "TS" | "TNS" | "TP" | "TNP");
+                    comparison |= materialized;
+                    materialized
+                }
+                "CpyVtoR4" => w(op, 0) == Some(target)
+                    && ins.get(at + 1).is_some_and(|next| next.op.name == "RET"),
+                _ => false,
+            }
+        });
+        if safe && comparison { proven.extend([source, target]); named.insert(target); }
+    }
+    (proven, named)
 }
 
 /// A bool return carrier may be read four bytes wide. Its every write must still
@@ -10845,13 +10907,19 @@ fn fold_assigned_temporaries(
 /// The declarations are written from the set of names the body used BEFORE the folds ran; a fold
 /// that takes the last mention away leaves the declaration behind, and an unused local still
 /// costs the slot the compiler allocates for it.
-fn drop_unused_declarations(text: &str, keep: &HashSet<i32>) -> String {
+fn drop_unused_declarations(
+    text: &str, keep: &HashSet<i32>, constructed: &HashSet<i32>,
+) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let mut kept: Vec<String> = Vec::with_capacity(lines.len());
     for (index, line) in lines.iter().enumerate() {
         let dead = bare_declaration(line)
             .or_else(|| declaration_with_initializer(line).map(|(indent, name, _)| (indent, name)))
             .is_some_and(|(_, name)| {
+                // A proven unused construction is a statement at this declaration site.
+                if bare_declaration(line).is_some()
+                    && slot_and_life_any(&name).is_some_and(|(slot, _)| constructed.contains(&slot))
+                { return false; }
                 // A literal vanilla stored and never read is a declaration the source wrote
                 // and left unused (`bool bFound = false;`): its store is the program.
                 if declaration_with_initializer(line).is_some()
@@ -15614,7 +15682,7 @@ fn fold_returned_temporaries(
     refs: &RefResolver,
     ret: &str,
     returns_by_reference: bool,
-    copied_widened_returns: &HashSet<i32>,
+    retained_return_copies: &HashSet<i32>,
 ) -> String {
     if returns_by_reference {
         return body.to_owned();
@@ -15623,7 +15691,7 @@ fn fold_returned_temporaries(
         let Some(slot) = ident.strip_prefix("local_").and_then(|s| s.parse::<i32>().ok()) else {
             return false;
         };
-        if copied_widened_returns.contains(&slot) {
+        if retained_return_copies.contains(&slot) {
             return false;
         }
         // Both names have to be spelled the same way before they can be compared. The slot table
@@ -17695,6 +17763,7 @@ fn resolve_ctor_site_markers(
     locals: &BTreeMap<i32, String>,
     refs: &RefResolver,
     after_branch: &HashSet<i32>,
+    unused_constructions: &HashSet<i32>,
 ) -> (String, HashSet<i32>, HashSet<i32>) {
     let marker = super::structure::CTOR_SITE;
     if !body.contains(marker) {
@@ -17763,7 +17832,8 @@ fn resolve_ctor_site_markers(
             .iter()
             .any(|(other, open, close)| *other == slot && *open <= at && at < *close);
         let ty = locals.get(&slot);
-        let wanted = !mentions.is_empty() && visible && !shadowed && ty.is_some();
+        let retained_unused = !init_kind && unused_constructions.contains(&slot) && !placed.contains(&slot);
+        let wanted = (!mentions.is_empty() || retained_unused) && visible && !shadowed && ty.is_some();
         if diag_enabled("GORE_AS_MARKER_DIAG") {
             eprintln!(
                 "[ctor-site] slot={slot} at={at} mentions={} visible={visible} shadowed={shadowed} typed={} init={init_kind}",
@@ -18363,7 +18433,7 @@ fn merge_site_declaration_with_assignment(body: &str, declared_at_site: &HashSet
 ///
 /// A definition deeper than the store does not end the life — the other path still reads the
 /// store's value — and any read before a definition at the store's depth keeps it.
-fn drop_dead_literal_stores(text: &str) -> String {
+fn drop_dead_literal_stores(text: &str, keep: &HashSet<i32>) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let mut out: Vec<Option<String>> = lines.iter().map(|l| Some((*l).to_owned())).collect();
     for at in 0..lines.len() {
@@ -18379,6 +18449,9 @@ fn drop_dead_literal_stores(text: &str) -> String {
                 _ => continue,
             },
         };
+        if slot_and_life_any(&name).is_some_and(|(slot, _)| keep.contains(&slot)) {
+            continue;
+        }
         let depth = indent_of(lines[at]).len();
         // A store inside a branch writes a variable of the enclosing scope: its reader may
         // stand after the branch closes (`if (c) { x = true; } … if (x)`), so the scan runs
@@ -24055,6 +24128,119 @@ mod member_arithmetic_lifetime_tests {
         assert!(super::canonical_bool_return_slots(&separated, &refs).is_empty());
     }
 
+    fn unused_default_constructor_fixture() -> Func {
+        let mut f = function(&[
+            ("CpyVtoR1", &[0]), ("JLowZ", &[]), ("PSF", &[14]),
+            ("CALLSYS", &[]), ("RET", &[1]),
+        ]);
+        f.ret.token = 0x52;
+        f.params.push(crate::cache::model::Param {
+            name: "Enabled".into(), flags: 0,
+            ty: DataType { token: 0x41, ..Default::default() },
+        });
+        f.obj_locals.push((14, 101));
+        let ins = super::disassemble(&f.bytecode).unwrap();
+        f.bytecode[ins[1].offset_dw + 1] = ins[4].offset_dw as i32 - ins[1].offset_dw as i32 - 2;
+        f.bytecode[ins[3].offset_dw + 1] = 1;
+        f
+    }
+
+    #[test]
+    fn unused_default_constructor_requires_exact_metadata_and_a_sole_slot_address() {
+        let refs = RefResolver::from_test_native_default_constructor("FVector", 0, true);
+        let f = unused_default_constructor_fixture();
+        assert_eq!(super::never_read_constructed_slots(&f, &refs), HashSet::from([14]));
+        let mut source = String::new();
+        super::emit_function(&mut source, &f, &refs, false, false, 0);
+        assert_eq!(source.matches("FVector local_14;").count(), 1, "{source}");
+        assert!(source.find("if (").unwrap() < source.find("FVector local_14;").unwrap(), "{source}");
+        for refs in [RefResolver::default(),
+            RefResolver::from_test_native_default_constructor("FVector", 1, true),
+            RefResolver::from_test_native_default_constructor("FVector", 0, false)]
+        {
+            assert!(super::never_read_constructed_slots(&f, &refs).is_empty());
+        }
+        let mut used = f.clone();
+        used.bytecode.extend(function(&[("PSF", &[14])]).bytecode);
+        assert!(super::never_read_constructed_slots(&used, &refs).is_empty());
+        let mut unknown = f.clone(); unknown.obj_locals.clear();
+        assert!(super::never_read_constructed_slots(&unknown, &refs).is_empty());
+        let mut duplicate = f.clone(); duplicate.obj_locals.push((14, 101));
+        assert!(super::never_read_constructed_slots(&duplicate, &refs).is_empty());
+        let mut rvo = f;
+        rvo.ret = DataType { token: 5, type_info: 101, ..Default::default() };
+        assert!(super::never_read_constructed_slots(&rvo, &refs).is_empty());
+    }
+
+    #[test]
+    fn unused_constructor_retention_keeps_only_the_placed_bare_declaration() {
+        let refs = RefResolver::from_test_native_default_constructor("FVector", 0, true);
+        let body = "if (Enabled)\n{\n    //__gore_ctor 14\n    Observe();\n}\n";
+        let locals = std::collections::BTreeMap::from([(14, "FVector".into())]);
+        let retain = HashSet::from([14]);
+        let (placed, sites, _) = super::resolve_ctor_site_markers(
+            body, &locals, &refs, &HashSet::new(), &retain);
+        assert_eq!(sites, retain);
+        assert_eq!(placed, "if (Enabled)\n{\n    FVector local_14;\n    Observe();\n}\n");
+        assert_eq!(super::drop_unused_declarations(&placed, &HashSet::new(), &sites), placed);
+        let ordinary = "FVector local_14;\nFVector local_20;\nint local_4;\n";
+        assert_eq!(super::drop_unused_declarations(ordinary, &HashSet::from([4]), &sites),
+            "FVector local_14;\n");
+        let (missing, sites, _) = super::resolve_ctor_site_markers(
+            body, &locals, &refs, &HashSet::new(), &HashSet::new());
+        assert!(sites.is_empty() && !missing.contains("FVector"));
+    }
+
+    #[test]
+    fn copied_boolean_return_requires_canonical_scratch_and_keeps_named_target() {
+        let code: Vec<(&str, &[u16])> = vec![
+            ("SetV1", &[2]), ("CpyVtoV4", &[1, 2]), ("SetV4", &[2]),
+            ("TZ", &[]), ("CpyRtoV4", &[9]), ("CpyVtoV4", &[2, 9]),
+            ("CpyVtoV4", &[1, 2]), ("CpyVtoR4", &[1]), ("RET", &[0]),
+        ];
+        let mut f = function(&code); f.ret.token = 0x41;
+        let refs = RefResolver::default();
+        let (proven, named) = super::copied_bool_return_carriers(&f, &refs);
+        assert_eq!(proven, HashSet::from([1, 2]));
+        assert_eq!(named, HashSet::from([1]));
+        let body = "    local_1 = local_2;\n    return local_1;\n";
+        assert_eq!(super::fold_alias_copies(body,
+            &std::collections::BTreeMap::from([(1, "bool".into()), (2, "bool".into())]), &named), body);
+        let locals = std::collections::BTreeMap::from([(1, "bool".into()), (2, "bool".into())]);
+        let retained = super::inline_call_argument_temporaries(body, &refs, &locals, None,
+            true, &HashMap::new(), &named, &HashSet::new(), &HashSet::new(),
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
+            &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new());
+        assert_eq!(retained, body);
+        assert_eq!(super::fold_returned_temporaries(body, &locals, &refs, "bool", false, &named), body);
+        let initialized = "    bool local_1 = false;\n    Observe();\n    local_1 = Ready() && Allowed();\n    return local_1;\n";
+        assert_eq!(super::drop_dead_literal_stores(initialized, &named), initialized);
+        assert!(!super::drop_dead_literal_stores(initialized, &HashSet::new()).contains("false"));
+        assert_eq!(super::inline_bool_chain_into_next_condition(initialized, &HashSet::new()), initialized);
+        for (at, replacement) in [
+            (0, ("SetV4", &[2][..])), (1, ("CpyVtoV4", &[1, 3][..])),
+            (3, ("CALLSYS", &[][..])), (5, ("CpyVtoV4", &[2, 8][..])),
+            (6, ("CpyVtoV4", &[1, 9][..])), (7, ("CpyVtoR4", &[2][..])),
+        ] {
+            let mut other = code.clone(); other[at] = replacement;
+            let mut other = function(&other); other.ret.token = 0x41;
+            assert!(super::copied_bool_return_carriers(&other, &refs).0.is_empty());
+        }
+        for extra in [("PSF", &[1][..]), ("PshV4", &[2][..]), ("SetV1", &[1][..]),
+            ("CpyVtoV4", &[2, 1][..]), ("RDR4", &[2][..])]
+        {
+            let mut other = f.clone(); other.bytecode.extend(function(&[extra]).bytecode);
+            assert!(super::copied_bool_return_carriers(&other, &refs).0.is_empty());
+        }
+        let decoded = super::disassemble(&f.bytecode).unwrap();
+        for (at, value) in [(0, 2), (2, 1), (2, 256)] {
+            let mut other = f.clone(); other.bytecode[decoded[at].offset_dw + 1] = value;
+            assert!(super::copied_bool_return_carriers(&other, &refs).0.is_empty());
+        }
+        f.ret.token = 0x44;
+        assert!(super::copied_bool_return_carriers(&f, &refs).0.is_empty());
+    }
+
     #[test]
     fn boolean_return_merges_accept_only_byte_literals_and_comparison_copies() {
         let code: Vec<(&str, &[u16])> = vec![
@@ -24473,7 +24659,7 @@ mod late_boolean_declaration_tests {
             &BTreeMap::from([(3, "bool".into())]), &RefResolver::default(),
             None, &HashMap::new(), None);
         assert_eq!(fold(body), body);
-        let cleaned = drop_unused_declarations(body, &HashSet::new());
+        let cleaned = drop_unused_declarations(body, &HashSet::new(), &HashSet::new());
         let folded = fold(&cleaned);
         assert!(folded.contains("local_3 = source == nullptr || (this.Weapon == nullptr);"), "{folded}");
 
@@ -24483,7 +24669,7 @@ mod late_boolean_declaration_tests {
             ("float local_6 = 1.0;", HashSet::from([6])),
         ] {
             let source = body.replace("TSubclassOf<UWeaponDefinition> local_6;", declaration);
-            let cleaned = drop_unused_declarations(&source, &keep);
+            let cleaned = drop_unused_declarations(&source, &keep, &HashSet::new());
             assert_eq!(cleaned, source);
             assert_eq!(fold(&cleaned), source);
         }

@@ -26,7 +26,7 @@ AI.AIAgent.Human.Config.OCR_GRD_Scatty_210.DailyRoutine_OCR_GRD_Scatty_210	2	0	0
 AI.AIAgent.Orc.Combat.Staff.Spells.StormOfFire.GA_Spell_StormOfFire_Orc	1	0	0
 AI.AIAgent.Orc.Living.AbilityTask_Interaction_Orc	1	0	0
 AI.AIAgent.Orc.Living.LivingAI_Orc	2	0	0
-AI.AIItemScoring	5	0	0
+AI.AIItemScoring	1	0	0
 AI.AssessmentResponseSystem.AssessmentBits	14	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	7	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeDefinitions	1	0	0
@@ -191,7 +191,6 @@ LoadingScreen.LoadingScreens.LoadingScreen_GeneralHints	1	0	0
 LoadingScreen.LoadingScreens.LoadingScreen_Intro	1	0	0
 LoadingScreen.StreamingLoadingScreenSetup	1	0	0
 Player.PlayerConfig	1	0	0
-Regions.Ownership.OCCastle.Ownership_OCCastle_BeforeFireMagesDead	3	0	0
 Regions.Traits.QuestRelatedTraits	8	0	0
 Sound.FXDefinitions.FXDefinitions_AttackImpact	2	0	0
 Sound.FXDefinitions.FXDefinitions_Footsteps	1	0	0
