@@ -2867,6 +2867,8 @@ fn emit_function_ctor(
         pass_trace("restore_named_argument_temporaries", &rendered);
         let rendered = fold_widening_aliases(&rendered, &declared_locals, &path_roots, &widened);
         pass_trace("fold_widening_aliases", &rendered);
+        let rendered = fold_unary_double_chain(&rendered, f, refs);
+        pass_trace("fold_unary_double_chain", &rendered);
         let rendered =
             spell_out_default_temporaries(&rendered, &default_only_construction_counts(f, refs));
         let rendered =
@@ -11581,6 +11583,100 @@ fn spell_out_argument_temporaries(
     out
 }
 
+/// One literal/widen/divide/unary-call/subtract expression, with no copies between.
+/// Keep the complete chain as the witness: its widening slot is reused by the call
+/// result, so physical slot/life sets cannot identify its two textual definitions.
+fn fold_unary_double_chain(body: &str, f: &Func, refs: &RefResolver) -> String {
+    let Ok(instrs) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let w = |ins: &super::disasm::Instr, index: usize| ins.words.get(index)
+        .map(|v| *v as i16 as i32).unwrap_or(0);
+    let double_value = |ty: &super::types::DataType| matches!(ty.token, 0x51 | 0x5e)
+        && !ty.is_reference && !ty.is_object_handle;
+    let mut call_counts = HashMap::new();
+    for ins in &instrs {
+        let name = match ins.op.name {
+            "CALLSYS" => ins.qwords.first().and_then(|p| refs.func_by_ptr(*p as i64)),
+            "CALL" | "CALLINTF" | "CALLBND" => ins.dwords.first().and_then(|p| refs.func_by_id(*p as i32)),
+            _ => None,
+        };
+        if let Some(name) = name { *call_counts.entry(name).or_insert(0usize) += 1; }
+    }
+    let mut witnessed = HashSet::new();
+    for chain in instrs.windows(7) {
+        if !chain.iter().map(|i| i.op.name).eq([
+            "SetV8", "fTOd", "DIVd", "PshV8", "CALLSYS", "CpyRtoV8", "SUBd",
+        ]) { continue; }
+        let Some(ptr) = chain[4].qwords.first().map(|p| *p as i64) else { continue; };
+        let Some(name) = refs.func_by_ptr(ptr) else { continue; };
+        if refs.is_method_by_ptr(ptr) || call_counts.get(name) != Some(&1)
+            || !refs.func_ret_by_ptr(ptr).is_some_and(double_value)
+            || !refs.func_params_by_ptr(ptr).is_some_and(|p| p.len() == 1 && double_value(&p[0]))
+        { continue; }
+        let Some(namespace) = refs.func_ns_by_ptr(ptr).filter(|ns| !ns.is_empty()) else { continue; };
+        let Some(bits) = chain[0].qwords.first().copied().filter(|b| f64::from_bits(*b).is_finite()) else { continue; };
+        // Literal, widening/call result, divided argument, numerator, narrow source, output.
+        let slots = [w(&chain[0], 0), w(&chain[1], 0), w(&chain[2], 0),
+            w(&chain[2], 1), w(&chain[1], 1), w(&chain[6], 0)];
+        if slots.iter().any(|s| *s <= 0) || slots.iter().collect::<HashSet<_>>().len() != 6
+            || w(&chain[2], 2) != slots[1] || w(&chain[3], 0) != slots[2]
+            || w(&chain[5], 0) != slots[1] || w(&chain[6], 1) != slots[0]
+            || w(&chain[6], 2) != slots[1]
+        { continue; }
+        witnessed.insert((slots, format!("{namespace}::{name}"), bits));
+    }
+    fold_witnessed_unary_double_chain(body, &witnessed)
+}
+
+fn fold_witnessed_unary_double_chain(
+    body: &str, witnessed: &HashSet<([i32; 6], String, u64)>,
+) -> String {
+    if witnessed.is_empty() { return body.to_owned(); }
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut at = 0;
+    while at + 4 < lines.len() {
+        let folded = (|| {
+            let (indent, literal, value) = declaration_with_initializer(&lines[at])?;
+            let (ind_w, wide, source) = declaration_with_initializer(&lines[at + 1])?;
+            let (ind_a, argument, division) = declaration_with_initializer(&lines[at + 2])?;
+            if ind_w != indent || ind_a != indent || indent_of(&lines[at + 3]) != indent
+                || indent_of(&lines[at + 4]) != indent { return None; }
+            let (numerator, denominator) = division.split_once(" / ")?;
+            if denominator != wide { return None; }
+            let call = lines[at + 3].trim().strip_prefix(&format!("{wide} = "))?.strip_suffix(';')?;
+            let callee = call.strip_suffix(&format!("({argument})"))?;
+            let (output, subtraction) = lines[at + 4].trim().strip_suffix(';')?.split_once(" = ")?;
+            if subtraction != format!("{literal} - {wide}") { return None; }
+            let mut slots = [0; 6];
+            for (slot, name) in slots.iter_mut().zip([literal.as_str(), wide.as_str(),
+                argument.as_str(), numerator, source.as_str(), output]) {
+                *slot = slot_and_life(name)?.0;
+            }
+            let bits = value.parse::<f64>().ok()?.to_bits();
+            if !witnessed.contains(&(slots, callee.to_owned(), bits)) { return None; }
+            // The removed widening is still performed by double / float32 promotion.
+            // Do not turn a double division into a narrower float32 calculation.
+            for name in [&literal, &wide, &argument] {
+                if !declared_type(&lines, name).is_some_and(|ty| matches!(ty.as_str(), "float" | "double")) {
+                    return None;
+                }
+            }
+            if !declared_type(&lines, numerator).is_some_and(|ty| matches!(ty.as_str(), "float" | "double"))
+                || declared_type(&lines, &source).as_deref() != Some("float32")
+            { return None; }
+            // These exact text names have no other life or use outside the five lines.
+            if count_ident(body, &literal) != 2 || count_ident(body, &wide) != 4
+                || count_ident(body, &argument) != 2 { return None; }
+            Some(format!("{indent}{output} = {value} - {callee}({numerator} / {source});"))
+        })();
+        if let Some(line) = folded {
+            lines.splice(at..at + 5, [line]);
+        } else { at += 1; }
+    }
+    let mut out = lines.join("\n");
+    if body.ends_with('\n') { out.push('\n'); }
+    out
+}
+
 /// `float X = <float32 local>;` read once is that local, widened where it is used.
 ///
 /// The alias fold asks for the two types to match, so a declaration that only WIDENS kept its
@@ -14458,7 +14554,9 @@ fn inline_unnamed_value_temporaries(
                     if region_end < lines.len()
                         && (indent_of(&lines[region_end]) != indent
                             || lines[at + 1..region_end].iter().any(|line| {
-                                line.trim() == "}" && indent_of(line).len() <= indent.len()
+                                // Same-indent `}` closes an inner block; only a
+                                // shallower close leaves this declaration's block.
+                                line.trim() == "}" && indent_of(line).len() < indent.len()
                             }))
                     {
                         inline_reject("life-scope", "", &name, &lines[at]);
@@ -16687,7 +16785,33 @@ fn literal_seeded_arithmetic_temps(f: &Func) -> HashSet<i32> {
 /// Every physical-slot life must be one uninterrupted double subexpression.
 fn strict_f64_arithmetic_temp_slots(f: &Func) -> HashSet<i32> {
     let Ok(instrs) = disassemble(&f.bytecode) else { return HashSet::new(); };
-    strict_f64_arithmetic_slots(&instrs, matches!(f.ret.token, 0x51 | 0x5e))
+    let mut slots = strict_f64_arithmetic_slots(&instrs, matches!(f.ret.token, 0x51 | 0x5e));
+    slots.extend(copied_widening_negation_temps(&instrs));
+    slots
+}
+
+/// The widening scratch is reused for an anonymous negated copy of the named value.
+/// Every reference to that physical slot must be within this exact five-instruction run.
+fn copied_widening_negation_temps(instrs: &[Instr]) -> HashSet<i32> {
+    let word = |i: &Instr, n: usize| i.words.get(n).map(|w| *w as i16 as i32);
+    let mut uses: HashMap<i32, Vec<usize>> = HashMap::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        for slot in super::bytediff::addressed_slots(ins) {
+            uses.entry(slot).or_default().push(at);
+        }
+    }
+    instrs.windows(5).enumerate().filter_map(|(at, w)| {
+        if [w[0].op.name, w[1].op.name, w[2].op.name, w[3].op.name, w[4].op.name]
+            != ["fTOd", "CpyVtoV8", "CpyVtoV8", "NEGd", "PshV8"] { return None; }
+        let (temp, named) = (word(&w[0], 0)?, word(&w[1], 0)?);
+        if temp <= 0 || named <= 0 || named == temp || word(&w[0], 1) == Some(temp)
+            || word(&w[1], 1) != Some(temp) || word(&w[2], 0) != Some(temp)
+            || word(&w[2], 1) != Some(named) || word(&w[3], 0) != Some(temp)
+            || word(&w[4], 0) != Some(temp)
+            || !uses.get(&temp).is_some_and(|u| u.len() == 5
+                && u.iter().enumerate().all(|(n, k)| *k == at + n)) { return None; }
+        Some(temp)
+    }).collect()
 }
 
 fn strict_f64_arithmetic_slots(instrs: &[super::disasm::Instr], returns_f64: bool) -> HashSet<i32> {
@@ -23649,6 +23773,30 @@ mod member_arithmetic_lifetime_tests {
 
 
     #[test]
+    fn copied_widening_negation_requires_its_whole_physical_slot_profile() {
+        let code: Vec<(&str, &[u16])> = vec![
+            ("fTOd", &[10, 7]), ("CpyVtoV8", &[6, 10]),
+            ("CpyVtoV8", &[10, 6]), ("NEGd", &[10]), ("PshV8", &[10]),
+        ];
+        let f = function(&code);
+        assert!(super::strict_f64_arithmetic_temp_slots(&f).contains(&10));
+        for (at, replacement) in [
+            (0, ("fTOd", &[10, 10][..])),
+            (1, ("CpyVtoV8", &[6, 12][..])),
+            (2, ("CpyVtoV8", &[10, 8][..])),
+            (3, ("NEGf", &[10][..])),
+            (4, ("PSF", &[10][..])),
+        ] {
+            let mut other=code.clone(); other[at]=replacement;
+            assert!(!super::strict_f64_arithmetic_temp_slots(&function(&other)).contains(&10));
+        }
+        for extra in [("PSF", &[10][..]), ("SetV8", &[10][..])] {
+            let mut other=code.clone(); other.push(extra);
+            assert!(!super::strict_f64_arithmetic_temp_slots(&function(&other)).contains(&10));
+        }
+    }
+
+    #[test]
     fn boolean_return_merges_accept_only_byte_literals_and_comparison_copies() {
         let code: Vec<(&str, &[u16])> = vec![
             ("SetV1", &[4]), ("TZ", &[]), ("CpyRtoV4", &[5]),
@@ -23942,5 +24090,100 @@ mod widened_negation_tests {
         assert_eq!(fold_negated_stores(effect, &widened), effect);
         assert_eq!(fold_negated_stores("local_10 = Ready();\nlocal_10 = !local_10;\n", &widened),
             "local_10 = !(Ready());\n");
+    }
+}
+
+#[cfg(test)]
+mod nested_arithmetic_life_scope_tests {
+    use super::*;
+
+    fn inline(body: &str) -> String {
+        // The existing candidate set admits this slot/life in the b200 trace. These tests
+        // exercise only scope/mention handling; they add no new bytecode permission.
+        inline_unnamed_value_temporaries(body, &HashSet::from([(10, 2)]),
+            &HashSet::new(), &HashSet::new(), &RefResolver::default(),
+            &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(),
+            &HashSet::new(), &HashSet::new(), &HashSet::new())
+    }
+
+    #[test]
+    fn an_inner_return_guard_does_not_end_the_outer_value_life() {
+        let body = concat!(
+            "    float local_10_2 = local_5;\n",
+            "    float local_14_4 = local_10_2 * this.Ratio;\n",
+            "    if (local_16_2 > local_14_4)\n",
+            "    {\n",
+            "        return -1000.0;\n",
+            "    }\n",
+            "    local_14_4 = local_46 + local_48;\n",
+            "    local_10_2 = (10.0 * local_14_4) * local_34;\n",
+            "    return 1.0 + local_10_2;\n",
+        );
+        let first = inline(body);
+        assert!(!first.contains("float local_10_2 = local_5;"));
+        assert!(first.contains("float local_14_4 = local_5 * this.Ratio;"));
+        assert!(first.contains("float local_10_2 = (10.0 * local_14_4) * local_34;"));
+        // The pipeline already runs this pass twice; the second invocation now sees
+        // the tail life alone, so the existing single-use rule can fold the return.
+        let second = inline(&first);
+        assert!(!second.contains("local_10_2"));
+        assert!(second.contains("return 1.0 + ((10.0 * local_14_4) * local_34);"));
+    }
+
+    #[test]
+    fn leaving_the_owner_block_or_a_conditional_redefinition_still_refuses() {
+        for body in [
+            "if (First)\n{\n    float local_10_2 = local_5;\n    Consume(local_10_2);\n}\nif (Second)\n{\n    local_10_2 = Other();\n    Consume(local_10_2);\n}\n",
+            "    float local_10_2 = local_5;\n    Consume(local_10_2);\n    if (Replace)\n    {\n        local_10_2 = Other();\n        Consume(local_10_2);\n    }\n",
+        ] {
+            // A later call may independently inline, but the original declaration
+            // cannot move into either a sibling block or a conditional new life.
+            assert!(inline(body).contains("float local_10_2 = local_5;"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod unary_double_chain_tests {
+    use super::*;
+
+    fn body() -> String {
+        concat!(
+            "    float local_16_2 = Previous();\n",
+            "    float32 local_33 = 2.0f;\n",
+            "    float local_10 = 1.0;\n",
+            "    float local_14_2 = local_33;\n",
+            "    float local_44 = local_16_2 / local_14_2;\n",
+            "    local_14_2 = Math::Abs(local_44);\n",
+            "    local_46 = local_10 - local_14_2;\n",
+        ).to_owned()
+    }
+
+    fn witness() -> HashSet<([i32; 6], String, u64)> {
+        HashSet::from([([10, 14, 44, 16, 33, 46], "Math::Abs".into(), 1.0_f64.to_bits())])
+    }
+
+    #[test]
+    fn exact_chain_folds_both_lives_of_the_widening_slot() {
+        let folded = fold_witnessed_unary_double_chain(&body(), &witness());
+        assert_eq!(folded, concat!(
+            "    float local_16_2 = Previous();\n",
+            "    float32 local_33 = 2.0f;\n",
+            "    local_46 = 1.0 - Math::Abs(local_16_2 / local_33);\n",
+        ));
+        assert_eq!(fold_witnessed_unary_double_chain(&body(), &HashSet::new()), body());
+    }
+
+    #[test]
+    fn chain_rejects_precision_loss_wrong_callee_or_any_extra_use() {
+        for source in [
+            body().replace("float local_16_2", "float32 local_16_2"),
+            body().replace("Math::Abs", "Other::Abs"),
+            body().replace("local_16_2 /", "local_18 /"),
+            body() + "    Observe(local_44);\n",
+            body().replace("    local_14_2 = Math::Abs", "    Observe();\n    local_14_2 = Math::Abs"),
+        ] {
+            assert_eq!(fold_witnessed_unary_double_chain(&source, &witness()), source);
+        }
     }
 }
