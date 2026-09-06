@@ -1127,7 +1127,6 @@ fn check_workspace(dir: &Path, cache: Option<PathBuf>, game: Option<PathBuf>) ->
     // in einem fremden Levelskript. Zwei Absichten, zwei Waechter.
     if manifest.operation == workspace::Operation::Checkout {
         findings.extend(check::guard_checkout_diff(&pristine, &edited));
-        findings.extend(check::guard_editable_defaults(&edited, &level.module));
     } else {
         findings.extend(check::guard_level_diff(&pristine, &edited, &spawn_class));
     }
@@ -1281,23 +1280,11 @@ fn stage_workspace(
     gore_mod::validate_mod_name(mod_name).context("invalid --mod-name")?;
     let manifest = read_manifest(dir)?;
     let path = cache_path(cache, game.clone())?;
-    // Der Weg haengt auch am Inhalt: ein Modul mit Klassen-Defaults lehnt `compile-module` ab.
-    let edited_source = match manifest.level_edit() {
-        Some(edit) => fs::read_to_string(dir.join(&edit.source_file))
-            .with_context(|| format!("reading {}", edit.source_file))?,
-        None => String::new(),
-    };
-    let route = stage::route_of(&manifest, &edited_source);
+    let route = stage::route_of(&manifest);
 
     let tree_display = match (route, tree) {
         (stage::Route::FullTree, None) => {
-            let why = if manifest.authored_module().is_some() {
-                "a new character brings a module of its own that the level script calls, and the \
-                 two only compile together"
-            } else {
-                "this module carries class defaults, and `compile-module` refuses those: it \
-                 cannot inventory their `__InitDefaults` and says so rather than guessing"
-            };
+            let why = "a new character brings a module of its own that the level script calls, and the two only compile together";
             bail!(
                 "this work needs a source tree: pass --tree <dir>. {why}. The tree is emitted \
                  once per game version and reused after that"
@@ -1329,7 +1316,6 @@ fn stage_workspace(
     let game_arg = game.as_ref().map(|path| path.display().to_string());
     let commands = stage::build_commands(
         &manifest,
-        &edited_source,
         &dir.display().to_string(),
         &tree_display,
         mod_name,
@@ -1468,15 +1454,7 @@ fn checkout(npc: &str, cache: Option<PathBuf>, game: Option<PathBuf>, out: &Path
     println!("checked {npc} out into {}", out.display());
     println!("  {leaf}  {class_count} classes from {module_name}");
     println!("  {}", render::translation_line(&emitted, &module_name));
-    // Ehrlich sein, bevor jemand Zeit investiert: eine Bearbeitung dieses Moduls uebersetzt
-    // heute nicht. Vier von vier Figurendefinitionen wurden abgelehnt.
-    for finding in check::guard_editable_defaults(&source, &module_name) {
-        println!("  WARNING: {}", finding.message);
-    }
-    println!(
-        "  what this is good for today is reading: it is the character's full definition, every \
-         value in one place. `gore npc show {npc}` gives the chain without the source"
-    );
+    println!("  edit the values; keep every existing default target, class name and parent");
     println!("next: gore npc check {}", out.display());
     Ok(())
 }

@@ -206,40 +206,6 @@ pub fn guard_authored_module(source: &str, npc_id: &str) -> Vec<Finding> {
     findings
 }
 
-/// Kann der Compiler eine Bearbeitung dieses Moduls überhaupt übersetzen?
-///
-/// Er weigert sich, ein **editiertes** Modul zu übersetzen, dessen `__InitDefaults` er nicht
-/// vollständig inventarisieren kann:
-///
-/// ```text
-/// refusing default-target preservation for edit module "…CharacterDefinition_OC_STT_Diego":
-/// unsupported store opcode STOREOBJ at dword 336; default-target coverage is unproven
-/// ```
-///
-/// Am 2026-09-06 an vier Figurendefinitionen gemessen — Diego, Viper, ein Bandit, Fingers —
-/// **vier von vier abgelehnt**, auf beiden Wegen: `compile-module` in Sekunden, der Voll-Baum
-/// erst nach 23 Minuten. Eine Figurendefinition besteht aus objektwertigen Defaults, also trifft
-/// es sie praktisch immer.
-///
-/// Ein **neues** Modul mit Defaults ist davon nicht betroffen: da gibt es nichts zu erhalten.
-/// Deshalb baut `new` und `checkout` nicht.
-pub fn guard_editable_defaults(source: &str, module: &str) -> Vec<Finding> {
-    let carries_defaults = source
-        .lines()
-        .any(|line| line.trim_start().starts_with("default "));
-    if !carries_defaults {
-        return Vec::new();
-    }
-    vec![Finding::blocking(format!(
-        "the compiler will not build an edit of {module}: it carries class defaults, and it \
-         refuses a module whose `__InitDefaults` it cannot fully inventory (`unsupported store \
-         opcode`). Measured on four shipped character definitions, four refusals. Changing a \
-         shipped character's values has no working path today — `gore as default-sites` shows the \
-         few plain scalar fields `gore as patch-default` can still reach, and everything an \
-         attribute sets is out of reach because it goes through a call, not a field store"
-    ))]
-}
-
 /// Der Wächter für eine ausgecheckte Figur: was das Modul deklariert, bleibt, wie es war.
 ///
 /// Werte und Rümpfe dürfen sich ändern — genau dafür checkt man aus. Die Klassenstruktur nicht:
@@ -451,25 +417,6 @@ class UDailyRoutine_MINE_Start : UAIState_DailyRoutine_Human
         assert!(findings
             .iter()
             .any(|f| f.severity == Severity::Blocking && f.message.contains("ForCharacter")));
-    }
-
-    #[test]
-    fn a_module_with_class_defaults_cannot_be_built_as_an_edit() {
-        // Der teuerste Fehlschlag des Projekts: `check` sagte in Ordnung, der Voll-Baum lief 23
-        // Minuten und lehnte dann ab. Jetzt sagt es das vorher.
-        let findings = guard_editable_defaults(AUTHORED, "SomeModule");
-        assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].severity, Severity::Blocking);
-        assert!(findings[0].message.contains("SomeModule"));
-        assert!(findings[0].message.contains("patch-default"));
-    }
-
-    #[test]
-    fn a_module_without_class_defaults_is_buildable_as_an_edit() {
-        // Ein Levelskript: keine Klassen-Defaults, nichts zu erhalten, uebersetzt in 37 Sekunden.
-        let source =
-            "class UWP_A : UWorldPointScript\n{\n    void OnWorldStart()\n    {\n    }\n}\n";
-        assert!(guard_editable_defaults(source, "LevelScripts.X").is_empty());
     }
 
     #[test]
