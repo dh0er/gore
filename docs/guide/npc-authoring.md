@@ -355,9 +355,9 @@ $ gore npc check work/diego
   [blocking] class UCharacterDefinition_Human_RENAMED is new. Checking a shipped character out is for changing its values; a new class needs `gore npc new`, which carries the contract for one
 ```
 
-A checkout still needs the full-tree route, and not because of how many modules
-it touches. `compile-module` refuses a module whose class defaults it cannot
-inventory:
+**A checkout cannot be built today**, and both `checkout` and `check` say so
+before you spend any time on it. The compiler refuses an *edit* of a module
+whose class defaults it cannot inventory:
 
 ```
 refusing default-target preservation for edit module
@@ -365,11 +365,24 @@ refusing default-target preservation for edit module
 dword 336; default-target coverage is unproven
 ```
 
-A character definition is nothing but class defaults, so it always lands there.
-A level script carries none — which is why suppressing a character compiles in
-37 seconds while changing one takes the long road. `stage` picks by what the
-edited module contains, not by counting modules, and says which of the two
-reasons applies when it asks for `--tree`.
+Measured on 2026-09-06 against four shipped character definitions — Diego,
+Viper, a bandit, Fingers — **four refusals**. On both routes: `compile-module`
+gives up in seconds, the full tree only after 23 minutes. A character
+definition is nothing but object-valued defaults, so it lands there every time.
+A **new** module with defaults is unaffected, because an add has nothing to
+preserve — which is why `new` builds and `checkout` does not.
+
+The narrow thing that does still work is `gore as patch-default`, which
+rewrites one plain scalar field in place. It is narrow: `gore as default-sites
+--class UCharacterDefinition_Human_OC_STT_Diego` reports exactly **one**
+patchable field on Diego, `m_LightType`. Everything an attribute sets — health,
+strength, resistances — goes through a `SetAttributeValue(...)` call rather than
+a field store and is out of reach.
+
+So what is `checkout` for today? Reading. It gives you the character's complete
+definition, every value in one place, which is more than `show` prints. Use it
+to see what a character is made of, and derive from it with `clone` when you
+want to change something.
 
 ### `npc check` — the diff guard
 

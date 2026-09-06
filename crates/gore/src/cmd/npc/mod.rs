@@ -146,7 +146,7 @@ pub enum NpcAction {
         #[arg(short, long)]
         out: PathBuf,
     },
-    /// Take a shipped character's own module out for editing
+    /// Read a shipped character's own module in full; the compiler refuses to build an edit of it
     Checkout {
         /// The character to edit, for example OC_STT_Diego
         npc: String,
@@ -1127,6 +1127,7 @@ fn check_workspace(dir: &Path, cache: Option<PathBuf>, game: Option<PathBuf>) ->
     // in einem fremden Levelskript. Zwei Absichten, zwei Waechter.
     if manifest.operation == workspace::Operation::Checkout {
         findings.extend(check::guard_checkout_diff(&pristine, &edited));
+        findings.extend(check::guard_editable_defaults(&edited, &level.module));
     } else {
         findings.extend(check::guard_level_diff(&pristine, &edited, &spawn_class));
     }
@@ -1467,9 +1468,14 @@ fn checkout(npc: &str, cache: Option<PathBuf>, game: Option<PathBuf>, out: &Path
     println!("checked {npc} out into {}", out.display());
     println!("  {leaf}  {class_count} classes from {module_name}");
     println!("  {}", render::translation_line(&emitted, &module_name));
+    // Ehrlich sein, bevor jemand Zeit investiert: eine Bearbeitung dieses Moduls uebersetzt
+    // heute nicht. Vier von vier Figurendefinitionen wurden abgelehnt.
+    for finding in check::guard_editable_defaults(&source, &module_name) {
+        println!("  WARNING: {}", finding.message);
+    }
     println!(
-        "  edit the values; class names and their parents have to stay as they are, because they \
-         are the character's identity in the cache"
+        "  what this is good for today is reading: it is the character's full definition, every \
+         value in one place. `gore npc show {npc}` gives the chain without the source"
     );
     println!("next: gore npc check {}", out.display());
     Ok(())
