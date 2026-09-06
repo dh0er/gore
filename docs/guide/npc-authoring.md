@@ -520,8 +520,16 @@ What that took, and what each cost, is worth knowing before authoring:
 - **`--modular-visuals` does not reproduce the template's look.** `B` was built
   that way and came out looking like the player character, not like Diego. The
   path produces a working body — so it is no longer unproven in the sense of
-  "might not render" — but it does not carry the parts across. Prefer the
-  default borrowed model until somebody works out why.
+  "might not render" — but it does not carry the parts across.
+
+  Worth knowing for anyone who picks this up: the data is demonstrably present.
+  `B`'s visuals class derives from Diego's and overrides nothing but
+  `m_HasPreBakedSK`, so it inherits `Person`, `BodyType`, `Clothes = "Shadow"`,
+  `Shirt_01`, `Armor_01` and the rest. The runtime simply does not use them on
+  that path. Which asset it does use is not visible from the script side — the
+  base classes name `m_MutableAsset` (`MO_Player` on the human base,
+  `MO_Characters` on the male-NPC base), and the player look suggests the former
+  wins, but nothing here proves it. Prefer the borrowed model.
 - **The daily routine does not move the character.** Both stayed at their world
   point; `location` and `spawnLocation` in the save were identical. The routine
   compiles and the character carries it, but nothing observed it running, and
