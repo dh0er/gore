@@ -7602,10 +7602,18 @@ impl Structurer<'_> {
                 let ret_ref_tail = self.ctx.ret_is_ref() && self.flows_to_bare_ret(i);
                 let (mut stmts, _, _) =
                     block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, ret_ref_tail);
-                let plain_return = self.plain_return_exit_stmt(i).map(|exit| {
-                    let exit = fold_return_into_store(&mut stmts, exit);
-                    self.constant_return_exit(i, exit, &stmts)
-                });
+                // Choose the exit before folding: a loop/switch return can win over the
+                // plain return. Consuming the store for a discarded exit loses its value.
+                let plain_return = self.plain_return_exit_stmt(i);
+                let selected_exit = self.region_exit_stmt(i)
+                    .or_else(|| self.loop_exit_stmt(i))
+                    .or_else(|| plain_return.clone())
+                    .map(|exit| {
+                        let exit = if plain_return.as_deref() == Some(exit.as_str()) {
+                            fold_return_into_store(&mut stmts, exit)
+                        } else { exit };
+                        self.constant_return_exit(i, exit, &stmts)
+                    });
                 for s in &stmts {
                     let _ = writeln!(out, "{ind}{s}");
                 }
@@ -7614,11 +7622,7 @@ impl Structurer<'_> {
                 // first; only fall to the loop-exit hook when no switch exit applies. batch-36:
                 // `loop_exit_stmt` renders a bare `JMP` to the loop break/continue offset (or to a
                 // bare-RET row inside the body) as `break;`/`continue;`/`return ...;`.
-                if let Some(x) = self.region_exit_stmt(i) {
-                    let _ = writeln!(out, "{ind}{}", self.constant_return_exit(i, x, &stmts));
-                } else if let Some(x) = self.loop_exit_stmt(i) {
-                    let _ = writeln!(out, "{ind}{}", self.constant_return_exit(i, x, &stmts));
-                } else if let Some(x) = plain_return {
+                if let Some(x) = selected_exit {
                     let _ = writeln!(out, "{ind}{x}");
                 }
                 next = i + 1;
@@ -7653,16 +7657,21 @@ impl Structurer<'_> {
             };
             let (mut stmts, cmp, leftover) =
                 block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, false);
-            let plain_return = self.plain_return_exit_stmt(bi).map(|exit| {
-                let exit = fold_return_into_store(&mut stmts, exit);
-                self.constant_return_exit(bi, exit, &stmts)
-            });
+            // Choose the exit before folding: a loop/switch return can win over the
+            // plain return. Consuming the store for a discarded exit loses its value.
+            let plain_return = self.plain_return_exit_stmt(bi);
+            let selected_exit = self.region_exit_stmt(bi)
+                .or_else(|| plain_return.clone())
+                .map(|exit| {
+                    let exit = if plain_return.as_deref() == Some(exit.as_str()) {
+                        fold_return_into_store(&mut stmts, exit)
+                    } else { exit };
+                    self.constant_return_exit(bi, exit, &stmts)
+                });
             for s in &stmts {
                 let _ = writeln!(out, "{ind}{s}");
             }
-            if let Some(x) = self.region_exit_stmt(bi) {
-                let _ = writeln!(out, "{ind}{}", self.constant_return_exit(bi, x, &stmts));
-            } else if let Some(x) = plain_return {
+            if let Some(x) = selected_exit {
                 let _ = writeln!(out, "{ind}{x}");
             }
             match carry_until {
@@ -10471,6 +10480,48 @@ mod tests {
             }
             CompoundFixture { instrs, labels }
         }
+    }
+
+    #[test]
+    fn loop_return_uses_the_value_from_the_consumed_store() {
+        for arithmetic in [false, true] {
+            let mut a = TestAssembler::default();
+            a.label("body");
+            if arithmetic {
+                a.op("ADDi", &[4, 6, 8], &[]);
+            } else {
+                a.op("SetV4", &[4], &[(-1000i32) as u32]);
+            }
+            a.op("CpyVtoR4", &[4], &[]);
+            a.jump("JMP", "shared_ret");
+            a.label("shared_ret");
+            a.op("RET", &[0], &[]);
+            let fixture = a.finish();
+            let scope = LoopScope { continue_off: usize::MAX, break_off: usize::MAX - 1,
+                continue_only: false, latch_block: None };
+            let output = render_fixture_range_with_selector(&fixture,
+                Some(("body", "shared_ret", scope)), &RefResolver::default(), "int");
+            let expected = if arithmetic { "return local_6 + local_8;" } else { "return -1000;" };
+            assert_eq!(output.trim(), expected);
+        }
+    }
+
+    #[test]
+    fn a_selected_loop_break_does_not_consume_the_plain_return_store() {
+        let mut a = TestAssembler::default();
+        a.label("body");
+        a.op("SetV4", &[4], &[17]);
+        a.op("CpyVtoR4", &[4], &[]);
+        a.jump("JMP", "shared_ret");
+        a.label("shared_ret");
+        a.op("RET", &[0], &[]);
+        let fixture = a.finish();
+        let scope = LoopScope { continue_off: usize::MAX, break_off: fixture.labels["shared_ret"],
+            continue_only: false, latch_block: None };
+        let output = render_fixture_range_with_selector(&fixture,
+            Some(("body", "shared_ret", scope)), &RefResolver::default(), "int");
+        assert!(output.contains("local_4 = 17;"), "{output}");
+        assert!(output.trim_end().ends_with("break;"), "{output}");
     }
 
     fn trap_switch_fixture(trap: bool) -> CompoundFixture {

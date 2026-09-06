@@ -1567,6 +1567,9 @@ fn emit_function_ctor(
     // the arguments and in another order.
     let rvo_producers = super::structure::take_rvo_producers();
     let rvo_consumers = super::structure::take_rvo_consumers();
+    let retained_values = retained_value_arguments(f, &fc, refs, &rvo_producers, &rvo_consumers);
+    hoisted.extend(retained_values.iter().copied());
+    statement_producers.extend(retained_values.iter().copied());
     let named_by_direct_store =
         values_named_by_a_direct_handle_store(f, refs, &rvo_producers, &rvo_consumers);
     hoisted.extend(named_by_direct_store.iter().copied());
@@ -1751,6 +1754,7 @@ fn emit_function_ctor(
     } else {
         let candidates: HashSet<i32> = used_locals(&body)
             .into_iter()
+            .filter(|slot| !retained_values.contains(slot))
             // A call result the source spent a `bool` on keeps its name here as well: folded
             // into its condition, the store and the reload vanilla has are gone (measured
             // with the enum seeds on: 9 `if (bX)` sites, all named by vanilla).
@@ -1774,7 +1778,7 @@ fn emit_function_ctor(
         rewrite_adjacent_value_temporaries(&body, &candidates).0
     };
     pass_trace("rewrite_adjacent_value_temporaries", &body);
-    let (body, _) = rewrite_value_temporaries(&body, &inferred_locals);
+    let (body, _) = rewrite_value_temporaries(&body, &inferred_locals, &retained_values);
     pass_trace("rewrite_value_temporaries", &body);
     let body = drop_dead_stores(&body, &vanilla_read_slots(f));
     pass_trace("drop_dead_stores", &body);
@@ -2725,7 +2729,7 @@ fn emit_function_ctor(
             .into_iter()
             .chain(destroyed_fstring_operator_receivers(f, refs, &rvo_producers, &rvo_consumers))
             .filter(|slot| !rvo_declared.contains(slot))
-            .filter(|slot| !named_iterated.contains(slot))
+            .filter(|slot| !named_iterated.contains(slot) && !retained_values.contains(slot))
             .collect();
         let f64_arithmetic_temps = strict_f64_arithmetic_temp_slots(f);
         let rendered = inline_unnamed_value_temporaries(
@@ -7683,12 +7687,12 @@ fn rewrite_no_assign_residual_assigns(
 /// `opAssign` — that the base cache has no row for, and the module stops being splicable. Fold
 /// every producer into its consumer; `rewrite_adjacent_value_temporaries` commits a slot only
 /// when every reference to it disappears, so a partial fold is impossible.
-fn rewrite_value_temporaries(body: &str, locals: &BTreeMap<i32, String>) -> (String, HashSet<i32>) {
+fn rewrite_value_temporaries(body: &str, locals: &BTreeMap<i32, String>, retained: &HashSet<i32>) -> (String, HashSet<i32>) {
     let candidates: HashSet<i32> = locals
         .iter()
         .filter(|(_, ty)| is_value_struct_type(ty))
         .map(|(slot, _)| *slot)
-        .filter(|slot| produced_only_by_calls(body, *slot))
+        .filter(|slot| !retained.contains(slot) && produced_only_by_calls(body, *slot))
         .collect();
     if candidates.is_empty() {
         return (body.to_owned(), HashSet::new());
@@ -12674,6 +12678,105 @@ fn destroyed_fstring_operator_receivers(
         let ptr = dtor.qwords.first().copied().unwrap_or(0) as i64;
         if refs.func_by_ptr(ptr) == Some("$beh2") && refs.func_owner_by_ptr(ptr) == Some("FString") {
             out.insert(slot);
+        }
+    }
+    out
+}
+
+/// Cleanup of the void call's own full expression, before another statement starts.
+fn immediate_value_cleanup_end(
+    instrs: &[Instr], mut at: usize, is_destructor: impl Fn(&Instr) -> bool,
+) -> usize {
+    loop {
+        if instrs.get(at).is_some_and(|i| i.op.name == "PSF")
+            && instrs.get(at + 1).is_some_and(&is_destructor) { at += 2; }
+        else if instrs.get(at).is_some_and(|i| matches!(i.op.name, "FreeNullV8" | "FreeNullV4")) { at += 1; }
+        else { return at; }
+    }
+}
+
+/// A value with one physical life that vanilla kept beyond its consuming expression.
+/// Require exactly one creator, one consumer, and no address use besides those and releases.
+/// Boundaries are an integer-result branch, another value's final return copy, or
+/// a void call's complete expression. An arbitrary later call proves nothing.
+fn retained_value_arguments(
+    f: &Func, fc: &FuncCode, refs: &RefResolver,
+    producers: &[(i32, usize)], consumers: &[(i32, usize)],
+) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    let w0 = |i: &Instr| i.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let behaviour = |i: &Instr, name: &str| i.op.name == "CALLSYS"
+        && refs.func_by_ptr(i.qwords.first().copied().unwrap_or(0) as i64) == Some(name);
+    let mut creators: HashMap<i32, HashSet<usize>> = HashMap::new();
+    let mut readers: HashMap<i32, HashSet<usize>> = HashMap::new();
+    let mut uses: HashMap<i32, Vec<usize>> = HashMap::new();
+    let mut releases: HashMap<i32, Vec<usize>> = HashMap::new();
+    for &(s, at) in producers { creators.entry(s).or_default().insert(at); }
+    for &(s, at) in consumers { readers.entry(s).or_default().insert(at); }
+    for (at, ins) in instrs.iter().enumerate() {
+        for s in super::bytediff::addressed_slots(ins) {
+            if s > 0 { uses.entry(s).or_default().push(at); }
+        }
+        if ins.op.name != "PSF" || w0(ins) <= 0 { continue; }
+        let s = w0(ins);
+        if instrs.get(at + 1).is_some_and(|i| behaviour(i, "$beh0")) {
+            creators.entry(s).or_default().insert(at + 1);
+        }
+        if instrs.get(at + 1).is_some_and(|i| behaviour(i, "$beh2")) {
+            releases.entry(s).or_default().push(at);
+        }
+    }
+    let (_, return_slot) = super::decompile::build_param_off_map_rvo(fc, &instrs, refs);
+    let mut out = HashSet::new();
+    for (s, dies) in releases {
+        if !matches!(dies.len(), 1 | 2) { continue; }
+        let (Some(created), Some(read), Some(uses)) = (creators.get(&s), readers.get(&s), uses.get(&s))
+            else { continue; };
+        if created.len() != 1 || read.len() != 1 || uses.len() != dies.len() + 2
+            || !uses.iter().all(|at| instrs[*at].op.name == "PSF") { continue; }
+        let producer = *created.iter().next().expect("one creator");
+        let consumer = *read.iter().next().expect("one consumer");
+        let live_uses: Vec<usize> = uses.iter().copied().filter(|at| !dies.contains(at)).collect();
+        let [destination, argument] = live_uses.as_slice() else { continue; };
+        if *destination >= producer || producer >= *argument || *argument >= consumer
+            || dies.iter().any(|at| *at <= consumer) { continue; }
+        // One final value receiver; the result's compare and branch precede BOTH releases.
+        let compared = dies.len() == 2 && *argument + 1 == consumer
+            && instrs.get(consumer + 1).is_some_and(|i| i.op.name == "CpyRtoV4")
+            && instrs.get(consumer + 2).is_some_and(|i| i.op.name == "CMPIi"
+                && w0(i) == w0(&instrs[consumer + 1]))
+            && instrs.get(consumer + 3).is_some_and(|i| matches!(i.op.name, "JZ" | "JNZ"))
+            && dies.iter().all(|at| *at > consumer + 3);
+        // This argument is not the returned value: that different value is copied out
+        // between the consumer and this argument's release (UCS_Not::GetDisplayName).
+        let copied_other = dies.len() == 1 && dies[0] == consumer + 4
+            && return_slot.is_some() && !f.ret.is_reference && !f.ret.is_object_handle
+            && instrs.get(consumer + 1).is_some_and(|i| i.op.name == "PSF" && w0(i) > 0 && w0(i) != s)
+            && instrs.get(consumer + 2).is_some_and(|i| i.op.name == "PshVPtr" && Some(w0(i)) == return_slot)
+            && instrs.get(consumer + 3).is_some_and(|i| behaviour(i, "$beh0")
+                && refs.type_by_ptr(f.ret.type_info).is_some_and(|ty|
+                    refs.func_owner_by_ptr(i.qwords.first().copied().unwrap_or(0) as i64) == Some(ty)));
+        // A void-returning consumer cannot feed an enclosing expression. A value
+        // released in this call's immediate cleanup is still a temporary; one kept
+        // across subsequent work is a name (DoCombatAction's GetAvailableTargets).
+        let call = &instrs[consumer];
+        let ret = match call.op.name {
+            "CALLSYS" | "Thiscall1" => refs.func_ret_by_ptr(call.qwords.first().copied().unwrap_or(0) as i64),
+            "CALL" | "CALLINTF" | "CALLBND" => refs.func_ret_by_id(call.dwords.first().copied().unwrap_or(0) as i32),
+            _ => None,
+        };
+        let cleanup_end = immediate_value_cleanup_end(&instrs, consumer + 1, |i| behaviour(i, "$beh2"));
+        // An unresolved PSF/CALLSYS pair might be another destructor, not new work.
+        let unknown_cleanup = instrs.get(cleanup_end).is_some_and(|i| i.op.name == "PSF")
+            && instrs.get(cleanup_end + 1).is_some_and(|i| i.op.name == "CALLSYS"
+                && refs.func_by_ptr(i.qwords.first().copied().unwrap_or(0) as i64).is_none());
+        let after_void = ret.is_some_and(|t| t.token == 0x52 && !t.is_reference && !t.is_object_handle)
+            && !unknown_cleanup && cleanup_end < dies[0];
+        let mut tail = dies[0];
+        while instrs.get(tail).is_some_and(|i| i.op.name == "PSF")
+            && instrs.get(tail + 1).is_some_and(|i| behaviour(i, "$beh2")) { tail += 2; }
+        if after_void || compared || (copied_other && instrs.get(tail).is_some_and(|i| i.op.name == "RET")) {
+            out.insert(s);
         }
     }
     out
@@ -22319,7 +22422,7 @@ mod source_shape_tests {
     fn folds_a_value_temporary_into_the_call_that_consumes_it() {
         let body =
             "    local_7 = this.MakeTransition(n\"Loop\");\n    this.Transitions.Add(local_7);\n";
-        let (out, gone) = rewrite_value_temporaries(body, &locals(&[(7, "FTransition")]));
+        let (out, gone) = rewrite_value_temporaries(body, &locals(&[(7, "FTransition")]), &std::collections::HashSet::new());
         assert_eq!(
             out,
             "    this.Transitions.Add(this.MakeTransition(n\"Loop\"));\n"
@@ -22332,7 +22435,7 @@ mod source_shape_tests {
         // `FText local_6 = "id";` converts; folding the literal would hand the consumer an FString.
         let body = "    local_6 = \"UI_Hint1\";\n    this.TipText.Add(local_6);\n";
         assert!(!produced_only_by_calls(body, 6));
-        let (out, gone) = rewrite_value_temporaries(body, &locals(&[(6, "FText")]));
+        let (out, gone) = rewrite_value_temporaries(body, &locals(&[(6, "FText")]), &std::collections::HashSet::new());
         assert_eq!(out, body);
         assert!(gone.is_empty());
     }
@@ -23745,5 +23848,69 @@ mod destroyed_fstring_receiver_text_tests {
             "    FString local_16 = (this.A.GetDisplayName() + FString(\" OR \"));\n    local_4.Append((local_16 + local_16));\n",
             "    FString local_16 = (this.A.GetDisplayName() + FString(\" OR \"));\n    Touch();\n    local_4.Append((local_16 + this.B.GetDisplayName()));\n",
         ] { assert_eq!(inline(body, true), body); }
+    }
+}
+
+#[cfg(test)]
+mod retained_value_argument_text_tests {
+    use super::*;
+
+    #[test]
+    fn retained_argument_survives_early_value_elimination() {
+        let body = "    local_4 = this.Situation.GetDisplayName();\n    local_8.Append(local_4);\n    return local_8;\n";
+        let locals = BTreeMap::from([(4, "FString".to_owned())]);
+        assert_eq!(rewrite_value_temporaries(body, &locals, &HashSet::from([4])).0, body);
+        assert_ne!(rewrite_value_temporaries(body, &locals, &HashSet::new()).0, body);
+    }
+
+    #[test]
+    fn retained_receiver_survives_argument_inlining() {
+        let original = "    local_44 = FMemoryFilter(local_36.AfterTime(local_28));\n    local_25 = local_44.GetCount();\n    if (local_25 == 0)\n";
+        let mut lines: Vec<String> = original.lines().map(str::to_owned).collect();
+        let before = lines.clone();
+        let retained = HashSet::from([44]);
+        assert!(!inline_temporary_into(&mut lines, 1, "local_44", "GetCount", Position::Receiver,
+            &BTreeMap::from([(44, "FMemoryFilter".to_owned())]),
+            &RefResolver::from_test_collision_names(&["FMemoryFilter"]), None,
+            &HashMap::new(), &HashSet::new(), &retained, &HashSet::new(), &HashSet::new(),
+            &HashSet::new(), &HashSet::new(), &retained, &HashSet::new(), &HashMap::new(),
+            &HashSet::new(), &HashSet::new()));
+        assert_eq!(lines, before);
+    }
+}
+
+#[cfg(test)]
+mod retained_void_consumer_cleanup_tests {
+    use super::{immediate_value_cleanup_end, Instr};
+
+    fn ins(name: &str, slot: Option<u16>, pointer: Option<u64>) -> Instr {
+        Instr { offset_dw: 0,
+            op: crate::cache::isa::OPCODES.iter().find(|o| o.name == name).unwrap(),
+            words: slot.into_iter().collect(), dwords: Vec::new(), qwords: pointer.into_iter().collect() }
+    }
+    fn destructor(i: &Instr) -> bool { i.op.name == "CALLSYS" && i.qwords.first() == Some(&2) }
+
+    #[test]
+    fn following_statement_is_outside_exact_sibling_cleanup() {
+        let code = vec![ins("CALLSYS", None, Some(1)),
+            ins("PSF", Some(12), None), ins("CALLSYS", None, Some(2)),
+            ins("FreeNullV8", Some(8), None),
+            ins("PshVPtr", Some(0), None), ins("CALLINTF", None, None),
+            ins("PSF", Some(16), None), ins("CALLSYS", None, Some(2))];
+        assert_eq!(immediate_value_cleanup_end(&code, 1, destructor), 4);
+        // Slot16 survives subsequent work; sibling slot12 belongs to immediate cleanup.
+        assert!(immediate_value_cleanup_end(&code, 1, destructor) < 6);
+        assert!(!(immediate_value_cleanup_end(&code, 1, destructor) < 1));
+    }
+
+    #[test]
+    fn own_release_after_other_temporaries_is_not_a_late_release() {
+        let code = vec![ins("CALLSYS", None, Some(1)),
+            ins("PSF", Some(12), None), ins("CALLSYS", None, Some(2)),
+            ins("PSF", Some(16), None), ins("CALLSYS", None, Some(2)), ins("RET", None, None)];
+        assert_eq!(immediate_value_cleanup_end(&code, 1, destructor), 5);
+        assert!(!(immediate_value_cleanup_end(&code, 1, destructor) < 3));
+        let ordinary_call = vec![ins("PSF", Some(16), None), ins("CALLSYS", None, Some(3))];
+        assert_eq!(immediate_value_cleanup_end(&ordinary_call, 0, destructor), 0);
     }
 }
