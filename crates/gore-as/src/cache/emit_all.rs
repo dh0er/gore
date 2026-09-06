@@ -251,6 +251,15 @@ pub fn prepare_resolver_semantics(
         })
         .collect();
     refs.set_class_fields(fields);
+    refs.set_const_object_fields(mods.iter().flat_map(|module| {
+        module.classes.iter().flat_map(move |class| {
+            class.fields.iter().map(move |field| (
+                super::refs::TypeIdentity { module: module.name.clone(),
+                    namespace: class.namespace.clone(), name: class.name.clone() },
+                field.name.clone(), field.ty.clone(),
+            ))
+        })
+    }));
     let non_const = mods
         .iter()
         .flat_map(|module| &module.classes)

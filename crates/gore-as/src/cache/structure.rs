@@ -1316,6 +1316,26 @@ fn materialized_comparison(c: &Cmp) -> Option<String> {
         .then(|| format!("({} {op} {})", c.a, c.b))
 }
 
+/// Const parameters remain excluded unless this exact bytecode store targets a
+/// field with the same fully qualified DataType in the serialized owner metadata.
+fn is_exact_const_param_field_store(
+    ctx: &Ctx, insns: &[Instr], at: usize, src: &str, dst: &str,
+) -> bool {
+    let Some(code) = at.checked_sub(3).and_then(|start| insns.get(start..=at)) else { return false; };
+    let word = |ins: &Instr, index: usize| ins.words.get(index).map(|v| *v as i16 as i32);
+    if !ctx.f.is_method || code[0].op.name != "PshVPtr" || code[1].op.name != "PshVPtr"
+        || word(&code[1], 0) != Some(0) || code[2].op.name != "ADDSi" || code[3].op.name != "REFCPY"
+    { return false; }
+    let Some(source_slot) = word(&code[0], 0) else { return false; };
+    if source_slot == 0 || src != ctx.slot_name(source_slot) { return false; }
+    let Some(index) = ctx.param_off_map.get(&source_slot) else { return false; };
+    let Some(param) = ctx.f.param_types.get(*index) else { return false; };
+    let Some(owner_id) = code[2].dwords.first().map(|v| *v as i32) else { return false; };
+    let Some(offset) = word(&code[2], 0) else { return false; };
+    let Some(field) = ctx.refs.member(owner_id, offset) else { return false; };
+    dst == format!("this.{field}") && ctx.refs.const_object_field_accepts(owner_id, offset, param)
+}
+
 /// Conditional-jump opcode (mirrors `cfg::is_cond_jump`, which is private to that module).
 fn is_cond_op(n: &str) -> bool {
     matches!(
@@ -6033,7 +6053,8 @@ fn block_stmts_in(
                             || member_src
                             || src_is_opindex_elem
                             || this_backlink
-                            || ctx.param_src_ok(&src.s));
+                            || ctx.param_src_ok(&src.s)
+                            || is_exact_const_param_field_store(ctx, insns, k, &src.s, &dst.s));
                     // batch-41d (CLASS 1b): the source slot holds a CONST object handle (a
                     // const-returning call result / const member read). Storing it into a
                     // (non-const) member is a "Can't implicitly convert from 'const T' to 'T'"
@@ -10571,6 +10592,66 @@ mod tests {
             assert!(!stmts.iter().any(|s| s == "(local_2 == nullptr);" || s == "(local_2 != nullptr);"),
                 "{test_op}/{between:?}/{call_op}: {stmts:?}");
         }
+    }
+
+    fn const_parameter_field_store_fixture(
+        refs: &RefResolver, param: DataType, owner: u32, receiver: u16,
+        between: Option<&'static str>, parameter_slot: i32,
+    ) -> String {
+        let mut a = TestAssembler::default();
+        // Exact pr69 store, shared by FWarningCharacterHandle and the four
+        // voice-reaction constructor signatures (after their default field setup).
+        a.op("PshVPtr", &[parameter_slot as i16 as u16], &[]);
+        a.op("PshVPtr", &[receiver], &[]);
+        a.op("ADDSi", &[0], &[owner]);
+        if let Some(op) = between { a.op(op, &[], &[]); }
+        a.op("REFCPY", &[], &[]);
+        a.op("PopPtr", &[], &[]);
+        a.op("RET", &[4], &[]);
+        let fixture = a.finish();
+        let f = FuncCode {
+            func: "FHolder::FHolder".into(), is_method: true,
+            param_names: vec!["Response".into()], param_types: vec![param],
+            ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new(),
+        };
+        let ctx = Ctx {
+            f: &f, refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret),
+            fields: None, param_types: None, class_name: Some("FHolder"), local_types: None,
+            float_slots: Default::default(), param_off_map: HashMap::from([(-2, 0)]),
+            rvo_off: None, keep_ints: None, rvo_switch_region: std::cell::Cell::new(false),
+        };
+        block_stmts(&ctx, 0, fixture.instrs.len()).0.join("\n")
+    }
+
+    #[test]
+    fn direct_const_parameter_store_requires_the_exact_const_field_type() {
+        let refs = RefResolver::from_test_const_object_fields();
+        let param = DataType { token: 5, type_info: 4,
+            is_object_const: true, is_object_handle: true, ..Default::default() };
+        assert_eq!(const_parameter_field_store_fixture(&refs, param.clone(), 1, 0, None, -2),
+            "this.Value = Response;\nreturn;");
+        for field in 0..6 {
+            let mut other = param.clone();
+            match field {
+                0 => other.type_info = 5, // same bare type name, different identity
+                1 => other.is_reference = true,
+                2 => other.is_read_only = true,
+                3 => other.is_object_handle = false,
+                4 => other.is_auto = true,
+                _ => other.if_handle_then_const = true,
+            }
+            assert!(!const_parameter_field_store_fixture(&refs, other, 1, 0, None, -2)
+                .contains(" = Response;"));
+        }
+        for (owner, receiver, between) in [(2, 0, None), (3, 0, None),
+            (1, 8, None), (1, 0, Some("SUSPEND"))]
+        {
+            assert!(!const_parameter_field_store_fixture(&refs, param.clone(), owner, receiver, between, -2)
+                .contains(" = Response;"));
+        }
+        // An unrelated negative offset is not a declared parameter.
+        assert!(!const_parameter_field_store_fixture(&refs, param, 1, 0, None, -4)
+            .contains("this.Value ="));
     }
 
     #[test]

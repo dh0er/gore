@@ -143,6 +143,8 @@ pub struct RefResolver {
     /// modules after build. Lets the emitter fold INHERITED fields into a class's field-type
     /// map (batch-21 Class B: `this.<inherited TMap>.opIndex(int)` needed the enum key wrap).
     class_fields: HashMap<String, HashMap<String, String>>,
+    /// Exact own const-object-field types; ordinary composed field maps remain unchanged.
+    const_object_fields: HashMap<(i64, String), DataType>,
     /// FunctionReferences parameter DataTypes (for arg-type-driven casts at call sites).
     func_params: HashMap<i64, Vec<DataType>>,
     /// Function names the cache records with a callable no-argument form — either a row with no
@@ -557,6 +559,49 @@ impl RefResolver {
     pub fn set_class_hierarchy(&mut self, supers: HashMap<String, String>) {
         self.class_super = supers;
     }
+    /// Sparse qualified field evidence, keyed by the exact serialized owner pointer.
+    /// Ambiguous owner identities or repeated field declarations provide no witness.
+    pub(crate) fn set_const_object_fields(
+        &mut self,
+        fields: impl IntoIterator<Item = (TypeIdentity, String, DataType)>,
+    ) {
+        let mut owners = HashMap::new();
+        for (ptr, owner) in &self.type_identity_by_ptr {
+            owners.entry((owner.module.as_str(), owner.namespace.as_str(), owner.name.as_str()))
+                .and_modify(|known| *known = None).or_insert(Some(*ptr));
+        }
+        let mut qualified = HashMap::new();
+        let mut seen = HashSet::new();
+        for (owner, field, ty) in fields {
+            let Some(Some(ptr)) = owners.get(&(
+                owner.module.as_str(), owner.namespace.as_str(), owner.name.as_str(),
+            )) else { continue; };
+            let key = (*ptr, field);
+            if !seen.insert(key.clone()) {
+                qualified.remove(&key);
+                continue;
+            }
+            if ty.token == 5 && ty.is_object_const && ty.is_object_handle && !ty.is_read_only
+                && self.type_by_ptr.contains_key(&ty.type_info)
+            {
+                qualified.insert(key, ty);
+            }
+        }
+        self.const_object_fields = qualified;
+    }
+
+    pub(crate) fn const_object_field_accepts(&self, owner_id: i32, offset: i32, param: &DataType) -> bool {
+        let Some(owner) = self.typeid_to_ptr.get(&owner_id) else { return false; };
+        let Some(name) = self.member(owner_id, offset) else { return false; };
+        self.const_object_fields.get(&(*owner, name.to_owned())).is_some_and(|field| {
+            field.token == param.token && field.type_info == param.type_info
+                && (field.is_reference, field.is_object_const, field.is_object_handle,
+                    field.is_read_only, field.is_auto, field.if_handle_then_const)
+                == (param.is_reference, param.is_object_const, param.is_object_handle,
+                    param.is_read_only, param.is_auto, param.if_handle_then_const)
+        })
+    }
+
     /// Inject per-class field-type maps (class -> field -> composed type) from parsed modules.
     pub fn set_class_fields(&mut self, fields: HashMap<String, HashMap<String, String>>) {
         self.class_fields = fields;
@@ -1508,6 +1553,32 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_const_object_fields() -> Self {
+        let mut r = Self::default();
+        // Same bare owner in another namespace/module; same bare value type at
+        // a different pointer. None may borrow the first owner's field witness.
+        for (id, module, namespace, name) in [
+            (1, "Fixture", "One", "FHolder"), (2, "Fixture", "Two", "FHolder"),
+            (3, "Other", "One", "FHolder"), (4, "", "First", "UValue"),
+            (5, "", "Second", "UValue"),
+        ] {
+            r.typeid_to_ptr.insert(id, id as i64);
+            r.type_by_ptr.insert(id as i64, name.into());
+            r.type_names.insert(name.into());
+            r.type_identity_by_ptr.insert(id as i64, TypeIdentity {
+                module: module.into(), namespace: namespace.into(), name: name.into(),
+            });
+            if id <= 3 { r.prop_by_key.insert(((id as i64) << 1) | 1, "Value".into()); }
+        }
+        r.set_const_object_fields([(
+            TypeIdentity { module: "Fixture".into(), namespace: "One".into(), name: "FHolder".into() },
+            "Value".into(), DataType { token: 5, type_info: 4,
+                is_object_const: true, is_object_handle: true, ..Default::default() },
+        )]);
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_collision_names(names: &[&str]) -> Self {
         let mut resolver = Self::default();
         for (index, name) in names.iter().enumerate() {
@@ -1819,5 +1890,33 @@ mod tests {
         assert_eq!(refs.field_type_by_class("Mid", "Value"), Some("int"));
         assert_eq!(refs.own_field_type_by_class("Mid", "Value"), None);
         assert_eq!(refs.own_field_type_by_class("Base", "Value"), Some("int"));
+    }
+}
+
+#[cfg(test)]
+mod const_object_field_tests {
+    use super::*;
+
+    #[test]
+    fn qualified_field_evidence_rejects_owner_and_value_type_collisions() {
+        let mut refs = RefResolver::from_test_const_object_fields();
+        let ty = DataType { token: 5, type_info: 4,
+            is_object_const: true, is_object_handle: true, ..Default::default() };
+        assert!(refs.const_object_field_accepts(1, 0, &ty));
+        for owner in [2, 3, 99] { assert!(!refs.const_object_field_accepts(owner, 0, &ty)); }
+        assert!(!refs.const_object_field_accepts(1, 1, &ty));
+        let mut other = ty.clone(); other.type_info = 5;
+        assert!(!refs.const_object_field_accepts(1, 0, &other));
+        let owner = TypeIdentity { module: "Fixture".into(), namespace: "One".into(), name: "FHolder".into() };
+        let mut mutable = ty.clone(); mutable.is_object_const = false;
+        // Both declaration orders must reject a mutable/const duplicate.
+        for declarations in [[ty.clone(), mutable.clone()], [mutable, ty.clone()]] {
+            refs.set_const_object_fields(declarations.into_iter()
+                .map(|field| (owner.clone(), "Value".into(), field)));
+            assert!(!refs.const_object_field_accepts(1, 0, &ty));
+        }
+        refs.type_identity_by_ptr.insert(6, owner.clone());
+        refs.set_const_object_fields([(owner, "Value".into(), ty.clone())]);
+        assert!(!refs.const_object_field_accepts(1, 0, &ty));
     }
 }

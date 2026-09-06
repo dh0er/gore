@@ -14686,6 +14686,14 @@ fn inline_unnamed_value_temporaries(
             if indent_of(consumer) != indent || count_ident(consumer, &name) != 1 {
                 return None;
             }
+            // A declared reference passed as an argument preserves the captured
+            // pointer (CpyRtoV8/PshVPtr). Inlining its getter emits PshRPtr instead.
+            if declared_type(&lines, &name).is_some_and(|ty| ty.ends_with('&'))
+                && call_sites(consumer).iter().any(|(_, args)| args.iter().any(|arg| arg == &name))
+            {
+                inline_reject("reference-argument", "", &name, &lines[at]);
+                return None;
+            }
             // An int slot can hold a bool member or result. Substituting that expression
             // into an int-as-bool comparison would produce invalid `bool != 0` source.
             if (consumer.contains(&format!("{name} != 0"))
@@ -15267,6 +15275,15 @@ fn fold_member_read_temporaries(
             }
             let reader = reader?;
             if !read_once_at(&lines, at, reader, &name) {
+                return None;
+            }
+            // A parameter alias used as a member-store receiver is a named copy.
+            // Keep its RefCpyV (or value copy) instead of redirecting the store to
+            // the parameter itself. Ordinary parameter reads may still fold.
+            if path != "this" && !path.contains('.') && roots.contains_key(&path)
+                && lines[reader].trim_start().starts_with(&format!("{name}."))
+                && assignment_target_is_rooted_at_ident(lines[reader], &name)
+            {
                 return None;
             }
             // An INDEXED read (`X[0].F`) moves only into a reader that calls nothing itself: a
@@ -23126,6 +23143,18 @@ mod condition_identifier_tests {
     }
 
     #[test]
+    fn captured_reference_arguments_keep_their_pointer_local() {
+        for ty in ["FGroup&", "const FGroup&"] {
+            let body = format!("    {ty} local_1 = Find();\n    Use(Character, local_1);\n");
+            assert_eq!(inline_first_life(&body), body);
+        }
+        let returned = "    FGroup& local_1 = Find();\n    return local_1;\n";
+        assert_eq!(inline_first_life(returned), "    return Find();\n");
+        let receiver = "    FGroup& local_1 = Find();\n    local_1.Clear();\n";
+        assert_eq!(inline_first_life(receiver), "    Find().Clear();\n");
+    }
+
+    #[test]
     fn inlining_one_life_preserves_the_next_declaration_and_scope() {
         let body = "    int local_1 = this.First;\n    Use(local_1);\n    local_1 = this.Second;\n    Use(local_1);\n    Use(local_1);\n";
         let expected = "    Use(this.First);\n    int local_1 = this.Second;\n    Use(local_1);\n    Use(local_1);\n";
@@ -24555,5 +24584,36 @@ mod short_circuit_life_name_tests {
         assert_eq!(output, "    local_3_2 = !(Me != nullptr || Other != nullptr);\n");
         let numeric = "    local_3_2 = Value();\n    local_3_2 = -local_3_2;\n";
         assert_eq!(fold_negated_stores(numeric, &HashSet::new()), numeric);
+    }
+}
+
+#[cfg(test)]
+mod parameter_member_store_alias_tests {
+    use super::*;
+
+    fn fold(body: &str, ty: &str) -> String {
+        fold_member_read_temporaries(body, &HashSet::new(), &HashSet::new(),
+            &BTreeMap::from([(2, ty.to_owned())]), None,
+            &HashMap::from([("Data".to_owned(), ty.to_owned())]),
+            &RefResolver::default(), &HashMap::new(), false, &HashSet::new())
+    }
+
+    #[test]
+    fn member_writes_keep_the_parameter_copy_receiver() {
+        for ty in ["USpellExecutionValidatorDataDefault", "FValue"] {
+            for declaration in ["local_2 = Data;".to_owned(), format!("{ty} local_2 = Data;")] {
+                let body = format!("    {declaration}\n    local_2.SourceActor = SourceActor;\n    return;\n");
+                assert_eq!(fold(&body, ty), body);
+            }
+        }
+    }
+
+    #[test]
+    fn read_aliases_still_fold_without_a_member_store() {
+        let body = "    local_2 = Data;\n    return local_2;\n";
+        assert_eq!(fold(body, "UValue"), "    return Data;\n");
+        // A member write unrelated to the alias is not a reason to keep it.
+        let body = "    local_2 = Data;\n    Other.Value = local_2;\n";
+        assert_eq!(fold(body, "UValue"), "    Other.Value = Data;\n");
     }
 }
