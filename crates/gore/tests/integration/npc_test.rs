@@ -149,6 +149,21 @@ fn stage_binds_single_module_commands_to_the_selected_and_configured_cache() {
             cmd
         };
 
+        // Missing or unreadable source must fail before any staging artifacts appear.
+        std::fs::write(&cache, b"checkout cache").unwrap();
+        let source = dir.join("XardasTower_AI.as");
+        let source_error = format!("reading {}", source.display());
+        stage()
+            .assert()
+            .failure()
+            .stderr(contains(source_error.clone()));
+        std::fs::create_dir(&source).unwrap();
+        stage().assert().failure().stderr(contains(source_error));
+        std::fs::remove_dir(&source).unwrap();
+        assert!(!dir.join("spec.json").exists());
+        assert!(!tmp.path().join(format!("{operation}.work")).exists());
+        std::fs::write(&source, "// authored source\n").unwrap();
+
         std::fs::write(&cache, b"different installed cache").unwrap();
         stage().assert().failure().stderr(contains("not the cache"));
         assert!(!dir.join("spec.json").exists());
