@@ -1336,6 +1336,44 @@ fn is_exact_const_param_field_store(
     dst == format!("this.{field}") && ctx.refs.const_object_field_accepts(owner_id, offset, param)
 }
 
+/// A script default temporary is destroyed before the assignment releases its
+/// pointer. A named local reverses those two operations. Require the complete
+/// construction/copy/destruction sequence and no other uses of its frame slot.
+fn script_default_member_copy(
+    ins: &[Instr], at: usize, refs: &RefResolver, source: &str, target: &str,
+) -> Option<String> {
+    let start = at.checked_sub(5)?;
+    let code = ins.get(start..at + 4)?;
+    let expected = ["PSF", "CALL", "PSF", "PshVPtr", "ADDSi", "CopyScript", "PSF", "CALL", "PopPtr"];
+    if !code.iter().zip(expected).all(|(op, name)| op.op.name == name) { return None; }
+    let w = |op: &Instr| op.words.first().map(|v| *v as i16 as i32);
+    let slot = w(&code[0])?;
+    if slot <= 0 || w(&code[2]) != Some(slot) || w(&code[6]) != Some(slot)
+        || w(&code[3]) != Some(0) || source != format!("local_{slot}")
+        || !target.starts_with("this.") || target.contains(['(', '[', '\u{1}', '\u{2}'])
+        || ins.iter().filter(|op| super::bytediff::addressed_slots(op).contains(&slot)).count() != 3
+    { return None; }
+    let ctor = *code[1].dwords.first()? as i32;
+    let owner = refs.script_constructor_type_by_id(ctor)?;
+    let copied = refs.type_identity_by_ptr(*code[5].qwords.first()? as i64)?;
+    if (owner.module.as_str(), owner.namespace.as_str(), owner.name.as_str())
+        != (copied.module.as_str(), copied.namespace.as_str(), copied.name.as_str())
+        || !refs.is_method_by_id(ctor)
+        || !refs.func_params_by_id(ctor).is_some_and(|p| p.is_empty())
+        || !refs.func_ret_by_id(ctor).is_some_and(|r| r.token == 0x52)
+    { return None; }
+    let destructor = *code[7].dwords.first()? as i32;
+    if refs.func_by_id(destructor) != Some(format!("~{}", owner.name).as_str())
+        || refs.func_owner_by_id(destructor) != Some(owner.name.as_str())
+        || !refs.is_method_by_id(destructor)
+        || !refs.func_params_by_id(destructor).is_some_and(|p| p.is_empty())
+        || !refs.func_ret_by_id(destructor).is_some_and(|r| r.token == 0x52)
+    { return None; }
+    let ty = if owner.namespace.is_empty() { owner.name.clone() }
+        else { format!("{}::{}", owner.namespace, owner.name) };
+    Some(format!("{ty}()"))
+}
+
 /// Conditional-jump opcode (mirrors `cfg::is_cond_jump`, which is private to that module).
 fn is_cond_op(n: &str) -> bool {
     matches!(
@@ -6188,7 +6226,9 @@ fn block_stmts_in(
                             }
                         } else if !dst.s.is_empty() && dst.s != UNRESOLVED && dst.s != src.s {
                             flush!();
-                            out.push(format!("{} = {};", dst.s, src.s));
+                            let value = script_default_member_copy(ctx.instrs, lo + k, ctx.refs, &src.s, &dst.s)
+                                .unwrap_or(src.s);
+                            out.push(format!("{} = {};", dst.s, value));
                         }
                     }
                 }
@@ -10652,6 +10692,37 @@ mod tests {
         // An unrelated negative offset is not a declared parameter.
         assert!(!const_parameter_field_store_fixture(&refs, param, 1, 0, None, -4)
             .contains("this.Value ="));
+    }
+
+    #[test]
+    fn script_default_copy_requires_temporary_destructor_order_and_exact_type() {
+        let make = |copy_type: u32, named: bool, extra_use: bool| {
+            let mut a = TestAssembler::default();
+            a.op("PSF", &[50], &[]); a.op("CALL", &[], &[1]);
+            a.op("PSF", &[50], &[]); a.op("PshVPtr", &[0], &[]);
+            a.op("ADDSi", &[0], &[1]); a.op("CopyScript", &[], &[copy_type, 0]);
+            if named { a.op("PopPtr", &[], &[]); }
+            a.op("PSF", &[50], &[]); a.op("CALL", &[], &[2]);
+            if !named { a.op("PopPtr", &[], &[]); }
+            if extra_use { a.op("PSF", &[50], &[]); }
+            a.op("RET", &[2], &[]);
+            let mut fixture = a.finish();
+            fixture.instrs[5].qwords = vec![u64::from(copy_type)];
+            fixture
+        };
+        let refs = RefResolver::from_test_script_default_copy();
+        let good = make(101, false, false);
+        assert_eq!(script_default_member_copy(&good.instrs, 5, &refs, "local_50", "this.Value"),
+            Some("Qualified::FPayload()".into()));
+        for bad in [make(102, false, false), make(101, true, false), make(101, false, true)] {
+            assert!(script_default_member_copy(&bad.instrs, 5, &refs, "local_50", "this.Value").is_none());
+        }
+        for (source, target) in [("local_51", "this.Value"), ("local_50", "__return"),
+            ("local_50", "local_4.Value")]
+        {
+            assert!(script_default_member_copy(&good.instrs, 5, &refs, source, target).is_none());
+        }
+        assert!(script_default_member_copy(&good.instrs, 5, &RefResolver::default(), "local_50", "this.Value").is_none());
     }
 
     #[test]

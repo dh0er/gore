@@ -1592,6 +1592,39 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_pointer_comparison_call(ret: DataType) -> Self {
+        let mut r = Self::from_test_collision_names(&["AActor", "APawn"]);
+        r.func_by_ptr.insert(1, "GetPawn".into());
+        r.func_params.insert(1, Vec::new());
+        r.func_ret.insert(1, ret);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_script_result(ret: DataType) -> Self {
+        let mut r = Self::default();
+        r.funcid_to_ptr.insert(1, 1);
+        r.func_by_ptr.insert(1, "Read".into());
+        r.func_ret.insert(1, ret);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_script_default_copy() -> Self {
+        let mut r = Self::from_test_script_constructors(&["Qualified"], "FPayload", &[]);
+        r.funcid_to_ptr.insert(2, 2);
+        r.func_by_ptr.insert(2, "~FPayload".into());
+        r.func_owner.insert(2, "FPayload".into());
+        r.func_is_method.insert(2);
+        r.func_params.insert(2, Vec::new());
+        r.func_ret.insert(2, DataType { token: 0x52, ..Default::default() });
+        r.type_identity_by_ptr.insert(102, TypeIdentity {
+            name: "FPayload".into(), module: "Synthetic".into(), namespace: "Other".into(),
+        });
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_collision_names(names: &[&str]) -> Self {
         let mut resolver = Self::default();
         for (index, name) in names.iter().enumerate() {

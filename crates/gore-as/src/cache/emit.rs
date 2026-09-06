@@ -1185,6 +1185,7 @@ fn emit_function_ctor(
     // the left was computed was a statement of its own (`int n = Max(1, Count()); return x +
     // (2pi * i) / n;` — vanilla called `Max` before it read `x`).
     statement_producers.extend(statement_operand_slots(f));
+    statement_producers.extend(call_results_before_parameter_comparisons(f, refs, is_method));
     let mut retained_return_copies = copied_widened_return_slots(f, refs);
     retained_return_copies.extend(named_bool_returns.iter().copied());
     statement_producers.extend(retained_return_copies.iter().copied());
@@ -2281,7 +2282,7 @@ fn emit_function_ctor(
         // executor locals to decl-init at their assignment sites.
         let (body, na_suppressed) = rewrite_no_assign_locals(&body, &locals);
         pass_trace("rewrite_no_assign_locals", &body);
-        let (body, discarded) = drop_unread_call_results(&body, &locals, refs);
+        let (body, discarded) = drop_unread_call_results(&body, &locals, refs, &unused_script_handle_results(f, refs));
         pass_trace("drop_unread_call_results", &body);
         // Batch-20 Class A residue: executor locals whose reference shape failed the decl-init
         // gates above (multi-assign with reads, read-before-assign, cross-block reads) still
@@ -7592,6 +7593,24 @@ fn rewrite_no_assign_locals(body: &str, locals: &BTreeMap<i32, String>) -> (Stri
     (out, suppressed)
 }
 
+/// A script handle call captured once into an otherwise untouched slot names
+/// an unused local. Value returns and unknown/native call conventions stay out.
+fn unused_script_handle_results(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(ins) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    ins.windows(2).filter_map(|pair| {
+        if !matches!(pair[0].op.name, "CALL" | "CALLINTF") || pair[1].op.name != "STOREOBJ" {
+            return None;
+        }
+        let id = *pair[0].dwords.first()? as i32;
+        let ret = refs.func_ret_by_id(id)?;
+        if ret.token != 5 || !ret.is_object_handle || ret.is_reference
+            || ret.is_object_const || ret.is_read_only { return None; }
+        let slot = *pair[1].words.first()? as i16 as i32;
+        (slot > 0 && ins.iter().filter(|op| super::bytediff::addressed_slots(op).contains(&slot)).count() == 1)
+            .then_some(slot)
+    }).collect()
+}
+
 /// A local whose every occurrence is `local_N = <call>;` is nothing but a name for the call's
 /// discarded result. Vanilla made the call and destroyed the result where it stood; naming it
 /// costs the declaration and, for a value type, sinks the destructor to the end of the function.
@@ -7601,10 +7620,14 @@ fn drop_unread_call_results(
     body: &str,
     locals: &BTreeMap<i32, String>,
     refs: &RefResolver,
+    stored_handles: &HashSet<i32>,
 ) -> (String, HashSet<i32>) {
     let mut dropped: HashSet<i32> = HashSet::new();
     let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
     for slot in locals.keys() {
+        // An ignored script handle result stays in the register. A sole STOREOBJ
+        // instead proves the source assigned it, even when the local was unused.
+        if stored_handles.contains(slot) { continue; }
         // A PRIMITIVE result reaches a slot only through `CpyRtoV4/8` — the store the source
         // wrote. Discarded, the compiler leaves it in the register; and most bound functions
         // returning one are `nodiscard` (`Math::Sign`: "Result of function Sign() is unused").
@@ -17387,6 +17410,44 @@ fn statement_operand_slots(f: &Func) -> HashSet<i32> {
     out
 }
 
+/// A native handle result evaluated before the comparison's parameter-copy
+/// operand needs its statement position. Inlining it on the right moves that
+/// copy ahead of the call. Both local slots must have this one physical life.
+fn call_results_before_parameter_comparisons(f: &Func, refs: &RefResolver, is_method: bool) -> HashSet<i32> {
+    if super::model::returns_struct_by_value(&f.ret, refs) { return HashSet::new(); }
+    let Ok(instrs) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    let params: Vec<_> = f.params.iter().map(|param| param.ty.clone()).collect();
+    let offsets = super::model::param_slot_map(&params, is_method, false, Some(refs));
+    let word = |ins: &Instr, at: usize| ins.words.get(at).map(|v| *v as i16 as i32);
+    let mut uses = HashMap::<i32, usize>::new();
+    for ins in &instrs {
+        for slot in super::bytediff::addressed_slots(ins) { *uses.entry(slot).or_default() += 1; }
+    }
+    let mut out = HashSet::new();
+    for code in instrs.windows(5) {
+        if code[0].op.name != "CALLSYS" || code[1].op.name != "STOREOBJ"
+            || code[2].op.name != "PshVPtr" || code[3].op.name != "RefCpyV"
+            || code[4].op.name != "CmpPtr"
+        { continue; }
+        let (Some(right), Some(parameter), Some(left)) = (word(&code[1], 0), word(&code[2], 0), word(&code[3], 0))
+            else { continue; };
+        if left <= 0 || right <= 0 || left == right
+            || word(&code[4], 0) != Some(left) || word(&code[4], 1) != Some(right)
+            || uses.get(&left) != Some(&2) || uses.get(&right) != Some(&2)
+        { continue; }
+        let Some(param) = offsets.get(&parameter).and_then(|index| params.get(*index)) else { continue; };
+        if param.token != 5 || !param.is_object_handle || param.is_reference { continue; }
+        let Some(ptr) = code[0].qwords.first().map(|v| *v as i64) else { continue; };
+        if refs.func_by_ptr(ptr).is_some() && refs.func_ret_by_ptr(ptr).is_some_and(|ret| {
+            ret.token == 5 && ret.is_object_handle && !ret.is_reference
+                && refs.type_by_ptr(ret.type_info).is_some()
+        }) {
+            out.insert(right);
+        }
+    }
+    out
+}
+
 /// A copied reference immediately used as a zero-argument value receiver can
 /// require its own name. Ordinary value arguments and RVO receivers give no such proof.
 fn values_named_by_a_direct_handle_store(
@@ -24239,6 +24300,104 @@ mod member_arithmetic_lifetime_tests {
         }
         f.ret.token = 0x44;
         assert!(super::copied_bool_return_carriers(&f, &refs).0.is_empty());
+    }
+
+    fn pointer_comparison_fixture(ops: &[(&str, &[u16])]) -> Func {
+        let mut f = function(ops);
+        f.ret.token = 0x41;
+        f.params.push(crate::cache::model::Param {
+            name: "target".into(), flags: 0,
+            ty: DataType { token: 5, type_info: 1, is_object_handle: true, ..Default::default() },
+        });
+        let ins = super::disassemble(&f.bytecode).unwrap();
+        f.bytecode[ins[0].offset_dw + 1] = 1; // exact native call pointer
+        f
+    }
+
+    #[test]
+    fn earlier_native_handle_result_keeps_its_statement_before_the_parameter_copy() {
+        let code: Vec<(&str, &[u16])> = vec![
+            ("CALLSYS", &[]), ("STOREOBJ", &[10]), ("PshVPtr", &[(-2i16) as u16]),
+            ("RefCpyV", &[12]), ("CmpPtr", &[12, 10]), ("RET", &[4]),
+        ];
+        let refs = RefResolver::from_test_pointer_comparison_call(DataType {
+            token: 5, type_info: 2, is_object_handle: true, ..Default::default()
+        });
+        let mut f = pointer_comparison_fixture(&code);
+        for is_const in [false, true] {
+            f.params[0].ty.is_object_const = is_const;
+            assert_eq!(super::call_results_before_parameter_comparisons(&f, &refs, true), HashSet::from([10]));
+        }
+        let body = "local_10 = GetPawn();\nif (target == local_10)\n{\n    return true;\n}\nreturn false;\n";
+        let locals = std::collections::BTreeMap::from([(10, "APawn".into())]);
+        let call_types = HashMap::from([(10, "APawn".into())]);
+        let empty = HashSet::new();
+        let fold = |witness: &HashSet<i32>| super::inline_call_argument_temporaries(
+            body, &refs, &locals, None, true, &call_types, witness,
+            &empty, &empty, &empty, &empty, &empty, &empty, &empty,
+            &HashMap::new(), &empty, &HashSet::new());
+        assert!(fold(&empty).contains("target == GetPawn()"));
+        assert_eq!(fold(&super::call_results_before_parameter_comparisons(&f, &refs, true)), body);
+    }
+
+    #[test]
+    fn pointer_order_witness_rejects_mirrored_operands_slot_reuse_and_wrong_producers() {
+        let code: Vec<(&str, &[u16])> = vec![
+            ("CALLSYS", &[]), ("STOREOBJ", &[10]), ("PshVPtr", &[(-2i16) as u16]),
+            ("RefCpyV", &[12]), ("CmpPtr", &[12, 10]), ("RET", &[4]),
+        ];
+        let refs = RefResolver::from_test_pointer_comparison_call(DataType {
+            token: 5, type_info: 2, is_object_handle: true, ..Default::default()
+        });
+        for (at, replacement) in [
+            (0, ("CALL", &[][..])), (0, ("CALLINTF", &[][..])),
+            (1, ("CpyRtoV8", &[10][..])), (2, ("PSF", &[(-2i16) as u16][..])),
+            (2, ("PshVPtr", &[0][..])), (2, ("PshVPtr", &[(-3i16) as u16][..])),
+            (4, ("CmpPtr", &[10, 12][..])), (4, ("CmpPtr", &[12, 8][..])),
+        ] {
+            let mut other = code.clone(); other[at] = replacement;
+            assert!(super::call_results_before_parameter_comparisons(&pointer_comparison_fixture(&other), &refs, true).is_empty(), "{other:?}");
+        }
+        for extra in [("STOREOBJ", &[10][..]), ("RefCpyV", &[12][..]), ("PshVPtr", &[10][..])] {
+            let mut other = code.clone(); other.push(extra);
+            assert!(super::call_results_before_parameter_comparisons(&pointer_comparison_fixture(&other), &refs, true).is_empty());
+        }
+        let mut interrupted = code.clone(); interrupted.insert(2, ("CALLSYS", &[]));
+        assert!(super::call_results_before_parameter_comparisons(&pointer_comparison_fixture(&interrupted), &refs, true).is_empty());
+        let f = pointer_comparison_fixture(&code);
+        assert!(super::call_results_before_parameter_comparisons(&f, &refs, false).is_empty());
+        let wrong_return = RefResolver::from_test_pointer_comparison_call(DataType { token: 0x44, ..Default::default() });
+        assert!(super::call_results_before_parameter_comparisons(&f, &wrong_return, true).is_empty());
+        let mut scalar = f.clone(); scalar.params[0].ty = DataType { token: 0x44, ..Default::default() };
+        assert!(super::call_results_before_parameter_comparisons(&scalar, &refs, true).is_empty());
+        let mut rvo = f; rvo.ret = DataType { token: 5, type_info: 2, ..Default::default() };
+        assert!(super::call_results_before_parameter_comparisons(&rvo, &refs, true).is_empty());
+    }
+
+    #[test]
+    fn unused_script_handle_store_survives_discard_folding() {
+        let ret = DataType { token: 5, type_info: 1, is_object_handle: true, ..Default::default() };
+        let refs = RefResolver::from_test_script_result(ret.clone());
+        let mut f = function(&[("CALLINTF", &[]), ("STOREOBJ", &[4]), ("RET", &[0])]);
+        f.bytecode[1] = 1;
+        let keep = super::unused_script_handle_results(&f, &refs);
+        assert_eq!(keep, HashSet::from([4]));
+        let source = "    local_4 = Read();\n    return;\n";
+        let locals = std::collections::BTreeMap::from([(4, "UValue".into())]);
+        assert_eq!(super::drop_unread_call_results(source, &locals, &refs, &keep).0, source);
+        assert_eq!(super::drop_unread_call_results(source, &locals, &refs, &HashSet::new()).0,
+            "    Read();\n    return;\n");
+        for extra in [("STOREOBJ", &[4][..]), ("PshVPtr", &[4][..]), ("FreeNullV8", &[4][..])] {
+            let mut other = f.clone(); other.bytecode.extend(function(&[extra]).bytecode);
+            assert!(super::unused_script_handle_results(&other, &refs).is_empty());
+        }
+        for qualifier in 0..4 {
+            let mut other = ret.clone();
+            match qualifier { 0 => other.is_object_handle = false, 1 => other.is_reference = true,
+                2 => other.is_object_const = true, _ => other.is_read_only = true }
+            assert!(super::unused_script_handle_results(&f, &RefResolver::from_test_script_result(other)).is_empty());
+        }
+        assert!(super::unused_script_handle_results(&f, &RefResolver::default()).is_empty());
     }
 
     #[test]
