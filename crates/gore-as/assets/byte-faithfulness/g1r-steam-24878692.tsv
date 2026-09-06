@@ -70,14 +70,14 @@ AI.States.FightAI.CombatState.CombatBehaviorSets.CombatBehaviorSet	1	0	0
 AI.States.FightAI.CombatState.CombatBehaviorSets.UnreachableEnemy.CombatBehaviorSet_UnreachableEnemy	1	0	0
 AI.States.FightAI.CombatState.CombatMoves	29	0	0
 AI.States.FightAI.CombatState.CombatOperations	1	0	0
-AI.States.FightAI.CombatState.CombatSituations	7	0	0
+AI.States.FightAI.CombatState.CombatSituations	5	0	0
 AI.States.FightAI.CombatState.CombatTestClasses	1	0	0
 AI.States.FightAI.CombatState.Positioning.AICombat_Positioning	16	0	0
 AI.States.FightAI.DisengageBehavior.AIState_Disengage	2	0	0
 AI.States.FightAI.FearState.AIState_Fear	2	0	0
 AI.States.FightAI.FleeState.AIState_Flee	2	0	0
 AI.States.FightAI.GoGetGuardState.AIState_GoGetGuard	2	0	0
-AI.States.FightAI.ManagedFightSubsystem	5	0	0
+AI.States.FightAI.ManagedFightSubsystem	4	0	0
 AI.States.FightAI.SearchState.AIState_Search	10	0	0
 AI.States.FightAI.SleeperFight.CorKalom_Sleeper.LordDemon.Components.MadCorKalomDemonFightComponent	1	0	0
 AI.States.FightAI.SleeperFight.CorKalom_Sleeper.LordDemon.GEs_CorKalomDemon_Sleeper	1	0	0
@@ -91,7 +91,7 @@ AI.States.FightAI.SleeperFight.SC_NOV_Lester_Sleeper.SleeperFight_LesterCombat	2
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.GA_Summon_XardasSleeper_Skeleton	1	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.GA_Xardas_Sleeper_FightManager	3	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpotManager	1	0	0
-AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpot_XardasSleeper	4	0	0
+AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpot_XardasSleeper	3	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.TraceTarget_XardasSleeper	1	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.Xardas_Sleeper_Minion_BillboardComponent	1	0	0
 AI.States.FightAI.WaitStates.AIState_Observe_Creeping	1	0	0
@@ -141,7 +141,7 @@ GAS.Abilities.Spells.ExecutionValidator.Derived.Spell.Telekinesis.CastSpell_Exec
 GAS.Abilities.Spells.Spells.Base.GA_Spell_BasicWithTarget	1	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_SpawnRechargeableProjectile	2	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_Targetable	1	0	0
-GAS.Abilities.Spells.Spells.Electric.ChainLightning.GA_Spell_ChainLightning	9	0	0
+GAS.Abilities.Spells.Spells.Electric.ChainLightning.GA_Spell_ChainLightning	8	0	0
 GAS.Abilities.Spells.Spells.Electric.GA_Spell_BallLightning	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_Fireball	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_StormOfFire	1	0	0
@@ -149,7 +149,7 @@ GAS.Abilities.Spells.Spells.Light.GA_Spell_Light	1	0	0
 GAS.Abilities.Spells.Spells.Summon.Base.GA_Spell_Summon	2	0	0
 GAS.Abilities.Spells.Spells.Summon.SpawnHelper.Base.SummonSpawnPlaceHelper	3	0	0
 GAS.Abilities.Spells.Spells.Summon.SpawnHelper.CircleSummonSpawnPlaceHelper	3	0	0
-GAS.Abilities.Spells.Spells.Telekinesis.GA_Spell_Telekinesis	2	0	0
+GAS.Abilities.Spells.Spells.Telekinesis.GA_Spell_Telekinesis	1	0	0
 GAS.Abilities.Spells.Spells.Telekinesis.GA_Spell_Telekinesis_FocusStoneBridge	1	0	0
 GAS.Abilities.Spells.Spells.Telekinesis.TelekinesisItemMovementVisual	1	0	0
 GAS.Abilities.Spells.Spells.Transform.GA_Spell_Transform	2	0	0
@@ -171,7 +171,7 @@ GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Drugs.Base.DrugDebuf
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Sleep.GA_SleepDebuffEffectGameplayAbility	1	0	0
 GAS.Effects.Debuffs.EffectStateComponent.DebuffEffectActors.SlowdownDebuffEffectActor	1	0	0
 GAS.Effects.Tests.Effect_GiveExperience	1	0	0
-GAS.GASCharacterMixins	7	0	0
+GAS.GASCharacterMixins	6	0	0
 GAS.GASCharacterStateMixins	19	0	0
 GAS.PerceptionEventMixins	1	0	0
 Gameplay.Environment.BattleBlockingBarrier.BattleBarrierVisual	1	0	0

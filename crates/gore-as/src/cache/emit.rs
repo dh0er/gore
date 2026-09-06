@@ -1166,6 +1166,8 @@ fn emit_function_ctor(
     bool_overrides.extend(not_operand_slots(f));
     bool_overrides.extend(bool_call_result_slots(f, refs));
     bool_overrides.extend(comparison_result_slots(f));
+    let returned_bools = canonical_bool_return_slots(f, refs);
+    bool_overrides.extend(returned_bools.iter().copied());
     // The type each slot's captured call result actually has — the witness the operand gates
     // need to tell a plain read from a read the declaration converts.
     let call_result_types = call_result_types(f, refs);
@@ -1258,6 +1260,7 @@ fn emit_function_ctor(
     // int-family hints below only describe how a value is passed.
     let mut proven_bool = not_operand_slots(f);
     proven_bool.extend(comparison_result_slots(f));
+    proven_bool.extend(returned_bools);
     proven_bool.extend(copied_bool_slots(f));
     proven_bool.extend(
         call_result_types
@@ -2719,8 +2722,9 @@ fn emit_function_ctor(
         // array behind the compare that read `Num()`, not behind `Num()` — a local destroyed
         // at the `return`, and inlining it moved the destructor in front of the compare.
         let rvo_temporaries: HashSet<i32> = rvo_temporary_slots(f, refs)
-            .difference(&rvo_declared)
-            .copied()
+            .into_iter()
+            .chain(destroyed_fstring_operator_receivers(f, refs, &rvo_producers, &rvo_consumers))
+            .filter(|slot| !rvo_declared.contains(slot))
             .filter(|slot| !named_iterated.contains(slot))
             .collect();
         let f64_arithmetic_temps = strict_f64_arithmetic_temp_slots(f);
@@ -4696,6 +4700,41 @@ fn infer_enum_flow(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
             .map(|slot| (*slot, ret_enum.clone())),
     );
     propagate_proven_enum_slots(&instrs, seeds)
+}
+
+/// A bool return carrier may be read four bytes wide. Its every write must still
+/// be a canonical bool: a byte literal or the immediately materialized comparison.
+fn canonical_bool_return_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    if f.ret.base_name(refs) != "bool" { return HashSet::new(); }
+    let Ok(instrs) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    let slot = |ins: &super::disasm::Instr, at: usize|
+        ins.words.get(at).map(|word| *word as i16 as i32);
+    let candidates: HashSet<i32> = instrs.windows(2)
+        .filter(|pair| pair[0].op.name == "CpyVtoR4" && pair[1].op.name == "RET")
+        .filter_map(|pair| slot(&pair[0], 0)).filter(|slot| *slot > 0).collect();
+    candidates.into_iter().filter(|candidate| {
+        let mut written = false;
+        let safe = instrs.iter().enumerate().all(|(at, ins)| {
+            if !super::bytediff::addressed_slots(ins).contains(candidate) { return true; }
+            match ins.op.name {
+                "SetV1" => {
+                    written = true;
+                    slot(ins, 0) == Some(*candidate) && ins.dwords.first().is_some_and(|v| *v <= 1)
+                }
+                "CpyVtoV4" => {
+                    written = true;
+                    slot(ins, 0) == Some(*candidate) && at >= 2
+                        && matches!(instrs[at - 2].op.name, "TZ" | "TNZ" | "TS" | "TNS" | "TP" | "TNP")
+                        && instrs[at - 1].op.name == "CpyRtoV4"
+                        && slot(ins, 1) == slot(&instrs[at - 1], 0)
+                }
+                "CpyVtoR4" => slot(ins, 0) == Some(*candidate)
+                    && instrs.get(at + 1).is_some_and(|next| next.op.name == "RET"),
+                _ => false,
+            }
+        });
+        written && safe
+    }).collect()
 }
 
 fn bool_slot_profile_is_safe(instrs: &[super::disasm::Instr], slot: i32) -> bool {
@@ -12056,9 +12095,15 @@ fn fold_compound_assignments(
     fields: Option<&HashMap<String, String>>,
     roots: &HashMap<String, String>,
     refs: &RefResolver,
-    literal_only: bool,
+    late: bool,
 ) -> String {
     const OPERATORS: [&str; 7] = [" + ", " - ", " * ", " / ", " | ", " & ", " ^ "];
+    let late_update_is_safe = |path: &str, operator: &str, addend: &str| {
+        let f64_type = |ty: &str| matches!(ty, "float" | "double");
+        matches!(operator.trim(), "+" | "-") && (addend.parse::<i32>().is_ok()
+            || (roots.get(addend).is_some_and(|ty| f64_type(ty))
+                && type_of_member_path(path, fields, roots, refs).is_some_and(|ty| f64_type(&ty))))
+    };
     let pure_member_path = |path: &str| {
         path.contains('.')
             && !path.is_empty()
@@ -12092,10 +12137,9 @@ fn fold_compound_assignments(
             })?;
             let operator = OPERATORS.iter().find(|op| rest.starts_with(**op))?;
             let addend = &rest[operator.len()..];
-            // The late pass sees expressions the inliner has just reconstructed.
-            // Compound assignment evaluates a computed addend before the member,
-            // so only the proven immediate integer updates may fold there.
-            if literal_only && (!matches!(operator.trim(), "+" | "-") || addend.parse::<i32>().is_err()) {
+            // A plain same-width scalar is already evaluated. Computed addends
+            // and field reads must retain their position relative to the target.
+            if late && !late_update_is_safe(target, operator, addend) {
                 return None;
             }
             // A literal addend is materialised BEFORE the member is loaded in the compound
@@ -12161,10 +12205,9 @@ fn fold_compound_assignments(
                 return refuse("operator");
             };
             let addend = &rest[operator.len()..];
-            // The late pass sees expressions the inliner has just reconstructed.
-            // Compound assignment evaluates a computed addend before the member,
-            // so only the proven immediate integer updates may fold there.
-            if literal_only && (!matches!(operator.trim(), "+" | "-") || addend.parse::<i32>().is_err()) {
+            // A plain same-width scalar is already evaluated. Computed addends
+            // and field reads must retain their position relative to the target.
+            if late && !late_update_is_safe(path, operator, addend) {
                 return None;
             }
             // `X.F = local_N;` — the target is a member path, which `slot_store` also refuses.
@@ -12574,6 +12617,66 @@ fn argument_list(line: &str, open: usize) -> Option<(Vec<String>, usize)> {
         }
     }
     None
+}
+
+/// A single-life FString operator result destroyed directly after its receiver call.
+/// Its three frame references are the producer's out-pointer, the consumer's receiver,
+/// and the destructor. Other operands may be evaluated between the two operator calls.
+fn destroyed_fstring_operator_receivers(
+    f: &Func,
+    refs: &RefResolver,
+    producers: &[(i32, usize)],
+    consumers: &[(i32, usize)],
+) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    let mut uses: HashMap<i32, Vec<usize>> = HashMap::new();
+    let mut produced: HashMap<i32, HashSet<usize>> = HashMap::new();
+    let consumed: HashSet<(i32, usize)> = consumers.iter().copied().collect();
+    for &(slot, at) in producers { produced.entry(slot).or_default().insert(at); }
+    let mut epoch = 0usize;
+    let mut epochs = Vec::with_capacity(instrs.len());
+    for (at, ins) in instrs.iter().enumerate() {
+        if ins.op.name.starts_with('J') || matches!(ins.op.name, "RET" | "SUSPEND") { epoch += 1; }
+        epochs.push(epoch);
+        for slot in super::bytediff::addressed_slots(ins) {
+            if slot > 0 { uses.entry(slot).or_default().push(at); }
+        }
+    }
+    let is_add = |at: usize| {
+        let Some(ins) = instrs.get(at).filter(|i| i.op.name == "CALLSYS") else { return false; };
+        let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
+        if refs.func_by_ptr(ptr) != Some("opAdd") || !refs.is_method_by_ptr(ptr)
+            || refs.func_owner_by_ptr(ptr) != Some("FString")
+        { return false; }
+        let (Some(params), Some(ret)) = (refs.func_params_by_ptr(ptr), refs.func_ret_by_ptr(ptr))
+            else { return false; };
+        let [arg] = params else { return false; };
+        arg.token == 5 && arg.is_reference && !arg.is_object_handle
+            && (arg.is_object_const || arg.is_read_only)
+            && ret.token == 5 && !ret.is_reference && !ret.is_object_handle
+            && arg.type_info == ret.type_info && refs.type_by_ptr(ret.type_info) == Some("FString")
+    };
+    let mut out = HashSet::new();
+    for (slot, positions) in uses {
+        let [destination, receiver, release] = positions.as_slice() else { continue; };
+        let (producer, consumer) = (destination + 2, receiver + 1);
+        if *destination == 0 || producer >= *receiver || *release != consumer + 1
+            || !produced.get(&slot).is_some_and(|p| p.len() == 1 && p.contains(&producer))
+            || !consumed.contains(&(slot, consumer)) || !is_add(producer) || !is_add(consumer)
+            || epochs[producer] != epochs[consumer]
+        { continue; }
+        // Both binary method frames are exactly PSF argument; PSF out; PSF receiver.
+        if ![destination - 1, *destination, destination + 1,
+              receiver.saturating_sub(2), receiver.saturating_sub(1), *receiver, *release]
+            .iter().all(|at| instrs.get(*at).is_some_and(|i| i.op.name == "PSF"))
+        { continue; }
+        let Some(dtor) = instrs.get(release + 1).filter(|i| i.op.name == "CALLSYS") else { continue; };
+        let ptr = dtor.qwords.first().copied().unwrap_or(0) as i64;
+        if refs.func_by_ptr(ptr) == Some("$beh2") && refs.func_owner_by_ptr(ptr) == Some("FString") {
+            out.insert(slot);
+        }
+    }
+    out
 }
 
 /// Slots that carry a by-value call result the source never named.
@@ -23434,6 +23537,36 @@ mod member_arithmetic_lifetime_tests {
 
 
     #[test]
+    fn boolean_return_merges_accept_only_byte_literals_and_comparison_copies() {
+        let code: Vec<(&str, &[u16])> = vec![
+            ("SetV1", &[4]), ("TZ", &[]), ("CpyRtoV4", &[5]),
+            ("CpyVtoV4", &[4, 5]), ("CpyVtoR4", &[4]), ("RET", &[0]),
+        ];
+        let mut f = function(&code);
+        f.ret.token = 0x41;
+        assert_eq!(super::canonical_bool_return_slots(&f, &RefResolver::default()), HashSet::from([4]));
+        f.ret.token = 0x44;
+        assert!(super::canonical_bool_return_slots(&f, &RefResolver::default()).is_empty());
+        f.ret.token = 0x41;
+        f.bytecode[1] = 3; // a byte-wide enum constant is not a canonical bool
+        assert!(super::canonical_bool_return_slots(&f, &RefResolver::default()).is_empty());
+        for (at, replacement) in [
+            (0, ("SetV4", &[4][..])),
+            (1, ("CALLSYS", &[][..])),
+            (3, ("CpyVtoV4", &[4, 6][..])),
+            (3, ("CpyVtoV4", &[6, 4][..])),
+            (3, ("PSF", &[4][..])),
+            (3, ("RDR8", &[4][..])),
+        ] {
+            let mut other = code.clone();
+            other[at] = replacement;
+            let mut f = function(&other);
+            f.ret.token = 0x41;
+            assert!(!super::canonical_bool_return_slots(&f, &RefResolver::default()).contains(&4), "{other:?}");
+        }
+    }
+
+    #[test]
     fn double_arithmetic_reuses_slots_only_after_one_consumer_and_folds_life_suffixes() {
         let ops: Vec<(&str, &[u16])> = vec![
             ("RDR8", &[12]), ("SetV8", &[14]), ("SUBd", &[12, 12, 14]),
@@ -23560,11 +23693,57 @@ mod late_compound_order_tests {
     use std::collections::HashMap;
 
     #[test]
+    fn late_plain_double_addends_fold_only_with_matching_member_type() {
+        let fields = HashMap::from([("Elapsed".into(), "float".into()), ("Count".into(), "int".into())]);
+        let roots = HashMap::from([("DeltaTime".into(), "float".into())]);
+        for (line, expected) in [
+            ("this.Elapsed = this.Elapsed + DeltaTime;", "this.Elapsed += DeltaTime;"),
+            ("this.Elapsed = this.Elapsed - DeltaTime;", "this.Elapsed -= DeltaTime;"),
+            ("this.Elapsed = this.Elapsed + this.Interval;", "this.Elapsed = this.Elapsed + this.Interval;"),
+            ("this.Elapsed = this.Elapsed + (DeltaTime * 0.5);", "this.Elapsed = this.Elapsed + (DeltaTime * 0.5);"),
+            ("this.Elapsed = this.Elapsed + 1.0;", "this.Elapsed = this.Elapsed + 1.0;"),
+            ("this.Count = this.Count + DeltaTime;", "this.Count = this.Count + DeltaTime;"),
+        ] {
+            assert_eq!(fold_compound_assignments(line, Some(&fields), &roots,
+                &RefResolver::default(), true), expected);
+        }
+    }
+
+    #[test]
     fn late_integer_updates_fold_but_computed_addends_keep_the_original_read_order() {
         let body = "    local_40.Z = local_40.Z + (local_8.Height * 0.5);\n    local_28.Counter = (local_28.Counter + 1);\n";
         let actual = fold_compound_assignments(body, None, &HashMap::new(), &RefResolver::default(), true);
         assert_eq!(actual, "    local_40.Z = local_40.Z + (local_8.Height * 0.5);\n    local_28.Counter += 1;\n");
         let carried = "    float local_4 = local_40.Z;\n    local_4 = local_4 + Compute();\n    local_40.Z = local_4;\n";
         assert_eq!(fold_compound_assignments(carried, None, &HashMap::new(), &RefResolver::default(), true), carried);
+    }
+}
+
+#[cfg(test)]
+mod destroyed_fstring_receiver_text_tests {
+    use super::*;
+
+    fn inline(body: &str, witnessed: bool) -> String {
+        let slots = if witnessed { HashSet::from([16]) } else { HashSet::new() };
+        let defs = slots.iter().copied().map(|s| (s, 1)).collect();
+        inline_unnamed_value_temporaries(body, &defs, &HashSet::new(), &slots,
+            &RefResolver::from_test_collision_names(&["FString"]), &HashSet::new(),
+            &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(),
+            &HashSet::new(), &HashSet::new())
+    }
+
+    #[test]
+    fn witnessed_string_operator_receiver_keeps_grouping_and_call_order() {
+        let body = "    FString local_16 = (this.A.GetDisplayName() + FString(\" AND \"));\n    local_4.Append((local_16 + this.B.GetDisplayName()));\n";
+        assert_eq!(inline(body, true), "    local_4.Append(((this.A.GetDisplayName() + FString(\" AND \")) + this.B.GetDisplayName()));\n");
+        assert_eq!(inline(body, false), body);
+    }
+
+    #[test]
+    fn receiver_witness_does_not_bypass_use_count_or_intervening_work() {
+        for body in [
+            "    FString local_16 = (this.A.GetDisplayName() + FString(\" OR \"));\n    local_4.Append((local_16 + local_16));\n",
+            "    FString local_16 = (this.A.GetDisplayName() + FString(\" OR \"));\n    Touch();\n    local_4.Append((local_16 + this.B.GetDisplayName()));\n",
+        ] { assert_eq!(inline(body, true), body); }
     }
 }
