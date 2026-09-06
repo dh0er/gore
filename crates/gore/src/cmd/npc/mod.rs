@@ -1282,7 +1282,14 @@ fn stage_workspace(
     let path = cache_path(cache, game.clone())?;
     let route = stage::route_of(&manifest);
     let game = match route {
-        stage::Route::SingleModule => Some(stage::compiler_game_for(&manifest, &path, game)?),
+        stage::Route::SingleModule => {
+            let edit = manifest
+                .level_edit()
+                .context("the manifest names no edited module")?;
+            let source = dir.join(&edit.source_file);
+            fs::read_to_string(&source).with_context(|| format!("reading {}", source.display()))?;
+            Some(stage::compiler_game_for(&manifest, &path, game)?)
+        }
         stage::Route::FullTree => game,
     };
 
