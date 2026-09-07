@@ -748,23 +748,12 @@ fn compile_report_with_available_product_package(
     // While a script mod is installed the compiler base is the deployment backup, which the
     // game compiler cannot restore over the live cache: `standalone_then_game` runs the
     // standalone compiler only and says so in its evidence.
-    let game_fallback_note = pristine_source
-        .as_ref()
-        .filter(|source| source.from_backup)
-        .map(|source| {
-            format!(
-                "the game fallback is unavailable while a script mod is installed: the compiler \
-                 base is the deployment backup {}, which the game compiler cannot restore over \
-                 the live cache",
-                source.path.display()
-            )
-        });
-    let effective =
-        if requested == CompilerBackendWireV2::StandaloneThenGame && game_fallback_note.is_some() {
-            CompilerBackendWireV2::Standalone
-        } else {
-            requested
-        };
+    let game_fallback_note = skipped_game_fallback_note(requested, pristine_source.as_ref());
+    let effective = if game_fallback_note.is_some() {
+        CompilerBackendWireV2::Standalone
+    } else {
+        requested
+    };
     let game_dir = PathBuf::from(&payload.game_dir);
     let staging = match OwnedCompileStaging::create(Path::new(&payload.work_dir), &game_dir) {
         Ok(staging) => staging,
@@ -1086,6 +1075,26 @@ fn qualified_target_pristine_script_cache(
     let target_matches_pristine = qualified_shipping == pristine.as_slice()
         && selected.is_none_or(|source| source.matches(qualified_shipping));
     Ok((pristine, target_matches_pristine))
+}
+
+/// Why standalone_then_game skips its game fallback, when it does: the compiler base is the
+/// deployment backup, which the game compiler cannot restore over the live cache. Only that
+/// policy has a fallback to skip; a strict standalone or game request never gets this note.
+fn skipped_game_fallback_note(
+    requested: CompilerBackendWireV2,
+    pristine_source: Option<&gore_mod::PristineScriptCacheSource>,
+) -> Option<String> {
+    if requested != CompilerBackendWireV2::StandaloneThenGame {
+        return None;
+    }
+    pristine_source
+        .filter(|source| source.from_backup)
+        .map(|source| {
+            format!(
+                "the game fallback is unavailable while a script mod is installed: the compiler base is the deployment backup {}, which the game compiler cannot restore over the live cache",
+                source.path.display()
+            )
+        })
 }
 
 /// The pristine base the mini was remapped against must still be the deployment-aware original
@@ -1975,6 +1984,67 @@ mod tests {
             message.contains("changed during compilation"),
             "got: {message}"
         );
+    }
+
+    /// Only `standalone_then_game` has a game fallback to skip. A strict `standalone` request
+    /// that fails while a script mod is installed must not report a skipped fallback.
+    #[test]
+    fn a_skipped_game_fallback_is_only_evidence_for_standalone_then_game() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let script = game.join("G1R/Script");
+        fs::create_dir_all(&script).unwrap();
+        let live = script.join("PrecompiledScript_Shipping.Cache");
+        fs::write(&live, b"pristine").unwrap();
+        let untouched = gore_mod::pristine_script_cache_source(&game).unwrap();
+        let backup = PathBuf::from(format!("{}.gore-bak", live.display()));
+        fs::write(&backup, b"pristine").unwrap();
+        fs::write(&live, b"deployed").unwrap();
+        let recorded_live = fs::canonicalize(&live).unwrap();
+        let recorded_backup = fs::canonicalize(&backup).unwrap();
+        let identity = |bytes: &[u8]| format!("sha256:{:x}", Sha256::digest(bytes));
+        let mut record = gore_mod::DeployRecord {
+            mod_name: "fixture".to_owned(),
+            backups: vec![(
+                recorded_live.display().to_string(),
+                recorded_backup.display().to_string(),
+                true,
+            )],
+            ..Default::default()
+        };
+        record
+            .deployed_hashes
+            .insert(recorded_live.display().to_string(), identity(b"deployed"));
+        record
+            .backup_hashes
+            .insert(recorded_backup.display().to_string(), identity(b"pristine"));
+        fs::write(
+            game.join("gore-mod.deployed.json"),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+        let installed = gore_mod::pristine_script_cache_source(&game).unwrap();
+        assert!(installed.from_backup);
+
+        assert!(
+            skipped_game_fallback_note(CompilerBackendWireV2::Standalone, Some(&installed))
+                .is_none()
+        );
+        assert!(
+            skipped_game_fallback_note(CompilerBackendWireV2::Game, Some(&installed)).is_none()
+        );
+        assert!(skipped_game_fallback_note(
+            CompilerBackendWireV2::StandaloneThenGame,
+            Some(&untouched)
+        )
+        .is_none());
+        assert!(
+            skipped_game_fallback_note(CompilerBackendWireV2::StandaloneThenGame, None).is_none()
+        );
+        let note =
+            skipped_game_fallback_note(CompilerBackendWireV2::StandaloneThenGame, Some(&installed))
+                .expect("standalone_then_game skips its game fallback on a backup-pinned base");
+        assert!(note.contains("game fallback is unavailable"), "got: {note}");
     }
 
     fn request(payload: Value) -> String {
