@@ -264,8 +264,10 @@ fn check_revision3_project_compiler_v2_inner(input: &str) -> Result<Value, Failu
             "detail": note,
         })
     });
-    let standalone_only =
-        requested == CompilerBackendWireV2::Standalone || early_installed.is_some();
+    // An empty project needs no compiler at all, so a skipped fallback must not turn a package
+    // failure into an error there; only a strict standalone request keeps that behaviour.
+    let standalone_only = requested == CompilerBackendWireV2::Standalone
+        || (early_installed.is_some() && !graph.modules.is_empty());
     if requested != CompilerBackendWireV2::Game {
         match resolve_product_standalone_compiler_for_game_v1(&game_root) {
             Ok(ResolvedProductStandaloneCompilerV1::Available(resolved)) => {
