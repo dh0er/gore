@@ -1316,6 +1316,25 @@ fn materialized_comparison(c: &Cmp) -> Option<String> {
         .then(|| format!("({} {op} {})", c.a, c.b))
 }
 
+/// A REFCPY through a declared mutable handle-reference parameter is a real output store.
+/// Require its exact frame address and a compatible typed local source, not a bare-name guess.
+fn is_ref_handle_parameter_store(ctx: &Ctx, code: &[Instr], at: usize, src: &Arg, dst: &Arg) -> bool {
+    let Some(chain) = at.checked_sub(2).and_then(|start| code.get(start..at + 2)) else { return false; };
+    if !chain.iter().map(|i| i.op.name).eq(["PshVPtr", "PshVPtr", "REFCPY", "PopPtr"]) { return false; }
+    let word = |i: &Instr| i.words.first().map(|w| s16(*w));
+    let (Some(source), Some(target)) = (word(&chain[0]), word(&chain[1])) else { return false; };
+    if source <= 0 || target > 0 || src.s != ctx.slot_name(source) || dst.s != ctx.slot_name(target) {
+        return false;
+    }
+    let Some(param) = ctx.param_off_map.get(&target).and_then(|index| ctx.f.param_types.get(*index))
+        else { return false; };
+    if param.token != 5 || !param.is_reference || !param.is_object_handle
+        || param.is_read_only || param.is_object_const { return false; }
+    let (Some(target_type), Some(source_type)) = (ctx.refs.type_by_ptr(param.type_info), src.ty.as_deref())
+        else { return false; };
+    source_type == target_type || provably_derived(source_type, target_type, ctx.refs)
+}
+
 /// Const parameters remain excluded unless this exact bytecode store targets a
 /// field with the same fully qualified DataType in the serialized owner metadata.
 fn is_exact_const_param_field_store(
@@ -3254,7 +3273,9 @@ fn block_stmts_in(
     let selection = stack.is_empty().then(|| local_lvalue_selection(ctx, lo)).flatten()
         .filter(|_| insns.len() >= 2);
     let skip = if let Some(selection) = selection { out.push(selection.statement); 2 } else { 0 };
+    let mut skip_until = skip;
     for k in skip..insns.len() {
+        if k < skip_until { continue; }
         let ins = &insns[k];
         CUR_INSTR.with(|c| c.set(lo + k));
         let n = ins.op.name;
@@ -3759,6 +3780,38 @@ fn block_stmts_in(
                 // call's ret DataType.is_reference (data-driven from the cache).
                 if ref_reg.is_none() && pending.is_some() && pending_is_ref {
                     let p = pending.take().unwrap();
+                    // A closed mutable-int reference update must evaluate its lvalue once.
+                    // Ordinary RDR consumption below forgets that address before WRTV.
+                    let immediate_update = (|| {
+                        if n != "RDR4" || k == 0 || !p.ends_with(')') || !p.contains('(')
+                            || p.contains(['\u{1}', '\u{2}']) || p == UNRESOLVED { return None; }
+                        let call = &insns[k - 1];
+                        if call.op.name != "CALLSYS" { return None; }
+                        let ret = ctx.refs.func_ret_by_ptr(*call.qwords.first()? as i64)?;
+                        if ret.token != 0x44 || !ret.is_reference || ret.is_object_handle
+                            || ret.is_object_const || ret.is_read_only { return None; }
+                        let (add, store) = (insns.get(k + 1)?, insns.get(k + 2)?);
+                        let slot = w(ins, 0);
+                        if slot <= 0 || add.op.name != "ADDIi" || store.op.name != "WRTV4"
+                            || w(add, 0) != slot || w(add, 1) != slot || w(store, 0) != slot {
+                            return None;
+                        }
+                        // No later value read or unrelated physical-slot life may lose its store.
+                        if ctx.instrs.iter().enumerate().any(|(at, other)|
+                            !(lo + k..=lo + k + 2).contains(&at)
+                                && super::bytediff::addressed_slots(other).contains(&slot)) {
+                            return None;
+                        }
+                        Some(*add.dwords.first()? as i32)
+                    })();
+                    if let Some(amount) = immediate_update {
+                        out.push(format!("{p} += {amount};"));
+                        skip_until = k + 3;
+                        pending_ty = None;
+                        pending_const = false;
+                        pending_is_ref = false;
+                        continue;
+                    }
                     let dst_slot = w(ins, 0);
                     let dst_is_int = dst_slot > 0 && ctx.slot_type(dst_slot).is_none();
                     // Mirror the member-RDR wraps below: an UNKNOWN/object-typed or float-family
@@ -6119,7 +6172,8 @@ fn block_stmts_in(
                     //  prove (mirrors the RefCpyV arm's original caution — copying a const
                     //  param/member handle into a non-const dest fails "Can't implicitly convert";
                     //  `this` back-links stay bailed, `param_src_ok` never matches `this`).
-                    let dst_ok = dst.s.contains('.')
+                    let dst_ok = (dst.s.contains('.')
+                        || is_ref_handle_parameter_store(ctx, insns, k, src, dst))
                         && !dst.s.is_empty()
                         && dst.s != UNRESOLVED
                         && !dst.s.contains('\u{2}');
@@ -10903,6 +10957,91 @@ mod tests {
             assert!(script_default_member_copy(&good.instrs, 5, &refs, source, target).is_none());
         }
         assert!(script_default_member_copy(&good.instrs, 5, &RefResolver::default(), "local_50", "this.Value").is_none());
+    }
+
+    #[test]
+    fn native_mutable_int_reference_update_keeps_one_call_and_real_store() {
+        let render = |ret: DataType, add_dst: u16, add_src: u16, store_src: u16,
+            intervening_call: bool, later_read: bool| {
+            let refs = RefResolver::from_test_pointer_comparison_call(ret);
+            let mut a = TestAssembler::default();
+            a.op("CALLSYS", &[], &[1, 0]);
+            a.op("RDR4", &[39], &[]);
+            if intervening_call { a.op("CALLSYS", &[], &[1, 0]); }
+            a.op("ADDIi", &[add_dst, add_src], &[1]);
+            a.op("WRTV4", &[store_src], &[]);
+            if later_read { a.op("CpyVtoV4", &[40, 39], &[]); }
+            a.op("RET", &[0], &[]);
+            let mut fixture = a.finish();
+            for ins in &mut fixture.instrs {
+                if ins.op.name == "CALLSYS" { ins.qwords = vec![1]; }
+            }
+            let f = FuncCode { func: "Fixture::Update".into(), is_method: false,
+                param_names: Vec::new(), param_types: Vec::new(),
+                ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+            let ctx = Ctx {
+                f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret),
+                fields: None, param_types: None, class_name: None, local_types: None,
+                float_slots: Default::default(), param_off_map: HashMap::new(), rvo_off: None,
+                keep_ints: None, rvo_switch_region: std::cell::Cell::new(false),
+            };
+            block_stmts(&ctx, 0, fixture.instrs.len()).0.join("\n")
+        };
+        let reference = || DataType { token: 0x44, is_reference: true, ..Default::default() };
+        let good = render(reference(), 39, 39, 39, false, false);
+        assert_eq!(good.matches("GetPawn()").count(), 1, "{good}");
+        assert!(good.contains("GetPawn() += 1;"), "{good}");
+        assert!(!good.contains("local_39"), "{good}");
+        for ret in [DataType { token: 0x44, ..Default::default() },
+            DataType { is_read_only: true, ..reference() },
+            DataType { token: 0x50, ..reference() }] {
+            let out = render(ret, 39, 39, 39, false, false);
+            assert!(!out.contains(" += "), "{out}");
+        }
+        for (dst, src, store, call, read) in [(40, 39, 39, false, false),
+            (39, 40, 39, false, false), (39, 39, 40, false, false),
+            (39, 39, 39, true, false), (39, 39, 39, false, true)] {
+            let out = render(reference(), dst, src, store, call, read);
+            assert!(!out.contains(" += "), "{out}");
+        }
+    }
+
+    #[test]
+    fn handle_reference_parameters_keep_their_typed_output_store() {
+        let render = |param: DataType, source_type: &str, target: i16, source_opcode: &'static str| {
+            let refs = RefResolver::from_test_member_chain(&[("AGothicCharacter", "")]);
+            let mut a = TestAssembler::default();
+            a.op(source_opcode, &[10], &[]);
+            a.op("PshVPtr", &[target as u16], &[]);
+            a.op("REFCPY", &[], &[]);
+            a.op("PopPtr", &[], &[]);
+            a.op("RET", &[0], &[]);
+            let fixture = a.finish();
+            let f = FuncCode { func: "Fixture::Read".into(), is_method: true,
+                param_names: vec!["Result".into()], param_types: vec![param],
+                ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+            let locals = HashMap::from([(10, source_type.to_owned())]);
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: None, param_types: None, class_name: None,
+                local_types: Some(&locals), float_slots: Default::default(),
+                param_off_map: HashMap::from([(-2, 0)]), rvo_off: None, keep_ints: None,
+                rvo_switch_region: std::cell::Cell::new(false) };
+            block_stmts(&ctx, 0, fixture.instrs.len()).0.join("\n")
+        };
+        let param = DataType { token: 5, type_info: 1, is_reference: true,
+            is_object_handle: true, ..Default::default() };
+        let out = render(param.clone(), "AGothicCharacter", -2, "PshVPtr");
+        assert!(out.contains("Result = local_10;"), "{out}");
+        for other in [DataType { is_reference: false, ..param.clone() },
+            DataType { is_object_handle: false, ..param.clone() },
+            DataType { is_read_only: true, ..param.clone() },
+            DataType { is_object_const: true, ..param.clone() },
+            DataType { type_info: 42, ..param.clone() }] {
+            assert!(!render(other, "AGothicCharacter", -2, "PshVPtr").contains("Result ="));
+        }
+        assert!(!render(param.clone(), "UOther", -2, "PshVPtr").contains("Result ="));
+        assert!(!render(param.clone(), "AGothicCharacter", -4, "PshVPtr").contains("Result ="));
+        assert!(!render(param, "AGothicCharacter", -2, "PSF").contains("Result ="));
     }
 
     #[test]
