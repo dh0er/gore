@@ -2916,6 +2916,44 @@ pub(crate) const LOOP_BACK_EDGE: &str = "//__gore_back_edge";
 /// `//__gore_ctor <slot>`: a default construction of a local the structurer met at this point.
 pub(crate) const CTOR_SITE: &str = "//__gore_ctor";
 
+/// A local default construction before the return object's construction is a
+/// declaration. Substituting T() would move that construction behind the RVO one.
+fn default_local_precedes_rvo(ctx: &Ctx, name: &str) -> bool {
+    (|| {
+        let slot: i32 = name.strip_prefix("local_")?.parse().ok()?;
+        let ret = ctx.ret_ty?;
+        let code = ctx.instrs;
+        if slot <= 0 || ret.token != 5 || ret.is_reference || ret.is_object_handle
+            || code.iter().map(|i| i.op.name).ne(["PSF", "CALLSYS", "PshVPtr", "CALLSYS",
+                "PSF", "PshVPtr", "CALLSYS", "PSF", "CALLSYS", "RET"])
+            || ctx.slot_type(slot).as_deref() != Some(ret.base_name(ctx.refs).as_str()) { return None; }
+        let w = |i: &Instr| i.words.first().copied().unwrap_or(0) as i16 as i32;
+        let ptr = |i: &Instr| i.qwords.first().copied().unwrap_or(0) as i64;
+        if [0, 4, 7].iter().any(|at| w(&code[*at]) != slot)
+            || ctx.rvo_off != Some(w(&code[2])) || w(&code[2]) != w(&code[5])
+            || ptr(&code[1]) != ptr(&code[3]) { return None; }
+        let owner = ctx.refs.type_by_ptr(ret.type_info)?;
+        for (at, name) in [(1, "$beh0"), (3, "$beh0"), (8, "$beh2")] {
+            let p = ptr(&code[at]);
+            if ctx.refs.func_by_ptr(p) != Some(name) || !ctx.refs.is_method_by_ptr(p)
+                || ctx.refs.func_owner_by_ptr(p) != Some(owner)
+                || ctx.refs.func_params_by_ptr(p).is_none_or(|args| !args.is_empty())
+                || ctx.refs.func_ret_by_ptr(p).is_none_or(|r| r.token != 0x52 || r.is_reference)
+            { return None; }
+        }
+        let assign = ptr(&code[6]);
+        let [arg] = ctx.refs.func_params_by_ptr(assign)? else { return None; };
+        let result = ctx.refs.func_ret_by_ptr(assign)?;
+        if ctx.refs.func_by_ptr(assign) != Some("opAssign") || !ctx.refs.is_method_by_ptr(assign)
+            || ctx.refs.func_owner_by_ptr(assign) != Some(owner)
+            || arg.token != 5 || arg.type_info != ret.type_info || arg.is_object_handle
+            || !arg.is_reference || !(arg.is_read_only || arg.is_object_const)
+            || result.token != 5 || result.type_info != ret.type_info || !result.is_reference
+            || result.is_object_handle || result.is_read_only || result.is_object_const { return None; }
+        Some(())
+    })().is_some()
+}
+
 /// Preserve a single default construction whose cleanup appears on multiple paths.
 /// Counting constructors as well as destructors excludes separate temporary lives
 /// that reuse a slot, including a fresh `return T()` in each return arm.
@@ -6793,6 +6831,7 @@ fn block_stmts_in(
                 .strip_suffix(&format!(" = {slot};"))
                 .filter(|lhs| count_word(lhs, slot) == 0)
             {
+                if lhs == "__return" && default_local_precedes_rvo(ctx, slot) { continue; }
                 *statement = format!("{lhs} = {value};");
                 continue;
             }
@@ -11494,6 +11533,46 @@ mod tests {
             (false, false, "JNZ", Some("const AActor")), (false, false, "JNZ", Some("AActor&"))] {
             let other = render_lvalue_selection(true, entry, wrong, jump, ty, true);
             assert!(!other.contains(" ? "), "{other}");
+        }
+    }
+
+    #[test]
+    fn default_return_order_requires_the_whole_typed_assignment_life() {
+        let make = |extra: bool, mismatch: bool| {
+            let mut a = TestAssembler::default();
+            a.op("PSF", &[4], &[]); a.op("CALLSYS", &[], &[1, 0]);
+            a.op("PshVPtr", &[(-2i16) as u16], &[]); a.op("CALLSYS", &[], &[1, 0]);
+            a.op("PSF", &[4], &[]); a.op("PshVPtr", &[(-2i16) as u16], &[]);
+            a.op("CALLSYS", &[], &[2, 0]); a.op("PSF", &[if mismatch { 6 } else { 4 }], &[]);
+            a.op("CALLSYS", &[], &[3, 0]);
+            if extra { a.op("PSF", &[4], &[]); }
+            a.op("RET", &[4], &[]);
+            let mut fixture = a.finish();
+            for ins in &mut fixture.instrs {
+                if ins.op.name == "CALLSYS" { ins.qwords = vec![ins.dwords[0] as u64]; }
+            }
+            fixture
+        };
+        for (fault, extra, mismatch, rvo, local_ty) in [(0, false, false, -2, "TArray<FEntry>"),
+            (1, false, false, -2, "TArray<FEntry>"), (2, false, false, -2, "TArray<FEntry>"),
+            (3, false, false, -2, "TArray<FEntry>"), (4, false, false, -2, "TArray<FEntry>"),
+            (0, true, false, -2, "TArray<FEntry>"), (0, false, true, -2, "TArray<FEntry>"),
+            (0, false, false, -4, "TArray<FEntry>"), (0, false, false, -2, "TArray<FOther>")]
+        {
+            let refs = RefResolver::from_test_named_default_rvo_return(fault);
+            let fixture = make(extra, mismatch);
+            let f = FuncCode { func: "Fixture::Read".into(), is_method: true, param_names: Vec::new(),
+                param_types: Vec::new(), ret: DataType { token: 5, type_info: 101, ..Default::default() },
+                bytecode: Vec::new() };
+            let locals = HashMap::from([(4, local_ty.into())]);
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: None, param_types: None, class_name: None,
+                local_types: Some(&locals), float_slots: Default::default(), param_off_map: HashMap::new(),
+                rvo_off: Some(rvo), keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+            let expected = fault == 0 && !extra && !mismatch && rvo == -2 && local_ty == "TArray<FEntry>";
+            assert_eq!(default_local_precedes_rvo(&ctx, "local_4"), expected,
+                "{fault}/{extra}/{mismatch}/{rvo}/{local_ty}");
+            assert!(!default_local_precedes_rvo(&ctx, "local_6"));
         }
     }
 

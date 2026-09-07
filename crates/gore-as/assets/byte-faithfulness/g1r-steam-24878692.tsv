@@ -17,7 +17,7 @@ AI.AIAgent.Creature.Minecrawler.Queen.Abilities.GA_MCQueenPhaseChangeHit	1	0	0
 AI.AIAgent.Creature.Molerat.CombatSituations_Molerat	1	0	0
 AI.AIAgent.Creature.Scavenger.Rideable.Components.GothicMountComponentAS	2	0	0
 AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.SoulHarvest.GA_Spell_SoulHarvest_SkeletonMage	1	0	0
-AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.SoulHarvest.SoulHarvest_Visual	3	0	0
+AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.SoulHarvest.SoulHarvest_Visual	2	0	0
 AI.AIAgent.Creature.Troll.TC_TrollAdult_01.CombatMoves_TrollAdult	1	0	0
 AI.AIAgent.Human.Config.OCR_GRD_Scatty_210.DailyRoutine_OCR_GRD_Scatty_210	2	0	0
 AI.AIAgent.Orc.Combat.Staff.Spells.StormOfFire.GA_Spell_StormOfFire_Orc	1	0	0
@@ -91,7 +91,7 @@ AI.States.FightAI.WaitStates.AIState_WaitForBlockedPath	2	0	0
 AI.States.FightAI.WaitStates.AIState_WaitWaryOfNearbyPerceivedCharacter	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_ComplainAboutBlockedPath	1	0	0
-AI.States.FightAI.WarningState.AIState_Warning_Creature	2	0	0
+AI.States.FightAI.WarningState.AIState_Warning_Creature	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_Crime	11	0	0
 AI.States.FightAI.WatchFightState.AIGroup_WatchFight	2	0	0
 AI.States.FightAI.WatchFightState.AIState_WatchFight	18	0	0
@@ -140,10 +140,7 @@ GAS.Abilities.Spells.Visuals.Environment.ElectrifiedArea_FocusStonePuzzle	1	0	0
 GAS.Abilities.Spells.Visuals.Fire.FireRainVisual	2	0	0
 GAS.Abilities.Spells.Visuals.Fire.InnosPrayVisual	2	0	0
 GAS.Abilities.Spells.Visuals.Light.LightVisual	2	0	0
-GAS.Abilities.Spells.Visuals.Projectile.Base.ProjectileDamageExplosionVisual	1	0	0
-GAS.Abilities.Spells.Visuals.SphereExplosion.SphereExplosionSpellVisual	1	0	0
 GAS.Abilities.Spells.Visuals.UrizielWaveOfDeath.UrizielWaveOfDeathVisual	1	0	0
-GAS.Abilities.Spells.Visuals.VisualShapes.CollisionShapeVisual	1	0	0
 GAS.Abilities.Spells.Visuals.Wind.StormFistVisual	1	0	0
 GAS.Abilities.TraceTarget.Base.GA_TraceTarget_Base	1	0	0
 GAS.Abilities.TraceTarget.Derived.GA_TraceTarget_Item	1	0	0
@@ -192,5 +189,5 @@ Story.G1R.Conversation.Conversation_UL_ORG_BLACKMAILER_888	2	0	0
 Story.G1R.Conversation.Conversation_UL_OSL_UrShak_2200	1	0	0
 Story.G1R.Conversation.Conversation_UL_STT_CAVALORN_336	1	0	0
 Story.G1R.Conversation.Conversation_XT_DMB_XARDAS_404	1	0	0
-Story.Support.DialogImport	3	0	0
+Story.Support.DialogImport	2	0	0
 Story.Support.G1R.StoryFunctions	1	0	0

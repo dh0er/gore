@@ -389,8 +389,35 @@ fn delegate_wrapper_decl(c: &Class, refs: &RefResolver) -> Option<String> {
     Some(format!(
         "{kw} {ret} {}({});\n\n",
         c.name,
-        render_params(carrier, refs)
+        render_params(carrier, refs, &delegate_int32_parameters(carrier, refs))
     ))
+}
+
+/// Delegate generation distinguishes the int32 spelling through its native
+/// argument-push thunk even though the cache gives int and int32 the same token.
+fn delegate_int32_parameters(f: &Func, refs: &RefResolver) -> HashSet<usize> {
+    if f.ret.token != 0x52 || f.ret.is_reference { return HashSet::new(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+    let offsets = super::model::param_slot_map(&params, true, false, Some(refs));
+    code.windows(2).filter_map(|pair| {
+        if pair[0].op.name != "PSF" || pair[1].op.name != "CALLSYS" { return None; }
+        let slot = *pair[0].words.first()? as i16 as i32;
+        let index = *offsets.get(&slot)?;
+        let ty = &params[index];
+        let ptr = *pair[1].qwords.first()? as i64;
+        let [arg] = refs.func_params_by_ptr(ptr)? else { return None; };
+        let integer = |t: &super::types::DataType| t.token == 0x44 && t.type_info == 0
+            && !t.is_object_handle && !t.is_auto && !t.if_handle_then_const;
+        if slot >= 0 || !integer(ty) || ty.is_reference || !integer(arg)
+            || !arg.is_reference || !arg.is_object_const || !arg.is_read_only
+            || refs.func_by_ptr(ptr) != Some("__Evt_PushArgument__int32")
+            || refs.is_method_by_ptr(ptr)
+            || refs.func_ret_by_ptr(ptr).is_none_or(|r| r.token != 0x52 || r.is_reference)
+            || code.iter().filter(|i| super::bytediff::addressed_slots(i).contains(&slot)).count() != 1
+            { return None; }
+        Some(index)
+    }).collect()
 }
 
 /// Qualify a rendered declaration type with its namespace when the name alone would not resolve.
@@ -888,7 +915,7 @@ fn emit_function_ctor(
     } else {
         f.ret.render(refs)
     };
-    let params = render_params(f, refs);
+    let params = render_params(f, refs, &HashSet::new());
     // NOTE: the signature is written AFTER the body is computed (below) — the ref-return `&`
     // rendering must know whether the body falls back to a stub / RVODEF default return.
 
@@ -1226,6 +1253,7 @@ fn emit_function_ctor(
     let aliased = handle_alias_slots(f);
     let copied_on = copied_on_slots(f);
     let mut hoisted = hoisted_handle_slots(f);
+    hoisted.extend(named_literal_string_scopes(f, refs, is_method));
     // A handle vanilla RELEASED was a declared local: this compiler frees no handle temporary
     // and no handle at function scope, only a block's own locals at the block's end.
     let released_handles = released_handle_slots(f, refs);
@@ -1970,6 +1998,7 @@ fn emit_function_ctor(
     pass_trace("fold_enum_round_trips", &body);
     let mut member_copy_named = member_copy_named_slots(f);
     member_copy_named.extend(parameter_field_read_store_copies(f, refs, is_method));
+    member_copy_named.extend(parameter_member_comparison_copies(f, refs, is_method));
     let native_handle_reads = native_handle_read_types(f, refs);
     let early_receivers = early_member_receiver_copies(f, refs);
     let body = fold_member_read_temporaries(
@@ -3056,12 +3085,15 @@ fn param_sig(f: &Func, refs: &RefResolver) -> String {
         .join(",")
 }
 
-fn render_params(f: &Func, refs: &RefResolver) -> String {
+fn render_params(f: &Func, refs: &RefResolver, int32_parameters: &HashSet<usize>) -> String {
     f.params
         .iter()
         .enumerate()
         .map(|(i, p)| {
-            let ty = p.ty.render(refs);
+            let mut ty = p.ty.render(refs);
+            if int32_parameters.contains(&i) && matches!(ty.as_str(), "int" | "const int") {
+                ty = ty.replacen("int", "int32", 1);
+            }
             // ParameterFlags: 1=in (asTM_INREF), 2=out, 3=inout (asTM_*); &-ref when reference
             let amp = if p.ty.is_reference {
                 match p.flags & 3 {
@@ -16236,6 +16268,51 @@ fn member_copy_named_slots(f: &Func) -> HashSet<i32> {
     out
 }
 
+/// Compare a saved parameter handle with a subsequently read member handle.
+/// Both aliases have exactly one typed copy and one comparison use.
+fn parameter_member_comparison_copies(f: &Func, refs: &RefResolver, is_method: bool) -> HashSet<i32> {
+    if !is_method || f.ret.token != 0x52 { return HashSet::new(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+    let offsets = super::model::param_slot_map(&params, true, false, Some(refs));
+    let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+    code.windows(7).filter_map(|run| {
+        if run.iter().map(|i| i.op.name).ne(["PshVPtr", "RefCpyV", "PshVPtr", "ADDSi",
+            "RDSPtr", "RefCpyV", "CmpPtr"]) { return None; }
+        let source = w(&run[0], 0)?;
+        let param = params.get(*offsets.get(&source)?)?;
+        let slot = w(&run[1], 0)?; let other = w(&run[5], 0)?;
+        if source >= 0 || slot <= 0 || other <= 0 || slot == other || w(&run[2], 0) != Some(0)
+            || w(&run[6], 0) != Some(slot) || w(&run[6], 1) != Some(other)
+            || param.token != 5 || !param.is_object_handle || param.is_reference
+            || param.is_object_const || param.is_read_only { return None; }
+        let identity = refs.type_identity_by_ptr(param.type_info)?;
+        for alias in [slot, other] {
+            let locals: Vec<_> = f.obj_locals.iter().filter(|(s, _)| *s == alias).collect();
+            if locals.len() != 1 || refs.type_identity_by_ptr(locals[0].1)? != identity
+                || code.iter().filter(|i| super::bytediff::addressed_slots(i).contains(&alias)).count() != 2
+                { return None; }
+        }
+        let tid = *run[3].dwords.first()? as i32;
+        let (field, old) = refs.member_identity(tid, w(&run[3], 0)?)?;
+        let owner = refs.type_identity_by_id(tid)?;
+        let field_ty = refs.own_field_type_by_class(&owner.name, field)?;
+        let param_ty = param.base_name(refs);
+        if refs.type_identity_by_id(old)? != owner
+            || !is_object_handle_type(field_ty) || field_ty.starts_with("const ")
+            // The native hierarchy omits ACharacter -> AActor. A* field handles
+            // still convert to AActor, as the paired raw RefCpyV records here.
+            || (field_ty != param_ty && !(param_ty == "AActor" && field_ty.starts_with('A')))
+            || !is_object_handle_type(&identity.name)
+            || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J')
+                && i.dwords.first().is_some_and(|v| {
+                    let target = i.offset_dw as i64 + 2 + *v as i32 as i64;
+                    target > run[0].offset_dw as i64 && target <= run[6].offset_dw as i64
+                }))) { return None; }
+        Some(slot)
+    }).collect()
+}
+
 /// Preserve a parameter handle copied before its field is assigned to this.
 /// The alias has one complete, same-typed life; both native/script property rows agree.
 fn parameter_field_read_store_copies(f: &Func, refs: &RefResolver, is_method: bool) -> HashSet<i32> {
@@ -21361,6 +21438,45 @@ fn block_scoped_value_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
         }
     }
     out
+}
+
+/// The literal string has one complete physical life and survives a later
+/// zero-argument void statement. Reuse the block-release witness early only for
+/// this typed shape; its other slots may represent unrelated later lives.
+fn named_literal_string_scopes(f: &Func, refs: &RefResolver, is_method: bool) -> HashSet<i32> {
+    let candidate = (|| {
+        if !is_method || f.ret.token != 0x52 || f.ret.is_reference { return None; }
+        let code = disassemble(&f.bytecode).ok()?;
+        let tail = code.len().checked_sub(5).filter(|n| *n > 3)?;
+        if code[..3].iter().map(|i| i.op.name).ne(["PGA", "PSF", "CALLSYS"])
+            || code[tail..].iter().map(|i| i.op.name).ne(["PshVPtr", "CALL", "PSF", "CALLSYS", "RET"])
+            || code.iter().any(|i| i.op.name.starts_with('J')) { return None; }
+        let w = |i: &Instr| i.words.first().copied().unwrap_or(0) as i16 as i32;
+        let ptr = |i: &Instr| i.qwords.first().copied().unwrap_or(0) as i64;
+        let slot = w(&code[1]);
+        if slot <= 0 || w(&code[tail]) != 0 || !refs.global_is_string(ptr(&code[0]))
+            || code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&slot))
+                .map(|(at, i)| (at, i.op.name)).ne([(1, "PSF"), (3, "PSF"), (tail + 2, "PSF")])
+            { return None; }
+        let locals: Vec<_> = f.obj_locals.iter().filter(|(s, _)| *s == slot).collect();
+        if locals.len() != 1 || refs.type_by_ptr(locals[0].1) != Some("FString") { return None; }
+        let ctor = ptr(&code[2]); let dtor = ptr(&code[tail + 3]);
+        for (p, name) in [(ctor, "$beh0"), (dtor, "$beh2")] {
+            if refs.func_by_ptr(p) != Some(name) || !refs.is_method_by_ptr(p)
+                || refs.func_owner_by_ptr(p) != Some("FString")
+                || refs.func_ret_by_ptr(p).is_none_or(|r| r.token != 0x52 || r.is_reference) { return None; }
+        }
+        let [arg] = refs.func_params_by_ptr(ctor)? else { return None; };
+        let id = *code[tail + 1].dwords.first()? as i32;
+        if arg.token != 5 || arg.type_info != locals[0].1 || arg.is_object_handle || !arg.is_reference
+            || !(arg.is_object_const || arg.is_read_only)
+            || refs.func_params_by_ptr(dtor).is_none_or(|p| !p.is_empty())
+            || !refs.is_method_by_id(id) || refs.func_params_by_id(id).is_none_or(|p| !p.is_empty())
+            || refs.func_ret_by_id(id).is_none_or(|r| r.token != 0x52 || r.is_reference)
+            || !block_scoped_value_slots(f, refs).contains(&slot) { return None; }
+        Some(slot)
+    })();
+    candidate.into_iter().collect()
 }
 
 /// The slot a REFERENCE return travels out through.
@@ -26962,6 +27078,95 @@ mod member_arithmetic_lifetime_tests {
         assert!(super::never_read_constructed_slots(&rvo, &refs).is_empty());
     }
 
+    fn default_array_return_fixture(local_first: bool) -> Func {
+        let (first, first_slot, second, second_slot) = if local_first {
+            ("PSF", 4, "PshVPtr", (-2i16) as u16)
+        } else { ("PshVPtr", (-2i16) as u16, "PSF", 4) };
+        let mut f = function(&[(first, &[first_slot]), ("CALLSYS", &[]),
+            (second, &[second_slot]), ("CALLSYS", &[]), ("PSF", &[4]),
+            ("PshVPtr", &[(-2i16) as u16]), ("CALLSYS", &[]),
+            ("PSF", &[4]), ("CALLSYS", &[]), ("RET", &[4])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, ptr) in [(1, 1), (3, 1), (6, 2), (8, 3)] { f.bytecode[code[at].offset_dw + 1] = ptr; }
+        f.ret = DataType { token: 5, type_info: 101, ..Default::default() };
+        f.obj_locals.push((4, 101));
+        f
+    }
+
+    #[test]
+    fn named_default_array_return_survives_structuring_markers_and_all_value_folds() {
+        let refs = RefResolver::from_test_named_default_rvo_return(0);
+        let mut source = String::new();
+        super::emit_function(&mut source, &default_array_return_fixture(true), &refs, true, false, 0);
+        assert!(source.contains("TArray<FEntry> local_4;"), "{source}");
+        assert!(source.contains("return local_4;"), "{source}");
+        assert!(!source.contains("return TArray<FEntry>()"), "{source}");
+        let mut temporary = String::new();
+        super::emit_function(&mut temporary, &default_array_return_fixture(false), &refs, true, false, 0);
+        assert!(temporary.contains("return TArray<FEntry>();"), "{temporary}");
+        assert!(!temporary.contains("TArray<FEntry> local_4;"), "{temporary}");
+    }
+
+    fn literal_string_scope_fixture() -> Func {
+        let mut f = function(&[("PGA", &[]), ("PSF", &[4]), ("CALLSYS", &[]),
+            ("PSF", &[4]), ("PSF", &[38]), ("PshVPtr", &[0]), ("CALLINTF", &[]),
+            ("PSF", &[38]), ("PshVPtr", &[0]), ("CALLSYS", &[]),
+            ("PSF", &[38]), ("CALLSYS", &[]), ("PshVPtr", &[0]), ("CALL", &[]),
+            ("PSF", &[4]), ("CALLSYS", &[]), ("RET", &[2])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, ptr) in [(0, 100), (2, 1), (6, 2), (9, 4), (11, 5), (13, 6), (15, 3)] {
+            f.bytecode[code[at].offset_dw + 1] = ptr;
+        }
+        f.ret.token = 0x52;
+        f.obj_locals = vec![(4, 101), (38, 102)];
+        f
+    }
+
+    #[test]
+    fn literal_string_lifetime_survives_the_early_argument_inliner() {
+        let refs = RefResolver::from_test_literal_string_scope(0);
+        let f = literal_string_scope_fixture();
+        let keep = super::named_literal_string_scopes(&f, &refs, true);
+        assert_eq!(keep, HashSet::from([4]));
+        let body = "    local_4 = FString(\"Warning\");\n    this.Use(this.Setup(local_4));\n    this.Later();\n    return;\n";
+        let locals = BTreeMap::from([(4, "FString".into())]);
+        let fold = |hoisted: &HashSet<i32>| super::inline_call_argument_temporaries(body, &refs,
+            &locals, None, true, &HashMap::new(), &HashSet::new(), &HashSet::new(),
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), hoisted,
+            &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new());
+        assert!(fold(&HashSet::new()).contains("this.Setup(FString(\"Warning\"))"));
+        assert_eq!(fold(&keep), body);
+        let mut source = String::new();
+        super::emit_function(&mut source, &f, &refs, true, false, 0);
+        assert!(source.contains("FString local_4 = \"Warning\";"), "{source}");
+        assert!(source.contains("Setup(local_4)"), "{source}");
+    }
+
+    #[test]
+    fn literal_string_early_keep_rejects_other_lives_and_unproven_metadata() {
+        let f = literal_string_scope_fixture();
+        for fault in 1..=5 {
+            assert!(super::named_literal_string_scopes(&f,
+                &RefResolver::from_test_literal_string_scope(fault), true).is_empty(), "{fault}");
+        }
+        let refs = RefResolver::from_test_literal_string_scope(0);
+        assert!(super::named_literal_string_scopes(&f, &refs, false).is_empty());
+        let code = disassemble(&f.bytecode).unwrap();
+        for fault in 0..5 {
+            let mut other = f.clone();
+            match fault {
+                0 => other.obj_locals.push((4, 101)),
+                1 => { other.bytecode.splice(code[12].offset_dw..code[12].offset_dw,
+                    function(&[("SetV4", &[4])]).bytecode); },
+                2 => { other.bytecode.splice(code[12].offset_dw..code[12].offset_dw,
+                    function(&[("JMP", &[])]).bytecode); },
+                3 => other.bytecode[code[12].offset_dw] |= 2 << 16,
+                _ => other.bytecode[code[14].offset_dw] ^= 2 << 16,
+            }
+            assert!(super::named_literal_string_scopes(&other, &refs, true).is_empty(), "raw {fault}");
+        }
+    }
+
     #[test]
     fn unused_constructor_retention_keeps_only_the_placed_bare_declaration() {
         let refs = RefResolver::from_test_native_default_constructor("FVector", 0, true);
@@ -27347,6 +27552,73 @@ mod member_arithmetic_lifetime_tests {
         let expected = returning.replace("        DeadInOuter();\n", "")
             .replace("    DeadAfter();\n", "");
         assert_eq!(super::drop_unreachable_statements(returning), expected);
+    }
+
+    #[test]
+    fn parameter_comparison_keeps_the_copy_before_the_member_read() {
+        let refs = RefResolver::from_test_parameter_field_comparison(DataType::default(), false);
+        let mut f = function(&[("PshVPtr", &[(-2i16) as u16]), ("RefCpyV", &[2]),
+            ("PshVPtr", &[0]), ("ADDSi", &[0]), ("RDSPtr", &[]), ("RefCpyV", &[4]),
+            ("CmpPtr", &[2, 4]), ("RET", &[4])]);
+        f.ret.token = 0x52;
+        f.params.push(crate::cache::model::Param { name: "Actor".into(), flags: 0,
+            ty: DataType { token: 5, type_info: 2, is_object_handle: true, ..Default::default() } });
+        f.obj_locals = vec![(2, 2), (4, 2)];
+        let code = disassemble(&f.bytecode).unwrap(); f.bytecode[code[3].offset_dw + 1] = 1;
+        let keep = super::parameter_member_comparison_copies(&f, &refs, true);
+        assert_eq!(keep, HashSet::from([2]));
+        let body = "    local_2 = Actor;\n    local_4 = this.Target;\n    if (local_2 == local_4)\n    {\n        this.Target = nullptr;\n    }\n";
+        let locals = BTreeMap::from([(2, "UNode".into()), (4, "UNode".into())]);
+        let roots = HashMap::from([("Actor".into(), "UNode".into())]);
+        assert_eq!(super::fold_member_read_temporaries(body, &HashSet::new(), &HashSet::new(),
+            &locals, None, &roots, &refs, &HashMap::new(), false, &keep,
+            &HashSet::new(), &HashMap::new()), body);
+        for fault in 0..5 {
+            let mut other = f.clone();
+            match fault {
+                0 => other.params[0].ty.is_object_const = true,
+                1 => other.obj_locals[1].1 = 1,
+                2 => other.obj_locals.push((2, 2)),
+                3 => other.bytecode.extend(function(&[("PshVPtr", &[2])]).bytecode),
+                _ => other.bytecode[code[6].offset_dw + 1] ^= 1,
+            }
+            assert!(super::parameter_member_comparison_copies(&other, &refs, true).is_empty(), "{fault}");
+        }
+        assert!(super::parameter_member_comparison_copies(&f,
+            &RefResolver::from_test_parameter_field_comparison(DataType::default(), true), true).is_empty());
+        assert_eq!(super::parameter_member_comparison_copies(&f,
+            &RefResolver::from_test_parameter_comparison_upcast(0), true), HashSet::from([2]));
+        for fault in [1, 2] {
+            assert!(super::parameter_member_comparison_copies(&f,
+                &RefResolver::from_test_parameter_comparison_upcast(fault), true).is_empty());
+        }
+    }
+
+    #[test]
+    fn delegate_int32_spelling_requires_the_exact_typed_native_argument_push() {
+        let mut f = function(&[("PSF", &[(-2i16) as u16]), ("CALLSYS", &[]), ("RET", &[3])]);
+        f.ret.token = 0x52; f.bytecode[2] = 1;
+        f.params.push(crate::cache::model::Param { name: "Value".into(), flags: 0,
+            ty: DataType { token: 0x44, is_object_const: true, is_read_only: true, ..Default::default() } });
+        let refs = RefResolver::from_test_delegate_int32_push(0);
+        let spellings = super::delegate_int32_parameters(&f, &refs);
+        assert_eq!(spellings, HashSet::from([0]));
+        assert_eq!(super::render_params(&f, &refs, &spellings), "const int32 Value");
+        assert_eq!(super::render_params(&f, &refs, &HashSet::new()), "const int Value");
+        for fault in 1..=4 {
+            assert!(super::delegate_int32_parameters(&f,
+                &RefResolver::from_test_delegate_int32_push(fault)).is_empty(), "{fault}");
+        }
+        for fault in 0..4 {
+            let mut other = f.clone();
+            match fault {
+                0 => other.params[0].ty.token = 0x41,
+                1 => other.bytecode[0] &= 0xffff,
+                2 => other.ret.token = 5,
+                _ => other.bytecode.extend(function(&[("PSF", &[(-2i16) as u16])]).bytecode),
+            }
+            assert!(super::delegate_int32_parameters(&other, &refs).is_empty(), "{fault}");
+        }
     }
 
     #[test]

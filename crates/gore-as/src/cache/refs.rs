@@ -1616,6 +1616,51 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_named_default_rvo_return(fault: u8) -> Self {
+        let mut r = Self::from_test_native_default_constructor("TArray", 0, true);
+        r.type_by_ptr.insert(102, "FEntry".into()); r.type_names.insert("FEntry".into());
+        r.type_subtypes.insert(101, vec![DataType { token: 5, type_info: 102, ..Default::default() }]);
+        for (id, name) in [(2, "opAssign"), (3, "$beh2")] {
+            r.func_by_ptr.insert(id, name.into()); r.func_owner.insert(id, "TArray".into());
+            r.func_is_method.insert(id); r.func_params.insert(id, Vec::new());
+        }
+        r.func_params.insert(2, vec![DataType { token: 5, type_info: if fault == 1 { 102 } else { 101 },
+            is_reference: true, is_read_only: fault != 2, ..Default::default() }]);
+        r.func_ret.insert(2, DataType { token: 5, type_info: 101, is_reference: true, ..Default::default() });
+        r.func_ret.insert(3, DataType { token: 0x52, ..Default::default() });
+        if fault == 3 { r.func_owner.insert(3, "FOther".into()); }
+        if fault == 4 { r.func_is_method.remove(&1); }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_literal_string_scope(fault: u8) -> Self {
+        let mut r = Self::from_test_native_default_constructor("FString", 0, true);
+        r.type_by_ptr.insert(102, "FSettings".into()); r.type_names.insert("FSettings".into());
+        r.global_by_ptr.insert(100, "Warning".into()); if fault != 1 { r.global_is_string.insert(100); }
+        let input = DataType { token: 5, type_info: 101, is_reference: true,
+            is_read_only: true, ..Default::default() };
+        r.func_params.insert(1, vec![DataType { type_info: if fault == 2 { 102 } else { 101 },
+            is_read_only: fault != 3, ..input.clone() }]);
+        for (id, name, owner) in [(2, "Setup", "UHost"), (3, "$beh2", "FString"),
+            (4, "Use", "UHost"), (5, "$beh2", "FSettings"), (6, "Later", "UHost")] {
+            r.func_by_ptr.insert(id, name.into()); r.funcid_to_ptr.insert(id as i32, id);
+            r.func_owner.insert(id, owner.into()); r.func_is_method.insert(id);
+            r.func_ret.insert(id, DataType { token: 0x52, ..Default::default() });
+            r.func_params.insert(id, Vec::new());
+        }
+        r.func_params.insert(2, vec![input.clone()]);
+        r.func_params.insert(4, vec![DataType { type_info: 102, ..input }]);
+        r.func_ret.insert(2, DataType { token: 5, type_info: 102, ..Default::default() });
+        for name in ["Setup", "Use"] {
+            r.temporary_arg_positions.insert(name.into(), HashMap::from([(1, vec![true])]));
+        }
+        if fault == 4 { r.func_ret.get_mut(&6).unwrap().token = 0x41; }
+        if fault == 5 { r.func_params.insert(3, vec![DataType::default()]); }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_native_default_constructor(owner: &str, params: usize, returns_void: bool) -> Self {
         let mut r = Self::default();
         r.type_by_ptr.insert(101, owner.into());
@@ -1953,6 +1998,17 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_delegate_int32_push(fault: u8) -> Self {
+        let mut r = Self::default();
+        r.func_by_ptr.insert(1, if fault == 1 { "__Evt_PushArgument__int" } else { "__Evt_PushArgument__int32" }.into());
+        r.func_ret.insert(1, DataType { token: 0x52, ..Default::default() });
+        r.func_params.insert(1, vec![DataType { token: if fault == 2 { 0x41 } else { 0x44 },
+            is_reference: true, is_object_const: true, is_read_only: fault != 3, ..Default::default() }]);
+        if fault == 4 { r.func_is_method.insert(1); }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_parameter_field_comparison(ret: DataType, wrong_owner: bool) -> Self {
         let mut r = Self::from_test_member_chain(&[("UHolder", "Target"), ("UNode", "")]);
         for (id, name) in [(1, "UHolder"), (2, "UNode")] {
@@ -1966,6 +2022,17 @@ impl RefResolver {
         r.func_ret.insert(3, ret);
         r.func_params.insert(3, Vec::new());
         r.func_is_method.insert(3);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_parameter_comparison_upcast(fault: u8) -> Self {
+        let mut r = Self::from_test_parameter_field_comparison(DataType::default(), false);
+        r.type_by_ptr.insert(2, "AActor".into());
+        r.type_identity_by_ptr.get_mut(&2).unwrap().name = "AActor".into();
+        let field = match fault { 1 => "UNode", 2 => "const AGothicCharacter", _ => "AGothicCharacter" };
+        r.set_class_fields(HashMap::from([("UHolder".into(),
+            HashMap::from([("Target".into(), field.into())]))]));
         r
     }
 
