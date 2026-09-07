@@ -1829,6 +1829,47 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_script_value_handle_store(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(100, "FPosition"), (101, "FPositionOther"), (102, "AArm"), (103, "AHost")] {
+            r.type_by_ptr.insert(ptr, name.into()); r.type_names.insert(name.into()); r.typeid_to_ptr.insert(ptr as i32, ptr);
+        }
+        for (id, name) in [(1, "MakePosition"), (2, "MakeArm")] {
+            r.funcid_to_ptr.insert(id as i32, id); r.func_by_ptr.insert(id, name.into());
+            r.func_owner.insert(id, "AHost".into()); r.func_ns.insert(id, if fault == 7 && id == 2 { "Other" } else { "" }.into());
+            if !(fault == 6 && id == 2) { r.func_is_method.insert(id); }
+        }
+        r.func_ret.insert(1, DataType { token: 5, type_info: 100, is_reference: fault == 1, ..Default::default() });
+        r.func_ret.insert(2, DataType { token: 5, type_info: 102, is_object_handle: fault != 5, ..Default::default() });
+        r.func_params.insert(1, vec![DataType { token: 5, type_info: 103, is_object_handle: fault != 2, ..Default::default() }]);
+        r.func_params.insert(2, vec![DataType { token: 5, type_info: if fault == 3 { 101 } else { 100 },
+            is_reference: true, is_object_const: fault != 4, ..Default::default() }]);
+        r.temporary_arg_positions.insert("MakeArm".into(), HashMap::from([(1, vec![true])]));
+        let key = (102i64 << 1) | (8i64 << 33) | 1;
+        r.prop_by_key.insert(key, "Owner".into()); r.prop_type_id.insert(key, 102);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_context_discarded_value(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(100, "FContext"), (200, "FSpec"), (300, "FResult"), (400, "UComponent")] { r.type_by_ptr.insert(ptr, name.into()); }
+        for (ptr, name, owner, ret) in [(1, "MakeContext", "UComponent", 100), (2, "MakeSpec", "UComponent", 200),
+            (3, "Apply", "UComponent", 300), (4, "$beh2", "FResult", 0), (5, "$beh2", "FSpec", 0),
+            (6, "$beh2", "FContext", 0), (7, "Work", "", 0)] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into());
+            if ptr != 7 && !(fault == 1 && ptr == 3) { r.func_is_method.insert(ptr); }
+            r.func_ret.insert(ptr, DataType { token: if ret == 0 { 0x52 } else { 5 }, type_info: ret,
+                is_reference: fault == 2 && ptr == 3, ..Default::default() });
+            r.func_params.insert(ptr, vec![]);
+        }
+        let spec = DataType { token: 5, type_info: if fault == 3 { 100 } else { 200 }, is_reference: true,
+            is_object_const: fault != 4, is_read_only: true, ..Default::default() };
+        r.func_params.insert(3, vec![spec, DataType { token: 5, type_info: 400, is_object_handle: fault != 5, ..Default::default() }]);
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_retained_after_value(token: i32, reference: bool, name: &str) -> Self {
         let mut r = Self::from_test_retained_receiver(5, true);
         r.func_by_ptr.insert(4, name.into());
@@ -2095,6 +2136,29 @@ impl RefResolver {
             token: 5, type_info: copy_type, is_reference: true,
             is_object_const: true, ..Default::default()
         }]);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_copied_bool_argument(token: i32) -> Self {
+        let mut r = Self::default();
+        r.func_by_ptr.insert(1, "SetFlag".into()); r.func_is_method.insert(1);
+        r.func_ret.insert(1, DataType { token: 0x52, ..Default::default() });
+        r.func_params.insert(1, vec![DataType { token, ..Default::default() }]);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_named_value_equality(fault: u8) -> Self {
+        let mut r = Self::default();
+        r.type_by_ptr.insert(100, "FValue".into());
+        r.func_by_ptr.insert(1, "opEquals".into());
+        r.func_owner.insert(1, if fault == 1 { "FOther" } else { "FValue" }.into());
+        r.func_is_method.insert(1);
+        if fault != 2 { r.const_method_ptrs.insert(1); }
+        r.func_ret.insert(1, DataType { token: if fault == 3 { 0x44 } else { 0x41 }, ..Default::default() });
+        r.func_params.insert(1, vec![DataType { token: 5, type_info: 100,
+            is_reference: true, is_object_const: fault != 4, is_read_only: true, ..Default::default() }]);
         r
     }
 

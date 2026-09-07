@@ -3,12 +3,11 @@ AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Base.FireDemon_HellArmsArea_Base	
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachStraight.FireDemon_HellArms_BreachStraight	1	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachZigZag.FireDemon_HellArmsArea_BreachZigZag	1	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachZigZag.FireDemon_HellArmsArea_BreachZigZag_Fire	1	0	0
-AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_Barrier_Ring	2	0	0
-AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_RingFireTest	4	0	0
+AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_Barrier_Ring	1	0	0
+AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_RingFireTest	3	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.FireDemon_HellArmsArea_Ring	5	0	0
 AI.AIAgent.Creature.Demon.Spells.Area.DemonAreaVisual	2	0	0
 AI.AIAgent.Creature.Golem.Fire.Spells.BreakFloor.GA_Spell_BreakFloor_FireGolem	2	0	0
-AI.AIAgent.Creature.Minecrawler.Queen.Abilities.GA_MCQueenPhaseChangeHit	1	0	0
 AI.AIAgent.Creature.Molerat.CombatSituations_Molerat	1	0	0
 AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.SoulHarvest.SoulHarvest_Visual	2	0	0
 AI.AIAgent.Creature.Troll.TC_TrollAdult_01.CombatMoves_TrollAdult	1	0	0
@@ -63,12 +62,10 @@ AI.States.FightAI.SearchState.AIState_Search	10	0	0
 AI.States.FightAI.SleeperFight.CorKalom_Sleeper.LordDemon.Components.MadCorKalomDemonFightComponent	1	0	0
 AI.States.FightAI.SleeperFight.CorKalom_Sleeper.LordDemon.GEs_CorKalomDemon_Sleeper	1	0	0
 AI.States.FightAI.SleeperFight.CorKalom_Sleeper.LordDemon.Spell.Pyrolaser.GA_LordDemon_Pyrolaser	2	0	0
-AI.States.FightAI.SleeperFight.NC_SLD_Gorn_699_Sleeper.Abilities.GA_GornSleeper_ElectrifiedAreaController	1	0	0
 AI.States.FightAI.SleeperFight.OC_KDF_Milten_Sleeper.Environment.MiltenSleeper_Brazier	1	0	0
 AI.States.FightAI.SleeperFight.OC_KDF_Milten_Sleeper.Spells.Fireball.GA_Spell_FireBall_MiltenSleeper	1	0	0
 AI.States.FightAI.SleeperFight.SC_NOV_Lester_Sleeper.SleeperFight_LesterCombat	2	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.GA_Summon_XardasSleeper_Skeleton	1	0	0
-AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.GA_Xardas_Sleeper_FightManager	1	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpotManager	1	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpot_XardasSleeper	3	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.TraceTarget_XardasSleeper	1	0	0
@@ -123,10 +120,9 @@ GAS.Abilities.Spells.Visuals.Wind.StormFistVisual	1	0	0
 GAS.Abilities.TraceTarget.Base.GA_TraceTarget_Base	1	0	0
 GAS.Abilities.TraceTarget.Derived.GA_TraceTarget_Item	1	0	0
 GAS.Calculations.Damage	5	0	0
-GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Drugs.Base.DrugDebuffEffectComponentBase	2	0	0
+GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Drugs.Base.DrugDebuffEffectComponentBase	1	0	0
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Sleep.GA_SleepDebuffEffectGameplayAbility	1	0	0
 GAS.Effects.Debuffs.EffectStateComponent.DebuffEffectActors.SlowdownDebuffEffectActor	1	0	0
-GAS.Effects.Tests.Effect_GiveExperience	1	0	0
 GAS.GASCharacterMixins	6	0	0
 GAS.GASCharacterStateMixins	8	0	0
 GAS.PerceptionEventMixins	1	0	0
@@ -136,7 +132,6 @@ Gameplay.Magic.Components.Damage.PercentageDamageLimiterComponent	1	0	0
 Gameplay.Magic.Components.Damage.WaterDamageLimiterComponent	1	0	0
 Gameplay.Magic.Components.InExtremo.InExtremoPropComponent	3	0	0
 Gameplay.Magic.Components.Spell.Summon.SummonManagerComponent	1	0	0
-InteractiveObjects.MixedObjectsPresets	2	0	0
 InteractiveObjects.PuzlesBlood	1	0	0
 Items.Projectiles	2	0	0
 Items.Visual.Projectile.Arrow.Base.ArrowProjectileVisual_Base	2	0	0
