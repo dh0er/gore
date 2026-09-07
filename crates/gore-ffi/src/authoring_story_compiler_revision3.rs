@@ -753,7 +753,7 @@ where
     let mut runner_unavailable = None;
     let mut runner = match package.sidecar_runner(staging.path().to_path_buf()) {
         Ok(runner) => Some(runner),
-        Err(failure) if requested == CompilerBackendWireV2::Standalone => {
+        Err(failure) if effective == CompilerBackendWireV2::Standalone => {
             let mut detail = Value::String(failure.to_string());
             redact_private_paths(
                 &mut detail,
@@ -765,7 +765,7 @@ where
                     package.profile_root(),
                 ],
             );
-            return product_preflight_failure(
+            return product_preflight_failure_with_fallback(
                 selection,
                 None,
                 &derived,
@@ -777,6 +777,7 @@ where
                         .as_str()
                         .unwrap_or("standalone runner initialization failed"),
                 ),
+                skipped_game_fallback.clone(),
             );
         }
         Err(failure) => {
@@ -897,6 +898,22 @@ fn product_preflight_failure(
     package: &gore_as::standalone_package_resolver::ProductStandaloneCompilerPackageIdentityV1,
     failure: Failure,
 ) -> Result<Value, Failure> {
+    product_preflight_failure_with_fallback(
+        selection, guard, derived, requested, package, failure, None,
+    )
+}
+
+/// [`product_preflight_failure`] carrying a fallback reason, for a preflight that happens after
+/// the game fallback was already skipped for an installed script mod.
+fn product_preflight_failure_with_fallback(
+    selection: InitialSelection,
+    guard: Option<InstallMutationGuard>,
+    derived: &DerivedModule,
+    requested: CompilerBackendWireV2,
+    package: &gore_as::standalone_package_resolver::ProductStandaloneCompilerPackageIdentityV1,
+    failure: Failure,
+    fallback: Option<Value>,
+) -> Result<Value, Failure> {
     let recovery = failure.code.contains("RECOVERY_REQUIRED");
     let mut response = match guard {
         Some(guard) if recovery => release_existing_recovery(selection, guard, derived, failure)?,
@@ -910,7 +927,7 @@ fn product_preflight_failure(
     };
     if response.get("compiler").is_some() {
         response["compiler"]["compiler_backend"] =
-            backend_evidence_with_package(requested, None, false, false, Some(package), None);
+            backend_evidence_with_package(requested, None, false, false, Some(package), fallback);
     }
     Ok(response)
 }
