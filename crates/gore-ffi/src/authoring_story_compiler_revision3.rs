@@ -700,6 +700,28 @@ where
     } else {
         None
     };
+    // The target was resolved before the guard; a deploy landing in between installs a script
+    // mod the game fallback must not run on while leaving the original's bytes in place. Ask
+    // again now that the guard is held.
+    if let Some(held) = guard.take() {
+        if let Some(source) = crate::script_compile_report::installed_script_mod(game_root) {
+            return product_preflight_failure(
+                selection,
+                Some(held),
+                &initial_derived,
+                requested,
+                package.identity(),
+                Failure::new(
+                    "AUTHORING_REVISION3_GAME_BACKEND_UNAVAILABLE",
+                    format!(
+                        "a script mod was installed after the compiler target was resolved ({}); the game fallback cannot run on the deployment backup, retry the check (the standalone compiler will be used)",
+                        source.path.display()
+                    ),
+                ),
+            );
+        }
+        guard = Some(held);
+    }
 
     let derived = match derive() {
         Ok(module) => module,

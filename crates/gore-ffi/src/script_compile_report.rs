@@ -887,6 +887,35 @@ fn compile_report_with_available_product_package(
             }
         }
     };
+    // The target was resolved before the guard; a deploy landing in between installs a script
+    // mod the game fallback must not run on while leaving the original's bytes in place. Ask
+    // again now that the guard is held.
+    if let Some(held) = guard.take() {
+        if let Some(source) = installed_script_mod(&game_dir) {
+            return attach_backend_evidence(
+                release_guard_after_preflight_failure(
+                    held,
+                    preflight_failure(
+                        "COMPILE_GAME_BACKEND_UNAVAILABLE",
+                        format!(
+                            "a script mod was installed after the compiler target was resolved ({}); the game fallback cannot run on the deployment backup, retry the compile (the standalone compiler will be used)",
+                            source.path.display()
+                        ),
+                    ),
+                    "a script mod was installed before launch",
+                ),
+                backend_evidence_with_package(
+                    requested,
+                    None,
+                    false,
+                    false,
+                    Some(authority.identity()),
+                    runner_unavailable.clone(),
+                ),
+            );
+        }
+        guard = Some(held);
+    }
     let (base_override, target_matches_pristine) = match qualified_target_pristine_script_cache(
         &game_dir,
         strict_target
