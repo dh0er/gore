@@ -348,6 +348,22 @@ fn check_revision3_project_compiler_v2_inner(input: &str) -> Result<Value, Failu
             })?,
         )
     };
+    // The selection above ran before the guard; a deploy landing in between installs a mod the
+    // game compiler must not run on. A game-capable request re-selects under the guard.
+    if guard.is_some() {
+        if let Some(source) = crate::script_compile_report::installed_script_mod(&game_root) {
+            return fail_v2_preflight_with_optional_guard(
+                guard.take(),
+                Failure::new(
+                    "AUTHORING_REVISION3_PROJECT_COMPILER_INSTALL_UNAVAILABLE",
+                    format!(
+                        "a script mod was installed after the compiler selected its base ({}); the game compiler cannot run on the deployment backup, retry the check (the standalone compiler will be used)",
+                        source.path.display()
+                    ),
+                ),
+            );
+        }
+    }
     let (catalog, shipping, binds) = match build_fresh_game_inputs(&game_root) {
         Ok(inputs) => inputs,
         Err(failure) => {

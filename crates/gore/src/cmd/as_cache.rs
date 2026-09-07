@@ -1817,7 +1817,16 @@ fn guarded_pristine_script_cache(
     // The bytes read under the guard must still be the original selected before it. The game
     // backend has no pinned target handle, so this comparison is its equivalent of the post-pin
     // check on the standalone path.
-    let outcome = match gore_mod::pristine_script_cache(game) {
+    // A deploy landing before the guard leaves the original's bytes in place (its backup holds
+    // them) while installing a mod the game compiler must not run on, so the source is selected
+    // again under the guard and not only compared by identity.
+    let outcome = match compiler_shipping_source(game).map_err(|error| error.to_string()) {
+        Err(error) => Err(error),
+        Ok(current) if current.from_backup => Err(format!(
+            "a script mod was installed after the compiler selected its base ({}); the game compiler cannot run on the deployment backup, retry the compile (the standalone compiler will be used)",
+            current.path.display()
+        )),
+        Ok(_) => match gore_mod::pristine_script_cache(game) {
         Ok(base) if selected.matches(&base) => Ok(base),
         Ok(_) => Err(
             "the pristine script cache changed between selecting it and reading it (a \
@@ -1827,6 +1836,7 @@ fn guarded_pristine_script_cache(
         Err(error) => Err(format!(
             "reading the drift-aware pristine script cache: {error}"
         )),
+        },
     };
     match outcome {
         Ok(base) => Ok((base, guard)),
@@ -6539,6 +6549,27 @@ mod default_cli_tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("changed during compilation"), "got: {error}");
+    }
+
+    /// A deploy landing between the selection and the guard leaves the bytes unchanged (the
+    /// backup holds the same original) but installs a mod the game compiler must not run on.
+    /// The guarded read therefore re-selects the source instead of trusting the identity alone.
+    #[test]
+    fn game_backend_refuses_a_script_mod_installed_after_selection() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"pristine").unwrap();
+        let selected = compiler_shipping_source(&game).unwrap();
+        assert!(!selected.from_backup);
+
+        install_script_mod_record(&game, b"pristine", b"deployed");
+        let error = guarded_pristine_script_cache(&game, &selected)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("script mod"), "got: {error}");
+        assert!(!game.join(".gore-install-mutation.lock").exists());
     }
 
     #[test]
