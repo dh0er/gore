@@ -54,7 +54,7 @@ AI.States.FightAI.CharmedState.AIState_Charmed	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_AcceptDefeat	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_ClaimVictory	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_CombatEndActions	4	0	0
-AI.States.FightAI.CombatState.AICombatBehaviorTree	4	0	0
+AI.States.FightAI.CombatState.AICombatBehaviorTree	1	0	0
 AI.States.FightAI.CombatState.AICombatFitnessMultipliers	2	0	0
 AI.States.FightAI.CombatState.AICombatRoleSystem	1	0	0
 AI.States.FightAI.CombatState.AICombatTargetScoring	2	0	0
@@ -72,7 +72,7 @@ AI.States.FightAI.DisengageBehavior.AIState_Disengage	2	0	0
 AI.States.FightAI.FearState.AIState_Fear	2	0	0
 AI.States.FightAI.FleeState.AIState_Flee	2	0	0
 AI.States.FightAI.GoGetGuardState.AIState_GoGetGuard	2	0	0
-AI.States.FightAI.ManagedFightSubsystem	3	0	0
+AI.States.FightAI.ManagedFightSubsystem	1	0	0
 AI.States.FightAI.SearchState.AIState_Search	10	0	0
 AI.States.FightAI.SleeperFight.CorKalom_Sleeper.LordDemon.Components.MadCorKalomDemonFightComponent	1	0	0
 AI.States.FightAI.SleeperFight.CorKalom_Sleeper.LordDemon.GEs_CorKalomDemon_Sleeper	1	0	0

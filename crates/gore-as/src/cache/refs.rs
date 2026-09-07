@@ -1824,6 +1824,40 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_typed_getter_copies(field_type: &str, object_const: bool, wrong_owner: bool) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FGroup", "MemberHandles"),
+            ("FMember", "CharacterState"), ("UNode", ""), ("TArray", ""), ("FName", "")]);
+        for (id, name) in [(1, "FGroup"), (2, "FMember"), (3, "UNode")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { module: "Fixture".into(),
+                namespace: String::new(), name: name.into() });
+            if id <= 2 { r.prop_type_id.insert((id << 1) | 1, id as i32); }
+        }
+        if wrong_owner { r.prop_type_id.insert((2 << 1) | 1, 1); }
+        r.set_class_fields(HashMap::from([
+            ("FGroup".into(), HashMap::from([("MemberHandles".into(), "TArray<FMember>".into())])),
+            ("FMember".into(), HashMap::from([("CharacterState".into(), field_type.into())])),
+        ]));
+        for (ptr, name, ty, handle) in [(1, "opIndex", 1, false),
+            (2, "opIndex", 2, false), (3, "Last", 3, true)] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, "TArray".into());
+            r.func_is_method.insert(ptr);
+            r.func_params.insert(ptr, vec![DataType { token: 0x44, ..Default::default() }]);
+            r.func_ret.insert(ptr, DataType { token: 5, type_info: ty, is_reference: true,
+                is_object_handle: handle, is_object_const: object_const, ..Default::default() });
+        }
+        r.func_by_ptr.insert(4, "IsValid".into());
+        r.func_params.insert(4, vec![DataType { token: 5, type_info: 3,
+            is_object_handle: true, ..Default::default() }]);
+        r.func_ret.insert(4, DataType { token: 0x41, ..Default::default() });
+        r.func_by_ptr.insert(5, "__STATIC_NAME".into());
+        r.func_params.insert(5, vec![DataType { token: 0x44, ..Default::default() }]);
+        r.func_ret.insert(5, DataType { token: 5, type_info: 5, is_reference: true,
+            is_object_const: true, is_read_only: true, ..Default::default() });
+        r.static_names.push("None".into());
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_handle_iterator(by_ref: bool, handle: bool, method: bool) -> Self {
         let mut r = Self::default();
         r.func_by_ptr.insert(1, "Proceed".into());

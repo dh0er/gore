@@ -2288,6 +2288,8 @@ fn emit_function_ctor(
         let body = fold_return_slot_stores(&body);
         pass_trace("fold_return_slot_stores", &body);
         let body = fold_return_slot_arms(&body);
+        let body = fold_literal_enum_default_return(&body, f, refs);
+        pass_trace("fold_literal_enum_default_return", &body);
         pass_trace("fold_return_slot_arms", &body);
         // Only where vanilla let the arm FALL THROUGH into the rest of the function. Where the
         // last thing before the epilogue is a jump INTO it, both arms jumped to a common join —
@@ -2610,6 +2612,8 @@ fn emit_function_ctor(
             &slots_built_once_per_iteration(f, refs),
         );
         pass_trace("sink_declarations_into_their_block", &rendered);
+        let rendered = merge_first_enum_call_declaration(&rendered, f, refs);
+        pass_trace("merge_first_enum_call_declaration", &rendered);
         // Same text, same reason as the sink: the declaration lives in `s`, its uses in `body`.
         let rendered = spell_out_repeated_temporaries(&rendered, &constructions);
         pass_trace("spell_out_repeated_temporaries", &rendered);
@@ -8366,6 +8370,9 @@ fn fold_literal_temporaries(
             let carries_a_value = folded.get(region_end).is_some_and(|line| {
                 assignment_rhs_for(line, &ident).is_some_and(|rhs| !is_foldable_literal(rhs))
             });
+            if carries_a_value && locals.get(&slot).is_some_and(|ty| is_enum(ty))
+                && enum_seed_feeds_loop_header(&folded, use_line, region_end, &ident)
+            { continue; }
             // …and the read has to be the COMPARISON that running value exists for. A slot read
             // as an argument is a flag the callee is handed, and a `true` folded into that
             // argument is right however many times the loop runs.
@@ -8410,6 +8417,30 @@ fn fold_literal_temporaries(
         joined.push('\n');
     }
     joined
+}
+
+/// The initial enum value belongs to a loop control when the body overwrites
+/// that same variable. Its first read may precede the header via an int cast.
+fn enum_seed_feeds_loop_header(lines: &[String], read: usize, write: usize, ident: &str) -> bool {
+    let witness = (|| {
+        let line = lines.get(read)?.trim();
+        let (header, operand) = if line.starts_with("while (") { (read, format!("int({ident})")) } else {
+            let (target, rhs) = line.strip_suffix(';')?.split_once(" = ")?;
+            if slot_and_life_any(&target).is_none() || rhs != format!("int({ident})") { return None; }
+            let next = lines.get(read + 1)?.trim();
+            if !next.starts_with("while (") || count_ident(next, &target) != 1
+                || indent_of(&lines[read]) != indent_of(&lines[read + 1]) { return None; }
+            (read + 1, target.to_owned())
+        };
+        let (left, right) = lines[header].trim().strip_prefix("while (")?
+            .strip_suffix(')')?.split_once(" == ")?;
+        if left != operand || right.parse::<i32>().is_err() { return None; }
+        if lines.get(header + 1)?.trim() != "{" || write <= header + 1 { return None; }
+        let borrowed: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let end = block_end(&borrowed, header + 1)?;
+        (write < end).then_some(())
+    })();
+    witness.is_some()
 }
 
 /// True when a loop carries the write at `write` back around to the read at `read`.
@@ -10925,6 +10956,45 @@ fn block_depths(lines: &[String]) -> Vec<usize> {
         depth = (depth + opens).saturating_sub(if closes { shuts - 1 } else { shuts });
     }
     depths
+}
+
+/// Merge only the first enum call-result life, at its already established declaration site.
+fn merge_first_enum_call_declaration(body: &str, f: &Func, refs: &RefResolver) -> String {
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let word = |ins: &Instr, at: usize| ins.words.get(at).map(|v| *v as i16 as i32);
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    for at in (0..lines.len().saturating_sub(1)).rev() {
+        let merged = (|| {
+            let (_, ident) = bare_declaration(&lines[at])?;
+            let slot = ident.strip_prefix("local_")?.parse::<i32>().ok()?;
+            let ty = lines[at].trim().strip_suffix(&format!(" {ident};"))?;
+            let (target, rhs) = slot_store(&lines[at + 1])?;
+            if slot <= 0 || !is_enum(ty) || target != ident
+                || indent_of(&lines[at]) != indent_of(&lines[at + 1])
+                || lines[..at].iter().any(|line| used_locals(line).contains(&slot)) { return None; }
+            let first = code.iter().position(|ins| super::bytediff::addressed_slots(ins).contains(&slot))?;
+            let call = code.get(first.checked_sub(1)?)?;
+            if code[first].op.name != "CpyRtoV4" || word(&code[first], 0) != Some(slot) { return None; }
+            let (ret, callee) = match call.op.name {
+                "CALLSYS" | "Thiscall1" => { let ptr = *call.qwords.first()? as i64;
+                    (refs.func_ret_by_ptr(ptr)?, refs.func_by_ptr(ptr)?) }
+                "CALL" | "CALLINTF" => { let id = *call.dwords.first()? as i32;
+                    (refs.func_ret_by_id(id)?, refs.func_by_id(id)?) }
+                _ => return None,
+            };
+            if ret.token != 5 || ret.is_reference || ret.is_object_handle
+                || qualify_decl_type(&ret.base_name(refs), refs) != ty
+                || outer_callee(&rhs).as_deref() != callee.rsplit("::").next()
+                || code[first + 1..].iter().take_while(|ins| !(ins.op.fmt.writes_first_word()
+                    && word(ins, 0) == Some(slot))).any(|ins|
+                    ins.op.name.starts_with("CpyVtoV") && word(ins, 1) == Some(slot)) { return None; }
+            Some(format!("{} = {rhs};", lines[at].trim_end().strip_suffix(';')?))
+        })();
+        if let Some(merged) = merged { lines[at] = merged; lines.remove(at + 1); }
+    }
+    let mut out = lines.join("\n");
+    if body.ends_with('\n') { out.push('\n'); }
+    out
 }
 
 /// The `(indent, name)` of a `T NAME;` line — a declaration with no initializer.
@@ -16466,6 +16536,49 @@ fn drop_else_after_returning_arm(body: &str, released: &HashSet<i32>) -> String 
         joined.push('\n');
     }
     joined
+}
+
+/// The final default's byte literal flows directly into the shared enum return.
+/// Keep that fallthrough: returning inside the case introduces an extra jump.
+fn fold_literal_enum_default_return(body: &str, f: &Func, refs: &RefResolver) -> String {
+    let fold = (|| {
+        let ty = qualify_decl_type(&f.ret.base_name(refs), refs);
+        if f.ret.token != 5 || f.ret.is_reference || f.ret.is_object_handle || !is_enum(&ty)
+            || body.contains("__return") { return None; }
+        let code = disassemble(&f.bytecode).ok()?;
+        let tail = code.get(code.len().checked_sub(3)?..)?;
+        let word = |ins: &Instr| ins.words.first().map(|v| *v as i16 as i32);
+        let slot = word(&tail[0])?;
+        let value = *tail[0].dwords.first()? as i32;
+        if tail[0].op.name != "SetV1" || tail[1].op.name != "CpyVtoR4" || tail[2].op.name != "RET"
+            || slot <= 0 || word(&tail[1]) != Some(slot) || !(0..=127).contains(&value)
+            || code.iter().filter(|i| i.op.name.starts_with('J') && i.op.name != "JMPP").any(|i|
+                i.dwords.first().is_some_and(|off| i.offset_dw as i64 + 2 + *off as i32 as i64 == tail[1].offset_dw as i64))
+        { return None; }
+        let ident = format!("local_{slot}");
+        if count_ident(body, &ident) != 2 { return None; }
+        let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+        let last = lines.iter().rposition(|l| !l.trim().is_empty())?;
+        if last < 6 || lines[last].trim() != format!("return {ty}({ident});")
+            || lines[last - 5].trim() != "default:" || lines[last - 4].trim() != "{"
+            || lines[last - 3].trim() != format!("{ident} = {value};")
+            || lines[last - 2].trim() != "}" || lines[last - 1].trim() != "}"
+        { return None; }
+        // Reuse the existing proof that every other switch arm already returns.
+        let proof: Vec<String> = lines.iter().map(|l| rename_ident(l, &ident, "__return")).collect();
+        let borrowed: Vec<&str> = proof.iter().map(String::as_str).collect();
+        let open = matching_open_brace(&borrowed, last - 1)?;
+        if open == 0 || !lines[open - 1].trim().starts_with("switch (") { return None; }
+        let mut stores = Vec::new();
+        if !tail_stores_of_switch(&borrowed, open, last - 1, &mut stores)
+            || stores != [last - 3] { return None; }
+        lines[last] = format!("{}return {ty}({value});", indent_of(&lines[last]));
+        lines.remove(last - 3);
+        let mut out = lines.join("\n");
+        if body.ends_with('\n') { out.push('\n'); }
+        Some(out)
+    })();
+    fold.unwrap_or_else(|| body.to_owned())
 }
 
 /// Every arm of an if/else ending in `__return = <val>;`, with the shared `return __return;` as
@@ -25458,6 +25571,90 @@ mod member_arithmetic_lifetime_tests {
         let plain = super::fold_copy_out_temporaries(source, &locals, &HashSet::new(), None,
             &HashSet::new(), &HashSet::new(), &HashSet::new());
         assert_eq!(plain, "local_44 = Source;\n");
+    }
+
+    #[test]
+    fn last_enum_default_falls_through_only_after_all_other_arms_return() {
+        let refs = RefResolver::from_test_nested_enum_index(true);
+        let mut f = function(&[("SetV1", &[8]), ("CpyVtoR4", &[8]), ("RET", &[0])]);
+        f.bytecode[1] = 3;
+        f.ret = DataType { token: 5, type_info: 104, ..Default::default() };
+        let body = "switch (Value)\n{\ncase 0:\n{\n    return EKind(0);\n}\ndefault:\n{\n    local_8 = 3;\n}\n}\nreturn EKind(local_8);\n";
+        let expected = body.replace("    local_8 = 3;\n", "").replace("EKind(local_8)", "EKind(3)");
+        assert_eq!(super::fold_literal_enum_default_return(body, &f, &refs), expected);
+        for other in [body.replace("return EKind(0);", "break;"),
+            body.replace("return EKind(0);", "Use(local_8);"), body.replace("default:", "case 1:"),
+            body.replace("local_8 = 3;", "local_8 = 4;"), body.replace("EKind(local_8)", "EOther(local_8)")] {
+            assert_eq!(super::fold_literal_enum_default_return(&other, &f, &refs), other);
+        }
+        let mut other = f.clone(); other.ret.is_reference = true;
+        assert_eq!(super::fold_literal_enum_default_return(body, &other, &refs), body);
+        let mut other = function(&[("JMP", &[]), ("SetV1", &[8]), ("CpyVtoR4", &[8]), ("RET", &[0])]);
+        other.ret = f.ret;
+        let code = disassemble(&other.bytecode).unwrap();
+        other.bytecode[code[1].offset_dw + 1] = 3;
+        other.bytecode[1] = code[2].offset_dw as i32 - 2;
+        assert_eq!(super::fold_literal_enum_default_return(body, &other, &refs), body);
+    }
+
+    #[test]
+    fn enum_loop_seed_survives_direct_and_cast_carried_header_reads() {
+        let refs = RefResolver::default();
+        let locals = BTreeMap::from([(4, "EResult".into()), (2, "int".into())]);
+        for head in ["while (int(local_4) == 0)", "local_2 = int(local_4);\nwhile (local_2 == 0)"] {
+            let source = format!("local_4 = EResult::Success;\n{head}\n{{\n    local_4 = Tick();\n    Use(local_4);\n}}\n");
+            assert_eq!(super::fold_literal_temporaries(&source, &refs, &locals,
+                &HashSet::new(), &HashSet::new(), &HashSet::new()), source);
+        }
+        // A store after the loop is another life, not a loop control update.
+        let source = "local_4 = EResult::Success;\nwhile (int(local_4) == 0)\n{\n    Work();\n}\nlocal_4 = Tick();\n";
+        let folded = super::fold_literal_temporaries(source, &refs, &locals,
+            &HashSet::new(), &HashSet::new(), &HashSet::new());
+        assert!(folded.starts_with("while (int(EResult::Success) == 0)"), "{folded}");
+        let source = "local_4 = EResult::Success;\nlocal_2 = int(local_4);\nwhile (Other == 0)\n{\n    local_4 = Tick();\n}\n";
+        let folded = super::fold_literal_temporaries(source, &refs, &locals,
+            &HashSet::new(), &HashSet::new(), &HashSet::new());
+        assert!(folded.starts_with("local_2 = int(EResult::Success);"), "{folded}");
+        for head in ["while (Poll(int(local_4)))", "local_2 = int(local_4);\nwhile (Poll(local_2))"] {
+            let source = format!("local_4 = EResult::Success;\n{head}\n{{\n    local_4 = Tick();\n}}\n");
+            let folded = super::fold_literal_temporaries(&source, &refs, &locals,
+                &HashSet::new(), &HashSet::new(), &HashSet::new());
+            assert!(!folded.contains("local_4 = EResult::Success;"), "{folded}");
+        }
+    }
+
+    #[test]
+    fn first_enum_call_declaration_uses_only_its_first_direct_result_life() {
+        let refs = RefResolver::from_test_short_value_lifetimes(true, false, false);
+        let make = |op: &str, copy_out: bool, prior_use: bool| {
+            let mut ops = vec![];
+            if prior_use { ops.push(("PshV4", &[22u16][..])); }
+            ops.extend([(op, &[][..]), ("CpyRtoV4", &[22][..]), ("sbTOi", &[23, 22][..])]);
+            if copy_out { ops.push(("CpyVtoV4", &[24, 22][..])); }
+            ops.extend([("CpyVtoR4", &[22][..]), ("SetV1", &[22][..]),
+                (op, &[][..]), ("CpyRtoV4", &[24][..]), ("CpyVtoV4", &[22, 24][..]), ("RET", &[0][..])]);
+            let mut f = function(&ops);
+            for ins in disassemble(&f.bytecode).unwrap() {
+                if ins.op.name == op { f.bytecode[ins.offset_dw + 1] = 5; }
+            }
+            f
+        };
+        let source = "if (Ready)\n{\n    EOutcome local_22;\n    local_22 = this.Current.GetResult();\n    Use(local_22);\n}\nif (Other)\n{\n    EOutcome local_22;\n    local_22 = this.Current.GetResult();\n    Use(local_22);\n}\n";
+        let sunk = super::sink_declarations_into_their_block(source, &HashSet::from([22]), &HashSet::new());
+        let expected = sunk.replacen("EOutcome local_22;\n    local_22 =", "EOutcome local_22 =", 1);
+        for op in ["CALL", "CALLINTF", "CALLSYS", "Thiscall1"] {
+            let f = make(op, false, false);
+            assert_eq!(super::merge_first_enum_call_declaration(&sunk, &f, &refs), expected);
+            for other in [make(op, true, false), make(op, false, true)] {
+                assert_eq!(super::merge_first_enum_call_declaration(&sunk, &other, &refs), sunk);
+            }
+            for body in [sunk.replace("GetResult()", "OtherResult()"), sunk.replace("EOutcome", "EOther"),
+                format!("Use(local_22_2);\n{sunk}"), sunk.replace("    local_22 =", "        local_22 =")] {
+                assert_eq!(super::merge_first_enum_call_declaration(&body, &f, &refs), body);
+            }
+            let reference = RefResolver::from_test_short_value_lifetimes(true, true, false);
+            assert_eq!(super::merge_first_enum_call_declaration(&sunk, &f, &reference), sunk);
+        }
     }
 
     fn nested_enum_index_fixture() -> Func {

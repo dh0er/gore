@@ -1523,6 +1523,61 @@ fn is_handle_getter_reference_argument(ctx: &Ctx<'_>, code: &[Instr], copy: usiz
     witness.is_some()
 }
 
+/// Recover a typed array getter's handle copy at this instruction, never by slot alone.
+fn is_typed_array_getter_handle_copy(ctx: &Ctx<'_>, code: &[Instr], copy: usize, src: &Arg) -> bool {
+    let witness = (|| {
+        let word = |ins: &Instr| ins.words.first().map(|v| *v as i16 as i32);
+        let dst = word(code.get(copy)?)?;
+        if dst <= 0 || src.s.chars().any(char::is_control) || src.s == UNRESOLVED
+            || src.ty.as_deref() != ctx.slot_type(dst).as_deref() || src.ty.is_none()
+            || code.get(copy.checked_sub(1)?)?.op.name != "RDSPtr" { return None; }
+        let field = code.get(copy.checked_sub(2)?)?.op.name == "ADDSi";
+        let start = copy.checked_sub(if field { 4 } else { 3 })?;
+        let lead = &code[start..copy];
+        if lead[0].op.name != "Thiscall1" || lead[1].op.name != "PshRPtr" { return None; }
+        let ptr = *lead[0].qwords.first()? as i64;
+        let ret = ctx.refs.func_ret_by_ptr(ptr)?;
+        let params = ctx.refs.func_params_by_ptr(ptr)?;
+        if !ctx.refs.is_method_by_ptr(ptr) || ctx.refs.func_owner_by_ptr(ptr)? != "TArray"
+            || ret.token != 5 || !ret.is_reference || ret.is_object_const || ret.is_read_only
+            || params.len() != 1 || params[0].token != 0x44 || params[0].is_reference
+            || params[0].is_object_handle { return None; }
+        let end = if field {
+            if ctx.refs.func_by_ptr(ptr)? != "opIndex" || ret.is_object_handle { return None; }
+            let tid = *lead[2].dwords.first()? as i32;
+            let (name, old_owner) = ctx.refs.member_identity(tid, word(&lead[2])?)?;
+            let owner = ctx.refs.type_identity_by_id(tid)?;
+            if ctx.refs.type_identity_by_id(old_owner)? != owner
+                || ctx.refs.type_identity_by_ptr(ret.type_info)? != owner
+                || ctx.refs.own_field_type_by_class(&owner.name, name) != src.ty.as_deref()
+                || !src.s.ends_with(&format!(".{name}")) { return None; }
+            copy
+        } else {
+            if ctx.refs.func_by_ptr(ptr)? != "Last" || !ret.is_object_handle
+                || ret.base_name(ctx.refs) != *src.ty.as_ref()? { return None; }
+            let tail = code.get(copy + 1..copy + 7)?;
+            if tail.iter().map(|ins| ins.op.name).ne(
+                ["SetV1", "PshV4", "PshC4", "CALLSYS", "PshRPtr", "CmpPtrNull"])
+                || word(&tail[0])? <= 0 || word(&tail[0])? == dst
+                || word(&tail[0]) != word(&tail[1]) || word(&tail[5]) != Some(dst)
+                || !matches!(*tail[0].dwords.first()?, 0 | 1)
+                || ctx.refs.func_by_ptr(*tail[3].qwords.first()? as i64)? != "__STATIC_NAME"
+                || ctx.refs.static_name(*tail[2].dwords.first()? as i32 as i64).is_none()
+                { return None; }
+            copy + 6
+        };
+        // Reject an entry into the producer/copy/argument run; a repeated loop entry
+        // at its first instruction is fine and does not borrow an earlier slot life.
+        if ctx.instrs.iter().any(|ins| ins.op.name == "JMPP" || (ins.op.name.starts_with('J')
+            && ins.dwords.first().is_some_and(|delta| {
+                let target = ins.offset_dw as i64 + 2 + *delta as i32 as i64;
+                target > code[start].offset_dw as i64 && target <= code[end].offset_dw as i64
+            }))) { return None; }
+        Some(())
+    })();
+    witness.is_some()
+}
+
 /// Conditional-jump opcode (mirrors `cfg::is_cond_jump`, which is private to that module).
 fn is_cond_op(n: &str) -> bool {
     matches!(
@@ -6148,7 +6203,8 @@ fn block_stmts_in(
                             || param_into_cmp
                             || param_into_later_use
                             || const_src_into_cmp
-                            || getter_into_store_rhs);
+                            || getter_into_store_rhs
+                            || is_typed_array_getter_handle_copy(ctx, insns, k, &top));
                     if ok {
                         flush!();
                         // batch-25b (G4 assign shape): a slot-to-slot handle copy whose DEST
@@ -11055,6 +11111,83 @@ mod tests {
         { assert!(!render(ret.clone(), bad, false, 1).contains("local_8 = this.Nodes.opIndex")); }
         assert!(!render(ret.clone(), param.clone(), true, 1).contains("local_8 = this.Nodes.opIndex"));
         assert!(!render(ret, param, false, 99).contains("local_8 = this.Nodes.opIndex"));
+    }
+
+    fn render_typed_getter_copy_fixture(field: bool, fault: u8) -> String {
+        let refs = RefResolver::from_test_typed_getter_copies(
+            if fault == 1 { "UOther" } else { "UNode" }, fault == 2, fault == 7);
+        let mut a = TestAssembler::default();
+        // An earlier assignment to the same physical slot must not receive this witness.
+        a.op("PshVPtr", &[(-4i16) as u16], &[]); a.op("RefCpyV", &[8], &[]);
+        if field { a.op("PshC4", &[], &[0]); }
+        a.op("PshC4", &[], &[0]); a.op("PshVPtr", &[(-2i16) as u16], &[]);
+        a.op("Thiscall1", &[], &[]); a.op("PshRPtr", &[], &[]);
+        if field {
+            a.op("ADDSi", &[0], &[1]); a.op("Thiscall1", &[], &[]);
+            a.op("PshRPtr", &[], &[]); a.op("ADDSi", &[0], &[if fault == 3 { 1 } else { 2 }]);
+        }
+        a.op("RDSPtr", &[], &[]); a.op("RefCpyV", &[8], &[]);
+        if field {
+            a.op("PshVPtr", &[8], &[]); a.op("CALLSYS", &[], &[]);
+            a.op("CpyRtoV4", &[9], &[]);
+        } else {
+            a.op("SetV1", &[if fault == 3 { 8 } else { 9 }], &[0]);
+            a.op("PshV4", &[9], &[]); a.op("PshC4", &[], &[if fault == 6 { 99 } else { 0 }]);
+            a.op("CALLSYS", &[], &[]); a.op("PshRPtr", &[], &[]);
+            a.op("CmpPtrNull", &[8], &[]);
+        }
+        a.op("RET", &[6], &[]);
+        let mut fixture = a.finish();
+        let mut getter = 0;
+        for ins in &mut fixture.instrs {
+            if ins.op.name == "Thiscall1" { getter += 1;
+                ins.qwords = vec![if field { getter } else { 3 }]; }
+            if ins.op.name == "CALLSYS" { ins.qwords = vec![if fault == 4 { 99 }
+                else if field { 4 } else { 5 }]; }
+        }
+        if fault == 5 {
+            let target = fixture.instrs.iter().rfind(|ins| ins.op.name == "RefCpyV").unwrap().offset_dw;
+            let mut jump = fixture.instrs[0].clone();
+            jump.op = crate::cache::isa::OPCODES.iter().find(|op| op.name == "JMP").unwrap();
+            jump.dwords = vec![(target as i32 - jump.offset_dw as i32 - 2) as u32];
+            fixture.instrs[0] = jump;
+        }
+        let f = FuncCode { func: "Fixture::Read".into(), is_method: false,
+            param_names: vec!["Groups".into(), "Earlier".into()],
+            param_types: vec![DataType { token: 5, type_info: 4, is_reference: true,
+                ..Default::default() }, DataType { token: 5, type_info: 3,
+                is_object_handle: true, ..Default::default() }],
+            ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+        let locals = HashMap::from([(8, "UNode".into()), (9, "bool".into())]);
+        let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+            ret_ty: Some(&f.ret), fields: None, param_types: None, class_name: None,
+            local_types: Some(&locals), float_slots: Default::default(),
+            param_off_map: HashMap::from([(-2, 0), (-4, 1)]), rvo_off: None, keep_ints: None,
+            rvo_switch_region: std::cell::Cell::new(false) };
+        block_stmts(&ctx, 0, fixture.instrs.len()).0.join("\n")
+    }
+
+    #[test]
+    fn terminal_field_of_indexed_value_keeps_its_handle_copy() {
+        let source = render_typed_getter_copy_fixture(true, 0);
+        let copy = "local_8 = Groups.opIndex(0).MemberHandles.opIndex(0).CharacterState;";
+        assert!(source.contains(copy), "{source}");
+        assert!(source.find(copy) < source.find("IsValid(local_8)"), "{source}");
+        for fault in [1, 2, 3, 5, 7] {
+            assert!(!render_typed_getter_copy_fixture(true, fault).contains(copy), "fault={fault}");
+        }
+    }
+
+    #[test]
+    fn last_handle_copy_precedes_literal_preparation_and_null_guard() {
+        let source = render_typed_getter_copy_fixture(false, 0);
+        let copy = "local_8 = Groups.Last(0);";
+        assert!(source.contains(copy), "{source}");
+        assert!(source.find(copy) < source.find("local_9 = false;"), "{source}");
+        assert_eq!(source.matches(copy).count(), 1, "{source}");
+        for fault in [2, 3, 4, 5, 6] {
+            assert!(!render_typed_getter_copy_fixture(false, fault).contains(copy), "fault={fault}");
+        }
     }
 
     fn render_lvalue_selection(handle: bool, extra_entry: bool, wrong_type: bool, jump: &'static str, test_type: Option<&str>) -> String {
