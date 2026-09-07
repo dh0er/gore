@@ -2954,10 +2954,10 @@ fn default_local_precedes_rvo(ctx: &Ctx, name: &str) -> bool {
     })().is_some()
 }
 
-/// Preserve a single default construction whose cleanup appears on multiple paths.
+/// Preserve a single default construction shared by exit paths or evaluated early.
 /// Counting constructors as well as destructors excludes separate temporary lives
 /// that reuse a slot, including a fresh `return T()` in each return arm.
-fn shared_default_constructions(instrs: &[Instr], refs: &RefResolver) -> std::collections::HashSet<i32> {
+fn retained_default_constructions(instrs: &[Instr], refs: &RefResolver) -> std::collections::HashSet<i32> {
     let mut sites: HashMap<i32, (usize, usize)> = HashMap::new();
     for pair in instrs.windows(2) {
         if pair[0].op.name != "PSF" || pair[1].op.name != "CALLSYS" {
@@ -2975,8 +2975,36 @@ fn shared_default_constructions(instrs: &[Instr], refs: &RefResolver) -> std::co
             _ => {}
         }
     }
+    // A default argument built before a different value's constructor, but
+    // pushed only AFTER that constructor, had its own declaration. Inlining it
+    // would move its construction across the other value's initialization.
+    let w = |i: &Instr| i.words.first().map(|v| *v as i16 as i32);
+    let constructor = |i: &Instr, empty: bool| -> bool {
+        let Some(ptr) = i.qwords.first().map(|p| *p as i64).filter(|_| i.op.name == "CALLSYS") else { return false; };
+        refs.func_by_ptr(ptr) == Some("$beh0") && refs.is_method_by_ptr(ptr)
+            && refs.func_owner_by_ptr(ptr).is_some_and(|n| matches!(n.as_bytes().first(), Some(b'F' | b'T' | b'E')))
+            && refs.func_ret_by_ptr(ptr).is_some_and(|t| t.token == 0x52 && !t.is_reference && !t.is_object_handle)
+            && refs.func_params_by_ptr(ptr).is_some_and(|p| p.is_empty() == empty)
+    };
+    let defaults: HashMap<i32, usize> = instrs.windows(2).enumerate().filter_map(|(at, c)|
+        (c[0].op.name == "PSF" && constructor(&c[1], true)).then(|| w(&c[0]).map(|s| (s, at + 1))).flatten()).collect();
+    let mut eager = std::collections::HashSet::new();
+    for (at, c) in instrs.windows(4).enumerate() {
+        if c[0].op.name != "PSF" || !constructor(&c[1], false)
+            || c[2].op.name != "PSF" || c[3].op.name != "PSF" || w(&c[0]) != w(&c[3]) { continue; }
+        let Some(slot) = w(&c[2]).filter(|s| *s > 0 && Some(*s) != w(&c[0])) else { continue; };
+        let Some(&created) = defaults.get(&slot).filter(|at_created| **at_created < at) else { continue; };
+        if instrs[created + 1..at].iter().any(|i| i.op.name.starts_with('J')) { continue; }
+        let uses: Vec<_> = instrs.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&slot)).collect();
+        if uses.len() == 3 && uses.iter().all(|(_, i)| i.op.name == "PSF")
+            && uses[0].0 + 1 == created && uses[1].0 == at + 2
+            && instrs.get(uses[2].0 + 1).is_some_and(|i| i.op.name == "CALLSYS"
+                && i.qwords.first().is_some_and(|p| refs.func_by_ptr(*p as i64) == Some("$beh2"))) {
+            eager.insert(slot);
+        }
+    }
     sites.into_iter().filter_map(|(slot, (constructs, destroys))| {
-        (constructs == 1 && destroys > 1).then_some(slot)
+        (constructs == 1 && (destroys > 1 || eager.contains(&slot))).then_some(slot)
     }).collect()
 }
 /// A `JMP` to the next instruction: `if (false) { } else { }`, spelled out by the emitter.
@@ -6823,7 +6851,7 @@ fn block_stmts_in(
             default_ctor_temp.remove(name);
         }
     }
-    let shared_constructions = shared_default_constructions(ctx.instrs, ctx.refs);
+    let shared_constructions = retained_default_constructions(ctx.instrs, ctx.refs);
     for (slot, ty) in &default_ctor_temp {
         if slot.strip_prefix("local_").and_then(|slot| slot.parse::<i32>().ok())
             .is_some_and(|slot| shared_constructions.contains(&slot))
@@ -11668,6 +11696,27 @@ mod tests {
             (false, false, "JNZ", Some("const AActor")), (false, false, "JNZ", Some("AActor&"))] {
             let other = render_lvalue_selection(true, entry, wrong, jump, ty, true);
             assert!(!other.contains(" ? "), "{other}");
+        }
+    }
+
+    #[test]
+    fn default_argument_keeps_its_declaration_before_another_value_constructor() {
+        let make = |late: bool, extra: bool| {
+            let mut a = TestAssembler::default();
+            if !late { a.op("PSF", &[4], &[]); a.op("CALLSYS", &[], &[1, 0]); }
+            a.op("PshC4", &[], &[7]); a.op("PSF", &[8], &[]); a.op("CALLSYS", &[], &[2, 0]);
+            if late { a.op("PSF", &[4], &[]); a.op("CALLSYS", &[], &[1, 0]); }
+            a.op("PSF", &[4], &[]); a.op("PSF", &[8], &[]); a.op("CALLSYS", &[], &[4, 0]);
+            if extra { a.op("PSF", &[4], &[]); }
+            a.op("PSF", &[4], &[]); a.op("CALLSYS", &[], &[3, 0]); a.op("RET", &[0], &[]);
+            let mut fixture = a.finish();
+            for i in &mut fixture.instrs { if i.op.name == "CALLSYS" { i.qwords = vec![i.dwords[0] as u64]; } }
+            fixture
+        };
+        for (late, extra, wrong_type) in [(false, false, false), (true, false, false), (false, true, false), (false, false, true)] {
+            let refs = RefResolver::from_test_ordered_default_argument(wrong_type);
+            let f = make(late, extra);
+            assert_eq!(retained_default_constructions(&f.instrs, &refs).contains(&4), !late && !extra && !wrong_type);
         }
     }
 

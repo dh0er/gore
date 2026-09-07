@@ -1841,6 +1841,65 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_retained_double_quotient(narrow: bool) -> Self {
+        let mut r = Self::from_test_literal_product_call(narrow);
+        let value = r.func_ret.get(&1).unwrap().clone();
+        r.func_by_ptr.insert(2, "Lerp".into()); r.func_ns.insert(2, "Math".into());
+        r.func_ret.insert(2, value.clone());
+        r.func_params.insert(2, vec![DataType { is_reference: true, is_read_only: true, ..value }; 3]);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_literal_product_call(narrow: bool) -> Self {
+        let mut r = Self::default();
+        r.func_by_ptr.insert(1, "Max".into()); r.func_ns.insert(1, "Math".into());
+        let double = DataType { token: if narrow { 0x50 } else { 0x51 }, ..Default::default() };
+        r.func_ret.insert(1, double.clone()); r.func_params.insert(1, vec![double.clone(), double]);
+        r.prop_by_key.insert((1 << 1) | 1, "Scale".into());
+        r.prop_type_id.insert((1 << 1) | 1, 1);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_eager_quotient(narrow: bool, mutable: bool) -> Self {
+        let mut r = Self::default();
+        r.func_by_ptr.insert(1, "Mix".into()); r.func_ns.insert(1, "Math".into());
+        let double = DataType { token: if narrow { 0x50 } else { 0x51 }, ..Default::default() };
+        r.func_ret.insert(1, double.clone());
+        r.func_params.insert(1, vec![DataType { is_reference: true, is_read_only: !mutable, ..double }; 3]);
+        for (offset, name) in [(0i64, "Max"), (8, "Min")] {
+            let key = (1 << 1) | (offset << 33) | 1;
+            r.prop_by_key.insert(key, name.into()); r.prop_type_id.insert(key, 1);
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_const_field_iterator(is_const: bool) -> Self {
+        let mut r = Self::default();
+        r.typeid_to_ptr.insert(1, 100); r.type_by_ptr.insert(100, "UPackage".into()); r.type_by_ptr.insert(101, "TSetConstIterator".into());
+        r.prop_by_key.insert((1 << 1) | 1, "Items".into()); r.prop_type_id.insert((1 << 1) | 1, 1);
+        r.func_by_ptr.insert(1, "Iterator".into()); r.func_is_method.insert(1);
+        if is_const { r.const_method_ptrs.insert(1); }
+        r.func_params.insert(1, vec![]);
+        r.func_ret.insert(1, DataType { token: 5, type_info: 101, ..Default::default() });
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_ordered_default_argument(wrong_type: bool) -> Self {
+        let mut r = Self::default();
+        for (ptr, name, owner) in [(1, "$beh0", "FContext"), (2, "$beh0", "FSpec"), (3, "$beh2", "FContext")] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into());
+            r.func_is_method.insert(ptr);
+            r.func_ret.insert(ptr, DataType { token: if wrong_type { 0x44 } else { 0x52 }, ..Default::default() });
+            r.func_params.insert(ptr, if ptr == 2 { vec![DataType { token: 0x44, ..Default::default() }] } else { vec![] });
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_retained_receiver(result_token: i32, is_method: bool) -> Self {
         let mut r = Self::default();
         for (id, name, token) in [(1, "Create", 5), (2, "Count", result_token),

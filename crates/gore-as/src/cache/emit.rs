@@ -1229,6 +1229,8 @@ fn emit_function_ctor(
     // (2pi * i) / n;` — vanilla called `Max` before it read `x`).
     let statement_operands = statement_operand_slots(f);
     statement_producers.extend(statement_operands.iter().copied());
+    let eager_quotients = eager_quotient_operand_slots(f, refs, &statement_operands);
+    statement_producers.extend(eager_quotients.iter().copied());
     statement_producers.extend(assignment_call_order_slots(f, refs, is_method));
     statement_producers.extend(call_results_before_parameter_comparisons(f, refs, is_method));
     let mut retained_return_copies = copied_widened_return_slots(f, refs);
@@ -1249,7 +1251,8 @@ fn emit_function_ctor(
     // changes the width the arithmetic behind it happens at.
     let widened = widened_slots(f);
     let retained_accumulators: HashSet<i32> = widened.iter().copied()
-        .chain(eager_comparison_accumulators(f, refs, &statement_operands)).collect();
+        .chain(eager_comparison_accumulators(f, refs, &statement_operands))
+        .chain(eager_quotients.iter().copied()).collect();
     // A primitive iterator reference is the binding, not a disposable value carrier.
     // Keep it through the copy-out pass until foreach owns that exact element.
     let mut copy_out_keep = widened.clone();
@@ -1595,7 +1598,9 @@ fn emit_function_ctor(
     // `const`; strip the marker and const-qualify the declaration below.
     let (body, const_slots) = strip_const_store_markers(&body);
     pass_trace("structured", &body);
-    let const_result_handles = const_call_result_slots(f, refs);
+    let const_iterator_receivers = const_iterator_field_receivers(f, refs, &local_types);
+    let mut const_result_handles = const_call_result_slots(f, refs);
+    const_result_handles.extend(const_iterator_receivers.iter().copied());
     let selected_read_only: HashSet<i32> = const_slots.iter().chain(const_result_handles.iter())
         .chain(reference_locals.keys()).copied().collect();
     let (body, selected_handle_copies) = scope_null_selected_handle_copy(
@@ -1797,7 +1802,8 @@ fn emit_function_ctor(
         }
         view
     };
-    let const_result_slots = infer_const_result_slots(f, refs);
+    let mut const_result_slots = infer_const_result_slots(f, refs);
+    const_result_slots.extend(const_iterator_receivers.iter().copied());
     let body = if enum_overrides.is_empty() {
         body
     } else {
@@ -5747,6 +5753,34 @@ fn scope_released_handles(body: &str, released: &HashSet<i32>) -> String {
         text.push('\n');
     }
     text
+}
+
+/// A copied handle used only to iterate a field through a const iterator was
+/// read-only. Retain that qualifier when declaring its recovered local.
+fn const_iterator_field_receivers(f: &Func, refs: &RefResolver, types: &HashMap<i32, String>) -> HashSet<i32> {
+    let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+    let mut uses: HashMap<i32, Vec<usize>> = HashMap::new();
+    for (at, i) in code.iter().enumerate() {
+        for s in super::bytediff::addressed_slots(i) { uses.entry(s).or_default().push(at); }
+    }
+    let mut out = HashSet::new();
+    for (at, c) in code.windows(4).enumerate() {
+        if c.iter().map(|i| i.op.name).ne(["PSF", "PshVPtr", "ADDSi", "CALLSYS"]) { continue; }
+        let Some(slot) = w(&c[1], 0).filter(|s| *s > 0) else { continue; };
+        let Some(mentions) = uses.get(&slot).filter(|u| u.len() == 2 && u[0] < at && u[1] == at + 1) else { continue; };
+        if code[mentions[0]].op.name != "RefCpyV" { continue; }
+        let Some(ty) = types.get(&slot).filter(|t| matches!(t.as_bytes().first(), Some(b'U' | b'A'))) else { continue; };
+        let Some((_, owner)) = c[2].dwords.first().and_then(|id| refs.member_identity(*id as i32, w(&c[2], 0)?)) else { continue; };
+        if refs.type_by_id(owner) != Some(ty.as_str()) { continue; }
+        let Some(ptr) = c[3].qwords.first().map(|p| *p as i64) else { continue; };
+        if refs.func_by_ptr(ptr) != Some("Iterator") || !refs.is_method_by_ptr(ptr) || !refs.is_const_method_by_ptr(ptr)
+            || !refs.func_params_by_ptr(ptr).is_some_and(|p| p.is_empty())
+            || !refs.func_ret_by_ptr(ptr).is_some_and(|t| t.token == 5 && !t.is_reference && !t.is_object_handle
+                && matches!(refs.type_by_ptr(t.type_info), Some("TSetConstIterator" | "TArrayConstIterator" | "TMapConstIterator"))) { continue; }
+        out.insert(slot);
+    }
+    out
 }
 
 /// Containers a range-for iterates through a NON-CONST iterator (`TArrayIterator<T>`, not
@@ -12938,7 +12972,178 @@ fn fold_unary_double_chain(body: &str, f: &Func, refs: &RefResolver) -> String {
         { continue; }
         witnessed.insert((slots, format!("{namespace}::{name}"), bits));
     }
-    fold_witnessed_unary_double_chain(body, &witnessed)
+    let body = fold_witnessed_unary_double_chain(body, &witnessed);
+    let body = fold_literal_product_call_chain(&body, &instrs, refs);
+    fold_retained_double_call_quotients(&body, f, refs)
+}
+
+// The same late chain recovery, with a binary double call returning into its
+// literal's old slot. Unique MULd destinations tie the text to this arithmetic
+// life even when other lives of the physical slot must remain named.
+fn fold_literal_product_call_chain(body: &str, code: &[Instr], refs: &RefResolver) -> String {
+    let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+    let double = |t: &super::types::DataType| matches!(t.token, 0x51 | 0x5e) && !t.is_reference && !t.is_object_handle;
+    let mut products = HashMap::new();
+    let mut targets = HashSet::new();
+    for i in code {
+        if i.op.name == "MULd" { *products.entry(w(i, 0)).or_insert(0usize) += 1; }
+        if i.op.name.starts_with('J') {
+            if i.op.name == "JMPP" { return body.to_owned(); }
+            if let Some(d) = i.dwords.first() { targets.insert(i.offset_dw as i64 + 2 + *d as i32 as i64); }
+        }
+    }
+    let mut witnessed = Vec::new();
+    for c in code.windows(9) {
+        if c.iter().map(|i| i.op.name).ne(["SetV8", "LoadRObjR", "RDR8", "MULd", "SUBd", "PshV8", "PshC8", "CALLSYS", "CpyRtoV8"])
+            || c[1..].iter().any(|i| targets.contains(&(i.offset_dw as i64))) { continue; }
+        let (Some(seed), Some(product), Some(argument)) = (w(&c[0], 0), w(&c[3], 0), w(&c[4], 0)) else { continue; };
+        if seed <= 0 || product <= 0 || argument <= 0 || seed == product || seed == argument || product == argument
+            || w(&c[2], 0) != w(&c[3], 1) || w(&c[4], 1) != Some(seed) || w(&c[4], 2) != Some(product)
+            || w(&c[5], 0) != Some(argument) || w(&c[8], 0) != Some(seed) || products.get(&Some(product)) != Some(&1) { continue; }
+        let Some(ptr) = c[7].qwords.first().map(|p| *p as i64) else { continue; };
+        let (Some(name), Some(ns), Some(field), Some(literal), Some(constant)) = (refs.func_by_ptr(ptr), refs.func_ns_by_ptr(ptr),
+            c[1].dwords.first().and_then(|id| refs.member_identity(*id as i32, w(&c[1], 1).unwrap_or(0)).map(|(name, _)| name)),
+            c[0].qwords.first().copied(), c[6].qwords.first().copied()) else { continue; };
+        if ns.is_empty() || refs.is_method_by_ptr(ptr) || !refs.func_ret_by_ptr(ptr).is_some_and(double)
+            || !refs.func_params_by_ptr(ptr).is_some_and(|p| p.len() == 2 && p.iter().all(double))
+            || !f64::from_bits(literal).is_finite() || !f64::from_bits(constant).is_finite() { continue; }
+        witnessed.push(([seed, product, argument], format!("{ns}::{name}"), field, literal, constant));
+    }
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut at = 0;
+    while at + 2 < lines.len() {
+        let folded = (|| {
+            let first = declaration_with_initializer(&lines[at])?;
+            let seeded = first.2.parse::<f64>().is_ok();
+            let (indent, product, expression) = declaration_with_initializer(&lines[at + usize::from(seeded)])?;
+            if (at..at + 3).any(|i| indent_of(&lines[i]) != indent) || count_ident(body, &product) != 2 { return None; }
+            let (field, factor) = expression.split_once(" * ")?;
+            if !field.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.'))
+                || !factor.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') { return None; }
+            let (output, call, subtract, literal) = if seeded {
+                let (out, call) = lines[at + 2].trim().strip_suffix(';')?.split_once(" = ")?;
+                if out != first.1 { return None; }
+                (out.to_owned(), call.to_owned(), format!("{} - {product}", first.1), first.2)
+            } else {
+                let (_, temp, subtraction) = declaration_with_initializer(&lines[at + 1])?;
+                let literal = subtraction.strip_suffix(&format!(" - {product}"))?;
+                if count_ident(body, &temp) != 2 { return None; }
+                let (_, out, call) = declaration_with_initializer(&lines[at + 2])?;
+                (out, call, temp, literal.to_owned())
+            };
+            let (_, arguments) = call_of_expression(&call)?;
+            let callee = call[..call.find('(')?].trim();
+            if arguments.len() != 2 || arguments[1] != subtract { return None; }
+            let bits = literal.parse::<f64>().ok()?.to_bits();
+            let constant = arguments[0].parse::<f64>().ok()?.to_bits();
+            let slots = [slot_and_life(&output)?.0, slot_and_life(&product)?.0];
+            if !witnessed.iter().any(|(s, call, f, lit, arg)| s[..2] == slots && *call == callee
+                && field.rsplit('.').next() == Some(*f) && *lit == bits && *arg == constant
+                && (seeded || slot_and_life(&subtract).is_some_and(|(slot, _)| slot == s[2]))) { return None; }
+            let ty = declared_type(&lines, &output)?;
+            if ![output.as_str(), product.as_str()].into_iter().all(|n| declared_type(&lines, n)
+                .is_some_and(|t| matches!(t.as_str(), "float" | "double")))
+                || (!seeded && !declared_type(&lines, &subtract).is_some_and(|t| matches!(t.as_str(), "float" | "double"))) { return None; }
+            Some(format!("{indent}{ty} {output} = {callee}({}, {literal} - ({expression}));", arguments[0]))
+        })();
+        if let Some(line) = folded { lines.splice(at..at + 3, [line]); } else { at += 1; }
+    }
+    let mut out = lines.join("\n");
+    if body.ends_with('\n') { out.push('\n'); }
+    out
+}
+
+// A converted argument's old scratch slot receives the quotient, while the
+// call result occupies its own closed, two-use slot. Keep that call named.
+fn retained_double_call_quotients(f: &Func, refs: &RefResolver) -> Vec<(i32, i32, i32, String, u64)> {
+    let Ok(code) = disassemble(&f.bytecode) else { return Vec::new(); };
+    let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+    let mut uses: HashMap<i32, Vec<usize>> = HashMap::new();
+    let mut targets = HashSet::new();
+    for (at, ins) in code.iter().enumerate() {
+        for slot in super::bytediff::addressed_slots(ins).into_iter().collect::<HashSet<_>>() { uses.entry(slot).or_default().push(at); }
+        if ins.op.name.starts_with('J') {
+            if ins.op.name == "JMPP" { return Vec::new(); }
+            if let Some(d) = ins.dwords.first() { targets.insert(ins.offset_dw as i64 + 2 + *d as i32 as i64); }
+        }
+    }
+    let double = |t: &super::types::DataType| matches!(t.token, 0x51 | 0x5e) && !t.is_reference && !t.is_object_handle;
+    if !double(&f.ret) { return Vec::new(); }
+    let mut out = Vec::new();
+    for (at, c) in code.windows(7).enumerate() {
+        if c[..6].iter().map(|i| i.op.name).ne(["iTOd", "PshV8", "PshC8", "CALLSYS", "CpyRtoV8", "DIVd"])
+            || !matches!(c[6].op.name, "PSF" | "PshV8")
+            || c[1..].iter().any(|i| targets.contains(&(i.offset_dw as i64))) { continue; }
+        let (Some(q), Some(n), Some(d)) = (w(&c[0], 0), w(&c[4], 0), w(&c[5], 2)) else { continue; };
+        if q <= 0 || n <= 0 || d <= 0 || q == n || q == d || n == d || w(&c[1], 0) != Some(q)
+            || c[5].words != [q as u16, n as u16, d as u16] || w(&c[6], 0) != Some(q)
+            || uses.get(&n).map(Vec::as_slice) != Some(&[at + 4, at + 5][..]) { continue; }
+        let (Some(ptr), Some(bits)) = (c[3].qwords.first(), c[2].qwords.first()) else { continue; };
+        let ptr = *ptr as i64;
+        let (Some(ns), Some(name)) = (refs.func_ns_by_ptr(ptr), refs.func_by_ptr(ptr)) else { continue; };
+        if ns.is_empty() || refs.is_method_by_ptr(ptr) || !f64::from_bits(*bits).is_finite()
+            || !refs.func_ret_by_ptr(ptr).is_some_and(double)
+            || !refs.func_params_by_ptr(ptr).is_some_and(|p| p.len() == 2 && p.iter().all(double)) { continue; }
+        let tail = &code[at + 6..];
+        let reader = if tail[0].op.name == "PshV8" {
+            if tail.len() < 3 || tail[1].op.name != "PshC8" { continue; } &tail[2]
+        } else {
+            if tail.len() < 6 || tail[1..5].iter().map(|i| i.op.name).ne(["SetV8", "PSF", "SetV8", "PSF"])
+                || w(&tail[1], 0) != w(&tail[2], 0) || w(&tail[3], 0) != w(&tail[4], 0) { continue; } &tail[5]
+        };
+        let Some(next) = reader.qwords.first().map(|p| *p as i64).filter(|_| reader.op.name == "CALLSYS") else { continue; };
+        if refs.is_method_by_ptr(next) || !refs.func_ret_by_ptr(next).is_some_and(double)
+            || !refs.func_params_by_ptr(next).is_some_and(|p| if tail[0].op.name == "PshV8" { p.len() == 2 && p.iter().all(double) }
+                else { p.len() == 3 && p.iter().all(|t| matches!(t.token, 0x51 | 0x5e) && t.is_reference && t.is_read_only && !t.is_object_handle) })
+            || tail[..=if tail[0].op.name == "PshV8" { 2 } else { 5 }].iter().any(|i| targets.contains(&(i.offset_dw as i64))) { continue; }
+        out.push((q, n, d, format!("{ns}::{name}"), *bits));
+    }
+    out
+}
+
+// Reuse late chain recovery instead of assigning a physical-slot permission to
+// the scratch: its earlier copied widening and its quotient are distinct lives.
+fn fold_retained_double_call_quotients(body: &str, f: &Func, refs: &RefResolver) -> String {
+    let witnessed = retained_double_call_quotients(f, refs);
+    if witnessed.is_empty() { return body.to_owned(); }
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut at = 0;
+    while at + 2 < lines.len() {
+        let folded = (|| {
+            let (indent, named, value) = declaration_with_initializer(&lines[at])?;
+            let (_, args) = call_of_expression(&value)?;
+            let callee = value[..value.find('(')?].trim().to_owned();
+            let (qname, quotient) = declaration_with_initializer(&lines[at + 1]).map(|(_, n, v)| (n, v)).or_else(|| slot_store(&lines[at + 1]))?;
+            let (left, denominator) = quotient.split_once(" / ")?;
+            if left != named || args.len() != 2 || count_ident(body, &named) != 2 { return None; }
+            let (q, n, d) = (slot_and_life(&qname)?.0, slot_and_life(&named)?.0, slot_and_life(denominator)?.0);
+            if !witnessed.iter().any(|(wq, wn, wd, call, bits)| (*wq, *wn, *wd) == (q, n, d) && call == &callee
+                && args[0].parse::<f64>().is_ok_and(|v| v.to_bits() == *bits)) { return None; }
+            let mut from = at;
+            let mut call = value;
+            let mut input_name = None;
+            if at > 0 {
+                if let Some((ind, input, expr)) = declaration_with_initializer(&lines[at - 1]) {
+                    if ind == indent && args[1] == input && slot_and_life(&input).is_some_and(|v| v.0 == q) {
+                        if count_ident(body, &input) != if input == qname { 4 } else { 2 } { return None; }
+                        call = format!("{callee}({}, {})", args[0], if wraps_whole_expression(&expr) { expr } else { format!("({expr})") });
+                        input_name = Some(input); from -= 1;
+                    }
+                }
+            }
+            if count_ident(body, &qname) != if input_name.as_deref() == Some(qname.as_str()) { 4 } else { 2 }
+                || !(from..at + 3).all(|i| indent_of(&lines[i]) == indent)
+                || ![named.as_str(), qname.as_str(), denominator].into_iter().chain(input_name.as_deref())
+                    .all(|name| declared_type(&lines, name).is_some_and(|t| matches!(t.as_str(), "float" | "double"))) { return None; }
+            let ret = &lines[at + 2];
+            if !ret.trim_start().starts_with("return ") || count_ident(ret, &qname) != 1
+                || !call_sites(ret).iter().any(|(_, args)| args.contains(&qname)) { return None; }
+            let ty = declared_type(&lines, &named)?;
+            Some((from, format!("{indent}{ty} {named} = {call};"), rename_ident(ret, &qname, &quotient)))
+        })();
+        if let Some((from, call, ret)) = folded { lines.splice(from..at + 3, [call, ret]); at = from + 1; } else { at += 1; }
+    }
+    let mut out = lines.join("\n"); if body.ends_with('\n') { out.push('\n'); } out
 }
 
 fn fold_witnessed_unary_double_chain(
@@ -19237,6 +19442,55 @@ fn eager_comparison_accumulators(f: &Func, refs: &RefResolver, named: &HashSet<i
     }).collect()
 }
 
+/// A denominator computed before the numerator is already an eager operand.
+/// Preserve both arithmetic names when their closed quotient is passed by
+/// const reference: removing the numerator also changes the live scratch slots.
+fn eager_quotient_operand_slots(f: &Func, refs: &RefResolver, named: &HashSet<i32>) -> HashSet<i32> {
+    let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+    let mut uses: HashMap<i32, Vec<usize>> = HashMap::new();
+    let mut arithmetic_writes = HashMap::new();
+    let mut targets = HashSet::new();
+    for (at, ins) in code.iter().enumerate() {
+        for slot in super::bytediff::addressed_slots(ins).into_iter().collect::<HashSet<_>>() {
+            uses.entry(slot).or_default().push(at);
+        }
+        if is_arithmetic_op(ins.op.name) && !super::structure::is_numeric_cast(ins.op.name) {
+            *arithmetic_writes.entry(w(ins, 0)).or_insert(0usize) += 1;
+        }
+        if ins.op.name.starts_with('J') {
+            if ins.op.name == "JMPP" { return HashSet::new(); }
+            if let Some(d) = ins.dwords.first() { targets.insert(ins.offset_dw as i64 + 2 + *d as i32 as i64); }
+        }
+    }
+    let mut out = HashSet::new();
+    for (at, c) in code.windows(15).enumerate() {
+        if c.iter().map(|i| i.op.name).ne(["LoadThisR", "RDR8", "LoadThisR", "RDR8", "SUBd",
+            "LoadThisR", "RDR8", "SUBd", "DIVd", "PSF", "SetV8", "PSF", "SetV8", "PSF", "CALLSYS"])
+            || c[1..].iter().any(|i| targets.contains(&(i.offset_dw as i64))) { continue; }
+        let (Some(den), Some(num), Some(scratch)) = (w(&c[1], 0), w(&c[7], 0), w(&c[3], 0)) else { continue; };
+        if den <= 0 || num <= 0 || scratch <= 0 || den == num || den == scratch || num == scratch
+            || !named.contains(&den) || uses.get(&num).map(Vec::as_slice) != Some(&[at + 7, at + 8][..])
+            || uses.get(&den).and_then(|u| u.last()) != Some(&(at + 8))
+            || arithmetic_writes.get(&Some(den)) != Some(&1)
+            || c[4].words != [den as u16, den as u16, scratch as u16]
+            || w(&c[6], 0) != Some(scratch) || w(&c[7], 1).is_none_or(|s| s <= 0 || [den, num, scratch].contains(&s))
+            || w(&c[7], 2) != Some(scratch) || c[8].words != [scratch as u16, num as u16, den as u16]
+            || w(&c[9], 0) != Some(scratch) || w(&c[10], 0) != w(&c[11], 0) || w(&c[12], 0) != w(&c[13], 0)
+            || c[2].words != c[5].words || c[2].dwords != c[5].dwords || c[0].dwords != c[2].dwords { continue; }
+        let property = |i: &Instr| refs.member_identity(*i.dwords.first()? as i32, w(i, 0)?);
+        if !property(&c[0]).zip(property(&c[2])).is_some_and(|(a, b)| a.1 == b.1 && a.0 != b.0) { continue; }
+        let Some(ptr) = c[14].qwords.first().map(|p| *p as i64) else { continue; };
+        let double = |t: &super::types::DataType| matches!(t.token, 0x51 | 0x5e) && !t.is_object_handle;
+        if refs.is_method_by_ptr(ptr) || !refs.func_ns_by_ptr(ptr).is_some_and(|n| !n.is_empty())
+            || !refs.func_ret_by_ptr(ptr).is_some_and(|t| double(t) && !t.is_reference)
+            || !refs.func_params_by_ptr(ptr).is_some_and(|p| p.len() == 3 && p.iter().all(|t| double(t) && t.is_reference && t.is_read_only))
+            || [10, 12].iter().any(|i| !c[*i].qwords.first().is_some_and(|b| f64::from_bits(*b).is_finite())) { continue; }
+        out.extend([den, num]);
+    }
+    out
+}
+
 /// Slots read as the RIGHT operand of a two-register arithmetic or comparison instruction whose
 /// value was produced BEFORE the left operand's. The compiler evaluates left to right inside an
 /// expression, so such a right operand was computed by a statement of its own.
@@ -20942,6 +21196,8 @@ fn named_value_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, String)> {
         .map(str::to_owned)
     };
     let mut out = HashSet::new();
+    out.extend(retained_double_call_quotients(f, refs).into_iter()
+        .map(|(_, result, _, callee, _)| (result, callee.rsplit("::").next().unwrap().to_owned())));
     // Second shape: the result copied into a slot and RELOADED as a bool for the test right
     // away (`CALL; CpyRtoV4 N; CpyVtoR1 N; JLowNZ`). A call tested directly reads the register
     // (`CALL; JLowZ`, vanilla's plain `if (IsGornReady(Gorn))`); the reload is a variable's
@@ -21066,6 +21322,14 @@ fn named_value_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, String)> {
     // even when its only read is the diamond's conditional copy arm. Moving the
     // call into that arm changes whether it runs. Reuse the callee-qualified key;
     // an unrelated life of the physical slot must not inherit this witness.
+    let mut bool_result_sites = HashMap::new();
+    for pair in instrs.windows(2) {
+        if pair[0].op.is_call() && pair[1].op.name == "CpyRtoV4" {
+            if let (Some(slot), Some(callee)) = (w(&pair[1], 0), callee_of(&pair[0])) {
+                *bool_result_sites.entry((slot, callee)).or_insert(0usize) += 1;
+            }
+        }
+    }
     let mut last_mention = HashMap::<i32, usize>::new();
     for at in 0..instrs.len() {
         let eager = (|| {
@@ -21106,7 +21370,9 @@ fn named_value_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, String)> {
             }?;
             if ret.token != 0x41 || ret.is_reference || ret.is_object_handle { return None; }
             let callee = callee_of(call)?;
-            (callee_counts.get(&callee) == Some(&1)).then_some((source, callee))
+            // Repeated calls may have distinct named results. Only another call
+            // with this same slot/callee key makes the recovered life ambiguous.
+            (bool_result_sites.get(&(source, callee.clone())) == Some(&1)).then_some((source, callee))
         })();
         if let Some(site) = eager { out.insert(site); }
         for slot in super::bytediff::addressed_slots(&instrs[at]) {
@@ -22118,6 +22384,27 @@ fn fold_negated_stores(body: &str, widened: &HashSet<i32>) -> String {
             }
             None => kept.push(line.to_string()),
         }
+    }
+    // Bool equality itself emits one NOT per operand to normalize the bytes.
+    // Strip that pair from two single-use operands; the compiler restores it.
+    // Keep the literal side explicit so integer or pointer comparisons cannot qualify.
+    let folded_body = kept.join("\n");
+    for at in 0..kept.len().saturating_sub(2) {
+        let pair = (|| {
+            let left = kept[at].trim().strip_suffix(';')?.split_once(" = ")?;
+            let right = kept[at + 1].trim().strip_suffix(';')?.split_once(" = ")?;
+            if !is_decompiler_local(left.0) || !is_decompiler_local(right.0) || left.0 == right.0
+                || indent_of(&kept[at]) != indent_of(&kept[at + 1])
+                || indent_of(&kept[at]) != indent_of(&kept[at + 2]) { return None; }
+            let lhs = left.1.strip_prefix("!(")?.strip_suffix(')')?;
+            let rhs = right.1.strip_prefix("!(")?.strip_suffix(')')?;
+            if !matches!(rhs, "false" | "true") || !["==", "!="].iter().any(|op|
+                kept[at + 2].trim() == format!("if ({} {op} {})", left.0, right.0))
+                || count_ident(&folded_body, left.0) != 2 || count_ident(&folded_body, right.0) != 2 { return None; }
+            let indent = indent_of(&kept[at]);
+            Some((format!("{indent}{} = {lhs};", left.0), format!("{indent}{} = {rhs};", right.0)))
+        })();
+        if let Some((left, right)) = pair { kept[at] = left; kept[at + 1] = right; }
     }
     let mut joined = kept.join("\n");
     if body.ends_with('\n') {
@@ -29065,10 +29352,15 @@ mod literal_value_lifetime_tests {
         let f = eager_bool_diamond(false);
         let site = (6, "Saved".to_owned());
         let mut repeated = f.clone();
-        let mut extra = function(&[("CALL", &[]), ("CpyRtoV4", &[20])]);
+        let mut extra = function(&[("CALL", &[]), ("CpyRtoV4", &[6])]);
         extra.bytecode[1] = 101;
         repeated.bytecode.extend(extra.bytecode);
         assert!(!super::named_value_sites(&repeated, &refs).contains(&site));
+        let mut separate = f.clone();
+        let mut extra = function(&[("CALL", &[]), ("CpyRtoV4", &[20])]);
+        extra.bytecode[1] = 101;
+        separate.bytecode.extend(extra.bytecode);
+        assert!(super::named_value_sites(&separate, &refs).contains(&site));
         assert!(!super::named_value_sites(&f, &RefResolver::from_test_eager_bool_calls(0x44)).contains(&site));
         for changed in [5, 6, 7] {
             let mut other = f.clone();
@@ -29233,6 +29525,81 @@ mod literal_value_lifetime_tests {
         assert!(check(&branched, &refs).is_empty());
     }
 
+    fn eager_quotient_fixture() -> Func {
+        // Earlier denominator lives are real: widening/copy, then a field comparison.
+        let mut f = function(&[("fTOd", &[26, 22]), ("CpyVtoV8", &[24, 26]),
+            ("LoadThisR", &[8]), ("RDR8", &[26]), ("CMPd", &[24, 26]),
+            ("LoadThisR", &[0]), ("RDR8", &[26]), ("LoadThisR", &[8]), ("RDR8", &[30]),
+            ("SUBd", &[26, 26, 30]), ("LoadThisR", &[8]), ("RDR8", &[30]),
+            ("SUBd", &[28, 24, 30]), ("DIVd", &[30, 28, 26]), ("PSF", &[30]),
+            ("SetV8", &[32]), ("PSF", &[32]), ("SetV8", &[34]), ("PSF", &[34]),
+            ("CALLSYS", &[]), ("CpyRtoV8", &[36]), ("CpyVtoR8", &[36]), ("RET", &[2])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        for at in [2, 5, 7, 10] { f.bytecode[code[at].offset_dw + 1] = 1; }
+        f.bytecode[code[19].offset_dw + 1] = 1;
+        f
+    }
+
+    #[test]
+    fn eager_quotient_keeps_both_names_through_collapse_and_late_inlining() {
+        let f = eager_quotient_fixture();
+        let refs = RefResolver::from_test_eager_quotient(false, false);
+        let named = super::statement_operand_slots(&f);
+        let keep = super::eager_quotient_operand_slots(&f, &refs, &named);
+        assert_eq!(keep, HashSet::from([26, 28]));
+        let body = "float local_26 = this.Max;\nlocal_26 = local_26 - this.Min;\nfloat local_28 = local_24 - this.Min;\nreturn Math::Mix(1.0, 0.0, local_28 / local_26);\n";
+        let locals = BTreeMap::from([(26, "float".into()), (28, "float".into())]);
+        let collapsed = super::collapse_single_use_accumulators(body, &keep, &locals);
+        assert_eq!(collapsed, body);
+        let merged = super::merge_self_assignments(&collapsed, &locals);
+        let late = super::inline_unnamed_value_temporaries(&merged, &HashSet::from([(28, 1)]),
+            &HashSet::new(), &HashSet::new(), &refs, &HashSet::new(), &keep, &HashMap::new(),
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
+        assert_eq!(late, "float local_26 = this.Max - this.Min;\nfloat local_28 = local_24 - this.Min;\nreturn Math::Mix(1.0, 0.0, local_28 / local_26);\n");
+    }
+
+    #[test]
+    fn eager_quotient_rejects_reused_arithmetic_other_members_and_call_types() {
+        let f = eager_quotient_fixture();
+        let refs = RefResolver::from_test_eager_quotient(false, false);
+        let check = |f: &Func, refs: &RefResolver| super::eager_quotient_operand_slots(f, refs, &super::statement_operand_slots(f));
+        assert!(check(&f, &RefResolver::from_test_eager_quotient(true, false)).is_empty());
+        assert!(check(&f, &RefResolver::from_test_eager_quotient(false, true)).is_empty());
+        for ops in [vec![("MULd", &[26, 26, 24][..])], vec![("CpyVtoV8", &[22, 28][..])]] {
+            let mut other = f.clone(); other.bytecode.extend(function(&ops).bytecode);
+            assert!(check(&other, &refs).is_empty());
+        }
+        let mut property = f.clone(); let code = disassemble(&f.bytecode).unwrap();
+        property.bytecode[code[10].offset_dw] = function(&[("LoadThisR", &[16])]).bytecode[0];
+        assert!(check(&property, &refs).is_empty());
+        let mut entry = function(&[("JMP", &[])]).bytecode;
+        entry[1] = code[7].offset_dw as i32; entry.extend(f.bytecode.clone());
+        let mut jumped = f.clone(); jumped.bytecode = entry;
+        assert!(check(&jumped, &refs).is_empty());
+    }
+
+    #[test]
+    fn const_field_iterator_requires_a_closed_copied_handle_life() {
+        let mut f = function(&[("PshVPtr", &[8]), ("RefCpyV", &[2]), ("PSF", &[16]),
+            ("PshVPtr", &[2]), ("ADDSi", &[0]), ("CALLSYS", &[]), ("RET", &[0])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        f.bytecode[code[4].offset_dw + 1] = 1; f.bytecode[code[5].offset_dw + 1] = 1;
+        let refs = RefResolver::from_test_const_field_iterator(true);
+        let types = HashMap::from([(2, "UPackage".to_owned())]);
+        let keep = super::const_iterator_field_receivers(&f, &refs, &types);
+        assert_eq!(keep, HashSet::from([2]));
+        let locals = BTreeMap::from([(2, "UPackage".to_owned())]);
+        let (declared, suppressed) = super::rewrite_const_decl_init("local_2 = Cast<UPackage>(Get());\nUse(local_2);\n", &locals, &keep, &refs);
+        assert_eq!(declared, "const UPackage local_2 = Cast<UPackage>(Get());\nUse(local_2);\n");
+        assert!(suppressed.contains(&2));
+        assert!(super::const_iterator_field_receivers(&f, &RefResolver::from_test_const_field_iterator(false), &types).is_empty());
+        assert!(super::const_iterator_field_receivers(&f, &refs, &HashMap::from([(2, "UOther".to_owned())])).is_empty());
+        for op in ["PshVPtr", "RefCpyV"] {
+            let mut other = f.clone(); other.bytecode.extend(function(&[(op, &[2])]).bytecode);
+            assert!(super::const_iterator_field_receivers(&other, &refs, &types).is_empty());
+        }
+    }
+
     fn eager_comparison_accumulator_fixture() -> Func {
         let mut f = function(&[("LoadThisR", &[0]), ("RDR8", &[4]),
             ("LoadThisR", &[0]), ("RDR8", &[6]), ("SUBd", &[4, 4, 6]),
@@ -29286,6 +29653,123 @@ mod literal_value_lifetime_tests {
         let old_len = code[5].offset_dw - code[4].offset_dw;
         late_arithmetic.bytecode.splice(code[14].offset_dw - old_len..code[14].offset_dw - old_len, update);
         assert!(!check(&late_arithmetic, &refs).contains(&4));
+    }
+
+    fn retained_double_quotient_fixture(nested: bool) -> Func {
+        let (q, n, d) = if nested { (20, 26, 16) } else { (22, 58, 50) };
+        let mut f = function(&[("iTOd", &[q, 30]), ("CpyVtoV8", &[d, q]),
+            ("iTOd", &[q, 51]), ("PshV8", &[q]), ("PshC8", &[]), ("CALLSYS", &[]),
+            ("CpyRtoV8", &[n]), ("DIVd", &[q, n, d])]);
+        let tail = if nested { function(&[("PshV8", &[q]), ("PshC8", &[]), ("CALLSYS", &[]), ("RET", &[2])]) }
+            else { function(&[("PSF", &[q]), ("SetV8", &[54]), ("PSF", &[54]),
+                ("SetV8", &[60]), ("PSF", &[60]), ("CALLSYS", &[]), ("RET", &[2])]) };
+        let mut tail = tail.bytecode; let code = disassemble(&tail).unwrap();
+        tail[code[if nested { 2 } else { 5 }].offset_dw + 1] = if nested { 1 } else { 2 };
+        f.bytecode.extend(tail);
+        f.ret.token = 0x51;
+        let code = disassemble(&f.bytecode).unwrap(); f.bytecode[code[5].offset_dw + 1] = 1;
+        f
+    }
+
+    #[test]
+    fn double_call_result_stays_named_while_both_scratch_lives_fold() {
+        let refs = RefResolver::from_test_retained_double_quotient(false);
+        for nested in [false, true] {
+            let f = retained_double_quotient_fixture(nested);
+            let (q, n, d) = if nested { (20, 26, 16) } else { (22, 58, 50) };
+            let sites = super::named_value_sites(&f, &refs);
+            assert!(sites.contains(&(n, "Max".into())));
+            let ret = if nested { format!("return Math::Lerp(0.0, 1.0, Math::Min(1.0, local_{q}));\n") }
+                else { format!("return Math::Lerp(0.0, 1.0, local_{q});\n") };
+            let source = format!("float local_{d} = Limit;\nfloat local_{q} = (Count - Minimum);\nfloat local_{n} = Math::Max(0.0, local_{q});\nlocal_{q} = local_{n} / local_{d};\n{ret}");
+            let locals = BTreeMap::from([(q, "float".into()), (n, "float".into()), (d, "float".into())]);
+            let early = super::inline_call_argument_temporaries(&source, &refs, &locals, None, true,
+                &HashMap::from([(n, "float".into())]), &HashSet::new(), &HashSet::new(), &HashSet::new(),
+                &HashSet::new(), &HashSet::new(), &HashSet::from([q]), &HashSet::new(), &HashSet::new(),
+                &HashMap::new(), &HashSet::new(), &sites);
+            assert!(early.contains(&format!("float local_{n} = Math::Max")), "{early}");
+            let folded = super::fold_unary_double_chain(&early, &f, &refs);
+            let expected = format!("float local_{d} = Limit;\nfloat local_{n} = Math::Max(0.0, (Count - Minimum));\n{}", ret.replace(&format!("local_{q}"), &format!("local_{n} / local_{d}")));
+            assert_eq!(folded, expected);
+            let split = source.replace(&format!("local_{q} = local_{n}"), &format!("float local_{q}_2 = local_{n}"))
+                .replace(&ret, &ret.replace(&format!("local_{q}"), &format!("local_{q}_2")));
+            assert_eq!(super::fold_unary_double_chain(&split, &f, &refs), expected);
+        }
+    }
+
+    #[test]
+    fn double_quotient_requires_closed_result_exact_callee_types_and_scratch_life() {
+        let f = retained_double_quotient_fixture(false);
+        let refs = RefResolver::from_test_retained_double_quotient(false);
+        let source = "float local_50 = Limit;\nfloat local_22 = Count;\nfloat local_58 = Math::Max(0.0, local_22);\nlocal_22 = local_58 / local_50;\nreturn Math::Lerp(0.0, 1.0, local_22);\n";
+        let mut other = f.clone(); other.bytecode.extend(function(&[("CpyVtoV8", &[60, 58])]).bytecode);
+        assert!(super::retained_double_call_quotients(&other, &refs).is_empty());
+        assert!(super::retained_double_call_quotients(&f, &RefResolver::from_test_retained_double_quotient(true)).is_empty());
+        for bad in [source.replace("Math::Max", "Other::Max"), source.replace("0.0, local_22", "1.0, local_22"),
+            source.replace("float local_22", "float32 local_22"), format!("{source}Use(local_22);\n"),
+            source.replace("local_58 / local_50", "local_50 / local_58")] {
+            assert_eq!(super::fold_unary_double_chain(&bad, &f, &refs), bad);
+        }
+        let mut branch = function(&[("JMP", &[])]).bytecode;
+        branch[1] = disassemble(&f.bytecode).unwrap()[3].offset_dw as i32;
+        branch.extend(f.bytecode); other.bytecode = branch;
+        assert!(super::retained_double_call_quotients(&other, &refs).is_empty());
+    }
+
+    fn literal_product_call_fixture(seed: u16, product: u16, argument: u16) -> Func {
+        let mut f = function(&[("SetV8", &[seed]), ("LoadRObjR", &[(-2i16) as u16, 0]),
+            ("RDR8", &[argument]), ("MULd", &[product, argument, 12]),
+            ("SUBd", &[argument, seed, product]), ("PshV8", &[argument]), ("PshC8", &[]),
+            ("CALLSYS", &[]), ("CpyRtoV8", &[seed]), ("RET", &[4])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        let bits = 1.0f64.to_bits();
+        f.bytecode[code[0].offset_dw + 1] = bits as i32;
+        f.bytecode[code[0].offset_dw + 2] = (bits >> 32) as i32;
+        f.bytecode[code[1].offset_dw + 2] = 1;
+        f.bytecode[code[7].offset_dw + 1] = 1;
+        f
+    }
+
+    #[test]
+    fn literal_product_binary_call_recovers_both_declaration_lives() {
+        let refs = RefResolver::from_test_literal_product_call(false);
+        for (seed, product, arg, source, expected) in [
+            (8, 6, 4, "float local_8 = 1.0;\nfloat local_6 = Params.Scale * Age;\nlocal_8 = Math::Max(0.0, local_8 - local_6);\nUse(local_8);\n",
+                "float local_8 = Math::Max(0.0, 1.0 - (Params.Scale * Age));\nUse(local_8);\n"),
+            (4, 18, 14, "float local_18 = Params.Scale * local_12;\nfloat local_14_2 = 1.0 - local_18;\nfloat local_4_2 = Math::Max(0.0, local_14_2);\nUse(local_4_2);\n",
+                "float local_4_2 = Math::Max(0.0, 1.0 - (Params.Scale * local_12));\nUse(local_4_2);\n"),
+        ] {
+            let mut f = literal_product_call_fixture(seed, product, arg);
+            // A later call-result life is deliberately legal; it is the reason
+            // global arithmetic-slot typing cannot repair the real function.
+            let old_code = disassemble(&f.bytecode).unwrap();
+            f.bytecode.truncate(old_code.last().unwrap().offset_dw);
+            let mut later = function(&[("PshC8", &[]), ("PshC8", &[]), ("CALLSYS", &[]),
+                ("CpyRtoV8", &[product]), ("RET", &[4])]).bytecode;
+            let later_code = disassemble(&later).unwrap(); later[later_code[2].offset_dw + 1] = 1;
+            f.bytecode.extend(later);
+            let tail = format!("float local_{product}_2 = Math::Max(0.0, 0.0);\nUse(local_{product}_2);\n");
+            assert_eq!(super::fold_unary_double_chain(&format!("{source}{tail}"), &f, &refs), format!("{expected}{tail}"));
+        }
+    }
+
+    #[test]
+    fn literal_product_chain_refuses_other_producers_types_and_sources() {
+        let refs = RefResolver::from_test_literal_product_call(false);
+        let f = literal_product_call_fixture(4, 18, 14);
+        let source = "float local_18 = Params.Scale * local_12;\nfloat local_14_2 = 1.0 - local_18;\nfloat local_4_2 = Math::Max(0.0, local_14_2);\n";
+        let mut reused = f.clone(); reused.bytecode.extend(function(&[("MULd", &[18, 6, 12])]).bytecode);
+        assert_eq!(super::fold_unary_double_chain(source, &reused, &refs), source);
+        assert_eq!(super::fold_unary_double_chain(source, &f, &RefResolver::from_test_literal_product_call(true)), source);
+        for bad in [source.replace("Params.Scale", "Params.Other"), source.replace("1.0", "2.0"),
+            source.replace("Math::Max", "Other::Max"), source.replace("float local_18", "float32 local_18"),
+            format!("{source}Use(local_18);\n"), source.replace(" * local_12", " * Changed()")]
+        { assert_eq!(super::fold_unary_double_chain(&bad, &f, &refs), bad); }
+        let mut entry = f.clone();
+        let code = disassemble(&entry.bytecode).unwrap();
+        let mut jump = function(&[("JMP", &[])]).bytecode;
+        jump[1] = code[1].offset_dw as i32; jump.extend(entry.bytecode); entry.bytecode = jump;
+        assert_eq!(super::fold_unary_double_chain(source, &entry, &refs), source);
     }
 
     #[test]
@@ -30042,6 +30526,22 @@ mod short_circuit_life_name_tests {
         assert!(output.contains(" || "), "{output}");
         assert_eq!(fold_condition_temporaries(&combined, &locals, &RefResolver::default(),
             None, &HashSet::from([3]), &HashSet::new(), false), combined);
+    }
+
+    #[test]
+    fn boolean_literal_equality_restores_the_compilers_normalization_pair() {
+        let source = "local_1 = Ready();\nlocal_1 = !local_1;\nlocal_2 = false;\nlocal_2 = !local_2;\nif (local_1 == local_2)\n{\n    Use();\n}\n";
+        let expected = "local_1 = Ready();\nlocal_2 = false;\nif (local_1 == local_2)\n{\n    Use();\n}\n";
+        assert_eq!(fold_negated_stores(source, &HashSet::new()), expected);
+        for op in ["==", "!="] {
+            let source = source.replace("==", op).replace("false", "true");
+            assert_eq!(fold_negated_stores(&source, &HashSet::new()), expected.replace("==", op).replace("false", "true"));
+        }
+        for source in [source.replace("false", "Other()"), source.replace("==", "&&"),
+            format!("{source}Use(local_1);\n"), source.replace("if (", "    if (")] {
+            let folded = fold_negated_stores(&source, &HashSet::new());
+            assert!(folded.contains("local_1 = !(Ready());"), "{folded}");
+        }
     }
 
     #[test]

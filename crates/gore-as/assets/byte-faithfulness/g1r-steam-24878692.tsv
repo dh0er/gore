@@ -17,7 +17,6 @@ AI.AIAgent.Orc.Combat.Staff.Spells.StormOfFire.GA_Spell_StormOfFire_Orc	1	0	0
 AI.AIItemScoring	1	0	0
 AI.AssessmentResponseSystem.AssessmentBits	9	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	7	0	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeDefinitions	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingResponse	2	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	20	0	0
@@ -35,7 +34,7 @@ AI.States.AIState_FollowCreator	1	0	0
 AI.States.AIState_GuideCharacter	3	0	0
 AI.States.AIState_InteractWinchGate	1	0	0
 AI.States.AIState_UseFreepoint	1	0	0
-AI.States.FightAI.AIGroup_ConflictInstance	2	0	0
+AI.States.FightAI.AIGroup_ConflictInstance	1	0	0
 AI.States.FightAI.AIGroup_StateEvent	2	0	0
 AI.States.FightAI.AIState_PerceptionResponse	3	0	0
 AI.States.FightAI.AssessGoToDailyRoutineState.UAIState_AssessGoToDailyRoutine	2	0	0
@@ -50,7 +49,6 @@ AI.States.FightAI.CombatState.AICombatTargetScoring	2	0	0
 AI.States.FightAI.CombatState.AIGroup_Attackers	5	0	0
 AI.States.FightAI.CombatState.AIGroup_Combat	4	0	0
 AI.States.FightAI.CombatState.AIState_OGCombat	12	0	0
-AI.States.FightAI.CombatState.CombatBehaviorSets.CombatBehaviorSet	1	0	0
 AI.States.FightAI.CombatState.CombatBehaviorSets.UnreachableEnemy.CombatBehaviorSet_UnreachableEnemy	1	0	0
 AI.States.FightAI.CombatState.CombatMoves	22	0	0
 AI.States.FightAI.CombatState.CombatOperations	1	0	0
@@ -70,7 +68,7 @@ AI.States.FightAI.SleeperFight.OC_KDF_Milten_Sleeper.Environment.MiltenSleeper_B
 AI.States.FightAI.SleeperFight.OC_KDF_Milten_Sleeper.Spells.Fireball.GA_Spell_FireBall_MiltenSleeper	1	0	0
 AI.States.FightAI.SleeperFight.SC_NOV_Lester_Sleeper.SleeperFight_LesterCombat	2	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.GA_Summon_XardasSleeper_Skeleton	1	0	0
-AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.GA_Xardas_Sleeper_FightManager	2	0	0
+AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.GA_Xardas_Sleeper_FightManager	1	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpotManager	1	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpot_XardasSleeper	3	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.TraceTarget_XardasSleeper	1	0	0
@@ -97,13 +95,11 @@ GAS.Abilities.Interact.Sleep.Base.GA_Human_Sleep	1	0	0
 GAS.Abilities.Locomotion.GA_Falling	2	0	0
 GAS.Abilities.Locomotion.GA_FallingRagdoll	1	0	0
 GAS.Abilities.Locomotion.GA_Swim	1	0	0
-GAS.Abilities.Locomotion.Target.GA_TargetEnemy	1	0	0
 GAS.Abilities.Passive.Drugs.Derived.Alcohol.GA_AlcoholDebuff	1	0	0
 GAS.Abilities.Passive.GA_PlayerPerception_CrimeRegistration	5	0	0
 GAS.Abilities.Spells.CastSpell.Base.Targetable.GA_CastSpell_Targetable_Mandatory	1	0	0
 GAS.Abilities.Spells.CastSpell.Derived.AlteredStates.GA_CastSpell_Control	1	0	0
 GAS.Abilities.Spells.CastSpell.Derived.Summon.Base.GA_CastSpell_SummonBase	1	0	0
-GAS.Abilities.Spells.ExecutionValidator.Derived.Base.CastSpell_ExecutionValidator_Default	1	0	0
 GAS.Abilities.Spells.ExecutionValidator.Derived.Spell.Telekinesis.CastSpell_ExecutionValidator_Telekinesis	1	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_SpawnRechargeableProjectile	1	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_Targetable	1	0	0
@@ -135,7 +131,6 @@ GAS.GASCharacterMixins	6	0	0
 GAS.GASCharacterStateMixins	8	0	0
 GAS.PerceptionEventMixins	1	0	0
 Gameplay.Environment.BattleBlockingBarrier.BattleBarrierVisual	1	0	0
-Gameplay.Environment.MCQueen.CeilingMinionSpawner.MCQueen_MinionCeilingSpawner	1	0	0
 Gameplay.Environment.StageManager.InExtremoBanner	1	0	0
 Gameplay.Magic.Components.Damage.PercentageDamageLimiterComponent	1	0	0
 Gameplay.Magic.Components.Damage.WaterDamageLimiterComponent	1	0	0
@@ -151,7 +146,6 @@ Player.PlayerConfig	1	0	0
 Regions.Traits.QuestRelatedTraits	8	0	0
 Sound.FXDefinitions.FXDefinitions_AttackImpact	1	0	0
 Sound.FXDefinitions.FXDefinitions_Footsteps	1	0	0
-Sound.MusicRegions	3	0	0
 Spawning.TriggerSpawner	1	0	0
 Story.Achievements	9	0	0
 Story.G1R.Conversation.Conversation_NC_BAU_RICELORD_900	1	0	0
