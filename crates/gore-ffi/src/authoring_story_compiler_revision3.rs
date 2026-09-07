@@ -1161,6 +1161,19 @@ where
             return managed_response(&selection, &initial_derived, compiler, false);
         }
     };
+    // The dispatch probe ran without the guard; a deploy may have landed in between. The game
+    // compiler must not run on an installed script mod, so ask again now that the guard is held.
+    if let Some(source) = crate::script_compile_report::installed_script_mod(game_root) {
+        return release_after_preflight(
+            selection,
+            guard,
+            &initial_derived,
+            Failure::new(
+                "AUTHORING_REVISION3_GAME_BACKEND_UNAVAILABLE",
+                crate::script_compile_report::game_backend_unavailable_detail(&source),
+            ),
+        );
+    }
 
     let (guard, derived) = match derive(guard) {
         GuardedDerivation::Ready { guard, module } => (guard, module),

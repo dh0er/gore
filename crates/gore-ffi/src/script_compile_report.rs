@@ -1190,6 +1190,18 @@ fn compile_report_v1_payload_recording_attempt(
         Ok(guard) => guard,
         Err(message) => return install_guard_failure(&game_dir, message),
     };
+    // The dispatch probe ran without the guard; a deploy may have landed in between. The game
+    // compiler must not run on an installed script mod, so ask again now that the guard is held.
+    if let Some(source) = installed_script_mod(&game_dir) {
+        return release_guard_after_preflight_failure(
+            guard,
+            preflight_failure(
+                "COMPILE_GAME_BACKEND_UNAVAILABLE",
+                game_backend_unavailable_detail(&source),
+            ),
+            "the game compiler cannot run on an installed script mod",
+        );
+    }
     // Do not silently fall back to an arbitrary live/backup choice here. The exact base used for
     // remapping must be the same drift-aware pristine base that deployment would later splice.
     let base_override = match gore_mod::pristine_script_cache(&game_dir) {
