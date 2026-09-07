@@ -9,10 +9,8 @@ AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_R
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.FireDemon_HellArmsArea_Ring	7	0	0
 AI.AIAgent.Creature.Demon.Spells.Area.DemonAreaVisual	2	0	0
 AI.AIAgent.Creature.Golem.Fire.Spells.BreakFloor.GA_Spell_BreakFloor_FireGolem	2	0	0
-AI.AIAgent.Creature.Golem.Fire.Spells.Heated.GA_FireGolem_SpecialState_Heated	1	0	0
 AI.AIAgent.Creature.Golem.Fire.Spells.LavaStream.GA_FireGolem_EnvironmentAttack_ArenaLavaStreams	1	0	0
 AI.AIAgent.Creature.Golem.Ice.Spells.Icebolt.GA_Spell_IceGolem_IceBolt	2	0	0
-AI.AIAgent.Creature.Golem.Ice.Spells.SummonMiniGolems.GA_IceGolem_SpecialState_SummonMiniGolem	1	0	0
 AI.AIAgent.Creature.Minecrawler.Queen.Abilities.GA_MCQueenPhaseChangeHit	1	0	0
 AI.AIAgent.Creature.Molerat.CombatSituations_Molerat	1	0	0
 AI.AIAgent.Creature.Scavenger.Rideable.Components.GothicMountComponentAS	2	0	0
@@ -30,7 +28,7 @@ AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingResponse	2	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	22	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.TheftEvaluationContext	1	0	0
-AI.AssessmentResponseSystem.EventResponses	7	0	0
+AI.AssessmentResponseSystem.EventResponses	6	0	0
 AI.CharacterAI_Gothic	6	0	0
 AI.CharacterAI_Human	1	0	0
 AI.CharacterAI_Orc	2	0	0
@@ -61,7 +59,7 @@ AI.States.FightAI.CombatState.AIGroup_Combat	4	0	0
 AI.States.FightAI.CombatState.AIState_OGCombat	12	0	0
 AI.States.FightAI.CombatState.CombatBehaviorSets.CombatBehaviorSet	1	0	0
 AI.States.FightAI.CombatState.CombatBehaviorSets.UnreachableEnemy.CombatBehaviorSet_UnreachableEnemy	1	0	0
-AI.States.FightAI.CombatState.CombatMoves	24	0	0
+AI.States.FightAI.CombatState.CombatMoves	23	0	0
 AI.States.FightAI.CombatState.CombatOperations	1	0	0
 AI.States.FightAI.CombatState.CombatSituations	4	0	0
 AI.States.FightAI.CombatState.CombatTestClasses	1	0	0
@@ -87,7 +85,6 @@ AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpot_
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.TraceTarget_XardasSleeper	1	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.Xardas_Sleeper_Minion_BillboardComponent	1	0	0
 AI.States.FightAI.WaitStates.AIState_WaitForBlockedPath	2	0	0
-AI.States.FightAI.WaitStates.AIState_WaitWaryOfNearbyPerceivedCharacter	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_ComplainAboutBlockedPath	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_Creature	1	0	0
@@ -127,7 +124,7 @@ GAS.Abilities.Spells.Spells.Fire.GA_Spell_StormOfFire	1	0	0
 GAS.Abilities.Spells.Spells.Light.GA_Spell_Light	1	0	0
 GAS.Abilities.Spells.Spells.Summon.Base.GA_Spell_Summon	2	0	0
 GAS.Abilities.Spells.Spells.Summon.SpawnHelper.Base.SummonSpawnPlaceHelper	3	0	0
-GAS.Abilities.Spells.Spells.Summon.SpawnHelper.CircleSummonSpawnPlaceHelper	3	0	0
+GAS.Abilities.Spells.Spells.Summon.SpawnHelper.CircleSummonSpawnPlaceHelper	2	0	0
 GAS.Abilities.Spells.Spells.Telekinesis.GA_Spell_Telekinesis	1	0	0
 GAS.Abilities.Spells.Spells.Telekinesis.GA_Spell_Telekinesis_FocusStoneBridge	1	0	0
 GAS.Abilities.Spells.Spells.Telekinesis.TelekinesisItemMovementVisual	1	0	0

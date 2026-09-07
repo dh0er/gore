@@ -1516,6 +1516,29 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_script_argument_copy(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name, namespace) in [(101, "FSource", "Qualified"), (102, "FResult", "Qualified"), (103, "FSource", "Other")] {
+            r.type_by_ptr.insert(ptr, name.into());
+            r.type_names.insert(name.into()); r.typeid_to_ptr.insert(ptr as i32, ptr);
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), namespace: namespace.into(), module: "Synthetic".into() });
+        }
+        for (id, owner, name) in [(1, "FResult", "FResult"), (2, "FSource", "FSource"),
+            (3, "FResult", "FResult"), (4, "FSource", "~FSource")] {
+            r.funcid_to_ptr.insert(id as i32, id); r.func_by_ptr.insert(id, name.into());
+            r.func_owner.insert(id, owner.into()); r.func_is_method.insert(id);
+            r.func_ret.insert(id, DataType { token: 0x52, ..Default::default() });
+            r.func_params.insert(id, Vec::new());
+        }
+        r.script_ctor_owner.extend([(1, 102), (2, if fault == 1 { 103 } else { 101 }), (3, 102)]);
+        r.func_params.insert(3, vec![DataType { token: 5, type_info: if fault == 2 { 103 } else { 101 },
+            is_reference: true, is_object_const: fault != 3, is_read_only: fault != 3, ..Default::default() },
+            DataType { token: 0x50, is_object_const: true, is_read_only: true, ..Default::default() }]);
+        if fault == 4 { r.func_is_method.remove(&3); }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_script_constructors(
         namespaces: &[&str], name: &str, params: &[DataType],
     ) -> Self {
@@ -1714,6 +1737,46 @@ impl RefResolver {
             r.func_ret.insert(id, DataType { token: 5, type_info: 100, is_reference: true, ..Default::default() });
         }
         if fault == 4 { r.func_params.insert(4, vec![DataType::default()]); }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_native_field_initializer(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(101, "Example"), (201, "FSoftValue"), (202, "FClassValue"), (301, "FName"), (302, "UClass")] {
+            r.type_by_ptr.insert(ptr, name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: if ptr == 101 { "Module" } else { "" }.into(),
+                namespace: if ptr == 101 { "NS" } else { "" }.into() });
+        }
+        r.typeid_to_ptr.insert(11, 101);
+        for (offset, name) in [(8, "Path"), (16, "Kind")] {
+            let key = (11i64 << 1) | ((offset as i64) << 33) | 1;
+            r.prop_by_key.insert(key, name.into()); r.prop_type_id.insert(key, if fault == 1 { 99 } else { 11 });
+        }
+        for (id, name, owner) in [(1, "__STATIC_NAME", ""), (2, "$beh0", "FSoftValue"), (3, "opAssign", "FSoftValue"),
+            (4, "StaticClass", ""), (5, "$beh0", "FClassValue"), (6, "opAssign", "FClassValue")] {
+            r.func_by_ptr.insert(id, name.into());
+            if !owner.is_empty() { r.func_is_method.insert(id); r.func_owner.insert(id, if fault == 2 { "FOther" } else { owner }.into()); }
+            r.func_params.insert(id, Vec::new()); r.func_ret.insert(id, DataType { token: 0x52, ..Default::default() });
+        }
+        r.funcid_to_ptr.insert(44, 4); r.static_names.push("/Game/Example".into());
+        r.func_params.insert(1, vec![DataType { token: 0x44, ..Default::default() }]);
+        r.func_ret.insert(1, DataType { token: 5, type_info: 301, is_reference: true, is_object_const: true, is_read_only: true, ..Default::default() });
+        r.func_params.insert(3, vec![DataType { token: 5, type_info: if fault == 3 { 302 } else { 301 }, ..Default::default() }]);
+        r.func_ret.insert(3, DataType { token: 5, type_info: 201, is_reference: true, ..Default::default() });
+        r.func_ret.insert(4, DataType { token: 5, type_info: 302, is_object_handle: fault != 4, ..Default::default() });
+        r.func_params.insert(6, vec![DataType { token: 5, type_info: 302, is_object_handle: true, ..Default::default() }]);
+        if fault == 5 { r.func_params.insert(2, vec![DataType::default()]); }
+        if fault >= 6 {
+            r.type_by_ptr.insert(203, "FBaseValue".into());
+            let mut identity = r.type_identity_by_ptr[&201].clone();
+            identity.name = "FBaseValue".into();
+            if fault == 9 { identity.namespace = "Other".into(); }
+            r.type_identity_by_ptr.insert(203, identity);
+            r.func_ret.get_mut(&3).unwrap().type_info = 203;
+            if fault == 7 { r.func_ret.get_mut(&3).unwrap().is_object_handle = true; }
+            if fault == 8 { r.func_ret.get_mut(&3).unwrap().is_read_only = true; }
+        }
         r
     }
 
