@@ -631,6 +631,15 @@ pub(super) fn compile_report_v2_raw(input: &str) -> Value {
     let requested = payload.compiler_backend;
     match requested {
         CompilerBackendWireV2::Game => {
+            if let Some(source) = installed_script_mod(Path::new(&payload.game_dir)) {
+                return attach_backend_evidence(
+                    preflight_failure(
+                        "COMPILE_GAME_BACKEND_UNAVAILABLE",
+                        game_backend_unavailable_detail(&source),
+                    ),
+                    backend_evidence(requested, None, false, false, None),
+                );
+            }
             let (response, game_attempted) =
                 compile_report_v1_payload_with_attempt(payload.into_v1());
             attach_backend_evidence(
@@ -655,13 +664,26 @@ fn compile_report_v2_product_payload(
     requested: CompilerBackendWireV2,
 ) -> Value {
     let game_dir = PathBuf::from(&payload.game_dir);
+    // While a script mod is installed the game fallback is unavailable even without a package:
+    // the failure that would have caused the fallback is reported instead, with the skipped
+    // fallback as evidence.
+    let installed = installed_script_mod(&game_dir);
+    let skipped_game_fallback =
+        skipped_game_fallback_note(requested, installed.as_ref()).map(|note| {
+            json!({
+                "failed_backend": CompilerBackendNameV1::Game.as_str(),
+                "failure_kind": "preflight",
+                "detail": note,
+            })
+        });
+    let standalone_only = requested == CompilerBackendWireV2::Standalone || installed.is_some();
     let resolution = match resolve_product_standalone_compiler_for_game_v1(&game_dir) {
         Ok(resolution) => resolution,
         Err(message) => {
-            if requested == CompilerBackendWireV2::Standalone {
+            if standalone_only {
                 return attach_backend_evidence(
                     preflight_failure("COMPILE_STANDALONE_PACKAGE_LOCATION", message),
-                    backend_evidence(requested, None, false, false, None),
+                    backend_evidence(requested, None, false, false, skipped_game_fallback),
                 );
             }
             let (response, game_attempted) = compile_report_v1_payload_with_attempt(payload);
@@ -683,13 +705,13 @@ fn compile_report_v2_product_payload(
     };
     match resolution {
         ResolvedProductStandaloneCompilerV1::BundleAbsent => {
-            if requested == CompilerBackendWireV2::Standalone {
+            if standalone_only {
                 attach_backend_evidence(
                     preflight_failure(
                         "COMPILE_STANDALONE_BUNDLE_ABSENT",
                         BUNDLE_ABSENT_DETAIL.to_owned(),
                     ),
-                    backend_evidence(requested, None, false, false, None),
+                    backend_evidence(requested, None, false, false, skipped_game_fallback),
                 )
             } else {
                 let (response, game_attempted) = compile_report_v1_payload_with_attempt(payload);
@@ -706,13 +728,13 @@ fn compile_report_v2_product_payload(
             }
         }
         ResolvedProductStandaloneCompilerV1::Unavailable(reason) => {
-            if requested == CompilerBackendWireV2::Standalone {
+            if standalone_only {
                 attach_backend_evidence(
                     preflight_failure(
                         "COMPILE_STANDALONE_PACKAGE_UNAVAILABLE",
                         format!("{:?}: {}", reason.kind(), reason.detail()),
                     ),
-                    backend_evidence(requested, None, false, false, None),
+                    backend_evidence(requested, None, false, false, skipped_game_fallback),
                 )
             } else {
                 let fallback = package_unavailable_fallback_reason(&reason);
@@ -1074,6 +1096,26 @@ fn qualified_target_pristine_script_cache(
     let target_matches_pristine = qualified_shipping == pristine.as_slice()
         && selected.is_none_or(|source| source.matches(qualified_shipping));
     Ok((pristine, target_matches_pristine))
+}
+
+/// The script mod installed in `game_dir`, if the deployment-aware pristine source is a backup
+/// the deployment owns. The game backend must not run then: it regenerates into the live cache
+/// and would restore the original over the mod.
+pub(crate) fn installed_script_mod(game_dir: &Path) -> Option<gore_mod::PristineScriptCacheSource> {
+    gore_mod::pristine_script_cache_source(game_dir)
+        .ok()
+        .filter(|source| source.from_backup)
+}
+
+pub(crate) fn game_backend_unavailable_detail(
+    source: &gore_mod::PristineScriptCacheSource,
+) -> String {
+    format!(
+        "the game compiler cannot run while a script mod is installed: the compiler base is the \
+         deployment backup {}, which the game compiler would restore over the live cache; use the \
+         standalone backend or undeploy the mod first",
+        source.path.display()
+    )
 }
 
 /// Why standalone_then_game skips its game fallback, when it does: the compiler base is the
@@ -2044,6 +2086,56 @@ mod tests {
             skipped_game_fallback_note(CompilerBackendWireV2::StandaloneThenGame, Some(&installed))
                 .expect("standalone_then_game skips its game fallback on a backup-pinned base");
         assert!(note.contains("game fallback is unavailable"), "got: {note}");
+    }
+
+    /// The legacy game dispatch asks this before it runs: only a backup the deployment owns
+    /// means a script mod is installed.
+    #[test]
+    fn installed_script_mod_needs_an_owned_backup() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let script = game.join("G1R/Script");
+        fs::create_dir_all(&script).unwrap();
+        let live = script.join("PrecompiledScript_Shipping.Cache");
+        fs::write(&live, b"pristine").unwrap();
+        assert!(installed_script_mod(&game).is_none());
+        assert!(installed_script_mod(&root.path().join("missing")).is_none());
+
+        let backup = PathBuf::from(format!("{}.gore-bak", live.display()));
+        fs::write(&backup, b"pristine").unwrap();
+        fs::write(&live, b"deployed").unwrap();
+        let recorded_live = fs::canonicalize(&live).unwrap();
+        let recorded_backup = fs::canonicalize(&backup).unwrap();
+        let identity = |bytes: &[u8]| format!("sha256:{:x}", Sha256::digest(bytes));
+        let mut record = gore_mod::DeployRecord {
+            mod_name: "fixture".to_owned(),
+            backups: vec![(
+                recorded_live.display().to_string(),
+                recorded_backup.display().to_string(),
+                true,
+            )],
+            ..Default::default()
+        };
+        record
+            .deployed_hashes
+            .insert(recorded_live.display().to_string(), identity(b"deployed"));
+        record
+            .backup_hashes
+            .insert(recorded_backup.display().to_string(), identity(b"pristine"));
+        fs::write(
+            game.join("gore-mod.deployed.json"),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+
+        let installed = installed_script_mod(&game).expect("an owned backup is an installed mod");
+        assert!(installed.from_backup);
+        let detail = game_backend_unavailable_detail(&installed);
+        assert!(detail.contains("script mod is installed"), "got: {detail}");
+        assert!(
+            detail.contains(&installed.path.display().to_string()),
+            "got: {detail}"
+        );
     }
 
     fn request(payload: Value) -> String {
