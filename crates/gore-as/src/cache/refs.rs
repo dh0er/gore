@@ -783,7 +783,8 @@ impl RefResolver {
     /// wrapper). Their cache FunctionReference is the only owner-specific signature evidence.
     /// `FPerceptionHandler::AddEvent(1)` versus the unrelated Binds-only
     /// `UTimelineComponent::AddEvent(2)` is the concrete over-count this gate prevents.
-    /// Free/static calls without an owner retain the unambiguous by-name fallback.
+    /// Ownerless namespace calls reject a conflicting by-name arity; the exact cache
+    /// declaration remains the fallback. Unnamespaced calls retain the historical lookup.
     pub fn native_arity_by_ptr(&self, ptr: i64, name: &str) -> Option<usize> {
         // batch-20 Class C: natives whose tail-table FunctionReferences param list UNDERCOUNTS
         // the live game API (proven by the in-game error candidates). Keyed (owner, name); the
@@ -813,7 +814,17 @@ impl RefResolver {
                 let cache = self.func_params.get(&ptr)?.len();
                 (by_name <= cache).then_some(by_name)
             }),
-            None => n.arity_by_name(name),
+            None => {
+                let arity = n.arity_by_name(name)?;
+                // Binds may omit this namespace entirely: its two-arg MagicScript::LogInfo
+                // must not truncate the three-arg VLog::LogInfo frame and orphan its FName.
+                if self.func_ns.contains_key(&ptr)
+                    && self.func_params.get(&ptr).is_some_and(|p| p.len() != arity)
+                {
+                    return None;
+                }
+                Some(arity)
+            }
         }
     }
     /// Best-known native arity for a call by function id.
@@ -1781,6 +1792,17 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_native_direct_field(fault: u8) -> Self {
+        let mut r = Self::from_test_native_field_initializer(if fault <= 2 { fault } else { 0 });
+        r.func_params.insert(2, vec![DataType { token: 5, type_info: if fault == 3 { 302 } else { 301 },
+            is_reference: fault == 4, ..Default::default() }]);
+        if fault == 5 { r.func_ret.get_mut(&2).unwrap().token = 0x41; }
+        if fault == 6 { r.func_ret.get_mut(&1).unwrap().is_object_const = false; }
+        if fault == 7 { r.type_identity_by_ptr.get_mut(&201).unwrap().namespace = "Other".into(); }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_native_default_constructor(owner: &str, params: usize, returns_void: bool) -> Self {
         let mut r = Self::default();
         r.type_by_ptr.insert(101, owner.into());
@@ -2452,6 +2474,43 @@ mod tests {
         assert_eq!(refs.native_arity_by_ptr(14, "GetComponent"), None);
         // An exact object-owner entry remains authoritative; only the name-only fallback is barred.
         assert_eq!(refs.native_arity_by_ptr(15, "ExactObject"), Some(1));
+    }
+
+    #[test]
+    fn namespaced_native_arity_rejects_a_conflicting_bare_name() {
+        let mut refs = RefResolver::default();
+        refs.func_ns.insert(10, "VLog".into());
+        refs.func_params.insert(10, vec![DataType::default(); 3]);
+        refs.native = Some(super::super::binds::NativeApi::from_test_arities(
+            &[], &[("LogInfo", Some(2))],
+        ));
+        assert_eq!(refs.native_arity_by_ptr(10, "LogInfo"), None);
+        // CALLSYS's existing fallback keeps the exact three-argument physical frame.
+        assert_eq!(refs.native_arity_by_ptr(10, "LogInfo")
+            .or_else(|| refs.func_params_by_ptr(10).map(|p| p.len())), Some(3));
+        // An unrelated longer signature must not consume an enclosing operand either.
+        refs.func_params.insert(10, vec![DataType::default()]);
+        assert_eq!(refs.native_arity_by_ptr(10, "LogInfo"), None);
+    }
+
+    #[test]
+    fn namespaced_native_arity_preserves_matching_unknown_and_owned_cases() {
+        let mut refs = RefResolver::default();
+        refs.func_ns.insert(10, "VLog".into());
+        refs.func_params.insert(10, vec![DataType::default(); 2]);
+        refs.func_params.insert(11, vec![DataType::default(); 3]);
+        refs.func_ns.insert(12, "VLog".into());
+        refs.func_owner.insert(12, "FExactOwner".into());
+        refs.func_params.insert(12, vec![DataType::default(); 3]);
+        refs.func_ns.insert(13, "VLog".into());
+        refs.native = Some(super::super::binds::NativeApi::from_test_arities(
+            &[("FExactOwner", "LogInfo", 1)], &[("LogInfo", Some(2))],
+        ));
+        assert_eq!(refs.native_arity_by_ptr(10, "LogInfo"), Some(2));
+        assert_eq!(refs.native_arity_by_ptr(11, "LogInfo"), Some(2));
+        assert_eq!(refs.native_arity_by_ptr(12, "LogInfo"), Some(1));
+        // Missing cache params provide no contradictory count; don't alter that fallback.
+        assert_eq!(refs.native_arity_by_ptr(13, "LogInfo"), Some(2));
     }
 
     #[test]

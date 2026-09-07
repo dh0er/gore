@@ -4665,6 +4665,20 @@ fn block_stmts_in(
                 if let Some(c) = &mut cmp {
                     c.op = Some("==");
                 }
+                // A terminal bool field store leaves the test unused: the separate
+                // return carrier replaces its register value. Keep its expression.
+                if k > 0 && insns[k - 1].op.name == "CmpPtrNull"
+                    && ctx.f.ret.token == 0x41 && !ctx.f.ret.is_reference
+                    && insns[k + 1..].iter().map(|i| i.op.name)
+                        .eq(["SetV1", "LoadThisR", "WRTV1", "CpyVtoR4", "RET"])
+                    && w(&insns[k + 1], 0) == w(&insns[k + 3], 0)
+                    && insns[k + 1].dwords.first().is_some_and(|v| *v <= 1)
+                {
+                    if let Some(condition) = cmp.as_ref().and_then(materialized_comparison) {
+                        out.push(format!("{condition};"));
+                        cmp = None;
+                    }
+                }
             }
             "TNZ" => {
                 if let Some(c) = &mut cmp {
@@ -11066,6 +11080,50 @@ mod tests {
             rvo_switch_region: std::cell::Cell::new(false),
         };
         block_stmts(&ctx, 0, fixture.instrs.len())
+    }
+
+    #[test]
+    fn terminal_null_test_precedes_the_independent_bool_field_store() {
+        for fault in 0..6 {
+            let mut a = TestAssembler::default();
+            a.op("PshVPtr", &[0], &[]);
+            a.op("ADDSi", &[0], &[1]);
+            a.op("RDSPtr", &[], &[]);
+            a.op("RefCpyV", &[4], &[]);
+            a.op("CmpPtrNull", &[4], &[]);
+            a.op(if fault == 1 { "TNZ" } else { "TZ" }, &[], &[]);
+            a.op("SetV1", &[2], &[if fault == 2 { 2 } else { 0 }]);
+            a.op("LoadThisR", &[0], &[2]);
+            a.op("WRTV1", &[if fault == 3 { 3 } else { 2 }], &[]);
+            a.op(if fault == 4 { "CpyVtoR1" } else { "CpyVtoR4" }, &[1], &[]);
+            a.op("RET", &[2], &[]);
+            let fixture = a.finish();
+            let refs = RefResolver::from_test_member_chain(&[
+                ("UController", "CurrentCell"), ("UController", "Waiting")]);
+            let f = FuncCode { func: "UController::Activate".into(), is_method: true,
+                param_names: Vec::new(), param_types: Vec::new(),
+                ret: DataType { token: if fault == 5 { 0x44 } else { 0x41 }, ..Default::default() },
+                bytecode: Vec::new() };
+            let locals = HashMap::from([(1, "bool".into()), (2, "bool".into()),
+                (3, "bool".into()), (4, "UCell".into())]);
+            let fields = HashMap::from([("Waiting".into(), "bool".into())]);
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: Some(&fields), param_types: None,
+                class_name: Some("UController"), local_types: Some(&locals),
+                float_slots: Default::default(), param_off_map: HashMap::new(), rvo_off: None,
+                keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+            let (stmts, cmp) = block_stmts(&ctx, 0, fixture.instrs.len());
+            let ignored = stmts.iter().position(|s| s == "(local_4 == nullptr);");
+            if fault == 0 {
+                let captured = stmts.iter().position(|s| s == "local_4 = this.CurrentCell;").unwrap();
+                let stored = stmts.iter().position(|s| s.starts_with("this.Waiting = ")).unwrap();
+                assert!(captured < ignored.unwrap() && ignored.unwrap() < stored, "{stmts:?}");
+                assert_eq!(stmts.iter().filter(|s| *s == "(local_4 == nullptr);").count(), 1);
+                assert!(cmp.is_none());
+            } else {
+                assert!(ignored.is_none(), "fault={fault}: {stmts:?}");
+            }
+        }
     }
 
     #[test]

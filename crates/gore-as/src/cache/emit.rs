@@ -770,6 +770,7 @@ fn emit_class(s: &mut String, c: &Class, module: &str, refs: &RefResolver, defau
     // constructors lost a `SetV1; LoadThisR; WRTV1` this way).
     let own_fields: HashSet<&str> = c.fields.iter().map(|f| f.name.as_str()).collect();
     let native_prefix = native_field_initializer_prefix(c, module, refs);
+    let direct_constructors = directly_constructed_native_fields(c, module, refs);
     let member_initializers = extract_member_initializers_with_native_prefix(&mut constructors, &own_fields, &native_prefix);
     let handle_nulls_are_the_compiler_s = null_stores_are_compiler_generated(&c.ctors);
     let written_bare = fields_initialised_bare(&c.ctors, refs);
@@ -801,6 +802,9 @@ fn emit_class(s: &mut String, c: &Class, module: &str, refs: &RefResolver, defau
             // constructor stores into it.
             Some(_) if written_bare.contains(&f.name) => {
                 let _ = writeln!(s, "    {ty} {};", f.name);
+            }
+            Some(value) if direct_constructors.contains(&f.name) => {
+                let _ = writeln!(s, "    {ty} {}({value});", f.name);
             }
             Some(value) if value != "nullptr" || !handle_nulls_are_the_compiler_s => {
                 let _ = writeln!(s, "    {ty} {} = {value};", f.name);
@@ -3031,7 +3035,7 @@ fn emit_function_ctor(
             returns_by_reference,
         );
         pass_trace("fold_literal_null_returns", &rendered);
-        let rendered = fold_carrier_if_else(&rendered);
+        let rendered = fold_carrier_if_else(&rendered, fields);
         pass_trace("fold_carrier_if_else", &rendered);
         // Restore this closed comparison tail after every bool-chain inliner.
         let rendered = restore_named_integer_comparison_return(&rendered, f, refs);
@@ -5045,7 +5049,15 @@ fn canonical_bool_return_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
                         && slot(ins, 1) == slot(&instrs[at - 1], 0)
                         && slot(ins, 1).is_some_and(|source| bool_fields.contains(&source));
                     field_copy |= from_field;
-                    from_field || (at >= 2
+                    let from_byte = at > 0 && instrs[at - 1].op.name == "SetV1"
+                        && slot(ins, 1) == slot(&instrs[at - 1], 0)
+                        && slot(ins, 1) != Some(*candidate)
+                        && instrs[at - 1].dwords.first().is_some_and(|v| *v <= 1)
+                        && !instrs.iter().any(|jump| jump.op.name == "JMPP"
+                            || (jump.op.name.starts_with('J') && jump.dwords.first().is_some_and(|delta|
+                                jump.offset_dw as i64 + 2 + i64::from(*delta as i32)
+                                    == ins.offset_dw as i64)));
+                    from_field || from_byte || (at >= 2
                         && matches!(instrs[at - 2].op.name, "TZ" | "TNZ" | "TS" | "TNS" | "TP" | "TNP")
                         && instrs[at - 1].op.name == "CpyRtoV4"
                         && slot(ins, 1) == slot(&instrs[at - 1], 0))
@@ -9273,6 +9285,10 @@ fn inline_temporary_into(
                 // radius, the radius is the named one).
                 let stays = slot_and_life_any(&feeder).is_some_and(|(slot, _)| {
                     widened.contains(&slot) || hoisted.contains(&slot) || statement_producers.contains(&slot)
+                        // A callee-qualified named life stays eager even when its
+                        // physical slot also held unrelated temporary results.
+                        || definition_value(&lines[line], &feeder).and_then(outer_callee)
+                            .is_some_and(|callee| named_sites.contains(&(slot, callee)))
                 });
                 !stays && count_ident(&lines[index], &feeder) > 0
             })
@@ -9653,6 +9669,39 @@ fn call_sites(line: &str) -> Vec<(String, Vec<String>)> {
     let mut pending: Vec<String> = statement_expression(line).into_iter().map(str::to_owned).collect();
     while let Some(expression) = pending.pop() {
         let Some((callee, arguments)) = call_of_expression(&expression) else {
+            // Only a complete expression statement gets this additional scan.
+            // Stored/tested/returned expressions carry conversion and lifetime
+            // evidence that the fallback cannot recover from their argument lists.
+            if line.trim().strip_suffix(';') != Some(expression.as_str()) { continue; }
+            // A receiver chain or arithmetic argument is not itself one call, but
+            // its inner calls still have the same typed argument-position gates.
+            let bytes = expression.as_bytes();
+            let (mut quoted, mut escaped) = (false, false);
+            for (open, &byte) in bytes.iter().enumerate() {
+                if quoted {
+                    match byte {
+                        _ if escaped => escaped = false,
+                        b'\\' => escaped = true,
+                        b'"' => quoted = false,
+                        _ => {}
+                    }
+                    continue;
+                }
+                if byte == b'"' { quoted = true; continue; }
+                if byte != b'(' { continue; }
+                let mut start = open;
+                while start > 0 && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_') {
+                    start -= 1;
+                }
+                if start == open || !(bytes[start].is_ascii_alphabetic() || bytes[start] == b'_') { continue; }
+                let Some(close) = matching_paren(&expression, open) else { continue; };
+                // argument_list has no string parser. Leave such enclosing lists alone;
+                // the scan can still find their real inner calls outside the strings.
+                if expression[open..=close].contains('"') { continue; }
+                if let Some((arguments, _)) = argument_list(&expression, open).filter(|(_, end)| *end == close) {
+                    sites.push((expression[start..open].to_owned(), arguments));
+                }
+            }
             continue;
         };
         pending.extend(arguments.iter().cloned());
@@ -9858,6 +9907,58 @@ fn null_stores_are_compiler_generated(ctors: &[Func]) -> bool {
         }
     }
     seen
+}
+
+/// Keep the native one-argument member constructor: `= value` instead
+/// emits a default constructor followed by assignment. The common textual
+/// initializer still proves equal values and a movable constructor prefix.
+fn directly_constructed_native_fields(c: &Class, module: &str, refs: &RefResolver) -> HashSet<String> {
+    let mut common: Option<HashSet<String>> = None;
+    for ctor in &c.ctors {
+        let Ok(code) = disassemble(&ctor.bytecode) else { return HashSet::new(); };
+        if code.iter().any(|i| i.op.name.starts_with('J')) { return HashSet::new(); }
+        let ptr = |i: &Instr| i.qwords.first().copied().unwrap_or(0) as i64;
+        let own = |id| refs.type_identity_by_id(id).is_some_and(|t|
+            t.module == module && t.namespace == c.namespace && t.name == c.name);
+        let mut found = Vec::new();
+        for frame in code.windows(6) {
+            let candidate = (|| {
+                if frame.iter().map(|i| i.op.name).ne(["PshC4", "CALLSYS", "PshRPtr", "PshVPtr", "ADDSi", "CALLSYS"])
+                    || frame[3].words.first() != Some(&0) { return None; }
+                let (id, offset) = (*frame[4].dwords.first()? as i32, *frame[4].words.first()? as i32);
+                let (field, old_owner) = refs.member_identity(id, offset)?;
+                if !own(id) || !own(old_owner) { return None; }
+                let mut fields = c.fields.iter().enumerate().filter(|(_, f)| f.name == field);
+                let (index, field) = fields.next()?;
+                let plain_value = |t: &super::types::DataType| t.token == 5 && !t.is_reference && !t.is_object_handle
+                    && !t.is_object_const && !t.is_read_only && !t.is_auto;
+                if fields.next().is_some() || !plain_value(&field.ty) { return None; }
+                let owner = refs.type_identity_by_ptr(field.ty.type_info)?;
+                let constructor = ptr(&frame[5]);
+                let [input] = refs.func_params_by_ptr(constructor)? else { return None; };
+                if !owner.module.is_empty() || !owner.namespace.is_empty() || !plain_value(input)
+                    || refs.func_by_ptr(constructor) != Some("$beh0") || !refs.is_method_by_ptr(constructor)
+                    || refs.func_owner_by_ptr(constructor) != Some(owner.name.as_str())
+                    || !refs.func_ret_by_ptr(constructor).is_some_and(|r| r.token == 0x52 && !r.is_reference) { return None; }
+                let name = ptr(&frame[1]);
+                let result = refs.func_ret_by_ptr(name)?;
+                let [argument] = refs.func_params_by_ptr(name)? else { return None; };
+                if refs.func_by_ptr(name) != Some("__STATIC_NAME") || refs.is_method_by_ptr(name)
+                    || argument.token != 0x44 || argument.is_reference
+                    || refs.static_name(*frame[0].dwords.first()? as i64).is_none()
+                    || result.token != 5 || !result.is_reference || !result.is_object_const || !result.is_read_only
+                    || result.is_object_handle || result.type_info != input.type_info
+                    || refs.type_by_ptr(input.type_info) != Some("FName")
+                    || code.iter().filter(|i| i.op.name == "ADDSi" && i.words == frame[4].words && i.dwords == frame[4].dwords).count() != 1 { return None; }
+                Some((index, field.name.clone()))
+            })();
+            if let Some(pair) = candidate { found.push(pair); }
+        }
+        if found.windows(2).any(|p| p[0].0 >= p[1].0) { return HashSet::new(); }
+        let found: HashSet<_> = found.into_iter().map(|(_, field)| field).collect();
+        match &mut common { Some(common) => common.retain(|field| found.contains(field)), None => common = Some(found) }
+    }
+    common.unwrap_or_default()
 }
 
 /// Native default construction AFTER a fully produced RHS belongs to the
@@ -16025,8 +16126,10 @@ fn inline_unnamed_value_temporaries(
                         is_decompiler_local(&target)
                             .then(|| (indent_of(&lines[reader]), target, value))
                     })
-                    .is_some_and(|(ind, n, _)| {
-                        ind == indent && slot_and_life(&n).is_some_and(|s| unnamed.contains(&s))
+                    .is_some_and(|(ind, n, value)| {
+                        ind == indent && slot_and_life(&n).is_some_and(|s|
+                            unnamed.contains(&s) && !outer_callee(&value)
+                                .is_some_and(|callee| named_sites.contains(&(s.0, callee))))
                     });
                 if !sibling {
                     return None;
@@ -19461,7 +19564,7 @@ fn rvo_statement_producers(
 /// That spelling stores the literal through a temporary the chain never had (measured: one
 /// `CpyVtoV4` per function, 11 of them). The chain it stands for: `if (A || B || C)`; with the
 /// literal on the other side, `if (!(A || B) && C)`, and the same for `false`.
-fn fold_carrier_if_else(body: &str) -> String {
+fn fold_carrier_if_else(body: &str, fields: Option<&HashMap<String, String>>) -> String {
     let lines: Vec<&str> = body.lines().collect();
     let mut kept: Vec<String> = Vec::with_capacity(lines.len());
     let mut dropped_declarations: Vec<String> = Vec::new();
@@ -19471,26 +19574,36 @@ fn fold_carrier_if_else(body: &str) -> String {
             let head = lines[at].trim();
             let condition = head.strip_prefix("if (")?.strip_suffix(')')?;
             let indent = indent_of(lines[at]);
-            let arm = |k: usize| -> Option<(String, String)> {
-                // `{`, `NAME = VALUE;`, `}` at the arm's own indent
-                if lines.get(k)?.trim() != "{" || lines.get(k + 2)?.trim() != "}" {
-                    return None;
+            let arm = |k: usize| -> Option<(String, String, usize, bool)> {
+                if lines.get(k)?.trim() != "{" { return None; }
+                if lines.get(k + 2)?.trim() == "}" {
+                    let (target, value) = slot_store(lines.get(k + 1)?)?;
+                    return (indent_of(lines[k + 1]).len() == indent.len() + 4)
+                        .then_some((target, value, k + 3, false));
                 }
-                let (target, value) = slot_store(lines.get(k + 1)?)?;
-                (indent_of(lines[k + 1]).len() == indent.len() + 4).then_some((target, value))
+                // A comparison may still have its own bool declaration before the
+                // integer-spelled merge copy. Consume only this closed, typed local life.
+                if lines.get(k + 3)?.trim() != "}" { return None; }
+                let (temp, expression) = lines[k + 1].trim().strip_prefix("bool ")?
+                    .strip_suffix(';')?.split_once(" = ")?;
+                let (target, value) = slot_store(lines.get(k + 2)?)?;
+                if !is_decompiler_local(temp) || value != temp || target == temp
+                    || expression.is_empty() || count_ident(expression, temp) != 0
+                    || lines.iter().map(|l| count_ident(l, temp)).sum::<usize>() != 2
+                    || [k + 1, k + 2].iter().any(|i| indent_of(lines[*i]).len() != indent.len() + 4)
+                { return None; }
+                Some((target, expression.to_owned(), k + 4, true))
             };
-            let (then_target, then_value) = arm(at + 1)?;
-            if lines.get(at + 4)?.trim() != "else" {
-                return None;
-            }
-            let (else_target, else_value) = arm(at + 5)?;
+            let (then_target, mut then_value, else_at, _) = arm(at + 1)?;
+            if lines.get(else_at)?.trim() != "else" { return None; }
+            let (else_target, else_value, next_test, else_is_bool) = arm(else_at + 1)?;
             if then_target != else_target || !is_decompiler_local(&then_target) {
                 return None;
             }
             // …possibly accumulated further before the test (`x = x || D;`): the chain went
             // on, one operand per statement (`AElectrifiedArea::ApplyGameplayEffectToTarget`).
             let mut accumulated: Vec<(String, String)> = Vec::new();
-            let mut test_at = at + 8;
+            let mut test_at = next_test;
             while let Some((target, value)) = lines.get(test_at).and_then(|l| slot_store(l)) {
                 if target != then_target || indent_of(&lines[test_at]) != indent {
                     break;
@@ -19506,8 +19619,29 @@ fn fold_carrier_if_else(body: &str) -> String {
                 test_at += 1;
             }
             let test = lines.get(test_at)?;
-            if indent_of(test) != indent || test.trim() != format!("if ({then_target})") {
-                return None;
+            let integer_return = test.trim() == format!("return ({then_target} != 0);");
+            let integer_test = integer_return || test.trim() == format!("if ({then_target} != 0)");
+            if indent_of(test) != indent
+                || (!integer_test && test.trim() != format!("if ({then_target})")) { return None; }
+            if integer_test {
+                // bool by-value arguments also earn keep_ints; a later physical-slot
+                // life can leave this earlier OR carrier spelled int. Fold only the
+                // exclusive source carrier, with a proved boolean alternative.
+                let own_bool = else_value.strip_prefix("this.")
+                    .and_then(|field| fields?.get(field)).is_some_and(|ty| ty == "bool");
+                if then_value != (if integer_return { "0" } else { "1" })
+                    || !(else_is_bool || own_bool) || !accumulated.is_empty() { return None; }
+                then_value = if integer_return { "false" } else { "true" }.into();
+                if integer_return {
+                    // Reuse turned_around only for its first, top-level relation.
+                    // A comparison inside a call argument is not the condition's inverse.
+                    let relation = [" <= ", " >= ", " < ", " > ", " == ", " != "]
+                        .iter().find_map(|op| condition.find(op));
+                    if condition.contains(['"', '&', '|', '?']) || !relation.is_some_and(|at|
+                        condition[..at].bytes().fold(0i32, |depth, byte| match byte {
+                            b'(' | b'[' => depth + 1, b')' | b']' => depth - 1, _ => depth,
+                        }) == 0) { return None; }
+                }
             }
             // exactly one literal arm, the other free of the carrier
             let (literal, other) = match (then_value.as_str(), else_value.as_str()) {
@@ -19525,6 +19659,8 @@ fn fold_carrier_if_else(body: &str) -> String {
             if mentions != 4 + 2 * accumulated.len() || declaration.is_none() {
                 return None;
             }
+            if integer_test && !lines[declaration?].trim().strip_suffix(&format!(" {then_target};"))
+                .is_some_and(|ty| matches!(ty, "int" | "int32")) { return None; }
             // Brackets only where the operators MIX: `(A || B) || C` is a chain of its own
             // inside the outer one and costs a carrier copy the flat `A || B || C` has not
             // (measured: 8 of the 11 carrier shapes kept a `CpyVtoV4` from the brackets).
@@ -19534,7 +19670,9 @@ fn fold_carrier_if_else(body: &str) -> String {
             };
             let (mut combined, mut last_op) = match (literal, literal_in_else) {
                 ("true", false) => (format!("{} || {}", group(condition, " || "), group(&other, " || ")), "||"),
-                ("false", false) => (format!("!({}) && {}", condition, group(&other, " && ")), "&&"),
+                ("false", false) => (format!("{} && {}",
+                    if integer_return { turned_around(condition) } else { format!("!({condition})") },
+                    group(&other, " && ")), "&&"),
                 ("true", true) => (format!("!({}) || {}", condition, group(&other, " || ")), "||"),
                 ("false", true) => (format!("{} && {}", group(condition, " && "), group(&other, " && ")), "&&"),
                 _ => return None,
@@ -19545,7 +19683,9 @@ fn fold_carrier_if_else(body: &str) -> String {
                 combined = format!("{left}{joined_by}{}", group(rest, &joined_by));
                 last_op = if op == "||" { "||" } else { "&&" };
             }
-            Some((format!("{indent}if ({combined})"), declaration?, test_at - at + 1))
+            let statement = if integer_return { format!("{indent}return {combined};") }
+                else { format!("{indent}if ({combined})") };
+            Some((statement, declaration?, test_at - at + 1))
         })();
         match folded {
             Some((replacement, declaration, consumed)) => {
@@ -25313,7 +25453,9 @@ mod source_shape_tests {
 
 #[cfg(test)]
 mod carrier_if_else_tests {
-    use super::fold_carrier_if_else;
+    fn fold_carrier_if_else(body: &str) -> String {
+        super::fold_carrier_if_else(body, None)
+    }
 
     #[test]
     fn a_literal_then_arm_and_a_tested_carrier_fold_into_one_chain() {
@@ -26780,6 +26922,38 @@ mod literal_value_lifetime_tests {
         assert_eq!(source, first); // no moving Kind past the unsupported earlier Path store
         let mut source = first.replace("Example()", "Example(FName Path)").replace("MakePath()", "Path");
         assert!(super::extract_member_initializers_with_native_prefix(&mut source, &fields, &keep).is_empty());
+    }
+
+    #[test]
+    fn direct_native_field_constructor_requires_own_typed_single_initialization() {
+        let mut f = function(&[("PshC4", &[]), ("CALLSYS", &[]), ("PshRPtr", &[]),
+            ("PshVPtr", &[0]), ("ADDSi", &[8]), ("CALLSYS", &[]), ("RET", &[2])]);
+        f.name = "Example".into(); f.namespace = "NS".into(); f.ret.token = 0x52;
+        let code = super::disassemble(&f.bytecode).unwrap();
+        for (at, value) in [(1, 1), (4, 11), (5, 2)] { f.bytecode[code[at].offset_dw + 1] = value; }
+        let class = |f| super::Class { name: "Example".into(), namespace: "NS".into(), super_class: None,
+            fields: vec![super::super::model::Field { name: "Path".into(), ty: DataType { token: 5, type_info: 201, ..Default::default() }, is_uproperty: true }],
+            methods: Vec::new(), ctors: vec![f], flags: 1 };
+        let refs = RefResolver::from_test_native_direct_field(0);
+        assert_eq!(super::directly_constructed_native_fields(&class(f.clone()), "Module", &refs), HashSet::from(["Path".into()]));
+        let mut source = String::new();
+        super::emit_class(&mut source, &class(f.clone()), "Module", &refs, None);
+        assert!(source.contains("FSoftValue Path(n\"/Game/Example\");"), "{source}");
+        for fault in 1..=7 {
+            assert!(super::directly_constructed_native_fields(&class(f.clone()), "Module", &RefResolver::from_test_native_direct_field(fault)).is_empty());
+        }
+        assert!(super::directly_constructed_native_fields(&class(f.clone()), "OtherModule", &refs).is_empty());
+        let mut inherited = class(f.clone()); inherited.fields.clear();
+        assert!(super::directly_constructed_native_fields(&inherited, "Module", &refs).is_empty());
+        let mut handles = class(f.clone()); handles.fields[0].ty.is_object_handle = true;
+        assert!(super::directly_constructed_native_fields(&handles, "Module", &refs).is_empty());
+        let mut duplicate = f.clone(); duplicate.bytecode.extend(f.bytecode.clone());
+        assert!(super::directly_constructed_native_fields(&class(duplicate), "Module", &refs).is_empty());
+        let mut branch = f.clone(); branch.bytecode.extend(function(&[("JMP", &[])]).bytecode);
+        assert!(super::directly_constructed_native_fields(&class(branch), "Module", &refs).is_empty());
+        let mut other = f.clone(); other.bytecode[code[5].offset_dw + 1] = 3;
+        let mut overloads = class(f); overloads.ctors.push(other);
+        assert!(super::directly_constructed_native_fields(&overloads, "Module", &refs).is_empty());
     }
 
     #[test]
@@ -28705,6 +28879,34 @@ mod literal_value_lifetime_tests {
     }
 
     #[test]
+    fn copied_byte_bool_return_requires_its_adjacent_literal_on_every_entry() {
+        let mut f = function(&[("SetV1", &[2]), ("CpyVtoV4", &[1, 2]),
+            ("CmpPtrNull", &[4]), ("JZ", &[]), ("SetV1", &[2]),
+            ("CpyVtoV4", &[1, 2]), ("CpyVtoR4", &[1]), ("RET", &[2])]);
+        f.ret.token = 0x41;
+        let code = super::disassemble(&f.bytecode).unwrap();
+        f.bytecode[code[4].offset_dw + 1] = 1;
+        f.bytecode[code[3].offset_dw + 1] = code[6].offset_dw as i32 - code[3].offset_dw as i32 - 2;
+        let refs = RefResolver::default();
+        assert_eq!(super::canonical_bool_return_slots(&f, &refs), HashSet::from([1]));
+        // Branching to the literal is safe; branching directly to its copy is not.
+        let mut through_literal = f.clone();
+        through_literal.bytecode[code[3].offset_dw + 1] = code[4].offset_dw as i32 - code[3].offset_dw as i32 - 2;
+        assert_eq!(super::canonical_bool_return_slots(&through_literal, &refs), HashSet::from([1]));
+        for fault in 0..5 {
+            let mut bad = f.clone();
+            match fault {
+                0 => bad.bytecode[code[3].offset_dw + 1] = code[5].offset_dw as i32 - code[3].offset_dw as i32 - 2,
+                1 => bad.bytecode[code[4].offset_dw + 1] = 2,
+                2 => bad.ret.token = 0x44,
+                3 => bad.bytecode.extend(function(&[("CpyVtoV4", &[1, 7])]).bytecode),
+                _ => bad.bytecode.extend(function(&[("SetV4", &[1])]).bytecode),
+            }
+            assert!(super::canonical_bool_return_slots(&bad, &refs).is_empty(), "fault={fault}");
+        }
+    }
+
+    #[test]
     fn boolean_return_merges_accept_only_byte_literals_and_comparison_copies() {
         let code: Vec<(&str, &[u16])> = vec![
             ("SetV1", &[4]), ("TZ", &[]), ("CpyRtoV4", &[5]),
@@ -29494,5 +29696,180 @@ mod out_argument_read_order_tests {
         assert!(!inline_crosses_out_argument_read(value, "local_55", "return !local_49 || local_55 < 0.0;", &mutable));
         assert!(!inline_crosses_out_argument_read(value, "local_55", "return local_55 < 0.0 || !local_49_2;", &mutable));
         assert!(!inline_crosses_out_argument_read(value, "local_55", "local_49_2 = local_55 < 0.0;", &mutable));
+    }
+}
+
+#[cfg(test)]
+mod nested_call_site_argument_tests {
+    use super::*;
+
+    fn inline(body: &str, refs: &RefResolver) -> String {
+        inline_call_argument_temporaries(body, refs,
+            &BTreeMap::from([(6, "AGothicCharacter".into())]), None, true,
+            &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
+            &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new())
+    }
+
+    #[test]
+    fn cast_argument_inside_receiver_chain_and_product_is_visible() {
+        let statement = "    UController::Get().Set(ReadAttribute(this, 0, local_6) * 2.0f);\n";
+        let body = format!("    local_6 = Cast<AGothicCharacter>(this.GetAvatar());\n{statement}");
+        let refs = RefResolver::from_test_out_argument_read_order(true);
+        assert_eq!(inline(&body, &refs),
+            "    UController::Get().Set(ReadAttribute(this, 0, Cast<AGothicCharacter>(this.GetAvatar())) * 2.0f);\n");
+        // A successful old single-call path keeps its existing argument order.
+        assert_eq!(call_sites("Use(ReadAttribute(this, 0, local_6));"), vec![
+            ("Use".into(), vec!["ReadAttribute(this, 0, local_6)".into()]),
+            ("ReadAttribute".into(), vec!["this".into(), "0".into(), "local_6".into()])]);
+    }
+
+    #[test]
+    fn nested_fallback_does_not_reclassify_stored_or_tested_numeric_chains() {
+        // HitsReceived: early argument inlining exposed the zero-seeded accumulator
+        // to collapse_single_use_accumulators, dropping its original SetV4/ADDi.
+        let accumulated = "local_1 = local_1 + local_4.GetPerception().GetMemory().Filter().FilterAffectedCharacterIs(this.GetSelf()).FilterRecent(local_25).GetCount();";
+        // CompleteChapter: the earlier merge concealed the intermediate double
+        // declaration, so the late inliner changed iTOd/dTOf into iTOf.
+        let stored = "local_2 = local_10.WithTag(this.RequiredMemoryTag).WithMagnitude(local_13).WithClass(this.RequiredClass).GetCount();";
+        let tested = "if (LongTermMemoryComponent.Filter().WithTag(this.RequiredMemoryTag).WithMagnitude(float32(local_12)).WithClass(this.RequiredClass).GetCount() == 0)";
+        for line in [accumulated, stored, tested,
+            "return this.Containers.opIndex(local_2).Groups.opIndex(local_8);"] {
+            assert!(call_sites(line).is_empty(), "{line}");
+        }
+        // The old successful single-call path, including assignment and return
+        // consumers, keeps its existing typed argument handling.
+        for line in ["local_13 = float32(local_12);", "return float32(local_12);"] {
+            assert_eq!(call_sites(line), vec![("float32".into(), vec!["local_12".into()])]);
+        }
+        // The existing cast_argument_inside_receiver_chain_and_product_is_visible
+        // test exercises the complete Health statement through the actual inliner.
+        assert!(call_sites("UController::Get().Set(ReadAttribute(this, 0, local_6) * 2.0f);")
+            .iter().any(|(name, args)| name == "ReadAttribute" && args.last().is_some_and(|arg| arg == "local_6")));
+    }
+
+    #[test]
+    fn fallback_ignores_string_calls_and_preserves_parameter_gates() {
+        assert!(call_sites("return this.Containers.opIndex(local_2).Groups.opIndex(local_8);").is_empty());
+        assert_eq!(call_sites("return Use(local_6);"), vec![("Use".into(), vec!["local_6".into()])]);
+        let sites = call_sites(r#"UController::Get().Set("Fake(\"local_9\",)", ReadAttribute(this, 0, local_6) * 2.0f);"#);
+        assert_eq!(sites, vec![("Get".into(), vec![]),
+            ("ReadAttribute".into(), vec!["this".into(), "0".into(), "local_6".into()])]);
+        let body = "    local_6 = Cast<AGothicCharacter>(this.GetAvatar());\n    UController::Get().Set(ReadAttribute(this, 0, local_6) * 2.0f);\n";
+        assert_eq!(inline(body, &RefResolver::from_test_out_argument_read_order(false)), body);
+        assert_eq!(inline(body, &RefResolver::default()), body);
+    }
+}
+
+#[cfg(test)]
+mod integer_bool_merge_carrier_tests {
+    use super::*;
+
+    fn body(other: &str) -> String {
+        format!("    int local_3;\n    if (this.Count == 0)\n    {{\n        local_3 = 1;\n    }}\n    else\n    {{\n{other}    }}\n    if (local_3 != 0)\n    {{\n        return;\n    }}\n")
+    }
+
+    #[test]
+    fn integer_spelled_or_carriers_need_a_boolean_other_arm() {
+        let fields = HashMap::from([("Lost".into(), "bool".into())]);
+        let direct = body("        local_3 = this.Lost;\n");
+        assert_eq!(fold_carrier_if_else(&direct, Some(&fields)),
+            "    if (this.Count == 0 || this.Lost)\n    {\n        return;\n    }\n");
+        for expression in ["(this.Index > this.Count)", "(this.Component == nullptr)"] {
+            let source = body(&format!("        bool local_7 = {expression};\n        local_3 = local_7;\n"));
+            let expected = format!("    if (this.Count == 0 || {expression})\n    {{\n        return;\n    }}\n");
+            assert_eq!(fold_carrier_if_else(&source, None), expected);
+            assert_eq!(fold_carrier_if_else(&expected, None), expected);
+        }
+        assert_eq!(fold_carrier_if_else(&direct, None), direct);
+        assert_eq!(fold_carrier_if_else(&direct,
+            Some(&HashMap::from([("Lost".into(), "int".into())]))), direct);
+    }
+
+    #[test]
+    fn integer_merge_does_not_consume_another_local_life_or_numeric_arm() {
+        let source = body("        bool local_7 = (this.Component == nullptr);\n        local_3 = local_7;\n");
+        for suffix in ["    Use(local_7);\n", "    local_7 = true;\n", "    Use(local_3);\n"] {
+            let reused = format!("{source}{suffix}");
+            assert_eq!(fold_carrier_if_else(&reused, None), reused);
+        }
+        for rejected in [source.replace("bool local_7", "int local_7"),
+            source.replace("local_3 = 1", "local_3 = 2"),
+            source.replace("if (local_3 != 0)", "if (local_3 > 0)"),
+            source.replace("if (local_3 != 0)", "if (local_3 != 0 || this.More)"),
+            source.replace("int local_3;", "bool local_3;")] {
+            assert_eq!(fold_carrier_if_else(&rejected, None), rejected);
+        }
+    }
+}
+
+#[cfg(test)]
+mod named_feeder_order_tests {
+    use super::*;
+
+    #[test]
+    fn a_named_eager_bool_feeder_keeps_the_preceding_call_in_order() {
+        let refs = RefResolver::from_test_eager_bool_calls(0x41);
+        let locals = BTreeMap::from([(6, "bool".into()), (9, "bool".into())]);
+        let types = HashMap::from([(6, "bool".into()), (9, "bool".into())]);
+        let empty = HashSet::new();
+        let body = "local_9 = Other();\nlocal_6 = Saved();\nif (local_9 && !(local_6))\n";
+        let fold = |sites: &HashSet<(i32, String)>| inline_call_argument_temporaries(body, &refs, &locals, None, true,
+            &types, &empty, &empty, &empty, &empty, &empty, &empty, &empty, &empty,
+            &HashMap::new(), &empty, sites);
+        assert_eq!(fold(&HashSet::from([(6, "Saved".into())])), body);
+        // Another callee's life on slot 6 does not preserve this feeder.
+        assert!(!fold(&HashSet::from([(6, "Earlier".into())])).contains("local_9 = Other();"));
+        // The late inliner must observe the same barrier after declarations appear.
+        let declared = body.replace("local_9 =", "bool local_9 =").replace("local_6 =", "bool local_6 =");
+        let late = |sites: &HashSet<(i32, String)>| inline_unnamed_value_temporaries(
+            &declared, &HashSet::from([(6, 1), (9, 1)]), &empty, &empty, &refs,
+            &empty, &empty, &HashMap::new(), sites, &empty, &empty, &empty);
+        assert_eq!(late(&HashSet::from([(6, "Saved".into())])), declared);
+        assert!(!late(&HashSet::from([(6, "Earlier".into())])).contains("bool local_9 = Other();"));
+    }
+}
+
+#[cfg(test)]
+mod comparison_carrier_return_tests {
+    use super::*;
+
+    fn body(condition: &str, alternative: &str) -> String {
+        format!("    int local_7;\n    if ({condition})\n    {{\n        local_7 = 0;\n    }}\n    else\n    {{\n        bool local_8 = ({alternative});\n        local_7 = local_8;\n    }}\n    return (local_7 != 0);\n")
+    }
+
+    #[test]
+    fn comparison_carrier_returns_recover_direct_and_relations() {
+        for (condition, inverse, alternative) in [
+            ("CenterArea.Distance(TargetLocation) < this.m_MinInnerDistance",
+             "CenterArea.Distance(TargetLocation) >= this.m_MinInnerDistance",
+             "CenterArea.Distance(TargetLocation) <= this.m_MaxOuterDistance"),
+            ("CenterArea.Distance(TargetLocation) < local_4",
+             "CenterArea.Distance(TargetLocation) >= local_4", "CenterArea.Distance(TargetLocation) <= local_6"),
+            ("local_2 != this.FindGroupAndTeamOf(Groups, CharacterStateB, local_3)",
+             "local_2 == this.FindGroupAndTeamOf(Groups, CharacterStateB, local_3)", "local_1 != local_3"),
+        ] {
+            let input = body(condition, alternative);
+            let expected = format!("    return {inverse} && ({alternative});\n");
+            assert_eq!(fold_carrier_if_else(&input, None), expected);
+            assert_eq!(fold_carrier_if_else(&expected, None), expected);
+        }
+    }
+
+    #[test]
+    fn comparison_carrier_return_keeps_types_lives_and_nested_conditions() {
+        let input = body("a < b", "c <= d");
+        for rejected in [input.replace("int local_7", "float local_7"),
+            input.replace("int local_7", "bool local_7"),
+            input.replace("bool local_8", "int local_8"),
+            input.replace("local_7 = 0", "local_7 = 1"),
+            input.replace("return (local_7 != 0);", "return (local_7 > 0);"),
+            format!("{input}    Use(local_7);\n"), format!("{input}    Use(local_8);\n"),
+            body("Check(a < b)", "c <= d"), body("a < b && Ready()", "c <= d"),
+            body("a < b ? Ready() : Done()", "c <= d"),
+            body("this.Name == n\"a < b\"", "c <= d"), body("Ready()", "c <= d"),
+        ] {
+            assert_eq!(fold_carrier_if_else(&rejected, None), rejected);
+        }
     }
 }
