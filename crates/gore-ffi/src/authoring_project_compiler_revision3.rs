@@ -250,43 +250,62 @@ fn check_revision3_project_compiler_v2_inner(input: &str) -> Result<Value, Failu
     // lock. A qualified target remains pinned from here through both explicit fallback attempts.
     let mut available_package = None;
     let mut unavailable_fallback = None;
+    // While a script mod is installed the game fallback is unavailable even without a package:
+    // the package cause is reported as on the strict path, with the skipped fallback attached.
+    let early_installed = crate::script_compile_report::installed_script_mod(&game_root);
+    let early_skipped_note = crate::script_compile_report::skipped_game_fallback_note(
+        requested,
+        early_installed.as_ref(),
+    )
+    .map(|note| {
+        json!({
+            "failed_backend": CompilerBackendNameV1::Game.as_str(),
+            "failure_kind": "preflight",
+            "detail": note,
+        })
+    });
+    let standalone_only =
+        requested == CompilerBackendWireV2::Standalone || early_installed.is_some();
     if requested != CompilerBackendWireV2::Game {
         match resolve_product_standalone_compiler_for_game_v1(&game_root) {
             Ok(ResolvedProductStandaloneCompilerV1::Available(resolved)) => {
                 available_package = Some(resolved);
             }
             Ok(ResolvedProductStandaloneCompilerV1::BundleAbsent) => {
-                if requested == CompilerBackendWireV2::Standalone {
-                    return unavailable_standalone_project_response(
+                if standalone_only {
+                    return unavailable_standalone_project_response_with_fallback(
                         &selection,
                         &mut graph,
                         requested,
                         "AUTHORING_REVISION3_PROJECT_STANDALONE_BUNDLE_ABSENT",
                         BUNDLE_ABSENT_DETAIL,
+                        early_skipped_note.clone(),
                     );
                 }
                 unavailable_fallback = Some(bundle_absent_fallback_reason());
             }
             Ok(ResolvedProductStandaloneCompilerV1::Unavailable(reason)) => {
-                if requested == CompilerBackendWireV2::Standalone {
-                    return unavailable_standalone_project_response(
+                if standalone_only {
+                    return unavailable_standalone_project_response_with_fallback(
                         &selection,
                         &mut graph,
                         requested,
                         "AUTHORING_REVISION3_PROJECT_STANDALONE_PACKAGE_UNAVAILABLE",
                         format!("{:?}: {}", reason.kind(), reason.detail()),
+                        early_skipped_note.clone(),
                     );
                 }
                 unavailable_fallback = Some(package_unavailable_fallback_reason(&reason));
             }
             Err(message) => {
-                if requested == CompilerBackendWireV2::Standalone {
-                    return unavailable_standalone_project_response(
+                if standalone_only {
+                    return unavailable_standalone_project_response_with_fallback(
                         &selection,
                         &mut graph,
                         requested,
                         "AUTHORING_REVISION3_PROJECT_STANDALONE_PACKAGE_LOCATION",
                         message,
+                        early_skipped_note.clone(),
                     );
                 }
                 unavailable_fallback = Some(json!({
@@ -750,6 +769,21 @@ fn unavailable_standalone_project_response(
     code: &'static str,
     message: impl Into<String>,
 ) -> Result<Value, Failure> {
+    unavailable_standalone_project_response_with_fallback(
+        selection, graph, requested, code, message, None,
+    )
+}
+
+/// [`unavailable_standalone_project_response`] carrying a fallback reason: the game fallback was
+/// skipped for an installed script mod before the standalone package turned out unavailable.
+fn unavailable_standalone_project_response_with_fallback(
+    selection: &InitialSelection,
+    graph: &mut ClosedModuleGraph,
+    requested: CompilerBackendWireV2,
+    code: &'static str,
+    message: impl Into<String>,
+    fallback: Option<Value>,
+) -> Result<Value, Failure> {
     // Package absence is established before game-input authority exists. Coverage still binds the
     // exact persisted closed graph, but does not pretend that Quest source was natively regenerated.
     for module in &mut graph.modules {
@@ -766,7 +800,7 @@ fn unavailable_standalone_project_response(
         0,
         "not_created",
     );
-    compiler["compiler_backend"] = backend_evidence(requested, None, false, false, None);
+    compiler["compiler_backend"] = backend_evidence(requested, None, false, false, fallback);
     project_response(
         selection,
         graph,
