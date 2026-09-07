@@ -4,11 +4,10 @@ AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachStraight.FireDemon_HellArms
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachZigZag.FireDemon_HellArmsArea_BreachZigZag	1	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachZigZag.FireDemon_HellArmsArea_BreachZigZag_Fire	1	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_Barrier_Ring	2	0	0
-AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_RingFireTest	5	0	0
+AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_RingFireTest	4	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.FireDemon_HellArmsArea_Ring	5	0	0
 AI.AIAgent.Creature.Demon.Spells.Area.DemonAreaVisual	2	0	0
 AI.AIAgent.Creature.Golem.Fire.Spells.BreakFloor.GA_Spell_BreakFloor_FireGolem	2	0	0
-AI.AIAgent.Creature.Golem.Fire.Spells.LavaStream.GA_FireGolem_EnvironmentAttack_ArenaLavaStreams	1	0	0
 AI.AIAgent.Creature.Minecrawler.Queen.Abilities.GA_MCQueenPhaseChangeHit	1	0	0
 AI.AIAgent.Creature.Molerat.CombatSituations_Molerat	1	0	0
 AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.SoulHarvest.SoulHarvest_Visual	2	0	0
@@ -100,7 +99,6 @@ GAS.Abilities.Locomotion.GA_FallingRagdoll	1	0	0
 GAS.Abilities.Locomotion.GA_Swim	1	0	0
 GAS.Abilities.Locomotion.Target.GA_TargetEnemy	1	0	0
 GAS.Abilities.Passive.Drugs.Derived.Alcohol.GA_AlcoholDebuff	1	0	0
-GAS.Abilities.Passive.Drugs.Derived.Swampweed.GA_Swampweed	1	0	0
 GAS.Abilities.Passive.GA_PlayerPerception_CrimeRegistration	5	0	0
 GAS.Abilities.Spells.CastSpell.Base.Targetable.GA_CastSpell_Targetable_Mandatory	1	0	0
 GAS.Abilities.Spells.CastSpell.Derived.AlteredStates.GA_CastSpell_Control	1	0	0

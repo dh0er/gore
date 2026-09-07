@@ -1829,6 +1829,18 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_retained_after_value(token: i32, reference: bool, name: &str) -> Self {
+        let mut r = Self::from_test_retained_receiver(5, true);
+        r.func_by_ptr.insert(4, name.into());
+        r.func_ret.insert(4, DataType { token, is_reference: reference, ..Default::default() });
+        r.func_by_ptr.insert(5, "Apply".into());
+        r.func_ret.insert(5, DataType { token: 5, ..Default::default() });
+        r.func_is_method.insert(5);
+        r.func_params.insert(5, vec![DataType { token: 5, is_reference: true, ..Default::default() }]);
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_retained_receiver(result_token: i32, is_method: bool) -> Self {
         let mut r = Self::default();
         for (id, name, token) in [(1, "Create", 5), (2, "Count", result_token),

@@ -8488,6 +8488,29 @@ impl Structurer<'_> {
         // Restricting this to a one-instruction block dropped the jump from `DoWork(); break;` —
         // the work was still written, and control then fell through into another iteration.
         if t == ls.break_off {
+            // A handle method followed by a direct shared return bypasses the
+            // iteration cleanup. Emitting break would add that missing clear.
+            if self.ctx.f.ret.token == 0x52 && self.is_bare_ret_off(t) && b.instr_hi >= b.instr_lo + 3 {
+                let w = |i: &Instr, n: usize| i.words.get(n).copied().map(s16).unwrap_or(0);
+                let tail = &self.ctx.instrs[b.instr_hi - 3..b.instr_hi];
+                let call = &tail[1];
+                let method = match call.op.name {
+                    "CALLSYS" => {
+                        let ptr = call.qwords.first().copied().unwrap_or(0) as i64;
+                        (self.ctx.refs.is_method_by_ptr(ptr), self.ctx.refs.func_params_by_ptr(ptr), self.ctx.refs.func_ret_by_ptr(ptr))
+                    }
+                    "CALL" | "CALLINTF" => {
+                        let id = call.dwords.first().copied().unwrap_or(0) as i32;
+                        (self.ctx.refs.is_method_by_id(id), self.ctx.refs.func_params_by_id(id), self.ctx.refs.func_ret_by_id(id))
+                    }
+                    _ => (false, None, None),
+                };
+                if tail[0].op.name == "PshVPtr" && w(&tail[0], 0) > 0
+                    && method.0 && method.1.is_some_and(|p| p.is_empty())
+                    && method.2.is_some_and(|r| r.token == 0x52 && !r.is_reference && !r.is_object_handle)
+                    && self.ctx.instrs.get(b.instr_hi).is_some_and(|i| i.op.name == "FreeNullV8" && w(i, 0) == w(&tail[0], 0))
+                { return Some("return;".into()); }
+            }
             return Some("break;".into());
         }
         if ls.continue_only {
@@ -11975,6 +11998,32 @@ mod tests {
                 Some(("body", "shared_ret", scope)), &RefResolver::default(), "int");
             let expected = if arithmetic { "return local_6 + local_8;" } else { "return -1000;" };
             assert_eq!(output.trim(), expected);
+        }
+    }
+
+    #[test]
+    fn a_void_loop_return_bypasses_the_following_iteration_handle_clear() {
+        for (already_cleared, clear_slot, return_token, call_token, expected) in [
+            (false, 16, 0x52, 0x52, "return;"),
+            (true, 16, 0x52, 0x52, "break;"),
+            (false, 18, 0x52, 0x52, "break;"),
+            (false, 16, 0x44, 0x52, "break;"),
+            (false, 16, 0x52, 0x41, "break;"),
+        ] {
+            let mut a = TestAssembler::default(); a.label("body");
+            a.op("PshVPtr", &[16], &[]); a.op("CALLSYS", &[], &[]);
+            if already_cleared { a.op("FreeNullV8", &[16], &[]); }
+            a.jump("JMP", "shared_ret");
+            a.label("cleanup"); a.op("FreeNullV8", &[clear_slot], &[]);
+            a.jump("JMP", "shared_ret");
+            a.label("shared_ret"); a.op("RET", &[0], &[]);
+            let mut fixture = a.finish(); fixture.instrs[1].qwords = vec![2];
+            let scope = LoopScope { continue_off: usize::MAX, break_off: fixture.labels["shared_ret"],
+                continue_only: false, latch_block: None };
+            let refs = RefResolver::from_test_retained_receiver(call_token, true);
+            let out = render_fixture_range_with_return(&fixture,
+                Some(("body", "cleanup", scope)), &refs, "int", None, return_token);
+            assert!(out.trim_end().ends_with(expected), "{out}");
         }
     }
 

@@ -1227,7 +1227,8 @@ fn emit_function_ctor(
     // binary expression's left side first, so a right operand whose value already stood when
     // the left was computed was a statement of its own (`int n = Max(1, Count()); return x +
     // (2pi * i) / n;` — vanilla called `Max` before it read `x`).
-    statement_producers.extend(statement_operand_slots(f));
+    let statement_operands = statement_operand_slots(f);
+    statement_producers.extend(statement_operands.iter().copied());
     statement_producers.extend(assignment_call_order_slots(f, refs, is_method));
     statement_producers.extend(call_results_before_parameter_comparisons(f, refs, is_method));
     let mut retained_return_copies = copied_widened_return_slots(f, refs);
@@ -1247,6 +1248,8 @@ fn emit_function_ctor(
     // Where a widening's result was copied ON, the source named it; folding that name away
     // changes the width the arithmetic behind it happens at.
     let widened = widened_slots(f);
+    let retained_accumulators: HashSet<i32> = widened.iter().copied()
+        .chain(eager_comparison_accumulators(f, refs, &statement_operands)).collect();
     // A primitive iterator reference is the binding, not a disposable value carrier.
     // Keep it through the copy-out pass until foreach owns that exact element.
     let mut copy_out_keep = widened.clone();
@@ -2635,7 +2638,7 @@ fn emit_function_ctor(
         // evaluating it twice is not the same as evaluating it once.
         // Before the compound-assignment fold, which would rewrite the middle line out of the
         // shape this one matches on.
-        let body = collapse_single_use_accumulators(&body, &widened, &locals);
+        let body = collapse_single_use_accumulators(&body, &retained_accumulators, &locals);
         pass_trace("collapse_single_use_accumulators", &body);
         let body = fold_enum_call_round_trips(&body, &call_result_types, fields, &path_roots, refs, returns_by_reference, has_enum_conversions(f));
         pass_trace("fold_enum_call_round_trips", &body);
@@ -2697,7 +2700,7 @@ fn emit_function_ctor(
         // And once more here, for the same reason: an accumulator whose declaration was hoisted
         // has its `T X;` in this text and its `X = ...` lines in the body, so the split form is
         // only whole once the two are joined.
-        let rendered = collapse_single_use_accumulators(&rendered, &widened, &locals);
+        let rendered = collapse_single_use_accumulators(&rendered, &retained_accumulators, &locals);
         pass_trace("collapse_single_use_accumulators", &rendered);
         let rendered = fold_enum_call_round_trips(&rendered, &call_result_types, fields, &path_roots, refs, returns_by_reference, has_enum_conversions(f));
         pass_trace("fold_enum_call_round_trips", &rendered);
@@ -2787,7 +2790,7 @@ fn emit_function_ctor(
         pass_trace("inline_single_use_literals", &rendered);
         let rendered = drop_dead_literal_stores(&rendered, &named_bool_returns);
         pass_trace("drop_dead_literal_stores", &rendered);
-        let rendered = collapse_single_use_accumulators(&rendered, &widened, &locals);
+        let rendered = collapse_single_use_accumulators(&rendered, &retained_accumulators, &locals);
         pass_trace("collapse_single_use_accumulators", &rendered);
         let rendered = inline_bool_chain_into_next_condition(&rendered, &named_sites);
         pass_trace("inline_bool_chain_into_next_condition", &rendered);
@@ -14331,6 +14334,36 @@ fn retained_value_arguments(
                 && refs.func_by_ptr(i.qwords.first().copied().unwrap_or(0) as i64).is_none());
         let after_void = ret.is_some_and(|t| t.token == 0x52 && !t.is_reference && !t.is_object_handle)
             && !unknown_cleanup && cleanup_end < dies[0];
+        // A void call followed by a separate explicit-local argument use ends this
+        // expression. Native defaults cannot refer to the caller's local result.
+        let after_value_statement = ret.is_some_and(|t| t.token == 5 && !t.is_reference && !t.is_object_handle)
+            && dies.len() == 1
+            && !instrs[consumer + 1..dies[0]].iter().any(|i| i.op.name.starts_with('J'))
+            && (consumer + 1..dies[0]).any(|at| {
+                let i = &instrs[at];
+                if i.op.name != "CALLSYS" { return false; }
+                let ptr = i.qwords.first().copied().unwrap_or(0) as i64;
+                if !refs.func_by_ptr(ptr).is_some_and(|name| !name.starts_with(['$', '~'])
+                    && !name.starts_with("op") && refs.func_owner_by_ptr(ptr) != Some(name))
+                    || !refs.func_ret_by_ptr(ptr).is_some_and(|t| t.token == 0x52 && !t.is_reference && !t.is_object_handle)
+                { return false; }
+                let end = immediate_value_cleanup_end(&instrs, at + 1, |i| behaviour(i, "$beh2"));
+                if end >= dies[0] || (instrs.get(end).is_some_and(|i| i.op.name == "PSF")
+                    && instrs.get(end + 1).is_some_and(|i| i.op.name == "CALLSYS"
+                        && refs.func_by_ptr(i.qwords.first().copied().unwrap_or(0) as i64).is_none()))
+                { return false; }
+                let Some(next) = (end..dies[0]).find(|n| instrs[*n].op.is_call()) else { return false; };
+                if instrs[next].op.name != "CALLSYS" || next == 0 || instrs[next - 1].op.name != "PshVPtr"
+                { return false; }
+                let next_ptr = instrs[next].qwords.first().copied().unwrap_or(0) as i64;
+                refs.is_method_by_ptr(next_ptr)
+                    && refs.func_params_by_ptr(next_ptr).is_some_and(|p| !p.is_empty())
+                    && producers.iter().any(|(result, produced)| *produced == consumer
+                        && *result > 0 && *result != w0(&instrs[next - 1])
+                        && creators.get(result).is_some_and(|c| c.len() == 1)
+                        && consumers.contains(&(*result, next))
+                        && instrs[end..next].iter().any(|p| p.op.name == "PSF" && w0(p) == *result))
+            });
         // A sole value receiver survives an integer-result if statement until
         // this void function's final cleanup. An expression temporary is already
         // released before that comparison. Keep the existing single-life proof.
@@ -14356,7 +14389,7 @@ fn retained_value_arguments(
         let mut tail = dies[0];
         while instrs.get(tail).is_some_and(|i| i.op.name == "PSF")
             && instrs.get(tail + 1).is_some_and(|i| behaviour(i, "$beh2")) { tail += 2; }
-        if after_void || compared || across_if || (copied_other && instrs.get(tail).is_some_and(|i| i.op.name == "RET")) {
+        if after_void || after_value_statement || compared || across_if || (copied_other && instrs.get(tail).is_some_and(|i| i.op.name == "RET")) {
             out.insert(s);
         }
     }
@@ -19168,6 +19201,40 @@ fn receivers_built_before_their_rvo_push(f: &Func, refs: &RefResolver) -> HashSe
         }
     }
     out
+}
+
+/// Carry the existing eager-operand proof into accumulator collapsing only for
+/// one double arithmetic life, finally compared against a later native call.
+fn eager_comparison_accumulators(f: &Func, refs: &RefResolver, named: &HashSet<i32>) -> HashSet<i32> {
+    let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+    let mut uses: HashMap<i32, Vec<usize>> = HashMap::new();
+    for (at, ins) in code.iter().enumerate() {
+        for slot in super::bytediff::addressed_slots(ins).into_iter().collect::<HashSet<_>>() {
+            if named.contains(&slot) { uses.entry(slot).or_default().push(at); }
+        }
+    }
+    uses.into_iter().filter_map(|(slot, uses)| {
+        let last = *uses.last()?;
+        if last < 2 || code[last].op.name != "CMPd" || w(&code[last], 1) != Some(slot)
+            || w(&code[last], 0) == Some(slot) || code[last - 1].op.name != "CpyRtoV8"
+            || w(&code[last - 1], 0) != w(&code[last], 0)
+            || !matches!(code[last - 2].op.name, "CALLSYS" | "Thiscall1") { return None; }
+        let ret = refs.func_ret_by_ptr(*code[last - 2].qwords.first()? as i64)?;
+        if !matches!(ret.token, 0x51 | 0x5e) || ret.is_reference || ret.is_object_handle { return None; }
+        let mut arithmetic = None;
+        for &at in &uses[..uses.len() - 1] {
+            let ins = &code[at];
+            if arithmetic.is_some() { return None; } // no further read/write life after the update
+            if w(ins, 0) == Some(slot) && (writes_destination(ins.op.name) || ins.op.fmt.writes_first_word()) {
+                if ins.op.name == "RDR8" { continue; }
+                if !matches!(ins.op.name, "ADDd" | "SUBd" | "MULd" | "DIVd")
+                    || !ins.words.iter().skip(1).any(|v| *v as i16 as i32 == slot) { return None; }
+                arithmetic = Some(at);
+            } else if !matches!(ins.op.name, "ADDd" | "SUBd" | "MULd" | "DIVd") { return None; }
+        }
+        (arithmetic? < last - 2).then_some(slot)
+    }).collect()
 }
 
 /// Slots read as the RIGHT operand of a two-register arithmetic or comparison instruction whose
@@ -29112,6 +29179,114 @@ mod literal_value_lifetime_tests {
         assert_eq!(super::slots_with_assignment_writes(&f), HashSet::from([11]));
     }
 
+
+    #[test]
+    fn value_argument_survives_a_later_void_statement_but_not_its_immediate_cleanup() {
+        let make = |immediate: bool| {
+            let mut ops = vec![("PSF", &[10][..]), ("CALLSYS", &[]), ("PSF", &[10][..]),
+                ("PSF", &[20][..]), ("CALLSYS", &[]), ("PSF", &[20][..]), ("CALLSYS", &[])];
+            if immediate { ops.extend([("PSF", &[10][..]), ("CALLSYS", &[])]); }
+            ops.extend([("PSF", &[20][..]), ("PSF", &[30][..]), ("PshVPtr", &[0][..]), ("CALLSYS", &[]),
+                ("PSF", &[30][..]), ("CALLSYS", &[]), ("PSF", &[20][..]), ("CALLSYS", &[])]);
+            if !immediate { ops.extend([("PSF", &[10][..]), ("CALLSYS", &[])]); }
+            ops.push(("RET", &[0][..]));
+            let mut f = function(&ops); f.ret.token = 0x52;
+            let code = super::disassemble(&f.bytecode).unwrap();
+            let mut ids = vec![1, 2, 4];
+            if immediate { ids.push(3); }
+            ids.extend([5, 3, 3]); if !immediate { ids.push(3); }
+            for (i, id) in code.iter().filter(|i| i.op.name == "CALLSYS").zip(ids) {
+                f.bytecode[i.offset_dw + 1] = id;
+            }
+            f
+        };
+        let check = |f: &Func, refs: &RefResolver| {
+            let fc = super::FuncCode { func: "Synthetic::Use".into(), is_method: false,
+                param_names: vec![], param_types: vec![], ret: f.ret.clone(), bytecode: f.bytecode.clone() };
+            let later = super::disassemble(&f.bytecode).unwrap().iter()
+                .position(|i| i.op.name == "CALLSYS" && i.qwords.first() == Some(&5)).unwrap();
+            super::retained_value_arguments(f, &fc, refs, &[(10, 1), (20, 4)], &[(10, 4), (20, 6), (20, later)])
+        };
+        let refs = RefResolver::from_test_retained_after_value(0x52, false, "SetMagnitude");
+        let f = make(false);
+        assert_eq!(check(&f, &refs), HashSet::from([10]));
+        assert!(check(&make(true), &refs).is_empty());
+        for other in [RefResolver::from_test_retained_after_value(0x41, false, "SetMagnitude"),
+            RefResolver::from_test_retained_after_value(0x52, true, "SetMagnitude"),
+            RefResolver::from_test_retained_after_value(0x52, false, "$beh0"),
+            RefResolver::from_test_retained_after_value(0x52, false, "opAssign")]
+        { assert!(check(&f, &other).is_empty()); }
+        let mut reused = f.clone(); reused.bytecode.extend(function(&[("PSF", &[10])]).bytecode);
+        assert!(check(&reused, &refs).is_empty());
+        let mut value_receiver = f.clone();
+        let code = super::disassemble(&f.bytecode).unwrap();
+        let receiver = code.iter().find(|i| i.op.name == "PshVPtr").unwrap().offset_dw;
+        value_receiver.bytecode[receiver] = function(&[("PSF", &[0])]).bytecode[0];
+        assert!(check(&value_receiver, &refs).is_empty());
+        let mut default_argument = f.clone();
+        let argument = code[7].offset_dw;
+        default_argument.bytecode[argument] = function(&[("PSF", &[22])]).bytecode[0];
+        assert!(check(&default_argument, &refs).is_empty());
+        let mut branched = f.clone();
+        let at = super::disassemble(&branched.bytecode).unwrap()[5].offset_dw;
+        branched.bytecode.splice(at..at, function(&[("JMP", &[])]).bytecode);
+        assert!(check(&branched, &refs).is_empty());
+    }
+
+    fn eager_comparison_accumulator_fixture() -> Func {
+        let mut f = function(&[("LoadThisR", &[0]), ("RDR8", &[4]),
+            ("LoadThisR", &[0]), ("RDR8", &[6]), ("SUBd", &[4, 4, 6]),
+            ("LoadThisR", &[0]), ("RDR8", &[6]), ("LoadThisR", &[0]), ("RDR8", &[2]),
+            ("ADDd", &[6, 6, 2]), ("PshVPtr", &[(-2i16) as u16]), ("PshVPtr", &[(-4i16) as u16]),
+            ("CALLSYS", &[]), ("CpyRtoV8", &[2]), ("CMPd", &[2, 4]), ("JNS", &[]),
+            ("SetV4", &[9]), ("JMP", &[]), ("PshVPtr", &[(-2i16) as u16]), ("PshVPtr", &[(-4i16) as u16]),
+            ("CALLSYS", &[]), ("CpyRtoV8", &[8]), ("CMPd", &[8, 6]), ("TNP", &[]),
+            ("CpyRtoV4", &[10]), ("CpyVtoV4", &[9, 10]), ("CpyVtoR4", &[9]), ("RET", &[6])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        for at in [12, 20] { f.bytecode[code[at].offset_dw + 1] = 2; }
+        for (from, to) in [(15, 18), (17, 26)] {
+            f.bytecode[code[from].offset_dw + 1] = code[to].offset_dw as i32 - code[from].offset_dw as i32 - 2;
+        }
+        f
+    }
+
+    #[test]
+    fn eager_double_bounds_keep_names_but_merge_their_initializers() {
+        let f = eager_comparison_accumulator_fixture();
+        let refs = RefResolver::from_test_retained_receiver(0x51, true);
+        let keep = super::eager_comparison_accumulators(&f, &refs, &super::statement_operand_slots(&f));
+        assert_eq!(keep, HashSet::from([4, 6]));
+        let body = concat!("float local_4 = this.Inner;\nlocal_4 = local_4 - this.Margin;\n",
+            "float local_6 = this.Outer;\nlocal_6 = local_6 + this.Margin;\n",
+            "if (Center.Distance(Target) < local_4)\n{\n    local_9 = 0;\n}\nelse\n{\n",
+            "    bool local_10 = (Center.Distance(Target) <= local_6);\n    local_9 = local_10;\n}\nreturn (local_9 != 0);\n");
+        let locals = BTreeMap::from([(4, "float".into()), (6, "float".into())]);
+        let collapsed = super::collapse_single_use_accumulators(body, &keep, &locals);
+        assert_eq!(collapsed, body);
+        let merged = super::merge_self_assignments(&collapsed, &locals);
+        assert!(merged.starts_with("float local_4 = this.Inner - this.Margin;\nfloat local_6 = this.Outer + this.Margin;\n"), "{merged}");
+        assert!(merged.contains("Center.Distance(Target) < local_4"));
+        assert!(!super::collapse_single_use_accumulators(body, &HashSet::new(), &locals).contains("float local_4"));
+    }
+
+    #[test]
+    fn eager_accumulator_requires_the_actual_call_order_and_one_arithmetic_life() {
+        let f = eager_comparison_accumulator_fixture();
+        let refs = RefResolver::from_test_retained_receiver(0x51, true);
+        let check = |f: &Func, refs: &RefResolver| super::eager_comparison_accumulators(f, refs, &super::statement_operand_slots(f));
+        assert!(check(&f, &RefResolver::from_test_retained_receiver(0x50, true)).is_empty());
+        let code = disassemble(&f.bytecode).unwrap();
+        let mut later_read = f.clone(); later_read.bytecode.extend(function(&[("CMPd", &[2, 4])]).bytecode);
+        assert!(!check(&later_read, &refs).contains(&4));
+        let mut another_life = f.clone(); another_life.bytecode.splice(0..0,
+            function(&[("RDR8", &[4]), ("MULd", &[4, 4, 2])]).bytecode);
+        assert!(!check(&another_life, &refs).contains(&4));
+        let mut late_arithmetic = f.clone();
+        let update = late_arithmetic.bytecode.drain(code[4].offset_dw..code[5].offset_dw).collect::<Vec<_>>();
+        let old_len = code[5].offset_dw - code[4].offset_dw;
+        late_arithmetic.bytecode.splice(code[14].offset_dw - old_len..code[14].offset_dw - old_len, update);
+        assert!(!check(&late_arithmetic, &refs).contains(&4));
+    }
 
     #[test]
     fn a_single_value_receiver_lives_through_its_integer_if_until_final_cleanup() {
