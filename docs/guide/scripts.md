@@ -220,6 +220,12 @@ retry rather than an undeploy. The installed version is replaced only by the
 next `gore mod deploy` or Manager apply, which rebuild from the same pristine
 backup.
 
+To pin which original a compile may use, pass `--expect-base <CACHE>` (a file
+the selected original must equal byte for byte, for example a frozen copy of
+the vanilla cache) or `--expect-base-sha256 <HEX>`. Both refuse the compile
+when the selected original differs and print both hashes; neither picks the
+base. The deployment-aware selection stays the only source of truth.
+
 ### Compiler diagnostics
 
 Strict `standalone` returns the bundled compiler's native diagnostics with the
@@ -290,6 +296,7 @@ gore as compile-module --op add --module MyMod.Dialog `
 | `--work-dir <DIR>` | Existing workspace outside the game installation (emitted tree + intermediate cache). |
 | `--allow-new-symbols` | Retain minimal rows for classes/functions/names absent from the pristine cache. |
 | `-o, --out <PATH>` | The remapped 1-module mini-cache. |
+| `--expect-base <CACHE>` / `--expect-base-sha256 <HEX>` | Refuse to compile unless the selected original is this file's bytes / has this SHA-256. Neither selects the base; both exist on `compile` as well. |
 
 The high-level `dialog new-topic` scaffold uses the same compiler command in a
 more specific shape. A new root or direct sub-topic is appended to the

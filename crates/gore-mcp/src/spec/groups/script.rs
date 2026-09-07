@@ -336,6 +336,24 @@ const DIAGNOSTICS_CHECK_ARGS: &[ArgSpec] = &[
     GAME,
 ];
 
+const EXPECT_BASE: ArgSpec = ArgSpec::new(
+    "expect_base",
+    Long("expect-base"),
+    Path,
+    "Refuse to compile unless the selected original script cache is byte-identical to this \
+     file, for example a frozen copy of the vanilla cache. Never selects the base.",
+    false,
+);
+
+const EXPECT_BASE_SHA256: ArgSpec = ArgSpec::new(
+    "expect_base_sha256",
+    Long("expect-base-sha256"),
+    Hex,
+    "Refuse to compile unless the selected original script cache has this SHA-256 (64 hex \
+     digits, `sha256:` prefix optional). Never selects the base.",
+    false,
+);
+
 const COMPILE_ARGS: &[ArgSpec] = &[
     ArgSpec::new(
         "src",
@@ -371,6 +389,8 @@ const COMPILE_ARGS: &[ArgSpec] = &[
         true,
     ),
     GAME,
+    EXPECT_BASE,
+    EXPECT_BASE_SHA256,
     ArgSpec::new(
         "backend",
         Long("backend"),
@@ -441,6 +461,8 @@ const COMPILE_MODULE_ARGS: &[ArgSpec] = &[
         true,
     ),
     GAME,
+    EXPECT_BASE,
+    EXPECT_BASE_SHA256,
     ArgSpec::new(
         "backend",
         Long("backend"),
@@ -535,6 +557,8 @@ const STANDALONE_COMPILE_ARGS: &[ArgSpec] = &[
         true,
     ),
     GAME,
+    EXPECT_BASE,
+    EXPECT_BASE_SHA256,
     ArgSpec::new(
         "generation_receipt",
         Long("generation-receipt"),
@@ -595,6 +619,8 @@ const STANDALONE_COMPILE_MODULE_ARGS: &[ArgSpec] = &[
         true,
     ),
     GAME,
+    EXPECT_BASE,
+    EXPECT_BASE_SHA256,
     ArgSpec::new(
         "generation_receipt",
         Long("generation-receipt"),

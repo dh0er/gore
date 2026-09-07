@@ -307,6 +307,14 @@ pub enum AsCmd {
         /// path, then Steam auto-detect.
         #[arg(long)]
         game: Option<PathBuf>,
+        /// Refuse to compile unless the selected original script cache is byte-identical to this
+        /// file, for example a frozen copy of the vanilla cache. Never selects the base.
+        #[arg(long, value_name = "CACHE", conflicts_with = "expect_base_sha256")]
+        expect_base: Option<PathBuf>,
+        /// Refuse to compile unless the selected original script cache has this SHA-256
+        /// (64 hex digits, `sha256:` prefix optional). Never selects the base.
+        #[arg(long, value_name = "HEX")]
+        expect_base_sha256: Option<String>,
         /// Disable the optional runtime compiler-diagnostic hook and use the normal generator.
         #[arg(long, conflicts_with = "diagnostics_hook")]
         no_diagnostics: bool,
@@ -358,6 +366,14 @@ pub enum AsCmd {
         /// Game install root. Falls back to configured path, then Steam auto-detect.
         #[arg(long)]
         game: Option<PathBuf>,
+        /// Refuse to compile unless the selected original script cache is byte-identical to this
+        /// file, for example a frozen copy of the vanilla cache. Never selects the base.
+        #[arg(long, value_name = "CACHE", conflicts_with = "expect_base_sha256")]
+        expect_base: Option<PathBuf>,
+        /// Refuse to compile unless the selected original script cache has this SHA-256
+        /// (64 hex digits, `sha256:` prefix optional). Never selects the base.
+        #[arg(long, value_name = "HEX")]
+        expect_base_sha256: Option<String>,
         /// Disable the optional runtime compiler-diagnostic hook and use the normal generator.
         #[arg(long, conflicts_with = "diagnostics_hook")]
         no_diagnostics: bool,
@@ -1793,25 +1809,37 @@ fn acquire_compile_guard(game: &Path) -> Result<gore_as::compile::InstallMutatio
 
 fn guarded_pristine_script_cache(
     game: &Path,
+    selected: &gore_mod::PristineScriptCacheSource,
 ) -> Result<(Vec<u8>, gore_as::compile::InstallMutationGuard)> {
     let mut guard = acquire_compile_guard(game)
         .map_err(anyhow::Error::msg)
         .context("acquiring the AngelScript install-mutation guard")?;
-    match gore_mod::pristine_script_cache(game) {
+    // The bytes read under the guard must still be the original selected before it. The game
+    // backend has no pinned target handle, so this comparison is its equivalent of the post-pin
+    // check on the standalone path.
+    let outcome = match gore_mod::pristine_script_cache(game) {
+        Ok(base) if selected.matches(&base) => Ok(base),
+        Ok(_) => Err(
+            "the pristine script cache changed between selecting it and reading it (a \
+             deployment change or a game update ran alongside); retry the compile"
+                .to_owned(),
+        ),
+        Err(error) => Err(format!(
+            "reading the drift-aware pristine script cache: {error}"
+        )),
+    };
+    match outcome {
         Ok(base) => Ok((base, guard)),
-        Err(error) => {
-            let primary = format!("reading the drift-aware pristine script cache: {error}");
-            match guard.release() {
-                Ok(()) => Err(anyhow::Error::msg(primary)),
-                Err(release) => {
-                    guard.preserve_for_manual_recovery();
-                    bail!(
-                        "COMPILE_RECOVERY_REQUIRED: {primary}; additionally failed to release the \
-                         pre-held install-mutation guard: {release}"
-                    )
-                }
+        Err(primary) => match guard.release() {
+            Ok(()) => Err(anyhow::Error::msg(primary)),
+            Err(release) => {
+                guard.preserve_for_manual_recovery();
+                bail!(
+                    "COMPILE_RECOVERY_REQUIRED: {primary}; additionally failed to release the \
+                     pre-held install-mutation guard: {release}"
+                )
             }
-        }
+        },
     }
 }
 
@@ -1831,6 +1859,90 @@ fn announce_compiler_shipping_source(source: &gore_mod::PristineScriptCacheSourc
             source.path.display()
         );
     }
+}
+
+/// What `--expect-base` / `--expect-base-sha256` demand of the selected original. Neither form
+/// selects the base: the deployment-aware selection stays the only source of truth, and the
+/// expectation merely refuses a compile whose original is not the one the caller vouches for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExpectedBase {
+    /// `sha256:<hex>` in the deploy record's notation.
+    Identity(String),
+    /// A file whose bytes the selected original must equal.
+    File(PathBuf),
+}
+
+const EXPECTED_BASE_MAX_BYTES: u64 = 512 * 1024 * 1024;
+
+fn expected_base_from_args(
+    file: Option<PathBuf>,
+    sha256: Option<String>,
+) -> Result<Option<ExpectedBase>> {
+    if let Some(path) = file {
+        return Ok(Some(ExpectedBase::File(path)));
+    }
+    let Some(raw) = sha256 else {
+        return Ok(None);
+    };
+    let trimmed = raw.trim();
+    let hex = trimmed
+        .get(..7)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("sha256:"))
+        .map_or(trimmed, |_| &trimmed[7..]);
+    if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!(
+            "--expect-base-sha256 must be 64 hex digits (a `sha256:` prefix is optional), got {raw:?}"
+        );
+    }
+    Ok(Some(ExpectedBase::Identity(format!(
+        "sha256:{}",
+        hex.to_ascii_lowercase()
+    ))))
+}
+
+fn base_identity(bytes: &[u8]) -> String {
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+fn describe_shipping_source(source: &gore_mod::PristineScriptCacheSource) -> &'static str {
+    if source.from_backup {
+        "the deployment backup"
+    } else if source.drifted {
+        "the live cache, updated since the deployment"
+    } else {
+        "the live cache"
+    }
+}
+
+/// Refuse to go on unless the selected original is the one the caller vouches for.
+fn require_expected_base(
+    source: &gore_mod::PristineScriptCacheSource,
+    expected: &ExpectedBase,
+) -> Result<()> {
+    let (expected_identity, vouched_by) = match expected {
+        ExpectedBase::Identity(identity) => (identity.clone(), "--expect-base-sha256".to_owned()),
+        ExpectedBase::File(path) => {
+            let bytes = read_regular_bounded(path, EXPECTED_BASE_MAX_BYTES, "AS_EXPECTED_BASE")
+                .with_context(|| format!("reading the expected base file {}", path.display()))?;
+            (
+                base_identity(&bytes),
+                format!("--expect-base {}", path.display()),
+            )
+        }
+    };
+    if source.identity != expected_identity {
+        bail!(
+            "the selected original script cache is not the expected one: {} ({}) has {}, but {} \
+             vouches for {}",
+            source.path.display(),
+            describe_shipping_source(source),
+            source.identity,
+            vouched_by,
+            expected_identity
+        );
+    }
+    eprintln!("the selected original matches the expected base ({expected_identity})");
+    Ok(())
 }
 
 /// Prove that the pinned compiler target holds the pristine base: its bytes must be the current
@@ -1946,6 +2058,7 @@ fn compile_full_graph_command(
     mini: Option<PathBuf>,
     work_dir: PathBuf,
     game: Option<PathBuf>,
+    expected_base: Option<ExpectedBase>,
     no_diagnostics: bool,
     diagnostics_hook: Option<PathBuf>,
     diagnostics_inject_delay_ms: u64,
@@ -2024,6 +2137,9 @@ fn compile_full_graph_command(
     let executable_path = compiler_executable_path(&game);
     let shipping_source = compiler_shipping_source(&game)?;
     announce_compiler_shipping_source(&shipping_source);
+    if let Some(expected) = expected_base.as_ref() {
+        require_expected_base(&shipping_source, expected)?;
+    }
     let shipping_path = shipping_source.path.clone();
     let binds_path = compiler_binds_path(&game);
     let host_module = std::env::current_exe().context("resolving the GORE host executable")?;
@@ -2132,7 +2248,7 @@ fn compile_full_graph_command(
     } else if requested_mode == CompilerBackendModeV1::Standalone {
         unreachable!("strict standalone availability was checked above")
     } else {
-        let (base, acquired) = guarded_pristine_script_cache(&game)?;
+        let (base, acquired) = guarded_pristine_script_cache(&game, &shipping_source)?;
         guard = Some(acquired);
         let binds =
             match read_regular_bounded(&binds_path, DEFAULT_BINDS_MAX_BYTES, "AS_FULL_GRAPH_BINDS")
@@ -3384,6 +3500,8 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             mini,
             work_dir,
             game,
+            expect_base,
+            expect_base_sha256,
             no_diagnostics,
             diagnostics_hook,
             diagnostics_inject_delay_ms,
@@ -3395,6 +3513,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 mini,
                 work_dir,
                 game,
+                expected_base_from_args(expect_base, expect_base_sha256)?,
                 no_diagnostics,
                 diagnostics_hook,
                 diagnostics_inject_delay_ms,
@@ -3410,12 +3529,15 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             allow_new_symbols,
             out,
             game,
+            expect_base,
+            expect_base_sha256,
             no_diagnostics,
             diagnostics_hook,
             diagnostics_inject_delay_ms,
             compiler,
         } => {
             let game = gore_loc::config::game_root(game).context("resolving game path")?;
+            let expected_base = expected_base_from_args(expect_base, expect_base_sha256)?;
             let work_dir = resolve_compile_module_work_dir(work_dir, &game)?;
             let source_bytes = read_regular_bounded(
                 &source,
@@ -3426,6 +3548,9 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let executable_path = compiler_executable_path(&game);
             let shipping_source = compiler_shipping_source(&game)?;
             announce_compiler_shipping_source(&shipping_source);
+            if let Some(expected) = expected_base.as_ref() {
+                require_expected_base(&shipping_source, expected)?;
+            }
             let shipping_path = shipping_source.path.clone();
             let binds_path = compiler_binds_path(&game);
             let target_paths = gore_as::compiler_target::CompilerTargetInputPathsV1 {
@@ -3581,7 +3706,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             } else if requested_mode == gore_as::compile::CompilerBackendModeV1::Standalone {
                 unreachable!("strict standalone availability was checked above")
             } else {
-                let (base, guard) = guarded_pristine_script_cache(&game)?;
+                let (base, guard) = guarded_pristine_script_cache(&game, &shipping_source)?;
                 (base, Some(guard))
             };
             let binds_override = standalone_target
@@ -6194,6 +6319,93 @@ mod default_cli_tests {
     }
 
     #[test]
+    fn expected_base_sha256_is_normalized_and_validated() {
+        let hex = "ab".repeat(32);
+        assert_eq!(
+            expected_base_from_args(None, Some(format!("SHA256:{}", hex.to_uppercase()))).unwrap(),
+            Some(ExpectedBase::Identity(format!("sha256:{hex}")))
+        );
+        assert_eq!(expected_base_from_args(None, None).unwrap(), None);
+        assert_eq!(
+            expected_base_from_args(Some(PathBuf::from("frozen.Cache")), None).unwrap(),
+            Some(ExpectedBase::File(PathBuf::from("frozen.Cache")))
+        );
+        for bad in ["abc", &"zz".repeat(32), ""] {
+            let error = expected_base_from_args(None, Some(bad.to_owned()))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("64 hex digits"), "got: {error}");
+        }
+    }
+
+    /// `--expect-base` / `--expect-base-sha256` never choose the base; they only refuse a compile
+    /// whose selected original is not the one the caller vouches for.
+    #[test]
+    fn expected_base_must_match_the_selected_original() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"pristine-cache").unwrap();
+        let selected = compiler_shipping_source(&game).unwrap();
+        let identity = format!("sha256:{:x}", Sha256::digest(b"pristine-cache"));
+        let other = format!("sha256:{:x}", Sha256::digest(b"other-cache"));
+
+        require_expected_base(&selected, &ExpectedBase::Identity(identity.clone())).unwrap();
+        let error = require_expected_base(&selected, &ExpectedBase::Identity(other.clone()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&other), "got: {error}");
+        assert!(error.contains(&identity), "got: {error}");
+        assert!(
+            error.contains(&selected.path.display().to_string()),
+            "the message must name the selected original: {error}"
+        );
+
+        let same = root.path().join("frozen.Cache");
+        std::fs::write(&same, b"pristine-cache").unwrap();
+        require_expected_base(&selected, &ExpectedBase::File(same)).unwrap();
+        let different = root.path().join("different.Cache");
+        std::fs::write(&different, b"other-cache").unwrap();
+        let error = require_expected_base(&selected, &ExpectedBase::File(different.clone()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&other), "got: {error}");
+        assert!(error.contains(&identity), "got: {error}");
+        assert!(
+            error.contains(&different.display().to_string()),
+            "the message must name the expected file: {error}"
+        );
+        let missing = root.path().join("missing.Cache");
+        let error = require_expected_base(&selected, &ExpectedBase::File(missing))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("missing.Cache"), "got: {error}");
+    }
+
+    /// The game backend reads its base after the selection; those bytes must still be the
+    /// selected original, exactly like the pinned standalone target.
+    #[test]
+    fn game_backend_base_must_still_be_the_selected_original() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"selected").unwrap();
+        let selected = compiler_shipping_source(&game).unwrap();
+
+        std::fs::write(&live, b"replaced").unwrap();
+        let error = guarded_pristine_script_cache(&game, &selected)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("changed between selecting it and reading it"),
+            "got: {error}"
+        );
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+    }
+
+    #[test]
     fn standalone_target_must_carry_the_selected_pristine_base() {
         let root = tempfile::tempdir().unwrap();
         let game = root.path().join("game");
@@ -6298,7 +6510,8 @@ mod default_cli_tests {
         )
         .unwrap();
 
-        let (base, mut guard) = guarded_pristine_script_cache(&game).unwrap();
+        let selected = compiler_shipping_source(&game).unwrap();
+        let (base, mut guard) = guarded_pristine_script_cache(&game, &selected).unwrap();
         assert_eq!(base, b"authoritative-pristine");
         let contender = gore_as::compile::InstallMutationGuard::acquire(&game, "gore-mod:deploy")
             .expect_err("deploy must remain blocked after the authoritative read");
@@ -6315,9 +6528,13 @@ mod default_cli_tests {
     fn compile_module_cli_releases_guard_when_pristine_selection_fails() {
         let root = tempfile::tempdir().unwrap();
         let game = root.path().join("game");
-        std::fs::create_dir_all(&game).unwrap();
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"selected").unwrap();
+        let selected = compiler_shipping_source(&game).unwrap();
+        std::fs::remove_file(&live).unwrap();
 
-        let error = guarded_pristine_script_cache(&game)
+        let error = guarded_pristine_script_cache(&game, &selected)
             .unwrap_err()
             .to_string();
         assert!(error.contains("pristine script cache"), "got: {error}");
