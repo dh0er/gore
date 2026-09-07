@@ -1554,6 +1554,12 @@ fn emit_function_ctor(
     // `const`; strip the marker and const-qualify the declaration below.
     let (body, const_slots) = strip_const_store_markers(&body);
     pass_trace("structured", &body);
+    let const_result_handles = const_call_result_slots(f, refs);
+    let selected_read_only: HashSet<i32> = const_slots.iter().chain(const_result_handles.iter())
+        .chain(reference_locals.keys()).copied().collect();
+    let (body, selected_handle_copies) = scope_null_selected_handle_copy(
+        &body, &released_handles, &local_types, &selected_read_only);
+    alias_copy_keep.extend(selected_handle_copies);
     let body = scope_released_handles(&body, &released_handles);
     pass_trace("scope_released_handles", &body);
     // By-value call results the structurer popped as hidden out-slots: one pushed on again
@@ -1612,7 +1618,7 @@ fn emit_function_ctor(
     let mut const_slots = const_slots;
     // A const handle that arrives from a call, not from a marked store: the hoisted declaration
     // is typed from the slot table and would otherwise drop the qualifier.
-    const_slots.extend(const_call_result_slots(f, refs));
+    const_slots.extend(const_result_handles);
     // batch-30a (C6a, specs/batch29-errortail.md §6a): propagate const FORWARD through
     // same-type handle copies BEFORE the shrink loop. `local_M = local_N;` with N
     // const-marked previously DROPPED N (copy into a non-const local), keeping the
@@ -2980,6 +2986,8 @@ fn emit_function_ctor(
         // Restore this closed comparison tail after every bool-chain inliner.
         let rendered = restore_named_integer_comparison_return(&rendered, f, refs);
         pass_trace("restore_named_integer_comparison_return", &rendered);
+        let rendered = fold_terminal_bool_literal_return(&rendered, f);
+        pass_trace("fold_terminal_bool_literal_return", &rendered);
         let rendered = expand_if_false_markers(&rendered);
         let rendered = unwrap_fstring_literal_declarations(&rendered);
         pass_trace("unwrap_fstring_literal_declarations", &rendered);
@@ -5471,6 +5479,45 @@ fn release_name(line: &str) -> &str {
     line.trim().strip_suffix(" = nullptr;").unwrap_or("")
 }
 
+/// The freshly copied alternative in a null/self selection has one explicit scope end.
+/// Keep that lvalue and let the existing declaration/release passes own the small block.
+fn scope_null_selected_handle_copy(
+    body: &str, released: &HashSet<i32>, locals: &HashMap<i32, String>, excluded: &HashSet<i32>,
+) -> (String, HashSet<i32>) {
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut kept = HashSet::new();
+    for at in (0..lines.len().saturating_sub(1)).rev() {
+        let Some((copy, source)) = slot_store(&lines[at]) else { continue; };
+        let Some((target, value)) = slot_store_any(&lines[at + 1]) else { continue; };
+        let (Some(slot), Some(src), Some(dst)) = (slot_of(&copy), slot_of(&source), slot_of(&target))
+            else { continue; };
+        if slot == src || slot == dst || src == dst || !released.contains(&slot)
+            || value != format!("({target} == nullptr ? {copy} : {target})")
+            || count_ident(body, &copy) != 3 { continue; }
+        let Some(ty) = locals.get(&slot) else { continue; };
+        if !is_object_handle_type(ty) || ty.starts_with("const ") || ty.contains(['&', '@'])
+            || [slot, src, dst].iter().any(|s| excluded.contains(s) || locals.get(s) != Some(ty))
+            { continue; }
+        let indent = indent_of(&lines[at]).to_owned();
+        let release = format!("{copy} = nullptr;");
+        let Some(end) = (at + 2..lines.len()).find(|i| lines[*i].trim() == release) else { continue; };
+        // No nested scope, early exit, or intervening declaration whose scope would shrink.
+        if lines[at + 1..=end].iter().any(|line| indent_of(line) != indent
+            || line.contains(['{', '}']) || line.trim_start().starts_with("return")
+            || matches!(line.trim(), "break;" | "continue;")
+            || bare_declaration(line).is_some() || declaration_with_initializer(line).is_some())
+            { continue; }
+        let mut block = vec![format!("{indent}{{")];
+        block.extend(lines[at..=end].iter().map(|line| format!("    {line}")));
+        block.push(format!("{indent}}}"));
+        lines.splice(at..=end, block);
+        kept.insert(slot);
+    }
+    let mut result = lines.join("\n");
+    if body.ends_with('\n') { result.push('\n'); }
+    (result, kept)
+}
+
 /// A `FreeNullV8 h` is the compiler's release of a handle local at the end of the block that
 /// declared it: a temporary is never released, a `return` releases nothing, a function-scope
 /// local is released nowhere (vanilla, throughout). The structurer renders it `local_h =
@@ -7240,6 +7287,13 @@ fn walk_assignment_scope(
             }
         }
         leaves |= trimmed.starts_with("return ") || trimmed == "return;";
+        if trimmed == "{" {
+            // A bare scope owns its close too. Its reads inherit the current
+            // assignments; keep the existing rule that child writes do not escape.
+            walk_assignment_scope(lines, at, ident, assigned, seen);
+            *at += 1;
+            continue;
+        }
         if lines.get(*at).map(|l| l.trim()) != Some("{") {
             continue;
         }
@@ -7771,16 +7825,67 @@ fn rewrite_no_assign_locals(body: &str, locals: &BTreeMap<i32, String>) -> (Stri
     (out, suppressed)
 }
 
-/// A script handle call captured once into an otherwise untouched slot names
-/// an unused local. Value returns and unknown/native call conventions stay out.
+/// A terminal SetV1 feeds the return register directly. A late split-slot
+/// declaration must not introduce another boolean copy into that exact tail.
+fn fold_terminal_bool_literal_return(body: &str, f: &Func) -> String {
+    let rewrite = (|| {
+        if f.ret.token != 0x41 || f.ret.is_reference { return None; }
+        let code = disassemble(&f.bytecode).ok()?;
+        let tail = code.get(code.len().checked_sub(3)?..)?;
+        if tail.iter().map(|ins| ins.op.name).ne(["SetV1", "CpyVtoR4", "RET"])
+            || tail[0].words.first() != tail[1].words.first() { return None; }
+        let value = match *tail[0].dwords.first()? { 0 => "false", 1 => "true", _ => return None };
+        let slot = *tail[0].words.first()? as i16 as i32;
+        if slot <= 0 || code.iter().any(|ins| ins.op.name == "JMPP" || (ins.op.name.starts_with('J')
+            && ins.dwords.first().is_some_and(|v|
+                ins.offset_dw as i64 + 2 + *v as i32 as i64 == tail[1].offset_dw as i64))) { return None; }
+        let mut lines: Vec<_> = body.trim_end().lines().collect();
+        let at = lines.len().checked_sub(2)?;
+        let (indent, name, init) = declaration_with_initializer(lines[at])?;
+        if init != value || slot_and_life_any(&name)?.0 != slot || count_ident(body, &name) != 2
+            || lines[at].trim() != format!("bool {name} = {value};")
+            || lines[at + 1] != format!("{indent}return {name};")
+            || lines[..at].iter().map(|line| brace_net(line)).sum::<i32>() != 0 { return None; }
+        lines.truncate(at);
+        let mut out = lines.join("\n");
+        if !out.is_empty() { out.push('\n'); }
+        out.push_str(&format!("{indent}return {value};\n"));
+        Some(out)
+    })();
+    rewrite.unwrap_or_else(|| body.to_owned())
+}
+
+/// A handle call captured once into an otherwise untouched slot names an unused
+/// local. Native calls additionally need the typed static handle-reader convention.
 fn unused_script_handle_results(f: &Func, refs: &RefResolver) -> HashSet<i32> {
     let Ok(ins) = disassemble(&f.bytecode) else { return HashSet::new(); };
-    ins.windows(2).filter_map(|pair| {
-        if !matches!(pair[0].op.name, "CALL" | "CALLINTF") || pair[1].op.name != "STOREOBJ" {
-            return None;
-        }
-        let id = *pair[0].dwords.first()? as i32;
-        let ret = refs.func_ret_by_id(id)?;
+    ins.windows(2).enumerate().filter_map(|(at, pair)| {
+        if pair[1].op.name != "STOREOBJ" { return None; }
+        let ret = match pair[0].op.name {
+            "CALL" | "CALLINTF" => refs.func_ret_by_id(*pair[0].dwords.first()? as i32)?,
+            "CALLSYS" => {
+                let ptr = *pair[0].qwords.first()? as i64;
+                let args = refs.func_params_by_ptr(ptr)?;
+                let push = ins.get(at.checked_sub(1)?)?;
+                if refs.is_method_by_ptr(ptr) || args.len() != 1 || args[0].token != 5
+                    || !args[0].is_object_handle || !args[0].is_object_const || args[0].is_reference
+                    || args[0].is_read_only || push.op.name != "PshVPtr"
+                    || *push.words.first()? as i16 >= 0 { return None; }
+                let ret = refs.func_ret_by_ptr(ptr)?;
+                let identity = refs.type_identity_by_ptr(ret.type_info)?;
+                let slot = *pair[1].words.first()? as i16 as i32;
+                let locals: Vec<_> = f.obj_locals.iter().filter(|(s, _)| *s == slot).collect();
+                if !identity.module.is_empty() || !identity.namespace.is_empty() || locals.len() != 1
+                    || refs.type_identity_by_ptr(locals[0].1)? != identity
+                    || ins.iter().any(|op| op.op.name == "JMPP" || (op.op.name.starts_with('J')
+                        && op.dwords.first().is_some_and(|v| {
+                            let target = op.offset_dw as i64 + 2 + *v as i32 as i64;
+                            target > push.offset_dw as i64 && target <= pair[1].offset_dw as i64
+                        }))) { return None; }
+                ret
+            }
+            _ => return None,
+        };
         if ret.token != 5 || !ret.is_object_handle || ret.is_reference
             || ret.is_object_const || ret.is_read_only { return None; }
         let slot = *pair[1].words.first()? as i16 as i32;
@@ -21138,7 +21243,17 @@ fn strip_unreachable<'a>(lines: &[&'a str], at: &mut usize, kept: &mut Vec<&'a s
             || trimmed == "return;"
             || trimmed == "break;"
             || trimmed == "continue;";
-        if lines.get(*at).map(|l| l.trim()) == Some("{") {
+        if trimmed == "{" {
+            // A bare block executes unconditionally and owns its closing brace.
+            statement_leaves = strip_unreachable(lines, at, out);
+            if let Some(close) = lines.get(*at) {
+                out.push(close);
+                *at += 1;
+            }
+        } else if !trimmed.is_empty() && !trimmed.ends_with(';')
+            && lines.get(*at).map(|l| l.trim()) == Some("{")
+        {
+            // A completed statement must not absorb the next bare block as its body.
             out.push(lines[*at]);
             *at += 1;
             let then_leaves = strip_unreachable(lines, at, out);
@@ -26583,6 +26698,92 @@ mod member_arithmetic_lifetime_tests {
         assert!(super::unused_script_handle_results(&f, &RefResolver::default()).is_empty());
     }
 
+    #[test]
+    fn terminal_bool_literal_return_requires_the_direct_raw_tail() {
+        for value in 0..2 {
+            let mut f = function(&[("SetV1", &[3]), ("CpyVtoR4", &[3]), ("RET", &[0])]);
+            f.ret.token = 0x41; f.bytecode[1] = value;
+            let literal = if value == 0 { "false" } else { "true" };
+            let body = format!("    Work();\n    bool local_3_2 = {literal};\n    return local_3_2;\n");
+            assert_eq!(super::fold_terminal_bool_literal_return(&body, &f),
+                format!("    Work();\n    return {literal};\n"));
+            for wrong in [body.replace("bool ", "int "), body.replace("local_3_2", "local_4_2"),
+                format!("    Use(local_3_2);\n{body}"), format!("    if (Check())\n    {{\n{body}")]
+            { assert_eq!(super::fold_terminal_bool_literal_return(&wrong, &f), wrong); }
+            let mut other = f.clone(); other.ret.token = 0x44;
+            assert_eq!(super::fold_terminal_bool_literal_return(&body, &other), body);
+            let mut other = f.clone(); other.bytecode[1] = 1 - value;
+            assert_eq!(super::fold_terminal_bool_literal_return(&body, &other), body);
+            let mut other = function(&[("JMP", &[])]); other.ret = f.ret.clone();
+            other.bytecode[1] = 2; other.bytecode.extend(f.bytecode.clone());
+            assert_eq!(super::fold_terminal_bool_literal_return(&body, &other), body);
+            other.bytecode[1] = 0; // An entry at SetV1 still initializes the returned literal.
+            assert_ne!(super::fold_terminal_bool_literal_return(&body, &other), body);
+        }
+    }
+
+    #[test]
+    fn unused_native_handle_reader_keeps_its_single_typed_store() {
+        let mut f = function(&[("PshVPtr", &[(-2i16) as u16]), ("CALLSYS", &[]),
+            ("STOREOBJ", &[4]), ("RET", &[0])]);
+        let code = disassemble(&f.bytecode).unwrap(); f.bytecode[code[1].offset_dw + 1] = 1;
+        f.obj_locals = vec![(4, 1)];
+        let refs = RefResolver::from_test_native_handle_reader(0);
+        let keep = super::unused_script_handle_results(&f, &refs);
+        assert_eq!(keep, HashSet::from([4]));
+        let body = "    local_4 = Read(Target);\n    return false;\n";
+        let locals = std::collections::BTreeMap::from([(4, "UValue".into())]);
+        assert_eq!(super::drop_unread_call_results(body, &locals, &refs, &keep, &HashSet::new()).0, body);
+        for fault in 1..8 {
+            assert!(super::unused_script_handle_results(&f,
+                &RefResolver::from_test_native_handle_reader(fault)).is_empty(), "fault={fault}");
+        }
+        for extra in [("STOREOBJ", &[4][..]), ("PshVPtr", &[4][..]), ("FreeNullV8", &[4][..])] {
+            let mut other = f.clone(); other.bytecode.extend(function(&[extra]).bytecode);
+            assert!(super::unused_script_handle_results(&other, &refs).is_empty());
+        }
+        let mut other = f.clone(); other.obj_locals.clear();
+        assert!(super::unused_script_handle_results(&other, &refs).is_empty());
+        let mut other = f.clone(); other.bytecode[0] &= 0xffff;
+        assert!(super::unused_script_handle_results(&other, &refs).is_empty());
+        let mut other = f.clone(); other.bytecode.extend(function(&[("JMP", &[])]).bytecode);
+        let jump = disassemble(&other.bytecode).unwrap().pop().unwrap();
+        other.bytecode[jump.offset_dw + 1] = code[2].offset_dw as i32 - jump.offset_dw as i32 - 2;
+        assert!(super::unused_script_handle_results(&other, &refs).is_empty());
+    }
+
+    #[test]
+    fn unreachable_preserves_bare_block_after_if_else_and_loop_continuation() {
+        let body = "    while (More())\n    {\n        if (Choose())\n        {\n            First();\n        }\n        else\n        {\n            Second();\n        }\n        {\n            Handle local_96 = local_98;\n            Use(local_96);\n        }\n        Advance();\n    }\n    SayMultiple();\n";
+        assert_eq!(super::drop_unreachable_statements(body), body);
+        let after_statement = "    Work();\n    {\n        Inner();\n    }\n    After();\n";
+        assert_eq!(super::drop_unreachable_statements(after_statement), after_statement);
+    }
+
+    #[test]
+    fn definite_assignment_walk_keeps_the_loop_state_across_bare_scopes() {
+        let body = "    while (More())\n    {\n        local_89 = 0;\n        if (Choose())\n        {\n            local_89 = Next();\n        }\n        Use(local_89);\n        if (Choose())\n        {\n            First();\n        }\n        else\n        {\n            Second();\n        }\n        {\n            Use(local_89);\n        }\n    }\n    AfterLoop();\n";
+        assert!(super::all_reads_lexically_dominated_by_assignment(body, 89));
+        let outside = format!("{body}    Use(local_89);\n");
+        assert!(!super::all_reads_lexically_dominated_by_assignment(&outside, 89));
+        let unassigned = body.replace("        local_89 = 0;\n", "");
+        assert!(!super::all_reads_lexically_dominated_by_assignment(&unassigned, 89));
+    }
+
+    #[test]
+    fn unreachable_propagates_bare_block_exits_but_not_zero_iteration_loops() {
+        for exit in ["return;", "return value;", "break;", "continue;"] {
+            let body = format!("    while (More())\n    {{\n        Work();\n        {{\n            {exit}\n            DeadInBlock();\n        }}\n        DeadInLoop();\n    }}\n    AfterLoop();\n");
+            let expected = body.replace("            DeadInBlock();\n", "")
+                .replace("        DeadInLoop();\n", "");
+            assert_eq!(super::drop_unreachable_statements(&body), expected, "{exit}");
+        }
+        let returning = "    Work();\n\n    {\n        {\n            return value;\n        }\n        DeadInOuter();\n    }\n    DeadAfter();\n";
+        let expected = returning.replace("        DeadInOuter();\n", "")
+            .replace("    DeadAfter();\n", "");
+        assert_eq!(super::drop_unreachable_statements(returning), expected);
+    }
+
     fn assignment_order_fixture(ops: &[(&str, &[u16])], first_call: i32) -> Func {
         let mut f = function(ops);
         f.params.push(crate::cache::model::Param {
@@ -27052,6 +27253,39 @@ mod member_arithmetic_lifetime_tests {
             &RefResolver::from_test_typed_getter_copies("UNode", true, false)).is_empty());
         let mut other = f.clone(); other.obj_locals.push((24, 2));
         assert!(super::repeated_handle_alias_slots(&other, &refs).is_empty());
+    }
+
+    #[test]
+    fn local_null_selection_copy_survives_dead_alias_declaration_and_cleanup_passes() {
+        let body = "    while (Ready())\n    {\n        local_96 = local_98;\n        local_68 = (local_68 == nullptr ? local_96 : local_68);\n        AddTag();\n        local_44 = local_60.Next;\n        local_96 = nullptr;\n        local_86 = nullptr;\n        local_60 = nullptr;\n    }\n    Use(local_68);\n";
+        let types: HashMap<i32, String> = HashMap::from([(96, "AActor".into()), (98, "AActor".into()), (68, "AActor".into())]);
+        let locals = types.iter().map(|(slot, ty)| (*slot, ty.clone())).collect();
+        let released = HashSet::from([96, 86, 60]);
+        let (scoped, keep) = super::scope_null_selected_handle_copy(body, &released, &types, &HashSet::new());
+        assert_eq!(keep, HashSet::from([96]));
+        assert!(scoped.contains("        {\n            local_96 = local_98;"), "{scoped}");
+        let dead = super::drop_dead_stores(&scoped, &HashSet::from([96, 98, 68]));
+        let aliases = super::fold_alias_copies(&dead, &locals, &keep);
+        assert!(aliases.contains("local_96 = local_98;"), "{aliases}");
+        let refs = RefResolver::from_test_collision_names(&["AActor"]);
+        let (declared, suppressed) = super::rewrite_first_use_decl_init(&aliases, &locals, &refs,
+            &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashMap::new(),
+            &released, &HashSet::new());
+        assert!(suppressed.contains(&96), "{declared}");
+        assert!(declared.contains("AActor local_96 = local_98;"), "{declared}");
+        let cleaned = super::drop_block_end_handle_releases(&declared);
+        assert!(!cleaned.contains("local_96 = nullptr;"), "{cleaned}");
+        assert!(cleaned.contains("        }\n        local_86 = nullptr;\n        local_60 = nullptr;"), "{cleaned}");
+        assert!(cleaned.contains("local_68 = (local_68 == nullptr ? local_96 : local_68);"));
+        for other in [body.replace("AddTag();", "return;"),
+            body.replace("AddTag();", "Use(local_96);"),
+            body.replace("AddTag();", "AActor local_12 = Other();"),
+            body.replace("local_96 : local_68", "local_98 : local_68")] {
+            assert_eq!(super::scope_null_selected_handle_copy(&other, &released, &types, &HashSet::new()).0, other);
+        }
+        assert_eq!(super::scope_null_selected_handle_copy(body, &released, &types, &HashSet::from([98])).0, body);
+        let mut other_types = types.clone(); other_types.insert(68, "APawn".into());
+        assert_eq!(super::scope_null_selected_handle_copy(body, &released, &other_types, &HashSet::new()).0, body);
     }
 
     #[test]

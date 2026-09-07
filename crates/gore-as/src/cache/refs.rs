@@ -1682,6 +1682,21 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_native_handle_reader(fault: u8) -> Self {
+        let mut r = Self::from_test_script_result(DataType { token: 5, type_info: 1,
+            is_object_handle: true, is_reference: fault == 1, is_object_const: fault == 2,
+            ..Default::default() });
+        r.type_by_ptr.insert(1, "UValue".into());
+        r.type_identity_by_ptr.insert(1, TypeIdentity { name: "UValue".into(),
+            module: if fault == 3 { "Script" } else { "" }.into(), namespace: String::new() });
+        if fault == 4 { r.func_is_method.insert(1); }
+        r.func_params.insert(1, vec![DataType { token: 5, type_info: 2, is_object_handle: true,
+            is_reference: fault == 5, is_object_const: fault != 6,
+            is_read_only: fault == 7, ..Default::default() }]);
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_nested_enum_index(key_const: bool) -> Self {
         let mut r = Self::default();
         for (id, name) in [(1, "USystem"), (2, "UContainer"), (3, "FResult"), (4, "EKind"), (5, "UWrong")] {
@@ -1847,6 +1862,12 @@ impl RefResolver {
             r.func_ret.insert(ptr, DataType { token: 5, type_info: ty, is_reference: true,
                 is_object_handle: handle, is_object_const: object_const, ..Default::default() });
         }
+        r.func_by_ptr.insert(7, "opIndex".into()); r.func_owner.insert(7, "TMap".into());
+        r.func_is_method.insert(7);
+        r.func_params.insert(7, vec![DataType { token: 5, type_info: 3, is_reference: true,
+            is_object_handle: true, is_object_const: true, is_read_only: true, ..Default::default() }]);
+        r.func_ret.insert(7, DataType { token: 5, type_info: 2, is_reference: true,
+            is_object_const: object_const, ..Default::default() });
         r.func_by_ptr.insert(4, "IsValid".into());
         r.func_params.insert(4, vec![DataType { token: 5, type_info: 3,
             is_object_handle: true, ..Default::default() }]);

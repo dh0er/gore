@@ -31,7 +31,7 @@ AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingResponse	2	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	22	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.TheftEvaluationContext	1	0	0
-AI.AssessmentResponseSystem.EventResponses	8	0	0
+AI.AssessmentResponseSystem.EventResponses	7	0	0
 AI.CharacterAI_Gothic	6	0	0
 AI.CharacterAI_Human	1	0	0
 AI.CharacterAI_Orc	2	0	0
@@ -100,7 +100,6 @@ AI.States.Test.TestCharacters_Navigation	1	0	0
 Camera.ConversationCameraConfig	1	0	0
 Environment.GothicUltraDynamicControlerAS	4	0	0
 FX.DepthOfField.DepthOfFieldController	1	0	0
-GAS.Abilities.Combat.AttackLoop.Base.GA_AttackLoop	1	0	0
 GAS.Abilities.Combat.AttackLoop.Capsule.GA_AttackLoopCapsule	2	0	0
 GAS.Abilities.Combat.AttackLoop.Capsule.PyrolaserHitCapsuleComponent	1	0	0
 GAS.Abilities.Combat.AttackLoop.Cone.GA_AttackLoopCone	2	0	0
@@ -141,7 +140,7 @@ GAS.Abilities.Spells.Spells.Telekinesis.GA_Spell_Telekinesis_FocusStoneBridge	1	
 GAS.Abilities.Spells.Spells.Telekinesis.TelekinesisItemMovementVisual	1	0	0
 GAS.Abilities.Spells.Spells.Transform.GA_Spell_Transform	2	0	0
 GAS.Abilities.Spells.Visuals.DeathToTheUndead.DeathToTheUndeadVisual	1	0	0
-GAS.Abilities.Spells.Visuals.Environment.ElectrifiedArea_FocusStonePuzzle	2	0	0
+GAS.Abilities.Spells.Visuals.Environment.ElectrifiedArea_FocusStonePuzzle	1	0	0
 GAS.Abilities.Spells.Visuals.Fire.FireRainVisual	2	0	0
 GAS.Abilities.Spells.Visuals.Fire.InnosPrayVisual	2	0	0
 GAS.Abilities.Spells.Visuals.Light.LightVisual	2	0	0
@@ -152,7 +151,7 @@ GAS.Abilities.Spells.Visuals.VisualShapes.CollisionShapeVisual	1	0	0
 GAS.Abilities.Spells.Visuals.Wind.StormFistVisual	1	0	0
 GAS.Abilities.TraceTarget.Base.GA_TraceTarget_Base	1	0	0
 GAS.Abilities.TraceTarget.Derived.GA_TraceTarget_Item	1	0	0
-GAS.Calculations.Damage	6	0	0
+GAS.Calculations.Damage	5	0	0
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Drugs.Base.DrugDebuffEffectComponentBase	2	0	0
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Sleep.GA_SleepDebuffEffectGameplayAbility	1	0	0
 GAS.Effects.Debuffs.EffectStateComponent.DebuffEffectActors.SlowdownDebuffEffectActor	1	0	0

@@ -1432,7 +1432,8 @@ fn local_lvalue_selection(ctx: &Ctx<'_>, join: usize) -> Option<LocalLvalueSelec
     let code = ctx.instrs.get(head..join + 2)?;
     let word = |op: &Instr, at: usize| op.words.get(at).map(|v| *v as i16 as i32);
     let target = |op: &Instr| op.dwords.first().map(|v| op.offset_dw as i64 + 2 + *v as i32 as i64);
-    if code[0].op.name != "CMPIi" || !matches!(code[1].op.name, "JZ" | "JNZ")
+    let null_test = code[0].op.name == "CmpPtrNull";
+    if !matches!(code[0].op.name, "CMPIi" | "CmpPtrNull") || !matches!(code[1].op.name, "JZ" | "JNZ")
         || !matches!(code[2].op.name, "LDV" | "PSF") || code[3].op.name != "JMP"
         || code[4].op.name != code[2].op.name
         || target(&code[1]) != Some(code[4].offset_dw as i64)
@@ -1453,8 +1454,9 @@ fn local_lvalue_selection(ctx: &Ctx<'_>, join: usize) -> Option<LocalLvalueSelec
     let no = word(&code[4], 0)?;
     // CMPIi tests signed integer bits in both selection forms. A known bool,
     // enum, float or object test must not become an ordinary source comparison.
-    if test <= 0 || ctx.float_slots.contains(&test)
-        || ctx.slot_type(test).is_some_and(|ty| ty != "int" && ty != "int32")
+    if test <= 0 || (null_test && code[2].op.name != "PSF")
+        || (!null_test && (ctx.float_slots.contains(&test)
+            || ctx.slot_type(test).is_some_and(|ty| ty != "int" && ty != "int32")))
     { return None; }
     let dst;
     if code[2].op.name == "LDV" {
@@ -1473,18 +1475,27 @@ fn local_lvalue_selection(ctx: &Ctx<'_>, join: usize) -> Option<LocalLvalueSelec
     } else {
         if code[5].op.name != "RDSPtr" || code[6].op.name != "RefCpyV" { return None; }
         dst = word(&code[6], 0)?;
-        let param = |slot| ctx.param_off_map.get(&slot).and_then(|i| ctx.f.param_types.get(*i));
-        let left = param(yes)?;
-        let right = param(no)?;
-        if dst <= 0 || yes >= 0 || no >= 0
-            || [left, right].iter().any(|ty| ty.token != 5 || !ty.is_object_handle
-                || ty.is_reference || ty.is_object_const || ty.is_read_only)
-            || left.type_info != right.type_info
-            || ctx.slot_type(dst).as_deref() != Some(left.base_name(ctx.refs).as_str())
-        { return None; }
+        if null_test {
+            let ty = ctx.slot_type(dst)?;
+            if dst != test || no != dst || yes <= 0 || yes == dst
+                || !ctx.refs.is_type_name(&ty) || !matches!(ty.as_bytes().first(), Some(b'A' | b'U'))
+                || [yes, no].iter().any(|slot| ctx.float_slots.contains(slot)
+                    || ctx.slot_type(*slot).as_deref() != Some(ty.as_str())) { return None; }
+        } else {
+            let param = |slot| ctx.param_off_map.get(&slot).and_then(|i| ctx.f.param_types.get(*i));
+            let left = param(yes)?;
+            let right = param(no)?;
+            if dst <= 0 || yes >= 0 || no >= 0
+                || [left, right].iter().any(|ty| ty.token != 5 || !ty.is_object_handle
+                    || ty.is_reference || ty.is_object_const || ty.is_read_only)
+                || left.type_info != right.type_info
+                || ctx.slot_type(dst).as_deref() != Some(left.base_name(ctx.refs).as_str())
+            { return None; }
+        }
     }
     let sense = if code[1].op.name == "JZ" { "!=" } else { "==" };
-    let immediate = *code[0].dwords.first()? as i32;
+    let immediate = if null_test { "nullptr".to_owned() }
+        else { (*code[0].dwords.first()? as i32).to_string() };
     Some(LocalLvalueSelection {
         head,
         statement: format!("{} = ({} {sense} {immediate} ? {} : {});",
@@ -1534,14 +1545,22 @@ fn is_typed_array_getter_handle_copy(ctx: &Ctx<'_>, code: &[Instr], copy: usize,
         let field = code.get(copy.checked_sub(2)?)?.op.name == "ADDSi";
         let start = copy.checked_sub(if field { 4 } else { 3 })?;
         let lead = &code[start..copy];
-        if lead[0].op.name != "Thiscall1" || lead[1].op.name != "PshRPtr" { return None; }
+        if !matches!(lead[0].op.name, "Thiscall1" | "CALLSYS")
+            || lead[1].op.name != "PshRPtr" { return None; }
         let ptr = *lead[0].qwords.first()? as i64;
         let ret = ctx.refs.func_ret_by_ptr(ptr)?;
         let params = ctx.refs.func_params_by_ptr(ptr)?;
-        if !ctx.refs.is_method_by_ptr(ptr) || ctx.refs.func_owner_by_ptr(ptr)? != "TArray"
-            || ret.token != 5 || !ret.is_reference || ret.is_object_const || ret.is_read_only
-            || params.len() != 1 || params[0].token != 0x44 || params[0].is_reference
-            || params[0].is_object_handle { return None; }
+        if !ctx.refs.is_method_by_ptr(ptr) || ret.token != 5 || !ret.is_reference
+            || ret.is_object_const || ret.is_read_only || params.len() != 1 { return None; }
+        let key = &params[0];
+        let indexed_container = match (lead[0].op.name, ctx.refs.func_owner_by_ptr(ptr)?) {
+            ("Thiscall1", "TArray") => key.token == 0x44 && !key.is_reference && !key.is_object_handle,
+            ("CALLSYS", "TMap") => field && key.token == 5 && key.is_reference
+                && key.is_object_handle && key.is_object_const && key.is_read_only
+                && ctx.refs.type_identity_by_ptr(key.type_info).is_some(),
+            _ => false,
+        };
+        if !indexed_container { return None; }
         let end = if field {
             if ctx.refs.func_by_ptr(ptr)? != "opIndex" || ret.is_object_handle { return None; }
             let tid = *lead[2].dwords.first()? as i32;
@@ -11129,6 +11148,39 @@ mod tests {
         assert!(!render(ret, param, false, 99).contains("local_8 = this.Nodes.opIndex"));
     }
 
+    #[test]
+    fn map_value_member_copy_requires_a_typed_mutable_index_result() {
+        for fault in 0..7 {
+            let refs = RefResolver::from_test_typed_getter_copies(
+                if fault == 1 { "UOther" } else { "UNode" }, fault == 2, fault == 3);
+            let mut a = TestAssembler::default();
+            a.op("CALLSYS", &[], &[]); a.op("PshRPtr", &[], &[]);
+            a.op("ADDSi", &[0], &[if fault == 4 { 1 } else { 2 }]);
+            a.op("RDSPtr", &[], &[]); a.op("RefCpyV", &[8], &[]);
+            a.op("RET", &[0], &[]);
+            let mut fixture = a.finish(); fixture.instrs[0].qwords = vec![if fault == 5 { 2 } else { 7 }];
+            if fault == 6 {
+                let target = fixture.instrs[2].offset_dw;
+                let jump = &mut fixture.instrs[5];
+                jump.op = crate::cache::isa::OPCODES.iter().find(|op| op.name == "JMP").unwrap();
+                jump.dwords = vec![(target as i32 - jump.offset_dw as i32 - 2) as u32];
+            }
+            let f = FuncCode { func: "Fixture::Read".into(), is_method: false,
+                param_names: vec![], param_types: vec![], ret: DataType { token: 0x52,
+                    ..Default::default() }, bytecode: vec![] };
+            let locals = HashMap::from([(8, "UNode".into())]);
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: None, param_types: None, class_name: None,
+                local_types: Some(&locals), float_slots: Default::default(),
+                param_off_map: HashMap::new(), rvo_off: None, keep_ints: None,
+                rvo_switch_region: std::cell::Cell::new(false) };
+            let src = Arg { s: "this.Nodes.opIndex(Key).CharacterState".into(),
+                ty: Some("UNode".into()), ..Default::default() };
+            assert_eq!(is_typed_array_getter_handle_copy(&ctx, &fixture.instrs, 4, &src), fault == 0,
+                "fault={fault}");
+        }
+    }
+
     fn render_typed_getter_copy_fixture(field: bool, fault: u8) -> String {
         let refs = RefResolver::from_test_typed_getter_copies(
             if fault == 1 { "UOther" } else { "UNode" }, fault == 2, fault == 7);
@@ -11245,22 +11297,26 @@ mod tests {
         }
     }
 
-    fn render_lvalue_selection(handle: bool, extra_entry: bool, wrong_type: bool, jump: &'static str, test_type: Option<&str>) -> String {
+    fn render_lvalue_selection(handle: bool, extra_entry: bool, wrong_type: bool, jump: &'static str, test_type: Option<&str>, null_locals: bool) -> String {
         let mut a = TestAssembler::default();
         if extra_entry { a.jump("JZ", "join"); }
-        a.op("CMPIi", &[7], &[u32::MAX]);
+        if null_locals {
+            a.op("PshVPtr", &[9], &[]); a.op("RefCpyV", &[8], &[]);
+            a.op("CmpPtrNull", &[7], &[]);
+        } else { a.op("CMPIi", &[7], &[u32::MAX]); }
         a.jump(jump, "else");
         let op = if handle { "PSF" } else { "LDV" };
-        a.op(op, &[if handle { (-2i16) as u16 } else { 7 }], &[]);
+        a.op(op, &[if null_locals { 8 } else if handle { (-2i16) as u16 } else { 7 }], &[]);
         a.jump("JMP", "join");
         a.label("else");
-        a.op(op, &[if handle { (-4i16) as u16 } else { 8 }], &[]);
+        a.op(op, &[if null_locals { 7 } else if handle { (-4i16) as u16 } else { 8 }], &[]);
         a.label("join");
         if handle {
-            a.op("RDSPtr", &[], &[]); a.op("RefCpyV", &[22], &[]);
+            a.op("RDSPtr", &[], &[]); a.op("RefCpyV", &[if null_locals { 7 } else { 22 }], &[]);
         } else {
             a.op("RDR4", &[19], &[]); a.op("CpyVtoV4", &[11, 19], &[]);
         }
+        if null_locals { a.op("FreeNullV8", &[8], &[]); }
         a.op("RET", &[0], &[]);
         let fixture = a.finish();
         let refs = RefResolver::from_test_collision_names(&["AActor", "APawn"]);
@@ -11272,6 +11328,9 @@ mod tests {
             ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new(),
         };
         let mut locals = HashMap::from([(22, "AActor".into())]);
+        if null_locals {
+            locals.extend([(7, "AActor".into()), (8, if wrong_type { "APawn" } else { "AActor" }.into()), (9, "AActor".into())]);
+        }
         if let Some(ty) = test_type { locals.insert(7, ty.into()); }
         let ctx = Ctx {
             f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret),
@@ -11298,10 +11357,10 @@ mod tests {
         for (handle, statement) in [(false, "local_11 = (local_7 != -1 ? local_7 : local_8);"),
             (true, "local_22 = (local_7 != -1 ? Left : Right);")]
         {
-            let body = render_lvalue_selection(handle, false, false, "JZ", None);
+            let body = render_lvalue_selection(handle, false, false, "JZ", None, false);
             assert!(body.contains(statement), "{body}");
             assert!(!body.contains("if (") && !body.contains("// LDV"), "{body}");
-            assert!(render_lvalue_selection(handle, false, false, "JNZ", None).contains("local_7 == -1 ?"));
+            assert!(render_lvalue_selection(handle, false, false, "JNZ", None, false).contains("local_7 == -1 ?"));
         }
     }
 
@@ -11309,7 +11368,7 @@ mod tests {
     fn local_lvalue_diamonds_reject_other_predecessors_types_and_branch_tests() {
         for handle in [false, true] {
             for (extra_entry, wrong_type, jump) in [(true, false, "JZ"), (false, true, "JZ"), (false, false, "JLowZ")] {
-                let body = render_lvalue_selection(handle, extra_entry, wrong_type, jump, None);
+                let body = render_lvalue_selection(handle, extra_entry, wrong_type, jump, None, false);
                 assert!(!body.contains(" ? "), "{body}");
             }
         }
@@ -11320,11 +11379,26 @@ mod tests {
         // Both handle parameters and the destination still have the same type;
         // only the CMPIi test's known type changes.
         for ty in ["bool", "EState", "float32", "AActor", "uint"] {
-            let body = render_lvalue_selection(true, false, false, "JZ", Some(ty));
+            let body = render_lvalue_selection(true, false, false, "JZ", Some(ty), false);
             assert!(!body.contains(" ? "), "{ty}: {body}");
         }
-        assert!(render_lvalue_selection(true, false, false, "JZ", Some("int"))
+        assert!(render_lvalue_selection(true, false, false, "JZ", Some("int"), false)
             .contains("local_22 = (local_7 != -1 ? Left : Right);"));
+    }
+
+    #[test]
+    fn local_handle_null_selection_keeps_the_initial_copy_and_release() {
+        let body = render_lvalue_selection(true, false, false, "JNZ", None, true);
+        assert!(body.contains("local_8 = local_9;"), "{body}");
+        assert!(body.contains("local_7 = (local_7 == nullptr ? local_8 : local_7);"), "{body}");
+        assert!(body.contains("local_8 = nullptr;"), "{body}");
+        assert!(!body.contains("if ("), "{body}");
+        for (entry, wrong, jump, ty) in [(true, false, "JNZ", None),
+            (false, true, "JNZ", None), (false, false, "JLowZ", None),
+            (false, false, "JNZ", Some("const AActor")), (false, false, "JNZ", Some("AActor&"))] {
+            let other = render_lvalue_selection(true, entry, wrong, jump, ty, true);
+            assert!(!other.contains(" ? "), "{other}");
+        }
     }
 
     #[test]
