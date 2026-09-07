@@ -3343,6 +3343,62 @@ fn esc(s: &str) -> String {
         .replace('\r', "\\r")
 }
 
+/// A closed native field assignment lost solely because its RHS crossed a cast.
+/// The caller has already proved the classic diamond's topology and both arms'
+/// unchanged emission/stack. This exception restores exactly one opAssign.
+fn restored_cast_member_assignment(
+    ctx: &Ctx, cast: &[Instr], join: &[Instr], carry: &[Arg], empty: &[String], full: &[String],
+) -> bool {
+    let witness = (|| {
+        let [rhs] = carry else { return None; };
+        let [actual] = full else { return None; };
+        if !empty.is_empty() || rhs.reeval || rhs.default_ctor.is_some()
+            || cast.iter().map(|i| i.op.name).ne(["TYPEID", "PSF", "PshVPtr", "CALLSYS", "JMP"])
+            || join.iter().map(|i| i.op.name).ne(["PshVPtr", "ADDSi", "RDSPtr", "ADDSi", "CALLSYS"]) { return None; }
+        let word = |i: &Instr| i.words.first().map(|w| *w as i16 as i32);
+        let slot = word(&join[0])?;
+        if slot <= 0 || word(&cast[1]) != Some(slot) { return None; }
+        let cast_ty = resolve_cast_typeid(ctx.refs, *cast[0].dwords.first()? as i32)?;
+        if ctx.slot_type(slot).as_deref() != Some(cast_ty.as_str()) { return None; }
+        let cp = *cast[3].qwords.first()? as i64;
+        let [out] = ctx.refs.func_params_by_ptr(cp)? else { return None; };
+        if ctx.refs.func_by_ptr(cp) != Some("opCast") || ctx.refs.func_owner_by_ptr(cp) != Some("UObject")
+            || !ctx.refs.is_method_by_ptr(cp) || !ctx.refs.is_const_method_by_ptr(cp)
+            || out.token != 0x3b || !out.is_reference || out.is_object_const || out.is_read_only
+            || !ctx.refs.func_ret_by_ptr(cp).is_some_and(|t| t.token == 0x52 && !t.is_reference) { return None; }
+        let field = |ins: &Instr| {
+            let tid = *ins.dwords.first()? as i32;
+            let owner = ctx.refs.type_identity_by_id(tid)?;
+            let (name, old) = ctx.refs.member_identity(tid, word(ins)?)?;
+            if !owner.module.is_empty() || !owner.namespace.is_empty()
+                || ctx.refs.type_identity_by_id(old)? != owner { return None; }
+            let ty = ctx.refs.native_field_value_type(&owner.name, name)
+                .or_else(|| ctx.refs.native_field_type(&owner.name, name))?;
+            Some((owner, name, ty))
+        };
+        let (owner, first, middle) = field(&join[1])?;
+        let (next_owner, last, field_ty) = field(&join[3])?;
+        if !ctx.refs.is_subclass(&cast_ty, &owner.name) || middle != next_owner.name { return None; }
+        let ptr = *join[4].qwords.first()? as i64;
+        let [param] = ctx.refs.func_params_by_ptr(ptr)? else { return None; };
+        let ret = ctx.refs.func_ret_by_ptr(ptr)?;
+        let native_type = ctx.refs.type_identity_by_ptr(ret.type_info)?;
+        if ctx.refs.func_by_ptr(ptr) != Some("opAssign") || !ctx.refs.is_method_by_ptr(ptr)
+            || ctx.refs.is_const_method_by_ptr(ptr) || !native_type.module.is_empty() || !native_type.namespace.is_empty()
+            || ctx.refs.func_owner_by_ptr(ptr) != Some(native_type.name.as_str())
+            || ret.token != 5 || !ret.is_reference || ret.is_object_handle || ret.is_object_const || ret.is_read_only
+            || param.token != 5 || !param.is_reference || param.is_object_handle || !param.is_object_const || !param.is_read_only
+            || param.type_info != ret.type_info || field_ty != ret.base_name(ctx.refs)
+            || rhs.ty.as_deref()?.split('<').next()? != native_type.name { return None; }
+        // cast_arg renders the existing conversion rules; it is not a complete
+        // covariance proof. The native assignment and destination are typed above.
+        let expected = format!("{}.{first}.{last} = {};", ctx.slot_name(slot), cast_arg(rhs, param, ctx.refs));
+        (!expected.contains(['\u{1}', '\u{2}']) && actual == &expected).then_some(())
+    })();
+    witness.is_some()
+}
+
+
 /// Type carried by a member-address register when `PshRPtr` turns it back into a call
 /// argument. Prefer the field's precise script value type; native structs have no field-value
 /// metadata in the script cache, so an independently resolved native ENUM type is the next
@@ -7628,6 +7684,9 @@ impl Structurer<'_> {
             let b = &self.g.blocks[i];
             let mut next;
 
+            // This suffix accepts no incoming operand carry; inspect it before take().
+            let returning_switch = self.try_emit_returning_two_case_switch(i, stop, depth, out);
+
             // batch-27: operand stack carried across a recognized Cast diamond — consumed by
             // the join block (always the immediately-next emitted block; see carry creation
             // below). take() unconditionally: if this block is emitted by an arm that cannot
@@ -7638,7 +7697,7 @@ impl Structurer<'_> {
                 _ => Vec::new(),
             };
 
-            if let Some(after) = self.try_emit_switch(i, stop, depth, out) {
+            if let Some(after) = returning_switch.or_else(|| self.try_emit_switch(i, stop, depth, out)) {
                 // recovered compiler switch idiom (guards + JMPP dispatch); the whole
                 // construct was emitted, continue after its JOIN.
                 next = after;
@@ -8877,6 +8936,95 @@ impl Structurer<'_> {
         preds > 0
     }
 
+    /// A closed two-case suffix whose three constant int arms share one bare RET.
+    /// Keep physical case order and reconstruct each value only inside its arm.
+    fn try_emit_returning_two_case_switch(
+        &mut self, i: usize, stop: usize, depth: usize, out: &mut String,
+    ) -> Option<usize> {
+        let ctx = self.ctx;
+        let b = &self.g.blocks;
+        if i.checked_add(8)? != stop || stop != b.len() || self.loop_scope.is_some()
+            || self.exit_join.is_some() || self.carry.is_some() || ctx.rvo_off.is_some()
+            || !ctx.ret_ty.is_some_and(|t| t.token == 0x44 && !t.is_reference && !t.is_object_handle)
+        { return None; }
+        let len = |n: usize| b[i+n].instr_hi - b[i+n].instr_lo;
+        if len(0) < 2 || len(1) != 2 || len(2) != 2 || len(3) != 1
+            || len(4) < 2 || len(5) < 2 || len(6) < 1 || len(7) != 1
+            || self.jump_op(i) != "JP" || self.jump_op(i+1) != "JZ"
+            || self.jump_op(i+2) != "JZ" || self.jump_op(i+3) != "JMP"
+            || self.jump_op(i+4) != "JMP" || self.jump_op(i+5) != "JMP"
+            || self.jump_op(i+7) != "RET" { return None; }
+        let compare = |n: usize| {
+            let ins = &ctx.instrs[b[i+n].instr_hi-2];
+            (ins.op.name == "CMPIi").then_some(())?;
+            Some((s16(*ins.words.first()?), *ins.dwords.first()? as i32))
+        };
+        let (selector, upper) = compare(0)?;
+        let (s1, first) = compare(1)?;
+        let (s2, second) = compare(2)?;
+        // Plain integer scratch slots are absent from the structurer's type
+        // map. An immediate sbTOi is a site-local int proof, never a slot override.
+        let widened = ctx.slot_type(selector).is_none() && len(0) >= 3
+            && ctx.instrs[b[i].instr_hi-3].op.name == "sbTOi"
+            && ctx.instrs[b[i].instr_hi-3].words.first().copied().map(s16) == Some(selector);
+        if selector != s1 || selector != s2 || first >= second || upper != second
+            || (ctx.slot_type(selector).as_deref() != Some("int") && !widened) { return None; }
+        let first_arm = *self.idx_of.get(b[i+1].succs.first()?)?;
+        let second_arm = *self.idx_of.get(b[i+2].succs.first()?)?;
+        if ![i+4, i+5].contains(&first_arm) || ![i+4, i+5].contains(&second_arm)
+            || first_arm == second_arm { return None; }
+        let edges: [&[usize]; 8] = [&[i+6, i+1], &[first_arm, i+2], &[second_arm, i+3],
+            &[i+6], &[i+7], &[i+7], &[i+7], &[]];
+        for (n, targets) in edges.iter().enumerate() {
+            if b[i+n].succs.len() != targets.len() || b[i+n].succs.iter().zip(targets.iter())
+                .any(|(off, target)| *off != b[*target].start_dw) { return None; }
+        }
+        // Earlier code may enter only the header or return independently. No
+        // outside jump may bypass a compare or enter a case/default body.
+        for (pi, prior) in b[..i].iter().enumerate() {
+            for target in &prior.succs {
+                if *target > b[i].start_dw && *target < b[i+7].start_dw { return None; }
+                if *target == b[i+7].start_dw && (prior.instr_hi-prior.instr_lo < 2
+                    || self.jump_op(pi) != "JMP" || ctx.instrs[prior.instr_hi-2].op.name != "CpyVtoR4")
+                { return None; }
+                if *target == b[i].start_dw && !block_stmts_in(ctx, prior.instr_lo,
+                    prior.instr_hi, Vec::new(), false).2.is_empty() { return None; }
+            }
+        }
+        let mut rendered = Vec::new();
+        for n in [0, 4, 5, 6] {
+            let lo = b[i+n].instr_lo;
+            let hi = b[i+n].instr_hi - if n == 0 { 2 } else if n == 6 { 0 } else { 1 };
+            if ctx.instrs[lo..hi].iter().any(|ins| ins.op.name.starts_with('J') || ins.op.name == "RET")
+                || (n != 0 && ctx.instrs[hi-1].op.name != "CpyVtoR4") { return None; }
+            let (mut lines, cmp, stack) = block_stmts_in(ctx, lo, hi, Vec::new(), false);
+            if cmp.is_some() || !stack.is_empty() || lines.iter().any(|s| s.contains(['\u{1}', '\u{2}']))
+            { return None; }
+            if n != 0 {
+                let slot = s16(*ctx.instrs[hi-1].words.first()?);
+                if ctx.const_return_at(hi-1, slot).is_none() || !ctx.instrs[lo..hi-1].iter().any(|ins|
+                    ins.op.name == "SetV4" && ins.words.first().copied().map(s16) == Some(slot))
+                { return None; }
+                let value = scan_back_retval_floor(ctx, hi, lo)?;
+                let exit = fold_return_into_store(&mut lines, ctx.return_stmt(Some(value)));
+                lines.push(exit);
+            }
+            rendered.push(lines);
+        }
+        let ind = "    ".repeat(depth);
+        for line in &rendered[0] { let _ = writeln!(out, "{ind}{line}"); }
+        let _ = writeln!(out, "{ind}switch ({})\n{ind}{{", ctx.slot_name(selector));
+        for (n, lines) in rendered[1..].iter().enumerate() {
+            let label = if n == 2 { "default".to_string() }
+                else { format!("case {}", if i+4+n == first_arm { first } else { second }) };
+            let _ = writeln!(out, "{ind}    {label}:\n{ind}    {{");
+            for line in lines { let _ = writeln!(out, "{ind}        {line}"); }
+            let _ = writeln!(out, "{ind}    }}");
+        }
+        let _ = writeln!(out, "{ind}}}");
+        Some(stop)
+    }
+
     /// The two-case lowering uses equality guards instead of a jump table.
     /// Recover only the complete seven-block void function: its exact forward
     /// edges prove both straight-line arms and leave the common RET to the caller.
@@ -9883,14 +10031,18 @@ impl Structurer<'_> {
         //   (b) changes the join's statement COUNT (the carry must only let existing
         //       statements gain args, never create/destroy statements — a spurious
         //       consumption by a non-call opcode, or a statement dropped as unresolved).
-        // False negatives cost nothing: status-quo drop-at-boundary.
+        // A false negative may lose a mutation: an unresolved opAssign has no
+        // output without its carried RHS. The closed typed exception below can
+        // restore exactly that statement; all other count changes still fail.
         // batch-31a note: with stage-2 CALL/CALLINTF consumers the WITH-init run may now
         // RESOLVE a sentinel the empty-init run HAS (a previously-missing arg recovered by
         // the carry) — that direction stays legal; only a NEW sentinel bails.
         let has_amm = |v: &[String]| v.iter().any(|s| s.contains('\u{2}'));
         let (j0, _, _) = block_stmts_in(ctx, jb.instr_lo, jb.instr_hi, Vec::new(), false);
         let (j1, _, _) = block_stmts_in(ctx, jb.instr_lo, jb.instr_hi, l.to_vec(), false);
-        if j1.len() != j0.len() || (has_amm(&j1) && !has_amm(&j0)) {
+        let restored_assignment = classic && restored_cast_member_assignment(ctx,
+            &ctx.instrs[t.instr_lo..t.instr_hi], &ctx.instrs[jb.instr_lo..jb.instr_hi], l, &j0, &j1);
+        if (j1.len() != j0.len() && !restored_assignment) || (has_amm(&j1) && !has_amm(&j0)) {
             return None;
         }
         Some(j)
@@ -11108,6 +11260,81 @@ mod tests {
         }
     }
 
+    fn cast_member_assignment_fixture(extra_carry: bool, extra_join: bool) -> CompoundFixture {
+        let mut a = TestAssembler::default();
+        // The outer branch makes the five-op inner join a closed block, just
+        // as the weapon-config guard does before the final Super call.
+        a.op("SetV1", &[9], &[1]); a.op("CpyVtoR1", &[9], &[]); a.jump("JLowZ", "end");
+        if extra_carry { a.op("PshNull", &[], &[]); }
+        a.op("PshVPtr", &[6], &[]); a.op("ADDSi", &[0], &[1]);
+        a.op("CmpPtrNull", &[(-2i16) as u16], &[]); a.jump("JZ", "null");
+        a.op("TYPEID", &[], &[0x4800_0007]); a.op("PSF", &[12], &[]);
+        a.op("PshVPtr", &[(-2i16) as u16], &[]); a.op("CALLSYS", &[], &[]);
+        a.jump("JMP", "join"); a.label("null"); a.op("ClrVPtr", &[12], &[]);
+        a.label("join"); a.op("PshVPtr", &[12], &[]); a.op("ADDSi", &[0], &[2]);
+        a.op("RDSPtr", &[], &[]); a.op("ADDSi", &[0], &[3]); a.op("CALLSYS", &[], &[]);
+        if extra_join { a.op("SUSPEND", &[], &[]); }
+        a.label("end"); a.op("RET", &[4], &[]);
+        let mut f = a.finish();
+        let mut ptr = 1;
+        for i in &mut f.instrs { if i.op.name == "CALLSYS" { i.qwords = vec![ptr]; ptr += 1; } }
+        f
+    }
+
+    fn render_cast_member_assignment(fixture: &CompoundFixture, refs: &RefResolver) -> String {
+        let f = FuncCode { func: "UHost::Apply".into(), is_method: true,
+            param_names: vec!["actor".into()],
+            param_types: vec![DataType { token: 5, type_info: 8, is_object_handle: true, ..Default::default() }],
+            ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+        let locals = HashMap::from([(6, "UConfig".into()), (9, "bool".into()), (12, "AScriptProjectile".into())]);
+        let ctx = Ctx { f: &f, refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret),
+            fields: None, param_types: None, class_name: Some("UHost"), local_types: Some(&locals),
+            float_slots: Default::default(), param_off_map: HashMap::from([(-2, 0)]), rvo_off: None,
+            keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+        let g = cfg::build(&fixture.instrs);
+        let idx_of = g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
+        let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of, exit_join: None,
+            exit_join_is_ret: false, exit_ret_rows_ok: false, exit_rvo_return: false,
+            exit_mixed_rvo_ret_rows_ok: false, exit_scan_floor: 0, carry: None,
+            loop_scope: None, shared_return: None };
+        let mut source = String::new(); st.emit_range(0, g.blocks.len(), 0, &mut source); source
+    }
+
+    #[test]
+    fn a_cast_diamond_restores_its_lost_native_member_assignment() {
+        let refs = RefResolver::from_test_cast_member_assignment(0);
+        let source = render_cast_member_assignment(&cast_member_assignment_fixture(false, false), &refs);
+        assert!(source.contains("local_12 = Cast<AScriptProjectile>(actor);"), "{source}");
+        assert_eq!(source.matches("local_12.Collision.Weapon = local_6.Override;").count(), 1, "{source}");
+        // The source template subtype differs from the destination's; preserve
+        // the actual native opAssign and its existing covariant argument typing.
+        assert!(!source.contains("opAssign("), "{source}");
+    }
+
+    #[test]
+    fn restored_assignment_requires_the_complete_typed_closed_join() {
+        let fixture = cast_member_assignment_fixture(false, false);
+        for fault in 1..=8 {
+            let source = render_cast_member_assignment(&fixture, &RefResolver::from_test_cast_member_assignment(fault));
+            assert!(!source.contains(".Weapon ="), "metadata {fault}: {source}");
+        }
+        let refs = RefResolver::from_test_cast_member_assignment(0);
+        for f in [cast_member_assignment_fixture(true, false), cast_member_assignment_fixture(false, true)] {
+            let source = render_cast_member_assignment(&f, &refs);
+            assert!(!source.contains(".Weapon ="), "{source}");
+        }
+        let mut other_slot = fixture.clone();
+        let at = other_slot.instrs.iter().position(|i| i.offset_dw == other_slot.labels["join"]).unwrap();
+        other_slot.instrs[at].words[0] = 14;
+        assert!(!render_cast_member_assignment(&other_slot, &refs).contains(".Weapon ="));
+        let mut outside = fixture.clone();
+        // An extra incoming edge is tested by redirecting the outer conditional
+        // into the join, bypassing the carried field push and cast entirely.
+        let outer = outside.instrs.iter_mut().find(|i| i.op.name == "JLowZ").unwrap();
+        outer.dwords[0] = (outside.labels["join"] as i64 - outer.offset_dw as i64 - 2) as i32 as u32;
+        assert!(!render_cast_member_assignment(&outside, &refs).contains(".Weapon ="));
+    }
+
     #[test]
     fn member_address_after_rvo_pushes_the_loaded_field() {
         // GetDisplayName's real prefix: a hidden value destination, a script
@@ -12094,6 +12321,120 @@ mod tests {
         assert!(output.trim_end().ends_with("break;"), "{output}");
     }
 
+    fn returning_two_case_fixture(reverse: bool, carry: bool) -> CompoundFixture {
+        let mut a = TestAssembler::default();
+        // A value temporary survives an early return and is destroyed separately
+        // in each returning arm, matching the real FGameplayTag lifetime.
+        a.op("PSF", &[12], &[]); a.op("CALLSYS", &[], &[]);
+        a.op("CpyVtoR1", &[7], &[]); a.label("early_guard"); a.jump("JLowZ", "switch");
+        a.op("SetV4", &[6], &[0]); a.op("PSF", &[12], &[]); a.op("CALLSYS", &[], &[]);
+        a.label("early_copy"); a.op("CpyVtoR4", &[6], &[]); a.jump("JMP", "ret");
+        a.label("switch"); a.op("SetV1", &[9], &[3]); a.label("widen"); a.op("sbTOi", &[4, 9], &[]);
+        if carry { a.op("PshVPtr", &[20], &[]); }
+        a.label("upper"); a.op("CMPIi", &[4], &[3]); a.jump("JP", "default");
+        a.label("first_compare"); a.op("CMPIi", &[4], &[2]); a.jump("JZ", "case_two");
+        a.label("second_compare"); a.op("CMPIi", &[4], &[3]); a.jump("JZ", "case_three");
+        a.jump("JMP", "default");
+        let order = if reverse { [("case_two", 6, 1), ("case_three", 10, 2)] }
+            else { [("case_three", 10, 2), ("case_two", 6, 1)] };
+        for (n, (label, slot, value)) in order.into_iter().enumerate() {
+            a.label(label); a.op("SetV4", &[slot], &[value]);
+            a.op("PSF", &[12], &[]); a.op("CALLSYS", &[], &[]);
+            a.label(if n == 0 { "first_copy" } else { "second_copy" }); a.op("CpyVtoR4", &[slot], &[]);
+            a.label(if n == 0 { "first_exit" } else { "second_exit" }); a.jump("JMP", "ret");
+        }
+        a.label("default"); a.op("SetV4", &[10], &[0]);
+        a.op("PSF", &[12], &[]); a.op("CALLSYS", &[], &[]);
+        a.label("default_copy"); a.op("CpyVtoR4", &[10], &[]);
+        a.label("ret"); a.op("RET", &[2], &[]);
+        let mut f = a.finish();
+        let mut ctor = true;
+        for op in &mut f.instrs {
+            if op.op.name == "CALLSYS" { op.qwords = vec![if ctor { 1 } else { 3 }]; ctor = false; }
+        }
+        f
+    }
+
+    #[test]
+    fn returning_two_case_switch_keeps_cleanup_early_return_and_physical_order() {
+        // Reuse typed native default-ctor/dtor metadata; no copy constructor.
+        let refs = RefResolver::from_test_named_default_rvo_return(0);
+        for reverse in [false, true] {
+            let fixture = returning_two_case_fixture(reverse, false);
+            let source = render_fixture_range_with_return(&fixture, None, &refs, "", None, 0x44);
+            assert!(source.contains("switch (local_4)"), "{source}");
+            assert_eq!(source.matches("return 0;").count(), 2, "{source}");
+            assert_eq!(source.matches("return 1;").count(), 1, "{source}");
+            assert_eq!(source.matches("return 2;").count(), 1, "{source}");
+            let two = source.find("case 2:").unwrap(); let three = source.find("case 3:").unwrap();
+            assert_eq!(two < three, reverse, "{source}");
+            assert!(source.find("return 0;").unwrap() < source.find("switch (").unwrap(), "{source}");
+            assert!(!source.contains("break;"), "{source}");
+            assert!(source.trim_end().ends_with('}'), "shared RET was emitted twice: {source}");
+        }
+    }
+
+    #[test]
+    fn returning_two_case_switch_rejects_other_entries_types_carries_and_returns() {
+        let refs = RefResolver::from_test_named_default_rvo_return(0);
+        let f = returning_two_case_fixture(false, false);
+        let render = |f: &CompoundFixture| render_fixture_range_with_return(f, None, &refs, "int", None, 0x44);
+        for (label, slot, value) in [("upper", 4, 4), ("first_compare", 5, 2), ("first_compare", 4, 3)] {
+            let mut bad = f.clone(); replace_same_width(&mut bad, label, "CMPIi", &[slot], &[value]);
+            assert!(!render(&bad).contains("switch ("));
+        }
+        for label in ["early_copy", "first_copy", "default_copy"] {
+            let mut bad = f.clone(); let at = bad.labels[label];
+            let slot = bad.instrs.iter().find(|i| i.offset_dw == at).unwrap().words[0];
+            replace_same_width(&mut bad, label, "CpyVtoR8", &[slot], &[]);
+            assert!(!render(&bad).contains("switch ("));
+        }
+        for (label, dst) in [("case_three", 10), ("case_two", 6), ("default", 10)] {
+            let mut bad = f.clone(); replace_same_width(&mut bad, label, "CpyVtoV4", &[dst, 8], &[]);
+            assert!(!render(&bad).contains("switch ("), "nonconstant arm {label}");
+        }
+        let mut bad = f.clone(); retarget(&mut bad, "first_exit", "case_two");
+        assert!(!render(&bad).contains("switch ("));
+        let mut bad = f.clone();
+        let jump = bad.instrs.iter_mut().find(|i| i.offset_dw == f.labels["early_guard"]).unwrap();
+        jump.dwords[0] = (f.labels["case_three"] as i64 - jump.offset_dw as i64 - 2) as i32 as u32;
+        assert!(!render(&bad).contains("switch ("));
+        assert!(!render(&returning_two_case_fixture(false, true)).contains("switch ("));
+        for (op, dst) in [("fTOi", 4), ("sbTOi", 6)] {
+            let mut bad = f.clone(); replace_same_width(&mut bad, "widen", op, &[dst, 9], &[]);
+            assert!(!render_fixture_range_with_return(&bad, None, &refs, "", None, 0x44).contains("switch ("));
+        }
+        for (selector, ret) in [("uint", 0x44), ("int", 0x50), ("int", 0x52)] {
+            assert!(!render_fixture_range_with_return(&f, None, &refs, selector, None, ret).contains("switch ("));
+        }
+        let scope = LoopScope { continue_off: f.labels["switch"], break_off: f.labels["ret"],
+            continue_only: false, latch_block: None };
+        assert!(!render_fixture_range_with_return(&f, Some(("switch", "ret", scope)),
+            &refs, "int", None, 0x44).contains("switch ("));
+
+        // A carry can originate before this suffix. The real emit_range hook
+        // must see it before take(), even though empty-init prefix simulation
+        // would show a balanced stack in each of its immediate predecessors.
+        let fc = FuncCode { func: "Fixture::ReturningSwitch".into(), is_method: false,
+            param_names: Vec::new(), param_types: Vec::new(),
+            ret: DataType { token: 0x44, ..Default::default() }, bytecode: Vec::new() };
+        let locals = HashMap::from([(4, "int".to_owned()), (7, "bool".to_owned())]);
+        let ctx = Ctx { f: &fc, refs: &refs, instrs: &f.instrs, super_ctor: None, ret_ty: Some(&fc.ret),
+            fields: None, param_types: None, class_name: None, local_types: Some(&locals),
+            float_slots: Default::default(), param_off_map: HashMap::new(), rvo_off: None,
+            keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+        let g = cfg::build(&f.instrs);
+        let idx_of: HashMap<_, _> = g.blocks.iter().enumerate().map(|(i,b)| (b.start_dw,i)).collect();
+        let start = idx_of[&f.labels["switch"]];
+        let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of, exit_join: None,
+            exit_join_is_ret: false, exit_ret_rows_ok: false, exit_rvo_return: false,
+            exit_mixed_rvo_ret_rows_ok: false, exit_scan_floor: 0,
+            carry: Some((start, vec![Arg::obj("local_20".into()).carry()])),
+            loop_scope: None, shared_return: None };
+        let mut out = String::new(); st.emit_range(start, g.blocks.len(), 0, &mut out);
+        assert!(!out.contains("switch ("), "incoming carry accepted: {out}");
+    }
+
     fn two_case_void_switch_fixture(selector: u16, outside_entry: bool, carried_prefix: bool) -> CompoundFixture {
         let mut a = TestAssembler::default();
         if outside_entry {
@@ -12580,8 +12921,8 @@ mod tests {
             },
             bytecode: Vec::new(),
         };
-        let local_types =
-            HashMap::from([(4, selector_type.to_string()), (7, "bool".to_string())]);
+        let mut local_types = HashMap::from([(7, "bool".to_string())]);
+        if !selector_type.is_empty() { local_types.insert(4, selector_type.to_string()); }
         let g = cfg::build(&fixture.instrs);
         let idx_of: HashMap<usize, usize> = g
             .blocks

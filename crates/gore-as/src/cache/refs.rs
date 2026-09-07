@@ -1970,6 +1970,19 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_changed_bool_fields() -> Self {
+        let mut r = Self::default();
+        for (id,module) in [(1,"Fixture"),(2,"Other")] {
+            r.typeid_to_ptr.insert(id,id as i64); r.type_by_ptr.insert(id as i64,"UWatcher".into());
+            r.type_identity_by_ptr.insert(id as i64,TypeIdentity { name:"UWatcher".into(), module:module.into(),namespace:String::new() });
+            for (off,name) in ["A","LastA","B","LastB","C","LastC","Settled"].iter().enumerate() {
+                r.prop_by_key.insert(((id as i64)<<1)|((off as i64)<<33)|1,(*name).into());
+            }
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_eager_clamp_bounds(narrow: bool) -> Self {
         let mut r = Self::default();
         for (p, name, count) in [(1, "Min", 2), (2, "Max", 2), (3, "Clamp", 3)] {
@@ -2457,6 +2470,43 @@ impl RefResolver {
         let mut r = Self::from_test_typed_getter_copies("UNode", false, false);
         r.funcid_to_ptr.insert(1, 4);
         r.func_params.insert(4, vec![argument]);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_cast_member_assignment(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UConfig", "Override"), ("ABaseProjectile", "Collision"),
+            ("UCollision", "Weapon"), ("TSubclassOf", ""), ("UWeapon", ""), ("USpecialWeapon", ""),
+            ("AScriptProjectile", ""), ("UObject", "")]);
+        for (id, name) in [(1, "UConfig"), (2, "ABaseProjectile"), (3, "UCollision"), (4, "TSubclassOf"),
+            (5, "UWeapon"), (6, "USpecialWeapon"), (7, "AScriptProjectile"), (8, "UObject")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: name.into(),
+                module: if matches!(id, 1 | 7) { "Fixture" } else { "" }.into(),
+                namespace: if fault == 7 && id == 2 { "Wrong" } else { "" }.into() });
+        }
+        for id in [1i64, 2, 3] { r.prop_type_id.insert((id << 1) | 1,
+            if fault == 5 && id == 2 { 3 } else { id as i32 }); }
+        r.type_subtypes.insert(4, vec![DataType { token: 5, type_info: 5, ..Default::default() }]);
+        r.typeid_to_ptr.insert(0x0800_0007, 7);
+        r.class_super.insert("AScriptProjectile".into(), "ABaseProjectile".into());
+        r.set_class_fields(HashMap::from([("UConfig".into(), HashMap::from([
+            ("Override".into(), "TSubclassOf<USpecialWeapon>".into())]))]));
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&[
+            ("ABaseProjectile", "Collision", if fault == 6 { "UOther" } else { "UCollision" }),
+            ("UCollision", "Weapon", if fault == 4 { "TSubclassOf<USpecialWeapon>" } else { "TSubclassOf<UWeapon>" }),
+        ], &[], None));
+        for (ptr, name, owner) in [(1, "opCast", "UObject"), (2, "opAssign", "TSubclassOf")] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr,
+                if fault == 8 && ptr == 1 { "UOther" } else { owner }.into());
+            r.func_is_method.insert(ptr);
+        }
+        r.const_method_ptrs.insert(1);
+        if fault == 3 { r.const_method_ptrs.insert(2); }
+        r.func_ret.insert(1, DataType { token: 0x52, ..Default::default() });
+        r.func_params.insert(1, vec![DataType { token: 0x3b, is_reference: true, ..Default::default() }]);
+        r.func_ret.insert(2, DataType { token: 5, type_info: 4, is_reference: true, ..Default::default() });
+        r.func_params.insert(2, vec![DataType { token: 5, type_info: if fault == 1 { 6 } else { 4 },
+            is_reference: true, is_object_const: true, is_read_only: fault != 2, ..Default::default() }]);
         r
     }
 

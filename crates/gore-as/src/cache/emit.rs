@@ -1864,6 +1864,8 @@ fn emit_function_ctor(
     pass_trace("fold_double_negations", &body);
     let body = fold_negated_stores(&body, &widened);
     pass_trace("fold_negated_stores", &body);
+    let body = fold_changed_bool_fields(&body, f, refs, fields, is_method);
+    pass_trace("fold_changed_bool_fields", &body);
     // `__InitDefaults` is where the class's values live, and their recovery is fail-closed: a
     // temporary left without a reader there costs the whole class its `default` statements
     // (measured: 358 classes). Move only what a call reads there, never a plain operand.
@@ -19236,6 +19238,63 @@ fn bool_field_read_slots(
     out
 }
 
+/// Three changed bool fields invalidate one flag, then save their current values.
+/// The complete, call-free frame proves the short-circuit order and every store;
+/// its NOT pairs normalize bool equality and are not source-level negations.
+fn fold_changed_bool_fields(body: &str, f: &Func, refs: &RefResolver,
+    fields: Option<&HashMap<String, String>>, is_method: bool) -> String {
+    let recovered = (|| {
+        if !is_method || f.ret.token != 0x52 || f.ret.is_reference || !f.params.is_empty() || !f.obj_locals.is_empty() { return None; }
+        let code = disassemble(&f.bytecode).ok()?;
+        if code.iter().map(|i| i.op.name).ne([
+            "LoadThisR", "RDR1", "NOT", "LoadThisR", "RDR1", "NOT", "CMPi", "JZ", "SetV1", "JMP",
+            "LoadThisR", "RDR1", "NOT", "LoadThisR", "RDR1", "NOT", "CMPi", "TNZ", "CpyRtoV4", "CpyVtoV4",
+            "CpyVtoR1", "JLowZ", "SetV1", "JMP", "LoadThisR", "RDR1", "NOT", "LoadThisR", "RDR1", "NOT",
+            "CMPi", "TNZ", "CpyRtoV4", "CpyVtoV4", "CpyVtoR1", "JLowZ", "SetV1", "LoadThisR", "WRTV1",
+            "LoadThisR", "RDR1", "LoadThisR", "WRTV1", "LoadThisR", "RDR1", "LoadThisR", "WRTV1",
+            "LoadThisR", "RDR1", "LoadThisR", "WRTV1", "RET"]) { return None; }
+        let w = |at: usize, n: usize| code[at].words.get(n).map(|w| *w as i16 as i32);
+        let (a, b, c) = (w(1, 0)?, w(4, 0)?, w(8, 0)?);
+        if [a, b, c].iter().any(|s| *s <= 0) || HashSet::from([a,b,c]).len() != 3 || w(51,0) != Some(2) { return None; }
+        for (slot, positions) in [(a, &[2,25,26,32][..]),
+            (b, &[5,11,12,18,22,28,29,34,40,42,48,50][..]),
+            (c, &[14,15,20,36,38,44,46][..])] {
+            if positions.iter().any(|at| w(*at, 0) != Some(slot)) { return None; }
+        }
+        for (at, left, right) in [(6,a,b),(16,b,c),(19,c,b),(30,a,b),(33,b,a)] {
+            if w(at, 0) != Some(left) || w(at, 1) != Some(right) { return None; }
+        }
+        for (at, value) in [(8,1),(22,1),(36,0)] {
+            if code[at].dwords.first().copied() != Some(value) { return None; }
+        }
+        for (at, target) in [(7,10),(9,20),(21,24),(23,34),(35,39)] {
+            if code[at].offset_dw as i64 + 2 + *code[at].dwords.first()? as i32 as i64
+                != code[target].offset_dw as i64 { return None; }
+        }
+        let owner = refs.type_identity_by_id(*code[0].dwords.first()? as i32)?;
+        let field = |at: usize| {
+            let id = *code[at].dwords.first()? as i32;
+            if refs.type_identity_by_id(id) != Some(owner) { return None; }
+            let name = refs.member(id, w(at,0)?)?;
+            (fields?.get(name).map(String::as_str) == Some("bool")).then(|| name.to_owned())
+        };
+        let names: Vec<_> = [0,3,10,13,24,27,37].iter().map(|at| field(*at)).collect::<Option<_>>()?;
+        if names.iter().collect::<HashSet<_>>().len() != 7 { return None; }
+        for (at, source) in [(39,0),(41,1),(43,2),(45,3),(47,4),(49,5)] {
+            if field(at).as_ref() != Some(&names[source]) { return None; }
+        }
+        let indent = body.lines().find(|l| !l.trim().is_empty()).map(indent_of).unwrap_or_default();
+        let condition = names[..6].chunks(2).map(|p| format!("(this.{} != this.{})", p[0], p[1]))
+            .collect::<Vec<_>>().join(" || ");
+        let mut lines = vec![format!("{indent}if ({condition})"), format!("{indent}{{"),
+            format!("{indent}    this.{} = false;", names[6]), format!("{indent}}}")];
+        for pair in names[..6].chunks(2) { lines.push(format!("{indent}this.{} = this.{};",pair[1],pair[0])); }
+        lines.push(format!("{indent}return;"));
+        let mut out = lines.join("\n"); if body.ends_with('\n') { out.push('\n'); } Some(out)
+    })();
+    recovered.unwrap_or_else(|| body.to_owned())
+}
+
 /// A float32 conditional is widened only after its join. Recover this closed
 /// field/division frame before carrier copies and later slot lives are renamed.
 fn fold_widened_conditional_divisions(body: &str, f: &Func, refs: &RefResolver) -> String {
@@ -30853,6 +30912,72 @@ mod literal_value_lifetime_tests {
         }
         let mut object = f.clone(); object.obj_locals.push((12, 100));
         assert!(super::eager_clamp_bound_sites(&object, &refs).is_empty());
+    }
+
+    fn changed_bool_fields_fixture() -> Func {
+        let mut f = function(&[
+            ("LoadThisR", &[0]),("RDR1", &[1]),("NOT", &[1]),("LoadThisR", &[1]),("RDR1", &[2]),("NOT", &[2]),
+            ("CMPi", &[1,2]),("JZ", &[]),("SetV1", &[3]),("JMP", &[]),
+            ("LoadThisR", &[2]),("RDR1", &[2]),("NOT", &[2]),("LoadThisR", &[3]),("RDR1", &[3]),("NOT", &[3]),
+            ("CMPi", &[2,3]),("TNZ", &[]),("CpyRtoV4", &[2]),("CpyVtoV4", &[3,2]),("CpyVtoR1", &[3]),
+            ("JLowZ", &[]),("SetV1", &[2]),("JMP", &[]),
+            ("LoadThisR", &[4]),("RDR1", &[1]),("NOT", &[1]),("LoadThisR", &[5]),("RDR1", &[2]),("NOT", &[2]),
+            ("CMPi", &[1,2]),("TNZ", &[]),("CpyRtoV4", &[1]),("CpyVtoV4", &[2,1]),("CpyVtoR1", &[2]),
+            ("JLowZ", &[]),("SetV1", &[3]),("LoadThisR", &[6]),("WRTV1", &[3]),
+            ("LoadThisR", &[0]),("RDR1", &[2]),("LoadThisR", &[1]),("WRTV1", &[2]),
+            ("LoadThisR", &[2]),("RDR1", &[3]),("LoadThisR", &[3]),("WRTV1", &[3]),
+            ("LoadThisR", &[4]),("RDR1", &[2]),("LoadThisR", &[5]),("WRTV1", &[2]),("RET", &[2])]);
+        f.ret.token = 0x52;
+        let code = disassemble(&f.bytecode).unwrap();
+        for i in code.iter().filter(|i| i.op.name == "LoadThisR") { f.bytecode[i.offset_dw + 1] = 1; }
+        for at in [8,22] { f.bytecode[code[at].offset_dw + 1] = 1; }
+        for (at, target) in [(7,10),(9,20),(21,24),(23,34),(35,39)] {
+            f.bytecode[code[at].offset_dw + 1] = code[target].offset_dw as i32 - code[at].offset_dw as i32 - 2;
+        }
+        f
+    }
+
+    #[test]
+    fn changed_bool_fields_restore_short_circuit_reads_and_all_saved_values() {
+        let f = changed_bool_fields_fixture();
+        let refs = RefResolver::from_test_changed_bool_fields();
+        let fields = ["A","LastA","B","LastB","C","LastC","Settled"].into_iter()
+            .map(|n| (n.to_owned(), "bool".to_owned())).collect::<HashMap<_,_>>();
+        let fold = |f: &Func, fields: &HashMap<String,String>| super::fold_changed_bool_fields("    old;\n", f, &refs, Some(fields), true);
+        assert_eq!(fold(&f, &fields), concat!(
+            "    if ((this.A != this.LastA) || (this.B != this.LastB) || (this.C != this.LastC))\n",
+            "    {\n        this.Settled = false;\n    }\n",
+            "    this.LastA = this.A;\n    this.LastB = this.B;\n    this.LastC = this.C;\n    return;\n"));
+        let code = disassemble(&f.bytecode).unwrap();
+        // Every changed successor, comparison/copy/store operand, field owner,
+        // normalization opcode, and bool literal must reject the whole rewrite.
+        for at in [7,9,21,23,35,8,22,36] {
+            let mut other = f.clone(); other.bytecode[code[at].offset_dw+1] ^= 1;
+            assert_eq!(fold(&other,&fields),"    old;\n", "immediate {at}");
+        }
+        for (at,n) in [(6,0),(6,1),(16,1),(19,0),(19,1),(30,0),(33,1),(34,0),(38,0),(42,0),(51,0)] {
+            let mut other = f.clone();
+            let shift = if n == 0 { 16 } else { 0 };
+            other.bytecode[code[at].offset_dw+usize::from(n>0)] ^= 1 << shift;
+            assert_eq!(fold(&other,&fields),"    old;\n", "operand {at}/{n}");
+        }
+        for at in [0,3,10,13,24,27,37,39,41,43,45,47,49] {
+            let mut other = f.clone(); other.bytecode[code[at].offset_dw+1] = 2;
+            assert_eq!(fold(&other,&fields),"    old;\n", "owner {at}");
+        }
+        let mut wrong_update = f.clone(); wrong_update.bytecode[code[41].offset_dw] ^= 1 << 16;
+        assert_eq!(fold(&wrong_update,&fields),"    old;\n");
+        let mut negation = f.clone(); negation.bytecode[code[2].offset_dw] = function(&[("NEGf",&[1])]).bytecode[0];
+        assert_eq!(fold(&negation,&fields),"    old;\n");
+        let mut extra = f.clone(); extra.bytecode.extend(function(&[("CALL", &[])]).bytecode);
+        assert_eq!(fold(&extra,&fields),"    old;\n");
+        for name in fields.keys() {
+            let mut other = fields.clone(); other.insert(name.clone(),"int".into());
+            assert_eq!(fold(&f,&other),"    old;\n");
+        }
+        assert_eq!(super::fold_changed_bool_fields("old;",&f,&refs,Some(&fields),false),"old;");
+        let mut other = f.clone(); other.ret.token=0x44; assert_eq!(fold(&other,&fields),"    old;\n");
+        let mut other = f.clone(); other.obj_locals.push((1,1)); assert_eq!(fold(&other,&fields),"    old;\n");
     }
 
     fn eager_bool_diamond(negated: bool) -> Func {
