@@ -20,7 +20,7 @@ AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingResponse	2	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	19	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.TheftEvaluationContext	1	0	0
-AI.AssessmentResponseSystem.EventResponses	6	0	0
+AI.AssessmentResponseSystem.EventResponses	5	0	0
 AI.CharacterAI_Gothic	6	0	0
 AI.CharacterAI_Human	1	0	0
 AI.CharacterAI_Orc	2	0	0
@@ -40,8 +40,7 @@ AI.States.FightAI.CharmedState.AIState_Charmed	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_AcceptDefeat	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_ClaimVictory	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_CombatEndActions	4	0	0
-AI.States.FightAI.CombatState.AICombatBehaviorTree	1	0	0
-AI.States.FightAI.CombatState.AICombatFitnessMultipliers	2	0	0
+AI.States.FightAI.CombatState.AICombatFitnessMultipliers	1	0	0
 AI.States.FightAI.CombatState.AICombatRoleSystem	1	0	0
 AI.States.FightAI.CombatState.AICombatTargetScoring	2	0	0
 AI.States.FightAI.CombatState.AIGroup_Attackers	5	0	0
@@ -99,7 +98,6 @@ GAS.Abilities.Spells.CastSpell.Derived.Summon.Base.GA_CastSpell_SummonBase	1	0	0
 GAS.Abilities.Spells.ExecutionValidator.Derived.Spell.Telekinesis.CastSpell_ExecutionValidator_Telekinesis	1	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_SpawnRechargeableProjectile	1	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_Targetable	1	0	0
-GAS.Abilities.Spells.Spells.Electric.GA_Spell_BallLightning	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_Fireball	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_StormOfFire	1	0	0
 GAS.Abilities.Spells.Spells.Light.GA_Spell_Light	1	0	0
@@ -122,7 +120,7 @@ GAS.Calculations.Damage	5	0	0
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Drugs.Base.DrugDebuffEffectComponentBase	1	0	0
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Sleep.GA_SleepDebuffEffectGameplayAbility	1	0	0
 GAS.Effects.Debuffs.EffectStateComponent.DebuffEffectActors.SlowdownDebuffEffectActor	1	0	0
-GAS.GASCharacterMixins	6	0	0
+GAS.GASCharacterMixins	5	0	0
 GAS.GASCharacterStateMixins	8	0	0
 GAS.PerceptionEventMixins	1	0	0
 Gameplay.Environment.BattleBlockingBarrier.BattleBarrierVisual	1	0	0

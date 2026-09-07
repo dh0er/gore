@@ -1829,6 +1829,76 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_widened_division_fields(field_type: &str) -> Self {
+        let mut r = Self::default();
+        r.type_by_ptr.insert(100, "UCounter".into()); r.typeid_to_ptr.insert(100, 100);
+        r.type_identity_by_ptr.insert(100, TypeIdentity { name: "UCounter".into(), module: "Test".into(), namespace: String::new() });
+        for (offset, name) in [(8, "MoveCount"), (12, "AttackCount")] {
+            let key = (100i64 << 1) | (offset << 33) | 1;
+            r.prop_by_key.insert(key, name.into()); r.prop_type_id.insert(key, 100);
+        }
+        r.set_class_fields(HashMap::from([("UCounter".into(), HashMap::from([
+            ("MoveCount".into(), field_type.into()), ("AttackCount".into(), field_type.into())]))]));
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_pushed_handle_selections(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(100, "AState"), (200, "ACharacterChild"), (201, "AActor"), (202, "UObject"), (300, "UReceiver"), (400, "FTag"), (500, "UOther")] {
+            r.type_by_ptr.insert(ptr, name.into()); r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        let handle = |ptr| DataType { token: 5, type_info: ptr, is_object_handle: true, ..Default::default() };
+        for (ptr, name) in [(1, "IsValid"), (2, "GetCharacter"), (3, "Consume"), (4, "GetReceiver")] { r.func_by_ptr.insert(ptr, name.into()); }
+        for (ptr, owner) in [(2, if fault == 3 { "UOther" } else { "AState" }), (3, "UReceiver"), (4, "UOwner")] {
+            r.func_is_method.insert(ptr); r.func_owner.insert(ptr, owner.into());
+        }
+        r.funcid_to_ptr.insert(4, 4);
+        r.func_ret.insert(1, DataType { token: if fault == 4 { 0x44 } else { 0x41 }, ..Default::default() });
+        r.func_ret.insert(2, handle(200)); r.func_ret.insert(4, handle(300));
+        r.func_ret.insert(3, DataType { token: 0x52, ..Default::default() });
+        r.func_params.insert(1, vec![handle(202)]); r.func_params.insert(2, Vec::new()); r.func_params.insert(4, Vec::new());
+        let mut params = vec![DataType { token: 5, type_info: 400, is_reference: true, is_object_const: true, is_read_only: true, ..Default::default() },
+            DataType { token: 0x50, ..Default::default() }, handle(201), handle(201), handle(201), handle(if fault == 1 { 500 } else { 201 })];
+        if fault == 2 { params.pop(); }
+        r.func_params.insert(3, params); r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_reused_value_chain_argument(mutable: bool) -> Self {
+        let mut r = Self::default();
+        for (p, name) in [(100, "FVector"), (101, "ACharacter")] { r.type_by_ptr.insert(p, name.into()); r.type_names.insert(name.into()); }
+        let value = DataType { token: 5, type_info: 100, ..Default::default() };
+        for (p, name, owner) in [(1, "GetVelocity", "ACharacter"), (2, "Normalize", "FVector"), (3, "opNeg", "FVector")] {
+            r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, owner.into()); r.func_is_method.insert(p);
+            r.func_ret.insert(p, value.clone()); r.func_params.insert(p, Vec::new());
+            r.const_method_ptrs.insert(p);
+        }
+        r.funcid_to_ptr.insert(101, 4); r.func_by_ptr.insert(4, "Check".into());
+        let handle = DataType { token: 5, type_info: 101, is_object_handle: true, ..Default::default() };
+        r.func_ret.insert(4, DataType { token: 0x41, ..Default::default() });
+        r.func_params.insert(4, vec![handle.clone(), handle, DataType { is_reference: true, is_object_const: !mutable,
+            is_read_only: !mutable, ..value }, DataType { token: 0x51, ..Default::default() }]);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_value_operands_before_return(mutable: bool) -> Self {
+        let mut r = Self::default();
+        for (p, name) in [(100, "FVector"), (101, "FTransform")] { r.type_by_ptr.insert(p, name.into()); r.type_names.insert(name.into()); }
+        let value = DataType { token: 5, type_info: 100, ..Default::default() };
+        let reference = DataType { is_reference: true, is_object_const: !mutable, is_read_only: !mutable, ..value.clone() };
+        for (p, name, owner) in [(1, "GetLocation", "FTransform"), (2, "opAdd", "FVector"), (3, "opDiv", "FVector"), (4, "$beh0", "FVector")] {
+            r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, owner.into());
+            r.func_is_method.insert(p); r.const_method_ptrs.insert(p); r.func_ret.insert(p, value.clone());
+        }
+        r.func_params.insert(1, Vec::new()); r.func_params.insert(2, vec![reference.clone()]);
+        r.func_params.insert(3, vec![DataType { token: 0x51, ..Default::default() }]);
+        r.func_params.insert(4, vec![reference]); r.func_ret.insert(4, DataType { token: 0x52, ..Default::default() });
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_forwarded_getter_field(fault: u8) -> Self {
         let mut r = Self::default();
         for (p, name) in [(99, "UHolder"), (100, "AState"), (101, "ANpcState"), (102, "AOther")] {
