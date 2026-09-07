@@ -3766,7 +3766,19 @@ fn block_stmts_in(
                     if let Some(lhs) = assign_lhs(&p) {
                         let lhs = lhs.to_string();
                         out.push(format!("{p};"));
-                        stack.push(Arg::typed(lhs, pending_ty.take()));
+                        let lhs_ty = pending_ty.take();
+                        // LoadThisR immediately overwrote the reference register after the
+                        // RVO call. Preserve the call statement, but push that field address.
+                        if k > 0 && insns[k - 1].op.name == "LoadThisR" {
+                            value_reg = None;
+                            stack.push(Arg::typed(
+                                ref_reg.clone().unwrap_or_else(|| UNRESOLVED.into()),
+                                member_ref_push_type(ref_reg_vty.as_deref(),
+                                    ref_reg_nfty.as_deref(), ref_reg_ty.as_deref()),
+                            ));
+                        } else {
+                            stack.push(Arg::typed(lhs, lhs_ty));
+                        }
                     } else if pending_is_static_name || pending_is_pure_elem {
                         // batch-31b (N2b): the pending is the PURE `n"..."`/`FName(...)`
                         // literal of the __STATIC_NAME idiom — no side effect can be
@@ -11042,6 +11054,43 @@ mod tests {
                 offset += op.size_dwords as usize;
             }
             CompoundFixture { instrs, labels }
+        }
+    }
+
+    #[test]
+    fn member_address_after_rvo_pushes_the_loaded_field() {
+        // GetDisplayName's real prefix: a hidden value destination, a script
+        // receiver/call, then a scalar member address used by FString::Append.
+        for load_member in [true, false] {
+            let mut a = TestAssembler::default();
+            a.op("PSF", &[4], &[]);
+            a.op("PshVPtr", &[0], &[]);
+            a.op("CALL", &[], &[10]);
+            if load_member { a.op("LoadThisR", &[0], &[1]); }
+            a.op("PshRPtr", &[], &[]);
+            let fixture = a.finish();
+            let refs = RefResolver::from_test_rvo_then_member_address();
+            let f = FuncCode { func: "UHost::Example".into(), is_method: true,
+                param_names: Vec::new(), param_types: Vec::new(),
+                ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+            let fields = HashMap::from([("Distance".into(), "float".into())]);
+            let locals = HashMap::from([(4, "FString".into())]);
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: Some(&fields), param_types: None,
+                class_name: Some("UHost"), local_types: Some(&locals),
+                float_slots: Default::default(), param_off_map: HashMap::new(),
+                rvo_off: None, keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+            let (stmts, _, stack) = block_stmts_in(&ctx, 0, fixture.instrs.len(), Vec::new(), false);
+            assert_eq!(stmts, vec!["local_4 = this.MakeValue();"]);
+            assert_eq!(stack.len(), 1);
+            if load_member {
+                assert_eq!(stack[0].s, "this.Distance");
+                assert_eq!(stack[0].ty.as_deref(), Some("float"));
+            } else {
+                // Without a new address load, the old RVO result remains correct.
+                assert_eq!(stack[0].s, "local_4");
+                assert_eq!(stack[0].ty.as_deref(), Some("FString"));
+            }
         }
     }
 

@@ -1608,6 +1608,19 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_rvo_then_member_address() -> Self {
+        let mut r = Self::from_test_member_chain(&[("UHost", "Distance")]);
+        r.type_by_ptr.insert(101, "FString".into());
+        r.funcid_to_ptr.insert(10, 10);
+        r.func_by_ptr.insert(10, "MakeValue".into());
+        r.func_owner.insert(10, "UHost".into());
+        r.func_is_method.insert(10);
+        r.func_params.insert(10, Vec::new());
+        r.func_ret.insert(10, DataType { token: 5, type_info: 101, ..Default::default() });
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_member_chain(owners: &[(&str, &str)]) -> Self {
         let mut r = Self::default();
         for (index, (owner, field)) in owners.iter().enumerate() {
@@ -1860,6 +1873,30 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_script_cleanup(fault: u8) -> Self {
+        let mut r = Self::default();
+        r.type_by_ptr.insert(101, "FContext".into());
+        r.type_by_ptr.insert(102, "UActor".into()); r.type_names.insert("FContext".into());
+        r.type_by_ptr.insert(103, "FOther".into());
+        r.typeid_to_ptr.insert(11, 101);
+        r.prop_by_key.insert((11 << 1) | (136i64 << 33) | 1, "Result".into());
+        r.prop_type_id.insert((11 << 1) | (136i64 << 33) | 1, 11);
+        r.set_class_fields(HashMap::from([("FContext".into(), HashMap::from([("Result".into(), "EContextResult".into())]))]));
+        for (id,name) in [(1,"ReadContext"),(2,"~FContext")] {
+            r.funcid_to_ptr.insert(id,id as i64); r.func_by_ptr.insert(id as i64,name.into());
+            r.func_params.insert(id as i64,Vec::new());
+        }
+        r.func_params.insert(1, vec![DataType { token:5, type_info:102,
+            is_object_handle:true, is_object_const:true, ..Default::default() }; 2]);
+        r.func_ret.insert(1,DataType {token:5,type_info:if fault == 5 {103} else {101},..Default::default()});
+        r.func_ret.insert(2,DataType {token:if fault == 3 {0x41} else {0x52},..Default::default()});
+        r.func_owner.insert(2,if fault == 2 {"Other"} else {"FContext"}.into());
+        if fault != 1 {r.func_is_method.insert(2);}
+        if fault == 4 {r.func_params.insert(2,vec![DataType::default()]);}
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_script_result(ret: DataType) -> Self {
         let mut r = Self::default();
         r.funcid_to_ptr.insert(1, 1);
@@ -1943,6 +1980,33 @@ impl RefResolver {
             r.func_by_ptr.insert(ptr, name.into());
             r.func_ret.insert(ptr, ret);
         }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_native_global_operator(fault: u8) -> Self {
+        let mut r = Self::default();
+        r.type_by_ptr.insert(101, "FFlags".into());
+        r.type_identity_by_ptr.insert(101, TypeIdentity { name: "FFlags".into(), module: String::new(),
+            namespace: if fault == 6 { "Other".into() } else { String::new() } });
+        for (ptr, ns, name) in [(10,"Checks","Combined"), (20,"Bits","First"), (21,"Bits","Second"),
+            (22,"Bits","Third"), (23,"","Fourth")] {
+            r.global_by_ptr.insert(ptr, name.into());
+            if !ns.is_empty() { r.global_ns.insert(ptr, ns.into()); }
+        }
+        if fault == 7 { r.global_ns.insert(10, "Other".into()); }
+        if fault == 5 { r.global_is_string.insert(20); }
+        let value = DataType { token: 5, type_info: 101, ..Default::default() };
+        let reference = DataType { is_reference: true, is_object_const: true, is_read_only: fault != 3, ..value.clone() };
+        for (ptr, name) in [(1,"$beh0"), (2,"opOr"), (3,"$beh2")] {
+            r.func_by_ptr.insert(ptr, name.into());
+            r.func_owner.insert(ptr, if fault == 4 && ptr == 2 { "FOther" } else { "FFlags" }.into());
+            if fault != 1 || ptr != 2 { r.func_is_method.insert(ptr); }
+            r.func_params.insert(ptr, if ptr == 3 { vec![] } else { vec![reference.clone()] });
+            r.func_ret.insert(ptr, if ptr == 2 { DataType { type_info: if fault == 2 { 102 } else { 101 }, ..value.clone() } }
+                else { DataType { token: 0x52, ..Default::default() } });
+        }
+        r.funcid_to_ptr.insert(4, 1);
         r
     }
 
