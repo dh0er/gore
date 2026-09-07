@@ -301,11 +301,32 @@ fn check_revision3_project_compiler_v2_inner(input: &str) -> Result<Value, Failu
     // While a script mod is installed the compiler base is the deployment backup, which the
     // game compiler cannot restore over the live cache: `standalone_then_game` runs the
     // standalone compiler only, takes no install guard, and says so in its evidence.
+    // The selection does not depend on a resolved package: without one, the game backend
+    // would otherwise be entered against an installed mod.
+    let pristine_source = available_package
+        .as_ref()
+        .and_then(|resolved| resolved.pristine_source.clone())
+        .or_else(|| gore_mod::pristine_script_cache_source(&game_root).ok());
+    if requested == CompilerBackendWireV2::Game {
+        if let Some(source) = pristine_source.as_ref().filter(|source| source.from_backup) {
+            return fail_v2_preflight_with_optional_guard(
+                None,
+                Failure::new(
+                    "AUTHORING_REVISION3_PROJECT_COMPILER_INSTALL_UNAVAILABLE",
+                    format!(
+                        "the game compiler cannot run while a script mod is installed: the \
+                         compiler base is the deployment backup {}, which the game compiler \
+                         would restore over the live cache; use the standalone backend or \
+                         undeploy the mod first",
+                        source.path.display()
+                    ),
+                ),
+            );
+        }
+    }
     let skipped_game_fallback = crate::script_compile_report::skipped_game_fallback_note(
         requested,
-        available_package
-            .as_ref()
-            .and_then(|resolved| resolved.pristine_source.as_ref()),
+        pristine_source.as_ref(),
     )
     .map(|note| {
         json!({
@@ -315,9 +336,6 @@ fn check_revision3_project_compiler_v2_inner(input: &str) -> Result<Value, Failu
         })
     });
     let skip_game_fallback = skipped_game_fallback.is_some();
-    if skip_game_fallback {
-        unavailable_fallback = skipped_game_fallback.clone();
-    }
     let mut guard = if requested == CompilerBackendWireV2::Standalone || skip_game_fallback {
         None
     } else {
@@ -471,14 +489,21 @@ fn check_revision3_project_compiler_v2_inner(input: &str) -> Result<Value, Failu
         && standalone_runner.is_none()
     {
         debug_assert!(guard.is_none());
-        let failure = runner_unavailable
-            .as_ref()
-            .expect("strict standalone reached execution only with a qualified package");
+        // A strict standalone request reaches this point only with a qualified package; a
+        // skipped game fallback may reach it with no package at all, in which case the package
+        // resolution reason is the failure.
+        let failure_text = match runner_unavailable.as_ref() {
+            Some(failure) => failure.to_string(),
+            None => unavailable_fallback
+                .as_ref()
+                .and_then(|reason| reason["detail"].as_str().map(str::to_owned))
+                .unwrap_or_else(|| "no standalone compiler package is available".to_owned()),
+        };
         let closing = close_revalidation(&selection, &game_root, &inputs.catalog, &inputs.shipping);
         if !closing.is_exact() {
             return Err(map_closing_failure(closing));
         }
-        let mut failure_detail = Value::String(failure.to_string());
+        let mut failure_detail = Value::String(failure_text);
         let mut private_paths = vec![
             private_workspace.root.path(),
             private_workspace.work_dir.as_path(),
@@ -617,11 +642,14 @@ fn check_revision3_project_compiler_v2_inner(input: &str) -> Result<Value, Failu
     };
     let closing = closing.get();
     report.finish_while_target_pinned(|report| {
+        // A skipped game fallback is evidence only when the standalone attempt failed.
+        let skipped_fallback = skipped_game_fallback
+            .filter(|_| matches!(report.outcome, FullGraphCompileOutcomeV1::Failed(_)));
         let mut compiler_backend = full_graph_backend_evidence_v2(
             &report,
             requested,
             authority.as_ref().map(|authority| authority.identity()),
-            unavailable_fallback,
+            unavailable_fallback.or(skipped_fallback),
         );
         let mut private_paths = vec![
             private_workspace.root.path(),

@@ -590,7 +590,26 @@ where
     let initial_derived = DerivedModule {
         generated: selection.persisted_module.clone(),
     };
-    let mut guard = if requested == CompilerBackendWireV2::StandaloneThenGame {
+    // While a script mod is installed the compiler base is the deployment backup, which the
+    // game compiler cannot restore over the live cache: `standalone_then_game` runs the
+    // standalone compiler only, takes no install guard, and says so in its evidence.
+    let skipped_game_fallback = crate::script_compile_report::skipped_game_fallback_note(
+        requested,
+        pristine_source.as_ref(),
+    )
+    .map(|note| {
+        json!({
+            "failed_backend": CompilerBackendNameV1::Game.as_str(),
+            "failure_kind": "preflight",
+            "detail": note,
+        })
+    });
+    let effective = if skipped_game_fallback.is_some() {
+        CompilerBackendWireV2::Standalone
+    } else {
+        requested
+    };
+    let mut guard = if effective == CompilerBackendWireV2::StandaloneThenGame {
         match acquire_compile_install_mutation(game_root) {
             Ok(guard) => Some(guard),
             Err(message) => {
@@ -788,7 +807,7 @@ where
         inject_delay: Duration::from_secs(2),
     };
     let mut strict_target = Some(target);
-    let report = if requested == CompilerBackendWireV2::Standalone {
+    let report = if effective == CompilerBackendWireV2::Standalone {
         compile_module_with_backend_v1(
             &opts,
             &diagnostics,
@@ -815,7 +834,9 @@ where
             let result_backend = report.backend_name();
             let standalone_attempted = report.standalone_attempted();
             let game_attempted = report.game_attempted();
-            let mut fallback = runner_unavailable.or_else(|| {
+            let skipped_fallback = skipped_game_fallback
+                .filter(|_| matches!(report.outcome, CompileModuleReportOutcome::Failed(_)));
+            let mut fallback = runner_unavailable.or(skipped_fallback).or_else(|| {
                 report.fallback_reason().map(|reason| {
                     json!({
                         "failed_backend": reason.failed_backend().as_str(),

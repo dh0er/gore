@@ -749,6 +749,13 @@ fn compile_report_with_available_product_package(
     // game compiler cannot restore over the live cache: `standalone_then_game` runs the
     // standalone compiler only and says so in its evidence.
     let game_fallback_note = skipped_game_fallback_note(requested, pristine_source.as_ref());
+    let skipped_game_fallback = game_fallback_note.as_ref().map(|note| {
+        json!({
+            "failed_backend": CompilerBackendNameV1::Game.as_str(),
+            "failure_kind": "preflight",
+            "detail": note,
+        })
+    });
     let effective = if game_fallback_note.is_some() {
         CompilerBackendWireV2::Standalone
     } else {
@@ -799,7 +806,7 @@ fn compile_report_with_available_product_package(
                     false,
                     false,
                     Some(authority.identity()),
-                    None,
+                    skipped_game_fallback,
                 ),
             );
         }
@@ -999,16 +1006,8 @@ fn compile_report_with_available_product_package(
     let result_backend = report.backend_name();
     let standalone_attempted = report.standalone_attempted();
     let game_attempted = report.game_attempted();
-    let skipped_fallback = game_fallback_note
-        .as_ref()
-        .filter(|_| matches!(report.outcome, CompileModuleReportOutcome::Failed(_)))
-        .map(|note| {
-            json!({
-                "failed_backend": CompilerBackendNameV1::Game.as_str(),
-                "failure_kind": "preflight",
-                "detail": note,
-            })
-        });
+    let skipped_fallback = skipped_game_fallback
+        .filter(|_| matches!(report.outcome, CompileModuleReportOutcome::Failed(_)));
     let fallback = runner_unavailable.or(skipped_fallback).or_else(|| {
         report.fallback_reason().map(|reason| {
             json!({
