@@ -25,7 +25,7 @@ AI.CharacterAI_Gothic	6	0	0
 AI.CharacterAI_Human	1	0	0
 AI.CharacterAI_Orc	2	0	0
 AI.DailyRoutines.DailyRoutines_OG	1	0	0
-AI.NativeAICommands	6	0	0
+AI.NativeAICommands	5	0	0
 AI.Relationship.PersonalRelationshipModifiers	3	0	0
 AI.States.AIState_DailyRoutine	2	0	0
 AI.States.AIState_FollowCharacterAggressive	2	0	0
@@ -40,14 +40,12 @@ AI.States.FightAI.CharmedState.AIState_Charmed	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_AcceptDefeat	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_ClaimVictory	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_CombatEndActions	4	0	0
-AI.States.FightAI.CombatState.AICombatFitnessMultipliers	1	0	0
 AI.States.FightAI.CombatState.AICombatRoleSystem	1	0	0
 AI.States.FightAI.CombatState.AICombatTargetScoring	2	0	0
 AI.States.FightAI.CombatState.AIGroup_Attackers	5	0	0
 AI.States.FightAI.CombatState.AIGroup_Combat	4	0	0
 AI.States.FightAI.CombatState.AIState_OGCombat	12	0	0
-AI.States.FightAI.CombatState.CombatBehaviorSets.UnreachableEnemy.CombatBehaviorSet_UnreachableEnemy	1	0	0
-AI.States.FightAI.CombatState.CombatMoves	22	0	0
+AI.States.FightAI.CombatState.CombatMoves	21	0	0
 AI.States.FightAI.CombatState.CombatOperations	1	0	0
 AI.States.FightAI.CombatState.CombatSituations	4	0	0
 AI.States.FightAI.CombatState.CombatTestClasses	1	0	0
@@ -63,7 +61,6 @@ AI.States.FightAI.SleeperFight.CorKalom_Sleeper.LordDemon.Spell.Pyrolaser.GA_Lor
 AI.States.FightAI.SleeperFight.OC_KDF_Milten_Sleeper.Environment.MiltenSleeper_Brazier	1	0	0
 AI.States.FightAI.SleeperFight.OC_KDF_Milten_Sleeper.Spells.Fireball.GA_Spell_FireBall_MiltenSleeper	1	0	0
 AI.States.FightAI.SleeperFight.SC_NOV_Lester_Sleeper.SleeperFight_LesterCombat	2	0	0
-AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.GA_Summon_XardasSleeper_Skeleton	1	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpotManager	1	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpot_XardasSleeper	3	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.TraceTarget_XardasSleeper	1	0	0
@@ -77,12 +74,11 @@ AI.States.FightAI.WatchFightState.AIGroup_WatchFight	2	0	0
 AI.States.FightAI.WatchFightState.AIState_WatchFight	18	0	0
 AI.States.Test.TestCharacters_Navigation	1	0	0
 Camera.ConversationCameraConfig	1	0	0
-Environment.GothicUltraDynamicControlerAS	4	0	0
+Environment.GothicUltraDynamicControlerAS	3	0	0
 FX.DepthOfField.DepthOfFieldController	1	0	0
 GAS.Abilities.Combat.AttackLoop.Capsule.GA_AttackLoopCapsule	1	0	0
 GAS.Abilities.Combat.AttackLoop.Capsule.PyrolaserHitCapsuleComponent	1	0	0
 GAS.Abilities.Combat.AttackLoop.Cone.GA_AttackLoopCone	2	0	0
-GAS.Abilities.Debug.GA_ControlDebug	1	0	0
 GAS.Abilities.Interact.GA_Human_CallInteractFunction	1	0	0
 GAS.Abilities.Interact.GA_Human_Lever	1	0	0
 GAS.Abilities.Interact.GA_Human_Loot	4	0	0
@@ -119,7 +115,6 @@ GAS.Abilities.TraceTarget.Derived.GA_TraceTarget_Item	1	0	0
 GAS.Calculations.Damage	5	0	0
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Drugs.Base.DrugDebuffEffectComponentBase	1	0	0
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Sleep.GA_SleepDebuffEffectGameplayAbility	1	0	0
-GAS.Effects.Debuffs.EffectStateComponent.DebuffEffectActors.SlowdownDebuffEffectActor	1	0	0
 GAS.GASCharacterMixins	5	0	0
 GAS.GASCharacterStateMixins	8	0	0
 GAS.PerceptionEventMixins	1	0	0

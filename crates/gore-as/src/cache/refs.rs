@@ -1899,6 +1899,89 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_reused_null_guard_getters(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UDebugOwner", "Controlled"), ("UComponent", ""),
+            ("UAbilityBase", "TargetEffect"), ("TSubclassOf", ""), ("UEffect", "")]);
+        for (id, name) in [(1, "UDebugOwner"), (2, "UComponent"), (3, "UAbilityBase"), (4, "TSubclassOf"), (5, "UEffect")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: name.into(), namespace: String::new(),
+                module: if id == 1 { "Script".into() } else { String::new() } });
+        }
+        r.prop_type_id.insert(3, if fault == 1 { 3 } else { 1 }); r.prop_type_id.insert(7, 3);
+        let key = (3i64 << 1) | (8i64 << 33) | 1;
+        r.prop_by_key.insert(key, "CasterEffect".into()); r.prop_type_id.insert(key, 3);
+        r.type_subtypes.insert(4, vec![DataType { token: 5, type_info: 5, ..Default::default() }]);
+        r.set_class_fields(HashMap::from([("UDebugOwner".into(), HashMap::from([("Controlled".into(),
+            if fault == 2 { "UOther".into() } else { "UComponent".into() })]))]));
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(
+            &[("UAbilityBase", "TargetEffect", "TSubclassOf<UEffect>"), ("UAbilityBase", "CasterEffect", "TSubclassOf<UEffect>")], &[], None));
+        for (ptr, name, owner) in [(10, "GetComponent", "UAbilityBase"), (11, "Remove", "UComponent")] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into());
+            if !(fault == 3 && ptr == 10) { r.func_is_method.insert(ptr); }
+        }
+        let handle = DataType { token: 5, type_info: 2, is_object_handle: true, ..Default::default() };
+        r.func_ret.insert(10, DataType { is_object_const: fault == 4, ..handle.clone() });
+        r.func_params.insert(10, Vec::new());
+        r.func_ret.insert(11, DataType { token: 0x52, ..Default::default() });
+        r.func_params.insert(11, vec![DataType { token: 5, type_info: 4, ..Default::default() },
+            DataType { type_info: if fault == 5 { 5 } else { 2 }, ..handle }, DataType { token: 0x44, ..Default::default() }]);
+        // RefResolver::build derives this separate gate from every parameter
+        // row; direct fixture insertion must supply the same derived metadata.
+        let params = &r.func_params[&11];
+        let accepts = params.iter().map(|p| !p.is_reference || p.is_object_const || p.is_read_only).collect();
+        r.temporary_arg_positions.insert("Remove".into(), HashMap::from([(params.len(), accepts)]));
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_copy_before_value_chain(mutable: bool) -> Self {
+        let mut r = Self::default(); r.type_by_ptr.insert(100, "FVector".into()); r.type_names.insert("FVector".into());
+        let value = DataType { token: 5, type_info: 100, ..Default::default() };
+        let reference = DataType { is_reference: true, is_object_const: !mutable, is_read_only: !mutable, ..value.clone() };
+        for (p, name, owner) in [(1, "$beh0", "FVector"), (2, "Location", "AActor"), (3, "opSub", "FVector"), (4, "Normalize", "FVector")] {
+            r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, owner.into()); r.func_is_method.insert(p);
+            r.const_method_ptrs.insert(p); r.func_ret.insert(p, value.clone());
+        }
+        r.func_ret.insert(1, DataType { token: 0x52, ..Default::default() });
+        r.func_params.insert(1, vec![reference.clone()]); r.func_params.insert(2, Vec::new());
+        r.func_params.insert(3, vec![reference.clone()]);
+        r.func_params.insert(4, vec![DataType { token: 0x51, ..Default::default() }, reference]); r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_constructed_return_value(wrong_owner: bool) -> Self {
+        let mut r = Self::from_test_script_constructors(&[""], "FPayload",
+            &[DataType { token: 0x50, ..Default::default() }]);
+        r.typeid_to_ptr.insert(101, 101);
+        r.funcid_to_ptr.insert(2, 2); r.func_by_ptr.insert(2, "FPayload".into());
+        r.func_owner.insert(2, "FPayload".into()); r.func_is_method.insert(2);
+        r.script_ctor_owner.insert(2, if wrong_owner { 102 } else { 101 });
+        r.func_params.insert(2, Vec::new()); r.func_ret.insert(2, DataType { token: 0x52, ..Default::default() }); r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_boxed_enum_result(wrong_identity: bool) -> Self {
+        let mut r = Self::default();
+        r.type_by_ptr.insert(100, "EStage".into()); r.type_names.insert("EStage".into());
+        r.type_identity_by_ptr.insert(100, TypeIdentity { name: "EStage".into(), module: "State".into(), namespace: String::new() });
+        r.typeid_to_ptr.insert(100, if wrong_identity { 101 } else { 100 });
+        r.funcid_to_ptr.insert(1, 1); r.func_by_ptr.insert(1, "Stage".into()); r.func_is_method.insert(1);
+        r.func_params.insert(1, Vec::new());
+        r.func_ret.insert(1, DataType { token: 5, type_info: 100, ..Default::default() }); r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_eager_clamp_bounds(narrow: bool) -> Self {
+        let mut r = Self::default();
+        for (p, name, count) in [(1, "Min", 2), (2, "Max", 2), (3, "Clamp", 3)] {
+            let scalar = DataType { token: if narrow && p == 2 { 0x50 } else { 0x51 }, ..Default::default() };
+            r.func_by_ptr.insert(p, name.into()); r.func_params.insert(p, vec![scalar.clone(); count]); r.func_ret.insert(p, scalar);
+            r.temporary_arg_positions.insert(name.into(), HashMap::from([(count, vec![true; count])]));
+        }
+        r.funcid_to_ptr.insert(4, 4); r.func_by_ptr.insert(4, "Other::Max".into());
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_forwarded_getter_field(fault: u8) -> Self {
         let mut r = Self::default();
         for (p, name) in [(99, "UHolder"), (100, "AState"), (101, "ANpcState"), (102, "AOther")] {
@@ -2477,6 +2560,29 @@ impl RefResolver {
         let field = match fault { 1 => "UNode", 2 => "const AGothicCharacter", _ => "AGothicCharacter" };
         r.set_class_fields(HashMap::from([("UHolder".into(),
             HashMap::from([("Target".into(), field.into())]))]));
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_cast_member_receiver(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UOwner", "Component"), ("UComponent", ""),
+            ("UDerived", ""), ("FEvent", ""), ("ESpeed", "")]);
+        for (id, name) in [(1, "UOwner"), (2, "UComponent"), (3, "UDerived"), (4, "FEvent"), (5, "ESpeed")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: name.into(), namespace: String::new(),
+                module: if id == 3 { "Script".into() } else { String::new() } });
+        }
+        r.prop_type_id.insert(3, if fault == 2 { 2 } else { 1 });
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(
+            &[("UOwner", "Component", if fault == 1 { "UOther" } else { "UComponent" })], &[], None));
+        r.func_by_ptr.insert(10, "opCast".into()); r.func_is_method.insert(10);
+        r.func_ret.insert(10, DataType { token: 0x52, ..Default::default() });
+        r.funcid_to_ptr.insert(11, 11); r.func_by_ptr.insert(11, "Apply".into());
+        r.func_owner.insert(11, if fault == 3 { "UOther" } else { "UDerived" }.into());
+        if fault != 4 { r.func_is_method.insert(11); }
+        r.func_ret.insert(11, DataType { token: 0x52, ..Default::default() });
+        r.func_params.insert(11, vec![DataType { token: 5, type_info: 4, is_reference: true,
+            is_object_const: fault == 5, ..Default::default() },
+            DataType { token: 5, type_info: 5, is_object_const: true, ..Default::default() }]);
         r
     }
 
