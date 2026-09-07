@@ -1578,6 +1578,8 @@ fn emit_function_ctor(
     // the arguments and in another order.
     let rvo_producers = super::structure::take_rvo_producers();
     let rvo_consumers = super::structure::take_rvo_consumers();
+    let (const_value_arguments, discarded_value_calls) =
+        short_rvo_lifetimes(f, refs, &rvo_producers, &rvo_consumers);
     let retained_values = retained_value_arguments(f, &fc, refs, &rvo_producers, &rvo_consumers);
     hoisted.extend(retained_values.iter().copied());
     statement_producers.extend(retained_values.iter().copied());
@@ -2286,7 +2288,7 @@ fn emit_function_ctor(
         // executor locals to decl-init at their assignment sites.
         let (body, na_suppressed) = rewrite_no_assign_locals(&body, &locals);
         pass_trace("rewrite_no_assign_locals", &body);
-        let (body, discarded) = drop_unread_call_results(&body, &locals, refs, &unused_script_handle_results(f, refs));
+        let (body, discarded) = drop_unread_call_results(&body, &locals, refs, &unused_script_handle_results(f, refs), &discarded_value_calls);
         pass_trace("drop_unread_call_results", &body);
         // Batch-20 Class A residue: executor locals whose reference shape failed the decl-init
         // gates above (multi-assign with reads, read-before-assign, cross-block reads) still
@@ -2789,7 +2791,7 @@ fn emit_function_ctor(
                 .filter(|(slot, _)| !released_handles.contains(slot))
                 .collect(),
             &wholly_consumed_object_slots(f),
-            &rvo_temporaries,
+            &rvo_temporaries.difference(&const_value_arguments).copied().collect(),
             refs,
             &arithmetic_temporaries(f),
             &statement_producers,
@@ -2848,7 +2850,7 @@ fn emit_function_ctor(
                 .filter(|(slot, _)| !released_handles.contains(slot))
                 .collect(),
             &wholly_consumed_object_slots(f),
-            &rvo_temporaries,
+            &rvo_temporaries.difference(&const_value_arguments).copied().collect(),
             refs,
             &arithmetic_temporaries(f),
             &statement_producers,
@@ -2957,6 +2959,10 @@ fn emit_function_ctor(
         // initialiser, and the initialiser is only one statement once the arms have rejoined.
         let rendered = sink_carrier_declarations(&rendered, &declared_at_initializer_carriers(f));
         pass_trace("sink_carrier_declarations", &rendered);
+        // Rejoining and placing a carrier can expose its declaration only here.
+        // Keep the same named-result and single-use guards as the earlier pass.
+        let rendered = inline_bool_chain_into_next_condition(&rendered, &named_sites);
+        pass_trace("inline_bool_chain_into_next_condition#late", &rendered);
         let rendered = unwrap_untested_bool_return(&rendered, f, refs);
         pass_trace("unwrap_untested_bool_return", &rendered);
         let rendered = fold_literal_null_returns(
@@ -7733,6 +7739,7 @@ fn drop_unread_call_results(
     locals: &BTreeMap<i32, String>,
     refs: &RefResolver,
     stored_handles: &HashSet<i32>,
+    discarded_values: &HashSet<(i32, String)>,
 ) -> (String, HashSet<i32>) {
     let mut dropped: HashSet<i32> = HashSet::new();
     let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
@@ -7753,7 +7760,7 @@ fn drop_unread_call_results(
             if count_ident(line, &ident) == 0 {
                 continue;
             }
-            match discardable_call(line, &ident, refs) {
+            match discardable_call(line, &ident, refs, *slot, discarded_values) {
                 Some(_) => sites.push(at),
                 None => {
                     every_use_is_a_discard = false;
@@ -7766,7 +7773,7 @@ fn drop_unread_call_results(
         }
         for at in sites {
             let indent: String = lines[at].chars().take_while(|c| c.is_whitespace()).collect();
-            let call = discardable_call(&lines[at], &ident, refs).expect("matched above");
+            let call = discardable_call(&lines[at], &ident, refs, *slot, discarded_values).expect("matched above");
             lines[at] = format!("{indent}{call};");
         }
         dropped.insert(*slot);
@@ -7803,7 +7810,10 @@ fn outer_callee(value: &str) -> Option<String> {
 /// expression is unused", and a handful of bound functions are `nodiscard` — neither the script
 /// cache nor `Binds.Cache` records that flag, so the names come from what the compiler reported
 /// (1,207 and 265 errors respectively, measured on this corpus).
-fn discardable_call(line: &str, ident: &str, refs: &RefResolver) -> Option<String> {
+fn discardable_call(
+    line: &str, ident: &str, refs: &RefResolver, slot: i32,
+    discarded_values: &HashSet<(i32, String)>,
+) -> Option<String> {
     // What the cache cannot say and the compiler did: `nodiscard` is a property of the C++
     // binding and appears in neither the script cache nor `Binds.Cache`, and one const method
     // (`GetCurrentCombo`) the function table records without its const flag. Every name here was
@@ -7831,7 +7841,8 @@ fn discardable_call(line: &str, ident: &str, refs: &RefResolver) -> Option<Strin
     // keep — the compiler refuses to throw either result away.
     if callee.is_empty()
         || !callee.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
-        || refs.names_a_const_method(callee)
+        || (refs.names_a_const_method(callee)
+            && !discarded_values.contains(&(slot, callee.to_owned())))
     {
         return None;
     }
@@ -13091,6 +13102,83 @@ fn destroyed_fstring_operator_receivers(
         }
     }
     out
+}
+
+/// Two narrowly typed uses of an RVO value released in its own full expression.
+/// Require one physical life and only the recorded destination/argument/cleanup
+/// addresses; these facts do not apply to another life or a same-named overload.
+fn short_rvo_lifetimes(
+    f: &Func, refs: &RefResolver, producers: &[(i32, usize)], consumers: &[(i32, usize)],
+) -> (HashSet<i32>, HashSet<(i32, String)>) {
+    let mut arguments = HashSet::new();
+    let mut discarded = HashSet::new();
+    let Ok(code) = disassemble(&f.bytecode) else { return (arguments, discarded); };
+    let w = |i: &Instr| i.words.first().copied().unwrap_or(0) as i16 as i32;
+    let mut uses: HashMap<i32, Vec<usize>> = HashMap::new();
+    let mut made: HashMap<i32, HashSet<usize>> = HashMap::new();
+    let mut read: HashMap<i32, HashSet<usize>> = HashMap::new();
+    for &(slot, at) in producers { made.entry(slot).or_default().insert(at); }
+    for &(slot, at) in consumers { read.entry(slot).or_default().insert(at); }
+    for (at, ins) in code.iter().enumerate() {
+        for slot in super::bytediff::addressed_slots(ins) {
+            if made.contains_key(&slot) { uses.entry(slot).or_default().push(at); }
+        }
+    }
+    let returns = |ins: &Instr| match ins.op.name {
+        "CALLSYS" => refs.func_ret_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64),
+        "CALL" | "CALLINTF" => refs.func_ret_by_id(ins.dwords.first().copied().unwrap_or(0) as i32),
+        _ => None,
+    };
+    let destructor = |ins: &Instr| ins.op.name == "CALLSYS"
+        && refs.func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64) == Some("$beh2");
+    for (slot, positions) in uses {
+        let created = &made[&slot];
+        if slot <= 0 || created.len() != 1 || !(2..=3).contains(&positions.len())
+            || !positions.iter().all(|at| code[*at].op.name == "PSF") { continue; }
+        let producer = *created.iter().next().expect("one producer");
+        let Some(call) = code.get(producer) else { continue; };
+        let Some(ret) = returns(call).filter(|r| r.token == 5 && !r.is_reference && !r.is_object_handle)
+            else { continue; };
+        let Some(ty) = refs.type_by_ptr(ret.type_info) else { continue; };
+        let release = *positions.last().expect("two or three uses");
+        let Some(dtor) = code.get(release + 1).filter(|i| destructor(i)) else { continue; };
+        if positions[0] >= producer || release <= producer
+            || refs.func_owner_by_ptr(dtor.qwords.first().copied().unwrap_or(0) as i64) != Some(ty)
+        { continue; }
+        if positions.len() == 2 {
+            // A different const overload must not veto the exact non-const call.
+            let ptr = call.qwords.first().copied().unwrap_or(0) as i64;
+            if call.op.name == "CALLSYS" && refs.is_method_by_ptr(ptr)
+                && !refs.is_const_method_by_ptr(ptr) && read.get(&slot).is_none_or(|s| s.is_empty())
+                && immediate_value_cleanup_end(&code, producer + 1, destructor) > release
+            {
+                if let Some(name) = refs.func_by_ptr(ptr) { discarded.insert((slot, name.to_owned())); }
+            }
+            continue;
+        }
+        let argument = positions[1];
+        let consumer = argument + 3;
+        if argument != producer + 1 || release != consumer + 1
+            || !read.get(&slot).is_some_and(|s| s.len() == 1 && s.contains(&consumer))
+            || code.get(argument + 1).is_none_or(|i| i.op.name != "PSF" || w(i) <= 0 || w(i) == slot)
+            || code.get(argument + 2).is_none_or(|i| i.op.name != "PshVPtr")
+        { continue; }
+        let Some(call) = code.get(consumer) else { continue; };
+        let (method, params) = match call.op.name {
+            "CALLSYS" => { let p = call.qwords.first().copied().unwrap_or(0) as i64;
+                (refs.is_method_by_ptr(p), refs.func_params_by_ptr(p)) },
+            "CALL" | "CALLINTF" => { let id = call.dwords.first().copied().unwrap_or(0) as i32;
+                (refs.is_method_by_id(id), refs.func_params_by_id(id)) },
+            _ => (false, None),
+        };
+        let Some([param]) = params else { continue; };
+        if method && param.token == 5 && param.is_reference && !param.is_object_handle
+            && (param.is_object_const || param.is_read_only) && param.type_info == ret.type_info
+            && returns(call).is_some_and(|r| r.token == 5 && !r.is_reference && !r.is_object_handle)
+            && producers.contains(&(w(&code[argument + 1]), consumer))
+        { arguments.insert(slot); }
+    }
+    (arguments, discarded)
 }
 
 /// Cleanup of the void call's own full expression, before another statement starts.
@@ -22043,6 +22131,21 @@ fn rvo_declared_at_initializer(
                 temporary = !diag_enabled("GORE_AS_RVO_CHAIN") || consumer.is_none() || chain.contains(&k);
                 break;
             }
+            // A const enum-reference result is read and copied before its
+            // temporary receiver dies. This exact copy is still the consumer's
+            // expression, unlike an arbitrary later local-to-local assignment.
+            let enum_result_copy = ins.op.name == "CpyVtoV4" && k >= 2 && k + 1 == release
+                && consumer == Some(k - 2) && instrs[k - 1].op.name == "RDR1"
+                && ins.words.get(1).map(|v| *v as i16 as i32) == Some(w0(&instrs[k - 1]))
+                && w0(ins) > 0 && w0(ins) != w0(&instrs[k - 1])
+                && instrs[k - 2].op.name == "CALLSYS"
+                && refs.func_ret_by_ptr(instrs[k - 2].qwords.first().copied().unwrap_or(0) as i64)
+                    .is_some_and(|r| r.token == 5 && r.is_reference && !r.is_object_handle
+                        && (r.is_object_const || r.is_read_only)
+                        // Native enum constants are absent from the script enum table.
+                        // Use the same resolved enum type as enum_call_result_slots.
+                        && is_enum(&r.base_name(refs)));
+            if enum_result_copy { continue; }
             // Result copies, the pushes that hand a result on (`PSF r; PSF d; $beh0` copies
             // the outer call's value into its declaration before the argument temporaries
             // are released — `ActivateStrangerDreams`) and other temporaries' destructors
@@ -24487,6 +24590,76 @@ mod member_arithmetic_lifetime_tests {
         }
     }
 
+
+    #[test]
+    fn immediate_const_value_argument_has_exact_type_frame_and_single_life() {
+        let refs = RefResolver::from_test_short_value_lifetimes(true, true, false);
+        let mut f = function(&[("PGA", &[]), ("PSF", &[4]), ("PshVPtr", &[65532]),
+            ("CALLSYS", &[]), ("PSF", &[4]), ("PSF", &[38]), ("PshVPtr", &[0]),
+            ("CALL", &[]), ("PSF", &[4]), ("CALLSYS", &[]), ("RET", &[0])]);
+        for (at, id) in [(3, 1), (7, 2), (9, 3)] {
+            let op = super::disassemble(&f.bytecode).unwrap()[at].offset_dw;
+            f.bytecode[op + 1] = id;
+        }
+        let producers = [(4, 3), (38, 7)];
+        let consumers = [(4, 7)];
+        let (args, _) = super::short_rvo_lifetimes(&f, &refs, &producers, &consumers);
+        assert_eq!(args, HashSet::from([4]));
+        let source = "    FString local_4 = (Name + \"_suffix\");\n    FSettings local_38 = Super::Consume(local_4);\n";
+        let render = |receiver_only: &HashSet<i32>| inline_unnamed_value_temporaries(source,
+            &HashSet::from([(4, 1)]), &HashSet::new(), receiver_only, &refs, &HashSet::new(),
+            &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
+        assert_eq!(render(&HashSet::from([4])), source);
+        assert_eq!(render(&HashSet::new()), "    FSettings local_38 = Super::Consume((Name + \"_suffix\"));\n");
+        assert!(super::short_rvo_lifetimes(&f,
+            &RefResolver::from_test_short_value_lifetimes(false, true, false), &producers, &consumers).0.is_empty());
+        f.bytecode.extend(function(&[("PSF", &[4])]).bytecode);
+        assert!(super::short_rvo_lifetimes(&f, &refs, &producers, &consumers).0.is_empty());
+    }
+
+    #[test]
+    fn immediate_enum_reference_result_copy_does_not_extend_receiver_lifetime() {
+        let mut f = function(&[("PSF", &[10]), ("CALL", &[]), ("PSF", &[10]),
+            ("CALLSYS", &[]), ("RDR1", &[12]), ("CpyVtoV4", &[14, 12]),
+            ("PSF", &[10]), ("CALLSYS", &[]), ("RET", &[0])]);
+        for (at, id) in [(1, 1), (3, 5), (7, 3)] {
+            let op = super::disassemble(&f.bytecode).unwrap()[at].offset_dw;
+            f.bytecode[op + 1] = id;
+        }
+        let code = super::disassemble(&f.bytecode).unwrap();
+        let refs = RefResolver::from_test_short_value_lifetimes(true, true, false);
+        assert!(super::rvo_declared_at_initializer(&code, &refs, &[(10, 1)], &[(10, 3)]).is_empty());
+        let refs = RefResolver::from_test_short_value_lifetimes(true, false, false);
+        assert_eq!(super::rvo_declared_at_initializer(&code, &refs, &[(10, 1)], &[(10, 3)]), vec![10]);
+        let mut wrong_copy = code;
+        wrong_copy[5].words[1] = 13;
+        let refs = RefResolver::from_test_short_value_lifetimes(true, true, false);
+        assert_eq!(super::rvo_declared_at_initializer(&wrong_copy, &refs, &[(10, 1)], &[(10, 3)]), vec![10]);
+    }
+
+    #[test]
+    fn discarded_rvo_call_uses_its_own_constness_and_immediate_cleanup() {
+        let mut f = function(&[("PSF", &[10]), ("CALLSYS", &[]), ("PSF", &[18]),
+            ("CALLSYS", &[]), ("PSF", &[10]), ("CALLSYS", &[]), ("RET", &[0])]);
+        for (at, id) in [(1, 6), (3, 4), (5, 3)] {
+            let op = super::disassemble(&f.bytecode).unwrap()[at].offset_dw;
+            f.bytecode[op + 1] = id;
+        }
+        let refs = RefResolver::from_test_short_value_lifetimes(true, true, false);
+        let (_, discarded) = super::short_rvo_lifetimes(&f, &refs, &[(10, 1)], &[]);
+        assert_eq!(discarded, HashSet::from([(10, "PlayEffect".into())]));
+        let body = "    local_10 = FX.PlayEffect();\n";
+        let locals = std::collections::BTreeMap::from([(10, "FString".into())]);
+        assert_eq!(super::drop_unread_call_results(body, &locals, &refs, &HashSet::new(), &discarded).0,
+            "    FX.PlayEffect();\n");
+        assert_eq!(super::drop_unread_call_results(body, &locals, &refs, &HashSet::new(), &HashSet::new()).0, body);
+        assert!(super::short_rvo_lifetimes(&f,
+            &RefResolver::from_test_short_value_lifetimes(true, true, true), &[(10, 1)], &[]).1.is_empty());
+        let at = super::disassemble(&f.bytecode).unwrap()[3].offset_dw;
+        f.bytecode[at + 1] = 1; // Actual work separates the result from its destructor.
+        assert!(super::short_rvo_lifetimes(&f, &refs, &[(10, 1)], &[]).1.is_empty());
+    }
+
     fn function(ops: &[(&str, &[u16])]) -> Func {
         let bytecode = ops.iter().flat_map(|(name, words)| {
             let op = OPCODES.iter().find(|op| op.name == *name).unwrap();
@@ -24976,8 +25149,8 @@ mod member_arithmetic_lifetime_tests {
         assert_eq!(keep, HashSet::from([4]));
         let source = "    local_4 = Read();\n    return;\n";
         let locals = std::collections::BTreeMap::from([(4, "UValue".into())]);
-        assert_eq!(super::drop_unread_call_results(source, &locals, &refs, &keep).0, source);
-        assert_eq!(super::drop_unread_call_results(source, &locals, &refs, &HashSet::new()).0,
+        assert_eq!(super::drop_unread_call_results(source, &locals, &refs, &keep, &HashSet::new()).0, source);
+        assert_eq!(super::drop_unread_call_results(source, &locals, &refs, &HashSet::new(), &HashSet::new()).0,
             "    Read();\n    return;\n");
         for extra in [("STOREOBJ", &[4][..]), ("PshVPtr", &[4][..]), ("FreeNullV8", &[4][..])] {
             let mut other = f.clone(); other.bytecode.extend(function(&[extra]).bytecode);

@@ -6191,7 +6191,12 @@ fn block_stmts_in(
                     // holds, and the const reading of the slot was ours. Dropping it lost the
                     // field's value (`this.SearchTerritory = this.AI.GetCurrentTerritory();`).
                     let const_into_own_field = src_is_const && dst.s.starts_with("this.");
-                    if dst_ok && src_ok && (!src_is_const || const_into_own_field) {
+                    // The native field already records a const handle target. A
+                    // compatible const source loses no qualifier in this store.
+                    let const_into_native_field = src_is_const && dst.nf_const.as_deref()
+                        .zip(src.ty.as_deref()).is_some_and(|(target, source)|
+                            target == source || provably_derived(source, target, ctx.refs));
+                    if dst_ok && src_ok && (!src_is_const || const_into_own_field || const_into_native_field) {
                         flush!();
                         // batch-41d (CLASS 2): the member field type PROVABLY derives from the
                         // source's type (`this.ActiveActionTask (UAITask_CombatMove) =
@@ -10898,6 +10903,46 @@ mod tests {
             assert!(script_default_member_copy(&good.instrs, 5, &refs, source, target).is_none());
         }
         assert!(script_default_member_copy(&good.instrs, 5, &RefResolver::default(), "local_50", "this.Value").is_none());
+    }
+
+    #[test]
+    fn const_handle_stores_require_a_compatible_native_const_field() {
+        let render = |owner: &str, field: &str, value: &str| {
+            let refs = RefResolver::from_test_const_native_store(owner, field, value);
+            let mut a = TestAssembler::default();
+            a.op("CALLSYS", &[], &[3, 0]);
+            a.op("STOREOBJ", &[10], &[]);
+            a.op("PshVPtr", &[10], &[]);
+            a.op("PSF", &[20], &[]);
+            a.op("ADDSi", &[0], &[1]);
+            a.op("REFCPY", &[], &[]);
+            a.op("PopPtr", &[], &[]);
+            a.op("RET", &[0], &[]);
+            let mut fixture = a.finish();
+            fixture.instrs[0].qwords = vec![3];
+            let f = FuncCode { func: "Fixture::Copy".into(), is_method: false,
+                param_names: Vec::new(), param_types: Vec::new(),
+                ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+            let locals = HashMap::from([(10, value.to_owned()), (20, owner.to_owned())]);
+            let ctx = Ctx {
+                f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret),
+                fields: None, param_types: None, class_name: None, local_types: Some(&locals),
+                float_slots: Default::default(), param_off_map: HashMap::new(), rvo_off: None,
+                keep_ints: None, rvo_switch_region: std::cell::Cell::new(false),
+            };
+            block_stmts(&ctx, 0, fixture.instrs.len()).0.join("\n")
+        };
+        for value in ["UObject", "UComboAttackConfig"] {
+            let out = render("FGameplayEventData", "OptionalObject", value);
+            assert!(out.contains("local_20.OptionalObject = local_10;"), "{out}");
+        }
+        for (owner, field, value) in [("FGameplayEventData", "Other", "UObject"),
+            ("FOther", "OptionalObject", "UObject"),
+            ("FGameplayEventData", "Instigator", "UComboAttackConfig")]
+        {
+            let out = render(owner, field, value);
+            assert!(!out.contains(&format!("local_20.{field} =")), "{out}");
+        }
     }
 
     #[test]

@@ -1537,6 +1537,16 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_const_native_store(owner: &str, field: &str, value: &str) -> Self {
+        let mut r = Self::from_test_member_chain(&[(owner, field), (value, "")]);
+        r.func_by_ptr.insert(3, "Make".into());
+        r.func_params.insert(3, Vec::new());
+        r.func_ret.insert(3, DataType { token: 5, type_info: 2,
+            is_object_const: true, is_object_handle: true, ..Default::default() });
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_member_chain(owners: &[(&str, &str)]) -> Self {
         let mut r = Self::default();
         for (index, (owner, field)) in owners.iter().enumerate() {
@@ -1708,6 +1718,33 @@ impl RefResolver {
         r.func_ret.insert(1, DataType { token: 5, type_info: 101,
             is_reference: by_ref, is_object_handle: handle, ..Default::default() });
         if method { r.func_is_method.insert(1); }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_short_value_lifetimes(const_argument: bool, enum_reference: bool, const_discard: bool) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(101, "FString"), (102, "FSettings"), (103, "EOutcome")] {
+            r.type_by_ptr.insert(ptr, name.into());
+        }
+        // Native enum metadata has a type name, but no script enumerator table.
+        for (ptr, name, owner, token, type_info) in [
+            (1, "MakeValue", "", 5, 101), (2, "Consume", "UBase", 5, 102),
+            (3, "$beh2", "FString", 0x52, 0), (4, "$beh2", "FSettings", 0x52, 0),
+            (5, "GetResult", "FString", 5, 103), (6, "PlayEffect", "UFX", 5, 101),
+        ] {
+            r.func_by_ptr.insert(ptr, name.into());
+            r.funcid_to_ptr.insert(ptr as i32, ptr);
+            r.func_ret.insert(ptr, DataType { token, type_info, ..Default::default() });
+            r.func_params.insert(ptr, Vec::new());
+            if !owner.is_empty() { r.func_owner.insert(ptr, owner.into()); r.func_is_method.insert(ptr); }
+        }
+        r.func_params.insert(2, vec![DataType { token: 5, type_info: 101,
+            is_reference: true, is_object_const: const_argument, ..Default::default() }]);
+        r.func_ret.insert(5, DataType { token: 5, type_info: 103,
+            is_reference: enum_reference, is_object_const: true, ..Default::default() });
+        r.const_method_names.insert("PlayEffect".into()); // Another overload is const.
+        if const_discard { r.const_method_ptrs.insert(6); }
         r
     }
 

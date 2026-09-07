@@ -14,7 +14,6 @@ AI.AIAgent.Creature.Golem.Fire.Spells.Heated.GA_FireGolem_SpecialState_Heated	1	
 AI.AIAgent.Creature.Golem.Fire.Spells.LavaStream.GA_FireGolem_EnvironmentAttack_ArenaLavaStreams	1	0	0
 AI.AIAgent.Creature.Golem.Ice.Spells.Icebolt.GA_Spell_IceGolem_IceBolt	2	0	0
 AI.AIAgent.Creature.Golem.Ice.Spells.SummonMiniGolems.GA_IceGolem_SpecialState_SummonMiniGolem	2	0	0
-AI.AIAgent.Creature.Harpy.AIState_Warning_Harpy	1	0	0
 AI.AIAgent.Creature.Minecrawler.Queen.Abilities.GA_MCQueenPhaseChangeHit	1	0	0
 AI.AIAgent.Creature.Molerat.CombatSituations_Molerat	1	0	0
 AI.AIAgent.Creature.Scavenger.Rideable.Components.GothicMountComponentAS	2	0	0
@@ -44,7 +43,7 @@ AI.Relationship.PersonalRelationshipModifiers	3	0	0
 AI.States.AIState_DailyRoutine	2	0	0
 AI.States.AIState_FollowCharacterAggressive	2	0	0
 AI.States.AIState_FollowCreator	1	0	0
-AI.States.AIState_GuideCharacter	4	0	0
+AI.States.AIState_GuideCharacter	3	0	0
 AI.States.AIState_InteractWinchGate	1	0	0
 AI.States.AIState_UseFreepoint	1	0	0
 AI.States.FightAI.AIGroup_ConflictInstance	2	0	0
@@ -65,7 +64,7 @@ AI.States.FightAI.CombatState.AIState_Combat	1	0	0
 AI.States.FightAI.CombatState.AIState_OGCombat	12	0	0
 AI.States.FightAI.CombatState.CombatBehaviorSets.CombatBehaviorSet	1	0	0
 AI.States.FightAI.CombatState.CombatBehaviorSets.UnreachableEnemy.CombatBehaviorSet_UnreachableEnemy	1	0	0
-AI.States.FightAI.CombatState.CombatMoves	27	0	0
+AI.States.FightAI.CombatState.CombatMoves	26	0	0
 AI.States.FightAI.CombatState.CombatOperations	1	0	0
 AI.States.FightAI.CombatState.CombatSituations	4	0	0
 AI.States.FightAI.CombatState.CombatTestClasses	1	0	0
@@ -167,7 +166,7 @@ GAS.PerceptionEventMixins	1	0	0
 Gameplay.Environment.BattleBlockingBarrier.BattleBarrierVisual	1	0	0
 Gameplay.Environment.BattleBlockingBarrier.BattleBlockingBarrierManager	2	0	0
 Gameplay.Environment.MCQueen.CeilingMinionSpawner.MCQueen_MinionCeilingSpawner	1	0	0
-Gameplay.Environment.StageManager.InExtremoBanner	2	0	0
+Gameplay.Environment.StageManager.InExtremoBanner	1	0	0
 Gameplay.Magic.Components.Damage.PercentageDamageLimiterComponent	1	0	0
 Gameplay.Magic.Components.Damage.WaterDamageLimiterComponent	1	0	0
 Gameplay.Magic.Components.InExtremo.InExtremoPropComponent	3	0	0
