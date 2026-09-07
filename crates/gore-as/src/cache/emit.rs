@@ -2900,6 +2900,8 @@ fn emit_function_ctor(
         pass_trace("fold_unary_double_chain", &rendered);
         let rendered = fold_widened_call_subtraction(&rendered, f, refs, &declared_locals);
         pass_trace("fold_widened_call_subtraction", &rendered);
+        let rendered = fold_unique_double_property_comparison(&rendered, f, refs);
+        pass_trace("fold_unique_double_property_comparison", &rendered);
         let rendered =
             spell_out_default_temporaries(&rendered, &default_only_construction_counts(f, refs));
         let rendered =
@@ -11932,6 +11934,71 @@ fn spell_out_argument_temporaries(
     out
 }
 
+/// Inline one unique double property directly consumed by a comparison's right side.
+/// Property identity anchors the site; unrelated copied lives of its scratch slot stay named.
+fn fold_unique_double_property_comparison(body: &str, f: &Func, refs: &RefResolver) -> String {
+    let Ok(instrs) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let w = |ins: &super::disasm::Instr, i: usize| ins.words.get(i).map(|v| *v as i16 as i32);
+    let property = |ins: &super::disasm::Instr| {
+        let off = match ins.op.name {
+            "LoadRObjR" | "LoadVObjR" => w(ins, 1)?,
+            "LoadThisR" | "ADDSi" => w(ins, 0)?,
+            _ => return None,
+        };
+        let tid = *ins.dwords.first()? as i32;
+        Some((refs.type_by_id(tid)?, refs.member(tid, off)?))
+    };
+    let mut counts = HashMap::new();
+    let mut name_counts = HashMap::new();
+    for ins in &instrs {
+        if let Some((owner, name)) = property(ins) {
+            *counts.entry((owner, name)).or_insert(0usize) += 1;
+            *name_counts.entry(name).or_insert(0usize) += 1;
+        }
+    }
+    let mut witnesses = HashSet::new();
+    for chain in instrs.windows(3) {
+        if !matches!(chain[0].op.name, "LoadRObjR" | "LoadVObjR")
+            || chain[1].op.name != "RDR8" || chain[2].op.name != "CMPd" { continue; }
+        let Some((owner, name)) = property(&chain[0]) else { continue; };
+        if counts.get(&(owner, name)) != Some(&1) || name_counts.get(name) != Some(&1)
+            || !refs.field_type_by_class(owner, name)
+                .or_else(|| refs.native_field_value_type(owner, name))
+                .is_some_and(|ty| matches!(ty, "float" | "double")) { continue; }
+        let (Some(right), Some(left)) = (w(&chain[1], 0), w(&chain[2], 0)) else { continue; };
+        if left > 0 && right > 0 && left != right && w(&chain[2], 1) == Some(right) {
+            witnesses.insert((left, right, owner, name));
+        }
+    }
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut at = 0;
+    while at + 1 < lines.len() {
+        let replacement = (|| {
+            let (indent, temp, value) = declaration_with_initializer(&lines[at])?;
+            if indent_of(&lines[at + 1]) != indent || count_ident(body, &temp) != 2 { return None; }
+            let (receiver, field) = value.rsplit_once('.')?;
+            if receiver.is_empty() || !receiver.replace("()", "").bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b':')) { return None; }
+            let condition = lines[at + 1].trim().strip_prefix("if (")?.strip_suffix(')')?;
+            let (left, right) = condition.split_once(" > ")?;
+            if right != temp || count_ident(body, field) != 1 { return None; }
+            let slots = (slot_and_life(left)?.0, slot_and_life(&temp)?.0);
+            if !witnesses.iter().any(|(l, r, _, name)| (*l, *r) == slots && *name == field) { return None; }
+            for name in [left, temp.as_str()] {
+                if !declared_type(&lines, name).is_some_and(|ty| matches!(ty.as_str(), "float" | "double")) {
+                    return None;
+                }
+            }
+            Some(format!("{indent}if ({left} > {value})"))
+        })();
+        if let Some(line) = replacement { lines.splice(at..at + 2, [line]); }
+        else { at += 1; }
+    }
+    let mut out = lines.join("\n");
+    if body.ends_with('\n') { out.push('\n'); }
+    out
+}
+
 /// A native float32 call widened once for an immediate in-place double subtraction.
 /// Keep the accumulator named; its other reads and earlier lives do not become candidates.
 fn fold_widened_call_subtraction(body: &str, f: &Func, refs: &RefResolver,
@@ -13161,10 +13228,11 @@ fn destroyed_fstring_operator_receivers(
             if slot > 0 { uses.entry(slot).or_default().push(at); }
         }
     }
-    let is_add = |at: usize| {
+    let is_add = |at: usize, producer: bool| {
         let Some(ins) = instrs.get(at).filter(|i| i.op.name == "CALLSYS") else { return false; };
         let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
-        if refs.func_by_ptr(ptr) != Some("opAdd") || !refs.is_method_by_ptr(ptr)
+        let reverse = refs.func_by_ptr(ptr) == Some("opAdd_r");
+        if !(refs.func_by_ptr(ptr) == Some("opAdd") || (producer && reverse)) || !refs.is_method_by_ptr(ptr)
             || refs.func_owner_by_ptr(ptr) != Some("FString")
         { return false; }
         let (Some(params), Some(ret)) = (refs.func_params_by_ptr(ptr), refs.func_ret_by_ptr(ptr))
@@ -13173,7 +13241,8 @@ fn destroyed_fstring_operator_receivers(
         arg.token == 5 && arg.is_reference && !arg.is_object_handle
             && (arg.is_object_const || arg.is_read_only)
             && ret.token == 5 && !ret.is_reference && !ret.is_object_handle
-            && arg.type_info == ret.type_info && refs.type_by_ptr(ret.type_info) == Some("FString")
+            && refs.type_by_ptr(ret.type_info) == Some("FString")
+            && ((!reverse && arg.type_info == ret.type_info) || refs.type_by_ptr(arg.type_info) == Some("FName"))
     };
     let mut out = HashSet::new();
     for (slot, positions) in uses {
@@ -13181,11 +13250,18 @@ fn destroyed_fstring_operator_receivers(
         let (producer, consumer) = (destination + 2, receiver + 1);
         if *destination == 0 || producer >= *receiver || *release != consumer + 1
             || !produced.get(&slot).is_some_and(|p| p.len() == 1 && p.contains(&producer))
-            || !consumed.contains(&(slot, consumer)) || !is_add(producer) || !is_add(consumer)
+            || !consumed.contains(&(slot, consumer)) || !is_add(producer, true) || !is_add(consumer, false)
             || epochs[producer] != epochs[consumer]
         { continue; }
-        // Both binary method frames are exactly PSF argument; PSF out; PSF receiver.
-        if ![destination - 1, *destination, destination + 1,
+        // The producer may use a proven literal FString receiver for reverse FName addition.
+        let producer_receiver = &instrs[destination + 1];
+        let producer_ptr = instrs[producer].qwords.first().copied().unwrap_or(0) as i64;
+        if producer_receiver.op.name != "PSF"
+            && !(producer_receiver.op.name == "PGA" && refs.func_by_ptr(producer_ptr) == Some("opAdd_r")
+                && producer_receiver.qwords.first().is_some_and(|p| refs.global_is_string(*p as i64)))
+        { continue; }
+        // All argument, destination, consumer-receiver and cleanup addresses remain exact PSFs.
+        if ![destination - 1, *destination,
               receiver.saturating_sub(2), receiver.saturating_sub(1), *receiver, *release]
             .iter().all(|at| instrs.get(*at).is_some_and(|i| i.op.name == "PSF"))
         { continue; }
@@ -24802,6 +24878,75 @@ mod member_arithmetic_lifetime_tests {
         let mut overwritten = super::disassemble(&f.bytecode).unwrap();
         overwritten.insert(4, super::disassemble(&function(&[("STOREOBJ", &[10])]).bytecode).unwrap().remove(0));
         assert!(!super::guarded_copied_receiver(&overwritten, 7));
+    }
+
+    #[test]
+    fn unique_double_property_comparison_ignores_another_copied_slot_life() {
+        let mut refs = RefResolver::from_test_member_chain(&[("UAI", "Threshold"), ("UAI", "Sensed")]);
+        refs.set_class_fields(HashMap::from([("UAI".into(),
+            HashMap::from([("Threshold".into(), "float".into()), ("Sensed".into(), "float".into())]))]));
+        let mut f = function(&[
+            ("LoadRObjR", &[6, 0]), ("RDR8", &[22]), ("CpyVtoV8", &[30, 22]),
+            ("LoadRObjR", &[12, 0]), ("RDR8", &[22]), ("CMPd", &[18, 22]),
+        ]);
+        let code = super::disassemble(&f.bytecode).unwrap();
+        for (at, tid) in [(0, 2), (3, 1)] {
+            let i = &code[at];
+            f.bytecode[i.offset_dw + i.op.size_dwords as usize - 1] = tid;
+        }
+        let body = concat!("    float local_18 = Distance();\n",
+            "    float local_22 = local_6.Sensed;\n    float local_30 = local_22;\n",
+            "    float local_22_2 = this.GetAI().Threshold;\n    if (local_18 > local_22_2)\n",
+            "    {\n        return;\n    }\n");
+        let expected = body.replace("    float local_22_2 = this.GetAI().Threshold;\n", "")
+            .replace("if (local_18 > local_22_2)", "if (local_18 > this.GetAI().Threshold)");
+        assert_eq!(super::fold_unique_double_property_comparison(body, &f, &refs), expected);
+        for other in [body.replace(" > local_22_2", " < local_22_2"),
+            body.replace("if (local_18 >", "if (ReadDistance() >"),
+            body.replace("if (local_18 >", "if (local_30 >"),
+            body.to_owned() + "    Observe(this.GetAI().Threshold);\n",
+            body.to_owned() + "    Observe(local_22_2);\n",
+            body.replace("    if (local_18 >", "    Observe();\n    if (local_18 >")] {
+            assert_eq!(super::fold_unique_double_property_comparison(&other, &f, &refs), other);
+        }
+        let mut repeated = f.clone();
+        let first = &code[0];
+        repeated.bytecode[first.offset_dw + first.op.size_dwords as usize - 1] = 1;
+        assert_eq!(super::fold_unique_double_property_comparison(body, &repeated, &refs), body);
+        refs.set_class_fields(HashMap::from([("UAI".into(),
+            HashMap::from([("Threshold".into(), "float32".into())]))]));
+        assert_eq!(super::fold_unique_double_property_comparison(body, &f, &refs), body);
+    }
+
+    #[test]
+    fn fname_add_receiver_accepts_only_a_verified_global_string_and_one_life() {
+        let mut f = function(&[
+            ("PSF", &[8]), ("PSF", &[12]), ("PGA", &[]), ("CALLSYS", &[]),
+            ("PSF", &[8]), ("PshVPtr", &[4]), ("CALLSYS", &[]),
+            ("PSF", &[8]), ("PSF", &[16]), ("PSF", &[12]), ("CALLSYS", &[]),
+            ("PSF", &[12]), ("CALLSYS", &[]),
+        ]);
+        let code = super::disassemble(&f.bytecode).unwrap();
+        for (at, pointer) in [(2, 100), (3, 1), (6, 4), (10, 2), (12, 3)] {
+            f.bytecode[code[at].offset_dw + 1] = pointer;
+        }
+        let producers = [(12, 3), (8, 6), (16, 10)];
+        let consumers = [(12, 10)];
+        let refs = RefResolver::from_test_fname_string_operators(true, "FName");
+        assert_eq!(super::destroyed_fstring_operator_receivers(&f, &refs, &producers, &consumers),
+            HashSet::from([12]));
+        for other in [RefResolver::from_test_fname_string_operators(false, "FName"),
+            RefResolver::from_test_fname_string_operators(true, "FVector"),
+            RefResolver::from_test_fname_string_operators(true, "FString")] {
+            assert!(super::destroyed_fstring_operator_receivers(&f, &other, &producers, &consumers).is_empty());
+        }
+        // An unrelated second address use is a second physical life, even after cleanup.
+        let mut reused = f.clone();
+        reused.bytecode.extend(function(&[("PSF", &[12])]).bytecode);
+        assert!(super::destroyed_fstring_operator_receivers(&reused, &refs, &producers, &consumers).is_empty());
+        let mut backwards_consumer = f.clone();
+        backwards_consumer.bytecode[code[10].offset_dw + 1] = 1;
+        assert!(super::destroyed_fstring_operator_receivers(&backwards_consumer, &refs, &producers, &consumers).is_empty());
     }
 
     fn function(ops: &[(&str, &[u16])]) -> Func {

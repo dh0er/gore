@@ -1537,6 +1537,29 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_fname_string_operators(string_literal: bool, arg_type: &str) -> Self {
+        let mut r = Self::default();
+        r.type_by_ptr.insert(101, "FString".into());
+        r.type_by_ptr.insert(102, arg_type.into());
+        for (ptr, name) in [(1, "opAdd_r"), (2, "opAdd"), (3, "$beh2")] {
+            r.func_by_ptr.insert(ptr, name.into());
+            r.func_is_method.insert(ptr);
+            r.func_owner.insert(ptr, "FString".into());
+        }
+        for ptr in [1, 2] {
+            r.func_params.insert(ptr, vec![DataType { token: 5, type_info: 102,
+                is_reference: true, is_object_const: true, ..Default::default() }]);
+            r.func_ret.insert(ptr, DataType { token: 5, type_info: 101, ..Default::default() });
+        }
+        r.func_by_ptr.insert(4, "GetName".into());
+        r.func_params.insert(4, Vec::new());
+        r.func_ret.insert(4, DataType { token: 5, type_info: 102, ..Default::default() });
+        r.global_by_ptr.insert(100, "prefix".into());
+        if string_literal { r.global_is_string.insert(100); }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_const_native_store(owner: &str, field: &str, value: &str) -> Self {
         let mut r = Self::from_test_member_chain(&[(owner, field), (value, "")]);
         r.func_by_ptr.insert(3, "Make".into());

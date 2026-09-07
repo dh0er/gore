@@ -32,7 +32,7 @@ AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingResponse	2	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	24	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.TheftEvaluationContext	1	0	0
-AI.AssessmentResponseSystem.EventResponses	9	0	0
+AI.AssessmentResponseSystem.EventResponses	8	0	0
 AI.CharacterAI_Gothic	6	0	0
 AI.CharacterAI_Human	1	0	0
 AI.CharacterAI_Orc	2	0	0
