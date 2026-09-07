@@ -36,7 +36,7 @@ AI.AssessmentResponseSystem.EventResponses	9	0	0
 AI.CharacterAI_Gothic	6	0	0
 AI.CharacterAI_Human	1	0	0
 AI.CharacterAI_Orc	2	0	0
-AI.DailyRoutines.DailyRoutines_OG	2	0	0
+AI.DailyRoutines.DailyRoutines_OG	1	0	0
 AI.Interactions.AbilityTask_Interaction_Human	1	0	0
 AI.NativeAICommands	6	0	0
 AI.Relationship.PersonalRelationshipModifiers	3	0	0
@@ -161,7 +161,7 @@ GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Sleep.GA_SleepDebuff
 GAS.Effects.Debuffs.EffectStateComponent.DebuffEffectActors.SlowdownDebuffEffectActor	1	0	0
 GAS.Effects.Tests.Effect_GiveExperience	1	0	0
 GAS.GASCharacterMixins	6	0	0
-GAS.GASCharacterStateMixins	13	0	0
+GAS.GASCharacterStateMixins	12	0	0
 GAS.PerceptionEventMixins	1	0	0
 Gameplay.Environment.BattleBlockingBarrier.BattleBarrierVisual	1	0	0
 Gameplay.Environment.BattleBlockingBarrier.BattleBlockingBarrierManager	2	0	0

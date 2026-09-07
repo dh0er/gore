@@ -2898,6 +2898,8 @@ fn emit_function_ctor(
         pass_trace("fold_widening_aliases", &rendered);
         let rendered = fold_unary_double_chain(&rendered, f, refs);
         pass_trace("fold_unary_double_chain", &rendered);
+        let rendered = fold_widened_call_subtraction(&rendered, f, refs, &declared_locals);
+        pass_trace("fold_widened_call_subtraction", &rendered);
         let rendered =
             spell_out_default_temporaries(&rendered, &default_only_construction_counts(f, refs));
         let rendered =
@@ -5332,7 +5334,8 @@ fn released_handle_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
                 return false;
             }
             let receiver = &instrs[k - 1];
-            return receiver.op.name == "PshVPtr" && w0(receiver) == slot;
+            return receiver.op.name == "PshVPtr" && w0(receiver) == slot
+                && !guarded_copied_receiver(&instrs, at);
         }
         false
     };
@@ -5356,6 +5359,31 @@ fn released_handle_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
         }
     }
     out
+}
+
+/// A captured handle tested before its sole receiver call survives both guard paths.
+/// The null branch jumps directly to its release: this is a declared block local,
+/// even when the last statement in the non-null branch happens to use it as receiver.
+fn guarded_copied_receiver(code: &[Instr], release: usize) -> bool {
+    let word = |i: &Instr| i.words.first().map(|v| *v as i16 as i32);
+    let Some(slot) = code.get(release).and_then(word).filter(|s| *s > 0) else { return false; };
+    let Some(copy) = code[..release].iter().rposition(|i|
+        i.op.name == "RefCpyV" && word(i) == Some(slot)) else { return false; };
+    if copy + 4 >= release || code[copy + 1].op.name != "CmpPtrNull"
+        || word(&code[copy + 1]) != Some(slot) || code[copy + 2].op.name != "JZ"
+    { return false; }
+    let guard = &code[copy + 2];
+    if !guard.dwords.first().is_some_and(|jump|
+        guard.offset_dw as i64 + 2 + (*jump as i32 as i64) == code[release].offset_dw as i64)
+        || code[copy + 3..release].iter().any(|i|
+            i.op.name.starts_with('J') || matches!(i.op.name, "RET" | "SUSPEND"))
+    { return false; }
+    let uses: Vec<usize> = (copy..=release).filter(|at|
+        super::bytediff::addressed_slots(&code[*at]).contains(&slot)).collect();
+    uses == [copy, copy + 1, release - 2, release]
+        && code[release - 2].op.name == "PshVPtr"
+        && code[release - 1].op.is_call()
+        && code[release].op.name == "FreeNullV8"
 }
 
 /// Protect every recognized Proceed result, including borrowed elements and reused
@@ -11901,6 +11929,72 @@ fn spell_out_argument_temporaries(
     if text.ends_with('\n') {
         out.push('\n');
     }
+    out
+}
+
+/// A native float32 call widened once for an immediate in-place double subtraction.
+/// Keep the accumulator named; its other reads and earlier lives do not become candidates.
+fn fold_widened_call_subtraction(body: &str, f: &Func, refs: &RefResolver,
+    locals: &BTreeMap<i32, String>) -> String {
+    let Ok(instrs) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let w = |ins: &super::disasm::Instr, i: usize| ins.words.get(i)
+        .map(|v| *v as i16 as i32).unwrap_or(0);
+    let mut calls = HashMap::new();
+    for ins in &instrs {
+        let name = match ins.op.name {
+            "CALLSYS" | "Thiscall1" => ins.qwords.first().and_then(|p| refs.func_by_ptr(*p as i64)),
+            "CALL" | "CALLINTF" | "CALLBND" => ins.dwords.first().and_then(|p| refs.func_by_id(*p as i32)),
+            _ => None,
+        };
+        if let Some(name) = name { *calls.entry(name).or_insert(0usize) += 1; }
+    }
+    let mut witnesses = HashSet::new();
+    for chain in instrs.windows(5) {
+        if !chain.iter().map(|i| i.op.name).eq(["CALLSYS", "CpyRtoV4", "fTOd", "SUBd", "SetV8"]) {
+            continue;
+        }
+        let Some(ptr) = chain[0].qwords.first().map(|p| *p as i64) else { continue; };
+        let Some(name) = refs.func_by_ptr(ptr) else { continue; };
+        if calls.get(name) != Some(&1) || !refs.func_ret_by_ptr(ptr).is_some_and(|t|
+            t.token == 0x50 && !t.is_reference && !t.is_object_handle) { continue; }
+        let (narrow, wide, output) = (w(&chain[1], 0), w(&chain[2], 0), w(&chain[3], 0));
+        if narrow <= 0 || wide <= 0 || output <= 0 || narrow == wide || wide == output || narrow == output
+            || w(&chain[2], 1) != narrow || w(&chain[3], 1) != output
+            || w(&chain[3], 2) != wide || w(&chain[4], 0) != wide { continue; }
+        // The immediate overwrite ends precisely this widening life, even when the slot was reused.
+        witnesses.insert((output, wide, name.to_owned()));
+    }
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut at = 0;
+    while at + 2 < lines.len() {
+        let replacement = (|| {
+            let (indent, output, init) = declaration_with_initializer(&lines[at])?;
+            let (next_indent, wide, call) = declaration_with_initializer(&lines[at + 1])?;
+            if next_indent != indent || indent_of(&lines[at + 2]) != indent
+                || !init.contains('.') || !init.bytes().all(|b| b.is_ascii_alphanumeric()
+                    || matches!(b, b'_' | b'.' | b':')) { return None; }
+            let head = call.strip_suffix("()")?;
+            if !head.contains('.') || !head.bytes().all(|b| b.is_ascii_alphanumeric()
+                || matches!(b, b'_' | b'.' | b':')) { return None; }
+            let callee = outer_callee(&call)?;
+            if !witnesses.contains(&(slot_and_life(&output)?.0, slot_and_life(&wide)?.0, callee.clone()))
+                || count_ident(body, &callee) != 1 || count_ident(body, &wide) != 2
+                || lines[at + 2].trim() != format!("{output} = {output} - {wide};") { return None; }
+            for name in [&output, &wide] {
+                if !declared_type(&lines, name).is_some_and(|ty| matches!(ty.as_str(), "float" | "double")) {
+                    return None;
+                }
+            }
+            // Explicit widening preserves fTOd; the existing merger retains the declaration.
+            let pair = format!("{}\n{indent}{output} = {output} - float({call});", lines[at]);
+            let merged = merge_self_assignments(&pair, locals);
+            (merged.lines().count() == 1).then_some(merged)
+        })();
+        if let Some(line) = replacement { lines.splice(at..at + 3, [line]); }
+        else { at += 1; }
+    }
+    let mut out = lines.join("\n");
+    if body.ends_with('\n') { out.push('\n'); }
     out
 }
 
@@ -24658,6 +24752,56 @@ mod member_arithmetic_lifetime_tests {
         let at = super::disassemble(&f.bytecode).unwrap()[3].offset_dw;
         f.bytecode[at + 1] = 1; // Actual work separates the result from its destructor.
         assert!(super::short_rvo_lifetimes(&f, &refs, &[(10, 1)], &[]).1.is_empty());
+    }
+
+    #[test]
+    fn widened_native_subtraction_keeps_accumulator_and_ignores_earlier_slot_life() {
+        let mut f = function(&[
+            ("RDR8", &[16]), ("CpyVtoV8", &[14, 16]),
+            ("CALLSYS", &[]), ("CpyRtoV4", &[23]), ("fTOd", &[16, 23]),
+            ("SUBd", &[8, 8, 16]), ("SetV8", &[16]), ("CMPd", &[8, 16]),
+            ("ADDd", &[18, 14, 8]),
+        ]);
+        let offset = super::disassemble(&f.bytecode).unwrap()[2].offset_dw;
+        f.bytecode[offset + 1] = 1;
+        let refs = RefResolver::from_test_pointer_comparison_call(DataType { token: 0x50, ..Default::default() });
+        let source = "    float local_14 = PreviousField;\n    float local_8 = local_20.Grace;\n    float local_16 = local_20.Start.GetPawn();\n    local_8 = local_8 - local_16;\n    if (local_8 > 0.0) Use(local_8);\n";
+        let expected = "    float local_14 = PreviousField;\n    float local_8 = local_20.Grace - float(local_20.Start.GetPawn());\n    if (local_8 > 0.0) Use(local_8);\n";
+        let locals = std::collections::BTreeMap::from([(8, "float".into()), (16, "float".into()), (20, "UValueSet".into())]);
+        assert_eq!(super::fold_widened_call_subtraction(source, &f, &refs, &locals), expected);
+        let suffixed = source.replace("local_16", "local_16_2");
+        assert_eq!(super::fold_widened_call_subtraction(&suffixed, &f, &refs, &locals), expected);
+        let wrong_ret = RefResolver::from_test_pointer_comparison_call(DataType { token: 0x51, ..Default::default() });
+        assert_eq!(super::fold_widened_call_subtraction(source, &f, &wrong_ret, &locals), source);
+        for other in [source.replace("GetPawn", "Other"), source.replace(" - local_16", " + local_16"),
+            source.to_owned() + "    Use(local_16);\n",
+            source.replace("    local_8 = local_8 -", "    Observe();\n    local_8 = local_8 -")] {
+            assert_eq!(super::fold_widened_call_subtraction(&other, &f, &refs, &locals), other);
+        }
+        let end = super::disassemble(&f.bytecode).unwrap()[6].offset_dw;
+        f.bytecode[end] = (f.bytecode[end] & 0xffff) | (18 << 16);
+        assert_eq!(super::fold_widened_call_subtraction(source, &f, &refs, &locals), source);
+    }
+
+    #[test]
+    fn copied_guarded_receiver_is_a_released_local() {
+        let refs = RefResolver::from_test_short_value_lifetimes(true, true, false);
+        let mut f = function(&[("PshVPtr", &[2]), ("RefCpyV", &[10]),
+            ("CmpPtrNull", &[10]), ("JZ", &[]), ("PshVPtr", &[10]),
+            ("CALLSYS", &[]), ("FreeNullV8", &[10]), ("RET", &[0])]);
+        let code = super::disassemble(&f.bytecode).unwrap();
+        f.bytecode[code[3].offset_dw + 1] = (code[6].offset_dw - code[3].offset_dw - 2) as i32;
+        f.bytecode[code[5].offset_dw + 1] = 1;
+        assert_eq!(super::released_handle_slots(&f, &refs), HashSet::from([10]));
+        let mut wrong_exit = f.clone();
+        wrong_exit.bytecode[code[3].offset_dw + 1] += 1;
+        assert!(!super::released_handle_slots(&wrong_exit, &refs).contains(&10));
+        let mut wrong_guard = super::disassemble(&f.bytecode).unwrap();
+        wrong_guard[2].words[0] = 12;
+        assert!(!super::guarded_copied_receiver(&wrong_guard, 6));
+        let mut overwritten = super::disassemble(&f.bytecode).unwrap();
+        overwritten.insert(4, super::disassemble(&function(&[("STOREOBJ", &[10])]).bytecode).unwrap().remove(0));
+        assert!(!super::guarded_copied_receiver(&overwritten, 7));
     }
 
     fn function(ops: &[(&str, &[u16])]) -> Func {
