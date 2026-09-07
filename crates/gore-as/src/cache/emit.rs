@@ -1238,6 +1238,7 @@ fn emit_function_ctor(
     let named_iterated = named_iterated_containers(f, refs);
     hoisted.extend(named_iterated.iter().copied());
     let spilled = spilled_boolean_names(f, refs);
+    let retained_bool_branches = named_bool_literal_branches(f);
     let named_arithmetic = named_arithmetic_slots(f);
     let named_sites = named_value_sites(f, refs);
     // How often each slot is default-constructed: more than once and the source spelled the
@@ -1569,7 +1570,7 @@ fn emit_function_ctor(
     // the arguments and in another order.
     let rvo_producers = super::structure::take_rvo_producers();
     let rvo_consumers = super::structure::take_rvo_consumers();
-    let (const_value_arguments, discarded_value_calls) =
+    let (const_value_arguments, discarded_value_calls, operator_value_arguments) =
         short_rvo_lifetimes(f, refs, &rvo_producers, &rvo_consumers);
     let retained_values = retained_value_arguments(f, &fc, refs, &rvo_producers, &rvo_consumers);
     hoisted.extend(retained_values.iter().copied());
@@ -1847,6 +1848,7 @@ fn emit_function_ctor(
         fields,
         &HashMap::new(),
         class_name,
+        &retained_bool_branches,
     );
     pass_trace("fold_short_circuits", &body);
     let body = join_short_circuit_chains(&body);
@@ -2668,6 +2670,7 @@ fn emit_function_ctor(
             fields,
             &path_roots,
             class_name,
+            &retained_bool_branches,
         );
         pass_trace("fold_short_circuits", &rendered);
         let rendered = join_short_circuit_chains(&rendered);
@@ -2722,6 +2725,7 @@ fn emit_function_ctor(
             fields,
             &path_roots,
             class_name,
+            &retained_bool_branches,
         );
         pass_trace("fold_short_circuits#late", &rendered);
         let rendered = join_short_circuit_chains(&rendered);
@@ -2772,6 +2776,7 @@ fn emit_function_ctor(
                 .copied()
                 .chain(pushed_bool_literal_defs(f, &rendered))
                 .chain(rvo_temporaries.iter().copied().map(|slot| (slot, 1)))
+                .chain(operator_value_arguments.iter().copied().map(|slot| (slot, 1)))
                 .chain(
                     fused_short_circuit_carriers(f)
                         .into_iter()
@@ -2831,6 +2836,7 @@ fn emit_function_ctor(
                 .copied()
                 .chain(pushed_bool_literal_defs(f, &rendered))
                 .chain(rvo_temporaries.iter().copied().map(|slot| (slot, 1)))
+                .chain(operator_value_arguments.iter().copied().map(|slot| (slot, 1)))
                 .chain(
                     fused_short_circuit_carriers(f)
                         .into_iter()
@@ -2994,6 +3000,8 @@ fn emit_function_ctor(
         pass_trace("restore_named_integer_comparison_return", &rendered);
         let rendered = fold_terminal_bool_literal_return(&rendered, f);
         pass_trace("fold_terminal_bool_literal_return", &rendered);
+        let rendered = restore_terminal_bool_return_scope(&rendered, f, refs);
+        pass_trace("restore_terminal_bool_return_scope", &rendered);
         let rendered = expand_if_false_markers(&rendered);
         let rendered = unwrap_fstring_literal_declarations(&rendered);
         pass_trace("unwrap_fstring_literal_declarations", &rendered);
@@ -7829,6 +7837,54 @@ fn rewrite_no_assign_locals(body: &str, locals: &BTreeMap<i32, String>) -> (Stri
         suppressed.insert(*slot);
     }
     (out, suppressed)
+}
+
+/// A direct bool call followed by an explicit jump to the sole RET came from
+/// a nested return scope. Keep that scope without moving the receiver's declaration.
+fn restore_terminal_bool_return_scope(body: &str, f: &Func, refs: &RefResolver) -> String {
+    let rewrite = (|| {
+        if f.ret.token != 0x41 || f.ret.is_reference { return None; }
+        let code = disassemble(&f.bytecode).ok()?;
+        let start = code.len().checked_sub(5)?;
+        let tail = &code[start..];
+        if tail[1..].iter().map(|i| i.op.name).ne(["CpyRtoV4", "CpyVtoR4", "JMP", "RET"])
+            || tail[1].words.first() != tail[2].words.first()
+            || tail[3].dwords.first() != Some(&0)
+            || code.iter().filter(|i| i.op.name == "RET").count() != 1 { return None; }
+        let slot = *tail[1].words.first()? as i16 as i32;
+        if slot <= 0 || code.iter().enumerate().filter(|(_, i)|
+            super::bytediff::addressed_slots(i).contains(&slot)).map(|(i, _)| i)
+                .ne([start + 1, start + 2])
+            || code.iter().enumerate().any(|(at, i)| i.op.name == "JMPP"
+                || (i.op.name.starts_with('J') && at != start + 3 && i.dwords.first().is_some_and(|v|
+                    i.offset_dw as i64 + 2 + *v as i32 as i64 > tail[0].offset_dw as i64)))
+            { return None; }
+        let (ret, callee) = match tail[0].op.name {
+            "CALLSYS" => {
+                let ptr = *tail[0].qwords.first()? as i64;
+                (refs.func_ret_by_ptr(ptr)?, refs.func_by_ptr(ptr)?)
+            }
+            "CALL" | "CALLINTF" => {
+                let id = *tail[0].dwords.first()? as i32;
+                (refs.func_ret_by_id(id)?, refs.func_by_id(id)?)
+            }
+            _ => return None,
+        };
+        if ret.token != 0x41 || ret.is_reference { return None; }
+        let mut lines: Vec<_> = body.trim_end().lines().collect();
+        let last = *lines.last()?;
+        let value = last.trim().strip_prefix("return ")?.strip_suffix(';')?;
+        if outermost_callee(value) != Some(callee)
+            || lines.iter().filter(|l| l.trim().starts_with("return ")).count() != 1
+            || lines[..lines.len() - 1].iter().map(|l| brace_net(l)).sum::<i32>() != 0 { return None; }
+        lines.pop();
+        let mut out = lines.join("\n");
+        if !out.is_empty() { out.push('\n'); }
+        let ind = indent_of(last);
+        out.push_str(&format!("{ind}{{\n{ind}    return {value};\n{ind}}}\n"));
+        Some(out)
+    })();
+    rewrite.unwrap_or_else(|| body.to_owned())
 }
 
 /// A terminal SetV1 feeds the return register directly. A late split-slot
@@ -13702,10 +13758,11 @@ fn destroyed_fstring_operator_receivers(
 /// addresses; these facts do not apply to another life or a same-named overload.
 fn short_rvo_lifetimes(
     f: &Func, refs: &RefResolver, producers: &[(i32, usize)], consumers: &[(i32, usize)],
-) -> (HashSet<i32>, HashSet<(i32, String)>) {
+) -> (HashSet<i32>, HashSet<(i32, String)>, HashSet<i32>) {
     let mut arguments = HashSet::new();
     let mut discarded = HashSet::new();
-    let Ok(code) = disassemble(&f.bytecode) else { return (arguments, discarded); };
+    let mut operators = HashSet::new();
+    let Ok(code) = disassemble(&f.bytecode) else { return (arguments, discarded, operators); };
     let w = |i: &Instr| i.words.first().copied().unwrap_or(0) as i16 as i32;
     let mut uses: HashMap<i32, Vec<usize>> = HashMap::new();
     let mut made: HashMap<i32, HashSet<usize>> = HashMap::new();
@@ -13751,6 +13808,15 @@ fn short_rvo_lifetimes(
         }
         let argument = positions[1];
         let consumer = argument + 3;
+        // An outer argument is already pushed before this operator's operands.
+        // The ordinary call-only inliner cannot move the resulting `(Call() - X)`.
+        if read.get(&slot).is_some_and(|s| s.len() == 1 && s.contains(&consumer))
+            && operator_rvo_argument(f, refs, &code, slot, producer, argument, release)
+        {
+            arguments.insert(slot);
+            operators.insert(slot);
+            continue;
+        }
         if argument != producer + 1 || release != consumer + 1
             || !read.get(&slot).is_some_and(|s| s.len() == 1 && s.contains(&consumer))
             || code.get(argument + 1).is_none_or(|i| i.op.name != "PSF" || w(i) <= 0 || w(i) == slot)
@@ -13771,7 +13837,59 @@ fn short_rvo_lifetimes(
             && producers.contains(&(w(&code[argument + 1]), consumer))
         { arguments.insert(slot); }
     }
-    (arguments, discarded)
+    (arguments, discarded, operators)
+}
+
+/// One const operator result passed as the third argument of a terminal bool
+/// call. The caller already pushed its last argument; only operand cleanups may
+/// separate the operator and its sole argument use. The enclosing RVO scan proves
+/// one producer and exactly the destination, argument, and destructor addresses.
+fn operator_rvo_argument(
+    f: &Func, refs: &RefResolver, code: &[Instr], slot: i32,
+    producer: usize, argument: usize, release: usize,
+) -> bool {
+    (|| {
+        let w = |i: &Instr| i.words.first().copied().unwrap_or(0) as i16 as i32;
+        let ptr = |i: &Instr| i.qwords.first().copied().unwrap_or(0) as i64;
+        let call = code.get(producer)?;
+        if call.op.name != "CALLSYS" || refs.func_by_ptr(ptr(call)) != Some("opSub")
+            || !refs.is_method_by_ptr(ptr(call)) || !refs.is_const_method_by_ptr(ptr(call))
+            || producer < 3 || code[producer - 2].op.name != "PSF" || w(&code[producer - 2]) != slot
+            || code[producer - 1].op.name != "PSF" || w(&code[producer - 1]) == slot
+            || code.first()?.op.name != "PshVPtr" || w(&code[0]) >= 0
+            || code.iter().any(|i| i.op.name.starts_with('J')) { return None; }
+        let ret = refs.func_ret_by_ptr(ptr(call))?;
+        let ty = refs.type_by_ptr(ret.type_info)?;
+        let const_value = |p: &super::types::DataType| p.token == 5 && !p.is_object_handle
+            && p.is_reference && (p.is_object_const || p.is_read_only);
+        let [operand] = refs.func_params_by_ptr(ptr(call))? else { return None; };
+        if !const_value(operand) || operand.type_info != ret.type_info
+            || refs.func_owner_by_ptr(ptr(call)) != Some(ty)
+            || f.obj_locals.iter().filter(|(s, _)| *s == slot).map(|(_, t)| *t).ne([ret.type_info])
+            || f.obj_locals.iter().filter(|(s, _)| *s == w(&code[producer - 1]))
+                .map(|(_, t)| *t).ne([ret.type_info]) { return None; }
+        let mut at = producer + 1;
+        while at < argument {
+            let dtor = code.get(at + 1)?;
+            if code[at].op.name != "PSF" || dtor.op.name != "CALLSYS"
+                || refs.func_by_ptr(ptr(dtor)) != Some("$beh2") { return None; }
+            at += 2;
+        }
+        if at != argument || release != argument + 5 || code.len() != argument + 9
+            || code[argument..].iter().map(|i| i.op.name).ne(["PSF", "PshVPtr", "PshVPtr",
+                "CALL", "CpyRtoV4", "PSF", "CALLSYS", "CpyVtoR4", "RET"])
+            || w(&code[argument + 1]) > 0 || w(&code[argument + 2]) > 0
+            || w(&code[argument + 4]) <= 0
+            || w(&code[argument + 4]) != w(&code[argument + 7]) { return None; }
+        let id = *code[argument + 3].dwords.first()? as i32;
+        let [first, second, value, last] = refs.func_params_by_id(id)? else { return None; };
+        if refs.is_method_by_id(id) || !const_value(value) || value.type_info != ret.type_info
+            || !const_value(second) || !first.is_object_handle || first.is_reference
+            || !last.is_object_handle || last.is_reference
+            || refs.func_ret_by_id(id).is_none_or(|r| r.token != 0x41 || r.is_reference)
+            || f.ret.token != 0x41 || f.ret.is_reference { return None; }
+        Some(())
+    })().is_some()
 }
 
 /// Cleanup of the void call's own full expression, before another statement starts.
@@ -17337,6 +17455,38 @@ fn logical_carrier_type<'a>(
     declared.or_else(|| is_local_ident(name).then(|| temporary_type(locals, name)).flatten())
 }
 
+/// A bool initialized by a literal copy and assigned through both terminal arms
+/// is a named variable. Its complete four-use life must survive short-circuit folding.
+fn named_bool_literal_branches(f: &Func) -> HashSet<i32> {
+    let witness = (|| {
+        if f.ret.token != 0x41 || f.ret.is_reference { return None; }
+        let code = disassemble(&f.bytecode).ok()?;
+        let start = code.len().checked_sub(9).filter(|n| *n >= 2)?;
+        let tail = &code[start..];
+        if code[0].op.name != "SetV1" || code[1].op.name != "CpyVtoV4"
+            || tail.iter().map(|i| i.op.name).ne(["CpyVtoR1", "JLowZ", "SetV1", "CpyVtoV4",
+                "JMP", "SetV1", "CpyVtoV4", "CpyVtoR4", "RET"]) { return None; }
+        let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+        let slot = w(&code[1], 0).filter(|s| *s > 0)?;
+        if !matches!(code[0].dwords.first(), Some(0 | 1))
+            || tail[2].dwords.first() != Some(&1) || tail[5].dwords.first() != Some(&0)
+            || w(&code[0], 0) != w(&code[1], 1)
+            || w(&tail[2], 0) != w(&tail[3], 1) || w(&tail[5], 0) != w(&tail[6], 1)
+            || [3, 6, 7].iter().any(|i| w(&tail[*i], 0) != Some(slot))
+            || code.iter().enumerate().filter(|(_, i)|
+                super::bytediff::addressed_slots(i).contains(&slot)).map(|(i, _)| i)
+                .ne([1, start + 3, start + 6, start + 7]) { return None; }
+        let jump = |i: &Instr| i.dwords.first().map(|v| i.offset_dw as i64 + 2 + *v as i32 as i64);
+        if jump(&tail[1]) != Some(tail[5].offset_dw as i64)
+            || jump(&tail[4]) != Some(tail[7].offset_dw as i64)
+            || code.iter().enumerate().any(|(at, i)| i.op.name == "JMPP"
+                || (i.op.name.starts_with('J') && at != start + 1 && at != start + 4
+                    && jump(i).is_some_and(|t| t > tail[0].offset_dw as i64))) { return None; }
+        Some(slot)
+    })();
+    witness.into_iter().collect()
+}
+
 /// AngelScript's `&&` and `||` do not evaluate their right side when the left already decides the
 /// answer, and the compiler lowers that to a branch that writes the deciding CONSTANT straight
 /// into the expression's result slot — a 4-byte store for `&&`'s `false`, a 1-byte one for
@@ -17360,6 +17510,7 @@ fn fold_short_circuits(
     fields: Option<&HashMap<String, String>>,
     roots: &HashMap<String, String>,
     class_name: Option<&str>,
+    retained_bool_branches: &HashSet<i32>,
 ) -> String {
     let lines: Vec<&str> = body.lines().collect();
     let mut kept: Vec<String> = Vec::new();
@@ -17368,9 +17519,13 @@ fn fold_short_circuits(
         if let Some((folded, after)) =
             short_circuit(&lines, at, locals, refs, fields, roots, class_name)
         {
-            kept.push(folded);
-            at = after;
-            continue;
+            let named_branch = slot_store_any(&folded).and_then(|(name, _)| slot_and_life(&name))
+                .is_some_and(|(slot, _)| retained_bool_branches.contains(&slot));
+            if !named_branch {
+                kept.push(folded);
+                at = after;
+                continue;
+            }
         }
         kept.push(lines[at].to_string());
         at += 1;
@@ -25760,6 +25915,78 @@ mod member_arithmetic_lifetime_tests {
 
 
     #[test]
+    fn operator_value_argument_reaches_the_existing_late_inliner() {
+        for hours in [false, true] {
+            let refs = RefResolver::from_test_operator_rvo_argument(0);
+            let (f, producers, consumers) = operator_argument_fixture(hours);
+            let (args, _, operators) = super::short_rvo_lifetimes(&f, &refs, &producers, &consumers);
+            let slot = if hours { 6 } else { 4 };
+            assert_eq!(operators, HashSet::from([slot]));
+            assert!(args.contains(&slot));
+            let value = if hours { "(FTime::Now() - FTime::FromHours(Hours))" }
+                else { "(FTime::Now() - Age)" };
+            let source = format!("    FTime local_{slot} = {value};\n    return Consume(State, Tag, local_{slot}, Instigator);\n");
+            let fold = |proof: &HashSet<i32>| super::inline_unnamed_value_temporaries(&source,
+                &proof.iter().copied().map(|s| (s, 1)).collect(), &HashSet::new(),
+                &proof.difference(&args).copied().collect(), &refs, &HashSet::new(),
+                &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(),
+                &HashSet::new(), &HashSet::new());
+            assert_eq!(fold(&HashSet::new()), source);
+            assert_eq!(fold(&operators), format!("    return Consume(State, Tag, {value}, Instigator);\n"));
+        }
+    }
+
+    fn operator_argument_fixture(hours: bool) -> (Func, Vec<(i32, usize)>, Vec<(i32, usize)>) {
+        let mut ops: Vec<(&str, Vec<u16>)> = vec![
+            ("PshVPtr", vec![(-6i16) as u16]), ("PshGPtr", vec![]),
+            ("PSF", vec![2]), ("CALLSYS", vec![])];
+        if hours { ops.extend([("PshV8", vec![(-4i16) as u16]), ("PSF", vec![4]), ("CALLSYS", vec![])]); }
+        let slot = if hours { 6 } else { 4 };
+        ops.extend([(if hours { "PSF" } else { "PshVPtr" }, vec![if hours { 4 } else { (-4i16) as u16 }]),
+            ("PSF", vec![slot]), ("PSF", vec![2]), ("CALLSYS", vec![]),
+            ("PSF", vec![2]), ("CALLSYS", vec![])]);
+        if hours { ops.extend([("PSF", vec![4]), ("CALLSYS", vec![])]); }
+        let arg = ops.len();
+        ops.extend([("PSF", vec![slot]), ("PshVPtr", vec![(-2i16) as u16]), ("PshVPtr", vec![0]),
+            ("CALL", vec![]), ("CpyRtoV4", vec![slot + 1]), ("PSF", vec![slot]),
+            ("CALLSYS", vec![]), ("CpyVtoR4", vec![slot + 1]), ("RET", vec![8])]);
+        let mut f = function(&ops.iter().map(|(n, w)| (*n, w.as_slice())).collect::<Vec<_>>());
+        let producer = if hours { 10 } else { 7 };
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, ins) in code.iter().enumerate() {
+            let id = match at { 3 => 1, p if p == producer => 2, c if c == arg + 3 => 4,
+                6 if hours => 5, _ => 3 };
+            if ins.op.name == "CALLSYS" || ins.op.name == "CALL" { f.bytecode[ins.offset_dw + 1] = id; }
+        }
+        f.ret.token = 0x41;
+        f.obj_locals = if hours { vec![(2, 101), (4, 101), (6, 101)] } else { vec![(2, 101), (4, 101)] };
+        (f, vec![(slot as i32, producer)], vec![(slot as i32, arg + 3)])
+    }
+
+    #[test]
+    fn operator_argument_refuses_mutable_parameters_frames_and_slot_reuse() {
+        let (f, producers, consumers) = operator_argument_fixture(false);
+        for fault in 1..=4 {
+            assert!(super::short_rvo_lifetimes(&f, &RefResolver::from_test_operator_rvo_argument(fault),
+                &producers, &consumers).2.is_empty(), "metadata fault {fault}");
+        }
+        let refs = RefResolver::from_test_operator_rvo_argument(0);
+        let code = disassemble(&f.bytecode).unwrap();
+        for fault in 0..4 {
+            let mut other = f.clone();
+            match fault {
+                0 => other.bytecode.extend(function(&[("PSF", &[4])]).bytecode),
+                1 => other.obj_locals.push((4, 101)),
+                2 => { other.bytecode.splice(0..0, function(&[("JMP", &[])]).bytecode); },
+                _ => other.bytecode[code[11].offset_dw] = (other.bytecode[code[11].offset_dw] & 0xffff) | (8 << 16),
+            }
+            assert!(super::short_rvo_lifetimes(&other, &refs, &producers, &consumers).2.is_empty(), "raw fault {fault}");
+        }
+        let mut another_life = producers.clone(); another_life.push((4, 3));
+        assert!(super::short_rvo_lifetimes(&f, &refs, &another_life, &consumers).2.is_empty());
+    }
+
+    #[test]
     fn immediate_const_value_argument_has_exact_type_frame_and_single_life() {
         let refs = RefResolver::from_test_short_value_lifetimes(true, true, false);
         let mut f = function(&[("PGA", &[]), ("PSF", &[4]), ("PshVPtr", &[65532]),
@@ -25771,7 +25998,7 @@ mod member_arithmetic_lifetime_tests {
         }
         let producers = [(4, 3), (38, 7)];
         let consumers = [(4, 7)];
-        let (args, _) = super::short_rvo_lifetimes(&f, &refs, &producers, &consumers);
+        let (args, _, _) = super::short_rvo_lifetimes(&f, &refs, &producers, &consumers);
         assert_eq!(args, HashSet::from([4]));
         let source = "    FString local_4 = (Name + \"_suffix\");\n    FSettings local_38 = Super::Consume(local_4);\n";
         let render = |receiver_only: &HashSet<i32>| inline_unnamed_value_temporaries(source,
@@ -25814,7 +26041,7 @@ mod member_arithmetic_lifetime_tests {
             f.bytecode[op + 1] = id;
         }
         let refs = RefResolver::from_test_short_value_lifetimes(true, true, false);
-        let (_, discarded) = super::short_rvo_lifetimes(&f, &refs, &[(10, 1)], &[]);
+        let (_, discarded, _) = super::short_rvo_lifetimes(&f, &refs, &[(10, 1)], &[]);
         assert_eq!(discarded, HashSet::from([(10, "PlayEffect".into())]));
         let body = "    local_10 = FX.PlayEffect();\n";
         let locals = std::collections::BTreeMap::from([(10, "FString".into())]);
@@ -26969,6 +27196,74 @@ mod member_arithmetic_lifetime_tests {
     }
 
     #[test]
+    fn named_terminal_bool_branch_preserves_the_literal_copy_life() {
+        let mut f = function(&[("SetV1", &[2]), ("CpyVtoV4", &[1, 2]), ("CALL", &[]),
+            ("CpyRtoV4", &[2]), ("CpyVtoR1", &[2]), ("JLowZ", &[]), ("SetV1", &[5]),
+            ("CpyVtoV4", &[1, 5]), ("JMP", &[]), ("SetV1", &[2]),
+            ("CpyVtoV4", &[1, 2]), ("CpyVtoR4", &[1]), ("RET", &[0])]);
+        f.ret.token = 0x41;
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, value) in [(0, 1), (6, 1),
+            (5, code[9].offset_dw as i32 - code[5].offset_dw as i32 - 2),
+            (8, code[11].offset_dw as i32 - code[8].offset_dw as i32 - 2)] {
+            f.bytecode[code[at].offset_dw + 1] = value;
+        }
+        let body = "    bool local_1 = true;\n    if (Actor != nullptr)\n    {\n        local_1 = true;\n    }\n    else\n    {\n        local_1 = false;\n    }\n    return local_1;\n";
+        let keep = super::named_bool_literal_branches(&f);
+        assert_eq!(keep, HashSet::from([1]));
+        let fold = |keep: &HashSet<i32>| super::fold_short_circuits(body,
+            &BTreeMap::from([(1, "bool".into())]), &RefResolver::default(), None,
+            &HashMap::new(), None, keep);
+        assert_eq!(fold(&keep), body);
+        assert!(fold(&HashSet::new()).contains("local_1 = Actor != nullptr || false;"));
+        for fault in 0..6 {
+            let mut other = f.clone();
+            match fault {
+                0 => other.ret.token = 0x40,
+                1 => other.bytecode[1] = 2,
+                2 => other.bytecode[code[6].offset_dw + 1] = 0,
+                3 => other.bytecode[code[5].offset_dw + 1] = 0,
+                4 => other.bytecode[code[11].offset_dw] ^= (1 << 16),
+                _ => { other.bytecode.splice(code[2].offset_dw..code[2].offset_dw,
+                    function(&[("PshV4", &[1])]).bytecode); },
+            }
+            assert!(super::named_bool_literal_branches(&other).is_empty(), "{fault}");
+        }
+    }
+
+    #[test]
+    fn terminal_bool_return_scope_requires_the_direct_call_and_exit_jump() {
+        for native in [false, true] {
+            let mut f = function(&[(if native { "CALLSYS" } else { "CALL" }, &[]),
+                ("CpyRtoV4", &[9]), ("CpyVtoR4", &[9]), ("JMP", &[]), ("RET", &[0])]);
+            f.ret.token = 0x41;
+            f.bytecode[1] = if native { 2 } else { 1 };
+            let refs = if native { RefResolver::from_test_retained_receiver(0x41, true) }
+                else { RefResolver::from_test_script_result(DataType { token: 0x41, ..Default::default() }) };
+            let call = if native { "Count" } else { "Read" };
+            let body = format!("    UActor local_2 = Actor;\n    return local_2.Component().{call}();\n");
+            let expected = format!("    UActor local_2 = Actor;\n    {{\n        return local_2.Component().{call}();\n    }}\n");
+            assert_eq!(super::restore_terminal_bool_return_scope(&body, &f, &refs), expected);
+            assert_eq!(super::restore_terminal_bool_return_scope(&expected, &f, &refs), expected);
+            let code = disassemble(&f.bytecode).unwrap();
+            for fault in 0..5 {
+                let mut other = f.clone();
+                match fault {
+                    0 => other.ret.token = 0x40,
+                    1 => other.bytecode[1] = 99,
+                    2 => other.bytecode[code[3].offset_dw + 1] = 1,
+                    3 => other.bytecode[code[2].offset_dw] ^= (1 << 16),
+                    _ => { other.bytecode.splice(0..0, function(&[("PshV4", &[9])]).bytecode); },
+                }
+                assert_eq!(super::restore_terminal_bool_return_scope(&body, &other, &refs), body, "{native}/{fault}");
+            }
+            for other in [body.replace(call, "Other"), format!("    if (Check())\n    {{\n        return true;\n    }}\n{body}")] {
+                assert_eq!(super::restore_terminal_bool_return_scope(&other, &f, &refs), other);
+            }
+        }
+    }
+
+    #[test]
     fn terminal_bool_literal_return_requires_the_direct_raw_tail() {
         for value in 0..2 {
             let mut f = function(&[("SetV1", &[3]), ("CpyVtoR4", &[3]), ("RET", &[0])]);
@@ -28009,7 +28304,7 @@ mod late_boolean_declaration_tests {
         );
         let fold = |text: &str| fold_short_circuits(text,
             &BTreeMap::from([(3, "bool".into())]), &RefResolver::default(),
-            None, &HashMap::new(), None);
+            None, &HashMap::new(), None, &HashSet::new());
         assert_eq!(fold(body), body);
         let cleaned = drop_unused_declarations(body, &HashSet::new(), &HashSet::new());
         let folded = fold(&cleaned);
@@ -28046,7 +28341,7 @@ mod short_circuit_life_name_tests {
     }
 
     fn fold(body: &str, locals: &BTreeMap<i32, String>) -> String {
-        fold_short_circuits(body, locals, &RefResolver::default(), None, &HashMap::new(), None)
+        fold_short_circuits(body, locals, &RefResolver::default(), None, &HashMap::new(), None, &HashSet::new())
     }
 
     #[test]

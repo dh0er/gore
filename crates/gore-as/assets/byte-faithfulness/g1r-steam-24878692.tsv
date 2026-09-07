@@ -102,14 +102,12 @@ FX.DepthOfField.DepthOfFieldController	1	0	0
 GAS.Abilities.Combat.AttackLoop.Capsule.GA_AttackLoopCapsule	2	0	0
 GAS.Abilities.Combat.AttackLoop.Capsule.PyrolaserHitCapsuleComponent	1	0	0
 GAS.Abilities.Combat.AttackLoop.Cone.GA_AttackLoopCone	2	0	0
-GAS.Abilities.Combat.GA_AttackThrow	1	0	0
 GAS.Abilities.Debug.GA_ControlDebug	1	0	0
 GAS.Abilities.HUD.GA_BossHealthBar	1	0	0
 GAS.Abilities.Interact.GA_Human_CallInteractFunction	1	0	0
 GAS.Abilities.Interact.GA_Human_Lever	1	0	0
 GAS.Abilities.Interact.GA_Human_Loot	4	0	0
 GAS.Abilities.Interact.Sleep.Base.GA_Human_Sleep	1	0	0
-GAS.Abilities.Locomotion.GA_Dodge	1	0	0
 GAS.Abilities.Locomotion.GA_Falling	2	0	0
 GAS.Abilities.Locomotion.GA_FallingRagdoll	1	0	0
 GAS.Abilities.Locomotion.GA_Swim	1	0	0
@@ -155,7 +153,7 @@ GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Sleep.GA_SleepDebuff
 GAS.Effects.Debuffs.EffectStateComponent.DebuffEffectActors.SlowdownDebuffEffectActor	1	0	0
 GAS.Effects.Tests.Effect_GiveExperience	1	0	0
 GAS.GASCharacterMixins	6	0	0
-GAS.GASCharacterStateMixins	12	0	0
+GAS.GASCharacterStateMixins	8	0	0
 GAS.PerceptionEventMixins	1	0	0
 Gameplay.Environment.BattleBlockingBarrier.BattleBarrierVisual	1	0	0
 Gameplay.Environment.MCQueen.CeilingMinionSpawner.MCQueen_MinionCeilingSpawner	1	0	0
@@ -167,7 +165,6 @@ Gameplay.Magic.Components.Spell.Summon.SummonManagerComponent	1	0	0
 InteractiveObjects.GothicTriggerVolume	1	0	0
 InteractiveObjects.MixedObjectsPresets	2	0	0
 InteractiveObjects.PuzlesBlood	1	0	0
-InteractiveObjects.Puzzles	1	0	0
 Items.Projectiles	2	0	0
 Items.Visual.Projectile.Arrow.Base.ArrowProjectileVisual_Base	3	0	0
 LevelScripts.Map_x2_y1_OldCamp_AI_script	1	0	0

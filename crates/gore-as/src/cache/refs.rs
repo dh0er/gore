@@ -1999,6 +1999,27 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_operator_rvo_argument(fault: u8) -> Self {
+        let mut r = Self::default();
+        r.type_by_ptr.insert(101, "FTime".into());
+        let value = DataType { token: 5, type_info: 101, ..Default::default() };
+        let input = DataType { is_reference: true, is_read_only: true, ..value.clone() };
+        for (id, name) in [(1, "Now"), (2, "opSub"), (3, "$beh2"), (4, "Consume"), (5, "FromHours")] {
+            r.func_by_ptr.insert(id, name.into()); r.funcid_to_ptr.insert(id as i32, id);
+            r.func_ret.insert(id, value.clone()); r.func_params.insert(id, Vec::new());
+        }
+        r.func_owner.insert(2, "FTime".into()); r.func_owner.insert(3, "FTime".into());
+        r.func_is_method.insert(2); if fault != 3 { r.const_method_ptrs.insert(2); }
+        r.func_params.insert(2, vec![input.clone()]);
+        if fault == 4 { r.func_ret.get_mut(&2).unwrap().is_reference = true; }
+        r.func_ret.insert(4, DataType { token: 0x41, ..Default::default() });
+        let handle = DataType { token: 5, type_info: 103, is_object_handle: true, ..Default::default() };
+        r.func_params.insert(4, vec![handle.clone(), DataType { type_info: 102, ..input.clone() },
+            DataType { type_info: if fault == 1 { 102 } else { 101 }, is_read_only: fault != 2, ..input }, handle]);
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_short_value_lifetimes(const_argument: bool, enum_reference: bool, const_discard: bool) -> Self {
         let mut r = Self::default();
         for (ptr, name) in [(101, "FString"), (102, "FSettings"), (103, "EOutcome")] {
