@@ -127,6 +127,11 @@ const DIAGNOSTICS_DELAY: ArgSpec = ArgSpec::new(
 .with_default("2000");
 
 const DIAGNOSTICS_CONFLICT: &[&[&str]] = &[&["no_diagnostics", "diagnostics_hook"]];
+const EXPECT_BASE_CONFLICT: &[&[&str]] = &[&["expect_base", "expect_base_sha256"]];
+const COMPILE_CONFLICTS: &[&[&str]] = &[
+    &["no_diagnostics", "diagnostics_hook"],
+    &["expect_base", "expect_base_sha256"],
+];
 
 const DECODE_HEADER_ARGS: &[ArgSpec] = &[CACHE_FILE];
 
@@ -336,6 +341,24 @@ const DIAGNOSTICS_CHECK_ARGS: &[ArgSpec] = &[
     GAME,
 ];
 
+const EXPECT_BASE: ArgSpec = ArgSpec::new(
+    "expect_base",
+    Long("expect-base"),
+    Path,
+    "Refuse to compile unless the selected original script cache is byte-identical to this \
+     file, for example a frozen copy of the vanilla cache. Never selects the base.",
+    false,
+);
+
+const EXPECT_BASE_SHA256: ArgSpec = ArgSpec::new(
+    "expect_base_sha256",
+    Long("expect-base-sha256"),
+    Str,
+    "Refuse to compile unless the selected original script cache has this SHA-256 (64 hex \
+     digits, `sha256:` prefix optional). Never selects the base.",
+    false,
+);
+
 const COMPILE_ARGS: &[ArgSpec] = &[
     ArgSpec::new(
         "src",
@@ -371,6 +394,8 @@ const COMPILE_ARGS: &[ArgSpec] = &[
         true,
     ),
     GAME,
+    EXPECT_BASE,
+    EXPECT_BASE_SHA256,
     ArgSpec::new(
         "backend",
         Long("backend"),
@@ -441,6 +466,8 @@ const COMPILE_MODULE_ARGS: &[ArgSpec] = &[
         true,
     ),
     GAME,
+    EXPECT_BASE,
+    EXPECT_BASE_SHA256,
     ArgSpec::new(
         "backend",
         Long("backend"),
@@ -535,6 +562,8 @@ const STANDALONE_COMPILE_ARGS: &[ArgSpec] = &[
         true,
     ),
     GAME,
+    EXPECT_BASE,
+    EXPECT_BASE_SHA256,
     ArgSpec::new(
         "generation_receipt",
         Long("generation-receipt"),
@@ -595,6 +624,8 @@ const STANDALONE_COMPILE_MODULE_ARGS: &[ArgSpec] = &[
         true,
     ),
     GAME,
+    EXPECT_BASE,
+    EXPECT_BASE_SHA256,
     ArgSpec::new(
         "generation_receipt",
         Long("generation-receipt"),
@@ -962,7 +993,7 @@ const AS_COMMANDS: &[CommandSpec] = &[
             .also_writes(&[("work_dir", Derived::Child("tree"))]),
         T_COMPILE,
     )
-    .at_most_one(DIAGNOSTICS_CONFLICT)
+    .at_most_one(COMPILE_CONFLICTS)
     .guide("scripts"),
     CommandSpec::new(
         "compile-module",
@@ -974,7 +1005,7 @@ const AS_COMMANDS: &[CommandSpec] = &[
             .writes_into(&["out", "generation_receipt"]),
         T_COMPILE,
     )
-    .at_most_one(DIAGNOSTICS_CONFLICT)
+    .at_most_one(COMPILE_CONFLICTS)
     .guide("scripts"),
     // These five publish with a plain `std::fs::write` over whatever is at the destination
     // (cmd/as_cache.rs) -- unlike `patch-default` and `patch-tag-map`, which refuse an occupied
@@ -1046,6 +1077,7 @@ const STANDALONE_COMPILE_COMMANDS: &[CommandSpec] = &[CommandSpec::new(
     Safety::write().also_writes(&[("work_dir", Derived::Child("tree"))]),
     T_COMPILE,
 )
+.at_most_one(EXPECT_BASE_CONFLICT)
 .forced(&["--backend", "standalone"])
 .hides_cli_flags(&[
     "no-diagnostics",
@@ -1072,6 +1104,7 @@ const STANDALONE_COMPILE_MODULE_COMMANDS: &[CommandSpec] = &[CommandSpec::new(
         .writes_into(&["out", "generation_receipt"]),
     T_COMPILE,
 )
+.at_most_one(EXPECT_BASE_CONFLICT)
 .forced(&["--backend", "standalone"])
 .hides_cli_flags(&[
     "development-standalone-sidecar",
@@ -1097,6 +1130,46 @@ pub const AS_COMPILE_MODULE: GroupSpec = GroupSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// clap declares the two expectation flags as conflicting; the MCP layer must enforce the
+    /// same contract instead of spawning a CLI that fails at argument parsing.
+    #[test]
+    fn the_expectation_flags_are_mutually_exclusive_on_every_compile_route() {
+        for (group, sub) in [
+            (&AS, "compile"),
+            (&AS, "compile-module"),
+            (&AS_COMPILE, "compile"),
+            (&AS_COMPILE_MODULE, "compile-module"),
+        ] {
+            let command = group.command(sub).expect("compiler command");
+            assert!(
+                command
+                    .at_most_one_of
+                    .iter()
+                    .any(|set| *set == ["expect_base", "expect_base_sha256"]),
+                "{}/{sub} lacks the expect_base conflict set",
+                group.tool
+            );
+        }
+    }
+
+    /// The CLI accepts the documented `sha256:` prefix. A Hex pre-check would refuse it before
+    /// the spawn, so the MCP argument stays a plain string and the CLI remains the validator.
+    #[test]
+    fn the_expected_base_sha256_reaches_the_cli_unchecked() {
+        for args in [
+            COMPILE_ARGS,
+            COMPILE_MODULE_ARGS,
+            STANDALONE_COMPILE_ARGS,
+            STANDALONE_COMPILE_MODULE_ARGS,
+        ] {
+            let spec = args
+                .iter()
+                .find(|spec| spec.name == "expect_base_sha256")
+                .expect("expect_base_sha256 is declared");
+            assert_eq!(spec.kind, Str);
+        }
+    }
     use crate::spec::Class;
 
     #[test]

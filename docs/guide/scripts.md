@@ -206,6 +206,33 @@ These are enforced, not advisory:
   artifacts and cross-tool ownership are retained and no usable compile result
   is returned.
 
+### Compiling while a script mod is installed
+
+An installed script mod does not have to be undeployed before its next version
+compiles. Every compile route validates the standalone compiler target against
+the deployment-aware pristine cache: while a deployment owns the script cache
+that is the `*.gore-bak` its record authenticates, otherwise the live file (also
+after a game update, when the backup is stale and the updated live cache is the
+new original). The CLI says so when it compiles against the backup. The pinned
+base is checked again after the pin and, for `gore as compile`, at the end of
+the run; if it changed in between, the compile fails closed and asks for a
+retry rather than an undeploy. The installed version is replaced only by the
+next `gore mod deploy` or Manager apply, which rebuild from the same pristine
+backup.
+
+This holds for the standalone compiler. The game compiler regenerates into the
+live cache and restores it from the pinned target afterwards, so it cannot run
+while a script mod is installed: `--backend game` is refused up front, and
+`standalone-then-game` runs the standalone compiler only, saying that the game
+fallback was skipped. Should the standalone compile fail, its own diagnostics
+are what you see, with that note appended.
+
+To pin which original a compile may use, pass `--expect-base <CACHE>` (a file
+the selected original must equal byte for byte, for example a frozen copy of
+the vanilla cache) or `--expect-base-sha256 <HEX>`. Both refuse the compile
+when the selected original differs and print both hashes; neither picks the
+base. The deployment-aware selection stays the only source of truth.
+
 ### Compiler diagnostics
 
 Strict `standalone` returns the bundled compiler's native diagnostics with the
@@ -276,6 +303,7 @@ gore as compile-module --op add --module MyMod.Dialog `
 | `--work-dir <DIR>` | Existing workspace outside the game installation (emitted tree + intermediate cache). |
 | `--allow-new-symbols` | Retain minimal rows for classes/functions/names absent from the pristine cache. |
 | `-o, --out <PATH>` | The remapped 1-module mini-cache. |
+| `--expect-base <CACHE>` / `--expect-base-sha256 <HEX>` | Refuse to compile unless the selected original is this file's bytes / has this SHA-256. Neither selects the base; both exist on `compile` as well. |
 
 The high-level `dialog new-topic` scaffold uses the same compiler command in a
 more specific shape. A new root or direct sub-topic is appended to the

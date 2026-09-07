@@ -11364,14 +11364,87 @@ pub(crate) fn bak_path(live: &Path) -> PathBuf {
 /// Reuses the same [`read_pristine_bounded`]/[`read_record`] logic so the compile base matches
 /// the bytes the splice will later be applied against. Never writes.
 pub fn pristine_script_cache(game_root: &Path) -> Result<Vec<u8>> {
-    let script_cache = resolve_game_paths(game_root).script_cache;
-    let record = read_record(game_root)?;
+    let (script_cache, record) = pristine_script_cache_inputs(game_root)?;
     let prior = record.as_ref().map(|stored| &stored.record);
-    if prior.is_some_and(|record| record.phase == DeployPhase::RecoveryRequired) {
-        return Err(recovery_required_error());
-    }
     read_pristine_bounded(&script_cache, prior, MAX_PRISTINE_PATCH_BYTES)
         .map(|(bytes, _drifted)| bytes)
+}
+
+/// Where the pristine precompiled-script cache lives right now, and which bytes it holds.
+///
+/// Compiler routes validate their standalone target against exactly this file, so an installed
+/// script mod can stay in place while its next version is compiled against the original the
+/// deployment preserved. The selection is the one [`pristine_script_cache`] reads from: the
+/// record-authenticated `*.gore-bak` while a deployment owns the cache, the live file when
+/// nothing is deployed there, and the live file again once it drifted from what was deployed (a
+/// game update made the backup stale). Never writes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PristineScriptCacheSource {
+    /// The file holding the pristine bytes.
+    pub path: PathBuf,
+    /// `sha256:<hex>` of the pristine bytes at selection time, in the deploy record's notation.
+    pub identity: String,
+    /// True when `path` is the deployment's `*.gore-bak` rather than the live cache.
+    pub from_backup: bool,
+    /// True when the live cache no longer matches what was deployed there, so the backup is
+    /// stale and the live cache is the pristine one.
+    pub drifted: bool,
+}
+
+impl PristineScriptCacheSource {
+    /// Whether `bytes` are exactly the bytes this selection named. A caller that pinned `path`
+    /// after selecting it proves with this that nothing replaced the file in between.
+    pub fn matches(&self, bytes: &[u8]) -> bool {
+        sha256_bytes(bytes) == self.identity
+    }
+}
+
+/// Select the pristine precompiled-script cache source for `game_root` without reading it.
+/// Refuses with `RECOVERY_REQUIRED` while an interrupted deployment awaits recovery, exactly
+/// like [`pristine_script_cache`].
+pub fn pristine_script_cache_source(game_root: &Path) -> Result<PristineScriptCacheSource> {
+    let (script_cache, record) = pristine_script_cache_inputs(game_root)?;
+    let prior = record.as_ref().map(|stored| &stored.record);
+    ensure_pristine_sources_bounded(&script_cache, MAX_PRISTINE_PATCH_BYTES)?;
+    let source = select_pristine_source(&script_cache, prior)?;
+    // Only a backup the active deployment owns means a script mod is installed. The selection
+    // also admits an unowned `*.gore-bak` that is byte-identical to the live cache; the live
+    // cache is then the same original, and the one every compiler backend can work from.
+    let owned_backup = source.path != script_cache
+        && prior.is_some_and(|record| {
+            backup_hash_for_path(&source.path, &record.backup_hashes).is_some()
+                || record
+                    .backups
+                    .iter()
+                    .any(|(stored_live, stored_backup, _)| {
+                        same_path(&script_cache, stored_live)
+                            && same_path(&source.path, stored_backup)
+                    })
+        });
+    let path = if owned_backup {
+        source.path
+    } else {
+        script_cache
+    };
+    Ok(PristineScriptCacheSource {
+        path,
+        identity: source.basis.pristine,
+        from_backup: owned_backup,
+        drifted: source.drifted,
+    })
+}
+
+/// The live script-cache path and the deploy record both pristine selections start from.
+fn pristine_script_cache_inputs(game_root: &Path) -> Result<(PathBuf, Option<StoredDeployRecord>)> {
+    let script_cache = resolve_game_paths(game_root).script_cache;
+    let record = read_record(game_root)?;
+    if record
+        .as_ref()
+        .is_some_and(|stored| stored.record.phase == DeployPhase::RecoveryRequired)
+    {
+        return Err(recovery_required_error());
+    }
+    Ok((script_cache, record))
 }
 
 fn file_identities_for_path(record: &DeployRecord, path: &Path) -> Vec<String> {
@@ -18987,6 +19060,135 @@ mod tests {
         assert!(!bak_path(&live).exists());
         assert_eq!(std::fs::read(record_path(&game)).unwrap(), record_before);
         assert_no_manager_pre_mutation_residue(&game);
+    }
+
+    /// Installs a synthetic one-module script mod into `game`, whose live cache must already
+    /// carry a module cache with the same `guid`. Returns the pristine bytes deploy preserved.
+    fn install_synthetic_script_mod(scratch: &Path, game: &Path, guid: [u8; 16]) -> Vec<u8> {
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        let base = std::fs::read(&live).unwrap();
+        let bundle = scratch.join("bundle");
+        std::fs::create_dir_all(bundle.join("scripts")).unwrap();
+        std::fs::write(
+            bundle.join("scripts/0_Mod.cache"),
+            test_script_cache_with_guid("_gore_mod", guid),
+        )
+        .unwrap();
+        std::fs::write(
+            bundle.join("scripts/manifest.json"),
+            serde_json::to_vec(&vec![ScriptEntry {
+                op: "add".into(),
+                module: "_gore_mod".into(),
+                mini: "scripts/0_Mod.cache".into(),
+            }])
+            .unwrap(),
+        )
+        .unwrap();
+        let manifest = ModManifest {
+            format: 1,
+            mod_meta: ModMeta {
+                name: "InstalledScriptMod".into(),
+                version: "1".into(),
+                author: "offline-test".into(),
+            },
+            components: vec![Component::AngelScriptPatch {
+                path: "scripts".into(),
+            }],
+        };
+        std::fs::write(
+            bundle.join("gore-mod.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        deploy(&bundle, game).unwrap();
+        assert_ne!(std::fs::read(&live).unwrap(), base);
+        base
+    }
+
+    /// The compiler routes ask WHERE the pristine cache lives so they can validate their target
+    /// against that file: the live cache while nothing is deployed, the record-authenticated
+    /// `*.gore-bak` while a script mod is installed, and the (updated) live cache again once a
+    /// game update made that backup stale. Every answer carries the identity of the bytes it
+    /// names so a caller can prove it pinned the selected base.
+    #[test]
+    fn pristine_script_cache_source_names_the_backup_while_a_script_mod_is_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        let guid = [0x41; 16];
+        std::fs::write(&live, test_script_cache_with_guid("_gore_base", guid)).unwrap();
+
+        let untouched = pristine_script_cache_source(&game).unwrap();
+        assert_eq!(untouched.path, live);
+        assert!(!untouched.from_backup);
+        assert!(!untouched.drifted);
+        let base = std::fs::read(&live).unwrap();
+        assert_eq!(untouched.identity, sha256_bytes(&base));
+        assert!(untouched.matches(&base));
+
+        let base = install_synthetic_script_mod(dir.path(), &game, guid);
+
+        let installed = pristine_script_cache_source(&game).unwrap();
+        assert_eq!(installed.path, bak_path(&live));
+        assert!(installed.from_backup);
+        assert!(!installed.drifted);
+        assert_eq!(installed.identity, sha256_bytes(&base));
+        assert!(installed.matches(&base));
+        assert!(!installed.matches(&std::fs::read(&live).unwrap()));
+        assert_eq!(pristine_script_cache(&game).unwrap(), base);
+
+        // A game update replaced the live cache underneath the deployment: the backup is stale
+        // and the updated live cache is the pristine source again.
+        let updated = test_script_cache_with_guid("_gore_base", [0x42; 16]);
+        std::fs::write(&live, &updated).unwrap();
+        let drifted = pristine_script_cache_source(&game).unwrap();
+        assert_eq!(drifted.path, live);
+        assert!(!drifted.from_backup);
+        assert!(drifted.drifted);
+        assert!(drifted.matches(&updated));
+        assert_eq!(pristine_script_cache(&game).unwrap(), updated);
+    }
+
+    /// A `*.gore-bak` nobody owns is admitted only when it is byte-identical to the live cache,
+    /// so the live cache is the same original: no script mod is installed, and every compiler
+    /// backend may work from the live file.
+    #[test]
+    fn pristine_script_cache_source_treats_an_unowned_identical_backup_as_live() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        let base = test_script_cache_with_guid("_gore_base", [0x44; 16]);
+        std::fs::write(&live, &base).unwrap();
+        std::fs::write(bak_path(&live), &base).unwrap();
+
+        let source = pristine_script_cache_source(&game).unwrap();
+        assert_eq!(source.path, live);
+        assert!(!source.from_backup);
+        assert!(!source.drifted);
+        assert!(source.matches(&base));
+        assert_eq!(pristine_script_cache(&game).unwrap(), base);
+    }
+
+    #[test]
+    fn pristine_script_cache_source_returns_to_the_live_cache_after_undeploy() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        let guid = [0x43; 16];
+        std::fs::write(&live, test_script_cache_with_guid("_gore_base", guid)).unwrap();
+        let base = install_synthetic_script_mod(dir.path(), &game, guid);
+        assert!(pristine_script_cache_source(&game).unwrap().from_backup);
+
+        undeploy(&game)
+            .unwrap()
+            .expect("the script mod was installed");
+
+        let restored = pristine_script_cache_source(&game).unwrap();
+        assert_eq!(restored.path, live);
+        assert!(!restored.from_backup);
+        assert!(!restored.drifted);
+        assert!(restored.matches(&base));
+        assert!(!bak_path(&live).exists());
     }
 
     #[test]

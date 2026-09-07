@@ -351,8 +351,8 @@ Output directories must not exist and are never placed in the game tree.
 | `patch-tag-map <CACHE>` | `--selector <JSON>` · `--expected-hex` · `--replacement-hex` · `-o, --out` · `--json` |
 | `qualify` | `--game` · `--usmap <FILE>` · `--catalog <JSON>` · `--id <ID>` · `--label <TEXT>` · `--json` |
 | `diagnostics-check` | `--exe <EXE>` · `--game <GAME>` |
-| `compile <SRC>` | `-o, --out` · `--mini <PATH>` · `--work-dir <DIR>` · `--game` · `--backend standalone\|game\|standalone-then-game` (default `standalone-then-game`) · `--generation-receipt <RECEIPT.json>` · `--no-diagnostics` · `--diagnostics-hook <DLL>` · `--diagnostics-inject-delay-ms <MS>` |
-| `compile-module` | `--op add\|edit` · `--module` · `--rel-path` · `--source` · `--work-dir` · `--allow-new-symbols` · `-o, --out` · `--game` · `--backend standalone\|game\|standalone-then-game` (default `standalone-then-game`) · `--generation-receipt <RECEIPT.json>` · diagnostics flags · five `--development-*` compiler-development overrides |
+| `compile <SRC>` | `-o, --out` · `--mini <PATH>` · `--work-dir <DIR>` · `--game` · `--expect-base <CACHE>` · `--expect-base-sha256 <HEX>` · `--backend standalone\|game\|standalone-then-game` (default `standalone-then-game`) · `--generation-receipt <RECEIPT.json>` · `--no-diagnostics` · `--diagnostics-hook <DLL>` · `--diagnostics-inject-delay-ms <MS>` |
+| `compile-module` | `--op add\|edit` · `--module` · `--rel-path` · `--source` · `--work-dir` · `--allow-new-symbols` · `-o, --out` · `--game` · `--expect-base <CACHE>` · `--expect-base-sha256 <HEX>` · `--backend standalone\|game\|standalone-then-game` (default `standalone-then-game`) · `--generation-receipt <RECEIPT.json>` · diagnostics flags · five `--development-*` compiler-development overrides |
 | `replace <BASE> <MINI> <TARGET>` | `-o, --out` |
 | `splice <BASE> <MINI>` | `--upsert` · `-o, --out` |
 | `extract <CACHE> <MODULE>` | `-o, --out` |
