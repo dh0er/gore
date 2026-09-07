@@ -1826,19 +1826,21 @@ impl RefResolver {
     #[cfg(test)]
     pub(crate) fn from_test_typed_getter_copies(field_type: &str, object_const: bool, wrong_owner: bool) -> Self {
         let mut r = Self::from_test_member_chain(&[("FGroup", "MemberHandles"),
-            ("FMember", "CharacterState"), ("UNode", ""), ("TArray", ""), ("FName", "")]);
+            ("FMember", "CharacterState"), ("UNode", "Target"), ("TArray", ""), ("FName", "")]);
         for (id, name) in [(1, "FGroup"), (2, "FMember"), (3, "UNode")] {
             r.type_identity_by_ptr.insert(id, TypeIdentity { module: "Fixture".into(),
                 namespace: String::new(), name: name.into() });
             if id <= 2 { r.prop_type_id.insert((id << 1) | 1, id as i32); }
         }
+        r.prop_type_id.insert((3 << 1) | 1, if wrong_owner { 1 } else { 3 });
         if wrong_owner { r.prop_type_id.insert((2 << 1) | 1, 1); }
         r.set_class_fields(HashMap::from([
             ("FGroup".into(), HashMap::from([("MemberHandles".into(), "TArray<FMember>".into())])),
+            ("UNode".into(), HashMap::from([("Target".into(), "UNode".into())])),
             ("FMember".into(), HashMap::from([("CharacterState".into(), field_type.into())])),
         ]));
         for (ptr, name, ty, handle) in [(1, "opIndex", 1, false),
-            (2, "opIndex", 2, false), (3, "Last", 3, true)] {
+            (2, "opIndex", 2, false), (3, "Last", 3, true), (6, "opIndex", 3, true)] {
             r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, "TArray".into());
             r.func_is_method.insert(ptr);
             r.func_params.insert(ptr, vec![DataType { token: 0x44, ..Default::default() }]);
@@ -1854,6 +1856,63 @@ impl RefResolver {
         r.func_ret.insert(5, DataType { token: 5, type_info: 5, is_reference: true,
             is_object_const: true, is_read_only: true, ..Default::default() });
         r.static_names.push("None".into());
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_early_member_receiver(method: bool, wrong_type: bool, wrong_owner: bool) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UState", "Component"),
+            ("UComponent", ""), ("FPayload", "")]);
+        for (ptr, name) in [(1, "UState"), (2, "UComponent")] {
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { module: String::new(),
+                namespace: String::new(), name: name.into() });
+        }
+        r.prop_type_id.insert(3, if wrong_owner { 2 } else { 1 });
+        r.set_class_fields(HashMap::from([("UState".into(), HashMap::from([
+            ("Component".into(), if wrong_type { "UOther" } else { "UComponent" }.into())]))]));
+        for (ptr, name, owner) in [(1, "$beh0", "FPayload"), (2, "Collect", "UComponent"),
+            (3, "Remove", "UComponent"), (4, "Unrelated", "FPayload")] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into());
+            if ptr != 2 || method { r.func_is_method.insert(ptr); }
+            r.func_ret.insert(ptr, DataType { token: 0x52, ..Default::default() });
+            r.func_params.insert(ptr, if ptr == 2 {
+                vec![DataType { token: 5, type_info: 3, is_reference: true, ..Default::default() }]
+            } else if ptr == 3 { vec![DataType { token: 0x44, ..Default::default() }] } else { vec![] });
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_parameter_field_comparison(ret: DataType, wrong_owner: bool) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UHolder", "Target"), ("UNode", "")]);
+        for (id, name) in [(1, "UHolder"), (2, "UNode")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { module: "Fixture".into(),
+                namespace: String::new(), name: name.into() });
+        }
+        r.prop_type_id.insert((1 << 1) | 1, if wrong_owner { 2 } else { 1 });
+        r.set_class_fields(HashMap::from([("UHolder".into(),
+            HashMap::from([("Target".into(), "UNode".into())]))]));
+        r.func_by_ptr.insert(3, "GetNode".into());
+        r.func_ret.insert(3, ret);
+        r.func_params.insert(3, Vec::new());
+        r.func_is_method.insert(3);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_native_handle_read(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UHolder", "Target"), ("AActor", ""),
+            ("UScriptHolder", "Avatar"), ("UOtherHolder", "Target")]);
+        for (id, name) in [(1, "UHolder"), (2, "AActor"), (3, "UScriptHolder"), (4, "UOtherHolder")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity {
+                module: if id == 3 || (fault == 2 && id == 1) { "Fixture".into() } else { String::new() },
+                namespace: if fault == 4 && id == 2 { "Other".into() } else { String::new() },
+                name: name.into() });
+            r.prop_type_id.insert((id << 1) | 1, if fault == 3 && id == 1 { 4 } else { id as i32 });
+        }
+        let field_type = if fault == 1 { "UOther" } else { "AActor" };
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(
+            &[("UHolder", "Target", field_type), ("UOtherHolder", "Target", "AActor")], &[], None));
         r
     }
 

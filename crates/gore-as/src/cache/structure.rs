@@ -1552,6 +1552,22 @@ fn is_typed_array_getter_handle_copy(ctx: &Ctx<'_>, code: &[Instr], copy: usize,
                 || ctx.refs.own_field_type_by_class(&owner.name, name) != src.ty.as_deref()
                 || !src.s.ends_with(&format!(".{name}")) { return None; }
             copy
+        } else if ctx.refs.func_by_ptr(ptr)? == "opIndex" && ret.is_object_handle {
+            // The indexed handle immediately becomes the owner of another handle read.
+            // Preserve this copy at its own site before resolving the following field.
+            let tail = code.get(copy + 1..copy + 5)?;
+            if tail.iter().map(|ins| ins.op.name).ne(["PshVPtr", "ADDSi", "RDSPtr", "RefCpyV"])
+                || word(&tail[0]) != Some(dst) || word(&tail[3])? <= 0
+                || word(&tail[3])? == dst || ret.base_name(ctx.refs) != *src.ty.as_ref()?
+                { return None; }
+            let tid = *tail[1].dwords.first()? as i32;
+            let (name, old_owner) = ctx.refs.member_identity(tid, word(&tail[1])?)?;
+            let owner = ctx.refs.type_identity_by_id(tid)?;
+            if ctx.refs.type_identity_by_id(old_owner)? != owner
+                || ctx.refs.type_identity_by_ptr(ret.type_info)? != owner
+                || ctx.refs.own_field_type_by_class(&owner.name, name)?
+                    != ctx.slot_type(word(&tail[3])?)? { return None; }
+            copy + 4
         } else {
             if ctx.refs.func_by_ptr(ptr)? != "Last" || !ret.is_object_handle
                 || ret.base_name(ctx.refs) != *src.ty.as_ref()? { return None; }
@@ -11187,6 +11203,45 @@ mod tests {
         assert_eq!(source.matches(copy).count(), 1, "{source}");
         for fault in [2, 3, 4, 5, 6] {
             assert!(!render_typed_getter_copy_fixture(false, fault).contains(copy), "fault={fault}");
+        }
+    }
+
+    #[test]
+    fn indexed_handle_copy_precedes_its_typed_member_read() {
+        for fault in 0..7 {
+            let refs = RefResolver::from_test_typed_getter_copies("UNode", fault == 1, fault == 5);
+            let mut a = TestAssembler::default();
+            a.op("PshC4", &[], &[0]); a.op("PshVPtr", &[(-2i16) as u16], &[]);
+            a.op("Thiscall1", &[], &[]); a.op("PshRPtr", &[], &[]);
+            a.op("RDSPtr", &[], &[]); a.op("RefCpyV", &[8], &[]);
+            a.op("PshVPtr", &[if fault == 2 { 10 } else { 8 }], &[]);
+            a.op("ADDSi", &[0], &[if fault == 3 { 2 } else { 3 }]);
+            a.op("RDSPtr", &[], &[]); a.op("RefCpyV", &[10], &[]);
+            a.op("CmpPtrNull", &[10], &[]); a.op("RET", &[2], &[]);
+            let mut fixture = a.finish();
+            fixture.instrs[2].qwords = vec![if fault == 4 { 3 } else { 6 }];
+            if fault == 6 {
+                let target = fixture.instrs[7].offset_dw;
+                let jump = &mut fixture.instrs[0];
+                jump.op = crate::cache::isa::OPCODES.iter().find(|op| op.name == "JMP").unwrap();
+                jump.dwords = vec![(target as i32 - jump.offset_dw as i32 - 2) as u32];
+            }
+            let f = FuncCode { func: "Fixture::Read".into(), is_method: false,
+                param_names: vec!["Nodes".into()], param_types: vec![DataType {
+                    token: 5, type_info: 4, is_reference: true, ..Default::default() }],
+                ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+            let locals = HashMap::from([(8, "UNode".into()), (10, "UNode".into())]);
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: None, param_types: None, class_name: None,
+                local_types: Some(&locals), float_slots: Default::default(),
+                param_off_map: HashMap::from([(-2, 0)]), rvo_off: None, keep_ints: None,
+                rvo_switch_region: std::cell::Cell::new(false) };
+            let source = block_stmts(&ctx, 0, fixture.instrs.len()).0.join("\n");
+            let copy = "local_8 = Nodes.opIndex(0);";
+            assert_eq!(source.contains(copy), fault == 0, "fault={fault}: {source}");
+            if fault == 0 {
+                assert!(source.find(copy) < source.find("local_10 = local_8.Target;"), "{source}");
+            }
         }
     }
 

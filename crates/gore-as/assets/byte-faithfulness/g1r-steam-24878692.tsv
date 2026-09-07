@@ -19,7 +19,6 @@ AI.AIAgent.Creature.Molerat.CombatSituations_Molerat	1	0	0
 AI.AIAgent.Creature.Scavenger.Rideable.Components.GothicMountComponentAS	2	0	0
 AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.SoulHarvest.GA_Spell_SoulHarvest_SkeletonMage	1	0	0
 AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.SoulHarvest.SoulHarvest_Visual	3	0	0
-AI.AIAgent.Creature.Troll.JuvenileTroll.AM_JuvenileTroll_01.AIAgentConfig_AM_JuvenileTroll_01	1	0	0
 AI.AIAgent.Creature.Troll.TC_TrollAdult_01.CombatMoves_TrollAdult	1	0	0
 AI.AIAgent.Human.Config.OCR_GRD_Scatty_210.DailyRoutine_OCR_GRD_Scatty_210	2	0	0
 AI.AIAgent.Orc.Combat.Staff.Spells.StormOfFire.GA_Spell_StormOfFire_Orc	1	0	0
@@ -81,7 +80,6 @@ AI.States.FightAI.SleeperFight.NC_SLD_Gorn_699_Sleeper.Abilities.GA_GornSleeper_
 AI.States.FightAI.SleeperFight.NC_SLD_Gorn_699_Sleeper.Abilities.GornSleeper_ElectrifiedArea	1	0	0
 AI.States.FightAI.SleeperFight.OC_KDF_Milten_Sleeper.Environment.MiltenSleeper_Brazier	1	0	0
 AI.States.FightAI.SleeperFight.OC_KDF_Milten_Sleeper.Spells.Fireball.GA_Spell_FireBall_MiltenSleeper	1	0	0
-AI.States.FightAI.SleeperFight.OC_VLK_Mud_574_Sleeper.Gameplay.RegionTrait_MudSleeper_TeleportToEnd_RegionTrait	1	0	0
 AI.States.FightAI.SleeperFight.SC_NOV_Lester_Sleeper.SleeperFight_LesterCombat	2	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.GA_Summon_XardasSleeper_Skeleton	1	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Abilities.GA_Xardas_Sleeper_FightManager	2	0	0
@@ -130,7 +128,7 @@ GAS.Abilities.Spells.ExecutionValidator.Derived.Base.CastSpell_ExecutionValidato
 GAS.Abilities.Spells.ExecutionValidator.Derived.Spell.Telekinesis.CastSpell_ExecutionValidator_Telekinesis	1	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_SpawnRechargeableProjectile	2	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_Targetable	1	0	0
-GAS.Abilities.Spells.Spells.Electric.ChainLightning.GA_Spell_ChainLightning	6	0	0
+GAS.Abilities.Spells.Spells.Electric.ChainLightning.GA_Spell_ChainLightning	3	0	0
 GAS.Abilities.Spells.Spells.Electric.GA_Spell_BallLightning	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_Fireball	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_StormOfFire	1	0	0
@@ -163,7 +161,6 @@ GAS.GASCharacterMixins	6	0	0
 GAS.GASCharacterStateMixins	12	0	0
 GAS.PerceptionEventMixins	1	0	0
 Gameplay.Environment.BattleBlockingBarrier.BattleBarrierVisual	1	0	0
-Gameplay.Environment.BattleBlockingBarrier.BattleBlockingBarrierManager	2	0	0
 Gameplay.Environment.MCQueen.CeilingMinionSpawner.MCQueen_MinionCeilingSpawner	1	0	0
 Gameplay.Environment.StageManager.InExtremoBanner	1	0	0
 Gameplay.Magic.Components.Damage.PercentageDamageLimiterComponent	1	0	0
@@ -188,7 +185,7 @@ Sound.FXDefinitions.FXDefinitions_AttackImpact	1	0	0
 Sound.FXDefinitions.FXDefinitions_Footsteps	1	0	0
 Sound.MusicRegions	3	0	0
 Spawning.TriggerSpawner	1	0	0
-Story.Achievements	10	0	0
+Story.Achievements	9	0	0
 Story.G1R.Conversation.Conversation_NC_BAU_RICELORD_900	1	0	0
 Story.G1R.Conversation.Conversation_NC_ORG_LEFTY_844	1	0	0
 Story.G1R.Conversation.Conversation_NC_SLD_LEE_700	1	0	0
