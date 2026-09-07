@@ -15,10 +15,10 @@ AI.AIAgent.Human.Config.OCR_GRD_Scatty_210.DailyRoutine_OCR_GRD_Scatty_210	1	0	0
 AI.AIAgent.Orc.Combat.Staff.Spells.StormOfFire.GA_Spell_StormOfFire_Orc	1	0	0
 AI.AIItemScoring	1	0	0
 AI.AssessmentResponseSystem.AssessmentBits	9	0	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	7	0	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	6	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingResponse	2	0	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	20	0	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	19	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.TheftEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.EventResponses	6	0	0
 AI.CharacterAI_Gothic	6	0	0
@@ -29,7 +29,6 @@ AI.NativeAICommands	6	0	0
 AI.Relationship.PersonalRelationshipModifiers	3	0	0
 AI.States.AIState_DailyRoutine	2	0	0
 AI.States.AIState_FollowCharacterAggressive	2	0	0
-AI.States.AIState_FollowCreator	1	0	0
 AI.States.AIState_GuideCharacter	3	0	0
 AI.States.AIState_InteractWinchGate	1	0	0
 AI.States.AIState_UseFreepoint	1	0	0
@@ -70,7 +69,7 @@ AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpotM
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpot_XardasSleeper	3	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.TraceTarget_XardasSleeper	1	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.Xardas_Sleeper_Minion_BillboardComponent	1	0	0
-AI.States.FightAI.WaitStates.AIState_WaitForBlockedPath	2	0	0
+AI.States.FightAI.WaitStates.AIState_WaitForBlockedPath	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_ComplainAboutBlockedPath	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_Creature	1	0	0

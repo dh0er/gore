@@ -1829,6 +1829,24 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_forwarded_getter_field(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (p, name) in [(99, "UHolder"), (100, "AState"), (101, "ANpcState"), (102, "AOther")] {
+            r.type_by_ptr.insert(p, name.into()); r.typeid_to_ptr.insert(p as i32, p); r.type_names.insert(name.into());
+        }
+        for (p, name, owner) in [(1, "GetState", "UHolder"), (2, "opCast", "UObject"), (3, "GetSource", "ANpcState")] {
+            r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, if fault == 3 && p == 3 { "AOther" } else { owner }.into());
+            if !(fault == 4 && p == 3) { r.func_is_method.insert(p); }
+            r.func_params.insert(p, Vec::new());
+            r.func_ret.insert(p, DataType { token: 5, type_info: if fault == 1 && p == 3 { 102 } else { 100 }, is_object_handle: true, ..Default::default() });
+        }
+        let key = (99i64 << 1) | (8i64 << 33) | 1;
+        r.prop_by_key.insert(key, "Target".into()); r.prop_type_id.insert(key, 99);
+        r.set_class_fields(HashMap::from([("UHolder".into(), HashMap::from([("Target".into(), if fault == 2 { "AOther" } else { "AState" }.into())]))]));
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_script_value_handle_store(fault: u8) -> Self {
         let mut r = Self::default();
         for (ptr, name) in [(100, "FPosition"), (101, "FPositionOther"), (102, "AArm"), (103, "AHost")] {
@@ -1899,6 +1917,21 @@ impl RefResolver {
         r.func_ret.insert(1, double.clone()); r.func_params.insert(1, vec![double.clone(), double]);
         r.prop_by_key.insert((1 << 1) | 1, "Scale".into());
         r.prop_type_id.insert((1 << 1) | 1, 1);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_eager_sum_before_field(narrow: bool) -> Self {
+        let mut r = Self::default();
+        r.type_by_ptr.insert(1, "UHolder".into()); r.typeid_to_ptr.insert(1, 1);
+        r.func_by_ptr.insert(1, "Min".into()); r.func_ns.insert(1, "Math".into());
+        let double = DataType { token: if narrow { 0x50 } else { 0x51 }, ..Default::default() };
+        r.func_ret.insert(1, double.clone()); r.func_params.insert(1, vec![double.clone(), double]);
+        for (offset, name) in [(0i64, "Suppressed"), (8, "Max")] {
+            let key = (1i64 << 1) | (offset << 33) | 1;
+            r.prop_by_key.insert(key, name.into()); r.prop_type_id.insert(key, 1);
+        }
+        r.set_class_fields(HashMap::from([("UHolder".into(), HashMap::from([("Suppressed".into(), "float".into()), ("Max".into(), "float".into())]))]));
         r
     }
 
