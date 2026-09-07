@@ -39,7 +39,8 @@ use crate::script_compile_report::{
 use crate::standalone_compiler_package::{
     backend_evidence, backend_evidence_with_package, bundle_absent_fallback_reason,
     package_unavailable_fallback_reason, resolve_product_standalone_compiler_for_game_v1,
-    CompilerBackendWireV2, ResolvedProductStandaloneCompilerV1, BUNDLE_ABSENT_DETAIL,
+    CompilerBackendWireV2, ResolvedProductPackageV1, ResolvedProductStandaloneCompilerV1,
+    BUNDLE_ABSENT_DETAIL,
 };
 
 pub(super) const QUEST_COMMAND: &str = "authoring_store_check_revision3_quest_compiler_v1";
@@ -292,13 +293,13 @@ fn check_revision3_quest_compiler_v2_inner(input: &str) -> Result<Value, Failure
                 ))
             }
         }
-        ResolvedProductStandaloneCompilerV1::Available(package) => {
+        ResolvedProductStandaloneCompilerV1::Available(resolved) => {
             let selection = open_quest_selection_v2(&payload)?;
             run_product_managed_check(
                 selection,
                 Path::new(&payload.game_root),
                 requested,
-                package,
+                resolved,
                 || {
                     derive_quest_module(
                         &payload.expected_head_json,
@@ -393,13 +394,13 @@ fn check_revision3_npc_compiler_v2_inner(input: &str) -> Result<Value, Failure> 
                 ))
             }
         }
-        ResolvedProductStandaloneCompilerV1::Available(package) => {
+        ResolvedProductStandaloneCompilerV1::Available(resolved) => {
             let selection = open_npc_selection_v2(&payload)?;
             run_product_managed_check(
                 selection,
                 Path::new(&payload.game_root),
                 requested,
-                package,
+                resolved,
                 || derive_npc_module(&payload.expected_head_json, &payload.npc_id, &payload.root),
             )
         }
@@ -575,13 +576,17 @@ fn run_product_managed_check<D>(
     selection: InitialSelection,
     game_root: &Path,
     requested: CompilerBackendWireV2,
-    package: gore_as::standalone_package_resolver::AvailableProductStandaloneCompilerPackageV1,
+    resolved: ResolvedProductPackageV1,
     derive: D,
 ) -> Result<Value, Failure>
 where
     D: FnOnce() -> Result<DerivedModule, Failure>,
 {
     debug_assert!(requested != CompilerBackendWireV2::Game);
+    let ResolvedProductPackageV1 {
+        package,
+        pristine_source,
+    } = resolved;
     let initial_derived = DerivedModule {
         generated: selection.persisted_module.clone(),
     };
@@ -660,6 +665,9 @@ where
     }
     if inputs.shipping.as_slice() != package.target_inputs().shipping_cache()
         || inputs.binds.as_slice() != package.target_inputs().binds_cache()
+        || pristine_source
+            .as_ref()
+            .is_some_and(|source| !source.matches(package.target_inputs().shipping_cache()))
     {
         return product_preflight_failure(
             selection,

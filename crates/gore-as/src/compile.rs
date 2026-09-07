@@ -4769,6 +4769,20 @@ fn vanilla_cache(game_dir: &Path) -> PathBuf {
         .join("PrecompiledScript_Shipping.Cache")
 }
 
+/// Whether a qualified target's Shipping path names the live cache of `script_dir`. Both are
+/// resolved through the filesystem so a differently spelled path to the same file still counts
+/// as live; only when either cannot be resolved does the lexical comparison decide.
+fn target_shipping_is_live(target_shipping: &Path, script_dir: &Path) -> bool {
+    let live = script_dir.join("PrecompiledScript_Shipping.Cache");
+    match (
+        std::fs::canonicalize(target_shipping),
+        std::fs::canonicalize(&live),
+    ) {
+        (Ok(target), Ok(live)) => target == live,
+        _ => target_shipping == live,
+    }
+}
+
 /// The deploy backup path for a live cache: the live path with `.gore-bak` APPENDED to the full
 /// filename (so `…Shipping.Cache` -> `…Shipping.Cache.gore-bak`). Mirrors gore-mod's `bak_path`;
 /// built via `OsString::push` (NOT `with_extension`, which would clobber the `.Cache` extension).
@@ -9002,6 +9016,27 @@ impl CompileTransaction {
                 game_dir,
                 mutation_guard,
                 vec![error],
+            ));
+        }
+        // The game compiler regenerates INTO the live Shipping cache, and the exact restore
+        // afterwards reopens the target pin as that live file. A target validated against the
+        // deployment backup (a script mod is installed) would restore the original over the mod,
+        // so it is refused here, before the first install mutation. The standalone compiler keeps
+        // working from the backup; the game compiler needs the live cache as its base.
+        if let Some(pinned) = project_input_pins
+            .as_ref()
+            .and_then(|pins| pins.target_paths.as_ref())
+            .filter(|paths| !target_shipping_is_live(paths.shipping_cache(), script_dir))
+            .map(|paths| paths.shipping_cache().display().to_string())
+        {
+            return Err(finalize_compile_transaction_begin_failure(
+                game_dir,
+                mutation_guard,
+                vec![format!(
+                    "the qualified compiler target pins the deployment backup {pinned} rather \
+                     than the live Shipping cache; the game compiler cannot run while a script \
+                     mod is installed (the standalone compiler can, or undeploy the mod first)"
+                )],
             ));
         }
         // The caller briefly released and identity-repinned qualified target directories to
@@ -16029,6 +16064,74 @@ mod tests {
         assert!(!compile_lock_path(&game).exists());
         assert!(!install_mutation_lock_path(&game).exists());
         drop(report);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    /// While a script mod is installed, the compiler target is validated against the deployment
+    /// backup. The game compiler regenerates INTO the live cache and restores it from the target
+    /// pin afterwards, so that pin must name the live cache; a target pinned on the backup is
+    /// refused before the first install mutation instead of restoring the original over the mod.
+    #[cfg(windows)]
+    #[test]
+    fn game_transaction_refuses_a_target_pinned_on_the_deployment_backup() {
+        let base = unique_test_root("qualified-target-backup-refused");
+        let (game, shipping) = fake_install(&base);
+        let _game_process = StatedGameProcess::not_running();
+        let script = shipping.parent().unwrap();
+        let binds = script.join("Binds.Cache");
+        std::fs::write(&binds, b"BINDS").unwrap();
+        let backup = deploy_bak_path(&shipping);
+        std::fs::write(&backup, b"OLD").unwrap();
+        std::fs::write(&shipping, b"MODDED").unwrap();
+        let executable = game
+            .join("G1R")
+            .join("Binaries")
+            .join("Win64")
+            .join("G1R-Win64-Shipping.exe");
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Mod.as"), b"script").unwrap();
+
+        let pins = ProjectGameInputPins {
+            _executable: Some(open_regular_file_no_follow_read(&executable).unwrap()),
+            shipping: open_regular_file_no_follow_read(&backup).unwrap(),
+            _binds: open_regular_file_no_follow_read(&binds).unwrap(),
+            _directory_pins: Vec::new(),
+            target_paths: Some(
+                crate::compiler_target::CompilerTargetOwnedPathsV1::for_test(
+                    executable,
+                    backup.clone(),
+                    binds,
+                ),
+            ),
+        };
+        let guard = InstallMutationGuard::acquire(&game, "gore-as:compile").unwrap();
+        let generated = std::cell::Cell::new(false);
+        let result = game_run_regen_with_install_report_with_guard_and_pins_and_after_restore(
+            &game,
+            &src,
+            guard,
+            pins,
+            |_, _, dev| {
+                generated.set(true);
+                let bytes = valid_cache();
+                std::fs::write(dev, &bytes).unwrap();
+                GeneratorRunResult::confirmed(Ok(bytes))
+            },
+            |_, _| Ok(()),
+        );
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("a backup-pinned target must be refused"),
+        };
+
+        assert!(error.contains("deployment backup"), "got: {error}");
+        assert!(!generated.get(), "the game compiler must not launch");
+        assert_eq!(std::fs::read(&shipping).unwrap(), b"MODDED");
+        assert_eq!(std::fs::read(&backup).unwrap(), b"OLD");
+        assert!(!compile_bak_path(&shipping).exists());
+        assert!(!compile_lock_path(&game).exists());
+        assert!(!install_mutation_lock_path(&game).exists());
         std::fs::remove_dir_all(base).unwrap();
     }
 

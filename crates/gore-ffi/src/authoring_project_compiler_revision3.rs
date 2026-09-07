@@ -252,8 +252,8 @@ fn check_revision3_project_compiler_v2_inner(input: &str) -> Result<Value, Failu
     let mut unavailable_fallback = None;
     if requested != CompilerBackendWireV2::Game {
         match resolve_product_standalone_compiler_for_game_v1(&game_root) {
-            Ok(ResolvedProductStandaloneCompilerV1::Available(package)) => {
-                available_package = Some(package);
+            Ok(ResolvedProductStandaloneCompilerV1::Available(resolved)) => {
+                available_package = Some(resolved);
             }
             Ok(ResolvedProductStandaloneCompilerV1::BundleAbsent) => {
                 if requested == CompilerBackendWireV2::Standalone {
@@ -324,9 +324,14 @@ fn check_revision3_project_compiler_v2_inner(input: &str) -> Result<Value, Failu
         shipping,
         binds,
     };
-    if let Some(package) = available_package.as_ref() {
+    if let Some(resolved) = available_package.as_ref() {
+        let package = &resolved.package;
         if package.target_inputs().shipping_cache() != inputs.shipping
             || package.target_inputs().binds_cache() != inputs.binds
+            || resolved
+                .pristine_source
+                .as_ref()
+                .is_some_and(|source| !source.matches(package.target_inputs().shipping_cache()))
         {
             return fail_v2_preflight_with_optional_guard(
                 guard.take(),
@@ -377,7 +382,9 @@ fn check_revision3_project_compiler_v2_inner(input: &str) -> Result<Value, Failu
 
     if graph.modules.is_empty() {
         let closing = close_revalidation(&selection, &game_root, &inputs.catalog, &inputs.shipping);
-        let package_identity = available_package.as_ref().map(|package| package.identity());
+        let package_identity = available_package
+            .as_ref()
+            .map(|resolved| resolved.package.identity());
         let mut compiler = if let Some(mut held) = guard.take() {
             match held.release() {
                 Ok(()) if closing.is_exact() => empty_compiler_evidence(),
@@ -428,7 +435,8 @@ fn check_revision3_project_compiler_v2_inner(input: &str) -> Result<Value, Failu
     let mut authority = None;
     let mut target = None;
     let mut runner_unavailable = None;
-    if let Some(package) = available_package.take() {
+    if let Some(resolved) = available_package.take() {
+        let package = resolved.package;
         let runner = package.sidecar_runner(private_workspace.scratch_dir.clone());
         let (package_authority, target_inputs) = package.into_execution_parts();
         authority = Some(package_authority);

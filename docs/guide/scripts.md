@@ -220,6 +220,12 @@ retry rather than an undeploy. The installed version is replaced only by the
 next `gore mod deploy` or Manager apply, which rebuild from the same pristine
 backup.
 
+This holds for the standalone compiler. The game compiler regenerates into the
+live cache and restores it from the pinned target afterwards, so a target
+validated against the backup is refused before any install change; with a
+script mod installed, a game-capable policy reports that refusal as the
+fallback reason and only the standalone result counts.
+
 To pin which original a compile may use, pass `--expect-base <CACHE>` (a file
 the selected original must equal byte for byte, for example a frozen copy of
 the vanilla cache) or `--expect-base-sha256 <HEX>`. Both refuse the compile

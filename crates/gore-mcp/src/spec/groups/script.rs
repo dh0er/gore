@@ -348,7 +348,7 @@ const EXPECT_BASE: ArgSpec = ArgSpec::new(
 const EXPECT_BASE_SHA256: ArgSpec = ArgSpec::new(
     "expect_base_sha256",
     Long("expect-base-sha256"),
-    Hex,
+    Str,
     "Refuse to compile unless the selected original script cache has this SHA-256 (64 hex \
      digits, `sha256:` prefix optional). Never selects the base.",
     false,
@@ -1123,6 +1123,24 @@ pub const AS_COMPILE_MODULE: GroupSpec = GroupSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The CLI accepts the documented `sha256:` prefix. A Hex pre-check would refuse it before
+    /// the spawn, so the MCP argument stays a plain string and the CLI remains the validator.
+    #[test]
+    fn the_expected_base_sha256_reaches_the_cli_unchecked() {
+        for args in [
+            COMPILE_ARGS,
+            COMPILE_MODULE_ARGS,
+            STANDALONE_COMPILE_ARGS,
+            STANDALONE_COMPILE_MODULE_ARGS,
+        ] {
+            let spec = args
+                .iter()
+                .find(|spec| spec.name == "expect_base_sha256")
+                .expect("expect_base_sha256 is declared");
+            assert_eq!(spec.kind, Str);
+        }
+    }
     use crate::spec::Class;
 
     #[test]

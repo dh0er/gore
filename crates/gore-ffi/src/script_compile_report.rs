@@ -33,7 +33,8 @@ use crate::err;
 use crate::standalone_compiler_package::{
     backend_evidence, backend_evidence_with_package, bundle_absent_fallback_reason,
     package_unavailable_fallback_reason, resolve_product_standalone_compiler_for_game_v1,
-    CompilerBackendWireV2, ResolvedProductStandaloneCompilerV1, BUNDLE_ABSENT_DETAIL,
+    CompilerBackendWireV2, ResolvedProductPackageV1, ResolvedProductStandaloneCompilerV1,
+    BUNDLE_ABSENT_DETAIL,
 };
 
 pub(super) const COMMAND: &str = "script_compile_report_v1";
@@ -728,8 +729,8 @@ fn compile_report_v2_product_payload(
                 )
             }
         }
-        ResolvedProductStandaloneCompilerV1::Available(package) => {
-            compile_report_with_available_product_package(payload, requested, package)
+        ResolvedProductStandaloneCompilerV1::Available(resolved) => {
+            compile_report_with_available_product_package(payload, requested, resolved)
         }
     }
 }
@@ -737,9 +738,13 @@ fn compile_report_v2_product_payload(
 fn compile_report_with_available_product_package(
     payload: CompileWirePayload,
     requested: CompilerBackendWireV2,
-    package: gore_as::standalone_package_resolver::AvailableProductStandaloneCompilerPackageV1,
+    resolved: ResolvedProductPackageV1,
 ) -> Value {
     debug_assert!(requested != CompilerBackendWireV2::Game);
+    let ResolvedProductPackageV1 {
+        package,
+        pristine_source,
+    } = resolved;
     let game_dir = PathBuf::from(&payload.game_dir);
     let staging = match OwnedCompileStaging::create(Path::new(&payload.work_dir), &game_dir) {
         Ok(staging) => staging,
@@ -850,6 +855,7 @@ fn compile_report_with_available_product_package(
             .as_ref()
             .expect("the authenticated target remains pinned before execution")
             .shipping_cache(),
+        pristine_source.as_ref(),
     ) {
         Ok(base) => base,
         Err(failure) => {
@@ -996,9 +1002,13 @@ fn attach_backend_evidence(mut response: Value, evidence: Value) -> Value {
     response
 }
 
+/// The pinned target must hold the current deployment-aware pristine cache AND, when the target
+/// was resolved on a selected pristine source, the bytes that selection named: equal bytes under
+/// a different selected identity are a base that changed between selection and pin.
 fn qualified_target_pristine_script_cache(
     game_dir: &Path,
     qualified_shipping: &[u8],
+    selected: Option<&gore_mod::PristineScriptCacheSource>,
 ) -> Result<(Vec<u8>, bool), Value> {
     let pristine = gore_mod::pristine_script_cache(game_dir).map_err(|error| {
         let message = error.to_string();
@@ -1015,7 +1025,8 @@ fn qualified_target_pristine_script_cache(
             )
         }
     })?;
-    let target_matches_pristine = qualified_shipping == pristine.as_slice();
+    let target_matches_pristine = qualified_shipping == pristine.as_slice()
+        && selected.is_none_or(|source| source.matches(qualified_shipping));
     Ok((pristine, target_matches_pristine))
 }
 
@@ -1829,14 +1840,26 @@ mod tests {
         fs::write(script.join("PrecompiledScript_Shipping.Cache"), b"pristine").unwrap();
 
         let (accepted, accepted_matches) =
-            qualified_target_pristine_script_cache(&game, b"pristine").unwrap();
+            qualified_target_pristine_script_cache(&game, b"pristine", None).unwrap();
         assert_eq!(accepted, b"pristine");
         assert!(accepted_matches);
 
         let (fallback_base, fallback_matches) =
-            qualified_target_pristine_script_cache(&game, b"deployed").unwrap();
+            qualified_target_pristine_script_cache(&game, b"deployed", None).unwrap();
         assert_eq!(fallback_base, b"pristine");
         assert!(!fallback_matches);
+
+        // The selection made before the pin must still be the pristine cache read after it:
+        // equal bytes under a different selected identity are a base that changed in between.
+        let stale = gore_mod::pristine_script_cache_source(&game).unwrap();
+        fs::write(script.join("PrecompiledScript_Shipping.Cache"), b"replaced").unwrap();
+        let (_, replaced_matches) =
+            qualified_target_pristine_script_cache(&game, b"replaced", Some(&stale)).unwrap();
+        assert!(!replaced_matches);
+        let fresh = gore_mod::pristine_script_cache_source(&game).unwrap();
+        let (_, fresh_matches) =
+            qualified_target_pristine_script_cache(&game, b"replaced", Some(&fresh)).unwrap();
+        assert!(fresh_matches);
 
         let rejected = pristine_base_changed_failure();
         assert_eq!(

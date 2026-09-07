@@ -42,7 +42,16 @@ impl CompilerBackendWireV2 {
 pub(super) enum ResolvedProductStandaloneCompilerV1 {
     BundleAbsent,
     Unavailable(ProductStandaloneCompilerPackageUnavailableV1),
-    Available(AvailableProductStandaloneCompilerPackageV1),
+    Available(ResolvedProductPackageV1),
+}
+
+/// An authenticated package together with the pristine source its Shipping target was validated
+/// against, so the check after the pin can prove the pinned bytes are the selected original and
+/// not merely whatever the pristine selection returns afterwards.
+#[derive(Debug)]
+pub(super) struct ResolvedProductPackageV1 {
+    pub(super) package: AvailableProductStandaloneCompilerPackageV1,
+    pub(super) pristine_source: Option<gore_mod::PristineScriptCacheSource>,
 }
 
 /// Resolve one product-authenticated compiler package for the exact selected installation.
@@ -70,7 +79,10 @@ pub(super) fn resolve_product_standalone_compiler_for_game_v1(
                 ResolvedProductStandaloneCompilerV1::Unavailable(reason)
             }
             ProductStandaloneCompilerPackageResolutionV1::Available(package) => {
-                ResolvedProductStandaloneCompilerV1::Available(package)
+                ResolvedProductStandaloneCompilerV1::Available(ResolvedProductPackageV1 {
+                    package,
+                    pristine_source: paths.pristine_source,
+                })
             }
         },
     )
