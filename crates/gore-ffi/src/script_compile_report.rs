@@ -1080,7 +1080,7 @@ fn qualified_target_pristine_script_cache(
 /// Why standalone_then_game skips its game fallback, when it does: the compiler base is the
 /// deployment backup, which the game compiler cannot restore over the live cache. Only that
 /// policy has a fallback to skip; a strict standalone or game request never gets this note.
-fn skipped_game_fallback_note(
+pub(crate) fn skipped_game_fallback_note(
     requested: CompilerBackendWireV2,
     pristine_source: Option<&gore_mod::PristineScriptCacheSource>,
 ) -> Option<String> {

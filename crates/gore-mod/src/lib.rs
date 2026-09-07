@@ -11407,11 +11407,29 @@ pub fn pristine_script_cache_source(game_root: &Path) -> Result<PristineScriptCa
     let prior = record.as_ref().map(|stored| &stored.record);
     ensure_pristine_sources_bounded(&script_cache, MAX_PRISTINE_PATCH_BYTES)?;
     let source = select_pristine_source(&script_cache, prior)?;
-    let from_backup = source.path != script_cache;
+    // Only a backup the active deployment owns means a script mod is installed. The selection
+    // also admits an unowned `*.gore-bak` that is byte-identical to the live cache; the live
+    // cache is then the same original, and the one every compiler backend can work from.
+    let owned_backup = source.path != script_cache
+        && prior.is_some_and(|record| {
+            backup_hash_for_path(&source.path, &record.backup_hashes).is_some()
+                || record
+                    .backups
+                    .iter()
+                    .any(|(stored_live, stored_backup, _)| {
+                        same_path(&script_cache, stored_live)
+                            && same_path(&source.path, stored_backup)
+                    })
+        });
+    let path = if owned_backup {
+        source.path
+    } else {
+        script_cache
+    };
     Ok(PristineScriptCacheSource {
-        path: source.path,
+        path,
         identity: source.basis.pristine,
-        from_backup,
+        from_backup: owned_backup,
         drifted: source.drifted,
     })
 }
@@ -19129,6 +19147,26 @@ mod tests {
         assert!(drifted.drifted);
         assert!(drifted.matches(&updated));
         assert_eq!(pristine_script_cache(&game).unwrap(), updated);
+    }
+
+    /// A `*.gore-bak` nobody owns is admitted only when it is byte-identical to the live cache,
+    /// so the live cache is the same original: no script mod is installed, and every compiler
+    /// backend may work from the live file.
+    #[test]
+    fn pristine_script_cache_source_treats_an_unowned_identical_backup_as_live() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        let base = test_script_cache_with_guid("_gore_base", [0x44; 16]);
+        std::fs::write(&live, &base).unwrap();
+        std::fs::write(bak_path(&live), &base).unwrap();
+
+        let source = pristine_script_cache_source(&game).unwrap();
+        assert_eq!(source.path, live);
+        assert!(!source.from_backup);
+        assert!(!source.drifted);
+        assert!(source.matches(&base));
+        assert_eq!(pristine_script_cache(&game).unwrap(), base);
     }
 
     #[test]

@@ -2207,8 +2207,9 @@ fn compile_full_graph_command(
         },
     );
 
-    let (requested_mode, game_fallback_note) =
-        effective_compile_mode(compiler.backend.into(), &shipping_source)?;
+    let requested_mode: CompilerBackendModeV1 = compiler.backend.into();
+    let (effective_mode, game_fallback_note) =
+        effective_compile_mode(requested_mode, &shipping_source)?;
     if let Some(note) = game_fallback_note.as_deref() {
         eprintln!("{note}");
     }
@@ -2218,7 +2219,7 @@ fn compile_full_graph_command(
     let mut package_unavailable = None;
     match resolution {
         ProductStandaloneCompilerPackageResolutionV1::Available(available) => {
-            let runner = (requested_mode != CompilerBackendModeV1::Game)
+            let runner = (effective_mode != CompilerBackendModeV1::Game)
                 .then(|| available.sidecar_runner(work_dir.clone()));
             let (authority, target_inputs) = available.into_execution_parts();
             receipt_authority = Some(authority);
@@ -2235,7 +2236,7 @@ fn compile_full_graph_command(
                             error.kind().as_str()
                         );
                         package_unavailable = Some(detail.clone());
-                        if requested_mode == CompilerBackendModeV1::StandaloneThenGame {
+                        if effective_mode == CompilerBackendModeV1::StandaloneThenGame {
                             standalone_runner =
                                 Some(ProductStandaloneRunnerV1::Unavailable { detail });
                         }
@@ -2250,7 +2251,7 @@ fn compile_full_graph_command(
             package_unavailable = Some(format!("{:?}: {}", reason.kind(), reason.detail()));
         }
     }
-    if requested_mode == CompilerBackendModeV1::Standalone && standalone_runner.is_none() {
+    if effective_mode == CompilerBackendModeV1::Standalone && standalone_runner.is_none() {
         bail!(
             "standalone compiler unavailable: {}",
             package_unavailable
@@ -2266,7 +2267,7 @@ fn compile_full_graph_command(
                 .unwrap_or("no product-authenticated package matched the installed target")
         );
     }
-    if requested_mode == CompilerBackendModeV1::StandaloneThenGame {
+    if effective_mode == CompilerBackendModeV1::StandaloneThenGame {
         if let Some(reason) = package_unavailable.as_deref() {
             eprintln!(
                 "standalone package unavailable; explicit game fallback remains enabled: {reason}"
@@ -2275,7 +2276,7 @@ fn compile_full_graph_command(
     }
 
     let mut guard = None;
-    if requested_mode != CompilerBackendModeV1::Standalone {
+    if effective_mode != CompilerBackendModeV1::Standalone {
         if let Some(target) = target.as_mut() {
             // Target validation pins every parent directory without delete sharing. Keep the exact
             // EXE/Shipping/Binds file handles open, release only those directory handles while the
@@ -2304,7 +2305,7 @@ fn compile_full_graph_command(
             }
         };
         (base, target.binds_cache().to_vec())
-    } else if requested_mode == CompilerBackendModeV1::Standalone {
+    } else if effective_mode == CompilerBackendModeV1::Standalone {
         unreachable!("strict standalone availability was checked above")
     } else {
         let (base, acquired) = guarded_pristine_script_cache(&game, &shipping_source)?;
@@ -2368,7 +2369,7 @@ fn compile_full_graph_command(
     let audit_base = opts.base_cache.clone();
     let audit_binds = opts.binds_cache.clone();
     let closing_audit = move || audit_full_graph_inputs(&audit_game, &audit_base, &audit_binds);
-    let report = match requested_mode {
+    let report = match effective_mode {
         CompilerBackendModeV1::Standalone => {
             gore_as::compile::compile_full_graph_standalone_v1_with_target(
                 &opts,
@@ -2389,7 +2390,7 @@ fn compile_full_graph_command(
                     gore_as::compile::compile_full_graph_with_backend_v1_with_guard_and_target(
                         &opts,
                         &diagnostics,
-                        requested_mode,
+                        effective_mode,
                         standalone_runner
                             .as_mut()
                             .map(|runner| runner as &mut dyn StandaloneCompilerRunnerV1),
@@ -2401,7 +2402,7 @@ fn compile_full_graph_command(
                 None => gore_as::compile::compile_full_graph_with_backend_v1_with_guard(
                     &opts,
                     &diagnostics,
-                    requested_mode,
+                    effective_mode,
                     standalone_runner
                         .as_mut()
                         .map(|runner| runner as &mut dyn StandaloneCompilerRunnerV1),
@@ -3610,8 +3611,9 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 require_expected_base(&shipping_source, expected)?;
             }
             let shipping_path = shipping_source.path.clone();
-            let (requested_mode, game_fallback_note) =
-                effective_compile_mode(compiler.backend.into(), &shipping_source)?;
+            let requested_mode: gore_as::compile::CompilerBackendModeV1 = compiler.backend.into();
+            let (effective_mode, game_fallback_note) =
+                effective_compile_mode(requested_mode, &shipping_source)?;
             if let Some(note) = game_fallback_note.as_deref() {
                 eprintln!("{note}");
             }
@@ -3653,7 +3655,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 );
                 match resolution {
                     ProductStandaloneCompilerPackageResolutionV1::Available(available) => {
-                        let runner = (requested_mode
+                        let runner = (effective_mode
                             != gore_as::compile::CompilerBackendModeV1::Game)
                             .then(|| available.sidecar_runner(work_dir.clone()));
                         let (authority, target) = available.into_execution_parts();
@@ -3672,7 +3674,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                                         error.kind().as_str()
                                     );
                                     package_unavailable = Some(detail.clone());
-                                    if requested_mode
+                                    if effective_mode
                                         == gore_as::compile::CompilerBackendModeV1::StandaloneThenGame
                                     {
                                         standalone_runner = Some(
@@ -3696,7 +3698,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                             Some(format!("{:?}: {}", reason.kind(), reason.detail()));
                     }
                 }
-                if requested_mode == gore_as::compile::CompilerBackendModeV1::Standalone
+                if effective_mode == gore_as::compile::CompilerBackendModeV1::Standalone
                     && standalone_runner.is_none()
                 {
                     bail!(
@@ -3715,7 +3717,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                         )
                     );
                 }
-                if requested_mode == gore_as::compile::CompilerBackendModeV1::StandaloneThenGame {
+                if effective_mode == gore_as::compile::CompilerBackendModeV1::StandaloneThenGame {
                     if let Some(reason) = package_unavailable.as_deref() {
                         eprintln!(
                             "standalone compiler unavailable; using the visible game fallback: \
@@ -3733,7 +3735,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             }
 
             let (base_override, guard) = if let Some(target) = standalone_target.as_mut() {
-                let guard = if requested_mode == gore_as::compile::CompilerBackendModeV1::Standalone
+                let guard = if effective_mode == gore_as::compile::CompilerBackendModeV1::Standalone
                 {
                     None
                 } else {
@@ -3766,7 +3768,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     }
                 };
                 (base, guard)
-            } else if requested_mode == gore_as::compile::CompilerBackendModeV1::Standalone {
+            } else if effective_mode == gore_as::compile::CompilerBackendModeV1::Standalone {
                 unreachable!("strict standalone availability was checked above")
             } else {
                 let (base, guard) = guarded_pristine_script_cache(&game, &shipping_source)?;
@@ -3830,7 +3832,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     gore_as::compile::compile_module_with_backend_v1_with_guard_and_target(
                         &opts,
                         &diagnostics,
-                        requested_mode,
+                        effective_mode,
                         standalone.as_mut().map(|runner| {
                             runner as &mut dyn gore_as::compile::StandaloneCompilerRunnerV1
                         }),
@@ -3841,7 +3843,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 (Some(guard), None) => gore_as::compile::compile_module_with_backend_v1_with_guard(
                     &opts,
                     &diagnostics,
-                    requested_mode,
+                    effective_mode,
                     standalone.as_mut().map(|runner| {
                         runner as &mut dyn gore_as::compile::StandaloneCompilerRunnerV1
                     }),
@@ -3858,7 +3860,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     gore_as::compile::compile_module_with_backend_v1(
                         &opts,
                         &diagnostics,
-                        requested_mode,
+                        effective_mode,
                         pinned_standalone.as_mut().map(|runner| {
                             runner as &mut dyn gore_as::compile::StandaloneCompilerRunnerV1
                         }),
@@ -3867,7 +3869,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 (None, None) => gore_as::compile::compile_module_with_backend_v1(
                     &opts,
                     &diagnostics,
-                    requested_mode,
+                    effective_mode,
                     standalone.as_mut().map(|runner| {
                         runner as &mut dyn gore_as::compile::StandaloneCompilerRunnerV1
                     }),

@@ -298,7 +298,27 @@ fn check_revision3_project_compiler_v2_inner(input: &str) -> Result<Value, Failu
         }
     }
 
-    let mut guard = if requested == CompilerBackendWireV2::Standalone {
+    // While a script mod is installed the compiler base is the deployment backup, which the
+    // game compiler cannot restore over the live cache: `standalone_then_game` runs the
+    // standalone compiler only, takes no install guard, and says so in its evidence.
+    let skipped_game_fallback = crate::script_compile_report::skipped_game_fallback_note(
+        requested,
+        available_package
+            .as_ref()
+            .and_then(|resolved| resolved.pristine_source.as_ref()),
+    )
+    .map(|note| {
+        json!({
+            "failed_backend": CompilerBackendNameV1::Game.as_str(),
+            "failure_kind": "preflight",
+            "detail": note,
+        })
+    });
+    let skip_game_fallback = skipped_game_fallback.is_some();
+    if skip_game_fallback {
+        unavailable_fallback = skipped_game_fallback.clone();
+    }
+    let mut guard = if requested == CompilerBackendWireV2::Standalone || skip_game_fallback {
         None
     } else {
         Some(
@@ -447,7 +467,9 @@ fn check_revision3_project_compiler_v2_inner(input: &str) -> Result<Value, Failu
         }
     }
 
-    if requested == CompilerBackendWireV2::Standalone && standalone_runner.is_none() {
+    if (requested == CompilerBackendWireV2::Standalone || skip_game_fallback)
+        && standalone_runner.is_none()
+    {
         debug_assert!(guard.is_none());
         let failure = runner_unavailable
             .as_ref()
@@ -486,7 +508,7 @@ fn check_revision3_project_compiler_v2_inner(input: &str) -> Result<Value, Failu
             false,
             false,
             authority.as_ref().map(|authority| authority.identity()),
-            None,
+            skipped_game_fallback,
         );
         return project_response(&selection, &graph, manifest, game_inputs, compiler, closing);
     }
@@ -528,6 +550,19 @@ fn check_revision3_project_compiler_v2_inner(input: &str) -> Result<Value, Failu
                 .take()
                 .expect("qualified standalone execution retains exact target inputs"),
         ),
+        CompilerBackendWireV2::StandaloneThenGame if skip_game_fallback => {
+            debug_assert!(guard.is_none());
+            compile_full_graph_standalone_v1_with_target(
+                &compiler_opts,
+                standalone_runner
+                    .as_mut()
+                    .expect("a skipped game fallback keeps the standalone runner"),
+                audit,
+                target
+                    .take()
+                    .expect("qualified standalone execution retains exact target inputs"),
+            )
+        }
         CompilerBackendWireV2::StandaloneThenGame if standalone_runner.is_some() => {
             compile_full_graph_with_backend_v1_with_guard_and_target(
                 &compiler_opts,
