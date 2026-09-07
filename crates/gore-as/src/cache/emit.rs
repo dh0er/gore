@@ -1921,6 +1921,8 @@ fn emit_function_ctor(
         &named_sites,
     );
     pass_trace("inline_call_argument_temporaries", &body);
+    let body = fold_inlined_cast_bool_cleanup(&body, f, refs, &widened);
+    pass_trace("fold_inlined_cast_bool_cleanup", &body);
     let body = drop_unreachable_statements(&body);
     pass_trace("drop_unreachable_statements", &body);
     // All three run before the declarations are hoisted, so a temporary they empty out never
@@ -1964,6 +1966,8 @@ fn emit_function_ctor(
         .collect();
     let body = fold_enum_round_trips(&body, fields, &path_roots, refs);
     pass_trace("fold_enum_round_trips", &body);
+    let mut member_copy_named = member_copy_named_slots(f);
+    member_copy_named.extend(parameter_field_read_store_copies(f, refs, is_method));
     let native_handle_reads = native_handle_read_types(f, refs);
     let early_receivers = early_member_receiver_copies(f, refs);
     let body = fold_member_read_temporaries(
@@ -1976,11 +1980,13 @@ fn emit_function_ctor(
         refs,
         &member_read_slots(f),
         returns_by_reference,
-            &member_copy_named_slots(f),
+            &member_copy_named,
             &early_receivers,
             &native_handle_reads,
     );
     pass_trace("fold_member_read_temporaries", &body);
+    let body = fold_cast_field_value_return(&body, f, refs, is_method);
+    pass_trace("fold_cast_field_value_return", &body);
     let body =
         fold_returned_temporaries(&body, &declared_locals, refs, &ret, returns_by_reference, &retained_return_copies);
     // Before the hoist counts which locals exist: a slot whose only write is dead has no name.
@@ -2938,7 +2944,7 @@ fn emit_function_ctor(
             refs,
             &member_read_slots(f),
             f.ret.is_reference && f.ret.token == 5 && !f.ret.is_object_handle,
-            &member_copy_named_slots(f),
+            &member_copy_named,
             &early_receivers,
             &native_handle_reads,
         );
@@ -16112,6 +16118,101 @@ fn member_copy_named_slots(f: &Func) -> HashSet<i32> {
     out
 }
 
+/// Preserve a parameter handle copied before its field is assigned to this.
+/// The alias has one complete, same-typed life; both native/script property rows agree.
+fn parameter_field_read_store_copies(f: &Func, refs: &RefResolver, is_method: bool) -> HashSet<i32> {
+    if !is_method || f.ret.token != 0x52 { return HashSet::new(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+    let offsets = super::model::param_slot_map(&params, true, false, Some(refs));
+    let w = |i: &Instr| i.words.first().map(|v| *v as i16 as i32);
+    code.windows(9).filter_map(|run| {
+        if run.iter().map(|i| i.op.name).ne(["PshVPtr", "RefCpyV", "PshVPtr", "ADDSi",
+            "RDSPtr", "PshVPtr", "ADDSi", "REFCPY", "PopPtr"]) { return None; }
+        let slot = w(&run[1])?;
+        let parameter_slot = w(&run[0])?;
+        let param = params.get(*offsets.get(&parameter_slot)?)?;
+        if slot <= 0 || parameter_slot >= 0 || w(&run[2]) != Some(slot) || w(&run[5]) != Some(0)
+            || param.token != 5 || !param.is_object_handle || param.is_reference
+            || param.is_object_const || param.is_read_only { return None; }
+        let locals: Vec<_> = f.obj_locals.iter().filter(|(s, _)| *s == slot).collect();
+        if locals.len() != 1 || refs.type_identity_by_ptr(locals[0].1)?
+            != refs.type_identity_by_ptr(param.type_info)?
+            || code.iter().filter(|i| super::bytediff::addressed_slots(i).contains(&slot)).count() != 2
+            { return None; }
+        let field_type = |i: &Instr| {
+            let tid = *i.dwords.first()? as i32;
+            let (field, old) = refs.member_identity(tid, w(i)?)?;
+            let owner = refs.type_identity_by_id(tid)?;
+            (refs.type_identity_by_id(old)? == owner)
+                .then(|| refs.own_field_type_by_class(&owner.name, field)).flatten()
+        };
+        let ty = field_type(&run[3])?;
+        if !is_object_handle_type(ty) || ty.starts_with("const ") || field_type(&run[6])? != ty
+            || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J')
+                && i.dwords.first().is_some_and(|v| {
+                    let target = i.offset_dw as i64 + 2 + *v as i32 as i64;
+                    target > run[0].offset_dw as i64 && target <= run[8].offset_dw as i64
+                }))) { return None; }
+        Some(slot)
+    }).collect()
+}
+
+/// After an unnamed cast becomes a bool-call argument, its sole remaining null
+/// store is the old expression cleanup. Keep every named or differently written life out.
+fn fold_inlined_cast_bool_cleanup(body: &str, f: &Func, refs: &RefResolver, widened: &HashSet<i32>) -> String {
+    if f.ret.token != 0x41 || f.ret.is_reference { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+    let mut removed = HashSet::new();
+    for (at, ins) in code.iter().enumerate() {
+        if ins.op.name != "FreeNullV8" || at < 2 { continue; }
+        let Some(slot) = w(ins, 0).filter(|s| *s > 0) else { continue; };
+        let name = format!("local_{slot}");
+        if count_ident(body, &name) != 1 || !body.lines().any(|l| l.trim() == format!("{name} = nullptr;"))
+            { continue; }
+        let call = &code[at - 2];
+        let ret = match call.op.name {
+            "CALL" | "CALLINTF" => call.dwords.first().and_then(|id| refs.func_ret_by_id(*id as i32)),
+            _ => None,
+        };
+        let tail = code.get(at + 1..at + 3);
+        if !ret.is_some_and(|r| r.token == 0x41 && !r.is_reference)
+            || code[at - 1].op.name != "CpyRtoV4" || !tail.is_some_and(|t|
+                t[0].op.name == "NOT" && t[1].op.name == "CpyVtoV4"
+                    && w(&t[0], 0) == w(&code[at - 1], 0) && w(&t[1], 1) == w(&t[0], 0))
+            { continue; }
+        let locals: Vec<_> = f.obj_locals.iter().filter(|(s, _)| *s == slot).collect();
+        if locals.len() != 1 { continue; }
+        let Some(identity) = refs.type_identity_by_ptr(locals[0].1) else { continue; };
+        if !is_object_handle_type(&identity.name) { continue; }
+        let mut casts = 0;
+        let safe = code.iter().enumerate().all(|(i, op)| {
+            if !super::bytediff::addressed_slots(op).contains(&slot) { return true; }
+            match op.op.name {
+                "PshVPtr" | "ClrVPtr" => true,
+                "FreeNullV8" => i == at,
+                "PSF" => {
+                    let Some(run) = i.checked_sub(1).and_then(|s| code.get(s..s + 4)) else { return false; };
+                    let cast = run[0].op.name == "TYPEID" && run[2].op.name == "PshVPtr"
+                        && run[3].op.name == "CALLSYS" && run[3].qwords.first().is_some_and(|p|
+                            refs.func_by_ptr(*p as i64) == Some("opCast"))
+                        && run[0].dwords.first().is_some_and(|tid|
+                            refs.type_identity_by_id((tid & !0x6000_0000) as i32) == Some(identity));
+                    if cast { casts += 1; }
+                    cast
+                }
+                _ => false,
+            }
+        });
+        if safe && casts > 0 { removed.insert(name); }
+    }
+    if removed.is_empty() { return body.to_owned(); }
+    let mut text = body.lines().filter(|l| !removed.contains(release_name(l))).collect::<Vec<_>>().join("\n");
+    if body.ends_with('\n') { text.push('\n'); }
+    fold_negated_stores(&text, widened)
+}
+
 /// A native member handle copied before the eventual method's argument preparation.
 /// The key includes owner, property and consumer; no other physical slot life may qualify.
 fn early_member_receiver_copies(f: &Func, refs: &RefResolver) -> HashSet<(i32, String, String, String)> {
@@ -16360,6 +16461,10 @@ fn fold_member_read_temporaries(
                 }
             }
             let reader = reader?;
+            // A field snapshot taken before a loop cannot become a fresh read each iteration.
+            if path.contains('.') && enclosing_loop_span(&lines, reader)
+                .is_some_and(|(header, close)| at < header && reader < close)
+            { return None; }
             if !read_once_at(&lines, at, reader, &name) {
                 return None;
             }
@@ -16692,6 +16797,80 @@ fn copied_widened_return_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
         }
     }
     out
+}
+
+/// A cast temporary supplies a field directly to the hidden value-return slot.
+/// No handle alias or other life may acquire this terminal expression's permission.
+fn fold_cast_field_value_return(body: &str, f: &Func, refs: &RefResolver, is_method: bool) -> String {
+    let folded = (|| {
+        if !is_method || !f.params.is_empty() || !f.is_const_method() || f.ret.token != 5
+            || f.ret.is_reference || f.ret.is_object_handle || f.ret.is_object_const
+            || f.ret.is_read_only || f.ret.is_auto || f.ret.if_handle_then_const { return None; }
+        let code = disassemble(&f.bytecode).ok()?;
+        let start = code.len().checked_sub(13)?;
+        let tail = &code[start..];
+        if tail.iter().map(|i| i.op.name).ne(["CmpPtrNull", "JZ", "TYPEID", "PSF", "PshVPtr",
+            "CALLSYS", "JMP", "ClrVPtr", "PshVPtr", "ADDSi", "PshVPtr", "CALLSYS", "RET"])
+        { return None; }
+        let word = |i: &Instr| i.words.first().map(|w| *w as i16 as i32);
+        let slot = word(&tail[3])?;
+        if slot <= 0 || word(&tail[0])? <= 0 || word(&tail[0]) == Some(slot)
+            || word(&tail[4]) != word(&tail[0]) || word(&tail[7]) != Some(slot)
+            || word(&tail[8]) != Some(slot) || word(&tail[10]) != Some(-super::model::AS_PTR_SIZE)
+            || code.iter().enumerate().filter(|(_, i)|
+                super::bytediff::addressed_slots(i).contains(&slot)).map(|(i, _)| i)
+                .ne([start + 3, start + 7, start + 8]) { return None; }
+        let jump = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+        if code.iter().enumerate().filter(|(_, i)| i.op.name.starts_with('J')).map(|(i, _)| i)
+            .ne([start + 1, start + 6]) || jump(&tail[1]) != Some(tail[7].offset_dw as i64)
+            || jump(&tail[6]) != Some(tail[8].offset_dw as i64) { return None; }
+        let type_id = *tail[2].dwords.first()?;
+        if type_id & 0x6000_0000 != 0x4000_0000 { return None; }
+        let target = refs.type_identity_by_id((type_id & !0x6000_0000) as i32)?;
+        let objects: Vec<_> = f.obj_locals.iter().filter(|(s, _)| *s == slot).collect();
+        let [(_, object)] = objects[..] else { return None; };
+        if refs.type_identity_by_ptr(*object) != Some(target) { return None; }
+        let owner = *tail[9].dwords.first()? as i32;
+        let (field, old_owner) = refs.member_identity(owner, word(&tail[9])?)?;
+        if refs.type_identity_by_id(owner) != Some(target)
+            || refs.type_identity_by_id(old_owner) != Some(target) { return None; }
+        let cast = *tail[5].qwords.first()? as i64;
+        let [cast_argument] = refs.func_params_by_ptr(cast)? else { return None; };
+        if refs.func_by_ptr(cast) != Some("opCast") || !refs.is_method_by_ptr(cast)
+            || refs.func_ret_by_ptr(cast)?.token != 0x52 || cast_argument.token != 0x3b
+            || !cast_argument.is_reference { return None; }
+        let copy = *tail[11].qwords.first()? as i64;
+        let [argument] = refs.func_params_by_ptr(copy)? else { return None; };
+        let result = refs.func_ret_by_ptr(copy)?;
+        let ret_identity = refs.type_identity_by_ptr(f.ret.type_info)?;
+        if !refs.is_method_by_ptr(copy) || refs.func_owner_by_ptr(copy) != Some(ret_identity.name.as_str())
+            || argument.token != 5 || argument.type_info != f.ret.type_info || argument.is_object_handle
+            || !argument.is_reference || !argument.is_object_const || !argument.is_read_only
+            || argument.is_auto || argument.if_handle_then_const { return None; }
+        match refs.func_by_ptr(copy)? {
+            "$beh0" if result.token == 0x52 && !result.is_reference => {},
+            "opAssign" if result.token == 5 && result.is_reference && !result.is_object_handle
+                && result.type_info == f.ret.type_info => {},
+            _ => return None,
+        }
+        let cast_type = super::types::DataType { token: 5, type_info: *object,
+            is_object_handle: true, ..Default::default() }.base_name(refs);
+        // Keep the composed return type: TSubclassOf<UWeapon> is not just TSubclassOf.
+        if f.ret.base_name(refs) != argument.base_name(refs) { return None; }
+        let lines: Vec<_> = body.lines().filter(|line| !line.trim().is_empty()).collect();
+        let [definition, reader] = lines[..] else { return None; };
+        let (name, value) = slot_store(definition).or_else(||
+            declaration_with_initializer(definition).map(|(_, n, v)| (n, v)))?;
+        let prefix = format!("Cast<{cast_type}>(");
+        if name != format!("local_{slot}") || count_ident(body, &name) != 2
+            || reader.trim() != format!("return {name}.{field};")
+            || indent_of(definition) != indent_of(reader) || !value.starts_with(&prefix)
+            || matching_paren(&value, prefix.len() - 1) != value.len().checked_sub(1)
+            || value.chars().any(char::is_control) { return None; }
+        Some(format!("{}return ({value}).{field};{}", indent_of(reader),
+            if body.ends_with('\n') { "\n" } else { "" }))
+    })();
+    folded.unwrap_or_else(|| body.to_owned())
 }
 
 /// `local_N = <expr>; return local_N;` is `return <expr>;`. The name is the whole cost: a
@@ -26113,6 +26292,97 @@ mod member_arithmetic_lifetime_tests {
         }
     }
 
+    #[test]
+    fn member_snapshot_stays_before_a_new_loop_through_both_member_folds() {
+        let refs = RefResolver::from_test_early_member_receiver(true, false, false);
+        let fold = |body: &str| super::fold_member_read_temporaries(body,
+            &HashSet::new(), &HashSet::new(), &BTreeMap::from([(18, "UComponent".into())]),
+            None, &HashMap::from([("Character".into(), "UState".into())]), &refs,
+            &HashMap::new(), false, &HashSet::new(), &HashSet::new(), &HashMap::new());
+        let body = "    local_18 = Character.Component;\n    Prepare();\n    for (; More();)\n    {\n        if (Other == local_18)\n        {\n            Work();\n        }\n    }\n";
+        assert_eq!(fold(body), body);
+        let declared = body.replace("    local_18 =", "    UComponent local_18 =");
+        assert_eq!(fold(&declared), declared);
+        assert_eq!(fold(&fold(&declared)), declared);
+        let same_loop = "    while (More())\n    {\n        local_18 = Character.Component;\n        Use(local_18);\n    }\n";
+        assert_eq!(fold(same_loop), same_loop.replace("        local_18 = Character.Component;\n", "")
+            .replace("Use(local_18)", "Use(Character.Component)"));
+        let earlier_loop = "    while (More())\n    {\n        Work();\n    }\n    local_18 = Character.Component;\n    Use(local_18);\n";
+        assert_eq!(fold(earlier_loop), earlier_loop.replace("    local_18 = Character.Component;\n", "")
+            .replace("Use(local_18)", "Use(Character.Component)"));
+    }
+
+    fn cast_field_return_fixture(subclass: bool, extra_copy: bool) -> Func {
+        let mut ops = Vec::new();
+        if subclass { ops.extend([("PshVPtr", &[(-2i16) as u16][..]), ("CALLSYS", &[][..])]); }
+        ops.extend([("PshVPtr", &[0][..]), ("ADDSi", &[0][..]), ("ADDSi", &[0][..]),
+            ("RDSPtr", &[][..]), ("RefCpyV", &[2][..])]);
+        if extra_copy { ops.extend([("PshVPtr", &[2][..]), ("RefCpyV", &[4][..])]); }
+        ops.extend([("CmpPtrNull", &[2][..]), ("JZ", &[][..]), ("TYPEID", &[][..]),
+            ("PSF", &[4][..]), ("PshVPtr", &[2][..]), ("CALLSYS", &[][..]),
+            ("JMP", &[][..]), ("ClrVPtr", &[4][..]), ("PshVPtr", &[4][..]),
+            ("ADDSi", &[0][..]), ("PshVPtr", &[(-2i16) as u16][..]), ("CALLSYS", &[][..]), ("RET", &[4][..])]);
+        let mut f = function(&ops);
+        f.ret = crate::cache::types::DataType { token: 5, type_info: if subclass { 3 } else { 2 }, ..Default::default() };
+        f.traits = 4; f.obj_locals = vec![(2, 7), (4, 1)];
+        let code = disassemble(&f.bytecode).unwrap();
+        let start = code.len() - 13;
+        if subclass { f.bytecode[code[1].offset_dw + 1] = 11; }
+        let prefix = usize::from(subclass) * 2;
+        f.bytecode[code[prefix + 1].offset_dw + 1] = 5;
+        f.bytecode[code[prefix + 2].offset_dw + 1] = 6;
+        f.bytecode[code[start + 2].offset_dw + 1] = 0x4000_0001;
+        f.bytecode[code[start + 5].offset_dw + 1] = 9;
+        f.bytecode[code[start + 9].offset_dw + 1] = 1;
+        f.bytecode[code[start + 11].offset_dw + 1] = 10;
+        for (jump, to) in [(start + 1, start + 7), (start + 6, start + 8)] {
+            f.bytecode[code[jump].offset_dw + 1] = code[to].offset_dw as i32 - code[jump].offset_dw as i32 - 2;
+        }
+        f
+    }
+
+    #[test]
+    fn cast_field_returns_inline_the_direct_tag_and_composed_class_value() {
+        for subclass in [false, true] {
+            let refs = RefResolver::from_test_cast_field_return(subclass, 0);
+            let f = cast_field_return_fixture(subclass, false);
+            let source = "    local_4 = Cast<UAttack>(this.Weighted.Move);\n    return local_4.Required;\n";
+            let expected = "    return (Cast<UAttack>(this.Weighted.Move)).Required;\n";
+            assert_eq!(super::fold_cast_field_value_return(source, &f, &refs, true), expected);
+            let declared = source.replace("    local_4 =", "    UAttack local_4 =");
+            assert_eq!(super::fold_cast_field_value_return(&declared, &f, &refs, true), expected);
+            let returned = super::fold_returned_temporaries(expected, &BTreeMap::new(), &refs,
+                &f.ret.base_name(&refs), false, &HashSet::new());
+            assert_eq!(returned, expected);
+            if subclass { assert_eq!(f.ret.base_name(&refs), "TSubclassOf<UWeapon>"); }
+        }
+    }
+
+    #[test]
+    fn cast_field_return_requires_matching_owner_metadata_and_unaliased_life() {
+        let source = "    local_4 = Cast<UAttack>(this.Weighted.Move);\n    return local_4.Required;\n";
+        for subclass in [false, true] {
+            let refs = RefResolver::from_test_cast_field_return(subclass, 0);
+            let f = cast_field_return_fixture(subclass, false);
+            for fault in 1..=4 {
+                let bad = RefResolver::from_test_cast_field_return(subclass, fault);
+                assert_eq!(super::fold_cast_field_value_return(source, &f, &bad, true), source, "{subclass}/{fault}");
+            }
+            let mut wrong = f.clone(); wrong.obj_locals.push((4, 1));
+            let mut bad_rvo = f.clone();
+            let code = disassemble(&f.bytecode).unwrap();
+            let at = code[code.len() - 3].offset_dw;
+            bad_rvo.bytecode[at] = (bad_rvo.bytecode[at] & 0xffff) | ((-4i16 as u16 as i32) << 16);
+            for bad in [cast_field_return_fixture(subclass, true), wrong, bad_rvo] {
+                assert_eq!(super::fold_cast_field_value_return(source, &bad, &refs, true), source);
+            }
+            for bad in [source.replace("UAttack", "UOther"), source.replace(".Required", ".Other"),
+                format!("    Use(local_4);\n{source}")]
+            { assert_eq!(super::fold_cast_field_value_return(&bad, &f, &refs, true), bad); }
+            assert_eq!(super::fold_cast_field_value_return(source, &f, &refs, false), source);
+        }
+    }
+
     fn native_handle_read_fixture(fault: u8) -> Func {
         // Two actual lives of one physical slot: script Avatar, then native Target.
         let mut ops = vec![("PshVPtr", &[0][..]), ("ADDSi", &[0][..]), ("RDSPtr", &[][..]),
@@ -26782,6 +27052,71 @@ mod member_arithmetic_lifetime_tests {
         let expected = returning.replace("        DeadInOuter();\n", "")
             .replace("    DeadAfter();\n", "");
         assert_eq!(super::drop_unreachable_statements(returning), expected);
+    }
+
+    #[test]
+    fn parameter_field_read_copy_keeps_its_typed_single_life_before_this_store() {
+        let refs = RefResolver::from_test_parameter_field_comparison(DataType::default(), false);
+        let mut f = function(&[("PshVPtr", &[(-2i16) as u16]), ("RefCpyV", &[2]),
+            ("PshVPtr", &[2]), ("ADDSi", &[0]), ("RDSPtr", &[]), ("PshVPtr", &[0]),
+            ("ADDSi", &[0]), ("REFCPY", &[]), ("PopPtr", &[]), ("RET", &[4])]);
+        f.ret.token = 0x52;
+        f.params.push(crate::cache::model::Param { name: "Holder".into(), flags: 0,
+            ty: DataType { token: 5, type_info: 1, is_object_handle: true, ..Default::default() } });
+        f.obj_locals = vec![(2, 1)];
+        for ins in disassemble(&f.bytecode).unwrap() {
+            if ins.op.name == "ADDSi" { f.bytecode[ins.offset_dw + 1] = 1; }
+        }
+        let keep = super::parameter_field_read_store_copies(&f, &refs, true);
+        assert_eq!(keep, HashSet::from([2]));
+        let body = "    local_2 = Holder;\n    this.Target = local_2.Target;\n";
+        let locals = BTreeMap::from([(2, "UHolder".into())]);
+        let roots = HashMap::from([("Holder".into(), "UHolder".into())]);
+        assert_eq!(super::fold_member_read_temporaries(body, &HashSet::new(), &HashSet::new(),
+            &locals, None, &roots, &refs, &HashMap::new(), false, &keep,
+            &HashSet::new(), &HashMap::new()), body);
+        for fault in 0..5 {
+            let mut other = f.clone();
+            match fault {
+                0 => other.params[0].ty.is_object_const = true,
+                1 => other.obj_locals.clear(),
+                2 => other.obj_locals[0].1 = 2,
+                3 => other.bytecode.extend(function(&[("PshVPtr", &[2])]).bytecode),
+                _ => other.ret.token = 0x41,
+            }
+            assert!(super::parameter_field_read_store_copies(&other, &refs, true).is_empty(), "{fault}");
+        }
+        assert!(super::parameter_field_read_store_copies(&f,
+            &RefResolver::from_test_parameter_field_comparison(DataType::default(), true), true).is_empty());
+        assert!(super::parameter_field_read_store_copies(&f, &refs, false).is_empty());
+    }
+
+    #[test]
+    fn inlined_cast_cleanup_requires_a_single_unnamed_typed_cast_life() {
+        let refs = RefResolver::from_test_inlined_cast_cleanup(true);
+        let mut f = function(&[("TYPEID", &[]), ("PSF", &[4]), ("PshVPtr", &[(-2i16) as u16]),
+            ("CALLSYS", &[]), ("PshVPtr", &[4]), ("PshVPtr", &[0]), ("CALLINTF", &[]),
+            ("CpyRtoV4", &[5]), ("FreeNullV8", &[4]), ("NOT", &[5]),
+            ("CpyVtoV4", &[1, 5]), ("CpyVtoR4", &[1]), ("RET", &[4])]);
+        f.ret.token = 0x41; f.obj_locals = vec![(4, 1)];
+        let code = disassemble(&f.bytecode).unwrap();
+        f.bytecode[code[0].offset_dw + 1] = 0x4000_0001;
+        f.bytecode[code[3].offset_dw + 1] = 1;
+        f.bytecode[code[6].offset_dw + 1] = 2;
+        let body = "    local_5 = this.Check(Cast<UNode>(Actor));\n    local_4 = nullptr;\n    local_5 = !local_5;\n    local_1 = local_5;\n    return local_1;\n";
+        let out = super::fold_inlined_cast_bool_cleanup(body, &f, &refs, &HashSet::new());
+        assert!(!out.contains("local_4"), "{out}");
+        assert!(out.contains("local_5 = !(this.Check(Cast<UNode>(Actor)));"), "{out}");
+        for extra in [("RefCpyV", &[4][..]), ("FreeNullV8", &[4][..]), ("PSF", &[4][..])] {
+            let mut other=f.clone(); other.bytecode.extend(function(&[extra]).bytecode);
+            assert_eq!(super::fold_inlined_cast_bool_cleanup(body, &other, &refs, &HashSet::new()), body);
+        }
+        let other = format!("    Use(local_4);\n{body}");
+        assert_eq!(super::fold_inlined_cast_bool_cleanup(&other, &f, &refs, &HashSet::new()), other);
+        assert_eq!(super::fold_inlined_cast_bool_cleanup(body, &f,
+            &RefResolver::from_test_inlined_cast_cleanup(false), &HashSet::new()), body);
+        let mut other=f.clone(); other.obj_locals = vec![(4, 2)];
+        assert_eq!(super::fold_inlined_cast_bool_cleanup(body, &other, &refs, &HashSet::new()), body);
     }
 
     fn assignment_order_fixture(ops: &[(&str, &[u16])], first_call: i32) -> Func {

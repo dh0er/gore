@@ -1881,6 +1881,42 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_guarded_handle_parameter_read(argument: DataType) -> Self {
+        let mut r = Self::from_test_typed_getter_copies("UNode", false, false);
+        r.funcid_to_ptr.insert(1, 4);
+        r.func_params.insert(4, vec![argument]);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_cast_field_return(subclass: bool, fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UAttack", "Required"), ("FTag", ""),
+            ("TSubclassOf", ""), ("UWeapon", ""), ("FRecord", "Weighted"), ("FWeighted", "Move"), ("UBase", "")]);
+        for (id, name) in [(1, "UAttack"), (2, "FTag"), (3, "TSubclassOf"), (4, "UWeapon"),
+            (5, "FRecord"), (6, "FWeighted"), (7, "UBase")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { module: if id == 1 { "Fixture" } else { "" }.into(),
+                namespace: String::new(), name: name.into() });
+        }
+        r.prop_type_id.insert(3, if fault == 1 { 7 } else { 1 });
+        r.type_subtypes.insert(3, vec![DataType { token: 5, type_info: 4, is_object_handle: true, ..Default::default() }]);
+        let result = if subclass { 3 } else { 2 };
+        for (ptr, name, owner) in [(9, "opCast", "UObject"),
+            (10, if subclass { "opAssign" } else { "$beh0" }, if subclass { "TSubclassOf" } else { "FTag" }),
+            (11, "$beh0", "TSubclassOf")] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into());
+            if ptr != 10 || fault != 3 { r.func_is_method.insert(ptr); }
+            r.func_ret.insert(ptr, if ptr == 10 && subclass {
+                DataType { token: 5, type_info: result, is_reference: true, ..Default::default() }
+            } else { DataType { token: 0x52, ..Default::default() } });
+        }
+        r.func_params.insert(9, vec![DataType { token: 0x3b, is_reference: true, ..Default::default() }]);
+        r.func_params.insert(10, vec![DataType { token: 5, type_info: if fault == 2 { 4 } else { result },
+            is_reference: true, is_object_const: true, is_read_only: fault != 4, ..Default::default() }]);
+        r.func_params.insert(11, vec![]);
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_early_member_receiver(method: bool, wrong_type: bool, wrong_owner: bool) -> Self {
         let mut r = Self::from_test_member_chain(&[("UState", "Component"),
             ("UComponent", ""), ("FPayload", "")]);
@@ -1900,6 +1936,19 @@ impl RefResolver {
                 vec![DataType { token: 5, type_info: 3, is_reference: true, ..Default::default() }]
             } else if ptr == 3 { vec![DataType { token: 0x44, ..Default::default() }] } else { vec![] });
         }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_inlined_cast_cleanup(boolean: bool) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UNode", ""), ("UOther", "")]);
+        for (id, name) in [(1, "UNode"), (2, "UOther")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: name.into(),
+                module: "Fixture".into(), namespace: String::new() });
+        }
+        r.func_by_ptr.insert(1, "opCast".into());
+        r.funcid_to_ptr.insert(2, 2); r.func_by_ptr.insert(2, "Check".into());
+        r.func_ret.insert(2, DataType { token: if boolean { 0x41 } else { 0x44 }, ..Default::default() });
         r
     }
 

@@ -1,6 +1,5 @@
 # module	divergent-functions	behaviour-risks	generated-methods
 AI.AIAgent.Creature.Demon.Fire.Firewall.DemonAreaFirewallVisual	1	0	0
-AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Base.Barrier.FireDemon_HellArms_Barrier	1	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Base.FireDemon_HellArmsArea_Base	1	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachStraight.FireDemon_HellArms_BreachStraight	1	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachZigZag.FireDemon_HellArmsArea_BreachZigZag	1	0	0
@@ -62,7 +61,7 @@ AI.States.FightAI.CombatState.AIGroup_Combat	4	0	0
 AI.States.FightAI.CombatState.AIState_OGCombat	12	0	0
 AI.States.FightAI.CombatState.CombatBehaviorSets.CombatBehaviorSet	1	0	0
 AI.States.FightAI.CombatState.CombatBehaviorSets.UnreachableEnemy.CombatBehaviorSet_UnreachableEnemy	1	0	0
-AI.States.FightAI.CombatState.CombatMoves	26	0	0
+AI.States.FightAI.CombatState.CombatMoves	24	0	0
 AI.States.FightAI.CombatState.CombatOperations	1	0	0
 AI.States.FightAI.CombatState.CombatSituations	4	0	0
 AI.States.FightAI.CombatState.CombatTestClasses	1	0	0
@@ -127,7 +126,6 @@ GAS.Abilities.Spells.ExecutionValidator.Derived.Base.CastSpell_ExecutionValidato
 GAS.Abilities.Spells.ExecutionValidator.Derived.Spell.Telekinesis.CastSpell_ExecutionValidator_Telekinesis	1	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_SpawnRechargeableProjectile	2	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_Targetable	1	0	0
-GAS.Abilities.Spells.Spells.Electric.ChainLightning.GA_Spell_ChainLightning	3	0	0
 GAS.Abilities.Spells.Spells.Electric.GA_Spell_BallLightning	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_Fireball	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_StormOfFire	1	0	0

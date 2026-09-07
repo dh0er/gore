@@ -1316,6 +1316,53 @@ fn materialized_comparison(c: &Cmp) -> Option<String> {
         .then(|| format!("({} {op} {})", c.a, c.b))
 }
 
+/// A typed parameter copy survives its null guard when the same closed life
+/// supplies the sole argument of a later call beyond an early false return.
+fn guarded_parameter_handle_copy(ctx: &Ctx, at: usize, source: &Arg) -> bool {
+    let found = (|| {
+        let w = |i: &Instr, n: usize| i.words.get(n).copied().map(s16).unwrap_or(i32::MIN);
+        let start = at.checked_sub(1)?;
+        let code = ctx.instrs.get(start..start + 9)?;
+        if code.iter().map(|i| i.op.name).ne(["PshVPtr", "RefCpyV", "CmpPtrNull", "JNZ",
+            "SetV1", "CpyVtoR4", "JMP", "PshVPtr", "CALL"])
+            || ctx.f.ret.token != 0x41 || ctx.f.ret.is_reference { return None; }
+        let slot = w(&code[1], 0);
+        let parameter_slot = w(&code[0], 0);
+        let index = *ctx.param_off_map.get(&parameter_slot)?;
+        let parameter = ctx.f.param_types.get(index)?;
+        let parameter_type = parameter.base_name(ctx.refs);
+        if slot <= 0 || parameter_slot >= 0 || parameter.token != 5 || !parameter.is_object_handle
+            || parameter.is_reference || parameter.is_object_const || parameter.is_read_only
+            || parameter.is_auto || parameter.if_handle_then_const
+            || source.s != ctx.param_or_arg(index) || !ctx.param_src_ok(&source.s)
+            || ctx.slot_type(slot)? != parameter_type
+            || source.ty.as_deref() != Some(parameter_type.as_str())
+            || w(&code[2], 0) != slot || w(&code[7], 0) != slot
+            || code[4].dwords.first() != Some(&0) || w(&code[4], 0) != w(&code[5], 0)
+        { return None; }
+        let identity = ctx.refs.type_identity_by_ptr(parameter.type_info)?;
+        let id = *code[8].dwords.first()? as i32;
+        let [argument] = ctx.refs.func_params_by_id(id)? else { return None; };
+        if ctx.refs.func_by_id(id).is_none() || ctx.refs.is_method_by_id(id)
+            || argument.token != 5 || !argument.is_object_handle || argument.is_reference
+            || argument.is_auto || argument.if_handle_then_const
+            || ctx.refs.type_identity_by_ptr(argument.type_info)? != identity { return None; }
+        let target = |i: &Instr| i.dwords.first().map(|v| i.offset_dw as i64 + 2 + *v as i32 as i64);
+        let last = ctx.instrs.last()?;
+        if last.op.name != "RET" || target(&code[3]) != Some(code[7].offset_dw as i64)
+            || target(&code[6]) != Some(last.offset_dw as i64)
+            || ctx.instrs.iter().enumerate().filter(|(_, i)|
+                super::bytediff::addressed_slots(i).contains(&slot)).map(|(i, _)| i)
+                .ne([at, at + 1, start + 7])
+            || ctx.instrs.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J')
+                && i.offset_dw != code[3].offset_dw && target(i).is_some_and(|to|
+                    to > code[0].offset_dw as i64 && to <= code[8].offset_dw as i64)))
+        { return None; }
+        Some(())
+    })();
+    found.is_some()
+}
+
 /// A REFCPY through a declared mutable handle-reference parameter is a real output store.
 /// Match its frame address and typed source, including a dereferenced input parameter.
 fn is_ref_handle_parameter_store(ctx: &Ctx, code: &[Instr], at: usize, src: &Arg, dst: &Arg) -> bool {
@@ -5972,7 +6019,9 @@ fn block_stmts_in(
                         && insns
                             .get(k + 1)
                             .is_some_and(|nx| nx.op.name == "CmpPtrNull" && w(nx, 0) == dst_slot0);
-                    if param_guard_fold {
+                    let keep_guarded_parameter = param_guard_fold
+                        && guarded_parameter_handle_copy(ctx, lo + k, &top);
+                    if param_guard_fold && !keep_guarded_parameter {
                         flush!();
                         guard_param_alias.insert(dst_slot0, top.s.clone());
                         continue;
@@ -6236,6 +6285,7 @@ fn block_stmts_in(
                             || getter_into_cmp
                             || getter_into_null_cmp
                             || param_into_cmp
+                            || keep_guarded_parameter
                             || param_into_later_use
                             || const_src_into_cmp
                             || getter_into_store_rhs
@@ -11002,6 +11052,52 @@ mod tests {
             let (stmts, _) = ignored_null_comparison_fixture(test_op, between, call_op);
             assert!(!stmts.iter().any(|s| s == "(local_2 == nullptr);" || s == "(local_2 != nullptr);"),
                 "{test_op}/{between:?}/{call_op}: {stmts:?}");
+        }
+    }
+
+    #[test]
+    fn null_guard_parameter_copy_survives_only_its_closed_typed_call_argument_life() {
+        for fault in 0..8 {
+            let mut a = TestAssembler::default();
+            if fault == 6 { a.jump("JMP", "copied"); }
+            a.op("PshVPtr", &[if fault == 5 { (-4i16) as u16 } else { (-2i16) as u16 }], &[]);
+            a.label("copied"); a.op("RefCpyV", &[2], &[]);
+            a.op("CmpPtrNull", &[2], &[]); a.jump("JNZ", "use");
+            a.op("SetV1", &[3], &[0]); a.op("CpyVtoR4", &[3], &[]); a.jump("JMP", "ret");
+            a.label("use"); a.op("PshVPtr", &[if fault == 7 { 4 } else { 2 }], &[]);
+            a.op("CALL", &[], &[1]); a.op("CpyRtoV4", &[3], &[]);
+            if fault == 3 { a.op("ClrVPtr", &[2], &[]); }
+            a.op("CpyVtoR4", &[3], &[]); a.label("ret"); a.op("RET", &[4], &[]);
+            let fixture = a.finish();
+            let parameter = DataType { token: 5, type_info: 3, is_object_handle: true,
+                is_object_const: fault == 1, ..Default::default() };
+            let argument = DataType { token: 5, type_info: if fault == 4 { 2 } else { 3 },
+                is_object_handle: true, is_object_const: true, ..Default::default() };
+            let refs = RefResolver::from_test_guarded_handle_parameter_read(argument);
+            let f = FuncCode { func: "UOwner::Check".into(), is_method: true,
+                param_names: vec!["Actor".into()], param_types: vec![parameter],
+                ret: DataType { token: 0x41, ..Default::default() }, bytecode: Vec::new() };
+            let locals = HashMap::from([(2, if fault == 2 { "UOther" } else { "UNode" }.into()),
+                (3, "bool".into())]);
+            let parameter_types = vec!["UNode".to_owned()];
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: None, param_types: Some(&parameter_types), class_name: Some("UOwner"),
+                local_types: Some(&locals), float_slots: Default::default(),
+                param_off_map: HashMap::from([(-2, 0)]), rvo_off: None, keep_ints: None,
+                rvo_switch_region: std::cell::Cell::new(false) };
+            let copy = usize::from(fault == 6) + 1;
+            let source = Arg { s: "Actor".into(), ty: Some("UNode".into()), ..Default::default() };
+            assert_eq!(guarded_parameter_handle_copy(&ctx, copy, &source), fault == 0, "{fault}");
+            let (statements, comparison) = block_stmts(&ctx, copy - 1, copy + 2);
+            if fault == 0 {
+                assert_eq!(statements, ["local_2 = Actor;"]);
+                assert_eq!(comparison.unwrap().a, "local_2");
+                let (later, _) = block_stmts(&ctx, copy + 6, fixture.instrs.len());
+                assert!(later.iter().any(|s| s.contains("IsValid(local_2)")), "{later:?}");
+            } else if fault != 5 {
+                assert!(statements.is_empty(), "{fault}: {statements:?}");
+                assert_eq!(comparison.unwrap().a, "Actor");
+            }
         }
     }
 
