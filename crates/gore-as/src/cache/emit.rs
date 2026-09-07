@@ -1182,6 +1182,9 @@ fn emit_function_ctor(
     // dead store and was deleted outright. One missing fact, three symptoms.
     let reference_locals = reference_result_slots(f, refs);
     let mutable_f32_elements = mutable_f32_iterator_elements(f, refs);
+    let explicit_copies = explicit_script_value_copies(f, refs);
+    let explicit_copy_destinations = explicit_copies.iter()
+        .map(|(_, dst, ty)| (*dst, ty.clone())).collect();
     // Producers the SOURCE kept as statements of their own — see `statement_producer_slots`.
     let mut statement_producers = statement_producer_slots(f);
     statement_producers.extend(mutable_f32_elements.iter().map(|(_, elem)| *elem));
@@ -1779,6 +1782,8 @@ fn emit_function_ctor(
     pass_trace("rewrite_value_temporaries", &body);
     let body = drop_dead_stores(&body, &vanilla_read_slots(f));
     pass_trace("drop_dead_stores", &body);
+    let body = fold_nested_enum_index_return(&body, f, refs, class_name);
+    pass_trace("fold_nested_enum_index_return", &body);
     let body =
         fold_literal_temporaries(
             &body,
@@ -1926,6 +1931,7 @@ fn emit_function_ctor(
         fields,
         &call_result_copies(f),
         &copy_out_keep,
+        &explicit_copies,
     );
     // A slot the structurer's marker declared right before its own assignment (`$beh0` then
     // `opAssign`) was a declaration WITH that initialiser: the compiler builds `T x = <value>;`
@@ -2338,7 +2344,7 @@ fn emit_function_ctor(
         // Before the declaration merge: a conversion naming the type the value already has hides
         // the copy-construction the merge is looking for.
         let reference_copy_initializers = reference_copy_initializer_sites(f, refs, &rvo_producers);
-        let body = drop_redundant_conversions(&body, fields, &path_roots, refs, &reference_copy_initializers);
+        let body = drop_redundant_conversions(&body, fields, &path_roots, refs, &reference_copy_initializers, &explicit_copy_destinations);
         pass_trace("drop_redundant_conversions", &body);
         let assigned_tail = assignment_write_counts(f, refs);
         let (body, value_suppressed) =
@@ -2674,6 +2680,7 @@ fn emit_function_ctor(
                 fields,
                 &call_result_copies(f),
                 &copy_out_keep,
+                &explicit_copies,
             );
         let rendered = fold_cast_operands(&rendered, &declared_locals, &call_result_types);
         pass_trace("fold_cast_operands", &rendered);
@@ -2713,7 +2720,7 @@ fn emit_function_ctor(
         pass_trace("inline_bool_chain_into_next_condition", &rendered);
         let rendered = fold_bool_member_comparisons(&rendered, fields, &path_roots, refs);
         pass_trace("fold_bool_member_comparisons", &rendered);
-        let rendered = drop_redundant_conversions(&rendered, fields, &path_roots, refs, &reference_copy_initializers);
+        let rendered = drop_redundant_conversions(&rendered, fields, &path_roots, refs, &reference_copy_initializers, &explicit_copy_destinations);
         pass_trace("drop_redundant_conversions", &rendered);
         // Object temporaries belong here too: a `STOREOBJ` whose very next instruction pushes the
         // same slot produced the value where it is consumed, so the source wrote that call inside
@@ -8199,6 +8206,75 @@ fn expression_start(line: &str, end: usize) -> Option<usize> {
     (i < end).then_some(i)
 }
 
+/// An enum literal materialized inside the exact nested index return frame.
+/// Match its complete text pair, so a later life of the slot receives no permission.
+fn fold_nested_enum_index_return(body: &str, f: &Func, refs: &RefResolver, class: Option<&str>) -> String {
+    let Some(class) = class else { return body.to_owned(); };
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    if f.ret.token != 5 || !f.ret.is_reference || f.ret.is_object_handle || refs.type_identity_by_ptr(f.ret.type_info).is_none()
+        || code.last().is_none_or(|i| i.op.name != "RET") || code.iter().any(|i| i.op.name == "JMPP")
+    { return body.to_owned(); }
+    let word = |ins: &Instr| ins.words.first().map(|v| *v as i16 as i32);
+    let jump = |ins: &Instr| ins.dwords.first().and_then(|off|
+        usize::try_from(ins.offset_dw as i64 + 2 + *off as i32 as i64).ok());
+    let targets: HashSet<_> = code.iter().filter(|i| i.op.name.starts_with('J')).filter_map(jump).collect();
+    let mut candidates = HashMap::<(String, String), (usize, String)>::new();
+    for ops in code.windows(11) {
+        let matched = (|| {
+            if ops.iter().map(|i| i.op.name).ne(["PshC4", "SetV1", "PSF", "PshVPtr", "ADDSi",
+                "CALLSYS", "PshRPtr", "RDSPtr", "ADDSi", "Thiscall1", "JMP"])
+                || ops[1..].iter().any(|i| targets.contains(&i.offset_dw))
+                || jump(&ops[10]) != code.last().map(|i| i.offset_dw) { return None; }
+            let slot = word(&ops[1])?;
+            if slot <= 0 || word(&ops[2]) != Some(slot) || word(&ops[3]) != Some(0) { return None; }
+            let (first_id, second_id) = (*ops[4].dwords.first()? as i32, *ops[8].dwords.first()? as i32);
+            let first_owner = refs.type_identity_by_id(first_id)?;
+            let second_owner = refs.type_identity_by_id(second_id)?;
+            if first_owner.name != class || first_owner.namespace != f.namespace { return None; }
+            let (first, first_old) = refs.member_identity(first_id, word(&ops[4])?)?;
+            let (second, second_old) = refs.member_identity(second_id, word(&ops[8])?)?;
+            if refs.type_identity_by_id(first_old) != Some(first_owner)
+                || refs.type_identity_by_id(second_old) != Some(second_owner) { return None; }
+            let (map, array) = (*ops[5].qwords.first()? as i64, *ops[9].qwords.first()? as i64);
+            for (ptr, owner) in [(map, "TMap"), (array, "TArray")] {
+                if refs.func_by_ptr(ptr) != Some("opIndex") || refs.func_owner_by_ptr(ptr) != Some(owner)
+                    || !refs.is_method_by_ptr(ptr) { return None; }
+            }
+            let ([key], [index]) = (refs.func_params_by_ptr(map)?, refs.func_params_by_ptr(array)?) else { return None; };
+            let (map_ret, array_ret) = (refs.func_ret_by_ptr(map)?, refs.func_ret_by_ptr(array)?);
+            if key.token != 5 || !key.is_reference || !key.is_object_const || !key.is_read_only || key.is_object_handle
+                || index.token != 0x44 || index.is_reference || index.is_object_handle
+                || map_ret.token != 5 || !map_ret.is_reference || !map_ret.is_object_handle
+                || refs.type_identity_by_ptr(map_ret.type_info) != Some(second_owner)
+                || array_ret.token != 5 || !array_ret.is_reference || array_ret.is_object_handle
+                || array_ret.type_info != f.ret.type_info { return None; }
+            let value = *ops[1].dwords.first()? as i32;
+            if !(0..=127).contains(&value) { return None; }
+            let enum_type = refs.type_by_ptr(key.type_info)?;
+            let literal = format!("{}::{}", qualify_decl_type(enum_type, refs), refs.enumerator_name(enum_type, value)?);
+            let index = *ops[0].dwords.first()? as i32;
+            let expression = |arg: &str| format!("return this.{first}.opIndex({arg}).{second}.opIndex({index});");
+            Some(((format!("local_{slot} = {literal};"), expression(&format!("local_{slot}"))), expression(&literal)))
+        })();
+        if let Some((key, replacement)) = matched {
+            let entry = candidates.entry(key).or_insert((0, replacement)); entry.0 += 1;
+        }
+    }
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    for ((definition, reader), (count, replacement)) in candidates {
+        if count != 1 { continue; }
+        let hits: Vec<_> = (0..lines.len().saturating_sub(1)).filter(|&i|
+            lines[i].trim() == definition && lines[i + 1].trim() == reader
+                && indent_of(&lines[i]) == indent_of(&lines[i + 1])).collect();
+        let [at] = hits[..] else { continue; };
+        lines[at + 1] = format!("{}{replacement}", indent_of(&lines[at + 1]));
+        lines.remove(at);
+    }
+    let mut out = lines.join("\n");
+    if body.ends_with('\n') { out.push('\n'); }
+    out
+}
+
 /// A slot that holds one literal and is read once is not a variable the source declared — the
 /// compiler put the constant straight into the expression, and writing it back as a local costs
 /// a wider store plus a narrowing conversion (`SetV4` + `iTOb` where vanilla has `SetV1`). Fold
@@ -9898,6 +9974,75 @@ fn fold_alias_copies(body: &str, locals: &BTreeMap<i32, String>, keep: &HashSet<
 }
 
 
+/// Two copies through a separately default-constructed script value are an
+/// explicit T(source) temporary. Require a closed carrier life and exact types.
+fn explicit_script_value_copies(f: &Func, refs: &RefResolver) -> HashSet<(i32, i32, String)> {
+    let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    if code.iter().any(|ins| ins.op.name == "JMPP") { return HashSet::new(); }
+    let word = |ins: &Instr| ins.words.first().map(|v| *v as i16 as i32);
+    let mut uses = HashMap::<i32, Vec<usize>>::new();
+    for (at, ins) in code.iter().enumerate() {
+        for slot in super::bytediff::addressed_slots(ins) { uses.entry(slot).or_default().push(at); }
+    }
+    let targets: HashSet<_> = code.iter().filter(|ins| ins.op.name.starts_with('J'))
+        .filter_map(|ins| ins.dwords.first().and_then(|off|
+            usize::try_from(ins.offset_dw as i64 + 2 + *off as i32 as i64).ok())).collect();
+    let mut out = HashSet::new();
+    for at in 0..code.len().saturating_sub(6) {
+        let site = (|| {
+            let run = &code[at..at + 6];
+            if run[0].op.name != "PSF" || !matches!(run[1].op.name, "COPY" | "CopyScript")
+                || run[2].op.name != "PopPtr" || run[3].op.name != "PSF" || run[4].op.name != "PSF"
+                || run[5].op.name != run[1].op.name || run[5].qwords != run[1].qwords || run[5].dwords != run[1].dwords
+                || run[5].words != run[1].words { return None; }
+            let (tmp, dst) = (word(&run[0])?, word(&run[4])?);
+            if tmp <= 0 || dst <= 0 || tmp == dst || word(&run[3]) != Some(tmp) { return None; }
+            let owner = if run[1].op.name == "COPY" {
+                refs.type_identity_by_id(*run[1].dwords.first()? as i32)
+            } else { refs.type_identity_by_ptr(*run[1].qwords.first()? as i64) }?;
+            if !is_value_struct_type(&owner.name) { return None; }
+            for slot in [tmp, dst] {
+                let mut entries = f.obj_locals.iter().filter(|(s, _)| *s == slot);
+                if refs.type_identity_by_ptr(entries.next()?.1) != Some(owner) || entries.next().is_some() { return None; }
+            }
+            let ctor = *uses.get(&tmp)?.first()?;
+            if ctor < 2 || ctor + 1 >= at || code[ctor].op.name != "PSF"
+                || code[ctor - 2].op.name != "PSF" || word(&code[ctor - 2]) != Some(dst)
+                || uses.get(&dst)?.first() != Some(&(ctor - 2)) { return None; }
+            for pos in [ctor - 1, ctor + 1] {
+                let ins = &code[pos];
+                let id = *ins.dwords.first()? as i32;
+                if ins.op.name != "CALL" || refs.script_constructor_type_by_id(id) != Some(owner)
+                    || !refs.is_method_by_id(id) || !refs.func_params_by_id(id).is_some_and(|p| p.is_empty())
+                    || !refs.func_ret_by_id(id).is_some_and(|r| r.token == 0x52) { return None; }
+            }
+            let destructor = |pos: usize, slot: i32| {
+                let Some(pair) = code.get(pos..pos + 2) else { return false; };
+                let Some(id) = pair[1].dwords.first().map(|v| *v as i32) else { return false; };
+                pair[0].op.name == "PSF" && word(&pair[0]) == Some(slot) && pair[1].op.name == "CALL"
+                    && refs.func_by_id(id) == Some(format!("~{}", owner.name).as_str())
+                    && refs.func_owner_by_id(id) == Some(owner.name.as_str()) && refs.is_method_by_id(id)
+                    && refs.func_params_by_id(id).is_some_and(|p| p.is_empty())
+                    && refs.func_ret_by_id(id).is_some_and(|r| r.token == 0x52)
+            };
+            let mut expected = vec![ctor, at, at + 3];
+            let end = if destructor(at + 6, tmp) { expected.push(at + 6); at + 8 } else { at + 6 };
+            if uses.get(&tmp)? != &expected || code.get(end)?.op.name != "PopPtr"
+                || code[ctor - 2..=end].iter().any(|ins| ins.op.name.starts_with('J'))
+                || code[ctor - 1..=end].iter().any(|ins| targets.contains(&ins.offset_dw)) { return None; }
+            // A later constructor/address use or scalar store is another destination life.
+            if uses.get(&dst)?.iter().any(|&pos| pos != ctor - 2 && pos != at + 4
+                && !(pos > end && (matches!(code[pos].op.name, "LoadVObjR" | "LoadRObjR")
+                    || destructor(pos, dst)))) { return None; }
+            let ty = if owner.namespace.is_empty() { owner.name.clone() }
+                else { format!("{}::{}", owner.namespace, owner.name) };
+            Some((tmp, dst, ty))
+        })();
+        if let Some(site) = site { out.insert(site); }
+    }
+    out
+}
+
 /// `local_A = <expr>; local_B = local_A;` is `local_B = <expr>;`. A cast, and any call the
 /// compiler lands in a slot of its own, writes that slot and then copies it into the one the
 /// source named. Naming BOTH makes the recompile allocate two variables where the original had
@@ -9913,6 +10058,7 @@ fn fold_copy_out_temporaries(
     fields: Option<&HashMap<String, String>>,
     assigned: &HashSet<i32>,
     named_carriers: &HashSet<i32>,
+    explicit_copies: &HashSet<(i32, i32, String)>,
 ) -> String {
     let lines: Vec<&str> = body.lines().collect();
     let mut kept: Vec<String> = Vec::new();
@@ -9998,6 +10144,10 @@ fn fold_copy_out_temporaries(
                 reject("not-read-once");
                 return None;
             }
+            let value = if slot_of(target).is_some_and(|b|
+                explicit_copies.contains(&(a, b, carrier_type.clone()))) {
+                format!("{carrier_type}({value})")
+            } else { value };
             Some(format!("{}{target} = {value};", indent_of(lines[at])))
         })();
         match folded {
@@ -11392,6 +11542,7 @@ fn drop_redundant_conversions(
     roots: &HashMap<String, String>,
     refs: &RefResolver,
     reference_copies: &HashSet<(i32, String, String)>,
+    explicit_copies: &HashSet<(i32, String)>,
 ) -> String {
     let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
     for line in &mut lines {
@@ -11422,6 +11573,10 @@ fn drop_redundant_conversions(
         else {
             continue;
         };
+        // This wrapper represents a second real script-value copy, not a conversion.
+        if slot_and_life_any(&name).is_some_and(|(slot, _)| explicit_copies.contains(&(slot, ty.clone()))) {
+            continue;
+        }
         // Declarations only: a T& returned directly to T's copy constructor.
         // The actual callee and type must match this slot's complete ctor profile;
         // a field assignment or another call/lifetime cannot borrow that witness.
@@ -24830,7 +24985,7 @@ mod member_arithmetic_lifetime_tests {
                 &empty, &empty, &empty, &empty, &empty, &empty, &empty,
                 &HashMap::new(), &empty, &HashSet::new());
             let aliases = super::fold_alias_copies(&inlined, &locals, &empty);
-            super::fold_copy_out_temporaries(&aliases, &locals, &empty, None, &empty, keep)
+            super::fold_copy_out_temporaries(&aliases, &locals, &empty, None, &empty, keep, &HashSet::new())
         };
         // The inliner guard alone did not stop the next pass redirecting Proceed.
         assert!(fold(&empty).contains("local_2 = local_14.Proceed();"));
@@ -25223,6 +25378,147 @@ mod member_arithmetic_lifetime_tests {
         assert_eq!(super::merge_conditional_into_declaration(reads_target), reads_target);
     }
 
+    fn explicit_script_copy_fixture(copy: &str, destroys: bool) -> Func {
+        let copy_words: &[u16] = if copy == "COPY" { &[8] } else { &[] };
+        let mut ops: Vec<(&str, &[u16])> = vec![
+            ("PSF", &[44]), ("CALL", &[]), ("PSF", &[88]), ("CALL", &[]),
+            ("PshVPtr", &[65531]), ("PSF", &[88]), (copy, copy_words), ("PopPtr", &[]),
+            ("PSF", &[88]), ("PSF", &[44]), (copy, copy_words),
+        ];
+        if destroys { ops.extend([("PSF", &[88][..]), ("CALL", &[][..])]); }
+        ops.push(("PopPtr", &[]));
+        ops.push(("LoadVObjR", &[44]));
+        if destroys { ops.extend([("PSF", &[44][..]), ("CALL", &[][..])]); }
+        ops.push(("RET", &[0]));
+        let mut f = function(&ops);
+        f.obj_locals = vec![(44, 101), (88, 101)];
+        for (at, ins) in disassemble(&f.bytecode).unwrap().iter().enumerate() {
+            if ins.op.name == "CALL" {
+                f.bytecode[ins.offset_dw + 1] = if at < 4 { 1 } else { 2 };
+            }
+            if ins.op.name == copy { f.bytecode[ins.offset_dw + 1] = 101; }
+        }
+        f
+    }
+
+    #[test]
+    fn explicit_script_copies_survive_the_copy_out_and_conversion_pipeline() {
+        let refs = RefResolver::from_test_script_default_copy();
+        let ty = "Qualified::FPayload";
+        for (op, destroys) in [("COPY", false), ("CopyScript", true)] {
+            let sites = super::explicit_script_value_copies(&explicit_script_copy_fixture(op, destroys), &refs);
+            assert_eq!(sites, HashSet::from([(88, 44, ty.to_owned())]));
+            let protected: HashSet<_> = sites.iter().map(|(_, dst, ty)| (*dst, ty.clone())).collect();
+            let locals = BTreeMap::from([(44, ty.to_owned()), (88, ty.to_owned())]);
+            let roots = HashMap::from([("Source".into(), ty.to_owned())]);
+            let body = format!("{ty} local_44;\n{ty} local_88;\nlocal_88 = Source;\nlocal_44 = local_88;\nUse(local_44);\n");
+            let folded = super::fold_copy_out_temporaries(&body, &locals, &HashSet::new(), None,
+                &HashSet::new(), &HashSet::new(), &sites);
+            assert!(folded.contains(&format!("local_44 = {ty}(Source);")), "{folded}");
+            // Without the separate protection, the ordinary same-type fold removes this.
+            assert!(super::drop_redundant_conversions(&folded, None, &roots, &refs,
+                &HashSet::new(), &HashSet::new()).contains("local_44 = Source;"));
+            let kept = super::drop_redundant_conversions(&folded, None, &roots, &refs,
+                &HashSet::new(), &protected);
+            let kept = super::drop_unused_declarations(&kept, &HashSet::new(), &HashSet::new());
+            assert!(!kept.contains("local_88"), "{kept}");
+            let again = super::fold_copy_out_temporaries(&kept, &locals, &HashSet::new(), None,
+                &HashSet::new(), &HashSet::new(), &sites);
+            assert_eq!(super::drop_redundant_conversions(&again, None, &roots, &refs,
+                &HashSet::new(), &protected), kept);
+            assert_eq!(kept, format!("{ty} local_44;\nlocal_44 = {ty}(Source);\nUse(local_44);\n"));
+        }
+    }
+
+    #[test]
+    fn explicit_script_copy_rejects_type_collisions_other_lives_and_interior_entries() {
+        let refs = RefResolver::from_test_script_default_copy();
+        let f = explicit_script_copy_fixture("CopyScript", true);
+        let code = disassemble(&f.bytecode).unwrap();
+        for at in [6, 10] {
+            let mut other = f.clone(); other.bytecode[code[at].offset_dw + 1] = 102;
+            assert!(super::explicit_script_value_copies(&other, &refs).is_empty());
+        }
+        let mut other = f.clone(); other.obj_locals[1].1 = 102;
+        assert!(super::explicit_script_value_copies(&other, &refs).is_empty());
+        for extra in [vec![("PSF", &[88][..])], vec![("CpyRtoV4", &[44][..])],
+            vec![("PSF", &[44][..]), ("CALL", &[][..])]] {
+            let mut other = f.clone(); other.bytecode.extend(function(&extra).bytecode);
+            assert!(super::explicit_script_value_copies(&other, &refs).is_empty());
+        }
+        let mut other = f.clone(); other.bytecode[code[3].offset_dw + 1] = 2;
+        assert!(super::explicit_script_value_copies(&other, &refs).is_empty());
+        let mut other = f.clone();
+        let mut jump = function(&[("JMP", &[])]).bytecode;
+        jump[1] = code[5].offset_dw as i32 - other.bytecode.len() as i32 - 2;
+        other.bytecode.extend(jump);
+        assert!(super::explicit_script_value_copies(&other, &refs).is_empty());
+        let locals = BTreeMap::from([(44, "Qualified::FPayload".into()), (88, "Qualified::FPayload".into())]);
+        let source = "local_88 = Source;\nlocal_44 = local_88;\n";
+        let plain = super::fold_copy_out_temporaries(source, &locals, &HashSet::new(), None,
+            &HashSet::new(), &HashSet::new(), &HashSet::new());
+        assert_eq!(plain, "local_44 = Source;\n");
+    }
+
+    fn nested_enum_index_fixture() -> Func {
+        let mut f = function(&[
+            ("JLowZ", &[]), ("PshC4", &[]), ("SetV1", &[2]), ("PSF", &[2]), ("PshVPtr", &[0]),
+            ("ADDSi", &[0]), ("CALLSYS", &[]), ("PshRPtr", &[]), ("RDSPtr", &[]),
+            ("ADDSi", &[0]), ("Thiscall1", &[]), ("JMP", &[]),
+            ("SetV1", &[2]), ("RET", &[2]),
+        ]);
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, value) in [(2, 3), (5, 1), (6, 201), (9, 2), (10, 202), (12, 7)] {
+            f.bytecode[code[at].offset_dw + 1] = value;
+        }
+        for (at, target) in [(0, 12), (11, 13)] {
+            f.bytecode[code[at].offset_dw + 1] = code[target].offset_dw as i32 - code[at].offset_dw as i32 - 2;
+        }
+        f.ret = DataType { token: 5, type_info: 103, is_reference: true, ..Default::default() };
+        f
+    }
+
+    #[test]
+    fn nested_enum_index_literal_moves_only_its_exact_return_site() {
+        let refs = RefResolver::from_test_nested_enum_index(true);
+        let mut f = nested_enum_index_fixture();
+        let body = "if (Missing)\n{\n    local_2 = EKind::Spare;\n    return this.Groups.opIndex(local_2).Roles.opIndex(0);\n}\nlocal_2 = OtherLife();\nUse(local_2);\n";
+        let expected = "if (Missing)\n{\n    return this.Groups.opIndex(EKind::Spare).Roles.opIndex(0);\n}\nlocal_2 = OtherLife();\nUse(local_2);\n";
+        for is_const in [false, true] {
+            f.ret.is_object_const = is_const;
+            assert_eq!(super::fold_nested_enum_index_return(body, &f, &refs, Some("USystem")), expected);
+        }
+        for other in [body.replace("Roles", "OtherRoles"), body.replace("Spare", "Unknown"),
+            body.replace("opIndex(0)", "opIndex(1)"), body.replace("    return", "        return"),
+            format!("{body}{body}")] {
+            assert_eq!(super::fold_nested_enum_index_return(&other, &f, &refs, Some("USystem")), other);
+        }
+    }
+
+    #[test]
+    fn nested_enum_index_rejects_wrong_signature_field_owner_and_interior_entry() {
+        let f = nested_enum_index_fixture();
+        let code = disassemble(&f.bytecode).unwrap();
+        let body = "local_2 = EKind::Spare;\nreturn this.Groups.opIndex(local_2).Roles.opIndex(0);\n";
+        assert_eq!(super::fold_nested_enum_index_return(body, &f,
+            &RefResolver::from_test_nested_enum_index(false), Some("USystem")), body);
+        for (at, value) in [(6, 202), (10, 201), (9, 5), (5, 5), (2, 4)] {
+            let mut other = f.clone(); other.bytecode[code[at].offset_dw + 1] = value;
+            assert_eq!(super::fold_nested_enum_index_return(body, &other,
+                &RefResolver::from_test_nested_enum_index(true), Some("USystem")), body);
+        }
+        let mut other = f.clone();
+        other.bytecode[code[0].offset_dw + 1] = code[3].offset_dw as i32 - code[0].offset_dw as i32 - 2;
+        assert_eq!(super::fold_nested_enum_index_return(body, &other,
+            &RefResolver::from_test_nested_enum_index(true), Some("USystem")), body);
+        for ret in [DataType { is_reference: false, ..f.ret.clone() },
+            DataType { type_info: 102, ..f.ret.clone() }] {
+            let mut other = f.clone(); other.ret = ret;
+            assert_eq!(super::fold_nested_enum_index_return(body, &other,
+                &RefResolver::from_test_nested_enum_index(true), Some("USystem")), body);
+        }
+    }
+
     fn reference_copy_initializer_fixture() -> Func {
         let mut f = function(&[("CALLSYS", &[]), ("PshRPtr", &[]), ("PSF", &[24]), ("CALLSYS", &[]),
             ("CALLSYS", &[]), ("PshRPtr", &[]), ("PSF", &[24]), ("CALLSYS", &[])]);
@@ -25241,13 +25537,13 @@ mod member_arithmetic_lifetime_tests {
         let sites = super::reference_copy_initializer_sites(&f, &refs, &[(24, 3), (24, 7)]);
         assert_eq!(sites.len(), 2);
         let body = "    FBox local_24 = FBox(Make().First());\n    Use(local_24);\n    FBox local_24_2 = FBox(Make().Second());\n    Use(local_24_2);\n";
-        let folded = super::drop_redundant_conversions(body, None, &HashMap::new(), &refs, &sites);
+        let folded = super::drop_redundant_conversions(body, None, &HashMap::new(), &refs, &sites, &HashSet::new());
         assert_eq!(folded, "    FBox local_24 = Make().First();\n    Use(local_24);\n    FBox local_24_2 = Make().Second();\n    Use(local_24_2);\n");
         for other in ["    FBox local_24 = FBox(Make().Unknown());\n",
             "    FOther local_24 = FOther(Make().First());\n",
             "    local_24 = FBox(Make().First());\n"]
         {
-            assert_eq!(super::drop_redundant_conversions(other, None, &HashMap::new(), &refs, &sites), other);
+            assert_eq!(super::drop_redundant_conversions(other, None, &HashMap::new(), &refs, &sites, &HashSet::new()), other);
         }
     }
 

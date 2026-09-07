@@ -30,7 +30,7 @@ AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	7	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeDefinitions	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingResponse	2	0	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	23	0	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	22	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.TheftEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.EventResponses	8	0	0
 AI.CharacterAI_Gothic	6	0	0
@@ -54,9 +54,9 @@ AI.States.FightAI.CharmedState.AIState_Charmed	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_AcceptDefeat	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_ClaimVictory	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_CombatEndActions	4	0	0
-AI.States.FightAI.CombatState.AICombatBehaviorTree	5	0	0
+AI.States.FightAI.CombatState.AICombatBehaviorTree	4	0	0
 AI.States.FightAI.CombatState.AICombatFitnessMultipliers	2	0	0
-AI.States.FightAI.CombatState.AICombatRoleSystem	4	0	0
+AI.States.FightAI.CombatState.AICombatRoleSystem	1	0	0
 AI.States.FightAI.CombatState.AICombatTargetScoring	2	0	0
 AI.States.FightAI.CombatState.AIGroup_Attackers	5	0	0
 AI.States.FightAI.CombatState.AIGroup_Combat	4	0	0
@@ -67,7 +67,7 @@ AI.States.FightAI.CombatState.CombatMoves	26	0	0
 AI.States.FightAI.CombatState.CombatOperations	1	0	0
 AI.States.FightAI.CombatState.CombatSituations	4	0	0
 AI.States.FightAI.CombatState.CombatTestClasses	1	0	0
-AI.States.FightAI.CombatState.Positioning.AICombat_Positioning	16	0	0
+AI.States.FightAI.CombatState.Positioning.AICombat_Positioning	15	0	0
 AI.States.FightAI.DisengageBehavior.AIState_Disengage	2	0	0
 AI.States.FightAI.FearState.AIState_Fear	2	0	0
 AI.States.FightAI.FleeState.AIState_Flee	2	0	0

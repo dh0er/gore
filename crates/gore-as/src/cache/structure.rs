@@ -1492,6 +1492,37 @@ fn local_lvalue_selection(ctx: &Ctx<'_>, join: usize) -> Option<LocalLvalueSelec
     })
 }
 
+/// A copied map handle can next be passed by address to another container.
+/// Keep the copy before intervening calls (including removal of its source entry).
+fn is_handle_getter_reference_argument(ctx: &Ctx<'_>, code: &[Instr], copy: usize, use_at: usize) -> bool {
+    let witness = (|| {
+        let producer = code.get(copy.checked_sub(3)?..copy)?;
+        let consumer = code.get(use_at..use_at + 4)?;
+        let word = |ins: &Instr| ins.words.first().map(|v| *v as i16 as i32);
+        let dst = word(code.get(copy)?)?;
+        if dst <= 0 || producer[0].op.name != "CALLSYS" || producer[1].op.name != "PshRPtr"
+            || producer[2].op.name != "RDSPtr" || consumer[0].op.name != "PSF"
+            || word(&consumer[0]) != Some(dst) || consumer[1].op.name != "PshVPtr"
+            || word(&consumer[1]) != Some(0) || consumer[2].op.name != "ADDSi"
+            || consumer[3].op.name != "CALLSYS"
+            || code[copy + 1..use_at].iter().any(|ins| ins.op.name.starts_with('J')
+                || super::bytediff::addressed_slots(ins).contains(&dst)) { return None; }
+        let getter = *producer[0].qwords.first()? as i64;
+        let callee = *consumer[3].qwords.first()? as i64;
+        let ret = ctx.refs.func_ret_by_ptr(getter)?;
+        let params = ctx.refs.func_params_by_ptr(callee)?;
+        if ctx.refs.func_by_ptr(getter) != Some("opIndex") || !ctx.refs.is_method_by_ptr(getter)
+            || !ctx.refs.is_method_by_ptr(callee) || params.len() != 1
+            || ret.token != 5 || !ret.is_reference || !ret.is_object_handle
+            || ret.is_object_const || ret.is_read_only
+            || ctx.slot_type(dst).as_deref() != Some(ret.base_name(ctx.refs).as_str()) { return None; }
+        let param = &params[0];
+        (param.token == 5 && param.is_reference && param.is_object_handle
+            && param.is_object_const && param.is_read_only && param.type_info == ret.type_info).then_some(())
+    })();
+    witness.is_some()
+}
+
 /// Conditional-jump opcode (mirrors `cfg::is_cond_jump`, which is private to that module).
 fn is_cond_op(n: &str) -> bool {
     matches!(
@@ -6081,6 +6112,9 @@ fn block_stmts_in(
                                 consumed = true;
                                 break;
                             }
+                            if nx.op.name == "PSF" && w(nx, 0) == dst_slot0
+                                && is_handle_getter_reference_argument(ctx, insns, k, j)
+                            { consumed = true; break; }
                             // re-defined before any consumer -> alias-shadow, not this copy; bail.
                             if matches!(
                                 nx.op.name,
@@ -8639,7 +8673,9 @@ impl Structurer<'_> {
             let _ = writeln!(out, "{ind}    case {case}:");
             let _ = writeln!(out, "{ind}    {{");
             for line in stmts { let _ = writeln!(out, "{ind}        {line}"); }
-            let _ = writeln!(out, "{ind}        break;");
+            // Only the first case jumps past the other arm. The final arm
+            // falls through to the common RET without an extra jump.
+            if *case == first { let _ = writeln!(out, "{ind}        break;"); }
             let _ = writeln!(out, "{ind}    }}");
         }
         let _ = writeln!(out, "{ind}}}");
@@ -10970,6 +11006,57 @@ mod tests {
         { assert!(!render(bad, 1, true).contains(" = Input;")); }
     }
 
+    #[test]
+    fn copied_map_handle_survives_before_a_native_reference_argument() {
+        let render = |ret: DataType, param: DataType, extra_use: bool, getter: u64| {
+            let refs = RefResolver::from_test_handle_getter_argument(ret, param);
+            let mut a = TestAssembler::default();
+            a.op("PSF", &[(-2i16) as u16], &[]); a.op("PshVPtr", &[0], &[]);
+            a.op("ADDSi", &[0], &[1]); a.op("CALLSYS", &[], &[]);
+            a.op("PshRPtr", &[], &[]); a.op("RDSPtr", &[], &[]); a.op("RefCpyV", &[8], &[]);
+            if extra_use { a.op("CpyRtoV8", &[8], &[]); }
+            a.op("PSF", &[(-2i16) as u16], &[]); a.op("PshVPtr", &[0], &[]);
+            a.op("ADDSi", &[0], &[1]); a.op("CALLSYS", &[], &[]);
+            a.op("PSF", &[8], &[]); a.op("PshVPtr", &[0], &[]);
+            a.op("ADDSi", &[0], &[1]); a.op("CALLSYS", &[], &[]); a.op("RET", &[4], &[]);
+            let mut fixture = a.finish();
+            let mut calls = 0;
+            for ins in &mut fixture.instrs {
+                if ins.op.name == "CALLSYS" {
+                    ins.qwords = vec![match calls { 0 => getter, 1 => 2, _ => 3 }]; calls += 1;
+                }
+            }
+            let f = FuncCode { func: "UHolder::Finished".into(), is_method: true,
+                param_names: vec!["Key".into()], param_types: vec![DataType { token: 5,
+                    type_info: 101, is_object_handle: true, ..Default::default() }],
+                ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+            let locals = HashMap::from([(8, "UNode".into())]);
+            let fields = HashMap::from([("Nodes".into(), "TMap<UNode,UNode>".into())]);
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: Some(&fields), param_types: None, class_name: Some("UHolder"),
+                local_types: Some(&locals), float_slots: Default::default(),
+                param_off_map: HashMap::from([(-2, 0)]), rvo_off: None, keep_ints: None,
+                rvo_switch_region: std::cell::Cell::new(false) };
+            block_stmts(&ctx, 0, fixture.instrs.len()).0.join("\n")
+        };
+        let ret = DataType { token: 5, type_info: 101, is_reference: true,
+            is_object_handle: true, ..Default::default() };
+        let param = DataType { is_object_const: true, is_read_only: true, ..ret.clone() };
+        let source = render(ret.clone(), param.clone(), false, 1);
+        let copy = source.find("local_8 = this.Nodes.opIndex(Key);").expect(&source);
+        let remove = source.find("this.Nodes.Remove(Key);").expect(&source);
+        let consume = source.find("this.Nodes.Contains(local_8)").expect(&source);
+        assert!(copy < remove && remove < consume, "{source}");
+        for bad in [DataType { is_object_const: true, ..ret.clone() },
+            DataType { is_reference: false, ..ret.clone() }, DataType { is_object_handle: false, ..ret.clone() }]
+        { assert!(!render(bad, param.clone(), false, 1).contains("local_8 = this.Nodes.opIndex")); }
+        for bad in [DataType { type_info: 102, ..param.clone() },
+            DataType { is_reference: false, ..param.clone() }, DataType { is_read_only: false, ..param.clone() }]
+        { assert!(!render(ret.clone(), bad, false, 1).contains("local_8 = this.Nodes.opIndex")); }
+        assert!(!render(ret.clone(), param.clone(), true, 1).contains("local_8 = this.Nodes.opIndex"));
+        assert!(!render(ret, param, false, 99).contains("local_8 = this.Nodes.opIndex"));
+    }
+
     fn render_lvalue_selection(handle: bool, extra_entry: bool, wrong_type: bool, jump: &'static str, test_type: Option<&str>) -> String {
         let mut a = TestAssembler::default();
         if extra_entry { a.jump("JZ", "join"); }
@@ -11361,7 +11448,7 @@ mod tests {
             let source = render_fixture_range_with_return(&fixture, None, &refs, "int", Some("int"), 0x52);
             assert_eq!(source, format!(concat!("local_8 = 17;\nswitch ({})\n{{\n",
                 "    case 0:\n    {{\n        this.Left = local_8;\n        break;\n    }}\n",
-                "    case 1:\n    {{\n        this.Right = local_8;\n        break;\n    }}\n",
+                "    case 1:\n    {{\n        this.Right = local_8;\n    }}\n",
                 "}}\nreturn;\n"), expected));
         }
     }

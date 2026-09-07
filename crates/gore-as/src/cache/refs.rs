@@ -530,6 +530,10 @@ impl RefResolver {
     pub fn type_by_ptr(&self, ptr: i64) -> Option<&str> {
         self.type_by_ptr.get(&ptr).map(|s| s.as_str())
     }
+    /// Full type identity for COPY's serialized type-id operand.
+    pub(crate) fn type_identity_by_id(&self, id: i32) -> Option<&TypeIdentity> {
+        self.typeid_to_ptr.get(&id).and_then(|ptr| self.type_identity_by_ptr.get(ptr))
+    }
     /// Full module/namespace/name identity for an exact serialized type pointer.
     pub fn type_identity_by_ptr(&self, ptr: i64) -> Option<&TypeIdentity> {
         self.type_identity_by_ptr.get(&ptr)
@@ -1678,8 +1682,42 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_nested_enum_index(key_const: bool) -> Self {
+        let mut r = Self::default();
+        for (id, name) in [(1, "USystem"), (2, "UContainer"), (3, "FResult"), (4, "EKind"), (5, "UWrong")] {
+            let ptr = id as i64 + 100;
+            r.typeid_to_ptr.insert(id, ptr);
+            r.type_by_ptr.insert(ptr, name.into());
+            r.type_names.insert(name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity {
+                module: "Synthetic".into(), namespace: String::new(), name: name.into(),
+            });
+        }
+        for (id, name) in [(1, "Groups"), (2, "Roles"), (5, "Roles")] {
+            let key = ((id as i64) << 1) | 1;
+            r.prop_by_key.insert(key, name.into());
+            r.prop_type_id.insert(key, id);
+        }
+        r.enum_entries.insert("EKind".into(), vec![("Spare".into(), 3)]);
+        for (ptr, owner) in [(201, "TMap"), (202, "TArray")] {
+            r.func_by_ptr.insert(ptr, "opIndex".into());
+            r.func_owner.insert(ptr, owner.into());
+            r.func_is_method.insert(ptr);
+        }
+        r.func_params.insert(201, vec![DataType { token: 5, type_info: 104,
+            is_reference: true, is_object_const: key_const, is_read_only: key_const, ..Default::default() }]);
+        r.func_params.insert(202, vec![DataType { token: 0x44, ..Default::default() }]);
+        r.func_ret.insert(201, DataType { token: 5, type_info: 102,
+            is_reference: true, is_object_handle: true, ..Default::default() });
+        r.func_ret.insert(202, DataType { token: 5, type_info: 103,
+            is_reference: true, ..Default::default() });
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_script_default_copy() -> Self {
         let mut r = Self::from_test_script_constructors(&["Qualified"], "FPayload", &[]);
+        r.typeid_to_ptr.extend([(101, 101), (102, 102)]);
         r.funcid_to_ptr.insert(2, 2);
         r.func_by_ptr.insert(2, "~FPayload".into());
         r.func_owner.insert(2, "FPayload".into());
@@ -1765,6 +1803,23 @@ impl RefResolver {
         }
         r.func_ret.insert(1, ret);
         r.func_ret.insert(2, DataType { token: 5, type_info: 101, ..Default::default() });
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_handle_getter_argument(ret: DataType, param: DataType) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UHolder", "Nodes")]);
+        r.type_by_ptr.insert(101, "UNode".into());
+        r.type_by_ptr.insert(102, "UOther".into());
+        for (ptr, name) in [(1, "opIndex"), (2, "Remove"), (3, "Contains")] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, "TMap".into());
+            r.func_is_method.insert(ptr);
+            r.func_ret.insert(ptr, if ptr == 1 { ret.clone() }
+                else { DataType { token: 0x41, ..Default::default() } });
+            r.func_params.insert(ptr, vec![if ptr == 3 { param.clone() }
+                else { DataType { token: 5, type_info: 101, is_reference: true,
+                    is_object_handle: true, is_object_const: true, is_read_only: true, ..Default::default() } }]);
+        }
         r
     }
 
