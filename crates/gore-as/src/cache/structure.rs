@@ -3032,8 +3032,13 @@ fn float_field_type(refs: &RefResolver, tid: i32, field: &str) -> Option<String>
         // components as float32 (offsets 0/4/8/12), including alpha.
         .or_else(|| (cls == "FLinearColor" && matches!(field, "R" | "G" | "B" | "A"))
             .then_some("float32"))
-        .filter(|t| matches!(*t, "float" | "float32" | "double"))
-        .map(|s| s.to_string())
+        // Binds also spells the 64-bit float as `float64`. Canonicalize it
+        // here so the existing field load/store paths decode its IEEE bits.
+        .and_then(|t| match t {
+            "float64" => Some("float".to_owned()),
+            "float" | "float32" | "double" => Some(t.to_owned()),
+            _ => None,
+        })
 }
 
 fn enum_to_int(rhs: String, src_ty: Option<&str>, dst_is_int: bool) -> String {
@@ -11767,6 +11772,45 @@ mod tests {
             let out = render(owner, field, value);
             assert!(!out.contains(&format!("local_20.{field} =")), "{out}");
         }
+    }
+
+    #[test]
+    fn declared_float64_field_stores_decode_the_double_bits() {
+        let make_refs = |ty| {
+            let mut refs = RefResolver::from_test_member_chain(&[("FSettings", "Duration")]);
+            refs.set_native_api(super::super::binds::NativeApi::from_test_field_types(
+                &[("FSettings", "Duration", ty)], &[], None));
+            refs
+        };
+        let refs = make_refs("float64");
+        assert_eq!(float_field_type(&refs, 1, "Duration").as_deref(), Some("float"));
+        for ty in ["int64", "uint64", "bool", "FUnknown"] {
+            assert_eq!(float_field_type(&make_refs(ty), 1, "Duration"), None);
+        }
+        let mut a = TestAssembler::default();
+        a.op("SetV8", &[4], &[0, 0x3ff00000]);
+        a.op("PshVPtr", &[0], &[]);
+        a.op("ADDSi", &[0], &[1]);
+        a.op("PopRPtr", &[], &[]);
+        a.op("WRTV8", &[4], &[]);
+        let mut fixture = a.finish();
+        fixture.instrs[0].qwords = vec![1.0f64.to_bits()];
+        let f = FuncCode {
+            func: "WriteSettings".into(), is_method: false,
+            param_names: vec!["Settings".into()],
+            param_types: vec![DataType { token: 5, type_info: 1,
+                is_reference: true, ..Default::default() }],
+            ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new(),
+        };
+        let ctx = Ctx {
+            f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret),
+            fields: None, param_types: None, class_name: None,
+            local_types: None, float_slots: Default::default(),
+            param_off_map: HashMap::from([(0, 0)]), rvo_off: None, keep_ints: None,
+            rvo_switch_region: std::cell::Cell::new(false),
+        };
+        let (stmts, _) = block_stmts(&ctx, 0, fixture.instrs.len());
+        assert!(stmts.iter().any(|s| s == "Settings.Duration = 1.0;"), "{stmts:?}");
     }
 
     #[test]

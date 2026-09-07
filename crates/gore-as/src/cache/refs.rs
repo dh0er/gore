@@ -1661,6 +1661,63 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_literal_string_rvo_return(literal: &str, fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(101, "FString"), (102, "FName")] {
+            r.type_by_ptr.insert(ptr, name.into()); r.type_names.insert(name.into());
+        }
+        r.global_by_ptr.insert(100, literal.into()); if fault != 1 { r.global_is_string.insert(100); }
+        for (id, name, owner) in [(1, "$beh0", "FString"), (2, "Level", "UAbility"),
+            (3, "Append", "FString"), (4, "$beh0", "FName"), (5, "$beh0", "FName"),
+            (6, "$beh2", "FString")] {
+            r.func_by_ptr.insert(id, name.into()); r.func_is_method.insert(id);
+            r.func_owner.insert(id, owner.into()); r.func_params.insert(id, Vec::new());
+            r.func_ret.insert(id, DataType { token: 0x52, ..Default::default() });
+        }
+        for (id, token, ty) in [(1, 5, 101), (3, 0x44, 0), (4, 5, 101), (5, 5, 102)] {
+            r.func_params.insert(id, vec![DataType { token, type_info: if fault == 2 && id == 4 { 102 } else { ty },
+                is_reference: true, is_object_const: fault != 3, is_read_only: fault != 3, ..Default::default() }]);
+        }
+        r.func_ret.insert(2, DataType { token: if fault == 4 { 0x50 } else { 0x44 }, ..Default::default() });
+        r.func_ret.insert(3, DataType { token: 5, type_info: 101, is_reference: fault != 5, ..Default::default() });
+        if fault == 6 { r.func_params.insert(6, vec![DataType::default()]); }
+        r.temporary_arg_positions.insert("Append".into(), HashMap::from([(1, vec![true])]));
+        r.ctor_arg_positions.insert("FName".into(), HashMap::from([(1, vec![true])]));
+        r.zero_arg_names.insert("Level".into());
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_out_argument_read_order(readonly: bool) -> Self {
+        let mut r = Self::default();
+        r.temporary_arg_positions.insert("ReadAttribute".into(),
+            HashMap::from([(3, vec![true, true, readonly])]));
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_literal_value_lifetime(fault: u8) -> Self {
+        let mut r = Self::default();
+        r.type_by_ptr.insert(100, "FLocalizedValue".into());
+        r.type_by_ptr.insert(101, "FString".into());
+        r.global_by_ptr.insert(10, "text".into()); if fault != 1 { r.global_is_string.insert(10); }
+        r.set_class_fields(HashMap::from([("FSettings".into(), HashMap::from([("Value".into(), "FLocalizedValue".into())]))]));
+        for (id, name) in [(1, "$beh0"), (2, "opAssign"), (3, "opAssign"), (4, "$beh2")] {
+            r.func_by_ptr.insert(id, name.into()); r.func_is_method.insert(id);
+            r.func_owner.insert(id, if fault == 5 && id == 1 { "FOther" } else { "FLocalizedValue" }.into());
+            r.func_params.insert(id, Vec::new());
+            r.func_ret.insert(id, DataType { token: 0x52, ..Default::default() });
+        }
+        for (id, ty) in [(2, 101), (3, 100)] {
+            r.func_params.insert(id, vec![DataType { token: 5, type_info: if fault == 2 { 999 } else { ty },
+                is_reference: true, is_object_const: fault != 3, is_read_only: fault != 3, ..Default::default() }]);
+            r.func_ret.insert(id, DataType { token: 5, type_info: 100, is_reference: true, ..Default::default() });
+        }
+        if fault == 4 { r.func_params.insert(4, vec![DataType::default()]); }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_native_default_constructor(owner: &str, params: usize, returns_void: bool) -> Self {
         let mut r = Self::default();
         r.type_by_ptr.insert(101, owner.into());

@@ -12,7 +12,7 @@ AI.AIAgent.Creature.Golem.Fire.Spells.BreakFloor.GA_Spell_BreakFloor_FireGolem	2
 AI.AIAgent.Creature.Golem.Fire.Spells.Heated.GA_FireGolem_SpecialState_Heated	1	0	0
 AI.AIAgent.Creature.Golem.Fire.Spells.LavaStream.GA_FireGolem_EnvironmentAttack_ArenaLavaStreams	1	0	0
 AI.AIAgent.Creature.Golem.Ice.Spells.Icebolt.GA_Spell_IceGolem_IceBolt	2	0	0
-AI.AIAgent.Creature.Golem.Ice.Spells.SummonMiniGolems.GA_IceGolem_SpecialState_SummonMiniGolem	2	0	0
+AI.AIAgent.Creature.Golem.Ice.Spells.SummonMiniGolems.GA_IceGolem_SpecialState_SummonMiniGolem	1	0	0
 AI.AIAgent.Creature.Minecrawler.Queen.Abilities.GA_MCQueenPhaseChangeHit	1	0	0
 AI.AIAgent.Creature.Molerat.CombatSituations_Molerat	1	0	0
 AI.AIAgent.Creature.Scavenger.Rideable.Components.GothicMountComponentAS	2	0	0
@@ -86,7 +86,6 @@ AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpotM
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpot_XardasSleeper	3	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.TraceTarget_XardasSleeper	1	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.Xardas_Sleeper_Minion_BillboardComponent	1	0	0
-AI.States.FightAI.WaitStates.AIState_Observe_Creeping	1	0	0
 AI.States.FightAI.WaitStates.AIState_WaitForBlockedPath	2	0	0
 AI.States.FightAI.WaitStates.AIState_WaitWaryOfNearbyPerceivedCharacter	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning	1	0	0
@@ -115,8 +114,6 @@ GAS.Abilities.Locomotion.Target.GA_TargetEnemy	1	0	0
 GAS.Abilities.Passive.Drugs.Derived.Alcohol.GA_AlcoholDebuff	1	0	0
 GAS.Abilities.Passive.Drugs.Derived.Swampweed.GA_Swampweed	1	0	0
 GAS.Abilities.Passive.GA_PlayerPerception_CrimeRegistration	5	0	0
-GAS.Abilities.Spells.CastSpell.Base.GA_CastSpell_Rechargeable	1	0	0
-GAS.Abilities.Spells.CastSpell.Base.GA_CastSpell_RechargeableWithoutTransitions	1	0	0
 GAS.Abilities.Spells.CastSpell.Base.Targetable.GA_CastSpell_Targetable_Mandatory	1	0	0
 GAS.Abilities.Spells.CastSpell.Derived.AlteredStates.GA_CastSpell_Control	1	0	0
 GAS.Abilities.Spells.CastSpell.Derived.Summon.Base.GA_CastSpell_SummonBase	1	0	0
@@ -163,13 +160,9 @@ InteractiveObjects.GothicTriggerVolume	1	0	0
 InteractiveObjects.MixedObjectsPresets	2	0	0
 InteractiveObjects.PuzlesBlood	1	0	0
 Items.Projectiles	2	0	0
-Items.Visual.Projectile.Arrow.Base.ArrowProjectileVisual_Base	3	0	0
+Items.Visual.Projectile.Arrow.Base.ArrowProjectileVisual_Base	2	0	0
 LevelScripts.Map_x2_y1_OldCamp_AI_script	1	0	0
 LoadingScreen.LoadingScreenChapterBase	2	0	0
-LoadingScreen.LoadingScreens.LoadingScreen_BlackScreen	1	0	0
-LoadingScreen.LoadingScreens.LoadingScreen_GeneralHints	1	0	0
-LoadingScreen.LoadingScreens.LoadingScreen_Intro	1	0	0
-LoadingScreen.StreamingLoadingScreenSetup	1	0	0
 Player.PlayerConfig	1	0	0
 Regions.Traits.QuestRelatedTraits	8	0	0
 Sound.FXDefinitions.FXDefinitions_AttackImpact	1	0	0
