@@ -30,7 +30,7 @@ AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	7	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeDefinitions	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingResponse	2	0	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	24	0	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	23	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.TheftEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.EventResponses	8	0	0
 AI.CharacterAI_Gothic	6	0	0
@@ -54,7 +54,7 @@ AI.States.FightAI.CharmedState.AIState_Charmed	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_AcceptDefeat	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_ClaimVictory	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_CombatEndActions	4	0	0
-AI.States.FightAI.CombatState.AICombatBehaviorTree	7	0	0
+AI.States.FightAI.CombatState.AICombatBehaviorTree	5	0	0
 AI.States.FightAI.CombatState.AICombatFitnessMultipliers	2	0	0
 AI.States.FightAI.CombatState.AICombatRoleSystem	4	0	0
 AI.States.FightAI.CombatState.AICombatTargetScoring	2	0	0
@@ -92,10 +92,10 @@ AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.Xardas_Slee
 AI.States.FightAI.WaitStates.AIState_Observe_Creeping	1	0	0
 AI.States.FightAI.WaitStates.AIState_WaitForBlockedPath	2	0	0
 AI.States.FightAI.WaitStates.AIState_WaitWaryOfNearbyPerceivedCharacter	1	0	0
-AI.States.FightAI.WarningState.AIState_Warning	2	0	0
+AI.States.FightAI.WarningState.AIState_Warning	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_ComplainAboutBlockedPath	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_Creature	2	0	0
-AI.States.FightAI.WarningState.AIState_Warning_Crime	13	0	0
+AI.States.FightAI.WarningState.AIState_Warning_Crime	11	0	0
 AI.States.FightAI.WatchFightState.AIGroup_WatchFight	2	0	0
 AI.States.FightAI.WatchFightState.AIState_WatchFight	18	0	0
 AI.States.Test.TestCharacters_Navigation	1	0	0

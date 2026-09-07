@@ -1639,6 +1639,27 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_const_handle_field_comparison(saved: DataType, method: bool) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UCombat", "Controller"), ("UController", "Root"), ("URoot", "")]);
+        for (id, name, ret) in [(101, "GetRootNode", saved), (102, "GetCombat",
+            DataType { token: 5, type_info: 1, is_object_handle: true, ..Default::default() })]
+        {
+            let ptr = id as i64;
+            r.funcid_to_ptr.insert(id, ptr);
+            r.func_by_ptr.insert(ptr, name.into());
+            r.func_params.insert(ptr, Vec::new());
+            r.func_ret.insert(ptr, ret);
+            if method { r.func_is_method.insert(ptr); }
+            r.const_method_ptrs.insert(ptr);
+        }
+        r.set_class_fields(HashMap::from([
+            ("UCombat".into(), HashMap::from([("Controller".into(), "UController".into())])),
+            ("UController".into(), HashMap::from([("Root".into(), "URoot".into())])),
+        ]));
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_pointer_comparison_call(ret: DataType) -> Self {
         let mut r = Self::from_test_collision_names(&["AActor", "APawn"]);
         r.func_by_ptr.insert(1, "GetPawn".into());
@@ -1729,6 +1750,21 @@ impl RefResolver {
         r.func_ret.insert(2, DataType { token: 0x52, ..Default::default() });
         r.func_params.insert(2, vec![DataType { token: 5, type_info: if same_type { 101 } else { 102 },
             is_reference: true, is_object_const: true, ..Default::default() }]);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_mutable_f32_iterator(ret: DataType, method: bool) -> Self {
+        let mut r = Self::default();
+        r.type_by_ptr.insert(101, "TArrayIterator".into());
+        for (ptr, name, owner) in [(1, "Proceed", "TArrayIterator"), (2, "Iterator", "TArray")] {
+            r.func_by_ptr.insert(ptr, name.into());
+            r.func_owner.insert(ptr, owner.into());
+            r.func_params.insert(ptr, Vec::new());
+            if method { r.func_is_method.insert(ptr); }
+        }
+        r.func_ret.insert(1, ret);
+        r.func_ret.insert(2, DataType { token: 5, type_info: 101, ..Default::default() });
         r
     }
 

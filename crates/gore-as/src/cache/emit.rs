@@ -1181,8 +1181,10 @@ fn emit_function_ctor(
     // return then travels as an address rather than through a register, the name looked like a
     // dead store and was deleted outright. One missing fact, three symptoms.
     let reference_locals = reference_result_slots(f, refs);
+    let mutable_f32_elements = mutable_f32_iterator_elements(f, refs);
     // Producers the SOURCE kept as statements of their own — see `statement_producer_slots`.
     let mut statement_producers = statement_producer_slots(f);
+    statement_producers.extend(mutable_f32_elements.iter().map(|(_, elem)| *elem));
     // …and an operand produced BEFORE the operand on its left was: the compiler evaluates a
     // binary expression's left side first, so a right operand whose value already stood when
     // the left was computed was a statement of its own (`int n = Max(1, Count()); return x +
@@ -1207,6 +1209,10 @@ fn emit_function_ctor(
     // Where a widening's result was copied ON, the source named it; folding that name away
     // changes the width the arithmetic behind it happens at.
     let widened = widened_slots(f);
+    // A primitive iterator reference is the binding, not a disposable value carrier.
+    // Keep it through the copy-out pass until foreach owns that exact element.
+    let mut copy_out_keep = widened.clone();
+    copy_out_keep.extend(mutable_f32_elements.iter().map(|(_, elem)| *elem));
     let alias_copy_keep = widened.union(&named_bool_returns).copied().collect();
     // Slots the function does not touch until it has branched: their declaration lives in the
     // block that touches them, not at the top.
@@ -1537,32 +1543,6 @@ fn emit_function_ctor(
         Some(&local_types),
         Some(&hints),
     );
-    // batch-30c (C9 accessor-ambiguity, specs/batch29-errortail.md §9): the recovered ctor
-    // default-writes `this.WalkSpeed = ...;` collide with the class's inherited SetWalkSpeed
-    // property accessor ("Assigned property also has a SetWalkSpeed accessor declared. Write
-    // is ambiguous." — a module-killer under warnings-as-errors). Vanilla's ctor bytecode is
-    // GENERATED from UPROPERTY defaults (no source statement to warn on), so no property-
-    // write spelling can reproduce it warning-free; the accessor-call spelling is the
-    // corpus-proven compiling form (`this.SetWalkSpeed(...)` call sites). Exact-keyed to the
-    // two captured ctors — a per-site fix, not a mechanism.
-    let body = if is_ctor
-        && matches!(
-            class_name,
-            Some("UAIState_Warning" | "UAIState_Warning_Crime")
-        )
-        && body.contains("this.WalkSpeed = ")
-    {
-        body.lines()
-            .map(|l| match l.split_once("this.WalkSpeed = ") {
-                Some((ind2, rhs)) if ind2.trim().is_empty() && rhs.ends_with(';') => {
-                    format!("{ind2}this.SetWalkSpeed({});\n", &rhs[..rhs.len() - 1])
-                }
-                _ => format!("{l}\n"),
-            })
-            .collect()
-    } else {
-        body
-    };
     // Batch-21 Class C: CONSTSTORE-marked stores carry a const object handle of the local's
     // EXACT type (a same-type Cast<T> does NOT strip const in-game — every batch-20 exact-type
     // Cast site failed "No conversion from 'const X' to 'X'"). Vanilla declared these locals
@@ -1945,7 +1925,7 @@ fn emit_function_ctor(
         &const_result_slots,
         fields,
         &call_result_copies(f),
-        &widened,
+        &copy_out_keep,
     );
     // A slot the structurer's marker declared right before its own assignment (`$beh0` then
     // `opAssign`) was a declaration WITH that initialiser: the compiler builds `T x = <value>;`
@@ -2353,7 +2333,7 @@ fn emit_function_ctor(
                 &proceed_element_slots(f, refs),
                 &reference_locals,
                 &borrowed_handle_iterator_elements(f, refs),
-                &inline_range_for_containers(f, refs),
+                &inline_range_for_containers(f, refs), &mutable_f32_elements
             );
         // Before the declaration merge: a conversion naming the type the value already has hides
         // the copy-construction the merge is looking for.
@@ -2693,7 +2673,7 @@ fn emit_function_ctor(
                 &const_result_slots,
                 fields,
                 &call_result_copies(f),
-                &widened,
+                &copy_out_keep,
             );
         let rendered = fold_cast_operands(&rendered, &declared_locals, &call_result_types);
         pass_trace("fold_cast_operands", &rendered);
@@ -19616,6 +19596,51 @@ fn named_value_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, String)> {
             last_mention.insert(slot, at);
         }
     }
+    // A const handle result precedes a second getter and two handle-field reads.
+    // Keep that call at its statement position when the comparison names both
+    // complete physical lives; a different call reusing either slot cannot qualify.
+    let mut uses = HashMap::<i32, usize>::new();
+    for ins in &instrs {
+        for slot in super::bytediff::addressed_slots(ins) { *uses.entry(slot).or_default() += 1; }
+    }
+    for code in instrs.windows(13) {
+        if code.iter().map(|ins| ins.op.name).ne([
+            "PshVPtr", "CALLINTF", "STOREOBJ", "PshVPtr", "CALLINTF", "STOREOBJ",
+            "PshVPtr", "ADDSi", "RDSPtr", "ADDSi", "RDSPtr", "RefCpyV", "CmpPtr",
+        ]) || w(&code[0], 0) != Some(0) || w(&code[3], 0) != Some(0)
+            || code[1..].iter().any(|ins| targets.contains(&ins.offset_dw))
+        { continue; }
+        let (Some(left), Some(receiver), Some(right)) = (w(&code[2], 0), w(&code[5], 0), w(&code[11], 0))
+            else { continue; };
+        if left <= 0 || right <= 0 || receiver <= 0 || left == right
+            || w(&code[6], 0) != Some(receiver)
+            || w(&code[12], 0) != Some(left) || w(&code[12], 1) != Some(right)
+            || uses.get(&left) != Some(&2) || uses.get(&right) != Some(&2)
+        { continue; }
+        let handle_result = |call: &Instr| {
+            let id = *call.dwords.first()? as i32;
+            let ret = refs.func_ret_by_id(id)?;
+            (refs.is_method_by_id(id) && refs.is_const_method_by_id(id)
+                && refs.func_params_by_id(id).is_some_and(|params| params.is_empty())
+                && ret.token == 5 && ret.is_object_handle && !ret.is_reference)
+                .then_some(ret)
+        };
+        let (Some(saved), Some(base)) = (handle_result(&code[1]), handle_result(&code[4]))
+            else { continue; };
+        if !saved.is_object_const { continue; }
+        let field = |ins: &Instr| {
+            let owner_id = *ins.dwords.first()? as i32;
+            let owner = refs.type_by_id(owner_id)?;
+            let name = refs.member(owner_id, *ins.words.first()? as i32)?;
+            Some((owner, refs.own_field_type_by_class(owner, name)?))
+        };
+        let (Some((owner, middle)), Some((next_owner, value))) = (field(&code[7]), field(&code[9]))
+            else { continue; };
+        if refs.type_by_ptr(base.type_info) != Some(owner) || middle != next_owner
+            || refs.type_by_ptr(saved.type_info) != Some(value)
+        { continue; }
+        if let Some(callee) = callee_of(&code[1]) { out.insert((left, callee)); }
+    }
     out
 }
 
@@ -20939,6 +20964,48 @@ fn foreach_reject(reason: &str) {
     }
 }
 
+/// A mutable float32 iterator address read, divided and written through in one
+/// closed instruction run. The copied-element form never captures this address.
+fn mutable_f32_iterator_elements(f: &Func, refs: &RefResolver) -> HashSet<(i32, i32)> {
+    let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    let range_for = range_for_iterator_slots(f, refs);
+    let w = |ins: &Instr, at: usize| ins.words.get(at).map(|v| *v as i16 as i32);
+    let mut uses = HashMap::<i32, usize>::new();
+    for ins in &code {
+        for slot in super::bytediff::addressed_slots(ins) { *uses.entry(slot).or_default() += 1; }
+    }
+    let targets: HashSet<_> = code.iter().filter(|ins| ins.op.name.starts_with('J'))
+        .filter_map(|ins| ins.dwords.first().and_then(|off|
+            usize::try_from(ins.offset_dw as i64 + 2 + *off as i32 as i64).ok())).collect();
+    let mut out = HashSet::new();
+    for ops in code.windows(10) {
+        if ops.iter().map(|ins| ins.op.name).ne([
+            "PSF", "CALLSYS", "CpyRtoV8", "PshVPtr", "PopRPtr", "RDR4",
+            "DIVf", "PshVPtr", "PopRPtr", "WRTV4",
+        ]) || ops[1..].iter().any(|ins| targets.contains(&ins.offset_dw)) { continue; }
+        let (Some(iter), Some(elem), Some(scratch), Some(sum)) =
+            (w(&ops[0], 0), w(&ops[2], 0), w(&ops[5], 0), w(&ops[6], 2)) else { continue; };
+        if iter <= 0 || elem <= 0 || scratch <= 0 || sum <= 0 || !range_for.contains(&iter)
+            || [iter, scratch, sum].contains(&elem) || scratch == sum || scratch == iter || sum == iter
+            || w(&ops[3], 0) != Some(elem) || w(&ops[7], 0) != Some(elem)
+            || w(&ops[6], 0) != Some(scratch) || w(&ops[6], 1) != Some(scratch)
+            || w(&ops[9], 0) != Some(scratch) || uses.get(&elem) != Some(&3)
+        { continue; }
+        let Some(ptr) = ops[1].qwords.first().map(|v| *v as i64) else { continue; };
+        if refs.func_by_ptr(ptr) != Some("Proceed") || !refs.is_method_by_ptr(ptr)
+            || refs.func_owner_by_ptr(ptr) != Some("TArrayIterator")
+            || !refs.func_params_by_ptr(ptr).is_some_and(|params| params.is_empty())
+            || !refs.func_ret_by_ptr(ptr).is_some_and(|ret| ret.token == 0x50
+                && ret.is_reference && !ret.is_object_handle && !ret.is_object_const && !ret.is_read_only)
+        { continue; }
+        let mut known = f.obj_locals.iter().filter(|(slot, _)| *slot == iter);
+        let Some((_, pointer)) = known.next() else { continue; };
+        if known.next().is_some() || refs.type_by_ptr(*pointer) != Some("TArrayIterator") { continue; }
+        out.insert((iter, elem));
+    }
+    out
+}
+
 /// A borrowed handle element keeps the pointer returned by Proceed; a copied
 /// handle instead dereferences it before RefCpyV. Keep this distinction local to
 /// foreach: the general reference-local table also serves value declarations.
@@ -20995,6 +21062,7 @@ fn rewrite_foreach_loops(
     reference_locals: &HashMap<i32, bool>,
     borrowed_handles: &HashSet<(i32, i32)>,
     inline_containers: &HashSet<i32>,
+    mutable_f32_elements: &HashSet<(i32, i32)>,
 ) -> (String, HashSet<i32>) {
     let trailing_newline = body.ends_with('\n');
     let lines: Vec<&str> = body.lines().collect();
@@ -21100,8 +21168,9 @@ fn rewrite_foreach_loops(
         // `Proceed()` line is that same fact stated in the text.
         // This pass runs before the declarations are written, so the fact is taken from the
         // bytecode rather than from the text.
+        let mutable_primitive = mutable_f32_elements.contains(&(iter, elem));
         let element_by_reference = reference_locals.contains_key(&elem)
-            || borrowed_handles.contains(&(iter, elem));
+            || borrowed_handles.contains(&(iter, elem)) || mutable_primitive;
         if !element_by_reference
             && element_is_written_through(
                 &lines[i + 4..end],
@@ -21113,18 +21182,14 @@ fn rewrite_foreach_loops(
             foreach_reject("element-written-through");
             continue;
         }
-        // A range-for element is not assignable, so every write to it inside the loop has to be
-        // the compiler's own handle release. One that is anything else means this is not the
-        // idiom it looks like, and the loop keeps its recovered while-shape.
-        let releases: Vec<usize> = (i + 4..end)
-            .filter(|n| assignment_rhs_for(lines[*n], &elem_ident).is_some())
-            .collect();
-        if releases
-            .iter()
-            .any(|n| assignment_rhs_for(lines[*n], &elem_ident) != Some("nullptr"))
-        {
-            continue;
-        }
+        // Only the exact mutable primitive witness may retain element assignments.
+        // Copied/handle elements still permit only compiler-owned null releases.
+        let assignments: Vec<usize> = (i + 4..end)
+            .filter(|n| assignment_rhs_for(lines[*n], &elem_ident).is_some()).collect();
+        if assignments.iter().any(|n| {
+            let is_null = assignment_rhs_for(lines[*n], &elem_ident) == Some("nullptr");
+            if mutable_primitive { is_null } else { !is_null }
+        }) { continue; }
         let indent = leading_indent(lines[i]);
         // An element the body writes through has to be spelled as a reference: a plain `auto`
         // element is a copy and read-only, which is what the refusal above is about.
@@ -21139,8 +21204,8 @@ fn rewrite_foreach_loops(
             Some((_, rewritten)) => replace[i + 3] = Some(rewritten.clone()),
             None => drop_line[i + 3] = true,
         }
-        for n in releases {
-            drop_line[n] = true;
+        if !mutable_primitive {
+            for n in assignments { drop_line[n] = true; }
         }
         // The header owns the element now, so the declaration it replaces goes with the rest.
         if let Some(at) = hoisted_declaration {
@@ -23527,7 +23592,7 @@ mod source_shape_tests {
                 &std::collections::HashMap::new(),
                 &std::collections::HashMap::new(),
                 &std::collections::HashSet::new(),
-                &std::collections::HashSet::new(),
+                &std::collections::HashSet::new(), &std::collections::HashSet::new()
             );
         assert_eq!(
             out,
@@ -23565,7 +23630,7 @@ mod source_shape_tests {
             &std::collections::HashMap::new(),
             &std::collections::HashMap::new(),
             &std::collections::HashSet::new(),
-            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(), &std::collections::HashSet::new()
         );
         assert_eq!(
             out,
@@ -23602,7 +23667,7 @@ mod source_shape_tests {
                 &std::collections::HashMap::new(),
                 &std::collections::HashMap::new(),
                 &std::collections::HashSet::new(),
-                &std::collections::HashSet::new(),
+                &std::collections::HashSet::new(), &std::collections::HashSet::new()
             );
         assert_eq!(out, body);
         assert!(gone.is_empty());
@@ -23627,7 +23692,7 @@ mod source_shape_tests {
                 &std::collections::HashMap::new(),
                 &std::collections::HashMap::new(),
                 &std::collections::HashSet::new(),
-                &std::collections::HashSet::new(),
+                &std::collections::HashSet::new(), &std::collections::HashSet::new()
             );
         assert_eq!(out, body);
     }
@@ -24709,6 +24774,108 @@ mod member_arithmetic_lifetime_tests {
     use super::{borrowed_handle_iterator_elements, rewrite_foreach_loops, disassemble};
     use std::collections::BTreeMap;
 
+    fn mutable_f32_iterator_fixture() -> Func {
+        let mut f = function(&[
+            ("PSF", &[14]), ("CALLSYS", &[]), ("JMP", &[]),
+            ("PSF", &[14]), ("CALLSYS", &[]), ("CpyRtoV8", &[20]),
+            ("PshVPtr", &[20]), ("PopRPtr", &[]), ("RDR4", &[2]),
+            ("DIVf", &[2, 2, 1]), ("PshVPtr", &[20]), ("PopRPtr", &[]),
+            ("WRTV4", &[2]), ("RET", &[0]),
+        ]);
+        let code = disassemble(&f.bytecode).unwrap();
+        f.bytecode[code[1].offset_dw + 1] = 2;
+        f.bytecode[code[4].offset_dw + 1] = 1;
+        f.obj_locals.push((14, 101));
+        f
+    }
+
+    #[test]
+    fn mutable_f32_iterator_keeps_binding_and_preserves_explicit_element_assignment() {
+        let refs = RefResolver::from_test_mutable_f32_iterator(DataType {
+            token: 0x50, is_reference: true, ..Default::default()
+        }, true);
+        let pairs = super::mutable_f32_iterator_elements(&mutable_f32_iterator_fixture(), &refs);
+        assert_eq!(pairs, HashSet::from([(14, 20)]));
+        let retained: HashSet<_> = pairs.iter().map(|(_, elem)| *elem).collect();
+        let locals = BTreeMap::from([(1, "float32".into()), (2, "float32".into()), (20, "float32".into())]);
+        let body = "local_20 = local_14.Proceed();\nlocal_2 = local_20;\nlocal_2 /= local_1;\nlocal_20 = local_2;\n";
+        let empty = HashSet::new();
+        let folded = super::inline_call_argument_temporaries(body, &refs, &locals, None, true,
+            &HashMap::from([(20, "float32".into())]), &retained,
+            &empty, &empty, &empty, &empty, &empty, &empty, &empty,
+            &HashMap::new(), &empty, &HashSet::new());
+        assert!(folded.contains("local_20 = local_14.Proceed();"), "{folded}");
+        let source = "auto local_14 = this.Weights.Iterator();\nwhile (local_14.CanProceed)\n{\n    local_20 = local_14.Proceed();\n    local_20 = local_20 / local_1;\n}\n";
+        let rewrite = |proof: &HashSet<(i32, i32)>| rewrite_foreach_loops(source, &locals, &refs,
+            &HashSet::from([14]), &HashMap::from([(14, 20)]), &HashMap::new(),
+            &HashSet::new(), &HashSet::new(), proof).0;
+        assert_eq!(rewrite(&pairs), "for (auto& local_20 : this.Weights)\n{\n    local_20 = local_20 / local_1;\n}\n");
+        assert_eq!(rewrite(&HashSet::new()), source);
+        assert_eq!(rewrite(&HashSet::from([(16, 20)])), source);
+    }
+
+    #[test]
+    fn mutable_f32_binding_survives_copy_out_before_foreach_recovery() {
+        let refs = RefResolver::from_test_mutable_f32_iterator(DataType {
+            token: 0x50, is_reference: true, ..Default::default()
+        }, true);
+        let pairs = super::mutable_f32_iterator_elements(&mutable_f32_iterator_fixture(), &refs);
+        let retained: HashSet<_> = pairs.iter().map(|(_, elem)| *elem).collect();
+        let locals = BTreeMap::from([(1, "float32".into()), (2, "float32".into()), (20, "float32".into())]);
+        let source = "auto local_14 = this.Weights.Iterator();\nwhile (local_14.CanProceed)\n{\n    local_20 = local_14.Proceed();\n    local_2 = local_20;\n    local_2 = local_2 / local_1;\n    local_20 = local_2;\n}\n";
+        let empty = HashSet::new();
+        let fold = |keep: &HashSet<i32>| {
+            let inlined = super::inline_call_argument_temporaries(source, &refs, &locals, None, true,
+                &HashMap::from([(20, "float32".into())]), &retained,
+                &empty, &empty, &empty, &empty, &empty, &empty, &empty,
+                &HashMap::new(), &empty, &HashSet::new());
+            let aliases = super::fold_alias_copies(&inlined, &locals, &empty);
+            super::fold_copy_out_temporaries(&aliases, &locals, &empty, None, &empty, keep)
+        };
+        // The inliner guard alone did not stop the next pass redirecting Proceed.
+        assert!(fold(&empty).contains("local_2 = local_14.Proceed();"));
+        let kept = fold(&retained);
+        assert!(kept.contains("local_20 = local_14.Proceed();"), "{kept}");
+        let (recovered, suppressed) = rewrite_foreach_loops(&kept, &locals, &refs,
+            &HashSet::from([14]), &HashMap::from([(14, 20)]), &HashMap::new(),
+            &HashSet::new(), &empty, &pairs);
+        assert!(recovered.contains("for (auto& local_20 : this.Weights)"), "{recovered}");
+        assert!(suppressed.contains(&20));
+        assert!(recovered.contains("local_20 = "), "the element write must survive: {recovered}");
+    }
+
+    #[test]
+    fn mutable_f32_iterator_rejects_copies_readonly_metadata_and_other_binding_lives() {
+        let f = mutable_f32_iterator_fixture();
+        let ret = DataType { token: 0x50, is_reference: true, ..Default::default() };
+        let refs = RefResolver::from_test_mutable_f32_iterator(ret.clone(), true);
+        for other in [DataType { is_reference: false, ..ret.clone() },
+            DataType { is_read_only: true, ..ret.clone() }, DataType { is_object_const: true, ..ret.clone() },
+            DataType { token: 0x51, ..ret.clone() }]
+        {
+            let r = RefResolver::from_test_mutable_f32_iterator(other, true);
+            assert!(super::mutable_f32_iterator_elements(&f, &r).is_empty());
+        }
+        assert!(super::mutable_f32_iterator_elements(&f,
+            &RefResolver::from_test_mutable_f32_iterator(ret, false)).is_empty());
+        for extra in [vec![("CpyRtoV8", &[20][..])], vec![("PSF", &[20][..])],
+            vec![("PshVPtr", &[20][..])]] {
+            let mut other = f.clone(); other.bytecode.extend(function(&extra).bytecode);
+            assert!(super::mutable_f32_iterator_elements(&other, &refs).is_empty());
+        }
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, replacement) in [(5, ("RDR4", &[20][..])), (6, ("PshVPtr", &[22][..])),
+            (9, ("DIVf", &[2, 1, 2][..])), (12, ("WRTV4", &[3][..]))]
+        {
+            let mut other = f.clone(); let row = function(&[replacement]).bytecode;
+            assert_eq!(row.len(), code[at].op.size_dwords as usize);
+            other.bytecode[code[at].offset_dw..code[at].offset_dw + row.len()].copy_from_slice(&row);
+            assert!(super::mutable_f32_iterator_elements(&other, &refs).is_empty());
+        }
+        let mut unknown = f.clone(); unknown.obj_locals.clear();
+        assert!(super::mutable_f32_iterator_elements(&unknown, &refs).is_empty());
+    }
+
     #[test]
     fn copied_and_borrowed_handle_loops_keep_their_own_binding_forms() {
         let refs = RefResolver::from_test_handle_iterator(true, true, true);
@@ -24727,12 +24894,12 @@ mod member_arithmetic_lifetime_tests {
         let body = "    auto local_6 = this.Targets.Iterator();\n    while (local_6.CanProceed)\n    {\n        local_16 = local_6.Proceed();\n        Use(local_16);\n    }\n    auto local_24 = this.Rays.Iterator();\n    while (local_24.CanProceed)\n    {\n        local_32 = local_24.Proceed();\n        Use(local_32);\n    }\n";
         let (out, _) = rewrite_foreach_loops(body, &BTreeMap::new(), &refs,
             &HashSet::from([6, 24]), &HashMap::from([(6, 16), (24, 32)]),
-            &HashMap::new(), &pairs, &HashSet::new());
+            &HashMap::new(), &pairs, &HashSet::new(), &std::collections::HashSet::new());
         assert!(out.contains("for (auto local_16 : this.Targets)"), "{out}");
         assert!(out.contains("for (auto& local_32 : this.Rays)"), "{out}");
         let (out, _) = rewrite_foreach_loops(&body.replace("local_24", "local_26"),
             &BTreeMap::new(), &refs, &HashSet::from([6, 26]),
-            &HashMap::from([(6, 16), (26, 32)]), &HashMap::new(), &pairs, &HashSet::new());
+            &HashMap::from([(6, 16), (26, 32)]), &HashMap::new(), &pairs, &HashSet::new(), &std::collections::HashSet::new());
         assert!(out.contains("for (auto local_32 : this.Rays)"), "{out}");
     }
 
@@ -25354,6 +25521,72 @@ mod member_arithmetic_lifetime_tests {
         }
         f.ret.token = 0x44;
         assert!(super::copied_bool_return_carriers(&f, &refs).0.is_empty());
+    }
+
+    fn const_handle_field_comparison_fixture() -> Func {
+        let mut f = function(&[
+            ("PshVPtr", &[0]), ("CALLINTF", &[]), ("STOREOBJ", &[10]),
+            ("PshVPtr", &[0]), ("CALLINTF", &[]), ("STOREOBJ", &[2]),
+            ("PshVPtr", &[2]), ("ADDSi", &[0]), ("RDSPtr", &[]),
+            ("ADDSi", &[0]), ("RDSPtr", &[]), ("RefCpyV", &[12]),
+            ("CmpPtr", &[10, 12]), ("RET", &[0]),
+        ]);
+        let code = super::disassemble(&f.bytecode).unwrap();
+        for (at, value) in [(1, 101), (4, 102), (7, 1), (9, 2)] {
+            f.bytecode[code[at].offset_dw + 1] = value;
+        }
+        f
+    }
+
+    #[test]
+    fn const_handle_getter_before_foreign_field_comparison_keeps_its_call_site() {
+        let f = const_handle_field_comparison_fixture();
+        let refs = RefResolver::from_test_const_handle_field_comparison(DataType {
+            token: 5, type_info: 3, is_object_handle: true, is_object_const: true, ..Default::default()
+        }, true);
+        let sites = super::named_value_sites(&f, &refs);
+        assert_eq!(sites, HashSet::from([(10, "GetRootNode".to_owned())]));
+        let body = "const URoot local_10 = this.GetRootNode();\nif (local_10 != local_12)\n{\n    Observe();\n}\n";
+        let empty = HashSet::new();
+        let fold = |keep: &HashSet<(i32, String)>| super::inline_unnamed_value_temporaries(
+            body, &HashSet::from([(10, 1)]), &empty, &empty, &refs, &empty, &empty,
+            &HashMap::new(), keep, &empty, &empty, &empty);
+        assert!(!fold(&HashSet::new()).contains("const URoot local_10"));
+        assert_eq!(fold(&sites), body);
+    }
+
+    #[test]
+    fn const_handle_comparison_rejects_reused_slots_wrong_types_and_reversed_operands() {
+        let f = const_handle_field_comparison_fixture();
+        let ret = DataType { token: 5, type_info: 3, is_object_handle: true,
+            is_object_const: true, ..Default::default() };
+        let refs = RefResolver::from_test_const_handle_field_comparison(ret.clone(), true);
+        for extra in [vec![("CALLINTF", &[][..]), ("STOREOBJ", &[10][..])],
+            vec![("RefCpyV", &[12][..])], vec![("PshVPtr", &[10][..])]]
+        {
+            let mut other = f.clone();
+            let mut suffix = function(&extra).bytecode;
+            if extra[0].0 == "CALLINTF" { suffix[1] = 102; } // another resolved getter life
+            other.bytecode.extend(suffix);
+            assert!(super::named_value_sites(&other, &refs).is_empty());
+        }
+        let code = super::disassemble(&f.bytecode).unwrap();
+        let mut reversed = f.clone();
+        let compare = function(&[("CmpPtr", &[12, 10])]).bytecode;
+        reversed.bytecode[code[12].offset_dw..code[12].offset_dw + compare.len()].copy_from_slice(&compare);
+        assert!(super::named_value_sites(&reversed, &refs).is_empty());
+        for other_ret in [DataType { is_object_const: false, ..ret.clone() },
+            DataType { is_reference: true, ..ret.clone() }, DataType { type_info: 2, ..ret.clone() }]
+        {
+            let other = RefResolver::from_test_const_handle_field_comparison(other_ret, true);
+            assert!(super::named_value_sites(&f, &other).is_empty());
+        }
+        let not_method = RefResolver::from_test_const_handle_field_comparison(ret, false);
+        assert!(super::named_value_sites(&f, &not_method).is_empty());
+        let mut wrong_field = refs;
+        wrong_field.set_class_fields(HashMap::from([("UCombat".into(),
+            HashMap::from([("Controller".into(), "URoot".into())]))]));
+        assert!(super::named_value_sites(&f, &wrong_field).is_empty());
     }
 
     fn pointer_comparison_fixture(ops: &[(&str, &[u16])]) -> Func {

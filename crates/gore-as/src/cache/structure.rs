@@ -1317,22 +1317,35 @@ fn materialized_comparison(c: &Cmp) -> Option<String> {
 }
 
 /// A REFCPY through a declared mutable handle-reference parameter is a real output store.
-/// Require its exact frame address and a compatible typed local source, not a bare-name guess.
+/// Match its frame address and typed source, including a dereferenced input parameter.
 fn is_ref_handle_parameter_store(ctx: &Ctx, code: &[Instr], at: usize, src: &Arg, dst: &Arg) -> bool {
-    let Some(chain) = at.checked_sub(2).and_then(|start| code.get(start..at + 2)) else { return false; };
-    if !chain.iter().map(|i| i.op.name).eq(["PshVPtr", "PshVPtr", "REFCPY", "PopPtr"]) { return false; }
+    let Some(tail) = at.checked_sub(1).and_then(|start| code.get(start..at + 2)) else { return false; };
+    if !tail.iter().map(|i| i.op.name).eq(["PshVPtr", "REFCPY", "PopPtr"]) { return false; }
     let word = |i: &Instr| i.words.first().map(|w| s16(*w));
-    let (Some(source), Some(target)) = (word(&chain[0]), word(&chain[1])) else { return false; };
-    if source <= 0 || target > 0 || src.s != ctx.slot_name(source) || dst.s != ctx.slot_name(target) {
-        return false;
+    let Some(target) = word(&tail[0]) else { return false; };
+    let parameter = |slot| ctx.param_off_map.get(&slot).and_then(|i| ctx.f.param_types.get(*i));
+    let Some(param) = parameter(target) else { return false; };
+    if target > 0 || dst.s != ctx.slot_name(target) || param.token != 5
+        || !param.is_reference || !param.is_object_handle || param.is_read_only || param.is_object_const
+    { return false; }
+    let Some(target_type) = ctx.refs.type_by_ptr(param.type_info) else { return false; };
+    let Some(mut from) = at.checked_sub(2) else { return false; };
+    if code[from].op.name == "PshNull" { return src.s == "nullptr"; }
+    let dereferenced = code[from].op.name == "RDSPtr";
+    if dereferenced {
+        let Some(previous) = from.checked_sub(1) else { return false; };
+        from = previous;
     }
-    let Some(param) = ctx.param_off_map.get(&target).and_then(|index| ctx.f.param_types.get(*index))
-        else { return false; };
-    if param.token != 5 || !param.is_reference || !param.is_object_handle
-        || param.is_read_only || param.is_object_const { return false; }
-    let (Some(target_type), Some(source_type)) = (ctx.refs.type_by_ptr(param.type_info), src.ty.as_deref())
-        else { return false; };
-    source_type == target_type || provably_derived(source_type, target_type, ctx.refs)
+    if code[from].op.name != "PshVPtr" { return false; }
+    let Some(source) = word(&code[from]) else { return false; };
+    if src.s != ctx.slot_name(source) { return false; }
+    let source_type = if source <= 0 {
+        let Some(input) = parameter(source) else { return false; };
+        if input.token != 5 || !input.is_object_handle || input.is_object_const || input.is_read_only
+            || input.is_reference != dereferenced { return false; }
+        ctx.refs.type_by_ptr(input.type_info)
+    } else if !dereferenced { src.ty.as_deref() } else { None };
+    source_type.is_some_and(|source| source == target_type || provably_derived(source, target_type, ctx.refs))
 }
 
 /// Const parameters remain excluded unless this exact bytecode store targets a
@@ -1342,17 +1355,29 @@ fn is_exact_const_param_field_store(
 ) -> bool {
     let Some(code) = at.checked_sub(3).and_then(|start| insns.get(start..=at)) else { return false; };
     let word = |ins: &Instr, index: usize| ins.words.get(index).map(|v| *v as i16 as i32);
-    if !ctx.f.is_method || code[0].op.name != "PshVPtr" || code[1].op.name != "PshVPtr"
+    let dereferenced = code[0].op.name == "RDSPtr";
+    let source_push = if dereferenced {
+        let Some(push) = at.checked_sub(4).and_then(|index| insns.get(index)) else { return false; };
+        push
+    } else { &code[0] };
+    if !ctx.f.is_method || source_push.op.name != "PshVPtr" || code[1].op.name != "PshVPtr"
         || word(&code[1], 0) != Some(0) || code[2].op.name != "ADDSi" || code[3].op.name != "REFCPY"
     { return false; }
-    let Some(source_slot) = word(&code[0], 0) else { return false; };
+    let Some(source_slot) = word(source_push, 0) else { return false; };
     if source_slot == 0 || src != ctx.slot_name(source_slot) { return false; }
     let Some(index) = ctx.param_off_map.get(&source_slot) else { return false; };
     let Some(param) = ctx.f.param_types.get(*index) else { return false; };
     let Some(owner_id) = code[2].dwords.first().map(|v| *v as i32) else { return false; };
     let Some(offset) = word(&code[2], 0) else { return false; };
     let Some(field) = ctx.refs.member(owner_id, offset) else { return false; };
-    dst == format!("this.{field}") && ctx.refs.const_object_field_accepts(owner_id, offset, param)
+    // RDSPtr consumes only the parameter's reference indirection; every other
+    // qualifier and the fully qualified object identity must still match the field.
+    let mut value = param.clone();
+    if dereferenced {
+        if !value.is_reference || !value.is_object_handle { return false; }
+        value.is_reference = false;
+    }
+    dst == format!("this.{field}") && ctx.refs.const_object_field_accepts(owner_id, offset, &value)
 }
 
 /// A script default temporary is destroyed before the assignment releases its
@@ -8556,6 +8581,71 @@ impl Structurer<'_> {
         preds > 0
     }
 
+    /// The two-case lowering uses equality guards instead of a jump table.
+    /// Recover only the complete seven-block void function: its exact forward
+    /// edges prove both straight-line arms and leave the common RET to the caller.
+    fn try_emit_two_case_switch(
+        &mut self, i: usize, stop: usize, depth: usize, out: &mut String,
+    ) -> Option<usize> {
+        let ctx = self.ctx;
+        let b = &self.g.blocks;
+        if i != 0 || stop != 7 || b.len() != 7 || self.loop_scope.is_some()
+            || ctx.rvo_off.is_some() || !ctx.ret_ty.is_some_and(|ret| ret.token == 0x52)
+            || self.jump_op(0) != "JP" || self.jump_op(1) != "JZ"
+            || self.jump_op(2) != "JZ" || self.jump_op(3) != "JMP"
+            || self.jump_op(4) != "JMP" || self.jump_op(6) != "RET"
+        { return None; }
+        let len = |at: usize| b[at].instr_hi - b[at].instr_lo;
+        if len(0) < 2 || len(1) != 2 || len(2) != 2 || len(3) != 1
+            || len(4) < 2 || len(5) == 0 || len(6) != 1
+        { return None; }
+        let compare = |at: usize| {
+            let ins = &ctx.instrs[b[at].instr_hi - 2];
+            (ins.op.name == "CMPIi").then_some(())?;
+            Some((s16(*ins.words.first()?), *ins.dwords.first()? as i32))
+        };
+        let (selector, upper) = compare(0)?;
+        let (first_slot, first) = compare(1)?;
+        let (second_slot, second) = compare(2)?;
+        if selector != first_slot || selector != second_slot || first >= second || upper != second
+            || ctx.slot_type(selector).as_deref() != Some("int")
+        { return None; }
+        // This is the entire CFG, so exact successor lists also exclude every
+        // external entry, backward edge, fallthrough between cases, and other exit.
+        let expected: [&[usize]; 7] = [&[6, 1], &[4, 2], &[5, 3], &[6], &[6], &[6], &[]];
+        for (at, successors) in expected.iter().enumerate() {
+            if b[at].succs.len() != successors.len()
+                || b[at].succs.iter().zip(successors.iter()).any(|(off, target)| *off != b[*target].start_dw)
+            { return None; }
+        }
+        let ranges = [(b[0].instr_lo, b[0].instr_hi - 2),
+            (b[4].instr_lo, b[4].instr_hi - 1), (b[5].instr_lo, b[5].instr_hi)];
+        let mut rendered = Vec::new();
+        for (lo, hi) in ranges {
+            if ctx.instrs[lo..hi].iter().any(|ins| ins.op.name.starts_with('J') || ins.op.name == "RET") {
+                return None;
+            }
+            // No operand may cross the recovered switch boundaries. Reuse the
+            // normal block emitter, including its call flush and constructor rules.
+            let (stmts, cmp, stack) = block_stmts_in(ctx, lo, hi, Vec::new(), false);
+            if !stack.is_empty() || cmp.is_some() { return None; }
+            rendered.push(stmts);
+        }
+        let ind = "    ".repeat(depth);
+        for line in &rendered[0] { let _ = writeln!(out, "{ind}{line}"); }
+        let _ = writeln!(out, "{ind}switch ({})", ctx.slot_name(selector));
+        let _ = writeln!(out, "{ind}{{");
+        for (case, stmts) in [first, second].iter().zip(&rendered[1..]) {
+            let _ = writeln!(out, "{ind}    case {case}:");
+            let _ = writeln!(out, "{ind}    {{");
+            for line in stmts { let _ = writeln!(out, "{ind}        {line}"); }
+            let _ = writeln!(out, "{ind}        break;");
+            let _ = writeln!(out, "{ind}    }}");
+        }
+        let _ = writeln!(out, "{ind}}}");
+        Some(6)
+    }
+
     /// Detect and emit the Hazelight compiler's `switch` lowering rooted at block `i`
     /// (see `work/reversing/gore-as/specs/illegal-op-round2.md` Part B). The 5-part idiom:
     ///
@@ -8583,6 +8673,9 @@ impl Structurer<'_> {
         depth: usize,
         out: &mut String,
     ) -> Option<usize> {
+        if let Some(after) = self.try_emit_two_case_switch(i, stop, depth, out) {
+            return Some(after);
+        }
         let ctx = self.ctx;
         let g = self.g;
         let blocks = &g.blocks;
@@ -10846,6 +10939,37 @@ mod tests {
     }
 
 
+    #[test]
+    fn dereferenced_const_handle_parameter_requires_matching_field_identity() {
+        let param = DataType { token: 5, type_info: 4, is_reference: true,
+            is_object_const: true, is_object_handle: true, ..Default::default() };
+        let render = |input: DataType, owner: u32, dereference: bool| {
+            let refs = RefResolver::from_test_const_object_fields();
+            let mut a = TestAssembler::default();
+            a.op("PshVPtr", &[(-2i16) as u16], &[]);
+            if dereference { a.op("RDSPtr", &[], &[]); }
+            a.op("PshVPtr", &[0], &[]); a.op("ADDSi", &[0], &[owner]);
+            a.op("REFCPY", &[], &[]); a.op("PopPtr", &[], &[]); a.op("RET", &[4], &[]);
+            let fixture = a.finish();
+            let f = FuncCode { func: "FHolder::FHolder".into(), is_method: true,
+                param_names: vec!["Input".into()], param_types: vec![input],
+                ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: None, param_types: None, class_name: Some("FHolder"),
+                local_types: None, float_slots: Default::default(), param_off_map: HashMap::from([(-2, 0)]),
+                rvo_off: None, keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+            block_stmts(&ctx, 0, fixture.instrs.len()).0.join("\n")
+        };
+        assert_eq!(render(param.clone(), 1, true), "this.Value = Input;\nreturn;");
+        assert!(!render(param.clone(), 1, false).contains(" = Input;"));
+        for owner in [2, 3, 99] { assert!(!render(param.clone(), owner, true).contains(" = Input;")); }
+        for bad in [DataType { type_info: 5, ..param.clone() },
+            DataType { is_reference: false, ..param.clone() },
+            DataType { is_object_handle: false, ..param.clone() },
+            DataType { is_read_only: true, ..param.clone() }]
+        { assert!(!render(bad, 1, true).contains(" = Input;")); }
+    }
+
     fn render_lvalue_selection(handle: bool, extra_entry: bool, wrong_type: bool, jump: &'static str, test_type: Option<&str>) -> String {
         let mut a = TestAssembler::default();
         if extra_entry { a.jump("JZ", "join"); }
@@ -11045,6 +11169,43 @@ mod tests {
     }
 
     #[test]
+    fn handle_reference_outputs_accept_null_and_matching_parameter_dereferences() {
+        let handle = DataType { token: 5, type_info: 1, is_object_handle: true, ..Default::default() };
+        let render = |input: DataType, null: bool, dereference: bool, source_slot: i16| {
+            let refs = RefResolver::from_test_member_chain(&[("AGothicCharacterState", "")]);
+            let mut a = TestAssembler::default();
+            if null { a.op("PshNull", &[], &[]); }
+            else { a.op("PshVPtr", &[source_slot as u16], &[]); }
+            if dereference { a.op("RDSPtr", &[], &[]); }
+            a.op("PshVPtr", &[(-4i16) as u16], &[]);
+            a.op("REFCPY", &[], &[]); a.op("PopPtr", &[], &[]); a.op("RET", &[6], &[]);
+            let fixture = a.finish();
+            let f = FuncCode { func: "Fixture::Resolve".into(), is_method: true,
+                param_names: vec!["Input".into(), "Result".into()],
+                param_types: vec![input, DataType { is_reference: true, ..handle.clone() }],
+                ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: None, param_types: None, class_name: None, local_types: None,
+                float_slots: Default::default(), param_off_map: HashMap::from([(-2, 0), (-4, 1)]),
+                rvo_off: None, keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+            block_stmts(&ctx, 0, fixture.instrs.len()).0.join("\n")
+        };
+        assert_eq!(render(handle.clone(), true, false, -2), "Result = nullptr;\nreturn;");
+        for by_ref in [false, true] {
+            let input = DataType { is_reference: by_ref, ..handle.clone() };
+            assert_eq!(render(input.clone(), false, by_ref, -2), "Result = Input;\nreturn;");
+            assert!(!render(input.clone(), false, !by_ref, -2).contains("Result ="));
+            for bad in [DataType { is_object_const: true, ..input.clone() },
+                DataType { is_object_handle: false, ..input.clone() },
+                DataType { type_info: 999, ..input.clone() },
+                DataType { is_read_only: true, ..input.clone() }]
+            { assert!(!render(bad, false, by_ref, -2).contains("Result =")); }
+            assert!(!render(input, false, by_ref, -6).contains("Result ="));
+        }
+        assert!(!render(handle.clone(), false, false, 0).contains("Result ="));
+    }
+
+    #[test]
     fn const_handle_stores_require_a_compatible_native_const_field() {
         let render = |owner: &str, field: &str, value: &str| {
             let refs = RefResolver::from_test_const_native_store(owner, field, value);
@@ -11158,6 +11319,83 @@ mod tests {
             Some(("body", "shared_ret", scope)), &RefResolver::default(), "int");
         assert!(output.contains("local_4 = 17;"), "{output}");
         assert!(output.trim_end().ends_with("break;"), "{output}");
+    }
+
+    fn two_case_void_switch_fixture(selector: u16, outside_entry: bool, carried_prefix: bool) -> CompoundFixture {
+        let mut a = TestAssembler::default();
+        if outside_entry {
+            a.op("CpyVtoR1", &[7], &[]);
+            a.jump("JLowNZ", "case_b");
+        }
+        a.label("prefix");
+        a.op("SetV4", &[8], &[17]);
+        if carried_prefix { a.op("PshVPtr", &[2], &[]); }
+        a.label("upper_compare");
+        a.op("CMPIi", &[selector], &[1]);
+        a.jump("JP", "join");
+        a.label("first_compare");
+        a.op("CMPIi", &[selector], &[0]);
+        a.jump("JZ", "case_a");
+        a.label("second_compare");
+        a.op("CMPIi", &[selector], &[1]);
+        a.jump("JZ", "case_b");
+        a.jump("JMP", "join");
+        a.label("case_a");
+        a.op("LoadThisR", &[0], &[1]);
+        a.op("WRTV4", &[8], &[]);
+        a.label("case_a_exit");
+        a.jump("JMP", "join");
+        a.label("case_b");
+        a.op("LoadThisR", &[0], &[2]);
+        a.op("WRTV4", &[8], &[]);
+        a.label("join");
+        a.op("RET", &[3], &[]);
+        a.finish()
+    }
+
+    #[test]
+    fn two_case_void_switch_preserves_prefix_and_both_field_mutations() {
+        let refs = RefResolver::from_test_member_chain(&[("UHolder", "Left"), ("UHolder", "Right")]);
+        for (selector, expected) in [((-2i16) as u16, "newState"), (4, "local_4")] {
+            let fixture = two_case_void_switch_fixture(selector, false, false);
+            let source = render_fixture_range_with_return(&fixture, None, &refs, "int", Some("int"), 0x52);
+            assert_eq!(source, format!(concat!("local_8 = 17;\nswitch ({})\n{{\n",
+                "    case 0:\n    {{\n        this.Left = local_8;\n        break;\n    }}\n",
+                "    case 1:\n    {{\n        this.Right = local_8;\n        break;\n    }}\n",
+                "}}\nreturn;\n"), expected));
+        }
+    }
+
+    #[test]
+    fn two_case_void_switch_rejects_mismatched_guards_types_entries_and_exits() {
+        let refs = RefResolver::from_test_member_chain(&[("UHolder", "Left"), ("UHolder", "Right")]);
+        let fixture = two_case_void_switch_fixture((-2i16) as u16, false, false);
+        let render = |f: &CompoundFixture| render_fixture_range_with_return(f, None, &refs, "int", Some("int"), 0x52);
+        for (label, slot, value) in [("upper_compare", -2i16, 2), ("first_compare", -3, 0),
+            ("first_compare", -2, 1), ("second_compare", -2, 0)]
+        {
+            let mut other = fixture.clone();
+            replace_same_width(&mut other, label, "CMPIi", &[slot as u16], &[value]);
+            assert!(!render(&other).contains("switch ("));
+        }
+        let mut falling_into_other_case = fixture.clone();
+        retarget(&mut falling_into_other_case, "case_a_exit", "case_b");
+        assert!(!render(&falling_into_other_case).contains("switch ("));
+        for (external, carried) in [(true, false), (false, true)] {
+            let other = two_case_void_switch_fixture((-2i16) as u16, external, carried);
+            assert!(!render(&other).contains("switch ("));
+        }
+        for ty in ["uint", "bool", "EHeaderStatus", ""] {
+            let source = render_fixture_range_with_return(&fixture, None, &refs, "int", Some(ty), 0x52);
+            assert!(!source.contains("switch ("));
+        }
+        let source = render_fixture_range_with_return(&fixture, None, &refs, "int", Some("int"), 0x44);
+        assert!(!source.contains("switch ("));
+        let scope = LoopScope { continue_off: fixture.labels["prefix"], break_off: fixture.labels["join"],
+            continue_only: false, latch_block: None };
+        let source = render_fixture_range_with_return(&fixture, Some(("prefix", "join", scope)),
+            &refs, "int", Some("int"), 0x52);
+        assert!(!source.contains("switch ("));
     }
 
     fn trap_switch_fixture(trap: bool) -> CompoundFixture {
