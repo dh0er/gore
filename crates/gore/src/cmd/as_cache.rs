@@ -2029,11 +2029,31 @@ fn require_qualified_target_pristine_base(
     Ok(pristine)
 }
 
+/// The selection made before the guard must still hold once the guard is held. A deploy landing
+/// in between leaves the pinned bytes and the backup identical to the original while installing
+/// a script mod on the live cache, which only a fresh selection notices.
+fn require_unchanged_selection(
+    game: &Path,
+    selected: &gore_mod::PristineScriptCacheSource,
+) -> Result<()> {
+    let current = compiler_shipping_source(game)?;
+    if current.from_backup != selected.from_backup
+        || current.identity != selected.identity
+        || current.path != selected.path
+    {
+        bail!(
+            "the deployment-aware pristine script cache changed between selecting it and pinning it (a deployment change or a game update ran alongside); retry the compile"
+        );
+    }
+    Ok(())
+}
+
 fn qualified_target_pristine_script_cache(
     game: &Path,
     target: &gore_as::compiler_target::ValidatedCompilerTargetInputsV1,
     selected: &gore_mod::PristineScriptCacheSource,
 ) -> Result<Vec<u8>> {
+    require_unchanged_selection(game, selected)?;
     let pristine = gore_mod::pristine_script_cache(game)
         .context("reading the deployment-aware pristine script cache")?;
     require_qualified_target_pristine_base(selected, target.shipping_cache(), pristine)
@@ -6570,6 +6590,29 @@ mod default_cli_tests {
             .to_string();
         assert!(error.contains("script mod"), "got: {error}");
         assert!(!game.join(".gore-install-mutation.lock").exists());
+    }
+
+    /// The qualified-target path selects its base before the guard too. A deploy landing in
+    /// between keeps the pinned bytes and the backup identical to the original, so only a fresh
+    /// selection under the guard notices the installed mod.
+    #[test]
+    fn qualified_target_selection_must_survive_the_guard() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"pristine").unwrap();
+        let selected = compiler_shipping_source(&game).unwrap();
+        require_unchanged_selection(&game, &selected).unwrap();
+
+        install_script_mod_record(&game, b"pristine", b"deployed");
+        let error = require_unchanged_selection(&game, &selected)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("changed between selecting it and pinning it"),
+            "got: {error}"
+        );
     }
 
     #[test]
