@@ -745,6 +745,26 @@ fn compile_report_with_available_product_package(
         package,
         pristine_source,
     } = resolved;
+    // While a script mod is installed the compiler base is the deployment backup, which the
+    // game compiler cannot restore over the live cache: `standalone_then_game` runs the
+    // standalone compiler only and says so in its evidence.
+    let game_fallback_note = pristine_source
+        .as_ref()
+        .filter(|source| source.from_backup)
+        .map(|source| {
+            format!(
+                "the game fallback is unavailable while a script mod is installed: the compiler \
+                 base is the deployment backup {}, which the game compiler cannot restore over \
+                 the live cache",
+                source.path.display()
+            )
+        });
+    let effective =
+        if requested == CompilerBackendWireV2::StandaloneThenGame && game_fallback_note.is_some() {
+            CompilerBackendWireV2::Standalone
+        } else {
+            requested
+        };
     let game_dir = PathBuf::from(&payload.game_dir);
     let staging = match OwnedCompileStaging::create(Path::new(&payload.work_dir), &game_dir) {
         Ok(staging) => staging,
@@ -767,7 +787,7 @@ fn compile_report_with_available_product_package(
     let mut runner_unavailable = None;
     let mut runner = match runner {
         Ok(runner) => Some(runner),
-        Err(failure) if requested == CompilerBackendWireV2::Standalone => {
+        Err(failure) if effective == CompilerBackendWireV2::Standalone => {
             let mut failure_detail = Value::String(failure.to_string());
             crate::authoring_story_compiler_revision3::redact_private_paths(
                 &mut failure_detail,
@@ -829,7 +849,7 @@ fn compile_report_with_available_product_package(
         );
     }
     let mut strict_target = Some(target);
-    let mut guard = if requested == CompilerBackendWireV2::Standalone {
+    let mut guard = if effective == CompilerBackendWireV2::Standalone {
         None
     } else {
         match acquire_guard(&game_dir) {
@@ -923,7 +943,7 @@ fn compile_report_with_available_product_package(
                 .to_vec(),
         ),
     };
-    let report = if requested == CompilerBackendWireV2::Standalone {
+    let report = if effective == CompilerBackendWireV2::Standalone {
         // `target` remains alive for the whole attempt and pins EXE/Shipping/Binds without ever
         // acquiring the install-mutation guard or touching the selected installation.
         let report = compile_module_with_backend_v1(
@@ -959,10 +979,48 @@ fn compile_report_with_available_product_package(
                 .expect("the authenticated target is transferred once"),
         )
     };
+    // The module path has no transaction hook for a closing audit: re-read the deployment-aware
+    // original before the mini is published and discard a mini whose base changed meanwhile.
+    let mut report = report;
+    if let (CompileModuleReportOutcome::Compiled(_), Some(source)) =
+        (&report.outcome, pristine_source.as_ref())
+    {
+        if let Err(message) = closing_base_audit(
+            &game_dir,
+            source,
+            opts.base_override.as_deref().unwrap_or_default(),
+        ) {
+            let previous = std::mem::replace(
+                &mut report.outcome,
+                CompileModuleReportOutcome::Failed(gore_as::compile::CompileError::Other(
+                    message.clone(),
+                )),
+            );
+            if let CompileModuleReportOutcome::Compiled(mut output) = previous {
+                if let Err(error) = output.neutralize_retained_artifact() {
+                    report.outcome = CompileModuleReportOutcome::Failed(
+                        gore_as::compile::CompileError::Other(format!(
+                            "{message}; discarding the compiled mini-cache also failed: {error}"
+                        )),
+                    );
+                }
+            }
+        }
+    }
     let result_backend = report.backend_name();
     let standalone_attempted = report.standalone_attempted();
     let game_attempted = report.game_attempted();
-    let fallback = runner_unavailable.or_else(|| {
+    let skipped_fallback = game_fallback_note
+        .as_ref()
+        .filter(|_| matches!(report.outcome, CompileModuleReportOutcome::Failed(_)))
+        .map(|note| {
+            json!({
+                "failed_backend": CompilerBackendNameV1::Game.as_str(),
+                "failure_kind": "preflight",
+                "detail": note,
+            })
+        });
+    let fallback = runner_unavailable.or(skipped_fallback).or_else(|| {
         report.fallback_reason().map(|reason| {
             json!({
                 "failed_backend": reason.failed_backend().as_str(),
@@ -1028,6 +1086,29 @@ fn qualified_target_pristine_script_cache(
     let target_matches_pristine = qualified_shipping == pristine.as_slice()
         && selected.is_none_or(|source| source.matches(qualified_shipping));
     Ok((pristine, target_matches_pristine))
+}
+
+/// The pristine base the mini was remapped against must still be the deployment-aware original
+/// now that the compiler has run, by selection and by bytes.
+fn closing_base_audit(
+    game_dir: &Path,
+    selected: &gore_mod::PristineScriptCacheSource,
+    base: &[u8],
+) -> Result<(), String> {
+    let current = gore_mod::pristine_script_cache_source(game_dir).map_err(|error| {
+        format!("re-reading the deployment-aware pristine script cache: {error}")
+    })?;
+    if current.identity != selected.identity || !current.matches(base) {
+        return Err(format!(
+            "the pristine script cache changed during compilation: the compiler used {} ({}), but \
+             the deployment-aware original is now {} ({}); retry the compile",
+            selected.path.display(),
+            selected.identity,
+            current.path.display(),
+            current.identity
+        ));
+    }
+    Ok(())
 }
 
 fn pristine_base_changed_failure() -> Value {
@@ -1874,6 +1955,26 @@ mod tests {
         assert!(!message.contains("undeploy"), "got: {message}");
         assert_eq!(rejected["install_restore"], "not_started");
         assert_eq!(rejected["recovery_required"], false);
+    }
+
+    #[test]
+    fn closing_base_audit_refuses_a_base_that_changed_during_compilation() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let script = game.join("G1R/Script");
+        fs::create_dir_all(&script).unwrap();
+        let live = script.join("PrecompiledScript_Shipping.Cache");
+        fs::write(&live, b"pristine-cache").unwrap();
+        let selected = gore_mod::pristine_script_cache_source(&game).unwrap();
+
+        closing_base_audit(&game, &selected, b"pristine-cache").unwrap();
+
+        fs::write(&live, b"updated-by-the-game").unwrap();
+        let message = closing_base_audit(&game, &selected, b"pristine-cache").unwrap_err();
+        assert!(
+            message.contains("changed during compilation"),
+            "got: {message}"
+        );
     }
 
     fn request(payload: Value) -> String {

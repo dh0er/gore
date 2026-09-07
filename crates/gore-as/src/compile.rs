@@ -1591,13 +1591,22 @@ fn compile_module_with_backend_v1_with_guard_and_optional_target(
     guard: InstallMutationGuard,
     target: Option<ValidatedCompilerTargetInputsV1>,
 ) -> CompileModuleReport {
+    let game_fallback_blocker = target.as_ref().and_then(|target| {
+        backup_pinned_target_blocker(target.shipping_cache_path(), &opts.game_dir)
+    });
     let guard = std::cell::RefCell::new(Some(guard));
     let target = std::cell::RefCell::new(target);
-    let mut report = compile_module_report_with_backend_runner_v1(
+    let mut report = compile_module_report_with_game_fallback_blocker(
         opts,
         mode,
         standalone,
+        game_fallback_blocker.clone(),
         |game_dir, source_tree| {
+            // An explicit `game` policy reaches this closure with the blocker still set: refuse
+            // before the guard is even taken, so nothing in the installation is touched.
+            if let Some(blocker) = game_fallback_blocker.as_ref() {
+                return Err(blocker.clone());
+            }
             let guard = guard
                 .borrow_mut()
                 .take()
@@ -1769,6 +1778,42 @@ where
         output_recovery_required: false,
         target_pins: None,
     }
+}
+
+/// [`compile_module_report_with_backend_runner_v1`] with a known reason the game backend must
+/// not run. `standalone-then-game` then runs the standalone compiler only and, when that fails,
+/// reports the standalone failure itself with the reason appended, instead of a refused game
+/// attempt that would hide the standalone diagnostics.
+fn compile_module_report_with_game_fallback_blocker<G>(
+    opts: &CompileOpts,
+    mode: CompilerBackendModeV1,
+    standalone: Option<&mut dyn StandaloneCompilerRunnerV1>,
+    game_fallback_blocker: Option<String>,
+    run_game: G,
+) -> CompileModuleReport
+where
+    G: FnOnce(&Path, &Path) -> Result<GameRunRegenExtendedReport, String>,
+{
+    let skipped_fallback = match (mode, game_fallback_blocker) {
+        (CompilerBackendModeV1::StandaloneThenGame, Some(blocker)) => Some(blocker),
+        _ => None,
+    };
+    let effective_mode = if skipped_fallback.is_some() {
+        CompilerBackendModeV1::Standalone
+    } else {
+        mode
+    };
+    let mut report =
+        compile_module_report_with_backend_runner_v1(opts, effective_mode, standalone, run_game);
+    if let Some(blocker) = skipped_fallback {
+        if let CompileModuleReportOutcome::Failed(error) = report.outcome {
+            report.outcome = CompileModuleReportOutcome::Failed(append_compile_error_note(
+                error,
+                &format!("the game fallback was not attempted: {blocker}"),
+            ));
+        }
+    }
+    report
 }
 
 fn compile_module_report_with_backend_runner_v1<G>(
@@ -2449,6 +2494,14 @@ where
                     format!("prepared full-graph source seal no longer matches: {error}"),
                 )
             })?;
+            if let Some(blocker) = target.borrow().as_ref().and_then(|target| {
+                backup_pinned_target_blocker(target.shipping_cache_path(), &opts.game_dir)
+            }) {
+                return Err(CompilerBackendFailureV1::new(
+                    CompilerBackendFailureKindV1::Preflight,
+                    blocker,
+                ));
+            }
             let input_pins = match target.borrow_mut().take() {
                 Some(target) => ProjectGameInputPins::from_compiler_target(target),
                 None => pin_game_input_seals(&opts.game_dir, &opts.base_cache, &opts.binds_cache)
@@ -4780,6 +4833,35 @@ fn target_shipping_is_live(target_shipping: &Path, script_dir: &Path) -> bool {
     ) {
         (Ok(target), Ok(live)) => target == live,
         _ => target_shipping == live,
+    }
+}
+
+/// Why the game compiler must not run on this qualified target, if it must not: the target's
+/// Shipping path is the deployment backup (a script mod is installed) rather than the live cache
+/// the game compiler regenerates into and restores. `None` when the target pins the live cache.
+fn backup_pinned_target_blocker(target_shipping: &Path, game_dir: &Path) -> Option<String> {
+    let script_dir = g1r_dir(game_dir).join("Script");
+    (!target_shipping_is_live(target_shipping, &script_dir)).then(|| {
+        format!(
+            "the qualified compiler target pins the deployment backup {} rather than the live \
+             Shipping cache; the game compiler regenerates into the live cache and cannot run \
+             while a script mod is installed (undeploy the mod first, or compile with the \
+             standalone backend)",
+            target_shipping.display()
+        )
+    })
+}
+
+fn append_compile_error_note(error: CompileError, note: &str) -> CompileError {
+    match error {
+        CompileError::Io(message) => CompileError::Io(format!("{message}; {note}")),
+        CompileError::Regen(message) => CompileError::Regen(format!("{message}; {note}")),
+        CompileError::NoRegen(message) => CompileError::NoRegen(format!("{message}; {note}")),
+        CompileError::Other(message) => CompileError::Other(format!("{message}; {note}")),
+        CompileError::ArtifactIo { message, artifact } => CompileError::ArtifactIo {
+            message: format!("{message}; {note}"),
+            artifact,
+        },
     }
 }
 
@@ -9035,7 +9117,8 @@ impl CompileTransaction {
                 vec![format!(
                     "the qualified compiler target pins the deployment backup {pinned} rather \
                      than the live Shipping cache; the game compiler cannot run while a script \
-                     mod is installed (the standalone compiler can, or undeploy the mod first)"
+                     mod is installed (undeploy the mod first, or compile with the standalone \
+                     backend)"
                 )],
             ));
         }
@@ -16133,6 +16216,89 @@ mod tests {
         assert!(!compile_lock_path(&game).exists());
         assert!(!install_mutation_lock_path(&game).exists());
         std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn backup_pinned_target_blocker_names_the_backup_and_accepts_the_live_cache() {
+        let base = unique_test_root("backup-pinned-blocker");
+        let (game, shipping) = fake_install(&base);
+        let backup = deploy_bak_path(&shipping);
+        std::fs::write(&backup, b"OLD").unwrap();
+
+        assert!(backup_pinned_target_blocker(&shipping, &game).is_none());
+        let blocker = backup_pinned_target_blocker(&backup, &game)
+            .expect("a backup-pinned target blocks the game compiler");
+        assert!(blocker.contains("deployment backup"), "got: {blocker}");
+        assert!(
+            !blocker.contains("the standalone compiler can"),
+            "must not claim the standalone compiler succeeded: {blocker}"
+        );
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    /// With the game fallback blocked, `standalone-then-game` reports the standalone failure
+    /// itself (its diagnostics included) plus a note, instead of a refused game attempt.
+    #[test]
+    fn standalone_then_game_keeps_the_standalone_failure_when_the_game_fallback_is_blocked() {
+        let root = unique_test_root("backend-v1-blocked-fallback");
+        std::fs::create_dir_all(&root).unwrap();
+        let opts = CompileOpts {
+            game_dir: root.join("game"),
+            op: "add".to_owned(),
+            module_name: "NewModule".to_owned(),
+            rel_path: "NewModule.as".to_owned(),
+            as_path: root.join("must-not-be-opened.as"),
+            source_override: Some(b"// fallback source\n".to_vec()),
+            work_dir: root.join("work"),
+            allow_new_symbols: true,
+            base_override: Some(cache_with_empty_modules(&[("Base", "Base.as")])),
+            binds_override: None,
+        };
+        let mut standalone = |_: StandaloneCompilerInputsV1<'_>| {
+            Err(CompilerBackendFailureV1::new(
+                CompilerBackendFailureKindV1::Unsupported,
+                "unsupported test construct",
+            ))
+        };
+        let game_calls = std::cell::Cell::new(0u8);
+
+        let report = compile_module_report_with_game_fallback_blocker(
+            &opts,
+            CompilerBackendModeV1::StandaloneThenGame,
+            Some(&mut standalone),
+            Some("the target pins the deployment backup".to_owned()),
+            |_, _| {
+                game_calls.set(game_calls.get().saturating_add(1));
+                panic!("the blocked game fallback must not run")
+            },
+        );
+
+        let CompileModuleReportOutcome::Failed(error) = &report.outcome else {
+            panic!("a failed standalone attempt without a fallback must fail")
+        };
+        let message = error.to_string();
+        assert!(
+            message.contains("unsupported test construct"),
+            "got: {message}"
+        );
+        assert!(
+            message.contains("game fallback was not attempted"),
+            "got: {message}"
+        );
+        assert!(
+            message.contains("the target pins the deployment backup"),
+            "got: {message}"
+        );
+        assert_eq!(
+            report.backend_name(),
+            Some(CompilerBackendNameV1::Standalone)
+        );
+        assert!(report.standalone_attempted());
+        assert!(!report.game_attempted());
+        assert!(report.fallback_reason().is_none());
+        assert_eq!(game_calls.get(), 0);
+        drop(report);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

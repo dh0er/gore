@@ -1945,6 +1945,61 @@ fn require_expected_base(
     Ok(())
 }
 
+/// The compiler policy actually run for `requested` given where the original was found. While
+/// a script mod is installed the base is the deployment backup, which the game compiler cannot
+/// restore over the live cache: an explicit `game` policy is refused up front, and
+/// `standalone-then-game` runs the standalone compiler only, announcing the skipped fallback.
+fn effective_compile_mode(
+    requested: gore_as::compile::CompilerBackendModeV1,
+    source: &gore_mod::PristineScriptCacheSource,
+) -> Result<(gore_as::compile::CompilerBackendModeV1, Option<String>)> {
+    use gore_as::compile::CompilerBackendModeV1 as Mode;
+    if !source.from_backup {
+        return Ok((requested, None));
+    }
+    match requested {
+        Mode::Standalone => Ok((Mode::Standalone, None)),
+        Mode::StandaloneThenGame => Ok((
+            Mode::Standalone,
+            Some(
+                "the game fallback is unavailable while a script mod is installed (the compiler \
+                 base is the deployment backup, which the game compiler cannot restore over the \
+                 live cache); compiling with the standalone backend only"
+                    .to_owned(),
+            ),
+        )),
+        Mode::Game => bail!(
+            "the game compiler cannot run while a script mod is installed: the compiler base is \
+             the deployment backup {}, which the game compiler would restore over the live cache; \
+             use --backend standalone, or undeploy the mod first",
+            source.path.display()
+        ),
+    }
+}
+
+/// The closing check of `compile-module`: the pristine base the mini was remapped against must
+/// still be the deployment-aware pristine cache now that the compiler has run, by selection and
+/// by bytes. `gore as compile` audits this inside the full-graph transaction; the module path has
+/// no such hook, so it re-reads here before the mini is published.
+fn audit_compile_module_base(
+    game: &Path,
+    selected: &gore_mod::PristineScriptCacheSource,
+    base: &[u8],
+) -> Result<()> {
+    let current = compiler_shipping_source(game)?;
+    if current.identity != selected.identity || !current.matches(base) {
+        bail!(
+            "the pristine script cache changed during compilation: the compiler used {} ({}), \
+             but the deployment-aware original is now {} ({}); retry the compile",
+            selected.path.display(),
+            selected.identity,
+            current.path.display(),
+            current.identity
+        );
+    }
+    Ok(())
+}
+
 /// Prove that the pinned compiler target holds the pristine base: its bytes must be the current
 /// deployment-aware pristine cache AND the bytes selected before the pin was taken. Anything else
 /// means the base changed in between (a deployment change or a game update ran alongside), which
@@ -2152,7 +2207,11 @@ fn compile_full_graph_command(
         },
     );
 
-    let requested_mode: CompilerBackendModeV1 = compiler.backend.into();
+    let (requested_mode, game_fallback_note) =
+        effective_compile_mode(compiler.backend.into(), &shipping_source)?;
+    if let Some(note) = game_fallback_note.as_deref() {
+        eprintln!("{note}");
+    }
     let mut standalone_runner: Option<ProductStandaloneRunnerV1> = None;
     let mut receipt_authority = None;
     let mut target = None;
@@ -3544,7 +3603,6 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 gore_as::generation_receipt::MAX_GENERATION_SOURCE_FILE_BYTES_V1 as u64,
                 "AS_COMPILE_SOURCE",
             )?;
-            let requested_mode: gore_as::compile::CompilerBackendModeV1 = compiler.backend.into();
             let executable_path = compiler_executable_path(&game);
             let shipping_source = compiler_shipping_source(&game)?;
             announce_compiler_shipping_source(&shipping_source);
@@ -3552,6 +3610,11 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 require_expected_base(&shipping_source, expected)?;
             }
             let shipping_path = shipping_source.path.clone();
+            let (requested_mode, game_fallback_note) =
+                effective_compile_mode(compiler.backend.into(), &shipping_source)?;
+            if let Some(note) = game_fallback_note.as_deref() {
+                eprintln!("{note}");
+            }
             let binds_path = compiler_binds_path(&game);
             let target_paths = gore_as::compiler_target::CompilerTargetInputPathsV1 {
                 executable: &executable_path,
@@ -3843,6 +3906,21 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     return Err(anyhow::Error::new(error)).context("compiling module");
                 }
             };
+            let mut compiled = compiled;
+            if let Err(audit) =
+                audit_compile_module_base(&opts.game_dir, &shipping_source, &base_override)
+            {
+                let cleanup = compiled
+                    .neutralize_retained_artifact()
+                    .err()
+                    .map(|error| {
+                        format!("; discarding the compiled mini-cache also failed: {error}")
+                    })
+                    .unwrap_or_default();
+                return Err(
+                    audit.context(format!("the compiled mini-cache was discarded{cleanup}"))
+                );
+            }
             let used_backend = used_backend.context(
                 "compiler succeeded without reporting the backend that produced its output",
             )?;
@@ -6403,6 +6481,62 @@ mod default_cli_tests {
             "got: {error}"
         );
         assert!(!game.join(".gore-install-mutation.lock").exists());
+    }
+
+    /// While a script mod is installed the compiler base is the deployment backup, which the
+    /// game compiler cannot restore over the live cache: `game` is refused up front and
+    /// `standalone-then-game` runs the standalone compiler only, saying so.
+    #[test]
+    fn effective_compile_mode_skips_the_game_fallback_while_a_script_mod_is_installed() {
+        use gore_as::compile::CompilerBackendModeV1 as Mode;
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"pristine").unwrap();
+        let untouched = compiler_shipping_source(&game).unwrap();
+        for mode in [Mode::Standalone, Mode::Game, Mode::StandaloneThenGame] {
+            let (effective, note) = effective_compile_mode(mode, &untouched).unwrap();
+            assert_eq!(effective, mode);
+            assert!(note.is_none());
+        }
+
+        install_script_mod_record(&game, b"pristine", b"deployed");
+        let installed = compiler_shipping_source(&game).unwrap();
+        let (effective, note) = effective_compile_mode(Mode::Standalone, &installed).unwrap();
+        assert_eq!(effective, Mode::Standalone);
+        assert!(note.is_none());
+        let (effective, note) =
+            effective_compile_mode(Mode::StandaloneThenGame, &installed).unwrap();
+        assert_eq!(effective, Mode::Standalone);
+        let note = note.expect("the skipped fallback is announced");
+        assert!(note.contains("game fallback"), "got: {note}");
+        let error = effective_compile_mode(Mode::Game, &installed)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("script mod is installed"), "got: {error}");
+        assert!(error.contains("--backend standalone"), "got: {error}");
+    }
+
+    /// The module path has no transaction hook for a closing audit, so the CLI re-reads the
+    /// deployment-aware pristine source before it publishes the mini and refuses a base that
+    /// changed while the compiler ran.
+    #[test]
+    fn compile_module_base_audit_refuses_a_base_that_changed_during_compilation() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"pristine-cache").unwrap();
+        let selected = compiler_shipping_source(&game).unwrap();
+
+        audit_compile_module_base(&game, &selected, b"pristine-cache").unwrap();
+
+        std::fs::write(&live, b"updated-by-the-game").unwrap();
+        let error = audit_compile_module_base(&game, &selected, b"pristine-cache")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("changed during compilation"), "got: {error}");
     }
 
     #[test]

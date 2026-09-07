@@ -221,10 +221,11 @@ next `gore mod deploy` or Manager apply, which rebuild from the same pristine
 backup.
 
 This holds for the standalone compiler. The game compiler regenerates into the
-live cache and restores it from the pinned target afterwards, so a target
-validated against the backup is refused before any install change; with a
-script mod installed, a game-capable policy reports that refusal as the
-fallback reason and only the standalone result counts.
+live cache and restores it from the pinned target afterwards, so it cannot run
+while a script mod is installed: `--backend game` is refused up front, and
+`standalone-then-game` runs the standalone compiler only, saying that the game
+fallback was skipped. Should the standalone compile fail, its own diagnostics
+are what you see, with that note appended.
 
 To pin which original a compile may use, pass `--expect-base <CACHE>` (a file
 the selected original must equal byte for byte, for example a frozen copy of
