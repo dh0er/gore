@@ -3359,6 +3359,34 @@ fn esc(s: &str) -> String {
         .replace('\r', "\\r")
 }
 
+/// A bool switch arm returns either a literal or a typed inline config field.
+/// No call, address escape, or intermediate copy can hide inside this arm.
+fn returning_switch_bool_value(ctx: &Ctx, code: &[Instr]) -> Option<String> {
+    let word = |i: &Instr| i.words.first().copied().map(s16);
+    if code.iter().map(|i| i.op.name).eq(["SetV1","CpyVtoR4"]) {
+        if word(&code[0]).is_none_or(|s| s <= 0) || word(&code[0]) != word(&code[1]) { return None; }
+        return match code[0].dwords.first() { Some(0) => Some("false".into()), Some(1) => Some("true".into()), _ => None };
+    }
+    if !ctx.f.is_method || code.iter().map(|i| i.op.name)
+        .ne(["PshVPtr","ADDSi","ADDSi","PopRPtr","RDR1","CpyVtoR4"])
+        || word(&code[0]) != Some(0) || word(&code[4]).is_none_or(|s| s <= 0)
+        || word(&code[4]) != word(&code[5]) { return None; }
+    let field = |ins: &Instr| {
+        let id = *ins.dwords.first()? as i32;
+        let owner = ctx.refs.type_identity_by_id(id)?;
+        let (name, old) = ctx.refs.member_identity(id,word(ins)?)?;
+        if owner.module.is_empty() || !owner.namespace.is_empty()
+            || ctx.refs.type_identity_by_id(old)? != owner { return None; }
+        let ty = ctx.refs.field_type_by_class(&owner.name,name)?;
+        Some((owner,name,ty))
+    };
+    let (owner, config, config_type) = field(&code[1])?;
+    let (config_owner, flag, flag_type) = field(&code[2])?;
+    if ctx.class_name != Some(owner.name.as_str()) || config_type != config_owner.name
+        || owner.module != config_owner.module || flag_type != "bool" { return None; }
+    Some(format!("this.{config}.{flag}"))
+}
+
 /// A closed native field assignment lost solely because its RHS crossed a cast.
 /// The caller has already proved the classic diamond's topology and both arms'
 /// unchanged emission/stack. This exception restores exactly one opAssign.
@@ -9011,7 +9039,7 @@ impl Structurer<'_> {
         preds > 0
     }
 
-    /// A closed two-case suffix whose three constant int arms share one bare RET.
+    /// A closed two-case suffix whose constant int or typed bool arms share one RET.
     /// Keep physical case order and reconstruct each value only inside its arm.
     fn try_emit_returning_two_case_switch(
         &mut self, i: usize, stop: usize, depth: usize, out: &mut String,
@@ -9020,7 +9048,7 @@ impl Structurer<'_> {
         let b = &self.g.blocks;
         if i.checked_add(8)? != stop || stop != b.len() || self.loop_scope.is_some()
             || self.exit_join.is_some() || self.carry.is_some() || ctx.rvo_off.is_some()
-            || !ctx.ret_ty.is_some_and(|t| t.token == 0x44 && !t.is_reference && !t.is_object_handle)
+            || !ctx.ret_ty.is_some_and(|t| matches!(t.token,0x44|0x41) && !t.is_reference && !t.is_object_handle)
         { return None; }
         let len = |n: usize| b[i+n].instr_hi - b[i+n].instr_lo;
         if len(0) < 2 || len(1) != 2 || len(2) != 2 || len(3) != 1
@@ -9072,6 +9100,12 @@ impl Structurer<'_> {
             let hi = b[i+n].instr_hi - if n == 0 { 2 } else if n == 6 { 0 } else { 1 };
             if ctx.instrs[lo..hi].iter().any(|ins| ins.op.name.starts_with('J') || ins.op.name == "RET")
                 || (n != 0 && ctx.instrs[hi-1].op.name != "CpyVtoR4") { return None; }
+            if n != 0 && ctx.ret_ty.is_some_and(|t| t.token == 0x41) {
+                if n == 6 && ctx.instrs[lo].op.name != "SetV1" { return None; }
+                let value = returning_switch_bool_value(ctx,&ctx.instrs[lo..hi])?;
+                rendered.push(vec![format!("return {value};")]);
+                continue;
+            }
             let (mut lines, cmp, stack) = block_stmts_in(ctx, lo, hi, Vec::new(), false);
             if cmp.is_some() || !stack.is_empty() || lines.iter().any(|s| s.contains(['\u{1}', '\u{2}']))
             { return None; }
@@ -12470,6 +12504,60 @@ mod tests {
         assert!(output.trim_end().ends_with("break;"), "{output}");
     }
 
+    fn returning_bool_switch_fixture() -> CompoundFixture {
+        let mut a = TestAssembler::default();
+        a.op("CpyVtoR1", &[7], &[]); a.label("early_guard"); a.jump("JLowZ","switch");
+        a.op("SetV1", &[6], &[0]); a.op("CpyVtoR4", &[6], &[]); a.jump("JMP","ret");
+        a.label("switch"); a.op("SetV1", &[9], &[2]); a.op("sbTOi", &[4,9], &[]);
+        a.op("CMPIi", &[4], &[2]); a.jump("JP","default");
+        a.op("CMPIi", &[4], &[1]); a.jump("JZ","passive");
+        a.op("CMPIi", &[4], &[2]); a.jump("JZ","active"); a.jump("JMP","default");
+        for (label,offset,slot) in [("active",0,6),("passive",1,8)] {
+            a.label(label); a.op("PshVPtr", &[0], &[]); a.op("ADDSi", &[0], &[1]);
+            a.op("ADDSi", &[offset], &[2]); a.op("PopRPtr", &[], &[]); a.op("RDR1", &[slot], &[]);
+            a.op("CpyVtoR4", &[slot], &[]); a.jump("JMP","ret");
+        }
+        a.label("default"); a.op("SetV1", &[6], &[1]); a.op("CpyVtoR4", &[6], &[]);
+        a.label("ret"); a.op("RET", &[2], &[]); a.finish()
+    }
+
+    #[test]
+    fn returning_bool_switch_preserves_field_arms_and_early_return() {
+        let refs = RefResolver::from_test_returning_bool_switch(0);
+        let f = returning_bool_switch_fixture();
+        let source = render_fixture_range_with_return_class(&f,None,&refs,"int",None,0x41,Some("UOwner"));
+        assert!(source.contains("switch (local_4)"),"{source}");
+        assert!(source.contains("case 2:\n        return this.Config.Active;"),"{source}");
+        assert!(source.contains("case 1:\n        return this.Config.Passive;"),"{source}");
+        assert!(source.contains("default:\n        return true;"),"{source}");
+        assert!(source.find("return false;").unwrap() < source.find("switch (").unwrap(),"{source}");
+        assert!(source.find("case 2:").unwrap() < source.find("case 1:").unwrap());
+        assert!(!source.contains("break;") && !source.contains("case 2:\n    {"),"{source}");
+    }
+
+    #[test]
+    fn returning_bool_switch_rejects_wrong_owners_types_and_case_entries() {
+        let f = returning_bool_switch_fixture();
+        let render = |f: &CompoundFixture, fault, ty, owner| render_fixture_range_with_return_class(
+            f,None,&RefResolver::from_test_returning_bool_switch(fault),"int",None,ty,owner);
+        assert!(render(&f,0,0x41,Some("UOwner")).contains("switch ("));
+        for fault in 1..=5 { assert!(!render(&f,fault,0x41,Some("UOwner")).contains("switch ("),"metadata {fault}"); }
+        for (ty,owner) in [(0x44,Some("UOwner")),(0x50,Some("UOwner")),(0x41,Some("UOther")),(0x41,None)] {
+            assert!(!render(&f,0,ty,owner).contains("switch ("));
+        }
+        let mut other = f.clone();
+        let (from,to)=(other.labels["early_guard"],other.labels["active"]);
+        other.instrs.iter_mut().find(|i| i.offset_dw==from).unwrap().dwords[0]=(to as i64-from as i64-2) as i32 as u32;
+        assert!(!render(&other,0,0x41,Some("UOwner")).contains("switch ("));
+        let mut other = f.clone(); replace_same_width(&mut other,"default","SetV1",&[6],&[2]);
+        assert!(!render(&other,0,0x41,Some("UOwner")).contains("switch ("));
+        let mut other = f.clone(); replace_same_width(&mut other,"active","PshVPtr",&[2],&[]);
+        assert!(!render(&other,0,0x41,Some("UOwner")).contains("switch ("));
+        let mut other = f.clone();
+        let read = other.instrs.iter_mut().find(|i| i.op.name=="RDR1").unwrap(); read.words[0]=10;
+        assert!(!render(&other,0,0x41,Some("UOwner")).contains("switch ("));
+    }
+
     fn returning_two_case_fixture(reverse: bool, carry: bool) -> CompoundFixture {
         let mut a = TestAssembler::default();
         // A value temporary survives an early return and is destroyed separately
@@ -13083,10 +13171,18 @@ mod tests {
         parameter_type: Option<&str>,
         return_token: i32,
     ) -> String {
+        render_fixture_range_with_return_class(fixture,range,refs,selector_type,parameter_type,return_token,None)
+    }
+
+    fn render_fixture_range_with_return_class(
+        fixture: &CompoundFixture, range: Option<(&'static str,&'static str,LoopScope)>,
+        refs: &RefResolver, selector_type: &str, parameter_type: Option<&str>,
+        return_token: i32, class_name: Option<&str>,
+    ) -> String {
         let parameter_types: Vec<String> = parameter_type.into_iter().map(str::to_owned).collect();
         let f = FuncCode {
             func: "Synthetic::CompoundLoopSwitch".into(),
-            is_method: parameter_type.is_some(),
+            is_method: parameter_type.is_some() || class_name.is_some(),
             param_names: parameter_type.map(|_| vec!["newState".to_owned()]).unwrap_or_default(),
             param_types: Vec::new(),
             ret: DataType {
@@ -13112,7 +13208,7 @@ mod tests {
             ret_ty: Some(&f.ret),
             fields: None,
             param_types: Some(&parameter_types),
-            class_name: None,
+            class_name,
             local_types: Some(&local_types),
             float_slots: std::collections::HashSet::new(),
             param_off_map: parameter_type.map(|_| HashMap::from([(-2, 0)])).unwrap_or_default(),

@@ -1294,8 +1294,9 @@ fn emit_function_ctor(
     let spilled = spilled_boolean_names(f, refs);
     let retained_bool_branches = named_bool_literal_branches(f);
     let named_arithmetic = named_arithmetic_slots(f);
-    let named_sites = named_value_sites(f, refs);
+    let mut named_sites = named_value_sites(f, refs);
     let explicit_member_sums = explicitly_reloaded_field_sums(f, refs, is_method, fields);
+    let addressed_compounds = addressed_compound_updates(f, refs, is_method);
     // How often each slot is default-constructed: more than once and the source spelled the
     // temporary out at every use.
     let constructions = default_construction_counts(f, refs);
@@ -1627,6 +1628,7 @@ fn emit_function_ctor(
     // the arguments and in another order.
     let rvo_producers = super::structure::take_rvo_producers();
     let rvo_consumers = super::structure::take_rvo_consumers();
+    named_sites.extend(named_value_before_return_construction(f, refs, &rvo_producers, &rvo_consumers, is_method));
     let (const_value_arguments, discarded_value_calls, operator_value_arguments) =
         short_rvo_lifetimes(f, refs, &rvo_producers, &rvo_consumers);
     let mut retained_values = retained_value_arguments(f, &fc, refs, &rvo_producers, &rvo_consumers);
@@ -2670,7 +2672,7 @@ fn emit_function_ctor(
         pass_trace("collapse_single_use_accumulators", &body);
         let body = fold_enum_call_round_trips(&body, &call_result_types, fields, &path_roots, refs, returns_by_reference, has_enum_conversions(f));
         pass_trace("fold_enum_call_round_trips", &body);
-        let body = fold_compound_assignments(&body, fields, &path_roots, refs, false, &explicit_member_sums);
+        let body = fold_compound_assignments(&body, fields, &path_roots, refs, false, &explicit_member_sums, &addressed_compounds);
         pass_trace("fold_compound_assignments", &body);
         let uses_return_slot = body.contains("__return");
         if uses_return_slot {
@@ -2735,7 +2737,7 @@ fn emit_function_ctor(
         pass_trace("fold_enum_call_round_trips", &rendered);
         let rendered = fold_member_read_modify_write(&rendered);
         pass_trace("fold_member_read_modify_write", &rendered);
-        let rendered = fold_compound_assignments(&rendered, fields, &path_roots, refs, false, &explicit_member_sums);
+        let rendered = fold_compound_assignments(&rendered, fields, &path_roots, refs, false, &explicit_member_sums, &addressed_compounds);
         pass_trace("fold_compound_assignments", &rendered);
         // Again on the joined text: a short circuit whose CONDITION is itself a short circuit is
         // only one condition once the inner one has folded, and the pass that folds it ran before
@@ -2966,7 +2968,7 @@ fn emit_function_ctor(
         pass_trace("merge_conditional_into_declaration#late", &rendered);
         // The final inline rounds expose X.F = (X.F + 1) only after the earlier
         // compound/receiver passes. Preserve their existing guards and order.
-        let rendered = fold_compound_assignments(&rendered, fields, &path_roots, refs, true, &explicit_member_sums);
+        let rendered = fold_compound_assignments(&rendered, fields, &path_roots, refs, true, &explicit_member_sums, &addressed_compounds);
         pass_trace("fold_compound_assignments", &rendered);
         let rendered = fold_assignment_receivers(&rendered, &immediately_consumed_defs(f));
         pass_trace("fold_assignment_receivers", &rendered);
@@ -13480,7 +13482,66 @@ fn fold_unary_double_chain(body: &str, f: &Func, refs: &RefResolver) -> String {
     let body = fold_witnessed_unary_double_chain(body, &witnessed);
     let body = fold_literal_product_call_chain(&body, &instrs, refs);
     let body = fold_retained_double_call_quotients(&body, f, refs);
+    let body = fold_widened_final_product_operand(&body, f, refs, &instrs);
     fold_double_product_before_bool_argument(&body, f, refs, &instrs)
+}
+
+/// The last conditional factor widens in place, then its slot becomes the return.
+/// Fold only this adjacent typed initializer; an earlier call on the slot stays named.
+fn fold_widened_final_product_operand(body: &str, f: &Func, refs: &RefResolver, code: &[Instr]) -> String {
+    let site = (|| {
+        if !matches!(f.ret.token,0x51|0x5e) || f.ret.is_reference || f.ret.is_object_handle { return None; }
+        let c = code.get(code.len().checked_sub(9)?..)?;
+        if c.iter().map(|i| i.op.name).ne(["CALL","CpyRtoV4","ADDIf","fTOd","MULd","JMP","MULd","CpyVtoR8","RET"]) { return None; }
+        let w = |i: usize,n: usize| c[i].words.get(n).copied().map(|v| v as i16 as i32);
+        let (narrow,sum,wide,acc,base) = (w(1,0)?,w(2,0)?,w(3,0)?,w(4,0)?,w(6,1)?);
+        let slots = [narrow,sum,wide,acc,base];
+        if slots.iter().any(|s| *s <= 0) || slots.iter().collect::<HashSet<_>>().len()!=slots.len()
+            || w(2,1)!=Some(narrow) || w(3,1)!=Some(sum) || w(4,1)!=Some(acc) || w(4,2)!=Some(wide)
+            || w(6,0)!=Some(wide) || w(6,2)!=Some(acc) || w(7,0)!=Some(wide)
+            || c[5].offset_dw as i64 + 2 + *c[5].dwords.first()? as i32 as i64 != c[6].offset_dw as i64
+            || code.iter().any(|i| i.op.name=="JMPP" || (matches!(i.op.name,"PSF"|"PshVPtr")
+                && i.words.first().copied().map(|v| v as i16 as i32)==Some(acc))
+                || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                    let target=i.offset_dw as i64+2+*d as i32 as i64;
+                    target>c[0].offset_dw as i64 && target<=c[5].offset_dw as i64
+                }))) { return None; }
+        let id = *c[0].dwords.first()? as i32;
+        let ret = refs.func_ret_by_id(id)?;
+        if ret.token!=0x50 || ret.is_reference || ret.is_object_handle
+            || code.iter().filter(|i| i.op.name=="CALL" && i.dwords.first()==c[0].dwords.first()).count()!=1
+            { return None; }
+        let name = refs.func_by_id(id)?.rsplit("::").next()?;
+        if code.iter().filter_map(|i| match i.op.name {
+            "CALLSYS" | "Thiscall1" => i.qwords.first().and_then(|p| refs.func_by_ptr(*p as i64)),
+            "CALL" | "CALLINTF" => i.dwords.first().and_then(|p| refs.func_by_id(*p as i32)),
+            _ => None,
+        }).filter(|other| other.rsplit("::").next()==Some(name)).count()!=1 { return None; }
+        let namespace = refs.func_ns_by_id(id).unwrap_or("");
+        Some((wide,acc,*c[2].dwords.first()?,format!("{namespace}::{name}")))
+    })();
+    let Some((wide,acc,bits,callee))=site else { return body.to_owned(); };
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut at=0;
+    while at+1<lines.len() {
+        let folded = (|| {
+            let (indent,name,init)=declaration_with_initializer(&lines[at])?;
+            let (target,value)=slot_store_any(&lines[at+1])?;
+            let expression=unwrap_brackets(&init);
+            let (call,literal)=expression.rsplit_once(" + ")?;
+            if slot_and_life(&name)?.0!=wide || slot_and_life(&target)?.0!=acc
+                || count_ident(body,&name)!=2 || body.contains(&format!("{name}_"))
+                || count_ident(call,&target)!=0 || !call.starts_with(&format!("{callee}("))
+                || call_of_expression(call).is_none()
+                || literal.strip_suffix('f')?.parse::<f32>().ok()?.to_bits()!=bits
+                || value!=format!("{target} * {name}") || indent_of(&lines[at+1])!=indent
+                || [&name,&target].iter().any(|n| !declared_type(&lines,n)
+                    .is_some_and(|t| matches!(t.as_str(),"float"|"double"))) { return None; }
+            Some(format!("{indent}{target} = {target} * {init};"))
+        })();
+        if let Some(line)=folded { lines.splice(at..at+2,[line]); } else { at+=1; }
+    }
+    let mut out=lines.join("\n"); if body.ends_with('\n') { out.push('\n'); } out
 }
 
 /// A double argument expression finishes before the next call's bool argument.
@@ -14401,6 +14462,55 @@ fn explicitly_reloaded_field_sums(f: &Func, refs: &RefResolver, is_method: bool,
     }).collect()
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum CompoundFieldRhs { Literal(u64), Field(String) }
+
+/// These scalar updates retain the exact field address through RDR/arithmetic/WRT.
+/// Unlike a reloaded assignment, their right operand is evaluated first.
+fn addressed_compound_updates(f: &Func, refs: &RefResolver, is_method: bool) -> HashSet<(String,String,CompoundFieldRhs)> {
+    let mut out=HashSet::new();
+    if !is_method { return out; }
+    let Ok(code)=disassemble(&f.bytecode) else {return out;};
+    let w=|i:&Instr,n:usize| i.words.get(n).map(|v|*v as i16 as i32);
+    let field=|i:&Instr| {
+        if i.op.name!="LoadThisR" {return None;}
+        let id=*i.dwords.first()? as i32;
+        let (name,old)=refs.member_identity(id,w(i,0)?)?;
+        let owner=refs.type_identity_by_id(id)?;
+        if refs.type_identity_by_id(old)!=Some(owner)
+            || !refs.field_type_by_class(&owner.name,name).is_some_and(|t| matches!(t,"float"|"double")) {return None;}
+        Some((format!("this.{name}"),owner.clone()))
+    };
+    let entered=|begin:usize,end:usize| code.iter().any(|i| i.op.name=="JMPP" || (i.op.name.starts_with('J')
+        && i.dwords.first().is_some_and(|d| {let t=i.offset_dw as i64+2+*d as i32 as i64;
+            t>begin as i64 && t<=end as i64})));
+    for c in code.windows(5) {
+        if c.iter().map(|i|i.op.name).ne(["SetV8","LoadThisR","RDR8","MULd","WRTV8"])
+            || entered(c[0].offset_dw,c[4].offset_dw) {continue;}
+        let found=(|| {
+            let (rhs,value)=(w(&c[0],0)?,w(&c[2],0)?);
+            let bits=*c[0].qwords.first()?;
+            if rhs<=0 || value<=0 || rhs==value || !f64::from_bits(bits).is_finite()
+                || c[3].words != [value as u16,value as u16,rhs as u16] || w(&c[4],0)!=Some(value) {return None;}
+            Some((field(&c[1])?.0,"*".into(),CompoundFieldRhs::Literal(bits)))
+        })();
+        if let Some(site)=found {out.insert(site);}
+    }
+    for c in code.windows(6) {
+        if c.iter().map(|i|i.op.name).ne(["LoadThisR","RDR8","LoadThisR","RDR8","ADDd","WRTV8"])
+            || entered(c[0].offset_dw,c[5].offset_dw) {continue;}
+        let found=(|| {
+            let (rhs,left,result)=(w(&c[1],0)?,w(&c[3],0)?,w(&c[4],0)?);
+            let (source,owner)=field(&c[0])?;let (target,target_owner)=field(&c[2])?;
+            if [rhs,left,result].iter().any(|s|*s<=0) || rhs==left || result==rhs || source==target || owner!=target_owner
+                || w(&c[4],1)!=Some(left) || w(&c[4],2)!=Some(rhs) || w(&c[5],0)!=Some(result) {return None;}
+            Some((target,"+".into(),CompoundFieldRhs::Field(source)))
+        })();
+        if let Some(site)=found {out.insert(site);}
+    }
+    out
+}
+
 fn fold_compound_assignments(
     body: &str,
     fields: Option<&HashMap<String, String>>,
@@ -14408,6 +14518,7 @@ fn fold_compound_assignments(
     refs: &RefResolver,
     late: bool,
     explicit_member_sums: &HashSet<(String, String)>,
+    addressed_compounds: &HashSet<(String, String, CompoundFieldRhs)>,
 ) -> String {
     const OPERATORS: [&str; 7] = [" + ", " - ", " * ", " / ", " | ", " & ", " ^ "];
     let late_update_is_safe = |path: &str, operator: &str, addend: &str| {
@@ -14453,7 +14564,22 @@ fn fold_compound_assignments(
             // and field reads must retain their position relative to the target.
             if operator.trim() == "+" && explicit_member_sums.contains(
                 &(target.to_owned(), unwrap_brackets(addend).to_owned())) { return None; }
-            if late && !late_update_is_safe(target, operator, addend) {
+            // A held bytecode address authorizes only its exact RHS and one
+            // text update. Count already-folded and still-carried writes too,
+            // so repeated passes cannot borrow the witness for another life.
+            let rhs = addend.parse::<f64>().ok().filter(|v| v.is_finite())
+                .map(|v| CompoundFieldRhs::Literal(v.to_bits()))
+                .unwrap_or_else(|| CompoundFieldRhs::Field(unwrap_brackets(addend).to_owned()));
+            let addressed = addressed_compounds.contains(&(target.to_owned(),operator.trim().to_owned(),rhs))
+                && lines.iter().filter(|line| {
+                    let line=line.trim();
+                    if line.starts_with(&format!("{target} {}= ",operator.trim())) {return true;}
+                    line.strip_prefix(&format!("{target} = ")).is_some_and(|value| {
+                        let value=unwrap_brackets(value.strip_suffix(';').unwrap_or(value));
+                        value.starts_with(&format!("{target}{operator}")) || value.contains("local_")
+                    })
+                }).count()==1;
+            if late && !late_update_is_safe(target, operator, addend) && !addressed {
                 return None;
             }
             // A literal addend is materialised BEFORE the member is loaded in the compound
@@ -14469,7 +14595,7 @@ fn fold_compound_assignments(
                     .unwrap_or(addend)
                     .parse::<f64>()
                     .is_ok();
-            (!addend.is_empty() && !addend.contains(target) && !float_literal_addend)
+            (!addend.is_empty() && !addend.contains(target) && (!float_literal_addend || addressed))
                 .then(|| format!("{}{target} {}= {addend};", indent_of(lines[at]), operator.trim()))
         })();
         if let Some(replacement) = direct {
@@ -15204,6 +15330,79 @@ fn immediate_value_cleanup_end(
         else if instrs.get(at).is_some_and(|i| matches!(i.op.name, "FreeNullV8" | "FreeNullV4")) { at += 1; }
         else { return at; }
     }
+}
+
+/// A value is complete before the return object's construction, while its unary
+/// consumer starts afterwards. Protect this producer, not its reused frame slot.
+fn named_value_before_return_construction(f: &Func, refs: &RefResolver, producers: &[(i32, usize)],
+    consumers: &[(i32, usize)], is_method: bool) -> HashSet<(i32, String)> {
+    let witness = (|| {
+        if is_method || f.ret.token != 5 || f.ret.is_reference || f.ret.is_object_handle { return None; }
+        let code = disassemble(&f.bytecode).ok()?;
+        let at = code.len().checked_sub(16)?; let c = &code[at..];
+        if c.iter().map(|i| i.op.name).ne(["CALLSYS", "PshVPtr", "CALLSYS", "PSF", "PSF", "CALLSYS",
+            "PSF", "PshVPtr", "PSF", "CALL", "PSF", "PshVPtr", "CALLSYS", "PSF", "CALLSYS", "RET"]) { return None; }
+        let w = |i: usize| c[i].words.first().map(|v| *v as i16 as i32);
+        let ptr = |i: usize| c[i].qwords.first().map(|v| *v as i64);
+        let (value, unary, returned) = (w(4)?,w(3)?,w(8)?);
+        if [value,unary,returned].iter().any(|s| *s <= 0) || value == unary || value == returned || unary == returned
+            || w(1) != Some(0) || w(11) != Some(0) || w(6) != Some(unary)
+            || w(10) != Some(returned) || w(13) != Some(returned) { return None; }
+        let (produce,construct,negate,assign,destroy) = (ptr(0)?,ptr(2)?,ptr(5)?,ptr(12)?,ptr(14)?);
+        let ty = refs.func_ret_by_ptr(produce)?;
+        let owner = refs.type_identity_by_ptr(ty.type_info)?;
+        let ret_owner = refs.type_identity_by_ptr(f.ret.type_info)?;
+        let plain = |t: &super::types::DataType, p| t.token == 5 && !t.is_reference && !t.is_object_handle && t.type_info == p;
+        let input = |t: &super::types::DataType, p| t.token == 5 && t.is_reference && !t.is_object_handle
+            && t.is_object_const && t.is_read_only && t.type_info == p;
+        if !plain(ty,ty.type_info) || ty.type_info == f.ret.type_info || !owner.module.is_empty() || !owner.namespace.is_empty()
+            || !ret_owner.module.is_empty() || !ret_owner.namespace.is_empty() { return None; }
+        for p in [produce,negate] {
+            if !refs.is_method_by_ptr(p) || !refs.is_const_method_by_ptr(p)
+                || refs.func_owner_by_ptr(p) != Some(owner.name.as_str()) || !plain(refs.func_ret_by_ptr(p)?,ty.type_info) { return None; }
+        }
+        let [arg] = refs.func_params_by_ptr(produce)? else { return None; };
+        if !input(arg,ty.type_info) || refs.func_by_ptr(negate) != Some("opNeg") || !refs.func_params_by_ptr(negate)?.is_empty() { return None; }
+        for (p,name) in [(construct,"$beh0"),(destroy,"$beh2")] {
+            let ret = refs.func_ret_by_ptr(p)?;
+            if refs.func_by_ptr(p) != Some(name) || !refs.is_method_by_ptr(p)
+                || refs.func_owner_by_ptr(p) != Some(ret_owner.name.as_str()) || ret.token != 0x52 || ret.is_reference
+                || !refs.func_params_by_ptr(p)?.is_empty() { return None; }
+        }
+        let [copy] = refs.func_params_by_ptr(assign)? else { return None; };
+        let assignment = refs.func_ret_by_ptr(assign)?;
+        if refs.func_by_ptr(assign) != Some("opAssign") || !refs.is_method_by_ptr(assign)
+            || refs.func_owner_by_ptr(assign) != Some(ret_owner.name.as_str())
+            || copy.token != 5 || !copy.is_reference || copy.is_object_handle || copy.type_info != f.ret.type_info
+            || assignment.token != 5 || !assignment.is_reference || assignment.is_object_handle || assignment.type_info != f.ret.type_info { return None; }
+        let consume = *c[9].dwords.first()? as i32;
+        let [handle,vector] = refs.func_params_by_id(consume)? else { return None; };
+        let [parameter] = f.params.as_slice() else { return None; };
+        if refs.is_method_by_id(consume) || !plain(refs.func_ret_by_id(consume)?,f.ret.type_info) || !input(vector,ty.type_info)
+            || handle.token != 5 || !handle.is_object_handle || handle.is_reference
+            || parameter.ty.token != 5 || !parameter.ty.is_object_handle || parameter.ty.is_reference
+            || refs.type_identity_by_ptr(handle.type_info).is_none() || refs.type_identity_by_ptr(parameter.ty.type_info).is_none()
+            || handle.is_object_const != parameter.ty.is_object_const
+            || super::model::param_slot_map(&[parameter.ty.clone()],false,true,Some(refs)).get(&w(7)?) != Some(&0) { return None; }
+        for (slot,p,made,used) in [(value,ty.type_info,at,at+5),(unary,ty.type_info,at+5,at+9)] {
+            if f.obj_locals.iter().filter(|(s,_)| *s == slot).map(|(_,p)| *p).ne([p])
+                || producers.iter().filter(|(_,i)| *i == made).copied().ne([(slot,made)])
+                || producers.iter().any(|(s,i)| *s == slot && *i > made)
+                || consumers.iter().filter(|(s,i)| *s == slot && *i > made).map(|(_,i)| *i).ne([used]) { return None; }
+        }
+        if !producers.contains(&(returned,at+9)) || !f.obj_locals.contains(&(returned,f.ret.type_info))
+            || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                target > c[0].offset_dw as i64 && target <= c[14].offset_dw as i64
+            }))) { return None; }
+        let name = refs.func_by_ptr(produce)?;
+        if code.iter().filter(|i| i.op.is_call() && match i.op.name {
+            "CALLSYS" | "Thiscall1" => i.qwords.first().and_then(|p| refs.func_by_ptr(*p as i64)),
+            _ => i.dwords.first().and_then(|p| refs.func_by_id(*p as i32)),
+        } == Some(name)).count() != 1 { return None; }
+        Some((value,name.to_owned()))
+    })();
+    witness.into_iter().collect()
 }
 
 /// Two equal-type getter results remain allocated past their addition and the
@@ -22974,6 +23173,22 @@ fn named_value_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, String)> {
         .map(str::to_owned)
     };
     let mut out = HashSet::new();
+    // An immediate same-width integer push reads a named literal. Keep the
+    // exact decimal initializer, so another value on this slot cannot inherit it.
+    // Bool/enum widening and spills across argument calls are different shapes.
+    if !instrs.iter().any(|i| i.op.name == "JMPP") {
+        for (at, pair) in instrs.windows(2).enumerate() {
+            if pair[0].op.name != "SetV4" || pair[1].op.name != "PshV4" { continue; }
+            let Some(slot) = w(&pair[0],0).filter(|s| *s > 0) else { continue; };
+            if w(&pair[1],0) != Some(slot) || targets.contains(&pair[1].offset_dw)
+                || f.obj_locals.iter().any(|(s,_)| *s == slot)
+                || instrs.iter().enumerate().filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&slot))
+                    .map(|(n,_)| n).ne([at,at+1]) { continue; }
+            if let Some(value) = pair[0].dwords.first() {
+                out.insert((slot,(*value as i32).to_string()));
+            }
+        }
+    }
     out.extend(eager_clamp_bound_sites(f, refs));
     out.extend(ordered_vector_argument_sites(f, refs));
     out.extend(retained_double_call_quotients(f, refs).into_iter()
@@ -32947,6 +33162,236 @@ mod literal_value_lifetime_tests {
         assert!(!check(&late_arithmetic, &refs).contains(&4));
     }
 
+    #[test]
+    fn an_integer_literal_name_survives_the_early_and_late_inliners() {
+        let mut f = function(&[("SetV4", &[7]), ("PshV4", &[7]), ("CALLSYS", &[]), ("RET", &[])]);
+        f.bytecode[1] = i32::MAX;
+        let refs = RefResolver::default();
+        let source = "int local_7 = 2147483647;\nCheck(local_7);\n";
+        let early = super::fold_literal_temporaries(source,&refs,&BTreeMap::from([(7,"int".into())]),
+            &super::value_pushed_literal_slots(&f),&HashSet::new(),&HashSet::new());
+        assert_eq!(early,source);
+        let sites = super::named_value_sites(&f,&refs);
+        assert!(sites.contains(&(7,i32::MAX.to_string())));
+        let late = |text: &str, sites: &HashSet<(i32,String)>| super::inline_unnamed_value_temporaries(text,
+            &HashSet::from([(7,1)]),&HashSet::new(),&HashSet::new(),&refs,&HashSet::new(),&HashSet::new(),
+            &HashMap::new(),sites,&HashSet::new(),&HashSet::new(),&HashSet::new());
+        assert_eq!(late(&early,&sites),source);
+        assert_eq!(late(&early,&HashSet::new()),"Check(2147483647);\n");
+        // Neither a different value nor a float interpretation borrows this exact site.
+        for text in ["int local_7 = 4;\nCheck(local_7);\n", "float32 local_7 = 1.0f;\nCheck(local_7);\n"] {
+            assert_eq!(late(text,&sites),late(text,&HashSet::new()));
+        }
+    }
+
+    #[test]
+    fn an_integer_literal_push_requires_one_closed_same_width_life() {
+        let sites = |f: &Func| super::named_value_sites(f,&RefResolver::default());
+        let mut f = function(&[("SetV4", &[7]),("PshV4", &[7]),("RET", &[])]);
+        f.bytecode[1] = 17;
+        assert!(sites(&f).contains(&(7,"17".into())));
+        for ops in [vec![("SetV1",vec![7]),("PshV4",vec![7])],
+            vec![("SetV4",vec![7]),("PshV8",vec![7])],
+            vec![("SetV4",vec![7]),("PshV4",vec![8])],
+            vec![("SetV4",vec![7]),("CALLSYS",vec![]),("PshV4",vec![7])]] {
+            let borrowed: Vec<_> = ops.iter().map(|(op,w)| (*op,w.as_slice())).collect();
+            assert!(sites(&function(&borrowed)).is_empty());
+        }
+        for extra in [function(&[("PshV4",&[7])]),function(&[("SetV4",&[7]),("PshV4",&[7])])] {
+            let mut other = f.clone(); other.bytecode.extend(extra.bytecode);
+            assert!(sites(&other).is_empty());
+        }
+        let mut object = f.clone(); object.obj_locals.push((7,100));
+        assert!(sites(&object).is_empty());
+        let code = disassemble(&f.bytecode).unwrap();
+        let mut entry = function(&[("JMP",&[])]).bytecode;
+        entry[1] = code[1].offset_dw as i32; entry.extend(f.bytecode.clone());
+        let mut branch = f.clone(); branch.bytecode = entry;
+        assert!(sites(&branch).is_empty());
+    }
+
+    fn widened_final_product_fixture() -> Func {
+        // The same physical wide slot carried an unrelated copied call result before.
+        let mut f=function(&[("CALLSYS",&[]),("CpyRtoV8",&[28]),("CpyVtoV8",&[2,28]),
+            ("CALL",&[]),("CpyRtoV4",&[34]),("ADDIf",&[25,34]),("fTOd",&[28,25]),
+            ("MULd",&[30,30,28]),("JMP",&[]),("MULd",&[28,2,30]),("CpyVtoR8",&[28]),("RET",&[4])]);
+        f.ret.token=0x51;
+        let code=disassemble(&f.bytecode).unwrap();
+        f.bytecode[code[3].offset_dw+1]=1;
+        f.bytecode[code[5].offset_dw+2]=1.0f32.to_bits() as i32;
+        f
+    }
+
+    const WIDENED_FINAL_PRODUCT_BODY: &str="float local_2 = Previous();\nfloat local_30 = 1.0;\nif (Check())\n{\n    float local_28 = (::Value() + 1.0f);\n    local_30 = local_30 * local_28;\n}\nreturn local_2 * local_30;\n";
+
+    #[test]
+    fn the_final_widened_factor_does_not_need_an_extra_named_copy() {
+        let f=widened_final_product_fixture();
+        let refs=RefResolver::from_test_widened_final_product(0x50,false);
+        let folded=super::fold_unary_double_chain(WIDENED_FINAL_PRODUCT_BODY,&f,&refs);
+        assert_eq!(folded,WIDENED_FINAL_PRODUCT_BODY.replace(
+            "    float local_28 = (::Value() + 1.0f);\n    local_30 = local_30 * local_28;",
+            "    local_30 = local_30 * (::Value() + 1.0f);"));
+        assert_eq!(super::fold_unary_double_chain(&folded,&f,&refs),folded);
+    }
+
+    #[test]
+    fn the_final_widened_factor_requires_the_exact_width_life_and_reader() {
+        let f=widened_final_product_fixture();
+        let refs=RefResolver::from_test_widened_final_product(0x50,false);
+        let fold=|s: &str,f: &Func,refs: &RefResolver| super::fold_unary_double_chain(s,f,refs);
+        for (token,reference) in [(0x51,false),(0x50,true)] {
+            assert_eq!(fold(WIDENED_FINAL_PRODUCT_BODY,&f,&RefResolver::from_test_widened_final_product(token,reference)),WIDENED_FINAL_PRODUCT_BODY);
+        }
+        for s in [WIDENED_FINAL_PRODUCT_BODY.replace("1.0f","2.0f"),
+            WIDENED_FINAL_PRODUCT_BODY.replace("::Value()","::Other()"),
+            WIDENED_FINAL_PRODUCT_BODY.replace("::Value()","Other::Value()"),
+            WIDENED_FINAL_PRODUCT_BODY.replace("float local_30","float32 local_30"),
+            WIDENED_FINAL_PRODUCT_BODY.replace("local_30 * local_28","local_28 * local_30"),
+            WIDENED_FINAL_PRODUCT_BODY.replace("::Value()","::Value(local_30)"),
+            WIDENED_FINAL_PRODUCT_BODY.replace("    local_30 =","    Observe();\n    local_30 ="),
+            format!("{WIDENED_FINAL_PRODUCT_BODY}Use(local_28);\n"),
+            format!("float local_28_2 = Other();\n{WIDENED_FINAL_PRODUCT_BODY}")]
+        { assert_eq!(fold(&s,&f,&refs),s); }
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,word,value) in [(6,1,34),(7,2,25),(9,2,2),(10,0,30)] {
+            let mut wrong=f.clone(); let k=word+1; let pos=code[at].offset_dw+k/2; let shift=(k%2)*16;
+            wrong.bytecode[pos]=((wrong.bytecode[pos] as u32 & !(0xffffu32<<shift))|((value as u32)<<shift)) as i32;
+            assert_eq!(fold(WIDENED_FINAL_PRODUCT_BODY,&wrong,&refs),WIDENED_FINAL_PRODUCT_BODY,"operand {at}");
+        }
+        let mut entry=function(&[("JMP",&[])]).bytecode; entry[1]=code[5].offset_dw as i32; entry.extend(f.bytecode.clone());
+        let mut wrong=f.clone(); wrong.bytecode=entry;
+        assert_eq!(fold(WIDENED_FINAL_PRODUCT_BODY,&wrong,&refs),WIDENED_FINAL_PRODUCT_BODY);
+        let mut extra=function(&[("PSF",&[30])]).bytecode; extra.extend(f.bytecode); wrong.bytecode=extra;
+        assert_eq!(fold(WIDENED_FINAL_PRODUCT_BODY,&wrong,&refs),WIDENED_FINAL_PRODUCT_BODY);
+        let mut duplicate=widened_final_product_fixture(); duplicate.bytecode[1]=10;
+        assert_eq!(fold(WIDENED_FINAL_PRODUCT_BODY,&duplicate,&refs),WIDENED_FINAL_PRODUCT_BODY);
+    }
+
+    fn value_before_return_construction_fixture() -> (Func,Vec<(i32,usize)>,Vec<(i32,usize)>) {
+        let mut f=function(&[("PSF",&[26]),("PshVPtr",&[65534]),("CALLSYS",&[]),
+            ("PSF",&[20]),("PSF",&[26]),("CALLSYS",&[]),
+            ("PshGPtr",&[]),("PSF",&[26]),("PSF",&[20]),("CALLSYS",&[]),
+            ("PshVPtr",&[0]),("CALLSYS",&[]),("PSF",&[32]),("PSF",&[26]),("CALLSYS",&[]),
+            ("PSF",&[32]),("PshVPtr",&[65534]),("PSF",&[12]),("CALL",&[]),
+            ("PSF",&[12]),("PshVPtr",&[0]),("CALLSYS",&[]),("PSF",&[12]),("CALLSYS",&[]),("RET",&[4])]);
+        f.ret=DataType {token:5,type_info:2,..Default::default()};
+        f.params=vec![super::super::model::Param {name:"AI".into(),flags:0,
+            ty:DataType {token:5,type_info:4,is_object_handle:true,..Default::default()} }];
+        f.obj_locals=vec![(20,1),(26,1),(32,1),(12,2)];
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,id) in [(2,11),(5,12),(9,10),(11,20),(14,30),(18,40),(21,50),(23,60)] {f.bytecode[code[at].offset_dw+1]=id;}
+        (f,vec![(26,2),(20,5),(26,9),(32,14),(12,18)],vec![(26,5),(20,9),(26,14),(32,18)])
+    }
+
+    #[test]
+    fn value_before_return_ctor_keeps_only_the_cross_product_life() {
+        let (f,producers,consumers)=value_before_return_construction_fixture();
+        let refs=RefResolver::from_test_value_before_return_construction(0);
+        let sites=super::named_value_before_return_construction(&f,&refs,&producers,&consumers,false);
+        assert_eq!(sites,HashSet::from([(26,"CrossProduct".into())]));
+        let body="local_26 = AI.Location();\nlocal_20 = local_26.Normalize();\nlocal_26 = local_20.CrossProduct(FVector::UpVector);\nlocal_32 = local_26.opNeg();\nreturn Consume(AI, local_32);\n";
+        let locals=BTreeMap::from([(20,"FVector".into()),(26,"FVector".into()),(32,"FVector".into())]);
+        let fold=|text:&str,sites:&HashSet<(i32,String)>| super::inline_call_argument_temporaries(text,&refs,&locals,None,false,
+            &HashMap::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),
+            &HashSet::new(),&HashSet::new(),&HashSet::new(),&HashMap::new(),&HashSet::new(),sites);
+        // In the combined reused-slot body reverse inlining may first create
+        // local_26 = local_26.Normalize().CrossProduct(...); its old Location
+        // then awaits later placement. Verify the unprotected earlier life separately.
+        let earlier="local_26 = AI.Location();\nreturn local_26.Normalize();\n";
+        assert_eq!(fold(earlier,&sites),"return AI.Location().Normalize();\n");
+        assert_eq!(fold(earlier,&sites),fold(earlier,&HashSet::new()));
+        let kept=fold(body,&sites);
+        assert!(kept.lines().any(|l| l.starts_with("local_26 = ") && l.contains(".CrossProduct(")),"{kept}");
+        assert!(kept.contains("local_26.opNeg()"),"{kept}");
+        // Isolate this producer life: the combined reused-slot body may stay
+        // named independently because its receiver reads its own destination.
+        let cross="local_26 = local_20.CrossProduct(FVector::UpVector);\nreturn local_26.opNeg();\n";
+        assert_eq!(fold(cross,&sites),cross);
+        assert_eq!(fold(cross,&HashSet::new()),"return local_20.CrossProduct(FVector::UpVector).opNeg();\n");
+        let late="FVector local_26 = AI.Location().Normalize().CrossProduct(FVector::UpVector);\nreturn Consume(AI, local_26.opNeg());\n";
+        assert_eq!(super::inline_unnamed_value_temporaries(late,&HashSet::from([(26,1)]),&HashSet::new(),&HashSet::new(),
+            &refs,&HashSet::new(),&HashSet::new(),&HashMap::new(),&sites,&HashSet::new(),&HashSet::new(),&HashSet::new()),late);
+    }
+
+    #[test]
+    fn value_before_return_ctor_requires_the_typed_producer_and_closed_tail() {
+        let (f,producers,consumers)=value_before_return_construction_fixture();
+        let refs=RefResolver::from_test_value_before_return_construction(0);
+        let check=|f:&Func,refs:&RefResolver,p:&[(i32,usize)],c:&[(i32,usize)]|
+            super::named_value_before_return_construction(f,refs,p,c,false);
+        for fault in 1..=6 {assert!(check(&f,&RefResolver::from_test_value_before_return_construction(fault),&producers,&consumers).is_empty(),"metadata {fault}");}
+        assert!(super::named_value_before_return_construction(&f,&refs,&producers,&consumers,true).is_empty());
+        let mut p=producers.clone();p[2].0=20;assert!(check(&f,&refs,&p,&consumers).is_empty());
+        let mut p=producers.clone();p.push((26,14));assert!(check(&f,&refs,&p,&consumers).is_empty());
+        let mut c=consumers.clone();c.push((26,18));assert!(check(&f,&refs,&producers,&c).is_empty());
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,slot) in [(10,65534),(12,26),(13,20),(16,0),(20,65534)] {
+            let mut wrong=f.clone();let pos=code[at].offset_dw;
+            wrong.bytecode[pos]=((wrong.bytecode[pos] as u32 & 0xffff) | ((slot as u32)<<16)) as i32;
+            assert!(check(&wrong,&refs,&producers,&consumers).is_empty(),"slot {at}");
+        }
+        let mut wrong=f.clone();wrong.obj_locals[1].1=2;assert!(check(&wrong,&refs,&producers,&consumers).is_empty());
+        let mut jumped=function(&[("JMP",&[])]).bytecode;jumped[1]=code[11].offset_dw as i32;jumped.extend(f.bytecode.clone());
+        wrong=f.clone();wrong.bytecode=jumped;
+        let p:Vec<_>=producers.iter().map(|(s,i)|(*s,i+1)).collect();let c:Vec<_>=consumers.iter().map(|(s,i)|(*s,i+1)).collect();
+        assert!(check(&wrong,&refs,&p,&c).is_empty());
+    }
+
+    fn addressed_compound_fixture() -> Func {
+        let mut f=function(&[("SetV8",&[6]),("LoadThisR",&[0]),("RDR8",&[4]),("MULd",&[4,4,6]),("WRTV8",&[4]),
+            ("LoadThisR",&[16]),("RDR8",&[8]),("LoadThisR",&[8]),("RDR8",&[6]),("ADDd",&[4,6,8]),("WRTV8",&[4]),("RET",&[2])]);
+        f.ret.token=0x52;
+        let c=disassemble(&f.bytecode).unwrap();let bits=(-1.0f64).to_bits();
+        f.bytecode[c[0].offset_dw+1]=bits as i32;f.bytecode[c[0].offset_dw+2]=(bits>>32) as i32;
+        for at in [1,5,7] {f.bytecode[c[at].offset_dw+1]=1;}
+        f
+    }
+
+    #[test]
+    fn held_double_field_addresses_allow_only_the_proven_compound_source() {
+        let f=addressed_compound_fixture();let refs=RefResolver::from_test_addressed_compound_updates(0);
+        let proof=super::addressed_compound_updates(&f,&refs,true);
+        assert_eq!(proof.len(),2);
+        let fields=HashMap::from([("Angle".into(),"float".into()),("Distance".into(),"float".into()),("Interval".into(),"float".into())]);
+        let source="if (Odd)\n{\n    this.Angle = (this.Angle * -1.0);\n}\nelse\n{\n    this.Angle = (Math::Abs(this.Angle) + this.Interval);\n}\nthis.Angle = 0.0;\nthis.Distance = (this.Distance + this.Interval);\n";
+        let expected=source.replace("this.Angle = (this.Angle * -1.0);","this.Angle *= -1.0;")
+            .replace("this.Distance = (this.Distance + this.Interval);","this.Distance += this.Interval;");
+        let mut out=source.to_owned();
+        for late in [false,false,true] {out=super::fold_compound_assignments(&out,Some(&fields),&HashMap::new(),&refs,late,&HashSet::new(),&proof);}
+        assert_eq!(out,expected);
+        let fold=|s:&str,proof:&HashSet<(String,String,super::CompoundFieldRhs)>| super::fold_compound_assignments(s,Some(&fields),&HashMap::new(),&refs,true,&HashSet::new(),proof);
+        assert_eq!(fold(source,&HashSet::new()),source);
+        for s in [source.replace("* -1.0","* -2.0"),source.replace("* -1.0","* -1.0f")] {
+            assert!(fold(&s,&proof).contains("this.Angle = (this.Angle *"));
+        }
+        let copied="float local_4 = this.Angle;\nlocal_4 = local_4 * -1.0;\nthis.Angle = local_4;\nthis.Angle = (this.Angle * -1.0);\n";
+        assert!(fold(copied,&proof).contains("this.Angle = (this.Angle * -1.0);"));
+        let repeated="this.Angle *= -1.0;\nthis.Angle = (this.Angle * -1.0);\n";
+        assert_eq!(fold(repeated,&proof),repeated);
+        let other="this.Distance = (this.Distance + this.Other);\n";assert_eq!(fold(other,&proof),other);
+    }
+
+    #[test]
+    fn held_double_field_witness_rejects_reloads_types_and_inside_entries() {
+        let f=addressed_compound_fixture();let refs=RefResolver::from_test_addressed_compound_updates(0);
+        for fault in 1..=2 {assert!(super::addressed_compound_updates(&f,&RefResolver::from_test_addressed_compound_updates(fault),true).is_empty());}
+        assert!(super::addressed_compound_updates(&f,&refs,false).is_empty());
+        let code=disassemble(&f.bytecode).unwrap();
+        let mut reload=f.clone();let mut load=function(&[("LoadThisR",&[0])]).bytecode;load[1]=1;
+        reload.bytecode.splice(code[4].offset_dw..code[4].offset_dw,load);
+        let proof=super::addressed_compound_updates(&reload,&refs,true);
+        assert_eq!(proof.len(),1);assert!(proof.iter().all(|(target,_,_)|target=="this.Distance"));
+        let mut reversed=f.clone();let pos=code[9].offset_dw+1;reversed.bytecode[pos]=8 | (6<<16);
+        let proof=super::addressed_compound_updates(&reversed,&refs,true);
+        assert_eq!(proof.len(),1);assert!(proof.iter().all(|(target,_,_)|target=="this.Angle"));
+        for at in [1,7] {
+            let mut branch=function(&[("JMP",&[])]).bytecode;branch[1]=code[at].offset_dw as i32;branch.extend(f.bytecode.clone());
+            let mut entered=f.clone();entered.bytecode=branch;
+            let proof=super::addressed_compound_updates(&entered,&refs,true);assert_eq!(proof.len(),1,"entry {at}");
+        }
+    }
+
     fn double_product_bool_argument_fixture() -> Func {
         let mut f = function(&[("SetV1", &[7]), ("CpyVtoR1", &[7]),
             ("fTOd", &[18,9]), ("PshV8", &[18]), ("fTOd", &[16,8]), ("PshVPtr", &[0]),
@@ -33386,12 +33831,12 @@ mod literal_value_lifetime_tests {
             let source = format!("    this.Radius = (this.Radius + ({addend}));\n    float local_12 = Blend(0.0, 1.0, this.Radius);\n");
             let mut kept = source.clone();
             for late in [false, false, true] {
-                kept = super::fold_compound_assignments(&kept, Some(&fields), &roots, &refs, late, &keep);
+                kept = super::fold_compound_assignments(&kept, Some(&fields), &roots, &refs, late, &keep, &std::collections::HashSet::new());
             }
             assert_eq!(kept, source);
             let other = if parameter_first { "this.Speed * Delta" } else { "Delta * this.Speed" };
             let different = source.replace(addend, other);
-            assert!(super::fold_compound_assignments(&different, Some(&fields), &roots, &refs, false, &keep).contains(" += "));
+            assert!(super::fold_compound_assignments(&different, Some(&fields), &roots, &refs, false, &keep, &std::collections::HashSet::new()).contains(" += "));
         }
     }
 
@@ -33432,9 +33877,9 @@ mod literal_value_lifetime_tests {
         let locals = BTreeMap::from([(2, "float".into()), (4, "float".into())]);
         let mut folded = super::collapse_single_use_accumulators(body, &HashSet::new(), &locals);
         assert!(folded.contains("this.Radius = (this.Radius + (this.Speed * Delta));"), "{folded}");
-        assert!(super::fold_compound_assignments(&folded, Some(&fields), &roots, &refs, false, &HashSet::new()).contains(" += "));
+        assert!(super::fold_compound_assignments(&folded, Some(&fields), &roots, &refs, false, &HashSet::new(), &std::collections::HashSet::new()).contains(" += "));
         for late in [false, false, true] {
-            folded = super::fold_compound_assignments(&folded, Some(&fields), &roots, &refs, late, &keep);
+            folded = super::fold_compound_assignments(&folded, Some(&fields), &roots, &refs, late, &keep, &std::collections::HashSet::new());
         }
         assert!(folded.contains("this.Radius = (this.Radius + (this.Speed * Delta));"), "{folded}");
         assert!(!folded.contains(" += "), "{folded}");
@@ -33721,17 +34166,17 @@ mod late_compound_order_tests {
             ("this.Count = this.Count + DeltaTime;", "this.Count = this.Count + DeltaTime;"),
         ] {
             assert_eq!(fold_compound_assignments(line, Some(&fields), &roots,
-                &RefResolver::default(), true, &std::collections::HashSet::new()), expected);
+                &RefResolver::default(), true, &std::collections::HashSet::new(), &std::collections::HashSet::new()), expected);
         }
     }
 
     #[test]
     fn late_integer_updates_fold_but_computed_addends_keep_the_original_read_order() {
         let body = "    local_40.Z = local_40.Z + (local_8.Height * 0.5);\n    local_28.Counter = (local_28.Counter + 1);\n";
-        let actual = fold_compound_assignments(body, None, &HashMap::new(), &RefResolver::default(), true, &std::collections::HashSet::new());
+        let actual = fold_compound_assignments(body, None, &HashMap::new(), &RefResolver::default(), true, &std::collections::HashSet::new(), &std::collections::HashSet::new());
         assert_eq!(actual, "    local_40.Z = local_40.Z + (local_8.Height * 0.5);\n    local_28.Counter += 1;\n");
         let carried = "    float local_4 = local_40.Z;\n    local_4 = local_4 + Compute();\n    local_40.Z = local_4;\n";
-        assert_eq!(fold_compound_assignments(carried, None, &HashMap::new(), &RefResolver::default(), true, &std::collections::HashSet::new()), carried);
+        assert_eq!(fold_compound_assignments(carried, None, &HashMap::new(), &RefResolver::default(), true, &std::collections::HashSet::new(), &std::collections::HashSet::new()), carried);
     }
 }
 

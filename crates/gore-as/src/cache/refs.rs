@@ -2158,6 +2158,87 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_returning_bool_switch(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UOwner","Config"),("FConfig","Active")]);
+        for (id,name) in [(1,"UOwner"),(2,"FConfig")] {
+            r.type_identity_by_ptr.insert(id,TypeIdentity { name:name.into(),
+                module: if fault == 3 && id == 2 { "Other" } else { "Fixture" }.into(),
+                namespace: if fault == 4 { "Other" } else { "" }.into() });
+        }
+        for (id,offset,name) in [(1,0,"Config"),(2,0,"Active"),(2,1,"Passive")] {
+            let key = (id << 1) | (offset << 33) | 1;
+            r.prop_by_key.insert(key,name.into());
+            r.prop_type_id.insert(key,if fault == 2 { 1 } else { id as i32 });
+        }
+        r.class_fields.insert("UOwner".into(),HashMap::from([("Config".into(),
+            if fault == 5 { "OtherConfig" } else { "FConfig" }.into())]));
+        r.class_fields.insert("FConfig".into(),HashMap::from([("Active".into(),
+            if fault == 1 { "int8" } else { "bool" }.into()),("Passive".into(),"bool".into())]));
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_widened_final_product(token: i32, reference: bool) -> Self {
+        let mut r=Self::default();
+        r.funcid_to_ptr.insert(1,10); r.func_by_ptr.insert(10,"Value".into());
+        r.func_ret.insert(10,DataType { token,is_reference:reference,..Default::default() });
+        r.func_params.insert(10,Vec::new());
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_value_before_return_construction(fault: u8) -> Self {
+        let mut r=Self::from_test_member_chain(&[("FVector",""),("FExecutor",""),("UAI",""),("UScriptAI","")]);
+        for (id,name) in [(1,"FVector"),(2,"FExecutor"),(3,"UAI"),(4,"UScriptAI")] {
+            r.type_identity_by_ptr.insert(id,TypeIdentity { name:name.into(),module:String::new(),namespace:String::new() });
+        }
+        let vector=DataType { token:5,type_info:1,..Default::default() };
+        let reference=DataType { is_reference:true,is_object_const:true,is_read_only:true,..vector.clone() };
+        let executor=DataType { type_info:2,..vector.clone() };
+        let handle=DataType { type_info:3,is_object_handle:true,..vector.clone() };
+        let void=DataType {token:0x52,..Default::default()};
+        for (ptr,name,owner) in [(10,"CrossProduct",Some("FVector")),(11,"Location",Some("UAI")),
+            (12,"Normalize",Some("FVector")),(20,"$beh0",Some("FExecutor")),(30,"opNeg",Some("FVector")),
+            (40,"Consume",None),(50,"opAssign",Some("FExecutor")),(60,"$beh2",Some("FExecutor"))] {
+            r.func_by_ptr.insert(ptr,name.into()); r.funcid_to_ptr.insert(ptr as i32,ptr);
+            if let Some(owner)=owner { r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr); }
+        }
+        r.const_method_ptrs.extend([10,11,12,30]);
+        // PreparedEmit supplies class overload keys separately from const pointer flags.
+        let mut methods=HashSet::from(["Normalize/0/const".into(),"CrossProduct/1/const".into()]);
+        if fault!=1 {methods.insert("opNeg/0/const".into());}
+        r.set_class_methods(HashMap::from([("FVector".into(),methods)]));
+        if fault==1 {r.const_method_ptrs.remove(&30);}
+        for p in [10,11,12,30] {r.func_ret.insert(p,vector.clone());r.func_params.insert(p,Vec::new());}
+        r.func_params.insert(10,vec![if fault==2 {vector.clone()} else {reference.clone()}]);
+        r.func_params.insert(40,vec![handle,reference]);r.func_ret.insert(40,executor.clone());
+        r.func_params.insert(50,vec![DataType {is_reference:true,..executor.clone()}]);
+        r.func_ret.insert(50,DataType {is_reference:true,..executor});
+        for p in [20,60] {r.func_ret.insert(p,void.clone());r.func_params.insert(p,Vec::new());}
+        if fault==3 {r.func_owner.insert(20,"OtherExecutor".into());}
+        if fault==4 {r.func_params.get_mut(&40).unwrap()[1].type_info=2;}
+        if fault==5 {r.func_ret.get_mut(&40).unwrap().is_object_handle=true;}
+        if fault==6 {r.func_params.get_mut(&20).unwrap().push(vector);}
+        r.temporary_arg_positions.insert("CrossProduct".into(),HashMap::from([(1,vec![true])]));
+        r.temporary_arg_positions.insert("Consume".into(),HashMap::from([(2,vec![false,true])]));
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_addressed_compound_updates(fault:u8) -> Self {
+        let mut r=Self::from_test_member_chain(&[("UOwner","")]);
+        r.type_identity_by_ptr.insert(1,TypeIdentity {name:"UOwner".into(),module:"Fixture".into(),namespace:String::new()});
+        let mut fields=HashMap::new();
+        for (offset,name) in [(0,"Angle"),(8,"Distance"),(16,"Interval")] {
+            let key=(1i64<<1)|((offset as i64)<<33)|1;
+            r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,if fault==2 {2} else {1});
+            fields.insert(name.into(),if fault==1 {"float32"} else {"float"}.into());
+        }
+        r.class_fields.insert("UOwner".into(),fields);
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_double_product_bool_argument(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("UOwner", "Config")]);
         r.type_identity_by_ptr.insert(1, TypeIdentity { name: "UOwner".into(), module: "Fixture".into(), namespace: String::new() });
