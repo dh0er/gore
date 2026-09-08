@@ -3087,8 +3087,17 @@ fn emit_function_ctor(
             returns_by_reference,
         );
         pass_trace("fold_literal_null_returns", &rendered);
-        let rendered = fold_carrier_if_else(&rendered, fields);
+        let carrier_folded = fold_carrier_if_else(&rendered, fields);
+        let carrier_changed = carrier_folded != rendered;
+        let rendered = carrier_folded;
         pass_trace("fold_carrier_if_else", &rendered);
+        // Removing a closed earlier bool life can expose its later literal's
+        // existing first-use guard. Reuse the same literal and declaration rules.
+        let rendered = if carrier_changed {
+            let folded = inline_bool_literal_temporaries(&rendered, &slots_with_direct_bool_literal_stores(f));
+            drop_unused_declarations(&folded, &dead_literal_declaration_slots(f), &retained_unused_constructions)
+        } else { rendered };
+        pass_trace("inline_bool_literal_temporaries#after-carrier", &rendered);
         // Restore this closed comparison tail after every bool-chain inliner.
         let rendered = restore_named_integer_comparison_return(&rendered, f, refs);
         pass_trace("restore_named_integer_comparison_return", &rendered);
@@ -13470,7 +13479,102 @@ fn fold_unary_double_chain(body: &str, f: &Func, refs: &RefResolver) -> String {
     }
     let body = fold_witnessed_unary_double_chain(body, &witnessed);
     let body = fold_literal_product_call_chain(&body, &instrs, refs);
-    fold_retained_double_call_quotients(&body, f, refs)
+    let body = fold_retained_double_call_quotients(&body, f, refs);
+    fold_double_product_before_bool_argument(&body, f, refs, &instrs)
+}
+
+/// A double argument expression finishes before the next call's bool argument.
+/// Recover this closed chain late: its product slot also holds the named result.
+fn fold_double_product_before_bool_argument(body: &str, f: &Func, refs: &RefResolver, code: &[Instr]) -> String {
+    let scalar = |t: &super::types::DataType, token| t.token == token && !t.is_reference && !t.is_object_handle;
+    if !scalar(&f.ret, 0x52) { return body.to_owned(); }
+    let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+    let offsets = super::model::param_slot_map(&params, true, false, Some(refs));
+    let mut sites = Vec::new();
+    for (at, c) in code.windows(22).enumerate() {
+        if c.iter().map(|i| i.op.name).ne(["fTOd", "PshV8", "fTOd", "PshVPtr", "ADDSi", "RDSPtr",
+            "CALLSYS", "CpyRtoV4", "fTOd", "MULd", "ADDd", "PshV8", "CALLSYS", "CpyRtoV8",
+            "SetV1", "PshV4", "dTOf", "PshV4", "PshVPtr", "ADDSi", "RDSPtr", "CALLSYS"]) { continue; }
+        let site = (|| {
+            let w = |i: usize, n: usize| c[i].words.get(n).map(|v| *v as i16 as i32);
+            let (bound, right, sum, left, narrow, result, flag) = (w(0,0)?, w(0,1)?, w(2,0)?, w(2,1)?, w(7,0)?, w(8,0)?, w(14,0)?);
+            let slots = [bound,right,sum,left,narrow,result,flag];
+            if slots.iter().any(|s| *s <= 0) || slots.iter().collect::<HashSet<_>>().len() != slots.len()
+                || w(1,0) != Some(bound) || w(3,0) != Some(0) || w(8,1) != Some(narrow)
+                || w(9,0) != Some(result) || w(9,1) != Some(result) || w(10,0) != Some(sum)
+                || w(10,1) != Some(sum) || w(10,2) != Some(result) || w(11,0) != Some(sum)
+                || w(13,0) != Some(result) || c[14].dwords.first() != Some(&1) || w(15,0) != Some(flag)
+                || w(16,0) != Some(narrow) || w(16,1) != Some(result) || w(17,0) != Some(narrow)
+                || w(18,0) != Some(0) { return None; }
+            let param = f.params.get(*offsets.get(&w(9,2)?)?)?;
+            if !scalar(&param.ty, 0x51) { return None; }
+            let ptr = |i: usize| c[i].qwords.first().map(|p| *p as i64);
+            let (getter, binary, setter) = (ptr(6)?, ptr(12)?, ptr(21)?);
+            let [a,b] = refs.func_params_by_ptr(binary)? else { return None; };
+            let [value,boolean] = refs.func_params_by_ptr(setter)? else { return None; };
+            if !scalar(refs.func_ret_by_ptr(getter)?,0x50) || !refs.is_method_by_ptr(getter)
+                || !refs.func_params_by_ptr(getter)?.is_empty() || !scalar(refs.func_ret_by_ptr(binary)?,0x51)
+                || refs.is_method_by_ptr(binary) || refs.func_owner_by_ptr(binary).is_some()
+                || !scalar(a,0x51) || !scalar(b,0x51) || !refs.is_method_by_ptr(setter)
+                || !scalar(refs.func_ret_by_ptr(setter)?,0x52) || !scalar(value,0x50) || !scalar(boolean,0x41)
+                || [getter,binary,setter].iter().any(|p| code.iter().filter(|i| i.op.is_call()
+                    && i.qwords.first().map(|q| *q as i64) == Some(*p)).count() != 1) { return None; }
+            let field = |i: usize, method| {
+                let id = *c[i].dwords.first()? as i32;
+                let (name, owner_id) = refs.member_identity(id, w(i,0)?)?;
+                let owner = refs.type_identity_by_id(id)?;
+                if refs.type_identity_by_id(owner_id) != Some(owner)
+                    || refs.field_type_by_class(&owner.name,name) != refs.func_owner_by_ptr(method) { return None; }
+                Some((name.to_owned(), owner.clone()))
+            };
+            let (source_field,owner) = field(4,getter)?;
+            let (target_field,target_owner) = field(19,setter)?;
+            if owner != target_owner || refs.func_owner_by_ptr(getter).is_none() || refs.func_owner_by_ptr(setter).is_none()
+                || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                    let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                    target > c[0].offset_dw as i64 && target <= c[21].offset_dw as i64
+                }))) { return None; }
+            // These two removed carriers have no other raw life. Result/narrow/flag
+            // may be reused elsewhere, but this window closes each use moved here.
+            for (slot, expected) in [(bound,vec![at,at+1]), (sum,vec![at+2,at+10,at+11])] {
+                if code.iter().enumerate().filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&slot))
+                    .map(|(i,_)| i).ne(expected) { return None; }
+            }
+            let ns = refs.func_ns_by_ptr(binary).filter(|ns| !ns.is_empty())?;
+            Some((sum,left,right,result,param.name.clone(),format!("this.{source_field}.{}()",refs.func_by_ptr(getter)?),
+                format!("{ns}::{}",refs.func_by_ptr(binary)?),format!("this.{target_field}.{}",refs.func_by_ptr(setter)?)))
+        })();
+        if let Some(site) = site { sites.push(site); }
+    }
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut at = 0;
+    while at + 2 < lines.len() {
+        let replacement = (|| {
+            let (indent,name,left) = declaration_with_initializer(&lines[at])?;
+            let (target,addition) = slot_store_any(&lines[at+1])?;
+            let product = unwrap_brackets(addition.strip_prefix(&format!("{name} + "))?);
+            let (getter,param) = product.split_once(" * ")?;
+            let (_,args) = call_of_expression(lines[at+2].trim().strip_suffix(';')?)?;
+            let [converted,boolean] = args.as_slice() else { return None; };
+            let binary = unwrap_brackets(converted.strip_prefix("float32(")?.strip_suffix(')')?);
+            let (_,inputs) = call_of_expression(binary)?;
+            let [sum,right] = inputs.as_slice() else { return None; };
+            if target != name || sum != &name || boolean != "true" || count_ident(body,&name) != 4
+                || (1..=2).any(|n| indent_of(&lines[at+n]) != indent)
+                || !declared_type(&lines,&name).is_some_and(|t| matches!(t.as_str(),"float"|"double"))
+                || [&left,right].iter().any(|n| declared_type(&lines,n).as_deref() != Some("float32")) { return None; }
+            let site = sites.iter().find(|(s,l,r,_,p,g,b,set)| slot_and_life(&name).map(|x|x.0) == Some(*s)
+                && slot_and_life(&left).map(|x|x.0) == Some(*l) && slot_and_life(right).map(|x|x.0) == Some(*r)
+                && p == param && g == getter && binary == format!("{b}({name}, {right})")
+                && lines[at+2].trim().starts_with(&format!("{set}(")))?;
+            let result = format!("local_{}",site.3);
+            if count_ident(body,&result) != 0 || body.contains(&format!("{result}_")) { return None; }
+            Some([format!("{indent}float {result} = {}(float({left}) + ({product}), float({right}));",site.6),
+                format!("{indent}{}(float32({result}), true);",site.7)])
+        })();
+        if let Some(pair) = replacement { lines.splice(at..at+3,pair); at += 2; } else { at += 1; }
+    }
+    let mut out = lines.join("\n"); if body.ends_with('\n') { out.push('\n'); } out
 }
 
 // The same late chain recovery, with a binary double call returning into its
@@ -21439,14 +21543,32 @@ fn fold_carrier_if_else(body: &str, fields: Option<&HashMap<String, String>>) ->
                 // A comparison may still have its own bool declaration before the
                 // integer-spelled merge copy. Consume only this closed, typed local life.
                 if lines.get(k + 3)?.trim() != "}" { return None; }
-                let (temp, expression) = lines[k + 1].trim().strip_prefix("bool ")?
-                    .strip_suffix(';')?.split_once(" = ")?;
+                let declared = lines[k + 1].trim().strip_prefix("bool ")
+                    .and_then(|s| s.strip_suffix(';')).and_then(|s| s.split_once(" = "));
+                let assigned = slot_store(lines[k + 1]);
+                let (temp, expression) = declared.or_else(|| assigned.as_ref()
+                    .map(|(name, value)| (name.as_str(), value.as_str())))?;
                 let (target, value) = slot_store(lines.get(k + 2)?)?;
                 if !is_decompiler_local(temp) || value != temp || target == temp
                     || expression.is_empty() || count_ident(expression, temp) != 0
-                    || lines.iter().map(|l| count_ident(l, temp)).sum::<usize>() != 2
                     || [k + 1, k + 2].iter().any(|i| indent_of(lines[*i]).len() != indent.len() + 4)
                 { return None; }
+                if declared.is_some() {
+                    if lines.iter().map(|l| count_ident(l, temp)).sum::<usize>() != 2 { return None; }
+                } else {
+                    // The earlier bool life is dead after its merge copy. A later
+                    // independent write keeps the bare declaration, not this value.
+                    let declaration = lines[..k + 1].iter().position(|line|
+                        line.trim() == format!("bool {temp};"))?;
+                    if block_span(&lines, declaration).1 <= k + 1
+                        || lines[..k + 1].iter().enumerate().any(|(at, line)|
+                            at != declaration && count_ident(line, temp) != 0) { return None; }
+                    let next = (k + 4..lines.len()).find(|at| count_ident(lines[*at], temp) != 0)?;
+                    let (next_target, next_value) = slot_store(lines[next])?;
+                    if next_target != temp || count_ident(&next_value, temp) != 0
+                        || indent_of(lines[next]).len() > indent.len()
+                        || block_span(&lines, declaration).1 <= next { return None; }
+                }
                 Some((target, expression.to_owned(), k + 4, true))
             };
             let (then_target, mut then_value, else_at, _) = arm(at + 1)?;
@@ -21475,7 +21597,11 @@ fn fold_carrier_if_else(body: &str, fields: Option<&HashMap<String, String>>) ->
             }
             let test = lines.get(test_at)?;
             let integer_return = test.trim() == format!("return ({then_target} != 0);");
-            let integer_test = integer_return || test.trim() == format!("if ({then_target} != 0)");
+            let integer_or_tail = test.trim().strip_prefix(&format!("if ({then_target} != 0 || "))
+                .and_then(|s| s.strip_suffix(')')).filter(|tail|
+                    !tail.is_empty() && count_ident(tail, &then_target) == 0);
+            let integer_test = integer_return || test.trim() == format!("if ({then_target} != 0)")
+                || integer_or_tail.is_some();
             if indent_of(test) != indent
                 || (!integer_test && test.trim() != format!("if ({then_target})")) { return None; }
             if integer_test {
@@ -21532,6 +21658,9 @@ fn fold_carrier_if_else(body: &str, fields: Option<&HashMap<String, String>>) ->
                 ("false", true) => (format!("{} && {}", group(condition, " && "), group(&other, " && ")), "&&"),
                 _ => return None,
             };
+            // The final test's leading read already accounts for its one carrier
+            // mention; append its OR operand only after that ownership check.
+            if let Some(tail) = integer_or_tail { accumulated.push(("||".into(), tail.into())); }
             for (op, rest) in &accumulated {
                 let joined_by = format!(" {op} ");
                 let left = if op == last_op { combined.clone() } else { format!("({combined})") };
@@ -24884,6 +25013,16 @@ fn rewrite_foreach_loops(
     let mut drop_line = vec![false; lines.len()];
     let mut replace: Vec<Option<String>> = vec![None; lines.len()];
     let mut suppressed = HashSet::new();
+    // A split Proceed reference keeps its full declaration name. Its physical
+    // slot still has to agree with this iterator's bytecode binding.
+    let direct_binding = |line: &str, iter: i32| {
+        let (slot, name) = proceed_assignment(line, iter)?;
+        if elements.get(&iter).is_some_and(|expected| *expected != slot)
+            || (name != format!("local_{slot}") && (!range_for.contains(&iter)
+                || elements.get(&iter) != Some(&slot) || !reference_locals.contains_key(&slot)))
+        { return None; }
+        Some((slot, name))
+    };
 
     // Every place that has the idiom's SHAPE, found before any of them is judged. A function may
     // run the same slot through two loops one after the other — the compiler reuses the frame —
@@ -24896,10 +25035,11 @@ fn rewrite_foreach_loops(
             (is_can_proceed_header(lines[i + 1].trim(), iter)
                 && lines[i + 2].trim() == "{")
             .then_some(())?;
-            let elem = proceed_assignment(lines[i + 3], iter)
-                .or_else(|| inline_proceed_element(&lines, i, iter, elements).map(|(e, _)| e))?;
+            let (_, name) = direct_binding(lines[i + 3], iter)
+                .or_else(|| inline_proceed_element(&lines, i, iter, elements)
+                    .map(|(e, _)| (e, format!("local_{e}"))))?;
             let end = matching_close(&lines, i + 2)?;
-            Some((i, end, format!("local_{elem}")))
+            Some((i, end, name))
         })
         .collect();
 
@@ -24917,13 +25057,14 @@ fn rewrite_foreach_loops(
             continue;
         }
         let inline_elem = inline_proceed_element(&lines, i, iter, elements);
-        let Some(elem) = proceed_assignment(lines[i + 3], iter).or(inline_elem.as_ref().map(|(e, _)| *e))
+        let binding = direct_binding(lines[i + 3], iter);
+        let Some((elem, elem_ident)) = binding.clone()
+            .or_else(|| inline_elem.as_ref().map(|(e, _)| (*e, format!("local_{e}"))))
         else {
             foreach_reject("no-proceed-assignment");
             continue;
         };
-        let inline_elem = proceed_assignment(lines[i + 3], iter)
-            .is_none()
+        let inline_elem = binding.is_none()
             .then_some(inline_elem)
             .flatten();
         let Some(end) = matching_close(&lines, i + 2) else {
@@ -24933,7 +25074,6 @@ fn rewrite_foreach_loops(
         // outside the loop body: the range-for scopes both, so any other reference would be to
         // a name that no longer exists.
         let iter_ident = format!("local_{iter}");
-        let elem_ident = format!("local_{elem}");
         let iter_uses: usize = lines.iter().map(|l| count_ident(l, &iter_ident)).sum();
         // The element's own bare declaration is the one mention outside the loop that does not
         // count: the range-for header declares the element itself, so that line is what the
@@ -25426,6 +25566,10 @@ fn inline_proceed_element(
     elements: &HashMap<i32, i32>,
 ) -> Option<(i32, String)> {
     let call = format!("local_{iter}.Proceed()");
+    // A direct binding rejected above must not become a second value copy via
+    // this expression fallback, including malformed or mismatched local names.
+    if lines[at + 3].trim().strip_suffix(';').and_then(|s| s.split_once(" = "))
+        .is_some_and(|(_, rhs)| rhs == call) { return None; }
     let end = matching_close(lines, at + 2)?;
     let uses: usize = lines[at + 3..=end]
         .iter()
@@ -25458,8 +25602,8 @@ fn inline_proceed_element(
     Some((elem, replaced))
 }
 
-/// `local_E = local_I.Proceed();` / `auto local_E = local_I.Proceed();` -> E.
-fn proceed_assignment(line: &str, iter: i32) -> Option<i32> {
+/// A direct Proceed binding: physical slot plus its complete local-life name.
+fn proceed_assignment(line: &str, iter: i32) -> Option<(i32, String)> {
     let trimmed = line.trim();
     // The element may already carry a declaration (`auto`, or a value type the decl-init rewrite
     // gave it in an earlier pass).
@@ -25467,10 +25611,10 @@ fn proceed_assignment(line: &str, iter: i32) -> Option<i32> {
         Some((head, _)) if !head.contains('(') && !head.contains('=') => &trimmed[head.len() + 1..],
         _ => trimmed,
     };
-    let rest = trimmed.strip_prefix("local_")?;
-    let (slot, rest) = rest.split_once(" = ")?;
-    let slot: i32 = slot.parse().ok()?;
-    (rest == format!("local_{iter}.Proceed();")).then_some(slot)
+    let (name, rest) = trimmed.split_once(" = ")?;
+    let (slot, life) = slot_and_life(name)?;
+    (slot > 0 && life > 0 && rest == format!("local_{iter}.Proceed();"))
+        .then(|| (slot, name.to_owned()))
 }
 
 /// Index of the `}` closing the block whose `{` is at `open`.
@@ -28742,6 +28886,77 @@ mod member_arithmetic_lifetime_tests {
 
     use super::{borrowed_handle_iterator_elements, rewrite_foreach_loops, disassemble};
     use std::collections::BTreeMap;
+
+    fn map_reference_binding_fixture() -> Func {
+        let mut f = function(&[("PSF", &[8]), ("PshVPtr", &[0]), ("CALLSYS", &[]), ("JMP", &[]),
+            ("SUSPEND", &[]), ("PSF", &[8]), ("CALLSYS", &[]), ("CpyRtoV8", &[20]),
+            ("PshVPtr", &[20]), ("CALLSYS", &[]), ("LoadVObjR", &[8, 24]), ("RDR1", &[17]),
+            ("CpyVtoR1", &[17]), ("JLowNZ", &[]),
+            ("PSF", &[16]), ("PshVPtr", &[0]), ("CALLSYS", &[]), ("JMP", &[]),
+            ("SUSPEND", &[]), ("PSF", &[16]), ("CALLSYS", &[]), ("CpyRtoV8", &[20]),
+            ("PshVPtr", &[20]), ("CALLSYS", &[]), ("LoadVObjR", &[16, 24]), ("RDR1", &[17]),
+            ("CpyVtoR1", &[17]), ("JLowNZ", &[]), ("RET", &[2])]);
+        f.ret.token = 0x52; f.obj_locals = vec![(8, 101), (16, 101)];
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, ptr) in [(2, 2), (6, 1), (9, 3), (16, 2), (20, 1), (23, 3)] {
+            f.bytecode[code[at].offset_dw + 1] = ptr;
+        }
+        for (at, target) in [(3, 10), (13, 4), (17, 24), (27, 18)] {
+            f.bytecode[code[at].offset_dw + 1] = code[target].offset_dw as i32 - code[at].offset_dw as i32 - 2;
+        }
+        f
+    }
+
+    #[test]
+    fn two_map_reference_loops_keep_their_split_binding_names_without_value_copies() {
+        let f = map_reference_binding_fixture();
+        let refs = RefResolver::from_test_map_reference_binding();
+        let reference = super::reference_result_slots(&f, &refs);
+        let elements = super::proceed_element_slots(&f, &refs);
+        let ranges = super::range_for_iterator_slots(&f, &refs);
+        assert_eq!(reference, HashMap::from([(20, false)]));
+        assert_eq!(elements, HashMap::from([(8, 20), (16, 20)]));
+        assert_eq!(ranges, HashSet::from([8, 16]));
+        let locals = BTreeMap::from([(8, "TMapIterator".into()), (16, "TMapIterator".into()),
+            (20, "TMapIterator".into())]);
+        let body = "local_8 = this.Minions.Iterator();\nfor (; local_8.CanProceed;)\n{\n    local_20 = local_8.Proceed();\n    if (!(local_20.GetKey().IsDead()))\n    {\n        return;\n    }\n}\nlocal_16 = this.Other.Minions.Iterator();\nfor (; local_16.CanProceed;)\n{\n    local_20 = local_16.Proceed();\n    if (!(local_20.GetKey().IsDead()))\n    {\n        return;\n    }\n}\nthis.Done();\nreturn;\n";
+        // Production rewrites the iterator-typed element before recovering foreach.
+        let (declared, _) = super::rewrite_iterator_decl_init(body, &locals);
+        assert!(declared.contains("auto local_20_2 = local_16.Proceed();"), "{declared}");
+        let (out, gone) = rewrite_foreach_loops(&declared, &locals, &refs, &ranges, &elements,
+            &reference, &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
+        assert!(out.contains("for (auto& local_20 : this.Minions)"), "{out}");
+        assert!(out.contains("for (auto& local_20_2 : this.Other.Minions)"), "{out}");
+        assert!(out.contains("if (!(local_20_2.GetKey().IsDead()))"), "{out}");
+        assert!(!out.contains("Proceed()") && !out.contains(" = local_20;"), "{out}");
+        assert_eq!(gone, HashSet::from([20]));
+    }
+
+    #[test]
+    fn suffixed_foreach_binding_requires_its_raw_slot_and_an_owned_reference_life() {
+        let f = map_reference_binding_fixture();
+        let refs = RefResolver::from_test_map_reference_binding();
+        let reference = super::reference_result_slots(&f, &refs);
+        let elements = super::proceed_element_slots(&f, &refs);
+        let ranges = super::range_for_iterator_slots(&f, &refs);
+        let body = "auto local_16 = this.Other.Minions.Iterator();\nwhile (local_16.CanProceed)\n{\n    auto local_20_2 = local_16.Proceed();\n    Use(local_20_2);\n}\n";
+        let fold = |s: &str, e: &HashMap<i32, i32>, r: &HashMap<i32, bool>|
+            rewrite_foreach_loops(s, &BTreeMap::new(), &refs, &ranges, e, r,
+                &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new()).0;
+        for name in ["local_22_2", "local_20_bad", "local_20_2_extra", "unrelated"] {
+            let wrong = body.replace("local_20_2", name);
+            assert_eq!(fold(&wrong, &elements, &reference), wrong, "{name}");
+        }
+        assert_eq!(fold(body, &HashMap::from([(16, 22)]), &reference), body);
+        assert_eq!(fold(body, &HashMap::new(), &reference), body);
+        assert_eq!(fold(body, &elements, &HashMap::new()), body);
+        let escaped = format!("{body}Use(local_20_2);\n");
+        assert_eq!(fold(&escaped, &elements, &reference), escaped);
+        let real_copy = body.replace("    Use(local_20_2);", "    auto local_30 = local_20_2;\n    Use(local_30);");
+        let folded = fold(&real_copy, &elements, &reference);
+        assert!(folded.contains("auto local_30 = local_20_2;"), "{folded}");
+        assert!(folded.contains("for (auto& local_20_2 :"), "{folded}");
+    }
 
     fn iterator_reference_before_argument_fixture() -> Func {
         let mut f = function(&[
@@ -32732,6 +32947,82 @@ mod literal_value_lifetime_tests {
         assert!(!check(&late_arithmetic, &refs).contains(&4));
     }
 
+    fn double_product_bool_argument_fixture() -> Func {
+        let mut f = function(&[("SetV1", &[7]), ("CpyVtoR1", &[7]),
+            ("fTOd", &[18,9]), ("PshV8", &[18]), ("fTOd", &[16,8]), ("PshVPtr", &[0]),
+            ("ADDSi", &[0]), ("RDSPtr", &[]), ("CALLSYS", &[]), ("CpyRtoV4", &[10]),
+            ("fTOd", &[14,10]), ("MULd", &[14,14,65534]), ("ADDd", &[16,16,14]), ("PshV8", &[16]),
+            ("CALLSYS", &[]), ("CpyRtoV8", &[14]), ("SetV1", &[7]), ("PshV4", &[7]),
+            ("dTOf", &[10,14]), ("PshV4", &[10]), ("PshVPtr", &[0]), ("ADDSi", &[8]), ("RDSPtr", &[]),
+            ("CALLSYS", &[]), ("RET", &[4])]);
+        f.ret.token = 0x52;
+        f.params = vec![super::super::model::Param { name: "DeltaTime".into(), flags: 0,
+            ty: DataType { token: 0x51, is_read_only: true, ..Default::default() } }];
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at,id) in [(6,1),(8,10),(14,20),(16,1),(21,1),(23,30)] { f.bytecode[code[at].offset_dw+1] = id; }
+        f
+    }
+
+    const DOUBLE_PRODUCT_BOOL_FINAL: &str = "float32 local_8 = Start();\nfloat32 local_9 = Limit();\nif (local_8 <= local_9)\n{\n    float local_16 = local_8;\n    local_16 = local_16 + (this.Config.Speed() * DeltaTime);\n    this.Hit.SetLength(float32((Math::Min(local_16, local_9))), true);\n    return;\n}\n";
+
+    #[test]
+    fn double_product_call_stays_before_the_later_bool_argument_in_the_pipeline() {
+        let f = double_product_bool_argument_fixture();
+        let refs = RefResolver::from_test_double_product_bool_argument(0);
+        let body = DOUBLE_PRODUCT_BOOL_FINAL.replace("    float local_16 = local_8;",
+            "    float local_18 = local_9;\n    float local_16 = local_8;\n    float local_14 = this.Config.Speed();\n    local_14 = local_14 * DeltaTime;")
+            .replace("local_16 = local_16 + (this.Config.Speed() * DeltaTime);", "local_16 = local_16 + local_14;")
+            .replace("    this.Hit.SetLength(float32((Math::Min(local_16, local_9))), true);",
+                "    local_14 = Math::Min(local_16, local_18);\n    this.Hit.SetLength(float32(local_14), true);");
+        let inline = |body: &str| super::inline_unnamed_value_temporaries(body,
+            &HashSet::from([(14,1),(16,1),(18,1)]), &HashSet::new(), &HashSet::new(), &refs,
+            &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
+        let locals = BTreeMap::from([(8,"float32".into()),(9,"float32".into()),(14,"float".into()),(16,"float".into()),(18,"float".into())]);
+        let early = inline(&body);
+        assert!(early.contains("SetLength(float32((Math::Min("),"{early}");
+        let merged = super::merge_self_assignments(&early,&locals);
+        let late = inline(&merged);
+        let late = super::fold_widening_aliases(&late,&locals,&HashMap::new(),&HashSet::new());
+        assert_eq!(late,DOUBLE_PRODUCT_BOOL_FINAL);
+        let output = super::fold_unary_double_chain(&late,&f,&refs);
+        let expected = DOUBLE_PRODUCT_BOOL_FINAL.replace(
+            "    float local_16 = local_8;\n    local_16 = local_16 + (this.Config.Speed() * DeltaTime);\n    this.Hit.SetLength(float32((Math::Min(local_16, local_9))), true);",
+            "    float local_14 = Math::Min(float(local_8) + (this.Config.Speed() * DeltaTime), float(local_9));\n    this.Hit.SetLength(float32(local_14), true);");
+        assert_eq!(output,expected);
+        assert_eq!(super::fold_unary_double_chain(&output,&f,&refs),output);
+    }
+
+    #[test]
+    fn double_product_bool_argument_rejects_other_metadata_lives_and_order() {
+        let f = double_product_bool_argument_fixture();
+        let refs = RefResolver::from_test_double_product_bool_argument(0);
+        let fold = |text: &str, f: &Func, refs: &RefResolver| super::fold_unary_double_chain(text,f,refs);
+        assert_ne!(fold(DOUBLE_PRODUCT_BOOL_FINAL,&f,&refs),DOUBLE_PRODUCT_BOOL_FINAL);
+        for fault in 1..=8 { assert_eq!(fold(DOUBLE_PRODUCT_BOOL_FINAL,&f,&RefResolver::from_test_double_product_bool_argument(fault)),DOUBLE_PRODUCT_BOOL_FINAL,"metadata {fault}"); }
+        for text in [DOUBLE_PRODUCT_BOOL_FINAL.replace("this.Config.Speed() * DeltaTime","DeltaTime * this.Config.Speed()"),
+            DOUBLE_PRODUCT_BOOL_FINAL.replace("float32 local_9","float local_9"),
+            DOUBLE_PRODUCT_BOOL_FINAL.replace("this.Hit.SetLength","other.Hit.SetLength"),
+            DOUBLE_PRODUCT_BOOL_FINAL.replace("Math::Min(local_16, local_9)","Math::Min(local_9, local_16)"),
+            DOUBLE_PRODUCT_BOOL_FINAL.replace(", true);",", false);"),
+            format!("{DOUBLE_PRODUCT_BOOL_FINAL}Use(local_16);\n"),
+            format!("float local_14 = Other();\n{DOUBLE_PRODUCT_BOOL_FINAL}"),
+            format!("float local_14_2 = Other();\n{DOUBLE_PRODUCT_BOOL_FINAL}")]
+        { assert_eq!(fold(&text,&f,&refs),text); }
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at,word,value) in [(3,0,17),(11,2,65532),(12,2,10),(18,1,16)] {
+            let mut wrong = f.clone(); let k = word + 1; let pos = code[at].offset_dw + k / 2; let shift = (k%2)*16;
+            wrong.bytecode[pos] = ((wrong.bytecode[pos] as u32 & !(0xffffu32 << shift)) | ((value as u32) << shift)) as i32;
+            assert_eq!(fold(DOUBLE_PRODUCT_BOOL_FINAL,&wrong,&refs),DOUBLE_PRODUCT_BOOL_FINAL,"operand {at}");
+        }
+        let mut wrong = f.clone(); wrong.params[0].ty.token = 0x50;
+        assert_eq!(fold(DOUBLE_PRODUCT_BOOL_FINAL,&wrong,&refs),DOUBLE_PRODUCT_BOOL_FINAL);
+        let mut extra = f.clone(); extra.bytecode.extend(function(&[("PshV8",&[16])]).bytecode);
+        assert_eq!(fold(DOUBLE_PRODUCT_BOOL_FINAL,&extra,&refs),DOUBLE_PRODUCT_BOOL_FINAL);
+        let mut entry = function(&[("JMP",&[])]).bytecode;
+        entry[1] = code[14].offset_dw as i32; entry.extend(f.bytecode.clone()); wrong = f.clone(); wrong.bytecode = entry;
+        assert_eq!(fold(DOUBLE_PRODUCT_BOOL_FINAL,&wrong,&refs),DOUBLE_PRODUCT_BOOL_FINAL);
+    }
+
     fn retained_double_quotient_fixture(nested: bool) -> Func {
         let (q, n, d) = if nested { (20, 26, 16) } else { (22, 58, 50) };
         let mut f = function(&[("iTOd", &[q, 30]), ("CpyVtoV8", &[d, q]),
@@ -34073,6 +34364,54 @@ mod integer_bool_merge_carrier_tests {
             Some(&HashMap::from([("Lost".into(), "int".into())]))), direct);
     }
 
+    fn reused_bool_or_body() -> String {
+        "    int local_3;\n    bool local_4;\n    if (Other == nullptr)\n    {\n        local_3 = 1;\n    }\n    else\n    {\n        local_4 = Other.Active;\n        local_3 = local_4;\n    }\n    if (local_3 != 0 || Other.Completed)\n    {\n        return false;\n    }\n    this.Other = Other;\n    local_4 = true;\n    this.Other.Activated = local_4;\n    return true;\n".into()
+    }
+
+    #[test]
+    fn reused_bool_first_life_rejoins_before_its_later_literal_store() {
+        let source = reused_bool_or_body();
+        let direct_literals = HashSet::from([4]);
+        assert_eq!(inline_bool_literal_temporaries(&source, &direct_literals), source,
+            "the pre-existing first-use guard must still reject the earlier bool life");
+        let folded = fold_carrier_if_else(&source, None);
+        assert!(folded.contains("if (Other == nullptr || Other.Active || Other.Completed)"), "{folded}");
+        assert!(folded.contains("bool local_4;") && folded.contains("local_4 = true;"), "{folded}");
+        assert!(!folded.contains("local_3") && !folded.contains("local_4 = Other.Active"), "{folded}");
+        let literal = inline_bool_literal_temporaries(&folded, &direct_literals);
+        let final_body = drop_unused_declarations(&literal, &HashSet::new(), &HashSet::new());
+        assert_eq!(final_body, "    if (Other == nullptr || Other.Active || Other.Completed)\n    {\n        return false;\n    }\n    this.Other = Other;\n    this.Other.Activated = true;\n    return true;\n");
+        assert_eq!(fold_carrier_if_else(&final_body, None), final_body);
+        // The new test-tail shape also composes with the old, independently
+        // declared and closed boolean alternative; the ordinary path stays intact.
+        let old = body("        bool local_7 = (this.Index > this.Count);\n        local_3 = local_7;\n");
+        let extended = old.replace("if (local_3 != 0)", "if (local_3 != 0 || this.More)");
+        assert_eq!(fold_carrier_if_else(&extended, None),
+            fold_carrier_if_else(&old, None).replace("this.Count))", "this.Count) || this.More)"));
+    }
+
+    #[test]
+    fn reused_bool_merge_requires_a_dominating_declaration_and_dead_first_life() {
+        let source = reused_bool_or_body();
+        for rejected in [
+            source.replace("bool local_4;", "int local_4;"),
+            source.replace("bool local_4;", "bool& local_4;"),
+            source.replace("    bool local_4;\n", ""),
+            source.replace("    bool local_4;", "    if (Ready())\n    {\n        bool local_4;\n    }"),
+            source.replace("    if (Other == nullptr)", "    Use(local_4);\n    if (Other == nullptr)"),
+            source.replace("        local_3 = local_4;", "        Use(local_4);\n        local_3 = local_4;"),
+            source.replace("    local_4 = true;", "    Use(local_4);\n    local_4 = true;"),
+            source.replace("    local_4 = true;", "    local_4 = !local_4;"),
+            source.replace("    local_4 = true;", "    if (Ready())\n    {\n        local_4 = true;\n    }"),
+            source.replace("local_3 = 1;", "local_3 = 2;"),
+            source.replace("local_3 != 0 || Other.Completed", "local_3 != 0 && Other.Completed"),
+            source.replace("local_3 != 0 || Other.Completed", "Ready(local_3 != 0) || Other.Completed"),
+            source.replace("local_3 != 0 || Other.Completed", "local_3 != 0 || Other.Completed || local_3 != 0"),
+        ] {
+            assert_eq!(fold_carrier_if_else(&rejected, None), rejected);
+        }
+    }
+
     #[test]
     fn integer_merge_does_not_consume_another_local_life_or_numeric_arm() {
         let source = body("        bool local_7 = (this.Component == nullptr);\n        local_3 = local_7;\n");
@@ -34083,7 +34422,6 @@ mod integer_bool_merge_carrier_tests {
         for rejected in [source.replace("bool local_7", "int local_7"),
             source.replace("local_3 = 1", "local_3 = 2"),
             source.replace("if (local_3 != 0)", "if (local_3 > 0)"),
-            source.replace("if (local_3 != 0)", "if (local_3 != 0 || this.More)"),
             source.replace("int local_3;", "bool local_3;")] {
             assert_eq!(fold_carrier_if_else(&rejected, None), rejected);
         }

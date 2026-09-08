@@ -2158,6 +2158,33 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_double_product_bool_argument(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UOwner", "Config")]);
+        r.type_identity_by_ptr.insert(1, TypeIdentity { name: "UOwner".into(), module: "Fixture".into(), namespace: String::new() });
+        for (offset, name) in [(0, "Config"), (8, "Hit")] {
+            let key = (1i64 << 1) | ((offset as i64) << 33) | 1;
+            r.prop_by_key.insert(key,name.into()); r.prop_type_id.insert(key,if fault == 4 { 2 } else { 1 });
+        }
+        r.class_fields.insert("UOwner".into(), HashMap::from([("Config".into(),"UConfig".into()),
+            ("Hit".into(),if fault == 5 { "UOther" } else { "UHit" }.into())]));
+        for (ptr,name,owner) in [(10,"Speed",Some("UConfig")), (20,"Min",None), (30,"SetLength",Some("UHit"))] {
+            r.func_by_ptr.insert(ptr,name.into());
+            if let Some(owner) = owner { r.func_owner.insert(ptr,owner.into()); r.func_is_method.insert(ptr); }
+        }
+        if fault != 7 { r.func_ns.insert(20,"Math".into()); }
+        if fault == 6 { r.func_is_method.insert(20); }
+        let narrow = DataType { token: 0x50, ..Default::default() };
+        let wide = DataType { token: 0x51, ..Default::default() };
+        r.func_ret.insert(10,if fault == 1 { wide.clone() } else { narrow.clone() });
+        r.func_params.insert(10,if fault == 8 { vec![narrow.clone()] } else { Vec::new() });
+        r.func_ret.insert(20,wide.clone());
+        r.func_params.insert(20,vec![wide.clone(),if fault == 2 { narrow.clone() } else { wide }]);
+        r.func_ret.insert(30,DataType { token: 0x52, ..Default::default() });
+        r.func_params.insert(30,vec![narrow,DataType { token: if fault == 3 { 0x44 } else { 0x41 }, ..Default::default() }]);
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_retained_double_quotient(narrow: bool) -> Self {
         let mut r = Self::from_test_literal_product_call(narrow);
         let value = r.func_ret.get(&1).unwrap().clone();
@@ -2502,6 +2529,25 @@ impl RefResolver {
         r.func_ret.insert(2, DataType { token: 0x52, ..Default::default() });
         r.func_params.insert(2, vec![DataType { token: 5, type_info: if same_type { 101 } else { 102 },
             is_reference: true, is_object_const: true, ..Default::default() }]);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_map_reference_binding() -> Self {
+        let mut r = Self::default();
+        r.type_by_ptr.insert(101, "TMapIterator".into());
+        r.type_by_ptr.insert(102, "AGothicCharacterState".into());
+        for (ptr, name, owner) in [(1, "Proceed", "TMapIterator"), (2, "Iterator", "TMap"),
+            (3, "GetKey", "TMapIterator")]
+        {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into());
+            r.func_is_method.insert(ptr); r.func_params.insert(ptr, Vec::new());
+        }
+        r.func_ret.insert(1, DataType { token: 5, type_info: 101, is_reference: true, ..Default::default() });
+        r.func_ret.insert(2, DataType { token: 5, type_info: 101, ..Default::default() });
+        r.func_ret.insert(3, DataType { token: 5, type_info: 102, is_reference: true,
+            is_object_handle: true, is_read_only: true, ..Default::default() });
+        r.const_method_ptrs.insert(3);
         r
     }
 
