@@ -2362,6 +2362,43 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_global_copy_before_handle(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(1, "FGameplayTag"), (2, "FPerceivedInteractiveObject"), (3, "AState"), (4, "UObject")] {
+            r.type_by_ptr.insert(ptr, name.into()); r.type_names.insert(name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        let void = DataType { token: 0x52, ..Default::default() };
+        let tag = DataType { token: 5, type_info: 1, is_reference: true, is_object_const: true, is_read_only: true, ..Default::default() };
+        let handle = DataType { token: 5, type_info: 3, is_object_handle: true, ..Default::default() };
+        for (ptr, name, owner) in [(10, "$beh0", "FGameplayTag"), (20, "$beh2", "FGameplayTag"), (30, "GetState", "FAgent"), (40, "Register", "UCrime")] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into()); r.func_is_method.insert(ptr);
+            r.func_ret.insert(ptr, void.clone());
+        }
+        r.func_params.insert(10, vec![tag.clone()]); r.func_params.insert(20, vec![]);
+        r.const_method_ptrs.insert(30); r.func_ret.insert(30, handle.clone());
+        r.func_params.insert(30, vec![DataType { type_info: 4, is_object_const: true, ..handle.clone() }]);
+        r.funcid_to_ptr.insert(40, 40);
+        r.func_params.insert(40, vec![tag.clone(), handle.clone(), handle, tag.clone(), DataType { type_info: 2, ..tag }]);
+        r.global_by_ptr.insert(50, "Crime_Interaction".into()); r.global_ns.insert(50, "GameplayTag".into());
+        r.temporary_arg_positions.insert("Register".into(), HashMap::from([(5, vec![true; 5])]));
+        match fault {
+            1 => r.func_params.get_mut(&10).unwrap()[0].is_read_only = false,
+            2 => { r.func_owner.insert(20, "FOther".into()); }
+            3 => r.func_ret.get_mut(&30).unwrap().is_reference = true,
+            4 => r.func_params.get_mut(&40).unwrap()[0].type_info = 2,
+            5 => r.func_params.get_mut(&40).unwrap()[1].type_info = 4,
+            6 => { r.const_method_ptrs.remove(&30); }
+            7 => r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(),
+            8 => { r.global_by_ptr.remove(&50); }
+            9 => r.func_params.get_mut(&20).unwrap().push(void),
+            10 => { r.func_is_method.remove(&40); }
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_assigned_value_before_getter(fault: u8) -> Self {
         let mut r = Self::default();
         r.type_by_ptr.insert(1, "FVector".into()); r.type_names.insert("FVector".into());
@@ -3334,6 +3371,32 @@ impl RefResolver {
             r.func_ret.insert(id as i64, DataType { token, ..Default::default() });
             r.func_params.insert(id as i64, vec![]);
         }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_eager_negated_cleanup_bool(fault: u8) -> Self {
+        let mut r = Self::from_test_eager_bool_calls(0x41);
+        r.type_by_ptr.insert(100, "FBox".into()); r.type_names.insert("FBox".into());
+        r.type_identity_by_ptr.insert(100, TypeIdentity { name: "FBox".into(),
+            module: if fault == 6 { "Script" } else { "" }.into(), namespace: String::new() });
+        for (ptr, name, token) in [(103, "IsEmpty", 0x41), (104, "$beh2", 0x52),
+            (105, "Container", 5), (106, "Work", 0x52)] {
+            r.func_by_ptr.insert(ptr, name.into()); r.funcid_to_ptr.insert(ptr as i32, ptr);
+            r.func_ret.insert(ptr, DataType { token, type_info: if ptr == 105 { 100 } else { 0 }, ..Default::default() });
+            r.func_params.insert(ptr, Vec::new());
+        }
+        for ptr in [103, 104] { r.func_owner.insert(ptr, "FBox".into()); r.func_is_method.insert(ptr); }
+        r.const_method_ptrs.insert(103);
+        if fault == 1 { r.func_ret.get_mut(&103).unwrap().token = 0x44; }
+        if fault == 2 { r.func_ret.get_mut(&103).unwrap().is_reference = true; }
+        if fault == 3 { r.func_by_ptr.insert(104, "Observe".into()); }
+        if fault == 4 { r.func_owner.insert(104, "FOther".into()); }
+        if fault == 5 { r.func_params.insert(104, vec![DataType::default()]); }
+        if fault == 7 { r.func_params.insert(103, vec![DataType::default()]); }
+        if fault == 8 { r.func_owner.insert(103, "FOther".into()); }
+        if fault == 9 { r.const_method_ptrs.remove(&103); }
+        if fault == 10 { r.func_ret.get_mut(&104).unwrap().token = 0x41; }
         r
     }
 

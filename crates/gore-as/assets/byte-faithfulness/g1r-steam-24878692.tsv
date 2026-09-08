@@ -69,7 +69,7 @@ GAS.Abilities.Locomotion.GA_Falling	1	0	0
 GAS.Abilities.Locomotion.GA_FallingRagdoll	1	0	0
 GAS.Abilities.Locomotion.GA_Swim	1	0	0
 GAS.Abilities.Passive.Drugs.Derived.Alcohol.GA_AlcoholDebuff	1	0	0
-GAS.Abilities.Passive.GA_PlayerPerception_CrimeRegistration	5	0	0
+GAS.Abilities.Passive.GA_PlayerPerception_CrimeRegistration	3	0	0
 GAS.Abilities.Spells.CastSpell.Derived.AlteredStates.GA_CastSpell_Control	1	0	0
 GAS.Abilities.Spells.CastSpell.Derived.Summon.Base.GA_CastSpell_SummonBase	1	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_Targetable	1	0	0
