@@ -1543,6 +1543,45 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_default_return_conditional(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(100, "FExecutor"), (101, "UAbility"), (102, "AState"), (103, "ACharacter"), (104, "FVector"), (105, "UTask")] {
+            r.type_by_ptr.insert(ptr, name.into()); r.type_names.insert(name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        let value = DataType { token: 5, type_info: 100, ..Default::default() };
+        let handle = |ptr| DataType { token: 5, type_info: ptr, is_object_handle: true, ..Default::default() };
+        for (ptr, name, owner) in [(1, "$beh0", "FExecutor"), (2, "Actor", "AState"), (3, "Radius", "AActor"),
+            (4, "opAssign", "FExecutor"), (5, "$beh2", "FExecutor")] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into()); r.func_is_method.insert(ptr);
+            r.func_params.insert(ptr, Vec::new()); r.func_ret.insert(ptr, DataType { token: 0x52, ..Default::default() });
+        }
+        r.const_method_ptrs.extend([2, 3]); r.func_ret.insert(2, handle(103));
+        r.func_ret.insert(3, DataType { token: 0x50, ..Default::default() });
+        let reference = DataType { is_reference: true, ..value.clone() };
+        r.func_params.insert(4, vec![reference.clone()]); r.func_ret.insert(4, reference);
+        r.funcid_to_ptr.insert(6, 6); r.func_by_ptr.insert(6, "Dispatch".into()); r.func_ret.insert(6, value);
+        r.func_ns.insert(6, String::new());
+        r.func_params.insert(6, vec![handle(101), handle(103), DataType { token: 0x51,
+            is_object_const: true, is_read_only: true, ..Default::default() }]);
+        match fault {
+            1 => r.func_params.get_mut(&6).unwrap()[2].token = 0x50,
+            2 => r.func_ret.get_mut(&3).unwrap().token = 0x51,
+            3 => r.func_ret.get_mut(&6).unwrap().is_reference = true,
+            4 => r.func_params.get_mut(&4).unwrap()[0].type_info = 104,
+            5 => { r.func_params.get_mut(&1).unwrap().push(DataType { token: 0x44, ..Default::default() }); }
+            6 => r.func_ret.get_mut(&5).unwrap().token = 0x41,
+            7 => r.func_owner.insert(2, "OtherState".into()).map(|_| ()).unwrap(),
+            8 => r.type_identity_by_ptr.get_mut(&100).unwrap().namespace = "Other".into(),
+            9 => { r.func_is_method.insert(6); }
+            10 => r.func_ret.get_mut(&2).unwrap().is_read_only = true,
+            11 => { r.func_ns.insert(6, "Other".into()); }
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_script_argument_copy(fault: u8) -> Self {
         let mut r = Self::default();
         for (ptr, name, namespace) in [(101, "FSource", "Qualified"), (102, "FResult", "Qualified"), (103, "FSource", "Other")] {
@@ -1883,6 +1922,35 @@ impl RefResolver {
         if fault == 10 { r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(); }
         if fault == 11 { r.func_is_method.remove(&1); }
         if fault == 12 { r.func_params.get_mut(&1).unwrap().clear(); }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_conditional_constructor_arguments(fault: u8) -> Self {
+        let mut r = Self::default();
+        r.type_by_ptr.insert(101, "FVector".into()); r.type_names.insert("FVector".into());
+        r.type_identity_by_ptr.insert(101, TypeIdentity { name: "FVector".into(), module: String::new(), namespace: String::new() });
+        for ptr in [1, 2] {
+            r.func_by_ptr.insert(ptr, "$beh0".into()); r.func_owner.insert(ptr, "FVector".into());
+            r.func_is_method.insert(ptr); r.func_ret.insert(ptr, DataType { token: 0x52, ..Default::default() });
+        }
+        r.func_params.insert(1, vec![DataType { token: 0x51, ..Default::default() }; 3]);
+        r.func_params.insert(2, vec![DataType { token: 5, type_info: 101, is_reference: true,
+            is_object_const: true, is_read_only: true, ..Default::default() }]);
+        r.ctor_arg_positions.insert("FVector".into(), HashMap::from([(3, vec![true; 3])]));
+        match fault {
+            1 => r.func_params.get_mut(&1).unwrap()[0].token = 0x50,
+            2 => r.func_params.get_mut(&1).unwrap()[0].is_reference = true,
+            3 => r.type_identity_by_ptr.get_mut(&101).unwrap().namespace = "Other".into(),
+            4 => r.func_ret.get_mut(&1).unwrap().token = 0x41,
+            5 => { r.func_is_method.remove(&1); }
+            6 => { r.func_params.get_mut(&1).unwrap().pop(); }
+            7 => { r.const_method_ptrs.insert(1); }
+            8 => { r.func_owner.insert(1, "FPoint".into()); }
+            9 => r.func_params.get_mut(&1).unwrap()[0].is_read_only = true,
+            10 => r.type_identity_by_ptr.get_mut(&101).unwrap().module = "Script".into(),
+            _ => {}
+        }
         r
     }
 
