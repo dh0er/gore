@@ -1676,6 +1676,54 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_copied_negated_boolean(token: i32, reference: bool) -> Self {
+        let mut r=Self::default();
+        r.func_by_ptr.insert(1,"Trace".into());r.funcid_to_ptr.insert(1,1);
+        r.func_ret.insert(1,DataType {token,is_reference:reference,..Default::default()});
+        r.func_params.insert(1,vec![]);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_prepared_enum_argument(fault: u8) -> Self {
+        let mut r=Self::from_test_member_chain(&[("FVector",""),("FHitResult",""),("FLinearColor",""),("UObject",""),
+            ("AActor",""),("ETraceKind",""),("ECollisionKind",""),("TArray",""),("EDrawKind","")]);
+        for (p,name) in [(1,"FVector"),(2,"FHitResult"),(3,"FLinearColor"),(4,"UObject"),(5,"AActor"),
+            (6,"ETraceKind"),(7,"ECollisionKind"),(8,"TArray"),(9,"EDrawKind")] {
+            r.type_identity_by_ptr.insert(p,TypeIdentity {name:name.into(),module:String::new(),namespace:String::new()});
+        }
+        let value=|p| DataType {token:5,type_info:p,..Default::default()};
+        let boolean=DataType {token:0x41,..Default::default()};
+        let float=DataType {token:0x50,..Default::default()};let void=DataType {token:0x52,..Default::default()};
+        let vector=DataType {is_object_const:true,is_read_only:true,..value(1)};
+        let trace=vec![DataType {is_object_handle:true,is_object_const:true,..value(4)},vector.clone(),vector,value(6),boolean.clone(),
+            DataType {is_reference:true,is_object_const:true,is_read_only:true,..value(8)},value(9),
+            DataType {is_reference:true,..value(2)},boolean.clone(),value(3),value(3),float.clone()];
+        for (p,name,owner,params,ret) in [(10,"Convert",None,vec![value(7)],value(6)),
+            (20,"$beh0",Some("FLinearColor"),vec![float;4],void.clone()),(21,"$beh0",Some("FHitResult"),vec![],void),
+            (30,"Trace",None,trace,boolean),(40,"GetLocation",Some("AActor"),vec![],value(1))] {
+            r.func_by_ptr.insert(p,name.into());r.func_params.insert(p,params);r.func_ret.insert(p,ret);
+            if let Some(owner)=owner {r.func_owner.insert(p,owner.into());r.func_is_method.insert(p);}
+        }
+        r.const_method_ptrs.insert(40);
+        r.global_by_ptr.insert(99,"__WorldContext".into());r.global_by_ptr.insert(100,"Red".into());r.global_by_ptr.insert(101,"Green".into());
+        r.temporary_arg_positions.insert("Trace".into(),HashMap::from([(11,vec![true,true,true,true,true,true,false,true,true,true,true])]));
+        r.ctor_arg_positions.insert("ETraceKind".into(),HashMap::from([(1,vec![true])]));
+        if fault==1 {r.func_ret.get_mut(&10).unwrap().is_reference=true;}
+        if fault==2 {r.func_params.get_mut(&30).unwrap()[3].type_info=7;}
+        if fault==3 {r.func_ret.get_mut(&40).unwrap().type_info=3;}
+        if fault==4 {r.const_method_ptrs.remove(&40);}
+        if fault==5 {r.func_params.get_mut(&20).unwrap()[0].token=0x51;}
+        if fault==6 {r.func_owner.insert(21,"FOtherHit".into());}
+        if fault==7 {r.func_ret.get_mut(&30).unwrap().token=0x44;}
+        if fault==8 {r.func_is_method.insert(30);}
+        if fault==9 {r.global_by_ptr.insert(99,"OtherGlobal".into());}
+        if fault==10 {r.func_params.get_mut(&30).unwrap()[1].is_read_only=false;}
+        if fault==11 {r.type_identity_by_ptr.get_mut(&6).unwrap().module="Other".into();}
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_member_chain(owners: &[(&str, &str)]) -> Self {
         let mut r = Self::default();
         for (index, (owner, field)) in owners.iter().enumerate() {
@@ -1900,6 +1948,43 @@ impl RefResolver {
         if fault == 5 { r.func_ret.get_mut(&2).unwrap().token = 0x41; }
         if fault == 6 { r.func_ret.get_mut(&1).unwrap().is_object_const = false; }
         if fault == 7 { r.type_identity_by_ptr.get_mut(&201).unwrap().namespace = "Other".into(); }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_native_psf_member_copy(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FEntry", "Name"), ("FName", ""), ("FOther", "")]);
+        for (id, name) in [(1, "FEntry"), (2, "FName"), (3, "FOther")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        r.prop_type_id.insert((1 << 1) | 1, 1);
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&[("FEntry", "Name", if fault == 1 { "FOther" } else { "FName" })], &[], None));
+        let value = DataType { token: 5, type_info: 2, ..Default::default() };
+        let reference = DataType { is_reference: true, is_object_const: true, is_read_only: true, ..value.clone() };
+        for (ptr, name, owner, ret, params) in [
+            (1, "$beh0", "FName", DataType { token: 0x52, ..Default::default() }, vec![reference.clone()]),
+            (2, "OtherName", "", value, vec![]),
+            (3, "opEquals", "FName", DataType { token: 0x41, ..Default::default() }, vec![reference]),
+        ] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_ret.insert(ptr, ret); r.func_params.insert(ptr, params);
+            if !owner.is_empty() { r.func_owner.insert(ptr, owner.into()); r.func_is_method.insert(ptr); }
+        }
+        r.const_method_ptrs.insert(3);
+        match fault {
+            2 => { r.func_params.get_mut(&1).unwrap()[0].type_info = 3; },
+            3 => { r.func_params.get_mut(&1).unwrap()[0].is_reference = false; },
+            4 => { r.func_params.get_mut(&1).unwrap()[0].is_object_const = false; },
+            5 => { r.func_params.get_mut(&1).unwrap()[0].is_read_only = false; },
+            6 => { r.func_params.get_mut(&1).unwrap()[0].is_object_handle = true; },
+            7 => { r.func_owner.insert(1, "FOther".into()); },
+            8 => { r.func_ret.get_mut(&1).unwrap().is_reference = true; },
+            9 => { r.func_is_method.remove(&1); },
+            10 => { r.const_method_ptrs.insert(1); },
+            11 => { r.prop_type_id.insert((1 << 1) | 1, 3); },
+            12 => { r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(); },
+            13 => { r.type_identity_by_ptr.get_mut(&2).unwrap().namespace = "Other".into(); },
+            _ => {},
+        }
         r
     }
 
@@ -3436,6 +3521,20 @@ impl RefResolver {
         r
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_test_reused_cast_handle(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("AGoblin", ""), ("AOther", "")]);
+        for (id, name) in [(1, "AGoblin"), (2, "AOther")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: name.into(), module: "Creatures".into(), namespace: String::new() });
+        }
+        r.func_by_ptr.insert(2, "opCast".into());
+        if fault != 1 { r.func_is_method.insert(2); }
+        r.func_ret.insert(2, DataType { token: if fault == 2 { 0x41 } else { 0x52 }, is_reference: fault == 3, ..Default::default() });
+        let argument = DataType { token: if fault == 4 { 0x44 } else { 0x3b }, is_reference: fault != 5,
+            is_object_handle: fault == 6, ..Default::default() };
+        r.func_params.insert(2, match fault { 7 => vec![], 8 => vec![argument.clone(), argument], _ => vec![argument] });
+        r
+    }
     #[cfg(test)]
     pub(crate) fn from_test_returned_loop_handle(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("AGothicCharacter", ""), ("AActor", ""),

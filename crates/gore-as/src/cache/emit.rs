@@ -1636,7 +1636,9 @@ fn emit_function_ctor(
     named_sites.extend(named_value_receiver_before_argument(f, refs, &rvo_producers, &rvo_consumers));
     let (const_value_arguments, discarded_value_calls, operator_value_arguments) =
         short_rvo_lifetimes(f, refs, &rvo_producers, &rvo_consumers);
+    let named_native_member_copies = native_member_copies_before_comparison(f, refs);
     let mut retained_values = retained_value_arguments(f, &fc, refs, &rvo_producers, &rvo_consumers);
+    retained_values.extend(named_native_member_copies.iter().copied());
     retained_values.extend(constructed_return_values.iter().copied());
     hoisted.extend(retained_values.iter().copied());
     statement_producers.extend(retained_values.iter().copied());
@@ -2046,6 +2048,7 @@ fn emit_function_ctor(
     let body = fold_enum_round_trips(&body, fields, &path_roots, refs);
     pass_trace("fold_enum_round_trips", &body);
     let mut member_copy_named = member_copy_named_slots(f);
+    member_copy_named.extend(named_native_member_copies.iter().copied());
     // A scoped field copy must keep its local. Repeated constructions can
     // instead be separate expression temporaries reusing the same slot.
     member_copy_named.extend(scope_exit_destroyed_slots(f, refs).into_iter()
@@ -2458,6 +2461,7 @@ fn emit_function_ctor(
         pass_trace("drop_redundant_conversions", &body);
         let mut assigned_tail = assignment_write_counts(f, refs);
         assigned_tail.extend(repeated_handle_alias_assignment_tails(&body, &repeated_aliases));
+        assigned_tail.extend(reused_cast_handle_assignment_tails(&body, f, refs));
         let literal_value_lives = retained_literal_value_locals(f, refs, &body);
         let value_locals = locals.iter().filter(|(slot, _)| !literal_value_lives.contains(*slot))
             .map(|(slot, ty)| (*slot, ty.clone())).collect();
@@ -2877,7 +2881,7 @@ fn emit_function_ctor(
             &unnamed_value_defs(f, refs, &rvo_producers, &rvo_consumers)
                 .union(&immediately_consumed_defs(f))
                 .copied()
-                .chain(pushed_bool_literal_defs(f, &rendered))
+                .chain(pushed_bool_literal_defs(f, &rendered, refs))
                 .chain(rvo_temporaries.iter().copied().map(|slot| (slot, 1)))
                 .chain(operator_value_arguments.iter().copied().map(|slot| (slot, 1)))
                 .chain(
@@ -2944,7 +2948,7 @@ fn emit_function_ctor(
             &unnamed_value_defs(f, refs, &rvo_producers, &rvo_consumers)
                 .union(&immediately_consumed_defs(f))
                 .copied()
-                .chain(pushed_bool_literal_defs(f, &rendered))
+                .chain(pushed_bool_literal_defs(f, &rendered, refs))
                 .chain(rvo_temporaries.iter().copied().map(|slot| (slot, 1)))
                 .chain(operator_value_arguments.iter().copied().map(|slot| (slot, 1)))
                 .chain(
@@ -10937,6 +10941,59 @@ fn read_once_at(lines: &[&str], at: usize, reader: usize, name: &str) -> bool {
     true
 }
 
+/// Two cast copies reuse one handle across a loop; no release opens a new life.
+/// Feed the existing assignment-tail gate only when the text still has both writes.
+fn reused_cast_handle_assignment_tails(body: &str, f: &Func, refs: &RefResolver) -> HashMap<i32, usize> {
+    let Ok(code) = disassemble(&f.bytecode) else { return HashMap::new(); };
+    if code.iter().any(|i| i.op.name == "JMPP") { return HashMap::new(); }
+    let w = |i: &Instr| i.words.first().map(|v| *v as i16 as i32);
+    let target = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+    let object = |slot| { let mut entries = f.obj_locals.iter().filter(|(s, _)| *s == slot);
+        let p = entries.next()?.1; entries.next().is_none().then(|| refs.type_identity_by_ptr(p)).flatten() };
+    let lines: Vec<_> = body.lines().collect();
+    f.obj_locals.iter().filter_map(|(slot, _)| {
+        let ty = object(*slot)?;
+        if *slot <= 0 || !is_object_handle_type(&ty.name) || !first_top_level_assignment_before_read(body, *slot) { return None; }
+        let uses: Vec<_> = code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(slot)).collect();
+        if uses.iter().any(|(_, i)| !matches!(i.op.name, "RefCpyV" | "PshVPtr")) { return None; }
+        let writes: Vec<_> = uses.iter().filter(|(_, i)| i.op.name == "RefCpyV").map(|(at, _)| *at).collect();
+        let [first, second] = writes.as_slice() else { return None; };
+        if uses.first()?.0 != *first { return None; }
+        for at in [*first, *second] {
+            let c = code.get(at.checked_sub(9)?..=at)?;
+            if c.iter().map(|i| i.op.name).ne(["CmpPtrNull", "JZ", "TYPEID", "PSF", "PshVPtr", "CALLSYS", "JMP", "ClrVPtr", "PshVPtr", "RefCpyV"])
+                || w(&c[0]) != w(&c[4]) || w(&c[3]) != w(&c[7]) || w(&c[3]) != w(&c[8])
+                || w(&c[3]).is_none_or(|s| s <= 0 || s == *slot) || object(w(&c[3])?)? != ty
+                || target(&c[1]) != Some(c[7].offset_dw as i64) || target(&c[6]) != Some(c[8].offset_dw as i64) { return None; }
+            let cast = *c[5].qwords.first()? as i64;
+            let [argument] = refs.func_params_by_ptr(cast)? else { return None; };
+            let ret = refs.func_ret_by_ptr(cast)?;
+            if refs.func_by_ptr(cast) != Some("opCast") || !refs.is_method_by_ptr(cast)
+                || ret.token != 0x52 || ret.is_reference || argument.token != 0x3b
+                || !argument.is_reference || argument.is_object_handle { return None; }
+            let tid = *c[2].dwords.first()? as i32;
+            if tid & 0x6000_0000 != 0x4000_0000 || refs.type_identity_by_id(tid & !0x6000_0000)? != ty { return None; }
+            if code.iter().any(|i| i.op.name.starts_with('J') && target(i).is_some_and(|t|
+                t > c[0].offset_dw as i64 && t <= c[9].offset_dw as i64
+                    && i.offset_dw != c[1].offset_dw && i.offset_dw != c[6].offset_dw)) { return None; }
+        }
+        // Only terminal exits may bypass the first initialization. Require the
+        // later write inside a real raw backedge even while text still says if.
+        if code[..*first].iter().any(|i| i.op.name.starts_with('J') && target(i).is_some_and(|t|
+            t > code[*first].offset_dw as i64 && !code.iter().any(|r| r.offset_dw as i64 == t && r.op.name == "RET")))
+            || !code[*second + 1..].iter().any(|i| i.op.name.starts_with('J') && target(i).is_some_and(|t|
+                t > code[*first].offset_dw as i64 && t <= code[*second - 9].offset_dw as i64)) { return None; }
+        let name = format!("local_{slot}");
+        let definitions: Vec<_> = lines.iter().enumerate().filter(|(_, l)| is_definition_line(l, &name)).map(|(at, _)| at).collect();
+        let [a, b] = definitions.as_slice() else { return None; };
+        if *b >= block_span(&lines, *a).1 || indent_of(lines[*b]).len() <= indent_of(lines[*a]).len() { return None; }
+        let rhs = assignment_rhs_for(lines[*a], &name)?;
+        if assignment_rhs_for(lines[*b], &name)? != rhs { return None; }
+        let cast = if wraps_whole_expression(rhs) { &rhs[1..rhs.len() - 1] } else { rhs };
+        if !cast.strip_prefix(&format!("Cast<{}>", ty.name)).is_some_and(wraps_whole_expression) { return None; }
+        Some((*slot, 1))
+    }).collect()
+}
 /// A closed three-write handle keeps its two later stores behind the first declaration.
 /// The declaration engine also requires exactly three nonliteral definitions in the text.
 fn repeated_handle_alias_assignment_tails(body: &str, slots: &HashSet<i32>) -> HashMap<i32, usize> {
@@ -16049,6 +16106,75 @@ fn named_value_operands_before_return(f: &Func, refs: &RefResolver, producers: &
     witness.into_iter().flatten().collect()
 }
 
+/// A native local member was copy-constructed before a separate comparison operand.
+/// Reuse copy-construction metadata; require closed destination lives so retaining
+/// the slot cannot protect another assignment or a foreach reference member read.
+fn native_member_copies_before_comparison(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    let copied = copy_constructed_slots(f, refs);
+    let word = |i: &Instr| i.words.first().map(|w| *w as i16 as i32);
+    let ptr = |i: &Instr| i.qwords.first().map(|p| *p as i64);
+    let local = |slot| {
+        let mut found = f.obj_locals.iter().filter(|(s, _)| *s == slot);
+        let ty = found.next()?.1;
+        found.next().is_none().then_some(ty)
+    };
+    code.windows(4).enumerate().filter_map(|(at, copy)| {
+        if copy.iter().map(|i| i.op.name).ne(["PSF", "ADDSi", "PSF", "CALLSYS"]) { return None; }
+        let (source, named) = (word(&copy[0])?, word(&copy[2])?);
+        if source <= 0 || named <= 0 || source == named || !copied.contains(&named) { return None; }
+        let owner = refs.type_identity_by_ptr(local(source)?)?;
+        let ty = local(named)?;
+        let value = refs.type_identity_by_ptr(ty)?;
+        let tid = *copy[1].dwords.first()? as i32;
+        let (field, old_owner) = refs.member_identity(tid, word(&copy[1])?)?;
+        if !owner.module.is_empty() || !owner.namespace.is_empty()
+            || !value.module.is_empty() || !value.namespace.is_empty()
+            || !matches!(value.name.bytes().next(), Some(b'F' | b'T'))
+            || refs.type_identity_by_id(tid)? != owner || refs.type_identity_by_id(old_owner)? != owner
+            || refs.native_field_value_type(&owner.name, field).or_else(|| refs.native_field_type(&owner.name, field))?
+                != value.name { return None; }
+        let reference = |t: &super::types::DataType| t.token == 5 && t.type_info == ty
+            && t.is_reference && t.is_object_const && t.is_read_only
+            && !t.is_object_handle && !t.is_auto && !t.if_handle_then_const;
+        let constructor = ptr(&copy[3])?;
+        let [input] = refs.func_params_by_ptr(constructor)? else { return None; };
+        let ret = refs.func_ret_by_ptr(constructor)?;
+        if !reference(input) || refs.func_owner_by_ptr(constructor) != Some(value.name.as_str())
+            || !refs.is_method_by_ptr(constructor) || refs.is_const_method_by_ptr(constructor)
+            || ret.token != 0x52 || ret.is_reference || ret.is_object_handle { return None; }
+        let method = code.get(at + 5)?.op.name == "PshVPtr";
+        let getter_at = at + if method { 6 } else { 5 };
+        let tail = code.get(getter_at..getter_at + 4)?;
+        if code[at + 4].op.name != "PSF"
+            || tail.iter().map(|i| i.op.name).ne(["CALLSYS", "PSF", "PSF", "CALLSYS"])
+            || word(&tail[2]) != Some(named) { return None; }
+        let other = word(&code[at + 4])?;
+        if other <= 0 || [source, named].contains(&other) || word(&tail[1]) != Some(other)
+            || local(other)? != ty { return None; }
+        let getter = ptr(&tail[0])?; let compare = ptr(&tail[3])?;
+        let result = refs.func_ret_by_ptr(getter)?;
+        let [operand] = refs.func_params_by_ptr(compare)? else { return None; };
+        let compared = refs.func_ret_by_ptr(compare)?;
+        if result.token != 5 || result.type_info != ty || result.is_reference || result.is_object_handle
+            || !refs.func_params_by_ptr(getter)?.is_empty() || refs.is_method_by_ptr(getter) != method
+            || (method && (!refs.is_const_method_by_ptr(getter) || refs.func_owner_by_ptr(getter).is_none()))
+            || refs.func_by_ptr(compare) != Some("opEquals") || refs.func_owner_by_ptr(compare) != Some(value.name.as_str())
+            || !refs.is_method_by_ptr(compare) || !refs.is_const_method_by_ptr(compare)
+            || !reference(operand) || compared.token != 0x41 || compared.is_reference || compared.is_object_handle
+            { return None; }
+        for (slot, positions) in [(named, [at + 2, getter_at + 2]), (other, [at + 4, getter_at + 1])] {
+            if code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&slot))
+                .map(|(i, _)| i).ne(positions) { return None; }
+        }
+        if code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+            let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+            target > copy[0].offset_dw as i64 && target <= tail[3].offset_dw as i64
+        }))) { return None; }
+        Some(named)
+    }).collect()
+}
+
 /// A value with one physical life that vanilla kept beyond its consuming expression.
 /// Require exactly one creator, one consumer, and no address use besides those and releases.
 /// Boundaries are an integer-result branch, another value's final return copy, or
@@ -17152,6 +17278,47 @@ fn spilled_boolean_names(f: &Func, refs: &RefResolver) -> HashSet<i32> {
         {
             continue;
         }
+        // A named bool may be copied to a separate negation scratch instead of
+        // reloaded for a branch. Every life of this protected source must agree.
+        let copied_to_negation = (|| {
+            if f.obj_locals.iter().any(|(s,_)| *s == slot) || instrs.iter().any(|i| i.op.name == "JMPP") { return None; }
+            let uses: Vec<_> = instrs.iter().enumerate().filter(|(_,i)|
+                super::bytediff::addressed_slots(i).contains(&slot)).map(|(i,_)| i).collect();
+            if uses.is_empty() || uses.len() % 2 != 0 { return None; }
+            for pair in uses.chunks_exact(2) {
+                let (write,read) = (pair[0],pair[1]);
+                let copy = &instrs[read];
+                let target = w0(copy);
+                if read != write+1 || copy.op.name != "CpyVtoV4" || target <= 0 || target == slot
+                    || copy.words.get(1).map(|v| *v as i16 as i32) != Some(slot)
+                    || !instrs.get(read+1).is_some_and(|i| i.op.name == "NOT" && w0(i) == target) { return None; }
+                let made = match instrs[write].op.name {
+                    "CpyRtoV4" if w0(&instrs[write]) == slot => write.checked_sub(1)?,
+                    // A later assignment copies the call's scratch into the same name.
+                    "CpyVtoV4" if w0(&instrs[write]) == slot => {
+                        let scratch = *instrs[write].words.get(1)? as i16 as i32;
+                        if scratch <= 0 || scratch == slot || scratch == target || write < 2
+                            || instrs[write-1].op.name != "CpyRtoV4" || w0(&instrs[write-1]) != scratch { return None; }
+                        write-2
+                    }
+                    _ => return None,
+                };
+                let call = &instrs[made];
+                let ret = match call.op.name {
+                    "CALLSYS" => refs.func_ret_by_ptr(*call.qwords.first()? as i64),
+                    "CALL" | "CALLINTF" | "CALLBND" => refs.func_ret_by_id(*call.dwords.first()? as i32),
+                    _ => None,
+                }?;
+                if ret.token != 0x41 || ret.type_info != 0 || ret.is_reference || ret.is_object_handle
+                    || ret.is_object_const || ret.is_read_only || ret.is_auto || ret.if_handle_then_const
+                    || instrs.iter().any(|i| i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                        let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                        target > call.offset_dw as i64 && target <= instrs[read+1].offset_dw as i64
+                    })) { return None; }
+            }
+            Some(())
+        })().is_some();
+        if copied_to_negation { out.insert(slot); continue; }
         let reloaded = instrs
             .get(at + 1)
             .is_some_and(|next| next.op.name == "CpyVtoR1" && w0(next) == slot)
@@ -18041,9 +18208,57 @@ fn writes_destination(op: &str) -> bool {
 /// A literal stored directly into its by-value push is an argument expression.
 /// Match the rendered literal and its full name; other slot lives may be calls,
 /// but a named copy, wider literal or address use makes the slot ambiguous.
-fn pushed_bool_literal_defs(f: &Func, body: &str) -> HashSet<(i32, usize)> {
+fn pushed_bool_literal_defs(f: &Func, body: &str, refs: &RefResolver) -> HashSet<(i32, usize)> {
     let Ok(instrs) = disassemble(&f.bytecode) else { return HashSet::new(); };
     let w0 = |ins: &Instr| ins.words.first().map(|w| *w as i16 as i32);
+    // A reused negation scratch may also carry direct literal arguments and
+    // early returns. Prove every access before allowing its rendered lives.
+    let closed_bool_scratch = |slot| {
+        if f.ret.token != 0x41 || f.ret.type_info != 0 || f.ret.is_reference || f.ret.is_object_handle
+            || f.obj_locals.iter().any(|(s, _)| *s == slot)
+            || instrs.iter().any(|i| i.op.name == "JMPP") { return false; }
+        let uses: Vec<_> = instrs.iter().enumerate().filter(|(_, i)|
+            super::bytediff::addressed_slots(i).contains(&slot)).map(|(at, _)| at).collect();
+        let mut cursor = 0;
+        while cursor < uses.len() {
+            let start = uses[cursor];
+            let (count, end) = match instrs[start].op.name {
+                "SetV1" if instrs[start].dwords.first().is_some_and(|v| *v <= 1) => {
+                    let Some(&end) = uses.get(cursor + 1) else { return false; };
+                    if !((instrs[end].op.name == "PshV4" && end == start + 1)
+                        || instrs[end].op.name == "CpyVtoR4") { return false; }
+                    if instrs[end].op.name == "CpyVtoR4" {
+                        let cleanup = &instrs[start + 1..end];
+                        if cleanup.len() % 2 != 0 || cleanup.chunks_exact(2).any(|pair| {
+                            let ptr = pair[1].qwords.first().copied().unwrap_or(0) as i64;
+                            pair[0].op.name != "PSF" || pair[1].op.name != "CALLSYS"
+                                || refs.func_by_ptr(ptr) != Some("$beh2") || !refs.is_method_by_ptr(ptr)
+                                || !refs.func_params_by_ptr(ptr).is_some_and(|p| p.is_empty())
+                        }) { return false; }
+                        let Some(exit) = instrs.get(end + 1) else { return false; };
+                        if exit.op.name != "RET" && !(exit.op.name == "JMP" && exit.dwords.first().is_some_and(|d| {
+                            let target = exit.offset_dw as i64 + 2 + *d as i32 as i64;
+                            instrs.iter().any(|i| i.offset_dw as i64 == target && i.op.name == "RET")
+                        })) { return false; }
+                    }
+                    (2, end)
+                }
+                "CpyVtoV4" if w0(&instrs[start]) == Some(slot) => {
+                    let Some(tail) = uses.get(cursor + 1..cursor + 3) else { return false; };
+                    if tail != [start + 1, start + 2] || instrs[tail[0]].op.name != "NOT"
+                        || instrs[tail[1]].op.name != "CpyVtoR1" { return false; }
+                    (3, tail[1])
+                }
+                _ => return false,
+            };
+            if instrs.iter().any(|i| i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                target > instrs[start].offset_dw as i64 && target <= instrs[end].offset_dw as i64
+            })) { return false; }
+            cursor += count;
+        }
+        !uses.is_empty()
+    };
     let mut literals = HashSet::new();
     let mut refused = HashSet::new();
     for (at, ins) in instrs.iter().enumerate() {
@@ -18064,7 +18279,7 @@ fn pushed_bool_literal_defs(f: &Func, body: &str) -> HashSet<(i32, usize)> {
         let (name, value) = declaration_with_initializer(line).map(|(_, n, v)| (n, v))
             .or_else(|| slot_store(line))?;
         let key = slot_and_life(&name)?;
-        if !matches!(value.as_str(), "true" | "false") || refused.contains(&key.0)
+        if !matches!(value.as_str(), "true" | "false") || refused.contains(&key.0) && !closed_bool_scratch(key.0)
             || !literals.contains(&(key.0, value == "true"))
             || declared_type(&lines, &name).as_deref() != Some("bool")
         { return None; }
@@ -23696,6 +23911,98 @@ fn enum_named_literal_slots(f: &Func, refs: &RefResolver) -> HashMap<i32, String
     out
 }
 
+/// A native enum local is complete before the later argument preparations.
+/// Match all direct/copied lives, then reuse the enum seed and named-site gates.
+fn prepared_enum_argument_sites(f: &Func, refs: &RefResolver) -> HashMap<i32,(String,String)> {
+    let Ok(code)=disassemble(&f.bytecode) else { return HashMap::new(); };
+    if code.iter().any(|i| i.op.name=="JMPP") { return HashMap::new(); }
+    let w=|i:&Instr,n:usize| i.words.get(n).map(|v| *v as i16 as i32);
+    let ptr=|i:&Instr| i.qwords.first().map(|v| *v as i64);
+    let plain=|t:&super::types::DataType,token,p| t.token==token && t.type_info==p && !t.is_reference
+        && !t.is_object_handle && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+    let uses=|s| code.iter().enumerate().filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&s)).map(|(at,_)| at).collect::<Vec<_>>();
+    let object=|s| {
+        let mut matches=f.obj_locals.iter().filter(|(slot,_)| *slot==s).map(|(_,p)| *p);
+        let p=matches.next()?;matches.next().is_none().then_some(p)
+    };
+    let mut out=HashMap::new();
+    for (at,capture) in code.iter().enumerate().filter(|(_,i)| i.op.name=="CpyRtoV4") {
+        let witness=(|| {
+            let producer=code.get(at.checked_sub(1)?)?;
+            if producer.op.name!="CALLSYS" { return None; }
+            let convert=ptr(producer)?;let enumeration=refs.func_ret_by_ptr(convert)?;
+            let identity=refs.type_identity_by_ptr(enumeration.type_info)?;
+            if !plain(enumeration,5,enumeration.type_info) || !is_enum(&identity.name)
+                || !identity.module.is_empty() || !identity.namespace.is_empty() || refs.is_method_by_ptr(convert) { return None; }
+            let [input]=refs.func_params_by_ptr(convert)? else { return None; };
+            if !plain(input,5,input.type_info) || !is_enum(&input.base_name(refs)) { return None; }
+            let source=w(capture,0)?;
+            let slot=code.get(at+1).filter(|i| i.op.name=="CpyVtoV4" && w(i,1)==Some(source)).and_then(|i| w(i,0)).unwrap_or(source);
+            if slot<=0 || f.obj_locals.iter().any(|(s,_)| *s==slot) { return None; }
+            let accesses=uses(slot);
+            if accesses.is_empty() || accesses.len()%2!=0 { return None; }
+            for pair in accesses.chunks_exact(2) {
+                let (write,pushed)=(pair[0],pair[1]);
+                if code[pushed].op.name!="PshV4" || pushed<=write+1 { return None; }
+                let made=match code[write].op.name {
+                    "CpyRtoV4" if w(&code[write],0)==Some(slot) => write.checked_sub(1)?,
+                    "CpyVtoV4" if w(&code[write],0)==Some(slot) && write>=2 => {
+                        let temp=w(&code[write],1)?;
+                        if temp<=0 || temp==slot || code[write-1].op.name!="CpyRtoV4"
+                            || w(&code[write-1],0)!=Some(temp) || uses(temp)!=[write-1,write] { return None; }
+                        write-2
+                    }
+                    _=>return None,
+                };
+                if made<2 || code[made].op.name!="CALLSYS" || ptr(&code[made])!=Some(convert)
+                    || code[made-2].op.name!="SetV1" || code[made-1].op.name!="PshV4"
+                    || w(&code[made-2],0)!=w(&code[made-1],0) { return None; }
+                // Only argument pushes/literals and fully typed default or literal
+                // value constructions may stand between the name and its push.
+                for j in write+1..pushed {
+                    match code[j].op.name {
+                        "PshC4"|"PshGPtr"|"PSF"|"PshV4"=>{},
+                        "SetV1" if code.get(j+1).is_some_and(|i| i.op.name=="PshV4" && w(i,0)==w(&code[j],0))=>{},
+                        "CALLSYS"=>{
+                            let p=ptr(&code[j])?;let params=refs.func_params_by_ptr(p)?;
+                            let dst=code.get(j.checked_sub(1)?)?;let t=object(w(dst,0)?)?;
+                            if dst.op.name!="PSF" || refs.func_by_ptr(p)!=Some("$beh0") || !refs.is_method_by_ptr(p)
+                                || !plain(refs.func_ret_by_ptr(p)?,0x52,0) || refs.func_owner_by_ptr(p)!=Some(refs.type_by_ptr(t)?)
+                                || params.len()>4 || j<write+2+params.len() || params.iter().any(|p| !plain(p,0x50,0))
+                                || code[j-1-params.len()..j-1].iter().any(|i| i.op.name!="PshC4") { return None; }
+                        }
+                        _=>return None,
+                    }
+                }
+                let tail=if code.get(pushed..pushed+5)?.iter().map(|i| i.op.name).eq(["PshV4","PSF","PSF","PshGPtr","CALLSYS"])
+                    { &code[pushed..pushed+5] } else { code.get(pushed..pushed+8)? };
+                if tail.len()==8 && tail.iter().map(|i| i.op.name).ne(["PshV4","PSF","PshVPtr","CALLSYS","PSF","PSF","PshGPtr","CALLSYS"]) { return None; }
+                let end=pushed+tail.len()-1;let call=ptr(&code[end])?;let params=refs.func_params_by_ptr(call)?;
+                if refs.is_method_by_ptr(call) || !plain(refs.func_ret_by_ptr(call)?,0x41,0) || params.len()<4
+                    || !plain(&params[3],5,enumeration.type_info) || params[0].token!=5 || !params[0].is_object_handle || params[0].is_reference
+                    || refs.global_by_ptr(ptr(&tail[tail.len()-2])?)!=Some("__WorldContext") { return None; }
+                let vector=params[1].type_info;
+                if !is_value_struct_type(&refs.type_identity_by_ptr(vector)?.name) { return None; }
+                if params[1..3].iter().any(|p| p.token!=5 || p.type_info!=vector || p.is_reference || p.is_object_handle
+                    || !p.is_object_const || !p.is_read_only || p.is_auto || p.if_handle_then_const)
+                    || object(w(&tail[tail.len()-4],0)?)!=Some(vector) || object(w(&tail[tail.len()-3],0)?)!=Some(vector) { return None; }
+                if tail.len()==8 {
+                    let getter=ptr(&tail[3])?;let receiver=w(&tail[2],0)?;
+                    if w(&tail[1],0)!=w(&tail[4],0) || receiver<=0 || !is_object_handle_type(refs.type_by_ptr(object(receiver)?)?)
+                        || !refs.is_method_by_ptr(getter) || !refs.is_const_method_by_ptr(getter) || !refs.func_params_by_ptr(getter)?.is_empty()
+                        || !plain(refs.func_ret_by_ptr(getter)?,5,vector) { return None; }
+                }
+                if code.iter().any(|i| i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                    let target=i.offset_dw as i64+2+*d as i32 as i64;
+                    target>code[made-2].offset_dw as i64 && target<=code[end].offset_dw as i64
+                })) { return None; }
+            }
+            Some((slot,(enumeration.base_name(refs),refs.func_by_ptr(convert)?.to_owned())))
+        })();
+        if let Some((slot,proof))=witness { out.insert(slot,proof); }
+    }
+    out
+}
 fn enum_argument_slots(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashMap::new();
@@ -23815,6 +24122,7 @@ fn enum_argument_slots(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
             out.entry(slot).or_insert(ty);
         }
     }
+    for (slot,(ty,_)) in prepared_enum_argument_sites(f, refs) { out.entry(slot).or_insert(ty); }
     out
 }
 
@@ -24363,6 +24671,7 @@ fn named_value_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, String)> {
     }
     out.extend(enum_reference_copy_initializers(f, refs));
     out.extend(named_index_field_sites(f, refs));
+    out.extend(prepared_enum_argument_sites(f, refs).into_iter().map(|(slot,(_,callee))| (slot,callee)));
     out.extend(eager_clamp_bound_sites(f, refs));
     out.extend(ordered_vector_argument_sites(f, refs));
     out.extend(assigned_value_before_getter_sites(f, refs));
@@ -31942,6 +32251,43 @@ mod literal_value_lifetime_tests {
         assert!(!source.contains("__gore_"), "{source}");
     }
 
+    #[test]
+    fn native_member_copy_before_comparison_survives_the_complete_pipeline() {
+        let mut f = function(&[("PSF", &[62]), ("ADDSi", &[0]), ("PSF", &[65]), ("CALLSYS", &[]),
+            ("PSF", &[67]), ("CALLSYS", &[]), ("PSF", &[67]), ("PSF", &[65]), ("CALLSYS", &[]),
+            ("CpyRtoV4", &[5]), ("CpyVtoR4", &[5]), ("RET", &[0])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, value) in [(1, 1), (3, 1), (5, 2), (8, 3)] {
+            f.bytecode[code[at].offset_dw + 1] = value;
+        }
+        f.ret.token = 0x41;
+        f.obj_locals = vec![(62, 1), (65, 2), (67, 2)];
+        let refs = RefResolver::from_test_native_psf_member_copy(0);
+        assert_eq!(super::native_member_copies_before_comparison(&f, &refs), HashSet::from([65]));
+        let mut source = String::new();
+        super::emit_function(&mut source, &f, &refs, false, false, 0);
+        let copy = "FName local_65 = local_62.Name;";
+        assert!(source.contains(copy), "{source}");
+        assert!(source.contains("local_65 == OtherName()"), "{source}");
+        assert!(source.find(copy).unwrap() < source.find("local_65 == OtherName()").unwrap(), "{source}");
+        assert!(!source.contains("local_62.Name == OtherName()"), "{source}");
+        for fault in 1..=13 {
+            assert!(super::native_member_copies_before_comparison(&f,
+                &RefResolver::from_test_native_psf_member_copy(fault)).is_empty(), "metadata {fault}");
+        }
+        // The global-filter foreach reference is not a declared native source local.
+        let mut reference_source = f.clone(); reference_source.obj_locals.remove(0);
+        assert!(super::native_member_copies_before_comparison(&reference_source, &refs).is_empty());
+        let mut wrong_source = f.clone(); wrong_source.obj_locals[0].1 = 3;
+        assert!(super::native_member_copies_before_comparison(&wrong_source, &refs).is_empty());
+        let mut reused = f.clone(); reused.bytecode.extend(function(&[("PSF", &[65])]).bytecode);
+        assert!(super::native_member_copies_before_comparison(&reused, &refs).is_empty());
+        let mut entered = function(&[("JMP", &[])]);
+        entered.bytecode[1] = code[2].offset_dw as i32;
+        entered.bytecode.extend(f.bytecode.clone()); entered.obj_locals = f.obj_locals.clone();
+        assert!(super::native_member_copies_before_comparison(&entered, &refs).is_empty());
+    }
+
     fn copied_integer_comparison_fixture() -> Func {
         let mut f = function(&[
             ("CALL", &[]), ("CpyRtoV4", &[2]), ("CALLSYS", &[]), ("STOREOBJ", &[6]),
@@ -32604,23 +32950,62 @@ mod literal_value_lifetime_tests {
         ];
         let body = "    bool local_3 = false;\n    Trace(local_3);\n";
         let f = function(&ops);
-        let candidates = super::pushed_bool_literal_defs(&f, body);
+        let candidates = super::pushed_bool_literal_defs(&f, body, &RefResolver::default());
         assert_eq!(candidates, HashSet::from([(3, 1)]));
         let folded = inline_unnamed_value_temporaries(body, &candidates, &HashSet::new(),
             &HashSet::new(), &RefResolver::default(), &HashSet::new(), &HashSet::new(),
             &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
         assert_eq!(folded, "    Trace(false);\n");
         for source in [body.replace("false", "true"), body.replace("bool ", "int ")] {
-            assert!(super::pushed_bool_literal_defs(&f, &source).is_empty());
+            assert!(super::pushed_bool_literal_defs(&f, &source, &RefResolver::default()).is_empty());
         }
         for extra in [("PSF", &[3][..]), ("SetV4", &[3][..]), ("CpyVtoV4", &[3, 4][..])] {
             let mut other = ops.clone(); other.push(extra);
-            assert!(super::pushed_bool_literal_defs(&function(&other), body).is_empty());
+            assert!(super::pushed_bool_literal_defs(&function(&other), body, &RefResolver::default()).is_empty());
         }
         let mut delayed = ops.clone(); delayed.insert(3, ("PshC4", &[]));
-        assert!(super::pushed_bool_literal_defs(&function(&delayed), body).is_empty());
+        assert!(super::pushed_bool_literal_defs(&function(&delayed), body, &RefResolver::default()).is_empty());
         let mut address = ops; address[3] = ("PSF", &[3]);
-        assert!(super::pushed_bool_literal_defs(&function(&address), body).is_empty());
+        assert!(super::pushed_bool_literal_defs(&function(&address), body, &RefResolver::default()).is_empty());
+    }
+
+    #[test]
+    fn literal_argument_survives_closed_negation_and_return_scratch_lives() {
+        let mut f = function(&[("CpyVtoV4", &[3, 8]), ("NOT", &[3]), ("CpyVtoR1", &[3]),
+            ("SetV1", &[3]), ("CpyVtoR4", &[3]), ("JMP", &[]),
+            ("SetV1", &[3]), ("PshV4", &[3]),
+            ("CpyVtoV4", &[3, 8]), ("NOT", &[3]), ("CpyVtoR1", &[3]), ("RET", &[0])]);
+        f.ret.token = 0x41;
+        let code = disassemble(&f.bytecode).unwrap();
+        f.bytecode[code[6].offset_dw + 1] = 1;
+        f.bytecode[code[5].offset_dw + 1] = code[11].offset_dw as i32 - code[5].offset_dw as i32 - 2;
+        let body = "    bool local_3_2 = true;\n    Trace(local_3_2);\n";
+        let candidates = super::pushed_bool_literal_defs(&f, body, &RefResolver::default());
+        assert_eq!(candidates, HashSet::from([(3, 2)]));
+        assert_eq!(inline_unnamed_value_temporaries(body, &candidates, &HashSet::new(),
+            &HashSet::new(), &RefResolver::default(), &HashSet::new(), &HashSet::new(),
+            &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new()),
+            "    Trace(true);\n");
+        for op in [("PSF", &[3][..]), ("PshV4", &[3][..]), ("SetV4", &[3][..]),
+            ("CpyVtoV4", &[4, 3][..]), ("NOT", &[3][..])] {
+            let mut other = f.clone(); other.bytecode.extend(function(&[op]).bytecode);
+            assert!(super::pushed_bool_literal_defs(&other, body, &RefResolver::default()).is_empty(), "{}", op.0);
+        }
+        let mut other = f.clone(); other.ret.token = 0x44;
+        assert!(super::pushed_bool_literal_defs(&other, body, &RefResolver::default()).is_empty());
+        let mut other = f.clone(); other.obj_locals.push((3, 1));
+        assert!(super::pushed_bool_literal_defs(&other, body, &RefResolver::default()).is_empty());
+        let mut other = f.clone(); other.bytecode[code[3].offset_dw + 1] = 2;
+        assert!(super::pushed_bool_literal_defs(&other, body, &RefResolver::default()).is_empty());
+        let mut other = f.clone(); other.bytecode[code[5].offset_dw + 1] = code[6].offset_dw as i32 - code[5].offset_dw as i32 - 2;
+        assert!(super::pushed_bool_literal_defs(&other, body, &RefResolver::default()).is_empty());
+        let mut other = f.clone();
+        other.bytecode.splice(code[4].offset_dw..code[4].offset_dw, function(&[("SUSPEND", &[])]).bytecode);
+        assert!(super::pushed_bool_literal_defs(&other, body, &RefResolver::default()).is_empty());
+        let mut other = f.clone(); let jump = other.bytecode.len();
+        other.bytecode.extend(function(&[("JMP", &[])]).bytecode);
+        other.bytecode[jump + 1] = code[7].offset_dw as i32 - jump as i32 - 2;
+        assert!(super::pushed_bool_literal_defs(&other, body, &RefResolver::default()).is_empty());
     }
 
     fn conditional_constructor_arguments_fixture() -> Func {
@@ -33603,6 +33988,84 @@ mod literal_value_lifetime_tests {
                 _ => other.bytecode.extend(function(&[("PshV8", &[8])]).bytecode),
             }
             assert_eq!(super::spell_double_parameter_round_trips(body, &other, &fc, &refs), body, "{fault}");
+        }
+    }
+
+    fn copied_negated_boolean_fixture(reused: bool, script_call: bool) -> Func {
+        let call=if script_call {"CALL"} else {"CALLSYS"};
+        let mut f=if reused {function(&[(call,&[]),("CpyRtoV4",&[95]),("CpyVtoV4",&[92,95]),("NOT",&[92]),
+            ("CpyVtoR1",&[92]),("JLowZ",&[]),("SetV1",&[92]),("CpyVtoR4",&[92]),("JMP",&[]),
+            (call,&[]),("CpyRtoV4",&[94]),("CpyVtoV4",&[95,94]),("CpyVtoV4",&[92,95]),("NOT",&[92]),
+            ("CpyVtoR4",&[92]),("RET",&[0])])}
+        else {function(&[(call,&[]),("CpyRtoV4",&[139]),("CpyVtoV4",&[55,139]),("NOT",&[55]),
+            ("CpyVtoR4",&[55]),("RET",&[0])])};
+        f.ret=DataType {token:0x41,..Default::default()};
+        let code=disassemble(&f.bytecode).unwrap();
+        f.bytecode[code[0].offset_dw+1]=1;
+        if reused {
+            f.bytecode[code[9].offset_dw+1]=1;
+            for (at,target) in [(5,9),(8,15)] {f.bytecode[code[at].offset_dw+1]=code[target].offset_dw as i32-code[at].offset_dw as i32-2;}
+        }
+        f
+    }
+
+    #[test]
+    fn copied_bool_names_survive_adjacent_early_and_late_folds() {
+        let refs=RefResolver::from_test_copied_negated_boolean(0x41,false);
+        for (reused,script_call) in [(false,false),(true,false),(true,true)] {
+            let f=copied_negated_boolean_fixture(reused,script_call);
+            let slot=if reused {95} else {139};
+            let spilled=super::spilled_boolean_names(&f,&refs);
+            assert_eq!(spilled,HashSet::from([slot]));
+            let locals=BTreeMap::from([(55,"bool".into()),(92,"bool".into()),(94,"bool".into()),(95,"bool".into()),(139,"bool".into())]);
+            let body=if reused {"local_95 = Trace();\nlocal_92 = local_95;\nlocal_92 = !local_92;\nif (local_92)\n{\n    return false;\n}\nlocal_94 = Trace();\nlocal_95 = local_94;\nlocal_92 = local_95;\nlocal_92 = !local_92;\nreturn local_92;\n"}
+                else {"local_139 = Trace();\nlocal_55 = local_139;\nlocal_55 = !local_55;\nreturn local_55;\n"};
+            // The same set excludes named source slots from the early adjacent fold.
+            let candidates=HashSet::from([slot]);
+            let protected=candidates.difference(&spilled).copied().collect();
+            let adjacent=super::rewrite_adjacent_value_temporaries(body,&protected).0;
+            assert_eq!(adjacent,body);
+            if !reused {assert_ne!(super::rewrite_adjacent_value_temporaries(body,&candidates).0,body);}
+            let negated=super::fold_negated_stores(&adjacent,&HashSet::new());
+            let kept=super::inline_call_argument_temporaries(&negated,&refs,&locals,None,true,
+                &HashMap::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),
+                &HashSet::new(),&HashSet::new(),&spilled,&HashMap::new(),&HashSet::new(),&HashSet::new());
+            let assignment=format!("local_{slot} = Trace();");
+            assert_eq!(kept.matches(&assignment).count(),if reused {2} else {1},"{kept}");
+            assert!(!kept.contains("local_94 = Trace()"),"{kept}");
+            let unnamed=super::unnamed_value_defs(&f,&refs,&[],&[]);
+            assert!(!unnamed.iter().any(|(s,_)| *s==slot));
+            let declared=kept.replacen(&assignment,&format!("bool {assignment}"),1);
+            let late=super::inline_unnamed_value_temporaries(&declared,&unnamed,&HashSet::new(),&HashSet::new(),&refs,
+                &HashSet::new(),&HashSet::new(),&HashMap::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),&HashSet::new());
+            assert_eq!(late.matches(&assignment).count(),if reused {2} else {1},"{late}");
+        }
+    }
+
+    #[test]
+    fn copied_negated_bool_requires_every_source_life_and_no_inner_entry() {
+        let refs=RefResolver::from_test_copied_negated_boolean(0x41,false);
+        let f=copied_negated_boolean_fixture(true,false);
+        let code=disassemble(&f.bytecode).unwrap();
+        for (token,reference) in [(0x44,false),(0x41,true),(0x50,false)] {
+            assert!(!super::spilled_boolean_names(&f,&RefResolver::from_test_copied_negated_boolean(token,reference)).contains(&95));
+        }
+        for (at,slot) in [(2,95),(3,94),(10,83),(11,94),(12,95),(13,94)] {
+            let mut wrong=f.clone();let pos=code[at].offset_dw;
+            wrong.bytecode[pos]=((wrong.bytecode[pos] as u32 & 0xffff) | ((slot as u32)<<16)) as i32;
+            assert!(!super::spilled_boolean_names(&wrong,&refs).contains(&95),"operand {at}");
+        }
+        let mut wrong=f.clone();wrong.bytecode[code[9].offset_dw+1]=99;
+        assert!(!super::spilled_boolean_names(&wrong,&refs).contains(&95));
+        for (op,words) in [("PshV4",vec![95]),("PSF",vec![95]),("SetV4",vec![95])] {
+            let mut wrong=f.clone();wrong.bytecode.extend(function(&[(op,&words)]).bytecode);
+            assert!(!super::spilled_boolean_names(&wrong,&refs).contains(&95),"extra {op}");
+        }
+        let mut wrong=f.clone();wrong.obj_locals.push((95,1));assert!(!super::spilled_boolean_names(&wrong,&refs).contains(&95));
+        for target in [1,2,3,10,11,12,13] {
+            let mut wrong=f.clone();let mut prefix=function(&[("JMP",&[])]).bytecode;
+            prefix[1]=code[target].offset_dw as i32;prefix.extend(wrong.bytecode);wrong.bytecode=prefix;
+            assert!(!super::spilled_boolean_names(&wrong,&refs).contains(&95),"entry {target}");
         }
     }
 
@@ -36415,6 +36878,93 @@ mod literal_value_lifetime_tests {
             let mut wrong=f.clone();wrong.bytecode=jump;assert_eq!(fold(source,&wrong,0,true),source);
         }
     }
+    fn prepared_enum_argument_fixture(reused: bool) -> Func {
+        let mut ops: Vec<(&str,Vec<u16>)>=Vec::new();let mut immediates=Vec::new();
+        let mut add=|op,words:Vec<u16>,value:Option<i32>| {
+            if let Some(value)=value {immediates.push((ops.len(),value));}ops.push((op,words));
+        };
+        if !reused {add("PSF",vec![120],None);add("CALLSYS",vec![],Some(21));}
+        for life in 0..if reused {2} else {1} {
+            let named=if reused {19} else {123};let temp=if life==1 {17} else {named};
+            add("SetV1",vec![18],Some(if life==0 {3} else {28}));add("PshV4",vec![18],None);
+            add("CALLSYS",vec![],Some(10));add("CpyRtoV4",vec![temp],None);
+            if life==1 {add("CpyVtoV4",vec![named,temp],None);}
+            if reused && life==0 {add("PSF",vec![120],None);add("CALLSYS",vec![],Some(21));}
+            add("PshC4",vec![],Some(0));
+            if reused {add("PshGPtr",vec![],Some(100));add("PshGPtr",vec![],Some(101));}
+            else {for color in [128,135] {
+                for _ in 0..4 {add("PshC4",vec![],Some(0));}
+                add("PSF",vec![color],None);add("CALLSYS",vec![],Some(20));add("PSF",vec![color],None);
+            }}
+            add("SetV1",vec![55],Some(1));add("PshV4",vec![55],None);add("PSF",vec![120],None);
+            add("SetV1",vec![137],Some(0));add("PshV4",vec![137],None);add("PSF",vec![36],None);
+            add("SetV1",vec![138],Some(0));add("PshV4",vec![138],None);add("PshV4",vec![named],None);
+            if reused {add("PSF",vec![90],None);add("PshVPtr",vec![12],None);add("CALLSYS",vec![],Some(40));}
+            add("PSF",vec![if reused {90} else {26}],None);add("PSF",vec![6],None);
+            add("PshGPtr",vec![],Some(99));add("CALLSYS",vec![],Some(30));add("CpyRtoV4",vec![139],None);
+        }
+        add("CpyVtoR4",vec![139],None);add("RET",vec![0],None);
+        let spec:Vec<_>=ops.iter().map(|(op,w)|(*op,w.as_slice())).collect();let mut f=function(&spec);
+        let code=disassemble(&f.bytecode).unwrap();for (at,value) in immediates {f.bytecode[code[at].offset_dw+1]=value;}
+        f.ret=DataType {token:0x41,..Default::default()};
+        f.obj_locals=vec![(6,1),(26,1),(90,1),(120,2),(128,3),(135,3),(12,5),(36,8)];f
+    }
+
+    #[test]
+    fn prepared_enum_names_seed_direct_and_copied_argument_lives() {
+        let refs=RefResolver::from_test_prepared_enum_argument(0);
+        for reused in [false,true] {
+            let f=prepared_enum_argument_fixture(reused);let slot=if reused {19} else {123};
+            let proof=super::prepared_enum_argument_sites(&f,&refs);
+            assert_eq!(proof,HashMap::from([(slot,("ETraceKind".into(),"Convert".into()))]));
+            assert_eq!(super::enum_argument_slots(&f,&refs).get(&slot),Some(&"ETraceKind".into()));
+            let sites=super::named_value_sites(&f,&refs);assert!(sites.contains(&(slot,"Convert".into())));
+            let locals=BTreeMap::from([(slot,"ETraceKind".into()),(17,"ETraceKind".into()),(139,"bool".into())]);
+            let trace=format!("Trace(local_6, local_90, ETraceKind(local_{slot}), false, local_36, EDrawKind(0), local_120, true, FLinearColor::Green, FLinearColor::Red, 5.0f)");
+            let mut body=format!("local_{slot} = Convert(ECollisionKind(3));\nlocal_139 = {trace};\n");
+            if reused {body.push_str(&format!("local_17 = Convert(ECollisionKind(28));\nlocal_{slot} = local_17;\nlocal_139 = {trace};\n"));}
+            body.push_str("return local_139;\n");
+            let fold=|sites:&HashSet<(i32,String)>| super::inline_call_argument_temporaries(&body,&refs,&locals,None,true,
+                &HashMap::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),
+                &HashSet::new(),&HashSet::new(),&HashSet::from([139]),&HashMap::new(),&HashSet::new(),sites);
+            let kept=fold(&sites);
+            assert_eq!(kept.matches(&format!("local_{slot} = Convert(")).count(),if reused {2} else {1},"{kept}");
+            assert!(!kept.contains("local_17 ="),"{kept}");assert_ne!(kept,fold(&HashSet::new()));
+            let late=kept.replacen(&format!("local_{slot} ="),&format!("ETraceKind local_{slot} ="),1);
+            let actual=super::inline_unnamed_value_temporaries(&late,&HashSet::from([(slot,1),(slot,2)]),&HashSet::new(),&HashSet::new(),&refs,
+                &HashSet::new(),&HashSet::new(),&HashMap::new(),&sites,&HashSet::new(),&HashSet::new(),&HashSet::new());
+            assert_eq!(actual,late);
+        }
+    }
+
+    #[test]
+    fn prepared_enum_arguments_reject_other_types_lives_and_inner_entries() {
+        let refs=RefResolver::from_test_prepared_enum_argument(0);
+        for reused in [false,true] {
+            let f=prepared_enum_argument_fixture(reused);let slot=if reused {19} else {123};
+            for fault in if reused {vec![1,2,3,4,6,7,8,9,10,11]} else {vec![1,2,5,7,8,9,10,11]} {
+                assert!(super::prepared_enum_argument_sites(&f,&RefResolver::from_test_prepared_enum_argument(fault)).is_empty(),"{reused}/{fault}");
+            }
+            for op in ["PshV4","PSF","SetV4"] {
+                let mut other=f.clone();other.bytecode.extend(function(&[(op,&[slot as u16])]).bytecode);
+                assert!(super::prepared_enum_argument_sites(&other,&refs).is_empty(),"extra {op}");
+            }
+            let code=disassemble(&f.bytecode).unwrap();
+            for target in code.iter().enumerate().filter(|(_,i)| i.op.name=="CpyRtoV4" && i.words.first()==Some(&(slot as u16))
+                || i.op.name=="PshV4" && i.words.first()==Some(&(slot as u16))).map(|(i,_)|i) {
+                let mut other=f.clone();let mut prefix=function(&[("JMP",&[])]).bytecode;prefix[1]=code[target].offset_dw as i32;
+                prefix.extend(other.bytecode);other.bytecode=prefix;
+                assert!(super::prepared_enum_argument_sites(&other,&refs).is_empty(),"entry {target}");
+            }
+            if reused {
+                let mut other=f.clone();other.bytecode.extend(function(&[("PshV4",&[17])]).bytecode);
+                assert!(super::prepared_enum_argument_sites(&other,&refs).is_empty());
+                let mut other=f.clone();let call=code.iter().rfind(|i| i.op.name=="CALLSYS" && i.qwords.first()==Some(&10)).unwrap();
+                other.bytecode[call.offset_dw+1]=30;assert!(super::prepared_enum_argument_sites(&other,&refs).is_empty());
+            }
+        }
+    }
+
     fn double_product_bool_argument_fixture() -> Func {
         let mut f = function(&[("SetV1", &[7]), ("CpyVtoR1", &[7]),
             ("fTOd", &[18,9]), ("PshV8", &[18]), ("fTOd", &[16,8]), ("PshVPtr", &[0]),
@@ -36750,6 +37300,61 @@ mod literal_value_lifetime_tests {
         }
     }
 
+    #[test]
+    fn repeated_cast_handle_keeps_one_declaration_across_marker_loop() {
+        let refs = RefResolver::from_test_reused_cast_handle(0);
+        let mut f = function(&[("PshVPtr", &[0]), ("CALLSYS", &[]), ("STOREOBJ", &[10]),
+            ("CmpPtrNull", &[10]), ("JZ", &[]), ("TYPEID", &[]), ("PSF", &[12]), ("PshVPtr", &[10]),
+            ("CALLSYS", &[]), ("JMP", &[]), ("ClrVPtr", &[12]), ("PshVPtr", &[12]), ("RefCpyV", &[14]),
+            ("PshVPtr", &[14]), ("CALLSYS", &[]), ("SUSPEND", &[]),
+            ("PshVPtr", &[0]), ("CALLSYS", &[]), ("STOREOBJ", &[10]),
+            ("CmpPtrNull", &[10]), ("JZ", &[]), ("TYPEID", &[]), ("PSF", &[12]), ("PshVPtr", &[10]),
+            ("CALLSYS", &[]), ("JMP", &[]), ("ClrVPtr", &[12]), ("PshVPtr", &[12]), ("RefCpyV", &[14]),
+            ("PshVPtr", &[14]), ("CALLSYS", &[]), ("PshVPtr", &[0]), ("CALLSYS", &[]), ("JLowNZ", &[]), ("RET", &[0])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        for at in [5, 21] { f.bytecode[code[at].offset_dw + 1] = 0x4000_0001; }
+        for at in [8, 24] { f.bytecode[code[at].offset_dw + 1] = 2; }
+        for (at, to) in [(4, 10), (9, 11), (20, 26), (25, 27), (33, 15)] {
+            f.bytecode[code[at].offset_dw + 1] = code[to].offset_dw as i32 - code[at].offset_dw as i32 - 2;
+        }
+        f.obj_locals = vec![(12, 1), (14, 1)];
+        let body = "    local_14 = (Cast<AGoblin>(this.Make()));\n    Read(local_14);\n    if (Again())\n    {\n        Wait();\n        if (Skip())\n        {\n            //__gore_back_edge 15\n        }\n        local_14 = (Cast<AGoblin>(this.Make()));\n        Bind(local_14);\n        //__gore_back_edge 15 34\n    }\n    return;\n";
+        let check = |body: &str, f: &Func| super::reused_cast_handle_assignment_tails(body, f, &refs);
+        let tails = check(body, &f);
+        assert_eq!(tails, HashMap::from([(14, 1)]));
+        for fault in 1..=8 {
+            assert!(super::reused_cast_handle_assignment_tails(body, &f, &RefResolver::from_test_reused_cast_handle(fault)).is_empty(), "signature {fault}");
+        }
+        let locals = BTreeMap::from([(14, "AGoblin".into())]);
+        let fold = |tails: &HashMap<i32, usize>| super::rewrite_first_use_decl_init(body, &locals, &refs,
+            &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(), tails, &HashSet::new(), &HashSet::new()).0;
+        let kept = fold(&tails);
+        assert_eq!(kept, body.replacen("local_14 =", "AGoblin local_14 =", 1));
+        assert!(fold(&HashMap::new()).contains("AGoblin local_14_2 ="));
+        for op in ["FreeNullV8", "ClrVPtr", "PSF", "STOREOBJ", "RefCpyV"] {
+            let mut other = f.clone(); other.bytecode.extend(function(&[(op, &[14])]).bytecode);
+            assert!(check(body, &other).is_empty(), "{op}");
+        }
+        let mut other = f.clone(); other.obj_locals[1].1 = 2;
+        assert!(check(body, &other).is_empty());
+        let mut duplicate = f.clone(); duplicate.obj_locals.push((14, 1));
+        assert!(check(body, &duplicate).is_empty());
+        for (at, value) in [(21, 1), (21, 0x4000_0002), (21, 0x6000_0001), (24, 99)] {
+            let mut other = f.clone(); other.bytecode[code[at].offset_dw + 1] = value;
+            assert!(check(body, &other).is_empty());
+        }
+        // Crossing the first store, entering a cast join, or dropping the backedge cannot prove one life.
+        for (at, to) in [(4, 15), (33, 28), (33, 34)] {
+            let mut other = f.clone(); other.bytecode[code[at].offset_dw + 1] = code[to].offset_dw as i32 - code[at].offset_dw as i32 - 2;
+            assert!(check(body, &other).is_empty(), "jump {at}->{to}");
+        }
+        let extra = body.replace("    return;", "    local_14 = (Cast<AGoblin>(this.Make()));\n    return;");
+        let different = body.replace("        local_14 = (Cast<AGoblin>(this.Make()));", "        local_14 = (Cast<AGoblin>(this.Other()));");
+        let other_scope = body.replace("    Read(local_14);", "}\n    Read(local_14);");
+        for text in [extra, different, other_scope, body.replace("Cast<AGoblin>", "Cast<AOther>")] {
+            assert!(check(&text, &f).is_empty());
+        }
+    }
     fn returned_loop_handle_fixture() -> Func {
         let mut f = function(&[("PSF", &[30]), ("CALLSYS", &[]),
             ("PSF", &[38]), ("PSF", &[30]), ("CALLSYS", &[]), ("JMP", &[]),

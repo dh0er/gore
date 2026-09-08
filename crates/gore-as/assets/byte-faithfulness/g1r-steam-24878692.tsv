@@ -9,14 +9,13 @@ AI.AIAgent.Creature.Demon.Spells.Area.DemonAreaVisual	1	0	0
 AI.AIAgent.Creature.Golem.Fire.Spells.BreakFloor.GA_Spell_BreakFloor_FireGolem	2	0	0
 AI.AIAgent.Creature.Molerat.CombatSituations_Molerat	1	0	0
 AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.SoulHarvest.SoulHarvest_Visual	2	0	0
-AI.AIAgent.Creature.Troll.TC_TrollAdult_01.CombatMoves_TrollAdult	1	0	0
 AI.AIAgent.Orc.Combat.Staff.Spells.StormOfFire.GA_Spell_StormOfFire_Orc	1	0	0
 AI.AIItemScoring	1	0	0
 AI.AssessmentResponseSystem.AssessmentBits	7	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	5	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingResponse	1	0	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	17	0	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	15	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.TheftEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.EventResponses	5	0	0
 AI.CharacterAI_Gothic	5	0	0
@@ -60,7 +59,7 @@ AI.States.FightAI.WarningState.AIState_Warning	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_Creature	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_Crime	10	0	0
 AI.States.FightAI.WatchFightState.AIGroup_WatchFight	2	0	0
-AI.States.FightAI.WatchFightState.AIState_WatchFight	16	0	0
+AI.States.FightAI.WatchFightState.AIState_WatchFight	15	0	0
 AI.States.Test.TestCharacters_Navigation	1	0	0
 Camera.ConversationCameraConfig	1	0	0
 Environment.GothicUltraDynamicControlerAS	3	0	0
@@ -92,7 +91,6 @@ GAS.Abilities.Spells.Visuals.Fire.FireRainVisual	1	0	0
 GAS.Abilities.Spells.Visuals.Fire.InnosPrayVisual	2	0	0
 GAS.Abilities.Spells.Visuals.Light.LightVisual	1	0	0
 GAS.Abilities.Spells.Visuals.UrizielWaveOfDeath.UrizielWaveOfDeathVisual	1	0	0
-GAS.Abilities.TraceTarget.Derived.GA_TraceTarget_Item	1	0	0
 GAS.Calculations.Damage	5	0	0
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Drugs.Base.DrugDebuffEffectComponentBase	1	0	0
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Sleep.GA_SleepDebuffEffectGameplayAbility	1	0	0
