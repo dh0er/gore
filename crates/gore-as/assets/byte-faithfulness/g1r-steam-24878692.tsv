@@ -44,7 +44,7 @@ AI.States.FightAI.CombatState.Positioning.AICombat_Positioning	13	0	0
 AI.States.FightAI.DisengageBehavior.AIState_Disengage	1	0	0
 AI.States.FightAI.FearState.AIState_Fear	1	0	0
 AI.States.FightAI.FleeState.AIState_Flee	2	0	0
-AI.States.FightAI.GoGetGuardState.AIState_GoGetGuard	2	0	0
+AI.States.FightAI.GoGetGuardState.AIState_GoGetGuard	1	0	0
 AI.States.FightAI.SearchState.AIState_Search	10	0	0
 AI.States.FightAI.SleeperFight.CorKalom_Sleeper.LordDemon.Components.MadCorKalomDemonFightComponent	1	0	0
 AI.States.FightAI.SleeperFight.CorKalom_Sleeper.LordDemon.Spell.Pyrolaser.GA_LordDemon_Pyrolaser	2	0	0
@@ -72,7 +72,6 @@ GAS.Abilities.Passive.Drugs.Derived.Alcohol.GA_AlcoholDebuff	1	0	0
 GAS.Abilities.Passive.GA_PlayerPerception_CrimeRegistration	5	0	0
 GAS.Abilities.Spells.CastSpell.Derived.AlteredStates.GA_CastSpell_Control	1	0	0
 GAS.Abilities.Spells.CastSpell.Derived.Summon.Base.GA_CastSpell_SummonBase	1	0	0
-GAS.Abilities.Spells.Spells.Base.GA_Spell_SpawnRechargeableProjectile	1	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_Targetable	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_Fireball	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_StormOfFire	1	0	0

@@ -1574,6 +1574,7 @@ pub(super) fn native_value_selection(
 
 struct LocalLvalueSelection {
     head: usize,
+    consumed: usize,
     statement: String,
     copy_ctor_slot: Option<i32>,
 }
@@ -1587,12 +1588,74 @@ fn local_lvalue_selection(ctx: &Ctx<'_>, join: usize) -> Option<LocalLvalueSelec
         if slots.iter().any(|slot| ctx.slot_type(*slot).as_deref() != Some(ty.as_str())) { return None; }
         let [yes, no, dst] = slots;
         let test = &ctx.instrs[head];
-        return Some(LocalLvalueSelection { head, copy_ctor_slot: Some(dst),
+        return Some(LocalLvalueSelection { head, consumed: 2, copy_ctor_slot: Some(dst),
             statement: format!("{} = ({} < {} ? {} : {});", ctx.slot_name(dst),
                 ctx.slot_name(s16(test.words[0])), ctx.slot_name(s16(test.words[1])),
                 ctx.slot_name(yes), ctx.slot_name(no)) });
     }
     let head = join.checked_sub(5)?;
+    // A guarded member address can likewise feed one immediate f64 field store.
+    if let Some(c) = ctx.instrs.get(head..join + 3).filter(|c| c.iter().map(|i| i.op.name)
+        .eq(["CALLSYS", "JLowZ", "LoadRObjR", "JMP", "LoadThisR", "RDR8", "LoadThisR", "WRTV8"]))
+    {
+        let word = |op: &Instr, n: usize| op.words.get(n).map(|v| *v as i16 as i32);
+        let target = |op: &Instr| op.dwords.first().map(|v| op.offset_dw as i64 + 2 + *v as i32 as i64);
+        let push = ctx.instrs.get(head.checked_sub(1)?)?;
+        let handle = word(&c[2], 0)?;
+        let scalar = word(&c[5], 0)?;
+        if !ctx.f.is_method || push.op.name != "PshVPtr" || word(push, 0) != Some(handle)
+            || handle <= 0 || scalar <= 0 || handle == scalar || word(&c[7], 0) != Some(scalar)
+            || target(&c[1]) != Some(c[4].offset_dw as i64)
+            || target(&c[3]) != Some(c[5].offset_dw as i64)
+        { return None; }
+        let ptr = *c[0].qwords.first()? as i64;
+        let callee = ctx.refs.func_by_ptr(ptr)?;
+        let [param] = ctx.refs.func_params_by_ptr(ptr)? else { return None; };
+        let ret = ctx.refs.func_ret_by_ptr(ptr)?;
+        if ctx.refs.is_method_by_ptr(ptr) || ctx.refs.func_owner_by_ptr(ptr).is_some()
+            || ctx.refs.func_ns_by_ptr(ptr).is_some_and(|ns| !ns.is_empty())
+            || ret.token != 0x41 || ret.type_info != 0 || ret.is_reference || ret.is_object_handle
+            || ret.is_object_const || ret.is_read_only || ret.is_auto || ret.if_handle_then_const
+            || param.token != 5 || !param.is_object_handle || !param.is_object_const
+            || param.is_reference || param.is_read_only || param.is_auto || param.if_handle_then_const
+            || ctx.refs.type_identity_by_ptr(param.type_info).is_none()
+        { return None; }
+        let field = |op: &Instr, offset_word: usize| {
+            let id = *op.dwords.first()? as i32;
+            let owner = ctx.refs.type_identity_by_id(id)?;
+            let (name, old) = ctx.refs.member_identity(id, word(op, offset_word)?)?;
+            (ctx.refs.type_identity_by_id(old) == Some(owner) && !owner.module.is_empty()
+                && owner.namespace.is_empty() && matches!(owner.name.as_bytes().first(), Some(b'A' | b'U'))
+                && ctx.refs.own_field_type_by_class(&owner.name, name) == Some("float"))
+                .then_some((owner, name))
+        };
+        let (yes_owner, yes) = field(&c[2], 1)?;
+        let (no_owner, no) = field(&c[4], 0)?;
+        let (dst_owner, dst) = field(&c[6], 0)?;
+        if ctx.slot_type(handle).as_deref() != Some(yes_owner.name.as_str()) || no_owner != dst_owner
+            || ctx.class_name != Some(dst_owner.name.as_str())
+            || [no, dst].iter().any(|name| ctx.fields.and_then(|f| f.get(*name)).map(String::as_str) != Some("float"))
+        { return None; }
+        // The scalar may be reused, but every use must be one closed load/store pair.
+        // In particular, replacing this pair must not discard a later read or address escape.
+        for (at, op) in ctx.instrs.iter().enumerate() {
+            let used = super::bytediff::addressed_slots(op).contains(&scalar);
+            if used && !(op.op.name == "RDR8"
+                && ctx.instrs.get(at + 1).is_some_and(|i| i.op.name == "LoadThisR")
+                && ctx.instrs.get(at + 2).is_some_and(|i| i.op.name == "WRTV8" && word(i, 0) == Some(scalar)))
+                && !(op.op.name == "WRTV8" && at >= 2
+                    && ctx.instrs[at - 1].op.name == "LoadThisR"
+                    && ctx.instrs[at - 2].op.name == "RDR8" && word(&ctx.instrs[at - 2], 0) == Some(scalar))
+            { return None; }
+            if op.op.name == "JMPP" || ((is_cond_op(op.op.name) || op.op.name == "JMP")
+                && at != head + 1 && at != head + 3
+                && target(op).is_some_and(|to| to > push.offset_dw as i64 && to <= c[7].offset_dw as i64))
+            { return None; }
+        }
+        return Some(LocalLvalueSelection { head, consumed: 3, copy_ctor_slot: None,
+            statement: format!("this.{dst} = ({callee}({}) ? {}.{yes} : this.{no});",
+                ctx.slot_name(handle), ctx.slot_name(handle)) });
+    }
     let code = ctx.instrs.get(head..join + 2)?;
     let word = |op: &Instr, at: usize| op.words.get(at).map(|v| *v as i16 as i32);
     let target = |op: &Instr| op.dwords.first().map(|v| op.offset_dw as i64 + 2 + *v as i32 as i64);
@@ -1662,6 +1725,7 @@ fn local_lvalue_selection(ctx: &Ctx<'_>, join: usize) -> Option<LocalLvalueSelec
         else { (*code[0].dwords.first()? as i32).to_string() };
     Some(LocalLvalueSelection {
         head,
+        consumed: 2,
         copy_ctor_slot: None,
         statement: format!("{} = ({} {sense} {immediate} ? {} : {});",
             ctx.slot_name(dst), ctx.slot_name(test), ctx.slot_name(yes), ctx.slot_name(no)),
@@ -3873,12 +3937,12 @@ fn block_stmts_in(
     let mut behaviour_flushed: Option<usize> = None;
     let insns = &ctx.instrs[lo..hi];
     let selection = stack.is_empty().then(|| local_lvalue_selection(ctx, lo)).flatten()
-        .filter(|_| insns.len() >= 2);
+        .filter(|selection| insns.len() >= selection.consumed);
     let skip = if let Some(selection) = selection {
         if let Some(slot) = selection.copy_ctor_slot {
             RVO_PRODUCERS.with(|v| v.borrow_mut().push((slot, lo + 1)));
         }
-        out.push(selection.statement); 2
+        out.push(selection.statement); selection.consumed
     } else { 0 };
     let mut skip_until = skip;
     for k in skip..insns.len() {
@@ -12263,6 +12327,81 @@ mod tests {
             if fault == 0 {
                 assert!(source.find(copy) < source.find("local_10 = local_8.Target;"), "{source}");
             }
+        }
+    }
+
+    fn guard_field_selection_fixture(fault: u8) -> CompoundFixture {
+        let mut a = TestAssembler::default();
+        if fault == 7 { a.jump("JZ", "join_a"); }
+        for (fallback, join, offset) in [("fallback_a", "join_a", 0),
+            ("fallback_b", "join_b", 8), ("fallback_c", "join_c", 16)]
+        {
+            a.op("PshVPtr", &[if fault == 10 { 4 } else { 2 }], &[]);
+            a.op("CALLSYS", &[], &[10, 0]);
+            a.jump("JLowZ", fallback);
+            a.op("LoadRObjR", &[2, offset], &[1]);
+            a.jump("JMP", join);
+            a.label(fallback); a.op("LoadThisR", &[offset], &[2]);
+            a.label(join); a.op("RDR8", &[28], &[]);
+            a.op("LoadThisR", &[offset + 24], &[2]);
+            a.op("WRTV8", &[if fault == 11 { 30 } else { 28 }], &[]);
+        }
+        if fault == 8 { a.op("PSF", &[28], &[]); a.op("PopPtr", &[], &[]); }
+        if fault == 9 { a.op("CpyVtoV8", &[30, 28], &[]); }
+        if fault == 12 { a.op("LDV", &[28], &[]); }
+        a.op("RET", &[2], &[]);
+        let mut fixture = a.finish();
+        for ins in &mut fixture.instrs { if ins.op.name == "CALLSYS" { ins.qwords = vec![10]; } }
+        fixture
+    }
+
+    fn check_guard_field_selection(fault: u8, render: bool) -> (Vec<bool>, String) {
+        let fixture = guard_field_selection_fixture(fault);
+        let refs = RefResolver::from_test_guard_field_selection(fault);
+        let f = FuncCode { func: "Fixture::Select".into(), is_method: true,
+            param_names: Vec::new(), param_types: Vec::new(),
+            ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+        let fields = refs.class_field_types("UState").unwrap();
+        let locals = HashMap::from([(2, "UConfig".into()), (4, "UConfig".into())]);
+        let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+            ret_ty: Some(&f.ret), fields: Some(fields), param_types: None, class_name: Some("UState"),
+            local_types: Some(&locals), float_slots: [28, 30].into_iter().collect(),
+            param_off_map: HashMap::new(), rvo_off: None, keep_ints: None,
+            rvo_switch_region: std::cell::Cell::new(false) };
+        let recognized = fixture.instrs.iter().enumerate().filter(|(_, i)| i.op.name == "RDR8")
+            .map(|(at, _)| local_lvalue_selection(&ctx, at).is_some()).collect();
+        let mut out = String::new();
+        if render {
+            let g = cfg::build(&fixture.instrs);
+            let idx_of = g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
+            let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of,
+                exit_join: None, exit_join_is_ret: false, exit_ret_rows_ok: false,
+                exit_rvo_return: false, exit_mixed_rvo_ret_rows_ok: false, exit_scan_floor: 0,
+                carry: None, loop_scope: None, pending_loop_exit: None, shared_return: None };
+            st.emit_range(0, g.blocks.len(), 0, &mut out);
+        }
+        (recognized, out)
+    }
+
+    #[test]
+    fn guarded_member_selections_restore_three_field_stores_with_one_reused_scalar() {
+        let (recognized, body) = check_guard_field_selection(0, true);
+        assert_eq!(recognized, vec![true; 3]);
+        for suffix in ["A", "B", "C"] {
+            let statement = format!("this.Resolved{suffix} = (AcceptConfig(local_2) ? local_2.{suffix} : this.Fallback{suffix});");
+            assert_eq!(body.matches(&statement).count(), 1, "{body}");
+        }
+        assert_eq!(body.matches("AcceptConfig(").count(), 3, "{body}");
+        assert!(!body.contains("if (") && !body.contains("local_28"), "{body}");
+    }
+
+    #[test]
+    fn guarded_member_selection_rejects_wrong_types_namespace_entries_and_scalar_escapes() {
+        // Native/script types, full OldTypeId identity, native signature/namespace,
+        // extra predecessor, PSF/LDV address escapes, later reads, and mismatched slots.
+        for fault in 1..=12 {
+            let (recognized, _) = check_guard_field_selection(fault, false);
+            assert!(!recognized[0], "fault={fault}: {recognized:?}");
         }
     }
 

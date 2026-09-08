@@ -1724,6 +1724,38 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_guard_field_selection(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UConfig", ""), ("UState", ""), ("UObject", ""), ("UState", "")]);
+        for (id, name) in [(1, "UConfig"), (2, "UState"), (3, "UObject"), (4, "UState")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: name.into(),
+                module: if id == 3 { "" } else if id == 4 { "OtherModule" } else { "Fixture" }.into(),
+                namespace: String::new() });
+        }
+        let mut fields: HashMap<String, HashMap<String, String>> = HashMap::new();
+        for (id, owner, entries) in [(1, "UConfig", vec![(0, "A"), (8, "B"), (16, "C")]),
+            (2, "UState", vec![(0, "FallbackA"), (8, "FallbackB"), (16, "FallbackC"),
+                (24, "ResolvedA"), (32, "ResolvedB"), (40, "ResolvedC")])]
+        {
+            for (offset, name) in entries {
+                let key = ((id as i64) << 1) | ((offset as i64) << 33) | 1;
+                r.prop_by_key.insert(key, name.into());
+                r.prop_type_id.insert(key, if fault == 2 && id == 2 { 4 } else { id });
+                fields.entry(owner.into()).or_default().insert(name.into(),
+                    if fault == 1 && id == 1 { "float32" } else { "float" }.into());
+            }
+        }
+        r.set_class_fields(fields);
+        r.func_by_ptr.insert(10, "AcceptConfig".into());
+        r.func_ret_names.insert("AcceptConfig".into(), "bool".into());
+        r.func_ret.insert(10, DataType { token: if fault == 3 { 0x44 } else { 0x41 }, ..Default::default() });
+        r.func_params.insert(10, vec![DataType { token: 5, type_info: 3,
+            is_object_handle: true, is_object_const: true, is_reference: fault == 4, ..Default::default() }]);
+        if fault == 5 { r.func_is_method.insert(10); }
+        if fault == 6 { r.func_ns.insert(10, "Other".into()); }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_member_chain(owners: &[(&str, &str)]) -> Self {
         let mut r = Self::default();
         for (index, (owner, field)) in owners.iter().enumerate() {
@@ -2364,6 +2396,33 @@ impl RefResolver {
             9 => r.type_identity_by_ptr.get_mut(&1).unwrap().namespace = "Other".into(),
             10 => r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(),
             11 => r.func_ret.get_mut(&1).unwrap().token = 0x41,
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_native_vector_self_assignment(fault: u8) -> Self {
+        let mut r = Self::from_test_assigned_value_before_getter(0);
+        r.func_by_ptr.insert(9, "opMul".into()); r.func_owner.insert(9, "FVector".into());
+        r.func_is_method.insert(9); r.const_method_ptrs.insert(9);
+        r.func_ret.insert(9, DataType { token: 5, type_info: 1, ..Default::default() });
+        r.func_params.insert(9, vec![DataType { token: 0x51, ..Default::default() }]);
+        r.func_by_ptr.insert(10, "ScaleFactor".into());
+        r.func_ret.insert(10, DataType { token: 0x51, ..Default::default() }); r.func_params.insert(10, vec![]);
+        match fault {
+            1 => r.func_params.get_mut(&9).unwrap()[0].token = 0x50,
+            2 => r.func_params.get_mut(&2).unwrap()[0].is_read_only = false,
+            3 => r.func_ret.get_mut(&2).unwrap().is_reference = false,
+            4 => r.func_params.get_mut(&4).unwrap()[0].type_info = 2,
+            5 => r.func_ret.get_mut(&5).unwrap().is_reference = true,
+            6 => { r.const_method_ptrs.remove(&9); }
+            7 => { r.const_method_ptrs.insert(2); }
+            8 => { r.func_owner.insert(4, "FOther".into()); }
+            9 => r.type_identity_by_ptr.get_mut(&1).unwrap().namespace = "Other".into(),
+            10 => r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(),
+            11 => { r.func_by_ptr.insert(9, "opMulAssign".into()); }
+            12 => r.func_ret.get_mut(&2).unwrap().is_object_const = true,
             _ => {}
         }
         r

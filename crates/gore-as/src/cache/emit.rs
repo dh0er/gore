@@ -2939,7 +2939,8 @@ fn emit_function_ctor(
         pass_trace("inline_unnamed_value_temporaries", &rendered);
         // Now that the operands carry no names of their own, an in-place update stands directly
         // under its declaration and the pair is one statement — which can expose another value.
-        let rendered = merge_self_assignments(&rendered, &declared_locals);
+        let rendered = merge_self_assignments_retaining(&rendered, &declared_locals,
+            &native_vector_self_assignments(f, refs));
         pass_trace("merge_self_assignments", &rendered);
         // Fresh default member values reuse the earlier call result's frame slot.
         // Expose them before the final inliner counts that result's actual reads.
@@ -16495,6 +16496,61 @@ fn rvo_temporary_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
     out
 }
 
+/// Keep the explicit update of one closed native vector life before its next
+/// operator consumer. Scratch result slots may have unrelated earlier lives.
+fn native_vector_self_assignments(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    if f.ret.token != 0x52 || f.ret.is_reference || f.ret.is_object_handle { return HashSet::new(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    let assignments = assignment_write_counts(f, refs);
+    let word = |i: &Instr| i.words.first().map(|v| *v as i16 as i32);
+    let ptr = |i: &Instr| i.qwords.first().map(|p| *p as i64);
+    let plain = |t: &super::types::DataType, token, ty, reference, constant| t.token == token && t.type_info == ty
+        && t.is_reference == reference && t.is_object_const == constant && t.is_read_only == constant
+        && !t.is_object_handle && !t.is_auto && !t.if_handle_then_const;
+    code.windows(11).enumerate().filter_map(|(at, c)| {
+        if c.iter().map(|i| i.op.name).ne(["PshV8", "PSF", "PSF", "CALLSYS", "PSF", "PSF",
+            "CALLSYS", "PSF", "PSF", "PSF", "CALLSYS"]) { return None; }
+        let (temporary, named, result, other) = (word(&c[1])?, word(&c[2])?, word(&c[8])?, word(&c[9])?);
+        if word(&c[4]) != Some(temporary) || word(&c[5]) != Some(named) || word(&c[7]) != Some(named)
+            || assignments.get(&named) != Some(&1) { return None; }
+        let uses: Vec<_> = code.iter().enumerate().filter(|(_, i)|
+            super::bytediff::addressed_slots(i).contains(&named)).map(|(i, _)| i).collect();
+        let [initialized, multiplied, assigned, consumed] = uses.as_slice() else { return None; };
+        if [*multiplied, *assigned, *consumed] != [at + 2, at + 5, at + 7] { return None; }
+        let start = initialized.checked_sub(1)?;
+        let initial = code.get(start..start + 4)?;
+        if start + 4 > at || initial.iter().map(|i| i.op.name).ne(["PSF", "PSF", "PSF", "CALLSYS"])
+            || word(&initial[0]) != Some(other) || word(&initial[1]) != Some(named) { return None; }
+        let left = word(&initial[2])?;
+        let slots = [temporary, named, result, other, left];
+        if slots.iter().any(|s| *s <= 0) || slots.into_iter().collect::<HashSet<_>>().len() != 5
+            || word(&c[0]).is_none_or(|s| s <= 0 || slots.contains(&s)) { return None; }
+        let (subtract, multiply, assign, add) = (ptr(&initial[3])?, ptr(&c[3])?, ptr(&c[6])?, ptr(&c[10])?);
+        let ty = refs.func_ret_by_ptr(multiply)?.type_info;
+        let identity = refs.type_identity_by_ptr(ty)?;
+        if identity.name != "FVector" || !identity.module.is_empty() || !identity.namespace.is_empty()
+            || slots.iter().any(|slot| f.obj_locals.iter().filter(|(s, _)| s == slot)
+                .map(|(_, p)| *p).ne([ty])) { return None; }
+        for (p, name, constant) in [(subtract, "opSub", true), (multiply, "opMul", true),
+            (assign, "opAssign", false), (add, "opAdd", true)] {
+            if refs.func_by_ptr(p) != Some(name) || refs.func_owner_by_ptr(p) != Some(identity.name.as_str())
+                || !refs.is_method_by_ptr(p) || refs.is_const_method_by_ptr(p) != constant
+                || !plain(refs.func_ret_by_ptr(p)?, 5, ty, p == assign, false) { return None; }
+            let [arg] = refs.func_params_by_ptr(p)? else { return None; };
+            if !(if p == multiply { plain(arg, 0x51, 0, false, false) }
+                else { plain(arg, 5, ty, true, true) }) { return None; }
+        }
+        // No path may bypass the initialization/update or supply another life.
+        if code[start..at + 11].iter().any(|i| i.op.name.starts_with('J'))
+            || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J')
+                && i.dwords.first().is_some_and(|d| {
+                    let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                    target > initial[0].offset_dw as i64 && target <= c[10].offset_dw as i64
+                }))) { return None; }
+        Some(named)
+    }).collect()
+}
+
 /// `T x = A; x = <expr with x>;` is one declaration: `T x = <expr with A>;`.
 ///
 /// The compiler computes an expression into a slot and then updates it in place, and the emitter
@@ -16502,11 +16558,20 @@ fn rvo_temporary_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
 /// of its own, it is the left operand. Folding the pair costs nothing and lets the value-life
 /// rules see the whole expression, which is what says whether the slot was ever named.
 fn merge_self_assignments(body: &str, locals: &BTreeMap<i32, String>) -> String {
+    merge_self_assignments_retaining(body, locals, &HashSet::new())
+}
+
+fn merge_self_assignments_retaining(
+    body: &str, locals: &BTreeMap<i32, String>, assignments: &HashSet<i32>,
+) -> String {
     let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
     let mut at = 0usize;
     while at + 1 < lines.len() {
         let merged = (|| {
             let (indent, name, init) = declaration_with_initializer(&lines[at])?;
+            if slot_and_life(&name).is_some_and(|(slot, life)| life == 1 && assignments.contains(&slot)) {
+                return None;
+            }
             let next = &lines[at + 1];
             if indent_of(next) != indent {
                 return None;
@@ -36955,6 +37020,95 @@ mod literal_value_lifetime_tests {
         assert_eq!(fold(WIDENED_FINAL_PRODUCT_BODY,&wrong,&refs),WIDENED_FINAL_PRODUCT_BODY);
         let mut duplicate=widened_final_product_fixture(); duplicate.bytecode[1]=10;
         assert_eq!(fold(WIDENED_FINAL_PRODUCT_BODY,&duplicate,&refs),WIDENED_FINAL_PRODUCT_BODY);
+    }
+
+    fn native_vector_self_assignment_fixture(direct: bool) -> Func {
+        let mut f = function(&[("PSF", &[26]), ("PshVPtr", &[0]), ("CALLSYS", &[]),
+            ("PshC8", &[]), ("PSF", &[26]), ("CALLSYS", &[]),
+            ("PSF", &[32]), ("PshVPtr", &[0]), ("CALLSYS", &[]),
+            ("PshC8", &[]), ("PSF", &[32]), ("CALLSYS", &[]),
+            ("PSF", &[32]), ("PSF", &[40]), ("PSF", &[26]), ("CALLSYS", &[]),
+            ("CALLSYS", &[]), ("CpyRtoV8", &[34]), ("PshV8", &[34]), ("PSF", &[20]),
+            ("PSF", &[40]), ("CALLSYS", &[]), ("PSF", &[20]), ("PSF", &[40]), ("CALLSYS", &[]),
+            ("PSF", &[40]), ("PSF", &[46]), ("PSF", &[32]), ("CALLSYS", &[]),
+            ("PshC8", &[]), ("PSF", &[46]), ("CALLSYS", &[]),
+            ("PSF", &[46]), ("PshVPtr", &[0]), ("CALLSYS", &[]), ("RET", &[0])]);
+        f.ret.token = 0x52; f.obj_locals = vec![(20, 1), (26, 1), (32, 1), (40, 1), (46, 1)];
+        let c = disassemble(&f.bytecode).unwrap();
+        for (at, p) in [(2, 3), (5, 6), (8, 3), (11, 6), (15, 5), (16, 10),
+            (21, 9), (24, 2), (28, 4), (31, 6), (34, 7)] { f.bytecode[c[at].offset_dw + 1] = p; }
+        for at in [3, 9, 29] {
+            let bits = 0.00001f64.to_bits();
+            f.bytecode[c[at].offset_dw + 1] = bits as i32;
+            f.bytecode[c[at].offset_dw + 2] = (bits >> 32) as i32;
+        }
+        if direct {
+            f.bytecode[c[25].offset_dw] = function(&[("PSF", &[20])]).bytecode[0];
+            f.bytecode.drain(c[22].offset_dw..c[25].offset_dw);
+        }
+        f
+    }
+
+    #[test]
+    fn a_closed_native_vector_update_survives_the_complete_pipeline() {
+        let f = native_vector_self_assignment_fixture(false);
+        let refs = RefResolver::from_test_native_vector_self_assignment(0);
+        assert_eq!(super::native_vector_self_assignments(&f, &refs), HashSet::from([40]));
+        let render = |f: &Func| { let mut text = String::new();
+            super::emit_function(&mut text, f, &refs, true, false, 0); text };
+        let source = render(&f);
+        let initial = "FVector local_40 = (local_26 - local_32);";
+        let update = "local_40 = (local_40 * ScaleFactor());";
+        let next = "FVector local_46 = (local_32 + local_40);";
+        for statement in [initial, update, next] { assert!(source.contains(statement), "{source}"); }
+        assert!(source.find(initial) < source.find(update) && source.find(update) < source.find(next), "{source}");
+        assert!(!source.contains("local_20") && !source.contains("local_40 *="), "{source}");
+        let direct = native_vector_self_assignment_fixture(true);
+        assert!(super::native_vector_self_assignments(&direct, &refs).is_empty());
+        let inline = render(&direct);
+        // The direct product result forwards without an assignment; its distinct
+        // subtraction input remains named by the existing operator-argument rule.
+        assert!(inline.contains(initial)
+            && inline.contains("FVector local_46 = (local_32 + (local_40 * ScaleFactor()));")
+            && !inline.contains("local_20") && !inline.contains(update), "{inline}");
+        // Existing scalar and later-life merging still uses the ordinary path.
+        let locals = BTreeMap::from([(1, "int".into()), (40, "FVector".into())]);
+        let scalar = "int local_1 = A;\nlocal_1 = local_1 + B;\n";
+        assert_eq!(super::merge_self_assignments_retaining(scalar, &locals, &HashSet::from([40])),
+            super::merge_self_assignments(scalar, &locals));
+        let later = "FVector local_40_2 = A;\nlocal_40_2 = local_40_2 * B;\n";
+        assert_eq!(super::merge_self_assignments_retaining(later, &locals, &HashSet::from([40])),
+            super::merge_self_assignments(later, &locals));
+    }
+
+    #[test]
+    fn native_vector_self_assignment_requires_exact_metadata_and_one_closed_life() {
+        let f = native_vector_self_assignment_fixture(false);
+        let refs = RefResolver::from_test_native_vector_self_assignment(0);
+        for fault in 1..=12 {
+            assert!(super::native_vector_self_assignments(&f,
+                &RefResolver::from_test_native_vector_self_assignment(fault)).is_empty(), "metadata {fault}");
+        }
+        for at in 0..f.obj_locals.len() {
+            let mut bad = f.clone(); bad.obj_locals[at].1 = 2;
+            assert!(super::native_vector_self_assignments(&bad, &refs).is_empty(), "slot {at}");
+        }
+        for before in [true, false] {
+            let mut reused = f.clone(); let extra = function(&[("PSF", &[40])]).bytecode;
+            if before { reused.bytecode.splice(0..0, extra); } else { reused.bytecode.extend(extra); }
+            assert!(super::native_vector_self_assignments(&reused, &refs).is_empty(), "reuse {before}");
+        }
+        let c = disassemble(&f.bytecode).unwrap();
+        for at in [13, 20, 23, 25, 28] {
+            let mut entered = f.clone(); let mut jump = function(&[("JMP", &[])]).bytecode;
+            jump[1] = c[at].offset_dw as i32; jump.extend(entered.bytecode); entered.bytecode = jump;
+            assert!(super::native_vector_self_assignments(&entered, &refs).is_empty(), "entry {at}");
+        }
+        let mut wrong = f.clone(); wrong.bytecode[c[25].offset_dw] = function(&[("PSF", &[20])]).bytecode[0];
+        assert!(super::native_vector_self_assignments(&wrong, &refs).is_empty());
+        // An earlier unrelated life of the scratch result is permitted, and never retained.
+        let mut scratch = f.clone(); scratch.bytecode.splice(0..0, function(&[("PSF", &[20])]).bytecode);
+        assert_eq!(super::native_vector_self_assignments(&scratch, &refs), HashSet::from([40]));
     }
 
     fn assigned_value_return_fixture() -> Func {
