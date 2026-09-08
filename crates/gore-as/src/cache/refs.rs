@@ -2242,6 +2242,35 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_copied_binary_receiver(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FVector", ""), ("UStorm", "Height")]);
+        r.type_identity_by_ptr.insert(1, TypeIdentity { name: "FVector".into(), module: String::new(), namespace: String::new() });
+        r.type_identity_by_ptr.insert(2, TypeIdentity { name: "UStorm".into(), module: "Fixture".into(), namespace: String::new() });
+        r.set_class_fields(HashMap::from([("UStorm".into(), HashMap::from([("Height".into(), "float".into())]))]));
+        r.prop_type_id.insert(5, 2);
+        let vector = DataType { token: 5, type_info: 1, ..Default::default() };
+        let reference = DataType { is_reference: true, is_object_const: true, is_read_only: true, ..vector.clone() };
+        for (p, name, ret, params) in [
+            (10, "$beh0", DataType { token: 0x52, ..Default::default() }, vec![reference.clone()]),
+            (20, "opMul", vector.clone(), vec![DataType { token: 0x51, ..Default::default() }]),
+            (30, "opAdd", vector, vec![reference]),
+        ] {
+            r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, "FVector".into()); r.func_is_method.insert(p);
+            r.func_ret.insert(p, ret); r.func_params.insert(p, params);
+        }
+        r.const_method_ptrs.extend([20, 30]);
+        r.global_by_ptr.insert(40, "FVector::UpVector".into());
+        if fault == 1 { r.func_params.get_mut(&10).unwrap()[0].is_reference = false; }
+        if fault == 2 { r.const_method_ptrs.remove(&20); }
+        if fault == 3 { r.func_ret.get_mut(&30).unwrap().is_reference = true; }
+        if fault == 4 { r.func_params.get_mut(&20).unwrap()[0].token = 0x50; }
+        if fault == 5 { r.func_owner.insert(30, "FOther".into()); }
+        if fault == 6 { r.set_class_fields(HashMap::from([("UStorm".into(), HashMap::from([("Height".into(), "float32".into())]))])); }
+        if fault == 7 { r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(); }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_assigned_value_return(fault: u8) -> Self {
         let mut r=Self::from_test_member_chain(&[("FVector",""),("TArray","")]);
         r.type_identity_by_ptr.insert(1,TypeIdentity { name:"FVector".into(),module:String::new(),namespace:String::new() });
@@ -3151,6 +3180,36 @@ impl RefResolver {
         let field_type = if fault == 1 { "UOther" } else { "AActor" };
         r.set_native_api(super::binds::NativeApi::from_test_field_types(
             &[("UHolder", "Target", field_type), ("UOtherHolder", "Target", "AActor")], &[], None));
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_returned_loop_handle(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("AGothicCharacter", ""), ("AActor", ""),
+            ("TArray", ""), ("TArrayIterator", "CanProceed")]);
+        let handle = DataType { token: 5, type_info: 1, is_object_handle: true, ..Default::default() };
+        let array = DataType { token: 5, type_info: 3, ..Default::default() };
+        let iterator = DataType { token: 5, type_info: 4, ..Default::default() };
+        let void = DataType { token: 0x52, ..Default::default() };
+        r.type_subtypes.insert(3, vec![handle.clone()]);
+        for (p, name, owner, ret, args) in [
+            (1, "GetChildren", "", array, vec![]),
+            (2, "Iterator", "TArray", iterator, vec![]),
+            (3, "Proceed", "TArrayIterator", DataType { is_reference: true, ..handle }, vec![]),
+            (4, "$beh2", "TArray", void, vec![]),
+            (5, "GetDistanceTo", "AActor", DataType { token: 0x50, ..Default::default() },
+                vec![DataType { token: 5, type_info: 2, is_object_handle: true, is_object_const: true, ..Default::default() }]),
+        ] {
+            r.func_by_ptr.insert(p, name.into()); r.funcid_to_ptr.insert(p as i32, p);
+            r.func_ret.insert(p, ret); r.func_params.insert(p, args);
+            if !owner.is_empty() { r.func_owner.insert(p, owner.into()); r.func_is_method.insert(p); }
+        }
+        r.const_method_ptrs.insert(5);
+        if fault == 1 { r.func_ret.get_mut(&3).unwrap().type_info = 2; }
+        if fault == 2 { r.func_ret.get_mut(&3).unwrap().is_reference = false; }
+        if fault == 3 { r.func_ret.get_mut(&3).unwrap().is_object_const = true; }
+        if fault == 4 { r.func_owner.insert(2, "TSet".into()); }
+        if fault == 5 { r.func_ret.get_mut(&4).unwrap().token = 0x41; }
         r
     }
 
