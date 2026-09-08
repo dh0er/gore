@@ -2547,6 +2547,39 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_value_receiver_before_argument(fault: u8) -> Self {
+        let mut r=Self::from_test_member_chain(&[("FVector",""),("AActor","")]);
+        r.type_identity_by_ptr.insert(1,TypeIdentity {name:"FVector".into(),module:String::new(),namespace:String::new()});
+        r.type_identity_by_ptr.insert(2,TypeIdentity {name:"AActor".into(),module:String::new(),namespace:String::new()});
+        let value=DataType {token:5,type_info:1,..Default::default()};
+        let reference=DataType {is_reference:true,is_object_const:true,is_read_only:true,..value.clone()};
+        let double=DataType {token:0x51,..Default::default()};
+        for (ptr,name,owner,params,ret) in [(10,"GetActorLocation","AActor",vec![],value.clone()),
+            (20,"opSub","FVector",vec![reference.clone()],value.clone()),
+            (30,"GetSafeNormal2D","FVector",vec![double.clone(),reference.clone()],value.clone()),
+            (40,"DotProduct","FVector",vec![reference],double)] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());
+            r.func_is_method.insert(ptr);r.const_method_ptrs.insert(ptr);
+            r.func_params.insert(ptr,params);r.func_ret.insert(ptr,ret);
+        }
+        r.set_class_methods(HashMap::from([("FVector".into(),HashSet::from([
+            "opSub/1/const".into(),"GetSafeNormal2D/2/const".into(),"DotProduct/1/const".into()])),
+            ("AActor".into(),HashSet::from(["GetActorLocation/0/const".into()]))]));
+        r.temporary_arg_positions.insert("GetSafeNormal2D".into(),HashMap::from([(2,vec![false,true])]));
+        for name in ["opSub","DotProduct"] {r.temporary_arg_positions.insert(name.into(),HashMap::from([(1,vec![true])]));}
+        if fault==1 {r.func_params.get_mut(&30).unwrap()[0].token=0x50;}
+        if fault==2 {r.func_params.get_mut(&30).unwrap()[1].is_read_only=false;}
+        if fault==3 {r.func_ret.get_mut(&30).unwrap().is_reference=true;}
+        if fault==4 {r.func_params.get_mut(&40).unwrap()[0].type_info=2;}
+        if fault==5 {r.func_owner.insert(40,"OtherVector".into());}
+        if fault==6 {r.const_method_ptrs.remove(&20);}
+        if fault==7 {r.func_ret.get_mut(&40).unwrap().token=0x50;}
+        if fault==8 {r.type_identity_by_ptr.get_mut(&1).unwrap().module="Other".into();}
+        if fault==9 {r.func_ret.get_mut(&30).unwrap().is_object_handle=true;}
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_value_before_return_construction(fault: u8) -> Self {
         let mut r=Self::from_test_member_chain(&[("FVector",""),("FExecutor",""),("UAI",""),("UScriptAI","")]);
         for (id,name) in [(1,"FVector"),(2,"FExecutor"),(3,"UAI"),(4,"UScriptAI")] {

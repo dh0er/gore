@@ -44,7 +44,7 @@ AI.States.FightAI.CombatState.CombatMoves	19	0	0
 AI.States.FightAI.CombatState.CombatOperations	1	0	0
 AI.States.FightAI.CombatState.CombatTestClasses	1	0	0
 AI.States.FightAI.CombatState.Positioning.AICombat_Positioning	13	0	0
-AI.States.FightAI.DisengageBehavior.AIState_Disengage	2	0	0
+AI.States.FightAI.DisengageBehavior.AIState_Disengage	1	0	0
 AI.States.FightAI.FearState.AIState_Fear	1	0	0
 AI.States.FightAI.FleeState.AIState_Flee	2	0	0
 AI.States.FightAI.GoGetGuardState.AIState_GoGetGuard	2	0	0
@@ -55,13 +55,10 @@ AI.States.FightAI.SleeperFight.OC_KDF_Milten_Sleeper.Environment.MiltenSleeper_B
 AI.States.FightAI.SleeperFight.SC_NOV_Lester_Sleeper.SleeperFight_LesterCombat	2	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpotManager	1	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpot_XardasSleeper	1	0	0
-AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.TraceTarget_XardasSleeper	1	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.Xardas_Sleeper_Minion_BillboardComponent	1	0	0
-AI.States.FightAI.WaitStates.AIState_WaitForBlockedPath	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning	1	0	0
-AI.States.FightAI.WarningState.AIState_Warning_ComplainAboutBlockedPath	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_Creature	1	0	0
-AI.States.FightAI.WarningState.AIState_Warning_Crime	11	0	0
+AI.States.FightAI.WarningState.AIState_Warning_Crime	10	0	0
 AI.States.FightAI.WatchFightState.AIGroup_WatchFight	2	0	0
 AI.States.FightAI.WatchFightState.AIState_WatchFight	16	0	0
 AI.States.Test.TestCharacters_Navigation	1	0	0
@@ -78,7 +75,6 @@ GAS.Abilities.Locomotion.GA_FallingRagdoll	1	0	0
 GAS.Abilities.Locomotion.GA_Swim	1	0	0
 GAS.Abilities.Passive.Drugs.Derived.Alcohol.GA_AlcoholDebuff	1	0	0
 GAS.Abilities.Passive.GA_PlayerPerception_CrimeRegistration	5	0	0
-GAS.Abilities.Spells.CastSpell.Base.Targetable.GA_CastSpell_Targetable_Mandatory	1	0	0
 GAS.Abilities.Spells.CastSpell.Derived.AlteredStates.GA_CastSpell_Control	1	0	0
 GAS.Abilities.Spells.CastSpell.Derived.Summon.Base.GA_CastSpell_SummonBase	1	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_SpawnRechargeableProjectile	1	0	0
@@ -96,7 +92,6 @@ GAS.Abilities.Spells.Visuals.Fire.FireRainVisual	1	0	0
 GAS.Abilities.Spells.Visuals.Fire.InnosPrayVisual	2	0	0
 GAS.Abilities.Spells.Visuals.Light.LightVisual	1	0	0
 GAS.Abilities.Spells.Visuals.UrizielWaveOfDeath.UrizielWaveOfDeathVisual	1	0	0
-GAS.Abilities.TraceTarget.Base.GA_TraceTarget_Base	1	0	0
 GAS.Abilities.TraceTarget.Derived.GA_TraceTarget_Item	1	0	0
 GAS.Calculations.Damage	5	0	0
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Drugs.Base.DrugDebuffEffectComponentBase	1	0	0

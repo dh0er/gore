@@ -1633,6 +1633,7 @@ fn emit_function_ctor(
     let rvo_producers = super::structure::take_rvo_producers();
     let rvo_consumers = super::structure::take_rvo_consumers();
     named_sites.extend(named_value_before_return_construction(f, refs, &rvo_producers, &rvo_consumers, is_method));
+    named_sites.extend(named_value_receiver_before_argument(f, refs, &rvo_producers, &rvo_consumers));
     let (const_value_arguments, discarded_value_calls, operator_value_arguments) =
         short_rvo_lifetimes(f, refs, &rvo_producers, &rvo_consumers);
     let mut retained_values = retained_value_arguments(f, &fc, refs, &rvo_producers, &rvo_consumers);
@@ -11941,6 +11942,19 @@ fn fold_enum_call_round_trips(
             {
                 continue;
             }
+            // Removing the enum casts must not move its call past a value's
+            // default construction. Keep the resolved enum at its original site.
+            let crosses_construction = lines[index + 1..reader].iter().any(|line| {
+                let Some((_, local)) = bare_declaration(line) else { return false; };
+                let head = line.trim().trim_end_matches(';').strip_suffix(&local).unwrap_or("").trim();
+                is_value_struct_type(head) && !head.contains(['&', '@'])
+            });
+            if resolved.as_deref() == Some(returned.as_str()) && is_enum(returned) && crosses_construction {
+                lines[index] = format!("{}{returned} {name} = {inner};", indent_of(&lines[index]));
+                lines[reader] = lines[reader].replace(&round_trip, &name);
+                changed = true;
+                break;
+            }
             lines[reader] = lines[reader].replace(&round_trip, inner);
             lines.remove(index);
             changed = true;
@@ -15830,6 +15844,71 @@ fn immediate_value_cleanup_end(
         else if instrs.get(at).is_some_and(|i| matches!(i.op.name, "FreeNullV8" | "FreeNullV4")) { at += 1; }
         else { return at; }
     }
+}
+
+/// Keep a completed value receiver before the second normalization call. The
+/// native binary/RVO frame distinguishes its producer from earlier slot lives.
+fn named_value_receiver_before_argument(f: &Func, refs: &RefResolver, producers: &[(i32, usize)],
+    consumers: &[(i32, usize)]) -> HashSet<(i32, String)> {
+    let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    code.windows(14).enumerate().filter_map(|(at,c)| {
+        if c.iter().map(|i| i.op.name).ne(["PSF", "PSF", "PSF", "CALLSYS", "PSF", "CALLSYS",
+            "PshGPtr", "PshC8", "PSF", "PSF", "CALLSYS", "PSF", "PSF", "CALLSYS"]) { return None; }
+        let w = |i: usize| c[i].words.first().map(|v| *v as i16 as i32);
+        let ptr = |i: usize| c[i].qwords.first().map(|v| *v as i64);
+        let (left,binary,right,input) = (w(0)?,w(1)?,w(2)?,w(9)?);
+        let slots = [left,binary,right,input];
+        if slots.iter().any(|s| *s <= 0) || slots.iter().collect::<HashSet<_>>().len() != 4
+            || w(4) != Some(binary) || w(8) != Some(right) || w(11) != Some(right) || w(12) != Some(left)
+            || ptr(5) != ptr(10) || !f64::from_bits(*c[7].qwords.first()?).is_finite() { return None; }
+        let (subtract,normalize,reduce) = (ptr(3)?,ptr(5)?,ptr(13)?);
+        let ty = refs.func_ret_by_ptr(normalize)?;
+        let owner = refs.type_identity_by_ptr(ty.type_info)?;
+        let plain = |t: &super::types::DataType, token, p| t.token == token && t.type_info == p
+            && !t.is_reference && !t.is_object_handle && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+        let input_type = |t: &super::types::DataType| t.token == 5 && t.type_info == ty.type_info
+            && t.is_reference && t.is_object_const && t.is_read_only && !t.is_object_handle && !t.is_auto && !t.if_handle_then_const;
+        if !plain(ty,5,ty.type_info) || !owner.module.is_empty() || !owner.namespace.is_empty()
+            || refs.func_by_ptr(subtract) != Some("opSub") { return None; }
+        for p in [subtract,normalize,reduce] {
+            if !refs.is_method_by_ptr(p) || !refs.is_const_method_by_ptr(p)
+                || refs.func_owner_by_ptr(p) != Some(owner.name.as_str()) { return None; }
+        }
+        let [sub_arg] = refs.func_params_by_ptr(subtract)? else { return None; };
+        let [tolerance,zero] = refs.func_params_by_ptr(normalize)? else { return None; };
+        let [reduced_arg] = refs.func_params_by_ptr(reduce)? else { return None; };
+        if !input_type(sub_arg) || !input_type(zero) || !input_type(reduced_arg) || !plain(tolerance,0x51,0)
+            || !plain(refs.func_ret_by_ptr(subtract)?,5,ty.type_info)
+            || !plain(refs.func_ret_by_ptr(reduce)?,0x51,0) { return None; }
+        for slot in slots {
+            if f.obj_locals.iter().filter(|(s,_)| *s == slot).map(|(_,p)| *p).ne([ty.type_info]) { return None; }
+        }
+        // The old left/right values feed subtraction; only their new lives feed
+        // the scalar consumer. No further production, address use or cleanup.
+        for (slot,made,used,accesses) in [(left,5,vec![3,13],vec![0,12]),
+            (right,10,vec![3,13],vec![2,8,11]),(binary,3,vec![5],vec![1,4])] {
+            if producers.iter().filter(|(s,i)| *s == slot && *i >= at).map(|(_,i)| *i).ne([at+made])
+                || consumers.iter().filter(|(s,i)| *s == slot && *i >= at).map(|(_,i)| *i).ne(used.iter().map(|i| at+i))
+                || code.iter().enumerate().skip(at).filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&slot))
+                    .map(|(i,_)| i).ne(accesses.iter().map(|i| at+i)) { return None; }
+        }
+        let name = refs.func_by_ptr(normalize)?;
+        // A (slot,callee) site must not also name another life of that callee.
+        for &(slot,made) in producers.iter().filter(|(s,_)| *s == left) {
+            let i = code.get(made)?;
+            let callee = match i.op.name {
+                "CALLSYS" | "Thiscall1" => refs.func_by_ptr(*i.qwords.first()? as i64),
+                "CALL" | "CALLINTF" | "CALLBND" => refs.func_by_id(*i.dwords.first()? as i32),
+                _ => None,
+            }?;
+            if slot == left && callee == name && made != at+5 { return None; }
+        }
+        if code.iter().any(|i| i.op.name == "JMPP" || i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+            let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+            target >= c[0].offset_dw as i64 && target <= c[13].offset_dw as i64
+        })) { return None; }
+        Some((left,name.to_owned()))
+    }).collect()
 }
 
 /// A value is complete before the return object's construction, while its unary
@@ -28528,6 +28607,23 @@ mod enum_call_round_trip_tests {
     }
 
     #[test]
+    fn a_resolved_enum_stays_before_an_intervening_value_construction() {
+        for ty in ["FHitResult", "TArray<AActor>"] {
+            let body = format!("    int local_5 = int(Convert(ECollisionChannel(3)));\n    {ty} local_8;\n    Use(ERelationship(local_5), local_8);\n");
+            let expected = format!("    ERelationship local_5 = Convert(ECollisionChannel(3));\n    {ty} local_8;\n    Use(local_5, local_8);\n");
+            assert_eq!(fold(&body, &types()), expected);
+            assert_eq!(fold(&expected, &types()), expected);
+            assert_eq!(fold(&body, &HashMap::new()), body);
+            let another = body.replace("Use(ERelationship(local_5)", "Use(EGuild(local_5)");
+            assert_eq!(fold(&another, &types()), another);
+        }
+        for ty in ["bool", "int", "AActor", "FValue&"] {
+            let body = format!("    int local_5 = int(Convert());\n    {ty} local_8;\n    Use(ERelationship(local_5), local_8);\n");
+            assert_eq!(fold(&body, &types()), format!("    {ty} local_8;\n    Use(Convert(), local_8);\n"));
+        }
+    }
+
+    #[test]
     fn a_round_trip_through_another_enum_is_a_conversion() {
         let body = "    int local_5 = int(this.GetRelationship(Entry));\n    this.Severities.Find(EGuild(local_5), local_2);\n";
         assert_eq!(
@@ -35988,6 +36084,84 @@ mod literal_value_lifetime_tests {
         let mut other=f.clone();let code=disassemble(&other.bytecode).unwrap();
         other.bytecode[code[7].offset_dw]=(other.bytecode[code[7].offset_dw]&65535)|(5<<16);
         assert!(super::named_index_field_sites(&other,&refs).is_empty());
+    }
+
+    fn value_receiver_before_argument_fixture() -> (Func,Vec<(i32,usize)>,Vec<(i32,usize)>) {
+        // Slot 34 is reserved for the outer result before also holding the
+        // second location. Slots 26/34 are reused only after subtraction.
+        let mut f=function(&[("PshGPtr",&[]),("PshC8",&[]),("PSF",&[34]),
+            ("PSF",&[26]),("PshVPtr",&[8]),("CALLSYS",&[]),
+            ("PSF",&[34]),("PshVPtr",&[12]),("CALLSYS",&[]),
+            ("PSF",&[34]),("PSF",&[40]),("PSF",&[26]),("CALLSYS",&[]),
+            ("PSF",&[40]),("CALLSYS",&[]),("PshGPtr",&[]),("PshC8",&[]),
+            ("PSF",&[26]),("PSF",&[10]),("CALLSYS",&[]),
+            ("PSF",&[26]),("PSF",&[34]),("CALLSYS",&[]),("CpyRtoV8",&[14]),
+            ("SetV8",&[42]),("CMPd",&[14,42]),("TP",&[]),("CpyRtoV4",&[1]),("CpyVtoR4",&[1]),("RET",&[2])]);
+        f.ret=DataType {token:0x41,..Default::default()};
+        f.obj_locals=vec![(10,1),(26,1),(34,1),(40,1),(8,2),(12,2)];
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,ptr) in [(5,10),(8,10),(12,20),(14,30),(19,30),(22,40)] {f.bytecode[code[at].offset_dw+1]=ptr;}
+        for at in [1,16] {
+            let bits=1e-8f64.to_bits();f.bytecode[code[at].offset_dw+1]=bits as i32;f.bytecode[code[at].offset_dw+2]=(bits>>32) as i32;
+        }
+        (f,vec![(26,5),(34,8),(40,12),(34,14),(26,19)],vec![(26,12),(34,12),(40,14),(10,19),(26,22),(34,22)])
+    }
+
+    #[test]
+    fn the_completed_value_receiver_stays_named_across_argument_folding() {
+        let (f,producers,consumers)=value_receiver_before_argument_fixture();
+        let refs=RefResolver::from_test_value_receiver_before_argument(0);
+        let sites=super::named_value_receiver_before_argument(&f,&refs,&producers,&consumers);
+        assert_eq!(sites,HashSet::from([(34,"GetSafeNormal2D".into())]));
+        let locals=BTreeMap::from([(10,"FVector".into()),(26,"FVector".into()),(34,"FVector".into()),(40,"FVector".into()),(14,"float".into())]);
+        let fold=|body:&str,sites:&HashSet<(i32,String)>| super::inline_call_argument_temporaries(body,&refs,&locals,None,false,
+            &HashMap::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),
+            &HashSet::new(),&HashSet::new(),&HashSet::new(),&HashMap::new(),&HashSet::new(),sites);
+        let body="local_34 = local_40.GetSafeNormal2D(1e-8, FVector::ZeroVector);\nlocal_26 = local_10.GetSafeNormal2D(1e-8, FVector::ZeroVector);\nlocal_14 = local_34.DotProduct(local_26);\nreturn (local_14 > 0.5);\n";
+        let kept=fold(body,&sites);
+        assert!(kept.contains("local_34 = local_40.GetSafeNormal2D("),"{kept}");
+        assert!(kept.contains("local_34.DotProduct(local_10.GetSafeNormal2D("),"{kept}");
+        assert!(!kept.contains("local_26 ="),"{kept}");
+        assert!(!fold(body,&HashSet::new()).contains("local_34 ="));
+        // Declaration/lifetime spelling between early and late inlining must
+        // not turn this callee-specific evidence into a physical-slot keep.
+        let late=kept.replace("local_34 =","FVector local_34_2 =").replace("local_34.DotProduct","local_34_2.DotProduct");
+        assert_eq!(super::inline_unnamed_value_temporaries(&late,&HashSet::from([(34,2)]),&HashSet::new(),&HashSet::new(),
+            &refs,&HashSet::new(),&HashSet::new(),&HashMap::new(),&sites,&HashSet::new(),&HashSet::new(),&HashSet::new()),late);
+        let earlier="local_34 = actor.GetActorLocation();\nreturn local_34.GetSafeNormal2D(1e-8, FVector::ZeroVector);\n";
+        assert_eq!(fold(earlier,&sites),fold(earlier,&HashSet::new()));
+        assert!(!fold(earlier,&sites).contains("local_34 ="));
+    }
+
+    #[test]
+    fn receiver_before_argument_requires_exact_types_closed_lives_and_cfg() {
+        let (f,p,c)=value_receiver_before_argument_fixture();
+        let refs=RefResolver::from_test_value_receiver_before_argument(0);
+        let check=|f:&Func,refs:&RefResolver,p:&[(i32,usize)],c:&[(i32,usize)]|
+            super::named_value_receiver_before_argument(f,refs,p,c);
+        for fault in 1..=9 {assert!(check(&f,&RefResolver::from_test_value_receiver_before_argument(fault),&p,&c).is_empty(),"metadata {fault}");}
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,slot) in [(13,26),(17,40),(18,34),(20,34),(21,26)] {
+            let mut wrong=f.clone();let pos=code[at].offset_dw;
+            wrong.bytecode[pos]=((wrong.bytecode[pos] as u32 & 0xffff) | ((slot as u32)<<16)) as i32;
+            assert!(check(&wrong,&refs,&p,&c).is_empty(),"operand {at}");
+        }
+        let mut wrong=f.clone();wrong.obj_locals[2].1=2;assert!(check(&wrong,&refs,&p,&c).is_empty());
+        let mut wrong=f.clone();wrong.obj_locals.push((34,1));assert!(check(&wrong,&refs,&p,&c).is_empty());
+        let mut wrong=f.clone();wrong.bytecode[code[19].offset_dw+1]=20;assert!(check(&wrong,&refs,&p,&c).is_empty());
+        let mut wrong=f.clone();wrong.bytecode.extend(function(&[("PSF",&[34])]).bytecode);assert!(check(&wrong,&refs,&p,&c).is_empty());
+        let mut extra=p.clone();extra.push((34,23));assert!(check(&f,&refs,&extra,&c).is_empty());
+        let mut extra=c.clone();extra.push((34,23));assert!(check(&f,&refs,&p,&extra).is_empty());
+        let mut missing=p.clone();missing.retain(|item| *item!=(34,14));assert!(check(&f,&refs,&missing,&c).is_empty());
+        // A previous production by this same callee would make the textual
+        // (slot,callee) key ambiguous; an unrelated location producer is fine.
+        let mut wrong=f.clone();wrong.bytecode[code[8].offset_dw+1]=30;assert!(check(&wrong,&refs,&p,&c).is_empty());
+        for target in [9,14,19,22] {
+            let mut wrong=f.clone();let mut prefix=function(&[("JMP",&[])]).bytecode;
+            prefix[1]=code[target].offset_dw as i32;prefix.extend(wrong.bytecode);wrong.bytecode=prefix;
+            let pp:Vec<_>=p.iter().map(|(s,i)|(*s,i+1)).collect();let cc:Vec<_>=c.iter().map(|(s,i)|(*s,i+1)).collect();
+            assert!(check(&wrong,&refs,&pp,&cc).is_empty(),"branch entry {target}");
+        }
     }
 
     fn value_before_return_construction_fixture() -> (Func,Vec<(i32,usize)>,Vec<(i32,usize)>) {
