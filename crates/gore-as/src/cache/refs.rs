@@ -2186,6 +2186,93 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_assigned_value_before_getter(fault: u8) -> Self {
+        let mut r = Self::default();
+        r.type_by_ptr.insert(1, "FVector".into()); r.type_names.insert("FVector".into());
+        r.type_identity_by_ptr.insert(1, TypeIdentity { name: "FVector".into(), module: String::new(), namespace: String::new() });
+        let value = DataType { token: 5, type_info: 1, ..Default::default() };
+        let input = DataType { is_reference: true, is_object_const: true, is_read_only: true, ..value.clone() };
+        let scalar = DataType { token: 0x51, ..Default::default() };
+        for (ptr, name, owner, constant) in [(1, "$beh0", "FVector", false), (2, "opAssign", "FVector", false),
+            (3, "GetLocation", "AActor", true), (4, "opAdd", "FVector", true), (5, "opSub", "FVector", true),
+            (6, "Normalize", "FVector", false), (7, "Sink", "USceneComponent", false), (8, "$beh0", "FVector", false)] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into()); r.func_is_method.insert(ptr);
+            if constant { r.const_method_ptrs.insert(ptr); }
+        }
+        r.func_ret.insert(1, DataType { token: 0x52, ..Default::default() }); r.func_params.insert(1, vec![scalar.clone(); 3]);
+        r.func_ret.insert(2, DataType { is_reference: true, ..value.clone() }); r.func_params.insert(2, vec![input.clone()]);
+        r.func_ret.insert(3, value.clone()); r.func_params.insert(3, Vec::new());
+        for ptr in [4, 5] { r.func_ret.insert(ptr, value.clone()); r.func_params.insert(ptr, vec![input.clone()]); }
+        r.func_ret.insert(6, DataType { token: 0x41, ..Default::default() }); r.func_params.insert(6, vec![scalar]);
+        r.func_ret.insert(7, DataType { token: 0x52, ..Default::default() }); r.func_params.insert(7, vec![input.clone()]);
+        r.func_ret.insert(8, DataType { token: 0x52, ..Default::default() }); r.func_params.insert(8, vec![input]);
+        r.temporary_arg_positions.insert("Sink".into(), HashMap::from([(1, vec![true])]));
+        r.ctor_arg_positions.insert("FVector".into(), HashMap::from([(3, vec![true; 3])]));
+        match fault {
+            1 => r.func_params.get_mut(&1).unwrap()[1].token = 0x50,
+            2 => r.func_params.get_mut(&2).unwrap()[0].is_read_only = false,
+            3 => r.func_ret.get_mut(&2).unwrap().is_reference = false,
+            4 => r.func_params.get_mut(&4).unwrap()[0].type_info = 2,
+            5 => r.func_ret.get_mut(&3).unwrap().is_reference = true,
+            6 => { r.func_params.get_mut(&3).unwrap().push(DataType { token: 0x44, ..Default::default() }); }
+            7 => { r.const_method_ptrs.remove(&4); }
+            8 => { r.func_owner.insert(1, "OtherVector".into()); }
+            9 => r.type_identity_by_ptr.get_mut(&1).unwrap().namespace = "Other".into(),
+            10 => r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(),
+            11 => r.func_ret.get_mut(&1).unwrap().token = 0x41,
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_copied_index_argument(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name, module) in [(1, "TSubclassOf", "GAS.Skills"), (2, "TArray", "GAS.Skills"), (3, "FContext", ""),
+            (4, "FResult", ""), (5, "UGothicAbilityComponent", ""), (6, "USkill", "GAS.Skills"),
+            (7, "TSubclassOf", ""), (8, "UGameplayEffect", "")] {
+            r.type_by_ptr.insert(ptr, name.into()); r.type_names.insert(name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: module.into(), namespace: String::new() });
+        }
+        let value = |ptr| DataType { token: 5, type_info: ptr, ..Default::default() };
+        r.type_subtypes.insert(2, vec![value(1)]);
+        r.type_subtypes.insert(1, vec![DataType { is_object_handle: true, ..value(6) }]);
+        r.type_subtypes.insert(7, vec![DataType { is_object_handle: true, ..value(8) }]);
+        for (ptr, name, owner, constant) in [(10, "MakeContext", "UAbilityComponent", true), (11, "$beh0", "TSubclassOf", false),
+            (12, "opIndex", "TArray", false), (13, "Apply", "UAbilityComponent", false),
+            (14, "$beh2", "FContext", false), (15, "$beh2", "FResult", false)] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into()); r.func_is_method.insert(ptr);
+            if constant { r.const_method_ptrs.insert(ptr); }
+        }
+        r.func_params.insert(10, Vec::new()); r.func_ret.insert(10, value(3));
+        r.func_params.insert(11, vec![DataType { is_reference: true, is_object_const: true, is_read_only: true, ..value(1) }]);
+        r.func_ret.insert(11, DataType { token: 0x52, ..Default::default() });
+        r.func_params.insert(12, vec![DataType { token: 0x44, ..Default::default() }]);
+        r.func_ret.insert(12, DataType { is_reference: true, ..value(1) });
+        r.func_params.insert(13, vec![value(7), DataType { token: 0x50, ..Default::default() }, value(3)]);
+        r.func_ret.insert(13, value(4));
+        for ptr in [14, 15] { r.func_params.insert(ptr, Vec::new()); r.func_ret.insert(ptr, DataType { token: 0x52, ..Default::default() }); }
+        r.temporary_arg_positions.insert("Apply".into(), HashMap::from([(3, vec![true; 3])]));
+        r.ctor_arg_positions.insert("TSubclassOf".into(), HashMap::from([(1, vec![true])]));
+        match fault {
+            1 => r.type_subtypes.get_mut(&2).unwrap()[0].type_info = 7,
+            2 => r.func_ret.get_mut(&12).unwrap().type_info = 7,
+            3 => r.func_params.get_mut(&11).unwrap()[0].is_object_const = false,
+            4 => r.func_ret.get_mut(&11).unwrap().token = 0x41,
+            5 => r.func_ret.get_mut(&10).unwrap().is_reference = true,
+            6 => { r.func_params.get_mut(&10).unwrap().push(DataType { token: 0x44, ..Default::default() }); }
+            7 => r.func_params.get_mut(&13).unwrap()[2].type_info = 4,
+            8 => r.func_params.get_mut(&13).unwrap()[1].token = 0x51,
+            9 => { r.func_owner.insert(13, "OtherAbility".into()); }
+            10 => r.func_params.get_mut(&12).unwrap()[0].is_reference = true,
+            11 => { r.const_method_ptrs.insert(12); }
+            12 => r.func_ret.get_mut(&13).unwrap().is_object_handle = true,
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_ordered_vector_arguments(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("FVector", ""), ("ECollisionChannel", ""), ("AGothicCharacter", "")]);
         for (id, name) in [(1, "FVector"), (2, "ECollisionChannel"), (3, "AGothicCharacter")] {

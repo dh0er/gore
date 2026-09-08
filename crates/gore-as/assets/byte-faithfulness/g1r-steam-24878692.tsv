@@ -5,7 +5,7 @@ AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachZigZag.FireDemon_HellArmsAr
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_Barrier_Ring	1	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_RingFireTest	2	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.FireDemon_HellArmsArea_Ring	3	0	0
-AI.AIAgent.Creature.Demon.Spells.Area.DemonAreaVisual	2	0	0
+AI.AIAgent.Creature.Demon.Spells.Area.DemonAreaVisual	1	0	0
 AI.AIAgent.Creature.Golem.Fire.Spells.BreakFloor.GA_Spell_BreakFloor_FireGolem	2	0	0
 AI.AIAgent.Creature.Molerat.CombatSituations_Molerat	1	0	0
 AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.SoulHarvest.SoulHarvest_Visual	2	0	0
@@ -42,7 +42,7 @@ AI.States.FightAI.CombatState.AICombatTargetScoring	2	0	0
 AI.States.FightAI.CombatState.AIGroup_Attackers	5	0	0
 AI.States.FightAI.CombatState.AIGroup_Combat	2	0	0
 AI.States.FightAI.CombatState.AIState_OGCombat	9	0	0
-AI.States.FightAI.CombatState.CombatMoves	21	0	0
+AI.States.FightAI.CombatState.CombatMoves	20	0	0
 AI.States.FightAI.CombatState.CombatOperations	1	0	0
 AI.States.FightAI.CombatState.CombatTestClasses	1	0	0
 AI.States.FightAI.CombatState.Positioning.AICombat_Positioning	13	0	0
@@ -114,8 +114,6 @@ InteractiveObjects.PuzlesBlood	1	0	0
 Items.Projectiles	2	0	0
 Items.Visual.Projectile.Arrow.Base.ArrowProjectileVisual_Base	2	0	0
 LevelScripts.Map_x2_y1_OldCamp_AI_script	1	0	0
-LoadingScreen.LoadingScreenChapterBase	1	0	0
-Player.PlayerConfig	1	0	0
 Regions.Traits.QuestRelatedTraits	8	0	0
 Sound.FXDefinitions.FXDefinitions_AttackImpact	1	0	0
 Sound.FXDefinitions.FXDefinitions_Footsteps	1	0	0

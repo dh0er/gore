@@ -2045,6 +2045,10 @@ fn emit_function_ctor(
     let body = fold_enum_round_trips(&body, fields, &path_roots, refs);
     pass_trace("fold_enum_round_trips", &body);
     let mut member_copy_named = member_copy_named_slots(f);
+    // A scoped field copy must keep its local. Repeated constructions can
+    // instead be separate expression temporaries reusing the same slot.
+    member_copy_named.extend(scope_exit_destroyed_slots(f, refs).into_iter()
+        .filter(|slot| constructions.get(slot) == Some(&1)));
     // An explicitly constructed iterator container is a value copy of its field.
     member_copy_named.extend(named_iterated.intersection(&declared_with_init).copied());
     member_copy_named.extend(parameter_field_read_store_copies(f, refs, is_method));
@@ -2457,7 +2461,8 @@ fn emit_function_ctor(
         let value_locals = locals.iter().filter(|(slot, _)| !literal_value_lives.contains(*slot))
             .map(|(slot, ty)| (*slot, ty.clone())).collect();
         let (body, mut value_suppressed) =
-            rewrite_value_decl_init(&body, &value_locals, refs, &copy_constructed_slots(f, refs), &assigned_tail, &reference_locals);
+            rewrite_value_decl_init(&body, &value_locals, refs, &copy_constructed_slots(f, refs), &assigned_tail, &reference_locals,
+                &assigned_value_before_getter_sites(f, refs));
         value_suppressed.extend(literal_value_lives.iter().copied());
         pass_trace("rewrite_value_decl_init", &body);
         // A local that receives a CONST call result has to be const as well, and a const local is
@@ -4527,7 +4532,7 @@ fn rewrite_const_decl_init(
     let want = |slot: i32, _ty: &str| const_slots.contains(&slot);
     rewrite_decl_at_assignment(body, locals, &want, &|_, ty| {
         format!("const {}", qualify_decl_type(ty, refs))
-    }, true, &HashMap::new())
+    }, true, &HashMap::new(), &HashSet::new())
 }
 
 fn infer_call_result_types(
@@ -8286,7 +8291,7 @@ fn split_integer_guard_bool_chain(body: &str, f: &Func, refs: &RefResolver, spil
             || !condition.trim().strip_prefix("if (")?.trim_start_matches('(').starts_with(&format!("{name} || "))
             { return None; }
         Some(rewrite_decl_at_assignment(body, &BTreeMap::from([(slot, "bool".into())]),
-            &|_, _| true, &|_, _| "bool".into(), true, &HashMap::new()).0)
+            &|_, _| true, &|_, _| "bool".into(), true, &HashMap::new(), &HashSet::new()).0)
     })();
     rewrite.unwrap_or_else(|| body.to_owned())
 }
@@ -13026,8 +13031,15 @@ fn drop_redundant_conversions(
             && matching_paren(&init, ty.len()) == Some(init.len() - 1)
             && slot_and_life_any(&name).zip(outer_callee(inner)).is_some_and(|((slot, _), callee)|
                 reference_copies.contains(&(slot, ty.clone(), callee)));
+        // The legacy member walk returns the container type for an indexed
+        // local root. Use the existing element-aware walk for a direct local
+        // TArray element; other member/conversion paths keep their old lookup.
+        let indexed_type = inner.strip_suffix(']').and_then(|v| v.split_once('['))
+            .filter(|(array, index)| slot_and_life_any(array).is_some() && slot_and_life_any(index).is_some()
+                && roots.get(*array).is_some_and(|ty| ty.starts_with("TArray<")))
+            .and_then(|_| member_path_type(inner, roots, fields, refs, None, &BTreeMap::new()));
         if !reference_copy && (inner.contains('(') || inner.contains(',')
-            || type_of_member_path(inner, fields, roots, refs).as_deref() != Some(ty.as_str()))
+            || indexed_type.or_else(|| type_of_member_path(inner, fields, roots, refs)).as_deref() != Some(ty.as_str()))
         { continue; }
         *line = match declared.is_empty() {
             true => format!("{indent}{name} = {inner};"),
@@ -21301,7 +21313,7 @@ fn rewrite_primitive_lives_decl_init(
             && !reference_locals.contains_key(&slot)
             && (is_primitive(ty) || enums.get(&slot).is_some_and(|enum_ty| enum_ty == ty))
     };
-    rewrite_decl_at_assignment(body, locals, &wanted, &|_, ty| qualify_decl_type(ty, refs), false, &HashMap::new())
+    rewrite_decl_at_assignment(body, locals, &wanted, &|_, ty| qualify_decl_type(ty, refs), false, &HashMap::new(), &HashSet::new())
 }
 
 /// An arithmetic, comparison or numeric-cast instruction: what an unnamed scratch value is
@@ -21829,6 +21841,60 @@ fn named_copy_before_value_chain(f: &Func, refs: &RefResolver) -> HashSet<i32> {
     }).collect()
 }
 
+/// The indexed value is copied before another argument's RVO getter runs.
+/// Its only two address uses are this construction and the later argument
+/// push, so the statement verdict cannot escape into another physical life.
+fn copied_index_arguments_before_rvo_push(f: &Func, refs: &RefResolver, code: &[Instr]) -> HashSet<i32> {
+    let plain = |t: &super::types::DataType, token, ptr, reference, constant| t.token == token && t.type_info == ptr
+        && t.is_reference == reference && t.is_object_const == constant && t.is_read_only == constant
+        && !t.is_object_handle && !t.is_auto && !t.if_handle_then_const;
+    let word = |i: &Instr| i.words.first().map(|w| *w as i16 as i32);
+    let ptr = |i: &Instr| i.qwords.first().map(|p| *p as i64);
+    let local_type = |slot| { let values: Vec<_> = f.obj_locals.iter().filter(|(s, _)| *s == slot).map(|(_, p)| *p).collect();
+        match values.as_slice() { [p] => Some(*p), _ => None } };
+    code.windows(15).enumerate().filter_map(|(at, c)| {
+        if c.iter().map(|i| i.op.name).ne(["PshV4", "PSF", "Thiscall1", "PshRPtr", "PSF", "CALLSYS", "PSF", "PshVPtr",
+            "CALLSYS", "PSF", "PshC4", "PSF", "PSF", "PshVPtr", "CALLSYS"]) { return None; }
+        let (array, named, context, receiver, output) = (word(&c[1])?, word(&c[4])?, word(&c[6])?, word(&c[7])?, word(&c[12])?);
+        if [array, named, context, receiver, output].iter().any(|s| *s <= 0)
+            || HashSet::from([array, named, context, receiver, output]).len() != 5
+            || word(&c[9]) != Some(context) || word(&c[11]) != Some(named) || word(&c[13]) != Some(receiver)
+            || !f32::from_bits(*c[10].dwords.first()?).is_finite()
+            || code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&named))
+                .map(|(i, _)| i).ne([at + 4, at + 11]) { return None; }
+        let (index, copy, getter, consume) = (ptr(&c[2])?, ptr(&c[5])?, ptr(&c[8])?, ptr(&c[14])?);
+        let ty = local_type(named)?; let collection = local_type(array)?; let context_ty = local_type(context)?;
+        let [element] = refs.type_subtypes(collection)? else { return None; };
+        let [key] = refs.func_params_by_ptr(index)? else { return None; };
+        let [source] = refs.func_params_by_ptr(copy)? else { return None; };
+        let [argument, level, context_arg] = refs.func_params_by_ptr(consume)? else { return None; };
+        // Template instances can carry their Script subtype's module identity.
+        // All copy/index identities still agree by the exact T1 pointer.
+        if refs.type_by_ptr(collection) != Some("TArray") || refs.type_by_ptr(ty) != Some("TSubclassOf")
+            || !plain(element, 5, ty, false, false) || !plain(key, 0x44, 0, false, false)
+            || refs.func_by_ptr(index) != Some("opIndex") || refs.func_owner_by_ptr(index) != Some("TArray")
+            || !refs.is_method_by_ptr(index) || refs.is_const_method_by_ptr(index)
+            || !plain(refs.func_ret_by_ptr(index)?, 5, ty, true, false)
+            || refs.func_by_ptr(copy) != Some("$beh0") || refs.func_owner_by_ptr(copy) != Some("TSubclassOf")
+            || !refs.is_method_by_ptr(copy) || refs.is_const_method_by_ptr(copy) || !plain(source, 5, ty, true, true)
+            || !plain(refs.func_ret_by_ptr(copy)?, 0x52, 0, false, false)
+            || !refs.is_method_by_ptr(getter) || !refs.is_const_method_by_ptr(getter) || !refs.func_params_by_ptr(getter)?.is_empty()
+            || !plain(refs.func_ret_by_ptr(getter)?, 5, context_ty, false, false)
+            || !refs.is_method_by_ptr(consume) || refs.func_owner_by_ptr(consume) != refs.func_owner_by_ptr(getter)
+            || !plain(argument, 5, argument.type_info, false, false) || refs.type_by_ptr(argument.type_info) != Some("TSubclassOf")
+            || !plain(level, 0x50, 0, false, false) || !plain(context_arg, 5, context_ty, false, false)
+            || !plain(refs.func_ret_by_ptr(consume)?, 5, local_type(output)?, false, false) { return None; }
+        // The consuming TSubclassOf may have a base-class subtype. This rule
+        // preserves the already typed copy; it adds no conversion or cast.
+        if refs.func_owner_by_ptr(getter).is_none() || local_type(receiver).is_none()
+            || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                target > c[0].offset_dw as i64 && target <= c[14].offset_dw as i64
+            }))) { return None; }
+        Some(named)
+    }).collect()
+}
+
 /// A constructor followed by a separate return-slot push and a zero-argument method call
 /// evaluated its receiver before that call began. Preserve the named value so inlining
 /// does not move the return-slot push ahead of the construction (FVector::ToString).
@@ -21851,7 +21917,7 @@ fn receivers_built_before_their_rvo_push(f: &Func, refs: &RefResolver) -> HashSe
             }
         }
     }
-    let mut out = HashSet::new();
+    let mut out = copied_index_arguments_before_rvo_push(f, refs, &instrs);
     for run in instrs.windows(5) {
         if run[0].op.name != "PSF" || run[2].op.name != "PSF" || run[3].op.name != "PSF" {
             continue;
@@ -22903,6 +22969,58 @@ fn drop_last_case_break(body: &str) -> String {
     out
 }
 
+/// A native value assignment completes before the next getter's RVO push.
+/// Name only this constructor/copy destination; earlier operator-result lives
+/// on the same physical slot retain their existing inlining behavior.
+fn assigned_value_before_getter_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, String)> {
+    let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    let plain = |t: &super::types::DataType, token, ptr, reference, constant| t.token == token && t.type_info == ptr
+        && t.is_reference == reference && t.is_object_const == constant && t.is_read_only == constant
+        && !t.is_object_handle && !t.is_auto && !t.if_handle_then_const;
+    if !plain(&f.ret, 0x52, 0, false, false) { return HashSet::new(); }
+    let word = |i: &Instr| i.words.first().map(|w| *w as i16 as i32);
+    let ptr = |i: &Instr| i.qwords.first().map(|p| *p as i64);
+    code.windows(12).enumerate().filter_map(|(at, c)| {
+        if c.iter().map(|i| i.op.name).ne(["PSF", "CALLSYS", "PSF", "PSF", "CALLSYS", "PSF", "PshVPtr",
+            "CALLSYS", "PSF", "PSF", "PSF", "CALLSYS"]) { return None; }
+        let (source, named, receiver) = (word(&c[0])?, word(&c[3])?, word(&c[5])?);
+        if [source, named, receiver].iter().any(|s| *s <= 0) || HashSet::from([source, named, receiver]).len() != 3
+            || word(&c[2]) != Some(source) || word(&c[6]) != Some(0) || word(&c[8]) != Some(named)
+            || word(&c[9]) != Some(source) || word(&c[10]) != Some(receiver) { return None; }
+        let constructor = ptr(&c[1])?; let assign = ptr(&c[4])?; let getter = ptr(&c[7])?; let add = ptr(&c[11])?;
+        let ty = refs.func_ret_by_ptr(getter)?.type_info; let identity = refs.type_identity_by_ptr(ty)?;
+        if identity.name != "FVector" || !identity.module.is_empty() || !identity.namespace.is_empty()
+            || [source, named, receiver].iter().any(|slot| f.obj_locals.iter().filter(|(s, _)| s == slot).map(|(_, p)| *p).ne([ty]))
+            || !plain(refs.func_ret_by_ptr(getter)?, 5, ty, false, false) || !refs.is_method_by_ptr(getter)
+            || !refs.is_const_method_by_ptr(getter) || !refs.func_params_by_ptr(getter)?.is_empty()
+            || refs.func_owner_by_ptr(getter) != Some("AActor") { return None; }
+        for (p, name, constant) in [(constructor, "$beh0", false), (assign, "opAssign", false), (add, "opAdd", true)] {
+            if refs.func_by_ptr(p) != Some(name) || refs.func_owner_by_ptr(p) != Some(identity.name.as_str())
+                || !refs.is_method_by_ptr(p) || refs.is_const_method_by_ptr(p) != constant { return None; }
+        }
+        let [x, y, z] = refs.func_params_by_ptr(constructor)? else { return None; };
+        let [copied] = refs.func_params_by_ptr(assign)? else { return None; };
+        let [operand] = refs.func_params_by_ptr(add)? else { return None; };
+        if ![x, y, z].iter().all(|t| plain(t, 0x51, 0, false, false))
+            || !plain(refs.func_ret_by_ptr(constructor)?, 0x52, 0, false, false)
+            || !plain(copied, 5, ty, true, true) || !plain(refs.func_ret_by_ptr(assign)?, 5, ty, true, false)
+            || !plain(operand, 5, ty, true, true) || !plain(refs.func_ret_by_ptr(add)?, 5, ty, false, false) { return None; }
+        // The key is callee-qualified, not a slot lifetime exemption. Ensure
+        // another direct construction or assignment cannot inherit that key.
+        if code.windows(2).enumerate().any(|(i, pair)| pair[0].op.name == "PSF" && word(&pair[0]) == Some(named)
+            && pair[1].op.name == "CALLSYS" && i != at + 3 && ptr(&pair[1]).is_some_and(|p|
+                matches!(refs.func_by_ptr(p), Some("$beh0" | "opAssign"))))
+            || code.iter().filter(|i| i.op.name == "CALLSYS" && ptr(i).is_some_and(|p|
+                refs.func_by_ptr(p) == Some("$beh0") && refs.func_owner_by_ptr(p) == Some(identity.name.as_str())
+                    && refs.func_params_by_ptr(p).is_some_and(|args| args.len() == 3))).count() != 1
+            || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                target > c[0].offset_dw as i64 && target <= c[11].offset_dw as i64
+            }))) { return None; }
+        Some((named, identity.name.clone()))
+    }).collect()
+}
+
 /// Two vector arguments are produced in source order; the second reuses the
 /// first getter's slot. Qualify that getter by its receiver so its earlier
 /// argument life can still inline into the first producer.
@@ -23949,6 +24067,7 @@ fn named_value_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, String)> {
     out.extend(named_index_field_sites(f, refs));
     out.extend(eager_clamp_bound_sites(f, refs));
     out.extend(ordered_vector_argument_sites(f, refs));
+    out.extend(assigned_value_before_getter_sites(f, refs));
     out.extend(retained_double_call_quotients(f, refs).into_iter()
         .map(|(_, result, _, callee, _)| (result, callee.rsplit("::").next().unwrap().to_owned())));
     // Second shape: the result copied into a slot and RELOADED as a bool for the test right
@@ -26619,7 +26738,7 @@ fn rewrite_iterator_decl_init(
         )
     };
     // `auto`, not the inferred iterator head — see the render comment below.
-    rewrite_decl_at_assignment(body, locals, &is_iter, &|_, _| "auto".to_string(), true, &HashMap::new())
+    rewrite_decl_at_assignment(body, locals, &is_iter, &|_, _| "auto".to_string(), true, &HashMap::new(), &HashSet::new())
 }
 
 /// A VALUE-type local (`F*`/`T*`) that is hoisted and then assigned costs two symbols vanilla
@@ -26661,6 +26780,7 @@ fn rewrite_value_decl_init(
     copy_constructed: &HashSet<i32>,
     assigned_tail: &HashMap<i32, usize>,
     reference_locals: &HashMap<i32, bool>,
+    assigned_sites: &HashSet<(i32, String)>,
 ) -> (String, HashSet<i32>) {
     // A slot vanilla COPY-constructs was declared with its value: the `$beh0` there takes a
     // parameter, which a default construction does not. That is a fact about this function, and
@@ -26676,7 +26796,7 @@ fn rewrite_value_decl_init(
             Some(false) => format!("{ty}&"),
             None => ty.to_string(),
         }
-    }, true, assigned_tail)
+    }, true, assigned_tail, assigned_sites)
 }
 
 /// A local whose first reference WRITES it through a member or an element — `local_N.Field = …;`
@@ -27545,7 +27665,7 @@ fn rewrite_first_use_decl_init(
             Some(false) => format!("{head}&"),
             None => head,
         }
-    }, true, assigned_tail)
+    }, true, assigned_tail, &HashSet::new())
 }
 
 /// Whether the value a definition inside a nested block writes is read after that block closes
@@ -27642,6 +27762,7 @@ fn rewrite_decl_at_assignment(
     decl_head: &dyn Fn(i32, &str) -> String,
     split_at_every_definition: bool,
     assigned_tail: &HashMap<i32, usize>,
+    assigned_sites: &HashSet<(i32, String)>,
 ) -> (String, HashSet<i32>) {
     let mut suppressed: HashSet<i32> = HashSet::new();
     let mut out = body.to_string();
@@ -27679,7 +27800,7 @@ fn rewrite_decl_at_assignment(
         // writes the slot straight (`SetV1 N, 1`) and never copies, so a literal among the
         // tail says the counted copies belong to some other life of the slot (measured: a
         // bool scratch's `= true` stores read as assignments, 5 regressions).
-        let assignments: HashSet<usize> = match assigned_tail.get(slot).copied().unwrap_or(0) {
+        let mut assignments: HashSet<usize> = match assigned_tail.get(slot).copied().unwrap_or(0) {
             n if n > 0
                 && definitions.len() == n + 1
                 && definitions[1..].iter().all(|at| {
@@ -27697,6 +27818,18 @@ fn rewrite_decl_at_assignment(
             }
             _ => HashSet::new(),
         };
+        // A typed constructor/opAssign frame identifies this particular write,
+        // even if the slot also held a value in an earlier returning branch.
+        // Its previous definition must still be in scope at the assignment.
+        for pair in definitions.windows(2) {
+            let (previous, at) = (pair[0], pair[1]);
+            if assignment_rhs_for(lines[at], &ident)
+                    .is_some_and(|rhs| is_named_value_site(*slot, rhs, assigned_sites))
+                && at < block_span(&lines, previous).1
+            {
+                assignments.insert(at);
+            }
+        }
         // Group references: each group starts at an assignment line and swallows every
         // following reference inside that assignment's innermost block span.
         let mut groups: Vec<(usize, Vec<usize>)> = Vec::new(); // (assign line, later refs)
@@ -30121,7 +30254,7 @@ mod member_arithmetic_lifetime_tests {
         let kept = inline(&inline(body, &keep), &keep);
         assert!(kept.contains("local_20 = local_10.Proceed();"), "{kept}");
         let (declared, _) = super::rewrite_value_decl_init(&kept, &locals, &refs,
-            &HashSet::new(), &HashMap::new(), &reference);
+            &HashSet::new(), &HashMap::new(), &reference, &HashSet::new());
         assert!(declared.contains("const TSubclassOf<UTask>& local_20 = local_10.Proceed();"), "{declared}");
         let (foreach, _) = super::rewrite_foreach_loops(&kept, &locals, &refs,
             &super::range_for_iterator_slots(&f, &refs), &super::proceed_element_slots(&f, &refs),
@@ -30609,13 +30742,13 @@ mod literal_value_lifetime_tests {
             assert_eq!(keep, HashSet::from([6]));
             let filtered = locals.iter().filter(|(slot, _)| !keep.contains(*slot)).map(|(s, t)| (*s, t.clone())).collect();
             let (out, mut suppressed) = rewrite_value_decl_init(&body, &filtered, &refs,
-                &HashSet::new(), &assignment_write_counts(&f, &refs), &HashMap::new());
+                &HashSet::new(), &assignment_write_counts(&f, &refs), &HashMap::new(), &HashSet::new());
             suppressed.extend(keep.iter().copied());
             assert!(suppressed.contains(&6));
             assert_eq!(fold_assigned_temporaries(&out, None, &roots, &refs, &keep), body);
             if repeated {
                 let (old, _) = rewrite_value_decl_init(&body, &locals, &refs,
-                    &HashSet::from([6]), &assignment_write_counts(&f, &refs), &HashMap::new());
+                    &HashSet::from([6]), &assignment_write_counts(&f, &refs), &HashMap::new(), &HashSet::new());
                 assert!(old.contains("local_6_2"));
             } else {
                 assert!(!fold_assigned_temporaries(&body, None, &roots, &refs, &HashSet::new()).contains("local_6"));
@@ -33665,6 +33798,191 @@ mod literal_value_lifetime_tests {
             assert!(super::return_expression_temporaries(&other, &refs, false).is_empty(), "raw/type {fault}");
         }
     }
+    fn assigned_value_before_getter_fixture() -> Func {
+        let mut f = function(&[
+            // Earlier opSub lives of 26 and a native field copy construction of 20.
+            ("PshVPtr", &[0]), ("ADDSi", &[32]), ("PSF", &[20]), ("CALLSYS", &[]),
+            ("PSF", &[14]), ("PSF", &[26]), ("PSF", &[20]), ("CALLSYS", &[]),
+            ("PSF", &[26]), ("PshVPtr", &[65532]), ("CALLSYS", &[]),
+            ("PSF", &[14]), ("PSF", &[26]), ("PSF", &[20]), ("CALLSYS", &[]),
+            ("PshC8", &[]), ("PSF", &[26]), ("CALLSYS", &[]),
+            ("PshC8", &[]), ("PshC8", &[]), ("PshC8", &[]),
+            // The source-proven 12-op constructor/assignment/getter/add frame.
+            ("PSF", &[8]), ("CALLSYS", &[]), ("PSF", &[8]), ("PSF", &[26]), ("CALLSYS", &[]),
+            ("PSF", &[20]), ("PshVPtr", &[0]), ("CALLSYS", &[]),
+            ("PSF", &[26]), ("PSF", &[8]), ("PSF", &[20]), ("CALLSYS", &[]),
+            ("PSF", &[8]), ("PshVPtr", &[65532]), ("CALLSYS", &[]), ("RET", &[6]),
+        ]);
+        let c = disassemble(&f.bytecode).unwrap();
+        for (at, ptr) in [(3, 8), (7, 5), (10, 7), (14, 5), (17, 6), (22, 1), (25, 2), (28, 3), (32, 4), (35, 7)] {
+            f.bytecode[c[at].offset_dw + 1] = ptr;
+        }
+        f.ret.token = 0x52; f.obj_locals = vec![(8, 1), (14, 1), (20, 1), (26, 1)];
+        f
+    }
+
+    #[test]
+    fn constructed_assignment_stays_before_the_next_getter_without_naming_operator_lives() {
+        let f = assigned_value_before_getter_fixture(); let refs = RefResolver::from_test_assigned_value_before_getter(0);
+        let sites = super::named_value_sites(&f, &refs);
+        assert_eq!(sites, HashSet::from([(26, "FVector".into())]));
+        let locals = BTreeMap::from([(8, "FVector".into()), (14, "FVector".into()), (20, "FVector".into()), (26, "FVector".into())]);
+        let body = "local_26 = (local_20 - local_14);\nCurrentBox.Sink(local_26);\nlocal_26 = (local_20 - local_14);\nlocal_26.Normalize(0.00001);\nlocal_8 = FVector(X, Y, Z);\nlocal_26 = local_8;\nlocal_20 = this.GetLocation();\nlocal_8 = (local_20 + local_26);\nCurrentBox.Sink(local_8);\nreturn;\n";
+        let fold = |sites: &HashSet<(i32, String)>| super::inline_call_argument_temporaries(body, &refs, &locals, None, true,
+            &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), sites);
+        let kept = fold(&sites);
+        assert!(kept.contains("CurrentBox.Sink((local_20 - local_14));"), "{kept}");
+        assert!(kept.contains("local_26 = (local_20 - local_14);\nlocal_26.Normalize"), "{kept}");
+        assert!(kept.contains("local_26 = FVector(X, Y, Z);"), "{kept}");
+        assert!(kept.contains("CurrentBox.Sink((this.GetLocation() + local_26));"), "{kept}");
+        assert!(!kept.contains("local_8 ="), "{kept}");
+        let without = fold(&HashSet::new());
+        assert!(!without.contains("local_26 = FVector"), "{without}");
+        assert!(without.contains("this.GetLocation() + FVector(X, Y, Z)"), "{without}");
+        // The same site survives the later declaration/lifetime suffix stage.
+        let late = "FVector local_26_3 = FVector(X, Y, Z);\nCurrentBox.Sink((this.GetLocation() + local_26_3));\n";
+        let late_fold = |sites: &HashSet<(i32, String)>| super::inline_unnamed_value_temporaries(late, &HashSet::from([(26, 3)]),
+            &HashSet::new(), &HashSet::new(), &refs, &HashSet::new(), &HashSet::new(), &HashMap::new(), sites,
+            &HashSet::new(), &HashSet::new(), &HashSet::new());
+        assert_eq!(late_fold(&sites), late);
+        assert_ne!(late_fold(&HashSet::new()), late);
+        assert!(!super::is_named_value_site(26, "(local_20 - local_14)", &sites));
+        assert!(!super::is_named_value_site(8, "FVector(X, Y, Z)", &sites));
+        // The same slot had a separate value in the early-return branch. The
+        // final constructor assigns the second life instead of declaring a third.
+        let declarations = "if (Guard())\n{\n    local_26 = A();\n    Sink(local_26);\n    return;\n}\nlocal_26 = B();\nlocal_26.Normalize(Epsilon);\nlocal_26 = FVector(X, Y, Z);\nSink(local_26);\n";
+        let values = BTreeMap::from([(26, "FVector".into())]);
+        let declare = |body: &str, sites: &HashSet<(i32, String)>| super::rewrite_value_decl_init(body, &values,
+            &refs, &HashSet::new(), &super::assignment_write_counts(&f, &refs), &HashMap::new(), sites).0;
+        let declared = declare(declarations, &sites);
+        assert!(declared.contains("FVector local_26_2 = B();"), "{declared}");
+        assert!(declared.contains("local_26_2 = FVector(X, Y, Z);\nSink(local_26_2);"), "{declared}");
+        assert!(!declared.contains("local_26_3"), "{declared}");
+        assert!(declare(declarations, &HashSet::new()).contains("local_26_3"));
+        let closed = "if (Guard())\n{\n    local_26 = A();\n    Sink(local_26);\n}\nlocal_26 = FVector(X, Y, Z);\nSink(local_26);\n";
+        let without_tail = super::rewrite_value_decl_init(closed, &values, &refs, &HashSet::new(),
+            &HashMap::new(), &HashMap::new(), &sites).0;
+        assert!(without_tail.contains("FVector local_26_2 = FVector(X, Y, Z);"), "{without_tail}");
+    }
+
+    #[test]
+    fn constructed_assignment_rejects_wrong_types_repeated_constructor_lives_and_inner_entries() {
+        let f = assigned_value_before_getter_fixture(); let refs = RefResolver::from_test_assigned_value_before_getter(0);
+        let check = |f: &Func, refs: &RefResolver| super::assigned_value_before_getter_sites(f, refs);
+        for fault in 1..=11 { assert!(check(&f, &RefResolver::from_test_assigned_value_before_getter(fault)).is_empty(), "metadata {fault}"); }
+        let c = disassemble(&f.bytecode).unwrap();
+        for (at, slot) in [(23, 9), (27, 2), (29, 20), (31, 8)] {
+            let mut wrong = f.clone(); let dw = c[at].offset_dw;
+            wrong.bytecode[dw] = (wrong.bytecode[dw] & 0xffff) | (slot << 16);
+            assert!(check(&wrong, &refs).is_empty(), "operand {at}");
+        }
+        let mut wrong = f.clone(); wrong.obj_locals[3].1 = 2; assert!(check(&wrong, &refs).is_empty());
+        let mut duplicate = f.clone(); duplicate.obj_locals.push((26, 1)); assert!(check(&duplicate, &refs).is_empty());
+        for (target, ctor) in [(8, 1), (26, 8), (26, 2)] {
+            let mut part = function(&[("PSF", &[target]), ("CALLSYS", &[])]); part.bytecode[2] = ctor;
+            let mut extra = f.clone(); extra.bytecode.extend(part.bytecode); assert!(check(&extra, &refs).is_empty());
+        }
+        let mut entry = function(&[("JMP", &[])]); entry.bytecode[1] = c[26].offset_dw as i32;
+        entry.bytecode.extend(f.bytecode.clone()); entry.ret = f.ret.clone(); entry.obj_locals = f.obj_locals.clone();
+        assert!(check(&entry, &refs).is_empty());
+    }
+
+    fn copied_index_argument_fixture() -> Func {
+        let mut f = function(&[("SUSPEND", &[]),
+            ("PshV4", &[23]), ("PSF", &[22]), ("Thiscall1", &[]), ("PshRPtr", &[]), ("PSF", &[28]), ("CALLSYS", &[]),
+            ("PSF", &[34]), ("PshVPtr", &[2]), ("CALLSYS", &[]), ("PSF", &[34]), ("PshC4", &[]),
+            ("PSF", &[28]), ("PSF", &[37]), ("PshVPtr", &[2]), ("CALLSYS", &[]),
+            ("PSF", &[34]), ("CALLSYS", &[]), ("PSF", &[37]), ("CALLSYS", &[]),
+            ("IncVi", &[23]), ("CMPi", &[23, 25]), ("JS", &[]), ("RET", &[2])]);
+        let c = disassemble(&f.bytecode).unwrap();
+        for (at, ptr) in [(3, 12), (6, 11), (9, 10), (15, 13), (17, 14), (19, 15)] { f.bytecode[c[at].offset_dw + 1] = ptr; }
+        f.bytecode[c[11].offset_dw + 1] = 1.0f32.to_bits() as i32;
+        f.bytecode[c[22].offset_dw + 1] = -(c[22].offset_dw as i32) - 2;
+        f.ret.token = 0x52; f.obj_locals = vec![(22, 2), (28, 1), (34, 3), (2, 5), (37, 4)];
+        f
+    }
+
+    #[test]
+    fn indexed_copy_stays_a_statement_before_the_other_rvo_argument() {
+        let f = copied_index_argument_fixture(); let refs = RefResolver::from_test_copied_index_argument(0);
+        let statements = super::receivers_built_before_their_rvo_push(&f, &refs);
+        assert_eq!(statements, HashSet::from([28]));
+        let locals = BTreeMap::from([(2, "UGothicAbilityComponent".into()), (22, "TArray<TSubclassOf<USkill>>".into()),
+            (23, "int".into()), (28, "TSubclassOf<USkill>".into()), (34, "FContext".into()), (37, "FResult".into())]);
+        let body = "for (; local_23 < local_22.Num(); )\n{\n    local_28 = TSubclassOf<USkill>(local_22.opIndex(local_23));\n    local_34 = local_2.MakeContext();\n    local_37 = local_2.Apply(local_28, 1.0f, local_34);\n    ++local_23;\n}\n";
+        let fold = |statements: &HashSet<i32>| super::inline_call_argument_temporaries(body, &refs, &locals, None, true,
+            &HashMap::new(), statements, &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new());
+        let kept = fold(&statements);
+        assert!(kept.contains("local_28 = TSubclassOf<USkill>(local_22.opIndex(local_23));"), "{kept}");
+        assert!(kept.contains("local_37 = local_2.Apply(local_28, 1.0f, local_2.MakeContext());"), "{kept}");
+        assert!(!kept.contains("local_34 ="), "{kept}");
+        let without = fold(&HashSet::new());
+        assert!(!without.contains("local_28 ="), "{without}");
+        assert!(without.contains("local_2.Apply(TSubclassOf<USkill>(local_22.opIndex(local_23)), 1.0f, local_2.MakeContext())"), "{without}");
+        let late = "TSubclassOf<USkill> local_28 = local_22[local_23];\nlocal_2.Apply(local_28, 1.0f, local_2.MakeContext());\n";
+        let late_fold = |statements: &HashSet<i32>| super::inline_unnamed_value_temporaries(late, &HashSet::from([(28, 1)]),
+            &HashSet::new(), &HashSet::new(), &refs, &HashSet::new(), statements, &HashMap::new(), &HashSet::new(),
+            &HashSet::new(), &HashSet::new(), &HashSet::new());
+        assert_eq!(late_fold(&statements), late);
+        assert_ne!(late_fold(&HashSet::new()), late);
+    }
+
+    #[test]
+    fn indexed_named_copy_unwraps_before_declaring_and_stays_before_the_context() {
+        let f = copied_index_argument_fixture(); let refs = RefResolver::from_test_copied_index_argument(0);
+        let statements = super::receivers_built_before_their_rvo_push(&f, &refs);
+        let locals: BTreeMap<i32, String> = BTreeMap::from([(2, "UGothicAbilityComponent".into()), (22, "TArray<TSubclassOf<USkill>>".into()),
+            (23, "int".into()), (28, "TSubclassOf<USkill>".into())]);
+        let roots: HashMap<String, String> = locals.iter().map(|(slot, ty)| (format!("local_{slot}"), ty.clone())).collect();
+        let body = "for (; local_23 < local_22.Num(); )\n{\n    local_28 = TSubclassOf<USkill>(local_22.opIndex(local_23));\n    local_2.Apply(local_28, 1.0f, local_2.MakeContext());\n    ++local_23;\n}\n";
+        let indexed = super::rewrite_operator_calls(body);
+        let plain = super::drop_redundant_conversions(&indexed, None, &roots, &refs, &HashSet::new(), &HashSet::new());
+        assert!(plain.contains("local_28 = local_22[local_23];"), "{plain}");
+        let (declared, _) = super::rewrite_value_decl_init(&plain, &locals, &refs, &super::copy_constructed_slots(&f, &refs),
+            &HashMap::new(), &HashMap::new(), &HashSet::new());
+        let late = super::inline_unnamed_value_temporaries(&declared, &HashSet::from([(28, 1)]),
+            &HashSet::new(), &HashSet::new(), &refs, &HashSet::new(), &statements, &HashMap::new(), &HashSet::new(),
+            &HashSet::new(), &HashSet::new(), &HashSet::new());
+        assert!(late.contains("TSubclassOf<USkill> local_28 = local_22[local_23];"), "{late}");
+        assert!(late.contains("local_2.Apply(local_28, 1.0f, local_2.MakeContext());"), "{late}");
+        let wrapper = "TSubclassOf<USkill> local_28 = TSubclassOf<USkill>(local_22[local_23]);\n";
+        let plain = "TSubclassOf<USkill> local_28 = local_22[local_23];\n";
+        assert_eq!(super::drop_redundant_conversions(wrapper, None, &roots, &refs, &HashSet::new(), &HashSet::new()), plain);
+        for container in ["TArray<TSubclassOf<UOther>>", "TMap<int, TSubclassOf<USkill>>", "Unknown"] {
+            let mut other = roots.clone(); other.insert("local_22".into(), container.into());
+            assert_eq!(super::drop_redundant_conversions(wrapper, None, &other, &refs, &HashSet::new(), &HashSet::new()), wrapper);
+        }
+        for other in [wrapper.replace("local_22[local_23]", "local_99[local_23]"),
+            wrapper.replace("local_22[local_23]", "local_22[Next()]"),
+            wrapper.replace("local_22[local_23]", "local_22[local_23][local_1]")] {
+            assert_eq!(super::drop_redundant_conversions(&other, None, &roots, &refs, &HashSet::new(), &HashSet::new()), other);
+        }
+        assert_eq!(super::drop_redundant_conversions(wrapper, None, &roots, &refs, &HashSet::new(),
+            &HashSet::from([(28, "TSubclassOf<USkill>".into())])), wrapper);
+    }
+
+    #[test]
+    fn indexed_copy_argument_requires_closed_identity_life_and_cfg_evidence() {
+        let f = copied_index_argument_fixture(); let refs = RefResolver::from_test_copied_index_argument(0);
+        let check = |f: &Func, refs: &RefResolver| super::receivers_built_before_their_rvo_push(f, refs);
+        for fault in 1..=12 { assert!(check(&f, &RefResolver::from_test_copied_index_argument(fault)).is_empty(), "metadata {fault}"); }
+        let c = disassemble(&f.bytecode).unwrap();
+        for (at, slot) in [(10, 35), (12, 29), (14, 4)] {
+            let mut wrong = f.clone(); let dw = c[at].offset_dw;
+            wrong.bytecode[dw] = (wrong.bytecode[dw] & 0xffff) | (slot << 16);
+            assert!(check(&wrong, &refs).is_empty(), "operand {at}");
+        }
+        let mut wrong = f.clone(); wrong.obj_locals[1].1 = 7; assert!(check(&wrong, &refs).is_empty());
+        let mut duplicate = f.clone(); duplicate.obj_locals.push((28, 1)); assert!(check(&duplicate, &refs).is_empty());
+        let mut live = f.clone(); live.bytecode.extend(function(&[("PSF", &[28])]).bytecode); assert!(check(&live, &refs).is_empty());
+        let mut copy = function(&[("PSF", &[28]), ("CALLSYS", &[])]); copy.bytecode[2] = 11;
+        let mut other_life = f.clone(); other_life.bytecode.extend(copy.bytecode); assert!(check(&other_life, &refs).is_empty());
+        let mut entry = f.clone(); entry.bytecode[c[22].offset_dw + 1] = c[7].offset_dw as i32 - c[22].offset_dw as i32 - 2;
+        assert!(check(&entry, &refs).is_empty());
+    }
+
     #[test]
     fn ordered_vector_arguments_keep_only_the_later_receiver_life() {
         let refs = RefResolver::from_test_ordered_vector_arguments(0);
@@ -34068,6 +34386,56 @@ mod literal_value_lifetime_tests {
             body.replace("return Fallback", "Use(local_7);\n        return Fallback"), body.replace("local_10 = Reach;", "local_10 = OtherReach;")] {
             assert_eq!(super::fold_default_return_conditionals(&other, &f, &refs), other);
         }
+    }
+
+    #[test]
+    fn a_member_copy_keeps_its_scope_lifetime_through_conversion_and_member_folding() {
+        let refs = RefResolver::from_test_literal_string_scope(0);
+        let mut f = function(&[("PSF", &[100]), ("CALLSYS", &[]),
+            ("PSF", &[118]), ("CALLSYS", &[]), ("PSF", &[118]), ("CALLSYS", &[]),
+            ("PSF", &[100]), ("CALLSYS", &[]), ("RET", &[0])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, ptr) in [(1, 1), (3, 1), (5, 3), (7, 3)] {
+            f.bytecode[code[at].offset_dw + 1] = ptr;
+        }
+        let scoped = |f: &Func| {
+            let constructions = super::default_construction_counts(f, &refs);
+            super::scope_exit_destroyed_slots(f, &refs).into_iter()
+                .filter(|slot| constructions.get(slot) == Some(&1)).collect::<HashSet<_>>()
+        };
+        let keep = scoped(&f);
+        assert_eq!(keep, HashSet::from([100, 118]));
+        let locals = BTreeMap::from([(100, "FString".into())]);
+        let fields = HashMap::from([("Label".into(), "FString".into())]);
+        let source = "    FString local_100 = FString(this.Label);\n    Use(local_100);\n    Later();\n";
+        let plain = super::drop_redundant_conversions(source, Some(&fields), &HashMap::new(), &refs,
+            &HashSet::new(), &HashSet::new());
+        assert_eq!(plain, source.replace("FString(this.Label)", "this.Label"));
+        let fold = |body: &str, named: &HashSet<i32>| super::fold_member_read_temporaries(body,
+            &HashSet::new(), &HashSet::new(), &locals, Some(&fields), &HashMap::new(), &refs,
+            &HashMap::new(), false, named, &HashSet::new(), &HashMap::new());
+        assert_eq!(fold(&plain, &keep), plain);
+        assert_eq!(fold(&fold(&plain, &keep), &keep), plain);
+        assert_eq!(fold(&plain, &HashSet::new()), "    Use(this.Label);\n    Later();\n");
+        // A single expression cleanup does not acquire scope retention.
+        let mut single = function(&[("PSF", &[100]), ("CALLSYS", &[]), ("RET", &[0])]);
+        single.bytecode[1 + 1] = 3;
+        let temporary = super::scope_exit_destroyed_slots(&single, &refs);
+        assert!(temporary.is_empty());
+        assert_eq!(fold(&plain, &temporary), fold(&plain, &HashSet::new()));
+        // Two constructor/destructor lives are two expression temporaries,
+        // not one local destroyed at two exits (e.g. short-circuit equality).
+        let mut reused = function(&[("PSF", &[100]), ("CALLSYS", &[]),
+            ("PSF", &[100]), ("CALLSYS", &[]), ("CpyVtoR1", &[5]),
+            ("PSF", &[100]), ("CALLSYS", &[]), ("PSF", &[100]), ("CALLSYS", &[]),
+            ("CpyVtoR1", &[6]), ("RET", &[0])]);
+        let code = disassemble(&reused.bytecode).unwrap();
+        for (at, ptr) in [(1, 1), (3, 3), (6, 1), (8, 3)] {
+            reused.bytecode[code[at].offset_dw + 1] = ptr;
+        }
+        assert!(super::scope_exit_destroyed_slots(&reused, &refs).contains(&100));
+        assert!(scoped(&reused).is_empty());
+        assert_eq!(fold(&plain, &scoped(&reused)), fold(&plain, &HashSet::new()));
     }
 
     fn widened_division_fixture() -> Func {
