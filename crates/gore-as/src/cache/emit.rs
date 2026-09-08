@@ -1288,6 +1288,7 @@ fn emit_function_ctor(
     hoisted.extend(seeded_integer_copies.iter().copied());
     hoisted.extend(named_literal_string_rvo_returns(f, refs, is_method));
     hoisted.extend(named_literal_string_scopes(f, refs, is_method));
+    hoisted.extend(named_returned_string_scopes(f, refs, is_method));
     // A handle vanilla RELEASED was a declared local: this compiler frees no handle temporary
     // and no handle at function scope, only a block's own locals at the block's end.
     let released_handles = released_handle_slots(f, refs);
@@ -1304,6 +1305,7 @@ fn emit_function_ctor(
     let spilled = spilled_boolean_names(f, refs);
     let retained_bool_branches = named_bool_literal_branches(f);
     let named_arithmetic = named_arithmetic_slots(f);
+    let terminal_arithmetic_sites = terminal_return_arithmetic_sites(f, refs, is_method);
     let mut named_sites = named_value_sites(f, refs);
     named_sites.extend(named_narrowed_field_differences(f, refs, is_method));
     let (pushed_scalar_sites, eager_scalar_sites) = scalar_argument_order_sites(f, refs, is_method);
@@ -1925,6 +1927,7 @@ fn emit_function_ctor(
         &inline_callees,
         &named_arithmetic,
         &named_sites,
+        &terminal_arithmetic_sites,
     );
     pass_trace("inline_call_argument_temporaries", &body);
     // Runs after the producers have moved into their readers: only then is the value arm of a
@@ -1979,6 +1982,7 @@ fn emit_function_ctor(
         &inline_callees,
         &named_arithmetic,
         &named_sites,
+        &terminal_arithmetic_sites,
     );
     pass_trace("inline_call_argument_temporaries", &body);
     let body = rewrite_operator_calls(&body);
@@ -2009,6 +2013,7 @@ fn emit_function_ctor(
         &inline_callees,
         &named_arithmetic,
         &named_sites,
+        &terminal_arithmetic_sites,
     );
     pass_trace("inline_call_argument_temporaries", &body);
     let body = fold_inlined_cast_bool_cleanup(&body, f, refs, &widened);
@@ -2945,8 +2950,9 @@ fn emit_function_ctor(
         pass_trace("inline_unnamed_value_temporaries", &rendered);
         // Now that the operands carry no names of their own, an in-place update stands directly
         // under its declaration and the pair is one statement — which can expose another value.
-        let rendered = merge_self_assignments_retaining(&rendered, &declared_locals,
-            &native_vector_self_assignments(f, refs));
+        let mut self_assignments = native_vector_self_assignments(f, refs);
+        self_assignments.extend(terminal_clamp_assignment_slots(f, refs, &terminal_arithmetic_sites));
+        let rendered = merge_self_assignments_retaining(&rendered, &declared_locals, &self_assignments);
         pass_trace("merge_self_assignments", &rendered);
         // Fresh default member values reuse the earlier call result's frame slot.
         // Expose them before the final inliner counts that result's actual reads.
@@ -9326,6 +9332,52 @@ fn copied_on_slots(f: &Func) -> HashSet<i32> {
         .collect()
 }
 
+/// An earlier parameter product consumed by a terminal bool comparison owns
+/// no part of the later call-result life reusing its physical slot. Match the
+/// exact adjacent rendered store/return pair; the later call keeps its order gate.
+fn terminal_return_arithmetic_sites(f: &Func, refs: &RefResolver, is_method: bool)
+    -> HashSet<(String, String)>
+{
+    if !is_method || f.ret.token != 0x41 || f.ret.is_reference || f.ret.is_object_handle {
+        return HashSet::new();
+    }
+    let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    let Some(tail) = code.last().filter(|i| i.op.name == "RET") else { return HashSet::new(); };
+    let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+    let offsets = super::model::param_slot_map(&params, true, false, Some(refs));
+    let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+    let wide = |t: &super::types::DataType| t.token == 0x51 && t.type_info == 0
+        && !t.is_reference && !t.is_object_handle && !t.is_auto;
+    code.windows(8).enumerate().filter_map(|(at, c)| {
+        if c.iter().map(|i| i.op.name).ne(["CALLSYS", "CpyRtoV8", "MULd", "CMPd",
+            "TS", "CpyRtoV4", "CpyVtoR4", "JMP"]) { return None; }
+        let (left, slot, source, boolean) = (w(&c[1], 0)?, w(&c[2], 0)?, w(&c[2], 1)?, w(&c[5], 0)?);
+        let index = *offsets.get(&source)?; let param = f.params.get(index)?;
+        if source >= 0 || [left, slot, boolean].iter().any(|s| *s <= 0)
+            || left == slot || boolean == slot || boolean == left || !wide(&param.ty)
+            || w(&c[2], 2) != Some(source) || c[3].words != [left as u16, slot as u16]
+            || w(&c[6], 0) != Some(boolean)
+            || !c[0].qwords.first().and_then(|p| refs.func_ret_by_ptr(*p as i64)).is_some_and(wide)
+            || c[7].dwords.first().map(|d| c[7].offset_dw as i64 + 2 + *d as i32 as i64)
+                != Some(tail.offset_dw as i64)
+            || f.obj_locals.iter().any(|(s, _)| [left, slot, boolean].contains(s)) { return None; }
+        let uses: Vec<_> = code.iter().enumerate().filter(|(_, i)|
+            super::bytediff::addressed_slots(i).contains(&slot)).map(|(at, _)| at).collect();
+        let [made, read, next, ..] = uses.as_slice() else { return None; };
+        if *made != at + 2 || *read != at + 3 || *next <= at + 7
+            || code[*next].op.name != "CpyRtoV8" || w(&code[*next], 0) != Some(slot)
+            || code.iter().filter(|i| i.op.name == "MULd" && w(i, 0) == Some(slot)).count() != 1
+            || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J')
+                && i.dwords.first().is_some_and(|d| {
+                    let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                    target > c[0].offset_dw as i64 && target <= c[7].offset_dw as i64
+                }))) { return None; }
+        let name = if param.name.is_empty() { format!("arg{index}") } else { param.name.clone() };
+        Some((format!("local_{slot} = {name} * {name};"),
+            format!("return (local_{left} < local_{slot});")))
+    }).collect()
+}
+
 fn inline_call_argument_temporaries(
     body: &str,
     refs: &RefResolver,
@@ -9344,6 +9396,7 @@ fn inline_call_argument_temporaries(
     inline_callees: &HashMap<i32, Vec<String>>,
     named_arithmetic: &HashSet<i32>,
     named_sites: &HashSet<(i32, String)>,
+    terminal_arithmetic_sites: &HashSet<(String, String)>,
 ) -> String {
     const MAX_ARGUMENT_INLINE_PASSES: usize = 8;
     let trailing_newline = body.ends_with('\n');
@@ -9408,7 +9461,7 @@ fn inline_call_argument_temporaries(
                 if inline_temporary_into(
                     &mut lines, index, &temp, &callee, position, locals, refs, fields, call_types,
                     statement_producers, temporary_receivers, loop_elements, widened, aliased,
-                    copied_on, hoisted, spilled, inline_callees, named_arithmetic, named_sites,
+                    copied_on, hoisted, spilled, inline_callees, named_arithmetic, named_sites, terminal_arithmetic_sites
                 ) {
                     changed = true;
                     moved = true;
@@ -9471,6 +9524,7 @@ fn inline_temporary_into(
     inline_callees: &HashMap<i32, Vec<String>>,
     named_arithmetic: &HashSet<i32>,
     named_sites: &HashSet<(i32, String)>,
+    terminal_arithmetic_sites: &HashSet<(String, String)>,
 ) -> bool {
     let receiver = position == Position::Receiver;
     // A loop header is evaluated once per ITERATION, and this producer stands before the loop.
@@ -9522,7 +9576,13 @@ fn inline_temporary_into(
             // A LITERAL lands in a temporary right before its use whichever way it is written:
             // the witness speaks about calls the compiler ran early, not about constants.
             let literal = this_definition.is_some_and(is_plain_literal);
-            if !this_definition_inline && !literal {
+            // Only this raw-proven adjacent terminal product is independent of
+            // the later call result that gave the physical slot its order witness.
+            let terminal_arithmetic = position == Position::Operand && index > 0
+                && definition_value(&lines[index - 1], temp).is_some()
+                && terminal_arithmetic_sites.contains(&(lines[index - 1].trim().to_owned(), lines[index].trim().to_owned()))
+                && lines.iter().filter(|line| line.trim() == lines[index - 1].trim()).count() == 1;
+            if !this_definition_inline && !literal && !terminal_arithmetic {
                 inline_reject("order", callee, &temp, &lines[index]);
                 return false;
             }
@@ -16562,6 +16622,49 @@ fn native_vector_self_assignments(f: &Func, refs: &RefResolver) -> HashSet<i32> 
                 && i.dwords.first().is_some_and(|d| {
                     let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
                     target > initial[0].offset_dw as i64 && target <= c[10].offset_dw as i64
+                }))) { return None; }
+        Some(named)
+    }).collect()
+}
+
+/// After a terminal arithmetic life disappears, retain the later native f64
+/// result and its explicit Clamp copy as two statements in that same binding.
+fn terminal_clamp_assignment_slots(
+    f: &Func, refs: &RefResolver, sites: &HashSet<(String, String)>,
+) -> HashSet<i32> {
+    let candidates: HashSet<_> = sites.iter().filter_map(|(store, _)|
+        slot_store(store).and_then(|(name, _)| slot_of(&name))).collect();
+    if candidates.is_empty() { return HashSet::new(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+    let wide = |t: &super::types::DataType| t.token == 0x51 && t.type_info == 0
+        && !t.is_reference && !t.is_object_handle && !t.is_auto;
+    code.windows(9).enumerate().filter_map(|(at, c)| {
+        if c.iter().map(|i| i.op.name).ne(["CALLSYS", "CpyRtoV8", "PshV8", "PshC8",
+            "PshV8", "CALLSYS", "CpyRtoV8", "CpyVtoV8", "PshV8"]) { return None; }
+        let (named, bound, scratch) = (w(&c[1], 0)?, w(&c[2], 0)?, w(&c[6], 0)?);
+        let slots = [named, bound, scratch];
+        if !candidates.contains(&named) || slots.iter().any(|s| *s <= 0)
+            || slots.into_iter().collect::<HashSet<_>>().len() != 3
+            || f.obj_locals.iter().any(|(s, _)| slots.contains(s))
+            || c[3].qwords.first() != Some(&0) || w(&c[4], 0) != Some(named)
+            || c[7].words != [named as u16, scratch as u16] || w(&c[8], 0) != Some(named)
+            || !c[0].qwords.first().and_then(|p| refs.func_ret_by_ptr(*p as i64)).is_some_and(wide)
+        { return None; }
+        let clamp = *c[5].qwords.first()? as i64;
+        let args = refs.func_params_by_ptr(clamp)?;
+        if refs.func_by_ptr(clamp) != Some("Clamp") || refs.func_ns_by_ptr(clamp) != Some("Math")
+            || refs.is_method_by_ptr(clamp) || !wide(refs.func_ret_by_ptr(clamp)?)
+            || args.len() != 3 || !args.iter().all(wide) { return None; }
+        // The terminal product/compare are the only earlier life; this capture,
+        // argument, copy-back and next argument are the complete later life.
+        let uses: Vec<_> = code.iter().enumerate().filter(|(_, i)|
+            super::bytediff::addressed_slots(i).contains(&named)).map(|(i, _)| i).collect();
+        if uses.len() != 6 || uses[1] >= at || uses[2..] != [at + 1, at + 4, at + 7, at + 8]
+            || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J')
+                && i.dwords.first().is_some_and(|d| {
+                    let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                    target > c[0].offset_dw as i64 && target <= c[8].offset_dw as i64
                 }))) { return None; }
         Some(named)
     }).collect()
@@ -23918,7 +24021,14 @@ fn eager_clamp_bound_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, String
         let at = code.len().checked_sub(17)?; let c = &code[at..];
         if c.iter().map(|i| i.op.name).ne(["PshV8", "PshV8", "CALLSYS", "CpyRtoV8", "PshV8", "PshV8",
             "CALLSYS", "CpyRtoV8", "PshV8", "PshV8", "MULd", "ADDd", "PshV8", "CALLSYS", "CpyRtoV8", "CpyVtoR8", "RET"])
-            || code.iter().any(|i| i.op.name.starts_with('J')) { return None; }
+            // Earlier guards may bypass the whole tail through their own return
+            // value. No branch may enter the bound evaluation midway through.
+            || code.iter().enumerate().any(|(n, i)| i.op.name == "JMPP" || (i.op.name.starts_with('J')
+                && i.dwords.first().is_none_or(|d| {
+                    let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                    target > c[0].offset_dw as i64 && (target != c[16].offset_dw as i64
+                        || i.op.name != "JMP" || n == 0 || code[n - 1].op.name != "CpyVtoR8")
+                }))) { return None; }
         let w = |i: usize, n: usize| c[i].words.get(n).map(|w| *w as i16 as i32);
         let ptr = |i: usize| c[i].qwords.first().map(|p| *p as i64);
         let (min, max, product, sum) = (w(3, 0)?, w(7, 0)?, w(10, 0)?, w(11, 0)?);
@@ -26155,6 +26265,57 @@ fn block_scoped_value_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
         }
     }
     out
+}
+
+/// A returned FString feeds an FName constructor but survives until the
+/// enclosing guard exits. Preserve its one closed life before argument folding.
+fn named_returned_string_scopes(f: &Func, refs: &RefResolver, is_method: bool) -> HashSet<i32> {
+    if !is_method || f.ret.token != 0x52 { return HashSet::new(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    let w = |i: &Instr| i.words.first().map(|v| *v as i16 as i32);
+    let ptr = |i: &Instr| i.qwords.first().map(|p| *p as i64);
+    let jump = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+    let plain = |t: &super::types::DataType, token, ty, reference, constant| t.token == token && t.type_info == ty
+        && t.is_reference == reference && t.is_object_const == constant && t.is_read_only == constant
+        && !t.is_object_handle && !t.is_auto && !t.if_handle_then_const;
+    let native_local = |slot, name| {
+        let mut types = f.obj_locals.iter().filter(|(s, _)| *s == slot).map(|(_, p)| *p);
+        let ty = types.next()?; let identity = refs.type_identity_by_ptr(ty)?;
+        (types.next().is_none() && identity.name == name && identity.module.is_empty()
+            && identity.namespace.is_empty()).then_some(ty)
+    };
+    code.windows(11).enumerate().filter_map(|(at, c)| {
+        if c.iter().map(|i| i.op.name).ne(["JLowZ", "PshVPtr", "ADDSi", "PshVPtr", "PSF", "PshVPtr",
+            "CALLSYS", "PSF", "PSF", "CALLSYS", "PSF"])
+            || w(&c[1]) != Some(0) || w(&c[5]) != Some(0) || w(&c[3])? >= 0 { return None; }
+        let (string, name) = (w(&c[4])?, w(&c[8])?);
+        if string <= 0 || name <= 0 || string == name || w(&c[7]) != Some(string)
+            || w(&c[10]) != Some(name) { return None; }
+        let (string_ty, name_ty) = (native_local(string, "FString")?, native_local(name, "FName")?);
+        let uses: Vec<_> = code.iter().enumerate().filter(|(_, i)|
+            super::bytediff::addressed_slots(i).contains(&string)).map(|(n, _)| n).collect();
+        let [made, read, release] = uses.as_slice() else { return None; };
+        if *made != at + 4 || *read != at + 7 || *release <= at + 12
+            || code[*release].op.name != "PSF" || code.get(*release + 1)?.op.name != "CALLSYS"
+            || jump(&c[0]) != Some(code.get(*release + 2)?.offset_dw as i64)
+            || !code[at + 11..*release].iter().any(|i| i.op.is_call()) { return None; }
+        let (getter, ctor, dtor) = (ptr(&c[6])?, ptr(&c[9])?, ptr(&code[*release + 1])?);
+        if !refs.is_method_by_ptr(getter) || !refs.is_const_method_by_ptr(getter)
+            || !plain(refs.func_ret_by_ptr(getter)?, 5, string_ty, false, false)
+            || !matches!(refs.func_params_by_ptr(getter)?, [map, key]
+                if plain(map, 5, map.type_info, true, true) && plain(key, 5, name_ty, true, true)) { return None; }
+        for (p, owner, behavior) in [(ctor, "FName", "$beh0"), (dtor, "FString", "$beh2")] {
+            if refs.func_owner_by_ptr(p) != Some(owner) || refs.func_by_ptr(p) != Some(behavior)
+                || !refs.is_method_by_ptr(p) || refs.is_const_method_by_ptr(p)
+                || !plain(refs.func_ret_by_ptr(p)?, 0x52, 0, false, false) { return None; }
+        }
+        if !matches!(refs.func_params_by_ptr(ctor)?, [arg] if plain(arg, 5, string_ty, true, true))
+            || !refs.func_params_by_ptr(dtor)?.is_empty()
+            || code.iter().enumerate().any(|(n, i)| i.op.name == "JMPP" || (i.op.name.starts_with('J')
+                && jump(i).is_some_and(|t| t > c[0].offset_dw as i64 && t < code[*release + 2].offset_dw as i64
+                    && (n <= at || n >= *release || t <= c[10].offset_dw as i64)))) { return None; }
+        Some(string)
+    }).collect()
 }
 
 /// The literal string has one complete physical life and survives a later
@@ -31174,7 +31335,7 @@ mod eager_negated_bool_guard_tests {
         let inline = |text: &str, spilled: &HashSet<i32>| inline_call_argument_temporaries(
             text, &refs, &locals, None, true, &types,
             &empty, &empty, &empty, &empty, &empty, &empty, &empty, spilled,
-            &HashMap::new(), &empty, &sites);
+            &HashMap::new(), &empty, &sites, &HashSet::new());
         let isolated = "local_1 = Saved();\nlocal_5 = Other();\nif (!(local_1) && !(local_5))\n";
         assert_eq!(inline(isolated, &spilled), isolated);
         for absent in [&empty, &HashSet::from([6])] {
@@ -31310,7 +31471,7 @@ mod arithmetic_inline_grouping_tests {
                 Position::Operand, &BTreeMap::from([(2, "float".into())]), &RefResolver::default(), None,
                 &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
                 &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
-                &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new());
+                &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
             (moved, lines)
         };
         let (moved, lines) = fold(source);
@@ -31341,7 +31502,7 @@ mod arithmetic_inline_grouping_tests {
                 &HashMap::from([(4, "float".into())]), &HashSet::new(), &HashSet::new(),
                 &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
                 &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(),
-                &HashSet::new()));
+                &HashSet::new(), &HashSet::new()));
             assert!(lines[0].is_empty());
             assert_eq!(lines[1].trim(), expected);
         }
@@ -31500,7 +31661,7 @@ mod member_arithmetic_lifetime_tests {
         let inline = |body: &str, keep: &HashSet<i32>| super::inline_call_argument_temporaries(
             body, &refs, &locals, None, true, &HashMap::new(), keep,
             &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
-            &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new());
+            &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
         assert!(!inline(body, &HashSet::new()).contains("local_20 = local_10.Proceed();"));
         let kept = inline(&inline(body, &keep), &keep);
         assert!(kept.contains("local_20 = local_10.Proceed();"), "{kept}");
@@ -31567,7 +31728,7 @@ mod member_arithmetic_lifetime_tests {
         let folded = super::inline_call_argument_temporaries(body, &refs, &locals, None, true,
             &HashMap::from([(20, "float32".into())]), &retained,
             &empty, &empty, &empty, &empty, &empty, &empty, &empty,
-            &HashMap::new(), &empty, &HashSet::new());
+            &HashMap::new(), &empty, &HashSet::new(), &HashSet::new());
         assert!(folded.contains("local_20 = local_14.Proceed();"), "{folded}");
         let source = "auto local_14 = this.Weights.Iterator();\nwhile (local_14.CanProceed)\n{\n    local_20 = local_14.Proceed();\n    local_20 = local_20 / local_1;\n}\n";
         let rewrite = |proof: &HashSet<(i32, i32)>| rewrite_foreach_loops(source, &locals, &refs,
@@ -31592,7 +31753,7 @@ mod member_arithmetic_lifetime_tests {
             let inlined = super::inline_call_argument_temporaries(source, &refs, &locals, None, true,
                 &HashMap::from([(20, "float32".into())]), &retained,
                 &empty, &empty, &empty, &empty, &empty, &empty, &empty,
-                &HashMap::new(), &empty, &HashSet::new());
+                &HashMap::new(), &empty, &HashSet::new(), &HashSet::new());
             let aliases = super::fold_alias_copies(&inlined, &locals, &empty);
             super::fold_copy_out_temporaries(&aliases, &locals, &empty, None, &empty, keep, &HashSet::new())
         };
@@ -31850,7 +32011,7 @@ mod member_arithmetic_lifetime_tests {
         let fold = |sites| super::inline_call_argument_temporaries(body, &refs, &locals, None, true,
             &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
             &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashMap::new(),
-            &HashSet::new(), sites);
+            &HashSet::new(), sites, &HashSet::new());
         assert_eq!(fold(&sites), body);
         assert!(!fold(&HashSet::new()).contains("local_14"));
     }
@@ -32646,7 +32807,7 @@ mod literal_value_lifetime_tests {
         let empty = HashSet::new();
         let fold = |body: &str, sites: &HashSet<(i32, String)>| super::inline_call_argument_temporaries(
             body, &refs, &locals, None, true, &types, &empty, &empty, &empty, &empty, &empty,
-            &empty, &empty, &empty, &HashMap::new(), &empty, sites);
+            &empty, &empty, &empty, &HashMap::new(), &empty, sites, &HashSet::new());
         // Actual first-pass shape: the enum is outside the conditional read.
         let body = "local_7 = owner.GetRelation(other);\nif (!(Ready(other)))\n{\n    local_11 = false;\n}\nelse\n{\n    local_11 = (int(local_7) != 16);\n}\nif (local_11)\n{\n    return false;\n}\nreturn true;\n";
         let first = fold(body, &sites);
@@ -32875,7 +33036,7 @@ mod literal_value_lifetime_tests {
         let body = "local_74 = FGameplayTag(GameplayTag::Crime_Interaction);\nlocal_4 = Perception.Sensing.GetState();\nthis.Register(local_74, local_4, nullptr, FGameplayTag::Empty, local_40);\n";
         let fold = |sites: &HashSet<(i32, String)>| super::inline_call_argument_temporaries(body, &refs, &locals, None, true,
             &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
-            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), sites);
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), sites, &HashSet::new());
         let kept = fold(&sites);
         assert_eq!(kept, "local_74 = FGameplayTag(GameplayTag::Crime_Interaction);\nthis.Register(local_74, Perception.Sensing.GetState(), nullptr, FGameplayTag::Empty, local_40);\n");
         let unkept = fold(&HashSet::new());
@@ -34044,7 +34205,7 @@ mod literal_value_lifetime_tests {
             let locals = BTreeMap::from([(1, "int".into()), (15, from.into()), (26, to.into())]);
             super::inline_call_argument_temporaries(text, &refs, &locals, None, true, &HashMap::new(),
                 &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
-                &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new())
+                &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new())
         };
         assert_eq!(fold(body, "int", "float"), body);
         assert_eq!(fold(body, "float", "int"), body);
@@ -34302,6 +34463,60 @@ mod literal_value_lifetime_tests {
         assert!(!temporary.contains("TArray<FEntry> local_4;"), "{temporary}");
     }
 
+    fn returned_string_scope_fixture() -> Func {
+        let mut f = function(&[("PshVPtr", &[0]), ("ADDSi", &[0]), ("PshVPtr", &[65534]),
+            ("PshVPtr", &[0]), ("CALLSYS", &[]), ("JLowZ", &[]),
+            ("PshVPtr", &[0]), ("ADDSi", &[0]), ("PshVPtr", &[65534]), ("PSF", &[10]),
+            ("PshVPtr", &[0]), ("CALLSYS", &[]), ("PSF", &[10]), ("PSF", &[20]), ("CALLSYS", &[]),
+            ("PSF", &[20]), ("PshVPtr", &[0]), ("CALLSYS", &[]), ("PshVPtr", &[0]), ("CALLSYS", &[]),
+            ("PSF", &[10]), ("CALLSYS", &[]), ("PshVPtr", &[0]), ("CALLSYS", &[]), ("RET", &[4])]);
+        f.ret.token = 0x52; f.obj_locals = vec![(10, 3), (20, 2)];
+        f.params.push(super::super::model::Param { name: "data".into(), flags: 0,
+            ty: DataType { token: 5, type_info: 4, is_reference: true, is_object_const: true, is_read_only: true, ..Default::default() } });
+        let c = disassemble(&f.bytecode).unwrap();
+        for (at, p) in [(1, 1), (7, 1), (4, 7), (11, 1), (14, 2), (17, 4), (19, 5), (21, 3), (23, 5)] {
+            f.bytecode[c[at].offset_dw + 1] = p;
+        }
+        f.bytecode[c[5].offset_dw + 1] = c[22].offset_dw as i32 - c[5].offset_dw as i32 - 2;
+        f
+    }
+
+    #[test]
+    fn returned_string_keeps_its_guard_scope_through_the_full_emitter() {
+        let f = returned_string_scope_fixture(); let refs = RefResolver::from_test_returned_string_scope(0);
+        assert_eq!(super::named_returned_string_scopes(&f, &refs, true), HashSet::from([10]));
+        let mut source = String::new(); super::emit_function(&mut source, &f, &refs, true, false, 0);
+        assert!(source.contains("        FString local_10 = this.GetDataFrom(data, this.Key);"), "{source}");
+        assert!(source.contains("this.Use(FName(local_10));"), "{source}");
+        assert_eq!(source.matches("FString local_10").count(), 1, "{source}");
+        assert!(!source.contains("stub[") && !source.contains("FName(this.GetDataFrom"), "{source}");
+    }
+
+    #[test]
+    fn returned_string_scope_requires_closed_types_lifetime_and_guard_exit() {
+        let f = returned_string_scope_fixture(); let refs = RefResolver::from_test_returned_string_scope(0);
+        for fault in 1..=10 { assert!(super::named_returned_string_scopes(&f,
+            &RefResolver::from_test_returned_string_scope(fault), true).is_empty(), "metadata {fault}"); }
+        assert!(super::named_returned_string_scopes(&f, &refs, false).is_empty());
+        let c = disassemble(&f.bytecode).unwrap();
+        for fault in 0..8 {
+            let mut bad = f.clone();
+            match fault {
+                0 => bad.obj_locals.push((10, 3)),
+                1 => bad.bytecode[c[5].offset_dw + 1] += 1,
+                2 => bad.bytecode[c[12].offset_dw] ^= 2 << 16,
+                3 => bad.bytecode[c[10].offset_dw] |= 2 << 16,
+                4 => bad.bytecode.extend(function(&[("PSF", &[10])]).bytecode),
+                5 => bad.bytecode[c[21].offset_dw + 1] = 2,
+                6 => { let at = bad.bytecode.len(); bad.bytecode.extend(function(&[("JMP", &[])]).bytecode);
+                    bad.bytecode[at + 1] = c[12].offset_dw as i32 - at as i32 - 2; }
+                _ => { let p = c[20].offset_dw; bad.bytecode.splice(p..p, function(&[("PSF", &[10])]).bytecode); }
+            }
+            assert!(super::named_returned_string_scopes(&bad, &refs, true).is_empty(), "raw {fault}");
+        }
+    }
+
+
     fn literal_string_scope_fixture() -> Func {
         let mut f = function(&[("PGA", &[]), ("PSF", &[4]), ("CALLSYS", &[]),
             ("PSF", &[4]), ("PSF", &[38]), ("PshVPtr", &[0]), ("CALLINTF", &[]),
@@ -34337,7 +34552,7 @@ mod literal_value_lifetime_tests {
         let fold = |hoisted: &HashSet<i32>| super::inline_call_argument_temporaries(body, &refs,
             &locals, None, true, &calls, &HashSet::new(), &HashSet::new(),
             &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), hoisted,
-            &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new());
+            &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
         assert!(!fold(&HashSet::new()).contains("local_6 ="));
         let kept = fold(&keep);
         assert!(kept.contains("local_6 = local_18.Count();"), "{kept}");
@@ -34365,7 +34580,7 @@ mod literal_value_lifetime_tests {
         let fold = |hoisted: &HashSet<i32>| super::inline_call_argument_temporaries(body, &refs,
             &locals, None, true, &HashMap::new(), &HashSet::new(), &HashSet::new(),
             &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), hoisted,
-            &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new());
+            &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
         assert!(fold(&HashSet::new()).contains("this.Setup(FString(\"Warning\"))"));
         assert_eq!(fold(&keep), body);
         let mut source = String::new();
@@ -34575,7 +34790,7 @@ mod literal_value_lifetime_tests {
         let retained = super::inline_call_argument_temporaries(body, &refs, &locals, None,
             true, &HashMap::new(), &named, &HashSet::new(), &HashSet::new(),
             &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
-            &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new());
+            &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
         assert_eq!(retained, body);
         assert_eq!(super::fold_returned_temporaries(body, &locals, &refs, "bool", false, &named), body);
         let initialized = "    bool local_1 = false;\n    Observe();\n    local_1 = Ready() && Allowed();\n    return local_1;\n";
@@ -34705,7 +34920,7 @@ mod literal_value_lifetime_tests {
         let fold = |witness: &HashSet<i32>| super::inline_call_argument_temporaries(
             body, &refs, &locals, None, true, &call_types, witness,
             &empty, &empty, &empty, &empty, &empty, &empty, &empty,
-            &HashMap::new(), &empty, &HashSet::new());
+            &HashMap::new(), &empty, &HashSet::new(), &HashSet::new());
         assert!(fold(&empty).contains("target == GetPawn()"));
         assert_eq!(fold(&super::call_results_before_parameter_comparisons(&f, &refs, true)), body);
     }
@@ -35317,7 +35532,7 @@ mod literal_value_lifetime_tests {
             let negated=super::fold_negated_stores(&adjacent,&HashSet::new());
             let kept=super::inline_call_argument_temporaries(&negated,&refs,&locals,None,true,
                 &HashMap::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),
-                &HashSet::new(),&HashSet::new(),&spilled,&HashMap::new(),&HashSet::new(),&HashSet::new());
+                &HashSet::new(),&HashSet::new(),&spilled,&HashMap::new(),&HashSet::new(),&HashSet::new(), &HashSet::new());
             let assignment=format!("local_{slot} = Trace();");
             assert_eq!(kept.matches(&assignment).count(),if reused {2} else {1},"{kept}");
             assert!(!kept.contains("local_94 = Trace()"),"{kept}");
@@ -35374,7 +35589,7 @@ mod literal_value_lifetime_tests {
         let out = super::inline_call_argument_temporaries(body, &refs, &locals, None, true,
             &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
             &HashSet::new(), &HashSet::new(), &HashSet::new(), &spilled, &HashMap::new(),
-            &HashSet::new(), &HashSet::new());
+            &HashSet::new(), &HashSet::new(), &HashSet::new());
         assert_eq!(out, body);
         assert_eq!(super::fold_condition_temporaries(body, &locals, &refs, None, &spilled, &HashSet::new(), false), body);
         for fault in 1..=4 {
@@ -35410,7 +35625,7 @@ mod literal_value_lifetime_tests {
         let out = super::inline_call_argument_temporaries(body, &refs, &locals, None, true,
             &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
             &HashSet::new(), &HashSet::new(), &HashSet::new(), &spilled, &HashMap::new(),
-            &HashSet::new(), &HashSet::new());
+            &HashSet::new(), &HashSet::new(), &HashSet::new());
         assert!(out.contains("local_3 = ((Cast<UNode>(Actor)) != nullptr);"), "{out}");
         assert!(out.contains("return local_3 || Extra;"), "{out}");
         for fault in 0..5 {
@@ -35458,7 +35673,7 @@ mod literal_value_lifetime_tests {
             (3, "bool".into()), (4, "bool".into()), (7, "bool".into()), (11, "bool".into())]);
         let fold = |keep: &HashSet<i32>| super::inline_call_argument_temporaries(body, &refs, &locals, None, true,
             &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
-            &HashSet::new(), &HashSet::new(), &HashSet::new(), keep, &HashMap::new(), &HashSet::new(), &HashSet::new());
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), keep, &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
         let kept = fold(&spilled);
         for slot in [3, 4, 7, 11] {
             assert!(kept.contains(&format!("local_{slot} = ((Cast<UNode>(Actor)) != nullptr);")), "{kept}");
@@ -36010,7 +36225,7 @@ mod literal_value_lifetime_tests {
         let locals = BTreeMap::from([(2, "AActor".into())]);
         let fold = |aliases: &HashSet<i32>| super::inline_call_argument_temporaries(body, &refs, &locals, None, true,
             &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), aliases,
-            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new());
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
         assert!(fold(&aliases).contains("Attach(local_2,"));
         assert!(fold(&aliases.difference(&allowed).copied().collect()).contains("Attach(this.Avatar(),"));
         for fault in 1..=4 { assert!(check(&f, &RefResolver::from_test_reused_guard_cast_getter(fault)).is_empty(), "metadata {fault}"); }
@@ -36037,7 +36252,7 @@ mod literal_value_lifetime_tests {
         let locals = BTreeMap::from([(4, "UComponent".into()), (8, "UComponent".into())]);
         let fold = |aliases: &HashSet<i32>| super::inline_call_argument_temporaries(body, &refs, &locals, None, true,
             &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), aliases,
-            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new());
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
         assert!(fold(&aliased).contains("local_4 = this.GetComponent();"));
         let folded = fold(&aliased.difference(&allowed).copied().collect());
         assert!(!folded.contains("local_4"), "{folded}");
@@ -36384,7 +36599,7 @@ mod literal_value_lifetime_tests {
         let body = "local_26 = (local_20 - local_14);\nCurrentBox.Sink(local_26);\nlocal_26 = (local_20 - local_14);\nlocal_26.Normalize(0.00001);\nlocal_8 = FVector(X, Y, Z);\nlocal_26 = local_8;\nlocal_20 = this.GetLocation();\nlocal_8 = (local_20 + local_26);\nCurrentBox.Sink(local_8);\nreturn;\n";
         let fold = |sites: &HashSet<(i32, String)>| super::inline_call_argument_temporaries(body, &refs, &locals, None, true,
             &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
-            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), sites);
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), sites, &HashSet::new());
         let kept = fold(&sites);
         assert!(kept.contains("CurrentBox.Sink((local_20 - local_14));"), "{kept}");
         assert!(kept.contains("local_26 = (local_20 - local_14);\nlocal_26.Normalize"), "{kept}");
@@ -36467,7 +36682,7 @@ mod literal_value_lifetime_tests {
         let body = "for (; local_23 < local_22.Num(); )\n{\n    local_28 = TSubclassOf<USkill>(local_22.opIndex(local_23));\n    local_34 = local_2.MakeContext();\n    local_37 = local_2.Apply(local_28, 1.0f, local_34);\n    ++local_23;\n}\n";
         let fold = |statements: &HashSet<i32>| super::inline_call_argument_temporaries(body, &refs, &locals, None, true,
             &HashMap::new(), statements, &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
-            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new());
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
         let kept = fold(&statements);
         assert!(kept.contains("local_28 = TSubclassOf<USkill>(local_22.opIndex(local_23));"), "{kept}");
         assert!(kept.contains("local_37 = local_2.Apply(local_28, 1.0f, local_2.MakeContext());"), "{kept}");
@@ -36556,7 +36771,7 @@ mod literal_value_lifetime_tests {
         let locals = BTreeMap::from([(20, "FVector".into()), (32, "FVector".into())]);
         let fold = |sites: &HashSet<(i32, String)>| super::inline_call_argument_temporaries(body, &refs, &locals, None, true,
             &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
-            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), sites);
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), sites, &HashSet::new());
         let kept = fold(&sites);
         assert!(!kept.contains("local_20 = Target.GetLocation()"), "{kept}");
         assert!(kept.contains("local_32 = this.Floor(Target.GetLocation(),"), "{kept}");
@@ -36671,7 +36886,7 @@ mod literal_value_lifetime_tests {
         let locals = BTreeMap::from([(12, "float".into()), (16, "float".into())]);
         let fold = |sites: &HashSet<(i32, String)>| super::inline_call_argument_temporaries(body, &refs, &locals, None, true,
             &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
-            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), sites);
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), sites, &HashSet::new());
         let kept = fold(&sites);
         assert!(kept.contains("local_16 = Math::Min(A, B);"), "{kept}");
         assert!(kept.contains("local_12 = Math::Max(A, B);"), "{kept}");
@@ -36701,6 +36916,21 @@ mod literal_value_lifetime_tests {
         }
         let mut object = f.clone(); object.obj_locals.push((12, 100));
         assert!(super::eager_clamp_bound_sites(&object, &refs).is_empty());
+        let mut guarded = function(&[("JLowZ", &[]), ("SetV8", &[2]), ("CpyVtoR8", &[2]), ("JMP", &[])]);
+        guarded.bytecode.extend(f.bytecode.clone()); guarded.ret = f.ret.clone();
+        let gc = disassemble(&guarded.bytecode).unwrap();
+        for (from, to) in [(0, 4), (3, 20)] {
+            guarded.bytecode[gc[from].offset_dw + 1] = gc[to].offset_dw as i32 - gc[from].offset_dw as i32 - 2;
+        }
+        assert_eq!(super::eager_clamp_bound_sites(&guarded, &refs), sites);
+        for target in 5..=20 {
+            let mut entered = guarded.clone();
+            entered.bytecode[gc[0].offset_dw + 1] = gc[target].offset_dw as i32 - gc[0].offset_dw as i32 - 2;
+            assert!(super::eager_clamp_bound_sites(&entered, &refs).is_empty(), "guard enters {target}");
+        }
+        let mut no_return_value = guarded.clone();
+        no_return_value.bytecode[gc[2].offset_dw] = function(&[("PshV8", &[2])]).bytecode[0];
+        assert!(super::eager_clamp_bound_sites(&no_return_value, &refs).is_empty());
     }
 
     fn changed_bool_fields_fixture() -> Func {
@@ -36806,7 +37036,7 @@ mod literal_value_lifetime_tests {
             let empty = HashSet::new();
             let folded = super::inline_call_argument_temporaries(body, &refs, &locals, None, true,
                 &call_types, &empty, &empty, &empty, &empty, &empty, &empty, &empty, &empty,
-                &HashMap::new(), &empty, &sites);
+                &HashMap::new(), &empty, &sites, &HashSet::new());
             assert!(folded.contains("local_6 = Saved();"), "{folded}");
             assert!(!folded.contains("|| Saved()") && !folded.contains("!(Saved())"), "{folded}");
         }
@@ -36897,7 +37127,7 @@ mod literal_value_lifetime_tests {
         let empty = HashSet::new();
         let inline = |text: &str, sites: &HashSet<(i32, String)>| super::inline_call_argument_temporaries(
             text, &refs, &locals, None, true, &types, &empty, &empty, &empty, &empty,
-            &empty, &empty, &empty, &empty, &HashMap::new(), &empty, sites);
+            &empty, &empty, &empty, &empty, &HashMap::new(), &empty, sites, &HashSet::new());
         let body = "local_5 = !(Other());\nif (local_5)\n{\n    return;\n}\nlocal_9 = !(Container().IsEmpty());\nlocal_5 = !(Container().IsEmpty());\nlocal_41 = !(local_9) && !(local_5);\nif (local_41)\n{\n    return;\n}\nWork();\n";
         assert!(!inline(body, &HashSet::new()).contains("local_5 = !(Container().IsEmpty());"));
         let kept = inline(body, &sites);
@@ -36948,6 +37178,171 @@ mod literal_value_lifetime_tests {
         }
         // Existing plain callee keys keep their old treatment of negated values.
         assert!(!super::is_named_value_site(5, "!(Container().IsEmpty())", &HashSet::from([(5, "IsEmpty".into())])));
+    }
+
+    fn terminal_return_arithmetic_fixture() -> Func {
+        let mut f = function(&[
+            ("CALLSYS", &[]), ("CpyRtoV8", &[8]), ("SetV8", &[34]), ("CMPd", &[8, 34]), ("JNS", &[]),
+            ("CALLSYS", &[]), ("CpyRtoV8", &[34]), ("MULd", &[38, 65534, 65534]), ("CMPd", &[34, 38]),
+            ("TS", &[]), ("CpyRtoV4", &[35]), ("CpyVtoR4", &[35]), ("JMP", &[]),
+            ("CALLSYS", &[]), ("CpyRtoV8", &[38]), ("PshV8", &[8]), ("PshC8", &[]), ("PshV8", &[38]),
+            ("CALLSYS", &[]), ("CpyRtoV8", &[46]), ("CpyVtoV8", &[38, 46]),
+            ("PshV8", &[38]), ("CALLSYS", &[]), ("CpyRtoV8", &[46]), ("MULd", &[34, 65534, 65534]),
+            ("CMPd", &[46, 34]), ("TS", &[]), ("CpyRtoV4", &[35]), ("CpyVtoR4", &[35]), ("RET", &[4]),
+        ]);
+        f.ret = DataType { token: 0x41, ..Default::default() };
+        f.params = vec![crate::cache::model::Param { name: "Radius".into(), flags: 0,
+            ty: DataType { token: 0x51, is_read_only: true, ..Default::default() } }];
+        let c = disassemble(&f.bytecode).unwrap();
+        for (at, ptr) in [(0, 1), (5, 2), (13, 3), (18, 4), (22, 5)] {
+            f.bytecode[c[at].offset_dw + 1] = ptr;
+        }
+        f.bytecode[c[2].offset_dw + 2] = 0x3ff00000;
+        for (at, target) in [(4, 13), (12, 29)] {
+            f.bytecode[c[at].offset_dw + 1] = c[target].offset_dw as i32 - c[at].offset_dw as i32 - 2;
+        }
+        f
+    }
+
+    #[test]
+    fn terminal_product_life_inlines_before_decl_placement_but_later_call_stays_named() {
+        let f = terminal_return_arithmetic_fixture();
+        let refs = RefResolver::from_test_terminal_return_arithmetic(false);
+        let sites = super::terminal_return_arithmetic_sites(&f, &refs, true);
+        assert_eq!(sites, HashSet::from([("local_38 = Radius * Radius;".into(),
+            "return (local_34 < local_38);".into())]));
+        let statements = super::statement_producer_slots(&f);
+        assert!(statements.contains(&38), "later Projection must keep its order witness");
+        let body = "local_8 = Size();\nif (local_8 < 1.0)\n{\n    local_34 = DistanceSquared();\n    local_38 = Radius * Radius;\n    return (local_34 < local_38);\n}\nlocal_38 = Projection();\nlocal_38 = Math::Clamp(local_38, 0.0, local_8);\nreturn (Consume(local_38) < (Radius * Radius));\n";
+        let locals: BTreeMap<i32, String> = [8, 34, 38].into_iter().map(|s| (s, "float".into())).collect();
+        let call_types: HashMap<_, _> = locals.iter().map(|(s, t)| (*s, t.clone())).collect();
+        let fold = |body: &str, sites: &HashSet<(String, String)>| super::inline_call_argument_temporaries(
+            body, &refs, &locals, None, true, &call_types, &statements, &HashSet::new(),
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
+            &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(), sites);
+        assert!(fold(body, &HashSet::new()).contains("local_38 = Radius * Radius;"));
+        let folded = fold(body, &sites);
+        assert!(!folded.contains("local_38 = Radius * Radius;"), "{folded}");
+        assert!(folded.contains("local_38 = Projection();"), "{folded}");
+        assert!(folded.contains("local_38 = Math::Clamp(local_38, 0.0, local_8);"), "{folded}");
+        let (placed, suppressed) = super::rewrite_first_use_decl_init(&folded, &locals, &refs,
+            &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(),
+            &HashMap::from([(38, 1)]), &HashSet::new(), &HashSet::new());
+        assert!(suppressed.contains(&38));
+        assert!(placed.contains("float local_38 = Projection();"), "{placed}");
+        assert!(placed.contains("local_38 = Math::Clamp(local_38, 0.0, local_8);"), "{placed}");
+        assert!(!placed.contains("local_38_2"), "Clamp must remain assignment: {placed}");
+        for changed in [body.replace("Radius * Radius", "Radius * 2.0"),
+            body.replace("local_34 < local_38", "local_38 < local_34"),
+            body.replace("    return (local_34 < local_38);", "    Observe();\n    return (local_34 < local_38);"),
+            format!("{body}local_38 = Radius * Radius;\n")]
+        {
+            assert!(fold(&changed, &sites).contains("local_38 = "), "{changed}");
+            assert!(fold(&changed, &sites).contains(if changed.contains("Radius * 2.0") {
+                "local_38 = Radius * 2.0;"
+            } else { "local_38 = Radius * Radius;" }), "{changed}");
+        }
+        let mut rendered = String::new();
+        super::emit_function(&mut rendered, &f, &refs, true, false, 0);
+        assert!(!rendered.contains("stub[") && !rendered.contains("float local_38;"), "{rendered}");
+        assert!(!rendered.contains("local_38 = Radius * Radius;"), "{rendered}");
+        assert!(rendered.contains("DistanceSquared()") && rendered.contains("< (Radius * Radius)"), "{rendered}");
+        assert!(rendered.contains("float local_38 = Projection();"), "{rendered}");
+        assert!(rendered.contains("local_38 = Math::Clamp(local_38, 0.0, local_8);"), "{rendered}");
+        assert!(!rendered.contains("local_38_2"), "{rendered}");
+    }
+
+    #[test]
+    fn terminal_product_site_rejects_other_types_copies_lives_and_interior_entries() {
+        let f = terminal_return_arithmetic_fixture();
+        let refs = RefResolver::from_test_terminal_return_arithmetic(false);
+        let c = disassemble(&f.bytecode).unwrap();
+        let sites = |f: &Func| super::terminal_return_arithmetic_sites(f, &refs, true);
+        assert!(super::terminal_return_arithmetic_sites(&f, &refs, false).is_empty());
+        assert!(super::terminal_return_arithmetic_sites(&f,
+            &RefResolver::from_test_terminal_return_arithmetic(true), true).is_empty());
+        for fault in 0..6 {
+            let mut other = f.clone();
+            match fault {
+                0 => other.params[0].ty.token = 0x50,
+                1 => other.params[0].ty.is_reference = true,
+                2 => other.params[0].ty.is_object_handle = true,
+                3 => other.ret.token = 0x44,
+                4 => other.ret.is_reference = true,
+                _ => other.obj_locals.push((38, 1)),
+            }
+            assert!(sites(&other).is_empty(), "type {fault}");
+        }
+        for (at, op, words) in [(7, "MULd", vec![38, 65534, 8]),
+            (8, "CMPd", vec![38, 34]), (11, "CpyVtoR4", vec![36]),
+            (14, "PshV8", vec![38]), (14, "CpyRtoV4", vec![38])]
+        {
+            let mut other = f.clone();
+            let replacement = function(&[(op, &words)]).bytecode;
+            assert_eq!(replacement.len(), c[at + 1].offset_dw - c[at].offset_dw);
+            other.bytecode[c[at].offset_dw..c[at].offset_dw + replacement.len()].copy_from_slice(&replacement);
+            assert!(sites(&other).is_empty(), "raw {at} {op}");
+        }
+        for (jump, target) in [(4, 6), (4, 7), (4, 8), (4, 12), (12, 13)] {
+            let mut other = f.clone();
+            other.bytecode[c[jump].offset_dw + 1] = c[target].offset_dw as i32 - c[jump].offset_dw as i32 - 2;
+            assert!(sites(&other).is_empty(), "entry {jump}->{target}");
+        }
+        let mut other = f.clone();
+        let mut prefix = function(&[("PshV8", &[38])]).bytecode;
+        prefix.extend(other.bytecode); other.bytecode = prefix;
+        assert!(sites(&other).is_empty(), "earlier slot read");
+        let mut other = f.clone();
+        other.bytecode.extend(function(&[("MULd", &[38, 65534, 65534]), ("RET", &[4])]).bytecode);
+        let changed = disassemble(&other.bytecode).unwrap();
+        other.bytecode[c[12].offset_dw + 1] = changed.last().unwrap().offset_dw as i32 - c[12].offset_dw as i32 - 2;
+        assert!(sites(&other).is_empty(), "duplicate arithmetic definition");
+    }
+
+    #[test]
+    fn terminal_clamp_copy_keeps_only_the_proven_later_assignment() {
+        let f = terminal_return_arithmetic_fixture();
+        let refs = RefResolver::from_test_terminal_return_arithmetic(false);
+        let sites = super::terminal_return_arithmetic_sites(&f, &refs, true);
+        let keep = super::terminal_clamp_assignment_slots(&f, &refs, &sites);
+        assert_eq!(keep, HashSet::from([38]));
+        let locals = BTreeMap::from([(38, "float".into())]);
+        let pair = "float local_38 = Projection();\nlocal_38 = Math::Clamp(local_38, 0.0, local_8);\n";
+        assert_eq!(super::merge_self_assignments_retaining(pair, &locals, &keep), pair);
+        assert_ne!(super::merge_self_assignments(pair, &locals), pair);
+        let unrelated = pair.replace("local_38", "local_38_2");
+        assert_ne!(super::merge_self_assignments_retaining(&unrelated, &locals, &keep), unrelated);
+        assert!(super::terminal_clamp_assignment_slots(&f, &refs, &HashSet::new()).is_empty());
+        for fault in 1..=6 {
+            assert!(super::terminal_clamp_assignment_slots(&f,
+                &RefResolver::from_test_terminal_clamp_assignment(fault), &sites).is_empty(), "metadata {fault}");
+        }
+        let c = disassemble(&f.bytecode).unwrap();
+        for (at, op, words) in [(14, "CpyRtoV4", vec![38]), (15, "PshV8", vec![38]),
+            (17, "PshV8", vec![46]), (19, "CpyRtoV8", vec![38]),
+            (20, "CpyVtoV8", vec![46, 38]), (20, "CpyVtoV4", vec![38, 46]),
+            (21, "PshV8", vec![46])]
+        {
+            let mut bad = f.clone();
+            let replacement = function(&[(op, &words)]).bytecode;
+            assert_eq!(replacement.len(), c[at + 1].offset_dw - c[at].offset_dw);
+            bad.bytecode[c[at].offset_dw..c[at].offset_dw + replacement.len()].copy_from_slice(&replacement);
+            assert!(super::terminal_clamp_assignment_slots(&bad, &refs, &sites).is_empty(), "raw {at} {op}");
+        }
+        for target in [14, 15, 18, 20, 21] {
+            let mut bad = f.clone();
+            bad.bytecode[c[4].offset_dw + 1] = c[target].offset_dw as i32 - c[4].offset_dw as i32 - 2;
+            assert!(super::terminal_clamp_assignment_slots(&bad, &refs, &sites).is_empty(), "entry {target}");
+        }
+        let mut bad = f.clone();
+        bad.bytecode[c[16].offset_dw + 1] = 1;
+        assert!(super::terminal_clamp_assignment_slots(&bad, &refs, &sites).is_empty(), "lower bound");
+        let mut bad = f.clone();
+        bad.obj_locals.push((38, 1));
+        assert!(super::terminal_clamp_assignment_slots(&bad, &refs, &sites).is_empty(), "object slot");
+        let mut bad = f.clone();
+        bad.bytecode.extend(function(&[("PshV8", &[38])]).bytecode);
+        assert!(super::terminal_clamp_assignment_slots(&bad, &refs, &sites).is_empty(), "another access");
     }
 
     #[test]
@@ -37362,7 +37757,7 @@ mod literal_value_lifetime_tests {
         let locals = BTreeMap::from([(16, "FPosition".into()), (18, "AArm".into())]);
         let fold = |keep: &HashSet<i32>| super::inline_call_argument_temporaries(body, &refs, &locals, None, true,
             &HashMap::new(), keep, &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
-            &HashSet::new(), keep, &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new());
+            &HashSet::new(), keep, &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
         assert_eq!(fold(&keep), body);
         assert!(fold(&HashSet::new()).contains("MakeArm(this.MakePosition(nullptr))"));
     }
@@ -37979,7 +38374,7 @@ mod literal_value_lifetime_tests {
         let locals=BTreeMap::from([(18,"FVector".into()),(38,"FVector".into()),(48,"float".into())]);
         let fold=|keep:&HashSet<i32>| super::inline_call_argument_temporaries(body,&refs,&locals,None,true,
             &HashMap::new(),keep,&HashSet::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),
-            &HashSet::new(),&HashSet::new(),&HashSet::new(),&HashMap::new(),&HashSet::new(),&HashSet::new());
+            &HashSet::new(),&HashSet::new(),&HashSet::new(),&HashMap::new(),&HashSet::new(),&HashSet::new(), &HashSet::new());
         let out=fold(&kept);
         assert_eq!(out,"local_18 = (local_18 / local_48);\nreturn local_18;\n");
         assert_eq!(super::fold_returned_temporaries(&out,&locals,&refs,"FVector",false,&kept),out);
@@ -38065,7 +38460,7 @@ mod literal_value_lifetime_tests {
         let locals=BTreeMap::from([(4,"FRole".into()),(5,"EKind".into()),(7,"int".into())]);
         let fold=|body:&str,sites:&HashSet<(i32,String)>| super::inline_call_argument_temporaries(body,&refs,&locals,None,true,
             &HashMap::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),
-            &HashSet::new(),&HashSet::new(),&HashSet::new(),&HashMap::new(),&HashSet::new(),sites);
+            &HashSet::new(),&HashSet::new(),&HashSet::new(),&HashMap::new(),&HashSet::new(),sites, &HashSet::new());
         assert_eq!(fold(body,&sites),body);assert_ne!(fold(body,&HashSet::new()),body);
         let other="local_7 = int(Other());\nRead(local_5, local_7);\n";
         assert_eq!(fold(other,&sites),fold(other,&HashSet::new()));
@@ -38116,7 +38511,7 @@ mod literal_value_lifetime_tests {
         let locals=BTreeMap::from([(10,"FVector".into()),(26,"FVector".into()),(34,"FVector".into()),(40,"FVector".into()),(14,"float".into())]);
         let fold=|body:&str,sites:&HashSet<(i32,String)>| super::inline_call_argument_temporaries(body,&refs,&locals,None,false,
             &HashMap::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),
-            &HashSet::new(),&HashSet::new(),&HashSet::new(),&HashMap::new(),&HashSet::new(),sites);
+            &HashSet::new(),&HashSet::new(),&HashSet::new(),&HashMap::new(),&HashSet::new(),sites, &HashSet::new());
         let body="local_34 = local_40.GetSafeNormal2D(1e-8, FVector::ZeroVector);\nlocal_26 = local_10.GetSafeNormal2D(1e-8, FVector::ZeroVector);\nlocal_14 = local_34.DotProduct(local_26);\nreturn (local_14 > 0.5);\n";
         let kept=fold(body,&sites);
         assert!(kept.contains("local_34 = local_40.GetSafeNormal2D("),"{kept}");
@@ -38190,7 +38585,7 @@ mod literal_value_lifetime_tests {
         let locals=BTreeMap::from([(20,"FVector".into()),(26,"FVector".into()),(32,"FVector".into())]);
         let fold=|text:&str,sites:&HashSet<(i32,String)>| super::inline_call_argument_temporaries(text,&refs,&locals,None,false,
             &HashMap::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),
-            &HashSet::new(),&HashSet::new(),&HashSet::new(),&HashMap::new(),&HashSet::new(),sites);
+            &HashSet::new(),&HashSet::new(),&HashSet::new(),&HashMap::new(),&HashSet::new(),sites, &HashSet::new());
         // In the combined reused-slot body reverse inlining may first create
         // local_26 = local_26.Normalize().CrossProduct(...); its old Location
         // then awaits later placement. Verify the unprotected earlier life separately.
@@ -38541,7 +38936,7 @@ mod literal_value_lifetime_tests {
             body.push_str("return local_139;\n");
             let fold=|sites:&HashSet<(i32,String)>| super::inline_call_argument_temporaries(&body,&refs,&locals,None,true,
                 &HashMap::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),&HashSet::new(),
-                &HashSet::new(),&HashSet::new(),&HashSet::from([139]),&HashMap::new(),&HashSet::new(),sites);
+                &HashSet::new(),&HashSet::new(),&HashSet::from([139]),&HashMap::new(),&HashSet::new(),sites, &HashSet::new());
             let kept=fold(&sites);
             assert_eq!(kept.matches(&format!("local_{slot} = Convert(")).count(),if reused {2} else {1},"{kept}");
             assert!(!kept.contains("local_17 ="),"{kept}");assert_ne!(kept,fold(&HashSet::new()));
@@ -38687,7 +39082,7 @@ mod literal_value_lifetime_tests {
             let early = super::inline_call_argument_temporaries(&source, &refs, &locals, None, true,
                 &HashMap::from([(n, "float".into())]), &HashSet::new(), &HashSet::new(), &HashSet::new(),
                 &HashSet::new(), &HashSet::new(), &HashSet::from([q]), &HashSet::new(), &HashSet::new(),
-                &HashMap::new(), &HashSet::new(), &sites);
+                &HashMap::new(), &HashSet::new(), &sites, &HashSet::new());
             assert!(early.contains(&format!("float local_{n} = Math::Max")), "{early}");
             let folded = super::fold_unary_double_chain(&early, &f, &refs);
             let expected = format!("float local_{d} = Limit;\nfloat local_{n} = Math::Max(0.0, (Count - Minimum));\n{}", ret.replace(&format!("local_{q}"), &format!("local_{n} / local_{d}")));
@@ -39546,7 +39941,7 @@ mod retained_value_argument_text_tests {
             &RefResolver::from_test_collision_names(&["FMemoryFilter"]), None,
             &HashMap::new(), &HashSet::new(), &retained, &HashSet::new(), &HashSet::new(),
             &HashSet::new(), &HashSet::new(), &retained, &HashSet::new(), &HashMap::new(),
-            &HashSet::new(), &HashSet::new()));
+            &HashSet::new(), &HashSet::new(), &HashSet::new()));
         assert_eq!(lines, before);
     }
 }
@@ -40124,7 +40519,7 @@ mod out_argument_read_order_tests {
         let out = inline_call_argument_temporaries(early, &refs, &locals, None, true,
             &HashMap::from([(55, "float32".into())]), &HashSet::new(), &HashSet::new(),
             &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
-            &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new());
+            &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
         assert_eq!(out, early);
     }
 
@@ -40152,7 +40547,7 @@ mod nested_call_site_argument_tests {
             &BTreeMap::from([(6, "AGothicCharacter".into())]), None, true,
             &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
             &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
-            &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new())
+            &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new())
     }
 
     #[test]
@@ -40307,7 +40702,7 @@ mod named_feeder_order_tests {
         let body = "local_9 = Other();\nlocal_6 = Saved();\nif (local_9 && !(local_6))\n";
         let fold = |sites: &HashSet<(i32, String)>| inline_call_argument_temporaries(body, &refs, &locals, None, true,
             &types, &empty, &empty, &empty, &empty, &empty, &empty, &empty, &empty,
-            &HashMap::new(), &empty, sites);
+            &HashMap::new(), &empty, sites, &HashSet::new());
         assert_eq!(fold(&HashSet::from([(6, "Saved".into())])), body);
         // Another callee's life on slot 6 does not preserve this feeder.
         assert!(!fold(&HashSet::from([(6, "Earlier".into())])).contains("local_9 = Other();"));

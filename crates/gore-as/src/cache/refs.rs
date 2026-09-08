@@ -1823,6 +1823,42 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_returned_string_scope(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UHost", "Key"), ("FName", ""), ("FString", ""), ("FReplicatedStringMap", "")]);
+        for (p, name) in [(1, "UHost"), (2, "FName"), (3, "FString"), (4, "FReplicatedStringMap")] {
+            r.type_identity_by_ptr.insert(p, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        r.prop_type_id.insert(3, 1);
+        r.set_class_fields(HashMap::from([("UHost".into(), HashMap::from([("Key".into(), "FName".into())]))]));
+        let value = |ty| DataType { token: 5, type_info: ty, ..Default::default() };
+        let input = |ty| DataType { is_reference: true, is_object_const: true, is_read_only: true, ..value(ty) };
+        for (p, name, owner) in [(1, "GetDataFrom", "UHost"), (2, "$beh0", "FName"), (3, "$beh2", "FString"),
+            (4, "Use", "UHost"), (5, "Later", "UHost"), (7, "ContainsData", "UHost")] {
+            r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, owner.into()); r.func_is_method.insert(p);
+            r.func_params.insert(p, Vec::new()); r.func_ret.insert(p, DataType { token: 0x52, ..Default::default() });
+        }
+        r.func_ret.insert(1, value(3)); r.func_ret.get_mut(&7).unwrap().token = 0x41;
+        for p in [1, 7] { r.const_method_ptrs.insert(p); r.func_params.insert(p, vec![input(4), input(2)]); }
+        r.func_params.insert(2, vec![input(3)]); r.func_params.insert(4, vec![value(2)]);
+        for name in ["Use", "FName"] { r.temporary_arg_positions.insert(name.into(), HashMap::from([(1, vec![true])])); }
+        match fault {
+            1 => { r.const_method_ptrs.remove(&1); }
+            2 => r.func_ret.get_mut(&1).unwrap().is_reference = true,
+            3 => r.func_ret.get_mut(&1).unwrap().type_info = 2,
+            4 => r.func_params.get_mut(&2).unwrap()[0].type_info = 2,
+            5 => r.func_params.get_mut(&2).unwrap()[0].is_object_const = false,
+            6 => { r.func_params.insert(3, vec![value(3)]); }
+            7 => { r.func_owner.insert(3, "FName".into()); }
+            8 => r.type_identity_by_ptr.get_mut(&3).unwrap().module = "Script".into(),
+            9 => r.type_identity_by_ptr.get_mut(&2).unwrap().namespace = "Other".into(),
+            10 => r.func_params.get_mut(&1).unwrap()[1].type_info = 3,
+            _ => {}
+        }
+        r
+    }
+
+
+    #[cfg(test)]
     pub(crate) fn from_test_literal_string_scope(fault: u8) -> Self {
         let mut r = Self::from_test_native_default_constructor("FString", 0, true);
         r.type_by_ptr.insert(102, "FSettings".into()); r.type_names.insert("FSettings".into());
@@ -3397,6 +3433,37 @@ impl RefResolver {
         if fault == 8 { r.func_owner.insert(103, "FOther".into()); }
         if fault == 9 { r.const_method_ptrs.remove(&103); }
         if fault == 10 { r.func_ret.get_mut(&104).unwrap().token = 0x41; }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_terminal_return_arithmetic(narrow: bool) -> Self {
+        let mut r = Self::default();
+        let wide = DataType { token: 0x51, ..Default::default() };
+        for (ptr, name, argc) in [(1, "Size", 0), (2, "DistanceSquared", 0),
+            (3, "Projection", 0), (4, "Clamp", 3), (5, "Consume", 1)] {
+            r.func_by_ptr.insert(ptr, name.into());
+            r.func_ret.insert(ptr, if narrow && ptr == 2 {
+                DataType { token: 0x50, ..Default::default() }
+            } else { wide.clone() });
+            r.func_params.insert(ptr, vec![wide.clone(); argc]);
+        }
+        r.func_ns.insert(4, "Math".into());
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_terminal_clamp_assignment(fault: u8) -> Self {
+        let mut r = Self::from_test_terminal_return_arithmetic(false);
+        match fault {
+            1 => r.func_ret.get_mut(&3).unwrap().token = 0x50,
+            2 => r.func_ret.get_mut(&4).unwrap().token = 0x50,
+            3 => r.func_params.get_mut(&4).unwrap()[0].is_reference = true,
+            4 => r.func_params.get_mut(&4).unwrap().truncate(2),
+            5 => { r.func_ns.insert(4, "Other".into()); },
+            6 => { r.func_by_ptr.insert(4, "Other".into()); },
+            _ => {},
+        }
         r
     }
 

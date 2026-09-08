@@ -32,7 +32,6 @@ AI.States.FightAI.CharmedState.AIState_Charmed	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_AcceptDefeat	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_ClaimVictory	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_CombatEndActions	1	0	0
-AI.States.FightAI.CombatState.AICombatTargetScoring	2	0	0
 AI.States.FightAI.CombatState.AIGroup_Attackers	5	0	0
 AI.States.FightAI.CombatState.AIGroup_Combat	2	0	0
 AI.States.FightAI.CombatState.AIState_OGCombat	7	0	0
@@ -55,7 +54,7 @@ AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.Xardas_Slee
 AI.States.FightAI.WarningState.AIState_Warning	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_Crime	10	0	0
 AI.States.FightAI.WatchFightState.AIGroup_WatchFight	2	0	0
-AI.States.FightAI.WatchFightState.AIState_WatchFight	15	0	0
+AI.States.FightAI.WatchFightState.AIState_WatchFight	14	0	0
 AI.States.Test.TestCharacters_Navigation	1	0	0
 Camera.ConversationCameraConfig	1	0	0
 Environment.GothicUltraDynamicControlerAS	3	0	0
@@ -83,8 +82,6 @@ GAS.Abilities.Spells.Spells.Telekinesis.TelekinesisItemMovementVisual	1	0	0
 GAS.Abilities.Spells.Spells.Transform.GA_Spell_Transform	2	0	0
 GAS.Abilities.Spells.Visuals.Fire.FireRainVisual	1	0	0
 GAS.Abilities.Spells.Visuals.Fire.InnosPrayVisual	2	0	0
-GAS.Abilities.Spells.Visuals.Light.LightVisual	1	0	0
-GAS.Abilities.Spells.Visuals.UrizielWaveOfDeath.UrizielWaveOfDeathVisual	1	0	0
 GAS.Calculations.Damage	5	0	0
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Drugs.Base.DrugDebuffEffectComponentBase	1	0	0
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Sleep.GA_SleepDebuffEffectGameplayAbility	1	0	0
