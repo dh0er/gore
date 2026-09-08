@@ -14588,6 +14588,75 @@ fn spell_out_default_temporaries(text: &str, defaults: &HashMap<i32, usize>) -> 
     out
 }
 
+// Temporary annotations exist only during recover_condition_loops. Original
+// bytecode targets survive inner-first recovery without emitting control flow
+// until the corresponding outer while has actually been recovered.
+const RECOVERED_LOOP_TARGET: &str = " //__gore_recovered_loop_target ";
+
+fn recovered_loop_target(line: &str) -> Option<usize> {
+    line.rsplit_once(RECOVERED_LOOP_TARGET)?.1.parse().ok()
+}
+
+fn pending_outer_loop_target(lines: &[String], head: usize, target: usize) -> bool {
+    let borrowed: Vec<_> = lines.iter().map(String::as_str).collect();
+    (0..head).rev().any(|owner| {
+        if !borrowed[owner].trim_start().starts_with("if (")
+            || borrowed.get(owner + 1).is_none_or(|line| line.trim() != "{")
+        { return false; }
+        let Some(close) = matching_close(&borrowed, owner + 1) else { return false; };
+        if close <= head { return false; }
+        let body_indent = indent_of(borrowed[owner]).len() + 4;
+        // Both the recovered head and this direct-body marker are enclosed by
+        // the pending if. Cleanup or other lines may follow the marker.
+        ((head + 1)..close).any(|mark| {
+            indent_of(borrowed[mark]).len() == body_indent
+                && super::structure::loop_back_edge_target(borrowed[mark]) == Some(target)
+        })
+    })
+}
+
+fn recover_same_target_continues(lines: &mut Vec<String>, outer: usize, target: usize) {
+    let borrowed: Vec<_> = lines.iter().map(String::as_str).collect();
+    if borrowed.get(outer + 1).is_none_or(|line| line.trim() != "{") { return; }
+    let Some(end) = matching_close(&borrowed, outer + 1) else { return; };
+    let mut inner = Vec::new();
+    let mut allowed = vec![true];
+    for head in (outer + 2)..end {
+        // Only if/else nesting and other same-target loops that this operation
+        // will also convert may intervene. A real while/for, switch, or opaque
+        // block is a boundary; a continue must never silently bind across it.
+        let text = borrowed[head].trim();
+        if text == "{" {
+            let parent = borrowed[head - 1].trim_start();
+            let transparent = parent.starts_with("if (") || parent == "else"
+                || (parent.starts_with("while (")
+                    && recovered_loop_target(parent) == Some(target));
+            allowed.push(*allowed.last().unwrap() && transparent);
+            continue;
+        }
+        if text == "}" {
+            if allowed.len() > 1 { allowed.pop(); }
+            continue;
+        }
+        if *allowed.last().unwrap() && text.starts_with("while (")
+            && recovered_loop_target(text) == Some(target)
+            && borrowed.get(head + 1).is_some_and(|line| line.trim() == "{")
+        {
+            inner.push(head);
+        }
+    }
+    // Later heads first preserve every earlier head index. Recompute each close
+    // because converting a nested candidate inserts a line inside its parent.
+    for head in inner.into_iter().rev() {
+        let borrowed: Vec<_> = lines.iter().map(String::as_str).collect();
+        let Some(close) = matching_close(&borrowed, head + 1) else { continue; };
+        let Some((plain, _)) = lines[head].rsplit_once(RECOVERED_LOOP_TARGET) else { continue; };
+        let indent = indent_of(plain).to_owned();
+        lines[head] = plain.replacen("while (", "if (", 1);
+        lines.insert(close, format!("{indent}    continue;"));
+    }
+}
+
 /// Turns a marked `if` back into the `while` it was.
 ///
 /// The structurer marks a then-arm whose last block jumped BACK to the test — a loop its block
@@ -14603,13 +14672,14 @@ fn recover_condition_loops(text: &str) -> String {
     let mut changed = true;
     while changed {
         changed = false;
-        let Some(mark) = lines.iter().position(|line| line.trim() == super::structure::LOOP_BACK_EDGE)
+        let Some(mark) = lines.iter().position(|line| super::structure::is_loop_back_edge(line))
         else {
             break;
         };
         // The mark's OWN indent, taken before it goes: the line that slides into its place is the
         // closing brace, which sits at the `if`'s own indent and would find no head above it.
         let indent = indent_of(&lines[mark]).len();
+        let target = super::structure::loop_back_edge_target(&lines[mark]);
         lines.remove(mark);
         let Some(head) = (0..mark).rev().find(|at| {
             lines[*at].trim_start().starts_with("if (") && indent_of(&lines[*at]).len() < indent
@@ -14632,7 +14702,7 @@ fn recover_condition_loops(text: &str) -> String {
         let head_indent = indent_of(&lines[head]);
         // A bare name at the head has its producer on the line before, and that producer belongs
         // IN the head: left outside, it is computed once and the loop never ends.
-        if is_decompiler_local(&cond) {
+        let recovered_head = if is_decompiler_local(&cond) {
             // A bare declaration between the two is one the sink put in front of its first
             // use — the loop — and it stays in front; the producer is the statement above it.
             let producer = (0..head)
@@ -14680,14 +14750,29 @@ fn recover_condition_loops(text: &str) -> String {
                 .unwrap_or(cond);
             lines[head] = format!("{head_indent}while ({value})");
             lines.remove(producer);
+            head - 1
         } else {
             lines[head] = format!("{head_indent}while ({cond})");
+            head
+        };
+        if let Some(target) = target {
+            lines[recovered_head].push_str(&format!("{RECOVERED_LOOP_TARGET}{target}"));
+            // A still-unprocessed same-target ancestor may yet refuse its condition.
+            // Wait for that outer candidate before introducing any new continue.
+            if !pending_outer_loop_target(&lines, recovered_head, target) {
+                recover_same_target_continues(&mut lines, recovered_head, target);
+            }
         }
         changed = true;
     }
     // A mark that found no head it could take is left behind as a comment, and it goes here: the
     // `if` it sat in stays exactly what it was.
-    lines.retain(|line| line.trim() != super::structure::LOOP_BACK_EDGE);
+    lines.retain(|line| !super::structure::is_loop_back_edge(line));
+    for line in &mut lines {
+        if recovered_loop_target(line).is_some() {
+            *line = line.rsplit_once(RECOVERED_LOOP_TARGET).unwrap().0.to_owned();
+        }
+    }
     let mut out = lines.join("\n");
     if text.ends_with('\n') {
         out.push('\n');
@@ -20306,7 +20391,7 @@ fn short_circuit(
         line.trim() == format!("if ({target})"))
         && lines.get(else_end + 2).is_some_and(|line| line.trim() == "{")
         && block_end(lines, else_end + 2).is_some_and(|end|
-            lines[end - 1].trim() == super::structure::LOOP_BACK_EDGE
+            super::structure::is_loop_back_edge(lines[end - 1])
                 && indent_of(lines[end - 1]).len() == indent_of(lines[else_end + 1]).len() + 4);
     let value = if marked_loop && value.contains(operator) { format!("({value})") } else { value };
     let indent = indent_of(lines[at]);
@@ -31209,6 +31294,161 @@ mod literal_value_lifetime_tests {
     }
 
 
+    fn compound_scope_fixture(inner: u8, carrier_live: bool) -> (Func, Option<(usize, usize)>) {
+        let mut ops: Vec<(&str, &[u16])> = vec![
+            ("SetV4", &[1]), ("SetV4", &[2]),
+            ("CMPIi", &[1]), ("JS", &[]), ("SetV4", &[7]), ("JMP", &[]),
+            ("CMPIi", &[2]), ("TS", &[]), ("CpyRtoV4", &[8]), ("CpyVtoV4", &[7, 8]),
+            ("CpyVtoR1", &[7]), ("JLowZ", &[]),
+            ("SUSPEND", &[]), ("CMPIi", &[1]), ("JNZ", &[]),
+            ("IncVi", &[1]), ("JMP", &[]),
+        ];
+        let mut values = vec![(2, 7), (6, 11)];
+        let mut edges = vec![(3, 6), (5, 10), (14, 17), (16, 2)];
+        let inner_start = ops.len();
+        if inner == 1 {
+            // A real top-test inner while with its own continue, break and latch.
+            ops.extend_from_slice(&[
+                ("SetV4", &[3]), ("CMPIi", &[3]), ("JNS", &[]),
+                ("SUSPEND", &[]), ("CMPIi", &[3]), ("JNZ", &[]),
+                ("IncVi", &[3]), ("JMP", &[]), ("CMPIi", &[3]), ("JNZ", &[]),
+                ("JMP", &[]), ("IncVi", &[3]), ("JMP", &[]),
+            ]);
+            values.extend([(inner_start + 1, 3), (inner_start + 4, 1), (inner_start + 8, 2)]);
+            edges.extend([(2, 13), (5, 8), (7, 1), (9, 11), (10, 13), (12, 1)]
+                .map(|(from, to)| (inner_start + from, inner_start + to)));
+        } else if inner == 2 {
+            // The explicit continue targets the increment, never the outer header.
+            ops.extend_from_slice(&[
+                ("SetV4", &[3]), ("JMP", &[]), ("SUSPEND", &[]),
+                ("CMPIi", &[3]), ("JNZ", &[]), ("JMP", &[]),
+                ("CMPIi", &[3]), ("JNZ", &[]), ("JMP", &[]),
+                ("IncVi", &[2]), ("IncVi", &[3]), ("CMPIi", &[3]), ("JS", &[]),
+            ]);
+            values.extend([(inner_start + 3, 1), (inner_start + 6, 2), (inner_start + 11, 3)]);
+            edges.extend([(1, 11), (4, 6), (5, 10), (7, 9), (8, 13), (12, 2)]
+                .map(|(from, to)| (inner_start + from, inner_start + to)));
+        } else {
+            assert_eq!(inner, 0);
+        }
+        let inner_end = ops.len();
+        let after_inner = ops.len();
+        // The second outer continue checks scope restoration after the inner loop.
+        ops.extend_from_slice(&[
+            ("CMPIi", &[2]), ("JNZ", &[]), ("IncVi", &[2]), ("JMP", &[]),
+            ("IncVi", &[1]), ("IncVi", &[2]), ("JMP", &[]),
+        ]);
+        let exit = ops.len();
+        edges.extend([(11, exit), (after_inner + 1, after_inner + 4),
+            (after_inner + 3, 2), (after_inner + 6, 2)]);
+        if carrier_live { ops.push(("CpyVtoR1", &[7])); }
+        ops.push(("RET", &[0]));
+        let mut f = function(&ops);
+        f.name = "CompoundScope".into();
+        f.ret.token = if carrier_live { 0x41 } else { 0x52 };
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, value) in values { f.bytecode[code[at].offset_dw + 1] = value; }
+        for (from, to) in edges {
+            f.bytecode[code[from].offset_dw + 1] =
+                code[to].offset_dw as i32 - code[from].offset_dw as i32 - 2;
+        }
+        let inner_range = (inner != 0).then(||
+            (code[inner_start].offset_dw, code[inner_end].offset_dw));
+        (f, inner_range)
+    }
+
+    fn compound_scope_source(f: &Func) -> String {
+        let mut source = String::new();
+        super::emit_function(&mut source, f, &RefResolver::default(), false, false, 0);
+        source
+    }
+
+    fn compound_scope_control_depths(source: &str) -> Vec<(&str, usize)> {
+        let lines: Vec<_> = source.lines().collect();
+        let loops: Vec<_> = lines.iter().enumerate().filter_map(|(at, line)| {
+            let text = line.trim();
+            (text.starts_with("while (") || text.starts_with("for (")).then(|| {
+                assert_eq!(lines[at + 1].trim(), "{", "{source}");
+                (at, super::matching_close(&lines, at + 1).expect("loop closes"))
+            })
+        }).collect();
+        lines.iter().enumerate().filter_map(|(at, line)| {
+            let keyword = line.trim();
+            matches!(keyword, "continue;" | "break;").then(||
+                (keyword, loops.iter().filter(|(start, end)| *start < at && at < *end).count()))
+        }).collect()
+    }
+
+    fn compound_scope_inner_text(source: &str) -> String {
+        let lines: Vec<_> = source.lines().collect();
+        let head = lines.iter().position(|line| {
+            let text = line.trim();
+            (text.starts_with("while (") || text.starts_with("for ("))
+                && text.contains("local_3")
+        }).unwrap_or_else(|| panic!("inner loop missing:\n{source}"));
+        let end = super::matching_close(&lines, head + 1).expect("inner loop closes");
+        lines[head..=end].iter().map(|line| line.trim()).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn compound_target_pipeline_keeps_nested_loops_breaks_and_latches() {
+        for inner in 0..=2 {
+            let (f, inner_range) = compound_scope_fixture(inner, false);
+            let source = compound_scope_source(&f);
+            let depths = compound_scope_control_depths(&source);
+            assert_eq!(depths.iter().filter(|&&(k, d)| k == "continue;" && d == 1).count(), 2, "inner={inner}\n{source}");
+            assert_eq!(depths.iter().filter(|&&(k, d)| k == "break;" && d == 1).count(), 0, "inner={inner}\n{source}");
+            assert!(depths.iter().all(|&(_, depth)| depth > 0), "orphan control:\n{source}");
+            assert_eq!(source.matches("while (").count(), if inner == 1 { 2 } else { 1 }, "{source}");
+            assert_eq!(source.matches("for (").count(), usize::from(inner == 2), "{source}");
+            assert!(source.contains("&&"), "compound outer condition was lost:\n{source}");
+            assert!(!source.contains(super::super::structure::LOOP_BACK_EDGE), "{source}");
+
+            // Structuring records exact targets but emits no new outer controls.
+            // Only the successful late outer recovery may materialize those continues.
+            let fc = super::FuncCode { func: f.name.clone(), is_method: false,
+                param_names: vec![], param_types: vec![], ret: f.ret.clone(), bytecode: f.bytecode.clone() };
+            let locals = HashMap::from([(1, "int".into()), (2, "int".into()), (3, "int".into()),
+                (7, "bool".into()), (8, "bool".into())]);
+            let raw = super::super::structure::body_statements_ctor(&fc, &RefResolver::default(),
+                0, None, Some(&f.ret), None, None, None, Some(&locals), None);
+            let header = disassemble(&f.bytecode).unwrap()[2].offset_dw;
+            assert_eq!(raw.lines().filter(|line|
+                super::super::structure::loop_back_edge_target(line) == Some(header)).count(), 3, "{raw}");
+            assert_eq!(raw.matches("continue;").count(), usize::from(inner != 0), "{raw}");
+            assert_eq!(raw.matches("break;").count(), usize::from(inner != 0), "{raw}");
+
+            if let Some((start, end)) = inner_range {
+                assert_eq!(depths.iter().filter(|&&(k, d)| k == "continue;" && d == 2).count(), 1, "{source}");
+                assert_eq!(depths.iter().filter(|&&(k, d)| k == "break;" && d == 2).count(), 1, "{source}");
+                // Relative branches remain exact when this contiguous inner region is
+                // moved to offset zero. Its exit now lands on the appended RET.
+                let mut isolated = f.clone();
+                isolated.bytecode = f.bytecode[start..end].to_vec();
+                isolated.bytecode.extend(function(&[("RET", &[0])]).bytecode);
+                let baseline = compound_scope_source(&isolated);
+                assert_eq!(compound_scope_inner_text(&source), compound_scope_inner_text(&baseline),
+                    "inner loop changed under outer compound scope:\n{source}\nstandalone:\n{baseline}");
+                if inner == 2 {
+                    assert!(compound_scope_inner_text(&source).lines().next().unwrap().contains("++local_3"),
+                        "continue must reach the counted-for increment:\n{source}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn compound_target_pipeline_live_carrier_has_no_orphan_controls() {
+        let (f, _) = compound_scope_fixture(0, true);
+        let source = compound_scope_source(&f);
+        // Returning the materialized condition keeps that carrier observable after
+        // loop exit. A refused late fold must never leave scope-generated keywords
+        // in an ordinary if. This remains a normal test, not an ignored probe.
+        assert!(compound_scope_control_depths(&source).iter().all(|&(_, depth)| depth > 0),
+            "live condition carrier left control outside a loop:\n{source}");
+        assert!(!source.contains(super::super::structure::LOOP_BACK_EDGE), "{source}");
+    }
+
     fn copied_integer_comparison_fixture() -> Func {
         let mut f = function(&[
             ("CALL", &[]), ("CpyRtoV4", &[2]), ("CALLSYS", &[]), ("STOREOBJ", &[6]),
@@ -36671,6 +36911,64 @@ mod declared_condition_loop_tests {
         // The old undeclared-carrier path continues to work.
         assert!(recover_condition_loops(&folded.replace("    bool local_10;\n", ""))
             .contains("    while (this.AttackToDodge != nullptr && ("));
+    }
+
+    #[test]
+    fn compound_target_recovery_defers_controls_and_respects_real_loop_boundaries() {
+        let outer = source().replace("//__gore_back_edge", "//__gore_back_edge 100");
+        let nested = concat!(
+            "        if (Skip)\n        {\n",
+            "            if (Again)\n            {\n",
+            "                Step();\n                //__gore_back_edge 100\n            }\n",
+            "            this.WaitOneTick();\n            //__gore_back_edge 100\n        }\n",
+        );
+        let body = outer.replace("        this.WaitOneTick();\n", nested);
+        let recover = |body: &str| recover_condition_loops(&rejoin_short_circuit_chains(
+            &join_short_circuit_chains(&fold(body))));
+        let recovered = recover(&body);
+        assert_eq!(recovered.matches("while (").count(), 1, "{recovered}");
+        assert_eq!(recovered.matches("continue;").count(), 2, "{recovered}");
+        assert!(recovered.contains("if (Skip)") && recovered.contains("if (Again)"), "{recovered}");
+        assert!(!recovered.contains("__gore_"), "internal marker escaped:\n{recovered}");
+
+        // The outer carrier remains observable, so the existing fold refuses it.
+        // Even the two nested same-target recoveries must wait: neither may add
+        // a continue before learning whether this actual outer loop recovers.
+        for trailing in ["", "        AfterMarker();\n"] {
+            let marked = body.replace("        //__gore_back_edge 100\n    }\n",
+                &format!("        //__gore_back_edge 100\n{trailing}    }}\n"));
+            assert!(trailing.is_empty() || marked.contains("AfterMarker();"));
+            let refused = recover(&format!("{marked}    Read(local_10);\n"));
+            assert!(refused.contains("if (local_10)"), "outer carrier unexpectedly folded:\n{refused}");
+            assert!(refused.contains("while (Skip)") && refused.contains("while (Again)"), "{refused}");
+            assert!(!refused.contains("continue;") && !refused.contains("break;"), "{refused}");
+            assert!(!refused.contains("__gore_"), "{refused}");
+        }
+
+        let guarded_continue = concat!(
+            "        if (Outside)\n        {\n            Step();\n",
+            "            //__gore_back_edge 100\n        }\n",
+        );
+        for (head, latch) in [
+            ("while (Other)", ""),
+            ("for (; Other;)", ""),
+            ("if (Other)", "            //__gore_back_edge 200\n"),
+        ] {
+            let barrier = format!(concat!(
+                "        {}\n        {{\n",
+                "            if (Blocked)\n            {{\n",
+                "                Step();\n                //__gore_back_edge 100\n            }}\n",
+                "            Tick();\n{}        }}\n",
+            ), head, latch);
+            let body = outer.replace("        this.WaitOneTick();\n",
+                &format!("{guarded_continue}{barrier}        this.WaitOneTick();\n"));
+            let recovered = recover(&body);
+            assert!(recovered.contains("if (Outside)"), "{recovered}");
+            assert_eq!(recovered.matches("continue;").count(), 1, "{recovered}");
+            assert!(recovered.contains("while (Blocked)") && !recovered.contains("if (Blocked)"),
+                "same-target conversion crossed {head}:\n{recovered}");
+            assert!(!recovered.contains("__gore_"), "{recovered}");
+        }
     }
 
     #[test]

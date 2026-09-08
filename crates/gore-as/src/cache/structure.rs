@@ -2949,6 +2949,14 @@ pub(crate) fn bare_type_name(tyname: &str) -> &str {
 /// emitter turns the pair into a `while` once the condition is one expression, and drops the
 /// mark when it cannot -- leaving exactly the `if` that stood here before.
 pub(crate) const LOOP_BACK_EDGE: &str = "//__gore_back_edge";
+
+pub(crate) fn loop_back_edge_target(line: &str) -> Option<usize> {
+    line.trim().strip_prefix(LOOP_BACK_EDGE)?.strip_prefix(' ')?.parse().ok()
+}
+
+pub(crate) fn is_loop_back_edge(line: &str) -> bool {
+    line.trim() == LOOP_BACK_EDGE || loop_back_edge_target(line).is_some()
+}
 /// `//__gore_ctor <slot>`: a default construction of a local the structurer met at this point.
 pub(crate) const CTOR_SITE: &str = "//__gore_ctor";
 
@@ -8162,8 +8170,9 @@ impl Structurer<'_> {
                         self.shared_return = outer;
                     }
                 }
-                if latch_back.is_some() {
-                    let _ = writeln!(out, "{ind}    {LOOP_BACK_EDGE}");
+                if let Some(latch) = latch_back {
+                    let target = self.g.blocks[latch].succs[0];
+                    let _ = writeln!(out, "{ind}    {LOOP_BACK_EDGE} {target}");
                 }
                 // Whether the arm we just WROTE ends in a return. The bytecode saying the branch
                 // returns is not enough: a return this renderer cannot express — a void one, a

@@ -25,7 +25,7 @@ AI.CharacterAI_Orc	2	0	0
 AI.DailyRoutines.DailyRoutines_OG	1	0	0
 AI.NativeAICommands	2	0	0
 AI.Relationship.PersonalRelationshipModifiers	2	0	0
-AI.States.AIState_DailyRoutine	2	0	0
+AI.States.AIState_DailyRoutine	1	0	0
 AI.States.AIState_FollowCharacterAggressive	2	0	0
 AI.States.AIState_GuideCharacter	3	0	0
 AI.States.AIState_InteractWinchGate	1	0	0
@@ -42,7 +42,7 @@ AI.States.FightAI.CombatState.AICombatTargetScoring	2	0	0
 AI.States.FightAI.CombatState.AIGroup_Attackers	5	0	0
 AI.States.FightAI.CombatState.AIGroup_Combat	2	0	0
 AI.States.FightAI.CombatState.AIState_OGCombat	9	0	0
-AI.States.FightAI.CombatState.CombatMoves	20	0	0
+AI.States.FightAI.CombatState.CombatMoves	19	0	0
 AI.States.FightAI.CombatState.CombatOperations	1	0	0
 AI.States.FightAI.CombatState.CombatTestClasses	1	0	0
 AI.States.FightAI.CombatState.Positioning.AICombat_Positioning	13	0	0
