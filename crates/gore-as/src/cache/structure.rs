@@ -1536,15 +1536,62 @@ fn script_default_member_copy(
 }
 
 
+/// An exact address-selection diamond consumed by a native value copy constructor.
+/// Share the witness with the argument-repair heuristic: its two source pushes
+/// are consumed here, not by a later call with a distinct default argument.
+pub(super) fn native_value_selection(
+    instrs: &[Instr], join: usize, refs: &RefResolver,
+) -> Option<(usize, [i32; 3], i64)> {
+    let head = join.checked_sub(5)?;
+    let c = instrs.get(head..join + 2)?;
+    if c.iter().map(|i| i.op.name).ne(["CMPd", "JNS", "PSF", "JMP", "PSF", "PSF", "CALLSYS"])
+    { return None; }
+    let word = |i: &Instr, at: usize| i.words.get(at).map(|v| *v as i16 as i32);
+    let target = |i: &Instr| i.dwords.first().map(|v| i.offset_dw as i64 + 2 + *v as i32 as i64);
+    let slots = [word(&c[2], 0)?, word(&c[4], 0)?, word(&c[5], 0)?];
+    if slots.iter().any(|s| *s <= 0) || slots[0] == slots[1] || slots[..2].contains(&slots[2])
+        || word(&c[0], 0)? <= 0 || word(&c[0], 1)? <= 0
+        || target(&c[1]) != Some(c[4].offset_dw as i64)
+        || target(&c[3]) != Some(c[5].offset_dw as i64)
+        || instrs.iter().enumerate().any(|(at, i)| i.op.name == "JMPP"
+            || ((is_cond_op(i.op.name) || i.op.name == "JMP") && at != head + 1 && at != head + 3
+                && target(i).is_some_and(|to| to > c[0].offset_dw as i64 && to <= c[6].offset_dw as i64)))
+    { return None; }
+    let ptr = *c[6].qwords.first()? as i64;
+    let [param] = refs.func_params_by_ptr(ptr)? else { return None; };
+    let owner = refs.type_identity_by_ptr(param.type_info)?;
+    let ret = refs.func_ret_by_ptr(ptr)?;
+    if param.token != 5 || !param.is_reference || !param.is_object_const || !param.is_read_only
+        || param.is_object_handle || param.is_auto || param.if_handle_then_const
+        || !owner.module.is_empty() || !owner.namespace.is_empty()
+        || !matches!(owner.name.bytes().next(), Some(b'F' | b'T'))
+        || refs.func_by_ptr(ptr) != Some("$beh0") || refs.func_owner_by_ptr(ptr) != Some(owner.name.as_str())
+        || !refs.is_method_by_ptr(ptr) || refs.is_const_method_by_ptr(ptr)
+        || ret.token != 0x52 || ret.is_reference || ret.is_object_handle
+    { return None; }
+    Some((head, slots, param.type_info))
+}
+
 struct LocalLvalueSelection {
     head: usize,
     statement: String,
+    copy_ctor_slot: Option<i32>,
 }
 
 /// The compiler selects an existing lvalue's address, then reads/copies it at
 /// the join. The arms have no side effects. Require the exact two-arm layout,
 /// a same-typed pair, immediate consumption, and no other entry into the region.
 fn local_lvalue_selection(ctx: &Ctx<'_>, join: usize) -> Option<LocalLvalueSelection> {
+    if let Some((head, slots, ptr)) = native_value_selection(ctx.instrs, join, ctx.refs) {
+        let ty = &ctx.refs.type_identity_by_ptr(ptr)?.name;
+        if slots.iter().any(|slot| ctx.slot_type(*slot).as_deref() != Some(ty.as_str())) { return None; }
+        let [yes, no, dst] = slots;
+        let test = &ctx.instrs[head];
+        return Some(LocalLvalueSelection { head, copy_ctor_slot: Some(dst),
+            statement: format!("{} = ({} < {} ? {} : {});", ctx.slot_name(dst),
+                ctx.slot_name(s16(test.words[0])), ctx.slot_name(s16(test.words[1])),
+                ctx.slot_name(yes), ctx.slot_name(no)) });
+    }
     let head = join.checked_sub(5)?;
     let code = ctx.instrs.get(head..join + 2)?;
     let word = |op: &Instr, at: usize| op.words.get(at).map(|v| *v as i16 as i32);
@@ -1615,6 +1662,7 @@ fn local_lvalue_selection(ctx: &Ctx<'_>, join: usize) -> Option<LocalLvalueSelec
         else { (*code[0].dwords.first()? as i32).to_string() };
     Some(LocalLvalueSelection {
         head,
+        copy_ctor_slot: None,
         statement: format!("{} = ({} {sense} {immediate} ? {} : {});",
             ctx.slot_name(dst), ctx.slot_name(test), ctx.slot_name(yes), ctx.slot_name(no)),
     })
@@ -3612,6 +3660,43 @@ fn member_ref_push_type(
         .map(str::to_string)
 }
 
+/// A mutable native handle reference yields a member address which is captured
+/// once and used only by one later field store. Preserve that reference binding.
+pub(super) fn captured_handle_member_reference(code: &[Instr], at: usize, refs: &RefResolver) -> Option<(i32, String)> {
+    let c = code.get(at.checked_sub(5)?..=at)?;
+    if c.iter().map(|i| i.op.name).ne(["CALLSYS", "PshRPtr", "RDSPtr", "ADDSi", "PopRPtr", "CpyRtoV8"]) { return None; }
+    let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+    let slot = w(&c[5], 0).filter(|s| *s > 0)?;
+    let ptr = *c[0].qwords.first()? as i64;
+    let ret = refs.func_ret_by_ptr(ptr)?;
+    if ret.token != 5 || !ret.is_reference || !ret.is_object_handle || ret.is_object_const || ret.is_read_only
+        || !refs.is_method_by_ptr(ptr) || refs.is_const_method_by_ptr(ptr)
+        || !refs.func_params_by_ptr(ptr)?.is_empty() { return None; }
+    let owner_id = *c[3].dwords.first()? as i32;
+    let owner = refs.type_identity_by_id(owner_id)?;
+    let (field, old) = refs.member_identity(owner_id, w(&c[3], 0)?)?;
+    if !owner.module.is_empty() || !owner.namespace.is_empty()
+        || refs.type_identity_by_id(old)? != owner || refs.type_identity_by_ptr(ret.type_info)? != owner { return None; }
+    let ty = refs.native_field_value_type(&owner.name, field)?;
+    if !ty.starts_with('F') || ty.contains(['<', '&', ' ']) { return None; }
+    let uses: Vec<_> = code.iter().enumerate().filter(|(_, i)|
+        super::bytediff::addressed_slots(i).contains(&slot)).map(|(i, _)| i).collect();
+    let [capture, load] = uses.as_slice() else { return None; };
+    if *capture != at || *load <= at || code[*load].op.name != "LoadRObjR"
+        || w(&code[*load], 0) != Some(slot) || !code.get(load + 1).is_some_and(|i|
+            matches!(i.op.name, "WRTV1" | "WRTV2" | "WRTV4" | "WRTV8")) { return None; }
+    let value_id = *code[*load].dwords.first()? as i32;
+    let value = refs.type_identity_by_id(value_id)?;
+    let (_, value_old) = refs.member_identity(value_id, w(&code[*load], 1)?)?;
+    if value.name != ty || !value.module.is_empty() || !value.namespace.is_empty()
+        || refs.type_identity_by_id(value_old)? != value { return None; }
+    if code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+        let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+        target > c[0].offset_dw as i64 && target <= code[load + 1].offset_dw as i64
+    }))) { return None; }
+    Some((slot, ty.to_owned()))
+}
+
 /// Decompile one block's instruction range into statements; also return the
 /// pending comparison (operands of the last CMP*) for condition recovery.
 fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
@@ -3789,7 +3874,12 @@ fn block_stmts_in(
     let insns = &ctx.instrs[lo..hi];
     let selection = stack.is_empty().then(|| local_lvalue_selection(ctx, lo)).flatten()
         .filter(|_| insns.len() >= 2);
-    let skip = if let Some(selection) = selection { out.push(selection.statement); 2 } else { 0 };
+    let skip = if let Some(selection) = selection {
+        if let Some(slot) = selection.copy_ctor_slot {
+            RVO_PRODUCERS.with(|v| v.borrow_mut().push((slot, lo + 1)));
+        }
+        out.push(selection.statement); 2
+    } else { 0 };
     let mut skip_until = skip;
     for k in skip..insns.len() {
         if k < skip_until { continue; }
@@ -6076,7 +6166,11 @@ fn block_stmts_in(
                         .checked_sub(1)
                         .map(|j| &insns[j])
                         .filter(|p| matches!(p.op.name, "LoadRObjR" | "LoadVObjR"));
-                    if let Some(pl) = prev_load {
+                    if let Some((dst, _)) = captured_handle_member_reference(ctx.instrs, lo + k, ctx.refs)
+                        .filter(|(slot, ty)| ctx.slot_type(*slot).as_deref() == Some(ty.as_str())) {
+                        out.push(format!("{} = {};", name(dst), ref_reg.as_ref().unwrap()));
+                        member_read_slots.insert(dst);
+                    } else if let Some(pl) = prev_load {
                         let off = pl.words.get(1).copied().unwrap_or(0) as i32;
                         let tid = pl.dwords.first().copied().unwrap_or(0) as i32;
                         let vty = ctx.refs.member(tid, off).and_then(|fname| {
@@ -11503,6 +11597,48 @@ mod tests {
                 offset += op.size_dwords as usize;
             }
             CompoundFixture { instrs, labels }
+        }
+    }
+
+    #[test]
+    fn captured_native_handle_members_preserve_the_mutable_reference_store() {
+        let mut a = TestAssembler::default();
+        a.op("PshVPtr", &[0], &[]); a.op("CALLSYS", &[], &[]);
+        a.op("PshRPtr", &[], &[]); a.op("RDSPtr", &[], &[]); a.op("ADDSi", &[0], &[1]);
+        a.op("PopRPtr", &[], &[]); a.op("CpyRtoV8", &[32], &[]);
+        a.op("SetV4", &[43], &[0]); a.op("LoadRObjR", &[32, 0], &[2]); a.op("WRTV4", &[43], &[]);
+        a.op("RET", &[0], &[]);
+        let mut fixture = a.finish(); fixture.instrs[1].qwords = vec![1];
+        let refs = RefResolver::from_test_captured_handle_member_reference(0);
+        assert_eq!(super::captured_handle_member_reference(&fixture.instrs, 6, &refs), Some((32, "FSettings".into())));
+        let f = FuncCode { func: "UGetter::SetWidth".into(), is_method: true, param_names: Vec::new(),
+            param_types: Vec::new(), ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+        let locals = HashMap::from([(32, "FSettings".into()), (43, "float32".into())]);
+        let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret),
+            fields: None, param_types: None, class_name: Some("UGetter"), local_types: Some(&locals),
+            float_slots: Default::default(), param_off_map: HashMap::new(), rvo_off: None,
+            keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+        let source = block_stmts(&ctx, 0, fixture.instrs.len()).0.join("\n");
+        assert!(source.contains("local_32 = this.GetValue().Settings;"), "{source}");
+        assert!(source.contains("local_32.Width ="), "{source}");
+        for fault in 1..=12 {
+            assert!(super::captured_handle_member_reference(&fixture.instrs, 6,
+                &RefResolver::from_test_captured_handle_member_reference(fault)).is_none(), "{fault}");
+        }
+        for (at, op) in [(3, "PshRPtr"), (5, "PshRPtr"), (8, "LoadVObjR"), (9, "RDR4")] {
+            let mut code = fixture.instrs.clone();
+            code[at].op = crate::cache::isa::OPCODES.iter().find(|i| i.name == op).unwrap();
+            assert!(super::captured_handle_member_reference(&code, 6, &refs).is_none());
+        }
+        let mut code = fixture.instrs.clone();
+        let mut extra = code[6].clone(); extra.offset_dw = code.last().unwrap().offset_dw + 2;
+        code.push(extra); assert!(super::captured_handle_member_reference(&code, 6, &refs).is_none());
+        for target in [2, 6, 8, 9] {
+            let mut code = fixture.instrs.clone();
+            let mut edge = code.last().unwrap().clone();
+            edge.op = crate::cache::isa::OPCODES.iter().find(|i| i.name == "JMP").unwrap();
+            edge.dwords = vec![(code[target].offset_dw as i32 - edge.offset_dw as i32 - 2) as u32];
+            code.push(edge); assert!(super::captured_handle_member_reference(&code, 6, &refs).is_none());
         }
     }
 

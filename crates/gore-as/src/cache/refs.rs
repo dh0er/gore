@@ -1952,6 +1952,36 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_captured_handle_member_reference(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("AVolume", "Settings"), ("FSettings", "Width"), ("FOther", "")]);
+        for (id, name) in [(1, "AVolume"), (2, "FSettings"), (3, "FOther")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+            r.prop_type_id.insert((id << 1) | 1, id as i32);
+        }
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&[
+            ("AVolume", "Settings", if fault == 1 { "FOther" } else { "FSettings" }),
+            ("FSettings", "Width", "float32")], &[], None));
+        r.func_by_ptr.insert(1, "GetValue".into()); r.func_owner.insert(1, "UGetter".into());
+        r.func_is_method.insert(1); r.func_params.insert(1, Vec::new());
+        r.func_ret.insert(1, DataType { token: 5, type_info: 1, is_reference: true, is_object_handle: true, ..Default::default() });
+        match fault {
+            2 => { r.func_ret.get_mut(&1).unwrap().is_reference = false; },
+            3 => { r.func_ret.get_mut(&1).unwrap().is_object_handle = false; },
+            4 => { r.func_ret.get_mut(&1).unwrap().is_object_const = true; },
+            5 => { r.func_ret.get_mut(&1).unwrap().is_read_only = true; },
+            6 => { r.func_params.get_mut(&1).unwrap().push(DataType { token: 0x44, ..Default::default() }); },
+            7 => { r.const_method_ptrs.insert(1); },
+            8 => { r.func_is_method.remove(&1); },
+            9 => { r.prop_type_id.insert(3, 3); },
+            10 => { r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(); },
+            11 => { r.type_identity_by_ptr.get_mut(&2).unwrap().namespace = "Other".into(); },
+            12 => { r.prop_type_id.insert(5, 3); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_native_psf_member_copy(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("FEntry", "Name"), ("FName", ""), ("FOther", "")]);
         for (id, name) in [(1, "FEntry"), (2, "FName"), (3, "FOther")] {
@@ -1984,6 +2014,28 @@ impl RefResolver {
             12 => { r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(); },
             13 => { r.type_identity_by_ptr.get_mut(&2).unwrap().namespace = "Other".into(); },
             _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_native_value_selection(fault: u8) -> Self {
+        let mut r = Self::from_test_native_psf_member_copy(fault);
+        let void = DataType { token: 0x52, ..Default::default() };
+        let value_ref = DataType { token: 5, type_info: 2, is_reference: true,
+            is_object_const: true, is_read_only: true, ..Default::default() };
+        for (ptr, name, owner, ret, params) in [
+            (2, "$beh0", "FName", void.clone(), vec![]),
+            (3, "$beh2", "FName", void.clone(), vec![]),
+            (4, "Touch", "FName", void.clone(), vec![DataType { token: 0x44, ..Default::default() }]),
+            (5, "ShouldTaunt", "", DataType { token: 0x41, ..Default::default() }, vec![]),
+            (6, "UseNames", "FEntry", void, vec![value_ref.clone(), value_ref]),
+            (7, "Left", "", DataType { token: 0x51, ..Default::default() }, vec![]),
+            (8, "Right", "", DataType { token: 0x51, ..Default::default() }, vec![]),
+        ] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_ret.insert(ptr, ret); r.func_params.insert(ptr, params);
+            r.const_method_ptrs.remove(&ptr);
+            if !owner.is_empty() { r.func_owner.insert(ptr, owner.into()); r.func_is_method.insert(ptr); }
         }
         r
     }
@@ -3156,6 +3208,35 @@ impl RefResolver {
         r
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_test_enum_before_conditional_comparison(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("ERelation", ""), ("ARelationOwner", "")]);
+        r.type_identity_by_ptr.insert(1, TypeIdentity { name: "ERelation".into(), module: String::new(), namespace: String::new() });
+        let enumeration = DataType { token: 5, type_info: 1, ..Default::default() };
+        let actor = DataType { token: 5, type_info: 2, is_object_handle: true, is_object_const: true, ..Default::default() };
+        for (id, name, ret) in [(101, "GetRelation", enumeration), (102, "Ready", DataType { token: 0x41, ..Default::default() })] {
+            r.funcid_to_ptr.insert(id, id as i64);
+            r.func_by_ptr.insert(id as i64, name.into());
+            r.func_ret.insert(id as i64, ret);
+            r.func_params.insert(id as i64, vec![actor.clone()]);
+        }
+        r.func_owner.insert(101, "ARelationOwner".into());
+        r.func_is_method.insert(101); r.const_method_ptrs.insert(101);
+        r.func_ret_names.insert("GetRelation".into(), "ERelation".into());
+        r.func_ret_names.insert("Ready".into(), "bool".into());
+        r.temporary_arg_positions.insert("GetRelation".into(), HashMap::from([(1, vec![true])]));
+        r.temporary_arg_positions.insert("Ready".into(), HashMap::from([(1, vec![true])]));
+        r.ctor_arg_positions.insert("int".into(), HashMap::from([(1, vec![true])]));
+        if fault == 1 { r.func_ret.get_mut(&101).unwrap().is_reference = true; }
+        if fault == 2 { r.func_ret.get_mut(&101).unwrap().is_object_handle = true; }
+        if fault == 3 { r.func_ret.get_mut(&101).unwrap().token = 0x44; }
+        if fault == 4 { r.func_ret.get_mut(&101).unwrap().type_info = 2; }
+        if fault == 5 { r.func_ret.get_mut(&102).unwrap().token = 0x44; }
+        if fault == 6 { r.func_ret.get_mut(&102).unwrap().is_reference = true; }
+        if fault == 7 { r.func_ret.remove(&101); }
+        if fault == 8 { r.func_ret.get_mut(&101).unwrap().is_read_only = true; }
+        r
+    }
     #[cfg(test)]
     pub(crate) fn from_test_eager_bool_calls(saved_token: i32) -> Self {
         let mut r = Self::default();
