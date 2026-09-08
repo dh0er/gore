@@ -5,12 +5,10 @@ AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachZigZag.FireDemon_HellArmsAr
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_Barrier_Ring	1	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_RingFireTest	2	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.FireDemon_HellArmsArea_Ring	3	0	0
-AI.AIAgent.Creature.Demon.Spells.Area.DemonAreaVisual	1	0	0
 AI.AIAgent.Creature.Golem.Fire.Spells.BreakFloor.GA_Spell_BreakFloor_FireGolem	2	0	0
 AI.AIAgent.Creature.Molerat.CombatSituations_Molerat	1	0	0
 AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.SoulHarvest.SoulHarvest_Visual	2	0	0
 AI.AIAgent.Orc.Combat.Staff.Spells.StormOfFire.GA_Spell_StormOfFire_Orc	1	0	0
-AI.AIItemScoring	1	0	0
 AI.AssessmentResponseSystem.AssessmentBits	7	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	5	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	0
@@ -67,7 +65,7 @@ FX.DepthOfField.DepthOfFieldController	1	0	0
 GAS.Abilities.Combat.AttackLoop.Capsule.GA_AttackLoopCapsule	1	0	0
 GAS.Abilities.Combat.AttackLoop.Capsule.PyrolaserHitCapsuleComponent	1	0	0
 GAS.Abilities.Combat.AttackLoop.Cone.GA_AttackLoopCone	1	0	0
-GAS.Abilities.Interact.GA_Human_Loot	2	0	0
+GAS.Abilities.Interact.GA_Human_Loot	1	0	0
 GAS.Abilities.Interact.Sleep.Base.GA_Human_Sleep	1	0	0
 GAS.Abilities.Locomotion.GA_Falling	1	0	0
 GAS.Abilities.Locomotion.GA_FallingRagdoll	1	0	0

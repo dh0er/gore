@@ -2547,6 +2547,44 @@ impl RefResolver {
         r
     }
     #[cfg(test)]
+    pub(crate) fn from_test_scalar_argument_order(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FVector", "X"), ("URegion", "Minimum"), ("FOther", "")]);
+        for (id, name, module) in [(1, "FVector", ""), (2, "URegion", "Fixture"), (3, "FOther", "")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: name.into(), module: module.into(), namespace: String::new() });
+        }
+        for (id, offset, name) in [(1, 0, "X"), (1, 8, "Y"), (1, 16, "Z"),
+            (2, 0, "Minimum"), (2, 8, "Radius"), (2, 16, "Maximum")] {
+            let key = (id << 1) | ((offset as i64) << 33) | 1;
+            r.prop_by_key.insert(key, name.into()); r.prop_type_id.insert(key, id as i32);
+        }
+        r.set_class_fields(HashMap::from([("URegion".into(), HashMap::from([
+            ("Minimum".into(), "float".into()), ("Radius".into(), "float".into()), ("Maximum".into(), "float".into())]))]));
+        let vector = DataType { token: 5, type_info: 1, ..Default::default() };
+        r.func_by_ptr.insert(1, "GetLocation".into()); r.func_owner.insert(1, "AActor".into());
+        r.func_is_method.insert(1); r.const_method_ptrs.insert(1);
+        r.func_ret.insert(1, vector); r.func_params.insert(1, Vec::new());
+        r.func_by_ptr.insert(2, "$beh0".into()); r.func_owner.insert(2, "FVector".into()); r.func_is_method.insert(2);
+        r.func_ret.insert(2, DataType { token: 0x52, ..Default::default() });
+        r.func_params.insert(2, vec![DataType { token: 0x51, ..Default::default() }; 3]);
+        r.ctor_arg_positions.insert("FVector".into(), HashMap::from([(3, vec![true; 3])]));
+        match fault {
+            1 => { r.prop_by_key.insert(3 | (16i64 << 33), "Unknown".into()); },
+            2 => { r.prop_type_id.insert(3 | (16i64 << 33), 3); },
+            3 => { r.func_ret.get_mut(&1).unwrap().is_reference = true; },
+            4 => { r.func_ret.get_mut(&1).unwrap().is_object_handle = true; },
+            5 => { r.func_params.get_mut(&1).unwrap().push(DataType { token: 0x51, ..Default::default() }); },
+            6 => { r.func_is_method.remove(&1); },
+            7 => { r.const_method_ptrs.remove(&1); },
+            8 => { r.set_class_fields(HashMap::from([("URegion".into(), HashMap::from([
+                ("Minimum".into(), "float32".into()), ("Radius".into(), "float".into()), ("Maximum".into(), "float".into())]))])); },
+            9 => { r.prop_type_id.insert(5 | (8i64 << 33), 1); },
+            10 => { r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Foreign".into(); },
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_copied_binary_receiver(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("FVector", ""), ("UStorm", "Height")]);
         r.type_identity_by_ptr.insert(1, TypeIdentity { name: "FVector".into(), module: String::new(), namespace: String::new() });
