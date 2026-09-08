@@ -2504,6 +2504,35 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_ordered_vector_field_receiver(fault: u8) -> Self {
+        let mut r = Self::from_test_ordered_vector_arguments(if fault <= 6 { fault } else { 0 });
+        for (id, name) in [(4, "AHost"), (5, "AOtherHost")] {
+            r.typeid_to_ptr.insert(id, id as i64); r.type_by_ptr.insert(id as i64, name.into());
+            r.type_identity_by_ptr.insert(id as i64, TypeIdentity { name: name.into(),
+                module: "Fixture".into(), namespace: String::new() });
+        }
+        let key = (4 << 1) | 1;
+        r.prop_by_key.insert(key, "Target".into()); r.prop_type_id.insert(key, 4);
+        r.set_class_fields(HashMap::from([("AHost".into(), HashMap::from([("Target".into(),
+            if fault == 7 { "UObject" } else { "AGothicCharacter" }.into())]))]));
+        r.class_super.insert("AHost".into(), "AActor".into());
+        for (ptr, name) in [(40, "Hit"), (41, "Miss")] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_ret.insert(ptr, DataType { token: 0x52, ..Default::default() });
+            r.func_params.insert(ptr, vec![]);
+        }
+        match fault {
+            8 => { r.prop_type_id.insert(key, 5); }
+            9 => r.type_identity_by_ptr.get_mut(&4).unwrap().namespace = "Other".into(),
+            10 => { r.duplicate_prop_keys.insert(key); }
+            11 => { r.class_fields.remove("AHost");
+                r.class_fields.insert("AActor".into(), HashMap::from([("Target".into(), "AGothicCharacter".into())])); }
+            12 => { r.class_super.insert("AGothicCharacter".into(), "AActor".into()); }
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_eager_clamp_bounds(narrow: bool) -> Self {
         let mut r = Self::default();
         for (p, name, count) in [(1, "Min", 2), (2, "Max", 2), (3, "Clamp", 3)] {

@@ -3,7 +3,7 @@ AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachStraight.FireDemon_HellArms
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachZigZag.FireDemon_HellArmsArea_BreachZigZag	1	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachZigZag.FireDemon_HellArmsArea_BreachZigZag_Fire	1	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_Barrier_Ring	1	0	0
-AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_RingFireTest	2	0	0
+AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_RingFireTest	1	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.FireDemon_HellArmsArea_Ring	3	0	0
 AI.AIAgent.Creature.Golem.Fire.Spells.BreakFloor.GA_Spell_BreakFloor_FireGolem	2	0	0
 AI.AIAgent.Creature.Molerat.CombatSituations_Molerat	1	0	0
@@ -28,7 +28,7 @@ AI.States.AIState_InteractWinchGate	1	0	0
 AI.States.FightAI.AIGroup_ConflictInstance	1	0	0
 AI.States.FightAI.AIGroup_StateEvent	2	0	0
 AI.States.FightAI.AIState_PerceptionResponse	3	0	0
-AI.States.FightAI.AssessGoToDailyRoutineState.UAIState_AssessGoToDailyRoutine	2	0	0
+AI.States.FightAI.AssessGoToDailyRoutineState.UAIState_AssessGoToDailyRoutine	1	0	0
 AI.States.FightAI.CharmedState.AIState_Charmed	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_AcceptDefeat	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_ClaimVictory	1	0	0
@@ -97,7 +97,7 @@ Gameplay.Magic.Components.InExtremo.InExtremoPropComponent	1	0	0
 Gameplay.Magic.Components.Spell.Summon.SummonManagerComponent	1	0	0
 Items.Projectiles	2	0	0
 Items.Visual.Projectile.Arrow.Base.ArrowProjectileVisual_Base	1	0	0
-Regions.Traits.QuestRelatedTraits	8	0	0
+Regions.Traits.QuestRelatedTraits	5	0	0
 Sound.FXDefinitions.FXDefinitions_AttackImpact	1	0	0
 Sound.FXDefinitions.FXDefinitions_Footsteps	1	0	0
 Spawning.TriggerSpawner	1	0	0

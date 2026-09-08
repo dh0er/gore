@@ -9780,6 +9780,7 @@ fn inline_temporary_into(
                 // radius, the radius is the named one).
                 let stays = slot_and_life_any(&feeder).is_some_and(|(slot, _)| {
                     widened.contains(&slot) || hoisted.contains(&slot) || statement_producers.contains(&slot)
+                        || spilled.contains(&slot)
                         // A callee-qualified named life stays eager even when its
                         // physical slot also held unrelated temporary results.
                         || definition_value(&lines[line], &feeder)
@@ -13226,6 +13227,15 @@ fn inline_bool_chain_into_next_condition(
                 .and_then(call_of_expression)
                 .is_some_and(|(callee, _)| !is_primitive(&callee) && !is_enum(&callee));
             if crosses_call { continue; }
+            // A negated right-hand chain was evaluated eagerly before this
+            // condition. Even a plain left bool can short-circuit it away.
+            let conditional_negated_chain = statement_expression(trimmed).map(unwrap_brackets)
+                .and_then(|expr| expr.strip_suffix(&format!("!({name})"))
+                    .or_else(|| expr.strip_suffix(&format!("!{name}"))))
+                .is_some_and(|prefix| prefix.ends_with(" && ") || prefix.ends_with(" || "))
+                && call_sites(&format!("{value};")).iter()
+                    .any(|(callee, _)| !is_primitive(callee) && !is_enum(callee));
+            if conditional_negated_chain { continue; }
             // Read once WITHIN THIS LIFE: the compiler reuses the slot for later carriers, and
             // a later life of the same name is not a second reader of this value — provided
             // every later life DECLARES itself: a plain `local_1 = …;` further down relies on
@@ -23663,13 +23673,18 @@ fn assigned_value_before_getter_sites(f: &Func, refs: &RefResolver) -> HashSet<(
 /// argument life can still inline into the first producer.
 fn ordered_vector_argument_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, String)> {
     let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
-    if f.ret.token != 0x41 || f.ret.is_reference { return HashSet::new(); }
-    code.windows(14).enumerate().filter_map(|(at, c)| {
+    if !matches!(f.ret.token, 0x41 | 0x52) || f.ret.is_reference { return HashSet::new(); }
+    let field_receiver = f.ret.token == 0x52;
+    let extra = if field_receiver { 2 } else { 0 };
+    code.windows(14 + extra).enumerate().filter_map(|(at, raw)| {
+        // Borrow the common frame; only the field variant inserts ADDSi/RDSPtr.
+        let index = |i| i + if i >= 2 { extra } else { 0 };
+        let c: [&Instr; 14] = std::array::from_fn(|i| &raw[index(i)]);
         if c.iter().map(|i| i.op.name).ne(["PSF", "PshVPtr", "CALLSYS", "PSF", "PSF", "PshVPtr", "CALLINTF",
             "PSF", "PshVPtr", "CALLSYS", "PSF", "PSF", "PshVPtr", "CALLINTF"]) { return None; }
         let w = |i: usize| c[i].words.first().map(|v| *v as i16 as i32);
         let (reused, first) = (w(0)?, w(4)?);
-        if reused <= 0 || first <= 0 || reused == first || w(1)? >= 0
+        if reused <= 0 || first <= 0 || reused == first
             || [3, 7, 10].iter().any(|i| w(*i) != Some(reused)) || w(11) != Some(first)
             || [5, 8, 12].iter().any(|i| w(*i) != Some(0)) || c[2].qwords != c[9].qwords { return None; }
         let getter = *c[2].qwords.first()? as i64;
@@ -23682,11 +23697,25 @@ fn ordered_vector_argument_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, 
         if !value(vector) || identity.name != "FVector" || !identity.module.is_empty() || !identity.namespace.is_empty()
             || refs.func_owner_by_ptr(getter) != Some("AActor") || !refs.is_method_by_ptr(getter)
             || !refs.is_const_method_by_ptr(getter) || !refs.func_params_by_ptr(getter)?.is_empty() { return None; }
-        let [parameter] = f.params.as_slice() else { return None; };
-        let parameter_type = refs.type_identity_by_ptr(parameter.ty.type_info)?;
-        if !parameter.ty.is_object_handle || parameter.ty.is_reference || !parameter_type.module.is_empty()
-            || !parameter_type.namespace.is_empty() || !matches!(parameter_type.name.as_str(), "AActor" | "AGothicCharacter")
-            || super::model::param_slot_map(&[parameter.ty.clone()], true, false, Some(refs)).get(&w(1)?) != Some(&0) { return None; }
+        if field_receiver {
+            if !f.params.is_empty() || f.ret.is_object_handle || w(1) != Some(0)
+                || raw[2].op.name != "ADDSi" || raw[3].op.name != "RDSPtr"
+                || code.get(at + raw.len()).is_none_or(|i| i.op.name != "JLowZ") { return None; }
+            let tid = *raw[2].dwords.first()? as i32;
+            let offset = *raw[2].words.first()? as i16 as i32;
+            let owner = refs.type_identity_by_id(tid)?;
+            let (field, old_owner) = refs.member_identity(tid, offset)?;
+            if owner.module.is_empty() || !owner.namespace.is_empty() || !owner.name.starts_with('A')
+                || refs.type_identity_by_id(old_owner) != Some(owner) { return None; }
+            let ty = refs.own_field_type_by_class(&owner.name, field)?;
+            if !matches!(ty, "AActor" | "AGothicCharacter") || refs.is_script_class(ty) { return None; }
+        } else {
+            let [parameter] = f.params.as_slice() else { return None; };
+            let parameter_type = refs.type_identity_by_ptr(parameter.ty.type_info)?;
+            if w(1)? >= 0 || !parameter.ty.is_object_handle || parameter.ty.is_reference || !parameter_type.module.is_empty()
+                || !parameter_type.namespace.is_empty() || !matches!(parameter_type.name.as_str(), "AActor" | "AGothicCharacter")
+                || super::model::param_slot_map(&[parameter.ty.clone()], true, false, Some(refs)).get(&w(1)?) != Some(&0) { return None; }
+        }
         let produce = *c[6].dwords.first()? as i32;
         let consume = *c[13].dwords.first()? as i32;
         let [location, channel, min, max] = refs.func_params_by_id(produce)? else { return None; };
@@ -23698,7 +23727,8 @@ fn ordered_vector_argument_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, 
             || !channel_type.module.is_empty() || !channel_type.namespace.is_empty() || !scalar(min) || !scalar(max)
             || !refs.is_method_by_id(consume) || result.token != 0x41 || result.is_reference || result.is_object_handle
             || refs.func_params_by_id(consume)?.len() != 2 || !refs.func_params_by_id(consume)?.iter().all(input) { return None; }
-        for (slot, uses) in [(reused, vec![at, at + 3, at + 7, at + 10]), (first, vec![at + 4, at + 11])] {
+        for (slot, uses) in [(reused, vec![at, at + index(3), at + index(7), at + index(10)]),
+            (first, vec![at + index(4), at + index(11)])] {
             if f.obj_locals.iter().filter(|(s, _)| *s == slot).map(|(_, t)| *t).ne([vector.type_info])
                 || code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&slot))
                     .map(|(i, _)| i).ne(uses) { return None; }
@@ -30893,6 +30923,71 @@ mod counted_loop_release_tests {
 }
 
 #[cfg(test)]
+mod eager_negated_bool_guard_tests {
+    use super::*;
+
+    #[test]
+    fn spilled_bool_feeder_preserves_two_eager_values_through_the_condition_pipeline() {
+        let refs = RefResolver::from_test_eager_bool_calls(0x41);
+        let locals = BTreeMap::from([(1, "bool".into()), (5, "bool".into()), (6, "bool".into())]);
+        let types = HashMap::from([(1, "bool".into()), (5, "bool".into())]);
+        let empty: HashSet<i32> = HashSet::new();
+        let sites: HashSet<(i32, String)> = HashSet::new();
+        let spilled = HashSet::from([5]);
+        let inline = |text: &str, spilled: &HashSet<i32>| inline_call_argument_temporaries(
+            text, &refs, &locals, None, true, &types,
+            &empty, &empty, &empty, &empty, &empty, &empty, &empty, spilled,
+            &HashMap::new(), &empty, &sites);
+        let isolated = "local_1 = Saved();\nlocal_5 = Other();\nif (!(local_1) && !(local_5))\n";
+        assert_eq!(inline(isolated, &spilled), isolated);
+        for absent in [&empty, &HashSet::from([6])] {
+            assert!(!inline(isolated, absent).contains("local_1 = Saved();"));
+        }
+        // Real post-join shape: the first slot had an earlier return guard,
+        // the second value is itself an AND, and a third carrier holds !A && !B.
+        let body = "local_1 = !(Other()) || !(Other());\nif (local_1)\n{\n    return;\n}\nlocal_1 = Saved();\nlocal_5 = Other() && (Left == Right);\nlocal_6 = !(local_1) && !(local_5);\nif (local_6)\n{\n    return;\n}\n";
+        let early = inline(body, &spilled);
+        assert!(early.contains("local_1 = Saved();\nlocal_5 = Other() && (Left == Right);"), "{early}");
+        let condition = fold_condition_temporaries(&early, &locals, &refs, None, &spilled, &sites, false);
+        let (declared, _) = rewrite_first_use_decl_init(&condition, &locals, &refs, &empty,
+            &HashMap::<i32, bool>::new(), &empty, &empty, &HashMap::<i32, usize>::new(), &empty, &empty);
+        let result = inline_bool_chain_into_next_condition(&declared, &sites);
+        assert!(result.contains("bool local_1 = Saved();\nbool local_5 = Other() && (Left == Right);"), "{result}");
+        assert!(result.contains("!(local_1) && !(local_5)"), "{result}");
+        assert_eq!(result.matches("Saved()").count(), 1, "{result}");
+        assert_eq!(inline_bool_chain_into_next_condition(&result, &sites), result);
+    }
+
+    #[test]
+    fn negated_rhs_chain_guard_preserves_plain_rhs_pure_chains_and_named_life_checks() {
+        let sites: HashSet<(i32, String)> = HashSet::new();
+        for name in ["local_5", "local_5_2"] {
+            for op in ["&&", "||"] {
+                for left in ["Ready", "!(Saved())"] {
+                    for right in [format!("!({name})"), format!("!{name}")] {
+                        let source = format!("bool {name} = Other() && Ready;\nreturn {left} {op} {right};\n");
+                        assert_eq!(inline_bool_chain_into_next_condition(&source, &sites), source);
+                    }
+                }
+            }
+            for condition in [format!("Ready || {name}"), format!("{name} || Next()"), format!("!({name})")] {
+                let source = format!("bool {name} = Other() && Ready;\nif ({condition})\n{{\n    Work();\n}}\n");
+                assert!(!inline_bool_chain_into_next_condition(&source, &sites).contains(&name), "{source}");
+            }
+            for value in ["Left && Right", "bool(Left) && bool(Right)", "Message == \"Other()\" && Ready"] {
+                let source = format!("bool {name} = {value};\nreturn Ready && !({name});\n");
+                assert!(!inline_bool_chain_into_next_condition(&source, &sites).contains(&name), "{source}");
+            }
+        }
+        let named = "bool local_18 = Ready && this.IsBlocked();\nif (!(local_18))\n{\n    Stop();\n}\n";
+        assert_eq!(inline_bool_chain_into_next_condition(named, &HashSet::from([(18, "IsBlocked".into())])), named);
+        assert!(!inline_bool_chain_into_next_condition(named, &HashSet::from([(18, "Earlier".into())])).contains("local_18"));
+        let reused = "bool local_5 = Other() && Ready;\nif (!(local_5))\n{\n    Work();\n}\nlocal_5 = false;\nUse(local_5);\n";
+        assert_eq!(inline_bool_chain_into_next_condition(reused, &sites), reused);
+    }
+}
+
+#[cfg(test)]
 mod named_bool_condition_tests {
     use super::inline_bool_chain_into_next_condition;
     use std::collections::HashSet;
@@ -35898,6 +35993,79 @@ mod literal_value_lifetime_tests {
         let mut entry = function(&[("JMP", &[])]); entry.bytecode[1] = code[7].offset_dw as i32;
         entry.bytecode.extend(f.bytecode.clone()); entry.ret = f.ret.clone(); entry.params = f.params.clone(); entry.obj_locals = f.obj_locals.clone();
         assert!(check(&entry, &refs).is_empty());
+    }
+
+    fn ordered_vector_field_receiver_fixture() -> Func {
+        let mut f = function(&[("PshC8", &[]), ("PshC8", &[]), ("SetV1", &[25]), ("PshV4", &[25]),
+            ("PSF", &[20]), ("PshVPtr", &[0]), ("ADDSi", &[0]), ("RDSPtr", &[]), ("CALLSYS", &[]),
+            ("PSF", &[20]), ("PSF", &[32]), ("PshVPtr", &[0]), ("CALLINTF", &[]),
+            ("PSF", &[20]), ("PshVPtr", &[0]), ("CALLSYS", &[]),
+            ("PSF", &[20]), ("PSF", &[32]), ("PshVPtr", &[0]), ("CALLINTF", &[]),
+            ("JLowZ", &[]), ("CALLSYS", &[]), ("JMP", &[]), ("CALLSYS", &[]), ("RET", &[2])]);
+        f.ret.token = 0x52; f.obj_locals = vec![(20, 1), (32, 1)];
+        let c = disassemble(&f.bytecode).unwrap();
+        for (at, value) in [(2, 14), (6, 4), (8, 10), (12, 20), (15, 10), (19, 30), (21, 40), (23, 41)] {
+            f.bytecode[c[at].offset_dw + 1] = value;
+        }
+        for (at, value) in [(0, 100.0f64), (1, -100.0f64)] {
+            let bits = value.to_bits(); f.bytecode[c[at].offset_dw + 1] = bits as i32;
+            f.bytecode[c[at].offset_dw + 2] = (bits >> 32) as i32;
+        }
+        for (at, to) in [(20, 23), (22, 24)] {
+            f.bytecode[c[at].offset_dw + 1] = c[to].offset_dw as i32 - c[at].offset_dw as i32 - 2;
+        }
+        f
+    }
+
+    #[test]
+    fn field_receiver_vector_order_survives_the_complete_pipeline() {
+        let f = ordered_vector_field_receiver_fixture(); let refs = RefResolver::from_test_ordered_vector_field_receiver(0);
+        let sites = super::ordered_vector_argument_sites(&f, &refs);
+        assert_eq!(sites, HashSet::from([(32, "Floor".into()), (20, "this.GetLocation()".into())]));
+        assert!(!super::is_named_value_site(20, "this.Target.GetLocation()", &sites));
+        let fields = HashMap::from([("Target".into(), "AGothicCharacter".into())]);
+        let mut source = String::new();
+        super::emit_function_ctor(&mut source, &f, &refs, true, false, 0, None, Some(&fields), Some("AHost"));
+        let first = "FVector local_32 = this.Floor(this.Target.GetLocation(),";
+        let second = "FVector local_20 = this.GetLocation();";
+        let consume = "if (this.Contains(local_32, local_20))";
+        for text in [first, second, consume, "Hit();", "Miss();"] { assert!(source.contains(text), "{source}"); }
+        assert!(source.find(first) < source.find(second) && source.find(second) < source.find(consume), "{source}");
+        assert!(!source.contains("local_20 = this.Target.GetLocation()") && !source.contains("bool local_"), "{source}");
+    }
+
+    #[test]
+    fn field_receiver_vector_order_requires_typed_property_direct_branch_and_closed_slots() {
+        let f = ordered_vector_field_receiver_fixture(); let refs = RefResolver::from_test_ordered_vector_field_receiver(0);
+        let check = |f: &Func, refs: &RefResolver| super::ordered_vector_argument_sites(f, refs);
+        for fault in 1..=12 {
+            assert!(check(&f, &RefResolver::from_test_ordered_vector_field_receiver(fault)).is_empty(), "metadata {fault}");
+        }
+        let c = disassemble(&f.bytecode).unwrap();
+        for (at, word) in [(5, 65534), (6, 1), (13, 21), (14, 65534), (17, 31)] {
+            let mut wrong = f.clone(); let pos = c[at].offset_dw;
+            wrong.bytecode[pos] = (wrong.bytecode[pos] & 0xffff) | (word << 16);
+            assert!(check(&wrong, &refs).is_empty(), "operand {at}");
+        }
+        for (at, name) in [(7, "PopPtr"), (20, "JZ")] {
+            let mut wrong = f.clone(); let pos = c[at].offset_dw;
+            wrong.bytecode[pos] = (wrong.bytecode[pos] & !255) | OPCODES.iter().find(|op| op.name == name).unwrap().opcode as i32;
+            assert!(check(&wrong, &refs).is_empty(), "opcode {name}");
+        }
+        let mut wrong = f.clone(); wrong.ret.token = 0x41; assert!(check(&wrong, &refs).is_empty());
+        let mut wrong = f.clone(); wrong.params = vec![super::super::model::Param { name: "Target".into(), flags: 0,
+            ty: DataType { token: 5, type_info: 3, is_object_handle: true, ..Default::default() } }];
+        assert!(check(&wrong, &refs).is_empty());
+        for slot in 0..2 {
+            let mut wrong = f.clone(); wrong.obj_locals[slot].1 = 2; assert!(check(&wrong, &refs).is_empty());
+            let mut extra = f.clone(); extra.bytecode.extend(function(&[("PSF", &[if slot == 0 { 20 } else { 32 }])]).bytecode);
+            assert!(check(&extra, &refs).is_empty());
+        }
+        for at in [6, 10, 13, 17, 19] {
+            let mut entered = f.clone(); let mut jump = function(&[("JMP", &[])]).bytecode;
+            jump[1] = c[at].offset_dw as i32; jump.extend(entered.bytecode); entered.bytecode = jump;
+            assert!(check(&entered, &refs).is_empty(), "entry {at}");
+        }
     }
 
     #[test]
