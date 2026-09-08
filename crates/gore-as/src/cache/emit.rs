@@ -2065,7 +2065,8 @@ fn emit_function_ctor(
     // An explicitly constructed iterator container is a value copy of its field.
     member_copy_named.extend(named_iterated.intersection(&declared_with_init).copied());
     member_copy_named.extend(parameter_field_read_store_copies(f, refs, is_method));
-    member_copy_named.extend(parameter_member_comparison_copies(f, refs, is_method));
+    let parameter_comparison_lives = parameter_member_comparison_copy_lives(f, refs, is_method);
+    member_copy_named.extend(parameter_comparison_lives.keys().copied());
     let mut native_handle_reads = native_handle_read_types(f, refs);
     native_handle_reads.extend(cast_member_receiver_read_types(f, refs));
     let early_receivers = early_member_receiver_copies(f, refs);
@@ -2469,6 +2470,8 @@ fn emit_function_ctor(
         let body = drop_redundant_conversions(&body, fields, &path_roots, refs, &reference_copy_initializers, &explicit_copy_destinations);
         pass_trace("drop_redundant_conversions", &body);
         let mut assigned_tail = assignment_write_counts(f, refs);
+        assigned_tail.extend(parameter_comparison_lives.iter().filter(|(_, n)| **n == 2)
+            .map(|(slot, _)| (*slot, 1)));
         // The same closed bool witness also proves its otherwise unread initializer.
         let copied_bool_seeds: HashSet<i32> = disassemble(&f.bytecode).ok().map(|code|
             assigned_tail.keys().copied().filter(|slot| copied_bool_initializer(f, &code, refs, *slot)).collect()
@@ -19354,14 +19357,16 @@ fn member_copy_named_slots(f: &Func, refs: &RefResolver, is_method: bool) -> Has
 }
 
 /// Compare a saved parameter handle with a subsequently read member handle.
-/// Both aliases have exactly one typed copy and one comparison use.
-fn parameter_member_comparison_copies(f: &Func, refs: &RefResolver, is_method: bool) -> HashSet<i32> {
-    if !is_method || f.ret.token != 0x52 { return HashSet::new(); }
-    let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
+/// The field alias has one copy/use. The parameter has one such life, or
+/// two captures of the same parameter across terminal comparison guards,
+/// with the second compared to the native AActor.GetOwner result.
+fn parameter_member_comparison_copy_lives(f: &Func, refs: &RefResolver, is_method: bool) -> HashMap<i32, usize> {
+    if !is_method || f.ret.token != 0x52 { return HashMap::new(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return HashMap::new(); };
     let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
     let offsets = super::model::param_slot_map(&params, true, false, Some(refs));
     let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
-    code.windows(7).filter_map(|run| {
+    code.windows(7).enumerate().filter_map(|(at, run)| {
         if run.iter().map(|i| i.op.name).ne(["PshVPtr", "RefCpyV", "PshVPtr", "ADDSi",
             "RDSPtr", "RefCpyV", "CmpPtr"]) { return None; }
         let source = w(&run[0], 0)?;
@@ -19374,10 +19379,48 @@ fn parameter_member_comparison_copies(f: &Func, refs: &RefResolver, is_method: b
         let identity = refs.type_identity_by_ptr(param.type_info)?;
         for alias in [slot, other] {
             let locals: Vec<_> = f.obj_locals.iter().filter(|(s, _)| *s == alias).collect();
-            if locals.len() != 1 || refs.type_identity_by_ptr(locals[0].1)? != identity
-                || code.iter().filter(|i| super::bytediff::addressed_slots(i).contains(&alias)).count() != 2
-                { return None; }
+            if locals.len() != 1 || refs.type_identity_by_ptr(locals[0].1)? != identity { return None; }
         }
+        let uses = |alias| code.iter().enumerate().filter(|(_, i)|
+            super::bytediff::addressed_slots(i).contains(&alias)).map(|(n, _)| n).collect::<Vec<_>>();
+        if uses(other) != [at + 5, at + 6] { return None; }
+        let accesses = uses(slot);
+        let lives = if accesses == [at + 1, at + 6] { 1 } else {
+            if accesses != [at + 1, at + 6, at + 10, at + 14] { return None; }
+            let c = code.get(at..at + 17)?;
+            if c[7..].iter().map(|i| i.op.name).ne(["JNZ", "JMP", "PshVPtr", "RefCpyV", "PshVPtr",
+                "CALLSYS", "STOREOBJ", "CmpPtr", "JNZ", "JMP"])
+                || w(&c[9], 0) != Some(source) || w(&c[10], 0) != Some(slot) || w(&c[11], 0) != Some(0)
+                || w(&c[14], 0) != Some(slot) || w(&c[14], 1) != w(&c[13], 0)
+                || identity.name != "AActor" || !identity.module.is_empty() || !identity.namespace.is_empty()
+                { return None; }
+            let result = w(&c[13], 0).filter(|s| *s > 0 && *s != slot && *s != other)?;
+            let mut entries = f.obj_locals.iter().filter(|(s, _)| *s == result);
+            let result_uses = uses(result);
+            if refs.type_identity_by_ptr(entries.next()?.1)? != identity || entries.next().is_some()
+                || result_uses.get(..2) != Some(&[at + 13, at + 14])
+                // Only the first getter life participates in these captures.
+                // A later STOREOBJ overwrites it before any later reads.
+                || result_uses.get(2).is_some_and(|n| code[*n].op.name != "STOREOBJ"
+                    || w(&code[*n], 0) != Some(result)) { return None; }
+            let getter = *c[12].qwords.first()? as i64;
+            let ret = refs.func_ret_by_ptr(getter)?;
+            if refs.func_by_ptr(getter) != Some("GetOwner") || refs.func_owner_by_ptr(getter) != Some("AActor")
+                || !refs.is_method_by_ptr(getter) || !refs.is_const_method_by_ptr(getter)
+                || !refs.func_params_by_ptr(getter)?.is_empty() || ret.token != 5 || !ret.is_object_handle
+                || ret.is_reference || ret.is_object_const || ret.is_read_only || ret.is_auto || ret.if_handle_then_const
+                || refs.type_identity_by_ptr(ret.type_info)? != identity { return None; }
+            let jump = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+            let exit = code.last().filter(|i| i.op.name == "RET")?.offset_dw as i64;
+            if code.iter().filter(|i| i.op.name == "RET").count() != 1
+                || jump(&c[7]) != Some(c[9].offset_dw as i64)
+                || jump(&c[15]) != Some(code.get(at + 17)?.offset_dw as i64)
+                || [8, 16].iter().any(|n| jump(&c[*n]) != Some(exit))
+                || code.iter().enumerate().any(|(n, i)| n != at + 7 && i.op.name.starts_with('J')
+                    && jump(i).is_some_and(|t| t > c[0].offset_dw as i64 && t <= c[16].offset_dw as i64))
+                { return None; }
+            2
+        };
         let tid = *run[3].dwords.first()? as i32;
         let (field, old) = refs.member_identity(tid, w(&run[3], 0)?)?;
         let owner = refs.type_identity_by_id(tid)?;
@@ -19394,8 +19437,13 @@ fn parameter_member_comparison_copies(f: &Func, refs: &RefResolver, is_method: b
                     let target = i.offset_dw as i64 + 2 + *v as i32 as i64;
                     target > run[0].offset_dw as i64 && target <= run[6].offset_dw as i64
                 }))) { return None; }
-        Some(slot)
+        Some((slot, lives))
     }).collect()
+}
+
+#[cfg(test)]
+fn parameter_member_comparison_copies(f: &Func, refs: &RefResolver, is_method: bool) -> HashSet<i32> {
+    parameter_member_comparison_copy_lives(f, refs, is_method).into_keys().collect()
 }
 
 /// Preserve a parameter handle copied before its field is assigned to this.
@@ -19708,7 +19756,15 @@ fn fold_member_read_temporaries(
             let (name, path) = slot_store(lines[at]).or_else(|| {
                 declaration_with_initializer(lines[at]).map(|(_, name, init)| (name, init))
             })?;
-            let slot = slot_of(&name)?;
+            let slot = slot_of(&name).or_else(|| {
+                // A later scalar life has its own declaration and suffix. The
+                // late pass must still see its field read; verify its declared
+                // type before borrowing the physical slot's width information.
+                let (slot, life) = slot_and_life(&name)?;
+                let ty = locals.get(&slot)?;
+                (life > 1 && matches!(ty.as_str(), "float" | "double")
+                    && lines[at].trim_start().starts_with(&format!("{ty} {name} = "))).then_some(slot)
+            })?;
             if !pure_path(&path) {
                 return None;
             }
@@ -32759,6 +32815,46 @@ mod literal_value_lifetime_tests {
         assert_eq!(super::member_copy_named_slots(&old, &refs, false), HashSet::from([6]));
     }
 
+    #[test]
+    fn late_scalar_field_read_folds_after_an_intervening_read_gets_a_lifetime_suffix() {
+        let refs = RefResolver::default();
+        let locals = BTreeMap::from([(6, "float".into()), (32, "float".into())]);
+        let fields = HashMap::from([("Radius".into(), "float".into()), ("Duration".into(), "float".into())]);
+        let fold = |body: &str| super::fold_member_read_temporaries(body, &HashSet::new(), &HashSet::new(),
+            &locals, Some(&fields), &HashMap::new(), &refs, &HashMap::new(), false, &HashSet::new(), &HashSet::new(), &HashMap::new());
+        // The first pass folds Duration across Radius, leaving that intervening
+        // assignment for the late pass after declaration placement splits lives.
+        let early = "    local_32 = this.Duration;\n    local_6 = this.Radius;\n    Draw(float32(local_6), float32(local_32));\n";
+        assert_eq!(fold(early), "    local_6 = this.Radius;\n    Draw(float32(local_6), float32(this.Duration));\n");
+        let late = "    float local_6 = Earlier();\n    Use(local_6);\n    float local_6_2 = this.Radius;\n    Draw(float32(local_6_2), float32(this.Duration));\n";
+        assert_eq!(fold(late), "    float local_6 = Earlier();\n    Use(local_6);\n    Draw(float32(this.Radius), float32(this.Duration));\n");
+    }
+
+    #[test]
+    fn suffixed_scalar_field_read_keeps_type_copy_lifetime_and_loop_guards() {
+        let refs = RefResolver::default();
+        let locals = BTreeMap::from([(6, "float".into())]);
+        let fields = HashMap::from([("Radius".into(), "float".into())]);
+        let fold = |body: &str, keep: &HashSet<i32>| super::fold_member_read_temporaries(body, &HashSet::new(), &HashSet::new(),
+            &locals, Some(&fields), &HashMap::new(), &refs, &HashMap::new(), false, keep, &HashSet::new(), &HashMap::new());
+        let body = "    float local_6_2 = this.Radius;\n    Draw(float32(local_6_2));\n";
+        assert_eq!(fold(body, &HashSet::from([6])), body);
+        for ty in ["int", "float32", "FVector"] {
+            let wrong = body.replace("float local_6_2", &format!("{ty} local_6_2"));
+            assert_eq!(fold(&wrong, &HashSet::new()), wrong);
+        }
+        for name in ["local_6_bad", "local_6_2_extra", "local_6_0"] {
+            let wrong = body.replace("local_6_2", name);
+            assert_eq!(fold(&wrong, &HashSet::new()), wrong);
+        }
+        let twice = format!("{body}    Use(local_6_2);\n");
+        assert_eq!(fold(&twice, &HashSet::new()), twice);
+        let changed = body.replace("    Draw", "    this.Radius = 0.0;\n    Draw");
+        assert_eq!(fold(&changed, &HashSet::new()), changed);
+        let looped = "    float local_6_2 = this.Radius;\n    while (More())\n    {\n        Draw(local_6_2);\n    }\n";
+        assert_eq!(fold(looped, &HashSet::new()), looped);
+    }
+
     fn global_copy_before_handle_fixture() -> Func {
         let mut f = function(&[("PshGPtr", &[]), ("PSF", &[74]), ("CALLSYS", &[]), ("PSF", &[40]),
             ("PshGPtr", &[]), ("PshNull", &[]), ("PshGPtr", &[]), ("PshVPtr", &[65534]), ("ADDSi", &[0]),
@@ -34879,6 +34975,93 @@ mod literal_value_lifetime_tests {
             assert!(super::parameter_member_comparison_copies(&f,
                 &RefResolver::from_test_parameter_comparison_upcast(fault), true).is_empty());
         }
+    }
+
+    fn reused_parameter_comparison_fixture() -> Func {
+        let mut f = function(&[("PshVPtr", &[65532]), ("RefCpyV", &[2]), ("PshVPtr", &[0]),
+            ("ADDSi", &[0]), ("RDSPtr", &[]), ("RefCpyV", &[4]), ("CmpPtr", &[2, 4]), ("JNZ", &[]), ("JMP", &[]),
+            ("PshVPtr", &[65532]), ("RefCpyV", &[2]), ("PshVPtr", &[0]), ("CALLSYS", &[]),
+            ("STOREOBJ", &[8]), ("CmpPtr", &[2, 8]), ("JNZ", &[]), ("JMP", &[]), ("CALL", &[]), ("RET", &[6])]);
+        f.ret.token = 0x52; f.obj_locals = vec![(2, 2), (4, 2), (8, 2)];
+        f.params = ["Component", "OtherActor"].into_iter().map(|name| super::super::model::Param {
+            name: name.into(), flags: 0,
+            ty: DataType { token: 5, type_info: 2, is_object_handle: true, ..Default::default() },
+        }).collect();
+        let c = disassemble(&f.bytecode).unwrap();
+        for (at, val) in [(3, 1), (12, 3), (17, 5)] { f.bytecode[c[at].offset_dw + 1] = val; }
+        for (at, target) in [(7, 9), (8, 18), (15, 17), (16, 18)] {
+            f.bytecode[c[at].offset_dw + 1] = c[target].offset_dw as i32 - c[at].offset_dw as i32 - 2;
+        }
+        f
+    }
+
+    #[test]
+    fn repeated_parameter_comparison_retains_two_writes_to_one_binding_through_the_emitter() {
+        let f = reused_parameter_comparison_fixture(); let refs = RefResolver::from_test_reused_parameter_comparison(0);
+        let lives = super::parameter_member_comparison_copy_lives(&f, &refs, true);
+        assert_eq!(lives, HashMap::from([(2, 2)]));
+        let keep: HashSet<i32> = lives.keys().copied().collect();
+        let tails: HashMap<i32, usize> = lives.iter().filter(|(_, n)| **n == 2).map(|(s, _)| (*s, 1)).collect();
+        let body = "    local_2 = OtherActor;\n    local_4 = this.Target;\n    if (local_2 == local_4)\n    {\n        return;\n    }\n    local_2 = OtherActor;\n    if (local_2 == this.GetOwner())\n    {\n        return;\n    }\n    Work();\n";
+        let locals = BTreeMap::from([(2, "AActor".into()), (4, "AActor".into())]);
+        let roots = HashMap::from([("OtherActor".into(), "AActor".into())]);
+        let held = super::fold_member_read_temporaries(body, &HashSet::new(), &HashSet::new(), &locals,
+            None, &roots, &refs, &HashMap::new(), false, &keep, &HashSet::new(), &HashMap::new());
+        assert_eq!(held, body);
+        let place = |tails: &HashMap<i32, usize>| super::rewrite_first_use_decl_init(&held, &locals, &refs,
+            &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(), tails, &HashSet::new(), &HashSet::new()).0;
+        assert!(place(&HashMap::new()).contains("local_2_2"));
+        let placed = place(&tails);
+        assert_eq!(placed.matches("AActor local_2 = OtherActor;").count(), 1, "{placed}");
+        assert_eq!(placed.matches("local_2 = OtherActor;").count(), 2, "{placed}");
+        assert!(!placed.contains("local_2_2"), "{placed}");
+        let mut source = String::new();
+        super::emit_function(&mut source, &f, &refs, true, false, 0);
+        assert!(source.contains("AActor local_2 = OtherActor;\n    AActor local_4 = this.Target;"), "{source}");
+        assert_eq!(source.matches("local_2 = OtherActor;").count(), 2, "{source}");
+        assert_eq!(source.matches("AActor local_2 =").count(), 1, "{source}");
+        assert!(source.contains("if (local_2 == this.GetOwner())"), "{source}");
+        assert!(!source.contains("local_2_2") && !source.contains("stub["), "{source}");
+    }
+
+    #[test]
+    fn repeated_parameter_comparison_requires_the_same_capture_two_exits_and_closed_typed_uses() {
+        let f = reused_parameter_comparison_fixture(); let refs = RefResolver::from_test_reused_parameter_comparison(0);
+        for fault in 1..=9 { assert!(super::parameter_member_comparison_copy_lives(&f,
+            &RefResolver::from_test_reused_parameter_comparison(fault), true).is_empty(), "metadata {fault}"); }
+        let c = disassemble(&f.bytecode).unwrap();
+        for fault in 0..10 {
+            let mut bad = f.clone();
+            match fault {
+                0 => bad.bytecode[c[9].offset_dw] ^= (65532 ^ 65534) << 16,
+                1 => bad.bytecode[c[14].offset_dw + 1] ^= 1,
+                2 => bad.obj_locals.push((8, 2)),
+                3 => bad.obj_locals[2].1 = 4,
+                4 | 5 | 6 => { let at = [7, 8, 16][fault - 4]; bad.bytecode[c[at].offset_dw + 1] += 1; }
+                7 => bad.bytecode.extend(function(&[("PshVPtr", &[2])]).bytecode),
+                8 => bad.bytecode.extend(function(&[("PshVPtr", &[8])]).bytecode),
+                _ => { let at = bad.bytecode.len(); bad.bytecode.extend(function(&[("JMP", &[])]).bytecode);
+                    bad.bytecode[at + 1] = c[10].offset_dw as i32 - at as i32 - 2; }
+            }
+            assert!(super::parameter_member_comparison_copy_lives(&bad, &refs, true).is_empty(), "raw {fault}");
+        }
+        assert!(super::parameter_member_comparison_copy_lives(&f, &refs, false).is_empty());
+        // Original single-copy witness stays valid and never requests a reassignment tail.
+        let mut one = f.clone(); one.bytecode.truncate(c[7].offset_dw);
+        one.bytecode.extend(function(&[("RET", &[6])]).bytecode); one.obj_locals.pop();
+        assert_eq!(super::parameter_member_comparison_copy_lives(&one, &refs, true), HashMap::from([(2, 1)]));
+        // The unretained getter result may have another life, as in the longer
+        // overlap callback. Its first later access must fully overwrite it.
+        let mut reused = f.clone();
+        let mut extra = function(&[("PshVPtr", &[0]), ("CALLSYS", &[]), ("STOREOBJ", &[8]),
+            ("CmpPtrNull", &[8]), ("PshVPtr", &[8]), ("PopPtr", &[])]).bytecode;
+        extra[2] = 3;
+        reused.bytecode.splice(c[18].offset_dw..c[18].offset_dw, extra);
+        let rc = disassemble(&reused.bytecode).unwrap();
+        for at in [8, 16] { reused.bytecode[rc[at].offset_dw + 1] = rc.last().unwrap().offset_dw as i32 - rc[at].offset_dw as i32 - 2; }
+        assert_eq!(super::parameter_member_comparison_copy_lives(&reused, &refs, true), HashMap::from([(2, 2)]));
+        reused.bytecode[rc[20].offset_dw] = function(&[("PshVPtr", &[8])]).bytecode[0];
+        assert!(super::parameter_member_comparison_copy_lives(&reused, &refs, true).is_empty());
     }
 
     #[test]

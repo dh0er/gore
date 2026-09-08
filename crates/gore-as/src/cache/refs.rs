@@ -3752,6 +3752,37 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_reused_parameter_comparison(fault: u8) -> Self {
+        let mut r = Self::from_test_parameter_comparison_upcast(0);
+        r.type_identity_by_ptr.get_mut(&2).unwrap().module.clear();
+        r.type_by_ptr.insert(1, "ADemonAreaVisual".into());
+        r.type_identity_by_ptr.get_mut(&1).unwrap().name = "ADemonAreaVisual".into();
+        r.type_by_ptr.insert(4, "ARing".into()); r.typeid_to_ptr.insert(4, 4);
+        r.type_identity_by_ptr.insert(4, TypeIdentity { name: "ARing".into(), module: "Ring".into(), namespace: String::new() });
+        r.class_super.insert("ARing".into(), "ADemonAreaVisual".into());
+        r.class_super.insert("ADemonAreaVisual".into(), "AActor".into());
+        r.set_class_fields(HashMap::from([("ADemonAreaVisual".into(), HashMap::from([("Target".into(), "AActor".into())]))]));
+        r.func_by_ptr.insert(3, "GetOwner".into()); r.func_owner.insert(3, "AActor".into());
+        r.const_method_ptrs.insert(3);
+        r.func_ret.insert(3, DataType { token: 5, type_info: 2, is_object_handle: true, ..Default::default() });
+        r.func_by_ptr.insert(5, "Work".into()); r.funcid_to_ptr.insert(5, 5);
+        r.func_params.insert(5, Vec::new()); r.func_ret.insert(5, DataType { token: 0x52, ..Default::default() });
+        match fault {
+            1 => { r.func_by_ptr.insert(3, "OtherGetter".into()); }
+            2 => { r.func_owner.insert(3, "UObject".into()); }
+            3 => { r.const_method_ptrs.remove(&3); }
+            4 => { r.func_params.insert(3, vec![DataType::default()]); }
+            5 => r.func_ret.get_mut(&3).unwrap().is_reference = true,
+            6 => r.func_ret.get_mut(&3).unwrap().is_object_const = true,
+            7 => r.func_ret.get_mut(&3).unwrap().type_info = 4,
+            8 => r.type_identity_by_ptr.get_mut(&2).unwrap().module = "Script".into(),
+            9 => { r.prop_type_id.insert((1 << 1) | 1, 4); }
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_cast_member_receiver(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("UOwner", "Component"), ("UComponent", ""),
             ("UDerived", ""), ("FEvent", ""), ("ESpeed", "")]);
