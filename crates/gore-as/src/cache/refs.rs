@@ -2127,6 +2127,35 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_completed_value_argument_order(fault: u8) -> Self {
+        let mut r=Self::default();
+        for (ptr,name) in [(100,"FTag"),(200,"FResult"),(300,"UProvider")] {
+            r.type_by_ptr.insert(ptr,name.into());r.type_names.insert(name.into());
+        }
+        for (ptr,name,owner) in [(1,"MakeTag","UProvider"),(2,"GetTag","UProvider"),
+            (3,"Relate","UProvider"),(4,"$beh2","FTag"),(5,"$beh2","FResult")] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());
+            r.func_is_method.insert(ptr);r.func_params.insert(ptr,Vec::new());
+        }
+        r.funcid_to_ptr.insert(1,1);
+        for ptr in [1,2,3] {r.const_method_ptrs.insert(ptr);}
+        r.func_ret.insert(1,DataType {token:5,type_info:100,is_reference:fault == 1,..Default::default()});
+        r.func_ret.insert(2,DataType {token:5,type_info:if fault == 2 {200} else {100},
+            is_reference:fault == 3,is_object_handle:fault == 4,..Default::default()});
+        if fault == 5 {r.func_params.insert(2,vec![DataType {token:0x44,..Default::default()}]);}
+        if fault == 6 {r.const_method_ptrs.remove(&2);}
+        r.func_ret.insert(3,DataType {token:5,type_info:200,..Default::default()});
+        r.func_params.insert(3,vec![DataType {token:5,type_info:100,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()};3]);
+        r.func_ret.insert(4,DataType {token:if fault == 7 {0x41} else {0x52},..Default::default()});
+        r.func_ret.insert(5,DataType {token:0x52,..Default::default()});
+        r.global_by_ptr.insert(6,"Global".into());r.global_ns.insert(6,"Tag".into());
+        r.temporary_arg_positions.insert("Relate".into(),HashMap::from([(3,vec![true,true,true])]));
+        r.set_class_methods(HashMap::from([("UProvider".into(),HashSet::from([
+            "MakeTag/0/const".into(),"GetTag/0/const".into(),"Relate/3/const".into()]))]));
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_context_discarded_value(fault: u8) -> Self {
         let mut r = Self::default();
         for (ptr, name) in [(100, "FContext"), (200, "FSpec"), (300, "FResult"), (400, "UComponent")] { r.type_by_ptr.insert(ptr, name.into()); }
@@ -2183,6 +2212,46 @@ impl RefResolver {
         r.funcid_to_ptr.insert(1,10); r.func_by_ptr.insert(10,"Value".into());
         r.func_ret.insert(10,DataType { token,is_reference:reference,..Default::default() });
         r.func_params.insert(10,Vec::new());
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_assigned_value_return(fault: u8) -> Self {
+        let mut r=Self::from_test_member_chain(&[("FVector",""),("TArray","")]);
+        r.type_identity_by_ptr.insert(1,TypeIdentity { name:"FVector".into(),module:String::new(),namespace:String::new() });
+        let vector=DataType { token:5,type_info:1,..Default::default() };
+        let reference=DataType { is_reference:true,is_object_const:true,is_read_only:true,..vector.clone() };
+        for (p,name,owner,ret,params) in [
+            (10,"opDiv","FVector",vector.clone(),vec![DataType {token:0x51,..Default::default()}]),
+            (20,"opAssign","FVector",DataType {is_reference:true,..vector.clone()},vec![reference.clone()]),
+            (30,"$beh0","FVector",DataType {token:0x52,..Default::default()},vec![reference]),
+            (40,"$beh2","TArray",DataType {token:0x52,..Default::default()},vec![]),
+            (50,"opAddAssign","FVector",vector.clone(),vec![DataType {is_reference:true,is_object_const:true,is_read_only:true,..vector.clone()}])] {
+            r.func_by_ptr.insert(p,name.into());r.func_owner.insert(p,owner.into());r.func_is_method.insert(p);
+            r.func_ret.insert(p,ret);r.func_params.insert(p,params);
+        }
+        r.const_method_ptrs.insert(10);
+        if fault==1 {r.func_owner.insert(20,"FOther".into());}
+        if fault==2 {r.func_params.get_mut(&20).unwrap()[0].is_reference=false;}
+        if fault==3 {r.func_ret.get_mut(&10).unwrap().is_reference=true;}
+        if fault==4 {r.func_owner.insert(40,"FOther".into());}
+        if fault==5 {r.const_method_ptrs.remove(&10);}
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_named_index_fields(fault: u8) -> Self {
+        let mut r=Self::from_test_member_chain(&[("FRole","Kind"),("EKind",""),("TMap","")]);
+        r.type_identity_by_ptr.insert(1,TypeIdentity {name:"FRole".into(),module:"Fixture".into(),namespace:String::new()});
+        r.prop_by_key.insert(3 | (4i64<<33),"Index".into());
+        r.prop_type_id.insert(3,1);r.prop_type_id.insert(3 | (4i64<<33),if fault==2 {2} else {1});
+        r.set_class_fields(HashMap::from([("FRole".into(),HashMap::from([
+            ("Kind".into(),"EKind".into()),("Index".into(),if fault==1 {"float"} else {"int"}.into())]))]));
+        r.func_by_ptr.insert(10,"opIndex".into());r.func_is_method.insert(10);
+        r.func_params.insert(10,vec![DataType {token:5,type_info:2,is_reference:fault!=3,
+            is_object_const:true,is_read_only:true,..Default::default()}]);
+        r.func_ret.insert(10,DataType {token:5,type_info:3,is_reference:true,..Default::default()});
+        r.temporary_arg_positions.insert("Read".into(),HashMap::from([(2,vec![true,true])]));
         r
     }
 
@@ -2422,6 +2491,21 @@ impl RefResolver {
         r.func_ret.insert(12, DataType {token:if fault == 4 {0x44} else {0x41},..Default::default()});
         r.func_ret.insert(13, DataType {token:if fault == 5 {0x41} else {0x52},..Default::default()});
         r.func_ret.insert(14, DataType {token:0x52,..Default::default()});
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_script_switch_return_lifetime(fault: u8) -> Self {
+        let mut r = Self::from_test_script_cleanup(if fault <= 5 {fault} else {0});
+        for (id, name) in [(101,"FContext"),(102,"UActor"),(103,"FOther")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name:name.into(), module:"Fixture".into(), namespace:String::new() });
+        }
+        if fault == 6 { r.prop_type_id.insert((11 << 1) | (136i64 << 33) | 1, 12); r.typeid_to_ptr.insert(12,103); }
+        if fault == 7 { r.set_class_fields(HashMap::from([("FContext".into(), HashMap::from([("Result".into(), "int".into())]))])); }
+        r.funcid_to_ptr.insert(3,3); r.func_by_ptr.insert(3,"Respond".into());
+        r.func_owner.insert(3,"UActor".into()); r.func_is_method.insert(3);
+        r.func_params.insert(3,vec![DataType {token:0x41,..Default::default()}]);
+        r.func_ret.insert(3,DataType {token:if fault == 8 {0x44} else {0x52},..Default::default()});
         r
     }
 
