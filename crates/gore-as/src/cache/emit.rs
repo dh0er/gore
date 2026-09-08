@@ -1290,6 +1290,8 @@ fn emit_function_ctor(
     // (`AIState_WaitForBlockedPath::DoTask`: `bStillBlocking = IsCharacterStillBlocking…();
     // if (!bStillBlocking)` was folded into `if (!Call())`, losing the copy).
     hoisted.extend(copied_call_result_slots(f));
+    // Cleanup-separated copies are named assignments too; protect them before inlining.
+    hoisted.extend(bare_declaration_slots(f, refs));
     let named_iterated = named_iterated_containers(f, refs);
     hoisted.extend(named_iterated.iter().copied());
     let spilled = spilled_boolean_names(f, refs);
@@ -8217,9 +8219,80 @@ fn rewrite_no_assign_locals(body: &str, locals: &BTreeMap<i32, String>) -> (Stri
     (out, suppressed)
 }
 
+/// An early negated guard ends at an integer return; a later AND initializer
+/// reuses its bool storage, then contributes once to a separate OR condition.
+fn split_integer_guard_bool_chain(body: &str, f: &Func, refs: &RefResolver, spilled: &HashSet<i32>) -> String {
+    let rewrite = (|| {
+        if f.ret.token != 0x44 || f.ret.is_reference { return None; }
+        let code = disassemble(&f.bytecode).ok()?;
+        let last = code.last().filter(|i| i.op.name == "RET")?;
+        let w = |i: &Instr| i.words.first().map(|v| *v as i16 as i32);
+        let target = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+        let lines: Vec<&str> = body.lines().collect();
+        let (indent, name, initial) = declaration_with_initializer(lines.first()?)?;
+        let slot = slot_of(&name)?;
+        if slot <= 0 || !spilled.contains(&slot) || !lines[0].trim_start().starts_with("bool ")
+            || !initial.starts_with("!(") || !initial.ends_with(')') || count_ident(body, &name) != 4
+            || count_ident(body, &format!("{name}_2")) != 0 { return None; }
+        let uses: Vec<_> = code.iter().enumerate().filter(|(_, i)|
+            super::bytediff::addressed_slots(i).contains(&slot)).map(|(at, _)| at).collect();
+        let [first, negated, guard, second, test, zero, copied, read] = uses.as_slice() else { return None; };
+        if *first == 0 || *second == 0 || *copied < 2 || *negated != first + 1 || *guard != first + 2
+            || *test != second + 1 || *zero != second + 3
+            || [*first, *second].iter().any(|at| code[*at].op.name != "CpyRtoV4")
+            || code[*negated].op.name != "NOT" || code[*guard].op.name != "CpyVtoR1"
+            || code[*test].op.name != "CpyVtoR1" || code[*zero].op.name != "SetV4"
+            || code[*zero].dwords.first() != Some(&0) || code[*copied].op.name != "CpyVtoV4"
+            || code[*copied - 1].op.name != "CpyRtoV4"
+            || code[*copied].words.get(1) != code[*copied - 1].words.first() { return None; }
+        let bool_call = |at: usize| {
+            let i = &code[at];
+            (i.op.name == "CALLSYS").then(|| i.qwords.first()).flatten()
+                .and_then(|p| refs.func_ret_by_ptr(*p as i64))
+                .is_some_and(|t| t.token == 0x41 && !t.is_reference && !t.is_object_handle)
+        };
+        let early = code.get(*guard + 1..*guard + 5)?;
+        let or = code.get(*read..*read + 6)?;
+        if ![*first - 1, *second - 1, *copied - 2].iter().all(|at| bool_call(*at))
+            || early.iter().map(|i| i.op.name).ne(["JLowZ", "SetV4", "CpyVtoR4", "JMP"])
+            || w(&early[1]) != w(&early[2]) || w(&early[1]) == Some(slot)
+            || target(&early[0]) != Some(code.get(*guard + 5)?.offset_dw as i64)
+            || target(&early[3]) != Some(last.offset_dw as i64)
+            || code[*test + 1].op.name != "JLowNZ" || code[*zero + 1].op.name != "JMP"
+            || target(&code[*test + 1]) != Some(code.get(*zero + 2)?.offset_dw as i64)
+            || target(&code[*zero + 1]) != Some(code.get(*copied + 1)?.offset_dw as i64)
+            || or.iter().map(|i| i.op.name).ne(["CpyVtoR1", "JLowZ", "SetV1", "JMP", "CpyVtoV4", "CpyVtoR1"])
+            || or[2].dwords.first() != Some(&1) || w(&or[2]) == Some(slot)
+            || w(&or[2]) != w(&or[4]) || w(&or[2]) != w(&or[5])
+            || target(&or[1]) != Some(or[4].offset_dw as i64) || target(&or[3]) != Some(or[5].offset_dw as i64)
+            { return None; }
+        if code.iter().any(|i| i.op.name == "JMPP" || i.op.name == "RET" && i.offset_dw != last.offset_dw
+            || i.op.name.starts_with('J') && target(i).is_some_and(|t| t <= i.offset_dw as i64
+                || [*first, *negated, *guard, *second, *test, *zero, *copied].iter()
+                    .any(|at| t == code[*at].offset_dw as i64))) { return None; }
+        let expected_return = format!("return {};", *early[1].dwords.first()? as i32);
+        if lines.get(1)?.trim() != format!("if ({name})") || lines.get(2)?.trim() != "{"
+            || lines.get(3)?.trim() != expected_return || lines.get(4)?.trim() != "}"
+            || [1, 2, 4].iter().any(|at| indent_of(lines[*at]) != indent) { return None; }
+        let later: Vec<_> = lines.iter().enumerate().skip(5).filter(|(_, line)| count_ident(line, &name) > 0).collect();
+        let [(assignment, line), (reader, condition)] = later.as_slice() else { return None; };
+        let rhs = assignment_rhs_for(line, &name)?;
+        if indent_of(line) != indent || indent_of(condition) != indent
+            || block_span(&lines, *assignment) != block_span(&lines, 0)
+            || *reader <= *assignment || count_ident(rhs, &name) != 0
+            || top_level_logical_operator(rhs) != Some("&&")
+            || !condition.trim().strip_prefix("if (")?.trim_start_matches('(').starts_with(&format!("{name} || "))
+            { return None; }
+        Some(rewrite_decl_at_assignment(body, &BTreeMap::from([(slot, "bool".into())]),
+            &|_, _| true, &|_, _| "bool".into(), true, &HashMap::new()).0)
+    })();
+    rewrite.unwrap_or_else(|| body.to_owned())
+}
+
 /// A negated guard and a later named chain can share one physical bool slot.
 /// Inline the first guard so the later chain is declared at its own initializer.
 fn split_negated_guard_from_named_bool_chain(body: &str, f: &Func, refs: &RefResolver, spilled: &HashSet<i32>) -> String {
+    if f.ret.token == 0x44 { return split_integer_guard_bool_chain(body, f, refs, spilled); }
     let rewrite = (|| {
         if f.ret.token != 0x41 || f.ret.is_reference { return None; }
         let code = disassemble(&f.bytecode).ok()?;
@@ -31729,6 +31802,43 @@ mod literal_value_lifetime_tests {
     }
 
     #[test]
+    fn cleanup_separated_integer_copy_survives_the_early_argument_inliner() {
+        let mut f = function(&[("CALLSYS", &[]), ("CpyRtoV4", &[29]),
+            ("PSF", &[22]), ("CALLSYS", &[]), ("CpyVtoV4", &[6, 29]),
+            ("CMPIi", &[6]), ("TNS", &[]), ("CpyRtoV4", &[1]),
+            ("CpyVtoR4", &[1]), ("RET", &[0])]);
+        let code = super::disassemble(&f.bytecode).unwrap();
+        f.bytecode[code[0].offset_dw + 1] = 2;
+        f.bytecode[code[3].offset_dw + 1] = 3;
+        f.bytecode[code[5].offset_dw + 1] = 1;
+        let refs = RefResolver::from_test_retained_receiver(0x44, true);
+        let keep = super::bare_declaration_slots(&f, &refs);
+        assert_eq!(keep, HashSet::from([6]));
+        let body = "    local_29 = local_18.Count();\n    local_6 = local_29;\n    local_1 = (local_6 >= 1);\n    return local_1;\n";
+        let locals = BTreeMap::from([(1, "bool".into()), (6, "int".into()),
+            (18, "FValue".into()), (29, "int".into())]);
+        let calls = HashMap::from([(6, "int".into()), (29, "int".into())]);
+        let fold = |hoisted: &HashSet<i32>| super::inline_call_argument_temporaries(body, &refs,
+            &locals, None, true, &calls, &HashSet::new(), &HashSet::new(),
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), hoisted,
+            &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new());
+        assert!(!fold(&HashSet::new()).contains("local_6 ="));
+        let kept = fold(&keep);
+        assert!(kept.contains("local_6 = local_18.Count();"), "{kept}");
+        assert!(kept.contains("(local_6 >= 1)"), "{kept}");
+        // Work in the gap, another destination write, or a live copied source
+        // is not the cleanup-separated sole assignment recognized above.
+        let mut other = f.clone(); other.bytecode[code[3].offset_dw + 1] = 4;
+        assert!(super::bare_declaration_slots(&other, &refs).is_empty());
+        let mut other = f.clone(); other.bytecode[code[7].offset_dw] =
+            (other.bytecode[code[7].offset_dw] & 65535) | (6 << 16);
+        assert!(super::bare_declaration_slots(&other, &refs).is_empty());
+        let mut other = f; other.bytecode[code[5].offset_dw] =
+            (other.bytecode[code[5].offset_dw] & 65535) | (29 << 16);
+        assert!(super::bare_declaration_slots(&other, &refs).is_empty());
+    }
+
+    #[test]
     fn literal_string_lifetime_survives_the_early_argument_inliner() {
         let refs = RefResolver::from_test_literal_string_scope(0);
         let f = literal_string_scope_fixture();
@@ -32732,6 +32842,71 @@ mod literal_value_lifetime_tests {
         let mut entry = f.clone(); let at = entry.bytecode.len(); entry.bytecode.extend(function(&[("JMP", &[])]).bytecode);
         entry.bytecode[at + 1] = code[7].offset_dw as i32 - at as i32 - 2;
         assert!(!super::named_value_sites(&entry, &refs).contains(&site));
+    }
+
+    fn integer_guard_bool_chain_fixture() -> Func {
+        let mut f = function(&[("CALLSYS", &[]), ("CpyRtoV4", &[3]), ("NOT", &[3]), ("CpyVtoR1", &[3]),
+            ("JLowZ", &[]), ("SetV4", &[4]), ("CpyVtoR4", &[4]), ("JMP", &[]),
+            ("SetV4", &[9]), ("CALLSYS", &[]), ("CpyRtoV4", &[3]), ("CpyVtoR1", &[3]),
+            ("JLowNZ", &[]), ("SetV4", &[3]), ("JMP", &[]), ("CALLSYS", &[]),
+            ("CpyRtoV4", &[14]), ("CpyVtoV4", &[3, 14]), ("CALLSYS", &[]), ("CpyRtoV4", &[14]),
+            ("CpyVtoR1", &[3]), ("JLowZ", &[]), ("SetV1", &[19]), ("JMP", &[]),
+            ("CpyVtoV4", &[19, 14]), ("CpyVtoR1", &[19]), ("JLowZ", &[]),
+            ("SetV4", &[18]), ("CpyVtoR4", &[18]), ("JMP", &[]), ("CpyVtoR4", &[9]), ("RET", &[0])]);
+        f.ret.token = 0x44;
+        let c = super::disassemble(&f.bytecode).unwrap();
+        for (at, value) in [(0, 101), (5, 999), (8, 17), (9, 101), (15, 102), (18, 102), (22, 1), (27, 999)] {
+            f.bytecode[c[at].offset_dw + 1] = value;
+        }
+        for (at, to) in [(4, 8), (7, 31), (12, 15), (14, 18), (21, 24), (23, 25), (26, 30), (29, 31)] {
+            f.bytecode[c[at].offset_dw + 1] = c[to].offset_dw as i32 - c[at].offset_dw as i32 - 2;
+        }
+        f
+    }
+
+    #[test]
+    fn integer_return_guard_keeps_its_bool_and_declares_the_later_and_life() {
+        let f = integer_guard_bool_chain_fixture();
+        let refs = RefResolver::from_test_eager_bool_calls(0x41);
+        let body = "    bool local_3 = !(Saved());\n    if (local_3)\n    {\n        return 999;\n    }\n    int local_9 = 17;\n    local_3 = Saved() && Other();\n    bool local_14 = Other();\n    bool local_19 = local_3 || local_14;\n    if (local_19)\n    {\n        return 999;\n    }\n    return local_9;\n";
+        let joined = super::inline_bool_chain_into_next_condition(body, &HashSet::new());
+        assert!(joined.contains("if ((local_3 || local_14))"), "{joined}");
+        let actual = super::split_negated_guard_from_named_bool_chain(&joined, &f, &refs, &HashSet::from([3]));
+        let expected = joined.replace("    local_3 = Saved() && Other();", "    bool local_3_2 = Saved() && Other();")
+            .replace("if ((local_3 || local_14))", "if ((local_3_2 || local_14))");
+        assert_ne!(actual, joined);
+        assert_eq!(actual, expected);
+        assert!(actual.starts_with("    bool local_3 = !(Saved());\n    if (local_3)\n"));
+        assert_eq!(super::split_negated_guard_from_named_bool_chain(&actual, &f, &refs, &HashSet::from([3])), actual);
+    }
+
+    #[test]
+    fn integer_guard_bool_split_rejects_other_lives_scope_types_and_diamonds() {
+        let f = integer_guard_bool_chain_fixture();
+        let refs = RefResolver::from_test_eager_bool_calls(0x41);
+        let body = "    bool local_3 = !(Saved());\n    if (local_3)\n    {\n        return 999;\n    }\n    int local_9 = 17;\n    local_3 = Saved() && Other();\n    bool local_14 = Other();\n    if ((local_3 || local_14))\n    {\n        return 999;\n    }\n    return local_9;\n";
+        let fold = |text: &str, f: &Func, refs: &RefResolver, keep: &HashSet<i32>|
+            super::split_negated_guard_from_named_bool_chain(text, f, refs, keep);
+        let keep = HashSet::from([3]);
+        assert_eq!(fold(body, &f, &refs, &HashSet::new()), body);
+        assert_eq!(fold(body, &f, &RefResolver::from_test_eager_bool_calls(0x44), &keep), body);
+        for text in [body.replace("return 999;", "return 998;"), body.replace(" && ", " || "),
+            body.replace("if ((local_3 || local_14))", "if ((local_14 || local_3))"),
+            body.replace("    local_3 = Saved() && Other();", "    if (Flag)\n    {\n        local_3 = Saved() && Other();\n    }"),
+            body.replace("    local_3 = Saved() && Other();", "    local_3 = Saved() && local_3;"),
+            format!("{body}    Use(local_3);\n"), format!("{body}    bool local_3_2 = false;\n")] {
+            assert_eq!(fold(&text, &f, &refs, &keep), text);
+        }
+        let c = super::disassemble(&f.bytecode).unwrap();
+        for (at, value) in [(4, 0), (7, 0), (12, 0), (13, 1), (14, 0), (21, 0), (22, 0), (23, 0)] {
+            let mut other = f.clone(); other.bytecode[c[at].offset_dw + 1] = value;
+            assert_eq!(fold(body, &other, &refs, &keep), body, "opcode {at}");
+        }
+        let mut other = f.clone(); other.ret.is_reference = true; assert_eq!(fold(body, &other, &refs, &keep), body);
+        let mut other = f.clone(); other.bytecode[c[8].offset_dw] = (other.bytecode[c[8].offset_dw] & 65535) | (3 << 16);
+        assert_eq!(fold(body, &other, &refs, &keep), body, "another physical bool write");
+        let mut other = f; other.bytecode[c[17].offset_dw + 1] ^= 1;
+        assert_eq!(fold(body, &other, &refs, &keep), body, "wrong merge source");
     }
 
     #[test]

@@ -145,6 +145,8 @@ pub struct RefResolver {
     class_fields: HashMap<String, HashMap<String, String>>,
     /// Exact own const-object-field types; ordinary composed field maps remain unchanged.
     const_object_fields: HashMap<(i64, String), DataType>,
+    /// Exact own script int fields; no bare-class-name fallback.
+    script_int_fields: HashSet<(i64, String)>,
     /// FunctionReferences parameter DataTypes (for arg-type-driven casts at call sites).
     func_params: HashMap<i64, Vec<DataType>>,
     /// Function names the cache records with a callable no-argument form — either a row with no
@@ -565,7 +567,7 @@ impl RefResolver {
     }
     /// Sparse qualified field evidence, keyed by the exact serialized owner pointer.
     /// Ambiguous owner identities or repeated field declarations provide no witness.
-    pub(crate) fn set_const_object_fields(
+    pub(crate) fn set_qualified_fields(
         &mut self,
         fields: impl IntoIterator<Item = (TypeIdentity, String, DataType)>,
     ) {
@@ -575,6 +577,7 @@ impl RefResolver {
                 .and_modify(|known| *known = None).or_insert(Some(*ptr));
         }
         let mut qualified = HashMap::new();
+        let mut integers = HashSet::new();
         let mut seen = HashSet::new();
         for (owner, field, ty) in fields {
             let Some(Some(ptr)) = owners.get(&(
@@ -583,7 +586,13 @@ impl RefResolver {
             let key = (*ptr, field);
             if !seen.insert(key.clone()) {
                 qualified.remove(&key);
+                integers.remove(&key);
                 continue;
+            }
+            if !owner.module.is_empty() && ty.token == 0x44 && ty.type_info == 0
+                && !ty.is_reference && !ty.is_object_handle && !ty.is_auto
+            {
+                integers.insert(key.clone());
             }
             if ty.token == 5 && ty.is_object_const && ty.is_object_handle && !ty.is_read_only
                 && self.type_by_ptr.contains_key(&ty.type_info)
@@ -592,6 +601,13 @@ impl RefResolver {
             }
         }
         self.const_object_fields = qualified;
+        self.script_int_fields = integers;
+    }
+
+    pub(crate) fn is_script_int_field(&self, owner_id: i32, offset: i32) -> bool {
+        let Some(owner) = self.typeid_to_ptr.get(&owner_id) else { return false; };
+        let Some(name) = self.member(owner_id, offset) else { return false; };
+        self.script_int_fields.contains(&(*owner, name.to_owned()))
     }
 
     pub(crate) fn const_object_field_accepts(&self, owner_id: i32, offset: i32, param: &DataType) -> bool {
@@ -1654,7 +1670,7 @@ impl RefResolver {
             });
             if id <= 3 { r.prop_by_key.insert(((id as i64) << 1) | 1, "Value".into()); }
         }
-        r.set_const_object_fields([(
+        r.set_qualified_fields([(
             TypeIdentity { module: "Fixture".into(), namespace: "One".into(), name: "FHolder".into() },
             "Value".into(), DataType { token: 5, type_info: 4,
                 is_object_const: true, is_object_handle: true, ..Default::default() },
@@ -1838,6 +1854,35 @@ impl RefResolver {
         if fault == 5 { r.func_ret.get_mut(&2).unwrap().token = 0x41; }
         if fault == 6 { r.func_ret.get_mut(&1).unwrap().is_object_const = false; }
         if fault == 7 { r.type_identity_by_ptr.get_mut(&201).unwrap().namespace = "Other".into(); }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_typed_psf_conversion(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FString", ""), ("FName", "")]);
+        r.type_identity_by_ptr.insert(1, TypeIdentity { name: "FString".into(), module: String::new(), namespace: String::new() });
+        let string = DataType { token: 5, type_info: 1, ..Default::default() };
+        let name = DataType { token: 5, type_info: 2, ..Default::default() };
+        let reference = |t: DataType| DataType { is_reference: true, is_object_const: true, is_read_only: true, ..t };
+        let void = DataType { token: 0x52, ..Default::default() };
+        for (id, callee, ret, args) in [(1, "$beh0", void.clone(), vec![reference(string.clone())]),
+            (2, "Source", string, vec![]), (3, "Allowed", DataType { token: 0x41, ..Default::default() }, vec![]),
+            (4, "Save", void.clone(), vec![reference(name)]), (5, "$beh2", void, vec![])] {
+            r.func_by_ptr.insert(id, callee.into()); r.func_ret.insert(id, ret); r.func_params.insert(id, args);
+        }
+        r.func_is_method.extend([1, 5]); r.func_owner.insert(1, "FName".into()); r.func_owner.insert(5, "FString".into());
+        if fault == 1 { r.func_params.get_mut(&1).unwrap()[0].type_info = 2; }
+        if fault == 2 { r.func_params.get_mut(&1).unwrap()[0].is_reference = false; }
+        if fault == 3 { r.func_params.get_mut(&1).unwrap()[0].is_object_const = false; }
+        if fault == 4 { r.func_params.get_mut(&1).unwrap()[0].is_read_only = false; }
+        if fault == 5 { r.func_params.get_mut(&1).unwrap()[0].is_object_handle = true; }
+        if fault == 6 { r.func_owner.insert(1, "FOther".into()); }
+        if fault == 7 { r.const_method_ptrs.insert(1); }
+        if fault == 8 { r.func_ret.get_mut(&1).unwrap().is_reference = true; }
+        if fault == 9 { r.type_identity_by_ptr.get_mut(&1).unwrap().namespace = "Other".into(); }
+        if fault == 10 { r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(); }
+        if fault == 11 { r.func_is_method.remove(&1); }
+        if fault == 12 { r.func_params.get_mut(&1).unwrap().clear(); }
         r
     }
 
@@ -2241,6 +2286,19 @@ impl RefResolver {
         r
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_test_copied_int_field_read(ty: &str, native: bool) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UConfig", "Limit")]);
+        let owner = TypeIdentity { name: "UConfig".into(),
+            module: if native { "" } else { "Fixture" }.into(), namespace: String::new() };
+        r.type_identity_by_ptr.insert(1, owner.clone());
+        r.prop_type_id.insert(3, 1);
+        r.set_class_fields(HashMap::from([("UConfig".into(), HashMap::from([("Limit".into(), ty.into())]))]));
+        let token = match ty { "int" => 0x44, "uint" => 0x4B, "int64" => 0x47,
+            "float32" => 0x50, "bool" => 0x41, _ => 5 };
+        r.set_qualified_fields([(owner, "Limit".into(), DataType { token, ..Default::default() })]);
+        r
+    }
     #[cfg(test)]
     pub(crate) fn from_test_copied_binary_receiver(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("FVector", ""), ("UStorm", "Height")]);
@@ -3674,6 +3732,31 @@ mod const_object_field_tests {
     use super::*;
 
     #[test]
+    fn integer_field_evidence_stays_with_its_qualified_owner() {
+        let mut refs = RefResolver::from_test_copied_int_field_read("int", false);
+        let owner = refs.type_identity_by_ptr[&1].clone();
+        let ty = DataType { token: 0x44, ..Default::default() };
+        assert!(refs.is_script_int_field(1, 0));
+        assert!(!refs.is_script_int_field(1, 4));
+        let mut foreign = owner.clone(); foreign.namespace = "Other".into();
+        refs.type_identity_by_ptr.insert(2, foreign.clone());
+        // A same-named class in another namespace cannot donate the field type.
+        refs.set_qualified_fields([(foreign.clone(), "Limit".into(), ty.clone())]);
+        assert!(!refs.is_script_int_field(1, 0));
+        refs.set_qualified_fields([(owner.clone(), "Limit".into(), ty.clone()),
+            (foreign, "Limit".into(), DataType { token: 0x50, ..Default::default() })]);
+        assert!(refs.is_script_int_field(1, 0));
+        let other = DataType { token: 0x50, ..Default::default() };
+        for declarations in [[ty.clone(), other.clone()], [other, ty.clone()]] {
+            refs.set_qualified_fields(declarations.into_iter().map(|t| (owner.clone(), "Limit".into(), t)));
+            assert!(!refs.is_script_int_field(1, 0));
+        }
+        refs.type_identity_by_ptr.insert(3, owner.clone());
+        refs.set_qualified_fields([(owner, "Limit".into(), ty)]);
+        assert!(!refs.is_script_int_field(1, 0));
+    }
+
+    #[test]
     fn qualified_field_evidence_rejects_owner_and_value_type_collisions() {
         let mut refs = RefResolver::from_test_const_object_fields();
         let ty = DataType { token: 5, type_info: 4,
@@ -3687,12 +3770,12 @@ mod const_object_field_tests {
         let mut mutable = ty.clone(); mutable.is_object_const = false;
         // Both declaration orders must reject a mutable/const duplicate.
         for declarations in [[ty.clone(), mutable.clone()], [mutable, ty.clone()]] {
-            refs.set_const_object_fields(declarations.into_iter()
+            refs.set_qualified_fields(declarations.into_iter()
                 .map(|field| (owner.clone(), "Value".into(), field)));
             assert!(!refs.const_object_field_accepts(1, 0, &ty));
         }
         refs.type_identity_by_ptr.insert(6, owner.clone());
-        refs.set_const_object_fields([(owner, "Value".into(), ty.clone())]);
+        refs.set_qualified_fields([(owner, "Value".into(), ty.clone())]);
         assert!(!refs.const_object_field_accepts(1, 0, &ty));
     }
 }

@@ -12,7 +12,7 @@ AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.SoulHarvest.SoulHarvest_Visual	
 AI.AIAgent.Creature.Troll.TC_TrollAdult_01.CombatMoves_TrollAdult	1	0	0
 AI.AIAgent.Orc.Combat.Staff.Spells.StormOfFire.GA_Spell_StormOfFire_Orc	1	0	0
 AI.AIItemScoring	1	0	0
-AI.AssessmentResponseSystem.AssessmentBits	9	0	0
+AI.AssessmentResponseSystem.AssessmentBits	7	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	6	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingResponse	1	0	0
@@ -108,7 +108,7 @@ GAS.GASCharacterStateMixins	7	0	0
 GAS.PerceptionEventMixins	1	0	0
 Gameplay.Environment.BattleBlockingBarrier.BattleBarrierVisual	1	0	0
 Gameplay.Magic.Components.Damage.PercentageDamageLimiterComponent	1	0	0
-Gameplay.Magic.Components.InExtremo.InExtremoPropComponent	3	0	0
+Gameplay.Magic.Components.InExtremo.InExtremoPropComponent	1	0	0
 Gameplay.Magic.Components.Spell.Summon.SummonManagerComponent	1	0	0
 InteractiveObjects.PuzlesBlood	1	0	0
 Items.Projectiles	2	0	0

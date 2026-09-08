@@ -428,6 +428,26 @@ fn is_lvalue_arg(arg: &Arg) -> bool {
     }
 }
 
+/// A typed native conversion consumes an existing local value even when that
+/// local was initialized in an enclosing block, outside this block's `out` list.
+fn is_proven_typed_psf_conversion(recv: &Arg, args: &[Arg], ptr: i64, refs: &RefResolver) -> bool {
+    let [src] = args else { return false; };
+    let Some([param]) = refs.func_params_by_ptr(ptr) else { return false; };
+    let (Some(dst_ty), Some(src_ty)) = (recv.ty.as_deref(), src.ty.as_deref()) else { return false; };
+    let local_slot = |arg: &Arg| arg.s.strip_prefix("local_").and_then(|n| n.parse::<i32>().ok()).filter(|n| *n > 0);
+    let (Some(dst), Some(source)) = (local_slot(recv), local_slot(src)) else { return false; };
+    let Some(identity) = refs.type_identity_by_ptr(param.type_info) else { return false; };
+    recv.is_psf && src.is_psf && dst != source && dst_ty != src_ty
+        && matches!(dst_ty.as_bytes().first(), Some(b'F' | b'T' | b'E'))
+        && param.token == 5 && param.is_reference && param.is_object_const
+        && param.is_read_only && !param.is_object_handle
+        && identity.module.is_empty() && identity.namespace.is_empty()
+        && identity.name.starts_with('F') && identity.name == src_ty
+        && refs.func_by_ptr(ptr) == Some("$beh0") && refs.func_owner_by_ptr(ptr) == Some(dst_ty)
+        && refs.is_method_by_ptr(ptr) && !refs.is_const_method_by_ptr(ptr)
+        && refs.func_ret_by_ptr(ptr).is_some_and(|t| t.token == 0x52 && !t.is_reference && !t.is_object_handle)
+}
+
 /// A `$beh0` value copy-constructor whose source is a PSF slot is recoverable only when every
 /// available type witness agrees: one parameter, PSF receiver/source, identical recovered slot
 /// types, and a behavior owner equal to that type. This is the compiler's
@@ -3085,6 +3105,34 @@ fn float_field_type(refs: &RefResolver, tid: i32, field: &str) -> Option<String>
         })
 }
 
+/// A known script int field is copied into a separate return local. An identity
+/// int(...) cast can elide that copy. Keep other uses on their existing path:
+/// seeded assignments and comparison chains need their own copy/lifetime handling.
+fn copied_int_field_read(code: &[Instr], at: usize, refs: &RefResolver) -> bool {
+    let witness = (|| {
+        let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32).unwrap_or(0);
+        let c = code.get(at.checked_sub(1)?..at + 2)?;
+        if !matches!(c[0].op.name, "LoadRObjR" | "LoadVObjR") || c[1].op.name != "RDR4"
+            || c[2].op.name != "CpyVtoV4" || c[2].words.get(1) != c[1].words.first()
+            || w(&c[1], 0) <= 0 || w(&c[2], 0) <= 0 || w(&c[1], 0) == w(&c[2], 0)
+        { return None; }
+        let dst = w(&c[2], 0);
+        let uses: Vec<_> = code.iter().enumerate().filter(|(_, i)|
+            super::bytediff::addressed_slots(i).contains(&dst)).collect();
+        let [(copy_at, _), (return_at, ret)] = uses.as_slice() else { return None; };
+        if *copy_at != at + 1 || ret.op.name != "CpyVtoR4"
+            || code.get(return_at + 1)?.op.name != "RET"
+        { return None; }
+        let type_id = *c[0].dwords.first()? as i32;
+        let owner = refs.type_identity_by_id(type_id)?;
+        let offset = *c[0].words.get(1)? as i32;
+        let (_, declared) = refs.member_identity(type_id, offset)?;
+        if owner.module.is_empty() || refs.type_identity_by_id(declared)? != owner
+            || !refs.is_script_int_field(type_id, offset) { return None; }
+        Some(())
+    })();
+    witness.is_some()
+}
 fn enum_to_int(rhs: String, src_ty: Option<&str>, dst_is_int: bool) -> String {
     match src_ty {
         Some(t) if dst_is_int && is_enum_name(t) => format!("int({rhs})"),
@@ -4368,7 +4416,9 @@ fn block_stmts_in(
                     // float64 member -> int slot precision-warning residue: foreign script
                     // config floats, FVector.Z/FRotator.Yaw); int64 member reads stay bare.
                     let rhs =
-                        if dst_is_int && (unknowable || float_src) && (n != "RDR8" || float_src) {
+                        if dst_is_int && copied_int_field_read(ctx.instrs, lo + k, ctx.refs) {
+                            r.clone()
+                        } else if dst_is_int && (unknowable || float_src) && (n != "RDR8" || float_src) {
                             format!("int({r})")
                         } else {
                             enum_to_int(r.clone(), ref_reg_ty.as_deref(), dst_is_int)
@@ -5538,6 +5588,7 @@ fn block_stmts_in(
                                 ctx.refs.func_owner_by_ptr(ptr),
                                 params.map(|p| p.len()),
                             );
+                            let proven_psf_conversion = is_proven_typed_psf_conversion(&recv, &args, ptr, ctx.refs);
                             // Gate (c): arg count matches the ctor's declared param count (no
                             // spurious leftover operands on the stack).
                             let count_ok = params.map(|p| p.len() == args.len()).unwrap_or(false);
@@ -5567,7 +5618,7 @@ fn block_stmts_in(
                                     })
                                 });
                             if !args.is_empty()
-                                && (!any_psf_arg || proven_psf_copy || psf_args_written_here)
+                                && (!any_psf_arg || proven_psf_copy || proven_psf_conversion || psf_args_written_here)
                                 && count_ok
                             {
                                 let rendered = render_args(&args, params, ctx.refs, None);
@@ -13137,6 +13188,49 @@ mod tests {
         ins.op = op;
     }
 
+    #[test]
+    fn copied_script_int_field_keeps_the_plain_read_and_copy() {
+        let mut a = TestAssembler::default();
+        a.op("LoadRObjR", &[8, 0], &[1]); a.op("RDR4", &[1], &[]);
+        a.op("CpyVtoV4", &[2, 1], &[]);
+        // The return can be in a later basic block; inspect the complete function.
+        a.op("SetV1", &[5], &[1]); a.op("CpyVtoR1", &[5], &[]); a.jump("JLowZ", "return");
+        a.op("SetV4", &[6], &[3]); a.label("return");
+        a.op("CpyVtoR4", &[2], &[]); a.op("RET", &[0], &[]);
+        let fixture = a.finish();
+        let refs = RefResolver::from_test_copied_int_field_read("int", false);
+        assert!(copied_int_field_read(&fixture.instrs, 1, &refs));
+        let source = render_fixture_range_with_selector(&fixture, None, &refs, "");
+        assert!(source.contains("local_1 = local_8.Limit;"), "{source}");
+        assert!(source.contains("local_2 = local_1;"), "{source}");
+        assert!(!source.contains("int(local_8.Limit)"), "{source}");
+        for ty in ["float32", "bool", "EKind", "uint", "int64"] {
+            let refs = RefResolver::from_test_copied_int_field_read(ty, false);
+            assert!(!copied_int_field_read(&fixture.instrs, 1, &refs), "{ty}");
+            let source = render_fixture_range_with_selector(&fixture, None, &refs, "");
+            assert!(source.contains("int(local_8.Limit)"), "{ty}: {source}");
+        }
+        assert!(!copied_int_field_read(&fixture.instrs, 1, &RefResolver::default()));
+        assert!(!copied_int_field_read(&fixture.instrs, 1, &RefResolver::from_test_copied_int_field_read("int", true)));
+        assert!(!copied_int_field_read(&fixture.instrs, 0, &refs));
+        let mut other = fixture.instrs.clone(); other[2].words[1] = 4;
+        assert!(!copied_int_field_read(&other, 1, &refs));
+        let mut other = fixture.instrs.clone(); other[2].words[0] = 1;
+        assert!(!copied_int_field_read(&other, 1, &refs));
+        let mut a = TestAssembler::default();
+        a.op("SetV4", &[2], &[0]);
+        a.op("LoadRObjR", &[8, 0], &[1]); a.op("RDR4", &[1], &[]);
+        a.op("CpyVtoV4", &[2, 1], &[]); a.op("CpyVtoR4", &[2], &[]); a.op("RET", &[0], &[]);
+        assert!(!copied_int_field_read(&a.finish().instrs, 2, &refs));
+        let mut a = TestAssembler::default();
+        a.op("LoadRObjR", &[8, 0], &[1]); a.op("RDR4", &[1], &[]);
+        a.op("CpyVtoV4", &[2, 1], &[]); a.op("ADDIi", &[1, 3], &[1]);
+        a.op("CMPi", &[2, 1], &[]); a.op("TNS", &[], &[]); a.op("RET", &[0], &[]);
+        assert!(!copied_int_field_read(&a.finish().instrs, 1, &refs));
+        let mut other = fixture.instrs.clone();
+        other[1].op = crate::cache::isa::OPCODES.iter().find(|op| op.name == "RDR8").unwrap();
+        assert!(!copied_int_field_read(&other, 1, &refs));
+    }
     fn render_fixture_range(
         fixture: &CompoundFixture,
         range: Option<(&'static str, &'static str, LoopScope)>,
@@ -13596,6 +13690,66 @@ mod tests {
             credit.instrs.first(), "local_12"
         ));
         assert!(!copy_receiver_is_immediately_pushed(None, "local_148"));
+    }
+
+    #[test]
+    fn native_value_conversion_keeps_the_local_initialized_before_the_if() {
+        fn push(code: &mut Vec<i32>, name: &str, word: u16, dword: Option<i32>) -> usize {
+            let op = crate::cache::isa::OPCODES.iter().find(|op| op.name == name).unwrap();
+            let at = code.len(); let mut encoded = vec![0; op.size_dwords as usize];
+            encoded[0] = op.opcode as i32 | ((word as i32) << 16);
+            if let Some(value) = dword { encoded[1] = value; }
+            code.extend(encoded); at
+        }
+        let mut code = Vec::new();
+        push(&mut code, "PSF", 16, None);
+        push(&mut code, "CALLSYS", 0, Some(2)); // Source() builds the FString before the branch.
+        push(&mut code, "CALLSYS", 0, Some(3));
+        push(&mut code, "CpyRtoV4", 7, None);
+        push(&mut code, "CpyVtoR1", 7, None);
+        let branch = push(&mut code, "JLowZ", 0, Some(0));
+        push(&mut code, "PSF", 16, None);
+        push(&mut code, "PSF", 21, None);
+        push(&mut code, "CALLSYS", 0, Some(1)); // FName(const FString&).
+        push(&mut code, "PSF", 21, None);
+        push(&mut code, "CALLSYS", 0, Some(4)); // Save(const FName&).
+        let cleanup = push(&mut code, "PSF", 16, None);
+        push(&mut code, "CALLSYS", 0, Some(5));
+        push(&mut code, "RET", 0, None);
+        code[branch + 1] = cleanup as i32 - branch as i32 - 2;
+        let ret = DataType { token: 0x52, ..Default::default() };
+        let f = FuncCode { func: "Synthetic::SaveValue".into(), is_method: false,
+            param_names: Vec::new(), param_types: Vec::new(), ret: ret.clone(), bytecode: code };
+        let locals = HashMap::from([(7, "bool".into()), (16, "FString".into()), (21, "FName".into())]);
+        let refs = RefResolver::from_test_typed_psf_conversion(0);
+        let source = body_statements_ctor(&f, &refs, 0, None, Some(&ret), None, None, None, Some(&locals), None);
+        assert!(source.contains("local_16 = Source();"), "{source}");
+        assert!(source.contains("local_21 = FName(local_16);"), "{source}");
+        assert!(source.contains("Save(local_21);"), "{source}");
+        assert!(source.find("local_16 =").unwrap() < source.find("if (").unwrap(), "{source}");
+        assert!(source.find("if (").unwrap() < source.find("local_21 =").unwrap(), "{source}");
+    }
+
+    #[test]
+    fn typed_psf_conversion_requires_exact_native_parameter_and_local_value_types() {
+        let refs = RefResolver::from_test_typed_psf_conversion(0);
+        let dst = Arg::psf("local_21".into(), Some("FName".into()));
+        let src = Arg::psf("local_16".into(), Some("FString".into()));
+        assert!(is_proven_typed_psf_conversion(&dst, std::slice::from_ref(&src), 1, &refs));
+        for fault in 1..=12 {
+            assert!(!is_proven_typed_psf_conversion(&dst, std::slice::from_ref(&src), 1,
+                &RefResolver::from_test_typed_psf_conversion(fault)), "metadata {fault}");
+        }
+        for (name, ty) in [("local_16", None), ("local_16", Some("FOther")),
+            ("local_16", Some("FName")), ("local_21", Some("FString")),
+            ("Source()", Some("FString")), ("local_-2", Some("FString")), ("local_0", Some("FString"))] {
+            let other = Arg::psf(name.into(), ty.map(str::to_owned));
+            assert!(!is_proven_typed_psf_conversion(&dst, &[other], 1, &refs));
+        }
+        let mut other = src.clone(); other.is_psf = false;
+        assert!(!is_proven_typed_psf_conversion(&dst, &[other], 1, &refs));
+        let mut other = dst; other.is_psf = false;
+        assert!(!is_proven_typed_psf_conversion(&other, &[src], 1, &refs));
     }
 
     #[test]
