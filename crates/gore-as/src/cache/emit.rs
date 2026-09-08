@@ -7098,7 +7098,14 @@ fn infer_float_flow(
                 seeds.push((w1(ins), NumKind::F32));
                 anti.insert(w0(ins));
             }
-            // same-width float<->int casts: one offset holds both kinds mid-lifetime — bail.
+            // A typed float out-ref remains float when conversion writes a distinct
+            // integer slot. Other conflicting uses still poison it below.
+            "fTOi" | "fTOu" if w0(ins) != w1(ins)
+                && outrefs.get(&w1(ins)).is_some_and(|t| t == "float32") => {
+                seeds.push((w1(ins), NumKind::F32));
+                anti.insert(w0(ins));
+            }
+            // Unproven or in-place same-width conversions retain the conservative verdict.
             "fTOi" | "fTOu" => {
                 poison.insert(w0(ins));
                 poison.insert(w1(ins));
@@ -16986,12 +16993,34 @@ fn spilled_boolean_names(f: &Func, refs: &RefResolver) -> HashSet<i32> {
             && instrs.get(at + 1).is_some_and(|i| i.op.name == "CpyVtoR1" && w0(i) == slot)
             && instrs.get(at + 2).is_some_and(|i| i.op.name == "JLowZ")
         {
+            // Earlier uses of this physical slot may be literal return values.
+            // Each such pair must exit immediately; only the final nullguard
+            // life is retained, and no other reads, writes or lives are admitted.
+            let accesses: Vec<_> = instrs.iter().enumerate().filter(|(_, i)|
+                super::bytediff::addressed_slots(i).contains(&slot)).map(|(i, _)| i).collect();
+            let closed_life = accesses.strip_suffix(&[at, at + 1]).is_some_and(|earlier| {
+                if earlier.is_empty() { return true; }
+                let Some(exit) = instrs.last().filter(|i| i.op.name == "RET") else { return false; };
+                if earlier.len() % 2 != 0 || instrs.iter().filter(|i| i.op.name == "RET").count() != 1 { return false; }
+                earlier.chunks_exact(2).all(|pair| {
+                    let (store, read) = (pair[0], pair[1]);
+                    if read != store + 1 || store + 2 >= at - 2 { return false; }
+                    let (set, load, jump) = (&instrs[store], &instrs[read], &instrs[store + 2]);
+                    set.op.name == "SetV1" && set.dwords.first().is_some_and(|v| *v <= 1)
+                        && load.op.name == "CpyVtoR4" && w0(load) == slot && jump.op.name == "JMP"
+                        && jump.dwords.first().is_some_and(|v|
+                            jump.offset_dw as i64 + 2 + *v as i32 as i64 == exit.offset_dw as i64)
+                        && !instrs.iter().any(|i| i.op.name.starts_with('J') && i.dwords.first().is_some_and(|v| {
+                            let target = i.offset_dw as i64 + 2 + *v as i32 as i64;
+                            target > set.offset_dw as i64 && target <= jump.offset_dw as i64
+                        }))
+                })
+            });
             let object = w0(&instrs[at - 2]);
             let types: Vec<_> = f.obj_locals.iter().filter(|(s, _)| *s == object).collect();
             if object > 0 && types.len() == 1
                 && refs.type_identity_by_ptr(types[0].1).is_some_and(|t| is_object_handle_type(&t.name))
-                && instrs.iter().enumerate().filter(|(_, i)|
-                    super::bytediff::addressed_slots(i).contains(&slot)).map(|(i, _)| i).eq([at, at + 1])
+                && closed_life
                 && !instrs.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J')
                     && i.dwords.first().is_some_and(|v| {
                         let target = i.offset_dw as i64 + 2 + *v as i32 as i64;
@@ -21241,9 +21270,9 @@ fn conditional_arm_type(
 
 /// The header of an iterator loop the structurer wrote: `while (local_N.CanProceed)`, or the
 /// `for (; local_N.CanProceed;)` it writes for the test-first layout.
-fn is_can_proceed_header(line: &str, iter: i32) -> bool {
-    line == format!("while (local_{iter}.CanProceed)")
-        || line == format!("for (; local_{iter}.CanProceed;)")
+fn is_can_proceed_header(line: &str, iter: &str) -> bool {
+    line == format!("while ({iter}.CanProceed)")
+        || line == format!("for (; {iter}.CanProceed;)")
 }
 
 /// `local_N = A; local_N = <expr reading local_N once>;` on adjacent lines at one depth, with
@@ -26297,9 +26326,10 @@ fn rewrite_foreach_loops(
     let mut suppressed = HashSet::new();
     // A split Proceed reference keeps its full declaration name. Its physical
     // slot still has to agree with this iterator's bytecode binding.
-    let direct_binding = |line: &str, iter: i32| {
-        let (slot, name) = proceed_assignment(line, iter)?;
+    let direct_binding = |line: &str, iter: i32, iter_name: &str| {
+        let (slot, name) = proceed_assignment(line, iter_name)?;
         if elements.get(&iter).is_some_and(|expected| *expected != slot)
+            || (iter_name != format!("local_{iter}") && elements.get(&iter) != Some(&slot))
             || (name != format!("local_{slot}") && (!range_for.contains(&iter)
                 || elements.get(&iter) != Some(&slot) || !reference_locals.contains_key(&slot)))
         { return None; }
@@ -26313,12 +26343,12 @@ fn rewrite_foreach_loops(
     let candidates: Vec<(usize, usize, String)> = (0..lines.len())
         .filter(|i| i + 3 < lines.len())
         .filter_map(|i| {
-            let (iter, _) = iterator_decl(lines[i], range_for)?;
-            (is_can_proceed_header(lines[i + 1].trim(), iter)
+            let (iter, iter_name, _) = iterator_decl(lines[i], range_for)?;
+            (is_can_proceed_header(lines[i + 1].trim(), &iter_name)
                 && lines[i + 2].trim() == "{")
             .then_some(())?;
-            let (_, name) = direct_binding(lines[i + 3], iter)
-                .or_else(|| inline_proceed_element(&lines, i, iter, elements)
+            let (_, name) = direct_binding(lines[i + 3], iter, &iter_name)
+                .or_else(|| inline_proceed_element(&lines, i, &iter_name, elements)
                     .map(|(e, _)| (e, format!("local_{e}"))))?;
             let end = matching_close(&lines, i + 2)?;
             Some((i, end, name))
@@ -26329,17 +26359,17 @@ fn rewrite_foreach_loops(
         if i + 3 >= lines.len() || drop_line[i] {
             continue;
         }
-        let Some((iter, container)) = iterator_decl(lines[i], range_for) else {
+        let Some((iter, iter_name, container)) = iterator_decl(lines[i], range_for) else {
             continue;
         };
-        if !is_can_proceed_header(lines[i + 1].trim(), iter)
+        if !is_can_proceed_header(lines[i + 1].trim(), &iter_name)
             || lines[i + 2].trim() != "{"
         {
             foreach_reject("not-the-idiom-shape");
             continue;
         }
-        let inline_elem = inline_proceed_element(&lines, i, iter, elements);
-        let binding = direct_binding(lines[i + 3], iter);
+        let inline_elem = inline_proceed_element(&lines, i, &iter_name, elements);
+        let binding = direct_binding(lines[i + 3], iter, &iter_name);
         let Some((elem, elem_ident)) = binding.clone()
             .or_else(|| inline_elem.as_ref().map(|(e, _)| (*e, format!("local_{e}"))))
         else {
@@ -26355,8 +26385,7 @@ fn rewrite_foreach_loops(
         // The iterator may appear nowhere but the three idiom lines, and the element nowhere
         // outside the loop body: the range-for scopes both, so any other reference would be to
         // a name that no longer exists.
-        let iter_ident = format!("local_{iter}");
-        let iter_uses: usize = lines.iter().map(|l| count_ident(l, &iter_ident)).sum();
+        let iter_uses: usize = lines.iter().map(|l| count_ident(l, &iter_name)).sum();
         // The element's own bare declaration is the one mention outside the loop that does not
         // count: the range-for header declares the element itself, so that line is what the
         // header REPLACES. Measured over the corpus, it is the only thing standing outside for
@@ -26816,11 +26845,14 @@ fn proceed_element_slots(f: &Func, refs: &RefResolver) -> HashMap<i32, i32> {
     map
 }
 
-/// `auto local_N = <pure path>.Iterator();` -> (N, container path).
-fn iterator_decl(line: &str, range_for: &HashSet<i32>) -> Option<(i32, String)> {
-    let rest = line.trim().strip_prefix("auto local_")?;
-    let (slot, rest) = rest.split_once(" = ")?;
-    let slot: i32 = slot.parse().ok()?;
+/// Iterator declaration: physical slot, complete life name and container.
+fn iterator_decl(line: &str, range_for: &HashSet<i32>) -> Option<(i32, String, String)> {
+    let rest = line.trim().strip_prefix("auto ")?;
+    let (name, rest) = rest.split_once(" = ")?;
+    let (slot, life) = slot_and_life(name)?;
+    // Split iterator lives need the same raw range-for proof as expressions;
+    // their Proceed binding is separately checked against the physical slot.
+    if slot <= 0 || life == 0 || (name != format!("local_{slot}") && !range_for.contains(&slot)) { return None; }
     let container = rest.strip_suffix(".Iterator();")?;
     // A pure member path is evaluated once by the range-for exactly as it was by the call, so
     // the fold cannot move an observable side effect. A container that is an EXPRESSION needs
@@ -26835,7 +26867,7 @@ fn iterator_decl(line: &str, range_for: &HashSet<i32>) -> Option<(i32, String)> 
     if container.is_empty() {
         return None;
     }
-    Some((slot, container.to_owned()))
+    Some((slot, name.to_owned(), container.to_owned()))
 }
 
 /// The first body statement reads `local_I.Proceed()` inside a larger expression rather than
@@ -26844,10 +26876,11 @@ fn iterator_decl(line: &str, range_for: &HashSet<i32>) -> Option<(i32, String)> 
 fn inline_proceed_element(
     lines: &[&str],
     at: usize,
-    iter: i32,
+    iter_name: &str,
     elements: &HashMap<i32, i32>,
 ) -> Option<(i32, String)> {
-    let call = format!("local_{iter}.Proceed()");
+    let iter = slot_and_life(iter_name)?.0;
+    let call = format!("{iter_name}.Proceed()");
     // A direct binding rejected above must not become a second value copy via
     // this expression fallback, including malformed or mismatched local names.
     if lines[at + 3].trim().strip_suffix(';').and_then(|s| s.split_once(" = "))
@@ -26885,7 +26918,7 @@ fn inline_proceed_element(
 }
 
 /// A direct Proceed binding: physical slot plus its complete local-life name.
-fn proceed_assignment(line: &str, iter: i32) -> Option<(i32, String)> {
+fn proceed_assignment(line: &str, iter: &str) -> Option<(i32, String)> {
     let trimmed = line.trim();
     // The element may already carry a declaration (`auto`, or a value type the decl-init rewrite
     // gave it in an earlier pass).
@@ -26895,7 +26928,7 @@ fn proceed_assignment(line: &str, iter: i32) -> Option<(i32, String)> {
     };
     let (name, rest) = trimmed.split_once(" = ")?;
     let (slot, life) = slot_and_life(name)?;
-    (slot > 0 && life > 0 && rest == format!("local_{iter}.Proceed();"))
+    (slot > 0 && life > 0 && rest == format!("{iter}.Proceed();"))
         .then(|| (slot, name.to_owned()))
 }
 
@@ -30351,6 +30384,39 @@ mod member_arithmetic_lifetime_tests {
     }
 
     #[test]
+    fn four_handle_foreach_loops_keep_complete_iterator_life_names() {
+        let refs = RefResolver::default();
+        let locals = BTreeMap::from([(14, "TArrayIterator<AGothicNPCState>".into()),
+            (20, "TArrayIterator<AGothicNPCState>".into()), (24, "AGothicNPCState".into())]);
+        let loop_text = |slot, key| format!("local_{slot} = FCharacterUniqueName(n\"{key}\").GetAllNPCStates().Iterator();\nfor (; local_{slot}.CanProceed;)\n{{\n    local_24 = local_{slot}.Proceed();\n    if (IsCharacterInWorld(local_24))\n    {{\n        local_24.RemoveFromWorld();\n    }}\n    local_24 = nullptr;\n}}\n");
+        let body = format!("AGothicNPCState local_24;\n{}{}{}{}Done();\n", loop_text(14, "A"), loop_text(20, "B"),
+            loop_text(14, "C"), loop_text(20, "D"));
+        let (declared, _) = super::rewrite_iterator_decl_init(&body, &locals);
+        assert!(declared.contains("auto local_14_2 =") && declared.contains("auto local_20_2 ="), "{declared}");
+        let ranges = HashSet::from([14, 20]); let elements = HashMap::from([(14, 24), (20, 24)]);
+        let fold = |body: &str, ranges: &HashSet<i32>, elements: &HashMap<i32, i32>| rewrite_foreach_loops(body, &locals,
+            &refs, ranges, elements, &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
+        let (out, gone) = fold(&declared, &ranges, &elements);
+        assert_eq!(gone, HashSet::from([24]));
+        assert_eq!(out.matches("for (auto local_24 : FCharacterUniqueName(").count(), 4, "{out}");
+        assert!(!out.contains("Iterator()") && !out.contains("Proceed") && !out.contains(" = nullptr")
+            && !out.contains("AGothicNPCState local_24;"), "{out}");
+        assert_eq!(out.matches("local_24.RemoveFromWorld();").count(), 4);
+        // The single-loop neighbour keeps its existing successful path.
+        let (single, _) = super::rewrite_iterator_decl_init(&loop_text(14, "A"), &locals);
+        assert!(fold(&single, &ranges, &elements).0.starts_with("for (auto local_24 : "));
+        for (range, bindings) in [(HashSet::from([14]), elements.clone()), (ranges.clone(), HashMap::from([(14, 24)])),
+            (ranges.clone(), HashMap::from([(14, 26), (20, 24)]))] {
+            assert_eq!(fold(&declared, &range, &bindings).0, declared);
+        }
+        for other in [format!("{declared}Use(local_24);\n"), declared.replace("local_14_2", "local_14_bad"),
+            declared.replace("local_14_2.Proceed()", "local_20_2.Proceed()"),
+            declared.replace("local_14_2.CanProceed", "local_14.CanProceed")] {
+            assert_eq!(fold(&other, &ranges, &elements).0, other);
+        }
+    }
+
+    #[test]
     fn two_map_reference_loops_keep_their_split_binding_names_without_value_copies() {
         let f = map_reference_binding_fixture();
         let refs = RefResolver::from_test_map_reference_binding();
@@ -33513,6 +33579,76 @@ mod literal_value_lifetime_tests {
         }
     }
 
+    fn nullguard_after_literal_return_fixture() -> Func {
+        let mut f = function(&[
+            ("CmpPtrNull", &[2]), ("TNZ", &[]), ("CpyRtoV4", &[3]), ("CpyVtoR1", &[3]), ("JLowZ", &[]),
+            ("SetV1", &[4]), ("CpyVtoR4", &[4]), ("JMP", &[]),
+            ("CmpPtrNull", &[6]), ("TNZ", &[]), ("CpyRtoV4", &[4]), ("CpyVtoR1", &[4]), ("JLowZ", &[]),
+            ("SetV1", &[7]), ("CpyVtoR4", &[7]), ("JMP", &[]),
+            ("CmpPtrNull", &[10]), ("TNZ", &[]), ("CpyRtoV4", &[7]), ("CpyVtoR1", &[7]), ("JLowZ", &[]),
+            ("SetV1", &[11]), ("CpyVtoR4", &[11]), ("JMP", &[]),
+            ("CmpPtrNull", &[14]), ("TNZ", &[]), ("CpyRtoV4", &[11]), ("CpyVtoR1", &[11]), ("JLowZ", &[]),
+            ("SetV1", &[15]), ("CpyVtoR4", &[15]), ("JMP", &[]),
+            ("SetV1", &[15]), ("CpyVtoR4", &[15]), ("RET", &[2])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, target) in [(4, 8), (12, 16), (20, 24), (28, 32), (7, 34), (15, 34), (23, 34), (31, 34)] {
+            f.bytecode[code[at].offset_dw + 1] = code[target].offset_dw as i32 - code[at].offset_dw as i32 - 2;
+        }
+        f.bytecode[code[29].offset_dw + 1] = 1;
+        f.bytecode[code[32].offset_dw + 1] = 1;
+        f.ret.token = 0x41; f.obj_locals = vec![(2, 2), (6, 2), (10, 2), (14, 2)];
+        f
+    }
+
+    #[test]
+    fn nullguard_names_survive_after_their_slots_returned_earlier_literals() {
+        let f = nullguard_after_literal_return_fixture();
+        let refs = RefResolver::from_test_parameter_field_comparison(DataType::default(), false);
+        let spilled = super::spilled_boolean_names(&f, &refs);
+        assert_eq!(spilled, HashSet::from([3, 4, 7, 11]));
+        let body = "    local_2 = Cast<UNode>(Actor);\n    local_3 = (local_2 != nullptr);\n    if (local_3)\n    {\n        return false;\n    }\n    local_6 = Cast<UNode>(Actor);\n    local_4 = (local_6 != nullptr);\n    if (local_4)\n    {\n        return false;\n    }\n    local_10 = Cast<UNode>(Actor);\n    local_7 = (local_10 != nullptr);\n    if (local_7)\n    {\n        return false;\n    }\n    local_14 = Cast<UNode>(Actor);\n    local_11 = (local_14 != nullptr);\n    if (local_11)\n    {\n        return true;\n    }\n    return true;\n";
+        let locals = BTreeMap::from([(2, "UNode".into()), (6, "UNode".into()), (10, "UNode".into()), (14, "UNode".into()),
+            (3, "bool".into()), (4, "bool".into()), (7, "bool".into()), (11, "bool".into())]);
+        let fold = |keep: &HashSet<i32>| super::inline_call_argument_temporaries(body, &refs, &locals, None, true,
+            &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), keep, &HashMap::new(), &HashSet::new(), &HashSet::new());
+        let kept = fold(&spilled);
+        for slot in [3, 4, 7, 11] {
+            assert!(kept.contains(&format!("local_{slot} = ((Cast<UNode>(Actor)) != nullptr);")), "{kept}");
+            assert!(kept.contains(&format!("if (local_{slot})")), "{kept}");
+        }
+        assert_eq!(super::fold_condition_temporaries(&kept, &locals, &refs, None, &spilled, &HashSet::new(), false), kept);
+        let previous = fold(&HashSet::from([3]));
+        assert!(previous.contains("local_3 ="), "{previous}");
+        for slot in [4, 7, 11] { assert!(!previous.contains(&format!("local_{slot} =")), "{previous}"); }
+        let mut true_return = f.clone(); let code = disassemble(&f.bytecode).unwrap();
+        true_return.bytecode[code[5].offset_dw + 1] = 1;
+        assert_eq!(super::spilled_boolean_names(&true_return, &refs), spilled);
+    }
+
+    #[test]
+    fn reused_nullguard_rejects_nonterminal_nonliteral_or_open_earlier_lives() {
+        let f = nullguard_after_literal_return_fixture();
+        let refs = RefResolver::from_test_parameter_field_comparison(DataType::default(), false);
+        let code = disassemble(&f.bytecode).unwrap();
+        for fault in 0..10 {
+            let mut other = f.clone();
+            match fault {
+                0 => other.bytecode[code[5].offset_dw + 1] = 2,
+                1 => other.bytecode[code[6].offset_dw] ^= 1 << 16,
+                2 => other.bytecode[code[7].offset_dw + 1] = code[8].offset_dw as i32 - code[7].offset_dw as i32 - 2,
+                3 => other.bytecode[code[4].offset_dw + 1] = code[6].offset_dw as i32 - code[4].offset_dw as i32 - 2,
+                4 => other.bytecode[code[4].offset_dw + 1] = code[7].offset_dw as i32 - code[4].offset_dw as i32 - 2,
+                5 => other.bytecode.extend(function(&[("PshV4", &[4])]).bytecode),
+                6 => other.bytecode.extend(function(&[("SetV1", &[4]), ("CpyVtoR4", &[4]), ("RET", &[2])]).bytecode),
+                7 => other.obj_locals.retain(|(s, _)| *s != 6),
+                8 => other.obj_locals.push((6, 2)),
+                _ => other.ret.token = 0x44,
+            }
+            assert!(!super::spilled_boolean_names(&other, &refs).contains(&4), "fault {fault}");
+        }
+    }
+
     #[test]
     fn parameter_field_read_copy_keeps_its_typed_single_life_before_this_store() {
         let refs = RefResolver::from_test_parameter_field_comparison(DataType::default(), false);
@@ -35007,6 +35143,30 @@ mod literal_value_lifetime_tests {
         assert!(super::scope_exit_destroyed_slots(&reused, &refs).contains(&100));
         assert!(scoped(&reused).is_empty());
         assert_eq!(fold(&plain, &scoped(&reused)), fold(&plain, &HashSet::new()));
+    }
+
+    #[test]
+    fn float_outref_keeps_its_width_when_converted_into_another_slot() {
+        let check = |f: &Func, ty: Option<&str>| {
+            let fc = super::FuncCode { func: "Initialize".into(), is_method: false,
+                param_names: vec![], param_types: vec![], ret: f.ret.clone(), bytecode: f.bytecode.clone() };
+            let outrefs = ty.map(|t| HashMap::from([(21, t.to_owned())])).unwrap_or_default();
+            super::infer_float_flow(f, &fc, &RefResolver::default(), None, &HashMap::new(), &outrefs, &HashSet::new())
+        };
+        for cast in ["fTOi", "fTOu"] {
+            let f = function(&[("RDR4", &[28]), ("iTOf", &[22, 28]), ("CpyVtoV4", &[21, 22]),
+                (cast, &[28, 21]), ("WRTV4", &[28]), ("RET", &[])]);
+            assert_eq!(check(&f, Some("float32")), HashMap::from([(21, super::NumKind::F32), (22, super::NumKind::F32)]));
+            assert!(check(&f, None).is_empty());
+            assert!(check(&f, Some("float")).is_empty());
+            assert!(check(&f, Some("int")).is_empty());
+            let mut conflict = f.clone(); conflict.bytecode.extend(function(&[("IncVi", &[21])]).bytecode);
+            assert!(check(&conflict, Some("float32")).is_empty());
+            let mut wide = f.clone(); wide.bytecode.extend(function(&[("CpyVtoV8", &[24, 21])]).bytecode);
+            assert!(check(&wide, Some("float32")).is_empty());
+            let in_place = function(&[("iTOf", &[22, 28]), ("CpyVtoV4", &[21, 22]), (cast, &[21, 21]), ("RET", &[])]);
+            assert!(check(&in_place, Some("float32")).is_empty());
+        }
     }
 
     fn widened_division_fixture() -> Func {

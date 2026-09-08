@@ -13,7 +13,7 @@ AI.AIAgent.Creature.Troll.TC_TrollAdult_01.CombatMoves_TrollAdult	1	0	0
 AI.AIAgent.Orc.Combat.Staff.Spells.StormOfFire.GA_Spell_StormOfFire_Orc	1	0	0
 AI.AIItemScoring	1	0	0
 AI.AssessmentResponseSystem.AssessmentBits	7	0	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	6	0	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	5	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingResponse	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	17	0	0
@@ -108,10 +108,8 @@ Gameplay.Environment.BattleBlockingBarrier.BattleBarrierVisual	1	0	0
 Gameplay.Magic.Components.Damage.PercentageDamageLimiterComponent	1	0	0
 Gameplay.Magic.Components.InExtremo.InExtremoPropComponent	1	0	0
 Gameplay.Magic.Components.Spell.Summon.SummonManagerComponent	1	0	0
-InteractiveObjects.PuzlesBlood	1	0	0
 Items.Projectiles	2	0	0
-Items.Visual.Projectile.Arrow.Base.ArrowProjectileVisual_Base	2	0	0
-LevelScripts.Map_x2_y1_OldCamp_AI_script	1	0	0
+Items.Visual.Projectile.Arrow.Base.ArrowProjectileVisual_Base	1	0	0
 Regions.Traits.QuestRelatedTraits	8	0	0
 Sound.FXDefinitions.FXDefinitions_AttackImpact	1	0	0
 Sound.FXDefinitions.FXDefinitions_Footsteps	1	0	0
