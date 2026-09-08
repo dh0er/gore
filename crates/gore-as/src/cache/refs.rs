@@ -2300,6 +2300,28 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_left_literal_carrier(fault: u8) -> Self {
+        let mut r = Self::default();
+        r.funcid_to_ptr.insert(1,1); r.func_by_ptr.insert(1,"GetAttack".into());
+        r.func_ret.insert(1, DataType { token:5, type_info:if fault >= 4 {101} else {100}, is_object_handle:true,
+            is_reference:fault == 1, ..Default::default() });
+        r.func_params.insert(1, if fault == 2 { vec![DataType::default()] } else { vec![] });
+        r.func_is_method.insert(1);
+        r.typeid_to_ptr.insert(100,100);
+        r.type_identity_by_ptr.insert(100, TypeIdentity { name:"UAttack".into(), module:String::new(), namespace:String::new() });
+        if fault >= 4 {
+            r.type_identity_by_ptr.insert(101, TypeIdentity { name:"USpecialAttack".into(), module:"Moves".into(),
+                namespace:if fault == 6 {"Other"} else {""}.into() });
+            r.class_super.insert("USpecialAttack".into(),if fault == 5 {"UOther"} else {"UAttack"}.into());
+            r.class_super.insert("UAttack".into(),"UObject".into());
+        }
+        r.prop_by_key.insert((100 << 1) | 1,"Minimum".into());
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&[
+            ("UAttack","Minimum",if fault == 3 {"int"} else {"float"})], &[],None));
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_script_result(ret: DataType) -> Self {
         let mut r = Self::default();
         r.funcid_to_ptr.insert(1, 1);
@@ -2598,6 +2620,33 @@ impl RefResolver {
         let mut r = Self::from_test_typed_getter_copies("UNode", false, false);
         r.funcid_to_ptr.insert(1, 4);
         r.func_params.insert(4, vec![argument]);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_destroyed_enum_member(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FEvaluation", "Kind"), ("UEvaluator", ""),
+            ("ERelation", ""), ("AActor", "")]);
+        for (ptr, name) in [(1, "FEvaluation"), (2, "UEvaluator"), (3, "ERelation"), (4, "AActor")] {
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: String::new(),
+                namespace: if fault == 5 && ptr == 3 { "Other" } else { "" }.into() });
+        }
+        r.prop_type_id.insert(3, if fault == 1 { 2 } else { 1 });
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(
+            &[("FEvaluation", "Kind", if fault == 2 { "EOther" } else { "ERelation" })], &[], None));
+        for (ptr, name) in [(10, "Acquire"), (11, "Evaluate"), (12, "$beh2")] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_params.insert(ptr, Vec::new());
+        }
+        r.func_is_method.extend([11, 12]); r.const_method_ptrs.insert(11);
+        r.func_owner.insert(11, if fault == 6 { "UOther" } else { "UEvaluator" }.into());
+        r.func_owner.insert(12, if fault == 3 { "FOther" } else { "FEvaluation" }.into());
+        r.func_ret.insert(10, DataType { token: 5, type_info: 2, is_object_handle: true, ..Default::default() });
+        r.func_ret.insert(11, DataType { token: 5, type_info: if fault == 4 { 2 } else { 1 },
+            is_reference: fault == 7, ..Default::default() });
+        r.func_ret.insert(12, DataType { token: if fault == 8 { 0x44 } else { 0x52 }, ..Default::default() });
+        if fault == 9 { r.func_params.get_mut(&12).unwrap().push(DataType { token: 0x44, ..Default::default() }); }
+        if fault == 10 { r.func_is_method.insert(10); }
+        if fault == 11 { r.duplicate_prop_keys.insert(3); }
         r
     }
 

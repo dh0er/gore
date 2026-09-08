@@ -46,7 +46,6 @@ AI.States.FightAI.CombatState.AIGroup_Combat	4	0	0
 AI.States.FightAI.CombatState.AIState_OGCombat	10	0	0
 AI.States.FightAI.CombatState.CombatMoves	21	0	0
 AI.States.FightAI.CombatState.CombatOperations	1	0	0
-AI.States.FightAI.CombatState.CombatSituations	1	0	0
 AI.States.FightAI.CombatState.CombatTestClasses	1	0	0
 AI.States.FightAI.CombatState.Positioning.AICombat_Positioning	13	0	0
 AI.States.FightAI.DisengageBehavior.AIState_Disengage	2	0	0
@@ -108,7 +107,7 @@ GAS.Calculations.Damage	5	0	0
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Drugs.Base.DrugDebuffEffectComponentBase	1	0	0
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Sleep.GA_SleepDebuffEffectGameplayAbility	1	0	0
 GAS.GASCharacterMixins	4	0	0
-GAS.GASCharacterStateMixins	8	0	0
+GAS.GASCharacterStateMixins	7	0	0
 GAS.PerceptionEventMixins	1	0	0
 Gameplay.Environment.BattleBlockingBarrier.BattleBarrierVisual	1	0	0
 Gameplay.Magic.Components.Damage.PercentageDamageLimiterComponent	1	0	0
