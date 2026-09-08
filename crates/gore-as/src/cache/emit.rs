@@ -1296,6 +1296,7 @@ fn emit_function_ctor(
     let retained_bool_branches = named_bool_literal_branches(f);
     let named_arithmetic = named_arithmetic_slots(f);
     let mut named_sites = named_value_sites(f, refs);
+    named_sites.extend(named_narrowed_field_differences(f, refs, is_method));
     let explicit_member_sums = explicitly_reloaded_field_sums(f, refs, is_method, fields);
     let addressed_compounds = addressed_compound_updates(f, refs, is_method);
     // How often each slot is default-constructed: more than once and the source spelled the
@@ -1874,6 +1875,8 @@ fn emit_function_ctor(
     pass_trace("fold_double_negations", &body);
     let body = fold_negated_stores(&body, &widened);
     pass_trace("fold_negated_stores", &body);
+    let body = fold_normalized_local_bool_comparison(&body, f);
+    pass_trace("fold_normalized_local_bool_comparison", &body);
     let body = fold_changed_bool_fields(&body, f, refs, fields, is_method);
     pass_trace("fold_changed_bool_fields", &body);
     // `__InitDefaults` is where the class's values live, and their recovery is fail-closed: a
@@ -2669,7 +2672,7 @@ fn emit_function_ctor(
         // evaluating it twice is not the same as evaluating it once.
         // Before the compound-assignment fold, which would rewrite the middle line out of the
         // shape this one matches on.
-        let body = collapse_single_use_accumulators(&body, &retained_accumulators, &locals);
+        let body = collapse_single_use_accumulators(&body, &retained_accumulators, &locals, &named_sites);
         pass_trace("collapse_single_use_accumulators", &body);
         let body = fold_enum_call_round_trips(&body, &call_result_types, fields, &path_roots, refs, returns_by_reference, has_enum_conversions(f));
         pass_trace("fold_enum_call_round_trips", &body);
@@ -2732,7 +2735,7 @@ fn emit_function_ctor(
         // And once more here, for the same reason: an accumulator whose declaration was hoisted
         // has its `T X;` in this text and its `X = ...` lines in the body, so the split form is
         // only whole once the two are joined.
-        let rendered = collapse_single_use_accumulators(&rendered, &retained_accumulators, &locals);
+        let rendered = collapse_single_use_accumulators(&rendered, &retained_accumulators, &locals, &named_sites);
         pass_trace("collapse_single_use_accumulators", &rendered);
         let rendered = fold_enum_call_round_trips(&rendered, &call_result_types, fields, &path_roots, refs, returns_by_reference, has_enum_conversions(f));
         pass_trace("fold_enum_call_round_trips", &rendered);
@@ -2823,7 +2826,7 @@ fn emit_function_ctor(
         let rendered = drop_dead_literal_stores(&rendered,
             &named_bool_returns.union(&seeded_integer_copies).copied().collect());
         pass_trace("drop_dead_literal_stores", &rendered);
-        let rendered = collapse_single_use_accumulators(&rendered, &retained_accumulators, &locals);
+        let rendered = collapse_single_use_accumulators(&rendered, &retained_accumulators, &locals, &named_sites);
         pass_trace("collapse_single_use_accumulators", &rendered);
         let rendered = inline_bool_chain_into_next_condition(&rendered, &named_sites);
         pass_trace("inline_bool_chain_into_next_condition", &rendered);
@@ -10331,6 +10334,69 @@ fn native_field_initializer_prefix(c: &Class, module: &str, refs: &RefResolver) 
             t.module == module && t.namespace == c.namespace && t.name == c.name);
         let mut found = Vec::new();
         for at in 3..code.len().saturating_sub(5) {
+            // A static FName copied directly into its field has no prior default
+            // construction. Include adjacent value-first scalar initializers so
+            // the existing contiguous text prefix can preserve their order.
+            let copied_name_prefix = (|| {
+                let frame = &code[at - 3..at + 3];
+                if frame.iter().map(|i| i.op.name).ne(["PshC4", "CALLSYS", "PshRPtr", "PshVPtr", "ADDSi", "CALLSYS"])
+                    || frame[3].words.first() != Some(&0) || code.iter().any(|i| i.op.name.starts_with('J')) { return None; }
+                let own_field = |address: &Instr| {
+                    let (id, offset) = (*address.dwords.first()? as i32, *address.words.first()? as i32);
+                    let (name, old_owner) = refs.member_identity(id, offset)?;
+                    if !own(id) || !own(old_owner) { return None; }
+                    let mut fields = c.fields.iter().enumerate().filter(|(_, field)| field.name == name);
+                    let (index, field) = fields.next()?;
+                    if fields.next().is_some() || field.ty.is_reference || field.ty.is_object_handle
+                        || field.ty.is_auto { return None; }
+                    Some((index, field))
+                };
+                let unique_address = |address: &Instr| code.iter().filter(|i|
+                    matches!(i.op.name, "ADDSi" | "LoadThisR") && i.words.first() == address.words.first()
+                        && i.dwords == address.dwords).count() == 1;
+                let (index, field) = own_field(&frame[4])?;
+                let native = refs.type_identity_by_ptr(field.ty.type_info)?;
+                // Copy construction initializes both mutable and fully const value fields.
+                if field.ty.token != 5 || native.name != "FName" || !native.module.is_empty() || !native.namespace.is_empty()
+                    || field.ty.is_object_const != field.ty.is_read_only || !unique_address(&frame[4]) { return None; }
+                let name = ptr(&frame[1]);
+                let constructor = ptr(&frame[5]);
+                let [index_arg] = refs.func_params_by_ptr(name)? else { return None; };
+                let [input] = refs.func_params_by_ptr(constructor)? else { return None; };
+                let constant_reference = |ty: &super::types::DataType| ty.token == 5
+                    && ty.type_info == field.ty.type_info && ty.is_reference && ty.is_object_const && ty.is_read_only
+                    && !ty.is_object_handle && !ty.is_auto;
+                if refs.func_by_ptr(name) != Some("__STATIC_NAME") || refs.is_method_by_ptr(name)
+                    || index_arg.token != 0x44 || index_arg.is_reference
+                    || refs.static_name(*frame[0].dwords.first()? as i64).is_none()
+                    || !constant_reference(refs.func_ret_by_ptr(name)?) || !constant_reference(input)
+                    || refs.func_by_ptr(constructor) != Some("$beh0") || !refs.is_method_by_ptr(constructor)
+                    || refs.func_owner_by_ptr(constructor) != Some("FName") || refs.is_const_method_by_ptr(constructor)
+                    || !refs.func_ret_by_ptr(constructor).is_some_and(|r| r.token == 0x52 && !r.is_reference) { return None; }
+                let mut fields = vec![(index, field.name.clone())];
+                let mut start = at - 3;
+                while start >= 3 {
+                    let scalar = &code[start - 3..start];
+                    let token = match scalar.iter().map(|i| i.op.name).collect::<Vec<_>>().as_slice() {
+                        ["SetV8", "LoadThisR", "WRTV8"] => 0x51,
+                        ["SetV1", "LoadThisR", "WRTV1"] => 0x41,
+                        _ => break,
+                    };
+                    let (index, field) = own_field(&scalar[1])?;
+                    if field.ty.token != token || field.ty.type_info != 0 || field.ty.is_object_const || field.ty.is_read_only
+                        || scalar[0].words != scalar[2].words
+                        || token == 0x41 && !scalar[0].dwords.first().is_some_and(|v| *v <= 1)
+                        || !unique_address(&scalar[1]) { return None; }
+                    fields.push((index, field.name.clone()));
+                    start -= 3;
+                }
+                fields.reverse();
+                Some(fields)
+            })();
+            if let Some(mut fields) = copied_name_prefix {
+                found.append(&mut fields);
+                continue;
+            }
             let candidate = (|| {
                 let frame = &code[at..at + 6];
                 if frame.iter().map(|i| i.op.name).ne(["PshVPtr", "ADDSi", "CALLSYS", "PshVPtr", "ADDSi", "CALLSYS"])
@@ -11323,7 +11389,7 @@ fn fold_enum_round_trips(
 /// after the accumulation is its last, and `X` is not one of the slots `widened_slots` proves the
 /// source NAMED — there the copy IS the declaration and taking it out changes the width the
 /// arithmetic happens at.
-fn collapse_single_use_accumulators(body: &str, widened: &HashSet<i32>, locals: &BTreeMap<i32, String>) -> String {
+fn collapse_single_use_accumulators(body: &str, widened: &HashSet<i32>, locals: &BTreeMap<i32, String>, named_sites: &HashSet<(i32,String)>) -> String {
     // The declaration's type may WIDEN the initialiser: `float x = a - b;` with integer `a`
     // and `b` subtracts in integers and converts, and `x = x / c` divides in floats. Folded,
     // `(a - b) / c` divides in integers — a different program, and a warning this compiler
@@ -11522,6 +11588,8 @@ fn collapse_single_use_accumulators(body: &str, widened: &HashSet<i32>, locals: 
             }) {
                 continue;
             }
+            if slot_and_life_any(&name).is_some_and(|(slot,_)|
+                is_named_value_site(slot,unwrap_brackets(&folded_value),named_sites)) { continue; }
             let folded = folded_value;
             lines[reader] = rename_ident(&lines[reader], &name, &folded);
             lines.drain(index..index + span + steps);
@@ -12490,6 +12558,52 @@ fn drop_one_block_end_handle_release(text: &str) -> String {
 
 /// The compiler normalizes both bool operands with one NOT before CMPi.
 /// Rendering those NOTs literally would normalize each operand a second time.
+/// The compiler normalizes both sides of a named bool/false comparison.
+/// Remove that normalization before it becomes two explicit source variables.
+fn fold_normalized_local_bool_comparison(body: &str, f: &Func) -> String {
+    if f.ret.token != 0x41 || f.ret.is_reference || f.ret.is_object_handle { return body.to_owned(); }
+    let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    let mut out=body.to_owned();
+    for (at,c) in code.windows(21).enumerate() {
+        let witness=(|| {
+            if c.iter().map(|i|i.op.name).ne(["TZ","CpyRtoV4","CpyVtoV4","NOT","SetV1","NOT","CMPi","JNZ",
+                "SetV1","JMP","LoadThisR","RDR1","sbTOi","CMPIi","TNZ","CpyRtoV4","CpyVtoV4",
+                "CpyVtoR1","JLowZ","CpyVtoR4","JMP"]) {return None;}
+            let w=|i:usize,n:usize|c[i].words.get(n).map(|v|*v as i16 as i32);
+            let (source,carrier,constant)=(w(1,0)?,w(2,0)?,w(4,0)?);
+            if [source,carrier,constant].iter().any(|s|*s<=0) || HashSet::from([source,carrier,constant]).len()!=3
+                || w(2,1)!=Some(source) || [3,8,16,17].iter().any(|i|w(*i,0)!=Some(carrier))
+                || [5,15].iter().any(|i|w(*i,0)!=Some(constant)) || w(6,0)!=Some(carrier) || w(6,1)!=Some(constant)
+                || w(16,1)!=Some(constant) || w(19,0)!=Some(source) || c[4].dwords.first()!=Some(&0)
+                || c[8].dwords.first()!=Some(&1) || w(12,1)!=w(11,0) || w(13,0)!=w(12,0)
+                || [w(11,0)?,w(12,0)?].iter().any(|s|*s<=0 || [source,carrier,constant].contains(s))
+                || code.iter().enumerate().filter(|(_,i)|super::bytediff::addressed_slots(i).contains(&source))
+                    .map(|(n,_)|n).ne([at+1,at+2,at+19]) {return None;}
+            let target=|i:&Instr|i.dwords.first().map(|v|i.offset_dw as i64+2+*v as i32 as i64);
+            if target(&c[7])!=Some(c[10].offset_dw as i64) || target(&c[9])!=Some(c[17].offset_dw as i64)
+                || target(&c[18])!=Some(code.get(at+21)?.offset_dw as i64)
+                || code.last()?.op.name!="RET" || target(&c[20])!=Some(code.last()?.offset_dw as i64)
+                || code.iter().enumerate().any(|(n,i)|i.op.name=="JMPP" || (i.op.name.starts_with('J')
+                    && ![at+7,at+9,at+18,at+20].contains(&n) && target(i).is_some_and(|t|
+                        t>c[0].offset_dw as i64 && t<=c[20].offset_dw as i64))) {return None;}
+            Some((source,carrier,constant))
+        })();
+        let Some((source,carrier,constant))=witness else {continue;};
+        let mut lines:Vec<String>=out.lines().map(str::to_owned).collect();
+        let matches:Vec<_>=lines.windows(3).enumerate().filter(|(_,s)|
+            s[0].trim()==format!("local_{carrier} = !(local_{source});")
+                && s[1].trim()==format!("local_{constant} = !(false);")
+                && s[2].trim()==format!("if (local_{carrier} == local_{constant})")
+                && indent_of(&s[0])==indent_of(&s[1]) && indent_of(&s[1])==indent_of(&s[2]))
+            .map(|(n,_)|n).collect();
+        let [line]=matches[..] else {continue;};
+        let replacement=format!("{}if (local_{source} == false)",indent_of(&lines[line]));
+        lines.splice(line..line+3,[replacement]);out=lines.join("\n");
+        if body.ends_with('\n') {out.push('\n');}
+    }
+    out
+}
+
 fn fold_normalized_bool_member_comparisons(body: &str, f: &Func, refs: &RefResolver, is_method: bool) -> String {
     let mut out = body.to_owned();
     if !is_method || f.ret.token != 5 || f.ret.is_reference || f.ret.is_object_handle
@@ -15948,6 +16062,44 @@ fn assigned_value_before_return(f: &Func, fc: &FuncCode, refs: &RefResolver) -> 
 
 /// Adjacent enum/index field copies are both named before nested index calls.
 /// Their scratch and destination slots each have one closed life.
+/// A double field difference was computed before a call's other arguments,
+/// then narrowed only when pushed. Keep that expression's named life.
+fn named_narrowed_field_differences(f: &Func, refs: &RefResolver, is_method: bool) -> HashSet<(i32,String)> {
+    if !is_method || f.ret.token != 0x52 { return HashSet::new(); }
+    let Ok(code)=disassemble(&f.bytecode) else { return HashSet::new(); };
+    code.windows(17).filter_map(|c| {
+        if c.iter().map(|i|i.op.name).ne(["LoadThisR","RDR8","PshGPtr","PshVPtr","ADDSi","CALLSYS",
+            "CpyRtoV4","fTOd","SUBd","PshC4","PshC4","SetV1","PshV4","SetV1","PshV4","dTOf","PshV4"]) { return None; }
+        let w=|i:usize,n:usize|c[i].words.get(n).map(|v|*v as i16 as i32);
+        let (named,call_result,right,narrowed)=(w(1,0)?,w(6,0)?,w(7,0)?,w(15,0)?);
+        let slots=[named,call_result,right,narrowed,w(11,0)?,w(13,0)?];
+        if slots.iter().any(|s|*s<=0) || slots.iter().collect::<HashSet<_>>().len()!=6
+            || w(3,0)!=Some(0) || w(7,1)!=Some(call_result) || c[8].words!=[named as u16,named as u16,right as u16]
+            || w(15,1)!=Some(named) || w(16,0)!=Some(narrowed) || w(12,0)!=w(11,0) || w(14,0)!=w(13,0)
+            || [9,10,11,13].iter().any(|i|c[*i].dwords.first()!=Some(&0))
+            || refs.global_by_ptr(*c[2].qwords.first()? as i64)!=Some("__WorldContext") { return None; }
+        let tid=*c[0].dwords.first()? as i32;
+        let owner=refs.type_identity_by_id(tid)?;
+        let (field,declared)=refs.member_identity(tid,w(0,0)?)?;
+        let receiver_tid=*c[4].dwords.first()? as i32;
+        let (receiver,receiver_declared)=refs.member_identity(receiver_tid,w(4,0)?)?;
+        if refs.type_identity_by_id(declared)?!=owner || refs.type_identity_by_id(receiver_tid)?!=owner
+            || refs.type_identity_by_id(receiver_declared)?!=owner
+            || !matches!(refs.own_field_type_by_class(&owner.name,field)?,"float"|"double") { return None; }
+        let p=*c[5].qwords.first()? as i64;
+        let ret=refs.func_ret_by_ptr(p)?;let [context]=refs.func_params_by_ptr(p)? else {return None;};
+        if !refs.is_method_by_ptr(p) || !refs.is_const_method_by_ptr(p)
+            || ret.token!=0x50 || ret.is_reference || ret.is_object_handle
+            || context.token!=5 || !context.is_object_handle || context.is_reference
+            || refs.func_owner_by_ptr(p)!=refs.own_field_type_by_class(&owner.name,receiver)
+            || code.iter().any(|i|i.op.name=="JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|v| {
+                let target=i.offset_dw as i64+2+*v as i32 as i64;
+                target>c[0].offset_dw as i64 && target<=c[16].offset_dw as i64
+            }))) {return None;}
+        Some((named,format!("this.{field} - this.{receiver}.{}()",refs.func_by_ptr(p)?)))
+    }).collect()
+}
+
 fn named_index_field_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, String)> {
     let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
     let mut out = HashSet::new();
@@ -27747,7 +27899,7 @@ mod accumulator_tests {
 
     #[test]
     fn accumulator_collapses_into_its_single_reader() {
-        let folded = collapse_single_use_accumulators(BODY, &HashSet::new(), &std::collections::BTreeMap::new());
+        let folded = collapse_single_use_accumulators(BODY, &HashSet::new(), &std::collections::BTreeMap::new(), &HashSet::new());
         assert_eq!(
             folded, "    return Use((Thing.GetRadius() * Multiplier));\n",
             "declare, accumulate, read once is one expression: {folded}"
@@ -27763,7 +27915,7 @@ mod accumulator_tests {
         let roots=HashMap::from([("local_12".into(),"float".into())]);
         let body="float local_12 = this.GetWorld().GetTimeSeconds();\nlocal_12 = local_12 - this.InitialTime;\nthis.InitialTime = this.GetWorld().GetTimeSeconds();\nfloat local_14 = this.ElapsedTime;\nthis.ElapsedTime = (local_14 + local_12);\n";
         let mut out=body.to_owned();
-        for _ in 0..3 {out=collapse_single_use_accumulators(&out,&HashSet::new(),&locals);}
+        for _ in 0..3 {out=collapse_single_use_accumulators(&out,&HashSet::new(),&locals, &HashSet::new());}
         assert_eq!(out,body);
         let late=|text:&str,slots:&HashSet<(i32,usize)>| super::inline_unnamed_value_temporaries(text,
             slots,&HashSet::new(),&HashSet::new(),&refs,&HashSet::new(),&HashSet::new(),&HashMap::new(),
@@ -27781,7 +27933,7 @@ mod accumulator_tests {
     #[test]
     fn the_accumulator_field_write_barrier_matches_the_whole_own_field_path() {
         use std::collections::BTreeMap;
-        let fold=|s:&str| collapse_single_use_accumulators(s,&HashSet::new(),&BTreeMap::new());
+        let fold=|s:&str| collapse_single_use_accumulators(s,&HashSet::new(),&BTreeMap::new(), &HashSet::new());
         let source=|read:&str,write:&str| format!("float local_12 = {read};\nlocal_12 = local_12 - Offset;\n{write} = Next;\nUse(local_12);\n");
         for read in ["this.Time","(this.Time + Bias)"] {
             let s=source(read,"this.Time");assert_eq!(fold(&s),s);
@@ -27799,7 +27951,7 @@ mod accumulator_tests {
     fn accumulator_read_twice_keeps_its_name() {
         let body = "    float local_10 = Thing.GetRadius();\n    local_10 = local_10 * Multiplier;\n    return Use(local_10, local_10);\n";
         assert_eq!(
-            collapse_single_use_accumulators(body, &HashSet::new(), &std::collections::BTreeMap::new()),
+            collapse_single_use_accumulators(body, &HashSet::new(), &std::collections::BTreeMap::new(), &HashSet::new()),
             body,
             "a value read twice has to keep the name it is read through"
         );
@@ -27814,7 +27966,7 @@ mod accumulator_tests {
             (3, "int".to_owned()),
         ]);
         assert_eq!(
-            collapse_single_use_accumulators(body, &HashSet::new(), &locals),
+            collapse_single_use_accumulators(body, &HashSet::new(), &locals, &HashSet::new()),
             "    int local_5 = Math::FloorToInt((float32(local_2 + local_3) * 0.5f));\n",
             "the declaration's conversion stands where the declaration stood"
         );
@@ -27823,7 +27975,7 @@ mod accumulator_tests {
     #[test]
     fn accumulator_on_a_named_widening_keeps_its_name() {
         assert_eq!(
-            collapse_single_use_accumulators(BODY, &HashSet::from([10]), &std::collections::BTreeMap::new()),
+            collapse_single_use_accumulators(BODY, &HashSet::from([10]), &std::collections::BTreeMap::new(), &HashSet::new()),
             BODY,
             "where the copy IS the declaration, folding it changes the width of the arithmetic"
         );
@@ -30309,6 +30461,94 @@ mod literal_value_lifetime_tests {
         assert_eq!(super::fold_literal_enum_default_return(body, &into_cleanup, &refs), body);
     }
 
+    fn native_name_initializer_fixture() -> super::Class {
+        let mut f = function(&[("SetV8", &[6]), ("LoadThisR", &[24]), ("WRTV8", &[6]),
+            ("SetV8", &[6]), ("LoadThisR", &[32]), ("WRTV8", &[6]),
+            ("SetV1", &[1]), ("LoadThisR", &[40]), ("WRTV1", &[1]),
+            ("PshC4", &[]), ("CALLSYS", &[]), ("PshRPtr", &[]), ("PshVPtr", &[0]), ("ADDSi", &[48]), ("CALLSYS", &[]),
+            ("PshC4", &[]), ("CALLSYS", &[]), ("PshRPtr", &[]), ("PshVPtr", &[0]), ("ADDSi", &[56]), ("CALLSYS", &[]),
+            ("SetV1", &[1]), ("PshV4", &[1]), ("PshVPtr", &[0]), ("CALLSYS", &[]),
+            ("SetV1", &[1]), ("PshV4", &[1]), ("PshVPtr", &[0]), ("CALLSYS", &[]), ("RET", &[2])]);
+        f.name = "Example".into(); f.namespace = "NS".into(); f.ret.token = 0x52;
+        let code = super::disassemble(&f.bytecode).unwrap();
+        for (at, value) in [(1, 11), (4, 11), (7, 11), (10, 1), (13, 11), (14, 7), (15, 1),
+            (16, 1), (19, 11), (20, 7), (21, 1), (24, 8), (25, 1), (28, 9)] {
+            f.bytecode[code[at].offset_dw + 1] = value;
+        }
+        super::Class { name: "Example".into(), namespace: "NS".into(), super_class: None,
+            fields: [("TimeA", 0x51, 0), ("TimeB", 0x51, 0), ("Enabled", 0x41, 0), ("NameA", 5, 301), ("NameB", 5, 301)]
+                .into_iter().map(|(name, token, type_info)| super::super::model::Field { name: name.into(),
+                    ty: DataType { token, type_info, is_object_const: token == 5, is_read_only: token == 5,
+                        ..Default::default() }, is_uproperty: false }).collect(),
+            methods: Vec::new(), ctors: vec![f], flags: 1 }
+    }
+
+    #[test]
+    fn native_name_copy_initializers_include_preceding_scalar_stores_and_keep_ctor_calls() {
+        let class = native_name_initializer_fixture();
+        let refs = RefResolver::from_test_native_name_initializer(0);
+        let keep = super::native_field_initializer_prefix(&class, "Module", &refs);
+        assert_eq!(keep, HashSet::from(["TimeA".into(), "TimeB".into(), "Enabled".into(), "NameA".into(), "NameB".into()]));
+        let mut source = String::new();
+        super::emit_class(&mut source, &class, "Module", &refs, None);
+        for initializer in ["float TimeA = 0.0;", "float TimeB = 0.0;", "bool Enabled = false;",
+            "FName NameA = n\"First\";", "FName NameB = n\"Second\";"] { assert!(source.contains(initializer), "{source}"); }
+        assert!(source.contains("this.EnableTick(true);") && source.contains("this.EnableMovement(true);"), "{source}");
+        assert!(!source.contains("this.TimeA =") && !source.contains("this.NameA ="), "{source}");
+        let mut mutable = class.clone();
+        for field in mutable.fields.iter_mut().filter(|field| field.ty.token == 5) {
+            field.ty.is_object_const = false; field.ty.is_read_only = false;
+        }
+        assert_eq!(super::native_field_initializer_prefix(&mutable, "Module", &refs), keep);
+    }
+
+    #[test]
+    fn native_name_initializers_reject_wrong_identity_width_lives_and_overloads() {
+        let class = native_name_initializer_fixture();
+        let refs = RefResolver::from_test_native_name_initializer(0);
+        for fault in 1..=9 {
+            let keep = super::native_field_initializer_prefix(&class, "Module", &RefResolver::from_test_native_name_initializer(fault));
+            assert!(!keep.contains("NameA") && !keep.contains("TimeA"), "fault={fault} {keep:?}");
+        }
+        assert!(super::native_field_initializer_prefix(&class, "WrongModule", &refs).is_empty());
+        for (object_const, read_only) in [(true, false), (false, true)] {
+            let mut partial = class.clone();
+            partial.fields[3].ty.is_object_const = object_const; partial.fields[3].ty.is_read_only = read_only;
+            let keep = super::native_field_initializer_prefix(&partial, "Module", &refs);
+            assert!(!keep.contains("NameA") && !keep.contains("TimeA"));
+        }
+        for (object_const, read_only) in [(true, false), (false, true), (true, true)] {
+            let mut constant_scalar = class.clone();
+            constant_scalar.fields[0].ty.is_object_const = object_const; constant_scalar.fields[0].ty.is_read_only = read_only;
+            assert!(!super::native_field_initializer_prefix(&constant_scalar, "Module", &refs).contains("TimeA"));
+        }
+        let mut wrong_type = class.clone(); wrong_type.fields[1].ty.token = 0x50;
+        assert!(!super::native_field_initializer_prefix(&wrong_type, "Module", &refs).contains("TimeA"));
+        let mut reversed = class.clone(); reversed.fields.swap(0, 1);
+        assert!(super::native_field_initializer_prefix(&reversed, "Module", &refs).is_empty());
+        let mut branch = class.clone(); branch.ctors[0].bytecode.extend(function(&[("JMP", &[])]).bytecode);
+        assert!(super::native_field_initializer_prefix(&branch, "Module", &refs).is_empty());
+        let mut reused = class.clone();
+        let mut read = function(&[("LoadThisR", &[24]), ("RDR8", &[6])]); read.bytecode[1] = 11;
+        reused.ctors[0].bytecode.extend(read.bytecode);
+        assert!(!super::native_field_initializer_prefix(&reused, "Module", &refs).contains("TimeA"));
+        let mut wrong_copy = class.clone(); let code = super::disassemble(&wrong_copy.ctors[0].bytecode).unwrap();
+        wrong_copy.ctors[0].bytecode[code[14].offset_dw + 1] = 8;
+        let mut overload = class.clone(); overload.ctors.extend(wrong_copy.ctors);
+        assert!(!super::native_field_initializer_prefix(&overload, "Module", &refs).contains("NameA"));
+        let fields = HashSet::from(["TimeA", "TimeB", "Enabled", "NameA", "NameB"]);
+        let keep = super::native_field_initializer_prefix(&class, "Module", &refs);
+        let first = "    Example()\n    {\n        this.TimeA = 0.0;\n        this.NameA = n\"First\";\n        Work();\n        return;\n    }\n";
+        let other = first.replace("Example()", "Example(bool flag)").replace("n\"First\"", "n\"Other\"");
+        let mut source = format!("{first}{other}");
+        let lifted = super::extract_member_initializers_with_native_prefix(&mut source, &fields, &keep);
+        assert_eq!(lifted, HashMap::from([("TimeA".into(), "0.0".into())]));
+        assert_eq!(source.matches("this.NameA =").count(), 2);
+        let mut source = first.replace("this.TimeA = 0.0;", "Prepare();\n        this.TimeA = 0.0;");
+        let unchanged = source.clone();
+        assert!(super::extract_member_initializers_with_native_prefix(&mut source, &fields, &keep).is_empty());
+        assert_eq!(source, unchanged);
+    }
     #[test]
     fn native_field_initializer_prefix_keeps_ctor_work_and_overload_consensus() {
         let fields = HashSet::from(["Path", "Kind"]);
@@ -33610,7 +33850,7 @@ mod literal_value_lifetime_tests {
         assert_eq!(keep, HashSet::from([26, 28]));
         let body = "float local_26 = this.Max;\nlocal_26 = local_26 - this.Min;\nfloat local_28 = local_24 - this.Min;\nreturn Math::Mix(1.0, 0.0, local_28 / local_26);\n";
         let locals = BTreeMap::from([(26, "float".into()), (28, "float".into())]);
-        let collapsed = super::collapse_single_use_accumulators(body, &keep, &locals);
+        let collapsed = super::collapse_single_use_accumulators(body, &keep, &locals, &HashSet::new());
         assert_eq!(collapsed, body);
         let merged = super::merge_self_assignments(&collapsed, &locals);
         let late = super::inline_unnamed_value_temporaries(&merged, &HashSet::from([(28, 1)]),
@@ -33689,12 +33929,12 @@ mod literal_value_lifetime_tests {
             "if (Center.Distance(Target) < local_4)\n{\n    local_9 = 0;\n}\nelse\n{\n",
             "    bool local_10 = (Center.Distance(Target) <= local_6);\n    local_9 = local_10;\n}\nreturn (local_9 != 0);\n");
         let locals = BTreeMap::from([(4, "float".into()), (6, "float".into())]);
-        let collapsed = super::collapse_single_use_accumulators(body, &keep, &locals);
+        let collapsed = super::collapse_single_use_accumulators(body, &keep, &locals, &HashSet::new());
         assert_eq!(collapsed, body);
         let merged = super::merge_self_assignments(&collapsed, &locals);
         assert!(merged.starts_with("float local_4 = this.Inner - this.Margin;\nfloat local_6 = this.Outer + this.Margin;\n"), "{merged}");
         assert!(merged.contains("Center.Distance(Target) < local_4"));
-        assert!(!super::collapse_single_use_accumulators(body, &HashSet::new(), &locals).contains("float local_4"));
+        assert!(!super::collapse_single_use_accumulators(body, &HashSet::new(), &locals, &HashSet::new()).contains("float local_4"));
     }
 
     #[test]
@@ -33872,6 +34112,48 @@ mod literal_value_lifetime_tests {
         let mut other=f.clone();let code=disassemble(&other.bytecode).unwrap();
         other.bytecode[code[14].offset_dw]=(other.bytecode[code[14].offset_dw]&65535)|(38<<16);
         assert!(assigned_return_keep(&other,&refs).is_empty());
+    }
+
+    fn named_narrowed_difference_fixture() -> Func {
+        let mut f=function(&[("LoadThisR",&[0]),("RDR8",&[6]),("PshGPtr",&[]),("PshVPtr",&[0]),
+            ("ADDSi",&[8]),("CALLSYS",&[]),("CpyRtoV4",&[1]),("fTOd",&[4,1]),("SUBd",&[6,6,4]),
+            ("PshC4",&[]),("PshC4",&[]),("SetV1",&[7]),("PshV4",&[7]),("SetV1",&[8]),("PshV4",&[8]),
+            ("dTOf",&[13,6]),("PshV4",&[13]),("RET",&[2])]);
+        f.ret=DataType {token:0x52,..Default::default()};let code=disassemble(&f.bytecode).unwrap();
+        for (i,p) in [(0,1),(2,20),(4,1),(5,10)] {f.bytecode[code[i].offset_dw+1]=p;}f
+    }
+
+    #[test]
+    fn narrowing_after_other_arguments_preserves_only_the_field_difference() {
+        let f=named_narrowed_difference_fixture();let refs=RefResolver::from_test_named_narrowed_difference(0);
+        let sites=super::named_narrowed_field_differences(&f,&refs,true);
+        assert_eq!(sites,HashSet::from([(6,"this.Duration - this.Start.Age()".into())]));
+        let body="float local_6 = this.Duration;\nfloat local_4 = this.Start.Age();\nlocal_6 = local_6 - local_4;\nUse(float32(local_6), false, false);\n";
+        let locals=BTreeMap::from([(6,"float".into()),(4,"float".into())]);
+        let kept=super::collapse_single_use_accumulators(body,&HashSet::new(),&locals,&sites);
+        assert_eq!(kept,body);
+        assert_eq!(super::collapse_single_use_accumulators(body,&HashSet::new(),&locals,&HashSet::new()),
+            "Use(float32((this.Duration - this.Start.Age())), false, false);\n");
+        let merged="float local_6 = this.Duration - this.Start.Age();\nUse(float32(local_6), false, false);\n";
+        let unnamed=HashSet::from([(6,1)]);
+        assert_eq!(super::inline_unnamed_value_temporaries(merged,&unnamed,&HashSet::new(),&HashSet::new(),
+            &refs,&HashSet::new(),&HashSet::new(),&HashMap::new(),&sites,&HashSet::new(),&HashSet::new(),&HashSet::new()),merged);
+        let earlier=body.replace("this.Duration","this.Other");
+        assert_eq!(super::collapse_single_use_accumulators(&earlier,&HashSet::new(),&locals,&sites),
+            super::collapse_single_use_accumulators(&earlier,&HashSet::new(),&locals,&HashSet::new()));
+    }
+
+    #[test]
+    fn named_narrowing_requires_typed_fields_calls_and_argument_order() {
+        let f=named_narrowed_difference_fixture();
+        for fault in 1..=5 {assert!(super::named_narrowed_field_differences(&f,&RefResolver::from_test_named_narrowed_difference(fault),true).is_empty(),"{fault}");}
+        let refs=RefResolver::from_test_named_narrowed_difference(0);
+        assert!(super::named_narrowed_field_differences(&f,&refs,false).is_empty());
+        let mut other=f.clone();let code=disassemble(&other.bytecode).unwrap();
+        other.bytecode[code[13].offset_dw+1]=1;assert!(super::named_narrowed_field_differences(&other,&refs,true).is_empty());
+        let mut other=f.clone();other.bytecode.splice(0..0,function(&[("JMP",&[])]).bytecode);
+        let code=disassemble(&other.bytecode).unwrap();other.bytecode[1]=(code[3].offset_dw-2) as i32;
+        assert!(super::named_narrowed_field_differences(&other,&refs,true).is_empty());
     }
 
     fn named_index_fields_fixture() -> Func {
@@ -34067,6 +34349,46 @@ mod literal_value_lifetime_tests {
         assert_eq!(super::address_push_counts(&f).get(&8),Some(&1));
         assert_eq!(super::restore_dropped_struct_arguments(source,&super::address_push_counts(&f)),
             source.replace("RemoveActiveEffectsWithTags(FGameplayTagContainer())","RemoveActiveEffectsWithTags(local_8)"));
+    }
+
+    fn normalized_local_bool_fixture() -> Func {
+        let mut f=function(&[("TZ",&[]),("CpyRtoV4",&[6]),("CpyVtoV4",&[1,6]),("NOT",&[1]),
+            ("SetV1",&[7]),("NOT",&[7]),("CMPi",&[1,7]),("JNZ",&[]),("SetV1",&[1]),("JMP",&[]),
+            ("LoadThisR",&[112]),("RDR1",&[2]),("sbTOi",&[4,2]),("CMPIi",&[4]),("TNZ",&[]),
+            ("CpyRtoV4",&[7]),("CpyVtoV4",&[1,7]),("CpyVtoR1",&[1]),("JLowZ",&[]),
+            ("CpyVtoR4",&[6]),("JMP",&[]),("SetV1",&[1]),("CpyVtoR4",&[1]),("RET",&[2])]);
+        f.ret=DataType {token:0x41,..Default::default()};let code=disassemble(&f.bytecode).unwrap();
+        f.bytecode[code[8].offset_dw+1]=1;f.bytecode[code[13].offset_dw+1]=3;
+        for (i,to) in [(7,10),(9,17),(18,21),(20,23)] {
+            f.bytecode[code[i].offset_dw+1]=(code[to].offset_dw as i64-code[i].offset_dw as i64-2) as i32;
+        }f
+    }
+
+    const NORMALIZED_LOCAL_BOOL_BODY:&str="local_6 = (Kind() == this.Kind);\nlocal_1 = !(local_6);\nlocal_7 = !(false);\nif (local_1 == local_7)\n{\n    local_1 = true;\n}\nelse\n{\n    local_7 = (this.Kind != 3);\n    local_1 = local_7;\n}\nif (local_1)\n{\n    return local_6;\n}\nreturn false;\n";
+
+    #[test]
+    fn normalized_bool_false_comparison_keeps_the_original_named_bool() {
+        let f=normalized_local_bool_fixture();
+        let expected=NORMALIZED_LOCAL_BOOL_BODY.replace("local_1 = !(local_6);\nlocal_7 = !(false);\nif (local_1 == local_7)","if (local_6 == false)");
+        let got=super::fold_normalized_local_bool_comparison(NORMALIZED_LOCAL_BOOL_BODY,&f);
+        assert_eq!(got,expected);assert_eq!(super::fold_normalized_local_bool_comparison(&got,&f),got);
+        assert!(got.contains("return local_6;"));assert!(got.starts_with("local_6 = (Kind() == this.Kind);"));
+    }
+
+    #[test]
+    fn normalized_local_bool_comparison_requires_closed_bool_diamond() {
+        let f=normalized_local_bool_fixture();let code=disassemble(&f.bytecode).unwrap();
+        let check=|f:&Func|super::fold_normalized_local_bool_comparison(NORMALIZED_LOCAL_BOOL_BODY,f);
+        let mut other=f.clone();other.ret.token=0x44;assert_eq!(check(&other),NORMALIZED_LOCAL_BOOL_BODY);
+        for i in [4,8] {let mut other=f.clone();other.bytecode[code[i].offset_dw+1]^=1;assert_eq!(check(&other),NORMALIZED_LOCAL_BOOL_BODY);}
+        let mut other=f.clone();other.bytecode[code[7].offset_dw+1]+=1;assert_eq!(check(&other),NORMALIZED_LOCAL_BOOL_BODY);
+        let mut other=f.clone();other.bytecode.extend(function(&[("PshV4",&[6])]).bytecode);assert_eq!(check(&other),NORMALIZED_LOCAL_BOOL_BODY);
+        let mut other=f.clone();other.bytecode.splice(0..0,function(&[("JMP",&[])]).bytecode);
+        let shifted=disassemble(&other.bytecode).unwrap();other.bytecode[1]=(shifted[3].offset_dw-2) as i32;
+        assert_eq!(check(&other),NORMALIZED_LOCAL_BOOL_BODY);
+        for body in [NORMALIZED_LOCAL_BOOL_BODY.replace("!(false)","!(true)"),
+            NORMALIZED_LOCAL_BOOL_BODY.replace("if (local_1 == local_7)","if (local_1 != local_7)"),
+            NORMALIZED_LOCAL_BOOL_BODY.repeat(2)] {assert_eq!(super::fold_normalized_local_bool_comparison(&body,&f),body);}
     }
 
     fn normalized_bool_member_fixture(reference: bool) -> Func {
@@ -34607,7 +34929,7 @@ mod literal_value_lifetime_tests {
         assert_eq!(keep, HashSet::from([("this.Radius".into(), "this.Speed * Delta".into())]));
         let body = "    float local_4 = this.Radius;\n    float local_2 = this.Speed;\n    local_2 = local_2 * Delta;\n    local_4 = local_4 + local_2;\n    this.Radius = local_4;\n";
         let locals = BTreeMap::from([(2, "float".into()), (4, "float".into())]);
-        let mut folded = super::collapse_single_use_accumulators(body, &HashSet::new(), &locals);
+        let mut folded = super::collapse_single_use_accumulators(body, &HashSet::new(), &locals, &HashSet::new());
         assert!(folded.contains("this.Radius = (this.Radius + (this.Speed * Delta));"), "{folded}");
         assert!(super::fold_compound_assignments(&folded, Some(&fields), &roots, &refs, false, &HashSet::new(), &std::collections::HashSet::new()).contains(" += "));
         for late in [false, false, true] {

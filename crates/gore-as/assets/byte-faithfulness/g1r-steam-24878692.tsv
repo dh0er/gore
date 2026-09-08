@@ -10,7 +10,6 @@ AI.AIAgent.Creature.Golem.Fire.Spells.BreakFloor.GA_Spell_BreakFloor_FireGolem	2
 AI.AIAgent.Creature.Molerat.CombatSituations_Molerat	1	0	0
 AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.SoulHarvest.SoulHarvest_Visual	2	0	0
 AI.AIAgent.Creature.Troll.TC_TrollAdult_01.CombatMoves_TrollAdult	1	0	0
-AI.AIAgent.Human.Config.OCR_GRD_Scatty_210.DailyRoutine_OCR_GRD_Scatty_210	1	0	0
 AI.AIAgent.Orc.Combat.Staff.Spells.StormOfFire.GA_Spell_StormOfFire_Orc	1	0	0
 AI.AIItemScoring	1	0	0
 AI.AssessmentResponseSystem.AssessmentBits	9	0	0
@@ -97,7 +96,7 @@ GAS.Abilities.Spells.Spells.Telekinesis.TelekinesisItemMovementVisual	1	0	0
 GAS.Abilities.Spells.Spells.Transform.GA_Spell_Transform	2	0	0
 GAS.Abilities.Spells.Visuals.Fire.FireRainVisual	2	0	0
 GAS.Abilities.Spells.Visuals.Fire.InnosPrayVisual	2	0	0
-GAS.Abilities.Spells.Visuals.Light.LightVisual	2	0	0
+GAS.Abilities.Spells.Visuals.Light.LightVisual	1	0	0
 GAS.Abilities.Spells.Visuals.UrizielWaveOfDeath.UrizielWaveOfDeathVisual	1	0	0
 GAS.Abilities.TraceTarget.Base.GA_TraceTarget_Base	1	0	0
 GAS.Abilities.TraceTarget.Derived.GA_TraceTarget_Item	1	0	0
@@ -115,7 +114,7 @@ InteractiveObjects.PuzlesBlood	1	0	0
 Items.Projectiles	2	0	0
 Items.Visual.Projectile.Arrow.Base.ArrowProjectileVisual_Base	2	0	0
 LevelScripts.Map_x2_y1_OldCamp_AI_script	1	0	0
-LoadingScreen.LoadingScreenChapterBase	2	0	0
+LoadingScreen.LoadingScreenChapterBase	1	0	0
 Player.PlayerConfig	1	0	0
 Regions.Traits.QuestRelatedTraits	8	0	0
 Sound.FXDefinitions.FXDefinitions_AttackImpact	1	0	0

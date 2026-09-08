@@ -1805,6 +1805,32 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_native_name_initializer(fault: u8) -> Self {
+        let mut r = Self::from_test_native_field_initializer(0);
+        for (offset, name) in [(24, "TimeA"), (32, "TimeB"), (40, "Enabled"), (48, "NameA"), (56, "NameB")] {
+            let key = (11i64 << 1) | ((offset as i64) << 33) | 1;
+            r.prop_by_key.insert(key, name.into());
+            r.prop_type_id.insert(key, if fault == 1 && offset == 48 { 99 } else { 11 });
+        }
+        r.static_names = vec!["First".into(), "Second".into()];
+        r.func_by_ptr.insert(7, "$beh0".into()); r.func_is_method.insert(7);
+        r.func_owner.insert(7, if fault == 2 { "FOther" } else { "FName" }.into());
+        r.func_params.insert(7, vec![DataType { token: 5, type_info: if fault == 3 { 201 } else { 301 },
+            is_reference: fault != 4, is_object_const: fault != 5, is_read_only: true, ..Default::default() }]);
+        r.func_ret.insert(7, DataType { token: if fault == 6 { 0x41 } else { 0x52 }, ..Default::default() });
+        if fault == 7 { r.func_ret.get_mut(&1).unwrap().is_read_only = false; }
+        if fault == 8 { r.type_identity_by_ptr.get_mut(&301).unwrap().namespace = "Other".into(); }
+        if fault == 9 { r.const_method_ptrs.insert(7); }
+        for (ptr, name) in [(8, "EnableTick"), (9, "EnableMovement")] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_is_method.insert(ptr);
+            r.func_owner.insert(ptr, "Example".into());
+            r.func_params.insert(ptr, vec![DataType { token: 0x41, ..Default::default() }]);
+            r.func_ret.insert(ptr, DataType { token: 0x52, ..Default::default() });
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_native_direct_field(fault: u8) -> Self {
         let mut r = Self::from_test_native_field_initializer(if fault <= 2 { fault } else { 0 });
         r.func_params.insert(2, vec![DataType { token: 5, type_info: if fault == 3 { 302 } else { 301 },
@@ -2235,6 +2261,22 @@ impl RefResolver {
         if fault==2 {r.func_params.get_mut(&20).unwrap()[0].is_reference=false;}
         if fault==3 {r.func_ret.get_mut(&10).unwrap().is_reference=true;}
         if fault==4 {r.func_owner.insert(40,"FOther".into());}
+        if fault==5 {r.const_method_ptrs.remove(&10);}
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_named_narrowed_difference(fault:u8) -> Self {
+        let mut r=Self::from_test_member_chain(&[("UEvent","Duration"),("FClock",""),("UObject","")]);
+        r.type_identity_by_ptr.insert(1,TypeIdentity{name:"UEvent".into(),module:"Fixture".into(),namespace:String::new()});
+        r.prop_by_key.insert(3|(8i64<<33),"Start".into());r.prop_type_id.insert(3,1);r.prop_type_id.insert(3|(8i64<<33),1);
+        r.set_class_fields(HashMap::from([("UEvent".into(),HashMap::from([
+            ("Duration".into(),if fault==1 {"float32"} else {"float"}.into()),("Start".into(),"FClock".into())]))]));
+        r.global_by_ptr.insert(20,if fault==2 {"Other"} else {"__WorldContext"}.into());
+        r.func_by_ptr.insert(10,"Age".into());r.func_owner.insert(10,if fault==3 {"OtherClock"} else {"FClock"}.into());
+        r.func_is_method.insert(10);r.const_method_ptrs.insert(10);
+        r.func_ret.insert(10,DataType {token:if fault==4 {0x51} else {0x50},..Default::default()});
+        r.func_params.insert(10,vec![DataType {token:5,type_info:3,is_object_handle:true,..Default::default()}]);
         if fault==5 {r.const_method_ptrs.remove(&10);}
         r
     }
