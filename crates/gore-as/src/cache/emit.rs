@@ -1240,6 +1240,7 @@ fn emit_function_ctor(
     statement_producers.extend(retained_return_copies.iter().copied());
     statement_producers.extend(receivers_built_before_their_rvo_push(f, refs));
     statement_producers.extend(named_copy_before_value_chain(f, refs));
+    statement_producers.extend(member_results_before_argument_pushes(f, refs));
     // Where vanilla destroyed a value slot mid-expression it was calling on a temporary there.
     // A by-value call result pushed again straight after the call is consumed where it was
     // produced — the temporary of a fluent chain (`AI.FearHere(…).While(n"…")`): vanilla ran
@@ -1263,6 +1264,8 @@ fn emit_function_ctor(
     let mut alias_copy_keep: HashSet<i32> = widened.union(&named_bool_returns).copied().collect();
     let repeated_aliases = repeated_handle_alias_slots(f, refs);
     alias_copy_keep.extend(repeated_aliases.iter().copied());
+    let loop_result_aliases = loop_result_handle_aliases(f, refs, is_method);
+    alias_copy_keep.extend(loop_result_aliases.keys().copied());
     // Slots the function does not touch until it has branched: their declaration lives in the
     // block that touches them, not at the top.
     let touched_after_branch = slots_touched_only_after_a_branch(f);
@@ -2478,6 +2481,7 @@ fn emit_function_ctor(
         pass_trace("inline_bool_literal_temporaries", &body);
         let mut declared_bare_slots = bare_declaration_slots(f, refs);
         declared_bare_slots.extend(copied_call_result_slots(f));
+        declared_bare_slots.extend(loop_result_aliases.keys().copied());
         // Handles vanilla released BEFORE another local of their block: declared behind it,
         // not at the block's top.
         let declared_behind: HashSet<i32> = handles_declared_behind_a_block_local(f, refs)
@@ -2532,8 +2536,8 @@ fn emit_function_ctor(
             &reference_locals,
         );
         pass_trace("rewrite_primitive_lives_decl_init", &body);
-        let placed_so_far: HashSet<i32> =
-            placed_so_far.union(&life_suppressed).copied().collect();
+        let placed_so_far: HashSet<i32> = placed_so_far.union(&life_suppressed)
+            .copied().chain(loop_result_aliases.keys().copied()).collect();
         let (body, first_write_suppressed) = rewrite_bare_decl_at_first_write(
             &body,
             &locals,
@@ -2712,6 +2716,7 @@ fn emit_function_ctor(
         let late_but_not_placed: HashSet<i32> = late_constructed_slots(f, refs)
             .difference(&declared_at_site)
             .copied()
+            .chain(loop_result_aliases.values().copied())
             .collect();
         let rendered = sink_declarations_to_first_use(&rendered, &late_but_not_placed);
         let rendered = merge_conditional_into_declaration(&rendered);
@@ -10742,6 +10747,60 @@ fn repeated_handle_alias_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
         if witness.is_some() { out.insert(dst); }
     }
     out
+}
+
+/// A loop-selected handle is copied once into an earlier declared handle before
+/// a terminal setter. Both handle profiles are closed: the selection owns the
+/// loop writes; the final copy has one argument read and no later lifetime.
+fn loop_result_handle_aliases(f: &Func, refs: &RefResolver, is_method: bool) -> HashMap<i32, i32> {
+    let witness = (|| {
+        if !is_method || !f.params.is_empty() || f.ret.token != 0x52 || f.ret.is_reference { return None; }
+        let code = disassemble(&f.bytecode).ok()?;
+        let tail_at = code.len().checked_sub(10)?;
+        let c = &code[tail_at..];
+        if c.iter().map(|i| i.op.name).ne(["LoadVObjR", "RDR1", "CpyVtoR1", "JLowNZ",
+            "PshVPtr", "RefCpyV", "PshVPtr", "PshVPtr", "CALLINTF", "RET"])
+            || code.get(..6)?.iter().map(|i| i.op.name).ne(["SetV8", "PSF", "PshVPtr", "ADDSi", "CALLSYS", "JMP"])
+            { return None; }
+        let w = |i: &Instr| i.words.first().map(|v| *v as i16 as i32);
+        let (dst, src, iter, scalar) = (w(&c[5])?, w(&c[4])?, w(&c[0])?, w(&code[0])?);
+        if !(0 < dst && dst < scalar && scalar < src && src < iter)
+            || w(&c[6]) != Some(dst) || w(&c[7]) != Some(0) || w(&c[9]) != Some(2)
+            || w(&c[1]) != w(&c[2]) || w(&code[1]) != Some(iter) || w(&code[2]) != Some(0)
+            { return None; }
+        let target = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+        let loop_at = target(&c[3])?;
+        if loop_at != code[6].offset_dw as i64 || target(&code[5]) != Some(c[0].offset_dw as i64)
+            || !range_for_iterator_slots(f, refs).contains(&iter) { return None; }
+        let element = *proceed_element_slots(f, refs).get(&iter)?;
+        let object_type = |slot| {
+            let mut entries = f.obj_locals.iter().filter(|(offset, _)| *offset == slot);
+            let (_, ptr) = entries.next()?;
+            if entries.next().is_some() { return None; }
+            refs.type_identity_by_ptr(*ptr)
+        };
+        let ty = object_type(src)?;
+        if !is_object_handle_type(&ty.name) || object_type(dst)? != ty || object_type(element)? != ty { return None; }
+        let uses = |slot| code.iter().enumerate().filter(move |(_, i)|
+            super::bytediff::addressed_slots(i).contains(&slot)).map(|(at, _)| at).collect::<Vec<_>>();
+        if uses(dst) != [tail_at + 5, tail_at + 6] { return None; }
+        let source = uses(src);
+        let [write, read] = source.as_slice() else { return None; };
+        if *read != tail_at + 4 || *write <= 6 || *write >= tail_at
+            || code[*write].op.name != "RefCpyV" || code[*write - 1].op.name != "PshVPtr"
+            || w(&code[*write - 1]) != Some(element) { return None; }
+        let id = *c[8].dwords.first()? as i32;
+        let ret = refs.func_ret_by_id(id)?;
+        let [arg] = refs.func_params_by_id(id)? else { return None; };
+        if !refs.is_method_by_id(id) || ret.token != 0x52 || ret.is_reference
+            || arg.token != 5 || !arg.is_object_handle || arg.is_reference || arg.is_object_const
+            || refs.type_identity_by_ptr(arg.type_info)? != ty { return None; }
+        if code[..code.len()-1].iter().any(|i| matches!(i.op.name, "JMPP" | "RET")
+            || (i.op.name.starts_with('J') && target(i).is_some_and(|t|
+                t >= c[4].offset_dw as i64 || t == code[*write].offset_dw as i64))) { return None; }
+        Some((dst, src))
+    })();
+    witness.into_iter().collect()
 }
 
 fn fold_alias_copies(body: &str, locals: &BTreeMap<i32, String>, keep: &HashSet<i32>) -> String {
@@ -20270,6 +20329,38 @@ fn next_declaration_to_split(
     None
 }
 
+/// A by-value result already exists when the next call's argument pushes start.
+/// Preserve its single life when only a scalar member is passed on: looking for
+/// a later PSF of the whole result misses this member-read form.
+fn member_results_before_argument_pushes(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    if code.iter().any(|i| i.op.name.starts_with('J')) { return HashSet::new(); }
+    code.windows(11).enumerate().filter_map(|(at, c)| {
+        if c.iter().map(|i| i.op.name).ne(["PSF", "PshVPtr", "CALLINTF", "PshNull", "SetV1",
+            "PshV4", "PshGPtr", "PshGPtr", "LoadVObjR", "RDR8", "PshV8"]) { return None; }
+        let w = |i: usize| c[i].words.first().map(|w| *w as i16 as i32);
+        let slot = w(0)?;
+        if slot <= 0 || w(1) != Some(0) || w(8) != Some(slot) || w(4) != w(5)
+            || c[4].dwords.first() != Some(&0) || w(9) != w(10)
+            || [w(4)?, w(9)?].iter().any(|s| *s <= 0 || *s == slot)
+            || code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&slot))
+                .map(|(i, _)| i).ne([at, at + 8]) { return None; }
+        let id = *c[2].dwords.first()? as i32;
+        let ret = refs.func_ret_by_id(id)?;
+        if !refs.is_method_by_id(id) || ret.token != 5 || ret.is_reference || ret.is_object_handle
+            || f.obj_locals.iter().filter(|(s, _)| *s == slot).map(|(_, ty)| *ty).ne([ret.type_info]) { return None; }
+        let owner = refs.type_identity_by_ptr(ret.type_info)?;
+        let tid = *c[8].dwords.first()? as i32;
+        let offset = *c[8].words.get(1)? as i16 as i32;
+        let (field, old_owner) = refs.member_identity(tid, offset)?;
+        if !owner.module.is_empty() || !owner.namespace.is_empty()
+            || refs.type_identity_by_id(tid)? != owner || refs.type_identity_by_id(old_owner)? != owner
+            || refs.native_field_value_type(&owner.name, field).or_else(|| refs.native_field_type(&owner.name, field))? != "float"
+        { return None; }
+        Some(slot)
+    }).collect()
+}
+
 /// A copied value exists before the enclosing method's constant arguments.
 /// Keep that one closed receiver life: inlining moves the constants before its
 /// construction and prevents the original scratch slot from being reused.
@@ -23614,6 +23705,11 @@ fn strip_unreachable<'a>(lines: &[&'a str], at: &mut usize, kept: &mut Vec<&'a s
         let trimmed = line.trim();
         if trimmed == "}" {
             break;
+        }
+        // A switch label is another entry into this block. A preceding arm's
+        // return or break makes only the remainder of that arm unreachable.
+        if trimmed == "default:" || (trimmed.starts_with("case ") && trimmed.ends_with(':')) {
+            leaves = false;
         }
         let mut dead = Vec::new();
         let out = if leaves { &mut dead } else { &mut *kept };
@@ -30084,6 +30180,19 @@ mod literal_value_lifetime_tests {
     }
 
     #[test]
+    fn unreachable_keeps_switch_entries_after_return_and_break() {
+        let body = "switch (Value)\n{\n    case 3:\n        return 2;\n        DeadA();\n    case 2:\n        break;\n        DeadB();\n    case 1:\n    default:\n        return 0;\n        DeadC();\n}\nAfterSwitch();\n";
+        let expected = body.replace("        DeadA();\n", "").replace("        DeadB();\n", "")
+            .replace("        DeadC();\n", "");
+        assert_eq!(super::drop_unreachable_statements(body), expected);
+        // Labels inside an already unreachable nested statement cannot revive it.
+        let dead = format!("return;\n{body}");
+        assert_eq!(super::drop_unreachable_statements(&dead), "return;\n");
+        let nested = "switch (First)\n{\n    case 1:\n        switch (Second)\n        {\n            case 2:\n                return 2;\n            default:\n                break;\n        }\n        AfterNested();\n        break;\n    default:\n        return 0;\n}\nAfterOuter();\n";
+        assert_eq!(super::drop_unreachable_statements(nested), nested);
+    }
+
+    #[test]
     fn unreachable_preserves_bare_block_after_if_else_and_loop_continuation() {
         let body = "    while (More())\n    {\n        if (Choose())\n        {\n            First();\n        }\n        else\n        {\n            Second();\n        }\n        {\n            Handle local_96 = local_98;\n            Use(local_96);\n        }\n        Advance();\n    }\n    SayMultiple();\n";
         assert_eq!(super::drop_unreachable_statements(body), body);
@@ -30786,6 +30895,39 @@ mod literal_value_lifetime_tests {
         let mut entered = function(&[("JMP", &[])]); entered.bytecode[1] = code[9].offset_dw as i32;
         entered.bytecode.extend(f.bytecode.clone()); entered.ret = f.ret.clone(); entered.obj_locals = f.obj_locals.clone();
         assert!(super::reused_null_guard_getter_slots(&entered, &refs).is_empty());
+    }
+
+    #[test]
+    fn a_value_member_read_after_argument_pushes_keeps_its_producer_statement() {
+        let refs = RefResolver::from_test_member_result_before_arguments(0);
+        let mut f = function(&[("PSF", &[18]), ("PshVPtr", &[0]), ("CALLINTF", &[]), ("PshNull", &[]),
+            ("SetV1", &[23]), ("PshV4", &[23]), ("PshGPtr", &[]), ("PshGPtr", &[]),
+            ("LoadVObjR", &[18, 0]), ("RDR8", &[8]), ("PshV8", &[8]), ("RET", &[2])]);
+        f.obj_locals = vec![(18, 1)];
+        let code = disassemble(&f.bytecode).unwrap();
+        f.bytecode[code[2].offset_dw + 1] = 10;
+        f.bytecode[code[8].offset_dw + 2] = 1;
+        let check = |f: &Func, refs: &RefResolver| super::member_results_before_argument_pushes(f, refs);
+        assert_eq!(check(&f, &refs), HashSet::from([18]));
+        let source = "FPoint local_18 = this.Floor();\nfloat local_8 = local_18.Z;\nUse(local_8);\n";
+        let inline = |keep: &HashSet<i32>| super::inline_unnamed_value_temporaries(source, &HashSet::from([(18, 1)]),
+            &HashSet::new(), &HashSet::new(), &refs, &HashSet::new(), keep, &HashMap::new(),
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
+        assert_eq!(inline(&check(&f, &refs)), source);
+        assert_ne!(inline(&HashSet::new()), source);
+        for fault in 1..=6 {
+            assert!(check(&f, &RefResolver::from_test_member_result_before_arguments(fault)).is_empty(), "metadata {fault}");
+        }
+        for (at, word, value) in [(1, 0, 2), (4, 1, 1), (8, 2, 2), (10, 0, 9)] {
+            let mut wrong = f.clone();
+            let pos = code[at].offset_dw + word;
+            if word == 0 { wrong.bytecode[pos] = (wrong.bytecode[pos] & 0xffff) | (value << 16); }
+            else { wrong.bytecode[pos] = value; }
+            assert!(check(&wrong, &refs).is_empty(), "operand {at}/{word}");
+        }
+        let mut wrong = f.clone(); wrong.obj_locals[0].1 = 2; assert!(check(&wrong, &refs).is_empty());
+        let mut extra = f.clone(); extra.bytecode.extend(function(&[("PSF", &[18])]).bytecode); assert!(check(&extra, &refs).is_empty());
+        let mut jump = f.clone(); jump.bytecode.splice(0..0, function(&[("JMP", &[])]).bytecode); assert!(check(&jump, &refs).is_empty());
     }
 
     #[test]
@@ -31894,6 +32036,67 @@ mod literal_value_lifetime_tests {
             assert_eq!(super::call_results_before_parameter_comparisons(&candidate, &refs, true),
                 if fault == 0 { HashSet::from([4]) } else { HashSet::new() }, "fault={fault}");
         }
+    }
+
+    fn loop_result_alias_fixture() -> Func {
+        let mut f = function(&[("SetV8", &[4]), ("PSF", &[14]), ("PshVPtr", &[0]), ("ADDSi", &[0]),
+            ("CALLSYS", &[]), ("JMP", &[]), ("SUSPEND", &[]), ("PSF", &[14]), ("CALLSYS", &[]),
+            ("PshRPtr", &[]), ("RDSPtr", &[]), ("RefCpyV", &[24]), ("PshVPtr", &[24]),
+            ("RefCpyV", &[8]), ("FreeNullV8", &[24]), ("LoadVObjR", &[14, 0]),
+            ("RDR1", &[21]), ("CpyVtoR1", &[21]), ("JLowNZ", &[]), ("PshVPtr", &[8]),
+            ("RefCpyV", &[2]), ("PshVPtr", &[2]), ("PshVPtr", &[0]), ("CALLINTF", &[]), ("RET", &[2])]);
+        f.ret.token = 0x52; f.obj_locals = vec![(2, 1), (8, 1), (24, 1), (14, 2)];
+        let c = super::disassemble(&f.bytecode).unwrap();
+        for (at, ptr) in [(4, 1), (8, 2), (23, 3)] { f.bytecode[c[at].offset_dw+1] = ptr; }
+        for (at, to) in [(5, 15), (18, 6)] {
+            f.bytecode[c[at].offset_dw+1] = c[to].offset_dw as i32 - c[at].offset_dw as i32 - 2;
+        }
+        f
+    }
+
+    #[test]
+    fn a_loop_result_alias_keeps_the_copy_and_separate_function_declarations() {
+        let f = loop_result_alias_fixture(); let refs = RefResolver::from_test_loop_result_handle_aliases(0);
+        let aliases = super::loop_result_handle_aliases(&f, &refs, true);
+        assert_eq!(aliases, HashMap::from([(2, 8)]));
+        let keep: HashSet<_> = aliases.keys().copied().collect();
+        let locals = BTreeMap::from([(2, "UCharacter".into()), (8, "UCharacter".into())]);
+        let body = "    float local_4 = 1.0;\n    for (auto local_24 : Items)\n    {\n        local_8 = local_24;\n    }\n    local_2 = local_8;\n    this.Select(local_2);\n    return;\n";
+        assert!(!super::fold_alias_copies(body, &locals, &HashSet::new()).contains("local_2 ="));
+        let body = super::fold_alias_copies(body, &locals, &keep);
+        let (body, suppressed) = super::rewrite_first_use_decl_init(&body, &locals, &refs, &HashSet::new(),
+            &HashMap::new(), &keep, &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new());
+        assert!(!suppressed.contains(&2));
+        let (body, suppressed) = super::rewrite_bare_decl_at_first_write(&body, &locals, &refs, &HashSet::new(), &keep);
+        assert!(!suppressed.contains(&2));
+        let body = format!("    UCharacter local_2;\n    UCharacter local_8;\n{body}");
+        let body = super::sink_declarations_into_their_block(&body, &HashSet::new(), &HashSet::new());
+        let body = super::sink_declarations_to_first_use(&body, &aliases.values().copied().collect());
+        let body = super::fold_alias_copies(&body, &locals, &keep);
+        assert!(body.starts_with("    UCharacter local_2;\n    float local_4 = 1.0;\n    UCharacter local_8;\n    for ("), "{body}");
+        assert!(body.contains("    local_2 = local_8;\n    this.Select(local_2);"), "{body}");
+        assert!(!body.contains("local_2_"), "{body}");
+    }
+
+    #[test]
+    fn loop_result_aliases_reject_reuse_and_incomplete_argument_paths() {
+        let f = loop_result_alias_fixture(); let refs = RefResolver::from_test_loop_result_handle_aliases(0);
+        let check = |f: &Func, refs: &RefResolver| super::loop_result_handle_aliases(f, refs, true);
+        for fault in [1, 2] { assert!(check(&f, &RefResolver::from_test_loop_result_handle_aliases(fault)).is_empty()); }
+        assert!(super::loop_result_handle_aliases(&f, &refs, false).is_empty());
+        let c = super::disassemble(&f.bytecode).unwrap();
+        // Replace the one-word SUSPEND inside the loop; leave the complete
+        // prefix, tail, and every jump intact so these reach the whole-life gate.
+        for (op, slot) in [("PshVPtr", 2), ("RefCpyV", 8), ("PSF", 8)] {
+            let mut other = f.clone();
+            let added = function(&[(op, &[slot])]); assert_eq!(added.bytecode.len(), 1);
+            other.bytecode[c[6].offset_dw] = added.bytecode[0];
+            assert!(check(&other, &refs).is_empty());
+        }
+        let mut other = f.clone(); other.bytecode[c[5].offset_dw+1] = c[20].offset_dw as i32 - c[5].offset_dw as i32 - 2;
+        assert!(check(&other, &refs).is_empty());
+        let mut other = f.clone(); other.obj_locals.push((8, 1)); assert!(check(&other, &refs).is_empty());
+        let mut other = f.clone(); other.obj_locals[2].1 = 3; assert!(check(&other, &refs).is_empty());
     }
 
     #[test]

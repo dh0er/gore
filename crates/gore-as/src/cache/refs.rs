@@ -1933,6 +1933,36 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_member_result_before_arguments(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FPoint", "Z"), ("FPoint", "Z")]);
+        for id in [1, 2] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: "FPoint".into(), namespace: String::new(),
+                module: if id == 2 || fault == 1 { "Other".into() } else { String::new() } });
+        }
+        r.prop_type_id.insert(3, if fault == 2 { 2 } else { 1 });
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(
+            &[("FPoint", "Z", if fault == 3 { "double" } else { "float" })], &[], None));
+        r.funcid_to_ptr.insert(10, 10); r.func_by_ptr.insert(10, "Floor".into());
+        r.func_owner.insert(10, "AOwner".into());
+        if fault != 4 { r.func_is_method.insert(10); }
+        r.func_ret.insert(10, DataType { token: 5, type_info: 1,
+            is_reference: fault == 5, is_object_handle: fault == 6, ..Default::default() });
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_scalar_predicate_widening(fault: u8) -> Self {
+        let mut r = Self::default();
+        r.func_by_ptr.insert(10, "Near".into());
+        if fault == 1 { r.func_is_method.insert(10); }
+        if fault == 2 { r.func_owner.insert(10, "FMath".into()); }
+        r.func_ret.insert(10, DataType { token: if fault == 3 { 0x44 } else { 0x41 }, ..Default::default() });
+        r.func_params.insert(10, (0..if fault == 4 { 2 } else { 3 }).map(|_| DataType {
+            token: if fault == 5 { 0x50 } else { 0x51 }, is_reference: fault == 6, ..Default::default() }).collect());
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_copy_before_value_chain(mutable: bool) -> Self {
         let mut r = Self::default(); r.type_by_ptr.insert(100, "FVector".into()); r.type_names.insert("FVector".into());
         let value = DataType { token: 5, type_info: 100, ..Default::default() };
@@ -2474,6 +2504,35 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_ordered_parameter_equality(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FInput", "Field"), ("TWeakValue", ""),
+            ("AActor", ""), ("AGothicCharacter", "")]);
+        for (id, name) in [(1, "FInput"), (2, "TWeakValue"), (3, "AActor"), (4, "AGothicCharacter")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: name.into(), module: String::new(),
+                namespace: if fault == 5 && id == 4 { "Other" } else { "" }.into() });
+        }
+        if fault == 6 {
+            r.type_by_ptr.insert(3, "UObject".into());
+            r.type_identity_by_ptr.get_mut(&3).unwrap().name = "UObject".into();
+        }
+        r.prop_type_id.insert(3, if fault == 1 { 2 } else { 1 });
+        r.type_subtypes.insert(2, vec![DataType { token: 5, type_info: 3, ..Default::default() }]);
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(
+            &[("FInput", "Field", if fault == 2 { "FOther" } else { "TWeakValue<AActor>" })], &[], None));
+        for (id, name, owner) in [(1, "Acquire", "FInput"), (2, "opEquals", "TWeakValue")] {
+            r.func_by_ptr.insert(id, name.into()); r.func_owner.insert(id, owner.into());
+            r.func_is_method.insert(id); r.const_method_ptrs.insert(id);
+        }
+        if fault == 3 { r.const_method_ptrs.remove(&2); }
+        r.func_ret.insert(1, DataType { token: 5, type_info: 4, is_object_handle: true, ..Default::default() });
+        r.func_params.insert(1, Vec::new());
+        r.func_ret.insert(2, DataType { token: 0x41, ..Default::default() });
+        r.func_params.insert(2, vec![DataType { token: 5, type_info: 3, is_object_handle: true,
+            is_reference: fault == 4, ..Default::default() }]);
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_cast_member_assignment(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("UConfig", "Override"), ("ABaseProjectile", "Collision"),
             ("UCollision", "Weapon"), ("TSubclassOf", ""), ("UWeapon", ""), ("USpecialWeapon", ""),
@@ -2650,6 +2709,21 @@ impl RefResolver {
         let field_type = if fault == 1 { "UOther" } else { "AActor" };
         r.set_native_api(super::binds::NativeApi::from_test_field_types(
             &[("UHolder", "Target", field_type), ("UOtherHolder", "Target", "AActor")], &[], None));
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_loop_result_handle_aliases(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UCharacter", ""), ("TArrayIterator", "CanProceed"), ("UOther", "")]);
+        for (id, name) in [(1, "UCharacter"), (2, "TArrayIterator"), (3, "UOther")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        for (id, name) in [(1, "Iterator"), (2, "Proceed"), (3, "Select")] {
+            r.func_by_ptr.insert(id, name.into()); r.funcid_to_ptr.insert(id as i32, id); r.func_is_method.insert(id);
+        }
+        r.func_params.insert(3, vec![DataType { token: 5, type_info: if fault == 2 { 3 } else { 1 },
+            is_object_handle: true, is_reference: fault == 1, ..Default::default() }]);
+        r.func_ret.insert(3, DataType { token: 0x52, ..Default::default() });
         r
     }
 

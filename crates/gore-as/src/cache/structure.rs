@@ -506,6 +506,22 @@ fn enum_parameter_field_type(
         .map(str::to_owned)
 }
 
+/// A widened first argument plus two f64 constants selects the native f64
+/// predicate overload. An implicit initializer can instead select its f32 peer.
+fn scalar_predicate_widening(instrs: &[Instr], at: usize, refs: &RefResolver) -> bool {
+    let Some(c) = at.checked_sub(2).and_then(|lo| instrs.get(lo..lo + 5)) else { return false; };
+    if c.iter().map(|i| i.op.name).ne(["PshC8", "PshC8", "fTOd", "PshV8", "CALLSYS"])
+        || c[2].words.first().is_none() || c[2].words.first() != c[3].words.first()
+        || c[..2].iter().any(|i| !i.qwords.first().is_some_and(|q| f64::from_bits(*q).is_finite()))
+    { return false; }
+    let Some(ptr) = c[4].qwords.first().map(|p| *p as i64) else { return false; };
+    let Some(params) = refs.func_params_by_ptr(ptr) else { return false; };
+    !refs.is_method_by_ptr(ptr) && refs.func_owner_by_ptr(ptr).is_none()
+        && refs.func_ret_by_ptr(ptr).is_some_and(|r| r.token == 0x41 && !r.is_reference && !r.is_object_handle)
+        && params.len() == 3 && params.iter().all(|p| matches!(p.token, 0x51 | 0x5e)
+            && !p.is_reference && !p.is_object_handle)
+}
+
 fn addressed_field_widening(instrs: &[Instr], at: usize) -> bool {
     let Some(previous) = at.checked_sub(1).and_then(|i| instrs.get(i)) else { return false; };
     let Some(convert) = instrs.get(at) else { return false; };
@@ -3399,6 +3415,59 @@ fn restored_cast_member_assignment(
 }
 
 
+/// Preserve a native equality method whose handle argument was evaluated before
+/// taking a const value-parameter field's address. Infix == would copy that field
+/// before the argument call; the explicit method preserves the recorded order.
+fn ordered_parameter_field_equality(ctx: &Ctx, at: usize, stack: &[Arg]) -> Option<String> {
+    let code = ctx.instrs.get(at.checked_sub(5)?..=at)?;
+    if code.iter().map(|i| i.op.name).ne(["CALLSYS", "STOREOBJ", "PshVPtr", "PshVPtr", "ADDSi", "CALLSYS"])
+        || !ctx.instrs.get(at+1).is_some_and(|i| matches!(i.op.name, "JLowZ" | "JLowNZ")) { return None; }
+    let [rhs, recv] = stack else { return None; };
+    let w = |i: &Instr| i.words.first().copied().map(s16);
+    let slot = w(&code[1])?; let parameter = w(&code[3])?;
+    if slot <= 0 || parameter >= 0 || w(&code[2]) != Some(slot)
+        || rhs.s != ctx.slot_name(slot) || rhs.is_psf || recv.is_psf { return None; }
+    let owner_id = *code[4].dwords.first()? as i32;
+    let owner = ctx.refs.type_identity_by_id(owner_id)?;
+    let (field, old) = ctx.refs.member_identity(owner_id, w(&code[4])?)?;
+    let input = ctx.f.param_types.get(*ctx.param_off_map.get(&parameter)?)?;
+    if !owner.module.is_empty() || !owner.namespace.is_empty() || ctx.refs.type_identity_by_id(old)? != owner
+        || input.token != 5 || !input.is_reference || input.is_object_handle || !input.is_object_const
+        || ctx.refs.type_identity_by_ptr(input.type_info)? != owner { return None; }
+    let field_ty = ctx.refs.native_field_value_type(&owner.name, field)?;
+    let ptr = *code[5].qwords.first()? as i64;
+    let [arg] = ctx.refs.func_params_by_ptr(ptr)? else { return None; };
+    let ret = ctx.refs.func_ret_by_ptr(ptr)?;
+    if ctx.refs.func_by_ptr(ptr) != Some("opEquals") || !ctx.refs.is_method_by_ptr(ptr)
+        || !ctx.refs.is_const_method_by_ptr(ptr) || ret.token != 0x41 || ret.is_reference || ret.is_object_handle
+        || arg.token != 5 || !arg.is_object_handle || arg.is_reference
+        || !matches!(field_ty.as_bytes().first(), Some(b'F' | b'T'))
+        || ctx.refs.func_owner_by_ptr(ptr) != field_ty.split('<').next()
+        || recv.s != format!("{}.{field}", ctx.slot_name(parameter)) || recv.ty.as_deref().is_some_and(|ty| ty != field_ty)
+        { return None; }
+    let producer = *code[0].qwords.first()? as i64;
+    let value = ctx.refs.func_ret_by_ptr(producer)?;
+    if value.token != 5 || !value.is_object_handle || value.is_reference
+        || (value.is_object_const && !arg.is_object_const)
+        || ctx.slot_type(slot).as_deref() != Some(value.base_name(ctx.refs).as_str())
+        || !(ctx.refs.is_subclass(&value.base_name(ctx.refs), &arg.base_name(ctx.refs))
+            || (arg.base_name(ctx.refs) == "AActor"
+                && provably_derived(&value.base_name(ctx.refs), "AActor", ctx.refs))) { return None; }
+    if ctx.instrs.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J')
+        && i.dwords.first().is_some_and(|d| {
+            let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+            target > code[0].offset_dw as i64 && target <= code[5].offset_dw as i64
+        }))) { return None; }
+    // The native hierarchy convention is used only for these fully resolved,
+    // unqualified native identities, never for similarly named script types.
+    for data in [value, arg] {
+        let identity = ctx.refs.type_identity_by_ptr(data.type_info)?;
+        if !identity.module.is_empty() || !identity.namespace.is_empty() { return None; }
+    }
+    let call = format!("{}.opEquals({})", recv.s, cast_arg(rhs, arg, ctx.refs));
+    (!call.contains(['\u{1}', '\u{2}'])).then_some(call)
+}
+
 /// Type carried by a member-address register when `PshRPtr` turns it back into a call
 /// argument. Prefer the field's precise script value type; native structs have no field-value
 /// metadata in the script cache, so an independently resolved native ENUM type is the next
@@ -5714,22 +5783,27 @@ fn block_stmts_in(
                         ref_reg_nfty = None;
                         ref_reg_vty = None;
                     }
-                    build_call(
-                        &mut stack,
-                        &qualified,
-                        ctx.refs.is_method_by_ptr(ptr),
-                        ctx.super_ctor,
-                        ctx.refs.func_params_by_ptr(ptr),
-                        na,
-                        trusted,
-                        ctx.refs.func_owner_by_ptr(ptr),
-                        ctx.class_name,
-                        false,
-                        pending_ty.as_deref(),
-                        ret_is_ref,
-                        false,
-                        ctx.refs,
-                    )
+                    if let Some(call) = ordered_parameter_field_equality(ctx, lo + k, &stack) {
+                        stack.clear();
+                        Some(call)
+                    } else {
+                        build_call(
+                            &mut stack,
+                            &qualified,
+                            ctx.refs.is_method_by_ptr(ptr),
+                            ctx.super_ctor,
+                            ctx.refs.func_params_by_ptr(ptr),
+                            na,
+                            trusted,
+                            ctx.refs.func_owner_by_ptr(ptr),
+                            ctx.class_name,
+                            false,
+                            pending_ty.as_deref(),
+                            ret_is_ref,
+                            false,
+                            ctx.refs,
+                        )
+                    }
                 };
                 // batch-31b: tag a resolved static-name FName literal (see the flag's doc).
                 // build_call returns the literal only for the accessor name; a failed gate
@@ -6657,7 +6731,8 @@ fn block_stmts_in(
                 // materialized conversion temporary. An implicit initializer adds
                 // a copy before the PSF; an explicit cast writes that slot directly.
                 let cast = narrowing_cast_target(n2).or_else(||
-                    addressed_field_widening(ctx.instrs, lo + k).then_some("float"));
+                    (addressed_field_widening(ctx.instrs, lo + k)
+                        || scalar_predicate_widening(ctx.instrs, lo + k, ctx.refs)).then_some("float"));
                 match cast {
                     Some(t) => out.push(format!("{dst} = {t}({src});")),
                     None => out.push(format!("{dst} = {src};")),
@@ -9017,9 +9092,21 @@ impl Structurer<'_> {
         for (n, lines) in rendered[1..].iter().enumerate() {
             let label = if n == 2 { "default".to_string() }
                 else { format!("case {}", if i+4+n == first_arm { first } else { second }) };
-            let _ = writeln!(out, "{ind}    {label}:\n{ind}    {{");
+            // Dead constant stores disappear in the later emitter pass. They
+            // introduce no declarations and do not require a case-local scope.
+            let constant_store = lines.len() == 2 && lines[1].strip_prefix("return ")
+                .and_then(|s| s.strip_suffix(';')).is_some_and(|value|
+                    value.parse::<i32>().is_ok() && lines[0].strip_prefix("local_")
+                        .and_then(|s| s.split_once(" = ")).is_some_and(|(slot, rhs)|
+                            !slot.is_empty() && slot.bytes().all(|b| b.is_ascii_digit())
+                                && rhs == format!("{value};")));
+            let scoped = !constant_store && (lines.len() != 1 || !lines[0].starts_with("return "));
+            let _ = writeln!(out, "{ind}    {label}:");
+            // A redundant scope around a terminal constant return forces an
+            // otherwise absent jump to the common native-cleanup return.
+            if scoped { let _ = writeln!(out, "{ind}    {{"); }
             for line in lines { let _ = writeln!(out, "{ind}        {line}"); }
-            let _ = writeln!(out, "{ind}    }}");
+            if scoped { let _ = writeln!(out, "{ind}    }}"); }
         }
         let _ = writeln!(out, "{ind}}}");
         Some(stop)
@@ -11335,6 +11422,68 @@ mod tests {
         assert!(!render_cast_member_assignment(&outside, &refs).contains(".Weapon ="));
     }
 
+    fn ordered_parameter_equality_fixture() -> CompoundFixture {
+        let mut a = TestAssembler::default();
+        // A handle call is complete before the native value field is addressed.
+        a.op("PshVPtr", &[(-2i16) as u16], &[]); a.op("CALLSYS", &[], &[]);
+        a.op("STOREOBJ", &[6], &[]); a.op("PshVPtr", &[6], &[]);
+        a.op("PshVPtr", &[(-2i16) as u16], &[]); a.op("ADDSi", &[0], &[1]);
+        a.op("CALLSYS", &[], &[]); a.jump("JLowZ", "end");
+        a.op("SetV4", &[9], &[1]); a.label("end"); a.op("RET", &[4], &[]);
+        let mut f = a.finish(); f.instrs[1].qwords = vec![1]; f.instrs[6].qwords = vec![2]; f
+    }
+
+    fn render_ordered_parameter_equality(fixture: &CompoundFixture, refs: &RefResolver, const_input: bool) -> String {
+        let f = FuncCode { func: "UHost::Check".into(), is_method: true,
+            param_names: vec!["input".into()], param_types: vec![DataType { token: 5, type_info: 1,
+                is_reference: true, is_object_const: const_input, ..Default::default() }],
+            ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+        let locals = HashMap::from([(6, "AGothicCharacter".into()), (9, "int".into())]);
+        let ctx = Ctx { f: &f, refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret),
+            fields: None, param_types: None, class_name: Some("UHost"), local_types: Some(&locals),
+            float_slots: Default::default(), param_off_map: HashMap::from([(-2, 0)]), rvo_off: None,
+            keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+        let g = cfg::build(&fixture.instrs);
+        let idx_of = g.blocks.iter().enumerate().map(|(i,b)| (b.start_dw,i)).collect();
+        let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of, exit_join: None,
+            exit_join_is_ret: false, exit_ret_rows_ok: false, exit_rvo_return: false,
+            exit_mixed_rvo_ret_rows_ok: false, exit_scan_floor: 0, carry: None,
+            loop_scope: None, shared_return: None };
+        let mut out = String::new(); st.emit_range(0, g.blocks.len(), 0, &mut out); out
+    }
+
+    #[test]
+    fn native_parameter_field_equality_preserves_its_argument_first_method_form() {
+        let f = ordered_parameter_equality_fixture();
+        let refs = RefResolver::from_test_ordered_parameter_equality(0);
+        // RefResolver's known-native chain ends at ACharacter. The production
+        // field call needs the already established, narrower AActor convention.
+        assert!(!refs.is_subclass("AGothicCharacter", "AActor"));
+        let out = render_ordered_parameter_equality(&f, &refs, true);
+        assert!(out.contains("local_6 = input.Acquire();"), "{out}");
+        assert!(out.contains("input.Field.opEquals(local_6)"), "{out}");
+        // ADDSi deliberately has no broad native-value Arg.ty fallback. Its exact
+        // property identity is sufficient here, without widening that shared path.
+        assert!(!out.contains("input.Field =="), "{out}");
+    }
+
+    #[test]
+    fn native_parameter_field_equality_rejects_other_types_and_frames() {
+        let f = ordered_parameter_equality_fixture();
+        for fault in 1..=6 {
+            assert!(!render_ordered_parameter_equality(&f,
+                &RefResolver::from_test_ordered_parameter_equality(fault), true).contains(".opEquals("), "{fault}");
+        }
+        let refs = RefResolver::from_test_ordered_parameter_equality(0);
+        assert!(!render_ordered_parameter_equality(&f, &refs, false).contains(".opEquals("));
+        let mut other = f.clone(); other.instrs[3].words[0] = 8;
+        assert!(!render_ordered_parameter_equality(&other, &refs, true).contains(".opEquals("));
+        let mut incoming = f.clone();
+        incoming.instrs[7].dwords[0] = (incoming.instrs[3].offset_dw as i64
+            - incoming.instrs[7].offset_dw as i64 - 2) as i32 as u32;
+        assert!(!render_ordered_parameter_equality(&incoming, &refs, true).contains(".opEquals("));
+    }
+
     #[test]
     fn member_address_after_rvo_pushes_the_loaded_field() {
         // GetDisplayName's real prefix: a hidden value destination, a script
@@ -12370,6 +12519,9 @@ mod tests {
             assert_eq!(two < three, reverse, "{source}");
             assert!(source.find("return 0;").unwrap() < source.find("switch (").unwrap(), "{source}");
             assert!(!source.contains("break;"), "{source}");
+            for label in ["case 2", "case 3", "default"] {
+                assert!(!source.contains(&format!("{label}:\n    {{")), "redundant case scope: {source}");
+            }
             assert!(source.trim_end().ends_with('}'), "shared RET was emitted twice: {source}");
         }
     }
@@ -12717,6 +12869,28 @@ mod tests {
             "UAIState_PerceptionResponse", "Priority"), None);
         assert_eq!(enum_parameter_field_type(&refs, "UAIState_PerceptionResponse",
             "UAIState_PerceptionResponse", "MissingField"), None);
+    }
+
+    #[test]
+    fn a_native_f64_predicate_keeps_the_widened_argument_explicit() {
+        let ins = |name, words: &[u16], qwords: &[u64]| Instr {
+            offset_dw: 0, op: crate::cache::isa::OPCODES.iter().find(|op| op.name == name).unwrap(),
+            words: words.to_vec(), dwords: Vec::new(), qwords: qwords.to_vec(),
+        };
+        let refs = RefResolver::from_test_scalar_predicate_widening(0);
+        let code = vec![ins("PshC8", &[], &[0.0001f64.to_bits()]), ins("PshC8", &[], &[1.0f64.to_bits()]),
+            ins("fTOd", &[12,6], &[]), ins("PshV8", &[12], &[]), ins("CALLSYS", &[], &[10])];
+        assert!(scalar_predicate_widening(&code, 2, &refs));
+        for fault in 1..=6 {
+            assert!(!scalar_predicate_widening(&code, 2, &RefResolver::from_test_scalar_predicate_widening(fault)), "metadata {fault}");
+        }
+        for (at, other) in [(0, ins("PshC4", &[], &[0])), (1, ins("PshC8", &[], &[f64::NAN.to_bits()])),
+            (2, ins("iTOd", &[12,6], &[])), (3, ins("PshV8", &[14], &[])), (4, ins("CALLSYS", &[], &[11]))] {
+            let mut wrong = code.clone(); wrong[at] = other;
+            assert!(!scalar_predicate_widening(&wrong, 2, &refs), "instruction {at}");
+        }
+        assert!(!scalar_predicate_widening(&code, 0, &refs));
+        assert!(!scalar_predicate_widening(&code[..4], 2, &refs));
     }
 
     #[test]
