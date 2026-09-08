@@ -2826,6 +2826,24 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_reloaded_field_address_read(fault: u8) -> Self {
+        let mut r = Self::from_test_reloaded_field_sum(false);
+        let scalar = DataType { token: 0x51, ..Default::default() };
+        let input = DataType { is_reference: true, is_object_const: true, is_read_only: true,
+            ..scalar.clone() };
+        r.func_by_ptr.insert(10, "Blend".into());
+        r.func_ret.insert(10, scalar);
+        r.func_params.insert(10, vec![input; 3]);
+        if fault == 1 { r.func_params.get_mut(&10).unwrap()[2].is_read_only = false; }
+        if fault == 2 { r.func_params.get_mut(&10).unwrap()[2].token = 0x50; }
+        if fault == 3 { r.func_ret.get_mut(&10).unwrap().is_reference = true; }
+        if fault == 4 { r.func_is_method.insert(10); }
+        if fault == 5 { r.func_params.get_mut(&10).unwrap().pop(); }
+        if fault == 6 { r.func_params.get_mut(&10).unwrap()[2].is_object_const = false; }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_reloaded_field_sum(wrong_owner: bool) -> Self {
         let mut r = Self::from_test_member_chain(&[("FHost", "Radius"), ("FHost", "Speed")]);
         for id in [1, 2] {

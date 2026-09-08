@@ -12335,6 +12335,58 @@ fn drop_block_end_handle_releases(text: &str) -> String {
     text
 }
 
+/// A terminal else releases only handles owned by its immediately enclosing block.
+/// That block already performs the same reverse-order cleanup on the fallthrough path.
+/// Keep function/outer-scope handles and explicit cleanup before a return unchanged.
+fn terminal_handle_cleanup_else(
+    lines: &[String], depths: &[usize], at: usize, body_depth: usize,
+) -> Option<usize> {
+    let line = |i: usize| lines.get(i).map(|s| s.trim());
+    let head = at.checked_sub(4)?;
+    let depth = *depths.get(at)?;
+    if depth <= body_depth || line(at) != Some("else") || line(at + 1) != Some("{")
+        || !line(head)?.starts_with("if (") || !line(head)?.ends_with(')')
+        || line(head + 1) != Some("{") || line(at - 1) != Some("}")
+        || !line(at - 2)?.starts_with("return ") || !line(at - 2)?.ends_with(';')
+        || depths[head] != depth || depths[at - 2] != depth + 1
+    { return None; }
+    let borrowed: Vec<&str> = lines.iter().map(String::as_str).collect();
+    if matching_close(&borrowed, head + 1) != Some(at - 1) { return None; }
+    let close = matching_close(&borrowed, at + 1)?;
+    if close == at + 2 || line(close + 1) != Some("}")
+        || depths[close + 1] + 1 != depth
+    { return None; }
+    let open = (0..head).rev().find(|&i| line(i) == Some("{") && depths[i] + 1 == depth)?;
+    if matching_close(&borrowed, open) != Some(close + 1) { return None; }
+    let declaration = |s: &str| bare_declaration(s).map(|(_, n)| n)
+        .or_else(|| declaration_with_initializer(s).map(|(_, n, _)| n));
+    let mut handles = Vec::new();
+    for i in open + 1..head {
+        if depths[i] != depth { continue; }
+        let Some(name) = declaration(&lines[i]) else { continue; };
+        let ty = lines[i].trim().split_once(&format!(" {name}"))?.0;
+        if is_object_handle_type(ty) && !ty.contains('&') {
+            // Full rendered names delimit lives; neither another declaration nor an
+            // access outside this owning scope may inherit this cleanup exception.
+            if lines.iter().enumerate().any(|(j, s)|
+                (j < i || j > close + 1) && count_ident(s, &name) != 0
+                || j != i && declaration(s).as_deref() == Some(name.as_str()))
+            { return None; }
+            handles.push(name);
+        } else if !is_primitive(ty) {
+            // A value object's destructor could change the order of handle cleanup.
+            return None;
+        }
+    }
+    if handles.is_empty() || close - at - 2 != handles.len() { return None; }
+    for (i, name) in handles.iter().rev().enumerate() {
+        if line(at + 2 + i) != Some(format!("{name} = nullptr;").as_str())
+            || depths[at + 2 + i] != depth + 1
+        { return None; }
+    }
+    Some(close)
+}
+
 fn drop_one_block_end_handle_release(text: &str) -> String {
     let lines: Vec<String> = text.lines().map(str::to_owned).collect();
     let depths = block_depths(&lines);
@@ -12342,6 +12394,11 @@ fn drop_one_block_end_handle_release(text: &str) -> String {
         return text.to_owned();
     };
     let mut drop: Vec<bool> = vec![false; lines.len()];
+    for at in 0..lines.len() {
+        if let Some(close) = terminal_handle_cleanup_else(&lines, &depths, at, body_depth) {
+            drop[at..=close].fill(true);
+        }
+    }
     for (index, line) in lines.iter().enumerate() {
         let name = match bare_declaration(line) {
             Some((_, name)) => name,
@@ -14088,13 +14145,39 @@ fn explicitly_reloaded_field_sums(f: &Func, refs: &RefResolver, is_method: bool,
         let (name, old) = refs.member_identity(id, *i.words.get(word)? as i32)?;
         (refs.type_identity_by_id(old)? == owner).then_some((owner, name))
     };
+    // A later address of this field is only read by a typed native scalar call.
+    // Two literal arguments fix its position; all parameters are const f64 references.
+    let addressed_scalar_read = |at: usize| -> bool {
+        let Some(r) = code.get(at..at + 7) else { return false; };
+        if r.iter().map(|i| i.op.name).ne(["LoadThisR", "PshRPtr", "SetV8", "PSF", "SetV8", "PSF", "CALLSYS"])
+            || r[2].words.first().is_none_or(|v| *v as i16 <= 0)
+            || r[4].words.first().is_none_or(|v| *v as i16 <= 0)
+            || r[2].words.first() != r[3].words.first() || r[4].words.first() != r[5].words.first()
+            || r[2].words.first() == r[4].words.first() { return false; }
+        let ptr = r[6].qwords.first().copied().unwrap_or(0) as i64;
+        let scalar = |t: &super::types::DataType| matches!(t.token, 0x51 | 0x5e)
+            && t.type_info == 0 && !t.is_object_handle;
+        !refs.is_method_by_ptr(ptr) && refs.func_owner_by_ptr(ptr).is_none()
+            && refs.func_ret_by_ptr(ptr).is_some_and(|t| scalar(t) && !t.is_reference)
+            && refs.func_params_by_ptr(ptr).is_some_and(|p| p.len() == 3
+                && p.iter().all(|t| scalar(t) && t.is_reference && t.is_object_const && t.is_read_only))
+            && !code.iter().any(|i| i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                target > r[0].offset_dw as i64 && target <= r[6].offset_dw as i64
+            }))
+    };
     code.windows(8).filter_map(|c| {
         if c.iter().map(|i| i.op.name).ne(["LoadThisR", "RDR8", "LoadThisR", "RDR8",
             "MULd", "ADDd", "LoadThisR", "WRTV8"]) { return None; }
         let w = |i: usize, j: usize| c[i].words.get(j).map(|v| *v as i16 as i32);
-        let (target_slot, factor_slot, parameter) = (w(1,0)?, w(3,0)?, w(4,2)?);
+        let (target_slot, factor_slot) = (w(1,0)?, w(3,0)?);
+        let (parameter, parameter_first) = match (w(4,1)?, w(4,2)?) {
+            (field, param) if field == factor_slot && param < 0 => (param, false),
+            (param, field) if field == factor_slot && param < 0 => (param, true),
+            _ => return None,
+        };
         if target_slot <= 0 || factor_slot <= 0 || target_slot == factor_slot || parameter >= 0
-            || w(4,0) != Some(factor_slot) || w(4,1) != Some(factor_slot)
+            || w(4,0) != Some(factor_slot)
             || w(5,0) != Some(target_slot) || w(5,1) != Some(target_slot) || w(5,2) != Some(factor_slot)
             || w(7,0) != Some(target_slot) { return None; }
         let target = property(&c[0])?; let factor = property(&c[2])?;
@@ -14108,7 +14191,11 @@ fn explicitly_reloaded_field_sums(f: &Func, refs: &RefResolver, is_method: bool,
         for (at, i) in code.iter().enumerate() {
             if property(i) == Some(target) {
                 if i.op.name != "LoadThisR" { return None; }
-                match code.get(at+1)?.op.name { "RDR8" => {}, "WRTV8" => writes += 1, _ => return None }
+                match code.get(at+1)?.op.name {
+                    "RDR8" => {}, "WRTV8" => writes += 1,
+                    "PshRPtr" if i.offset_dw > c[7].offset_dw && addressed_scalar_read(at) => {},
+                    _ => return None,
+                }
             }
             if i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
                 let t = i.offset_dw as i64 + 2 + *d as i32 as i64;
@@ -14116,7 +14203,9 @@ fn explicitly_reloaded_field_sums(f: &Func, refs: &RefResolver, is_method: bool,
             })) { return None; }
         }
         if writes != 1 { return None; }
-        Some((format!("this.{}", target.1), format!("this.{} * {}", factor.1, p.name)))
+        let addend = if parameter_first { format!("{} * this.{}", p.name, factor.1) }
+            else { format!("this.{} * {}", factor.1, p.name) };
+        Some((format!("this.{}", target.1), addend))
     }).collect()
 }
 
@@ -16823,6 +16912,26 @@ fn unnamed_value_defs(
     out
 }
 
+/// The new right-literal case may use only the first direct comparison of an if/return.
+/// A copied or returned name from another physical-slot life is not such a reader.
+fn right_literal_comparison_reader(line: &str, name: &str, operand: &str) -> bool {
+    let line = line.trim();
+    let Some(mut expression) = line.strip_prefix("return ").and_then(|s| s.strip_suffix(';'))
+        .or_else(|| line.strip_prefix("if (").and_then(|s| s.strip_suffix(')')))
+    else { return false; };
+    while unwrap_brackets(expression) != expression { expression = unwrap_brackets(expression); }
+    if expression.contains(['"', '[', '?']) { return false; }
+    [" <= ", " >= ", " < ", " > "].iter().any(|op| {
+        let Some((left, right)) = expression.split_once(op) else { return false; };
+        // Parentheses on the left must balance: a comparison within a call's
+        // argument is not the direct comparison of the return/if expression.
+        !left.is_empty() && left.matches('(').count() == left.matches(')').count()
+            && top_level_logical_operator(left).is_none() && count_ident(left, operand) == 0
+            && right.strip_prefix(name).is_some_and(|tail|
+                tail.is_empty() || tail.starts_with(" && ") || tail.starts_with(" || "))
+    })
+}
+
 /// `T local_N = <expr>;` (or the split `local_N = <expr>;`) whose one reader is the statement
 /// directly below it, for a slot [`unnamed_value_slots`] proves the source never named. The name
 /// costs the copy vanilla does not have — and where the value is a branch condition it also costs
@@ -16901,7 +17010,13 @@ fn inline_unnamed_value_temporaries(
             let literal_seeded = || {
                 literal_seeded_temps.contains(&key.0)
                     && init.split(' ').count() == 3
-                    && init.split(' ').next().is_some_and(is_plain_literal)
+                    && (init.split(' ').next().is_some_and(is_plain_literal)
+                        || (init.split(' ').nth(1) == Some("+")
+                            && init.split(' ').last().is_some_and(is_plain_literal)
+                            && init.split(' ').next().is_some_and(|operand| is_decompiler_local(operand)
+                                && declared_type(&lines, operand).is_some_and(|ty| is_primitive(&ty))
+                                && lines.get(at + 1).is_some_and(|reader|
+                                    right_literal_comparison_reader(reader, &name, operand)))))
                     && !init.contains(['(', '"'])
             };
             // A member read consumed once — `int t = X.F + 1; X.F = t;` — is the compiler's
@@ -28071,6 +28186,60 @@ mod r31_safe_release_tests {
         ));
     }
 
+    fn terminal_cleanup_body() -> &'static str {
+        "    if (HasTag())\n    {\n        AGothicCharacter local_10;\n        local_10 = Cast<AGothicCharacter>(GetAvatar());\n        UDataModule_Container local_12 = GetContainer(local_10);\n        bool local_1 = local_12.HasItem();\n        if (local_1)\n        {\n            return n\"Magic\";\n        }\n        else\n        {\n            local_12 = nullptr;\n            local_10 = nullptr;\n        }\n    }\n    return n\"None\";\n"
+    }
+
+    #[test]
+    fn terminal_else_cleanup_uses_the_enclosing_handle_scope_after_early_return() {
+        let body = terminal_cleanup_body();
+        let cleanup = "        else\n        {\n            local_12 = nullptr;\n            local_10 = nullptr;\n        }\n";
+        let expected = body.replace(cleanup, "");
+        // The existing earlier pass must preserve the ownership ambiguity until
+        // declarations have been placed; the late cleanup then resolves it.
+        let early = super::drop_else_after_returning_arm(body, &HashSet::from([10, 12]));
+        assert_eq!(early, body);
+        let result = drop_block_end_handle_releases(&early);
+        assert_eq!(result, expected);
+        assert!(result.contains("            return n\"Magic\";"));
+        assert!(result.ends_with("    return n\"None\";\n"));
+        assert_eq!(drop_block_end_handle_releases(&result), result);
+
+        // Initialized first handles and a separately named later slot life use
+        // the same ownership rule, without inheriting the earlier life by slot.
+        let initialized = body.replace(
+            "AGothicCharacter local_10;\n        local_10 = Cast<AGothicCharacter>(GetAvatar());",
+            "AGothicCharacter local_10 = Cast<AGothicCharacter>(GetAvatar());");
+        assert_eq!(drop_block_end_handle_releases(&initialized), initialized.replace(cleanup, ""));
+        let next_life = body.replace("    return n\"None\";", "    AActor local_10_2 = FindOther();\n    Use(local_10_2);\n    return n\"None\";");
+        assert_eq!(drop_block_end_handle_releases(&next_life), next_life.replace(cleanup, ""));
+    }
+
+    #[test]
+    fn terminal_else_cleanup_keeps_other_owners_later_uses_and_nonterminal_work() {
+        let body = terminal_cleanup_body();
+        let own_decl = "        AGothicCharacter local_10;\n";
+        let function_handle = format!("    AGothicCharacter local_10;\n{}", body.replace(own_decl, ""));
+        let outer_handle = format!("    if (outer)\n    {{\n        AGothicCharacter local_10;\n{}    }}\n", body.replace(own_decl, "").lines().map(|s| format!("    {s}\n")).collect::<String>());
+        let foreign_handle = body.replace("local_12 = nullptr;", "input = nullptr;");
+        let later_read = body.replace("        }\n    }\n    return", "        }\n        Use(local_12);\n    }\n    return");
+        let nonterminal = body.replace("        }\n    }\n    return", "        }\n        Work();\n    }\n    return");
+        let outside_read = body.replace("    return n\"None\";", "    Use(local_10);\n    return n\"None\";");
+        let swapped = body.replace("local_12 = nullptr;\n            local_10 = nullptr;", "local_10 = nullptr;\n            local_12 = nullptr;");
+        let statement_else = body.replace("            local_12 = nullptr;", "            Work();\n            local_12 = nullptr;");
+        let nonreturning = body.replace("return n\"Magic\";", "PlayMagic();");
+        let reference = body.replace("AGothicCharacter local_10;", "AGothicCharacter& local_10;");
+        let value_cleanup = body.replace("        bool local_1", "        FString local_20 = Text();\n        bool local_1");
+        for changed in [function_handle, outer_handle, foreign_handle, later_read, nonterminal,
+                        outside_read, swapped, statement_else, nonreturning, reference, value_cleanup] {
+            assert_eq!(drop_block_end_handle_releases(&changed), changed);
+        }
+        // Existing release-before-return policy remains unchanged even within
+        // the owning block: epilogue cleanup is after the original jump.
+        let explicit_return_cleanup = "    if (flag)\n    {\n        AActor local_10 = Find();\n        local_10 = nullptr;\n        return local_10;\n    }\n";
+        assert_eq!(drop_block_end_handle_releases(explicit_return_cleanup), explicit_return_cleanup);
+    }
+
     #[test]
     fn return_cleanup_exception_is_preserved() {
         for expression in ["false", "local_8.IsValid()"] {
@@ -31387,6 +31556,69 @@ mod literal_value_lifetime_tests {
     }
 
     #[test]
+    fn a_right_literal_sum_inlines_only_its_direct_comparison_reader() {
+        let mut f = function(&[("CALLINTF", &[]), ("CpyRtoV8", &[8]), ("CpyVtoV8", &[6, 8]),
+            ("CALLINTF", &[]), ("CpyRtoV8", &[10]), ("SetV8", &[8]), ("ADDd", &[8, 6, 8]),
+            ("CMPd", &[10, 8]), ("TNP", &[]), ("CpyRtoV4", &[1]), ("CpyVtoR4", &[1]), ("RET", &[2])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        f.bytecode[code[5].offset_dw + 2] = 0x403e0000; // 30.0
+        let literal = super::literal_seeded_arithmetic_temps(&f);
+        assert_eq!(literal, HashSet::from([8]));
+        assert!(!super::arithmetic_temporaries(&f).contains(&8));
+        let refs = RefResolver::default();
+        let fold = |body: &str, literal: &HashSet<i32>| super::inline_unnamed_value_temporaries(body,
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &refs, &HashSet::new(), &HashSet::new(),
+            &HashMap::new(), &HashSet::new(), literal, &HashSet::new(), &HashSet::new());
+        for reader in ["return Limit() <= local_8_2;", "return (Limit() <= local_8_2);",
+            "return (this.Minimum <= local_8_2 && ((local_6 - 30.0) <= this.Maximum));",
+            "if (Limit() <= local_8_2)"] {
+            let body = format!("float local_6 = Distance();\nfloat local_8_2 = local_6 + 30.0;\n{reader}\n");
+            let expected = format!("float local_6 = Distance();\n{}\n", reader.replace("local_8_2", "(local_6 + 30.0)"));
+            assert_eq!(fold(&body, &literal), expected, "{reader}");
+            assert_eq!(fold(&body, &HashSet::new()), body);
+            assert_eq!(fold(&expected, &literal), expected);
+        }
+        for reader in ["float local_12 = local_8_2;", "return local_8_2;",
+            "return Check(local_8_2);", "return Check(Limit() <= local_8_2 && Valid());",
+            "return Enabled() && Limit() <= local_8_2;", "while (Limit() <= local_8_2)",
+            "return Limit(local_6) <= local_8_2;"] {
+            let body = format!("float local_6 = Distance();\nfloat local_8_2 = local_6 + 30.0;\n{reader}\n");
+            assert_eq!(fold(&body, &literal), body, "{reader}");
+        }
+        for init in ["this.Distance + 30.0", "local_6 + Margin", "local_6 - 30.0"] {
+            let body = format!("float local_6 = Distance();\nfloat local_8_2 = {init};\nreturn Limit() <= local_8_2;\n");
+            assert_eq!(fold(&body, &literal), body);
+        }
+        let reference = "float& local_6 = Distance();\nfloat local_8_2 = local_6 + 30.0;\nreturn Limit() <= local_8_2;\n";
+        assert_eq!(fold(reference, &literal), reference);
+    }
+
+    #[test]
+    fn comparison_scratch_witness_does_not_authorize_a_later_copied_sum_life() {
+        let mut f = function(&[("SetV8", &[8]), ("ADDd", &[8, 6, 8]), ("CMPd", &[10, 8]),
+            ("TNP", &[]), ("CpyRtoV4", &[1]), ("SetV8", &[8]), ("ADDd", &[8, 6, 8]),
+            ("CpyVtoV8", &[12, 8]), ("CpyVtoR8", &[12]), ("RET", &[2])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        f.bytecode[code[0].offset_dw + 2] = 0x403e0000; // 30.0
+        f.bytecode[code[5].offset_dw + 2] = 0x40440000; // 40.0
+        let literal = super::literal_seeded_arithmetic_temps(&f);
+        // The first life still grants the physical slot. The text reader must
+        // prevent that permission from deleting the second life's real copy.
+        assert_eq!(literal, HashSet::from([8]));
+        let body = "float local_6 = Distance();\nfloat local_8 = local_6 + 30.0;\nif (Limit() <= local_8)\n{\n    Work();\n}\nfloat local_8_2 = local_6 + 40.0;\nfloat local_12 = local_8_2;\nreturn local_12;\n";
+        let refs = RefResolver::default();
+        let result = super::inline_unnamed_value_temporaries(body, &HashSet::new(), &HashSet::new(),
+            &HashSet::new(), &refs, &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(),
+            &literal, &HashSet::new(), &HashSet::new());
+        let expected = body.replace("float local_8 = local_6 + 30.0;\n", "")
+            .replace("if (Limit() <= local_8)", "if (Limit() <= (local_6 + 30.0))");
+        assert_eq!(result, expected);
+        let branch_overwrite = "float local_6 = Distance();\nfloat local_8 = local_6 + 30.0;\nif (Limit() <= local_8)\n{\n    local_8 = Other();\n}\nUse(local_8);\n";
+        assert_eq!(super::inline_unnamed_value_temporaries(branch_overwrite, &HashSet::new(), &HashSet::new(),
+            &HashSet::new(), &refs, &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(),
+            &literal, &HashSet::new(), &HashSet::new()), branch_overwrite);
+    }
+    #[test]
     fn ordered_vector_arguments_keep_only_the_later_receiver_life() {
         let refs = RefResolver::from_test_ordered_vector_arguments(0);
         let mut f = function(&[("PSF", &[20]), ("PshVPtr", &[65534]), ("CALLSYS", &[]), ("PSF", &[20]),
@@ -32532,6 +32764,72 @@ mod literal_value_lifetime_tests {
         let code = super::disassemble(&f.bytecode).unwrap();
         for (at, id) in [(0, 1), (2, 2), (6, 1)] { f.bytecode[code[at].offset_dw+1] = id; }
         f
+    }
+
+    fn reloaded_field_address_read_fixture(parameter_first: bool) -> Func {
+        let mut f = reloaded_field_sum_fixture();
+        let code = disassemble(&f.bytecode).unwrap();
+        if parameter_first {
+            let row = function(&[("MULd", &[2, (-2i16) as u16, 2])]).bytecode;
+            f.bytecode[code[4].offset_dw..code[4].offset_dw + row.len()].copy_from_slice(&row);
+        }
+        f.bytecode.truncate(code[8].offset_dw);
+        let mut tail = function(&[("LoadThisR", &[0]), ("PshRPtr", &[]), ("SetV8", &[2]), ("PSF", &[2]),
+            ("SetV8", &[4]), ("PSF", &[4]), ("CALLSYS", &[]), ("CpyRtoV8", &[12]), ("RET", &[4])]);
+        let tail_code = disassemble(&tail.bytecode).unwrap();
+        tail.bytecode[tail_code[0].offset_dw + 1] = 1;
+        tail.bytecode[tail_code[2].offset_dw + 2] = 0x3ff0_0000; // 1.0; second literal is 0.0.
+        tail.bytecode[tail_code[6].offset_dw + 1] = 10;
+        f.bytecode.extend(tail.bytecode);
+        f
+    }
+
+    #[test]
+    fn reloaded_field_sum_keeps_mul_order_with_a_later_const_address_read() {
+        let refs = RefResolver::from_test_reloaded_field_address_read(0);
+        let fields = HashMap::from([("Radius".into(), "float".into()), ("Speed".into(), "float".into())]);
+        let roots = HashMap::from([("Delta".into(), "float".into())]);
+        for parameter_first in [false, true] {
+            let f = reloaded_field_address_read_fixture(parameter_first);
+            let addend = if parameter_first { "Delta * this.Speed" } else { "this.Speed * Delta" };
+            let keep = super::explicitly_reloaded_field_sums(&f, &refs, true, Some(&fields));
+            assert_eq!(keep, HashSet::from([("this.Radius".into(), addend.into())]));
+            let source = format!("    this.Radius = (this.Radius + ({addend}));\n    float local_12 = Blend(0.0, 1.0, this.Radius);\n");
+            let mut kept = source.clone();
+            for late in [false, false, true] {
+                kept = super::fold_compound_assignments(&kept, Some(&fields), &roots, &refs, late, &keep);
+            }
+            assert_eq!(kept, source);
+            let other = if parameter_first { "this.Speed * Delta" } else { "Delta * this.Speed" };
+            let different = source.replace(addend, other);
+            assert!(super::fold_compound_assignments(&different, Some(&fields), &roots, &refs, false, &keep).contains(" += "));
+        }
+    }
+
+    #[test]
+    fn reloaded_field_address_read_rejects_mutable_unknown_and_unclosed_uses() {
+        let f = reloaded_field_address_read_fixture(true);
+        let refs = RefResolver::from_test_reloaded_field_address_read(0);
+        let fields = HashMap::from([("Radius".into(), "float".into()), ("Speed".into(), "float".into())]);
+        let check = |f: &Func, refs: &RefResolver| super::explicitly_reloaded_field_sums(f, refs, true, Some(&fields));
+        for fault in 1..=6 { assert!(check(&f, &RefResolver::from_test_reloaded_field_address_read(fault)).is_empty(), "metadata {fault}"); }
+        assert!(check(&f, &RefResolver::from_test_reloaded_field_sum(false)).is_empty());
+        let code = disassemble(&f.bytecode).unwrap();
+        let mut wrong = f.clone(); let at = code[11].offset_dw;
+        wrong.bytecode[at] = (wrong.bytecode[at] & 0xffff) | (5 << 16);
+        assert!(check(&wrong, &refs).is_empty(), "first literal address differs");
+        let mut wrong = f.clone(); wrong.bytecode.extend(function(&[("LoadThisR", &[0]), ("PshRPtr", &[])]).bytecode);
+        let extra = disassemble(&wrong.bytecode).unwrap(); wrong.bytecode[extra[extra.len() - 2].offset_dw + 1] = 1;
+        assert!(check(&wrong, &refs).is_empty(), "unbounded field address");
+        let mut wrong = f.clone(); wrong.bytecode.extend(f.bytecode[code[6].offset_dw..code[8].offset_dw].iter().copied());
+        assert!(check(&wrong, &refs).is_empty(), "second field store");
+        let mut entry = f.clone(); let at = entry.bytecode.len(); entry.bytecode.extend(function(&[("JMP", &[])]).bytecode);
+        entry.bytecode[at + 1] = code[10].offset_dw as i32 - at as i32 - 2;
+        assert!(check(&entry, &refs).is_empty(), "entry after field address");
+        let mut wrong = f.clone();
+        let row = function(&[("MULd", &[2, (-2i16) as u16, 4])]).bytecode;
+        wrong.bytecode[code[4].offset_dw..code[4].offset_dw + row.len()].copy_from_slice(&row);
+        assert!(check(&wrong, &refs).is_empty(), "wrong multiplication source");
     }
 
     #[test]
