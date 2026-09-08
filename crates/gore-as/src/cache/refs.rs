@@ -2239,6 +2239,22 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_normalized_bool_member(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FEntry","Flag"),("FFilter","")]);
+        for (id,name) in [(1,"FEntry"),(2,"FFilter")] {
+            r.type_identity_by_ptr.insert(id,TypeIdentity { name:name.into(),namespace:String::new(),
+                module:if id==2 || fault==2 {"Fixture"} else {""}.into() });
+        }
+        r.prop_type_id.insert(3,if fault==3 {2} else {1});
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(
+            &[("FEntry","Flag",if fault==1 {"int"} else {"bool"})],&[],None));
+        r.func_by_ptr.insert(10,"Proceed".into());
+        r.func_ret.insert(10,DataType { token:5,type_info:if fault==4 {2} else {1},
+            is_reference:fault!=5,is_object_const:true,is_read_only:true,..Default::default() });
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_double_product_bool_argument(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("UOwner", "Config")]);
         r.type_identity_by_ptr.insert(1, TypeIdentity { name: "UOwner".into(), module: "Fixture".into(), namespace: String::new() });
@@ -2380,6 +2396,32 @@ impl RefResolver {
         r.func_by_ptr.insert(1, "GetPawn".into());
         r.func_params.insert(1, Vec::new());
         r.func_ret.insert(1, ret);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_script_field_return_lifetime(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FResult", "Severity"), ("UActor", "Level")]);
+        for (id, name) in [(1, "FResult"), (2, "UActor"), (3, "FOther")] {
+            r.type_by_ptr.insert(id, name.into());
+            r.type_identity_by_ptr.insert(id, TypeIdentity {name: name.into(), module: "Fixture".into(), namespace: String::new()});
+        }
+        r.prop_type_id.insert(3, if fault == 1 {2} else {1});
+        r.prop_type_id.insert(5, 2);
+        r.set_class_fields(HashMap::from([
+            ("FResult".into(), HashMap::from([("Severity".into(), "float".into())])),
+            ("UActor".into(), HashMap::from([("Level".into(), "int".into())]))]));
+        for (id, name) in [(10,"Evaluate"),(11,"Classify"),(12,"ShouldContinue"),(13,"~FResult"),(14,"Work")] {
+            r.funcid_to_ptr.insert(id, id as i64); r.func_by_ptr.insert(id as i64, name.into());
+            r.func_params.insert(id as i64, Vec::new()); r.func_is_method.insert(id as i64);
+            r.func_owner.insert(id as i64, if id == 13 {if fault == 2 {"FOther"} else {"FResult"}} else {"UActor"}.into());
+        }
+        r.func_ret.insert(10, DataType {token:5,type_info:if fault == 3 {3} else {1},..Default::default()});
+        r.func_ret.insert(11, DataType {token:0x44,..Default::default()});
+        r.func_params.insert(11, vec![DataType {token:0x51,is_object_const:true,is_read_only:true,..Default::default()}]);
+        r.func_ret.insert(12, DataType {token:if fault == 4 {0x44} else {0x41},..Default::default()});
+        r.func_ret.insert(13, DataType {token:if fault == 5 {0x41} else {0x52},..Default::default()});
+        r.func_ret.insert(14, DataType {token:0x52,..Default::default()});
         r
     }
 

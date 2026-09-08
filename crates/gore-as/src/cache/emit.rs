@@ -2826,7 +2826,7 @@ fn emit_function_ctor(
         pass_trace("collapse_single_use_accumulators", &rendered);
         let rendered = inline_bool_chain_into_next_condition(&rendered, &named_sites);
         pass_trace("inline_bool_chain_into_next_condition", &rendered);
-        let rendered = fold_bool_member_comparisons(&rendered, fields, &path_roots, refs);
+        let rendered = fold_bool_member_comparisons(&rendered, fields, &path_roots, refs, f, is_method);
         pass_trace("fold_bool_member_comparisons", &rendered);
         let rendered = drop_redundant_conversions(&rendered, fields, &path_roots, refs, &reference_copy_initializers, &explicit_copy_destinations);
         pass_trace("drop_redundant_conversions", &rendered);
@@ -11511,6 +11511,16 @@ fn collapse_single_use_accumulators(body: &str, widened: &HashSet<i32>, locals: 
             else {
                 continue;
             };
+            // A captured member read belongs before an intervening store to
+            // that same field. A later single reader does not make it movable.
+            if lines[index + span + steps..reader].iter().any(|line| {
+                let Some((path, _)) = line.trim().split_once(" = ") else { return false; };
+                path.strip_prefix("this.").is_some_and(|field| !field.is_empty()
+                    && field.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
+                    && count_ident(&folded_value, path) > 0)
+            }) {
+                continue;
+            }
             let folded = folded_value;
             lines[reader] = rename_ident(&lines[reader], &name, &folded);
             lines.drain(index..index + span + steps);
@@ -12108,7 +12118,8 @@ fn address_push_counts(f: &Func) -> HashMap<i32, usize> {
     let calls = |name: &str| matches!(name, "CALL" | "CALLSYS" | "CALLINTF" | "CALLBND");
     let mut counts: HashMap<i32, usize> = HashMap::new();
     for (at, ins) in instrs.iter().enumerate() {
-        if ins.op.name != "PSF" || instrs.get(at + 1).is_some_and(|next| calls(next.op.name)) {
+        // ADDSi narrows the address to a member; it never hands on the whole owner.
+        if ins.op.name != "PSF" || instrs.get(at + 1).is_some_and(|next| calls(next.op.name) || next.op.name == "ADDSi") {
             continue;
         }
         if let Some(slot) = ins.words.first().map(|word| *word as i16 as i32) {
@@ -12476,6 +12487,66 @@ fn drop_one_block_end_handle_release(text: &str) -> String {
     joined
 }
 
+/// The compiler normalizes both bool operands with one NOT before CMPi.
+/// Rendering those NOTs literally would normalize each operand a second time.
+fn fold_normalized_bool_member_comparisons(body: &str, f: &Func, refs: &RefResolver, is_method: bool) -> String {
+    let mut out = body.to_owned();
+    if !is_method || f.ret.token != 5 || f.ret.is_reference || f.ret.is_object_handle
+        || !refs.type_identity_by_ptr(f.ret.type_info).is_some_and(|t| !t.module.is_empty()) { return out; }
+    let Ok(code) = disassemble(&f.bytecode) else { return out; };
+    if code.iter().any(|i| i.op.name == "JMPP") { return out; }
+    let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+    let offsets = super::model::param_slot_map(&params,true,true,Some(refs));
+    let word = |i: &Instr,n: usize| i.words.get(n).copied().map(|w| w as i16 as i32);
+    let is_ident = |s: &str| s.as_bytes().first().is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_')
+        && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
+    for (at,c) in code.windows(7).enumerate() {
+        let site = (|| {
+            if !matches!(c[0].op.name,"LoadVObjR"|"LoadRObjR") || c[1..].iter().map(|i| i.op.name)
+                .ne(["RDR1","NOT","CpyVtoV4","NOT","CMPi","JZ"]) { return None; }
+            let (object,left,right) = (word(&c[0],0)?,word(&c[1],0)?,word(&c[3],0)?);
+            let parameter = word(&c[3],1)?;
+            if [object,left,right].iter().any(|s| *s <= 0) || left == right || object == left || object == right
+                || parameter >= 0 || word(&c[2],0)!=Some(left) || word(&c[4],0)!=Some(right)
+                || word(&c[5],0)!=Some(left) || word(&c[5],1)!=Some(right) { return None; }
+            let input = f.params.get(*offsets.get(&parameter)?)?;
+            if input.ty.token != 0x41 || input.ty.type_info != 0 || input.ty.is_reference
+                || input.ty.is_object_handle || input.ty.is_auto || !is_ident(&input.name) { return None; }
+            let id = *c[0].dwords.first()? as i32;
+            let owner = refs.type_identity_by_id(id)?;
+            let (field,old) = refs.member_identity(id,word(&c[0],1)?)?;
+            if !owner.module.is_empty() || !owner.namespace.is_empty() || !is_ident(field)
+                || refs.type_identity_by_id(old)? != owner
+                || refs.native_field_value_type(&owner.name,field) != Some("bool") { return None; }
+            if c[0].op.name == "LoadVObjR" {
+                let mut locals = f.obj_locals.iter().filter(|(s,_)| *s == object);
+                if refs.type_identity_by_ptr(locals.next()?.1)? != owner || locals.next().is_some() { return None; }
+            } else {
+                let before = code.get(at.checked_sub(2)?..at)?;
+                if before[0].op.name != "CALLSYS" || before[1].op.name != "CpyRtoV8"
+                    || word(&before[1],0) != Some(object) { return None; }
+                let returned = refs.func_ret_by_ptr(*before[0].qwords.first()? as i64)?;
+                if returned.token != 5 || !returned.is_reference || returned.is_object_handle
+                    || !returned.is_object_const || !returned.is_read_only
+                    || refs.type_identity_by_ptr(returned.type_info)? != owner { return None; }
+            }
+            if code.iter().any(|i| i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                target > c[0].offset_dw as i64 && target <= c[6].offset_dw as i64
+            })) { return None; }
+            Some((format!("local_{object}.{field}"),input.name.as_str()))
+        })();
+        let Some((member,parameter)) = site else { continue; };
+        let old = format!("if (!({member}) != !({parameter}))");
+        // Do not lend a bytecode site to repeated textual lives of the same pair.
+        if body.lines().filter(|line| line.trim() == old).count() != 1 { continue; }
+        out = out.lines().map(|line| if line.trim() == old {
+            format!("{}if ({member} != {parameter})",indent_of(line))
+        } else { line.to_owned() }).collect::<Vec<_>>().join("\n");
+        if body.ends_with('\n') { out.push('\n'); }
+    }
+    out
+}
 /// `int X = <bool member>; ... (X != 0) ...` is that member.
 ///
 /// The slot fell back to `int`, and an int carrying a bool has to be compared to reach a bool
@@ -12487,7 +12558,10 @@ fn fold_bool_member_comparisons(
     fields: Option<&HashMap<String, String>>,
     roots: &HashMap<String, String>,
     refs: &RefResolver,
+    f: &Func,
+    is_method: bool,
 ) -> String {
+    let body = fold_normalized_bool_member_comparisons(body,f,refs,is_method);
     let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
     let mut changed = true;
     while changed {
@@ -26423,6 +26497,49 @@ fn rvo_declared_at_initializer(
         if slot <= 0 {
             continue;
         }
+        // A single field-read result survives an early return and later work.
+        // Its two script cleanups end the two paths; a condition temporary would
+        // instead be destroyed at both branch entries, before that later work.
+        let retained_field_return = (|| {
+            if !matches!(call.op.name, "CALL" | "CALLINTF") || instrs.iter().any(|i| i.op.name == "JMPP")
+                || rvo_producers.iter().filter(|(s, _)| *s == slot).count() != 1 { return None; }
+            let ty = refs.func_ret_by_id(*call.dwords.first()? as i32)?;
+            let owner = refs.type_identity_by_ptr(ty.type_info)?;
+            if owner.module.is_empty() || is_enum(&owner.name) { return None; }
+            let uses: Vec<usize> = instrs.iter().enumerate()
+                .filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&slot)).map(|(p, _)| p).collect();
+            let [destination, member, early, last] = *uses.as_slice() else { return None; };
+            if destination + 2 != at || instrs[destination].op.name != "PSF"
+                || instrs[at - 1].op.name != "PshVPtr" || member != at + 1
+                || instrs[member].op.name != "LoadVObjR" || instrs.get(member + 1)?.op.name != "RDR8"
+                || early <= member + 6 || early + 3 >= last || last + 3 != instrs.len()
+                || instrs[last + 2].op.name != "RET" || instrs.iter().filter(|i| i.op.name == "RET").count() != 1
+                || !instrs[early + 3..last].iter().any(|i| i.op.is_call()) { return None; }
+            let id = *instrs[member].dwords.first()? as i32;
+            let (_, old) = refs.member_identity(id, *instrs[member].words.get(1)? as i16 as i32)?;
+            if refs.type_identity_by_id(id)? != owner || refs.type_identity_by_id(old)? != owner { return None; }
+            for release in [early, last] {
+                let dtor = &instrs[release + 1];
+                if instrs[release].op.name != "PSF" || !script_value_destructor(dtor, refs)
+                    || refs.func_owner_by_id(*dtor.dwords.first()? as i32) != Some(owner.name.as_str()) { return None; }
+            }
+            let condition = &instrs[early - 5..early];
+            if !matches!(condition[0].op.name, "CALL" | "CALLINTF")
+                || !refs.func_ret_by_id(*condition[0].dwords.first()? as i32)
+                    .is_some_and(|t| t.token == 0x41 && !t.is_reference && !t.is_object_handle)
+                || condition[1..].iter().map(|i| i.op.name).ne(["CpyRtoV4", "NOT", "CpyVtoR1", "JLowZ"])
+                || w0(&condition[1]) != w0(&condition[2]) || w0(&condition[1]) != w0(&condition[3]) { return None; }
+            let target = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+            if target(&instrs[early - 1]) != Some(instrs[early + 3].offset_dw as i64)
+                || instrs[early + 2].op.name != "JMP"
+                || target(&instrs[early + 2]) != Some(instrs[last + 2].offset_dw as i64)
+                || instrs.iter().enumerate().any(|(p, i)| i.op.name.starts_with('J')
+                    && p != early - 1 && p != early + 2
+                    && (p > destination || target(i).is_some_and(|t|
+                        t > instrs[destination].offset_dw as i64 && t <= instrs[last + 1].offset_dw as i64))) { return None; }
+            Some(())
+        })().is_some();
+        if retained_field_return { out.push(slot); continue; }
         // One context is inspected once, then destroyed separately on both return paths.
         if call.op.name == "CALL" && instrs[..at].iter().all(|i| matches!(i.op.name, "PshVPtr" | "PSF")) {
             let uses: Vec<_> = instrs.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&slot)).collect();
@@ -27407,6 +27524,47 @@ mod accumulator_tests {
             folded, "    return Use((Thing.GetRadius() * Multiplier));\n",
             "declare, accumulate, read once is one expression: {folded}"
         );
+    }
+
+    #[test]
+    fn a_time_delta_stays_before_the_sampled_field_is_updated_through_the_pipeline() {
+        use std::collections::{BTreeMap, HashMap};
+        let refs=super::RefResolver::default();
+        let locals=BTreeMap::from([(12,"float".into()),(14,"float".into())]);
+        let fields=HashMap::from([("InitialTime".into(),"float".into()),("ElapsedTime".into(),"float".into())]);
+        let roots=HashMap::from([("local_12".into(),"float".into())]);
+        let body="float local_12 = this.GetWorld().GetTimeSeconds();\nlocal_12 = local_12 - this.InitialTime;\nthis.InitialTime = this.GetWorld().GetTimeSeconds();\nfloat local_14 = this.ElapsedTime;\nthis.ElapsedTime = (local_14 + local_12);\n";
+        let mut out=body.to_owned();
+        for _ in 0..3 {out=collapse_single_use_accumulators(&out,&HashSet::new(),&locals);}
+        assert_eq!(out,body);
+        let late=|text:&str,slots:&HashSet<(i32,usize)>| super::inline_unnamed_value_temporaries(text,
+            slots,&HashSet::new(),&HashSet::new(),&refs,&HashSet::new(),&HashSet::new(),&HashMap::new(),
+            &HashSet::new(),&HashSet::new(),&HashSet::new(),&HashSet::new());
+        out=late(&out,&HashSet::from([(14,1)]));
+        out=super::merge_self_assignments(&out,&locals);
+        let named="float local_12 = this.GetWorld().GetTimeSeconds() - this.InitialTime;\nthis.InitialTime = this.GetWorld().GetTimeSeconds();\nthis.ElapsedTime = (this.ElapsedTime + local_12);\n";
+        assert_eq!(out,named);
+        out=late(&out,&HashSet::from([(12,1)]));
+        assert_eq!(out,named,"a field store is not an unnamed argument sibling");
+        out=super::fold_compound_assignments(&out,Some(&fields),&roots,&refs,true,&HashSet::new(),&HashSet::new());
+        assert_eq!(out,named.replace("this.ElapsedTime = (this.ElapsedTime + local_12);","this.ElapsedTime += local_12;"));
+    }
+
+    #[test]
+    fn the_accumulator_field_write_barrier_matches_the_whole_own_field_path() {
+        use std::collections::BTreeMap;
+        let fold=|s:&str| collapse_single_use_accumulators(s,&HashSet::new(),&BTreeMap::new());
+        let source=|read:&str,write:&str| format!("float local_12 = {read};\nlocal_12 = local_12 - Offset;\n{write} = Next;\nUse(local_12);\n");
+        for read in ["this.Time","(this.Time + Bias)"] {
+            let s=source(read,"this.Time");assert_eq!(fold(&s),s);
+        }
+        for (read,write) in [("this.Time","this.Other"),("this.Time","this.TimeExtra"),
+            ("this.TimeExtra","this.Time"),("Other.Time","this.Time")] {
+            let s=source(read,write);
+            assert_eq!(fold(&s),format!("{write} = Next;\nUse(({read} - Offset));\n"));
+        }
+        let adjacent="float local_12 = this.Time;\nlocal_12 = local_12 - Offset;\nUse(local_12);\nthis.Time = Next;\n";
+        assert_eq!(fold(adjacent),"Use((this.Time - Offset));\nthis.Time = Next;\n");
     }
 
     #[test]
@@ -29735,6 +29893,59 @@ mod literal_value_lifetime_tests {
     }
 }
 
+
+    fn script_field_return_lifetime_fixture() -> Func {
+        let mut f = function(&[("PSF", &[88]), ("PshVPtr", &[0]), ("CALLINTF", &[]),
+            ("LoadVObjR", &[88,0]), ("RDR8", &[90]), ("PshV8", &[90]), ("PshVPtr", &[0]), ("CALLINTF", &[]),
+            ("CpyRtoV4", &[91]), ("LoadThisR", &[0]), ("WRTV4", &[91]),
+            ("PshVPtr", &[0]), ("CALLINTF", &[]), ("CpyRtoV4", &[1]), ("NOT", &[1]), ("CpyVtoR1", &[1]), ("JLowZ", &[]),
+            ("PSF", &[88]), ("CALL", &[]), ("JMP", &[]), ("PshVPtr", &[0]), ("CALLINTF", &[]),
+            ("SetV4", &[96]), ("LoadThisR", &[0]), ("WRTV4", &[96]), ("PSF", &[88]), ("CALL", &[]), ("RET", &[2])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, id) in [(2,10), (7,11), (12,12), (18,13), (21,14), (26,13)] {f.bytecode[code[at].offset_dw+1] = id;}
+        f.bytecode[code[3].offset_dw+2] = 1;
+        for at in [9,23] {f.bytecode[code[at].offset_dw+1] = 2;}
+        for (at, dst) in [(16,20), (19,27)] {f.bytecode[code[at].offset_dw+1] = code[dst].offset_dw as i32-code[at].offset_dw as i32-2;}
+        f.bytecode[code[22].offset_dw+1] = 1;
+        f.ret = DataType {token:0x52,..Default::default()}; f.obj_locals = vec![(88,1)];
+        f.params = vec![crate::cache::model::Param {name:"AI".into(), flags:0,
+            ty:DataType {token:5,type_info:2,is_object_handle:true,..Default::default()}}];
+        f
+    }
+
+    #[test]
+    fn field_read_rvo_survives_early_return_and_final_cleanup_in_pipeline() {
+        let f = script_field_return_lifetime_fixture();
+        let refs = RefResolver::from_test_script_field_return_lifetime(0);
+        let code = disassemble(&f.bytecode).unwrap();
+        assert_eq!(super::rvo_declared_at_initializer(&code,&refs,&[(88,2)],&[]), vec![88]);
+        let mut source = String::new();
+        super::emit_function(&mut source,&f,&refs,false,false,0);
+        assert!(source.contains("FResult local_88 = AI.Evaluate();"), "{source}");
+        assert!(source.contains("AI.Classify(local_88.Severity)"), "{source}");
+        assert!(source.contains("AI.Work();"), "{source}");
+        assert!(!source.contains("AI.Evaluate().Severity"), "{source}");
+    }
+
+    #[test]
+    fn field_read_rvo_requires_one_life_typed_exits_and_closed_control_flow() {
+        let f = script_field_return_lifetime_fixture();
+        let refs = RefResolver::from_test_script_field_return_lifetime(0);
+        let code = disassemble(&f.bytecode).unwrap();
+        let named = |f:&Func, r:&RefResolver, producers:&[(i32,usize)]| super::rvo_declared_at_initializer(
+            &disassemble(&f.bytecode).unwrap(),r,producers,&[]).contains(&88);
+        for fault in 1..=5 {assert!(!named(&f,&RefResolver::from_test_script_field_return_lifetime(fault),&[(88,2)]), "metadata {fault}");}
+        assert!(!named(&f,&refs,&[(88,2),(88,21)]));
+        let mut other = f.clone(); other.bytecode.extend(function(&[("PSF", &[88])]).bytecode);
+        assert!(!named(&other,&refs,&[(88,2)]), "later physical life");
+        let mut other = f.clone(); other.bytecode[code[4].offset_dw] = function(&[("RDR4", &[90])]).bytecode[0];
+        assert!(!named(&other,&refs,&[(88,2)]), "different member width");
+        let mut other = f.clone(); other.bytecode[code[19].offset_dw+1] = 0;
+        assert!(!named(&other,&refs,&[(88,2)]), "early exit is not the shared RET");
+        let mut prefix = function(&[("JMP", &[])]).bytecode; prefix[1] = code[3].offset_dw as i32;
+        prefix.extend(f.bytecode.clone()); let mut other = f; other.bytecode = prefix;
+        assert!(!named(&other,&refs,&[(88,3)]), "jump enters after construction");
+    }
 
     fn script_cleanup_bool_fixture() -> Func {
         let mut f = function(&[("PshVPtr", &[65534]), ("PshVPtr", &[0]), ("PSF", &[36]), ("CALL", &[]),
@@ -33392,6 +33603,93 @@ mod literal_value_lifetime_tests {
         }
     }
 
+    #[test]
+    fn member_addresses_do_not_replace_a_distinct_default_argument() {
+        let f=function(&[("PSF",&[334]),("CALLSYS",&[]),
+            ("PSF",&[334]),("ADDSi",&[0]),("CALLSYS",&[]),
+            ("PSF",&[334]),("ADDSi",&[0]),("ADDSi",&[1]),("PopRPtr",&[]),("WRTV1",&[339]),
+            ("PSF",&[8]),("PSF",&[666]),("CALLSYS",&[]),
+            ("PSF",&[666]),("PshGPtr",&[]),("PshVPtr",&[0]),("CALLSYS",&[]),
+            ("PSF",&[666]),("CALLSYS",&[]),("PSF",&[334]),("CALLSYS",&[]),("RET",&[2])]);
+        let source="FRememberedPerception local_334;\nlocal_334.Affected.SetCharacter(Character);\nlocal_334.Affected.Relationship = ERelationship(1);\nAssess(FRememberedPerception(), local_8);\n";
+        let pushes=super::address_push_counts(&f);
+        assert!(!pushes.contains_key(&334));assert_eq!(pushes.get(&666),Some(&1));
+        assert_eq!(super::restore_dropped_struct_arguments(source,&pushes),source);
+        // The opposite evidence must still repair an actual whole-object hand-off,
+        // even when the populated value has several member uses in the text.
+        let code=disassemble(&f.bytecode).unwrap();let mut handed=f.clone();
+        handed.bytecode[code[13].offset_dw]=function(&[("PSF",&[334])]).bytecode[0];
+        assert_eq!(super::restore_dropped_struct_arguments(source,&super::address_push_counts(&handed)),
+            source.replace("Assess(FRememberedPerception(),","Assess(local_334,"));
+    }
+
+    #[test]
+    fn a_populated_tag_container_still_reaches_its_whole_object_consumer() {
+        let f=function(&[("PSF",&[8]),("CALLSYS",&[]),
+            ("PshGPtr",&[]),("PSF",&[8]),("CALLSYS",&[]),
+            ("PSF",&[8]),("PshVPtr",&[0]),("CALLSYS",&[]),
+            ("PSF",&[8]),("CALLSYS",&[]),("RET",&[2])]);
+        let source="FGameplayTagContainer local_8;\nlocal_8.AddTag(Tag);\nRemoveActiveEffectsWithTags(FGameplayTagContainer());\n";
+        assert_eq!(super::address_push_counts(&f).get(&8),Some(&1));
+        assert_eq!(super::restore_dropped_struct_arguments(source,&super::address_push_counts(&f)),
+            source.replace("RemoveActiveEffectsWithTags(FGameplayTagContainer())","RemoveActiveEffectsWithTags(local_8)"));
+    }
+
+    fn normalized_bool_member_fixture(reference: bool) -> Func {
+        let mut f = function(&[("LoadVObjR",&[30,0]),("RDR1",&[5]),("NOT",&[5]),
+            ("CpyVtoV4",&[31,65532]),("NOT",&[31]),("CMPi",&[5,31]),("JZ",&[]),("RET",&[5])]);
+        f.bytecode[2]=1;
+        f.ret=DataType {token:5,type_info:2,..Default::default()};
+        f.params=vec![super::super::model::Param {name:"wanted".into(),flags:0,
+            ty:DataType {token:0x41,is_read_only:true,..Default::default()}}];
+        if reference {
+            let load=function(&[("LoadRObjR",&[30,0])]);f.bytecode[0]=load.bytecode[0];
+            let mut prefix=function(&[("CALLSYS",&[]),("CpyRtoV8",&[30])]).bytecode;
+            prefix[1]=10;prefix.extend(f.bytecode);f.bytecode=prefix;
+        } else { f.obj_locals=vec![(30,1)]; }
+        f
+    }
+
+    #[test]
+    fn typed_bool_comparison_normalization_is_not_emitted_twice() {
+        let refs=RefResolver::from_test_normalized_bool_member(0);
+        let source="for (auto& local_30 : Array)\n{\n    if (!(local_30.Flag) != !(wanted))\n    {\n        continue;\n    }\n}\n";
+        let expected=source.replace("!(local_30.Flag) != !(wanted)","local_30.Flag != wanted");
+        for reference in [false,true] {
+            let f=normalized_bool_member_fixture(reference);
+            let fold=|text:&str| super::fold_bool_member_comparisons(text,None,&HashMap::new(),&refs,&f,true);
+            assert_eq!(fold(source),expected,"reference {reference}");
+            assert_eq!(fold(&expected),expected);
+        }
+    }
+
+    #[test]
+    fn bool_normalization_requires_exact_typed_reads_and_one_text_site() {
+        let source="if (!(local_30.Flag) != !(wanted))\n";
+        let fold=|s:&str,f:&Func,fault,method| super::fold_bool_member_comparisons(
+            s,None,&HashMap::new(),&RefResolver::from_test_normalized_bool_member(fault),f,method);
+        for reference in [false,true] {
+            let f=normalized_bool_member_fixture(reference);
+            for fault in 1..=3 {assert_eq!(fold(source,&f,fault,true),source);}
+            if reference { for fault in 4..=5 {assert_eq!(fold(source,&f,fault,true),source);} }
+            assert_eq!(fold(source,&f,0,false),source);
+            for s in [source.replace("Flag","FlagOther"),source.replace("wanted","other"),
+                source.replace("!=","=="),source.replace("!(wanted)","wanted"),source.repeat(2)] {
+                assert_eq!(fold(&s,&f,0,true),s);
+            }
+            let mut wrong=f.clone();wrong.params[0].ty.token=0x44;assert_eq!(fold(source,&wrong,0,true),source);
+            let mut wrong=f.clone();wrong.params[0].ty.is_reference=true;assert_eq!(fold(source,&wrong,0,true),source);
+            let mut wrong=f.clone();wrong.ret.is_reference=true;assert_eq!(fold(source,&wrong,0,true),source);
+            let code=disassemble(&f.bytecode).unwrap();let start=if reference {2} else {0};
+            for (relative,operand,value) in [(2,0,31),(3,1,65530),(4,0,5),(5,1,5)] {
+                let mut wrong=f.clone();let k=operand+1;let pos=code[start+relative].offset_dw+k/2;let shift=(k%2)*16;
+                wrong.bytecode[pos]=((wrong.bytecode[pos] as u32 & !(0xffffu32<<shift))|((value as u32)<<shift)) as i32;
+                assert_eq!(fold(source,&wrong,0,true),source);
+            }
+            let mut jump=function(&[("JMP",&[])]).bytecode;jump[1]=code[start+1].offset_dw as i32;jump.extend(f.bytecode.clone());
+            let mut wrong=f.clone();wrong.bytecode=jump;assert_eq!(fold(source,&wrong,0,true),source);
+        }
+    }
     fn double_product_bool_argument_fixture() -> Func {
         let mut f = function(&[("SetV1", &[7]), ("CpyVtoR1", &[7]),
             ("fTOd", &[18,9]), ("PshV8", &[18]), ("fTOd", &[16,8]), ("PshVPtr", &[0]),
