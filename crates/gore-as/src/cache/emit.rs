@@ -1239,7 +1239,9 @@ fn emit_function_ctor(
     statement_producers.extend(assignment_call_order_slots(f, refs, is_method));
     statement_producers.extend(call_results_before_parameter_comparisons(f, refs, is_method));
     let constructed_return_values = constructed_values_before_return(f, &fc, refs);
+    let joined_return_copies = copied_joined_widened_return_slots(f);
     let mut retained_return_copies = copied_widened_return_slots(f, refs);
+    retained_return_copies.extend(joined_return_copies.iter().copied());
     retained_return_copies.extend(constructed_return_values.iter().copied());
     retained_return_copies.extend(assigned_value_before_return(f, &fc, refs));
     retained_return_copies.extend(named_bool_returns.iter().copied());
@@ -1268,6 +1270,7 @@ fn emit_function_ctor(
     let mut copy_out_keep = widened.clone();
     copy_out_keep.extend(mutable_f32_elements.iter().map(|(_, elem)| *elem));
     let mut alias_copy_keep: HashSet<i32> = widened.union(&named_bool_returns).copied().collect();
+    alias_copy_keep.extend(joined_return_copies.iter().copied());
     let repeated_aliases = repeated_handle_alias_slots(f, refs);
     alias_copy_keep.extend(repeated_aliases.iter().copied());
     let loop_result_aliases = loop_result_handle_aliases(f, refs, is_method);
@@ -2053,7 +2056,7 @@ fn emit_function_ctor(
         .collect();
     let body = fold_enum_round_trips(&body, fields, &path_roots, refs);
     pass_trace("fold_enum_round_trips", &body);
-    let mut member_copy_named = member_copy_named_slots(f);
+    let mut member_copy_named = member_copy_named_slots(f, refs, is_method);
     member_copy_named.extend(named_native_member_copies.iter().copied());
     // A scoped field copy must keep its local. Repeated constructions can
     // instead be separate expression temporaries reusing the same slot.
@@ -19294,7 +19297,7 @@ fn path_prefixes(path: &str) -> Vec<String> {
 /// in an expression lands in the temporary the instruction reads; a copy behind it is the
 /// variable the source assigned (`int Threshold = Data.Member; if (Threshold >= x)` —
 /// `ShouldBlockingPathSkipWaitToWarning` and ten more lost that copy to the fold).
-fn member_copy_named_slots(f: &Func) -> HashSet<i32> {
+fn member_copy_named_slots(f: &Func, refs: &RefResolver, is_method: bool) -> HashSet<i32> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
     };
@@ -19311,6 +19314,41 @@ fn member_copy_named_slots(f: &Func) -> HashSet<i32> {
         if let Some(named) = w(copy, 0).filter(|s| *s > 0) {
             out.insert(named);
         }
+    }
+    // A by-value f64 parameter copied before another call, then narrowed only at
+    // its argument push, is a named snapshot too. Require its complete scalar life.
+    if instrs.iter().any(|i| i.op.name == "JMPP") { return out; }
+    let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+    let offsets = super::model::param_slot_map(&params, is_method,
+        super::model::returns_struct_by_value(&f.ret, refs), Some(refs));
+    for (at, copy) in instrs.iter().enumerate() {
+        if copy.op.name != "CpyVtoV8" { continue; }
+        let (Some(slot), Some(source)) = (w(copy, 0), w(copy, 1)) else { continue; };
+        let Some(param) = offsets.get(&source).and_then(|p| params.get(*p)) else { continue; };
+        if slot <= 0 || source >= 0 || param.token != 0x51 || param.type_info != 0
+            || param.is_reference || param.is_object_handle || param.is_auto || param.if_handle_then_const
+            || f.obj_locals.iter().any(|(s, _)| *s == slot)
+        { continue; }
+        let uses: Vec<_> = instrs.iter().enumerate().filter_map(|(n, i)|
+            super::bytediff::addressed_slots(i).contains(&slot).then_some(n)).collect();
+        if uses.len() != 2 || uses[0] != at { continue; }
+        let read_at = uses[1];
+        let Some(pair) = instrs.get(read_at..read_at + 2) else { continue; };
+        let (read, push) = (&pair[0], &pair[1]);
+        if read.op.name != "dTOf" || w(read, 1) != Some(slot)
+            || !w(read, 0).is_some_and(|s| s > 0 && s != slot)
+            || push.op.name != "PshV4" || w(push, 0) != w(read, 0)
+        { continue; }
+        let gap = &instrs[at + 1..read_at];
+        if !gap.iter().any(|i| i.op.is_call())
+            || gap.iter().any(|i| i.op.name.starts_with('J') || matches!(i.op.name, "RET" | "SUSPEND"))
+            || instrs.iter().any(|i| i.op.name.starts_with('J') && i.op.name != "JitEntry"
+                && i.dwords.first().is_some_and(|d| {
+                    let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                    target > copy.offset_dw as i64 && target <= push.offset_dw as i64
+                }))
+        { continue; }
+        out.insert(slot);
     }
     out
 }
@@ -20034,6 +20072,65 @@ fn drop_dead_stores_before_return(body: &str) -> String {
         joined.push('\n');
     }
     joined
+}
+
+/// A widened result is assigned in both final arms, then copied to a fresh
+/// return name. Earlier guards return the accumulator directly and bypass it.
+fn copied_joined_widened_return_slots(f: &Func) -> HashSet<i32> {
+    let witness = (|| {
+        if f.ret.token != 0x51 || f.ret.is_reference || f.ret.is_object_handle { return None; }
+        let code = disassemble(&f.bytecode).ok()?;
+        let end = code.len().checked_sub(3)?;
+        let tail = &code[end..];
+        if tail.iter().map(|i| i.op.name).ne(["CpyVtoV8", "CpyVtoR8", "RET"]) { return None; }
+        let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+        let jump = |i: &Instr| i.dwords.first().map(|v| i.offset_dw as i64 + 2 + *v as i32 as i64);
+        let (dst, src) = (w(&tail[0], 0)?, w(&tail[0], 1)?);
+        if dst <= 0 || src <= 0 || dst == src || w(&tail[1], 0) != Some(dst)
+            || f.obj_locals.iter().any(|(s, _)| [src, dst].contains(s)) { return None; }
+        let uses = |slot| code.iter().enumerate().filter(|(_, i)|
+            super::bytediff::addressed_slots(i).contains(&slot)).map(|(at, _)| at).collect::<Vec<_>>();
+        if uses(dst) != [end, end + 1] { return None; }
+        let mut writes = Vec::new(); let mut early_returns = Vec::new();
+        for at in uses(src) {
+            let i = &code[at];
+            match i.op.name {
+                "SetV8" if at == 0 && w(i, 0) == Some(src) => {},
+                "CpyVtoV8" if at == end => {},
+                "CpyVtoV8" if at > 0 && w(i, 0) == Some(src)
+                    && code[at - 1].op.name == "fTOd" && w(&code[at - 1], 0) == w(i, 1)
+                    && w(i, 1).is_some_and(|s| s > 0 && s != src && s != dst) => writes.push(at),
+                "CpyVtoR8" if w(i, 0) == Some(src)
+                    && code.get(at + 1).is_some_and(|next| next.op.name == "JMP"
+                        && jump(next) == Some(tail[2].offset_dw as i64)) => early_returns.push(at),
+                _ => return None,
+            }
+        }
+        let [first, second] = writes[..] else { return None; };
+        if code.first()?.op.name != "SetV8" || w(&code[0], 0) != Some(src)
+            || second + 1 != end || first + 2 >= second
+            || w(&code[first], 1) != w(&code[second], 1)
+            || code[first + 1].op.name != "JMP" || jump(&code[first + 1]) != Some(tail[0].offset_dw as i64)
+            || early_returns.is_empty() { return None; }
+        let branch = code[..first - 1].iter().rposition(|i|
+            matches!(i.op.name, "JZ" | "JNZ" | "JLowZ" | "JLowNZ"))?;
+        if jump(&code[branch]) != Some(code[first + 2].offset_dw as i64)
+            || early_returns.iter().any(|at| *at >= branch) { return None; }
+        // Both arms join at the copy. No bypass to its return load, loop, or
+        // external entry into either arm may acquire this slot-wide keep flag.
+        for (at, i) in code.iter().enumerate() {
+            if i.op.name == "JMPP" || (i.op.name == "RET" && at != end + 2) { return None; }
+            if !i.op.name.starts_with('J') { continue; }
+            let target = jump(i)?;
+            if target <= i.offset_dw as i64 || target == tail[1].offset_dw as i64
+                || [first, second].iter().any(|n| target == code[*n].offset_dw as i64)
+                || (at > branch && at != first + 1)
+                || (at < branch && target > code[branch].offset_dw as i64
+                    && target < tail[0].offset_dw as i64) { return None; }
+        }
+        Some(dst)
+    })();
+    witness.into_iter().collect()
 }
 
 /// Preserve the one named return copy vanilla made after widening float32 to float.
@@ -32499,6 +32596,85 @@ mod literal_value_lifetime_tests {
         assert_eq!(fold(body, &proof(&reused, &refs)), old);
     }
 
+    fn named_parameter_narrowing_fixture(fault: u8) -> Func {
+        let mut ops: Vec<(&str, Vec<u16>)> = vec![
+            ("JLowZ", vec![]), ("RET", vec![4]),
+            ("CpyVtoV8", vec![6, (-2i16) as u16]),
+            (if fault == 6 { "SUSPEND" } else { "CALLSYS" }, vec![]),
+            ("CpyRtoV4", vec![10]), ("fTOd", vec![8, 10]),
+        ];
+        if fault == 3 { ops.push(("PSF", vec![6])); }
+        if fault == 4 { ops.push(("CpyVtoV8", vec![6, (-2i16) as u16])); }
+        if fault == 9 { ops.push(("LDV", vec![6])); }
+        let read_at = ops.len();
+        ops.extend([
+            (if fault == 5 { "dTOi" } else { "dTOf" }, vec![9, 6]),
+            ("PshV4", vec![if fault == 7 { 10 } else { 9 }]),
+            ("CALLSYS", vec![]), ("CpyRtoV4", vec![1]),
+            ("CpyVtoR4", vec![1]), ("RET", vec![4]),
+        ]);
+        let borrowed: Vec<_> = ops.iter().map(|(n, w)| (*n, w.as_slice())).collect();
+        let mut f = function(&borrowed);
+        f.ret.token = 0x41;
+        f.params.push(crate::cache::model::Param { name: "Reach".into(), flags: 0,
+            ty: DataType { token: if fault == 1 { 0x50 } else { 0x51 },
+                is_reference: fault == 2, is_read_only: true, ..Default::default() } });
+        let code = disassemble(&f.bytecode).unwrap();
+        // Entering at the copy is valid; entering only at its use is not.
+        let target = if fault == 8 { read_at } else { 2 };
+        f.bytecode[code[0].offset_dw + 1] = code[target].offset_dw as i32 - 2;
+        f
+    }
+
+    #[test]
+    fn named_f64_parameter_snapshot_survives_both_member_and_late_alias_rounds() {
+        let refs = RefResolver::default();
+        let f = named_parameter_narrowing_fixture(0);
+        let keep = super::member_copy_named_slots(&f, &refs, true);
+        assert_eq!(keep, HashSet::from([6]));
+        let locals = BTreeMap::from([(6, "float".into()), (8, "float".into())]);
+        let roots = HashMap::from([("Reach".into(), "float".into())]);
+        let body = "if (Invalid())\n{\n    return false;\n}\nlocal_6 = Reach;\nlocal_8 = Height();\nif (CanReach(float32(local_6), float32(local_8)))\n{\n    return true;\n}\nreturn false;\n";
+        let member = |body: &str, keep: &HashSet<i32>| super::fold_member_read_temporaries(
+            body, &HashSet::new(), &HashSet::new(), &locals, None, &roots, &refs,
+            &HashMap::new(), false, keep, &HashSet::new(), &HashMap::new());
+        assert!(!member(body, &HashSet::new()).contains("local_6"));
+        let early = member(body, &keep);
+        assert!(early.contains("local_6 = Reach;"), "{early}");
+        let aliases = super::fold_alias_copies(&early, &locals, &HashSet::new());
+        let (declared, _) = super::rewrite_first_use_decl_init(&aliases, &locals, &refs,
+            &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(),
+            &HashMap::new(), &HashSet::new(), &HashSet::new());
+        let assigned = super::fold_assigned_temporaries(&declared, None, &roots, &refs, &HashSet::new());
+        let widened = super::fold_widening_aliases(&assigned, &locals, &roots, &HashSet::new());
+        let mut candidates = super::unnamed_value_defs(&f, &refs, &[], &[]);
+        candidates.extend(super::immediately_consumed_defs(&f));
+        assert!(!candidates.iter().any(|(s, _)| *s == 6));
+        let late = super::inline_unnamed_value_temporaries(&widened, &candidates,
+            &HashSet::new(), &HashSet::new(), &refs, &HashSet::new(), &HashSet::new(),
+            &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
+        let final_body = member(&late, &keep);
+        assert!(final_body.contains("float local_6 = Reach;"), "{final_body}");
+        assert!(final_body.find("local_6 = Reach;") < final_body.find("Height()"), "{final_body}");
+        assert!(final_body.contains("float32(local_6)"), "{final_body}");
+    }
+
+    #[test]
+    fn named_parameter_snapshot_requires_f64_closed_life_narrowing_push_and_cfg() {
+        let refs = RefResolver::default();
+        for fault in 1..=9 {
+            let f = named_parameter_narrowing_fixture(fault);
+            assert!(super::member_copy_named_slots(&f, &refs, true).is_empty(), "fault {fault}");
+        }
+        let f = named_parameter_narrowing_fixture(0);
+        assert!(super::member_copy_named_slots(&f, &refs, false).is_empty());
+        let mut object = f.clone(); object.obj_locals.push((6, 17));
+        assert!(super::member_copy_named_slots(&object, &refs, true).is_empty());
+        // The previous member-copy witness is unchanged and needs no parameter.
+        let old = function(&[("RDR8", &[8]), ("CpyVtoV8", &[6, 8]), ("RET", &[0])]);
+        assert_eq!(super::member_copy_named_slots(&old, &refs, false), HashSet::from([6]));
+    }
+
     fn function(ops: &[(&str, &[u16])]) -> Func {
         let bytecode = ops.iter().flat_map(|(name, words)| {
             let op = OPCODES.iter().find(|op| op.name == *name).unwrap();
@@ -34054,6 +34230,89 @@ mod literal_value_lifetime_tests {
         let (missing, sites, _) = super::resolve_ctor_site_markers(
             body, &locals, &refs, &HashSet::new(), &HashSet::new());
         assert!(sites.is_empty() && !missing.contains("FVector"));
+    }
+
+    fn joined_widened_return_copy_fixture() -> Func {
+        let mut ops: Vec<(&str, &[u16])> = vec![("SetV8", &[2])];
+        let guards = [0, 65535, 65534, 65533, 65532, 65531];
+        for guard in &guards {
+            ops.extend_from_slice(&[("CpyVtoR1", std::slice::from_ref(guard)), ("JLowZ", &[]),
+                ("CpyVtoR8", &[2]), ("JMP", &[])]);
+        }
+        ops.extend_from_slice(&[("CpyVtoR1", &[65530]), ("JLowZ", &[]),
+            ("fTOd", &[10, 65529]), ("CpyVtoV8", &[2, 10]), ("JMP", &[]),
+            ("fTOd", &[10, 65528]), ("CpyVtoV8", &[2, 10]),
+            ("CpyVtoV8", &[18, 2]), ("CpyVtoR8", &[18]), ("RET", &[9])]);
+        let mut f = function(&ops); f.ret.token = 0x51;
+        f.params = ["Guard0", "Guard1", "Guard2", "Guard3", "Guard4", "Guard5", "Front", "A", "B"]
+            .into_iter().enumerate().map(|(n, name)| super::super::model::Param {
+                name: name.into(), flags: 0,
+                ty: DataType { token: if n < 7 { 0x41 } else { 0x50 }, ..Default::default() },
+            }).collect();
+        let code = disassemble(&f.bytecode).unwrap();
+        let mut edges = vec![(26, 30), (29, 32)];
+        for guard in 0..6 { edges.extend([(guard * 4 + 2, guard * 4 + 5), (guard * 4 + 4, 34)]); }
+        for (at, target) in edges {
+            f.bytecode[code[at].offset_dw + 1] = code[target].offset_dw as i32 - code[at].offset_dw as i32 - 2;
+        }
+        f
+    }
+
+    #[test]
+    fn joined_widened_return_copy_survives_alias_and_return_folds_through_the_emitter() {
+        let f = joined_widened_return_copy_fixture(); let refs = RefResolver::default();
+        let keep = super::copied_joined_widened_return_slots(&f);
+        assert_eq!(keep, HashSet::from([18]));
+        let body = "    local_18 = local_2;\n    return local_18;\n";
+        let locals = BTreeMap::from([(2, "float".into()), (18, "float".into())]);
+        assert_eq!(super::fold_alias_copies(body, &locals, &keep), body);
+        assert_eq!(super::fold_returned_temporaries(body, &locals, &refs, "float", false, &keep), body);
+        let mut source = String::new();
+        super::emit_function(&mut source, &f, &refs, false, false, 0);
+        assert!(source.contains("float local_18 = local_2;"), "{source}");
+        assert_eq!(source.matches("return local_2;").count(), 6, "{source}");
+        assert_eq!(source.matches("return local_18;").count(), 1, "{source}");
+        assert!(source.contains("local_2 = A;") && source.contains("local_2 = B;"), "{source}");
+        assert!(!source.contains("stub[") && !source.contains("local_18_"), "{source}");
+    }
+
+    #[test]
+    fn joined_return_copy_requires_closed_lives_widening_and_the_exact_branch_join() {
+        let f = joined_widened_return_copy_fixture();
+        let code = disassemble(&f.bytecode).unwrap();
+        for fault in 0..12 {
+            let mut bad = f.clone();
+            match fault {
+                0 => bad.ret.token = 0x50,
+                1 => bad.ret.is_reference = true,
+                2 => bad.obj_locals.push((18, 100)),
+                3 => bad.bytecode[code[32].offset_dw + 1] = 10,
+                4 => bad.bytecode[code[33].offset_dw] ^= (18 ^ 2) << 16,
+                5 => bad.bytecode[code[27].offset_dw] =
+                    (bad.bytecode[code[27].offset_dw] & !0xff) | OPCODES.iter().find(|op| op.name == "CpyVtoV8").unwrap().opcode as i32,
+                6 | 7 | 8 => {
+                    let (at, target) = match fault { 6 => (29, 33), 7 => (26, 31), _ => (2, 27) };
+                    bad.bytecode[code[at].offset_dw + 1] = code[target].offset_dw as i32 - code[at].offset_dw as i32 - 2;
+                }
+                9 | 10 => {
+                    let extra = if fault == 9 { function(&[("SetV8", &[18])]) } else { function(&[("PSF", &[2])]) };
+                    bad.bytecode.splice(code[1].offset_dw..code[1].offset_dw, extra.bytecode);
+                }
+                _ => for guard in 0..6 { bad.bytecode[code[guard * 4 + 3].offset_dw] ^= (2 ^ 10) << 16; },
+            }
+            assert!(super::copied_joined_widened_return_slots(&bad).is_empty(), "fault {fault}");
+        }
+        // Ordinary one-use return aliases retain their previous folding behavior.
+        let mut ordinary = function(&[("fTOd", &[10, 65535]), ("CpyVtoV8", &[2, 10]),
+            ("CpyVtoV8", &[18, 2]), ("CpyVtoR8", &[18]), ("RET", &[1])]);
+        ordinary.ret.token = 0x51;
+        let empty = super::copied_joined_widened_return_slots(&ordinary);
+        assert!(empty.is_empty());
+        let body = "    local_18 = local_2;\n    return local_18;\n";
+        let locals = BTreeMap::from([(2, "float".into()), (18, "float".into())]);
+        assert_eq!(super::fold_alias_copies(body, &locals, &empty), "    return local_2;\n");
+        assert_eq!(super::fold_returned_temporaries(body, &locals, &RefResolver::default(), "float", false, &empty),
+            "    return local_2;\n");
     }
 
     #[test]
