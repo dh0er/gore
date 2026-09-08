@@ -1899,6 +1899,40 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_reused_guard_cast_getter(fault: u8) -> Self {
+        let names = [("UMagic", "Target"), ("ABridge", ""), ("USpell", "Bridge"), ("UDelegate", ""),
+            ("FTag", ""), ("FName", ""), ("AActor", ""), ("UObject", "")];
+        let mut r = Self::from_test_member_chain(&names);
+        for (index, (name, _)) in names.iter().enumerate() {
+            let id = index as i64 + 1;
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: (*name).into(),
+                module: if [2, 3].contains(&id) { "Fixture".into() } else { String::new() },
+                namespace: if fault == 4 && id == 7 { "Other".into() } else { String::new() } });
+            if matches!(id, 1 | 3) { r.prop_type_id.insert((id << 1) | 1, id as i32); }
+        }
+        let key = (3i64 << 1) | (8i64 << 33) | 1;
+        r.prop_by_key.insert(key, "Handle".into()); r.prop_type_id.insert(key, 3);
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(
+            &[("UMagic", "Target", if fault == 1 { "UObject" } else { "AActor" })], &[], None));
+        r.set_class_fields(HashMap::from([("USpell".into(), HashMap::from([
+            ("Bridge".into(), "ABridge".into()), ("Handle".into(), "UDelegate".into())]))]));
+        let handle = |ty| DataType { token: 5, type_info: ty, is_object_handle: true, ..Default::default() };
+        let value = |ty| DataType { token: 5, type_info: ty, ..Default::default() };
+        for (ptr, name) in [(1, "Interrupt"), (2, "Target"), (3, "opCast"), (4, "__STATIC_NAME"), (5, "Avatar"), (6, "Attach")] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_params.insert(ptr, Vec::new());
+            r.func_ret.insert(ptr, DataType { token: 0x52, ..Default::default() });
+        }
+        for ptr in [1, 2, 3, 5] { r.func_is_method.insert(ptr); }
+        for ptr in [2, 5] { r.func_ret.insert(ptr, handle(7)); }
+        if fault == 2 { r.func_ret.get_mut(&5).unwrap().is_reference = true; }
+        r.func_ret.insert(4, DataType { is_reference: true, is_object_const: true, ..value(6) });
+        r.func_params.insert(4, vec![DataType { token: 0x44, ..Default::default() }]);
+        r.func_ret.insert(6, handle(4)); r.func_params.insert(6, vec![handle(if fault == 3 { 8 } else { 7 }), value(5), handle(8), value(6)]);
+        r.temporary_arg_positions.insert("Attach".into(), HashMap::from([(4, vec![true, false, true, false])]));
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_reused_null_guard_getters(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("UDebugOwner", "Controlled"), ("UComponent", ""),
             ("UAbilityBase", "TargetEffect"), ("TSubclassOf", ""), ("UEffect", "")]);
@@ -2008,6 +2042,34 @@ impl RefResolver {
             for (off,name) in ["A","LastA","B","LastB","C","LastC","Settled"].iter().enumerate() {
                 r.prop_by_key.insert(((id as i64)<<1)|((off as i64)<<33)|1,(*name).into());
             }
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_ordered_vector_arguments(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FVector", ""), ("ECollisionChannel", ""), ("AGothicCharacter", "")]);
+        for (id, name) in [(1, "FVector"), (2, "ECollisionChannel"), (3, "AGothicCharacter")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: name.into(), namespace: String::new(),
+                module: if id == 1 && fault == 1 { "Other" } else { "" }.into() });
+        }
+        for (id, name, owner) in [(10, "GetLocation", "AActor"), (20, "Floor", "AHost"), (30, "Contains", "AHost")] {
+            r.funcid_to_ptr.insert(id, id as i64); r.func_by_ptr.insert(id as i64, name.into());
+            r.func_owner.insert(id as i64, owner.into()); r.func_is_method.insert(id as i64);
+        }
+        if fault != 2 { r.const_method_ptrs.insert(10); }
+        let value = DataType { token: 5, type_info: 1, ..Default::default() };
+        let input = DataType { is_reference: true, is_object_const: true, is_read_only: true, ..value.clone() };
+        let scalar = DataType { token: if fault == 3 { 0x50 } else { 0x51 }, ..Default::default() };
+        r.func_ret.insert(10, value.clone()); r.func_params.insert(10, Vec::new());
+        r.func_ret.insert(20, value.clone());
+        r.func_params.insert(20, vec![input.clone(), DataType { token: 5, type_info: 2, ..Default::default() }, scalar.clone(), scalar]);
+        r.func_ret.insert(30, DataType { token: 0x41, ..Default::default() });
+        r.func_params.insert(30, vec![input.clone(), if fault == 4 { value } else { input }]);
+        if fault == 5 { r.func_is_method.remove(&20); }
+        if fault == 6 { r.func_params.get_mut(&10).unwrap().push(DataType { token: 0x44, ..Default::default() }); }
+        for (name, count) in [("Floor", 4), ("Contains", 2)] {
+            r.temporary_arg_positions.insert(name.into(), HashMap::from([(count, vec![true; count])]));
         }
         r
     }
@@ -2422,6 +2484,42 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_iterator_reference_before_argument(fault: u8) -> Self {
+        let mut r = Self::default();
+        r.type_by_ptr.insert(101, "TSetIterator".into());
+        r.type_by_ptr.insert(102, "TSubclassOf<UTask>".into());
+        r.type_by_ptr.insert(103, "UEntry".into());
+        for (id, name, owner) in [(1, "Proceed", "TSetIterator"), (2, "Iterator", "TSet"),
+            (3, "opIndex", "TMap"), (4, "Use", "AOwner")]
+        {
+            r.func_by_ptr.insert(id, name.into()); r.func_owner.insert(id, owner.into());
+            r.func_is_method.insert(id); r.func_params.insert(id, Vec::new());
+        }
+        let value = DataType { token: 5, type_info: 102, is_reference: true,
+            is_object_const: true, is_read_only: true, ..Default::default() };
+        r.func_ret.insert(1, value.clone());
+        r.func_ret.insert(2, DataType { token: 5, type_info: 101, ..Default::default() });
+        r.func_ret.insert(3, DataType { token: 5, type_info: 103,
+            is_reference: true, is_object_handle: true, ..Default::default() });
+        r.func_params.insert(3, vec![value.clone()]);
+        r.func_ret.insert(4, DataType { token: 0x52, ..Default::default() });
+        r.func_params.insert(4, vec![value, DataType { token: 0x51,
+            is_object_const: true, is_read_only: true, ..Default::default() }]);
+        r.funcid_to_ptr.insert(4, 4);
+        r.temporary_arg_positions.insert("Use".into(), [(2, vec![true, true])].into_iter().collect());
+        if fault == 1 { r.func_ret.get_mut(&1).unwrap().is_reference = false; }
+        if fault == 2 { r.func_ret.get_mut(&1).unwrap().is_object_const = false; }
+        if fault == 3 { r.func_params.get_mut(&4).unwrap()[0].type_info = 103; }
+        if fault == 4 { r.func_params.get_mut(&4).unwrap()[1].token = 0x50; }
+        if fault == 5 { r.func_is_method.remove(&1); }
+        if fault == 6 { r.func_owner.insert(1, "TOtherIterator".into()); }
+        if fault == 7 { r.func_ret.get_mut(&3).unwrap().is_reference = false; }
+        if fault == 8 { r.func_is_method.remove(&4); }
+        if fault == 9 { r.func_params.get_mut(&4).unwrap()[0].is_read_only = false; }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_mutable_f32_iterator(ret: DataType, method: bool) -> Self {
         let mut r = Self::default();
         r.type_by_ptr.insert(101, "TArrayIterator".into());
@@ -2724,6 +2822,17 @@ impl RefResolver {
         r.func_params.insert(3, vec![DataType { token: 5, type_info: if fault == 2 { 3 } else { 1 },
             is_object_handle: true, is_reference: fault == 1, ..Default::default() }]);
         r.func_ret.insert(3, DataType { token: 0x52, ..Default::default() });
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_reloaded_field_sum(wrong_owner: bool) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FHost", "Radius"), ("FHost", "Speed")]);
+        for id in [1, 2] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: "FHost".into(), module: "Fixture".into(),
+                namespace: if wrong_owner && id == 2 { "Other" } else { "" }.into() });
+            r.prop_type_id.insert((id << 1) | 1, id as i32);
+        }
         r
     }
 
