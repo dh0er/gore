@@ -1692,6 +1692,13 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_const_assignment(ty: &str) -> Self {
+        let mut r = Self::default();
+        r.temporary_arg_methods.insert(format!("opAssign/{ty}"));
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_const_object_fields() -> Self {
         let mut r = Self::default();
         // Same bare owner in another namespace/module; same bare value type at

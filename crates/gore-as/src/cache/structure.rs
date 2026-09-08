@@ -253,7 +253,7 @@ pub fn body_statements_ctor(
         exit_mixed_rvo_ret_rows_ok: false,
         exit_scan_floor: 0,
         carry: None,
-        loop_scope: None,
+        loop_scope: None, pending_loop_exit: None,
         shared_return: None,
     };
     st.emit_range(0, g.blocks.len(), depth, &mut body);
@@ -2949,9 +2949,19 @@ pub(crate) fn bare_type_name(tyname: &str) -> &str {
 /// emitter turns the pair into a `while` once the condition is one expression, and drops the
 /// mark when it cannot -- leaving exactly the `if` that stood here before.
 pub(crate) const LOOP_BACK_EDGE: &str = "//__gore_back_edge";
+pub(crate) const LOOP_BREAK_EDGE: &str = "//__gore_loop_break";
+
+pub(crate) fn loop_back_edge_exit(line: &str) -> Option<usize> {
+    line.trim().strip_prefix(LOOP_BACK_EDGE)?.trim().split_once(' ')?.1.parse().ok()
+}
+
+pub(crate) fn loop_break_edge(line: &str) -> Option<(usize, usize)> {
+    let (target, exit) = line.trim().strip_prefix(LOOP_BREAK_EDGE)?.strip_prefix(' ')?.split_once(' ')?;
+    Some((target.parse().ok()?, exit.parse().ok()?))
+}
 
 pub(crate) fn loop_back_edge_target(line: &str) -> Option<usize> {
-    line.trim().strip_prefix(LOOP_BACK_EDGE)?.strip_prefix(' ')?.parse().ok()
+    line.trim().strip_prefix(LOOP_BACK_EDGE)?.strip_prefix(' ')?.split_whitespace().next()?.parse().ok()
 }
 
 pub(crate) fn is_loop_back_edge(line: &str) -> bool {
@@ -7303,6 +7313,9 @@ struct Structurer<'a> {
     /// `break;` lands: the latch's non-back-edge successor). Saved/restored around the recursive
     /// body emission; nested loops push/pop so break/continue always bind to the innermost loop.
     loop_scope: Option<LoopScope>,
+    /// Provenance only: (back-edge header, exact exit) of a pending late loop.
+    /// This never authorizes a keyword before the emitter recovers that while.
+    pending_loop_exit: Option<(usize, usize)>,
     /// While a then-arm is being emitted: the offset the enclosing conditional jumps to when its
     /// test fails. A constant-return block there is the tail BOTH guards share, and writing it
     /// again inside the arm duplicates a `return` vanilla wrote once.
@@ -8160,19 +8173,32 @@ impl Structurer<'_> {
                 // The latch block is NOT excluded: its jump is only its terminator, and the
                 // statements before it are the body's last ones.
                 let then_end_body = then_end;
+                // Only the complete suspended body identifies this candidate's exit;
+                // an earlier guarded jump to the same header has no such authority.
+                let marked_loop_exit = latch_back.filter(|_| {
+                    then_idx == Some(i + 1) && else_idx == Some(then_end)
+                        && self.ctx.instrs[self.g.blocks[i + 1].instr_lo].op.name == "SUSPEND"
+                }).map(|latch| (self.g.blocks[latch].succs[0], taken.unwrap()));
                 let _ = writeln!(out, "{ind}if ({cond})");
                 let _ = writeln!(out, "{ind}{{");
                 let then_body_at = out.len();
                 if let Some(t) = then_idx {
                     if t > i && t <= then_end_body {
                         let outer = std::mem::replace(&mut self.shared_return, taken);
+                        let pending = self.pending_loop_exit;
+                        if marked_loop_exit.is_some() { self.pending_loop_exit = marked_loop_exit; }
                         self.emit_range(t, then_end_body, depth + 1, out);
+                        self.pending_loop_exit = pending;
                         self.shared_return = outer;
                     }
                 }
                 if let Some(latch) = latch_back {
                     let target = self.g.blocks[latch].succs[0];
-                    let _ = writeln!(out, "{ind}    {LOOP_BACK_EDGE} {target}");
+                    if let Some((_, exit)) = marked_loop_exit {
+                        let _ = writeln!(out, "{ind}    {LOOP_BACK_EDGE} {target} {exit}");
+                    } else {
+                        let _ = writeln!(out, "{ind}    {LOOP_BACK_EDGE} {target}");
+                    }
                 }
                 // Whether the arm we just WROTE ends in a return. The bytecode saying the branch
                 // returns is not enough: a return this renderer cannot express — a void one, a
@@ -8379,6 +8405,10 @@ impl Structurer<'_> {
                 // bare-RET row inside the body) as `break;`/`continue;`/`return ...;`.
                 if let Some(x) = selected_exit {
                     let _ = writeln!(out, "{ind}{x}");
+                } else if let Some((target, exit)) = self.pending_loop_exit {
+                    if self.jump_op(i) == "JMP" && b.succs.first() == Some(&exit) {
+                        let _ = writeln!(out, "{ind}{LOOP_BREAK_EDGE} {target} {exit}");
+                    }
                 }
                 next = i + 1;
             }
@@ -11477,7 +11507,7 @@ mod tests {
         let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of, exit_join: None,
             exit_join_is_ret: false, exit_ret_rows_ok: false, exit_rvo_return: false,
             exit_mixed_rvo_ret_rows_ok: false, exit_scan_floor: 0, carry: None,
-            loop_scope: None, shared_return: None };
+            loop_scope: None, pending_loop_exit: None, shared_return: None };
         let mut source = String::new(); st.emit_range(0, g.blocks.len(), 0, &mut source); source
     }
 
@@ -11542,7 +11572,7 @@ mod tests {
         let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of, exit_join: None,
             exit_join_is_ret: false, exit_ret_rows_ok: false, exit_rvo_return: false,
             exit_mixed_rvo_ret_rows_ok: false, exit_scan_floor: 0, carry: None,
-            loop_scope: None, shared_return: None };
+            loop_scope: None, pending_loop_exit: None, shared_return: None };
         let mut out = String::new(); st.emit_range(0, g.blocks.len(), 0, &mut out); out
     }
 
@@ -12113,7 +12143,7 @@ mod tests {
             ctx: &ctx, g: &g, idx_of: &idx_of,
             exit_join: None, exit_join_is_ret: false, exit_ret_rows_ok: false,
             exit_rvo_return: false, exit_mixed_rvo_ret_rows_ok: false, exit_scan_floor: 0,
-            carry: None, loop_scope: None, shared_return: None,
+            carry: None, loop_scope: None, pending_loop_exit: None, shared_return: None,
         };
         let mut out = String::new();
         st.emit_range(0, g.blocks.len(), 0, &mut out);
@@ -12730,7 +12760,7 @@ mod tests {
             exit_join_is_ret: false, exit_ret_rows_ok: false, exit_rvo_return: false,
             exit_mixed_rvo_ret_rows_ok: false, exit_scan_floor: 0,
             carry: Some((start, vec![Arg::obj("local_20".into()).carry()])),
-            loop_scope: None, shared_return: None };
+            loop_scope: None, pending_loop_exit: None, shared_return: None };
         let mut out = String::new(); st.emit_range(start, g.blocks.len(), 0, &mut out);
         assert!(!out.contains("switch ("), "incoming carry accepted: {out}");
     }
@@ -13330,7 +13360,7 @@ mod tests {
             exit_mixed_rvo_ret_rows_ok: false,
             exit_scan_floor: 0,
             carry: None,
-            loop_scope: None,
+            loop_scope: None, pending_loop_exit: None,
             shared_return: None,
         };
         let (start, stop) = if let Some((start, stop, scope)) = range {

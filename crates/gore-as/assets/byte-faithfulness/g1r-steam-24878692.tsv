@@ -25,11 +25,9 @@ AI.CharacterAI_Orc	2	0	0
 AI.DailyRoutines.DailyRoutines_OG	1	0	0
 AI.NativeAICommands	2	0	0
 AI.Relationship.PersonalRelationshipModifiers	2	0	0
-AI.States.AIState_DailyRoutine	1	0	0
 AI.States.AIState_FollowCharacterAggressive	2	0	0
 AI.States.AIState_GuideCharacter	3	0	0
 AI.States.AIState_InteractWinchGate	1	0	0
-AI.States.AIState_UseFreepoint	1	0	0
 AI.States.FightAI.AIGroup_ConflictInstance	1	0	0
 AI.States.FightAI.AIGroup_StateEvent	2	0	0
 AI.States.FightAI.AIState_PerceptionResponse	3	0	0
@@ -37,7 +35,7 @@ AI.States.FightAI.AssessGoToDailyRoutineState.UAIState_AssessGoToDailyRoutine	2	
 AI.States.FightAI.CharmedState.AIState_Charmed	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_AcceptDefeat	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_ClaimVictory	1	0	0
-AI.States.FightAI.CombatEndActionsState.AIState_CombatEndActions	3	0	0
+AI.States.FightAI.CombatEndActionsState.AIState_CombatEndActions	1	0	0
 AI.States.FightAI.CombatState.AICombatTargetScoring	2	0	0
 AI.States.FightAI.CombatState.AIGroup_Attackers	5	0	0
 AI.States.FightAI.CombatState.AIGroup_Combat	2	0	0
@@ -65,7 +63,7 @@ AI.States.FightAI.WarningState.AIState_Warning_ComplainAboutBlockedPath	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_Creature	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_Crime	11	0	0
 AI.States.FightAI.WatchFightState.AIGroup_WatchFight	2	0	0
-AI.States.FightAI.WatchFightState.AIState_WatchFight	17	0	0
+AI.States.FightAI.WatchFightState.AIState_WatchFight	16	0	0
 AI.States.Test.TestCharacters_Navigation	1	0	0
 Camera.ConversationCameraConfig	1	0	0
 Environment.GothicUltraDynamicControlerAS	3	0	0
@@ -73,7 +71,7 @@ FX.DepthOfField.DepthOfFieldController	1	0	0
 GAS.Abilities.Combat.AttackLoop.Capsule.GA_AttackLoopCapsule	1	0	0
 GAS.Abilities.Combat.AttackLoop.Capsule.PyrolaserHitCapsuleComponent	1	0	0
 GAS.Abilities.Combat.AttackLoop.Cone.GA_AttackLoopCone	1	0	0
-GAS.Abilities.Interact.GA_Human_Loot	3	0	0
+GAS.Abilities.Interact.GA_Human_Loot	2	0	0
 GAS.Abilities.Interact.Sleep.Base.GA_Human_Sleep	1	0	0
 GAS.Abilities.Locomotion.GA_Falling	1	0	0
 GAS.Abilities.Locomotion.GA_FallingRagdoll	1	0	0
