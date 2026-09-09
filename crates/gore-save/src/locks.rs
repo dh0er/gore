@@ -261,19 +261,19 @@ pub fn list_locks(root: &RootObject) -> LocksSummary {
     }
 }
 
-/// Whether `name` is in the set right now, plus the path that addresses the
+/// Stored spellings of `name` in the set, plus the path that addresses the
 /// set. `None` for the path means the save has no such set at all.
 ///
-/// Name comparison is case-insensitive, matching UE `FName` semantics and the
-/// `SetAdd`/`SetRemove` appliers, so a catalog entry that differs from a
-/// save's spelling only in case is still recognized as present.
+/// Lock IDs compare case-insensitively, matching UE `FName` semantics and the
+/// editor. Preserve each stored spelling for removal: string sets compare
+/// case-sensitively and can hold multiple case variants of the same lock ID.
 pub fn lock_snapshot(
     payload: &[u8],
     name: &str,
-) -> Result<(bool, Option<Vec<properties::PathSeg>>), CoreError> {
+) -> Result<(Vec<String>, Option<Vec<properties::PathSeg>>), CoreError> {
     let root = properties::parse_private_root(payload)?;
     let Some((path, property)) = unlocked_locks(&root) else {
-        return Ok((false, None));
+        return Ok((Vec::new(), None));
     };
     let PropertyValue::Set { elements, .. } = &property.value else {
         return Err(CoreError::Parse(format!(
@@ -285,11 +285,18 @@ pub fn lock_snapshot(
             "{UNLOCKED_LOCKS_PROPERTY} holds elements this build cannot splice"
         )));
     }
-    let contains = elements.iter().any(|element| match element {
-        PropertyValue::Name(value) | PropertyValue::Str(value) => value.eq_ignore_ascii_case(name),
-        _ => false,
-    });
-    Ok((contains, Some(properties::parse_path(&path)?)))
+    let stored_names = elements
+        .iter()
+        .filter_map(|element| match element {
+            PropertyValue::Name(value) | PropertyValue::Str(value)
+                if value.eq_ignore_ascii_case(name) =>
+            {
+                Some(value.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    Ok((stored_names, Some(properties::parse_path(&path)?)))
 }
 
 #[cfg(test)]
@@ -487,10 +494,49 @@ mod tests {
     #[test]
     fn membership_is_case_insensitive_like_fname() {
         let payload = payload_with_locks("NameProperty", &["IO_OC_CHEST_DEXTER"]);
-        let (contains, path) = lock_snapshot(&payload, "io_oc_chest_dexter").unwrap();
-        assert!(contains);
+        let (stored_names, path) = lock_snapshot(&payload, "io_oc_chest_dexter").unwrap();
+        assert_eq!(stored_names, ["IO_OC_CHEST_DEXTER"]);
         assert!(path.is_some());
         let (absent, _) = lock_snapshot(&payload, "IO_OC_CHEST_STONE").unwrap();
-        assert!(!absent);
+        assert!(absent.is_empty());
+    }
+
+    #[test]
+    fn relocking_removes_stored_case_variants_for_name_and_string_sets() {
+        for inner_type in ["NameProperty", "StrProperty"] {
+            let names: &[&str] = if inner_type == "StrProperty" {
+                &["io_oc_chest_dexter", "IO_OC_CHEST_DEXTER", "OtherLock"]
+            } else {
+                &["io_oc_chest_dexter", "OtherLock"]
+            };
+            let mut payload = payload_with_locks(inner_type, names);
+            let before = payload.clone();
+            let apply = |payload: &mut Vec<u8>, unlocked| {
+                crate::apply_private_lock_set_unlocked_to_payload(
+                    payload,
+                    &crate::PrivateLockSetUnlockedEdit {
+                        lock: "IO_OC_CHEST_DEXTER".to_string(),
+                        unlocked,
+                    },
+                )
+                .unwrap();
+            };
+            apply(&mut payload, true);
+            assert_eq!(payload, before, "already unlocked: {inner_type}");
+            apply(&mut payload, false);
+            let root = properties::parse_private_root(&payload).unwrap();
+            assert_eq!(list_locks(&root).unlocked, ["OtherLock"]);
+            let locked = payload.clone();
+            apply(&mut payload, false);
+            assert_eq!(payload, locked, "already locked: {inner_type}");
+            apply(&mut payload, true);
+            let root = properties::parse_private_root(&payload).unwrap();
+            assert_eq!(
+                list_locks(&root).unlocked,
+                ["OtherLock", "IO_OC_CHEST_DEXTER"]
+            );
+            apply(&mut payload, false);
+            assert_eq!(payload, locked, "roundtrip: {inner_type}");
+        }
     }
 }

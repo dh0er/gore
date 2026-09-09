@@ -14021,32 +14021,37 @@ fn apply_private_lock_set_unlocked_to_payload(
     edit: &PrivateLockSetUnlockedEdit,
 ) -> Result<(), CoreError> {
     let mut patched = payload.clone();
-    let (contains, set_path) = locks::lock_snapshot(&patched, &edit.lock)?;
+    let (stored_names, set_path) = locks::lock_snapshot(&patched, &edit.lock)?;
     let Some(set_path) = set_path else {
         return Err(CoreError::UnsupportedEdit(format!(
             "this save has no {} set to edit",
             locks::UNLOCKED_LOCKS_PROPERTY
         )));
     };
-    if contains && edit.unlocked {
+    if !stored_names.is_empty() && edit.unlocked {
         return Ok(());
     }
 
-    if contains != edit.unlocked {
+    let changes: Vec<_> = if edit.unlocked {
+        vec![properties::ContainerEdit::SetAdd(edit.lock.clone())]
+    } else {
+        stored_names
+            .into_iter()
+            .map(properties::ContainerEdit::SetRemove)
+            .collect()
+    };
+    for change in changes {
         apply_private_typed_container_edit_to_payload(
             &mut patched,
             &PrivateTypedContainerEdit {
-                path: set_path,
-                edit: if edit.unlocked {
-                    properties::ContainerEdit::SetAdd(edit.lock.clone())
-                } else {
-                    properties::ContainerEdit::SetRemove(edit.lock.clone())
-                },
+                path: set_path.clone(),
+                edit: change,
             },
         )?;
     }
 
-    let (final_contains, _) = locks::lock_snapshot(&patched, &edit.lock)?;
+    let (final_names, _) = locks::lock_snapshot(&patched, &edit.lock)?;
+    let final_contains = !final_names.is_empty();
     if final_contains != edit.unlocked {
         return Err(CoreError::Validation(format!(
             "lock postcondition failed for {:?}",
@@ -17021,7 +17026,12 @@ mod tests {
         let (open, closed) = door_arrays(&payload);
         assert_eq!(open, ["OC_Cellar_Door"]);
         assert_eq!(closed, ["CV_Stash_Door"]);
-        assert!(!locks::lock_snapshot(&payload, "CV_Stash_Door").unwrap().0);
+        assert!(
+            locks::lock_snapshot(&payload, "CV_Stash_Door")
+                .unwrap()
+                .0
+                .is_empty()
+        );
     }
 
     #[test]
