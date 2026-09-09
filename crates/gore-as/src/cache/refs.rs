@@ -2236,6 +2236,11 @@ impl RefResolver {
         if fault == 10 { r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(); }
         if fault == 11 { r.func_is_method.remove(&1); }
         if fault == 12 { r.func_params.get_mut(&1).unwrap().clear(); }
+        if (13..=16).contains(&fault) {
+            let p = &mut r.func_params.get_mut(&1).unwrap()[0];
+            p.is_reference = false; p.is_object_const = false; p.is_read_only = false;
+            p.is_auto = fault == 14; p.if_handle_then_const = fault == 15; p.is_object_handle = fault == 16;
+        }
         r
     }
 
@@ -2651,6 +2656,49 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_context_receiver_before_nested_rvo(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(1, "FName"), (2, "FInteractionSpotHandle"), (3, "FTransform"), (4, "FVector"), (5, "UObject")] {
+            r.type_by_ptr.insert(ptr, name.into()); r.type_names.insert(name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        let value = |ptr| DataType { token: 5, type_info: ptr, ..Default::default() };
+        let void = DataType { token: 0x52, ..Default::default() };
+        for (ptr, name, owner, constant, ret, args) in [
+            (10, "$beh0", "FInteractionSpotHandle", false, void.clone(), vec![value(1)]),
+            (11, "GetTransform", "FInteractionSpotHandle", true, value(3),
+                vec![DataType { is_object_handle: true, is_object_const: true, ..value(5) }]),
+            (12, "GetLocation", "FTransform", true, value(4), vec![]),
+            (13, "$beh2", "FInteractionSpotHandle", false, void, vec![])] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into()); r.func_is_method.insert(ptr);
+            if constant { r.const_method_ptrs.insert(ptr); }
+            r.func_ret.insert(ptr, ret); r.func_params.insert(ptr, args);
+        }
+        r.global_by_ptr.insert(100, "__WorldContext".into());
+        r.ctor_arg_positions.insert("FInteractionSpotHandle".into(), HashMap::from([(1, vec![true])]));
+        match fault {
+            1 => r.func_params.get_mut(&10).unwrap()[0].type_info = 2,
+            2 => r.func_params.get_mut(&10).unwrap()[0].is_reference = true,
+            3 => r.func_ret.get_mut(&11).unwrap().is_reference = true,
+            4 => { r.const_method_ptrs.remove(&11); }
+            5 => { r.func_owner.insert(12, "FOther".into()); }
+            6 => r.func_ret.get_mut(&12).unwrap().type_info = 3,
+            7 => { r.global_by_ptr.insert(100, "OtherGlobal".into()); }
+            8 => r.func_params.get_mut(&11).unwrap()[0].is_object_const = false,
+            9 => r.type_identity_by_ptr.get_mut(&2).unwrap().module = "Script".into(),
+            10 => { r.func_owner.insert(13, "FOther".into()); }
+            11 => { r.const_method_ptrs.insert(13); }
+            12 => r.func_ret.get_mut(&10).unwrap().token = 0x41,
+            13 => { r.func_is_method.remove(&12); }
+            14 => r.func_params.get_mut(&12).unwrap().push(value(1)),
+            15 => r.type_identity_by_ptr.get_mut(&5).unwrap().namespace = "Other".into(),
+            16 => { r.const_method_ptrs.insert(10); }
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_copied_index_argument(fault: u8) -> Self {
         let mut r = Self::default();
         for (ptr, name, module) in [(1, "TSubclassOf", "GAS.Skills"), (2, "TArray", "GAS.Skills"), (3, "FContext", ""),
@@ -2851,6 +2899,26 @@ impl RefResolver {
         let spec = DataType { token: 5, type_info: if fault == 3 { 100 } else { 200 }, is_reference: true,
             is_object_const: fault != 4, is_read_only: true, ..Default::default() };
         r.func_params.insert(3, vec![spec, DataType { token: 5, type_info: 400, is_object_handle: fault != 5, ..Default::default() }]);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_value_before_handle_argument(fault: u8) -> Self {
+        let mut r = Self::from_test_context_discarded_value(if fault <= 5 { fault } else { 0 });
+        for (ptr, name) in [(100, "FContext"), (200, "FSpec"), (300, "FResult"), (400, "UComponent"), (500, "ATarget")] {
+            r.type_by_ptr.insert(ptr, name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), namespace: String::new(),
+                module: if fault == 9 && ptr == 200 { "Foreign" } else { "" }.into() });
+        }
+        r.func_by_ptr.insert(8, "GetComponent".into()); r.func_owner.insert(8, "ATarget".into());
+        r.func_is_method.insert(8); r.const_method_ptrs.extend([2, 8]);
+        r.func_params.insert(8, Vec::new());
+        r.func_ret.insert(8, DataType { token: 5, type_info: 400, is_object_handle: fault != 6, ..Default::default() });
+        if fault == 7 { r.const_method_ptrs.remove(&8); }
+        if fault == 8 { r.func_owner.insert(4, "FContext".into()); }
+        if fault == 10 { r.func_ret.get_mut(&2).unwrap().is_reference = true; }
+        if fault == 11 { r.func_params.get_mut(&5).unwrap().push(DataType { token: 0x44, ..Default::default() }); }
+        r.temporary_arg_positions.insert("Apply".into(), HashMap::from([(2, vec![true, true])]));
         r
     }
 

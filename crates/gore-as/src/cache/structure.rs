@@ -437,10 +437,13 @@ fn is_proven_typed_psf_conversion(recv: &Arg, args: &[Arg], ptr: i64, refs: &Ref
     let local_slot = |arg: &Arg| arg.s.strip_prefix("local_").and_then(|n| n.parse::<i32>().ok()).filter(|n| *n > 0);
     let (Some(dst), Some(source)) = (local_slot(recv), local_slot(src)) else { return false; };
     let Some(identity) = refs.type_identity_by_ptr(param.type_info) else { return false; };
+    // Native value parameters can consume the same addressed local without const-ref flags.
+    let plain_value = !param.is_reference && !param.is_object_const && !param.is_read_only
+        && !param.is_object_handle && !param.is_auto && !param.if_handle_then_const;
     recv.is_psf && src.is_psf && dst != source && dst_ty != src_ty
         && matches!(dst_ty.as_bytes().first(), Some(b'F' | b'T' | b'E'))
-        && param.token == 5 && param.is_reference && param.is_object_const
-        && param.is_read_only && !param.is_object_handle
+        && param.token == 5 && !param.is_object_handle
+        && (plain_value || (param.is_reference && param.is_object_const && param.is_read_only))
         && identity.module.is_empty() && identity.namespace.is_empty()
         && identity.name.starts_with('F') && identity.name == src_ty
         && refs.func_by_ptr(ptr) == Some("$beh0") && refs.func_owner_by_ptr(ptr) == Some(dst_ty)
@@ -14389,6 +14392,51 @@ mod tests {
         assert!(source.contains("Save(local_21);"), "{source}");
         assert!(source.find("local_16 =").unwrap() < source.find("if (").unwrap(), "{source}");
         assert!(source.find("if (").unwrap() < source.find("local_21 =").unwrap(), "{source}");
+    }
+
+    #[test]
+    fn a_plain_native_value_constructor_input_survives_an_enclosing_branch() {
+        fn push(code: &mut Vec<i32>, name: &str, word: u16, dword: Option<i32>) -> usize {
+            let op = crate::cache::isa::OPCODES.iter().find(|op| op.name == name).unwrap();
+            let at = code.len(); let mut row = vec![0; op.size_dwords as usize];
+            row[0] = op.opcode as i32 | ((word as i32) << 16);
+            if let Some(value) = dword { row[1] = value; }
+            code.extend(row); at
+        }
+        let mut code = Vec::new();
+        push(&mut code, "PSF", 16, None);
+        push(&mut code, "CALLSYS", 0, Some(2)); // Input exists before the branch.
+        push(&mut code, "CALLSYS", 0, Some(3));
+        push(&mut code, "CpyRtoV4", 7, None);
+        push(&mut code, "CpyVtoR1", 7, None);
+        let branch = push(&mut code, "JLowZ", 0, Some(0));
+        push(&mut code, "PSF", 16, None);
+        push(&mut code, "PSF", 21, None);
+        push(&mut code, "CALLSYS", 0, Some(1)); // One plain, by-value native object parameter.
+        push(&mut code, "PSF", 21, None);
+        push(&mut code, "CALLSYS", 0, Some(4));
+        let cleanup = push(&mut code, "PSF", 16, None);
+        push(&mut code, "CALLSYS", 0, Some(5));
+        push(&mut code, "RET", 0, None);
+        code[branch + 1] = cleanup as i32 - branch as i32 - 2;
+        let ret = DataType { token: 0x52, ..Default::default() };
+        let f = FuncCode { func: "Synthetic::ConsumePlainValue".into(), is_method: false,
+            param_names: Vec::new(), param_types: Vec::new(), ret: ret.clone(), bytecode: code };
+        let locals = HashMap::from([(7, "bool".into()), (16, "FString".into()), (21, "FName".into())]);
+        let render = |fault| body_statements_ctor(&f, &RefResolver::from_test_typed_psf_conversion(fault),
+            0, None, Some(&ret), None, None, None, Some(&locals), None);
+        let source = render(13);
+        let constructor = "local_21 = FName(local_16);";
+        assert!(source.contains("local_16 = Source();"), "{source}");
+        assert!(source.contains(constructor), "{source}");
+        assert!(source.contains("Save(local_21);"), "{source}");
+        assert!(source.find("local_16 =").unwrap() < source.find("if (").unwrap(), "{source}");
+        assert!(source.find("if (").unwrap() < source.find(constructor).unwrap(), "{source}");
+        assert!(source.find(constructor).unwrap() < source.find("Save(local_21);").unwrap(), "{source}");
+        // Wrong type, partial reference qualifiers, handle/auto/conditional-handle remain rejected.
+        for fault in [1, 2, 3, 4, 5, 14, 15, 16] {
+            assert!(!render(fault).contains(constructor), "metadata {fault}");
+        }
     }
 
     #[test]
