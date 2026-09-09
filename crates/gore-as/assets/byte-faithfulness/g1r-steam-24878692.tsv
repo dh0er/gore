@@ -35,7 +35,7 @@ AI.States.FightAI.CombatEndActionsState.AIState_CombatEndActions	1	0	0
 AI.States.FightAI.CombatState.AIGroup_Attackers	5	0	0
 AI.States.FightAI.CombatState.AIGroup_Combat	2	0	0
 AI.States.FightAI.CombatState.AIState_OGCombat	6	0	0
-AI.States.FightAI.CombatState.CombatMoves	18	0	0
+AI.States.FightAI.CombatState.CombatMoves	16	0	0
 AI.States.FightAI.CombatState.CombatOperations	1	0	0
 AI.States.FightAI.CombatState.CombatTestClasses	1	0	0
 AI.States.FightAI.CombatState.Positioning.AICombat_Positioning	13	0	0
@@ -58,7 +58,6 @@ Environment.GothicUltraDynamicControlerAS	2	0	0
 GAS.Abilities.Combat.AttackLoop.Capsule.GA_AttackLoopCapsule	1	0	0
 GAS.Abilities.Combat.AttackLoop.Capsule.PyrolaserHitCapsuleComponent	1	0	0
 GAS.Abilities.Combat.AttackLoop.Cone.GA_AttackLoopCone	1	0	0
-GAS.Abilities.Interact.GA_Human_Loot	1	0	0
 GAS.Abilities.Locomotion.GA_Falling	1	0	0
 GAS.Abilities.Locomotion.GA_FallingRagdoll	1	0	0
 GAS.Abilities.Locomotion.GA_Swim	1	0	0
@@ -80,7 +79,7 @@ GAS.GASCharacterMixins	3	0	0
 GAS.GASCharacterStateMixins	7	0	0
 Gameplay.Magic.Components.InExtremo.InExtremoPropComponent	1	0	0
 Items.Projectiles	2	0	0
-Regions.Traits.QuestRelatedTraits	3	0	0
+Regions.Traits.QuestRelatedTraits	2	0	0
 Sound.FXDefinitions.FXDefinitions_AttackImpact	1	0	0
 Spawning.TriggerSpawner	1	0	0
 Story.Achievements	9	0	0

@@ -3949,6 +3949,127 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_named_int_field_predicate(old_owner: i32) -> Self {
+        let mut r = Self::from_test_copied_int_field_read("int", false);
+        r.typeid_to_ptr.insert(2, 2); r.type_by_ptr.insert(2, "UConfig".into());
+        r.type_identity_by_ptr.insert(2, TypeIdentity { name: "UConfig".into(), module: "Foreign".into(), namespace: String::new() });
+        r.prop_type_id.insert(3, old_owner);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_prepared_loot_arguments(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(1, "AUnit"), (2, "UInventory"), (3, "TSet"), (4, "FTag")] {
+            r.type_by_ptr.insert(ptr, name.into()); r.type_names.insert(name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        for (ptr, name, owner) in [(10, "Inventory", "AUnit"), (11, "Items", "UInventory"),
+            (12, "Num", "TSet"), (13, "$beh2", "TSet"), (14, "Take", "ULooter"), (15, "Send", "UEvents")] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into()); r.func_is_method.insert(ptr);
+            r.func_params.insert(ptr, vec![]); r.func_ret.insert(ptr, DataType { token: 0x52, ..Default::default() });
+        }
+        let integer = DataType { token: 0x44, ..Default::default() };
+        let float = DataType { token: 0x50, ..Default::default() };
+        let value = |ptr| DataType { token: 5, type_info: ptr, ..Default::default() };
+        for (ptr, ret, name, ty) in [(10, DataType { is_object_handle: true, ..value(2) }, "Inventory", "UInventory"),
+            (11, value(3), "Items", "TSet"), (12, integer.clone(), "Num", "int")] {
+            r.func_ret.insert(ptr, ret); r.const_method_ptrs.insert(ptr);
+            r.func_ret_names.insert(name.into(), ty.into()); r.zero_arg_names.insert(name.into());
+        }
+        r.func_params.insert(14, vec![DataType { is_object_handle: true, ..value(1) }, value(4), integer.clone()]);
+        r.func_ret.insert(14, DataType { token: 0x41, ..Default::default() });
+        r.func_params.insert(15, vec![float.clone(), float]);
+        r.func_ret_names.insert("Take".into(), "bool".into());
+        r.temporary_arg_positions.insert("Take".into(), HashMap::from([(3, vec![true; 3])]));
+        r.temporary_arg_positions.insert("Send".into(), HashMap::from([(2, vec![true; 2])]));
+        r.ctor_arg_positions.insert("float32".into(), HashMap::from([(1, vec![true])]));
+        match fault {
+            1 => r.type_identity_by_ptr.get_mut(&3).unwrap().module = "Script".into(),
+            2 => r.func_ret.get_mut(&10).unwrap().type_info = 3,
+            3 => r.func_ret.get_mut(&11).unwrap().is_reference = true,
+            4 => r.func_ret.get_mut(&12).unwrap().token = 0x50,
+            5 => { r.const_method_ptrs.remove(&12); },
+            6 => { r.func_owner.insert(13, "FOther".into()); },
+            7 => { r.func_params.insert(13, vec![integer]); },
+            8 => r.func_params.get_mut(&14).unwrap()[2].is_reference = true,
+            9 => r.func_params.get_mut(&14).unwrap()[2].token = 0x50,
+            10 => { r.func_params.get_mut(&14).unwrap().pop(); },
+            11 => { r.func_is_method.remove(&14); },
+            12 => r.func_ret.get_mut(&14).unwrap().token = 0x44,
+            13 => { r.func_params.insert(11, vec![integer]); },
+            14 => { r.const_method_ptrs.remove(&10); },
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_context_null_and_double_seed(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(1, "UObject"), (2, "UClass"), (3, "TSubclassOf"), (4, "FVector"),
+            (5, "AController"), (6, "AGothicCharacter"), (7, "UMovementHost"), (8, "UQueryFilter")] {
+            r.type_by_ptr.insert(ptr, name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(),
+                module: if ptr == 7 { "Fixture" } else { "" }.into(), namespace: String::new() });
+        }
+        let value = |p| DataType { token: 5, type_info: p, ..Default::default() };
+        let handle = |p| DataType { is_object_handle: true, ..value(p) };
+        let vector = DataType { is_reference: true, is_object_const: true, is_read_only: true, ..value(4) };
+        let void = DataType { token: 0x52, ..Default::default() };
+        let double = DataType { token: 0x51, ..Default::default() };
+        r.type_subtypes.insert(3, vec![value(8)]);
+        for (ptr, name, owner, params, ret) in [
+            (101, "$beh0", Some("TSubclassOf"), vec![handle(2)], void.clone()),
+            (102, "Trace", None, vec![handle(1), vector.clone(), vector, DataType { is_reference: true, ..value(4) }, value(3), handle(5)], DataType { token: 0x41, ..Default::default() }),
+            (103, "GetLocation", Some("AGothicCharacter"), vec![], value(4)),
+            (104, "$beh0", Some("FVector"), vec![], void.clone()),
+            (105, "Min", None, vec![double.clone(); 2], double.clone()),
+            (106, "Notify", None, vec![], void.clone()),
+            (107, "Use", None, vec![double], void),
+        ] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_params.insert(ptr, params); r.func_ret.insert(ptr, ret);
+            if let Some(owner) = owner { r.func_owner.insert(ptr, owner.into()); r.func_is_method.insert(ptr); }
+        }
+        r.const_method_ptrs.insert(103); r.func_ns.insert(102, "Nav".into()); r.func_ns.insert(105, "Math".into());
+        r.global_by_ptr.insert(99, "__WorldContext".into());
+        r.typeid_to_ptr.insert(11, 7); r.typeid_to_ptr.insert(12, 6);
+        let key = (11 << 1) | (8i64 << 33) | 1;
+        r.prop_by_key.insert(key, "Distance".into()); r.prop_type_id.insert(key, 11);
+        r.set_class_fields(HashMap::from([("UMovementHost".into(), HashMap::from([("Distance".into(), "float".into())]))]));
+        r.temporary_arg_positions.insert("Trace".into(), HashMap::from([(6, vec![true, true, true, false, true, true])]));
+        r.temporary_arg_positions.insert("Use".into(), HashMap::from([(1, vec![true])]));
+        match fault {
+            1 => { r.global_by_ptr.insert(99, "OtherGlobal".into()); }
+            2 => { r.func_owner.insert(101, "TOtherSubclass".into()); }
+            3 => r.func_params.get_mut(&101).unwrap()[0].type_info = 1,
+            4 => r.func_params.get_mut(&102).unwrap()[0].type_info = 6,
+            5 => r.func_params.get_mut(&102).unwrap()[4].is_reference = true,
+            6 => r.func_params.get_mut(&102).unwrap()[4].type_info = 4,
+            7 => r.func_params.get_mut(&102).unwrap()[3].is_reference = false,
+            8 => { r.func_is_method.insert(102); }
+            9 => r.func_ret.get_mut(&102).unwrap().token = 0x44,
+            10 => { r.func_ns.insert(102, "OtherNav".into()); }
+            11 => r.type_identity_by_ptr.get_mut(&3).unwrap().module = "Script".into(),
+            12 => { r.type_subtypes.insert(3, vec![value(1)]); }
+            13 => r.func_params.get_mut(&103).unwrap().push(value(3)),
+            14 => r.func_params.get_mut(&102).unwrap()[1].is_object_const = false,
+            15 => r.func_params.get_mut(&102).unwrap()[5].type_info = 6,
+            16 => r.func_ret.get_mut(&105).unwrap().token = 0x50,
+            17 => r.func_params.get_mut(&105).unwrap()[1].is_reference = true,
+            18 => { r.func_ns.insert(105, "OtherMath".into()); }
+            19 => { r.class_fields.get_mut("UMovementHost").unwrap().insert("Distance".into(), "float32".into()); }
+            20 => { r.prop_type_id.insert(key, 12); }
+            21 => { r.type_identity_by_ptr.get_mut(&7).unwrap().namespace = "Other".into(); }
+            22 => { r.func_is_method.remove(&103); }
+            23 => { r.const_method_ptrs.remove(&103); }
+            24 => r.func_params.get_mut(&103).unwrap().push(DataType { token: 0x51, ..Default::default() }),
+            25 => r.func_ret.get_mut(&103).unwrap().token = 0x51,
+            _ => {}
+        }
+        r
+    }
+    #[cfg(test)]
     pub(crate) fn from_test_copied_bool_argument(token: i32) -> Self {
         let mut r = Self::default();
         r.func_by_ptr.insert(1, "SetFlag".into()); r.func_is_method.insert(1);
