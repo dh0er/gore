@@ -3370,6 +3370,24 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_native_bool_branch(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UBase", "Flag"), ("USpecial", "")]);
+        for (id, name) in [(1, "UBase"), (2, "USpecial")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: if fault == 4 && id == 2 { "FValue" } else { name }.into(),
+                module: if id == 2 || fault == 2 { "Script" } else { "" }.into(),
+                namespace: if fault == 5 { "Other" } else { "" }.into() });
+        }
+        r.prop_type_id.insert(3, if fault == 3 { 2 } else { 1 });
+        r.class_super.insert("USpecial".into(), "UNativeMiddle".into());
+        if fault != 6 {
+            r.set_native_api(super::binds::NativeApi::from_test_field_types(
+                &[("UBase", "Flag", if fault == 1 { "int8" } else { "bool" })], &[], None));
+        }
+        r
+    }
+
+
+    #[cfg(test)]
     pub(crate) fn from_test_normalized_bool_member(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("FEntry","Flag"),("FFilter","")]);
         for (id,name) in [(1,"FEntry"),(2,"FFilter")] {
@@ -3579,6 +3597,18 @@ impl RefResolver {
             12 => { r.func_is_method.insert(20); }
             13 => r.type_identity_by_ptr.get_mut(&1).unwrap().namespace = "Other".into(),
             _ => {}
+        }
+        r
+    }
+
+
+    #[cfg(test)]
+    pub(crate) fn from_test_const_set_field() -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(201, "TSet"), (202, "TArray")] {
+            r.type_by_ptr.insert(ptr, name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: "Module".into(), namespace: String::new() });
+            r.type_subtypes.insert(ptr, vec![DataType { token: 0x44, ..Default::default() }]);
         }
         r
     }

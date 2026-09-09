@@ -24,7 +24,6 @@ AI.States.AIState_FollowCharacterAggressive	2	0	0
 AI.States.AIState_GuideCharacter	2	0	0
 AI.States.AIState_InteractWinchGate	1	0	0
 AI.States.FightAI.AIGroup_ConflictInstance	1	0	0
-AI.States.FightAI.AIGroup_StateEvent	2	0	0
 AI.States.FightAI.AIState_PerceptionResponse	3	0	0
 AI.States.FightAI.AssessGoToDailyRoutineState.UAIState_AssessGoToDailyRoutine	1	0	0
 AI.States.FightAI.CharmedState.AIState_Charmed	1	0	0
@@ -67,7 +66,6 @@ GAS.Abilities.Spells.Visuals.Fire.FireRainVisual	1	0	0
 GAS.Abilities.Spells.Visuals.Fire.InnosPrayVisual	2	0	0
 GAS.Calculations.Damage	2	0	0
 GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Drugs.Base.DrugDebuffEffectComponentBase	1	0	0
-GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Sleep.GA_SleepDebuffEffectGameplayAbility	1	0	0
 GAS.GASCharacterMixins	3	0	0
 GAS.GASCharacterStateMixins	7	0	0
 Gameplay.Magic.Components.InExtremo.InExtremoPropComponent	1	0	0

@@ -717,6 +717,19 @@ fn class_field_types(c: &Class, refs: &RefResolver) -> HashMap<String, String> {
     field_types
 }
 
+/// A read-only set that has no emitted constructor work can keep its declared
+/// constness. Dropping it selects the mutable iterator in otherwise read-only loops.
+fn unassigned_const_set_field(field: &super::model::Field, refs: &RefResolver,
+    initializers: &HashMap<String, String>, constructors: &str) -> bool {
+    let ty = &field.ty;
+    field.is_uproperty && ty.token == 5 && ty.is_object_const && ty.is_read_only
+        && !ty.is_object_handle && !ty.is_reference && !ty.is_auto && !ty.if_handle_then_const
+        && refs.type_identity_by_ptr(ty.type_info).is_some_and(|id| id.name == "TSet" && id.namespace.is_empty())
+        && refs.type_subtypes(ty.type_info).is_some_and(|items| items.len() == 1)
+        && !initializers.contains_key(&field.name) && count_ident(constructors, &field.name) == 0
+}
+
+
 fn emit_class(s: &mut String, c: &Class, module: &str, refs: &RefResolver, defaults: Option<&[String]>) {
     // batch-30a (C6b, specs/batch29-errortail.md §6): the cache Class record's asOBJ_*
     // Flags discriminate script VALUE types (asOBJ_VALUE, 0x2 — vanilla `struct`) from
@@ -777,18 +790,19 @@ fn emit_class(s: &mut String, c: &Class, module: &str, refs: &RefResolver, defau
     let handle_nulls_are_the_compiler_s = null_stores_are_compiler_generated(&c.ctors);
     let written_bare = fields_initialised_bare(&c.ctors, refs);
     for f in &c.fields {
-        // Drop a leading `const`: UE-AS UPROPERTY members aren't const-assignable, yet the
-        // generated constructor assigns them — keeping `const` causes "Cannot assign" errors.
+        // Generated constructor assignments need mutable value fields. Default-only sets
+        // can keep their recorded constness and therefore select the original const iterator.
         let ty = f.ty.render(refs);
         // A handle to a CONST OBJECT keeps its `const`: the handle itself is re-pointable, and
         // vanilla assigns it (`SearchTerritory = AI.GetCurrentTerritory();` returns a const
         // handle; without the qualifier on the field that assignment does not compile). Only a
-        // const VALUE or a read-only handle drops the qualifier, which the generated
-        // constructor could not assign ("Cannot assign, variable is const").
-        let keeps_const = f.ty.is_object_const
+        // constructor-backed const value or a read-only handle drops the qualifier, which the
+        // generated constructor could not assign ("Cannot assign, variable is const").
+        let keeps_const = (f.ty.is_object_const
             && !f.ty.is_read_only
             && f.ty.token == 5
-            && is_object_handle_type(&ty);
+            && is_object_handle_type(&ty))
+            || unassigned_const_set_field(f, refs, &member_initializers, &constructors);
         let ty = if keeps_const { ty.as_str() } else { ty.strip_prefix("const ").unwrap_or(&ty) };
         if f.is_uproperty {
             let _ = writeln!(s, "    UPROPERTY()");
@@ -13214,6 +13228,49 @@ fn fold_normalized_local_bool_comparison(body: &str, f: &Func) -> String {
     out
 }
 
+/// The bytecode names the native declaring class even when the receiver is a
+/// script subclass beyond the known inheritance graph. Keep a direct bool test
+/// direct, using that recorded field identity rather than guessing native supers.
+fn fold_native_bool_member_branch(body: &str, f: &Func, refs: &RefResolver) -> String {
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let mut paths: HashMap<String, usize> = HashMap::new();
+    for c in code.windows(4) {
+        let path = (|| {
+            if !matches!(c[0].op.name, "LoadRObjR" | "LoadVObjR")
+                || c[1..].iter().map(|i| i.op.name).ne(["RDR1", "CpyVtoR1", "JLowZ"]) { return None; }
+            let word = |i: &Instr, n: usize| i.words.get(n).map(|w| *w as i16 as i32);
+            let (receiver, boolean) = (word(&c[0], 0)?, word(&c[1], 0)?);
+            if receiver <= 0 || boolean <= 0 || receiver == boolean || word(&c[2], 0)? != boolean
+                || f.obj_locals.iter().any(|(s, _)| *s == boolean) { return None; }
+            let mut locals = f.obj_locals.iter().filter(|(s, _)| *s == receiver);
+            let local = refs.type_identity_by_ptr(locals.next()?.1)?;
+            if locals.next().is_some() || !is_object_handle_type(&local.name) { return None; }
+            let id = *c[0].dwords.first()? as i32;
+            let owner = refs.type_identity_by_id(id)?;
+            let (field, old) = refs.member_identity(id, word(&c[0], 1)?)?;
+            if !owner.module.is_empty() || !owner.namespace.is_empty() || !is_object_handle_type(&owner.name)
+                || refs.type_identity_by_id(old)? != owner || refs.native_field_value_type(&owner.name, field) != Some("bool") { return None; }
+            if code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                target > c[0].offset_dw as i64 && target <= c[3].offset_dw as i64
+            }))) { return None; }
+            Some(format!("local_{receiver}.{field}"))
+        })();
+        if let Some(path) = path { *paths.entry(path).or_default() += 1; }
+    }
+    let mut out = body.to_owned();
+    for (path, count) in paths {
+        let before = format!("if (int({path}) != 0)");
+        if count != 1 || body.lines().filter(|line| line.trim() == before).count() != 1 { continue; }
+        out = out.lines().map(|line| if line.trim() == before {
+            format!("{}if ({path})", indent_of(line))
+        } else { line.to_owned() }).collect::<Vec<_>>().join("\n");
+        if body.ends_with('\n') { out.push('\n'); }
+    }
+    out
+}
+
+
 fn fold_normalized_bool_member_comparisons(body: &str, f: &Func, refs: &RefResolver, is_method: bool) -> String {
     let mut out = body.to_owned();
     if !is_method || f.ret.token != 5 || f.ret.is_reference || f.ret.is_object_handle
@@ -13286,7 +13343,8 @@ fn fold_bool_member_comparisons(
     f: &Func,
     is_method: bool,
 ) -> String {
-    let body = fold_normalized_bool_member_comparisons(body,f,refs,is_method);
+    let body = fold_native_bool_member_branch(body, f, refs);
+    let body = fold_normalized_bool_member_comparisons(&body,f,refs,is_method);
     let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
     let mut changed = true;
     while changed {
@@ -35508,6 +35566,75 @@ mod literal_value_lifetime_tests {
         let mut source = first.replace("Example()", "Example(FName Path)").replace("MakePath()", "Path");
         assert!(super::extract_member_initializers_with_native_prefix(&mut source, &fields, &keep).is_empty());
     }
+
+    #[test]
+    fn direct_bool_branches_use_the_recorded_native_field_owner() {
+        let mut f = function(&[("LoadRObjR", &[24, 0]), ("RDR1", &[15]), ("CpyVtoR1", &[15]), ("JLowZ", &[]), ("RET", &[2])]);
+        f.ret.token = 0x52; f.bytecode[2] = 1; f.obj_locals = vec![(24, 2)];
+        let refs = RefResolver::from_test_native_bool_branch(0);
+        let roots = HashMap::from([("local_24".into(), "USpecial".into())]);
+        let body = "    if (int(local_24.Flag) != 0)\n    {\n        Run();\n    }\n";
+        let expected = body.replace("int(local_24.Flag) != 0", "local_24.Flag");
+        let fold = |text: &str, f: &Func, refs: &RefResolver| super::fold_bool_member_comparisons(text, None, &roots, refs, f, true);
+        assert_eq!(super::type_of_member_path("local_24.Flag", None, &roots, &refs), None);
+        assert_eq!(fold(body, &f, &refs), expected);
+        assert_eq!(fold(&expected, &f, &refs), expected);
+        for fault in 1..=6 { assert_eq!(fold(body, &f, &RefResolver::from_test_native_bool_branch(fault)), body, "metadata {fault}"); }
+        let code = disassemble(&f.bytecode).unwrap();
+        for at in 0..=2 {
+            let mut bad = f.clone(); bad.bytecode[code[at].offset_dw] ^= 1 << 16;
+            assert_eq!(fold(body, &bad, &refs), body, "operand {at}");
+        }
+        let mut duplicate = f.clone(); duplicate.obj_locals.push((24, 2));
+        assert_eq!(fold(body, &duplicate, &refs), body);
+        let mut value = f.clone(); value.obj_locals.push((15, 2));
+        assert_eq!(fold(body, &value, &refs), body);
+        let mut repeated = f.clone(); repeated.bytecode.extend(f.bytecode.clone());
+        assert_eq!(fold(body, &repeated, &refs), body);
+        let mut jump = f.clone(); let at = jump.bytecode.len(); jump.bytecode.extend(function(&[("JMP", &[])]).bytecode);
+        jump.bytecode[at + 1] = code[1].offset_dw as i32 - at as i32 - 2;
+        assert_eq!(fold(body, &jump, &refs), body);
+        for text in [body.replace("local_24", "local_24_2"), body.replace("!= 0", "== 0"), body.repeat(2)] {
+            assert_eq!(fold(&text, &f, &refs), text);
+        }
+    }
+
+
+    #[test]
+    fn readonly_default_sets_keep_their_const_field_declarations() {
+        let refs = RefResolver::from_test_const_set_field();
+        let field = super::super::model::Field { name: "Groups".into(),
+            ty: DataType { token: 5, type_info: 201, is_object_const: true, is_read_only: true, ..Default::default() },
+            is_uproperty: true };
+        let class = super::Class { name: "UGroup".into(), namespace: String::new(), super_class: None,
+            fields: vec![field.clone()], methods: Vec::new(), ctors: Vec::new(), flags: 1 };
+        let mut source = String::new();
+        super::emit_class(&mut source, &class, "Module", &refs, None);
+        assert!(source.contains("UPROPERTY()\n    const TSet<int> Groups;"), "{source}");
+        let empty = HashMap::new();
+        assert!(super::unassigned_const_set_field(&field, &refs, &empty, "    Other();\n"));
+        for constructors in ["    this.Groups.Add(1);\n", "    this.Groups = MakeGroups();\n", "    Observe(Groups);\n"] {
+            assert!(!super::unassigned_const_set_field(&field, &refs, &empty, constructors));
+        }
+        assert!(!super::unassigned_const_set_field(&field, &refs, &HashMap::from([("Groups".into(), "MakeGroups()".into())]), ""));
+        for fault in 0..9 {
+            let mut other = field.clone();
+            match fault {
+                0 => other.is_uproperty = false,
+                1 => other.ty.token = 0x44,
+                2 => other.ty.is_object_const = false,
+                3 => other.ty.is_read_only = false,
+                4 => other.ty.is_object_handle = true,
+                5 => other.ty.is_reference = true,
+                6 => other.ty.is_auto = true,
+                7 => other.ty.if_handle_then_const = true,
+                8 => other.ty.type_info = 202,
+                _ => unreachable!(),
+            }
+            assert!(!super::unassigned_const_set_field(&other, &refs, &empty, ""), "metadata {fault}");
+        }
+    }
+
 
     #[test]
     fn direct_native_field_constructor_requires_own_typed_single_initialization() {
