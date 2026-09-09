@@ -1327,6 +1327,11 @@ fn emit_function_ctor(
     let named_arithmetic = named_arithmetic_slots(f);
     let terminal_arithmetic_sites = terminal_return_arithmetic_sites(f, refs, is_method);
     let mut named_sites = named_value_sites(f, refs);
+    let vector_sign = native_vector_sign_witness(f, refs);
+    if let Some((cross, _, _, rotated, _)) = vector_sign {
+        named_sites.insert((cross, "CrossProduct".into()));
+        named_sites.insert((rotated, "RotateAngleAxis".into()));
+    }
     let (navigation_sites, navigation_values) = ordered_navigation_vectors(f, refs);
     named_sites.extend(navigation_sites);
     named_sites.extend(named_narrowed_field_differences(f, refs, is_method));
@@ -1675,6 +1680,7 @@ fn emit_function_ctor(
     retained_values.extend(constructed_return_values.iter().copied());
     retained_values.extend(retained_native_vector_field_update(f, refs));
     retained_values.extend(navigation_values);
+    retained_values.extend(vector_sign.map(|(_, _, _, _, scaled)| scaled));
     hoisted.extend(retained_values.iter().copied());
     statement_producers.extend(retained_values.iter().copied());
     let named_by_direct_store =
@@ -3228,6 +3234,10 @@ fn emit_function_ctor(
         pass_trace("discard_unused_fstring_argument_predecessors", &rendered);
         let rendered = fold_scoped_or_result(&rendered, f, refs);
         pass_trace("fold_scoped_or_result", &rendered);
+        let rendered = restore_repeated_event_scope(&rendered, f, refs);
+        pass_trace("restore_repeated_event_scope", &rendered);
+        let rendered = fold_widened_vector_sign(&rendered, vector_sign);
+        pass_trace("fold_widened_vector_sign", &rendered);
         s.truncate(declarations_at);
         s.push_str(&rendered);
     } else {
@@ -11030,6 +11040,121 @@ fn extract_member_initializers_with_native_prefix(
 ///
 /// Either way only a slot read exactly once, on that very line: a second reader would have to
 /// evaluate the expression again.
+/// Two context/event pairs are destroyed separately. Recover the first lexical
+/// scope and the second default construction after the initializer calls fold.
+fn restore_repeated_event_scope(body: &str, f: &Func, refs: &RefResolver) -> String {
+    let witness = (|| {
+        if f.ret.token!=0x41 || f.ret.is_reference || f.params.len()!=7
+            || f.params.iter().any(|p| p.ty.token!=5 || !p.ty.is_reference) { return None; }
+        let code=disassemble(&f.bytecode).ok()?;
+        let mut found=None;
+        for (start,c) in code.windows(101).enumerate() {
+            let candidate = (|| {
+                if c[..51].iter().map(|i|i.op.name).ne(["PSF","PSF","PshVPtr","CALLSYS","PSF","CALLSYS","PSF","CALLSYS","PSF","PSF","CALLSYS","PSF","CALLSYS","PshGPtr","PSF","ADDSi","CALLSYS","PSF","CALLSYS","PshVPtr","PSF","ADDSi","REFCPY","PopPtr","PshVPtr","PSF","ADDSi","REFCPY","PopPtr","PshVPtr","CALLSYS","STOREOBJ","PshVPtr","CALLSYS","STOREOBJ","PshVPtr","PSF","ADDSi","REFCPY","PopPtr","PSF","PSF","CALLSYS","PSF","PshGPtr","PshVPtr","CALLSYS","PSF","CALLSYS","PSF","CALLSYS"])
+                    || c[51..58].iter().map(|i|i.op.name).ne(["PshVPtr","RDSPtr","CALLSYS","CpyRtoV4","sbTOi","CMPIi","JNZ"])
+                    || c[87..].iter().map(|i|i.op.name).ne(["PSF","PSF","CALLSYS","PshVPtr","PSF","CALLSYS","PSF","PshGPtr","PshVPtr","CALLSYS","PSF","CALLSYS","PSF","CALLSYS"])
+                    || c[..29].iter().zip(&c[58..87]).any(|(a,b)|a.op.name!=b.op.name || a.words!=b.words || a.dwords!=b.dwords || a.qwords!=b.qwords) { return None; }
+                let w=|n:usize,o:usize|c[n].words.get(o).map(|v|*v as i16 as i32);
+                let ptr=|n:usize|c[n].qwords.first().map(|p|*p as i64);
+                let (root,event,source,handle,actor,other,combat,combo)=(w(9,0)?,w(17,0)?,w(0,0)?,w(1,0)?,w(19,0)?,w(24,0)?,w(31,0)?,w(34,0)?);
+                let slots=[root,event,source,handle,actor,other,combat,combo];
+                if slots.iter().any(|s|*s<=0) || slots.into_iter().collect::<HashSet<_>>().len()!=8 { return None; }
+                let local_ty=|slot| {let mut it=f.obj_locals.iter().filter(|(s,_)|*s==slot);let ty=it.next()?.1;if it.next().is_some(){None}else{Some(ty)}};
+                let (root_ty,event_ty,handle_ty,actor_ty)=(local_ty(root)?,local_ty(event)?,local_ty(handle)?,local_ty(actor)?);
+                let native=|ty,name:&str|refs.type_identity_by_ptr(ty).is_some_and(|t|t.name==name && t.module.is_empty() && t.namespace.is_empty());
+                if local_ty(source)!=Some(root_ty) || local_ty(other)!=Some(actor_ty)
+                    || !native(root_ty,"FGameplayEffectContext_HitResponse") || !native(event_ty,"FGameplayEventData")
+                    || !native(handle_ty,"FGameplayEffectContextHandle") || !native(actor_ty,"AActor")
+                    || !native(f.params[6].ty.type_info,"FGameplayEffectSpec") || !native(f.params[4].ty.type_info,"UCombatConfig") { return None; }
+                if [(2,0,-14),(4,0,handle),(6,0,handle),(8,0,source),(11,0,source),(14,0,root),(20,0,event),(25,0,event),
+                    (29,0,actor),(32,0,combat),(35,0,combo),(36,0,event),(40,0,root),(41,0,event),(43,0,event),(45,0,actor),(47,0,event),(49,0,root),
+                    (51,0,-10),(55,1,w(54,0)?),(56,0,w(55,0)?),(87,0,root),(88,0,event),(90,0,-12),(91,0,event),
+                    (93,0,event),(95,0,other),(97,0,event),(99,0,root)].iter().any(|(n,o,s)|w(*n,*o)!=Some(*s)) || c[56].dwords.first()!=Some(&1) { return None; }
+                for (slot,uses) in [(root,vec![9,14,40,49,67,72,87,99]),(event,vec![17,20,25,36,41,43,47,75,78,83,88,91,93,97]),
+                    (source,vec![0,8,11,58,66,69]),(handle,vec![1,4,6,59,62,64])] {
+                    if code.iter().enumerate().filter(|(_,i)|super::bytediff::addressed_slots(i).contains(&slot)).map(|(n,_)|n)
+                        .ne(uses.into_iter().map(|n|start+n)) { return None; }
+                }
+                let jump=|i:&Instr|i.dwords.first().map(|d|i.offset_dw as i64+2+*d as i32 as i64);
+                if jump(&c[57])!=Some(code.get(start+101)?.offset_dw as i64)
+                    || code.iter().enumerate().any(|(n,i)|i.op.name=="JMPP" || i.op.name.starts_with('J') && n!=start+57
+                        && jump(i).is_some_and(|t|t>c[0].offset_dw as i64 && t<=c[100].offset_dw as i64)) { return None; }
+                for (at,owner,name) in [(3,"FGameplayEffectSpec","GetContext"),(5,"FGameplayEffectContextHandle","GetHitContext"),
+                    (7,"FGameplayEffectContextHandle","$beh2"),(10,"FGameplayEffectContext_HitResponse","$beh0"),(12,"FGameplayEffectContext_HitResponse","$beh2"),
+                    (18,"FGameplayEventData","$beh0"),(48,"FGameplayEventData","$beh2"),(53,"UCombatConfig","GetParryMode")] {
+                    let p=ptr(at)?;let ret=refs.func_ret_by_ptr(p)?;let params=refs.func_params_by_ptr(p)?;
+                    if refs.func_owner_by_ptr(p)!=Some(owner) || refs.func_by_ptr(p)!=Some(name) || !refs.is_method_by_ptr(p)
+                        || refs.is_const_method_by_ptr(p)!=matches!(at,3|5|53) { return None; }
+                    if at==10 {
+                        if ret.token!=0x52 || ret.is_reference || !matches!(params,[p] if p.token==5 && p.type_info==root_ty && p.is_reference && p.is_object_const && p.is_read_only && !p.is_object_handle) { return None; }
+                    } else if !params.is_empty() || ret.is_reference || ret.is_object_handle || match at {
+                        3=>ret.token!=5 || ret.type_info!=handle_ty,
+                        5=>ret.token!=5 || ret.type_info!=root_ty,
+                        53=>ret.token!=5,
+                        _=>ret.token!=0x52,
+                    } { return None; }
+                }
+                if ptr(50)!=ptr(12) || ptr(98)!=ptr(48) || ptr(100)!=ptr(12) || ptr(89)!=ptr(42) || ptr(96)!=ptr(46) { return None; }
+                for (at,ty,name) in [(15,root_ty,"Impact"),(21,event_ty,"Target"),(26,event_ty,"Instigator"),(37,event_ty,"OptionalObject")] {
+                    let id=*c[at].dwords.first()? as i32;let (field,old)=refs.member_identity(id,w(at,0)?)?;
+                    if field!=name || refs.type_identity_by_id(id)?!=refs.type_identity_by_ptr(ty)? || refs.type_identity_by_id(old)?!=refs.type_identity_by_ptr(ty)? { return None; }
+                }
+                for (at,name,ns) in [(30,"GetCombatDataModule","DataModule"),(42,"InitializeHitData","GothicGAS"),(46,"SendGameplayEvent","GothicGAS"),(92,"AddTargetInputData","GothicGAS")] {
+                    let p=ptr(at)?;
+                    if refs.func_by_ptr(p)!=Some(name) || refs.is_method_by_ptr(p) || refs.func_ns_by_ptr(p)!=Some(ns) { return None; }
+                }
+                let reference=|t:&super::types::DataType,ty|t.token==5 && t.type_info==ty && t.is_reference && !t.is_object_handle;
+                let tag_ty=refs.func_params_by_ptr(ptr(46)?)?.get(1)?.type_info;
+                if !native(tag_ty,"FGameplayTag") {return None;}
+                for (at,args) in [(42,vec![event_ty,root_ty]),(92,vec![event_ty,tag_ty])] {
+                    let p=ptr(at)?;let ret=refs.func_ret_by_ptr(p)?;let params=refs.func_params_by_ptr(p)?;
+                    if ret.token!=0x52 || ret.is_reference || params.len()!=2 || !reference(&params[0],args[0])
+                        || params[1].token!=5 || params[1].type_info!=args[1] || params[1].is_reference!=(at==42) || params[1].is_object_handle {return None;}
+                }
+                let send=refs.func_params_by_ptr(ptr(46)?)?;
+                if !matches!(send,[a,t,e] if a.token==5 && a.type_info==actor_ty && a.is_object_handle && !a.is_reference
+                    && t.token==5 && t.type_info==tag_ty && !t.is_reference && !t.is_object_handle && reference(e,event_ty))
+                    || refs.func_ret_by_ptr(ptr(46)?)?.token!=0x52 {return None;}
+                let combo_call=ptr(33)?;let combo_ret=refs.func_ret_by_ptr(combo_call)?;let combat_ret=refs.func_ret_by_ptr(ptr(30)?)?;
+                if refs.func_by_ptr(combo_call)!=Some("GetCurrentCombo") || !refs.is_method_by_ptr(combo_call) || !refs.is_const_method_by_ptr(combo_call)
+                    || !refs.func_params_by_ptr(combo_call)?.is_empty() || combo_ret.token!=5 || !combo_ret.is_object_handle || combo_ret.is_reference
+                    || local_ty(combo)!=Some(combo_ret.type_info) || combat_ret.token!=5 || !combat_ret.is_object_handle || combat_ret.is_reference
+                    || local_ty(combat)!=Some(combat_ret.type_info) || refs.func_owner_by_ptr(combo_call)!=Some(refs.type_identity_by_ptr(combat_ret.type_info)?.name.as_str()) {return None;}
+                let tag=|n:usize| {let p=ptr(n)?;(refs.global_ns(p)==Some("GameplayTag") && !refs.global_is_string(p)).then(||format!("GameplayTag::{}",refs.global_by_ptr(p).unwrap_or(""))).filter(|s|!s.ends_with("::"))};
+                Some((root,event,actor,other,tag(13)?,tag(44)?,tag(94)?))
+            })();
+            if let Some(candidate)=candidate { if found.is_some(){return None;} found=Some(candidate); }
+        }
+        found
+    })();
+    let Some((root,event,actor,other,impact,outgoing,incoming))=witness else{return body.to_owned();};
+    let (root,event,actor,other)=(format!("local_{root}"),format!("local_{event}"),format!("local_{actor}"),format!("local_{other}"));
+    let root2=format!("{root}_2");let ty="FGameplayEffectContext_HitResponse";let event_ty="FGameplayEventData";
+    let initializer=format!("{}.GetContext().GetHitContext()",f.params[6].name);
+    let lines:Vec<_>=body.lines().collect();
+    let expected=[format!("{ty} {root} = {ty}({initializer});"),format!("{root}.Impact = {impact};"),format!("{event_ty} {event};"),
+        format!("{event}.Target = {actor};"),format!("{event}.Instigator = {other};"),format!("{event}.OptionalObject = DataModule::GetCombatDataModule({actor}).GetCurrentCombo();"),
+        format!("GothicGAS::InitializeHitData({event}, {root});"),format!("GothicGAS::SendGameplayEvent({actor}, {outgoing}, {event});"),
+        format!("if ((int({}.GetParryMode())) == 1)",f.params[4].name),"{".into(),format!("{ty} {root2} = {ty}({initializer});"),
+        format!("{root2}.Impact = {impact};"),format!("{event}.Target = {actor};"),format!("{event}.Instigator = {other};"),
+        format!("GothicGAS::InitializeHitData({event}, {root2});"),format!("GothicGAS::AddTargetInputData({event}, {});",f.params[5].name),
+        format!("GothicGAS::SendGameplayEvent({other}, {incoming}, {event});"),"}".into()];
+    if count_ident(body,&root)!=3 || count_ident(body,&root2)!=3 || count_ident(body,&event)!=11 { return body.to_owned(); }
+    for at in 0..lines.len().saturating_sub(17) {
+        if lines[at..at+18].iter().map(|l|l.trim()).ne(expected.iter().map(|s|s.as_str())) {continue;}
+        let indent=indent_of(lines[at]);
+        if (0..18).any(|n|indent_of(lines[at+n]).len()!=indent.len()+if (10..17).contains(&n){4}else{0}) {continue;}
+        let mut out:Vec<String>=lines[..at].iter().map(|l|l.to_string()).collect();out.push(format!("{indent}{{"));
+        out.push(format!("{indent}    {ty} {root}({initializer});"));
+        out.extend(lines[at+1..at+8].iter().map(|l|format!("    {l}")));out.push(format!("{indent}}}"));
+        out.extend(lines[at+8..at+10].iter().map(|l|l.to_string()));
+        out.push(format!("{indent}    {ty} {root2}({initializer});"));out.push(lines[at+11].to_string());
+        out.push(format!("{indent}    {event_ty} {event};"));out.extend(lines[at+12..].iter().map(|l|l.to_string()));
+        let mut result=out.join("\n");if body.ends_with('\n'){result.push('\n');}return result;
+    }
+    body.to_owned()
+}
+
 /// An OR result reuses its right-hand predicate register. A same-named local in
 /// another lexical block must not turn this temporary into a named bool copy.
 fn fold_scoped_or_result(body: &str, f: &Func, refs: &RefResolver) -> String {
@@ -17829,6 +17954,80 @@ fn ordered_navigation_vectors(f: &Func, refs: &RefResolver) -> (HashSet<(i32, St
         }
     }
     (sites, values)
+}
+
+/// A named cross product feeds a widened float sign and retained rotation/scale
+/// values before the final vector's field update and return construction.
+fn native_vector_sign_witness(f: &Func, refs: &RefResolver) -> Option<(i32, i32, i32, i32, i32)> {
+    if f.ret.token != 5 || f.ret.is_reference || f.ret.is_object_handle || f.params.len() != 5 { return None; }
+    let ty = f.ret.type_info; let identity = refs.type_identity_by_ptr(ty)?;
+    if identity.name != "FVector" || !identity.module.is_empty() || !identity.namespace.is_empty() { return None; }
+    let vector = |t: &super::types::DataType, reference| t.token == 5 && t.type_info == ty
+        && t.is_reference == reference && !t.is_object_handle;
+    let scalar = |t: &super::types::DataType| t.token == 0x51 && !t.is_reference && !t.is_object_handle;
+    if !f.params[..3].iter().all(|p| vector(&p.ty,true)) || !f.params[3..].iter().all(|p| scalar(&p.ty)) { return None; }
+    let code = disassemble(&f.bytecode).ok()?; let start = code.len().checked_sub(36)?; let c = &code[start..];
+    if c.iter().map(|i| i.op.name).ne(["PSF","PSF","PSF","CALLSYS","LoadVObjR","RDR8","SetV8","CMPd","JS",
+        "SetV4","JMP","SetV4","fTOd","CpyVtoV8","PshGPtr","MULd","PshV8","PSF","PSF","CALLSYS",
+        "PshV8","PSF","PSF","CALLSYS","PSF","PSF","PSF","CALLSYS","LoadRObjR","RDR8","LoadVObjR","WRTV8","PSF","PshVPtr","CALLSYS","RET"]) { return None; }
+    let w = |n: usize, o: usize| c[n].words.get(o).map(|v| *v as i16 as i32);
+    let (cross, narrow, sign, rotated, scaled, result) = (w(1,0)?,w(9,0)?,w(13,0)?,w(17,0)?,w(21,0)?,w(25,0)?);
+    let (component, scratch, lhs, rhs, center) = (w(5,0)?,w(6,0)?,w(2,0)?,w(0,0)?,w(26,0)?);
+    if [cross,narrow,sign,rotated,scaled,result,component,scratch,lhs,rhs,center].into_iter().collect::<HashSet<_>>().len()!=11
+        || [narrow,sign,component,scratch].iter().any(|s| *s<=0 || f.obj_locals.iter().any(|(o,_)| o==s))
+        || [cross,rotated,scaled,result,lhs,rhs,center].iter().any(|s| *s<=0 || f.obj_locals.iter().filter(|(o,_)| o==s).map(|(_,p)| *p).ne([ty]))
+        || c[6].qwords.first()!=Some(&0) || c[9].dwords.first()!=Some(&1.0f32.to_bits()) || c[11].dwords.first()!=Some(&(-1.0f32).to_bits())
+        || [(4,0,cross),(7,0,component),(7,1,scratch),(11,0,narrow),(12,0,scratch),(12,1,narrow),(13,1,scratch),
+            (15,0,component),(15,1,sign),(15,2,-12),(16,0,component),(18,0,lhs),(20,0,-10),(22,0,rotated),(24,0,scaled),
+            (28,0,-8),(29,0,scratch),(30,0,result),(31,0,scratch),(32,0,result),(33,0,-2),(35,0,14)].iter().any(|(n,o,s)| w(*n,*o)!=Some(*s)) { return None; }
+    let jump = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64+2+*d as i32 as i64);
+    if jump(&c[8])!=Some(c[11].offset_dw as i64) || jump(&c[10])!=Some(c[12].offset_dw as i64)
+        || code.iter().enumerate().any(|(at,i)| i.op.name=="JMPP" || i.op.name.starts_with('J') && ![start+8,start+10].contains(&at)
+            && jump(i).is_some_and(|t| t>c[0].offset_dw as i64 && t<=c[35].offset_dw as i64)) { return None; }
+    for (slot, uses) in [(rotated,vec![start+17,start+22]),(scaled,vec![start+21,start+24])] {
+        if code.iter().enumerate().filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&slot)).map(|(n,_)| n).ne(uses) { return None; }
+    }
+    let member_id = *c[4].dwords.first()? as i32;
+    let (member, old) = refs.member_identity(member_id,w(4,1)?)?;
+    if member!="Z" || refs.type_identity_by_id(member_id)?!=identity || refs.type_identity_by_id(old)?!=identity
+        || [28,30].iter().any(|n| c[*n].dwords!=c[4].dwords || w(*n,1)!=w(4,1)) { return None; }
+    let up = *c[14].qwords.first()? as i64;
+    if refs.global_by_ptr(up)!=Some("UpVector") || refs.global_ns(up)!=Some("FVector") { return None; }
+    for (at,name,constant) in [(3,"CrossProduct",true),(19,"RotateAngleAxis",true),(23,"opMul",true),(27,"opAdd",true),(34,"$beh0",false)] {
+        let ptr = *c[at].qwords.first()? as i64;
+        if refs.func_by_ptr(ptr)!=Some(name) || refs.func_owner_by_ptr(ptr)!=Some("FVector")
+            || !refs.is_method_by_ptr(ptr) || refs.is_const_method_by_ptr(ptr)!=constant { return None; }
+        let ret = refs.func_ret_by_ptr(ptr)?; let params = refs.func_params_by_ptr(ptr)?;
+        let by_ref = |p: &super::types::DataType| vector(p,true) && p.is_object_const && p.is_read_only;
+        if at==34 {
+            if ret.token!=0x52 || ret.is_reference || !matches!(params,[p] if by_ref(p)) { return None; }
+        } else if !vector(ret,false) || match at {
+            19 => !matches!(params,[a,b] if scalar(a) && by_ref(b)),
+            23 => !matches!(params,[a] if scalar(a)),
+            _ => !matches!(params,[a] if by_ref(a)),
+        } { return None; }
+    }
+    Some((cross,narrow,sign,rotated,scaled))
+}
+
+fn fold_widened_vector_sign(body: &str, witness: Option<(i32,i32,i32,i32,i32)>) -> String {
+    let Some((cross,narrow,sign,_,_)) = witness else { return body.to_owned(); };
+    let lines: Vec<_> = body.lines().collect(); let mut out: Vec<_> = lines.iter().map(|l| l.to_string()).collect();
+    let (cross,narrow,sign) = (format!("local_{cross}"),format!("local_{narrow}"),format!("local_{sign}"));
+    if count_ident(body,&narrow)!=4 { return body.to_owned(); }
+    for at in 0..lines.len().saturating_sub(8) {
+        let condition = format!("{cross}.Z >= 0.0");
+        let expected = [format!("if ({condition})"),"{".into(),format!("{narrow} = 1.0f;"),"}".into(),"else".into(),"{".into(),
+            format!("{narrow} = -1.0f;"),"}".into(),format!("float {sign} = {narrow};")];
+        if lines[at..at+9].iter().map(|l| l.trim()).ne(expected.iter().map(|s| s.as_str())) { continue; }
+        let declarations: Vec<_> = (0..at).filter(|i| lines[*i].trim()==format!("float32 {narrow};") && indent_of(lines[*i])==indent_of(lines[at])).collect();
+        if declarations.len()!=1 || block_span(&lines,declarations[0])!=block_span(&lines,at) || !lines[..at].iter().any(|l| l.trim().starts_with(&format!("FVector {cross} = "))) { continue; }
+        out[declarations[0]].clear();
+        out[at]=format!("{}float {sign} = ({condition}) ? 1.0f : -1.0f;",indent_of(lines[at]));
+        for line in &mut out[at+1..at+9] { line.clear(); }
+    }
+    let mut result = out.into_iter().enumerate().filter(|(i,l)| !l.is_empty() || lines[*i].is_empty()).map(|(_,l)| l).collect::<Vec<_>>().join("\n");
+    if body.ends_with('\n') { result.push('\n'); } result
 }
 
 /// Three distinct native vector results precede a component write and return.
@@ -36885,6 +37084,46 @@ mod literal_value_lifetime_tests {
 
 
     #[test]
+    fn a_vector_sign_keeps_the_cross_product_and_widens_after_its_join() {
+        let mut f=function(&[("PSF",&[26]),("PSF",&[40]),("PSF",&[32]),("CALLSYS",&[]),("LoadVObjR",&[40,0]),
+            ("RDR8",&[8]),("SetV8",&[50]),("CMPd",&[8,50]),("JS",&[]),("SetV4",&[51]),("JMP",&[]),("SetV4",&[51]),
+            ("fTOd",&[50,51]),("CpyVtoV8",&[48,50]),("PshGPtr",&[]),("MULd",&[8,48,65524]),("PshV8",&[8]),
+            ("PSF",&[46]),("PSF",&[32]),("CALLSYS",&[]),("PshV8",&[65526]),("PSF",&[58]),("PSF",&[46]),("CALLSYS",&[]),
+            ("PSF",&[58]),("PSF",&[70]),("PSF",&[6]),("CALLSYS",&[]),("LoadRObjR",&[65528,0]),("RDR8",&[50]),
+            ("LoadVObjR",&[70,0]),("WRTV8",&[50]),("PSF",&[70]),("PshVPtr",&[65534]),("CALLSYS",&[]),("RET",&[14])]);
+        let value=DataType {token:5,type_info:1,..Default::default()};
+        let reference=DataType {is_reference:true,is_object_const:true,is_read_only:true,..value.clone()};
+        let scalar=DataType {token:0x51,..Default::default()};
+        f.ret=value;f.obj_locals=[6,26,32,40,46,58,70].into_iter().map(|s|(s,1)).collect();
+        f.params=[("Start",reference.clone()),("Target",reference.clone()),("Center",reference),("Radius",scalar.clone()),("Angle",scalar)]
+            .into_iter().map(|(name,ty)| crate::cache::model::Param {name:name.into(),ty,flags:0}).collect();
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,ptr) in [(3,14),(14,9),(19,10),(23,11),(27,12),(34,13)] {f.bytecode[code[at].offset_dw+1]=ptr;}
+        for at in [4,28,30] {f.bytecode[code[at].offset_dw+2]=1;}
+        for (at,value) in [(9,1.0f32),(11,-1.0f32)] {f.bytecode[code[at].offset_dw+1]=value.to_bits() as i32;}
+        for (from,to) in [(8,11),(10,12)] {f.bytecode[code[from].offset_dw+1]=code[to].offset_dw as i32-code[from].offset_dw as i32-2;}
+        let refs=RefResolver::from_test_native_vector_sign(0);
+        let witness=super::native_vector_sign_witness(&f,&refs);
+        assert_eq!(witness,Some((40,51,48,46,58)));
+        let body="    float32 local_51;\n    FVector local_40 = local_32.CrossProduct(local_26);\n    if (local_40.Z >= 0.0)\n    {\n        local_51 = 1.0f;\n    }\n    else\n    {\n        local_51 = -1.0f;\n    }\n    float local_48 = local_51;\n    Use(local_48);\n";
+        let expected="    FVector local_40 = local_32.CrossProduct(local_26);\n    float local_48 = (local_40.Z >= 0.0) ? 1.0f : -1.0f;\n    Use(local_48);\n";
+        assert_eq!(super::fold_widened_vector_sign(body,witness),expected);
+        for fault in 1..=8 {assert!(super::native_vector_sign_witness(&f,&RefResolver::from_test_native_vector_sign(fault)).is_none(),"metadata {fault}");}
+        for at in [4,5,7,11,12,13,15,16,18,20,22,24,28,29,30,31,32,33,35] {
+            let mut bad=f.clone();bad.bytecode[code[at].offset_dw]^=1<<16;
+            assert!(super::native_vector_sign_witness(&bad,&refs).is_none(),"operand {at}");
+        }
+        let mut entry=f.clone();let mut j=function(&[("JMP",&[])]).bytecode;j[1]=code[19].offset_dw as i32;j.extend(entry.bytecode);entry.bytecode=j;
+        assert!(super::native_vector_sign_witness(&entry,&refs).is_none());
+        let mut extra=f.clone();let mut prefix=function(&[("PSF",&[46])]).bytecode;prefix.extend(extra.bytecode);extra.bytecode=prefix;
+        assert!(super::native_vector_sign_witness(&extra,&refs).is_none());
+        for changed in [body.replace("Use(local_48)","Use(local_51)"),body.replace("= -1.0f","= -2.0f"),
+            body.replace("    float32 local_51;\n",""),body.replace("if (local_40.Z","if (local_32.Z"),body.replace("float local_48","float32 local_48")] {
+            assert_eq!(super::fold_widened_vector_sign(&changed,witness),changed);
+        }
+    }
+
+    #[test]
     fn a_returned_vector_field_update_keeps_its_two_native_operands() {
         let mut f = function(&[("PshGPtr", &[]), ("PshV8", &[65528]), ("PSF", &[12]), ("PshVPtr", &[65526]), ("CALLSYS", &[]),
             ("PshV8", &[65530]), ("PSF", &[6]), ("PSF", &[12]), ("CALLSYS", &[]), ("PSF", &[6]), ("PSF", &[24]),
@@ -37001,6 +37240,162 @@ mod literal_value_lifetime_tests {
         assert!(super::ordered_navigation_vectors(&extra,&refs).0.is_empty());
         let mut entry=f.clone();let mut jump=function(&[("JMP",&[])]).bytecode;jump[1]=code[16].offset_dw as i32;jump.extend(entry.bytecode);entry.bytecode=jump;
         assert!(super::ordered_navigation_vectors(&entry,&refs).0.is_empty());
+    }
+
+    #[test]
+    fn repeated_native_events_get_separate_scopes_and_default_constructions() {
+        let mut ops:Vec<(&str,&[u16])>=vec![
+            ("PSF",&[172]),("PSF",&[98]),("PshVPtr",&[65522]),("CALLSYS",&[]),
+            ("PSF",&[98]),("CALLSYS",&[]),("PSF",&[98]),("CALLSYS",&[]),
+            ("PSF",&[172]),("PSF",&[92]),("CALLSYS",&[]),("PSF",&[172]),
+            ("CALLSYS",&[]),("PshGPtr",&[]),("PSF",&[92]),("ADDSi",&[128]),
+            ("CALLSYS",&[]),("PSF",&[216]),("CALLSYS",&[]),("PshVPtr",&[6]),
+            ("PSF",&[216]),("ADDSi",&[16]),("REFCPY",&[]),("PopPtr",&[]),
+            ("PshVPtr",&[2]),("PSF",&[216]),("ADDSi",&[8]),("REFCPY",&[]),
+            ("PopPtr",&[]),("PshVPtr",&[6]),("CALLSYS",&[]),("STOREOBJ",&[218]),
+            ("PshVPtr",&[218]),("CALLSYS",&[]),("STOREOBJ",&[220]),("PshVPtr",&[220]),
+            ("PSF",&[216]),("ADDSi",&[24]),("REFCPY",&[]),("PopPtr",&[]),
+            ("PSF",&[92]),("PSF",&[216]),("CALLSYS",&[]),("PSF",&[216]),
+            ("PshGPtr",&[]),("PshVPtr",&[6]),("CALLSYS",&[]),("PSF",&[216]),
+            ("CALLSYS",&[]),("PSF",&[92]),("CALLSYS",&[]),
+        ];
+        let init=ops[..29].to_vec();
+        ops.extend([("PshVPtr",&[65526][..]),("RDSPtr",&[]), ("CALLSYS",&[]),("CpyRtoV4",&[221]),("sbTOi",&[222,221]),("CMPIi",&[222]),("JNZ",&[])]);
+        ops.extend(init);
+        ops.extend([("PSF",&[92][..]),("PSF",&[216]),("CALLSYS",&[]),("PshVPtr",&[65524]),("PSF",&[216]),("CALLSYS",&[]),
+            ("PSF",&[216]),("PshGPtr",&[]),("PshVPtr",&[2]),("CALLSYS",&[]),("PSF",&[216]),("CALLSYS",&[]),("PSF",&[92]),("CALLSYS",&[]),("RET",&[16])]);
+        let mut f=function(&ops);f.ret.token=0x41;
+        f.obj_locals=vec![(2,4),(6,4),(92,1),(98,3),(172,1),(216,2),(218,7),(220,8)];
+        f.params=[("ExecutionParams",10),("targetAbComp",4),("sourceAbComp",4),("weaponMeleeItem",11),("combatConfig",6),("attackDirection",9),("spec",5)]
+            .into_iter().map(|(name,ty)|crate::cache::model::Param {name:name.into(),ty:DataType {token:5,type_info:ty,is_reference:true,..Default::default()},flags:0}).collect();
+        let code=disassemble(&f.bytecode).unwrap();
+        let calls=[(3,20),(5,21),(7,22),(10,23),(12,24),(16,25),(18,26),(30,27),(33,28),(42,29),(46,30),(48,31),(50,24),(53,32)];
+        for (at,ptr) in calls {f.bytecode[code[at].offset_dw+1]=ptr;if at<29 {f.bytecode[code[at+58].offset_dw+1]=ptr;}}
+        for (at,ptr) in [(89,29),(92,33),(96,30),(98,31),(100,24),(13,100),(71,100),(44,101),(94,102)] {f.bytecode[code[at].offset_dw+1]=ptr;}
+        for (at,id) in [(15,1),(21,2),(26,2),(37,2),(73,1),(79,2),(84,2)] {f.bytecode[code[at].offset_dw+1]=id;}
+        f.bytecode[code[56].offset_dw+1]=1;
+        f.bytecode[code[57].offset_dw+1]=code[101].offset_dw as i32-code[57].offset_dw as i32-2;
+        let body=r###"    bool ExecuteParry(const FGameplayEffectCustomExecutionParameters &inout ExecutionParams, UGothicAbilitySystemComponent &inout targetAbComp, UGothicAbilitySystemComponent &inout sourceAbComp, const UWeaponMeleeDefinition &inout weaponMeleeItem, const UCombatConfig &inout combatConfig, const FGameplayTag &inout attackDirection, const FGameplayEffectSpec &inout spec) const
+    {
+        AActor local_2 = targetAbComp.GetAvatar();
+        AActor local_6 = sourceAbComp.GetAvatar();
+        GothicGAS::Log_Info(EGothicLogCategory(2), ((" parried by ".opAdd_r(local_6.GetName())) + local_2.GetName()));
+        FGameplayEffectContext_HitResponse local_92 = FGameplayEffectContext_HitResponse(spec.GetContext().GetHitContext());
+        local_92.Impact = GameplayTag::Impact;
+        FGameplayEventData local_216;
+        local_216.Target = local_6;
+        local_216.Instigator = local_2;
+        local_216.OptionalObject = DataModule::GetCombatDataModule(local_6).GetCurrentCombo();
+        GothicGAS::InitializeHitData(local_216, local_92);
+        GothicGAS::SendGameplayEvent(local_6, GameplayTag::Outgoing, local_216);
+        if ((int(combatConfig.GetParryMode())) == 1)
+        {
+            FGameplayEffectContext_HitResponse local_92_2 = FGameplayEffectContext_HitResponse(spec.GetContext().GetHitContext());
+            local_92_2.Impact = GameplayTag::Impact;
+            local_216.Target = local_6;
+            local_216.Instigator = local_2;
+            GothicGAS::InitializeHitData(local_216, local_92_2);
+            GothicGAS::AddTargetInputData(local_216, attackDirection);
+            GothicGAS::SendGameplayEvent(local_2, GameplayTag::Incoming, local_216);
+        }
+        APlayerController local_226 = targetAbComp.GetPlayerController();
+        APlayerController local_230 = sourceAbComp.GetPlayerController();
+        if ((((local_230 != nullptr && local_230.IsLocalController()) || (local_226 != nullptr && local_226.IsLocalController())) && (weaponMeleeItem != nullptr)) && (spec.GetPeriod() == 0.0f))
+        {
+            UFeedbackData local_238 = weaponMeleeItem.GetFeedbackControl();
+            if (local_238 != nullptr)
+            {
+                FFreezeParams local_246 = local_238.GetHitFreezeParams(GameplayTag::Impact);
+                FFreezeParams local_243 = local_238.GetAttackFreezeParams(GameplayTag::Impact);
+                if (local_246.m_FreezeDuration > 0.0f)
+                {
+                    AGothicCharacter local_252 = (Cast<AGothicCharacter>(local_6));
+                    if (local_252 != nullptr)
+                    {
+                        local_252.ActiveFreezeFrame(local_246.m_CustomTimeDilation, local_246.m_FreezeDuration, local_246.m_BlendOutDuration);
+                    }
+                    AGothicCharacter local_258 = (Cast<AGothicCharacter>(local_2));
+                    if (local_258 != nullptr)
+                    {
+                        local_258.ActiveFreezeFrame(local_243.m_CustomTimeDilation, local_243.m_FreezeDuration, local_243.m_BlendOutDuration);
+                    }
+                }
+            }
+        }
+        return true;
+    }
+"###;
+        let expected=r###"    bool ExecuteParry(const FGameplayEffectCustomExecutionParameters &inout ExecutionParams, UGothicAbilitySystemComponent &inout targetAbComp, UGothicAbilitySystemComponent &inout sourceAbComp, const UWeaponMeleeDefinition &inout weaponMeleeItem, const UCombatConfig &inout combatConfig, const FGameplayTag &inout attackDirection, const FGameplayEffectSpec &inout spec) const
+    {
+        AActor local_2 = targetAbComp.GetAvatar();
+        AActor local_6 = sourceAbComp.GetAvatar();
+        GothicGAS::Log_Info(EGothicLogCategory(2), ((" parried by ".opAdd_r(local_6.GetName())) + local_2.GetName()));
+        {
+            FGameplayEffectContext_HitResponse local_92(spec.GetContext().GetHitContext());
+            local_92.Impact = GameplayTag::Impact;
+            FGameplayEventData local_216;
+            local_216.Target = local_6;
+            local_216.Instigator = local_2;
+            local_216.OptionalObject = DataModule::GetCombatDataModule(local_6).GetCurrentCombo();
+            GothicGAS::InitializeHitData(local_216, local_92);
+            GothicGAS::SendGameplayEvent(local_6, GameplayTag::Outgoing, local_216);
+        }
+        if ((int(combatConfig.GetParryMode())) == 1)
+        {
+            FGameplayEffectContext_HitResponse local_92_2(spec.GetContext().GetHitContext());
+            local_92_2.Impact = GameplayTag::Impact;
+            FGameplayEventData local_216;
+            local_216.Target = local_6;
+            local_216.Instigator = local_2;
+            GothicGAS::InitializeHitData(local_216, local_92_2);
+            GothicGAS::AddTargetInputData(local_216, attackDirection);
+            GothicGAS::SendGameplayEvent(local_2, GameplayTag::Incoming, local_216);
+        }
+        APlayerController local_226 = targetAbComp.GetPlayerController();
+        APlayerController local_230 = sourceAbComp.GetPlayerController();
+        if ((((local_230 != nullptr && local_230.IsLocalController()) || (local_226 != nullptr && local_226.IsLocalController())) && (weaponMeleeItem != nullptr)) && (spec.GetPeriod() == 0.0f))
+        {
+            UFeedbackData local_238 = weaponMeleeItem.GetFeedbackControl();
+            if (local_238 != nullptr)
+            {
+                FFreezeParams local_246 = local_238.GetHitFreezeParams(GameplayTag::Impact);
+                FFreezeParams local_243 = local_238.GetAttackFreezeParams(GameplayTag::Impact);
+                if (local_246.m_FreezeDuration > 0.0f)
+                {
+                    AGothicCharacter local_252 = (Cast<AGothicCharacter>(local_6));
+                    if (local_252 != nullptr)
+                    {
+                        local_252.ActiveFreezeFrame(local_246.m_CustomTimeDilation, local_246.m_FreezeDuration, local_246.m_BlendOutDuration);
+                    }
+                    AGothicCharacter local_258 = (Cast<AGothicCharacter>(local_2));
+                    if (local_258 != nullptr)
+                    {
+                        local_258.ActiveFreezeFrame(local_243.m_CustomTimeDilation, local_243.m_FreezeDuration, local_243.m_BlendOutDuration);
+                    }
+                }
+            }
+        }
+        return true;
+    }
+"###;
+        let refs=RefResolver::from_test_repeated_event_scope(0);
+        assert_eq!(super::restore_repeated_event_scope(body,&f,&refs),expected);
+        for fault in 1..=9 {assert_eq!(super::restore_repeated_event_scope(body,&f,&RefResolver::from_test_repeated_event_scope(fault)),body,"metadata {fault}");}
+        for at in [0,1,2,9,17,29,31,32,34,35,36,40,41,43,45,47,49,51,55,56,87,88,90,91,93,95,97,99] {
+            let mut bad=f.clone();bad.bytecode[code[at].offset_dw]^=1<<16;
+            assert_eq!(super::restore_repeated_event_scope(body,&bad,&refs),body,"operand {at}");
+        }
+        let mut bad_type=f.clone();bad_type.obj_locals.iter_mut().find(|(s,_)|*s==172).unwrap().1=2;
+        assert_eq!(super::restore_repeated_event_scope(body,&bad_type,&refs),body);
+        let mut extra=f.clone();extra.bytecode.extend(function(&[("PSF",&[216])]).bytecode);
+        assert_eq!(super::restore_repeated_event_scope(body,&extra,&refs),body);
+        let mut entry=f.clone();let mut j=function(&[("JMP",&[])]).bytecode;j[1]=code[40].offset_dw as i32;j.extend(entry.bytecode);entry.bytecode=j;
+        assert_eq!(super::restore_repeated_event_scope(body,&entry,&refs),body);
+        for changed in [body.replace("return true;","Use(local_216);\n        return true;"),body.replace("return true;","Use(local_92);\n        return true;"),
+            body.replacen("local_216.Target = local_6;","local_216.Target = local_2;",1),body.replacen("spec.GetContext()","Other.GetContext()",1),
+            body.replacen("        if ((int(combatConfig","            if ((int(combatConfig",1)] {
+            assert_eq!(super::restore_repeated_event_scope(&changed,&f,&refs),changed);
+        }
     }
 
     #[test]

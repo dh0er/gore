@@ -3431,6 +3431,20 @@ impl RefResolver {
 
 
     #[cfg(test)]
+    pub(crate) fn from_test_native_vector_sign(fault: u8) -> Self {
+        let mut r = Self::from_test_native_vector_field_update(if fault<=6 {fault} else {0});
+        r.global_ns.insert(9,"FVector".into());
+        r.func_by_ptr.insert(14,"CrossProduct".into());r.func_owner.insert(14,"FVector".into());r.func_is_method.insert(14);r.const_method_ptrs.insert(14);
+        r.func_ret.insert(14,r.func_ret[&12].clone());r.func_params.insert(14,r.func_params[&12].clone());
+        match fault {
+            7=>{r.global_ns.insert(9,"Other".into());}
+            8=>r.func_ret.get_mut(&14).unwrap().is_reference=true,
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_native_vector_field_update(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("FVector", "Z")]);
         r.type_identity_by_ptr.insert(1, TypeIdentity { name: "FVector".into(), module: if fault == 1 { "Script" } else { "" }.into(), namespace: String::new() });
@@ -3541,6 +3555,52 @@ impl RefResolver {
             6=>{r.class_fields.get_mut("UState").unwrap().insert("OffsetDistance".into(),"float32".into());}
             7=>{r.global_by_ptr.insert(8,"ForwardVector".into());}
             8=>r.func_ret.get_mut(&10).unwrap().is_object_handle=false,
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_repeated_event_scope(fault: u8) -> Self {
+        let mut r=Self::default();
+        let types=["FGameplayEffectContext_HitResponse","FGameplayEventData","FGameplayEffectContextHandle","AActor",
+            "FGameplayEffectSpec","UCombatConfig","UDataModule_Combat","UComboAttackConfig","FGameplayTag","FExecution","FWeapon","EMode"];
+        for (n,name) in types.iter().enumerate() {
+            let id=n as i64+1;r.typeid_to_ptr.insert(id as i32,id);r.type_by_ptr.insert(id,(*name).into());r.type_names.insert((*name).into());
+            r.type_identity_by_ptr.insert(id,TypeIdentity {name:(*name).into(),module:String::new(),namespace:String::new()});
+        }
+        for (id,off,name) in [(1,128,"Impact"),(2,16,"Target"),(2,8,"Instigator"),(2,24,"OptionalObject")] {
+            let key=((id as i64)<<1)|((off as i64)<<33)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id);
+        }
+        let value=|ty|DataType {token:5,type_info:ty,..Default::default()};
+        let reference=|ty,constant|DataType {is_reference:true,is_object_const:constant,is_read_only:constant,..value(ty)};
+        let handle=|ty|DataType {is_object_handle:true,..value(ty)};
+        let void=DataType {token:0x52,..Default::default()};
+        for (ptr,owner,name,constant,ret,args,ns) in [
+            (20,5,"GetContext",true,value(3),vec![],""),(21,3,"GetHitContext",true,value(1),vec![],""),
+            (22,3,"$beh2",false,void.clone(),vec![],""),(23,1,"$beh0",false,void.clone(),vec![reference(1,true)],""),
+            (24,1,"$beh2",false,void.clone(),vec![],""),(25,9,"opAssign",false,reference(9,false),vec![reference(9,true)],""),
+            (26,2,"$beh0",false,void.clone(),vec![],""),(27,0,"GetCombatDataModule",false,handle(7),vec![handle(4)],"DataModule"),
+            (28,7,"GetCurrentCombo",true,handle(8),vec![],""),(29,0,"InitializeHitData",false,void.clone(),vec![reference(2,false),reference(1,false)],"GothicGAS"),
+            (30,0,"SendGameplayEvent",false,void.clone(),vec![handle(4),value(9),reference(2,false)],"GothicGAS"),
+            (31,2,"$beh2",false,void.clone(),vec![],""),(32,6,"GetParryMode",true,value(12),vec![],""),
+            (33,0,"AddTargetInputData",false,void,vec![reference(2,false),value(9)],"GothicGAS"),
+        ] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            if owner!=0 {r.func_owner.insert(ptr,types[owner-1].into());r.func_is_method.insert(ptr);}
+            if constant {r.const_method_ptrs.insert(ptr);}if !ns.is_empty(){r.func_ns.insert(ptr,ns.into());}
+        }
+        for (ptr,name) in [(100,"Impact"),(101,"Outgoing"),(102,"Incoming")] {r.global_by_ptr.insert(ptr,name.into());r.global_ns.insert(ptr,"GameplayTag".into());}
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into(),
+            2=>r.func_params.get_mut(&23).unwrap()[0].is_read_only=false,
+            3=>r.func_ret.get_mut(&20).unwrap().is_reference=true,
+            4=>{r.func_params.get_mut(&26).unwrap().push(value(9));}
+            5=>{r.func_owner.insert(31,"FOther".into());}
+            6=>{r.func_ns.insert(30,"Other".into());}
+            7=>r.func_params.get_mut(&29).unwrap()[0].type_info=1,
+            8=>{r.global_ns.insert(101,"Other".into());}
+            9=>{r.const_method_ptrs.remove(&28);}
             _=>{}
         }
         r
