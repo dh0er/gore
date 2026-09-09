@@ -11,6 +11,34 @@ import build as gore_build
 
 
 class RunBuildTest(unittest.TestCase):
+    def test_build_run_builds_once_before_launching(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle = root / 'apps/save-editor/build/windows/x64/runner/Debug'
+            bundle.mkdir(parents=True)
+            exe = bundle / 'goresave.exe'
+            exe.write_bytes(b'stale runner')
+            events = []
+
+            def build(project, release, dry):
+                self.assertEqual((project, release, dry), ('gore-save-editor', False, False))
+                events.append('build')
+                exe.write_bytes(b'current runner')
+
+            def launch(args, **kwargs):
+                self.assertEqual(Path(args[0]), exe)
+                self.assertEqual(exe.read_bytes(), b'current runner')
+                events.append('launch')
+
+            with (
+                mock.patch.object(gore_build, 'ROOT', root),
+                mock.patch.object(gore_build, 'build_project', side_effect=build),
+                mock.patch.object(gore_build.subprocess, 'Popen', side_effect=launch),
+                mock.patch.object(sys, 'argv', ['build.py', 'gore-save-editor', 'build', '--debug', '--run']),
+            ):
+                self.assertEqual(gore_build.main(), 0)
+            self.assertEqual(events, ['build', 'launch'])
+
     def test_existing_exe_launches_with_current_ui_and_core(self):
         for existing_core in (False, True):
             with self.subTest(existing_core=existing_core), tempfile.TemporaryDirectory() as tmp:

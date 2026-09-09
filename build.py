@@ -2652,9 +2652,7 @@ def main() -> int:
             raise SystemExit("build --run takes exactly one project (not 'all')")
         t = targets[0]
         release = args.release or not args.debug
-        runnable_exe(t, release)  # rejects non-runnable before the rebuild
-        build_project(t, release=release, dry=False)
-        run_project(t, release=release)  # exe just built, so this only launches
+        run_project(t, release=release)
         return 0
 
     targets = expand_targets(

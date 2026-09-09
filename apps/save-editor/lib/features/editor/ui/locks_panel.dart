@@ -568,17 +568,11 @@ class _LockList extends StatelessWidget {
   /// takes to open it.
   Widget? _subtitle(_LockRow row) {
     final text = _subtitleText(row);
-    final entry = row.entry;
-    final hasMeter =
-        entry != null && (entry.difficulty != null || entry.lockId != null);
-    if (!hasMeter) return text == null ? null : Text(text);
+    final difficulty = row.entry?.difficulty;
+    if (difficulty == null) return text == null ? null : Text(text);
     return Row(
       children: [
-        _DifficultyBars(
-          difficulty: entry.difficulty ?? 0,
-          theme: theme,
-          l10n: l10n,
-        ),
+        _DifficultyBars(difficulty: difficulty, theme: theme, l10n: l10n),
         if (text != null) ...[
           const SizedBox(width: 8),
           Flexible(child: Text(text, overflow: TextOverflow.ellipsis)),

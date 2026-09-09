@@ -489,20 +489,27 @@ void main() {
     expect(find.byTooltip('New Camp'), findsNothing);
   });
 
-  testWidgets('a lock with no authored tier still shows an empty meter', (
+  testWidgets('a lock with no authored tier omits the difficulty meter', (
     tester,
   ) async {
-    // Seven doors carry a lock config but no m_LockDifficulty. The int is then
-    // 0 and the game fills no pips — an empty meter is what it draws, so the
-    // row must not silently drop the fact that there is a lock at all.
+    // A lock id does not supply a pickable difficulty. Keep the lock row,
+    // but do not turn a missing catalog tier into a displayed zero.
     final core = _LocksCore();
     await _panel(tester, await _notifier(tester, core));
 
     final meter = find.descendant(
       of: find.byKey(const ValueKey('lock-OC_Guards_Cell_01_Door')),
-      matching: find.byTooltip('Difficulty 0 of 4 (internal tier 0 of 7)'),
+      matching: find.byWidgetPredicate(
+        (widget) =>
+            widget is Tooltip &&
+            (widget.message?.startsWith('Difficulty') ?? false),
+      ),
     );
-    expect(meter, findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('lock-OC_Guards_Cell_01_Door')),
+      findsOneWidget,
+    );
+    expect(meter, findsNothing);
   });
 
   testWidgets('the difficulty tooltip names both scales', (tester) async {
