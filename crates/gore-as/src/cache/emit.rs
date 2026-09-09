@@ -14547,15 +14547,14 @@ fn default_only_construction_counts(f: &Func, refs: &RefResolver) -> HashMap<i32
 
 /// The two handles of a gameplay-effect chain, and the slots vanilla gave them.
 ///
-/// `Apply…SpecTo*( …MakeOutgoingSpec(…, …MakeEffectContext()) )` written as ONE expression occurs
-/// 38 times in the tree and **not one of those functions is byte-faithful**; every function that
-/// gets the chain right writes it as two declarations. Both handles are released at the scope
-/// exit rather than after the call that took them, which is an order a deferred parameter cannot
-/// produce — the source named them.
+/// The existing chain repair names both handles. A closed typed context release immediately
+/// after MakeOutgoingSpec instead keeps that argument inside the named spec initializer;
+/// contexts surviving later work retain the two-declaration behavior.
 ///
-/// Returns `(context slot, spec slot)`. Keyed on the two callees by name, because the general
+/// Returns `(context slot, spec slot, keep context name)`. Only an exact typed immediate
+/// cleanup frame removes the context name. Keyed on the two callees by name, because the general
 /// release-order rule fires on ten times as many slots as it should and cost 232 records.
-fn gameplay_effect_chain_slots(f: &Func, refs: &RefResolver) -> Vec<(i32, i32)> {
+fn gameplay_effect_chain_slots(f: &Func, refs: &RefResolver) -> Vec<(i32, i32, bool)> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return Vec::new();
     };
@@ -14589,7 +14588,66 @@ fn gameplay_effect_chain_slots(f: &Func, refs: &RefResolver) -> Vec<(i32, i32)> 
                 // them all the FIRST pair's names declares the same local twice.
                 if let (Some(ctx), Some(spec)) = (context.take(), destination(at, ptr)) {
                     if ctx != spec {
-                        pairs.push((ctx, spec));
+                        // A context destroyed in the spec call's immediate cleanup is an
+                        // argument temporary. Keep the spec name while preserving that inner
+                        // initializer, rather than extending the context to the apply call.
+                        let temporary_context = (|| {
+                            let begin = at.checked_sub(8)?;
+                            let c = instrs.get(begin..at + 3)?;
+                            if c.iter().map(|i| i.op.name).ne(["PSF", "PshVPtr", "CALLSYS", "PSF", "PshC4", "PSF", "PSF", "PshVPtr", "CALLSYS", "PSF", "CALLSYS"])
+                                || w0(&c[0]) != ctx || w0(&c[3]) != ctx || w0(&c[9]) != ctx
+                                || w0(&c[6]) != spec || w0(&c[1]) <= 0 || w0(&c[1]) != w0(&c[7])
+                                || w0(&c[5]) <= 0 || [ctx, spec].contains(&w0(&c[5]))
+                                || [ctx, spec, w0(&c[5])].contains(&w0(&c[1])) { return None; }
+                            let local = |slot, name| {
+                                let mut types = f.obj_locals.iter().filter(|(s, _)| *s == slot).map(|(_, p)| *p);
+                                let ty = types.next()?; let identity = refs.type_identity_by_ptr(ty)?;
+                                (types.next().is_none() && identity.name == name && identity.module.is_empty()
+                                    && identity.namespace.is_empty()).then_some(ty)
+                            };
+                            let context_type = local(ctx, "FGameplayEffectContextHandle")?;
+                            let spec_type = local(spec, "FGameplayEffectSpecHandle")?;
+                            let class_type = local(w0(&c[5]), "TSubclassOf")?;
+                            local(w0(&c[1]), "UAbilitySystemComponent")?;
+                            let plain = |t: &super::types::DataType, token, ty| t.token == token && t.type_info == ty
+                                && !t.is_reference && !t.is_object_handle && !t.is_object_const && !t.is_read_only
+                                && !t.is_auto && !t.if_handle_then_const;
+                            let creator = *c[2].qwords.first()? as i64;
+                            let destructor = *c[10].qwords.first()? as i64;
+                            if refs.func_by_ptr(creator) != Some("MakeEffectContext")
+                                || !refs.is_method_by_ptr(creator) || !refs.is_const_method_by_ptr(creator)
+                                || refs.func_owner_by_ptr(creator) != Some("UAbilitySystemComponent")
+                                || !refs.func_params_by_ptr(creator)?.is_empty()
+                                || !plain(refs.func_ret_by_ptr(creator)?, 5, context_type)
+                                || !refs.is_method_by_ptr(ptr) || !refs.is_const_method_by_ptr(ptr)
+                                || refs.func_owner_by_ptr(ptr) != Some("UAbilitySystemComponent")
+                                || !plain(refs.func_ret_by_ptr(ptr)?, 5, spec_type)
+                                || !matches!(refs.func_params_by_ptr(ptr)?, [class, level, context]
+                                    if plain(class, 5, class_type) && plain(level, 0x50, 0) && plain(context, 5, context_type))
+                                || refs.func_by_ptr(destructor) != Some("$beh2")
+                                || !refs.is_method_by_ptr(destructor) || refs.is_const_method_by_ptr(destructor)
+                                || refs.func_owner_by_ptr(destructor) != Some("FGameplayEffectContextHandle")
+                                || !refs.func_params_by_ptr(destructor)?.is_empty()
+                                || !plain(refs.func_ret_by_ptr(destructor)?, 0x52, 0) { return None; }
+                            let uses: Vec<_> = instrs.iter().enumerate().filter(|(_, i)|
+                                super::bytediff::addressed_slots(i).contains(&ctx)).map(|(n, _)| n).collect();
+                            if uses != [begin, begin + 3, at + 1]
+                                || instrs.iter().enumerate().any(|(index, i)| {
+                                    if i.op.name == "JMPP" {
+                                        // A preceding switch table consists entirely of explicit
+                                        // JMPs, whose destinations are checked below as usual.
+                                        let Some(end) = i.dwords.first().and_then(|last| index.checked_add(2)?.checked_add(*last as usize)) else { return true; };
+                                        return end > begin || instrs.get(index + 1..end)
+                                            .is_none_or(|table| table.is_empty() || table.iter().any(|j| j.op.name != "JMP"));
+                                    }
+                                    i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                                        let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                                        target > c[0].offset_dw as i64 && target <= c[10].offset_dw as i64
+                                    })
+                                }) { return None; }
+                            Some(())
+                        })().is_some();
+                        pairs.push((ctx, spec, !temporary_context));
                     }
                 }
             }
@@ -14600,7 +14658,7 @@ fn gameplay_effect_chain_slots(f: &Func, refs: &RefResolver) -> Vec<(i32, i32)> 
 }
 
 /// Split that chain back into the two declarations the source wrote.
-fn split_gameplay_effect_chain(body: &str, slots: &[(i32, i32)], refs: &RefResolver) -> String {
+fn split_gameplay_effect_chain(body: &str, slots: &[(i32, i32, bool)], refs: &RefResolver) -> String {
     if slots.is_empty() {
         return body.to_owned();
     }
@@ -14616,7 +14674,7 @@ fn split_gameplay_effect_chain(body: &str, slots: &[(i32, i32)], refs: &RefResol
     // chains sharing one spec slot would each emit its declaration.
     let mut declared: HashSet<i32> = HashSet::new();
     for line in body.lines() {
-        let Some(&(context, spec)) = slots.get(next) else {
+        let Some(&(context, spec, keep_context)) = slots.get(next) else {
             out.push(line.to_owned());
             continue;
         };
@@ -14664,10 +14722,14 @@ fn split_gameplay_effect_chain(body: &str, slots: &[(i32, i32)], refs: &RefResol
             let context_expr = &line[context_start..context_at + ".MakeEffectContext()".len()];
             let call_end = matching_paren(line, call + ".MakeOutgoingSpec".len())?;
             let spec_start = start(call)?;
-            let spec_expr = line[spec_start..=call_end].replace(context_expr, &format!("local_{context}"));
+            let spec_expr = if keep_context {
+                line[spec_start..=call_end].replace(context_expr, &format!("local_{context}"))
+            } else {
+                line[spec_start..=call_end].to_owned()
+            };
             // Both halves have to be what they claim. A back-scan that overshoots produces
             // `local_N = local_N;` — self-initialisation, which the compiler does not survive.
-            if spec_expr.contains(".MakeEffectContext()")
+            if (keep_context && spec_expr.contains(".MakeEffectContext()"))
                 || !spec_expr.contains(".MakeOutgoingSpec(")
                 || !context_expr.ends_with(".MakeEffectContext()")
                 || context_expr.starts_with('.')
@@ -14694,9 +14756,11 @@ fn split_gameplay_effect_chain(body: &str, slots: &[(i32, i32)], refs: &RefResol
                 format_args!("local_{spec}"),
                 &line[call_end + 1..]
             );
-            Some(format!(
-                "{indent}{context_ty} local_{context} = {context_expr};\n{indent}{spec_ty} local_{spec} = {spec_expr};\n{rest}"
-            ))
+            Some(if keep_context {
+                format!("{indent}{context_ty} local_{context} = {context_expr};\n{indent}{spec_ty} local_{spec} = {spec_expr};\n{rest}")
+            } else {
+                format!("{indent}{spec_ty} local_{spec} = {spec_expr};\n{rest}")
+            })
         })();
         // The pair belongs to the chain on this line whether or not the line is rewritten: a
         // chain a function RETURNS is deliberately left alone, and leaving its pair unconsumed
@@ -15785,10 +15849,17 @@ fn destroyed_fstring_operator_receivers(
             && !(producer_receiver.op.name == "PGA" && refs.func_by_ptr(producer_ptr) == Some("opAdd_r")
                 && producer_receiver.qwords.first().is_some_and(|p| refs.global_is_string(*p as i64)))
         { continue; }
-        // All argument, destination, consumer-receiver and cleanup addresses remain exact PSFs.
-        if ![destination - 1, *destination,
-              receiver.saturating_sub(2), receiver.saturating_sub(1), *receiver, *release]
+        // The consumer may add a verified global string literal. Its remaining
+        // frame addresses and the producer argument must still be exact PSFs.
+        if ![destination - 1, *destination, receiver.saturating_sub(1), *receiver, *release]
             .iter().all(|at| instrs.get(*at).is_some_and(|i| i.op.name == "PSF"))
+        { continue; }
+        let arg = &instrs[receiver.saturating_sub(2)];
+        let consumer_ptr = instrs[consumer].qwords.first().copied().unwrap_or(0) as i64;
+        if arg.op.name != "PSF" && !(arg.op.name == "PGA"
+            && arg.qwords.first().is_some_and(|p| refs.global_is_string(*p as i64))
+            && refs.func_params_by_ptr(consumer_ptr).zip(refs.func_ret_by_ptr(consumer_ptr))
+                .is_some_and(|(p, r)| p.first().is_some_and(|p| p.type_info == r.type_info)))
         { continue; }
         let Some(dtor) = instrs.get(release + 1).filter(|i| i.op.name == "CALLSYS") else { continue; };
         let ptr = dtor.qwords.first().copied().unwrap_or(0) as i64;
@@ -32287,6 +32358,92 @@ mod member_arithmetic_lifetime_tests {
         assert_eq!(super::fold_unique_double_property_comparison(body, &f, &refs), body);
     }
 
+    #[test]
+    fn string_add_receiver_accepts_only_a_verified_literal_operand() {
+        let mut f = function(&[
+            ("PSF", &[8]), ("PSF", &[16]), ("PSF", &[12]), ("CALLSYS", &[]),
+            ("PSF", &[12]), ("CALLSYS", &[]),
+            ("PGA", &[]), ("PSF", &[12]), ("PSF", &[16]), ("CALLSYS", &[]),
+            ("PSF", &[16]), ("CALLSYS", &[]),
+        ]);
+        let code = super::disassemble(&f.bytecode).unwrap();
+        for (at, pointer) in [(3, 2), (5, 3), (6, 100), (9, 2), (11, 3)] {
+            f.bytecode[code[at].offset_dw + 1] = pointer;
+        }
+        let producers = [(16, 3), (12, 9)];
+        let consumers = [(16, 9)];
+        let refs = RefResolver::from_test_fstring_literal_operand(true);
+        let retained = super::destroyed_fstring_operator_receivers(&f, &refs, &producers, &consumers);
+        assert_eq!(retained, HashSet::from([16]));
+        assert!(super::destroyed_fstring_operator_receivers(&f,
+            &RefResolver::from_test_fstring_literal_operand(false), &producers, &consumers).is_empty());
+        assert!(super::destroyed_fstring_operator_receivers(&f,
+            &RefResolver::from_test_fname_string_operators(true, "FName"), &producers, &consumers).is_empty());
+        for (at, pointer) in [(6, 999), (9, 1), (11, 2)] {
+            let mut wrong = f.clone(); wrong.bytecode[code[at].offset_dw + 1] = pointer;
+            assert!(super::destroyed_fstring_operator_receivers(&wrong, &refs, &producers, &consumers).is_empty());
+        }
+        let mut reused = f.clone(); reused.bytecode.extend(function(&[("PSF", &[16])]).bytecode);
+        assert!(super::destroyed_fstring_operator_receivers(&reused, &refs, &producers, &consumers).is_empty());
+        let body = "    FString local_16 = ((FString(\"prefix\")) + local_8);\n    Reason = (local_16 + \")\");\n";
+        let defs = HashSet::from([(16, 1)]);
+        let inline = |witness: &HashSet<i32>| super::inline_unnamed_value_temporaries(body, &defs,
+            &HashSet::new(), witness, &refs, &HashSet::new(), &HashSet::new(), &HashMap::new(),
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
+        assert_eq!(inline(&retained), "    Reason = (((FString(\"prefix\")) + local_8) + \")\");\n");
+    }
+
+    #[test]
+    fn gameplay_effect_chain_keeps_only_the_named_spec_for_an_immediate_context_release() {
+        let fixture = |deferred: bool| {
+            let mut ops = vec![("PSF", vec![16]), ("PshVPtr", vec![6]), ("CALLSYS", vec![]),
+                ("PSF", vec![16]), ("PshC4", vec![]), ("PSF", vec![8]), ("PSF", vec![22]),
+                ("PshVPtr", vec![6]), ("CALLSYS", vec![])];
+            if deferred { ops.push(("SetV4", vec![30])); }
+            ops.extend([("PSF", vec![16]), ("CALLSYS", vec![]), ("RET", vec![3])]);
+            let borrowed: Vec<_> = ops.iter().map(|(name, words)| (*name, words.as_slice())).collect();
+            let mut f = function(&borrowed);
+            let code = super::disassemble(&f.bytecode).unwrap();
+            let mut pointers = [1, 2, 3].into_iter();
+            for ins in code { if ins.op.name == "CALLSYS" { f.bytecode[ins.offset_dw + 1] = pointers.next().unwrap(); } }
+            f.obj_locals = vec![(16, 101), (22, 102), (8, 103), (6, 104)];
+            f
+        };
+        let refs = RefResolver::from_test_temporary_effect_context(0);
+        let f = fixture(false);
+        let pairs = super::gameplay_effect_chain_slots(&f, &refs);
+        assert_eq!(pairs, vec![(16, 22, false)]);
+        let chain = "    this.Result = local_6.ApplyGameplayEffectSpecToSelf(local_6.MakeOutgoingSpec(local_8, 0.0f, local_6.MakeEffectContext()));\n";
+        let short = "    FGameplayEffectSpecHandle local_22 = local_6.MakeOutgoingSpec(local_8, 0.0f, local_6.MakeEffectContext());\n    this.Result = local_6.ApplyGameplayEffectSpecToSelf(local_22);\n";
+        assert_eq!(super::split_gameplay_effect_chain(chain, &pairs, &refs), short);
+        let long = super::gameplay_effect_chain_slots(&fixture(true), &refs);
+        assert_eq!(long, vec![(16, 22, true)]);
+        assert_eq!(super::split_gameplay_effect_chain(chain, &long, &refs), concat!(
+            "    FGameplayEffectContextHandle local_16 = local_6.MakeEffectContext();\n",
+            "    FGameplayEffectSpecHandle local_22 = local_6.MakeOutgoingSpec(local_8, 0.0f, local_16);\n",
+            "    this.Result = local_6.ApplyGameplayEffectSpecToSelf(local_22);\n"));
+        for fault in 1..=5 {
+            assert_eq!(super::gameplay_effect_chain_slots(&f, &RefResolver::from_test_temporary_effect_context(fault)),
+                vec![(16, 22, true)], "metadata {fault}");
+        }
+        let mut reused = f.clone(); reused.bytecode.extend(function(&[("PSF", &[16])]).bytecode);
+        assert_eq!(super::gameplay_effect_chain_slots(&reused, &refs), vec![(16, 22, true)]);
+        let mut duplicate = f.clone(); duplicate.obj_locals.push((16, 101));
+        assert_eq!(super::gameplay_effect_chain_slots(&duplicate, &refs), vec![(16, 22, true)]);
+        let mut preceding_switch = f.clone();
+        preceding_switch.bytecode = function(&[("JMPP", &[30]), ("JMP", &[])]).bytecode;
+        preceding_switch.bytecode.extend(f.bytecode.clone());
+        assert_eq!(super::gameplay_effect_chain_slots(&preceding_switch, &refs), vec![(16, 22, false)]);
+        let mut jump = f.clone(); jump.bytecode.extend(function(&[("JMPP", &[30])]).bytecode);
+        assert_eq!(super::gameplay_effect_chain_slots(&jump, &refs), vec![(16, 22, true)]);
+        let code = super::disassemble(&f.bytecode).unwrap();
+        let mut incoming = f.clone(); let branch = incoming.bytecode.len();
+        incoming.bytecode.extend(function(&[("JMP", &[])]).bytecode);
+        incoming.bytecode[branch + 1] = code[3].offset_dw as i32 - (branch + 2) as i32;
+        assert_eq!(super::gameplay_effect_chain_slots(&incoming, &refs), vec![(16, 22, true)]);
+        let returned = "    return local_6.MakeOutgoingSpec(local_8, 0.0f, local_6.MakeEffectContext());\n";
+        assert_eq!(super::split_gameplay_effect_chain(returned, &pairs, &refs), returned);
+    }
     #[test]
     fn fname_add_receiver_accepts_only_a_verified_global_string_and_one_life() {
         let mut f = function(&[

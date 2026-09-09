@@ -1630,6 +1630,45 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_fstring_literal_operand(string_literal: bool) -> Self {
+        let mut r = Self::from_test_fname_string_operators(string_literal, "FString");
+        r.func_params.get_mut(&2).unwrap()[0].type_info = 101;
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_temporary_effect_context(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(101, "FGameplayEffectContextHandle"), (102, "FGameplayEffectSpecHandle"),
+            (103, "TSubclassOf"), (104, "UAbilitySystemComponent")] {
+            r.type_by_ptr.insert(ptr, name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        for (ptr, name, owner) in [(1, "MakeEffectContext", "UAbilitySystemComponent"),
+            (2, "MakeOutgoingSpec", "UAbilitySystemComponent"), (3, "$beh2", "FGameplayEffectContextHandle")] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into()); r.func_is_method.insert(ptr);
+        }
+        r.const_method_ptrs.extend([1, 2]);
+        r.func_params.insert(1, vec![]); r.func_params.insert(3, vec![]);
+        r.func_params.insert(2, vec![DataType { token: 5, type_info: 103, ..Default::default() },
+            DataType { token: 0x50, ..Default::default() }, DataType { token: 5, type_info: 101, ..Default::default() }]);
+        r.func_ret.insert(1, DataType { token: 5, type_info: 101, ..Default::default() });
+        r.func_ret.insert(2, DataType { token: 5, type_info: 102, ..Default::default() });
+        r.func_ret.insert(3, DataType { token: 0x52, ..Default::default() });
+        r.func_ret_names.insert("MakeEffectContext".into(), "FGameplayEffectContextHandle".into());
+        r.func_ret_names.insert("MakeOutgoingSpec".into(), "FGameplayEffectSpecHandle".into());
+        match fault {
+            1 => { r.const_method_ptrs.remove(&1); }
+            2 => { r.func_params.get_mut(&2).unwrap()[2].type_info = 102; }
+            3 => { r.func_ret.get_mut(&1).unwrap().is_reference = true; }
+            4 => { r.func_owner.insert(3, "FGameplayEffectSpecHandle".into()); }
+            5 => { r.type_identity_by_ptr.get_mut(&101).unwrap().module = "Script".into(); }
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_fname_string_operators(string_literal: bool, arg_type: &str) -> Self {
         let mut r = Self::default();
         r.type_by_ptr.insert(101, "FString".into());

@@ -34,7 +34,7 @@ AI.States.FightAI.CombatEndActionsState.AIState_ClaimVictory	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_CombatEndActions	1	0	0
 AI.States.FightAI.CombatState.AIGroup_Attackers	5	0	0
 AI.States.FightAI.CombatState.AIGroup_Combat	2	0	0
-AI.States.FightAI.CombatState.AIState_OGCombat	7	0	0
+AI.States.FightAI.CombatState.AIState_OGCombat	6	0	0
 AI.States.FightAI.CombatState.CombatMoves	19	0	0
 AI.States.FightAI.CombatState.CombatOperations	1	0	0
 AI.States.FightAI.CombatState.CombatTestClasses	1	0	0
@@ -62,7 +62,6 @@ GAS.Abilities.Combat.AttackLoop.Capsule.GA_AttackLoopCapsule	1	0	0
 GAS.Abilities.Combat.AttackLoop.Capsule.PyrolaserHitCapsuleComponent	1	0	0
 GAS.Abilities.Combat.AttackLoop.Cone.GA_AttackLoopCone	1	0	0
 GAS.Abilities.Interact.GA_Human_Loot	1	0	0
-GAS.Abilities.Interact.Sleep.Base.GA_Human_Sleep	1	0	0
 GAS.Abilities.Locomotion.GA_Falling	1	0	0
 GAS.Abilities.Locomotion.GA_FallingRagdoll	1	0	0
 GAS.Abilities.Locomotion.GA_Swim	1	0	0
