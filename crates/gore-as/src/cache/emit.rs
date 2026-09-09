@@ -1671,6 +1671,7 @@ fn emit_function_ctor(
     let mut retained_values = retained_value_arguments(f, &fc, refs, &rvo_producers, &rvo_consumers);
     retained_values.extend(named_native_member_copies.iter().copied());
     retained_values.extend(constructed_return_values.iter().copied());
+    retained_values.extend(retained_native_vector_field_update(f, refs));
     hoisted.extend(retained_values.iter().copied());
     statement_producers.extend(retained_values.iter().copied());
     let named_by_direct_store =
@@ -2935,6 +2936,8 @@ fn emit_function_ctor(
         let arithmetic_temps = arithmetic_temporaries(f).union(&copied_integer_negation_arguments(f, refs))
             .copied().collect();
         let rendered = spell_double_parameter_round_trips(&rendered, f, &fc, refs);
+        let (rendered, native_float_updates) = restore_native_float_update(&rendered, f, refs);
+        pass_trace("restore_native_float_update", &rendered);
         let rendered = inline_unnamed_value_temporaries(
             &rendered,
             &unnamed_value_defs(f, refs, &rvo_producers, &rvo_consumers)
@@ -2988,6 +2991,7 @@ fn emit_function_ctor(
         // Now that the operands carry no names of their own, an in-place update stands directly
         // under its declaration and the pair is one statement — which can expose another value.
         let mut self_assignments = native_vector_self_assignments(f, refs);
+        self_assignments.extend(native_float_updates);
         self_assignments.extend(terminal_clamp_assignment_slots(f, refs, &terminal_arithmetic_sites));
         let rendered = merge_self_assignments_retaining(&rendered, &declared_locals, &self_assignments);
         pass_trace("merge_self_assignments", &rendered);
@@ -17586,6 +17590,53 @@ fn copied_short_circuit_accumulators(f: &Func, refs: &RefResolver) -> HashSet<i3
     }
     out
 }
+/// Three distinct native vector results precede a component write and return.
+/// Keep the first two results named so the final result cannot reuse either slot.
+fn retained_native_vector_field_update(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let witness = (|| {
+        if f.ret.token != 5 || f.ret.is_reference || f.ret.is_object_handle || f.params.len() != 4 { return None; }
+        let ty = f.ret.type_info; let identity = refs.type_identity_by_ptr(ty)?;
+        if identity.name != "FVector" || !identity.module.is_empty() || !identity.namespace.is_empty() { return None; }
+        let vector = |t: &super::types::DataType, reference| t.token == 5 && t.type_info == ty
+            && t.is_reference == reference && !t.is_object_handle;
+        let scalar = |t: &super::types::DataType| t.token == 0x51 && !t.is_reference && !t.is_object_handle;
+        if !vector(&f.params[0].ty, true) || !scalar(&f.params[1].ty) || !scalar(&f.params[2].ty)
+            || !vector(&f.params[3].ty, true) { return None; }
+        let code = disassemble(&f.bytecode).ok()?; let c = code.as_slice();
+        if c.iter().map(|i| i.op.name).ne(["PshGPtr", "PshV8", "PSF", "PshVPtr", "CALLSYS", "PshV8", "PSF", "PSF", "CALLSYS",
+            "PSF", "PSF", "PshVPtr", "CALLSYS", "LoadRObjR", "RDR8", "LoadVObjR", "WRTV8", "PSF", "PshVPtr", "CALLSYS", "RET"]) { return None; }
+        let w = |n: usize, o: usize| c[n].words.get(o).map(|v| *v as i16 as i32);
+        let (rotated, scaled, result, field) = (w(2,0)?, w(6,0)?, w(10,0)?, w(14,0)?);
+        let slots = [rotated, scaled, result];
+        if slots.iter().any(|s| *s <= 0 || f.obj_locals.iter().filter(|(o,_)| o == s).map(|(_,p)| *p).collect::<Vec<_>>() != [ty])
+            || slots.into_iter().collect::<HashSet<_>>().len() != 3 || field <= 0 || slots.contains(&field)
+            || [(1,0,-8),(3,0,-10),(5,0,-6),(7,0,rotated),(9,0,scaled),(11,0,-4),(13,0,-4),
+                (15,0,result),(16,0,field),(17,0,result),(18,0,-2),(20,0,12)].iter().any(|(n,o,s)| w(*n,*o) != Some(*s)) { return None; }
+        let member_id = *c[13].dwords.first()? as i32;
+        let (member, old) = refs.member_identity(member_id, w(13,1)?)?;
+        if c[13].dwords != c[15].dwords || w(13,1)? != w(15,1)? || !matches!(member, "X" | "Y" | "Z")
+            || refs.type_identity_by_id(member_id)? != identity || refs.type_identity_by_id(old)? != identity
+            || refs.global_by_ptr(*c[0].qwords.first()? as i64).is_none() { return None; }
+        for (at, name, constant) in [(4,"RotateAngleAxis",true),(8,"opMul",true),(12,"opAdd",true),(19,"$beh0",false)] {
+            let ptr = *c[at].qwords.first()? as i64;
+            if refs.func_by_ptr(ptr) != Some(name) || refs.func_owner_by_ptr(ptr) != Some("FVector")
+                || !refs.is_method_by_ptr(ptr) || refs.is_const_method_by_ptr(ptr) != constant { return None; }
+            let ret = refs.func_ret_by_ptr(ptr)?; let params = refs.func_params_by_ptr(ptr)?;
+            let by_ref = |p: &super::types::DataType| vector(p, true) && p.is_object_const && p.is_read_only;
+            if at == 19 {
+                if ret.token != 0x52 || ret.is_reference || !matches!(params,[p] if by_ref(p)) { return None; }
+            } else if !vector(ret, false) || match at {
+                4 => !matches!(params,[a,b] if scalar(a) && by_ref(b)),
+                8 => !matches!(params,[a] if scalar(a)),
+                _ => !matches!(params,[a] if by_ref(a)),
+            } { return None; }
+        }
+        Some([rotated, scaled])
+    })();
+    witness.into_iter().flatten().collect()
+}
+
+
 /// A value with one physical life that vanilla kept beyond its consuming expression.
 /// Require exactly one creator, one consumer, and no address use besides those and releases.
 /// Boundaries are an integer-result branch, another value's final return copy, or
@@ -17706,7 +17757,18 @@ fn retained_value_arguments(
         // expression. Native defaults cannot refer to the caller's local result.
         let after_value_statement = ret.is_some_and(|t| t.token == 5 && !t.is_reference && !t.is_object_handle)
             && dies.len() == 1
-            && !instrs[consumer + 1..dies[0]].iter().any(|i| i.op.name.starts_with('J'))
+            && !(consumer + 1..dies[0]).any(|at| {
+                let i = &instrs[at];
+                if !i.op.name.starts_with('J') { return false; }
+                // A float guard may skip one scalar store. It cannot bypass a
+                // call or cleanup, so the later void statement still ends here.
+                !(i.op.name == "JP" && instrs[at - 1].op.name == "CMPf"
+                    && instrs.get(at + 1).is_some_and(|store| store.op.name == "CpyVtoV4"
+                        && store.words.iter().all(|w| (*w as i16) > 0)
+                        && store.words.first() == instrs[at - 1].words.get(1))
+                    && instrs.get(at + 2).is_some_and(|next| i.dwords.first().is_some_and(|d|
+                        i.offset_dw as i64 + 2 + *d as i32 as i64 == next.offset_dw as i64)))
+            })
             && (consumer + 1..dies[0]).any(|at| {
                 let i = &instrs[at];
                 if i.op.name != "CALLSYS" { return false; }
@@ -23117,6 +23179,66 @@ fn copied_bool_argument_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
         Some(slot)
     }).collect()
 }
+
+/// A named immediate product is overwritten by a native float call, compared,
+/// then negated through an explicit float/double/float round trip.
+fn restore_native_float_update(body: &str, f: &Func, refs: &RefResolver) -> (String, HashSet<i32>) {
+    let Ok(code) = disassemble(&f.bytecode) else { return (body.to_owned(), HashSet::new()); };
+    let mut lines: Vec<_> = body.lines().map(str::to_owned).collect(); let mut keep = HashSet::new();
+    for (at, c) in code.windows(17).enumerate() {
+        let witness = (|| {
+            if c.iter().map(|i| i.op.name).ne(["MULIf", "PshV4", "CALLSYS", "CpyRtoV4", "CpyVtoV4", "PshC4",
+                "PshVPtr", "CALL", "CpyRtoV4", "CMPf", "JP", "CpyVtoV4", "CpyVtoV4", "NEGf", "fTOd", "dTOf", "PshV4"]) { return None; }
+            let w = |n: usize, operand: usize| c[n].words.get(operand).map(|v| *v as i16 as i32);
+            let (named, source, scratch, wide, narrow) = (w(0,0)?, w(0,1)?, w(3,0)?, w(14,0)?, w(15,0)?);
+            let slots = [named, source, scratch, wide, narrow];
+            if slots.iter().any(|s| *s <= 0 || f.obj_locals.iter().any(|(o,_)| o == s))
+                || slots.into_iter().collect::<HashSet<_>>().len() != 5
+                || [(1,0,named),(4,0,named),(4,1,scratch),(8,0,scratch),(9,0,scratch),(9,1,named),
+                    (11,0,named),(11,1,source),(12,0,scratch),(12,1,named),(13,0,scratch),
+                    (14,1,scratch),(15,1,wide),(16,0,narrow)].iter().any(|(n,o,s)| w(*n,*o) != Some(*s)) { return None; }
+            let bits = *c[0].dwords.first()?;
+            if !f32::from_bits(bits).is_finite() || w(6,0)? <= 0 || slots.contains(&w(6,0)?) { return None; }
+            let ptr = *c[2].qwords.first()? as i64; let id = *c[7].dwords.first()? as i32;
+            let float = |t: &super::types::DataType| t.token == 0x50 && !t.is_reference && !t.is_object_handle;
+            let [arg] = refs.func_params_by_ptr(ptr)? else { return None; };
+            let [handle, default] = refs.func_params_by_id(id)? else { return None; };
+            if refs.is_method_by_ptr(ptr) || !float(refs.func_ret_by_ptr(ptr)?) || !float(arg)
+                || refs.is_method_by_id(id) || !float(refs.func_ret_by_id(id)?) || !float(default)
+                || handle.token != 5 || !handle.is_object_handle || handle.is_reference { return None; }
+            let target = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+            if target(&c[10])? != c[12].offset_dw as i64 || code.iter().any(|i| i.op.name == "JMPP"
+                || (i.op.name.starts_with('J') && i.offset_dw != c[10].offset_dw && target(i).is_some_and(|t|
+                    t > c[0].offset_dw as i64 && t <= c[16].offset_dw as i64))) { return None; }
+            for (slot, expected) in [(named, vec![0,1,4,9,11,12]), (wide, vec![14,15])] {
+                if code.iter().enumerate().filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&slot))
+                    .map(|(n,_)| n).collect::<Vec<_>>() != expected.into_iter().map(|n| at+n).collect::<Vec<_>>() { return None; }
+            }
+            let name = format!("local_{named}"); let input = format!("local_{source}");
+            let callee = refs.func_by_ptr(ptr)?;
+            let row = lines.windows(2).position(|pair| pair[0].trim_start().starts_with(&format!("float32 {name} = "))
+                && pair[1].trim().strip_prefix(&format!("{name} = ")).and_then(|s| s.strip_suffix(';'))
+                    .is_some_and(|rhs| rhs.split_once('(').is_some_and(|(call,args)|
+                        call.rsplit("::").next() == Some(callee) && args == format!("{name})"))))?;
+            let (_, declared, init) = declaration_with_initializer(&lines[row])?;
+            if declared != name { return None; }
+            let (left, literal) = init.split_once(" * ")?;
+            if left != input || literal.strip_suffix('f')?.parse::<f32>().ok()?.to_bits() != bits { return None; }
+            let wide_name = format!("local_{wide}"); let scratch_name = format!("local_{scratch}");
+            let widened = format!("float {wide_name} = {scratch_name};");
+            let conversion = lines.iter().position(|s| s.trim() == widened)?;
+            if count_ident(body, &wide_name) != 2 { return None; }
+            Some((named, row, conversion, format!("{}float32 {name} = {literal} * {input};", indent_of(&lines[row])),
+                format!("{}float {wide_name} = float({scratch_name});", indent_of(&lines[conversion]))))
+        })();
+        if let Some((slot, row, conversion, product, widened)) = witness {
+            lines[row] = product; lines[conversion] = widened; keep.insert(slot);
+        }
+    }
+    let mut out = lines.join("\n"); if body.ends_with('\n') { out.push('\n'); }
+    (out, keep)
+}
+
 
 /// Preserve the double conversion in an integer parameter's closed iTOd/dTOf pair.
 /// Once its declaration is inlined, the cast must carry the intermediate width.
@@ -36482,6 +36604,76 @@ mod literal_value_lifetime_tests {
 
 
     #[test]
+    fn a_native_float_update_retains_its_product_and_explicit_widening() {
+        let mut f = function(&[("MULIf", &[42, 41]), ("PshV4", &[42]), ("CALLSYS", &[]), ("CpyRtoV4", &[35]),
+            ("CpyVtoV4", &[42, 35]), ("PshC4", &[]), ("PshVPtr", &[8]), ("CALL", &[]), ("CpyRtoV4", &[35]),
+            ("CMPf", &[35, 42]), ("JP", &[]), ("CpyVtoV4", &[42, 41]), ("CpyVtoV4", &[35, 42]),
+            ("NEGf", &[35]), ("fTOd", &[46, 35]), ("dTOf", &[43, 46]), ("PshV4", &[43]), ("RET", &[2])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        // MULIf carries two short slots before its immediate dword.
+        f.bytecode[code[0].offset_dw + 2] = 0.34f32.to_bits() as i32;
+        for (at, value) in [(2, 10), (7, 11)] { f.bytecode[code[at].offset_dw + 1] = value; }
+        f.bytecode[code[10].offset_dw + 1] = code[12].offset_dw as i32 - code[10].offset_dw as i32 - 2;
+        let body = "float32 local_41 = GetMax();\nfloat32 local_42 = local_41 * 0.34f;\nlocal_42 = Math::Round(local_42);\nif (GetAmount() <= local_42)\n{\n    local_42 = local_41;\n}\nfloat32 local_35 = local_42;\nlocal_35 = -local_35;\nfloat local_46 = local_35;\nApply(float32(local_46));\n";
+        let refs = RefResolver::from_test_native_float_update(0);
+        let (restored, keep) = super::restore_native_float_update(body, &f, &refs);
+        assert_eq!(keep, HashSet::from([42]));
+        assert!(restored.contains("float32 local_42 = 0.34f * local_41;\nlocal_42 = Math::Round(local_42);"));
+        assert!(restored.contains("float local_46 = float(local_35);"));
+        let locals = BTreeMap::from([(35,"float32".into()),(41,"float32".into()),(42,"float32".into()),(46,"float".into())]);
+        let inlined = super::inline_unnamed_value_temporaries(&restored, &HashSet::from([(46,1)]),
+            &HashSet::new(), &HashSet::new(), &refs, &HashSet::new(), &HashSet::new(), &HashMap::new(),
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
+        let merged = super::merge_self_assignments_retaining(&inlined, &locals, &keep);
+        assert!(merged.contains("float32 local_42 = 0.34f * local_41;\nlocal_42 = Math::Round(local_42);"), "{merged}");
+        assert!(merged.contains("Apply(float32(float(local_35)))"), "{merged}");
+        for fault in 1..=5 { assert_eq!(super::restore_native_float_update(body, &f, &RefResolver::from_test_native_float_update(fault)), (body.into(),HashSet::new()), "metadata {fault}"); }
+        for at in [1, 3, 4, 8, 9, 11, 12, 13, 14, 15, 16] {
+            let mut bad = f.clone(); bad.bytecode[code[at].offset_dw] ^= 1 << 16;
+            assert!(super::restore_native_float_update(body, &bad, &refs).1.is_empty(), "operand {at}");
+        }
+        let mut target = f.clone(); target.bytecode[code[10].offset_dw + 1] += 1;
+        assert!(super::restore_native_float_update(body, &target, &refs).1.is_empty());
+        let mut reused = f.clone(); reused.bytecode.extend(function(&[("PshV4", &[42])]).bytecode);
+        assert!(super::restore_native_float_update(body, &reused, &refs).1.is_empty());
+        for text in [body.replace("0.34f", "0.35f"),body.replace("Math::Round", "Math::Other"),body.replace("float local_46 = local_35", "float local_46 = local_41")] {
+            assert_eq!(super::restore_native_float_update(&text, &f, &refs), (text,HashSet::new()));
+        }
+    }
+
+
+    #[test]
+    fn a_returned_vector_field_update_keeps_its_two_native_operands() {
+        let mut f = function(&[("PshGPtr", &[]), ("PshV8", &[65528]), ("PSF", &[12]), ("PshVPtr", &[65526]), ("CALLSYS", &[]),
+            ("PshV8", &[65530]), ("PSF", &[6]), ("PSF", &[12]), ("CALLSYS", &[]), ("PSF", &[6]), ("PSF", &[24]),
+            ("PshVPtr", &[65532]), ("CALLSYS", &[]), ("LoadRObjR", &[65532, 0]), ("RDR8", &[26]), ("LoadVObjR", &[24, 0]),
+            ("WRTV8", &[26]), ("PSF", &[24]), ("PshVPtr", &[65534]), ("CALLSYS", &[]), ("RET", &[12])]);
+        let value = DataType {token:5,type_info:1,..Default::default()};
+        let reference = DataType {is_reference:true,is_object_const:true,is_read_only:true,..value.clone()};
+        let scalar = DataType {token:0x51,..Default::default()};
+        f.ret = value; f.obj_locals=vec![(6,1),(12,1),(18,1),(24,1)];
+        f.params = [("CenterPoint",reference.clone()),("Radius",scalar.clone()),("Angle",scalar),("ForwardVector",reference)]
+            .into_iter().map(|(name,ty)| crate::cache::model::Param {name:name.into(),ty,flags:0}).collect();
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,ptr) in [(0,9),(4,10),(8,11),(12,12),(19,13)] {f.bytecode[code[at].offset_dw+1]=ptr;}
+        for at in [13,15] {f.bytecode[code[at].offset_dw+2]=1;}
+        let refs=RefResolver::from_test_native_vector_field_update(0);
+        assert_eq!(super::retained_native_vector_field_update(&f,&refs),HashSet::from([6,12]));
+        for fault in 1..=6 {assert!(super::retained_native_vector_field_update(&f,&RefResolver::from_test_native_vector_field_update(fault)).is_empty(),"metadata {fault}");}
+        for at in [1,3,5,7,9,11,13,14,15,16,17,18,20] {
+            let mut bad=f.clone();bad.bytecode[code[at].offset_dw]^=1<<16;
+            assert!(super::retained_native_vector_field_update(&bad,&refs).is_empty(),"operand {at}");
+        }
+        let mut duplicate=f.clone();duplicate.obj_locals.push((6,1));
+        assert!(super::retained_native_vector_field_update(&duplicate,&refs).is_empty());
+        let mut reused=f.clone();reused.bytecode.extend(function(&[("PSF",&[12])]).bytecode);
+        assert!(super::retained_native_vector_field_update(&reused,&refs).is_empty());
+        let mut wrong_field=f.clone();wrong_field.bytecode[code[15].offset_dw+1]=1;
+        assert!(super::retained_native_vector_field_update(&wrong_field,&refs).is_empty());
+    }
+
+
+    #[test]
     fn a_direct_enum_index_argument_does_not_gain_a_named_copy() {
         let mut f = function(&[("PshVPtr", &[65531]), ("PshV4", &[9]), ("PshVPtr", &[0]), ("ADDSi", &[12]),
             ("Thiscall1", &[]), ("RDR1", &[12]), ("PshV4", &[12]), ("PshV4", &[1]), ("PSF", &[16]),
@@ -43204,7 +43396,9 @@ mod literal_value_lifetime_tests {
                 param_names: vec![], param_types: vec![], ret: f.ret.clone(), bytecode: f.bytecode.clone() };
             let later = super::disassemble(&f.bytecode).unwrap().iter()
                 .position(|i| i.op.name == "CALLSYS" && i.qwords.first() == Some(&5)).unwrap();
-            super::retained_value_arguments(f, &fc, refs, &[(10, 1), (20, 4)], &[(10, 4), (20, 6), (20, later)])
+            let update = super::disassemble(&f.bytecode).unwrap().iter()
+                .position(|i| i.op.name == "CALLSYS" && i.qwords.first() == Some(&4)).unwrap();
+            super::retained_value_arguments(f, &fc, refs, &[(10, 1), (20, 4)], &[(10, 4), (20, update), (20, later)])
         };
         let refs = RefResolver::from_test_retained_after_value(0x52, false, "SetMagnitude");
         let f = make(false);
@@ -43230,6 +43424,17 @@ mod literal_value_lifetime_tests {
         let at = super::disassemble(&branched.bytecode).unwrap()[5].offset_dw;
         branched.bytecode.splice(at..at, function(&[("JMP", &[])]).bytecode);
         assert!(check(&branched, &refs).is_empty());
+        let mut guarded = f.clone();
+        let mut branch = function(&[("CMPf", &[31, 32]), ("JP", &[]), ("CpyVtoV4", &[32, 33])]).bytecode;
+        let code = super::disassemble(&branch).unwrap();
+        branch[code[1].offset_dw + 1] = (branch.len() - code[1].offset_dw - 2) as i32;
+        guarded.bytecode.splice(at..at, branch.clone());
+        assert_eq!(check(&guarded, &refs), HashSet::from([10]));
+        for (offset, value) in [(code[1].offset_dw + 1, 0), (code[1].offset_dw + 1, 6),
+            (code[2].offset_dw, branch[code[2].offset_dw] ^ (1 << 16))] {
+            let mut bad = guarded.clone(); bad.bytecode[at + offset] = value;
+            assert!(check(&bad, &refs).is_empty(), "branch/store {offset}");
+        }
     }
 
     fn eager_sum_before_field_fixture() -> Func {

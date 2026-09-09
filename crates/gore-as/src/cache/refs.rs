@@ -3413,6 +3413,52 @@ impl RefResolver {
 
 
     #[cfg(test)]
+    pub(crate) fn from_test_native_float_update(fault: u8) -> Self {
+        let mut r = Self::default(); let float = DataType { token: 0x50, ..Default::default() };
+        r.func_by_ptr.insert(10, "Round".into()); r.func_ret.insert(10, float.clone()); r.func_params.insert(10, vec![float.clone()]);
+        r.funcid_to_ptr.insert(11, 11); r.func_by_ptr.insert(11, "GetAmount".into()); r.func_ret.insert(11, float.clone());
+        r.func_params.insert(11, vec![DataType { token: 5, is_object_handle: true, ..Default::default() }, float]);
+        match fault {
+            1 => r.func_params.get_mut(&10).unwrap()[0].is_reference = true,
+            2 => r.func_ret.get_mut(&10).unwrap().token = 0x51,
+            3 => { r.func_is_method.insert(10); }
+            4 => r.func_ret.get_mut(&11).unwrap().token = 0x44,
+            5 => r.func_params.get_mut(&11).unwrap()[0].is_object_handle = false,
+            _ => {}
+        }
+        r
+    }
+
+
+    #[cfg(test)]
+    pub(crate) fn from_test_native_vector_field_update(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FVector", "Z")]);
+        r.type_identity_by_ptr.insert(1, TypeIdentity { name: "FVector".into(), module: if fault == 1 { "Script" } else { "" }.into(), namespace: String::new() });
+        r.prop_type_id.insert(3, 1); r.global_by_ptr.insert(9, "UpVector".into());
+        let value = DataType { token: 5, type_info: 1, ..Default::default() };
+        let reference = DataType { is_reference: true, is_object_const: true, is_read_only: true, ..value.clone() };
+        let scalar = DataType { token: 0x51, ..Default::default() };
+        for (ptr, name, ret, args) in [
+            (10,"RotateAngleAxis",value.clone(),vec![scalar.clone(),reference.clone()]),
+            (11,"opMul",value.clone(),vec![scalar]),(12,"opAdd",value,vec![reference.clone()]),
+            (13,"$beh0",DataType {token:0x52,..Default::default()},vec![reference]),
+        ] {
+            r.func_by_ptr.insert(ptr,name.into()); r.func_owner.insert(ptr,"FVector".into()); r.func_is_method.insert(ptr);
+            r.func_ret.insert(ptr,ret); r.func_params.insert(ptr,args); if ptr != 13 {r.const_method_ptrs.insert(ptr);}
+        }
+        match fault {
+            2 => r.func_params.get_mut(&11).unwrap()[0].token=0x50,
+            3 => r.func_params.get_mut(&12).unwrap()[0].is_read_only=false,
+            4 => r.func_ret.get_mut(&10).unwrap().is_reference=true,
+            5 => {r.const_method_ptrs.remove(&11);}
+            6 => {r.func_owner.insert(13,"FOther".into());}
+            _=>{}
+        }
+        r
+    }
+
+
+    #[cfg(test)]
     pub(crate) fn from_test_native_bool_branch(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("UBase", "Flag"), ("USpecial", "")]);
         for (id, name) in [(1, "UBase"), (2, "USpecial")] {
