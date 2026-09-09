@@ -2277,6 +2277,35 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_native_rvo_constructor_input(fault: u8) -> Self {
+        let mut r = Self::from_test_entry_constructed_value(0);
+        r.type_by_ptr.insert(104, "USceneComponent".into()); r.type_names.insert("USceneComponent".into());
+        r.type_identity_by_ptr.insert(104, TypeIdentity { name: "USceneComponent".into(), module: String::new(), namespace: String::new() });
+        r.func_by_ptr.insert(7, "GetSocketLocation".into()); r.func_owner.insert(7, "USceneComponent".into());
+        r.func_is_method.insert(7); r.const_method_ptrs.insert(7); r.func_params.insert(7, Vec::new());
+        r.func_ret.insert(7, DataType { token: 5, type_info: 101, ..Default::default() });
+        r.func_by_ptr.insert(8, "Rotation".into());
+        r.func_params.insert(8, vec![DataType { token: 5, type_info: 101, is_reference: true,
+            is_object_const: true, is_read_only: true, ..Default::default() }]);
+        r.func_ret.insert(8, DataType { token: 5, type_info: 102, ..Default::default() });
+        match fault {
+            1 => r.func_ret.get_mut(&7).unwrap().type_info = 102,
+            2 => r.func_ret.get_mut(&7).unwrap().is_reference = true,
+            3 => r.func_ret.get_mut(&7).unwrap().is_object_handle = true,
+            4 => { r.const_method_ptrs.remove(&7); }
+            5 => { r.func_is_method.remove(&7); }
+            6 => r.func_params.get_mut(&3).unwrap()[1].is_read_only = false,
+            7 => r.func_params.get_mut(&3).unwrap()[1].type_info = 104,
+            8 => r.type_identity_by_ptr.get_mut(&101).unwrap().module = "Script".into(),
+            9 => r.func_ret.get_mut(&7).unwrap().is_read_only = true,
+            10 => { r.func_owner.insert(7, "FValue".into()); }
+            11 => { r.func_params.remove(&7); }
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_conditional_constructor_arguments(fault: u8) -> Self {
         let mut r = Self::default();
         r.type_by_ptr.insert(101, "FVector".into()); r.type_names.insert("FVector".into());
@@ -2315,6 +2344,26 @@ impl RefResolver {
         r.func_is_method.insert(1);
         r.func_params.insert(1, vec![DataType { token: 0x44, ..Default::default() }; params]);
         r.func_ret.insert(1, DataType { token: if returns_void { 0x52 } else { 0x41 }, ..Default::default() });
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_narrowed_argument_lives(fault: u8) -> Self {
+        let mut r = Self::from_test_widened_division_fields(if fault == 1 { "float32" } else { "double" });
+        r.func_by_ptr.insert(1, "Height".into()); r.func_owner.insert(1, "UComponent".into());
+        r.func_is_method.insert(1); r.const_method_ptrs.insert(1); r.func_params.insert(1, Vec::new());
+        r.func_ret.insert(1, DataType { token: 0x50, is_reference: true, is_object_const: true,
+            is_read_only: true, ..Default::default() });
+        match fault {
+            2 => r.func_ret.get_mut(&1).unwrap().token = 0x51,
+            3 => r.func_ret.get_mut(&1).unwrap().is_reference = false,
+            4 => r.func_ret.get_mut(&1).unwrap().is_object_const = false,
+            5 => r.func_ret.get_mut(&1).unwrap().is_read_only = false,
+            6 => { r.const_method_ptrs.remove(&1); }
+            7 => { r.func_is_method.remove(&1); }
+            8 => r.func_params.get_mut(&1).unwrap().push(DataType { token: 0x44, ..Default::default() }),
+            _ => {}
+        }
         r
     }
 

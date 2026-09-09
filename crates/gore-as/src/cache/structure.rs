@@ -451,8 +451,8 @@ fn is_proven_typed_psf_conversion(recv: &Arg, args: &[Arg], ptr: i64, refs: &Ref
         && refs.func_ret_by_ptr(ptr).is_some_and(|t| t.token == 0x52 && !t.is_reference && !t.is_object_handle)
 }
 
-/// A native value constructed before the first branch remains a readable local
-/// in later blocks. Require its exact const-reference type and no intervening release.
+/// A native value initialized by an entry constructor or an earlier native RVO
+/// remains readable in later blocks. Require its exact const-reference type and lifetime.
 fn has_entry_constructed_psf_value(ctx: &Ctx<'_>, at: usize, arg: &Arg, param: &DataType) -> bool {
     (|| {
         let slot = arg.s.strip_prefix("local_")?.parse::<i32>().ok()?;
@@ -477,7 +477,38 @@ fn has_entry_constructed_psf_value(ctx: &Ctx<'_>, at: usize, arg: &Arg, param: &
                 && ctx.refs.func_ret_by_ptr(ptr).is_some_and(|r| r.token == 0x52
                     && !r.is_reference && !r.is_object_handle) { constructed = true; }
         }
-        constructed.then_some(())
+        if constructed { return Some(()); }
+        // A completed native method RVO also initializes a local outside this
+        // block. Its first address use must be the hidden return slot; no edge
+        // may enter after that setup without passing its producing call.
+        let first = prefix.iter().position(|i| super::bytediff::addressed_slots(i).contains(&slot))?;
+        let run = prefix.get(first..first + 3)?;
+        if run.iter().map(|i| i.op.name).ne(["PSF", "PshVPtr", "CALLSYS"]) { return None; }
+        let receiver = run[1].words.first().map(|w| *w as i16 as i32)?;
+        if receiver <= 0 || receiver == slot || !ctx.slot_type(receiver)
+            .is_some_and(|t| matches!(t.as_bytes().first(), Some(b'U' | b'A'))) { return None; }
+        let ptr = *run[2].qwords.first()? as i64;
+        let ret = ctx.refs.func_ret_by_ptr(ptr)?;
+        if !ctx.refs.is_method_by_ptr(ptr) || !ctx.refs.is_const_method_by_ptr(ptr)
+            || !ctx.refs.func_owner_by_ptr(ptr).is_some_and(|t| matches!(t.as_bytes().first(), Some(b'U' | b'A')))
+            || ctx.refs.func_params_by_ptr(ptr).is_none()
+            || ret.token != 5 || ret.type_info != param.type_info || ret.is_reference || ret.is_object_const
+            || ret.is_object_handle || ret.is_read_only || ret.is_auto || ret.if_handle_then_const { return None; }
+        for (index, ins) in prefix.iter().enumerate().skip(first + 3) {
+            if ins.op.name == "RET" { return None; }
+            if !super::bytediff::addressed_slots(ins).contains(&slot) { continue; }
+            if ins.op.name != "PSF" { return None; }
+            if prefix.get(index + 1).is_some_and(|call| call.op.name == "CALLSYS"
+                && call.qwords.first().is_some_and(|p| matches!(ctx.refs.func_by_ptr(*p as i64), Some("$beh0" | "$beh2")))) { return None; }
+        }
+        for (index, ins) in ctx.instrs.iter().enumerate() {
+            if !ins.op.name.starts_with('J') { continue; }
+            if ins.op.name == "JMPP" { return None; }
+            let target = ins.offset_dw as i64 + 2 + *ins.dwords.first()? as i32 as i64;
+            if target > run[0].offset_dw as i64 && target <= ctx.instrs.get(at)?.offset_dw as i64
+                && !(first + 2..at).contains(&index) { return None; }
+        }
+        Some(())
     })().is_some()
 }
 
@@ -14477,6 +14508,54 @@ mod tests {
         }
     }
 
+    #[test]
+    fn constructor_keeps_a_typed_native_rvo_input_from_before_the_later_branch() {
+        let render = |fault: u8, hazard: u8| {
+            let mut a = TestAssembler::default();
+            // There is already a branch before the native value's construction.
+            a.jump("JMP", if hazard == 1 { "body" } else if hazard == 2 { "produce" } else { "init" });
+            a.label("init"); a.op("PSF", &[48], &[]); a.op("PshVPtr", &[2], &[]);
+            a.label("produce"); a.op("CALLSYS", &[], &[7, 0]);
+            match hazard {
+                3 => { a.op("PSF", &[48], &[]); a.op("CALLSYS", &[], &[6, 0]); }
+                4 => a.op("SetV4", &[48], &[0]),
+                5 => a.op("RET", &[0], &[]),
+                6 => { a.op("PSF", &[48], &[]); a.op("CALLSYS", &[], &[1, 0]); }
+                7 => a.op("JMPP", &[1], &[0]),
+                _ => {}
+            }
+            a.jump("JMP", "body"); a.label("body");
+            a.op("PSF", &[48], &[]); a.op("PSF", &[62], &[]); a.op("CALLSYS", &[], &[8, 0]);
+            a.op("PshC4", &[], &[5]); a.op("PshGPtr", &[], &[100, 0]);
+            a.op("PSF", &[48], &[]); a.op("PSF", &[62], &[]); a.op("PSF", &[88], &[]);
+            a.op("CALLSYS", &[], &[3, 0]); a.op("PSF", &[88], &[]); a.op("CALLSYS", &[], &[4, 0]);
+            let mut fixture = a.finish();
+            for i in &mut fixture.instrs {
+                if matches!(i.op.name, "CALLSYS" | "PshGPtr") { i.qwords = vec![i.dwords[0] as u64]; }
+            }
+            let begin = fixture.instrs.iter().position(|i| i.offset_dw == fixture.labels["body"]).unwrap();
+            let refs = RefResolver::from_test_native_rvo_constructor_input(fault);
+            let f = FuncCode { func: "Fixture::ConstructFromPriorRvo".into(), is_method: false,
+                param_names: Vec::new(), param_types: Vec::new(), bytecode: Vec::new(),
+                ret: DataType { token: 0x52, ..Default::default() } };
+            let mut locals = HashMap::from([(2, "USceneComponent".into()), (48, "FVector".into()),
+                (62, "FRotator".into()), (88, "FTransform".into())]);
+            if hazard == 8 { locals.remove(&48); }
+            if hazard == 9 { locals.remove(&2); }
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: None, param_types: None, class_name: None,
+                local_types: Some(&locals), float_slots: Default::default(), param_off_map: HashMap::new(),
+                rvo_off: None, keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+            block_stmts(&ctx, begin, fixture.instrs.len()).0.join("\n")
+        };
+        let source = render(0, 0);
+        let ctor = "local_88 = FTransform(local_62, local_48, FVector::OneVector);";
+        assert!(source.contains("local_62 = Rotation(local_48);"), "{source}");
+        assert!(source.contains(ctor), "{source}");
+        assert!(source.contains("Use(local_88, 5);"), "{source}");
+        for fault in 1..=11 { assert!(!render(fault, 0).contains(ctor), "metadata {fault}"); }
+        for hazard in 1..=9 { assert!(!render(0, hazard).contains(ctor), "flow/life {hazard}"); }
+    }
     #[test]
     fn fresh_bool_test_survives_a_pending_void_statement() {
         let render = |fresh: bool, dest_type: &str| {

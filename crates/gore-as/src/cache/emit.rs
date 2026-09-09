@@ -1664,6 +1664,12 @@ fn emit_function_ctor(
     hoisted.extend(value_operands.iter().copied());
     statement_producers.extend(value_operands);
     let (rvo_statements, mut inline_callees) = rvo_statement_producers(f, refs, &rvo_producers);
+    // The closed float32 cast belongs to the earlier pushed argument life;
+    // the same slot's later reference getter carries the statement verdict.
+    let narrowed_argument_lives = narrowed_argument_split_lives(f, refs);
+    for slot in &narrowed_argument_lives {
+        inline_callees.entry(*slot).or_default().push("float32".into());
+    }
     let copied_binary_receivers = copied_binary_receiver_lifetimes(f, refs, &rvo_producers, is_method);
     for (slot, constructor) in &copied_binary_receivers {
         inline_callees.entry(*slot).or_default().push(constructor.clone());
@@ -2585,6 +2591,7 @@ fn emit_function_ctor(
             &enum_overrides,
             &reference_locals,
             &enum_reference_copy_initializers(f, refs),
+            &narrowed_argument_lives,
         );
         pass_trace("rewrite_primitive_lives_decl_init", &body);
         let placed_so_far: HashSet<i32> = placed_so_far.union(&life_suppressed)
@@ -22680,6 +22687,48 @@ fn literal_temporary_slots(f: &Func) -> HashSet<i32> {
     consumed_at_once.difference(&other_writes).copied().collect()
 }
 
+/// A narrowed argument and a later const-reference result share only storage.
+/// The five closed accesses prove two independent float32 lives; lexical flow
+/// checks still decide whether their declarations may be split across a branch.
+fn narrowed_argument_split_lives(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+    let entered = |first: usize, last: usize| code.iter().any(|i| i.op.name == "JMPP"
+        || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+            let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+            target > code[first].offset_dw as i64 && target <= code[last].offset_dw as i64
+        })));
+    code.windows(4).enumerate().filter_map(|(at, c)| {
+        if c.iter().map(|i| i.op.name).ne(["LoadThisR", "RDR8", "dTOf", "PshV4"])
+            || w(&c[1], 0) != w(&c[2], 1) || w(&c[2], 0) != w(&c[3], 0)
+            || entered(at, at + 3) { return None; }
+        let s = w(&c[2], 0)?;
+        if s <= 0 || w(&c[1], 0)? <= 0 || w(&c[1], 0) == Some(s)
+            || f.obj_locals.iter().any(|(slot, _)| *slot == s) { return None; }
+        let tid = *c[0].dwords.first()? as i32;
+        let owner = refs.type_identity_by_id(tid)?;
+        let (field, old) = refs.member_identity(tid, w(&c[0], 0)?)?;
+        if refs.type_identity_by_id(old)? != owner
+            || !matches!(refs.own_field_type_by_class(&owner.name, field), Some("float" | "double")) { return None; }
+        let uses: Vec<_> = code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&s))
+            .map(|(i, _)| i).collect();
+        let [cast, push, read, add, widen] = uses.as_slice() else { return None; };
+        if *cast != at + 2 || *push != at + 3 || *read <= *push + 1 || *add != *read + 1 || *widen != *add + 1
+            || code[*read].op.name != "RDR4" || code[*add].op.name != "ADDIf" || code[*widen].op.name != "fTOd"
+            || code[*add].words != [s as u16, s as u16] || w(&code[*widen], 1) != Some(s)
+            || w(&code[*widen], 0)? <= 0 || w(&code[*widen], 0) == Some(s)
+            || !f32::from_bits(*code[*add].dwords.first()?).is_finite() || entered(*read - 1, *widen) { return None; }
+        let getter = &code[*read - 1];
+        if getter.op.name != "CALLSYS" { return None; }
+        let p = *getter.qwords.first()? as i64;
+        let ret = refs.func_ret_by_ptr(p)?;
+        (refs.is_method_by_ptr(p) && refs.is_const_method_by_ptr(p) && refs.func_owner_by_ptr(p).is_some()
+            && refs.func_params_by_ptr(p)?.is_empty() && ret.token == 0x50 && ret.type_info == 0
+            && ret.is_reference && ret.is_object_const && ret.is_read_only
+            && !ret.is_object_handle && !ret.is_auto && !ret.if_handle_then_const).then_some(s)
+    }).collect()
+}
+
 /// Every primitive or enum local whose writes are all declarations — none of them the
 /// through-a-temporary form of an assignment — is declared at each write that starts a life,
 /// in the block that holds it. See the call site for why.
@@ -22692,6 +22741,7 @@ fn rewrite_primitive_lives_decl_init(
     enums: &HashMap<i32, String>,
     reference_locals: &HashMap<i32, bool>,
     enum_copy_initializers: &HashSet<(i32, String)>,
+    split_lives: &HashSet<i32>,
 ) -> (String, HashSet<i32>) {
     // RDR1 followed by a same-enum copy is the declaration's copy from a
     // const reference, not the separate assignment of a by-value call result.
@@ -22707,7 +22757,15 @@ fn rewrite_primitive_lives_decl_init(
             && !reference_locals.contains_key(&slot)
             && (is_primitive(ty) || enums.get(&slot).is_some_and(|enum_ty| enum_ty == ty))
     };
-    rewrite_decl_at_assignment(body, locals, &wanted, &|_, ty| qualify_decl_type(ty, refs), false, &HashMap::new(), &HashSet::new())
+    let (body, mut suppressed) = rewrite_decl_at_assignment(body, locals,
+        &|slot, ty| wanted(slot, ty) && !(split_lives.contains(&slot) && ty == "float32"), &|_, ty| qualify_decl_type(ty, refs),
+        false, &HashMap::new(), &HashSet::new());
+    if split_lives.is_empty() { return (body, suppressed); }
+    let (body, split) = rewrite_decl_at_assignment(&body, locals,
+        &|slot, ty| wanted(slot, ty) && split_lives.contains(&slot) && ty == "float32",
+        &|_, ty| qualify_decl_type(ty, refs), true, &HashMap::new(), &HashSet::new());
+    suppressed.extend(split);
+    (body, suppressed)
 }
 
 /// An arithmetic, comparison or numeric-cast instruction: what an unnamed scratch value is
@@ -32672,7 +32730,7 @@ mod member_arithmetic_lifetime_tests {
         assert_eq!(super::named_value_sites(&f, &refs), sites);
         let place = |body: &str, locals: &BTreeMap<i32, String>, sites: &HashSet<(i32, String)>|
             super::rewrite_primitive_lives_decl_init(body, locals, &refs, &HashSet::new(),
-                &assigned, &enums, &HashMap::new(), sites);
+                &assigned, &enums, &HashMap::new(), sites, &HashSet::new());
         assert_eq!(place(body, &locals, &HashSet::new()).0, body);
         let (placed, suppressed) = place(body, &locals, &sites);
         let expected = body.replace("        local_14 =", "        EOutcome local_14 =");
@@ -35060,6 +35118,53 @@ mod literal_value_lifetime_tests {
             f.bytecode[c[at].offset_dw + 1] = c[target].offset_dw as i32 - c[at].offset_dw as i32 - 2;
         }
         f
+    }
+
+    #[test]
+    fn a_narrowed_argument_and_later_reference_sum_have_separate_lives() {
+        let mut f = function(&[("LoadThisR", &[8]), ("RDR8", &[8]), ("dTOf", &[12, 8]),
+            ("PshV4", &[12]), ("CALLSYS", &[]), ("JZ", &[]), ("PshVPtr", &[65534]),
+            ("CALLSYS", &[]), ("RDR4", &[12]), ("ADDIf", &[12, 12]), ("fTOd", &[20, 12]),
+            ("WRTV8", &[20]), ("RET", &[2])]);
+        let c = disassemble(&f.bytecode).unwrap();
+        f.bytecode[c[0].offset_dw + 1] = 100;
+        f.bytecode[c[7].offset_dw + 1] = 1;
+        f.bytecode[c[9].offset_dw + 2] = 15.0f32.to_bits() as i32;
+        f.bytecode[c[5].offset_dw + 1] = c[12].offset_dw as i32 - c[5].offset_dw as i32 - 2;
+        let refs = RefResolver::from_test_narrowed_argument_lives(0);
+        let split = super::narrowed_argument_split_lives(&f, &refs);
+        assert_eq!(split, HashSet::from([12]));
+        let locals = BTreeMap::from([(12, "float32".into()), (20, "float".into())]);
+        let body = "local_12 = float32(this.MoveCount);\nUse(local_12, false);\nif (Flag)\n{\n    local_12 = Component.Height();\n    local_12 = local_12 + 15.0f;\n    Use(local_12);\n}\nreturn;\n";
+        let place = |body: &str, split: &HashSet<i32>| super::rewrite_primitive_lives_decl_init(body, &locals, &refs,
+            &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashMap::new(), &HashSet::new(), split).0;
+        let placed = place(body, &split);
+        assert!(placed.contains("float32 local_12_2 = Component.Height();"), "{placed}");
+        assert!(!place(body, &HashSet::new()).contains("local_12_2"));
+        let collapsed = super::collapse_single_use_accumulators(&placed, &HashSet::new(), &locals, &HashSet::new());
+        assert!(!collapsed.contains("local_12_2 = local_12_2 +"), "{collapsed}");
+        let inline: HashMap<i32, Vec<String>> = split.iter().map(|slot| (*slot, vec!["float32".into()])).collect();
+        let fold = |inline: &HashMap<i32, Vec<String>>| super::inline_unnamed_value_temporaries(&collapsed,
+            &super::unnamed_value_defs(&f, &refs, &[], &[]), &HashSet::new(), &HashSet::new(), &refs,
+            &HashSet::new(), &HashSet::from([12]), inline, &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
+        assert!(fold(&HashMap::new()).contains("float32 local_12 ="));
+        let folded = fold(&inline);
+        assert!(folded.contains("Use(float32(this.MoveCount), false);"), "{folded}");
+        assert_eq!(folded.matches("Component.Height()").count(), 1);
+        let joined = body.replace("}\nreturn;", "}\nUse(local_12);\nreturn;");
+        assert!(!place(&joined, &split).contains("local_12_2"));
+        for fault in 1..=8 { assert!(super::narrowed_argument_split_lives(&f, &RefResolver::from_test_narrowed_argument_lives(fault)).is_empty(), "metadata {fault}"); }
+        let mut escaped = f.clone(); escaped.bytecode.extend(function(&[("PSF", &[12])]).bytecode);
+        assert!(super::narrowed_argument_split_lives(&escaped, &refs).is_empty());
+        let mut object = f.clone(); object.obj_locals.push((12, 100));
+        assert!(super::narrowed_argument_split_lives(&object, &refs).is_empty());
+        let mut infinite = f.clone(); infinite.bytecode[c[9].offset_dw + 2] = f32::INFINITY.to_bits() as i32;
+        assert!(super::narrowed_argument_split_lives(&infinite, &refs).is_empty());
+        for at in [1, 2, 3, 8, 9, 10] {
+            let mut entry = function(&[("JMP", &[])]); entry.bytecode[1] = c[at].offset_dw as i32;
+            entry.bytecode.extend(f.bytecode.clone());
+            assert!(super::narrowed_argument_split_lives(&entry, &refs).is_empty(), "entry {at}");
+        }
     }
 
     #[test]
@@ -38723,7 +38828,7 @@ mod literal_value_lifetime_tests {
         let body = "if (ready)\n{\n    local_11 = Count();\n    local_11 = local_11 - 1;\n    Use(local_11);\n    return true;\n}\nlocal_11 = (test != -1 ? a : b);\nUse(local_11);\nreturn true;\n";
         let (out, suppressed) = super::rewrite_primitive_lives_decl_init(body,
             &std::collections::BTreeMap::from([(11, "int".into())]), &RefResolver::default(),
-            &HashSet::new(), &super::slots_with_assignment_writes(&f), &HashMap::new(), &HashMap::new(), &HashSet::new());
+            &HashSet::new(), &super::slots_with_assignment_writes(&f), &HashMap::new(), &HashMap::new(), &HashSet::new(), &HashSet::new());
         assert!(suppressed.contains(&11));
         assert!(out.contains("int local_11 = Count();") && out.contains("int local_11_2 = (test"), "{out}");
         f.bytecode[code[3].offset_dw + 1] += 1;
