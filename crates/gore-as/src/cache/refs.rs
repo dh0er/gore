@@ -1715,6 +1715,33 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_reused_bool_guards(fault: u8) -> Self {
+        let mut r = Self::default();
+        let boolean = DataType { token: 0x41, ..Default::default() };
+        for (ptr, name, params) in [(1, "First", vec![]), (2, "Second", vec![boolean.clone()]),
+            (3, "Ignore", vec![]), (4, "Final", vec![])] {
+            r.funcid_to_ptr.insert(ptr as i32, ptr);
+            r.func_by_ptr.insert(ptr, name.into()); r.func_params.insert(ptr, params);
+            r.func_ret.insert(ptr, boolean.clone());
+        }
+        for (ptr, name) in [(5, "$beh2"), (6, "$beh0")] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, "FHitResult".into());
+            r.func_is_method.insert(ptr); r.func_params.insert(ptr, vec![]);
+            r.func_ret.insert(ptr, DataType { token: 0x52, ..Default::default() });
+        }
+        r.type_by_ptr.insert(100, "FHitResult".into());
+        r.type_identity_by_ptr.insert(100, TypeIdentity { name: "FHitResult".into(), module: String::new(), namespace: String::new() });
+        r.temporary_arg_positions.insert("Second".into(), HashMap::from([(1, vec![true])]));
+        if fault == 1 { r.func_ret.get_mut(&1).unwrap().token = 0x44; }
+        if fault == 2 { r.func_ret.get_mut(&2).unwrap().is_reference = true; }
+        if fault == 3 { r.func_ret.get_mut(&3).unwrap().token = 0x44; }
+        if fault == 4 { r.func_ret.get_mut(&4).unwrap().is_object_handle = true; }
+        if fault == 5 { r.func_owner.insert(5, "FOtherHit".into()); }
+        r
+    }
+
+
+    #[cfg(test)]
     pub(crate) fn from_test_copied_negated_boolean(token: i32, reference: bool) -> Self {
         let mut r=Self::default();
         r.func_by_ptr.insert(1,"Trace".into());r.funcid_to_ptr.insert(1,1);
@@ -3900,6 +3927,39 @@ impl RefResolver {
         r
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_test_cast_value_frame(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FString", ""), ("TSubclassOf", ""),
+            ("UClass", ""), ("UObject", ""), ("UResponse", ""), ("UOwner", ""), ("UBaseResponse", "")]);
+        for (id, name) in [(1, "FString"), (2, "TSubclassOf"), (3, "UClass"), (4, "UObject"), (5, "UResponse"), (6, "UOwner"), (7, "UBaseResponse")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: name.into(), namespace: String::new(),
+                module: if id >= 5 { "Fixture" } else { "" }.into() });
+        }
+        r.typeid_to_ptr.insert(0x0800_0005, 5);
+        r.set_class_hierarchy(HashMap::from([("UResponse".into(), "UBaseResponse".into())]));
+        for (ptr, name, owner, result, handle) in [(1, "Get", "TSubclassOf", 3, true),
+            (2, "GetDefaultObject", "UClass", 4, true), (3, "opCast", "UObject", 0, false),
+            (11, "GetClass", "UOwner", 2, false), (12, "GetDisplayName", "UBaseResponse", 1, false)] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into());
+            r.func_is_method.insert(ptr); r.const_method_ptrs.insert(ptr);
+            r.func_params.insert(ptr, Vec::new());
+            r.func_ret.insert(ptr, DataType { token: if result == 0 { 0x52 } else { 5 },
+                type_info: result, is_object_handle: handle, ..Default::default() });
+            if ptr >= 11 { r.funcid_to_ptr.insert(ptr as i32, ptr); }
+        }
+        r.func_params.insert(3, vec![DataType { token: 0x3b, is_reference: true, ..Default::default() }]);
+        match fault {
+            1 => { r.func_ret.get_mut(&12).unwrap().is_reference = true; }
+            2 => { r.func_owner.insert(12, "UOther".into()); }
+            3 => { r.const_method_ptrs.remove(&1); }
+            4 => { r.func_params.get_mut(&11).unwrap().push(DataType { token: 0x44, ..Default::default() }); }
+            5 => { r.func_params.get_mut(&3).unwrap()[0].is_read_only = true; }
+            6 => { r.func_ret.get_mut(&2).unwrap().is_object_handle = false; }
+            7 => { r.set_class_hierarchy(HashMap::new()); }
+            _ => {}
+        }
+        r
+    }
     #[cfg(test)]
     pub(crate) fn from_test_cast_field_return(subclass: bool, fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("UAttack", "Required"), ("FTag", ""),
