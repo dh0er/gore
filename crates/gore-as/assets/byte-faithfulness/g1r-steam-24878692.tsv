@@ -4,7 +4,7 @@ AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachZigZag.FireDemon_HellArmsAr
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachZigZag.FireDemon_HellArmsArea_BreachZigZag_Fire	1	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_Barrier_Ring	1	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_RingFireTest	1	0	0
-AI.AIAgent.Creature.Golem.Fire.Spells.BreakFloor.GA_Spell_BreakFloor_FireGolem	2	0	0
+AI.AIAgent.Creature.Golem.Fire.Spells.BreakFloor.GA_Spell_BreakFloor_FireGolem	1	0	0
 AI.AIAgent.Creature.Molerat.CombatSituations_Molerat	1	0	0
 AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.SoulHarvest.SoulHarvest_Visual	2	0	0
 AI.AIAgent.Orc.Combat.Staff.Spells.StormOfFire.GA_Spell_StormOfFire_Orc	1	0	0
@@ -55,7 +55,6 @@ Environment.GothicUltraDynamicControlerAS	1	0	0
 GAS.Abilities.Combat.AttackLoop.Capsule.PyrolaserHitCapsuleComponent	1	0	0
 GAS.Abilities.Locomotion.GA_Falling	1	0	0
 GAS.Abilities.Passive.GA_PlayerPerception_CrimeRegistration	1	0	0
-GAS.Abilities.Spells.Spells.Base.GA_Spell_Targetable	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_StormOfFire	1	0	0
 GAS.Abilities.Spells.Spells.Light.GA_Spell_Light	1	0	0
 GAS.Abilities.Spells.Spells.Summon.SpawnHelper.Base.SummonSpawnPlaceHelper	3	0	0
@@ -65,7 +64,6 @@ GAS.Abilities.Spells.Spells.Transform.GA_Spell_Transform	2	0	0
 GAS.Abilities.Spells.Visuals.Fire.FireRainVisual	1	0	0
 GAS.Abilities.Spells.Visuals.Fire.InnosPrayVisual	2	0	0
 GAS.Calculations.Damage	2	0	0
-GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Drugs.Base.DrugDebuffEffectComponentBase	1	0	0
 GAS.GASCharacterMixins	3	0	0
 GAS.GASCharacterStateMixins	7	0	0
 Gameplay.Magic.Components.InExtremo.InExtremoPropComponent	1	0	0
