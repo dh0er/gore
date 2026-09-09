@@ -185,7 +185,7 @@ pub struct RefResolver {
     /// FunctionReferences owning class name (from the ObjectType ptr) — disambiguates native
     /// method overloads when looking up arity in the Binds.Cache native API.
     func_owner: HashMap<i64, String>,
-    /// Exact ObjectType pointer for methods named after their owning script type.
+    /// Exact ObjectType pointer for named script constructors and destructors.
     script_ctor_owner: HashMap<i64, i64>,
     /// FunctionReferences namespace (e.g. `Gameplay`, `Math`, `System`) for free/static native
     /// functions — a call must be qualified `Namespace::func(...)` or the global-scope lookup
@@ -378,7 +378,7 @@ impl RefResolver {
             r.func_ret.insert(key, ret);
             if let Some(cls) = r.type_by_ptr.get(&objtype) {
                 r.func_owner.insert(key, cls.clone());
-                if is_method && cls == &name {
+                if is_method && (cls == &name || name.strip_prefix('~') == Some(cls.as_str())) {
                     r.script_ctor_owner.insert(key, objtype);
                 }
             }
@@ -524,10 +524,15 @@ impl RefResolver {
     }
     /// Exact owner identity of a named script constructor; never a bare-name lookup.
     pub(crate) fn script_constructor_type_by_id(&self, id: i32) -> Option<&TypeIdentity> {
-        self.funcid_to_ptr
-            .get(&id)
-            .and_then(|p| self.script_ctor_owner.get(p))
-            .and_then(|p| self.type_identity_by_ptr.get(p))
+        let ptr = self.funcid_to_ptr.get(&id)?;
+        let owner = self.type_identity_by_ptr.get(self.script_ctor_owner.get(ptr)?)?;
+        (self.func_by_ptr.get(ptr)? == &owner.name).then_some(owner)
+    }
+    /// Exact owner identity of a named script destructor, sharing the behavior-owner table.
+    pub(crate) fn script_destructor_type_by_id(&self, id: i32) -> Option<&TypeIdentity> {
+        let ptr = self.funcid_to_ptr.get(&id)?;
+        let owner = self.type_identity_by_ptr.get(self.script_ctor_owner.get(ptr)?)?;
+        (self.func_by_ptr.get(ptr)? == &format!("~{}", owner.name)).then_some(owner)
     }
     pub fn type_by_ptr(&self, ptr: i64) -> Option<&str> {
         self.type_by_ptr.get(&ptr).map(|s| s.as_str())
@@ -3408,6 +3413,65 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_const_native_field_enum_loop(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (id, name) in [(1, "FEntry"), (2, "FChild"), (3, "TArray"),
+            (4, "TArrayIterator"), (5, "TArrayConstIterator"), (6, "EDisposition")] {
+            r.typeid_to_ptr.insert(id, i64::from(id) + 100);
+            r.type_by_ptr.insert(i64::from(id) + 100, name.into());
+            r.type_identity_by_ptr.insert(i64::from(id) + 100,
+                TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        let key = |id: i64, offset: i64| (id << 1) | (offset << 33) | 1;
+        for (id, offset, name) in [(1, 0, "ID"), (1, 17, "Disposition"), (1, 40, "Children"),
+            (2, 8, "Disposition"), (4, 16, "CanProceed"), (5, 16, "CanProceed")] {
+            r.prop_by_key.insert(key(id, offset), name.into());
+            r.prop_type_id.insert(key(id, offset), id as i32);
+        }
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&[
+            ("FEntry", "Disposition", "EDisposition"),
+            ("FEntry", "Children", if fault == 21 { "TSet<FChild>" } else { "TArray<FChild>" }),
+            ("FChild", "Disposition", if fault == 12 { "int" } else { "EDisposition" })], &[], None));
+        for (p, name, owner, ty, reference, constant) in [
+            (1, "Iterator", "TArray", 104, false, false),
+            (2, "Proceed", "TArrayIterator", 101, true, false),
+            (3, "Iterator", "TArray", 105, false, false),
+            (4, "Proceed", "TArrayConstIterator", 102, true, true)] {
+            r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, owner.into());
+            r.func_is_method.insert(p); r.func_params.insert(p, vec![]);
+            r.func_ret.insert(p, DataType { token: 5, type_info: ty, is_reference: reference,
+                is_object_const: constant, is_read_only: constant, ..Default::default() });
+        }
+        r.const_method_ptrs.insert(3);
+        r.temporary_arg_positions.insert("int".into(), [(1, vec![true])].into_iter().collect());
+        match fault {
+            1 => { r.type_identity_by_ptr.get_mut(&101).unwrap().namespace = "Foreign".into(); },
+            2 => { r.prop_type_id.insert(key(1, 0), 2); },
+            3 => { r.prop_type_id.insert(key(1, 40), 2); },
+            4 => { r.const_method_ptrs.remove(&3); },
+            5 => { r.func_ret.get_mut(&3).unwrap().type_info = 104; },
+            6 => { r.func_ret.get_mut(&2).unwrap().is_reference = false; },
+            7 => { r.func_is_method.remove(&2); },
+            8 => { r.func_params.get_mut(&3).unwrap().push(DataType::default()); },
+            9 => { r.type_identity_by_ptr.get_mut(&104).unwrap().module = "Foreign".into(); },
+            10 => { r.duplicate_prop_keys.insert(key(1, 40)); },
+            11 => { r.native = None; },
+            13 => { r.type_identity_by_ptr.get_mut(&102).unwrap().module = "Foreign".into(); },
+            14 => { r.prop_type_id.insert(key(2, 8), 1); },
+            15 => { r.func_ret.get_mut(&4).unwrap().is_object_const = false; },
+            16 => { r.func_ret.get_mut(&4).unwrap().is_reference = false; },
+            17 => { r.func_params.get_mut(&4).unwrap().push(DataType::default()); },
+            18 => { r.func_is_method.remove(&4); },
+            19 => { r.func_owner.insert(4, "TArrayIterator".into()); },
+            20 => { r.duplicate_prop_keys.insert(key(2, 8)); },
+            22 => { r.set_native_api(super::binds::NativeApi::from_test_field_types(&[
+                ("FChild", "Disposition", "EDisposition")], &[], None)); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_const_field_iterator(is_const: bool) -> Self {
         let mut r = Self::default();
         r.typeid_to_ptr.insert(1, 100); r.type_by_ptr.insert(100, "UPackage".into()); r.type_by_ptr.insert(101, "TSetConstIterator".into());
@@ -4065,6 +4129,96 @@ impl RefResolver {
             23 => { r.const_method_ptrs.remove(&103); }
             24 => r.func_params.get_mut(&103).unwrap().push(DataType { token: 0x51, ..Default::default() }),
             25 => r.func_ret.get_mut(&103).unwrap().token = 0x51,
+            _ => {}
+        }
+        r
+    }
+    #[cfg(test)]
+    pub(crate) fn from_test_loop_seed_and_eager_comparison(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(1, "FVector"), (2, "ACharacter"), (3, "TArray")] {
+            r.type_by_ptr.insert(ptr, name.into()); r.type_names.insert(name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        let value = DataType { token: 5, type_info: 1, ..Default::default() };
+        let input = DataType { is_reference: true, is_object_const: true, is_read_only: true, ..value.clone() };
+        let integer = DataType { token: 0x44, ..Default::default() };
+        for (ptr, name, owner, params, ret) in [
+            (10, "GetLocation", "ACharacter", vec![], value),
+            (20, "Classify", "UHost", vec![input.clone(), input.clone()], integer.clone()),
+            (30, "IndexSide", "UHost", vec![DataType { token: 5, type_info: 2, is_object_handle: true, ..Default::default() }, input], integer.clone()),
+            (40, "Num", "TArray", vec![], integer),
+        ] {
+            r.funcid_to_ptr.insert(ptr as i32, ptr); r.func_by_ptr.insert(ptr, name.into());
+            r.func_owner.insert(ptr, owner.into()); r.func_is_method.insert(ptr); r.const_method_ptrs.insert(ptr);
+            r.func_params.insert(ptr, params); r.func_ret.insert(ptr, ret);
+        }
+        for name in ["Classify", "IndexSide"] {
+            r.temporary_arg_positions.insert(name.into(), HashMap::from([(2, vec![true; 2])]));
+        }
+        match fault {
+            1 => { r.const_method_ptrs.remove(&10); }
+            2 => r.func_ret.get_mut(&10).unwrap().is_reference = true,
+            3 => { r.func_params.get_mut(&10).unwrap().push(DataType { token: 0x44, ..Default::default() }); }
+            4 => { r.func_owner.insert(10, "UOther".into()); }
+            5 => r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(),
+            6 => r.type_identity_by_ptr.get_mut(&2).unwrap().namespace = "Other".into(),
+            7 => { r.func_is_method.remove(&20); }
+            8 => { r.const_method_ptrs.remove(&30); }
+            9 => { r.func_owner.insert(30, "UOther".into()); }
+            10 => { r.func_ns.insert(20, "Other".into()); }
+            11 => r.func_ret.get_mut(&20).unwrap().token = 0x45,
+            12 => r.func_ret.get_mut(&30).unwrap().is_reference = true,
+            13 => r.func_params.get_mut(&20).unwrap()[0].is_read_only = false,
+            14 => r.func_params.get_mut(&20).unwrap()[1].type_info = 2,
+            15 => r.func_params.get_mut(&30).unwrap()[0].is_object_handle = false,
+            16 => r.func_params.get_mut(&30).unwrap()[1].is_reference = false,
+            17 => { r.func_params.get_mut(&30).unwrap().pop(); }
+            _ => {}
+        }
+        r
+    }
+    #[cfg(test)]
+    pub(crate) fn from_test_enum_guard_and_unused_script_value(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name, module) in [(1, "FRecord", "Records"), (2, "EDisposition", ""), (3, "FQuery", ""), (4, "FRecord", "OtherRecords")] {
+            r.type_by_ptr.insert(ptr, name.into()); r.type_names.insert(name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: module.into(), namespace: String::new() });
+        }
+        let void = DataType { token: 0x52, ..Default::default() };
+        for (ptr, name, owner, ret) in [
+            (10, "Disposition", None, DataType { token: 5, type_info: 2, ..Default::default() }),
+            (20, "FRecord", Some("FRecord"), void.clone()),
+            (30, "~FRecord", Some("FRecord"), void.clone()),
+            (40, "GetCount", Some("FQuery"), DataType { token: 0x44, ..Default::default() }),
+            (41, "$beh2", Some("FQuery"), void.clone()), (50, "First", None, void.clone()), (51, "Second", None, void),
+        ] {
+            r.funcid_to_ptr.insert(ptr as i32, ptr); r.func_by_ptr.insert(ptr, name.into());
+            r.func_params.insert(ptr, Vec::new()); r.func_ret.insert(ptr, ret);
+            if let Some(owner) = owner { r.func_owner.insert(ptr, owner.into()); r.func_is_method.insert(ptr); }
+        }
+        r.script_ctor_owner.extend([(20, 1), (30, 1)]); r.const_method_ptrs.insert(40);
+        r.ctor_arg_positions.insert("int".into(), HashMap::from([(1, vec![true])]));
+        match fault {
+            1 => r.func_ret.get_mut(&10).unwrap().token = 0x44,
+            2 => r.func_ret.get_mut(&10).unwrap().is_reference = true,
+            3 => r.func_ret.get_mut(&10).unwrap().is_object_handle = true,
+            4 => r.func_ret.get_mut(&10).unwrap().is_object_const = true,
+            5 => r.func_ret.get_mut(&10).unwrap().is_auto = true,
+            6 => r.func_ret.get_mut(&10).unwrap().type_info = 3,
+            7 => { r.func_is_method.insert(10); }
+            8 => { r.script_ctor_owner.insert(20, 4); }
+            9 => { r.script_ctor_owner.insert(30, 4); }
+            10 => { r.func_by_ptr.insert(20, "OtherMethod".into()); }
+            11 => { r.func_by_ptr.insert(30, "OtherMethod".into()); }
+            12 => { r.func_is_method.remove(&20); }
+            13 => { r.const_method_ptrs.insert(30); }
+            14 => r.func_params.get_mut(&20).unwrap().push(DataType { token: 0x44, ..Default::default() }),
+            15 => r.func_params.get_mut(&30).unwrap().push(DataType { token: 0x44, ..Default::default() }),
+            16 => r.func_ret.get_mut(&20).unwrap().token = 0x41,
+            17 => r.func_ret.get_mut(&30).unwrap().is_reference = true,
+            18 => r.type_identity_by_ptr.get_mut(&1).unwrap().module.clear(),
+            19 => { r.script_ctor_owner.remove(&30); }
             _ => {}
         }
         r

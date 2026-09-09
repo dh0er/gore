@@ -12,7 +12,7 @@ AI.AssessmentResponseSystem.AssessmentBits	7	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	5	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingResponse	1	0	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	15	0	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	14	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.TheftEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.EventResponses	4	0	0
 AI.CharacterAI_Gothic	5	0	0
@@ -49,8 +49,8 @@ AI.States.FightAI.SleeperFight.OC_KDF_Milten_Sleeper.Environment.MiltenSleeper_B
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpotManager	1	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.Xardas_Sleeper_Minion_BillboardComponent	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning	1	0	0
-AI.States.FightAI.WarningState.AIState_Warning_Crime	9	0	0
-AI.States.FightAI.WatchFightState.AIGroup_WatchFight	2	0	0
+AI.States.FightAI.WarningState.AIState_Warning_Crime	8	0	0
+AI.States.FightAI.WatchFightState.AIGroup_WatchFight	1	0	0
 AI.States.FightAI.WatchFightState.AIState_WatchFight	13	0	0
 AI.States.Test.TestCharacters_Navigation	1	0	0
 Camera.ConversationCameraConfig	1	0	0
@@ -61,7 +61,7 @@ GAS.Abilities.Combat.AttackLoop.Cone.GA_AttackLoopCone	1	0	0
 GAS.Abilities.Locomotion.GA_Falling	1	0	0
 GAS.Abilities.Locomotion.GA_FallingRagdoll	1	0	0
 GAS.Abilities.Locomotion.GA_Swim	1	0	0
-GAS.Abilities.Passive.GA_PlayerPerception_CrimeRegistration	3	0	0
+GAS.Abilities.Passive.GA_PlayerPerception_CrimeRegistration	1	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_Targetable	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_Fireball	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_StormOfFire	1	0	0
