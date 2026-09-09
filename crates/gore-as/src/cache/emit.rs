@@ -3135,6 +3135,8 @@ fn emit_function_ctor(
         pass_trace("drop_int_inside_enum_cast", &rendered);
         let rendered = drop_block_end_handle_releases(&rendered);
         pass_trace("drop_block_end_handle_releases", &rendered);
+        let rendered = fold_foreach_getter_receiver(&rendered, f, refs);
+        pass_trace("fold_foreach_getter_receiver", &rendered);
         let rendered = if disassemble(&f.bytecode).is_ok_and(|instrs| {
             !instrs.iter().any(|ins| ins.op.name == "JMP" && ins.dwords.first() == Some(&0))
         }) {
@@ -14408,6 +14410,73 @@ fn fold_unary_double_chain(body: &str, f: &Func, refs: &RefResolver) -> String {
     fold_double_product_before_bool_argument(&body, f, refs, &instrs)
 }
 
+/// The iterator destination precedes a native getter and its array member.
+/// Its handle is used only for that member and freed after the loop predicate.
+fn fold_foreach_getter_receiver(body: &str, f: &Func, refs: &RefResolver) -> String {
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    for (at, c) in code.windows(7).enumerate() {
+        let witness = (|| {
+            if c.iter().map(|i| i.op.name).ne(["PSF", "PshVPtr", "CALLSYS", "STOREOBJ", "PshVPtr", "ADDSi", "CALLSYS"]) { return None; }
+            let slot = |i: &Instr| i.words.first().map(|w| *w as i16 as i32);
+            let (iterator, source, receiver) = (slot(&c[0])?, slot(&c[1])?, slot(&c[3])?);
+            if [iterator, source, receiver].iter().any(|s| *s <= 0)
+                || HashSet::from([iterator, source, receiver]).len() != 3 || slot(&c[4])? != receiver { return None; }
+            let local_type = |s| {
+                let mut found = f.obj_locals.iter().filter(|(n, _)| *n == s).map(|(_, p)| *p);
+                let ptr = found.next()?; if found.next().is_some() { None } else { Some(ptr) }
+            };
+            let getter = *c[2].qwords.first()? as i64;
+            let ret = refs.func_ret_by_ptr(getter)?;
+            let owner = refs.type_identity_by_ptr(local_type(source)?)?;
+            let value = refs.type_identity_by_ptr(ret.type_info)?;
+            if !owner.module.is_empty() || !owner.namespace.is_empty() || !is_object_handle_type(&owner.name)
+                || !value.module.is_empty() || !value.namespace.is_empty() || !is_object_handle_type(&value.name)
+                || !refs.is_method_by_ptr(getter) || !refs.is_const_method_by_ptr(getter)
+                || refs.func_owner_by_ptr(getter) != Some(owner.name.as_str()) || !refs.func_params_by_ptr(getter)?.is_empty()
+                || ret.token != 5 || ret.is_reference || !ret.is_object_handle || local_type(receiver)? != ret.type_info { return None; }
+            let id = *c[5].dwords.first()? as i32;
+            let (field, old) = refs.member_identity(id, slot(&c[5])?)?;
+            if refs.type_identity_by_id(id)? != value || refs.type_identity_by_id(old)? != value
+                || !refs.native_field_value_type(&value.name, field)?.starts_with("TArray<") { return None; }
+            let iter = *c[6].qwords.first()? as i64;
+            let iter_ret = refs.func_ret_by_ptr(iter)?;
+            let iter_type = refs.type_identity_by_ptr(iter_ret.type_info)?;
+            if refs.func_by_ptr(iter) != Some("Iterator") || refs.func_owner_by_ptr(iter) != Some("TArray")
+                || !refs.is_method_by_ptr(iter) || refs.is_const_method_by_ptr(iter) || !refs.func_params_by_ptr(iter)?.is_empty()
+                || iter_ret.token != 5 || iter_ret.is_reference || iter_ret.is_object_handle || iter_ret.is_object_const
+                || iter_type.name != "TArrayIterator" || !iter_type.module.is_empty() || !iter_type.namespace.is_empty()
+                || local_type(iterator)? != iter_ret.type_info { return None; }
+            let jump = code.get(at + 7)?; let start = code.get(at + 8)?;
+            if jump.op.name != "JMP" || start.op.name != "SUSPEND" { return None; }
+            let target = |i: &Instr| Some(i.offset_dw as i64 + 2 + *i.dwords.first()? as i32 as i64);
+            let end = code.iter().position(|i| Some(i.offset_dw as i64) == target(jump))?;
+            let tail = code.get(end..end + 5)?;
+            if end <= at + 8 || tail.iter().map(|i| i.op.name).ne(["LoadVObjR", "RDR1", "CpyVtoR1", "JLowNZ", "FreeNullV8"])
+                || slot(&tail[0])? != iterator || slot(&tail[1])? != slot(&tail[2])?
+                || target(&tail[3])? != start.offset_dw as i64 || slot(&tail[4])? != receiver { return None; }
+            if code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&receiver))
+                .map(|(n, _)| n).ne([at + 3, at + 4, end + 4]) { return None; }
+            if code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && target(i).is_some_and(|t|
+                t > c[0].offset_dw as i64 && t <= c[6].offset_dw as i64))) { return None; }
+            Some((receiver, source, value.name.clone(), refs.func_by_ptr(getter)?.to_owned(), field.to_owned()))
+        })();
+        let Some((receiver, source, ty, getter, field)) = witness else { continue; };
+        let name = format!("local_{receiver}"); let rhs = format!("local_{source}.{getter}()");
+        if count_ident(body, &name) != 2 { continue; }
+        for n in 0..lines.len().saturating_sub(1) {
+            if lines[n].trim() != format!("{ty} {name} = {rhs};") || indent_of(&lines[n]) != indent_of(&lines[n + 1]) { continue; }
+            let header = lines[n + 1].trim();
+            if !["for (auto ", "for (auto& "].iter().any(|prefix| header.starts_with(prefix))
+                || !header.ends_with(&format!(" : {name}.{field})")) { continue; }
+            lines[n + 1] = lines[n + 1].replace(&format!(" : {name}.{field})"), &format!(" : {rhs}.{field})"));
+            lines.remove(n); break;
+        }
+    }
+    let mut out = lines.join("\n"); if body.ends_with('\n') { out.push('\n'); } out
+}
+
+
 /// An enum array reference read directly into a pushed argument has no named
 /// copy. Retyping another life must not turn this read into a declaration.
 fn fold_direct_enum_index_argument(body: &str, f: &Func, refs: &RefResolver, code: &[Instr]) -> String {
@@ -24922,15 +24991,25 @@ fn fold_carrier_if_else(body: &str, fields: Option<&HashMap<String, String>>) ->
                 || integer_or_tail.is_some();
             if indent_of(test) != indent
                 || (!integer_test && test.trim() != format!("if ({then_target})")) { return None; }
+            // Two resolved own handle fields form a closed nullable AND test.
+            // Keep the existing declaration and two-use bool-arm ownership checks.
+            let integer_and = !integer_return && integer_or_tail.is_none() && then_value == "0" && else_is_bool
+                && (|| {
+                    let left = condition.strip_prefix("this.")?.strip_suffix(" == nullptr")?;
+                    let right = unwrap_brackets(&else_value).strip_prefix("this.")?.strip_suffix(" != nullptr")?;
+                    let fields = fields?;
+                    (left != right && is_object_handle_type(fields.get(left)?)
+                        && is_object_handle_type(fields.get(right)?)).then_some(())
+                })().is_some();
             if integer_test {
                 // bool by-value arguments also earn keep_ints; a later physical-slot
                 // life can leave this earlier OR carrier spelled int. Fold only the
                 // exclusive source carrier, with a proved boolean alternative.
                 let own_bool = else_value.strip_prefix("this.")
                     .and_then(|field| fields?.get(field)).is_some_and(|ty| ty == "bool");
-                if then_value != (if integer_return { "0" } else { "1" })
+                if then_value != (if integer_return || integer_and { "0" } else { "1" })
                     || !(else_is_bool || own_bool) || !accumulated.is_empty() { return None; }
-                then_value = if integer_return { "false" } else { "true" }.into();
+                then_value = if integer_return || integer_and { "false" } else { "true" }.into();
                 if integer_return {
                     // Reuse turned_around only for its first, top-level relation.
                     // A comparison inside a call argument is not the condition's inverse.
@@ -24970,7 +25049,7 @@ fn fold_carrier_if_else(body: &str, fields: Option<&HashMap<String, String>>) ->
             let (mut combined, mut last_op) = match (literal, literal_in_else) {
                 ("true", false) => (format!("{} || {}", group(condition, " || "), group(&other, " || ")), "||"),
                 ("false", false) => (format!("{} && {}",
-                    if integer_return { turned_around(condition) } else { format!("!({condition})") },
+                    if integer_return || integer_and { turned_around(condition) } else { format!("!({condition})") },
                     group(&other, " && ")), "&&"),
                 ("true", true) => (format!("!({}) || {}", condition, group(&other, " || ")), "||"),
                 ("false", true) => (format!("{} && {}", group(condition, " && "), group(&other, " && ")), "&&"),
@@ -35515,6 +35594,50 @@ mod literal_value_lifetime_tests {
     }
 
     #[test]
+    fn foreach_getter_receiver_keeps_the_original_header_evaluation() {
+        let mut f = function(&[("PSF", &[32]), ("PshVPtr", &[20]), ("CALLSYS", &[]), ("STOREOBJ", &[26]),
+            ("PshVPtr", &[26]), ("ADDSi", &[160]), ("CALLSYS", &[]), ("JMP", &[]), ("SUSPEND", &[]),
+            ("PSF", &[32]), ("LoadVObjR", &[32, 16]), ("RDR1", &[1]), ("CpyVtoR1", &[1]),
+            ("JLowNZ", &[]), ("FreeNullV8", &[26]), ("RET", &[6])]);
+        let c = disassemble(&f.bytecode).unwrap();
+        for (at, value) in [(2, 10), (5, 2), (6, 11)] { f.bytecode[c[at].offset_dw + 1] = value; }
+        for (at, to) in [(7, 10), (13, 8)] {
+            f.bytecode[c[at].offset_dw + 1] = c[to].offset_dw as i32 - c[at].offset_dw as i32 - 2;
+        }
+        f.bytecode[c[10].offset_dw + 2] = 3;
+        f.obj_locals = vec![(20, 1), (26, 2), (32, 3)];
+        let refs = RefResolver::from_test_foreach_getter(0);
+        let body = "    UComponent local_26 = local_20.GetComponent();\n    for (auto local_40 : local_26.Items)\n    {\n        Use(local_40);\n    }\n";
+        let expected = "    for (auto local_40 : local_20.GetComponent().Items)\n    {\n        Use(local_40);\n    }\n";
+        let fold = |s: &str, f: &Func, r: &RefResolver| super::fold_foreach_getter_receiver(s, f, r);
+        assert_eq!(fold(body, &f, &refs), expected);
+        let released = format!("{{\n{body}    local_26 = nullptr;\n}}\n");
+        assert_eq!(fold(&released, &f, &refs), released);
+        assert_eq!(fold(&super::drop_block_end_handle_releases(&released), &f, &refs), format!("{{\n{expected}}}\n"));
+        assert_eq!(fold(expected, &f, &refs), expected);
+        assert_eq!(fold(&body.replace("auto ", "auto& "), &f, &refs), expected.replace("auto ", "auto& "));
+        for fault in 1..=16 { assert_eq!(fold(body, &f, &RefResolver::from_test_foreach_getter(fault)), body, "metadata {fault}"); }
+        for at in [0, 1, 3, 4, 5, 10, 11, 12, 14] {
+            let mut bad = f.clone(); bad.bytecode[c[at].offset_dw] ^= 1 << 16;
+            assert_eq!(fold(body, &bad, &refs), body, "operand {at}");
+        }
+        let mut duplicate = f.clone(); duplicate.obj_locals.push((26, 2));
+        assert_eq!(fold(body, &duplicate, &refs), body);
+        let mut extra = f.clone(); extra.bytecode.extend(function(&[("PshVPtr", &[26])]).bytecode);
+        assert_eq!(fold(body, &extra, &refs), body);
+        let mut jump = f.clone(); let at = jump.bytecode.len();
+        jump.bytecode.extend(function(&[("JMP", &[])]).bytecode);
+        jump.bytecode[at + 1] = c[3].offset_dw as i32 - at as i32 - 2;
+        assert_eq!(fold(body, &jump, &refs), body);
+        for text in [body.replace("GetComponent", "GetOther"), body.replace(".Items", ".Other"),
+            body.replace("local_26", "local_26_2"), body.replace("local_20", "local_22"),
+            body.replace("    for", "    Observe();\n    for"), format!("{body}    Use(local_26);\n")] {
+            assert_eq!(fold(&text, &f, &refs), text);
+        }
+    }
+
+
+    #[test]
     fn a_direct_enum_index_argument_does_not_gain_a_named_copy() {
         let mut f = function(&[("PshVPtr", &[65531]), ("PshV4", &[9]), ("PshVPtr", &[0]), ("ADDSi", &[12]),
             ("Thiscall1", &[]), ("RDR1", &[12]), ("PshV4", &[12]), ("PshV4", &[1]), ("PSF", &[16]),
@@ -45153,6 +45276,29 @@ mod integer_bool_merge_carrier_tests {
             source.replace("local_3 != 0 || Other.Completed", "local_3 != 0 || Other.Completed || local_3 != 0"),
         ] {
             assert_eq!(fold_carrier_if_else(&rejected, None), rejected);
+        }
+    }
+
+    #[test]
+    fn integer_false_carrier_rejoins_two_own_handle_checks() {
+        let fields = HashMap::from([("Component".into(), "UComponent".into()), ("Config".into(), "UConfig".into())]);
+        let source = body("        bool local_7 = (this.Config != nullptr);\n        local_3 = local_7;\n")
+            .replace("this.Count == 0", "this.Component == nullptr").replace("local_3 = 1;", "local_3 = 0;");
+        let expected = "    if (this.Component != nullptr && (this.Config != nullptr))\n    {\n        return;\n    }\n";
+        assert_eq!(fold_carrier_if_else(&source, Some(&fields)), expected);
+        assert_eq!(fold_carrier_if_else(expected, Some(&fields)), expected);
+        assert_eq!(fold_carrier_if_else(&source, None), source);
+        for field in ["Component", "Config"] {
+            let mut bad = fields.clone(); bad.insert(field.into(), "FValue".into());
+            assert_eq!(fold_carrier_if_else(&source, Some(&bad)), source);
+        }
+        for bad in [source.replace("this.Config != nullptr", "this.Config == nullptr"),
+            source.replace("this.Config != nullptr", "Check()"), source.replace("this.Component == nullptr", "GetComponent() == nullptr"),
+            source.replace("this.Config", "this.Component"), source.replace("local_3 = 0;", "local_3 = 2;"),
+            source.replace("if (local_3 != 0)", "if (local_3 != 0 || Ready())"),
+            source.replace("bool local_7", "int local_7"), format!("{source}    Observe(local_3);\n"),
+            format!("{source}    Observe(local_7);\n")] {
+            assert_eq!(fold_carrier_if_else(&bad, Some(&fields)), bad);
         }
     }
 

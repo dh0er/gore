@@ -3463,6 +3463,45 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_foreach_getter(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(1, "UActor"), (2, "UComponent"), (3, "TArrayIterator")] {
+            r.type_by_ptr.insert(ptr, name.into()); r.typeid_to_ptr.insert(ptr as i32, ptr);
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        let key = (2 << 1) | (160 << 33) | 1;
+        r.prop_by_key.insert(key, "Items".into()); r.prop_type_id.insert(key, 2);
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&[
+            ("UComponent", "Items", if fault == 9 { "TSet<UItem>" } else { "TArray<UItem>" })], &[], None));
+        for (ptr, name, owner, ty, handle) in [(10, "GetComponent", "UActor", 2, true), (11, "Iterator", "TArray", 3, false)] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into());
+            r.func_is_method.insert(ptr); r.func_params.insert(ptr, vec![]);
+            r.func_ret.insert(ptr, DataType { token: 5, type_info: ty, is_object_handle: handle, ..Default::default() });
+        }
+        r.const_method_ptrs.insert(10);
+        match fault {
+            1 => { r.const_method_ptrs.remove(&10); }
+            2 => { r.func_is_method.remove(&10); }
+            3 => { r.func_owner.insert(10, "UOther".into()); }
+            4 => r.func_params.get_mut(&10).unwrap().push(DataType::default()),
+            5 => r.func_ret.get_mut(&10).unwrap().is_reference = true,
+            6 => r.func_ret.get_mut(&10).unwrap().is_object_handle = false,
+            7 => r.type_identity_by_ptr.get_mut(&2).unwrap().module = "Script".into(),
+            8 => { r.prop_type_id.insert(key, 1); }
+            10 => { r.func_owner.insert(11, "TSet".into()); }
+            11 => { r.const_method_ptrs.insert(11); }
+            12 => r.func_params.get_mut(&11).unwrap().push(DataType::default()),
+            13 => r.func_ret.get_mut(&11).unwrap().is_reference = true,
+            14 => r.func_ret.get_mut(&11).unwrap().is_object_handle = true,
+            15 => r.type_identity_by_ptr.get_mut(&3).unwrap().namespace = "Foreign".into(),
+            16 => { r.native = None; }
+            _ => {}
+        }
+        r
+    }
+
+
+    #[cfg(test)]
     pub(crate) fn from_test_direct_enum_index(fault: u8) -> Self {
         let mut r = Self::from_test_hidden_return_enum_arguments(fault);
         r.type_identity_by_ptr.get_mut(&6).unwrap().module = "Script".into();
