@@ -827,8 +827,25 @@ impl RefResolver {
                     return None;
                 }
                 let by_name = n.arity_by_name(name)?;
-                let cache = self.func_params.get(&ptr)?.len();
-                (by_name <= cache).then_some(by_name)
+                let params = self.func_params.get(&ptr)?;
+                // A native value comparison's explicit tolerance is not a default
+                // argument proved by an unrelated one-argument Binds method.
+                let plain = |t: &DataType, token| t.token == token && t.type_info == 0
+                    && !t.is_reference && !t.is_object_handle && !t.is_object_const
+                    && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+                if by_name == 1 && self.is_method_by_ptr(ptr) && self.is_const_method_by_ptr(ptr)
+                    && self.func_ret.get(&ptr).is_some_and(|t| plain(t, 0x41)) {
+                    if let [value, tolerance] = params.as_slice() {
+                        if value.token == 5 && value.is_reference && value.is_object_const && value.is_read_only
+                            && !value.is_object_handle && !value.is_auto && !value.if_handle_then_const
+                            && matches!(tolerance.token, 0x50 | 0x51 | 0x5e) && plain(tolerance, tolerance.token)
+                            && self.type_identity_by_ptr(value.type_info).is_some_and(|ty| ty.name == *cls
+                                && ty.name.starts_with('F') && ty.module.is_empty() && ty.namespace.is_empty()) {
+                            return None;
+                        }
+                    }
+                }
+                (by_name <= params.len()).then_some(by_name)
             }),
             None => {
                 let arity = n.arity_by_name(name)?;
@@ -3728,6 +3745,140 @@ impl RefResolver {
         r
     }
     #[cfg(test)]
+    pub(crate) fn from_test_float_getters_before_arguments(fault: u8) -> Self {
+        let mut r = Self::default();
+        r.type_by_ptr.insert(100, "UValues".into());
+        r.type_identity_by_ptr.insert(100, TypeIdentity { name: "UValues".into(), module: String::new(), namespace: String::new() });
+        for (ptr, name) in [(1, "GetLeft"), (2, "GetRight"), (3, "Blend")] {
+            r.func_by_ptr.insert(ptr, name.into());
+            r.func_ret.insert(ptr, DataType { token: 0x50, ..Default::default() });
+            r.func_params.insert(ptr, if ptr == 3 { vec![DataType { token: 0x50, ..Default::default() }; 2] } else { vec![] });
+            if ptr < 3 { r.func_is_method.insert(ptr); r.func_owner.insert(ptr, "UValues".into()); }
+        }
+        r.const_method_ptrs.insert(1); // The second getter need not be const.
+        r.temporary_arg_positions.insert("Blend".into(), HashMap::from([(2, vec![true, true])]));
+        match fault {
+            1 => r.func_ret.get_mut(&1).unwrap().token = 0x51,
+            2 => r.func_params.get_mut(&1).unwrap().push(DataType::default()),
+            3 => { r.func_owner.insert(1, "UOther".into()); },
+            4 => r.type_identity_by_ptr.get_mut(&100).unwrap().namespace = "Other".into(),
+            5 => { r.func_params.get_mut(&3).unwrap().pop(); },
+            6 => r.func_ret.get_mut(&3).unwrap().is_reference = true,
+            7 => { r.func_is_method.insert(3); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_weak_member_null_comparison(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("AOwner", "First"), ("AOther", "")]);
+        for (ptr, name) in [(1, "AOwner"), (2, "AOther"), (100, "TWeakObjectPtr"),
+            (101, "TWeakObjectPtr"), (200, "UFirst"), (201, "USecond")] {
+            r.type_by_ptr.insert(ptr, if fault == 13 && ptr == 100 { "TSoftObjectPtr" } else { name }.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: r.type_by_ptr[&ptr].clone(), namespace: String::new(),
+                module: if fault == 10 && ptr == 1 { "Script" } else { "" }.into() });
+        }
+        r.prop_type_id.insert(3, if fault == 9 { 2 } else { 1 });
+        let second = (1i64 << 1) | (8i64 << 33) | 1;
+        r.prop_by_key.insert(second, "Second".into()); r.prop_type_id.insert(second, 1);
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&[
+            ("AOwner", "First", if fault == 8 { "TWeakObjectPtr<UOther>" } else { "TWeakObjectPtr<UFirst>" }),
+            ("AOwner", "Second", "TWeakObjectPtr<USecond>")], &[], None));
+        for (ty, subtype, ctor, assign, equals) in [(100, 200, 10, 11, 12), (101, 201, 20, 21, 22)] {
+            r.type_subtypes.insert(ty, vec![DataType { token: 5, type_info: subtype, ..Default::default() }]);
+            for (ptr, name) in [(ctor, "$beh0"), (assign, "opAssign"), (equals, "opEquals")] {
+                r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, "TWeakObjectPtr".into()); r.func_is_method.insert(ptr);
+            }
+            r.const_method_ptrs.insert(equals);
+            r.func_params.insert(ctor, vec![]); r.func_ret.insert(ctor, DataType { token: 0x52, ..Default::default() });
+            r.func_params.insert(assign, vec![DataType { token: 5, type_info: ty, is_reference: true,
+                is_object_const: true, is_read_only: true, ..Default::default() }]);
+            r.func_ret.insert(assign, DataType { token: 5, type_info: ty, is_reference: true, ..Default::default() });
+            r.func_params.insert(equals, vec![DataType { token: 5, type_info: subtype, is_object_handle: true, ..Default::default() }]);
+            r.func_ret.insert(equals, DataType { token: 0x41, ..Default::default() });
+        }
+        match fault {
+            1 => r.func_params.get_mut(&11).unwrap()[0].type_info = 101,
+            2 => r.func_params.get_mut(&11).unwrap()[0].is_object_const = false,
+            3 => r.func_ret.get_mut(&11).unwrap().is_reference = false,
+            4 => { r.const_method_ptrs.remove(&12); },
+            5 => r.func_params.get_mut(&12).unwrap()[0].type_info = 201,
+            6 => { r.func_params.get_mut(&10).unwrap().push(DataType { token: 0x44, ..Default::default() }); },
+            7 => r.func_ret.get_mut(&10).unwrap().token = 0x41,
+            11 => r.type_subtypes.get_mut(&100).unwrap()[0].type_info = 201,
+            12 => { r.type_subtypes.remove(&100); },
+            14 => { r.func_is_method.remove(&10); },
+            _ => {},
+        }
+        r.func_by_ptr.insert(30, "Count".into());
+        r.func_params.insert(30, vec![]);
+        r.func_ret.insert(30, DataType { token: 0x44, ..Default::default() });
+        r
+    }
+    #[cfg(test)]
+    pub(crate) fn from_test_soft_member_null_comparison(fault: u8) -> Self {
+        let mut r = Self::from_test_weak_member_null_comparison(0);
+        r.type_by_ptr.insert(100, "TSoftObjectPtr".into());
+        r.type_identity_by_ptr.get_mut(&100).unwrap().name = "TSoftObjectPtr".into();
+        r.typeid_to_ptr.insert(3, 3); r.type_by_ptr.insert(3, "FNested".into());
+        r.type_identity_by_ptr.insert(3, TypeIdentity { name: "FNested".into(), module: String::new(), namespace: String::new() });
+        r.prop_by_key.insert(7, "Material".into()); r.prop_type_id.insert(7, 3);
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&[
+            ("AOwner", "First", if fault == 3 { "FOther" } else { "FNested" }),
+            ("FNested", "Material", if fault == 4 { "TSoftObjectPtr<USecond>" } else { "TSoftObjectPtr<UFirst>" })], &[], None));
+        for ptr in [10, 11, 12, 13] { r.func_owner.insert(ptr, "TSoftObjectPtr".into()); }
+        r.func_by_ptr.insert(13, "$beh2".into()); r.func_is_method.insert(13);
+        r.func_params.insert(13, vec![]); r.func_ret.insert(13, DataType { token: 0x52, ..Default::default() });
+        match fault {
+            1 => r.type_identity_by_ptr.get_mut(&3).unwrap().module = "Script".into(),
+            2 => { r.prop_type_id.insert(7, 2); },
+            5 => { r.func_owner.insert(13, "FString".into()); },
+            6 => { r.const_method_ptrs.insert(13); },
+            7 => r.func_params.get_mut(&13).unwrap().push(DataType { token: 0x44, ..Default::default() }),
+            8 => r.func_ret.get_mut(&13).unwrap().token = 0x41,
+            9 => r.func_params.get_mut(&12).unwrap()[0].type_info = 201,
+            10 => r.func_params.get_mut(&11).unwrap()[0].type_info = 101,
+            11 => r.type_identity_by_ptr.get_mut(&100).unwrap().name = "TWeakObjectPtr".into(),
+            12 => { r.type_subtypes.remove(&100); },
+            13 => r.native = None,
+            14 => { r.func_is_method.remove(&13); },
+            15 => r.type_identity_by_ptr.get_mut(&3).unwrap().name = "ANested".into(),
+            16 => r.type_identity_by_ptr.get_mut(&3).unwrap().namespace = "Other".into(),
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_named_field_product(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UBase", "First"), ("UDerived", "Second")]);
+        for (ptr, name) in [(1, "UBase"), (2, "UDerived")] {
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: "Fixture".into(), namespace: String::new() });
+            r.prop_type_id.insert((ptr << 1) | 1, ptr as i32);
+        }
+        r.set_class_fields(HashMap::from([
+            ("UBase".into(), HashMap::from([("First".into(), if fault == 1 { "float32" } else { "float" }.into())])),
+            ("UDerived".into(), HashMap::from([("Second".into(), if fault == 2 { "int64" } else { "float" }.into())]))]));
+        r.func_by_ptr.insert(10, "Blend".into());
+        r.func_ret.insert(10, DataType { token: 0x51, ..Default::default() });
+        r.func_params.insert(10, vec![DataType { token: 0x51, ..Default::default() }; 2]);
+        r.temporary_arg_positions.insert("Blend".into(), HashMap::from([(2, vec![true, true])]));
+        match fault {
+            3 => { r.prop_type_id.insert(3, 2); },
+            4 => r.type_identity_by_ptr.get_mut(&1).unwrap().namespace = "Other".into(),
+            5 => r.type_identity_by_ptr.get_mut(&1).unwrap().module.clear(),
+            6 => r.func_params.get_mut(&10).unwrap()[0].is_reference = true,
+            7 => r.func_ret.get_mut(&10).unwrap().token = 0x50,
+            8 => { r.func_is_method.insert(10); },
+            9 => { r.func_owner.insert(10, "FMath".into()); },
+            10 => { r.func_params.get_mut(&10).unwrap().pop(); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_copied_bool_argument(token: i32) -> Self {
         let mut r = Self::default();
         r.func_by_ptr.insert(1, "SetFlag".into()); r.func_is_method.insert(1);
@@ -4700,6 +4851,34 @@ mod tests {
         assert_eq!(refs.native_arity_by_ptr(14, "GetComponent"), None);
         // An exact object-owner entry remains authoritative; only the name-only fallback is barred.
         assert_eq!(refs.native_arity_by_ptr(15, "ExactObject"), Some(1));
+    }
+
+    #[test]
+    fn a_native_value_comparison_keeps_its_tolerance_despite_an_unrelated_name_match() {
+        let mut refs = RefResolver::default();
+        refs.func_owner.insert(10, "FVector".into());
+        refs.func_is_method.insert(10); refs.const_method_ptrs.insert(10);
+        refs.func_ret.insert(10, DataType { token: 0x41, ..Default::default() });
+        refs.type_identity_by_ptr.insert(100, TypeIdentity { name: "FVector".into(), module: String::new(), namespace: String::new() });
+        refs.func_params.insert(10, vec![
+            DataType { token: 5, type_info: 100, is_reference: true, is_object_const: true, is_read_only: true, ..Default::default() },
+            DataType { token: 0x51, ..Default::default() },
+        ]);
+        refs.native = Some(super::super::binds::NativeApi::from_test_arities(&[], &[("Compare", Some(1))]));
+        for token in [0x50, 0x51, 0x5e] {
+            refs.func_params.get_mut(&10).unwrap()[1].token = token;
+            assert_eq!(refs.native_arity_by_ptr(10, "Compare"), None);
+            assert_eq!(refs.native_arity_by_ptr(10, "Compare").or_else(|| refs.func_params_by_ptr(10).map(|p| p.len())), Some(2));
+        }
+        // Exact owner evidence and unrelated default-argument signatures retain their rules.
+        refs.native = Some(super::super::binds::NativeApi::from_test_arities(&[("FVector", "Compare", 1)], &[("Compare", Some(1))]));
+        assert_eq!(refs.native_arity_by_ptr(10, "Compare"), Some(1));
+        refs.native = Some(super::super::binds::NativeApi::from_test_arities(&[], &[("Compare", Some(1))]));
+        refs.func_params.get_mut(&10).unwrap()[1].is_reference = true;
+        assert_eq!(refs.native_arity_by_ptr(10, "Compare"), Some(1));
+        refs.func_params.get_mut(&10).unwrap()[1].is_reference = false;
+        refs.type_identity_by_ptr.get_mut(&100).unwrap().namespace = "Other".into();
+        assert_eq!(refs.native_arity_by_ptr(10, "Compare"), Some(1));
     }
 
     #[test]

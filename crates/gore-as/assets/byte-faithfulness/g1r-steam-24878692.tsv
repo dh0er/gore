@@ -63,7 +63,6 @@ GAS.Abilities.Interact.GA_Human_Loot	1	0	0
 GAS.Abilities.Locomotion.GA_Falling	1	0	0
 GAS.Abilities.Locomotion.GA_FallingRagdoll	1	0	0
 GAS.Abilities.Locomotion.GA_Swim	1	0	0
-GAS.Abilities.Passive.Drugs.Derived.Alcohol.GA_AlcoholDebuff	1	0	0
 GAS.Abilities.Passive.GA_PlayerPerception_CrimeRegistration	3	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_Targetable	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_Fireball	1	0	0
@@ -81,12 +80,10 @@ GAS.Effects.Debuffs.EffectStateComponent.Components.Derived.Sleep.GA_SleepDebuff
 GAS.GASCharacterMixins	3	0	0
 GAS.GASCharacterStateMixins	7	0	0
 Gameplay.Environment.BattleBlockingBarrier.BattleBarrierVisual	1	0	0
-Gameplay.Magic.Components.Damage.PercentageDamageLimiterComponent	1	0	0
 Gameplay.Magic.Components.InExtremo.InExtremoPropComponent	1	0	0
 Items.Projectiles	2	0	0
 Regions.Traits.QuestRelatedTraits	5	0	0
 Sound.FXDefinitions.FXDefinitions_AttackImpact	1	0	0
-Sound.FXDefinitions.FXDefinitions_Footsteps	1	0	0
 Spawning.TriggerSpawner	1	0	0
 Story.Achievements	9	0	0
 Story.G1R.Conversation.Conversation_NC_BAU_RICELORD_900	1	0	0

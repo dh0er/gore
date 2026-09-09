@@ -1697,7 +1697,8 @@ fn emit_function_ctor(
     // hoist and the sink below leave the slot alone; every other marker goes.
     let unused_constructions = never_read_constructed_slots(f, refs);
     let (body, declared_at_site, declared_with_init) =
-        resolve_ctor_site_markers(&body, &infer_locals(f, refs), refs, &touched_after_branch, &unused_constructions);
+        resolve_ctor_site_markers(&body, &infer_locals(f, refs), refs, &touched_after_branch, &unused_constructions,
+            &weak_member_null_comparison_copies(f, refs, is_method));
     // Retain only declarations placed at their actual bytecode construction site.
     let retained_unused_constructions: HashSet<i32> = unused_constructions
         .intersection(&declared_at_site).copied().collect();
@@ -11926,9 +11927,14 @@ fn collapse_single_use_accumulators(body: &str, widened: &HashSet<i32>, locals: 
             }) {
                 continue;
             }
-            if slot_and_life_any(&name).is_some_and(|(slot,_)|
-                is_named_value_site(slot,unwrap_brackets(&folded_value),named_sites)) { continue; }
-            let folded = folded_value;
+            let named = slot_and_life_any(&name).is_some_and(|(slot,_)|
+                is_named_value_site(slot,unwrap_brackets(&folded_value),named_sites));
+            let field = |s: &str| s.strip_prefix("this.").is_some_and(|f| !f.is_empty()
+                && f.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_'));
+            let named_product = named && span == 1 && steps == 1 && declared.as_deref() == Some("float")
+                && unwrap_brackets(&folded_value).split_once(" * ").is_some_and(|(a, b)| field(a) && field(b));
+            if named && !named_product { continue; }
+            let folded = if named_product { unwrap_brackets(&folded_value).to_owned() } else { folded_value };
             // A pre-loop call must still run once, even when the loop reads its
             // result at only one source site. Fold the arithmetic at its declaration.
             let enters_loop = indent_of(&lines[reader]).len() > indent.len()
@@ -11937,7 +11943,7 @@ fn collapse_single_use_accumulators(body: &str, widened: &HashSet<i32>, locals: 
                 && lines[index + span + steps..reader].iter().any(|line|
                     indent_of(line) == indent && (line.trim_start().starts_with("for (")
                         || line.trim_start().starts_with("while (")));
-            if enters_loop {
+            if enters_loop || named_product {
                 let declaration = lines[index].split_once(" = ").map(|(left, _)| left)
                     .unwrap_or_else(|| lines[index].trim_end().trim_end_matches(';')).to_owned();
                 lines[index] = format!("{declaration} = {folded};");
@@ -17794,6 +17800,24 @@ fn spilled_boolean_names(f: &Func, refs: &RefResolver) -> HashSet<i32> {
     let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
     let mut out = copied_short_circuit_accumulators(f, refs);
     out.extend(copied_bool_initializer_slots(f, refs));
+    // A native int predicate explicitly reloads its named bool before branching.
+    for (at, c) in instrs.windows(7).enumerate() {
+        if c.iter().map(|i| i.op.name).ne(["CALLSYS", "CpyRtoV4", "CMPIi", "TP", "CpyRtoV4", "CpyVtoR1", "JLowZ"]) { continue; }
+        let (integer, boolean) = (w0(&c[1]), w0(&c[4]));
+        let ret = c[0].qwords.first().and_then(|p| refs.func_ret_by_ptr(*p as i64));
+        if integer <= 0 || boolean <= 0 || integer == boolean || w0(&c[2]) != integer || w0(&c[5]) != boolean
+            || !ret.is_some_and(|t| t.token == 0x44 && t.type_info == 0 && !t.is_reference && !t.is_object_handle
+                && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const)
+            || f.obj_locals.iter().any(|(s, _)| [integer, boolean].contains(s))
+            || [(integer, [at + 1, at + 2]), (boolean, [at + 4, at + 5])].iter().any(|(slot, uses)|
+                instrs.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(slot))
+                    .map(|(n, _)| n).ne(*uses))
+            || !c[6].dwords.first().is_some_and(|d| *d as i32 >= 0)
+            || instrs.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J')
+                && i.dwords.first().is_some_and(|d| { let t = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                    t > c[0].offset_dw as i64 && t <= c[6].offset_dw as i64 }))) { continue; }
+        out.insert(boolean);
+    }
     // A materialized double comparison is copied before its negation. Earlier
     // literal argument lives of the source do not make this comparison anonymous.
     if !instrs.iter().any(|i| i.op.name == "JMPP") {
@@ -24381,6 +24405,96 @@ fn expand_if_false_markers(body: &str) -> String {
     out
 }
 
+/// A weak field's anonymous comparison receiver is default-built and assigned
+/// immediately before its sole const null test. Soft fields additionally destroy
+/// that receiver before negating the result. The operator recreates these copies.
+fn weak_member_null_comparison_copies(f: &Func, refs: &RefResolver, is_method: bool) -> HashMap<i32, String> {
+    let mut out = HashMap::new();
+    if !is_method { return out; }
+    let Ok(code) = disassemble(&f.bytecode) else { return out; };
+    let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+    for at in 0..code.len() {
+        let tail = &code[at..];
+        let soft = tail.iter().take(14).map(|i| i.op.name).eq(["PSF", "CALLSYS", "PshVPtr", "ADDSi", "ADDSi",
+            "PSF", "CALLSYS", "PshNull", "PSF", "CALLSYS", "CpyRtoV4", "PSF", "CALLSYS", "NOT"]);
+        if !soft && tail.iter().take(11).map(|i| i.op.name).ne(["PSF", "CALLSYS", "PshVPtr", "ADDSi", "PSF", "CALLSYS",
+            "PshNull", "PSF", "CALLSYS", "CpyRtoV4", "NOT"]) { continue; }
+        let c = &tail[..if soft { 14 } else { 11 }];
+        let shift = usize::from(soft);
+        let site = (|| {
+            let slot = w(&c[0], 0).filter(|s| *s > 0)?;
+            let boolean = w(&c[9 + shift], 0).filter(|s| *s > 0 && *s != slot)?;
+            let types: Vec<_> = f.obj_locals.iter().filter(|(s, _)| *s == slot).map(|(_, p)| *p).collect();
+            let [ty] = types.as_slice() else { return None; };
+            let value = refs.type_identity_by_ptr(*ty)?;
+            let [subtype] = refs.type_subtypes(*ty)? else { return None; };
+            let value_name = if soft { "TSoftObjectPtr" } else { "TWeakObjectPtr" };
+            let uses = if soft { vec![at, at + 5, at + 8, at + 11] } else { vec![at, at + 4, at + 7] };
+            if value.name != value_name || !value.module.is_empty() || !value.namespace.is_empty()
+                || subtype.token != 5 || subtype.is_reference || subtype.is_object_const || subtype.is_read_only
+                || subtype.is_auto || subtype.if_handle_then_const
+                || !refs.type_by_ptr(subtype.type_info).is_some_and(is_object_handle_type)
+                || w(&c[2], 0) != Some(0) || w(&c[4 + shift], 0) != Some(slot) || w(&c[7 + shift], 0) != Some(slot)
+                || w(c.last()?, 0) != Some(boolean) || (soft && w(&c[11], 0) != Some(slot))
+                || f.obj_locals.iter().any(|(s, _)| *s == boolean)
+                || code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&slot))
+                    .map(|(n, _)| n).ne(uses) { return None; }
+            let ptr = |n: usize| c[n].qwords.first().map(|p| *p as i64);
+            let (ctor, assign, equals) = (ptr(1)?, ptr(5 + shift)?, ptr(8 + shift)?);
+            let plain = |t: &super::types::DataType, token| t.token == token && t.type_info == 0 && !t.is_reference
+                && !t.is_object_handle && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+            let reference = |t: &super::types::DataType, constant| t.token == 5 && t.type_info == *ty && t.is_reference
+                && t.is_object_const == constant && t.is_read_only == constant
+                && !t.is_object_handle && !t.is_auto && !t.if_handle_then_const;
+            let [input] = refs.func_params_by_ptr(assign)? else { return None; };
+            let [null] = refs.func_params_by_ptr(equals)? else { return None; };
+            if [ctor, assign, equals].iter().any(|p| !refs.is_method_by_ptr(*p)
+                    || refs.func_owner_by_ptr(*p) != Some(value_name))
+                || refs.func_by_ptr(ctor) != Some("$beh0") || refs.is_const_method_by_ptr(ctor)
+                || !refs.func_params_by_ptr(ctor)?.is_empty() || !plain(refs.func_ret_by_ptr(ctor)?, 0x52)
+                || refs.func_by_ptr(assign) != Some("opAssign") || refs.is_const_method_by_ptr(assign)
+                || !reference(input, true) || !reference(refs.func_ret_by_ptr(assign)?, false)
+                || refs.func_by_ptr(equals) != Some("opEquals") || !refs.is_const_method_by_ptr(equals)
+                || !plain(refs.func_ret_by_ptr(equals)?, 0x41) || null.token != 5 || null.type_info != subtype.type_info
+                || !null.is_object_handle || null.is_reference || null.is_object_const || null.is_read_only
+                || null.is_auto || null.if_handle_then_const { return None; }
+            if soft {
+                let dtor = ptr(12)?;
+                if !refs.is_method_by_ptr(dtor) || refs.func_owner_by_ptr(dtor) != Some(value_name)
+                    || refs.func_by_ptr(dtor) != Some("$beh2") || refs.is_const_method_by_ptr(dtor)
+                    || !refs.func_params_by_ptr(dtor)?.is_empty() || !plain(refs.func_ret_by_ptr(dtor)?, 0x52) { return None; }
+            }
+            let id = *c[3].dwords.first()? as i32;
+            let owner = refs.type_identity_by_id(id)?;
+            let (field, old) = refs.member_identity(id, w(&c[3], 0)?)?;
+            if refs.type_identity_by_id(old) != Some(owner) || !owner.module.is_empty()
+                || !owner.namespace.is_empty() || !is_object_handle_type(&owner.name) { return None; }
+            let mut path = format!("this.{field}");
+            let (owner, field) = if soft {
+                let id = *c[4].dwords.first()? as i32;
+                let nested = refs.type_identity_by_id(id)?;
+                let (member, old) = refs.member_identity(id, w(&c[4], 0)?)?;
+                if refs.type_identity_by_id(old) != Some(nested) || !nested.module.is_empty()
+                    || !nested.namespace.is_empty() || !nested.name.starts_with('F')
+                    || refs.native_field_value_type(&owner.name, field).or_else(|| refs.native_field_type(&owner.name, field))
+                        .is_some_and(|known| known != nested.name) { return None; }
+                path.push('.'); path.push_str(member);
+                (nested, member)
+            } else { (owner, field) };
+            // A missing native row is witnessed by the contiguous typed address
+            // chain and const copy input; a known conflicting field stays refused.
+            if refs.native_field_value_type(&owner.name, field).or_else(|| refs.native_field_type(&owner.name, field))
+                    .is_some_and(|known| known != value_name && known != input.base_name(refs))
+                || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J')
+                    && i.dwords.first().is_some_and(|d| { let t = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                        t > c[0].offset_dw as i64 && t <= c[c.len() - 1].offset_dw as i64 }))) { return None; }
+            Some((slot, path))
+        })();
+        out.extend(site);
+    }
+    out
+}
+
 /// Turn the structurer's construction-site markers into declarations, or drop them.
 ///
 /// A marker names a slot by number. It becomes `T local_N;` on its own line when the slot is a
@@ -24393,6 +24507,7 @@ fn resolve_ctor_site_markers(
     refs: &RefResolver,
     after_branch: &HashSet<i32>,
     unused_constructions: &HashSet<i32>,
+    null_comparison_copies: &HashMap<i32, String>,
 ) -> (String, HashSet<i32>, HashSet<i32>) {
     let marker = super::structure::CTOR_SITE;
     if !body.contains(marker) {
@@ -24408,7 +24523,9 @@ fn resolve_ctor_site_markers(
     let mut with_init: HashSet<i32> = HashSet::new();
     let mut placed_at: Vec<(i32, usize, usize)> = Vec::new();
     let mut kept: Vec<String> = Vec::with_capacity(lines.len());
+    let mut skip_until = 0;
     for (at, line) in lines.iter().enumerate() {
+        if at < skip_until { continue; }
         let trimmed = line.trim();
         let Some(rest) = trimmed.strip_prefix(marker) else {
             kept.push((*line).to_owned());
@@ -24461,6 +24578,19 @@ fn resolve_ctor_site_markers(
             .iter()
             .any(|(other, open, close)| *other == slot && *open <= at && at < *close);
         let ty = locals.get(&slot);
+        // This exact raw copy is the null operator's temporary receiver, not
+        // a declaration. Remove only its adjacent field store and sole test use.
+        if !init_kind && visible && !shadowed && ty.is_some() && mentions == [at + 1, at + 2] {
+            if let Some(path) = null_comparison_copies.get(&slot) {
+                if slot_store(lines[at + 1]) == Some((ident.clone(), path.clone()))
+                    && slot_store(lines[at + 2]).is_some_and(|(_, v)| unwrap_brackets(&v) == format!("{ident} == nullptr"))
+                    && [at + 1, at + 2].iter().all(|n| indent_of(lines[*n]) == indent_of(line)) {
+                    kept.push(rename_ident(lines[at + 2], &ident, path));
+                    skip_until = at + 3;
+                    continue;
+                }
+            }
+        }
         let retained_unused = !init_kind && unused_constructions.contains(&slot) && !placed.contains(&slot);
         let wanted = (!mentions.is_empty() || retained_unused) && visible && !shadowed && ty.is_some();
         if diag_enabled("GORE_AS_MARKER_DIAG") {
@@ -25941,6 +26071,91 @@ fn named_value_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, String)> {
         .map(str::to_owned)
     };
     let mut out = HashSet::new();
+    // A complete script-field product precedes the other scalar argument push.
+    // Keep that expression named, independently of later lives of its RHS slot.
+    if !instrs.iter().any(|i| i.op.name == "JMPP") {
+        for (at, c) in instrs.windows(8).enumerate() {
+            if c.iter().map(|i| i.op.name).ne(["LoadThisR", "RDR8", "LoadThisR", "RDR8", "MULd", "PshV8", "PshV8", "CALLSYS"])
+                || c[1..].iter().any(|i| targets.contains(&i.offset_dw)) { continue; }
+            let site = (|| {
+                let (slot, rhs) = (w(&c[1], 0)?, w(&c[3], 0)?);
+                if slot <= 0 || rhs <= 0 || slot == rhs || w(&c[4], 0) != Some(slot) || w(&c[4], 1) != Some(slot)
+                    || w(&c[4], 2) != Some(rhs) || w(&c[5], 0)? >= 0 || w(&c[6], 0) != Some(slot)
+                    || f.obj_locals.iter().any(|(s, _)| [slot, rhs].contains(s))
+                    || instrs.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&slot))
+                        .map(|(n, _)| n).ne([at + 1, at + 4, at + 6]) { return None; }
+                let plain = |t: &super::types::DataType| t.token == 0x51 && t.type_info == 0 && !t.is_reference
+                    && !t.is_object_handle && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+                let consume = *c[7].qwords.first()? as i64;
+                if refs.is_method_by_ptr(consume) || refs.func_owner_by_ptr(consume).is_some()
+                    || !plain(refs.func_ret_by_ptr(consume)?)
+                    || !refs.func_params_by_ptr(consume).is_some_and(|p| p.len() == 2 && p.iter().all(plain)) { return None; }
+                let field = |n: usize| {
+                    let id = *c[n].dwords.first()? as i32;
+                    let owner = refs.type_identity_by_id(id)?;
+                    let (name, old) = refs.member_identity(id, w(&c[n], 0)?)?;
+                    (refs.type_identity_by_id(old) == Some(owner) && !owner.module.is_empty() && owner.namespace.is_empty()
+                        && is_object_handle_type(&owner.name) && refs.own_field_type_by_class(&owner.name, name) == Some("float"))
+                        .then_some(name)
+                };
+                Some((slot, format!("this.{} * this.{}", field(0)?, field(2)?)))
+            })();
+            out.extend(site);
+        }
+    }
+    // Getter results computed before the right argument stay named; moving the
+    // getters into the division would reverse their order during argument emission.
+    if !instrs.iter().any(|i| i.op.name == "JMPP") {
+        let plain_float = |t: &super::types::DataType| t.token == 0x50 && t.type_info == 0
+            && !t.is_reference && !t.is_object_handle && !t.is_object_const
+            && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+        for length in [8, 10] {
+            for (at, c) in instrs.windows(length).enumerate() {
+                let paired = length == 10;
+                let shape: &[&str] = if paired { &["PshVPtr", "CALLSYS", "CpyRtoV4", "PshVPtr", "CALLSYS",
+                    "CpyRtoV4", "PshC4", "DIVf", "PshV4", "CALLSYS"] }
+                    else { &["PshVPtr", "CALLSYS", "CpyRtoV4", "PshC4", "SetV4", "DIVf", "PshV4", "CALLSYS"] };
+                if c.iter().map(|i| i.op.name).ne(shape.iter().copied())
+                    || c[1..].iter().any(|i| targets.contains(&i.offset_dw)) { continue; }
+                let sites = (|| {
+                    let d = length - 3;
+                    let (dst, left, right) = (w(&c[d], 0)?, w(&c[d], 1)?, w(&c[d], 2)?);
+                    if [dst, left, right].iter().any(|s| *s <= 0) || left == right || dst == left
+                        || paired && dst == right || !paired && dst != right
+                        || w(&c[2], 0) != Some(left) || w(&c[d + 1], 0) != Some(dst)
+                        || w(&c[if paired { 5 } else { 4 }], 0) != Some(right)
+                        || f.obj_locals.iter().any(|(s, _)| [dst, left, right].contains(s)) { return None; }
+                    let consumer = *c[length - 1].qwords.first()? as i64;
+                    if refs.is_method_by_ptr(consumer) || refs.func_owner_by_ptr(consumer).is_some()
+                        || !plain_float(refs.func_ret_by_ptr(consumer)?)
+                        || !refs.func_params_by_ptr(consumer).is_some_and(|p| p.len() == 2 && p.iter().all(plain_float)) { return None; }
+                    let mut sites = Vec::new();
+                    for n in if paired { &[0usize, 3][..] } else { &[0usize][..] } {
+                        let (receiver, slot) = (w(&c[*n], 0)?, w(&c[*n + 2], 0)?);
+                        let ptr = *c[*n + 1].qwords.first()? as i64;
+                        let owner = refs.func_owner_by_ptr(ptr)?;
+                        let [ty] = f.obj_locals.iter().filter(|(s, _)| *s == receiver).map(|(_, p)| *p).collect::<Vec<_>>()[..]
+                            else { return None; };
+                        let identity = refs.type_identity_by_ptr(ty)?;
+                        if receiver <= 0 || !is_object_handle_type(owner) || identity.name != owner
+                            || !identity.module.is_empty() || !identity.namespace.is_empty()
+                            || !refs.is_method_by_ptr(ptr) || !plain_float(refs.func_ret_by_ptr(ptr)?)
+                            || !refs.func_params_by_ptr(ptr)?.is_empty()
+                            || instrs.iter().filter(|i| i.op.name == "CALLSYS" && i.qwords.first() == Some(&(ptr as u64))).count() != 1 {
+                            return None;
+                        }
+                        let end = (at + *n + 3..instrs.len()).find(|i| w(&instrs[*i], 0) == Some(slot)
+                            && writes_destination(instrs[*i].op.name)).unwrap_or(instrs.len());
+                        if (at + *n + 3..end).filter(|i| super::bytediff::addressed_slots(&instrs[*i]).contains(&slot))
+                            .ne([at + d]) { return None; }
+                        sites.push((slot, format!("local_{receiver}.{}()", refs.func_by_ptr(ptr)?)));
+                    }
+                    Some(sites)
+                })();
+                out.extend(sites.into_iter().flatten());
+            }
+        }
+    }
     // A native int result copied before widening names only this complete call.
     // The exact copy key protects its initial spelling until the call folds into it.
     if !instrs.iter().any(|i| i.op.name == "JMPP") {
@@ -35994,7 +36209,7 @@ mod literal_value_lifetime_tests {
         let locals = std::collections::BTreeMap::from([(14, "FVector".into())]);
         let retain = HashSet::from([14]);
         let (placed, sites, _) = super::resolve_ctor_site_markers(
-            body, &locals, &refs, &HashSet::new(), &retain);
+            body, &locals, &refs, &HashSet::new(), &retain, &HashMap::new());
         assert_eq!(sites, retain);
         assert_eq!(placed, "if (Enabled)\n{\n    FVector local_14;\n    Observe();\n}\n");
         assert_eq!(super::drop_unused_declarations(&placed, &HashSet::new(), &sites), placed);
@@ -36002,7 +36217,7 @@ mod literal_value_lifetime_tests {
         assert_eq!(super::drop_unused_declarations(ordinary, &HashSet::from([4]), &sites),
             "FVector local_14;\n");
         let (missing, sites, _) = super::resolve_ctor_site_markers(
-            body, &locals, &refs, &HashSet::new(), &HashSet::new());
+            body, &locals, &refs, &HashSet::new(), &HashSet::new(), &HashMap::new());
         assert!(sites.is_empty() && !missing.contains("FVector"));
     }
 
@@ -37016,6 +37231,248 @@ mod literal_value_lifetime_tests {
                 function(&[(op, &words)]).bytecode); rejects(&bad);
         }
     }
+    #[test]
+    fn float_getters_before_a_right_argument_keep_their_exact_named_sites() {
+        for paired in [false, true] {
+            let mut f = if paired {
+                function(&[("PshVPtr", &[14]), ("CALLSYS", &[]), ("CpyRtoV4", &[9]),
+                    ("PshVPtr", &[14]), ("CALLSYS", &[]), ("CpyRtoV4", &[10]),
+                    ("PshC4", &[]), ("DIVf", &[11, 9, 10]), ("PshV4", &[11]), ("CALLSYS", &[])])
+            } else {
+                function(&[("PshVPtr", &[14]), ("CALLSYS", &[]), ("CpyRtoV4", &[9]),
+                    ("PshC4", &[]), ("SetV4", &[10]), ("DIVf", &[10, 9, 10]), ("PshV4", &[10]), ("CALLSYS", &[])])
+            };
+            f.obj_locals = vec![(14, 100)];
+            let c = disassemble(&f.bytecode).unwrap();
+            for (at, ptr) in if paired { vec![(1, 1), (4, 2), (9, 3)] } else { vec![(1, 1), (7, 3)] } {
+                f.bytecode[c[at].offset_dw + 1] = ptr;
+            }
+            let refs = RefResolver::from_test_float_getters_before_arguments(0);
+            let sites = super::named_value_sites(&f, &refs);
+            assert!(sites.contains(&(9, "local_14.GetLeft()".into())));
+            assert_eq!(sites.contains(&(10, "local_14.GetRight()".into())), paired);
+            assert!(!super::is_named_value_site(9, "local_14.Other()", &sites));
+            let body = if paired { "local_9 = local_14.GetLeft();\nlocal_10 = local_14.GetRight();\nlocal_11 = local_9 / local_10;\nBlend(local_11, 1.0f);\n" }
+                else { "local_9 = local_14.GetLeft();\nlocal_10 = local_9 / 10.0f;\nBlend(local_10, 1.0f);\n" };
+            let locals = BTreeMap::from([(14, "UValues".into()), (9, "float32".into()), (10, "float32".into()), (11, "float32".into())]);
+            let types = HashMap::from([(9, "float32".into()), (10, "float32".into())]);
+            let early = super::inline_call_argument_temporaries(body, &refs, &locals, None, true, &types,
+                &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
+                &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), &sites, &HashSet::new());
+            assert!(early.contains("local_9 = local_14.GetLeft();"), "{early}");
+            if paired { assert!(early.contains("local_10 = local_14.GetRight();"), "{early}"); }
+            for fault in 1..=7 { assert!(super::named_value_sites(&f, &RefResolver::from_test_float_getters_before_arguments(fault)).is_empty(), "metadata {fault}"); }
+            let rejects = |bad: &Func| assert!(super::named_value_sites(bad, &refs).is_empty());
+            let mut bad = f.clone(); bad.obj_locals.clear(); rejects(&bad);
+            let mut bad = f.clone(); bad.obj_locals.push((9, 100)); rejects(&bad);
+            let mut bad = f.clone(); bad.bytecode.extend(function(&[("PshV4", &[9])]).bytecode); rejects(&bad);
+            let mut bad = f.clone(); bad.bytecode.extend(f.bytecode.clone()); rejects(&bad);
+            for target in 1..c.len() {
+                let mut bad = f.clone(); let mut jump = function(&[("JMP", &[])]).bytecode;
+                jump[1] = c[target].offset_dw as i32; jump.extend(bad.bytecode); bad.bytecode = jump; rejects(&bad);
+            }
+        }
+    }
+
+    fn weak_member_comparison_diamond_fixture() -> Func {
+        let mut f = function(&[("CALLSYS", &[]), ("CpyRtoV4", &[5]), ("CMPIi", &[5]), ("TP", &[]),
+            ("CpyRtoV4", &[7]), ("CpyVtoR1", &[7]), ("JLowZ", &[]),
+            ("PSF", &[20]), ("CALLSYS", &[]), ("PshVPtr", &[0]), ("ADDSi", &[0]), ("PSF", &[20]), ("CALLSYS", &[]),
+            ("PshNull", &[]), ("PSF", &[20]), ("CALLSYS", &[]), ("CpyRtoV4", &[1]), ("NOT", &[1]),
+            ("CpyVtoR1", &[1]), ("JLowNZ", &[]), ("SetV4", &[1]), ("JMP", &[]),
+            ("PSF", &[22]), ("CALLSYS", &[]), ("PshVPtr", &[0]), ("ADDSi", &[8]), ("PSF", &[22]), ("CALLSYS", &[]),
+            ("PshNull", &[]), ("PSF", &[22]), ("CALLSYS", &[]), ("CpyRtoV4", &[23]), ("NOT", &[23]),
+            ("CpyVtoV4", &[1, 23]), ("CpyVtoR1", &[1]), ("JLowZ", &[]), ("SUSPEND", &[]), ("RET", &[0])]);
+        f.obj_locals = vec![(20, 100), (22, 101)];
+        let c = disassemble(&f.bytecode).unwrap();
+        for (at, value) in [(0, 30), (8, 10), (10, 1), (12, 11), (15, 12), (23, 20), (25, 1), (27, 21), (30, 22)] {
+            f.bytecode[c[at].offset_dw + 1] = value;
+        }
+        for (at, target) in [(6, 37), (19, 22), (21, 34), (35, 37)] {
+            f.bytecode[c[at].offset_dw + 1] = c[target].offset_dw as i32 - c[at].offset_dw as i32 - 2;
+        }
+        f
+    }
+
+    #[test]
+    fn a_native_integer_predicate_retains_its_explicit_spill_through_adjacent_and_condition_folds() {
+        let f = weak_member_comparison_diamond_fixture();
+        let refs = RefResolver::from_test_weak_member_null_comparison(0);
+        let spilled = super::spilled_boolean_names(&f, &refs);
+        assert_eq!(spilled, HashSet::from([7]));
+        let body = "local_5 = Count();\nlocal_7 = (local_5 > 0);\nif (local_7)\n{\n    Work();\n}\n";
+        let candidates = HashSet::from([5, 7]);
+        let protected = candidates.difference(&spilled).copied().collect();
+        let adjacent = super::rewrite_adjacent_value_temporaries(body, &protected).0;
+        assert!(adjacent.contains("local_7 ="));
+        assert!(!super::rewrite_adjacent_value_temporaries(body, &candidates).0.contains("local_7 ="));
+        let locals = BTreeMap::from([(5, "int".into()), (7, "bool".into())]);
+        let early = super::inline_call_argument_temporaries(&adjacent, &refs, &locals, None, true,
+            &HashMap::from([(5, "int".into())]), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &spilled, &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
+        assert!(early.contains("local_7 = (Count() > 0);"), "{early}");
+        assert_eq!(super::fold_condition_temporaries(&early, &locals, &refs, None, &spilled, &HashSet::new(), false), early);
+        let c = disassemble(&f.bytecode).unwrap();
+        let rejects = |bad: &Func| assert!(!super::spilled_boolean_names(bad, &refs).contains(&7));
+        for (at, op, words) in [(3, "TNP", vec![]), (5, "CpyVtoR1", vec![5]), (2, "CMPIi", vec![6])] {
+            let mut bad = f.clone(); bad.bytecode.splice(c[at].offset_dw..c[at + 1].offset_dw, function(&[(op, &words)]).bytecode); rejects(&bad);
+        }
+        let mut bad = f.clone(); bad.bytecode[c[0].offset_dw + 1] = 12; rejects(&bad); // bool return
+        for slot in [5, 7] {
+            let mut bad = f.clone(); bad.obj_locals.push((slot, 100)); rejects(&bad);
+            let mut bad = f.clone(); bad.bytecode.extend(function(&[("PshV4", &[slot as u16])]).bytecode); rejects(&bad);
+        }
+        for target in 1..=6 {
+            let mut bad = f.clone(); let mut jump = function(&[("JMP", &[])]).bytecode;
+            jump[1] = c[target].offset_dw as i32; jump.extend(bad.bytecode); bad.bytecode = jump; rejects(&bad);
+        }
+    }
+
+    #[test]
+    fn typed_weak_copy_markers_restore_a_conditional_member_comparison_without_general_diamond_changes() {
+        let f = weak_member_comparison_diamond_fixture();
+        let refs = RefResolver::from_test_weak_member_null_comparison(0);
+        let copies = super::weak_member_null_comparison_copies(&f, &refs, true);
+        assert_eq!(copies, HashMap::from([(20, "this.First".into()), (22, "this.Second".into())]));
+        let locals = BTreeMap::from([(1, "bool".into()), (23, "bool".into()),
+            (20, "TWeakObjectPtr<UFirst>".into()), (22, "TWeakObjectPtr<USecond>".into())]);
+        let body = "//__gore_ctor 20\nlocal_20 = this.First;\nlocal_1 = (local_20 == nullptr);\nlocal_1 = !local_1;\nif (!(local_1))\n{\n    local_1 = false;\n}\nelse\n{\n    //__gore_ctor 22\n    local_22 = this.Second;\n    local_23 = (local_22 == nullptr);\n    local_23 = !local_23;\n    local_1 = local_23;\n}\nif (local_1)\n{\n    Work();\n}\n";
+        let resolve = |text: &str, sites: &HashMap<i32, String>| super::resolve_ctor_site_markers(text, &locals, &refs,
+            &HashSet::new(), &HashSet::new(), sites);
+        let (resolved, placed, _) = resolve(body, &copies);
+        assert!(placed.is_empty() && !resolved.contains("local_20") && !resolved.contains("local_22"), "{resolved}");
+        assert!(resolve(body, &HashMap::new()).0.contains("TWeakObjectPtr<USecond> local_22;"));
+        let negated = super::fold_negated_stores(&resolved, &HashSet::new());
+        let joined = super::fold_short_circuits(&negated, &locals, &refs, None, &HashMap::new(), None, &HashSet::new());
+        assert!(!joined.contains("else"), "{joined}");
+        assert!(joined.contains("local_1 && !((this.Second == nullptr))"), "{joined}");
+        let collapsed = super::join_short_circuit_chains(&joined);
+        assert!(collapsed.contains("this.First == nullptr") && collapsed.contains("&&") && collapsed.contains("this.Second == nullptr"), "{collapsed}");
+        assert_eq!(collapsed.matches("this.First").count(), 1);
+        assert_eq!(collapsed.matches("this.Second").count(), 1);
+        assert!(!collapsed.contains("local_1 = local_1"), "{collapsed}");
+        let declared = collapsed.replacen("local_1 =", "bool local_1 =", 1);
+        let late = super::fold_condition_temporaries(&declared, &locals, &refs, None, &HashSet::new(), &HashSet::new(), false);
+        assert_eq!(late.matches("this.First").count(), 1);
+        assert_eq!(late.matches("this.Second").count(), 1);
+        assert!(late.contains("&&") && !late.contains("else"), "{late}");
+        for fault in 1..=14 { assert!(!super::weak_member_null_comparison_copies(&f,
+            &RefResolver::from_test_weak_member_null_comparison(fault), true).contains_key(&20), "metadata {fault}"); }
+        assert!(super::weak_member_null_comparison_copies(&f, &refs, false).is_empty());
+        let c = disassemble(&f.bytecode).unwrap();
+        let rejects = |bad: &Func| assert!(!super::weak_member_null_comparison_copies(bad, &refs, true).contains_key(&20));
+        for locals in [vec![], vec![(20, 100), (20, 100)], vec![(20, 101)], vec![(20, 100), (1, 100)]] {
+            let mut bad = f.clone(); bad.obj_locals = locals; rejects(&bad);
+        }
+        for target in 8..=17 {
+            let mut bad = f.clone(); let mut jump = function(&[("JMP", &[])]).bytecode;
+            jump[1] = c[target].offset_dw as i32; jump.extend(bad.bytecode); bad.bytecode = jump; rejects(&bad);
+        }
+        let mut extra = f.clone(); extra.bytecode.extend(function(&[("PSF", &[20])]).bytecode); rejects(&extra);
+        for changed in [body.replace("local_20 = this.First", "local_20 = this.Other"),
+            body.replace("local_1 = (local_20 == nullptr)", "local_1 = (local_20 != nullptr)"),
+            format!("{body}Use(local_20);\n"), body.replace("local_20 = this.First;", "local_20 = this.First;\nObserve();")] {
+            assert!(resolve(&changed, &copies).0.contains("TWeakObjectPtr<UFirst> local_20;"));
+        }
+    }
+    #[test]
+    fn typed_soft_field_copy_ends_at_the_null_test_before_reusing_the_boolean() {
+        let mut f = function(&[("PSF", &[56]), ("CALLSYS", &[]), ("PshVPtr", &[0]), ("ADDSi", &[0]), ("ADDSi", &[0]),
+            ("PSF", &[56]), ("CALLSYS", &[]), ("PshNull", &[]), ("PSF", &[56]), ("CALLSYS", &[]), ("CpyRtoV4", &[5]),
+            ("PSF", &[56]), ("CALLSYS", &[]), ("NOT", &[5]), ("CpyVtoR1", &[5]), ("JLowZ", &[]),
+            ("SUSPEND", &[]), ("CpyRtoV4", &[5]), ("CpyVtoR1", &[5]), ("RET", &[0])]);
+        f.obj_locals = vec![(56, 100)];
+        let c = disassemble(&f.bytecode).unwrap();
+        for (at, value) in [(1, 10), (3, 1), (4, 3), (6, 11), (9, 12), (12, 13)] { f.bytecode[c[at].offset_dw + 1] = value; }
+        f.bytecode[c[15].offset_dw + 1] = c[19].offset_dw as i32 - c[15].offset_dw as i32 - 2;
+        let refs = RefResolver::from_test_soft_member_null_comparison(0);
+        let copies = super::weak_member_null_comparison_copies(&f, &refs, true);
+        assert_eq!(copies, HashMap::from([(56, "this.First.Material".into())]));
+        let locals = BTreeMap::from([(5, "bool".into()), (56, "TSoftObjectPtr<UFirst>".into())]);
+        let body = "this.First.Material = material;\n//__gore_ctor 56\nlocal_56 = this.First.Material;\nlocal_5 = (local_56 == nullptr);\nlocal_5 = !local_5;\nif (local_5)\n{\n    local_5 = Check();\n    if (local_5)\n    {\n        Work();\n    }\n}\n";
+        let resolve = |text: &str, sites: &HashMap<i32, String>| super::resolve_ctor_site_markers(text, &locals, &refs,
+            &HashSet::new(), &HashSet::new(), sites);
+        let (resolved, placed, _) = resolve(body, &copies);
+        assert!(placed.is_empty() && !resolved.contains("local_56"), "{resolved}");
+        assert!(resolved.starts_with("this.First.Material = material;\n"));
+        assert_eq!(resolved.matches("this.First.Material == nullptr").count(), 1);
+        assert!(resolve(body, &HashMap::new()).0.contains("TSoftObjectPtr<UFirst> local_56;"));
+        let negated = super::fold_negated_stores(&resolved, &HashSet::new());
+        let late = super::fold_condition_temporaries(&negated, &locals, &refs, None, &HashSet::new(), &HashSet::new(), false);
+        assert_eq!(late.matches("this.First.Material == nullptr").count(), 1);
+        assert!(late.contains("Check()") && !late.contains("local_56"), "{late}");
+        for fault in (1..=16).filter(|n| *n != 13) { assert!(super::weak_member_null_comparison_copies(&f,
+            &RefResolver::from_test_soft_member_null_comparison(fault), true).is_empty(), "metadata {fault}"); }
+        assert_eq!(super::weak_member_null_comparison_copies(&f,
+            &RefResolver::from_test_soft_member_null_comparison(13), true), copies); // typed contiguous copy, absent field rows
+        let rejects = |bad: &Func| assert!(super::weak_member_null_comparison_copies(bad, &refs, true).is_empty());
+        for at in [5, 8, 11] {
+            let mut bad = f.clone(); bad.bytecode[c[at].offset_dw] ^= 1 << 16; rejects(&bad);
+        }
+        let mut bad = f.clone(); bad.bytecode[c[12].offset_dw + 1] = 10; rejects(&bad); // constructor is not destructor
+        let mut bad = f.clone(); bad.bytecode.splice(c[11].offset_dw..c[13].offset_dw, []); rejects(&bad); // no cleanup
+        let mut bad = f.clone(); bad.bytecode.extend(function(&[("PSF", &[56])]).bytecode); rejects(&bad);
+        let mut bad = f.clone(); bad.obj_locals.push((56, 100)); rejects(&bad);
+        for target in 1..=13 {
+            let mut bad = f.clone(); let mut jump = function(&[("JMP", &[])]).bytecode;
+            jump[1] = c[target].offset_dw as i32; jump.extend(bad.bytecode); bad.bytecode = jump; rejects(&bad);
+        }
+        for changed in [body.replace("local_56 = this.First.Material", "local_56 = this.First.Other"),
+            body.replace("local_5 = (local_56 == nullptr)", "local_5 = (local_56 != nullptr)"),
+            body.replace("local_56 = this.First.Material;", "local_56 = this.First.Material;\nObserve();"),
+            format!("{body}Use(local_56);\n")] {
+            assert!(resolve(&changed, &copies).0.contains("TSoftObjectPtr<UFirst> local_56;"));
+        }
+    }
+
+    #[test]
+    fn a_named_field_product_stays_before_the_other_argument_through_both_folds() {
+        let mut f = function(&[("LoadThisR", &[0]), ("RDR8", &[4]), ("LoadThisR", &[0]), ("RDR8", &[6]),
+            ("MULd", &[4, 4, 6]), ("PshV8", &[65534]), ("PshV8", &[4]), ("CALLSYS", &[]),
+            ("CpyRtoV8", &[6]), ("CpyVtoR8", &[6]), ("RET", &[2])]);
+        f.params = vec![super::super::model::Param { name: "CurrentDamage".into(), flags: 0,
+            ty: DataType { token: 0x51, is_read_only: true, ..Default::default() } }];
+        let c = disassemble(&f.bytecode).unwrap();
+        for (at, value) in [(0, 1), (2, 2), (7, 10)] { f.bytecode[c[at].offset_dw + 1] = value; }
+        let refs = RefResolver::from_test_named_field_product(0);
+        let sites = super::named_value_sites(&f, &refs);
+        assert_eq!(sites, HashSet::from([(4, "this.First * this.Second".into())]));
+        assert!(super::named_arithmetic_slots(&f).contains(&4));
+        let body = "float local_4 = this.First;\nlocal_4 = local_4 * this.Second;\nfloat local_6 = Blend(local_4, CurrentDamage);\nreturn local_6;\n";
+        let locals = BTreeMap::from([(4, "float".into()), (6, "float".into())]);
+        let collapsed = super::collapse_single_use_accumulators(body, &HashSet::new(), &locals, &sites);
+        let wanted = "float local_4 = this.First * this.Second;\nfloat local_6 = Blend(local_4, CurrentDamage);\nreturn local_6;\n";
+        assert_eq!(collapsed, wanted);
+        assert!(!super::collapse_single_use_accumulators(body, &HashSet::new(), &locals, &HashSet::new()).contains("float local_4"));
+        let late = |text: &str, sites: &HashSet<(i32, String)>| super::inline_unnamed_value_temporaries(text,
+            &HashSet::from([(4, 1)]), &HashSet::new(), &HashSet::new(), &refs, &HashSet::new(), &HashSet::new(),
+            &HashMap::new(), sites, &HashSet::new(), &HashSet::new(), &HashSet::new());
+        assert_eq!(late(&collapsed, &sites), wanted);
+        assert!(!late(&collapsed, &HashSet::new()).contains("float local_4"));
+        assert_eq!(super::collapse_single_use_accumulators(&collapsed, &HashSet::new(), &locals, &sites), wanted);
+        let other = body.replace("this.First", "this.Other");
+        assert_eq!(super::collapse_single_use_accumulators(&other, &HashSet::new(), &locals, &sites),
+            super::collapse_single_use_accumulators(&other, &HashSet::new(), &locals, &HashSet::new()));
+        // Existing named non-product accumulators retain their previous unmerged shape.
+        let sum = body.replace(" * ", " + ");
+        assert_eq!(super::collapse_single_use_accumulators(&sum, &HashSet::new(), &locals,
+            &HashSet::from([(4, "this.First + this.Second".into())])), sum);
+        for fault in 1..=10 { assert!(super::named_value_sites(&f,
+            &RefResolver::from_test_named_field_product(fault)).is_empty(), "metadata {fault}"); }
+        let rejects = |bad: &Func| assert!(super::named_value_sites(bad, &refs).is_empty());
+        let mut bad = f.clone(); bad.obj_locals.push((4, 100)); rejects(&bad);
+        let mut bad = f.clone(); bad.bytecode.extend(function(&[("PshV8", &[4])]).bytecode); rejects(&bad);
+        let mut bad = f.clone(); bad.bytecode.splice(0..0, function(&[("SetV8", &[4])]).bytecode); rejects(&bad);
+        for (at, op, words) in [(4, "MULd", vec![6, 4, 6]), (4, "MULd", vec![4, 6, 4]),
+            (5, "PshV8", vec![8]), (6, "PshV8", vec![6])] {
+            let mut bad = f.clone(); bad.bytecode.splice(c[at].offset_dw..c[at + 1].offset_dw, function(&[(op, &words)]).bytecode); rejects(&bad);
+        }
+        for target in 1..=7 {
+            let mut bad = f.clone(); let mut jump = function(&[("JMP", &[])]).bytecode;
+            jump[1] = c[target].offset_dw as i32; jump.extend(bad.bytecode); bad.bytecode = jump; rejects(&bad);
+        }
+    }
+
     #[test]
     fn copied_bool_names_survive_adjacent_early_and_late_folds() {
         let refs=RefResolver::from_test_copied_negated_boolean(0x41,false);
