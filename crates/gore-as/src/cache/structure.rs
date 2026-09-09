@@ -479,8 +479,10 @@ fn has_entry_constructed_psf_value(ctx: &Ctx<'_>, at: usize, arg: &Arg, param: &
 }
 
 /// A native local's addressed field is a typed copy source, not a pending RVO.
-/// Keep this evidence local to the constructor and its direct-copy spelling.
-fn is_proven_native_psf_member_copy(ctx: &Ctx<'_>, at: usize, recv: &Arg, args: &[Arg], ptr: i64) -> bool {
+/// None rejects the copy; Some(true) proves its field type and permits direct-copy spelling.
+/// Some(false) proves only the direct typed input and keeps T(member): missing native field
+/// metadata cannot rule out an opcode-free base/shadow or covariant reference conversion.
+fn is_proven_native_psf_member_copy(ctx: &Ctx<'_>, at: usize, recv: &Arg, args: &[Arg], ptr: i64) -> Option<bool> {
     (|| {
         let [arg] = args else { return None; };
         let c = ctx.instrs.get(at.checked_sub(3)?..at)?;
@@ -493,7 +495,9 @@ fn is_proven_native_psf_member_copy(ctx: &Ctx<'_>, at: usize, recv: &Arg, args: 
         let [param] = ctx.refs.func_params_by_ptr(ptr)? else { return None; };
         let copied = ctx.refs.type_identity_by_ptr(param.type_info)?;
         let ret = ctx.refs.func_ret_by_ptr(ptr)?;
-        Some(source > 0 && dest > 0 && source != dest && recv.is_psf && arg.is_psf
+        let field_type = ctx.refs.native_field_value_type(&owner.name, field)
+            .or_else(|| ctx.refs.native_field_type(&owner.name, field));
+        (source > 0 && dest > 0 && source != dest && recv.is_psf && arg.is_psf
             && recv.s == format!("local_{dest}") && arg.s == format!("local_{source}.{field}")
             && owner.module.is_empty() && owner.namespace.is_empty()
             && ctx.refs.type_identity_by_id(old_owner) == Some(owner)
@@ -502,14 +506,14 @@ fn is_proven_native_psf_member_copy(ctx: &Ctx<'_>, at: usize, recv: &Arg, args: 
             && matches!(copied.name.bytes().next(), Some(b'F' | b'T'))
             && recv.ty.as_deref() == Some(copied.name.as_str())
             && arg.ty.as_deref().is_none_or(|ty| ty == copied.name)
-            && ctx.refs.native_field_value_type(&owner.name, field)
-                .or_else(|| ctx.refs.native_field_type(&owner.name, field)) == Some(copied.name.as_str())
+            && field_type.is_none_or(|ty| ty == copied.name)
             && param.token == 5 && param.is_reference && param.is_object_const && param.is_read_only
             && !param.is_object_handle && !param.is_auto && !param.if_handle_then_const
             && ctx.refs.func_by_ptr(ptr) == Some("$beh0") && ctx.refs.func_owner_by_ptr(ptr) == Some(copied.name.as_str())
             && ctx.refs.is_method_by_ptr(ptr) && !ctx.refs.is_const_method_by_ptr(ptr)
             && ret.token == 0x52 && !ret.is_reference && !ret.is_object_handle)
-    })().unwrap_or(false)
+            .then_some(field_type.is_some())
+    })()
 }
 
 /// A `$beh0` value copy-constructor whose source is a PSF slot is recoverable only when every
@@ -5936,7 +5940,7 @@ fn block_stmts_in(
                                         a.s != recv.s && has_entry_constructed_psf_value(ctx, lo + k, a, param))
                                 });
                             if !args.is_empty()
-                                && (!any_psf_arg || proven_psf_copy || proven_psf_conversion || proven_member_copy || psf_args_written_here)
+                                && (!any_psf_arg || proven_psf_copy || proven_psf_conversion || proven_member_copy.is_some() || psf_args_written_here)
                                 && count_ok
                             {
                                 let rendered = render_args(&args, params, ctx.refs, None);
@@ -5957,7 +5961,7 @@ fn block_stmts_in(
                                     // A copy from a plain local/member can initialize the slot
                                     // directly. Keep explicit constructors for literals, indexing,
                                     // conversions and call results (including RVO temporaries).
-                                    let same_type_copy = (proven_member_copy && args.first().is_some_and(|arg| rendered == arg.s)) || match args.as_slice() {
+                                    let same_type_copy = (proven_member_copy == Some(true) && args.first().is_some_and(|arg| rendered == arg.s)) || match args.as_slice() {
                                         [arg] if rendered == arg.s && is_lvalue_arg(arg) => {
                                             let arg_type = arg.ty.clone().or_else(|| {
                                                 let (head, field) = rendered.rsplit_once('.')?;
@@ -14304,6 +14308,49 @@ mod tests {
         // A separate member address cannot be substituted for the recorded PSF source.
         let mut other = f.clone(); other.bytecode[0] = (other.bytecode[0] & 0xffff) | (61 << 16);
         assert!(!render(&other, &refs, &locals).contains("local_65 = local_61.Name;"));
+    }
+
+    #[test]
+    fn native_member_copy_without_field_metadata_keeps_its_explicit_constructor() {
+        fn push(code: &mut Vec<i32>, name: &str, word: u16, dword: Option<i32>) {
+            let op = crate::cache::isa::OPCODES.iter().find(|op| op.name == name).unwrap();
+            let mut row = vec![0; op.size_dwords as usize];
+            row[0] = op.opcode as i32 | ((word as i32) << 16);
+            if let Some(value) = dword { row[1] = value; }
+            code.extend(row);
+        }
+        let mut code = Vec::new();
+        // The destination has an older value, so losing the field copy would read stale data.
+        push(&mut code, "PSF", 65, None);
+        push(&mut code, "CALLSYS", 0, Some(2));
+        push(&mut code, "PSF", 62, None);
+        push(&mut code, "ADDSi", 0, Some(1));
+        push(&mut code, "PSF", 65, None);
+        push(&mut code, "CALLSYS", 0, Some(1));
+        push(&mut code, "PSF", 67, None);
+        push(&mut code, "CALLSYS", 0, Some(2));
+        push(&mut code, "PSF", 67, None);
+        push(&mut code, "PSF", 65, None);
+        push(&mut code, "CALLSYS", 0, Some(3));
+        push(&mut code, "CpyRtoV4", 5, None);
+        push(&mut code, "CpyVtoR4", 5, None);
+        push(&mut code, "RET", 0, None);
+        let ret = DataType { token: 0x41, ..Default::default() };
+        let f = FuncCode { func: "Synthetic::ReusedMemberCopy".into(), is_method: false,
+            param_names: Vec::new(), param_types: Vec::new(), ret: ret.clone(), bytecode: code };
+        let locals = HashMap::from([(62, "FEntry".into()), (65, "FName".into()),
+            (67, "FName".into()), (5, "bool".into())]);
+        let render = |fault| body_statements_ctor(&f, &RefResolver::from_test_native_psf_member_copy(fault),
+            0, None, Some(&ret), None, None, None, Some(&locals), None);
+        let source = render(14); // Native field declaration is unavailable.
+        let explicit = "local_65 = FName(local_62.Name);";
+        assert!(source.contains(explicit), "{source}");
+        assert!(!source.contains("local_65 = local_62.Name;"), "{source}");
+        assert!(source.find("local_65 = OtherName();").unwrap() < source.find(explicit).unwrap(), "{source}");
+        assert!(source.find(explicit).unwrap() < source.find("local_67 = OtherName();").unwrap(), "{source}");
+        assert!(source.contains("local_65 == local_67"), "{source}");
+        assert!(render(0).contains("local_65 = local_62.Name;")); // Known identical field type still unwraps.
+        assert!(!render(1).contains("local_62.Name")); // Known conflicting field type still rejects.
     }
 
     #[test]

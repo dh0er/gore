@@ -2182,6 +2182,7 @@ impl RefResolver {
             11 => { r.prop_type_id.insert((1 << 1) | 1, 3); },
             12 => { r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(); },
             13 => { r.type_identity_by_ptr.get_mut(&2).unwrap().namespace = "Other".into(); },
+            14 => { r.native = None; },
             _ => {},
         }
         r
@@ -3098,6 +3099,17 @@ impl RefResolver {
         if fault==6 {r.func_params.get_mut(&20).unwrap().push(vector);}
         r.temporary_arg_positions.insert("CrossProduct".into(),HashMap::from([(1,vec![true])]));
         r.temporary_arg_positions.insert("Consume".into(),HashMap::from([(2,vec![false,true])]));
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_local_compound(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FVector", "Z")]);
+        r.type_identity_by_ptr.insert(1, TypeIdentity { name: "FVector".into(), namespace: String::new(),
+            module: if fault == 2 { "Foreign" } else { "" }.into() });
+        r.prop_type_id.insert(3, if fault == 3 { 2 } else { 1 });
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(
+            &[("FVector", "Z", if fault == 1 { "float32" } else { "float" })], &[], None));
         r
     }
 

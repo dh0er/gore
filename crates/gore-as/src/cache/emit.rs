@@ -12233,6 +12233,26 @@ fn sink_declarations_into_their_block(
     out
 }
 
+/// A pending loop with differently cleaned break paths cannot own this handle.
+/// Splitting its declaration into the temporary if would add cleanup to both.
+fn pending_loop_has_mixed_handle_exits(lines: &[String], open: usize, declaration: &str) -> bool {
+    let Some((_, name)) = bare_declaration(declaration) else { return false; };
+    let ty = declaration.trim().strip_suffix(';').and_then(|s| s.strip_suffix(&name)).unwrap_or("").trim();
+    if !is_object_handle_type(ty) || open == 0 || lines[open].trim() != "{"
+        || !lines[open - 1].trim_start().starts_with("if (") { return false; }
+    let borrowed: Vec<_> = lines.iter().map(String::as_str).collect();
+    let Some(close) = matching_close(&borrowed, open) else { return false; };
+    let Some(last) = (open + 1..close).rev().find(|i| !lines[*i].trim().is_empty()) else { return false; };
+    let (Some(target), Some(exit)) = (super::structure::loop_back_edge_target(&lines[last]),
+        super::structure::loop_back_edge_exit(&lines[last])) else { return false; };
+    if target >= exit || indent_of(&lines[last]).len() != indent_of(&lines[open]).len() + 4 { return false; }
+    let breaks: Vec<_> = (open + 1..last).filter(|i|
+        super::structure::loop_break_edge(&lines[*i]) == Some((target, exit))).collect();
+    if breaks.len() != 2 { return false; }
+    let release = format!("{name} = nullptr;");
+    breaks.iter().filter(|i| lines[**i - 1].trim() == release).count() == 1
+}
+
 /// The first declaration in `lines` that may move, as `(from, to, text)`.
 fn next_declaration_to_sink(
     lines: &[String],
@@ -12300,7 +12320,8 @@ fn next_declaration_to_sink(
             header.starts_with("for") || header.starts_with("while") || header.starts_with("do");
         // …unless vanilla built it once per iteration and released it on every exit, which is
         // the source declaring it in the body.
-        if heads_a_loop && !built_per_iteration.contains(&slot) {
+        if (heads_a_loop || pending_loop_has_mixed_handle_exits(lines, open, line))
+                && !built_per_iteration.contains(&slot) {
             continue;
         }
         // A switch body holds `case` labels, not statements: a declaration there does not
@@ -15257,6 +15278,31 @@ fn addressed_compound_updates(f: &Func, refs: &RefResolver, is_method: bool) -> 
             Some((target,"+".into(),CompoundFieldRhs::Field(source)))
         })();
         if let Some(site)=found {out.insert(site);}
+    }
+    // A native value local keeps its field address through a literal addition.
+    // The literal is prepared before the address, and WRTV8 reuses that address.
+    for c in code.windows(5) {
+        if c.iter().map(|i| i.op.name).ne(["SetV8", "LoadVObjR", "RDR8", "ADDd", "WRTV8"])
+            || entered(c[0].offset_dw, c[4].offset_dw) { continue; }
+        let found = (|| {
+            let (rhs, receiver, read, result) = (w(&c[0],0)?, w(&c[1],0)?, w(&c[2],0)?, w(&c[3],0)?);
+            let bits = *c[0].qwords.first()?;
+            if [rhs, receiver, read, result].iter().any(|s| *s <= 0)
+                || rhs == read || result == rhs || receiver == rhs || receiver == read || receiver == result
+                || !f64::from_bits(bits).is_finite() || w(&c[3],1) != Some(read)
+                || w(&c[3],2) != Some(rhs) || w(&c[4],0) != Some(result) { return None; }
+            let id = *c[1].dwords.first()? as i32;
+            let owner = refs.type_identity_by_id(id)?;
+            let (name, old) = refs.member_identity(id, w(&c[1],1)?)?;
+            let types: Vec<_> = f.obj_locals.iter().filter(|(s,_)| *s == receiver).map(|(_,p)| *p).collect();
+            if types.len() != 1 || refs.type_identity_by_ptr(types[0]) != Some(owner)
+                || refs.type_identity_by_id(old) != Some(owner) || !owner.module.is_empty()
+                || !owner.namespace.is_empty() || !is_value_struct_type(&owner.name)
+                || !refs.native_field_value_type(&owner.name, name).or_else(|| refs.native_field_type(&owner.name, name))
+                    .is_some_and(|t| matches!(t, "float" | "double")) { return None; }
+            Some((format!("local_{receiver}.{name}"), "+".into(), CompoundFieldRhs::Literal(bits)))
+        })();
+        if let Some(site) = found { out.insert(site); }
     }
     out
 }
@@ -23030,7 +23076,8 @@ fn next_declaration_to_split(
                     let head = line.trim_start();
                     head.starts_with("for") || head.starts_with("while") || head.starts_with("do")
                 });
-            if heads_a_loop && !built_per_iteration.contains(&slot) {
+            if (heads_a_loop || pending_loop_has_mixed_handle_exits(lines, open, line))
+                && !built_per_iteration.contains(&slot) {
                 ok = false;
                 break;
             }
@@ -33699,6 +33746,30 @@ mod literal_value_lifetime_tests {
     }
 
     #[test]
+    fn a_shared_handle_stays_outside_a_pending_loop_with_mixed_break_cleanup() {
+        let source = "UStorage local_6;\nif (Ready())\n{\n    local_6 = Fetch();\n    Read(local_6);\n    local_6 = nullptr;\n}\nif (Again())\n{\n    local_6 = Fetch();\n    if (StopAndRelease())\n    {\n        Read(local_6);\n        local_6 = nullptr;\n        //__gore_loop_break 10 90\n    }\n    if (Stop())\n    {\n        //__gore_loop_break 10 90\n    }\n    Wait();\n    //__gore_back_edge 10 90\n}\nif (Done())\n{\n    local_6 = Fetch();\n    Read(local_6);\n    local_6 = nullptr;\n}\nreturn;\n";
+        let sink = |s: &str, built: &HashSet<i32>| super::sink_declarations_into_their_block(s, &HashSet::from([6]), built);
+        assert_eq!(sink(source, &HashSet::new()), source);
+        let recovered = super::recover_condition_loops(source);
+        assert!(recovered.contains("while (Again())"), "{recovered}");
+        let clean = super::drop_block_end_handle_releases(&recovered);
+        assert_eq!(clean.matches("local_6 = nullptr;").count(), 3, "{clean}");
+        assert_eq!(clean.matches("UStorage local_6;").count(), 1);
+        for other in [source.replace("//__gore_back_edge 10 90", "//__gore_back_edge 10"),
+            source.replace("//__gore_loop_break 10 90", "//__gore_loop_break 11 90"),
+            source.replace("        local_6 = nullptr;\n", ""),
+            source.replace("UStorage local_6;", "int local_6;")] {
+            assert_ne!(sink(&other, &HashSet::new()), other);
+        }
+        assert_ne!(sink(source, &HashSet::from([6])), source);
+        // The same proof also protects a declaration with only one using block.
+        let at = source.find("if (Again())").unwrap();
+        let end = source.find("if (Done())").unwrap();
+        let one = format!("UStorage local_6;\n{}return;\n", &source[at..end]);
+        assert_eq!(sink(&one, &HashSet::new()), one);
+    }
+
+    #[test]
     fn a_cast_receiver_inside_a_prepared_value_frame_remains_an_expression() {
         let mut f = function(&[("PSF", &[8]), ("PSF", &[14]), ("PshVPtr", &[0]), ("CALLINTF", &[]),
             ("PSF", &[14]), ("CALLSYS", &[]), ("STOREOBJ", &[16]), ("PshVPtr", &[16]),
@@ -39716,6 +39787,46 @@ mod literal_value_lifetime_tests {
         f.bytecode[c[0].offset_dw+1]=bits as i32;f.bytecode[c[0].offset_dw+2]=(bits>>32) as i32;
         for at in [1,5,7] {f.bytecode[c[at].offset_dw+1]=1;}
         f
+    }
+
+    #[test]
+    fn a_native_value_field_keeps_its_address_for_literal_addition() {
+        let mut f = function(&[("SetV8", &[40]), ("LoadVObjR", &[30, 0]), ("RDR8", &[38]),
+            ("ADDd", &[42, 38, 40]), ("WRTV8", &[42]), ("RET", &[2])]);
+        f.obj_locals = vec![(30, 1)];
+        let code = disassemble(&f.bytecode).unwrap(); let bits = 90.0f64.to_bits();
+        f.bytecode[1] = bits as i32; f.bytecode[2] = (bits >> 32) as i32;
+        f.bytecode[code[1].offset_dw + 2] = 1;
+        let refs = RefResolver::from_test_local_compound(0);
+        let proof = super::addressed_compound_updates(&f, &refs, true);
+        assert_eq!(proof, HashSet::from([("local_30.Z".into(), "+".into(), super::CompoundFieldRhs::Literal(bits))]));
+        let source = "local_30.Z = (local_30.Z + 90.0);\n";
+        let roots = HashMap::from([("local_30".into(), "FVector".into())]);
+        let fold = |s: &str, proof: &HashSet<_>| super::fold_compound_assignments(s, None, &roots, &refs,
+            true, &HashSet::new(), proof);
+        assert_eq!(fold(source, &proof), "local_30.Z += 90.0;\n");
+        assert_eq!(fold(&fold(source, &proof), &proof), "local_30.Z += 90.0;\n");
+        assert_eq!(fold(source, &HashSet::new()), source);
+        for other in [source.replace("90.0", "80.0"), source.replace("local_30", "local_31"), source.repeat(2)] {
+            assert_eq!(fold(&other, &proof), other);
+        }
+        for fault in 1..=3 {
+            assert!(super::addressed_compound_updates(&f, &RefResolver::from_test_local_compound(fault), true).is_empty());
+        }
+        for locals in [vec![], vec![(30,1),(30,1)], vec![(30,2)]] {
+            let mut bad=f.clone(); bad.obj_locals=locals;
+            assert!(super::addressed_compound_updates(&bad, &refs, true).is_empty());
+        }
+        for (at, op, words) in [(2,"RDR4",vec![38]), (4,"WRTV8",vec![38]), (3,"ADDd",vec![42,40,38])] {
+            let mut bad=f.clone(); let replacement=function(&[(op,&words)]).bytecode;
+            bad.bytecode.splice(code[at].offset_dw..code[at+1].offset_dw,replacement);
+            assert!(super::addressed_compound_updates(&bad, &refs, true).is_empty());
+        }
+        for at in 1..=4 {
+            let mut bad=f.clone(); let mut jump=function(&[("JMP",&[])]).bytecode;
+            jump[1]=code[at].offset_dw as i32; jump.extend(bad.bytecode); bad.bytecode=jump;
+            assert!(super::addressed_compound_updates(&bad, &refs, true).is_empty());
+        }
     }
 
     #[test]

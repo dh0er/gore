@@ -22,7 +22,7 @@ AI.DailyRoutines.DailyRoutines_OG	1	0	0
 AI.NativeAICommands	2	0	0
 AI.Relationship.PersonalRelationshipModifiers	1	0	0
 AI.States.AIState_FollowCharacterAggressive	2	0	0
-AI.States.AIState_GuideCharacter	3	0	0
+AI.States.AIState_GuideCharacter	2	0	0
 AI.States.AIState_InteractWinchGate	1	0	0
 AI.States.FightAI.AIGroup_ConflictInstance	1	0	0
 AI.States.FightAI.AIGroup_StateEvent	2	0	0
@@ -72,7 +72,7 @@ GAS.Abilities.Spells.Spells.Base.GA_Spell_Targetable	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_Fireball	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_StormOfFire	1	0	0
 GAS.Abilities.Spells.Spells.Light.GA_Spell_Light	1	0	0
-GAS.Abilities.Spells.Spells.Summon.Base.GA_Spell_Summon	2	0	0
+GAS.Abilities.Spells.Spells.Summon.Base.GA_Spell_Summon	1	0	0
 GAS.Abilities.Spells.Spells.Summon.SpawnHelper.Base.SummonSpawnPlaceHelper	3	0	0
 GAS.Abilities.Spells.Spells.Telekinesis.GA_Spell_Telekinesis	1	0	0
 GAS.Abilities.Spells.Spells.Telekinesis.TelekinesisItemMovementVisual	1	0	0
