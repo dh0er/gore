@@ -1272,6 +1272,7 @@ fn emit_function_ctor(
     let mut alias_copy_keep: HashSet<i32> = widened.union(&named_bool_returns).copied().collect();
     alias_copy_keep.extend(joined_return_copies.iter().copied());
     alias_copy_keep.extend(copied_short_circuit_accumulators(f, refs));
+    alias_copy_keep.extend(copied_member_arguments_before_calls(f, refs));
     let repeated_aliases = repeated_handle_alias_slots(f, refs);
     alias_copy_keep.extend(repeated_aliases.iter().copied());
     let loop_result_aliases = loop_result_handle_aliases(f, refs, is_method);
@@ -19634,6 +19635,47 @@ fn path_prefixes(path: &str) -> Vec<String> {
     out
 }
 
+/// A copied double field is a snapshot taken before later calls. Keep its
+/// closed alias life so the existing member-copy gate retains the field read.
+fn copied_member_arguments_before_calls(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    if code.iter().any(|i| i.op.name == "JMPP") { return HashSet::new(); }
+    let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+    let uses = |slot| code.iter().enumerate().filter_map(|(at, i)|
+        super::bytediff::addressed_slots(i).contains(&slot).then_some(at)).collect::<Vec<_>>();
+    code.windows(3).enumerate().filter_map(|(at, c)| {
+        if c.iter().map(|i| i.op.name).ne(["LoadRObjR", "RDR8", "CpyVtoV8"]) { return None; }
+        let (receiver, scratch, named) = (w(&c[0], 0)?, w(&c[1], 0)?, w(&c[2], 0)?);
+        if [receiver, scratch, named].iter().any(|s| *s <= 0)
+            || HashSet::from([receiver, scratch, named]).len() != 3
+            || w(&c[2], 1) != Some(scratch)
+            || f.obj_locals.iter().any(|(s, _)| *s == scratch || *s == named)
+            || uses(scratch) != [at + 1, at + 2] { return None; }
+        let read = uses(named);
+        let [copy, pushed] = read.as_slice() else { return None; };
+        if *copy != at + 2 || code[*pushed].op.name != "PshV8"
+            || !code[*copy + 1..*pushed].iter().any(|i| i.op.is_call()) { return None; }
+        let tid = *c[0].dwords.first()? as i32;
+        let owner = refs.type_identity_by_id(tid)?;
+        let (field, old_owner) = refs.member_identity(tid, w(&c[0], 1)?)?;
+        let mut receiver_types = f.obj_locals.iter().filter(|(s, _)| *s == receiver);
+        let ty = receiver_types.next()?.1;
+        if receiver_types.next().is_some() || refs.type_identity_by_ptr(ty) != Some(owner)
+            || refs.type_identity_by_id(old_owner) != Some(owner)
+            || !is_object_handle_type(&owner.name)
+            || !matches!(refs.field_type_by_class(&owner.name, field)
+                .or_else(|| refs.native_field_type(&owner.name, field)), Some("float" | "double"))
+        { return None; }
+        // Internal guard exits may skip the argument; an outside path may not
+        // enter after the property read and borrow its copy/push proof.
+        if code.iter().enumerate().any(|(n, i)| (n < at || n > *pushed) && i.op.name.starts_with('J')
+            && i.dwords.first().is_some_and(|d| {
+                let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                target > c[0].offset_dw as i64 && target <= code[*pushed].offset_dw as i64
+            })) { return None; }
+        Some(named)
+    }).collect()
+}
 /// Slots a member read was COPIED into: `RDR4 t; CpyVtoV4 N, t`. A member read the source used
 /// in an expression lands in the temporary the instruction reads; a copy behind it is the
 /// variable the source assigned (`int Threshold = Data.Member; if (Threshold >= x)` —
@@ -25456,6 +25498,12 @@ fn named_value_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, String)> {
         .map(str::to_owned)
     };
     let mut out = HashSet::new();
+    // Keep the exact shared field seed, not earlier member-read lives of its slot.
+    // The same typed raw witness controls the WRTV literal materialization.
+    for (at, _) in instrs.iter().enumerate().filter(|(_, i)| i.op.name == "WRTV8") {
+        let Some((slot, literal, _, _)) = super::structure::shared_double_field_seed_value(&instrs, refs, at) else { continue; };
+        if !f.obj_locals.iter().any(|(s, _)| *s == slot) { out.insert((slot, literal)); }
+    }
     // An immediate same-width integer push reads a named literal. Keep the
     // exact decimal initializer, so another value on this slot cannot inherit it.
     // Bool/enum widening and spills across argument calls are different shapes.
@@ -33524,6 +33572,56 @@ mod literal_value_lifetime_tests {
         assert_eq!(super::global_copy_before_handle_argument_sites(&entered, &refs), HashSet::from([(74, "FGameplayTag".into())]));
     }
 
+    #[test]
+    fn shared_double_field_seed_survives_argument_and_lifetime_inlining() {
+        let mut f = function(&[("SetV8", &[8]), ("LoadThisR", &[0]), ("WRTV8", &[8]),
+            ("PshVPtr", &[0]), ("CALLSYS", &[]), ("JLowZ", &[]), ("RDR8", &[14]),
+            ("CpyVtoV8", &[8, 14]), ("JMP", &[]), ("SetV8", &[8]), ("dTOf", &[15, 8]),
+            ("PshV4", &[15]), ("RET", &[0])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        f.bytecode[code[1].offset_dw + 1] = 1;
+        for (at, value) in [(0, f64::MAX), (9, 5.0)] {
+            f.bytecode[code[at].offset_dw + 1] = value.to_bits() as u32 as i32;
+            f.bytecode[code[at].offset_dw + 2] = (value.to_bits() >> 32) as u32 as i32;
+        }
+        for (at, target) in [(5, 9), (8, 10)] {
+            f.bytecode[code[at].offset_dw + 1] = code[target].offset_dw as i32 - code[at].offset_dw as i32 - 2;
+        }
+        let refs = RefResolver::from_test_copied_int_field_read("float", false);
+        let literal = "1.7976931348623157e308";
+        let sites = super::named_value_sites(&f, &refs);
+        assert_eq!(sites, HashSet::from([(8, literal.into())]));
+        let locals = BTreeMap::from([(8, "float".into()), (14, "float".into())]);
+        let empty = HashSet::new();
+        let source = format!("local_8 = this.Old;\nthis.Other = local_8;\nlocal_8 = {literal};\nthis.Limit = local_8;\nTouch();\nif (Ready())\n{{\n    local_8 = this.Duration;\n}}\nelse\n{{\n    local_8 = 5.0;\n}}\nUse(float32(local_8));\n");
+        let early = |body: &str, named: &HashSet<(i32, String)>| super::inline_call_argument_temporaries(
+            body, &refs, &locals, None, true, &HashMap::new(), &empty, &empty, &empty,
+            &empty, &empty, &empty, &empty, &empty, &HashMap::new(), &empty, named, &HashSet::new());
+        let kept = early(&source, &sites);
+        assert!(kept.contains(&format!("local_8 = {literal};\nthis.Limit = local_8;")), "{kept}");
+        assert!(!kept.contains("local_8 = this.Old;"), "{kept}");
+        assert!(kept.contains("this.Other = this.Old;"), "{kept}");
+        assert!(!early(&source, &HashSet::new()).contains(&format!("local_8 = {literal};")));
+        let declared = format!("float local_8 = {literal};\nthis.Limit = local_8;\n");
+        let late = |named: &HashSet<(i32, String)>| super::inline_unnamed_value_temporaries(
+            &declared, &HashSet::from([(8, 1)]), &empty, &empty, &refs, &empty, &empty,
+            &HashMap::new(), named, &empty, &empty, &empty);
+        assert_eq!(late(&sites), declared);
+        assert!(!late(&HashSet::new()).contains("float local_8"));
+        assert!(!super::is_named_value_site(8, "5.0", &sites));
+        assert!(!super::is_named_value_site(8, "this.Old", &sites));
+        assert!(!super::is_named_value_site(14, literal, &sites));
+        for ty in ["float32", "int64", "bool"] {
+            assert!(!super::named_value_sites(&f, &RefResolver::from_test_copied_int_field_read(ty, false))
+                .contains(&(8, literal.into())), "{ty}");
+        }
+        let mut wrong = f.clone(); wrong.obj_locals.push((8, 1));
+        assert!(!super::named_value_sites(&wrong, &refs).contains(&(8, literal.into())));
+        wrong = f.clone(); wrong.bytecode[code[8].offset_dw + 1] = 0;
+        assert!(!super::named_value_sites(&wrong, &refs).contains(&(8, literal.into())));
+    }
+
+
     fn function(ops: &[(&str, &[u16])]) -> Func {
         let bytecode = ops.iter().flat_map(|(name, words)| {
             let op = OPCODES.iter().find(|op| op.name == *name).unwrap();
@@ -35077,6 +35175,61 @@ mod literal_value_lifetime_tests {
             prefix[1] = code[target].offset_dw as i32; prefix.extend(entered.bytecode); entered.bytecode = prefix;
             assert!(!super::named_value_sites(&entered, &refs).contains(&key), "interior entry {target}");
         }
+    }
+
+    #[test]
+    fn a_copied_double_member_stays_before_calls_and_early_guard_exits() {
+        let mut f = function(&[("LoadRObjR", &[4, 0]), ("RDR8", &[8]), ("CpyVtoV8", &[6, 8]),
+            ("PshVPtr", &[0]), ("CALLSYS", &[]), ("JLowZ", &[]), ("RET", &[2]),
+            ("PshVPtr", &[0]), ("CALLSYS", &[]), ("PshV8", &[6]), ("PshVPtr", &[0]),
+            ("CALLSYS", &[]), ("RET", &[2])]);
+        f.obj_locals = vec![(4, 1)];
+        let code = disassemble(&f.bytecode).unwrap();
+        f.bytecode[code[0].offset_dw + 2] = 1;
+        f.bytecode[code[5].offset_dw + 1] = code[7].offset_dw as i32 - code[5].offset_dw as i32 - 2;
+        let refs = RefResolver::from_test_copied_int_field_read("float", false);
+        let keep = super::copied_member_arguments_before_calls(&f, &refs);
+        assert_eq!(keep, HashSet::from([6]));
+        let locals = BTreeMap::from([(4, "UConfig".into()), (6, "float".into()), (8, "float".into())]);
+        let body = "local_8 = local_4.Limit;\nlocal_6 = local_8;\nif (Stop())\n{\n    return;\n}\nUpdate();\nUse(local_6);\n";
+        assert_ne!(super::fold_alias_copies(body, &locals, &HashSet::new()), body);
+        let aliases = super::fold_alias_copies(body, &locals, &keep);
+        assert_eq!(aliases, body);
+        let copied = super::fold_copy_out_temporaries(&aliases, &locals, &HashSet::new(), None,
+            &HashSet::new(), &HashSet::new(), &HashSet::new());
+        let expected = body.replace("local_8 = local_4.Limit;\nlocal_6 = local_8;", "local_6 = local_4.Limit;");
+        assert_eq!(copied, expected);
+        let member_keep = super::member_copy_named_slots(&f, &refs, true);
+        let folded = super::fold_member_read_temporaries(&copied, &HashSet::new(), &HashSet::new(),
+            &locals, None, &HashMap::from([("local_4".into(), "UConfig".into())]), &refs,
+            &super::member_read_slots(&f), false, &member_keep, &HashSet::new(), &HashMap::new());
+        assert_eq!(folded, expected);
+        assert_eq!(super::fold_alias_copies(&folded, &locals, &keep), expected);
+        for ty in ["float32", "int64", "bool"] {
+            assert!(super::copied_member_arguments_before_calls(&f,
+                &RefResolver::from_test_copied_int_field_read(ty, false)).is_empty(), "{ty}");
+        }
+        for suffix in [function(&[("PshV8", &[6])]), function(&[("SetV8", &[8])]),
+            function(&[("JMPP", &[2])])] {
+            let mut other = f.clone(); other.bytecode.extend(suffix.bytecode);
+            assert!(super::copied_member_arguments_before_calls(&other, &refs).is_empty());
+        }
+        let mut other = f.clone(); other.obj_locals.push((4, 1));
+        assert!(super::copied_member_arguments_before_calls(&other, &refs).is_empty());
+        let mut other = f.clone(); other.obj_locals[0].1 = 2;
+        assert!(super::copied_member_arguments_before_calls(&other, &refs).is_empty());
+        let mut other = f.clone();
+        other.bytecode[code[9].offset_dw] = function(&[("PshV4", &[6])]).bytecode[0];
+        assert!(super::copied_member_arguments_before_calls(&other, &refs).is_empty());
+        let mut other = f.clone(); other.bytecode.splice(0..0, function(&[("JMP", &[])]).bytecode);
+        let entered = disassemble(&other.bytecode).unwrap();
+        other.bytecode[1] = entered[3].offset_dw as i32 - 2;
+        assert!(super::copied_member_arguments_before_calls(&other, &refs).is_empty());
+        // An adjacent push has no intervening work whose snapshot needs this guard.
+        let mut adjacent = function(&[("LoadRObjR", &[4, 0]), ("RDR8", &[8]),
+            ("CpyVtoV8", &[6, 8]), ("PshV8", &[6]), ("RET", &[2])]);
+        adjacent.obj_locals = vec![(4, 1)]; adjacent.bytecode[2] = 1;
+        assert!(super::copied_member_arguments_before_calls(&adjacent, &refs).is_empty());
     }
 
     #[test]

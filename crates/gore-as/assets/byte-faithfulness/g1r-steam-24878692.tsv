@@ -52,7 +52,7 @@ AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpotM
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpot_XardasSleeper	1	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.Xardas_Sleeper_Minion_BillboardComponent	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning	1	0	0
-AI.States.FightAI.WarningState.AIState_Warning_Crime	10	0	0
+AI.States.FightAI.WarningState.AIState_Warning_Crime	9	0	0
 AI.States.FightAI.WatchFightState.AIGroup_WatchFight	2	0	0
 AI.States.FightAI.WatchFightState.AIState_WatchFight	14	0	0
 AI.States.Test.TestCharacters_Navigation	1	0	0
@@ -68,7 +68,6 @@ GAS.Abilities.Locomotion.GA_Swim	1	0	0
 GAS.Abilities.Passive.Drugs.Derived.Alcohol.GA_AlcoholDebuff	1	0	0
 GAS.Abilities.Passive.GA_PlayerPerception_CrimeRegistration	3	0	0
 GAS.Abilities.Spells.CastSpell.Derived.AlteredStates.GA_CastSpell_Control	1	0	0
-GAS.Abilities.Spells.CastSpell.Derived.Summon.Base.GA_CastSpell_SummonBase	1	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_Targetable	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_Fireball	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_StormOfFire	1	0	0

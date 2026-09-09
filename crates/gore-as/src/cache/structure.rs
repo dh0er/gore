@@ -3812,6 +3812,64 @@ pub(super) fn captured_handle_member_reference(code: &[Instr], at: usize, refs: 
     Some((slot, ty.to_owned()))
 }
 
+/// The emitted double seed also names a later Copy/Set branch merge. Reuse
+/// that seed for its immediate field write instead of materializing it twice.
+pub(super) fn shared_double_field_seed_value(code: &[Instr], refs: &RefResolver, at: usize) -> Option<(i32, String, i32, String)> {
+    (|| {
+        let first = at.checked_sub(2)?;
+        let c = code.get(first..=at)?;
+        let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+        if c.iter().map(|i| i.op.name).ne(["SetV8", "LoadThisR", "WRTV8"])
+            || code.iter().any(|i| i.op.name == "JMPP") { return None; }
+        let slot = w(&c[0], 0).filter(|s| *s > 0)?;
+        let bits = *c[0].qwords.first()?;
+        if w(&c[2], 0) != Some(slot) || !f64::from_bits(bits).is_finite() { return None; }
+        let tid = *c[1].dwords.first()? as i32;
+        let owner = refs.type_identity_by_id(tid)?;
+        let (field, old_owner) = refs.member_identity(tid, w(&c[1], 0)?)?;
+        if refs.type_identity_by_id(old_owner)? != owner
+            || !matches!(float_field_type(refs, tid, field).as_deref(), Some("float" | "double"))
+        { return None; }
+        let later: Vec<_> = code.iter().enumerate().skip(at + 1).filter_map(|(n, i)|
+            super::bytediff::addressed_slots(i).contains(&slot).then_some(n)).collect();
+        let [copy, fallback, narrow] = later.as_slice() else { return None; };
+        let tail = code.get(copy.checked_sub(1)?..*narrow + 2)?;
+        if *copy <= at + 1 || *fallback != *copy + 2 || *narrow != *copy + 3
+            || tail.iter().map(|i| i.op.name).ne(["RDR8", "CpyVtoV8", "JMP", "SetV8", "dTOf", "PshV4"])
+            || w(&tail[0], 0).is_none_or(|s| s <= 0 || s == slot)
+            || w(&tail[1], 1) != w(&tail[0], 0) || w(&tail[1], 0) != Some(slot)
+            || w(&tail[3], 0) != Some(slot) || w(&tail[4], 1) != Some(slot)
+            || w(&tail[4], 0).is_none_or(|s| s <= 0 || s == slot)
+            || w(&tail[5], 0) != w(&tail[4], 0)
+            || !f64::from_bits(*tail[3].qwords.first()?).is_finite() { return None; }
+        let jump_target = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+        if jump_target(&tail[2]) != Some(tail[4].offset_dw as i64) { return None; }
+        let guards: Vec<_> = (at + 1..*copy - 1).filter(|n|
+            matches!(code[*n].op.name, "JLowZ" | "JLowNZ")
+                && jump_target(&code[*n]) == Some(tail[3].offset_dw as i64)).collect();
+        let [guard] = guards.as_slice() else { return None; };
+        if code.iter().enumerate().any(|(n, i)| n != *guard && n != *copy + 1 && i.op.name.starts_with('J')
+            && jump_target(i).is_some_and(|t| t > c[0].offset_dw as i64 && t <= tail[4].offset_dw as i64))
+        { return None; }
+        Some((slot, fmt_float(ConstBits::W8(bits), true), tid, field.to_owned()))
+    })()
+}
+
+fn shared_double_field_seed(ctx: &Ctx, at: usize, out: &[String], target: &str, target_type: Option<&str>) -> bool {
+    (|| {
+        if !ctx.f.is_method || !matches!(target_type, Some("float" | "double")) { return None; }
+        let (slot, literal, tid, field) = shared_double_field_seed_value(ctx.instrs, ctx.refs, at)?;
+        let owner = ctx.refs.type_identity_by_id(tid)?;
+        let class = ctx.class_name?;
+        if !ctx.float_slots.contains(&slot)
+            || ctx.slot_type(slot).is_some_and(|ty| !matches!(ty.as_str(), "float" | "double"))
+            || (class != owner.name && !ctx.refs.is_subclass(class, &owner.name))
+            || target != format!("this.{field}")
+            || out.last()? != &format!("{} = {literal};", ctx.slot_name(slot)) { return None; }
+        Some(())
+    })().is_some()
+}
+
 /// Decompile one block's instruction range into statements; also return the
 /// pending comparison (operands of the last CMP*) for condition recovery.
 fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
@@ -4753,6 +4811,7 @@ fn block_stmts_in(
                     let target_is_bool = ref_reg_ty.as_deref() == Some("bool")
                         || ref_reg_vty.as_deref() == Some("bool");
                     let mut rhs = match ref_reg_ty.as_deref() {
+                        _ if shared_double_field_seed(ctx, lo + k, &out, r, ref_reg_ty.as_deref()) => raw.clone(),
                         _ if source_is_bool && target_is_bool => raw.clone(),
                         Some("float32") => {
                             float_lit(&set_consts, slot, false).unwrap_or(raw.clone())
@@ -12828,6 +12887,71 @@ mod tests {
             let out = render(owner, field, value);
             assert!(!out.contains(&format!("local_20.{field} =")), "{out}");
         }
+    }
+
+    #[test]
+    fn a_shared_double_branch_seed_is_written_to_its_field_once() {
+        let mut a = TestAssembler::default();
+        a.op("SetV8", &[8], &[0, 0]);
+        a.op("LoadThisR", &[0], &[1]);
+        a.op("WRTV8", &[8], &[]);
+        a.op("PshVPtr", &[0], &[]);
+        a.op("CALLSYS", &[], &[0, 0]);
+        a.jump("JLowZ", "fallback");
+        a.op("RDR8", &[14], &[]);
+        a.op("CpyVtoV8", &[8, 14], &[]);
+        a.jump("JMP", "join");
+        a.label("fallback");
+        a.op("SetV8", &[8], &[0, 0]);
+        a.label("join");
+        a.op("dTOf", &[15, 8], &[]);
+        a.op("PshV4", &[15], &[]);
+        a.op("RET", &[0], &[]);
+        let mut fixture = a.finish();
+        fixture.instrs[0].qwords = vec![f64::MAX.to_bits()];
+        fixture.instrs[9].qwords = vec![5.0f64.to_bits()];
+        let f = FuncCode { func: "WriteSharedSeed".into(), is_method: true,
+            param_names: Vec::new(), param_types: Vec::new(),
+            ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+        let locals = HashMap::from([(8, "float".to_owned())]);
+        let refs = RefResolver::from_test_copied_int_field_read("float", false);
+        let seed = vec![format!("local_8 = {};", fmt_float(ConstBits::W8(f64::MAX.to_bits()), true))];
+        let render = |code: &[Instr], refs: &RefResolver, float: bool, class: &str, emitted: &[String]| {
+            let ctx = Ctx { f: &f, refs, instrs: code, super_ctor: None, ret_ty: Some(&f.ret),
+                fields: None, param_types: None, class_name: Some(class), local_types: Some(&locals),
+                float_slots: if float { std::collections::HashSet::from([8]) } else { Default::default() },
+                param_off_map: HashMap::new(), rvo_off: None, keep_ints: None,
+                rvo_switch_region: std::cell::Cell::new(false) };
+            let proof = shared_double_field_seed(&ctx, 2, emitted, "this.Limit", Some("float"));
+            (proof, block_stmts(&ctx, 0, 3).0)
+        };
+        let (proof, out) = render(&fixture.instrs, &refs, true, "UConfig", &seed);
+        assert!(proof);
+        assert_eq!(out, vec![seed[0].clone(), "this.Limit = local_8;".into()]);
+        for ty in ["float32", "int64", "bool"] {
+            assert!(!render(&fixture.instrs, &RefResolver::from_test_copied_int_field_read(ty, false),
+                true, "UConfig", &seed).0, "{ty}");
+        }
+        assert!(!render(&fixture.instrs, &refs, false, "UConfig", &seed).0);
+        assert!(!render(&fixture.instrs, &refs, true, "OtherOwner", &seed).0);
+        assert!(!render(&fixture.instrs, &refs, true, "UConfig", &[]).0);
+        for fault in 0..7 {
+            let mut other = fixture.instrs.clone();
+            match fault {
+                0 => other[2].words[0] = 10,
+                1 => other[7].words[1] = 15,
+                2 => other[8].dwords[0] = 0,
+                3 => other[9].words[0] = 10,
+                4 => other[10].words[1] = 10,
+                5 => other[5].dwords[0] = 0,
+                _ => other[11].words[0] = 16,
+            }
+            assert!(!render(&other, &refs, true, "UConfig", &seed).0, "fault {fault}");
+        }
+        let mut no_join = fixture.instrs.clone(); no_join.truncate(3);
+        let (proof, out) = render(&no_join, &refs, true, "UConfig", &seed);
+        assert!(!proof);
+        assert_eq!(out[1], format!("this.Limit = {};", fmt_float(ConstBits::W8(f64::MAX.to_bits()), true)));
     }
 
     #[test]
