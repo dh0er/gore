@@ -11317,6 +11317,42 @@ impl Structurer<'_> {
         None
     }
 
+    /// A constant top-test has two cleanup-and-retry leaves and a final
+    /// cleanup-and-break leaf. The last block is an exit, not the loop latch.
+    fn has_two_released_retry_edges(&self, head: usize, exit: usize) -> bool {
+        let witness = (|| {
+            if self.ctx.f.ret.token != 0x52 || exit != head + 6 || exit >= self.g.blocks.len() { return None; }
+            let block = |n: usize| &self.g.blocks[head+n];
+            let code = |n: usize| &self.ctx.instrs[block(n).instr_lo..block(n).instr_hi];
+            let w = |i: &Instr,n: usize| i.words.get(n).map(|v|s16(*v));
+            let h=code(0);let body=code(1);let check=code(3);
+            if h.iter().map(|i|i.op.name).ne(["SetV1","CpyVtoR1","JLowZ"])
+                || h[0].dwords.first()!=Some(&1) || w(&h[0],0)?<=0 || w(&h[1],0)!=w(&h[0],0)
+                || body.first()?.op.name!="SUSPEND" || body.len()<10
+                || check.iter().map(|i|i.op.name).ne(["sbTOi","CMPIi","JZ"]) || check[1].dwords.first()!=Some(&0) { return None; }
+            let tail=&body[body.len()-8..];
+            if tail.iter().map(|i|i.op.name).ne(["RDR1","CpyVtoV4","PSF","CALLSYS","LoadRObjR","RDR1","CpyVtoR1","JLowZ"]) { return None; }
+            let (handle, result, scratch)=(w(&tail[4],0)?,w(&tail[1],0)?,w(&check[0],0)?);
+            if [handle,result,scratch].iter().any(|s|*s<=0) || std::collections::HashSet::from([handle,result,scratch,w(&h[0],0)?]).len()!=4
+                || w(&tail[1],1)!=w(&tail[0],0) || w(&tail[5],0)!=w(&h[0],0) || w(&tail[6],0)!=w(&h[0],0)
+                || w(&check[0],1)!=Some(result) || w(&check[1],0)!=Some(scratch)
+                || body.iter().filter(|i|i.op.name=="STOREOBJ" && w(i,0)==Some(handle)).count()!=1 { return None; }
+            let header=block(0).start_dw;let after=block(6).start_dw;
+            if block(0).succs.as_slice()!=[after,block(1).start_dw]
+                || block(1).succs.as_slice()!=[block(3).start_dw,block(2).start_dw]
+                || block(3).succs.as_slice()!=[block(5).start_dw,block(4).start_dw] { return None; }
+            for (n,target) in [(2,header),(4,header),(5,after)] {
+                let leaf=code(n);
+                if leaf.iter().map(|i|i.op.name).ne(["FreeNullV8","JMP"]) || w(&leaf[0],0)!=Some(handle)
+                    || block(n).succs.as_slice()!=[target] { return None; }
+            }
+            // No external edge may enter a predicate, cleanup, or retry leaf.
+            if self.g.blocks.iter().enumerate().any(|(n,b)| (n<head || n>=exit) && b.succs.iter().any(|t|*t>header && *t<after)) { return None; }
+            Some(())
+        })();
+        witness.is_some()
+    }
+
     /// Detect a top-test loop headed at block `i`:
     /// `header: <cmp> Jcc exit; body...; JMP header`. Returns (body_end_idx, condition, prefix):
     /// the prefix holds statements of the header block that are NOT the test's own temporaries
@@ -11339,9 +11375,11 @@ impl Structurer<'_> {
         if prev <= i {
             return None;
         }
-        // last body block must JMP back to the header's start offset …
-        let jumps_back = self.jump_op(prev) == "JMP"
-            && self.g.blocks[prev].succs.first().copied() == Some(b.start_dw);
+        // A back edge usually ends the body. Two released retry leaves can
+        // instead precede a final released break leaf.
+        let jumps_back = (self.jump_op(prev) == "JMP"
+            && self.g.blocks[prev].succs.first().copied() == Some(b.start_dw))
+            || self.has_two_released_retry_edges(i, taken_idx);
         // … unless the body is one the compiler marked as a loop body anyway. A `SUSPEND` stands
         // at the head of every loop body and nowhere else behind a test. Where every path through
         // the body leaves the function, the back edge was dead and the compiler dropped it: the
@@ -13239,6 +13277,56 @@ mod tests {
             let refs = RefResolver::from_test_member_chain(&[(owner, field)]);
             assert_eq!(float_field_type(&refs, 1, field), None);
         }
+    }
+
+    #[test]
+    fn released_retry_leaves_repeat_the_task_before_testing_again() {
+        let mut a = TestAssembler::default();
+        a.label("head"); a.op("SetV1", &[1], &[1]);
+        a.op("CpyVtoR1", &[1], &[]); a.jump("JLowZ", "exit");
+        a.label("body"); a.op("SUSPEND", &[], &[]);
+        a.op("CALLSYS", &[], &[]); a.op("STOREOBJ", &[14], &[]);
+        a.op("PSF", &[22], &[]); a.op("CALLSYS", &[], &[]);
+        a.op("RDR1", &[25], &[]); a.op("CpyVtoV4", &[24,25], &[]);
+        a.op("PSF", &[22], &[]); a.op("CALLSYS", &[], &[]);
+        a.op("LoadRObjR", &[14], &[0,1]); a.op("RDR1", &[1], &[]);
+        a.op("CpyVtoR1", &[1], &[]); a.jump("JLowZ", "check");
+        a.label("retry_one_clear"); a.op("FreeNullV8", &[14], &[]);
+        a.label("retry_one"); a.jump("JMP", "head");
+        a.label("check"); a.op("sbTOi", &[26,24], &[]);
+        a.op("CMPIi", &[26], &[0]); a.jump("JZ", "break_clear");
+        a.label("retry_two_clear"); a.op("FreeNullV8", &[14], &[]);
+        a.label("retry_two"); a.jump("JMP", "head");
+        a.label("break_clear"); a.op("FreeNullV8", &[14], &[]);
+        a.label("break"); a.jump("JMP", "exit");
+        a.label("exit"); a.op("RET", &[0], &[]);
+        let fixture = a.finish();
+        let refs = RefResolver::default();
+        let render = |f: &CompoundFixture, ret| render_fixture_range_with_return(f,None,&refs,"int",None,ret);
+        let out = render(&fixture,0x52);
+        assert!(out.starts_with("while (true)\n"), "{out}");
+        assert_eq!(out.matches("continue;").count(),2,"{out}");
+        assert_eq!(out.matches("break;").count(),1,"{out}");
+        assert_eq!(out.matches("while (").count(),1,"{out}");
+        // Every cleanup and both predicates belong to the same iteration.
+        for (label,op,words,dwords) in [
+            ("head","SetV1",vec![1],vec![0]),
+            ("body","CpyVtoR1",vec![1],vec![]),
+            ("check","sbTOi",vec![26,23],vec![]),
+            ("retry_one_clear","FreeNullV8",vec![16],vec![]),
+            ("retry_two_clear","FreeNullV8",vec![16],vec![]),
+            ("break_clear","FreeNullV8",vec![16],vec![]),
+        ] {
+            let mut bad = fixture.clone();
+            replace_same_width(&mut bad,label,op,&words,&dwords);
+            let out = render(&bad,0x52);
+            assert!(!out.starts_with("while (true)\n"),"accepted {label}: {out}");
+        }
+        for (label,target) in [("retry_one","check"),("retry_two","exit")] {
+            let mut bad = fixture.clone(); retarget(&mut bad,label,target);
+            assert!(!render(&bad,0x52).starts_with("while (true)\n"),"accepted {label}");
+        }
+        assert!(!render(&fixture,0x44).starts_with("while (true)\n"));
     }
 
     #[test]

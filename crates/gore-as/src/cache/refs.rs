@@ -3547,6 +3547,29 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_scoped_or_result(fault: u8) -> Self {
+        let mut r=Self::default();
+        for (id,name) in [(2,"FGameplayTag"),(3,"ACharacterState")] { r.type_identity_by_ptr.insert(id,TypeIdentity {name:name.into(),module:String::new(),namespace:String::new()}); }
+        r.global_by_ptr.insert(9,"Right".into());r.global_ns.insert(9,"GameplayTag".into());
+        r.funcid_to_ptr.insert(10,10);r.func_by_ptr.insert(10,"GetActor".into());r.func_is_method.insert(10);
+        r.func_ret.insert(10,DataType {token:5,type_info:3,is_object_handle:true,..Default::default()});r.func_params.insert(10,vec![]);
+        r.func_by_ptr.insert(11,"HasTag".into());r.func_owner.insert(11,"ACharacterState".into());r.func_is_method.insert(11);r.const_method_ptrs.insert(11);
+        r.func_ret.insert(11,DataType {token:0x41,..Default::default()});
+        r.func_params.insert(11,vec![DataType {token:5,type_info:2,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()}]);
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&2).unwrap().module="Script".into(),
+            2=>r.func_ret.get_mut(&11).unwrap().token=0x44,
+            3=>r.func_ret.get_mut(&10).unwrap().is_reference=true,
+            4=>{r.const_method_ptrs.remove(&11);}
+            5=>{r.global_ns.insert(9,"Other".into());}
+            6=>r.func_params.get_mut(&11).unwrap()[0].is_read_only=false,
+            7=>{r.func_owner.insert(11,"AOther".into());}
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_native_bool_branch(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("UBase", "Flag"), ("USpecial", "")]);
         for (id, name) in [(1, "UBase"), (2, "USpecial")] {

@@ -3226,6 +3226,8 @@ fn emit_function_ctor(
         pass_trace("unwrap_fstring_literal_declarations", &rendered);
         let rendered = discard_unused_fstring_argument_predecessors(&rendered, f, refs);
         pass_trace("discard_unused_fstring_argument_predecessors", &rendered);
+        let rendered = fold_scoped_or_result(&rendered, f, refs);
+        pass_trace("fold_scoped_or_result", &rendered);
         s.truncate(declarations_at);
         s.push_str(&rendered);
     } else {
@@ -11028,6 +11030,69 @@ fn extract_member_initializers_with_native_prefix(
 ///
 /// Either way only a slot read exactly once, on that very line: a second reader would have to
 /// evaluate the expression again.
+/// An OR result reuses its right-hand predicate register. A same-named local in
+/// another lexical block must not turn this temporary into a named bool copy.
+fn fold_scoped_or_result(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if f.ret.token != 0x52 || !f.params.is_empty() { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let mut sites = HashSet::new();
+    for (at,c) in code.windows(22).enumerate() {
+        let witness = (|| {
+            if c.iter().map(|i|i.op.name).ne(["CpyVtoR1","JLowZ","SetV1","JMP","PshVPtr","CALLINTF","STOREOBJ","CmpPtrNull","JNZ","SetV4","JMP",
+                "PshGPtr","PshVPtr","CALLINTF","STOREOBJ","PshVPtr","CALLSYS","CpyRtoV4","CpyVtoV4","CpyVtoV4","CpyVtoR1","JLowZ"]) { return None; }
+            let w=|n:usize,o:usize| c[n].words.get(o).map(|v|*v as i16 as i32);
+            let jump=|i:&Instr| i.dwords.first().map(|d|i.offset_dw as i64+2+*d as i32 as i64);
+            let (left,result,inner,handle)=(w(0,0)?,w(2,0)?,w(9,0)?,w(6,0)?);
+            if [left,result,inner,handle].iter().any(|s|*s<=0) || HashSet::from([left,result,inner,handle]).len()!=4
+                || [left,result,inner].iter().any(|s|f.obj_locals.iter().any(|(o,_)|o==s))
+                || c[2].dwords.first()!=Some(&1) || c[9].dwords.first()!=Some(&0)
+                || [(4,0,0),(7,0,handle),(12,0,0),(14,0,handle),(15,0,handle),(17,0,result),(18,0,inner),(18,1,result),(19,0,result),(19,1,inner),(20,0,result)]
+                    .iter().any(|(n,o,v)|w(*n,*o)!=Some(*v)) || c[5].dwords!=c[13].dwords { return None; }
+            for (from,to) in [(1,4),(3,20),(8,11),(10,19)] { if jump(&c[from])!=Some(c[to].offset_dw as i64) { return None; } }
+            let end=jump(&c[21])?;
+            if end<=c[21].offset_dw as i64 || !code.iter().any(|i|i.offset_dw as i64==end)
+                || code.iter().enumerate().any(|(n,i)|i.op.name=="JMPP" || i.op.name.starts_with('J') && ![at+1,at+3,at+8,at+10].contains(&n)
+                    && jump(i).is_some_and(|t|t>c[0].offset_dw as i64 && t<=c[21].offset_dw as i64)) { return None; }
+            let getter=*c[5].dwords.first()? as i32; let ret=refs.func_ret_by_id(getter)?;
+            if !refs.is_method_by_id(getter) || !refs.func_params_by_id(getter)?.is_empty() || ret.token!=5 || !ret.is_object_handle || ret.is_reference
+                || f.obj_locals.iter().filter(|(s,_)|*s==handle).map(|(_,p)|*p).ne([ret.type_info]) { return None; }
+            let actor=refs.type_identity_by_ptr(ret.type_info)?;
+            if !actor.module.is_empty() || !actor.namespace.is_empty() || !is_object_handle_type(&actor.name) { return None; }
+            let predicate=*c[16].qwords.first()? as i64; let boolean=refs.func_ret_by_ptr(predicate)?;
+            let [tag]=refs.func_params_by_ptr(predicate)? else { return None; };
+            let tag_type=refs.type_identity_by_ptr(tag.type_info)?;
+            if !refs.is_method_by_ptr(predicate) || !refs.is_const_method_by_ptr(predicate)
+                || refs.func_owner_by_ptr(predicate)!=Some(actor.name.as_str())
+                || boolean.token!=0x41 || boolean.is_reference || boolean.is_object_handle
+                || tag.token!=5 || !tag.is_reference || !tag.is_object_const || !tag.is_read_only || tag.is_object_handle
+                || tag_type.name!="FGameplayTag" || !tag_type.module.is_empty() || !tag_type.namespace.is_empty() { return None; }
+            let global=*c[11].qwords.first()? as i64;
+            if refs.global_by_ptr(global).is_none() || refs.global_ns(global)!=Some("GameplayTag") || refs.global_is_string(global) { return None; }
+            Some((result,refs.func_by_id(getter)?.to_owned(),refs.func_by_ptr(predicate)?.to_owned()))
+        })();
+        if let Some(site)=witness { sites.insert(site); }
+    }
+    if sites.is_empty() { return body.to_owned(); }
+    let lines:Vec<_>=body.lines().collect(); let mut out:Vec<_>=lines.iter().map(|s|s.to_string()).collect();
+    for (slot,getter,predicate) in sites {
+        let name=format!("local_{slot}"); let bare=format!("bool {name};");
+        for at in 0..lines.len().saturating_sub(1) {
+            let Some(value)=assignment_rhs_for(lines[at],&name) else { continue; };
+            if top_level_logical_operator(value)!=Some("||") || lines[at+1].trim()!=format!("if ({name})") { continue; }
+            let calls=call_sites(&format!("{value};"));
+            if calls.len()!=6 || calls.iter().filter(|(n,_)|n==&getter).count()!=4 || calls.iter().filter(|(n,_)|n==&predicate).count()!=2 { continue; }
+            let (start,end)=block_span(&lines,at);
+            if lines.get(start).map(|s|s.trim())!=Some("{") || lines.get(end).map(|s|s.trim())!=Some("}")
+                || lines[start+1..end].iter().map(|l|count_ident(l,&name)).sum::<usize>()!=3 { continue; }
+            let declarations:Vec<_>=(start+1..at).filter(|i|lines[*i].trim()==bare && indent_of(lines[*i])==indent_of(lines[at])).collect();
+            if declarations.len()!=1 { continue; }
+            out[declarations[0]].clear(); out[at].clear(); out[at+1]=format!("{}if ({value})",indent_of(lines[at+1]));
+        }
+    }
+    let mut result=out.into_iter().enumerate().filter(|(i,l)|!l.is_empty() || lines[*i].is_empty()).map(|(_,l)|l).collect::<Vec<_>>().join("\n");
+    if body.ends_with('\n') { result.push('\n'); } result
+}
+
 fn fold_condition_temporaries(
     body: &str,
     locals: &BTreeMap<i32, String>,
@@ -36936,6 +37001,35 @@ mod literal_value_lifetime_tests {
         assert!(super::ordered_navigation_vectors(&extra,&refs).0.is_empty());
         let mut entry=f.clone();let mut jump=function(&[("JMP",&[])]).bytecode;jump[1]=code[16].offset_dw as i32;jump.extend(entry.bytecode);entry.bytecode=jump;
         assert!(super::ordered_navigation_vectors(&entry,&refs).0.is_empty());
+    }
+
+    #[test]
+    fn a_temporary_or_result_ignores_names_in_other_blocks() {
+        let mut f=function(&[("CpyVtoR1",&[13]),("JLowZ",&[]),("SetV1",&[24]),("JMP",&[]),("PshVPtr",&[0]),("CALLINTF",&[]),
+            ("STOREOBJ",&[6]),("CmpPtrNull",&[6]),("JNZ",&[]),("SetV4",&[23]),("JMP",&[]),("PshGPtr",&[]),("PshVPtr",&[0]),
+            ("CALLINTF",&[]),("STOREOBJ",&[6]),("PshVPtr",&[6]),("CALLSYS",&[]),("CpyRtoV4",&[24]),("CpyVtoV4",&[23,24]),
+            ("CpyVtoV4",&[24,23]),("CpyVtoR1",&[24]),("JLowZ",&[]),("RET",&[2])]);
+        f.ret.token=0x52;f.obj_locals=vec![(6,3)];let code=disassemble(&f.bytecode).unwrap();
+        for (at,ptr) in [(2,1),(5,10),(11,9),(13,10),(16,11)] {f.bytecode[code[at].offset_dw+1]=ptr;}
+        for (from,to) in [(1,4),(3,20),(8,11),(10,19),(21,22)] {f.bytecode[code[from].offset_dw+1]=code[to].offset_dw as i32-code[from].offset_dw as i32-2;}
+        let expr="(this.GetActor() != nullptr && this.GetActor().HasTag(GameplayTag::Left)) || (this.GetActor() != nullptr && this.GetActor().HasTag(GameplayTag::Right))";
+        let body=format!("if (ready)\n{{\n    bool local_24;\n    Debug();\n    local_24 = {expr};\n    if (local_24)\n    {{\n        Use();\n    }}\n}}\nelse\n{{\n    bool local_24;\n    Other();\n}}\n");
+        let expected=body.replacen("    bool local_24;\n","",1).replace(&format!("    local_24 = {expr};\n    if (local_24)"),&format!("    if ({expr})"));
+        let refs=RefResolver::from_test_scoped_or_result(0);
+        assert_eq!(super::fold_scoped_or_result(&body,&f,&refs),expected);
+        assert!(expected.contains("else\n{\n    bool local_24;"));
+        for fault in 1..=7 {assert_eq!(super::fold_scoped_or_result(&body,&f,&RefResolver::from_test_scoped_or_result(fault)),body,"metadata {fault}");}
+        for at in [4,7,9,12,14,15,17,18,19,20] {
+            let mut bad=f.clone();bad.bytecode[code[at].offset_dw]^=1<<16;
+            assert_eq!(super::fold_scoped_or_result(&body,&bad,&refs),body,"operand {at}");
+        }
+        let mut entry=f.clone();let mut j=function(&[("JMP",&[])]).bytecode;j[1]=code[16].offset_dw as i32;j.extend(entry.bytecode);entry.bytecode=j;
+        assert_eq!(super::fold_scoped_or_result(&body,&entry,&refs),body);
+        let mut duplicate=f.clone();duplicate.obj_locals.push((6,3));assert_eq!(super::fold_scoped_or_result(&body,&duplicate,&refs),body);
+        for changed in [body.replace("        Use();","        Use(local_24);"),body.replacen("    bool local_24;\n","",1),
+            body.replace("HasTag(GameplayTag::Right)","OtherTest(GameplayTag::Right)"),body.replace(" || "," && ")] {
+            assert_eq!(super::fold_scoped_or_result(&changed,&f,&refs),changed);
+        }
     }
 
     #[test]
