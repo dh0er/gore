@@ -12818,6 +12818,38 @@ mod tests {
         }
     }
     #[test]
+    fn native_actor_factory_keeps_the_name_and_default_tail_in_its_own_frame() {
+        let mut refs = RefResolver::from_test_native_actor_factory(0);
+        let render = |refs: &RefResolver, force_short: bool| {
+            let mut stack = vec![Arg::obj("Outside".into()), Arg::obj("nullptr".into()),
+                Arg::typed("false".into(),Some("bool".into())),
+                Arg::psf("FName(\"NamedActor\")".into(),Some("FName".into())),
+                Arg::typed("FRotator::ZeroRotator".into(),Some("FRotator".into())),
+                Arg::psf("Position".into(),Some("FVector".into())),
+                Arg::psf("Class".into(),Some("TSubclassOf<AActor>".into()))];
+            let arity = if force_short { Some(3) } else { refs.native_arity_by_ptr(10,"MakeActor") };
+            let params = refs.func_params_by_ptr(10);
+            let call = build_call(&mut stack,"MakeActor",false,None,params,arity,
+                arity.or_else(|| params.map(|p|p.len())),None,None,false,Some("AActor"),false,false,refs).unwrap();
+            (call,stack)
+        };
+        assert_eq!(refs.native_arity_by_ptr(10,"MakeActor"),None);
+        let (full,remaining) = render(&refs,false);
+        assert_eq!(full,"MakeActor(Class, Position, FRotator::ZeroRotator, FName(\"NamedActor\"), false, nullptr)");
+        assert_eq!(remaining.len(),1); assert_eq!(remaining[0].s,"Outside");
+        let (short,orphaned) = render(&refs,true);
+        assert_eq!(short,"MakeActor(Class, Position, FRotator::ZeroRotator)");
+        assert_eq!(orphaned.len(),4); // Name, bool and level were incorrectly left outside.
+        // Defaults may disappear only when declared: the explicit nondefault name stays.
+        refs.set_param_defaults(HashMap::from([((String::new(),"MakeActor".into()),
+            vec![String::new(),String::new(),String::new(),"NAME_None".into(),"false".into(),"nullptr".into()])]));
+        assert_eq!(render(&refs,false).0,"MakeActor(Class, Position, FRotator::ZeroRotator, FName(\"NamedActor\"))");
+        for fault in 1..=20 {
+            let bad=RefResolver::from_test_native_actor_factory(fault);
+            assert_eq!(bad.native_arity_by_ptr(10,"MakeActor"),Some(3),"metadata fault {fault}");
+        }
+    }
+    #[test]
     fn default_argument_keeps_its_declaration_before_another_value_constructor() {
         let make = |late: bool, extra: bool| {
             let mut a = TestAssembler::default();

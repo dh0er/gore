@@ -1078,8 +1078,8 @@ fn emit_function_ctor(
             let w = |ins: &super::disasm::Instr, i: usize| ins.words.get(i).map(|w| *w as i16 as i32);
             // Every slot's opcode profile must be enum-compatible: a slot that is also used in
             // arithmetic, as an address or through a float op is an int the source declared.
-            let profile_ok = |slot: i32| {
-                instrs.iter().all(|ins| {
+            let profile_ok = |slot: i32, ty: &str| {
+                instrs.iter().enumerate().all(|(at, ins)| {
                     ins.words.iter().enumerate().all(|(wi, &word)| {
                         if word as i16 as i32 != slot {
                             return true;
@@ -1088,6 +1088,8 @@ fn emit_function_ctor(
                             "SetV1" | "SetV2" | "SetV4" | "CpyRtoV4" | "CpyVtoR4" | "PshV4" => wi == 0,
                             "CpyVtoV4" => wi < 2,
                             "sbTOi" | "swTOi" | "ubTOi" | "uwTOi" => wi == 1,
+                            "RDR1" => wi == 0 && native_enum_index_read_matches(&instrs, at, ty, refs),
+                            "ADDSi" => true, // Its word is a member byte offset, never a local slot.
                             "CMPIi" | "CMPi" => true,
                             _ => false,
                         }
@@ -1115,7 +1117,7 @@ fn emit_function_ctor(
                     }
                 }
                 let verdict = |slot: &i32| -> Option<&'static str> {
-                    if !profile_ok(*slot) {
+                    if !profile_ok(*slot, ty) {
                         return Some("profile");
                     }
                     if numkinds.contains_key(slot) {
@@ -2088,6 +2090,7 @@ fn emit_function_ctor(
     member_copy_named.extend(parameter_comparison_lives.keys().copied());
     let mut native_handle_reads = native_handle_read_types(f, refs);
     native_handle_reads.extend(cast_member_receiver_read_types(f, refs));
+    native_handle_reads.extend(native_enum_reference_field_read_types(f, refs));
     let early_receivers = early_member_receiver_copies(f, refs);
     let body = fold_member_read_temporaries(
         &body,
@@ -14400,9 +14403,139 @@ fn fold_unary_double_chain(body: &str, f: &Func, refs: &RefResolver) -> String {
     let body = fold_literal_product_call_chain(&body, &instrs, refs);
     let body = fold_retained_double_call_quotients(&body, f, refs);
     let body = fold_widened_final_product_operand(&body, f, refs, &instrs);
+    let body = fold_negated_narrow_call_argument(&body, f, refs, &instrs);
+    let body = fold_direct_enum_index_argument(&body, f, refs, &instrs);
     fold_double_product_before_bool_argument(&body, f, refs, &instrs)
 }
 
+/// An enum array reference read directly into a pushed argument has no named
+/// copy. Retyping another life must not turn this read into a declaration.
+fn fold_direct_enum_index_argument(body: &str, f: &Func, refs: &RefResolver, code: &[Instr]) -> String {
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    for (at, c) in code.windows(11).enumerate() {
+        let witness = (|| {
+            if c.iter().map(|i| i.op.name).ne(["PshVPtr", "PshV4", "PshVPtr", "ADDSi", "Thiscall1",
+                "RDR1", "PshV4", "PshV4", "PSF", "PshVPtr", "CALLINTF"]) { return None; }
+            let w = |i: usize, n: usize| c[i].words.get(n).map(|v| *v as i16 as i32);
+            let (slot, index) = (w(5, 0)?, w(1, 0)?);
+            if slot <= 0 || index <= 0 || slot == index || w(6, 0) != Some(slot)
+                || w(2, 0) != Some(0) || w(9, 0) != Some(0) { return None; }
+            let getter = *c[4].qwords.first()? as i64;
+            let ty = refs.func_ret_by_ptr(getter)?.base_name(refs);
+            if !native_enum_index_read_matches(code, at + 5, &ty, refs) { return None; }
+            let id = *c[3].dwords.first()? as i32;
+            let owner = refs.type_identity_by_id(id)?;
+            let (field, old) = refs.member_identity(id, w(3, 0)?)?;
+            if owner.module.is_empty() || refs.type_identity_by_id(old) != Some(owner)
+                || refs.own_field_type_by_class(&owner.name, field)? != format!("TArray<{ty}>") { return None; }
+            let consumer = *c[10].dwords.first()? as i32;
+            let [first, second, state] = refs.func_params_by_id(consumer)? else { return None; };
+            let ret = refs.func_ret_by_id(consumer)?;
+            if !refs.is_method_by_id(consumer) || refs.func_owner_by_id(consumer) != Some(owner.name.as_str())
+                || !is_enum(&first.base_name(refs)) || first.is_reference || first.is_object_handle
+                || second.base_name(refs) != ty || second.is_reference || second.is_object_handle
+                || !state.is_reference || state.is_object_handle || !is_value_struct_type(&state.base_name(refs))
+                || ret.token != 5 || ret.is_reference || ret.is_object_handle || !is_value_struct_type(&ret.base_name(refs))
+                || f.obj_locals.iter().filter(|(s, _)| Some(*s) == w(8, 0)).map(|(_, p)| *p).collect::<Vec<_>>() != [ret.type_info]
+            { return None; }
+            if code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                target > c[0].offset_dw as i64 && target <= c[10].offset_dw as i64
+            }))) { return None; }
+            Some((slot, index, field.to_owned(), ty, refs.func_by_id(consumer)?.to_owned()))
+        })();
+        let Some((slot, index, field, ty, consumer)) = witness else { continue; };
+        let name = format!("local_{slot}");
+        let rhs = format!("this.{field}[local_{index}]");
+        let wrapped = format!("{ty}({name})");
+        if count_ident(body, &name) != 2 { continue; }
+        for line in 0..lines.len().saturating_sub(1) {
+            if lines[line].trim() != format!("{ty} {name} = {rhs};")
+                || indent_of(&lines[line]) != indent_of(&lines[line + 1])
+                || !lines[line + 1].trim().ends_with(';')
+                || !lines[line + 1].contains(&format!("this.{consumer}("))
+                || !call_sites(&lines[line + 1]).iter().any(|(callee, args)|
+                    callee == &consumer && args.len() == 3 && args[1] == wrapped)
+                || lines[line + 1].matches(&wrapped).count() != 1 { continue; }
+            lines[line + 1] = lines[line + 1].replace(&wrapped, &rhs);
+            lines.remove(line);
+            break;
+        }
+    }
+    let mut out = lines.join("\n"); if body.ends_with('\n') { out.push('\n'); } out
+}
+
+/// A negated double getter is narrowed as the first native call argument,
+/// after the other arguments have already been pushed.
+fn fold_negated_narrow_call_argument(body: &str, f: &Func, refs: &RefResolver, code: &[Instr]) -> String {
+    let scalar = |t: &super::types::DataType, token| t.token == token && t.type_info == 0
+        && !t.is_reference && !t.is_object_handle && !t.is_object_const && !t.is_read_only;
+    let mut sites = Vec::new();
+    for (at, c) in code.windows(11).enumerate() {
+        let witness = (|| {
+            if c.iter().map(|i| i.op.name).ne(["PshVPtr", "ADDSi", "PshC4", "PshVPtr", "CALLINTF",
+                "CpyRtoV8", "NEGd", "dTOf", "PshV4", "PshVPtr", "CALLSYS"]) { return None; }
+            let w = |i: usize,n: usize| c[i].words.get(n).map(|v| *v as i16 as i32);
+            let (wide,narrow) = (w(5,0)?,w(7,0)?);
+            if wide <= 0 || narrow <= 0 || wide == narrow || w(6,0) != Some(wide)
+                || w(7,1) != Some(wide) || w(8,0) != Some(narrow)
+                || [0,3,9].iter().any(|i| w(*i,0) != Some(0))
+                || f.obj_locals.iter().any(|(s,_)| *s == wide || *s == narrow) { return None; }
+            for (slot,uses) in [(wide,vec![at+5,at+6,at+7]),(narrow,vec![at+7,at+8])] {
+                if code.iter().enumerate().filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&slot))
+                    .map(|(n,_)| n).ne(uses) { return None; }
+            }
+            let owner_id = *c[1].dwords.first()? as i32;
+            let owner = refs.type_identity_by_id(owner_id)?;
+            let (field,old_owner) = refs.member_identity(owner_id,w(1,0)?)?;
+            let getter = *c[4].dwords.first()? as i32;
+            let consumer = *c[10].qwords.first()? as i64;
+            let [first,second,third] = refs.func_params_by_ptr(consumer)? else { return None; };
+            let consumer_owner = refs.func_owner_by_ptr(consumer)?;
+            if owner.module.is_empty() || refs.type_identity_by_id(old_owner) != Some(owner)
+                || !refs.own_field_type_by_class(&owner.name,field)?.starts_with("TSubclassOf<")
+                || !refs.is_method_by_id(getter) || refs.func_owner_by_id(getter) != Some(owner.name.as_str())
+                || !refs.func_params_by_id(getter)?.is_empty() || !scalar(refs.func_ret_by_id(getter)?,0x51)
+                || !refs.is_method_by_ptr(consumer) || !scalar(refs.func_ret_by_ptr(consumer)?,0x52)
+                || !scalar(first,0x50) || !scalar(second,0x50)
+                || !is_object_handle_type(consumer_owner) || !refs.func_ns_by_ptr(consumer).unwrap_or("").is_empty()
+                || third.token != 5 || third.is_reference || third.is_object_handle
+                || third.is_object_const || third.is_read_only { return None; }
+            let subclass = refs.type_identity_by_ptr(third.type_info)?;
+            if subclass.name != "TSubclassOf" || !subclass.module.is_empty() || !subclass.namespace.is_empty() { return None; }
+            let bits = *c[2].dwords.first()?;
+            if !f32::from_bits(bits).is_finite() || code.iter().any(|i| i.op.name == "JMPP"
+                || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                    let t=i.offset_dw as i64+2+*d as i32 as i64;
+                    t>c[0].offset_dw as i64 && t<=c[10].offset_dw as i64
+                }))) { return None; }
+            Some((wide,refs.func_by_id(getter)?.rsplit("::").next()?.to_owned(),
+                refs.func_by_ptr(consumer)?.to_owned(),field.to_owned(),bits))
+        })();
+        if let Some(site)=witness { sites.push(site); }
+    }
+    let mut lines: Vec<String>=body.lines().map(str::to_owned).collect();
+    for (slot,getter,consumer,field,bits) in sites {
+        let mut at=0;
+        while at+1<lines.len() {
+            let folded=(|| {
+                let (indent,name,value)=declaration_with_initializer(&lines[at])?;
+                if slot_and_life(&name)? != (slot,1) || count_ident(body,&name)!=2
+                    || body.contains(&format!("{name}_"))
+                    || !declared_type(&lines,&name).is_some_and(|t| t=="float" || t=="double")
+                    || value != format!("-this.{getter}()") || indent_of(&lines[at+1])!=indent { return None; }
+                let statement=lines[at+1].trim();
+                let (_,args)=call_arguments(statement)?;
+                if !statement.starts_with(&format!("this.{consumer}(")) || args.len()!=3
+                    || args[0]!=format!("float32({name})") || args[2]!=format!("this.{field}")
+                    || args[1].strip_suffix('f')?.parse::<f32>().ok()?.to_bits()!=bits { return None; }
+                Some(format!("{indent}this.{consumer}(float32({value}), {}, this.{field});",args[1]))
+            })();
+            if let Some(line)=folded { lines.splice(at..at+2,[line]); } else { at+=1; }
+        }
+    }
+    let mut out=lines.join("\n"); if body.ends_with('\n') { out.push('\n'); } out
+}
 /// The last conditional factor widens in place, then its slot becomes the return.
 /// Fold only this adjacent typed initializer; an earlier call on the slot stays named.
 fn fold_widened_final_product_operand(body: &str, f: &Func, refs: &RefResolver, code: &[Instr]) -> String {
@@ -20820,6 +20953,36 @@ fn cast_member_receiver_read_types(f: &Func, refs: &RefResolver) -> HashMap<(i32
         Some(((source, format!("this.{field}")), ty.to_owned()))
     }).collect()
 }
+/// A native reference element's enum field carries its own resolved type even
+/// when the loop element has no entry in the textual local-type map.
+fn native_enum_reference_field_read_types(f: &Func, refs: &RefResolver) -> HashMap<(i32, String), String> {
+    let Ok(code) = disassemble(&f.bytecode) else { return HashMap::new(); };
+    let ret = &f.ret;
+    if ret.token != 5 || ret.is_reference || ret.is_object_handle || !is_enum(&ret.base_name(refs)) {
+        return HashMap::new();
+    }
+    if refs.type_identity_by_ptr(ret.type_info)
+        .is_none_or(|ty| !ty.module.is_empty() || !ty.namespace.is_empty()) { return HashMap::new(); }
+    let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+    code.windows(2).filter_map(|c| {
+        if c[0].op.name != "LoadRObjR" || c[1].op.name != "RDR1" { return None; }
+        let (receiver, slot) = (w(&c[0], 0)?, w(&c[1], 0)?);
+        if receiver <= 0 || slot <= 0 || receiver == slot
+            || f.obj_locals.iter().any(|(s, _)| *s == slot) { return None; }
+        let id = *c[0].dwords.first()? as i32;
+        // A reused reference slot with another owner cannot lend this path its type.
+        if code.iter().any(|i| i.op.name == "LoadRObjR" && w(i, 0) == Some(receiver)
+            && i.dwords.first().copied() != Some(id as u32)) { return None; }
+        let owner = refs.type_identity_by_id(id)?;
+        let (field, old) = refs.member_identity(id, w(&c[0], 1)?)?;
+        if !owner.module.is_empty() || !owner.namespace.is_empty()
+            || !is_value_struct_type(&owner.name) || refs.type_identity_by_id(old)? != owner { return None; }
+        let ty = refs.native_field_value_type(&owner.name, field)?;
+        if ty != ret.base_name(refs) { return None; }
+        Some(((slot, format!("local_{receiver}.{field}")), ty.to_owned()))
+    }).collect()
+}
+
 /// Exact native this-field handle reads used immediately by a pointer comparison.
 /// Other lives may use the slot, but never inherit a different field's type witness.
 fn native_handle_read_types(f: &Func, refs: &RefResolver) -> HashMap<(i32, String), String> {
@@ -25847,6 +26010,27 @@ fn prepared_enum_argument_sites(f: &Func, refs: &RefResolver) -> HashMap<i32,(St
     }
     out
 }
+/// A byte loaded immediately from a typed native array index keeps its enum
+/// type. Other RDR1 sources cannot relax the enum copy-class opcode profile.
+fn native_enum_index_read_matches(code: &[Instr], at: usize, ty: &str, refs: &RefResolver) -> bool {
+    let witness = (|| {
+        let index = code.get(at.checked_sub(1)?)?;
+        if code.get(at)?.op.name != "RDR1" || index.op.name != "Thiscall1" { return None; }
+        let ptr = *index.qwords.first()? as i64;
+        let ret = refs.func_ret_by_ptr(ptr)?;
+        let owner = refs.type_identity_by_ptr(ret.type_info)?;
+        if refs.func_by_ptr(ptr) != Some("opIndex") || refs.func_owner_by_ptr(ptr) != Some("TArray")
+            || !refs.is_method_by_ptr(ptr) || ret.token != 5 || !ret.is_reference || ret.is_object_handle
+            || ret.is_auto || ret.if_handle_then_const || !owner.module.is_empty() || !owner.namespace.is_empty()
+            || !is_enum(&owner.name) || ret.base_name(refs) != ty { return None; }
+        let [param] = refs.func_params_by_ptr(ptr)? else { return None; };
+        if param.token != 0x44 || param.type_info != 0 || param.is_reference || param.is_object_handle
+            || param.is_auto || param.if_handle_then_const { return None; }
+        Some(())
+    })();
+    witness.is_some()
+}
+
 fn enum_argument_slots(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashMap::new();
@@ -25937,7 +26121,26 @@ fn enum_argument_slots(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
         let receiver = is_method && frame.first().is_some_and(|top| {
             matches!(instrs[*top].op.name, "PshVPtr" | "PSF")
         });
-        let args: Vec<usize> = frame.into_iter().skip(receiver as usize).collect();
+        let mut args: Vec<usize> = frame.into_iter().skip(receiver as usize).collect();
+        // A script member returning a value struct has an extra PSF directly
+        // below its receiver. Only the exact unique object-local type proves it
+        // is the hidden return destination rather than an ordinary argument.
+        if receiver && matches!(ins.op.name, "CALL" | "CALLINTF") && args.len() == params.len() + 1 {
+            let hidden = (|| {
+                let push = &instrs[*args.first()?];
+                if push.op.name != "PSF" { return None; }
+                let slot = w0(push).filter(|s| *s > 0)?;
+                let ret = refs.func_ret_by_id(*ins.dwords.first()? as i32)?;
+                if ret.token != 5 || ret.is_reference || ret.is_object_handle || ret.is_object_const
+                    || ret.is_read_only || ret.is_auto || ret.if_handle_then_const
+                    || !is_value_struct_type(&ret.base_name(refs)) { return None; }
+                let mut objects = f.obj_locals.iter().filter(|(s, _)| *s == slot);
+                if objects.next()?.1 != ret.type_info || objects.next().is_some()
+                    || refs.type_identity_by_ptr(ret.type_info).is_none() { return None; }
+                Some(())
+            })();
+            if hidden.is_some() { args.remove(0); }
+        }
         if args.len() != params.len() {
             continue;
         }
@@ -34284,6 +34487,98 @@ mod literal_value_lifetime_tests {
     use super::super::*;
 
     #[test]
+    fn native_enum_reference_field_types_reach_repeated_member_folds() {
+        let mut f = function(&[("LoadRObjR", &[18, 8]), ("RDR1", &[2]), ("sbTOi", &[20, 2]),
+            ("LoadRObjR", &[18, 8]), ("RDR1", &[2]), ("sbTOi", &[20, 2]),
+            ("LoadRObjR", &[18, 8]), ("RDR1", &[2]), ("CpyVtoV4", &[1, 2]), ("RET", &[0])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        for at in [0, 3, 6] { f.bytecode[code[at].offset_dw + 2] = 2; }
+        f.ret = DataType { token: 5, type_info: 106, ..Default::default() };
+        let refs = RefResolver::from_test_const_native_field_enum_loop(0);
+        let proof = native_enum_reference_field_read_types(&f, &refs);
+        assert_eq!(proof, HashMap::from([((2, "local_18.Disposition".into()), "EDisposition".into())]));
+        let body = "    for (auto& local_18 : Items)\n    {\n        local_2 = local_18.Disposition;\n        if (int(local_2) == 2)\n        {\n            local_1 = EDisposition(2);\n            continue;\n        }\n        local_2 = local_18.Disposition;\n        if (int(local_2) == 8)\n        {\n            local_1 = EDisposition(8);\n            continue;\n        }\n        local_1 = local_18.Disposition;\n    }\n";
+        let locals = BTreeMap::from([(1, "EDisposition".into()), (2, "EDisposition".into())]);
+        let fold = |body: &str, evidence: &HashMap<(i32, String), String>| fold_member_read_temporaries(body,
+            &HashSet::new(), &HashSet::new(), &locals, None, &HashMap::new(), &refs,
+            &member_read_slots(&f), false, &member_copy_named_slots(&f, &refs, true), &HashSet::new(), evidence);
+        assert_eq!(fold(body, &HashMap::new()), body, "exercise the unresolved-type refusal");
+        let result = fold(body, &proof);
+        assert!(!result.contains("local_2"), "{result}");
+        assert!(result.contains("if (int(local_18.Disposition) == 2)"));
+        assert!(result.contains("if (int(local_18.Disposition) == 8)"));
+        assert!(result.contains("local_1 = local_18.Disposition;"));
+        let declared = body.replacen("local_2 =", "EDisposition local_2 =", 1);
+        assert_eq!(drop_unused_declarations(&fold(&declared, &proof), &HashSet::new(), &HashSet::new()), result, "late declaration-bearing fold and cleanup");
+        let other = body.replace("local_18.Disposition", "local_18.Other");
+        assert_eq!(fold(&other, &proof), other, "another field cannot borrow the proof");
+        let read_twice = body.replacen("        if (int(local_2) == 2)",
+            "        Use(local_2);\n        if (int(local_2) == 2)", 1);
+        assert!(fold(&read_twice, &proof).contains("local_2 = local_18.Disposition;"));
+        for fault in [11, 12, 13, 14, 20] {
+            assert!(native_enum_reference_field_read_types(&f,
+                &RefResolver::from_test_const_native_field_enum_loop(fault)).is_empty(), "metadata {fault}");
+        }
+        let mut other_return = f.clone(); other_return.ret.type_info = 101;
+        assert!(native_enum_reference_field_read_types(&other_return, &refs).is_empty());
+        let mut object_slot = f.clone(); object_slot.obj_locals.push((2, 106));
+        assert!(native_enum_reference_field_read_types(&object_slot, &refs).is_empty());
+    }
+
+    #[test]
+    fn hidden_struct_return_enum_arguments_preserve_getter_and_index_copy_types_in_emitter() {
+        let mut f = function(&[("PshVPtr", &[0]), ("CALLSYS", &[]), ("CpyRtoV4", &[1]),
+            ("PshC4", &[]), ("PshVPtr", &[65534]), ("Thiscall1", &[]), ("RDR1", &[12]),
+            ("CpyVtoV4", &[11, 12]), ("PshVPtr", &[65532]), ("PshV4", &[11]),
+            ("PshV4", &[1]), ("PSF", &[16]), ("PshVPtr", &[0]), ("CALLINTF", &[]),
+            ("PSF", &[16]), ("CALLSYS", &[]), ("PshVPtr", &[65532]),
+            ("PshV4", &[11]), ("PshV4", &[1]), ("PSF", &[16]), ("PshVPtr", &[0]),
+            ("CALLINTF", &[]), ("PSF", &[16]), ("CALLSYS", &[]), ("RET", &[6])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, ptr) in [(1, 10), (5, 20), (13, 30), (15, 40), (21, 30), (23, 40)] {
+            f.bytecode[code[at].offset_dw + 1] = ptr;
+        }
+        f.ret = DataType { token: 0x52, ..Default::default() };
+        f.params = vec![crate::cache::model::Param { name: "Choices".into(), flags: 0,
+            ty: DataType { token: 5, type_info: 5, is_reference: true, ..Default::default() } },
+            crate::cache::model::Param { name: "State".into(), flags: 0,
+                ty: DataType { token: 5, type_info: 3, is_reference: true, ..Default::default() } }];
+        f.obj_locals = vec![(16, 4)];
+        let code = disassemble(&f.bytecode).unwrap();
+        let refs = RefResolver::from_test_hidden_return_enum_arguments(0);
+        let seeds = enum_argument_slots(&f, &refs);
+        assert_eq!(seeds, HashMap::from([(1, "EFirst".into()), (11, "ESecond".into())]));
+        assert!(native_enum_index_read_matches(&code, 6, "ESecond", &refs));
+        let mut rendered = String::new(); emit_function(&mut rendered, &f, &refs, true, false, 0);
+        assert!(!rendered.contains("stub["), "{rendered}");
+        assert!(rendered.contains("EFirst local_1 = this.GetFirst();"), "{rendered}");
+        assert!(rendered.contains("ESecond local_11"), "{rendered}");
+        assert!(!rendered.contains("int(Choices"), "{rendered}");
+        assert!(!rendered.contains("int(this.GetFirst())"), "{rendered}");
+        for fault in 1..=5 {
+            assert!(enum_argument_slots(&f, &RefResolver::from_test_hidden_return_enum_arguments(fault)).is_empty(),
+                "hidden-return metadata {fault}");
+        }
+        for fault in 6..=11 {
+            assert!(!native_enum_index_read_matches(&code, 6, "ESecond",
+                &RefResolver::from_test_hidden_return_enum_arguments(fault)), "index metadata {fault}");
+        }
+        let mut duplicate = f.clone(); duplicate.obj_locals.push((16, 4));
+        assert!(enum_argument_slots(&duplicate, &refs).is_empty());
+        let mut wrong_local = f.clone(); wrong_local.obj_locals[0].1 = 3;
+        assert!(enum_argument_slots(&wrong_local, &refs).is_empty());
+        for offset in [11, 12] {
+            let mut field_offset = f.clone();
+            field_offset.bytecode.extend(function(&[("ADDSi", &[offset])]).bytecode);
+            let mut output = String::new(); emit_function(&mut output, &field_offset, &refs, true, false, 0);
+            assert!(output.contains("ESecond local_11"), "member offset is not a local: {output}");
+        }
+        let mut reused = f.clone(); reused.bytecode.extend(function(&[("ADDi", &[11, 11, 1])]).bytecode);
+        let mut output = String::new(); emit_function(&mut output, &reused, &refs, true, false, 0);
+        assert!(!output.contains("ESecond local_11"), "arithmetic reuse rejects the enum class: {output}");
+    }
+
+    #[test]
     fn getter_before_global_cast_stays_named_after_cast_diamond_folding() {
         let mut f = function(&[("PshVPtr", &[6]), ("CALLSYS", &[]), ("STOREOBJ", &[10]),
             ("PshGPtr", &[]), ("CmpPtrNull", &[10]), ("JZ", &[]), ("TYPEID", &[]),
@@ -35217,6 +35512,76 @@ mod literal_value_lifetime_tests {
         let c = disassemble(&f.bytecode).unwrap();
         for (at, value) in [(0, 50), (2, 10), (9, 30), (14, 40), (16, 20)] { f.bytecode[c[at].offset_dw + 1] = value; }
         f
+    }
+
+    #[test]
+    fn a_direct_enum_index_argument_does_not_gain_a_named_copy() {
+        let mut f = function(&[("PshVPtr", &[65531]), ("PshV4", &[9]), ("PshVPtr", &[0]), ("ADDSi", &[12]),
+            ("Thiscall1", &[]), ("RDR1", &[12]), ("PshV4", &[12]), ("PshV4", &[1]), ("PSF", &[16]),
+            ("PshVPtr", &[0]), ("CALLINTF", &[]), ("RET", &[6])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, value) in [(3, 1), (4, 20), (10, 30)] { f.bytecode[code[at].offset_dw + 1] = value; }
+        f.obj_locals = vec![(16, 4)];
+        let refs = RefResolver::from_test_direct_enum_index(0);
+        let body = "    ESecond local_12 = this.Choices[local_9];\n    Values.Add(this.Make(EFirst(local_1), ESecond(local_12), State));\n";
+        let expected = "    Values.Add(this.Make(EFirst(local_1), this.Choices[local_9], State));\n";
+        assert_eq!(super::fold_unary_double_chain(body, &f, &refs), expected);
+        for fault in 1..=11 {
+            assert_eq!(super::fold_unary_double_chain(body, &f, &RefResolver::from_test_direct_enum_index(fault)), body, "metadata {fault}");
+        }
+        for at in [1, 2, 5, 6, 8, 9] {
+            let mut bad = f.clone(); bad.bytecode[code[at].offset_dw] ^= 1 << 16;
+            assert_eq!(super::fold_unary_double_chain(body, &bad, &refs), body, "operand {at}");
+        }
+        let mut named = f.clone();
+        let at = code[6].offset_dw;
+        named.bytecode.splice(at..at, function(&[("CpyVtoV4", &[11, 12])]).bytecode);
+        assert_eq!(super::fold_unary_double_chain(body, &named, &refs), body);
+        let mut jump = f.clone(); let at = jump.bytecode.len();
+        jump.bytecode.extend(function(&[("JMP", &[])]).bytecode);
+        jump.bytecode[at + 1] = code[5].offset_dw as i32 - at as i32 - 2;
+        assert_eq!(super::fold_unary_double_chain(body, &jump, &refs), body);
+        for other in [body.replace("this.Choices", "this.Other"), body.replace("local_9", "local_8"),
+            body.replace("ESecond(local_12)", "EFirst(local_12)"), body.replace("this.Make", "this.Other"),
+            body.replace("local_12", "local_12_2"), format!("{body}    Observe(local_12);\n"),
+            body.replace("    Values.Add", "    SideEffect();\n    Values.Add")] {
+            assert_eq!(super::fold_unary_double_chain(&other, &f, &refs), other);
+        }
+    }
+
+    #[test]
+    fn negated_getter_stays_inside_the_narrowed_first_argument() {
+        let mut f=function(&[("PshVPtr",&[0]),("ADDSi",&[0]),("PshC4",&[]),("PshVPtr",&[0]),
+            ("CALLINTF",&[]),("CpyRtoV8",&[4]),("NEGd",&[4]),("dTOf",&[6,4]),
+            ("PshV4",&[6]),("PshVPtr",&[0]),("CALLSYS",&[]),("RET",&[2])]);
+        let c=disassemble(&f.bytecode).unwrap();
+        for (at,value) in [(1,1),(2,(-1.0f32).to_bits() as i32),(4,101),(10,202)] { f.bytecode[c[at].offset_dw+1]=value; }
+        let refs=RefResolver::from_test_negated_narrow_argument(0);
+        let body="    float local_4 = this.GetCost();\n    local_4 = -local_4;\n    this.Apply(float32(local_4), -1.0f, this.Limit);\n";
+        let merged=super::merge_self_assignments(body,&BTreeMap::from([(4,"float".into())]));
+        assert!(merged.contains("float local_4 = -this.GetCost();"),"{merged}");
+        let expected="    this.Apply(float32(-this.GetCost()), -1.0f, this.Limit);\n";
+        assert_eq!(super::fold_unary_double_chain(&merged,&f,&refs),expected);
+        for fault in 1..=14 {
+            assert_eq!(super::fold_unary_double_chain(&merged,&f,&RefResolver::from_test_negated_narrow_argument(fault)),merged,"metadata {fault}");
+        }
+        let rejects=|bad: &Func| assert_eq!(super::fold_unary_double_chain(&merged,bad,&refs),merged);
+        for at in [0,3,5,6,7,8,9] { let mut bad=f.clone(); bad.bytecode[c[at].offset_dw]^=1<<16; rejects(&bad); }
+        let mut bad=f.clone(); bad.bytecode[c[2].offset_dw+1]=f32::NAN.to_bits() as i32; rejects(&bad);
+        for slot in [4,6] {
+            let mut bad=f.clone();bad.bytecode.extend(function(&[("PSF",&[slot])]).bytecode);rejects(&bad);
+            let mut bad=f.clone();bad.obj_locals.push((slot as i32,1));rejects(&bad);
+        }
+        for target in 1..=10 {
+            let mut bad=f.clone();let at=bad.bytecode.len();bad.bytecode.extend(function(&[("JMP",&[])]).bytecode);
+            bad.bytecode[at+1]=c[target].offset_dw as i32-at as i32-2;rejects(&bad);
+        }
+        let mut bad=f.clone();bad.bytecode.extend(function(&[("JMPP",&[4])]).bytecode);rejects(&bad);
+        for other in [merged.replace("this.GetCost()","this.Other()"),merged.replace("this.Apply(","other.Apply("),
+            merged.replace("this.Limit","this.Other"),merged.replace("-1.0f","2.0f"),merged.replace("float32(local_4)","local_4"),
+            merged.replace("local_4","local_4_2"),format!("{merged}    Observe(local_4);\n")] {
+            assert_eq!(super::fold_unary_double_chain(&other,&f,&refs),other);
+        }
     }
 
     #[test]

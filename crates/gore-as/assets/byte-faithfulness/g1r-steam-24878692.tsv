@@ -12,7 +12,7 @@ AI.AssessmentResponseSystem.AssessmentBits	7	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	5	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingResponse	1	0	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	14	0	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	12	0	0
 AI.AssessmentResponseSystem.EventResponses	4	0	0
 AI.CharacterAI_Gothic	5	0	0
 AI.CharacterAI_Human	1	0	0
@@ -52,15 +52,13 @@ AI.States.FightAI.WatchFightState.AIGroup_WatchFight	1	0	0
 AI.States.FightAI.WatchFightState.AIState_WatchFight	13	0	0
 AI.States.Test.TestCharacters_Navigation	1	0	0
 Camera.ConversationCameraConfig	1	0	0
-Environment.GothicUltraDynamicControlerAS	2	0	0
+Environment.GothicUltraDynamicControlerAS	1	0	0
 GAS.Abilities.Combat.AttackLoop.Capsule.GA_AttackLoopCapsule	1	0	0
 GAS.Abilities.Combat.AttackLoop.Capsule.PyrolaserHitCapsuleComponent	1	0	0
 GAS.Abilities.Combat.AttackLoop.Cone.GA_AttackLoopCone	1	0	0
 GAS.Abilities.Locomotion.GA_Falling	1	0	0
-GAS.Abilities.Locomotion.GA_FallingRagdoll	1	0	0
 GAS.Abilities.Passive.GA_PlayerPerception_CrimeRegistration	1	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_Targetable	1	0	0
-GAS.Abilities.Spells.Spells.Fire.GA_Spell_Fireball	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_StormOfFire	1	0	0
 GAS.Abilities.Spells.Spells.Light.GA_Spell_Light	1	0	0
 GAS.Abilities.Spells.Spells.Summon.SpawnHelper.Base.SummonSpawnPlaceHelper	3	0	0

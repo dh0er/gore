@@ -854,6 +854,28 @@ impl RefResolver {
             }),
             None => {
                 let arity = n.arity_by_name(name)?;
+                // A global actor factory has a name/bool/level tail absent from
+                // an unrelated task method's three-argument Binds declaration.
+                // Its complete typed cache signature owns both frame and arity.
+                let actor_factory = (|| {
+                    if arity != 3 || self.is_method_by_ptr(ptr) || self.func_ns.contains_key(&ptr) { return None; }
+                    let [class, location, rotation, actor_name, deferred, level] = self.func_params.get(&ptr)?.as_slice() else { return None; };
+                    let plain = |t: &DataType| !t.is_reference && !t.is_object_const && !t.is_read_only
+                        && !t.is_auto && !t.if_handle_then_const;
+                    let native = |t: &DataType, name: &str| t.token == 5 && self.type_identity_by_ptr(t.type_info)
+                        .is_some_and(|i| i.name == name && i.module.is_empty() && i.namespace.is_empty());
+                    let ret = self.func_ret.get(&ptr)?;
+                    if !native(ret, "AActor") || !ret.is_object_handle || !plain(ret)
+                        || !native(level, "ULevel") || !level.is_object_handle || !plain(level)
+                        || deferred.token != 0x41 || deferred.type_info != 0 || deferred.is_object_handle || !plain(deferred)
+                        || [(class, "TSubclassOf"), (location, "FVector"), (rotation, "FRotator"), (actor_name, "FName")]
+                            .iter().any(|(t, name)| !native(t, name) || !t.is_reference || !t.is_object_const
+                                || !t.is_read_only || t.is_object_handle || t.is_auto || t.if_handle_then_const)
+                    { return None; }
+                    let [subtype] = self.type_subtypes(class.type_info)? else { return None; };
+                    (subtype.token == 5 && subtype.type_info == ret.type_info && subtype.is_object_handle && plain(subtype)).then_some(())
+                })();
+                if actor_factory.is_some() { return None; }
                 // Binds may omit this namespace entirely: its two-arg MagicScript::LogInfo
                 // must not truncate the three-arg VLog::LogInfo frame and orphan its FName.
                 if self.func_ns.contains_key(&ptr)
@@ -3035,6 +3057,34 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_negated_narrow_argument(fault: u8) -> Self {
+        let mut r=Self::from_test_copied_int_field_read("TSubclassOf<UEffect>",false);
+        r.type_by_ptr.insert(2,"TSubclassOf".into());
+        r.type_identity_by_ptr.insert(2,TypeIdentity { name:"TSubclassOf".into(),module:String::new(),namespace:String::new() });
+        r.funcid_to_ptr.insert(101,101);
+        for (ptr,name,token) in [(101,"GetCost",0x51),(202,"Apply",0x52)] {
+            r.func_by_ptr.insert(ptr,name.into()); r.func_owner.insert(ptr,"UConfig".into()); r.func_is_method.insert(ptr);
+            r.func_ret.insert(ptr,DataType { token,..Default::default() }); r.func_params.insert(ptr,Vec::new());
+        }
+        r.func_params.insert(202,vec![DataType { token:0x50,..Default::default() },DataType { token:0x50,..Default::default() },
+            DataType { token:5,type_info:2,..Default::default() }]);
+        if fault==1 { r.func_ret.get_mut(&101).unwrap().token=0x50; }
+        if fault==2 { r.func_ret.get_mut(&101).unwrap().is_reference=true; }
+        if fault==3 { r.func_params.get_mut(&101).unwrap().push(DataType::default()); }
+        if fault==4 { r.func_is_method.remove(&101); }
+        if fault==5 { r.func_owner.insert(101,"UOther".into()); }
+        if fault==6 { r.func_params.get_mut(&202).unwrap()[0].token=0x51; }
+        if fault==7 { r.func_params.get_mut(&202).unwrap()[1].is_reference=true; }
+        if fault==8 { r.func_params.get_mut(&202).unwrap()[2].is_object_handle=true; }
+        if fault==9 { r.type_identity_by_ptr.get_mut(&2).unwrap().module="Script".into(); }
+        if fault==10 { r.func_owner.insert(202,"FValue".into()); }
+        if fault==11 { r.func_ret.get_mut(&202).unwrap().token=0x41; }
+        if fault==12 { r.type_identity_by_ptr.get_mut(&1).unwrap().module.clear(); }
+        if fault==13 { r.prop_type_id.insert(3,2); }
+        if fault==14 { r.class_fields.get_mut("UConfig").unwrap().insert("Limit".into(),"TArray<UEffect>".into()); }
+        r
+    }
+    #[cfg(test)]
     pub(crate) fn from_test_copied_int_field_read(ty: &str, native: bool) -> Self {
         let mut r = Self::from_test_member_chain(&[("UConfig", "Limit")]);
         let owner = TypeIdentity { name: "UConfig".into(),
@@ -3408,6 +3458,62 @@ impl RefResolver {
         for (offset, name) in [(0i64, "Max"), (8, "Min")] {
             let key = (1 << 1) | (offset << 33) | 1;
             r.prop_by_key.insert(key, name.into()); r.prop_type_id.insert(key, 1);
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_direct_enum_index(fault: u8) -> Self {
+        let mut r = Self::from_test_hidden_return_enum_arguments(fault);
+        r.type_identity_by_ptr.get_mut(&6).unwrap().module = "Script".into();
+        r.typeid_to_ptr.insert(1, 6);
+        let key = (1 << 1) | (12 << 33) | 1;
+        r.prop_by_key.insert(key, "Choices".into()); r.prop_type_id.insert(key, 1);
+        r.class_fields.insert("UHost".into(), HashMap::from([("Choices".into(), "TArray<ESecond>".into())]));
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_hidden_return_enum_arguments(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("EFirst", ""), ("ESecond", ""),
+            ("FState", ""), ("FResult", ""), ("TArray", ""), ("UHost", "")]);
+        for (p, name) in [(1, "EFirst"), (2, "ESecond"), (3, "FState"),
+            (4, "FResult"), (5, "TArray"), (6, "UHost")] {
+            r.type_identity_by_ptr.insert(p, TypeIdentity { name: name.into(),
+                module: String::new(), namespace: String::new() });
+        }
+        let value = |p| DataType { token: 5, type_info: p, ..Default::default() };
+        let constant = |p| DataType { is_object_const: true, is_read_only: true, ..value(p) };
+        r.type_subtypes.insert(5, vec![value(2)]);
+        for (p, name, owner, params, ret) in [
+            (10, "GetFirst", "UHost", vec![], value(1)),
+            (20, "opIndex", "TArray", vec![DataType { token: 0x44, ..Default::default() }],
+                DataType { is_reference: true, ..value(2) }),
+            (30, "Make", "UHost", vec![constant(1), constant(2),
+                DataType { is_reference: true, ..constant(3) }], value(4)),
+            (40, "Inspect", "FResult", vec![], DataType { token: 0x52, ..Default::default() }),
+        ] {
+            r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, owner.into());
+            r.func_is_method.insert(p); r.func_params.insert(p, params); r.func_ret.insert(p, ret);
+            r.funcid_to_ptr.insert(p as i32, p);
+        }
+        r.temporary_arg_positions.insert("Make".into(), HashMap::from([(3, vec![true, true, false])]));
+        for name in ["EFirst", "ESecond"] {
+            r.ctor_arg_positions.insert(name.into(), HashMap::from([(1, vec![true])]));
+        }
+        match fault {
+            1 => r.func_ret.get_mut(&30).unwrap().is_reference = true,
+            2 => r.func_ret.get_mut(&30).unwrap().is_object_handle = true,
+            3 => r.func_ret.get_mut(&30).unwrap().type_info = 3,
+            4 => { r.func_ret.remove(&30); },
+            5 => { r.func_is_method.remove(&30); },
+            6 => r.func_ret.get_mut(&20).unwrap().is_reference = false,
+            7 => r.func_ret.get_mut(&20).unwrap().type_info = 1,
+            8 => { r.func_owner.insert(20, "TMap".into()); },
+            9 => { r.func_is_method.remove(&20); },
+            10 => r.func_params.get_mut(&20).unwrap()[0].token = 0x51,
+            11 => r.type_identity_by_ptr.get_mut(&2).unwrap().namespace = "Other".into(),
+            _ => {},
         }
         r
     }
@@ -4320,6 +4426,47 @@ impl RefResolver {
         r
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_test_native_actor_factory(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(1,"AActor"), (2,"TSubclassOf"), (3,"FVector"), (4,"FRotator"), (5,"FName"), (6,"ULevel")] {
+            r.type_by_ptr.insert(ptr, name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name:name.into(), module:String::new(), namespace:String::new() });
+        }
+        let value = |type_info| DataType { token:5,type_info,..Default::default() };
+        let cref = |type_info| DataType { is_reference:true,is_object_const:true,is_read_only:true,..value(type_info) };
+        r.type_subtypes.insert(2,vec![DataType { is_object_handle:true,..value(1) }]);
+        r.func_by_ptr.insert(10,"MakeActor".into());
+        r.func_ret.insert(10,DataType { is_object_handle:true,..value(1) });
+        r.func_ret_names.insert("MakeActor".into(),"AActor".into());
+        r.func_params.insert(10,vec![cref(2),cref(3),cref(4),cref(5),DataType { token:0x41,..Default::default() },
+            DataType { is_object_handle:true,..value(6) }]);
+        r.native=Some(crate::cache::binds::NativeApi::from_test_arities(&[("UTask","MakeActor",3)],&[("MakeActor",Some(3))]));
+        match fault {
+            1 => { r.func_is_method.insert(10); },
+            2 => { r.func_params.get_mut(&10).unwrap().pop(); },
+            3 => r.func_ret.get_mut(&10).unwrap().is_object_handle=false,
+            4 => r.func_ret.get_mut(&10).unwrap().is_reference=true,
+            5 => r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into(),
+            6 => r.type_identity_by_ptr.get_mut(&5).unwrap().namespace="Other".into(),
+            7 => r.func_params.get_mut(&10).unwrap()[3].is_reference=false,
+            8 => r.func_params.get_mut(&10).unwrap()[3].is_read_only=false,
+            9 => r.func_params.get_mut(&10).unwrap()[3].is_object_const=false,
+            10 => r.func_params.get_mut(&10).unwrap()[3].is_object_handle=true,
+            11 => r.func_params.get_mut(&10).unwrap()[3].type_info=3,
+            12 => r.func_params.get_mut(&10).unwrap()[4].token=0x44,
+            13 => r.func_params.get_mut(&10).unwrap()[4].is_reference=true,
+            14 => r.func_params.get_mut(&10).unwrap()[5].is_object_handle=false,
+            15 => r.type_subtypes.get_mut(&2).unwrap()[0].type_info=6,
+            16 => { r.type_subtypes.remove(&2); },
+            17 => { r.func_owner.insert(10,"UTask".into()); r.func_is_method.insert(10); },
+            18 => r.func_params.get_mut(&10).unwrap()[1].is_auto=true,
+            19 => r.func_params.get_mut(&10).unwrap()[2].if_handle_then_const=true,
+            20 => r.type_subtypes.get_mut(&2).unwrap()[0].is_object_handle=false,
+            _ => {}
+        }
+        r
+    }
     #[cfg(test)]
     pub(crate) fn from_test_copied_bool_argument(token: i32) -> Self {
         let mut r = Self::default();
