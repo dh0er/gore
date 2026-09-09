@@ -527,7 +527,7 @@ void main() {
     );
   });
 
-  testWidgets('a name the catalog does not know is still shown', (
+  testWidgets('an unknown lock stays unclassified and visible under All', (
     tester,
   ) async {
     // The catalog is cook-specific: a save from another build can carry a lock
@@ -537,6 +537,50 @@ void main() {
 
     expect(find.text('IO_AM_CHEST_05'), findsOneWidget);
     expect(find.text('Not in this game version'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('lock-IO_AM_CHEST_05')),
+        matching: find.byIcon(Icons.lock_outline),
+      ),
+      findsOneWidget,
+    );
+    for (final kind in ['chests', 'doors']) {
+      await tester.tap(find.byKey(ValueKey('locks-kind-$kind')));
+      await tester.pumpAndSettle();
+      expect(find.text('IO_AM_CHEST_05'), findsNothing);
+      expect(find.text('2 of 5'), findsOneWidget);
+    }
+    await tester.tap(find.byKey(const ValueKey('locks-kind-all')));
+    await tester.pumpAndSettle();
+    expect(find.text('IO_AM_CHEST_05'), findsOneWidget);
+    expect(find.text('5 of 5'), findsOneWidget);
+  });
+
+  testWidgets('Other isolates unknown regions independently from All regions', (
+    tester,
+  ) async {
+    final core = _LocksCore(unlocked: ['IO_AM_CHEST_05']);
+    await _panel(tester, await _notifier(tester, core));
+    final all = find.byKey(const ValueKey('locks-region-All regions'));
+    final other = find.byKey(const ValueKey('locks-region-Other'));
+    expect(tester.widget<ListTile>(all).selected, isTrue);
+    expect(tester.widget<ListTile>(other).selected, isFalse);
+
+    await tester.tap(other);
+    await tester.pumpAndSettle();
+    expect(tester.widget<ListTile>(all).selected, isFalse);
+    expect(tester.widget<ListTile>(other).selected, isTrue);
+    expect(find.text('IO_AM_CHEST_05'), findsOneWidget);
+    expect(find.text('IO_OC_CHEST_DEXTER'), findsNothing);
+    expect(find.text('1 of 5'), findsOneWidget);
+
+    await tester.tap(all);
+    await tester.pumpAndSettle();
+    expect(tester.widget<ListTile>(all).selected, isTrue);
+    expect(tester.widget<ListTile>(other).selected, isFalse);
+    expect(find.text('IO_AM_CHEST_05'), findsOneWidget);
+    expect(find.text('IO_OC_CHEST_DEXTER'), findsOneWidget);
+    expect(find.text('5 of 5'), findsOneWidget);
   });
 
   testWidgets('a save with no editable lock set stays read-only', (

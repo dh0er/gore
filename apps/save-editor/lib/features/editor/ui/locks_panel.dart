@@ -48,7 +48,7 @@ class _LockRow {
   final LockEntry? entry;
   final bool unlocked;
 
-  bool get isDoor => entry?.kind == LockKind.door;
+  LockKind? get kind => entry?.kind;
   String get area => entry?.area ?? '';
   String get search => entry?.search ?? name.toLowerCase();
 }
@@ -100,7 +100,7 @@ class _LocksDetailState extends ConsumerState<LocksDetail> {
   final Map<String, LockSetUnlockedEdit> _pending = {};
 
   String _query = '';
-  String _area = '';
+  String? _area;
   Map<String, String> _searchIndex = const {};
   Object? _searchIndexKey;
   _KindFilter _kind = _KindFilter.all;
@@ -230,12 +230,12 @@ class _LocksDetailState extends ConsumerState<LocksDetail> {
   /// [withArea] false answers "would this row match if no region were
   /// selected?", which is what the rail's per-region counts need.
   bool _matchesFilters(_LockRow row, {bool withArea = true}) {
-    if (withArea && _area.isNotEmpty && row.area != _area) return false;
+    if (withArea && _area != null && row.area != _area) return false;
     switch (_kind) {
       case _KindFilter.chests:
-        if (row.isDoor) return false;
+        if (row.kind != LockKind.chest) return false;
       case _KindFilter.doors:
-        if (!row.isDoor) return false;
+        if (row.kind != LockKind.door) return false;
       case _KindFilter.all:
         break;
     }
@@ -405,13 +405,13 @@ class _RegionRail extends StatelessWidget {
 
   final Map<String, int> counts;
   final int total;
-  final String selected;
+  final String? selected;
   final LocationCatalog? locations;
   final Map<String, Map<String, String>> locCatalog;
   final GameLang lang;
   final AppLocalizations l10n;
   final ThemeData theme;
-  final ValueChanged<String> onSelected;
+  final ValueChanged<String?> onSelected;
 
   String _label(String area) {
     final catalog = locations;
@@ -435,8 +435,8 @@ class _RegionRail extends StatelessWidget {
         _RegionTile(
           label: l10n.locksAllRegions,
           count: total,
-          selected: selected.isEmpty,
-          onTap: () => onSelected(''),
+          selected: selected == null,
+          onTap: () => onSelected(null),
           theme: theme,
         ),
         for (final area in areas)
@@ -584,7 +584,7 @@ class _LockList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = theme.colorScheme;
-    final anyDoorVisible = rows.any((row) => row.isDoor);
+    final anyDoorVisible = rows.any((row) => row.kind == LockKind.door);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -680,12 +680,16 @@ class _LockList extends StatelessWidget {
                       // The game's own marks: the interaction glyph it draws on
                       // a container and on a door.
                       leading: GameIcon(
-                        name: row.isDoor
-                            ? 'T_Interaction_Door'
-                            : 'T_Interaction_Loot',
-                        fallbackIcon: row.isDoor
-                            ? Icons.meeting_room_outlined
-                            : Icons.inventory_2_outlined,
+                        name: switch (row.kind) {
+                          LockKind.door => 'T_Interaction_Door',
+                          LockKind.chest => 'T_Interaction_Loot',
+                          null => null,
+                        },
+                        fallbackIcon: switch (row.kind) {
+                          LockKind.door => Icons.meeting_room_outlined,
+                          LockKind.chest => Icons.inventory_2_outlined,
+                          null => Icons.lock_outline,
+                        },
                         color: effective ? scheme.primary : scheme.outline,
                       ),
                       title: Text(row.name),
