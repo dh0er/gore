@@ -3879,6 +3879,76 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_literal_receiver_before_name(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(1, "FString"), (2, "FName")] {
+            r.type_by_ptr.insert(ptr, name.into()); r.type_names.insert(name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        for (ptr, literal) in [(100, "First prefix"), (101, "Second prefix"), (102, "Third prefix")] {
+            r.global_by_ptr.insert(ptr, literal.into()); r.global_is_string.insert(ptr);
+        }
+        for (ptr, name, owner) in [(10, "$beh0", "FString"), (11, "GetLabel", "UObject"),
+            (12, "$beh0", "FString"), (13, "Append", "FString"), (14, "$beh2", "FString")] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into());
+            r.func_is_method.insert(ptr); r.func_params.insert(ptr, Vec::new());
+            r.func_ret.insert(ptr, DataType { token: 0x52, ..Default::default() });
+        }
+        let input = |ty| DataType { token: 5, type_info: ty, is_reference: true,
+            is_object_const: true, is_read_only: true, ..Default::default() };
+        for (ptr, ty) in [(10, 1), (12, 2), (13, 1)] { r.func_params.insert(ptr, vec![input(ty)]); }
+        r.func_ret.insert(11, DataType { token: 5, type_info: 2, ..Default::default() });
+        r.func_ret.insert(13, DataType { token: 5, type_info: 1, is_reference: true, ..Default::default() });
+        r.const_method_ptrs.insert(11); r.zero_arg_names.insert("GetLabel".into());
+        r.func_ret_names.insert("GetLabel".into(), "FName".into());
+        r.ctor_arg_positions.insert("FString".into(), HashMap::from([(1, vec![true])]));
+        r.temporary_arg_positions.insert("Append".into(), HashMap::from([(1, vec![true])]));
+        match fault {
+            1 => r.global_is_string.clear(),
+            2 => r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(),
+            3 => r.type_identity_by_ptr.get_mut(&2).unwrap().namespace = "Other".into(),
+            4 => r.func_params.get_mut(&10).unwrap()[0].type_info = 2,
+            5 => r.func_params.get_mut(&12).unwrap()[0].is_reference = false,
+            6 => { r.const_method_ptrs.remove(&11); },
+            7 => r.func_ret.get_mut(&11).unwrap().is_reference = true,
+            8 => { r.func_owner.insert(11, "FOther".into()); },
+            9 => { r.func_by_ptr.insert(13, "Other".into()); },
+            10 => r.func_ret.get_mut(&13).unwrap().is_reference = false,
+            11 => r.func_params.get_mut(&13).unwrap()[0].type_info = 2,
+            12 => { r.func_params.insert(14, vec![input(1)]); },
+            13 => { r.func_owner.insert(14, "FName".into()); },
+            14 => { r.const_method_ptrs.insert(10); },
+            15 => { r.func_is_method.remove(&12); },
+            16 => { r.func_params.insert(11, vec![input(2)]); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_nested_bool_copy(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(10, "Valid"), (11, "Allowed")] {
+            r.func_by_ptr.insert(ptr, name.into()); r.funcid_to_ptr.insert(ptr as i32, ptr);
+            r.func_ret.insert(ptr, DataType { token: 0x41, ..Default::default() });
+            r.func_ret_names.insert(name.into(), "bool".into());
+            r.func_params.insert(ptr, Vec::new());
+        }
+        r.func_params.insert(11, vec![DataType { token: 0x44, ..Default::default() }]);
+        r.temporary_arg_positions.insert("Allowed".into(), HashMap::from([(1, vec![true])]));
+        r.zero_arg_names.insert("Valid".into());
+        match fault {
+            1 => r.func_ret.get_mut(&10).unwrap().token = 0x44,
+            2 => r.func_ret.get_mut(&11).unwrap().token = 0x44,
+            3 => r.func_ret.get_mut(&11).unwrap().is_reference = true,
+            4 => r.func_ret.get_mut(&10).unwrap().is_object_const = true,
+            5 => r.func_ret.get_mut(&11).unwrap().type_info = 1,
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_copied_bool_argument(token: i32) -> Self {
         let mut r = Self::default();
         r.func_by_ptr.insert(1, "SetFlag".into()); r.func_is_method.insert(1);

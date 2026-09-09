@@ -1306,6 +1306,7 @@ fn emit_function_ctor(
     let named_iterated = named_iterated_containers(f, refs);
     hoisted.extend(named_iterated.iter().copied());
     let spilled = spilled_boolean_names(f, refs);
+    let named_negated_carriers = copied_negated_chain_carriers(f, refs);
     let retained_bool_branches = named_bool_literal_branches(f);
     let named_arithmetic = named_arithmetic_slots(f);
     let terminal_arithmetic_sites = terminal_return_arithmetic_sites(f, refs, is_method);
@@ -2882,7 +2883,7 @@ fn emit_function_ctor(
         pass_trace("drop_dead_literal_stores", &rendered);
         let rendered = collapse_single_use_accumulators(&rendered, &retained_accumulators, &locals, &named_sites);
         pass_trace("collapse_single_use_accumulators", &rendered);
-        let rendered = inline_bool_chain_into_next_condition(&rendered, &named_sites);
+        let rendered = inline_bool_chain_into_next_condition(&rendered, &named_sites, &named_negated_carriers);
         pass_trace("inline_bool_chain_into_next_condition", &rendered);
         let rendered = fold_bool_member_comparisons(&rendered, fields, &path_roots, refs, f, is_method);
         pass_trace("fold_bool_member_comparisons", &rendered);
@@ -2924,7 +2925,7 @@ fn emit_function_ctor(
                 .chain(
                     fused_short_circuit_carriers(f)
                         .into_iter()
-                        .filter(|slot| !several_lives.contains(slot))
+                        .filter(|slot| !several_lives.contains(slot) && !named_negated_carriers.contains(slot))
                         .map(|slot| (slot, 1)),
                 )
                 .chain(chain_inlined_cast_operands(f).into_iter().map(|slot| (slot, 1)))
@@ -2995,7 +2996,7 @@ fn emit_function_ctor(
                 .chain(
                     fused_short_circuit_carriers(f)
                         .into_iter()
-                        .filter(|slot| !several_lives.contains(slot))
+                        .filter(|slot| !several_lives.contains(slot) && !named_negated_carriers.contains(slot))
                         .map(|slot| (slot, 1)),
                 )
                 .chain(chain_inlined_cast_operands(f).into_iter().map(|slot| (slot, 1)))
@@ -3146,11 +3147,13 @@ fn emit_function_ctor(
         pass_trace("rejoin_logical_carriers", &rendered);
         // After the carrier chains are whole: the source declared a witnessed carrier on its
         // initialiser, and the initialiser is only one statement once the arms have rejoined.
-        let rendered = sink_carrier_declarations(&rendered, &declared_at_initializer_carriers(f));
+        let mut initializer_carriers = declared_at_initializer_carriers(f);
+        initializer_carriers.extend(named_negated_carriers.iter().copied());
+        let rendered = sink_carrier_declarations(&rendered, &initializer_carriers);
         pass_trace("sink_carrier_declarations", &rendered);
         // Rejoining and placing a carrier can expose its declaration only here.
         // Keep the same named-result and single-use guards as the earlier pass.
-        let rendered = inline_bool_chain_into_next_condition(&rendered, &named_sites);
+        let rendered = inline_bool_chain_into_next_condition(&rendered, &named_sites, &named_negated_carriers);
         pass_trace("inline_bool_chain_into_next_condition#late", &rendered);
         let rendered = unwrap_untested_bool_return(&rendered, f, refs);
         pass_trace("unwrap_untested_bool_return", &rendered);
@@ -3181,7 +3184,7 @@ fn emit_function_ctor(
         let rendered = split_negated_guard_from_named_bool_chain(&rendered, f, refs, &spilled);
         pass_trace("split_negated_guard_from_named_bool_chain", &rendered);
         let rendered = expand_if_false_markers(&rendered);
-        let rendered = unwrap_fstring_literal_declarations(&rendered);
+        let rendered = unwrap_fstring_literal_declarations(&rendered, &named_sites);
         pass_trace("unwrap_fstring_literal_declarations", &rendered);
         s.truncate(declarations_at);
         s.push_str(&rendered);
@@ -11982,13 +11985,16 @@ fn declaration_with_initializer(line: &str) -> Option<(String, String, String)> 
     Some((indent, name.to_owned(), init.to_owned()))
 }
 
-/// A literal already constructs the declared FString. Wrapping it in FString(...) adds
-/// a temporary and its destructor. Limit this to declarations, never call arguments.
-fn unwrap_fstring_literal_declarations(body: &str) -> String {
+/// Simplify literal declarations unless their exact constructor expression is
+/// witnessed as a named receiver. Never simplify call arguments here.
+fn unwrap_fstring_literal_declarations(body: &str, named_sites: &HashSet<(i32, String)>) -> String {
     let mut out = String::with_capacity(body.len());
     for line in body.split_inclusive('\n') {
         let literal_decl = declaration_with_initializer(line).and_then(|(indent, name, init)| {
             if !line.trim_start().starts_with("FString ") {
+                return None;
+            }
+            if slot_and_life_any(&name).is_some_and(|(slot, _)| named_sites.contains(&(slot, init.clone()))) {
                 return None;
             }
             let literal = init.strip_prefix("FString(")?.strip_suffix(')')?;
@@ -13315,6 +13321,7 @@ fn drop_redundant_conversions(
 fn inline_bool_chain_into_next_condition(
     body: &str,
     named_sites: &HashSet<(i32, String)>,
+    named_negated_carriers: &HashSet<i32>,
 ) -> String {
     let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
     let mut changed = true;
@@ -13333,7 +13340,7 @@ fn inline_bool_chain_into_next_condition(
             // A read-back of this call's result witnesses a named bool, even after
             // short-circuit folding has joined its initializer into one expression.
             if let Some((slot, _)) = slot_and_life_any(&name) {
-                if is_named_value_site(slot, &value, named_sites) {
+                if is_named_value_site(slot, &value, named_sites) || named_negated_carriers.contains(&slot) {
                     continue;
                 }
             }
@@ -17710,6 +17717,63 @@ fn wraps_whole_expression(expr: &str) -> bool {
     depth == 0
 }
 
+/// An AND around an OR materializes its result before a copied negation.
+/// The outer carrier has one closed five-access life, despite other lives of
+/// the inner OR and negation slots. Both joins and all bool producers are typed.
+fn copied_negated_chain_carriers(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+    let target = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+    let boolean = |i: &Instr| {
+        let ret = match i.op.name {
+            "CALLSYS" => i.qwords.first().and_then(|p| refs.func_ret_by_ptr(*p as i64)),
+            "CALL" | "CALLINTF" => i.dwords.first().and_then(|p| refs.func_ret_by_id(*p as i32)),
+            _ => None,
+        };
+        ret.is_some_and(|t| t.token == 0x41 && t.type_info == 0 && !t.is_reference && !t.is_object_handle
+            && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const)
+    };
+    let mut out = HashSet::new();
+    for (at, c) in code.windows(8).enumerate() {
+        let named = (|| {
+            if !boolean(&c[0]) || c[1..].iter().map(|i| i.op.name).ne(["CpyRtoV4", "CpyVtoV4",
+                "CpyVtoV4", "CpyVtoV4", "NOT", "CpyVtoR1", "JLowZ"]) { return None; }
+            let (outer, inner, negated) = (w(&c[1], 0)?, w(&c[2], 0)?, w(&c[4], 0)?);
+            if [outer, inner, negated].iter().any(|s| *s <= 0)
+                || HashSet::from([outer, inner, negated]).len() != 3
+                || w(&c[2], 1) != Some(outer) || w(&c[3], 0) != Some(outer) || w(&c[3], 1) != Some(inner)
+                || w(&c[4], 1) != Some(outer) || w(&c[5], 0) != Some(negated) || w(&c[6], 0) != Some(negated)
+                || f.obj_locals.iter().any(|(s, _)| [outer, inner, negated].contains(s)) { return None; }
+            let uses: Vec<_> = code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&outer))
+                .map(|(i, _)| i).collect();
+            let [seed, capture, copied, joined, read] = uses.as_slice() else { return None; };
+            if [*capture, *copied, *joined, *read] != [at + 1, at + 2, at + 3, at + 4]
+                || *seed < 2 || *seed + 2 >= at || code[*seed].op.name != "SetV4" || code[*seed].dwords.first() != Some(&0)
+                || !boolean(&code[seed - 2]) || code[seed - 1].op.name != "JLowNZ" || code[seed + 1].op.name != "JMP"
+                || target(&code[seed - 1]) != Some(code[seed + 2].offset_dw as i64)
+                || target(&code[seed + 1]) != Some(c[4].offset_dw as i64) { return None; }
+            let inner_uses: Vec<_> = code.iter().enumerate().take(at + 4).skip(seed + 2)
+                .filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&inner)).map(|(i, _)| i).collect();
+            let [first, tested, one, assigned, merged] = inner_uses.as_slice() else { return None; };
+            if *first <= seed + 2 || [*tested, *one, *assigned, *merged] != [first + 1, first + 3, at + 2, at + 3]
+                || code[*first].op.name != "CpyRtoV4" || !boolean(&code[first - 1])
+                || code[first + 1].op.name != "CpyVtoR1" || code[first + 2].op.name != "JLowZ"
+                || code[first + 3].op.name != "SetV1" || code[first + 3].dwords.first() != Some(&1)
+                || code[first + 4].op.name != "JMP" || first + 5 >= at
+                || target(&code[first + 2]) != Some(code[first + 5].offset_dw as i64)
+                || target(&code[first + 4]) != Some(c[3].offset_dw as i64)
+                || !target(&c[7]).is_some_and(|t| t > c[7].offset_dw as i64) { return None; }
+            let joins = [seed - 1, seed + 1, first + 2, first + 4];
+            if code.iter().enumerate().any(|(i, ins)| ins.op.name == "JMPP" || ins.op.name.starts_with('J')
+                && !joins.contains(&i) && target(ins).is_some_and(|t|
+                    t > code[seed - 2].offset_dw as i64 && t <= c[7].offset_dw as i64)) { return None; }
+            Some(outer)
+        })();
+        out.extend(named);
+    }
+    out
+}
+
 /// Slots whose destruction stands in a RUN of destructions — two or more `PSF; CALLSYS ::$beh2`
 /// pairs back to back. That run is a scope leaving, and a value destroyed there was alive to the
 /// end of its block: a declared local. A temporary built inside an expression is destroyed on its
@@ -17800,6 +17864,7 @@ fn spilled_boolean_names(f: &Func, refs: &RefResolver) -> HashSet<i32> {
     let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
     let mut out = copied_short_circuit_accumulators(f, refs);
     out.extend(copied_bool_initializer_slots(f, refs));
+    out.extend(copied_negated_chain_carriers(f, refs));
     // A native int predicate explicitly reloads its named bool before branching.
     for (at, c) in instrs.windows(7).enumerate() {
         if c.iter().map(|i| i.op.name).ne(["CALLSYS", "CpyRtoV4", "CMPIi", "TP", "CpyRtoV4", "CpyVtoR1", "JLowZ"]) { continue; }
@@ -26071,6 +26136,64 @@ fn named_value_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, String)> {
         .map(str::to_owned)
     };
     let mut out = HashSet::new();
+    // A literal FString receiver is already constructed before the other
+    // argument's FName getter. Name only that copy, not other lives of its slot.
+    if !instrs.iter().any(|i| i.op.name == "JMPP") {
+        for c in instrs.windows(16) {
+            if c.iter().map(|i| i.op.name).ne(["PGA", "PSF", "CALLSYS", "PSF", "PshVPtr", "CALLSYS",
+                "PSF", "PSF", "CALLSYS", "PSF", "PSF", "CALLSYS", "PSF", "CALLSYS", "PSF", "CALLSYS"])
+                || c[1..].iter().any(|i| targets.contains(&i.offset_dw)) { continue; }
+            let site = (|| {
+                let (receiver, name, argument) = (w(&c[1], 0)?, w(&c[3], 0)?, w(&c[7], 0)?);
+                if [receiver, name, argument].iter().any(|s| *s <= 0)
+                    || HashSet::from([receiver, name, argument]).len() != 3 || w(&c[4], 0) != Some(0)
+                    || w(&c[6], 0) != Some(name) || w(&c[9], 0) != Some(argument)
+                    || w(&c[10], 0) != Some(receiver) || w(&c[12], 0) != Some(argument)
+                    || w(&c[14], 0) != Some(receiver) { return None; }
+                let local_type = |slot, expected| {
+                    let mut rows = f.obj_locals.iter().filter(|(s, _)| *s == slot).map(|(_, p)| *p);
+                    let ty = rows.next()?; let identity = refs.type_identity_by_ptr(ty)?;
+                    (rows.next().is_none() && identity.name == expected && identity.module.is_empty()
+                        && identity.namespace.is_empty()).then_some(ty)
+                };
+                let string_ty = local_type(receiver, "FString")?;
+                let name_ty = local_type(name, "FName")?;
+                if local_type(argument, "FString")? != string_ty { return None; }
+                let ptr = |n: usize| c[n].qwords.first().map(|p| *p as i64);
+                let literal_ptr = ptr(0)?; let literal = refs.global_by_ptr(literal_ptr)?;
+                if !refs.global_is_string(literal_ptr) || literal.contains(['"', '\\'])
+                    || literal.chars().any(char::is_control) { return None; }
+                // An identical constructor expression in another life must not
+                // inherit this site's order witness just because its slot matches.
+                if instrs.windows(3).filter(|p| p[0].op.name == "PGA" && p[1].op.name == "PSF"
+                    && w(&p[1], 0) == Some(receiver) && p[2].op.name == "CALLSYS"
+                    && p[0].qwords.first().and_then(|v| refs.global_by_ptr(*v as i64)) == Some(literal)).count() != 1 { return None; }
+                let plain = |t: &super::types::DataType, token, ty, reference, constant| t.token == token
+                    && t.type_info == ty && t.is_reference == reference && t.is_object_const == constant
+                    && t.is_read_only == constant && !t.is_object_handle && !t.is_auto && !t.if_handle_then_const;
+                for (n, behavior, input) in [(2, "$beh0", Some(string_ty)), (8, "$beh0", Some(name_ty)),
+                    (13, "$beh2", None), (15, "$beh2", None)] {
+                    let p = ptr(n)?;
+                    if refs.func_by_ptr(p) != Some(behavior) || refs.func_owner_by_ptr(p) != Some("FString")
+                        || !refs.is_method_by_ptr(p) || refs.is_const_method_by_ptr(p)
+                        || !plain(refs.func_ret_by_ptr(p)?, 0x52, 0, false, false) { return None; }
+                    let params = refs.func_params_by_ptr(p)?;
+                    if match input { Some(ty) => !matches!(params, [t] if plain(t, 5, ty, true, true)),
+                        None => !params.is_empty() } { return None; }
+                }
+                let (getter, append) = (ptr(5)?, ptr(11)?);
+                if !refs.is_method_by_ptr(getter) || !refs.is_const_method_by_ptr(getter)
+                    || refs.func_owner_by_ptr(getter) != Some("UObject") || !refs.func_params_by_ptr(getter)?.is_empty()
+                    || !plain(refs.func_ret_by_ptr(getter)?, 5, name_ty, false, false)
+                    || refs.func_by_ptr(append) != Some("Append") || refs.func_owner_by_ptr(append) != Some("FString")
+                    || !refs.is_method_by_ptr(append) || refs.is_const_method_by_ptr(append)
+                    || !plain(refs.func_ret_by_ptr(append)?, 5, string_ty, true, false)
+                    || !matches!(refs.func_params_by_ptr(append)?, [t] if plain(t, 5, string_ty, true, true)) { return None; }
+                Some((receiver, format!("FString(\"{literal}\")")))
+            })();
+            out.extend(site);
+        }
+    }
     // A complete script-field product precedes the other scalar argument push.
     // Keep that expression named, independently of later lives of its RHS slot.
     if !instrs.iter().any(|i| i.op.name == "JMPP") {
@@ -31783,7 +31906,7 @@ mod condition_identifier_tests {
         let expected = body
             .replacen("FString(\"QuestTag\")", "\"QuestTag\"", 1)
             .replacen("FString(\"\")", "\"\"", 1);
-        assert_eq!(unwrap_fstring_literal_declarations(body), expected);
+        assert_eq!(unwrap_fstring_literal_declarations(body, &HashSet::new()), expected);
     }
 
     #[test]
@@ -32474,11 +32597,11 @@ mod eager_negated_bool_guard_tests {
         let condition = fold_condition_temporaries(&early, &locals, &refs, None, &spilled, &sites, false);
         let (declared, _) = rewrite_first_use_decl_init(&condition, &locals, &refs, &empty,
             &HashMap::<i32, bool>::new(), &empty, &empty, &HashMap::<i32, usize>::new(), &empty, &empty);
-        let result = inline_bool_chain_into_next_condition(&declared, &sites);
+        let result = inline_bool_chain_into_next_condition(&declared, &sites, &HashSet::new());
         assert!(result.contains("bool local_1 = Saved();\nbool local_5 = Other() && (Left == Right);"), "{result}");
         assert!(result.contains("!(local_1) && !(local_5)"), "{result}");
         assert_eq!(result.matches("Saved()").count(), 1, "{result}");
-        assert_eq!(inline_bool_chain_into_next_condition(&result, &sites), result);
+        assert_eq!(inline_bool_chain_into_next_condition(&result, &sites, &HashSet::new()), result);
     }
 
     #[test]
@@ -32489,24 +32612,24 @@ mod eager_negated_bool_guard_tests {
                 for left in ["Ready", "!(Saved())"] {
                     for right in [format!("!({name})"), format!("!{name}")] {
                         let source = format!("bool {name} = Other() && Ready;\nreturn {left} {op} {right};\n");
-                        assert_eq!(inline_bool_chain_into_next_condition(&source, &sites), source);
+                        assert_eq!(inline_bool_chain_into_next_condition(&source, &sites, &HashSet::new()), source);
                     }
                 }
             }
             for condition in [format!("Ready || {name}"), format!("{name} || Next()"), format!("!({name})")] {
                 let source = format!("bool {name} = Other() && Ready;\nif ({condition})\n{{\n    Work();\n}}\n");
-                assert!(!inline_bool_chain_into_next_condition(&source, &sites).contains(&name), "{source}");
+                assert!(!inline_bool_chain_into_next_condition(&source, &sites, &HashSet::new()).contains(&name), "{source}");
             }
             for value in ["Left && Right", "bool(Left) && bool(Right)", "Message == \"Other()\" && Ready"] {
                 let source = format!("bool {name} = {value};\nreturn Ready && !({name});\n");
-                assert!(!inline_bool_chain_into_next_condition(&source, &sites).contains(&name), "{source}");
+                assert!(!inline_bool_chain_into_next_condition(&source, &sites, &HashSet::new()).contains(&name), "{source}");
             }
         }
         let named = "bool local_18 = Ready && this.IsBlocked();\nif (!(local_18))\n{\n    Stop();\n}\n";
-        assert_eq!(inline_bool_chain_into_next_condition(named, &HashSet::from([(18, "IsBlocked".into())])), named);
-        assert!(!inline_bool_chain_into_next_condition(named, &HashSet::from([(18, "Earlier".into())])).contains("local_18"));
+        assert_eq!(inline_bool_chain_into_next_condition(named, &HashSet::from([(18, "IsBlocked".into())]), &HashSet::new()), named);
+        assert!(!inline_bool_chain_into_next_condition(named, &HashSet::from([(18, "Earlier".into())]), &HashSet::new()).contains("local_18"));
         let reused = "bool local_5 = Other() && Ready;\nif (!(local_5))\n{\n    Work();\n}\nlocal_5 = false;\nUse(local_5);\n";
-        assert_eq!(inline_bool_chain_into_next_condition(reused, &sites), reused);
+        assert_eq!(inline_bool_chain_into_next_condition(reused, &sites, &HashSet::new()), reused);
     }
 }
 
@@ -32520,9 +32643,9 @@ mod named_bool_condition_tests {
         for name in ["local_11", "local_11_2"] {
             for op in ["||", "&&"] {
                 let body = format!("    bool {name} = local_10.Selected() && (local_10.Actor() == Source);\n    return !(local_10.Selected()) {op} {name};\n");
-                let first = inline_bool_chain_into_next_condition(&body, &HashSet::new());
+                let first = inline_bool_chain_into_next_condition(&body, &HashSet::new(), &HashSet::new());
                 assert_eq!(first, body);
-                assert_eq!(inline_bool_chain_into_next_condition(&first, &HashSet::new()), body);
+                assert_eq!(inline_bool_chain_into_next_condition(&first, &HashSet::new(), &HashSet::new()), body);
             }
         }
     }
@@ -32531,7 +32654,7 @@ mod named_bool_condition_tests {
     fn a_chain_in_the_first_operand_and_pure_left_operands_still_inline() {
         for condition in ["local_11 || Next()", "Ready || local_11", "bool(Ready) || local_11", "!(local_11)"] {
             let body = format!("    bool local_11 = First() && Second();\n    if ({condition})\n    {{\n        Work();\n    }}\n");
-            let folded = inline_bool_chain_into_next_condition(&body, &HashSet::new());
+            let folded = inline_bool_chain_into_next_condition(&body, &HashSet::new(), &HashSet::new());
             assert!(!folded.contains("local_11"), "{condition}: {folded}");
         }
     }
@@ -32540,16 +32663,16 @@ mod named_bool_condition_tests {
     fn witnessed_chain_keeps_its_readback_before_the_condition() {
         let body = "    bool local_18 = local_4 && this.IsBlocked();\n    if (!(local_18))\n    {\n        Stop();\n    }\n";
         let named = HashSet::from([(18, "IsBlocked".to_owned())]);
-        assert_eq!(inline_bool_chain_into_next_condition(body, &named), body);
-        assert!(!inline_bool_chain_into_next_condition(body, &HashSet::new()).contains("local_18"));
+        assert_eq!(inline_bool_chain_into_next_condition(body, &named, &HashSet::new()), body);
+        assert!(!inline_bool_chain_into_next_condition(body, &HashSet::new(), &HashSet::new()).contains("local_18"));
     }
 
     #[test]
     fn a_different_callee_on_the_same_slot_does_not_gain_the_witness() {
         let body = "    bool local_18 = local_4 && this.IsReady();\n    if (!(local_18))\n    {\n        Stop();\n    }\n";
         let named = HashSet::from([(18, "IsBlocked".to_owned())]);
-        assert_eq!(inline_bool_chain_into_next_condition(body, &named),
-                   inline_bool_chain_into_next_condition(body, &HashSet::new()));
+        assert_eq!(inline_bool_chain_into_next_condition(body, &named, &HashSet::new()),
+                   inline_bool_chain_into_next_condition(body, &HashSet::new(), &HashSet::new()));
     }
 }
 
@@ -36329,7 +36452,7 @@ mod literal_value_lifetime_tests {
         let initialized = "    bool local_1 = false;\n    Observe();\n    local_1 = Ready() && Allowed();\n    return local_1;\n";
         assert_eq!(super::drop_dead_literal_stores(initialized, &named), initialized);
         assert!(!super::drop_dead_literal_stores(initialized, &HashSet::new()).contains("false"));
-        assert_eq!(super::inline_bool_chain_into_next_condition(initialized, &HashSet::new()), initialized);
+        assert_eq!(super::inline_bool_chain_into_next_condition(initialized, &HashSet::new(), &HashSet::new()), initialized);
         for (at, replacement) in [
             (0, ("SetV4", &[2][..])), (1, ("CpyVtoV4", &[1, 3][..])),
             (3, ("CALLSYS", &[][..])), (5, ("CpyVtoV4", &[2, 8][..])),
@@ -37474,6 +37597,167 @@ mod literal_value_lifetime_tests {
     }
 
     #[test]
+    fn literal_string_receivers_stay_before_name_arguments_in_reused_slots() {
+        let block = |receiver: u16, argument: u16, global: i32| {
+            let mut f = function(&[("PGA", &[]), ("PSF", &[receiver]), ("CALLSYS", &[]),
+                ("PSF", &[14]), ("PshVPtr", &[0]), ("CALLSYS", &[]), ("PSF", &[14]),
+                ("PSF", &[argument]), ("CALLSYS", &[]), ("PSF", &[argument]), ("PSF", &[receiver]),
+                ("CALLSYS", &[]), ("PSF", &[argument]), ("CALLSYS", &[]), ("PSF", &[receiver]), ("CALLSYS", &[])]);
+            let c = disassemble(&f.bytecode).unwrap();
+            for (at, ptr) in [(0, global), (2, 10), (5, 11), (8, 12), (11, 13), (13, 14), (15, 14)] {
+                f.bytecode[c[at].offset_dw + 1] = ptr;
+            }
+            f.obj_locals = vec![(8, 1), (12, 1), (14, 2)]; f.ret.token = 0x52; f
+        };
+        let mut f = block(12, 8, 100);
+        f.bytecode.extend(block(8, 12, 101).bytecode);
+        f.bytecode.extend(block(12, 8, 102).bytecode);
+        let refs = RefResolver::from_test_literal_receiver_before_name(0);
+        let sites = super::named_value_sites(&f, &refs);
+        assert_eq!(sites, HashSet::from([(12, "FString(\"First prefix\")".into()),
+            (8, "FString(\"Second prefix\")".into()), (12, "FString(\"Third prefix\")".into())]));
+        let empty = HashSet::new();
+        let locals = BTreeMap::from([(8, "FString".into()), (12, "FString".into()), (14, "FName".into())]);
+        let receivers: HashSet<i32> = super::temporary_receiver_slots(&f, &refs)
+            .union(&super::rvo_temporary_slots(&f, &refs)).copied().collect();
+        let mut body = String::new(); let mut expected = String::new();
+        for (slot, argument, label) in [(12, 8, "First prefix"), (8, 12, "Second prefix"), (12, 8, "Third prefix")] {
+            body.push_str(&format!("if (Guard())\n{{\n    local_{slot} = FString(\"{label}\");\n    local_14 = this.GetLabel();\n    local_{argument} = FString(local_14);\n    local_{slot}.Append(local_{argument});\n}}\n"));
+            expected.push_str(&format!("if (Guard())\n{{\n    local_{slot} = FString(\"{label}\");\n    local_{slot}.Append(FString(this.GetLabel()));\n}}\n"));
+        }
+        let early = |sites: &HashSet<(i32, String)>| super::inline_call_argument_temporaries(&body, &refs, &locals, None, true,
+            &HashMap::from([(14, "FName".into())]), &empty, &receivers, &empty, &empty, &empty, &empty, &empty, &empty,
+            &HashMap::new(), &empty, sites, &HashSet::new());
+        assert_eq!(early(&sites), expected);
+        let unprotected = early(&HashSet::new());
+        assert!(!unprotected.contains("local_12 =") && !unprotected.contains("local_8 ="), "{unprotected}");
+        // Later declaration suffixes still select the literal expression, while
+        // the FName conversion in the other life of that slot remains movable.
+        let late = "FString local_12_3 = FString(\"Third prefix\");\nlocal_12_3.Append(FString(this.GetLabel()));\n";
+        let late_fold = |body: &str, sites: &HashSet<(i32, String)>| super::inline_unnamed_value_temporaries(body,
+            &HashSet::from([(12, 3)]), &empty, &receivers, &refs, &empty, &empty, &HashMap::new(), sites, &empty, &empty, &empty);
+        assert_eq!(late_fold(late, &sites), late);
+        assert_ne!(late_fold(late, &HashSet::new()), late);
+        assert_eq!(super::unwrap_fstring_literal_declarations(late, &sites), late);
+        let unwrapped = late.replace("FString(\"Third prefix\")", "\"Third prefix\"");
+        assert_eq!(super::unwrap_fstring_literal_declarations(late, &HashSet::new()), unwrapped);
+        assert_eq!(super::unwrap_fstring_literal_declarations(late, &HashSet::from([(12, "FString".into())])), unwrapped);
+        let conversion = "FString local_12_3 = FString(this.GetLabel());\nUse(local_12_3);\n";
+        assert!(!super::is_named_value_site(12, "FString(this.GetLabel())", &sites));
+        assert_eq!(late_fold(conversion, &sites), late_fold(conversion, &HashSet::new()));
+        for fault in 1..=16 {
+            assert!(super::named_value_sites(&f, &RefResolver::from_test_literal_receiver_before_name(fault)).is_empty(), "metadata {fault}");
+        }
+        let single = block(12, 8, 100); let c = disassemble(&single.bytecode).unwrap();
+        for (at, slot) in [(4, 2), (6, 8), (9, 12), (10, 8), (12, 12), (14, 8)] {
+            let mut bad = single.clone(); let dw = c[at].offset_dw;
+            bad.bytecode[dw] = (bad.bytecode[dw] & 0xffff) | (slot << 16);
+            assert!(super::named_value_sites(&bad, &refs).is_empty(), "slot {at}");
+        }
+        for row in 0..3 {
+            let mut bad = single.clone(); bad.obj_locals.remove(row);
+            assert!(super::named_value_sites(&bad, &refs).is_empty());
+        }
+        let mut duplicate = single.clone(); duplicate.obj_locals.push((12, 1));
+        assert!(super::named_value_sites(&duplicate, &refs).is_empty());
+        for before in [false, true] {
+            let mut bad = single.clone(); let copy = single.bytecode[..c[3].offset_dw].to_vec();
+            if before { bad.bytecode.splice(0..0, copy); } else { bad.bytecode.extend(copy); }
+            assert!(super::named_value_sites(&bad, &refs).is_empty(), "same literal in another life");
+        }
+        for target in 1..16 {
+            let mut incoming = function(&[("JMP", &[])]); incoming.bytecode[1] = c[target].offset_dw as i32;
+            incoming.bytecode.extend(single.bytecode.clone()); incoming.obj_locals = single.obj_locals.clone();
+            assert!(super::named_value_sites(&incoming, &refs).is_empty(), "interior entry {target}");
+        }
+        let mut indirect = single.clone(); indirect.bytecode.extend(function(&[("JMPP", &[30])]).bytecode);
+        assert!(super::named_value_sites(&indirect, &refs).is_empty());
+    }
+    #[test]
+    fn copied_nested_bool_chain_keeps_one_named_carrier_through_the_late_pipeline() {
+        let fixture = |outer: u16, inner: u16, negated: u16| {
+            let mut f = function(&[("CALLSYS", &[]), ("JLowNZ", &[]), ("SetV4", &[outer]), ("JMP", &[]),
+                ("PshC4", &[]), ("CALL", &[]), ("CpyRtoV4", &[inner]), ("CpyVtoR1", &[inner]), ("JLowZ", &[]),
+                ("SetV1", &[inner]), ("JMP", &[]), ("PshC4", &[]), ("CALL", &[]), ("CpyRtoV4", &[outer]),
+                ("CpyVtoV4", &[inner, outer]), ("CpyVtoV4", &[outer, inner]), ("CpyVtoV4", &[negated, outer]),
+                ("NOT", &[negated]), ("CpyVtoR1", &[negated]), ("JLowZ", &[]), ("RET", &[0])]);
+            let c = disassemble(&f.bytecode).unwrap();
+            for (at, value) in [(0, 10), (4, 1), (5, 11), (9, 1), (11, 2), (12, 11)] {
+                f.bytecode[c[at].offset_dw + 1] = value;
+            }
+            for (from, to) in [(1, 4), (3, 16), (8, 11), (10, 15), (19, 20)] {
+                f.bytecode[c[from].offset_dw + 1] = c[to].offset_dw as i32 - c[from].offset_dw as i32 - 2;
+            }
+            f.ret.token = 0x52; f
+        };
+        let refs = RefResolver::from_test_nested_bool_copy(0);
+        for (outer, inner, negated) in [(29, 5, 1), (59, 1, 8)] {
+            let f = fixture(outer, inner, negated);
+            let named = super::copied_negated_chain_carriers(&f, &refs);
+            assert_eq!(named, HashSet::from([outer as i32]));
+            let spilled = super::spilled_boolean_names(&f, &refs);
+            assert!(spilled.contains(&(outer as i32)));
+            let locals = BTreeMap::from([(outer as i32, "bool".into()), (inner as i32, "bool".into()), (negated as i32, "bool".into())]);
+            // Start before the existing copy-out fold chooses the outer carrier.
+            let body = format!("bool local_{outer};\nif (!(Valid()))\n{{\n    local_{outer} = false;\n}}\nelse\n{{\n    local_{inner} = Allowed(1) || Allowed(2);\n    local_{outer} = local_{inner};\n}}\nif (!(local_{outer}))\n{{\n    return;\n}}\n");
+            let copied = super::fold_copy_out_temporaries(&body, &locals, &HashSet::new(), None,
+                &HashSet::new(), &HashSet::new(), &HashSet::new());
+            let joined = super::fold_short_circuits(&copied, &locals, &refs, None, &HashMap::new(), None, &HashSet::new());
+            assert!(joined.contains(&format!("local_{outer} = Valid() && (Allowed(1) || Allowed(2));")), "{joined}");
+            let kept = super::fold_condition_temporaries(&joined, &locals, &refs, None, &spilled, &HashSet::new(), false);
+            assert_eq!(kept, joined);
+            assert!(!super::fold_condition_temporaries(&joined, &locals, &refs, None, &HashSet::new(), &HashSet::new(), false)
+                .contains(&format!("local_{outer} =")));
+            // The fused left test must not re-admit the copied outer result.
+            let fused = super::fused_short_circuit_carriers(&f);
+            assert!(fused.contains(&(outer as i32)));
+            assert!(super::unnamed_value_defs(&f, &refs, &[], &[]).iter().all(|(s, _)| *s != outer as i32));
+            let lines: Vec<String> = kept.lines().map(str::to_owned).collect();
+            let several_lives = super::slots_with_several_lives(&lines);
+            let unprotected = fused.iter().copied().filter(|s| !several_lives.contains(s)).map(|s| (s, 1)).collect();
+            let candidates = fused.iter().copied()
+                .filter(|s| !several_lives.contains(s) && !named.contains(s)).map(|s| (s, 1)).collect();
+            let inline = |candidates| super::inline_unnamed_value_temporaries(&kept, candidates,
+                &HashSet::new(), &HashSet::new(), &refs, &HashSet::new(), &HashSet::new(),
+                &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
+            assert!(!inline(&unprotected).contains(&format!("local_{outer}")));
+            let kept = inline(&candidates);
+            assert_eq!(kept, joined);
+            let late = super::rejoin_logical_carriers(&kept, &locals, &refs, None, &spilled);
+            let declared = super::sink_carrier_declarations(&late, &named);
+            assert!(declared.starts_with(&format!("bool local_{outer} = Valid() && (Allowed(1) || Allowed(2));\n")), "{declared}");
+            assert_eq!(super::inline_bool_chain_into_next_condition(&declared, &HashSet::new(), &named), declared);
+            assert_ne!(super::inline_bool_chain_into_next_condition(&declared, &HashSet::new(), &HashSet::new()), declared);
+            // The other two slots may have earlier/later literal argument lives.
+            let extra = function(&[("SetV1", &[inner]), ("PshV4", &[inner]), ("SetV1", &[negated]), ("PshV4", &[negated])]);
+            let mut reused = f.clone(); reused.bytecode.splice(0..0, extra.bytecode.clone()); reused.bytecode.extend(extra.bytecode);
+            assert_eq!(super::copied_negated_chain_carriers(&reused, &refs), named);
+            let c = disassemble(&f.bytecode).unwrap();
+            for fault in 1..=5 { assert!(super::copied_negated_chain_carriers(&f, &RefResolver::from_test_nested_bool_copy(fault)).is_empty()); }
+            for at in [1, 2, 3, 8, 9, 10] {
+                let mut bad = f.clone(); bad.bytecode[c[at].offset_dw + 1] += 1;
+                assert!(super::copied_negated_chain_carriers(&bad, &refs).is_empty(), "branch/literal {at}");
+            }
+            for at in [14, 15, 16, 17, 18] {
+                let mut bad = f.clone(); let dw = c[at].offset_dw;
+                bad.bytecode[dw] ^= 1 << 16;
+                assert!(super::copied_negated_chain_carriers(&bad, &refs).is_empty(), "copy {at}");
+            }
+            for slot in [outer, inner, negated] {
+                let mut bad = f.clone(); bad.obj_locals.push((slot as i32, 1));
+                assert!(super::copied_negated_chain_carriers(&bad, &refs).is_empty());
+            }
+            let mut extra_outer = f.clone(); extra_outer.bytecode.extend(function(&[("PshV4", &[outer])]).bytecode);
+            assert!(super::copied_negated_chain_carriers(&extra_outer, &refs).is_empty());
+            for target in [1, 6, 13, 15, 16, 17, 19] {
+                let mut incoming = function(&[("JMP", &[])]); incoming.bytecode[1] = c[target].offset_dw as i32;
+                incoming.bytecode.extend(f.bytecode.clone());
+                assert!(super::copied_negated_chain_carriers(&incoming, &refs).is_empty(), "entry {target}");
+            }
+        }
+    }
+
+    #[test]
     fn copied_bool_names_survive_adjacent_early_and_late_folds() {
         let refs=RefResolver::from_test_copied_negated_boolean(0x41,false);
         for (reused,script_call) in [(false,false),(true,false),(true,true)] {
@@ -38074,8 +38358,8 @@ mod literal_value_lifetime_tests {
         assert!(named.contains(&site));
         // Script calls in emitted conditions carry their global namespace.
         let body = "bool local_2 = ::Saved(Actor) || ::Other(Actor);\nif (local_2)\n{\n    Add(Actor);\n}\n";
-        assert_eq!(super::inline_bool_chain_into_next_condition(body, &named), body);
-        assert!(!super::inline_bool_chain_into_next_condition(body, &HashSet::new()).contains("local_2"));
+        assert_eq!(super::inline_bool_chain_into_next_condition(body, &named, &HashSet::new()), body);
+        assert!(!super::inline_bool_chain_into_next_condition(body, &HashSet::new(), &HashSet::new()).contains("local_2"));
         assert!(!super::named_value_sites(&f, &RefResolver::from_test_eager_bool_calls(0x44)).contains(&site));
         for at in [4, 5, 6, 8] {
             let mut other = f.clone(); other.bytecode[code[at].offset_dw + 1] += 1;
@@ -38113,7 +38397,7 @@ mod literal_value_lifetime_tests {
         let f = integer_guard_bool_chain_fixture();
         let refs = RefResolver::from_test_eager_bool_calls(0x41);
         let body = "    bool local_3 = !(Saved());\n    if (local_3)\n    {\n        return 999;\n    }\n    int local_9 = 17;\n    local_3 = Saved() && Other();\n    bool local_14 = Other();\n    bool local_19 = local_3 || local_14;\n    if (local_19)\n    {\n        return 999;\n    }\n    return local_9;\n";
-        let joined = super::inline_bool_chain_into_next_condition(body, &HashSet::new());
+        let joined = super::inline_bool_chain_into_next_condition(body, &HashSet::new(), &HashSet::new());
         assert!(joined.contains("if ((local_3 || local_14))"), "{joined}");
         let actual = super::split_negated_guard_from_named_bool_chain(&joined, &f, &refs, &HashSet::from([3]));
         let expected = joined.replace("    local_3 = Saved() && Other();", "    bool local_3_2 = Saved() && Other();")
