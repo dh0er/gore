@@ -3585,6 +3585,45 @@ impl RefResolver {
 
 
     #[cfg(test)]
+    pub(crate) fn from_test_reused_foreach_lives(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (id, name) in [(1, "UHost"), (2, "UFlow"), (3, "TArrayIterator"), (4, "UNode")] {
+            let ptr = id as i64 + 100;
+            r.typeid_to_ptr.insert(id, ptr); r.type_by_ptr.insert(ptr, name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: "Script".into(), namespace: String::new() });
+        }
+        let key = |id: i64, offset: i64| (id << 1) | (offset << 33) | 1;
+        for (id, offset, name) in [(1, 8, "First"), (1, 24, "Second"), (2, 16, "Nodes")] {
+            r.prop_by_key.insert(key(id, offset), name.into()); r.prop_type_id.insert(key(id, offset), id as i32);
+        }
+        r.class_fields.insert("UHost".into(), HashMap::from([("First".into(), "UFlow".into()), ("Second".into(), "UFlow".into())]));
+        r.class_fields.insert("UFlow".into(), HashMap::from([("Nodes".into(), "TArray<UNode>".into())]));
+        for (ptr, name, owner, ty, reference, handle) in [(10, "Iterator", "TArray", 103, false, false),
+            (11, "Proceed", "TArrayIterator", 104, true, true)] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into()); r.func_is_method.insert(ptr);
+            r.func_params.insert(ptr, vec![]);
+            r.func_ret.insert(ptr, DataType { token: 5, type_info: ty, is_reference: reference, is_object_handle: handle, ..Default::default() });
+        }
+        match fault {
+            1 => r.func_ret.get_mut(&10).unwrap().is_reference = true,
+            2 => { r.func_is_method.remove(&10); }
+            3 => r.func_ret.get_mut(&11).unwrap().is_reference = false,
+            4 => r.func_ret.get_mut(&11).unwrap().is_object_handle = false,
+            5 => { r.const_method_ptrs.insert(10); }
+            6 => { r.func_owner.insert(11, "TOtherIterator".into()); }
+            7 => { r.prop_type_id.insert(key(2, 16), 1); }
+            8 => { r.class_fields.get_mut("UHost").unwrap().insert("Second".into(), "UOther".into()); }
+            9 => { r.class_fields.get_mut("UFlow").unwrap().insert("Nodes".into(), "TSet<UNode>".into()); }
+            10 => r.func_ret.get_mut(&10).unwrap().type_info = 104,
+            11 => r.func_params.get_mut(&10).unwrap().push(DataType::default()),
+            12 => r.func_ret.get_mut(&11).unwrap().is_read_only = true,
+            _ => {}
+        }
+        r
+    }
+
+
+    #[cfg(test)]
     pub(crate) fn from_test_direct_enum_index(fault: u8) -> Self {
         let mut r = Self::from_test_hidden_return_enum_arguments(fault);
         r.type_identity_by_ptr.get_mut(&6).unwrap().module = "Script".into();

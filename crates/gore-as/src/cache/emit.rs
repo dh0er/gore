@@ -2474,6 +2474,8 @@ fn emit_function_ctor(
         // The iterator idiom is a range-for the compiler desugared; write it back as one. Runs
         // BEFORE the value-type decl-init rewrite, which would otherwise give the loop element a
         // declaration and hide the idiom.
+        let body = split_reused_foreach_iterator_lives(&body, f, refs);
+        pass_trace("split_reused_foreach_iterator_lives", &body);
         let (body, foreach_suppressed) =
             rewrite_foreach_loops(
                 &body,
@@ -14676,6 +14678,88 @@ fn order_block_handle_declarations(body: &str, permutations: &[Vec<i32>]) -> Str
             || !permutations.iter().any(|run| run.windows(order.len()).any(|part| part == order)) { continue; }
         for (n, slot) in order.iter().enumerate() {
             lines[open + 1 + n] = declarations.iter().find(|(s, _)| s == slot).unwrap().1.clone();
+        }
+    }
+    let mut out = lines.join("\n"); if body.ends_with('\n') { out.push('\n'); } out
+}
+
+
+/// Repeated iterator destinations are separate range-loop lives when every
+/// native factory writes directly to the loop's own iterator, without assignment.
+/// Name those lives before the existing range-loop recovery counts identifier uses.
+fn split_reused_foreach_iterator_lives(body: &str, f: &Func, refs: &RefResolver) -> String {
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let mut groups: HashMap<i32, Vec<(String, i32, Vec<usize>)>> = HashMap::new();
+    for (at, c) in code.windows(13).enumerate() {
+        let witness = (|| {
+            if c.iter().map(|i| i.op.name).ne(["PSF", "PshVPtr", "ADDSi", "RDSPtr", "ADDSi", "CALLSYS", "JMP",
+                "SUSPEND", "PSF", "CALLSYS", "PshRPtr", "RDSPtr", "RefCpyV"]) { return None; }
+            let w = |i: &Instr, n: usize| i.words.get(n).map(|w| *w as i16 as i32);
+            let (iter, elem) = (w(&c[0], 0)?, w(&c[12], 0)?);
+            if iter <= 0 || elem <= 0 || iter == elem || w(&c[1], 0)? != 0 || w(&c[8], 0)? != iter { return None; }
+            let factory = *c[5].qwords.first()? as i64; let proceed = *c[9].qwords.first()? as i64;
+            let ret = refs.func_ret_by_ptr(factory)?; let item = refs.func_ret_by_ptr(proceed)?;
+            let iterator_type = refs.type_identity_by_ptr(ret.type_info)?; let element_type = refs.type_identity_by_ptr(item.type_info)?;
+            if refs.func_by_ptr(factory) != Some("Iterator") || refs.func_owner_by_ptr(factory) != Some("TArray")
+                || refs.func_by_ptr(proceed) != Some("Proceed") || refs.func_owner_by_ptr(proceed) != Some("TArrayIterator")
+                || [factory, proceed].iter().any(|p| !refs.is_method_by_ptr(*p) || refs.is_const_method_by_ptr(*p)
+                    || !refs.func_params_by_ptr(*p).is_some_and(|args| args.is_empty()))
+                || ret.token != 5 || ret.is_reference || ret.is_object_handle || ret.is_object_const || iterator_type.name != "TArrayIterator"
+                || item.token != 5 || !item.is_reference || !item.is_object_handle || item.is_object_const || item.is_read_only
+                || !is_object_handle_type(&element_type.name) { return None; }
+            for (slot, ty) in [(iter, ret.type_info), (elem, item.type_info)] {
+                if f.obj_locals.iter().filter(|(s, _)| *s == slot).map(|(_, p)| *p).collect::<Vec<_>>() != [ty] { return None; }
+            }
+            let (host_id, owner_id) = (*c[2].dwords.first()? as i32, *c[4].dwords.first()? as i32);
+            let host = refs.type_identity_by_id(host_id)?; let owner = refs.type_identity_by_id(owner_id)?;
+            let (outer, old_host) = refs.member_identity(host_id, w(&c[2], 0)?)?;
+            let (field, old_owner) = refs.member_identity(owner_id, w(&c[4], 0)?)?;
+            if host.module.is_empty() || owner.module.is_empty() || !is_object_handle_type(&owner.name)
+                || refs.type_identity_by_id(old_host)? != host || refs.type_identity_by_id(old_owner)? != owner
+                || refs.own_field_type_by_class(&host.name, outer)? != owner.name
+                || refs.own_field_type_by_class(&owner.name, field)? != format!("TArray<{}>", element_type.name) { return None; }
+            let target = |i: &Instr| Some(i.offset_dw as i64 + 2 + *i.dwords.first()? as i32 as i64);
+            let end = code.iter().position(|i| Some(i.offset_dw as i64) == target(&c[6]))?;
+            let tail = code.get(end..end + 4)?;
+            if end <= at + 13 || tail.iter().map(|i| i.op.name).ne(["LoadVObjR", "RDR1", "CpyVtoR1", "JLowNZ"])
+                || w(&tail[0], 0)? != iter || w(&tail[1], 0)? != w(&tail[2], 0)?
+                || target(&tail[3])? != c[7].offset_dw as i64
+                || refs.type_identity_by_id(*tail[0].dwords.first()? as i32)? != iterator_type
+                || code[end - 1].op.name != "FreeNullV8" || w(&code[end - 1], 0)? != elem { return None; }
+            if code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && target(i).is_some_and(|t|
+                t > c[0].offset_dw as i64 && t <= c[5].offset_dw as i64))) { return None; }
+            Some((iter, format!("this.{outer}.{field}"), elem, vec![at, at + 8, end]))
+        })();
+        if let Some((iter, path, elem, uses)) = witness { groups.entry(iter).or_default().push((path, elem, uses)); }
+    }
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    for (iter, instances) in groups {
+        if instances.len() < 2 { continue; }
+        let uses: Vec<usize> = instances.iter().flat_map(|(_, _, uses)| uses.iter().copied()).collect();
+        if code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&iter)).map(|(n, _)| n).ne(uses) { continue; }
+        let name = format!("local_{iter}");
+        let mut loops = Vec::new();
+        for (at, line) in lines.iter().enumerate() {
+            let store = line.trim().strip_prefix("auto ").unwrap_or(line.trim());
+            let Some(path) = store.strip_prefix(&format!("{name} = ")).and_then(|s| s.strip_suffix(".Iterator();")) else { continue; };
+            let Some((expected_path, elem, _)) = instances.get(loops.len()) else { loops.clear(); break; };
+            if path != expected_path || !lines.get(at + 1).is_some_and(|l| is_can_proceed_header(l.trim(), &name))
+                || !lines.get(at + 2).is_some_and(|l| l.trim() == "{")
+                || !lines.get(at + 3).is_some_and(|l| proceed_assignment(l, &name).is_some_and(|(slot, _)| slot == *elem)) { loops.clear(); break; }
+            let Some(close) = matching_close(&lines.iter().map(String::as_str).collect::<Vec<_>>(), at + 2) else { loops.clear(); break; };
+            if lines[at..=close].iter().map(|l| count_ident(l, &name)).sum::<usize>() != 3 { loops.clear(); break; }
+            loops.push((at, close));
+        }
+        if loops.len() != instances.len() || lines.iter().enumerate().any(|(at, line)| count_ident(line, &name) > 0
+            && !loops.iter().any(|(start, close)| at >= *start && at <= *close)
+            && !bare_declaration(line).is_some_and(|(_, ident)| ident == name)) { continue; }
+        if (2..=loops.len()).any(|life| count_ident(body, &format!("{name}_{life}")) > 0) { continue; }
+        for (life, (start, close)) in loops.iter().enumerate().skip(1) {
+            let renamed = format!("{name}_{}", life + 1);
+            if !lines[*start].trim().starts_with("auto ") {
+                lines[*start] = format!("{}auto {}", indent_of(&lines[*start]), lines[*start].trim());
+            }
+            for line in &mut lines[*start..=*close] { *line = rename_ident(line, &name, &renamed); }
         }
     }
     let mut out = lines.join("\n"); if body.ends_with('\n') { out.push('\n'); } out
@@ -35955,6 +36039,53 @@ mod literal_value_lifetime_tests {
             branch.replace("    local_26 = nullptr;", "    local_14 = nullptr;"),
             branch.replace("    UEvent", "        UEvent")] {
             assert_eq!(super::order_block_handle_declarations(&bad, &runs), bad);
+        }
+    }
+
+
+    #[test]
+    fn reused_native_iterator_lives_reach_the_existing_foreach_recovery() {
+        let mut f = function(&[]);
+        for offset in [8, 24] {
+            let mut loop_f = function(&[("PSF", &[28]), ("PshVPtr", &[0]), ("ADDSi", &[offset]), ("RDSPtr", &[]),
+                ("ADDSi", &[16]), ("CALLSYS", &[]), ("JMP", &[]), ("SUSPEND", &[]), ("PSF", &[28]),
+                ("CALLSYS", &[]), ("PshRPtr", &[]), ("RDSPtr", &[]), ("RefCpyV", &[36]), ("FreeNullV8", &[36]),
+                ("LoadVObjR", &[28, 16]), ("RDR1", &[1]), ("CpyVtoR1", &[1]), ("JLowNZ", &[])]);
+            let c = disassemble(&loop_f.bytecode).unwrap();
+            for (at, value) in [(2, 1), (4, 2), (5, 10), (9, 11)] { loop_f.bytecode[c[at].offset_dw + 1] = value; }
+            loop_f.bytecode[c[14].offset_dw + 2] = 3;
+            for (at, to) in [(6, 14), (17, 7)] { loop_f.bytecode[c[at].offset_dw + 1] = c[to].offset_dw as i32 - c[at].offset_dw as i32 - 2; }
+            f.bytecode.extend(loop_f.bytecode);
+        }
+        f.bytecode.extend(function(&[("RET", &[6])]).bytecode); f.obj_locals = vec![(28, 103), (36, 104)];
+        let refs = RefResolver::from_test_reused_foreach_lives(0);
+        let region = |field: &str, declare: &str| format!("    {declare}local_28 = this.{field}.Nodes.Iterator();\n    for (; local_28.CanProceed;)\n    {{\n        local_36 = local_28.Proceed();\n        Use(local_36);\n        local_36 = nullptr;\n    }}\n");
+        let body = format!("    UNode local_36;\n{}{}", region("First", "auto "), region("Second", ""));
+        let split = super::split_reused_foreach_iterator_lives(&body, &f, &refs);
+        assert!(split.contains("auto local_28_2 = this.Second.Nodes.Iterator();"));
+        assert_eq!(super::split_reused_foreach_iterator_lives(&split, &f, &refs), split);
+        let recovered = super::rewrite_foreach_loops(&split, &BTreeMap::from([(28, "TArrayIterator".into()), (36, "UNode".into())]),
+            &refs, &super::range_for_iterator_slots(&f, &refs), &super::proceed_element_slots(&f, &refs), &HashMap::new(),
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new()).0;
+        for field in ["First", "Second"] { assert!(recovered.contains(&format!("for (auto local_36 : this.{field}.Nodes)")), "{recovered}"); }
+        assert!(!recovered.contains(".Iterator()"), "{recovered}");
+        for fault in 1..=12 { assert_eq!(super::split_reused_foreach_iterator_lives(&body, &f, &RefResolver::from_test_reused_foreach_lives(fault)), body, "metadata {fault}"); }
+        let c = disassemble(&f.bytecode).unwrap();
+        for at in [0, 1, 2, 4, 8, 12, 13, 14, 15, 16] {
+            let mut bad = f.clone(); bad.bytecode[c[at].offset_dw] ^= 1 << 16;
+            assert_eq!(super::split_reused_foreach_iterator_lives(&body, &bad, &refs), body, "operand {at}");
+        }
+        let mut extra = f.clone(); extra.bytecode.extend(function(&[("PSF", &[28])]).bytecode);
+        assert_eq!(super::split_reused_foreach_iterator_lives(&body, &extra, &refs), body);
+        let mut duplicate = f.clone(); duplicate.obj_locals.push((28, 103));
+        assert_eq!(super::split_reused_foreach_iterator_lives(&body, &duplicate, &refs), body);
+        let mut jump = f.clone(); let at = jump.bytecode.len(); jump.bytecode.extend(function(&[("JMP", &[])]).bytecode);
+        jump.bytecode[at + 1] = c[5].offset_dw as i32 - at as i32 - 2;
+        assert_eq!(super::split_reused_foreach_iterator_lives(&body, &jump, &refs), body);
+        for text in [body.replace("this.Second", "this.Other"), body.replace("local_36 = local_28.Proceed()", "local_40 = local_28.Proceed()"),
+            format!("{body}    Use(local_28);\n"), format!("{body}    Use(local_28_2);\n"),
+            body.replace("        Use(local_36);", "        Use(local_28);\n        Use(local_36);")] {
+            assert_eq!(super::split_reused_foreach_iterator_lives(&text, &f, &refs), text);
         }
     }
 
