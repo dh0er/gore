@@ -448,6 +448,36 @@ fn is_proven_typed_psf_conversion(recv: &Arg, args: &[Arg], ptr: i64, refs: &Ref
         && refs.func_ret_by_ptr(ptr).is_some_and(|t| t.token == 0x52 && !t.is_reference && !t.is_object_handle)
 }
 
+/// A native value constructed before the first branch remains a readable local
+/// in later blocks. Require its exact const-reference type and no intervening release.
+fn has_entry_constructed_psf_value(ctx: &Ctx<'_>, at: usize, arg: &Arg, param: &DataType) -> bool {
+    (|| {
+        let slot = arg.s.strip_prefix("local_")?.parse::<i32>().ok()?;
+        let identity = ctx.refs.type_identity_by_ptr(param.type_info)?;
+        if slot <= 0 || !arg.is_psf || arg.ty.as_deref() != Some(identity.name.as_str())
+            || ctx.slot_type(slot).as_deref() != Some(identity.name.as_str())
+            || !identity.name.starts_with('F') || !identity.module.is_empty() || !identity.namespace.is_empty()
+            || param.token != 5 || !param.is_reference || !param.is_object_const || !param.is_read_only
+            || param.is_object_handle || param.is_auto || param.if_handle_then_const { return None; }
+        let prefix = ctx.instrs.get(..at)?;
+        let first_branch = prefix.iter().position(|i| i.op.name.starts_with('J')).unwrap_or(at);
+        let mut constructed = false;
+        for (index, pair) in prefix.windows(2).enumerate() {
+            if pair[0].op.name != "PSF" || pair[0].words.first().map(|w| *w as i16 as i32) != Some(slot)
+                || pair[1].op.name != "CALLSYS" { continue; }
+            let ptr = *pair[1].qwords.first()? as i64;
+            if ctx.refs.func_by_ptr(ptr) == Some("$beh2") { return None; }
+            if index + 1 >= first_branch || ctx.refs.func_by_ptr(ptr) != Some("$beh0") { continue; }
+            if ctx.refs.func_owner_by_ptr(ptr) == Some(identity.name.as_str())
+                && ctx.refs.is_method_by_ptr(ptr) && !ctx.refs.is_const_method_by_ptr(ptr)
+                && ctx.refs.func_params_by_ptr(ptr)?.is_empty()
+                && ctx.refs.func_ret_by_ptr(ptr).is_some_and(|r| r.token == 0x52
+                    && !r.is_reference && !r.is_object_handle) { constructed = true; }
+        }
+        constructed.then_some(())
+    })().is_some()
+}
+
 /// A native local's addressed field is a typed copy source, not a pending RVO.
 /// Keep this evidence local to the constructor and its direct-copy spelling.
 fn is_proven_native_psf_member_copy(ctx: &Ctx<'_>, at: usize, recv: &Arg, args: &[Arg], ptr: i64) -> bool {
@@ -5837,13 +5867,14 @@ fn block_stmts_in(
                                 .unwrap_or(false);
                             let psf_args_written_here = (params.map(|p| p.len()).unwrap_or(0) >= 2
                                 || converts)
-                                && args.iter().filter(|a| a.is_psf).all(|a| {
+                                && args.iter().enumerate().filter(|(_, a)| a.is_psf).all(|(index, a)| {
                                     out.iter().any(|statement| {
                                         statement
                                             .trim_start()
                                             .strip_prefix(a.s.as_str())
                                             .is_some_and(|rest| rest.starts_with(" = "))
-                                    })
+                                    }) || params.and_then(|p| p.get(index)).is_some_and(|param|
+                                        a.s != recv.s && has_entry_constructed_psf_value(ctx, lo + k, a, param))
                                 });
                             if !args.is_empty()
                                 && (!any_psf_arg || proven_psf_copy || proven_psf_conversion || proven_member_copy || psf_args_written_here)
@@ -6193,6 +6224,21 @@ fn block_stmts_in(
                 flush_store(&mut out, name(slot), rhs);
             }
             "CpyRtoV4" | "CpyRtoV8" => {
+                // A fresh typed bool comparison supersedes a preceding void call's
+                // pending statement. Flush that statement, then capture the test below.
+                if n == "CpyRtoV4" && pending_ty.as_deref() == Some("void")
+                    && ctx.slot_type(w(ins, 0)).as_deref() == Some("bool")
+                    && k.checked_sub(1).is_some_and(|j|
+                        matches!(insns[j].op.name, "TZ" | "TNZ" | "TS" | "TNS" | "TP" | "TNP"))
+                    && k.checked_sub(2).is_some_and(|j| matches!(insns[j].op.name,
+                        "CMPi" | "CMPu" | "CMPf" | "CMPd" | "CMPi64" | "CMPu64"
+                            | "CMPIi" | "CMPIu" | "CMPIf" | "CmpPtrNull"))
+                    && cmp.as_ref().and_then(materialized_comparison).is_some()
+                {
+                    if let Some(statement) = pending.take().filter(|s|
+                        !s.contains('\u{2}') && !s.contains(UNRESOLVED))
+                    { out.push(format!("{statement};")); }
+                }
                 // batch-21 Class C shape 3: a VOID call has no register value to copy —
                 // `local_N = VoidCall();` fails "No conversion from 'void' to 'int'". Emit the
                 // call as its own statement; the copied register value (stale, unmodeled) is
@@ -14172,6 +14218,68 @@ mod tests {
         assert!(source.contains("Save(local_21);"), "{source}");
         assert!(source.find("local_16 =").unwrap() < source.find("if (").unwrap(), "{source}");
         assert!(source.find("if (").unwrap() < source.find("local_21 =").unwrap(), "{source}");
+    }
+
+    #[test]
+    fn constructor_can_read_an_entry_constructed_value_across_a_branch() {
+        let render = |fault: u8, branch_first: bool, released: bool, known_type: bool| {
+            let mut a = TestAssembler::default();
+            if branch_first { a.jump("JMP", "construct"); }
+            a.label("construct"); a.op("PSF", &[48], &[]); a.op("CALLSYS", &[], &[1, 0]);
+            a.op("PSF", &[62], &[]); a.op("CALLSYS", &[], &[2, 0]);
+            a.jump("JMP", "body"); a.label("body");
+            if released { a.op("PSF", &[48], &[]); a.op("CALLSYS", &[], &[6, 0]); }
+            a.op("PshC4", &[], &[5]); a.op("PshGPtr", &[], &[100, 0]);
+            a.op("PSF", &[48], &[]); a.op("PSF", &[62], &[]); a.op("PSF", &[88], &[]);
+            a.op("CALLSYS", &[], &[3, 0]); a.op("PSF", &[88], &[]); a.op("CALLSYS", &[], &[4, 0]);
+            let mut fixture = a.finish();
+            for i in &mut fixture.instrs {
+                if matches!(i.op.name, "CALLSYS" | "PshGPtr") { i.qwords = vec![i.dwords[0] as u64]; }
+            }
+            let begin = fixture.instrs.iter().position(|i| i.offset_dw == fixture.labels["body"]).unwrap();
+            let refs = RefResolver::from_test_entry_constructed_value(fault);
+            let f = FuncCode { func: "Fixture::Construct".into(), is_method: false,
+                param_names: Vec::new(), param_types: Vec::new(), bytecode: Vec::new(),
+                ret: DataType { token: 0x52, ..Default::default() } };
+            let mut locals = HashMap::from([(48, "FVector".into()), (62, "FRotator".into()), (88, "FTransform".into())]);
+            if !known_type { locals.remove(&48); }
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: None, param_types: None, class_name: None,
+                local_types: Some(&locals), float_slots: Default::default(), param_off_map: HashMap::new(),
+                rvo_off: None, keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+            block_stmts(&ctx, begin, fixture.instrs.len()).0.join("\n")
+        };
+        let source = render(0, false, false, true);
+        assert!(source.contains("local_88 = FTransform(local_62, local_48, FVector::OneVector);"), "{source}");
+        assert!(source.contains("Use(local_88, 5);"), "{source}");
+        for fault in 1..=6 { assert!(!render(fault, false, false, true).contains("local_88 = FTransform("), "{fault}"); }
+        for (branch_first, released, known_type) in [(true, false, true), (false, true, true), (false, false, false)] {
+            assert!(!render(0, branch_first, released, known_type).contains("local_88 = FTransform("));
+        }
+    }
+
+    #[test]
+    fn fresh_bool_test_survives_a_pending_void_statement() {
+        let render = |fresh: bool, dest_type: &str| {
+            let mut a = TestAssembler::default();
+            a.op("CALLSYS", &[], &[1, 0]);
+            if fresh { a.op("CMPd", &[40, 42], &[]); a.op("TS", &[], &[]); }
+            a.op("CpyRtoV4", &[49], &[]); a.op("PshV4", &[49], &[]);
+            let mut fixture = a.finish(); fixture.instrs[0].qwords = vec![1];
+            let refs = RefResolver::from_test_pointer_comparison_call(DataType { token: 0x52, ..Default::default() });
+            let f = FuncCode { func: "Fixture::Compare".into(), is_method: false,
+                param_names: Vec::new(), param_types: Vec::new(), bytecode: Vec::new(),
+                ret: DataType { token: 0x52, ..Default::default() } };
+            let locals = HashMap::from([(49, dest_type.into()), (40, "float".into()), (42, "float".into())]);
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: None, param_types: None, class_name: None,
+                local_types: Some(&locals), float_slots: Default::default(), param_off_map: HashMap::new(),
+                rvo_off: None, keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+            block_stmts(&ctx, 0, fixture.instrs.len()).0
+        };
+        assert_eq!(render(true, "bool"), ["GetPawn();", "local_49 = (local_40 < local_42);"]);
+        assert_eq!(render(false, "bool"), ["GetPawn();"]);
+        assert_eq!(render(true, "int"), ["GetPawn();"]);
     }
 
     #[test]

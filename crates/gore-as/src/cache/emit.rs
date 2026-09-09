@@ -1271,6 +1271,7 @@ fn emit_function_ctor(
     copy_out_keep.extend(mutable_f32_elements.iter().map(|(_, elem)| *elem));
     let mut alias_copy_keep: HashSet<i32> = widened.union(&named_bool_returns).copied().collect();
     alias_copy_keep.extend(joined_return_copies.iter().copied());
+    alias_copy_keep.extend(copied_short_circuit_accumulators(f, refs));
     let repeated_aliases = repeated_handle_alias_slots(f, refs);
     alias_copy_keep.extend(repeated_aliases.iter().copied());
     let loop_result_aliases = loop_result_handle_aliases(f, refs, is_method);
@@ -16344,6 +16345,118 @@ fn native_member_copies_before_comparison(f: &Func, refs: &RefResolver) -> HashS
     }).collect()
 }
 
+/// The exact native const equality signature, including its receiver's unique value identity.
+fn const_native_value_equality(f: &Func, refs: &RefResolver, call: &Instr, slot: i32) -> Option<i64> {
+    if call.op.name != "CALLSYS" || slot <= 0 { return None; }
+    let ptr = *call.qwords.first()? as i64;
+    let ret = refs.func_ret_by_ptr(ptr)?;
+    let [param] = refs.func_params_by_ptr(ptr)? else { return None; };
+    let identity = refs.type_identity_by_ptr(param.type_info)?;
+    if refs.func_by_ptr(ptr) != Some("opEquals") || !refs.is_method_by_ptr(ptr)
+        || !refs.is_const_method_by_ptr(ptr) || refs.func_owner_by_ptr(ptr) != Some(identity.name.as_str())
+        || !identity.name.starts_with('F') || !identity.module.is_empty() || !identity.namespace.is_empty()
+        || ret.token != 0x41 || ret.type_info != 0 || ret.is_reference || ret.is_object_handle
+        || ret.is_object_const || ret.is_read_only || ret.is_auto || ret.if_handle_then_const
+        || param.token != 5 || !param.is_reference || !param.is_object_const || !param.is_read_only
+        || param.is_object_handle || param.is_auto || param.if_handle_then_const
+        || f.obj_locals.iter().filter(|(s, _)| *s == slot).map(|(_, p)| *p).ne([param.type_info])
+    { return None; }
+    Some(param.type_info)
+}
+
+/// Each OR statement copies its result into the same named bool before the next
+/// statement reloads it. Retain only this closed, literal-seeded native-equality profile.
+fn copied_short_circuit_accumulators(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    if f.ret.token != 0x41 || f.ret.type_info != 0 || f.ret.is_reference || f.ret.is_object_handle {
+        return HashSet::new();
+    }
+    let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+    let jump = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+    let mut out = HashSet::new();
+    for (seed, pair) in code.windows(2).enumerate() {
+        let candidate = (|| {
+            if pair[0].op.name != "SetV1" || pair[0].dwords.first() != Some(&0)
+                || pair[1].op.name != "CpyVtoV4" || w(&pair[0], 0) != w(&pair[1], 1) { return None; }
+            let (named, scratch) = (w(&pair[1], 0)?, w(&pair[0], 0)?);
+            if named <= 0 || scratch <= 0 || named == scratch
+                || f.obj_locals.iter().any(|(s, _)| [named, scratch].contains(s)) { return None; }
+            let uses: Vec<_> = code.iter().enumerate().filter(|(_, i)|
+                super::bytediff::addressed_slots(i).contains(&named)).map(|(at, _)| at).collect();
+            // Initial copy, >=2 read/store links, alternate true copy, returned value.
+            if uses.len() < 7 || uses.len() % 2 != 1 || uses[0] != seed + 1 { return None; }
+            let links = (uses.len() - 3) / 2;
+            let first = uses[1];
+            if first <= seed + 2 { return None; }
+            let mut allowed = HashSet::new();
+            let mut operands = None;
+            for n in 0..links {
+                let at = first + n * 17;
+                let c = code.get(at..at + 17)?;
+                if uses[1 + n * 2] != at || uses[2 + n * 2] != at + 16
+                    || c.iter().map(|i| i.op.name).ne(["CpyVtoR1", "JLowZ", "SetV1", "JMP",
+                        "PshGPtr", "PSF", "CALLSYS", "JLowNZ", "SetV4", "JMP", "PshGPtr",
+                        "PSF", "CALLSYS", "CpyRtoV4", "CpyVtoV4", "CpyVtoV4", "CpyVtoV4"])
+                    || c[2].dwords.first() != Some(&1) || c[8].dwords.first() != Some(&0)
+                    || w(&c[0], 0) != Some(named) || w(&c[8], 0) != Some(scratch)
+                    || w(&c[14], 0) != Some(scratch) || w(&c[15], 1) != Some(scratch)
+                    || w(&c[16], 0) != Some(named) { return None; }
+                let (carrier, left, right) = (w(&c[2], 0)?, w(&c[5], 0)?, w(&c[11], 0)?);
+                if carrier <= 0 || left <= 0 || right <= 0
+                    || [named, scratch, carrier, left, right].into_iter().collect::<HashSet<_>>().len() != 5
+                    || f.obj_locals.iter().any(|(s, _)| *s == carrier)
+                    || [13, 15].iter().any(|i| w(&c[*i], 0) != Some(carrier))
+                    || [14, 16].iter().any(|i| w(&c[*i], 1) != Some(carrier))
+                    || c[4].qwords != c[10].qwords
+                    || refs.global_by_ptr(*c[4].qwords.first()? as i64).is_none()
+                    || const_native_value_equality(f, refs, &c[6], left)?
+                        != const_native_value_equality(f, refs, &c[12], right)? { return None; }
+                let current = (carrier, left, right);
+                if operands.is_some_and(|previous| previous != current) { return None; }
+                operands = Some(current);
+                for (from, to) in [(1, 4), (3, 16), (7, 10), (9, 15)] {
+                    if jump(&c[from]) != Some(c[to].offset_dw as i64) { return None; }
+                    allowed.insert(at + from);
+                }
+            }
+            let end = first + links * 17;
+            let tail = code.get(end..end + 3)?;
+            if tail.iter().map(|i| i.op.name).ne(["JMP", "SetV1", "CpyVtoV4"])
+                || tail[1].dwords.first() != Some(&1) || w(&tail[1], 0) != Some(scratch)
+                || w(&tail[2], 0) != Some(named) || w(&tail[2], 1) != Some(scratch)
+                || uses[uses.len() - 2] != end + 2
+                || jump(&tail[0]) != Some(code.get(end + 3)?.offset_dw as i64)
+                || code[first - 1].op.name != "JNZ"
+                || jump(&code[first - 1]) != Some(tail[1].offset_dw as i64) { return None; }
+            allowed.extend([first - 1, end]);
+            let returned = *uses.last()?;
+            if code[returned].op.name != "CpyVtoR4" || returned < end + 3 { return None; }
+            // Only typed native value destruction separates the final copy from its return.
+            let cleanup = code.get(end + 3..returned)?;
+            if cleanup.len() % 2 != 0 || cleanup.chunks_exact(2).any(|c| {
+                let Some(ptr) = c[1].qwords.first().map(|p| *p as i64) else { return true; };
+                let types: Vec<_> = f.obj_locals.iter().filter(|(s, _)| Some(*s) == w(&c[0], 0))
+                    .map(|(_, p)| *p).collect();
+                c[0].op.name != "PSF" || c[1].op.name != "CALLSYS"
+                    || refs.func_by_ptr(ptr) != Some("$beh2") || !refs.is_method_by_ptr(ptr)
+                    || refs.is_const_method_by_ptr(ptr) || types.len() != 1
+                    || !refs.func_params_by_ptr(ptr).is_some_and(|p| p.is_empty())
+                    || !refs.func_ret_by_ptr(ptr).is_some_and(|t| t.token == 0x52 && !t.is_reference && !t.is_object_handle)
+                    || !refs.type_by_ptr(types[0]).is_some_and(|ty| refs.func_owner_by_ptr(ptr) == Some(ty))
+            }) { return None; }
+            let exit = code.get(returned + 1)?;
+            if exit.op.name != "RET" && !(exit.op.name == "JMP" && code.last().is_some_and(|i|
+                i.op.name == "RET" && jump(exit) == Some(i.offset_dw as i64))) { return None; }
+            if code.iter().enumerate().any(|(at, i)| i.op.name == "JMPP" ||
+                (i.op.name.starts_with('J') && !allowed.contains(&at)
+                    && jump(i).is_some_and(|target| target > pair[0].offset_dw as i64
+                        && target <= code[returned].offset_dw as i64))) { return None; }
+            Some(named)
+        })();
+        out.extend(candidate);
+    }
+    out
+}
 /// A value with one physical life that vanilla kept beyond its consuming expression.
 /// Require exactly one creator, one consumer, and no address use besides those and releases.
 /// Boundaries are an integer-result branch, another value's final return copy, or
@@ -16397,6 +16510,43 @@ fn retained_value_arguments(
                 && w0(i) == w0(&instrs[consumer + 1]))
             && instrs.get(consumer + 3).is_some_and(|i| matches!(i.op.name, "JZ" | "JNZ"))
             && dies.iter().all(|at| *at > consumer + 3);
+        // A const native value equality branches directly; its named receiver
+        // is released at both bool returns, never in the condition's cleanup.
+        let compared_bool = (|| {
+            if dies.len() != 2 || *argument + 1 != consumer || producer != *destination + 3
+                || consumer != producer + 3 || f.ret.token != 0x41 || f.ret.is_reference || f.ret.is_object_handle
+            { return None; }
+            let c = instrs.get(*destination..consumer + 2)?;
+            if c[..7].iter().map(|i| i.op.name).ne(["PSF", "PshVPtr", "RDSPtr", "CALLSYS", "PshGPtr", "PSF", "CALLSYS"])
+                || !matches!(c[7].op.name, "JLowZ" | "JLowNZ") || w0(&c[1]) > 0
+                || refs.global_by_ptr(*c[4].qwords.first()? as i64).is_none() { return None; }
+            let ty = const_native_value_equality(f, refs, &c[6], s)?;
+            let ptr = *c[3].qwords.first()? as i64;
+            if !refs.is_method_by_ptr(ptr) || !refs.is_const_method_by_ptr(ptr)
+                || refs.func_owner_by_ptr(ptr).is_none()
+                || !refs.func_params_by_ptr(ptr).is_some_and(|p| p.is_empty())
+                || !refs.func_ret_by_ptr(ptr).is_some_and(|t| t.token == 5 && t.type_info == ty
+                    && !t.is_reference && !t.is_object_handle && !t.is_object_const && !t.is_read_only)
+            { return None; }
+            let jump = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+            let last = instrs.last().filter(|i| i.op.name == "RET")?;
+            if dies[1] + 4 != instrs.len() || !jump(&c[7]).is_some_and(|to|
+                to > c[7].offset_dw as i64 && to < instrs[dies[0]].offset_dw as i64) { return None; }
+            for (n, at) in dies.iter().enumerate() {
+                let tail = instrs.get(*at..*at + 4)?;
+                let dtor = *tail[1].qwords.first()? as i64;
+                if tail[2].op.name != "CpyVtoR4" || w0(&tail[2]) <= 0
+                    || !refs.is_method_by_ptr(dtor) || refs.is_const_method_by_ptr(dtor)
+                    || !refs.type_by_ptr(ty).is_some_and(|t| refs.func_owner_by_ptr(dtor) == Some(t))
+                    || !refs.func_params_by_ptr(dtor).is_some_and(|p| p.is_empty())
+                    || !refs.func_ret_by_ptr(dtor).is_some_and(|t| t.token == 0x52 && !t.is_reference && !t.is_object_handle)
+                    || (n == 0 && (tail[3].op.name != "JMP" || jump(&tail[3]) != Some(last.offset_dw as i64)))
+                    || (n == 1 && tail[3].op.name != "RET") { return None; }
+            }
+            (!instrs.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J')
+                && jump(i).is_some_and(|to| to > c[0].offset_dw as i64 && to <= c[7].offset_dw as i64))))
+                .then_some(())
+        })().is_some();
         // This argument is not the returned value: that different value is copied out
         // between the consumer and this argument's release (UCS_Not::GetDisplayName).
         let copied_other = dies.len() == 1 && dies[0] == consumer + 4
@@ -16520,7 +16670,7 @@ fn retained_value_arguments(
         let mut tail = dies[0];
         while instrs.get(tail).is_some_and(|i| i.op.name == "PSF")
             && instrs.get(tail + 1).is_some_and(|i| behaviour(i, "$beh2")) { tail += 2; }
-        if after_void || after_value_statement || after_discarded_value_statement || compared || across_if || (copied_other && instrs.get(tail).is_some_and(|i| i.op.name == "RET")) {
+        if after_void || after_value_statement || after_discarded_value_statement || compared || compared_bool || across_if || (copied_other && instrs.get(tail).is_some_and(|i| i.op.name == "RET")) {
             out.insert(s);
         }
     }
@@ -17461,7 +17611,7 @@ fn spilled_boolean_names(f: &Func, refs: &RefResolver) -> HashSet<i32> {
         return HashSet::new();
     };
     let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
-    let mut out = HashSet::new();
+    let mut out = copied_short_circuit_accumulators(f, refs);
     for (at, ins) in instrs.iter().enumerate() {
         let slot = w0(ins);
         if ins.op.name != "CpyRtoV4" || slot <= 0 || at == 0 {
@@ -35761,6 +35911,129 @@ mod literal_value_lifetime_tests {
         }
     }
 
+    fn native_equality_lifetimes_fixture(links: usize) -> Func {
+        let mut ops: Vec<(&str, &[u16])> = vec![("PSF", &[4]), ("PshVPtr", &[65534]),
+            ("RDSPtr", &[]), ("CALLSYS", &[]), ("PshGPtr", &[]), ("PSF", &[4]),
+            ("CALLSYS", &[]), ("JLowNZ", &[]), ("SetV1", &[5]), ("JMP", &[]),
+            ("SetV1", &[6]), ("CpyVtoV4", &[11, 6]), ("CMPIi", &[12]), ("JNZ", &[])];
+        for _ in 0..links {
+            ops.extend_from_slice(&[("CpyVtoR1", &[11]), ("JLowZ", &[]), ("SetV1", &[5]),
+                ("JMP", &[]), ("PshGPtr", &[]), ("PSF", &[8]), ("CALLSYS", &[]),
+                ("JLowNZ", &[]), ("SetV4", &[6]), ("JMP", &[]), ("PshGPtr", &[]),
+                ("PSF", &[10]), ("CALLSYS", &[]), ("CpyRtoV4", &[5]),
+                ("CpyVtoV4", &[6, 5]), ("CpyVtoV4", &[5, 6]), ("CpyVtoV4", &[11, 5])]);
+        }
+        let end = ops.len();
+        ops.extend_from_slice(&[("JMP", &[]), ("SetV1", &[6]), ("CpyVtoV4", &[11, 6]),
+            ("PSF", &[10]), ("CALLSYS", &[]), ("PSF", &[8]), ("CALLSYS", &[]),
+            ("PSF", &[4]), ("CALLSYS", &[]), ("CpyVtoR4", &[11]), ("JMP", &[]),
+            ("SetV1", &[5]), ("PSF", &[4]), ("CALLSYS", &[]), ("CpyVtoR4", &[5]), ("RET", &[0])]);
+        let mut f = function(&ops);
+        f.ret.token = 0x41; f.obj_locals = vec![(4, 100), (8, 100), (10, 100)];
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, i) in code.iter().enumerate() {
+            if i.op.name == "CALLSYS" { f.bytecode[i.offset_dw + 1] = if at == 3 { 2 } else if at > end { 3 } else { 1 }; }
+            if i.op.name == "PshGPtr" { f.bytecode[i.offset_dw + 1] = 50; }
+        }
+        let mut edges = vec![(7, 10), (9, end + 11), (13, end + 1), (end, end + 3), (end + 10, end + 15)];
+        for n in 0..links {
+            let at = 14 + n * 17;
+            for (from, to) in [(1, 4), (3, 16), (7, 10), (9, 15)] { edges.push((at + from, at + to)); }
+            f.bytecode[code[at + 2].offset_dw + 1] = 1;
+        }
+        f.bytecode[code[end + 1].offset_dw + 1] = 1;
+        for (from, to) in edges {
+            f.bytecode[code[from].offset_dw + 1] = code[to].offset_dw as i32 - code[from].offset_dw as i32 - 2;
+        }
+        f
+    }
+
+    #[test]
+    fn native_equality_receiver_survives_both_bool_return_cleanups() {
+        let f = native_equality_lifetimes_fixture(4);
+        let refs = RefResolver::from_test_native_equality_lifetimes(0);
+        let check = |f: &Func, refs: &RefResolver| {
+            let code = disassemble(&f.bytecode).unwrap();
+            let producer = code.iter().position(|i| i.op.name == "CALLSYS" && i.qwords.first() == Some(&2)).unwrap();
+            let consumer = code.iter().position(|i| i.op.name == "CALLSYS" && i.qwords.first() == Some(&1)).unwrap();
+            let fc = super::FuncCode { func: "Synthetic::Use".into(), is_method: true,
+                param_names: Vec::new(), param_types: Vec::new(), ret: f.ret.clone(), bytecode: f.bytecode.clone() };
+            super::retained_value_arguments(f, &fc, refs, &[(4, producer)], &[(4, consumer)])
+        };
+        let keep = check(&f, &refs);
+        assert_eq!(keep, HashSet::from([4]));
+        let body = "    local_4 = Owner.Create();\n    if ((local_4 == Value))\n    {\n        return true;\n    }\n    return false;\n";
+        let locals = BTreeMap::from([(4, "FValue".into())]);
+        assert_eq!(super::inline_call_argument_temporaries(body, &refs, &locals, None, true,
+            &HashMap::new(), &keep, &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
+            &HashSet::new(), &keep, &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new()), body);
+        for fault in 1..=18 {
+            assert!(check(&f, &RefResolver::from_test_native_equality_lifetimes(fault)).is_empty(), "metadata {fault}");
+        }
+        let code = disassemble(&f.bytecode).unwrap();
+        let mut ambiguous = f.clone(); ambiguous.obj_locals.push((4, 100));
+        assert!(check(&ambiguous, &refs).is_empty());
+        let mut escaped = f.clone(); escaped.bytecode.extend(function(&[("PSF", &[4])]).bytecode);
+        assert!(check(&escaped, &refs).is_empty());
+        let mut immediate = f.clone();
+        // Immediate cleanup cannot inherit the named receiver's closed lifetime.
+        let first_release = code.len() - 9;
+        immediate.bytecode.splice(code[7].offset_dw..code[7].offset_dw,
+            f.bytecode[code[first_release].offset_dw..code[first_release + 2].offset_dw].iter().copied());
+        assert!(check(&immediate, &refs).is_empty());
+        for target in [1, 3, 5, 6, 7] {
+            let mut entered = f.clone(); let mut prefix = function(&[("JMP", &[])]).bytecode;
+            prefix[1] = code[target].offset_dw as i32; prefix.extend(entered.bytecode); entered.bytecode = prefix;
+            assert!(check(&entered, &refs).is_empty(), "interior entry {target}");
+        }
+    }
+
+    #[test]
+    fn copied_native_equality_accumulator_keeps_each_statement_boundary() {
+        let refs = RefResolver::from_test_native_equality_lifetimes(0);
+        let f = native_equality_lifetimes_fixture(4);
+        let keep = super::copied_short_circuit_accumulators(&f, &refs);
+        assert_eq!(keep, HashSet::from([11]));
+        assert_eq!(super::copied_short_circuit_accumulators(&native_equality_lifetimes_fixture(2), &refs), keep);
+        assert!(super::copied_short_circuit_accumulators(&native_equality_lifetimes_fixture(1), &refs).is_empty());
+        let spilled = super::spilled_boolean_names(&f, &refs);
+        assert!(spilled.contains(&11));
+        assert!(!spilled.contains(&5) && !spilled.contains(&6));
+        let body = "    local_11 = local_5;\n    if (local_11)\n    {\n        Act();\n    }\n";
+        let locals = BTreeMap::from([(5, "bool".into()), (11, "bool".into())]);
+        assert_eq!(super::inline_call_argument_temporaries(body, &refs, &locals, None, true,
+            &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &spilled, &HashMap::new(),
+            &HashSet::new(), &HashSet::new(), &HashSet::new()), body);
+        assert_eq!(super::fold_condition_temporaries(body, &locals, &refs, None, &spilled, &HashSet::new(), false), body);
+        assert_eq!(super::fold_alias_copies(body, &locals, &keep), body);
+        assert_ne!(super::fold_alias_copies(body, &locals, &HashSet::new()), body);
+        for fault in [1, 2, 3, 4, 5, 6, 7, 11, 12, 13, 14, 15, 16, 17, 18] {
+            assert!(super::copied_short_circuit_accumulators(&f, &RefResolver::from_test_native_equality_lifetimes(fault)).is_empty(), "metadata {fault}");
+        }
+        let code = disassemble(&f.bytecode).unwrap();
+        for at in [10, 16, code.len() - 15] {
+            let mut other = f.clone(); other.bytecode[code[at].offset_dw + 1] = 2;
+            assert!(super::copied_short_circuit_accumulators(&other, &refs).is_empty(), "noncanonical literal {at}");
+        }
+        let mut escaped = f.clone(); escaped.bytecode.extend(function(&[("PSF", &[11])]).bytecode);
+        assert!(super::copied_short_circuit_accumulators(&escaped, &refs).is_empty());
+        let mut object = f.clone(); object.obj_locals.push((11, 100));
+        assert!(super::copied_short_circuit_accumulators(&object, &refs).is_empty());
+        let mut untyped = f.clone(); untyped.obj_locals.retain(|(s, _)| *s != 8);
+        assert!(super::copied_short_circuit_accumulators(&untyped, &refs).is_empty());
+        let mut indirect = f.clone(); indirect.bytecode.extend(function(&[("JMPP", &[12])]).bytecode);
+        assert!(super::copied_short_circuit_accumulators(&indirect, &refs).is_empty());
+        let mut wrong_copy = f.clone();
+        wrong_copy.bytecode[code[30].offset_dw] = function(&[("CpyVtoV4", &[11, 6])]).bytecode[0];
+        wrong_copy.bytecode[code[30].offset_dw + 1] = function(&[("CpyVtoV4", &[11, 6])]).bytecode[1];
+        assert!(super::copied_short_circuit_accumulators(&wrong_copy, &refs).is_empty());
+        for target in [11, 14, 15, 20, 30, 31, code.len() - 7] {
+            let mut entered = f.clone(); let mut prefix = function(&[("JMP", &[])]).bytecode;
+            prefix[1] = code[target].offset_dw as i32; prefix.extend(entered.bytecode); entered.bytecode = prefix;
+            assert!(super::copied_short_circuit_accumulators(&entered, &refs).is_empty(), "interior entry {target}");
+        }
+    }
     #[test]
     fn materialized_const_value_equality_keeps_its_closed_bool_life() {
         let mut f = function(&[("PshVPtr", &[0]), ("ADDSi", &[56]), ("PSF", &[8]),

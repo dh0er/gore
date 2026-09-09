@@ -2212,6 +2212,38 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_entry_constructed_value(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (id, name) in [(101, "FVector"), (102, "FRotator"), (103, "FTransform")] {
+            r.type_by_ptr.insert(id, name.into()); r.type_names.insert(name.into());
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        let void = DataType { token: 0x52, ..Default::default() };
+        let reference = |id| DataType { token: 5, type_info: id, is_reference: true,
+            is_object_const: true, is_read_only: true, ..Default::default() };
+        for (id, name, owner, args) in [(1, "$beh0", "FVector", vec![]),
+            (2, "$beh0", "FRotator", vec![]),
+            (3, "$beh0", "FTransform", vec![reference(102), reference(101), reference(101)]),
+            (6, "$beh2", "FVector", vec![])] {
+            r.func_by_ptr.insert(id, name.into()); r.func_owner.insert(id, owner.into());
+            r.func_is_method.insert(id); r.func_ret.insert(id, void.clone()); r.func_params.insert(id, args);
+        }
+        r.func_by_ptr.insert(4, "Use".into()); r.func_ret.insert(4, void);
+        r.func_params.insert(4, vec![reference(103), DataType { token: 0x44, ..Default::default() }]);
+        r.global_by_ptr.insert(100, "OneVector".into()); r.global_ns.insert(100, "FVector".into());
+        match fault {
+            1 => r.func_params.get_mut(&3).unwrap()[1].is_read_only = false,
+            2 => r.type_identity_by_ptr.get_mut(&101).unwrap().module = "Script".into(),
+            3 => r.func_ret.get_mut(&1).unwrap().token = 0x41,
+            4 => { r.func_is_method.remove(&1); }
+            5 => { r.func_owner.insert(1, "FOther".into()); }
+            6 => r.func_params.get_mut(&3).unwrap()[1].type_info = 102,
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_conditional_constructor_arguments(fault: u8) -> Self {
         let mut r = Self::default();
         r.type_by_ptr.insert(101, "FVector".into()); r.type_names.insert("FVector".into());
@@ -3441,6 +3473,36 @@ impl RefResolver {
         r.func_by_ptr.insert(1, "SetFlag".into()); r.func_is_method.insert(1);
         r.func_ret.insert(1, DataType { token: 0x52, ..Default::default() });
         r.func_params.insert(1, vec![DataType { token, ..Default::default() }]);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_native_equality_lifetimes(fault: u8) -> Self {
+        let mut r = Self::from_test_named_value_equality(if fault <= 4 { fault } else { 0 });
+        r.type_identity_by_ptr.insert(100, TypeIdentity { name: "FValue".into(),
+            module: String::new(), namespace: String::new() });
+        r.global_by_ptr.insert(50, "Value".into());
+        r.func_by_ptr.insert(2, "Create".into()); r.func_owner.insert(2, "UOwner".into());
+        r.func_is_method.insert(2); r.const_method_ptrs.insert(2);
+        r.func_params.insert(2, Vec::new());
+        r.func_ret.insert(2, DataType { token: 5, type_info: 100, ..Default::default() });
+        r.func_by_ptr.insert(3, "$beh2".into()); r.func_owner.insert(3, "FValue".into());
+        r.func_is_method.insert(3); r.func_params.insert(3, Vec::new());
+        r.func_ret.insert(3, DataType { token: 0x52, ..Default::default() });
+        if fault == 5 { r.global_by_ptr.remove(&50); }
+        if fault == 6 { r.func_owner.insert(3, "FOther".into()); }
+        if fault == 7 { r.func_params.insert(3, vec![DataType { token: 0x41, ..Default::default() }]); }
+        if fault == 8 { r.func_ret.get_mut(&2).unwrap().is_reference = true; }
+        if fault == 9 { r.func_is_method.remove(&2); }
+        if fault == 10 { r.const_method_ptrs.remove(&2); }
+        if fault == 11 { r.func_params.remove(&1); }
+        if fault == 12 { r.type_identity_by_ptr.get_mut(&100).unwrap().module = "Script".into(); }
+        if fault == 13 { r.type_identity_by_ptr.get_mut(&100).unwrap().namespace = "Other".into(); }
+        if fault == 14 { r.func_params.get_mut(&1).unwrap()[0].type_info = 200; }
+        if fault == 15 { r.func_ret.get_mut(&1).unwrap().is_reference = true; }
+        if fault == 16 { r.func_params.get_mut(&1).unwrap()[0].is_read_only = false; }
+        if fault == 17 { r.func_ret.get_mut(&3).unwrap().token = 0x41; }
+        if fault == 18 { r.func_is_method.remove(&1); }
         r
     }
 
