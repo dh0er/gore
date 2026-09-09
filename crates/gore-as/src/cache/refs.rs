@@ -3459,6 +3459,57 @@ impl RefResolver {
 
 
     #[cfg(test)]
+    pub(crate) fn from_test_ordered_distance_roots(fault: u8) -> Self {
+        let mut r=Self::from_test_member_chain(&[("UState","Gain"),("FVector","")]);
+        for (id,name,module) in [(1,"UState","Fixture"),(2,"FVector","")] {
+            r.type_identity_by_ptr.insert(id,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        r.prop_type_id.insert(3,1);
+        r.class_fields.insert("UState".into(),HashMap::from([("Gain".into(),if fault==6 {"float"}else{"float32"}.into())]));
+        let vector=DataType {token:5,type_info:2,..Default::default()};
+        let reference=DataType {is_reference:true,is_object_const:true,is_read_only:true,..vector.clone()};
+        let scalar=DataType {token:0x51,..Default::default()};
+        for (ptr,name,ret,args) in [(10,"GetLocation",vector,vec![]),(11,"Distance",scalar.clone(),vec![reference.clone(),reference]),
+            (12,"Sqrt",scalar.clone(),vec![scalar])] {
+            r.funcid_to_ptr.insert(ptr as i32,ptr);r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+        }
+        r.func_is_method.extend([10,11]);r.const_method_ptrs.insert(10);
+        match fault {
+            1=>r.func_ret.get_mut(&10).unwrap().is_reference=true,
+            2=>r.func_params.get_mut(&11).unwrap()[1].is_read_only=false,
+            3=>r.func_ret.get_mut(&12).unwrap().token=0x50,
+            4=>{r.func_is_method.insert(12);}
+            5=>{r.const_method_ptrs.remove(&10);}
+            _=>{}
+        }
+        r
+    }
+
+
+    #[cfg(test)]
+    pub(crate) fn from_test_discarded_fstring_predecessor(fault:u8)->Self {
+        let mut r=Self::from_test_member_chain(&[("FString","")]);
+        r.type_identity_by_ptr.insert(1,TypeIdentity {name:"FString".into(),module:if fault==1 {"Script"}else{""}.into(),namespace:String::new()});
+        for (ptr,text) in [(20,"ignored"),(21,"prefix")] {r.global_by_ptr.insert(ptr,text.into());r.global_is_string.insert(ptr);}
+        let reference=DataType {token:5,type_info:1,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()};
+        let void=DataType {token:0x52,..Default::default()};
+        for (ptr,name,ret,args) in [(10,"$beh0",void.clone(),vec![reference.clone()]),(11,"$beh2",void,vec![]),
+            (12,"Append",DataType {is_object_const:false,is_read_only:false,..reference.clone()},vec![reference])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,"FString".into());r.func_is_method.insert(ptr);r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+        }
+        match fault {
+            2=>r.func_params.get_mut(&10).unwrap()[0].is_read_only=false,
+            3=>{r.const_method_ptrs.insert(11);}
+            4=>r.func_ret.get_mut(&12).unwrap().is_reference=false,
+            5=>{r.global_is_string.remove(&20);}
+            6=>{r.func_owner.insert(12,"FOther".into());}
+            _=>{}
+        }
+        r
+    }
+
+
+    #[cfg(test)]
     pub(crate) fn from_test_native_bool_branch(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("UBase", "Flag"), ("USpecial", "")]);
         for (id, name) in [(1, "UBase"), (2, "USpecial")] {

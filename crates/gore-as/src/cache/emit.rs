@@ -3221,6 +3221,8 @@ fn emit_function_ctor(
         pass_trace("inline_copied_bool_literal_declarations", &rendered);
         let rendered = unwrap_fstring_literal_declarations(&rendered, &named_sites);
         pass_trace("unwrap_fstring_literal_declarations", &rendered);
+        let rendered = discard_unused_fstring_argument_predecessors(&rendered, f, refs);
+        pass_trace("discard_unused_fstring_argument_predecessors", &rendered);
         s.truncate(declarations_at);
         s.push_str(&rendered);
     } else {
@@ -12290,6 +12292,58 @@ fn declaration_with_initializer(line: &str) -> Option<(String, String, String)> 
     Some((indent, name.to_owned(), init.to_owned()))
 }
 
+/// An unused literal construction dies immediately, and its slot is next reused
+/// by a temporary Append argument. Emit the first life as a discarded expression.
+fn discard_unused_fstring_argument_predecessors(body: &str, f: &Func, refs: &RefResolver) -> String {
+    let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    let mut lines:Vec<_>=body.lines().map(str::to_owned).collect();
+    for (at,c) in code.windows(5).enumerate() {
+        let witness=(|| {
+            if c.iter().map(|i|i.op.name).ne(["PGA","PSF","CALLSYS","PSF","CALLSYS"]) {return None;}
+            let w=|i:&Instr|i.words.first().map(|v|*v as i16 as i32);
+            let ptr=|i:&Instr|i.qwords.first().map(|p|*p as i64);
+            let slot=w(&c[1])?;if slot<=0 || w(&c[3])?!=slot {return None;}
+            let global=ptr(&c[0])?;let literal=refs.global_by_ptr(global)?;
+            if !refs.global_is_string(global) || literal.contains(['"','\\','\r','\n']) {return None;}
+            let mut local=f.obj_locals.iter().filter(|(s,_)|*s==slot);let ty=local.next()?.1;
+            let identity=refs.type_identity_by_ptr(ty)?;
+            if local.next().is_some() || identity.name!="FString" || !identity.module.is_empty() || !identity.namespace.is_empty() {return None;}
+            let reference=|p:&super::types::DataType| p.token==5 && p.type_info==ty && p.is_reference
+                && p.is_object_const && p.is_read_only && !p.is_object_handle;
+            let (copy,dtor)=(ptr(&c[2])?,ptr(&c[4])?);
+            for (callee,name) in [(copy,"$beh0"),(dtor,"$beh2")] {
+                let ret=refs.func_ret_by_ptr(callee)?;
+                if refs.func_by_ptr(callee)!=Some(name) || refs.func_owner_by_ptr(callee)!=Some("FString")
+                    || !refs.is_method_by_ptr(callee) || refs.is_const_method_by_ptr(callee) || ret.token!=0x52 || ret.is_reference {return None;}
+            }
+            if !matches!(refs.func_params_by_ptr(copy)?,[p] if reference(p)) || !refs.func_params_by_ptr(dtor)?.is_empty() {return None;}
+            let uses:Vec<_>=code.iter().enumerate().filter(|(_,i)|super::bytediff::addressed_slots(i).contains(&slot)).map(|(n,_)|n).collect();
+            if uses.get(..2)?!=[at+1,at+3] || uses.iter().any(|n|code[*n].op.name!="PSF") {return None;}
+            let later=uses.get(2)?.checked_sub(1)?;let next=code.get(later..later+8)?;
+            if later<=at+4 || next.iter().map(|i|i.op.name).ne(["PGA","PSF","CALLSYS","PSF","PSF","CALLSYS","PSF","CALLSYS"])
+                || uses.get(..5)?!=[at+1,at+3,later+1,later+3,later+6] || ptr(&next[2])?!=copy || ptr(&next[7])?!=dtor
+                || !refs.global_is_string(ptr(&next[0])?) {return None;}
+            let receiver=w(&next[4])?;
+            if receiver<=0 || receiver==slot || f.obj_locals.iter().filter(|(s,_)|*s==receiver).map(|(_,p)|*p).collect::<Vec<_>>() != [ty] {return None;}
+            let append=ptr(&next[5])?;let result=refs.func_ret_by_ptr(append)?;
+            if refs.func_by_ptr(append)!=Some("Append") || refs.func_owner_by_ptr(append)!=Some("FString")
+                || !refs.is_method_by_ptr(append) || refs.is_const_method_by_ptr(append) || result.token!=5 || result.type_info!=ty
+                || !result.is_reference || result.is_object_handle || !matches!(refs.func_params_by_ptr(append)?,[p] if reference(p)) {return None;}
+            if code.iter().any(|i|i.op.name=="JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let target=i.offset_dw as i64+2+*d as i32 as i64;
+                [(c[0].offset_dw,c[4].offset_dw),(next[0].offset_dw,next[7].offset_dw)].iter().any(|(start,end)|target>*start as i64 && target<=*end as i64)
+            }))) {return None;}
+            let name=format!("local_{slot}");let declaration=format!("FString {name} = \"{literal}\";");
+            if count_ident(body,&name)!=1 {return None;}
+            let row=lines.iter().position(|line|line.trim()==declaration)?;
+            Some((row,format!("{}FString(\"{literal}\");",indent_of(&lines[row]))))
+        })();
+        if let Some((row,text))=witness {lines[row]=text;}
+    }
+    let mut out=lines.join("\n");if body.ends_with('\n') {out.push('\n');}out
+}
+
+
 /// Simplify literal declarations unless their exact constructor expression is
 /// witnessed as a named receiver. Never simplify call arguments here.
 fn unwrap_fstring_literal_declarations(body: &str, named_sites: &HashSet<(i32, String)>) -> String {
@@ -14754,6 +14808,61 @@ fn inline_copied_bool_literal_declarations(body: &str, f: &Func) -> String {
         else { at += 1; }
     }
     let mut out = lines.join("\n"); if body.ends_with('\n') { out.push('\n'); } out
+}
+
+
+/// Two native unary results feed an ordered comparison after a field read.
+/// The second result reuses the first inner call's scratch, not its named root.
+fn ordered_distance_root_sites(f: &Func, refs: &RefResolver, code: &[Instr]) -> HashSet<(i32, String)> {
+    let mut out = HashSet::new();
+    if f.ret.token != 0x41 || f.ret.is_reference || f.params.len() != 3 { return out; }
+    let vector = &f.params[0].ty; let identity = refs.type_identity_by_ptr(vector.type_info);
+    if !identity.is_some_and(|t| t.name == "FVector" && t.module.is_empty() && t.namespace.is_empty()) { return out; }
+    let vector_ref = |t: &super::types::DataType| t.token == 5 && t.type_info == vector.type_info && t.is_reference
+        && t.is_object_const && t.is_read_only && !t.is_object_handle;
+    if !vector_ref(vector) || !vector_ref(&f.params[1].ty) || !f.params[2].ty.is_object_handle || f.params[2].ty.is_reference { return out; }
+    for (at, c) in code.windows(31).enumerate() {
+        let witness = (|| {
+            if at + 31 != code.len() || c.iter().map(|i| i.op.name).ne(["PSF","PshVPtr","CALLSYS","PSF","PshVPtr","PshVPtr","CALLINTF",
+                "CpyRtoV8","PshV8","CALLSYS","CpyRtoV8","PSF","PshVPtr","CALLSYS","PSF","PshVPtr","PshVPtr","CALLINTF",
+                "CpyRtoV8","PshV8","CALLSYS","CpyRtoV8","LoadThisR","RDR4","fTOd","ADDd","CMPd","TNS","CpyRtoV4","CpyVtoR4","RET"]) { return None; }
+            let w=|n:usize,o:usize| c[n].words.get(o).map(|v| *v as i16 as i32);
+            let ptr=|n:usize| c[n].qwords.first().map(|p| *p as i64);
+            let (value,first,second,scratch,sum)=(w(0,0)?,w(10,0)?,w(21,0)?,w(18,0)?,w(25,0)?);
+            if [value,first,second,scratch,sum].iter().any(|s| *s<=0)
+                || [first,second,scratch,sum].into_iter().collect::<HashSet<_>>().len()!=4
+                || [(1,0,-6),(3,0,value),(4,0,-2),(5,0,0),(7,0,second),(8,0,second),(11,0,value),(12,0,-6),
+                    (14,0,value),(15,0,-4),(16,0,0),(19,0,scratch),(24,0,scratch),(25,1,first),(25,2,scratch),
+                    (26,0,second),(26,1,sum),(30,0,8)].iter().any(|(n,o,s)| w(*n,*o)!=Some(*s))
+                || w(23,0)?!=w(24,1)? || w(28,0)?!=w(29,0)? || ptr(2)?!=ptr(13)? || ptr(9)?!=ptr(20)?
+                || c[6].dwords!=c[17].dwords {return None;}
+            if f.obj_locals.iter().filter(|(s,_)| *s==value).map(|(_,p)| *p).collect::<Vec<_>>() != [vector.type_info]
+                || [first,second,scratch,sum].iter().any(|s| f.obj_locals.iter().any(|(o,_)| o==s)) {return None;}
+            let getter=ptr(2)?;let root=ptr(9)?;let distance=*c[6].dwords.first()? as i32;
+            let float=|t:&super::types::DataType| t.token==0x51 && !t.is_reference && !t.is_object_handle;
+            let result=refs.func_ret_by_ptr(getter)?;
+            if !refs.is_method_by_ptr(getter) || !refs.is_const_method_by_ptr(getter) || !refs.func_params_by_ptr(getter)?.is_empty()
+                || result.token!=5 || result.type_info!=vector.type_info || result.is_reference || result.is_object_handle
+                || !refs.is_method_by_id(distance) || !float(refs.func_ret_by_id(distance)?)
+                || !matches!(refs.func_params_by_id(distance)?,[a,b] if vector_ref(a)&&vector_ref(b))
+                || refs.is_method_by_ptr(root) || !float(refs.func_ret_by_ptr(root)?)
+                || !matches!(refs.func_params_by_ptr(root)?,[a] if float(a)) {return None;}
+            let id=*c[22].dwords.first()? as i32;let owner=refs.type_identity_by_id(id)?;
+            let (field,old)=refs.member_identity(id,w(22,0)?)?;
+            if owner.module.is_empty() || refs.type_identity_by_id(old)?!=owner
+                || refs.own_field_type_by_class(&owner.name,field)!=Some("float32") {return None;}
+            for (slot,expected) in [(first,vec![10,25]),(second,vec![7,8,21,26])] {
+                if code.iter().enumerate().filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&slot)).map(|(n,_)|n).collect::<Vec<_>>()
+                    != expected.into_iter().map(|n|at+n).collect::<Vec<_>>() {return None;}
+            }
+            if code.iter().any(|i| i.op.name=="JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let target=i.offset_dw as i64+2+*d as i32 as i64;target>c[0].offset_dw as i64 && target<c[30].offset_dw as i64
+            }))) {return None;}
+            Some([(first,refs.func_by_ptr(root)?.to_owned()),(second,refs.func_by_ptr(root)?.to_owned())])
+        })();
+        if let Some(sites)=witness {out.extend(sites);}
+    }
+    out
 }
 
 
@@ -27543,6 +27652,7 @@ fn named_value_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, String)> {
     };
     let mut out = retained_text_comparison_sites(f, refs, &instrs);
     out.extend(named_static_name_predicate_sites(f, refs, &instrs));
+    out.extend(ordered_distance_root_sites(f, refs, &instrs));
     // A native handle getter finishes before a global value argument is
     // pushed for a call through its null-guarded cast. Inlining that getter
     // moves it behind the argument; retain only this closed getter-result site.
@@ -36670,6 +36780,62 @@ mod literal_value_lifetime_tests {
         assert!(super::retained_native_vector_field_update(&reused,&refs).is_empty());
         let mut wrong_field=f.clone();wrong_field.bytecode[code[15].offset_dw+1]=1;
         assert!(super::retained_native_vector_field_update(&wrong_field,&refs).is_empty());
+    }
+
+
+    #[test]
+    fn repeated_distance_roots_remain_in_the_recorded_parameter_order() {
+        let mut f=function(&[("PSF",&[10]),("PshVPtr",&[65530]),("CALLSYS",&[]),("PSF",&[10]),("PshVPtr",&[65534]),("PshVPtr",&[0]),("CALLINTF",&[]),
+            ("CpyRtoV8",&[12]),("PshV8",&[12]),("CALLSYS",&[]),("CpyRtoV8",&[14]),("PSF",&[10]),("PshVPtr",&[65530]),("CALLSYS",&[]),
+            ("PSF",&[10]),("PshVPtr",&[65532]),("PshVPtr",&[0]),("CALLINTF",&[]),("CpyRtoV8",&[4]),("PshV8",&[4]),("CALLSYS",&[]),("CpyRtoV8",&[12]),
+            ("LoadThisR",&[0]),("RDR4",&[17]),("fTOd",&[4,17]),("ADDd",&[16,14,4]),("CMPd",&[12,16]),("TNS",&[]),("CpyRtoV4",&[1]),("CpyVtoR4",&[1]),("RET",&[8])]);
+        f.ret.token=0x41;f.obj_locals=vec![(10,2)];
+        let vector=DataType {token:5,type_info:2,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()};
+        f.params=[("Start",vector.clone()),("End",vector),("Actor",DataType {token:5,type_info:3,is_object_handle:true,..Default::default()})]
+            .into_iter().map(|(name,ty)|crate::cache::model::Param {name:name.into(),ty,flags:0}).collect();
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,ptr) in [(2,10),(6,11),(9,12),(13,10),(17,11),(20,12),(22,1)] {f.bytecode[code[at].offset_dw+1]=ptr;}
+        let refs=RefResolver::from_test_ordered_distance_roots(0);
+        let sites=super::ordered_distance_root_sites(&f,&refs,&disassemble(&f.bytecode).unwrap());
+        assert_eq!(sites,HashSet::from([(14,"Sqrt".into()),(12,"Sqrt".into())]));
+        let body="float local_14 = Math::Sqrt(this.Distance(Start, Actor.GetLocation()));\nfloat local_12 = Math::Sqrt(this.Distance(End, Actor.GetLocation()));\nreturn (local_12 >= (local_14 + this.Gain));\n";
+        let folded=super::inline_unnamed_value_temporaries(body,&HashSet::from([(14,1),(12,1)]),&HashSet::new(),&HashSet::new(),&refs,
+            &HashSet::new(),&HashSet::new(),&HashMap::new(),&sites,&HashSet::new(),&HashSet::new(),&HashSet::new());
+        assert_eq!(folded,body);
+        for fault in 1..=6 {assert!(super::ordered_distance_root_sites(&f,&RefResolver::from_test_ordered_distance_roots(fault),&disassemble(&f.bytecode).unwrap()).is_empty(),"metadata {fault}");}
+        for at in [1,3,4,5,7,8,11,12,14,15,16,18,19,21,22,23,24,25,26,28,30] {
+            let mut bad=f.clone();bad.bytecode[code[at].offset_dw]^=1<<16;
+            assert!(super::ordered_distance_root_sites(&bad,&refs,&disassemble(&bad.bytecode).unwrap()).is_empty(),"operand {at}");
+        }
+        let mut duplicate=f.clone();duplicate.obj_locals.push((10,2));
+        assert!(super::ordered_distance_root_sites(&duplicate,&refs,&disassemble(&duplicate.bytecode).unwrap()).is_empty());
+        let mut entry=f.clone();let mut jump=function(&[("JMP",&[])]).bytecode;jump[1]=code[3].offset_dw as i32;jump.extend(entry.bytecode);entry.bytecode=jump;
+        assert!(super::ordered_distance_root_sites(&entry,&refs,&disassemble(&entry.bytecode).unwrap()).is_empty());
+    }
+
+
+    #[test]
+    fn an_unused_string_life_is_discarded_before_the_slot_becomes_an_append_argument() {
+        let mut f=function(&[("PGA",&[]),("PSF",&[6]),("CALLSYS",&[]),("PSF",&[6]),("CALLSYS",&[]),
+            ("PGA",&[]),("PSF",&[6]),("CALLSYS",&[]),("PSF",&[6]),("PSF",&[10]),("CALLSYS",&[]),("PSF",&[6]),("CALLSYS",&[]),("RET",&[2])]);
+        f.obj_locals=vec![(6,1),(10,1)];let code=disassemble(&f.bytecode).unwrap();
+        for (at,ptr) in [(0,20),(2,10),(4,11),(5,21),(7,10),(10,12),(12,11)] {f.bytecode[code[at].offset_dw+1]=ptr;}
+        let refs=RefResolver::from_test_discarded_fstring_predecessor(0);
+        let body="FString local_10 = \"\";\nif (Flag)\n{\n    FString local_6 = \"ignored\";\n}\nlocal_10.Append(FString(\"prefix\"));\n";
+        let expected=body.replace("FString local_6 = \"ignored\";","FString(\"ignored\");");
+        assert_eq!(super::discard_unused_fstring_argument_predecessors(body,&f,&refs),expected);
+        for fault in 1..=6 {assert_eq!(super::discard_unused_fstring_argument_predecessors(body,&f,&RefResolver::from_test_discarded_fstring_predecessor(fault)),body,"metadata {fault}");}
+        for at in [1,3,6,8,9,11] {
+            let mut bad=f.clone();bad.bytecode[code[at].offset_dw]^=1<<16;
+            assert_eq!(super::discard_unused_fstring_argument_predecessors(body,&bad,&refs),body,"operand {at}");
+        }
+        let mut duplicate=f.clone();duplicate.obj_locals.push((6,1));
+        assert_eq!(super::discard_unused_fstring_argument_predecessors(body,&duplicate,&refs),body);
+        let mut entry=f.clone();let mut jump=function(&[("JMP",&[])]).bytecode;jump[1]=code[2].offset_dw as i32;jump.extend(entry.bytecode);entry.bytecode=jump;
+        assert_eq!(super::discard_unused_fstring_argument_predecessors(body,&entry,&refs),body);
+        for text in [body.replace("ignored","different"),format!("{body}Use(local_6);\n"),body.replace("FString local_6","FOther local_6")] {
+            assert_eq!(super::discard_unused_fstring_argument_predecessors(&text,&f,&refs),text);
+        }
     }
 
 
