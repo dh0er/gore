@@ -3259,6 +3259,31 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_indexed_int_compound(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FEntry", "Amount"), ("TArray", ""), ("FOther", "")]);
+        for (ptr, name) in [(1, "FEntry"), (2, "TArray"), (3, "FOther")] {
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), namespace: String::new(),
+                module: if fault == 13 && ptr == 1 { "" } else { "Fixture" }.into() });
+        }
+        r.prop_type_id.insert(3, if fault == 1 { 3 } else { 1 });
+        r.set_class_fields(HashMap::from([("FEntry".into(), HashMap::from([("Amount".into(),
+            if fault == 2 { "float" } else { "int" }.into())]))]));
+        let mut element = DataType { token: 5, type_info: if fault == 3 { 3 } else { 1 }, ..Default::default() };
+        if fault == 4 { element.is_object_handle = true; }
+        r.type_subtypes.insert(2, vec![element]);
+        r.func_by_ptr.insert(10, "opIndex".into());
+        r.func_owner.insert(10, if fault == 5 { "TMap" } else { "TArray" }.into());
+        if fault != 6 { r.func_is_method.insert(10); }
+        if fault == 7 { r.const_method_ptrs.insert(10); }
+        r.func_params.insert(10, vec![DataType { token: if fault == 8 { 0x51 } else { 0x44 },
+            is_reference: fault == 9, ..Default::default() }]);
+        r.func_ret.insert(10, DataType { token: 5, type_info: 1, is_reference: fault != 10,
+            is_object_const: fault == 11, is_read_only: fault == 12, ..Default::default() });
+        if fault == 14 { r.type_subtypes.remove(&2); }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_addressed_compound_updates(fault:u8) -> Self {
         let mut r=Self::from_test_member_chain(&[("UOwner","")]);
         r.type_identity_by_ptr.insert(1,TypeIdentity {name:"UOwner".into(),module:"Fixture".into(),namespace:String::new()});
@@ -3685,6 +3710,23 @@ impl RefResolver {
         r
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_test_copied_native_int_conversion(fault: u8) -> Self {
+        let mut r = Self::default();
+        r.func_by_ptr.insert(1, "Choose".into()); r.func_ns.insert(1, "Math".into());
+        for name in ["Use", "float"] {
+            r.temporary_arg_positions.insert(name.into(), HashMap::from([(1, vec![true])]));
+        }
+        let int = DataType { token: 0x44, ..Default::default() };
+        r.func_ret.insert(1, DataType { token: if fault == 1 { 0x51 } else { 0x44 },
+            is_reference: fault == 2, is_object_handle: fault == 3, ..Default::default() });
+        r.func_params.insert(1, vec![int.clone(), DataType { token: if fault == 4 { 0x45 } else { 0x44 },
+            is_reference: fault == 5, ..Default::default() }]);
+        if fault == 6 { r.func_is_method.insert(1); }
+        if fault == 7 { r.func_owner.insert(1, "UOwner".into()); }
+        if fault == 8 { r.func_params.get_mut(&1).unwrap().push(int); }
+        r
+    }
     #[cfg(test)]
     pub(crate) fn from_test_copied_bool_argument(token: i32) -> Self {
         let mut r = Self::default();

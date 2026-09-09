@@ -6491,7 +6491,10 @@ fn block_stmts_in(
                 // render `if (x = call() == 0)` is unparseable (18 parse [E]s, 4 module
                 // killers) AND tests the wrong value. A non-bool pending can't be the 1-byte
                 // test value either. Flush both as their own statement and test the slot.
+                // Reloading an actual parameter replaces the result register;
+                // an earlier bool call is a separate statement even if its type matches.
                 let foldable = pending_ty.as_deref() == Some("bool")
+                    && !ctx.param_off_map.contains_key(&w(ins, 0))
                     && pending
                         .as_deref()
                         .map(|p| assign_lhs(p).is_none())
@@ -14556,6 +14559,38 @@ mod tests {
         for fault in 1..=11 { assert!(!render(fault, 0).contains(ctor), "metadata {fault}"); }
         for hazard in 1..=9 { assert!(!render(0, hazard).contains(ctor), "flow/life {hazard}"); }
     }
+    #[test]
+    fn a_bool_parameter_reload_does_not_consume_a_pending_call_result() {
+        let render = |parameter_slot: i32, tested: Option<i32>, return_token| {
+            let mut a = TestAssembler::default();
+            a.op("CALLSYS", &[], &[1, 0]);
+            if let Some(slot) = tested { a.op("CpyVtoR1", &[slot as u16], &[]); }
+            a.op("RET", &[2], &[]);
+            let mut fixture = a.finish(); fixture.instrs[0].qwords = vec![1];
+            let refs = RefResolver::from_test_pointer_comparison_call(DataType { token: return_token, ..Default::default() });
+            let boolean = DataType { token: 0x41, ..Default::default() };
+            let f = FuncCode { func: "Fixture::TestParameter".into(), is_method: parameter_slot < 0,
+                param_names: vec!["Enabled".into()], param_types: vec![boolean.clone()], bytecode: Vec::new(),
+                ret: boolean };
+            let params = vec!["bool".into()];
+            let locals = HashMap::from([(7, "bool".into())]);
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: None, param_types: Some(&params), class_name: None,
+                local_types: Some(&locals), float_slots: Default::default(),
+                param_off_map: HashMap::from([(parameter_slot, 0)]), rvo_off: None, keep_ints: None,
+                rvo_switch_region: std::cell::Cell::new(false) };
+            block_stmts(&ctx, 0, fixture.instrs.len()).0
+        };
+        for slot in [-2, 0] {
+            assert_eq!(render(slot, Some(slot), 0x41), ["GetPawn();", "return Enabled;"]);
+            assert_eq!(render(slot, Some(slot), 0x52), ["GetPawn();", "return Enabled;"]);
+        }
+        // The parameter guard does not change the existing local-result fold
+        // or a directly returned native result with no slot reload.
+        assert_eq!(render(-2, Some(7), 0x41), ["return GetPawn();"]);
+        assert_eq!(render(-2, None, 0x41), ["return GetPawn();"]);
+    }
+
     #[test]
     fn fresh_bool_test_survives_a_pending_void_statement() {
         let render = |fresh: bool, dest_type: &str| {

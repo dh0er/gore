@@ -69,7 +69,6 @@ GAS.Abilities.Spells.Spells.Base.GA_Spell_Targetable	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_Fireball	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_StormOfFire	1	0	0
 GAS.Abilities.Spells.Spells.Light.GA_Spell_Light	1	0	0
-GAS.Abilities.Spells.Spells.Summon.Base.GA_Spell_Summon	1	0	0
 GAS.Abilities.Spells.Spells.Summon.SpawnHelper.Base.SummonSpawnPlaceHelper	3	0	0
 GAS.Abilities.Spells.Spells.Telekinesis.GA_Spell_Telekinesis	1	0	0
 GAS.Abilities.Spells.Spells.Telekinesis.TelekinesisItemMovementVisual	1	0	0
@@ -85,7 +84,6 @@ Gameplay.Environment.BattleBlockingBarrier.BattleBarrierVisual	1	0	0
 Gameplay.Magic.Components.Damage.PercentageDamageLimiterComponent	1	0	0
 Gameplay.Magic.Components.InExtremo.InExtremoPropComponent	1	0	0
 Items.Projectiles	2	0	0
-Items.Visual.Projectile.Arrow.Base.ArrowProjectileVisual_Base	1	0	0
 Regions.Traits.QuestRelatedTraits	5	0	0
 Sound.FXDefinitions.FXDefinitions_AttackImpact	1	0	0
 Sound.FXDefinitions.FXDefinitions_Footsteps	1	0	0

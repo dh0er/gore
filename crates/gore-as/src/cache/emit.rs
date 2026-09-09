@@ -15320,6 +15320,40 @@ fn addressed_compound_updates(f: &Func, refs: &RefResolver, is_method: bool) -> 
         })();
         if let Some(site) = found { out.insert(site); }
     }
+    // A mutable array element's int field retains its address through subtraction.
+    // The exact indexed target and scalar RHS keep this separate from other lives.
+    for c in code.windows(9) {
+        if c.iter().map(|i| i.op.name).ne(["PshV4", "PSF", "Thiscall1", "PshRPtr", "ADDSi", "PopRPtr", "RDR4", "SUBi", "WRTV4"])
+            || entered(c[0].offset_dw, c[8].offset_dw) { continue; }
+        let found = (|| {
+            let (index, array, read, result, rhs) = (w(&c[0],0)?, w(&c[1],0)?, w(&c[6],0)?, w(&c[7],0)?, w(&c[7],2)?);
+            let slots = [index, array, read, result, rhs];
+            if slots.iter().any(|s| *s <= 0) || slots.iter().collect::<HashSet<_>>().len() != 5
+                || w(&c[7],1) != Some(read) || w(&c[8],0) != Some(result)
+                || f.obj_locals.iter().any(|(s,_)| *s != array && slots.contains(s)) { return None; }
+            let ptr = *c[2].qwords.first()? as i64;
+            let [key] = refs.func_params_by_ptr(ptr)? else { return None; };
+            let ret = refs.func_ret_by_ptr(ptr)?;
+            let arrays: Vec<_> = f.obj_locals.iter().filter(|(s,_)| *s == array).map(|(_,p)| *p).collect();
+            let [array_type] = arrays.as_slice() else { return None; };
+            let [element] = refs.type_subtypes(*array_type)? else { return None; };
+            let plain = |t: &super::types::DataType, token, pointer, reference| t.token == token && t.type_info == pointer
+                && t.is_reference == reference && !t.is_object_handle && !t.is_object_const
+                && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+            let id = *c[4].dwords.first()? as i32;
+            let owner = refs.type_identity_by_id(id)?;
+            let (field, old) = refs.member_identity(id, w(&c[4],0)?)?;
+            if refs.type_by_ptr(*array_type) != Some("TArray") || !plain(key, 0x44, 0, false)
+                || !plain(element, 5, ret.type_info, false) || !plain(ret, 5, ret.type_info, true)
+                || refs.func_by_ptr(ptr) != Some("opIndex") || refs.func_owner_by_ptr(ptr) != Some("TArray")
+                || !refs.is_method_by_ptr(ptr) || refs.is_const_method_by_ptr(ptr)
+                || refs.type_identity_by_ptr(ret.type_info) != Some(owner) || refs.type_identity_by_id(old) != Some(owner)
+                || !is_value_struct_type(&owner.name) || owner.module.is_empty()
+                || refs.own_field_type_by_class(&owner.name, field) != Some("int") { return None; }
+            Some((format!("local_{array}[local_{index}].{field}"), "-".into(), CompoundFieldRhs::Field(format!("local_{rhs}"))))
+        })();
+        if let Some(site) = found { out.insert(site); }
+    }
     out
 }
 
@@ -15366,7 +15400,8 @@ fn fold_compound_assignments(
         let direct = (|| {
             let statement = lines[at].trim().strip_suffix(';')?;
             let (target, value) = statement.split_once(" = ")?;
-            if !pure_member_path(target) {
+            let plain_target = pure_member_path(target);
+            if !plain_target && !addressed_compounds.iter().any(|(path, _, _)| path == target) {
                 return None;
             }
             // The decompiler brackets a value it built and may name the read's own type on the
@@ -15403,6 +15438,8 @@ fn fold_compound_assignments(
                         value.starts_with(&format!("{target}{operator}")) || value.contains("local_")
                     })
                 }).count()==1;
+            // Indexed targets need their exact held-address update in every pass.
+            if !plain_target && (!addressed || roots.get(addend).map(String::as_str) != Some("int")) { return None; }
             if late && !late_update_is_safe(target, operator, addend, at) && !addressed {
                 return None;
             }
@@ -17757,6 +17794,34 @@ fn spilled_boolean_names(f: &Func, refs: &RefResolver) -> HashSet<i32> {
     let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
     let mut out = copied_short_circuit_accumulators(f, refs);
     out.extend(copied_bool_initializer_slots(f, refs));
+    // A materialized double comparison is copied before its negation. Earlier
+    // literal argument lives of the source do not make this comparison anonymous.
+    if !instrs.iter().any(|i| i.op.name == "JMPP") {
+        let target = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+        for (at, c) in instrs.windows(7).enumerate() {
+            if c.iter().map(|i| i.op.name).ne(["CMPd", "TS", "CpyRtoV4", "CpyVtoV4", "NOT", "CpyVtoR1", "JLowZ"]) { continue; }
+            let (source, scratch) = (w0(&c[2]), w0(&c[3]));
+            let uses: Vec<_> = instrs.iter().enumerate().filter(|(_, i)|
+                super::bytediff::addressed_slots(i).contains(&source)).map(|(n, _)| n).collect();
+            let Some(earlier) = uses.strip_suffix(&[at + 2, at + 3]) else { continue; };
+            let chain_constant = |dw: i64| instrs.iter().position(|i| i.offset_dw as i64 == dw).is_some_and(|n|
+                matches!(instrs[n].op.name, "SetV1" | "SetV4") && instrs.get(n + 1).is_some_and(|i| i.op.name == "JMP"));
+            if source <= 0 || scratch <= 0 || source == scratch || earlier.len() % 2 != 0
+                || c[0].words.iter().any(|s| [source, scratch].contains(&(*s as i16 as i32)))
+                || c[3].words.get(1).map(|s| *s as i16 as i32) != Some(source)
+                || w0(&c[4]) != scratch || w0(&c[5]) != scratch
+                || f.obj_locals.iter().any(|(s, _)| [source, scratch].contains(s))
+                || !earlier.chunks_exact(2).all(|pair| pair[1] == pair[0] + 1 && pair[1] < at
+                    && instrs[pair[0]].op.name == "SetV1" && instrs[pair[0]].dwords.first().is_some_and(|d| *d <= 1)
+                    && instrs[pair[1]].op.name == "PshV4"
+                    && !instrs.iter().any(|i| target(i) == Some(instrs[pair[1]].offset_dw as i64) && i.op.name.starts_with('J')))
+                || !target(&c[6]).is_some_and(|t| t > c[6].offset_dw as i64 && !chain_constant(t))
+                || instrs.get(at + 7).is_some_and(|i| chain_constant(i.offset_dw as i64))
+                || instrs.iter().any(|i| i.op.name.starts_with('J') && target(i).is_some_and(|t|
+                    t > c[0].offset_dw as i64 && t <= c[6].offset_dw as i64)) { continue; }
+            out.insert(source);
+        }
+    }
     for (at, ins) in instrs.iter().enumerate() {
         let slot = w0(ins);
         if ins.op.name != "CpyRtoV4" || slot <= 0 || at == 0 {
@@ -25876,6 +25941,41 @@ fn named_value_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, String)> {
         .map(str::to_owned)
     };
     let mut out = HashSet::new();
+    // A native int result copied before widening names only this complete call.
+    // The exact copy key protects its initial spelling until the call folds into it.
+    if !instrs.iter().any(|i| i.op.name == "JMPP") {
+        for (at, c) in instrs.windows(7).enumerate() {
+            if c.iter().map(|i| i.op.name).ne(["PshC4", "PshC4", "CALLSYS", "CpyRtoV4", "CpyVtoV4", "iTOd", "MULd"])
+                || c[1..].iter().any(|i| targets.contains(&i.offset_dw)) { continue; }
+            let site = (|| {
+                let (scratch, named, wide) = (w(&c[3], 0)?, w(&c[4], 0)?, w(&c[5], 0)?);
+                if [scratch, named, wide].iter().any(|s| *s <= 0)
+                    || [scratch, named, wide].iter().collect::<HashSet<_>>().len() != 3
+                    || w(&c[4], 1) != Some(scratch) || w(&c[5], 1) != Some(named) || w(&c[6], 2) != Some(wide)
+                    || w(&c[6], 1).is_none_or(|s| [scratch, named, wide].contains(&s))
+                    || f.obj_locals.iter().any(|(s, _)| [scratch, named, wide].contains(s))
+                    || instrs[at + 6..].iter().any(|i| super::bytediff::addressed_slots(i).contains(&named))
+                    || instrs.iter().filter(|i| i.op.name == "CpyVtoV4" && w(i, 0) == Some(named)
+                        && w(i, 1) == Some(scratch)).count() != 1 { return None; }
+                let ptr = *c[2].qwords.first()? as i64;
+                let int = |t: &super::types::DataType| t.token == 0x44 && t.type_info == 0 && !t.is_reference
+                    && !t.is_object_handle && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+                if refs.is_method_by_ptr(ptr) || refs.is_const_method_by_ptr(ptr) || refs.func_owner_by_ptr(ptr).is_some()
+                    || !int(refs.func_ret_by_ptr(ptr)?) || !refs.func_params_by_ptr(ptr).is_some_and(|p| p.len() == 2 && p.iter().all(int)) { return None; }
+                let callee = refs.func_by_ptr(ptr)?;
+                let namespace = refs.func_ns_by_ptr(ptr).unwrap_or("");
+                let (right, left) = (*c[0].dwords.first()? as i32, *c[1].dwords.first()? as i32);
+                // The same source spelling elsewhere could lend this key to another life.
+                if instrs.windows(3).filter(|run| run[0].op.name == "PshC4" && run[1].op.name == "PshC4"
+                    && run[2].op.name == "CALLSYS" && run[0].dwords == c[0].dwords && run[1].dwords == c[1].dwords
+                    && run[2].qwords.first().is_some_and(|p| refs.func_by_ptr(*p as i64) == Some(callee)
+                        && refs.func_ns_by_ptr(*p as i64).unwrap_or("") == namespace)).count() != 1 { return None; }
+                let qualified = if namespace.is_empty() { callee.to_owned() } else { format!("{namespace}::{callee}") };
+                Some([(named, format!("local_{scratch}")), (named, format!("{qualified}({left}, {right})"))])
+            })();
+            out.extend(site.into_iter().flatten());
+        }
+    }
     // Keep the exact shared field seed, not earlier member-read lives of its slot.
     // The same typed raw witness controls the WRTV literal materialization.
     for (at, _) in instrs.iter().enumerate().filter(|(_, i)| i.op.name == "WRTV8") {
@@ -36815,6 +36915,108 @@ mod literal_value_lifetime_tests {
     }
 
     #[test]
+    fn a_copied_double_comparison_keeps_its_name_after_an_earlier_literal_life() {
+        let mut f = function(&[("SetV1", &[19]), ("PshV4", &[19]), ("CMPd", &[18, 14]), ("TS", &[]),
+            ("CpyRtoV4", &[19]), ("CpyVtoV4", &[41, 19]), ("NOT", &[41]), ("CpyVtoR1", &[41]),
+            ("JLowZ", &[]), ("SUSPEND", &[]), ("SetV1", &[41]), ("PshV4", &[41]), ("RET", &[0])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        f.bytecode[code[0].offset_dw + 1] = 1;
+        f.bytecode[code[8].offset_dw + 1] = code[10].offset_dw as i32 - code[8].offset_dw as i32 - 2;
+        let refs = RefResolver::default();
+        let spilled = super::spilled_boolean_names(&f, &refs);
+        assert_eq!(spilled, HashSet::from([19]));
+        let locals = BTreeMap::from([(14, "float".into()), (18, "float".into()), (19, "bool".into()), (41, "bool".into())]);
+        // Literal arguments are already rendered directly before this first-loss pass.
+        let source = "Use(true);\nlocal_19 = (local_18 < 0.0);\nlocal_41 = local_19;\nlocal_41 = !local_41;\nif (local_41)\n{\n    Work();\n}\nUse(false);\n";
+        let negated = super::fold_negated_stores(source, &HashSet::new());
+        let early = super::inline_call_argument_temporaries(&negated, &refs, &locals, None, true,
+            &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
+            &HashSet::new(), &HashSet::new(), &spilled, &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
+        assert!(early.contains("local_19 = (local_18 < 0.0);\nif (!(local_19))"), "{early}");
+        let fold = |spills: &HashSet<i32>| super::fold_condition_temporaries(&early, &locals, &refs, None, spills, &HashSet::new(), false);
+        assert_eq!(fold(&spilled), early);
+        assert!(!fold(&HashSet::new()).contains("local_19 ="));
+        let unnamed = super::unnamed_value_defs(&f, &refs, &[], &[]);
+        assert!(!unnamed.iter().any(|(slot, _)| *slot == 19));
+        let declared = early.replace("local_19 =", "bool local_19 =");
+        let late = super::inline_unnamed_value_temporaries(&declared, &unnamed, &HashSet::new(), &HashSet::new(), &refs,
+            &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
+        assert_eq!(late, declared);
+        let rejects = |bad: &Func| assert!(!super::spilled_boolean_names(bad, &refs).contains(&19));
+        for (at, op, words) in [(3, "TNS", vec![]), (5, "CpyVtoV4", vec![41, 18]),
+            (6, "NOT", vec![19]), (7, "CpyVtoR1", vec![19]), (1, "PshV8", vec![19])] {
+            let mut bad = f.clone(); bad.bytecode.splice(code[at].offset_dw..code[at + 1].offset_dw,
+                function(&[(op, &words)]).bytecode); rejects(&bad);
+        }
+        for extra in [function(&[("PshV4", &[19])]), function(&[("SetV1", &[19])])] {
+            let mut bad = f.clone(); bad.bytecode.extend(extra.bytecode); rejects(&bad);
+        }
+        for slot in [19, 41] { let mut bad = f.clone(); bad.obj_locals.push((slot, 1)); rejects(&bad); }
+        let mut bad = f.clone(); bad.bytecode[code[0].offset_dw + 1] = 2; rejects(&bad);
+        for at in [1, 3, 4, 5, 6, 7, 8] {
+            let mut bad = f.clone(); let mut jump = function(&[("JMP", &[])]).bytecode;
+            jump[1] = code[at].offset_dw as i32; jump.extend(bad.bytecode); bad.bytecode = jump; rejects(&bad);
+        }
+        // A short-circuit constant arm is not a named comparison.
+        let mut chain = f.clone(); chain.bytecode.splice(code[9].offset_dw..code[10].offset_dw,
+            function(&[("SetV1", &[50]), ("JMP", &[])]).bytecode); rejects(&chain);
+    }
+
+    #[test]
+    fn only_the_exact_copied_native_int_call_stays_named_before_widening() {
+        let mut f = function(&[("PshC4", &[]), ("PshC4", &[]), ("CALLSYS", &[]), ("CpyRtoV4", &[3]),
+            ("iTOd", &[14, 3]), ("PshV8", &[14]), ("PshC4", &[]), ("PshC4", &[]), ("CALLSYS", &[]),
+            ("CpyRtoV4", &[3]), ("iTOd", &[14, 3]), ("CpyVtoV8", &[34, 14]),
+            ("PshC4", &[]), ("PshC4", &[]), ("CALLSYS", &[]), ("CpyRtoV4", &[4]),
+            ("CpyVtoV4", &[3, 4]), ("iTOd", &[18, 3]), ("MULd", &[34, 65532, 18]), ("RET", &[0])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, value) in [(0, 360), (1, -360), (2, 1), (6, 200), (7, 100), (8, 1), (12, 400), (13, 300), (14, 1)] {
+            f.bytecode[code[at].offset_dw + 1] = value;
+        }
+        let refs = RefResolver::from_test_copied_native_int_conversion(0);
+        let sites = super::named_value_sites(&f, &refs);
+        let alias = (3, "local_4".into()); let call = (3, "Math::Choose(300, 400)".into());
+        assert_eq!(sites, HashSet::from([alias.clone(), call.clone()]));
+        for value in ["Math::Choose(-360, 360)", "Math::Choose(100, 200)", "Math::Choose(400, 300)",
+            "Other::Choose(300, 400)", "Choose(300, 400)", "local_5"] {
+            assert!(!super::is_named_value_site(3, value, &sites), "{value}");
+        }
+        let locals = BTreeMap::from([(3, "int".into()), (4, "int".into()), (14, "float".into()), (18, "float".into()), (34, "float".into())]);
+        // The real slot 18 also holds DotProduct's native double result.
+        let call_types = HashMap::from([(3, "int".into()), (4, "int".into()), (18, "float".into())]);
+        let source = "local_3 = Math::Choose(-360, 360);\nlocal_14 = local_3;\nUse(local_14);\nlocal_3 = Math::Choose(100, 200);\nlocal_14 = local_3;\nlocal_34 = local_14;\nlocal_4 = Math::Choose(300, 400);\nlocal_3 = local_4;\nlocal_18 = local_3;\nlocal_34 = Coef * local_18;\n";
+        let inline = |sites: &HashSet<(i32, String)>| super::inline_call_argument_temporaries(source, &refs, &locals, None, true,
+            &call_types, &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
+            &HashSet::from([4]), &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), sites, &HashSet::new());
+        let early = inline(&sites);
+        assert!(early.contains("local_3 = Math::Choose(300, 400);"), "{early}");
+        assert!(early.contains("Coef * float(local_3)"), "{early}");
+        assert!(!early.contains("local_3 = Math::Choose(-360, 360)") && !early.contains("local_3 = Math::Choose(100, 200)"), "{early}");
+        assert!(!inline(&HashSet::new()).contains("local_3 ="));
+        let declared = early.replace("local_3 = Math::Choose(300, 400)", "int local_3 = Math::Choose(300, 400)");
+        let late = super::inline_unnamed_value_temporaries(&declared, &HashSet::from([(3, 1)]), &HashSet::new(), &HashSet::new(), &refs,
+            &HashSet::new(), &HashSet::new(), &HashMap::new(), &sites, &HashSet::new(), &HashSet::new(), &HashSet::new());
+        assert_eq!(late, declared);
+        for fault in 1..=8 { assert!(!super::named_value_sites(&f, &RefResolver::from_test_copied_native_int_conversion(fault)).contains(&call), "metadata {fault}"); }
+        let rejects = |bad: &Func| assert!(!super::named_value_sites(bad, &refs).contains(&call));
+        for at in 13..=18 {
+            let mut bad = f.clone(); let mut jump = function(&[("JMP", &[])]).bytecode;
+            jump[1] = code[at].offset_dw as i32; jump.extend(bad.bytecode); bad.bytecode = jump; rejects(&bad);
+        }
+        for at in [0, 19] {
+            let mut bad = f.clone(); bad.bytecode.splice(code[at].offset_dw..code[at].offset_dw,
+                function(&[("CpyVtoV4", &[3, 4])]).bytecode); rejects(&bad);
+        }
+        let mut repeated = f.clone(); repeated.bytecode[code[0].offset_dw + 1] = 400;
+        repeated.bytecode[code[1].offset_dw + 1] = 300; rejects(&repeated);
+        for slot in [3, 4, 18] { let mut bad = f.clone(); bad.obj_locals.push((slot, 1)); rejects(&bad); }
+        for (at, op, words) in [(16, "CpyVtoV4", vec![3, 5]), (17, "uTOd", vec![18, 3]),
+            (18, "MULd", vec![34, 18, 65532])] {
+            let mut bad = f.clone(); bad.bytecode.splice(code[at].offset_dw..code[at + 1].offset_dw,
+                function(&[(op, &words)]).bytecode); rejects(&bad);
+        }
+    }
+    #[test]
     fn copied_bool_names_survive_adjacent_early_and_late_folds() {
         let refs=RefResolver::from_test_copied_negated_boolean(0x41,false);
         for (reused,script_call) in [(false,false),(true,false),(true,true)] {
@@ -40285,6 +40487,73 @@ mod literal_value_lifetime_tests {
             let mut bad=f.clone(); let mut jump=function(&[("JMP",&[])]).bytecode;
             jump[1]=code[at].offset_dw as i32; jump.extend(bad.bytecode); bad.bytecode=jump;
             assert!(super::addressed_compound_updates(&bad, &refs, true).is_empty());
+        }
+    }
+
+    #[test]
+    fn an_indexed_int_field_folds_only_its_exact_typed_held_address_update() {
+        let mut f = function(&[("PshV4", &[30]), ("PSF", &[4]), ("Thiscall1", &[]),
+            ("PshRPtr", &[]), ("ADDSi", &[0]), ("PopRPtr", &[]), ("RDR4", &[28]),
+            ("SUBi", &[29, 28, 27]), ("WRTV4", &[29]), ("RET", &[2])]);
+        f.obj_locals = vec![(4, 2)];
+        let code = disassemble(&f.bytecode).unwrap();
+        f.bytecode[code[2].offset_dw + 1] = 10;
+        f.bytecode[code[4].offset_dw + 1] = 1;
+        let refs = RefResolver::from_test_indexed_int_compound(0);
+        let check = |f: &Func, refs: &RefResolver| super::addressed_compound_updates(f, refs, true);
+        let proof = check(&f, &refs);
+        assert_eq!(proof, HashSet::from([("local_4[local_30].Amount".into(), "-".into(),
+            super::CompoundFieldRhs::Field("local_27".into()))]));
+        let roots = HashMap::from([("local_4".into(), "TArray<FEntry>".into()),
+            ("local_30".into(), "int".into()), ("local_27".into(), "int".into())]);
+        let fold = |s: &str, proof: &HashSet<_>, types: &HashMap<String, String>, late|
+            super::fold_compound_assignments(s, None, types, &refs, late, &HashSet::new(), proof);
+        let update = "local_4[local_30].Amount = (local_4[local_30].Amount - local_27);\n";
+        let expected = "local_4[local_30].Amount -= local_27;\n";
+        for late in [false, true] {
+            assert_eq!(fold(update, &proof, &roots, late), expected);
+            assert_eq!(fold(expected, &proof, &roots, late), expected);
+            assert_eq!(fold(update, &HashSet::new(), &roots, late), update);
+            for other in [update.replace("local_4", "local_6"), update.replace("local_30", "local_31"),
+                update.replace("Amount", "Count"), update.replace("local_27", "local_26"),
+                update.replace(" - ", " + "), update.replace("local_27", "Compute()"), update.repeat(2),
+                format!("{expected}{update}")] {
+                assert_eq!(fold(&other, &proof, &roots, late), other);
+            }
+            for ty in ["float", "float32", "uint", "int64"] {
+                let mut wrong = roots.clone(); wrong.insert("local_27".into(), ty.into());
+                assert_eq!(fold(update, &proof, &wrong, late), update);
+            }
+            assert_eq!(fold(update, &proof, &HashMap::new(), late), update);
+        }
+        // The actual late inliner hands the first scalar declaration to its next
+        // member-read life; folding the update must preserve that later read.
+        let carried = "int local_28 = local_4[local_30].Amount;\nlocal_4[local_30].Amount = (local_28 - local_27);\nlocal_28 = local_4[local_30].Amount;\nif (local_28 == 0)\n{\n    Remove(local_30);\n}\n";
+        let inlined = super::inline_unnamed_value_temporaries(carried, &HashSet::from([(28, 1)]),
+            &HashSet::new(), &HashSet::new(), &refs, &HashSet::new(), &HashSet::new(), &HashMap::new(),
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
+        let combined = fold(&inlined, &proof, &roots, true);
+        assert!(combined.starts_with(expected), "{combined}");
+        assert!(combined.contains("int local_28 = local_4[local_30].Amount;"), "{combined}");
+        assert!(combined.contains("if (local_28 == 0)"));
+        for fault in 1..=14 { assert!(check(&f, &RefResolver::from_test_indexed_int_compound(fault)).is_empty(), "metadata {fault}"); }
+        assert!(super::addressed_compound_updates(&f, &refs, false).is_empty());
+        for locals in [vec![], vec![(4, 2), (4, 2)], vec![(4, 1)], vec![(4, 2), (27, 1)]] {
+            let mut bad = f.clone(); bad.obj_locals = locals; assert!(check(&bad, &refs).is_empty());
+        }
+        for (at, op, words) in [(6, "RDR8", vec![28]), (7, "SUBi", vec![29, 27, 28]),
+            (7, "SUBi", vec![29, 28, 30]), (8, "WRTV4", vec![28]), (0, "PshV4", vec![65534])] {
+            let mut bad = f.clone(); bad.bytecode.splice(code[at].offset_dw..code[at + 1].offset_dw,
+                function(&[(op, &words)]).bytecode); assert!(check(&bad, &refs).is_empty(), "raw {at}");
+        }
+        let mut reload = f.clone();
+        let prefix = f.bytecode[code[0].offset_dw..code[6].offset_dw].to_vec();
+        reload.bytecode.splice(code[8].offset_dw..code[8].offset_dw, prefix);
+        assert!(check(&reload, &refs).is_empty());
+        for at in 1..=8 {
+            let mut bad = f.clone(); let mut jump = function(&[("JMP", &[])]).bytecode;
+            jump[1] = code[at].offset_dw as i32; jump.extend(bad.bytecode); bad.bytecode = jump;
+            assert!(check(&bad, &refs).is_empty(), "entry {at}");
         }
     }
 
