@@ -20887,12 +20887,16 @@ fn drop_else_after_returning_arm(body: &str, released: &HashSet<i32>) -> String 
 fn fold_literal_enum_default_return(body: &str, f: &Func, refs: &RefResolver) -> String {
     let fold = (|| {
         let ty = qualify_decl_type(&f.ret.base_name(refs), refs);
-        let boolean = f.ret.token == 0x41 && !f.ret.is_reference;
+        let boolean = f.ret.token == 0x41 && !f.ret.is_reference && !f.ret.is_object_handle;
         let integer = f.ret.token == 0x44 && !f.ret.is_reference && !f.ret.is_object_handle;
         if !boolean && !integer && (f.ret.token != 5 || f.ret.is_reference || f.ret.is_object_handle || !is_enum(&ty))
             || body.contains("__return") { return None; }
         let mut code = disassemble(&f.bytecode).ok()?;
-        if boolean {
+        // A primitive bool may fall directly into RET without script cleanup.
+        // The common tail proof below still checks its literal, slot and entries.
+        let direct_bool = boolean && code.len() >= 3 && code[code.len()-3..]
+            .iter().map(|i| i.op.name).eq(["SetV1", "CpyVtoR4", "RET"]);
+        if boolean && !direct_bool {
             let tail = code.get(code.len().checked_sub(5)?..)?;
             if tail[1].op.name != "PSF" || !script_value_destructor(&tail[2], refs) { return None; }
             if code.iter().any(|i| i.op.name.starts_with('J') && i.op.name != "JMPP" && i.dwords.first().is_some_and(|d|
@@ -20929,7 +20933,11 @@ fn fold_literal_enum_default_return(body: &str, f: &Func, refs: &RefResolver) ->
         if !tail_stores_of_switch(&borrowed, open, last - 1, &mut stores)
             || stores != [last - 3] { return None; }
         lines[last] = format!("{}return {};", indent_of(&lines[last]), returned(&literal));
-        if boolean || integer { lines.drain(last - 5..last - 1); } else { lines.remove(last - 3); }
+        // Keep stacked case labels and their empty default block: they preserve
+        // the original jump-table bounds while falling into the literal return.
+        let stacked = lines[last - 6].trim().starts_with("case ");
+        if (boolean || integer) && !stacked { lines.drain(last - 5..last - 1); }
+        else { lines.remove(last - 3); }
         let mut out = lines.join("\n");
         if body.ends_with('\n') { out.push('\n'); }
         Some(out)
@@ -21072,6 +21080,9 @@ fn tail_stores_of_switch(lines: &[&str], open: usize, close: usize, out: &mut Ve
         // Labels may stack (`case 1:` `case 2:` `{`); the arm is the block behind the last one.
         let mut block = at + 1;
         while block < close && lines[block].trim().ends_with(':') {
+            let stacked = lines[block].trim();
+            if !(stacked.starts_with("case ") || stacked == "default:") { return false; }
+            has_default |= stacked == "default:";
             block += 1;
         }
         if block >= close || lines[block].trim() != "{" {
@@ -33974,6 +33985,50 @@ mod literal_value_lifetime_tests {
         let code = disassemble(&other.bytecode).unwrap();
         other.bytecode[1] = code[2].offset_dw as i32 - 2;
         assert_eq!(super::fold_literal_enum_default_return(body, &other, &refs), body);
+    }
+
+
+    #[test]
+    fn direct_bool_default_preserves_stacked_labels_and_falls_into_return() {
+        let refs = RefResolver::default();
+        let mut f = function(&[("SetV1", &[9]), ("CpyVtoR4", &[9]), ("RET", &[0])]);
+        f.ret = DataType { token: 0x41, ..Default::default() };
+        let body = "switch (Direction)\n{\ncase 2:\n{\n    return Probe();\n}\ncase 0:\ncase 1:\ndefault:\n{\n    local_9 = true;\n}\n}\nreturn local_9;\n";
+        for (value, literal) in [(0, "false"), (1, "true")] {
+            f.bytecode[1] = value;
+            let body = body.replace("local_9 = true", &format!("local_9 = {literal}"));
+            let expected = body.replace(&format!("    local_9 = {literal};\n"), "")
+                .replace("return local_9;", &format!("return {literal};"));
+            assert_eq!(super::fold_literal_enum_default_return(&body, &f, &refs), expected);
+            assert_eq!(super::fold_literal_enum_default_return(&expected, &f, &refs), expected);
+            let unstacked = body.replace("case 0:\ncase 1:\n", "");
+            let want = expected.replace("case 0:\ncase 1:\ndefault:\n{\n}\n", "");
+            assert_eq!(super::fold_literal_enum_default_return(&unstacked, &f, &refs), want);
+        }
+        for bad in [body.replace("return Probe();", "break;"),
+            body.replace("return Probe();", "Use(local_9);"),
+            body.replace("local_9 = true", "local_9 = false"),
+            body.replace("return local_9;", "return !local_9;")] {
+            assert_eq!(super::fold_literal_enum_default_return(&bad, &f, &refs), bad);
+        }
+        for fault in 0..5 {
+            let mut bad = f.clone();
+            match fault {
+                0 => bad.ret.is_reference = true,
+                1 => bad.ret.is_object_handle = true,
+                2 => bad.ret.token = 0x44,
+                3 => bad.bytecode[1] = 2,
+                _ => { let code = disassemble(&bad.bytecode).unwrap();
+                    bad.bytecode[code[1].offset_dw] += 1 << 16; }
+            }
+            assert_eq!(super::fold_literal_enum_default_return(body, &bad, &refs), body);
+        }
+        let mut entry = function(&[("JMP", &[]), ("SetV1", &[9]), ("CpyVtoR4", &[9]), ("RET", &[0])]);
+        entry.ret = f.ret;
+        let code = disassemble(&entry.bytecode).unwrap();
+        entry.bytecode[code[1].offset_dw + 1] = 1;
+        entry.bytecode[1] = code[2].offset_dw as i32 - 2;
+        assert_eq!(super::fold_literal_enum_default_return(body, &entry, &refs), body);
     }
 
     #[test]
