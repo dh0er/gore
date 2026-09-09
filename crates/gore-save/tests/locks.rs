@@ -177,20 +177,27 @@ fn relocking_and_raw_door_array_edits_are_refused_in_both_orders() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("refused.sav");
     let lock = set_unlocked("CV_Stash_Door", false);
-    let raw = json!({
-        "path": "private.typed.arrayRemove",
-        "value": {"path": ["m_DoorsOpen"], "index": 0},
-    });
-    for edits in [vec![lock.clone(), raw.clone()], vec![raw, lock]] {
-        let error = exec_err(json!({
-            "command": "write_save",
-            "payload": {"path": path, "outputPath": out, "edits": edits},
-        }));
-        assert!(
-            error.contains("rewrites as a whole"),
-            "unexpected error: {error}"
-        );
-        assert!(!out.exists());
+    for property in [
+        "m_DoorsOpen",
+        "m_DoorsClosed",
+        "m_SavedDoorsMessagesName",
+        "m_SavedDoorsMessagesStruct",
+    ] {
+        let raw = json!({
+            "path": "private.typed.arrayRemove",
+            "value": {"path": [property], "index": 0},
+        });
+        for edits in [vec![lock.clone(), raw.clone()], vec![raw, lock.clone()]] {
+            let error = exec_err(json!({
+                "command": "write_save",
+                "payload": {"path": path, "outputPath": out, "edits": edits},
+            }));
+            assert!(
+                error.contains("rewrites as a whole"),
+                "unexpected error for {property}: {error}"
+            );
+            assert!(!out.exists());
+        }
     }
 }
 

@@ -1781,6 +1781,31 @@ class EditorNotifier extends StateNotifier<EditorState> {
       state = state.copyWith(error: _l10n.editorTraderArrayConflict);
       return false;
     }
+    // Relocking pairs message names with structs by index. Splitting a raw
+    // change into an earlier write could remap the door to another message,
+    // so reject the combination before any sub-write reaches the save.
+    final hasRelock = allEdits.any((keyed) {
+      final edit = keyed.edit;
+      final value = edit['value'];
+      return edit['path'] == 'private.locks.setUnlocked' &&
+          value is Map &&
+          value['unlocked'] == false;
+    });
+    if (hasRelock) {
+      for (final keyed in allEdits) {
+        final path = _rawTypedEditPath(keyed.edit);
+        if (path != null &&
+            const [
+              'm_SavedDoorsMessagesName',
+              'm_SavedDoorsMessagesStruct',
+            ].any((name) => _pathHasName(path, name))) {
+          state = state.copyWith(
+            error: _l10n.editorConflictingPropertyEdits(path.join(' › ')),
+          );
+          return false;
+        }
+      }
+    }
     final fixedBatch = allEdits
         .where(
           (k) =>
@@ -4876,6 +4901,7 @@ bool structuredEditRewrites(
               const [
                 'm_DoorsOpen',
                 'm_DoorsClosed',
+                'm_SavedDoorsMessagesName',
                 'm_SavedDoorsMessagesStruct',
               ].any((name) => _pathHasName(typedPath, name)));
     // Claims a whole slot — but only in the inventory it targets; another

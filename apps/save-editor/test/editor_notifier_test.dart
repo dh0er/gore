@@ -1381,6 +1381,70 @@ void main() {
   );
 
   test(
+    'saveAllPending refuses raw door messages only when relocking',
+    () async {
+      for (final unlocked in [true, false]) {
+        for (final property in [
+          'm_SavedDoorsMessagesName',
+          'm_SavedDoorsMessagesStruct',
+        ]) {
+          for (final operation in [
+            'arrayRemove',
+            'arrayDuplicate',
+            'setValue',
+          ]) {
+            for (final rawFirst in [true, false]) {
+              final core = _RecordingCoreService();
+              final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+              await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+              notifier.setPendingEdit(
+                rawFirst ? 'a:raw' : 'z:raw',
+                PendingSaveEdit(
+                  edits: [
+                    {
+                      'path': 'private.typed.$operation',
+                      'value': {
+                        'path': [property],
+                        'index': 0,
+                        'value': 'OtherDoor',
+                      },
+                    },
+                  ],
+                ),
+              );
+              notifier.setPendingEdit(
+                'lock',
+                PendingSaveEdit(
+                  edits: [
+                    {
+                      'path': 'private.locks.setUnlocked',
+                      'value': {'lock': 'CV_Stash_Door', 'unlocked': unlocked},
+                    },
+                  ],
+                ),
+              );
+
+              expect(await notifier.saveAllPending(), unlocked);
+              final writes = core.requests.where(
+                (r) => r.command == 'write_save',
+              );
+              if (unlocked) {
+                expect(writes, isNotEmpty);
+                expect(notifier.state.error, isNull);
+              } else {
+                expect(writes, isEmpty);
+                expect(notifier.state.error, contains(property));
+                expect(notifier.state.pendingEdits, hasLength(2));
+              }
+              notifier.dispose();
+            }
+          }
+        }
+      }
+    },
+  );
+
+  test(
     'saveAllPending refuses a typed edit to a glossary quest CurrentState path',
     () async {
       final core = _RecordingCoreService();
@@ -3054,6 +3118,7 @@ void main() {
         for (final property in [
           'm_DoorsOpen',
           'm_DoorsClosed',
+          'm_SavedDoorsMessagesName',
           'm_SavedDoorsMessagesStruct',
         ]) {
           expect(structuredEditRewrites(lock, [property]), !unlocked);

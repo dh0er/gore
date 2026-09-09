@@ -11498,9 +11498,14 @@ fn structured_edit_rewrites(edit: &PrivateEdit, path: &[properties::PathSeg]) ->
         PrivateEdit::LockSetUnlocked(edit) => {
             path_has_name(path, locks::UNLOCKED_LOCKS_PROPERTY)
                 || (!edit.unlocked
-                    && ["m_DoorsOpen", "m_DoorsClosed", "m_SavedDoorsMessagesStruct"]
-                        .iter()
-                        .any(|name| path_has_name(path, name)))
+                    && [
+                        "m_DoorsOpen",
+                        "m_DoorsClosed",
+                        "m_SavedDoorsMessagesName",
+                        "m_SavedDoorsMessagesStruct",
+                    ]
+                    .iter()
+                    .any(|name| path_has_name(path, name)))
         }
         // Claims a whole slot: the add fills a blank one and resets its payload, the
         // removal blanks one. Only in the inventory it targets — another actor's
