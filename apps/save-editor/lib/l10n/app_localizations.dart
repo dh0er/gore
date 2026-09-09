@@ -149,7 +149,7 @@ abstract class AppLocalizations {
   /// No description provided for @storyStateDescription.
   ///
   /// In en, this message translates to:
-  /// **'Authoritative catalog of persisted story state declared by the shipped game scripts. Stored entries show their raw value; catalog fields missing from this save are marked as not set. Source-declared time markers are formatted as game time, while other integers may be booleans, counters, or multi-state values.'**
+  /// **'The game tracks progress in quests, dialogues and events here. “Stored” shows the values in your save; “Not set” shows the other known entries. Depending on the entry, a number can mean yes/no, a count or a stage of progress. Time markers show a day and time in the game.'**
   String get storyStateDescription;
 
   /// No description provided for @storyStateReadOnly.
@@ -199,6 +199,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Unknown source type'**
   String get storyStateUnknown;
+
+  /// No description provided for @storyStateShowDormant.
+  ///
+  /// In en, this message translates to:
+  /// **'Show unused ({count})'**
+  String storyStateShowDormant(int count);
 
   /// No description provided for @storyStateUnknownDetail.
   ///
@@ -263,7 +269,7 @@ abstract class AppLocalizations {
   /// No description provided for @storyStateEditingGuidance.
   ///
   /// In en, this message translates to:
-  /// **'Every entry remains editable across the full signed int32 range. Script-backed switches and value suggestions are guidance; raw input is always available. Story changes can skip dialogue, quest, or world transitions, so save them deliberately — a backup is created automatically.'**
+  /// **'Select an entry to change its value. Changes take effect when you save. Only change values whose effects you understand: quests or dialogues may otherwise stop working as expected. A backup is created automatically when you save.'**
   String get storyStateEditingGuidance;
 
   /// No description provided for @storyStatePending.
@@ -4866,6 +4872,108 @@ abstract class AppLocalizations {
     int failed,
     String playTime,
   );
+
+  /// No description provided for @locksSidebar.
+  ///
+  /// In en, this message translates to:
+  /// **'Locks'**
+  String get locksSidebar;
+
+  /// No description provided for @editorLockListFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Lock list failed: {details}'**
+  String editorLockListFailed(String details);
+
+  /// No description provided for @locksSearchHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Search lock or key'**
+  String get locksSearchHint;
+
+  /// No description provided for @locksAllRegions.
+  ///
+  /// In en, this message translates to:
+  /// **'All regions'**
+  String get locksAllRegions;
+
+  /// No description provided for @locksShownOfTotal.
+  ///
+  /// In en, this message translates to:
+  /// **'{shown} of {total}'**
+  String locksShownOfTotal(int shown, int total);
+
+  /// No description provided for @locksFilterChests.
+  ///
+  /// In en, this message translates to:
+  /// **'Chests'**
+  String get locksFilterChests;
+
+  /// No description provided for @locksFilterDoors.
+  ///
+  /// In en, this message translates to:
+  /// **'Doors'**
+  String get locksFilterDoors;
+
+  /// No description provided for @locksFilterUnlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Unlocked'**
+  String get locksFilterUnlocked;
+
+  /// No description provided for @locksFilterLocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Locked'**
+  String get locksFilterLocked;
+
+  /// No description provided for @locksDifficultyLevel.
+  ///
+  /// In en, this message translates to:
+  /// **'Difficulty {bars} of 4 (internal tier {level} of 7)'**
+  String locksDifficultyLevel(int bars, int level);
+
+  /// No description provided for @locksKeyOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'Key only'**
+  String get locksKeyOnly;
+
+  /// No description provided for @locksKeyLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Key: {keys}'**
+  String locksKeyLabel(String keys);
+
+  /// No description provided for @locksPermalocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Sealed permanently'**
+  String get locksPermalocked;
+
+  /// No description provided for @locksReadOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'This save has no editable lock set.'**
+  String get locksReadOnly;
+
+  /// No description provided for @locksUnknownEntry.
+  ///
+  /// In en, this message translates to:
+  /// **'Not in this game version'**
+  String get locksUnknownEntry;
+
+  /// No description provided for @locksDoorLeafHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Locking a door again also shuts the door itself.'**
+  String get locksDoorLeafHint;
+
+  /// No description provided for @locksResetPending.
+  ///
+  /// In en, this message translates to:
+  /// **'Discard queued lock changes'**
+  String get locksResetPending;
 }
 
 class _AppLocalizationsDelegate

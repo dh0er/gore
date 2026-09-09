@@ -27,7 +27,7 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get storyStateDescription =>
-      'Autorytatywny katalog trwałych stanów fabuły zadeklarowanych w skryptach dostarczonych z grą. Zapisane wpisy pokazują surową wartość; pola katalogu nieobecne w tym zapisie są oznaczone jako nieustawione. Znaczniki czasu zadeklarowane w kodzie są przedstawiane jako czas gry, a pozostałe liczby całkowite mogą być wartościami logicznymi, licznikami albo stanami wielopoziomowymi.';
+      'Gra zapisuje tu postępy zadań, dialogów i wydarzeń. „Zapisane” pokazuje wartości z twojego zapisu gry, a „Nieustawione” — pozostałe znane wpisy. Zależnie od wpisu liczba może oznaczać tak/nie, licznik lub etap postępu. Znaczniki czasu pokazują dzień i godzinę w grze.';
 
   @override
   String get storyStateReadOnly =>
@@ -56,6 +56,11 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get storyStateUnknown => 'Nieznany typ źródłowy';
+
+  @override
+  String storyStateShowDormant(int count) {
+    return 'Pokaż nieużywane ($count)';
+  }
 
   @override
   String get storyStateUnknownDetail =>
@@ -105,7 +110,7 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get storyStateEditingGuidance =>
-      'Każdy wpis można edytować w pełnym zakresie wartości int32 ze znakiem. Flagi i sugerowane wartości oparte na skryptach są jedynie wskazówkami; zawsze można wprowadzić surową wartość. Zmiany stanu fabuły mogą pominąć przejścia dialogów, zadań lub świata, dlatego zapisuj je rozważnie. Kopia zapasowa zostanie utworzona automatycznie.';
+      'Wybierz wpis, aby zmienić jego wartość. Zmiany zostaną zastosowane po zapisaniu. Zmieniaj tylko wartości, których działanie rozumiesz: inaczej zadania lub dialogi mogą przestać działać zgodnie z oczekiwaniami. Podczas zapisywania automatycznie powstaje kopia zapasowa.';
 
   @override
   String get storyStatePending => 'Oczekuje';
@@ -3264,4 +3269,64 @@ class AppLocalizationsPl extends AppLocalizations {
   ) {
     return 'Poziom $level, $guild, rozdział $chapter. Ukończone zadania: $completed, nieudane: $failed. Czas gry: $playTime.';
   }
+
+  @override
+  String get locksSidebar => 'Zamki';
+
+  @override
+  String editorLockListFailed(String details) {
+    return 'Nie udało się wczytać listy zamków: $details';
+  }
+
+  @override
+  String get locksSearchHint => 'Szukaj zamka lub klucza';
+
+  @override
+  String get locksAllRegions => 'Wszystkie regiony';
+
+  @override
+  String locksShownOfTotal(int shown, int total) {
+    return '$shown z $total';
+  }
+
+  @override
+  String get locksFilterChests => 'Skrzynie';
+
+  @override
+  String get locksFilterDoors => 'Drzwi';
+
+  @override
+  String get locksFilterUnlocked => 'Otwarty';
+
+  @override
+  String get locksFilterLocked => 'Zamknięty';
+
+  @override
+  String locksDifficultyLevel(int bars, int level) {
+    return 'Trudność $bars z 4 (wewnętrzny stopień $level z 7)';
+  }
+
+  @override
+  String get locksKeyOnly => 'Tylko kluczem';
+
+  @override
+  String locksKeyLabel(String keys) {
+    return 'Klucz: $keys';
+  }
+
+  @override
+  String get locksPermalocked => 'Zapieczętowane na stałe';
+
+  @override
+  String get locksReadOnly => 'Ten zapis nie ma edytowalnej listy zamków.';
+
+  @override
+  String get locksUnknownEntry => 'Brak w tej wersji gry';
+
+  @override
+  String get locksDoorLeafHint =>
+      'Ponowne zamknięcie drzwi zamyka także same drzwi.';
+
+  @override
+  String get locksResetPending => 'Odrzuć oczekujące zmiany zamków';
 }

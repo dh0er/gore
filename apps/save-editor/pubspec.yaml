@@ -67,6 +67,7 @@ flutter:
     - assets/npc_catalog.json
     - assets/knowledge_catalog.json
     - assets/location_catalog.json
+    - assets/lock_catalog.json
     - assets/glossary_images.json
     - assets/glossary_npc_catalog.json
     - assets/glossary_segment_text_catalog.json

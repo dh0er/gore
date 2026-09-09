@@ -26,7 +26,7 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get storyStateDescription =>
-      '製品版ゲームスクリプトで宣言された永続ストーリー状態の正式なカタログです。保存済み項目には生の値を表示し、このセーブにないカタログ項目は未設定として示します。ソースで宣言された時刻はゲーム内時刻として表示します。その他の整数は真偽値、カウンター、多段階状態などの場合があります。';
+      'ここにはクエスト、会話、イベントの進行状況が記録されています。「保存済み」はセーブデータ内の値、「未設定」はそれ以外の既知の項目を表示します。数値は項目によって、はい／いいえ、回数、進行段階などを表します。時刻の項目はゲーム内の日付と時刻を表します。';
 
   @override
   String get storyStateReadOnly =>
@@ -55,6 +55,11 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get storyStateUnknown => '不明なソース型';
+
+  @override
+  String storyStateShowDormant(int count) {
+    return '未使用を表示（$count）';
+  }
 
   @override
   String get storyStateUnknownDetail =>
@@ -96,7 +101,7 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get storyStateEditingGuidance =>
-      'すべての項目は、符号付き int32 の全範囲で編集できます。スクリプトに基づくフラグや値の候補は参考情報であり、生の値はいつでも入力できます。ストーリー状態を変更すると、会話、クエスト、ワールドの遷移が飛ばされる場合があります。内容を確認して保存してください。バックアップは自動的に作成されます。';
+      '項目を選ぶと値を変更できます。変更は保存すると反映されます。効果を理解している値だけを変更してください。クエストや会話が意図どおりに進まなくなる場合があります。保存時には自動的にバックアップが作成されます。';
 
   @override
   String get storyStatePending => '保留中';
@@ -3145,4 +3150,63 @@ class AppLocalizationsJa extends AppLocalizations {
   ) {
     return 'レベル$level、$guild、チャプター$chapter。完了クエスト$completed件、失敗$failed件。プレイ時間：$playTime。';
   }
+
+  @override
+  String get locksSidebar => '錠';
+
+  @override
+  String editorLockListFailed(String details) {
+    return '錠の一覧を読み込めませんでした: $details';
+  }
+
+  @override
+  String get locksSearchHint => '錠または鍵を検索';
+
+  @override
+  String get locksAllRegions => 'すべての地域';
+
+  @override
+  String locksShownOfTotal(int shown, int total) {
+    return '$total 件中 $shown 件';
+  }
+
+  @override
+  String get locksFilterChests => '宝箱';
+
+  @override
+  String get locksFilterDoors => '扉';
+
+  @override
+  String get locksFilterUnlocked => '解錠済み';
+
+  @override
+  String get locksFilterLocked => '施錠中';
+
+  @override
+  String locksDifficultyLevel(int bars, int level) {
+    return '難易度 $bars/4（内部段階 $level/7）';
+  }
+
+  @override
+  String get locksKeyOnly => '鍵のみ';
+
+  @override
+  String locksKeyLabel(String keys) {
+    return '鍵: $keys';
+  }
+
+  @override
+  String get locksPermalocked => '恒久的に封鎖';
+
+  @override
+  String get locksReadOnly => 'このセーブデータには編集できる錠の一覧がありません。';
+
+  @override
+  String get locksUnknownEntry => 'このバージョンには存在しません';
+
+  @override
+  String get locksDoorLeafHint => '扉を再び施錠すると、扉自体も閉まります。';
+
+  @override
+  String get locksResetPending => '保留中の錠の変更を破棄';
 }

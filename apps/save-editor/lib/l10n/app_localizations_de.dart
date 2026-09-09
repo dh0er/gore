@@ -26,7 +26,7 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get storyStateDescription =>
-      'Autoritativer Katalog der in den ausgelieferten Spielscripts deklarierten, persistenten Story-Zustände. Gespeicherte Einträge zeigen ihren Rohwert; im Save fehlende Katalogfelder sind als nicht gesetzt markiert. Im Source deklarierte Zeitpunkte werden als Spielzeit formatiert. Andere Ganzzahlen können Ja/Nein-Werte, Zähler oder mehrstufige Zustände sein.';
+      'Hier merkt sich das Spiel Fortschritte bei Quests, Dialogen und Ereignissen. „Gespeichert“ zeigt die Werte deines Spielstands, „Nicht gesetzt“ die übrigen bekannten Einträge. Zahlen können je nach Eintrag Ja/Nein, einen Zähler oder einen Fortschrittsschritt bedeuten. Zeitpunkte zeigen einen Tag und eine Uhrzeit im Spiel.';
 
   @override
   String get storyStateReadOnly =>
@@ -55,6 +55,11 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get storyStateUnknown => 'Unbekannter Source-Typ';
+
+  @override
+  String storyStateShowDormant(int count) {
+    return 'Ungenutzte anzeigen ($count)';
+  }
 
   @override
   String get storyStateUnknownDetail =>
@@ -102,7 +107,7 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get storyStateEditingGuidance =>
-      'Jeder Eintrag bleibt über den gesamten vorzeichenbehafteten int32-Bereich editierbar. Script-belegte Schalter und Wertvorschläge sind Hilfen; die Rohwerteingabe bleibt immer verfügbar. Story-Änderungen können Dialog-, Quest- oder Weltübergänge überspringen – beim Speichern wird automatisch ein Backup angelegt.';
+      'Wähle einen Eintrag, um seinen Wert zu ändern. Die Änderung wird erst mit „Speichern“ übernommen. Verändere nur Werte, deren Wirkung du kennst: Quests oder Dialoge können sonst nicht mehr wie erwartet ablaufen. Beim Speichern wird automatisch ein Backup angelegt.';
 
   @override
   String get storyStatePending => 'Ausstehend';
@@ -3251,4 +3256,65 @@ class AppLocalizationsDe extends AppLocalizations {
   ) {
     return 'Level $level, $guild, Kapitel $chapter. $completed Quests abgeschlossen, $failed fehlgeschlagen. Spielzeit: $playTime.';
   }
+
+  @override
+  String get locksSidebar => 'Schlösser';
+
+  @override
+  String editorLockListFailed(String details) {
+    return 'Die Schlossliste konnte nicht geladen werden: $details';
+  }
+
+  @override
+  String get locksSearchHint => 'Schloss oder Schlüssel suchen';
+
+  @override
+  String get locksAllRegions => 'Alle Regionen';
+
+  @override
+  String locksShownOfTotal(int shown, int total) {
+    return '$shown von $total';
+  }
+
+  @override
+  String get locksFilterChests => 'Truhen';
+
+  @override
+  String get locksFilterDoors => 'Türen';
+
+  @override
+  String get locksFilterUnlocked => 'Aufgeschlossen';
+
+  @override
+  String get locksFilterLocked => 'Verschlossen';
+
+  @override
+  String locksDifficultyLevel(int bars, int level) {
+    return 'Schwierigkeit $bars von 4 (intern Stufe $level von 7)';
+  }
+
+  @override
+  String get locksKeyOnly => 'Nur mit Schlüssel';
+
+  @override
+  String locksKeyLabel(String keys) {
+    return 'Schlüssel: $keys';
+  }
+
+  @override
+  String get locksPermalocked => 'Dauerhaft verriegelt';
+
+  @override
+  String get locksReadOnly =>
+      'Dieser Spielstand hat keine bearbeitbare Schlossliste.';
+
+  @override
+  String get locksUnknownEntry => 'Nicht in dieser Spielversion';
+
+  @override
+  String get locksDoorLeafHint =>
+      'Eine Tür wieder abzuschließen schließt auch den Türflügel.';
+
+  @override
+  String get locksResetPending => 'Ausstehende Schlossänderungen verwerfen';
 }

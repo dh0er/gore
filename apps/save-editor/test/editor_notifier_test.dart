@@ -3044,6 +3044,24 @@ void main() {
       );
     });
 
+    test('lock edits separate raw lock and door writes', () {
+      for (final unlocked in [true, false]) {
+        final lock = {
+          'path': 'private.locks.setUnlocked',
+          'value': {'lock': 'CV_Stash_Door', 'unlocked': unlocked},
+        };
+        expect(structuredEditRewrites(lock, const ['m_UnlockedLocks']), isTrue);
+        for (final property in [
+          'm_DoorsOpen',
+          'm_DoorsClosed',
+          'm_SavedDoorsMessagesStruct',
+        ]) {
+          expect(structuredEditRewrites(lock, [property]), !unlocked);
+        }
+        expect(structuredEditRewrites(lock, const ['m_Traders']), isFalse);
+      }
+    });
+
     test('addressing a whole map collides with every entry in it', () {
       final setEntry = {
         'path': 'private.knowledge.setEntry',

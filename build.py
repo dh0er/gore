@@ -2127,24 +2127,7 @@ def build_project(project: str, release: bool, dry: bool) -> None:
         _stage_standalone_compiler_bundle(project, host_dir, dry=dry)
         return
     # flutter app: build native cdylib first, then the app, then bundle the dll.
-    # The cargo package id (hyphenated) and the produced dll basename
-    # (underscored) differ, so they are tracked as separate fields.
-    crate = cfg["core_crate"]
-    cargo_cmd = [CARGO, "build", "-p", crate]
-    if release:
-        cargo_cmd.append("--release")
-    run(
-        f"cargo build {crate} ({mode})",
-        cargo_cmd,
-        dry=dry,
-        extra_env=_standalone_compiler_build_env(project, dry=dry),
-    )
-    if not dry:
-        _verify_host_embedded_standalone_compiler_catalog(
-            project,
-            target_dir(release) / f"{cfg['core_dll']}.dll",
-            dry=False,
-        )
+    build_core_dll(project, release=release, dry=dry)
 
     flutter_cmd = [FLUTTER, "build", "windows", f"--{mode}"]
     # Every Flutter app's About dialog reads GIT_SHA (String.fromEnvironment, defaultValue 'dev').
@@ -2159,16 +2142,7 @@ def build_project(project: str, release: bool, dry: bool) -> None:
     # line endings alone, so a build does not leave a worktree that reads as dirty
     # (see discard_line_ending_only_churn).
     discard_line_ending_only_churn(project)
-    rel = flutter_build_dir(project, release)
-    if not rel.exists():
-        raise SystemExit(f"missing flutter output: {rel}")
-    dll = f"{cfg['core_dll']}.dll"
-    src = target_dir(release) / dll
-    if not src.exists():
-        raise SystemExit(f"missing native artifact: {src}")
-    shutil.copy2(src, rel / dll)
-    _verify_host_embedded_standalone_compiler_catalog(project, rel / dll, dry=False)
-    print(f"copied {dll} -> {rel / dll}")
+    stage_core_dll(project, release=release)
 
 
 def runnable_exe(project: str, release: bool) -> Path:
@@ -2180,13 +2154,63 @@ def runnable_exe(project: str, release: bool) -> Path:
     raise SystemExit(f"{project} is not runnable")
 
 
+def build_core_dll(project: str, release: bool, dry: bool = False) -> Path:
+    """Compile a Flutter app's native cdylib and return the built artifact.
+
+    The cargo package id (hyphenated) and the produced dll basename
+    (underscored) differ, so they are tracked as separate config fields.
+    """
+    cfg = PROJECTS[project]
+    mode = "release" if release else "debug"
+    crate = cfg["core_crate"]
+    cargo_cmd = [CARGO, "build", "-p", crate]
+    if release:
+        cargo_cmd.append("--release")
+    run(
+        f"cargo build {crate} ({mode})",
+        cargo_cmd,
+        dry=dry,
+        extra_env=_standalone_compiler_build_env(project, dry=dry),
+    )
+    src = target_dir(release) / f"{cfg['core_dll']}.dll"
+    if not dry:
+        _verify_host_embedded_standalone_compiler_catalog(project, src, dry=False)
+    return src
+
+
+def stage_core_dll(project: str, release: bool) -> Path:
+    """Copy the native cdylib next to the app's exe, where the app looks first.
+
+    Kept separate from [build_core_dll] so `run` can refresh the core of an
+    already-built app: the exe existing does NOT mean its core is there, and an
+    app launched without one loads no core at all and silently does nothing.
+    """
+    cfg = PROJECTS[project]
+    rel = flutter_build_dir(project, release)
+    if not rel.exists():
+        raise SystemExit(f"missing flutter output: {rel}")
+    dll = f"{cfg['core_dll']}.dll"
+    src = target_dir(release) / dll
+    if not src.exists():
+        raise SystemExit(f"missing native artifact: {src}")
+    shutil.copy2(src, rel / dll)
+    _verify_host_embedded_standalone_compiler_catalog(project, rel / dll, dry=False)
+    print(f"copied {dll} -> {rel / dll}")
+    return rel / dll
+
+
 def run_project(project: str, release: bool) -> None:
-    """Launch the built program, building it first if it is missing."""
+    """Build the program, then launch it.
+
+    `run` REBUILDS rather than launching whatever happens to sit in build/.
+    Both toolchains are incremental, so an unchanged tree costs seconds — and
+    the alternative is worse than slow: a Flutter app whose exe already exists
+    launches, looks perfectly healthy, and shows code from whenever it was last
+    built. Checking only that the exe exists has already put a stale UI and a
+    missing native core in front of a reviewer.
+    """
     exe = runnable_exe(project, release)
-    if not exe.exists():
-        mode = "release" if release else "debug"
-        print(f"{exe.name} ({mode}) not built yet; building first...")
-        build_project(project, release=release, dry=False)
+    build_project(project, release=release, dry=False)
     if not exe.exists():
         raise SystemExit(f"build did not produce {exe}")
     # Run from the exe's own directory so a Flutter app finds its bundled DLLs.

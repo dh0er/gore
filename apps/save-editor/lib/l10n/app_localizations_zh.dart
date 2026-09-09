@@ -25,7 +25,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get storyStateDescription =>
-      '游戏随附脚本中声明的持久剧情状态权威目录。已保存条目显示原始值；此存档中缺少的目录字段会标记为未设置。源码声明的时间标记会格式化为游戏时间，其他整数可能表示布尔值、计数器或多阶段状态。';
+      '游戏在这里记录任务、对话和事件的进度。“已保存”显示存档中的数值，“未设置”显示其他已知条目。根据条目的不同，数字可能表示是或否、次数或进度阶段。时间标记表示游戏内的日期和时间。';
 
   @override
   String get storyStateReadOnly =>
@@ -54,6 +54,11 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get storyStateUnknown => '未知源码类型';
+
+  @override
+  String storyStateShowDormant(int count) {
+    return '显示未使用（$count）';
+  }
 
   @override
   String get storyStateUnknownDetail =>
@@ -94,7 +99,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get storyStateEditingGuidance =>
-      '所有条目在整个有符号 int32 范围内都可编辑。根据脚本确定的标志和建议值仅供参考；始终可以直接输入原始值。更改剧情状态可能会跳过对话、任务或世界的正常转换，因此请谨慎保存。系统会自动创建备份。';
+      '选择条目即可修改数值，修改会在保存后生效。请只修改你了解其作用的数值，否则任务或对话可能无法按预期进行。保存时会自动创建备份。';
 
   @override
   String get storyStatePending => '待处理';
@@ -3107,6 +3112,65 @@ class AppLocalizationsZh extends AppLocalizations {
   ) {
     return '等级$level，$guild，第$chapter章。完成任务$completed个，失败$failed个。游玩时间：$playTime。';
   }
+
+  @override
+  String get locksSidebar => '锁';
+
+  @override
+  String editorLockListFailed(String details) {
+    return '无法加载锁列表：$details';
+  }
+
+  @override
+  String get locksSearchHint => '搜索锁或钥匙';
+
+  @override
+  String get locksAllRegions => '所有区域';
+
+  @override
+  String locksShownOfTotal(int shown, int total) {
+    return '$total 个中的 $shown 个';
+  }
+
+  @override
+  String get locksFilterChests => '箱子';
+
+  @override
+  String get locksFilterDoors => '门';
+
+  @override
+  String get locksFilterUnlocked => '已开启';
+
+  @override
+  String get locksFilterLocked => '已上锁';
+
+  @override
+  String locksDifficultyLevel(int bars, int level) {
+    return '难度 $bars/4（内部等级 $level/7）';
+  }
+
+  @override
+  String get locksKeyOnly => '仅限钥匙';
+
+  @override
+  String locksKeyLabel(String keys) {
+    return '钥匙：$keys';
+  }
+
+  @override
+  String get locksPermalocked => '永久封闭';
+
+  @override
+  String get locksReadOnly => '此存档没有可编辑的锁列表。';
+
+  @override
+  String get locksUnknownEntry => '此游戏版本中不存在';
+
+  @override
+  String get locksDoorLeafHint => '重新锁上门时，门本身也会关闭。';
+
+  @override
+  String get locksResetPending => '放弃待保存的锁改动';
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hans`).
@@ -3130,7 +3194,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get storyStateDescription =>
-      '游戏随附脚本中声明的持久剧情状态权威目录。已保存条目显示原始值；此存档中缺少的目录字段会标记为未设置。源码声明的时间标记会格式化为游戏时间，其他整数可能表示布尔值、计数器或多阶段状态。';
+      '游戏在这里记录任务、对话和事件的进度。“已保存”显示存档中的数值，“未设置”显示其他已知条目。根据条目的不同，数字可能表示是或否、次数或进度阶段。时间标记表示游戏内的日期和时间。';
 
   @override
   String get storyStateReadOnly =>
@@ -3159,6 +3223,11 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get storyStateUnknown => '未知源码类型';
+
+  @override
+  String storyStateShowDormant(int count) {
+    return '显示未使用（$count）';
+  }
 
   @override
   String get storyStateUnknownDetail =>
@@ -3199,7 +3268,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get storyStateEditingGuidance =>
-      '所有条目在整个有符号 int32 范围内都可编辑。根据脚本确定的标志和建议值仅供参考；始终可以直接输入原始值。更改剧情状态可能会跳过对话、任务或世界的正常转换，因此请谨慎保存。系统会自动创建备份。';
+      '选择条目即可修改数值，修改会在保存后生效。请只修改你了解其作用的数值，否则任务或对话可能无法按预期进行。保存时会自动创建备份。';
 
   @override
   String get storyStatePending => '待处理';
@@ -6212,4 +6281,63 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   ) {
     return '等级$level，$guild，第$chapter章。完成任务$completed个，失败$failed个。游玩时间：$playTime。';
   }
+
+  @override
+  String get locksSidebar => '锁';
+
+  @override
+  String editorLockListFailed(String details) {
+    return '无法加载锁列表：$details';
+  }
+
+  @override
+  String get locksSearchHint => '搜索锁或钥匙';
+
+  @override
+  String get locksAllRegions => '所有区域';
+
+  @override
+  String locksShownOfTotal(int shown, int total) {
+    return '$total 个中的 $shown 个';
+  }
+
+  @override
+  String get locksFilterChests => '箱子';
+
+  @override
+  String get locksFilterDoors => '门';
+
+  @override
+  String get locksFilterUnlocked => '已开启';
+
+  @override
+  String get locksFilterLocked => '已上锁';
+
+  @override
+  String locksDifficultyLevel(int bars, int level) {
+    return '难度 $bars/4（内部等级 $level/7）';
+  }
+
+  @override
+  String get locksKeyOnly => '仅限钥匙';
+
+  @override
+  String locksKeyLabel(String keys) {
+    return '钥匙：$keys';
+  }
+
+  @override
+  String get locksPermalocked => '永久封闭';
+
+  @override
+  String get locksReadOnly => '此存档没有可编辑的锁列表。';
+
+  @override
+  String get locksUnknownEntry => '此游戏版本中不存在';
+
+  @override
+  String get locksDoorLeafHint => '重新锁上门时，门本身也会关闭。';
+
+  @override
+  String get locksResetPending => '放弃待保存的锁改动';
 }

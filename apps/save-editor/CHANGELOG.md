@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Browse and edit chest and door locks under World → Locks, with search and
+  filters. Relocking a door also closes it.
+
+### Changed
+
+- Story states are easier to browse, with clearer filters and help. Unused
+  entries are hidden by default and can be shown when needed.
+
 ## [1.4.1] - 2026-09-06
 
 ### Added
