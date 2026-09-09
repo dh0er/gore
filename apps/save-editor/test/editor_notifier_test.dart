@@ -1381,18 +1381,20 @@ void main() {
   );
 
   test(
-    'saveAllPending refuses raw door messages only when relocking',
+    'saveAllPending refuses raw edits a lock change can invalidate',
     () async {
       for (final unlocked in [true, false]) {
         for (final property in [
+          'm_UnlockedLocks',
+          'm_DoorsOpen',
+          'm_DoorsClosed',
           'm_SavedDoorsMessagesName',
           'm_SavedDoorsMessagesStruct',
         ]) {
-          for (final operation in [
-            'arrayRemove',
-            'arrayDuplicate',
-            'setValue',
-          ]) {
+          final operations = property == 'm_UnlockedLocks'
+              ? ['setRemove', 'setAdd', 'setValue']
+              : ['arrayRemove', 'arrayDuplicate', 'setValue'];
+          for (final operation in operations) {
             for (final rawFirst in [true, false]) {
               final core = _RecordingCoreService();
               final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
@@ -1404,9 +1406,17 @@ void main() {
                     {
                       'path': 'private.typed.$operation',
                       'value': {
-                        'path': [property],
+                        'path': [
+                          property,
+                          if (operation == 'setValue') '[0]',
+                          if (operation == 'setValue' &&
+                              property == 'm_SavedDoorsMessagesStruct')
+                            'm_Magnitude',
+                        ],
                         'index': 0,
-                        'value': 'OtherDoor',
+                        'value': property == 'm_SavedDoorsMessagesStruct'
+                            ? 1.0
+                            : 'OtherDoor',
                       },
                     },
                   ],
@@ -1424,11 +1434,12 @@ void main() {
                 ),
               );
 
-              expect(await notifier.saveAllPending(), unlocked);
+              final canSave = unlocked && property != 'm_UnlockedLocks';
+              expect(await notifier.saveAllPending(), canSave);
               final writes = core.requests.where(
                 (r) => r.command == 'write_save',
               );
-              if (unlocked) {
+              if (canSave) {
                 expect(writes, isNotEmpty);
                 expect(notifier.state.error, isNull);
               } else {
