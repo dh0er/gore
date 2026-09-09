@@ -221,7 +221,7 @@ class _LocksDetailState extends ConsumerState<LocksDetail> {
     ];
     final known = {for (final entry in catalog.locks) entry.name.toLowerCase()};
     for (final name in _saved.unlocked) {
-      if (known.contains(name.toLowerCase())) continue;
+      if (!known.add(name.toLowerCase())) continue;
       rows.add(_LockRow(name: name, entry: null, unlocked: true));
     }
     return rows;
@@ -297,7 +297,9 @@ class _LocksDetailState extends ConsumerState<LocksDetail> {
     final visible = rows.where(_matchesFilters).toList();
     // Region counts follow the kind/state/search filters but NOT the region
     // itself, so the rail keeps showing where the remaining matches are.
-    final byArea = <String, int>{};
+    // Keep an active region visible even when another filter removes its last
+    // match, so the restriction stays visible and can be cleared via All.
+    final byArea = <String, int>{?_area: 0};
     var acrossRegions = 0;
     for (final row in rows) {
       if (!_matchesFilters(row, withArea: false)) continue;

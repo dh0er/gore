@@ -342,6 +342,33 @@ void main() {
     expect(find.text('3 of 4'), findsOneWidget);
   });
 
+  testWidgets('an active region with zero matches stays visible and selected', (
+    tester,
+  ) async {
+    await _panel(tester, await _notifier(tester, _LocksCore()));
+    final newCamp = find.byKey(const ValueKey('locks-region-New Camp'));
+    final all = find.byKey(const ValueKey('locks-region-All regions'));
+    await tester.tap(newCamp);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('locks-kind-chests')));
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<ListTile>(newCamp).selected, isTrue);
+    expect(
+      find.descendant(of: newCamp, matching: find.text('0')),
+      findsOneWidget,
+    );
+    expect(tester.widget<ListTile>(all).selected, isFalse);
+    expect(find.descendant(of: all, matching: find.text('2')), findsOneWidget);
+    expect(find.text('IO_OC_CHEST_DEXTER'), findsNothing);
+
+    await tester.tap(all);
+    await tester.pumpAndSettle();
+    expect(tester.widget<ListTile>(all).selected, isTrue);
+    expect(find.text('IO_OC_CHEST_DEXTER'), findsOneWidget);
+    expect(find.text('2 of 4'), findsOneWidget);
+  });
+
   testWidgets('the kind filter separates chests from doors', (tester) async {
     final core = _LocksCore();
     await _panel(tester, await _notifier(tester, core));
@@ -554,6 +581,31 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('IO_AM_CHEST_05'), findsOneWidget);
     expect(find.text('5 of 5'), findsOneWidget);
+  });
+
+  testWidgets('case variants of a save-only lock share one row and draft', (
+    tester,
+  ) async {
+    final core = _LocksCore(unlocked: ['ModDoor', 'moddoor']);
+    final notifier = await _notifier(tester, core);
+    await _panel(tester, notifier);
+    final row = find.byKey(const ValueKey('lock-ModDoor'));
+    expect(row, findsOneWidget);
+    expect(find.byKey(const ValueKey('lock-moddoor')), findsNothing);
+    expect(find.text('5 of 5'), findsOneWidget);
+
+    await tester.tap(row);
+    await _settle(tester);
+    expect(notifier.pendingEditFor('world.locks')!.edits.single, {
+      'path': 'private.locks.setUnlocked',
+      'value': {'lock': 'ModDoor', 'unlocked': false},
+    });
+    final toggle = find.descendant(of: row, matching: find.byType(Switch));
+    expect(tester.widget<Switch>(toggle).value, isFalse);
+    await tester.tap(row);
+    await _settle(tester);
+    expect(notifier.pendingEditFor('world.locks'), isNull);
+    expect(tester.widget<Switch>(toggle).value, isTrue);
   });
 
   testWidgets('Other isolates unknown regions independently from All regions', (

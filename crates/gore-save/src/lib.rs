@@ -17035,6 +17035,56 @@ mod tests {
     }
 
     #[test]
+    fn relocking_checks_parallel_door_messages_before_mutating() {
+        for (name_count, struct_count) in [(1, 2), (2, 1), (2, 2)] {
+            let mut props = private_name_set_property("m_UnlockedLocks", &["TargetDoor"]);
+            props.extend(inv_name_array_property("m_DoorsOpen", &["TargetDoor"]));
+            props.extend(inv_name_array_property("m_DoorsClosed", &[]));
+            props.extend(inv_name_array_property(
+                "m_SavedDoorsMessagesName",
+                &["TargetDoor", "OtherDoor"][..name_count],
+            ));
+            let mut message = inv_name_property("m_Event", "m_CurrentSection");
+            message.extend(private_double_property("m_Magnitude", 1.0));
+            props.extend(inv_struct_array_property(
+                "m_SavedDoorsMessagesStruct",
+                "SavedDoorMessage",
+                &vec![message; struct_count],
+            ));
+            let mut payload = fstring("/Script/G1R.GameStateDataBaseSaveData");
+            payload.push(0);
+            payload.extend(props);
+            payload.extend(fstring("None"));
+            payload.extend(0u32.to_le_bytes());
+            let before = payload.clone();
+            let result = apply_private_lock_set_unlocked_to_payload(
+                &mut payload,
+                &PrivateLockSetUnlockedEdit {
+                    lock: "TargetDoor".to_string(),
+                    unlocked: false,
+                },
+            );
+            if name_count != struct_count {
+                assert!(result.unwrap_err().to_string().contains("different lengths"));
+                assert_eq!(payload, before, "a refused relock must be atomic");
+            } else {
+                result.unwrap();
+                let root = properties::parse_private_root(&payload).unwrap();
+                for (index, expected) in [(0, 0.0), (1, 1.0)] {
+                    let path = properties::parse_path(&[
+                        "m_SavedDoorsMessagesStruct".to_string(),
+                        format!("[{index}]"),
+                        "m_Magnitude".to_string(),
+                    ])
+                    .unwrap();
+                    let actual = &properties::resolve(&root.properties, &path).unwrap().value;
+                    assert_eq!(actual, &properties::PropertyValue::Double(expected));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn shared_door_relock_is_refused_without_changing_the_payload() {
         let mut payload = door_state_payload(&["GenericDoorSavedState", "CV_Stash_Door"], &[]);
         let before = payload.clone();

@@ -145,16 +145,25 @@ pub fn plan_close_door_leaf(
     // if that message still says section 1, the leaf swings back open however
     // the arrays read. Zero it for this door only.
     let mut open_message_magnitudes = Vec::new();
-    if let (Some((_, names)), Some((structs_path, structs))) = (
-        array_elements(root, DOOR_MESSAGE_NAMES_PROPERTY),
-        array_elements(root, DOOR_MESSAGE_STRUCTS_PROPERTY),
-    ) {
+    let message_names = array_elements(root, DOOR_MESSAGE_NAMES_PROPERTY);
+    let message_structs = array_elements(root, DOOR_MESSAGE_STRUCTS_PROPERTY);
+    if message_names
+        .as_ref()
+        .map_or(0, |(_, entries)| entries.len())
+        != message_structs
+            .as_ref()
+            .map_or(0, |(_, entries)| entries.len())
+    {
+        return Err(CoreError::UnsupportedEdit(format!(
+            "cannot relock {name:?}: saved door-message name and struct arrays have different lengths"
+        )));
+    }
+    if let (Some((_, names)), Some((structs_path, structs))) = (message_names, message_structs) {
         for (index, entry) in names.iter().enumerate() {
             if !element_is(entry, name) {
                 continue;
             }
-            // The two arrays are parallel; a save whose lengths disagree is not
-            // one this can reason about, so it is left alone.
+            // Unknown message payloads are left intact.
             let Some(message) = structs.get(index).and_then(struct_properties) else {
                 continue;
             };
