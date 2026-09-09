@@ -57,7 +57,7 @@ AI.States.FightAI.WatchFightState.AIGroup_WatchFight	2	0	0
 AI.States.FightAI.WatchFightState.AIState_WatchFight	14	0	0
 AI.States.Test.TestCharacters_Navigation	1	0	0
 Camera.ConversationCameraConfig	1	0	0
-Environment.GothicUltraDynamicControlerAS	3	0	0
+Environment.GothicUltraDynamicControlerAS	2	0	0
 GAS.Abilities.Combat.AttackLoop.Capsule.GA_AttackLoopCapsule	1	0	0
 GAS.Abilities.Combat.AttackLoop.Capsule.PyrolaserHitCapsuleComponent	1	0	0
 GAS.Abilities.Combat.AttackLoop.Cone.GA_AttackLoopCone	1	0	0

@@ -560,9 +560,30 @@ fn enum_parameter_field_type(
         .map(str::to_owned)
 }
 
-/// A widened first argument plus two f64 constants selects the native f64
-/// predicate overload. An implicit initializer can instead select its f32 peer.
-fn scalar_predicate_widening(instrs: &[Instr], at: usize, refs: &RefResolver) -> bool {
+/// Preserve explicit argument widening that selects a native f64 overload.
+/// An implicit initializer can instead select its f32 peer after inlining.
+fn scalar_argument_widening(instrs: &[Instr], at: usize, refs: &RefResolver) -> bool {
+    // A widened upper bound and a zero lower bound feed the f64 random range.
+    if let Some(c) = instrs.get(at..at + 5) {
+        if c.iter().map(|i| i.op.name).eq(["fTOd", "PshV8", "PshC8", "CALLSYS", "CpyRtoV8"])
+            && c[0].words.first().is_some_and(|w| s16(*w) > 0)
+            && c[0].words.get(1).is_some_and(|w| s16(*w) > 0)
+            && c[0].words.first() != c[0].words.get(1)
+            && c[0].words.first() == c[1].words.first()
+            && c[2].qwords.first() == Some(&0)
+        {
+            if let Some(ptr) = c[3].qwords.first().map(|p| *p as i64) {
+                let scalar = |ty: &DataType| matches!(ty.token, 0x51 | 0x5e)
+                    && !ty.is_reference && !ty.is_object_handle;
+                if !refs.is_method_by_ptr(ptr) && refs.func_owner_by_ptr(ptr).is_none()
+                    && refs.func_by_ptr(ptr) == Some("RandRange")
+                    && refs.func_ns_by_ptr(ptr) == Some("Math")
+                    && refs.func_ret_by_ptr(ptr).is_some_and(scalar)
+                    && refs.func_params_by_ptr(ptr).is_some_and(|p| p.len() == 2 && p.iter().all(scalar))
+                { return true; }
+            }
+        }
+    }
     let Some(c) = at.checked_sub(2).and_then(|lo| instrs.get(lo..lo + 5)) else { return false; };
     if c.iter().map(|i| i.op.name).ne(["PshC8", "PshC8", "fTOd", "PshV8", "CALLSYS"])
         || c[2].words.first().is_none() || c[2].words.first() != c[3].words.first()
@@ -7022,7 +7043,7 @@ fn block_stmts_in(
                 // a copy before the PSF; an explicit cast writes that slot directly.
                 let cast = narrowing_cast_target(n2).or_else(||
                     (addressed_field_widening(ctx.instrs, lo + k)
-                        || scalar_predicate_widening(ctx.instrs, lo + k, ctx.refs)).then_some("float"));
+                        || scalar_argument_widening(ctx.instrs, lo + k, ctx.refs)).then_some("float"));
                 match cast {
                     Some(t) => out.push(format!("{dst} = {t}({src});")),
                     None => out.push(format!("{dst} = {src};")),
@@ -13368,17 +13389,41 @@ mod tests {
         let refs = RefResolver::from_test_scalar_predicate_widening(0);
         let code = vec![ins("PshC8", &[], &[0.0001f64.to_bits()]), ins("PshC8", &[], &[1.0f64.to_bits()]),
             ins("fTOd", &[12,6], &[]), ins("PshV8", &[12], &[]), ins("CALLSYS", &[], &[10])];
-        assert!(scalar_predicate_widening(&code, 2, &refs));
+        assert!(scalar_argument_widening(&code, 2, &refs));
         for fault in 1..=6 {
-            assert!(!scalar_predicate_widening(&code, 2, &RefResolver::from_test_scalar_predicate_widening(fault)), "metadata {fault}");
+            assert!(!scalar_argument_widening(&code, 2, &RefResolver::from_test_scalar_predicate_widening(fault)), "metadata {fault}");
         }
         for (at, other) in [(0, ins("PshC4", &[], &[0])), (1, ins("PshC8", &[], &[f64::NAN.to_bits()])),
             (2, ins("iTOd", &[12,6], &[])), (3, ins("PshV8", &[14], &[])), (4, ins("CALLSYS", &[], &[11]))] {
             let mut wrong = code.clone(); wrong[at] = other;
-            assert!(!scalar_predicate_widening(&wrong, 2, &refs), "instruction {at}");
+            assert!(!scalar_argument_widening(&wrong, 2, &refs), "instruction {at}");
         }
-        assert!(!scalar_predicate_widening(&code, 0, &refs));
-        assert!(!scalar_predicate_widening(&code[..4], 2, &refs));
+        assert!(!scalar_argument_widening(&code, 0, &refs));
+        assert!(!scalar_argument_widening(&code[..4], 2, &refs));
+    }
+
+    #[test]
+    fn a_native_f64_range_keeps_the_widened_upper_bound_explicit() {
+        let ins = |name, words: &[u16], qwords: &[u64]| Instr {
+            offset_dw: 0, op: crate::cache::isa::OPCODES.iter().find(|op| op.name == name).unwrap(),
+            words: words.to_vec(), dwords: Vec::new(), qwords: qwords.to_vec(),
+        };
+        let refs = RefResolver::from_test_range_widening(0);
+        let code = vec![ins("fTOd", &[30, 11], &[]), ins("PshV8", &[30], &[]),
+            ins("PshC8", &[], &[0]), ins("CALLSYS", &[], &[10]), ins("CpyRtoV8", &[34], &[])];
+        assert!(scalar_argument_widening(&code, 0, &refs));
+        for fault in 1..=10 {
+            assert!(!scalar_argument_widening(&code, 0, &RefResolver::from_test_range_widening(fault)), "metadata {fault}");
+        }
+        for (at, other) in [(0, ins("iTOd", &[30, 11], &[])), (0, ins("fTOd", &[30, 30], &[])),
+            (0, ins("fTOd", &[30], &[])), (1, ins("PshV8", &[32], &[])),
+            (2, ins("PshC8", &[], &[1.0f64.to_bits()])), (2, ins("PshC4", &[], &[0])),
+            (3, ins("CALLSYS", &[], &[11])), (4, ins("CpyRtoV4", &[34], &[]))] {
+            let mut wrong = code.clone(); wrong[at] = other;
+            assert!(!scalar_argument_widening(&wrong, 0, &refs), "instruction {at}");
+        }
+        assert!(!scalar_argument_widening(&code[..4], 0, &refs));
+        assert!(!scalar_argument_widening(&code, 1, &refs));
     }
 
     #[test]

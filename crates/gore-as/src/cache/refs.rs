@@ -1724,6 +1724,41 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_prepared_enum_getter_argument(fault: u8) -> Self {
+        let mut r=Self::from_test_member_chain(&[("EWeather",""),("FWeatherState",""),("FWeatherResult",""),("AWeatherHost","")]);
+        for (p,name) in [(1,"EWeather"),(2,"FWeatherState"),(3,"FWeatherResult"),(4,"AWeatherHost")] {
+            r.type_identity_by_ptr.insert(p,TypeIdentity {name:name.into(),module:String::new(),namespace:String::new()});
+        }
+        let value=|p|DataType {token:5,type_info:p,..Default::default()};
+        let mut enum_arg=value(1);enum_arg.is_object_const=true;enum_arg.is_read_only=true;
+        let state=DataType {is_reference:true,is_object_const:true,is_read_only:true,..value(2)};
+        for (p,name,owner,params,ret) in [(10,"GetCurrentWeather","AWeatherHost",vec![],value(1)),
+            (20,"GetChoices","AWeatherHost",vec![enum_arg,state],value(3)),
+            (30,"Inspect","FWeatherResult",vec![],DataType {token:0x52,..Default::default()})] {
+            r.func_by_ptr.insert(p,name.into());r.func_owner.insert(p,owner.into());r.func_is_method.insert(p);
+            r.func_params.insert(p,params);r.func_ret.insert(p,ret);r.funcid_to_ptr.insert(p as i32,p);
+        }
+        r.temporary_arg_positions.insert("GetChoices".into(),HashMap::from([(2,vec![true,false])]));
+        r.ctor_arg_positions.insert("EWeather".into(),HashMap::from([(1,vec![true])]));
+        match fault {
+            1=>r.func_ret.get_mut(&10).unwrap().is_reference=true,
+            2=>{r.func_is_method.remove(&10);},
+            3=>r.func_params.get_mut(&10).unwrap().push(value(1)),
+            4=>r.func_params.get_mut(&20).unwrap()[0].type_info=2,
+            5=>r.func_params.get_mut(&20).unwrap()[0].is_reference=true,
+            6=>r.func_params.get_mut(&20).unwrap()[1].is_reference=false,
+            7=>r.func_params.get_mut(&20).unwrap()[1].is_read_only=false,
+            8=>{r.func_is_method.remove(&20);},
+            9=>r.func_ret.get_mut(&20).unwrap().is_object_handle=true,
+            10=>r.func_ret.get_mut(&20).unwrap().type_info=2,
+            11=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Other".into(),
+            12=>r.func_params.get_mut(&20).unwrap().truncate(1),
+            _=>{},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_guard_field_selection(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("UConfig", ""), ("UState", ""), ("UObject", ""), ("UState", "")]);
         for (id, name) in [(1, "UConfig"), (2, "UState"), (3, "UObject"), (4, "UState")] {
@@ -2332,6 +2367,21 @@ impl RefResolver {
         if fault != 4 { r.func_is_method.insert(10); }
         r.func_ret.insert(10, DataType { token: 5, type_info: 1,
             is_reference: fault == 5, is_object_handle: fault == 6, ..Default::default() });
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_range_widening(fault: u8) -> Self {
+        let mut r = Self::default();
+        r.func_by_ptr.insert(10, if fault == 1 { "Other" } else { "RandRange" }.into());
+        r.func_ns.insert(10, if fault == 2 { "Other" } else { "Math" }.into());
+        if fault == 3 { r.func_is_method.insert(10); }
+        if fault == 4 { r.func_owner.insert(10, "FMath".into()); }
+        r.func_ret.insert(10, DataType { token: if fault == 5 { 0x50 } else { 0x51 },
+            is_reference: fault == 6, ..Default::default() });
+        r.func_params.insert(10, (0..if fault == 7 { 3 } else { 2 }).map(|_| DataType {
+            token: if fault == 8 { 0x50 } else { 0x51 }, is_reference: fault == 9,
+            is_object_handle: fault == 10, ..Default::default() }).collect());
         r
     }
 

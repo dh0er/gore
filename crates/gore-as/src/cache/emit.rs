@@ -24379,7 +24379,8 @@ fn enum_named_literal_slots(f: &Func, refs: &RefResolver) -> HashMap<i32, String
 }
 
 /// A native enum local is complete before the later argument preparations.
-/// Match all direct/copied lives, then reuse the enum seed and named-site gates.
+/// Match direct/copied converter lives or a closed member getter capture before
+/// a script call's reference/RVO arguments; reuse enum seeds and named-site gates.
 fn prepared_enum_argument_sites(f: &Func, refs: &RefResolver) -> HashMap<i32,(String,String)> {
     let Ok(code)=disassemble(&f.bytecode) else { return HashMap::new(); };
     if code.iter().any(|i| i.op.name=="JMPP") { return HashMap::new(); }
@@ -24400,7 +24401,38 @@ fn prepared_enum_argument_sites(f: &Func, refs: &RefResolver) -> HashMap<i32,(St
             let convert=ptr(producer)?;let enumeration=refs.func_ret_by_ptr(convert)?;
             let identity=refs.type_identity_by_ptr(enumeration.type_info)?;
             if !plain(enumeration,5,enumeration.type_info) || !is_enum(&identity.name)
-                || !identity.module.is_empty() || !identity.namespace.is_empty() || refs.is_method_by_ptr(convert) { return None; }
+                || !identity.module.is_empty() || !identity.namespace.is_empty() { return None; }
+            if refs.is_method_by_ptr(convert) {
+                // A zero-argument member enum getter finishes before a reference
+                // argument and the RVO frame of a typed script member call.
+                let start=at.checked_sub(2)?;let c=code.get(start..start+8)?;
+                if c.iter().map(|i| i.op.name).ne(["PshVPtr","CALLSYS","CpyRtoV4","PshVPtr",
+                    "PshV4","PSF","PshVPtr","CALLINTF"]) || w(&c[0],0)!=Some(0) || w(&c[6],0)!=Some(0)
+                    || !refs.func_params_by_ptr(convert)?.is_empty() { return None; }
+                let (slot,reference,result)=(w(capture,0)?,w(&c[3],0)?,w(&c[5],0)?);
+                if slot<=0 || reference>=0 || result<=0 || w(&c[4],0)!=Some(slot)
+                    || f.obj_locals.iter().any(|(s,_)| *s==slot) || uses(slot)!=[at,at+2] { return None; }
+                let consumer=*c[7].dwords.first()? as i32;
+                let [arg,state]=refs.func_params_by_id(consumer)? else { return None; };
+                let ret=refs.func_ret_by_id(consumer)?;
+                if !refs.is_method_by_id(consumer) || arg.token!=5 || arg.type_info!=enumeration.type_info
+                    || arg.is_reference || arg.is_object_handle || !arg.is_object_const || !arg.is_read_only
+                    || arg.is_auto || arg.if_handle_then_const || state.token!=5 || !state.is_reference
+                    || state.is_object_handle || !state.is_object_const || !state.is_read_only
+                    || state.is_auto || state.if_handle_then_const || !is_value_struct_type(&state.base_name(refs))
+                    || !plain(ret,5,ret.type_info) || !is_value_struct_type(&ret.base_name(refs))
+                    || object(result)!=Some(ret.type_info) { return None; }
+                let params:Vec<_>=f.params.iter().map(|p|p.ty.clone()).collect();
+                let offsets=super::model::param_slot_map(&params,true,super::model::returns_struct_by_value(&f.ret,refs),Some(refs));
+                let supplied=&f.params.get(*offsets.get(&reference)?)?.ty;
+                if supplied.token!=5 || supplied.type_info!=state.type_info || !supplied.is_reference
+                    || supplied.is_object_handle || supplied.is_auto || supplied.if_handle_then_const
+                    || code.iter().any(|i| i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                        let target=i.offset_dw as i64+2+*d as i32 as i64;
+                        target>c[0].offset_dw as i64 && target<=c[7].offset_dw as i64
+                    })) { return None; }
+                return Some((slot,(enumeration.base_name(refs),refs.func_by_ptr(convert)?.to_owned())));
+            }
             let [input]=refs.func_params_by_ptr(convert)? else { return None; };
             if !plain(input,5,input.type_info) || !is_enum(&input.base_name(refs)) { return None; }
             let source=w(capture,0)?;
@@ -38972,6 +39004,69 @@ mod literal_value_lifetime_tests {
                 let mut other=f.clone();let call=code.iter().rfind(|i| i.op.name=="CALLSYS" && i.qwords.first()==Some(&10)).unwrap();
                 other.bytecode[call.offset_dw+1]=30;assert!(super::prepared_enum_argument_sites(&other,&refs).is_empty());
             }
+        }
+    }
+
+    fn prepared_enum_getter_argument_fixture() -> Func {
+        let mut f=function(&[("PshVPtr",&[0]),("CALLSYS",&[]),("CpyRtoV4",&[1]),
+            ("PshVPtr",&[65533]),("PshV4",&[1]),("PSF",&[6]),("PshVPtr",&[0]),("CALLINTF",&[]),
+            ("PSF",&[6]),("CALLSYS",&[]),("RET",&[5])]);
+        let c=disassemble(&f.bytecode).unwrap();
+        for (at,id) in [(1,10),(7,20),(9,30)] {f.bytecode[c[at].offset_dw+1]=id;}
+        f.ret=DataType {token:0x52,..Default::default()};
+        f.params=vec![super::super::model::Param {name:"Instant".into(),flags:0,
+            ty:DataType {token:0x41,is_read_only:true,..Default::default()}},
+            super::super::model::Param {name:"SaveState".into(),flags:0,
+                ty:DataType {token:5,type_info:2,is_reference:true,..Default::default()}}];
+        f.obj_locals=vec![(6,3)];f
+    }
+
+    #[test]
+    fn prepared_member_enum_capture_stays_before_reference_argument_through_emitter() {
+        let f=prepared_enum_getter_argument_fixture();
+        let refs=RefResolver::from_test_prepared_enum_getter_argument(0);
+        assert_eq!(super::prepared_enum_argument_sites(&f,&refs),
+            HashMap::from([(1,("EWeather".into(),"GetCurrentWeather".into()))]));
+        assert_eq!(super::enum_argument_slots(&f,&refs).get(&1),Some(&"EWeather".into()));
+        assert!(super::named_value_sites(&f,&refs).contains(&(1,"GetCurrentWeather".into())));
+        let mut rendered=String::new();super::emit_function(&mut rendered,&f,&refs,true,false,0);
+        assert!(!rendered.contains("stub["),"{rendered}");
+        let getter=rendered.find("EWeather local_1 = this.GetCurrentWeather();").expect(&rendered);
+        let consumer=rendered.find("this.GetChoices(EWeather(local_1), SaveState)").expect(&rendered);
+        assert!(getter<consumer,"{rendered}");
+        assert!(!rendered.contains("GetChoices(this.GetCurrentWeather()"),"{rendered}");
+    }
+
+    #[test]
+    fn prepared_member_enum_capture_rejects_wrong_types_lives_frames_and_entries() {
+        let f=prepared_enum_getter_argument_fixture();let refs=RefResolver::from_test_prepared_enum_getter_argument(0);
+        for fault in 1..=12 {
+            assert!(super::prepared_enum_argument_sites(&f,&RefResolver::from_test_prepared_enum_getter_argument(fault)).is_empty(),"metadata {fault}");
+        }
+        let c=disassemble(&f.bytecode).unwrap();
+        for (at,op,words) in [(0,"PshVPtr",vec![2]),(2,"CpyRtoV8",vec![1]),
+            (3,"PshVPtr",vec![65534]),(4,"PshV4",vec![2]),(5,"PSF",vec![8]),(6,"PshVPtr",vec![2])]
+        {
+            let mut bad=f.clone();let replacement=function(&[(op,&words)]).bytecode;
+            assert_eq!(replacement.len(),c[at+1].offset_dw-c[at].offset_dw);
+            bad.bytecode[c[at].offset_dw..c[at].offset_dw+replacement.len()].copy_from_slice(&replacement);
+            assert!(super::prepared_enum_argument_sites(&bad,&refs).is_empty(),"frame {at}");
+        }
+        for op in ["PshV4","PSF","SetV4"] {
+            let mut bad=f.clone();bad.bytecode.extend(function(&[(op,&[1])]).bytecode);
+            assert!(super::prepared_enum_argument_sites(&bad,&refs).is_empty(),"life {op}");
+        }
+        for target in 1..8 {
+            let mut bad=f.clone();let mut prefix=function(&[("JMP",&[])]).bytecode;
+            prefix[1]=c[target].offset_dw as i32;prefix.extend(bad.bytecode);bad.bytecode=prefix;
+            assert!(super::prepared_enum_argument_sites(&bad,&refs).is_empty(),"entry {target}");
+        }
+        for fault in 0..4 {
+            let mut bad=f.clone();match fault {
+                0=>bad.params[1].ty.type_info=3,1=>bad.params[1].ty.is_reference=false,
+                2=>bad.obj_locals.push((1,1)),_=>bad.obj_locals.push((6,3)),
+            }
+            assert!(super::prepared_enum_argument_sites(&bad,&refs).is_empty(),"caller {fault}");
         }
     }
 
