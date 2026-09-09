@@ -1664,6 +1664,9 @@ fn emit_function_ctor(
     hoisted.extend(value_operands.iter().copied());
     statement_producers.extend(value_operands);
     let (rvo_statements, mut inline_callees) = rvo_statement_producers(f, refs, &rvo_producers);
+    for (slot, expression) in &pushed_scalar_sites {
+        inline_callees.entry(*slot).or_default().push(expression.clone());
+    }
     // The closed float32 cast belongs to the earlier pushed argument life;
     // the same slot's later reference getter carries the statement verdict.
     let narrowed_argument_lives = narrowed_argument_split_lives(f, refs);
@@ -12596,7 +12599,7 @@ fn address_push_counts(f: &Func, refs: &RefResolver) -> HashMap<i32, usize> {
 /// everything done to the named one is thrown away — `RemoveActiveEffectsWithTags` asked to
 /// remove effects with NO tags rather than the one just added.
 ///
-/// The witness is a count: vanilla pushes the slot once more than the text mentions it. Only the
+/// The witness is a count: vanilla pushes the slot more often than the text passes it directly. Only the
 /// single-hand-off case is repaired, and only where the placeholder stands AFTER the last mention
 /// of the name, so nothing is put where the value did not exist yet.
 fn restore_dropped_struct_arguments(body: &str, pushes: &HashMap<i32, usize>) -> String {
@@ -12622,6 +12625,12 @@ fn restore_dropped_struct_arguments(body: &str, pushes: &HashMap<i32, usize>) ->
         if mentions == 0 || pushes.get(&slot).copied().unwrap_or(0) == 0 {
             continue;
         }
+        // A real T() temporary can follow earlier uses of a distinct named T.
+        // Only still-unrepresented whole-object arguments justify replacing it;
+        // member receivers and member writes do not spend an argument push.
+        let rendered_arguments = lines.iter().flat_map(|line| call_sites(line))
+            .flat_map(|(_, args)| args).filter(|arg| arg.trim() == name.as_str()).count();
+        if pushes.get(&slot).copied().unwrap_or(0) <= rendered_arguments { continue; }
         let placeholder = format!("{ty}()");
         let last_mention = (0..lines.len())
             .rev()
@@ -15324,10 +15333,23 @@ fn fold_compound_assignments(
     addressed_compounds: &HashSet<(String, String, CompoundFieldRhs)>,
 ) -> String {
     const OPERATORS: [&str; 7] = [" + ", " - ", " * ", " / ", " | ", " & ", " ^ "];
-    let late_update_is_safe = |path: &str, operator: &str, addend: &str| {
+    let lines: Vec<&str> = body.lines().collect();
+    let late_update_is_safe = |path: &str, operator: &str, addend: &str, at: usize| {
         let f64_type = |ty: &str| matches!(ty, "float" | "double");
         matches!(operator.trim(), "+" | "-") && (addend.parse::<i32>().is_ok()
-            || (roots.get(addend).is_some_and(|ty| f64_type(ty))
+            || (roots.get(addend).map(|ty| f64_type(ty)).unwrap_or_else(|| {
+                // Life splitting creates names absent from the original slot types.
+                // Require their exact earlier declaration, never a guessed base slot.
+                if !slot_and_life(addend).is_some_and(|(slot, life)| slot > 0 && life > 1) { return false; }
+                let (begin, _) = block_span(&lines, at);
+                let mut declared = lines[begin..at].iter().filter_map(|line| {
+                    if indent_of(line) != indent_of(lines[at]) { return None; }
+                    let head = line.trim().strip_suffix(';')?.split_once(" = ")?.0;
+                    let (ty, name) = head.rsplit_once(' ')?;
+                    (name == addend).then_some(ty)
+                });
+                declared.next().is_some_and(f64_type) && declared.next().is_none()
+            })
                 && type_of_member_path(path, fields, roots, refs).is_some_and(|ty| f64_type(&ty))))
     };
     let pure_member_path = |path: &str| {
@@ -15337,7 +15359,6 @@ fn fold_compound_assignments(
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b':'))
     };
-    let lines: Vec<&str> = body.lines().collect();
     let mut kept: Vec<String> = Vec::with_capacity(lines.len());
     let mut at = 0usize;
     while at < lines.len() {
@@ -15382,7 +15403,7 @@ fn fold_compound_assignments(
                         value.starts_with(&format!("{target}{operator}")) || value.contains("local_")
                     })
                 }).count()==1;
-            if late && !late_update_is_safe(target, operator, addend) && !addressed {
+            if late && !late_update_is_safe(target, operator, addend, at) && !addressed {
                 return None;
             }
             // A literal addend is materialised BEFORE the member is loaded in the compound
@@ -15452,7 +15473,7 @@ fn fold_compound_assignments(
             // and field reads must retain their position relative to the target.
             if operator.trim() == "+" && explicit_member_sums.contains(
                 &(path.to_owned(), unwrap_brackets(addend).to_owned())) { return None; }
-            if late && !late_update_is_safe(path, operator, addend) {
+            if late && !late_update_is_safe(path, operator, addend, at) {
                 return None;
             }
             // `X.F = local_N;` — the target is a member path, which `slot_store` also refuses.
@@ -18843,8 +18864,12 @@ fn scalar_argument_order_sites(f: &Func, refs: &RefResolver, is_method: bool)
     };
     let mut pushed = HashSet::new();
     for (at, c) in code.windows(6).enumerate() {
-        if c.iter().map(|i| i.op.name).ne(["PSF", "PshVPtr", "CALLSYS", "LoadVObjR", "RDR8", "PshV8"])
-            || w(&c[1], 0) != Some(0) || w(&c[0], 0) != w(&c[3], 0) || w(&c[4], 0) != w(&c[5], 0)
+        let comparison = c[5].op.name == "CMPd";
+        if c[..5].iter().map(|i| i.op.name).ne(["PSF", "PshVPtr", "CALLSYS", "LoadVObjR", "RDR8"])
+            || w(&c[0], 0) != w(&c[3], 0)
+            || if comparison { w(&c[1], 0).is_none_or(|s| s <= 0 || Some(s) == w(&c[0], 0) || Some(s) == w(&c[4], 0))
+                || w(&c[4], 0) != w(&c[5], 1) || w(&c[5], 0).is_none_or(|s| s <= 0 || Some(s) == w(&c[4], 0)) }
+            else { c[5].op.name != "PshV8" || w(&c[1], 0) != Some(0) || w(&c[4], 0) != w(&c[5], 0) }
             || entered(at, at + 5) { continue; }
         let Some((slot, object, ptr)) = w(&c[4], 0).zip(w(&c[0], 0)).zip(c[2].qwords.first())
             .map(|((s, o), p)| (s, o, *p as i64)).filter(|(s, o, _)| *s > 0 && *o > 0 && s != o) else { continue; };
@@ -18854,13 +18879,42 @@ fn scalar_argument_order_sites(f: &Func, refs: &RefResolver, is_method: bool)
         if ret.token != 5 || ret.is_reference || ret.is_object_handle || !refs.is_method_by_ptr(ptr)
             || !refs.is_const_method_by_ptr(ptr) || !refs.func_params_by_ptr(ptr).is_some_and(|p| p.is_empty())
             || refs.type_identity_by_ptr(ret.type_info) != Some(owner) || !owner.module.is_empty() || !owner.namespace.is_empty()
-            || !matches!(refs.native_field_type(&owner.name, field), Some("float" | "double"))
+            || !matches!(refs.native_field_value_type(&owner.name, field)
+                .or_else(|| refs.native_field_type(&owner.name, field)), Some("float" | "double"))
             || f.obj_locals.iter().filter(|(s, _)| *s == object).map(|(_, p)| *p).ne([ret.type_info])
             || code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&object))
                 .map(|(i, _)| i).ne([at, at + 3])
             || code.iter().filter(|i| i.op.name == "CALLSYS" && i.qwords.first().copied() == Some(ptr as u64)).count() != 1
             || !sole_read(at + 4, at + 5, slot) { continue; }
-        pushed.insert((slot, format!("this.{callee}().{field}")));
+        // A scalar member used immediately as the right comparison operand
+        // belongs to this getter expression, even if later arithmetic parks its slot.
+        let receiver = if comparison {
+            let Some(receiver) = (|| {
+                let receiver = w(&c[1], 0)?;
+                let getter_owner = refs.func_owner_by_ptr(ptr)?;
+                let types: Vec<_> = f.obj_locals.iter().filter(|(s,_)| *s == receiver).map(|(_,p)| *p).collect();
+                if types.len() != 1 || ret.is_object_const || ret.is_read_only || ret.is_auto || ret.if_handle_then_const
+                    || !is_value_struct_type(&owner.name) || f.obj_locals.iter().any(|(s,_)| *s == slot)
+                    || !getter_owner.starts_with(['U','A']) { return None; }
+                let receiver_type = refs.type_identity_by_ptr(types[0])?;
+                if receiver_type.name != getter_owner || !receiver_type.module.is_empty()
+                    || !receiver_type.namespace.is_empty() { return None; }
+                let mut stores = 0;
+                for (i, ins) in code.iter().enumerate().filter(|(_, ins)|
+                    super::bytediff::addressed_slots(ins).contains(&receiver)) {
+                    match ins.op.name {
+                        "STOREOBJ" if i < at => stores += 1,
+                        "CmpPtrNull" if i < at => {},
+                        "PshVPtr" if i == at + 1 => {},
+                        "FreeNullV8" if i > at + 5 => {},
+                        _ => return None,
+                    }
+                }
+                (stores == 1).then(|| format!("local_{receiver}"))
+            })() else { continue; };
+            receiver
+        } else { "this".into() };
+        pushed.insert((slot, format!("{receiver}.{callee}().{field}")));
     }
     let mut named = HashSet::new();
     for (at, c) in code.windows(9).enumerate() {
@@ -19291,7 +19345,8 @@ fn inline_unnamed_value_temporaries(
             // the expression that reads it, it was a statement whatever else says it was a
             // temporary: the reader's other operands were computed after it.
             let this_definition_inline = inline_callees.get(&key.0).is_some_and(|names| {
-                outermost_callee(&init).is_some_and(|callee| names.iter().any(|n| n == callee))
+                names.iter().any(|n| n.contains("().") && n == &init) // Exact typed getter/member definition.
+                    || outermost_callee(&init).is_some_and(|callee| names.iter().any(|n| n == callee))
             });
             if statement_producers.contains(&key.0) && !this_definition_inline && !is_plain_literal(&init) {
                 let accepted = inline_callees.get(&key.0).map(|n| n.join(",")).unwrap_or_default();
@@ -39268,6 +39323,87 @@ mod literal_value_lifetime_tests {
     }
 
     #[test]
+    fn scalar_rvo_comparison_folds_only_its_getter_life_and_typed_later_compounds() {
+        let mut f = function(&[("STOREOBJ", &[16]), ("CmpPtrNull", &[16]),
+            ("PSF", &[22]), ("PshVPtr", &[16]), ("CALLSYS", &[]),
+            ("LoadVObjR", &[22, 0]), ("RDR8", &[34]), ("CMPd", &[26, 34]),
+            ("MULd", &[34, 26, 65534]), ("LoadVObjR", &[40, 0]), ("RDR8", &[48]),
+            ("ADDd", &[26, 48, 34]), ("WRTV8", &[26]),
+            ("MULd", &[34, 26, 65534]), ("LoadVObjR", &[46, 0]), ("RDR8", &[48]),
+            ("SUBd", &[26, 48, 34]), ("WRTV8", &[26]), ("RET", &[2])]);
+        f.obj_locals = vec![(16, 2), (22, 1), (40, 3), (46, 3)];
+        let code = disassemble(&f.bytecode).unwrap();
+        f.bytecode[code[4].offset_dw + 1] = 10;
+        for (at, id) in [(5, 1), (9, 3), (14, 3)] { f.bytecode[code[at].offset_dw + 2] = id; }
+        let refs = RefResolver::from_test_scalar_rvo_member_comparison(0);
+        let map = |f: &Func, r: &RefResolver| -> HashMap<i32, Vec<String>> {
+            super::scalar_argument_order_sites(f, r, true).0.into_iter()
+                .map(|(slot, expression)| (slot, vec![expression])).collect()
+        };
+        let inline = map(&f, &refs);
+        assert_eq!(inline, HashMap::from([(34, vec!["local_16.Location().Z".into()])]));
+        let source = "float local_26 = Origin();\nfloat local_34 = local_16.Location().Z;\nif (local_26 < local_34)\n{\n    float local_34_2 = Speed * DeltaTime;\n    local_40.Roll = (local_40.Roll + local_34_2);\n}\nfloat local_34_3 = Speed * DeltaTime;\nlocal_46.Roll = (local_46.Roll - local_34_3);\n";
+        let unnamed = HashSet::from([(26, 1), (34, 1), (34, 2), (34, 3)]);
+        let parked = HashSet::from([34]);
+        let fold_values = |s: &str, names: &HashMap<i32, Vec<String>>| super::inline_unnamed_value_temporaries(
+            s, &unnamed, &HashSet::new(), &HashSet::new(), &refs, &HashSet::new(), &parked, names,
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
+        let roots = HashMap::from([("local_40".into(), "FRotator".into()), ("local_46".into(), "FRotator".into())]);
+        let fold_updates = |s: &str, types: &HashMap<String, String>| super::fold_compound_assignments(
+            s, None, types, &refs, true, &HashSet::new(), &HashSet::new());
+        let ordered = fold_values(source, &inline);
+        assert!(ordered.contains("if (Origin() < local_16.Location().Z)"), "{ordered}");
+        assert!(ordered.contains("float local_34_2 = Speed * DeltaTime;"));
+        assert!(ordered.contains("float local_34_3 = Speed * DeltaTime;"));
+        let expected = ordered.replace("local_40.Roll = (local_40.Roll + local_34_2);", "local_40.Roll += local_34_2;")
+            .replace("local_46.Roll = (local_46.Roll - local_34_3);", "local_46.Roll -= local_34_3;");
+        assert_eq!(fold_updates(&ordered, &roots), expected);
+        assert_eq!(fold_updates(&fold_values(&expected, &inline), &roots), expected);
+        assert!(fold_values(source, &HashMap::new()).contains("float local_34 = local_16.Location().Z;"));
+        for other in ["local_17.Location().Z", "local_16.Location().X", "local_16.Other().Z"] {
+            assert!(fold_values(&source.replace("local_16.Location().Z", other), &inline)
+                .contains(&format!("float local_34 = {other};")));
+        }
+        // Existing callee-name permissions do not become bare-value permissions.
+        let bare = "float local_34 = local_26;\nreturn local_34;\n";
+        assert_eq!(fold_values(bare, &HashMap::from([(34, vec!["local_26".into()])])), bare);
+        let update = "float local_34_2 = Speed;\nlocal_40.Roll = (local_40.Roll + local_34_2);\n";
+        for invalid in [update.replace("float local", "float32 local"), update.replace("float local", "int local"),
+            update.replace("local_34_2", "local_34_2_extra"), update.replace("local_34_2", "local_-34_2"),
+            update.replace("local_34_2", "local_34_1"), update.replace("local_34_2", "Other_2"),
+            update.replace("float local_34_2 = Speed;\n", ""),
+            update.replace("float local_34_2 = Speed;\n", "float local_34_2 = Speed;\nfloat local_34_2 = Other;\n"),
+            "{\n    float local_34_2 = Speed;\n}\n{\n    local_40.Roll = (local_40.Roll + local_34_2);\n}\n".into(),
+            "local_40.Roll = (local_40.Roll + local_34_2);\nfloat local_34_2 = Speed;\n".into()] {
+            assert_eq!(fold_updates(&invalid, &roots), invalid);
+        }
+        let mut conflicting = roots.clone(); conflicting.insert("local_34_2".into(), "float32".into());
+        assert_eq!(fold_updates(update, &conflicting), update);
+        assert_eq!(fold_updates(update, &HashMap::new()), update);
+        for fault in 1..=13 { assert!(map(&f, &RefResolver::from_test_scalar_rvo_member_comparison(fault)).is_empty(), "metadata {fault}"); }
+        for locals in [vec![(16, 2)], vec![(16, 2), (22, 1), (22, 1)], vec![(16, 2), (16, 2), (22, 1)],
+            vec![(16, 3), (22, 1)], vec![(16, 2), (22, 1), (34, 1)]] {
+            let mut bad = f.clone(); bad.obj_locals = locals; assert!(map(&bad, &refs).is_empty());
+        }
+        assert!(super::scalar_argument_order_sites(&f, &refs, false).0.is_empty());
+        for (at, op, words) in [(6, "RDR4", vec![34]), (7, "CMPd", vec![34, 26]),
+            (3, "PshVPtr", vec![65534])] {
+            let mut bad = f.clone(); bad.bytecode.splice(code[at].offset_dw..code[at + 1].offset_dw,
+                function(&[(op, &words)]).bytecode); assert!(map(&bad, &refs).is_empty(), "raw {at}");
+        }
+        for (op, words) in [("STOREOBJ", vec![16]), ("PSF", vec![22]), ("JMPP", vec![1])] {
+            let mut bad = f.clone(); bad.bytecode.extend(function(&[(op, &words)]).bytecode);
+            assert!(map(&bad, &refs).is_empty(), "escape {op}");
+        }
+        let mut bad = f.clone(); let mut second_call = function(&[("CALLSYS", &[])]).bytecode;
+        second_call[1] = 10; bad.bytecode.extend(second_call); assert!(map(&bad, &refs).is_empty());
+        for at in 3..=7 {
+            let mut bad = f.clone(); let mut jump = function(&[("JMP", &[])]).bytecode;
+            jump[1] = code[at].offset_dw as i32; jump.extend(bad.bytecode); bad.bytecode = jump;
+            assert!(map(&bad, &refs).is_empty(), "entry {at}");
+        }
+    }
+    #[test]
     fn a_completed_value_argument_does_not_hide_the_earlier_named_value() {
         let f=completed_value_argument_order_fixture();
         let refs=RefResolver::from_test_completed_value_argument_order(0);
@@ -40194,6 +40330,34 @@ mod literal_value_lifetime_tests {
             let mut entered=f.clone();entered.bytecode=branch;
             let proof=super::addressed_compound_updates(&entered,&refs,true);assert_eq!(proof.len(),1,"entry {at}");
         }
+    }
+
+    #[test]
+    fn represented_whole_object_arguments_do_not_replace_a_later_fresh_temporary() {
+        let f = function(&[("PSF", &[20]), ("CALLSYS", &[]),
+            ("PSF", &[20]), ("PshVPtr", &[0]), ("CALLSYS", &[]),
+            ("PSF", &[20]), ("PshVPtr", &[0]), ("CALLSYS", &[]),
+            ("PSF", &[40]), ("CALLSYS", &[]), ("PSF", &[40]), ("PshVPtr", &[0]), ("CALLSYS", &[]),
+            ("PSF", &[40]), ("CALLSYS", &[]), ("PSF", &[20]), ("CALLSYS", &[]), ("RET", &[2])]);
+        let refs = RefResolver::default();
+        let source = "FRememberedPerception local_20;\nAI.Assess(FirstTag, local_20);\nAI.Assess(SecondTag, local_20);\nAI.Assess(DoneTag, FRememberedPerception());\n";
+        let pushes = super::address_push_counts(&f, &refs);
+        assert_eq!(pushes.get(&20), Some(&2));
+        assert_eq!(super::restore_dropped_struct_arguments(source, &pushes), source);
+        // A third original hand-off really missing from the text must still be repaired.
+        let code = disassemble(&f.bytecode).unwrap();
+        let mut missing = f.clone();
+        missing.bytecode[code[10].offset_dw] = function(&[("PSF", &[20])]).bytecode[0];
+        let pushes = super::address_push_counts(&missing, &refs);
+        assert_eq!(pushes.get(&20), Some(&3));
+        assert_eq!(super::restore_dropped_struct_arguments(source, &pushes),
+            source.replace("DoneTag, FRememberedPerception()", "DoneTag, local_20"));
+        // Populating members does not itself pass the whole value to a call.
+        let populated = "FRememberedPerception local_20;\nlocal_20.Affected.SetCharacter(Character);\nlocal_20.Affected.Relationship = ERelationship(1);\nAI.Assess(DoneTag, FRememberedPerception());\n";
+        assert_eq!(super::restore_dropped_struct_arguments(populated, &HashMap::from([(20, 1)])),
+            populated.replace("DoneTag, FRememberedPerception()", "DoneTag, local_20"));
+        let nested = source.replace("AI.Assess(FirstTag, local_20)", "Outer(Inner(local_20), FirstTag)");
+        assert_eq!(super::restore_dropped_struct_arguments(&nested, &super::address_push_counts(&f, &refs)), nested);
     }
 
     #[test]

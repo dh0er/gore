@@ -3220,6 +3220,34 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_scalar_rvo_member_comparison(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FVector", "Z"), ("AActor", ""), ("FRotator", "Roll")]);
+        for (ptr, name) in [(1, "FVector"), (2, "AActor"), (3, "FRotator")] {
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), namespace: String::new(),
+                module: if fault == 7 && ptr == 1 { "Foreign" } else { "" }.into() });
+        }
+        r.prop_type_id.insert(3, if fault == 5 { 3 } else { 1 });
+        r.prop_type_id.insert(7, 3);
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&[
+            ("FVector", "Z", if fault == 6 { "float32" } else { "float" }),
+            ("FRotator", "Roll", "float")], &[], None));
+        r.func_by_ptr.insert(10, "Location".into());
+        r.func_owner.insert(10, if fault == 4 { "UOther" } else { "AActor" }.into());
+        if fault != 2 { r.func_is_method.insert(10); }
+        if fault != 1 { r.const_method_ptrs.insert(10); }
+        r.func_params.insert(10, if fault == 3 { vec![DataType { token: 0x51, ..Default::default() }] } else { vec![] });
+        let mut ret = DataType { token: 5, type_info: 1, ..Default::default() };
+        match fault {
+            8 => ret.is_reference = true, 9 => ret.is_object_handle = true,
+            10 => ret.is_object_const = true, 11 => ret.is_read_only = true,
+            12 => ret.is_auto = true, 13 => ret.if_handle_then_const = true,
+            _ => {},
+        }
+        r.func_ret.insert(10, ret);
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_local_compound(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("FVector", "Z")]);
         r.type_identity_by_ptr.insert(1, TypeIdentity { name: "FVector".into(), namespace: String::new(),
