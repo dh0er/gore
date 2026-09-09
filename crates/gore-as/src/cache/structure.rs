@@ -3292,6 +3292,81 @@ fn retained_default_constructions(instrs: &[Instr], refs: &RefResolver) -> std::
             eager.insert(slot);
         }
     }
+    // Two separately default-constructed values, then configuration and a
+    // shared call, with reverse destruction at scope exit. The first const
+    // argument must retain its construction before the configured sibling.
+    let graph = cfg::build(instrs);
+    for (at, c) in instrs.windows(4).enumerate() {
+        let witness = (|| {
+            if c[0].op.name != "PSF" || c[2].op.name != "PSF"
+                || !constructor(&c[1], true) || !constructor(&c[3], true)
+                || at.checked_sub(1).is_some_and(|p| instrs[p].op.name.starts_with("Psh") || instrs[p].op.name == "PSF")
+            { return None; }
+            let slot = w(&c[0]).filter(|s| *s > 0)?;
+            let sibling = w(&c[2]).filter(|s| *s > 0 && *s != slot)?;
+            if sites.get(&slot) != Some(&(1, 1)) || sites.get(&sibling) != Some(&(1, 1)) { return None; }
+            let uses: Vec<usize> = instrs.iter().enumerate().filter_map(|(i, op)|
+                super::bytediff::addressed_slots(op).contains(&slot).then_some(i)).collect();
+            let [created, handed, destroyed] = uses.as_slice() else { return None; };
+            if *created != at || *handed <= at + 4 || *destroyed + 3 != instrs.len()
+                || instrs[*handed].op.name != "PSF" || instrs[*destroyed].op.name != "PSF"
+                || instrs.last()?.op.name != "RET" { return None; }
+            let cleanup = destroyed.checked_sub(2)?;
+            if instrs[cleanup].op.name != "PSF" || w(&instrs[cleanup]) != Some(sibling) { return None; }
+            for (ctor, dtor) in [(&c[1], &instrs[*destroyed + 1]), (&c[3], &instrs[cleanup + 1])] {
+                let cp = *ctor.qwords.first()? as i64;
+                let dp = *dtor.qwords.first()? as i64;
+                if dtor.op.name != "CALLSYS" || refs.func_by_ptr(dp) != Some("$beh2")
+                    || !refs.is_method_by_ptr(dp) || refs.is_const_method_by_ptr(dp) || refs.is_const_method_by_ptr(cp)
+                    || refs.func_owner_by_ptr(dp) != refs.func_owner_by_ptr(cp)
+                    || refs.func_ns_by_ptr(dp).unwrap_or("") != refs.func_ns_by_ptr(cp).unwrap_or("")
+                    || !refs.func_params_by_ptr(dp)?.is_empty()
+                    || !refs.func_ret_by_ptr(dp).is_some_and(|t| t.token == 0x52
+                        && !t.is_reference && !t.is_object_handle && !t.is_object_const && !t.is_read_only)
+                { return None; }
+            }
+            // The first argument is followed by its sibling in the reverse
+            // argument run; the last PSF is the native value return address.
+            if instrs.get(handed + 1)?.op.name != "PSF" || w(&instrs[handed + 1]) != Some(sibling) { return None; }
+            let call = (*handed + 2..(*handed + 12).min(cleanup)).find(|i| instrs[*i].op.is_call())?;
+            if instrs[*handed..call].iter().any(|i| !matches!(i.op.name, "PSF" | "PshVPtr" | "PshNull"))
+                || instrs[call - 1].op.name != "PSF" { return None; }
+            w(&instrs[call - 1]).filter(|s| *s > 0 && *s != slot && *s != sibling)?;
+            let target = &instrs[call];
+            let cp = *target.qwords.first()? as i64;
+            if target.op.name != "CALLSYS" || refs.is_method_by_ptr(cp) { return None; }
+            let ret = refs.func_ret_by_ptr(cp)?;
+            let ri = refs.type_identity_by_ptr(ret.type_info)?;
+            if ret.token != 5 || ret.is_reference || ret.is_object_handle || !ri.module.is_empty()
+                || !ri.name.starts_with('F') { return None; }
+            let params = refs.func_params_by_ptr(cp)?;
+            let position = call.checked_sub(*handed + 2)?;
+            let param = params.get(position)?;
+            let identity = refs.type_identity_by_ptr(param.type_info)?;
+            let ctor = *c[1].qwords.first()? as i64;
+            if param.token != 5 || !param.is_reference || !param.is_object_const || !param.is_read_only
+                || param.is_object_handle || !identity.module.is_empty()
+                || Some(identity.name.as_str()) != refs.func_owner_by_ptr(ctor)
+                || identity.namespace != refs.func_ns_by_ptr(ctor).unwrap_or("") { return None; }
+            let other = params.get(position.checked_sub(1)?)?;
+            let oi = refs.type_identity_by_ptr(other.type_info)?;
+            let oc = *c[3].qwords.first()? as i64;
+            if other.token != 5 || other.is_reference || other.is_object_handle || !oi.module.is_empty()
+                || Some(oi.name.as_str()) != refs.func_owner_by_ptr(oc)
+                || oi.namespace != refs.func_ns_by_ptr(oc).unwrap_or("") { return None; }
+            if instrs.iter().any(|i| i.op.name == "JMPP")
+                || instrs[at..instrs.len() - 1].iter().any(|i| i.op.name == "RET")
+                || instrs[at..call].iter().any(|i| i.op.name.starts_with('J'))
+                || instrs[at..].iter().any(|i| i.op.name.starts_with('J')
+                    && i.dwords.first().is_some_and(|d| i.offset_dw as i64 + 2 + *d as i32 as i64
+                        == instrs[instrs.len() - 1].offset_dw as i64))
+                || graph.blocks.iter().any(|b| (b.start_dw > c[0].offset_dw && b.start_dw <= target.offset_dw)
+                    || (b.start_dw > instrs[cleanup].offset_dw && b.start_dw <= instrs[*destroyed + 1].offset_dw))
+            { return None; }
+            Some(slot)
+        })();
+        if let Some(slot) = witness { eager.insert(slot); }
+    }
     sites.into_iter().filter_map(|(slot, (constructs, destroys))| {
         (constructs == 1 && (destroys > 1 || eager.contains(&slot))).then_some(slot)
     }).collect()
@@ -12696,6 +12771,52 @@ mod tests {
         }
     }
 
+    #[test]
+    fn adjacent_default_arguments_keep_the_first_value_until_scope_exit() {
+        let make = |fault: u8| {
+            let mut a=TestAssembler::default();
+            // The real method returns through the shared RET before either
+            // constructor on its first guard. That path owes no cleanup.
+            a.op("CpyVtoR1",&[7],&[]); a.jump("JLowNZ","body"); a.jump("JMP","finish");
+            a.label("body");
+            if fault == 9 { a.op("PshNull",&[],&[]); }
+            if fault == 4 { a.jump("JMP","sibling"); }
+            a.op("PSF",&[80],&[]); a.op("CALLSYS",&[],&[1,0]);
+            a.label("sibling");
+            a.op("PSF",&[154],&[]); a.op("CALLSYS",&[],&[2,0]);
+            a.op("PSF",&[154],&[]); a.op("CALLSYS",&[],&[5,0]);
+            if fault == 1 { a.op("PSF",&[80],&[]); }
+            if fault == 3 { a.op("PSF",&[80],&[]); a.op("CALLSYS",&[],&[1,0]); }
+            if fault == 5 { a.jump("JMP","arguments"); }
+            a.label("arguments");
+            a.op("PSF",&[80],&[]); a.op("PSF",&[if fault == 6 { 10 } else { 154 }],&[]);
+            a.op("PSF",&[4],&[]); a.op("CALLSYS",&[],&[6,0]);
+            a.op("PSF",&[4],&[]); a.op("CALLSYS",&[],&[7,0]);
+            a.op("CALLSYS",&[],&[8,0]);
+            if fault == 8 { a.op("CpyVtoR1",&[7],&[]); a.jump("JLowZ","finish"); }
+            if fault == 7 { a.op("RET",&[0],&[]); }
+            for (slot,ptr) in if fault == 2 { [(80,3),(154,4)] } else { [(154,4),(80,3)] } {
+                a.op("PSF",&[slot],&[]); a.op("CALLSYS",&[],&[ptr,0]);
+            }
+            a.label("finish"); a.op("RET",&[0],&[]);
+            let mut f=a.finish();
+            for i in &mut f.instrs { if i.op.name == "CALLSYS" { i.qwords=vec![i.dwords[0] as u64]; } }
+            f
+        };
+        let refs=RefResolver::from_test_adjacent_default_arguments(0);
+        let f=make(0);
+        assert!(retained_default_constructions(&f.instrs,&refs).contains(&80));
+        let body=render_fixture_range_with_return(&f,None,&refs,"FProbeResult",None,0x52);
+        assert!(body.contains("//__gore_ctor 80"),"{body}");
+        assert!(body.contains("Consume(local_154, local_80)"),"{body}");
+        assert!(!body.contains("FProbeHit()"),"{body}");
+        for fault in 1..=15 {
+            assert!(!retained_default_constructions(&f.instrs,&RefResolver::from_test_adjacent_default_arguments(fault)).contains(&80),"metadata fault {fault}");
+        }
+        for fault in 1..=9 {
+            assert!(!retained_default_constructions(&make(fault).instrs,&refs).contains(&80),"raw fault {fault}");
+        }
+    }
     #[test]
     fn default_argument_keeps_its_declaration_before_another_value_constructor() {
         let make = |late: bool, extra: bool| {

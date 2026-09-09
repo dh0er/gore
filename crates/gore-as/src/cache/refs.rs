@@ -3413,6 +3413,50 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_getter_before_global_cast(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (id, name) in [(1, "UProducer"), (2, "UComponent"), (3, "USpecialComponent"), (4, "FTag")] {
+            let ptr = i64::from(id) + 100;
+            r.typeid_to_ptr.insert(id, ptr); r.type_by_ptr.insert(ptr, name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        for (p, name, owner) in [(1, "GetComponent", "UProducer"), (2, "opCast", "UObject"), (3, "Test", "UNativeComponentBase")] {
+            r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, owner.into());
+            r.func_is_method.insert(p); r.const_method_ptrs.insert(p); r.func_params.insert(p, vec![]);
+        }
+        r.func_ret.insert(1, DataType { token: 5, type_info: 102, is_object_handle: true, ..Default::default() });
+        r.func_ret.insert(2, DataType { token: 0x52, ..Default::default() });
+        r.func_ret.insert(3, DataType { token: 0x41, ..Default::default() });
+        r.func_params.insert(2, vec![DataType { token: 0x3b, is_reference: true, ..Default::default() }]);
+        r.func_params.insert(3, vec![DataType { token: 5, type_info: 104, ..Default::default() }]);
+        r.global_by_ptr.insert(100, "Ready".into()); r.global_ns.insert(100, "Tags".into());
+        // Cast<T> is a typed nested call argument in the actual inliner.
+        r.temporary_arg_positions.insert("Cast".into(), [(1, vec![true])].into_iter().collect());
+        match fault {
+            1 => { r.func_ret.get_mut(&1).unwrap().is_object_handle = false; },
+            2 => { r.func_ret.get_mut(&1).unwrap().is_reference = true; },
+            3 => { r.func_params.get_mut(&1).unwrap().push(DataType::default()); },
+            4 => { r.const_method_ptrs.remove(&1); },
+            5 => { r.func_owner.insert(1, "UOther".into()); },
+            6 => { r.type_identity_by_ptr.get_mut(&101).unwrap().module = "Foreign".into(); },
+            7 => { r.type_identity_by_ptr.get_mut(&102).unwrap().namespace = "Foreign".into(); },
+            8 => { r.type_identity_by_ptr.get_mut(&103).unwrap().module = "Foreign".into(); },
+            9 => { r.func_params.get_mut(&2).unwrap()[0].is_reference = false; },
+            10 => { r.func_owner.insert(2, "UOther".into()); },
+            11 => { r.func_ret.get_mut(&3).unwrap().token = 0x44; },
+            12 => { r.func_params.get_mut(&3).unwrap()[0].is_reference = true; },
+            13 => { r.type_identity_by_ptr.get_mut(&104).unwrap().namespace = "Foreign".into(); },
+            14 => { r.const_method_ptrs.remove(&3); },
+            15 => { r.func_is_method.remove(&3); },
+            16 => { r.global_by_ptr.remove(&100); },
+            17 => { r.global_is_string.insert(100); },
+            18 => { r.global_ns.remove(&100); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_const_native_field_enum_loop(fault: u8) -> Self {
         let mut r = Self::default();
         for (id, name) in [(1, "FEntry"), (2, "FChild"), (3, "TArray"),
@@ -3480,6 +3524,44 @@ impl RefResolver {
         if is_const { r.const_method_ptrs.insert(1); }
         r.func_params.insert(1, vec![]);
         r.func_ret.insert(1, DataType { token: 5, type_info: 101, ..Default::default() });
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_adjacent_default_arguments(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(11, "FProbeHit"), (12, "FProbeContext"), (13, "FProbeResult")] {
+            r.type_by_ptr.insert(ptr, name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        for (ptr, name, owner) in [(1,"$beh0",Some("FProbeHit")), (2,"$beh0",Some("FProbeContext")),
+            (3,"$beh2",Some("FProbeHit")), (4,"$beh2",Some("FProbeContext")),
+            (5,"Configure",Some("FProbeContext")), (6,"Consume",None),
+            (7,"$beh2",Some("FProbeResult")), (8,"After",None)] {
+            r.func_by_ptr.insert(ptr,name.into());
+            if let Some(owner) = owner { r.func_owner.insert(ptr,owner.into()); r.func_is_method.insert(ptr); }
+            r.func_ret.insert(ptr,DataType { token:0x52,..Default::default() });
+            r.func_params.insert(ptr,Vec::new());
+        }
+        r.func_ret.insert(6,DataType { token:5,type_info:13,..Default::default() });
+        r.func_ret_names.insert("Consume".into(),"FProbeResult".into());
+        r.func_params.insert(6,vec![DataType { token:5,type_info:12,..Default::default() },
+            DataType { token:5,type_info:11,is_reference:true,is_object_const:true,is_read_only:true,..Default::default() }]);
+        if fault == 1 { r.func_params.get_mut(&6).unwrap()[1].is_reference=false; }
+        if fault == 2 { r.func_params.get_mut(&6).unwrap()[1].is_read_only=false; }
+        if fault == 3 { r.func_params.get_mut(&6).unwrap()[1].type_info=12; }
+        if fault == 4 { r.type_identity_by_ptr.get_mut(&11).unwrap().module="Script".into(); }
+        if fault == 5 { r.type_identity_by_ptr.get_mut(&11).unwrap().namespace="Other".into(); }
+        if fault == 6 { r.func_owner.insert(3,"FOther".into()); }
+        if fault == 7 { r.func_ret.get_mut(&3).unwrap().token=0x44; }
+        if fault == 8 { r.func_params.insert(3,vec![DataType { token:0x44,..Default::default() }]); }
+        if fault == 9 { r.func_is_method.remove(&1); }
+        if fault == 10 { r.func_ret.get_mut(&1).unwrap().token=0x44; }
+        if fault == 11 { r.func_is_method.insert(6); }
+        if fault == 12 { r.func_ret.get_mut(&6).unwrap().is_reference=true; }
+        if fault == 13 { r.func_params.get_mut(&6).unwrap()[0].is_reference=true; }
+        if fault == 14 { r.func_ns.insert(3,"Other".into()); }
+        if fault == 15 { r.const_method_ptrs.insert(1); }
         r
     }
 
@@ -4223,6 +4305,21 @@ impl RefResolver {
         }
         r
     }
+    #[cfg(test)]
+    pub(crate) fn from_test_context_double_predicate(ty: &str, fault: u8) -> Self {
+        let mut r = Self::from_test_copied_int_field_read(ty, false);
+        r.typeid_to_ptr.insert(2, 2); r.type_by_ptr.insert(2, "UConfig".into());
+        r.type_identity_by_ptr.insert(2, TypeIdentity { name: "UConfig".into(), module: "Foreign".into(), namespace: String::new() });
+        match fault {
+            1 => { r.prop_type_id.insert(3, 2); },
+            2 => { r.type_identity_by_ptr.get_mut(&1).unwrap().module.clear(); },
+            3 => { r.class_fields.get_mut("UConfig").unwrap().remove("Limit"); },
+            4 => { r.prop_by_key.remove(&3); },
+            _ => {}
+        }
+        r
+    }
+
     #[cfg(test)]
     pub(crate) fn from_test_copied_bool_argument(token: i32) -> Self {
         let mut r = Self::default();

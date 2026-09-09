@@ -13,7 +13,6 @@ AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	5	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingResponse	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	14	0	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.TheftEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.EventResponses	4	0	0
 AI.CharacterAI_Gothic	5	0	0
 AI.CharacterAI_Human	1	0	0
@@ -44,7 +43,6 @@ AI.States.FightAI.FearState.AIState_Fear	1	0	0
 AI.States.FightAI.FleeState.AIState_Flee	2	0	0
 AI.States.FightAI.GoGetGuardState.AIState_GoGetGuard	1	0	0
 AI.States.FightAI.SearchState.AIState_Search	10	0	0
-AI.States.FightAI.SleeperFight.CorKalom_Sleeper.LordDemon.Components.MadCorKalomDemonFightComponent	1	0	0
 AI.States.FightAI.SleeperFight.OC_KDF_Milten_Sleeper.Environment.MiltenSleeper_Brazier	1	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpotManager	1	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.Xardas_Sleeper_Minion_BillboardComponent	1	0	0
@@ -60,7 +58,6 @@ GAS.Abilities.Combat.AttackLoop.Capsule.PyrolaserHitCapsuleComponent	1	0	0
 GAS.Abilities.Combat.AttackLoop.Cone.GA_AttackLoopCone	1	0	0
 GAS.Abilities.Locomotion.GA_Falling	1	0	0
 GAS.Abilities.Locomotion.GA_FallingRagdoll	1	0	0
-GAS.Abilities.Locomotion.GA_Swim	1	0	0
 GAS.Abilities.Passive.GA_PlayerPerception_CrimeRegistration	1	0	0
 GAS.Abilities.Spells.Spells.Base.GA_Spell_Targetable	1	0	0
 GAS.Abilities.Spells.Spells.Fire.GA_Spell_Fireball	1	0	0
