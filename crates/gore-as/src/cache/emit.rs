@@ -14585,6 +14585,103 @@ fn inline_copied_bool_literal_declarations(body: &str, f: &Func) -> String {
 }
 
 
+/// A text factory finishes before two string conversions. Its value survives
+/// the string comparison and is destroyed only on the later scope exits.
+fn retained_text_comparison_sites(f: &Func, refs: &RefResolver, code: &[Instr]) -> HashSet<(i32, String)> {
+    let mut sites = HashSet::new();
+    for (at, c) in code.windows(19).enumerate() {
+        let witness = (|| {
+            if c.iter().map(|i| i.op.name).ne(["PGA", "PSF", "CALL", "PSF", "PshVPtr", "CALLSYS",
+                "PSF", "PSF", "CALLSYS", "PSF", "PSF", "CALLSYS", "CpyRtoV4", "PSF", "CALLSYS",
+                "PSF", "CALLSYS", "CpyVtoR1", "JLowZ"]) { return None; }
+            let w = |n: usize| c[n].words.first().map(|w| *w as i16 as i32);
+            let ptr = |n: usize| c[n].qwords.first().map(|p| *p as i64);
+            let (text, left, right, boolean) = (w(1)?, w(3)?, w(6)?, w(12)?);
+            if [text, left, right, boolean].iter().any(|s| *s <= 0)
+                || HashSet::from([text, left, right, boolean]).len() != 4 || w(4)? >= 0
+                || w(7)? != text || [10, 13].iter().any(|n| w(*n) != Some(left))
+                || [9, 15].iter().any(|n| w(*n) != Some(right)) || w(17)? != boolean { return None; }
+            let factory = *c[2].dwords.first()? as i32;
+            let text_ret = refs.func_ret_by_id(factory)?;
+            let string = refs.func_ret_by_ptr(ptr(5)?)?;
+            let native_value = |t: &super::types::DataType, name: &str| {
+                t.token == 5 && !t.is_reference && !t.is_object_handle && !t.is_object_const
+                    && refs.type_identity_by_ptr(t.type_info).is_some_and(|id|
+                        id.name == name && id.module.is_empty() && id.namespace.is_empty())
+            };
+            if !native_value(text_ret, "FText") || !native_value(string, "FString") || refs.is_method_by_id(factory) { return None; }
+            let [arg] = refs.func_params_by_id(factory)? else { return None; };
+            if arg.token != 5 || arg.type_info != string.type_info || !arg.is_reference || !arg.is_object_const || arg.is_object_handle { return None; }
+            for (slot, ty) in [(text, text_ret.type_info), (left, string.type_info), (right, string.type_info)] {
+                if f.obj_locals.iter().filter(|(s, _)| *s == slot).map(|(_, p)| *p).collect::<Vec<_>>() != [ty] { return None; }
+            }
+            let convert = ptr(5)?;
+            if ptr(8)? != convert || refs.func_by_ptr(convert) != Some("ToString") || refs.func_owner_by_ptr(convert) != Some("FText")
+                || !refs.is_method_by_ptr(convert) || !refs.is_const_method_by_ptr(convert) || !refs.func_params_by_ptr(convert)?.is_empty() { return None; }
+            let equals = ptr(11)?; let [arg] = refs.func_params_by_ptr(equals)? else { return None; };
+            if refs.func_by_ptr(equals) != Some("opEquals") || refs.func_owner_by_ptr(equals) != Some("FString")
+                || !refs.is_method_by_ptr(equals) || !refs.is_const_method_by_ptr(equals) || refs.func_ret_by_ptr(equals)?.token != 0x41
+                || arg.token != 5 || arg.type_info != string.type_info || !arg.is_reference || !arg.is_object_const || arg.is_object_handle { return None; }
+            let destructor = |p: i64, owner: &str| refs.func_by_ptr(p) == Some("$beh2") && refs.func_owner_by_ptr(p) == Some(owner)
+                && refs.is_method_by_ptr(p) && !refs.is_const_method_by_ptr(p)
+                && refs.func_params_by_ptr(p).is_some_and(|args| args.is_empty())
+                && refs.func_ret_by_ptr(p).is_some_and(|ret| ret.token == 0x52);
+            if ptr(14)? != ptr(16)? || !destructor(ptr(14)?, "FString") { return None; }
+            let mut cleanups = 0;
+            for (i, ins) in code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&text)) {
+                if i == at + 1 || i == at + 7 { continue; }
+                if i <= at + 18 || ins.op.name != "PSF" || !code.get(i + 1).is_some_and(|next|
+                    next.op.name == "CALLSYS" && next.qwords.first().is_some_and(|p| destructor(*p as i64, "FText"))) { return None; }
+                cleanups += 1;
+            }
+            if cleanups == 0 || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                target > c[0].offset_dw as i64 && target <= c[18].offset_dw as i64
+            }))) { return None; }
+            Some((text, refs.func_by_id(factory)?.rsplit("::").next()?.to_owned()))
+        })();
+        if let Some(site) = witness { sites.insert(site); }
+    }
+    sites
+}
+
+
+/// An outer value can extend a native cleanup run beyond the handles owned by
+/// an inner block. Reorder only adjacent bare handles whose own closing release
+/// statements also agree with a contiguous part of that native run.
+fn order_block_handle_declarations(body: &str, permutations: &[Vec<i32>]) -> String {
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    for open in 0..lines.len() {
+        if lines[open].trim() != "{" { continue; }
+        let Some(close) = matching_close(&lines.iter().map(String::as_str).collect::<Vec<_>>(), open) else { continue; };
+        let mut declarations = Vec::new();
+        for line in &lines[open + 1..close] {
+            let Some((_, name)) = bare_declaration(line) else { break; };
+            let Some(slot) = slot_of(&name) else { declarations.clear(); break; };
+            let ty = line.trim().split_whitespace().next().unwrap_or("");
+            if !is_object_handle_type(ty) { declarations.clear(); break; }
+            declarations.push((slot, line.clone()));
+        }
+        if declarations.len() < 2 || declarations.iter().map(|(s, _)| *s).collect::<HashSet<_>>().len() != declarations.len() { continue; }
+        let indent = indent_of(&declarations[0].1);
+        if declarations.iter().any(|(_, line)| indent_of(line) != indent) { continue; }
+        let mut order = Vec::new();
+        for line in lines[open + 1..close].iter().rev() {
+            let Some((name, value)) = slot_store(line) else { break; };
+            if value != "nullptr" || indent_of(line) != indent { break; }
+            let Some(slot) = slot_of(&name) else { break; };
+            order.push(slot);
+        }
+        if order.len() != declarations.len() || order.iter().copied().collect::<HashSet<_>>() != declarations.iter().map(|(s, _)| *s).collect()
+            || !permutations.iter().any(|run| run.windows(order.len()).any(|part| part == order)) { continue; }
+        for (n, slot) in order.iter().enumerate() {
+            lines[open + 1 + n] = declarations.iter().find(|(s, _)| s == slot).unwrap().1.clone();
+        }
+    }
+    let mut out = lines.join("\n"); if body.ends_with('\n') { out.push('\n'); } out
+}
+
+
 /// An enum array reference read directly into a pushed argument has no named
 /// copy. Retyping another life must not turn this read into a declaration.
 fn fold_direct_enum_index_argument(body: &str, f: &Func, refs: &RefResolver, code: &[Instr]) -> String {
@@ -19048,7 +19145,7 @@ fn order_adjacent_declarations(body: &str, runs: &[Vec<i32>], permutations: &[Ve
     if body.ends_with('\n') {
         out.push('\n');
     }
-    out
+    order_block_handle_declarations(&out, permutations)
 }
 
 /// The local whose declaration was the function's FIRST statement.
@@ -27020,7 +27117,7 @@ fn named_value_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, String)> {
         .and_then(|name| name.rsplit("::").next())
         .map(str::to_owned)
     };
-    let mut out = HashSet::new();
+    let mut out = retained_text_comparison_sites(f, refs, &instrs);
     // A native handle getter finishes before a global value argument is
     // pushed for a call through its null-guarded cast. Inlining that getter
     // moves it behind the argument; retain only this closed getter-result site.
@@ -35807,6 +35904,57 @@ mod literal_value_lifetime_tests {
             first.replace("bool local_1", "int local_1"), first.replace("    bool local_2", "    Observe();\n    bool local_2"),
             format!("{first}    Read(local_1);\n"), first.replace("local_1", "local_1_bad")] {
             assert_eq!(fold(&text, &f), text);
+        }
+    }
+
+
+    #[test]
+    fn text_surviving_its_string_comparison_keeps_the_factory_statement() {
+        let mut f = function(&[("PGA", &[]), ("PSF", &[14]), ("CALL", &[]), ("PSF", &[18]), ("PshVPtr", &[65534]),
+            ("CALLSYS", &[]), ("PSF", &[22]), ("PSF", &[14]), ("CALLSYS", &[]), ("PSF", &[22]), ("PSF", &[18]),
+            ("CALLSYS", &[]), ("CpyRtoV4", &[23]), ("PSF", &[18]), ("CALLSYS", &[]), ("PSF", &[22]),
+            ("CALLSYS", &[]), ("CpyVtoR1", &[23]), ("JLowZ", &[]), ("PSF", &[14]), ("CALLSYS", &[]), ("RET", &[6])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, value) in [(2, 20), (5, 21), (8, 21), (11, 22), (14, 23), (16, 23), (20, 24)] {
+            f.bytecode[code[at].offset_dw + 1] = value;
+        }
+        f.obj_locals = vec![(14, 2), (18, 1), (22, 1)];
+        let refs = RefResolver::from_test_retained_text_comparison(0);
+        let sites = super::named_value_sites(&f, &refs);
+        assert!(super::is_named_value_site(14, "ReadText(\"line\")", &sites));
+        assert!(!super::is_named_value_site(18, "ReadText(\"line\")", &sites));
+        assert!(!super::is_named_value_site(14, "OtherText(\"line\")", &sites));
+        let qualifies = |f: &Func, refs: &RefResolver| super::named_value_sites(f, refs).contains(&(14, "ReadText".into()));
+        for fault in 1..=13 { assert!(!qualifies(&f, &RefResolver::from_test_retained_text_comparison(fault)), "metadata {fault}"); }
+        for at in [1, 3, 6, 7, 9, 10, 12, 13, 15, 17, 19] {
+            let mut bad = f.clone(); bad.bytecode[code[at].offset_dw] ^= 1 << 16;
+            assert!(!qualifies(&bad, &refs), "operand {at}");
+        }
+        let mut duplicate = f.clone(); duplicate.obj_locals.push((14, 2)); assert!(!qualifies(&duplicate, &refs));
+        let mut read = f.clone(); read.bytecode.extend(function(&[("PSF", &[14])]).bytecode); assert!(!qualifies(&read, &refs));
+        let mut jump = f.clone(); let at = jump.bytecode.len(); jump.bytecode.extend(function(&[("JMP", &[])]).bytecode);
+        jump.bytecode[at + 1] = code[7].offset_dw as i32 - at as i32 - 2;
+        assert!(!qualifies(&jump, &refs));
+        let mut no_cleanup = f.clone(); no_cleanup.bytecode.truncate(code[19].offset_dw); assert!(!qualifies(&no_cleanup, &refs));
+    }
+
+
+    #[test]
+    fn native_outer_cleanup_does_not_hide_an_inner_handle_declaration_order() {
+        let branch = "{\n    UAudio local_32;\n    UEvent local_26;\n    Create(local_26, local_32);\n    local_32 = nullptr;\n    local_26 = nullptr;\n}\n";
+        let source = format!("if (Choice)\n{branch}else\n{branch}");
+        let expected = source.replace("    UAudio local_32;\n    UEvent local_26;", "    UEvent local_26;\n    UAudio local_32;");
+        let runs = vec![vec![26, 32], vec![14, 26, 32]];
+        assert_eq!(super::order_adjacent_declarations(&source, &[], &runs), expected);
+        assert_eq!(super::order_adjacent_declarations(&expected, &[], &runs), expected);
+        assert_eq!(super::order_adjacent_declarations(&source, &[], &[vec![14, 26, 32]]), expected);
+        assert_eq!(super::order_block_handle_declarations(&source, &[vec![32, 26]]), source);
+        for bad in [branch.replace("UAudio", "FValue"), branch.replace("local_32", "local_32_2"),
+            branch.replace("    UEvent", "    Observe();\n    UEvent"),
+            branch.replace("    local_26 = nullptr;", "    Observe();\n    local_26 = nullptr;"),
+            branch.replace("    local_26 = nullptr;", "    local_14 = nullptr;"),
+            branch.replace("    UEvent", "        UEvent")] {
+            assert_eq!(super::order_block_handle_declarations(&bad, &runs), bad);
         }
     }
 

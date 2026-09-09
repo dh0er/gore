@@ -3545,6 +3545,46 @@ impl RefResolver {
 
 
     #[cfg(test)]
+    pub(crate) fn from_test_retained_text_comparison(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(1, "FString"), (2, "FText")] {
+            r.type_by_ptr.insert(ptr, name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        let value = |ptr| DataType { token: 5, type_info: ptr, ..Default::default() };
+        let input = DataType { is_reference: true, is_object_const: true, is_read_only: true, ..value(1) };
+        r.funcid_to_ptr.insert(20, 20); r.func_by_ptr.insert(20, "ReadText".into());
+        r.func_ret.insert(20, value(2)); r.func_params.insert(20, vec![input.clone()]);
+        for (ptr, name, owner, ret, args, constant) in [
+            (21, "ToString", "FText", value(1), vec![], true),
+            (22, "opEquals", "FString", DataType { token: 0x41, ..Default::default() }, vec![input], true),
+            (23, "$beh2", "FString", DataType { token: 0x52, ..Default::default() }, vec![], false),
+            (24, "$beh2", "FText", DataType { token: 0x52, ..Default::default() }, vec![], false)] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into()); r.func_is_method.insert(ptr);
+            r.func_ret.insert(ptr, ret); r.func_params.insert(ptr, args);
+            if constant { r.const_method_ptrs.insert(ptr); }
+        }
+        match fault {
+            1 => r.func_ret.get_mut(&20).unwrap().is_reference = true,
+            2 => r.func_ret.get_mut(&20).unwrap().type_info = 1,
+            3 => r.func_params.get_mut(&20).unwrap()[0].is_reference = false,
+            4 => { r.func_owner.insert(21, "FString".into()); }
+            5 => { r.const_method_ptrs.remove(&21); }
+            6 => r.func_ret.get_mut(&21).unwrap().is_reference = true,
+            7 => r.func_ret.get_mut(&22).unwrap().token = 0x44,
+            8 => r.func_params.get_mut(&22).unwrap()[0].is_reference = false,
+            9 => { r.func_owner.insert(23, "FText".into()); }
+            10 => { r.const_method_ptrs.insert(24); }
+            11 => r.type_identity_by_ptr.get_mut(&2).unwrap().module = "Script".into(),
+            12 => { r.func_is_method.insert(20); }
+            13 => r.type_identity_by_ptr.get_mut(&1).unwrap().namespace = "Other".into(),
+            _ => {}
+        }
+        r
+    }
+
+
+    #[cfg(test)]
     pub(crate) fn from_test_direct_enum_index(fault: u8) -> Self {
         let mut r = Self::from_test_hidden_return_enum_arguments(fault);
         r.type_identity_by_ptr.get_mut(&6).unwrap().module = "Script".into();
