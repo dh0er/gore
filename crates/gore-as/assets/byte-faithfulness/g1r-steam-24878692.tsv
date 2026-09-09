@@ -20,7 +20,7 @@ AI.CharacterAI_Human	1	0	0
 AI.CharacterAI_Orc	2	0	0
 AI.DailyRoutines.DailyRoutines_OG	1	0	0
 AI.NativeAICommands	2	0	0
-AI.Relationship.PersonalRelationshipModifiers	2	0	0
+AI.Relationship.PersonalRelationshipModifiers	1	0	0
 AI.States.AIState_FollowCharacterAggressive	2	0	0
 AI.States.AIState_GuideCharacter	3	0	0
 AI.States.AIState_InteractWinchGate	1	0	0

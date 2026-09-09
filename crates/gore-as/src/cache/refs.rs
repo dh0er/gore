@@ -3206,6 +3206,40 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_cleanup_integer_comparison(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(100, "FBox"), (200, "FTime")] {
+            r.type_by_ptr.insert(ptr, name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        for (ptr, name, owner, ret) in [(1, "Adjust", "FBox", DataType { token: 5, type_info: 100, is_reference: true, ..Default::default() }),
+            (2, "Count", "FBox", DataType { token: 0x44, ..Default::default() }),
+            (3, "$beh2", "FBox", DataType { token: 0x52, ..Default::default() }),
+            (4, "$beh2", "FTime", DataType { token: 0x52, ..Default::default() })] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into());
+            r.func_is_method.insert(ptr); r.func_ret.insert(ptr, ret); r.func_params.insert(ptr, Vec::new());
+        }
+        r.const_method_ptrs.insert(2);
+        r.func_params.insert(1, vec![DataType { token: 5, type_info: 200, is_reference: true,
+            is_object_const: true, is_read_only: true, ..Default::default() }]);
+        r.funcid_to_ptr.insert(99, 99); r.func_by_ptr.insert(99, "Other".into());
+        r.func_ret.insert(99, DataType { token: 0x41, ..Default::default() });
+        r.func_params.insert(99, Vec::new()); r.func_ret_names.insert("Other".into(), "bool".into());
+        if fault == 1 { r.func_ret.get_mut(&2).unwrap().token = 0x50; }
+        if fault == 2 { r.func_ret.get_mut(&2).unwrap().is_reference = true; }
+        if fault == 3 { r.const_method_ptrs.remove(&2); }
+        if fault == 4 { r.func_by_ptr.insert(3, "Work".into()); }
+        if fault == 5 { r.func_owner.insert(3, "FOther".into()); }
+        if fault == 6 { r.func_params.insert(4, vec![DataType::default()]); }
+        if fault == 7 { r.func_ret.get_mut(&1).unwrap().is_reference = false; }
+        if fault == 8 { r.type_identity_by_ptr.get_mut(&100).unwrap().module = "Script".into(); }
+        if fault == 9 { r.func_ret.remove(&2); }
+        if fault == 10 { r.func_params.insert(2, vec![DataType::default()]); }
+        if fault == 11 { r.func_params.get_mut(&1).unwrap()[0].type_info = 100; }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_retained_receiver(result_token: i32, is_method: bool) -> Self {
         let mut r = Self::default();
         for (id, name, token) in [(1, "Create", 5), (2, "Count", result_token),
