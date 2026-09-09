@@ -3502,6 +3502,49 @@ impl RefResolver {
 
 
     #[cfg(test)]
+    pub(crate) fn from_test_completed_string_argument(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(1, "FString"), (2, "ECategory")] {
+            r.type_by_ptr.insert(ptr, name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        let string = DataType { token: 5, type_info: 1, ..Default::default() };
+        let void = DataType { token: 0x52, ..Default::default() };
+        let input = |token, ty| DataType { token, type_info: ty, is_reference: true, is_object_const: true, is_read_only: true, ..Default::default() };
+        for (p, name, ret, args) in [(10, "opAdd", string.clone(), vec![input(5, 1)]),
+            (11, "$beh2", void.clone(), vec![]), (12, "opAdd", string.clone(), vec![input(0x51, 0)])] {
+            r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, "FString".into()); r.func_is_method.insert(p);
+            r.func_ret.insert(p, ret); r.func_params.insert(p, args);
+        }
+        r.const_method_ptrs.extend([10, 12]);
+        r.func_by_ptr.insert(13, "Write".into()); r.func_ns.insert(13, "TestLog".into());
+        r.func_ret.insert(13, void);
+        r.func_params.insert(13, vec![DataType { token: 5, type_info: 2, ..Default::default() },
+            DataType { is_object_const: true, is_read_only: true, ..string }]);
+        match fault {
+            1 => r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(),
+            2 => r.func_ret.get_mut(&12).unwrap().is_reference = true,
+            3 => r.func_params.get_mut(&10).unwrap()[0].type_info = 2,
+            4 => r.func_params.get_mut(&12).unwrap()[0].token = 0x44,
+            5 => r.func_params.get_mut(&12).unwrap()[0].is_reference = false,
+            6 => { r.const_method_ptrs.remove(&12); }
+            7 => { r.func_owner.insert(12, "FOther".into()); }
+            8 => { r.func_by_ptr.insert(10, "opAssign".into()); }
+            9 => { r.func_by_ptr.insert(11, "$beh0".into()); }
+            10 => { r.const_method_ptrs.insert(11); }
+            11 => r.func_params.get_mut(&11).unwrap().push(DataType::default()),
+            12 => { r.func_is_method.insert(13); }
+            13 => r.func_params.get_mut(&13).unwrap()[1].is_reference = true,
+            14 => r.func_params.get_mut(&13).unwrap()[0].token = 0x44,
+            15 => r.func_ret.get_mut(&13).unwrap().token = 0x41,
+            16 => { r.func_ns.remove(&13); }
+            _ => {}
+        }
+        r
+    }
+
+
+    #[cfg(test)]
     pub(crate) fn from_test_direct_enum_index(fault: u8) -> Self {
         let mut r = Self::from_test_hidden_return_enum_arguments(fault);
         r.type_identity_by_ptr.get_mut(&6).unwrap().module = "Script".into();

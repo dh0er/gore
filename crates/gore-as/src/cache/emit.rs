@@ -3192,6 +3192,10 @@ fn emit_function_ctor(
         let rendered = split_negated_guard_from_named_bool_chain(&rendered, f, refs, &spilled);
         pass_trace("split_negated_guard_from_named_bool_chain", &rendered);
         let rendered = expand_if_false_markers(&rendered);
+        let rendered = restore_completed_string_argument(&rendered, f, refs);
+        pass_trace("restore_completed_string_argument", &rendered);
+        let rendered = inline_copied_bool_literal_declarations(&rendered, f);
+        pass_trace("inline_copied_bool_literal_declarations", &rendered);
         let rendered = unwrap_fstring_literal_declarations(&rendered, &named_sites);
         pass_trace("unwrap_fstring_literal_declarations", &rendered);
         s.truncate(declarations_at);
@@ -14472,6 +14476,110 @@ fn fold_foreach_getter_receiver(body: &str, f: &Func, refs: &RefResolver) -> Str
             lines[n + 1] = lines[n + 1].replace(&format!(" : {name}.{field})"), &format!(" : {rhs}.{field})"));
             lines.remove(n); break;
         }
+    }
+    let mut out = lines.join("\n"); if body.ends_with('\n') { out.push('\n'); } out
+}
+
+
+/// A string prefix dies after a numeric append, before the completed string is
+/// passed by value. Keep that statement boundary and the two destructor lives.
+fn restore_completed_string_argument(body: &str, f: &Func, refs: &RefResolver) -> String {
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    for (at, c) in code.windows(18).enumerate() {
+        let witness = (|| {
+            if c.iter().map(|i| i.op.name).ne(["PGA", "PSF", "PSF", "CALLSYS", "PSF", "CALLSYS",
+                "PSF", "PSF", "PSF", "CALLSYS", "PSF", "CALLSYS", "PSF", "SetV1", "PshV4", "CALLSYS", "PSF", "CALLSYS"]) { return None; }
+            let w = |n: usize| c[n].words.first().map(|w| *w as i16 as i32);
+            let ptr = |n: usize| c[n].qwords.first().map(|p| *p as i64);
+            let (prefix, result, number, category) = (w(1)?, w(2)?, w(6)?, w(13)?);
+            if [prefix, result, number, category].iter().any(|s| *s <= 0)
+                || HashSet::from([prefix, result, number, category]).len() != 4
+                || [4, 7, 12, 16].iter().any(|n| w(*n) != Some(result))
+                || [8, 10].iter().any(|n| w(*n) != Some(prefix)) || w(14)? != category { return None; }
+            let string = refs.func_ret_by_ptr(ptr(9)?)?;
+            let value = |ty: &super::types::DataType| ty.token == 5 && ty.type_info == string.type_info
+                && !ty.is_reference && !ty.is_object_handle;
+            let identity = refs.type_identity_by_ptr(string.type_info)?;
+            if identity.name != "FString" || !identity.module.is_empty() || !identity.namespace.is_empty()
+                || !value(string) || string.is_object_const { return None; }
+            for slot in [prefix, result] {
+                if f.obj_locals.iter().filter(|(s, _)| *s == slot).map(|(_, p)| *p).collect::<Vec<_>>() != [string.type_info] { return None; }
+            }
+            for n in [3, 9] {
+                let p = ptr(n)?; let [arg] = refs.func_params_by_ptr(p)? else { return None; };
+                if refs.func_by_ptr(p) != Some("opAdd") || refs.func_owner_by_ptr(p) != Some("FString")
+                    || !refs.is_method_by_ptr(p) || !refs.is_const_method_by_ptr(p) || !value(refs.func_ret_by_ptr(p)?)
+                    || !arg.is_reference || !arg.is_object_const || !arg.is_read_only || arg.is_object_handle
+                    || if n == 3 { arg.token != 5 || arg.type_info != string.type_info }
+                       else { !matches!(arg.token, 0x51 | 0x5e) || arg.type_info != 0 } { return None; }
+            }
+            let dtor = ptr(5)?;
+            if ptr(11)? != dtor || ptr(17)? != dtor || refs.func_by_ptr(dtor) != Some("$beh2")
+                || refs.func_owner_by_ptr(dtor) != Some("FString") || !refs.is_method_by_ptr(dtor)
+                || refs.is_const_method_by_ptr(dtor) || !refs.func_params_by_ptr(dtor)?.is_empty()
+                || refs.func_ret_by_ptr(dtor)?.token != 0x52 { return None; }
+            let consumer = ptr(15)?; let [enum_arg, string_arg] = refs.func_params_by_ptr(consumer)? else { return None; };
+            if refs.is_method_by_ptr(consumer) || refs.func_owner_by_ptr(consumer).is_some()
+                || refs.func_ret_by_ptr(consumer)?.token != 0x52 || !value(string_arg)
+                || !is_enum(&enum_arg.base_name(refs)) || enum_arg.is_reference || enum_arg.is_object_handle { return None; }
+            if code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&prefix))
+                .map(|(n, _)| n).ne([at + 1, at + 8, at + 10]) { return None; }
+            if code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                target > c[0].offset_dw as i64 && target <= c[17].offset_dw as i64
+            }))) { return None; }
+            let ns = refs.func_ns_by_ptr(consumer)?.trim();
+            if ns.is_empty() { return None; }
+            Some((prefix, result, number, format!("{ns}::{}", refs.func_by_ptr(consumer)?), enum_arg.base_name(refs), *c[13].dwords.first()? as i32))
+        })();
+        let Some((prefix, result, number, consumer, enum_ty, category)) = witness else { continue; };
+        let name = format!("local_{prefix}"); let completed = format!("local_{result}");
+        if count_ident(body, &name) != 2 || count_ident(body, &completed) != 0 { continue; }
+        for n in 0..lines.len().saturating_sub(1) {
+            let Some(init) = lines[n].trim().strip_prefix(&format!("FString {name} = ")).and_then(|s| s.strip_suffix(';')) else { continue; };
+            if indent_of(&lines[n]) != indent_of(&lines[n + 1])
+                || lines[n + 1].trim() != format!("{consumer}({enum_ty}({category}), ({name} + local_{number}));") { continue; }
+            let indent = indent_of(&lines[n]);
+            lines[n] = format!("{indent}FString {completed} = ({init} + local_{number});");
+            lines[n + 1] = format!("{indent}{consumer}({enum_ty}({category}), {completed});"); break;
+        }
+    }
+    let mut out = lines.join("\n"); if body.ends_with('\n') { out.push('\n'); } out
+}
+
+
+/// SetV1's scratch is copied once into the named bool. Retaining both bool
+/// declarations would introduce a second copy, including on later scratch lives.
+fn inline_copied_bool_literal_declarations(body: &str, f: &Func) -> String {
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let mut sites = HashSet::new();
+    for (at, c) in code.windows(2).enumerate() {
+        if c[0].op.name != "SetV1" || c[1].op.name != "CpyVtoV4" { continue; }
+        let w = |i: &Instr, n: usize| i.words.get(n).map(|w| *w as i16 as i32);
+        let (Some(source), Some(dest), Some(value)) = (w(&c[0], 0), w(&c[1], 0), c[0].dwords.first().copied()) else { continue; };
+        if source <= 0 || dest <= 0 || source == dest || value > 1 || w(&c[1], 1) != Some(source) { continue; }
+        // Another read before the next whole-slot write owns a real name.
+        if code[at + 2..].iter().find(|i| super::bytediff::addressed_slots(i).contains(&source)).is_some_and(|i|
+            !matches!(i.op.name, "SetV1" | "SetV4" | "CpyRtoV4" | "RDR1") || w(i, 0) != Some(source)) { continue; }
+        if code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d|
+            i.offset_dw as i64 + 2 + *d as i32 as i64 == c[1].offset_dw as i64))) { continue; }
+        sites.insert((source, dest, if value == 0 { "false" } else { "true" }));
+    }
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut at = 0;
+    while at + 1 < lines.len() {
+        let pair = (|| {
+            let (indent, name, value) = declaration_with_initializer(&lines[at])?;
+            let (next_indent, target, rhs) = declaration_with_initializer(&lines[at + 1])?;
+            let source = slot_and_life_any(&name)?.0; let dest = slot_and_life_any(&target)?.0;
+            if !lines[at].trim().starts_with("bool ") || !lines[at + 1].trim().starts_with("bool ")
+                || indent != next_indent || rhs != name || count_ident(body, &name) != 2
+                || !sites.contains(&(source, dest, value.as_str())) { return None; }
+            Some(format!("{indent}bool {target} = {value};"))
+        })();
+        if let Some(line) = pair { lines[at + 1] = line; lines.remove(at); }
+        else { at += 1; }
     }
     let mut out = lines.join("\n"); if body.ends_with('\n') { out.push('\n'); } out
 }
@@ -35633,6 +35741,72 @@ mod literal_value_lifetime_tests {
             body.replace("local_26", "local_26_2"), body.replace("local_20", "local_22"),
             body.replace("    for", "    Observe();\n    for"), format!("{body}    Use(local_26);\n")] {
             assert_eq!(fold(&text, &f, &refs), text);
+        }
+    }
+
+
+    #[test]
+    fn completed_string_keeps_the_prefix_destruction_before_the_consumer() {
+        let mut f = function(&[("PGA", &[]), ("PSF", &[84]), ("PSF", &[80]), ("CALLSYS", &[]), ("PSF", &[80]),
+            ("CALLSYS", &[]), ("PSF", &[50]), ("PSF", &[80]), ("PSF", &[84]), ("CALLSYS", &[]),
+            ("PSF", &[84]), ("CALLSYS", &[]), ("PSF", &[80]), ("SetV1", &[85]), ("PshV4", &[85]),
+            ("CALLSYS", &[]), ("PSF", &[80]), ("CALLSYS", &[]), ("RET", &[6])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, value) in [(3, 10), (5, 11), (9, 12), (11, 11), (13, 2), (15, 13), (17, 11)] {
+            f.bytecode[code[at].offset_dw + 1] = value;
+        }
+        f.obj_locals = vec![(80, 1), (84, 1)];
+        let refs = RefResolver::from_test_completed_string_argument(0);
+        let body = "    FString local_84 = ((Prefix() + Name()) + \": HP: \");\n    TestLog::Write(ECategory(2), (local_84 + local_50));\n";
+        let expected = "    FString local_80 = (((Prefix() + Name()) + \": HP: \") + local_50);\n    TestLog::Write(ECategory(2), local_80);\n";
+        let fold = |s: &str, f: &Func, r: &RefResolver| super::restore_completed_string_argument(s, f, r);
+        assert_eq!(fold(body, &f, &refs), expected);
+        assert_eq!(fold(expected, &f, &refs), expected);
+        for fault in 1..=16 { assert_eq!(fold(body, &f, &RefResolver::from_test_completed_string_argument(fault)), body, "metadata {fault}"); }
+        for at in [1, 2, 4, 6, 7, 8, 10, 12, 13, 14, 16] {
+            let mut bad = f.clone(); bad.bytecode[code[at].offset_dw] ^= 1 << 16;
+            assert_eq!(fold(body, &bad, &refs), body, "operand {at}");
+        }
+        let mut duplicate = f.clone(); duplicate.obj_locals.push((80, 1));
+        assert_eq!(fold(body, &duplicate, &refs), body);
+        let mut extra = f.clone(); extra.bytecode.extend(function(&[("PSF", &[84])]).bytecode);
+        assert_eq!(fold(body, &extra, &refs), body);
+        let mut jump = f.clone(); let at = jump.bytecode.len();
+        jump.bytecode.extend(function(&[("JMP", &[])]).bytecode);
+        jump.bytecode[at + 1] = code[9].offset_dw as i32 - at as i32 - 2;
+        assert_eq!(fold(body, &jump, &refs), body);
+        for text in [body.replace("Write", "Other"), body.replace("ECategory(2)", "ECategory(3)"),
+            body.replace("local_84", "local_84_2"), body.replace("local_50", "local_52"),
+            body.replace("    TestLog", "    Observe();\n    TestLog"), format!("{body}    Use(local_84);\n"),
+            format!("    FString local_80 = Other();\n{body}")] {
+            assert_eq!(fold(&text, &f, &refs), text);
+        }
+    }
+
+
+    #[test]
+    fn copied_bool_literals_keep_the_named_destination_without_extra_scratch_lives() {
+        let mut f = function(&[("SetV1", &[1]), ("CpyVtoV4", &[2, 1]), ("SetV1", &[1]),
+            ("CpyVtoV4", &[3, 1]), ("PSF", &[2]), ("PSF", &[3]), ("RDR1", &[1]), ("RET", &[6])]);
+        let c = disassemble(&f.bytecode).unwrap(); f.bytecode[c[0].offset_dw + 1] = 1;
+        let body = "    bool local_1 = true;\n    bool local_2 = local_1;\n    bool local_1_2 = false;\n    bool local_3 = local_1_2;\n    Update(local_2, local_3);\n";
+        let expected = "    bool local_2 = true;\n    bool local_3 = false;\n    Update(local_2, local_3);\n";
+        let fold = |s: &str, f: &Func| super::inline_copied_bool_literal_declarations(s, f);
+        assert_eq!(fold(body, &f), expected); assert_eq!(fold(expected, &f), expected);
+        for at in [0, 1, 2, 3] {
+            let mut bad = f.clone(); bad.bytecode[c[at].offset_dw] ^= 1 << 16;
+            assert_ne!(fold(body, &bad), expected, "operand {at}");
+        }
+        let first = "    bool local_1 = true;\n    bool local_2 = local_1;\n";
+        let mut read = f.clone(); read.bytecode.splice(c[2].offset_dw..c[2].offset_dw, function(&[("PshV4", &[1])]).bytecode);
+        assert_eq!(fold(first, &read), first);
+        let mut jump = f.clone(); let at = jump.bytecode.len(); jump.bytecode.extend(function(&[("JMP", &[])]).bytecode);
+        jump.bytecode[at + 1] = c[1].offset_dw as i32 - at as i32 - 2;
+        assert_eq!(fold(first, &jump), first);
+        for text in [first.replace("bool local_2", "int local_2"), first.replace("true", "false"),
+            first.replace("bool local_1", "int local_1"), first.replace("    bool local_2", "    Observe();\n    bool local_2"),
+            format!("{first}    Read(local_1);\n"), first.replace("local_1", "local_1_bad")] {
+            assert_eq!(fold(&text, &f), text);
         }
     }
 
