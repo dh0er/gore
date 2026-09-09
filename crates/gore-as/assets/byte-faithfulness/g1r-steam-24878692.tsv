@@ -47,7 +47,6 @@ AI.States.FightAI.WarningState.AIState_Warning	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_Crime	8	0	0
 AI.States.FightAI.WatchFightState.AIGroup_WatchFight	1	0	0
 AI.States.FightAI.WatchFightState.AIState_WatchFight	12	0	0
-AI.States.Test.TestCharacters_Navigation	1	0	0
 Camera.ConversationCameraConfig	1	0	0
 Environment.GothicUltraDynamicControlerAS	1	0	0
 GAS.Abilities.Combat.AttackLoop.Capsule.PyrolaserHitCapsuleComponent	1	0	0

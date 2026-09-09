@@ -3510,6 +3510,43 @@ impl RefResolver {
 
 
     #[cfg(test)]
+    pub(crate) fn from_test_ordered_navigation_vectors(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UState","OffsetDistance"),("UBase","AI"),("FVector",""),("AGothicCharacter","")]);
+        for (id,name,module) in [(1,"UState","Fixture"),(2,"UBase","Fixture"),(3,"FVector",""),(4,"AGothicCharacter","")] {
+            r.type_identity_by_ptr.insert(id,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        r.prop_type_id.extend([(3,1),(5,2)]);
+        r.class_fields.insert("UState".into(),HashMap::from([("OffsetDistance".into(),"float".into())]));
+        r.global_by_ptr.extend([(9,"ZeroVector".into()),(8,"UpVector".into())]);
+        let value = DataType {token:5,type_info:3,..Default::default()};
+        let reference = DataType {is_reference:true,is_object_const:true,is_read_only:true,..value.clone()};
+        let scalar = DataType {token:0x51,..Default::default()};
+        let actor = DataType {token:5,type_info:4,is_object_handle:true,..Default::default()};
+        for (ptr,name,owner,ret,args) in [
+            (10,"GetCharacter","UGameplayAbility_AI",actor,vec![]),(11,"GetFeetLocation","AGothicCharacter",value.clone(),vec![]),
+            (12,"opSub","FVector",value.clone(),vec![reference.clone()]),
+            (13,"GetSafeNormal2D","FVector",value.clone(),vec![scalar.clone(),reference.clone()]),
+            (14,"CrossProduct","FVector",value.clone(),vec![reference.clone()]),
+            (15,"opMul","FVector",value.clone(),vec![scalar]),(16,"opAdd","FVector",value,vec![reference]),
+        ] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            r.func_is_method.insert(ptr);r.const_method_ptrs.insert(ptr);
+        }
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&3).unwrap().module="Script".into(),
+            2=>r.func_params.get_mut(&13).unwrap()[0].token=0x50,
+            3=>r.func_params.get_mut(&14).unwrap()[0].is_read_only=false,
+            4=>r.func_ret.get_mut(&15).unwrap().is_reference=true,
+            5=>{r.const_method_ptrs.remove(&11);}
+            6=>{r.class_fields.get_mut("UState").unwrap().insert("OffsetDistance".into(),"float32".into());}
+            7=>{r.global_by_ptr.insert(8,"ForwardVector".into());}
+            8=>r.func_ret.get_mut(&10).unwrap().is_object_handle=false,
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_native_bool_branch(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("UBase", "Flag"), ("USpecial", "")]);
         for (id, name) in [(1, "UBase"), (2, "USpecial")] {

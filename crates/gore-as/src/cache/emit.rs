@@ -1327,6 +1327,8 @@ fn emit_function_ctor(
     let named_arithmetic = named_arithmetic_slots(f);
     let terminal_arithmetic_sites = terminal_return_arithmetic_sites(f, refs, is_method);
     let mut named_sites = named_value_sites(f, refs);
+    let (navigation_sites, navigation_values) = ordered_navigation_vectors(f, refs);
+    named_sites.extend(navigation_sites);
     named_sites.extend(named_narrowed_field_differences(f, refs, is_method));
     let (pushed_scalar_sites, eager_scalar_sites) = scalar_argument_order_sites(f, refs, is_method);
     named_sites.extend(eager_scalar_sites);
@@ -1672,6 +1674,7 @@ fn emit_function_ctor(
     retained_values.extend(named_native_member_copies.iter().copied());
     retained_values.extend(constructed_return_values.iter().copied());
     retained_values.extend(retained_native_vector_field_update(f, refs));
+    retained_values.extend(navigation_values);
     hoisted.extend(retained_values.iter().copied());
     statement_producers.extend(retained_values.iter().copied());
     let named_by_direct_store =
@@ -17699,6 +17702,70 @@ fn copied_short_circuit_accumulators(f: &Func, refs: &RefResolver) -> HashSet<i3
     }
     out
 }
+/// A normalized offset, its perpendicular, and its scaled displacement occupy
+/// distinct native lives. Keep the two call sites and the final displacement.
+fn ordered_navigation_vectors(f: &Func, refs: &RefResolver) -> (HashSet<(i32, String)>, HashSet<i32>) {
+    let mut sites = HashSet::new(); let mut values = HashSet::new();
+    if f.ret.token != 0x52 || !f.params.is_empty() { return (sites, values); }
+    let Ok(code) = disassemble(&f.bytecode) else { return (sites, values); };
+    for (at, c) in code.windows(31).enumerate() {
+        let witness = (|| {
+            if c.iter().map(|i| i.op.name).ne(["PshGPtr", "PshC8", "PSF", "PSF", "PshVPtr", "ADDSi", "RDSPtr", "CALLSYS", "STOREOBJ", "PshVPtr", "CALLSYS",
+                "PSF", "PSF", "PSF", "CALLSYS", "PSF", "CALLSYS", "PshGPtr", "PSF", "PSF", "CALLSYS", "LoadThisR", "RDR8", "PshV8", "PSF", "PSF", "CALLSYS", "PSF", "PSF", "PSF", "CALLSYS"]) { return None; }
+            let w = |n: usize| c[n].words.first().map(|v| *v as i16 as i32);
+            let ptr = |n: usize| c[n].qwords.first().map(|v| *v as i64);
+            let (normal, cross, target, scaled, result, handle, scalar) = (w(2)?, w(12)?, w(13)?, w(24)?, w(28)?, w(8)?, w(22)?);
+            let vectors = [normal, cross, target, scaled, result];
+            if vectors.iter().any(|s| *s <= 0) || vectors.into_iter().collect::<HashSet<_>>().len() != 5
+                || handle <= 0 || scalar <= 0 || vectors.contains(&handle) || vectors.contains(&scalar) || handle == scalar
+                || [(3,normal),(4,0),(9,handle),(11,normal),(15,cross),(18,cross),(19,normal),(23,scalar),(25,cross),(27,scaled),(29,target)]
+                    .iter().any(|(n,s)| w(*n) != Some(*s)) { return None; }
+            let ret = refs.func_ret_by_ptr(ptr(16)?)?; let ty = ret.type_info;
+            let identity = refs.type_identity_by_ptr(ty)?;
+            if identity.name != "FVector" || !identity.module.is_empty() || !identity.namespace.is_empty() { return None; }
+            let vector = |t: &super::types::DataType, reference| t.token == 5 && t.type_info == ty && t.is_reference == reference && !t.is_object_handle;
+            let by_ref = |t: &super::types::DataType| vector(t, true) && t.is_object_const && t.is_read_only;
+            let double = |t: &super::types::DataType| t.token == 0x51 && !t.is_reference && !t.is_object_handle;
+            if vectors.iter().any(|s| f.obj_locals.iter().filter(|(o,_)| o == s).map(|(_,p)| *p).ne([ty])) { return None; }
+            for (n, name) in [(14,"opSub"),(16,"GetSafeNormal2D"),(20,"CrossProduct"),(26,"opMul"),(30,"opAdd")] {
+                let p = ptr(n)?; let args = refs.func_params_by_ptr(p)?;
+                if refs.func_by_ptr(p) != Some(name) || refs.func_owner_by_ptr(p) != Some("FVector") || !refs.is_method_by_ptr(p)
+                    || !refs.is_const_method_by_ptr(p) || !vector(refs.func_ret_by_ptr(p)?,false)
+                    || match n {16 => !matches!(args,[a,b] if double(a) && by_ref(b)),26 => !matches!(args,[a] if double(a)),_ => !matches!(args,[a] if by_ref(a))} { return None; }
+            }
+            let getter = ptr(7)?; let feet = ptr(10)?; let actor = refs.func_ret_by_ptr(getter)?;
+            if actor.token != 5 || !actor.is_object_handle || actor.is_reference
+                || f.obj_locals.iter().filter(|(s,_)| *s == handle).map(|(_,p)| *p).ne([actor.type_info])
+                || refs.func_by_ptr(getter) != Some("GetCharacter") || refs.func_by_ptr(feet) != Some("GetFeetLocation")
+                || !vector(refs.func_ret_by_ptr(feet)?,false) { return None; }
+            let actor_id = refs.type_identity_by_ptr(actor.type_info)?;
+            if !actor_id.module.is_empty() || !actor_id.namespace.is_empty() || refs.func_owner_by_ptr(feet) != Some(actor_id.name.as_str()) { return None; }
+            for p in [getter,feet] {
+                if !refs.is_method_by_ptr(p) || !refs.is_const_method_by_ptr(p) || !refs.func_params_by_ptr(p)?.is_empty() { return None; }
+            }
+            let field_id = *c[21].dwords.first()? as i32; let (field, old) = refs.member_identity(field_id,w(21)?)?;
+            let owner = refs.type_identity_by_id(field_id)?;
+            if owner.module.is_empty() || refs.type_identity_by_id(old)? != owner
+                || refs.own_field_type_by_class(&owner.name,field) != Some("float")
+                || refs.member_identity(*c[5].dwords.first()? as i32,w(5)?).is_none()
+                || refs.global_by_ptr(ptr(0)?) != Some("ZeroVector") || refs.global_by_ptr(ptr(17)?) != Some("UpVector")
+                || !f64::from_bits(*c[1].qwords.first()?).is_finite() { return None; }
+            for (slot, uses) in [(normal,vec![2,3,11,19]),(cross,vec![12,15,18,25]),(scaled,vec![24,27])] {
+                if code.iter().enumerate().filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&slot)).map(|(n,_)| n).ne(uses.into_iter().map(|n| at+n)) { return None; }
+            }
+            if code.iter().any(|i| i.op.name == "JMPP" || i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                target > c[0].offset_dw as i64 && target <= c[30].offset_dw as i64
+            })) { return None; }
+            Some((normal,cross,scaled))
+        })();
+        if let Some((normal,cross,scaled)) = witness {
+            sites.extend([(normal,"GetSafeNormal2D".into()),(cross,"CrossProduct".into())]); values.insert(scaled);
+        }
+    }
+    (sites, values)
+}
+
 /// Three distinct native vector results precede a component write and return.
 /// Keep the first two results named so the final result cannot reuse either slot.
 fn retained_native_vector_field_update(f: &Func, refs: &RefResolver) -> HashSet<i32> {
@@ -36838,6 +36905,38 @@ mod literal_value_lifetime_tests {
         }
     }
 
+
+    #[test]
+    fn a_normalized_offset_keeps_its_perpendicular_and_displacement() {
+        let mut f = function(&[("PshGPtr",&[]),("PshC8",&[]),("PSF",&[8]),("PSF",&[8]),("PshVPtr",&[0]),("ADDSi",&[0]),("RDSPtr",&[]),
+            ("CALLSYS",&[]),("STOREOBJ",&[22]),("PshVPtr",&[22]),("CALLSYS",&[]),("PSF",&[8]),("PSF",&[28]),("PSF",&[14]),("CALLSYS",&[]),
+            ("PSF",&[28]),("CALLSYS",&[]),("PshGPtr",&[]),("PSF",&[28]),("PSF",&[8]),("CALLSYS",&[]),("LoadThisR",&[0]),("RDR8",&[30]),
+            ("PshV8",&[30]),("PSF",&[20]),("PSF",&[28]),("CALLSYS",&[]),("PSF",&[20]),("PSF",&[36]),("PSF",&[14]),("CALLSYS",&[])]);
+        f.ret.token=0x52; f.obj_locals=vec![(8,3),(14,3),(20,3),(28,3),(36,3),(22,4)];
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,ptr) in [(0,9),(5,2),(7,10),(10,11),(14,12),(16,13),(17,8),(20,14),(21,1),(26,15),(30,16)] {f.bytecode[code[at].offset_dw+1]=ptr;}
+        let refs=RefResolver::from_test_ordered_navigation_vectors(0);
+        let (sites,values)=super::ordered_navigation_vectors(&f,&refs);
+        assert_eq!(sites,HashSet::from([(8,"GetSafeNormal2D".into()),(28,"CrossProduct".into())]));
+        assert_eq!(values,HashSet::from([20]));
+        let body="FVector local_8 = (local_14 - this.AI.GetCharacter().GetFeetLocation()).GetSafeNormal2D(0.0, FVector::ZeroVector);\nFVector local_28 = local_8.CrossProduct(FVector::UpVector);\nFVector local_20 = local_28 * this.OffsetDistance;\nFVector local_36 = (local_14 + local_20);\nUse(local_36);\n";
+        let kept=super::inline_unnamed_value_temporaries(body,&HashSet::from([(8,1),(28,1)]),&HashSet::new(),&HashSet::new(),&refs,
+            &HashSet::new(),&values,&HashMap::new(),&sites,&HashSet::new(),&HashSet::new(),&HashSet::new());
+        assert_eq!(kept,body);
+        assert!(!super::is_named_value_site(8,"Actor.GetFeetLocation()",&sites));
+        assert!(!super::is_named_value_site(28,"(local_14 - local_8)",&sites));
+        for fault in 1..=8 {let (s,v)=super::ordered_navigation_vectors(&f,&RefResolver::from_test_ordered_navigation_vectors(fault));assert!(s.is_empty()&&v.is_empty(),"metadata {fault}");}
+        for at in [3,4,5,9,11,13,15,18,19,21,23,25,27,29] {
+            let mut bad=f.clone();bad.bytecode[code[at].offset_dw]^=1<<16;
+            let (s,v)=super::ordered_navigation_vectors(&bad,&refs);assert!(s.is_empty()&&v.is_empty(),"operand {at}");
+        }
+        let mut duplicate=f.clone();duplicate.obj_locals.push((28,3));
+        assert!(super::ordered_navigation_vectors(&duplicate,&refs).0.is_empty());
+        let mut extra=f.clone();extra.bytecode.extend(function(&[("PSF",&[20])]).bytecode);
+        assert!(super::ordered_navigation_vectors(&extra,&refs).0.is_empty());
+        let mut entry=f.clone();let mut jump=function(&[("JMP",&[])]).bytecode;jump[1]=code[16].offset_dw as i32;jump.extend(entry.bytecode);entry.bytecode=jump;
+        assert!(super::ordered_navigation_vectors(&entry,&refs).0.is_empty());
+    }
 
     #[test]
     fn a_direct_enum_index_argument_does_not_gain_a_named_copy() {
