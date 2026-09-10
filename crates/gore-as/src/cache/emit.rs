@@ -3297,6 +3297,10 @@ fn emit_function_ctor(
         pass_trace("retain_look_at_values", &rendered);
         let rendered = fold_self_vector_sum(&rendered, f, refs);
         pass_trace("fold_self_vector_sum", &rendered);
+        let rendered = fold_native_null_captures(&rendered, f, refs);
+        pass_trace("fold_native_null_captures", &rendered);
+        let rendered = restore_relative_vector_values(&rendered, f, refs);
+        pass_trace("restore_relative_vector_values", &rendered);
         let rendered = restore_enum_trace_result(&rendered, f, refs);
         pass_trace("restore_enum_trace_result", &rendered);
         let rendered = fold_weak_forward_sum(&rendered, f, refs);
@@ -9574,6 +9578,142 @@ fn fold_self_vector_sum(body: &str, f: &Func, refs: &RefResolver) -> String {
     for (n, line) in lines.iter().enumerate() {
         if n == *at { out.push(format!("{}FVector local_{direction} = (this.{location}() + (this.{axis}() * this.{scale}()));", indent_of(line))); }
         else if n < *at || n >= *at + 4 { out.push(rename_ident(line, old_sum, &format!("local_{direction}"))); }
+    }
+    let mut result = out.join("\n");
+    if body.ends_with('\n') { result.push('\n'); }
+    result
+}
+
+/// Repeated field-null guards reuse the first target capture inside a three-way OR.
+fn fold_native_null_captures(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if f.ret.token != 0x52 || f.ret.is_reference || !f.params.is_empty() || !body.contains(" == nullptr ||") { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let w = |i: &Instr, n| i.words.get(n).map(|s| *s as i16 as i32);
+    let jump = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+    let field = |i: &Instr, slot| {
+        let id = *i.dwords.first()? as i32;
+        let owner = refs.type_identity_by_id(id)?;
+        let (name, old) = refs.member_identity(id, w(i, 0)?)?;
+        if !owner.namespace.is_empty() || refs.type_identity_by_id(old)? != owner { return None; }
+        let locals: Vec<_> = f.obj_locals.iter().filter(|(s, _)| *s == slot).collect();
+        let [(_, p)] = locals.as_slice() else { return None; };
+        let ty = refs.type_identity_by_ptr(*p)?;
+        if !ty.module.is_empty() || !ty.namespace.is_empty() || !is_object_handle_type(&ty.name) { return None; }
+        let declared = if owner.module.is_empty() {
+            refs.native_field_value_type(&owner.name, name).or_else(|| refs.native_field_type(&owner.name, name))
+        } else { refs.own_field_type_by_class(&owner.name, name) }?;
+        (declared == ty.name).then_some((name.to_owned(), ty.name.clone()))
+    };
+    let witnesses: Vec<_> = code.windows(30).enumerate().filter_map(|(at, c)| {
+        if c.iter().map(|i| i.op.name).ne(["PshVPtr", "ADDSi", "RDSPtr", "RefCpyV", "CmpPtrNull", "JNZ", "SetV1", "JMP",
+            "PshVPtr", "ADDSi", "RDSPtr", "RefCpyV", "CmpPtrNull", "TZ", "CpyRtoV4", "CpyVtoV4", "CpyVtoR1", "JLowZ", "SetV1", "JMP",
+            "PshVPtr", "ADDSi", "RDSPtr", "RefCpyV", "CmpPtrNull", "TZ", "CpyRtoV4", "CpyVtoV4", "CpyVtoR1", "JLowZ"]) { return None; }
+        let (sensor, target, component, carrier, scratch) = (w(&c[3], 0)?, w(&c[11], 0)?, w(&c[23], 0)?, w(&c[6], 0)?, w(&c[14], 0)?);
+        let slots = [sensor, target, component, carrier, scratch];
+        if slots.iter().any(|s| *s <= 0) || HashSet::from(slots).len() != slots.len()
+            || [(0, 0), (4, sensor), (8, 0), (12, target), (15, carrier), (16, carrier), (18, carrier), (20, 0), (24, component), (26, scratch), (27, carrier), (28, carrier)].iter().any(|(n, s)| w(&c[*n], 0) != Some(*s))
+            || [6, 18].iter().any(|n| c[*n].dwords.first() != Some(&1)) || w(&c[15], 1) != Some(scratch) || w(&c[27], 1) != Some(scratch)
+            || f.obj_locals.iter().any(|(s, _)| *s == carrier || *s == scratch) { return None; }
+        for (from, to) in [(5, 8), (7, 16), (17, 20), (19, 28)] {
+            if jump(&c[from]) != Some(c[to].offset_dw as i64) { return None; }
+        }
+        if jump(&c[29])? <= c[29].offset_dw as i64 { return None; }
+        let sensor_field = field(&c[1], sensor)?;
+        let target_field = field(&c[9], target)?;
+        let component_field = field(&c[21], component)?;
+        let first: Vec<_> = code[..at].windows(6).enumerate().filter(|(_, p)| p.iter().map(|i| i.op.name).eq(["PshVPtr", "ADDSi", "RDSPtr", "RefCpyV", "CmpPtrNull", "JZ"])
+            && w(&p[0], 0) == Some(0) && p[1].words == c[9].words && p[1].dwords == c[9].dwords
+            && w(&p[3], 0) == Some(target) && w(&p[4], 0) == Some(target) && jump(&p[5]) == Some(c[0].offset_dw as i64)).map(|(n, _)| n).collect();
+        let [first] = first.as_slice() else { return None; };
+        let uses = |slot, end| code[..end].iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&slot)).map(|(n, _)| n).collect::<Vec<_>>();
+        if uses(target, at + 13) != [first + 3, first + 4, at + 11, at + 12] || uses(sensor, code.len()) != [at + 3, at + 4]
+            || code.iter().enumerate().any(|(n, i)| i.op.name == "JMPP" || (i.op.name.starts_with('J') && ![at + 5, at + 7, at + 17, at + 19].contains(&n)
+                && jump(i).is_some_and(|t| t > c[0].offset_dw as i64 && t <= c[29].offset_dw as i64))) { return None; }
+        Some((sensor, target, sensor_field, target_field, component_field.0))
+    }).collect();
+    let [(sensor, target, (sensor_field, sensor_type), (target_field, target_type), component)] = witnesses.as_slice() else { return body.to_owned(); };
+    let (sensor_name, target_name) = (format!("local_{sensor}"), format!("local_{target}"));
+    if count_ident(body, &sensor_name) != 2 || count_ident(body, &target_name) != 2 { return body.to_owned(); }
+    let lines: Vec<_> = body.lines().collect();
+    let mut edits = Vec::new();
+    for (name, ty, member, condition) in [(&target_name, target_type, target_field, format!("if ({target_name} != nullptr)")),
+        (&sensor_name, sensor_type, sensor_field, format!("if (({sensor_name} == nullptr || ((this.{target_field} == nullptr)) || ((this.{component} == nullptr))))"))] {
+        let found: Vec<_> = lines.windows(2).enumerate().filter(|(_, c)| c[0].trim() == format!("{ty} {name} = this.{member};") && c[1].trim() == condition
+            && indent_of(c[0]) == indent_of(c[1])).map(|(at, _)| at).collect();
+        let [at] = found.as_slice() else { return body.to_owned(); };
+        edits.push((*at, rename_ident(lines[at + 1], name, &format!("this.{member}"))));
+    }
+    if edits[0].0 >= edits[1].0 { return body.to_owned(); }
+    let mut out = Vec::new();
+    for (n, line) in lines.iter().enumerate() {
+        if let Some((_, replacement)) = edits.iter().find(|(at, _)| n == at + 1) { out.push(replacement.clone()); }
+        else if edits.iter().all(|(at, _)| n != *at) { out.push((*line).to_owned()); }
+    }
+    let mut result = out.join("\n");
+    if body.ends_with('\n') { result.push('\n'); }
+    result
+}
+
+/// The displacement and both relative directions survive through the equality guard.
+fn restore_relative_vector_values(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if f.ret.token != 0x41 || f.ret.is_reference || f.params.len() != 4 || !body.contains("FVector local_") { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let Some(c) = code.get(..25) else { return body.to_owned(); };
+    let witness = (|| {
+        if c.iter().map(|i| i.op.name).ne(["PSF", "PshVPtr", "CALLSYS", "PSF", "PshVPtr", "CALLSYS", "PSF", "PSF", "PSF", "CALLSYS",
+            "PSF", "PshVPtr", "PSF", "CALL", "PshVPtr", "PshVPtr", "PSF", "CALL", "PSF", "PSF", "CALLSYS", "JLowZ", "SetV1", "CpyVtoR4", "JMP"])
+            || c[2].qwords != c[5].qwords || c[13].dwords != c[17].dwords || c[22].dwords.first() != Some(&0) || c[22].words != c[23].words { return None; }
+        let w = |n: usize| c[n].words.first().map(|s| *s as i16 as i32);
+        let (relative, location, delta, direction, character, attacker, input) = (w(0)?, w(3)?, w(7)?, w(16)?, w(4)?, w(1)?, w(14)?);
+        let slots = [relative, location, delta, direction];
+        if slots.iter().any(|s| *s <= 0) || HashSet::from(slots).len() != slots.len() || character != 0 || attacker >= 0 || input >= 0 || attacker == input
+            || w(22)? <= 0 || f.obj_locals.iter().any(|(s, _)| Some(*s) == w(22))
+            || [(6, location), (8, relative), (10, delta), (11, character), (12, relative), (15, character), (18, direction), (19, relative)].iter().any(|(n, s)| w(*n) != Some(*s)) { return None; }
+        let ptr = |n: usize| c[n].qwords.first().copied().map(|p| p as i64);
+        let (get, sub, equal, convert) = (ptr(2)?, ptr(9)?, ptr(20)?, *c[13].dwords.first()? as i32);
+        let vector = refs.func_ret_by_ptr(get)?.type_info;
+        let value = |t: &super::types::DataType| t.token == 5 && t.type_info == vector && !t.is_reference && !t.is_object_handle;
+        let reference = |t: &super::types::DataType| t.token == 5 && t.type_info == vector && t.is_reference && t.is_object_const && t.is_read_only && !t.is_object_handle;
+        if !matches!(refs.type_identity_by_ptr(vector), Some(t) if t.name == "FVector" && t.module.is_empty() && t.namespace.is_empty())
+            || slots.iter().any(|s| f.obj_locals.iter().filter(|(n, _)| n == s).map(|(_, p)| *p).ne([vector])) { return None; }
+        if refs.func_owner_by_ptr(get) != Some("AActor") || !refs.is_method_by_ptr(get) || !refs.is_const_method_by_ptr(get) || !refs.func_params_by_ptr(get)?.is_empty() || !value(refs.func_ret_by_ptr(get)?) { return None; }
+        for (p, name) in [(sub, "opSub"), (equal, "opEquals")] {
+            if refs.func_by_ptr(p) != Some(name) || refs.func_owner_by_ptr(p) != Some("FVector") || !refs.is_method_by_ptr(p) || !refs.is_const_method_by_ptr(p)
+                || !matches!(refs.func_params_by_ptr(p)?, [t] if reference(t)) { return None; }
+        }
+        if !value(refs.func_ret_by_ptr(sub)?) || !matches!(refs.func_ret_by_ptr(equal)?, t if t.token == 0x41 && t.type_info == 0 && !t.is_reference && !t.is_object_handle)
+            || refs.is_method_by_id(convert) || !value(refs.func_ret_by_id(convert)?) { return None; }
+        let [actor_type, vector_type] = refs.func_params_by_id(convert)? else { return None; };
+        let handle = |t: &super::types::DataType| t.token == 5 && t.type_info == actor_type.type_info && t.is_object_handle && t.is_object_const && !t.is_reference;
+        if !handle(actor_type) || !reference(vector_type) || !matches!(refs.type_identity_by_ptr(actor_type.type_info), Some(t) if t.name == "AGothicCharacter" && t.module.is_empty() && t.namespace.is_empty()) { return None; }
+        let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+        let offsets = super::model::param_slot_map(&params, false, false, Some(refs));
+        let param = |slot| offsets.get(&slot).and_then(|n| f.params.get(*n));
+        let (character, attacker, input) = (param(character)?, param(attacker)?, param(input)?);
+        if !handle(&character.ty) || !handle(&attacker.ty) || !reference(&input.ty) || [character, attacker, input].iter().any(|p| p.name.is_empty()) { return None; }
+        for (slot, indices) in [(relative, vec![0, 8, 12, 19]), (location, vec![3, 6]), (delta, vec![7, 10])] {
+            if code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&slot)).map(|(n, _)| n).ne(indices) { return None; }
+        }
+        let jump = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+        if jump(&c[21]) != Some(code.get(25)?.offset_dw as i64) || code.last()?.op.name != "RET" || jump(&c[24]) != Some(code.last()?.offset_dw as i64)
+            || code.iter().enumerate().any(|(n, i)| i.op.name == "JMPP" || (i.op.name.starts_with('J') && n != 21 && n != 24 && jump(i).is_some_and(|t| t >= 0 && t <= c[24].offset_dw as i64))) { return None; }
+        Some((relative, delta, direction, character.name.clone(), attacker.name.clone(), input.name.clone(), refs.func_by_ptr(get)?.to_owned(), refs.func_by_id(convert)?.to_owned()))
+    })();
+    let Some((relative, delta, direction, character, attacker, input, get, convert)) = witness else { return body.to_owned(); };
+    let (relative_name, delta_name, direction_name) = (format!("local_{relative}"), format!("local_{delta}"), format!("local_{direction}"));
+    if count_ident(body, &relative_name) != 0 || count_ident(body, &delta_name) != 0 || count_ident(body, &direction_name) < 3 { return body.to_owned(); }
+    let lines: Vec<_> = body.lines().collect();
+    let positions: Vec<_> = lines.windows(2).enumerate().filter(|(_, p)| p[0].trim() == format!("FVector {direction_name} = {convert}({character}, {input});")
+        && p[1].trim() == format!("if (({convert}({character}, ({attacker}.{get}() - {character}.{get}())) == {direction_name}))") && indent_of(p[0]) == indent_of(p[1])).map(|(n, _)| n).collect();
+    let [at] = positions.as_slice() else { return body.to_owned(); };
+    if lines[..*at].iter().any(|s| !s.trim().is_empty()) { return body.to_owned(); }
+    let mut out = Vec::new();
+    for (n, line) in lines.iter().enumerate() {
+        if n == *at {
+            let indent = indent_of(line);
+            out.extend([format!("{indent}FVector {delta_name} = ({attacker}.{get}() - {character}.{get}());"),
+                format!("{indent}FVector {relative_name} = {convert}({character}, {delta_name});"), (*line).to_owned(), format!("{indent}if ({relative_name}.opEquals({direction_name}))")]);
+        } else if n != at + 1 { out.push((*line).to_owned()); }
     }
     let mut result = out.join("\n");
     if body.ends_with('\n') { result.push('\n'); }
@@ -45083,6 +45223,71 @@ mod literal_value_lifetime_tests {
         let mut bad = f.clone(); bad.bytecode.extend(function(&[("PSF", &[6])]).bytecode); reject(&bad);
         let mut bad = f.clone(); bad.bytecode[c[17].offset_dw + 1] = 20; reject(&bad);
         let mut bad = f; let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[7].offset_dw as i32; jump.extend(bad.bytecode); bad.bytecode = jump; reject(&bad);
+    }
+
+    #[test]
+    fn repeated_native_field_guards_release_their_null_capture_handles() {
+        let mut f = function(&[("PshVPtr", &[0]), ("ADDSi", &[0]), ("RDSPtr", &[]), ("RefCpyV", &[16]), ("CmpPtrNull", &[16]), ("JZ", &[]),
+            ("PshVPtr", &[0]), ("CALLSYS", &[]),
+            ("PshVPtr", &[0]), ("ADDSi", &[0]), ("RDSPtr", &[]), ("RefCpyV", &[26]), ("CmpPtrNull", &[26]), ("JNZ", &[]), ("SetV1", &[1]), ("JMP", &[]),
+            ("PshVPtr", &[0]), ("ADDSi", &[0]), ("RDSPtr", &[]), ("RefCpyV", &[16]), ("CmpPtrNull", &[16]), ("TZ", &[]), ("CpyRtoV4", &[27]), ("CpyVtoV4", &[1, 27]),
+            ("CpyVtoR1", &[1]), ("JLowZ", &[]), ("SetV1", &[1]), ("JMP", &[]),
+            ("PshVPtr", &[0]), ("ADDSi", &[0]), ("RDSPtr", &[]), ("RefCpyV", &[24]), ("CmpPtrNull", &[24]), ("TZ", &[]), ("CpyRtoV4", &[27]), ("CpyVtoV4", &[1, 27]),
+            ("CpyVtoR1", &[1]), ("JLowZ", &[]), ("RET", &[2])]);
+        f.ret.token = 0x52; f.obj_locals = vec![(16, 2), (26, 4), (24, 6)];
+        let c = disassemble(&f.bytecode).unwrap();
+        for (n, id) in [(1, 1), (9, 3), (17, 1), (29, 5)] { f.bytecode[c[n].offset_dw + 1] = id; }
+        for (from, to) in [(5, 8), (13, 16), (15, 24), (25, 28), (27, 36), (37, 38)] {
+            f.bytecode[c[from].offset_dw + 1] = c[to].offset_dw as i32 - c[from].offset_dw as i32 - 2;
+        }
+        for n in [14, 26] { f.bytecode[c[n].offset_dw + 1] = 1; }
+        let body = "    AActor local_16 = this.Target;\n    if (local_16 != nullptr)\n    {\n        Use();\n    }\n    USensor local_26 = this.Sensor;\n    if ((local_26 == nullptr || ((this.Target == nullptr)) || ((this.Component == nullptr))))\n    {\n        return;\n    }\n";
+        let expected = "    if (this.Target != nullptr)\n    {\n        Use();\n    }\n    if ((this.Sensor == nullptr || ((this.Target == nullptr)) || ((this.Component == nullptr))))\n    {\n        return;\n    }\n";
+        let refs = RefResolver::from_test_native_null_captures(0);
+        assert_eq!(super::fold_native_null_captures(body, &f, &refs), expected);
+        assert_eq!(super::fold_native_null_captures(expected, &f, &refs), expected);
+        for fault in 1..=6 { assert_eq!(super::fold_native_null_captures(body, &f, &RefResolver::from_test_native_null_captures(fault)), body, "metadata {fault}"); }
+        for bad in [body.replace("Sensor", "Other"), body.replace("local_16 != nullptr", "local_16 == nullptr"), format!("{body}Use(local_16);\n")] {
+            assert_eq!(super::fold_native_null_captures(&bad, &f, &refs), bad);
+        }
+        let reject = |bad: &Func| assert_eq!(super::fold_native_null_captures(body, bad, &refs), body);
+        let mut bad = f.clone(); bad.obj_locals.push((26, 4)); reject(&bad);
+        let mut bad = f.clone(); bad.bytecode[c[14].offset_dw + 1] = 0; reject(&bad);
+        let mut bad = f.clone(); bad.bytecode[c[5].offset_dw + 1] += 1; reject(&bad);
+        let mut bad = f.clone(); bad.bytecode.extend(function(&[("PSF", &[26])]).bytecode); reject(&bad);
+        let mut bad = f; let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[17].offset_dw as i32; jump.extend(bad.bytecode); bad.bytecode = jump; reject(&bad);
+    }
+
+    #[test]
+    fn relative_directions_keep_the_delta_and_original_call_order() {
+        let mut f = function(&[("PSF", &[18]), ("PshVPtr", &[65530]), ("CALLSYS", &[]), ("PSF", &[12]), ("PshVPtr", &[0]), ("CALLSYS", &[]),
+            ("PSF", &[12]), ("PSF", &[24]), ("PSF", &[18]), ("CALLSYS", &[]), ("PSF", &[24]), ("PshVPtr", &[0]), ("PSF", &[18]), ("CALL", &[]),
+            ("PshVPtr", &[65534]), ("PshVPtr", &[0]), ("PSF", &[6]), ("CALL", &[]), ("PSF", &[6]), ("PSF", &[18]), ("CALLSYS", &[]),
+            ("JLowZ", &[]), ("SetV1", &[37]), ("CpyVtoR4", &[37]), ("JMP", &[]), ("PSF", &[6]), ("RET", &[8])]);
+        f.ret.token = 0x41; f.obj_locals = [6, 12, 18, 24].into_iter().map(|s| (s, 1)).collect();
+        let actor = DataType { token: 5, type_info: 3, is_object_handle: true, is_object_const: true, ..Default::default() };
+        f.params = [
+            ("Character", actor.clone()), ("Direction", DataType { token: 5, type_info: 1, is_reference: true, is_object_const: true, is_read_only: true, ..Default::default() }),
+            ("Distance", DataType { token: 0x51, ..Default::default() }), ("Attacker", actor),
+        ].into_iter().map(|(name, ty)| super::super::model::Param { name: name.into(), ty, flags: 0 }).collect();
+        let c = disassemble(&f.bytecode).unwrap();
+        for (n, p) in [(2, 50), (5, 50), (9, 40), (13, 100), (17, 100), (20, 70)] { f.bytecode[c[n].offset_dw + 1] = p; }
+        for (from, to) in [(21, 25), (24, 26)] { f.bytecode[c[from].offset_dw + 1] = c[to].offset_dw as i32 - c[from].offset_dw as i32 - 2; }
+        let body = "    FVector local_6 = DirectionOf(Character, Direction);\n    if ((DirectionOf(Character, (Attacker.Location() - Character.Location())) == local_6))\n    {\n        return false;\n    }\n    return Use(local_6);\n";
+        let expected = "    FVector local_24 = (Attacker.Location() - Character.Location());\n    FVector local_18 = DirectionOf(Character, local_24);\n    FVector local_6 = DirectionOf(Character, Direction);\n    if (local_18.opEquals(local_6))\n    {\n        return false;\n    }\n    return Use(local_6);\n";
+        let refs = RefResolver::from_test_relative_vector_values(0);
+        assert_eq!(super::restore_relative_vector_values(body, &f, &refs), expected);
+        assert_eq!(super::restore_relative_vector_values(expected, &f, &refs), expected);
+        for fault in 1..=7 { assert_eq!(super::restore_relative_vector_values(body, &f, &RefResolver::from_test_relative_vector_values(fault)), body, "metadata {fault}"); }
+        for bad in [body.replace("Location", "Other"), body.replace(" == ", " != "), format!("{body}Use(local_24);\n"), format!("    First();\n{body}")] {
+            assert_eq!(super::restore_relative_vector_values(&bad, &f, &refs), bad);
+        }
+        let reject = |bad: &Func| assert_eq!(super::restore_relative_vector_values(body, bad, &refs), body);
+        let mut bad = f.clone(); bad.obj_locals.push((24, 1)); reject(&bad);
+        let mut bad = f.clone(); bad.params[1].ty.is_reference = false; reject(&bad);
+        let mut bad = f.clone(); bad.bytecode[c[21].offset_dw + 1] += 1; reject(&bad);
+        let mut bad = f.clone(); bad.bytecode[c[22].offset_dw + 1] = 1; reject(&bad);
+        let mut bad = f; bad.bytecode.extend(function(&[("PSF", &[18])]).bytecode); reject(&bad);
     }
 
     #[test]
