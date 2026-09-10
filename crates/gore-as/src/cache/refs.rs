@@ -5032,6 +5032,29 @@ impl RefResolver {
         r
     }
     #[cfg(test)]
+    pub(crate) fn from_test_conditional_handle_return(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("URouter", ""), ("UAgent", ""), ("UState", "")]);
+        for (id, name) in [(1, "URouter"), (2, "UAgent"), (3, "UState")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: name.into(), module: "Fixture".into(), namespace: String::new() });
+        }
+        for (p, name, owner, returned) in [(20, "Router", "UOwner", 1), (21, "Agent", "URouter", 2), (22, "State", "UAgent", 3)] {
+            r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, owner.into()); r.func_is_method.insert(p);
+            r.func_params.insert(p, vec![]); r.func_ret.insert(p, DataType { token: 5, type_info: returned, is_object_handle: true, ..Default::default() });
+            if p != 22 { r.funcid_to_ptr.insert(p as i32, p); }
+        }
+        match fault {
+            1 => { r.func_ret.get_mut(&20).unwrap().is_reference = true; },
+            2 => { r.func_ret.get_mut(&21).unwrap().type_info = 3; },
+            3 => { r.func_ret.get_mut(&22).unwrap().is_read_only = true; },
+            4 => { r.func_params.get_mut(&22).unwrap().push(DataType { token: 0x44, ..Default::default() }); },
+            5 => { r.func_owner.insert(22, "UOther".into()); },
+            6 => { r.func_is_method.remove(&20); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_role_value_lifetimes(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("UFirst", "Code"), ("FSecond", "Code"), ("UHolder", "Items"), ("ECode", "")]);
         for (id, name, field, ty) in [(1, "UFirst", "Code", "ECode"), (2, "FSecond", "Code", "ECode"), (3, "UHolder", "Items", "TArray<FSecond>"), (4, "ECode", "", "")] {

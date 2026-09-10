@@ -3253,6 +3253,8 @@ fn emit_function_ctor(
         pass_trace("restore_segment_clearance_order", &rendered);
         let rendered = restore_adjusted_segment_endpoint(&rendered, f, refs);
         pass_trace("restore_adjusted_segment_endpoint", &rendered);
+        let rendered = restore_conditional_handle_return(&rendered, f, refs);
+        pass_trace("restore_conditional_handle_return", &rendered);
         let rendered = restore_copied_enum_field_lifetimes(&rendered, f, refs);
         pass_trace("restore_copied_enum_field_lifetimes", &rendered);
         let rendered = fold_direct_indexed_enum_arguments(&rendered, f, refs);
@@ -8555,6 +8557,77 @@ fn rewrite_no_assign_locals(body: &str, locals: &BTreeMap<i32, String>) -> (Stri
         suppressed.insert(*slot);
     }
     (out, suppressed)
+}
+
+/// The conditional's result is a return temporary, not a function-wide handle.
+fn restore_conditional_handle_return(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if !body.contains("else\n") || f.ret.token != 5 || !f.ret.is_object_handle || f.ret.is_reference { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let word = |i: &Instr, n: usize| i.words.get(n).map(|w| *w as i16 as i32);
+    let jump = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+    let Some(end) = code.last().filter(|i| i.op.name == "RET") else { return body.to_owned(); };
+    if code.iter().filter(|i| i.op.name == "RET").count() != 1 { return body.to_owned(); }
+    // JMPP indexes fixed-width JMP entries. Require its complete range guards,
+    // subtraction and table before allowing those indirect entries in this scan.
+    for (at, i) in code.iter().enumerate().filter(|(_, i)| i.op.name == "JMPP") {
+        let valid = (|| {
+            let g = code.get(at.checked_sub(5)?..=at)?; let max = *i.dwords.first()?;
+            if max > 255 || g.iter().map(|i| i.op.name).ne(["CMPIi", "JP", "CMPIi", "JS", "SUBIi", "JMPP"])
+                || g[0].dwords.first() != Some(&max) || g[2].dwords.first() != Some(&0) || g[4].dwords.first() != Some(&0)
+                || word(&g[0], 0) != word(&g[2], 0) || word(&g[4], 1) != word(&g[0], 0) || word(&g[4], 0) != word(i, 0)
+                || jump(&g[1]) != jump(&g[3]) || jump(&g[1])? <= i.offset_dw as i64 { return None; }
+            let table = code.get(at + 1..at + max as usize + 2)?;
+            if table.iter().any(|i| i.op.name != "JMP") || code.iter().filter(|i| i.op.name != "JMPP" && i.op.name.starts_with('J'))
+                .any(|j| jump(j).is_some_and(|t| t > g[0].offset_dw as i64 && t <= i.offset_dw as i64)) { return None; }
+            Some(())
+        })();
+        if valid.is_none() { return body.to_owned(); }
+    }
+    let sites: Vec<_> = code.windows(21).enumerate().filter_map(|(at, c)| {
+        if c.iter().map(|i| i.op.name).ne(["PshVPtr", "CALLINTF", "STOREOBJ", "PshVPtr", "CALLINTF", "STOREOBJ", "CmpPtrNull", "JNZ", "FreeNullV8", "JMP",
+            "PshVPtr", "CALLINTF", "STOREOBJ", "PshVPtr", "CALLINTF", "STOREOBJ", "PshVPtr", "CALLSYS", "STOREOBJ", "LOADOBJ", "JMP"]) { return None; }
+        let (first, second, result) = (word(&c[2], 0)?, word(&c[5], 0)?, word(&c[8], 0)?);
+        if [first, second, result].iter().any(|s| *s <= 0) || HashSet::from([first, second, result]).len() != 3
+            || [0, 10].iter().any(|n| word(&c[*n], 0) != Some(0))
+            || [3, 12, 13].iter().any(|n| word(&c[*n], 0) != Some(first))
+            || [6, 15, 16].iter().any(|n| word(&c[*n], 0) != Some(second))
+            || [18, 19].iter().any(|n| word(&c[*n], 0) != Some(result))
+            || c[1].dwords != c[11].dwords || c[4].dwords != c[14].dwords
+            || jump(&c[7]) != Some(c[10].offset_dw as i64) || jump(&c[9]) != Some(c[19].offset_dw as i64)
+            || jump(&c[20]) != Some(end.offset_dw as i64) { return None; }
+        let mut types = Vec::new();
+        for slot in [first, second, result] {
+            let entries: Vec<_> = f.obj_locals.iter().filter(|(s, _)| *s == slot).map(|(_, p)| *p).collect();
+            let [ptr] = entries.as_slice() else { return None; }; types.push(*ptr);
+        }
+        for (n, ty) in [(1, types[0]), (4, types[1])] {
+            let id = *c[n].dwords.first()? as i32; let ret = refs.func_ret_by_id(id)?;
+            if !refs.is_method_by_id(id) || !refs.func_params_by_id(id)?.is_empty() || ret.token != 5 || !ret.is_object_handle
+                || ret.is_reference || ret.is_object_const || ret.is_read_only || ret.type_info != ty { return None; }
+        }
+        let p = *c[17].qwords.first()? as i64; let ret = refs.func_ret_by_ptr(p)?;
+        if !refs.is_method_by_ptr(p) || !refs.func_params_by_ptr(p)?.is_empty() || ret.token != 5 || !ret.is_object_handle
+            || ret.is_reference || ret.is_object_const || ret.is_read_only || ret.type_info != types[2] || ret.type_info != f.ret.type_info
+            || refs.func_owner_by_ptr(p)? != refs.type_identity_by_ptr(types[1])?.name
+            || code.iter().enumerate().any(|(n, i)| ![at + 7, at + 9].contains(&n) && i.op.name != "JMPP" && i.op.name.starts_with('J')
+                && jump(i).is_some_and(|t| t > c[0].offset_dw as i64 && t <= c[20].offset_dw as i64)) { return None; }
+        Some((result, format!("this.{}().{}()", refs.func_by_id(*c[1].dwords.first()? as i32)?, refs.func_by_id(*c[4].dwords.first()? as i32)?),
+            refs.func_by_ptr(p)?.to_owned()))
+    }).collect();
+    let [(slot, receiver, getter)] = sites.as_slice() else { return body.to_owned(); };
+    let name = format!("local_{slot}"); let declaration = format!("{} {name};", f.ret.base_name(refs));
+    let lines: Vec<_> = body.lines().collect();
+    let declarations: Vec<_> = lines.iter().enumerate().filter(|(_, l)| l.trim() == declaration).map(|(at, _)| at).collect();
+    let [declaration_at] = declarations.as_slice() else { return body.to_owned(); };
+    let pattern = [format!("if ({receiver} == nullptr)"), "{".into(), format!("{name} = nullptr;"), "}".into(), "else".into(), "{".into(),
+        format!("{name} = {receiver}.{getter}();"), "}".into(), format!("return {name};")];
+    let matches: Vec<_> = lines.windows(9).enumerate().filter(|(_, c)| c.iter().map(|l| l.trim()).eq(pattern.iter().map(String::as_str))).map(|(at, _)| at).collect();
+    let [at] = matches.as_slice() else { return body.to_owned(); };
+    if *declaration_at >= *at || count_ident(body, &name) != 4 { return body.to_owned(); }
+    let mut result: Vec<_> = lines.iter().map(|l| (*l).to_owned()).collect();
+    result.splice(*at..at + 9, [format!("{}return {receiver} == nullptr ? nullptr : {receiver}.{getter}();", indent_of(lines[*at]))]);
+    result.remove(*declaration_at);
+    let mut result = result.join("\n"); if body.ends_with('\n') { result.push('\n'); } result
 }
 
 /// A copied enum field gets a name in its own block; its scratch read does not.
@@ -43115,6 +43188,41 @@ mod literal_value_lifetime_tests {
         let mut named=function(&[("PSF",&[12]),("CALL",&[]),("PshVPtr",&[65534]),("CALL",&[])]);
         let c=disassemble(&named.bytecode).unwrap();for at in [1,3]{named.bytecode[c[at].offset_dw+1]=7;}
         assert_eq!(super::fold_returned_empty_values(body,&named,&refs),body);
+    }
+
+    #[test]
+    fn conditional_handle_returns_do_not_hoist_the_result() {
+        for switch in [false, true] {
+            let mut f = function(&[("PshVPtr", &[0]), ("CALLINTF", &[]), ("STOREOBJ", &[6]), ("PshVPtr", &[6]), ("CALLINTF", &[]), ("STOREOBJ", &[8]), ("CmpPtrNull", &[8]), ("JNZ", &[]), ("FreeNullV8", &[12]), ("JMP", &[]),
+                ("PshVPtr", &[0]), ("CALLINTF", &[]), ("STOREOBJ", &[6]), ("PshVPtr", &[6]), ("CALLINTF", &[]), ("STOREOBJ", &[8]), ("PshVPtr", &[8]), ("CALLSYS", &[]), ("STOREOBJ", &[12]), ("LOADOBJ", &[12]), ("JMP", &[]), ("RET", &[0])]);
+            f.ret = DataType { token: 5, type_info: 3, is_object_handle: true, ..Default::default() }; f.obj_locals = vec![(6, 1), (8, 2), (12, 3)];
+            let c = disassemble(&f.bytecode).unwrap();
+            for (at, value) in [(1, 20), (4, 21), (11, 20), (14, 21), (17, 22)] { f.bytecode[c[at].offset_dw + 1] = value; }
+            for (at, target) in [(7, 10), (9, 19), (20, 21)] { f.bytecode[c[at].offset_dw + 1] = c[target].offset_dw as i32 - c[at].offset_dw as i32 - 2; }
+            if switch {
+                let prefix = function(&[("CMPIi", &[1]), ("JP", &[]), ("CMPIi", &[1]), ("JS", &[]), ("SUBIi", &[2, 1]), ("JMPP", &[2]), ("JMP", &[]), ("JMP", &[])]).bytecode;
+                f.bytecode.splice(0..0, prefix);
+                let c = disassemble(&f.bytecode).unwrap(); f.bytecode[c[0].offset_dw + 1] = 1; f.bytecode[c[5].offset_dw + 1] = 1;
+                for (at, target) in [(1, 29), (3, 29), (6, 8), (7, 29)] { f.bytecode[c[at].offset_dw + 1] = c[target].offset_dw as i32 - c[at].offset_dw as i32 - 2; }
+            }
+            let body = "    UState local_12;\n    if (this.Router().Agent() == nullptr)\n    {\n        local_12 = nullptr;\n    }\n    else\n    {\n        local_12 = this.Router().Agent().State();\n    }\n    return local_12;\n";
+            let expected = "    return this.Router().Agent() == nullptr ? nullptr : this.Router().Agent().State();\n";
+            let refs = RefResolver::from_test_conditional_handle_return(0);
+            assert_eq!(super::restore_conditional_handle_return(body, &f, &refs), expected, "switch={switch}");
+            assert_eq!(super::restore_conditional_handle_return(expected, &f, &refs), expected);
+            for fault in 1..=6 { assert_eq!(super::restore_conditional_handle_return(body, &f, &RefResolver::from_test_conditional_handle_return(fault)), body, "metadata {fault}"); }
+            let extra = format!("{body}    Use(local_12);\n"); assert_eq!(super::restore_conditional_handle_return(&extra, &f, &refs), extra);
+            let wrong = body.replace("this.Router().Agent().State()", "this.Router().Other().State()"); assert_eq!(super::restore_conditional_handle_return(&wrong, &f, &refs), wrong);
+            let mut bad = f.clone(); bad.obj_locals.push((12, 3)); assert_eq!(super::restore_conditional_handle_return(body, &bad, &refs), body);
+            let c = disassemble(&f.bytecode).unwrap(); let start = if switch { 8 } else { 0 };
+            let mut bad = f.clone(); bad.bytecode[c[start + 13].offset_dw] ^= 1 << 16; assert_eq!(super::restore_conditional_handle_return(body, &bad, &refs), body);
+            let mut bad = f.clone(); bad.bytecode[c[start + 7].offset_dw + 1] += 1; assert_eq!(super::restore_conditional_handle_return(body, &bad, &refs), body);
+            if switch {
+                let mut bad = f.clone(); bad.bytecode[c[0].offset_dw + 1] = 2; assert_eq!(super::restore_conditional_handle_return(body, &bad, &refs), body);
+                let mut bad = f.clone(); bad.bytecode[c[7].offset_dw + 1] = c[start + 15].offset_dw as i32 - c[7].offset_dw as i32 - 2;
+                assert_eq!(super::restore_conditional_handle_return(body, &bad, &refs), body);
+            }
+        }
     }
 
     #[test]
