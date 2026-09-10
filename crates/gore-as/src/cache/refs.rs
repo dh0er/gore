@@ -5321,6 +5321,59 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_unused_native_lifetime(fault: u8) -> Self {
+        let mut r=Self::from_test_native_default_constructor("TArray",0,true);
+        r.type_identity_by_ptr.insert(101,TypeIdentity {name:"TArray".into(),module:String::new(),namespace:String::new()});
+        r.type_by_ptr.insert(102,"FGameplayTag".into());
+        r.type_subtypes.insert(101,vec![DataType {token:5,type_info:102,..Default::default()}]);
+        r.func_by_ptr.insert(2,"$beh2".into());r.func_owner.insert(2,"TArray".into());r.func_is_method.insert(2);
+        r.func_params.insert(2,vec![]);r.func_ret.insert(2,DataType {token:0x52,..Default::default()});
+        match fault {
+            1 => {r.func_params.get_mut(&1).unwrap().push(DataType::default());},
+            2 => {r.func_ret.get_mut(&2).unwrap().token=0x44;},
+            3 => {r.const_method_ptrs.insert(2);},
+            4 => {r.func_owner.insert(2,"TOther".into());},
+            5 => {r.type_identity_by_ptr.get_mut(&101).unwrap().module="Script".into();},
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_recipient_argument(fault: u8) -> Self {
+        let names=[("UHost","AI"),("ACharacter",""),("AState",""),("UVoice",""),("FTag",""),("FContext",""),("ELoudness",""),("UAbility","")];
+        let mut r=Self::from_test_member_chain(&names);
+        for (index,(name,_)) in names.iter().enumerate() {
+            r.type_identity_by_ptr.insert(index as i64+1,TypeIdentity {name:(*name).into(),module:if index==0 {"Script"} else {""}.into(),namespace:String::new()});
+        }
+        r.prop_type_id.insert(3,1);
+        r.class_fields.insert("UHost".into(),HashMap::from([("AI".into(),"UAbility".into())]));
+        let handle=|p| DataType {token:5,type_info:p,is_object_handle:true,..Default::default()};
+        let cref=|p| DataType {token:5,type_info:p,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()};
+        for (p,name,owner,ret) in [(100,"GetState","ACharacter",handle(3)),(101,"GetState","UAbility",handle(3)),(102,"GetVoice","AState",handle(4)),(103,"Say","UVoice",DataType {token:0x41,..Default::default()})] {
+            r.func_by_ptr.insert(p,name.into());r.func_owner.insert(p,owner.into());r.func_ret.insert(p,ret);r.func_params.insert(p,vec![]);r.func_is_method.insert(p);
+            if p!=103 {r.const_method_ptrs.insert(p);}
+        }
+        r.func_params.insert(103,vec![cref(5),DataType {is_object_const:true,..handle(3)},cref(6),DataType {token:5,type_info:7,..Default::default()}]);
+        match fault {
+            1=>{r.func_ret.get_mut(&100).unwrap().is_reference=true;},
+            2=>{r.func_params.get_mut(&100).unwrap().push(DataType::default());},
+            3=>{r.func_owner.insert(102,"UOther".into());},
+            4=>{r.func_ret.get_mut(&101).unwrap().type_info=4;},
+            5=>{r.const_method_ptrs.remove(&100);},
+            6=>{r.func_params.get_mut(&103).unwrap()[0].is_reference=false;},
+            7=>{r.func_params.get_mut(&103).unwrap()[1].is_object_handle=false;},
+            8=>{r.func_params.get_mut(&103).unwrap()[2].is_object_const=false;},
+            9=>{r.func_params.get_mut(&103).unwrap()[3].token=0x44;},
+            10=>{r.func_ret.get_mut(&103).unwrap().token=0x52;},
+            11=>{r.class_fields.get_mut("UHost").unwrap().insert("AI".into(),"FOther".into());},
+            12=>{r.prop_type_id.insert(3,2);},
+            13=>{r.type_identity_by_ptr.get_mut(&3).unwrap().module="Script".into();},
+            _=>{},
+        }
+        r
+    }
+    #[cfg(test)]
     pub(crate) fn from_test_scoped_empty_event(fault: u8) -> Self {
         let mut r = Self::default();
         for (p,name) in [(1,"FEvent"),(2,"UReceiver"),(3,"FGameplayTag")] {

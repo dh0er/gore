@@ -3245,6 +3245,8 @@ fn emit_function_ctor(
         pass_trace("fold_closed_executor_bridges", &rendered);
         let rendered = restore_segment_value_lifetimes(&rendered, f, refs);
         pass_trace("restore_segment_value_lifetimes", &rendered);
+        let rendered = fold_native_recipient_argument(&rendered, f, refs);
+        pass_trace("fold_native_recipient_argument", &rendered);
         let rendered = scope_empty_native_event_arguments(&rendered, f, refs);
         pass_trace("scope_empty_native_event_arguments", &rendered);
         let rendered = fold_initial_handle_guard(&rendered, f, refs);
@@ -3607,6 +3609,30 @@ fn never_read_constructed_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
         if sole {
             out.insert(slot);
         }
+        // A native value can also have one unused constructor/destructor pair.
+        let paired = (|| {
+            let identity = refs.type_identity_by_ptr(*object_type)?;
+            if !identity.module.is_empty() || !identity.namespace.is_empty() || !is_value_struct_type(owner) { return None; }
+            let uses: Vec<_> = instrs.iter().enumerate().filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&slot)).map(|(n,_)| n).collect();
+            let [made,dropped] = uses.as_slice() else { return None; };
+            if *made != at || *dropped <= at+1 || *dropped+3 != instrs.len() || instrs[*dropped].op.name != "PSF"
+                || instrs[dropped+1].op.name != "CALLSYS" || instrs[dropped+2].op.name != "RET" { return None; }
+            for (n,name) in [(at+1,"$beh0"),(*dropped+1,"$beh2")] {
+                let p = *instrs[n].qwords.first()? as i64; let ret = refs.func_ret_by_ptr(p)?;
+                if refs.func_by_ptr(p) != Some(name) || refs.func_owner_by_ptr(p) != Some(owner) || !refs.is_method_by_ptr(p)
+                    || refs.is_const_method_by_ptr(p) || !refs.func_params_by_ptr(p)?.is_empty()
+                    || ret.token != 0x52 || ret.type_info != 0 || ret.is_reference || ret.is_object_handle { return None; }
+            }
+            let begin = ins.offset_dw as i64; let cleanup = instrs[*dropped].offset_dw as i64;
+            if instrs.iter().enumerate().any(|(n,i)| i.op.name == "JMPP" || (n>at && n<*dropped && i.op.name == "RET")
+                || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                    let t = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                    if n<at { t>begin && t<=instrs[dropped+1].offset_dw as i64 }
+                    else { t<=i.offset_dw as i64 || t>cleanup || t<=instrs[at+1].offset_dw as i64 || !instrs.iter().any(|dest| dest.offset_dw as i64 == t) }
+                }))) { return None; }
+            Some(slot)
+        })();
+        out.extend(paired);
     }
     out
 }
@@ -9271,6 +9297,63 @@ fn fold_ordered_coordinate_difference(body: &str, f: &Func, refs: &RefResolver) 
         if let Some(line) = folded { out.push(line); at += 2; } else { out.push(lines[at].to_owned()); at += 1; }
     }
     let mut result = out.join("\n"); if body.ends_with('\n') { result.push('\n'); } result
+}
+
+/// A recipient getter belongs between the surrounding arguments, before the receiver chain.
+fn fold_native_recipient_argument(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if f.ret.token != 0x52 || !body.contains(" = ") { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let w = |i: &Instr| i.words.first().map(|s| *s as i16 as i32);
+    let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+    let offsets = super::model::param_slot_map(&params,true,false,Some(refs));
+    let sites: Vec<_> = code.windows(18).filter_map(|c| {
+        if c.iter().map(|i| i.op.name).ne(["SetV1","PshV4","PSF","PshVPtr","CALLSYS","STOREOBJ","PshVPtr","PSF","PshVPtr","ADDSi","RDSPtr","CALLSYS","STOREOBJ","PshVPtr","CALLSYS","STOREOBJ","PshVPtr","CALLSYS"]) { return None; }
+        let (number,context,recipient,tag,state,component) = (w(&c[0])?,w(&c[2])?,w(&c[5])?,w(&c[7])?,w(&c[12])?,w(&c[15])?);
+        let slots = [number,context,recipient,tag,state,component];
+        if slots.iter().any(|s| *s<=0) || HashSet::from(slots).len()!=slots.len() || w(&c[1])!=Some(number)
+            || w(&c[6])!=Some(recipient) || w(&c[8])!=Some(0) || w(&c[13])!=Some(state) || w(&c[16])!=Some(component)
+            || f.obj_locals.iter().any(|(s,_)| *s==number) { return None; }
+        let local = |slot| { let types: Vec<_> = f.obj_locals.iter().filter(|(s,_)| *s==slot).map(|(_,p)| *p).collect(); let [p] = types.as_slice() else { return None; }; Some(*p) };
+        let recipient_type=local(recipient)?;let component_type=local(component)?;
+        if local(state)?!=recipient_type { return None; }
+        let native_name = |p| {let t=refs.type_identity_by_ptr(p)?;if !t.module.is_empty() || !t.namespace.is_empty() {return None;}Some(t.name.as_str())};
+        let recipient_name=native_name(recipient_type)?;let component_name=native_name(component_type)?;
+        let parameter=f.params.get(*offsets.get(&w(&c[3])?)?)?;
+        let handle = |t: &super::types::DataType,p| t.token==5 && t.type_info==p && t.is_object_handle && !t.is_reference;
+        if w(&c[3])?>=0 || parameter.name.is_empty() || !handle(&parameter.ty,parameter.ty.type_info) {return None;}
+        let ptr = |n: usize| c[n].qwords.first().map(|p| *p as i64);
+        let get=ptr(4)?;let own=ptr(11)?;let voice=ptr(14)?;let say=ptr(17)?;
+        for (p,result,owner) in [(get,recipient_type,native_name(parameter.ty.type_info)?),(own,recipient_type,refs.func_owner_by_ptr(own)?),(voice,component_type,recipient_name)] {
+            if !refs.is_method_by_ptr(p) || !refs.is_const_method_by_ptr(p) || refs.func_owner_by_ptr(p)!=Some(owner)
+                || !refs.func_params_by_ptr(p)?.is_empty() || !handle(refs.func_ret_by_ptr(p)?,result) {return None;}
+        }
+        let [tag_arg,recipient_arg,context_arg,enum_arg]=refs.func_params_by_ptr(say)? else {return None;};
+        let constant_ref = |t: &super::types::DataType,p| t.token==5 && t.type_info==p && t.is_reference && !t.is_object_handle && t.is_object_const && t.is_read_only;
+        let ret=refs.func_ret_by_ptr(say)?;
+        if !refs.is_method_by_ptr(say) || refs.is_const_method_by_ptr(say) || refs.func_owner_by_ptr(say)!=Some(component_name)
+            || ret.token!=0x41 || ret.type_info!=0 || ret.is_reference || ret.is_object_handle
+            || !constant_ref(tag_arg,local(tag)?) || !constant_ref(context_arg,local(context)?)
+            || !handle(recipient_arg,recipient_type) || !recipient_arg.is_object_const
+            || enum_arg.token!=5 || enum_arg.is_reference || enum_arg.is_object_handle || enum_arg.is_object_const || enum_arg.is_read_only {return None;}
+        let enum_name=native_name(enum_arg.type_info)?;
+        if !enum_name.starts_with('E') || !is_value_struct_type(native_name(local(tag)?)?) || !is_value_struct_type(native_name(local(context)?)?) {return None;}
+        let id=*c[9].dwords.first()? as i32;let owner=refs.type_identity_by_id(id)?;let (field,old)=refs.member_identity(id,w(&c[9])?)?;
+        if refs.type_identity_by_id(old)?!=owner || !owner.namespace.is_empty()
+            || !is_object_handle_type(refs.own_field_type_by_class(&owner.name,field)?)
+            || code.iter().any(|i| i.op.name=="JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let t=i.offset_dw as i64+2+*d as i32 as i64;t>c[0].offset_dw as i64 && t<=c[17].offset_dw as i64
+            }))) {return None;}
+        let value=format!("{}.{}()",parameter.name,refs.func_by_ptr(get)?);
+        let call=format!("this.{field}.{}().{}().{}(local_{tag}, local_{recipient}, local_{context}, {enum_name}({}));",refs.func_by_ptr(own)?,refs.func_by_ptr(voice)?,refs.func_by_ptr(say)?,*c[0].dwords.first()? as i32);
+        Some((recipient,recipient_name.to_owned(),value,call))
+    }).collect();
+    let [(slot,ty,value,call)] = sites.as_slice() else {return body.to_owned();};
+    let name=format!("local_{slot}");if count_ident(body,&name)!=2 {return body.to_owned();}
+    let declaration=format!("{ty} {name} = {value};");let lines:Vec<_>=body.lines().collect();
+    let matches:Vec<_>=lines.windows(2).enumerate().filter(|(_,c)| c[0].trim()==declaration && c[1].trim()==call && indent_of(c[0])==indent_of(c[1])).map(|(at,_)| at).collect();
+    let [at]=matches.as_slice() else {return body.to_owned();};
+    let mut out:Vec<_>=lines.iter().map(|l| (*l).to_owned()).collect();out[*at+1]=rename_ident(&out[*at+1],&name,value);out.remove(*at);
+    let mut result=out.join("\n");if body.ends_with('\n') {result.push('\n');}result
 }
 
 /// An empty mutable event lives only inside the branch that dispatches it.
@@ -44097,6 +44180,49 @@ mod literal_value_lifetime_tests {
             format!("{body}Use(local_90_2);\n"), body.replace("if (Math::Abs", "while (Math::Abs")] {
             assert_eq!(fold(&text,&f,&refs),text);
         }
+    }
+
+    #[test]
+    fn unused_native_container_keeps_its_closed_constructor_destructor_lifetime() {
+        let mut f=function(&[("CpyVtoR1",&[0]),("JLowZ",&[]),("PSF",&[14]),("CALLSYS",&[]),("CpyVtoR1",&[0]),("PSF",&[14]),("CALLSYS",&[]),("RET",&[1])]);
+        f.ret.token=0x52;f.obj_locals=vec![(14,101)];let c=disassemble(&f.bytecode).unwrap();
+        f.bytecode[c[1].offset_dw+1]=c[7].offset_dw as i32-c[1].offset_dw as i32-2;
+        f.bytecode[c[3].offset_dw+1]=1;f.bytecode[c[6].offset_dw+1]=2;
+        let refs=RefResolver::from_test_unused_native_lifetime(0);
+        assert_eq!(super::never_read_constructed_slots(&f,&refs),HashSet::from([14]));
+        for fault in 1..=5 {assert!(super::never_read_constructed_slots(&f,&RefResolver::from_test_unused_native_lifetime(fault)).is_empty(),"metadata {fault}");}
+        let reject=|bad:&Func|assert!(super::never_read_constructed_slots(bad,&refs).is_empty());
+        let mut bad=f.clone();bad.obj_locals.push((14,101));reject(&bad);
+        let mut bad=f.clone();bad.bytecode[c[1].offset_dw+1]=c[5].offset_dw as i32-c[1].offset_dw as i32-2;reject(&bad);
+        let mut bad=f.clone();bad.bytecode.extend(function(&[("PSF",&[14])]).bytecode);reject(&bad);
+        let mut bad=f.clone();bad.bytecode[c[4].offset_dw]=(bad.bytecode[c[4].offset_dw]&!255)|function(&[("RET",&[0])]).bytecode[0];reject(&bad);
+        let mut bad=f.clone();bad.ret=DataType {token:5,type_info:101,..Default::default()};reject(&bad);
+    }
+
+    #[test]
+    fn recipient_getter_is_evaluated_inside_the_native_argument_frame() {
+        let mut f=function(&[("SetV1",&[69]),("PshV4",&[69]),("PSF",&[50]),("PshVPtr",&[65534]),("CALLSYS",&[]),
+            ("STOREOBJ",&[18]),("PshVPtr",&[18]),("PSF",&[32]),("PshVPtr",&[0]),("ADDSi",&[0]),("RDSPtr",&[]),
+            ("CALLSYS",&[]),("STOREOBJ",&[16]),("PshVPtr",&[16]),("CALLSYS",&[]),("STOREOBJ",&[68]),("PshVPtr",&[68]),("CALLSYS",&[]),("RET",&[])]);
+        f.ret.token=0x52;f.obj_locals=vec![(50,6),(18,3),(32,5),(16,3),(68,4)];
+        f.params=vec![super::super::model::Param {name:"Other".into(),ty:DataType {token:5,type_info:2,is_object_handle:true,..Default::default()},flags:0}];
+        let c=disassemble(&f.bytecode).unwrap();f.bytecode[c[0].offset_dw+1]=4;f.bytecode[c[9].offset_dw+1]=1;
+        for (n,p) in [(4,100),(11,101),(14,102),(17,103)] {f.bytecode[c[n].offset_dw+1]=p;}
+        let body="    AState local_18 = Other.GetState();\n    this.AI.GetState().GetVoice().Say(local_32, local_18, local_50, ELoudness(4));\n";
+        let expected="    this.AI.GetState().GetVoice().Say(local_32, Other.GetState(), local_50, ELoudness(4));\n";
+        let refs=RefResolver::from_test_recipient_argument(0);
+        assert_eq!(super::fold_native_recipient_argument(body,&f,&refs),expected);
+        assert_eq!(super::fold_native_recipient_argument(expected,&f,&refs),expected);
+        for fault in 1..=13 {assert_eq!(super::fold_native_recipient_argument(body,&f,&RefResolver::from_test_recipient_argument(fault)),body,"metadata {fault}");}
+        for bad in [format!("{body}Use(local_18);\n"),body.replace("Other.GetState()","Other.Other()"),body.replace("local_32, local_18","local_50, local_18"),body.replace("ELoudness(4)","ELoudness(3)"),body.replace(";\n    this.",";\n    Between();\n    this.")] {
+            assert_eq!(super::fold_native_recipient_argument(&bad,&f,&refs),bad);
+        }
+        let reject=|bad:&Func|assert_eq!(super::fold_native_recipient_argument(body,bad,&refs),body);
+        let mut bad=f.clone();bad.params[0].ty.is_reference=true;reject(&bad);
+        let mut bad=f.clone();bad.obj_locals.push((18,3));reject(&bad);
+        let mut bad=f.clone();bad.obj_locals.push((69,7));reject(&bad);
+        let mut bad=f.clone();bad.bytecode[c[6].offset_dw]=(17<<16)|(bad.bytecode[c[6].offset_dw]&65535);reject(&bad);
+        let mut bad=f.clone();let mut jump=function(&[("JMP",&[])]).bytecode;jump[1]=c[3].offset_dw as i32-bad.bytecode.len() as i32-2;bad.bytecode.extend(jump);reject(&bad);
     }
 
     #[test]
