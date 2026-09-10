@@ -22,7 +22,6 @@ AI.NativeAICommands	2	0	0
 AI.Relationship.PersonalRelationshipModifiers	1	0	0
 AI.States.AIState_FollowCharacterAggressive	1	0	0
 AI.States.AIState_GuideCharacter	2	0	0
-AI.States.AIState_InteractWinchGate	1	0	0
 AI.States.FightAI.AIState_PerceptionResponse	2	0	0
 AI.States.FightAI.AssessGoToDailyRoutineState.UAIState_AssessGoToDailyRoutine	1	0	0
 AI.States.FightAI.CharmedState.AIState_Charmed	1	0	0

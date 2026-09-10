@@ -5292,6 +5292,15 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_native_fname_copy_declarations(fault: u8) -> Self {
+        let mut r = Self::from_test_native_vector_copy_declarations(fault);
+        r.type_identity_by_ptr.get_mut(&1).unwrap().name = "FName".into();
+        for ptr in [10, 11] { r.func_owner.insert(ptr, "FName".into()); }
+        if fault == 5 { r.type_identity_by_ptr.get_mut(&1).unwrap().name = "FVector".into(); }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_native_vector_copy_declarations(fault:u8)->Self {
         let mut r=Self::default();
         r.type_identity_by_ptr.insert(1,TypeIdentity {name:"FVector".into(),module:String::new(),namespace:String::new()});
