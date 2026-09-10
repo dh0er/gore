@@ -5306,6 +5306,56 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_navigation_radius_product(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FVector",""),("UActor",""),("UState","Scale"),("UTask","State")]);
+        for (id,name) in [(1,"FVector"),(2,"UActor"),(3,"UState"),(4,"UTask")] {
+            r.type_identity_by_ptr.insert(id,TypeIdentity { name:name.into(),module:if id>=3 { "Fixture".into() } else { String::new() },namespace:String::new() });
+        }
+        r.prop_type_id.insert(7,3); r.prop_type_id.insert(9,4);
+        r.class_fields.entry("UState".into()).or_default().insert("Scale".into(),"float".into());
+        r.class_fields.entry("UTask".into()).or_default().insert("State".into(),"UState".into());
+        let scalar = |token| DataType { token,..Default::default() };
+        let value = |p| DataType { token:5,type_info:p,..Default::default() };
+        let handle = DataType { is_object_handle:true,..value(2) };
+        let vector_ref = DataType { is_reference:true,is_object_const:true,is_read_only:true,..value(1) };
+        for (p,owner,name,ret,args) in [(100,"UState","Actor",handle.clone(),vec![]),(101,"UActor","Radius",scalar(0x50),vec![]),
+            (102,"UActor","Location",value(1),vec![]),(103,"","Probe",scalar(0x41),vec![handle,vector_ref.clone(),vector_ref,scalar(0x50),DataType { is_reference:true,..scalar(0x50) }])] {
+            r.func_by_ptr.insert(p,name.into()); r.func_ret.insert(p,ret); r.func_params.insert(p,args);
+            if !owner.is_empty() { r.func_owner.insert(p,owner.into()); r.func_is_method.insert(p); r.const_method_ptrs.insert(p); }
+        }
+        match fault {
+            1 => { r.func_ret.get_mut(&101).unwrap().token = 0x51; },
+            2 => { r.func_ret.get_mut(&102).unwrap().is_reference = true; },
+            3 => { r.func_params.get_mut(&103).unwrap()[4].is_read_only = true; },
+            4 => { r.class_fields.get_mut("UState").unwrap().insert("Scale".into(),"float32".into()); },
+            5 => { r.prop_type_id.insert(7,4); },
+            6 => { r.duplicate_prop_keys.insert(9); },
+            7 => { r.func_is_method.insert(103); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_eager_vector_comparison(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FVector","")]);
+        r.type_identity_by_ptr.insert(1,TypeIdentity { name:"FVector".into(),module:String::new(),namespace:String::new() });
+        r.func_by_ptr.insert(100,"Measure".into()); r.func_owner.insert(100,"FVector".into());
+        r.func_is_method.insert(100); r.const_method_ptrs.insert(100);
+        r.func_ret.insert(100,DataType { token:0x51,..Default::default() });
+        r.func_params.insert(100,vec![DataType { token:5,type_info:1,is_reference:true,is_object_const:true,is_read_only:true,..Default::default() }]);
+        match fault {
+            1 => { r.func_ret.get_mut(&100).unwrap().token = 0x50; },
+            2 => { r.func_ret.get_mut(&100).unwrap().is_reference = true; },
+            3 => { r.func_params.get_mut(&100).unwrap()[0].is_read_only = false; },
+            4 => { r.const_method_ptrs.remove(&100); },
+            5 => { r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_signed_vector_projection(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("FVector",""),("FVector2D","")]);
         for (id,name) in [(1,"FVector"),(2,"FVector2D")] {

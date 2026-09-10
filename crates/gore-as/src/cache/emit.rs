@@ -3245,6 +3245,8 @@ fn emit_function_ctor(
         pass_trace("fold_closed_executor_bridges", &rendered);
         let rendered = restore_segment_value_lifetimes(&rendered, f, refs);
         pass_trace("restore_segment_value_lifetimes", &rendered);
+        let rendered = restore_navigation_radius_product(&rendered, f, refs);
+        pass_trace("restore_navigation_radius_product", &rendered);
         let rendered = fold_signed_vector_projection(&rendered, f, refs);
         pass_trace("fold_signed_vector_projection", &rendered);
         let rendered = fold_native_raycast_sum_origin(&rendered, f, refs);
@@ -9262,6 +9264,82 @@ fn fold_ordered_coordinate_difference(body: &str, f: &Func, refs: &RefResolver) 
     }
     let mut result = out.join("\n"); if body.ends_with('\n') { result.push('\n'); } result
 }
+
+/// A radius product precedes the navigation call's output argument and conversions.
+fn restore_navigation_radius_product(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if !body.contains("float32((") || f.ret.token != 0x52 { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let w = |i: &Instr,n: usize| i.words.get(n).map(|s| *s as i16 as i32);
+    let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+    let offsets = super::model::param_slot_map(&params,true,false,Some(refs));
+    let sites: Vec<_> = code.windows(37).enumerate().filter_map(|(at,c)| {
+        if c.iter().map(|i| i.op.name).ne(["PshVPtr","ADDSi","RDSPtr","CALLSYS","STOREOBJ","PshVPtr","CALLSYS","CpyRtoV4","fTOd",
+            "PshVPtr","ADDSi","RDSPtr","ADDSi","PopRPtr","RDR8","MULd","PSF","ADDd","dTOf","PshV4","PshVPtr","PSF","PshVPtr","ADDSi","RDSPtr","CALLSYS","STOREOBJ","PshVPtr","CALLSYS","PSF","PshVPtr","ADDSi","RDSPtr","CALLSYS","STOREOBJ","PshVPtr","CALLSYS"]) { return None; }
+        let (actor,narrow,product,wide,output,vector) = (w(&c[4],0)?,w(&c[7],0)?,w(&c[8],0)?,w(&c[14],0)?,w(&c[16],0)?,w(&c[21],0)?);
+        let slots = [actor,narrow,product,wide,output,vector];
+        if slots.iter().any(|s| *s <= 0) || HashSet::from(slots).len() != slots.len()
+            || [0,9,22,30].iter().any(|n| w(&c[*n],0) != Some(0)) || [5,26,27,34,35].iter().any(|n| w(&c[*n],0) != Some(actor))
+            || w(&c[8],1) != Some(narrow) || w(&c[15],0) != Some(product) || w(&c[15],1) != Some(product) || w(&c[15],2) != Some(wide)
+            || w(&c[17],0) != Some(wide) || w(&c[17],1) != Some(product) || w(&c[18],0) != Some(narrow) || w(&c[18],1) != Some(wide)
+            || w(&c[19],0) != Some(narrow) || w(&c[29],0) != Some(vector)
+            || [10,23,31].iter().any(|n| c[*n].words != c[1].words || c[*n].dwords != c[1].dwords)
+            || [25,33].iter().any(|n| c[*n].qwords != c[3].qwords) { return None; }
+        let local = |slot| {
+            let values: Vec<_> = f.obj_locals.iter().filter(|(s,_)| *s == slot).map(|(_,p)| *p).collect();
+            let [p] = values.as_slice() else { return None; }; Some(*p)
+        };
+        let actor_type = local(actor)?; let vector_type = local(vector)?; let identity = refs.type_identity_by_ptr(vector_type)?;
+        if identity.name != "FVector" || !identity.module.is_empty() || !identity.namespace.is_empty()
+            || f.obj_locals.iter().any(|(s,_)| [narrow,product,wide,output].contains(s)) { return None; }
+        let field = |n: usize| {
+            let id = *c[n].dwords.first()? as i32; let owner = refs.type_identity_by_id(id)?;
+            let (name,old) = refs.member_identity(id,w(&c[n],0)?)?;
+            if owner.module.is_empty() || !owner.namespace.is_empty() || refs.type_identity_by_id(old)? != owner { return None; }
+            Some((name,refs.own_field_type_by_class(&owner.name,name)?,owner.name.as_str()))
+        };
+        let (state,state_type,_) = field(1)?; let (factor,factor_type,factor_owner) = field(12)?;
+        if state_type != factor_owner || factor_type != "float" { return None; }
+        let scalar = |t: &super::types::DataType,token,reference| t.token == token && t.type_info == 0 && t.is_reference == reference && !t.is_object_handle;
+        let vector_ref = |t: &super::types::DataType| t.token == 5 && t.type_info == vector_type && t.is_reference && t.is_object_const && t.is_read_only && !t.is_object_handle;
+        let parameter = |slot| f.params.get(*offsets.get(&slot)?);
+        let reach = parameter(w(&c[17],2)?)?; let target = parameter(w(&c[20],0)?)?;
+        if !scalar(&reach.ty,0x51,false) || !vector_ref(&target.ty) || reach.name.is_empty() || target.name.is_empty() { return None; }
+        let ptr = |n: usize| c[n].qwords.first().map(|p| *p as i64);
+        for n in [3,6,28] {
+            let p = ptr(n)?;
+            if !refs.is_method_by_ptr(p) || !refs.is_const_method_by_ptr(p) || !refs.func_params_by_ptr(p)?.is_empty() { return None; }
+        }
+        let actor_ret = refs.func_ret_by_ptr(ptr(3)?)?; let location_ret = refs.func_ret_by_ptr(ptr(28)?)?;
+        if actor_ret.token != 5 || actor_ret.type_info != actor_type || !actor_ret.is_object_handle || actor_ret.is_reference
+            || !scalar(refs.func_ret_by_ptr(ptr(6)?)?,0x50,false) || refs.func_owner_by_ptr(ptr(6)?)? != refs.func_owner_by_ptr(ptr(28)?)?
+            || location_ret.token != 5 || location_ret.type_info != vector_type || location_ret.is_reference || location_ret.is_object_handle { return None; }
+        let query = ptr(36)?; let args = refs.func_params_by_ptr(query)?;
+        if refs.is_method_by_ptr(query) || !scalar(refs.func_ret_by_ptr(query)?,0x41,false) || args.len() != 5
+            || args[0].token != 5 || args[0].type_info != actor_type || !args[0].is_object_handle || args[0].is_reference
+            || !vector_ref(&args[1]) || !vector_ref(&args[2]) || !scalar(&args[3],0x50,false) || !scalar(&args[4],0x50,true)
+            || args[4].is_object_const || args[4].is_read_only
+            || code.iter().enumerate().filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&product)).map(|(n,_)| n).ne([at+8,at+15,at+17])
+            || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let t = i.offset_dw as i64 + 2 + *d as i32 as i64; t > c[0].offset_dw as i64 && t <= c[36].offset_dw as i64
+            }))) { return None; }
+        let receiver = format!("this.{state}.{}()",refs.func_by_ptr(ptr(3)?)?);
+        let value = format!("({receiver}.{}() * this.{state}.{factor})",refs.func_by_ptr(ptr(6)?)?);
+        let name = refs.func_by_ptr(query)?; let ns = refs.func_ns_by_ptr(query).unwrap_or("");
+        let query = if ns.is_empty() { name.to_owned() } else { format!("{ns}::{name}") };
+        let rhs = format!("{query}({receiver}, {receiver}.{}(), {}, float32(({value} + {})), local_{output})",refs.func_by_ptr(ptr(28)?)?,target.name,reach.name);
+        Some((product,value,rhs))
+    }).collect();
+    let [(slot,value,rhs)] = sites.as_slice() else { return body.to_owned(); };
+    let name = format!("local_{slot}"); if count_ident(body,&name) != 0 { return body.to_owned(); }
+    let lines: Vec<_> = body.lines().collect();
+    let matches: Vec<_> = lines.iter().enumerate().filter(|(_,l)| l.trim_start().starts_with("bool local_")
+        && declaration_with_initializer(l).is_some_and(|(_,_,r)| r == *rhs)).map(|(at,_)| at).collect();
+    let [at] = matches.as_slice() else { return body.to_owned(); };
+    let mut result: Vec<_> = lines.iter().map(|l| (*l).to_owned()).collect();
+    result[*at] = result[*at].replace(value,&name); result.insert(*at,format!("{}float {name} = {value};",indent_of(lines[*at])));
+    let mut result = result.join("\n"); if body.ends_with('\n') { result.push('\n'); } result
+}
+
 
 /// A conditional float32 sign and its vector intermediates belong to one expression.
 fn fold_signed_vector_projection(body: &str, f: &Func, refs: &RefResolver) -> String {
@@ -16323,6 +16401,40 @@ fn inline_copied_bool_literal_declarations(body: &str, f: &Func) -> String {
         else { at += 1; }
     }
     let mut out = lines.join("\n"); if body.ends_with('\n') { out.push('\n'); } out
+}
+
+
+/// A vector measurement is evaluated before either arm of a scalar AND.
+fn eager_vector_comparison_sites(f: &Func, refs: &RefResolver, code: &[Instr]) -> HashSet<(i32, String)> {
+    if f.ret.token != 0x41 || f.ret.is_reference || f.ret.is_object_handle
+        || code.iter().any(|i| i.op.name == "JMPP") { return HashSet::new(); }
+    let w = |i: &Instr,n: usize| i.words.get(n).map(|s| *s as i16 as i32);
+    let jump = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+    code.windows(13).enumerate().filter_map(|(at,c)| {
+        if c.iter().map(|i| i.op.name).ne(["PSF","CALLSYS","CpyRtoV8","CMPd","JNP","SetV4","JMP","CMPd","TNP","CpyRtoV4","CpyVtoV4","CpyVtoR1","JLowZ"])
+            || c[5].dwords.first() != Some(&0) || jump(&c[4]) != Some(c[7].offset_dw as i64)
+            || jump(&c[6]) != Some(c[11].offset_dw as i64)
+            || !jump(&c[12]).is_some_and(|t| t > c[12].offset_dw as i64 && code.iter().any(|i| i.offset_dw as i64 == t)) { return None; }
+        let (receiver,value,left,right,join,scratch) = (w(&c[0],0)?,w(&c[2],0)?,w(&c[3],0)?,w(&c[3],1)?,w(&c[5],0)?,w(&c[9],0)?);
+        let slots = [receiver,value,left,right,join,scratch];
+        if slots.iter().any(|s| *s <= 0) || HashSet::from(slots).len() != slots.len()
+            || w(&c[7],0) != Some(value) || w(&c[7],1) != Some(right)
+            || w(&c[10],0) != Some(join) || w(&c[10],1) != Some(scratch) || w(&c[11],0) != Some(join)
+            || f.obj_locals.iter().any(|(s,_)| [value,left,right,join,scratch].contains(s)) { return None; }
+        let types: Vec<_> = f.obj_locals.iter().filter(|(s,_)| *s == receiver).map(|(_,p)| *p).collect();
+        let [vector] = types.as_slice() else { return None; };
+        let identity = refs.type_identity_by_ptr(*vector)?;
+        if identity.name != "FVector" || !identity.module.is_empty() || !identity.namespace.is_empty() { return None; }
+        let method = *c[1].qwords.first()? as i64; let ret = refs.func_ret_by_ptr(method)?;
+        let [arg] = refs.func_params_by_ptr(method)? else { return None; };
+        if !refs.is_method_by_ptr(method) || !refs.is_const_method_by_ptr(method) || refs.func_owner_by_ptr(method) != Some(identity.name.as_str())
+            || ret.token != 0x51 || ret.type_info != 0 || ret.is_reference || ret.is_object_handle
+            || arg.token != 5 || arg.type_info != *vector || !arg.is_reference || !arg.is_object_const || !arg.is_read_only || arg.is_object_handle
+            || code.iter().enumerate().filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&value)).map(|(n,_)| n).ne([at+2,at+7])
+            || code.iter().any(|i| i.op.name.starts_with('J') && ![c[4].offset_dw,c[6].offset_dw].contains(&i.offset_dw)
+                && jump(i).is_some_and(|t| t > c[0].offset_dw as i64 && t <= c[12].offset_dw as i64)) { return None; }
+        Some((value,refs.func_by_ptr(method)?.to_owned()))
+    }).collect()
 }
 
 
@@ -29342,6 +29454,7 @@ fn named_value_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, String)> {
     let mut out = retained_text_comparison_sites(f, refs, &instrs);
     out.extend(named_static_name_predicate_sites(f, refs, &instrs));
     out.extend(ordered_distance_root_sites(f, refs, &instrs));
+    out.extend(eager_vector_comparison_sites(f, refs, &instrs));
     // A native handle getter finishes before a global value argument is
     // pushed for a call through its null-guarded cast. Inlining that getter
     // moves it behind the argument; retain only this closed getter-result site.
@@ -43727,6 +43840,62 @@ mod literal_value_lifetime_tests {
             format!("{body}Use(local_90_2);\n"), body.replace("if (Math::Abs", "while (Math::Abs")] {
             assert_eq!(fold(&text,&f,&refs),text);
         }
+    }
+
+    #[test]
+    fn navigation_radius_product_precedes_output_argument() {
+        let mut f = function(&[("PshVPtr",&[0]),("ADDSi",&[0]),("RDSPtr",&[]),("CALLSYS",&[]),("STOREOBJ",&[6]),("PshVPtr",&[6]),("CALLSYS",&[]),("CpyRtoV4",&[7]),("fTOd",&[12,7]),
+            ("PshVPtr",&[0]),("ADDSi",&[0]),("RDSPtr",&[]),("ADDSi",&[0]),("PopRPtr",&[]),("RDR8",&[10]),("MULd",&[12,12,10]),("PSF",&[13]),("ADDd",&[10,12,(-4i16) as u16]),
+            ("dTOf",&[7,10]),("PshV4",&[7]),("PshVPtr",&[(-2i16) as u16]),("PSF",&[20]),("PshVPtr",&[0]),("ADDSi",&[0]),("RDSPtr",&[]),("CALLSYS",&[]),("STOREOBJ",&[6]),
+            ("PshVPtr",&[6]),("CALLSYS",&[]),("PSF",&[20]),("PshVPtr",&[0]),("ADDSi",&[0]),("RDSPtr",&[]),("CALLSYS",&[]),("STOREOBJ",&[6]),("PshVPtr",&[6]),("CALLSYS",&[])]);
+        f.ret.token = 0x52; f.obj_locals = vec![(6,2),(20,1)];
+        f.params = vec![super::super::model::Param { name:"Target".into(),ty:DataType { token:5,type_info:1,is_reference:true,is_object_const:true,is_read_only:true,..Default::default() },flags:1 },
+            super::super::model::Param { name:"Reach".into(),ty:DataType { token:0x51,..Default::default() },flags:0 }];
+        let c = disassemble(&f.bytecode).unwrap();
+        for (at,value) in [(1,4),(3,100),(6,101),(10,4),(12,3),(23,4),(25,100),(28,102),(31,4),(33,100),(36,103)] { f.bytecode[c[at].offset_dw+1] = value; }
+        let body = "    float32 local_13;\n    bool local_21 = Probe(this.State.Actor(), this.State.Actor().Location(), Target, float32(((this.State.Actor().Radius() * this.State.Scale) + Reach)), local_13);\n";
+        let expected = "    float32 local_13;\n    float local_12 = (this.State.Actor().Radius() * this.State.Scale);\n    bool local_21 = Probe(this.State.Actor(), this.State.Actor().Location(), Target, float32((local_12 + Reach)), local_13);\n";
+        let refs = RefResolver::from_test_navigation_radius_product(0);
+        assert_eq!(super::restore_navigation_radius_product(body,&f,&refs),expected);
+        assert_eq!(super::restore_navigation_radius_product(expected,&f,&refs),expected);
+        for fault in 1..=7 { assert_eq!(super::restore_navigation_radius_product(body,&f,&RefResolver::from_test_navigation_radius_product(fault)),body,"metadata {fault}"); }
+        for bad in [format!("{body}    Use(local_12);\n"),body.replace("this.State.Scale","this.State.Other"),body.replace("Probe(","Other("),body.replace(" + Reach"," - Reach")] {
+            assert_eq!(super::restore_navigation_radius_product(&bad,&f,&refs),bad);
+        }
+        let reject = |bad: &Func| assert_eq!(super::restore_navigation_radius_product(body,bad,&refs),body);
+        let mut bad = f.clone(); bad.params[1].ty.token = 0x50; reject(&bad);
+        let mut bad = f.clone(); bad.obj_locals.push((6,2)); reject(&bad);
+        let mut bad = f.clone(); bad.bytecode[c[15].offset_dw] ^= 1 << 16; reject(&bad);
+        let mut bad = f.clone(); bad.bytecode.extend(function(&[("PshV8",&[12])]).bytecode); reject(&bad);
+        let mut bad = f.clone(); let mut prefix = function(&[("JMP",&[])]).bytecode; prefix[1] = c[15].offset_dw as i32;
+        bad.bytecode.splice(0..0,prefix); reject(&bad);
+    }
+
+    #[test]
+    fn vector_measurement_stays_before_scalar_short_circuit() {
+        let mut f = function(&[("PSF",&[10]),("CALLSYS",&[]),("CpyRtoV8",&[28]),("CMPd",&[26,24]),("JNP",&[]),("SetV4",&[2]),("JMP",&[]),
+            ("CMPd",&[28,24]),("TNP",&[]),("CpyRtoV4",&[1]),("CpyVtoV4",&[2,1]),("CpyVtoR1",&[2]),("JLowZ",&[]),("SetV1",&[1]),("RET",&[])]);
+        f.ret.token = 0x41; f.obj_locals = vec![(10,1)];
+        let c = disassemble(&f.bytecode).unwrap(); f.bytecode[c[1].offset_dw+1] = 100;
+        for (at,target) in [(4,7),(6,11),(12,14)] { f.bytecode[c[at].offset_dw+1] = c[target].offset_dw as i32 - c[at].offset_dw as i32 - 2; }
+        let refs = RefResolver::from_test_eager_vector_comparison(0);
+        let sites = super::eager_vector_comparison_sites(&f,&refs,&disassemble(&f.bytecode).unwrap());
+        assert_eq!(sites,HashSet::from([(28,"Measure".into())]));
+        assert!(super::named_value_sites(&f,&refs).contains(&(28,"Measure".into())));
+        assert!(super::is_named_value_site(28,"this.State.Actor().Location().Measure(local_16)",&sites));
+        assert!(!super::is_named_value_site(28,"local_10.Other(local_16)",&sites));
+        assert!(!super::is_named_value_site(24,"local_10.Measure(local_16)",&sites));
+        for fault in 1..=5 { assert!(super::eager_vector_comparison_sites(&f,&RefResolver::from_test_eager_vector_comparison(fault),&disassemble(&f.bytecode).unwrap()).is_empty(),"metadata {fault}"); }
+        let reject = |bad: &Func| assert!(super::eager_vector_comparison_sites(bad,&refs,&disassemble(&bad.bytecode).unwrap()).is_empty());
+        let mut bad = f.clone(); bad.ret.token = 0x52; reject(&bad);
+        let mut bad = f.clone(); bad.obj_locals.push((10,1)); reject(&bad);
+        let mut bad = f.clone(); bad.obj_locals.push((28,1)); reject(&bad);
+        let mut bad = f.clone(); bad.bytecode[c[4].offset_dw+1] += 1; reject(&bad);
+        let mut bad = f.clone(); bad.bytecode[c[7].offset_dw+1] ^= 1; reject(&bad);
+        let mut bad = f.clone(); bad.bytecode.extend(function(&[("PshV8",&[28])]).bytecode); reject(&bad);
+        let mut bad = f.clone(); let mut prefix = function(&[("JMP",&[])]).bytecode; prefix[1] = c[3].offset_dw as i32;
+        bad.bytecode.splice(0..0,prefix); reject(&bad);
+        let mut bad = f.clone(); bad.bytecode.splice(0..0,function(&[("JMPP",&[90])]).bytecode); reject(&bad);
     }
 
     #[test]

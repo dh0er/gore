@@ -31,7 +31,7 @@ AI.States.FightAI.CombatEndActionsState.AIState_CombatEndActions	1	0	0
 AI.States.FightAI.CombatState.AIGroup_Attackers	2	0	0
 AI.States.FightAI.CombatState.AIGroup_Combat	1	0	0
 AI.States.FightAI.CombatState.AIState_OGCombat	5	0	0
-AI.States.FightAI.CombatState.CombatMoves	13	0	0
+AI.States.FightAI.CombatState.CombatMoves	11	0	0
 AI.States.FightAI.CombatState.CombatOperations	1	0	0
 AI.States.FightAI.CombatState.CombatTestClasses	1	0	0
 AI.States.FightAI.CombatState.Positioning.AICombat_Positioning	11	0	0
