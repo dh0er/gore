@@ -5306,6 +5306,38 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_signed_vector_projection(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FVector",""),("FVector2D","")]);
+        for (id,name) in [(1,"FVector"),(2,"FVector2D")] {
+            r.type_identity_by_ptr.insert(id,TypeIdentity { name:name.into(),module:String::new(),namespace:String::new() });
+        }
+        let value = |p| DataType { token:5,type_info:p,..Default::default() };
+        let reference = |p,constant| DataType { is_reference:true,is_object_const:constant,is_read_only:constant,..value(p) };
+        for (p,owner,name,constant,ret,args) in [
+            (100,"FVector","opMul",true,value(1),vec![DataType { token:0x51,..Default::default() }]),
+            (101,"FVector","opAdd",true,value(1),vec![reference(1,true)]),
+            (102,"FVector2D","opSub",true,value(2),vec![reference(2,true)]),
+            (103,"FVector2D","opAssign",false,reference(2,false),vec![reference(2,true)]),
+            (200,"UTask","Project",true,value(2),vec![reference(1,true)]),
+        ] {
+            r.func_by_ptr.insert(p,name.into()); r.func_owner.insert(p,owner.into());
+            r.func_ret.insert(p,ret); r.func_params.insert(p,args); r.func_is_method.insert(p);
+            if constant { r.const_method_ptrs.insert(p); }
+        }
+        r.funcid_to_ptr.insert(200,200);
+        match fault {
+            1 => { r.func_params.get_mut(&100).unwrap()[0].token = 0x50; },
+            2 => { r.func_ret.get_mut(&200).unwrap().is_reference = true; },
+            3 => { r.func_params.get_mut(&200).unwrap()[0].is_reference = false; },
+            4 => { r.func_ret.get_mut(&103).unwrap().is_reference = false; },
+            5 => { r.func_params.get_mut(&101).unwrap()[0].type_info = 2; },
+            6 => { r.const_method_ptrs.insert(103); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_native_raycast_origin(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("FVector",""),("UActor",""),("UState",""),("TSubclassOf",""),("UFilter",""),("UBase","State"),("UMove","Length"),("UClass",""),("UObject","")]);
         for (id,name) in [(1,"FVector"),(2,"UActor"),(3,"UState"),(4,"TSubclassOf"),(5,"UFilter"),(6,"UBase"),(7,"UMove"),(8,"UClass"),(9,"UObject")] {

@@ -3245,6 +3245,8 @@ fn emit_function_ctor(
         pass_trace("fold_closed_executor_bridges", &rendered);
         let rendered = restore_segment_value_lifetimes(&rendered, f, refs);
         pass_trace("restore_segment_value_lifetimes", &rendered);
+        let rendered = fold_signed_vector_projection(&rendered, f, refs);
+        pass_trace("fold_signed_vector_projection", &rendered);
         let rendered = fold_native_raycast_sum_origin(&rendered, f, refs);
         pass_trace("fold_native_raycast_sum_origin", &rendered);
         let rendered = restore_native_value_copy_declarations(&rendered, f, refs);
@@ -9259,6 +9261,77 @@ fn fold_ordered_coordinate_difference(body: &str, f: &Func, refs: &RefResolver) 
         if let Some(line) = folded { out.push(line); at += 2; } else { out.push(lines[at].to_owned()); at += 1; }
     }
     let mut result = out.join("\n"); if body.ends_with('\n') { result.push('\n'); } result
+}
+
+/// A conditional float32 sign and its vector intermediates belong to one expression.
+fn fold_signed_vector_projection(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if !body.contains("float32 local_") || !body.contains("else\n") || f.ret.token != 0x52 { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let w = |i: &Instr,n: usize| i.words.get(n).map(|s| *s as i16 as i32);
+    let jump = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+    let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+    let offsets = super::model::param_slot_map(&params,true,false,Some(refs));
+    let sites: Vec<_> = code.windows(30).filter_map(|c| {
+        if c.iter().map(|i| i.op.name).ne(["CMPIi","JNZ","SetV4","JMP","SetV4","fTOd","PshV8","PSF","PSF","CALLSYS","PshV8","PSF","PSF","CALLSYS","PSF","PSF","PSF","CALLSYS","PSF","PSF","PshVPtr","CALLINTF","PshVPtr","PSF","PSF","CALLSYS","PSF","PshVPtr","CALLSYS","RET"])
+            || code.last()?.offset_dw != c[29].offset_dw || c[0].dwords.first() != Some(&0)
+            || c[2].dwords.first() != Some(&0x3f800000) || c[4].dwords.first() != Some(&0xbf800000)
+            || jump(&c[1]) != Some(c[4].offset_dw as i64) || jump(&c[3]) != Some(c[5].offset_dw as i64) { return None; }
+        let (sign,wide,temp,normal,height,scaled,base,flat,result) = (w(&c[2],0)?,w(&c[5],0)?,w(&c[7],0)?,w(&c[8],0)?,w(&c[10],0)?,w(&c[11],0)?,w(&c[16],0)?,w(&c[19],0)?,w(&c[23],0)?);
+        let slots = [sign,wide,temp,normal,height,scaled,base,flat,result];
+        if slots.iter().any(|s| *s <= 0) || HashSet::from(slots).len() != slots.len()
+            || w(&c[4],0) != Some(sign) || w(&c[5],1) != Some(sign) || w(&c[6],0) != Some(wide)
+            || [12,15,18].iter().any(|n| w(&c[*n],0) != Some(temp)) || w(&c[14],0) != Some(scaled)
+            || w(&c[20],0) != Some(0) || w(&c[24],0) != Some(flat) || w(&c[26],0) != Some(result) || c[9].qwords != c[13].qwords { return None; }
+        let local = |slot| {
+            let values: Vec<_> = f.obj_locals.iter().filter(|(s,_)| *s == slot).map(|(_,p)| *p).collect();
+            let [p] = values.as_slice() else { return None; }; Some(*p)
+        };
+        let vector = local(temp)?; let vector2 = local(flat)?;
+        for (p,name) in [(vector,"FVector"),(vector2,"FVector2D")] {
+            let identity = refs.type_identity_by_ptr(p)?;
+            if identity.name != name || !identity.module.is_empty() || !identity.namespace.is_empty() { return None; }
+        }
+        if [normal,scaled,base].iter().any(|s| local(*s) != Some(vector)) || local(result) != Some(vector2)
+            || f.obj_locals.iter().any(|(s,_)| [sign,wide,height].contains(s)) { return None; }
+        let parameter = |slot| f.params.get(*offsets.get(&slot)?);
+        let selector = parameter(w(&c[0],0)?)?; let input = parameter(w(&c[22],0)?)?; let output = parameter(w(&c[27],0)?)?;
+        let vector_type = |t: &super::types::DataType,p,reference| t.token == 5 && t.type_info == p && !t.is_object_handle && t.is_reference == reference;
+        if selector.ty.token != 0x44 || selector.ty.type_info != 0 || selector.ty.is_reference || selector.ty.is_object_handle
+            || !vector_type(&input.ty,vector2,true) || !vector_type(&output.ty,vector2,true) || output.ty.is_object_const || output.ty.is_read_only
+            || input.name.is_empty() || output.name.is_empty() || selector.name.is_empty() || input.name == output.name { return None; }
+        for (n,name,p,reference) in [(9,"opMul",vector,false),(17,"opAdd",vector,false),(25,"opSub",vector2,false),(28,"opAssign",vector2,true)] {
+            let ptr = *c[n].qwords.first()? as i64; let ret = refs.func_ret_by_ptr(ptr)?; let [arg] = refs.func_params_by_ptr(ptr)? else { return None; };
+            if refs.func_by_ptr(ptr) != Some(name) || refs.func_owner_by_ptr(ptr)? != refs.type_identity_by_ptr(p)?.name
+                || !refs.is_method_by_ptr(ptr) || refs.is_const_method_by_ptr(ptr) != (n != 28) || !vector_type(ret,p,reference)
+                || (n == 9 && (arg.token != 0x51 || arg.type_info != 0 || arg.is_reference || arg.is_object_handle))
+                || (n != 9 && (!vector_type(arg,p,true) || !arg.is_object_const || !arg.is_read_only)) { return None; }
+        }
+        let projection = *c[21].dwords.first()? as i32; let [arg] = refs.func_params_by_id(projection)? else { return None; };
+        if !refs.is_method_by_id(projection) || !vector_type(refs.func_ret_by_id(projection)?,vector2,false)
+            || !vector_type(arg,vector,true) || !arg.is_object_const || !arg.is_read_only
+            || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && ![c[1].offset_dw,c[3].offset_dw].contains(&i.offset_dw)
+                && jump(i).is_some_and(|t| t > c[0].offset_dw as i64 && t <= c[28].offset_dw as i64))) { return None; }
+        Some((sign,temp,normal,height,base,selector.name.as_str(),input.name.as_str(),output.name.as_str(),refs.func_by_id(projection)?))
+    }).collect();
+    let [(sign,temp,normal,height,base,selector,input,output,project)] = sites.as_slice() else { return body.to_owned(); };
+    let sign_name = format!("local_{sign}"); let declaration = format!("float32 {sign_name};"); let lines: Vec<_> = body.lines().collect();
+    let declarations: Vec<_> = lines.iter().enumerate().filter(|(_,l)| l.trim() == declaration).map(|(at,_)| at).collect();
+    let [declaration_at] = declarations.as_slice() else { return body.to_owned(); };
+    if count_ident(body,&sign_name) != 4 { return body.to_owned(); }
+    let pattern = [format!("if ({selector} == 0)"),"{".into(),format!("{sign_name} = 1.0f;"),"}".into(),"else".into(),"{".into(),format!("{sign_name} = -1.0f;"),"}".into()];
+    let matching: Vec<_> = lines.windows(11).enumerate().filter_map(|(at,c)| {
+        if at <= *declaration_at || c[..8].iter().map(|l| l.trim()).ne(pattern.iter().map(String::as_str)) { return None; }
+        let (_,first,rhs) = declaration_with_initializer(c[8])?; let (_,second,sum) = declaration_with_initializer(c[9])?;
+        if slot_and_life_any(&first)?.0 != *temp || slot_and_life_any(&second)?.0 != *temp || first == second
+            || !c[8].trim_start().starts_with("FVector ") || !c[9].trim_start().starts_with("FVector ")
+            || rhs != format!("(local_{normal} * {sign_name})") || count_ident(body,&first) != 2 || count_ident(body,&second) != 2 { return None; }
+        let height_name = sum.strip_prefix(&format!("(local_{base} + ({first} * "))?.strip_suffix("))")?;
+        if slot_and_life_any(height_name)?.0 != *height || c[10].trim() != format!("{output} = (this.{project}({second}) - {input});") { return None; }
+        Some((at,format!("{}{output} = (this.{project}((local_{base} + ((local_{normal} * ({selector} == 0 ? 1.0f : -1.0f)) * {height_name}))) - {input});",indent_of(c[10]))))
+    }).collect();
+    let [(at,replacement)] = matching.as_slice() else { return body.to_owned(); };
+    let mut result: Vec<_> = lines.iter().map(|l| (*l).to_owned()).collect(); result.splice(*at..at+11,[replacement.clone()]); result.remove(*declaration_at);
+    let mut result = result.join("\n"); if body.ends_with('\n') { result.push('\n'); } result
 }
 
 /// The getter belongs inside the sum argument, after the later call arguments.
@@ -43654,6 +43727,37 @@ mod literal_value_lifetime_tests {
             format!("{body}Use(local_90_2);\n"), body.replace("if (Math::Abs", "while (Math::Abs")] {
             assert_eq!(fold(&text,&f,&refs),text);
         }
+    }
+
+    #[test]
+    fn signed_vector_projection_keeps_one_temporary_expression() {
+        let mut f = function(&[("CMPIi",&[(-6i16) as u16]),("JNZ",&[]),("SetV4",&[74]),("JMP",&[]),("SetV4",&[74]),("fTOd",&[48,74]),
+            ("PshV8",&[48]),("PSF",&[60]),("PSF",&[54]),("CALLSYS",&[]),("PshV8",&[42]),("PSF",&[82]),("PSF",&[60]),("CALLSYS",&[]),
+            ("PSF",&[82]),("PSF",&[60]),("PSF",&[72]),("CALLSYS",&[]),("PSF",&[60]),("PSF",&[4]),("PshVPtr",&[0]),("CALLINTF",&[]),
+            ("PshVPtr",&[(-2i16) as u16]),("PSF",&[86]),("PSF",&[4]),("CALLSYS",&[]),("PSF",&[86]),("PshVPtr",&[(-4i16) as u16]),("CALLSYS",&[]),("RET",&[7])]);
+        f.ret.token = 0x52; f.obj_locals = vec![(60,1),(54,1),(82,1),(72,1),(4,2),(86,2)];
+        let reference = |constant| DataType { token:5,type_info:2,is_reference:true,is_object_const:constant,is_read_only:constant,..Default::default() };
+        f.params = vec![super::super::model::Param { name:"Source".into(),ty:reference(true),flags:1 },
+            super::super::model::Param { name:"Output".into(),ty:reference(false),flags:2 },
+            super::super::model::Param { name:"Choice".into(),ty:DataType { token:0x44,..Default::default() },flags:0 }];
+        let c = disassemble(&f.bytecode).unwrap();
+        for (at,value) in [(2,0x3f800000),(4,0xbf800000u32 as i32),(9,100),(13,100),(17,101),(21,200),(25,102),(28,103)] { f.bytecode[c[at].offset_dw+1] = value; }
+        for (at,target) in [(1,4),(3,5)] { f.bytecode[c[at].offset_dw+1] = c[target].offset_dw as i32 - c[at].offset_dw as i32 - 2; }
+        let body = "    float32 local_74;\n    if (Choice == 0)\n    {\n        local_74 = 1.0f;\n    }\n    else\n    {\n        local_74 = -1.0f;\n    }\n    FVector local_60_2 = (local_54 * local_74);\n    FVector local_60_3 = (local_72 + (local_60_2 * local_42_3));\n    Output = (this.Project(local_60_3) - Source);\n";
+        let expected = "    Output = (this.Project((local_72 + ((local_54 * (Choice == 0 ? 1.0f : -1.0f)) * local_42_3))) - Source);\n";
+        let refs = RefResolver::from_test_signed_vector_projection(0);
+        assert_eq!(super::fold_signed_vector_projection(body,&f,&refs),expected);
+        assert_eq!(super::fold_signed_vector_projection(expected,&f,&refs),expected);
+        for fault in 1..=6 { assert_eq!(super::fold_signed_vector_projection(body,&f,&RefResolver::from_test_signed_vector_projection(fault)),body,"metadata {fault}"); }
+        for bad in [format!("{body}    Use(local_60_2);\n"),body.replace("local_42_3","local_40_3"),body.replace("Choice == 0","Choice != 0"),body.replace("this.Project(","this.Other(")] {
+            assert_eq!(super::fold_signed_vector_projection(&bad,&f,&refs),bad);
+        }
+        let mut bad = f.clone(); bad.obj_locals.push((60,1)); assert_eq!(super::fold_signed_vector_projection(body,&bad,&refs),body);
+        let mut bad = f.clone(); bad.params[2].ty.token = 0x50; assert_eq!(super::fold_signed_vector_projection(body,&bad,&refs),body);
+        let mut bad = f.clone(); bad.params[1].ty.is_object_const = true; assert_eq!(super::fold_signed_vector_projection(body,&bad,&refs),body);
+        let mut bad = f.clone(); bad.bytecode[c[1].offset_dw+1] += 1; assert_eq!(super::fold_signed_vector_projection(body,&bad,&refs),body);
+        let mut bad = f.clone(); let mut prefix = function(&[("JMP",&[])]).bytecode; prefix[1] = c[17].offset_dw as i32;
+        bad.bytecode.splice(0..0,prefix); assert_eq!(super::fold_signed_vector_projection(body,&bad,&refs),body);
     }
 
     #[test]
