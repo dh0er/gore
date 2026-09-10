@@ -5,7 +5,7 @@ AI.AIAgent.Creature.Molerat.CombatSituations_Molerat	1	0	0
 AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.SoulHarvest.SoulHarvest_Visual	2	0	0
 AI.AIAgent.Orc.Combat.Staff.Spells.StormOfFire.GA_Spell_StormOfFire_Orc	1	0	0
 AI.AssessmentResponseSystem.AssessmentBits	7	0	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	4	0	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	3	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	8	0	0
 AI.AssessmentResponseSystem.EventResponses	3	0	0

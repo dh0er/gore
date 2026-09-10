@@ -504,6 +504,11 @@ impl RefResolver {
             _ => Some(base.clone()),
         }
     }
+    /// The same serialized function identity behind a script ID and native pointer.
+    pub(crate) fn func_ptr_by_id(&self, id: i32) -> Option<i64> {
+        self.funcid_to_ptr.get(&id).copied()
+    }
+
     pub fn func_by_id(&self, id: i32) -> Option<&str> {
         self.funcid_to_ptr
             .get(&id)
@@ -5654,6 +5659,7 @@ impl RefResolver {
             2 => ("TArray", "FMemorizedEvent", "FMemoryFilter", "GetArrayOldestToNewest", false),
             3 => ("TSet", "AGothicCharacterState", "FPerceivedInteractiveObject", "GetPersonallyOwnedBy", true),
             4 => ("TArray", "UGothicAchievement", "UGothicAchievementSubsystem", "GetPendingAchievements", true),
+            5 => ("TArray", "UConflictTeam", "UAIGroup_ConflictInstance", "GetTeams", true),
             _ => ("TArray", "FMemorizedEvent", "FMemoryFilter", "GetArray", false),
         };
         let mut r = Self::from_test_member_chain(&[(container, ""), (element, ""), ("FMemoryFilter", ""), ("UObject", ""), ("FInGameTime", "")]);
@@ -5674,13 +5680,17 @@ impl RefResolver {
             r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, ty_owner.into()); r.func_ret.insert(p, ret); r.func_params.insert(p, params); r.func_is_method.insert(p);
         }
         r.const_method_ptrs.extend([10, 70]);
+        if kind == 5 {
+            r.const_method_ptrs.remove(&10); r.funcid_to_ptr.insert(10, 10);
+            for p in [1, 2] { r.type_identity_by_ptr.get_mut(&p).unwrap().module = "AI.States.FightAI.AIGroup_ConflictInstance".into(); }
+        }
         match fault {
             1 => { r.func_ret.get_mut(&10).unwrap().is_reference = true; },
             2 => { r.type_subtypes.get_mut(&1).unwrap()[0].is_object_handle = !handle; },
             3 => { r.func_params.get_mut(&30).unwrap()[0].type_info = 2; },
             4 => { r.func_ret.get_mut(&30).unwrap().is_reference = false; },
             5 => { r.func_owner.insert(10, "UnknownOwner".into()); },
-            6 => { r.const_method_ptrs.remove(&10); },
+            6 => { if kind == 5 { r.const_method_ptrs.insert(10); } else { r.const_method_ptrs.remove(&10); } },
             7 => { r.func_params.get_mut(&20).unwrap().push(DataType { token: 5, type_info: 1, ..Default::default() }); },
             8 => { r.func_owner.insert(50, "OtherFilter".into()); },
             9 => { r.func_owner.insert(60, "OtherTime".into()); },
@@ -5689,6 +5699,8 @@ impl RefResolver {
             12 => { r.func_params.get_mut(&70).unwrap().push(DataType { token: 0x44, ..Default::default() }); },
             13 => { r.const_method_ptrs.remove(&70); },
             14 => { r.func_ret.get_mut(&70).unwrap().is_reference = true; },
+            15 => { r.type_identity_by_ptr.get_mut(&1).unwrap().module.clear(); },
+            16 => { r.type_identity_by_ptr.get_mut(&2).unwrap().module = "Other.Module".into(); },
             _ => {},
         }
         r
@@ -5730,6 +5742,37 @@ impl RefResolver {
             9 => { r.func_ret.get_mut(&80).unwrap().token = 0x41; },
             10 => { r.func_params.get_mut(&90).unwrap()[0].type_info = 2; },
             11 => { r.func_ret.get_mut(&90).unwrap().is_reference = false; },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_iterator_scalar_initializer(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("TSetConstIterator", ""), ("TMap", ""), ("TSet", ""), ("UGroup", "")]);
+        for (p, name) in [(1, "TSetConstIterator"), (2, "TMap"), (3, "TSet"), (4, "UGroup")] {
+            r.type_identity_by_ptr.insert(p, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        let integer = DataType { token: 0x44, ..Default::default() };
+        r.type_subtypes.insert(1, vec![integer.clone()]); r.type_subtypes.insert(2, vec![integer.clone(), integer.clone()]); r.type_subtypes.insert(3, vec![integer.clone()]);
+        let reference = DataType { is_reference: true, is_object_const: true, is_read_only: true, ..integer.clone() };
+        for (p, name, owner, ret, args) in [
+            (1, "Proceed", "TSetConstIterator", reference.clone(), vec![]),
+            (2, "Find", "TMap", DataType { token: 0x41, ..Default::default() }, vec![reference, DataType { is_reference: true, ..integer }]),
+        ] {
+            r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, owner.into()); r.func_ret.insert(p, ret); r.func_params.insert(p, args); r.func_is_method.insert(p);
+        }
+        r.const_method_ptrs.insert(2);
+        match fault {
+            1 => { r.func_ret.get_mut(&1).unwrap().is_reference = false; },
+            2 => { r.func_ret.get_mut(&1).unwrap().token = 0x50; },
+            3 => { r.func_owner.insert(1, "OtherIterator".into()); },
+            4 => { r.type_subtypes.get_mut(&1).unwrap()[0].token = 0x50; },
+            5 => { r.type_subtypes.get_mut(&2).unwrap()[0].token = 0x50; },
+            6 => { r.func_params.get_mut(&2).unwrap()[1].is_read_only = true; },
+            7 => { r.const_method_ptrs.remove(&2); },
+            8 => { r.func_ret.get_mut(&2).unwrap().token = 0x44; },
+            9 => { r.type_identity_by_ptr.get_mut(&2).unwrap().module = "Script".into(); },
             _ => {},
         }
         r
