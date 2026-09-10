@@ -2814,6 +2814,7 @@ fn emit_function_ctor(
             .copied()
             .chain(loop_result_aliases.values().copied())
             .chain(returned_loop_handle_slots(f, refs))
+            .chain(cleanup_copy_declaration_slots(f, refs, true))
             .collect();
         let rendered = sink_declarations_to_first_use(&rendered, &late_but_not_placed);
         let rendered = merge_conditional_into_declaration(&rendered);
@@ -9995,14 +9996,14 @@ fn restore_nav_normal_properties(body: &str, f: &Func, refs: &RefResolver) -> St
 
 /// Deferred properties retain the original temporary-to-local container copy.
 fn restore_container_property_copies(body: &str, f: &Func, refs: &RefResolver) -> String {
-    if !body.contains("TArray<") && !body.contains("TSet<") { return body.to_owned(); }
+    if !body.contains("TArray<") && !body.contains("TSet<") && !(body.contains(".Get") && body.contains(".IsEmpty())")) { return body.to_owned(); }
     let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
     let w = |i: &Instr| i.words.first().map(|s| *s as i16 as i32);
     let ptr = |i: &Instr| i.qwords.first().map(|p| *p as i64);
     let callee = |i: &Instr| if i.op.name == "CALLINTF" { i.dwords.first().and_then(|id| refs.func_ptr_by_id(*id as i32)) } else if i.op.name == "CALLSYS" { ptr(i) } else { None };
     let void = |t: &super::types::DataType| t.token == 0x52 && t.type_info == 0 && !t.is_reference && !t.is_object_handle;
     let mut groups: HashMap<String, (i64, String, usize)> = HashMap::new();
-    let mut conditions: HashMap<String, Vec<i32>> = HashMap::new();
+    let mut conditions: HashMap<String, Vec<(usize, i32, bool)>> = HashMap::new();
     for (at, c) in code.windows(7).enumerate() {
         let witness = (|| {
             if at == 0 || c.iter().map(|i| i.op.name).ne(["PSF", "PSF", "CALLSYS", "PSF", "CALLSYS", "PSF", "CALLSYS"]) { return None; }
@@ -10060,22 +10061,34 @@ fn restore_container_property_copies(body: &str, f: &Func, refs: &RefResolver) -
                     target > code[first].offset_dw as i64 && target <= c[6].offset_dw as i64
                 }))) { return None; }
             let condition = (|| {
-                let follow = code.get(at + 7..at + 10)?;
-                if follow.iter().map(|i| i.op.name).ne(["PSF", "CALLSYS", "JLowZ"]) || w(&follow[0]) != Some(dest) { return None; }
+                let follow = code.get(at + 7..)?;
+                if follow.len() < 3 || follow[0].op.name != "PSF" || follow[1].op.name != "CALLSYS" || w(&follow[0]) != Some(dest) { return None; }
+                let negated = follow[2].op.name == "CpyRtoV4";
+                let length = if negated { 6 } else { 3 };
+                if negated {
+                    let tail = follow.get(2..6)?;
+                    let slot = w(&tail[0])?;
+                    if tail.iter().map(|i| i.op.name).ne(["CpyRtoV4", "NOT", "CpyVtoR1", "JLowZ"])
+                        || slot <= 0 || w(&tail[1]) != Some(slot) || w(&tail[2]) != Some(slot) || f.obj_locals.iter().any(|(s, _)| *s == slot) { return None; }
+                } else if follow[2].op.name != "JLowZ" { return None; }
+                if code.iter().any(|i| i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                    let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                    target > follow[0].offset_dw as i64 && target <= follow[length - 1].offset_dw as i64
+                })) { return None; }
                 let empty = ptr(&follow[1])?;
                 if refs.func_by_ptr(empty) != Some("IsEmpty") || refs.func_owner_by_ptr(empty) != Some(container) || !refs.is_method_by_ptr(empty) || !refs.is_const_method_by_ptr(empty)
                     || !refs.func_params_by_ptr(empty)?.is_empty() || !matches!(refs.func_ret_by_ptr(empty)?, t if t.token == 0x41 && t.type_info == 0 && !t.is_reference && !t.is_object_handle) { return None; }
                 let uses: Vec<_> = code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&dest)).map(|(n, _)| n).collect();
-                if uses.len() != 5 || uses[..3] != [at + 1, at + 3, at + 7]
+                if uses.len() < 5 || uses[..3] != [at + 1, at + 3, at + 7]
                     || uses[3..].iter().any(|n| code[*n].op.name != "PSF" || code.get(*n + 1).is_none_or(|i| i.op.name != "CALLSYS" || ptr(i) != ptr(&c[6]))) { return None; }
-                Some(dest)
+                Some((dest, negated))
             })();
             Some((getter, name.to_owned(), returned.base_name(refs), condition))
         })();
         if let Some((getter, name, ty, condition)) = witness {
-            if let Some(dest) = condition { conditions.entry(name.clone()).or_default().push(dest); }
-            let group = groups.entry(name).or_insert((getter, ty.clone(), 0));
+            let group = groups.entry(name.clone()).or_insert((getter, ty.clone(), 0));
             if group.0 != getter || group.1 != ty { return body.to_owned(); }
+            if let Some((dest, negated)) = condition { conditions.entry(name).or_default().push((group.2, dest, negated)); }
             group.2 += 1;
         }
     }
@@ -10084,19 +10097,29 @@ fn restore_container_property_copies(body: &str, f: &Func, refs: &RefResolver) -
         let suffix = format!(".{name}()");
         if code.iter().filter(|i| callee(i) == Some(getter)).count() != count || body.matches(&suffix).count() != count { continue; }
         let mut candidate = lines.clone();
+        let occurrences: Vec<_> = lines.iter().enumerate().filter(|(_, line)| line.contains(&suffix)).map(|(at, _)| at).collect();
+        if occurrences.len() != count { continue; }
         let inline: Vec<_> = lines.iter().enumerate().filter_map(|(at, line)| {
-            let receiver = line.trim().strip_prefix("if (")?.strip_suffix(".IsEmpty())")?.strip_suffix(&suffix)?;
+            let text = line.trim();
+            let (expression, negated) = if let Some(s) = text.strip_prefix("if (!(").and_then(|s| s.strip_suffix(".IsEmpty()))")) { (s, true) }
+                else { (text.strip_prefix("if (")?.strip_suffix(".IsEmpty())")?, false) };
+            let receiver = expression.strip_suffix(&suffix)?;
             if !receiver.as_bytes().first().is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_') || receiver.contains("&&") || receiver.contains("||") { return None; }
-            Some((at, receiver))
+            Some((at, receiver, negated))
         }).collect();
-        if !inline.is_empty() {
-            let [(at, receiver)] = inline.as_slice() else { continue; };
-            let Some(destinations) = conditions.get(&name) else { continue; };
-            let [dest] = destinations.as_slice() else { continue; };
-            let local = format!("local_{dest}"); if count_ident(body, &local) != 0 { continue; }
-            let indent = indent_of(&lines[*at]);
-            candidate[*at] = format!("{indent}if ({local}.IsEmpty())");
-            candidate.insert(*at, format!("{indent}{ty} {local} = {receiver}{suffix};"));
+        let lifts: Option<Vec<_>> = inline.iter().map(|(at, receiver, negated)| {
+            let ordinal = occurrences.iter().position(|n| n == at)?;
+            let destinations: Vec<_> = conditions.get(&name)?.iter().filter(|(order, _, polarity)| *order == ordinal && polarity == negated).collect();
+            let [(_, dest, _)] = destinations.as_slice() else { return None; };
+            let local = format!("local_{dest}"); if count_ident(body, &local) != 0 { return None; }
+            Some((*at, *receiver, *negated, local))
+        }).collect();
+        let Some(lifts) = lifts else { continue; };
+        if lifts.iter().map(|(_, _, _, local)| local).collect::<HashSet<_>>().len() != lifts.len() { continue; }
+        for (at, receiver, negated, local) in lifts.into_iter().rev() {
+            let indent = indent_of(&lines[at]);
+            candidate[at] = if negated { format!("{indent}if (!({local}.IsEmpty()))") } else { format!("{indent}if ({local}.IsEmpty())") };
+            candidate.insert(at, format!("{indent}{ty} {local} = {receiver}{suffix};"));
         }
         let matches: Vec<_> = candidate.iter().enumerate().filter_map(|(at, line)| {
             let (_, local, rhs) = declaration_with_initializer(line)?;
@@ -34772,6 +34795,10 @@ fn copied_call_result_slots(f: &Func) -> HashSet<i32> {
 /// Measured: fires on 9 functions tree-wide, none of them byte-faithful. Every byte-faithful
 /// sole-copy local has its producer ADJACENT to the copy, which is what the gap separates.
 fn bare_declaration_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    cleanup_copy_declaration_slots(f, refs, false)
+}
+
+fn cleanup_copy_declaration_slots(f: &Func, refs: &RefResolver, reused_only: bool) -> HashSet<i32> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
     };
@@ -34816,11 +34843,18 @@ fn bare_declaration_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
                 _ => false,
             }
         });
-        // …and the temporary is dead after the copy.
-        let reused = instrs[at + 1..]
-            .iter()
-            .any(|ins| super::bytediff::addressed_slots(ins).into_iter().any(|s| s == src));
-        if cleanup_only && !reused {
+        // The old value may also end at an unconditional full register overwrite.
+        // Reusing its physical slot afterwards does not keep that old value alive.
+        let next_use = instrs[at + 1..].iter().position(|ins| {
+            super::bytediff::addressed_slots(ins).contains(&src)
+        }).map(|n| at + 1 + n);
+        let overwritten = next_use.is_some_and(|next| {
+            ins.op.name == "CpyVtoV4" && instrs[producer].op.name == "CpyRtoV4"
+                && instrs[next].op.name == "CpyRtoV4" && w0(&instrs[next]) == src
+                && !f.obj_locals.iter().any(|(s, _)| *s == src || *s == dst)
+                && instrs[at + 1..next].iter().all(|i| !i.op.name.starts_with('J') && !matches!(i.op.name, "RET" | "SUSPEND"))
+        });
+        if cleanup_only && ((!reused_only && next_use.is_none()) || overwritten) {
             out.insert(dst);
         }
     }
@@ -46132,6 +46166,60 @@ mod literal_value_lifetime_tests {
         for bad in [body.replace("int local_41 = 0;", "int local_41 = 1;"), body.replace("    local_41 =", "    Use(local_41);\n    local_41 ="), format!("int local_41 = 0;\n{body}")] { assert_eq!(fold(&bad, &f, &refs), bad); }
     }
 
+    #[test]
+    fn negated_container_checks_keep_each_original_copy_until_all_returns() {
+        let mut f = function(&[("PSF", &[16]), ("PshVPtr", &[65534]), ("CALLSYS", &[]), ("PSF", &[16]), ("PSF", &[12]), ("CALLSYS", &[]),
+            ("PSF", &[12]), ("CALLSYS", &[]), ("PSF", &[16]), ("CALLSYS", &[]), ("PSF", &[12]), ("CALLSYS", &[]), ("JLowZ", &[]),
+            ("PSF", &[12]), ("CALLSYS", &[]), ("RET", &[4]),
+            ("PSF", &[16]), ("PshVPtr", &[65534]), ("CALLSYS", &[]), ("PSF", &[16]), ("PSF", &[20]), ("CALLSYS", &[]),
+            ("PSF", &[20]), ("CALLSYS", &[]), ("PSF", &[16]), ("CALLSYS", &[]), ("PSF", &[20]), ("CALLSYS", &[]),
+            ("CpyRtoV4", &[24]), ("NOT", &[24]), ("CpyVtoR1", &[24]), ("JLowZ", &[]),
+            ("PSF", &[20]), ("CALLSYS", &[]), ("PSF", &[12]), ("CALLSYS", &[]), ("RET", &[4]),
+            ("CpyVtoR1", &[30]), ("JLowZ", &[]), ("PSF", &[20]), ("CALLSYS", &[]), ("PSF", &[12]), ("CALLSYS", &[]), ("RET", &[4]),
+            ("PSF", &[20]), ("CALLSYS", &[]), ("PSF", &[12]), ("CALLSYS", &[]), ("RET", &[4])]);
+        f.obj_locals = vec![(12, 1), (16, 1), (20, 1)]; let c = disassemble(&f.bytecode).unwrap();
+        for (at, p) in [(2, 10), (5, 20), (7, 30), (9, 40), (11, 70), (14, 40),
+            (18, 10), (21, 20), (23, 30), (25, 40), (27, 70), (33, 40), (35, 40), (40, 40), (42, 40), (45, 40), (47, 40)] {
+            f.bytecode[c[at].offset_dw + 1] = p;
+        }
+        for (at, target) in [(12, 16), (31, 37), (38, 44)] { f.bytecode[c[at].offset_dw + 1] = c[target].offset_dw as i32 - c[at].offset_dw as i32 - 2; }
+        let body = "    TArray<FMemorizedEvent> local_12 = first.GetArray();\n    if (local_12.IsEmpty())\n    {\n        return;\n    }\n    if (!(second.GetArray().IsEmpty()))\n    {\n        return;\n    }\n    if (again)\n    {\n        return;\n    }\n    return;\n";
+        let expected = body.replace("first.GetArray()", "first.Array").replace("    if (!(second.GetArray().IsEmpty()))", "    TArray<FMemorizedEvent> local_20 = second.Array;\n    if (!(local_20.IsEmpty()))");
+        let refs = RefResolver::from_test_container_property_copies(0, 0);
+        let fold = |s: &str, f: &Func| super::restore_container_property_copies(s, f, &refs);
+        assert_eq!(fold(body, &f), expected); assert_eq!(fold(&expected, &f), expected);
+        let both = body.replace("    TArray<FMemorizedEvent> local_12 = first.GetArray();\n    if (local_12.IsEmpty())", "    if (first.GetArray().IsEmpty())");
+        assert_eq!(fold(&both, &f), expected);
+        for at in [29, 30] { let mut bad = f.clone(); bad.bytecode[c[at].offset_dw] ^= 1 << 16; assert_eq!(fold(body, &bad), body); }
+        let mut bad = f.clone(); bad.bytecode[c[45].offset_dw + 1] = 20; assert_eq!(fold(body, &bad), body);
+        let mut bad = f.clone(); bad.bytecode.extend(function(&[("PSF", &[20])]).bytecode); assert_eq!(fold(body, &bad), body);
+        let mut bad = f.clone(); bad.bytecode[c[12].offset_dw + 1] = c[29].offset_dw as i32 - c[12].offset_dw as i32 - 2; assert_eq!(fold(body, &bad), body);
+        for bad in [body.replace("if (!(second.GetArray().IsEmpty()))", "if (second.GetArray().IsEmpty())"), format!("int local_20 = 0;\n{body}"), body.replace("second.GetArray()", "a && second.GetArray()")] { assert_eq!(fold(&bad, &f), bad); }
+    }
+
+    #[test]
+    fn cleanup_separated_count_survives_later_register_slot_reuse() {
+        let mut f = function(&[("CALLSYS", &[]), ("CpyRtoV4", &[29]), ("PSF", &[22]), ("CALLSYS", &[]),
+            ("CpyVtoV4", &[6, 29]), ("CALLSYS", &[]), ("CpyRtoV4", &[29]), ("CMPIi", &[29]), ("CMPIi", &[6]), ("RET", &[0])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, ptr) in [(0, 2), (3, 3), (5, 2)] { f.bytecode[code[at].offset_dw + 1] = ptr; }
+        let refs = RefResolver::from_test_retained_receiver(0x44, true);
+        let keep = |f: &Func| super::bare_declaration_slots(f, &refs);
+        assert_eq!(keep(&f), HashSet::from([6]));
+        let late = super::cleanup_copy_declaration_slots(&f, &refs, true);
+        assert_eq!(late, HashSet::from([6]));
+        let body = "    int local_6;\n    if (invalid)\n    {\n        return;\n    }\n    local_6 = Count();\n    Use(local_6);\n";
+        let expected = "    if (invalid)\n    {\n        return;\n    }\n    int local_6;\n    local_6 = Count();\n    Use(local_6);\n";
+        assert_eq!(super::sink_declarations_to_first_use(body, &late), expected);
+        // Reading the old value, a partial overwrite or a branch keeps the conservative result.
+        let mut bad = f.clone(); bad.bytecode[code[6].offset_dw] = function(&[("CpyVtoR4", &[29])]).bytecode[0]; assert!(keep(&bad).is_empty());
+        let mut bad = f.clone(); bad.bytecode.splice(code[6].offset_dw..code[7].offset_dw, function(&[("SetV1", &[29])]).bytecode); assert!(keep(&bad).is_empty());
+        let mut bad = f.clone(); bad.obj_locals.push((29, 1)); assert!(keep(&bad).is_empty());
+        let mut bad = f.clone(); let branch = function(&[("JMP", &[])]).bytecode;
+        bad.bytecode.splice(code[5].offset_dw..code[5].offset_dw, branch); assert!(keep(&bad).is_empty());
+        let mut bad = f.clone(); bad.bytecode[code[3].offset_dw + 1] = 4; assert!(keep(&bad).is_empty());
+        let mut bad = f.clone(); bad.bytecode.splice(code[8].offset_dw..code[9].offset_dw, function(&[("CpyRtoV4", &[6])]).bytecode); assert!(keep(&bad).is_empty());
+    }
     #[test]
     fn weak_forward_vector_and_distance_die_before_the_named_sum() {
         let mut f = function(&[("PSF", &[38]), ("PSF", &[32]), ("PshVPtr", &[0]), ("ADDSi", &[0]), ("CALLSYS", &[]),

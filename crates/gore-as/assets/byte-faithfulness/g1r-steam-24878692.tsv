@@ -4,12 +4,12 @@ AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_R
 AI.AIAgent.Creature.Molerat.CombatSituations_Molerat	1	0	0
 AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.SoulHarvest.SoulHarvest_Visual	2	0	0
 AI.AIAgent.Orc.Combat.Staff.Spells.StormOfFire.GA_Spell_StormOfFire_Orc	1	0	0
-AI.AssessmentResponseSystem.AssessmentBits	7	0	0
+AI.AssessmentResponseSystem.AssessmentBits	6	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	3	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	8	0	0
 AI.AssessmentResponseSystem.EventResponses	3	0	0
-AI.CharacterAI_Gothic	4	0	0
+AI.CharacterAI_Gothic	3	0	0
 AI.CharacterAI_Human	1	0	0
 AI.CharacterAI_Orc	2	0	0
 AI.DailyRoutines.DailyRoutines_OG	1	0	0
@@ -18,7 +18,6 @@ AI.Relationship.PersonalRelationshipModifiers	1	0	0
 AI.States.AIState_FollowCharacterAggressive	1	0	0
 AI.States.AIState_GuideCharacter	2	0	0
 AI.States.FightAI.AIState_PerceptionResponse	2	0	0
-AI.States.FightAI.AssessGoToDailyRoutineState.UAIState_AssessGoToDailyRoutine	1	0	0
 AI.States.FightAI.CharmedState.AIState_Charmed	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_AcceptDefeat	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_ClaimVictory	1	0	0
