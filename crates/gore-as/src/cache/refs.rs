@@ -5032,6 +5032,88 @@ impl RefResolver {
         r
     }
     #[cfg(test)]
+    pub(crate) fn from_test_named_set_return(fault:u8) -> Self {
+        let mut r=Self::default();
+        for (ptr,name) in [(1,"TSet"),(2,"FGameplayTag"),(3,"UOwner"),(4,"AState")] {
+            r.type_by_ptr.insert(ptr,name.into());r.type_names.insert(name.into());
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:String::new(),namespace:String::new()});
+        }
+        let value=|ty|DataType {token:5,type_info:ty,..Default::default()};
+        let reference=|ty|DataType {is_reference:true,is_object_const:true,is_read_only:true,..value(ty)};
+        r.type_subtypes.insert(1,vec![DataType {is_object_handle:true,..value(4)}]);
+        let void=DataType {token:0x52,..Default::default()};
+        for (p,owner,name,constant,ret,args) in [(10,"FGameplayTag","IsValid",true,DataType {token:0x41,..Default::default()},vec![]),
+            (11,"TSet","$beh0",false,void.clone(),vec![]),(12,"TSet","opAssign",false,DataType {is_reference:true,..value(1)},vec![reference(1)]),
+            (13,"TSet","$beh2",false,void,vec![]),(14,"","Get",false,DataType {is_object_handle:true,..value(3)},vec![]),
+            (15,"UOwner","GetOwners",true,value(1),vec![reference(2)])] {
+            r.func_by_ptr.insert(p,name.into());r.func_ret.insert(p,ret);r.func_params.insert(p,args);
+            if !owner.is_empty(){r.func_owner.insert(p,owner.into());r.func_is_method.insert(p);}if constant{r.const_method_ptrs.insert(p);}
+        }
+        r.func_ns.insert(14,"UOwner".into());
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into(),
+            2=>r.func_ret.get_mut(&15).unwrap().type_info=2,
+            3=>r.func_params.get_mut(&12).unwrap()[0].is_read_only=false,
+            4=>{r.const_method_ptrs.remove(&15);}
+            5=>{r.func_ns.insert(14,"Other".into());}
+            6=>r.func_ret.get_mut(&14).unwrap().is_reference=true,
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_loop_deadline(fault:u8) -> Self {
+        let mut r=Self::from_test_member_chain(&[("UState","Duration"),("FInGameTime",""),("UObject","")]);
+        for (id,name,module) in [(1,"UState","Fixture"),(2,"FInGameTime",""),(3,"UObject","")] {
+            r.type_identity_by_ptr.insert(id,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        r.prop_type_id.insert(3,1);r.class_fields.insert("UState".into(),HashMap::from([("Duration".into(),"float".into())]));
+        r.global_by_ptr.insert(9,"__WorldContext".into());
+        let context=DataType {token:5,type_info:3,is_object_handle:true,is_object_const:true,..Default::default()};
+        let time=DataType {token:5,type_info:2,..Default::default()};let boolean=DataType {token:0x41,..Default::default()};let void=DataType {token:0x52,..Default::default()};
+        for (ptr,owner,name,constant,ret,args) in [(10,"","XRealtimeSecondsFromNow",false,time,vec![context.clone(),DataType {token:0x50,..Default::default()}]),
+            (11,"FInGameTime","IsTimeInThePast",true,boolean.clone(),vec![context]),(12,"UAbilityTaskCoroutine","WaitOneTick",false,void.clone(),vec![]),
+            (13,"FInGameTime","$beh2",false,void,vec![]),(14,"UState","Continue",false,boolean,vec![])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            if !owner.is_empty(){r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);}if constant{r.const_method_ptrs.insert(ptr);}
+        }
+        r.func_ns.insert(10,"FInGameTime".into());r.funcid_to_ptr.insert(14,14);
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&2).unwrap().module="Script".into(),
+            2=>r.func_params.get_mut(&10).unwrap()[1].token=0x51,
+            3=>{r.class_fields.get_mut("UState").unwrap().insert("Duration".into(),"float32".into());}
+            4=>{r.const_method_ptrs.remove(&11);}
+            5=>r.func_ret.get_mut(&14).unwrap().token=0x44,
+            6=>{r.func_owner.insert(13,"FOther".into());}
+            7=>{r.global_by_ptr.insert(9,"OtherContext".into());}
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_void_guard_bool(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UState", "Early"), ("UState", "Visible")]);
+        for id in [1,2] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name:"UState".into(), module:"Fixture".into(), namespace:String::new() });
+            r.prop_type_id.insert((id << 1) | 1, id as i32);
+        }
+        r.class_fields.insert("UState".into(), HashMap::from([("Early".into(),"bool".into()),("Visible".into(),"bool".into())]));
+        for (p,name) in [(101,"Saved"),(102,"Other")] {
+            r.func_by_ptr.insert(p,name.into()); r.func_ret.insert(p,DataType {token:0x41,..Default::default()});
+        }
+        match fault {
+            1 => r.func_ret.get_mut(&101).unwrap().token=0x44,
+            2 => r.func_ret.get_mut(&102).unwrap().is_reference=true,
+            3 => { r.class_fields.get_mut("UState").unwrap().insert("Visible".into(),"int".into()); }
+            4 => { r.prop_type_id.insert(5,9); }
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_eager_bool_calls(saved_token: i32) -> Self {
         let mut r = Self::default();
         for (id, name, token) in [(101, "Saved", saved_token), (102, "Other", 0x41)] {
