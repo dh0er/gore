@@ -5032,6 +5032,39 @@ impl RefResolver {
         r
     }
     #[cfg(test)]
+    pub(crate) fn from_test_conditional_field_references(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FPair", ""), ("FPosition", ""), ("UOwner", "")]);
+        for (id, name) in [(1, "FPair"), (2, "FPosition"), (3, "UOwner")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: name.into(), module: "Fixture".into(), namespace: String::new() });
+        }
+        for (id, offset, name, ty) in [(1, 0, "A", "FPosition"), (1, 24, "B", "FPosition"),
+            (2, 0, "Value", "FVector2D"), (2, 16, "Valid", "bool"), (3, 112, "Pairs", "TArray<FPair>")] {
+            let key = ((id as i64) << 1) | ((offset as i64) << 33) | 1;
+            r.prop_by_key.insert(key, name.into()); r.prop_type_id.insert(key, id);
+            let owner = r.type_by_id(id).unwrap().to_owned();
+            r.class_fields.entry(owner).or_default().insert(name.into(), ty.into());
+        }
+        for (p, name, owner, params) in [(10, "Proceed", "TArrayIterator", vec![]),
+            (11, "opIndex", "TArray", vec![DataType { token: 0x44, ..Default::default() }])] {
+            r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, owner.into());
+            r.func_is_method.insert(p); r.func_params.insert(p, params);
+            r.func_ret.insert(p, DataType { token: 5, type_info: 1, is_reference: true, ..Default::default() });
+        }
+        match fault {
+            1 => { r.duplicate_prop_keys.insert(3); },
+            2 => { r.prop_type_id.insert(3, 2); },
+            3 => { r.func_ret.get_mut(&10).unwrap().is_read_only = true; },
+            4 => { r.func_ret.get_mut(&11).unwrap().is_reference = false; },
+            5 => { r.class_fields.get_mut("FPair").unwrap().insert("B".into(), "FOther".into()); },
+            6 => { r.class_fields.get_mut("FPosition").unwrap().insert("Valid".into(), "int".into()); },
+            7 => { r.type_identity_by_ptr.get_mut(&2).unwrap().namespace = "Foreign".into(); },
+            8 => { r.func_params.get_mut(&11).unwrap()[0].token = 0x4b; },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_adjusted_segment_endpoint(fault:u8)->Self {
         let mut r=Self::default();r.type_identity_by_ptr.insert(1,TypeIdentity {name:"FVector".into(),module:if fault==1 {"Foreign"}else{""}.into(),namespace:String::new()});
         let vector=DataType {token:5,type_info:1,..Default::default()};let input=DataType {is_reference:true,is_object_const:true,is_read_only:true,..vector.clone()};

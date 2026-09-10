@@ -3253,6 +3253,8 @@ fn emit_function_ctor(
         pass_trace("restore_segment_clearance_order", &rendered);
         let rendered = restore_adjusted_segment_endpoint(&rendered, f, refs);
         pass_trace("restore_adjusted_segment_endpoint", &rendered);
+        let rendered = restore_conditional_field_references(&rendered, f, refs);
+        pass_trace("restore_conditional_field_references", &rendered);
         let rendered = fold_widened_vector_sign(&rendered, vector_sign);
         pass_trace("fold_widened_vector_sign", &rendered);
         s.truncate(declarations_at);
@@ -8515,6 +8517,121 @@ fn rewrite_no_assign_locals(body: &str, locals: &BTreeMap<i32, String>) -> (Stri
         suppressed.insert(*slot);
     }
     (out, suppressed)
+}
+
+/// Preserve the selected field's address across a conditional, not a default value.
+fn restore_conditional_field_references(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if !body.contains("else\n") || f.is_const_method() { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let word = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+    let jump = |i: &Instr| i.dwords.first().map(|v| i.offset_dw as i64 + 2 + *v as i32 as i64);
+    let field = |i: &Instr, n: usize| {
+        let id = *i.dwords.first()? as i32; let offset = word(i, n)?;
+        let (name, old) = refs.member_identity(id, offset)?;
+        let owner = refs.type_identity_by_id(id)?;
+        if refs.type_identity_by_id(old)? != owner || !owner.namespace.is_empty() || owner.module.is_empty() { return None; }
+        Some((owner, name, refs.own_field_type_by_class(&owner.name, name)?))
+    };
+    let mut sites = Vec::new();
+    for start in 0..code.len() {
+        let candidate = (|| {
+            let c = code.get(start..)?;
+            let direct = c.get(..11).is_some_and(|c| c.iter().map(|i| i.op.name).eq([
+                "CMPIi", "JNZ", "PshVPtr", "ADDSi", "ADDSi", "JMP", "PshVPtr", "ADDSi", "ADDSi", "PopRPtr", "CpyRtoV8"]));
+            let indexed = c.get(..17).is_some_and(|c| c.iter().map(|i| i.op.name).eq([
+                "CMPIi", "JNZ", "PshV4", "PshVPtr", "ADDSi", "Thiscall1", "PshRPtr", "ADDSi", "JMP",
+                "PshV4", "PshVPtr", "ADDSi", "Thiscall1", "PshRPtr", "ADDSi", "PopRPtr", "CpyRtoV8"]));
+            if !direct && !indexed { return None; }
+            let (other, skip, join, capture) = if direct { (6, 5, 9, 10) } else { (9, 8, 15, 16) };
+            let (selector, destination) = (word(&c[0], 0)?, word(&c[capture], 0)?);
+            if selector <= 0 || destination <= 0 || selector == destination || c[0].dwords.first() != Some(&0)
+                || jump(&c[1]) != Some(c[other].offset_dw as i64) || jump(&c[skip]) != Some(c[join].offset_dw as i64)
+                || f.obj_locals.iter().any(|(s, _)| *s == destination) { return None; }
+            let (left, right, ty) = if direct {
+                let source = word(&c[2], 0)?;
+                if source <= 0 || source == destination || source == selector || word(&c[6], 0) != Some(source) { return None; }
+                let (pair, a, inner) = field(&c[3], 0)?;
+                let (pair_b, b, inner_b) = field(&c[7], 0)?;
+                let (value, member, ty) = field(&c[4], 0)?;
+                if pair != pair_b || inner != inner_b || inner != value.name || pair.module != value.module
+                    || field(&c[8], 0)? != (value, member, ty) || a == b { return None; }
+                let producers: Vec<_> = code.windows(2).filter(|w| w[1].op.name == "CpyRtoV8" && word(&w[1], 0) == Some(source)).collect();
+                let [producer] = producers.as_slice() else { return None; };
+                if producer[0].op.name != "CALLSYS" || producer[1].offset_dw >= c[0].offset_dw { return None; }
+                let p = *producer[0].qwords.first()? as i64; let ret = refs.func_ret_by_ptr(p)?;
+                if refs.func_by_ptr(p) != Some("Proceed") || refs.func_owner_by_ptr(p) != Some("TArrayIterator")
+                    || !refs.is_method_by_ptr(p) || !refs.func_params_by_ptr(p)?.is_empty()
+                    || ret.token != 5 || !ret.is_reference || ret.is_object_handle || ret.is_object_const || ret.is_read_only
+                    || refs.type_identity_by_ptr(ret.type_info)? != pair { return None; }
+                (format!("local_{source}.{a}.{member}"), format!("local_{source}.{b}.{member}"), ty.to_owned())
+            } else {
+                let index = word(&c[2], 0)?;
+                if index <= 0 || index == destination || index == selector || word(&c[9], 0) != Some(index)
+                    || word(&c[3], 0) != Some(0) || word(&c[10], 0) != Some(0) { return None; }
+                let array = field(&c[4], 0)?;
+                let (pair, a, ty) = field(&c[7], 0)?; let (pair_b, b, ty_b) = field(&c[14], 0)?;
+                if field(&c[11], 0)? != array || pair != pair_b || ty != ty_b || a == b
+                    || array.2 != format!("TArray<{}>", pair.name) || array.0.module != pair.module { return None; }
+                let p = *c[5].qwords.first()? as i64;
+                if c[5].qwords != c[12].qwords || refs.func_by_ptr(p) != Some("opIndex") || refs.func_owner_by_ptr(p) != Some("TArray")
+                    || !refs.is_method_by_ptr(p) || refs.is_const_method_by_ptr(p) { return None; }
+                let ret = refs.func_ret_by_ptr(p)?; let [arg] = refs.func_params_by_ptr(p)? else { return None; };
+                if ret.token != 5 || !ret.is_reference || ret.is_object_handle || ret.is_object_const || ret.is_read_only
+                    || refs.type_identity_by_ptr(ret.type_info)? != pair || arg.token != 0x44 || arg.is_reference { return None; }
+                (format!("this.{}[local_{index}].{a}", array.1), format!("this.{}[local_{index}].{b}", array.1), ty.to_owned())
+            };
+            // Pointer captures have one producer; their later reads must stay pointers.
+            let uses: Vec<_> = code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&destination)).collect();
+            if uses.first().map(|(at, _)| *at) != Some(start + capture) || uses.len() < 2
+                || uses.iter().skip(1).any(|(_, i)| !matches!(i.op.name, "PshVPtr" | "LoadRObjR"))
+                || code.iter().enumerate().any(|(at, i)| i.op.name == "JMPP" || (![start + 1, start + skip].contains(&at)
+                    && i.op.name.starts_with('J') && jump(i).is_some_and(|t| t > c[0].offset_dw as i64 && t <= c[capture].offset_dw as i64))) { return None; }
+            let mut bool_field = None;
+            if let Some(w) = c.get(capture + 1..capture + 5) {
+                if w.iter().map(|i| i.op.name).eq(["LoadRObjR", "RDR1", "CpyVtoR1", "JLowZ"])
+                    && word(&w[0], 0) == Some(destination) && word(&w[1], 0) == word(&w[2], 0) {
+                    let (owner, name, value) = field(&w[0], 1)?;
+                    if owner.name != ty || value != "bool" { return None; }
+                    bool_field = Some(name.to_owned());
+                }
+            }
+            Some((selector, destination, left, right, ty, bool_field))
+        })();
+        if let Some(site) = candidate { sites.push(site); }
+    }
+    if sites.is_empty() { return body.to_owned(); }
+    let lines: Vec<&str> = body.lines().collect(); let mut edits = Vec::new();
+    let mut consumed = HashSet::new();
+    for (selector, dst, left, right, ty, boolean) in &sites {
+        if sites.iter().filter(|s| s.1 == *dst).count() != 1 { return body.to_owned(); }
+        let name = format!("local_{dst}"); let declaration = format!("{ty} {name};");
+        let declarations: Vec<_> = lines.iter().enumerate().filter(|(_, l)| l.trim() == declaration).map(|(at, _)| at).collect();
+        let [declaration_at] = declarations.as_slice() else { return body.to_owned(); };
+        let condition = format!("if (local_{selector} == 0)");
+        let matches: Vec<_> = lines.windows(6).enumerate().filter(|(_, w)| w[0].trim() == condition
+            && w.iter().skip(1).map(|l| l.trim()).eq(["{", "}", "else", "{", "}"]))
+            .map(|(at, _)| at).collect();
+        if matches.len() != sites.iter().filter(|s| s.0 == *selector).count() { return body.to_owned(); }
+        let Some(at) = matches.into_iter().find(|at| !consumed.contains(at)) else { return body.to_owned(); };
+        if *declaration_at >= at { return body.to_owned(); }
+        let (_, end) = block_span(&lines, at);
+        if lines.iter().enumerate().any(|(n, l)| n != *declaration_at && count_ident(l, &name) != 0 && (n <= at || n >= end)) { return body.to_owned(); }
+        let indent = indent_of(lines[at]);
+        edits.push((*declaration_at, *declaration_at + 1, Vec::new()));
+        edits.push((at, at + 6, vec![format!("{indent}{ty}& {name} = local_{selector} == 0 ? {left} : {right};")]));
+        consumed.insert(at);
+        if let Some(member) = boolean {
+            let old = format!("if (int({name}.{member}) != 0)");
+            let found: Vec<_> = lines.iter().enumerate().filter(|(_, l)| l.trim() == old).map(|(at, _)| at).collect();
+            let [row] = found.as_slice() else { return body.to_owned(); };
+            edits.push((*row, *row + 1, vec![format!("{}if ({name}.{member})", indent_of(lines[*row]))]));
+        }
+    }
+    edits.sort_by_key(|e| e.0);
+    if edits.windows(2).any(|w| w[0].1 > w[1].0) { return body.to_owned(); }
+    let mut result: Vec<String> = lines.iter().map(|l| (*l).to_owned()).collect();
+    for (start, end, replacement) in edits.into_iter().rev() { result.splice(start..end, replacement); }
+    let mut result = result.join("\n"); if body.ends_with('\n') { result.push('\n'); } result
 }
 
 /// The adjustment product is temporary; the later endpoint starts a new value life.
@@ -42718,6 +42835,45 @@ mod literal_value_lifetime_tests {
         let mut named=function(&[("PSF",&[12]),("CALL",&[]),("PshVPtr",&[65534]),("CALL",&[])]);
         let c=disassemble(&named.bytecode).unwrap();for at in [1,3]{named.bytecode[c[at].offset_dw+1]=7;}
         assert_eq!(super::fold_returned_empty_values(body,&named,&refs),body);
+    }
+
+    #[test]
+    fn conditional_field_addresses_remain_references_in_their_owner_block() {
+        let mut f = function(&[("PSF", &[12]), ("CALLSYS", &[]), ("CpyRtoV8", &[20]),
+            ("CMPIi", &[21]), ("JNZ", &[]), ("PshVPtr", &[20]), ("ADDSi", &[0]), ("ADDSi", &[0]), ("JMP", &[]),
+            ("PshVPtr", &[20]), ("ADDSi", &[24]), ("ADDSi", &[0]), ("PopRPtr", &[]), ("CpyRtoV8", &[24]), ("PshVPtr", &[24]),
+            ("CMPIi", &[21]), ("JNZ", &[]), ("PshV4", &[2]), ("PshVPtr", &[0]), ("ADDSi", &[112]), ("Thiscall1", &[]),
+            ("PshRPtr", &[]), ("ADDSi", &[0]), ("JMP", &[]), ("PshV4", &[2]), ("PshVPtr", &[0]), ("ADDSi", &[112]),
+            ("Thiscall1", &[]), ("PshRPtr", &[]), ("ADDSi", &[24]), ("PopRPtr", &[]), ("CpyRtoV8", &[68]),
+            ("LoadRObjR", &[68, 16]), ("RDR1", &[5]), ("CpyVtoR1", &[5]), ("JLowZ", &[]), ("PshVPtr", &[68]), ("RET", &[0])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, value) in [(1, 10), (6, 1), (7, 2), (10, 1), (11, 2), (19, 3), (20, 11), (22, 1), (26, 3), (27, 11), (29, 1)] {
+            f.bytecode[code[at].offset_dw + 1] = value;
+        }
+        f.bytecode[code[32].offset_dw + 2] = 2;
+        for (at, target) in [(4, 9), (8, 12), (16, 24), (23, 30), (35, 37)] {
+            f.bytecode[code[at].offset_dw + 1] = code[target].offset_dw as i32 - code[at].offset_dw as i32 - 2;
+        }
+        let body = "    FVector2D local_24;\n    FPosition local_68;\n    for (auto& local_20 : this.Pairs)\n    {\n        if (local_21 == 0)\n        {\n        }\n        else\n        {\n        }\n        Use(local_24);\n        if (local_21 == 0)\n        {\n        }\n        else\n        {\n        }\n        if (int(local_68.Valid) != 0)\n        {\n            Use(local_68.Value);\n        }\n    }\n";
+        let expected = "    for (auto& local_20 : this.Pairs)\n    {\n        FVector2D& local_24 = local_21 == 0 ? local_20.A.Value : local_20.B.Value;\n        Use(local_24);\n        FPosition& local_68 = local_21 == 0 ? this.Pairs[local_2].A : this.Pairs[local_2].B;\n        if (local_68.Valid)\n        {\n            Use(local_68.Value);\n        }\n    }\n";
+        let refs = RefResolver::from_test_conditional_field_references(0);
+        let fold = |s: &str, f: &Func, r: &RefResolver| super::restore_conditional_field_references(s, f, r);
+        assert_eq!(fold(body, &f, &refs), expected); assert_eq!(fold(expected, &f, &refs), expected);
+        for fault in 1..=8 { assert_eq!(fold(body, &f, &RefResolver::from_test_conditional_field_references(fault)), body, "metadata {fault}"); }
+        for at in [5, 9, 13, 17, 18, 24, 25, 31] {
+            let mut bad = f.clone(); bad.bytecode[code[at].offset_dw] ^= 1 << 16;
+            assert_eq!(fold(body, &bad, &refs), body, "slot {at}");
+        }
+        let mut bad = f.clone(); bad.bytecode[code[4].offset_dw + 1] += 1; assert_eq!(fold(body, &bad, &refs), body);
+        let mut bad = f.clone(); bad.bytecode[code[3].offset_dw + 1] = 1; assert_eq!(fold(body, &bad, &refs), body);
+        let mut bad = f.clone(); bad.traits |= 4; assert_eq!(fold(body, &bad, &refs), body);
+        let mut bad = f.clone(); bad.obj_locals.push((24, 4)); assert_eq!(fold(body, &bad, &refs), body);
+        let mut bad = f.clone(); let end = bad.bytecode.len(); bad.bytecode.extend(function(&[("JMP", &[])]).bytecode);
+        bad.bytecode[end + 1] = code[7].offset_dw as i32 - end as i32 - 2; assert_eq!(fold(body, &bad, &refs), body);
+        for bad in [format!("{body}    Use(local_24);\n"), body.replace("        Use(local_24);", "        if (local_21 == 0)\n        {\n        }\n        else\n        {\n        }\n        Use(local_24);"),
+            body.replace("FVector2D local_24;", "FVector local_24;"), body.replace("if (int(local_68.Valid) != 0)", "if (int(local_68.Other) != 0)")] {
+            assert_eq!(fold(&bad, &f, &refs), bad);
+        }
     }
 
     #[test]
