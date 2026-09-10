@@ -11398,6 +11398,63 @@ impl Structurer<'_> {
         None
     }
 
+    /// Two guarded tick waits retry the outer deadline; a final inner wait exits it.
+    fn has_two_timed_retries_and_final_wait(&self, head: usize, exit: usize) -> bool {
+        let witness = (|| {
+            if self.ctx.f.ret.token != 0x52 || exit < head + 7 || exit >= self.g.blocks.len() { return None; }
+            let block = |n: usize| &self.g.blocks[n];
+            let code = |n: usize| &self.ctx.instrs[block(n).instr_lo..block(n).instr_hi];
+            let h = code(head); let header = block(head).start_dw; let after = block(exit).start_dw;
+            if h.get(h.len().checked_sub(2)?)?.op.name != "CMPd" || h.last()?.op.name != "JNS"
+                || block(head).succs.as_slice() != [after,block(head+1).start_dw] || code(head+1).first()?.op.name != "SUSPEND"
+                || code(exit-1).iter().map(|i| i.op.name).ne(["JMP"]) || block(exit-1).succs.as_slice() != [after] { return None; }
+            let waits: Vec<_> = (head+1..exit).filter(|n| block(*n).succs.contains(&header)).collect();
+            let [first,second] = waits.as_slice() else { return None; };
+            let tick = |n, suspended| {
+                let c = code(n); let c = if suspended {
+                    if c.first()?.op.name != "SUSPEND" { return None; } &c[1..]
+                } else { c };
+                if c.iter().map(|i| i.op.name).ne(["PshVPtr","CALLSYS","JMP"]) || c[0].words.first() != Some(&0) { return None; }
+                let p = *c[1].qwords.first()? as i64; let ret = self.ctx.refs.func_ret_by_ptr(p)?;
+                (self.ctx.refs.is_method_by_ptr(p) && self.ctx.refs.func_params_by_ptr(p)?.is_empty()
+                    && ret.token == 0x52 && ret.type_info == 0 && !ret.is_reference && !ret.is_object_handle).then_some(p)
+            };
+            let wait = tick(*first,false)?;
+            if tick(*second,false)? != wait || tick(exit-2,true)? != wait { return None; }
+            for &n in waits.iter() {
+                if n <= head+1 || n >= exit-3 || self.jump_op(n-1) != "JLowZ"
+                    || block(n-1).succs.as_slice() != [block(n+1).start_dw,block(n).start_dw]
+                    || block(n).succs.as_slice() != [header]
+                    || self.g.blocks.iter().enumerate().any(|(at,b)| at != n-1 && b.succs.contains(&block(n).start_dw)) { return None; }
+            }
+            let inner = code(exit-3);
+            if inner.iter().map(|i| i.op.name).ne(["PshVPtr","CALLINTF","CpyRtoV4","NOT","CpyVtoR1","JLowZ"])
+                || inner[0].words.first() != Some(&0) || inner[2].words != inner[3].words || inner[2].words != inner[4].words
+                || block(exit-3).succs.as_slice() != [block(exit-1).start_dw,block(exit-2).start_dw]
+                || block(exit-2).succs.as_slice() != [block(exit-3).start_dw] { return None; }
+            let check = *inner[1].dwords.first()? as i32; let ret = self.ctx.refs.func_ret_by_id(check)?;
+            let scratch = *inner[2].words.first()? as i16 as i32;
+            if scratch <= 0 || self.ctx.local_types.and_then(|m| m.get(&scratch)).is_some_and(|ty| ty != "bool")
+                || !self.ctx.refs.is_method_by_id(check) || !self.ctx.refs.func_params_by_id(check)?.is_empty()
+                || ret.token != 0x41 || ret.type_info != 0 || ret.is_reference || ret.is_object_handle { return None; }
+            for n in head+1..exit {
+                if code(n).iter().any(|i| i.op.name == "JMPP") { return None; }
+                for &target in &block(n).succs {
+                    if target <= block(n).start_dw && !((waits.contains(&n) && target == header)
+                        || (n == exit-2 && target == block(exit-3).start_dw)) { return None; }
+                    if target < header || target > after {
+                        let dest = *self.idx_of.get(&target)?;
+                        if code(dest).iter().map(|i| i.op.name).ne(["RET"]) { return None; }
+                    }
+                }
+            }
+            if self.g.blocks.iter().enumerate().any(|(n,b)| (n<head || n>=exit)
+                && b.succs.iter().any(|t| *t > header && *t < after)) { return None; }
+            Some(())
+        })();
+        witness.is_some()
+    }
+
     /// One guarded retry returns to the time test; the final body block exits.
     fn has_guarded_retry_and_final_break(&self, head: usize, exit: usize) -> bool {
         let witness = (|| {
@@ -11491,7 +11548,8 @@ impl Structurer<'_> {
         let jumps_back = (self.jump_op(prev) == "JMP"
             && self.g.blocks[prev].succs.first().copied() == Some(b.start_dw))
             || self.has_two_released_retry_edges(i, taken_idx)
-            || self.has_guarded_retry_and_final_break(i, taken_idx);
+            || self.has_guarded_retry_and_final_break(i, taken_idx)
+            || self.has_two_timed_retries_and_final_wait(i, taken_idx);
         // … unless the body is one the compiler marked as a loop body anyway. A `SUSPEND` stands
         // at the head of every loop body and nowhere else behind a test. Where every path through
         // the body leaves the function, the back edge was dead and the compiler dropped it: the
@@ -13443,6 +13501,45 @@ mod tests {
         }
     }
 
+    #[test]
+    fn timed_retries_preserve_outer_checks_and_the_final_inner_wait() {
+        let mut a = TestAssembler::default();
+        a.label("head"); a.op("CMPd", &[4,12], &[]); a.jump("JNS", "exit");
+        a.label("body"); a.op("SUSPEND", &[], &[]); a.op("CpyVtoR1", &[7], &[]); a.jump("JLowZ", "first_guard");
+        a.label("early_exit"); a.jump("JMP", "ret");
+        a.label("first_guard"); a.op("CpyVtoR1", &[7], &[]); a.jump("JLowZ", "second_guard");
+        a.label("retry1"); a.op("PshVPtr", &[0], &[]); a.label("wait1"); a.op("CALLSYS", &[], &[]); a.label("back1"); a.jump("JMP", "head");
+        a.label("second_guard"); a.op("SetV1", &[9], &[1]); a.op("CpyVtoR1", &[7], &[]); a.jump("JLowZ", "finish");
+        a.label("retry2"); a.op("PshVPtr", &[0], &[]); a.label("wait2"); a.op("CALLSYS", &[], &[]); a.label("back2"); a.jump("JMP", "head");
+        a.label("finish"); a.op("IncVi", &[4], &[]);
+        a.label("inner"); a.op("PshVPtr", &[0], &[]); a.op("CALLINTF", &[], &[20]); a.label("inner_test"); a.op("CpyRtoV4", &[7], &[]);
+        a.op("NOT", &[7], &[]); a.op("CpyVtoR1", &[7], &[]); a.jump("JLowZ", "break");
+        a.label("inner_body"); a.op("SUSPEND", &[], &[]); a.op("PshVPtr", &[0], &[]); a.label("wait3"); a.op("CALLSYS", &[], &[]); a.label("back3"); a.jump("JMP", "inner");
+        a.label("break"); a.jump("JMP", "exit");
+        a.label("exit"); a.op("IncVi", &[4], &[]); a.label("ret"); a.op("RET", &[0], &[]);
+        let mut fixture = a.finish();
+        for label in ["wait1","wait2","wait3"] { fixture.instrs.iter_mut().find(|i| i.offset_dw == fixture.labels[label]).unwrap().qwords = vec![10]; }
+        let refs = RefResolver::from_test_two_timed_retries(0);
+        let render = |f: &CompoundFixture, refs: &RefResolver, ret| render_fixture_range_with_return_class(f,None,refs,"float",None,ret,Some("UTask"));
+        let out = render(&fixture,&refs,0x52);
+        assert!(out.starts_with("while ("),"{out}");
+        assert_eq!(out.matches("while (").count(),2,"{out}");
+        assert_eq!(out.matches("continue;").count(),2,"{out}");
+        assert_eq!(out.matches("break;").count(),1,"{out}");
+        assert_eq!(out.matches("this.WaitTick();").count(),3,"{out}");
+        assert!(out.contains("this.Ready()"),"{out}");
+        for fault in 1..=6 { assert!(!render(&fixture,&RefResolver::from_test_two_timed_retries(fault),0x52).starts_with("while ("),"metadata {fault}"); }
+        for (label,op,words) in [("head","CMPi",vec![4,12]),("body","CpyVtoR1",vec![7]),("retry1","PshVPtr",vec![2]),
+            ("inner_body","CpyVtoR1",vec![7]),("inner_test","CpyRtoV4",vec![8])] {
+            let mut bad = fixture.clone(); replace_same_width(&mut bad,label,op,&words,&[]);
+            assert!(!render(&bad,&refs,0x52).starts_with("while ("),"accepted {label}");
+        }
+        for (label,target) in [("back1","first_guard"),("back3","head"),("early_exit","retry1")] {
+            let mut bad = fixture.clone(); retarget(&mut bad,label,target);
+            assert!(!render(&bad,&refs,0x52).starts_with("while ("),"edge {label}");
+        }
+        assert!(!render(&fixture,&refs,0x44).starts_with("while ("));
+    }
     #[test]
     fn guarded_wait_repeats_the_time_test_and_target_check() {
         let mut a = TestAssembler::default();

@@ -5292,6 +5292,21 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_two_timed_retries(fault: u8) -> Self {
+        let mut r = Self::from_test_guarded_retry_loop(if fault <= 3 { fault } else { 0 });
+        r.funcid_to_ptr.insert(20,20); r.func_by_ptr.insert(20,"Ready".into());
+        r.func_owner.insert(20,"UTask".into()); r.func_is_method.insert(20);
+        r.func_ret.insert(20,DataType { token:0x41,..Default::default() }); r.func_params.insert(20,vec![]);
+        match fault {
+            4 => { r.func_ret.get_mut(&20).unwrap().token = 0x44; },
+            5 => { r.func_is_method.remove(&20); },
+            6 => { r.func_params.get_mut(&20).unwrap().push(DataType::default()); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_guarded_retry_loop(fault: u8) -> Self {
         let mut r = Self::default();
         r.func_by_ptr.insert(10, "WaitTick".into()); r.func_owner.insert(10, "UTask".into()); r.func_is_method.insert(10);
