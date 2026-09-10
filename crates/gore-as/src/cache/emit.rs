@@ -3289,6 +3289,8 @@ fn emit_function_ctor(
         pass_trace("restore_conditional_field_references", &rendered);
         let rendered = fold_widened_vector_sign(&rendered, vector_sign);
         pass_trace("fold_widened_vector_sign", &rendered);
+        let rendered = fold_weak_forward_sum(&rendered, f, refs);
+        pass_trace("fold_weak_forward_sum", &rendered);
         let rendered = fold_reused_vector_product(&rendered, f, refs);
         pass_trace("fold_reused_vector_product", &rendered);
         let rendered = restore_vector_return_lifetimes(&rendered, f, refs);
@@ -9307,6 +9309,85 @@ fn fold_ordered_coordinate_difference(body: &str, f: &Func, refs: &RefResolver) 
     let mut result = out.join("\n"); if body.ends_with('\n') { result.push('\n'); } result
 }
 
+/// Keep the final sum, while the weak-pointer forward vector and scalar remain temporary.
+fn fold_weak_forward_sum(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if !body.contains("FVector local_") { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let w = |i: &Instr| i.words.first().map(|s| *s as i16 as i32);
+    let local_type = |slot| {
+        let locals: Vec<_> = f.obj_locals.iter().filter(|(s, _)| *s == slot).collect();
+        if let [(_, p)] = locals.as_slice() { Some(*p) } else { None }
+    };
+    let value = |t: &super::types::DataType, p| t.token == 5 && t.type_info == p && !t.is_reference && !t.is_object_handle;
+    let scalar = |t: &super::types::DataType| t.token == 0x51 && t.type_info == 0 && !t.is_reference && !t.is_object_handle;
+    let sites: Vec<_> = code.windows(21).enumerate().filter_map(|(at, c)| {
+        if c.iter().map(|i| i.op.name).ne(["PSF", "PSF", "PshVPtr", "ADDSi", "CALLSYS", "STOREOBJ", "PshVPtr", "CALLSYS", "PSF", "CALLSYS", "LoadRObjR", "RDR8", "ADDd", "PshV8", "PSF", "PSF", "CALLSYS", "PSF", "PSF", "PSF", "CALLSYS"]) { return None; }
+        let (sum, rotation, component, config, read, amount, radius, product, base) =
+            (w(&c[0])?, w(&c[1])?, w(&c[5])?, w(&c[10])?, w(&c[11])?, w(&c[12])?, *c[12].words.get(2)? as i16 as i32, w(&c[14])?, w(&c[19])?);
+        let slots = [sum, rotation, component, config, read, amount, radius, product, base];
+        if slots.iter().any(|s| *s <= 0) || HashSet::from(slots).len() != slots.len()
+            || [(2, 0), (6, component), (8, rotation), (13, amount), (15, sum), (17, product), (18, sum)].iter().any(|(n, s)| w(&c[*n]) != Some(*s))
+            || c[12].words.get(1).map(|s| *s as i16 as i32) != Some(read)
+            || [read, amount, radius].iter().any(|s| f.obj_locals.iter().any(|(slot, _)| slot == s)) { return None; }
+        let vector = local_type(sum)?;
+        if [product, base].iter().any(|s| local_type(*s) != Some(vector)) || !value(&f.ret, vector)
+            || !matches!(refs.type_identity_by_ptr(vector), Some(t) if t.name == "FVector" && t.module.is_empty() && t.namespace.is_empty()) { return None; }
+        let rotator = local_type(rotation)?;
+        if !matches!(refs.type_identity_by_ptr(rotator), Some(t) if t.name == "FRotator" && t.module.is_empty() && t.namespace.is_empty()) { return None; }
+        let component_type = local_type(component)?;
+        let component_identity = refs.type_identity_by_ptr(component_type)?;
+        if !component_identity.module.is_empty() || !component_identity.namespace.is_empty() { return None; }
+        let calls: Vec<_> = [4, 7, 9, 16, 20].iter().map(|n| c[*n].qwords.first().copied().map(|p| p as i64)).collect::<Option<_>>()?;
+        let [weak, rotate, forward, mul, add] = calls.as_slice() else { return None; };
+        for (p, owner, constant) in [(*weak, "TWeakObjectPtr", true), (*rotate, component_identity.name.as_str(), false), (*forward, "FRotator", true), (*mul, "FVector", true), (*add, "FVector", true)] {
+            if refs.func_owner_by_ptr(p) != Some(owner) || !refs.is_method_by_ptr(p) || refs.is_const_method_by_ptr(p) != constant { return None; }
+        }
+        let handle = refs.func_ret_by_ptr(*weak)?;
+        if handle.token != 5 || handle.type_info != component_type || !handle.is_object_handle || handle.is_reference || handle.is_object_const
+            || !value(refs.func_ret_by_ptr(*rotate)?, rotator) || !value(refs.func_ret_by_ptr(*forward)?, vector)
+            || !value(refs.func_ret_by_ptr(*mul)?, vector) || !value(refs.func_ret_by_ptr(*add)?, vector)
+            || [weak, rotate, forward].iter().any(|p| !matches!(refs.func_params_by_ptr(**p), Some([])))
+            || refs.func_by_ptr(*weak) != Some("Get") || refs.func_by_ptr(*mul) != Some("opMul") || refs.func_by_ptr(*add) != Some("opAdd")
+            || !matches!(refs.func_params_by_ptr(*mul)?, [t] if scalar(t))
+            || !matches!(refs.func_params_by_ptr(*add)?, [t] if t.token == 5 && t.type_info == vector && t.is_reference && t.is_object_const && t.is_read_only && !t.is_object_handle) { return None; }
+        let weak_id = *c[3].dwords.first()? as i32;
+        let weak_owner = refs.type_identity_by_id(weak_id)?;
+        let (weak_field, old_weak_owner) = refs.member_identity(weak_id, w(&c[3])?)?;
+        if !weak_owner.module.is_empty() || !weak_owner.namespace.is_empty() || refs.type_identity_by_id(old_weak_owner)? != weak_owner { return None; }
+        let config_id = *c[10].dwords.first()? as i32;
+        let config_owner = refs.type_identity_by_id(config_id)?;
+        let (offset_field, old_config_owner) = refs.member_identity(config_id, *c[10].words.get(1)? as i16 as i32)?;
+        if config_owner.module.is_empty() || !config_owner.namespace.is_empty() || refs.type_identity_by_id(old_config_owner)? != config_owner
+            || refs.type_identity_by_ptr(local_type(config)?)? != config_owner || refs.own_field_type_by_class(&config_owner.name, offset_field) != Some("float") { return None; }
+        let uses: Vec<_> = code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&sum)).map(|(n, _)| n).collect();
+        let [made, read_at, reused, consumed] = uses.as_slice() else { return None; };
+        if [*made, *read_at, *reused] != [at, at + 15, at + 18] || *consumed <= at + 20 || code[*consumed].op.name != "PSF"
+            || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let t = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                t > c[0].offset_dw as i64 && t <= c[20].offset_dw as i64
+            }))) { return None; }
+        Some((sum, amount, config, radius, base, weak_field.to_owned(), offset_field.to_owned(), refs.func_by_ptr(*rotate)?.to_owned(), refs.func_by_ptr(*forward)?.to_owned()))
+    }).collect();
+    let [(sum, amount, config, radius, base, weak_field, offset_field, rotate, forward)] = sites.as_slice() else { return body.to_owned(); };
+    let name = format!("local_{sum}");
+    let final_name = format!("{name}_2");
+    let scalar_name = format!("local_{amount}");
+    if [&name, &final_name, &scalar_name].iter().any(|n| count_ident(body, n) != 2) { return body.to_owned(); }
+    let direction = format!("this.{weak_field}.Get().{rotate}().{forward}()");
+    let distance = format!("local_{config}.{offset_field} + local_{radius}");
+    let expected = [format!("FVector {name} = {direction};"), format!("float {scalar_name} = {distance};"), format!("FVector {final_name} = (local_{base} + ({name} * {scalar_name}));")];
+    let lines: Vec<_> = body.lines().collect();
+    let found: Vec<_> = lines.windows(3).enumerate().filter(|(_, c)| c.iter().zip(&expected).all(|(a, b)| a.trim() == b) && indent_of(c[0]) == indent_of(c[1]) && indent_of(c[0]) == indent_of(c[2])).map(|(n, _)| n).collect();
+    let [at] = found.as_slice() else { return body.to_owned(); };
+    let mut out = Vec::new();
+    for (n, line) in lines.iter().enumerate() {
+        if n == *at { out.push(format!("{}FVector {name} = (local_{base} + ({direction} * ({distance})));", indent_of(line))); }
+        else if n != at + 1 && n != at + 2 { out.push(rename_ident(line, &final_name, &name)); }
+    }
+    let mut result = out.join("\n");
+    if body.ends_with('\n') { result.push('\n'); }
+    result
+}
 /// The first product is temporary; its slot becomes the named final sum.
 fn fold_reused_vector_product(body:&str, f:&Func, refs:&RefResolver)->String {
     if f.ret.token!=0x52 || !body.contains("FVector local_") {return body.to_owned();}
@@ -44447,6 +44528,37 @@ mod literal_value_lifetime_tests {
         let mut bad=f.clone();bad.bytecode.extend(function(&[("PSF",&[14])]).bytecode);reject(&bad);
         let mut bad=f.clone();bad.bytecode[c[4].offset_dw]=(bad.bytecode[c[4].offset_dw]&!255)|function(&[("RET",&[0])]).bytecode[0];reject(&bad);
         let mut bad=f.clone();bad.ret=DataType {token:5,type_info:101,..Default::default()};reject(&bad);
+    }
+
+    #[test]
+    fn weak_forward_vector_and_distance_die_before_the_named_sum() {
+        let mut f = function(&[("PSF", &[38]), ("PSF", &[32]), ("PshVPtr", &[0]), ("ADDSi", &[0]), ("CALLSYS", &[]),
+            ("STOREOBJ", &[26]), ("PshVPtr", &[26]), ("CALLSYS", &[]), ("PSF", &[32]), ("CALLSYS", &[]),
+            ("LoadRObjR", &[2, 0]), ("RDR8", &[12]), ("ADDd", &[10, 12, 6]), ("PshV8", &[10]), ("PSF", &[44]),
+            ("PSF", &[38]), ("CALLSYS", &[]), ("PSF", &[44]), ("PSF", &[38]), ("PSF", &[24]), ("CALLSYS", &[]),
+            ("PSF", &[38]), ("RET", &[8])]);
+        f.ret = DataType { token: 5, type_info: 1, ..Default::default() };
+        f.obj_locals = vec![(38, 1), (32, 2), (26, 3), (2, 4), (44, 1), (24, 1)];
+        let c = disassemble(&f.bytecode).unwrap();
+        for (n, p) in [(3, 5), (4, 10), (7, 11), (9, 12), (16, 13), (20, 14)] { f.bytecode[c[n].offset_dw + 1] = p; }
+        f.bytecode[c[10].offset_dw + 2] = 4;
+        let body = "    FVector local_38 = this.Movement.Get().Rotation().Forward();\n    float local_10 = local_2.Offset + local_6;\n    FVector local_38_2 = (local_24 + (local_38 * local_10));\n    Consume(local_38_2);\n";
+        let expected = "    FVector local_38 = (local_24 + (this.Movement.Get().Rotation().Forward() * (local_2.Offset + local_6)));\n    Consume(local_38);\n";
+        let refs = RefResolver::from_test_weak_forward_sum(0);
+        assert_eq!(super::fold_weak_forward_sum(body, &f, &refs), expected);
+        assert_eq!(super::fold_weak_forward_sum(expected, &f, &refs), expected);
+        for fault in 1..=10 { assert_eq!(super::fold_weak_forward_sum(body, &f, &RefResolver::from_test_weak_forward_sum(fault)), body, "metadata {fault}"); }
+        for bad in [body.replace("Movement", "Other"), body.replace("Offset", "Other"), body.replace("Rotation", "Other"),
+            body.replace(" + local_6", " - local_6"), body.replace("    float local_10", "        float local_10"), format!("{body}Use(local_10);\n")] {
+            assert_eq!(super::fold_weak_forward_sum(&bad, &f, &refs), bad);
+        }
+        let reject = |bad: &Func| assert_eq!(super::fold_weak_forward_sum(body, bad, &refs), body);
+        let mut bad = f.clone(); bad.ret.is_reference = true; reject(&bad);
+        let mut bad = f.clone(); bad.obj_locals.push((10, 1)); reject(&bad);
+        let mut bad = f.clone(); bad.obj_locals.push((38, 1)); reject(&bad);
+        let mut bad = f.clone(); bad.bytecode[c[16].offset_dw + 1] = 14; reject(&bad);
+        let mut bad = f.clone(); let mut extra = function(&[("PSF", &[38])]).bytecode; extra.extend(bad.bytecode); bad.bytecode = extra; reject(&bad);
+        let mut bad = f.clone(); let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[7].offset_dw as i32; jump.extend(bad.bytecode); bad.bytecode = jump; reject(&bad);
     }
 
     #[test]

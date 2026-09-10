@@ -5340,6 +5340,47 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_weak_forward_sum(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FVector", ""), ("FRotator", ""), ("UComponent", ""), ("UConfig", "Offset"), ("UNativeHost", "Movement")]);
+        for (p, name, module) in [(1, "FVector", ""), (2, "FRotator", ""), (3, "UComponent", ""), (4, "UConfig", "Script"), (5, "UNativeHost", "")] {
+            r.type_identity_by_ptr.insert(p, TypeIdentity { name: name.into(), module: module.into(), namespace: String::new() });
+        }
+        r.prop_type_id.insert(9, 4);
+        r.prop_type_id.insert(11, 5);
+        r.class_fields.insert("UConfig".into(), HashMap::from([("Offset".into(), "float".into())]));
+        let vector = DataType { token: 5, type_info: 1, ..Default::default() };
+        let reference = DataType { is_reference: true, is_object_const: true, is_read_only: true, ..vector.clone() };
+        for (p, name, owner, ret, args, constant) in [
+            (10, "Get", "TWeakObjectPtr", DataType { token: 5, type_info: 3, is_object_handle: true, ..Default::default() }, vec![], true),
+            (11, "Rotation", "UComponent", DataType { token: 5, type_info: 2, ..Default::default() }, vec![], false),
+            (12, "Forward", "FRotator", vector.clone(), vec![], true),
+            (13, "opMul", "FVector", vector.clone(), vec![DataType { token: 0x51, ..Default::default() }], true),
+            (14, "opAdd", "FVector", vector, vec![reference], true),
+        ] {
+            r.func_by_ptr.insert(p, name.into());
+            r.func_owner.insert(p, owner.into());
+            r.func_ret.insert(p, ret);
+            r.func_params.insert(p, args);
+            r.func_is_method.insert(p);
+            if constant { r.const_method_ptrs.insert(p); }
+        }
+        match fault {
+            1 => { r.func_ret.get_mut(&10).unwrap().is_object_handle = false; },
+            2 => { r.func_ret.get_mut(&11).unwrap().is_reference = true; },
+            3 => { r.func_params.get_mut(&12).unwrap().push(DataType::default()); },
+            4 => { r.func_params.get_mut(&13).unwrap()[0].token = 0x50; },
+            5 => { r.func_params.get_mut(&14).unwrap()[0].is_reference = false; },
+            6 => { r.class_fields.get_mut("UConfig").unwrap().insert("Offset".into(), "float32".into()); },
+            7 => { r.prop_type_id.insert(9, 5); },
+            8 => { r.duplicate_prop_keys.insert(11); },
+            9 => { r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(); },
+            10 => { r.const_method_ptrs.insert(11); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_reused_vector_product(fault:u8)->Self {
         let mut r=Self::from_test_member_chain(&[("FVector",""),("UHost","Speed")]);
         for (p,name,module) in [(1,"FVector",""),(2,"UHost","Script")] {r.type_identity_by_ptr.insert(p,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});}

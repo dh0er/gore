@@ -46,7 +46,6 @@ Environment.GothicUltraDynamicControlerAS	1	0	0
 GAS.Abilities.Combat.AttackLoop.Capsule.PyrolaserHitCapsuleComponent	1	0	0
 GAS.Abilities.Locomotion.GA_Falling	1	0	0
 GAS.Abilities.Passive.GA_PlayerPerception_CrimeRegistration	1	0	0
-GAS.Abilities.Spells.Spells.Fire.GA_Spell_StormOfFire	1	0	0
 GAS.Abilities.Spells.Spells.Light.GA_Spell_Light	1	0	0
 GAS.Abilities.Spells.Spells.Summon.SpawnHelper.Base.SummonSpawnPlaceHelper	2	0	0
 GAS.Abilities.Spells.Spells.Telekinesis.GA_Spell_Telekinesis	1	0	0
