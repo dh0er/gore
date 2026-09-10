@@ -5032,6 +5032,33 @@ impl RefResolver {
         r
     }
     #[cfg(test)]
+    pub(crate) fn from_test_array_count_loop_lifetime(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("TArray", ""), ("TArray", ""), ("UOwner", "Values"), ("UItem", "")]);
+        for (id, name) in [(1, "TArray"), (2, "TArray"), (3, "UOwner"), (4, "UItem")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: name.into(), module: "Fixture".into(), namespace: String::new() });
+        }
+        r.prop_type_id.insert(7, 3); r.class_fields.entry("UOwner".into()).or_default().insert("Values".into(), "TArray<UItem>".into());
+        r.type_subtypes.insert(1, vec![DataType { token: 0x44, ..Default::default() }]);
+        r.type_subtypes.insert(2, vec![DataType { token: 5, type_info: 4, is_object_handle: true, ..Default::default() }]);
+        for (p, name, token, params) in [(10, "$beh0", 0x52, vec![]), (11, "$beh0", 0x52, vec![]), (12, "Num", 0x44, vec![]),
+            (13, "SetNum", 0x52, vec![DataType { token: 0x44, ..Default::default() }])] {
+            r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, "TArray".into()); r.func_is_method.insert(p);
+            r.func_ret.insert(p, DataType { token, ..Default::default() }); r.func_params.insert(p, params);
+        }
+        match fault {
+            1 => { r.type_subtypes.get_mut(&1).unwrap()[0].token = 0x51; },
+            2 => { r.type_subtypes.get_mut(&2).unwrap()[0].is_object_handle = false; },
+            3 => { r.func_ret.get_mut(&12).unwrap().token = 0x4b; },
+            4 => { r.func_params.get_mut(&13).unwrap()[0].is_reference = true; },
+            5 => { r.prop_type_id.insert(7, 4); },
+            6 => { r.duplicate_prop_keys.insert(7); },
+            7 => { r.func_ret.get_mut(&10).unwrap().token = 0x44; },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_conditional_handle_return(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("URouter", ""), ("UAgent", ""), ("UState", "")]);
         for (id, name) in [(1, "URouter"), (2, "UAgent"), (3, "UState")] {

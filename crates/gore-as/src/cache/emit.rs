@@ -3253,6 +3253,8 @@ fn emit_function_ctor(
         pass_trace("restore_segment_clearance_order", &rendered);
         let rendered = restore_adjusted_segment_endpoint(&rendered, f, refs);
         pass_trace("restore_adjusted_segment_endpoint", &rendered);
+        let rendered = restore_array_count_and_loop_lifetime(&rendered, f, refs);
+        pass_trace("restore_array_count_and_loop_lifetime", &rendered);
         let rendered = restore_conditional_handle_return(&rendered, f, refs);
         pass_trace("restore_conditional_handle_return", &rendered);
         let rendered = restore_copied_enum_field_lifetimes(&rendered, f, refs);
@@ -8557,6 +8559,85 @@ fn rewrite_no_assign_locals(body: &str, locals: &BTreeMap<i32, String>) -> (Stri
         suppressed.insert(*slot);
     }
     (out, suppressed)
+}
+
+/// Keep the initial array size named while a reused loop index has a shorter scope.
+fn restore_array_count_and_loop_lifetime(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if !body.contains(".SetNum(this.") || !body.contains("for (; local_") || f.is_const_method() || f.ret.token != 0x52 { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let word = |i: &Instr, n: usize| i.words.get(n).map(|w| *w as i16 as i32);
+    let jump = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+    let proof = (|| {
+        let c = code.get(..13)?;
+        if c.iter().map(|i| i.op.name).ne(["PSF", "CALLSYS", "PshVPtr", "ADDSi", "CALLSYS", "CpyRtoV4", "PshV4", "PSF", "CALLSYS", "PSF", "CALLSYS", "SetV4", "JMP"]) { return None; }
+        let (map, count, output, index) = (word(&c[0], 0)?, word(&c[5], 0)?, word(&c[9], 0)?, word(&c[11], 0)?);
+        if [map, count, output, index].iter().any(|s| *s <= 0) || HashSet::from([map, count, output, index]).len() != 4
+            || word(&c[2], 0) != Some(0) || word(&c[6], 0) != Some(count) || word(&c[7], 0) != Some(map)
+            || c[11].dwords.first() != Some(&0) || f.obj_locals.iter().any(|(s, _)| [count, index].contains(s)) { return None; }
+        let local_type = |slot| {
+            let values: Vec<_> = f.obj_locals.iter().filter(|(s, _)| *s == slot).map(|(_, p)| *p).collect();
+            let [p] = values.as_slice() else { return None; };
+            Some((*p, super::types::DataType { token: 5, type_info: *p, ..Default::default() }.base_name(refs)))
+        };
+        let (array_ptr, array_type) = local_type(output)?;
+        let [element] = refs.type_subtypes(array_ptr)? else { return None; };
+        if local_type(map)?.1 != "TArray<int>" || refs.type_identity_by_ptr(array_ptr)?.name != "TArray"
+            || element.token != 5 || !element.is_object_handle || element.is_reference { return None; }
+        let tid = *c[3].dwords.first()? as i32; let (field, old) = refs.member_identity(tid, word(&c[3], 0)?)?;
+        let owner = refs.type_identity_by_id(tid)?;
+        if owner.module.is_empty() || !owner.namespace.is_empty() || refs.type_identity_by_id(old)? != owner
+            || refs.own_field_type_by_class(&owner.name, field)? != array_type { return None; }
+        for (at, name, result, params) in [(1, "$beh0", 0x52, 0), (4, "Num", 0x44, 0), (8, "SetNum", 0x52, 1), (10, "$beh0", 0x52, 0)] {
+            let p = *c[at].qwords.first()? as i64; let ret = refs.func_ret_by_ptr(p)?; let args = refs.func_params_by_ptr(p)?;
+            if refs.func_by_ptr(p) != Some(name) || refs.func_owner_by_ptr(p) != Some("TArray") || !refs.is_method_by_ptr(p)
+                || ret.token != result || ret.is_reference || ret.is_object_handle || ret.type_info != 0 || args.len() != params
+                || args.iter().any(|a| a.token != 0x44 || a.is_reference || a.is_object_handle || a.type_info != 0) { return None; }
+        }
+        let condition = code.iter().position(|i| Some(i.offset_dw as i64) == jump(&c[12]))?;
+        let tail = code.get(condition.checked_sub(1)?..condition + 6)?;
+        let scratch = word(&tail[4], 0)?;
+        if tail.iter().map(|i| i.op.name).ne(["IncVi", "PshVPtr", "ADDSi", "CALLSYS", "CpyRtoV4", "CMPi", "JS"])
+            || scratch <= 0 || [map, count, output, index].contains(&scratch) || word(&tail[0], 0) != Some(index)
+            || word(&tail[1], 0) != Some(0) || tail[2].words != c[3].words || tail[2].dwords != c[3].dwords
+            || tail[3].qwords != c[4].qwords || word(&tail[5], 0) != Some(index) || word(&tail[5], 1) != Some(scratch)
+            || jump(&tail[6]) != Some(code.get(13)?.offset_dw as i64) { return None; }
+        let resets: Vec<_> = code.iter().enumerate().filter(|(_, i)| i.op.name == "SetV4" && word(i, 0) == Some(index)).collect();
+        let [(first_reset, _), (second_reset, reset)] = resets.as_slice() else { return None; };
+        let second_jump = code.get(second_reset + 1)?;
+        let second_condition = code.iter().position(|i| Some(i.offset_dw as i64) == jump(second_jump))?;
+        let second_tail = code.get(second_condition.checked_sub(1)?..second_condition + 6)?;
+        if second_jump.op.name != "JMP" || second_condition <= second_reset + 2
+            || second_tail.iter().map(|i| i.op.name).ne(["IncVi", "PshVPtr", "ADDSi", "CALLSYS", "CpyRtoV4", "CMPi", "JS"])
+            || word(&second_tail[0], 0) != Some(index) || word(&second_tail[1], 0) != Some(0)
+            || second_tail[2].words != c[3].words || second_tail[2].dwords != c[3].dwords || second_tail[3].qwords != c[4].qwords
+            || word(&second_tail[4], 0) != Some(count) || word(&second_tail[5], 0) != Some(index) || word(&second_tail[5], 1) != Some(count)
+            || jump(&second_tail[6]) != Some(code.get(second_reset + 2)?.offset_dw as i64)
+            || code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&count)).map(|(at, _)| at)
+                .ne([5, 6, second_condition + 3, second_condition + 4]) { return None; }
+        if *first_reset != 11 || *second_reset <= condition + 5 || reset.dwords.first() != Some(&0)
+            || code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&index))
+                .any(|(at, i)| at < 11 || (at > condition + 5 && at < *second_reset)
+                    || (at <= condition + 5 && !matches!(i.op.name, "SetV4" | "PshV4" | "IncVi" | "CMPi")))
+            || code.iter().enumerate().any(|(at, i)| i.op.name == "JMPP" || (i.op.name.starts_with('J') && jump(i).is_some_and(|t|
+                (t > c[0].offset_dw as i64 && t <= c[12].offset_dw as i64)
+                || (!(11..condition + 6).contains(&at) && t >= code[13].offset_dw as i64 && t <= tail[6].offset_dw as i64)))) { return None; }
+        Some((map, count, output, index, field, array_type))
+    })();
+    let Some((map, count, output, index, field, array_type)) = proof else { return body.to_owned(); };
+    let count_name = format!("local_{count}"); let index_name = format!("local_{index}");
+    if count_ident(body, &count_name) != 0 { return body.to_owned(); }
+    let lines: Vec<_> = body.lines().collect();
+    let prefix = [format!("TArray<int> local_{map};"), format!("local_{map}.SetNum(this.{field}.Num());"), format!("{array_type} local_{output};"),
+        format!("int {index_name} = 0;"), format!("for (; {index_name} < this.{field}.Num(); ++{index_name})"), "{".into()];
+    let matches: Vec<_> = lines.windows(6).enumerate().filter(|(_, c)| c.iter().map(|l| l.trim()).eq(prefix.iter().map(String::as_str))).map(|(at, _)| at).collect();
+    let [at] = matches.as_slice() else { return body.to_owned(); };
+    let close = block_span(&lines, at + 6).1;
+    if close >= lines.len() || lines.iter().enumerate().any(|(n, l)| count_ident(l, &index_name) > 0 && (n < at + 3 || n > close)) { return body.to_owned(); }
+    let indent = indent_of(lines[*at]); let mut result: Vec<_> = lines.iter().map(|l| (*l).to_owned()).collect();
+    let mut scoped = vec![format!("{indent}{{")]; scoped.extend(lines[at + 3..=close].iter().map(|l| format!("    {l}"))); scoped.push(format!("{indent}}}"));
+    result.splice(at + 3..=close, scoped);
+    result.splice(at + 1..at + 2, [format!("{indent}int {count_name} = this.{field}.Num();"), format!("{indent}local_{map}.SetNum({count_name});")]);
+    let mut result = result.join("\n"); if body.ends_with('\n') { result.push('\n'); } result
 }
 
 /// The conditional's result is a return temporary, not a function-wide handle.
@@ -43188,6 +43269,32 @@ mod literal_value_lifetime_tests {
         let mut named=function(&[("PSF",&[12]),("CALL",&[]),("PshVPtr",&[65534]),("CALL",&[])]);
         let c=disassemble(&named.bytecode).unwrap();for at in [1,3]{named.bytecode[c[at].offset_dw+1]=7;}
         assert_eq!(super::fold_returned_empty_values(body,&named,&refs),body);
+    }
+
+    #[test]
+    fn array_count_stays_named_while_the_first_loop_index_expires() {
+        let mut f = function(&[("PSF", &[4]), ("CALLSYS", &[]), ("PshVPtr", &[0]), ("ADDSi", &[0]), ("CALLSYS", &[]), ("CpyRtoV4", &[5]), ("PshV4", &[5]), ("PSF", &[4]), ("CALLSYS", &[]), ("PSF", &[10]), ("CALLSYS", &[]), ("SetV4", &[11]), ("JMP", &[]),
+            ("SUSPEND", &[]), ("PshV4", &[11]), ("CALLSYS", &[]), ("IncVi", &[11]), ("PshVPtr", &[0]), ("ADDSi", &[0]), ("CALLSYS", &[]), ("CpyRtoV4", &[12]), ("CMPi", &[11, 12]), ("JS", &[]),
+            ("SetV4", &[11]), ("JMP", &[]), ("SUSPEND", &[]), ("PshV4", &[11]), ("CALLSYS", &[]), ("IncVi", &[11]), ("PshVPtr", &[0]), ("ADDSi", &[0]), ("CALLSYS", &[]), ("CpyRtoV4", &[5]), ("CMPi", &[11, 5]), ("JS", &[]), ("RET", &[0])]);
+        f.ret.token = 0x52; f.obj_locals = vec![(4, 1), (10, 2)]; let c = disassemble(&f.bytecode).unwrap();
+        for (at, value) in [(1, 10), (3, 3), (4, 12), (8, 13), (10, 11), (15, 99), (18, 3), (19, 12), (27, 99), (30, 3), (31, 12)] { f.bytecode[c[at].offset_dw + 1] = value; }
+        for (at, target) in [(12, 17), (22, 13), (24, 29), (34, 25)] { f.bytecode[c[at].offset_dw + 1] = c[target].offset_dw as i32 - c[at].offset_dw as i32 - 2; }
+        let body = "    TArray<int> local_4;\n    local_4.SetNum(this.Values.Num());\n    TArray<UItem> local_10;\n    int local_11 = 0;\n    for (; local_11 < this.Values.Num(); ++local_11)\n    {\n        Consume(local_11);\n    }\n    int local_11_2 = 0;\n    for (; local_11_2 < this.Values.Num(); ++local_11_2)\n    {\n        Consume(local_11_2);\n    }\n";
+        let expected = "    TArray<int> local_4;\n    int local_5 = this.Values.Num();\n    local_4.SetNum(local_5);\n    TArray<UItem> local_10;\n    {\n        int local_11 = 0;\n        for (; local_11 < this.Values.Num(); ++local_11)\n        {\n            Consume(local_11);\n        }\n    }\n    int local_11_2 = 0;\n    for (; local_11_2 < this.Values.Num(); ++local_11_2)\n    {\n        Consume(local_11_2);\n    }\n";
+        let refs = RefResolver::from_test_array_count_loop_lifetime(0);
+        assert_eq!(super::restore_array_count_and_loop_lifetime(body, &f, &refs), expected);
+        assert_eq!(super::restore_array_count_and_loop_lifetime(expected, &f, &refs), expected);
+        for fault in 1..=7 { assert_eq!(super::restore_array_count_and_loop_lifetime(body, &f, &RefResolver::from_test_array_count_loop_lifetime(fault)), body, "metadata {fault}"); }
+        for bad in [format!("{body}    Use(local_11);\n"), format!("    int local_5;\n{body}"), body.replace("this.Values.Num()", "this.Other.Num()")]
+            { assert_eq!(super::restore_array_count_and_loop_lifetime(&bad, &f, &refs), bad); }
+        let mut bad = f.clone(); bad.traits |= 4; assert_eq!(super::restore_array_count_and_loop_lifetime(body, &bad, &refs), body);
+        let mut bad = f.clone(); bad.obj_locals.push((10, 2)); assert_eq!(super::restore_array_count_and_loop_lifetime(body, &bad, &refs), body);
+        let mut bad = f.clone(); bad.ret.token = 0x44; assert_eq!(super::restore_array_count_and_loop_lifetime(body, &bad, &refs), body);
+        let mut bad = f.clone(); bad.bytecode[c[12].offset_dw + 1] += 1; assert_eq!(super::restore_array_count_and_loop_lifetime(body, &bad, &refs), body);
+        let mut bad = f.clone(); bad.bytecode[c[24].offset_dw + 1] = c[14].offset_dw as i32 - c[24].offset_dw as i32 - 2;
+        assert_eq!(super::restore_array_count_and_loop_lifetime(body, &bad, &refs), body);
+        let mut bad = f.clone(); let extra = function(&[("SetV4", &[5])]).bytecode;
+        bad.bytecode.splice(c[35].offset_dw..c[35].offset_dw, extra); assert_eq!(super::restore_array_count_and_loop_lifetime(body, &bad, &refs), body);
     }
 
     #[test]
