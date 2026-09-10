@@ -3251,6 +3251,8 @@ fn emit_function_ctor(
         pass_trace("fold_ordered_coordinate_difference", &rendered);
         let rendered = restore_segment_clearance_order(&rendered, f, refs);
         pass_trace("restore_segment_clearance_order", &rendered);
+        let rendered = restore_adjusted_segment_endpoint(&rendered, f, refs);
+        pass_trace("restore_adjusted_segment_endpoint", &rendered);
         let rendered = fold_widened_vector_sign(&rendered, vector_sign);
         pass_trace("fold_widened_vector_sign", &rendered);
         s.truncate(declarations_at);
@@ -8515,6 +8517,84 @@ fn rewrite_no_assign_locals(body: &str, locals: &BTreeMap<i32, String>) -> (Stri
     (out, suppressed)
 }
 
+/// The adjustment product is temporary; the later endpoint starts a new value life.
+fn restore_adjusted_segment_endpoint(body:&str,f:&Func,refs:&RefResolver)->String {
+    if !body.contains(" += local_") || !body.contains(".GetSafeNormal(") || f.params.len()!=4 {return body.to_owned();}
+    let Ok(code)=disassemble(&f.bytecode) else{return body.to_owned();};let mut sites=Vec::new();
+    for c in code.windows(40) {
+        let site=(|| {
+            if c.iter().map(|i|i.op.name).ne(["PshGPtr","PshC8","PSF","PSF","PSF","PSF","CALLSYS","PSF","CALLSYS",
+                "PshVPtr","CALLSYS","CpyRtoV4","fTOd","PshV8","PSF","PSF","CALLSYS","PSF","PSF","PSF","CALLSYS",
+                "PSF","PshVPtr","CALLSYS","PSF","PSF","CALLSYS","PshGPtr","PshC8","PSF","PshVPtr","CALLSYS",
+                "PshV8","PSF","PSF","CALLSYS","PSF","PSF","PSF","CALLSYS"]) {return None;}
+            let w=|at:usize,n:usize|c[at].words.get(n).map(|v|*v as i16 as i32);let ptr=|at:usize|c[at].qwords.first().map(|p|*p as i64);
+            let groups:&[&[(usize,usize)]]=&[&[(4,0),(7,0),(14,0),(17,0),(21,0),(24,0),(29,0),(34,0),(37,0)],
+                &[(2,0),(15,0),(18,0),(33,0),(36,0)],&[(3,0),(19,0)],&[(5,0)],&[(9,0)],&[(11,0),(12,1)],&[(12,0),(13,0)],&[(25,0),(38,0)]];
+            let mut slots=Vec::new();for group in groups {
+                let s=w(group[0].0,group[0].1).filter(|s|*s>0)?;
+                if group.iter().any(|(at,n)|w(*at,*n)!=Some(s)) || slots.contains(&s) {return None;}slots.push(s);
+            }
+            if w(22,0)!=Some(-2) || w(30,0)!=Some(-4) || w(32,0)!=Some(-6)
+                || c[0].qwords!=c[27].qwords || c[1].qwords!=c[28].qwords {return None;}
+            let (sub,normal,radius,mul,adjust,location,copy,add)=(ptr(6)?,ptr(8)?,ptr(10)?,ptr(16)?,ptr(20)?,ptr(23)?,ptr(26)?,ptr(39)?);
+            if ptr(31)!=Some(normal) || ptr(35)!=Some(mul) {return None;}
+            let vector=refs.func_ret_by_ptr(sub)?;let identity=refs.type_identity_by_ptr(vector.type_info)?;
+            if vector.token!=5 || vector.is_reference || vector.is_object_handle || identity.name!="FVector" || !identity.module.is_empty() || !identity.namespace.is_empty() {return None;}
+            let value=|t:&super::types::DataType|t.token==5 && t.type_info==vector.type_info && !t.is_reference && !t.is_object_handle && !t.is_object_const && !t.is_read_only;
+            let input=|t:&super::types::DataType|t.token==5 && t.type_info==vector.type_info && t.is_reference && t.is_object_const && t.is_read_only && !t.is_object_handle;
+            for (p,name,constant) in [(sub,"opSub",true),(normal,"GetSafeNormal",true),(mul,"opMul",true),(adjust,"opAddAssign",false),(add,"opAdd",true)] {
+                if refs.func_by_ptr(p)!=Some(name) || refs.func_owner_by_ptr(p)!=Some("FVector") || !refs.is_method_by_ptr(p)
+                    || refs.is_const_method_by_ptr(p)!=constant || !value(refs.func_ret_by_ptr(p)?) {return None;}
+            }
+            for p in [sub,adjust,add,copy] {let [a]=refs.func_params_by_ptr(p)? else{return None;};if !input(a){return None;}}
+            let [scale]=refs.func_params_by_ptr(mul)? else{return None;};
+            let [tolerance,zero]=refs.func_params_by_ptr(normal)? else{return None;};
+            if scale.token!=0x51 || scale.is_reference || tolerance.token!=0x51 || tolerance.is_reference || !input(zero) {return None;}
+            if refs.func_by_ptr(copy)!=Some("$beh0") || refs.func_owner_by_ptr(copy)!=Some("FVector") || !refs.is_method_by_ptr(copy)
+                || refs.is_const_method_by_ptr(copy) || refs.func_ret_by_ptr(copy)?.token!=0x52 || refs.func_ret_by_ptr(copy)?.is_reference || refs.func_ret_by_ptr(copy)?.is_object_handle {return None;}
+            for p in [radius,location] {if refs.func_owner_by_ptr(p)!=Some("AActor") || !refs.is_method_by_ptr(p) || !refs.is_const_method_by_ptr(p)
+                || !refs.func_params_by_ptr(p)?.is_empty(){return None;}}
+            let narrow=refs.func_ret_by_ptr(radius)?;
+            if narrow.token!=0x50 || narrow.is_reference || narrow.is_object_handle || !value(refs.func_ret_by_ptr(location)?) {return None;}
+            for slot in [slots[0],slots[1],slots[2],slots[3],slots[7]] {
+                if f.obj_locals.iter().filter(|(s,_)|*s==slot).map(|(_,p)|*p).ne([vector.type_info]) {return None;}
+            }
+            let actor=&f.params[0].ty;
+            if actor.token!=5 || !actor.is_object_handle || actor.is_reference || !input(&f.params[1].ty)
+                || f.params[2].ty.token!=0x51 || f.params[2].ty.is_reference
+                || f.obj_locals.iter().filter(|(s,_)|*s==slots[4]).map(|(_,p)|*p).ne([actor.type_info]) {return None;}
+            if code.iter().any(|i|i.op.name=="JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let target=i.offset_dw as i64+2+*d as i32 as i64;target>c[0].offset_dw as i64 && target<=c[39].offset_dw as i64
+            }))) {return None;}
+            let global=ptr(0)?;let name=refs.global_by_ptr(global)?;let ns=refs.global_ns(global).unwrap_or("");
+            let global=if ns.is_empty(){name.to_owned()}else{format!("{ns}::{name}")};
+            Some((slots,global,*c[1].qwords.first()?,refs.func_by_ptr(radius)?.to_owned(),refs.func_by_ptr(location)?.to_owned()))
+        })();
+        if let Some(site)=site {sites.push(site);}
+    }
+    if sites.len()!=1 {return body.to_owned();}
+    let (s,global,bits,radius,location)=&sites[0];let temp=format!("local_{}",s[0]);
+    if count_ident(body,&temp)!=4 {return body.to_owned();}
+    let mut lines:Vec<String>=body.lines().map(str::to_owned).collect();
+    let replacement=(|| {
+        let (at,(_,name,rhs))=lines.iter().enumerate().filter_map(|(at,line)|declaration_with_initializer(line).map(|d|(at,d)))
+            .find(|(_,(_,name,_))|name==&temp)?;
+        let block=lines.get(at..at+4)?;let indent=indent_of(&block[0]);
+        let calls=call_sites(&format!("{rhs};"));let (_,args)=calls.iter().find(|(name,_)|name=="GetSafeNormal")?;
+        if args.len()!=2 || args[0].parse::<f64>().ok()?.to_bits()!=*bits || args[1]!=*global {return None;}
+        let anchor=format!("local_{}",s[3]);let adjusted=format!("local_{}",s[2]);let origin=format!("local_{}",s[7]);
+        let product=format!("(({anchor} - {adjusted}).GetSafeNormal({}, {global}) * local_{}.{radius}())",args[0],s[4]);
+        let endpoint=format!("({origin} + ({}.GetSafeNormal({}, {global}) * {}))",f.params[1].name,args[0],f.params[2].name);
+        if rhs!=product || !block[0].trim_start().starts_with("FVector ") || block.iter().any(|l|indent_of(l)!=indent)
+            || block[1].trim()!=format!("{adjusted} += {name};") || block[2].trim()!=format!("FVector {origin}({}.{location}());",f.params[0].name)
+            || block[3].trim()!=format!("{name} = {endpoint};") {return None;}
+        Some((at,format!("{indent}{adjusted} += {product};"),format!("{indent}FVector {name} = {endpoint};")))
+    })();
+    let Some((at,adjust,endpoint))=replacement else{return body.to_owned();};
+    lines[at+1]=adjust;lines[at+3]=endpoint;lines.remove(at);
+    let mut result=lines.join("\n");if body.ends_with('\n'){result.push('\n');}result
+}
+
 /// Keep the interpolated point, then calculate clearance, then measure distance.
 fn restore_segment_clearance_order(body:&str,f:&Func,refs:&RefResolver)->String {
     if !body.contains("if ((Math::Lerp(") || f.params.len()!=4 {return body.to_owned();}
@@ -10688,8 +10768,10 @@ fn inline_temporary_into(
     };
     // Replacing one arithmetic operand must preserve the producer's grouping:
     // a / temp with temp = b + c means a / (b + c), not a / b + c.
+    // Calls in either operand do not remove the arithmetic expression's grouping.
     let value = if position == Position::Operand
-        && is_pure_arithmetic(&value) && !wraps_whole_expression(&value)
+        && (is_pure_arithmetic(&value) || [" + ", " - ", " * ", " / ", " % "].iter().any(|op| value.contains(*op)))
+        && !wraps_whole_expression(&value)
     {
         format!("({value})")
     } else { value };
@@ -35318,6 +35400,14 @@ mod arithmetic_inline_grouping_tests {
     #[test]
     fn arithmetic_operand_substitution_preserves_the_original_expression_group() {
         for (value, consumer, expected) in [
+            ("RadiusA() + RadiusB()", "local_6 = local_8 - local_4;",
+                "local_6 = local_8 - (RadiusA() + RadiusB());"),
+            ("GetScale() * local_10", "local_6 = local_8 / local_4;",
+                "local_6 = local_8 / (GetScale() * local_10);"),
+            ("local_2.Radius() + local_10.Radius()", "local_6 = local_8 - local_4;",
+                "local_6 = local_8 - (local_2.Radius() + local_10.Radius());"),
+            ("(RadiusA() + RadiusB())", "local_6 = local_8 - local_4;",
+                "local_6 = local_8 - (RadiusA() + RadiusB());"),
             ("local_2 + local_10", "local_6 = local_8 / local_4;",
                 "local_6 = local_8 / (local_2 + local_10);"),
             ("local_2 - local_10", "local_6 = local_8 * local_4;",
@@ -42628,6 +42718,38 @@ mod literal_value_lifetime_tests {
         let mut named=function(&[("PSF",&[12]),("CALL",&[]),("PshVPtr",&[65534]),("CALL",&[])]);
         let c=disassemble(&named.bytecode).unwrap();for at in [1,3]{named.bytecode[c[at].offset_dw+1]=7;}
         assert_eq!(super::fold_returned_empty_values(body,&named,&refs),body);
+    }
+
+    #[test]
+    fn a_temporary_adjustment_does_not_own_the_later_endpoint() {
+        let mut f=function(&[("PshGPtr",&[]),("PshC8",&[]),("PSF",&[54]),("PSF",&[48]),("PSF",&[42]),("PSF",&[36]),("CALLSYS",&[]),
+            ("PSF",&[42]),("CALLSYS",&[]),("PshVPtr",&[24]),("CALLSYS",&[]),("CpyRtoV4",&[29]),("fTOd",&[4,29]),("PshV8",&[4]),
+            ("PSF",&[42]),("PSF",&[54]),("CALLSYS",&[]),("PSF",&[42]),("PSF",&[54]),("PSF",&[48]),("CALLSYS",&[]),
+            ("PSF",&[42]),("PshVPtr",&[65534]),("CALLSYS",&[]),("PSF",&[42]),("PSF",&[60]),("CALLSYS",&[]),
+            ("PshGPtr",&[]),("PshC8",&[]),("PSF",&[42]),("PshVPtr",&[65532]),("CALLSYS",&[]),("PshV8",&[65530]),
+            ("PSF",&[54]),("PSF",&[42]),("CALLSYS",&[]),("PSF",&[54]),("PSF",&[42]),("PSF",&[60]),("CALLSYS",&[]),("RET",&[10])]);
+        let c=disassemble(&f.bytecode).unwrap();
+        for (at,p) in [(0,100),(6,10),(8,11),(10,12),(16,13),(20,14),(23,15),(26,16),(27,100),(31,11),(35,13),(39,17)] {f.bytecode[c[at].offset_dw+1]=p;}
+        let bits=0.125f64.to_bits();for at in [1,28] {f.bytecode[c[at].offset_dw+1]=bits as i32;f.bytecode[c[at].offset_dw+2]=(bits>>32) as i32;}
+        let vector=DataType {token:5,type_info:1,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()};
+        f.params=[("Moving",DataType {token:5,type_info:2,is_object_handle:true,..Default::default()}),("Direction",vector),
+            ("Length",DataType {token:0x51,..Default::default()}),("Extra",DataType {token:0x51,..Default::default()})].into_iter()
+            .map(|(name,ty)|crate::cache::model::Param {name:name.into(),ty,flags:0}).collect();
+        f.obj_locals=vec![(36,1),(48,1),(42,1),(54,1),(60,1),(24,2)];
+        let body="    FVector local_42 = ((local_36 - local_48).GetSafeNormal(0.125, FVector::ZeroVector) * local_24.Radius());\n    local_48 += local_42;\n    FVector local_60(Moving.Location());\n    local_42 = (local_60 + (Direction.GetSafeNormal(0.125, FVector::ZeroVector) * Length));\n    Use(local_42);\n";
+        let expected="    local_48 += ((local_36 - local_48).GetSafeNormal(0.125, FVector::ZeroVector) * local_24.Radius());\n    FVector local_60(Moving.Location());\n    FVector local_42 = (local_60 + (Direction.GetSafeNormal(0.125, FVector::ZeroVector) * Length));\n    Use(local_42);\n";
+        let refs=RefResolver::from_test_adjusted_segment_endpoint(0);let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_adjusted_segment_endpoint(s,f,r);
+        assert_eq!(fold(body,&f,&refs),expected);assert_eq!(fold(expected,&f,&refs),expected);
+        for fault in 1..=6 {assert_eq!(fold(body,&f,&RefResolver::from_test_adjusted_segment_endpoint(fault)),body,"metadata {fault}");}
+        for at in [2,3,4,5,7,9,11,12,13,14,15,17,18,19,21,22,24,25,29,30,32,33,34,36,37,38] {
+            let mut bad=f.clone();bad.bytecode[c[at].offset_dw]^=1<<16;assert_eq!(fold(body,&bad,&refs),body,"operand {at}");
+        }
+        let mut changed=f.clone();changed.bytecode[c[28].offset_dw+1]^=1;assert_eq!(fold(body,&changed,&refs),body);
+        let mut duplicate=f.clone();duplicate.obj_locals.push((42,1));assert_eq!(fold(body,&duplicate,&refs),body);
+        let mut entry=f.clone();let end=entry.bytecode.len();entry.bytecode.extend(function(&[("JMP",&[])]).bytecode);
+        entry.bytecode[end+1]=c[22].offset_dw as i32-end as i32-2;assert_eq!(fold(body,&entry,&refs),body);
+        for text in [body.replace("0.125", "0.25"),body.replace("local_24.Radius", "local_22.Radius"),body.replace(" += "," -= "),
+            body.replace("    FVector local_60", "    Before();\n    FVector local_60"),body.replace("* Length", "* Extra"),format!("{body}Use(local_42);\n")] {assert_eq!(fold(&text,&f,&refs),text);}
     }
 
     #[test]

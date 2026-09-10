@@ -5032,6 +5032,27 @@ impl RefResolver {
         r
     }
     #[cfg(test)]
+    pub(crate) fn from_test_adjusted_segment_endpoint(fault:u8)->Self {
+        let mut r=Self::default();r.type_identity_by_ptr.insert(1,TypeIdentity {name:"FVector".into(),module:if fault==1 {"Foreign"}else{""}.into(),namespace:String::new()});
+        let vector=DataType {token:5,type_info:1,..Default::default()};let input=DataType {is_reference:true,is_object_const:true,is_read_only:true,..vector.clone()};
+        let double=DataType {token:0x51,..Default::default()};
+        for (ptr,name) in [(10,"opSub"),(11,"GetSafeNormal"),(13,"opMul"),(14,"opAddAssign"),(16,"$beh0"),(17,"opAdd")] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,"FVector".into());r.func_is_method.insert(ptr);
+            if ![14,16].contains(&ptr) {r.const_method_ptrs.insert(ptr);}
+            r.func_ret.insert(ptr,if ptr==16 {DataType {token:0x52,is_reference:fault==5,..Default::default()}}else{vector.clone()});
+            r.func_params.insert(ptr,match ptr {11=>vec![double.clone(),input.clone()],13=>vec![double.clone()],_=>vec![input.clone()]});
+        }
+        for (ptr,name) in [(12,"Radius"),(15,"Location")] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,"AActor".into());r.func_is_method.insert(ptr);r.const_method_ptrs.insert(ptr);r.func_params.insert(ptr,vec![]);
+            r.func_ret.insert(ptr,if ptr==12 {DataType {token:if fault==3 {0x51}else{0x50},..Default::default()}}else{vector.clone()});
+        }
+        r.global_by_ptr.insert(100,"ZeroVector".into());r.global_ns.insert(100,if fault==6 {"Other"}else{"FVector"}.into());
+        if fault==2 {r.func_params.get_mut(&11).unwrap()[1].is_read_only=false;}
+        if fault==4 {r.const_method_ptrs.insert(14);}
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_segment_clearance_order(fault:u8)->Self {
         let mut r=Self::default();
         r.type_identity_by_ptr.insert(1,TypeIdentity {name:"FVector".into(),module:if fault==1 {"Foreign"}else{""}.into(),namespace:String::new()});
