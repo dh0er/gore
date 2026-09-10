@@ -5536,6 +5536,118 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_location_property_return(fault: u8) -> Self {
+        let mut r = Self::from_test_copied_binary_receiver(0);
+        r.type_by_ptr.insert(3, "AGothicCharacter".into());
+        r.type_identity_by_ptr.insert(3, TypeIdentity { name: "AGothicCharacter".into(), module: String::new(), namespace: String::new() });
+        let vector = DataType { token: 5, type_info: 1, ..Default::default() };
+        let reference = DataType { is_reference: true, is_object_const: true, is_read_only: true, ..vector.clone() };
+        let scalar = DataType { token: 0x51, ..Default::default() };
+        for (p, name, owner, ret, params) in [
+            (10, "GetSelf", "UCharacterAIState", DataType { token: 5, type_info: 3, is_object_handle: true, ..Default::default() }, vec![]),
+            (20, "GetActorLocation", "AActor", vector.clone(), vec![]),
+            (30, "GetSafeNormal", "FVector", vector.clone(), vec![scalar.clone(), reference.clone()]),
+            (40, "opMul", "FVector", vector.clone(), vec![scalar]),
+            (50, "opSub", "FVector", vector, vec![reference.clone()]),
+            (60, "$beh0", "FVector", DataType { token: 0x52, ..Default::default() }, vec![reference]),
+        ] {
+            r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, owner.into());
+            r.func_ret.insert(p, ret); r.func_params.insert(p, params); r.func_is_method.insert(p);
+            if p != 60 { r.const_method_ptrs.insert(p); }
+        }
+        r.global_by_ptr.insert(70, "ZeroVector".into()); r.global_ns.insert(70, "FVector".into());
+        match fault {
+            1 => { r.func_owner.insert(20, "AOther".into()); },
+            2 => { r.func_ret.get_mut(&20).unwrap().is_reference = true; },
+            3 => { r.func_ret.get_mut(&10).unwrap().is_reference = true; },
+            4 => { r.func_params.get_mut(&30).unwrap()[1].is_reference = false; },
+            5 => { r.const_method_ptrs.remove(&40); },
+            6 => { r.func_ret.get_mut(&60).unwrap().token = 0x41; },
+            7 => { r.global_ns.insert(70, "Other".into()); },
+            8 => { r.func_by_ptr.insert(20, "GetOtherLocation".into()); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_range_location_properties(fault: u8) -> Self {
+        let mut r = Self::from_test_location_property_return(0);
+        let vector = DataType { token: 5, type_info: 1, ..Default::default() };
+        for (ptr, name) in [(4, "FColor"), (5, "UObject")] {
+            r.type_by_ptr.insert(ptr, name.into()); r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        r.func_by_ptr.insert(30, "GetActorForwardVector".into()); r.func_owner.insert(30, "AActor".into()); r.func_params.insert(30, vec![]);
+        r.func_by_ptr.insert(50, "opAdd".into());
+        r.func_by_ptr.insert(80, "DrawLine".into()); r.func_ns.insert(80, "DebugScript".into()); r.func_ret.insert(80, DataType { token: 0x52, ..Default::default() });
+        r.func_params.insert(80, vec![DataType { token: 5, type_info: 5, is_object_handle: true, ..Default::default() }, vector.clone(), vector,
+            DataType { token: 5, type_info: 4, ..Default::default() }, DataType { token: 0x50, ..Default::default() }, DataType { token: 0x50, ..Default::default() }]);
+        r.global_by_ptr.insert(90, "Cyan".into()); r.global_ns.insert(90, "FColor".into()); r.global_by_ptr.insert(91, "__WorldContext".into());
+        match fault {
+            1 => { r.func_ret.get_mut(&20).unwrap().is_reference = true; },
+            2 => { r.func_params.get_mut(&80).unwrap()[1].is_reference = true; },
+            3 => { r.func_params.get_mut(&80).unwrap()[4].token = 0x51; },
+            4 => { r.func_ns.insert(80, "Other".into()); },
+            5 => { r.global_by_ptr.insert(90, "Red".into()); },
+            6 => { r.func_by_ptr.insert(20, "GetOtherLocation".into()); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_scan_location_property(fault: u8) -> Self {
+        let mut r = Self::from_test_location_property_return(0);
+        let vector = DataType { token: 5, type_info: 1, ..Default::default() };
+        r.type_by_ptr.insert(4, "UHost".into()); r.typeid_to_ptr.insert(4, 4);
+        r.type_identity_by_ptr.insert(4, TypeIdentity { name: "UHost".into(), module: "Fixture".into(), namespace: String::new() });
+        r.prop_by_key.insert(9, "Distance".into()); r.prop_type_id.insert(9, 4); r.class_fields.insert("UHost".into(), HashMap::from([("Distance".into(), "float".into())]));
+        r.func_by_ptr.insert(80, "Center".into()); r.func_ret.insert(80, vector.clone()); r.func_params.insert(80, vec![]); r.func_is_method.insert(80); r.funcid_to_ptr.insert(100, 80);
+        r.func_by_ptr.insert(30, "RotateAngleAxis".into());
+        r.func_by_ptr.insert(90, "opAdd".into()); r.func_owner.insert(90, "FVector".into()); r.func_ret.insert(90, vector); r.func_params.insert(90, r.func_params[&50].clone()); r.func_is_method.insert(90); r.const_method_ptrs.insert(90);
+        r.global_by_ptr.insert(70, "UpVector".into());
+        match fault {
+            1 => { r.func_ret.get_mut(&80).unwrap().is_reference = true; },
+            2 => { r.func_ret.get_mut(&20).unwrap().is_reference = true; },
+            3 => { r.func_params.get_mut(&30).unwrap()[1].is_reference = false; },
+            4 => { r.class_fields.get_mut("UHost").unwrap().insert("Distance".into(), "float32".into()); },
+            5 => { r.duplicate_prop_keys.insert(9); },
+            6 => { r.global_by_ptr.insert(70, "RightVector".into()); },
+            7 => { r.func_is_method.remove(&80); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_nav_normal_properties(fault: u8) -> Self {
+        let mut r = Self::from_test_location_property_return(0);
+        for (ptr, name, module) in [(4, "UHost", "Fixture"), (5, "UCombat", "Fixture"), (6, "FAbilityTaskExecutor", ""), (7, "UAIController", "")] {
+            r.type_by_ptr.insert(ptr, name.into()); r.typeid_to_ptr.insert(ptr as i32, ptr);
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: module.into(), namespace: String::new() });
+        }
+        r.class_super.insert("UCombat".into(), String::new()); r.class_fields.insert("UHost".into(), HashMap::from([("Combat".into(), "UCombat".into())]));
+        r.prop_by_key.insert(9, "Combat".into()); r.prop_type_id.insert(9, 4);
+        r.func_owner.insert(10, "UAbilityTask_AI".into()); r.func_by_ptr.insert(20, "GetNavAgentLocation".into()); r.func_owner.insert(20, "APawn".into());
+        r.func_by_ptr.insert(30, "GetUnsafeNormal".into()); r.func_params.insert(30, vec![]);
+        r.func_by_ptr.insert(80, "Other".into()); r.func_params.insert(80, vec![]); r.func_ret.insert(80, r.func_ret[&10].clone()); r.func_is_method.insert(80); r.funcid_to_ptr.insert(100, 80);
+        r.func_by_ptr.insert(90, "Evade".into()); r.func_ret.insert(90, DataType { token: 5, type_info: 6, ..Default::default() }); r.funcid_to_ptr.insert(200, 90);
+        r.func_params.insert(90, vec![DataType { token: 5, type_info: 7, is_object_handle: true, ..Default::default() },
+            DataType { token: 5, type_info: 1, is_reference: true, is_object_const: true, is_read_only: true, ..Default::default() }, DataType { token: 0x41, is_read_only: true, is_object_const: true, ..Default::default() }]);
+        match fault {
+            1 => { r.func_ret.get_mut(&20).unwrap().is_reference = true; },
+            2 => { r.func_by_ptr.insert(30, "GetDifferentNormal".into()); },
+            3 => { r.func_params.get_mut(&30).unwrap().push(DataType { token: 0x51, ..Default::default() }); },
+            4 => { r.func_ret.get_mut(&80).unwrap().is_object_handle = false; },
+            5 => { r.duplicate_prop_keys.insert(9); },
+            6 => { r.func_params.get_mut(&90).unwrap()[1].is_reference = false; },
+            7 => { r.func_ret.get_mut(&90).unwrap().is_reference = true; },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_weak_forward_sum(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("FVector", ""), ("FRotator", ""), ("UComponent", ""), ("UConfig", "Offset"), ("UNativeHost", "Movement")]);
         for (p, name, module) in [(1, "FVector", ""), (2, "FRotator", ""), (3, "UComponent", ""), (4, "UConfig", "Script"), (5, "UNativeHost", "")] {
