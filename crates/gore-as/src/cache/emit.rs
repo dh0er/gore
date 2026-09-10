@@ -3324,6 +3324,8 @@ fn emit_function_ctor(
         pass_trace("restore_eager_minimum_location_property", &rendered);
         let rendered = restore_feet_forward_property(&rendered, f, refs);
         pass_trace("restore_feet_forward_property", &rendered);
+        let rendered = restore_hostility_property_argument(&rendered, f, refs, is_method);
+        pass_trace("restore_hostility_property_argument", &rendered);
         let rendered = restore_container_property_copies(&rendered, f, refs);
         pass_trace("restore_container_property_copies", &rendered);
         let rendered = restore_enum_trace_result(&rendered, f, refs);
@@ -10464,6 +10466,56 @@ fn restore_feet_forward_property(body: &str, f: &Func, refs: &RefResolver) -> St
     let [(at, replacement)] = edits.as_slice() else { return body.to_owned(); };
     lines.splice(*at..*at + 3, [replacement.clone()]);
     let mut out = lines.join("\n"); if body.ends_with('\n') { out.push('\n'); } out
+}
+
+/// Keep the previously used character-state temporary for the first query argument.
+fn restore_hostility_property_argument(body: &str, f: &Func, refs: &RefResolver, is_method: bool) -> String {
+    if !body.contains("GetHostilityTowards(") { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let native = |p, name| matches!(refs.type_identity_by_ptr(p), Some(t) if t.name == name && t.module.is_empty() && t.namespace.is_empty());
+    let handle = |t: &super::types::DataType, name| t.token == 5 && t.is_object_handle && !t.is_reference && native(t.type_info, name);
+    let w = |i: &Instr, n| i.words.get(n).map(|s| *s as i16 as i32);
+    let p = |i: &Instr| i.qwords.first().map(|p| *p as i64);
+    let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+    let offsets = super::model::param_slot_map(&params, is_method, false, Some(refs));
+    let mut edits = Vec::new();
+    for (at, c) in code.windows(9).enumerate() {
+        let edit = (|| {
+            if c.iter().map(|i| i.op.name).ne(["PshVPtr", "CALLSYS", "STOREOBJ", "PshVPtr", "PshVPtr", "CALLSYS", "STOREOBJ", "PshVPtr", "CALL"]) { return None; }
+            let (character, second, first) = (w(&c[0], 0)?, w(&c[2], 0)?, w(&c[6], 0)?);
+            if [character, second, first].iter().any(|s| *s <= 0) || HashSet::from([character, second, first]).len() != 3
+                || w(&c[3], 0) != Some(second) || w(&c[7], 0) != Some(first) { return None; }
+            let ai = f.params.get(*offsets.get(&w(&c[4], 0)?)?)?;
+            if ai.name.is_empty() || !handle(&ai.ty, "UGameplayAbility_AI") { return None; }
+            let state = refs.func_ret_by_ptr(p(&c[1])?)?;
+            if !handle(state, "AGothicCharacterState") { return None; }
+            for (at, owner) in [(1, "AGothicCharacter"), (5, "UGameplayAbility_AI")] {
+                let ptr = p(&c[at])?;
+                if refs.func_by_ptr(ptr) != Some("GetCharacterState") || refs.func_owner_by_ptr(ptr) != Some(owner)
+                    || !refs.is_method_by_ptr(ptr) || !refs.is_const_method_by_ptr(ptr) || !refs.func_params_by_ptr(ptr)?.is_empty()
+                    || !matches!(refs.func_ret_by_ptr(ptr), Some(t) if handle(t, "AGothicCharacterState") && t.type_info == state.type_info) { return None; }
+            }
+            if [first, second].iter().any(|s| f.obj_locals.iter().filter(|(slot, _)| slot == s).map(|(_, t)| *t).ne([state.type_info]))
+                || !matches!(f.obj_locals.iter().filter(|(s, _)| *s == character).map(|(_, t)| *t).collect::<Vec<_>>().as_slice(), [t] if native(*t, "AGothicCharacter")) { return None; }
+            let id = *c[8].dwords.first()? as i32;
+            if refs.func_by_id(id) != Some("GetHostilityTowards") || refs.is_method_by_id(id)
+                || !matches!(refs.func_ret_by_id(id), Some(t) if t.token == 5 && !t.is_object_handle && !t.is_reference && native(t.type_info, "ERelationshipHostility"))
+                || !matches!(refs.func_params_by_id(id), Some([a, b]) if [a, b].iter().all(|t| handle(t, "AGothicCharacterState") && t.is_object_const && t.type_info == state.type_info)) { return None; }
+            // The earlier exclusion query owns the first state slot. The paired query
+            // needs a deferred second argument to avoid reusing it too soon.
+            let earlier = code[..at].windows(4).filter(|v| v.iter().map(|i| i.op.name).eq(["PshVPtr", "CALLSYS", "STOREOBJ", "PSF"])
+                && w(&v[0], 0) == Some(character) && p(&v[1]) == p(&c[1]) && w(&v[2], 0) == Some(first) && w(&v[3], 0) == Some(first)).count();
+            if earlier != 1 || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let target = i.offset_dw as i64 + 2 + *d as i32 as i64; target > c[0].offset_dw as i64 && target <= c[8].offset_dw as i64
+            }))) { return None; }
+            let old = format!("GetHostilityTowards({}.GetCharacterState(), local_{character}.GetCharacterState())", ai.name);
+            let new = format!("GetHostilityTowards({}.GetCharacterState(), local_{character}.CharacterState)", ai.name);
+            (body.matches(&old).count() == 1).then_some((old, new))
+        })();
+        if let Some(edit) = edit { edits.push(edit); }
+    }
+    let [(old, new)] = edits.as_slice() else { return body.to_owned(); };
+    body.replacen(old, new, 1)
 }
 
 /// Retain the completed enum conversion and initialized bool before native trace arguments.
@@ -46420,6 +46472,30 @@ mod literal_value_lifetime_tests {
         let mut bad = f.clone(); bad.bytecode[c[7].offset_dw] ^= 2 << 16; assert_eq!(fold(body, &bad, &refs), body);
         let mut bad = f.clone(); let start = bad.bytecode.len(); let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[13].offset_dw as i32 - start as i32 - 2; bad.bytecode.extend(jump); assert_eq!(fold(body, &bad, &refs), body);
         for bad in [body.replace("200.0", "201.0"), body.replace("local_2 -", "local_3 -"), format!("{body}Use(local_18);\n"), format!("{body}Use(local_4);\n"), body.replace("this.GetSelf()", "Other.GetSelf()")] { assert_eq!(fold(&bad, &f, &refs), bad); }
+    }
+
+    #[test]
+    fn hostility_query_preserves_the_previously_used_state_slot() {
+        let mut f = function(&[("PshVPtr", &[24]), ("CALLSYS", &[]), ("STOREOBJ", &[26]), ("PSF", &[26]),
+            ("PshVPtr", &[24]), ("CALLSYS", &[]), ("STOREOBJ", &[28]), ("PshVPtr", &[28]), ("PshVPtr", &[0]),
+            ("CALLSYS", &[]), ("STOREOBJ", &[26]), ("PshVPtr", &[26]), ("CALL", &[]), ("RET", &[2])]);
+        use super::super::types::DataType;
+        f.obj_locals = vec![(24, 1), (26, 2), (28, 2)];
+        f.params = vec![super::super::model::Param { name: "AI".into(), ty: DataType { token: 5, type_info: 3, is_object_handle: true, ..Default::default() }, flags: 0 }];
+        let c = disassemble(&f.bytecode).unwrap();
+        for (at, ptr) in [(1, 10), (5, 10), (9, 11), (12, 12)] { f.bytecode[c[at].offset_dw + 1] = ptr; }
+        let refs = RefResolver::from_test_hostility_property(0);
+        let body = "    if (!(Hostilities.Contains(GetHostilityTowards(AI.GetCharacterState(), local_24.GetCharacterState()))))\n    {\n        continue;\n    }\n";
+        let expected = body.replace("local_24.GetCharacterState()", "local_24.CharacterState");
+        let fold = |s: &str, f: &Func, r: &RefResolver| super::restore_hostility_property_argument(s, f, r, false);
+        assert_eq!(fold(body, &f, &refs), expected); assert_eq!(fold(&expected, &f, &refs), expected);
+        for fault in 1..=8 { assert_eq!(fold(body, &f, &RefResolver::from_test_hostility_property(fault)), body, "metadata {fault}"); }
+        let mut bad = f.clone(); bad.bytecode[c[2].offset_dw] ^= 2 << 16; assert_eq!(fold(body, &bad, &refs), body);
+        let mut bad = f.clone(); bad.bytecode[c[7].offset_dw] ^= 2 << 16; assert_eq!(fold(body, &bad, &refs), body);
+        let mut bad = f.clone(); bad.obj_locals.push((28, 2)); assert_eq!(fold(body, &bad, &refs), body);
+        let mut bad = f.clone(); bad.params[0].ty.is_reference = true; assert_eq!(fold(body, &bad, &refs), body);
+        let mut bad = f.clone(); let start = bad.bytecode.len(); let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[9].offset_dw as i32 - start as i32 - 2; bad.bytecode.extend(jump); assert_eq!(fold(body, &bad, &refs), body);
+        for bad in [body.replace("local_24", "local_28"), body.replace("AI.Get", "Other.Get"), format!("{body}{body}")] { assert_eq!(fold(&bad, &f, &refs), bad); }
     }
 
     #[test]

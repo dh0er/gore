@@ -5846,6 +5846,34 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_hostility_property(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("AGothicCharacter", ""), ("AGothicCharacterState", ""), ("UGameplayAbility_AI", ""), ("ERelationshipHostility", "")]);
+        for (p, name) in [(1, "AGothicCharacter"), (2, "AGothicCharacterState"), (3, "UGameplayAbility_AI"), (4, "ERelationshipHostility")] {
+            r.type_identity_by_ptr.insert(p, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        let state = DataType { token: 5, type_info: 2, is_object_handle: true, ..Default::default() };
+        for (p, owner) in [(10, "AGothicCharacter"), (11, "UGameplayAbility_AI")] {
+            r.func_by_ptr.insert(p, "GetCharacterState".into()); r.func_owner.insert(p, owner.into());
+            r.func_is_method.insert(p); r.const_method_ptrs.insert(p); r.func_params.insert(p, vec![]); r.func_ret.insert(p, state.clone());
+        }
+        r.funcid_to_ptr.insert(12, 12); r.func_by_ptr.insert(12, "GetHostilityTowards".into());
+        r.func_params.insert(12, vec![DataType { is_object_const: true, ..state }; 2]);
+        r.func_ret.insert(12, DataType { token: 5, type_info: 4, ..Default::default() });
+        match fault {
+            1 => { r.func_owner.insert(10, "Other".into()); },
+            2 => { r.func_ret.get_mut(&10).unwrap().is_reference = true; },
+            3 => { r.const_method_ptrs.remove(&11); },
+            4 => { r.func_params.get_mut(&11).unwrap().push(DataType::default()); },
+            5 => { r.func_params.get_mut(&12).unwrap()[1].is_object_const = false; },
+            6 => { r.func_ret.get_mut(&12).unwrap().is_object_handle = true; },
+            7 => { r.type_identity_by_ptr.get_mut(&2).unwrap().module = "Script".into(); },
+            8 => { r.func_by_ptr.insert(12, "GetOtherRelationship".into()); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_weak_forward_sum(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("FVector", ""), ("FRotator", ""), ("UComponent", ""), ("UConfig", "Offset"), ("UNativeHost", "Movement")]);
         for (p, name, module) in [(1, "FVector", ""), (2, "FRotator", ""), (3, "UComponent", ""), (4, "UConfig", "Script"), (5, "UNativeHost", "")] {

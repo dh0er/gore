@@ -5,7 +5,7 @@ uses the matching version section as the GitHub release notes.
 
 ## [Unreleased]
 
-- `gore as`: 124 aligned script functions still have semantic bytecode differences
+- `gore as`: 123 aligned script functions still have semantic bytecode differences
   (from 1,114); 7,257 of 7,317 modules contain none. One generated function is
   still missing from the recompiled cache.
 - `gore as emit-all --skip <module>` leaves a module out of the tree.
