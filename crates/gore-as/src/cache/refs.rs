@@ -5032,6 +5032,32 @@ impl RefResolver {
         r
     }
     #[cfg(test)]
+    pub(crate) fn from_test_named_filter_copies(fault:u8) -> Self {
+        let mut r=Self::default();
+        for (ptr,name) in [(20,"FMemoryFilter"),(21,"FInGameTime")] {
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:String::new(),namespace:String::new()});
+        }
+        let filter=DataType {token:5,type_info:20,..Default::default()};
+        let void=DataType {token:0x52,..Default::default()};
+        for (ptr,owner,name,constant,ret,args) in [(10,"FMemoryFilter","$beh0",false,void.clone(),vec![DataType {is_reference:true,is_object_const:true,is_read_only:true,..filter.clone()}]),
+            (11,"FMemoryFilter","$beh2",false,void.clone(),vec![]),(12,"FMemoryFilter","GetCount",true,DataType {token:0x44,..Default::default()},vec![]),
+            (13,"FInGameTime","$beh2",false,void,vec![]),(14,"FMemoryFilter","Affecting",false,DataType {is_reference:true,..filter.clone()},vec![]),
+            (15,"FMemoryFilter","AfterTime",false,DataType {is_reference:true,..filter},vec![])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            if constant{r.const_method_ptrs.insert(ptr);}
+        }
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&20).unwrap().module="Script".into(),
+            2=>r.func_params.get_mut(&10).unwrap()[0].is_read_only=false,
+            3=>{r.const_method_ptrs.remove(&12);}
+            4=>r.func_ret.get_mut(&14).unwrap().is_reference=false,
+            5=>{r.func_owner.insert(13,"Other".into());}
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_named_set_return(fault:u8) -> Self {
         let mut r=Self::default();
         for (ptr,name) in [(1,"TSet"),(2,"FGameplayTag"),(3,"UOwner"),(4,"AState")] {

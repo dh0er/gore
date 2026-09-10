@@ -3239,6 +3239,8 @@ fn emit_function_ctor(
         pass_trace("restore_repeated_event_scope", &rendered);
         let rendered = restore_named_set_return(&rendered, f, refs);
         pass_trace("restore_named_set_return", &rendered);
+        let rendered = restore_named_filter_copies(&rendered, f, refs);
+        pass_trace("restore_named_filter_copies", &rendered);
         let rendered = fold_widened_vector_sign(&rendered, vector_sign);
         pass_trace("fold_widened_vector_sign", &rendered);
         s.truncate(declarations_at);
@@ -8501,6 +8503,63 @@ fn rewrite_no_assign_locals(body: &str, locals: &BTreeMap<i32, String>) -> (Stri
         suppressed.insert(*slot);
     }
     (out, suppressed)
+}
+
+/// Both returning paths copy the same native filter into its own named life.
+/// Keeping that copy separate preserves which filter storage the next path reuses.
+fn restore_named_filter_copies(body: &str, f: &Func, refs: &RefResolver) -> String {
+    let witness = (|| {
+        if f.ret.token!=0x44 || f.ret.is_reference || !matches!(f.params.as_slice(),[p] if p.ty.token==0x51 && !p.ty.is_reference) {return None;}
+        let c=disassemble(&f.bytecode).ok()?;
+        if c.len()!=85 || c[..3].iter().map(|i|i.op.name).ne(["SetV8","CMPd","JP"]) || c[0].qwords.first()!=Some(&0) {return None;}
+        let w=|at:usize,n:usize|c[at].words.get(n).map(|v|*v as i16 as i32);
+        let p=|at:usize|c[at].qwords.first().map(|p|*p as i64);
+        let jump=|at:usize|c[at].dwords.first().map(|d|c[at].offset_dw as i64+2+*d as i32 as i64);
+        if w(1,0)!=Some(-2) || w(1,1)!=w(0,0) || jump(2)!=Some(c[39].offset_dw as i64) || jump(38)!=Some(c[84].offset_dw as i64)
+            || c.iter().enumerate().any(|(n,i)|i.op.name.starts_with('J') && ![2,38].contains(&n) || i.op.name=="RET" && n!=84) {return None;}
+        if c[27..39].iter().map(|i|i.op.name).ne(["PshRPtr","PSF","CALLSYS","PSF","CALLSYS","PSF","CALLSYS","CpyRtoV4","PSF","CALLSYS","CpyVtoR4","JMP"])
+            || c[71..].iter().map(|i|i.op.name).ne(["PshRPtr","PSF","CALLSYS","PSF","CALLSYS","PSF","CALLSYS","PSF","CALLSYS","CpyRtoV4","PSF","CALLSYS","CpyVtoR4","RET"]) {return None;}
+        let slot=w(28,0)?;let source=w(30,0)?;let time=w(76,0)?;
+        if [slot,source,time].iter().any(|s|*s<=0) || HashSet::from([slot,source,time]).len()!=3
+            || [32,35,72,78,81].iter().any(|at|w(*at,0)!=Some(slot)) || w(74,0)!=Some(source)
+            || w(34,0)!=w(37,0) || w(80,0)!=w(83,0) || w(34,0)!=w(80,0) || w(84,0)!=Some(4)
+            || p(73)!=p(29) || [36,75,82].iter().any(|at|p(*at)!=p(31)) || p(33)!=p(79)
+            || c.iter().enumerate().filter(|(_,i)|super::bytediff::addressed_slots(i).contains(&slot)).map(|(n,_)|n).ne([28,32,35,72,78,81]) {return None;}
+        let ctor=p(29)?;let [input]=refs.func_params_by_ptr(ctor)? else{return None;};
+        let ty=input.type_info;let identity=refs.type_identity_by_ptr(ty)?;
+        if input.token!=5 || !input.is_reference || !input.is_object_const || !input.is_read_only || input.is_object_handle
+            || identity.name!="FMemoryFilter" || !identity.module.is_empty() || !identity.namespace.is_empty()
+            || [slot,source].iter().any(|s|f.obj_locals.iter().filter(|(n,_)|n==s).map(|(_,t)|*t).ne([ty])) {return None;}
+        for (ptr,name,constant,token) in [(ctor,"$beh0",false,0x52),(p(31)?,"$beh2",false,0x52),(p(33)?,"GetCount",true,0x44)] {
+            let ret=refs.func_ret_by_ptr(ptr)?;
+            if refs.func_owner_by_ptr(ptr)!=Some("FMemoryFilter") || refs.func_by_ptr(ptr)!=Some(name) || !refs.is_method_by_ptr(ptr)
+                || refs.is_const_method_by_ptr(ptr)!=constant || ret.token!=token || ret.is_reference || ret.is_object_handle
+                || ptr!=ctor && !refs.func_params_by_ptr(ptr)?.is_empty() {return None;}
+        }
+        for at in [26,70] {
+            if c[at].op.name!="CALLSYS" {return None;}
+            let ptr=p(at)?;let ret=refs.func_ret_by_ptr(ptr)?;
+            if refs.func_owner_by_ptr(ptr)!=Some("FMemoryFilter") || !refs.is_method_by_ptr(ptr) || ret.token!=5 || ret.type_info!=ty || !ret.is_reference || ret.is_object_handle {return None;}
+        }
+        let dtor=p(77)?;let time_ty=f.obj_locals.iter().find(|(s,_)|*s==time)?.1;
+        let time_id=refs.type_identity_by_ptr(time_ty)?;
+        if time_id.name!="FInGameTime" || !time_id.module.is_empty() || !time_id.namespace.is_empty()
+            || refs.func_owner_by_ptr(dtor)!=Some("FInGameTime") || refs.func_by_ptr(dtor)!=Some("$beh2") || !refs.is_method_by_ptr(dtor)
+            || refs.func_ret_by_ptr(dtor)?.token!=0x52 || !refs.func_params_by_ptr(dtor)?.is_empty() {return None;}
+        Some(slot)
+    })();
+    let Some(slot)=witness else{return body.to_owned();};let name=format!("local_{slot}");
+    if count_ident(body,&name)!=0 {return body.to_owned();}
+    let lines:Vec<_>=body.lines().collect();let returns:Vec<_>=lines.iter().enumerate().filter(|(_,l)|l.trim_start().starts_with("return ")).collect();
+    if returns.len()!=2 {return body.to_owned();}
+    let mut out=Vec::new();
+    for line in &lines {
+        if line.trim_start().starts_with("return ") {
+            let Some(arg)=line.trim().strip_prefix("return FMemoryFilter(").and_then(|s|s.strip_suffix(").GetCount();")) else{return body.to_owned();};
+            let indent=indent_of(line);out.push(format!("{indent}FMemoryFilter {name}({arg});"));out.push(format!("{indent}return {name}.GetCount();"));
+        } else {out.push(line.to_string());}
+    }
+    let mut result=out.join("\n");if body.ends_with('\n'){result.push('\n');}result
 }
 
 /// The nonempty branch computes a set before constructing the hidden return.
@@ -19085,12 +19144,21 @@ fn fold_returned_empty_values(body: &str, f: &Func, refs: &RefResolver) -> Strin
     while at < lines.len() {
         let folded = (|| {
             let (_indent, name) = bare_declaration(&lines[at])?;
-            if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != 2 {
-                return None;
-            }
-            let reader = lines
-                .iter()
-                .position(|line| line.trim() == format!("return {name};"))?;
+            let reader = if count_ident(body, &name) == 2 {
+                lines.iter().position(|line| line.trim() == format!("return {name};"))?
+            } else {
+                // A later block may independently reuse the same raw slot name.
+                // Keep this extension to a block's adjacent declaration/return tail.
+                let borrowed: Vec<_> = lines.iter().map(String::as_str).collect();
+                let (begin, end) = block_span(&borrowed, at);
+                if end != at + 2 || lines.get(begin)?.trim() != "{" || lines.get(end)?.trim() != "}"
+                    || lines.get(at + 1)?.trim() != format!("return {name};")
+                    || indent_of(&lines[at]) != indent_of(&lines[at + 1])
+                    || lines[begin..end].iter().map(|line| count_ident(line, &name)).sum::<usize>() != 2 {
+                    return None;
+                }
+                at + 1
+            };
             let head = lines[at].trim().trim_end_matches(';');
             let ty = head[..head.len() - name.len()].trim();
             // Only a value type: a handle's `T()` would construct an object, and a
@@ -42211,6 +42279,47 @@ mod literal_value_lifetime_tests {
             f.bytecode[c[at].offset_dw + 1] = c[to].offset_dw as i32 - c[at].offset_dw as i32 - 2;
         }
         f
+    }
+
+    #[test]
+    fn empty_returns_count_reused_names_in_their_own_blocks() {
+        let f=function(&[]);let refs=RefResolver::default();
+        let body="if (First)\n{\n    FValue local_12;\n    return local_12;\n}\nWork();\nif (Second)\n{\n    FValue local_12;\n    return local_12;\n}\nreturn FValue(Input);\n";
+        let expected=body.replace("    FValue local_12;\n    return local_12;","    return FValue();");
+        assert_eq!(super::fold_returned_empty_values(body,&f,&refs),expected);
+        let used=body.replace("    return local_12;","    Use(local_12);\n    return local_12;");
+        assert_eq!(super::fold_returned_empty_values(&used,&f,&refs),used);
+        let changed=body.replace("    return local_12;","    local_12 = Other();\n    return local_12;");
+        assert_eq!(super::fold_returned_empty_values(&changed,&f,&refs),changed);
+        let nonadjacent=body.replace("    return local_12;","    Work();\n    return local_12;");
+        assert_eq!(super::fold_returned_empty_values(&nonadjacent,&f,&refs),nonadjacent);
+        let handles=body.replace("FValue","UObject");assert_eq!(super::fold_returned_empty_values(&handles,&f,&refs),handles);
+        let mut named=function(&[("PSF",&[12]),("CALL",&[]),("PshVPtr",&[65534]),("CALL",&[])]);
+        let c=disassemble(&named.bytecode).unwrap();for at in [1,3]{named.bytecode[c[at].offset_dw+1]=7;}
+        assert_eq!(super::fold_returned_empty_values(body,&named,&refs),body);
+    }
+
+    #[test]
+    fn returning_filter_copies_keep_their_own_storage_in_both_paths() {
+        let mut f=function(&[("SetV8",&[2]),("CMPd",&[65534,2]),("JP",&[]),("PSF",&[18]),("PshVPtr",&[0]),("CALLSYS",&[]),("STOREOBJ",&[6]),("PshVPtr",&[6]),("CALLSYS",&[]),("PSF",&[18]),("PshVPtr",&[0]),("ADDSi",&[764]),("PSF",&[16]),("PshVPtr",&[0]),("ADDSi",&[752]),("RDSPtr",&[]),("CALLSYS",&[]),("STOREOBJ",&[6]),("PshVPtr",&[6]),("CALLSYS",&[]),("STOREOBJ",&[8]),("PshVPtr",&[8]),("CALLSYS",&[]),("PSF",&[16]),("CALLSYS",&[]),("PshRPtr",&[]),("CALLSYS",&[]),("PshRPtr",&[]),("PSF",&[26]),("CALLSYS",&[]),("PSF",&[16]),("CALLSYS",&[]),("PSF",&[26]),("CALLSYS",&[]),("CpyRtoV4",&[27]),("PSF",&[26]),("CALLSYS",&[]),("CpyVtoR4",&[27]),("JMP",&[]),("dTOf",&[28,65534]),("PshV4",&[28]),("PshGPtr",&[]),("PSF",&[30]),("CALLSYS",&[]),("PSF",&[30]),("PSF",&[18]),("PshVPtr",&[0]),("CALLSYS",&[]),("STOREOBJ",&[6]),("PshVPtr",&[6]),("CALLSYS",&[]),("PSF",&[18]),("PshVPtr",&[0]),("ADDSi",&[764]),("PSF",&[16]),("PshVPtr",&[0]),("ADDSi",&[752]),("RDSPtr",&[]),("CALLSYS",&[]),("STOREOBJ",&[6]),("PshVPtr",&[6]),("CALLSYS",&[]),("STOREOBJ",&[8]),("PshVPtr",&[8]),("CALLSYS",&[]),("PSF",&[16]),("CALLSYS",&[]),("PshRPtr",&[]),("CALLSYS",&[]),("PshRPtr",&[]),("CALLSYS",&[]),("PshRPtr",&[]),("PSF",&[26]),("CALLSYS",&[]),("PSF",&[16]),("CALLSYS",&[]),("PSF",&[30]),("CALLSYS",&[]),("PSF",&[26]),("CALLSYS",&[]),("CpyRtoV4",&[27]),("PSF",&[26]),("CALLSYS",&[]),("CpyVtoR4",&[27]),("RET",&[4])]);
+        f.ret.token=0x44;f.params=vec![crate::cache::model::Param {name:"Seconds".into(),ty:DataType {token:0x51,..Default::default()},flags:0}];
+        f.obj_locals=vec![(16,20),(26,20),(30,21)];let c=disassemble(&f.bytecode).unwrap();
+        for (at,ptr) in [(26,14),(29,10),(31,11),(33,12),(36,11),(70,15),(73,10),(75,11),(77,13),(79,12),(82,11)] {f.bytecode[c[at].offset_dw+1]=ptr;}
+        for (from,to) in [(2,39),(38,84)]{f.bytecode[c[from].offset_dw+1]=c[to].offset_dw as i32-c[from].offset_dw as i32-2;}
+        let body="if (Seconds <= 0.0)\n{\n    return FMemoryFilter(Build().Affecting(Id())).GetCount();\n}\nreturn FMemoryFilter(Build().Affecting(Id()).AfterTime(Time())).GetCount();\n";
+        let expected="if (Seconds <= 0.0)\n{\n    FMemoryFilter local_26(Build().Affecting(Id()));\n    return local_26.GetCount();\n}\nFMemoryFilter local_26(Build().Affecting(Id()).AfterTime(Time()));\nreturn local_26.GetCount();\n";
+        let refs=RefResolver::from_test_named_filter_copies(0);
+        assert_eq!(super::restore_named_filter_copies(body,&f,&refs),expected);
+        assert_eq!(super::restore_named_filter_copies(&expected,&f,&refs),expected);
+        for fault in 1..=5 {assert_eq!(super::restore_named_filter_copies(body,&f,&RefResolver::from_test_named_filter_copies(fault)),body,"metadata {fault}");}
+        for at in [28,30,32,34,35,37,72,74,78,80,81,83,84] {
+            let mut bad=f.clone();bad.bytecode[c[at].offset_dw]^=1<<16;assert_eq!(super::restore_named_filter_copies(body,&bad,&refs),body,"operand {at}");
+        }
+        for at in [2,38] {let mut bad=f.clone();bad.bytecode[c[at].offset_dw+1]+=1;assert_eq!(super::restore_named_filter_copies(body,&bad,&refs),body);}
+        let mut reused=f.clone();reused.obj_locals.push((26,20));assert_eq!(super::restore_named_filter_copies(body,&reused,&refs),body);
+        for text in [format!("{body}Use(local_26);\n"),body.replacen(".GetCount();",".Other();",1),format!("{body}return 0;\n")] {
+            assert_eq!(super::restore_named_filter_copies(&text,&f,&refs),text);
+        }
     }
 
     #[test]
