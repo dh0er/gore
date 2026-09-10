@@ -1252,6 +1252,8 @@ fn emit_function_ctor(
     statement_producers.extend(statement_operands.iter().copied());
     let eager_quotients = eager_quotient_operand_slots(f, refs, &statement_operands);
     statement_producers.extend(eager_quotients.iter().copied());
+    let eager_vector_minimum = eager_vector_minimum_values(f, refs, is_method);
+    statement_producers.extend(eager_vector_minimum.as_ref().map(|w| w.0));
     statement_producers.extend(assignment_call_order_slots(f, refs, is_method));
     statement_producers.extend(call_results_before_parameter_comparisons(f, refs, is_method));
     let constructed_return_values = constructed_values_before_return(f, &fc, refs);
@@ -1280,6 +1282,7 @@ fn emit_function_ctor(
     let widened = widened_slots(f);
     let retained_accumulators: HashSet<i32> = widened.iter().copied()
         .chain(eager_comparison_accumulators(f, refs, &statement_operands))
+        .chain(eager_vector_minimum.as_ref().map(|w| w.0))
         .chain(eager_quotients.iter().copied()).collect();
     // A primitive iterator reference is the binding, not a disposable value carrier.
     // Keep it through the copy-out pass until foreach owns that exact element.
@@ -3317,6 +3320,10 @@ fn emit_function_ctor(
         pass_trace("restore_conditional_memory_times", &rendered);
         let rendered = drop_iterator_scalar_initializers(&rendered, f, refs);
         pass_trace("drop_iterator_scalar_initializers", &rendered);
+        let rendered = restore_eager_minimum_location_property(&rendered, eager_vector_minimum.as_ref());
+        pass_trace("restore_eager_minimum_location_property", &rendered);
+        let rendered = restore_feet_forward_property(&rendered, f, refs);
+        pass_trace("restore_feet_forward_property", &rendered);
         let rendered = restore_container_property_copies(&rendered, f, refs);
         pass_trace("restore_container_property_copies", &rendered);
         let rendered = restore_enum_trace_result(&rendered, f, refs);
@@ -10319,6 +10326,144 @@ fn drop_iterator_scalar_initializers(body: &str, f: &Func, refs: &RefResolver) -
         result = result.replacen(&before, &format!("int {name};"), 1);
     }
     result
+}
+
+/// Preserve a distance accumulator evaluated before the vectors that consume it.
+fn eager_vector_minimum_values(f: &Func, refs: &RefResolver, is_method: bool) -> Option<(i32, i32, i32, String)> {
+    if !is_method || f.ret.token != 5 || f.ret.is_reference || f.ret.is_object_handle { return None; }
+    let native = |p, name| matches!(refs.type_identity_by_ptr(p), Some(t) if t.name == name && t.module.is_empty() && t.namespace.is_empty());
+    if !native(f.ret.type_info, "FVector") { return None; }
+    let vector = |t: &super::types::DataType, reference| t.token == 5 && t.type_info == f.ret.type_info && !t.is_object_handle && t.is_reference == reference;
+    let vector_ref = |t: &super::types::DataType| vector(t, true) && t.is_object_const && t.is_read_only;
+    let scalar = |t: &super::types::DataType, token| t.token == token && t.type_info == 0 && !t.is_reference && !t.is_object_handle;
+    let code = disassemble(&f.bytecode).ok()?;
+    let w = |i: &Instr, n| i.words.get(n).map(|s| *s as i16 as i32);
+    let p = |i: &Instr| i.qwords.first().map(|p| *p as i64);
+    let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+    let offsets = super::model::param_slot_map(&params, true, true, Some(refs));
+    let mut found = Vec::new();
+    for (at, c) in code.windows(34).enumerate() {
+        let witness = (|| {
+            if c.iter().map(|i| i.op.name).ne(["CALLSYS", "CpyRtoV8", "PshVPtr", "CALLSYS", "CpyRtoV4", "PshVPtr", "CALLSYS", "CpyRtoV4", "ADDf", "fTOd", "SUBd",
+                "PSF", "PshVPtr", "CALLSYS", "PshGPtr", "PshC8", "PSF", "PshVPtr", "CALLSYS", "PshV8", "PshV8", "CALLSYS", "CpyRtoV8", "PshV8", "PSF", "PSF", "CALLSYS", "PSF", "PSF", "PSF", "CALLSYS", "PSF", "PSF", "CALLSYS"]) { return None; }
+            let (distance, radius1, radius2, widened, minimum, bound) = (w(&c[1], 0)?, w(&c[4], 0)?, w(&c[7], 0)?, w(&c[9], 0)?, w(&c[22], 0)?, w(&c[19], 0)?);
+            let primitives = [distance, radius1, radius2, widened, minimum, bound];
+            if primitives.iter().any(|s| *s <= 0 || f.obj_locals.iter().any(|(slot, _)| slot == s)) || HashSet::from(primitives).len() != 6
+                || c[8].words.iter().map(|s| *s as i16 as i32).ne([radius1, radius1, radius2]) || w(&c[9], 1) != Some(radius1)
+                || c[10].words.iter().map(|s| *s as i16 as i32).ne([distance, distance, widened]) || w(&c[20], 0) != Some(distance) || w(&c[23], 0) != Some(minimum) { return None; }
+            let (location, normal, product, assigned) = (w(&c[11], 0)?, w(&c[16], 0)?, w(&c[24], 0)?, w(&c[32], 0)?);
+            let values = [location, normal, product, assigned];
+            if values.iter().any(|s| *s <= 0 || f.obj_locals.iter().filter(|(slot, _)| slot == s).map(|(_, ty)| *ty).ne([f.ret.type_info])) || HashSet::from(values).len() != 4
+                || [(25, normal), (27, product), (28, normal), (29, location), (31, normal)].iter().any(|(at, slot)| w(&c[*at], 0) != Some(*slot)) { return None; }
+            let character = f.params.get(*offsets.get(&w(&c[12], 0)?)?)?;
+            let direction = params.get(*offsets.get(&w(&c[17], 0)?)?)?;
+            if character.ty.token != 5 || !character.ty.is_object_handle || character.ty.is_reference || !native(character.ty.type_info, "AGothicCharacter")
+                || character.name.is_empty() || !vector_ref(direction) || w(&c[5], 0) != w(&c[12], 0)
+                || !matches!(f.obj_locals.iter().filter(|(s, _)| Some(*s) == w(&c[2], 0)).map(|(_, t)| *t).collect::<Vec<_>>().as_slice(), [t] if *t == character.ty.type_info) { return None; }
+            for (at, owner, name, constant) in [(0, "FVector", "Distance", true), (3, "AActor", "GetSimpleCollisionRadius", true), (6, "AActor", "GetSimpleCollisionRadius", true),
+                (13, "AActor", "GetActorLocation", true), (18, "FVector", "GetSafeNormal", true), (26, "FVector", "opMul", true), (30, "FVector", "opAdd", true), (33, "FVector", "opAssign", false)] {
+                let ptr = p(&c[at])?;
+                if refs.func_by_ptr(ptr) != Some(name) || refs.func_owner_by_ptr(ptr) != Some(owner) || !refs.is_method_by_ptr(ptr) || refs.is_const_method_by_ptr(ptr) != constant { return None; }
+            }
+            if !scalar(refs.func_ret_by_ptr(p(&c[0])?)?, 0x51) || !matches!(refs.func_params_by_ptr(p(&c[0])?)?, [t] if vector_ref(t))
+                || p(&c[3]) != p(&c[6]) || !scalar(refs.func_ret_by_ptr(p(&c[3])?)?, 0x50) || !refs.func_params_by_ptr(p(&c[3])?)?.is_empty()
+                || !refs.func_params_by_ptr(p(&c[13])?)?.is_empty() || !matches!(refs.func_params_by_ptr(p(&c[18])?)?, [t, v] if scalar(t, 0x51) && vector_ref(v))
+                || !matches!(refs.func_params_by_ptr(p(&c[26])?)?, [t] if scalar(t, 0x51))
+                || [30, 33].iter().any(|n| !matches!(p(&c[*n]).and_then(|p| refs.func_params_by_ptr(p)), Some([t]) if vector_ref(t)))
+                || [13, 18, 26, 30].iter().any(|n| !matches!(p(&c[*n]).and_then(|p| refs.func_ret_by_ptr(p)), Some(t) if vector(t, false)))
+                || !matches!(refs.func_ret_by_ptr(p(&c[33])?)?, t if vector(t, true) && !t.is_object_const && !t.is_read_only) { return None; }
+            let min = p(&c[21])?;
+            if refs.func_by_ptr(min) != Some("Min") || refs.func_ns_by_ptr(min) != Some("Math") || refs.is_method_by_ptr(min)
+                || !scalar(refs.func_ret_by_ptr(min)?, 0x51) || !matches!(refs.func_params_by_ptr(min)?, [a, b] if scalar(a, 0x51) && scalar(b, 0x51))
+                || refs.global_by_ptr(p(&c[14])?) != Some("ZeroVector") || refs.global_ns(p(&c[14])?) != Some("FVector")
+                || c[15].qwords.first().copied() != Some(0x3e45798ee0000000)
+                || code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&distance)).map(|(n, _)| n).ne([at + 1, at + 10, at + 20])
+                || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                    let target = i.offset_dw as i64 + 2 + *d as i32 as i64; target > c[0].offset_dw as i64 && target <= c[33].offset_dw as i64
+                }))) { return None; }
+            Some((distance, location, assigned, format!("{}.ActorLocation", character.name)))
+        })();
+        if let Some(witness) = witness { found.push(witness); }
+    }
+    if found.len() == 1 { found.pop() } else { None }
+}
+
+fn restore_eager_minimum_location_property(body: &str, witness: Option<&(i32, i32, i32, String)>) -> String {
+    let Some((_, location, assigned, property)) = witness else { return body.to_owned(); };
+    let getter = property.replace(".ActorLocation", ".GetActorLocation()");
+    let mut lines: Vec<_> = body.lines().map(str::to_owned).collect();
+    let candidates: Vec<_> = lines.iter().enumerate().filter_map(|(at, line)| {
+        let (_, name, rhs) = declaration_with_initializer(line)?;
+        (line.trim().starts_with("FVector ") && slot_and_life_any(&name).is_some_and(|(s, _)| s == *location) && rhs == getter).then_some((at, name))
+    }).collect();
+    let [(at, name)] = candidates.as_slice() else { return body.to_owned(); };
+    let Some(next) = lines.get(*at + 1) else { return body.to_owned(); };
+    if count_ident(body, name) != 2 || !next.trim().starts_with(&format!("local_{assigned} = ({name} + ")) { return body.to_owned(); }
+    lines[*at + 1] = rename_ident(next, name, property); lines.remove(*at);
+    let mut out = lines.join("\n"); if body.ends_with('\n') { out.push('\n'); } out
+}
+
+fn restore_feet_forward_property(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if !body.contains(".GetFeetLocation()") || !body.contains(".GetActorForwardVector()") { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let w = |i: &Instr, n| i.words.get(n).map(|s| *s as i16 as i32);
+    let p = |i: &Instr| i.qwords.first().map(|p| *p as i64);
+    let native = |p, name| matches!(refs.type_identity_by_ptr(p), Some(t) if t.name == name && t.module.is_empty() && t.namespace.is_empty());
+    let mut witnesses = Vec::new();
+    for c in code.windows(22) {
+        let witness = (|| {
+            if c.iter().map(|i| i.op.name).ne(["PSF", "PshVPtr", "CALLSYS", "STOREOBJ", "PshVPtr", "CALLSYS", "PSF", "PshVPtr", "CALLSYS", "STOREOBJ", "PshVPtr", "CALLSYS",
+                "SetV8", "SUBd", "PshV8", "PSF", "PSF", "CALLSYS", "PSF", "PSF", "PSF", "CALLSYS"]) { return None; }
+            let (feet, forward, product, receiver, delta, base) = (w(&c[0], 0)?, w(&c[6], 0)?, w(&c[15], 0)?, w(&c[3], 0)?, w(&c[12], 0)?, w(&c[13], 1)?);
+            if [feet, forward, product, receiver, delta, base].iter().any(|s| *s <= 0) || HashSet::from([feet, forward, product, receiver, delta, base]).len() != 6
+                || w(&c[1], 0) != Some(0) || w(&c[7], 0) != Some(0) || p(&c[2]) != p(&c[8])
+                || [(4, receiver), (9, receiver), (10, receiver), (14, delta), (16, forward), (18, product), (19, forward), (20, feet)].iter().any(|(n, s)| w(&c[*n], 0) != Some(*s))
+                || c[13].words.iter().map(|s| *s as i16 as i32).ne([delta, base, delta]) { return None; }
+            for (at, owner, name) in [(2, "UCharacterAIState", "GetSelf"), (5, "AGothicCharacter", "GetFeetLocation"), (11, "AActor", "GetActorForwardVector"), (17, "FVector", "opMul"), (21, "FVector", "opAdd")] {
+                let ptr = p(&c[at])?;
+                if refs.func_by_ptr(ptr) != Some(name) || refs.func_owner_by_ptr(ptr) != Some(owner) || !refs.is_method_by_ptr(ptr) || !refs.is_const_method_by_ptr(ptr) { return None; }
+            }
+            let character = refs.func_ret_by_ptr(p(&c[2])?)?;
+            let value = refs.func_ret_by_ptr(p(&c[5])?)?;
+            let vector = |t: &super::types::DataType, reference| t.token == 5 && t.type_info == value.type_info && !t.is_object_handle && t.is_reference == reference;
+            if character.token != 5 || !character.is_object_handle || character.is_reference || !native(character.type_info, "AGothicCharacter")
+                || !vector(value, false) || !native(value.type_info, "FVector")
+                || f.obj_locals.iter().filter(|(s, _)| *s == receiver).map(|(_, t)| *t).ne([character.type_info])
+                || [feet, forward, product].iter().any(|s| f.obj_locals.iter().filter(|(slot, _)| slot == s).map(|(_, t)| *t).ne([value.type_info]))
+                || f.obj_locals.iter().any(|(s, _)| *s == delta || *s == base)
+                || [2, 5, 11].iter().any(|n| p(&c[*n]).and_then(|p| refs.func_params_by_ptr(p)).is_none_or(|args| !args.is_empty()))
+                || [11, 17, 21].iter().any(|n| !matches!(p(&c[*n]).and_then(|p| refs.func_ret_by_ptr(p)), Some(t) if vector(t, false)))
+                || !matches!(refs.func_params_by_ptr(p(&c[17])?)?, [t] if t.token == 0x51 && t.type_info == 0 && !t.is_reference && !t.is_object_handle)
+                || !matches!(refs.func_params_by_ptr(p(&c[21])?)?, [t] if vector(t, true) && t.is_object_const && t.is_read_only) { return None; }
+            let bits = *c[12].qwords.first()?;
+            if !f64::from_bits(bits).is_finite() || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let target = i.offset_dw as i64 + 2 + *d as i32 as i64; target > c[0].offset_dw as i64 && target <= c[21].offset_dw as i64
+            }))) { return None; }
+            Some((feet, delta, base, forward, bits))
+        })();
+        if let Some(witness) = witness { witnesses.push(witness); }
+    }
+    let [(feet, delta, base, sum, bits)] = witnesses.as_slice() else { return body.to_owned(); };
+    let mut lines: Vec<_> = body.lines().map(str::to_owned).collect();
+    let mut edits = Vec::new();
+    for (at, c) in lines.windows(3).enumerate() {
+        let matched = (|| {
+            let (indent, feet_name, feet_rhs) = declaration_with_initializer(&c[0])?;
+            let (delta_indent, delta_name, delta_rhs) = declaration_with_initializer(&c[1])?;
+            let (sum_indent, sum_name, sum_rhs) = declaration_with_initializer(&c[2])?;
+            if indent != delta_indent || indent != sum_indent || !c[0].trim().starts_with("FVector ") || !c[1].trim().starts_with("float ") || !c[2].trim().starts_with("FVector ")
+                || slot_and_life_any(&feet_name)?.0 != *feet || slot_and_life_any(&delta_name)?.0 != *delta || slot_and_life_any(&sum_name)?.0 != *sum
+                || feet_rhs != "this.GetSelf().GetFeetLocation()" || count_ident(body, &feet_name) != 2 || count_ident(body, &delta_name) != 2 { return None; }
+            let (base_name, literal) = delta_rhs.split_once(" - ")?;
+            if slot_and_life_any(base_name)?.0 != *base || literal.parse::<f64>().ok()?.to_bits() != *bits
+                || sum_rhs != format!("({feet_name} + (this.GetSelf().GetActorForwardVector() * {delta_name}))") { return None; }
+            Some(format!("{indent}FVector {sum_name} = (this.GetSelf().FeetLocation + (this.GetSelf().GetActorForwardVector() * ({delta_rhs})));") )
+        })();
+        if let Some(replacement) = matched { edits.push((at, replacement)); }
+    }
+    let [(at, replacement)] = edits.as_slice() else { return body.to_owned(); };
+    lines.splice(*at..*at + 3, [replacement.clone()]);
+    let mut out = lines.join("\n"); if body.ends_with('\n') { out.push('\n'); } out
 }
 
 /// Retain the completed enum conversion and initialized bool before native trace arguments.
@@ -46220,6 +46365,63 @@ mod literal_value_lifetime_tests {
         let mut bad = f.clone(); bad.bytecode[code[3].offset_dw + 1] = 4; assert!(keep(&bad).is_empty());
         let mut bad = f.clone(); bad.bytecode.splice(code[8].offset_dw..code[9].offset_dw, function(&[("CpyRtoV4", &[6])]).bytecode); assert!(keep(&bad).is_empty());
     }
+    #[test]
+    fn distance_bound_stays_before_its_deferred_vector_receiver() {
+        let mut f = function(&[("CALLSYS", &[]), ("CpyRtoV8", &[2]), ("PshVPtr", &[30]), ("CALLSYS", &[]), ("CpyRtoV4", &[37]),
+            ("PshVPtr", &[65532]), ("CALLSYS", &[]), ("CpyRtoV4", &[38]), ("ADDf", &[37, 37, 38]), ("fTOd", &[40, 37]), ("SUBd", &[2, 2, 40]),
+            ("PSF", &[22]), ("PshVPtr", &[65532]), ("CALLSYS", &[]), ("PshGPtr", &[]), ("PshC8", &[]), ("PSF", &[10]), ("PshVPtr", &[65530]),
+            ("CALLSYS", &[]), ("PshV8", &[4]), ("PshV8", &[2]), ("CALLSYS", &[]), ("CpyRtoV8", &[36]), ("PshV8", &[36]), ("PSF", &[28]),
+            ("PSF", &[10]), ("CALLSYS", &[]), ("PSF", &[28]), ("PSF", &[10]), ("PSF", &[22]), ("CALLSYS", &[]), ("PSF", &[10]), ("PSF", &[16]), ("CALLSYS", &[]), ("RET", &[10])]);
+        use super::super::types::DataType;
+        f.ret = DataType { token: 5, type_info: 1, ..Default::default() };
+        f.obj_locals = vec![(10, 1), (16, 1), (22, 1), (28, 1), (30, 2)];
+        f.params = vec![super::super::model::Param { name: "Character".into(), ty: DataType { token: 5, type_info: 2, is_object_handle: true, ..Default::default() }, flags: 0 },
+            super::super::model::Param { name: "MoveDirection".into(), ty: DataType { token: 5, type_info: 1, is_reference: true, is_object_const: true, is_read_only: true, ..Default::default() }, flags: 0 },
+            super::super::model::Param { name: "MoveDurationSec".into(), ty: DataType { token: 0x51, ..Default::default() }, flags: 0 }];
+        let c = disassemble(&f.bytecode).unwrap();
+        for (at, ptr) in [(0, 1), (3, 2), (6, 2), (13, 3), (14, 9), (18, 4), (21, 5), (26, 6), (30, 7), (33, 8)] { f.bytecode[c[at].offset_dw + 1] = ptr; }
+        f.bytecode[c[15].offset_dw + 1] = 0xe0000000u32 as i32; f.bytecode[c[15].offset_dw + 2] = 0x3e45798e;
+        let refs = RefResolver::from_test_eager_vector_minimum(0);
+        let detect = |f: &Func, refs: &RefResolver| super::eager_vector_minimum_values(f, refs, true);
+        let witness = detect(&f, &refs).unwrap(); assert_eq!(witness, (2, 22, 16, "Character.ActorLocation".into()));
+        let body = "    float local_2 = Distance();\n    local_2 = local_2 - Radius();\n    FVector local_22_2 = Character.GetActorLocation();\n    local_16 = (local_22_2 + (MoveDirection.GetSafeNormal() * Math::Min(local_2, local_4)));\n";
+        let expected = body.replace("    FVector local_22_2 = Character.GetActorLocation();\n", "").replace("local_22_2 +", "Character.ActorLocation +");
+        assert_eq!(super::restore_eager_minimum_location_property(body, Some(&witness)), expected);
+        let locals = BTreeMap::from([(2, "float".into())]);
+        assert!(super::collapse_single_use_accumulators(body, &HashSet::from([witness.0]), &locals, &HashSet::new()).contains("local_2 = local_2 - Radius()"));
+        assert!(!super::collapse_single_use_accumulators(body, &HashSet::new(), &locals, &HashSet::new()).contains("local_2 = local_2 - Radius()"));
+        for fault in 1..=12 { assert!(detect(&f, &RefResolver::from_test_eager_vector_minimum(fault)).is_none(), "metadata {fault}"); }
+        assert!(super::eager_vector_minimum_values(&f, &refs, false).is_none());
+        let mut bad = f.clone(); bad.bytecode[c[8].offset_dw] ^= 1 << 16; assert!(detect(&bad, &refs).is_none());
+        let mut bad = f.clone(); bad.obj_locals.push((22, 1)); assert!(detect(&bad, &refs).is_none());
+        let mut bad = f.clone(); bad.bytecode.extend(function(&[("PshV8", &[2])]).bytecode); assert!(detect(&bad, &refs).is_none());
+        let mut bad = f.clone(); let start = bad.bytecode.len(); let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[19].offset_dw as i32 - start as i32 - 2; bad.bytecode.extend(jump); assert!(detect(&bad, &refs).is_none());
+        for bad in [body.replace("local_22_2 +", "local_22_3 +"), format!("{body}Use(local_22_2);\n"), body.replace("Character.GetActorLocation()", "Other.GetActorLocation()"), body.replace("local_16 =", "local_18 =")] {
+            assert_eq!(super::restore_eager_minimum_location_property(&bad, Some(&witness)), bad);
+        }
+    }
+
+    #[test]
+    fn feet_property_keeps_forward_query_before_distance_subtraction() {
+        let mut f = function(&[("PSF", &[18]), ("PshVPtr", &[0]), ("CALLSYS", &[]), ("STOREOBJ", &[12]), ("PshVPtr", &[12]), ("CALLSYS", &[]),
+            ("PSF", &[24]), ("PshVPtr", &[0]), ("CALLSYS", &[]), ("STOREOBJ", &[12]), ("PshVPtr", &[12]), ("CALLSYS", &[]),
+            ("SetV8", &[4]), ("SUBd", &[4, 2, 4]), ("PshV8", &[4]), ("PSF", &[30]), ("PSF", &[24]), ("CALLSYS", &[]), ("PSF", &[30]), ("PSF", &[24]), ("PSF", &[18]), ("CALLSYS", &[]), ("RET", &[2])]);
+        f.obj_locals = vec![(18, 1), (24, 1), (30, 1), (12, 2)]; let c = disassemble(&f.bytecode).unwrap();
+        for (at, ptr) in [(2, 10), (5, 11), (8, 10), (11, 12), (17, 6), (21, 7)] { f.bytecode[c[at].offset_dw + 1] = ptr; }
+        f.bytecode[c[12].offset_dw + 2] = 0x40690000;
+        let body = "    FVector local_18 = this.GetSelf().GetFeetLocation();\n    float local_4 = local_2 - 200.0;\n    FVector local_24 = (local_18 + (this.GetSelf().GetActorForwardVector() * local_4));\n    Use(local_24);\n";
+        let expected = "    FVector local_24 = (this.GetSelf().FeetLocation + (this.GetSelf().GetActorForwardVector() * (local_2 - 200.0)));\n    Use(local_24);\n";
+        let refs = RefResolver::from_test_feet_forward_property(0);
+        let fold = |s: &str, f: &Func, r: &RefResolver| super::restore_feet_forward_property(s, f, r);
+        assert_eq!(fold(body, &f, &refs), expected); assert_eq!(fold(expected, &f, &refs), expected);
+        for fault in 1..=9 { assert_eq!(fold(body, &f, &RefResolver::from_test_feet_forward_property(fault)), body, "metadata {fault}"); }
+        let mut bad = f.clone(); bad.obj_locals.push((18, 1)); assert_eq!(fold(body, &bad, &refs), body);
+        let mut bad = f.clone(); bad.bytecode[c[13].offset_dw] ^= 1 << 16; assert_eq!(fold(body, &bad, &refs), body);
+        let mut bad = f.clone(); bad.bytecode[c[7].offset_dw] ^= 2 << 16; assert_eq!(fold(body, &bad, &refs), body);
+        let mut bad = f.clone(); let start = bad.bytecode.len(); let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[13].offset_dw as i32 - start as i32 - 2; bad.bytecode.extend(jump); assert_eq!(fold(body, &bad, &refs), body);
+        for bad in [body.replace("200.0", "201.0"), body.replace("local_2 -", "local_3 -"), format!("{body}Use(local_18);\n"), format!("{body}Use(local_4);\n"), body.replace("this.GetSelf()", "Other.GetSelf()")] { assert_eq!(fold(&bad, &f, &refs), bad); }
+    }
+
     #[test]
     fn weak_forward_vector_and_distance_die_before_the_named_sum() {
         let mut f = function(&[("PSF", &[38]), ("PSF", &[32]), ("PshVPtr", &[0]), ("ADDSi", &[0]), ("CALLSYS", &[]),

@@ -5779,6 +5779,73 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_eager_vector_minimum(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FVector", ""), ("AGothicCharacter", ""), ("AActor", "")]);
+        for (p, name) in [(1, "FVector"), (2, "AGothicCharacter"), (3, "AActor")] {
+            r.type_identity_by_ptr.insert(p, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        let vector = DataType { token: 5, type_info: 1, ..Default::default() };
+        let reference = DataType { is_reference: true, is_object_const: true, is_read_only: true, ..vector.clone() };
+        let wide = DataType { token: 0x51, ..Default::default() };
+        for (p, name, owner, ret, args) in [
+            (1, "Distance", "FVector", wide.clone(), vec![reference.clone()]),
+            (2, "GetSimpleCollisionRadius", "AActor", DataType { token: 0x50, ..Default::default() }, vec![]),
+            (3, "GetActorLocation", "AActor", vector.clone(), vec![]),
+            (4, "GetSafeNormal", "FVector", vector.clone(), vec![wide.clone(), reference.clone()]),
+            (5, "Min", "", wide.clone(), vec![wide.clone(), wide.clone()]),
+            (6, "opMul", "FVector", vector.clone(), vec![wide]),
+            (7, "opAdd", "FVector", vector.clone(), vec![reference.clone()]),
+            (8, "opAssign", "FVector", DataType { is_reference: true, ..vector }, vec![reference]),
+        ] {
+            r.func_by_ptr.insert(p, name.into()); r.func_ret.insert(p, ret); r.func_params.insert(p, args);
+            if !owner.is_empty() { r.func_owner.insert(p, owner.into()); r.func_is_method.insert(p); }
+        }
+        r.const_method_ptrs.extend([1, 2, 3, 4, 6, 7]); r.func_ns.insert(5, "Math".into());
+        r.global_by_ptr.insert(9, "ZeroVector".into()); r.global_ns.insert(9, "FVector".into());
+        match fault {
+            1 => { r.func_ret.get_mut(&1).unwrap().token = 0x50; },
+            2 => { r.func_ret.get_mut(&2).unwrap().token = 0x51; },
+            3 => { r.func_ns.insert(5, "Other".into()); },
+            4 => { r.const_method_ptrs.remove(&4); },
+            5 => { r.func_ret.get_mut(&3).unwrap().is_reference = true; },
+            6 => { r.func_params.get_mut(&6).unwrap()[0].token = 0x50; },
+            7 => { r.func_ret.get_mut(&8).unwrap().is_read_only = true; },
+            8 => { r.func_params.get_mut(&1).unwrap()[0].is_reference = false; },
+            9 => { r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(); },
+            10 => { r.global_ns.insert(9, "Other".into()); },
+            11 => { r.func_owner.insert(2, "Other".into()); },
+            12 => { r.func_params.get_mut(&4).unwrap()[1].is_object_const = false; },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_feet_forward_property(fault: u8) -> Self {
+        let mut r = Self::from_test_eager_vector_minimum(0);
+        for (p, name, owner, ret) in [
+            (10, "GetSelf", "UCharacterAIState", DataType { token: 5, type_info: 2, is_object_handle: true, ..Default::default() }),
+            (11, "GetFeetLocation", "AGothicCharacter", DataType { token: 5, type_info: 1, ..Default::default() }),
+            (12, "GetActorForwardVector", "AActor", DataType { token: 5, type_info: 1, ..Default::default() }),
+        ] {
+            r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, owner.into()); r.func_ret.insert(p, ret); r.func_params.insert(p, vec![]); r.func_is_method.insert(p); r.const_method_ptrs.insert(p);
+        }
+        match fault {
+            1 => { r.func_ret.get_mut(&10).unwrap().is_object_handle = false; },
+            2 => { r.const_method_ptrs.remove(&10); },
+            3 => { r.func_by_ptr.insert(11, "GetOtherLocation".into()); },
+            4 => { r.func_ret.get_mut(&11).unwrap().is_reference = true; },
+            5 => { r.func_params.get_mut(&12).unwrap().push(DataType { token: 0x51, ..Default::default() }); },
+            6 => { r.func_params.get_mut(&6).unwrap()[0].token = 0x50; },
+            7 => { r.func_ret.get_mut(&7).unwrap().is_reference = true; },
+            8 => { r.func_params.get_mut(&7).unwrap()[0].is_object_const = false; },
+            9 => { r.type_identity_by_ptr.get_mut(&2).unwrap().module = "Script".into(); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_weak_forward_sum(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("FVector", ""), ("FRotator", ""), ("UComponent", ""), ("UConfig", "Offset"), ("UNativeHost", "Movement")]);
         for (p, name, module) in [(1, "FVector", ""), (2, "FRotator", ""), (3, "UComponent", ""), (4, "UConfig", "Script"), (5, "UNativeHost", "")] {
