@@ -3245,6 +3245,8 @@ fn emit_function_ctor(
         pass_trace("fold_closed_executor_bridges", &rendered);
         let rendered = restore_segment_value_lifetimes(&rendered, f, refs);
         pass_trace("restore_segment_value_lifetimes", &rendered);
+        let rendered = scope_empty_native_event_arguments(&rendered, f, refs);
+        pass_trace("scope_empty_native_event_arguments", &rendered);
         let rendered = fold_initial_handle_guard(&rendered, f, refs);
         pass_trace("fold_initial_handle_guard", &rendered);
         let rendered = scope_mutated_iterator_handle(&rendered, f, refs);
@@ -9271,6 +9273,74 @@ fn fold_ordered_coordinate_difference(body: &str, f: &Func, refs: &RefResolver) 
     let mut result = out.join("\n"); if body.ends_with('\n') { result.push('\n'); } result
 }
 
+/// An empty mutable event lives only inside the branch that dispatches it.
+fn scope_empty_native_event_arguments(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if !body.contains("GameplayTag::") { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let w = |i: &Instr| i.words.first().map(|v| *v as i16 as i32);
+    let jump = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+    let mut sites: BTreeMap<i32,Vec<(usize,String,String)>> = BTreeMap::new();
+    for (at,c) in code.windows(11).enumerate() {
+        let site = (|| {
+            if at == 0 || c.iter().map(|i| i.op.name).ne(["PSF","CALLSYS","PSF","PshGPtr","PshVPtr","CALLSYS","STOREOBJ","PshVPtr","CALLSYS","PSF","CALLSYS"])
+                || code[at-1].op.name != "JLowZ" || jump(&code[at-1]) != Some(code.get(at+11)?.offset_dw as i64) { return None; }
+            let (slot,actor) = (w(&c[0])?,w(&c[6])?);
+            if slot <= 0 || actor <= 0 || slot == actor || w(&c[2]) != Some(slot) || w(&c[9]) != Some(slot)
+                || w(&c[4]) != Some(0) || w(&c[7]) != Some(actor) { return None; }
+            let local = |s| { let types: Vec<_> = f.obj_locals.iter().filter(|(n,_)| *n == s).map(|(_,p)| *p).collect(); let [p] = types.as_slice() else { return None; }; Some(*p) };
+            let event = local(slot)?; let actor_type = local(actor)?; let identity = refs.type_identity_by_ptr(event)?;
+            if !identity.module.is_empty() || !identity.namespace.is_empty() { return None; }
+            let ptr = |n: usize| c[n].qwords.first().map(|p| *p as i64);
+            let void = |t: &super::types::DataType| t.token == 0x52 && t.type_info == 0 && !t.is_reference && !t.is_object_handle;
+            for (n,name) in [(1,"$beh0"),(10,"$beh2")] {
+                let p = ptr(n)?;
+                if refs.func_by_ptr(p) != Some(name) || refs.func_owner_by_ptr(p) != Some(identity.name.as_str())
+                    || !refs.is_method_by_ptr(p) || refs.is_const_method_by_ptr(p) || !refs.func_params_by_ptr(p)?.is_empty() || !void(refs.func_ret_by_ptr(p)?) { return None; }
+            }
+            let getter = ptr(5)?; let ret = refs.func_ret_by_ptr(getter)?; let dispatch = ptr(8)?;
+            let [recipient,tag,data] = refs.func_params_by_ptr(dispatch)? else { return None; };
+            if !refs.is_method_by_ptr(getter) || !refs.func_params_by_ptr(getter)?.is_empty()
+                || ret.token != 5 || ret.type_info != actor_type || !ret.is_object_handle || ret.is_reference
+                || refs.is_method_by_ptr(dispatch) || !void(refs.func_ret_by_ptr(dispatch)?)
+                || recipient.token != 5 || !recipient.is_object_handle || recipient.is_reference
+                || tag.token != 5 || tag.is_reference || tag.is_object_handle || refs.type_identity_by_ptr(tag.type_info)?.name != "FGameplayTag"
+                || data.token != 5 || data.type_info != event || !data.is_reference || data.is_object_handle || data.is_object_const || data.is_read_only { return None; }
+            let global = ptr(3)?;
+            if refs.global_ns(global) != Some("GameplayTag") || refs.global_is_string(global)
+                || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J')
+                    && jump(i).is_some_and(|t| t > c[0].offset_dw as i64 && t <= c[10].offset_dw as i64))) { return None; }
+            let ns = refs.func_ns_by_ptr(dispatch).unwrap_or("");
+            let call = format!("{ns}::{}(this.{}(), GameplayTag::{}, local_{slot});",refs.func_by_ptr(dispatch)?,refs.func_by_ptr(getter)?,refs.global_by_ptr(global)?);
+            Some((slot,identity.name.clone(),call))
+        })();
+        if let Some((slot,ty,call)) = site { sites.entry(slot).or_default().push((at,ty,call)); }
+    }
+    let mut result = body.to_owned();
+    for (slot,frames) in sites {
+        let expected_uses: Vec<_> = frames.iter().flat_map(|(at,_,_)| [*at,at+2,at+9]).collect();
+        if code.iter().enumerate().filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&slot)).map(|(n,_)| n).ne(expected_uses)
+            || frames.iter().any(|(_,ty,_)| ty != &frames[0].1) { continue; }
+        let name = format!("local_{slot}"); let declaration = format!("{} {name};",frames[0].1);
+        if count_ident(&result,&name) != 2*frames.len() { continue; }
+        let lines: Vec<_> = result.lines().collect();
+        let declarations: Vec<_> = lines.iter().enumerate().filter(|(_,l)| l.trim() == declaration).map(|(n,_)| n).collect();
+        let mut required: BTreeMap<&str,usize> = BTreeMap::new();
+        for (_,_,call) in &frames { *required.entry(call.as_str()).or_default() += 1; }
+        let calls: Vec<_> = lines.iter().enumerate().filter(|(n,l)| *n>0 && *n+1<lines.len() && lines[*n-1].trim()=="{" && lines[*n+1].trim()=="}"
+            && required.contains_key(l.trim())).map(|(n,_)| n).collect();
+        if calls.len()!=frames.len() || declarations.len()!=frames.len()
+            || required.iter().any(|(call,count)| calls.iter().filter(|n| lines[**n].trim()==*call).count()!=*count)
+            || declarations.iter().zip(&calls).any(|(d,c)| d>=c || indent_of(lines[*d]).len()>=indent_of(lines[*c]).len()) { continue; }
+        let mut out = Vec::new();
+        for (n,line) in lines.iter().enumerate() {
+            if declarations.contains(&n) { continue; }
+            if calls.contains(&n) { out.push(format!("{}{declaration}",indent_of(line))); }
+            out.push((*line).to_owned());
+        }
+        let trailing = result.ends_with('\n'); result = out.join("\n"); if trailing { result.push('\n'); }
+    }
+    result
+}
 /// A first guard's call result is a temporary reused by a later field read.
 fn fold_initial_handle_guard(body: &str, f: &Func, refs: &RefResolver) -> String {
     let witness = (|| {
@@ -44027,6 +44097,33 @@ mod literal_value_lifetime_tests {
             format!("{body}Use(local_90_2);\n"), body.replace("if (Math::Abs", "while (Math::Abs")] {
             assert_eq!(fold(&text,&f,&refs),text);
         }
+    }
+
+    #[test]
+    fn empty_mutable_events_are_constructed_only_in_their_dispatch_branches() {
+        let frame=vec![("PSF",&[68][..]),("CALLSYS",&[]),("PSF",&[68]),("PshGPtr",&[]),("PshVPtr",&[0]),
+            ("CALLSYS",&[]),("STOREOBJ",&[70]),("PshVPtr",&[70]),("CALLSYS",&[]),("PSF",&[68]),("CALLSYS",&[])];
+        let mut ops=vec![("CpyVtoR1",&[1][..]),("JLowZ",&[])];ops.extend(frame.clone());
+        ops.extend([("CpyVtoR1",&[1][..]),("JLowZ",&[])]);ops.extend(frame);ops.push(("RET",&[]));
+        let mut f=function(&ops);f.obj_locals=vec![(68,1),(70,2)];let c=disassemble(&f.bytecode).unwrap();
+        for start in [2,15] {
+            for (n,p) in [(1,100),(3,900),(5,101),(8,102),(10,103)] {f.bytecode[c[start+n].offset_dw+1]=p;}
+            f.bytecode[c[start-1].offset_dw+1]=c[start+11].offset_dw as i32-c[start-1].offset_dw as i32-2;
+        }
+        let branch="    if (outer)\n    {\n        FEvent local_68;\n        Before();\n        if (active)\n        {\n            Events::Dispatch(this.GetReceiver(), GameplayTag::Stop, local_68);\n        }\n        After();\n    }\n";
+        let body=branch.repeat(2);let expected=branch.replace("        FEvent local_68;\n","").replace("            Events::Dispatch","            FEvent local_68;\n            Events::Dispatch").repeat(2);
+        let refs=RefResolver::from_test_scoped_empty_event(0);
+        assert_eq!(super::scope_empty_native_event_arguments(&body,&f,&refs),expected);
+        assert_eq!(super::scope_empty_native_event_arguments(&expected,&f,&refs),expected);
+        for fault in 1..=11 {assert_eq!(super::scope_empty_native_event_arguments(&body,&f,&RefResolver::from_test_scoped_empty_event(fault)),body,"metadata {fault}");}
+        for bad in [format!("{body}Use(local_68);\n"),body.replace("FEvent local_68;","FOther local_68;"),body.replace("GameplayTag::Stop","GameplayTag::Other"),body.replace("this.GetReceiver()","this.Other()"),body.replace("        FEvent local_68;\n","            FEvent local_68;\n")] {
+            assert_eq!(super::scope_empty_native_event_arguments(&bad,&f,&refs),bad);
+        }
+        let reject=|bad:&Func|assert_eq!(super::scope_empty_native_event_arguments(&body,bad,&refs),body);
+        let mut bad=f.clone();bad.obj_locals.push((68,1));reject(&bad);
+        let mut bad=f.clone();bad.bytecode[c[1].offset_dw+1]+=1;reject(&bad);
+        let mut bad=f.clone();bad.bytecode.extend(function(&[("PSF",&[68])]).bytecode);reject(&bad);
+        let mut bad=f.clone();let mut extra=function(&[("JMP",&[])]).bytecode;extra[1]=c[7].offset_dw as i32-bad.bytecode.len() as i32-2;bad.bytecode.extend(extra);reject(&bad);
     }
 
     #[test]

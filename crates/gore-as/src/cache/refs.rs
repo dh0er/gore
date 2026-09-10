@@ -5321,6 +5321,39 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_scoped_empty_event(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (p,name) in [(1,"FEvent"),(2,"UReceiver"),(3,"FGameplayTag")] {
+            r.type_by_ptr.insert(p,name.into());
+            r.type_identity_by_ptr.insert(p,TypeIdentity {name:name.into(),module:String::new(),namespace:String::new()});
+        }
+        for (p,name,owner) in [(100,"$beh0","FEvent"),(101,"GetReceiver","UTask"),(102,"Dispatch",""),(103,"$beh2","FEvent")] {
+            r.func_by_ptr.insert(p,name.into()); r.func_params.insert(p,vec![]); r.func_ret.insert(p,DataType {token:0x52,..Default::default()});
+            if !owner.is_empty() {r.func_owner.insert(p,owner.into());r.func_is_method.insert(p);}
+        }
+        r.func_ns.insert(102,"Events".into());
+        let receiver=DataType {token:5,type_info:2,is_object_handle:true,..Default::default()};
+        r.func_ret.insert(101,receiver.clone());r.const_method_ptrs.insert(101);
+        r.func_params.insert(102,vec![receiver,DataType {token:5,type_info:3,..Default::default()},DataType {token:5,type_info:1,is_reference:true,..Default::default()}]);
+        r.global_by_ptr.insert(900,"Stop".into());r.global_ns.insert(900,"GameplayTag".into());
+        match fault {
+            1 => {r.func_params.get_mut(&100).unwrap().push(DataType::default());},
+            2 => {r.const_method_ptrs.insert(103);},
+            3 => {r.func_ret.get_mut(&101).unwrap().is_reference=true;},
+            4 => {r.func_params.get_mut(&102).unwrap()[2].is_reference=false;},
+            5 => {r.func_params.get_mut(&102).unwrap()[2].is_object_const=true;},
+            6 => {r.func_params.get_mut(&102).unwrap()[1].token=0x44;},
+            7 => {r.global_ns.insert(900,"Other".into());},
+            8 => {r.global_is_string.insert(900);},
+            9 => {r.func_is_method.insert(102);},
+            10 => {r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into();},
+            11 => {r.func_ret.get_mut(&101).unwrap().type_info=4;},
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_attack_selection_scopes(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("UCandidate",""),("UElement","Enabled"),("TArrayIterator","CanProceed"),("UTask","State"),("UState","")]);
         for (id,name) in [(1,"UCandidate"),(2,"UElement"),(3,"TArrayIterator"),(4,"UTask"),(5,"UState")] {
