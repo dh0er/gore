@@ -5668,11 +5668,12 @@ impl RefResolver {
             (30, "opAssign", container, DataType { is_reference: true, ..value.clone() }, vec![DataType { is_reference: true, is_object_const: true, is_read_only: true, ..value }]),
             (40, "$beh2", container, DataType { token: 0x52, ..Default::default() }, vec![]),
             (50, "$beh2", "FMemoryFilter", DataType { token: 0x52, ..Default::default() }, vec![]),
+            (70, "IsEmpty", container, DataType { token: 0x41, ..Default::default() }, vec![]),
             (60, "$beh2", "FInGameTime", DataType { token: 0x52, ..Default::default() }, vec![]),
         ] {
             r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, ty_owner.into()); r.func_ret.insert(p, ret); r.func_params.insert(p, params); r.func_is_method.insert(p);
         }
-        r.const_method_ptrs.insert(10);
+        r.const_method_ptrs.extend([10, 70]);
         match fault {
             1 => { r.func_ret.get_mut(&10).unwrap().is_reference = true; },
             2 => { r.type_subtypes.get_mut(&1).unwrap()[0].is_object_handle = !handle; },
@@ -5685,10 +5686,55 @@ impl RefResolver {
             9 => { r.func_owner.insert(60, "OtherTime".into()); },
             10 => { r.const_method_ptrs.insert(60); },
             11 => { r.type_identity_by_ptr.get_mut(&5).unwrap().name = "OtherTime".into(); },
+            12 => { r.func_params.get_mut(&70).unwrap().push(DataType { token: 0x44, ..Default::default() }); },
+            13 => { r.const_method_ptrs.remove(&70); },
+            14 => { r.func_ret.get_mut(&70).unwrap().is_reference = true; },
             _ => {},
         }
         r
     }
+    #[cfg(test)]
+    pub(crate) fn from_test_memory_time_values(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FInGameTime", ""), ("FMemorizedEvent", "Time"), ("TArray", ""), ("FMemoryFilter", "")]);
+        for (p, name) in [(1, "FInGameTime"), (2, "FMemorizedEvent"), (3, "TArray"), (4, "FMemoryFilter")] {
+            r.type_identity_by_ptr.insert(p, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        r.prop_type_id.insert(5, 2);
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&[("FMemorizedEvent", "Time", if fault == 1 { "OtherTime" } else { "FInGameTime" })], &[], None));
+        r.type_subtypes.insert(3, vec![DataType { token: 5, type_info: 2, ..Default::default() }]);
+        let time = DataType { token: 5, type_info: 1, is_reference: true, is_object_const: true, is_read_only: true, ..Default::default() };
+        let event = DataType { token: 5, type_info: 2, is_reference: true, ..Default::default() };
+        let integer = DataType { token: 0x44, ..Default::default() }; let void = DataType { token: 0x52, ..Default::default() };
+        for (p, name, owner, ret, params) in [
+            (10, "Last", "TArray", event.clone(), vec![integer.clone()]),
+            (20, "$beh0", "FInGameTime", void.clone(), vec![time.clone()]),
+            (30, "$beh2", "FInGameTime", void.clone(), vec![]),
+            (40, "$beh2", "TArray", void, vec![]),
+            (50, "AfterTime", "FMemoryFilter", DataType { token: 5, type_info: 4, is_reference: true, ..Default::default() }, vec![time.clone()]),
+            (60, "GetCount", "FMemoryFilter", integer.clone(), vec![]),
+            (70, "opIndex", "TArray", event, vec![integer.clone()]),
+            (80, "opCmp", "FInGameTime", integer, vec![time.clone()]),
+            (90, "opAssign", "FInGameTime", DataType { token: 5, type_info: 1, is_reference: true, ..Default::default() }, vec![time]),
+        ] {
+            r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, owner.into()); r.func_ret.insert(p, ret); r.func_params.insert(p, params); r.func_is_method.insert(p);
+        }
+        r.const_method_ptrs.extend([60, 80]);
+        match fault {
+            2 => { r.prop_type_id.insert(5, 1); },
+            3 => { r.func_ret.get_mut(&10).unwrap().is_reference = false; },
+            4 => { r.func_params.get_mut(&20).unwrap()[0].type_info = 2; },
+            5 => { r.const_method_ptrs.insert(30); },
+            6 => { r.func_params.get_mut(&50).unwrap()[0].is_reference = false; },
+            7 => { r.type_subtypes.get_mut(&3).unwrap()[0].is_object_handle = true; },
+            8 => { r.func_ret.get_mut(&70).unwrap().is_reference = false; },
+            9 => { r.func_ret.get_mut(&80).unwrap().token = 0x41; },
+            10 => { r.func_params.get_mut(&90).unwrap()[0].type_info = 2; },
+            11 => { r.func_ret.get_mut(&90).unwrap().is_reference = false; },
+            _ => {},
+        }
+        r
+    }
+
     #[cfg(test)]
     pub(crate) fn from_test_weak_forward_sum(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("FVector", ""), ("FRotator", ""), ("UComponent", ""), ("UConfig", "Offset"), ("UNativeHost", "Movement")]);
