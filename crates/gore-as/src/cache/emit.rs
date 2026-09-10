@@ -3289,6 +3289,8 @@ fn emit_function_ctor(
         pass_trace("restore_conditional_field_references", &rendered);
         let rendered = fold_widened_vector_sign(&rendered, vector_sign);
         pass_trace("fold_widened_vector_sign", &rendered);
+        let rendered = restore_enum_trace_result(&rendered, f, refs);
+        pass_trace("restore_enum_trace_result", &rendered);
         let rendered = fold_weak_forward_sum(&rendered, f, refs);
         pass_trace("fold_weak_forward_sum", &rendered);
         let rendered = fold_reused_vector_product(&rendered, f, refs);
@@ -9309,6 +9311,96 @@ fn fold_ordered_coordinate_difference(body: &str, f: &Func, refs: &RefResolver) 
     let mut result = out.join("\n"); if body.ends_with('\n') { result.push('\n'); } result
 }
 
+/// Retain the completed enum conversion and initialized bool before native trace arguments.
+fn restore_enum_trace_result(body: &str, f: &Func, refs: &RefResolver) -> String {
+    let plain = |t: &super::types::DataType, token, ptr| t.token == token && t.type_info == ptr && !t.is_reference && !t.is_object_handle;
+    if !plain(&f.ret, 0x41, 0) || !body.contains("return ") { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    if code.iter().any(|i| i.op.name.starts_with('J')) { return body.to_owned(); }
+    let w = |i: &Instr, n| i.words.get(n).map(|s| *s as i16 as i32);
+    let ptr = |i: &Instr| i.qwords.first().copied().map(|p| p as i64);
+    let uses = |slot| code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&slot)).map(|(n, _)| n).collect::<Vec<_>>();
+    let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+    let offsets = super::model::param_slot_map(&params, true, false, Some(refs));
+    let sites: Vec<_> = code.windows(8).enumerate().filter_map(|(at, c)| {
+        if c.iter().map(|i| i.op.name).ne(["PshVPtr", "CALLSYS", "CpyRtoV4", "PshV4", "CALLSYS", "CpyRtoV4", "SetV1", "CpyVtoV4"]) || c[6].dwords.first() != Some(&0) { return None; }
+        let tail_at = code.len().checked_sub(5)?;
+        let tail = &code[tail_at..];
+        if tail_at <= at + 8 || tail.iter().map(|i| i.op.name).ne(["CALLSYS", "CpyRtoV4", "CpyVtoV4", "CpyVtoR4", "RET"]) { return None; }
+        let (receiver, input, enumeration, scratch, result, returned) = (w(&c[0], 0)?, w(&c[2], 0)?, w(&c[5], 0)?, w(&c[6], 0)?, w(&c[7], 0)?, w(&tail[1], 0)?);
+        let slots = [input, enumeration, scratch, result, returned];
+        if receiver == 0 || slots.iter().any(|s| *s <= 0 || *s == receiver || f.obj_locals.iter().any(|(n, _)| n == s)) || HashSet::from(slots).len() != slots.len()
+            || w(&c[3], 0) != Some(input) || w(&c[7], 1) != Some(scratch) || w(&tail[2], 0) != Some(result) || w(&tail[2], 1) != Some(returned) || w(&tail[3], 0) != Some(result)
+            || uses(input) != [at + 2, at + 3] || uses(result) != [at + 7, tail_at + 2, tail_at + 3] || uses(returned) != [tail_at + 1, tail_at + 2] { return None; }
+        let enum_uses = uses(enumeration);
+        let [captured, pushed] = enum_uses.as_slice() else { return None; };
+        if *captured != at + 5 || *pushed <= at + 7 || *pushed >= tail_at || code[*pushed].op.name != "PshV4" { return None; }
+        let (getter, convert, trace) = (ptr(&c[1])?, ptr(&c[4])?, ptr(&tail[0])?);
+        let input_type = refs.func_ret_by_ptr(getter)?;
+        let enum_type = refs.func_ret_by_ptr(convert)?;
+        let input_identity = refs.type_identity_by_ptr(input_type.type_info)?;
+        let enum_identity = refs.type_identity_by_ptr(enum_type.type_info)?;
+        if !plain(input_type, 5, input_type.type_info) || !plain(enum_type, 5, enum_type.type_info)
+            || [input_identity, enum_identity].iter().any(|t| !t.name.starts_with('E') || !t.module.is_empty() || !t.namespace.is_empty())
+            || !refs.is_method_by_ptr(getter) || !refs.is_const_method_by_ptr(getter) || !refs.func_params_by_ptr(getter)?.is_empty()
+            || refs.is_method_by_ptr(convert) || !matches!(refs.func_params_by_ptr(convert)?, [t] if plain(t, 5, input_type.type_info))
+            || refs.is_method_by_ptr(trace) || !plain(refs.func_ret_by_ptr(trace)?, 0x41, 0) { return None; }
+        let trace_params = refs.func_params_by_ptr(trace)?;
+        let context = trace_params.first()?;
+        if context.token != 5 || !context.is_object_handle || context.is_reference || !context.is_object_const
+            || !matches!(refs.type_identity_by_ptr(context.type_info), Some(t) if t.name == "UObject" && t.module.is_empty() && t.namespace.is_empty()) { return None; }
+        let indices: Vec<_> = trace_params.iter().enumerate().filter(|(_, t)| plain(t, 5, enum_type.type_info)).map(|(n, _)| n).collect();
+        let [index] = indices.as_slice() else { return None; };
+        if *index == 0 { return None; }
+        for i in &code[at + 8..tail_at] {
+            if !matches!(i.op.name, "PshC4" | "PshGPtr" | "SetV1" | "PshV4" | "PshVPtr" | "CALLSYS" | "CpyRtoV4" | "PSF") { return None; }
+            if i.op.name == "CALLSYS" {
+                let p = ptr(i)?;
+                if !refs.is_method_by_ptr(p) || !refs.is_const_method_by_ptr(p) || !refs.func_params_by_ptr(p)?.is_empty() || !plain(refs.func_ret_by_ptr(p)?, 0x50, 0) { return None; }
+            }
+        }
+        let receiver_name = if receiver < 0 {
+            let param = offsets.get(&receiver).and_then(|n| f.params.get(*n))?;
+            if param.name.is_empty() || param.ty.token != 5 || !param.ty.is_object_handle || param.ty.is_reference { return None; }
+            param.name.clone()
+        } else {
+            let locals: Vec<_> = f.obj_locals.iter().filter(|(n, _)| *n == receiver).collect();
+            let [(_, p)] = locals.as_slice() else { return None; };
+            let identity = refs.type_identity_by_ptr(*p)?;
+            if !identity.module.is_empty() || !identity.namespace.is_empty() || !identity.name.starts_with('U') { return None; }
+            format!("local_{receiver}")
+        };
+        let converter = format!("{}::{}", refs.func_ns_by_ptr(convert)?, refs.func_by_ptr(convert)?);
+        let call = format!("{}::{}", refs.func_ns_by_ptr(trace)?, refs.func_by_ptr(trace)?);
+        let expression = format!("{converter}({}({receiver_name}.{}()))", input_identity.name, refs.func_by_ptr(getter)?);
+        Some((enumeration, result, enum_identity.name.clone(), expression, call, *index - 1, trace_params.len() - 1))
+    }).collect();
+    let [(enumeration, result, ty, expression, call, index, argc)] = sites.as_slice() else { return body.to_owned(); };
+    let enum_name = format!("local_{enumeration}");
+    let result_name = format!("local_{result}");
+    if count_ident(body, &enum_name) != 0 || count_ident(body, &result_name) != 0 || body.matches(expression.as_str()).count() != 1 { return body.to_owned(); }
+    let lines: Vec<_> = body.lines().collect();
+    let found: Vec<_> = lines.iter().enumerate().filter_map(|(n, line)| {
+        let value = line.trim().strip_prefix("return ")?.strip_suffix(';')?;
+        if !value.starts_with(&format!("{call}(")) { return None; }
+        let (_, mut args) = call_of_expression(value)?;
+        if args.len() != *argc || args.get(*index) != Some(expression) { return None; }
+        args[*index] = enum_name.clone();
+        Some((n, format!("{call}({})", args.join(", "))))
+    }).collect();
+    let [(at, invocation)] = found.as_slice() else { return body.to_owned(); };
+    if lines[at + 1..].iter().any(|line| !line.trim().is_empty()) { return body.to_owned(); }
+    let mut out = Vec::new();
+    for (n, line) in lines.iter().enumerate() {
+        if n == *at {
+            let indent = indent_of(line);
+            out.extend([format!("{indent}{ty} {enum_name} = {expression};"), format!("{indent}bool {result_name} = false;"), format!("{indent}{result_name} = {invocation};"), format!("{indent}return {result_name};")]);
+        } else { out.push((*line).to_owned()); }
+    }
+    let mut result = out.join("\n");
+    if body.ends_with('\n') { result.push('\n'); }
+    result
+}
 /// Keep the final sum, while the weak-pointer forward vector and scalar remain temporary.
 fn fold_weak_forward_sum(body: &str, f: &Func, refs: &RefResolver) -> String {
     if !body.contains("FVector local_") { return body.to_owned(); }
@@ -20501,21 +20593,23 @@ fn copied_binary_receiver_lifetimes(
     let offsets = super::model::param_slot_map(&params, is_method, super::model::returns_struct_by_value(&f.ret, refs), Some(refs));
     code.iter().enumerate().filter_map(|(at, _)| {
         let short = code.get(at..at + 11)?;
-        let from_params = short.iter().map(|i| i.op.name).eq(["PshGPtr", "PSF", "CALLSYS", "PshV8", "PSF", "PSF", "CALLSYS", "PSF", "PSF", "PshVPtr", "CALLSYS"]);
-        let c = if from_params { short } else {
+        let getter_frame = code.get(at..at + 16).filter(|c| c.iter().map(|i| i.op.name).eq(["PshGPtr", "PSF", "CALLSYS", "PshVPtr", "CALLSYS", "CpyRtoV4", "ADDIf", "fTOd", "PshV8", "PSF", "PSF", "CALLSYS", "PSF", "PSF", "PshVPtr", "CALLSYS"]));
+        let from_getter = getter_frame.is_some();
+        let from_params = from_getter || short.iter().map(|i| i.op.name).eq(["PshGPtr", "PSF", "CALLSYS", "PshV8", "PSF", "PSF", "CALLSYS", "PSF", "PSF", "PshVPtr", "CALLSYS"]);
+        let c = if let Some(c) = getter_frame { c } else if from_params { short } else {
             let c = code.get(at..at + 13)?;
             if c.iter().map(|i| i.op.name).ne(["PshGPtr", "PSF", "CALLSYS", "LoadThisR", "RDR8",
                 "PshV8", "PSF", "PSF", "CALLSYS", "PSF", "PSF", "PSF", "CALLSYS"]) { return None; }
             c
         };
-        let shift = if from_params { 2 } else { 0 };
+        let argument = if from_getter { 8 } else if from_params { 3 } else { 5 };
         let w = |i: usize| c[i].words.first().map(|v| *v as i16 as i32);
-        let (copied, scalar, inner, outer) = (w(1)?, w(if from_params { 3 } else { 4 })?, w(6 - shift)?, w(11 - shift)?);
+        let (copied, scalar, inner, outer) = (w(1)?, w(if from_getter { 7 } else if from_params { 3 } else { 4 })?, w(argument + 1)?, w(argument + 6)?);
         let slots = [copied, scalar, inner, outer];
         if copied <= 0 || inner <= 0 || (!from_params && (scalar <= 0 || outer <= 0)) || slots.iter().collect::<HashSet<_>>().len() != 4
-            || w(5 - shift) != Some(scalar) || w(7 - shift) != Some(copied) || w(9 - shift) != Some(inner)
-            || w(10 - shift) != Some(copied)
-            || producers.iter().filter(|(s, _)| *s == copied).map(|(_, p)| *p).ne([at + 2, at + 12 - shift])
+            || w(argument) != Some(scalar) || w(argument + 2) != Some(copied) || w(argument + 4) != Some(inner)
+            || w(argument + 5) != Some(copied)
+            || producers.iter().filter(|(s, _)| *s == copied).map(|(_, p)| *p).ne([at + 2, at + argument + 7])
             || code[..at].iter().any(|i| super::bytediff::addressed_slots(i).contains(&copied))
         { return None; }
         let stored_types: Vec<_> = f.obj_locals.iter().filter(|(s, _)| *s == copied).map(|(_, p)| *p).collect();
@@ -20530,7 +20624,7 @@ fn copied_binary_receiver_lifetimes(
         let const_ref = |t: &super::types::DataType| value(t) && t.is_reference
             && t.is_object_const && t.is_read_only;
         let ptr = |i: usize| c[i].qwords.first().map(|p| *p as i64);
-        let (copy, multiply, add) = (ptr(2)?, ptr(8 - shift)?, ptr(12 - shift)?);
+        let (copy, multiply, add) = (ptr(2)?, ptr(argument + 3)?, ptr(argument + 7)?);
         if [copy, multiply, add].iter().any(|p| !refs.is_method_by_ptr(*p)
             || refs.func_owner_by_ptr(*p) != Some(identity.name.as_str()))
             || refs.func_by_ptr(copy) != Some("$beh0") || refs.is_const_method_by_ptr(copy)
@@ -20543,10 +20637,33 @@ fn copied_binary_receiver_lifetimes(
             || !matches!(refs.func_params_by_ptr(add), Some([t]) if const_ref(t))
             || refs.global_by_ptr(ptr(0)?).is_none() { return None; }
         if from_params {
-            let amount = offsets.get(&scalar).and_then(|n| f.params.get(*n))?;
             let base = offsets.get(&outer).and_then(|n| f.params.get(*n))?;
-            if amount.ty.token != 0x51 || amount.ty.type_info != 0 || amount.ty.is_reference || amount.ty.is_object_handle
-                || !const_ref(&base.ty) { return None; }
+            if !const_ref(&base.ty) { return None; }
+            if from_getter {
+                let receiver = w(3)?;
+                let narrow = w(5)?;
+                if receiver == 0 || narrow <= 0 || scalar <= 0 || narrow == scalar || [copied, inner, outer].contains(&narrow)
+                    || w(6) != Some(narrow) || c[6].words.get(1).map(|s| *s as i16 as i32) != Some(narrow)
+                    || c[7].words.get(1).map(|s| *s as i16 as i32) != Some(narrow)
+                    || f.obj_locals.iter().any(|(s, _)| *s == narrow || *s == scalar)
+                    || !c[6].dwords.first().is_some_and(|v| f32::from_bits(*v).is_finite()) { return None; }
+                let getter = ptr(4)?;
+                if !refs.is_method_by_ptr(getter) || !refs.is_const_method_by_ptr(getter) || !refs.func_params_by_ptr(getter)?.is_empty()
+                    || !matches!(refs.func_ret_by_ptr(getter)?, t if t.token == 0x50 && t.type_info == 0 && !t.is_reference && !t.is_object_handle) { return None; }
+                let receiver_type = if receiver < 0 {
+                    let param = offsets.get(&receiver).and_then(|n| f.params.get(*n))?;
+                    if param.ty.token != 5 || !param.ty.is_object_handle || param.ty.is_reference { return None; }
+                    param.ty.type_info
+                } else {
+                    let locals: Vec<_> = f.obj_locals.iter().filter(|(s, _)| *s == receiver).collect();
+                    let [(_, p)] = locals.as_slice() else { return None; };
+                    *p
+                };
+                if !matches!(refs.type_identity_by_ptr(receiver_type), Some(t) if t.name.starts_with('U') && t.module.is_empty() && t.namespace.is_empty()) { return None; }
+            } else {
+                let amount = offsets.get(&scalar).and_then(|n| f.params.get(*n))?;
+                if amount.ty.token != 0x51 || amount.ty.type_info != 0 || amount.ty.is_reference || amount.ty.is_object_handle { return None; }
+            }
         } else {
             let type_id = *c[3].dwords.first()? as i32;
             let owner = refs.type_identity_by_id(type_id)?;
@@ -20557,7 +20674,7 @@ fn copied_binary_receiver_lifetimes(
         if code.iter().any(|i| i.op.name == "JMPP" || i.op.name.starts_with('J')
                 && i.dwords.first().is_some_and(|d| {
                     let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
-                    target > c[0].offset_dw as i64 && target <= c[12 - shift].offset_dw as i64
+                    target > c[0].offset_dw as i64 && target <= c[argument + 7].offset_dw as i64
                 })) { return None; }
         Some((copied, identity.name.clone()))
     }).collect()
@@ -44571,6 +44688,34 @@ mod literal_value_lifetime_tests {
     }
 
     #[test]
+    fn native_enum_capture_precedes_the_initialized_trace_result() {
+        let mut f = function(&[("PshVPtr", &[65534]), ("CALLSYS", &[]), ("CpyRtoV4", &[24]), ("PshV4", &[24]),
+            ("CALLSYS", &[]), ("CpyRtoV4", &[25]), ("SetV1", &[27]), ("CpyVtoV4", &[26, 27]), ("PshV4", &[25]),
+            ("PshGPtr", &[]), ("CALLSYS", &[]), ("CpyRtoV4", &[30]), ("CpyVtoV4", &[26, 30]), ("CpyVtoR4", &[26]), ("RET", &[4])]);
+        f.ret = DataType { token: 0x41, ..Default::default() };
+        f.params.push(super::super::model::Param { name: "Shape".into(), ty: DataType { token: 5, type_info: 4, is_object_handle: true, ..Default::default() }, flags: 0 });
+        let c = disassemble(&f.bytecode).unwrap();
+        for (n, p) in [(1, 10), (4, 11), (10, 12)] { f.bytecode[c[n].offset_dw + 1] = p; }
+        let body = "    return System::Trace(UCollisionProfile::Convert(ECollision(Shape.Collision())));\n";
+        let expected = "    ETrace local_25 = UCollisionProfile::Convert(ECollision(Shape.Collision()));\n    bool local_26 = false;\n    local_26 = System::Trace(local_25);\n    return local_26;\n";
+        let refs = RefResolver::from_test_enum_trace_result(0);
+        assert_eq!(super::restore_enum_trace_result(body, &f, &refs), expected);
+        assert_eq!(super::restore_enum_trace_result(expected, &f, &refs), expected);
+        for fault in 1..=7 { assert_eq!(super::restore_enum_trace_result(body, &f, &RefResolver::from_test_enum_trace_result(fault)), body, "metadata {fault}"); }
+        let mut local = f.clone(); local.bytecode[c[0].offset_dw] = (local.bytecode[c[0].offset_dw] & 65535) | (2 << 16); local.obj_locals.push((2, 4));
+        assert_eq!(super::restore_enum_trace_result(&body.replace("Shape.", "local_2."), &local, &refs), expected.replace("Shape.", "local_2."));
+        for bad in [body.replace("Shape.", "Other."), body.replace("ECollision", "EOther"), body.replace("System::", "Other::"), format!("{body}Use(local_26);\n"), format!("bool local_25;\n{body}")] {
+            assert_eq!(super::restore_enum_trace_result(&bad, &f, &refs), bad);
+        }
+        let reject = |bad: &Func| assert_eq!(super::restore_enum_trace_result(body, bad, &refs), body);
+        let mut bad = f.clone(); bad.params[0].ty.is_object_handle = false; reject(&bad);
+        let mut bad = f.clone(); bad.obj_locals.push((26, 4)); reject(&bad);
+        let mut bad = f.clone(); bad.bytecode[c[6].offset_dw + 1] = 1; reject(&bad);
+        let mut bad = f.clone(); let mut extra = function(&[("PshV4", &[25])]).bytecode; extra.extend(bad.bytecode); bad.bytecode = extra; reject(&bad);
+        let mut bad = f; let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[4].offset_dw as i32; jump.extend(bad.bytecode); bad.bytecode = jump; reject(&bad);
+    }
+
+    #[test]
     fn weak_forward_vector_and_distance_die_before_the_named_sum() {
         let mut f = function(&[("PSF", &[38]), ("PSF", &[32]), ("PshVPtr", &[0]), ("ADDSi", &[0]), ("CALLSYS", &[]),
             ("STOREOBJ", &[26]), ("PshVPtr", &[26]), ("CALLSYS", &[]), ("PSF", &[32]), ("CALLSYS", &[]),
@@ -47011,6 +47156,34 @@ mod literal_value_lifetime_tests {
         for (at, ptr) in [(0, 40), (2, 10), (3, 2), (8, 20), (12, 30)] { f.bytecode[code[at].offset_dw + 1] = ptr; }
         f.obj_locals = vec![(10, 1), (20, 1), (30, 1)];
         f
+    }
+
+    #[test]
+    fn copied_binary_receiver_preserves_native_f32_offset_before_widening() {
+        let mut f = function(&[("PshGPtr", &[]), ("PSF", &[14]), ("CALLSYS", &[]), ("PshVPtr", &[65534]), ("CALLSYS", &[]),
+            ("CpyRtoV4", &[7]), ("ADDIf", &[7, 7]), ("fTOd", &[16, 7]), ("PshV8", &[16]), ("PSF", &[22]),
+            ("PSF", &[14]), ("CALLSYS", &[]), ("PSF", &[22]), ("PSF", &[14]), ("PshVPtr", &[65532]), ("CALLSYS", &[]), ("RET", &[6])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, ptr) in [(0, 40), (2, 10), (4, 50), (11, 20), (15, 30)] { f.bytecode[code[at].offset_dw + 1] = ptr; }
+        f.bytecode[code[6].offset_dw + 2] = 0.1f32.to_bits() as i32;
+        f.ret.token = 0x41; f.obj_locals = vec![(14, 1), (22, 1)];
+        f.params = vec![super::super::model::Param { name: "Shape".into(), ty: DataType { token: 5, type_info: 3, is_object_handle: true, ..Default::default() }, flags: 0 },
+            super::super::model::Param { name: "Base".into(), ty: DataType { token: 5, type_info: 1, is_reference: true, is_object_const: true, is_read_only: true, ..Default::default() }, flags: 0 }];
+        let refs = RefResolver::from_test_copied_receiver_getter(0);
+        let producers = [(14, 2), (22, 11), (14, 15)];
+        let check = |f: &Func, r: &RefResolver| super::copied_binary_receiver_lifetimes(f, r, &producers, true);
+        assert_eq!(check(&f, &refs), HashMap::from([(14, "FVector".into())]));
+        let mut local = f.clone(); local.bytecode[code[3].offset_dw] = (local.bytecode[code[3].offset_dw] & 65535) | (2 << 16); local.obj_locals.push((2, 3));
+        assert_eq!(check(&local, &refs), HashMap::from([(14, "FVector".into())]));
+        for fault in 1..=4 { assert!(check(&f, &RefResolver::from_test_copied_receiver_getter(fault)).is_empty(), "metadata {fault}"); }
+        let mut bad = f.clone(); bad.params[0].ty.is_object_handle = false; assert!(check(&bad, &refs).is_empty());
+        let mut bad = f.clone(); bad.params[1].ty.is_reference = false; assert!(check(&bad, &refs).is_empty());
+        let mut bad = f.clone(); bad.bytecode[code[6].offset_dw + 2] = f32::INFINITY.to_bits() as i32; assert!(check(&bad, &refs).is_empty());
+        let mut bad = f.clone(); bad.obj_locals.push((7, 1)); assert!(check(&bad, &refs).is_empty());
+        let mut bad = local; bad.obj_locals.push((2, 3)); assert!(check(&bad, &refs).is_empty());
+        let mut bad = f; let at = bad.bytecode.len(); bad.bytecode.extend(function(&[("JMP", &[])]).bytecode);
+        bad.bytecode[at + 1] = code[4].offset_dw as i32 - at as i32 - 2;
+        assert!(check(&bad, &refs).is_empty());
     }
 
     #[test]

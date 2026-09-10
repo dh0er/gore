@@ -3136,6 +3136,24 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_copied_receiver_getter(fault: u8) -> Self {
+        let mut r = Self::from_test_copied_binary_receiver(0);
+        r.type_by_ptr.insert(3, "UComponent".into());
+        r.type_identity_by_ptr.insert(3, TypeIdentity { name: "UComponent".into(), module: String::new(), namespace: String::new() });
+        r.func_by_ptr.insert(50, "Radius".into()); r.func_owner.insert(50, "UComponent".into());
+        r.func_ret.insert(50, DataType { token: 0x50, ..Default::default() });
+        r.func_params.insert(50, vec![]); r.func_is_method.insert(50); r.const_method_ptrs.insert(50);
+        match fault {
+            1 => { r.func_ret.get_mut(&50).unwrap().is_reference = true; },
+            2 => { r.func_ret.get_mut(&50).unwrap().token = 0x51; },
+            3 => { r.const_method_ptrs.remove(&50); },
+            4 => { r.type_identity_by_ptr.get_mut(&3).unwrap().module = "Script".into(); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_copied_binary_receiver(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("FVector", ""), ("UStorm", "Height")]);
         r.type_identity_by_ptr.insert(1, TypeIdentity { name: "FVector".into(), module: String::new(), namespace: String::new() });
@@ -5334,6 +5352,36 @@ impl RefResolver {
             3 => {r.const_method_ptrs.insert(2);},
             4 => {r.func_owner.insert(2,"TOther".into());},
             5 => {r.type_identity_by_ptr.get_mut(&101).unwrap().module="Script".into();},
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_enum_trace_result(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (p, name) in [(1, "ECollision"), (2, "ETrace"), (3, "UObject"), (4, "UComponent")] {
+            r.type_by_ptr.insert(p, name.into());
+            r.type_identity_by_ptr.insert(p, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        let input = DataType { token: 5, type_info: 1, ..Default::default() };
+        let enumeration = DataType { token: 5, type_info: 2, ..Default::default() };
+        for (p, name, namespace, ret, params) in [
+            (10, "Collision", "", input.clone(), vec![]),
+            (11, "Convert", "UCollisionProfile", enumeration.clone(), vec![input]),
+            (12, "Trace", "System", DataType { token: 0x41, ..Default::default() }, vec![DataType { token: 5, type_info: 3, is_object_handle: true, is_object_const: true, ..Default::default() }, enumeration]),
+        ] {
+            r.func_by_ptr.insert(p, name.into()); r.func_ns.insert(p, namespace.into()); r.func_ret.insert(p, ret); r.func_params.insert(p, params);
+        }
+        r.func_owner.insert(10, "UComponent".into()); r.func_is_method.insert(10); r.const_method_ptrs.insert(10);
+        match fault {
+            1 => { r.func_ret.get_mut(&10).unwrap().is_reference = true; },
+            2 => { r.func_params.get_mut(&11).unwrap()[0].type_info = 2; },
+            3 => { r.func_is_method.insert(11); },
+            4 => { r.func_ret.get_mut(&12).unwrap().token = 0x44; },
+            5 => { r.func_params.get_mut(&12).unwrap()[0].is_object_handle = false; },
+            6 => { r.type_identity_by_ptr.get_mut(&2).unwrap().module = "Script".into(); },
+            7 => { r.const_method_ptrs.remove(&10); },
             _ => {},
         }
         r
