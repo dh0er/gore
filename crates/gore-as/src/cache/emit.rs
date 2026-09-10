@@ -3241,6 +3241,10 @@ fn emit_function_ctor(
         pass_trace("restore_named_set_return", &rendered);
         let rendered = restore_named_filter_copies(&rendered, f, refs);
         pass_trace("restore_named_filter_copies", &rendered);
+        let rendered = fold_closed_executor_bridges(&rendered, f, refs);
+        pass_trace("fold_closed_executor_bridges", &rendered);
+        let rendered = restore_segment_value_lifetimes(&rendered, f, refs);
+        pass_trace("restore_segment_value_lifetimes", &rendered);
         let rendered = fold_widened_vector_sign(&rendered, vector_sign);
         pass_trace("fold_widened_vector_sign", &rendered);
         s.truncate(declarations_at);
@@ -8503,6 +8507,148 @@ fn rewrite_no_assign_locals(body: &str, locals: &BTreeMap<i32, String>) -> (Stri
         suppressed.insert(*slot);
     }
     (out, suppressed)
+}
+
+/// Copied segment origins survive the nearest-point query. The scaled direction
+/// values instead die inside their endpoint expressions and lend storage onward.
+fn restore_segment_value_lifetimes(body:&str,f:&Func,refs:&RefResolver)->String {
+    if !body.contains("FindNearestPointsOnLineSegments(") {return body.to_owned();}
+    let witness=(|| {
+        if f.ret.token!=0x51 || f.ret.is_reference || f.params.len()!=2 || f.params.iter().any(|p|p.ty.token!=5 || !p.ty.is_object_handle || p.ty.is_reference) {return None;}
+        let c=disassemble(&f.bytecode).ok()?;
+        if c.iter().map(|i|i.op.name).ne(["PSF","PshVPtr","CALLSYS","PSF","PSF","PshVPtr","CALLSYS","STOREOBJ","PshVPtr","CALLSYS","PSF","CALLSYS","CpyRtoV8","PSF","PshVPtr","CALLSYS","STOREOBJ","PshVPtr","CALLSYS","PSF","PSF","CALLSYS","PSF","PshVPtr","CALLSYS","STOREOBJ","PshVPtr","CALLSYS","PshC8","PSF","PSF","CALLSYS","PshV8","PSF","PSF","CALLSYS","PSF","PSF","PSF","CALLSYS","PSF","PshVPtr","CALLSYS","PSF","PSF","CALLSYS","PSF","PshVPtr","CALLSYS","PshC8","PSF","PSF","CALLSYS","PshVPtr","CALLSYS","CpyRtoV4","fTOd","PshV8","PSF","PSF","CALLSYS","PSF","PSF","PSF","CALLSYS","PSF","CALLSYS","PSF","CALLSYS","PSF","PSF","PSF","PSF","PSF","PSF","CALLSYS","PSF","PSF","CALLSYS","CpyRtoV8","CpyVtoR8","RET"]) {return None;}
+        let w=|at:usize,n:usize|c[at].words.get(n).map(|v|*v as i16 as i32);
+        let p=|at:usize|c[at].qwords.first().map(|p|*p as i64);
+        if [(0,0),(3,0),(22,0),(30,0),(33,0),(36,0),(40,0),(43,0),(50,0),(59,0),(62,0),(71,0)].iter().any(|(at,n)|w(*at,*n)!=w(0,0)) {return None;}
+        if [(1,0),(41,0),(47,0),(53,0)].iter().any(|(at,n)|w(*at,*n)!=Some(-2)) {return None;}
+        if [(4,0),(10,0),(13,0),(19,0),(29,0),(34,0),(37,0),(73,0)].iter().any(|(at,n)|w(*at,*n)!=w(4,0)) {return None;}
+        if [(5,0),(14,0),(23,0)].iter().any(|(at,n)|w(*at,*n)!=Some(0)) {return None;}
+        if [(7,0),(8,0),(16,0),(17,0),(25,0),(26,0)].iter().any(|(at,n)|w(*at,*n)!=w(7,0)) {return None;}
+        if [(12,0),(32,0)].iter().any(|(at,n)|w(*at,*n)!=w(12,0)) {return None;}
+        if [(20,0),(38,0),(74,0)].iter().any(|(at,n)|w(*at,*n)!=w(20,0)) {return None;}
+        if [(44,0),(63,0),(72,0)].iter().any(|(at,n)|w(*at,*n)!=w(44,0)) {return None;}
+        if [(46,0),(51,0),(58,0),(61,0)].iter().any(|(at,n)|w(*at,*n)!=w(46,0)) {return None;}
+        if [(55,0),(56,1)].iter().any(|(at,n)|w(*at,*n)!=w(55,0)) {return None;}
+        if [(56,0),(57,0),(79,0),(80,0)].iter().any(|(at,n)|w(*at,*n)!=w(56,0)) {return None;}
+        if [(65,0),(70,0),(77,0)].iter().any(|(at,n)|w(*at,*n)!=w(65,0)) {return None;}
+        if [(67,0),(69,0),(76,0)].iter().any(|(at,n)|w(*at,*n)!=w(67,0)) {return None;}
+        let slots=[w(0,0)?,w(4,0)?,w(7,0)?,w(12,0)?,w(20,0)?,w(44,0)?,w(46,0)?,w(55,0)?,w(56,0)?,w(65,0)?,w(67,0)?];if slots.iter().any(|s|*s<=0) || HashSet::from(slots).len()!=slots.len() {return None;}
+        if w(81,0)!=Some(4) || c[28].qwords.first()!=Some(&0x4000000000000000) || c[49].qwords!=c[28].qwords {return None;}
+        for group in [&[2,9,18][..],&[6,15,24],&[11,78],&[21,45],&[31,35,52,60],&[39,64],&[66,68]] {
+            if group.iter().any(|at|p(*at)!=p(group[0])) {return None;}
+        }
+        let ctor=p(21)?;let [arg]=refs.func_params_by_ptr(ctor)? else{return None;};let ty=arg.type_info;
+        let vector=refs.type_identity_by_ptr(ty)?;
+        if arg.token!=5 || !arg.is_reference || !arg.is_object_const || !arg.is_read_only || arg.is_object_handle
+            || vector.name!="FVector" || !vector.module.is_empty() || !vector.namespace.is_empty() {return None;}
+        for at in [0,4,20,44,46,65,67] {
+            let slot=w(at,0)?;
+            if f.obj_locals.iter().filter(|(s,_)|*s==slot).map(|(_,t)|*t).ne([ty]) {return None;}
+        }
+        for (at,name,token,constant) in [(21,"$beh0",0x52,false),(66,"$beh0",0x52,false),(31,"opMul",5,true),(39,"opAdd",5,true),(11,"Distance",0x51,true)] {
+            let ptr=p(at)?;let ret=refs.func_ret_by_ptr(ptr)?;let args=refs.func_params_by_ptr(ptr)?;
+            if refs.func_owner_by_ptr(ptr)!=Some("FVector") || refs.func_by_ptr(ptr)!=Some(name) || !refs.is_method_by_ptr(ptr)
+                || refs.is_const_method_by_ptr(ptr)!=constant || ret.token!=token || ret.is_reference || ret.is_object_handle || token==5 && ret.type_info!=ty {return None;}
+            if at==66 && !args.is_empty() || at==31 && !matches!(args,[a] if a.token==0x51 && !a.is_reference)
+                || [39,11].contains(&at) && !matches!(args,[a] if a.token==5 && a.type_info==ty && a.is_reference && a.is_object_const && a.is_read_only && !a.is_object_handle) {return None;}
+        }
+        for (at,name) in [(2,"GetActorLocation"),(27,"GetActorForwardVector"),(42,"GetFeetLocation"),(48,"GetActorUpVector")] {
+            let ptr=p(at)?;let ret=refs.func_ret_by_ptr(ptr)?;
+            if refs.func_by_ptr(ptr)!=Some(name) || !refs.is_method_by_ptr(ptr) || !refs.is_const_method_by_ptr(ptr) || !refs.func_params_by_ptr(ptr)?.is_empty()
+                || ret.token!=5 || ret.type_info!=ty || ret.is_reference || ret.is_object_handle {return None;}
+        }
+        let query=p(75)?;let args=refs.func_params_by_ptr(query)?;
+        if refs.func_by_ptr(query)!=Some("FindNearestPointsOnLineSegments") || refs.func_ns_by_ptr(query)!=Some("Math") || refs.is_method_by_ptr(query)
+            || refs.func_ret_by_ptr(query)?.token!=0x52 || args.len()!=6 || args.iter().enumerate().any(|(i,a)|a.token!=5 || a.type_info!=ty || a.is_object_handle || a.is_reference!=(i>=4) || a.is_object_const || a.is_read_only) {return None;}
+        Some((w(20,0)?,w(44,0)?,w(0,0)?,w(4,0)?,w(12,0)?))
+    })();
+    let Some((first,second,temp,endpoint,distance))=witness else{return body.to_owned();};
+    let first=format!("local_{first}");let second=format!("local_{second}");let distance=format!("local_{distance}");
+    let actor=&f.params[0].name;let other=&f.params[1].name;
+    let first_arg=format!("{actor}.GetController().GetActorLocation()");let second_arg=format!("{other}.GetFeetLocation()");
+    if count_ident(body,&first)!=3 || count_ident(body,&second)!=3 {return body.to_owned();}
+    let mut lines:Vec<String>=body.lines().map(str::to_owned).collect();
+    let Some(at)=lines.iter().position(|l|l.trim()==format!("FVector {first} = FVector({first_arg});")) else{return body.to_owned();};
+    let rewrite=(|| {
+        let block=lines.get(at..at+6)?;let indent=indent_of(&block[0]);
+        let (_,a,a_value)=declaration_with_initializer(&block[1])?;let (_,end_a,end_a_value)=declaration_with_initializer(&block[2])?;
+        let (_,b,b_value)=declaration_with_initializer(&block[4])?;let (_,end_b,end_b_value)=declaration_with_initializer(&block[5])?;
+        if block.iter().any(|l|indent_of(l)!=indent) || [1,2,4,5].iter().any(|i|!block[*i].trim_start().starts_with("FVector "))
+            || slot_and_life_any(&a)?.0!=temp || slot_and_life_any(&b)?.0!=temp || a==b || slot_and_life_any(&end_a)?.0!=endpoint || slot_and_life_any(&end_b)?.0!=temp
+            || count_ident(body,&a)!=2 || count_ident(body,&b)!=2 || count_ident(body,&end_a)!=2 || count_ident(body,&end_b)!=2
+            || a_value!=format!("(({actor}.GetController().GetActorForwardVector() * 2.0) * {distance})") || end_a_value!=format!("({first} + {a})")
+            || block[3].trim()!=format!("FVector {second} = FVector({second_arg});") || b_value!=format!("({other}.GetActorUpVector() * 2.0)")
+            || end_b_value!=format!("({second} + ({b} * {other}.GetSimpleCollisionHalfHeight()))") {return None;}
+        Some((format!("{indent}FVector {first}({first_arg});"),format!("{indent}FVector {second}({second_arg});"),rename_ident(&block[2],&a,&a_value),rename_ident(&block[5],&b,&b_value)))
+    })();
+    let Some((a,b,end_a,end_b))=rewrite else{return body.to_owned();};
+    lines[at]=a;lines[at+3]=b;lines[at+2]=end_a;lines[at+5]=end_b;lines.remove(at+4);lines.remove(at+1);
+    let mut result=lines.join("\n");if body.ends_with('\n'){result.push('\n');}result
+}
+
+/// Three executor results are immediately destroyed; a fourth survives its two
+/// status tests. Their shared raw slot must not manufacture four native copies.
+fn fold_closed_executor_bridges(body:&str,f:&Func,refs:&RefResolver)->String {
+    if !body.contains("FAbilityTaskExecutor __na_t") {return body.to_owned();}
+    let witness=(|| {
+        if f.ret.token!=0x52 || !f.params.is_empty() {return None;}
+        let c=disassemble(&f.bytecode).ok()?;
+        let jump=|i:&Instr|i.dwords.first().map(|d|i.offset_dw as i64+2+*d as i32 as i64);
+        if c.iter().any(|i|i.op.name=="JMPP" || i.op.name.starts_with('J') && jump(i).is_some_and(|to|to<=i.offset_dw as i64)) {return None;}
+        for (slot,ty) in &f.obj_locals {
+            let Some(identity)=refs.type_identity_by_ptr(*ty) else{continue;};
+            if *slot<=0 || identity.name!="FAbilityTaskExecutor" || !identity.module.is_empty() || !identity.namespace.is_empty()
+                || f.obj_locals.iter().filter(|(s,_)|s==slot).count()!=1 {continue;}
+            let uses:Vec<_>=c.iter().enumerate().filter(|(_,i)|super::bytediff::addressed_slots(i).contains(slot)).map(|(n,_)|n).collect();
+            let [a,a_end,b,b_end,d,d_end,last,test,result,end]=uses.as_slice() else{continue;};
+            if *a_end!=a+2 || *b_end!=b+2 || *d_end!=d+2 || *test!=last+2 || *result!=last+9 || *end!=last+18 {continue;}
+            let mut factories=Vec::new();let mut destructor=None;
+            for (start,release) in [(*a,*a_end),(*b,*b_end),(*d,*d_end),(*last,*end)] {
+                if c[start].op.name!="PSF" || c.get(start+1)?.op.name!="CALL" || c[release].op.name!="PSF" || c.get(release+1)?.op.name!="CALLSYS" {return None;}
+                let id=*c[start+1].dwords.first()? as i32;let ret=refs.func_ret_by_id(id)?;
+                if ret.token!=5 || ret.type_info!=*ty || ret.is_reference || ret.is_object_handle || refs.is_method_by_id(id)
+                    || c.iter().filter(|i|i.op.name=="CALL" && i.dwords.first()==Some(&(id as u32))).count()!=1 {return None;}
+                factories.push(refs.func_by_id(id)?.to_owned());
+                let ptr=*c[release+1].qwords.first()? as i64;
+                if destructor.is_some_and(|old|old!=ptr) || refs.func_by_ptr(ptr)!=Some("$beh2") || refs.func_owner_by_ptr(ptr)!=Some("FAbilityTaskExecutor")
+                    || !refs.is_method_by_ptr(ptr) || refs.is_const_method_by_ptr(ptr) || refs.func_ret_by_ptr(ptr)?.token!=0x52 || !refs.func_params_by_ptr(ptr)?.is_empty() {return None;}
+                destructor=Some(ptr);
+                if c.iter().enumerate().any(|(n,i)|i.op.name.starts_with('J') && !(start==*last && [last+4,last+8,last+14].contains(&n))
+                    && jump(i).is_some_and(|to|to>c[start].offset_dw as i64 && to<=c[release+1].offset_dw as i64)) {return None;}
+            }
+            let tail=c.get(*last..last+20)?;
+            if tail.iter().map(|i|i.op.name).ne(["PSF","CALL","PSF","CALL","JLowZ","PSF","PshVPtr","CALLINTF","JMP","PSF","CALLSYS","RDR1","sbTOi","CMPIi","JNZ","PSF","PshVPtr","CALLINTF","PSF","CALLSYS"]) {return None;}
+            for (from,to) in [(4,9),(8,18),(14,18)] {if jump(&tail[from])!=Some(tail[to].offset_dw as i64){return None;}}
+            let success=*tail[3].dwords.first()? as i32;let [arg]=refs.func_params_by_id(success)? else{return None;};
+            if refs.func_by_id(success)!=Some("WasSuccessful") || refs.is_method_by_id(success) || refs.func_ret_by_id(success)?.token!=0x41
+                || arg.token!=5 || arg.type_info!=*ty || !arg.is_reference || !arg.is_object_const || !arg.is_read_only || arg.is_object_handle {return None;}
+            let result=*tail[10].qwords.first()? as i64;let ret=refs.func_ret_by_ptr(result)?;
+            if refs.func_by_ptr(result)!=Some("GetResult") || refs.func_owner_by_ptr(result)!=Some("FAbilityTaskExecutor") || !refs.is_method_by_ptr(result)
+                || !refs.is_const_method_by_ptr(result) || !refs.func_params_by_ptr(result)?.is_empty() || ret.token!=5 || !ret.is_reference || !ret.is_object_const || !ret.is_read_only || ret.is_object_handle {return None;}
+            return Some((*slot,factories));
+        }
+        None
+    })();
+    let Some((slot,factories))=witness else{return body.to_owned();};let lines:Vec<_>=body.lines().collect();
+    let mut changes=BTreeMap::new();let mut previous=None;
+    for (ordinal,callee) in factories.iter().enumerate() {
+        let found:Vec<_>=lines.iter().enumerate().filter_map(|(at,line)| {
+            let (name,rhs)=line.trim().strip_prefix("FAbilityTaskExecutor ")?.strip_suffix(';')?.split_once(" = ")?;
+            let number=name.strip_prefix("__na_t")?;
+            (!number.is_empty() && number.bytes().all(|b|b.is_ascii_digit()) && rhs.starts_with(&format!("::{callee}(")) && rhs.ends_with(')'))
+                .then_some((at,indent_of(line).to_owned(),name.to_owned(),rhs.to_owned()))
+        }).collect();
+        let [(at,indent,temporary,rhs)]=found.as_slice() else{return body.to_owned();};
+        let Some(next)=lines.get(at+1) else{return body.to_owned();};
+        let Some((other_indent,name,value))=declaration_with_initializer(next) else{return body.to_owned();};
+        if previous.is_some_and(|old|*at<=old) || !next.trim_start().starts_with("FAbilityTaskExecutor ") || other_indent!=*indent || value!=*temporary
+            || slot_and_life_any(&name).is_none_or(|(s,_)|s!=slot) || count_ident(body,temporary)!=2 || count_ident(body,&name)!=if ordinal==3{3}else{1} {return body.to_owned();}
+        if ordinal==3 && (!body.contains(&format!("::WasSuccessful({name})")) || !body.contains(&format!("{name}.GetResult()"))) {return body.to_owned();}
+        changes.insert(*at,if ordinal==3 {format!("{indent}FAbilityTaskExecutor {name} = {rhs};")} else{format!("{indent}{rhs};")});
+        changes.insert(at+1,String::new());previous=Some(*at);
+    }
+    let mut out=Vec::new();for (at,line) in lines.iter().enumerate() {match changes.get(&at){Some(s) if s.is_empty()=>{},Some(s)=>out.push(s.clone()),None=>out.push(line.to_string())}}
+    let mut result=out.join("\n");if body.ends_with('\n'){result.push('\n');}result
 }
 
 /// Both returning paths copy the same native filter into its own named life.
@@ -42297,6 +42443,58 @@ mod literal_value_lifetime_tests {
         let mut named=function(&[("PSF",&[12]),("CALL",&[]),("PshVPtr",&[65534]),("CALL",&[])]);
         let c=disassemble(&named.bytecode).unwrap();for at in [1,3]{named.bytecode[c[at].offset_dw+1]=7;}
         assert_eq!(super::fold_returned_empty_values(body,&named,&refs),body);
+    }
+
+    #[test]
+    fn copied_segment_origins_outlive_only_the_endpoint_temporaries() {
+        let mut f=function(&[("PSF",&[16]),("PshVPtr",&[65534]),("CALLSYS",&[]),("PSF",&[16]),("PSF",&[10]),("PshVPtr",&[0]),("CALLSYS",&[]),("STOREOBJ",&[4]),("PshVPtr",&[4]),("CALLSYS",&[]),("PSF",&[10]),("CALLSYS",&[]),("CpyRtoV8",&[18]),("PSF",&[10]),("PshVPtr",&[0]),("CALLSYS",&[]),("STOREOBJ",&[4]),("PshVPtr",&[4]),("CALLSYS",&[]),("PSF",&[10]),("PSF",&[24]),("CALLSYS",&[]),("PSF",&[16]),("PshVPtr",&[0]),("CALLSYS",&[]),("STOREOBJ",&[4]),("PshVPtr",&[4]),("CALLSYS",&[]),("PshC8",&[]),("PSF",&[10]),("PSF",&[16]),("CALLSYS",&[]),("PshV8",&[18]),("PSF",&[16]),("PSF",&[10]),("CALLSYS",&[]),("PSF",&[16]),("PSF",&[10]),("PSF",&[24]),("CALLSYS",&[]),("PSF",&[16]),("PshVPtr",&[65534]),("CALLSYS",&[]),("PSF",&[16]),("PSF",&[36]),("CALLSYS",&[]),("PSF",&[30]),("PshVPtr",&[65534]),("CALLSYS",&[]),("PshC8",&[]),("PSF",&[16]),("PSF",&[30]),("CALLSYS",&[]),("PshVPtr",&[65534]),("CALLSYS",&[]),("CpyRtoV4",&[43]),("fTOd",&[2,43]),("PshV8",&[2]),("PSF",&[30]),("PSF",&[16]),("CALLSYS",&[]),("PSF",&[30]),("PSF",&[16]),("PSF",&[36]),("CALLSYS",&[]),("PSF",&[50]),("CALLSYS",&[]),("PSF",&[56]),("CALLSYS",&[]),("PSF",&[56]),("PSF",&[50]),("PSF",&[16]),("PSF",&[36]),("PSF",&[10]),("PSF",&[24]),("CALLSYS",&[]),("PSF",&[56]),("PSF",&[50]),("CALLSYS",&[]),("CpyRtoV8",&[2]),("CpyVtoR8",&[2]),("RET",&[4])]);
+        f.ret.token=0x51;f.params=["Character","OtherCharacter"].into_iter().map(|name|crate::cache::model::Param {name:name.into(),ty:DataType {token:5,type_info:2,is_object_handle:true,is_object_const:true,..Default::default()},flags:0}).collect();
+        f.obj_locals=vec![(10,1),(16,1),(24,1),(30,1),(36,1),(42,1),(50,1),(56,1)];let c=disassemble(&f.bytecode).unwrap();
+        for (at,ptr) in [(2,15),(9,15),(18,15),(11,14),(78,14),(21,10),(45,10),(66,11),(68,11),(31,12),(35,12),(52,12),(60,12),(39,13),(64,13),(27,16),(42,17),(48,18),(75,19)] {
+            f.bytecode[c[at].offset_dw+1]=ptr;
+        }
+        for at in [28,49]{f.bytecode[c[at].offset_dw+2]=0x40000000;}
+        let body="    float local_18 = Character.GetController().GetActorLocation().Distance(OtherCharacter.GetActorLocation());\n    FVector local_24 = FVector(Character.GetController().GetActorLocation());\n    FVector local_16 = ((Character.GetController().GetActorForwardVector() * 2.0) * local_18);\n    FVector local_10_2 = (local_24 + local_16);\n    FVector local_36 = FVector(OtherCharacter.GetFeetLocation());\n    FVector local_16_2 = (OtherCharacter.GetActorUpVector() * 2.0);\n    FVector local_16_3 = (local_36 + (local_16_2 * OtherCharacter.GetSimpleCollisionHalfHeight()));\n    FVector local_50;\n    FVector local_56;\n    Math::FindNearestPointsOnLineSegments(local_24, local_10_2, local_36, local_16_3, local_50, local_56);\n    return local_50.Distance(local_56);\n";
+        let expected="    float local_18 = Character.GetController().GetActorLocation().Distance(OtherCharacter.GetActorLocation());\n    FVector local_24(Character.GetController().GetActorLocation());\n    FVector local_10_2 = (local_24 + ((Character.GetController().GetActorForwardVector() * 2.0) * local_18));\n    FVector local_36(OtherCharacter.GetFeetLocation());\n    FVector local_16_3 = (local_36 + ((OtherCharacter.GetActorUpVector() * 2.0) * OtherCharacter.GetSimpleCollisionHalfHeight()));\n    FVector local_50;\n    FVector local_56;\n    Math::FindNearestPointsOnLineSegments(local_24, local_10_2, local_36, local_16_3, local_50, local_56);\n    return local_50.Distance(local_56);\n";
+        let refs=RefResolver::from_test_segment_lifetimes(0);
+        assert_eq!(super::restore_segment_value_lifetimes(body,&f,&refs),expected);
+        assert_eq!(super::restore_segment_value_lifetimes(&expected,&f,&refs),expected);
+        for fault in 1..=6 {assert_eq!(super::restore_segment_value_lifetimes(body,&f,&RefResolver::from_test_segment_lifetimes(fault)),body,"metadata {fault}");}
+        for at in [0,3,4,5,7,12,20,30,33,38,40,44,46,50,55,56,58,62,65,67,69,74,81] {
+            let mut bad=f.clone();bad.bytecode[c[at].offset_dw]^=1<<16;assert_eq!(super::restore_segment_value_lifetimes(body,&bad,&refs),body,"operand {at}");
+        }
+        let mut duplicate=f.clone();duplicate.obj_locals.push((24,1));assert_eq!(super::restore_segment_value_lifetimes(body,&duplicate,&refs),body);
+        for text in [body.replace("FVector local_16_2", "Work();\n    FVector local_16_2"),body.replace(" * 2.0", " * 3.0"),
+            format!("{body}Use(local_16);\n"),format!("{body}Use(local_24);\n")] {
+            assert_eq!(super::restore_segment_value_lifetimes(&text,&f,&refs),text);
+        }
+    }
+
+    #[test]
+    fn closed_executor_lives_do_not_gain_copy_bridges() {
+        let mut f=function(&[("PshVPtr",&[0]),("CALL",&[]),("PshGPtr",&[]),("PshVPtr",&[0]),("ADDSi",&[776]),("ADDSi",&[1280]),("CALLSYS",&[]),("JLowZ",&[]),("PSF",&[10]),("PshGPtr",&[]),("PshVPtr",&[0]),("ADDSi",&[776]),("ADDSi",&[192]),("CALLSYS",&[]),("STOREOBJ",&[4]),("PshVPtr",&[4]),("CALLSYS",&[]),("PSF",&[10]),("PshVPtr",&[0]),("CALLINTF",&[]),("PshVPtr",&[0]),("CALLSYS",&[]),("STOREOBJ",&[12]),("PshVPtr",&[12]),("CALLSYS",&[]),("JLowZ",&[]),("SetV1",&[1]),("JMP",&[]),("PshVPtr",&[0]),("CALLSYS",&[]),("STOREOBJ",&[12]),("PshVPtr",&[12]),("CALLSYS",&[]),("CpyRtoV4",&[13]),("CpyVtoV4",&[1,13]),("CpyVtoR1",&[1]),("JLowZ",&[]),("PshVPtr",&[0]),("CALLSYS",&[]),("JMP",&[]),("PshC8",&[]),("PshVPtr",&[0]),("ADDSi",&[752]),("RDSPtr",&[]),("PSF",&[24]),("CALL",&[]),("PSF",&[24]),("CALLSYS",&[]),("PshC8",&[]),("PshVPtr",&[0]),("ADDSi",&[752]),("RDSPtr",&[]),("PSF",&[24]),("CALL",&[]),("PSF",&[24]),("CALLSYS",&[]),("PshVPtr",&[0]),("ADDSi",&[776]),("ADDSi",&[192]),("ADDSi",&[8]),("PSF",&[30]),("CALLSYS",&[]),("PshVPtr",&[0]),("CALLSYS",&[]),("STOREOBJ",&[32]),("PshVPtr",&[32]),("CALL",&[]),("JLowZ",&[]),("PshGPtr",&[]),("PshVPtr",&[0]),("ADDSi",&[776]),("ADDSi",&[192]),("CALLSYS",&[]),("STOREOBJ",&[4]),("CmpPtrNull",&[4]),("JZ",&[]),("PshC8",&[]),("PshGPtr",&[]),("PshVPtr",&[0]),("ADDSi",&[776]),("ADDSi",&[192]),("CALLSYS",&[]),("STOREOBJ",&[4]),("PshVPtr",&[4]),("PshVPtr",&[0]),("ADDSi",&[752]),("RDSPtr",&[]),("PSF",&[24]),("CALL",&[]),("PSF",&[24]),("CALLSYS",&[]),("PSF",&[10]),("PshGPtr",&[]),("PshVPtr",&[0]),("ADDSi",&[776]),("ADDSi",&[192]),("CALLSYS",&[]),("STOREOBJ",&[4]),("PshVPtr",&[4]),("CALLSYS",&[]),("PSF",&[10]),("PSF",&[30]),("CALLSYS",&[]),("PshC8",&[]),("PSF",&[30]),("CALL",&[]),("STOREOBJ",&[34]),("PshVPtr",&[34]),("PSF",&[36]),("CALLSYS",&[]),("PSF",&[36]),("PshVPtr",&[0]),("ADDSi",&[752]),("RDSPtr",&[]),("PSF",&[24]),("CALL",&[]),("PSF",&[24]),("CALL",&[]),("JLowZ",&[]),("PSF",&[30]),("PshVPtr",&[0]),("CALLINTF",&[]),("JMP",&[]),("PSF",&[24]),("CALLSYS",&[]),("RDR1",&[45]),("sbTOi",&[46,45]),("CMPIi",&[46]),("JNZ",&[]),("PSF",&[30]),("PshVPtr",&[0]),("CALLINTF",&[]),("PSF",&[24]),("CALLSYS",&[]),("PshVPtr",&[0]),("ADDSi",&[776]),("PshGPtr",&[]),("PshVPtr",&[0]),("ADDSi",&[752]),("RDSPtr",&[]),("CALLSYS",&[]),("RET",&[2])]);
+        f.ret.token=0x52;f.obj_locals=vec![(24,20),(44,20)];let c=disassemble(&f.bytecode).unwrap();
+        for (at,ptr) in [(45,10),(53,11),(88,12),(115,13),(117,14),(47,15),(55,15),(90,15),(133,15),(124,16)] {f.bytecode[c[at].offset_dw+1]=ptr;}
+        for (from,to) in [(7,20),(25,28),(27,35),(36,40),(39,141),(67,134),(75,103),(118,123),(122,132),(128,132)] {f.bytecode[c[from].offset_dw+1]=c[to].offset_dw as i32-c[from].offset_dw as i32-2;}
+        let body="        Super::DoTask_Implementation();\n        if (this.RememberedPerception.EventTag.MatchesTag(GameplayTag::Event_Perception_Gained_Hear))\n        {\n            this.RememberPouchDroppedAtLocation(this.RememberedPerception.Origin.GetActor().GetActorLocation());\n        }\n        if (this.GetCharacterState().IsDead() || this.GetCharacterState().IsDefeated())\n        {\n            this.EndTaskAsFailure();\n            return;\n        }\n        FAbilityTaskExecutor __na_t1 = ::WaitUntilCanMove(this.AI, -1.0);\n        FAbilityTaskExecutor local_24 = __na_t1;\n        FAbilityTaskExecutor __na_t2 = ::WaitUntilNoLongerBlocked(this.AI, -1.0);\n        FAbilityTaskExecutor local_24_2 = __na_t2;\n        FVector local_30 = this.RememberedPerception.Origin.AtPosition;\n        if (::CanWalk(this.GetSelf()))\n        {\n            if (this.RememberedPerception.Origin.GetActor() != nullptr)\n            {\n                FAbilityTaskExecutor __na_t3 = ::TurnToActor(this.AI, this.RememberedPerception.Origin.GetActor(), -1.0);\n                FAbilityTaskExecutor local_24_3 = __na_t3;\n                local_30 = this.RememberedPerception.Origin.GetActor().GetActorLocation();\n            }\n            FAbilityTaskExecutor __na_t4 = ::FindAndPickUpItem(this.AI, TSubclassOf<UItemDefinition>(UItMi_Meta_Pouch::StaticClass()), local_30, 50.0);\n            FAbilityTaskExecutor local_24_4 = __na_t4;\n            if (::WasSuccessful(local_24_4))\n            {\n                this.RememberPouchPickedUpAtLocation(local_30);\n            }\n            else\n            {\n                if ((int(local_24_4.GetResult())) == 2)\n                {\n                    this.RememberPouchNotFoundAtLocation(local_30);\n                }\n            }\n        }\n        this.AI.AssessEvent(GameplayTag::AIEvent_State_Done, this.RememberedPerception);\n        return;\n";
+        let expected="        Super::DoTask_Implementation();\n        if (this.RememberedPerception.EventTag.MatchesTag(GameplayTag::Event_Perception_Gained_Hear))\n        {\n            this.RememberPouchDroppedAtLocation(this.RememberedPerception.Origin.GetActor().GetActorLocation());\n        }\n        if (this.GetCharacterState().IsDead() || this.GetCharacterState().IsDefeated())\n        {\n            this.EndTaskAsFailure();\n            return;\n        }\n        ::WaitUntilCanMove(this.AI, -1.0);\n        ::WaitUntilNoLongerBlocked(this.AI, -1.0);\n        FVector local_30 = this.RememberedPerception.Origin.AtPosition;\n        if (::CanWalk(this.GetSelf()))\n        {\n            if (this.RememberedPerception.Origin.GetActor() != nullptr)\n            {\n                ::TurnToActor(this.AI, this.RememberedPerception.Origin.GetActor(), -1.0);\n                local_30 = this.RememberedPerception.Origin.GetActor().GetActorLocation();\n            }\n            FAbilityTaskExecutor local_24_4 = ::FindAndPickUpItem(this.AI, TSubclassOf<UItemDefinition>(UItMi_Meta_Pouch::StaticClass()), local_30, 50.0);\n            if (::WasSuccessful(local_24_4))\n            {\n                this.RememberPouchPickedUpAtLocation(local_30);\n            }\n            else\n            {\n                if ((int(local_24_4.GetResult())) == 2)\n                {\n                    this.RememberPouchNotFoundAtLocation(local_30);\n                }\n            }\n        }\n        this.AI.AssessEvent(GameplayTag::AIEvent_State_Done, this.RememberedPerception);\n        return;\n";
+        let refs=RefResolver::from_test_executor_bridge_lives(0);
+        assert_eq!(super::fold_closed_executor_bridges(body,&f,&refs),expected);
+        assert_eq!(super::fold_closed_executor_bridges(&expected,&f,&refs),expected);
+        for fault in 1..=6 {assert_eq!(super::fold_closed_executor_bridges(body,&f,&RefResolver::from_test_executor_bridge_lives(fault)),body,"metadata {fault}");}
+        for at in [44,46,52,54,87,89,114,116,123,132] {
+            let mut bad=f.clone();bad.bytecode[c[at].offset_dw]^=1<<16;assert_eq!(super::fold_closed_executor_bridges(body,&bad,&refs),body,"operand {at}");
+        }
+        for at in [118,122,128] {
+            let mut bad=f.clone();bad.bytecode[c[at].offset_dw+1]+=1;assert_eq!(super::fold_closed_executor_bridges(body,&bad,&refs),body,"jump {at}");
+        }
+        let mut entry=f.clone();entry.bytecode[c[39].offset_dw+1]=c[46].offset_dw as i32-c[39].offset_dw as i32-2;
+        assert_eq!(super::fold_closed_executor_bridges(body,&entry,&refs),body);
+        let mut duplicate=f.clone();duplicate.obj_locals.push((24,20));assert_eq!(super::fold_closed_executor_bridges(body,&duplicate,&refs),body);
+        for text in [format!("{body}Use(local_24);\n"),format!("{body}Use(__na_t1);\n"),body.replace("FAbilityTaskExecutor local_24_4 =", "local_24_4 ="),
+            body.replace("::WasSuccessful(local_24_4)","::Other(local_24_4)")] {
+            assert_eq!(super::fold_closed_executor_bridges(&text,&f,&refs),text);
+        }
     }
 
     #[test]

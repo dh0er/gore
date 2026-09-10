@@ -5032,6 +5032,59 @@ impl RefResolver {
         r
     }
     #[cfg(test)]
+    pub(crate) fn from_test_segment_lifetimes(fault:u8)->Self {
+        let mut r=Self::default();let vector=DataType {token:5,type_info:1,..Default::default()};
+        let input=DataType {is_reference:true,is_object_const:true,is_read_only:true,..vector.clone()};
+        let void=DataType {token:0x52,..Default::default()};let wide=DataType {token:0x51,..Default::default()};
+        r.type_identity_by_ptr.insert(1,TypeIdentity {name:"FVector".into(),module:String::new(),namespace:String::new()});
+        for (ptr,owner,name,constant,ret,args) in [(10,"FVector","$beh0",false,void.clone(),vec![input.clone()]),
+            (11,"FVector","$beh0",false,void.clone(),vec![]),(12,"FVector","opMul",true,vector.clone(),vec![wide.clone()]),
+            (13,"FVector","opAdd",true,vector.clone(),vec![input.clone()]),(14,"FVector","Distance",true,wide,vec![input]),
+            (15,"AActor","GetActorLocation",true,vector.clone(),vec![]),(16,"AActor","GetActorForwardVector",true,vector.clone(),vec![]),
+            (17,"AGothicCharacter","GetFeetLocation",true,vector.clone(),vec![]),(18,"AActor","GetActorUpVector",true,vector.clone(),vec![]),
+            (19,"","FindNearestPointsOnLineSegments",false,void,(0..6).map(|i|DataType {is_reference:i>=4,..vector.clone()}).collect())] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            if !owner.is_empty(){r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);}if constant{r.const_method_ptrs.insert(ptr);}
+        }
+        r.func_ns.insert(19,"Math".into());
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into(),
+            2=>r.func_params.get_mut(&10).unwrap()[0].is_reference=false,
+            3=>r.func_params.get_mut(&19).unwrap()[4].is_reference=false,
+            4=>{r.const_method_ptrs.remove(&12);}
+            5=>r.func_ret.get_mut(&17).unwrap().is_object_handle=true,
+            6=>{r.func_ns.insert(19,"Other".into());}
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_executor_bridge_lives(fault:u8)->Self {
+        let mut r=Self::default();let task=DataType {token:5,type_info:20,..Default::default()};
+        r.type_identity_by_ptr.insert(20,TypeIdentity {name:"FAbilityTaskExecutor".into(),module:String::new(),namespace:String::new()});
+        for (id,name) in [(10,"WaitUntilCanMove"),(11,"WaitUntilNoLongerBlocked"),(12,"TurnToActor"),(13,"FindAndPickUpItem"),(14,"WasSuccessful")] {
+            r.funcid_to_ptr.insert(id,id as i64);r.func_by_ptr.insert(id as i64,name.into());
+            r.func_ret.insert(id as i64,if id==14{DataType {token:0x41,..Default::default()}}else{task.clone()});
+            r.func_params.insert(id as i64,if id==14{vec![DataType {is_reference:true,is_object_const:true,is_read_only:true,..task.clone()}]}else{vec![]});
+        }
+        for (ptr,name,ret) in [(15,"$beh2",DataType {token:0x52,..Default::default()}),(16,"GetResult",DataType {token:5,type_info:21,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()})] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,"FAbilityTaskExecutor".into());r.func_is_method.insert(ptr);r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,vec![]);
+        }
+        r.const_method_ptrs.insert(16);
+        match fault {
+            1=>r.func_ret.get_mut(&10).unwrap().is_reference=true,
+            2=>{r.const_method_ptrs.insert(15);}
+            3=>r.func_params.get_mut(&14).unwrap()[0].is_reference=false,
+            4=>r.func_ret.get_mut(&16).unwrap().is_object_const=false,
+            5=>r.type_identity_by_ptr.get_mut(&20).unwrap().module="Script".into(),
+            6=>{r.func_is_method.insert(13);}
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_named_filter_copies(fault:u8) -> Self {
         let mut r=Self::default();
         for (ptr,name) in [(20,"FMemoryFilter"),(21,"FInGameTime")] {
