@@ -31,7 +31,7 @@ AI.States.FightAI.CombatEndActionsState.AIState_AcceptDefeat	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_ClaimVictory	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_CombatEndActions	1	0	0
 AI.States.FightAI.CombatState.AIGroup_Attackers	2	0	0
-AI.States.FightAI.CombatState.AIGroup_Combat	2	0	0
+AI.States.FightAI.CombatState.AIGroup_Combat	1	0	0
 AI.States.FightAI.CombatState.AIState_OGCombat	5	0	0
 AI.States.FightAI.CombatState.CombatMoves	15	0	0
 AI.States.FightAI.CombatState.CombatOperations	1	0	0

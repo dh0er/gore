@@ -5032,6 +5032,91 @@ impl RefResolver {
         r
     }
     #[cfg(test)]
+    pub(crate) fn from_test_role_value_lifetimes(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UFirst", "Code"), ("FSecond", "Code"), ("UHolder", "Items"), ("ECode", "")]);
+        for (id, name, field, ty) in [(1, "UFirst", "Code", "ECode"), (2, "FSecond", "Code", "ECode"), (3, "UHolder", "Items", "TArray<FSecond>"), (4, "ECode", "", "")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: name.into(), module: "Fixture".into(), namespace: String::new() });
+            r.prop_type_id.insert((id << 1) | 1, id as i32);
+            r.class_fields.entry(name.into()).or_default().insert(field.into(), ty.into());
+        }
+        for (id, name, owner, params, token) in [
+            (10, "Available", "UFirst", vec![], 0x51), (11, "Available", "FSecond", vec![], 0x51),
+            (12, "Measure", "USource", vec![DataType { token: 5, type_info: 4, ..Default::default() }], 0x51),
+            (13, "Take", "USource", vec![DataType { token: 5, type_info: 4, ..Default::default() }], 0x52)] {
+            r.funcid_to_ptr.insert(id as i32, id); r.func_by_ptr.insert(id, name.into()); r.func_owner.insert(id, owner.into()); r.func_is_method.insert(id);
+            r.func_params.insert(id, params); r.func_ret.insert(id, DataType { token, ..Default::default() });
+        }
+        r.func_by_ptr.insert(20, "opIndex".into()); r.func_owner.insert(20, "TArray".into()); r.func_is_method.insert(20);
+        r.func_params.insert(20, vec![DataType { token: 0x44, ..Default::default() }]);
+        r.func_ret.insert(20, DataType { token: 5, type_info: 2, is_reference: true, ..Default::default() });
+        match fault {
+            1 => { r.func_ret.get_mut(&10).unwrap().token = 0x50; },
+            2 => { r.func_params.get_mut(&10).unwrap().push(DataType { token: 0x44, ..Default::default() }); },
+            3 => { r.func_is_method.remove(&10); },
+            4 => { r.func_ret.get_mut(&12).unwrap().token = 0x50; },
+            5 => { r.func_params.get_mut(&12).unwrap()[0].token = 0x44; },
+            6 => { r.func_ret.get_mut(&12).unwrap().is_reference = true; },
+            7 => { r.class_fields.get_mut("FSecond").unwrap().insert("Code".into(), "int8".into()); },
+            8 => { r.func_ret.get_mut(&20).unwrap().is_reference = false; },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_script_enum_field_read(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FRecord", "Code"), ("FOther", "Code")]);
+        for (id, name) in [(1, "FRecord"), (2, "FOther")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: name.into(), module: "Fixture".into(), namespace: String::new() });
+            r.prop_type_id.insert((id << 1) | 1, id as i32);
+            r.class_fields.entry(name.into()).or_default().insert("Code".into(), "ECode".into());
+        }
+        match fault {
+            1 => { r.class_fields.get_mut("FRecord").unwrap().insert("Code".into(), "int8".into()); },
+            2 => { r.prop_type_id.insert(3, 2); },
+            3 => { r.duplicate_prop_keys.insert(3); },
+            4 => { r.type_identity_by_ptr.get_mut(&1).unwrap().module.clear(); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_enum_map_handle_capture(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UOwner", "Router"), ("URouter", "Containers"),
+            ("UHolder", "Items"), ("TArrayIterator", ""), ("ECategory", "")]);
+        for (id, name) in [(1, "UOwner"), (2, "URouter"), (3, "UHolder"), (4, "TArrayIterator"), (5, "ECategory")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name: name.into(), module: "Fixture".into(), namespace: String::new() });
+            r.prop_type_id.insert((id << 1) | 1, id as i32);
+        }
+        for (owner, field, ty) in [("UOwner", "Router", "URouter"), ("URouter", "Containers", "TMap<ECategory, UHolder>"),
+            ("UHolder", "Items", "TArray<FItem>")] {
+            r.class_fields.entry(owner.into()).or_default().insert(field.into(), ty.into());
+        }
+        r.enum_entries.insert("ECategory".into(), vec![("One".into(), 1), ("Two".into(), 2), ("Three".into(), 3)]);
+        for (p, name, owner, ret, params) in [
+            (10, "opIndex", "TMap", DataType { token: 5, type_info: 3, is_reference: true, is_object_handle: true, ..Default::default() },
+                vec![DataType { token: 5, type_info: 5, is_reference: true, is_read_only: true, is_object_const: true, ..Default::default() }]),
+            (11, "Iterator", "TArray", DataType { token: 5, type_info: 4, ..Default::default() }, vec![])] {
+            r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, owner.into()); r.func_is_method.insert(p);
+            r.func_ret.insert(p, ret); r.func_params.insert(p, params);
+        }
+        match fault {
+            1 => { r.func_ret.get_mut(&10).unwrap().is_read_only = true; },
+            2 => { r.func_params.get_mut(&10).unwrap()[0].is_read_only = false; },
+            3 => { r.enum_entries.clear(); },
+            4 => { r.class_fields.get_mut("URouter").unwrap().insert("Containers".into(), "TMap<ECategory, UOther>".into()); },
+            5 => { r.prop_type_id.insert(3, 3); },
+            6 => { r.func_ret.get_mut(&10).unwrap().is_object_handle = false; },
+            7 => { r.const_method_ptrs.insert(10); },
+            8 => { r.class_fields.get_mut("UHolder").unwrap().insert("Items".into(), "TSet<FItem>".into()); },
+            9 => { r.duplicate_prop_keys.insert(3); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_conditional_field_references(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("FPair", ""), ("FPosition", ""), ("UOwner", "")]);
         for (id, name) in [(1, "FPair"), (2, "FPosition"), (3, "UOwner")] {

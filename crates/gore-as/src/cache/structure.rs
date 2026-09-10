@@ -1853,6 +1853,64 @@ fn is_handle_getter_reference_argument(ctx: &Ctx<'_>, code: &[Instr], copy: usiz
 }
 
 /// Recover a typed array getter's handle copy at this instruction, never by slot alone.
+/// A native map lookup with an enum key still initializes its captured handle.
+fn is_typed_enum_map_handle_copy(ctx: &Ctx<'_>, code: &[Instr], copy: usize, source: &Arg) -> bool {
+    (|| {
+        let c = code.get(copy.checked_sub(9)?..=copy)?;
+        if c.iter().map(|i| i.op.name).ne(["SetV1", "PSF", "PshVPtr", "ADDSi", "RDSPtr", "ADDSi", "CALLSYS", "PshRPtr", "RDSPtr", "RefCpyV"])
+            || !ctx.f.is_method || source.s.chars().any(char::is_control) || source.s == UNRESOLVED { return None; }
+        let word = |i: &Instr, n: usize| i.words.get(n).map(|w| *w as i16 as i32);
+        let (key_slot, dst) = (word(&c[0], 0)?, word(&c[9], 0)?);
+        if key_slot <= 0 || dst <= 0 || key_slot == dst || word(&c[1], 0) != Some(key_slot) || word(&c[2], 0) != Some(0)
+            || source.ty.is_none() || source.ty.as_deref() != ctx.slot_type(dst).as_deref() { return None; }
+        let ptr = *c[6].qwords.first()? as i64; let ret = ctx.refs.func_ret_by_ptr(ptr)?;
+        let [key] = ctx.refs.func_params_by_ptr(ptr)? else { return None; };
+        if ctx.refs.func_by_ptr(ptr) != Some("opIndex") || ctx.refs.func_owner_by_ptr(ptr) != Some("TMap")
+            || !ctx.refs.is_method_by_ptr(ptr) || ctx.refs.is_const_method_by_ptr(ptr)
+            || ret.token != 5 || !ret.is_reference || !ret.is_object_handle || ret.is_object_const || ret.is_read_only
+            || key.token != 5 || !key.is_reference || key.is_object_handle || !key.is_object_const || !key.is_read_only
+            || ret.base_name(ctx.refs) != *source.ty.as_ref()? { return None; }
+        let key_name = key.base_name(ctx.refs); let literal = *c[0].dwords.first()? as i32;
+        if !is_enum_name(&key_name) || ctx.refs.enumerator_name(&key_name, literal).is_none() { return None; }
+        let member = |i: &Instr, n: usize| {
+            let id = *i.dwords.first()? as i32; let (name, old) = ctx.refs.member_identity(id, word(i, n)?)?;
+            let owner = ctx.refs.type_identity_by_id(id)?;
+            if ctx.refs.type_identity_by_id(old)? != owner || owner.module.is_empty() || !owner.namespace.is_empty() { return None; }
+            Some((owner, name, ctx.refs.own_field_type_by_class(&owner.name, name)?))
+        };
+        let (owner, _, container_owner) = member(&c[3], 0)?;
+        let (container, _, map) = member(&c[5], 0)?;
+        if ctx.class_name != Some(owner.name.as_str()) || container_owner != container.name
+            || map != format!("TMap<{key_name}, {}>", ret.base_name(ctx.refs)) { return None; }
+        let object = ctx.refs.type_identity_by_ptr(ret.type_info)?;
+        let end = if code.get(copy + 1)?.op.name == "SetV4" {
+            let tail = code.get(copy + 1..copy + 4)?;
+            if tail.iter().map(|i| i.op.name).ne(["SetV4", "LoadRObjR", "CpyRtoV8"])
+                || tail[0].dwords.first() != Some(&0) || word(&tail[0], 0)? <= 0 || word(&tail[1], 0) != Some(dst)
+                || word(&tail[2], 0)? <= 0 || word(&tail[2], 0) == Some(dst) { return None; }
+            let (owner, _, ty) = member(&tail[1], 1)?;
+            if owner != object || !ty.starts_with("TArray<") || ctx.slot_type(word(&tail[2], 0)?).as_deref() != Some(ty) { return None; }
+            copy + 3
+        } else {
+            let tail = code.get(copy + 1..copy + 5)?;
+            if tail.iter().map(|i| i.op.name).ne(["PSF", "PshVPtr", "ADDSi", "CALLSYS"])
+                || word(&tail[0], 0)? <= 0 || word(&tail[1], 0) != Some(dst) { return None; }
+            let (owner, _, ty) = member(&tail[2], 0)?; let p = *tail[3].qwords.first()? as i64;
+            let iterator = ctx.refs.func_ret_by_ptr(p)?;
+            if owner != object || !ty.starts_with("TArray<") || ctx.refs.func_by_ptr(p) != Some("Iterator")
+                || ctx.refs.func_owner_by_ptr(p) != Some("TArray") || !ctx.refs.is_method_by_ptr(p)
+                || !ctx.refs.func_params_by_ptr(p)?.is_empty() || iterator.token != 5 || iterator.is_reference || iterator.is_object_handle
+                || ctx.refs.type_identity_by_ptr(iterator.type_info)?.name != "TArrayIterator" { return None; }
+            copy + 4
+        };
+        if ctx.instrs.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+            let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+            target > c[0].offset_dw as i64 && target <= code[end].offset_dw as i64
+        }))) { return None; }
+        Some(())
+    })().is_some()
+}
+
 fn is_typed_array_getter_handle_copy(ctx: &Ctx<'_>, code: &[Instr], copy: usize, src: &Arg) -> bool {
     let witness = (|| {
         let word = |ins: &Instr| ins.words.first().map(|v| *v as i16 as i32);
@@ -7070,6 +7128,7 @@ fn block_stmts_in(
                             || param_into_later_use
                             || const_src_into_cmp
                             || getter_into_store_rhs
+                            || is_typed_enum_map_handle_copy(ctx, insns, k, &top)
                             || is_typed_array_getter_handle_copy(ctx, insns, k, &top));
                     if ok {
                         flush!();
@@ -12501,6 +12560,38 @@ mod tests {
         { assert!(!render(ret.clone(), bad, false, 1).contains("local_8 = this.Nodes.opIndex")); }
         assert!(!render(ret.clone(), param.clone(), true, 1).contains("local_8 = this.Nodes.opIndex"));
         assert!(!render(ret, param, false, 99).contains("local_8 = this.Nodes.opIndex"));
+    }
+
+    #[test]
+    fn enum_map_results_initialize_the_handle_before_member_array_reads() {
+        for array_reference in [false, true] {
+            let mut a = TestAssembler::default();
+            a.op("SetV1", &[2], &[1]); a.op("PSF", &[2], &[]); a.op("PshVPtr", &[0], &[]);
+            a.op("ADDSi", &[0], &[1]); a.op("RDSPtr", &[], &[]); a.op("ADDSi", &[0], &[2]);
+            a.op("CALLSYS", &[], &[]); a.op("PshRPtr", &[], &[]); a.op("RDSPtr", &[], &[]); a.op("RefCpyV", &[4], &[]);
+            if array_reference {
+                a.op("SetV4", &[6], &[0]); a.op("LoadRObjR", &[4, 0], &[3]); a.op("CpyRtoV8", &[8], &[]);
+            } else {
+                a.op("PSF", &[12], &[]); a.op("PshVPtr", &[4], &[]); a.op("ADDSi", &[0], &[3]); a.op("CALLSYS", &[], &[]);
+            }
+            a.op("RET", &[0], &[]); let mut fixture = a.finish(); fixture.instrs[6].qwords = vec![10];
+            if !array_reference { fixture.instrs[13].qwords = vec![11]; }
+            for fault in 0..=9 {
+                let refs = RefResolver::from_test_enum_map_handle_capture(fault);
+                let f = FuncCode { func: "Fixture::Read".into(), is_method: true, param_names: vec![], param_types: vec![],
+                    ret: DataType { token: 0x52, ..Default::default() }, bytecode: vec![] };
+                let locals = HashMap::from([(4, "UHolder".into()), (8, "TArray<FItem>".into())]);
+                let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret), fields: None,
+                    param_types: None, class_name: Some("UOwner"), local_types: Some(&locals), float_slots: Default::default(),
+                    param_off_map: HashMap::new(), rvo_off: None, keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+                let src = Arg { s: "this.Router.Containers.opIndex(ECategory(local_2))".into(), ty: Some("UHolder".into()), ..Default::default() };
+                assert_eq!(is_typed_enum_map_handle_copy(&ctx, &fixture.instrs, 9, &src), fault == 0, "reference={array_reference} fault={fault}");
+            }
+            if !array_reference {
+                let text = render_fixture_range_with_return_class(&fixture, None, &RefResolver::from_test_enum_map_handle_capture(0), "UHolder", None, 0x52, Some("UOwner"));
+                assert!(text.contains("local_4 = this.Router.Containers.opIndex(ECategory(local_2));"), "{text}");
+            }
+        }
     }
 
     #[test]
