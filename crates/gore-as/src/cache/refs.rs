@@ -5032,6 +5032,77 @@ impl RefResolver {
         r
     }
     #[cfg(test)]
+    pub(crate) fn from_test_segment_clearance_order(fault:u8)->Self {
+        let mut r=Self::default();
+        r.type_identity_by_ptr.insert(1,TypeIdentity {name:"FVector".into(),module:if fault==1 {"Foreign"}else{""}.into(),namespace:String::new()});
+        let vector=DataType {token:5,type_info:1,..Default::default()};
+        let input=DataType {is_reference:true,is_object_const:true,is_read_only:true,..vector.clone()};
+        for (ptr,name,owner,token) in [(20,"Distance","FVector",0x51),(21,"Radius","AActor",0x50)] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);r.const_method_ptrs.insert(ptr);
+            r.func_ret.insert(ptr,DataType {token,..Default::default()});
+        }
+        r.func_params.insert(20,vec![input.clone()]);r.func_params.insert(21,vec![]);
+        r.func_by_ptr.insert(22,"Lerp".into());r.func_ns.insert(22,"Math".into());r.func_ret.insert(22,vector);
+        r.func_params.insert(22,vec![input.clone(),input,DataType {token:0x51,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()}]);
+        match fault {
+            2=>r.func_params.get_mut(&22).unwrap()[2].token=0x50,
+            3=>r.func_ret.get_mut(&21).unwrap().token=0x51,
+            4=>r.func_ret.get_mut(&22).unwrap().is_reference=true,
+            5=>r.func_params.get_mut(&20).unwrap()[0].is_read_only=false,
+            6=>{r.const_method_ptrs.remove(&21);}
+            7=>{r.func_ns.insert(22,"Other".into());}
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_mutable_native_value_outputs(fault:u8)->Self {
+        let mut r=Self::default();
+        r.type_by_ptr.insert(1,"FVector".into()); r.type_names.insert("FVector".into());
+        r.type_identity_by_ptr.insert(1,TypeIdentity {name:"FVector".into(),module:if fault==5 {"Foreign"}else{""}.into(),namespace:String::new()});
+        r.func_by_ptr.insert(10,"$beh0".into()); r.func_owner.insert(10,if fault==6 {"FOther"}else{"FVector"}.into());
+        r.func_is_method.insert(10); r.func_ret.insert(10,DataType {token:0x52,..Default::default()}); r.func_params.insert(10,vec![]);
+        r.func_by_ptr.insert(20,"Fill".into());
+        r.func_ret.insert(20,DataType {token:if fault==4 {5}else{0x52},type_info:if fault==4 {1}else{0},..Default::default()});
+        let value=DataType {token:5,type_info:1,..Default::default()};
+        let output=DataType {is_reference:fault!=1,is_object_const:fault==2,is_read_only:fault==2,..value.clone()};
+        r.func_params.insert(20,vec![value.clone(),output.clone(),output]);
+        if fault==3 {r.func_is_method.insert(20);}
+        r.func_by_ptr.insert(21,"Distance".into());r.func_owner.insert(21,"FVector".into());r.func_is_method.insert(21);r.const_method_ptrs.insert(21);
+        r.func_ret.insert(21,DataType {token:0x51,..Default::default()});r.func_params.insert(21,vec![DataType {is_reference:true,is_object_const:true,is_read_only:true,..value}]);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_ordered_coordinate_difference(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FVector", "Z"), ("UState", "AI"), ("UFollowingState", "Height"), ("AGothicCharacter", "")]);
+        for (ptr, name, module) in [(1,"FVector",""), (2,"UState","Test"), (3,"UFollowingState","Test"), (4,"AGothicCharacter","")] {
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name:name.into(), module:module.into(), namespace:String::new() });
+        }
+        for id in [1,2,3] { r.prop_type_id.insert((id << 1) | 1, id as i32); }
+        if fault != 11 { r.set_native_api(super::binds::NativeApi::from_test_field_types(&[("FVector", "Z", if fault == 2 {"float32"} else {"float"})], &[], None)); }
+        r.set_class_fields(HashMap::from([("UFollowingState".into(), HashMap::from([("Height".into(), if fault == 8 {"float32"} else {"float"}.into())]))]));
+        for (ptr, name, owner) in [(10,"Location","AActor"), (11,"Character","UGameplayAbility_AI")] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into());
+            r.func_is_method.insert(ptr); r.const_method_ptrs.insert(ptr); r.func_params.insert(ptr, vec![]);
+        }
+        r.func_ret.insert(10, DataType {token:5,type_info:1,is_reference:fault==3,..Default::default()});
+        r.func_ret.insert(11, DataType {token:5,type_info:4,is_object_handle:fault!=4,..Default::default()});
+        r.func_by_ptr.insert(12,"Abs".into()); r.func_ns.insert(12,if fault==7 {"Other"} else {"Math"}.into());
+        r.func_ret.insert(12,DataType {token:0x51,..Default::default()});
+        r.func_params.insert(12,vec![DataType {token:if fault==6 {0x50} else {0x51},..Default::default()}]);
+        match fault {
+            1 => r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Foreign".into(),
+            5 => {r.func_is_method.remove(&11);}
+            9 => {r.prop_type_id.insert(3,3);}
+            10 => {r.const_method_ptrs.remove(&10);}
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_native_vector_copy_declarations(fault:u8)->Self {
         let mut r=Self::default();
         r.type_identity_by_ptr.insert(1,TypeIdentity {name:"FVector".into(),module:String::new(),namespace:String::new()});

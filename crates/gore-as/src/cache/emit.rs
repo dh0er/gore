@@ -3247,6 +3247,10 @@ fn emit_function_ctor(
         pass_trace("restore_segment_value_lifetimes", &rendered);
         let rendered = restore_native_vector_copy_declarations(&rendered, f, refs);
         pass_trace("restore_native_vector_copy_declarations", &rendered);
+        let rendered = fold_ordered_coordinate_difference(&rendered, f, refs);
+        pass_trace("fold_ordered_coordinate_difference", &rendered);
+        let rendered = restore_segment_clearance_order(&rendered, f, refs);
+        pass_trace("restore_segment_clearance_order", &rendered);
         let rendered = fold_widened_vector_sign(&rendered, vector_sign);
         pass_trace("fold_widened_vector_sign", &rendered);
         s.truncate(declarations_at);
@@ -8509,6 +8513,146 @@ fn rewrite_no_assign_locals(body: &str, locals: &BTreeMap<i32, String>) -> (Stri
         suppressed.insert(*slot);
     }
     (out, suppressed)
+}
+
+/// Keep the interpolated point, then calculate clearance, then measure distance.
+fn restore_segment_clearance_order(body:&str,f:&Func,refs:&RefResolver)->String {
+    if !body.contains("if ((Math::Lerp(") || f.params.len()!=4 {return body.to_owned();}
+    let Ok(code)=disassemble(&f.bytecode) else{return body.to_owned();};
+    let w=|i:&Instr,n:usize|i.words.get(n).map(|v|*v as i16 as i32);
+    let ptr=|i:&Instr|i.qwords.first().map(|p|*p as i64);
+    let mut edits=HashMap::new();let lines:Vec<_>=body.lines().collect();
+    for c in code.windows(19) {
+        let candidate=(|| {
+            if c.iter().map(|i|i.op.name).ne(["PSF","PSF","PSF","PSF","CALLSYS","PshVPtr","CALLSYS","CpyRtoV4",
+                "PshVPtr","CALLSYS","CpyRtoV4","ADDf","fTOd","ADDd","PSF","PSF","CALLSYS","CpyRtoV8","CMPd"]) {return None;}
+            let (ratio,end,start,point,first,second,clearance,nearest,distance)=(w(&c[0],0)?,w(&c[1],0)?,w(&c[2],0)?,w(&c[3],0)?,
+                w(&c[7],0)?,w(&c[10],0)?,w(&c[12],0)?,w(&c[14],0)?,w(&c[17],0)?);
+            let slots=[ratio,end,start,point,first,second,clearance,nearest,distance];
+            if slots.iter().any(|s|*s<=0) || slots.into_iter().collect::<HashSet<_>>().len()!=slots.len()
+                || w(&c[5],0)!=Some(-2) || w(&c[8],0)!=Some(-4) || w(&c[11],0)!=Some(first)
+                || w(&c[11],1)!=Some(first) || w(&c[11],2)!=Some(second) || w(&c[12],1)!=Some(first)
+                || w(&c[13],0)!=Some(clearance) || w(&c[13],1)!=Some(clearance) || w(&c[13],2)!=Some(-8)
+                || w(&c[15],0)!=Some(point) || w(&c[18],0)!=Some(distance) || w(&c[18],1)!=Some(clearance) {return None;}
+            let (lerp,radius,measure)=(ptr(&c[4])?,ptr(&c[6])?,ptr(&c[16])?);
+            if ptr(&c[9])!=Some(radius) || refs.func_by_ptr(lerp)!=Some("Lerp") || refs.func_ns_by_ptr(lerp)!=Some("Math")
+                || refs.is_method_by_ptr(lerp) || refs.func_owner_by_ptr(measure)!=Some("FVector")
+                || refs.func_by_ptr(measure)!=Some("Distance") || refs.func_owner_by_ptr(radius)!=Some("AActor") {return None;}
+            let vector=refs.func_ret_by_ptr(lerp)?;let identity=refs.type_identity_by_ptr(vector.type_info)?;
+            if vector.token!=5 || vector.is_reference || vector.is_object_handle || vector.is_object_const || vector.is_read_only
+                || identity.name!="FVector" || !identity.module.is_empty() || !identity.namespace.is_empty() {return None;}
+            let constant=|t:&super::types::DataType|t.is_reference && t.is_object_const && t.is_read_only && !t.is_object_handle;
+            let [a,b,t]=refs.func_params_by_ptr(lerp)? else{return None;};
+            if [a,b].iter().any(|p|p.token!=5 || p.type_info!=vector.type_info || !constant(p)) || t.token!=0x51 || !constant(t) {return None;}
+            for (p,token) in [(radius,0x50),(measure,0x51)] {
+                let ret=refs.func_ret_by_ptr(p)?;
+                if !refs.is_method_by_ptr(p) || !refs.is_const_method_by_ptr(p) || ret.token!=token || ret.is_reference || ret.is_object_handle {return None;}
+            }
+            if !refs.func_params_by_ptr(radius)?.is_empty() {return None;}
+            let [arg]=refs.func_params_by_ptr(measure)? else{return None;};
+            if arg.token!=5 || arg.type_info!=vector.type_info || !constant(arg) {return None;}
+            for slot in [end,start,point,nearest] {
+                if f.obj_locals.iter().filter(|(s,_)|*s==slot).map(|(_,t)|*t).ne([vector.type_info]) {return None;}
+            }
+            if f.params[..2].iter().any(|p|p.ty.token!=5 || !p.ty.is_object_handle || p.ty.is_reference)
+                || f.params[2..].iter().any(|p|p.ty.token!=0x51 || p.ty.is_reference || p.ty.is_object_handle) {return None;}
+            if code.iter().any(|i|i.op.name=="JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let target=i.offset_dw as i64+2+*d as i32 as i64;target>c[0].offset_dw as i64 && target<=c[18].offset_dw as i64
+            }))) {return None;}
+            let point=format!("local_{point}");let clearance=format!("local_{clearance}");
+            if count_ident(body,&point)!=0 || count_ident(body,&clearance)!=0 {return None;}
+            let lerp=format!("Math::Lerp(local_{start}, local_{end}, local_{ratio})");let radius=refs.func_by_ptr(radius)?;
+            let sum=format!("({}.{radius}() + {}.{radius}()) + {}",f.params[0].name,f.params[1].name,f.params[3].name);
+            let wanted=format!("if (({lerp}).Distance(local_{nearest}) < ({sum}))");
+            let matching:Vec<_>=lines.iter().enumerate().filter(|(_,line)|line.trim_start()==wanted).collect();
+            let [(at,line)]=matching.as_slice() else{return None;};let indent=indent_of(line);
+            Some((*at,format!("{indent}FVector {point} = {lerp};\n{indent}float {clearance} = {sum};\n{indent}if ({point}.Distance(local_{nearest}) < {clearance})")))
+        })();
+        if let Some((at,replacement))=candidate {edits.entry(at).or_insert_with(Vec::new).push(replacement);}
+    }
+    if edits.is_empty(){return body.to_owned();}
+    let mut result=lines.iter().enumerate().map(|(at,line)|match edits.get(&at).map(Vec::as_slice) {Some([replacement])=>replacement.as_str(),_=>line}).collect::<Vec<_>>().join("\n");
+    if body.ends_with('\n'){result.push('\n');}result
+}
+
+/// A coordinate read consumed directly by subtraction is part of that expression.
+/// Recover both getter calls in the native left-to-right order after local lives split.
+fn fold_ordered_coordinate_difference(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if !body.contains("if (Math::Abs((") || !body.contains("float local_") { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let w = |i: &Instr, at: usize| i.words.get(at).map(|n| *n as i16 as i32);
+    let ptr = |i: &Instr| i.qwords.first().map(|p| *p as i64);
+    let mut sites: HashMap<(i32, String, String, String), usize> = HashMap::new();
+    for c in code.windows(22) {
+        let site = (|| {
+            if c.iter().map(|i| i.op.name).ne(["PSF", "PshVPtr", "CALLSYS", "LoadVObjR", "RDR8",
+                "PSF", "PshVPtr", "ADDSi", "RDSPtr", "CALLSYS", "STOREOBJ", "PshVPtr", "CALLSYS",
+                "LoadVObjR", "RDR8", "SUBd", "PshV8", "CALLSYS", "CpyRtoV8", "LoadThisR", "RDR8", "CMPd"]) { return None; }
+            let (a, actor, b, handle, left, right, result, limit) =
+                (w(&c[0],0)?, w(&c[1],0)?, w(&c[5],0)?, w(&c[10],0)?, w(&c[4],0)?, w(&c[14],0)?, w(&c[15],0)?, w(&c[20],0)?);
+            let slots = [a, actor, b, handle, left, right, result, limit];
+            if slots.iter().any(|s| *s <= 0) || slots.into_iter().collect::<HashSet<_>>().len() != slots.len()
+                || w(&c[3],0) != Some(a) || w(&c[6],0) != Some(0) || w(&c[11],0) != Some(handle)
+                || w(&c[13],0) != Some(b) || w(&c[15],1) != Some(left) || w(&c[15],2) != Some(right)
+                || w(&c[16],0) != Some(result) || w(&c[18],0) != Some(left)
+                || w(&c[21],0) != Some(left) || w(&c[21],1) != Some(limit) { return None; }
+            let (getter, parent, abs) = (ptr(&c[2])?, ptr(&c[9])?, ptr(&c[17])?);
+            if ptr(&c[12]) != Some(getter) { return None; }
+            for p in [getter, parent] {
+                if !refs.is_method_by_ptr(p) || !refs.is_const_method_by_ptr(p)
+                    || !refs.func_params_by_ptr(p)?.is_empty() { return None; }
+            }
+            let vector = refs.func_ret_by_ptr(getter)?; let character = refs.func_ret_by_ptr(parent)?;
+            let identity = refs.type_identity_by_ptr(vector.type_info)?;
+            if vector.token != 5 || vector.is_reference || vector.is_object_handle || vector.is_object_const || vector.is_read_only
+                || identity.name != "FVector" || !identity.module.is_empty() || !identity.namespace.is_empty()
+                || character.token != 5 || !character.is_object_handle || character.is_reference { return None; }
+            for (slot, ty) in [(a,vector.type_info), (b,vector.type_info), (actor,character.type_info), (handle,character.type_info)] {
+                if f.obj_locals.iter().filter(|(s,_)| *s == slot).map(|(_,t)| *t).ne([ty]) { return None; }
+            }
+            let scalar = |t: &super::types::DataType| t.token == 0x51 && !t.is_reference && !t.is_object_handle;
+            if refs.func_by_ptr(abs) != Some("Abs") || refs.func_ns_by_ptr(abs) != Some("Math")
+                || refs.is_method_by_ptr(abs) || !scalar(refs.func_ret_by_ptr(abs)?) { return None; }
+            let [arg] = refs.func_params_by_ptr(abs)? else { return None; }; if !scalar(arg) { return None; }
+            let tid = *c[3].dwords.first()? as i32; let offset = w(&c[3],1)?;
+            if c[13].dwords.first() != c[3].dwords.first() || w(&c[13],1) != Some(offset)
+                || refs.type_identity_by_id(tid)? != identity { return None; }
+            let (coordinate, old) = refs.member_identity(tid, offset)?;
+            if refs.type_identity_by_id(old)? != identity || refs.native_field_value_type("FVector", coordinate)
+                .or_else(|| refs.native_field_type("FVector", coordinate)) != Some("float") { return None; }
+            let (field, _) = refs.member_identity(*c[7].dwords.first()? as i32, w(&c[7],0)?)?;
+            let limit_tid = *c[19].dwords.first()? as i32;
+            let (threshold, owner) = refs.member_identity(limit_tid, w(&c[19],0)?)?;
+            if refs.own_field_type_by_class(refs.type_by_id(owner)?, threshold) != Some("float") { return None; }
+            if code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                target > c[0].offset_dw as i64 && target <= c[21].offset_dw as i64
+            }))) { return None; }
+            let getter = refs.func_by_ptr(getter)?; let parent = refs.func_by_ptr(parent)?;
+            Some((right, format!("local_{actor}.{getter}().{coordinate}"),
+                format!("this.{field}.{parent}().{getter}().{coordinate}"), format!("this.{threshold}")))
+        })();
+        if let Some(site) = site { *sites.entry(site).or_default() += 1; }
+    }
+    if sites.is_empty() { return body.to_owned(); }
+    let lines: Vec<_> = body.lines().collect(); let mut out = Vec::new(); let mut at = 0;
+    while at < lines.len() {
+        let folded = (|| {
+            let (indent, name, rhs) = declaration_with_initializer(lines[at])?;
+            let (slot, _) = slot_and_life_any(&name)?;
+            if !lines[at].trim_start().starts_with("float ") || count_ident(body, &name) != 2 { return None; }
+            for ((s, left, right, limit), count) in &sites {
+                if *s != slot || *count != 1 || &rhs != right { continue; }
+                let expected = format!("{indent}if (Math::Abs(({left} - {name})) > {limit})");
+                if lines.get(at+1).copied() == Some(expected.as_str()) {
+                    return Some(format!("{indent}if (Math::Abs(({left} - {right})) > {limit})"));
+                }
+            }
+            None
+        })();
+        if let Some(line) = folded { out.push(line); at += 2; } else { out.push(lines[at].to_owned()); at += 1; }
+    }
+    let mut result = out.join("\n"); if body.ends_with('\n') { result.push('\n'); } result
 }
 
 /// An explicit native vector copy initializes the named object's own storage.
@@ -42484,6 +42628,73 @@ mod literal_value_lifetime_tests {
         let mut named=function(&[("PSF",&[12]),("CALL",&[]),("PshVPtr",&[65534]),("CALL",&[])]);
         let c=disassemble(&named.bytecode).unwrap();for at in [1,3]{named.bytecode[c[at].offset_dw+1]=7;}
         assert_eq!(super::fold_returned_empty_values(body,&named,&refs),body);
+    }
+
+    #[test]
+    fn segment_clearance_is_calculated_after_lerp_before_distance() {
+        let mut f=function(&[("PSF",&[60]),("PSF",&[18]),("PSF",&[36]),("PSF",&[24]),("CALLSYS",&[]),
+            ("PshVPtr",&[65534]),("CALLSYS",&[]),("CpyRtoV4",&[71]),("PshVPtr",&[65532]),("CALLSYS",&[]),
+            ("CpyRtoV4",&[72]),("ADDf",&[71,71,72]),("fTOd",&[62,71]),("ADDd",&[62,62,65528]),
+            ("PSF",&[48]),("PSF",&[24]),("CALLSYS",&[]),("CpyRtoV8",&[70]),("CMPd",&[70,62]),("RET",&[10])]);
+        let c=disassemble(&f.bytecode).unwrap();for (at,p) in [(4,22),(6,21),(9,21),(16,20)] {f.bytecode[c[at].offset_dw+1]=p;}
+        f.obj_locals=vec![(18,1),(36,1),(24,1),(48,1)];
+        f.params=[("Moving",5,true),("Attacker",5,true),("Time",0x51,false),("Extra",0x51,false)].into_iter()
+            .map(|(name,token,is_object_handle)|crate::cache::model::Param {name:name.into(),ty:DataType {token,is_object_handle,..Default::default()},flags:0}).collect();
+        let body="    if ((Math::Lerp(local_36, local_18, local_60)).Distance(local_48) < ((Moving.Radius() + Attacker.Radius()) + Extra))\n    {\n        return true;\n    }\n";
+        let expected="    FVector local_24 = Math::Lerp(local_36, local_18, local_60);\n    float local_62 = (Moving.Radius() + Attacker.Radius()) + Extra;\n    if (local_24.Distance(local_48) < local_62)\n    {\n        return true;\n    }\n";
+        let refs=RefResolver::from_test_segment_clearance_order(0);let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_segment_clearance_order(s,f,r);
+        assert_eq!(fold(body,&f,&refs),expected);assert_eq!(fold(expected,&f,&refs),expected);
+        for fault in 1..=7 {assert_eq!(fold(body,&f,&RefResolver::from_test_segment_clearance_order(fault)),body,"metadata {fault}");}
+        for at in [0,1,2,3,5,7,8,10,11,12,13,14,15,17,18] {
+            let mut bad=f.clone();bad.bytecode[c[at].offset_dw]^=1<<16;assert_eq!(fold(body,&bad,&refs),body,"operand {at}");
+        }
+        let mut duplicate=f.clone();duplicate.obj_locals.push((24,1));assert_eq!(fold(body,&duplicate,&refs),body);
+        let mut wide=f.clone();wide.params[3].ty.token=0x50;assert_eq!(fold(body,&wide,&refs),body);
+        let mut entry=f.clone();let end=entry.bytecode.len();entry.bytecode.extend(function(&[("JMP",&[])]).bytecode);
+        entry.bytecode[end+1]=c[6].offset_dw as i32-end as i32-2;assert_eq!(fold(body,&entry,&refs),body);
+        for text in [body.replace("local_48)","local_54)"),body.replace("Extra)","Other)"),body.replace("Moving.Radius", "Other.Radius"),
+            format!("Use(local_24);\n{body}"),format!("Use(local_62);\n{body}"),format!("{body}{body}")] {assert_eq!(fold(&text,&f,&refs),text);}
+    }
+
+    #[test]
+    fn later_coordinate_life_keeps_the_native_subtraction_call_order() {
+        let mut f = function(&[("PSF", &[88]), ("PshVPtr", &[64]), ("CALLSYS", &[]), ("LoadVObjR", &[88,0]), ("RDR8", &[92]),
+            ("PSF", &[82]), ("PshVPtr", &[0]), ("ADDSi", &[0]), ("RDSPtr", &[]), ("CALLSYS", &[]), ("STOREOBJ", &[4]),
+            ("PshVPtr", &[4]), ("CALLSYS", &[]), ("LoadVObjR", &[82,0]), ("RDR8", &[90]), ("SUBd", &[94,92,90]),
+            ("PshV8", &[94]), ("CALLSYS", &[]), ("CpyRtoV8", &[92]), ("LoadThisR", &[0]), ("RDR8", &[98]), ("CMPd", &[92,98]), ("RET", &[0])]);
+        let c = disassemble(&f.bytecode).unwrap();
+        for (at,value) in [(2,10),(9,11),(12,10),(17,12),(7,2),(19,3)] { f.bytecode[c[at].offset_dw+1] = value; }
+        for at in [3,13] { f.bytecode[c[at].offset_dw+2] = 1; }
+        f.obj_locals = vec![(88,1),(82,1),(64,4),(4,4)];
+        let refs = RefResolver::from_test_ordered_coordinate_difference(0);
+        let body = "float local_90 = Earlier();\nUse(local_90);\nfor (auto local_64 : Characters)\n{\n    float local_90_2 = this.AI.Character().Location().Z;\n    if (Math::Abs((local_64.Location().Z - local_90_2)) > this.Height)\n    {\n        continue;\n    }\n}\n";
+        let expected = body.replace("    float local_90_2 = this.AI.Character().Location().Z;\n", "")
+            .replace(" - local_90_2)", " - this.AI.Character().Location().Z)");
+        let fold = |s:&str, f:&Func, r:&RefResolver| super::fold_ordered_coordinate_difference(s,f,r);
+        assert_eq!(fold(body,&f,&refs),expected);
+        assert_eq!(fold(&expected,&f,&refs),expected);
+        assert_eq!(fold(body,&f,&RefResolver::from_test_ordered_coordinate_difference(11)),expected);
+        for fault in 1..=10 { assert_eq!(fold(body,&f,&RefResolver::from_test_ordered_coordinate_difference(fault)),body,"metadata {fault}"); }
+        for at in [0,1,3,4,5,6,7,10,11,13,14,15,16,18,19,20,21] {
+            let mut bad=f.clone(); bad.bytecode[c[at].offset_dw] ^= 1<<16;
+            assert_eq!(fold(body,&bad,&refs),body,"operand {at}");
+        }
+        for (at,word) in [(3,2),(7,1),(13,2),(19,1)] {
+            let mut bad=f.clone(); bad.bytecode[c[at].offset_dw+word] += 1;
+            assert_eq!(fold(body,&bad,&refs),body,"field type {at}");
+        }
+        let mut copied=f.clone(); copied.bytecode[c[14].offset_dw] = (90<<16) | (f.bytecode[c[18].offset_dw] & 0xff);
+        assert_eq!(fold(body,&copied,&refs),body);
+        let mut duplicate=f.clone(); duplicate.obj_locals.push((82,1)); assert_eq!(fold(body,&duplicate,&refs),body);
+        let mut repeated=f.clone(); repeated.bytecode.extend(f.bytecode.iter()); assert_eq!(fold(body,&repeated,&refs),body);
+        let mut entry=f.clone(); let j=entry.bytecode.len(); entry.bytecode.extend(function(&[("JMP", &[])]).bytecode);
+        entry.bytecode[j+1] = c[5].offset_dw as i32-j as i32-2; assert_eq!(fold(body,&entry,&refs),body);
+        for text in [body.replace("float local_90_2", "float32 local_90_2"), body.replace(".AI.",".Other."),
+            body.replace("local_64.Location", "local_66.Location"), body.replace("this.Height)", "this.Width)"),
+            body.replace(" - local_90_2", " + local_90_2"), body.replace("    if (Math::Abs", "    Before();\n    if (Math::Abs"),
+            format!("{body}Use(local_90_2);\n"), body.replace("if (Math::Abs", "while (Math::Abs")] {
+            assert_eq!(fold(&text,&f,&refs),text);
+        }
     }
 
     #[test]

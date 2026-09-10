@@ -3292,6 +3292,28 @@ fn retained_default_constructions(instrs: &[Instr], refs: &RefResolver) -> std::
             eager.insert(slot);
         }
     }
+    // A writable native argument can fill a default-constructed value without
+    // emitting a source assignment. Subsequent reads must use that filled value.
+    for (at, call) in instrs.iter().enumerate() {
+        let Some(ptr) = call.qwords.first().map(|p| *p as i64).filter(|_| call.op.name == "CALLSYS") else { continue; };
+        if refs.is_method_by_ptr(ptr) || !refs.func_ret_by_ptr(ptr).is_some_and(|t|
+            t.token == 0x52 && !t.is_reference && !t.is_object_handle) { continue; }
+        let Some(params) = refs.func_params_by_ptr(ptr) else { continue; };
+        let Some(start) = at.checked_sub(params.len()) else { continue; };
+        if params.is_empty() || instrs[start..at].iter().any(|i| i.op.name != "PSF") { continue; }
+        for (param, push) in params.iter().zip(instrs[start..at].iter().rev()) {
+            if param.token != 5 || !param.is_reference || param.is_object_const || param.is_read_only || param.is_object_handle { continue; }
+            let Some(slot) = w(push).filter(|s| *s > 0) else { continue; };
+            let Some(&created) = defaults.get(&slot).filter(|c| **c < start) else { continue; };
+            if sites.get(&slot).is_none_or(|s| s.0 != 1) { continue; }
+            let ctor = instrs[created].qwords[0] as i64;
+            let Some(identity) = refs.type_identity_by_ptr(param.type_info) else { continue; };
+            if !identity.module.is_empty() || Some(identity.name.as_str()) != refs.func_owner_by_ptr(ctor)
+                || identity.namespace != refs.func_ns_by_ptr(ctor).unwrap_or("") { continue; }
+            eager.insert(slot);
+        }
+    }
+
     // Two separately default-constructed values, then configuration and a
     // shared call, with reverse destruction at scope exit. The first const
     // argument must retain its construction before the configured sibling.
@@ -12807,6 +12829,26 @@ mod tests {
             let other = render_lvalue_selection(true, entry, wrong, jump, ty, true);
             assert!(!other.contains(" ? "), "{other}");
         }
+    }
+
+    #[test]
+    fn writable_native_outputs_keep_their_filled_value_for_later_reads() {
+        let make=|fault:u8| {
+            let mut a=TestAssembler::default();
+            for slot in [20,8,14] {a.op("PSF",&[slot],&[]);a.op("CALLSYS",&[],&[10,0]);}
+            if fault==1 {a.op("PSF",&[8],&[]);a.op("CALLSYS",&[],&[10,0]);}
+            for slot in [14,8,20] {a.op(if fault==2 {"PshVPtr"}else{"PSF"},&[slot],&[]);}
+            a.op("CALLSYS",&[],&[20,0]);
+            a.op("PSF",&[8],&[]);a.op("PSF",&[20],&[]);a.op("CALLSYS",&[],&[21,0]);a.op("CpyRtoV8",&[22],&[]);a.op("RET",&[0],&[]);
+            let mut f=a.finish();for i in &mut f.instrs {if i.op.name=="CALLSYS" {i.qwords=vec![i.dwords[0] as u64];}}f
+        };
+        let f=make(0);let refs=RefResolver::from_test_mutable_native_value_outputs(0);
+        let retained=retained_default_constructions(&f.instrs,&refs);
+        assert!(retained.contains(&8) && retained.contains(&14));assert!(!retained.contains(&20));
+        let body=render_fixture_range_with_return(&f,None,&refs,"FVector",None,0x52);
+        assert!(body.contains("Distance(local_8)"),"{body}");assert!(!body.contains("Distance(FVector())"),"{body}");
+        for fault in 1..=6 {assert!(!retained_default_constructions(&f.instrs,&RefResolver::from_test_mutable_native_value_outputs(fault)).contains(&8),"metadata {fault}");}
+        for fault in 1..=2 {assert!(!retained_default_constructions(&make(fault).instrs,&refs).contains(&8),"raw {fault}");}
     }
 
     #[test]
