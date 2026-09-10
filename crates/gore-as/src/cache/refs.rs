@@ -5381,6 +5381,33 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_reused_product_prior_copy(fault: u8) -> Self {
+        let mut r = Self::from_test_reused_vector_product(0);
+        let key = 5 | (8i64 << 33);
+        r.prop_by_key.insert(key, "Component".into());
+        r.prop_type_id.insert(key, 2);
+        let vector = DataType { token: 5, type_info: 1, ..Default::default() };
+        for (p, name, owner, ret, args, constant) in [
+            (12, "Axis", "USceneComponent", vector.clone(), vec![], true),
+            (13, "$beh0", "FVector", DataType { token: 0x52, ..Default::default() }, vec![DataType { is_reference: true, is_object_const: true, is_read_only: true, ..vector }], false),
+            (14, "Normalize", "FVector", DataType { token: 0x41, ..Default::default() }, vec![DataType { token: 0x51, ..Default::default() }], false),
+        ] {
+            r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, owner.into()); r.func_ret.insert(p, ret); r.func_params.insert(p, args); r.func_is_method.insert(p);
+            if constant { r.const_method_ptrs.insert(p); }
+        }
+        match fault {
+            1 => { r.func_ret.get_mut(&12).unwrap().is_reference = true; },
+            2 => { r.func_params.get_mut(&13).unwrap()[0].is_reference = false; },
+            3 => { r.const_method_ptrs.insert(14); },
+            4 => { r.func_params.get_mut(&14).unwrap()[0].token = 0x50; },
+            5 => { r.prop_type_id.insert(key, 1); },
+            6 => { r.duplicate_prop_keys.insert(key); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_reused_vector_product(fault:u8)->Self {
         let mut r=Self::from_test_member_chain(&[("FVector",""),("UHost","Speed")]);
         for (p,name,module) in [(1,"FVector",""),(2,"UHost","Script")] {r.type_identity_by_ptr.insert(p,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});}

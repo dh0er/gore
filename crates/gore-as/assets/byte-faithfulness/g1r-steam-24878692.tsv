@@ -1,5 +1,4 @@
 # module	divergent-functions	behaviour-risks	generated-methods
-AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.BreachStraight.FireDemon_HellArms_BreachStraight	1	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_Barrier_Ring	1	0	0
 AI.AIAgent.Creature.Demon.Fire.Spells.HellArms.Ring.Barrier.FireDemon_HellArms_RingFireTest	1	0	0
 AI.AIAgent.Creature.Molerat.CombatSituations_Molerat	1	0	0
@@ -51,8 +50,7 @@ GAS.Abilities.Spells.Spells.Summon.SpawnHelper.Base.SummonSpawnPlaceHelper	2	0	0
 GAS.Abilities.Spells.Spells.Telekinesis.GA_Spell_Telekinesis	1	0	0
 GAS.Abilities.Spells.Spells.Telekinesis.TelekinesisItemMovementVisual	1	0	0
 GAS.Abilities.Spells.Spells.Transform.GA_Spell_Transform	2	0	0
-GAS.Abilities.Spells.Visuals.Fire.FireRainVisual	1	0	0
-GAS.Abilities.Spells.Visuals.Fire.InnosPrayVisual	2	0	0
+GAS.Abilities.Spells.Visuals.Fire.InnosPrayVisual	1	0	0
 GAS.Calculations.Damage	1	0	0
 GAS.GASCharacterMixins	1	0	0
 GAS.GASCharacterStateMixins	7	0	0

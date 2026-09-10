@@ -9417,10 +9417,34 @@ fn fold_reused_vector_product(body:&str, f:&Func, refs:&RefResolver)->String {
         let id=*c[0].dwords.first()? as i32;let owner=refs.type_identity_by_id(id)?;let (field,old)=refs.member_identity(id,w(&c[0])?)?;
         if owner.module.is_empty() || !owner.namespace.is_empty() || refs.type_identity_by_id(old)?!=owner || refs.own_field_type_by_class(&owner.name,field)!=Some("float") {return None;}
         let uses:Vec<_>=code.iter().enumerate().filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&product)).map(|(n,_)| n).collect();
-        let [made,read,reused,consumed]=uses.as_slice() else {return None;};
+        // A previous getter result may occupy the same slot before its copy is normalized.
+        let first = if uses.len() == 6 {
+            let start = at.checked_sub(11)?;
+            let p = &code[start..at];
+            if p.iter().map(|i| i.op.name).ne(["PSF", "PshVPtr", "ADDSi", "RDSPtr", "CALLSYS", "PSF", "PSF", "CALLSYS", "PshC8", "PSF", "CALLSYS"])
+                || uses[..2] != [start, start + 5]
+                || [(0, product), (1, 0), (5, product), (6, direction), (9, direction)].iter().any(|(n, s)| w(&p[*n]) != Some(*s)) { return None; }
+            let getter = *p[4].qwords.first()? as i64;
+            let copy = *p[7].qwords.first()? as i64;
+            let normalize = *p[10].qwords.first()? as i64;
+            if !refs.is_method_by_ptr(getter) || !refs.is_const_method_by_ptr(getter) || !refs.func_params_by_ptr(getter)?.is_empty() || !value(refs.func_ret_by_ptr(getter)?)
+                || refs.func_by_ptr(copy) != Some("$beh0") || refs.func_owner_by_ptr(copy) != Some("FVector") || !refs.is_method_by_ptr(copy) || refs.is_const_method_by_ptr(copy)
+                || !matches!(refs.func_ret_by_ptr(copy)?, t if t.token == 0x52 && t.type_info == 0 && !t.is_reference && !t.is_object_handle)
+                || !matches!(refs.func_params_by_ptr(copy)?, [t] if t.token == 5 && t.type_info == vector && t.is_reference && t.is_object_const && t.is_read_only && !t.is_object_handle)
+                || refs.func_by_ptr(normalize) != Some("Normalize") || refs.func_owner_by_ptr(normalize) != Some("FVector") || !refs.is_method_by_ptr(normalize) || refs.is_const_method_by_ptr(normalize)
+                || !matches!(refs.func_ret_by_ptr(normalize)?, t if t.token == 0x41 && t.type_info == 0 && !t.is_reference && !t.is_object_handle)
+                || !matches!(refs.func_params_by_ptr(normalize)?, [t] if scalar(t)) { return None; }
+            let id = *p[2].dwords.first()? as i32;
+            let owner = refs.type_identity_by_id(id)?;
+            let (_, old) = refs.member_identity(id, w(&p[2])?)?;
+            if owner.module.is_empty() || !owner.namespace.is_empty() || refs.type_identity_by_id(old)? != owner { return None; }
+            start
+        } else { at };
+        let uses = if first == at { uses.as_slice() } else { &uses[2..] };
+        let [made,read,reused,consumed]=uses else {return None;};
         if [*made,*read,*reused]!=[at+3,at+8,at+11] || *consumed<=at+13 || code[*consumed].op.name!="PSF"
             || code.iter().any(|i| i.op.name=="JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
-                let t=i.offset_dw as i64+2+*d as i32 as i64;t>c[0].offset_dw as i64 && t<=c[13].offset_dw as i64
+                let t=i.offset_dw as i64+2+*d as i32 as i64;t>code[first].offset_dw as i64 && t<=c[13].offset_dw as i64
             }))) {return None;}
         Some((product,direction,base,field.to_owned(),param.name.clone()))
     }).collect();
@@ -20473,16 +20497,25 @@ fn copied_binary_receiver_lifetimes(
 ) -> HashMap<i32, String> {
     if !is_method { return HashMap::new(); }
     let Ok(code) = disassemble(&f.bytecode) else { return HashMap::new(); };
-    code.windows(13).enumerate().filter_map(|(at, c)| {
-        if c.iter().map(|i| i.op.name).ne(["PshGPtr", "PSF", "CALLSYS", "LoadThisR", "RDR8",
-            "PshV8", "PSF", "PSF", "CALLSYS", "PSF", "PSF", "PSF", "CALLSYS"]) { return None; }
+    let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+    let offsets = super::model::param_slot_map(&params, is_method, super::model::returns_struct_by_value(&f.ret, refs), Some(refs));
+    code.iter().enumerate().filter_map(|(at, _)| {
+        let short = code.get(at..at + 11)?;
+        let from_params = short.iter().map(|i| i.op.name).eq(["PshGPtr", "PSF", "CALLSYS", "PshV8", "PSF", "PSF", "CALLSYS", "PSF", "PSF", "PshVPtr", "CALLSYS"]);
+        let c = if from_params { short } else {
+            let c = code.get(at..at + 13)?;
+            if c.iter().map(|i| i.op.name).ne(["PshGPtr", "PSF", "CALLSYS", "LoadThisR", "RDR8",
+                "PshV8", "PSF", "PSF", "CALLSYS", "PSF", "PSF", "PSF", "CALLSYS"]) { return None; }
+            c
+        };
+        let shift = if from_params { 2 } else { 0 };
         let w = |i: usize| c[i].words.first().map(|v| *v as i16 as i32);
-        let (copied, scalar, inner, outer) = (w(1)?, w(4)?, w(6)?, w(11)?);
+        let (copied, scalar, inner, outer) = (w(1)?, w(if from_params { 3 } else { 4 })?, w(6 - shift)?, w(11 - shift)?);
         let slots = [copied, scalar, inner, outer];
-        if slots.iter().any(|s| *s <= 0) || slots.iter().collect::<HashSet<_>>().len() != 4
-            || w(5) != Some(scalar) || w(7) != Some(copied) || w(9) != Some(inner)
-            || w(10) != Some(copied)
-            || producers.iter().filter(|(s, _)| *s == copied).map(|(_, p)| *p).ne([at + 2, at + 12])
+        if copied <= 0 || inner <= 0 || (!from_params && (scalar <= 0 || outer <= 0)) || slots.iter().collect::<HashSet<_>>().len() != 4
+            || w(5 - shift) != Some(scalar) || w(7 - shift) != Some(copied) || w(9 - shift) != Some(inner)
+            || w(10 - shift) != Some(copied)
+            || producers.iter().filter(|(s, _)| *s == copied).map(|(_, p)| *p).ne([at + 2, at + 12 - shift])
             || code[..at].iter().any(|i| super::bytediff::addressed_slots(i).contains(&copied))
         { return None; }
         let stored_types: Vec<_> = f.obj_locals.iter().filter(|(s, _)| *s == copied).map(|(_, p)| *p).collect();
@@ -20491,13 +20524,13 @@ fn copied_binary_receiver_lifetimes(
         let type_ptr = *type_ptr;
         let identity = refs.type_identity_by_ptr(type_ptr)?;
         if !identity.module.is_empty() || !identity.namespace.is_empty() || !identity.name.starts_with('F')
-            || [inner, outer].iter().any(|s| f.obj_locals.iter().filter(|(slot, _)| slot == s)
+            || [inner, outer].iter().filter(|s| !from_params || **s == inner).any(|s| f.obj_locals.iter().filter(|(slot, _)| slot == s)
                 .map(|(_, p)| *p).ne([type_ptr])) { return None; }
         let value = |t: &super::types::DataType| t.token == 5 && t.type_info == type_ptr && !t.is_object_handle;
         let const_ref = |t: &super::types::DataType| value(t) && t.is_reference
             && t.is_object_const && t.is_read_only;
         let ptr = |i: usize| c[i].qwords.first().map(|p| *p as i64);
-        let (copy, multiply, add) = (ptr(2)?, ptr(8)?, ptr(12)?);
+        let (copy, multiply, add) = (ptr(2)?, ptr(8 - shift)?, ptr(12 - shift)?);
         if [copy, multiply, add].iter().any(|p| !refs.is_method_by_ptr(*p)
             || refs.func_owner_by_ptr(*p) != Some(identity.name.as_str()))
             || refs.func_by_ptr(copy) != Some("$beh0") || refs.is_const_method_by_ptr(copy)
@@ -20509,15 +20542,22 @@ fn copied_binary_receiver_lifetimes(
             || !matches!(refs.func_params_by_ptr(multiply), Some([t]) if t.token == 0x51 && !t.is_reference && !t.is_object_handle)
             || !matches!(refs.func_params_by_ptr(add), Some([t]) if const_ref(t))
             || refs.global_by_ptr(ptr(0)?).is_none() { return None; }
-        let type_id = *c[3].dwords.first()? as i32;
-        let owner = refs.type_identity_by_id(type_id)?;
-        let (field, declared) = refs.member_identity(type_id, w(3)?)?;
-        if refs.type_identity_by_id(declared)? != owner
-            || !matches!(refs.own_field_type_by_class(&owner.name, field)?, "float" | "double")
-            || code.iter().any(|i| i.op.name == "JMPP" || i.op.name.starts_with('J')
+        if from_params {
+            let amount = offsets.get(&scalar).and_then(|n| f.params.get(*n))?;
+            let base = offsets.get(&outer).and_then(|n| f.params.get(*n))?;
+            if amount.ty.token != 0x51 || amount.ty.type_info != 0 || amount.ty.is_reference || amount.ty.is_object_handle
+                || !const_ref(&base.ty) { return None; }
+        } else {
+            let type_id = *c[3].dwords.first()? as i32;
+            let owner = refs.type_identity_by_id(type_id)?;
+            let (field, declared) = refs.member_identity(type_id, w(3)?)?;
+            if refs.type_identity_by_id(declared)? != owner
+                || !matches!(refs.own_field_type_by_class(&owner.name, field)?, "float" | "double") { return None; }
+        }
+        if code.iter().any(|i| i.op.name == "JMPP" || i.op.name.starts_with('J')
                 && i.dwords.first().is_some_and(|d| {
                     let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
-                    target > c[0].offset_dw as i64 && target <= c[12].offset_dw as i64
+                    target > c[0].offset_dw as i64 && target <= c[12 - shift].offset_dw as i64
                 })) { return None; }
         Some((copied, identity.name.clone()))
     }).collect()
@@ -44562,6 +44602,27 @@ mod literal_value_lifetime_tests {
     }
 
     #[test]
+    fn reused_product_slot_can_follow_a_closed_getter_copy_life() {
+        let mut f = function(&[("PSF", &[32]), ("PshVPtr", &[0]), ("ADDSi", &[8]), ("RDSPtr", &[]), ("CALLSYS", &[]),
+            ("PSF", &[32]), ("PSF", &[22]), ("CALLSYS", &[]), ("PshC8", &[]), ("PSF", &[22]), ("CALLSYS", &[]),
+            ("LoadThisR", &[0]), ("RDR8", &[24]), ("PshV8", &[24]), ("PSF", &[32]), ("PSF", &[22]), ("CALLSYS", &[]),
+            ("PshV8", &[65534]), ("PSF", &[44]), ("PSF", &[32]), ("CALLSYS", &[]), ("PSF", &[44]), ("PSF", &[32]), ("PSF", &[16]), ("CALLSYS", &[]), ("PSF", &[32]), ("RET", &[4])]);
+        f.ret.token = 0x52; f.obj_locals = [16, 22, 32, 44].into_iter().map(|s| (s, 1)).collect();
+        f.params.push(super::super::model::Param { name: "Step".into(), ty: DataType { token: 0x51, ..Default::default() }, flags: 0 });
+        let c = disassemble(&f.bytecode).unwrap();
+        for (n, p) in [(2, 2), (4, 12), (7, 13), (10, 14), (11, 2), (16, 10), (20, 10), (24, 11)] { f.bytecode[c[n].offset_dw + 1] = p; }
+        let body = "    FVector local_22(this.Component.Axis());\n    local_22.Normalize(0.0);\n    FVector local_32 = (local_22 * this.Speed);\n    FVector local_32_2 = (local_16 + (local_32 * Step));\n    Consume(local_32_2);\n";
+        let expected = "    FVector local_22(this.Component.Axis());\n    local_22.Normalize(0.0);\n    FVector local_32 = (local_16 + ((local_22 * this.Speed) * Step));\n    Consume(local_32);\n";
+        let refs = RefResolver::from_test_reused_product_prior_copy(0);
+        assert_eq!(super::fold_reused_vector_product(body, &f, &refs), expected);
+        for fault in 1..=6 { assert_eq!(super::fold_reused_vector_product(body, &f, &RefResolver::from_test_reused_product_prior_copy(fault)), body, "metadata {fault}"); }
+        let reject = |bad: &Func| assert_eq!(super::fold_reused_vector_product(body, bad, &refs), body);
+        let mut bad = f.clone(); bad.bytecode[c[7].offset_dw + 1] = 14; reject(&bad);
+        let mut bad = f.clone(); let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[5].offset_dw as i32; jump.extend(bad.bytecode); bad.bytecode = jump; reject(&bad);
+        let mut bad = f.clone(); let mut extra = function(&[("PSF", &[32])]).bytecode; extra.extend(bad.bytecode); bad.bytecode = extra; reject(&bad);
+    }
+
+    #[test]
     fn only_the_final_sum_owns_the_reused_vector_product_slot() {
         let mut f=function(&[("LoadThisR",&[0]),("RDR8",&[24]),("PshV8",&[24]),("PSF",&[32]),("PSF",&[22]),("CALLSYS",&[]),("PshV8",&[65534]),
             ("PSF",&[44]),("PSF",&[32]),("CALLSYS",&[]),("PSF",&[44]),("PSF",&[32]),("PSF",&[16]),("CALLSYS",&[]),("PSF",&[32]),("RET",&[4])]);
@@ -46950,6 +47011,34 @@ mod literal_value_lifetime_tests {
         for (at, ptr) in [(0, 40), (2, 10), (3, 2), (8, 20), (12, 30)] { f.bytecode[code[at].offset_dw + 1] = ptr; }
         f.obj_locals = vec![(10, 1), (20, 1), (30, 1)];
         f
+    }
+
+    #[test]
+    fn copied_binary_receiver_accepts_typed_base_and_scale_parameters() {
+        let mut f = function(&[("PshGPtr", &[]), ("PSF", &[10]), ("CALLSYS", &[]), ("PshV8", &[65530]), ("PSF", &[20]),
+            ("PSF", &[10]), ("CALLSYS", &[]), ("PSF", &[20]), ("PSF", &[10]), ("PshVPtr", &[65532]), ("CALLSYS", &[]), ("RET", &[8])]);
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, ptr) in [(0, 40), (2, 10), (6, 20), (10, 30)] { f.bytecode[code[at].offset_dw + 1] = ptr; }
+        f.obj_locals = vec![(10, 1), (20, 1)];
+        f.ret = DataType { token: 5, type_info: 1, ..Default::default() };
+        f.params = vec![super::super::model::Param { name: "Base".into(), ty: DataType { is_reference: true, is_object_const: true, is_read_only: true, ..f.ret.clone() }, flags: 0 },
+            super::super::model::Param { name: "Height".into(), ty: DataType { token: 0x51, is_object_const: true, is_read_only: true, ..Default::default() }, flags: 0 }];
+        let refs = RefResolver::from_test_copied_binary_receiver(0);
+        let producers = [(10, 2), (20, 6), (10, 10)];
+        let check = |f: &Func, r: &RefResolver| super::copied_binary_receiver_lifetimes(f, r, &producers, true);
+        assert_eq!(check(&f, &refs), HashMap::from([(10, "FVector".into())]));
+        for fault in [1, 2, 3, 4, 5, 7] { assert!(check(&f, &RefResolver::from_test_copied_binary_receiver(fault)).is_empty(), "metadata {fault}"); }
+        for (index, change) in [(0, 0), (0, 1), (1, 2), (1, 3)] {
+            let mut bad = f.clone();
+            match change { 0 => bad.params[index].ty.is_reference = false, 1 => bad.params[index].ty.type_info = 2,
+                2 => bad.params[index].ty.token = 0x50, _ => bad.params[index].ty.is_reference = true }
+            assert!(check(&bad, &refs).is_empty());
+        }
+        let mut bad = f.clone(); bad.params.clear(); assert!(check(&bad, &refs).is_empty());
+        let mut bad = f.clone(); bad.obj_locals.push((10, 1)); assert!(check(&bad, &refs).is_empty());
+        let mut bad = f; let at = bad.bytecode.len(); bad.bytecode.extend(function(&[("JMP", &[])]).bytecode);
+        bad.bytecode[at + 1] = code[4].offset_dw as i32 - at as i32 - 2;
+        assert!(check(&bad, &refs).is_empty());
     }
 
     #[test]
