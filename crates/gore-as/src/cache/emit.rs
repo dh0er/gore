@@ -3309,6 +3309,8 @@ fn emit_function_ctor(
         pass_trace("restore_scan_location_property", &rendered);
         let rendered = restore_nav_normal_properties(&rendered, f, refs);
         pass_trace("restore_nav_normal_properties", &rendered);
+        let rendered = restore_container_property_copies(&rendered, f, refs);
+        pass_trace("restore_container_property_copies", &rendered);
         let rendered = restore_enum_trace_result(&rendered, f, refs);
         pass_trace("restore_enum_trace_result", &rendered);
         let rendered = fold_weak_forward_sum(&rendered, f, refs);
@@ -9982,6 +9984,91 @@ fn restore_nav_normal_properties(body: &str, f: &Func, refs: &RefResolver) -> St
     let before = format!("(this.{self_get}().GetNavAgentLocation() - this.{field}.{other_get}().GetNavAgentLocation()).GetUnsafeNormal()");
     if body.matches(&before).count() != 1 { return body.to_owned(); }
     body.replace(&before, &before.replace(".GetNavAgentLocation()", ".NavAgentLocation").replace(".GetUnsafeNormal()", ".UnsafeNormal"))
+}
+
+/// Deferred native properties retain the original temporary-to-local container copy.
+fn restore_container_property_copies(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if !body.contains("TArray<") && !body.contains("TSet<") { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let w = |i: &Instr| i.words.first().map(|s| *s as i16 as i32);
+    let ptr = |i: &Instr| i.qwords.first().map(|p| *p as i64);
+    let void = |t: &super::types::DataType| t.token == 0x52 && t.type_info == 0 && !t.is_reference && !t.is_object_handle;
+    let mut groups: HashMap<String, (i64, String, usize)> = HashMap::new();
+    for (at, c) in code.windows(7).enumerate() {
+        let witness = (|| {
+            if at == 0 || c.iter().map(|i| i.op.name).ne(["PSF", "PSF", "CALLSYS", "PSF", "CALLSYS", "PSF", "CALLSYS"]) { return None; }
+            let (source, dest) = (w(&c[0])?, w(&c[1])?);
+            if source <= 0 || dest <= 0 || source == dest || w(&c[3]) != Some(dest) || w(&c[5]) != Some(source) { return None; }
+            let mut getter_at = at - 1;
+            let mut cleanup = Vec::new();
+            while code[getter_at].op.name == "CALLSYS" && refs.func_by_ptr(ptr(&code[getter_at])?) == Some("$beh2") {
+                if getter_at < 2 || cleanup.len() == 3 || code[getter_at - 1].op.name != "PSF" { return None; }
+                cleanup.push((ptr(&code[getter_at])?, w(&code[getter_at - 1])?)); getter_at -= 2;
+            }
+            let call = &code[getter_at]; if call.op.name != "CALLSYS" { return None; }
+            let getter = ptr(call)?; let name = refs.func_by_ptr(getter)?;
+            // Finite native property APIs verified in the shipped post-bind registration.
+            let (container, element, handle, argc) = match (refs.func_owner_by_ptr(getter)?, name) {
+                ("FMemoryFilter", "GetArray" | "GetArrayNewestToOldest" | "GetArrayOldestToNewest") => ("TArray", "FMemorizedEvent", false, 0),
+                ("FPerceivedInteractiveObject", "GetPersonallyOwnedBy") => ("TSet", "AGothicCharacterState", true, 1),
+                ("UGothicAchievementSubsystem", "GetPendingAchievements") => ("TArray", "UGothicAchievement", true, 0),
+                _ => return None,
+            };
+            let returned = refs.func_ret_by_ptr(getter)?;
+            let value = |t: &super::types::DataType| t.token == 5 && t.type_info == returned.type_info && !t.is_reference && !t.is_object_handle;
+            if !value(returned) || !refs.is_method_by_ptr(getter) || !refs.is_const_method_by_ptr(getter)
+                || !matches!(refs.type_identity_by_ptr(returned.type_info), Some(t) if t.name == container && t.module.is_empty() && t.namespace.is_empty())
+                || [source, dest].iter().any(|s| f.obj_locals.iter().filter(|(n, _)| n == s).map(|(_, p)| *p).ne([returned.type_info])) { return None; }
+            let [subtype] = refs.type_subtypes(returned.type_info)? else { return None; };
+            if subtype.token != 5 || subtype.is_reference || subtype.is_object_handle != handle
+                || !matches!(refs.type_identity_by_ptr(subtype.type_info), Some(t) if t.name == element && t.module.is_empty() && t.namespace.is_empty()) { return None; }
+            let params = refs.func_params_by_ptr(getter)?;
+            if params.len() != argc || (argc == 1 && (params[0].token != 5 || !params[0].is_object_handle || params[0].is_reference
+                || !matches!(refs.type_identity_by_ptr(params[0].type_info), Some(t) if t.name == "UObject" && t.module.is_empty() && t.namespace.is_empty()))) { return None; }
+            for n in [2, 6] {
+                let p = ptr(&c[n])?;
+                if refs.func_owner_by_ptr(p) != Some(container) || refs.func_by_ptr(p) != Some(if n == 2 { "$beh0" } else { "$beh2" })
+                    || !refs.is_method_by_ptr(p) || refs.is_const_method_by_ptr(p) || !refs.func_params_by_ptr(p)?.is_empty() || !void(refs.func_ret_by_ptr(p)?) { return None; }
+            }
+            let assign = ptr(&c[4])?;
+            if refs.func_owner_by_ptr(assign) != Some(container) || refs.func_by_ptr(assign) != Some("opAssign") || !refs.is_method_by_ptr(assign) || refs.is_const_method_by_ptr(assign)
+                || !matches!(refs.func_ret_by_ptr(assign)?, t if t.token == 5 && t.type_info == returned.type_info && t.is_reference && !t.is_object_handle && !t.is_object_const && !t.is_read_only)
+                || !matches!(refs.func_params_by_ptr(assign)?, [t] if t.token == 5 && t.type_info == returned.type_info && t.is_reference && t.is_object_const && t.is_read_only && !t.is_object_handle) { return None; }
+            if !cleanup.is_empty() && (refs.func_owner_by_ptr(getter) != Some("FMemoryFilter")
+                || cleanup.iter().filter(|(p, _)| refs.func_owner_by_ptr(*p) == Some("FMemoryFilter")).count() != 1) { return None; }
+            for &(dtor, slot) in &cleanup {
+                let owner = refs.func_owner_by_ptr(dtor)?;
+                if !matches!(owner, "FMemoryFilter" | "FInGameTime") || !refs.is_method_by_ptr(dtor) || refs.is_const_method_by_ptr(dtor)
+                    || !refs.func_params_by_ptr(dtor)?.is_empty() || !void(refs.func_ret_by_ptr(dtor)?)
+                    || slot <= 0 || slot == source || slot == dest || cleanup.iter().filter(|(_, s)| *s == slot).count() != 1
+                    || !matches!(f.obj_locals.iter().filter(|(s, _)| *s == slot).map(|(_, p)| *p).collect::<Vec<_>>().as_slice(), [p] if matches!(refs.type_identity_by_ptr(*p), Some(t) if t.name == owner && t.module.is_empty() && t.namespace.is_empty())) { return None; }
+            }
+            let first = code[..at].iter().rposition(|i| super::bytediff::addressed_slots(i).contains(&source))?;
+            if first >= getter_at || code[first].op.name != "PSF" || w(&code[first]) != Some(source)
+                || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                    let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                    target > code[first].offset_dw as i64 && target <= c[6].offset_dw as i64
+                }))) { return None; }
+            Some((getter, name.to_owned(), returned.base_name(refs)))
+        })();
+        if let Some((getter, name, ty)) = witness {
+            let group = groups.entry(name).or_insert((getter, ty.clone(), 0));
+            if group.0 != getter || group.1 != ty { return body.to_owned(); }
+            group.2 += 1;
+        }
+    }
+    let mut lines: Vec<_> = body.lines().map(str::to_owned).collect();
+    for (name, (getter, ty, count)) in groups {
+        let suffix = format!(".{name}()");
+        if code.iter().filter(|i| i.op.name == "CALLSYS" && ptr(i) == Some(getter)).count() != count || body.matches(&suffix).count() != count { continue; }
+        let matches: Vec<_> = lines.iter().enumerate().filter_map(|(at, line)| {
+            let (_, local, rhs) = declaration_with_initializer(line)?;
+            (is_decompiler_local(&local) && line.trim().starts_with(&format!("{ty} {local} = ")) && rhs.ends_with(&suffix)).then_some(at)
+        }).collect();
+        if matches.len() != count { continue; }
+        for at in matches { lines[at] = lines[at].replacen(&suffix, &format!(".{}", &name[3..]), 1); }
+    }
+    let mut result = lines.join("\n"); if body.ends_with('\n') { result.push('\n'); } result
 }
 
 /// Retain the completed enum conversion and initialized bool before native trace arguments.
@@ -45656,6 +45743,43 @@ mod literal_value_lifetime_tests {
         let mut bad = f; let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[14].offset_dw as i32; jump.extend(bad.bytecode); bad.bytecode = jump; reject(&bad);
     }
 
+    #[test]
+    fn native_container_properties_keep_the_temporary_copy_and_cleanup() {
+        for (kind, ty, getter) in [(0, "TArray<FMemorizedEvent>", "GetArray"), (1, "TArray<FMemorizedEvent>", "GetArrayNewestToOldest"),
+            (2, "TArray<FMemorizedEvent>", "GetArrayOldestToNewest"), (3, "TSet<AGothicCharacterState>", "GetPersonallyOwnedBy"), (4, "TArray<UGothicAchievement>", "GetPendingAchievements")] {
+            let mut ops = vec![("PSF", &[16_u16][..]), ("PshVPtr", &[65534][..]), ("CALLSYS", &[][..])];
+            if kind < 3 { ops.extend([("PSF", &[8_u16][..]), ("CALLSYS", &[][..])]); }
+            if kind == 1 || kind == 2 { ops.extend([("PSF", &[22_u16][..]), ("CALLSYS", &[][..])]); }
+            if kind == 1 { ops.extend([("PSF", &[28_u16][..]), ("CALLSYS", &[][..])]); }
+            let copy_at = ops.len();
+            ops.extend([("PSF", &[16_u16][..]), ("PSF", &[12_u16][..]), ("CALLSYS", &[][..]), ("PSF", &[12_u16][..]), ("CALLSYS", &[][..]), ("PSF", &[16_u16][..]), ("CALLSYS", &[][..]), ("RET", &[4_u16][..])]);
+            let mut f = function(&ops); f.ret.token = 0x52; f.obj_locals = vec![(12, 1), (16, 1)];
+            if kind < 3 { f.obj_locals.push((8, 3)); }
+            if kind == 1 || kind == 2 { f.obj_locals.push((22, 5)); }
+            if kind == 1 { f.obj_locals.push((28, 5)); }
+            let c = disassemble(&f.bytecode).unwrap();
+            for (n, ptr) in [(2, 10), (copy_at + 2, 20), (copy_at + 4, 30), (copy_at + 6, 40)] { f.bytecode[c[n].offset_dw + 1] = ptr; }
+            if kind < 3 { f.bytecode[c[4].offset_dw + 1] = 50; }
+            if kind == 1 || kind == 2 { f.bytecode[c[6].offset_dw + 1] = 60; }
+            if kind == 1 { f.bytecode[c[8].offset_dw + 1] = 60; }
+            let body = format!("    {ty} local_16 = this.{getter}();\n    Use(local_16);\n");
+            let expected = body.replace(&format!(".{getter}()"), &format!(".{}", &getter[3..]));
+            let refs = RefResolver::from_test_container_property_copies(kind, 0);
+            assert_eq!(super::restore_container_property_copies(&body, &f, &refs), expected, "kind {kind}");
+            assert_eq!(super::restore_container_property_copies(&expected, &f, &refs), expected);
+            for fault in 1..=if kind == 1 || kind == 2 { 11 } else if kind == 0 { 8 } else { 7 } {
+                assert_eq!(super::restore_container_property_copies(&body, &f, &RefResolver::from_test_container_property_copies(kind, fault)), body, "kind {kind}, metadata {fault}");
+            }
+            let reject = |bad: &Func| assert_eq!(super::restore_container_property_copies(&body, bad, &refs), body);
+            let mut bad = f.clone(); bad.obj_locals.push((16, 1)); reject(&bad);
+            if kind == 1 { let mut bad = f.clone(); bad.bytecode[c[7].offset_dw] = (bad.bytecode[c[7].offset_dw] & 0xffff) | (22 << 16); reject(&bad); }
+            let mut bad = f.clone(); bad.bytecode[c[copy_at + 5].offset_dw] ^= 4 << 16; reject(&bad);
+            let mut bad = f.clone(); let mut extra = function(&[("CALLSYS", &[])]).bytecode; extra[1] = 10; bad.bytecode.extend(extra); reject(&bad);
+            let mut bad = f.clone(); let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[copy_at].offset_dw as i32; jump.extend(bad.bytecode); bad.bytecode = jump; reject(&bad);
+            let extra_source = format!("{body}    Other(this.{getter}());\n");
+            assert_eq!(super::restore_container_property_copies(&extra_source, &f, &refs), extra_source);
+        }
+    }
     #[test]
     fn weak_forward_vector_and_distance_die_before_the_named_sum() {
         let mut f = function(&[("PSF", &[38]), ("PSF", &[32]), ("PshVPtr", &[0]), ("ADDSi", &[0]), ("CALLSYS", &[]),

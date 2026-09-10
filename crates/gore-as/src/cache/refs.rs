@@ -5648,6 +5648,48 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_container_property_copies(kind: u8, fault: u8) -> Self {
+        let (container, element, owner, getter, handle) = match kind {
+            1 => ("TArray", "FMemorizedEvent", "FMemoryFilter", "GetArrayNewestToOldest", false),
+            2 => ("TArray", "FMemorizedEvent", "FMemoryFilter", "GetArrayOldestToNewest", false),
+            3 => ("TSet", "AGothicCharacterState", "FPerceivedInteractiveObject", "GetPersonallyOwnedBy", true),
+            4 => ("TArray", "UGothicAchievement", "UGothicAchievementSubsystem", "GetPendingAchievements", true),
+            _ => ("TArray", "FMemorizedEvent", "FMemoryFilter", "GetArray", false),
+        };
+        let mut r = Self::from_test_member_chain(&[(container, ""), (element, ""), ("FMemoryFilter", ""), ("UObject", ""), ("FInGameTime", "")]);
+        for (p, name) in [(1, container), (2, element), (3, "FMemoryFilter"), (4, "UObject"), (5, "FInGameTime")] {
+            r.type_identity_by_ptr.insert(p, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        let value = DataType { token: 5, type_info: 1, ..Default::default() };
+        r.type_subtypes.insert(1, vec![DataType { token: 5, type_info: 2, is_object_handle: handle, ..Default::default() }]);
+        for (p, name, ty_owner, ret, params) in [
+            (10, getter, owner, value.clone(), if kind == 3 { vec![DataType { token: 5, type_info: 4, is_object_handle: true, is_object_const: true, ..Default::default() }] } else { vec![] }),
+            (20, "$beh0", container, DataType { token: 0x52, ..Default::default() }, vec![]),
+            (30, "opAssign", container, DataType { is_reference: true, ..value.clone() }, vec![DataType { is_reference: true, is_object_const: true, is_read_only: true, ..value }]),
+            (40, "$beh2", container, DataType { token: 0x52, ..Default::default() }, vec![]),
+            (50, "$beh2", "FMemoryFilter", DataType { token: 0x52, ..Default::default() }, vec![]),
+            (60, "$beh2", "FInGameTime", DataType { token: 0x52, ..Default::default() }, vec![]),
+        ] {
+            r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, ty_owner.into()); r.func_ret.insert(p, ret); r.func_params.insert(p, params); r.func_is_method.insert(p);
+        }
+        r.const_method_ptrs.insert(10);
+        match fault {
+            1 => { r.func_ret.get_mut(&10).unwrap().is_reference = true; },
+            2 => { r.type_subtypes.get_mut(&1).unwrap()[0].is_object_handle = !handle; },
+            3 => { r.func_params.get_mut(&30).unwrap()[0].type_info = 2; },
+            4 => { r.func_ret.get_mut(&30).unwrap().is_reference = false; },
+            5 => { r.func_owner.insert(10, "UnknownOwner".into()); },
+            6 => { r.const_method_ptrs.remove(&10); },
+            7 => { r.func_params.get_mut(&20).unwrap().push(DataType { token: 5, type_info: 1, ..Default::default() }); },
+            8 => { r.func_owner.insert(50, "OtherFilter".into()); },
+            9 => { r.func_owner.insert(60, "OtherTime".into()); },
+            10 => { r.const_method_ptrs.insert(60); },
+            11 => { r.type_identity_by_ptr.get_mut(&5).unwrap().name = "OtherTime".into(); },
+            _ => {},
+        }
+        r
+    }
+    #[cfg(test)]
     pub(crate) fn from_test_weak_forward_sum(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("FVector", ""), ("FRotator", ""), ("UComponent", ""), ("UConfig", "Offset"), ("UNativeHost", "Movement")]);
         for (p, name, module) in [(1, "FVector", ""), (2, "FRotator", ""), (3, "UComponent", ""), (4, "UConfig", "Script"), (5, "UNativeHost", "")] {

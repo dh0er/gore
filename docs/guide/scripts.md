@@ -495,7 +495,7 @@ changed as well.
 ```
 
 The current measurement finds no semantic difference among aligned functions in
-**7,253 of the 7,317 modules**. The remaining 64 contain unresolved semantic differences;
+**7,255 of the 7,317 modules**. The remaining 62 contain unresolved semantic differences;
 they are not established to be harmless source-text variations. The oracle normalises
 reference keys, slot numbers and other supported encoding differences before comparing.
 Passing that comparison is useful evidence, but does not by itself prove behavior equivalence.
