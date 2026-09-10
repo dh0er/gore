@@ -1,6 +1,7 @@
 pub mod codec_backend;
 mod codec_calibration;
 pub mod factions;
+pub mod locks;
 pub mod npc;
 pub mod placement;
 pub mod properties;
@@ -563,6 +564,12 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             let kraken_backend = codec_backend::KrakenBackend::default();
             let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
             list_guild_crimes_command(&path, codec_backend)
+        }
+        "private.locks.list" => {
+            let path = required_path(&payload)?;
+            let kraken_backend = codec_backend::KrakenBackend::default();
+            let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
+            locks_list_command(&path, codec_backend)
         }
         "private.traders.list" => {
             let path = required_path(&payload)?;
@@ -6898,6 +6905,7 @@ const CACHEABLE_READ_COMMANDS: &[&str] = &[
     "private.npc.position",
     "private.npc.inventory",
     "private.factions.list",
+    "private.locks.list",
 ];
 
 /// Identity of one cached response: the exact request, plus a content
@@ -8332,6 +8340,35 @@ fn npc_inventory_command(
         map.insert("id".to_string(), json!(id));
     }
     Ok(summary)
+}
+
+/// `private.locks.list`: the names of every lock the player has already opened.
+///
+/// Payload: `{ path }`. Returns `{ unlocked: [...], writable: [...] }`.
+///
+/// Only the save side is answered here. Which locks EXIST in the game is not in
+/// a save at all — a fresh start carries the set with zero elements — so the
+/// full list comes from the bundled lock catalog and is joined against this
+/// answer by the app.
+fn locks_list_command(
+    path: &Path,
+    backend: Option<&dyn codec_backend::CodecBackend>,
+) -> Result<Value, CoreError> {
+    let backend = backend.ok_or_else(|| {
+        CoreError::Codec("reading locks requires a working codec backend".to_string())
+    })?;
+    let root = decode_private_root_cached(path, backend)?;
+    let summary = locks::list_locks(&root);
+    // One op covers both directions: the edit carries the desired state.
+    let writable: Vec<&str> = if summary.writable {
+        vec!["private.locks.setUnlocked"]
+    } else {
+        Vec::new()
+    };
+    Ok(json!({
+        "unlocked": summary.unlocked,
+        "writable": writable,
+    }))
 }
 
 /// `private.traders.list`: every merchant's shop record in array order.
@@ -11096,6 +11133,13 @@ fn apply_private_edits(
             "private.knowledge.setEntry" => {
                 parse_private_knowledge_set_entry_edit(edit).map(PrivateEdit::KnowledgeSetEntry)
             }
+            // Value-addressed like the generic set ops it is built on: the lock
+            // is found by name on a fresh parse per edit, never by an index a
+            // sibling edit could have shifted, so a whole panel of toggles
+            // batches into one write.
+            "private.locks.setUnlocked" => {
+                parse_private_lock_set_unlocked_edit(edit).map(PrivateEdit::LockSetUnlocked)
+            }
             // Value-addressed skill edit (resolves its target by skill base,
             // never a stale index, and re-parses per edit), so a batch of
             // them applies safely even when some are structural
@@ -11370,6 +11414,12 @@ fn structured_edit_target(edit: &PrivateEdit) -> Option<(&'static str, String)> 
             "knowledge entry of that character",
             key([entry.character.as_str(), entry.entry.as_str()]),
         )),
+        // Declarative about ONE lock. Two intents for the same lock in one write
+        // are a contradiction the caller has to resolve, not something to apply
+        // in submission order; different locks keep batching.
+        PrivateEdit::LockSetUnlocked(lock) => {
+            Some(("lock state of that chest or door", key([lock.lock.as_str(), ""])))
+        }
         PrivateEdit::GlossarySetSegment(glossary) => Some((
             "glossary segment",
             key([
@@ -11442,6 +11492,21 @@ fn structured_edit_rewrites(edit: &PrivateEdit, path: &[properties::PathSeg]) ->
         PrivateEdit::KnowledgeSetEntry(edit) => {
             path_enters_map_entry(path, "CharacterKnowledgeByUniqueName", &edit.character)
         }
+        // Splices the one set every lock lives in, so a raw container edit on
+        // that same set in the same write is refused rather than resolved
+        // against a cardinality the lock edit already moved.
+        PrivateEdit::LockSetUnlocked(edit) => {
+            path_has_name(path, locks::UNLOCKED_LOCKS_PROPERTY)
+                || (!edit.unlocked
+                    && [
+                        "m_DoorsOpen",
+                        "m_DoorsClosed",
+                        "m_SavedDoorsMessagesName",
+                        "m_SavedDoorsMessagesStruct",
+                    ]
+                    .iter()
+                    .any(|name| path_has_name(path, name)))
+        }
         // Claims a whole slot: the add fills a blank one and resets its payload, the
         // removal blanks one. Only in the inventory it targets — another actor's
         // slots are a different subtree.
@@ -11492,6 +11557,8 @@ fn may_invalidate_caller_ordinals(edit: &PrivateEdit) -> bool {
         PrivateEdit::KnowledgeAddCharacter(_) => true,
         // May insert a character and set-add/set-remove an entry.
         PrivateEdit::KnowledgeSetEntry(_) => true,
+        // Set-adds or set-removes a name in m_UnlockedLocks.
+        PrivateEdit::LockSetUnlocked(_) => true,
         // Removes memory events across owners and drops the corpse map entry.
         PrivateEdit::NpcRevive(_) => true,
         // Inserts a missing relationship entry.
@@ -11680,6 +11747,7 @@ enum PrivateEdit {
     GlossarySetSegment(PrivateGlossarySetSegmentEdit),
     KnowledgeAddCharacter(String),
     KnowledgeSetEntry(PrivateKnowledgeSetEntryEdit),
+    LockSetUnlocked(PrivateLockSetUnlockedEdit),
     FactionsForgive(PrivateFactionsForgiveEdit),
     SkillSet(skills::SkillSetEdit),
     TraderSetStock(traders::SetStockEdit),
@@ -11973,6 +12041,54 @@ fn parse_private_knowledge_set_entry_edit(
         character: required_text("character")?,
         entry: required_text("entry")?,
         present,
+    })
+}
+
+/// `private.locks.setUnlocked` edit: `value = { lock: String, unlocked: bool }`.
+///
+/// One intent per lock, stated as the desired state rather than as an add or a
+/// remove, so re-applying a batch after a partial write is a no-op instead of a
+/// duplicate-insert error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PrivateLockSetUnlockedEdit {
+    lock: String,
+    unlocked: bool,
+}
+
+fn parse_private_lock_set_unlocked_edit(
+    edit: &Edit,
+) -> Result<PrivateLockSetUnlockedEdit, CoreError> {
+    let value = edit.value.as_object().ok_or_else(|| {
+        CoreError::InvalidRequest("private.locks.setUnlocked value must be an object".to_string())
+    })?;
+    let lock = value
+        .get("lock")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .ok_or_else(|| {
+            CoreError::InvalidRequest(
+                "private.locks.setUnlocked requires a non-empty string value.lock".to_string(),
+            )
+        })?;
+    // The name is spliced into the payload as an FString; the game's own longest
+    // lock name is well under this, so anything past it is a malformed request.
+    if lock.len() > 256 {
+        return Err(CoreError::InvalidRequest(
+            "private.locks.setUnlocked value.lock is too long".to_string(),
+        ));
+    }
+    let unlocked = value
+        .get("unlocked")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| {
+            CoreError::InvalidRequest(
+                "private.locks.setUnlocked requires boolean value.unlocked".to_string(),
+            )
+        })?;
+    Ok(PrivateLockSetUnlockedEdit {
+        lock: lock.to_string(),
+        unlocked,
     })
 }
 
@@ -13336,6 +13452,9 @@ fn apply_private_edit_to_payload_uncached(
         PrivateEdit::KnowledgeSetEntry(edit) => {
             apply_private_knowledge_set_entry_to_payload(payload, edit)
         }
+        PrivateEdit::LockSetUnlocked(edit) => {
+            apply_private_lock_set_unlocked_to_payload(payload, edit)
+        }
         PrivateEdit::FactionsForgive(edit) => factions::apply_forgive(payload, &edit.guild),
     }
 }
@@ -13889,6 +14008,127 @@ fn apply_private_knowledge_set_entry_to_payload(
     })?;
     *payload = patched;
     Ok(())
+}
+
+/// Apply one lock intent atomically: add the name to `m_UnlockedLocks` to leave
+/// the lock open, remove it to lock the chest or door again.
+///
+/// Desired-state, like the knowledge writer: an intent that already holds is a
+/// no-op, so re-submitting a batch after a partial write neither fails on a
+/// duplicate insert nor on a missing removal.
+fn apply_private_lock_set_unlocked_to_payload(
+    payload: &mut Vec<u8>,
+    edit: &PrivateLockSetUnlockedEdit,
+) -> Result<(), CoreError> {
+    let mut patched = payload.clone();
+    let (stored_names, set_path) = locks::lock_snapshot(&patched, &edit.lock)?;
+    let Some(set_path) = set_path else {
+        return Err(CoreError::UnsupportedEdit(format!(
+            "this save has no {} set to edit",
+            locks::UNLOCKED_LOCKS_PROPERTY
+        )));
+    };
+    if !stored_names.is_empty() && edit.unlocked {
+        return Ok(());
+    }
+
+    let changes: Vec<_> = if edit.unlocked {
+        vec![properties::ContainerEdit::SetAdd(edit.lock.clone())]
+    } else {
+        stored_names
+            .into_iter()
+            .map(properties::ContainerEdit::SetRemove)
+            .collect()
+    };
+    for change in changes {
+        apply_private_typed_container_edit_to_payload(
+            &mut patched,
+            &PrivateTypedContainerEdit {
+                path: set_path.clone(),
+                edit: change,
+            },
+        )?;
+    }
+
+    let (final_names, _) = locks::lock_snapshot(&patched, &edit.lock)?;
+    let final_contains = !final_names.is_empty();
+    if final_contains != edit.unlocked {
+        return Err(CoreError::Validation(format!(
+            "lock postcondition failed for {:?}",
+            edit.lock
+        )));
+    }
+
+    // Restoring a door's lock while its leaf stays open leaves a locked door
+    // standing open, which is not a state the player could have produced. The
+    // leaf lives in a different bucket, so shut it here.
+    if !edit.unlocked {
+        close_door_leaf_in_payload(&mut patched, &edit.lock)?;
+    }
+
+    properties::parse_private_root(&patched).map_err(|err| {
+        CoreError::Parse(format!("lock edit produced an inconsistent payload: {err}"))
+    })?;
+    *payload = patched;
+    Ok(())
+}
+
+/// Shut one door's leaf, doing exactly what the game's own
+/// `Server_SetDoorOpenState(false, name)` does: strip EVERY copy of the name
+/// from `m_DoorsOpen` (the game appends without a uniqueness check, so a door
+/// used often has dozens) and append it once to `m_DoorsClosed`.
+///
+/// A name that is not in `m_DoorsOpen` is not a door, or is a door already
+/// shut — either way there is nothing to do, so every chest lands here as a
+/// no-op.
+fn close_door_leaf_in_payload(payload: &mut Vec<u8>, name: &str) -> Result<(), CoreError> {
+    let root = properties::parse_private_root(payload)?;
+    let Some(plan) = locks::plan_close_door_leaf(&root, name)? else {
+        return Ok(());
+    };
+    drop(root);
+
+    // Fixed-size writes first, so they resolve against the layout they were
+    // planned on; the length-changing splices come after.
+    for magnitude_path in &plan.open_message_magnitudes {
+        let root = properties::parse_private_root(payload)?;
+        let segments = properties::parse_path(magnitude_path)?;
+        let target = properties::resolve(&root.properties, &segments)?.clone();
+        drop(root);
+        properties::patch_scalar(payload, &target, properties::ScalarValue::Double(0.0))?;
+    }
+
+    apply_container_edit_by_path(
+        payload,
+        &plan.open_path,
+        properties::ContainerEdit::ArrayRemoveMany(plan.open_indices.clone()),
+    )?;
+
+    if plan.closed_needs_entry {
+        if let Some(closed_path) = &plan.closed_path {
+            apply_container_edit_by_path(
+                payload,
+                closed_path,
+                properties::ContainerEdit::ArrayInsertBytes(properties::encode_fstring_value(name)),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Resolve `path` on a fresh parse and apply one container edit to the payload.
+fn apply_container_edit_by_path(
+    payload: &mut Vec<u8>,
+    path: &[String],
+    edit: properties::ContainerEdit,
+) -> Result<(), CoreError> {
+    let root = properties::parse_private_root(payload)?;
+    let segments = properties::parse_path(path)?;
+    let resolved = properties::resolve_chain(&root.properties, &segments)?;
+    let target = resolved.target.clone();
+    let enclosing = resolved.enclosing_size_fields.clone();
+    drop(root);
+    properties::patch_container(payload, &target, &enclosing, &edit)
 }
 
 /// Enum label identifying the player's main item container inside
@@ -16715,6 +16955,193 @@ mod tests {
     /// exactly ONE entry, so two of them running at once evict each other's and the
     /// loser sees a re-parse where it asserted a hit.
     static REAL_SAVE_CACHE_TESTS: Mutex<()> = Mutex::new(());
+
+    /// A private root with the two door arrays, built through the real parser
+    /// so the descriptors are the ones a save carries.
+    fn door_state_payload(open: &[&str], closed: &[&str]) -> Vec<u8> {
+        fn fstring(value: &str) -> Vec<u8> {
+            let mut out = ((value.len() + 1) as i32).to_le_bytes().to_vec();
+            out.extend_from_slice(value.as_bytes());
+            out.push(0);
+            out
+        }
+        fn name_array(property: &str, names: &[&str]) -> Vec<u8> {
+            let mut body = (names.len() as u32).to_le_bytes().to_vec();
+            for name in names {
+                body.extend_from_slice(&fstring(name));
+            }
+            let mut out = fstring(property);
+            out.extend_from_slice(&fstring("ArrayProperty"));
+            out.extend_from_slice(&1u32.to_le_bytes());
+            out.extend_from_slice(&fstring("NameProperty"));
+            out.extend_from_slice(&0u32.to_le_bytes());
+            out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            out.push(0);
+            out.extend_from_slice(&body);
+            out
+        }
+        let mut props = name_array("m_DoorsOpen", open);
+        props.extend_from_slice(&name_array("m_DoorsClosed", closed));
+        props.extend_from_slice(&private_name_set_property("m_UnlockedLocks", &[]));
+        let mut out = fstring("/Script/G1R.GameStateDataBaseSaveData");
+        out.push(0);
+        out.extend_from_slice(&props);
+        out.extend_from_slice(&fstring("None"));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out
+    }
+
+    fn door_arrays(payload: &[u8]) -> (Vec<String>, Vec<String>) {
+        let root = properties::parse_private_root(payload).unwrap();
+        let read = |name: &str| -> Vec<String> {
+            let Some((_, property)) = properties::find_property_by_name(&root, name) else {
+                return Vec::new();
+            };
+            match &property.value {
+                properties::PropertyValue::Array { elements } => elements
+                    .iter()
+                    .filter_map(|e| match e {
+                        properties::PropertyValue::Name(v)
+                        | properties::PropertyValue::Str(v) => Some(v.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            }
+        };
+        (read("m_DoorsOpen"), read("m_DoorsClosed"))
+    }
+
+    #[test]
+    fn relocking_an_already_locked_door_still_closes_its_leaf() {
+        let mut payload = door_state_payload(&["CV_Stash_Door", "OC_Cellar_Door"], &[]);
+        apply_private_lock_set_unlocked_to_payload(
+            &mut payload,
+            &PrivateLockSetUnlockedEdit {
+                lock: "CV_Stash_Door".to_string(),
+                unlocked: false,
+            },
+        )
+        .unwrap();
+        let (open, closed) = door_arrays(&payload);
+        assert_eq!(open, ["OC_Cellar_Door"]);
+        assert_eq!(closed, ["CV_Stash_Door"]);
+        assert!(
+            locks::lock_snapshot(&payload, "CV_Stash_Door")
+                .unwrap()
+                .0
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn relocking_checks_parallel_door_messages_before_mutating() {
+        for (name_count, struct_count) in [(1, 2), (2, 1), (2, 2)] {
+            let mut props = private_name_set_property("m_UnlockedLocks", &["TargetDoor"]);
+            props.extend(inv_name_array_property("m_DoorsOpen", &["TargetDoor"]));
+            props.extend(inv_name_array_property("m_DoorsClosed", &[]));
+            props.extend(inv_name_array_property(
+                "m_SavedDoorsMessagesName",
+                &["TargetDoor", "OtherDoor"][..name_count],
+            ));
+            let mut message = inv_name_property("m_Event", "m_CurrentSection");
+            message.extend(private_double_property("m_Magnitude", 1.0));
+            props.extend(inv_struct_array_property(
+                "m_SavedDoorsMessagesStruct",
+                "SavedDoorMessage",
+                &vec![message; struct_count],
+            ));
+            let mut payload = fstring("/Script/G1R.GameStateDataBaseSaveData");
+            payload.push(0);
+            payload.extend(props);
+            payload.extend(fstring("None"));
+            payload.extend(0u32.to_le_bytes());
+            let before = payload.clone();
+            let result = apply_private_lock_set_unlocked_to_payload(
+                &mut payload,
+                &PrivateLockSetUnlockedEdit {
+                    lock: "TargetDoor".to_string(),
+                    unlocked: false,
+                },
+            );
+            if name_count != struct_count {
+                assert!(result.unwrap_err().to_string().contains("different lengths"));
+                assert_eq!(payload, before, "a refused relock must be atomic");
+            } else {
+                result.unwrap();
+                let root = properties::parse_private_root(&payload).unwrap();
+                for (index, expected) in [(0, 0.0), (1, 1.0)] {
+                    let path = properties::parse_path(&[
+                        "m_SavedDoorsMessagesStruct".to_string(),
+                        format!("[{index}]"),
+                        "m_Magnitude".to_string(),
+                    ])
+                    .unwrap();
+                    let actual = &properties::resolve(&root.properties, &path).unwrap().value;
+                    assert_eq!(actual, &properties::PropertyValue::Double(expected));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shared_door_relock_is_refused_without_changing_the_payload() {
+        let mut payload = door_state_payload(&["GenericDoorSavedState", "CV_Stash_Door"], &[]);
+        let before = payload.clone();
+        let result = apply_private_lock_set_unlocked_to_payload(
+            &mut payload,
+            &PrivateLockSetUnlockedEdit {
+                lock: "GenericDoorSavedState".to_string(),
+                unlocked: false,
+            },
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("whole class of doors")
+        );
+        assert_eq!(payload, before);
+    }
+
+    #[test]
+    fn closing_a_door_strips_every_copy_and_records_it_closed() {
+        // The game appends to m_DoorsOpen without a uniqueness check, so a door
+        // used often has many copies — leaving one behind leaves it open,
+        // because IsDoorOpen scans that array first and returns on a hit.
+        let mut payload = door_state_payload(
+            &[
+                "EZ_LootCage_Door",
+                "OC_Cellar_Door",
+                "EZ_LootCage_Door",
+                "EZ_LootCage_Door",
+            ],
+            &[],
+        );
+        close_door_leaf_in_payload(&mut payload, "EZ_LootCage_Door").unwrap();
+
+        let (open, closed) = door_arrays(&payload);
+        assert_eq!(open, ["OC_Cellar_Door"], "every copy must go, and only those");
+        assert_eq!(closed, ["EZ_LootCage_Door"]);
+    }
+
+    #[test]
+    fn closing_a_door_twice_does_not_stack_a_second_closed_entry() {
+        let mut payload = door_state_payload(&["CV_Stash_Door"], &[]);
+        close_door_leaf_in_payload(&mut payload, "CV_Stash_Door").unwrap();
+        close_door_leaf_in_payload(&mut payload, "CV_Stash_Door").unwrap();
+        let (open, closed) = door_arrays(&payload);
+        assert!(open.is_empty());
+        assert_eq!(closed, ["CV_Stash_Door"]);
+    }
+
+    #[test]
+    fn closing_a_chest_leaves_the_door_arrays_alone() {
+        let before = door_state_payload(&["OC_Cellar_Door"], &[]);
+        let mut payload = before.clone();
+        close_door_leaf_in_payload(&mut payload, "IO_OC_CHEST_DEXTER").unwrap();
+        assert_eq!(payload, before, "a chest has no leaf; nothing may move");
+    }
 
     #[test]
     fn item_icons_prepare_returns_manifest_and_actual_source_path() {

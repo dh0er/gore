@@ -10,6 +10,7 @@ import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/features/editor/domain/game_time.dart';
 import 'package:goresave/features/editor/domain/glossary_models.dart';
 import 'package:goresave/features/editor/domain/hero_attributes.dart';
+import 'package:goresave/features/editor/domain/locks_models.dart';
 import 'package:goresave/features/editor/domain/npc_actors_page.dart';
 import 'package:goresave/features/editor/domain/npc_attributes.dart';
 import 'package:goresave/features/editor/domain/npc_position.dart';
@@ -1197,9 +1198,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// survive.
   void refreshSelectedActorStatus({required String id, required bool isDead}) {
     final selected = state.selectedActor;
-    if (selected.isPlayer ||
-        selected.id != id ||
-        selected.isDead == isDead) {
+    if (selected.isPlayer || selected.id != id || selected.isDead == isDead) {
       return;
     }
     state = state.copyWith(
@@ -1781,6 +1780,25 @@ class EditorNotifier extends StateNotifier<EditorState> {
     if (traderArrayConflict(allEdits.map((k) => k.edit).toList()) != null) {
       state = state.copyWith(error: _l10n.editorTraderArrayConflict);
       return false;
+    }
+    // Lock changes splice the lock set and door arrays; relocking also pairs
+    // message names with structs by index. Splitting a conflicting raw edit
+    // into another write can shift its target or remap a door message, so
+    // reject every affected container before any sub-write reaches the save.
+    final lockEdits = allEdits
+        .where((keyed) => keyed.edit['path'] == 'private.locks.setUnlocked')
+        .toList();
+    if (lockEdits.isNotEmpty) {
+      for (final keyed in allEdits) {
+        final path = _rawTypedEditPath(keyed.edit);
+        if (path != null &&
+            lockEdits.any((lock) => structuredEditRewrites(lock.edit, path))) {
+          state = state.copyWith(
+            error: _l10n.editorConflictingPropertyEdits(path.join(' › ')),
+          );
+          return false;
+        }
+      }
     }
     final fixedBatch = allEdits
         .where(
@@ -4289,6 +4307,40 @@ class EditorNotifier extends StateNotifier<EditorState> {
     }
   }
 
+  /// Which locks this save records as already opened.
+  ///
+  /// The catalog of locks that EXIST is bundled with the app, not read from the
+  /// save — a fresh game carries an empty set — so the panel loads the two and
+  /// joins them.
+  Future<LocksResult> loadLocks() async {
+    final path = state.selectedPath;
+    if (path == null) {
+      return LocksResult(error: _l10n.editorNoSaveSelected);
+    }
+    try {
+      final response = await _execute(
+        'private.locks.list',
+        payload: {'path': path},
+      );
+      if (response['ok'] != true) {
+        return LocksResult(
+          error: _l10n.editorLockListFailed(_errorDetails(response)),
+        );
+      }
+      return LocksResult.fromJson(
+        (response['data'] as Map).cast<String, Object?>(),
+      );
+    } catch (error) {
+      return LocksResult(error: _l10n.editorLockListFailed('$error'));
+    }
+  }
+
+  /// Pending-edit key of the queued lock changes. One entry holds every toggle:
+  /// `private.locks.setUnlocked` is value-addressed (the core finds the lock by
+  /// name on a fresh parse per edit), so a whole panel of them batches into a
+  /// single `write_save` and needs no place in [splicingPaths].
+  static const pendingLocksKey = 'world.locks';
+
   /// Pending-edit key prefix for a queued faction forgive (`<prefix><guild>`).
   static const _factionForgivePrefix = 'factions.forgive:';
 
@@ -4484,6 +4536,10 @@ String? _structuredEditTarget(Map<String, Object?> edit) {
         foldEditTargetPart(fields['character']),
         foldEditTargetPart(fields['entry']),
       ]);
+    // Two intents for the same lock in one write contradict each other; the
+    // core refuses the pair, so catch it here rather than at save time.
+    case 'private.locks.setUnlocked':
+      return key([foldEditTargetPart(fields['lock'])]);
     case 'private.glossary.setSegment':
       return key([
         _foldAssetName(fields['documentClass']),
@@ -4833,6 +4889,15 @@ bool structuredEditRewrites(
             'CharacterKnowledgeByUniqueName',
             character,
           );
+    case 'private.locks.setUnlocked':
+      return _pathHasName(typedPath, 'm_UnlockedLocks') ||
+          (fields['unlocked'] == false &&
+              const [
+                'm_DoorsOpen',
+                'm_DoorsClosed',
+                'm_SavedDoorsMessagesName',
+                'm_SavedDoorsMessagesStruct',
+              ].any((name) => _pathHasName(typedPath, name)));
     // Claims a whole slot — but only in the inventory it targets; another
     // actor's slots are a different subtree.
     case 'private.inventory.addItem':
@@ -4946,6 +5011,8 @@ bool _mayInvalidateOrdinals(Map<String, Object?> edit) {
     'private.inventory.repairSlots',
     'private.knowledge.addCharacter',
     'private.knowledge.setEntry',
+    // Set-adds or set-removes a name in m_UnlockedLocks.
+    'private.locks.setUnlocked',
     'private.npc.revive',
     'private.npc.setRelationship',
     'private.glossary.setSegment',

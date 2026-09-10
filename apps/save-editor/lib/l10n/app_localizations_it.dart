@@ -27,7 +27,7 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get storyStateDescription =>
-      'Catalogo autorevole degli stati persistenti dichiarati dagli script distribuiti con il gioco. Le voci salvate mostrano il valore grezzo; i campi del catalogo assenti dal salvataggio sono indicati come non impostati. I marcatori temporali dichiarati nel codice sono formattati come tempo di gioco; gli altri interi possono essere booleani, contatori o stati a più livelli.';
+      'Qui il gioco registra i progressi di missioni, dialoghi ed eventi. «Salvato» mostra i valori del salvataggio; «Non impostato», le altre voci note. A seconda della voce, un numero può indicare sì/no, un conteggio o una fase di avanzamento. I riferimenti temporali mostrano un giorno e un’ora nel gioco.';
 
   @override
   String get storyStateReadOnly =>
@@ -56,6 +56,11 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get storyStateUnknown => 'Tipo sorgente sconosciuto';
+
+  @override
+  String storyStateShowDormant(int count) {
+    return 'Mostra inutilizzati ($count)';
+  }
 
   @override
   String get storyStateUnknownDetail =>
@@ -103,7 +108,7 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get storyStateEditingGuidance =>
-      'Ogni voce resta modificabile nell’intero intervallo int32 con segno. Gli indicatori e i suggerimenti di valore ricavati dagli script sono solo indicativi; l’inserimento del valore grezzo è sempre disponibile. Le modifiche allo stato della storia possono saltare transizioni di dialoghi, missioni o del mondo, quindi salvale con cautela; viene creata automaticamente una copia di sicurezza.';
+      'Seleziona una voce per modificarne il valore. Le modifiche vengono applicate quando salvi. Modifica solo valori di cui conosci gli effetti: altrimenti missioni o dialoghi potrebbero non funzionare più come previsto. Quando salvi, viene creata automaticamente una copia di sicurezza.';
 
   @override
   String get storyStatePending => 'In sospeso';
@@ -3256,4 +3261,66 @@ class AppLocalizationsIt extends AppLocalizations {
   ) {
     return 'Livello $level, $guild, capitolo $chapter. $completed missioni completate, $failed fallite. Tempo di gioco: $playTime.';
   }
+
+  @override
+  String get locksSidebar => 'Serrature';
+
+  @override
+  String editorLockListFailed(String details) {
+    return 'Impossibile caricare l\'elenco delle serrature: $details';
+  }
+
+  @override
+  String get locksSearchHint => 'Cerca serratura o chiave';
+
+  @override
+  String get locksAllRegions => 'Tutte le regioni';
+
+  @override
+  String locksShownOfTotal(int shown, int total) {
+    return '$shown di $total';
+  }
+
+  @override
+  String get locksFilterChests => 'Casse';
+
+  @override
+  String get locksFilterDoors => 'Porte';
+
+  @override
+  String get locksFilterUnlocked => 'Aperta';
+
+  @override
+  String get locksFilterLocked => 'Chiusa';
+
+  @override
+  String locksDifficultyLevel(int bars, int level) {
+    return 'Difficoltà $bars su 4 (livello interno $level su 7)';
+  }
+
+  @override
+  String get locksKeyOnly => 'Solo con chiave';
+
+  @override
+  String locksKeyLabel(String keys) {
+    return 'Chiave: $keys';
+  }
+
+  @override
+  String get locksPermalocked => 'Sigillata per sempre';
+
+  @override
+  String get locksReadOnly =>
+      'Questo salvataggio non ha un elenco di serrature modificabile.';
+
+  @override
+  String get locksUnknownEntry => 'Non presente in questa versione del gioco';
+
+  @override
+  String get locksDoorLeafHint =>
+      'Richiudere una porta chiude anche il battente.';
+
+  @override
+  String get locksResetPending =>
+      'Scarta le modifiche alle serrature in sospeso';
 }

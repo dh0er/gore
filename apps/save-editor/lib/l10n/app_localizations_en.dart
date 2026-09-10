@@ -26,7 +26,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get storyStateDescription =>
-      'Authoritative catalog of persisted story state declared by the shipped game scripts. Stored entries show their raw value; catalog fields missing from this save are marked as not set. Source-declared time markers are formatted as game time, while other integers may be booleans, counters, or multi-state values.';
+      'The game tracks progress in quests, dialogues and events here. “Stored” shows the values in your save; “Not set” shows the other known entries. Depending on the entry, a number can mean yes/no, a count or a stage of progress. Time markers show a day and time in the game.';
 
   @override
   String get storyStateReadOnly =>
@@ -55,6 +55,11 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get storyStateUnknown => 'Unknown source type';
+
+  @override
+  String storyStateShowDormant(int count) {
+    return 'Show unused ($count)';
+  }
 
   @override
   String get storyStateUnknownDetail =>
@@ -102,7 +107,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get storyStateEditingGuidance =>
-      'Every entry remains editable across the full signed int32 range. Script-backed switches and value suggestions are guidance; raw input is always available. Story changes can skip dialogue, quest, or world transitions, so save them deliberately — a backup is created automatically.';
+      'Select an entry to change its value. Changes take effect when you save. Only change values whose effects you understand: quests or dialogues may otherwise stop working as expected. A backup is created automatically when you save.';
 
   @override
   String get storyStatePending => 'Pending';
@@ -3229,4 +3234,64 @@ class AppLocalizationsEn extends AppLocalizations {
   ) {
     return 'Level $level, $guild, chapter $chapter. $completed quests completed, $failed failed. Play time: $playTime.';
   }
+
+  @override
+  String get locksSidebar => 'Locks';
+
+  @override
+  String editorLockListFailed(String details) {
+    return 'Lock list failed: $details';
+  }
+
+  @override
+  String get locksSearchHint => 'Search lock or key';
+
+  @override
+  String get locksAllRegions => 'All regions';
+
+  @override
+  String locksShownOfTotal(int shown, int total) {
+    return '$shown of $total';
+  }
+
+  @override
+  String get locksFilterChests => 'Chests';
+
+  @override
+  String get locksFilterDoors => 'Doors';
+
+  @override
+  String get locksFilterUnlocked => 'Unlocked';
+
+  @override
+  String get locksFilterLocked => 'Locked';
+
+  @override
+  String locksDifficultyLevel(int bars, int level) {
+    return 'Difficulty $bars of 4 (internal tier $level of 7)';
+  }
+
+  @override
+  String get locksKeyOnly => 'Key only';
+
+  @override
+  String locksKeyLabel(String keys) {
+    return 'Key: $keys';
+  }
+
+  @override
+  String get locksPermalocked => 'Sealed permanently';
+
+  @override
+  String get locksReadOnly => 'This save has no editable lock set.';
+
+  @override
+  String get locksUnknownEntry => 'Not in this game version';
+
+  @override
+  String get locksDoorLeafHint =>
+      'Locking a door again also shuts the door itself.';
+
+  @override
+  String get locksResetPending => 'Discard queued lock changes';
 }

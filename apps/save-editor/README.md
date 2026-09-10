@@ -53,8 +53,8 @@ game install. For modding, use the [`gore` CLI](../../docs/guide/README.md) or
 ## Compatibility
 
 Tested with Steam game version CL168781. Other game versions are not guaranteed:
-the bundled item, item-stat and named-location catalogs come from specific game
-cooks and can become stale when a patch moves, renames or changes game data.
+the bundled item, item-stat, lock and named-location catalogs come from specific
+game cooks and can become stale when a patch moves, renames or changes game data.
 Keep backups and use a Save Editor build qualified for the updated game
 version.
 
@@ -62,7 +62,10 @@ The bundled item stats (`assets/item_stats.json`) carry what the shipped script
 cache says about every item — its type tag, damage, requirements, value and
 description key — plus the game's own inventory filter tables.
 `assets/glossary_images.json` maps each glossary entry to its portrait file.
-Regenerate both after a game update with the scripts in
+`assets/lock_catalog.json` lists every lockable chest and door in the game with
+its difficulty, keys and region — a save records only the locks the player has
+already opened, so the Welt tab's lock list needs the other half from here.
+Regenerate all three after a game update with the scripts in
 `apps/save-editor/tools/`; each file header documents the commands.
 
 The glossary portraits themselves are not bundled: they are loose PNGs in the

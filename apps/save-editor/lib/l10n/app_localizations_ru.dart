@@ -27,7 +27,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get storyStateDescription =>
-      'Авторитетный каталог постоянных состояний сюжета, объявленных в поставляемых с игрой скриптах. Сохранённые записи показывают исходное значение; отсутствующие в сохранении поля каталога отмечены как незаданные. Метки времени, объявленные в коде, показываются как игровое время; остальные целые числа могут быть логическими значениями, счётчиками или многоуровневыми состояниями.';
+      'Здесь игра хранит прогресс заданий, диалогов и событий. «Сохранено» показывает значения из вашего сохранения, а «Не задано» — остальные известные записи. В зависимости от записи число может означать да/нет, счётчик или этап прохождения. Метки времени показывают день и время в игре.';
 
   @override
   String get storyStateReadOnly =>
@@ -56,6 +56,11 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get storyStateUnknown => 'Неизвестный исходный тип';
+
+  @override
+  String storyStateShowDormant(int count) {
+    return 'Показать неиспользуемые ($count)';
+  }
 
   @override
   String get storyStateUnknownDetail =>
@@ -105,7 +110,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get storyStateEditingGuidance =>
-      'Каждую запись можно редактировать во всём диапазоне знакового int32. Флаги и предлагаемые значения, основанные на скриптах, служат лишь подсказками; исходное значение всегда можно ввести вручную. Изменение состояния сюжета может пропустить переходы диалогов, заданий или мира, поэтому сохраняйте такие правки осознанно. Резервная копия создаётся автоматически.';
+      'Выберите запись, чтобы изменить её значение. Изменения применяются при сохранении. Меняйте только значения, действие которых вам понятно: иначе задания или диалоги могут перестать работать как ожидается. При сохранении автоматически создаётся резервная копия.';
 
   @override
   String get storyStatePending => 'Ожидает';
@@ -3262,4 +3267,65 @@ class AppLocalizationsRu extends AppLocalizations {
   ) {
     return 'Уровень $level, $guild, глава $chapter. Выполнено заданий: $completed, провалено: $failed. Время игры: $playTime.';
   }
+
+  @override
+  String get locksSidebar => 'Замки';
+
+  @override
+  String editorLockListFailed(String details) {
+    return 'Не удалось загрузить список замков: $details';
+  }
+
+  @override
+  String get locksSearchHint => 'Поиск замка или ключа';
+
+  @override
+  String get locksAllRegions => 'Все регионы';
+
+  @override
+  String locksShownOfTotal(int shown, int total) {
+    return '$shown из $total';
+  }
+
+  @override
+  String get locksFilterChests => 'Сундуки';
+
+  @override
+  String get locksFilterDoors => 'Двери';
+
+  @override
+  String get locksFilterUnlocked => 'Открыт';
+
+  @override
+  String get locksFilterLocked => 'Заперт';
+
+  @override
+  String locksDifficultyLevel(int bars, int level) {
+    return 'Сложность $bars из 4 (внутренний уровень $level из 7)';
+  }
+
+  @override
+  String get locksKeyOnly => 'Только ключом';
+
+  @override
+  String locksKeyLabel(String keys) {
+    return 'Ключ: $keys';
+  }
+
+  @override
+  String get locksPermalocked => 'Запечатано навсегда';
+
+  @override
+  String get locksReadOnly =>
+      'В этом сохранении нет редактируемого списка замков.';
+
+  @override
+  String get locksUnknownEntry => 'Отсутствует в этой версии игры';
+
+  @override
+  String get locksDoorLeafHint =>
+      'Повторное запирание двери также закрывает саму дверь.';
+
+  @override
+  String get locksResetPending => 'Отменить несохранённые изменения замков';
 }

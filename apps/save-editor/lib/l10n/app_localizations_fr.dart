@@ -28,7 +28,7 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get storyStateDescription =>
-      'Catalogue de référence des états persistants déclarés par les scripts livrés avec le jeu. Les entrées enregistrées affichent leur valeur brute ; les champs du catalogue absents de cette sauvegarde sont marqués comme non définis. Les repères temporels déclarés dans le code sont affichés en temps de jeu ; les autres entiers peuvent être des booléens, compteurs ou états à plusieurs niveaux.';
+      'Le jeu mémorise ici la progression des quêtes, des dialogues et des événements. « Enregistré » affiche les valeurs de ta sauvegarde ; « Non défini », les autres entrées connues. Selon l’entrée, un nombre peut indiquer oui/non, un compteur ou une étape de progression. Les repères temporels indiquent un jour et une heure dans le jeu.';
 
   @override
   String get storyStateReadOnly =>
@@ -57,6 +57,11 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get storyStateUnknown => 'Type source inconnu';
+
+  @override
+  String storyStateShowDormant(int count) {
+    return 'Afficher les inutilisés ($count)';
+  }
 
   @override
   String get storyStateUnknownDetail =>
@@ -104,7 +109,7 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get storyStateEditingGuidance =>
-      'Chaque entrée reste modifiable sur toute la plage int32 signée. Les indicateurs et suggestions de valeurs issus des scripts sont fournis à titre indicatif ; la saisie brute reste toujours disponible. Les changements d’état de l’histoire peuvent court-circuiter des transitions de dialogue, de quête ou du monde : enregistrez-les avec précaution. Une sauvegarde de sécurité est créée automatiquement.';
+      'Sélectionne une entrée pour modifier sa valeur. Les changements sont appliqués à l’enregistrement. Ne modifie que les valeurs dont tu connais les effets : les quêtes ou les dialogues pourraient sinon ne plus fonctionner comme prévu. Une copie de sauvegarde est créée automatiquement à l’enregistrement.';
 
   @override
   String get storyStatePending => 'En attente';
@@ -3269,4 +3274,66 @@ class AppLocalizationsFr extends AppLocalizations {
   ) {
     return 'Niveau $level, $guild, chapitre $chapter. $completed quêtes terminées, $failed échouées. Temps de jeu : $playTime.';
   }
+
+  @override
+  String get locksSidebar => 'Serrures';
+
+  @override
+  String editorLockListFailed(String details) {
+    return 'Échec du chargement de la liste des serrures : $details';
+  }
+
+  @override
+  String get locksSearchHint => 'Rechercher une serrure ou une clé';
+
+  @override
+  String get locksAllRegions => 'Toutes les régions';
+
+  @override
+  String locksShownOfTotal(int shown, int total) {
+    return '$shown sur $total';
+  }
+
+  @override
+  String get locksFilterChests => 'Coffres';
+
+  @override
+  String get locksFilterDoors => 'Portes';
+
+  @override
+  String get locksFilterUnlocked => 'Déverrouillée';
+
+  @override
+  String get locksFilterLocked => 'Verrouillée';
+
+  @override
+  String locksDifficultyLevel(int bars, int level) {
+    return 'Difficulté $bars sur 4 (palier interne $level sur 7)';
+  }
+
+  @override
+  String get locksKeyOnly => 'Clé uniquement';
+
+  @override
+  String locksKeyLabel(String keys) {
+    return 'Clé : $keys';
+  }
+
+  @override
+  String get locksPermalocked => 'Scellée définitivement';
+
+  @override
+  String get locksReadOnly =>
+      'Cette sauvegarde ne contient pas de liste de serrures modifiable.';
+
+  @override
+  String get locksUnknownEntry => 'Absente de cette version du jeu';
+
+  @override
+  String get locksDoorLeafHint =>
+      'Reverrouiller une porte referme aussi le battant.';
+
+  @override
+  String get locksResetPending =>
+      'Abandonner les modifications de serrures en attente';
 }

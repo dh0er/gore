@@ -1381,6 +1381,81 @@ void main() {
   );
 
   test(
+    'saveAllPending refuses raw edits a lock change can invalidate',
+    () async {
+      for (final unlocked in [true, false]) {
+        for (final property in [
+          'm_UnlockedLocks',
+          'm_DoorsOpen',
+          'm_DoorsClosed',
+          'm_SavedDoorsMessagesName',
+          'm_SavedDoorsMessagesStruct',
+        ]) {
+          final operations = property == 'm_UnlockedLocks'
+              ? ['setRemove', 'setAdd', 'setValue']
+              : ['arrayRemove', 'arrayDuplicate', 'setValue'];
+          for (final operation in operations) {
+            for (final rawFirst in [true, false]) {
+              final core = _RecordingCoreService();
+              final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+              await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+              notifier.setPendingEdit(
+                rawFirst ? 'a:raw' : 'z:raw',
+                PendingSaveEdit(
+                  edits: [
+                    {
+                      'path': 'private.typed.$operation',
+                      'value': {
+                        'path': [
+                          property,
+                          if (operation == 'setValue') '[0]',
+                          if (operation == 'setValue' &&
+                              property == 'm_SavedDoorsMessagesStruct')
+                            'm_Magnitude',
+                        ],
+                        'index': 0,
+                        'value': property == 'm_SavedDoorsMessagesStruct'
+                            ? 1.0
+                            : 'OtherDoor',
+                      },
+                    },
+                  ],
+                ),
+              );
+              notifier.setPendingEdit(
+                'lock',
+                PendingSaveEdit(
+                  edits: [
+                    {
+                      'path': 'private.locks.setUnlocked',
+                      'value': {'lock': 'CV_Stash_Door', 'unlocked': unlocked},
+                    },
+                  ],
+                ),
+              );
+
+              final canSave = unlocked && property != 'm_UnlockedLocks';
+              expect(await notifier.saveAllPending(), canSave);
+              final writes = core.requests.where(
+                (r) => r.command == 'write_save',
+              );
+              if (canSave) {
+                expect(writes, isNotEmpty);
+                expect(notifier.state.error, isNull);
+              } else {
+                expect(writes, isEmpty);
+                expect(notifier.state.error, contains(property));
+                expect(notifier.state.pendingEdits, hasLength(2));
+              }
+              notifier.dispose();
+            }
+          }
+        }
+      }
+    },
+  );
+
+  test(
     'saveAllPending refuses a typed edit to a glossary quest CurrentState path',
     () async {
       final core = _RecordingCoreService();
@@ -3042,6 +3117,25 @@ void main() {
         ),
         isFalse,
       );
+    });
+
+    test('lock edits separate raw lock and door writes', () {
+      for (final unlocked in [true, false]) {
+        final lock = {
+          'path': 'private.locks.setUnlocked',
+          'value': {'lock': 'CV_Stash_Door', 'unlocked': unlocked},
+        };
+        expect(structuredEditRewrites(lock, const ['m_UnlockedLocks']), isTrue);
+        for (final property in [
+          'm_DoorsOpen',
+          'm_DoorsClosed',
+          'm_SavedDoorsMessagesName',
+          'm_SavedDoorsMessagesStruct',
+        ]) {
+          expect(structuredEditRewrites(lock, [property]), !unlocked);
+        }
+        expect(structuredEditRewrites(lock, const ['m_Traders']), isFalse);
+      }
     });
 
     test('addressing a whole map collides with every entry in it', () {

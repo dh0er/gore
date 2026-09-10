@@ -5,6 +5,7 @@ import 'package:goresave/l10n/app_localizations.dart';
 import '../domain/editor_models.dart';
 import '../domain/editor_notifier.dart';
 import 'glossary_panel.dart';
+import 'locks_panel.dart';
 import 'progression_panel.dart' show QuestsDetail, FactionsDetail;
 import 'story_state_panel.dart';
 
@@ -12,7 +13,7 @@ import 'story_state_panel.dart';
 /// deliberately absent: they moved to detail-only panels (KnowledgeDetail /
 /// EventsDetail) keyed by a shared character selection and are mounted from
 /// the Characters tab, not from this sidebar.
-enum _WorldSection { quests, glossary, factions, storyState }
+enum _WorldSection { quests, glossary, factions, locks, storyState }
 
 /// World tab: structured quests, glossary, source-aware story state, and
 /// faction crime records.
@@ -47,6 +48,9 @@ class _WorldTabState extends State<WorldTab> {
   // Story state parses a large private map and joins optional glossary
   // context. Like the glossary, do that work only after its first selection.
   bool _storyStateMounted = false;
+  // The locks section reads the save's unlocked set and loads two bundled
+  // catalogs to name and group the rest. Defer that until it is opened.
+  bool _locksMounted = false;
 
   @override
   Widget build(BuildContext context) {
@@ -118,6 +122,18 @@ class _WorldTabState extends State<WorldTab> {
                           setState(() => _selected = _WorldSection.factions),
                     ),
                     _SidebarTile(
+                      icon: Icons.lock_open_outlined,
+                      // The game's own padlock, the same glyph it draws on a
+                      // locked chest or door.
+                      gameIcon: 'T_Icon_Lock',
+                      label: l10n.locksSidebar,
+                      selected: _selected == _WorldSection.locks,
+                      onTap: () => setState(() {
+                        _locksMounted = true;
+                        _selected = _WorldSection.locks;
+                      }),
+                    ),
+                    _SidebarTile(
                       icon: Icons.account_tree_outlined,
                       gameIcon: 'T_Icon_Commpleted',
                       label: l10n.storyStateSidebar,
@@ -175,6 +191,17 @@ class _WorldTabState extends State<WorldTab> {
                     theme: theme,
                   ),
                 ),
+                if (_locksMounted)
+                  Offstage(
+                    offstage: _selected != _WorldSection.locks,
+                    child: LocksDetail(
+                      key: const ValueKey('locks'),
+                      notifier: widget.notifier,
+                      editable: widget.editable,
+                      reloadKey: reloadKey,
+                      theme: theme,
+                    ),
+                  ),
                 if (_storyStateMounted)
                   Offstage(
                     offstage: _selected != _WorldSection.storyState,

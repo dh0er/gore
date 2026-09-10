@@ -27,7 +27,7 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get storyStateDescription =>
-      'Catálogo autoritativo de estados persistentes declarados por los scripts distribuidos con el juego. Las entradas guardadas muestran su valor bruto; los campos del catálogo ausentes de esta partida se marcan como no establecidos. Las marcas de tiempo declaradas en el código se muestran como tiempo de juego; los demás enteros pueden ser booleanos, contadores o estados de varios niveles.';
+      'Aquí el juego registra el progreso de misiones, diálogos y eventos. «Guardado» muestra los valores de tu partida; «No establecido», las demás entradas conocidas. Según la entrada, un número puede indicar sí/no, una cantidad o una etapa de progreso. Los marcadores de tiempo muestran un día y una hora del juego.';
 
   @override
   String get storyStateReadOnly =>
@@ -56,6 +56,11 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get storyStateUnknown => 'Tipo de origen desconocido';
+
+  @override
+  String storyStateShowDormant(int count) {
+    return 'Mostrar sin usar ($count)';
+  }
 
   @override
   String get storyStateUnknownDetail =>
@@ -103,7 +108,7 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get storyStateEditingGuidance =>
-      'Todas las entradas se pueden editar en todo el intervalo de int32 con signo. Los indicadores y las sugerencias de valores respaldados por los scripts son solo orientativos; la entrada sin procesar siempre está disponible. Los cambios en el estado de la historia pueden omitir transiciones de diálogos, misiones o del mundo, así que guárdalos con cuidado; se crea una copia de seguridad automáticamente.';
+      'Selecciona una entrada para cambiar su valor. Los cambios se aplican al guardar. Cambia solo valores cuyo efecto conozcas: de lo contrario, las misiones o los diálogos podrían dejar de funcionar como esperas. Al guardar se crea una copia de seguridad automáticamente.';
 
   @override
   String get storyStatePending => 'Pendiente';
@@ -3254,4 +3259,66 @@ class AppLocalizationsEs extends AppLocalizations {
   ) {
     return 'Nivel $level, $guild, capítulo $chapter. $completed misiones completadas, $failed fallidas. Tiempo de juego: $playTime.';
   }
+
+  @override
+  String get locksSidebar => 'Cerraduras';
+
+  @override
+  String editorLockListFailed(String details) {
+    return 'No se pudo cargar la lista de cerraduras: $details';
+  }
+
+  @override
+  String get locksSearchHint => 'Buscar cerradura o llave';
+
+  @override
+  String get locksAllRegions => 'Todas las regiones';
+
+  @override
+  String locksShownOfTotal(int shown, int total) {
+    return '$shown de $total';
+  }
+
+  @override
+  String get locksFilterChests => 'Cofres';
+
+  @override
+  String get locksFilterDoors => 'Puertas';
+
+  @override
+  String get locksFilterUnlocked => 'Abierta';
+
+  @override
+  String get locksFilterLocked => 'Cerrada';
+
+  @override
+  String locksDifficultyLevel(int bars, int level) {
+    return 'Dificultad $bars de 4 (nivel interno $level de 7)';
+  }
+
+  @override
+  String get locksKeyOnly => 'Solo con llave';
+
+  @override
+  String locksKeyLabel(String keys) {
+    return 'Llave: $keys';
+  }
+
+  @override
+  String get locksPermalocked => 'Sellada permanentemente';
+
+  @override
+  String get locksReadOnly =>
+      'Esta partida no tiene una lista de cerraduras editable.';
+
+  @override
+  String get locksUnknownEntry => 'No existe en esta versión del juego';
+
+  @override
+  String get locksDoorLeafHint =>
+      'Volver a cerrar una puerta también cierra la puerta en sí.';
+
+  @override
+  String get locksResetPending =>
+      'Descartar los cambios de cerraduras pendientes';
 }
