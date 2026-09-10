@@ -3289,6 +3289,14 @@ fn emit_function_ctor(
         pass_trace("restore_conditional_field_references", &rendered);
         let rendered = fold_widened_vector_sign(&rendered, vector_sign);
         pass_trace("fold_widened_vector_sign", &rendered);
+        let rendered = fold_directional_product_assignments(&rendered, f, refs);
+        pass_trace("fold_directional_product_assignments", &rendered);
+        let rendered = retain_copied_native_getter(&rendered, f, refs);
+        pass_trace("retain_copied_native_getter", &rendered);
+        let rendered = retain_look_at_values(&rendered, f, refs);
+        pass_trace("retain_look_at_values", &rendered);
+        let rendered = fold_self_vector_sum(&rendered, f, refs);
+        pass_trace("fold_self_vector_sum", &rendered);
         let rendered = restore_enum_trace_result(&rendered, f, refs);
         pass_trace("restore_enum_trace_result", &rendered);
         let rendered = fold_weak_forward_sum(&rendered, f, refs);
@@ -9309,6 +9317,267 @@ fn fold_ordered_coordinate_difference(body: &str, f: &Func, refs: &RefResolver) 
         if let Some(line) = folded { out.push(line); at += 2; } else { out.push(lines[at].to_owned()); at += 1; }
     }
     let mut result = out.join("\n"); if body.ends_with('\n') { result.push('\n'); } result
+}
+
+/// The scalar product is consumed by the immediately assigned vector sum.
+fn fold_directional_product_assignments(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if !body.contains("FVector local_") { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let w = |i: &Instr| i.words.first().map(|s| *s as i16 as i32);
+    let sites: Vec<_> = code.windows(14).filter_map(|c| {
+        let negative = c[0].op.name == "PSF" && c[1].op.name == "PshGPtr";
+        if (!negative && (c[0].op.name != "PshGPtr" || c[1].op.name != "PSF"))
+            || c[2..].iter().map(|i| i.op.name).ne(["CALLSYS", "PshC8", "PSF", "PSF", "CALLSYS", "PSF", "PSF", "PSF", "CALLSYS", "PSF", "PSF", "CALLSYS"]) { return None; }
+        let (axis, product, base, target) = (w(&c[usize::from(!negative)])?, w(&c[4])?, w(&c[9])?, w(&c[12])?);
+        let slots = [axis, product, base, target];
+        if slots.iter().any(|s| *s <= 0) || HashSet::from(slots).len() != slots.len()
+            || [(5, axis), (7, product), (8, axis), (11, axis)].iter().any(|(n, s)| w(&c[*n]) != Some(*s)) { return None; }
+        let locals: Vec<_> = f.obj_locals.iter().filter(|(s, _)| *s == axis).collect();
+        let [(_, vector)] = locals.as_slice() else { return None; };
+        let vector = *vector;
+        if !matches!(refs.type_identity_by_ptr(vector), Some(t) if t.name == "FVector" && t.module.is_empty() && t.namespace.is_empty())
+            || slots.iter().any(|s| f.obj_locals.iter().filter(|(n, _)| n == s).map(|(_, p)| *p).ne([vector])) { return None; }
+        let value = |t: &super::types::DataType| t.token == 5 && t.type_info == vector && !t.is_reference && !t.is_object_handle;
+        let reference = |t: &super::types::DataType| t.token == 5 && t.type_info == vector && t.is_reference && t.is_object_const && t.is_read_only && !t.is_object_handle;
+        let ptr = |n: usize| c[n].qwords.first().copied().map(|p| p as i64);
+        let (first, mul, add, assign) = (ptr(2)?, ptr(6)?, ptr(10)?, ptr(13)?);
+        for (p, name, constant) in [(first, if negative { "opNeg" } else { "$beh0" }, negative), (mul, "opMul", true), (add, "opAdd", true), (assign, "opAssign", false)] {
+            if refs.func_by_ptr(p) != Some(name) || refs.func_owner_by_ptr(p) != Some("FVector") || !refs.is_method_by_ptr(p) || refs.is_const_method_by_ptr(p) != constant { return None; }
+        }
+        if !value(refs.func_ret_by_ptr(mul)?) || !value(refs.func_ret_by_ptr(add)?)
+            || !matches!(refs.func_params_by_ptr(mul)?, [t] if t.token == 0x51 && t.type_info == 0 && !t.is_reference && !t.is_object_handle)
+            || !matches!(refs.func_params_by_ptr(add)?, [t] if reference(t)) || !matches!(refs.func_params_by_ptr(assign)?, [t] if reference(t))
+            || !matches!(refs.func_ret_by_ptr(assign)?, t if t.token == 5 && t.type_info == vector && t.is_reference && !t.is_object_const && !t.is_read_only && !t.is_object_handle) { return None; }
+        if negative {
+            if !value(refs.func_ret_by_ptr(first)?) || !refs.func_params_by_ptr(first)?.is_empty() { return None; }
+        } else if !matches!(refs.func_ret_by_ptr(first)?, t if t.token == 0x52 && t.type_info == 0 && !t.is_reference && !t.is_object_handle)
+            || !matches!(refs.func_params_by_ptr(first)?, [t] if reference(t)) { return None; }
+        let global = ptr(usize::from(negative))?;
+        if refs.global_ns(global) != Some("FVector") || refs.global_is_string(global) { return None; }
+        let name = refs.global_by_ptr(global)?;
+        let bits = *c[3].qwords.first()?;
+        if !f64::from_bits(bits).is_finite() || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+            let t = i.offset_dw as i64 + 2 + *d as i32 as i64;
+            t > c[0].offset_dw as i64 && t <= c[13].offset_dw as i64
+        }))) { return None; }
+        Some((product, base, target, if negative { format!("FVector::{name}.opNeg()") } else { format!("FVector(FVector::{name})") }, bits))
+    }).collect();
+    let lines: Vec<_> = body.lines().collect();
+    let mut edits = HashMap::new();
+    for (at, pair) in lines.windows(2).enumerate() {
+        let Some((indent, name, rhs)) = declaration_with_initializer(pair[0]) else { continue; };
+        if !pair[0].trim().starts_with("FVector ") || !is_decompiler_local(&name) || count_ident(body, &name) != 2 || indent_of(pair[1]) != indent { continue; }
+        let Some((slot, _)) = slot_and_life_any(&name) else { continue; };
+        let candidates: Vec<_> = sites.iter().filter_map(|(product, base, target, axis, bits)| {
+            if *product != slot || pair[1].trim() != format!("local_{target} = (local_{base} + {name});") { return None; }
+            let literal = rhs.strip_prefix(&format!("({axis} * "))?.strip_suffix(')')?;
+            if literal.parse::<f64>().ok()?.to_bits() != *bits { return None; }
+            Some(format!("{indent}local_{target} = (local_{base} + {rhs});"))
+        }).collect();
+        if let [replacement] = candidates.as_slice() { edits.insert(at, replacement.clone()); }
+    }
+    if edits.is_empty() { return body.to_owned(); }
+    let mut out = Vec::new();
+    for (at, line) in lines.iter().enumerate() {
+        if let Some(replacement) = edits.get(&at) { out.push(replacement.clone()); }
+        else if at == 0 || !edits.contains_key(&(at - 1)) { out.push((*line).to_owned()); }
+    }
+    let mut result = out.join("\n");
+    if body.ends_with('\n') { result.push('\n'); }
+    result
+}
+
+/// A copied native getter result remains named while the next getter uses another slot.
+fn retain_copied_native_getter(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if f.ret.token != 0x52 || !body.contains("FVector local_") { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let w = |i: &Instr| i.words.first().map(|s| *s as i16 as i32);
+    let sites: Vec<_> = code.windows(10).enumerate().filter_map(|(at, c)| {
+        if c.iter().map(|i| i.op.name).ne(["PSF", "PSF", "CALLSYS", "PSF", "PSF", "CALLSYS", "PSF", "PshVPtr", "ADDSi", "CALLSYS"])
+            || c[2].qwords != c[9].qwords { return None; }
+        let (kept, receiver, copied, next) = (w(&c[0])?, w(&c[1])?, w(&c[4])?, w(&c[6])?);
+        let slots = [kept, receiver, copied, next];
+        if slots.iter().any(|s| *s <= 0) || HashSet::from(slots).len() != slots.len() || w(&c[3]) != Some(kept) || w(&c[7]) != Some(0) { return None; }
+        let getter = *c[2].qwords.first()? as i64;
+        let copy = *c[5].qwords.first()? as i64;
+        let ret = refs.func_ret_by_ptr(getter)?;
+        let vector = ret.type_info;
+        if ret.token != 5 || ret.is_reference || ret.is_object_handle || !matches!(refs.type_identity_by_ptr(vector), Some(t) if t.name == "FVector" && t.module.is_empty() && t.namespace.is_empty())
+            || [kept, copied, next].iter().any(|s| f.obj_locals.iter().filter(|(n, _)| n == s).map(|(_, p)| *p).ne([vector])) { return None; }
+        let locals: Vec<_> = f.obj_locals.iter().filter(|(n, _)| *n == receiver).collect();
+        let [(_, receiver_type)] = locals.as_slice() else { return None; };
+        let identity = refs.type_identity_by_ptr(*receiver_type)?;
+        if identity.name != "FTransform" || !identity.module.is_empty() || !identity.namespace.is_empty()
+            || refs.func_owner_by_ptr(getter) != Some("FTransform") || !refs.is_method_by_ptr(getter) || !refs.is_const_method_by_ptr(getter) || !refs.func_params_by_ptr(getter)?.is_empty()
+            || refs.func_by_ptr(copy) != Some("$beh0") || refs.func_owner_by_ptr(copy) != Some("FVector") || !refs.is_method_by_ptr(copy) || refs.is_const_method_by_ptr(copy)
+            || !matches!(refs.func_ret_by_ptr(copy)?, t if t.token == 0x52 && t.type_info == 0 && !t.is_reference && !t.is_object_handle)
+            || !matches!(refs.func_params_by_ptr(copy)?, [t] if t.token == 5 && t.type_info == vector && t.is_reference && t.is_object_const && t.is_read_only && !t.is_object_handle) { return None; }
+        let id = *c[8].dwords.first()? as i32;
+        let owner = refs.type_identity_by_id(id)?;
+        let (field, old) = refs.member_identity(id, w(&c[8])?)?;
+        if owner.module.is_empty() || !owner.namespace.is_empty() || refs.type_identity_by_id(old)? != owner || refs.own_field_type_by_class(&owner.name, field) != Some("FTransform")
+            || code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&kept)).map(|(n, _)| n).ne([at, at + 3])
+            || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let t = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                t > c[0].offset_dw as i64 && t <= c[9].offset_dw as i64
+            }))) { return None; }
+        Some((kept, receiver, copied, next, field.to_owned(), refs.func_by_ptr(getter)?.to_owned()))
+    }).collect();
+    let [(kept, receiver, copied, next, field, getter)] = sites.as_slice() else { return body.to_owned(); };
+    let name = format!("local_{kept}");
+    if count_ident(body, &name) != 0 { return body.to_owned(); }
+    let lines: Vec<_> = body.lines().collect();
+    let candidates: Vec<_> = lines.windows(2).enumerate().filter(|(_, c)| c[0].trim() == format!("FVector local_{copied}(local_{receiver}.{getter}());")
+        && c[1].trim() == format!("FVector local_{next} = this.{field}.{getter}();") && indent_of(c[0]) == indent_of(c[1])).map(|(n, _)| n).collect();
+    let [at] = candidates.as_slice() else { return body.to_owned(); };
+    let mut out = Vec::new();
+    for (n, line) in lines.iter().enumerate() {
+        if n == *at {
+            let indent = indent_of(line);
+            out.push(format!("{indent}FVector {name} = local_{receiver}.{getter}();"));
+            out.push(format!("{indent}FVector local_{copied}({name});"));
+        } else { out.push((*line).to_owned()); }
+    }
+    let mut result = out.join("\n");
+    if body.ends_with('\n') { result.push('\n'); }
+    result
+}
+
+/// Preserve the named forward vector and rotation around the two native setters.
+fn retain_look_at_values(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if f.ret.token != 0x52 || !body.contains("FVector local_") { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let w = |i: &Instr| i.words.first().map(|s| *s as i16 as i32);
+    let value = |t: &super::types::DataType, p| t.token == 5 && t.type_info == p && !t.is_reference && !t.is_object_handle;
+    let reference = |t: &super::types::DataType, p| t.token == 5 && t.type_info == p && t.is_reference && t.is_object_const && t.is_read_only && !t.is_object_handle;
+    let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+    let offsets = super::model::param_slot_map(&params, true, false, Some(refs));
+    let sites: Vec<_> = code.windows(24).enumerate().filter_map(|(at, c)| {
+        if c.iter().map(|i| i.op.name).ne(["PSF", "PshVPtr", "CALLSYS", "STOREOBJ", "PshVPtr", "CALLSYS", "PshC8", "PSF", "PSF", "CALLSYS", "PSF", "PSF", "PSF", "CALLSYS", "PSF", "PSF", "PSF", "CALLSYS", "PSF", "PshVPtr", "CALLSYS", "PSF", "PshVPtr", "CALLSYS"]) { return None; }
+        let (forward, actor, product, sum, base, rotation, target) = (w(&c[0])?, w(&c[3])?, w(&c[7])?, w(&c[11])?, w(&c[12])?, w(&c[16])?, w(&c[19])?);
+        let slots = [forward, actor, product, sum, base, rotation];
+        if slots.iter().any(|s| *s <= 0) || HashSet::from(slots).len() != slots.len() || target >= 0
+            || [(1, 0), (4, actor), (8, forward), (10, product), (14, sum), (15, base), (18, rotation), (21, base), (22, target)].iter().any(|(n, s)| w(&c[*n]) != Some(*s)) { return None; }
+        let ptr = |n: usize| c[n].qwords.first().copied().map(|p| p as i64);
+        let (actor_get, direction_get, mul, add, look, rotate, locate) = (ptr(2)?, ptr(5)?, ptr(9)?, ptr(13)?, ptr(17)?, ptr(20)?, ptr(23)?);
+        let vector = refs.func_ret_by_ptr(direction_get)?.type_info;
+        let rotator = refs.func_ret_by_ptr(look)?.type_info;
+        let actor_type = refs.func_ret_by_ptr(actor_get)?;
+        for (p, name) in [(vector, "FVector"), (rotator, "FRotator"), (actor_type.type_info, "AActor")] {
+            if !matches!(refs.type_identity_by_ptr(p), Some(t) if t.name == name && t.module.is_empty() && t.namespace.is_empty()) { return None; }
+        }
+        for (slot, p) in [(forward, vector), (product, vector), (sum, vector), (base, vector), (rotation, rotator), (actor, actor_type.type_info)] {
+            if f.obj_locals.iter().filter(|(s, _)| *s == slot).map(|(_, t)| *t).ne([p]) { return None; }
+        }
+        if actor_type.token != 5 || actor_type.is_reference || !actor_type.is_object_handle
+            || !refs.is_method_by_ptr(actor_get) || !refs.is_const_method_by_ptr(actor_get) || !refs.func_params_by_ptr(actor_get)?.is_empty()
+            || !refs.is_method_by_ptr(direction_get) || !refs.is_const_method_by_ptr(direction_get) || refs.func_owner_by_ptr(direction_get) != Some("AActor") || !refs.func_params_by_ptr(direction_get)?.is_empty() || !value(refs.func_ret_by_ptr(direction_get)?, vector) { return None; }
+        for (p, name) in [(mul, "opMul"), (add, "opAdd")] {
+            if refs.func_by_ptr(p) != Some(name) || refs.func_owner_by_ptr(p) != Some("FVector") || !refs.is_method_by_ptr(p) || !refs.is_const_method_by_ptr(p) || !value(refs.func_ret_by_ptr(p)?, vector) { return None; }
+        }
+        if !matches!(refs.func_params_by_ptr(mul)?, [t] if t.token == 0x51 && t.type_info == 0 && !t.is_reference && !t.is_object_handle)
+            || !matches!(refs.func_params_by_ptr(add)?, [t] if reference(t, vector))
+            || refs.is_method_by_ptr(look) || !value(refs.func_ret_by_ptr(look)?, rotator) || !matches!(refs.func_params_by_ptr(look)?, [a, b] if reference(a, vector) && reference(b, vector)) { return None; }
+        for (p, ty) in [(rotate, rotator), (locate, vector)] {
+            if !refs.is_method_by_ptr(p) || refs.is_const_method_by_ptr(p) || refs.func_owner_by_ptr(p) != Some("AActor")
+                || !matches!(refs.func_ret_by_ptr(p)?, t if t.token == 0x52 && t.type_info == 0 && !t.is_reference && !t.is_object_handle)
+                || !matches!(refs.func_params_by_ptr(p)?, [t] if reference(t, ty)) { return None; }
+        }
+        let param = offsets.get(&target).and_then(|n| f.params.get(*n))?;
+        if param.name.is_empty() || param.ty.token != 5 || param.ty.type_info != actor_type.type_info || !param.ty.is_object_handle || param.ty.is_reference { return None; }
+        for (slot, expected) in [(forward, [at, at + 8]), (rotation, [at + 16, at + 18]), (product, [at + 7, at + 10]), (sum, [at + 11, at + 14])] {
+            if code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&slot)).map(|(n, _)| n).ne(expected) { return None; }
+        }
+        let bits = *c[6].qwords.first()?;
+        if !f64::from_bits(bits).is_finite() || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+            let t = i.offset_dw as i64 + 2 + *d as i32 as i64;
+            t > c[0].offset_dw as i64 && t <= c[23].offset_dw as i64
+        }))) { return None; }
+        Some((forward, rotation, base, param.name.clone(), format!("this.{}().{}()", refs.func_by_ptr(actor_get)?, refs.func_by_ptr(direction_get)?),
+            format!("{}::{}", refs.func_ns_by_ptr(look)?, refs.func_by_ptr(look)?), refs.func_by_ptr(rotate)?.to_owned(), refs.func_by_ptr(locate)?.to_owned(), bits))
+    }).collect();
+    let [(forward, rotation, base, target, direction, look, rotate, locate, bits)] = sites.as_slice() else { return body.to_owned(); };
+    let (forward_name, rotation_name) = (format!("local_{forward}"), format!("local_{rotation}"));
+    if count_ident(body, &forward_name) != 0 || count_ident(body, &rotation_name) != 0 { return body.to_owned(); }
+    let lines: Vec<_> = body.lines().collect();
+    let candidates: Vec<_> = lines.windows(2).enumerate().filter_map(|(n, c)| {
+        if indent_of(c[0]) != indent_of(c[1]) || c[1].trim() != format!("{target}.{locate}(local_{base});") { return None; }
+        let literal = c[0].trim().strip_prefix(&format!("{target}.{rotate}({look}(local_{base}, (local_{base} + ({direction} * "))?.strip_suffix("))));")?;
+        if literal.parse::<f64>().ok()?.to_bits() != *bits { return None; }
+        Some((n, literal.to_owned()))
+    }).collect();
+    let [(at, literal)] = candidates.as_slice() else { return body.to_owned(); };
+    let mut out = Vec::new();
+    for (n, line) in lines.iter().enumerate() {
+        if n == *at {
+            let indent = indent_of(line);
+            out.extend([format!("{indent}FVector {forward_name} = {direction};"),
+                format!("{indent}FRotator {rotation_name} = {look}(local_{base}, (local_{base} + ({forward_name} * {literal})));"),
+                format!("{indent}{target}.{rotate}({rotation_name});")]);
+        } else { out.push((*line).to_owned()); }
+    }
+    let mut result = out.join("\n");
+    if body.ends_with('\n') { result.push('\n'); }
+    result
+}
+
+/// Getter and product temporaries expire when the reused vector slot receives the sum.
+fn fold_self_vector_sum(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if f.ret.token != 0x52 || !body.contains("FVector local_") { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let w = |i: &Instr, n| i.words.get(n).map(|s| *s as i16 as i32);
+    let sites: Vec<_> = code.windows(18).enumerate().filter_map(|(at, c)| {
+        if c.iter().map(|i| i.op.name).ne(["PSF", "PshVPtr", "CALLSYS", "PSF", "PshVPtr", "CALLSYS", "PshVPtr", "CALLSYS", "RDR4", "fTOd", "PshV8", "PSF", "PSF", "CALLSYS", "PSF", "PSF", "PSF", "CALLSYS"]) { return None; }
+        let (origin, direction, narrow, wide, product) = (w(&c[0], 0)?, w(&c[3], 0)?, w(&c[8], 0)?, w(&c[9], 0)?, w(&c[11], 0)?);
+        let slots = [origin, direction, narrow, wide, product];
+        if slots.iter().any(|s| *s <= 0) || HashSet::from(slots).len() != slots.len()
+            || [(1, 0), (4, 0), (6, 0), (10, wide), (12, direction), (14, product), (15, direction), (16, origin)].iter().any(|(n, s)| w(&c[*n], 0) != Some(*s))
+            || w(&c[9], 1) != Some(narrow) || f.obj_locals.iter().any(|(s, _)| *s == narrow || *s == wide) { return None; }
+        let ptr = |n: usize| c[n].qwords.first().copied().map(|p| p as i64);
+        let (location, axis, scale, mul, add) = (ptr(2)?, ptr(5)?, ptr(7)?, ptr(13)?, ptr(17)?);
+        let vector = refs.func_ret_by_ptr(location)?.type_info;
+        let value = |t: &super::types::DataType| t.token == 5 && t.type_info == vector && !t.is_reference && !t.is_object_handle;
+        if !matches!(refs.type_identity_by_ptr(vector), Some(t) if t.name == "FVector" && t.module.is_empty() && t.namespace.is_empty())
+            || [origin, direction, product].iter().any(|s| f.obj_locals.iter().filter(|(n, _)| n == s).map(|(_, p)| *p).ne([vector])) { return None; }
+        for p in [location, axis, scale] {
+            if !refs.is_method_by_ptr(p) || !refs.is_const_method_by_ptr(p) || !refs.func_params_by_ptr(p)?.is_empty() || !refs.func_owner_by_ptr(p)?.starts_with('U') { return None; }
+        }
+        if !value(refs.func_ret_by_ptr(location)?) || !value(refs.func_ret_by_ptr(axis)?)
+            || !matches!(refs.func_ret_by_ptr(scale)?, t if t.token == 0x50 && t.type_info == 0 && t.is_reference && t.is_object_const && t.is_read_only && !t.is_object_handle) { return None; }
+        for (p, name) in [(mul, "opMul"), (add, "opAdd")] {
+            if refs.func_by_ptr(p) != Some(name) || refs.func_owner_by_ptr(p) != Some("FVector") || !refs.is_method_by_ptr(p) || !refs.is_const_method_by_ptr(p) || !value(refs.func_ret_by_ptr(p)?) { return None; }
+        }
+        if !matches!(refs.func_params_by_ptr(mul)?, [t] if t.token == 0x51 && t.type_info == 0 && !t.is_reference && !t.is_object_handle)
+            || !matches!(refs.func_params_by_ptr(add)?, [t] if t.token == 5 && t.type_info == vector && t.is_reference && t.is_object_const && t.is_read_only && !t.is_object_handle) { return None; }
+        let uses: Vec<_> = code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&direction)).map(|(n, _)| n).collect();
+        let [made, read, reused, consumed] = uses.as_slice() else { return None; };
+        if [*made, *read, *reused] != [at + 3, at + 12, at + 15] || *consumed <= at + 17 || code[*consumed].op.name != "PSF"
+            || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let t = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                t > c[0].offset_dw as i64 && t <= c[17].offset_dw as i64
+            }))) { return None; }
+        Some((origin, direction, product, refs.func_by_ptr(location)?.to_owned(), refs.func_by_ptr(axis)?.to_owned(), refs.func_by_ptr(scale)?.to_owned()))
+    }).collect();
+    let [(origin, direction, product, location, axis, scale)] = sites.as_slice() else { return body.to_owned(); };
+    let lines: Vec<_> = body.lines().collect();
+    let candidates: Vec<_> = lines.windows(4).enumerate().filter_map(|(at, c)| {
+        let declarations: Vec<_> = c.iter().map(|line| declaration_with_initializer(line)).collect::<Option<_>>()?;
+        let names: Vec<_> = declarations.iter().map(|(_, name, _)| name).collect();
+        if c.iter().any(|line| !line.trim().starts_with("FVector ") || indent_of(line) != declarations[0].0)
+            || names.iter().zip([*origin, *direction, *product, *direction]).any(|(name, slot)| !is_decompiler_local(name) || slot_and_life_any(name).map(|v| v.0) != Some(slot) || count_ident(body, name) != 2)
+            || names[1] != &format!("local_{direction}") || declarations[0].2 != format!("this.{location}()") || declarations[1].2 != format!("this.{axis}()")
+            || declarations[2].2 != format!("({} * this.{scale}())", names[1]) || declarations[3].2 != format!("({} + {})", names[0], names[2]) { return None; }
+        Some((at, names[3].to_string()))
+    }).collect();
+    let [(at, old_sum)] = candidates.as_slice() else { return body.to_owned(); };
+    let mut out = Vec::new();
+    for (n, line) in lines.iter().enumerate() {
+        if n == *at { out.push(format!("{}FVector local_{direction} = (this.{location}() + (this.{axis}() * this.{scale}()));", indent_of(line))); }
+        else if n < *at || n >= *at + 4 { out.push(rename_ident(line, old_sum, &format!("local_{direction}"))); }
+    }
+    let mut result = out.join("\n");
+    if body.ends_with('\n') { result.push('\n'); }
+    result
 }
 
 /// Retain the completed enum conversion and initialized bool before native trace arguments.
@@ -44713,6 +44982,107 @@ mod literal_value_lifetime_tests {
         let mut bad = f.clone(); bad.bytecode[c[6].offset_dw + 1] = 1; reject(&bad);
         let mut bad = f.clone(); let mut extra = function(&[("PshV4", &[25])]).bytecode; extra.extend(bad.bytecode); bad.bytecode = extra; reject(&bad);
         let mut bad = f; let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[4].offset_dw as i32; jump.extend(bad.bytecode); bad.bytecode = jump; reject(&bad);
+    }
+
+    #[test]
+    fn directional_product_life_ends_at_the_immediate_vector_assignment() {
+        let refs = RefResolver::from_test_directional_product_assignment(0);
+        for negative in [false, true] {
+            let mut f = if negative { function(&[("PSF", &[6]), ("PshGPtr", &[])]) } else { function(&[("PshGPtr", &[]), ("PSF", &[6])]) };
+            f.bytecode.extend(function(&[("CALLSYS", &[]), ("PshC8", &[]), ("PSF", &[30]), ("PSF", &[6]), ("CALLSYS", &[]),
+                ("PSF", &[30]), ("PSF", &[6]), ("PSF", &[14]), ("CALLSYS", &[]), ("PSF", &[6]), ("PSF", &[24]), ("CALLSYS", &[]), ("RET", &[2])]).bytecode);
+            f.obj_locals = [6, 14, 24, 30].into_iter().map(|s| (s, 1)).collect();
+            let c = disassemble(&f.bytecode).unwrap();
+            for (n, p) in [(usize::from(negative), 40), (2, if negative { 50 } else { 10 }), (6, 20), (10, 30), (13, 60)] { f.bytecode[c[n].offset_dw + 1] = p; }
+            let bits = 100.0f64.to_bits(); f.bytecode[c[3].offset_dw + 1] = bits as i32; f.bytecode[c[3].offset_dw + 2] = (bits >> 32) as i32;
+            let axis = if negative { "FVector::RightVector.opNeg()" } else { "FVector(FVector::RightVector)" };
+            let body = format!("    FVector local_30_2 = ({axis} * 100.0);\n    local_24 = (local_14 + local_30_2);\n");
+            let expected = format!("    local_24 = (local_14 + ({axis} * 100.0));\n");
+            assert_eq!(super::fold_directional_product_assignments(&body, &f, &refs), expected);
+            assert_eq!(super::fold_directional_product_assignments(&expected, &f, &refs), expected);
+            for fault in 1..=6 { assert_eq!(super::fold_directional_product_assignments(&body, &f, &RefResolver::from_test_directional_product_assignment(fault)), body, "metadata {fault}"); }
+            for bad in [body.replace("100.0", "101.0"), body.replace("RightVector", "OtherVector"), body.replace("    local_24", "        local_24"), format!("{body}Use(local_30_2);\n")] {
+                assert_eq!(super::fold_directional_product_assignments(&bad, &f, &refs), bad);
+            }
+            let reject = |bad: &Func| assert_eq!(super::fold_directional_product_assignments(&body, bad, &refs), body);
+            let mut bad = f.clone(); bad.obj_locals.push((30, 1)); reject(&bad);
+            let mut bad = f.clone(); bad.bytecode[c[13].offset_dw + 1] = 30; reject(&bad);
+            let mut bad = f; let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[7].offset_dw as i32; jump.extend(bad.bytecode); bad.bytecode = jump; reject(&bad);
+        }
+    }
+
+    #[test]
+    fn named_native_getter_survives_its_copy_and_the_next_getter() {
+        let mut f = function(&[("PSF", &[38]), ("PSF", &[24]), ("CALLSYS", &[]), ("PSF", &[38]), ("PSF", &[44]), ("CALLSYS", &[]),
+            ("PSF", &[32]), ("PshVPtr", &[0]), ("ADDSi", &[0]), ("CALLSYS", &[]), ("RET", &[2])]);
+        f.ret.token = 0x52; f.obj_locals = vec![(24, 3), (38, 1), (44, 1), (32, 1)];
+        let c = disassemble(&f.bytecode).unwrap();
+        for (n, p) in [(2, 50), (5, 10), (8, 2), (9, 50)] { f.bytecode[c[n].offset_dw + 1] = p; }
+        let body = "    FVector local_44(local_24.Location());\n    FVector local_32 = this.Initial.Location();\n    Use(local_44, local_32);\n";
+        let expected = "    FVector local_38 = local_24.Location();\n    FVector local_44(local_38);\n    FVector local_32 = this.Initial.Location();\n    Use(local_44, local_32);\n";
+        let refs = RefResolver::from_test_retained_copied_getter(0);
+        assert_eq!(super::retain_copied_native_getter(body, &f, &refs), expected);
+        assert_eq!(super::retain_copied_native_getter(expected, &f, &refs), expected);
+        for fault in 1..=6 { assert_eq!(super::retain_copied_native_getter(body, &f, &RefResolver::from_test_retained_copied_getter(fault)), body, "metadata {fault}"); }
+        for bad in [body.replace("Initial", "Other"), body.replace("local_32 =", "local_33 ="), format!("{body}Use(local_38);\n")] {
+            assert_eq!(super::retain_copied_native_getter(&bad, &f, &refs), bad);
+        }
+        let reject = |bad: &Func| assert_eq!(super::retain_copied_native_getter(body, bad, &refs), body);
+        let mut bad = f.clone(); bad.obj_locals.push((38, 1)); reject(&bad);
+        let mut bad = f.clone(); bad.bytecode[c[9].offset_dw + 1] = 30; reject(&bad);
+        let mut bad = f.clone(); bad.bytecode.extend(function(&[("PSF", &[38])]).bytecode); reject(&bad);
+        let mut bad = f; let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[3].offset_dw as i32; jump.extend(bad.bytecode); bad.bytecode = jump; reject(&bad);
+    }
+
+    #[test]
+    fn forward_and_look_at_values_remain_named_through_native_setters() {
+        let mut f = function(&[("PSF", &[16]), ("PshVPtr", &[0]), ("CALLSYS", &[]), ("STOREOBJ", &[2]), ("PshVPtr", &[2]), ("CALLSYS", &[]),
+            ("PshC8", &[]), ("PSF", &[22]), ("PSF", &[16]), ("CALLSYS", &[]), ("PSF", &[22]), ("PSF", &[36]), ("PSF", &[10]), ("CALLSYS", &[]),
+            ("PSF", &[36]), ("PSF", &[10]), ("PSF", &[42]), ("CALLSYS", &[]), ("PSF", &[42]), ("PshVPtr", &[65534]), ("CALLSYS", &[]),
+            ("PSF", &[10]), ("PshVPtr", &[65534]), ("CALLSYS", &[]), ("RET", &[4])]);
+        f.ret.token = 0x52; f.obj_locals = vec![(16, 1), (2, 4), (22, 1), (36, 1), (10, 1), (42, 3)];
+        f.params.push(super::super::model::Param { name: "Target".into(), ty: DataType { token: 5, type_info: 4, is_object_handle: true, ..Default::default() }, flags: 0 });
+        let c = disassemble(&f.bytecode).unwrap();
+        for (n, p) in [(2, 50), (5, 51), (9, 20), (13, 30), (17, 52), (20, 53), (23, 54)] { f.bytecode[c[n].offset_dw + 1] = p; }
+        let bits = 1000.0f64.to_bits(); f.bytecode[c[6].offset_dw + 1] = bits as i32; f.bytecode[c[6].offset_dw + 2] = (bits >> 32) as i32;
+        let body = "    FVector local_10 = Origin();\n    Target.Rotate(Math::LookAt(local_10, (local_10 + (this.Avatar().Forward() * 1000.0))));\n    Target.Locate(local_10);\n";
+        let expected = "    FVector local_10 = Origin();\n    FVector local_16 = this.Avatar().Forward();\n    FRotator local_42 = Math::LookAt(local_10, (local_10 + (local_16 * 1000.0)));\n    Target.Rotate(local_42);\n    Target.Locate(local_10);\n";
+        let refs = RefResolver::from_test_named_look_at_values(0);
+        assert_eq!(super::retain_look_at_values(body, &f, &refs), expected);
+        assert_eq!(super::retain_look_at_values(expected, &f, &refs), expected);
+        for fault in 1..=7 { assert_eq!(super::retain_look_at_values(body, &f, &RefResolver::from_test_named_look_at_values(fault)), body, "metadata {fault}"); }
+        for bad in [body.replace("1000.0", "999.0"), body.replace("Math::", "Other::"), body.replace("Target.Locate", "Other.Locate"), format!("{body}Use(local_16);\n")] {
+            assert_eq!(super::retain_look_at_values(&bad, &f, &refs), bad);
+        }
+        let reject = |bad: &Func| assert_eq!(super::retain_look_at_values(body, bad, &refs), body);
+        let mut bad = f.clone(); bad.params[0].ty.type_info = 3; reject(&bad);
+        let mut bad = f.clone(); bad.bytecode.extend(function(&[("PSF", &[16])]).bytecode); reject(&bad);
+        let mut bad = f.clone(); bad.obj_locals.push((42, 3)); reject(&bad);
+        let mut bad = f; let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[8].offset_dw as i32; jump.extend(bad.bytecode); bad.bytecode = jump; reject(&bad);
+    }
+
+    #[test]
+    fn self_getters_and_product_expire_before_the_named_vector_sum() {
+        let mut f = function(&[("PSF", &[12]), ("PshVPtr", &[0]), ("CALLSYS", &[]), ("PSF", &[6]), ("PshVPtr", &[0]), ("CALLSYS", &[]),
+            ("PshVPtr", &[0]), ("CALLSYS", &[]), ("RDR4", &[19]), ("fTOd", &[22, 19]), ("PshV8", &[22]), ("PSF", &[28]), ("PSF", &[6]), ("CALLSYS", &[]),
+            ("PSF", &[28]), ("PSF", &[6]), ("PSF", &[12]), ("CALLSYS", &[]), ("PSF", &[6]), ("RET", &[2])]);
+        f.ret.token = 0x52; f.obj_locals = vec![(12, 1), (6, 1), (28, 1)];
+        let c = disassemble(&f.bytecode).unwrap();
+        for (n, p) in [(2, 50), (5, 51), (7, 52), (13, 20), (17, 30)] { f.bytecode[c[n].offset_dw + 1] = p; }
+        let body = "    FVector local_12_2 = this.Location();\n    FVector local_6 = this.Axis();\n    FVector local_28_2 = (local_6 * this.Extent());\n    FVector local_6_2 = (local_12_2 + local_28_2);\n    Draw(local_6_2);\n";
+        let expected = "    FVector local_6 = (this.Location() + (this.Axis() * this.Extent()));\n    Draw(local_6);\n";
+        let refs = RefResolver::from_test_self_vector_sum(0);
+        assert_eq!(super::fold_self_vector_sum(body, &f, &refs), expected);
+        assert_eq!(super::fold_self_vector_sum(expected, &f, &refs), expected);
+        for fault in 1..=6 { assert_eq!(super::fold_self_vector_sum(body, &f, &RefResolver::from_test_self_vector_sum(fault)), body, "metadata {fault}"); }
+        for bad in [body.replace("Extent", "Other"), body.replace(" + ", " - "), format!("{body}Use(local_6);\n"), body.replace("    FVector local_28", "        FVector local_28")] {
+            assert_eq!(super::fold_self_vector_sum(&bad, &f, &refs), bad);
+        }
+        let reject = |bad: &Func| assert_eq!(super::fold_self_vector_sum(body, bad, &refs), body);
+        let mut bad = f.clone(); bad.obj_locals.push((6, 1)); reject(&bad);
+        let mut bad = f.clone(); bad.bytecode.extend(function(&[("PSF", &[6])]).bytecode); reject(&bad);
+        let mut bad = f.clone(); bad.bytecode[c[17].offset_dw + 1] = 20; reject(&bad);
+        let mut bad = f; let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[7].offset_dw as i32; jump.extend(bad.bytecode); bad.bytecode = jump; reject(&bad);
     }
 
     #[test]

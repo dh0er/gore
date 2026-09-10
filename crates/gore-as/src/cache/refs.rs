@@ -5388,6 +5388,106 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_directional_product_assignment(fault: u8) -> Self {
+        let mut r = Self::from_test_copied_binary_receiver(0);
+        r.global_by_ptr.insert(40, "RightVector".into()); r.global_ns.insert(40, "FVector".into());
+        let vector = DataType { token: 5, type_info: 1, ..Default::default() };
+        for (p, name, ret, args, constant) in [(50, "opNeg", vector.clone(), vec![], true),
+            (60, "opAssign", DataType { is_reference: true, ..vector.clone() }, vec![DataType { is_reference: true, is_object_const: true, is_read_only: true, ..vector }], false)] {
+            r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, "FVector".into()); r.func_ret.insert(p, ret); r.func_params.insert(p, args); r.func_is_method.insert(p);
+            if constant { r.const_method_ptrs.insert(p); }
+        }
+        match fault {
+            1 => { r.func_params.get_mut(&20).unwrap()[0].token = 0x50; },
+            2 => { r.func_ret.get_mut(&30).unwrap().is_reference = true; },
+            3 => { r.func_params.get_mut(&60).unwrap()[0].is_reference = false; },
+            4 => { r.func_ret.get_mut(&60).unwrap().is_object_const = true; },
+            5 => { r.global_ns.insert(40, "Other".into()); },
+            6 => { r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_retained_copied_getter(fault: u8) -> Self {
+        let mut r = Self::from_test_copied_binary_receiver(0);
+        r.type_by_ptr.insert(3, "FTransform".into());
+        r.type_identity_by_ptr.insert(3, TypeIdentity { name: "FTransform".into(), module: String::new(), namespace: String::new() });
+        r.prop_by_key.insert(5, "Initial".into());
+        r.class_fields.insert("UStorm".into(), HashMap::from([("Initial".into(), "FTransform".into())]));
+        r.func_by_ptr.insert(50, "Location".into()); r.func_owner.insert(50, "FTransform".into());
+        r.func_is_method.insert(50); r.const_method_ptrs.insert(50);
+        r.func_ret.insert(50, DataType { token: 5, type_info: 1, ..Default::default() }); r.func_params.insert(50, vec![]);
+        match fault {
+            1 => { r.func_ret.get_mut(&50).unwrap().is_reference = true; },
+            2 => { r.const_method_ptrs.remove(&50); },
+            3 => { r.func_params.get_mut(&10).unwrap()[0].is_reference = false; },
+            4 => { r.class_fields.get_mut("UStorm").unwrap().insert("Initial".into(), "FVector".into()); },
+            5 => { r.duplicate_prop_keys.insert(5); },
+            6 => { r.type_identity_by_ptr.get_mut(&3).unwrap().module = "Script".into(); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_named_look_at_values(fault: u8) -> Self {
+        let mut r = Self::from_test_copied_binary_receiver(0);
+        for (p, name) in [(3, "FRotator"), (4, "AActor")] {
+            r.type_by_ptr.insert(p, name.into());
+            r.type_identity_by_ptr.insert(p, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        let vector = DataType { token: 5, type_info: 1, ..Default::default() };
+        let vector_ref = DataType { is_reference: true, is_object_const: true, is_read_only: true, ..vector.clone() };
+        let rotation = DataType { token: 5, type_info: 3, ..Default::default() };
+        for (p, name, owner, ret, params, constant) in [
+            (50, "Avatar", "UAbility", DataType { token: 5, type_info: 4, is_object_handle: true, ..Default::default() }, vec![], true),
+            (51, "Forward", "AActor", vector, vec![], true),
+            (52, "LookAt", "", rotation.clone(), vec![vector_ref.clone(), vector_ref.clone()], false),
+            (53, "Rotate", "AActor", DataType { token: 0x52, ..Default::default() }, vec![DataType { is_reference: true, is_object_const: true, is_read_only: true, ..rotation }], false),
+            (54, "Locate", "AActor", DataType { token: 0x52, ..Default::default() }, vec![vector_ref], false),
+        ] {
+            r.func_by_ptr.insert(p, name.into()); r.func_ret.insert(p, ret); r.func_params.insert(p, params);
+            if !owner.is_empty() { r.func_owner.insert(p, owner.into()); r.func_is_method.insert(p); }
+            if constant { r.const_method_ptrs.insert(p); }
+        }
+        r.func_ns.insert(52, "Math".into());
+        match fault {
+            1 => { r.func_ret.get_mut(&51).unwrap().is_reference = true; },
+            2 => { r.func_ret.get_mut(&52).unwrap().is_reference = true; },
+            3 => { r.func_params.get_mut(&52).unwrap()[1].is_reference = false; },
+            4 => { r.func_params.get_mut(&53).unwrap()[0].type_info = 1; },
+            5 => { r.const_method_ptrs.insert(54); },
+            6 => { r.func_ret.get_mut(&50).unwrap().is_object_handle = false; },
+            7 => { r.type_identity_by_ptr.get_mut(&3).unwrap().module = "Script".into(); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_self_vector_sum(fault: u8) -> Self {
+        let mut r = Self::from_test_copied_binary_receiver(0);
+        for (p, name, ret) in [(50, "Location", DataType { token: 5, type_info: 1, ..Default::default() }),
+            (51, "Axis", DataType { token: 5, type_info: 1, ..Default::default() }),
+            (52, "Extent", DataType { token: 0x50, is_reference: true, is_object_const: true, is_read_only: true, ..Default::default() })] {
+            r.func_by_ptr.insert(p, name.into()); r.func_owner.insert(p, "UComponent".into());
+            r.func_is_method.insert(p); r.const_method_ptrs.insert(p); r.func_ret.insert(p, ret); r.func_params.insert(p, vec![]);
+        }
+        match fault {
+            1 => { r.func_ret.get_mut(&50).unwrap().is_reference = true; },
+            2 => { r.const_method_ptrs.remove(&51); },
+            3 => { r.func_ret.get_mut(&52).unwrap().is_reference = false; },
+            4 => { r.func_params.get_mut(&20).unwrap()[0].token = 0x50; },
+            5 => { r.func_ret.get_mut(&30).unwrap().is_reference = true; },
+            6 => { r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_weak_forward_sum(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("FVector", ""), ("FRotator", ""), ("UComponent", ""), ("UConfig", "Offset"), ("UNativeHost", "Movement")]);
         for (p, name, module) in [(1, "FVector", ""), (2, "FRotator", ""), (3, "UComponent", ""), (4, "UConfig", "Script"), (5, "UNativeHost", "")] {

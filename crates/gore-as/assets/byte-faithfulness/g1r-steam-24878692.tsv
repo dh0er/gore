@@ -42,14 +42,10 @@ AI.States.FightAI.WatchFightState.AIGroup_WatchFight	1	0	0
 AI.States.FightAI.WatchFightState.AIState_WatchFight	9	0	0
 Camera.ConversationCameraConfig	1	0	0
 Environment.GothicUltraDynamicControlerAS	1	0	0
-GAS.Abilities.Combat.AttackLoop.Capsule.PyrolaserHitCapsuleComponent	1	0	0
 GAS.Abilities.Locomotion.GA_Falling	1	0	0
 GAS.Abilities.Passive.GA_PlayerPerception_CrimeRegistration	1	0	0
-GAS.Abilities.Spells.Spells.Light.GA_Spell_Light	1	0	0
 GAS.Abilities.Spells.Spells.Telekinesis.GA_Spell_Telekinesis	1	0	0
-GAS.Abilities.Spells.Spells.Telekinesis.TelekinesisItemMovementVisual	1	0	0
 GAS.Abilities.Spells.Spells.Transform.GA_Spell_Transform	2	0	0
-GAS.Abilities.Spells.Visuals.Fire.InnosPrayVisual	1	0	0
 GAS.Calculations.Damage	1	0	0
 GAS.GASCharacterMixins	1	0	0
 GAS.GASCharacterStateMixins	7	0	0
