@@ -11398,6 +11398,37 @@ impl Structurer<'_> {
         None
     }
 
+    /// One guarded retry returns to the time test; the final body block exits.
+    fn has_guarded_retry_and_final_break(&self, head: usize, exit: usize) -> bool {
+        let witness = (|| {
+            if self.ctx.f.ret.token != 0x52 || exit != head + 9 || exit >= self.g.blocks.len() { return None; }
+            let block = |n: usize| &self.g.blocks[head + n];
+            let code = |n: usize| &self.ctx.instrs[block(n).instr_lo..block(n).instr_hi];
+            let h = code(0); let body = code(1); let retry = code(7); let end = code(8);
+            let header = block(0).start_dw; let after = block(9).start_dw;
+            if h.get(h.len().checked_sub(2)?)?.op.name != "CMPd" || h.last()?.op.name != "JNS"
+                || body.first()?.op.name != "SUSPEND" || body.last()?.op.name != "JLowZ"
+                || retry.iter().map(|i| i.op.name).ne(["PshVPtr", "CALLSYS", "JMP"])
+                || retry[0].words.first() != Some(&0) || end.len() < 2 || end.last()?.op.name != "JMP" { return None; }
+            let p = *retry[1].qwords.first()? as i64; let ret = self.ctx.refs.func_ret_by_ptr(p)?;
+            if !self.ctx.refs.is_method_by_ptr(p) || !self.ctx.refs.func_params_by_ptr(p)?.is_empty()
+                || ret.token != 0x52 || ret.type_info != 0 || ret.is_reference || ret.is_object_handle { return None; }
+            for (n, targets) in [(0, vec![after, block(1).start_dw]), (1, vec![block(3).start_dw, block(2).start_dw]),
+                (3, vec![block(5).start_dw, block(4).start_dw]), (4, vec![block(6).start_dw]), (5, vec![block(6).start_dw]),
+                (6, vec![block(8).start_dw, block(7).start_dw]), (7, vec![header]), (8, vec![after])] {
+                if block(n).succs != targets { return None; }
+            }
+            let [early_exit] = block(2).succs.as_slice() else { return None; };
+            let ret_block = &self.g.blocks[*self.idx_of.get(early_exit)?];
+            if self.jump_op(head + 2) != "JMP" || *early_exit <= after
+                || self.ctx.instrs[ret_block.instr_lo..ret_block.instr_hi].iter().map(|i| i.op.name).ne(["RET"])
+                || self.g.blocks.iter().enumerate().any(|(n, b)| (n < head || n >= exit)
+                    && b.succs.iter().any(|t| *t > header && *t < after)) { return None; }
+            Some(())
+        })();
+        witness.is_some()
+    }
+
     /// A constant top-test has two cleanup-and-retry leaves and a final
     /// cleanup-and-break leaf. The last block is an exit, not the loop latch.
     fn has_two_released_retry_edges(&self, head: usize, exit: usize) -> bool {
@@ -11456,11 +11487,11 @@ impl Structurer<'_> {
         if prev <= i {
             return None;
         }
-        // A back edge usually ends the body. Two released retry leaves can
-        // instead precede a final released break leaf.
+        // A guarded retry can precede a final break instead of ending the body.
         let jumps_back = (self.jump_op(prev) == "JMP"
             && self.g.blocks[prev].succs.first().copied() == Some(b.start_dw))
-            || self.has_two_released_retry_edges(i, taken_idx);
+            || self.has_two_released_retry_edges(i, taken_idx)
+            || self.has_guarded_retry_and_final_break(i, taken_idx);
         // … unless the body is one the compiler marked as a loop body anyway. A `SUSPEND` stands
         // at the head of every loop body and nowhere else behind a test. Where every path through
         // the body leaves the function, the back edge was dead and the compiler dropped it: the
@@ -13410,6 +13441,41 @@ mod tests {
             let refs = RefResolver::from_test_member_chain(&[(owner, field)]);
             assert_eq!(float_field_type(&refs, 1, field), None);
         }
+    }
+
+    #[test]
+    fn guarded_wait_repeats_the_time_test_and_target_check() {
+        let mut a = TestAssembler::default();
+        a.label("head"); a.op("CMPd", &[4, 12], &[]); a.jump("JNS", "exit");
+        a.label("body"); a.op("SUSPEND", &[], &[]); a.op("CpyVtoR1", &[7], &[]); a.jump("JLowZ", "first_guard");
+        a.label("early_exit"); a.jump("JMP", "ret");
+        a.label("first_guard"); a.op("CpyVtoR1", &[7], &[]); a.jump("JLowZ", "second_guard");
+        a.label("true_arm"); a.op("SetV1", &[7], &[1]); a.jump("JMP", "merge");
+        a.label("second_guard"); a.op("CpyVtoV4", &[7, 8], &[]);
+        a.label("merge"); a.op("CpyVtoR1", &[7], &[]); a.jump("JLowZ", "finish");
+        a.label("retry"); a.op("PshVPtr", &[0], &[]); a.label("wait"); a.op("CALLSYS", &[], &[]); a.label("back"); a.jump("JMP", "head");
+        a.label("finish"); a.op("SetV4", &[9], &[1]); a.label("break"); a.jump("JMP", "exit");
+        a.label("exit"); a.op("IncVi", &[4], &[]); a.label("ret"); a.op("RET", &[0], &[]);
+        let mut fixture = a.finish();
+        fixture.instrs.iter_mut().find(|i| i.offset_dw == fixture.labels["wait"]).unwrap().qwords = vec![10];
+        let refs = RefResolver::from_test_guarded_retry_loop(0);
+        let render = |f: &CompoundFixture, refs: &RefResolver, ret| render_fixture_range_with_return_class(f, None, refs, "float", None, ret, Some("UTask"));
+        let out = render(&fixture, &refs, 0x52);
+        assert!(out.starts_with("while ("), "{out}");
+        assert_eq!(out.matches("while (").count(), 1, "{out}");
+        assert_eq!(out.matches("continue;").count(), 1, "{out}");
+        assert_eq!(out.matches("break;").count(), 1, "{out}");
+        assert!(out.contains("this.WaitTick();"), "{out}");
+        for fault in 1..=3 { assert!(!render(&fixture, &RefResolver::from_test_guarded_retry_loop(fault), 0x52).starts_with("while ("), "metadata {fault}"); }
+        for (label, op, words) in [("head", "CMPi", vec![4, 12]), ("body", "CpyVtoR1", vec![7]), ("retry", "PshVPtr", vec![2])] {
+            let mut bad = fixture.clone(); replace_same_width(&mut bad, label, op, &words, &[]);
+            assert!(!render(&bad, &refs, 0x52).starts_with("while ("), "accepted {label}");
+        }
+        let mut bad = fixture.clone(); retarget(&mut bad, "early_exit", "retry");
+        assert!(!render(&bad, &refs, 0x52).starts_with("while ("));
+        let mut bad = fixture.clone(); retarget(&mut bad, "back", "first_guard");
+        assert!(!render(&bad, &refs, 0x52).starts_with("while ("));
+        assert!(!render(&fixture, &refs, 0x44).starts_with("while ("));
     }
 
     #[test]

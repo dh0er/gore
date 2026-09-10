@@ -5292,6 +5292,20 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_guarded_retry_loop(fault: u8) -> Self {
+        let mut r = Self::default();
+        r.func_by_ptr.insert(10, "WaitTick".into()); r.func_owner.insert(10, "UTask".into()); r.func_is_method.insert(10);
+        r.func_ret.insert(10, DataType { token: 0x52, ..Default::default() }); r.func_params.insert(10, vec![]);
+        match fault {
+            1 => { r.func_is_method.remove(&10); },
+            2 => { r.func_ret.get_mut(&10).unwrap().token = 0x44; },
+            3 => { r.func_params.get_mut(&10).unwrap().push(DataType { token: 0x44, ..Default::default() }); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_native_fname_copy_declarations(fault: u8) -> Self {
         let mut r = Self::from_test_native_vector_copy_declarations(fault);
         r.type_identity_by_ptr.get_mut(&1).unwrap().name = "FName".into();
