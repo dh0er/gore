@@ -3289,6 +3289,10 @@ fn emit_function_ctor(
         pass_trace("restore_conditional_field_references", &rendered);
         let rendered = fold_widened_vector_sign(&rendered, vector_sign);
         pass_trace("fold_widened_vector_sign", &rendered);
+        let rendered = fold_reused_vector_product(&rendered, f, refs);
+        pass_trace("fold_reused_vector_product", &rendered);
+        let rendered = restore_vector_return_lifetimes(&rendered, f, refs);
+        pass_trace("restore_vector_return_lifetimes", &rendered);
         s.truncate(declarations_at);
         s.push_str(&rendered);
     } else {
@@ -9301,6 +9305,129 @@ fn fold_ordered_coordinate_difference(body: &str, f: &Func, refs: &RefResolver) 
         if let Some(line) = folded { out.push(line); at += 2; } else { out.push(lines[at].to_owned()); at += 1; }
     }
     let mut result = out.join("\n"); if body.ends_with('\n') { result.push('\n'); } result
+}
+
+/// The first product is temporary; its slot becomes the named final sum.
+fn fold_reused_vector_product(body:&str, f:&Func, refs:&RefResolver)->String {
+    if f.ret.token!=0x52 || !body.contains("FVector local_") {return body.to_owned();}
+    let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    let w=|i:&Instr| i.words.first().map(|s| *s as i16 as i32);
+    let scalar=|t:&super::types::DataType| t.token==0x51 && t.type_info==0 && !t.is_reference && !t.is_object_handle;
+    let params:Vec<_>=f.params.iter().map(|p| p.ty.clone()).collect();let offsets=super::model::param_slot_map(&params,true,false,Some(refs));
+    let sites:Vec<_>=code.windows(14).enumerate().filter_map(|(at,c)| {
+        if c.iter().map(|i| i.op.name).ne(["LoadThisR","RDR8","PshV8","PSF","PSF","CALLSYS","PshV8","PSF","PSF","CALLSYS","PSF","PSF","PSF","CALLSYS"]) {return None;}
+        let (speed,product,direction,scaled,base)=(w(&c[1])?,w(&c[3])?,w(&c[4])?,w(&c[7])?,w(&c[12])?);let slots=[speed,product,direction,scaled,base];
+        if slots.iter().any(|s| *s<=0) || HashSet::from(slots).len()!=slots.len()
+            || [(2,speed),(8,product),(10,scaled),(11,product)].iter().any(|(n,s)| w(&c[*n])!=Some(*s)) || c[5].qwords!=c[9].qwords
+            || f.obj_locals.iter().any(|(s,_)| *s==speed) {return None;}
+        let vectors:Vec<_>=f.obj_locals.iter().filter(|(s,_)| [product,direction,scaled,base].contains(s)).collect();
+        if vectors.len()!=4 || [product,direction,scaled,base].iter().any(|s| vectors.iter().filter(|(slot,_)| slot==s).count()!=1) {return None;}
+        let vector=vectors[0].1;
+        if vectors.iter().any(|(_,p)| *p!=vector) || !matches!(refs.type_identity_by_ptr(vector),Some(t) if t.name=="FVector" && t.module.is_empty() && t.namespace.is_empty()) {return None;}
+        let value=|t:&super::types::DataType| t.token==5 && t.type_info==vector && !t.is_reference && !t.is_object_handle;
+        let mul=*c[5].qwords.first()? as i64;let add=*c[13].qwords.first()? as i64;
+        for (p,name) in [(mul,"opMul"),(add,"opAdd")] {
+            if refs.func_by_ptr(p)!=Some(name) || refs.func_owner_by_ptr(p)!=Some("FVector") || !refs.is_method_by_ptr(p) || !refs.is_const_method_by_ptr(p) || !value(refs.func_ret_by_ptr(p)?) {return None;}
+        }
+        if !matches!(refs.func_params_by_ptr(mul)?,[t] if scalar(t))
+            || !matches!(refs.func_params_by_ptr(add)?,[t] if t.token==5 && t.type_info==vector && t.is_reference && t.is_object_const && t.is_read_only && !t.is_object_handle) {return None;}
+        let param=offsets.get(&w(&c[6])?).and_then(|n| f.params.get(*n))?;
+        if param.name.is_empty() || !scalar(&param.ty) {return None;}
+        let id=*c[0].dwords.first()? as i32;let owner=refs.type_identity_by_id(id)?;let (field,old)=refs.member_identity(id,w(&c[0])?)?;
+        if owner.module.is_empty() || !owner.namespace.is_empty() || refs.type_identity_by_id(old)?!=owner || refs.own_field_type_by_class(&owner.name,field)!=Some("float") {return None;}
+        let uses:Vec<_>=code.iter().enumerate().filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&product)).map(|(n,_)| n).collect();
+        let [made,read,reused,consumed]=uses.as_slice() else {return None;};
+        if [*made,*read,*reused]!=[at+3,at+8,at+11] || *consumed<=at+13 || code[*consumed].op.name!="PSF"
+            || code.iter().any(|i| i.op.name=="JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let t=i.offset_dw as i64+2+*d as i32 as i64;t>c[0].offset_dw as i64 && t<=c[13].offset_dw as i64
+            }))) {return None;}
+        Some((product,direction,base,field.to_owned(),param.name.clone()))
+    }).collect();
+    let [(product,direction,base,field,param)]=sites.as_slice() else {return body.to_owned();};
+    let name=format!("local_{product}");let sum=format!("{name}_2");
+    if count_ident(body,&name)!=2 || count_ident(body,&sum)!=2 {return body.to_owned();}
+    let first=format!("FVector {name} = (local_{direction} * this.{field});");let second=format!("FVector {sum} = (local_{base} + ({name} * {param}));");
+    let lines:Vec<_>=body.lines().collect();let found:Vec<_>=lines.windows(2).enumerate().filter(|(_,c)| c[0].trim()==first && c[1].trim()==second && indent_of(c[0])==indent_of(c[1])).map(|(n,_)| n).collect();
+    let [at]=found.as_slice() else {return body.to_owned();};
+    let mut out=Vec::new();for (n,line) in lines.iter().enumerate() {
+        if n==*at {out.push(format!("{}FVector {name} = (local_{base} + ((local_{direction} * this.{field}) * {param}));",indent_of(line)));}
+        else if n!=at+1 {out.push(rename_ident(line,&sum,&name));}
+    }
+    let mut result=out.join("\n");if body.ends_with('\n') {result.push('\n');}result
+}
+/// Keep unused entry values and a named sum alive through a native vector return copy.
+fn restore_vector_return_lifetimes(body:&str, f:&Func, refs:&RefResolver)->String {
+    let vector=f.ret.type_info;
+    let value=|t:&super::types::DataType| t.token==5 && t.type_info==vector && !t.is_reference && !t.is_object_handle;
+    let reference=|t:&super::types::DataType| t.token==5 && t.type_info==vector && t.is_reference && t.is_object_const && t.is_read_only && !t.is_object_handle;
+    let void=|t:&super::types::DataType| t.token==0x52 && t.type_info==0 && !t.is_reference && !t.is_object_handle;
+    if !value(&f.ret) || !body.contains("return ((local_") || !matches!(refs.type_identity_by_ptr(vector),Some(t) if t.name=="FVector" && t.module.is_empty() && t.namespace.is_empty()) {return body.to_owned();}
+    let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    let w=|i:&Instr| i.words.first().map(|s| *s as i16 as i32);
+    let jump=|i:&Instr| i.dwords.first().map(|d| i.offset_dw as i64+2+*d as i32 as i64);
+    let params:Vec<_>=f.params.iter().map(|p| p.ty.clone()).collect();let offsets=super::model::param_slot_map(&params,true,true,Some(refs));
+    let sites:Vec<_>=code.windows(28).enumerate().filter_map(|(at,c)| {
+        if at<7 || c.iter().map(|i| i.op.name).ne(["PSF","PshVPtr","CALLSYS","PshC8","PshC8","PshC8","PSF","CALLSYS","PSF","PSF","PSF","CALLSYS","PSF","PSF","PSF","CALLSYS","PshC8","PshC8","PshC8","PSF","CALLSYS","PSF","PSF","PSF","CALLSYS","PSF","PshVPtr","CALLSYS"]) {return None;}
+        let prefix=code.get(..4)?;
+        if prefix.iter().map(|i| i.op.name).ne(["PSF","CALLSYS","PSF","CALLSYS"]) || prefix[1].qwords!=prefix[3].qwords {return None;}
+        let (unused_a,unused_b,axis,constant,product,sum,left)=(w(&prefix[0])?,w(&prefix[2])?,w(&c[0])?,w(&c[6])?,w(&c[9])?,w(&c[13])?,w(&c[14])?);
+        let slots=[unused_a,unused_b,axis,constant,product,sum,left];
+        if slots.iter().any(|s| *s<=0) || HashSet::from(slots).len()!=slots.len()
+            || [(8,constant),(10,axis),(12,product),(19,constant),(21,constant),(22,product),(23,sum),(25,product),(26,-2)].iter().any(|(n,s)| w(&c[*n])!=Some(*s))
+            || c[7].qwords!=c[20].qwords {return None;}
+        for slot in slots {
+            if f.obj_locals.iter().filter(|(s,_)| *s==slot).map(|(_,p)| *p).ne([vector]) {return None;}
+        }
+        for (slot,uses) in [(unused_a,vec![0]),(unused_b,vec![2]),(sum,vec![at-7,at-4,at+13,at+23])] {
+            if code.iter().enumerate().filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&slot)).map(|(n,_)| n).ne(uses) {return None;}
+        }
+        let prior=&code[at-7..at];
+        if prior.iter().map(|i| i.op.name).ne(["PSF","PSF","CALLSYS","PSF","PSF","PSF","CALLSYS"])
+            || [(0,sum),(1,left),(3,sum),(4,left),(5,product)].iter().any(|(n,s)| w(&prior[*n])!=Some(*s))
+            || prior[2].qwords!=c[11].qwords || prior[6].qwords!=c[15].qwords {return None;}
+        let param=offsets.get(&w(&c[1])?).and_then(|n| f.params.get(*n))?;
+        if param.name.is_empty() || param.ty.token!=5 || !param.ty.is_object_handle || param.ty.is_reference {return None;}
+        let ptr=|n:usize| c[n].qwords.first().map(|p| *p as i64);let getter=ptr(2)?;
+        if !refs.is_method_by_ptr(getter) || !refs.is_const_method_by_ptr(getter) || !refs.func_params_by_ptr(getter)?.is_empty() || !value(refs.func_ret_by_ptr(getter)?) {return None;}
+        for (p,argc) in [(*prefix[1].qwords.first()? as i64,0),(ptr(7)?,3),(ptr(27)?,1)] {
+            let args=refs.func_params_by_ptr(p)?;
+            if refs.func_by_ptr(p)!=Some("$beh0") || refs.func_owner_by_ptr(p)!=Some("FVector") || !refs.is_method_by_ptr(p) || refs.is_const_method_by_ptr(p)
+                || !void(refs.func_ret_by_ptr(p)?) || args.len()!=argc
+                || (argc==1 && !reference(&args[0])) || (argc==3 && args.iter().any(|t| t.token!=0x51 || t.type_info!=0 || t.is_reference || t.is_object_handle)) {return None;}
+        }
+        for (n,name) in [(11,"opMul"),(15,"opAdd"),(24,"opSub")] {
+            let p=ptr(n)?;
+            if refs.func_by_ptr(p)!=Some(name) || refs.func_owner_by_ptr(p)!=Some("FVector") || !refs.is_method_by_ptr(p) || !refs.is_const_method_by_ptr(p)
+                || !value(refs.func_ret_by_ptr(p)?) || !matches!(refs.func_params_by_ptr(p)?,[t] if reference(t)) {return None;}
+        }
+        let exit=code.get(at+28)?;
+        if exit.op.name!="JMP" || code.last()?.op.name!="RET" || jump(exit)!=Some(code.last()?.offset_dw as i64)
+            || code.iter().any(|i| i.op.name=="JMPP" || (i.op.name.starts_with('J') && jump(i).is_some_and(|t| {
+                (t>=prior[0].offset_dw as i64 && t<exit.offset_dw as i64) || t<=prefix[3].offset_dw as i64
+            }))) {return None;}
+        let coordinates=|ns:[usize;3]| ->Option<Vec<u64>> {ns.into_iter().map(|n| c[n].qwords.first().copied().filter(|b| f64::from_bits(*b).is_finite())).collect()};
+        Some((unused_a,unused_b,sum,left,param.name.clone(),refs.func_by_ptr(getter)?.to_owned(),coordinates([5,4,3])?,coordinates([18,17,16])?))
+    }).collect();
+    let [(unused_a,unused_b,sum,left,actor,getter,scale_bits,delta_bits)]=sites.as_slice() else {return body.to_owned();};
+    let left_name=format!("local_{left}");let sum_name=format!("local_{sum}");
+    if count_ident(body,&left_name)!=2 || [unused_a,unused_b,sum].iter().any(|s| count_ident(body,&format!("local_{s}"))!=0) {return body.to_owned();}
+    let lines:Vec<_>=body.lines().collect();let Some(first)=lines.iter().position(|l| !l.trim().is_empty()) else {return body.to_owned();};
+    let prefix=format!("return (({left_name} + ({actor}.{getter}() * FVector(");
+    let values_match=|s:&str,bits:&[u64]| {let values:Option<Vec<_>>=s.split(',').map(|n| n.trim().parse::<f64>().ok().map(f64::to_bits)).collect();values.as_deref()==Some(bits)};
+    let found:Vec<_>=lines.iter().enumerate().filter_map(|(at,line)| {
+        let (scale,delta)=line.trim().strip_prefix(&prefix)?.split_once("))) - FVector(")?;let delta=delta.strip_suffix("));")?;
+        if at==0 || !values_match(scale,scale_bits) || !values_match(delta,delta_bits)
+            || !lines[at-1].trim().starts_with(&format!("FVector {left_name} = ")) || indent_of(lines[at-1])!=indent_of(line)
+            || indent_of(line)!=format!("{}    ",indent_of(lines[first])) {return None;}
+        Some((at,scale,delta))
+    }).collect();
+    let [(at,scale,delta)]=found.as_slice() else {return body.to_owned();};
+    let mut out=Vec::new();for (n,line) in lines.iter().enumerate() {
+        if n==first {for slot in [unused_a,unused_b] {out.push(format!("{}FVector local_{slot};",indent_of(line)));}}
+        if n==*at {let indent=indent_of(line);out.push(format!("{indent}FVector {sum_name} = ({left_name} + ({actor}.{getter}() * FVector({scale})));"));out.push(format!("{indent}return ({sum_name} - FVector({delta}));"));}
+        else {out.push((*line).to_owned());}
+    }
+    let mut result=out.join("\n");if body.ends_with('\n') {result.push('\n');}result
 }
 
 /// Separate sign assignment and retain the native i32/f32/f64 accumulator lifetimes.
@@ -44320,6 +44447,65 @@ mod literal_value_lifetime_tests {
         let mut bad=f.clone();bad.bytecode.extend(function(&[("PSF",&[14])]).bytecode);reject(&bad);
         let mut bad=f.clone();bad.bytecode[c[4].offset_dw]=(bad.bytecode[c[4].offset_dw]&!255)|function(&[("RET",&[0])]).bytecode[0];reject(&bad);
         let mut bad=f.clone();bad.ret=DataType {token:5,type_info:101,..Default::default()};reject(&bad);
+    }
+
+    #[test]
+    fn only_the_final_sum_owns_the_reused_vector_product_slot() {
+        let mut f=function(&[("LoadThisR",&[0]),("RDR8",&[24]),("PshV8",&[24]),("PSF",&[32]),("PSF",&[22]),("CALLSYS",&[]),("PshV8",&[65534]),
+            ("PSF",&[44]),("PSF",&[32]),("CALLSYS",&[]),("PSF",&[44]),("PSF",&[32]),("PSF",&[16]),("CALLSYS",&[]),("PSF",&[32]),("RET",&[4])]);
+        f.ret.token=0x52;f.obj_locals=[16,22,32,44].into_iter().map(|s| (s,1)).collect();
+        f.params.push(super::super::model::Param {name:"Step".into(),ty:DataType {token:0x51,..Default::default()},flags:0});
+        let c=disassemble(&f.bytecode).unwrap();for (n,p) in [(0,2),(5,10),(9,10),(13,11)] {f.bytecode[c[n].offset_dw+1]=p;}
+        let body="    FVector local_32 = (local_22 * this.Speed);\n    FVector local_32_2 = (local_16 + (local_32 * Step));\n    Consume(local_32_2);\n";
+        let expected="    FVector local_32 = (local_16 + ((local_22 * this.Speed) * Step));\n    Consume(local_32);\n";
+        let refs=RefResolver::from_test_reused_vector_product(0);
+        assert_eq!(super::fold_reused_vector_product(body,&f,&refs),expected);
+        assert_eq!(super::fold_reused_vector_product(expected,&f,&refs),expected);
+        for fault in 1..=9 {assert_eq!(super::fold_reused_vector_product(body,&f,&RefResolver::from_test_reused_vector_product(fault)),body,"metadata {fault}");}
+        for bad in [body.replace("this.Speed","this.Other"),body.replace("* Step","* Other"),format!("{body}Consume(local_32);\n"),body.replace("    FVector local_32_2","        FVector local_32_2")] {
+            assert_eq!(super::fold_reused_vector_product(&bad,&f,&refs),bad);
+        }
+        let reject=|bad:&Func| assert_eq!(super::fold_reused_vector_product(body,bad,&refs),body);
+        let mut bad=f.clone();bad.params[0].ty.is_reference=true;reject(&bad);
+        let mut bad=f.clone();bad.obj_locals.push((24,1));reject(&bad);
+        let mut bad=f.clone();bad.bytecode[c[9].offset_dw+1]=11;reject(&bad);
+        let mut bad=f.clone();let mut extra=function(&[("PSF",&[32])]).bytecode;extra.extend(bad.bytecode);bad.bytecode=extra;reject(&bad);
+        let mut bad=f.clone();let mut jump=function(&[("JMP",&[])]).bytecode;jump[1]=c[7].offset_dw as i32;jump.extend(bad.bytecode);bad.bytecode=jump;reject(&bad);
+    }
+
+    #[test]
+    fn vector_sum_and_unused_entry_values_survive_the_return_copy() {
+        let mut f=function(&[("PSF",&[6]),("CALLSYS",&[]),("PSF",&[12]),("CALLSYS",&[]),
+            ("PSF",&[52]),("PSF",&[34]),("CALLSYS",&[]),("PSF",&[52]),("PSF",&[34]),("PSF",&[28]),("CALLSYS",&[]),
+            ("PSF",&[40]),("PshVPtr",&[65532]),("CALLSYS",&[]),("PshC8",&[]),("PshC8",&[]),("PshC8",&[]),
+            ("PSF",&[22]),("CALLSYS",&[]),("PSF",&[22]),("PSF",&[28]),("PSF",&[40]),("CALLSYS",&[]),
+            ("PSF",&[28]),("PSF",&[52]),("PSF",&[34]),("CALLSYS",&[]),("PshC8",&[]),("PshC8",&[]),("PshC8",&[]),
+            ("PSF",&[22]),("CALLSYS",&[]),("PSF",&[22]),("PSF",&[28]),("PSF",&[52]),("CALLSYS",&[]),("PSF",&[28]),("PshVPtr",&[65534]),("CALLSYS",&[]),("JMP",&[]),("RET",&[6])]);
+        f.ret=DataType {token:5,type_info:100,..Default::default()};f.obj_locals=[6,12,22,28,34,40,52].into_iter().map(|s| (s,100)).collect();
+        f.params.push(super::super::model::Param {name:"Actor".into(),ty:DataType {token:5,type_info:200,is_object_handle:true,..Default::default()},flags:0});
+        let c=disassemble(&f.bytecode).unwrap();
+        for (n,p) in [(1,1),(3,1),(6,4),(10,5),(13,2),(18,3),(22,4),(26,5),(31,3),(35,6),(38,7)] {f.bytecode[c[n].offset_dw+1]=p;}
+        for (n,value) in [(14,0.0f64),(15,-40.0),(16,-40.0),(27,160.0),(28,0.0),(29,0.0)] {
+            let bits=value.to_bits();f.bytecode[c[n].offset_dw+1]=bits as i32;f.bytecode[c[n].offset_dw+2]=(bits>>32) as i32;
+        }
+        f.bytecode[c[39].offset_dw+1]=c[40].offset_dw as i32-c[39].offset_dw as i32-2;
+        let body="    FName Label;\n    if (Ready)\n    {\n        FVector local_34 = First;\n        return ((local_34 + (Actor.GetAxis() * FVector(-40.0, -40.0, 0.0))) - FVector(0.0, 0.0, 160.0));\n    }\n    return Fallback;\n";
+        let expected="    FVector local_6;\n    FVector local_12;\n    FName Label;\n    if (Ready)\n    {\n        FVector local_34 = First;\n        FVector local_52 = (local_34 + (Actor.GetAxis() * FVector(-40.0, -40.0, 0.0)));\n        return (local_52 - FVector(0.0, 0.0, 160.0));\n    }\n    return Fallback;\n";
+        let refs=RefResolver::from_test_vector_return_lifetimes(0);
+        assert_eq!(super::restore_vector_return_lifetimes(body,&f,&refs),expected);
+        assert_eq!(super::restore_vector_return_lifetimes(expected,&f,&refs),expected);
+        for fault in 1..=10 {assert_eq!(super::restore_vector_return_lifetimes(body,&f,&RefResolver::from_test_vector_return_lifetimes(fault)),body,"metadata {fault}");}
+        for bad in [body.replace("160.0","170.0"),body.replace("Actor.GetAxis","Other.GetAxis"),body.replace("FVector local_34","FVector2D local_34"),format!("{body}Use(local_6);\n"),format!("{body}Use(local_52);\n")] {
+            assert_eq!(super::restore_vector_return_lifetimes(&bad,&f,&refs),bad);
+        }
+        let reject=|bad:&Func| assert_eq!(super::restore_vector_return_lifetimes(body,bad,&refs),body);
+        let mut bad=f.clone();bad.ret.is_reference=true;reject(&bad);
+        let mut bad=f.clone();bad.params[0].ty.is_reference=true;reject(&bad);
+        let mut bad=f.clone();bad.obj_locals.push((6,100));reject(&bad);
+        let mut bad=f.clone();bad.bytecode[c[35].offset_dw+1]=5;reject(&bad);
+        let mut bad=f.clone();bad.bytecode[c[39].offset_dw+1]=0;bad.bytecode.extend(function(&[("PSF",&[6])] ).bytecode);reject(&bad);
+        let mut bad=f.clone();bad.bytecode[c[39].offset_dw+1]=c[13].offset_dw as i32-c[39].offset_dw as i32-2;reject(&bad);
+        let mut bad=f.clone();bad.bytecode[c[27].offset_dw+2]=0x7ff00000;reject(&bad);
     }
 
     #[test]

@@ -5340,6 +5340,59 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_reused_vector_product(fault:u8)->Self {
+        let mut r=Self::from_test_member_chain(&[("FVector",""),("UHost","Speed")]);
+        for (p,name,module) in [(1,"FVector",""),(2,"UHost","Script")] {r.type_identity_by_ptr.insert(p,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});}
+        r.prop_type_id.insert(5,2);r.class_fields.insert("UHost".into(),HashMap::from([("Speed".into(),"float".into())]));
+        let vector=DataType {token:5,type_info:1,..Default::default()};let reference=DataType {is_reference:true,is_object_const:true,is_read_only:true,..vector.clone()};
+        for (p,name,arg) in [(10,"opMul",DataType {token:0x51,..Default::default()}),(11,"opAdd",reference)] {
+            r.func_by_ptr.insert(p,name.into());r.func_owner.insert(p,"FVector".into());r.func_ret.insert(p,vector.clone());r.func_params.insert(p,vec![arg]);r.func_is_method.insert(p);r.const_method_ptrs.insert(p);
+        }
+        match fault {
+            1=>{r.func_ret.get_mut(&10).unwrap().is_reference=true;},
+            2=>{r.func_params.get_mut(&10).unwrap()[0].token=0x50;},
+            3=>{r.func_params.get_mut(&11).unwrap()[0].is_reference=false;},
+            4=>{r.const_method_ptrs.remove(&11);},
+            5=>{r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into();},
+            6=>{r.class_fields.get_mut("UHost").unwrap().insert("Speed".into(),"float32".into());},
+            7=>{r.prop_type_id.insert(5,1);},
+            8=>{r.duplicate_prop_keys.insert(5);},
+            9=>{r.func_owner.insert(10,"FOther".into());},
+            _=>{},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_vector_return_lifetimes(fault:u8)->Self {
+        let mut r=Self::default();
+        for (p,name) in [(100,"FVector"),(200,"AActor")] {r.type_by_ptr.insert(p,name.into());r.type_identity_by_ptr.insert(p,TypeIdentity {name:name.into(),module:String::new(),namespace:String::new()});}
+        let vector=DataType {token:5,type_info:100,..Default::default()};let reference=DataType {is_reference:true,is_object_const:true,is_read_only:true,..vector.clone()};
+        let void=DataType {token:0x52,..Default::default()};let double=DataType {token:0x51,..Default::default()};
+        for (p,name,owner,ret,args,constant) in [(1,"$beh0","FVector",void.clone(),vec![],false),
+            (2,"GetAxis","AActor",vector.clone(),vec![],true),(3,"$beh0","FVector",void.clone(),vec![double.clone(),double.clone(),double],false),
+            (4,"opMul","FVector",vector.clone(),vec![reference.clone()],true),(5,"opAdd","FVector",vector.clone(),vec![reference.clone()],true),
+            (6,"opSub","FVector",vector,vec![reference.clone()],true),(7,"$beh0","FVector",void,vec![reference],false)] {
+            r.func_by_ptr.insert(p,name.into());r.func_owner.insert(p,owner.into());r.func_ret.insert(p,ret);r.func_params.insert(p,args);r.func_is_method.insert(p);
+            if constant {r.const_method_ptrs.insert(p);}
+        }
+        match fault {
+            1=>{r.func_ret.get_mut(&1).unwrap().token=0x51;},
+            2=>{r.func_params.get_mut(&1).unwrap().push(DataType::default());},
+            3=>{r.type_identity_by_ptr.get_mut(&100).unwrap().module="Script".into();},
+            4=>{r.func_ret.get_mut(&2).unwrap().is_reference=true;},
+            5=>{r.func_params.get_mut(&3).unwrap()[0].token=0x50;},
+            6=>{r.func_params.get_mut(&4).unwrap()[0].is_reference=false;},
+            7=>{r.func_ret.get_mut(&5).unwrap().is_reference=true;},
+            8=>{r.func_ret.get_mut(&7).unwrap().token=0x51;},
+            9=>{r.func_is_method.remove(&6);},
+            10=>{r.const_method_ptrs.remove(&2);},
+            _=>{},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_random_scalar_lifetimes(fault:u8)->Self {
         let mut r=Self::default();
         r.type_by_ptr.insert(100,"FVector2D".into());
