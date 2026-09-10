@@ -3245,6 +3245,8 @@ fn emit_function_ctor(
         pass_trace("fold_closed_executor_bridges", &rendered);
         let rendered = restore_segment_value_lifetimes(&rendered, f, refs);
         pass_trace("restore_segment_value_lifetimes", &rendered);
+        let rendered = fold_native_raycast_sum_origin(&rendered, f, refs);
+        pass_trace("fold_native_raycast_sum_origin", &rendered);
         let rendered = restore_native_value_copy_declarations(&rendered, f, refs);
         pass_trace("restore_native_value_copy_declarations", &rendered);
         let rendered = fold_ordered_coordinate_difference(&rendered, f, refs);
@@ -9257,6 +9259,80 @@ fn fold_ordered_coordinate_difference(body: &str, f: &Func, refs: &RefResolver) 
         if let Some(line) = folded { out.push(line); at += 2; } else { out.push(lines[at].to_owned()); at += 1; }
     }
     let mut result = out.join("\n"); if body.ends_with('\n') { result.push('\n'); } result
+}
+
+/// The getter belongs inside the sum argument, after the later call arguments.
+fn fold_native_raycast_sum_origin(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if !body.contains("FVector ") || !body.contains("TSubclassOf<") || !f.is_const_method() || f.ret.token != 0x41 { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+    let sites: Vec<_> = code.windows(36).filter_map(|c| {
+        if c.iter().map(|i| i.op.name).ne(["PshNull", "PshNull", "PSF", "CALLSYS", "PSF", "PSF", "PSF", "PshVPtr", "ADDSi", "RDSPtr", "CALLSYS", "STOREOBJ", "PshVPtr", "CALLSYS",
+            "LoadThisR", "RDR8", "PshV8", "PSF", "PSF", "CALLSYS", "PSF", "PSF", "PSF", "CALLSYS", "PSF", "PSF", "PshVPtr", "ADDSi", "RDSPtr", "CALLSYS", "STOREOBJ", "PshVPtr", "CALLSYS", "PSF", "PshGPtr", "CALLSYS"]) { return None; }
+        let (filter, hit, origin, actor, scale, scratch, direction, sum) = (w(&c[2],0)?, w(&c[5],0)?, w(&c[6],0)?, w(&c[11],0)?, w(&c[15],0)?, w(&c[17],0)?, w(&c[18],0)?, w(&c[21],0)?);
+        let slots = [filter,hit,origin,actor,scale,scratch,direction,sum];
+        if slots.iter().any(|s| *s <= 0) || HashSet::from(slots).len() != slots.len()
+            || w(&c[4],0) != Some(filter) || [7,26].iter().any(|n| w(&c[*n],0) != Some(0))
+            || [12,30,31].iter().any(|n| w(&c[*n],0) != Some(actor)) || w(&c[16],0) != Some(scale)
+            || [20,25,33].iter().any(|n| w(&c[*n],0) != Some(scratch)) || w(&c[22],0) != Some(origin) || w(&c[24],0) != Some(sum)
+            || c[8].words != c[27].words || c[8].dwords != c[27].dwords || c[10].qwords != c[29].qwords || c[13].qwords != c[32].qwords { return None; }
+        let local = |slot| {
+            let values: Vec<_> = f.obj_locals.iter().filter(|(s,_)| *s == slot).map(|(_,p)| *p).collect();
+            let [p] = values.as_slice() else { return None; }; Some(*p)
+        };
+        let vector = local(origin)?; let actor_type = local(actor)?; let filter_type = local(filter)?;
+        let identity = refs.type_identity_by_ptr(vector)?;
+        if identity.name != "FVector" || !identity.module.is_empty() || !identity.namespace.is_empty()
+            || [hit,scratch,direction,sum].iter().any(|s| local(*s) != Some(vector))
+            || refs.type_identity_by_ptr(filter_type)?.name != "TSubclassOf" || f.obj_locals.iter().any(|(s,_)| *s == scale) { return None; }
+        let field = |n: usize| {
+            let tid = *c[n].dwords.first()? as i32; let (name, old) = refs.member_identity(tid, w(&c[n],0)?)?;
+            let owner = refs.type_identity_by_id(tid)?;
+            if owner.module.is_empty() || !owner.namespace.is_empty() || refs.type_identity_by_id(old)? != owner { return None; }
+            Some((name, refs.own_field_type_by_class(&owner.name,name)?))
+        };
+        let (state, state_type) = field(8)?; let (distance, distance_type) = field(14)?;
+        if state_type.is_empty() || distance_type != "float" { return None; }
+        let ptr = |n: usize| c[n].qwords.first().map(|p| *p as i64);
+        let value_vector = |t: &super::types::DataType| t.token == 5 && t.type_info == vector && !t.is_reference && !t.is_object_handle;
+        let ref_vector = |t: &super::types::DataType, constant| t.token == 5 && t.type_info == vector && t.is_reference && !t.is_object_handle && t.is_object_const == constant && t.is_read_only == constant;
+        for n in [10,13] {
+            let p = ptr(n)?;
+            if !refs.is_method_by_ptr(p) || !refs.is_const_method_by_ptr(p) || !refs.func_params_by_ptr(p)?.is_empty() { return None; }
+        }
+        let actor_ret = refs.func_ret_by_ptr(ptr(10)?)?;
+        if actor_ret.token != 5 || actor_ret.type_info != actor_type || !actor_ret.is_object_handle || actor_ret.is_reference
+            || !value_vector(refs.func_ret_by_ptr(ptr(13)?)?) || refs.func_owner_by_ptr(ptr(13)?)? != refs.type_identity_by_ptr(actor_type)?.name { return None; }
+        let ctor = ptr(3)?; let ctor_ret = refs.func_ret_by_ptr(ctor)?; let [class_arg] = refs.func_params_by_ptr(ctor)? else { return None; };
+        if refs.func_by_ptr(ctor) != Some("$beh0") || refs.func_owner_by_ptr(ctor) != Some("TSubclassOf") || !refs.is_method_by_ptr(ctor)
+            || ctor_ret.token != 0x52 || ctor_ret.is_reference || ctor_ret.is_object_handle || class_arg.token != 5 || !class_arg.is_object_handle || class_arg.is_reference { return None; }
+        for (n,name) in [(19,"opMul"),(23,"opAdd")] {
+            let p = ptr(n)?; let [arg] = refs.func_params_by_ptr(p)? else { return None; };
+            if refs.func_by_ptr(p) != Some(name) || refs.func_owner_by_ptr(p) != Some("FVector") || !refs.is_method_by_ptr(p) || !refs.is_const_method_by_ptr(p)
+                || !value_vector(refs.func_ret_by_ptr(p)?) || (n == 19 && (arg.token != 0x51 || arg.type_info != 0 || arg.is_reference || arg.is_object_handle))
+                || (n == 23 && !ref_vector(arg,true)) { return None; }
+        }
+        let query = ptr(35)?; let args = refs.func_params_by_ptr(query)?; let ret = refs.func_ret_by_ptr(query)?;
+        if refs.is_method_by_ptr(query) || ret.token != 0x41 || ret.is_reference || ret.is_object_handle || args.len() != 6
+            || !args[0].is_object_handle || !ref_vector(&args[1],true) || !ref_vector(&args[2],true) || !ref_vector(&args[3],false)
+            || args[4].token != 5 || args[4].type_info != filter_type || args[4].is_reference || args[4].is_object_handle || !args[5].is_object_handle
+            || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let t = i.offset_dw as i64 + 2 + *d as i32 as i64; t > c[0].offset_dw as i64 && t <= c[35].offset_dw as i64
+            }))) { return None; }
+        let receiver = format!("this.{state}.{}().{}()",refs.func_by_ptr(ptr(10)?)?,refs.func_by_ptr(ptr(13)?)?);
+        let name = refs.func_by_ptr(query)?; let namespace = refs.func_ns_by_ptr(query).unwrap_or("");
+        let query = if namespace.is_empty() { name.to_owned() } else { format!("{namespace}::{name}") };
+        let filter_name = super::types::DataType { token:5,type_info:filter_type,..Default::default() }.base_name(refs);
+        Some((origin, receiver.clone(), format!("{query}({receiver}, (local_{origin} + (local_{direction} * this.{distance})), local_{hit}, {filter_name}(nullptr), nullptr);")))
+    }).collect();
+    let [(slot, receiver, query)] = sites.as_slice() else { return body.to_owned(); };
+    let name = format!("local_{slot}"); if count_ident(body,&name) != 2 { return body.to_owned(); }
+    let declaration = format!("FVector {name} = {receiver};"); let lines: Vec<_> = body.lines().collect();
+    let matching: Vec<_> = lines.windows(2).enumerate().filter(|(_,c)| c[0].trim() == declaration && c[1].trim() == query.as_str()).map(|(at,_)| at).collect();
+    let [at] = matching.as_slice() else { return body.to_owned(); };
+    let mut result: Vec<_> = lines.iter().map(|s| (*s).to_owned()).collect();
+    result.splice(*at..at+2,[format!("{}{}",indent_of(lines[*at+1]),query.replace(&format!("({name} +"),&format!("({receiver} +")))]);
+    let mut result = result.join("\n"); if body.ends_with('\n') { result.push('\n'); } result
 }
 
 /// An explicit native value copy initializes the named object's own storage.
@@ -43578,6 +43654,32 @@ mod literal_value_lifetime_tests {
             format!("{body}Use(local_90_2);\n"), body.replace("if (Math::Abs", "while (Math::Abs")] {
             assert_eq!(fold(&text,&f,&refs),text);
         }
+    }
+
+    #[test]
+    fn raycast_sum_origin_keeps_native_argument_evaluation_order() {
+        let mut f = function(&[("PshNull",&[]),("PshNull",&[]),("PSF",&[46]),("CALLSYS",&[]),("PSF",&[46]),("PSF",&[38]),("PSF",&[24]),("PshVPtr",&[0]),("ADDSi",&[0]),("RDSPtr",&[]),("CALLSYS",&[]),("STOREOBJ",&[12]),("PshVPtr",&[12]),("CALLSYS",&[]),
+            ("LoadThisR",&[0]),("RDR8",&[32]),("PshV8",&[32]),("PSF",&[30]),("PSF",&[10]),("CALLSYS",&[]),("PSF",&[30]),("PSF",&[44]),("PSF",&[24]),("CALLSYS",&[]),
+            ("PSF",&[44]),("PSF",&[30]),("PshVPtr",&[0]),("ADDSi",&[0]),("RDSPtr",&[]),("CALLSYS",&[]),("STOREOBJ",&[12]),("PshVPtr",&[12]),("CALLSYS",&[]),("PSF",&[30]),("PshGPtr",&[]),("CALLSYS",&[])]);
+        f.ret.token = 0x41; f.traits = 4; f.obj_locals = vec![(46,4),(38,1),(24,1),(12,2),(30,1),(10,1),(44,1)];
+        let c = disassemble(&f.bytecode).unwrap();
+        for (at,value) in [(3,100),(8,6),(10,101),(13,102),(14,7),(19,103),(23,104),(27,6),(29,101),(32,102),(34,1001),(35,105)] { f.bytecode[c[at].offset_dw+1] = value; }
+        let body = "    FVector local_24 = this.State.Actor().Location();\n    Probe(this.State.Actor().Location(), (local_24 + (local_10 * this.Length)), local_38, TSubclassOf<UFilter>(nullptr), nullptr);\n";
+        let expected = "    Probe(this.State.Actor().Location(), (this.State.Actor().Location() + (local_10 * this.Length)), local_38, TSubclassOf<UFilter>(nullptr), nullptr);\n";
+        let refs = RefResolver::from_test_native_raycast_origin(0);
+        assert_eq!(super::fold_native_raycast_sum_origin(body,&f,&refs),expected);
+        assert_eq!(super::fold_native_raycast_sum_origin(expected,&f,&refs),expected);
+        for fault in 1..=10 { assert_eq!(super::fold_native_raycast_sum_origin(body,&f,&RefResolver::from_test_native_raycast_origin(fault)),body,"metadata {fault}"); }
+        for bad in [format!("{body}    Use(local_24);\n"),body.replace("this.Length","this.Other"),body.replace("Probe(","Other("),body.replace("local_24 +","local_18 +")] {
+            assert_eq!(super::fold_native_raycast_sum_origin(&bad,&f,&refs),bad);
+        }
+        let mut bad = f.clone(); bad.traits = 0; assert_eq!(super::fold_native_raycast_sum_origin(body,&bad,&refs),body);
+        let mut bad = f.clone(); bad.ret.token = 0x52; assert_eq!(super::fold_native_raycast_sum_origin(body,&bad,&refs),body);
+        let mut bad = f.clone(); bad.obj_locals.push((24,1)); assert_eq!(super::fold_native_raycast_sum_origin(body,&bad,&refs),body);
+        let mut bad = f.clone(); bad.bytecode[c[22].offset_dw] ^= 1 << 16; assert_eq!(super::fold_native_raycast_sum_origin(body,&bad,&refs),body);
+        let mut bad = f.clone(); let mut prefix = function(&[("JMP",&[])]).bytecode; prefix[1] = c[13].offset_dw as i32;
+        bad.bytecode.splice(0..0,prefix); assert_eq!(super::fold_native_raycast_sum_origin(body,&bad,&refs),body);
+        let mut bad = f.clone(); bad.bytecode.splice(0..0,function(&[("JMPP",&[99])]).bytecode); assert_eq!(super::fold_native_raycast_sum_origin(body,&bad,&refs),body);
     }
 
     #[test]

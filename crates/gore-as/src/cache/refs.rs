@@ -5306,6 +5306,44 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_native_raycast_origin(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FVector",""),("UActor",""),("UState",""),("TSubclassOf",""),("UFilter",""),("UBase","State"),("UMove","Length"),("UClass",""),("UObject","")]);
+        for (id,name) in [(1,"FVector"),(2,"UActor"),(3,"UState"),(4,"TSubclassOf"),(5,"UFilter"),(6,"UBase"),(7,"UMove"),(8,"UClass"),(9,"UObject")] {
+            r.type_identity_by_ptr.insert(id, TypeIdentity { name:name.into(), module:if [6,7].contains(&id) { "Fixture".into() } else { String::new() }, namespace:String::new() });
+        }
+        r.prop_type_id.insert(13,6); r.prop_type_id.insert(15,7);
+        r.class_fields.entry("UBase".into()).or_default().insert("State".into(),"UState".into());
+        r.class_fields.entry("UMove".into()).or_default().insert("Length".into(),"float".into());
+        let value = |p| DataType { token:5,type_info:p,..Default::default() };
+        let handle = |p| DataType { is_object_handle:true,..value(p) };
+        let reference = |constant| DataType { is_reference:true,is_object_const:constant,is_read_only:constant,..value(1) };
+        let scalar = |token| DataType { token,..Default::default() };
+        r.type_subtypes.insert(4,vec![handle(5)]);
+        for (p,owner,name,constant,ret,args) in [(100,"TSubclassOf","$beh0",false,scalar(0x52),vec![handle(8)]),
+            (101,"UState","Actor",true,handle(2),vec![]),(102,"UActor","Location",true,value(1),vec![]),
+            (103,"FVector","opMul",true,value(1),vec![scalar(0x51)]),(104,"FVector","opAdd",true,value(1),vec![reference(true)]),
+            (105,"","Probe",false,scalar(0x41),vec![handle(9),reference(true),reference(true),reference(false),value(4),handle(2)])] {
+            r.func_by_ptr.insert(p,name.into()); r.func_ret.insert(p,ret); r.func_params.insert(p,args);
+            if !owner.is_empty() { r.func_owner.insert(p,owner.into()); r.func_is_method.insert(p); }
+            if constant { r.const_method_ptrs.insert(p); }
+        }
+        match fault {
+            1 => { r.func_params.get_mut(&103).unwrap()[0].token = 0x50; },
+            2 => { r.func_ret.get_mut(&102).unwrap().is_reference = true; },
+            3 => { r.func_params.get_mut(&104).unwrap()[0].is_read_only = false; },
+            4 => { r.func_params.get_mut(&105).unwrap()[3].is_object_const = true; },
+            5 => { r.class_fields.get_mut("UMove").unwrap().insert("Length".into(),"float32".into()); },
+            6 => { r.prop_type_id.insert(13,7); },
+            7 => { r.duplicate_prop_keys.insert(15); },
+            8 => { r.func_ret.get_mut(&101).unwrap().type_info = 3; },
+            9 => { r.type_identity_by_ptr.get_mut(&4).unwrap().name = "TOther".into(); },
+            10 => { r.func_is_method.insert(105); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_native_fname_copy_declarations(fault: u8) -> Self {
         let mut r = Self::from_test_native_vector_copy_declarations(fault);
         r.type_identity_by_ptr.get_mut(&1).unwrap().name = "FName".into();
