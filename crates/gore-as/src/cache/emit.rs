@@ -3245,6 +3245,8 @@ fn emit_function_ctor(
         pass_trace("fold_closed_executor_bridges", &rendered);
         let rendered = restore_segment_value_lifetimes(&rendered, f, refs);
         pass_trace("restore_segment_value_lifetimes", &rendered);
+        let rendered = restore_native_vector_copy_declarations(&rendered, f, refs);
+        pass_trace("restore_native_vector_copy_declarations", &rendered);
         let rendered = fold_widened_vector_sign(&rendered, vector_sign);
         pass_trace("fold_widened_vector_sign", &rendered);
         s.truncate(declarations_at);
@@ -8507,6 +8509,45 @@ fn rewrite_no_assign_locals(body: &str, locals: &BTreeMap<i32, String>) -> (Stri
         suppressed.insert(*slot);
     }
     (out, suppressed)
+}
+
+/// An explicit native vector copy initializes the named object's own storage.
+/// An initializer expression can instead lend that name a temporary's storage.
+fn restore_native_vector_copy_declarations(body:&str,f:&Func,refs:&RefResolver)->String {
+    if !body.contains(" = FVector(") {return body.to_owned();}
+    let Ok(code)=disassemble(&f.bytecode) else{return body.to_owned();};
+    let mut copies:HashMap<i32,usize>=HashMap::new();let mut mixed=HashSet::new();
+    for c in code.windows(2) {
+        if c[0].op.name!="PSF" || c[1].op.name!="CALLSYS" {continue;}
+        let Some(slot)=c[0].words.first().map(|s|*s as i16 as i32).filter(|s|*s>0) else{continue;};
+        let Some(ptr)=c[1].qwords.first().map(|p|*p as i64) else{continue;};
+        if refs.func_owner_by_ptr(ptr)!=Some("FVector") || refs.func_by_ptr(ptr)!=Some("$beh0") {continue;}
+        let qualifies=(|| {
+            let [arg]=refs.func_params_by_ptr(ptr)? else{return None;};let ret=refs.func_ret_by_ptr(ptr)?;
+            let identity=refs.type_identity_by_ptr(arg.type_info)?;
+            if arg.token!=5 || !arg.is_reference || !arg.is_object_const || !arg.is_read_only || arg.is_object_handle
+                || identity.name!="FVector" || !identity.module.is_empty() || !identity.namespace.is_empty()
+                || ret.token!=0x52 || ret.is_reference || ret.is_object_handle || !refs.is_method_by_ptr(ptr) || refs.is_const_method_by_ptr(ptr)
+                || f.obj_locals.iter().filter(|(s,_)|*s==slot).map(|(_,t)|*t).ne([arg.type_info]) {return None;}
+            Some(())
+        })();
+        if qualifies.is_some(){*copies.entry(slot).or_default()+=1;}else{mixed.insert(slot);}
+    }
+    if copies.is_empty(){return body.to_owned();}
+    let mut candidates:HashMap<i32,Vec<(usize,String)>>=HashMap::new();
+    let lines:Vec<_>=body.lines().collect();
+    for (at,line) in lines.iter().enumerate() {
+        let Some((indent,name,rhs))=declaration_with_initializer(line) else{continue;};
+        let Some((slot,_))=slot_and_life_any(&name) else{continue;};
+        if !copies.contains_key(&slot) || mixed.contains(&slot) || !line.trim_start().starts_with("FVector ") || !rhs.starts_with("FVector(") {continue;}
+        let Some((args,close))=argument_list(&rhs,"FVector".len()) else{continue;};
+        if args.len()!=1 || close+1!=rhs.len(){continue;}
+        candidates.entry(slot).or_default().push((at,format!("{indent}FVector {name}({});",args[0])));
+    }
+    let edits:HashMap<_,_>=candidates.into_iter().filter(|(slot,sites)|copies.get(slot)==Some(&sites.len())).flat_map(|(_,sites)|sites).collect();
+    if edits.is_empty(){return body.to_owned();}
+    let mut result=lines.iter().enumerate().map(|(at,line)|edits.get(&at).map_or(*line,String::as_str)).collect::<Vec<_>>().join("\n");
+    if body.ends_with('\n'){result.push('\n');}result
 }
 
 /// Copied segment origins survive the nearest-point query. The scaled direction
@@ -42443,6 +42484,28 @@ mod literal_value_lifetime_tests {
         let mut named=function(&[("PSF",&[12]),("CALL",&[]),("PshVPtr",&[65534]),("CALL",&[])]);
         let c=disassemble(&named.bytecode).unwrap();for at in [1,3]{named.bytecode[c[at].offset_dw+1]=7;}
         assert_eq!(super::fold_returned_empty_values(body,&named,&refs),body);
+    }
+
+    #[test]
+    fn native_vector_copy_declarations_match_all_lives_of_their_destination() {
+        let mut f=function(&[("PSF",&[6]),("CALLSYS",&[]),("PSF",&[12]),("CALLSYS",&[]),("PSF",&[12]),("CALLSYS",&[])]);
+        f.obj_locals=vec![(6,1),(12,1)];let c=disassemble(&f.bytecode).unwrap();for at in [1,3,5]{f.bytecode[c[at].offset_dw+1]=10;}
+        let body="FVector local_6 = FVector(Origin());\nif (First)\n{\n    FVector local_12 = FVector(Actor.GetLocation());\n    Use(local_12);\n}\nelse\n{\n    FVector local_12_2 = FVector(FVector::UpVector);\n    Use(local_12_2);\n}\nUse(local_6);\n";
+        let expected=body.replace("local_6 = FVector(Origin())","local_6(Origin())").replace("local_12 = FVector(Actor.GetLocation())","local_12(Actor.GetLocation())")
+            .replace("local_12_2 = FVector(FVector::UpVector)","local_12_2(FVector::UpVector)");
+        let refs=RefResolver::from_test_native_vector_copy_declarations(0);
+        assert_eq!(super::restore_native_vector_copy_declarations(body,&f,&refs),expected);
+        assert_eq!(super::restore_native_vector_copy_declarations(&expected,&f,&refs),expected);
+        for fault in 1..=4 {assert_eq!(super::restore_native_vector_copy_declarations(body,&f,&RefResolver::from_test_native_vector_copy_declarations(fault)),body,"metadata {fault}");}
+        let mut missing=f.clone();missing.bytecode.truncate(c[4].offset_dw);
+        assert_eq!(super::restore_native_vector_copy_declarations(body,&missing,&refs),body.replace("local_6 = FVector(Origin())","local_6(Origin())"));
+        let mut mixed=f.clone();mixed.bytecode[c[5].offset_dw+1]=11;
+        assert_eq!(super::restore_native_vector_copy_declarations(body,&mixed,&refs),body.replace("local_6 = FVector(Origin())","local_6(Origin())"));
+        let mut duplicate=f.clone();duplicate.obj_locals.push((6,1));duplicate.obj_locals.push((12,1));assert_eq!(super::restore_native_vector_copy_declarations(body,&duplicate,&refs),body);
+        for text in [body.replace("FVector local_", "Other local_"),body.replace("= FVector(","= Other("),
+            body.replace("Origin()","1.0, 2.0, 3.0").replace("Actor.GetLocation()","1.0, 2.0, 3.0").replace("FVector::UpVector","1.0, 2.0, 3.0")] {
+            assert_eq!(super::restore_native_vector_copy_declarations(&text,&f,&refs),text);
+        }
     }
 
     #[test]

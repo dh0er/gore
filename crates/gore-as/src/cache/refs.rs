@@ -5032,6 +5032,25 @@ impl RefResolver {
         r
     }
     #[cfg(test)]
+    pub(crate) fn from_test_native_vector_copy_declarations(fault:u8)->Self {
+        let mut r=Self::default();
+        r.type_identity_by_ptr.insert(1,TypeIdentity {name:"FVector".into(),module:String::new(),namespace:String::new()});
+        for ptr in [10,11] {
+            r.func_by_ptr.insert(ptr,"$beh0".into());r.func_owner.insert(ptr,"FVector".into());r.func_is_method.insert(ptr);
+            r.func_ret.insert(ptr,DataType {token:0x52,..Default::default()});
+            r.func_params.insert(ptr,if ptr==10{vec![DataType {token:5,type_info:1,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()}]}else{vec![]});
+        }
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into(),
+            2=>r.func_params.get_mut(&10).unwrap()[0].is_read_only=false,
+            3=>r.func_ret.get_mut(&10).unwrap().is_reference=true,
+            4=>{r.const_method_ptrs.insert(10);}
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_segment_lifetimes(fault:u8)->Self {
         let mut r=Self::default();let vector=DataType {token:5,type_info:1,..Default::default()};
         let input=DataType {is_reference:true,is_object_const:true,is_read_only:true,..vector.clone()};

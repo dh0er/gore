@@ -30,10 +30,10 @@ AI.States.FightAI.CharmedState.AIState_Charmed	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_AcceptDefeat	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_ClaimVictory	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_CombatEndActions	1	0	0
-AI.States.FightAI.CombatState.AIGroup_Attackers	5	0	0
+AI.States.FightAI.CombatState.AIGroup_Attackers	4	0	0
 AI.States.FightAI.CombatState.AIGroup_Combat	2	0	0
 AI.States.FightAI.CombatState.AIState_OGCombat	5	0	0
-AI.States.FightAI.CombatState.CombatMoves	16	0	0
+AI.States.FightAI.CombatState.CombatMoves	15	0	0
 AI.States.FightAI.CombatState.CombatOperations	1	0	0
 AI.States.FightAI.CombatState.CombatTestClasses	1	0	0
 AI.States.FightAI.CombatState.Positioning.AICombat_Positioning	13	0	0
@@ -41,12 +41,12 @@ AI.States.FightAI.DisengageBehavior.AIState_Disengage	1	0	0
 AI.States.FightAI.FearState.AIState_Fear	1	0	0
 AI.States.FightAI.FleeState.AIState_Flee	2	0	0
 AI.States.FightAI.GoGetGuardState.AIState_GoGetGuard	1	0	0
-AI.States.FightAI.SearchState.AIState_Search	8	0	0
+AI.States.FightAI.SearchState.AIState_Search	7	0	0
 AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpotManager	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_Crime	7	0	0
 AI.States.FightAI.WatchFightState.AIGroup_WatchFight	1	0	0
-AI.States.FightAI.WatchFightState.AIState_WatchFight	11	0	0
+AI.States.FightAI.WatchFightState.AIState_WatchFight	9	0	0
 Camera.ConversationCameraConfig	1	0	0
 Environment.GothicUltraDynamicControlerAS	1	0	0
 GAS.Abilities.Combat.AttackLoop.Capsule.PyrolaserHitCapsuleComponent	1	0	0
@@ -61,7 +61,7 @@ GAS.Abilities.Spells.Spells.Transform.GA_Spell_Transform	2	0	0
 GAS.Abilities.Spells.Visuals.Fire.FireRainVisual	1	0	0
 GAS.Abilities.Spells.Visuals.Fire.InnosPrayVisual	2	0	0
 GAS.Calculations.Damage	1	0	0
-GAS.GASCharacterMixins	2	0	0
+GAS.GASCharacterMixins	1	0	0
 GAS.GASCharacterStateMixins	7	0	0
 Gameplay.Magic.Components.InExtremo.InExtremoPropComponent	1	0	0
 Items.Projectiles	2	0	0
