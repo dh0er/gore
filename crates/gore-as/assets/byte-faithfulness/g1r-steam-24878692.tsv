@@ -61,7 +61,6 @@ GAS.Calculations.Damage	1	0	0
 GAS.GASCharacterMixins	1	0	0
 GAS.GASCharacterStateMixins	7	0	0
 Gameplay.Magic.Components.InExtremo.InExtremoPropComponent	1	0	0
-Items.Projectiles	2	0	0
 Regions.Traits.QuestRelatedTraits	2	0	0
 Sound.FXDefinitions.FXDefinitions_AttackImpact	1	0	0
 Spawning.TriggerSpawner	1	0	0

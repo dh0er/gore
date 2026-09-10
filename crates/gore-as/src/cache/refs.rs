@@ -5340,6 +5340,31 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_random_scalar_lifetimes(fault:u8)->Self {
+        let mut r=Self::default();
+        r.type_by_ptr.insert(100,"FVector2D".into());
+        r.type_identity_by_ptr.insert(100,TypeIdentity {name:"FVector2D".into(),module:String::new(),namespace:String::new()});
+        let integer=DataType {token:0x44,..Default::default()};let double=DataType {token:0x51,..Default::default()};
+        let range=DataType {token:5,type_info:100,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()};
+        r.func_by_ptr.insert(10,"DrawInt".into());r.func_ns.insert(10,"Math".into());r.func_ret.insert(10,integer.clone());r.func_params.insert(10,vec![integer.clone(),integer]);
+        r.func_by_ptr.insert(11,"Map".into());r.func_ns.insert(11,"Math".into());r.func_ret.insert(11,double.clone());r.func_params.insert(11,vec![range.clone(),range,double]);
+        match fault {
+            1=>{r.func_ret.get_mut(&10).unwrap().token=0x51;},
+            2=>{r.func_params.get_mut(&10).unwrap()[0].token=0x50;},
+            3=>{r.func_is_method.insert(10);},
+            4=>{r.func_ret.get_mut(&11).unwrap().token=0x50;},
+            5=>{r.func_params.get_mut(&11).unwrap()[2].is_reference=true;},
+            6=>{r.func_params.get_mut(&11).unwrap()[1].type_info=101;},
+            7=>{r.type_identity_by_ptr.get_mut(&100).unwrap().name="FVector".into();},
+            8=>{r.type_identity_by_ptr.get_mut(&100).unwrap().module="Script".into();},
+            9=>{r.func_is_method.insert(11);},
+            10=>{r.func_ns.insert(10,"Other".into());},
+            _=>{},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_retained_predicate_argument(fault:u8)->Self {
         let mut r=Self::from_test_member_chain(&[("UHost","Tracked"),("AActor",""),("AState","")]);
         for (p,name) in [(1,"UHost"),(2,"AActor"),(3,"AState")] {

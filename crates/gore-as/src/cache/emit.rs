@@ -3245,6 +3245,8 @@ fn emit_function_ctor(
         pass_trace("fold_closed_executor_bridges", &rendered);
         let rendered = restore_segment_value_lifetimes(&rendered, f, refs);
         pass_trace("restore_segment_value_lifetimes", &rendered);
+        let rendered = restore_random_scalar_lifetimes(&rendered, f, refs);
+        pass_trace("restore_random_scalar_lifetimes", &rendered);
         let rendered = retain_native_predicate_argument(&rendered, f, refs);
         pass_trace("retain_native_predicate_argument", &rendered);
         let rendered = fold_native_recipient_argument(&rendered, f, refs);
@@ -9299,6 +9301,68 @@ fn fold_ordered_coordinate_difference(body: &str, f: &Func, refs: &RefResolver) 
         if let Some(line) = folded { out.push(line); at += 2; } else { out.push(lines[at].to_owned()); at += 1; }
     }
     let mut result = out.join("\n"); if body.ends_with('\n') { result.push('\n'); } result
+}
+
+/// Separate sign assignment and retain the native i32/f32/f64 accumulator lifetimes.
+fn restore_random_scalar_lifetimes(body:&str, f:&Func, refs:&RefResolver)->String {
+    if f.ret.token!=0x51 || !body.contains(" * ") {return body.to_owned();}
+    let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    let w=|i:&Instr,n:usize| i.words.get(n).map(|s| *s as i16 as i32);
+    let scalar=|t:&super::types::DataType,token| t.token==token && t.type_info==0 && !t.is_reference && !t.is_object_handle;
+    let native_call=|p| {let name=refs.func_by_ptr(p)?;let ns=refs.func_ns_by_ptr(p).unwrap_or("");Some(if ns.is_empty() {name.to_owned()} else {format!("{ns}::{name}")})};
+    let sites:Vec<_>=code.windows(18).enumerate().filter_map(|(at,c)| {
+        if at==0 || c.iter().map(|i| i.op.name).ne(["SetV4","PshC4","PshC4","CALLSYS","CpyRtoV4","MULIi","SUBi","PshC4","PshC4","CALLSYS","CpyRtoV4","iTOf","SetV4","MULf","iTOf","MULf","fTOd","ADDd"]) {return None;}
+        let (one,sign,product,fraction,factor,sign_float,addend,acc)=(w(&c[0],0)?,w(&c[4],0)?,w(&c[5],0)?,w(&c[11],0)?,w(&c[12],0)?,w(&c[14],0)?,w(&c[16],0)?,w(&c[17],0)?);
+        let slots=[one,sign,product,fraction,factor,sign_float,addend,acc];
+        if slots.iter().any(|s| *s<=0) || HashSet::from(slots).len()!=slots.len() || f.obj_locals.iter().any(|(s,_)| slots.contains(s))
+            || [(5,1,sign),(6,0,sign),(6,1,one),(6,2,product),(10,0,one),(11,1,one),(13,0,fraction),(13,1,fraction),(13,2,factor),
+                (14,1,sign),(15,0,factor),(15,1,fraction),(15,2,sign_float),(16,1,factor),(17,1,acc),(17,2,addend)].iter().any(|(n,o,s)| w(&c[*n],*o)!=Some(*s))
+            || code[at-1].op.name!="DIVd" || w(&code[at-1],0)!=Some(acc) || c[3].qwords!=c[9].qwords {return None;}
+        let random=*c[3].qwords.first()? as i64;
+        if refs.is_method_by_ptr(random) || !scalar(refs.func_ret_by_ptr(random)?,0x44)
+            || !matches!(refs.func_params_by_ptr(random)?,[a,b] if scalar(a,0x44) && scalar(b,0x44)) {return None;}
+        let tail=code.get(code.len().checked_sub(5)?..)?;
+        if at+18>=code.len()-5 || tail.iter().map(|i| i.op.name).ne(["CALLSYS","CpyRtoV8","CpyVtoV8","CpyVtoR8","RET"])
+            || w(&tail[2],0)!=Some(acc) || w(&tail[2],1)!=w(&tail[1],0) || w(&tail[3],0)!=Some(acc) {return None;}
+        let mapped=*tail[0].qwords.first()? as i64;
+        let [a,b,value]=refs.func_params_by_ptr(mapped)? else {return None;};
+        let range=|t:&super::types::DataType| t.token==5 && t.type_info==a.type_info && t.is_reference && t.is_object_const && t.is_read_only && !t.is_object_handle;
+        let range_type=refs.type_identity_by_ptr(a.type_info)?;
+        if refs.is_method_by_ptr(mapped) || !scalar(refs.func_ret_by_ptr(mapped)?,0x51) || !scalar(value,0x51) || !range(a) || !range(b)
+            || range_type.name!="FVector2D" || !range_type.module.is_empty() || !range_type.namespace.is_empty()
+            || code.iter().any(|i| i.op.name=="JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let t=i.offset_dw as i64+2+*d as i32 as i64;t>=c[0].offset_dw as i64
+            }))) {return None;}
+        let bits=*c[12].dwords.first()?;if !f32::from_bits(bits).is_finite() {return None;}
+        let integer=|n:usize| c[n].dwords.first().map(|d| *d as i32);
+        let callee=native_call(random)?;let first=format!("{callee}({}, {})",integer(2)?,integer(1)?);let second=format!("{callee}({}, {})",integer(8)?,integer(7)?);
+        Some((sign,fraction,factor,acc,integer(0)?,integer(5)?,bits,first,second,native_call(mapped)?))
+    }).collect();
+    let [(sign,fraction,factor,acc,one,multiplier,bits,first,second,mapped)]=sites.as_slice() else {return body.to_owned();};
+    let name=format!("local_{sign}");let result=format!("{name}_2");let accumulator=format!("local_{acc}");
+    if count_ident(body,&name)!=2 || count_ident(body,&result)!=2 || [fraction,factor].iter().any(|s| count_ident(body,&format!("local_{s}"))!=0) {return body.to_owned();}
+    let lines:Vec<_>=body.lines().collect();let prefix=format!("{accumulator} = {accumulator} + ((({second}) * ");let suffix=format!(") * {result});");
+    let found:Vec<_>=lines.windows(3).enumerate().filter_map(|(at,c)| {
+        if c[0].trim()!=format!("int {name} = {first};") || c[1].trim()!=format!("int {result} = {one} - ({name} * {multiplier});")
+            || indent_of(c[0])!=indent_of(c[1]) || indent_of(c[0])!=indent_of(c[2]) {return None;}
+        let literal=c[2].trim().strip_prefix(&prefix)?.strip_suffix(&suffix)?;
+        if literal.strip_suffix('f')?.parse::<f32>().ok()?.to_bits()!=*bits {return None;}
+        Some((at,literal.to_owned()))
+    }).collect();
+    let [(at,literal)]=found.as_slice() else {return body.to_owned();};
+    let returns:Vec<_>=lines.iter().enumerate().filter(|(_,l)| l.trim().starts_with("return ")).collect();
+    let [(last,line)]=returns.as_slice() else {return body.to_owned();};
+    let Some(rhs)=line.trim().strip_prefix("return (").and_then(|s| s.strip_suffix(");")) else {return body.to_owned();};
+    if *last<=at+2 || !rhs.starts_with(&format!("{mapped}(")) || count_ident(rhs,&accumulator)!=1 || indent_of(line)!=indent_of(lines[*at]) {return body.to_owned();}
+    let indent=indent_of(lines[*at]);let fraction_name=format!("local_{fraction}");let factor_name=format!("local_{factor}");
+    let replacement=[format!("int {name};"),format!("{name} = {one} - {first} * {multiplier};"),format!("float32 {fraction_name} = float32({second});"),
+        format!("float32 {factor_name} = {literal};"),format!("{fraction_name} = {fraction_name} * {factor_name};"),format!("{factor_name} = {fraction_name} * float32({name});"),format!("{accumulator} = {accumulator} + {factor_name};")];
+    let mut out=Vec::new();for (n,line) in lines.iter().enumerate() {
+        if n==*at {out.extend(replacement.iter().map(|s| format!("{indent}{s}")));}
+        if (*at..at+3).contains(&n) {continue;}
+        if n==*last {out.push(format!("{indent}{accumulator} = {rhs};"));out.push(format!("{indent}return {accumulator};"));} else {out.push((*line).to_owned());}
+    }
+    let mut result=out.join("\n");if body.ends_with('\n') {result.push('\n');}result
 }
 
 /// Keep the right predicate argument while the left slot is reused by a later set lookup.
@@ -44256,6 +44320,33 @@ mod literal_value_lifetime_tests {
         let mut bad=f.clone();bad.bytecode.extend(function(&[("PSF",&[14])]).bytecode);reject(&bad);
         let mut bad=f.clone();bad.bytecode[c[4].offset_dw]=(bad.bytecode[c[4].offset_dw]&!255)|function(&[("RET",&[0])]).bytecode[0];reject(&bad);
         let mut bad=f.clone();bad.ret=DataType {token:5,type_info:101,..Default::default()};reject(&bad);
+    }
+
+    #[test]
+    fn random_scalar_assignment_preserves_immediates_widths_and_final_copy() {
+        let mut f=function(&[("DIVd",&[4,65534,2]),("SetV4",&[13]),("PshC4",&[]),("PshC4",&[]),("CALLSYS",&[]),("CpyRtoV4",&[11]),
+            ("MULIi",&[9,11]),("SUBi",&[11,13,9]),("PshC4",&[]),("PshC4",&[]),("CALLSYS",&[]),("CpyRtoV4",&[13]),("iTOf",&[15,13]),
+            ("SetV4",&[16]),("MULf",&[15,15,16]),("iTOf",&[17,11]),("MULf",&[16,15,17]),("fTOd",&[8,16]),("ADDd",&[4,4,8]),
+            ("PshV8",&[4]),("CALLSYS",&[]),("CpyRtoV8",&[24]),("CpyVtoV8",&[4,24]),("CpyVtoR8",&[4]),("RET",&[6])]);
+        f.ret.token=0x51;let c=disassemble(&f.bytecode).unwrap();
+        for (n,value) in [(1,1),(2,1),(3,0),(4,10),(8,100),(9,0),(10,10),(13,0.01f32.to_bits() as i32),(20,11)] {f.bytecode[c[n].offset_dw+1]=value;}
+        f.bytecode[c[6].offset_dw+2]=2; // MULIi stores its immediate after both slot operands.
+        let body="    float local_4 = Input / local_2;\n    int local_11 = Math::DrawInt(0, 1);\n    int local_11_2 = 1 - (local_11 * 2);\n    local_4 = local_4 + (((Math::DrawInt(0, 100)) * 0.01f) * local_11_2);\n    return (Math::Map(FVector2D(0.0, 1.0), FVector2D(0.1, 0.4), local_4 / 10.0));\n";
+        let expected="    float local_4 = Input / local_2;\n    int local_11;\n    local_11 = 1 - Math::DrawInt(0, 1) * 2;\n    float32 local_15 = float32(Math::DrawInt(0, 100));\n    float32 local_16 = 0.01f;\n    local_15 = local_15 * local_16;\n    local_16 = local_15 * float32(local_11);\n    local_4 = local_4 + local_16;\n    local_4 = Math::Map(FVector2D(0.0, 1.0), FVector2D(0.1, 0.4), local_4 / 10.0);\n    return local_4;\n";
+        let refs=RefResolver::from_test_random_scalar_lifetimes(0);
+        assert_eq!(super::restore_random_scalar_lifetimes(body,&f,&refs),expected);
+        assert_eq!(super::restore_random_scalar_lifetimes(expected,&f,&refs),expected);
+        for fault in 1..=10 {assert_eq!(super::restore_random_scalar_lifetimes(body,&f,&RefResolver::from_test_random_scalar_lifetimes(fault)),body,"metadata {fault}");}
+        for bad in [body.replace("0.01f","0.02f"),body.replace("local_11 * 2","local_11 * 3"),body.replace("DrawInt(0, 100)","DrawInt(0, 99)"),format!("{body}Use(local_15);\n"),format!("{body}return 0.0;\n")] {
+            assert_eq!(super::restore_random_scalar_lifetimes(&bad,&f,&refs),bad);
+        }
+        let reject=|bad:&Func|assert_eq!(super::restore_random_scalar_lifetimes(body,bad,&refs),body);
+        let mut bad=f.clone();bad.ret.token=0x50;reject(&bad);
+        let mut bad=f.clone();bad.obj_locals.push((15,100));reject(&bad);
+        let mut bad=f.clone();bad.bytecode[c[10].offset_dw+1]=11;reject(&bad);
+        let mut bad=f.clone();bad.bytecode[c[13].offset_dw+1]=f32::INFINITY.to_bits() as i32;reject(&bad);
+        let mut bad=f.clone();bad.bytecode[c[22].offset_dw]=(5<<16)|(bad.bytecode[c[22].offset_dw]&65535);reject(&bad);
+        let mut bad=f.clone();let mut jump=function(&[("JMP",&[])]).bytecode;jump[1]=c[6].offset_dw as i32;jump.extend(bad.bytecode);bad.bytecode=jump;reject(&bad);
     }
 
     #[test]
