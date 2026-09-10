@@ -5306,6 +5306,72 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_attack_selection_scopes(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UCandidate",""),("UElement","Enabled"),("TArrayIterator","CanProceed"),("UTask","State"),("UState","")]);
+        for (id,name) in [(1,"UCandidate"),(2,"UElement"),(3,"TArrayIterator"),(4,"UTask"),(5,"UState")] {
+            r.type_identity_by_ptr.insert(id,TypeIdentity { name:name.into(),module:"Fixture".into(),namespace:String::new() });
+        }
+        for id in [2,3,4] { r.prop_type_id.insert((id << 1) | 1,id as i32); }
+        r.class_fields.entry("UElement".into()).or_default().insert("Enabled".into(),"bool".into());
+        r.class_fields.entry("UTask".into()).or_default().insert("State".into(),"UState".into());
+        for (p,owner,name,reference,ty) in [(100,"TArrayIterator","Proceed",true,2),(200,"UState","Selected",false,1)] {
+            r.func_by_ptr.insert(p,name.into()); r.func_owner.insert(p,owner.into()); r.func_is_method.insert(p);
+            r.func_ret.insert(p,DataType { token:5,type_info:ty,is_reference:reference,is_object_handle:true,..Default::default() });
+            r.func_params.insert(p,vec![]);
+        }
+        r.funcid_to_ptr.insert(200,200);
+        match fault {
+            1 => { r.func_ret.get_mut(&200).unwrap().is_reference = true; },
+            2 => { r.duplicate_prop_keys.insert(9); },
+            3 => { r.func_params.get_mut(&200).unwrap().push(DataType::default()); },
+            4 => { r.func_ret.get_mut(&100).unwrap().is_reference = false; },
+            5 => { r.func_ret.get_mut(&100).unwrap().is_object_const = true; },
+            6 => { r.class_fields.get_mut("UElement").unwrap().insert("Enabled".into(),"int".into()); },
+            7 => { r.prop_type_id.insert(5,3); },
+            8 => { r.const_method_ptrs.insert(100); },
+            9 => { r.type_identity_by_ptr.get_mut(&2).unwrap().module.clear(); },
+            10 => { r.type_identity_by_ptr.get_mut(&1).unwrap().module.clear(); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_retreat_navigation(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FVector",""),("UActor",""),("UState",""),("UTask","State"),("TArray","")]);
+        for (id,name) in [(1,"FVector"),(2,"UActor"),(3,"UState"),(4,"UTask"),(5,"TArray")] {
+            r.type_identity_by_ptr.insert(id,TypeIdentity { name:name.into(),module:if id == 4 { "Fixture".into() } else { String::new() },namespace:String::new() });
+        }
+        r.prop_type_id.insert(9,4); r.class_fields.entry("UTask".into()).or_default().insert("State".into(),"UState".into());
+        let scalar = |token| DataType { token,..Default::default() };
+        let value = |p| DataType { token:5,type_info:p,..Default::default() };
+        let handle = DataType { is_object_handle:true,..value(2) };
+        let reference = |p,constant| DataType { is_reference:true,is_object_const:constant,is_read_only:constant,..value(p) };
+        r.type_subtypes.insert(5,vec![handle.clone()]);
+        for (p,owner,name,constant,ret,args) in [(100,"UState","Actor",true,handle.clone(),vec![]),
+            (101,"","Spread",false,scalar(0x41),vec![handle.clone(),reference(5,false),scalar(0x50),scalar(0x50),reference(1,false)]),
+            (102,"FVector","$beh0",false,scalar(0x52),vec![scalar(0x51);3]),(103,"UActor","Radius",true,scalar(0x50),vec![]),
+            (104,"","Reachable",false,scalar(0x41),vec![handle,reference(1,true),scalar(0x50),scalar(0x50),scalar(0x41),scalar(0x41),reference(1,false)])] {
+            r.func_by_ptr.insert(p,name.into()); r.func_ret.insert(p,ret); r.func_params.insert(p,args);
+            if !owner.is_empty() { r.func_owner.insert(p,owner.into()); r.func_is_method.insert(p); }
+            if constant { r.const_method_ptrs.insert(p); }
+        }
+        match fault {
+            1 => { r.func_params.get_mut(&102).unwrap()[0].token = 0x50; },
+            2 => { r.func_params.get_mut(&104).unwrap()[6].is_object_const = true; },
+            3 => { r.func_ret.get_mut(&100).unwrap().is_reference = true; },
+            4 => { r.func_ret.get_mut(&103).unwrap().token = 0x51; },
+            5 => { r.func_params.get_mut(&101).unwrap()[3].token = 0x51; },
+            6 => { r.type_subtypes.get_mut(&5).unwrap()[0].type_info = 3; },
+            7 => { r.func_params.get_mut(&101).unwrap()[4].is_object_const = true; },
+            8 => { r.duplicate_prop_keys.insert(9); },
+            9 => { r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_navigation_radius_product(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("FVector",""),("UActor",""),("UState","Scale"),("UTask","State")]);
         for (id,name) in [(1,"FVector"),(2,"UActor"),(3,"UState"),(4,"UTask")] {
