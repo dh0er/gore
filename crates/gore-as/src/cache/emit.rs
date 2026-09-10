@@ -3245,6 +3245,8 @@ fn emit_function_ctor(
         pass_trace("fold_closed_executor_bridges", &rendered);
         let rendered = restore_segment_value_lifetimes(&rendered, f, refs);
         pass_trace("restore_segment_value_lifetimes", &rendered);
+        let rendered = retain_native_predicate_argument(&rendered, f, refs);
+        pass_trace("retain_native_predicate_argument", &rendered);
         let rendered = fold_native_recipient_argument(&rendered, f, refs);
         pass_trace("fold_native_recipient_argument", &rendered);
         let rendered = scope_empty_native_event_arguments(&rendered, f, refs);
@@ -9297,6 +9299,63 @@ fn fold_ordered_coordinate_difference(body: &str, f: &Func, refs: &RefResolver) 
         if let Some(line) = folded { out.push(line); at += 2; } else { out.push(lines[at].to_owned()); at += 1; }
     }
     let mut result = out.join("\n"); if body.ends_with('\n') { result.push('\n'); } result
+}
+
+/// Keep the right predicate argument while the left slot is reused by a later set lookup.
+fn retain_native_predicate_argument(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if f.ret.token!=0x41 || !body.contains("if (!(::") {return body.to_owned();}
+    let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    let w=|i:&Instr| i.words.first().map(|s| *s as i16 as i32);
+    let jump=|i:&Instr| i.dwords.first().map(|d| i.offset_dw as i64+2+*d as i32 as i64);
+    let sites:Vec<_>=code.windows(29).enumerate().filter_map(|(at,c)| {
+        if c.iter().map(|i| i.op.name).ne(["PshVPtr","CALLINTF","STOREOBJ","PshVPtr","CALLSYS","STOREOBJ","PshVPtr","PshVPtr","CALLSYS","STOREOBJ","PshVPtr","CALL",
+            "CpyRtoV4","NOT","CpyVtoR1","JLowZ","SetV1","CpyVtoR4","JMP","PshVPtr","CALLINTF","STOREOBJ","PshVPtr","CALLSYS","STOREOBJ","PSF","PshVPtr","ADDSi","CALLSYS"]) {return None;}
+        let (actor,right,left,boolean)=(w(&c[2])?,w(&c[5])?,w(&c[9])?,w(&c[12])?);let slots=[actor,right,left,boolean];
+        if slots.iter().any(|s| *s<=0) || HashSet::from(slots).len()!=slots.len()
+            || [0,7,19,26].iter().any(|n| w(&c[*n])!=Some(0)) || [3,21,22].iter().any(|n| w(&c[*n])!=Some(actor))
+            || w(&c[6])!=Some(right) || [10,24,25].iter().any(|n| w(&c[*n])!=Some(left))
+            || [13,14,16,17].iter().any(|n| w(&c[*n])!=Some(boolean)) || c[16].dwords.first()!=Some(&1)
+            || jump(&c[15])!=Some(c[19].offset_dw as i64) || code.last()?.op.name!="RET" || jump(&c[18])!=Some(code.last()?.offset_dw as i64)
+            || c[1].dwords!=c[20].dwords || c[4].qwords!=c[23].qwords || f.obj_locals.iter().any(|(s,_)| *s==boolean) {return None;}
+        for (slot,uses) in [(right,vec![at+5,at+6]),(left,vec![at+9,at+10,at+24,at+25])] {
+            if code.iter().enumerate().filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&slot)).map(|(n,_)| n).ne(uses) {return None;}
+        }
+        let local=|slot| {let types:Vec<_>=f.obj_locals.iter().filter(|(s,_)| *s==slot).map(|(_,p)| *p).collect();let [p]=types.as_slice() else {return None;};Some(*p)};
+        let actor_type=local(actor)?;let state_type=local(right)?;if local(left)?!=state_type {return None;}
+        let native_name=|p| {let t=refs.type_identity_by_ptr(p)?;if !t.module.is_empty() || !t.namespace.is_empty() {return None;}Some(t.name.as_str())};
+        let actor_name=native_name(actor_type)?;let state_name=native_name(state_type)?;
+        let handle=|t:&super::types::DataType,p| t.token==5 && t.type_info==p && t.is_object_handle && !t.is_reference;
+        let boolean_type=|t:&super::types::DataType| t.token==0x41 && t.type_info==0 && !t.is_reference && !t.is_object_handle;
+        let getter=*c[1].dwords.first()? as i32;let predicate=*c[11].dwords.first()? as i32;
+        if !refs.is_method_by_id(getter) || !refs.func_params_by_id(getter)?.is_empty() || !handle(refs.func_ret_by_id(getter)?,actor_type)
+            || refs.is_method_by_id(predicate) || !refs.func_ns_by_id(predicate).unwrap_or("").is_empty() || !boolean_type(refs.func_ret_by_id(predicate)?)
+            || !matches!(refs.func_params_by_id(predicate)?,[a,b] if handle(a,state_type) && handle(b,state_type) && a.is_object_const && b.is_object_const) {return None;}
+        let ptr=|n:usize| c[n].qwords.first().map(|p| *p as i64);let state=ptr(4)?;let own=ptr(8)?;let contains=ptr(28)?;
+        for p in [state,own] {
+            if !refs.is_method_by_ptr(p) || !refs.is_const_method_by_ptr(p) || !refs.func_params_by_ptr(p)?.is_empty() || !handle(refs.func_ret_by_ptr(p)?,state_type) {return None;}
+        }
+        if refs.func_owner_by_ptr(state)!=Some(actor_name) || !is_object_handle_type(refs.func_owner_by_ptr(own)?)
+            || refs.func_owner_by_ptr(contains)!=Some("TSet") || !refs.is_method_by_ptr(contains) || !refs.is_const_method_by_ptr(contains)
+            || !boolean_type(refs.func_ret_by_ptr(contains)?)
+            || !matches!(refs.func_params_by_ptr(contains)?,[t] if t.token==5 && t.type_info==state_type && t.is_object_handle && t.is_reference && t.is_object_const && t.is_read_only) {return None;}
+        let id=*c[27].dwords.first()? as i32;let owner=refs.type_identity_by_id(id)?;let (field,old)=refs.member_identity(id,w(&c[27])?)?;
+        if owner.module.is_empty() || !owner.namespace.is_empty() || refs.type_identity_by_id(old)?!=owner
+            || refs.own_field_type_by_class(&owner.name,field)?!=format!("TSet<{state_name}>")
+            || code.iter().enumerate().any(|(n,i)| i.op.name=="JMPP" || (i.op.name.starts_with('J') && n!=at+15 && n!=at+18
+                && jump(i).is_some_and(|t| t>c[0].offset_dw as i64 && t<=c[28].offset_dw as i64))) {return None;}
+        let value=format!("this.{}().{}()",refs.func_by_id(getter)?,refs.func_by_ptr(state)?);
+        let condition=format!("if (!(::{}(this.{}(), {value})))",refs.func_by_id(predicate)?,refs.func_by_ptr(own)?);
+        let later=format!("if (!(this.{field}.{}({value})))",refs.func_by_ptr(contains)?);
+        Some((right,state_name.to_owned(),value,condition,later))
+    }).collect();
+    let [(slot,ty,value,condition,later)]=sites.as_slice() else {return body.to_owned();};
+    let name=format!("local_{slot}");if count_ident(body,&name)!=0 || body.matches(value.as_str()).count()!=2 {return body.to_owned();}
+    let lines:Vec<_>=body.lines().collect();let found:Vec<_>=lines.iter().enumerate().filter(|(_,l)| l.trim()==condition || l.trim()==later).map(|(n,_)| n).collect();
+    let [at,after]=found.as_slice() else {return body.to_owned();};
+    if lines[*at].trim()!=condition || lines[*after].trim()!=later || indent_of(lines[*at])!=indent_of(lines[*after]) {return body.to_owned();}
+    let mut out:Vec<_>=lines.iter().map(|l| (*l).to_owned()).collect();out[*at]=out[*at].replace(value.as_str(),&name);
+    out.insert(*at,format!("{}{ty} {name} = {value};",indent_of(lines[*at])));
+    let mut result=out.join("\n");if body.ends_with('\n') {result.push('\n');}result
 }
 
 /// A recipient getter belongs between the surrounding arguments, before the receiver chain.
@@ -44199,6 +44258,31 @@ mod literal_value_lifetime_tests {
         let mut bad=f.clone();bad.ret=DataType {token:5,type_info:101,..Default::default()};reject(&bad);
     }
 
+    #[test]
+    fn predicate_right_handle_survives_the_left_slots_later_set_lookup() {
+        let mut f=function(&[("PshVPtr",&[0]),("CALLINTF",&[]),("STOREOBJ",&[2]),("PshVPtr",&[2]),("CALLSYS",&[]),("STOREOBJ",&[8]),("PshVPtr",&[8]),("PshVPtr",&[0]),("CALLSYS",&[]),("STOREOBJ",&[6]),("PshVPtr",&[6]),("CALL",&[]),
+            ("CpyRtoV4",&[3]),("NOT",&[3]),("CpyVtoR1",&[3]),("JLowZ",&[]),("SetV1",&[3]),("CpyVtoR4",&[3]),("JMP",&[]),
+            ("PshVPtr",&[0]),("CALLINTF",&[]),("STOREOBJ",&[2]),("PshVPtr",&[2]),("CALLSYS",&[]),("STOREOBJ",&[6]),("PSF",&[6]),("PshVPtr",&[0]),("ADDSi",&[0]),("CALLSYS",&[]),("RET",&[])]);
+        f.ret.token=0x41;f.obj_locals=vec![(2,2),(6,3),(8,3)];let c=disassemble(&f.bytecode).unwrap();
+        for (n,p) in [(1,10),(4,1),(8,2),(11,20),(16,1),(20,10),(23,1),(27,1),(28,3)] {f.bytecode[c[n].offset_dw+1]=p;}
+        for (n,to) in [(15,19),(18,29)] {f.bytecode[c[n].offset_dw+1]=c[to].offset_dw as i32-c[n].offset_dw as i32-2;}
+        let body="    if (!(::HasTraining(this.GetOwnState(), this.GetTarget().GetState())))\n    {\n        return true;\n    }\n    if (!(this.Tracked.Contains(this.GetTarget().GetState())))\n    {\n        return false;\n    }\n    return true;\n";
+        let expected=format!("    AState local_8 = this.GetTarget().GetState();\n{}",body.replacen("this.GetTarget().GetState()","local_8",1));
+        let refs=RefResolver::from_test_retained_predicate_argument(0);
+        assert_eq!(super::retain_native_predicate_argument(body,&f,&refs),expected);
+        assert_eq!(super::retain_native_predicate_argument(&expected,&f,&refs),expected);
+        for fault in 1..=11 {assert_eq!(super::retain_native_predicate_argument(body,&f,&RefResolver::from_test_retained_predicate_argument(fault)),body,"metadata {fault}");}
+        for bad in [format!("{body}Use(local_8);\n"),body.replace("Tracked.Contains","Other.Contains"),body.replace("this.GetOwnState()","this.Other()"),body.replace("    if (!(this.Tracked","        if (!(this.Tracked")] {
+            assert_eq!(super::retain_native_predicate_argument(&bad,&f,&refs),bad);
+        }
+        let reject=|bad:&Func|assert_eq!(super::retain_native_predicate_argument(body,bad,&refs),body);
+        let mut bad=f.clone();bad.obj_locals.push((8,3));reject(&bad);
+        let mut bad=f.clone();bad.bytecode[c[16].offset_dw+1]=0;reject(&bad);
+        let mut bad=f.clone();bad.bytecode[c[15].offset_dw+1]+=1;reject(&bad);
+        let mut bad=f.clone();bad.bytecode[c[23].offset_dw+1]=2;reject(&bad);
+        let mut bad=f.clone();let mut extra=function(&[("PSF",&[8])]).bytecode;extra.extend(bad.bytecode);bad.bytecode=extra;reject(&bad);
+        let mut bad=f.clone();let mut jump=function(&[("JMP",&[])]).bytecode;jump[1]=c[4].offset_dw as i32;jump.extend(bad.bytecode);bad.bytecode=jump;reject(&bad);
+    }
     #[test]
     fn recipient_getter_is_evaluated_inside_the_native_argument_frame() {
         let mut f=function(&[("SetV1",&[69]),("PshV4",&[69]),("PSF",&[50]),("PshVPtr",&[65534]),("CALLSYS",&[]),

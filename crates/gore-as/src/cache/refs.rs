@@ -5340,6 +5340,39 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_retained_predicate_argument(fault:u8)->Self {
+        let mut r=Self::from_test_member_chain(&[("UHost","Tracked"),("AActor",""),("AState","")]);
+        for (p,name) in [(1,"UHost"),(2,"AActor"),(3,"AState")] {
+            r.type_identity_by_ptr.insert(p,TypeIdentity {name:name.into(),module:if p==1 {"Script"} else {""}.into(),namespace:String::new()});
+        }
+        r.prop_type_id.insert(3,1);r.class_fields.insert("UHost".into(),HashMap::from([("Tracked".into(),"TSet<AState>".into())]));
+        let handle=|p| DataType {token:5,type_info:p,is_object_handle:true,..Default::default()};
+        for (p,name,owner,ret) in [(1,"GetState","AActor",handle(3)),(2,"GetOwnState","UHost",handle(3)),(3,"Contains","TSet",DataType {token:0x41,..Default::default()}),
+            (110,"GetTarget","UHost",handle(2)),(120,"HasTraining","",DataType {token:0x41,..Default::default()})] {
+            r.func_by_ptr.insert(p,name.into());r.func_ret.insert(p,ret);r.func_params.insert(p,vec![]);
+            if !owner.is_empty() {r.func_owner.insert(p,owner.into());r.func_is_method.insert(p);r.const_method_ptrs.insert(p);}
+        }
+        r.funcid_to_ptr.insert(10,110);r.funcid_to_ptr.insert(20,120);
+        let state=DataType {is_object_const:true,..handle(3)};
+        r.func_params.insert(120,vec![state.clone(),state.clone()]);r.func_params.insert(3,vec![DataType {is_reference:true,is_read_only:true,..state}]);
+        match fault {
+            1=>{r.func_ret.get_mut(&110).unwrap().is_reference=true;},
+            2=>{r.func_params.get_mut(&1).unwrap().push(DataType::default());},
+            3=>{r.func_owner.insert(1,"AOther".into());},
+            4=>{r.func_ret.get_mut(&2).unwrap().type_info=2;},
+            5=>{r.const_method_ptrs.remove(&2);},
+            6=>{r.func_is_method.insert(120);},
+            7=>{r.func_params.get_mut(&120).unwrap()[1].is_object_const=false;},
+            8=>{r.func_params.get_mut(&3).unwrap()[0].is_reference=false;},
+            9=>{r.class_fields.get_mut("UHost").unwrap().insert("Tracked".into(),"TSet<AOther>".into());},
+            10=>{r.prop_type_id.insert(3,2);},
+            11=>{r.func_ns.insert(120,"Other".into());},
+            _=>{},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_recipient_argument(fault: u8) -> Self {
         let names=[("UHost","AI"),("ACharacter",""),("AState",""),("UVoice",""),("FTag",""),("FContext",""),("ELoudness",""),("UAbility","")];
         let mut r=Self::from_test_member_chain(&names);
