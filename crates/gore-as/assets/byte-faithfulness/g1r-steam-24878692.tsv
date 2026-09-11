@@ -7,7 +7,7 @@ AI.AssessmentResponseSystem.AssessmentBits	2	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	3	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeEvaluationContext	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	8	0	0
-AI.AssessmentResponseSystem.EventResponses	3	0	0
+AI.AssessmentResponseSystem.EventResponses	2	0	0
 AI.CharacterAI_Gothic	3	0	0
 AI.CharacterAI_Orc	2	0	0
 AI.DailyRoutines.DailyRoutines_OG	1	0	0
@@ -25,7 +25,7 @@ AI.States.FightAI.DisengageBehavior.AIState_Disengage	1	0	0
 AI.States.FightAI.FearState.AIState_Fear	1	0	0
 AI.States.FightAI.FleeState.AIState_Flee	2	0	0
 AI.States.FightAI.GoGetGuardState.AIState_GoGetGuard	1	0	0
-AI.States.FightAI.SearchState.AIState_Search	5	0	0
+AI.States.FightAI.SearchState.AIState_Search	3	0	0
 AI.States.FightAI.WarningState.AIState_Warning	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_Crime	6	0	0
 AI.States.FightAI.WatchFightState.AIGroup_WatchFight	1	0	0

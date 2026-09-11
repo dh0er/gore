@@ -5978,6 +5978,34 @@ impl RefResolver {
 
 
     #[cfg(test)]
+    pub(crate) fn from_test_branch_memory_initializers(fault: u8) -> Self {
+        let mut r = Self::default();
+        r.type_identity_by_ptr.insert(1, TypeIdentity { name: "FMemorizedEvent".into(), module: String::new(), namespace: String::new() });
+        r.type_by_ptr.insert(1, "FMemorizedEvent".into());
+        for (ptr, name) in [(10, "$beh0"), (11, "$beh2")] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, "FMemorizedEvent".into());
+            r.func_is_method.insert(ptr); r.func_params.insert(ptr, vec![]);
+            r.func_ret.insert(ptr, DataType { token: 0x52, ..Default::default() });
+        }
+        match fault {
+            1 => r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Shadow".into(),
+            2 => r.type_identity_by_ptr.get_mut(&1).unwrap().name = "Other".into(),
+            3 => { r.func_owner.insert(10, "Other".into()); },
+            4 => { r.func_owner.insert(11, "Other".into()); },
+            5 => { r.func_by_ptr.insert(10, "Other".into()); },
+            6 => { r.func_is_method.remove(&11); },
+            7 => { r.const_method_ptrs.insert(10); },
+            8 => r.func_params.get_mut(&10).unwrap().push(DataType::default()),
+            9 => r.func_ret.get_mut(&11).unwrap().token = 0x41,
+            10 => { r.const_method_ptrs.insert(11); },
+            11 => r.func_ret.get_mut(&10).unwrap().is_reference = true,
+            12 => r.type_identity_by_ptr.get_mut(&1).unwrap().namespace = "Shadow".into(),
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_paired_speech_defaults(fault:u8)->Self {
         use super::model::{Func,Module,Param};
         let mut r=Self::default();
@@ -6037,6 +6065,97 @@ impl RefResolver {
             _=>{}
         }
         r.set_restored_mixins(&mods);
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_item_navigation_wait_defaults(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"FAbilityTaskExecutor",""),(2,"UGameplayAbility_AI",""),(3,"UState","Fixture"),(4,"FVector",""),
+            (5,"UItemDefinition",""),(6,"EGenericTaskResult","")] {
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:module.into(),namespace:String::new()});
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32,ptr);
+        }
+        let key=(752i64<<33)|7;r.prop_by_key.insert(key,"Ability".into());r.prop_type_id.insert(key,3);
+        r.class_fields.entry("UState".into()).or_default().insert("Ability".into(),"UDerivedAI".into());
+        r.class_super.insert("UDerivedAI".into(),"UGameplayAbility_CharacterAI".into());
+        let value=|ptr|DataType{token:5,type_info:ptr,..Default::default()};let handle=|ptr|DataType{is_object_handle:true,..value(ptr)};
+        let reference=|ptr|DataType{is_reference:true,is_object_const:true,is_read_only:true,..value(ptr)};
+        let item=DataType{is_object_const:true,..handle(5)};let double=DataType{token:0x51,is_object_const:true,is_read_only:true,..Default::default()};
+        let void=DataType{token:0x52,..Default::default()};
+        for (ptr,name,owner,ret,args,constant) in [(10,"$beh0","FAbilityTaskExecutor",void.clone(),vec![],false),(11,"$beh2","FAbilityTaskExecutor",void,vec![],false),
+            (12,"WaitForLastTaskToEnd","UAbilityTaskCoroutine",reference(6),vec![value(1);6],false),
+            (21,"Equip","UDerivedAI",value(1),vec![item.clone()],false),(22,"ChosenItem","UState",item,vec![],true)] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            r.funcid_to_ptr.insert(ptr as i32,ptr);if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        r.func_by_ptr.insert(20,"Approach".into());r.funcid_to_ptr.insert(20,20);r.func_ret.insert(20,value(1));
+        r.func_params.insert(20,vec![handle(2),reference(4),double.clone(),double]);
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into(),
+            2=>r.func_params.get_mut(&20).unwrap()[1].is_reference=false,
+            3=>r.func_params.get_mut(&20).unwrap()[0].is_object_handle=false,
+            4=>r.func_params.get_mut(&20).unwrap()[2].is_read_only=false,
+            5=>r.func_params.get_mut(&20).unwrap()[3].token=0x50,
+            6=>r.func_ret.get_mut(&22).unwrap().is_object_const=false,
+            7=>r.func_params.get_mut(&22).unwrap().push(value(1)),
+            8=>{r.func_owner.insert(22,"OtherState".into());},
+            9=>r.func_params.get_mut(&21).unwrap()[0].is_read_only=true,
+            10=>r.func_ret.get_mut(&21).unwrap().is_reference=true,
+            11=>{r.func_owner.insert(21,"OtherAbility".into());},
+            12=>{r.class_super.remove("UDerivedAI");},
+            13=>{r.duplicate_prop_keys.insert(key);},
+            14=>{r.const_method_ptrs.insert(10);},
+            15=>r.func_params.get_mut(&10).unwrap().push(value(1)),
+            16=>r.func_ret.get_mut(&11).unwrap().token=0x44,
+            17=>r.func_params.get_mut(&12).unwrap()[4].is_reference=true,
+            18=>{r.func_params.get_mut(&12).unwrap().pop();},
+            19=>r.func_ret.get_mut(&12).unwrap().is_read_only=false,
+            20=>{r.func_owner.insert(12,"OtherCoroutine".into());},
+            21=>{r.func_by_ptr.insert(10,"OtherConstructor".into());},
+            22=>{r.const_method_ptrs.insert(12);},
+            23=>{r.func_is_method.remove(&21);},
+            24=>{r.func_ns.insert(20,"Other".into());},
+            25=>r.type_identity_by_ptr.get_mut(&5).unwrap().module="Script".into(),
+            26=>{r.prop_type_id.insert(key,4);},
+            27=>{r.class_super.insert("UDerivedAI".into(),"UGameplayAbility_AI".into());},
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_item_character_wait_defaults(fault:u8)->Self {
+        let mut r=Self::from_test_item_navigation_wait_defaults(match fault {15=>17,16=>9,17=>12,_=>0});
+        for (ptr,name,module) in [(30,"FRememberedPerception",""),(31,"FPerceivedAgent",""),(32,"UResponse","Fixture"),(33,"AGothicCharacter",""),(34,"UObject","")] {
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:module.into(),namespace:String::new()});
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32,ptr);
+        }
+        let memory=(776i64<<33)|65;let origin=(192i64<<33)|61;
+        r.prop_by_key.insert(memory,"Memory".into());r.prop_type_id.insert(memory,32);
+        r.prop_by_key.insert(origin,"Source".into());r.prop_type_id.insert(origin,30);
+        r.class_fields.entry("UResponse".into()).or_default().insert("Memory".into(),"FRememberedPerception".into());r.class_super.insert("UResponse".into(),"UState".into());
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&[("FRememberedPerception","Source",if fault==2 {"Other"} else {"FPerceivedAgent"})],&[],None));
+        let handle=|ptr|DataType{token:5,type_info:ptr,is_object_handle:true,..Default::default()};
+        let turn=r.func_params.get_mut(&20).unwrap();turn[1]=handle(33);turn.remove(2);
+        r.func_by_ptr.insert(13,"GetCharacter".into());r.func_owner.insert(13,"FPerceivedAgent".into());r.func_is_method.insert(13);r.const_method_ptrs.insert(13);
+        r.func_ret.insert(13,handle(33));r.func_params.insert(13,vec![DataType{is_object_const:true,..handle(34)}]);r.global_by_ptr.insert(90,"__WorldContext".into());
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&30).unwrap().module="Script".into(),
+            3=>{r.class_fields.get_mut("UResponse").unwrap().insert("Memory".into(),"Other".into());},
+            4=>{r.class_super.remove("UResponse");},
+            5=>{r.func_is_method.remove(&13);},
+            6=>{r.const_method_ptrs.remove(&13);},
+            7=>r.func_ret.get_mut(&13).unwrap().is_object_const=true,
+            8=>r.func_params.get_mut(&13).unwrap()[0].is_read_only=true,
+            9=>r.func_params.get_mut(&13).unwrap()[0].type_info=33,
+            10=>{r.global_by_ptr.insert(90,"OtherContext".into());},
+            11=>{r.duplicate_prop_keys.insert(origin);},
+            12=>{r.func_owner.insert(13,"OtherAgent".into());},
+            13=>{r.func_by_ptr.insert(13,"OtherGetter".into());},
+            14=>r.func_params.get_mut(&13).unwrap().clear(),
+            _=>{}
+        }
         r
     }
 
