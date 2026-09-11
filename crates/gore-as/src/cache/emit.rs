@@ -3333,6 +3333,8 @@ fn emit_function_ctor(
         pass_trace("restore_repeated_memory_copy", &rendered);
         let rendered = restore_nested_tag_requirements(&rendered, f, refs, is_method);
         pass_trace("restore_nested_tag_requirements", &rendered);
+        let rendered = restore_named_character_key_constructors(&rendered, f, refs);
+        pass_trace("restore_named_character_key_constructors", &rendered);
         let rendered = restore_temporary_vector_expression_lifetimes(&rendered, f, refs);
         pass_trace("restore_temporary_vector_expression_lifetimes", &rendered);
         let rendered = restore_item_transfer_ai_property(&rendered, f, refs);
@@ -10795,6 +10797,75 @@ fn restore_nested_tag_requirements(body: &str, f: &Func, refs: &RefResolver, is_
     out[0] = format!("{indent}if ({} && !({}))",empty(&first),both(&first));
     out[4] = format!("{indent}if ({} && ({}))",empty(&second),both(&second));
     let mut text = out.join("\n"); if body.ends_with('\n') { text.push('\n'); } text
+}
+
+/// Keep named character keys outside the compiler's earlier temporary-storage pool.
+fn restore_named_character_key_constructors(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if !body.contains(" = FCharacterUniqueName(n\"") { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let native = |p, name| refs.type_identity_by_ptr(p).is_some_and(|t| t.name == name && t.module.is_empty() && t.namespace.is_empty());
+    let w = |i: &Instr| i.words.first().map(|s| *s as i16 as i32);
+    let p = |i: &Instr| i.qwords.first().map(|p| *p as i64);
+    let plain = |t: &super::types::DataType, token| t.token == token && !t.is_reference && !t.is_object_handle
+        && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+    let method = |ptr, name, constant| refs.func_owner_by_ptr(ptr) == Some("FCharacterUniqueName")
+        && refs.func_by_ptr(ptr) == Some(name) && refs.is_method_by_ptr(ptr) && refs.is_const_method_by_ptr(ptr) == constant;
+    let mut result = body.to_owned();
+    for &(slot, ty) in &f.obj_locals {
+        let edit = (|| {
+            if slot <= 0 || !native(ty,"FCharacterUniqueName") || f.obj_locals.iter().filter(|(s,_)| *s == slot).count() != 1 { return None; }
+            let uses: Vec<_> = code.iter().enumerate().filter(|(_,i)| i.words.iter().any(|w| *w as i16 as i32 == slot)).collect();
+            let [(built,a),(first,b),(second,c),(destroyed,d)] = uses.as_slice() else { return None; };
+            if [a,b,c,d].iter().any(|i| i.op.name != "PSF") || *built < 3 || *first <= built+1 || *second <= first+1
+                || *destroyed <= second+1 || code.last()?.op.name != "RET" { return None; }
+            let frame = &code[built-3..built+2];
+            if frame.iter().map(|i| i.op.name).ne(["PshC4","CALLSYS","PshRPtr","PSF","CALLSYS"])
+                || [*first,*second,*destroyed].iter().any(|at| code.get(at+1).is_none_or(|i| i.op.name != "CALLSYS")) { return None; }
+            let (static_name,ctor,getter,dtor) = (p(&frame[1])?,p(&frame[4])?,p(&code[first+1])?,p(&code[destroyed+1])?);
+            let [arg] = refs.func_params_by_ptr(ctor)? else { return None; };
+            let [id] = refs.func_params_by_ptr(static_name)? else { return None; };
+            let named = refs.func_ret_by_ptr(static_name)?;
+            let [world] = refs.func_params_by_ptr(getter)? else { return None; };
+            let state = refs.func_ret_by_ptr(getter)?;
+            if !method(ctor,"$beh0",false) || !method(dtor,"$beh2",false) || !method(getter,"GetNPCState",true)
+                || p(&code[second+1]) != Some(getter)
+                || [ctor,dtor].iter().any(|ptr| !refs.func_ret_by_ptr(*ptr).is_some_and(|t| plain(t,0x52) && t.type_info == 0))
+                || !matches!(refs.func_params_by_ptr(dtor),Some([]))
+                || !plain(arg,5) || !native(arg.type_info,"FName") || !plain(id,0x44) || id.type_info != 0
+                || refs.func_by_ptr(static_name) != Some("__STATIC_NAME") || refs.is_method_by_ptr(static_name)
+                || named.type_info != arg.type_info || named.token != 5 || !named.is_reference || !named.is_object_const
+                || !named.is_read_only || named.is_object_handle || named.is_auto || named.if_handle_then_const
+                || world.token != 5 || !world.is_object_handle || !world.is_object_const || world.is_reference
+                || world.is_read_only || world.is_auto || world.if_handle_then_const || !native(world.type_info,"UObject")
+                || state.token != 5 || !state.is_object_handle || state.is_reference || state.is_object_const
+                || state.is_read_only || state.is_auto || state.if_handle_then_const || !native(state.type_info,"AGothicNPCState") { return None; }
+            let tail = &code[*destroyed..code.len()-1];
+            if tail.len()%2 != 0 || tail.chunks_exact(2).any(|pair| pair[0].op.name != "PSF" || pair[1].op.name != "CALLSYS"
+                || p(&pair[1]) != Some(dtor) || !f.obj_locals.iter().any(|(s,t)| Some(*s) == w(&pair[0]) && *t == ty))
+                || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                    let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                    target > frame[0].offset_dw as i64 && target <= frame[4].offset_dw as i64
+                }))) { return None; }
+            // A previous, already destroyed key has the same type but a different slot.
+            // Direct construction must preserve that separation from the temporary pool.
+            if !code[..built-3].windows(2).enumerate().any(|(at,pair)| {
+                let Some(other) = w(&pair[0]).filter(|s| *s > 0 && *s != slot) else { return false; };
+                pair[0].op.name == "PSF" && pair[1].op.name == "CALLSYS" && p(&pair[1]) == Some(ctor)
+                    && f.obj_locals.iter().any(|(s,t)| *s == other && *t == ty)
+                    && code[at+2..built-3].windows(2).any(|end| end[0].op.name == "PSF" && w(&end[0]) == Some(other)
+                        && end[1].op.name == "CALLSYS" && p(&end[1]) == Some(dtor))
+            }) { return None; }
+            let key = refs.static_name(*frame[0].dwords.first()? as i64)?;
+            if key.is_empty() || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') { return None; }
+            let local = format!("local_{slot}");
+            let old = format!("FCharacterUniqueName {local} = FCharacterUniqueName(n\"{key}\");");
+            if result.lines().filter(|line| line.trim() == old).count() != 1 || count_ident(&result,&local) != 3
+                || result.matches(&format!("{local}.GetNPCState()")).count() != 2 { return None; }
+            Some((old,format!("FCharacterUniqueName {local}(n\"{key}\");")))
+        })();
+        if let Some((old,new)) = edit { result = result.replacen(&old,&new,1); }
+    }
+    result
 }
 
 /// Keep the reused vector products and widened integer negation inside their expressions.
@@ -47257,6 +47328,40 @@ mod literal_value_lifetime_tests {
             if i.op.name=="CpyVtoV4" {shifted.bytecode[i.offset_dw+1]+=20;}
         }
         assert_eq!(fold(&body.replace("local_1","local_21"),&shifted,&refs),expected);
+    }
+
+    #[test]
+    fn named_character_keys_keep_distinct_storage_from_earlier_temporaries() {
+        let mut f=function(&[("PshC4",&[]),("CALLSYS",&[]),("PshRPtr",&[]),("PSF",&[3]),("CALLSYS",&[]),
+            ("PSF",&[3]),("CALLSYS",&[]),("PshC4",&[]),("CALLSYS",&[]),("PshRPtr",&[]),("PSF",&[8]),
+            ("CALLSYS",&[]),("PSF",&[8]),("CALLSYS",&[]),("PSF",&[8]),("CALLSYS",&[]),
+            ("PSF",&[8]),("CALLSYS",&[]),("RET",&[0])]);
+        f.obj_locals=vec![(3,10),(8,10)];
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,ptr) in [(1,1),(4,2),(6,3),(8,1),(11,2),(13,4),(15,4),(17,3)] {f.bytecode[code[at].offset_dw+1]=ptr;}
+        f.bytecode[code[7].offset_dw+1]=1;
+        let refs=RefResolver::from_test_named_character_keys(0);
+        let body="    Use(FCharacterUniqueName(n\"Temp\"));\n    FCharacterUniqueName local_8 = FCharacterUniqueName(n\"Named\");\n    if (IsValid(local_8.GetNPCState()))\n    {\n        local_8.GetNPCState().RemoveFromWorld();\n    }\n";
+        let expected=body.replace("local_8 = FCharacterUniqueName(n\"Named\")","local_8(n\"Named\")");
+        let fold=|s:&str,f:&Func,r:&RefResolver| super::restore_named_character_key_constructors(s,f,r);
+        assert_eq!(fold(body,&f,&refs),expected);
+        assert_eq!(fold(&expected,&f,&refs),expected);
+        for fault in 1..=12 {assert_eq!(fold(body,&f,&RefResolver::from_test_named_character_keys(fault)),body,"metadata {fault}");}
+        let mut reused=f.clone();reused.obj_locals[1].0=3;
+        assert_eq!(fold(body,&reused,&refs),body);
+        let mut no_free=f.clone();no_free.bytecode[code[6].offset_dw+1]=2;
+        assert_eq!(fold(body,&no_free,&refs),body);
+        let mut late_free=f.clone();late_free.bytecode[code[17].offset_dw+1]=4;
+        assert_eq!(fold(body,&late_free,&refs),body);
+        let mut readback=f.clone();readback.bytecode[code[15].offset_dw+1]=3;
+        assert_eq!(fold(body,&readback,&refs),body);
+        for bad in [format!("{body}    Use(local_8);\n"),body.replace("GetNPCState()","GetCharacterState()"),
+            body.replace("local_8 = ","local_8_2 = "),body.replace("n\"Named\"","GetKey()"),format!("{body}{body}")] {
+            assert_eq!(fold(&bad,&f,&refs),bad);
+        }
+        let mut shifted=f.clone();shifted.obj_locals=vec![(13,10),(18,10)];
+        for i in &code {if i.op.name=="PSF" {shifted.bytecode[i.offset_dw]+=10<<16;}}
+        assert_eq!(fold(&body.replace("local_8","local_18"),&shifted,&refs),expected.replace("local_8","local_18"));
     }
 
     #[test]

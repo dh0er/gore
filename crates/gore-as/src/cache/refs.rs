@@ -5802,6 +5802,41 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_named_character_keys(fault: u8) -> Self {
+        let mut r=Self::default();
+        for (ptr,name) in [(10,"FCharacterUniqueName"),(20,"FName"),(30,"UObject"),(40,"AGothicNPCState")] {
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:String::new(),namespace:String::new()});
+        }
+        let value=|ptr| DataType {token:5,type_info:ptr,..Default::default()};
+        let void=DataType {token:0x52,..Default::default()};
+        let mut name=value(20); name.is_reference=true;name.is_object_const=true;name.is_read_only=true;
+        let mut world=value(30);world.is_object_handle=true;world.is_object_const=true;
+        let mut state=value(40);state.is_object_handle=true;
+        for (ptr,method,ret,args) in [(1,"__STATIC_NAME",name,vec![DataType {token:0x44,..Default::default()}]),
+            (2,"$beh0",void.clone(),vec![value(20)]),(3,"$beh2",void,vec![]),(4,"GetNPCState",state,vec![world])] {
+            r.func_by_ptr.insert(ptr,method.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            if ptr!=1 {r.func_owner.insert(ptr,"FCharacterUniqueName".into());r.func_is_method.insert(ptr);}
+        }
+        r.const_method_ptrs.insert(4);r.static_names=vec!["Temp".into(),"Named".into()];
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&10).unwrap().module="Script".into(),
+            2=>r.type_identity_by_ptr.get_mut(&20).unwrap().namespace="Other".into(),
+            3=>r.type_identity_by_ptr.get_mut(&30).unwrap().module="Script".into(),
+            4=>r.type_identity_by_ptr.get_mut(&40).unwrap().module="Script".into(),
+            5=>{r.func_by_ptr.insert(2,"Other".into());},
+            6=>{r.const_method_ptrs.insert(2);},
+            7=>{r.const_method_ptrs.remove(&4);},
+            8=>r.func_params.get_mut(&2).unwrap()[0].is_reference=true,
+            9=>r.func_ret.get_mut(&1).unwrap().is_read_only=false,
+            10=>r.func_ret.get_mut(&4).unwrap().is_object_handle=false,
+            11=>{r.func_params.get_mut(&3).unwrap().push(DataType::default());},
+            12=>r.static_names[1]="Different".into(),
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_temporary_vector_expressions(fault:u8)->Self {
         let mut r=Self::default();
         for (p,name,module) in [(1,"FVector",""),(2,"AHost","Fixture"),(3,"UConfig","Fixture"),(4,"UProjectile","")] {
