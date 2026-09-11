@@ -2416,7 +2416,7 @@ struct PristinePropertyIdentity {
 // registrar/Binds evidence. Extending it requires repeating the audit and updating this seal.
 const NATIVE_API_SNAPSHOT_BYTES: &[u8] = include_bytes!("../../data/npc-head-native-api-v1.json");
 const NATIVE_API_SNAPSHOT_SHA256: &str =
-    "6b7061cfa3a36ca2e58821b629e86acd82096d9666e2900969175f5cc71c257c";
+    "e8004138e4b07a04203bfb7d10c33e8ba21ca64b0990f91a670b64d2a63fea3b";
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2529,17 +2529,21 @@ impl NativeApiSnapshot {
         self.qualified
             && self.pristine_cache_sha256.as_deref()
                 == Some(format!("{:x}", Sha256::digest(base)).as_str())
-            && CacheHeader::parse(base).ok().is_some_and(|header| {
-                self.pristine_cache_guid_hex.as_deref()
-                    == Some(
-                        header
-                            .hash
-                            .iter()
-                            .map(|byte| format!("{byte:02x}"))
-                            .collect::<String>()
-                            .as_str(),
-                    )
-            })
+            && self.matches_generation(base)
+    }
+
+    fn matches_generation(&self, base: &[u8]) -> bool {
+        CacheHeader::parse(base).ok().is_some_and(|header| {
+            self.pristine_cache_guid_hex.as_deref()
+                == Some(
+                    header
+                        .hash
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>()
+                        .as_str(),
+                )
+        })
     }
 
     fn allows_type(&self, row: &TypeRowMeta, meta: &TailMetadata, syms: &SymTables) -> bool {
@@ -2591,6 +2595,34 @@ fn native_api_snapshot_for_base(base: &[u8]) -> Option<Arc<NativeApiSnapshot>> {
         .as_ref()
         .filter(|snapshot| snapshot.matches_base(base))
         .cloned()
+}
+
+/// Native declarations authenticated against the original cache, retained while FullGraph folds
+/// authored modules onto it. Running caches supply their own script declarations; they never
+/// authenticate a new native snapshot merely by retaining the original generation GUID.
+pub(super) struct PristineNativeApiAuthority {
+    snapshot: Option<Arc<NativeApiSnapshot>>,
+}
+
+impl PristineNativeApiAuthority {
+    pub(super) fn from_pristine(pristine: &[u8]) -> Self {
+        Self {
+            snapshot: native_api_snapshot_for_base(pristine),
+        }
+    }
+
+    pub(super) fn matches_pristine(&self, pristine: &[u8]) -> bool {
+        self.snapshot
+            .as_ref()
+            .is_none_or(|snapshot| snapshot.matches_base(pristine))
+    }
+
+    fn for_running_generation(&self, running: &[u8]) -> Option<Arc<NativeApiSnapshot>> {
+        self.snapshot
+            .as_ref()
+            .filter(|snapshot| snapshot.matches_generation(running))
+            .cloned()
+    }
 }
 
 #[derive(Debug)]
@@ -3869,8 +3901,17 @@ pub(super) struct ReferenceContribution {
 
 impl EffectiveReferenceBase {
     pub(super) fn build(base: &[u8]) -> Result<Self, RemapError> {
+        Self::build_with_native_authority(base, None)
+    }
+
+    pub(super) fn build_with_native_authority(
+        base: &[u8],
+        native_authority: Option<&PristineNativeApiAuthority>,
+    ) -> Result<Self, RemapError> {
         preflight_cache_module_work(base)?;
-        Self::from_allow_new_base(Arc::new(build_allow_new_base_context(base)?))
+        Self::from_allow_new_base(Arc::new(
+            build_allow_new_base_context_with_native_authority(base, native_authority)?,
+        ))
     }
 
     fn from_allow_new_base(base: Arc<AllowNewBaseContext>) -> Result<Self, RemapError> {
@@ -9325,6 +9366,13 @@ struct AllowNewBaseContext {
 }
 
 fn build_allow_new_base_context(base: &[u8]) -> Result<AllowNewBaseContext, RemapError> {
+    build_allow_new_base_context_with_native_authority(base, None)
+}
+
+fn build_allow_new_base_context_with_native_authority(
+    base: &[u8],
+    native_authority: Option<&PristineNativeApiAuthority>,
+) -> Result<AllowNewBaseContext, RemapError> {
     let syms = SymTables::build(base)?;
     let meta = TailMetadata::build(base)?;
     let identity_summaries = SymbolIdentitySummaries {
@@ -9360,7 +9408,10 @@ fn build_allow_new_base_context(base: &[u8]) -> Result<AllowNewBaseContext, Rema
         declaration_inventory,
         &mut comparison_budget,
     )?;
-    declarations.native_api = native_api_snapshot_for_base(base);
+    declarations.native_api = match native_authority {
+        Some(authority) => authority.for_running_generation(base),
+        None => native_api_snapshot_for_base(base),
+    };
     Ok(AllowNewBaseContext {
         syms,
         meta,
@@ -9919,6 +9970,7 @@ pub(super) fn remap_module_to_base_with_loadout_plan(
 fn remap_module_allow_new(
     extracted_mini: &[u8],
     base: &[u8],
+    native_authority: Option<&PristineNativeApiAuthority>,
 ) -> Result<(Vec<u8>, RemapCounts), RemapError> {
     if super::walk_modules::module_count(extracted_mini) == 0 {
         return Err(RemapError::NotSingle(0));
@@ -9926,7 +9978,7 @@ fn remap_module_allow_new(
     preflight_mini_module_work(extracted_mini)?;
     preflight_cache_module_work(base)?;
 
-    let base_context = build_allow_new_base_context(base)?;
+    let base_context = build_allow_new_base_context_with_native_authority(base, native_authority)?;
     let mut analyzed = analyze_new_symbol_mini(extracted_mini, &base_context)?;
     allocate_new_pointer_keys(&mut analyzed.plan, &analyzed.regen, &base_context.syms)?;
     allocate_engine_ids(
@@ -10088,8 +10140,17 @@ pub fn remap_module_to_base_with_options(
     base: &[u8],
     options: RemapOptions,
 ) -> Result<(Vec<u8>, RemapCounts), RemapError> {
+    remap_module_with_native_authority(extracted_mini, base, options, None)
+}
+
+pub(super) fn remap_module_with_native_authority(
+    extracted_mini: &[u8],
+    base: &[u8],
+    options: RemapOptions,
+    native_authority: Option<&PristineNativeApiAuthority>,
+) -> Result<(Vec<u8>, RemapCounts), RemapError> {
     if options.allow_new_symbols {
-        remap_module_allow_new(extracted_mini, base)
+        remap_module_allow_new(extracted_mini, base, native_authority)
     } else {
         remap_module_to_base(extracted_mini, base)
     }
@@ -10480,6 +10541,234 @@ mod native_api_snapshot_tests {
         )
         .expect("embedded native qualification data must match its checked-in seal and schema");
         assert!(!snapshot.matches_base(&empty_cache()));
+    }
+
+    fn cache_with_quest_availability_property(include_property: bool) -> Vec<u8> {
+        let mut bytes = empty_cache();
+        bytes.truncate(CacheHeader::SIZE);
+        bytes.extend_from_slice(&2_i32.to_le_bytes()); // T1: both owners already pristine
+        for (pointer, name) in [(0x100_i64, "UQuest"), (0x110, "UQuestSubsystem")] {
+            bytes.extend_from_slice(&pointer.to_le_bytes());
+            for value in [name, "", ""] {
+                append_canonical_sia(&mut bytes, value).unwrap();
+            }
+            bytes.extend_from_slice(&0_i32.to_le_bytes());
+        }
+        bytes.extend_from_slice(&2_i32.to_le_bytes()); // T2
+        for (id, pointer) in [(0x0400_1636_i32, 0x100_i64), (0x0400_000c, 0x110)] {
+            bytes.extend_from_slice(&id.to_le_bytes());
+            bytes.extend_from_slice(&pointer.to_le_bytes());
+        }
+        bytes.extend_from_slice(&[0; 16]); // T3 through T6
+        bytes.extend_from_slice(&i32::from(include_property).to_le_bytes()); // T7
+        if include_property {
+            bytes.extend_from_slice(&property_key(0x0400_1636, 322).to_le_bytes());
+            append_canonical_sia(&mut bytes, "bExternalAvailabilityTrigger").unwrap();
+            bytes.extend_from_slice(&0x0400_1636_i32.to_le_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn quest_availability_snapshot_admits_only_the_exact_bool_property() {
+        let pristine = cache_with_quest_availability_property(false);
+        let output = cache_with_quest_availability_property(true);
+        let embedded: serde_json::Value =
+            serde_json::from_slice(NATIVE_API_SNAPSHOT_BYTES).unwrap();
+        let property = embedded["properties"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == "bExternalAvailabilityTrigger")
+            .unwrap();
+        assert_eq!(property["owner_full_identity"], "0:0:6:UQuest1:00:");
+        assert_eq!(property["member_offset"], 322);
+        assert_eq!(property["owner_object_kind"], 0x0400_0000);
+        assert_eq!(
+            property["value_type_full_identity"],
+            "9:primitive2:651:01:01:01:0"
+        );
+
+        let mut document = qualified_document(&pristine);
+        document["types"] = serde_json::json!([]);
+        document["functions"] = serde_json::json!([]);
+        document["properties"] = serde_json::json!([property]);
+        let mut base = build_allow_new_base_context(&pristine).unwrap();
+        assert!(validate_native_admission(&output, &base).is_err());
+        base.declarations.native_api = Some(Arc::new(parse_document(&document).unwrap()));
+        validate_native_admission(&output, &base).unwrap();
+        validate_composed_module_records_with_pristine(&output, Some(&base.declarations)).unwrap();
+
+        let meta = TailMetadata::build(&output).unwrap();
+        assert_eq!(meta.properties[0].key, 0x28408002c6d);
+        let start = meta.properties[0].start;
+        let owner_offset = meta.properties[0].end - 4;
+        let mut changed_name = output.clone();
+        changed_name[start + 12] = b'X';
+        assert!(validate_native_admission(&changed_name, &base).is_err());
+        let mut changed_offset = output.clone();
+        changed_offset[start..start + 8]
+            .copy_from_slice(&property_key(0x0400_1636, 323).to_le_bytes());
+        assert!(validate_native_admission(&changed_offset, &base).is_err());
+        let mut changed_owner = output.clone();
+        changed_owner[start..start + 8]
+            .copy_from_slice(&property_key(0x0400_000c, 322).to_le_bytes());
+        changed_owner[owner_offset..owner_offset + 4]
+            .copy_from_slice(&0x0400_000c_i32.to_le_bytes());
+        assert!(validate_native_admission(&changed_owner, &base).is_err());
+        let mut changed_kind = output.clone();
+        changed_kind[start..start + 8]
+            .copy_from_slice(&property_key(0x0800_1636, 322).to_le_bytes());
+        changed_kind[owner_offset..owner_offset + 4]
+            .copy_from_slice(&0x0800_1636_i32.to_le_bytes());
+        assert!(validate_native_admission(&changed_kind, &base).is_err());
+
+        // T7 has no value datatype. The independent bool audit is protected by the source seal.
+        let source = std::str::from_utf8(NATIVE_API_SNAPSHOT_BYTES).unwrap();
+        let bool_type = "\"value_type_full_identity\": \"9:primitive2:651:01:01:01:0\"";
+        assert_eq!(source.matches(bool_type).count(), 1);
+        let altered_type = source.replace(
+            bool_type,
+            "\"value_type_full_identity\": \"9:primitive2:681:01:01:01:0\"",
+        );
+        assert!(NativeApiSnapshot::from_sealed_bytes(
+            altered_type.as_bytes(),
+            NATIVE_API_SNAPSHOT_SHA256,
+        )
+        .is_none());
+    }
+
+    fn cache_with_material_parameter_methods(include_methods: bool) -> Vec<u8> {
+        let mut bytes = empty_cache();
+        bytes.truncate(CacheHeader::SIZE);
+        bytes.extend_from_slice(&3_i32.to_le_bytes()); // T1: already pristine types
+        for (pointer, name) in [
+            (0x100_i64, "UMaterialInstanceDynamic"),
+            (0x110, "FName"),
+            (0x120, "FLinearColor"),
+        ] {
+            bytes.extend_from_slice(&pointer.to_le_bytes());
+            for value in [name, "", ""] {
+                append_canonical_sia(&mut bytes, value).unwrap();
+            }
+            bytes.extend_from_slice(&0_i32.to_le_bytes());
+        }
+        bytes.extend_from_slice(&3_i32.to_le_bytes()); // T2
+        for (index, pointer) in [0x100_i64, 0x110, 0x120].into_iter().enumerate() {
+            bytes.extend_from_slice(&(0x0400_0001_i32 + index as i32).to_le_bytes());
+            bytes.extend_from_slice(&pointer.to_le_bytes());
+        }
+        let count = if include_methods { 2_i32 } else { 0 };
+        bytes.extend_from_slice(&count.to_le_bytes()); // T3
+        for index in 0..count {
+            bytes.extend_from_slice(&(0x200_i64 + i64::from(index)).to_le_bytes());
+            let name = if index == 0 {
+                "GetVectorParameterValue"
+            } else {
+                "SetVectorParameterValue"
+            };
+            for value in [name, "", ""] {
+                append_canonical_sia(&mut bytes, value).unwrap();
+            }
+            for flag in [0_i32, 0, 1] {
+                // non-const, non-imported method
+                bytes.extend_from_slice(&flag.to_le_bytes());
+            }
+            bytes.extend_from_slice(&0x100_i64.to_le_bytes());
+            bytes.extend_from_slice(&(index + 1).to_le_bytes());
+            let parameters_and_return = if index == 0 {
+                vec![(0x110_i64, 5_i32), (0x120, 5)]
+            } else {
+                vec![(0x110_i64, 5_i32), (0x120, 5), (0, 0x52)]
+            };
+            for (pointer, token) in parameters_and_return {
+                bytes.extend_from_slice(&[0; 24]); // unqualified by-value datatypes
+                bytes.extend_from_slice(&pointer.to_le_bytes());
+                bytes.extend_from_slice(&token.to_le_bytes());
+            }
+        }
+        bytes.extend_from_slice(&count.to_le_bytes()); // T4
+        for index in 0..count {
+            bytes.extend_from_slice(&(12_i32 + index).to_le_bytes());
+            bytes.extend_from_slice(&(0x200_i64 + i64::from(index)).to_le_bytes());
+        }
+        bytes.extend_from_slice(&[0; 12]); // T5/T6/T7
+        bytes
+    }
+
+    #[test]
+    fn material_parameter_snapshot_admits_only_the_two_exact_methods() {
+        let pristine = cache_with_material_parameter_methods(false);
+        let output = cache_with_material_parameter_methods(true);
+        let mut base = build_allow_new_base_context(&pristine).unwrap();
+        assert!(validate_native_admission(&output, &base).is_err());
+
+        // Keep synthetic base authority separate from the real build-specific base seal.
+        // The tested method identities themselves must come from the embedded audit.
+        let embedded: serde_json::Value =
+            serde_json::from_slice(NATIVE_API_SNAPSHOT_BYTES).unwrap();
+        let methods: Vec<_> = embedded["functions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| {
+                row["full_identity"]
+                    .as_str()
+                    .unwrap()
+                    .contains("UMaterialInstanceDynamic")
+            })
+            .cloned()
+            .collect();
+        assert_eq!(methods.len(), 2);
+        let mut document = qualified_document(&pristine);
+        document["types"] = serde_json::json!([]);
+        document["properties"] = serde_json::json!([]);
+        document["functions"] = serde_json::json!(methods);
+        base.declarations.native_api = Some(Arc::new(parse_document(&document).unwrap()));
+        validate_native_admission(&output, &base).unwrap();
+        validate_composed_module_records_with_pristine(&output, Some(&base.declarations)).unwrap();
+
+        let meta = TailMetadata::build(&output).unwrap();
+        let refused = |changed: &[u8]| {
+            assert!(validate_native_admission(changed, &base).is_err());
+            assert!(validate_composed_module_records_with_pristine(
+                changed,
+                Some(&base.declarations)
+            )
+            .is_err());
+        };
+        for function in &meta.funcs {
+            let mut unknown_name = output.clone();
+            unknown_name[function.start + 12] = b'X';
+            refused(&unknown_name);
+
+            let mut cursor = Cursor::at(&output, function.start + 8);
+            for _ in 0..3 {
+                cursor.read_sia().unwrap();
+            }
+            let mut wrong_const = output.clone();
+            wrong_const[cursor.pos()..cursor.pos() + 4].copy_from_slice(&1_i32.to_le_bytes());
+            refused(&wrong_const);
+
+            let mut wrong_owner = output.clone();
+            wrong_owner[cursor.pos() + 12..cursor.pos() + 20]
+                .copy_from_slice(&0x110_i64.to_le_bytes());
+            refused(&wrong_owner);
+
+            for dependency in function
+                .type_deps
+                .iter()
+                .filter(|dependency| dependency.ptr != 0)
+            {
+                for flag in 0..3 {
+                    // reference, object const, handle
+                    let mut changed = output.clone();
+                    let offset = dependency.off - 24 + flag * 4;
+                    changed[offset..offset + 4].copy_from_slice(&1_i32.to_le_bytes());
+                    refused(&changed);
+                }
+            }
+        }
     }
 
     #[test]

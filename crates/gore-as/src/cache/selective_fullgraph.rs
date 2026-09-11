@@ -14,10 +14,12 @@ use super::default_targets::ExistingDefaultTargetPlan;
 use super::generated_defaults::{
     ExistingFunctionMetadataPlan, ExistingModuleStructurePlan, GeneratedDefaultsPlan,
 };
-use super::remap::{RemapDependencyIndex, RemapError, RemapOptions};
+use super::remap::{
+    remap_module_with_native_authority, PristineNativeApiAuthority, RemapDependencyIndex,
+    RemapError, RemapOptions,
+};
 use super::splice::{
-    extract_module, remap_module_to_base_with_options, validate_standalone_script_cache,
-    SequentialMiniGuard, SpliceError,
+    extract_module, validate_standalone_script_cache, SequentialMiniGuard, SpliceError,
 };
 use super::walk_modules::{module_names, module_ranges};
 
@@ -115,6 +117,8 @@ pub(crate) struct SelectiveFullGraphRemapFailure {
 
 #[derive(Debug, Error)]
 pub(crate) enum SelectiveFullGraphError {
+    #[error("retained native API authority does not match the pristine FullGraph input")]
+    NativeAuthorityMismatch,
     #[error("selective FullGraph {which} cache is invalid: {source}")]
     InvalidCache {
         which: &'static str,
@@ -341,8 +345,26 @@ impl PreparedChange {
 pub(crate) fn compose_selective_full_graph(
     pristine: &[u8],
     full_graph: &[u8],
-    mut changes: Vec<SelectiveFullGraphChange>,
+    changes: Vec<SelectiveFullGraphChange>,
 ) -> Result<SelectiveFullGraphOutput, SelectiveFullGraphError> {
+    let native_authority = PristineNativeApiAuthority::from_pristine(pristine);
+    compose_selective_full_graph_with_native_authority(
+        pristine,
+        full_graph,
+        changes,
+        &native_authority,
+    )
+}
+
+pub(super) fn compose_selective_full_graph_with_native_authority(
+    pristine: &[u8],
+    full_graph: &[u8],
+    mut changes: Vec<SelectiveFullGraphChange>,
+    native_authority: &PristineNativeApiAuthority,
+) -> Result<SelectiveFullGraphOutput, SelectiveFullGraphError> {
+    if !native_authority.matches_pristine(pristine) {
+        return Err(SelectiveFullGraphError::NativeAuthorityMismatch);
+    }
     validate_standalone_script_cache(pristine).map_err(|source| {
         SelectiveFullGraphError::InvalidCache {
             which: "pristine",
@@ -420,7 +442,15 @@ pub(crate) fn compose_selective_full_graph(
         prepared,
         |change| change.module_name().to_owned(),
         |change| change.provider_identities.clone(),
-        |running, change| attempt_change(running, full_graph, &dependency_index, &change.change),
+        |running, change| {
+            attempt_change(
+                running,
+                full_graph,
+                &dependency_index,
+                &change.change,
+                native_authority,
+            )
+        },
     );
     match result {
         Ok((cache, applied_modules)) => Ok(SelectiveFullGraphOutput {
@@ -461,6 +491,7 @@ fn attempt_change(
     full_graph: &[u8],
     dependency_index: &RemapDependencyIndex,
     change: &SelectiveFullGraphChange,
+    native_authority: &PristineNativeApiAuthority,
 ) -> Result<Vec<u8>, AttemptFailure<SelectiveFullGraphRemapFailure, SelectiveFullGraphError>> {
     let module_name = change.module_name();
     // Extract on demand. Every extracted mini owns the complete global tail-table set, so retaining
@@ -479,18 +510,22 @@ fn attempt_change(
             .map_or(true, GeneratedDefaultsPlan::allows_new_symbols),
         SelectiveFullGraphChange::Delete { .. } => unreachable!("deletes fail during preflight"),
     };
-    let mut mini =
-        remap_module_to_base_with_options(&extracted, running, RemapOptions { allow_new_symbols })
-            .map_err(|error| {
-                let retry_after = dependency_index.retry_provider(&error);
-                AttemptFailure::Deferred {
-                    error: SelectiveFullGraphRemapFailure {
-                        module_name: module_name.to_owned(),
-                        error,
-                    },
-                    retry_after,
-                }
-            })?;
+    let (mut mini, _) = remap_module_with_native_authority(
+        &extracted,
+        running,
+        RemapOptions { allow_new_symbols },
+        Some(native_authority),
+    )
+    .map_err(|error| {
+        let retry_after = dependency_index.retry_provider(&error);
+        AttemptFailure::Deferred {
+            error: SelectiveFullGraphRemapFailure {
+                module_name: module_name.to_owned(),
+                error,
+            },
+            retry_after,
+        }
+    })?;
 
     if let SelectiveFullGraphChange::Edit { preservation, .. } = change {
         if let Some(carry) = &preservation.generated_defaults {
@@ -529,14 +564,16 @@ fn attempt_change(
     }
 
     // A persistent guard rooted at `pristine` intentionally does not grant authority to a prior
-    // mini. Constructing it from the exact running state is what turns a successfully composed Add
-    // into ordinary base authority for dependent modules on this or a later pass.
-    let mut guard = SequentialMiniGuard::new(running).map_err(|source| {
-        AttemptFailure::Fatal(SelectiveFullGraphError::Compose {
-            module_name: module_name.to_owned(),
-            source,
-        })
-    })?;
+    // mini. Constructing script authority from the exact running state turns a successfully
+    // composed Add into ordinary base authority for dependent modules on this or a later pass.
+    // Native authority remains tied to the authenticated original; `running` no longer has its SHA.
+    let mut guard = SequentialMiniGuard::new_with_native_authority(running, Some(native_authority))
+        .map_err(|source| {
+            AttemptFailure::Fatal(SelectiveFullGraphError::Compose {
+                module_name: module_name.to_owned(),
+                source,
+            })
+        })?;
     let updated = match change {
         SelectiveFullGraphChange::Add { .. } => guard.compose_add(running, &mini),
         SelectiveFullGraphChange::Edit { .. } => guard.compose_edit(running, &mini, module_name),
