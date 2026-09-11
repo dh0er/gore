@@ -209,8 +209,8 @@ pub struct RefResolver {
     /// keys the cross-module free-fn rename map, matching the parsed `Module::name` exactly.
     func_module: HashMap<i64, String>,
     /// Script predicate mixins whose declarations and exact CALL targets agree.
-    native_pair_mixins: HashSet<i64>,
-    native_pair_mixin_declarations: HashSet<(String, i64)>,
+    restored_mixins: HashSet<i64>,
+    restored_mixin_declarations: HashSet<(String, Vec<i64>)>,
     /// batch-25f: per-function-ptr rename for cross-module free-fn collisions — the emit-side
     /// collision scan renames each colliding declaration `Name -> Name_g<mi>` with a TEXT pass
     /// over the DECLARING module only; this id-keyed map lets CALL/CALLINTF sites in EVERY
@@ -1523,44 +1523,79 @@ impl RefResolver {
             && matches!(ty.name.as_str(), "AGothicCharacter" | "AGothicCharacterState")).then_some(a.type_info)
     }
 
-    /// Preserve the original mixin trait for the proven two-const-character predicate family.
-    pub(crate) fn restores_native_pair_mixin(&self, f: &super::model::Func) -> bool {
-        let [a, b] = f.params.as_slice() else { return false; };
-        f.traits & 0x800 != 0 && f.namespace.is_empty()
-            && f.param_defaults.iter().all(String::is_empty)
-            && a.flags == 0 && b.flags == 0
-            && self.native_pair_predicate_type(&f.ret, &a.ty, &b.ty).is_some()
+    /// Both native speech overloads return a task executor and have fixed argument roles.
+    /// The type pointers preserve overload identity after those roles have been checked.
+    fn native_speech_mixin(&self, ret: &DataType, params: &[DataType]) -> bool {
+        let native = |t: &DataType, name| t.token == 5 && self.type_identity_by_ptr(t.type_info)
+            .is_some_and(|i| i.name == name && i.module.is_empty() && i.namespace.is_empty());
+        let value = |t: &DataType| !t.is_reference && !t.is_object_handle && !t.is_object_const && !t.is_read_only;
+        let handle = |t: &DataType, name| native(t,name) && t.is_object_handle && !t.is_reference && !t.is_object_const && !t.is_read_only;
+        let reference = |t: &DataType, name| native(t,name) && t.is_reference && t.is_object_const && t.is_read_only && !t.is_object_handle;
+        let boolean = |t: &DataType| t.token == 0x41 && t.type_info == 0 && !t.is_reference && !t.is_object_handle && t.is_object_const && t.is_read_only;
+        if !native(ret,"FAbilityTaskExecutor") || !value(ret) || ret.is_auto || ret.if_handle_then_const
+            || params.iter().any(|t| t.is_auto || t.if_handle_then_const) { return false; }
+        match params {
+            [ai,text,expression,target,unskippable,camera,language,posture] => handle(ai,"UGameplayAbility_AI")
+                && reference(text,"FText") && reference(expression,"FGameplayTag") && handle(target,"AGothicCharacter")
+                && boolean(unskippable) && reference(camera,"FName") && reference(language,"FName")
+                && reference(posture,"FGameplayTag") && expression.type_info == posture.type_info && camera.type_info == language.type_info,
+            [ai,sound,loudness,target,unskippable,posture] => handle(ai,"UGameplayAbility_AI")
+                && reference(sound,"FGameplayTag") && native(loudness,"EPerceptionNoiseLoudness")
+                && !loudness.is_reference && !loudness.is_object_handle && loudness.is_object_const && loudness.is_read_only
+                && handle(target,"AGothicCharacter") && boolean(unskippable) && reference(posture,"FGameplayTag")
+                && sound.type_info == posture.type_info,
+            _ => false,
+        }
     }
 
-    pub(crate) fn set_native_pair_mixins(&mut self, mods: &[super::model::Module]) {
-        let declared: HashSet<_> = mods.iter().flat_map(|m| m.functions.iter()
-            .filter(|f| self.restores_native_pair_mixin(f))
-            .map(|f| (m.name.as_str(), f.name.as_str(), f.params[0].ty.type_info))).collect();
+    fn restored_mixin_types(&self, ret: &DataType, params: &[DataType]) -> Option<Vec<i64>> {
+        let predicate = match params { [a,b] => self.native_pair_predicate_type(ret,a,b).is_some(), _ => false };
+        (predicate || self.native_speech_mixin(ret,params)).then(||
+            std::iter::once(ret.type_info).chain(params.iter().map(|p| p.type_info)).collect())
+    }
+
+    /// Restore only source-proven mixin families with their original declaration trait.
+    pub(crate) fn restores_mixin(&self, f: &super::model::Func) -> bool {
+        if f.traits & 0x800 == 0 || !f.namespace.is_empty() { return false; }
+        let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+        if self.native_speech_mixin(&f.ret,&params) {
+            return f.params.iter().all(|p| p.flags == if p.ty.is_reference { 3 } else { 0 });
+        }
+        matches!(params.as_slice(), [a,b] if self.native_pair_predicate_type(&f.ret,a,b).is_some())
+            && f.param_defaults.iter().all(String::is_empty) && f.params.iter().all(|p| p.flags == 0)
+    }
+
+    pub(crate) fn set_restored_mixins(&mut self, mods: &[super::model::Module]) {
+        let declared: HashSet<_> = mods.iter().flat_map(|m| m.functions.iter().filter_map(|f| {
+            if !self.restores_mixin(f) { return None; }
+            let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+            Some((m.name.as_str(),f.name.as_str(),self.restored_mixin_types(&f.ret,&params)?))
+        })).collect();
         let mut targets = HashSet::new();
-        for (ptr, name) in &self.func_by_ptr {
+        for (ptr,name) in &self.func_by_ptr {
             if self.is_method_by_ptr(*ptr) || self.func_ns.contains_key(ptr) { continue; }
             let Some(module) = self.func_module.get(ptr) else { continue; };
             let Some(params) = self.func_params.get(ptr) else { continue; };
-            let [a, b] = params.as_slice() else { continue; };
             let Some(ret) = self.func_ret.get(ptr) else { continue; };
-            if self.native_pair_predicate_type(ret, a, b).is_some_and(|ty|
-                declared.contains(&(module.as_str(), name.as_str(), ty))) { targets.insert(*ptr); }
+            if self.restored_mixin_types(ret,params).is_some_and(|types|
+                declared.contains(&(module.as_str(),name.as_str(),types))) { targets.insert(*ptr); }
         }
-        self.native_pair_mixins = targets;
-        self.native_pair_mixin_declarations = declared.into_iter()
-            .map(|(_, name, ty)| (name.to_owned(), ty)).collect();
+        self.restored_mixins = targets;
+        self.restored_mixin_declarations = declared.into_iter().map(|(_,name,types)| (name.to_owned(),types)).collect();
     }
 
-    pub(crate) fn is_native_pair_mixin_by_id(&self, id: i32) -> bool {
-        self.funcid_to_ptr.get(&id).is_some_and(|ptr| self.native_pair_mixins.contains(ptr))
+    pub(crate) fn is_restored_mixin_by_id(&self, id: i32) -> bool {
+        self.funcid_to_ptr.get(&id).is_some_and(|ptr| self.restored_mixins.contains(ptr))
     }
 
-    pub(crate) fn emits_native_pair_mixin(&self, f: &super::model::Func) -> bool {
-        // A bare, unprepared resolver must retain the old declaration together with
-        // its old free calls. Prepared emission binds both sides through the same targets.
-        self.restores_native_pair_mixin(f)
-            && self.native_pair_mixin_declarations.contains(&(f.name.clone(), f.params[0].ty.type_info))
+    pub(crate) fn emits_restored_mixin(&self, f: &super::model::Func) -> bool {
+        // Bare resolvers retain their old declarations and free calls together.
+        if !self.restores_mixin(f) { return false; }
+        let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+        self.restored_mixin_types(&f.ret,&params).is_some_and(|types|
+            self.restored_mixin_declarations.contains(&(f.name.clone(),types)))
     }
+
     /// True if `name` exists as a member in cached/script/native evidence.
     ///
     /// The bytecode emitter now globally qualifies every structurally proven free script global
@@ -7496,6 +7531,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn speech_mixins_bind_each_original_overload_and_native_signature() {
+        use crate::cache::model::{Func,Module,Param};
+        let make = || {
+            let mut r=RefResolver::default();
+            for (p,name) in [(1,"FAbilityTaskExecutor"),(2,"UGameplayAbility_AI"),(3,"FText"),(4,"FGameplayTag"),(5,"AGothicCharacter"),(6,"FName"),(7,"EPerceptionNoiseLoudness")] {
+                r.type_identity_by_ptr.insert(p,TypeIdentity {name:name.into(),module:String::new(),namespace:String::new()});
+            }
+            let value=|p| DataType {token:5,type_info:p,..Default::default()};
+            let handle=|p| DataType {is_object_handle:true,..value(p)};
+            let reference=|p| DataType {is_reference:true,is_object_const:true,is_read_only:true,..value(p)};
+            let boolean=DataType {token:0x41,is_object_const:true,is_read_only:true,..Default::default()};
+            let types=[vec![handle(2),reference(3),reference(4),handle(5),boolean.clone(),reference(6),reference(6),reference(4)],
+                vec![handle(2),reference(4),DataType {is_object_const:true,is_read_only:true,..value(7)},handle(5),boolean,reference(4)]];
+            let mut functions=Vec::new();
+            for (index,params) in types.into_iter().enumerate() {
+                let ptr=index as i64+10;
+                r.func_by_ptr.insert(ptr,"Speak".into());r.func_module.insert(ptr,"Speech".into());r.funcid_to_ptr.insert(ptr as i32,ptr);
+                r.func_ret.insert(ptr,value(1));r.func_params.insert(ptr,params.clone());
+                functions.push(Func {name:"Speak".into(),namespace:String::new(),ret:value(1),traits:0x820,is_ufunction:false,
+                    param_defaults:vec![String::new();params.len()],params:params.into_iter().enumerate().map(|(i,ty)| Param {
+                        name:format!("arg{i}"),flags:if ty.is_reference {3}else{0},ty}).collect(),bytecode:vec![],obj_locals:vec![]});
+            }
+            (r,Module {name:"Speech".into(),file:String::new(),functions,classes:vec![],enums:vec![],globals:vec![]})
+        };
+        let (mut r,m)=make();
+        for f in &m.functions {assert!(r.restores_mixin(f));assert!(!r.emits_restored_mixin(f));}
+        r.set_restored_mixins(std::slice::from_ref(&m));
+        assert!(r.is_restored_mixin_by_id(10));assert!(r.is_restored_mixin_by_id(11));
+        for f in &m.functions {assert!(r.emits_restored_mixin(f));}
+        let (mut r,mut m)=make();m.functions.truncate(1);r.set_restored_mixins(&[m]);
+        assert!(r.is_restored_mixin_by_id(10));assert!(!r.is_restored_mixin_by_id(11));
+        for fault in 0..17 {
+            let (mut r,mut m)=make();let f=&mut m.functions[0];
+            match fault {
+                0=>f.traits=0x20,1=>f.namespace="Other".into(),2=>f.ret.is_reference=true,
+                3=>f.params[1].flags=0,4=>f.params[0].ty.is_object_const=true,5=>f.params[4].ty.token=0x44,
+                6=>f.params[1].ty.type_info=4,7=>f.params[6].ty.is_reference=false,8=>f.params[7].ty.is_auto=true,
+                9=>{r.type_identity_by_ptr.get_mut(&3).unwrap().module="Script".into();},
+                10=>{r.func_module.insert(10,"Other".into());},11=>{r.func_is_method.insert(10);},
+                12=>{r.func_ns.insert(10,"Other".into());},13=>{r.func_params.get_mut(&10).unwrap()[4].is_read_only=false;},
+                14=>{r.func_ret.get_mut(&10).unwrap().type_info=2;},15=>{f.params.pop();},
+                16=>{r.func_module.remove(&10);},_=>unreachable!(),
+            }
+            r.set_restored_mixins(&[m]);assert!(!r.is_restored_mixin_by_id(10),"fault {fault}");
+        }
+    }
+
+    #[test]
     fn predicate_mixins_require_the_original_trait_and_exact_script_target() {
         use crate::cache::model::{Func, Module, Param};
         let make = || {
@@ -7519,14 +7602,14 @@ mod tests {
         let (mut refs, mut module) = make();
         let mut unused = module.functions[0].clone(); unused.name = "Unused".into();
         module.functions.push(unused);
-        assert!(refs.restores_native_pair_mixin(&module.functions[0]));
-        assert!(!refs.emits_native_pair_mixin(&module.functions[0]));
-        refs.set_native_pair_mixins(std::slice::from_ref(&module));
-        assert!(refs.emits_native_pair_mixin(&module.functions[0]));
-        assert!(refs.emits_native_pair_mixin(&module.functions[1]));
-        assert!(refs.is_native_pair_mixin_by_id(11));
-        for id in [12, 13, 14, 99] { assert!(!refs.is_native_pair_mixin_by_id(id)); }
-        refs.set_native_pair_mixins(&[]); assert!(!refs.is_native_pair_mixin_by_id(11));
+        assert!(refs.restores_mixin(&module.functions[0]));
+        assert!(!refs.emits_restored_mixin(&module.functions[0]));
+        refs.set_restored_mixins(std::slice::from_ref(&module));
+        assert!(refs.emits_restored_mixin(&module.functions[0]));
+        assert!(refs.emits_restored_mixin(&module.functions[1]));
+        assert!(refs.is_restored_mixin_by_id(11));
+        for id in [12, 13, 14, 99] { assert!(!refs.is_restored_mixin_by_id(id)); }
+        refs.set_restored_mixins(&[]); assert!(!refs.is_restored_mixin_by_id(11));
         for fault in 0..18 {
             let (mut refs, mut module) = make(); let f = &mut module.functions[0];
             match fault {
@@ -7550,8 +7633,8 @@ mod tests {
                 17 => f.name = "AnotherPredicate".into(),
                 _ => unreachable!(),
             }
-            refs.set_native_pair_mixins(&[module]);
-            assert!(!refs.is_native_pair_mixin_by_id(11), "fault {fault}");
+            refs.set_restored_mixins(&[module]);
+            assert!(!refs.is_restored_mixin_by_id(11), "fault {fault}");
         }
     }
 

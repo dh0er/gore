@@ -2671,6 +2671,19 @@ fn build_call(
         } else {
             f.into()
         };
+        // Split off the mixin receiver only after the ordinary call frame and RVO
+        // destination have been recovered. Defaults retain their parameter positions.
+        let render_free_call = |args: &[Arg]| {
+            if script_mixin {
+                if let (Some((receiver,rest)),Some((first,tail))) = (args.split_first(),params.and_then(|p| p.split_first())) {
+                    if rest.len() == tail.len() {
+                        return format!("({}).{}({})",cast_arg(receiver,first,refs),f.trim_start_matches("::"),
+                            render_args(rest,Some(tail),refs,arg_defaults.and_then(|d| d.get(1..))));
+                    }
+                }
+            }
+            format!("{f}({})",render_args(args,params,refs,arg_defaults))
+        };
         // Free-call RVO struct-return (mirror of the method Fix-b3 arm): a free/static function
         // returning a struct BY VALUE pushes a hidden PSF out-slot. Recover `out = f(args)`
         // instead of leaking the out-slot as a leading arg (GotoPosition/Say/GiveItemTo/
@@ -2703,10 +2716,7 @@ fn build_call(
                         }
                     }
                     maybe_reverse_args(&mut a, params, refs);
-                    return Some(format!(
-                        "{out} = {f}({})",
-                        render_args(&a, params, refs, arg_defaults)
-                    ));
+                    return Some(format!("{out} = {}", render_free_call(&a)));
                 }
             }
         }
@@ -2717,16 +2727,7 @@ fn build_call(
             }
         }
         maybe_reverse_args(&mut a, params, refs);
-        if script_mixin {
-            if let ([receiver, other], Some([first, second])) = (a.as_slice(), params) {
-                return Some(format!("({}).{}({})", cast_arg(receiver, first, refs),
-                    f.trim_start_matches("::"), cast_arg(other, second, refs)));
-            }
-        }
-        Some(format!(
-            "{f}({})",
-            render_args(&a, params, refs, arg_defaults)
-        ))
+        Some(render_free_call(&a))
     }
 }
 
@@ -5805,7 +5806,7 @@ fn block_stmts_in(
                         pending_ty.as_deref(),
                         ret_is_ref,
                         free_global_in_class,
-                        ctx.refs.is_native_pair_mixin_by_id(id),
+                        ctx.refs.is_restored_mixin_by_id(id),
                         ctx.refs,
                     )
                 };
@@ -13117,6 +13118,23 @@ mod tests {
         for fault in 1..=20 {
             let bad=RefResolver::from_test_native_actor_factory(fault);
             assert_eq!(bad.native_arity_by_ptr(10,"MakeActor"),Some(3),"metadata fault {fault}");
+        }
+    }
+
+    #[test]
+    fn task_mixin_keeps_rvo_arguments_and_the_outer_frame() {
+        let refs=RefResolver::default();
+        let mut params=vec![DataType {token:5,..Default::default()};8];params[4].token=0x41;
+        for mixin in [false,true] {
+            let mut stack=vec![Arg::obj("Outside".into()),Arg::obj("Posture".into()),Arg::obj("Language".into()),
+                Arg::obj("Camera".into()),Arg {s:"0".into(),is_int:true,cbits:Some(ConstBits::W4(0)),..Default::default()},Arg::obj("Target()".into()),
+                Arg::obj("Expression".into()),Arg::obj("Text()".into()),Arg::obj("AI()".into()),
+                Arg {s:"local_22".into(),is_psf:true,ty:Some("FAbilityTaskExecutor".into()),..Default::default()}];
+            let call=build_call(&mut stack,"Speak",false,None,Some(&params),None,Some(8),None,Some("Host"),false,
+                Some("FAbilityTaskExecutor"),false,true,mixin,&refs).unwrap();
+            assert_eq!(call,if mixin {"local_22 = (AI()).Speak(Text(), Expression, Target(), (0 != 0), Camera, Language, Posture)"}
+                else {"local_22 = ::Speak(AI(), Text(), Expression, Target(), (0 != 0), Camera, Language, Posture)"});
+            assert_eq!(stack.len(),1);assert_eq!(stack[0].s,"Outside");
         }
     }
 

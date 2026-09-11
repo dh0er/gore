@@ -2396,7 +2396,7 @@ fn emit_function_ctor(
             ""
         };
         let propertyq = if f.traits & 0x200 != 0 { " property" } else { "" };
-        let mixinq = if !is_method && refs.emits_native_pair_mixin(f) { "mixin " } else { "" };
+        let mixinq = if !is_method && refs.emits_restored_mixin(f) { "mixin " } else { "" };
         let _ = writeln!(s, "{ind}{mixinq}{ret_sig} {}({params}){constq}{propertyq}", f.name);
     }
     let _ = writeln!(s, "{ind}{{");
@@ -14235,7 +14235,15 @@ fn call_of_expression(expression: &str) -> Option<(String, Vec<String>)> {
         }
         statement = stripped;
     }
-    let open = statement.find('(')?;
+    // Restored mixins use `(receiver).Method(args)`. Its first parentheses
+    // enclose the receiver, not the method's argument list.
+    let open = if statement.starts_with('(') {
+        let receiver_end = matching_paren(statement, 0)?;
+        let method = statement.get(receiver_end + 1..)?.strip_prefix('.')?;
+        let open = method.find('(')?;
+        if open == 0 || !method[..open].bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') { return None; }
+        receiver_end + 2 + open
+    } else { statement.find('(')? };
     if matching_paren(statement, open)? != statement.len() - 1 {
         return None; // not a single call: something follows the closing parenthesis
     }
@@ -42568,6 +42576,21 @@ mod literal_value_lifetime_tests {
         assert!(super::pushed_bool_literal_defs(&function(&delayed), body, &RefResolver::default()).is_empty());
         let mut address = ops; address[3] = ("PSF", &[3]);
         assert!(super::pushed_bool_literal_defs(&function(&address), body, &RefResolver::default()).is_empty());
+    }
+
+    #[test]
+    fn parenthesized_receiver_keeps_literal_argument_reconstruction() {
+        let body="    bool local_3 = false;\n    (this.GetAI()).Trace(\"Text, with (parentheses)\", local_3);\n";
+        assert_eq!(super::call_arguments(body.lines().nth(1).unwrap()),Some(("Trace".into(),vec!["\"Text, with (parentheses)\"".into(),"local_3".into()])));
+        let f=function(&[("CpyRtoV4",&[3]),("NOT",&[3]),("SetV1",&[3]),("PshV4",&[3])]);
+        let candidates=super::pushed_bool_literal_defs(&f,body,&RefResolver::default());
+        assert_eq!(inline_unnamed_value_temporaries(body,&candidates,&HashSet::new(),&HashSet::new(),
+            &RefResolver::default(),&HashSet::new(),&HashSet::new(),&HashMap::new(),&HashSet::new(),
+            &HashSet::new(),&HashSet::new(),&HashSet::new()),
+            "    (this.GetAI()).Trace(\"Text, with (parentheses)\", false);\n");
+        for expression in ["(this.GetAI()).Trace(local_3) + Other()", "(this.GetAI()).Trace(local_3).Count", "(this.GetAI()) + Trace(local_3)"] {
+            assert!(super::call_of_expression(expression).is_none());
+        }
     }
 
     #[test]

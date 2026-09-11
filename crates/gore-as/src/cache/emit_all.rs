@@ -339,7 +339,7 @@ pub fn prepare_resolver_semantics(
         }
     }
     refs.set_param_defaults(param_defaults);
-    refs.set_native_pair_mixins(mods);
+    refs.set_restored_mixins(mods);
     refs.set_unusable_const_returns(unusable_const_returns(mods, refs));
     refs.add_method_names(
         mods.iter()
