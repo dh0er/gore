@@ -1,0 +1,4 @@
+# Preserve exact compiled fixture bytes, including existing EOF blanks and line endings.
+*.as -text whitespace=cr-at-eol,-blank-at-eof
+# Evidence/source manifests are referenced by file SHA-256.
+*.json -text whitespace=cr-at-eol

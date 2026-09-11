@@ -5,6 +5,13 @@ NPC roles**. Game tests are performed by the user. Complete each focused change,
 then batch offline checks and provide a short game checklist. An untested behavior
 is not automatically a missing CLI capability.
 
+The [remaining-case test batch](../../scripts/fixtures/npc-batch-tests/README.md)
+prepares separate appearance, natural-voice, economy/teacher, field-role and
+quest packages. It covers the open runtime cases below with isolated starting
+saves, including separate teacher requirement failures and a stronger Hero only
+for the positive defeat/death tests. Its current build/verification status is
+recorded with that batch. Preparation does not check off the runtime items.
+
 ## 1. Modular heads and faces — tested path passed
 
 - [x] Combine the shipped Flex head with the tested modular Novice clothing.
@@ -105,7 +112,7 @@ Original warning modules were not recompiled; a cleanup gate exists in original
 bytecode, but its role in the observed failure is not yet established. Vanilla
 correctness and blanket decompiler correctness are not assumed.
 The [0.1.12 correction](../../scripts/fixtures/npc-weapon-warning/RECOVERY.md)
-is now installed: only B receives a derived warning state that retries normal
+introduced the tested fix: only B receives a derived warning state that retries normal
 end assessment for a latched state with no target, warned characters or sensed
 living enemies. C retains its original AI. The user confirmed all focused tests
 on2026-09-10; saves59/60 both contain activation and recovery markers. Cleanup,
