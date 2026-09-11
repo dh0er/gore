@@ -1,0 +1,107 @@
+{
+  "schema": "gore.npc-batch.sources.v1",
+  "pristine_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+  "binds_sha256": "aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2",
+  "local_cli_sha256": "9428ceacd052ba3f6ed98162cfd505536e57979e3ffcfe96a555fb3d2bddf005",
+  "base": [
+    {
+      "source": "base/GORE_TEST_A.as",
+      "module_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
+      "sha256": "b09651f45797f358e70d89c00e04aaff03a477d2cdc3b84151b1120846b192a1"
+    },
+    {
+      "source": "base/GORE_TEST_B.as",
+      "module_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
+      "sha256": "af5a3dbfd775e36643033c2b0d91f182c46836b7808bda67a3cd83115e04fcc0"
+    },
+    {
+      "source": "base/tree/AI/AIAgent/Human/Config/OC_STT_Diego/CharacterDefinition_OC_STT_Diego.as",
+      "module_path": "AI/AIAgent/Human/Config/OC_STT_Diego/CharacterDefinition_OC_STT_Diego.as",
+      "sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664"
+    },
+    {
+      "source": "base/tree/LevelScripts/XardasTower_AI.as",
+      "module_path": "LevelScripts/XardasTower_AI.as",
+      "sha256": "ee74734e29cafb76445abe5000bc662d2c9e79d3cd6b88a989a17f81d42056eb"
+    }
+  ],
+  "variants": {
+    "heads": {
+      "bundle_name": "NpcHeadPaletteTest",
+      "sources": [
+        {
+          "source": "heads/GORE_TEST_A.as",
+          "module_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
+          "sha256": "a7f2cd17688a5a32ae625fdb48303b79c06fbd258deab52053cfbeae8ba5aa38"
+        },
+        {
+          "source": "heads/GORE_TEST_B.as",
+          "module_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
+          "sha256": "637a06baf3cd51b086772c2af2dec5630d6477849c2d893d9a7f05360952e5f2"
+        }
+      ]
+    },
+    "voice": {
+      "bundle_name": "NpcNaturalVoiceTest",
+      "sources": [
+        {
+          "source": "voice/GORE_TEST_A.as",
+          "module_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
+          "sha256": "a5a10c338dd01dff1906d4064088ac444a79319e56b92256b4fcd3e53db97721"
+        },
+        {
+          "source": "voice/GORE_TEST_B.as",
+          "module_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
+          "sha256": "d7a22bd5cf36ed60d2d3776208a3c38fbf83162cec4ac42654a02e92e6b9a783"
+        }
+      ]
+    },
+    "roles/economy": {
+      "bundle_name": "NpcEconomyRolesTest",
+      "sources": [
+        {
+          "source": "roles/economy/GORE_TEST_A.as",
+          "module_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
+          "sha256": "5dd6bb2bbdf3cd6cabf6aa565e3eb727bba51e4884fd64843f08f7d665c10b64"
+        },
+        {
+          "source": "roles/economy/GORE_TEST_B.as",
+          "module_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
+          "sha256": "69c4c1bb77c686b96b82515f0628f76422dc7b52b1a564619408b86316ff4193"
+        }
+      ]
+    },
+    "roles/field": {
+      "bundle_name": "NpcFieldRolesTest",
+      "sources": [
+        {
+          "source": "roles/field/GORE_TEST_A.as",
+          "module_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
+          "sha256": "40c59b6053412f40ba0fcdc33e77d6a431e64e070b68a78133be0c606bf83b2c"
+        },
+        {
+          "source": "roles/field/GORE_TEST_B.as",
+          "module_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
+          "sha256": "34a5f200d787dacfd3738851bbb716f6345f8788f7c66930960f3965c7fe7b4a"
+        }
+      ]
+    },
+    "quest": {
+      "bundle_name": "NpcQuestCallbacksTest",
+      "sources": [
+        {
+          "source": "quest/GORE_TEST_A.as",
+          "module_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
+          "sha256": "c7943e2b04c0817c0f883644a60e8b5038210a9a30bb2f6f5c7e60bd4728768d"
+        },
+        {
+          "source": "quest/GORE_TEST_B.as",
+          "module_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
+          "sha256": "af5a3dbfd775e36643033c2b0d91f182c46836b7808bda67a3cd83115e04fcc0"
+        }
+      ]
+    }
+  },
+  "palette_cli_sha256": "3e16d37f2c04361e6c80764295a648837a91273c6bef792ac14990c9758c9ada",
+  "native_api_snapshot_sha256": "e8004138e4b07a04203bfb7d10c33e8ba21ca64b0990f91a670b64d2a63fea3b"
+}
