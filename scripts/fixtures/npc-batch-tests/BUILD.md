@@ -22,8 +22,8 @@ role sources are also tracked, so that regeneration is optional.
   SHA256 `3e16d37f2c04361e6c80764295a648837a91273c6bef792ac14990c9758c9ada`.
   It includes the two narrowly qualified material-parameter methods needed by
   the head palette and the quest availability property, and retains that authenticated
-  native authority throughout selective FullGraph composition. The voice/economy
-  builds used `gore-current.exe`,
+  native authority throughout selective FullGraph composition. The original 0.1.0
+  voice/economy builds used `gore-current.exe`,
   SHA256 `9428ceacd052ba3f6ed98162cfd505536e57979e3ffcfe96a555fb3d2bddf005`.
   That executable, its compiler runtime, the full emitted game tree and game
   caches are **not supplied by these fixtures**. Provision the supported runtime
@@ -83,13 +83,17 @@ receipts/readback results separately from the source manifest.
 
 ## Recorded batch builds
 
-Voice and economy used the CLI invocation above. Heads, field roles and quest
+The original 0.1.0 voice and economy builds used the CLI invocation above. Heads, field roles and quest
 used `compile_full_graph_standalone_v1_with_target` through a local Rust caller
 linked against the product Release library. That caller supplies the same four
 changes from a frozen 7,319-file manifest; it avoids repeating the costly original
 source emission/comparison. Native compilation, selective composition, receipt
 publication and the closing original-cache audit still run in the product core.
-`build-checks.json` records the successful routes, hashes and preservation checks.
+`build-checks.json` records the initial successful routes, hashes and preservation
+checks. The 0.1.1 head/voice follow-up also uses the product Core route and is
+recorded separately in `daylight-build-checks.json`: noon setup, 14:00/16:00
+voice-routine transitions and hidden nonfunctional full-beard controls.
+`source-manifest.json` pins the latest source variants.
 
 The quest build exposed a core defect: after adding the first module, the running
 cache has a different SHA and no longer authenticates the sealed native API

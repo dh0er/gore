@@ -53,7 +53,7 @@ class UChoiceGoreNaturalVoiceSetup : UTopic_Hero__GORE_TEST_A
         // not the menu, supplies the greeting event and selects the voice line.
         ::SetRelationshipTowards(B, Hero, ERelationship(5));
         ::SetRelationshipTowards(C, Hero, ERelationship(5));
-        UGameTimeSubsystem::Get().AdvanceToClockTime(FClockTime(8, 0, 0.0f));
+        UGameTimeSubsystem::Get().AdvanceToClockTime(FClockTime(12, 0, 0.0f));
         ::TeleportToWaypointAndExchangeDailyRoutineToClass(B, TSubclassOf<UAIState_DailyRoutine>(UDailyRoutine_GoreNaturalVoiceB::StaticClass()), n"FP_NavigationSupport393");
         ::TeleportToWaypointAndExchangeDailyRoutineToClass(C, TSubclassOf<UAIState_DailyRoutine>(UDailyRoutine_GoreNaturalVoiceC::StaticClass()), n"FP_NavigationSupport391");
         AG1RGameState::SaveWorldFloatData(A.GetWorld(), n"gore_natural_voice_batch_v1_ready", 2.0f);
@@ -66,14 +66,14 @@ class UChoiceGoreNaturalVoiceSetup : UTopic_Hero__GORE_TEST_A
 class UChoiceGoreNaturalVoiceNoon : UTopic_Hero__GORE_TEST_A
 {
     default DebugId = 3409845526797145102;
-    default Caption = FText::FromString(n"02 11:59 - B wechselt seinen Platz".ToString());
+    default Caption = FText::FromString(n"02 13:59 - B wechselt seinen Platz".ToString());
     default PriorityRank = 79;
     UFUNCTION(BlueprintOverride)
     bool IsVisible() const { return GoreNaturalVoiceStatus(this.GetSelf()) == 2.0f; }
     UFUNCTION(BlueprintOverride)
     void Act()
     {
-        UGameTimeSubsystem::Get().AdvanceToClockTime(FClockTime(11, 59, 0.0f));
+        UGameTimeSubsystem::Get().AdvanceToClockTime(FClockTime(13, 59, 0.0f));
         this.EndConversation();
     }
 }
@@ -81,14 +81,14 @@ class UChoiceGoreNaturalVoiceNoon : UTopic_Hero__GORE_TEST_A
 class UChoiceGoreNaturalVoiceEvening : UTopic_Hero__GORE_TEST_A
 {
     default DebugId = 3409845526797145103;
-    default Caption = FText::FromString(n"03 17:59 - B kehrt zurueck".ToString());
+    default Caption = FText::FromString(n"03 15:59 - B kehrt zurueck".ToString());
     default PriorityRank = 78;
     UFUNCTION(BlueprintOverride)
     bool IsVisible() const { return GoreNaturalVoiceStatus(this.GetSelf()) == 2.0f; }
     UFUNCTION(BlueprintOverride)
     void Act()
     {
-        UGameTimeSubsystem::Get().AdvanceToClockTime(FClockTime(17, 59, 0.0f));
+        UGameTimeSubsystem::Get().AdvanceToClockTime(FClockTime(15, 59, 0.0f));
         this.EndConversation();
     }
 }
@@ -107,7 +107,7 @@ class UChoiceGoreNaturalVoiceReady : UTopic_Hero__GORE_TEST_A
 class UChoiceGoreNaturalVoiceOldC : UTopic_Hero__GORE_TEST_A
 {
     default DebugId = 3409845526797145105;
-    default Caption = FText::FromString(n"C schon vorhanden: bitte Ausgangsspielstand 030 laden".ToString());
+    default Caption = FText::FromString(n"C schon vorhanden: bitte Ausgangsspielstand 066 laden".ToString());
     default PriorityRank = 81;
     UFUNCTION(BlueprintOverride)
     bool IsVisible() const { return GoreNaturalVoiceStatus(this.GetSelf()) == 3.0f; }

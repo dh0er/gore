@@ -32,14 +32,15 @@
         {
           "source": "heads/GORE_TEST_A.as",
           "module_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
-          "sha256": "a7f2cd17688a5a32ae625fdb48303b79c06fbd258deab52053cfbeae8ba5aa38"
+          "sha256": "100dfd89787dbb64df1b072c9f987bc26be7705cacea16b986841d02cf0df2dc"
         },
         {
           "source": "heads/GORE_TEST_B.as",
           "module_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
           "sha256": "637a06baf3cd51b086772c2af2dec5630d6477849c2d893d9a7f05360952e5f2"
         }
-      ]
+      ],
+      "bundle_version": "0.1.1"
     },
     "voice": {
       "bundle_name": "NpcNaturalVoiceTest",
@@ -47,14 +48,15 @@
         {
           "source": "voice/GORE_TEST_A.as",
           "module_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
-          "sha256": "a5a10c338dd01dff1906d4064088ac444a79319e56b92256b4fcd3e53db97721"
+          "sha256": "93da6eca99399bca5dc8338c42499b93f80b3f9b0d8dcd5a9a8e8adca12b4f14"
         },
         {
           "source": "voice/GORE_TEST_B.as",
           "module_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
-          "sha256": "d7a22bd5cf36ed60d2d3776208a3c38fbf83162cec4ac42654a02e92e6b9a783"
+          "sha256": "b62c1cf2147eee80f899c3c813dde9ac95d3186dff58dbc660ef5392e9c1c353"
         }
-      ]
+      ],
+      "bundle_version": "0.1.1"
     },
     "roles/economy": {
       "bundle_name": "NpcEconomyRolesTest",

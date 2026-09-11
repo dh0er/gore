@@ -576,8 +576,8 @@ class UDailyRoutine_GoreNaturalVoiceB : UAIState_DailyRoutine_Human
     default ScheduleTimeOffsetMinutesMax = 0.0f;
     default TeleportToCurrentTaskWhen = EDailyRoutineTeleportMode::Never;
     default Schedule(0, 0, UAIState_TestGotoWP(), n"FP_NavigationSupport393", 100.0f, TSubclassOf<UNavArea>(nullptr), nullptr);
-    default Schedule(12, 0, UAIState_TestGotoWP(), n"FP_XT_WAIT_OUTSIDE", 100.0f, TSubclassOf<UNavArea>(nullptr), nullptr);
-    default Schedule(18, 0, UAIState_TestGotoWP(), n"FP_NavigationSupport393", 100.0f, TSubclassOf<UNavArea>(nullptr), nullptr);
+    default Schedule(14, 0, UAIState_TestGotoWP(), n"FP_XT_WAIT_OUTSIDE", 100.0f, TSubclassOf<UNavArea>(nullptr), nullptr);
+    default Schedule(16, 0, UAIState_TestGotoWP(), n"FP_NavigationSupport393", 100.0f, TSubclassOf<UNavArea>(nullptr), nullptr);
 }
 
 class UDailyRoutine_GoreNaturalVoiceC : UAIState_DailyRoutine_Human

@@ -786,7 +786,7 @@ namespace G1R::Conversation
 class UChoiceGorePaletteSetup : UTopic_Hero__GORE_TEST_A
 {
     default DebugId = 3409845526797150099;
-    default Caption = FText::FromString(n"H0 Aufbau: A und C vor den Turm".ToString());
+    default Caption = FText::FromString(n"H0 Aufbau: Mittag vor dem Turm".ToString());
     default PriorityRank = 40;
 
     UFUNCTION(BlueprintOverride)
@@ -816,7 +816,7 @@ class UChoiceGorePaletteSetup : UTopic_Hero__GORE_TEST_A
             return;
         }
         AGothicCharacterState Hero = this.GetHero();
-        UGameTimeSubsystem::Get().AdvanceToClockTime(FClockTime(8, 0, 0.0f));
+        UGameTimeSubsystem::Get().AdvanceToClockTime(FClockTime(12, 0, 0.0f));
         ::TeleportToWaypointAndExchangeDailyRoutineToClass(C, TSubclassOf<UAIState_DailyRoutine>(UDailyRoutine_GORE_TEST_C_Start::StaticClass()), n"FP_NavigationSupport391");
         ::TeleportToWaypointAndExchangeDailyRoutineToClass(B, TSubclassOf<UAIState_DailyRoutine>(UDailyRoutine_GORE_TEST_B_Start::StaticClass()), n"FP_NavigationSupport393");
         // B/C preparation must finish before touching the conversation participants.
@@ -900,7 +900,7 @@ class UChoiceGorePaletteBeardOff : UTopic_Hero__GORE_TEST_A
     default Caption = FText::FromString(n"H5 Bart aus (Heldenkopf)".ToString());
     default PriorityRank = 26;
     UFUNCTION(BlueprintOverride)
-    bool IsVisible() const { return FCharacterUniqueName(n"GORE_TEST_C").GetNPCState() != nullptr; }
+    bool IsVisible() const { return false; } // The visible Hero beard is baked into the face texture.
     UFUNCTION(BlueprintOverride)
     void Act()
     {
@@ -916,7 +916,7 @@ class UChoiceGorePaletteBeardOn : UTopic_Hero__GORE_TEST_A
     default Caption = FText::FromString(n"H6 Bart an (Heldenkopf)".ToString());
     default PriorityRank = 25;
     UFUNCTION(BlueprintOverride)
-    bool IsVisible() const { return FCharacterUniqueName(n"GORE_TEST_C").GetNPCState() != nullptr; }
+    bool IsVisible() const { return false; } // The visible Hero beard is baked into the face texture.
     UFUNCTION(BlueprintOverride)
     void Act()
     {
