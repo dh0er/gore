@@ -51,7 +51,7 @@
         {
           "source": "voice/GORE_TEST_A.as",
           "module_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
-          "sha256": "93da6eca99399bca5dc8338c42499b93f80b3f9b0d8dcd5a9a8e8adca12b4f14"
+          "sha256": "9d5379545c320583303d9fb09a712dbebe0ff8aac48576469969218880df9633"
         },
         {
           "source": "voice/GORE_TEST_B.as",
@@ -59,7 +59,9 @@
           "sha256": "b62c1cf2147eee80f899c3c813dde9ac95d3186dff58dbc660ef5392e9c1c353"
         }
       ],
-      "bundle_version": "0.1.1"
+      "bundle_version": "0.1.2",
+      "cli_sha256": "28b5d76e1e861476c7882725f056bca7cb65e718550203bd6c6dbd9aa9987fe1",
+      "native_api_snapshot_sha256": "e1c3b72c4641b9e0fa5df8ca8d67b91266f13ab68ebae94a30a40dbf6c1a5c78"
     },
     "roles/economy": {
       "bundle_name": "NpcEconomyRolesTest",

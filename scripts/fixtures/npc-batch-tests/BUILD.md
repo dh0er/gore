@@ -18,7 +18,7 @@ role sources are also tracked, so that regeneration is optional.
   and sibling `Binds.Cache` SHA256
   `aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2`.
 - A current GORE CLI with its matching qualified standalone compiler package.
-  For the current head/beard package use local `work/npc-continuation/runtime/gore-beard-v2.exe`,
+  For the current head/beard and voice setup correction use local `work/npc-continuation/runtime/gore-beard-v2.exe`,
   SHA256 `28b5d76e1e861476c7882725f056bca7cb65e718550203bd6c6dbd9aa9987fe1`.
   It includes the head palette and quest availability bindings plus five narrowly
   qualified texture/path/material functions and UTexture, plus the fresh MID factory,
@@ -95,6 +95,15 @@ checks. The 0.1.1 head/voice follow-up also uses the product Core route and is
 recorded separately in `daylight-build-checks.json`: noon setup, 14:00/16:00
 voice-routine transitions and hidden nonfunctional full-beard controls.
 `source-manifest.json` pins the latest source variants.
+
+Voice0.1.2 is a focused setup correction: the Hero teleport and final A
+routine/teleport precede `EndConversation`, as in the tested head setup.
+It uses frozen voice-v2 with the current tracked A/B overlays through the same
+Core caller; B, native bindings, recordings, localization and routine times
+remain unchanged. Build the voice spec as version0.1.2 with its new mini-cache.
+`voice/setup-fix.json` records the source/build/payload and installation checks;
+`voice/runtime-setup-0.1.1.json` records the failed visible setup. Its retest
+starts from the existing untouched START066.
 
 The quest build exposed a core defect: after adding the first module, the running
 cache has a different SHA and no longer authenticates the sealed native API

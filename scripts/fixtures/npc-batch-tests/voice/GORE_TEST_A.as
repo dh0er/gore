@@ -829,9 +829,11 @@ class UChoiceGoreNaturalVoiceSetup : UTopic_Hero__GORE_TEST_A
         ::TeleportToWaypointAndExchangeDailyRoutineToClass(B, TSubclassOf<UAIState_DailyRoutine>(UDailyRoutine_GoreNaturalVoiceB::StaticClass()), n"FP_NavigationSupport393");
         ::TeleportToWaypointAndExchangeDailyRoutineToClass(C, TSubclassOf<UAIState_DailyRoutine>(UDailyRoutine_GoreNaturalVoiceC::StaticClass()), n"FP_NavigationSupport391");
         AG1RGameState::SaveWorldFloatData(A.GetWorld(), n"gore_natural_voice_batch_v1_ready", 2.0f);
-        this.EndConversation();
+        // Finish participant movement before ending the conversation, as in the tested head setup.
         ::TeleportToSpot(Hero, n"FP_XT_WAIT_OUTSIDE");
+        // Replacing the owner's routine may itself end the conversation; keep it last.
         ::TeleportToWaypointAndExchangeDailyRoutineToClass(A, TSubclassOf<UAIState_DailyRoutine>(UDailyRoutine_GoreNaturalVoiceObserver::StaticClass()), n"FP_NavigationSupport392");
+        this.EndConversation();
     }
 }
 
