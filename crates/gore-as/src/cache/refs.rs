@@ -5678,6 +5678,61 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_second_navigation_default(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr,name,module) in [(1,"FVector",""),(2,"AGothicCharacter",""),(3,"FString",""),(4,"UHost","Fixture"),(5,"UCombat","Fixture")] {
+            r.type_by_ptr.insert(ptr,name.into()); r.typeid_to_ptr.insert(ptr as i32,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity { name:name.into(), module:module.into(), namespace:String::new() });
+        }
+        r.class_super.insert("UCombat".into(),String::new()); r.class_fields.insert("UHost".into(),HashMap::from([("Combat".into(),"UCombat".into())]));
+        r.prop_by_key.insert(9,"Combat".into()); r.prop_type_id.insert(9,4);
+        let vector = DataType { token:5,type_info:1,..Default::default() };
+        let reference = DataType { is_reference:true,is_object_const:true,is_read_only:true,..vector.clone() };
+        let actor = DataType { token:5,type_info:2,is_object_handle:true,..Default::default() };
+        let double = DataType { token:0x51,..Default::default() }; let void = DataType { token:0x52,..Default::default() };
+        for (ptr,name,owner,ret,params) in [
+            (10,"GetSelf","UCharacterAIState",actor.clone(),vec![]),
+            (20,"GetNavAgentLocation","APawn",vector.clone(),vec![]),
+            (30,"GetSafeNormal","FVector",vector.clone(),vec![double.clone(),reference.clone()]),
+            (40,"opSub","FVector",vector.clone(),vec![reference.clone()]),
+            (50,"CrossProduct","FVector",vector.clone(),vec![reference.clone()]),
+            (60,"$beh0","FVector",void.clone(),vec![]),
+            (80,"Other","UCombat",actor.clone(),vec![]),
+            (90,"opNeg","FVector",vector.clone(),vec![]),
+            (100,"$beh0","FVector",void,vec![double.clone(),double.clone(),double]),
+        ] {
+            r.func_by_ptr.insert(ptr,name.into()); r.func_owner.insert(ptr,owner.into()); r.func_ret.insert(ptr,ret); r.func_params.insert(ptr,params); r.func_is_method.insert(ptr);
+        }
+        r.const_method_ptrs.extend([10,20,30,40,50,90]); r.funcid_to_ptr.insert(100,80);
+        r.func_by_ptr.insert(110,"CanMoveStraightInDirection".into()); r.func_ns.insert(110,"UCharacterPersonalSpaceSubsystem".into());
+        r.func_ret.insert(110,DataType { token:0x41,..Default::default() });
+        r.func_params.insert(110,vec![DataType {is_object_const:true,..actor},reference.clone(),DataType {token:0x50,..Default::default()},
+            DataType {is_reference:true,..vector},reference]);
+        for (ptr,name) in [(70,"ZeroVector"),(71,"UpVector")] { r.global_by_ptr.insert(ptr,name.into()); r.global_ns.insert(ptr,"FVector".into()); }
+        match fault {
+            1 => { r.func_params.get_mut(&110).unwrap()[4].is_reference = false; },
+            2 => { r.func_params.get_mut(&110).unwrap()[3].is_object_const = true; },
+            3 => { r.func_params.get_mut(&110).unwrap()[2].token = 0x51; },
+            4 => { r.func_params.get_mut(&110).unwrap()[0].type_info = 5; },
+            5 => { r.func_ret.get_mut(&110).unwrap().is_reference = true; },
+            6 => { r.func_ns.insert(110,"Other".into()); },
+            7 => { r.func_is_method.insert(110); },
+            8 => { r.func_ret.get_mut(&20).unwrap().is_reference = true; },
+            9 => { r.func_owner.insert(20,"OtherPawn".into()); },
+            10 => { r.func_params.get_mut(&100).unwrap()[0].token = 0x50; },
+            11 => { r.func_params.get_mut(&30).unwrap()[1].is_reference = false; },
+            12 => { r.func_ret.get_mut(&80).unwrap().is_object_handle = false; },
+            13 => { r.duplicate_prop_keys.insert(9); },
+            14 => { r.global_ns.insert(70,"Other".into()); },
+            15 => { r.const_method_ptrs.remove(&90); },
+            16 => { r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(); },
+            17 => { r.func_params.get_mut(&60).unwrap().push(DataType::default()); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_nav_normal_properties(fault: u8) -> Self {
         let mut r = Self::from_test_location_property_return(0);
         for (ptr, name, module) in [(4, "UHost", "Fixture"), (5, "UCombat", "Fixture"), (6, "FAbilityTaskExecutor", ""), (7, "UAIController", "")] {
