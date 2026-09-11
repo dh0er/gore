@@ -3335,6 +3335,8 @@ fn emit_function_ctor(
         pass_trace("restore_nested_tag_requirements", &rendered);
         let rendered = restore_named_character_key_constructors(&rendered, f, refs);
         pass_trace("restore_named_character_key_constructors", &rendered);
+        let rendered = restore_linked_bool_guard_lifetimes(&rendered, f, refs);
+        pass_trace("restore_linked_bool_guard_lifetimes", &rendered);
         let rendered = restore_temporary_vector_expression_lifetimes(&rendered, f, refs);
         pass_trace("restore_temporary_vector_expression_lifetimes", &rendered);
         let rendered = restore_item_transfer_ai_property(&rendered, f, refs);
@@ -10866,6 +10868,100 @@ fn restore_named_character_key_constructors(body: &str, f: &Func, refs: &RefReso
         if let Some((old,new)) = edit { result = result.replacen(&old,&new,1); }
     }
     result
+}
+
+/// Preserve the linked bool lifetimes of early guards, two named chains and a final negation.
+fn restore_linked_bool_guard_lifetimes(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if f.ret.token != 0x52 || f.ret.type_info != 0 || f.ret.is_reference || f.ret.is_object_handle
+        || !body.contains("bool local_") || !body.contains(" || ") { return body.to_owned(); }
+    let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    let w=|i:&Instr,n|i.words.get(n).map(|s|*s as i16 as i32);
+    let p=|i:&Instr|i.qwords.first().map(|p|*p as i64);
+    let target=|i:&Instr|i.dwords.first().map(|d|i.offset_dw as i64+2+*d as i32 as i64);
+    let plain=|t:&super::types::DataType,token|t.token==token && t.type_info==0 && !t.is_reference && !t.is_object_handle
+        && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+    let boolean=|i:&Instr|match i.op.name {
+        "CALLSYS"=>p(i).and_then(|p|refs.func_ret_by_ptr(p)).is_some_and(|t|plain(t,0x41)),
+        "CALL"=>i.dwords.first().and_then(|id|refs.func_ret_by_id(*id as i32)).is_some_and(|t|plain(t,0x41)),
+        _=>false,
+    };
+    let native_key=|slot| {
+        let types:Vec<_>=f.obj_locals.iter().filter(|(s,_)|*s==slot).map(|(_,t)|*t).collect();
+        matches!(types.as_slice(),[ptr] if refs.type_identity_by_ptr(*ptr).is_some_and(|id|
+            id.name=="FCharacterUniqueName" && id.module.is_empty() && id.namespace.is_empty()))
+    };
+    let candidate=(|| {
+        let end=code.last()?;if end.op.name!="RET" {return None;}
+        if code.iter().any(|i|i.op.name=="JMPP" || (i.op.name.starts_with('J') && target(i).is_none_or(|to|to<=i.offset_dw as i64 || to>end.offset_dw as i64))) {return None;}
+        let mut guards=Vec::new();
+        for (at,c) in code.windows(8).enumerate() {
+            if c.iter().map(|i|i.op.name).ne(["CALLSYS","CpyRtoV4","NOT","CpyVtoR1","JLowZ","PSF","CALLSYS","JMP"]) || !boolean(&c[0]) {continue;}
+            let (slot,key,dtor)=(w(&c[1],0)?,w(&c[5],0)?,p(&c[6])?);
+            if slot<=0 || [2,3].iter().any(|n|w(&c[*n],0)!=Some(slot)) || !native_key(key)
+                || refs.func_owner_by_ptr(dtor)!=Some("FCharacterUniqueName") || refs.func_by_ptr(dtor)!=Some("$beh2")
+                || !refs.is_method_by_ptr(dtor) || refs.is_const_method_by_ptr(dtor)
+                || !refs.func_ret_by_ptr(dtor).is_some_and(|t|plain(t,0x52)) || !matches!(refs.func_params_by_ptr(dtor),Some([]))
+                || target(&c[4])!=Some(code.get(at+8)?.offset_dw as i64) || target(&c[7])!=Some(end.offset_dw as i64) {continue;}
+            guards.push((at,slot,key,dtor));
+        }
+        let [(early,g,key,dtor),(later,g2,key2,dtor2)]=guards.as_slice() else {return None;};
+        if g!=g2 || key!=key2 || dtor!=dtor2 || later<=early {return None;}
+        let mut copies=Vec::new();
+        for (at,c) in code.windows(3).enumerate() {
+            if at==0 || at<=later+7 || c.iter().map(|i|i.op.name).ne(["CpyRtoV4","CpyVtoV4","CpyVtoV4"]) || !boolean(&code[at-1]) {continue;}
+            let (a,b)=(w(&c[0],0)?,w(&c[1],0)?);
+            if a>0 && b>0 && a!=b && w(&c[1],1)==Some(a) && w(&c[2],0)==Some(a) && w(&c[2],1)==Some(b) {copies.push((at,a,b));}
+        }
+        let [(first,a,b),(second,b2,c)]=copies.as_slice() else {return None;};
+        if b!=b2 || second<=first || HashSet::from([*g,*a,*b,*c]).len()!=4
+            || f.obj_locals.iter().any(|(s,_)|[*g,*a,*b,*c].contains(s)) {return None;}
+        let finals:Vec<_>=code.windows(9).enumerate().filter(|(at,v)|*at>*second+2 && boolean(&code[*at-1])
+            && v.iter().map(|i|i.op.name).eq(["CpyRtoV4","CpyVtoV4","CpyVtoV4","NOT","CpyVtoR1","JLowZ","PSF","CALLSYS","JMP"])
+            && w(&v[1],0)==Some(*c) && w(&v[1],1)==w(&v[0],0) && w(&v[2],1)==Some(*c)
+            && w(&v[2],0).is_some_and(|r|r>0 && ![*g,*a,*b,*c].contains(&r))
+            && w(&v[3],0)==w(&v[2],0) && w(&v[4],0)==w(&v[2],0) && w(&v[6],0)==Some(*key)
+            && p(&v[7])==Some(*dtor) && target(&v[8])==Some(end.offset_dw as i64)
+            && code.get(*at+9).is_some_and(|next|target(&v[5])==Some(next.offset_dw as i64))).collect();
+        let [(last,_)]=finals.as_slice() else {return None;};
+        let protected=[(*early,*early+7),(*later,*later+7),(*first,*first+2),(*second,*second+2),(*last,*last+8)];
+        let joins=[code[first+2].offset_dw as i64,code[second+2].offset_dw as i64,code[last+2].offset_dw as i64];
+        if code.iter().any(|i|i.op.name.starts_with('J') && target(i).is_some_and(|to|!joins.contains(&to) && protected.iter().any(|(from,to_at)|
+            to>code[*from].offset_dw as i64 && to<=code[*to_at].offset_dw as i64))) {return None;}
+        Some((*g,*a,*b,*c))
+    })();
+    let Some((g,a,b,c))=candidate else {return body.to_owned();};
+    let lines:Vec<_>=body.lines().collect();let Some(first)=lines.first() else {return body.to_owned();};let indent=indent_of(first);
+    let mut edits=HashMap::new();let mut removed=HashSet::new();let mut guard_ends=Vec::new();
+    for name in [format!("local_{g}"),format!("local_{g}_2")] {
+        let declarations:Vec<_>=lines.iter().enumerate().filter_map(|(at,line)|declaration_with_initializer(line)
+            .filter(|(_,n,_)|*n==name).map(|v|(at,v))).collect();
+        let [(at,(pad,_,value))]=declarations.as_slice() else {return body.to_owned();};
+        if *pad!=indent || !lines[*at].trim().starts_with("bool ") || !value.starts_with("!(") || !value.ends_with(')') || count_ident(body,&name)!=2
+            || lines.get(at+1)!=Some(&format!("{indent}if ({name})").as_str())
+            || lines.get(at+2)!=Some(&format!("{indent}{{").as_str()) || lines.get(at+3)!=Some(&format!("{indent}    return;").as_str())
+            || lines.get(at+4)!=Some(&format!("{indent}}}").as_str()) {return body.to_owned();}
+        removed.insert(*at);edits.insert(at+1,format!("{indent}if ({value})"));guard_ends.push(at+4);
+    }
+    let mut assignments=Vec::new();
+    for slot in [a,b] {
+        let name=format!("local_{slot}");let declaration=format!("{indent}bool {name};");
+        let decls:Vec<_>=lines.iter().enumerate().filter(|(_,s)|**s==declaration).map(|(i,_)|i).collect();
+        let writes:Vec<_>=lines.iter().enumerate().filter_map(|(at,line)|line.strip_prefix(&format!("{indent}{name} = "))
+            .and_then(|s|s.strip_suffix(';')).filter(|s|s.contains(" && ") && s.contains(" || ")).map(|s|(at,s))).collect();
+        let ([decl],[(at,rhs)])=(decls.as_slice(),writes.as_slice()) else {return body.to_owned();};
+        if *decl>=guard_ends[0] || *at<=guard_ends[1] || count_ident(&lines[..*at].join("\n"),&name)!=1 {return body.to_owned();}
+        removed.insert(*decl);edits.insert(*at,format!("{indent}bool {name} = {rhs};"));assignments.push(*at);
+    }
+    if assignments[1]!=assignments[0]+1 {return body.to_owned();}
+    let at=assignments[1]+1;let Some(line)=lines.get(at) else {return body.to_owned();};
+    let Some(expr)=line.strip_prefix(&format!("{indent}if (!(" )).and_then(|s|s.strip_suffix("))")) else {return body.to_owned();};
+    let name=format!("local_{c}");
+    if expr.matches(" || ").count()!=2 || count_ident(expr,&format!("local_{g}_3"))!=1 || count_ident(body,&name)!=0
+        || lines.get(at+1)!=Some(&format!("{indent}{{").as_str()) || lines.get(at+2)!=Some(&format!("{indent}    return;").as_str())
+        || lines.get(at+3)!=Some(&format!("{indent}}}").as_str()) {return body.to_owned();}
+    edits.insert(at,format!("{indent}bool {name} = {expr};\n{indent}if (!({name}))"));
+    let mut out=lines.iter().enumerate().filter(|(at,_)|!removed.contains(at)).map(|(at,line)|edits.get(&at).cloned().unwrap_or_else(||(*line).to_owned())).collect::<Vec<_>>().join("\n");
+    if body.ends_with('\n') {out.push('\n');} out
 }
 
 /// Keep the reused vector products and widened integer negation inside their expressions.
@@ -47362,6 +47458,43 @@ mod literal_value_lifetime_tests {
         let mut shifted=f.clone();shifted.obj_locals=vec![(13,10),(18,10)];
         for i in &code {if i.op.name=="PSF" {shifted.bytecode[i.offset_dw]+=10<<16;}}
         assert_eq!(fold(&body.replace("local_8","local_18"),&shifted,&refs),expected.replace("local_8","local_18"));
+    }
+
+    #[test]
+    fn linked_bool_guards_preserve_reused_and_named_lifetimes() {
+        let mut f=function(&[("CALLSYS",&[]),("CpyRtoV4",&[12]),("NOT",&[12]),("CpyVtoR1",&[12]),("JLowZ",&[]),
+            ("PSF",&[9]),("CALLSYS",&[]),("JMP",&[]),("CALLSYS",&[]),("CpyRtoV4",&[12]),("NOT",&[12]),("CpyVtoR1",&[12]),
+            ("JLowZ",&[]),("PSF",&[9]),("CALLSYS",&[]),("JMP",&[]),("CALL",&[]),("CpyRtoV4",&[35]),
+            ("CpyVtoV4",&[23,35]),("CpyVtoV4",&[35,23]),("CALL",&[]),("CpyRtoV4",&[23]),("CpyVtoV4",&[6,23]),
+            ("CpyVtoV4",&[23,6]),("CALL",&[]),("CpyRtoV4",&[27]),("CpyVtoV4",&[6,27]),("CpyVtoV4",&[36,6]),
+            ("NOT",&[36]),("CpyVtoR1",&[36]),("JLowZ",&[]),("PSF",&[9]),("CALLSYS",&[]),("JMP",&[]),("RET",&[0])]);
+        f.ret=DataType {token:0x52,..Default::default()};f.obj_locals=vec![(9,10)];let code=disassemble(&f.bytecode).unwrap();
+        for (at,id) in [(0,5),(6,3),(8,5),(14,3),(16,60),(20,60),(24,60),(32,3)] {f.bytecode[code[at].offset_dw+1]=id;}
+        for (at,to) in [(4,8),(7,34),(12,16),(15,34),(30,34),(33,34)] {
+            f.bytecode[code[at].offset_dw+1]=code[to].offset_dw as i32-code[at].offset_dw as i32-2;
+        }
+        let body="    bool local_23;\n    bool local_35;\n    bool local_12 = !(CanStart());\n    if (local_12)\n    {\n        return;\n    }\n    bool local_12_2 = !(CanContinue());\n    if (local_12_2)\n    {\n        return;\n    }\n    bool local_12_3 = CanKeep();\n    local_35 = Valid() && (First() || Second());\n    local_23 = Valid() && (Third() || Fourth());\n    if (!((Finished() || local_12_3) || HasItem()))\n    {\n        return;\n    }\n    Keep();\n";
+        let expected="    if (!(CanStart()))\n    {\n        return;\n    }\n    if (!(CanContinue()))\n    {\n        return;\n    }\n    bool local_12_3 = CanKeep();\n    bool local_35 = Valid() && (First() || Second());\n    bool local_23 = Valid() && (Third() || Fourth());\n    bool local_6 = (Finished() || local_12_3) || HasItem();\n    if (!(local_6))\n    {\n        return;\n    }\n    Keep();\n";
+        let refs=RefResolver::from_test_linked_bool_guards(0);
+        let fold=|body:&str,f:&Func,refs:&RefResolver|super::restore_linked_bool_guard_lifetimes(body,f,refs);
+        assert_eq!(fold(body,&f,&refs),expected);assert_eq!(fold(expected,&f,&refs),expected);
+        for fault in 1..=5 {assert_eq!(fold(body,&f,&RefResolver::from_test_linked_bool_guards(fault)),body,"metadata {fault}");}
+        for at in [1,2,3,5,9,10,11,13,17,18,19,21,22,23,25,26,27,28,29,31] {
+            let mut bad=f.clone();bad.bytecode[code[at].offset_dw]^=8<<16;assert_eq!(fold(body,&bad,&refs),body,"operand {at}");
+        }
+        for at in [4,7,12,15,30,33] {
+            let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1]+=1;assert_eq!(fold(body,&bad,&refs),body,"target {at}");
+        }
+        let mut duplicate=f.clone();duplicate.obj_locals.push((9,10));assert_eq!(fold(body,&duplicate,&refs),body);
+        for bad in [format!("{body}    Use(local_12);\n"),format!("{body}    Use(local_6);\n"),
+            body.replace("bool local_23;","int local_23;"),body.replace("    local_23 = ","        local_23 = "),
+            body.replace("return;","return true;"),body.replace(" || local_12_3"," || Other()"),
+            body.replace("    local_23 = ","    Use(local_23);\n    local_23 = ")] {assert_eq!(fold(&bad,&f,&refs),bad);}
+        let mut shifted=f.clone();shifted.obj_locals[0].0+=50;
+        for i in &code {if i.words.first().is_some_and(|s|*s>0) {shifted.bytecode[i.offset_dw]+=50<<16;}
+            if i.op.name=="CpyVtoV4" {shifted.bytecode[i.offset_dw+1]+=50;}}
+        let shift=|text:&str| [6,12,23,35].iter().fold(text.to_owned(),|s,slot|s.replace(&format!("local_{slot}"),&format!("local_{}",slot+50)));
+        assert_eq!(fold(&shift(body),&shifted,&refs),shift(expected));
     }
 
     #[test]

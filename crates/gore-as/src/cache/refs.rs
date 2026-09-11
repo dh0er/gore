@@ -5837,6 +5837,23 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_linked_bool_guards(fault: u8) -> Self {
+        let mut r=Self::from_test_named_character_keys(0);
+        let boolean=DataType {token:0x41,..Default::default()};
+        r.func_ret.insert(5,boolean.clone());r.func_ret.insert(6,boolean);
+        r.funcid_to_ptr.insert(60,6);
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&10).unwrap().module="Script".into(),
+            2=>r.func_ret.get_mut(&5).unwrap().token=0x44,
+            3=>r.func_ret.get_mut(&6).unwrap().is_reference=true,
+            4=>{r.const_method_ptrs.insert(3);},
+            5=>{r.func_params.get_mut(&3).unwrap().push(DataType::default());},
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_temporary_vector_expressions(fault:u8)->Self {
         let mut r=Self::default();
         for (p,name,module) in [(1,"FVector",""),(2,"AHost","Fixture"),(3,"UConfig","Fixture"),(4,"UProjectile","")] {

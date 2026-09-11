@@ -41,5 +41,5 @@ GAS.Abilities.Passive.GA_PlayerPerception_CrimeRegistration	1	0	0
 GAS.Abilities.Spells.Spells.Transform.GA_Spell_Transform	2	0	0
 GAS.Calculations.Damage	1	0	0
 Gameplay.Magic.Components.InExtremo.InExtremoPropComponent	1	0	0
-Regions.Traits.QuestRelatedTraits	2	0	0
+Regions.Traits.QuestRelatedTraits	1	0	0
 Sound.FXDefinitions.FXDefinitions_AttackImpact	1	0	0
