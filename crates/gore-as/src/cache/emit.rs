@@ -3335,6 +3335,8 @@ fn emit_function_ctor(
         pass_trace("restore_nested_tag_requirements", &rendered);
         let rendered = restore_named_character_key_constructors(&rendered, f, refs);
         pass_trace("restore_named_character_key_constructors", &rendered);
+        let rendered = restore_position_vector_lifetimes(&rendered, f, refs);
+        pass_trace("restore_position_vector_lifetimes", &rendered);
         let rendered = restore_scored_branch_lifetimes(&rendered, f, refs);
         pass_trace("restore_scored_branch_lifetimes", &rendered);
         let rendered = restore_path_cost_and_score_conditions(&rendered, f, refs);
@@ -10872,6 +10874,96 @@ fn restore_named_character_key_constructors(body: &str, f: &Func, refs: &RefReso
         if let Some((old,new)) = edit { result = result.replacen(&old,&new,1); }
     }
     result
+}
+
+/// Retain the first scaled vector and the later normal while their products stay temporary.
+fn restore_position_vector_lifetimes(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if f.ret.token!=0x52 || !body.contains("FVector2D local_") || !body.contains(".GetSafeNormal(") {return body.to_owned();}
+    let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    let w=|i:&Instr|i.words.first().map(|s|*s as i16 as i32);
+    let p=|i:&Instr|i.qwords.first().map(|p|*p as i64);
+    let local=|slot,ptr|f.obj_locals.iter().filter(|(s,_)|*s==slot).map(|(_,t)|*t).eq([ptr]);
+    let plain=|t:&super::types::DataType,token|t.token==token && t.type_info==0 && !t.is_reference && !t.is_object_handle
+        && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+    let enters=|start:usize,end:usize|code.iter().any(|i|i.op.name=="JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+        let target=i.offset_dw as i64+2+*d as i32 as i64;target>start as i64 && target<=end as i64
+    })));
+    let mut starts=Vec::new();
+    for (at,c) in code.windows(13).enumerate() {
+        let found=(|| {
+            if c.iter().map(|i|i.op.name).ne(["PSF","CALLSYS","PshV8","PSF","PSF","CALLSYS","PSF","PSF","PSF","CALLSYS","PSF","PSF","CALLSYS"]) {return None;}
+            let (destination,scalar,scaled,axis,sum,origin)=(w(&c[0])?,w(&c[2])?,w(&c[3])?,w(&c[4])?,w(&c[7])?,w(&c[8])?);
+            let vectors=[destination,scaled,axis,sum,origin];
+            if vectors.iter().any(|s|*s<=0) || vectors.into_iter().collect::<HashSet<_>>().len()!=5 || scalar<=0
+                || f.obj_locals.iter().any(|(s,_)|*s==scalar) || w(&c[6])!=Some(scaled) || w(&c[10])!=Some(sum) || w(&c[11])!=Some(destination)
+                || code.iter().enumerate().filter(|(_,i)|super::bytediff::addressed_slots(i).contains(&scaled)).map(|(n,_)|n).ne([at+3,at+6])
+                || enters(c[0].offset_dw,c[12].offset_dw) {return None;}
+            let vector=f.obj_locals.iter().find(|(s,_)|*s==destination)?.1;
+            if !refs.type_identity_by_ptr(vector).is_some_and(|t|t.name=="FVector2D" && t.module.is_empty() && t.namespace.is_empty())
+                || vectors.iter().any(|s|!local(*s,vector)) {return None;}
+            let value=|t:&super::types::DataType,reference,constant|t.token==5 && t.type_info==vector && t.is_reference==reference
+                && t.is_object_const==constant && t.is_read_only==constant && !t.is_object_handle && !t.is_auto && !t.if_handle_then_const;
+            let (ctor,mul,add,assign)=(p(&c[1])?,p(&c[5])?,p(&c[9])?,p(&c[12])?);
+            for (ptr,name,constant) in [(ctor,"$beh0",false),(mul,"opMul",true),(add,"opAdd",true),(assign,"opAssign",false)] {
+                if refs.func_owner_by_ptr(ptr)!=Some("FVector2D") || refs.func_by_ptr(ptr)!=Some(name) || !refs.is_method_by_ptr(ptr)
+                    || refs.is_const_method_by_ptr(ptr)!=constant {return None;}
+            }
+            if !matches!(refs.func_params_by_ptr(ctor),Some([])) || !plain(refs.func_ret_by_ptr(ctor)?,0x52)
+                || !matches!(refs.func_params_by_ptr(mul)?,[t] if plain(t,0x51)) || !value(refs.func_ret_by_ptr(mul)?,false,false)
+                || !matches!(refs.func_params_by_ptr(add)?,[t] if value(t,true,true)) || !value(refs.func_ret_by_ptr(add)?,false,false)
+                || !matches!(refs.func_params_by_ptr(assign)?,[t] if value(t,true,true)) || !value(refs.func_ret_by_ptr(assign)?,true,false) {return None;}
+            Some((at,destination,scalar,scaled,axis,origin,vector,mul,add,assign))
+        })();
+        if let Some(found)=found {starts.push(found);}
+    }
+    let [(start,destination,scalar,scaled,axis,origin,vector,mul,add,assign)]=starts.as_slice() else {return body.to_owned();};
+    let mut ends=Vec::new();
+    for (at,c) in code.windows(15).enumerate() {
+        let found=(|| {
+            if at<=start+12 || c.iter().map(|i|i.op.name).ne(["PshC8","PSF","PSF","CALLSYS","PshV8","PSF","PSF","CALLSYS","PSF","PSF","PSF","CALLSYS","PSF","PSF","CALLSYS"])
+                || p(&c[7])!=Some(*mul) || p(&c[11])!=Some(*add) || p(&c[14])!=Some(*assign) {return None;}
+            let (normal,input,product,sum)=(w(&c[1])?,w(&c[2])?,w(&c[5])?,w(&c[9])?);
+            let vectors=[normal,input,product,sum,*origin,*destination];
+            if vectors.iter().any(|s|*s<=0 || *s==*scaled || !local(*s,*vector)) || vectors.into_iter().collect::<HashSet<_>>().len()!=6
+                || [(4,*scalar),(6,normal),(8,product),(10,*origin),(12,sum),(13,*destination)].iter().any(|(n,s)|w(&c[*n])!=Some(*s))
+                || code.iter().enumerate().filter(|(_,i)|super::bytediff::addressed_slots(i).contains(&normal)).map(|(n,_)|n).ne([at+1,at+6])
+                || enters(c[0].offset_dw,c[14].offset_dw) {return None;}
+            let normalize=p(&c[3])?;let tolerance=f64::from_bits(*c[0].qwords.first()?);
+            if !tolerance.is_finite() || tolerance<0.0 || refs.func_owner_by_ptr(normalize)!=Some("FVector2D")
+                || refs.func_by_ptr(normalize)!=Some("GetSafeNormal") || !refs.is_method_by_ptr(normalize) || !refs.is_const_method_by_ptr(normalize)
+                || !matches!(refs.func_params_by_ptr(normalize)?,[t] if plain(t,0x51))
+                || !matches!(refs.func_ret_by_ptr(normalize)?,t if t.token==5 && t.type_info==*vector && !t.is_reference && !t.is_object_handle
+                    && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const) {return None;}
+            Some((normal,input,product,tolerance))
+        })();
+        if let Some(found)=found {ends.push(found);}
+    }
+    let [(normal,input,product,tolerance)]=ends.as_slice() else {return body.to_owned();};
+    if count_ident(body,&format!("local_{scaled}"))!=0 || count_ident(body,&format!("local_{normal}"))!=0 {return body.to_owned();}
+    let lines:Vec<_>=body.lines().collect();let mut first=Vec::new();let mut last=Vec::new();
+    for (at,c) in lines.windows(2).enumerate() {
+        let indent=indent_of(c[0]);
+        if c[0].trim()==format!("FVector2D local_{destination};") && c[1]==format!("{indent}local_{destination} = (local_{origin} + (local_{axis} * local_{scalar}));") {
+            first.push((at,indent));
+        }
+        let Some((pad,name,rhs))=declaration_with_initializer(c[0]) else {continue;};
+        if !c[0].trim_start().starts_with("FVector2D ") || slot_and_life_any(&name).map(|s|s.0)!=Some(*product)
+            || count_ident(body,&name)!=2 || c[1]!=format!("{pad}local_{destination} = (local_{origin} + {name});") {continue;}
+        let Some((receiver,argument))=rhs.strip_prefix('(').and_then(|s|s.split_once(".GetSafeNormal(")) else {continue;};
+        let Some(argument)=argument.strip_suffix(&format!(") * local_{scalar})")) else {continue;};
+        if slot_and_life_any(receiver).map(|s|s.0)!=Some(*input) || argument.parse::<f64>().ok().map(f64::to_bits)!=Some(tolerance.to_bits()) {continue;}
+        last.push((at,pad,receiver.to_owned(),argument.to_owned()));
+    }
+    let ([(a,pad)],[(b,other,receiver,argument)])=(first.as_slice(),last.as_slice()) else {return body.to_owned();};
+    if a+1>=*b || pad!=other {return body.to_owned();}
+    let mut out=Vec::new();
+    for (at,line) in lines.iter().enumerate() {
+        if at==a+1 {out.push(format!("{pad}FVector2D local_{scaled} = (local_{axis} * local_{scalar});\n{pad}local_{destination} = (local_{origin} + local_{scaled});"));}
+        else if at==*b {out.push(format!("{pad}FVector2D local_{normal} = {receiver}.GetSafeNormal({argument});"));}
+        else if at==b+1 {out.push(format!("{pad}local_{destination} = (local_{origin} + (local_{normal} * local_{scalar}));"));}
+        else {out.push((*line).to_owned());}
+    }
+    let mut out=out.join("\n");if body.ends_with('\n') {out.push('\n');}out
 }
 
 /// Preserve paired scored-value branches, their bool guards and transient color arithmetic.
@@ -47683,6 +47775,41 @@ mod literal_value_lifetime_tests {
         let mut shifted=f.clone();shifted.obj_locals=vec![(13,10),(18,10)];
         for i in &code {if i.op.name=="PSF" {shifted.bytecode[i.offset_dw]+=10<<16;}}
         assert_eq!(fold(&body.replace("local_8","local_18"),&shifted,&refs),expected.replace("local_8","local_18"));
+    }
+
+    #[test]
+    fn paired_position_vectors_preserve_named_value_lifetimes() {
+        let mut f=function(&[("PSF",&[44]),("CALLSYS",&[]),("PshV8",&[30]),("PSF",&[20]),("PSF",&[4]),("CALLSYS",&[]),
+            ("PSF",&[20]),("PSF",&[28]),("PSF",&[16]),("CALLSYS",&[]),("PSF",&[28]),("PSF",&[44]),("CALLSYS",&[]),
+            ("PshC8",&[]),("PSF",&[84]),("PSF",&[48]),("CALLSYS",&[]),("PshV8",&[30]),("PSF",&[74]),("PSF",&[84]),("CALLSYS",&[]),
+            ("PSF",&[74]),("PSF",&[90]),("PSF",&[16]),("CALLSYS",&[]),("PSF",&[90]),("PSF",&[44]),("CALLSYS",&[]),("RET",&[0])]);
+        f.ret=DataType{token:0x52,..Default::default()};f.obj_locals=[44,20,4,28,16,84,48,74,90].into_iter().map(|s|(s,1)).collect();
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,ptr) in [(1,10),(5,11),(9,12),(12,13),(16,14),(20,11),(24,12),(27,13)] {f.bytecode[code[at].offset_dw+1]=ptr;}
+        let bits=0.125f64.to_bits();let at=code[13].offset_dw;f.bytecode[at+1]=bits as i32;f.bytecode[at+2]=(bits>>32) as i32;
+        let body="    FVector2D local_16 = Origin();\n    FVector2D local_4 = Axis();\n    float local_30 = Radius();\n    FVector2D local_44;\n    local_44 = (local_16 + (local_4 * local_30));\n    Use(local_44);\n    FVector2D local_48_2 = Delta();\n    FVector2D local_74_2 = (local_48_2.GetSafeNormal(0.125) * local_30);\n    local_44 = (local_16 + local_74_2);\n    Use(local_44);\n";
+        let expected="    FVector2D local_16 = Origin();\n    FVector2D local_4 = Axis();\n    float local_30 = Radius();\n    FVector2D local_44;\n    FVector2D local_20 = (local_4 * local_30);\n    local_44 = (local_16 + local_20);\n    Use(local_44);\n    FVector2D local_48_2 = Delta();\n    FVector2D local_84 = local_48_2.GetSafeNormal(0.125);\n    local_44 = (local_16 + (local_84 * local_30));\n    Use(local_44);\n";
+        let refs=RefResolver::from_test_position_vector_lifetimes(0);let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_position_vector_lifetimes(s,f,r);
+        assert_eq!(fold(body,&f,&refs),expected);assert_eq!(fold(expected,&f,&refs),expected);
+        for fault in 1..=11 {assert_eq!(fold(body,&f,&RefResolver::from_test_position_vector_lifetimes(fault)),body,"metadata {fault}");}
+        for at in [0,2,3,4,6,7,8,10,11,14,15,17,18,19,21,22,23,25,26] {
+            let mut bad=f.clone();bad.bytecode[code[at].offset_dw]^=4<<16;assert_eq!(fold(body,&bad,&refs),body,"operand {at}");
+        }
+        for at in [1,5,9,12,13,16,20,24,27] {let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1]+=1;assert_eq!(fold(body,&bad,&refs),body,"call/tolerance {at}");}
+        let mut bad=f.clone();bad.obj_locals.push((20,1));assert_eq!(fold(body,&bad,&refs),body);
+        let mut bad=f.clone();let jump=function(&[("JMP",&[])]);let offset=bad.bytecode.len();bad.bytecode.extend(jump.bytecode);
+        bad.bytecode[offset+1]=code[4].offset_dw as i32-offset as i32-2;assert_eq!(fold(body,&bad,&refs),body);
+        for slot in [20,84] {let mut bad=f.clone();bad.bytecode.extend(function(&[("PSF",&[slot])]).bytecode);assert_eq!(fold(body,&bad,&refs),body);}
+        for bad in [format!("{body}    Use(local_74_2);\n"),format!("{body}    Use(local_20);\n"),format!("{body}    Use(local_84);\n"),
+            body.replace("GetSafeNormal(0.125)","GetSafeNormal(0.25)"),body.replace("local_16 + local_74_2","local_4 + local_74_2"),
+            body.replace("local_44;","local_44 = FVector2D();"),body.replace("local_48_2.GetSafeNormal","Other().GetSafeNormal")] {assert_eq!(fold(&bad,&f,&refs),bad);}
+        let mut shifted=f.clone();for (slot,_) in &mut shifted.obj_locals {*slot+=100;}
+        for i in &code {if matches!(i.op.name,"PSF"|"PshV8") {shifted.bytecode[i.offset_dw]+=100<<16;}}
+        let shift=|s:&str|["4","16","20","30","44","48_2","74_2","84"].iter().fold(s.to_owned(),|s,slot| {
+            let (number,suffix)=slot.split_once('_').unwrap_or((slot,""));let number=number.parse::<i32>().unwrap()+100;
+            let name=if suffix.is_empty(){format!("local_{number}")}else{format!("local_{number}_{suffix}")};super::rename_ident(&s,&format!("local_{slot}"),&name)
+        });
+        assert_eq!(fold(&shift(body),&shifted,&refs),shift(expected));
     }
 
     #[test]

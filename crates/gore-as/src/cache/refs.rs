@@ -5837,6 +5837,38 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_position_vector_lifetimes(fault:u8)->Self {
+        let mut r=Self::default();
+        r.type_identity_by_ptr.insert(1,TypeIdentity{name:"FVector2D".into(),module:String::new(),namespace:String::new()});
+        r.type_by_ptr.insert(1,"FVector2D".into());
+        let vector=DataType{token:5,type_info:1,..Default::default()};
+        let reference=DataType{is_reference:true,is_object_const:true,is_read_only:true,..vector.clone()};
+        let scalar=DataType{token:0x51,..Default::default()};
+        for (ptr,name,ret,params) in [(10,"$beh0",DataType{token:0x52,..Default::default()},vec![]),
+            (11,"opMul",vector.clone(),vec![scalar.clone()]),(12,"opAdd",vector.clone(),vec![reference.clone()]),
+            (13,"opAssign",DataType{is_reference:true,..vector.clone()},vec![reference]),(14,"GetSafeNormal",vector,vec![scalar])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,"FVector2D".into());r.func_is_method.insert(ptr);
+            r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,params);
+        }
+        r.const_method_ptrs.extend([11,12,14]);
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into(),
+            2=>r.type_identity_by_ptr.get_mut(&1).unwrap().namespace="Other".into(),
+            3=>{r.func_owner.insert(14,"FVector".into());},
+            4=>{r.const_method_ptrs.remove(&11);},
+            5=>r.func_ret.get_mut(&12).unwrap().is_reference=true,
+            6=>r.func_params.get_mut(&11).unwrap()[0].token=0x50,
+            7=>r.func_params.get_mut(&13).unwrap()[0].is_read_only=false,
+            8=>r.func_params.get_mut(&14).unwrap()[0].is_reference=true,
+            9=>{r.func_is_method.remove(&10);},
+            10=>r.func_params.get_mut(&10).unwrap().push(DataType{token:0x44,..Default::default()}),
+            11=>r.func_ret.get_mut(&14).unwrap().is_object_handle=true,
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_scored_branches(fault:u8)->Self {
         let mut r=Self::from_test_path_score_conditions(0);
         for (ptr,name,module) in [(6,"TArray","Fixture"),(7,"FPair","Fixture"),(8,"FColor","")] {
