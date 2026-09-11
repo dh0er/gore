@@ -3343,6 +3343,8 @@ fn emit_function_ctor(
         pass_trace("fold_reused_vector_product", &rendered);
         let rendered = restore_named_actor_cast(&rendered, f, refs, is_method);
         pass_trace("restore_named_actor_cast", &rendered);
+        let rendered = restore_named_box_upper_bound(&rendered, f, refs, is_method);
+        pass_trace("restore_named_box_upper_bound", &rendered);
         let rendered = restore_vector_return_lifetimes(&rendered, f, refs);
         pass_trace("restore_vector_return_lifetimes", &rendered);
         s.truncate(declarations_at);
@@ -10981,6 +10983,66 @@ fn fold_reused_vector_product(body:&str, f:&Func, refs:&RefResolver)->String {
     }
     let mut result=out.join("\n");if body.ends_with('\n') {result.push('\n');}result
 }
+/// A named box upper bound keeps its vector storage alive after construction.
+/// Inlining it releases that storage for later vector expressions in the function.
+fn restore_named_box_upper_bound(body: &str, f: &Func, refs: &RefResolver, is_method: bool) -> String {
+    if !is_method || f.ret.token != 5 || f.ret.is_reference || f.ret.is_object_handle
+        || !body.contains(" = FBox(") { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let w = |i: &Instr| i.words.first().map(|v| *v as i16 as i32);
+    let ptr = |i: &Instr| i.qwords.first().map(|v| *v as i64);
+    let mut edits = Vec::new();
+    for (at,c) in code.windows(22).enumerate() {
+        let edit = (|| {
+            if c.iter().map(|i| i.op.name).ne(["PSF","PshVPtr","ADDSi","RDSPtr","CALLSYS","PSF","PSF","PSF","CALLSYS",
+                "PSF","PshVPtr","ADDSi","RDSPtr","CALLSYS","PSF","PSF","PSF","CALLSYS","PSF","PSF","PSF","CALLSYS"]) { return None; }
+            let (location,extent,min,max,bounds) = (w(&c[0])?,w(&c[5])?,w(&c[6])?,w(&c[15])?,w(&c[20])?);
+            if [location,extent,min,max,bounds].iter().any(|s| *s <= 0) || HashSet::from([location,extent,min,max,bounds]).len() != 5
+                || [(1,0),(7,location),(9,location),(10,0),(14,extent),(16,location),(18,max),(19,min)].iter().any(|(n,s)| w(&c[*n]) != Some(*s))
+                || c[2].words != c[11].words || c[2].dwords != c[11].dwords || c[4].qwords != c[13].qwords { return None; }
+            let object = |slot| { let mut locals = f.obj_locals.iter().filter(|(s,_)| *s == slot);
+                let ty = locals.next()?.1; locals.next().is_none().then(|| refs.type_identity_by_ptr(ty)).flatten() };
+            let vector = object(location)?; let box_type = object(bounds)?;
+            if vector.name != "FVector" || box_type.name != "FBox" || refs.type_identity_by_ptr(f.ret.type_info)? != vector
+                || [vector,box_type].iter().any(|t| !t.module.is_empty() || !t.namespace.is_empty())
+                || [extent,min,max].iter().any(|s| object(*s) != Some(vector)) { return None; }
+            for (slot,uses) in [(min,[at+6,at+19]),(max,[at+15,at+18])] {
+                if code.iter().enumerate().filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&slot)).map(|(n,_)| n).ne(uses) { return None; }
+            }
+            let boxes: Vec<_> = f.obj_locals.iter().filter(|(_,p)| refs.type_identity_by_ptr(*p) == Some(box_type)).map(|(s,_)| *s).collect();
+            if boxes.len() != 2 { return None; }
+            let elided = *boxes.iter().find(|s| **s != bounds)?;
+            if elided <= 0 || object(elided)? != box_type || code.iter().any(|i| super::bytediff::addressed_slots(i).contains(&elided)) { return None; }
+            let value = |t: &super::types::DataType| t.token == 5 && !t.is_reference && !t.is_object_handle && refs.type_identity_by_ptr(t.type_info) == Some(vector);
+            let reference = |t: &super::types::DataType| t.token == 5 && t.is_reference && t.is_object_const && t.is_read_only && !t.is_object_handle && refs.type_identity_by_ptr(t.type_info) == Some(vector);
+            for (n,name,owner) in [(4,"GetActorLocation","AActor"),(8,"opSub","FVector"),(17,"opAdd","FVector"),(21,"$beh0","FBox")] {
+                let p = ptr(&c[n])?; let ret = refs.func_ret_by_ptr(p)?; let args = refs.func_params_by_ptr(p)?;
+                if refs.func_by_ptr(p) != Some(name) || refs.func_owner_by_ptr(p) != Some(owner) || !refs.is_method_by_ptr(p) { return None; }
+                if n == 21 {
+                    if ret.token != 0x52 || ret.type_info != 0 || ret.is_reference || ret.is_object_handle || args.len() != 2 || !args.iter().all(reference) { return None; }
+                } else if !refs.is_const_method_by_ptr(p) || !value(ret) || args.len() != usize::from(n != 4) || !args.iter().all(reference) { return None; }
+            }
+            let id = *c[2].dwords.first()? as i32; let owner = refs.type_identity_by_id(id)?;
+            let (field,old) = refs.member_identity(id,w(&c[2])?)?;
+            if owner.module.is_empty() || !owner.namespace.is_empty() || refs.type_identity_by_id(old)? != owner
+                || !is_object_handle_type(refs.own_field_type_by_class(&owner.name,field)?) { return None; }
+            if code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let to = i.offset_dw as i64 + 2 + *d as i32 as i64; to > c[0].offset_dw as i64 && to <= c[21].offset_dw as i64
+            }))) { return None; }
+            let name = format!("local_{max}"); let expression = format!("(this.{field}.GetActorLocation() + local_{extent})");
+            let before = [format!("FVector local_{min} = (this.{field}.GetActorLocation() - local_{extent});"),format!("FBox local_{bounds} = FBox(local_{min}, {expression});")];
+            let lines: Vec<_> = body.lines().collect();
+            let matches: Vec<_> = lines.windows(2).filter(|ls| ls.iter().map(|s| s.trim()).eq(before.iter().map(String::as_str))).collect();
+            if matches.len() != 1 || count_ident(body,&name) != 0 || count_ident(body,&format!("local_{min}")) != 2 { return None; }
+            let line = matches[0][1]; let indent = indent_of(line);
+            if indent_of(matches[0][0]) != indent { return None; }
+            Some((line.to_owned(),format!("{indent}FVector {name} = {expression};\n{indent}FBox local_{bounds} = FBox(local_{min}, {name});")))
+        })();
+        if let Some(edit) = edit { edits.push(edit); }
+    }
+    if let [(old,new)] = edits.as_slice() { body.replacen(old,new,1) } else { body.to_owned() }
+}
+
 /// Preserve the named actor before a native character cast when the original
 /// object table retains its otherwise unused actor local. Inlining that source
 /// changes which earlier character temporary the compiler reuses after the cast.
@@ -46794,6 +46856,38 @@ mod literal_value_lifetime_tests {
         let mut bad = f.clone(); bad.bytecode.extend(function(&[("SetV4", &[94])]).bytecode); assert_eq!(fold(body, &bad, &refs), body);
         let mut bad = f.clone(); let start = bad.bytecode.len(); let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[10].offset_dw as i32 - start as i32 - 2; bad.bytecode.extend(jump); assert_eq!(fold(body, &bad, &refs), body);
         for bad in [body.replace("local_94_2", "local_94_3"), body.replace("local_38.Last()", "local_40.Last()"), format!("{body}{body}")] { assert_eq!(fold(&bad, &f, &refs), bad); }
+    }
+
+    #[test]
+    fn named_box_upper_bound_is_retained_after_construction() {
+        let mut f=function(&[("PSF",&[12]),("PshVPtr",&[0]),("ADDSi",&[0]),("RDSPtr",&[]),("CALLSYS",&[]),
+            ("PSF",&[6]),("PSF",&[24]),("PSF",&[12]),("CALLSYS",&[]),("PSF",&[12]),("PshVPtr",&[0]),
+            ("ADDSi",&[0]),("RDSPtr",&[]),("CALLSYS",&[]),("PSF",&[6]),("PSF",&[18]),("PSF",&[12]),
+            ("CALLSYS",&[]),("PSF",&[18]),("PSF",&[24]),("PSF",&[58]),("CALLSYS",&[]),("RET",&[4])]);
+        f.ret=DataType {token:5,type_info:1,..Default::default()};f.obj_locals=vec![(6,1),(12,1),(18,1),(24,1),(44,2),(58,2)];
+        let c=disassemble(&f.bytecode).unwrap();
+        for (at,value) in [(2,3),(4,10),(8,20),(11,3),(13,10),(17,30),(21,40)] {f.bytecode[c[at].offset_dw+1]=value;}
+        let body="    FVector local_24 = (this.Zone.GetActorLocation() - local_6);\n    FBox local_58 = FBox(local_24, (this.Zone.GetActorLocation() + local_6));\n    return local_58.Max;\n";
+        let expected="    FVector local_24 = (this.Zone.GetActorLocation() - local_6);\n    FVector local_18 = (this.Zone.GetActorLocation() + local_6);\n    FBox local_58 = FBox(local_24, local_18);\n    return local_58.Max;\n";
+        let refs=RefResolver::from_test_named_box_upper_bound(0);
+        let fold=|s:&str,f:&Func,r:&RefResolver| super::restore_named_box_upper_bound(s,f,r,true);
+        assert_eq!(fold(body,&f,&refs),expected);assert_eq!(fold(expected,&f,&refs),expected);
+        assert_eq!(super::restore_named_box_upper_bound(body,&f,&refs,false),body);
+        for fault in 1..=10 {assert_eq!(fold(body,&f,&RefResolver::from_test_named_box_upper_bound(fault)),body,"metadata {fault}");}
+        for at in [0,1,5,6,7,9,10,14,15,16,18,19,20] {
+            let mut bad=f.clone();bad.bytecode[c[at].offset_dw]^=2<<16;assert_eq!(fold(body,&bad,&refs),body,"slot {at}");
+        }
+        let mut bad=f.clone();bad.obj_locals.push((18,1));assert_eq!(fold(body,&bad,&refs),body);
+        let mut bad=f.clone();bad.obj_locals.retain(|(s,_)| *s!=44);assert_eq!(fold(body,&bad,&refs),body);
+        for slot in [18,24,44] {let mut bad=f.clone();bad.bytecode.extend(function(&[("PSF",&[slot])]).bytecode);assert_eq!(fold(body,&bad,&refs),body);}
+        let mut bad=f.clone();let j=bad.bytecode.len();bad.bytecode.extend(function(&[("JMP",&[])]).bytecode);
+        bad.bytecode[j+1]=c[4].offset_dw as i32-j as i32-2;assert_eq!(fold(body,&bad,&refs),body);
+        for bad in [format!("{body}{body}"),format!("{body}    FVector local_18;\n"),body.replace(" + "," - "),body.replace("Zone","Other")] {assert_eq!(fold(&bad,&f,&refs),bad);}
+        let mut shifted=f.clone();for (slot,_) in &mut shifted.obj_locals {*slot+=100;}
+        for i in &c {if i.op.name=="PSF" {shifted.bytecode[i.offset_dw]+=100<<16;}}
+        let mut s=body.to_owned();let mut e=expected.to_owned();
+        for slot in [58,24,18,6] {s=super::rename_ident(&s,&format!("local_{slot}"),&format!("local_{}",slot+100));e=super::rename_ident(&e,&format!("local_{slot}"),&format!("local_{}",slot+100));}
+        assert_eq!(fold(&s,&shifted,&refs),e);
     }
 
     #[test]

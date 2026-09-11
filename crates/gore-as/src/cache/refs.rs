@@ -5678,6 +5678,39 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_named_box_upper_bound(fault: u8) -> Self {
+        let mut r=Self::default();
+        for (p,name,module) in [(1,"FVector",""),(2,"FBox",""),(3,"AHost","Fixture")] {
+            r.type_by_ptr.insert(p,name.into());r.typeid_to_ptr.insert(p as i32,p);
+            r.type_identity_by_ptr.insert(p,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        r.prop_by_key.insert(7,"Zone".into());r.prop_type_id.insert(7,3);
+        r.class_fields.insert("AHost".into(),HashMap::from([("Zone".into(),"ATriggerBox".into())]));
+        let vector=DataType {token:5,type_info:1,..Default::default()};
+        let reference=DataType {is_reference:true,is_object_const:true,is_read_only:true,..vector.clone()};
+        for (p,name,owner,ret,args) in [(10,"GetActorLocation","AActor",vector.clone(),vec![]),
+            (20,"opSub","FVector",vector.clone(),vec![reference.clone()]),(30,"opAdd","FVector",vector,vec![reference.clone()]),
+            (40,"$beh0","FBox",DataType {token:0x52,..Default::default()},vec![reference.clone(),reference])] {
+            r.func_by_ptr.insert(p,name.into());r.func_owner.insert(p,owner.into());r.func_ret.insert(p,ret);r.func_params.insert(p,args);r.func_is_method.insert(p);
+        }
+        r.const_method_ptrs.extend([10,20,30]);
+        match fault {
+            1=>{r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into();},
+            2=>{r.type_identity_by_ptr.get_mut(&2).unwrap().namespace="Other".into();},
+            3=>{r.func_ret.get_mut(&10).unwrap().is_reference=true;},
+            4=>{r.func_params.get_mut(&20).unwrap()[0].is_read_only=false;},
+            5=>{r.func_params.get_mut(&40).unwrap().pop();},
+            6=>{r.func_owner.insert(40,"FOtherBox".into());},
+            7=>{r.const_method_ptrs.remove(&30);},
+            8=>{r.duplicate_prop_keys.insert(7);},
+            9=>{r.class_fields.get_mut("AHost").unwrap().insert("Zone".into(),"FVector".into());},
+            10=>{r.func_is_method.remove(&10);},
+            _=>{},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_named_actor_cast(fault: u8) -> Self {
         let mut r = Self::default();
         for (p,name) in [(1,"AGothicCharacter"),(2,"AActor"),(3,"UObject"),(4,"FRememberedPerception"),(5,"FPerceivedAgent")] {
