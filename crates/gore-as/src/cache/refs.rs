@@ -6309,6 +6309,58 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_vector_accumulation_temporaries(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"FVector",""),(2,"AGothicCharacter",""),(3,"UAccumulator","Fixture"),(4,"TArrayConstIterator",""),(5,"TArray","")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        r.class_super.insert("UAccumulator".into(),"UCharacterAIState".into());
+        for (id,offset,name) in [(1,16,"Z"),(4,16,"CanProceed"),(3,2300,"Reach"),(3,2308,"Spacing"),(3,2332,"Radius")] {
+            let key=((id as i64)<<1)|((offset as i64)<<33)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id);
+            if id==3 {r.class_fields.entry("UAccumulator".into()).or_default().insert(name.into(),"float32".into());}
+        }
+        let value=DataType{token:5,type_info:1,..Default::default()};
+        let reference=DataType{is_reference:true,is_object_const:true,is_read_only:true,..value.clone()};
+        let handle=DataType{token:5,type_info:2,is_object_handle:true,..Default::default()};
+        let double=DataType{token:0x51,..Default::default()};let void=DataType{token:0x52,..Default::default()};
+        for (ptr,name,owner,constant,ret,params) in [
+            (10,"Size","FVector",true,double.clone(),vec![]),(11,"$beh0","FVector",false,void.clone(),vec![]),
+            (12,"opDiv","FVector",true,value.clone(),vec![double.clone()]),(13,"opAssign","FVector",false,DataType{is_reference:true,..value.clone()},vec![reference.clone()]),
+            (14,"GetSelf","UCharacterAIState",true,handle.clone(),vec![]),(15,"GetActorForwardVector","AActor",true,value.clone(),vec![]),
+            (16,"GetFeetLocation","AGothicCharacter",true,value.clone(),vec![]),(17,"opSub","FVector",true,value.clone(),vec![reference.clone()]),
+            (18,"SizeSquared","FVector",true,double.clone(),vec![]),(19,"opAddAssign","FVector",false,value.clone(),vec![reference.clone()]),
+            (20,"opMulAssign","FVector",false,value.clone(),vec![double.clone()]),(21,"opMul","FVector",true,value.clone(),vec![double.clone()]),
+            (22,"opAdd","FVector",true,value.clone(),vec![reference.clone()]),(23,"GetSafeNormal","FVector",true,value.clone(),vec![double,reference.clone()]),
+            (24,"Proceed","TArrayConstIterator",false,DataType{is_reference:true,is_read_only:true,..handle},vec![]),
+            (25,"$beh2","TArray",false,void.clone(),vec![]),(26,"$beh0","FVector",false,void,vec![reference])
+        ] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);if constant {r.const_method_ptrs.insert(ptr);}
+            r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,params);
+        }
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Shadow".into(),
+            2=>r.func_ret.get_mut(&19).unwrap().is_reference=true,
+            3=>r.func_params.get_mut(&12).unwrap()[0].token=0x50,
+            4=>r.func_params.get_mut(&22).unwrap()[0].is_read_only=false,
+            5=>{r.const_method_ptrs.remove(&15);},
+            6=>{r.class_fields.get_mut("UAccumulator").unwrap().insert("Radius".into(),"float".into());},
+            7=>{r.class_fields.get_mut("UAccumulator").unwrap().insert("Spacing".into(),"int".into());},
+            8=>{r.duplicate_prop_keys.insert((2332i64<<33)|7);},
+            9=>{r.prop_type_id.insert((2332i64<<33)|7,1);},
+            10=>{r.class_super.remove("UAccumulator");},
+            11=>r.func_ret.get_mut(&24).unwrap().is_reference=false,
+            12=>r.func_ret.get_mut(&23).unwrap().is_object_handle=true,
+            13=>r.func_ret.get_mut(&14).unwrap().is_object_const=true,
+            14=>{r.func_params.get_mut(&11).unwrap().push(value);},
+            15=>{r.func_owner.insert(16,"AActor".into());},
+            16=>{r.const_method_ptrs.insert(25);},
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_influence_vector_returns(fault:u8)->Self {
         let mut r=Self::from_test_movement_vector_lifetimes(0);
         for (ptr,name) in [(10,"UState"),(11,"FSettings")] {
