@@ -816,7 +816,8 @@ impl RefResolver {
     /// `FPerceptionHandler::AddEvent(1)` versus the unrelated Binds-only
     /// `UTimelineComponent::AddEvent(2)` is the concrete over-count this gate prevents.
     /// Ownerless namespace calls reject a conflicting by-name arity; the exact cache
-    /// declaration remains the fallback. Unnamespaced calls retain the historical lookup.
+    /// declaration remains the fallback. Unnamespaced calls retain the historical lookup,
+    /// except for the qualified two-argument LoadObject global's zero-argument name collision.
     pub fn native_arity_by_ptr(&self, ptr: i64, name: &str) -> Option<usize> {
         // batch-20 Class C: natives whose tail-table FunctionReferences param list UNDERCOUNTS
         // the live game API (proven by the in-game error candidates). Keyed (owner, name); the
@@ -865,6 +866,17 @@ impl RefResolver {
             }),
             None => {
                 let arity = n.arity_by_name(name)?;
+                // The qualified global LoadObject(UObject, const FString&) is absent from
+                // Binds, which only records UGroundTruthData::LoadObject(). Preserve this
+                // exact two-argument cache frame without changing other globals' fallback.
+                if name == "LoadObject"
+                    && arity == 0
+                    && !self.is_method_by_ptr(ptr)
+                    && !self.func_ns.contains_key(&ptr)
+                    && self.func_params.get(&ptr).is_some_and(|p| p.len() == 2)
+                {
+                    return Some(2);
+                }
                 // A global actor factory has a name/bool/level tail absent from
                 // an unrelated task method's three-argument Binds declaration.
                 // Its complete typed cache signature owns both frame and arity.
@@ -13106,6 +13118,36 @@ mod tests {
         assert_eq!(refs.native_arity_by_ptr(12, "LogInfo"), Some(1));
         // Missing cache params provide no contradictory count; don't alter that fallback.
         assert_eq!(refs.native_arity_by_ptr(13, "LogInfo"), Some(2));
+    }
+
+    #[test]
+    fn global_native_arity_keeps_exact_t3_args_over_unrelated_zero_arg_method() {
+        let mut refs = RefResolver::default();
+        refs.func_params
+            .insert(10, vec![DataType::default(), DataType::default()]);
+        refs.func_owner.insert(11, "UGroundTruthData".to_string());
+        refs.func_params.insert(13, vec![DataType::default(); 2]);
+        refs.func_params.insert(14, vec![DataType::default()]);
+        refs.func_params.insert(15, vec![DataType::default(); 2]);
+        refs.func_ns.insert(15, "Other".into());
+        refs.func_params.insert(16, vec![DataType::default(); 2]);
+        refs.func_is_method.insert(16);
+        refs.native = Some(super::super::binds::NativeApi::from_test_arities(
+            &[("UGroundTruthData", "LoadObject", 0)],
+            &[("LoadObject", Some(0)), ("Unrelated", Some(0))],
+        ));
+
+        // The native global's T3 record declares (UObject, const FString&). The only
+        // Binds declaration is an unrelated zero-argument method with the same name.
+        assert_eq!(refs.native_arity_by_ptr(10, "LoadObject"), Some(2));
+        assert_eq!(refs.native_arity_by_ptr(11, "LoadObject"), Some(0));
+        // Preserve the existing fallback when no exact pointer-specific signature exists.
+        assert_eq!(refs.native_arity_by_ptr(12, "LoadObject"), Some(0));
+        // Keep main's behavior for other globals, signatures, namespaces and methods.
+        assert_eq!(refs.native_arity_by_ptr(13, "Unrelated"), Some(0));
+        assert_eq!(refs.native_arity_by_ptr(14, "LoadObject"), Some(0));
+        assert_eq!(refs.native_arity_by_ptr(15, "LoadObject"), None);
+        assert_eq!(refs.native_arity_by_ptr(16, "LoadObject"), Some(0));
     }
 
     #[test]

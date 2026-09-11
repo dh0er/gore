@@ -1,0 +1,303 @@
+// AI.States.FightAI.WarningState.AIState_Warning_Crime.UAIState_Warning_Crime::DoTask_Implementation
+  0000  PshVPtr      w0
+  0001  CALL         0x14bb1
+  0003  PshVPtr      w0
+  0004  CALLINTF     0x22e47
+  0006  PshVPtr      w0
+  0007  CALLINTF     0x145a6
+  0009  STOREOBJ     w2
+  0010  PshVPtr      w2
+  0011  PshVPtr      w0
+  0012  CALLINTF     0x22e46
+  0014  LoadThisR    w536, 0x4001160
+  0016  RDR1         w3
+  0017  NOT          w3
+  0018  CpyVtoR1     w3
+  0019  JLowZ        0x1d5
+  0021  SUSPEND      
+  0022  PshVPtr      w0
+  0023  CALLINTF     0x22e4e
+  0025  PshVPtr      w0
+  0026  CALLINTF     0x22e4c
+  0028  PshVPtr      w0
+  0029  CALLINTF     0x22e44
+  0031  LoadThisR    w2432, 0x800626b
+  0033  RDR1         w3
+  0034  NOT          w3
+  0035  CpyVtoR1     w3
+  0036  JLowNZ       0x4
+  0038  SetV4        w3, 0x0
+  0040  JMP          0xb
+  0042  PshVPtr      w0
+  0043  CALLINTF     0x145a6
+  0045  STOREOBJ     w2
+  0046  PshVPtr      w2
+  0047  CALLSYS      0x1d3ba482000
+  0050  CpyRtoV4     w4
+  0051  CpyVtoV4     w3, w4
+  0053  CpyVtoR1     w3
+  0054  JLowNZ       0x4
+  0056  SetV4        w3, 0x0
+  0058  JMP          0x6
+  0060  PshVPtr      w0
+  0061  CALLINTF     0x22e43
+  0063  CpyRtoV4     w4
+  0064  CpyVtoV4     w3, w4
+  0066  CpyVtoR1     w3
+  0067  JLowZ        0x20
+  0069  SetV1        w5, 0x1
+  0071  PshV4        w5
+  0072  PshVPtr      w0
+  0073  CALLSYS      0x1d3c1c24840
+  0076  SetV1        w4, 0x0
+  0078  PshV4        w4
+  0079  PshC8        0xbff0000000000000
+  0082  SetV1        w3, 0x0
+  0084  PshV4        w3
+  0085  PshC8        0xbff0000000000000
+  0088  PshVPtr      w0
+  0089  CALLINTF     0x145a6
+  0091  STOREOBJ     w2
+  0092  PshVPtr      w2
+  0093  PshVPtr      w0
+  0094  ADDSi        w752, 0x8003395
+  0096  RDSPtr       
+  0097  CALL         0x147d3
+  0099  JMP          0xe
+  0101  SetV1        w5, 0x0
+  0103  PshV4        w5
+  0104  PshVPtr      w0
+  0105  CALLSYS      0x1d3c1c24840
+  0108  PshNull      
+  0109  PshVPtr      w0
+  0110  ADDSi        w752, 0x8003395
+  0112  RDSPtr       
+  0113  CALL         0x147d4
+  0115  PshVPtr      w0
+  0116  CALLINTF     0x145a6
+  0118  STOREOBJ     w2
+  0119  PshVPtr      w2
+  0120  CALLSYS      0x1d3ba482000
+  0123  JLowNZ       0x4
+  0125  SetV4        w4, 0x0
+  0127  JMP          0x5
+  0129  LoadThisR    w2448, 0x800626b
+  0131  RDR1         w3
+  0132  CpyVtoV4     w4, w3
+  0134  CpyVtoR1     w4
+  0135  JLowNZ       0x4
+  0137  SetV4        w4, 0x0
+  0139  JMP          0x7
+  0141  PshVPtr      w0
+  0142  CALLINTF     0x22e50
+  0144  CpyRtoV4     w3
+  0145  NOT          w3
+  0146  CpyVtoV4     w4, w3
+  0148  CpyVtoR1     w4
+  0149  JLowNZ       0x4
+  0151  SetV4        w4, 0x0
+  0153  JMP          0x12
+  0155  PshGPtr      0x7ff7a283c4b0
+  0158  PSF          w12
+  0159  PshVPtr      w0
+  0160  CALLINTF     0x22e3c
+  0162  PSF          w12
+  0163  CALLSYS      0x1d3c1fb3dc0
+  0166  CpyRtoV4     w3
+  0167  PSF          w12
+  0168  CALLSYS      0x1d3bf6e4300
+  0171  CpyVtoV4     w4, w3
+  0173  CpyVtoR1     w4
+  0174  JLowNZ       0x4
+  0176  SetV4        w4, 0x0
+  0178  JMP          0xd
+  0180  PshVPtr      w0
+  0181  CALLINTF     0x22e49
+  0183  CpyRtoV4     w13
+  0184  LoadThisR    w2256, 0x800626b
+  0186  RDR4         w14
+  0187  CMPi         w13, w14
+  0189  TS           
+  0190  CpyRtoV4     w3
+  0191  CpyVtoV4     w4, w3
+  0193  CpyVtoR1     w4
+  0194  JLowZ        0xa
+  0196  PshVPtr      w0
+  0197  CALLINTF     0x145a6
+  0199  STOREOBJ     w2
+  0200  PshVPtr      w2
+  0201  PshVPtr      w0
+  0202  CALLINTF     0x22e46
+  0204  JMP          0xcf
+  0206  PshGPtr      0x7ff7a283c4b0
+  0209  PSF          w12
+  0210  PshVPtr      w0
+  0211  CALLINTF     0x22e3c
+  0213  PSF          w12
+  0214  CALLSYS      0x1d3c1fb3dc0
+  0217  CpyRtoV4     w4
+  0218  PSF          w12
+  0219  CALLSYS      0x1d3bf6e4300
+  0222  CpyVtoR1     w4
+  0223  JLowNZ       0x4
+  0225  SetV4        w4, 0x0
+  0227  JMP          0xd
+  0229  PshVPtr      w0
+  0230  CALLINTF     0x22e49
+  0232  CpyRtoV4     w14
+  0233  LoadThisR    w2256, 0x800626b
+  0235  RDR4         w13
+  0236  CMPi         w14, w13
+  0238  TNS          
+  0239  CpyRtoV4     w3
+  0240  CpyVtoV4     w4, w3
+  0242  CpyVtoR1     w4
+  0243  JLowNZ       0x4
+  0245  SetV4        w4, 0x0
+  0247  JMP          0xb
+  0249  PshVPtr      w0
+  0250  CALLINTF     0x145a6
+  0252  STOREOBJ     w2
+  0253  PshVPtr      w2
+  0254  CALLSYS      0x1d3ba482000
+  0257  CpyRtoV4     w3
+  0258  CpyVtoV4     w4, w3
+  0260  CpyVtoR1     w4
+  0261  JLowNZ       0x4
+  0263  SetV4        w21, 0x0
+  0265  JMP          0x2a
+  0267  PshVPtr      w0
+  0268  CALLINTF     0x14591
+  0270  STOREOBJ     w16
+  0271  PshVPtr      w16
+  0272  ADDSi        w456, 0x80057da
+  0274  RDSPtr       
+  0275  CALLSYS      0x1d3ba482000
+  0278  CpyRtoV4     w3
+  0279  NOT          w3
+  0280  CpyVtoR1     w3
+  0281  JLowZ        0x4
+  0283  SetV1        w3, 0x1
+  0285  JMP          0x14
+  0287  PshVPtr      w0
+  0288  CALLINTF     0x14591
+  0290  STOREOBJ     w16
+  0291  PshVPtr      w16
+  0292  ADDSi        w456, 0x80057da
+  0294  RDSPtr       
+  0295  RefCpyV      w20
+  0296  PshVPtr      w0
+  0297  CALLSYS      0x1d3c1c26600
+  0300  STOREOBJ     w18
+  0301  CmpPtr       w20, w18
+  0303  TZ           
+  0304  CpyRtoV4     w21
+  0305  CpyVtoV4     w3, w21
+  0307  CpyVtoV4     w21, w3
+  0309  CpyVtoR1     w21
+  0310  JLowZ        0x65
+  0312  PSF          w348
+  0313  CALLSYS      0x1d3bf76bf40
+  0316  PshGPtr      0x7ff7a283c4b0
+  0319  PshVPtr      w0
+  0320  CALLSYS      0x1d3c1c259c0
+  0323  STOREOBJ     w2
+  0324  PshVPtr      w2
+  0325  PSF          w348
+  0326  ADDSi        w384, 0x4002b87
+  0328  CALLSYS      0x1d3c20a1740
+  0331  PshGPtr      0x7ff7a283c4b0
+  0334  PshVPtr      w0
+  0335  CALLSYS      0x1d3c1c259c0
+  0338  STOREOBJ     w2
+  0339  PshVPtr      w2
+  0340  CALLSYS      0x1d3c1bf2540
+  0343  STOREOBJ     w18
+  0344  PshVPtr      w18
+  0345  PSF          w348
+  0346  ADDSi        w384, 0x4002b87
+  0348  CALLSYS      0x1d3c20a1580
+  0351  PshGPtr      0x7ff7a283c4b0
+  0354  PshVPtr      w0
+  0355  CALLINTF     0x145a6
+  0357  STOREOBJ     w2
+  0358  PshVPtr      w2
+  0359  PSF          w348
+  0360  ADDSi        w768, 0x4002b87
+  0362  CALLSYS      0x1d3c20a1740
+  0365  PshGPtr      0x7ff7a283c4b0
+  0368  PshVPtr      w0
+  0369  CALLINTF     0x145a6
+  0371  STOREOBJ     w2
+  0372  PshVPtr      w2
+  0373  CALLSYS      0x1d3c1bf2540
+  0376  STOREOBJ     w18
+  0377  PshVPtr      w18
+  0378  PSF          w348
+  0379  ADDSi        w768, 0x4002b87
+  0381  CALLSYS      0x1d3c20a1580
+  0384  PshGPtr      0x1d3ba565bc8
+  0387  PSF          w348
+  0388  ADDSi        w1280, 0x4002b87
+  0390  CALLSYS      0x1d3bf811e40
+  0393  PSF          w348
+  0394  PshGPtr      0x1d3ba565bc8
+  0397  PshVPtr      w0
+  0398  ADDSi        w752, 0x8003395
+  0400  RDSPtr       
+  0401  CALLSYS      0x1d3c1e028c0
+  0404  SetV1        w3, 0x1
+  0406  LoadThisR    w2449, 0x800626b
+  0408  WRTV1        w3
+  0409  PSF          w348
+  0410  CALLSYS      0x1d3bf76bd80
+  0413  PshVPtr      w0
+  0414  CALLINTF     0x22e3b
+  0416  JLowZ        0x3
+  0418  PshVPtr      w0
+  0419  CALLINTF     0x22e45
+  0421  LoadThisR    w2449, 0x800626b
+  0423  RDR1         w4
+  0424  NOT          w4
+  0425  CpyVtoR1     w4
+  0426  JLowNZ       0x4
+  0428  SetV4        w3, 0x0
+  0430  JMP          0x9
+  0432  PshVPtr      w0
+  0433  CALLINTF     0x145a6
+  0435  STOREOBJ     w2
+  0436  CmpPtrNull   w2
+  0437  TZ           
+  0438  CpyRtoV4     w21
+  0439  CpyVtoV4     w3, w21
+  0441  CpyVtoR1     w3
+  0442  JLowNZ       0x4
+  0444  SetV4        w4, 0x0
+  0446  JMP          0x15
+  0448  SetV1        w4, 0x0
+  0450  PshV4        w4
+  0451  PSF          w352
+  0452  PshVPtr      w0
+  0453  ADDSi        w752, 0x8003395
+  0455  RDSPtr       
+  0456  CALLINTF     0x145ef
+  0458  PSF          w352
+  0459  CALLSYS      0x1d3914159c0
+  0462  CpyRtoV4     w21
+  0463  PSF          w352
+  0464  CALLSYS      0x1d3c1bfdd00
+  0467  CpyVtoV4     w4, w21
+  0469  CpyVtoR1     w4
+  0470  JLowZ        0x9
+  0472  PshVPtr      w0
+  0473  CALLINTF     0x22e52
+  0475  PshVPtr      w0
+  0476  CALLSYS      0x1d3c1b9cd40
+  0479  JMP          0xfffffe2d
+  0481  PshVPtr      w0
+  0482  CALLINTF     0x22e51
+  0484  PshVPtr      w0
+  0485  CALLSYS      0x1d3c1b9cd40
+  0488  JMP          0xfffffe24
+  0490  RET          w2
+

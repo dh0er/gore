@@ -1,0 +1,205 @@
+{
+  "schema": "gore.npc-seat-guard.setup-observation.v1",
+  "version": "0.1.11",
+  "user_report": "Only A visible at gate; neither B nor chair seen.",
+  "save_evidence": {
+    "slot": 53,
+    "save": {
+      "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\G1R-053.sav",
+      "sha256": "d365e7083ce35bec95f6495ff0361dac4126c3347e33ea172c08d08453cf6b67",
+      "bytes": 1126457
+    },
+    "name": "npc sitz-wache - sitzen",
+    "actors": {
+      "GORE_TEST_A": {
+        "actor": {
+          "globalId": "GORE_TEST_A-WP_WarningFlock_XT_01",
+          "hasEvents": true,
+          "hasInventory": true,
+          "hasKnowledge": true,
+          "isDead": false,
+          "isTrader": false,
+          "personalRelationship": "Friend",
+          "uniqueName": "GORE_TEST_A"
+        },
+        "position": {
+          "inertRoutineClass": "/Script/Angelscript.DailyRoutine_Empty",
+          "pose": {
+            "compact": false,
+            "location": {
+              "x": 106902.30076970375,
+              "y": -108144.71148823804,
+              "z": -4657.31296825058
+            },
+            "locationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_A-WP_WarningFlock_XT_01}",
+              "CharacterLocation"
+            ],
+            "rotation": {
+              "pitch": 0.0,
+              "roll": -0.0,
+              "yaw": 58.53389399999999
+            },
+            "rotationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_A-WP_WarningFlock_XT_01}",
+              "CharacterRotation"
+            ],
+            "spawnLocation": {
+              "x": 124370.39,
+              "y": -142248.06,
+              "z": 1509.48
+            },
+            "spawnLocationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_A-WP_WarningFlock_XT_01}",
+              "SpawnLocation"
+            ],
+            "spawnRotation": {
+              "pitch": 0.0,
+              "roll": 0.0,
+              "yaw": 0.9899999999999921
+            },
+            "spawnRotationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_A-WP_WarningFlock_XT_01}",
+              "SpawnRotation"
+            ]
+          },
+          "routineClass": "/Script/Angelscript.DailyRoutine_GoreSeatGuardObserver",
+          "routineClassPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "DailyRoutineByGlobalId",
+            "{GORE_TEST_A-WP_WarningFlock_XT_01}",
+            "DailyRoutineClass"
+          ],
+          "undo": null
+        }
+      },
+      "GORE_TEST_B": {
+        "actor": {
+          "globalId": "GORE_TEST_B-WP_WarningFlock_XT_02",
+          "hasEvents": true,
+          "hasInventory": true,
+          "hasKnowledge": false,
+          "isDead": false,
+          "isTrader": false,
+          "personalRelationship": null,
+          "uniqueName": "GORE_TEST_B"
+        },
+        "position": {
+          "inertRoutineClass": "/Script/Angelscript.DailyRoutine_Empty",
+          "pose": {
+            "compact": false,
+            "location": {
+              "x": 107714.4080085966,
+              "y": -107991.87168261802,
+              "z": -4579.6501126700405
+            },
+            "locationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "CharacterLocation"
+            ],
+            "rotation": {
+              "pitch": -0.00024362682813716677,
+              "roll": 0.00020973325270794588,
+              "yaw": 35.00057729696982
+            },
+            "rotationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "CharacterRotation"
+            ],
+            "spawnLocation": {
+              "x": 125313.49,
+              "y": -142845.3,
+              "z": 1713.68
+            },
+            "spawnLocationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "SpawnLocation"
+            ],
+            "spawnRotation": {
+              "pitch": 0.0,
+              "roll": 0.0,
+              "yaw": 89.99999999999999
+            },
+            "spawnRotationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "SpawnRotation"
+            ]
+          },
+          "routineClass": "/Script/Angelscript.DailyRoutine_GoreSeatGuardActivities",
+          "routineClassPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "DailyRoutineByGlobalId",
+            "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+            "DailyRoutineClass"
+          ],
+          "undo": null
+        }
+      }
+    },
+    "setup": [
+      {
+        "childCount": 0,
+        "depth": 3,
+        "display": "m_GenericData{GameStateDataBase} \u203a m_GenericData{gore_npc_seat_guard_setup_v1}",
+        "editValue": null,
+        "editable": false,
+        "id": "private:955709",
+        "kind": "mapEntry",
+        "path": [
+          "m_GenericData",
+          "{GameStateDataBase}",
+          "m_GenericData",
+          "{gore_npc_seat_guard_setup_v1}"
+        ],
+        "source": "private",
+        "structType": null,
+        "type": "FloatProperty",
+        "value": "gore_npc_seat_guard_setup_v1 \u2192 2"
+      }
+    ],
+    "original_unchanged": true
+  },
+  "B_horizontal_distance_from_stool_cm": 55.31088109596593,
+  "screenshot": {
+    "path": "C:\\Users\\Daniel\\AppData\\Local\\Temp\\codex-clipboard-db32b37d-a05b-4772-b4f3-b75c1116ce29.png",
+    "sha256": "6929984046b2e0d4fe63a033658c9881faf37ff1b276321a7587af54e8c530dd"
+  },
+  "finding": "B alive and placed near stool; corrected approach is left behind gate. Visibility and sitting animation still need user confirmation.",
+  "game_launched_by_agent": false
+}

@@ -1,0 +1,138 @@
+{
+  "schema": "gore.npc-weapon-voice.runtime-result.v1",
+  "date": "2026-09-10",
+  "package": "NpcWarningRecovery",
+  "version": "0.1.12",
+  "tested_by": "user",
+  "status": "combat entry and natural combat-start voice passed; close-range weapon choice unresolved",
+  "user_observed": {
+    "B_attacks_after_sword_threat": "passed",
+    "B_speaks_at_combat_start": "passed",
+    "approximate_recalled_lines": [
+      "jetzt gibts aufs maul",
+      "na dann mal los"
+    ],
+    "weapon_selection": "Often draws his bow with the Hero next to him; sometimes switches to sword just before drawing the bowstring.",
+    "equipped_sword_warning_cleanup": "Not separately described in this message; save62 named npc voice - schwertwarnung exists."
+  },
+  "saved_evidence": [
+    {
+      "slot": 61,
+      "name": "npc voice - waffentest start",
+      "save": {
+        "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\G1R-061.sav",
+        "sha256": "7167007aa992627588d8a23cdaf2ef8faa8eb09861dd426e48b639a059dfa527",
+        "bytes": 1124921
+      },
+      "B_weapons_and_ammo": [
+        {
+          "containerType": "MainContainer",
+          "count": 99,
+          "id": "ItAm_Arrow",
+          "path": "/Script/Angelscript.ItAm_Arrow",
+          "removable": true,
+          "slotId": 5
+        },
+        {
+          "containerType": "MainContainer",
+          "count": 1,
+          "id": "ItAm_Arrow",
+          "path": "/Script/Angelscript.ItAm_Arrow",
+          "removable": true,
+          "slotId": 6
+        },
+        {
+          "containerType": "MainContainer",
+          "count": 1,
+          "id": "ItMw_1H_Sword_04_Diego_Sleeper",
+          "path": "/Script/Angelscript.ItMw_1H_Sword_04_Diego_Sleeper",
+          "removable": true,
+          "slotId": 12
+        },
+        {
+          "containerType": "MainContainer",
+          "count": 1,
+          "id": "ItRw_Bow_Diego",
+          "path": "/Script/Angelscript.ItRw_Bow_Diego",
+          "removable": true,
+          "slotId": 13
+        }
+      ],
+      "B_combat_attributes": [
+        {
+          "key": "Dexterity",
+          "base": 180.0,
+          "current": 180.0
+        },
+        {
+          "key": "Strength",
+          "base": 120.0,
+          "current": 120.0
+        }
+      ]
+    },
+    {
+      "slot": 62,
+      "name": "npc voice - schwertwarnung",
+      "save": {
+        "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\G1R-062.sav",
+        "sha256": "505c2733fc4cb686b738788c320615bf59b6b071675b098b95e1544c41bbfc8b",
+        "bytes": 1125668
+      },
+      "B_weapons_and_ammo": [
+        {
+          "containerType": "MainContainer",
+          "count": 99,
+          "id": "ItAm_Arrow",
+          "path": "/Script/Angelscript.ItAm_Arrow",
+          "removable": true,
+          "slotId": 5
+        },
+        {
+          "containerType": "MainContainer",
+          "count": 1,
+          "id": "ItAm_Arrow",
+          "path": "/Script/Angelscript.ItAm_Arrow",
+          "removable": true,
+          "slotId": 6
+        },
+        {
+          "containerType": "MainContainer",
+          "count": 1,
+          "id": "ItMw_1H_Sword_04_Diego_Sleeper",
+          "path": "/Script/Angelscript.ItMw_1H_Sword_04_Diego_Sleeper",
+          "removable": true,
+          "slotId": 12
+        },
+        {
+          "containerType": "MainContainer",
+          "count": 1,
+          "id": "ItRw_Bow_Diego",
+          "path": "/Script/Angelscript.ItRw_Bow_Diego",
+          "removable": true,
+          "slotId": 13
+        }
+      ],
+      "B_combat_attributes": [
+        {
+          "key": "Dexterity",
+          "base": 180.0,
+          "current": 180.0
+        },
+        {
+          "key": "Strength",
+          "base": 120.0,
+          "current": 120.0
+        }
+      ]
+    }
+  ],
+  "evidence_limits": [
+    "User performed the game test; the agent did not launch or control the game.",
+    "Saved equipment and attributes do not reveal transient live weapon scores, target or navigation reachability.",
+    "Recalled speech does not establish an exact archive recording ID.",
+    "Neither vanilla correctness nor mod fault is inferred from the observation alone."
+  ],
+  "response_changes": "Documentation and read-only analysis only; no combat tuning, save edits or deployment.",
+  "analysis": "WEAPON-SELECTION.md"
+}

@@ -21,6 +21,8 @@ of that page, not a second claim.
 | **Current native dialog path** | On BuildID `24878692`, against pristine Shipping cache SHA-256 `7A18F954E32AF30FC24AE3A66EA35D3B5CB98560C8F5083C7846FC9CE1D77511`, a source-identical full Diego-module recompile ran normally, and a `Caption` edit rendered and selected correctly. A new same-module root appeared and was selectable in two runs: first while a legacy UE4SS adapter was present but skipped the conversation as `sentinel-topic-missing`, then with the proxy removed. The root was therefore discovered by the shipped script path, not inserted by UE4SS. |
 | **New same-module sub-topic** | `[GORE TEST] Neuer Diego-Unterdialog` appeared in `UChoiceDiegoKolonie`, was selected, ran its newly compiled `Act` override, ended the conversation, and returned HUD and camera control. Stage A also rendered an exact 20-sibling submenu and allowed multiple slots to be selected. The default placement appeared immediately before Zurück and was selectable; explicit position 1 appeared first while Zurück stayed last and was also selectable. The earlier 4→5 edit remains working. |
 | **Rules and persisted effects** | A new option added one ore nugget, changing inventory from 0 to 1; the item remained after quicksave and restart. Another option used `Rules.HideIfKnowsId` with `gore_diego_quest_knowledge_24878692`: it disappeared immediately after selection and remained absent after restart, while save-query found that exact ID on the hero. A new Stonehenge quest produced its toast and journal entry and remained `Running` after restart. |
+| **Invented NPC identity** | On BuildID `24878692`, `GORE_TEST_A` received its first conversation in the combined `npc new` module. Its original quest remained active or completed across the corresponding restarts. Save inspection verified A-owned knowledge and one persistent Story relationship towards Hero with Friend, while B remained an independent control. |
+| **Invented NPC voice** | The user completed all eight `GORE_TEST_A` voice cases: shipped and new recordings, new subtitles, three Vorbis layouts, correct A/Hero speaker turns, inherited Diego generic voice requests and continuation after a missing recording. Repeat, skip and restart playback passed. Saves 029/030 record all eight selected topics and preserve the prior quest/NPC state. Lip sync was excluded. |
 | **New field and helper** | A new topic field with `default ProbeMarker = 24878692` and a helper method were authored and used successfully in game. |
 | **New voice-over and formats** | A new topic displayed its authored subtitle and played its new voice asset; system loopback matched the source with normalized correlation `0.763`. A five-choice follow-up played 48 kHz mono, 44.1 kHz mono and 48 kHz stereo Vorbis fully; 48 kHz mono and stereo Opus were silent. All five returned to the menu without a hang or crash and moved Diego's lips, proving generic placeholder facials independent of successful audio playback, not accurate audio-derived lip sync. |
 | **Complete new conversation** | A shipped Guard with no previous dialog topics received a private root and wholly new choices inside that NPC's already-loaded conversation-settings module. The final run used `dialog new-conversation` → `check` → `stage` → standalone compile → bundle/deploy, then opened automatically, spoke a shipped oracle line, displayed and selected both nested choices in sequence, and returned HUD/control cleanly. A separate unreferenced conversation Add module compiled and deployed but was not discovered; `new-conversation` therefore requires the loaded per-NPC settings anchor and stages an edit. |
@@ -38,6 +40,15 @@ is retained for diagnosis only; it does not define a practical authoring limit.
 
 ## Practical limits only
 
+Call `EndConversation()` after all gameplay effects in an `Act`. Treat it as a
+control-transfer boundary: native code invokes the owning conversation's callback.
+An NPC test wrote its ready marker, ended the conversation, then attempted clock
+and teleport changes; the user saw the new ready-gated menu choices but none of
+those later effects. Changing the conversation owner's AI routine can also end
+its active context, so place other participants and store needed state first.
+The [corrected setup fixture](../../scripts/fixtures/npc-appearance-routine/README.md)
+records this failure and its focused retest.
+
 This section deliberately leaves out everything that already works. It separates
 possible-but-unproven game behavior from shapes the current GORE pipeline cannot
 produce.
@@ -53,12 +64,12 @@ produce.
 
 ### Not technically supported by the current GORE pipeline
 
-- Giving an NPC a first conversation when the shipped cache has no exact,
-  already-loaded per-NPC conversation-settings module for it. A completely new,
-  unreferenced conversation module is not discovered by the game. In content
-  terms, `gore dialog` alone therefore cannot yet give a wholly new NPC its
-  first conversation; another NPC pipeline would first have to provide a
-  runtime-loaded settings anchor.
+- Giving an NPC a first conversation without an exact settings anchor in the
+  supplied cache. A completely new, unreferenced conversation module is not
+  discovered by the game. `npc new` supplies a combined NPC/settings module;
+  `dialog new-conversation --cache <composed.Cache>` can now recognize that
+  module after the NPC has been compiled. That anchored path now has runtime
+  evidence from the [invented NPC session fixture](../../scripts/fixtures/npc-session/RESULTS.md).
 - Making one deployable mini-cache dialog patch depend on a new symbol supplied
   by another script module. That content works through the selectively composed
   complete-cache path, but cannot currently ship as two small, independently
@@ -386,11 +397,16 @@ gore dialog check work
 gore dialog stage work --mod-name MyGuardDialog
 ```
 
-The command resolves the participant exactly and requires one already-loaded
-per-NPC conversation-settings module from the shipped cache. It refuses partial
+The command resolves the participant exactly and requires one per-NPC settings
+anchor in the supplied cache. It recognizes the shipped
+`AI.AIAgent.Human.Config.<ID>.ConversationCharacterSettings_<ID>` module and the
+combined `AI.AIAgent.Human.Config.<ID>.<ID>` module generated by `npc new`.
+The combined form must contain exactly one matching global character definition,
+agent config, spawn definition and ambient settings declaration. The settings
+must directly derive from `UConversationCharacterSettings`. It refuses partial
 names, ambiguous matches, an already rooted conversation, a missing settings
 anchor, or an anchor whose participant/default shape does not match. It keeps
-that shipped settings class untouched and appends the private root and choices
+that existing settings class untouched and appends the private root and choices
 under `G1R::Conversation` in the same loaded module. Staging therefore uses
 `--op edit --allow-new-symbols`; there is no deployable Add-module fallback.
 The first choice defaults to `PriorityRank = 2`. Pass
@@ -404,7 +420,11 @@ game never discovered it. Placing the same new conversation classes in the
 Guard's loaded settings module made the conversation open automatically and run
 normally. For a wholly new NPC, `gore dialog` can only add the conversation once
 some other NPC-authoring path supplies an exact settings module that the game
-actually loads.
+actually loads. `npc new` provides the recognized combined form. Pass its
+composed full cache to `new-conversation` and `check`, then put the checked
+source back into the complete NPC source tree. Compile the additions and their
+level-script references together with `gore as compile --backend standalone`;
+do not install an Edit-only mini against a base where that NPC module is absent.
 
 The generated source contains the conversation settings, its private root and
 one direct choice. To author a deeper tree, append every additional topic to

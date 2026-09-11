@@ -7,10 +7,15 @@ this page happens offline. The authoring commands write source, a manifest and a
 build spec; compiling, packaging and deploying are separate steps you run
 afterwards, and this group launches nothing.
 
-The read half is proven. The authoring half is checked offline and **has never
-been run in game** — read
+The read commands are proven offline. Authored NPC bodies, a shipped NPC's
+health edit, and an invented NPC's voice, quest, knowledge and relationship
+across game sessions have also been observed in game. Read
 [What is proven, and what is not](#what-is-proven-and-what-is-not) before you
 build anything on it.
+
+Open implementation and game-test work is tracked in
+[NPC modding: open work](npc-open-items.md), in the user's order: heads, objects,
+voice triggers, then NPC roles.
 
 ## The class chain
 
@@ -233,13 +238,17 @@ guards' faction.
 prebaked model and not one of them assembles its looks from parts at runtime. A
 new id has no prebaked model of its own, so the generated visuals class keeps
 the template's — `default m_PreBakedName = "OC_STT_Diego"`. `--modular-visuals`
-takes the other path instead, and the source it generates says in a comment of
-its own that nothing ships that way and it is unproven.
+takes the other path instead. The first runtime test produced a working body
+with the Hero's appearance, rather than the template's. See the remaining
+limits below before choosing it.
 
 `--trader` adds an empty trader configuration. `--waypoint` gives the character
-a daily routine that sends it to one spot; without it, the character has no
-routine at all. `check` looks that waypoint up in the bundled location catalog,
-because the game ignores an unknown one without a word.
+a daily routine with one all-day task at one spot; without it, the character has
+no routine at all. This does not create multiple daily phases. The generated
+`WhenOutOfBounds` teleport mode is conditional and does not guarantee placement
+at that spot. Choose a reachable target near the spawn. `check` looks that
+waypoint up in the bundled location catalog, because the game ignores an unknown
+one without a word; catalog membership does not prove a navigable route.
 
 ### `npc delete` — stop a shipped character being placed
 
@@ -385,9 +394,11 @@ checkout, edit both health defaults from 540 to 1234, compile-module, build,
 inspect, deploy, then a new game played and saved by the user. Reading that save
 with `private.npc.attributes` found `Health` and `MaxHealth` both at **1234**,
 for both base and current values, under
-`OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN`. This proves the edited health reached
-runtime and serialization; it does not establish save/reload behavior or every
-other default's runtime effect.
+`OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN`. The user subsequently loaded that save
+(`G1R-002.sav`) and saved to `G1R-028.sav`; both retain all four values at 1234.
+This proves the tested health edit through runtime, serialization and reload;
+other defaults still need their own runtime evidence. See the
+[session results](../../scripts/fixtures/npc-session/RESULTS.md).
 
 ### `npc check` — the diff guard
 
@@ -518,7 +529,7 @@ points at Xardas' Tower; they differed in one field, the appearance mode.
 | | |
 |---|---|
 | **A character that never shipped appears in the world** | Both stood at their world points after a load. |
-| **It has a body** | Both animate like any shipped NPC, can be focused, and can be spoken to. Each answered *"Nicht jetzt"* — the correct refusal for a character with no conversation, which is what these two are. |
+| **It has a body** | Both animate like any shipped NPC, can be focused, and can be spoken to. In the initial body test, each answered *"Nicht jetzt"*, the expected refusal before adding a conversation. |
 | **The borrowed look works** | `A`, carrying Diego's prebaked model, looks like Diego. |
 | **The save records it** | Both appear in the save under `GORE_TEST_A-WP_WarningFlock_XT_01` and `GORE_TEST_B-WP_WarningFlock_XT_02` — `<unique name>-<world point script without its leading U>`, exactly the shape a shipped character uses. |
 | **Nothing else moved** | In an earlier run the character was added to a world point that already spawned Xardas' lesser demon. The demon was still there, unchanged. |
@@ -533,7 +544,94 @@ What that took, and what each cost, is worth knowing before authoring:
 - **Two characters at one world point stand inside each other.** Only one can be
   focused and the other flickers with the viewing angle. Use `sites --free`.
 
-### Not proven in game
+### Invented identity across sessions
+
+The focused [session fixture](../../scripts/fixtures/npc-session/README.md)
+passed on 2026-09-06, BuildID `24878692`. `GORE_TEST_A` received its first
+conversation inside the combined module emitted by `npc new`. The user
+completed the game campaign, including full restarts, and supplied screenshots
+of the active and completed quest with `<GORE_TEST_A>` as giver.
+
+Read-only verification independently confirmed these saved states:
+
+| Reload pair | Verified result |
+|---|---|
+| `G1R-023.sav` → `G1R-026.sav` | Quest remains `Running`; A retains its start marker and Friend relationship towards Hero. |
+| `G1R-025.sav` → `G1R-027.sav` | Quest remains `Succeeded`; A retains both markers and the same relationship. |
+
+Both pairs preserve exact A/B identities, inventories and attributes. Neither
+B, Hero nor Diego owns A's fixture knowledge. One stable Story modifier belongs
+to A and targets Hero; startup code does not recreate it. The
+[results](../../scripts/fixtures/npc-session/RESULTS.md) distinguish user
+observations from save inspection and retain artifact and evidence hashes.
+
+### Voice on an invented identity
+
+The [voice campaign](../../scripts/fixtures/npc-voice/RESULTS.md) passed on
+2026-09-06, BuildID `24878692`, based on the user's completed game tests.
+`GORE_TEST_A` played shipped recordings and new recordings with new subtitle
+IDs. New Vorbis audio worked at 48 kHz mono, 44.1 kHz mono and 48 kHz stereo;
+an A → Hero → A exchange kept the correct speakers. Generic `Address_Call` and
+`DailyRoutine_Mumble` requests used the assigned Diego Voice05 subset, proving
+that selection separately from explicitly named recordings.
+
+Repeat playback, skipping and replay after a full restart worked. The diagnostic
+line without an audio file continued to the next recorded line. Save inspection
+of `G1R-029.sav` → `G1R-030.sav` found all eight selected topics on A and retained
+the completed quest, fixture knowledge, relationship, identities, inventories
+and attributes. Audible playback and the restart are user observations, not
+inferences from those saved topic markers. Lip sync was excluded; natural
+combat/routine triggers and other voice profiles were not qualified by this test.
+
+A later natural reaction was observed on invented B during the sitting/watch
+campaign0.1.11: B warned Hero to leave another camp member's hut, without a
+scripted generic-voice request. Save56 contains B's witness records for Hero
+trespassing in Hut31, owned by Digger26_531. B can react while seated as well
+as while watching. Visibility, owner context and conflict state affect that
+path; the reason warnings differed between the four saved situations is not
+established. See the [analysis](../../scripts/fixtures/npc-seat-guard/TRESPASSING.md).
+This qualifies a natural intrusion warning, not all everyday/combat triggers.
+
+The follow-up on2026-09-09 used bare fists. B's threat warning and voice worked,
+and lowering fists after the first warning ended it. After the second completed
+line, however, B stayed in the warning pose and saving was blocked until the
+user moved away. Saves57/58 were made after recovery or moving away. This is
+a partial pass with an open cleanup defect, not complete threat-AI coverage.
+The [investigation](../../scripts/fixtures/npc-weapon-warning/README.md) verifies
+that original warning modules and their reference targets were preserved; an
+original-code cleanup gate is a candidate, not a confirmed runtime diagnosis.
+The subsequent [0.1.12 correction](../../scripts/fixtures/npc-weapon-warning/RECOVERY.md)
+places a guarded end-assessment retry in a B-only subclass selected through
+`SetAIStateClassForType`; original warning modules stay byte-preserved. C's
+definition explicitly retains the old AI to prevent inheriting B's change.
+The custom AI inherits Diego's parent `UGameplayAbility_CharacterAI_Human`
+and retains Diego's sole extra default, ZombieBias target scoring at10000.
+Direct inheritance from Diego was rejected by its final defaults initializer;
+that restriction does not prevent selecting an authored AI for a new NPC.
+Compilation, override-slot checks and installed-cache verification passed.
+On2026-09-10 the user confirmed all focused0.1.12 tests. Saves59/60 contain both
+activation and recovery markers; warning cleanup, nearby saving and normal
+watch after loading work. Raising fists again after loading the second-warning
+save makes B attack immediately, so cleanup retains the observed escalation.
+This qualifies the tested bare-fists path, not every weapon or combat voice.
+
+The next [equipped-sword/combat-voice test](../../scripts/fixtures/npc-weapon-voice/README.md)
+uses separate slot61, `npc voice - waffentest start`, copied from54 with one
+usable sword. Its initial import was invisible: public identity copies disagreed
+and the central slot list omitted61. The save-library import path and live test
+input were repaired with backups on2026-09-10. The user then confirmed B attacks
+and speaks at combat onset. Save62 is `npc voice - schwertwarnung`; the latest
+report did not separately describe cleanup after sheathing. Frequent bow drawing
+at point-blank range, sometimes followed by a sword switch, remains an open
+[weapon-selection observation](../../scripts/fixtures/npc-weapon-voice/WEAPON-SELECTION.md).
+B has Diego's archer personality and both usable weapons. The successful voice
+trigger does not establish correct combat tactics or vanilla behavior.
+The user repeated the test on open ground in64 on2026-09-11: B draws his sword
+during the warning, then switches to the bow at combat escalation. This also
+occurs with his daily routine disabled. Cached bytecode confirms separate
+warning and combat item selection; the actual winning combat scores remain unknown.
+
+### Remaining limits
 
 - **`--modular-visuals` does not reproduce the template's look.** `B` was built
   that way and came out looking like the player character, not like Diego. The
@@ -546,20 +644,99 @@ What that took, and what each cost, is worth knowing before authoring:
   `Shirt_01`, `Armor_01` and the rest. The runtime simply does not use them on
   that path. Which asset it does use is not visible from the script side — the
   base classes name `m_MutableAsset` (`MO_Player` on the human base,
-  `MO_Characters` on the male-NPC base), and the player look suggests the former
-  wins, but nothing here proves it. Prefer the borrowed model.
-- **The daily routine does not move the character.** Both stayed at their world
+  `MO_Characters` on the male-NPC base). On build 24878692, exact asset extraction
+  cannot find `/Game/Assets/Characters/Humans/Mutables/MO_Characters`.
+  `MO_Player` at the same directory does extract: its cooked parameter data has
+  only `Hero` under `Person`, plus clothing/part options such as `GuardArmor`,
+  `NoviceArmor`, `Shirt_01` and `Boots_02`. The subsequent explicit-parameter
+  experiment passed its appearance test: B's Guard clothing and C's Novice
+  clothing rendered correctly and survived loading. Both retained the Hero
+  head. Shipped NPC face/hair fields and indexed GTO presets establish useful
+  authoring targets, but not independent face/clothing recombination. See the
+  [runtime results](../../scripts/fixtures/npc-appearance-routine/RESULTS.md).
+- **The tested Flex head now works with Novice clothing.** Earlier versions
+  exposed pose, neck-join and restoration problems. In 0.1.5,
+  the user observed severe stretching when C turned; restoring the Hero head
+  with option 15 worked. Slot 43 confirms asset loading and matching bone names,
+  but only six hidden material/LOD pairs from 31 matched materials. In 0.1.6,
+  slot 44 confirms all 186 expected pairs hidden, yet the head still deforms;
+  restoring the Hero head continues to work. Matching
+  bone names alone does not establish compatible animation. The rigid attachment
+  in 0.1.7 renders a normal head, but leaves an open neck gap (slot 45). Restoration
+  and repeated option 14 pass. The 0.1.8 experiment copies the body animation into
+  a poseable head and resets its facial descendants. The user confirms a correct
+  neck join (slot 46), but option 15 crashed in that version. Version 0.1.9
+  excludes only C from the BFG tick optimizer implicated by the dump. The user
+  confirms its full checklist passes: restoration without a crash, repeated
+  application without duplicates, full restart and restoration after loading.
+  Slots 47/48 retain restored/active selections. This qualifies the tested
+  Flex/Novice combination, not arbitrary independent face/hair/color editing. See the
+  [head fixture](../../scripts/fixtures/npc-head/README.md).
+- **Scheduled noon walking is now proven; the original ambient fixture failed.**
+  In the original fixture both stayed at their world
   point; `location` and `spawnLocation` in the save were identical. The routine
-  compiles and the character carries it, but nothing observed it running, and
-  `TeleportToCurrentTaskWhen` did not relocate anyone.
-- **Voice is unconfirmed.** Both spoke, both sounded the same, and neither was
-  identifiable as the template's voice.
-- **Save and reload across sessions**, and anything about quests, knowledge or
-  relationships for an authored identity.
+  compiles and the character carries it, but nothing observed it running.
+  Investigation found that value `1` of `TeleportToCurrentTaskWhen` means
+  `WhenOutOfBounds`, B's spawn is 24.6 metres above its scheduled target, and the
+  10-metre waypoint radius can hide motion between nearby targets. Human routines
+  also offset schedule times by up to ten game minutes. These make the old
+  fixture insufficient to establish that routines cannot work.
+
+The [appearance and routine fixture](../../scripts/fixtures/npc-appearance-routine/README.md)
+retains the successful quest/voice campaign. Its corrected setup successfully
+replaces saved routines and places actors; the user confirmed clothing, loading,
+and C without duplicates. Saves031–034 preserve the new routines and clock
+changes, but B's target selection and walking failed. The ambient tasks had no
+compatible action spots within their radius. The next focused fixture uses
+direct `GotoPreferredLocation` tasks between two observed outdoor points.
+On2026-09-07 the user confirmed B visibly walked to the expected point at the
+natural noon transition. Slot036, `npc lauf - mittag`, records12:02:43, the
+assigned routine and B's changed position, with A/C and C's unique identity
+preserved. Clock controls use `AdvanceToClockTime` without explicitly moving B.
+This proves the tested noon walk; evening/morning returns, a restart from036,
+and Guard/Drink animations are not separately qualified by that pass.
+
+The next fixture, `NpcActivitiesProof` 0.1.3, used scheduled reading and drinking
+after the same direct walk. Both selected interactions are explicitly registered
+with `bPossibleAnywhere`, unlike the original ambient Guard/Drink tasks. The
+activity state includes graceful exit, and the evening control stops at17:59 so
+the user can observe a natural18:00 transition. Its game test failed: neither
+activities nor walking occurred, and saves037–039 retain B's exact setup position.
+Binary inspection found that the new class's callbacks had no native event
+binding. Version0.1.4 corrects only the two declarations to explicit
+`UFUNCTION(BlueprintOverride)` with unsuffixed event names; see
+[engine callbacks in new classes](scripts.md#engine-callbacks-in-new-classes).
+The corrected native event flags are checked directly in the cache. On2026-09-07
+the user confirmed the complete0.1.4 test: reading after setup, walking to drink
+at noon, drinking after a full restart without setup, walking back to read in
+the evening, and reading the next morning. These are repeated short conversation
+actions: the user observed about three seconds of activity per action, with
+the script waiting two seconds before trying again. The20-second argument to
+`TryInteractionWithoutSpot` is a maximum duration per call, not a forced
+animation length. This proves the tested free activities and schedule;
+continuous ambient animations and furniture-based tasks were not qualified by that pass.
+See the [passed test and results](../../scripts/fixtures/npc-appearance-routine/README.md).
+
+The [object fixture](../../scripts/fixtures/npc-objects/README.md) 0.1.10 passed
+the user's bed/alchemy campaign with exact named spots and shipped states from
+Xardas' bedroom routine. Zero schedule offsets and disabled scheduled teleporting
+let the user observe entry, walking and graceful exit. Full restart and continued
+sleep at08:00 also passed. Saves49–52 retain the routine, clock and matching
+positions. This qualifies that particular object pair; other spots still need
+availability and reachability checks. Alchemy here covers object use and
+animation, not recipe processing or crafted output.
+
+The [sitting/watch fixture](../../scripts/fixtures/npc-seat-guard/README.md)0.1.11
+also passed the full user checklist: sitting on a real stool, walking to a
+nearby stationary watch point at noon, returning at18:00, full restart and
+continued sitting the next morning. Saves53–56 preserve the schedule and
+matching positions. The stool is inside Hut31 near the Old Camp north gate.
+An interaction spot without custom requirements is not necessarily in a public
+area: ordinary trespassing reactions still apply to that privately owned hut.
 
 Changing a shipped character's values is `npc checkout`, described above. The
-Diego health edit has been verified in a user-created new-game save; broader
-value edits and loading that save in another session remain untested.
+Diego health edit has been verified in a user-created new-game save and after
+loading that save in another session; broader value edits remain untested.
 What checkout does not reach either: visuals and the spawn definition, which
 live in modules hundreds of characters share, and what a character says. Use the
 surfaces that do:

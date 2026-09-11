@@ -210,11 +210,9 @@ pub fn source(npc: &NewNpc) -> String {
                     "Schedule(0, 0, UAIState_Stand(), n\"{waypoint}\", 1000.0f, \
                      TSubclassOf<UNavArea>(nullptr), nullptr)"
                 ),
-                // Ohne das steht die Figur an ihrem Weltpunkt, und wo der liegt weiss niemand:
-                // Weltpunkte stehen nicht im Ortskatalog. Mit Teleport landet sie am Wegpunkt,
-                // und der hat Koordinaten, die man nachschlagen und ansteuern kann.
-                // 280 ausgelieferte Tagesablaeufe machen es genauso.
-                "TeleportToCurrentTaskWhen = EDailyRoutineTeleportMode(1)".to_string(),
+                // Der ausgelieferte Wert 1 bedeutet WhenOutOfBounds: kein garantierter
+                // Start-Teleport. Weltpunkt, Ziel und Navigation muessen zusammenpassen.
+                "TeleportToCurrentTaskWhen = EDailyRoutineTeleportMode::WhenOutOfBounds".to_string(),
             ],
         ));
     }
@@ -368,12 +366,10 @@ mod tests {
     }
 
     #[test]
-    fn a_routine_teleports_the_character_to_its_waypoint() {
-        // Sonst steht sie an ihrem Weltpunkt, und dessen Lage kennt niemand — Weltpunkte stehen
-        // nicht im Ortskatalog. Am Wegpunkt ist sie auffindbar, weil der Koordinaten hat.
-        // Im Spiel gelernt: die erste Testfigur war schlicht nicht zu finden.
+    fn a_routine_uses_conditional_out_of_bounds_teleport() {
+        // Native enum value 1 is conditional; it does not promise initial placement.
         assert!(source(&diego_clone())
-            .contains("default TeleportToCurrentTaskWhen = EDailyRoutineTeleportMode(1);"));
+            .contains("default TeleportToCurrentTaskWhen = EDailyRoutineTeleportMode::WhenOutOfBounds;"));
     }
 
     #[test]

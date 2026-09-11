@@ -1,0 +1,72 @@
+{
+  "base_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+  "cache_byte_length": 124658227,
+  "changed_byte_count": 1435,
+  "changed_function_id_count": 359,
+  "checks": {
+    "all_differences_are_function_id_fields": true,
+    "all_non_function_id_bytes_identical": true,
+    "all_seven_tail_tables_byte_identical": true,
+    "executable_bytecode_and_reference_operands_byte_identical": true,
+    "function_traits_and_unreal_metadata_byte_identical": true,
+    "header_byte_identical": true,
+    "module_order_and_boundaries_identical": true,
+    "only_four_selected_modules_differ": true,
+    "unselected_pristine_modules_byte_identical": 7315
+  },
+  "compiled_full_sha256": "87e9995cff198592975578366fa317ca589548dc6f00f4e7f1ed006c8907dc42",
+  "installed_full_sha256": "3299cf0f59f74a337b4ba4c36df7feab0287434e2501f2285e4b4683c9760cb1",
+  "module_count": 7319,
+  "operation": "read-only exact module/tail comparison; all differing bytes classified against product-walker Function.Id fields",
+  "passed": true,
+  "schema": "gore.installed-canonicalization-checks-v1",
+  "selected_modules": [
+    "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A",
+    "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B",
+    "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+    "LevelScripts.XardasTower_AI"
+  ],
+  "tail_tables": [
+    {
+      "byte_identical": true,
+      "count": 37259,
+      "table": "TypeReferences"
+    },
+    {
+      "byte_identical": true,
+      "count": 37259,
+      "table": "TypeIdReferenceToPointer"
+    },
+    {
+      "byte_identical": true,
+      "count": 105976,
+      "table": "FunctionReferences"
+    },
+    {
+      "byte_identical": true,
+      "count": 105976,
+      "table": "FunctionIdReferenceToPointer"
+    },
+    {
+      "byte_identical": true,
+      "count": 134780,
+      "table": "GlobalReferences"
+    },
+    {
+      "byte_identical": true,
+      "count": 23269,
+      "table": "StaticNames"
+    },
+    {
+      "byte_identical": true,
+      "count": 13281,
+      "table": "PropertyReferences"
+    }
+  ],
+  "complete_report": {
+    "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-weapon-warning\\live-preservation-checks.json",
+    "sha256": "0be0a2bc974cd01ec52abb7b9a51de4a3d8a7da1f63c2f6b4bc434858ecbc461",
+    "bytes": 77902
+  },
+  "audit_date": "2026-09-09"
+}
