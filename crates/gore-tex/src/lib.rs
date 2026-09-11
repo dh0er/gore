@@ -1,4 +1,5 @@
 //! Texture extraction/replacement for Gothic 1 Remake (UE5 IoStore).
+pub mod clone_texture;
 pub mod container;
 pub mod decode;
 pub mod encode;
@@ -12,4 +13,5 @@ pub mod story_images;
 pub mod texdata;
 pub mod vt;
 
+pub use clone_texture::rename_texture_package;
 pub use error::{Result, TexError};

@@ -60,13 +60,48 @@ gore texture replace --game "$GAME" /Game/UI/Textures/Common/T_HardwareCursor `
 ```
 
 - `extract` writes the texture's **top mip** as PNG.
-- `replace` accepts RGBA8 or RGB8 PNG. The dimensions do **not** need to match
-  the original.
+- `replace` accepts RGBA8 or RGB8 PNG. Regular texture dimensions may differ
+  from the original; virtual textures retain their existing tile layout and
+  dimensions. Use `--fit-original` to resample the input to the original top
+  mip with Lanczos3 before encoding. The input PNG remains unchanged.
 - `replace` writes rewritten cooked files below `<mod-dir>\G1R\Content\…`; it
   does not touch the game.
 
 Repeat `replace` with the same `--mod-dir` to collect several textures into one
 mod.
+
+### Create a separate texture asset
+
+For an NPC-specific material variant, assign a new package identity instead of
+overriding the stock texture:
+
+```powershell
+gore texture replace --game "$GAME" `
+  /Game/Assets/Characters/Humans/TierA/NH/Textures/T_NH_Head_D `
+  --image clean-face.png --mod-dir beard-mod `
+  --as-asset /Game/GoreMods/NpcBeardSwitch/T_NH_Head_Clean_D --fit-original
+gore texture pack --game "$GAME" --mod-dir beard-mod --name zzz_Beard_P -o beard-out
+```
+
+`--as-asset` preserves the source codec, regular/virtual texture kind and
+serialized properties, but renames the cooked package and its texture export.
+It currently accepts single-export, top-level UE5.4 cooked `Texture2D` packages
+with canonical `/Game/` paths. Existing installed destinations or output files,
+other package shapes and paths are rejected. Normal `replace` behavior is
+unchanged when this flag is absent.
+
+Import `beard-out` with `gore mgr import`, enable its returned ID alongside the
+script bundle, then analyze, preflight and apply the selected loadout through
+the [Mod Manager](mod-manager.md). A script loads the example texture with
+`LoadObject` using `/Game/GoreMods/NpcBeardSwitch/T_NH_Head_Clean_D.T_NH_Head_Clean_D`
+and assigns it to a private material instance. An existing dynamic material
+must be copied into a fresh MID; a component factory may return the old MID.
+The NPC beard fixture documents the exact qualified API calls.
+
+Ordinary imported PNG resources cannot substitute for a virtual-texture resource
+in a material that expects VT sampling. The beard test 0.1.2 rendered black with
+that combination; 0.1.3 preserves the original VT type. Its cooking and packed
+readback are checked offline; the updated face rendering still needs a game test.
 
 ## Pack and deploy
 
@@ -272,6 +307,8 @@ that anything changed.
 | `--filter <TEXT>` | `list`, `paklist` | Keep only paths containing this substring. |
 | `-o, --out <PATH>` | `extract`, `pack`, `index` | Output PNG, triplet output dir, or index path. |
 | `--image <PNG>` | `replace` | Replacement PNG (RGBA8/RGB8). |
+| `--as-asset </Game/PATH>` | `replace` | Create a separate cooked texture package instead of overriding the source. |
+| `--fit-original` | `replace` | Resample to the original top-mip dimensions before encoding. |
 | `--mod-dir <DIR>` | `replace`, `pack` | Cooked-file staging dir laid out under its mount path. |
 | `--name <NAME>` | `pack`, `deploy`, `undeploy` | Triplet base name, e.g. `zzz_MyMod_P`. |
 | `--triplet-dir <DIR>` | `deploy` | Directory holding `<name>.{utoc,ucas,pak}`. |

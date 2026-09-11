@@ -1,0 +1,418 @@
+{
+  "schema": "gore.npc-beard.virtual-textures.v1",
+  "version": "0.1.3",
+  "runtime_verified": false,
+  "originals": [
+    {
+      "asset": "/Game/Assets/Characters/Humans/TierA/NH/Textures/T_NH_Head_D",
+      "first_mip": 1,
+      "format": "PF_DXT1",
+      "height": 4096,
+      "platform_region": [
+        90,
+        741
+      ],
+      "proof": "Existing product unpack_asset_verified plus texdata::PlatformData::parse. Diagnostic only; no AssetExtract or pack receipt claimed.",
+      "regular_mips": 0,
+      "uasset": "work/npc-batch-tests/beard-vt-fix/originals\\hero\\T_NH_Head_D.uasset",
+      "virtual_texture": {
+        "b_cooked": 1,
+        "chunks": 3,
+        "formats": [
+          "PF_DXT1"
+        ],
+        "height": 2048,
+        "legacy": false,
+        "num_layers": 1,
+        "num_mips": 11,
+        "tile_border_size": 4,
+        "tile_size": 128,
+        "width": 2048
+      },
+      "width": 4096
+    },
+    {
+      "asset": "/Game/Assets/Characters/Humans/TierC/Flex/Textures/T_OC_IE_Flex_Head_D",
+      "first_mip": 1,
+      "format": "PF_DXT1",
+      "height": 4096,
+      "platform_region": [
+        90,
+        741
+      ],
+      "proof": "Existing product unpack_asset_verified plus texdata::PlatformData::parse. Diagnostic only; no AssetExtract or pack receipt claimed.",
+      "regular_mips": 0,
+      "uasset": "work/npc-batch-tests/beard-vt-fix/originals\\flex\\T_OC_IE_Flex_Head_D.uasset",
+      "virtual_texture": {
+        "b_cooked": 1,
+        "chunks": 3,
+        "formats": [
+          "PF_DXT1"
+        ],
+        "height": 2048,
+        "legacy": false,
+        "num_layers": 1,
+        "num_mips": 11,
+        "tile_border_size": 4,
+        "tile_size": 128,
+        "width": 2048
+      },
+      "width": 4096
+    }
+  ],
+  "generated_image_source": "beard-textures.json (0.1.2 image provenance; reused unchanged)",
+  "textures": [
+    {
+      "cook": {
+        "kind": "hero",
+        "source": "/Game/Assets/Characters/Humans/TierA/NH/Textures/T_NH_Head_D",
+        "target": "/Game/GoreMods/NpcBeardSwitch/T_NH_Head_Clean_D",
+        "input_png": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\beard-switch\\images\\T_NH_Head_Clean_D.png",
+        "input_png_sha256": "c1357d23d584892ee0e24064eac4ee259dd2fc683d759830fc95b6c96b06dfb3",
+        "input_dimensions": [
+          1254,
+          1254
+        ],
+        "encoded_dimensions": [
+          2048,
+          2048
+        ],
+        "resize": "CLI --fit-original, Lanczos3, PNG unchanged",
+        "cooked": [
+          {
+            "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\beard-vt-fix\\cooked\\hero\\G1R\\Content\\GoreMods\\NpcBeardSwitch\\T_NH_Head_Clean_D.uasset",
+            "sha256": "f7f97df5fa2c41093dbd7214cbb5d42a93b57d7722647b1c437d7704c3d8c841"
+          },
+          {
+            "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\beard-vt-fix\\cooked\\hero\\G1R\\Content\\GoreMods\\NpcBeardSwitch\\T_NH_Head_Clean_D.ubulk",
+            "sha256": "86f1c4445c537f57535a4ef0179281144c055aaa90a6844ec5ba6358f7caa980"
+          },
+          {
+            "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\beard-vt-fix\\cooked\\hero\\G1R\\Content\\GoreMods\\NpcBeardSwitch\\T_NH_Head_Clean_D.uexp",
+            "sha256": "bb7cc2be2c4eb15c0bafacb5af93fbdb36b5225f042695d87c155ebd380ff00b"
+          }
+        ],
+        "triplet_stem": "zzz_GoreBeard_hero_013_P",
+        "triplet": [
+          {
+            "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\packages-vt\\NpcBeardTextures013\\zzz_GoreBeard_hero_013_P.utoc",
+            "sha256": "2740a5fcb469627e59306b4e62610ff265abef59f3f72349397b6b44a7b0bece"
+          },
+          {
+            "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\packages-vt\\NpcBeardTextures013\\zzz_GoreBeard_hero_013_P.ucas",
+            "sha256": "38e4c570dc99e4f3bbf9bc0755cfdf1d116dca4f397ee7687d51ed4ff6a7e74a"
+          },
+          {
+            "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\packages-vt\\NpcBeardTextures013\\zzz_GoreBeard_hero_013_P.pak",
+            "sha256": "75e7144577253917f6da7312ef5e585b12fb728226a22b0938323751a6b555cd"
+          }
+        ]
+      },
+      "readback": {
+        "asset": "/Game/GoreMods/NpcBeardSwitch/T_NH_Head_Clean_D",
+        "decoded_pixels_identical": true,
+        "fallback_chunk_types": [
+          "ScriptObjects",
+          "ContainerHeader",
+          "ContainerHeader",
+          "ContainerHeader",
+          "ContainerHeader",
+          "ContainerHeader",
+          "ContainerHeader"
+        ],
+        "fallback_metadata_only": true,
+        "kind": "hero",
+        "original_assets_checked": [
+          "/Game/Assets/Characters/Humans/TierA/NH/Textures/T_NH_Head_D",
+          "/Game/Assets/Characters/Humans/TierC/Flex/Textures/T_OC_IE_Flex_Head_D"
+        ],
+        "original_package_ids_absent": true,
+        "postpack": {
+          "format": "PF_DXT1",
+          "height": 2048,
+          "nonblack_pixels": 4194304,
+          "pixel_count": 4194304,
+          "platform_height": 4096,
+          "platform_width": 4096,
+          "rgba_u32_le_sha256": "eec5a99ac07a2f55c8dd073ccd9bc309bbf891f717cd44d1c685e5f00c28cd18",
+          "uasset_sha256": "f7f97df5fa2c41093dbd7214cbb5d42a93b57d7722647b1c437d7704c3d8c841",
+          "ubulk_sha256": "86f1c4445c537f57535a4ef0179281144c055aaa90a6844ec5ba6358f7caa980",
+          "uexp_sha256": "bb7cc2be2c4eb15c0bafacb5af93fbdb36b5225f042695d87c155ebd380ff00b",
+          "vt": true,
+          "vt_chunks": 3,
+          "vt_layers": 1,
+          "vt_mips": 11,
+          "width": 2048
+        },
+        "prepack": {
+          "format": "PF_DXT1",
+          "height": 2048,
+          "nonblack_pixels": 4194304,
+          "pixel_count": 4194304,
+          "platform_height": 4096,
+          "platform_width": 4096,
+          "rgba_u32_le_sha256": "eec5a99ac07a2f55c8dd073ccd9bc309bbf891f717cd44d1c685e5f00c28cd18",
+          "uasset_sha256": "f7f97df5fa2c41093dbd7214cbb5d42a93b57d7722647b1c437d7704c3d8c841",
+          "ubulk_sha256": "86f1c4445c537f57535a4ef0179281144c055aaa90a6844ec5ba6358f7caa980",
+          "uexp_sha256": "bb7cc2be2c4eb15c0bafacb5af93fbdb36b5225f042695d87c155ebd380ff00b",
+          "vt": true,
+          "vt_chunks": 3,
+          "vt_layers": 1,
+          "vt_mips": 11,
+          "width": 2048
+        },
+        "primary_readback_bound_to_triplet": true,
+        "strict_triplet": {
+          "bulk_chunks": 1,
+          "chunk_count": 3,
+          "chunks": [
+            {
+              "blake3": "a78d6a3ccc6445b93334684efe2cd8ae8f20962b1596d41dc5814fb486b00947",
+              "chunk_id": "2d0ec9418b19e86b00000001",
+              "chunk_type": "ExportBundleData",
+              "length": 1177,
+              "source_utoc": "work/npc-batch-tests/packages-vt/NpcBeardTextures013\\zzz_GoreBeard_hero_013_P.utoc",
+              "toc_hash": "a78d6a3ccc6445b93334684efe2cd8ae8f20962b",
+              "toc_hash_bytes": 20
+            },
+            {
+              "blake3": "e5afc7a69ade98c6d5e8bf9b77523f9d1fdbd30b59e7f6c2c8bead87980dfdc8",
+              "chunk_id": "2d0ec9418b19e86b00000002",
+              "chunk_type": "BulkData",
+              "length": 3209068,
+              "source_utoc": "work/npc-batch-tests/packages-vt/NpcBeardTextures013\\zzz_GoreBeard_hero_013_P.utoc",
+              "toc_hash": "e5afc7a69ade98c6d5e8bf9b77523f9d1fdbd30b",
+              "toc_hash_bytes": 20
+            },
+            {
+              "blake3": "891318c5307bb99ea8e1e38cfce84fb6468013cee21a20d787c7b56b8c4991d9",
+              "chunk_id": "89aab658e0e6d96a00000006",
+              "chunk_type": "ContainerHeader",
+              "length": 80,
+              "source_utoc": "work/npc-batch-tests/packages-vt/NpcBeardTextures013\\zzz_GoreBeard_hero_013_P.utoc",
+              "toc_hash": "891318c5307bb99ea8e1e38cfce84fb6468013ce",
+              "toc_hash_bytes": 20
+            }
+          ],
+          "export_path": "../../../G1R/Content/GoreMods/NpcBeardSwitch/T_NH_Head_Clean_D.uasset",
+          "memory_mapped_bulk_chunks": 0,
+          "optional_bulk_chunks": 0,
+          "package": "/Game/GoreMods/NpcBeardSwitch/T_NH_Head_Clean_D",
+          "pak_files": [],
+          "pak_mount_point": "../../../"
+        },
+        "utoc": "work/npc-batch-tests/packages-vt/NpcBeardTextures013\\zzz_GoreBeard_hero_013_P.utoc"
+      }
+    },
+    {
+      "cook": {
+        "kind": "flex",
+        "source": "/Game/Assets/Characters/Humans/TierC/Flex/Textures/T_OC_IE_Flex_Head_D",
+        "target": "/Game/GoreMods/NpcBeardSwitch/T_OC_IE_Flex_Beard_D",
+        "input_png": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\beard-switch\\images\\T_OC_IE_Flex_Beard_D.png",
+        "input_png_sha256": "52c20ba31e3694f88df1132161b75f52d3c555c9532753193d622b520bd7b290",
+        "input_dimensions": [
+          1254,
+          1254
+        ],
+        "encoded_dimensions": [
+          2048,
+          2048
+        ],
+        "resize": "CLI --fit-original, Lanczos3, PNG unchanged",
+        "cooked": [
+          {
+            "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\beard-vt-fix\\cooked\\flex\\G1R\\Content\\GoreMods\\NpcBeardSwitch\\T_OC_IE_Flex_Beard_D.uasset",
+            "sha256": "d11e441c7db43e2277a4bb600d8d9e7038502a279dc1352f0dc3c04ab10d61a1"
+          },
+          {
+            "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\beard-vt-fix\\cooked\\flex\\G1R\\Content\\GoreMods\\NpcBeardSwitch\\T_OC_IE_Flex_Beard_D.ubulk",
+            "sha256": "6f82c69175dab1f4af53a932bdb082e3a67351eb490f6119a128f542ebcb2363"
+          },
+          {
+            "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\beard-vt-fix\\cooked\\flex\\G1R\\Content\\GoreMods\\NpcBeardSwitch\\T_OC_IE_Flex_Beard_D.uexp",
+            "sha256": "5770fa60cfb29437132f3763e78abfe309895b279d2f5f9fc8981b3183b53d0c"
+          }
+        ],
+        "triplet_stem": "zzz_GoreBeard_flex_013_P",
+        "triplet": [
+          {
+            "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\packages-vt\\NpcBeardTextures013\\zzz_GoreBeard_flex_013_P.utoc",
+            "sha256": "ded61d7bc9b6eaf6e5acddb1419efe540e9fe2ba9768d6b7826ee468b60d0049"
+          },
+          {
+            "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\packages-vt\\NpcBeardTextures013\\zzz_GoreBeard_flex_013_P.ucas",
+            "sha256": "b67e8e1906c2423f6db2ae3f887c9bf66fde42c735b0fab840520f6747aaa7df"
+          },
+          {
+            "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\packages-vt\\NpcBeardTextures013\\zzz_GoreBeard_flex_013_P.pak",
+            "sha256": "75e7144577253917f6da7312ef5e585b12fb728226a22b0938323751a6b555cd"
+          }
+        ]
+      },
+      "readback": {
+        "asset": "/Game/GoreMods/NpcBeardSwitch/T_OC_IE_Flex_Beard_D",
+        "decoded_pixels_identical": true,
+        "fallback_chunk_types": [
+          "ScriptObjects",
+          "ContainerHeader",
+          "ContainerHeader",
+          "ContainerHeader",
+          "ContainerHeader",
+          "ContainerHeader",
+          "ContainerHeader"
+        ],
+        "fallback_metadata_only": true,
+        "kind": "flex",
+        "original_assets_checked": [
+          "/Game/Assets/Characters/Humans/TierA/NH/Textures/T_NH_Head_D",
+          "/Game/Assets/Characters/Humans/TierC/Flex/Textures/T_OC_IE_Flex_Head_D"
+        ],
+        "original_package_ids_absent": true,
+        "postpack": {
+          "format": "PF_DXT1",
+          "height": 2048,
+          "nonblack_pixels": 4194304,
+          "pixel_count": 4194304,
+          "platform_height": 4096,
+          "platform_width": 4096,
+          "rgba_u32_le_sha256": "c8f9110c7481838429cba8e698558648318f1a11cf9ba08e6aca9673f0cbefea",
+          "uasset_sha256": "d11e441c7db43e2277a4bb600d8d9e7038502a279dc1352f0dc3c04ab10d61a1",
+          "ubulk_sha256": "6f82c69175dab1f4af53a932bdb082e3a67351eb490f6119a128f542ebcb2363",
+          "uexp_sha256": "5770fa60cfb29437132f3763e78abfe309895b279d2f5f9fc8981b3183b53d0c",
+          "vt": true,
+          "vt_chunks": 3,
+          "vt_layers": 1,
+          "vt_mips": 11,
+          "width": 2048
+        },
+        "prepack": {
+          "format": "PF_DXT1",
+          "height": 2048,
+          "nonblack_pixels": 4194304,
+          "pixel_count": 4194304,
+          "platform_height": 4096,
+          "platform_width": 4096,
+          "rgba_u32_le_sha256": "c8f9110c7481838429cba8e698558648318f1a11cf9ba08e6aca9673f0cbefea",
+          "uasset_sha256": "d11e441c7db43e2277a4bb600d8d9e7038502a279dc1352f0dc3c04ab10d61a1",
+          "ubulk_sha256": "6f82c69175dab1f4af53a932bdb082e3a67351eb490f6119a128f542ebcb2363",
+          "uexp_sha256": "5770fa60cfb29437132f3763e78abfe309895b279d2f5f9fc8981b3183b53d0c",
+          "vt": true,
+          "vt_chunks": 3,
+          "vt_layers": 1,
+          "vt_mips": 11,
+          "width": 2048
+        },
+        "primary_readback_bound_to_triplet": true,
+        "strict_triplet": {
+          "bulk_chunks": 1,
+          "chunk_count": 3,
+          "chunks": [
+            {
+              "blake3": "0b43cd6d9f9bfd08981ceafb58f296db0421f8b94026469601b3040d0561930e",
+              "chunk_id": "8dc1543964e057d000000006",
+              "chunk_type": "ContainerHeader",
+              "length": 80,
+              "source_utoc": "work/npc-batch-tests/packages-vt/NpcBeardTextures013\\zzz_GoreBeard_flex_013_P.utoc",
+              "toc_hash": "0b43cd6d9f9bfd08981ceafb58f296db0421f8b9",
+              "toc_hash_bytes": 20
+            },
+            {
+              "blake3": "d601878948db3e1d113a112c8b5496b9f3f55e088330cfa89997272c28983263",
+              "chunk_id": "d01b179aeb6c339100000001",
+              "chunk_type": "ExportBundleData",
+              "length": 1185,
+              "source_utoc": "work/npc-batch-tests/packages-vt/NpcBeardTextures013\\zzz_GoreBeard_flex_013_P.utoc",
+              "toc_hash": "d601878948db3e1d113a112c8b5496b9f3f55e08",
+              "toc_hash_bytes": 20
+            },
+            {
+              "blake3": "63179edf01cd9f5b0d77ff3e6f97e8e74b5b701438eda984fc59597dc4eef757",
+              "chunk_id": "d01b179aeb6c339100000002",
+              "chunk_type": "BulkData",
+              "length": 3209068,
+              "source_utoc": "work/npc-batch-tests/packages-vt/NpcBeardTextures013\\zzz_GoreBeard_flex_013_P.utoc",
+              "toc_hash": "63179edf01cd9f5b0d77ff3e6f97e8e74b5b7014",
+              "toc_hash_bytes": 20
+            }
+          ],
+          "export_path": "../../../G1R/Content/GoreMods/NpcBeardSwitch/T_OC_IE_Flex_Beard_D.uasset",
+          "memory_mapped_bulk_chunks": 0,
+          "optional_bulk_chunks": 0,
+          "package": "/Game/GoreMods/NpcBeardSwitch/T_OC_IE_Flex_Beard_D",
+          "pak_files": [],
+          "pak_mount_point": "../../../"
+        },
+        "utoc": "work/npc-batch-tests/packages-vt/NpcBeardTextures013\\zzz_GoreBeard_flex_013_P.utoc"
+      }
+    }
+  ],
+  "raw_readback_report": {
+    "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\beard-vt-fix\\cooked-readback-verification.json",
+    "sha256": "3e4f5d902b83e56e173026a2598c0140d2efb80ebb16e5cc44601a1fc866958c"
+  },
+  "readback_helper": {
+    "route": "Direct rustc linking fresh release gore_tex; read-only productive strict-triplet and primary-readback APIs",
+    "files": [
+      {
+        "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\beard-vt-fix\\verify-cooked-readback.rs",
+        "sha256": "d8beb11380e9e27f8915d9bca9265e357a64e401dab9d5c368b078387b15c86f",
+        "bytes": 5796
+      },
+      {
+        "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\beard-vt-fix\\verify-cooked-readback.exe",
+        "sha256": "f9fa891f4a6c319d8e9bf7829f883a2bf7b594ac981d4c69650da7212a27e432",
+        "bytes": 4594688
+      },
+      {
+        "path": "C:\\sbx\\goresave\\target\\release\\deps\\libgore_tex-4c5d7462933494ae.rlib",
+        "sha256": "6fce701639738eb6096d424cde30c819e5041c8929ce0eeefad20462a74dbf21",
+        "bytes": 7442718
+      },
+      {
+        "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\beard-vt-fix\\cooked-readback-verification.json",
+        "sha256": "3e4f5d902b83e56e173026a2598c0140d2efb80ebb16e5cc44601a1fc866958c",
+        "bytes": 59710
+      }
+    ]
+  },
+  "original_metadata_comparison": {
+    "passed": true,
+    "original_evidence": "original-texture-platforms.json",
+    "readback_evidence": "cooked-readback-verification.json",
+    "textures": [
+      {
+        "kind": "hero",
+        "original_asset": "/Game/Assets/Characters/Humans/TierA/NH/Textures/T_NH_Head_D",
+        "outer_platform_dimensions": [
+          4096,
+          4096
+        ],
+        "original_first_mip": 1,
+        "vt_dimensions": [
+          2048,
+          2048
+        ],
+        "vt_mips": 11,
+        "outer_and_inner_dimensions_match_original": true,
+        "prepack_postpack_uexp_byte_identical": true
+      },
+      {
+        "kind": "flex",
+        "original_asset": "/Game/Assets/Characters/Humans/TierC/Flex/Textures/T_OC_IE_Flex_Head_D",
+        "outer_platform_dimensions": [
+          4096,
+          4096
+        ],
+        "original_first_mip": 1,
+        "vt_dimensions": [
+          2048,
+          2048
+        ],
+        "vt_mips": 11,
+        "outer_and_inner_dimensions_match_original": true,
+        "prepack_postpack_uexp_byte_identical": true
+      }
+    ]
+  }
+}

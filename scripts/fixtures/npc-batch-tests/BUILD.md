@@ -18,10 +18,11 @@ role sources are also tracked, so that regeneration is optional.
   and sibling `Binds.Cache` SHA256
   `aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2`.
 - A current GORE CLI with its matching qualified standalone compiler package.
-  For the current head/beard package use local `work/npc-continuation/runtime/gore-beard-v1.exe`,
-  SHA256 `14dcd61ed8a1b5a3fe52f77526bf3e5da4a7fab8f288a0f5db8e6af37eba5097`.
+  For the current head/beard package use local `work/npc-continuation/runtime/gore-beard-v2.exe`,
+  SHA256 `28b5d76e1e861476c7882725f056bca7cb65e718550203bd6c6dbd9aa9987fe1`.
   It includes the head palette and quest availability bindings plus five narrowly
-  qualified texture/path/material functions and UTexture for beard switching, and retains that authenticated
+  qualified texture/path/material functions and UTexture, plus the fresh MID factory,
+  CopyParameterOverrides and EMIDCreationFlags. It retains that authenticated
   native authority throughout selective FullGraph composition. The original 0.1.0
   voice/economy builds used `gore-current.exe`,
   SHA256 `9428ceacd052ba3f6ed98162cfd505536e57979e3ffcfe96a555fb3d2bddf005`.
@@ -154,34 +155,52 @@ it must not rename the A/B/C technical identities. Inspect the resulting bundle
 and verify its four script modules and declared payloads before handing it off
 for any separately authorized game test.
 
-## Beard follow-up 0.1.2
+## Beard correction 0.1.3
 
-The head follow-up uses the same productive Core pipeline with frozen heads-v3
-as input and the current tracked head A/B overlays. `beard-build-checks.json`
-records its new native qualification, compile receipt, module preservation and
-bundle inspection. The five new functions are ImportFileAsTexture2D,
-SetTextureParameterValue, SetMaterial, ProjectContentDir and the one-argument
-ConvertRelativePathToFull. Exact registered declarations and effective types
-are sealed; this does not enable unrelated native APIs or bypass admission.
+The head follow-up uses the same productive Core pipeline with frozen heads-v4
+as input and the current tracked head A/B overlays. `beard-vt-build-checks.json`
+records the fresh CLI, compile receipt, module preservation and bundle inspection.
+`heads/fresh-mid-native-api-qualification.json` seals the two additional exact
+functions and enum; no unrelated admission or runtime policies change.
 
-`heads/beard-textures.json` records the two edited face atlases and local paths.
-They must be present with the recorded hashes when rebuilding this package;
-neither the original extracted game atlases nor the edited binaries are in Git.
-The imagegen outputs are 1254x1254 despite a 2048 request; no further image
-resampling was applied. Their intended normalized UV mapping and visual quality
-are part of the user test. Keep a copy of the generated PNGs with the bundle.
+The 0.1.2 PNG import failed in game: both stock albedos are virtual textures,
+while runtime PNG import creates an ordinary Texture2D resource. Its component
+MID factory could also return the Hero's existing mutable instance, corrupting
+the stored original. See `heads/beard-runtime-0.1.2.json` for the user report.
+0.1.3 loads separately cooked VT assets and uses a fresh MID with a static parent
+and copied original overrides. Remove the former `pak_files` PNG entries from
+the script bundle spec; retain its mini-cache, localization and voice payloads.
 
-Add these entries to the head spec, alongside the existing script/loc/voice:
+`heads/beard-textures.json` records the two generated atlases and local hashes.
+The generated PNGs are 1254x1254; they are not checked into Git. Retain them with
+the original matching game installation and compiler runtime for reproduction.
+The texture CLI now resamples them to the 2048x2048 stored top mip while
+preserving the original PF_DXT1 VT layout (11 mips, 128-pixel tiles, border 4).
+Use fresh directories outside the installation:
 
-```json
-"pak_files": [
-  {"game_path":"G1R/Content/GoreMods/NpcBeardSwitch/T_NH_Head_Clean_D.png", "source_path":"../images/T_NH_Head_Clean_D.png"},
-  {"game_path":"G1R/Content/GoreMods/NpcBeardSwitch/T_OC_IE_Flex_Beard_D.png", "source_path":"../images/T_OC_IE_Flex_Beard_D.png"}
-]
+```powershell
+& $gore texture replace --game $game `
+  /Game/Assets/Characters/Humans/TierA/NH/Textures/T_NH_Head_D `
+  --image work/npc-batch-tests/beard-switch/images/T_NH_Head_Clean_D.png `
+  --mod-dir work/npc-rebuild/beard/hero `
+  --as-asset /Game/GoreMods/NpcBeardSwitch/T_NH_Head_Clean_D --fit-original
+& $gore texture replace --game $game `
+  /Game/Assets/Characters/Humans/TierC/Flex/Textures/T_OC_IE_Flex_Head_D `
+  --image work/npc-batch-tests/beard-switch/images/T_OC_IE_Flex_Beard_D.png `
+  --mod-dir work/npc-rebuild/beard/flex `
+  --as-asset /Game/GoreMods/NpcBeardSwitch/T_OC_IE_Flex_Beard_D --fit-original
+& $gore texture pack --game $game --mod-dir work/npc-rebuild/beard/hero `
+  --name zzz_GoreBeard_hero_013_P --out work/npc-rebuild/NpcBeardTextures013
+& $gore texture pack --game $game --mod-dir work/npc-rebuild/beard/flex `
+  --name zzz_GoreBeard_flex_013_P --out work/npc-rebuild/NpcBeardTextures013
 ```
 
-This makes a format-2 bundle with an additive pak_file_patch; no original
-face texture or cooked PackageId is replaced. The PNG import happens through
-the mounted game content path at runtime. Offline validation proves package
-ownership and the bound calls, not that the import renders correctly in game.
-See `beard-deployment.json` for the active package and Apply/Reset commands.
+Both resulting triplets contain only the new PackageIds; no original face asset
+is overridden. Readback from each packed primary container must reproduce the
+prepack decoded pixels and VT metadata. The companion folder and script bundle
+are separate Manager entries: import and enable both, disable the previous
+head version, analyze and preflight, then use the authorized Manager Apply.
+See `beard-vt-deployment.json` for this installation's exact Apply/Reset commands.
+The existing `beard-build-checks.json` and `beard-deployment.json` describe the
+superseded 0.1.2 attempt. Neither offline validation nor deployment proves that
+the new beard renders correctly; restart the game and retest from clean START065.

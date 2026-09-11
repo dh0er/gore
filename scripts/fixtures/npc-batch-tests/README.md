@@ -7,14 +7,16 @@ die Save-Bereinigung und `7ac45595` die benoetigte native API-Komposition.
 Siehe [Build-/Paketpruefung](build-checks.json) und
 [veroeffentlichte Startstaende](start-saves.json).
 
-**Aktiv ist NpcHeadPaletteTest 0.1.2**; Manager-Status `in_sync`.
+**Aktiv ist NpcHeadPaletteTest 0.1.3 mit NpcBeardTextures013**; Manager-Status `in_sync`.
 Der Bartwechsel hat Vorrang. Das Sprachpaket und die anderen Pakete bleiben
-deaktiviert. Build und Aktivierung stehen im [Bart-Buildbericht](beard-build-checks.json)
-und [Bart-Deploymentbericht](beard-deployment.json).
+deaktiviert. Build und Aktivierung stehen im [VT-Buildbericht](beard-vt-build-checks.json)
+und [VT-Deploymentbericht](beard-vt-deployment.json). Der fehlgeschlagene
+[Barttest 0.1.2](heads/beard-runtime-0.1.2.json) bleibt dokumentiert.
 Die bisherigen [Tageslicht-](daylight-build-checks.json) und
 [Deploymentberichte](daylight-deployment.json) bleiben als Historie erhalten.
 
-Die Pakete werden **einzeln** aktiviert. Zum Paketwechsel das Spiel vollstaendig
+Die Testpakete werden **einzeln** aktiviert; zum Kopf-Test gehoert zusaetzlich
+das Textur-Begleitpaket. Zum Paketwechsel das Spiel vollstaendig
 beenden und den zugehoerigen START-Stand laden. Ergebnisse anderer Pakete nicht
 als Ausgangspunkt verwenden. Die Startstaende bleiben erhalten; Ergebnisse unter
 den unten verlinkten Testnamen neu speichern. Spieltests macht der Benutzer.
@@ -36,7 +38,8 @@ H2/H5 fuer rasierten Heldenkopf, H6 fuer Originalbart; H1/H6 fuer Flex mit Bart,
 H5 fuer Flex ohne Bart. Beide neuen Auswahlen speichern/neu starten, danach H9.
 Die neue Texturzuordnung betrifft nur Cs Materialinstanzen. Der Nutzer hat die
 bisherigen Kopf-, Haar- und Farbtests bestanden; dieser echte Bartwechsel ist
-neu implementiert und noch nicht im Spiel bestaetigt.
+in 0.1.3 korrigiert und noch nicht im Spiel bestaetigt. Nach vollstaendigem
+Neustart unbedingt den sauberen START065 statt eines schwarzen 0.1.2-Ergebnisses laden.
 
 ## 2. Natuerliche Stimme
 

@@ -7,7 +7,7 @@
   "compiler_profile_sha256": "8d816e27cf7d2a20283239ed3d06347e56a7c5813b9f03eda9a865659d022ba8",
   "registration_trace_sha256": "17f374a632eadb354207aad9de7512367cad72e1c4c7a3253a3f68d9e075999c",
   "post_bind_snapshot_sha256": "e355aeead72953582c31a2c1b933d08f87c4daa20f4cd55ae71db1f51713d4c5",
-  "qualification_evidence": "scripts/fixtures/npc-batch-tests/heads/beard-native-api-qualification.json sha256:2fe15b6a453b2d0f339157a9fbd0bddb5405717f961c574ce93f78e97b293371",
+  "qualification_evidence": "scripts/fixtures/npc-batch-tests/heads/fresh-mid-native-api-qualification.json sha256:8b9a45a959c2fd2559311461b972578ee3d6f3ea4daa94c0a6053796f2cfc7c9",
   "types": [
     {
       "full_identity": "0:0:17:UMaterialInstance1:00:",
@@ -32,6 +32,10 @@
     {
       "full_identity": "0:0:8:UTexture1:00:",
       "object_kind": 67108864
+    },
+    {
+      "full_identity": "0:0:17:EMIDCreationFlags1:00:",
+      "object_kind": 0
     }
   ],
   "functions": [
@@ -136,6 +140,12 @@
     },
     {
       "full_identity": "6:method0:0:31:0:0:19:UPrimitiveComponent1:00:11:SetMaterial1:085:9:primitive2:681:01:01:01:0,6:object1:51:01:01:11:030:0:0:18:UMaterialInterface1:00:,27:9:primitive2:821:01:01:01:0"
+    },
+    {
+      "full_identity": "6:global0:8:Material0:29:CreateDynamicMaterialInstance1:0201:6:object1:51:01:01:11:018:0:0:7:UObject1:00:,6:object1:51:01:01:11:030:0:0:18:UMaterialInterface1:00:,6:object1:51:01:01:01:016:0:0:5:FName1:00:,6:object1:51:01:01:01:029:0:0:17:EMIDCreationFlags1:00:,62:6:object1:51:01:01:11:036:0:0:24:UMaterialInstanceDynamic1:00:"
+    },
+    {
+      "full_identity": "6:method0:0:36:0:0:24:UMaterialInstanceDynamic1:00:22:CopyParameterOverrides1:056:6:object1:51:01:01:11:029:0:0:17:UMaterialInstance1:00:,27:9:primitive2:821:01:01:01:0"
     }
   ],
   "properties": [
