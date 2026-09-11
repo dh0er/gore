@@ -5837,6 +5837,76 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_circle_radius_arguments(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name) in [(1,"FVector"),(2,"UObject"),(3,"FColor"),(4,"AGothicCharacter")] {
+            r.type_by_ptr.insert(ptr,name.into());r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:String::new(),namespace:String::new()});
+        }
+        let value=|ptr|DataType{token:5,type_info:ptr,..Default::default()};let single=DataType{token:0x50,..Default::default()};let double=DataType{token:0x51,..Default::default()};
+        r.func_by_ptr.insert(10,"DrawCircle".into());r.func_ns.insert(10,"DebugScript".into());r.func_ret.insert(10,DataType{token:0x52,..Default::default()});
+        r.func_params.insert(10,vec![DataType{is_object_handle:true,..value(2)},value(1),single.clone(),value(3),single,DataType{token:0x44,..Default::default()}]);
+        for (id,name,arg) in [(20,"Radius",DataType{is_object_const:true,is_read_only:true,..double.clone()}),(21,"SafeRadius",DataType{is_object_handle:true,..value(4)})] {
+            r.funcid_to_ptr.insert(id,id as i64);r.func_by_ptr.insert(id as i64,name.into());r.func_owner.insert(id as i64,"UHost".into());r.func_is_method.insert(id as i64);
+            r.func_ret.insert(id as i64,double.clone());r.func_params.insert(id as i64,vec![arg]);
+        }
+        r.global_by_ptr.insert(90,"__WorldContext".into());r.global_by_ptr.insert(91,"Blue".into());r.global_by_ptr.insert(92,"Yellow".into());
+        match fault {
+            1=>{r.func_ns.insert(10,"Other".into());},
+            2=>r.func_params.get_mut(&10).unwrap()[1].is_reference=true,
+            3=>r.func_params.get_mut(&10).unwrap()[2].token=0x51,
+            4=>r.func_params.get_mut(&10).unwrap()[3].type_info=1,
+            5=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into(),
+            6=>{r.global_by_ptr.insert(90,"Other".into());},
+            7=>{r.func_ret.get_mut(&20).unwrap().token=0x50;r.func_ret.get_mut(&21).unwrap().token=0x50;},
+            8=>{r.func_is_method.remove(&20);r.func_is_method.remove(&21);},
+            9=>{r.func_params.get_mut(&20).unwrap()[0].is_reference=true;r.func_params.get_mut(&21).unwrap()[0].is_reference=true;},
+            10=>{r.func_is_method.insert(10);},
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_influence_vector_returns(fault:u8)->Self {
+        let mut r=Self::from_test_movement_vector_lifetimes(0);
+        for (ptr,name) in [(10,"UState"),(11,"FSettings")] {
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:"Fixture".into(),namespace:String::new()});
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32,ptr);
+        }
+        for (id,offset,name,ty) in [(10,12,"Config","FSettings"),(11,8,"Preferred","float")] {
+            let key=((id as i64)<<1)|((offset as i64)<<33)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id);
+            let owner=r.type_by_id(id).unwrap().to_owned();r.class_fields.entry(owner).or_default().insert(name.into(),ty.into());
+        }
+        let vector=DataType{token:5,type_info:1,..Default::default()};
+        let reference=DataType{is_reference:true,is_object_const:true,is_read_only:true,..vector};
+        for (ptr,name,ret,owner) in [(26,"$beh0",DataType{token:0x52,..Default::default()},"FVector"),
+            (27,"Distance",DataType{token:0x51,..Default::default()},"FVector"),
+            (30,"Target",DataType{token:5,type_info:2,is_object_handle:true,..Default::default()},"UCharacterAIState")] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);
+            r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,if ptr==30 {vec![]} else {vec![reference.clone()]});
+        }
+        r.funcid_to_ptr.insert(30,30);r.const_method_ptrs.extend([27,30]);
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into(),
+            2=>{r.const_method_ptrs.remove(&30);},
+            3=>{r.func_owner.insert(30,"Other".into());},
+            4=>r.func_ret.get_mut(&30).unwrap().type_info=7,
+            5=>{r.func_params.get_mut(&30).unwrap().push(DataType::default());},
+            6=>r.func_params.get_mut(&20).unwrap()[0].token=0x50,
+            7=>r.func_ret.get_mut(&22).unwrap().is_reference=true,
+            8=>r.func_params.get_mut(&26).unwrap()[0].is_read_only=false,
+            9=>r.func_ret.get_mut(&27).unwrap().token=0x50,
+            10=>{r.class_fields.get_mut("UState").unwrap().insert("Config".into(),"Other".into());},
+            11=>{r.class_fields.get_mut("FSettings").unwrap().insert("Preferred".into(),"float32".into());},
+            12=>{r.duplicate_prop_keys.insert((8i64<<33)|23);},
+            13=>{r.prop_type_id.insert((12i64<<33)|21,11);},
+            14=>{r.const_method_ptrs.insert(26);},
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_clamped_vector_expression(fault:u8)->Self {
         let mut r=Self::default();
         for (ptr,name,module) in [(1,"FVector",""),(2,"UHost","Fixture")] {
