@@ -5846,6 +5846,29 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_repeated_memory_copy(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(1, "FMemorizedEvent"), (2, "TArray")] {
+            r.type_by_ptr.insert(ptr, name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        if fault == 1 { r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(); }
+        let event = DataType { token: 5, type_info: 1, ..Default::default() };
+        r.type_subtypes.insert(2, vec![DataType { type_info: if fault == 2 { 3 } else { 1 }, ..event.clone() }]);
+        for (ptr, name, owner) in [(10, "Last", "TArray"), (11, "$beh0", "FMemorizedEvent"), (12, "$beh2", "FMemorizedEvent")] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into());
+            r.func_is_method.insert(ptr); r.func_params.insert(ptr, Vec::new());
+            r.func_ret.insert(ptr, DataType { token: 0x52, ..Default::default() });
+        }
+        r.func_params.insert(10, vec![DataType { token: if fault == 3 { 0x51 } else { 0x44 }, ..Default::default() }]);
+        r.func_ret.insert(10, DataType { is_reference: fault != 4, ..event.clone() });
+        r.func_params.insert(11, vec![DataType { is_reference: fault != 5, is_object_const: fault != 6, ..event }]);
+        if fault == 7 { r.func_owner.insert(11, "Other".into()); }
+        if fault == 8 { r.func_is_method.remove(&10); }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_hostility_property(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("AGothicCharacter", ""), ("AGothicCharacterState", ""), ("UGameplayAbility_AI", ""), ("ERelationshipHostility", "")]);
         for (p, name) in [(1, "AGothicCharacter"), (2, "AGothicCharacterState"), (3, "UGameplayAbility_AI"), (4, "ERelationshipHostility")] {

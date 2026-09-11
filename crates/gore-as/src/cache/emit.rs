@@ -3324,6 +3324,8 @@ fn emit_function_ctor(
         pass_trace("restore_eager_minimum_location_property", &rendered);
         let rendered = restore_feet_forward_property(&rendered, f, refs);
         pass_trace("restore_feet_forward_property", &rendered);
+        let rendered = restore_repeated_memory_copy(&rendered, f, refs);
+        pass_trace("restore_repeated_memory_copy", &rendered);
         let rendered = restore_hostility_property_argument(&rendered, f, refs, is_method);
         pass_trace("restore_hostility_property_argument", &rendered);
         let rendered = restore_container_property_copies(&rendered, f, refs);
@@ -10466,6 +10468,66 @@ fn restore_feet_forward_property(body: &str, f: &Func, refs: &RefResolver) -> St
     let [(at, replacement)] = edits.as_slice() else { return body.to_owned(); };
     lines.splice(*at..*at + 3, [replacement.clone()]);
     let mut out = lines.join("\n"); if body.ends_with('\n') { out.push('\n'); } out
+}
+
+/// A second array-element copy reuses the first event's physical storage.
+/// Direct construction avoids an extra conversion temporary reserving that slot.
+fn restore_repeated_memory_copy(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if !body.contains(" = FMemorizedEvent(") { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let native = |p, name| matches!(refs.type_identity_by_ptr(p), Some(t) if t.name == name && t.module.is_empty() && t.namespace.is_empty());
+    let value = |t: &super::types::DataType| t.token == 5 && !t.is_object_handle && native(t.type_info, "FMemorizedEvent");
+    let w = |i: &Instr| i.words.first().map(|s| *s as i16 as i32);
+    let p = |i: &Instr| i.qwords.first().map(|p| *p as i64);
+    let mut sites = HashMap::<_, Vec<_>>::new();
+    for (at, c) in code.windows(6).enumerate() {
+        let site = (|| {
+            if c.iter().map(|i| i.op.name).ne(["PshC4", "PSF", "Thiscall1", "PshRPtr", "PSF", "CALLSYS"])
+                || c[0].dwords.first() != Some(&0) { return None; }
+            let (array, dst, getter, ctor) = (w(&c[1])?, w(&c[4])?, p(&c[2])?, p(&c[5])?);
+            if array <= 0 || dst <= 0 || array == dst
+                || refs.func_by_ptr(getter) != Some("Last") || refs.func_owner_by_ptr(getter) != Some("TArray")
+                || !refs.is_method_by_ptr(getter)
+                || !matches!(refs.func_params_by_ptr(getter), Some([t]) if t.token == 0x44 && !t.is_reference && !t.is_object_handle)
+                || refs.func_by_ptr(ctor) != Some("$beh0") || refs.func_owner_by_ptr(ctor) != Some("FMemorizedEvent")
+                || !refs.is_method_by_ptr(ctor)
+                || !matches!(refs.func_ret_by_ptr(ctor), Some(t) if t.token == 0x52 && !t.is_reference) { return None; }
+            let returned = refs.func_ret_by_ptr(getter)?;
+            if !value(returned) || !returned.is_reference
+                || !matches!(refs.func_params_by_ptr(ctor), Some([t]) if value(t) && t.type_info == returned.type_info && t.is_reference && (t.is_object_const || t.is_read_only))
+                || f.obj_locals.iter().filter(|(s, _)| *s == dst).map(|(_, t)| *t).ne([returned.type_info]) { return None; }
+            let arrays: Vec<_> = f.obj_locals.iter().filter(|(s, _)| *s == array).map(|(_, t)| *t).collect();
+            let [array_type] = arrays.as_slice() else { return None; };
+            if !native(*array_type, "TArray")
+                || !matches!(refs.type_subtypes(*array_type), Some([t]) if value(t) && !t.is_reference && t.type_info == returned.type_info)
+                || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                    let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                    target > c[0].offset_dw as i64 && target <= c[5].offset_dw as i64
+                }))) { return None; }
+            Some(((dst, array, getter, ctor), at))
+        })();
+        if let Some((key, at)) = site { sites.entry(key).or_default().push(at); }
+    }
+    let mut result = body.to_owned();
+    for ((dst, array, _, ctor), sites) in sites {
+        let [first, second] = sites.as_slice() else { continue; };
+        // All constructors of this physical slot must be the two proved copies.
+        let constructors: Vec<_> = code.windows(2).enumerate().filter(|(_, c)| c[0].op.name == "PSF" && w(&c[0]) == Some(dst)
+            && c[1].op.name == "CALLSYS" && p(&c[1]).is_some_and(|p| refs.func_by_ptr(p) == Some("$beh0"))).map(|(at, _)| at).collect();
+        if constructors != [first + 4, second + 4]
+            || code.iter().any(|i| writes_destination(i.op.name) && w(i) == Some(dst))
+            || !code[first + 6..*second].windows(2).any(|c| c[0].op.name == "PSF" && w(&c[0]) == Some(dst) && c[1].op.name == "CALLSYS"
+                && p(&c[1]).is_some_and(|p| refs.func_by_ptr(p) == Some("$beh2") && refs.func_owner_by_ptr(p) == refs.func_owner_by_ptr(ctor))) { continue; }
+        let declarations: Vec<_> = result.lines().filter_map(declaration_with_initializer)
+            .filter(|(_, name, _)| slot_and_life_any(name).is_some_and(|(slot, _)| slot == dst)).collect();
+        let [(_, first_name, first_init), (_, second_name, second_init)] = declarations.as_slice() else { continue; };
+        let init = format!("FMemorizedEvent(local_{array}.Last())");
+        if first_name != &format!("local_{dst}") || second_name != &format!("local_{dst}_2") || first_init != &init || second_init != &init { continue; }
+        let old = format!("FMemorizedEvent {second_name} = {init};");
+        if result.matches(&old).count() != 1 { continue; }
+        result = result.replacen(&old, &format!("FMemorizedEvent {second_name}(local_{array}.Last());"), 1);
+    }
+    result
 }
 
 /// Keep the previously used character-state temporary for the first query argument.
@@ -46472,6 +46534,28 @@ mod literal_value_lifetime_tests {
         let mut bad = f.clone(); bad.bytecode[c[7].offset_dw] ^= 2 << 16; assert_eq!(fold(body, &bad, &refs), body);
         let mut bad = f.clone(); let start = bad.bytecode.len(); let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[13].offset_dw as i32 - start as i32 - 2; bad.bytecode.extend(jump); assert_eq!(fold(body, &bad, &refs), body);
         for bad in [body.replace("200.0", "201.0"), body.replace("local_2 -", "local_3 -"), format!("{body}Use(local_18);\n"), format!("{body}Use(local_4);\n"), body.replace("this.GetSelf()", "Other.GetSelf()")] { assert_eq!(fold(&bad, &f, &refs), bad); }
+    }
+
+    #[test]
+    fn repeated_memory_copy_reuses_storage_with_direct_construction() {
+        let mut f = function(&[("PshC4", &[]), ("PSF", &[38]), ("Thiscall1", &[]), ("PshRPtr", &[]), ("PSF", &[94]), ("CALLSYS", &[]),
+            ("PSF", &[94]), ("CALLSYS", &[]),
+            ("PshC4", &[]), ("PSF", &[38]), ("Thiscall1", &[]), ("PshRPtr", &[]), ("PSF", &[94]), ("CALLSYS", &[]), ("RET", &[0])]);
+        f.obj_locals = vec![(94, 1), (38, 2)]; let c = disassemble(&f.bytecode).unwrap();
+        for (at, ptr) in [(2, 10), (5, 11), (7, 12), (10, 10), (13, 11)] { f.bytecode[c[at].offset_dw + 1] = ptr; }
+        let body = "    {\n        FMemorizedEvent local_94 = FMemorizedEvent(local_38.Last());\n        Use(local_94);\n    }\n    {\n        FMemorizedEvent local_94_2 = FMemorizedEvent(local_38.Last());\n        Use(local_94_2);\n    }\n";
+        let expected = body.replace("local_94_2 = FMemorizedEvent(local_38.Last())", "local_94_2(local_38.Last())");
+        let refs = RefResolver::from_test_repeated_memory_copy(0);
+        let fold = |s: &str, f: &Func, r: &RefResolver| super::restore_repeated_memory_copy(s, f, r);
+        assert_eq!(fold(body, &f, &refs), expected); assert_eq!(fold(&expected, &f, &refs), expected);
+        for fault in 1..=8 { assert_eq!(fold(body, &f, &RefResolver::from_test_repeated_memory_copy(fault)), body, "metadata {fault}"); }
+        let mut bad = f.clone(); bad.obj_locals.push((94, 1)); assert_eq!(fold(body, &bad, &refs), body);
+        let mut bad = f.clone(); bad.bytecode[c[8].offset_dw + 1] = 1; assert_eq!(fold(body, &bad, &refs), body);
+        let mut bad = f.clone(); bad.bytecode[c[12].offset_dw] ^= 2 << 16; assert_eq!(fold(body, &bad, &refs), body);
+        let mut bad = f.clone(); bad.bytecode[c[7].offset_dw + 1] = 11; assert_eq!(fold(body, &bad, &refs), body);
+        let mut bad = f.clone(); bad.bytecode.extend(function(&[("SetV4", &[94])]).bytecode); assert_eq!(fold(body, &bad, &refs), body);
+        let mut bad = f.clone(); let start = bad.bytecode.len(); let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[10].offset_dw as i32 - start as i32 - 2; bad.bytecode.extend(jump); assert_eq!(fold(body, &bad, &refs), body);
+        for bad in [body.replace("local_94_2", "local_94_3"), body.replace("local_38.Last()", "local_40.Last()"), format!("{body}{body}")] { assert_eq!(fold(&bad, &f, &refs), bad); }
     }
 
     #[test]
