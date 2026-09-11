@@ -4950,6 +4950,27 @@ fn register_global_save_slot(data: &mut Vec<u8>, slot: &str) -> Result<(), CoreE
     )
 }
 
+/// Remove every occurrence while retaining all other global entries in order.
+/// Reparse after each splice; older profiles without this list need no edit.
+fn unregister_global_save_slot(data: &mut Vec<u8>, slot: &str) -> Result<(), CoreError> {
+    loop {
+        let root = parse_profile_file(data)?;
+        let Some(property) = root.properties.iter().find(|p| p.name == "m_SavedGamesNames") else {
+            return Ok(());
+        };
+        let path = vec![property.name.to_string()];
+        let Some(index) = string_array_element_index(&root, &path, slot)? else {
+            return Ok(());
+        };
+        properties::patch_container(
+            data,
+            property,
+            &[],
+            &properties::ContainerEdit::ArrayRemove(index),
+        )?;
+    }
+}
+
 fn persistent_slot_profile_path(
     root: &properties::RootObject,
     slot: &str,
@@ -5879,9 +5900,10 @@ fn prepare_profile_removal(
         remove_slot_from_all_profile_arrays(&mut persistent_edited, &ids, array_name, slot)?;
     }
     remove_persistent_slot_metadata(&mut persistent_edited, slot)?;
+    unregister_global_save_slot(&mut persistent_edited, slot)?;
 
     // Validate the complete edited structure before creating a backup or temp
-    // file. The slot must be absent from every profile array and from the map.
+    // file. The slot must be absent from every profile/global array and map.
     let edited_root = parse_profile_file(&persistent_edited).map_err(|error| {
         CoreError::Validation(format!(
             "profile removal produced an invalid PersistentDataList.sav: {error}"
@@ -5899,6 +5921,14 @@ fn prepare_profile_removal(
     if persistent_slot_is_registered(&edited_root, slot)? {
         return Err(CoreError::Validation(format!(
             "slot {slot} remained in m_SavedGamesPublicData"
+        )));
+    }
+    let global_path = vec!["m_SavedGamesNames".to_string()];
+    if edited_root.properties.iter().any(|p| p.name == "m_SavedGamesNames")
+        && string_array_element_index(&edited_root, &global_path, slot)?.is_some()
+    {
+        return Err(CoreError::Validation(format!(
+            "slot {slot} remained in m_SavedGamesNames"
         )));
     }
 
@@ -18357,6 +18387,38 @@ mod tests {
     }
 
     #[test]
+    fn profile_removal_cleans_duplicate_global_names_and_preserves_other_slots() {
+        let slot = "G1R-007";
+        let mut original = assignment_persistent_data_list_with_layout(
+            slot,
+            Some(0),
+            &[slot, "G1R-006"],
+            &["G1R-008"],
+        );
+        for value in ["G1R-006", slot, "G1R-008"] {
+            let root = parse_profile_file(&original).unwrap();
+            let property = root.properties.iter().find(|p| p.name == "m_SavedGamesNames").unwrap();
+            properties::patch_container(
+                &mut original,
+                property,
+                &[],
+                &properties::ContainerEdit::ArrayInsertBytes(properties::encode_fstring_value(value)),
+            ).unwrap();
+        }
+        let edited = prepare_profile_removal(&original, slot, 0).unwrap();
+        assert_eq!(global_save_slots(&edited), vec![
+            properties::PropertyValue::Str("G1R-006".into()),
+            properties::PropertyValue::Str("G1R-008".into()),
+        ]);
+        let root = parse_profile_file(&edited).unwrap();
+        assert!(!persistent_slot_is_registered(&root, slot).unwrap());
+        assert!(profile_array_contains(&root, 0, "m_SavedSlotsNames", "G1R-006").unwrap());
+        assert!(profile_array_contains(&root, 1, "m_SavedSlotsNames", "G1R-008").unwrap());
+        // The input snapshot is immutable, even with duplicate registrations.
+        assert_eq!(global_save_slots(&original).len(), 4);
+    }
+
+    #[test]
     fn remove_save_from_profile_keeps_save_and_cleans_registry_with_backup() {
         let dir = tempdir().unwrap();
         let slot = "G1R-006";
@@ -18393,6 +18455,7 @@ mod tests {
         assert_eq!(fs::read(&save_path).unwrap(), save_original);
 
         let written_persistent = fs::read(&persistent_path).unwrap();
+        assert!(global_save_slots(&written_persistent).is_empty());
         let root = parse_profile_file(&written_persistent).unwrap();
         assert!(!persistent_slot_is_registered(&root, slot).unwrap());
         for profile_id in [0, 1] {
@@ -18517,6 +18580,7 @@ mod tests {
         );
 
         let written = fs::read(&persistent_path).unwrap();
+        assert!(global_save_slots(&written).is_empty());
         let root = parse_profile_file(&written).unwrap();
         assert!(!persistent_slot_is_registered(&root, slot).unwrap());
         for profile_id in [0, 1] {
