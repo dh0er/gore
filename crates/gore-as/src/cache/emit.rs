@@ -3335,6 +3335,8 @@ fn emit_function_ctor(
         pass_trace("restore_nested_tag_requirements", &rendered);
         let rendered = restore_named_character_key_constructors(&rendered, f, refs);
         pass_trace("restore_named_character_key_constructors", &rendered);
+        let rendered = restore_path_cost_and_score_conditions(&rendered, f, refs);
+        pass_trace("restore_path_cost_and_score_conditions", &rendered);
         let rendered = restore_linked_bool_guard_lifetimes(&rendered, f, refs);
         pass_trace("restore_linked_bool_guard_lifetimes", &rendered);
         let rendered = restore_temporary_vector_expression_lifetimes(&rendered, f, refs);
@@ -10868,6 +10870,106 @@ fn restore_named_character_key_constructors(body: &str, f: &Func, refs: &RefReso
         if let Some((old,new)) = edit { result = result.replacen(&old,&new,1); }
     }
     result
+}
+
+/// Keep path cost and short-circuit score products in their original evaluation order.
+fn restore_path_cost_and_score_conditions(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if !body.contains("UNavigationSystemV1::DoesPathExistWithinCostLimit(") { return body.to_owned(); }
+    let plain=|t:&super::types::DataType,token| t.token==token && t.type_info==0 && !t.is_reference && !t.is_object_handle
+        && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+    if !plain(&f.ret,0x41) {return body.to_owned();}
+    let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    let w=|i:&Instr,n|i.words.get(n).map(|v|*v as i16 as i32);
+    let p=|i:&Instr|i.qwords.first().map(|v|*v as i64);
+    let target=|i:&Instr|i.dwords.first().map(|v|i.offset_dw as i64+2+*v as i32 as i64);
+    let field=|i:&Instr,n| {
+        let id=*i.dwords.first()? as i32;let owner=refs.type_identity_by_id(id)?;
+        let (name,old)=refs.member_identity(id,w(i,n)?)?;
+        (refs.type_identity_by_id(old)?==owner && !owner.module.is_empty() && owner.namespace.is_empty()).then_some((owner,name))
+    };
+    let local=|slot,ptr| f.obj_locals.iter().filter(|(s,_)|*s==slot).map(|(_,t)|*t).eq([ptr]);
+    let native=|t:&super::types::DataType,name,reference,constant,handle| t.token==5 && !t.is_auto && !t.if_handle_then_const
+        && t.is_reference==reference && t.is_object_const==constant && t.is_object_handle==handle && t.is_read_only==(reference && constant)
+        && refs.type_identity_by_ptr(t.type_info).is_some_and(|i|i.name==name && i.module.is_empty() && i.namespace.is_empty());
+    let mut candidates=Vec::new();
+    for c in code.windows(50) {
+        let candidate=(|| {
+            if c.iter().map(|i|i.op.name).ne(["LoadThisR","RDR8","SetV8","MULd","dTOf","PshV4","PSF","PSF","PshVPtr","ADDSi","RDSPtr",
+                "CALLSYS","STOREOBJ","PshVPtr","CALLSYS","PSF","PshVPtr","ADDSi","RDSPtr","CALLSYS","STOREOBJ","PshVPtr",
+                "CALLSYS","CpyRtoV4","CpyVtoR1","JLowZ","PSF","PshVPtr","CALLSYS","PSF","ADDSi","ADDSi","PopRPtr",
+                "RDR1","CpyVtoR1","JLowNZ","SetV4","JMP","LoadRObjR","RDR8","LoadVObjR","RDR8","SetV8","MULd",
+                "CMPd","TS","CpyRtoV4","CpyVtoV4","CpyVtoR1","JLowZ"])
+                || c[2].qwords.first()!=Some(&2.0f64.to_bits()) || c[42].qwords.first()!=Some(&1.3f64.to_bits()) {return None;}
+            let (scalar,factor,narrow,guard,condition,left_scalar)=(w(&c[1],0)?,w(&c[2],0)?,w(&c[4],0)?,w(&c[23],0)?,w(&c[33],0)?,w(&c[39],0)?);
+            let scalars=[scalar,factor,narrow,guard,condition,left_scalar];
+            if scalars.iter().any(|s|*s<=0 || f.obj_locals.iter().any(|(slot,_)|slot==s)) || HashSet::from(scalars).len()!=6 {return None;}
+            let (path,nav,character,right,left)=(w(&c[6],0)?,w(&c[7],0)?,w(&c[12],0)?,w(&c[29],0)?,w(&c[38],0)?);
+            if [path,nav,character,right,left].iter().any(|s|*s<=0 || scalars.contains(s)) || HashSet::from([path,nav,character,right,left]).len()!=5
+                || [(3,scalar),(5,narrow),(8,0),(13,character),(15,nav),(16,0),(20,character),(21,character),(24,guard),
+                    (26,path),(27,-2),(34,condition),(36,condition),(40,right),(41,scalar),(42,factor),(43,scalar),(44,left_scalar),
+                    (46,guard),(47,condition),(48,condition)].iter().any(|(at,slot)|w(&c[*at],0)!=Some(*slot))
+                || w(&c[4],1)!=Some(scalar) || [3,43].iter().any(|at|w(&c[*at],1)!=Some(scalar) || w(&c[*at],2)!=Some(factor))
+                || w(&c[44],1)!=Some(scalar) || w(&c[47],1)!=Some(guard) || c[36].dwords.first()!=Some(&0)
+                || p(&c[11])!=p(&c[19]) {return None;}
+            let (get_self,nav_getter,cost,assign)=(p(&c[11])?,p(&c[14])?,p(&c[22])?,p(&c[28])?);
+            for (ptr,name,owner,method,constant) in [(get_self,"GetSelf",Some("UCharacterAIState"),true,true),
+                (nav_getter,"GetNavAgentLocation",Some("APawn"),true,true),(cost,"DoesPathExistWithinCostLimit",None,false,false),
+                (assign,"opAssign",Some("FVector"),true,false)] {
+                if refs.func_by_ptr(ptr)!=Some(name) || refs.func_owner_by_ptr(ptr)!=owner || refs.is_method_by_ptr(ptr)!=method
+                    || refs.is_const_method_by_ptr(ptr)!=constant {return None;}
+            }
+            if refs.func_ns_by_ptr(cost)!=Some("UNavigationSystemV1") || !matches!(refs.func_params_by_ptr(get_self),Some([]))
+                || !matches!(refs.func_params_by_ptr(nav_getter),Some([])) || !plain(refs.func_ret_by_ptr(cost)?,0x41)
+                || !native(refs.func_ret_by_ptr(get_self)?,"AGothicCharacter",false,false,true)
+                || !native(refs.func_ret_by_ptr(nav_getter)?,"FVector",false,false,false)
+                || !native(refs.func_ret_by_ptr(assign)?,"FVector",true,false,false)
+                || !matches!(refs.func_params_by_ptr(assign)?,[v] if native(v,"FVector",true,true,false))
+                || !matches!(refs.func_params_by_ptr(cost)?,[who,start,end,limit] if native(who,"AGothicCharacter",false,true,true)
+                    && native(start,"FVector",true,true,false) && native(end,"FVector",true,true,false) && plain(limit,0x50)) {return None;}
+            let vector=refs.func_ret_by_ptr(nav_getter)?.type_info;
+            if !local(path,vector) || !local(nav,vector) || !local(character,refs.func_ret_by_ptr(get_self)?.type_info) {return None;}
+            let output=f.params.first()?;
+            if output.name.is_empty() || !native(&output.ty,"FVector",true,false,false) {return None;}
+            let (owner,distance)=field(&c[0],0)?;let (combat_owner,combat)=field(&c[9],0)?;
+            let (score_owner,score)=field(&c[38],1)?;let (calculated_owner,calculated)=field(&c[30],0)?;let (valid_owner,valid)=field(&c[31],0)?;
+            if owner!=combat_owner || field(&c[17],0)?!=(combat_owner,combat) || field(&c[40],1)?!=(score_owner,score)
+                || score_owner!=calculated_owner || score_owner.module!=valid_owner.module
+                || refs.own_field_type_by_class(&owner.name,distance)!=Some("float")
+                || !refs.is_subclass(refs.own_field_type_by_class(&owner.name,combat)?,"UCharacterAIState")
+                || refs.own_field_type_by_class(&score_owner.name,score)!=Some("float")
+                || refs.own_field_type_by_class(&score_owner.name,calculated)!=Some(valid_owner.name.as_str())
+                || refs.own_field_type_by_class(&valid_owner.name,valid)!=Some("bool") {return None;}
+            let right_ptr=f.obj_locals.iter().find(|(s,_)|*s==right)?.1;
+            if !local(right,right_ptr) || refs.type_identity_by_ptr(right_ptr)!=Some(score_owner) || f.obj_locals.iter().any(|(s,_)|*s==left) {return None;}
+            let (outer,inner)=(target(&c[25])?,target(&c[49])?);
+            if target(&c[35])!=Some(c[38].offset_dw as i64) || target(&c[37])!=Some(c[48].offset_dw as i64)
+                || inner<=c[49].offset_dw as i64 || outer<=inner || [outer,inner].iter().any(|to|!code.iter().any(|i|i.offset_dw as i64==*to))
+                || code.iter().any(|i|i.op.name=="JMPP" || (i.op.name.starts_with('J') && target(i).is_some_and(|to|
+                    to>c[0].offset_dw as i64 && to<=c[49].offset_dw as i64 && i.offset_dw!=c[35].offset_dw && i.offset_dw!=c[37].offset_dw))) {return None;}
+            Some((scalar,guard,condition,path,right,left,output.name.as_str(),distance,combat,calculated,valid,score))
+        })();
+        if let Some(candidate)=candidate {candidates.push(candidate);}
+    }
+    let [(scalar,guard,condition,path,right,left,output,distance,combat,calculated,valid,score)]=candidates.as_slice() else {return body.to_owned();};
+    if [(scalar,8),(guard,2),(condition,6)].iter().any(|(s,n)|count_ident(body,&format!("local_{s}"))!=*n) {return body.to_owned();}
+    let lines:Vec<_>=body.lines().collect();let mut edits=Vec::new();
+    for (at,c) in lines.windows(19).enumerate() {
+        let pad=indent_of(c[0]);let nested=format!("{pad}    ");let deep=format!("{nested}    ");
+        let call=format!("UNavigationSystemV1::DoesPathExistWithinCostLimit(this.{combat}.GetSelf(), this.{combat}.GetSelf().GetNavAgentLocation(), local_{path}, float32(local_{scalar}))");
+        let expected=[format!("{pad}float local_{scalar} = this.{distance};"),format!("{pad}local_{scalar} = local_{scalar} * 2.0;"),
+            format!("{pad}bool local_{guard} = {call};"),format!("{pad}if (local_{guard})"),format!("{pad}{{"),format!("{nested}bool local_{condition};"),
+            format!("{nested}{output} = local_{path};"),format!("{nested}local_{condition} = local_{right}.{calculated}.{valid};"),
+            format!("{nested}if (!(local_{condition}))"),format!("{nested}{{"),format!("{deep}local_{condition} = false;"),format!("{nested}}}"),
+            format!("{nested}else"),format!("{nested}{{"),format!("{deep}local_{scalar} = local_{right}.{score};"),
+            format!("{deep}local_{scalar} = local_{scalar} * 1.3;"),format!("{deep}local_{condition} = (local_{left}.{score} < local_{scalar});"),
+            format!("{nested}}}"),format!("{nested}if (local_{condition})")];
+        if c.iter().copied().ne(expected.iter().map(String::as_str)) {continue;}
+        let call=call.replace(&format!("float32(local_{scalar})"),&format!("float32((this.{distance} * 2.0))"));
+        edits.push((at,format!("{pad}if ({call})\n{pad}{{\n{nested}{output} = local_{path};\n{nested}if (local_{right}.{calculated}.{valid} && (local_{left}.{score} < (local_{right}.{score} * 1.3)))")));
+    }
+    let [(at,replacement)]=edits.as_slice() else {return body.to_owned();};
+    let mut out=lines[..*at].iter().map(|s|(*s).to_owned()).collect::<Vec<_>>();out.push(replacement.clone());out.extend(lines[at+19..].iter().map(|s|(*s).to_owned()));
+    let mut out=out.join("\n");if body.ends_with('\n') {out.push('\n');}out
 }
 
 /// Preserve the linked bool lifetimes of early guards, two named chains and a final negation.
@@ -47458,6 +47560,49 @@ mod literal_value_lifetime_tests {
         let mut shifted=f.clone();shifted.obj_locals=vec![(13,10),(18,10)];
         for i in &code {if i.op.name=="PSF" {shifted.bytecode[i.offset_dw]+=10<<16;}}
         assert_eq!(fold(&body.replace("local_8","local_18"),&shifted,&refs),expected.replace("local_8","local_18"));
+    }
+
+    #[test]
+    fn path_cost_and_score_conditions_keep_expression_lifetimes() {
+        let mut f=function(&[("LoadThisR",&[64]),("RDR8",&[4]),("SetV8",&[78]),("MULd",&[4,4,78]),("dTOf",&[19,4]),("PshV4",&[19]),
+            ("PSF",&[76]),("PSF",&[16]),("PshVPtr",&[0]),("ADDSi",&[40]),("RDSPtr",&[]),("CALLSYS",&[]),("STOREOBJ",&[10]),
+            ("PshVPtr",&[10]),("CALLSYS",&[]),("PSF",&[16]),("PshVPtr",&[0]),("ADDSi",&[40]),("RDSPtr",&[]),("CALLSYS",&[]),
+            ("STOREOBJ",&[10]),("PshVPtr",&[10]),("CALLSYS",&[]),("CpyRtoV4",&[51]),("CpyVtoR1",&[51]),("JLowZ",&[]),
+            ("PSF",&[76]),("PshVPtr",&[65534]),("CALLSYS",&[]),("PSF",&[50]),("ADDSi",&[8]),("ADDSi",&[16]),("PopRPtr",&[]),
+            ("RDR1",&[81]),("CpyVtoR1",&[81]),("JLowNZ",&[]),("SetV4",&[81]),("JMP",&[]),("LoadRObjR",&[66,0]),("RDR8",&[80]),
+            ("LoadVObjR",&[50,0]),("RDR8",&[4]),("SetV8",&[78]),("MULd",&[4,4,78]),("CMPd",&[80,4]),("TS",&[]),
+            ("CpyRtoV4",&[51]),("CpyVtoV4",&[81,51]),("CpyVtoR1",&[81]),("JLowZ",&[]),("CpyVtoR1",&[81]),("CpyVtoR1",&[81]),("RET",&[0])]);
+        f.ret=DataType{token:0x41,..Default::default()};f.obj_locals=vec![(10,2),(16,1),(50,4),(76,1)];
+        f.params=vec![super::super::model::Param{name:"Destination".into(),ty:DataType{token:5,type_info:1,is_reference:true,..Default::default()},flags:3}];
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,id) in [(0,3),(9,3),(11,10),(14,11),(17,3),(19,10),(22,12),(28,13),(30,4),(31,5)] {f.bytecode[code[at].offset_dw+1]=id;}
+        for at in [38,40] {f.bytecode[code[at].offset_dw+2]=4;}
+        for (at,value) in [(2,2.0f64),(42,1.3f64)] {let bits=value.to_bits();let offset=code[at].offset_dw;f.bytecode[offset+1]=bits as i32;f.bytecode[offset+2]=(bits>>32) as i32;}
+        for (at,to) in [(25,52),(35,38),(37,48),(49,51)] {f.bytecode[code[at].offset_dw+1]=code[to].offset_dw as i32-code[at].offset_dw as i32-2;}
+        let body="    float local_4 = this.Distance;\n    local_4 = local_4 * 2.0;\n    bool local_51 = UNavigationSystemV1::DoesPathExistWithinCostLimit(this.State.GetSelf(), this.State.GetSelf().GetNavAgentLocation(), local_76, float32(local_4));\n    if (local_51)\n    {\n        bool local_81;\n        Destination = local_76;\n        local_81 = local_50.Calculated.Valid;\n        if (!(local_81))\n        {\n            local_81 = false;\n        }\n        else\n        {\n            local_4 = local_50.Score;\n            local_4 = local_4 * 1.3;\n            local_81 = (local_66.Score < local_4);\n        }\n        if (local_81)\n        {\n            return false;\n        }\n        Use(Destination);\n    }\n";
+        let expected="    if (UNavigationSystemV1::DoesPathExistWithinCostLimit(this.State.GetSelf(), this.State.GetSelf().GetNavAgentLocation(), local_76, float32((this.Distance * 2.0))))\n    {\n        Destination = local_76;\n        if (local_50.Calculated.Valid && (local_66.Score < (local_50.Score * 1.3)))\n        {\n            return false;\n        }\n        Use(Destination);\n    }\n";
+        let refs=RefResolver::from_test_path_score_conditions(0);
+        let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_path_cost_and_score_conditions(s,f,r);
+        assert_eq!(fold(body,&f,&refs),expected);assert_eq!(fold(expected,&f,&refs),expected);
+        for fault in 1..=13 {assert_eq!(fold(body,&f,&RefResolver::from_test_path_score_conditions(fault)),body,"metadata {fault}");}
+        for (at,word) in [(3,0),(4,1),(5,0),(6,0),(7,0),(8,0),(9,0),(12,0),(13,0),(15,0),(16,0),(17,0),(20,0),(21,0),
+            (24,0),(26,0),(27,0),(29,0),(30,0),(31,0),(34,0),(36,0),(38,0),(38,1),(39,0),(40,0),(40,1),(41,0),(42,0),(43,0),(43,1),(43,2),(44,1),(46,0),(47,1),(48,0)] {
+            let mut bad=f.clone();let offset=code[at].offset_dw;if word==0 {bad.bytecode[offset]^=8<<16;} else {bad.bytecode[offset+1]^=8<<((word-1)*16);}
+            assert_eq!(fold(body,&bad,&refs),body,"operand {at}:{word}");
+        }
+        for at in [2,25,35,36,37,42,49] {let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1]+=1;assert_eq!(fold(body,&bad,&refs),body,"constant/target {at}");}
+        let mut bad=f.clone();bad.obj_locals.push((50,4));assert_eq!(fold(body,&bad,&refs),body);
+        let mut bad=f.clone();bad.params[0].ty.is_object_const=true;assert_eq!(fold(body,&bad,&refs),body);
+        for bad in [format!("{body}    Use(local_4);\n"),format!("{body}    Use(local_51);\n"),format!("{body}    Use(local_81);\n"),
+            body.replace("local_81 = false;","local_81 = SideEffect();"),body.replace("Destination = local_76;","Destination = Other();"),
+            body.replace("local_66.Score < local_4","local_4 < local_66.Score"),body.replace("float32(local_4)","float32(Other())")] {assert_eq!(fold(&bad,&f,&refs),bad);}
+        let mut shifted=f.clone();for (slot,_) in &mut shifted.obj_locals {*slot+=100;}
+        for i in &code {for (n,slot) in i.words.iter().enumerate() {
+            if *slot==0 || (*slot as i16)<0 || (n==0 && matches!(i.op.name,"LoadThisR"|"ADDSi")) || (n==1 && matches!(i.op.name,"LoadRObjR"|"LoadVObjR")) {continue;}
+            if n==0 {shifted.bytecode[i.offset_dw]+=100<<16;} else {shifted.bytecode[i.offset_dw+1]+=100<<((n-1)*16);}
+        }}
+        let shift=|s:&str|[4,50,51,66,76,81].iter().fold(s.to_owned(),|s,slot|s.replace(&format!("local_{slot}"),&format!("local_{}",slot+100)));
+        assert_eq!(fold(&shift(body),&shifted,&refs),shift(expected));
     }
 
     #[test]

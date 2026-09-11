@@ -5837,6 +5837,50 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_path_score_conditions(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"FVector",""),(2,"AGothicCharacter",""),(3,"UHost","Fixture"),(4,"FScored","Fixture"),(5,"FCalculated","Fixture")] {
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:module.into(),namespace:String::new()});
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32,ptr);
+        }
+        for (id,offset,name) in [(3,64,"Distance"),(3,40,"State"),(4,8,"Calculated"),(4,0,"Score"),(5,16,"Valid")] {
+            let key=((id as i64)<<1)|((offset as i64)<<33)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id);
+        }
+        for (owner,name,ty) in [("UHost","Distance","float"),("UHost","State","UState"),("FScored","Calculated","FCalculated"),("FScored","Score","float"),("FCalculated","Valid","bool")] {
+            r.class_fields.entry(owner.into()).or_default().insert(name.into(),ty.into());
+        }
+        r.class_super.insert("UState".into(),"UCharacterAIState".into());
+        let vector=DataType{token:5,type_info:1,..Default::default()};
+        let reference=DataType{is_reference:true,is_object_const:true,is_read_only:true,..vector.clone()};
+        let character=DataType{token:5,type_info:2,is_object_handle:true,..Default::default()};
+        for (ptr,name,ret,args,owner) in [(10,"GetSelf",character.clone(),vec![],Some("UCharacterAIState")),
+            (11,"GetNavAgentLocation",vector.clone(),vec![],Some("APawn")),
+            (12,"DoesPathExistWithinCostLimit",DataType{token:0x41,..Default::default()},vec![DataType{is_object_const:true,..character},reference.clone(),reference.clone(),DataType{token:0x50,..Default::default()}],None),
+            (13,"opAssign",DataType{is_reference:true,..vector},vec![reference],Some("FVector"))] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            if let Some(owner)=owner {r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);}
+        }
+        r.const_method_ptrs.extend([10,11]);r.func_ns.insert(12,"UNavigationSystemV1".into());
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into(),
+            2=>r.type_identity_by_ptr.get_mut(&2).unwrap().namespace="Other".into(),
+            3=>{r.func_ns.insert(12,"Other".into());},
+            4=>{r.const_method_ptrs.remove(&10);},
+            5=>r.func_ret.get_mut(&11).unwrap().is_reference=true,
+            6=>r.func_params.get_mut(&12).unwrap()[3].token=0x51,
+            7=>r.func_params.get_mut(&13).unwrap()[0].is_read_only=false,
+            8=>{r.class_fields.get_mut("FScored").unwrap().insert("Score".into(),"float32".into());},
+            9=>{r.class_super.insert("UState".into(),"UObject".into());},
+            10=>{r.duplicate_prop_keys.insert((64i64<<33)|7);},
+            11=>{r.prop_type_id.insert((8i64<<33)|9,5);},
+            12=>r.type_identity_by_ptr.get_mut(&5).unwrap().module="Other".into(),
+            13=>r.func_params.get_mut(&12).unwrap()[0].is_object_const=false,
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_linked_bool_guards(fault: u8) -> Self {
         let mut r=Self::from_test_named_character_keys(0);
         let boolean=DataType {token:0x41,..Default::default()};
