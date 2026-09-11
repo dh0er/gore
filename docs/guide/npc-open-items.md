@@ -99,6 +99,12 @@ surrounding room public; the hut belongs to Digger26_531.
 
 ## 3. Natural voice triggers — in progress
 
+The 0.1.1 batch setup displayed ready but left Hero and A at the tower's upper
+starting point. Its teleport calls came after `EndConversation`; 0.1.2 moves
+them before the conversation ends, using the tested head-setup order. Retest
+the actual relocation before interpreting silence as a voice-system result.
+See the [setup correction](../../scripts/fixtures/npc-batch-tests/voice/setup-fix.json).
+
 - [ ] Demonstrate naturally triggered everyday/routine lines on a new NPC.
 - [x] Observe a naturally triggered trespassing warning spoken by invented B.
 - [x] Observe B's natural threat warning with voice and cleanup after the first warning (bare fists).

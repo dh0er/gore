@@ -1,9 +1,11 @@
 # Natuerliche Stimmen: Annaeherung und Alltag
 
-Status: **0.1.1 aktiv**, nachdem der Kopf-/Barttest 0.1.3 bestanden wurde;
-natuerliche Begruessung und Alltag sind noch nicht im Spiel geprueft.
-Die [Aktivierung](deployment-after-heads.json) verwendet das bereits gepruefte,
-unveraenderte Tageslichtpaket. Ausgangspunkt ist **Profil 4,
+Status: **Aufbaukorrektur 0.1.2**, nachdem 0.1.1 zwar „04 Bereit“ anzeigte,
+aber Held und A oben am Turm stehen liess. Der Sprachtest ist damit noch offen.
+Die [Korrektur und Aktivierung](setup-fix.json) verschiebt die Teleports vor
+`EndConversation`, entsprechend dem bereits bestandenen Kopf-Aufbau.
+Der [erste Sprachversuch](runtime-setup-0.1.1.json) bleibt dokumentiert.
+Ausgangspunkt ist **Profil 4,
 Slot 066, „NPC 02 Voice - START“**, die vorbereitete Kopie des inzwischen archivierten Slots
 030. Andere Testmods werden einzeln getestet. Diese Variante
 enthaelt weiterhin Bs Warnungsreparatur aus 0.1.12.
@@ -17,12 +19,17 @@ auch dieser Teil bei Tageslicht stattfindet.
 
 ## Ablauf
 
-1. A ansprechen, **01 Natuerliche Stimmen: Aufbau mit B und C** waehlen.
+1. Spiel vollstaendig neu starten und den unveraenderten START066 laden.
+   A ansprechen, **01 Natuerliche Stimmen: Aufbau mit B und C** waehlen.
    Der Aufbau setzt 12:00 Uhr. Held, A, B und C stehen danach draussen am Xardas-Turm. C steht etwas
    oberhalb von A, B unterhalb. A hat danach die Bereitschaftszeile **04**.
    Falls stattdessen „C schon vorhanden“ erscheint, den Ausgangsspielstand 066
    laden. Der Aufbau erzeugt C nur einmal; erneuter Aufbau mit unserem eigenen C
    ist erlaubt. Er ersetzt keinen fremden C aus einem aelteren Teststand.
+   **Zuerst den tatsaechlichen Ortswechsel pruefen:** Held und A muessen unten
+   vor dem Turm stehen. „04 Bereit“ allein ist kein Nachweis dafuer. Wenn der
+   Ortswechsel ausbleibt, als „npc voice - aufbaufehler“ speichern und abbrechen;
+   die Wartepruefungen erst nach erfolgreichem Aufbau beginnen.
 2. **Vor der ersten Annaeherung** einen neuen Spielstand
    **„npc natuerlich - start“** anlegen. Nicht 066 ueberschreiben.
 3. Mit leeren, gesenkten Haenden auf **B** zugehen. Ihn nicht ansprechen.

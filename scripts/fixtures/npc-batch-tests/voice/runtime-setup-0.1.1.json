@@ -1,0 +1,29 @@
+{
+  "schema": "gore.npc-batch.voice-setup-runtime.v1",
+  "date": "2026-09-11",
+  "bundle": "NpcNaturalVoiceTest",
+  "version": "0.1.1",
+  "passed": false,
+  "user_report": "aufbau funktioniert net, steh weiterhin oben am turm bei a.",
+  "user_follow_up": "04 Bereit: B Diego, C Lares was visible, as were02/03",
+  "finding": "Setup reaches its ready marker, but the Hero/A teleport calls were placed after EndConversation. The tested head setup performs those operations before ending the conversation.",
+  "baseline": {
+    "slot": "G1R-066",
+    "name": "NPC 02 Voice - START",
+    "sha256": "553c7a9e4d2fafd5d0e444d669642e89ec3d38640e125a063af0aa0df9785ba5",
+    "profile_id": 2,
+    "displayed_profile": 4,
+    "A_present": true,
+    "B_present": true,
+    "C_present": false,
+    "ready_flag_present": false,
+    "unchanged_since_daylight_preparation": true,
+    "inspection_report": {
+      "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\voice\\runtime-setup-review-20260911T180842Z\\066-summary.json",
+      "sha256": "99be814da376d68a7f9422299bfac2f582f0ee6f23a7d35f43853b8e5f55a17e"
+    }
+  },
+  "failed_runtime_save_available": false,
+  "voice_result": "Not evaluated: first establish visible successful setup.",
+  "correction": "0.1.2 moves Hero teleport and finally A routine/teleport before EndConversation; no speech requests or voice selection changes. Runtime retest pending."
+}

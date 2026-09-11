@@ -9,11 +9,12 @@ die Save-Bereinigung und `7ac45595` die benoetigte native API-Komposition.
 Siehe [Build-/Paketpruefung](build-checks.json) und
 [veroeffentlichte Startstaende](start-saves.json).
 
-**Aktiv ist NpcNaturalVoiceTest 0.1.1**; Manager-Status `in_sync`.
+**Aktiv ist NpcNaturalVoiceTest 0.1.2**; Manager-Status `in_sync`.
 Kopf-Test und Barttexturen sind nach dem bestandenen
 [Barttest 0.1.3](heads/beard-runtime-0.1.3.json) deaktiviert. Die anderen
 Testpakete bleiben deaktiviert. Die aktuelle Aktivierung steht im
-[Sprach-Deploymentbericht](voice/deployment-after-heads.json).
+[Bericht zur Aufbaukorrektur](voice/setup-fix.json). In0.1.1 blieb der Ortswechsel
+von Held und A trotz „04 Bereit“ aus; die Teleports stehen nun vor dem Gespraechsende.
 Der fehlgeschlagene [Barttest 0.1.2](heads/beard-runtime-0.1.2.json) und die
 [VT-Build-](beard-vt-build-checks.json) / [Deploymentbelege](beard-vt-deployment.json)
 bleiben als Historie erhalten.
@@ -51,8 +52,10 @@ Alle acht START-Saves stehen jetzt auf 12:00 Uhr; der [Tageslichtbericht](daylig
 haelt die Aenderung mit Backups fest. Kopf- und Sprach-Aufbau setzen ebenfalls
 Mittag. Beim Sprachtest liegen die optionalen Wechsel jetzt bei 14:00/16:00 Uhr.
 
-066 laden und bei A **01 Natuerliche Stimmen: Aufbau mit B und C** waehlen.
-Erst vor der Annaeherung speichern, dann B und C ohne Dialog annaehern.
+Nach vollstaendigem Neustart066 laden und bei A
+**01 Natuerliche Stimmen: Aufbau mit B und C** waehlen. Zuerst pruefen, dass
+Held und A unten vor dem Turm stehen; erst dann vor der Annaeherung speichern
+und B und C ohne Dialog annaehern.
 Die [Stimmenliste](voice/README.md) trennt Begruessung, selbststaendiges Murmeln
 und Neustart. Sie enthaelt klare Beobachtungsfristen; Stille ist ein Ergebnis.
 
