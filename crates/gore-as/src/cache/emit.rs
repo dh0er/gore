@@ -3341,6 +3341,8 @@ fn emit_function_ctor(
         pass_trace("fold_weak_forward_sum", &rendered);
         let rendered = fold_reused_vector_product(&rendered, f, refs);
         pass_trace("fold_reused_vector_product", &rendered);
+        let rendered = restore_named_actor_cast(&rendered, f, refs, is_method);
+        pass_trace("restore_named_actor_cast", &rendered);
         let rendered = restore_vector_return_lifetimes(&rendered, f, refs);
         pass_trace("restore_vector_return_lifetimes", &rendered);
         s.truncate(declarations_at);
@@ -10979,6 +10981,84 @@ fn fold_reused_vector_product(body:&str, f:&Func, refs:&RefResolver)->String {
     }
     let mut result=out.join("\n");if body.ends_with('\n') {result.push('\n');}result
 }
+/// Preserve the named actor before a native character cast when the original
+/// object table retains its otherwise unused actor local. Inlining that source
+/// changes which earlier character temporary the compiler reuses after the cast.
+fn restore_named_actor_cast(body: &str, f: &Func, refs: &RefResolver, is_method: bool) -> String {
+    if f.ret.token != 0x41 || f.ret.is_reference || !body.contains("Cast<AGothicCharacter>")
+        || !body.contains(".GetTargetedActor()") { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+    let slots = super::model::param_slot_map(&params, is_method, false, Some(refs));
+    let word = |i: &Instr| i.words.first().map(|v| *v as i16 as i32);
+    let ptr = |i: &Instr| i.qwords.first().map(|v| *v as i64);
+    let jump = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+    let mut edits = Vec::new();
+    for (at, c) in code.windows(18).enumerate() {
+        let edit = (|| {
+            if c.iter().map(|i| i.op.name).ne(["PshGPtr", "PshVPtr", "ADDSi", "CALLSYS", "STOREOBJ", "PshVPtr", "CALLSYS", "STOREOBJ", "CmpPtrNull", "JZ", "TYPEID", "PSF", "PshVPtr", "CALLSYS", "JMP", "ClrVPtr", "PshVPtr", "RefCpyV"]) { return None; }
+            let (receiver, actor, cast, target) = (word(&c[4])?, word(&c[7])?, word(&c[11])?, word(&c[17])?);
+            if [receiver, actor, cast, target].iter().any(|s| *s <= 0)
+                || HashSet::from([receiver, actor, cast, target]).len() != 4
+                || [(5,receiver),(8,actor),(12,actor),(15,cast),(16,cast)].iter().any(|(n,s)| word(&c[*n]) != Some(*s))
+                || jump(&c[9]) != Some(c[15].offset_dw as i64) || jump(&c[14]) != Some(c[16].offset_dw as i64) { return None; }
+            let object = |slot| { let mut locals = f.obj_locals.iter().filter(|(s,_)| *s == slot);
+                let ty = locals.next()?.1; locals.next().is_none().then(|| refs.type_identity_by_ptr(ty)).flatten() };
+            let character = object(receiver)?; let actor_type = object(actor)?;
+            if character.name != "AGothicCharacter" || actor_type.name != "AActor"
+                || [character,actor_type].iter().any(|t| !t.module.is_empty() || !t.namespace.is_empty())
+                || object(cast)? != character || object(target)? != character { return None; }
+            let actors: Vec<_> = f.obj_locals.iter().filter(|(_,t)| refs.type_identity_by_ptr(*t) == Some(actor_type)).map(|(s,_)| *s).collect();
+            if actors.len() != 2 { return None; }
+            let named = *actors.iter().find(|s| **s != actor)?;
+            if named <= 0 || object(named)? != actor_type || code.iter().any(|i| super::bytediff::addressed_slots(i).contains(&named))
+                || code.iter().enumerate().filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&actor)).map(|(n,_)| n).ne([at+7,at+8,at+12]) { return None; }
+            let (get_character, get_actor, op_cast) = (ptr(&c[3])?, ptr(&c[6])?, ptr(&c[13])?);
+            for (p,name,owner) in [(get_character,"GetCharacter","FPerceivedAgent"),(get_actor,"GetTargetedActor","AGothicCharacter"),(op_cast,"opCast","UObject")] {
+                if refs.func_by_ptr(p) != Some(name) || refs.func_owner_by_ptr(p) != Some(owner)
+                    || !refs.is_method_by_ptr(p) || !refs.is_const_method_by_ptr(p) { return None; }
+            }
+            let handle = |t: &super::types::DataType| t.token == 5 && t.is_object_handle && !t.is_reference && !t.is_object_const && !t.is_read_only;
+            let char_ret = refs.func_ret_by_ptr(get_character)?; let actor_ret = refs.func_ret_by_ptr(get_actor)?;
+            if !handle(char_ret) || !handle(actor_ret) || refs.type_identity_by_ptr(char_ret.type_info)? != character
+                || refs.type_identity_by_ptr(actor_ret.type_info)? != actor_type || !refs.func_params_by_ptr(get_actor)?.is_empty() { return None; }
+            let [context] = refs.func_params_by_ptr(get_character)? else { return None; };
+            let context_type = refs.type_identity_by_ptr(context.type_info)?;
+            if context.token != 5 || !context.is_object_handle || !context.is_object_const || context.is_reference || context.is_read_only
+                || context_type.name != "UObject" || !context_type.module.is_empty() || !context_type.namespace.is_empty()
+                || refs.global_by_ptr(ptr(&c[0])?) != Some("__WorldContext") { return None; }
+            let [argument] = refs.func_params_by_ptr(op_cast)? else { return None; };
+            let cast_ret = refs.func_ret_by_ptr(op_cast)?;
+            if cast_ret.token != 0x52 || cast_ret.type_info != 0 || cast_ret.is_reference || cast_ret.is_object_handle
+                || argument.token != 0x3b || argument.type_info != 0 || !argument.is_reference || argument.is_object_handle
+                || argument.is_object_const || argument.is_read_only { return None; }
+            let tid = *c[10].dwords.first()? as i32;
+            if tid & 0x6000_0000 != 0x4000_0000 || refs.type_identity_by_id(tid & !0x6000_0000)? != character { return None; }
+            let index = *slots.get(&word(&c[1])?)?; let param = &f.params[index];
+            let owner = refs.type_identity_by_ptr(param.ty.type_info)?;
+            let field_id = *c[2].dwords.first()? as i32; let (field,old) = refs.member_identity(field_id,word(&c[2])?)?;
+            if param.ty.token != 5 || !param.ty.is_reference || param.ty.is_object_handle
+                || owner.name != "FRememberedPerception" || !owner.module.is_empty() || !owner.namespace.is_empty()
+                || refs.type_identity_by_id(field_id)? != owner || refs.type_identity_by_id(old)? != owner
+                || refs.native_field_value_type(&owner.name,field) != Some("FPerceivedAgent") { return None; }
+            if code.iter().enumerate().any(|(n,i)| i.op.name == "JMPP" ||
+                (i.op.name.starts_with('J') && ![at+9,at+14].contains(&n) && jump(i).is_some_and(|to|
+                    to > c[0].offset_dw as i64 && to <= c[17].offset_dw as i64))) { return None; }
+            let parameter = if param.name.is_empty() { format!("arg{index}") } else { param.name.clone() };
+            let expression = format!("{parameter}.{field}.GetCharacter().GetTargetedActor()");
+            let name = format!("local_{named}");
+            let expected = format!("AGothicCharacter local_{target} = (Cast<AGothicCharacter>({expression}));");
+            let lines: Vec<_> = body.lines().filter(|l| l.trim() == expected).collect();
+            if lines.len() != 1 || count_ident(body,&name) != 0 { return None; }
+            let indent = indent_of(lines[0]);
+            Some((lines[0].to_owned(), format!("{indent}AActor {name} = {expression};\n{indent}AGothicCharacter local_{target} = (Cast<AGothicCharacter>({name}));")))
+        })();
+        if let Some(edit) = edit { edits.push(edit); }
+    }
+    if let [(old,new)] = edits.as_slice() { body.replacen(old,new,1) } else { body.to_owned() }
+}
+
+
 /// Keep unused entry values and a named sum alive through a native vector return copy.
 fn restore_vector_return_lifetimes(body:&str, f:&Func, refs:&RefResolver)->String {
     let vector=f.ret.type_info;
@@ -46714,6 +46794,42 @@ mod literal_value_lifetime_tests {
         let mut bad = f.clone(); bad.bytecode.extend(function(&[("SetV4", &[94])]).bytecode); assert_eq!(fold(body, &bad, &refs), body);
         let mut bad = f.clone(); let start = bad.bytecode.len(); let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[10].offset_dw as i32 - start as i32 - 2; bad.bytecode.extend(jump); assert_eq!(fold(body, &bad, &refs), body);
         for bad in [body.replace("local_94_2", "local_94_3"), body.replace("local_38.Last()", "local_40.Last()"), format!("{body}{body}")] { assert_eq!(fold(&bad, &f, &refs), bad); }
+    }
+
+    #[test]
+    fn named_actor_before_character_cast_preserves_temporary_reuse() {
+        let mut f = function(&[("PshGPtr",&[]),("PshVPtr",&[0]),("ADDSi",&[0]),("CALLSYS",&[]),
+            ("STOREOBJ",&[4]),("PshVPtr",&[4]),("CALLSYS",&[]),("STOREOBJ",&[16]),("CmpPtrNull",&[16]),
+            ("JZ",&[]),("TYPEID",&[]),("PSF",&[14]),("PshVPtr",&[16]),("CALLSYS",&[]),("JMP",&[]),
+            ("ClrVPtr",&[14]),("PshVPtr",&[14]),("RefCpyV",&[20]),("RET",&[2])]);
+        f.ret = DataType {token:0x41,..Default::default()};
+        f.params = vec![super::super::model::Param {name:"Perception".into(),ty:DataType {token:5,type_info:4,is_reference:true,..Default::default()},flags:0}];
+        f.obj_locals = vec![(4,1),(14,1),(20,1),(16,2),(18,2)];
+        let c = disassemble(&f.bytecode).unwrap();
+        for (at,value) in [(0,40),(2,4),(3,10),(6,20),(10,0x40000001),(13,30)] { f.bytecode[c[at].offset_dw+1] = value; }
+        for (at,to) in [(9,15),(14,16)] { f.bytecode[c[at].offset_dw+1] = c[to].offset_dw as i32-c[at].offset_dw as i32-2; }
+        let body = "    AGothicCharacter local_20 = (Cast<AGothicCharacter>(Perception.Origin.GetCharacter().GetTargetedActor()));\n    return local_20 != nullptr;\n";
+        let expected = "    AActor local_18 = Perception.Origin.GetCharacter().GetTargetedActor();\n    AGothicCharacter local_20 = (Cast<AGothicCharacter>(local_18));\n    return local_20 != nullptr;\n";
+        let refs = RefResolver::from_test_named_actor_cast(0);
+        let fold = |s:&str,f:&Func,r:&RefResolver| super::restore_named_actor_cast(s,f,r,false);
+        assert_eq!(fold(body,&f,&refs),expected); assert_eq!(fold(expected,&f,&refs),expected);
+        for fault in 1..=14 { assert_eq!(fold(body,&f,&RefResolver::from_test_named_actor_cast(fault)),body,"metadata {fault}"); }
+        for at in [1,4,5,7,8,11,12,15,16,17] {
+            let mut bad=f.clone(); bad.bytecode[c[at].offset_dw] ^= 2<<16; assert_eq!(fold(body,&bad,&refs),body,"slot {at}");
+        }
+        for at in [9,10,14] { let mut bad=f.clone(); bad.bytecode[c[at].offset_dw+1] += 1; assert_eq!(fold(body,&bad,&refs),body); }
+        let mut bad=f.clone(); bad.obj_locals.push((18,2)); assert_eq!(fold(body,&bad,&refs),body);
+        let mut bad=f.clone(); bad.obj_locals.retain(|(s,_)| *s != 18); assert_eq!(fold(body,&bad,&refs),body);
+        let mut bad=f.clone(); bad.bytecode.extend(function(&[("PshVPtr",&[18])]).bytecode); assert_eq!(fold(body,&bad,&refs),body);
+        let mut bad=f.clone(); bad.bytecode.extend(function(&[("PshVPtr",&[16])]).bytecode); assert_eq!(fold(body,&bad,&refs),body);
+        let mut bad=f.clone(); let j=bad.bytecode.len(); bad.bytecode.extend(function(&[("JMP",&[])]).bytecode);
+        bad.bytecode[j+1]=c[6].offset_dw as i32-j as i32-2; assert_eq!(fold(body,&bad,&refs),body);
+        for bad in [format!("{body}{body}"),format!("{body}    AActor local_18;\n"),body.replace("Origin","Other")] { assert_eq!(fold(&bad,&f,&refs),bad); }
+        let mut renamed=f.clone(); renamed.params[0].name="Memory".into(); renamed.obj_locals.last_mut().unwrap().0=28;
+        assert_eq!(fold(&body.replace("Perception","Memory"),&renamed,&refs),expected.replace("Perception","Memory").replace("local_18","local_28"));
+        // Parameter slots follow the actual frame layout, including method receivers.
+        let mut method=f.clone(); method.bytecode[c[1].offset_dw]=(method.bytecode[c[1].offset_dw] as u32 & 0xffff | 0xfffe0000) as i32;
+        assert_eq!(super::restore_named_actor_cast(body,&method,&refs,true),expected);
     }
 
     #[test]

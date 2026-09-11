@@ -5678,6 +5678,46 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_named_actor_cast(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (p,name) in [(1,"AGothicCharacter"),(2,"AActor"),(3,"UObject"),(4,"FRememberedPerception"),(5,"FPerceivedAgent")] {
+            r.type_by_ptr.insert(p,name.into()); r.typeid_to_ptr.insert(p as i32,p);
+            r.type_identity_by_ptr.insert(p,TypeIdentity { name:name.into(),module:String::new(),namespace:String::new() });
+        }
+        r.prop_by_key.insert(9,"Origin".into()); r.prop_type_id.insert(9,4);
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&[("FRememberedPerception","Origin",if fault == 1 { "FOther" } else { "FPerceivedAgent" })],&[],None));
+        let character = DataType { token:5,type_info:1,is_object_handle:true,..Default::default() };
+        let actor = DataType { type_info:2,..character.clone() };
+        let context = DataType { type_info:3,is_object_const:true,..character.clone() };
+        for (p,name,owner,ret,params) in [
+            (10,"GetCharacter","FPerceivedAgent",character,vec![context]),
+            (20,"GetTargetedActor","AGothicCharacter",actor,vec![]),
+            (30,"opCast","UObject",DataType {token:0x52,..Default::default()},vec![DataType {token:0x3b,is_reference:true,..Default::default()}]),
+        ] {
+            r.func_by_ptr.insert(p,name.into()); r.func_owner.insert(p,owner.into()); r.func_ret.insert(p,ret);
+            r.func_params.insert(p,params); r.func_is_method.insert(p); r.const_method_ptrs.insert(p);
+        }
+        r.global_by_ptr.insert(40,"__WorldContext".into());
+        match fault {
+            2 => { r.duplicate_prop_keys.insert(9); },
+            3 => { r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(); },
+            4 => { r.type_identity_by_ptr.get_mut(&2).unwrap().namespace = "Other".into(); },
+            5 => { r.func_ret.get_mut(&10).unwrap().is_reference = true; },
+            6 => { r.func_ret.get_mut(&20).unwrap().type_info = 1; },
+            7 => { r.func_owner.insert(20,"OtherActor".into()); },
+            8 => { r.const_method_ptrs.remove(&30); },
+            9 => { r.func_params.get_mut(&30).unwrap()[0].is_reference = false; },
+            10 => { r.func_params.get_mut(&10).unwrap()[0].is_object_const = false; },
+            11 => { r.global_by_ptr.insert(40,"OtherContext".into()); },
+            12 => { r.func_params.get_mut(&20).unwrap().push(DataType::default()); },
+            13 => { r.func_ret.get_mut(&30).unwrap().is_reference = true; },
+            14 => { r.func_is_method.remove(&10); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_second_navigation_default(fault: u8) -> Self {
         let mut r = Self::default();
         for (ptr,name,module) in [(1,"FVector",""),(2,"AGothicCharacter",""),(3,"FString",""),(4,"UHost","Fixture"),(5,"UCombat","Fixture")] {
