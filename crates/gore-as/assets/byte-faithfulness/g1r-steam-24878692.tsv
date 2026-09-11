@@ -14,8 +14,7 @@ AI.DailyRoutines.DailyRoutines_OG	1	0	0
 AI.NativeAICommands	1	0	0
 AI.States.AIState_FollowCharacterAggressive	1	0	0
 AI.States.AIState_GuideCharacter	2	0	0
-AI.States.FightAI.AIState_PerceptionResponse	2	0	0
-AI.States.FightAI.CharmedState.AIState_Charmed	1	0	0
+AI.States.FightAI.AIState_PerceptionResponse	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_CombatEndActions	1	0	0
 AI.States.FightAI.CombatState.AIGroup_Attackers	1	0	0
 AI.States.FightAI.CombatState.AIState_OGCombat	3	0	0
@@ -25,11 +24,11 @@ AI.States.FightAI.DisengageBehavior.AIState_Disengage	1	0	0
 AI.States.FightAI.FearState.AIState_Fear	1	0	0
 AI.States.FightAI.FleeState.AIState_Flee	2	0	0
 AI.States.FightAI.GoGetGuardState.AIState_GoGetGuard	1	0	0
-AI.States.FightAI.SearchState.AIState_Search	3	0	0
+AI.States.FightAI.SearchState.AIState_Search	2	0	0
 AI.States.FightAI.WarningState.AIState_Warning	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_Crime	6	0	0
 AI.States.FightAI.WatchFightState.AIGroup_WatchFight	1	0	0
-AI.States.FightAI.WatchFightState.AIState_WatchFight	8	0	0
+AI.States.FightAI.WatchFightState.AIState_WatchFight	7	0	0
 Camera.ConversationCameraConfig	1	0	0
 Environment.GothicUltraDynamicControlerAS	1	0	0
 GAS.Abilities.Locomotion.GA_Falling	1	0	0

@@ -6160,6 +6160,155 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_character_speech_wait_defaults(fault:u8)->Self {
+        let mut r=Self::from_test_paired_speech_defaults(0);
+        r.type_identity_by_ptr.insert(30,TypeIdentity{name:"AGothicCharacterState".into(),module:String::new(),namespace:String::new()});
+        r.type_by_ptr.insert(30,"AGothicCharacterState".into());
+        let handle=|ptr|DataType{token:5,type_info:ptr,is_object_handle:true,..Default::default()};
+        r.func_by_ptr.insert(13,"GetCharacter".into());r.func_owner.insert(13,"AGothicCharacterState".into());r.func_is_method.insert(13);r.const_method_ptrs.insert(13);
+        r.func_ret.insert(13,handle(5));r.func_params.insert(13,vec![]);
+        r.func_by_ptr.insert(21,"Face".into());r.func_params.insert(21,vec![handle(2),handle(5),DataType{token:0x51,is_object_const:true,is_read_only:true,..Default::default()}]);
+        r.global_by_ptr.insert(92,"Surprise".into());r.global_ns.insert(91,"GameplayTag".into());r.global_ns.insert(92,"GameplayTag".into());
+        match fault {
+            1=>{r.func_owner.insert(13,"OtherState".into());},
+            2=>{r.const_method_ptrs.remove(&13);},
+            3=>r.func_params.get_mut(&13).unwrap().push(handle(5)),
+            4=>r.func_ret.get_mut(&13).unwrap().is_object_const=true,
+            5=>r.type_identity_by_ptr.get_mut(&30).unwrap().module="Script".into(),
+            6=>r.func_ret.get_mut(&13).unwrap().type_info=30,
+            7=>r.func_params.get_mut(&21).unwrap()[2].is_read_only=false,
+            8=>r.func_params.get_mut(&21).unwrap()[1].is_object_const=true,
+            9=>r.restored_mixin_defaults.get_mut(&20).unwrap()[4]="true".into(),
+            10=>r.restored_mixin_defaults.get_mut(&20).unwrap()[5]="OtherTag".into(),
+            11=>{r.func_params.get_mut(&12).unwrap().pop();},
+            12=>r.func_params.get_mut(&12).unwrap()[5].is_object_handle=true,
+            13=>{r.const_method_ptrs.insert(10);},
+            14=>{r.class_super.remove("UDerivedAI");},
+            15=>{r.duplicate_prop_keys.insert((752i64<<33)|7);},
+            16=>{r.global_by_ptr.insert(90,"Other".into());},
+            17=>{r.global_ns.insert(91,"Other".into());},
+            18=>r.func_ret.get_mut(&20).unwrap().is_object_handle=true,
+            19=>{r.restored_mixins.remove(&20);},
+            20=>r.func_params.get_mut(&20).unwrap()[4].is_read_only=false,
+            21=>r.func_params.get_mut(&11).unwrap().push(handle(5)),
+            22=>{r.func_owner.insert(12,"OtherCoroutine".into());},
+            23=>r.type_identity_by_ptr.get_mut(&30).unwrap().name="OtherState".into(),
+            24=>{r.func_is_method.insert(21);},
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_paired_nullable_arguments(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(1, "AGothicCharacter"), (2, "AGothicCharacterState"), (3, "FGameplayTag"), (4, "FGameplayTagContainer")] {
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+            r.type_by_ptr.insert(ptr, name.into());
+        }
+        let handle = |ptr| DataType { token: 5, type_info: ptr, is_object_handle: true, ..Default::default() };
+        let reference = |ptr| DataType { token: 5, type_info: ptr, is_reference: true, is_object_const: true, is_read_only: true, ..Default::default() };
+        for (ptr, name, owner, ret, params, constant) in [
+            (20, "Target", "UBaseState", handle(1), vec![], false),
+            (21, "GetCharacterState", "AGothicCharacter", handle(2), vec![], true),
+            (22, "Broadcast", "UState", DataType { token: 0x52, ..Default::default() },
+                vec![reference(3), DataType { token: 0x51, is_object_const: true, is_read_only: true, ..Default::default() }, reference(4), handle(2), handle(2)], false),
+        ] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into()); r.func_is_method.insert(ptr);
+            r.func_ret.insert(ptr, ret); r.func_params.insert(ptr, params); r.funcid_to_ptr.insert(ptr as i32, ptr);
+            if constant { r.const_method_ptrs.insert(ptr); }
+        }
+        r.class_super.insert("UState".into(), "UBaseState".into());
+        r.global_by_ptr.insert(90, "Alert".into()); r.global_ns.insert(90, "GameplayTag".into());
+        match fault {
+            1 => r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Shadow".into(),
+            2 => r.type_identity_by_ptr.get_mut(&2).unwrap().name = "Other".into(),
+            3 => r.func_ret.get_mut(&20).unwrap().is_reference = true,
+            4 => r.func_params.get_mut(&20).unwrap().push(handle(1)),
+            5 => { r.func_is_method.remove(&20); },
+            6 => { r.const_method_ptrs.remove(&21); },
+            7 => { r.func_owner.insert(21, "Other".into()); },
+            8 => r.func_ret.get_mut(&21).unwrap().is_object_const = true,
+            9 => r.func_params.get_mut(&21).unwrap().push(handle(1)),
+            10 => { r.class_super.clear(); },
+            11 => r.func_params.get_mut(&22).unwrap()[3].type_info = 1,
+            12 => r.func_params.get_mut(&22).unwrap()[4].is_object_handle = false,
+            13 => r.func_params.get_mut(&22).unwrap()[2].is_read_only = false,
+            14 => r.func_params.get_mut(&22).unwrap()[1].token = 0x50,
+            15 => r.func_ret.get_mut(&22).unwrap().token = 0x41,
+            16 => { r.global_ns.insert(90, "Other".into()); },
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_split_navigation_executor_lives(fault:u8)->Self {
+        let mut r=Self::from_test_item_character_wait_defaults(if fault<=17 {fault} else {0});
+        let value=|p|DataType{token:5,type_info:p,..Default::default()};let handle=|p|DataType{is_object_handle:true,..value(p)};
+        let reference=|p|DataType{is_reference:true,is_object_const:true,is_read_only:true,..value(p)};
+        let boolean=DataType{token:0x41,..Default::default()};let double=DataType{token:0x51,is_object_const:true,is_read_only:true,..Default::default()};
+        r.func_by_ptr.insert(20,"FacePoint".into());r.func_params.insert(20,vec![handle(2),reference(4)]);
+        r.func_by_ptr.insert(23,"Reachable".into());r.funcid_to_ptr.insert(23,23);r.func_ret.insert(23,boolean.clone());
+        r.func_params.insert(23,vec![DataType{is_object_const:true,..handle(2)},reference(4),double]);
+        r.func_by_ptr.insert(24,"Point".into());r.funcid_to_ptr.insert(24,24);r.func_owner.insert(24,"UResponse".into());r.func_is_method.insert(24);
+        r.func_ret.insert(24,value(4));r.func_params.insert(24,vec![]);
+        r.func_by_ptr.insert(14,"opEquals".into());r.func_owner.insert(14,"FVector".into());r.func_is_method.insert(14);r.const_method_ptrs.insert(14);
+        r.func_ret.insert(14,boolean.clone());r.func_params.insert(14,vec![reference(4)]);
+        r.func_by_ptr.insert(15,"IsValid".into());r.func_ret.insert(15,boolean);r.func_params.insert(15,vec![DataType{is_object_const:true,..handle(34)}]);
+        r.global_by_ptr.insert(91,"ZeroVector".into());r.global_ns.insert(91,"FVector".into());
+        match fault {
+            18=>{r.const_method_ptrs.remove(&14);},
+            19=>r.func_params.get_mut(&23).unwrap()[0].is_object_const=false,
+            20=>r.func_ret.get_mut(&24).unwrap().is_reference=true,
+            21=>r.func_params.get_mut(&15).unwrap()[0].is_object_const=false,
+            22=>{r.global_by_ptr.insert(91,"Other".into());},
+            23=>{r.const_method_ptrs.insert(10);},
+            24=>r.func_params.get_mut(&11).unwrap().push(value(1)),
+            25=>r.func_params.get_mut(&20).unwrap()[1].is_reference=false,
+            26=>{r.func_owner.insert(21,"OtherAbility".into());},
+            27=>r.type_identity_by_ptr.get_mut(&4).unwrap().module="Script".into(),
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_selected_memory_output(fault: u8) -> Self {
+        let mut r = Self::from_test_memory_time_values(0);
+        r.type_identity_by_ptr.insert(5,TypeIdentity{name:"UObject".into(),module:String::new(),namespace:String::new()});
+        let reference = |constant| DataType {token:5,type_info:2,is_reference:true,is_object_const:constant,is_read_only:constant,..Default::default()};
+        r.func_owner.insert(20,"FMemorizedEvent".into());r.func_params.insert(20,vec![reference(true)]);
+        r.func_owner.insert(30,"FMemorizedEvent".into());
+        r.func_owner.insert(90,"FMemorizedEvent".into());r.func_ret.insert(90,reference(false));r.func_params.insert(90,vec![reference(true)]);
+        r.func_by_ptr.insert(80,"GetAgeInRealtimeSeconds".into());r.func_ret.insert(80,DataType{token:0x50,..Default::default()});
+        r.func_params.insert(80,vec![DataType{token:5,type_info:5,is_object_handle:true,is_object_const:true,..Default::default()}]);
+        r.global_by_ptr.insert(99,"__WorldContext".into());
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&2).unwrap().module="Shadow".into(),
+            2=>r.func_ret.get_mut(&10).unwrap().is_reference=false,
+            3=>r.func_params.get_mut(&10).unwrap()[0].token=0x45,
+            4=>{r.func_owner.insert(20,"Other".into());},
+            5=>r.func_params.get_mut(&20).unwrap()[0].type_info=1,
+            6=>{r.const_method_ptrs.insert(20);},
+            7=>{r.const_method_ptrs.insert(30);},
+            8=>r.func_ret.get_mut(&30).unwrap().token=0x41,
+            9=>r.func_ret.get_mut(&90).unwrap().is_reference=false,
+            10=>r.func_params.get_mut(&90).unwrap()[0].is_object_const=false,
+            11=>{r.const_method_ptrs.remove(&80);},
+            12=>r.func_ret.get_mut(&80).unwrap().token=0x51,
+            13=>r.func_params.get_mut(&80).unwrap()[0].is_object_const=false,
+            14=>{r.global_by_ptr.insert(99,"Other".into());},
+            15=>r.type_subtypes.get_mut(&3).unwrap()[0].is_reference=true,
+            16=>{r.duplicate_prop_keys.insert(5);},
+            17=>r.set_native_api(super::binds::NativeApi::from_test_field_types(&[("FMemorizedEvent","Time","OtherTime")],&[],None)),
+            18=>{r.func_is_method.remove(&90);},
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_influence_vector_returns(fault:u8)->Self {
         let mut r=Self::from_test_movement_vector_lifetimes(0);
         for (ptr,name) in [(10,"UState"),(11,"FSettings")] {
