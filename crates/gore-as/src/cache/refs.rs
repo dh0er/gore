@@ -210,6 +210,7 @@ pub struct RefResolver {
     func_module: HashMap<i64, String>,
     /// Script predicate mixins whose declarations and exact CALL targets agree.
     restored_mixins: HashSet<i64>,
+    restored_mixin_defaults: HashMap<i64, Vec<String>>,
     restored_mixin_declarations: HashSet<(String, Vec<i64>)>,
     /// batch-25f: per-function-ptr rename for cross-module free-fn collisions — the emit-side
     /// collision scan renames each colliding declaration `Name -> Name_g<mi>` with a TEXT pass
@@ -1610,23 +1611,38 @@ impl RefResolver {
     }
 
     pub(crate) fn set_restored_mixins(&mut self, mods: &[super::model::Module]) {
-        let declared: HashSet<_> = mods.iter().flat_map(|m| m.functions.iter().filter_map(|f| {
-            if !self.restores_mixin(f) { return None; }
-            let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
-            Some((m.name.as_str(),f.name.as_str(),self.restored_mixin_types(&f.ret,&params)?))
-        })).collect();
-        let mut targets = HashSet::new();
+        let mut declared:HashMap<_,Option<Vec<String>>>=HashMap::new();
+        for m in mods {for f in &m.functions {
+            if !self.restores_mixin(f) {continue;}
+            let params:Vec<_>=f.params.iter().map(|p|p.ty.clone()).collect();
+            let Some(types)=self.restored_mixin_types(&f.ret,&params) else {continue;};
+            let defaults=(f.param_defaults.len()==params.len()).then(||f.param_defaults.clone());
+            declared.entry((m.name.as_str(),f.name.as_str(),types)).and_modify(|previous| {
+                if *previous!=defaults {*previous=None;}
+            }).or_insert(defaults);
+        }}
+        let mut targets=HashSet::new();let mut defaults=HashMap::new();
         for (ptr,name) in &self.func_by_ptr {
-            if self.is_method_by_ptr(*ptr) || self.func_ns.contains_key(ptr) { continue; }
-            let Some(module) = self.func_module.get(ptr) else { continue; };
-            let Some(params) = self.func_params.get(ptr) else { continue; };
-            let Some(ret) = self.func_ret.get(ptr) else { continue; };
-            if self.restored_mixin_types(ret,params).is_some_and(|types|
-                declared.contains(&(module.as_str(),name.as_str(),types))) { targets.insert(*ptr); }
+            if self.is_method_by_ptr(*ptr) || self.func_ns.contains_key(ptr) {continue;}
+            let Some(module)=self.func_module.get(ptr) else {continue;};
+            let Some(params)=self.func_params.get(ptr) else {continue;};
+            let Some(ret)=self.func_ret.get(ptr) else {continue;};
+            let Some(types)=self.restored_mixin_types(ret,params) else {continue;};
+            if let Some(known)=declared.get(&(module.as_str(),name.as_str(),types)) {
+                targets.insert(*ptr);
+                if let Some(known)=known {defaults.insert(*ptr,known.clone());}
+            }
         }
-        self.restored_mixins = targets;
-        self.restored_mixin_declarations = declared.into_iter().map(|(_,name,types)| (name.to_owned(),types)).collect();
+        self.restored_mixins=targets;
+        self.restored_mixin_defaults=defaults;
+        self.restored_mixin_declarations=declared.into_keys().map(|(_,name,types)|(name.to_owned(),types)).collect();
     }
+
+    /// Defaults belong to the exact restored module and overload, never an owner/name lookup.
+    pub(crate) fn restored_mixin_default_by_id(&self,id:i32,param:usize)->Option<&str> {
+        self.restored_mixin_defaults.get(self.funcid_to_ptr.get(&id)?)?.get(param).map(String::as_str)
+    }
+
 
     pub(crate) fn is_restored_mixin_by_id(&self, id: i32) -> bool {
         self.funcid_to_ptr.get(&id).is_some_and(|ptr| self.restored_mixins.contains(ptr))
@@ -5908,6 +5924,119 @@ impl RefResolver {
             20=>r.func_params.get_mut(&14).unwrap()[0].is_object_handle=false,
             _=>{}
         }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_sampled_navigation_vectors(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"FVector",""),(2,"AGothicCharacter",""),(3,"UHost","Fixture"),(4,"UTerrain","Terrain")] {
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:module.into(),namespace:String::new()});
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32,ptr);
+        }
+        let key=(48i64<<33)|7;r.prop_by_key.insert(key,"State".into());r.prop_type_id.insert(key,3);
+        r.class_fields.entry("UHost".into()).or_default().insert("State".into(),"UState".into());
+        r.class_super.insert("UState".into(),"UGothicState".into());r.class_super.insert("UGothicState".into(),"UCharacterAIState".into());
+        r.class_super.insert("UTerrain".into(),"UTerrainBase".into());
+        let value=|ptr|DataType{token:5,type_info:ptr,..Default::default()};let reference=DataType{is_reference:true,is_object_const:true,is_read_only:true,..value(1)};
+        let double=DataType{token:0x51,..Default::default()};let boolean=DataType{token:0x41,..Default::default()};let character=DataType{is_object_handle:true,..value(2)};
+        for (ptr,name,owner,ret,args,constant) in [
+            (10,"GetSelf","UCharacterAIState",character.clone(),vec![],true),(11,"GetNavAgentLocation","APawn",value(1),vec![],true),
+            (12,"opSub","FVector",value(1),vec![reference.clone()],true),(13,"Normalize","FVector",boolean.clone(),vec![double.clone()],false),
+            (14,"Distance","FVector",double.clone(),vec![reference.clone()],true),(15,"opMul","FVector",value(1),vec![double],true),
+            (16,"opAdd","FVector",value(1),vec![reference.clone()],true),(20,"Target","UGothicState",character,vec![],true),
+            (21,"Allows","UTerrainBase",boolean,vec![reference],true)] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);r.func_params.insert(ptr,args);r.func_ret.insert(ptr,ret);
+            if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        r.funcid_to_ptr.insert(20,20);r.funcid_to_ptr.insert(21,21);
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into(),
+            2=>r.type_identity_by_ptr.get_mut(&2).unwrap().namespace="Other".into(),
+            3=>{r.func_owner.insert(11,"Other".into());},
+            4=>{r.const_method_ptrs.remove(&11);},
+            5=>r.func_ret.get_mut(&11).unwrap().is_reference=true,
+            6=>{r.func_params.get_mut(&11).unwrap().push(DataType::default());},
+            7=>r.func_ret.get_mut(&10).unwrap().is_object_handle=false,
+            8=>{r.class_super.remove("UGothicState");},
+            9=>{r.duplicate_prop_keys.insert(key);},
+            10=>{r.prop_type_id.insert(key,4);},
+            11=>r.func_ret.get_mut(&20).unwrap().type_info=4,
+            12=>{r.func_owner.insert(20,"Other".into());},
+            13=>r.func_params.get_mut(&15).unwrap()[0].token=0x50,
+            14=>r.func_params.get_mut(&16).unwrap()[0].is_read_only=false,
+            15=>{r.const_method_ptrs.insert(13);},
+            16=>r.func_ret.get_mut(&14).unwrap().token=0x50,
+            17=>r.func_params.get_mut(&21).unwrap()[0].is_reference=false,
+            18=>r.func_ret.get_mut(&21).unwrap().token=0x44,
+            19=>{r.class_super.remove("UTerrain");},
+            20=>{r.func_is_method.remove(&21);},
+            _=>{}
+        }
+        r
+    }
+
+
+    #[cfg(test)]
+    pub(crate) fn from_test_paired_speech_defaults(fault:u8)->Self {
+        use super::model::{Func,Module,Param};
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"FAbilityTaskExecutor",""),(2,"UGameplayAbility_AI",""),(3,"UState","Fixture"),(4,"FGameplayTag",""),(5,"AGothicCharacter",""),
+            (6,"EPerceptionNoiseLoudness",""),(7,"EGenericTaskResult",""),(8,"FText",""),(9,"FName","")] {
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:module.into(),namespace:String::new()});
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32,ptr);
+        }
+        let key=(752i64<<33)|7;r.prop_by_key.insert(key,"Ability".into());r.prop_type_id.insert(key,3);
+        r.class_fields.entry("UState".into()).or_default().insert("Ability".into(),"UDerivedAI".into());
+        r.class_super.insert("UDerivedAI".into(),"UGameplayAbility_CharacterAI".into());
+        let value=|ptr|DataType{token:5,type_info:ptr,..Default::default()};let handle=|ptr|DataType{is_object_handle:true,..value(ptr)};
+        let reference=|ptr|DataType{is_reference:true,is_object_const:true,is_read_only:true,..value(ptr)};
+        let boolean=DataType{token:0x41,is_object_const:true,is_read_only:true,..Default::default()};let void=DataType{token:0x52,..Default::default()};
+        let sound=vec![handle(2),reference(4),DataType{is_object_const:true,is_read_only:true,..value(6)},handle(5),boolean.clone(),reference(4)];
+        let text=vec![handle(2),reference(8),reference(4),handle(5),boolean,reference(9),reference(9),reference(4)];
+        let mut mods=Vec::new();
+        for (ptr,module,params,default) in [(20,"Speech",sound.clone(),"false"),(40,"Speech",text,"true"),(41,"OtherSpeech",sound,"true")] {
+            r.func_by_ptr.insert(ptr,"Speak".into());r.func_module.insert(ptr,module.into());r.funcid_to_ptr.insert(ptr as i32,ptr);r.func_ret.insert(ptr,value(1));r.func_params.insert(ptr,params.clone());
+            let mut defaults=vec![String::new();params.len()];defaults[4]=default.into();*defaults.last_mut().unwrap()="FGameplayTag::Empty".into();
+            let f=Func{name:"Speak".into(),namespace:String::new(),ret:value(1),traits:0x820,is_ufunction:false,param_defaults:defaults,
+                params:params.into_iter().enumerate().map(|(i,ty)|Param{name:format!("arg{i}"),flags:if ty.is_reference{3}else{0},ty}).collect(),bytecode:vec![],obj_locals:vec![]};
+            mods.push(Module{name:module.into(),file:String::new(),functions:vec![f],classes:vec![],enums:vec![],globals:vec![]});
+        }
+        for (ptr,name,owner,ret,args,constant) in [(10,"$beh0","FAbilityTaskExecutor",void.clone(),vec![],false),(11,"$beh2","FAbilityTaskExecutor",void,vec![],false),
+            (12,"WaitForLastTaskToEnd","UAbilityTaskCoroutine",reference(7),vec![value(1);6],false),(22,"Target","UState",handle(5),vec![],true)] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        r.funcid_to_ptr.insert(22,22);r.funcid_to_ptr.insert(21,21);r.func_by_ptr.insert(21,"LowerWeapon".into());r.func_ret.insert(21,value(1));r.func_params.insert(21,vec![handle(2)]);
+        r.global_by_ptr.insert(90,"Empty".into());r.global_by_ptr.insert(91,"Greeting".into());
+        let mut ambiguous=vec![String::new();6];ambiguous[4]="true".into();
+        r.param_defaults.insert(("UGameplayAbility_AI".into(),"Speak".into()),ambiguous);
+        match fault {
+            1=>mods[0].functions[0].param_defaults[4]="true".into(),
+            2=>mods[0].functions[0].param_defaults[5]="OtherTag".into(),
+            3=>{mods[0].functions[0].param_defaults.pop();},
+            4=>mods[0].name="Unknown".into(),
+            5=>mods[0].functions[0].traits=0,
+            6=>r.func_params.get_mut(&20).unwrap()[4].is_read_only=false,
+            7=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into(),
+            8=>r.func_params.get_mut(&12).unwrap()[2].is_reference=true,
+            9=>r.func_ret.get_mut(&12).unwrap().is_read_only=false,
+            10=>{r.func_params.get_mut(&12).unwrap().pop();},
+            11=>{r.const_method_ptrs.insert(10);},
+            12=>r.func_ret.get_mut(&11).unwrap().token=0x44,
+            13=>r.func_ret.get_mut(&21).unwrap().is_object_handle=true,
+            14=>r.func_params.get_mut(&21).unwrap()[0].type_info=5,
+            15=>{r.func_owner.insert(22,"Other".into());},
+            16=>{r.class_super.remove("UDerivedAI");},
+            17=>{r.duplicate_prop_keys.insert(key);},
+            18=>{r.global_by_ptr.insert(90,"Other".into());},
+            19=>{r.global_by_ptr.insert(91,"Other".into());},
+            20=>{let mut duplicate=mods[0].clone();duplicate.functions[0].param_defaults[4]="true".into();mods.push(duplicate);},
+            21=>{mods.clear();},
+            22=>{r.class_super.insert("UDerivedAI".into(),"UGameplayAbility_AI".into());},
+            _=>{}
+        }
+        r.set_restored_mixins(&mods);
         r
     }
 

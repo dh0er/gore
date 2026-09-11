@@ -3339,6 +3339,10 @@ fn emit_function_ctor(
         pass_trace("restore_circle_radius_arguments", &rendered);
         let rendered = restore_paired_debug_line_arguments(&rendered, f, refs, class_name);
         pass_trace("restore_paired_debug_line_arguments", &rendered);
+        let rendered = restore_sampled_navigation_vectors(&rendered, f, refs);
+        pass_trace("restore_sampled_navigation_vectors", &rendered);
+        let rendered = restore_paired_speech_defaults(&rendered, f, refs);
+        pass_trace("restore_paired_speech_defaults", &rendered);
         let rendered = restore_influence_vector_returns(&rendered, f, refs);
         pass_trace("restore_influence_vector_returns", &rendered);
         let rendered = restore_clamped_vector_expression(&rendered, f, refs);
@@ -11060,6 +11064,223 @@ fn restore_paired_debug_line_arguments(body:&str,f:&Func,refs:&RefResolver,class
         else if !edits.iter().any(|(at,len,_)|row>*at && row<at+len) {out.push((*line).to_owned());}
     }
     let mut out=out.join("\n");if body.ends_with('\n') {out.push('\n');}out
+}
+
+/// Keep each sampled loop point alive through its predicate and early-return scope.
+fn restore_sampled_navigation_vectors(body:&str,f:&Func,refs:&RefResolver)->String {
+    if body.matches(".GetNavAgentLocation()").count()!=7 || !body.contains(".Normalize(") || !body.contains("for (; ") {return body.to_owned();}
+    let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    let w=|i:&Instr,n|i.words.get(n).map(|s|*s as i16 as i32);let p=|i:&Instr|i.qwords.first().map(|p|*p as i64);
+    let plain=|t:&super::types::DataType,token|t.token==token && t.type_info==0 && !t.is_reference && !t.is_object_handle && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+    let object=|t:&super::types::DataType,ptr,reference,constant,handle|t.token==5 && t.type_info==ptr && t.is_reference==reference && t.is_object_const==constant
+        && t.is_read_only==constant && t.is_object_handle==handle && !t.is_auto && !t.if_handle_then_const;
+    let native=|ptr,name|refs.type_identity_by_ptr(ptr).is_some_and(|t|t.name==name && t.module.is_empty() && t.namespace.is_empty());
+    let local=|slot,ptr|f.obj_locals.iter().filter(|(s,_)|*s==slot).map(|(_,t)|*t).eq([ptr]);
+    let field=|i:&Instr| {
+        let id=*i.dwords.first()? as i32;let owner=refs.type_identity_by_id(id)?;let (name,old)=refs.member_identity(id,w(i,0)?)?;
+        (!owner.module.is_empty() && owner.namespace.is_empty() && refs.type_identity_by_id(old)?==owner).then_some((owner,name))
+    };
+    let target=|i:&Instr|i.dwords.first().map(|d|i.offset_dw as i64+2+*d as i32 as i64);
+    if !plain(&f.ret,0x41) || !f.params.is_empty() {return body.to_owned();}
+    let sites:Vec<_>=code.windows(8).enumerate().filter_map(|(at,c)| {
+        let is_self=c[4].op.name=="CALLSYS";
+        if c.iter().map(|i|i.op.name).ne(["PSF","PshVPtr","ADDSi","RDSPtr",if is_self {"CALLSYS"}else{"CALLINTF"},"STOREOBJ","PshVPtr","CALLSYS"])
+            || w(&c[1],0)!=Some(0) || w(&c[5],0)!=w(&c[6],0) {return None;}
+        let out=w(&c[0],0)?;let actor=w(&c[5],0)?;let nav=p(&c[7])?;let (owner,state)=field(&c[2])?;
+        let state_type=refs.own_field_type_by_class(&owner.name,state)?;
+        if !refs.is_subclass(state_type,"UCharacterAIState") || refs.func_by_ptr(nav)!=Some("GetNavAgentLocation") || refs.func_owner_by_ptr(nav)!=Some("APawn")
+            || !refs.is_method_by_ptr(nav) || !refs.is_const_method_by_ptr(nav) || !matches!(refs.func_params_by_ptr(nav),Some([])) {return None;}
+        let vector=refs.func_ret_by_ptr(nav)?.type_info;
+        if !native(vector,"FVector") || !object(refs.func_ret_by_ptr(nav)?,vector,false,false,false) || out<=0 || actor<=0 || out==actor || !local(out,vector) {return None;}
+        let (getter,character)=if is_self {
+            let ptr=p(&c[4])?;
+            if refs.func_by_ptr(ptr)!=Some("GetSelf") || refs.func_owner_by_ptr(ptr)!=Some("UCharacterAIState") || !refs.is_method_by_ptr(ptr)
+                || !refs.is_const_method_by_ptr(ptr) || !matches!(refs.func_params_by_ptr(ptr),Some([])) {return None;}
+            (ptr,refs.func_ret_by_ptr(ptr)?)
+        } else {
+            let id=*c[4].dwords.first()? as i32;
+            if !refs.is_method_by_id(id) || !refs.is_subclass(state_type,refs.func_owner_by_id(id)?) || !matches!(refs.func_params_by_id(id),Some([])) || refs.func_by_id(id).is_none() {return None;}
+            (id as i64,refs.func_ret_by_id(id)?)
+        };
+        if !native(character.type_info,"AGothicCharacter") || !object(character,character.type_info,false,false,true) || !local(actor,character.type_info) {return None;}
+        Some((at,out,actor,is_self,getter,nav,owner,state,vector,character.type_info))
+    }).collect();
+    let [a,b,c,d,e,g,h]=sites.as_slice() else {return body.to_owned();};
+    if sites.iter().map(|s|s.3).ne([true,false,true,false,true,true,false])
+        || sites.iter().any(|s|s.5!=a.5 || s.6!=a.6 || s.7!=a.7 || s.8!=a.8 || s.9!=a.9 || s.4!=if s.3 {a.4}else{b.4})
+        || a.1!=b.1 || a.1!=d.1 || a.2!=b.2 || a.2!=e.2 || a.2!=g.2 || c.2!=d.2 || c.2!=h.2 || e.1!=g.1
+        || a.0+18!=b.0 || b.0+8!=c.0 || c.0+16!=d.0 || d.0+9!=e.0 || e.0+16!=g.0 || g.0+34!=h.0 || h.0+21!=code.len() {return body.to_owned();}
+    let proof=(|| {
+        let sub=&code[c.0+8..d.0];let pre=&code[e.0+8..g.0-1];let first=&code[a.0+8..b.0];let loop_at=g.0-1;let tail=&code[loop_at..];
+        if sub.iter().map(|i|i.op.name).ne(["PSF","PSF","PSF","CALLSYS","PshC8","PSF","CALLSYS","SetV4"])
+            || pre.iter().map(|i|i.op.name).ne(["PSF","CALLSYS","CpyRtoV8","iTOd","DIVd","SetV4","JMP"])
+            || first.iter().map(|i|i.op.name).ne(["PSF","PshVPtr","CALLINTF","CpyRtoV4","NOT","CpyVtoR1","JLowZ","SetV1","CpyVtoR4","JMP"])
+            || tail.iter().map(|i|i.op.name).ne(["SUSPEND","PSF","PshVPtr","ADDSi","RDSPtr","CALLSYS","STOREOBJ","PshVPtr","CALLSYS","PshV8","PSF","PSF","CALLSYS",
+                "iTOd","PshV8","PSF","PSF","CALLSYS","PSF","PSF","PSF","CALLSYS","PSF","PshVPtr","CALLINTF","CpyRtoV4","NOT","CpyVtoR1","JLowZ","SetV1","CpyVtoR4","JMP",
+                "IncVi","CMPi","JS","PSF","PshVPtr","ADDSi","RDSPtr","CALLINTF","STOREOBJ","PshVPtr","CALLSYS","PSF","PshVPtr","CALLINTF","CpyRtoV4","NOT","CpyVtoR1","JLowZ",
+                "SetV1","CpyVtoR4","JMP","SetV1","CpyVtoR4","RET"]) {return None;}
+        let (scratch,base,sum,direction,last)=(a.1,e.1,c.1,w(&sub[1],0)?,h.1);let vector=a.8;
+        let (count,step,wide,index,flag,system)=(w(&sub[7],0)?,w(&pre[2],0)?,w(&pre[3],0)?,w(&pre[5],0)?,w(&tail[25],0)?,w(&tail[23],0)?);
+        let all=[scratch,base,sum,direction,last,a.2,c.2,count,step,wide,index,flag,system];
+        if all.iter().any(|s|*s<=0) || HashSet::from(all).len()!=all.len() || ![scratch,base,sum,direction,last].iter().all(|s|local(*s,vector))
+            || [count,step,wide,index,flag].iter().any(|s|f.obj_locals.iter().any(|(slot,_)|slot==s))
+            || [(0,0,sum),(2,0,scratch),(5,0,direction)].iter().any(|(n,k,s)|w(&sub[*n],*k)!=Some(*s))
+            || [(0,0,base),(3,1,count),(4,0,step),(4,1,step),(4,2,wide)].iter().any(|(n,k,s)|w(&pre[*n],*k)!=Some(*s))
+            || [(0,0,scratch),(1,0,system),(3,0,flag),(4,0,flag),(5,0,flag),(7,0,flag),(8,0,flag)].iter().any(|(n,k,s)|w(&first[*n],*k)!=Some(*s))
+            || [(9,0,step),(10,0,sum),(11,0,direction),(13,0,wide),(13,1,index),(14,0,wide),(15,0,scratch),(16,0,sum),(18,0,scratch),(19,0,sum),(20,0,base),(22,0,sum),
+                (26,0,flag),(27,0,flag),(29,0,flag),(30,0,flag),(32,0,index),(33,0,index),(33,1,count),(43,0,last),(44,0,system),(46,0,flag),(47,0,flag),(48,0,flag),
+                (50,0,flag),(51,0,flag),(53,0,flag),(54,0,flag)].iter().any(|(n,k,s)|w(&tail[*n],*k)!=Some(*s))
+            || code[d.0+8].op.name!="PSF" || w(&code[d.0+8],0)!=Some(scratch) {return None;}
+        let (subtract,normalize,distance,mul,add)=(p(&sub[3])?,p(&sub[6])?,p(&pre[1])?,p(&tail[12])?,p(&tail[21])?);
+        if p(&tail[17])!=Some(mul) {return None;}
+        for (ptr,name,constant) in [(subtract,"opSub",true),(normalize,"Normalize",false),(distance,"Distance",true),(mul,"opMul",true),(add,"opAdd",true)] {
+            if refs.func_by_ptr(ptr)!=Some(name) || refs.func_owner_by_ptr(ptr)!=Some("FVector") || !refs.is_method_by_ptr(ptr) || refs.is_const_method_by_ptr(ptr)!=constant {return None;}
+        }
+        if ![subtract,mul,add].iter().all(|ptr|refs.func_ret_by_ptr(*ptr).is_some_and(|t|object(t,vector,false,false,false)))
+            || !plain(refs.func_ret_by_ptr(normalize)?,0x41) || !plain(refs.func_ret_by_ptr(distance)?,0x51)
+            || ![subtract,add,distance].iter().all(|ptr|matches!(refs.func_params_by_ptr(*ptr),Some([t]) if object(t,vector,true,true,false)))
+            || ![normalize,mul].iter().all(|ptr|matches!(refs.func_params_by_ptr(*ptr),Some([t]) if plain(t,0x51))) {return None;}
+        let predicate=*tail[24].dwords.first()? as i32;let predicate_name=refs.func_by_id(predicate)?;
+        let system_type=f.obj_locals.iter().find(|(s,_)|*s==system)?.1;let system_identity=refs.type_identity_by_ptr(system_type)?;
+        if system_identity.module.is_empty() || !system_identity.namespace.is_empty() || !local(system,system_type) || !refs.is_method_by_id(predicate)
+            || !refs.is_subclass(&system_identity.name,refs.func_owner_by_id(predicate)?) || !plain(refs.func_ret_by_id(predicate)?,0x41)
+            || !matches!(refs.func_params_by_id(predicate)?,[t] if object(t,vector,true,true,false))
+            || first[2].dwords.first().copied()!=Some(predicate as u32) || tail[45].dwords.first().copied()!=Some(predicate as u32) {return None;}
+        let count_value=*sub[7].dwords.first()? as i32;let tolerance=f64::from_bits(*sub[4].qwords.first()?);
+        if count_value<=0 || !tolerance.is_finite() || tolerance<0.0 || pre[5].dwords.first()!=Some(&0) || first[7].dwords.first()!=Some(&0)
+            || [29,50].iter().any(|n|tail[*n].dwords.first()!=Some(&0)) || tail[53].dwords.first()!=Some(&1)
+            || target(&first[6])!=Some(code[b.0].offset_dw as i64) || target(&first[9])!=Some(tail[55].offset_dw as i64)
+            || target(&pre[6])!=Some(tail[33].offset_dw as i64)
+            || [(28,32),(31,55),(34,0),(49,53),(52,55)].iter().any(|(from,to)|target(&tail[*from])!=Some(tail[*to].offset_dw as i64)) {return None;}
+        // Only the loop latch, its entry, and shared early-return epilogue may enter this span.
+        if code.iter().enumerate().any(|(at,i)|i.op.name=="JMPP" || (i.op.name.starts_with('J') && target(i).is_some_and(|to| {
+            if to<tail[0].offset_dw as i64 || to>tail[55].offset_dw as i64 {return false;}
+            if at>=loop_at {return ![(28,32),(31,55),(34,0),(49,53),(52,55)].iter().any(|(from,dest)|at==loop_at+from && to==tail[*dest].offset_dw as i64);}
+            to!=tail[55].offset_dw as i64 && !(at+1==loop_at && to==tail[33].offset_dw as i64)
+        }))) {return None;}
+        let spans:Vec<_>=sites.iter().map(|s|(s.0,s.0+7)).chain([(c.0+8,d.0-1),(e.0+8,g.0-2)]).collect();
+        if code.iter().any(|i|i.op.name.starts_with('J') && target(i).is_some_and(|to|spans.iter().any(|(start,end)|to>code[*start].offset_dw as i64 && to<=code[*end].offset_dw as i64))) {return None;}
+        Some((sum,direction,count,step,index,system,count_value,tolerance,predicate_name,system_identity.name.as_str()))
+    })();
+    let Some((sum,direction,count,step,index,system,count_value,tolerance,predicate,system_type))=proof else {return body.to_owned();};
+    let sample=format!("local_{sum}");
+    if body.split(|c:char|!(c.is_ascii_alphanumeric() || c=='_')).any(|name|slot_and_life_any(name).map(|s|s.0)==Some(sum)) {return body.to_owned();}
+    let self_location=format!("this.{}.{}().GetNavAgentLocation()",a.7,refs.func_by_ptr(a.4).unwrap());
+    let target_location=format!("this.{}.{}().GetNavAgentLocation()",a.7,refs.func_by_id(b.4 as i32).unwrap());
+    let lines:Vec<_>=body.lines().collect();let mut edits=Vec::new();
+    for (row,block) in lines.windows(22).enumerate() {
+        let positions=[0,5,7,8,9];let Some(decls)=positions.iter().map(|n|declaration_with_initializer(block[*n])).collect::<Option<Vec<_>>>() else {continue;};
+        let pad=&decls[0].0;let names:Vec<_>=decls.iter().map(|(_,name,_)|name.as_str()).collect();let [receiver,dir,n,spacing,i]=names.as_slice() else {continue;};
+        if names.iter().zip([system,direction,count,step,index]).any(|(name,slot)|slot_and_life_any(name).map(|s|s.0)!=Some(slot))
+            || names.iter().zip([4,3,3,2,4]).any(|(name,uses)|count_ident(body,name)!=uses)
+            || !positions.iter().zip([system_type,"FVector","int","float","int"]).all(|(pos,ty)|block[*pos].trim_start().starts_with(&format!("{ty} ")))
+            || decls.iter().any(|(indent,_,_)|indent!=pad) || decls[1].2!=format!("({target_location} - {self_location})")
+            || decls[2].2.parse::<i32>().ok()!=Some(count_value) || decls[3].2!=format!("({self_location}.Distance({target_location}) / {n})") || decls[4].2!="0" {continue;}
+        let normalize_prefix=format!("{pad}{dir}.Normalize(");let Some(literal)=block[6].strip_prefix(&normalize_prefix).and_then(|s|s.strip_suffix(");")) else {continue;};
+        if literal.parse::<f64>().ok().map(f64::to_bits)!=Some(tolerance.to_bits()) {continue;}
+        let expression=format!("({self_location} + (({dir} * {spacing}) * {i}))");
+        let check=|location:&str|format!("if (!({receiver}.{predicate}({location})))");
+        let expected=[(1,format!("{pad}{}",check(&self_location))),(2,format!("{pad}{{")),(3,format!("{pad}    return false;")),(4,format!("{pad}}}")),
+            (10,format!("{pad}for (; {i} < {n}; ++{i})")),(11,format!("{pad}{{")),(12,format!("{pad}    {}",check(&expression))),(13,format!("{pad}    {{")),
+            (14,format!("{pad}        return false;")),(15,format!("{pad}    }}")),(16,format!("{pad}}}")),(17,format!("{pad}{}",check(&target_location))),
+            (18,format!("{pad}{{")),(19,format!("{pad}    return false;")),(20,format!("{pad}}}")),(21,format!("{pad}return true;"))];
+        if expected.iter().any(|(at,text)|block[*at]!=text) {continue;}
+        let old=block.join("\n");let replacement=format!("{pad}    FVector {sample} = {expression};\n{pad}    {}",check(&sample));
+        let new=old.replacen(block[12],&replacement,1).replace(".GetNavAgentLocation()",".NavAgentLocation");
+        edits.push((row,old,new));
+    }
+    let [(_,old,new)]=edits.as_slice() else {return body.to_owned();};body.replacen(old,new,1)
+}
+
+/// Preserve the paired speech branch's original optional arguments and executor frame.
+fn restore_paired_speech_defaults(body:&str,f:&Func,refs:&RefResolver)->String {
+    if !body.contains(".WaitForLastTaskToEnd(") || body.matches("FAbilityTaskExecutor()").count()!=4 {return body.to_owned();}
+    let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    let w=|i:&Instr|i.words.first().map(|s|*s as i16 as i32);let p=|i:&Instr|i.qwords.first().map(|p|*p as i64);
+    let plain=|t:&super::types::DataType,token,constant|t.token==token && t.type_info==0 && !t.is_reference && !t.is_object_handle && t.is_object_const==constant && t.is_read_only==constant && !t.is_auto && !t.if_handle_then_const;
+    let object=|t:&super::types::DataType,ptr,reference,constant,handle|t.token==5 && t.type_info==ptr && t.is_reference==reference && t.is_object_const==constant
+        && t.is_read_only==constant && t.is_object_handle==handle && !t.is_auto && !t.if_handle_then_const;
+    let native=|ptr,name|refs.type_identity_by_ptr(ptr).is_some_and(|t|t.name==name && t.module.is_empty() && t.namespace.is_empty());
+    let local=|slot,ptr|f.obj_locals.iter().filter(|(s,_)|*s==slot).map(|(_,t)|*t).eq([ptr]);
+    let field=|i:&Instr| {
+        let id=*i.dwords.first()? as i32;let owner=refs.type_identity_by_id(id)?;let (name,old)=refs.member_identity(id,w(i)?)?;
+        (!owner.module.is_empty() && owner.namespace.is_empty() && refs.type_identity_by_id(old)?==owner).then_some((owner,name))
+    };
+    let target=|i:&Instr|i.dwords.first().map(|d|i.offset_dw as i64+2+*d as i32 as i64);
+    if !plain(&f.ret,0x52,false) || !f.params.is_empty() {return body.to_owned();}
+    let mut frames=Vec::new();
+    for (at,c) in code.windows(66).enumerate() {
+        let found=(|| {
+            let predecessor=code.get(at.checked_sub(1)?)?;let exit=code.get(at+66)?;
+            let say_ops=["PshGPtr","SetV1","PshV4","PshVPtr","CALLINTF","STOREOBJ","PshVPtr","SetV1","PshV4","PshGPtr","PshVPtr","ADDSi","RDSPtr","PSF","CALL"];
+            if c[..15].iter().map(|i|i.op.name).ne(say_ops) || c[30..45].iter().map(|i|i.op.name).ne(say_ops)
+                || c[15..18].iter().map(|i|i.op.name).ne(["PSF","CALLSYS","JMP"])
+                || c[18..30].chunks_exact(3).any(|v|v.iter().map(|i|i.op.name).ne(["PSF","CALLSYS","PSF"]))
+                || c[45..54].iter().map(|i|i.op.name).ne(["PSF","PshVPtr","ADDSi","RDSPtr","PSF","CALL","PSF","PshVPtr","CALLSYS"])
+                || c[54..].chunks_exact(2).any(|v|v.iter().map(|i|i.op.name).ne(["PSF","CALLSYS"]))
+                || predecessor.op.name!="JLowZ" || target(predecessor)!=Some(c[18].offset_dw as i64) || target(&c[17])!=Some(exit.offset_dw as i64) {return None;}
+            let (say,other,interest)=(*c[14].dwords.first()? as i32,*c[50].dwords.first()? as i32,*c[4].dwords.first()? as i32);
+            if c[44].dwords.first().copied()!=Some(say as u32) || c[34].dwords.first().copied()!=Some(interest as u32)
+                || !refs.is_restored_mixin_by_id(say) || refs.is_method_by_id(say) || refs.is_method_by_id(other) {return None;}
+            for (param,expected) in [(4,"false"),(5,"FGameplayTag::Empty")] {
+                if refs.restored_mixin_default_by_id(say,param)?.chars().filter(|c|!c.is_whitespace()).collect::<String>()!=expected {return None;}
+            }
+            let [ai,tag,noise,character,boolean,posture]=refs.func_params_by_id(say)? else {return None;};let executor=refs.func_ret_by_id(say)?.type_info;
+            if !native(executor,"FAbilityTaskExecutor") || !object(refs.func_ret_by_id(say)?,executor,false,false,false)
+                || !native(ai.type_info,"UGameplayAbility_AI") || !object(ai,ai.type_info,false,false,true)
+                || !native(tag.type_info,"FGameplayTag") || !object(tag,tag.type_info,true,true,false) || !object(posture,tag.type_info,true,true,false)
+                || !native(noise.type_info,"EPerceptionNoiseLoudness") || !object(noise,noise.type_info,false,true,false)
+                || !native(character.type_info,"AGothicCharacter") || !object(character,character.type_info,false,false,true) || !plain(boolean,0x41,true)
+                || !object(refs.func_ret_by_id(other)?,executor,false,false,false) || !matches!(refs.func_params_by_id(other)?,[t] if object(t,ai.type_info,false,false,true))
+                || !refs.is_method_by_id(interest) || !matches!(refs.func_params_by_id(interest),Some([])) || !object(refs.func_ret_by_id(interest)?,character.type_info,false,false,true) {return None;}
+            let (owner,member)=field(&c[11])?;let ability_type=refs.own_field_type_by_class(&owner.name,member)?;
+            // The script hierarchy stops at native CharacterAI. This typed CALL frame
+            // proves its receiver upcast to the native UGameplayAbility_AI parameter.
+            if field(&c[41])!=Some((owner,member)) || field(&c[47])!=Some((owner,member))
+                || !["UGameplayAbility_AI","UGameplayAbility_CharacterAI"].iter().any(|base|refs.is_subclass(ability_type,base))
+                || !refs.is_subclass(&owner.name,refs.func_owner_by_id(interest)?) {return None;}
+            let slots=[w(&c[13])?,w(&c[49])?,w(&c[18])?,w(&c[21])?,w(&c[24])?,w(&c[27])?];
+            let actor=w(&c[5])?;let flags=[w(&c[1])?,w(&c[31])?,w(&c[7])?];
+            if slots.iter().chain([&actor]).chain(&flags).any(|s|*s<=0) || slots.iter().chain([&actor]).chain(&flags).copied().collect::<HashSet<_>>().len()!=10
+                || !slots.iter().all(|s|local(*s,executor)) || !local(actor,character.type_info) || flags.iter().any(|s|f.obj_locals.iter().any(|(slot,_)|slot==s))
+                || [(2,flags[0]),(3,0),(6,actor),(8,flags[2]),(10,0),(15,slots[0]),(32,flags[1]),(33,0),(35,actor),(36,actor),(37,flags[2]),(38,flags[2]),
+                    (40,0),(43,slots[0]),(45,slots[0]),(46,0),(51,slots[1]),(52,0)].iter().any(|(n,s)|w(&c[*n])!=Some(*s)) {return None;}
+            let (ctor,dtor,wait)=(p(&c[19])?,p(&c[16])?,p(&c[53])?);
+            for (base,slot) in [18,21,24,27].into_iter().zip(&slots[2..]) {
+                if w(&c[base+2])!=Some(*slot) || p(&c[base+1])!=Some(ctor) {return None;}
+            }
+            for (pair,slot) in c[54..].chunks_exact(2).zip(slots[2..].iter().chain(&slots[..2])) {
+                if w(&pair[0])!=Some(*slot) || p(&pair[1])!=Some(dtor) {return None;}
+            }
+            for (ptr,name) in [(ctor,"$beh0"),(dtor,"$beh2")] {
+                if refs.func_by_ptr(ptr)!=Some(name) || refs.func_owner_by_ptr(ptr)!=Some("FAbilityTaskExecutor") || !refs.is_method_by_ptr(ptr) || refs.is_const_method_by_ptr(ptr)
+                    || !matches!(refs.func_params_by_ptr(ptr),Some([])) || !plain(refs.func_ret_by_ptr(ptr)?,0x52,false) {return None;}
+            }
+            let wait_ret=refs.func_ret_by_ptr(wait)?;
+            // The registered six-value overload declares exactly four default executor arguments.
+            if refs.func_by_ptr(wait)!=Some("WaitForLastTaskToEnd") || refs.func_owner_by_ptr(wait)!=Some("UAbilityTaskCoroutine") || !refs.is_method_by_ptr(wait) || refs.is_const_method_by_ptr(wait)
+                || !native(wait_ret.type_info,"EGenericTaskResult") || !object(wait_ret,wait_ret.type_info,true,true,false)
+                || !matches!(refs.func_params_by_ptr(wait),Some(v) if v.len()==6 && v.iter().all(|t|object(t,executor,false,false,false))) {return None;}
+            let empty=p(&c[0])?;let tag=p(&c[9])?;let noise_value=*c[7].dwords.first()? as i32;
+            if refs.global_by_ptr(empty)!=Some("Empty") || p(&c[30])!=Some(empty) || p(&c[39])!=Some(tag) || c[37].dwords.first().copied()!=Some(noise_value as u32)
+                || [1,31].iter().any(|n|c[*n].dwords.first()!=Some(&0)) || code.iter().enumerate().any(|(from,i)|i.op.name=="JMPP" || (i.op.name.starts_with('J') && target(i).is_some_and(|to| {
+                    to>c[0].offset_dw as i64 && to<=c[65].offset_dw as i64 && !(from+1==at && to==c[18].offset_dw as i64)
+                }))) {return None;}
+            Some((member,refs.func_by_id(say)?,refs.func_by_id(other)?,refs.func_by_id(interest)?,refs.global_by_ptr(tag)?,noise_value))
+        })();if let Some(found)=found {frames.push(found);}
+    }
+    let [(member,say,other,interest,tag,noise)]=frames.as_slice() else {return body.to_owned();};
+    let call=format!("(this.{member}).{say}(GameplayTag::{tag}, EPerceptionNoiseLoudness({noise}), this.{interest}(), false)");
+    let shorter=call.strip_suffix(", false)").map(|s|format!("{s})")).unwrap();
+    let other=format!("::{other}(this.{member})");let wait=format!("this.WaitForLastTaskToEnd({other}, {call}, FAbilityTaskExecutor(), FAbilityTaskExecutor(), FAbilityTaskExecutor(), FAbilityTaskExecutor());");
+    if body.matches(&call).count()!=2 || body.matches("this.WaitForLastTaskToEnd(").count()!=1 {return body.to_owned();}
+    let lines:Vec<_>=body.lines().collect();let mut edits=Vec::new();
+    for (row,c) in lines.windows(6).enumerate() {
+        let pad=indent_of(c[0]);let Some(outer)=pad.strip_suffix("    ") else {continue;};
+        if c[0]!=format!("{pad}{call};") || c[1]!=format!("{outer}}}") || c[2]!=format!("{outer}else") || c[3]!=format!("{outer}{{") || c[4]!=format!("{pad}{wait}") || c[5]!=format!("{outer}}}") {continue;}
+        edits.push((row,c.join("\n"),format!("{pad}{shorter};\n{}\n{}\n{}\n{pad}this.WaitForLastTaskToEnd({other}, {shorter});\n{}",c[1],c[2],c[3],c[5])));
+    }
+    let [(_,old,new)]=edits.as_slice() else {return body.to_owned();};body.replacen(old,new,1)
 }
 
 /// Retain the two final return vectors, leaving their normalized receivers temporary.
@@ -48349,6 +48570,138 @@ mod literal_value_lifetime_tests {
             super::rename_ident(&s,&format!("local_{slot}"),&format!("local_{number}_{life}"))
         });
         assert_eq!(fold(&lives(body),&f,&refs),lives(expected));
+    }
+
+    #[test]
+    fn sampled_navigation_vectors_preserve_loop_sample_scope() {
+        let mut f=function(&[
+            ("PshVPtr",&[0]),("CALL",&[]),("CpyRtoV4",&[1]),("NOT",&[1]),("CpyVtoR1",&[1]),
+            ("JLowZ",&[]),("SetV1",&[1]),("CpyVtoR4",&[1]),("JMP",&[]),("CALL",&[]),
+            ("STOREOBJ",&[6]),("PSF",&[14]),("PshVPtr",&[0]),("ADDSi",&[48]),("RDSPtr",&[]),
+            ("CALLSYS",&[]),("STOREOBJ",&[8]),("PshVPtr",&[8]),("CALLSYS",&[]),("PSF",&[14]),
+            ("PshVPtr",&[6]),("CALLINTF",&[]),("CpyRtoV4",&[1]),("NOT",&[1]),("CpyVtoR1",&[1]),
+            ("JLowZ",&[]),("SetV1",&[1]),("CpyVtoR4",&[1]),("JMP",&[]),("PSF",&[14]),
+            ("PshVPtr",&[0]),("ADDSi",&[48]),("RDSPtr",&[]),("CALLINTF",&[]),("STOREOBJ",&[8]),
+            ("PshVPtr",&[8]),("CALLSYS",&[]),("PSF",&[28]),("PshVPtr",&[0]),("ADDSi",&[48]),
+            ("RDSPtr",&[]),("CALLSYS",&[]),("STOREOBJ",&[22]),("PshVPtr",&[22]),("CALLSYS",&[]),
+            ("PSF",&[28]),("PSF",&[34]),("PSF",&[14]),("CALLSYS",&[]),("PshC8",&[]),
+            ("PSF",&[34]),("CALLSYS",&[]),("SetV4",&[37]),("PSF",&[14]),("PshVPtr",&[0]),
+            ("ADDSi",&[48]),("RDSPtr",&[]),("CALLINTF",&[]),("STOREOBJ",&[22]),("PshVPtr",&[22]),
+            ("CALLSYS",&[]),("PSF",&[14]),("PSF",&[20]),("PshVPtr",&[0]),("ADDSi",&[48]),
+            ("RDSPtr",&[]),("CALLSYS",&[]),("STOREOBJ",&[8]),("PshVPtr",&[8]),("CALLSYS",&[]),
+            ("PSF",&[20]),("CALLSYS",&[]),("CpyRtoV8",&[36]),("iTOd",&[42,37]),("DIVd",&[36,36,42]),
+            ("SetV4",&[43]),("JMP",&[]),("SUSPEND",&[]),("PSF",&[20]),("PshVPtr",&[0]),
+            ("ADDSi",&[48]),("RDSPtr",&[]),("CALLSYS",&[]),("STOREOBJ",&[8]),("PshVPtr",&[8]),
+            ("CALLSYS",&[]),("PshV8",&[36]),("PSF",&[28]),("PSF",&[34]),("CALLSYS",&[]),
+            ("iTOd",&[42,43]),("PshV8",&[42]),("PSF",&[14]),("PSF",&[28]),("CALLSYS",&[]),
+            ("PSF",&[14]),("PSF",&[28]),("PSF",&[20]),("CALLSYS",&[]),("PSF",&[28]),
+            ("PshVPtr",&[6]),("CALLINTF",&[]),("CpyRtoV4",&[1]),("NOT",&[1]),("CpyVtoR1",&[1]),
+            ("JLowZ",&[]),("SetV1",&[1]),("CpyVtoR4",&[1]),("JMP",&[]),("IncVi",&[43]),
+            ("CMPi",&[43,37]),("JS",&[]),("PSF",&[50]),("PshVPtr",&[0]),("ADDSi",&[48]),
+            ("RDSPtr",&[]),("CALLINTF",&[]),("STOREOBJ",&[22]),("PshVPtr",&[22]),("CALLSYS",&[]),
+            ("PSF",&[50]),("PshVPtr",&[6]),("CALLINTF",&[]),("CpyRtoV4",&[1]),("NOT",&[1]),
+            ("CpyVtoR1",&[1]),("JLowZ",&[]),("SetV1",&[1]),("CpyVtoR4",&[1]),("JMP",&[]),
+            ("SetV1",&[1]),("CpyVtoR4",&[1]),("RET",&[2]),
+        ]);
+        f.ret=DataType{token:0x41,..Default::default()};f.traits=4;
+        f.obj_locals=[14,20,28,34,50].into_iter().map(|s|(s,1)).chain([(8,2),(22,2),(4,4),(6,4)]).collect();
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,value) in [(1,201u32),(5,5u32),(6,0u32),(8,191u32),(9,202u32),(13,3u32),(15,10u32),(18,11u32),(21,21u32),(25,5u32),(26,0u32),(28,161u32),(31,3u32),(33,20u32),(36,11u32),(39,3u32),(41,10u32),(44,11u32),(48,12u32),(51,13u32),(52,4u32),(55,3u32),(57,20u32),(60,11u32),(64,3u32),(66,10u32),(69,11u32),(71,14u32),(75,0u32),(76,49u32),(80,3u32),(82,10u32),(85,11u32),(89,15u32),(94,15u32),(98,16u32),(101,21u32),(105,5u32),(106,0u32),(108,34u32),(111,4294967243u32),(114,3u32),(116,20u32),(119,11u32),(122,21u32),(126,5u32),(127,0u32),(129,3u32),(130,1u32)] {f.bytecode[code[at].offset_dw+1]=value as i32;}
+        let bits=0.125f64.to_bits();let at=code[49].offset_dw;f.bytecode[at+1]=bits as i32;f.bytecode[at+2]=(bits>>32) as i32;
+        let body="    bool IsInSituation() const\n    {\n        if (!(Super::IsInSituation()))\n        {\n            return false;\n        }\n        UTerrain local_6 = ::UTerrain::Get();\n        if (!(local_6.Allows(this.State.GetSelf().GetNavAgentLocation())))\n        {\n            return false;\n        }\n        FVector local_34 = (this.State.Target().GetNavAgentLocation() - this.State.GetSelf().GetNavAgentLocation());\n        local_34.Normalize(0.125);\n        int local_37 = 4;\n        float local_36 = (this.State.GetSelf().GetNavAgentLocation().Distance(this.State.Target().GetNavAgentLocation()) / local_37);\n        int local_43 = 0;\n        for (; local_43 < local_37; ++local_43)\n        {\n            if (!(local_6.Allows((this.State.GetSelf().GetNavAgentLocation() + ((local_34 * local_36) * local_43)))))\n            {\n                return false;\n            }\n        }\n        if (!(local_6.Allows(this.State.Target().GetNavAgentLocation())))\n        {\n            return false;\n        }\n        return true;\n    }";
+        let expected="    bool IsInSituation() const\n    {\n        if (!(Super::IsInSituation()))\n        {\n            return false;\n        }\n        UTerrain local_6 = ::UTerrain::Get();\n        if (!(local_6.Allows(this.State.GetSelf().NavAgentLocation)))\n        {\n            return false;\n        }\n        FVector local_34 = (this.State.Target().NavAgentLocation - this.State.GetSelf().NavAgentLocation);\n        local_34.Normalize(0.125);\n        int local_37 = 4;\n        float local_36 = (this.State.GetSelf().NavAgentLocation.Distance(this.State.Target().NavAgentLocation) / local_37);\n        int local_43 = 0;\n        for (; local_43 < local_37; ++local_43)\n        {\n            FVector local_28 = (this.State.GetSelf().NavAgentLocation + ((local_34 * local_36) * local_43));\n            if (!(local_6.Allows(local_28)))\n            {\n                return false;\n            }\n        }\n        if (!(local_6.Allows(this.State.Target().NavAgentLocation)))\n        {\n            return false;\n        }\n        return true;\n    }";
+        let refs=RefResolver::from_test_sampled_navigation_vectors(0);let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_sampled_navigation_vectors(s,f,r);
+        assert_eq!(fold(body,&f,&refs),expected);assert_eq!(fold(expected,&f,&refs),expected);
+        for fault in 1..=20 {assert_eq!(fold(body,&f,&RefResolver::from_test_sampled_navigation_vectors(fault)),body,"metadata {fault}");}
+        for (at,instr) in code.iter().enumerate().filter(|(at,_)|*at>=11 && *at!=132) {
+            for (n,_) in instr.words.iter().enumerate() {
+                let mut bad=f.clone();if n==0 {bad.bytecode[instr.offset_dw]^=4<<16;}else{bad.bytecode[instr.offset_dw+1]^=4<<((n-1)*16);}
+                assert_eq!(fold(body,&bad,&refs),body,"operand {at}:{n}");
+            }
+            if !instr.dwords.is_empty() || !instr.qwords.is_empty() {
+                let mut bad=f.clone();bad.bytecode[instr.offset_dw+1]+=1;assert_eq!(fold(body,&bad,&refs),body,"call/literal/jump {at}");
+            }
+        }
+        for at in [12,46,68,78,99,109,118] {
+            let mut bad=f.clone();bad.bytecode[code[8].offset_dw+1]=code[at].offset_dw as i32-code[8].offset_dw as i32-2;
+            assert_eq!(fold(body,&bad,&refs),body,"interior entry {at}");
+        }
+        let mut bad=f.clone();bad.bytecode[code[76].offset_dw]=(bad.bytecode[code[76].offset_dw]&!255)|OPCODES.iter().find(|o|o.name=="JMPP").unwrap().opcode as i32;
+        assert_eq!(fold(body,&bad,&refs),body);
+        for extra in [(28,1),(6,4),(42,1)] {let mut bad=f.clone();bad.obj_locals.push(extra);assert_eq!(fold(body,&bad,&refs),body);}
+        let mut bad=f.clone();bad.obj_locals[4].1=2;assert_eq!(fold(body,&bad,&refs),body);
+        for bad in [format!("{body}\nUse(local_28);"),format!("{body}\nUse(local_28_2);"),format!("{body}\nUse(local_34);"),format!("{body}{body}"),
+            body.replace("local_43 = 0","local_43 = 1"),body.replace("local_34 * local_36","local_36 * local_34"),body.replace(" / local_37"," * local_37"),
+            body.replace("FVector local_34","Other local_34"),body.replace("int local_37","uint local_37"),body.replace("0.125","0.25"),body.replace("this.State.Target()","Other()"),
+            body.replace("return false;","return true;"),body.replacen(".GetNavAgentLocation()",".NavAgentLocation",1)] {assert_eq!(fold(&bad,&f,&refs),bad);}
+        let mut shifted=f.clone();for (slot,_) in &mut shifted.obj_locals {*slot+=100;}
+        for instr in &code {for (n,slot) in instr.words.iter().enumerate() {
+            if instr.op.name=="ADDSi" || instr.op.name=="RET" || (*slot as i16)<=0 {continue;}
+            if n==0 {shifted.bytecode[instr.offset_dw]+=100<<16;}else{shifted.bytecode[instr.offset_dw+1]+=100<<((n-1)*16);}
+        }}
+        let shift=|s:&str|[6,28,34,36,37,43].iter().fold(s.to_owned(),|s,slot|super::rename_ident(&s,&format!("local_{slot}"),&format!("local_{}",slot+100)));
+        assert_eq!(fold(&shift(body),&shifted,&refs),shift(expected));
+        let lives=|s:&str|[6,34,36,37,43].iter().fold(s.to_owned(),|s,slot|super::rename_ident(&s,&format!("local_{slot}"),&format!("local_{slot}_3")));
+        assert_eq!(fold(&lives(body),&f,&refs),lives(expected));
+    }
+
+    #[test]
+    fn paired_speech_defaults_bind_exact_overloads_and_executor_frames() {
+        let mut f=function(&[
+            ("JLowZ",&[]),("PshGPtr",&[]),("SetV1",&[16]),("PshV4",&[16]),("PshVPtr",&[0]),
+            ("CALLINTF",&[]),("STOREOBJ",&[14]),("PshVPtr",&[14]),("SetV1",&[17]),("PshV4",&[17]),
+            ("PshGPtr",&[]),("PshVPtr",&[0]),("ADDSi",&[752]),("RDSPtr",&[]),("PSF",&[10]),
+            ("CALL",&[]),("PSF",&[10]),("CALLSYS",&[]),("JMP",&[]),("PSF",&[34]),
+            ("CALLSYS",&[]),("PSF",&[34]),("PSF",&[42]),("CALLSYS",&[]),("PSF",&[42]),
+            ("PSF",&[50]),("CALLSYS",&[]),("PSF",&[50]),("PSF",&[58]),("CALLSYS",&[]),
+            ("PSF",&[58]),("PshGPtr",&[]),("SetV1",&[15]),("PshV4",&[15]),("PshVPtr",&[0]),
+            ("CALLINTF",&[]),("STOREOBJ",&[14]),("PshVPtr",&[14]),("SetV1",&[17]),("PshV4",&[17]),
+            ("PshGPtr",&[]),("PshVPtr",&[0]),("ADDSi",&[752]),("RDSPtr",&[]),("PSF",&[10]),
+            ("CALL",&[]),("PSF",&[10]),("PshVPtr",&[0]),("ADDSi",&[752]),("RDSPtr",&[]),
+            ("PSF",&[26]),("CALL",&[]),("PSF",&[26]),("PshVPtr",&[0]),("CALLSYS",&[]),
+            ("PSF",&[34]),("CALLSYS",&[]),("PSF",&[42]),("CALLSYS",&[]),("PSF",&[50]),
+            ("CALLSYS",&[]),("PSF",&[58]),("CALLSYS",&[]),("PSF",&[10]),("CALLSYS",&[]),
+            ("PSF",&[26]),("CALLSYS",&[]),("RET",&[0]),
+        ]);
+        f.ret=DataType{token:0x52,..Default::default()};f.obj_locals=[10,26,34,42,50,58].into_iter().map(|s|(s,1)).chain([(14,5)]).collect();
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,value) in [(0,30u32),(1,90u32),(2,0u32),(5,22u32),(8,4u32),(10,91u32),(12,3u32),(15,20u32),(17,11u32),(18,81u32),(20,10u32),(23,10u32),(26,10u32),(29,10u32),(31,90u32),(32,0u32),(35,22u32),(38,4u32),(40,91u32),(42,3u32),(45,20u32),(48,3u32),(51,21u32),(54,12u32),(56,11u32),(58,11u32),(60,11u32),(62,11u32),(64,11u32),(66,11u32)] {f.bytecode[code[at].offset_dw+1]=value as i32;}
+        let body="    if (Busy())\n    {\n        (this.Ability).Speak(GameplayTag::Greeting, EPerceptionNoiseLoudness(4), this.Target(), false);\n    }\n    else\n    {\n        this.WaitForLastTaskToEnd(::LowerWeapon(this.Ability), (this.Ability).Speak(GameplayTag::Greeting, EPerceptionNoiseLoudness(4), this.Target(), false), FAbilityTaskExecutor(), FAbilityTaskExecutor(), FAbilityTaskExecutor(), FAbilityTaskExecutor());\n    }\n";
+        let expected="    if (Busy())\n    {\n        (this.Ability).Speak(GameplayTag::Greeting, EPerceptionNoiseLoudness(4), this.Target());\n    }\n    else\n    {\n        this.WaitForLastTaskToEnd(::LowerWeapon(this.Ability), (this.Ability).Speak(GameplayTag::Greeting, EPerceptionNoiseLoudness(4), this.Target()));\n    }\n";
+        let refs=RefResolver::from_test_paired_speech_defaults(0);let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_paired_speech_defaults(s,f,r);
+        assert_eq!(refs.param_defaults("UGameplayAbility_AI","Speak").unwrap()[4],"true");
+        assert!(!refs.is_subclass("UDerivedAI","UGameplayAbility_AI"));
+        assert!(refs.is_subclass("UDerivedAI","UGameplayAbility_CharacterAI"));
+        assert_eq!(fold(body,&f,&RefResolver::from_test_paired_speech_defaults(22)),expected);
+        for (id,value) in [(20,"false"),(40,"true"),(41,"true")] {
+            assert!(refs.is_restored_mixin_by_id(id));assert_eq!(refs.restored_mixin_default_by_id(id,4),Some(value));
+        }
+        assert_eq!(fold(body,&f,&refs),expected);assert_eq!(fold(expected,&f,&refs),expected);
+        for fault in 1..=21 {assert_eq!(fold(body,&f,&RefResolver::from_test_paired_speech_defaults(fault)),body,"metadata/default {fault}");}
+        let conflict=RefResolver::from_test_paired_speech_defaults(20);
+        assert!(conflict.is_restored_mixin_by_id(20));assert_eq!(conflict.restored_mixin_default_by_id(20,4),None);
+        let mut cleared=RefResolver::from_test_paired_speech_defaults(0);cleared.set_restored_mixins(&[]);
+        assert!(!cleared.is_restored_mixin_by_id(20));assert_eq!(cleared.restored_mixin_default_by_id(20,4),None);
+        for (at,instr) in code.iter().enumerate().filter(|(at,_)|*at!=67) {
+            if !instr.words.is_empty() {let mut bad=f.clone();bad.bytecode[instr.offset_dw]^=4<<16;assert_eq!(fold(body,&bad,&refs),body,"operand {at}");}
+            if !instr.dwords.is_empty() || !instr.qwords.is_empty() {
+                let mut bad=f.clone();bad.bytecode[instr.offset_dw+1]+=1;assert_eq!(fold(body,&bad,&refs),body,"call/literal/jump {at}");
+            }
+        }
+        for at in [2,21,32,53,65] {
+            let mut bad=f.clone();let start=bad.bytecode.len();bad.bytecode.extend(function(&[("JMP",&[])]).bytecode);
+            bad.bytecode[start+1]=code[at].offset_dw as i32-start as i32-2;assert_eq!(fold(body,&bad,&refs),body,"interior jump {at}");
+        }
+        let mut bad=f.clone();bad.bytecode.extend(function(&[("JMPP",&[1])]).bytecode);assert_eq!(fold(body,&bad,&refs),body);
+        for extra in [(10,1),(14,5),(15,1)] {let mut bad=f.clone();bad.obj_locals.push(extra);assert_eq!(fold(body,&bad,&refs),body);}
+        let mut bad=f.clone();bad.obj_locals[4].1=5;assert_eq!(fold(body,&bad,&refs),body);
+        for bad in [body.replace("this.Target(), false","this.Target(), true"),body.replace("EPerceptionNoiseLoudness(4)","EPerceptionNoiseLoudness(3)"),
+            body.replace("GameplayTag::Greeting","GameplayTag::Other"),body.replace("this.Ability","this.Other"),body.replace("::LowerWeapon","::Other"),
+            body.replace("this.Target()","this.Other()"),body.replacen("FAbilityTaskExecutor()","Other()",1),body.replace("    else\n","    if (Elsewhere())\n"),
+            format!("{body}{body}"),body.replace("this.WaitForLastTaskToEnd", "Other.WaitForLastTaskToEnd")] {assert_eq!(fold(&bad,&f,&refs),bad);}
+        let mut shifted=f.clone();for (slot,_) in &mut shifted.obj_locals {*slot+=100;}
+        for instr in &code {if instr.op.name!="ADDSi" && instr.op.name!="RET" && instr.words.first().is_some_and(|s|(*s as i16)>0) {shifted.bytecode[instr.offset_dw]+=100<<16;}}
+        assert_eq!(fold(body,&shifted,&refs),expected);
     }
 
     #[test]
