@@ -7,11 +7,12 @@ die Save-Bereinigung und `7ac45595` die benoetigte native API-Komposition.
 Siehe [Build-/Paketpruefung](build-checks.json) und
 [veroeffentlichte Startstaende](start-saves.json).
 
-**Aktiv ist jetzt NpcNaturalVoiceTest 0.1.1**; Manager-Status `in_sync`.
-Kopf- und andere Pakete sind deaktiviert. Die aktualisierten Kopf-/Sprachpakete
-sind [geprueft](daylight-build-checks.json); aktuelle IDs und Ruecknahme stehen
-im [Tageslicht-Deploymentbericht](daylight-deployment.json).
-Der urspruengliche [Deploymentbericht](deployment.json) bleibt als Historie erhalten.
+**Aktiv ist NpcHeadPaletteTest 0.1.2**; Manager-Status `in_sync`.
+Der Bartwechsel hat Vorrang. Das Sprachpaket und die anderen Pakete bleiben
+deaktiviert. Build und Aktivierung stehen im [Bart-Buildbericht](beard-build-checks.json)
+und [Bart-Deploymentbericht](beard-deployment.json).
+Die bisherigen [Tageslicht-](daylight-build-checks.json) und
+[Deploymentberichte](daylight-deployment.json) bleiben als Historie erhalten.
 
 Die Pakete werden **einzeln** aktiviert. Zum Paketwechsel das Spiel vollstaendig
 beenden und den zugehoerigen START-Stand laden. Ergebnisse anderer Pakete nicht
@@ -20,7 +21,7 @@ den unten verlinkten Testnamen neu speichern. Spieltests macht der Benutzer.
 
 | Reihenfolge | Paket | Startstaende in Profil 4 | Abdeckung |
 |---|---|---|---|
-| 1 | NpcHeadPaletteTest | 065: NPC 01 Koepfe - START | Gesicht, Haare, Haarfarbe, Wiederherstellung, Neustart; Barttextur offen |
+| 1 | NpcHeadPaletteTest | 065: NPC 01 Koepfe - START | Gesicht, Haare, Haarfarbe bestanden; echter Bartwechsel/Originale/Neustart jetzt testen |
 | 2 | NpcNaturalVoiceTest | 066: NPC 02 Voice - START | Natuerliche Begruessung/Alltagsstimme, zweites Stimmprofil, Routine, Neustart |
 | 3 | NpcEconomyRolesTest | 067: Handel - LP fehlt; 068: Lehrer - Erz fehlt; 069: Lehrer - bereit | Kaufen/Verkaufen/Abbrechen, beide Lernvoraussetzungen, Kosten, bereits gelernt, Persistenz |
 | 4 | NpcFieldRolesTest | 070: NPC 04 Rollen - START; 072: NPC 04 Rollen - Kampf bereit | Waffenwahl-Diagnose, Folgen/Warten, Feindschaft/Gilde, Flucht, Niederlage/Tod, Wiederbelebung derselben Figur |
@@ -30,10 +31,12 @@ den unten verlinkten Testnamen neu speichern. Spieltests macht der Benutzer.
 
 065 laden, A ansprechen, **H0 Aufbau** waehlen. Danach stehen die Testfiguren
 an den bereits verwendeten Punkten vor Xardas' Turm.
-Die [Kopfliste](heads/README.md) dokumentiert den Befund und die verbleibenden Optionen.
-Der Nutzer hat diese Kopftests ausser Bart bestanden. Der Heldenbart ist in
-die Gesichtstextur eingezeichnet; H5/H6 sind ab 0.1.1 verborgen. Ein echter
-Bartwechsel ueber passende Gesichtstexturen bleibt offen. Haarfarbe wird nur an Cs Materialinstanz geaendert.
+Die [Bart-Checkliste](heads/README.md) beschreibt den jetzt aktiven Nachtest:
+H2/H5 fuer rasierten Heldenkopf, H6 fuer Originalbart; H1/H6 fuer Flex mit Bart,
+H5 fuer Flex ohne Bart. Beide neuen Auswahlen speichern/neu starten, danach H9.
+Die neue Texturzuordnung betrifft nur Cs Materialinstanzen. Der Nutzer hat die
+bisherigen Kopf-, Haar- und Farbtests bestanden; dieser echte Bartwechsel ist
+neu implementiert und noch nicht im Spiel bestaetigt.
 
 ## 2. Natuerliche Stimme
 

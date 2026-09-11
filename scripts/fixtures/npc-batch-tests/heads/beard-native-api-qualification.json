@@ -1,0 +1,1056 @@
+{
+  "format": "gore-native-api-beard-texture-qualification-v1",
+  "qualified": true,
+  "scope": "Exactly Rendering::ImportFileAsTexture2D, MID::SetTextureParameterValue, FPaths::ProjectContentDir, one-argument FPaths::ConvertRelativePathToFull, UPrimitiveComponent::SetMaterial, and native UTexture leaf. No templates, property or wildcard authority.",
+  "source_snapshot_sha256": "e8004138e4b07a04203bfb7d10c33e8ba21ca64b0990f91a670b64d2a63fea3b",
+  "previous_qualification": {
+    "path": "scripts/fixtures/npc-batch-tests/quest/native-availability-property-qualification.json",
+    "sha256": "5b97225cfea73f3d85885a4df78390761e992c642860a5edca1d95ef6f0b0aad"
+  },
+  "pristine_cache_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+  "pristine_cache_guid_hex": "7835bcc09c5eee488d72cb5ffb0fb0c3",
+  "pristine_tail_offset": 88127207,
+  "pristine_t4_end": 111948149,
+  "profile_file_sha256": "8d816e27cf7d2a20283239ed3d06347e56a7c5813b9f03eda9a865659d022ba8",
+  "authority_file_sha256": {
+    "registration-trace.json": "17f374a632eadb354207aad9de7512367cad72e1c4c7a3253a3f68d9e075999c",
+    "post-bind-snapshot.json": "e355aeead72953582c31a2c1b933d08f87c4daa20f4cd55ae71db1f51713d4c5",
+    "reflected-type-graph.bin": "aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2"
+  },
+  "audit_script_sha256": "f82c74264a50247a10668fe001f98840383d9f04f0b820c53470fbf4aeadaa10",
+  "tail_reader_sha256": "96d35c4b297f45a8051d71d8b13d3350f686add84a1a171648c11edb76d556ec",
+  "qualification_script_sha256": "a5b3de3d4772e94279dc562f6330c34e3a3263a71742e1abd91e83e21cdbae94",
+  "datatype_flag_order": [
+    "IsReference",
+    "IsObjectConst",
+    "IsObjectHandle",
+    "IsReadOnly",
+    "IsAuto",
+    "HasIfHandleThenConst"
+  ],
+  "functions": [
+    {
+      "full_identity": "6:global0:9:Rendering0:21:ImportFileAsTexture2D1:090:6:object1:51:01:01:11:018:0:0:7:UObject1:00:,6:object1:51:11:11:01:018:0:0:7:FString1:00:,48:6:object1:51:01:01:11:022:0:0:10:UTexture2D1:00:",
+      "expected_t3": {
+        "full_identity": "6:global0:9:Rendering0:21:ImportFileAsTexture2D1:090:6:object1:51:01:01:11:018:0:0:7:UObject1:00:,6:object1:51:11:11:01:018:0:0:7:FString1:00:,48:6:object1:51:01:01:11:022:0:0:10:UTexture2D1:00:",
+        "name": "ImportFileAsTexture2D",
+        "owner_full_identity": "",
+        "is_const": false,
+        "is_method": false,
+        "is_imported": false,
+        "type_dependencies": [
+          {
+            "full_identity": "0:0:7:UObject1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              1,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:11:018:0:0:7:UObject1:00:"
+          },
+          {
+            "full_identity": "0:0:7:FString1:00:",
+            "token": 5,
+            "flags": [
+              1,
+              1,
+              0,
+              1,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:11:11:01:018:0:0:7:FString1:00:"
+          },
+          {
+            "full_identity": "0:0:10:UTexture2D1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              1,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:11:022:0:0:10:UTexture2D1:00:"
+          }
+        ]
+      },
+      "trace": {
+        "kind": "global_function",
+        "ordinal": 106134,
+        "registration_id": 106134,
+        "context": {
+          "namespace": "Rendering",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 58233,
+        "declaration": "UTexture2D ImportFileAsTexture2D(UObject WorldContextObject,const FString& Filename)",
+        "call_convention": "cdecl",
+        "callable_stub_id": 5,
+        "auxiliary_object_stub_id": null
+      },
+      "post_bind": {
+        "kind": "global_function",
+        "engine_function_id": 59547
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 58233,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": 0,
+        "hidden_argument_default": "__WorldContext",
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "binds_methods": [
+        {
+          "declaration": "UTexture2D ImportFileAsTexture2D(UObject WorldContextObject,const FString& Filename)",
+          "unreal_path": "ImportFileAsTexture2D",
+          "static_in_unreal": true,
+          "static_in_script": true,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": 0,
+          "determines_output_type_argument": -1,
+          "class_name": "Rendering",
+          "script_name": ""
+        }
+      ],
+      "origin": "independently registrar-derived; not claimed as observed compiled T3/T4",
+      "binds_scope": "exact reflected Binds declaration"
+    },
+    {
+      "full_identity": "6:method0:0:36:0:0:24:UMaterialInstanceDynamic1:00:24:SetTextureParameterValue1:089:6:object1:51:01:01:01:016:0:0:5:FName1:00:,6:object1:51:01:01:11:019:0:0:8:UTexture1:00:,27:9:primitive2:821:01:01:01:0",
+      "expected_t3": {
+        "full_identity": "6:method0:0:36:0:0:24:UMaterialInstanceDynamic1:00:24:SetTextureParameterValue1:089:6:object1:51:01:01:01:016:0:0:5:FName1:00:,6:object1:51:01:01:11:019:0:0:8:UTexture1:00:,27:9:primitive2:821:01:01:01:0",
+        "name": "SetTextureParameterValue",
+        "owner_full_identity": "0:0:24:UMaterialInstanceDynamic1:00:",
+        "is_const": false,
+        "is_method": true,
+        "is_imported": false,
+        "type_dependencies": [
+          {
+            "full_identity": "0:0:5:FName1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:01:016:0:0:5:FName1:00:"
+          },
+          {
+            "full_identity": "0:0:8:UTexture1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              1,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:11:019:0:0:8:UTexture1:00:"
+          },
+          {
+            "full_identity": null,
+            "token": 82,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "9:primitive2:821:01:01:01:0"
+          }
+        ]
+      },
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 106612,
+        "registration_id": 106612,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 58711,
+        "owner_type_id": 3680,
+        "declaration": "void SetTextureParameterValue(FName ParameterName,UTexture Value)",
+        "call_convention": "thiscall",
+        "callable_stub_id": 8877,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140854380,
+        "engine_function_id": 60035
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 58711,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "binds_methods": [
+        {
+          "declaration": "void SetTextureParameterValue(FName ParameterName,UTexture Value)",
+          "unreal_path": "SetTextureParameterValue",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ],
+      "origin": "independently registrar-derived; not claimed as observed compiled T3/T4",
+      "binds_scope": "exact reflected Binds declaration"
+    },
+    {
+      "full_identity": "6:global0:6:FPaths0:17:ProjectContentDir1:00:44:6:object1:51:01:01:01:018:0:0:7:FString1:00:",
+      "expected_t3": {
+        "full_identity": "6:global0:6:FPaths0:17:ProjectContentDir1:00:44:6:object1:51:01:01:01:018:0:0:7:FString1:00:",
+        "name": "ProjectContentDir",
+        "owner_full_identity": "",
+        "is_const": false,
+        "is_method": false,
+        "is_imported": false,
+        "type_dependencies": [
+          {
+            "full_identity": "0:0:7:FString1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:01:018:0:0:7:FString1:00:"
+          }
+        ]
+      },
+      "trace": {
+        "kind": "global_function",
+        "ordinal": 37630,
+        "registration_id": 37630,
+        "context": {
+          "namespace": "FPaths",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 3926,
+        "declaration": "FString ProjectContentDir()",
+        "call_convention": "cdecl",
+        "callable_stub_id": 220,
+        "auxiliary_object_stub_id": null
+      },
+      "post_bind": {
+        "kind": "global_function",
+        "engine_function_id": 3956
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 3926,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "binds_methods": [
+        {
+          "declaration": "FString ProjectContentDir()",
+          "unreal_path": "ProjectContentDir",
+          "static_in_unreal": true,
+          "static_in_script": true,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "Paths",
+          "script_name": ""
+        }
+      ],
+      "origin": "independently registrar-derived; not claimed as observed compiled T3/T4",
+      "binds_scope": "FPaths authority is the exact manual registrar/post-bind entry; any Paths Binds match is corroboration only"
+    },
+    {
+      "full_identity": "6:global0:6:FPaths0:25:ConvertRelativePathToFull1:045:6:object1:51:11:11:01:018:0:0:7:FString1:00:,44:6:object1:51:01:01:01:018:0:0:7:FString1:00:",
+      "expected_t3": {
+        "full_identity": "6:global0:6:FPaths0:25:ConvertRelativePathToFull1:045:6:object1:51:11:11:01:018:0:0:7:FString1:00:,44:6:object1:51:01:01:01:018:0:0:7:FString1:00:",
+        "name": "ConvertRelativePathToFull",
+        "owner_full_identity": "",
+        "is_const": false,
+        "is_method": false,
+        "is_imported": false,
+        "type_dependencies": [
+          {
+            "full_identity": "0:0:7:FString1:00:",
+            "token": 5,
+            "flags": [
+              1,
+              1,
+              0,
+              1,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:11:11:01:018:0:0:7:FString1:00:"
+          },
+          {
+            "full_identity": "0:0:7:FString1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:01:018:0:0:7:FString1:00:"
+          }
+        ]
+      },
+      "trace": {
+        "kind": "global_function",
+        "ordinal": 37658,
+        "registration_id": 37658,
+        "context": {
+          "namespace": "FPaths",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 3954,
+        "declaration": "FString ConvertRelativePathToFull(const FString& InPath)",
+        "call_convention": "cdecl",
+        "callable_stub_id": 192,
+        "auxiliary_object_stub_id": null
+      },
+      "post_bind": {
+        "kind": "global_function",
+        "engine_function_id": 3984
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 3954,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "binds_methods": [],
+      "origin": "independently registrar-derived; not claimed as observed compiled T3/T4",
+      "binds_scope": "FPaths authority is the exact manual registrar/post-bind entry; any Paths Binds match is corroboration only"
+    },
+    {
+      "full_identity": "6:method0:0:31:0:0:19:UPrimitiveComponent1:00:11:SetMaterial1:085:9:primitive2:681:01:01:01:0,6:object1:51:01:01:11:030:0:0:18:UMaterialInterface1:00:,27:9:primitive2:821:01:01:01:0",
+      "expected_t3": {
+        "full_identity": "6:method0:0:31:0:0:19:UPrimitiveComponent1:00:11:SetMaterial1:085:9:primitive2:681:01:01:01:0,6:object1:51:01:01:11:030:0:0:18:UMaterialInterface1:00:,27:9:primitive2:821:01:01:01:0",
+        "name": "SetMaterial",
+        "owner_full_identity": "0:0:19:UPrimitiveComponent1:00:",
+        "is_const": false,
+        "is_method": true,
+        "is_imported": false,
+        "type_dependencies": [
+          {
+            "full_identity": null,
+            "token": 68,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "9:primitive2:681:01:01:01:0"
+          },
+          {
+            "full_identity": "0:0:18:UMaterialInterface1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              1,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:11:030:0:0:18:UMaterialInterface1:00:"
+          },
+          {
+            "full_identity": null,
+            "token": 82,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "9:primitive2:821:01:01:01:0"
+          }
+        ]
+      },
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 102010,
+        "registration_id": 102010,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 54109,
+        "owner_type_id": 2300,
+        "declaration": "void SetMaterial(int ElementIndex,UMaterialInterface Material)",
+        "call_convention": "thiscall",
+        "callable_stub_id": 8933,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140853000,
+        "engine_function_id": 55264
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 54109,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "binds_methods": [
+        {
+          "declaration": "void SetMaterial(int ElementIndex,UMaterialInterface Material)",
+          "unreal_path": "SetMaterial",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ],
+      "origin": "independently registrar-derived; not claimed as observed compiled T3/T4",
+      "binds_scope": "exact reflected Binds declaration"
+    }
+  ],
+  "type_dependencies": [
+    {
+      "full_identity": "0:0:7:UObject1:00:",
+      "pristine_t1_present": true,
+      "trace": {
+        "kind": "object_type",
+        "ordinal": 14600,
+        "registration_id": 14600,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "type_id": 2109,
+        "declaration": "UObject",
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "type_operations": {
+          "kind": "fixed",
+          "operations": {
+            "can_create_property": true,
+            "never_requires_gc": false,
+            "requires_property": false,
+            "can_be_template_subtype": true,
+            "can_construct": true,
+            "need_construct": true,
+            "can_destruct": true,
+            "need_destruct": false,
+            "can_copy": true,
+            "need_copy": false,
+            "can_compare": true,
+            "can_hash_value": true,
+            "value_size": 8,
+            "value_alignment": 8,
+            "is_object_pointer": true
+          }
+        }
+      },
+      "post_bind": {
+        "kind": "object_type",
+        "engine_type_id": 1140852809
+      },
+      "final_state": {
+        "kind": "object_type",
+        "type_id": 2109,
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "base_type_id": null,
+        "shadow_type_id": null,
+        "interface_type_ids": [],
+        "interface_vft_offsets": [],
+        "has_implicit_constructors": false,
+        "accepts_value_subtype": true,
+        "accepts_reference_subtype": true,
+        "is_invalid_generated_type": false
+      },
+      "binds_types": [
+        {
+          "type_name": "UObject",
+          "unreal_path": "/Script/CoreUObject.Object"
+        }
+      ]
+    },
+    {
+      "full_identity": "0:0:7:FString1:00:",
+      "pristine_t1_present": true,
+      "trace": {
+        "kind": "object_type",
+        "ordinal": 24978,
+        "registration_id": 24978,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "type_id": 9367,
+        "declaration": "FString",
+        "byte_size": 16,
+        "alignment": 8,
+        "flags": 7938,
+        "type_operations": {
+          "kind": "fixed",
+          "operations": {
+            "can_create_property": true,
+            "never_requires_gc": false,
+            "requires_property": false,
+            "can_be_template_subtype": true,
+            "can_construct": true,
+            "need_construct": true,
+            "can_destruct": true,
+            "need_destruct": true,
+            "can_copy": true,
+            "need_copy": true,
+            "can_compare": true,
+            "can_hash_value": true,
+            "value_size": 16,
+            "value_alignment": 8,
+            "is_object_pointer": false
+          }
+        }
+      },
+      "post_bind": {
+        "kind": "object_type",
+        "engine_type_id": 67118243
+      },
+      "final_state": {
+        "kind": "object_type",
+        "type_id": 9367,
+        "byte_size": 16,
+        "alignment": 8,
+        "flags": 7938,
+        "base_type_id": null,
+        "shadow_type_id": null,
+        "interface_type_ids": [],
+        "interface_vft_offsets": [],
+        "has_implicit_constructors": false,
+        "accepts_value_subtype": true,
+        "accepts_reference_subtype": true,
+        "is_invalid_generated_type": false
+      },
+      "binds_types": []
+    },
+    {
+      "full_identity": "0:0:10:UTexture2D1:00:",
+      "pristine_t1_present": true,
+      "trace": {
+        "kind": "object_type",
+        "ordinal": 15640,
+        "registration_id": 15640,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "type_id": 3149,
+        "declaration": "UTexture2D",
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "type_operations": {
+          "kind": "fixed",
+          "operations": {
+            "can_create_property": true,
+            "never_requires_gc": false,
+            "requires_property": false,
+            "can_be_template_subtype": true,
+            "can_construct": true,
+            "need_construct": true,
+            "can_destruct": true,
+            "need_destruct": false,
+            "can_copy": true,
+            "need_copy": false,
+            "can_compare": true,
+            "can_hash_value": true,
+            "value_size": 8,
+            "value_alignment": 8,
+            "is_object_pointer": true
+          }
+        }
+      },
+      "post_bind": {
+        "kind": "object_type",
+        "engine_type_id": 1140853849
+      },
+      "final_state": {
+        "kind": "object_type",
+        "type_id": 3149,
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "base_type_id": null,
+        "shadow_type_id": 2603,
+        "interface_type_ids": [],
+        "interface_vft_offsets": [],
+        "has_implicit_constructors": false,
+        "accepts_value_subtype": true,
+        "accepts_reference_subtype": true,
+        "is_invalid_generated_type": false
+      },
+      "binds_types": [
+        {
+          "type_name": "UTexture2D",
+          "unreal_path": "/Script/Engine.Texture2D"
+        }
+      ]
+    },
+    {
+      "full_identity": "0:0:24:UMaterialInstanceDynamic1:00:",
+      "pristine_t1_present": true,
+      "trace": {
+        "kind": "object_type",
+        "ordinal": 16171,
+        "registration_id": 16171,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "type_id": 3680,
+        "declaration": "UMaterialInstanceDynamic",
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "type_operations": {
+          "kind": "fixed",
+          "operations": {
+            "can_create_property": true,
+            "never_requires_gc": false,
+            "requires_property": false,
+            "can_be_template_subtype": true,
+            "can_construct": true,
+            "need_construct": true,
+            "can_destruct": true,
+            "need_destruct": false,
+            "can_copy": true,
+            "need_copy": false,
+            "can_compare": true,
+            "can_hash_value": true,
+            "value_size": 8,
+            "value_alignment": 8,
+            "is_object_pointer": true
+          }
+        }
+      },
+      "post_bind": {
+        "kind": "object_type",
+        "engine_type_id": 1140854380
+      },
+      "final_state": {
+        "kind": "object_type",
+        "type_id": 3680,
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "base_type_id": null,
+        "shadow_type_id": 3677,
+        "interface_type_ids": [],
+        "interface_vft_offsets": [],
+        "has_implicit_constructors": false,
+        "accepts_value_subtype": true,
+        "accepts_reference_subtype": true,
+        "is_invalid_generated_type": false
+      },
+      "binds_types": [
+        {
+          "type_name": "UMaterialInstanceDynamic",
+          "unreal_path": "/Script/Engine.MaterialInstanceDynamic"
+        }
+      ]
+    },
+    {
+      "full_identity": "0:0:5:FName1:00:",
+      "pristine_t1_present": true,
+      "trace": {
+        "kind": "object_type",
+        "ordinal": 28768,
+        "registration_id": 28768,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "type_id": 12959,
+        "declaration": "FName",
+        "byte_size": 8,
+        "alignment": 8,
+        "flags": 778,
+        "type_operations": {
+          "kind": "fixed",
+          "operations": {
+            "can_create_property": true,
+            "never_requires_gc": false,
+            "requires_property": false,
+            "can_be_template_subtype": true,
+            "can_construct": true,
+            "need_construct": true,
+            "can_destruct": true,
+            "need_destruct": false,
+            "can_copy": true,
+            "need_copy": false,
+            "can_compare": true,
+            "can_hash_value": true,
+            "value_size": 8,
+            "value_alignment": 4,
+            "is_object_pointer": false
+          }
+        }
+      },
+      "post_bind": {
+        "kind": "object_type",
+        "engine_type_id": 67121835
+      },
+      "final_state": {
+        "kind": "object_type",
+        "type_id": 12959,
+        "byte_size": 8,
+        "alignment": 4,
+        "flags": 778,
+        "base_type_id": null,
+        "shadow_type_id": null,
+        "interface_type_ids": [],
+        "interface_vft_offsets": [],
+        "has_implicit_constructors": false,
+        "accepts_value_subtype": true,
+        "accepts_reference_subtype": true,
+        "is_invalid_generated_type": false
+      },
+      "binds_types": []
+    },
+    {
+      "full_identity": "0:0:8:UTexture1:00:",
+      "pristine_t1_present": false,
+      "trace": {
+        "kind": "object_type",
+        "ordinal": 15094,
+        "registration_id": 15094,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "type_id": 2603,
+        "declaration": "UTexture",
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "type_operations": {
+          "kind": "fixed",
+          "operations": {
+            "can_create_property": true,
+            "never_requires_gc": false,
+            "requires_property": false,
+            "can_be_template_subtype": true,
+            "can_construct": true,
+            "need_construct": true,
+            "can_destruct": true,
+            "need_destruct": false,
+            "can_copy": true,
+            "need_copy": false,
+            "can_compare": true,
+            "can_hash_value": true,
+            "value_size": 8,
+            "value_alignment": 8,
+            "is_object_pointer": true
+          }
+        }
+      },
+      "post_bind": {
+        "kind": "object_type",
+        "engine_type_id": 1140853303
+      },
+      "final_state": {
+        "kind": "object_type",
+        "type_id": 2603,
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "base_type_id": null,
+        "shadow_type_id": 2602,
+        "interface_type_ids": [],
+        "interface_vft_offsets": [],
+        "has_implicit_constructors": false,
+        "accepts_value_subtype": true,
+        "accepts_reference_subtype": true,
+        "is_invalid_generated_type": false
+      },
+      "binds_types": [
+        {
+          "type_name": "UTexture",
+          "unreal_path": "/Script/Engine.Texture"
+        }
+      ]
+    },
+    {
+      "full_identity": "0:0:19:UPrimitiveComponent1:00:",
+      "pristine_t1_present": true,
+      "trace": {
+        "kind": "object_type",
+        "ordinal": 14791,
+        "registration_id": 14791,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "type_id": 2300,
+        "declaration": "UPrimitiveComponent",
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "type_operations": {
+          "kind": "fixed",
+          "operations": {
+            "can_create_property": true,
+            "never_requires_gc": false,
+            "requires_property": false,
+            "can_be_template_subtype": true,
+            "can_construct": true,
+            "need_construct": true,
+            "can_destruct": true,
+            "need_destruct": false,
+            "can_copy": true,
+            "need_copy": false,
+            "can_compare": true,
+            "can_hash_value": true,
+            "value_size": 8,
+            "value_alignment": 8,
+            "is_object_pointer": true
+          }
+        }
+      },
+      "post_bind": {
+        "kind": "object_type",
+        "engine_type_id": 1140853000
+      },
+      "final_state": {
+        "kind": "object_type",
+        "type_id": 2300,
+        "byte_size": 0,
+        "alignment": 16,
+        "flags": 1310721,
+        "base_type_id": null,
+        "shadow_type_id": 2299,
+        "interface_type_ids": [],
+        "interface_vft_offsets": [],
+        "has_implicit_constructors": false,
+        "accepts_value_subtype": true,
+        "accepts_reference_subtype": true,
+        "is_invalid_generated_type": false
+      },
+      "binds_types": [
+        {
+          "type_name": "UPrimitiveComponent",
+          "unreal_path": "/Script/Engine.PrimitiveComponent"
+        }
+      ]
+    },
+    {
+      "full_identity": "0:0:18:UMaterialInterface1:00:",
+      "pristine_t1_present": true,
+      "trace": {
+        "kind": "object_type",
+        "ordinal": 15869,
+        "registration_id": 15869,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "type_id": 3378,
+        "declaration": "UMaterialInterface",
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "type_operations": {
+          "kind": "fixed",
+          "operations": {
+            "can_create_property": true,
+            "never_requires_gc": false,
+            "requires_property": false,
+            "can_be_template_subtype": true,
+            "can_construct": true,
+            "need_construct": true,
+            "can_destruct": true,
+            "need_destruct": false,
+            "can_copy": true,
+            "need_copy": false,
+            "can_compare": true,
+            "can_hash_value": true,
+            "value_size": 8,
+            "value_alignment": 8,
+            "is_object_pointer": true
+          }
+        }
+      },
+      "post_bind": {
+        "kind": "object_type",
+        "engine_type_id": 1140854078
+      },
+      "final_state": {
+        "kind": "object_type",
+        "type_id": 3378,
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "base_type_id": null,
+        "shadow_type_id": 2109,
+        "interface_type_ids": [],
+        "interface_vft_offsets": [],
+        "has_implicit_constructors": false,
+        "accepts_value_subtype": true,
+        "accepts_reference_subtype": true,
+        "is_invalid_generated_type": false
+      },
+      "binds_types": [
+        {
+          "type_name": "UMaterialInterface",
+          "unreal_path": "/Script/Engine.MaterialInterface"
+        }
+      ]
+    }
+  ],
+  "new_types": [
+    {
+      "full_identity": "0:0:8:UTexture1:00:",
+      "pristine_t1_present": false,
+      "trace": {
+        "kind": "object_type",
+        "ordinal": 15094,
+        "registration_id": 15094,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "type_id": 2603,
+        "declaration": "UTexture",
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "type_operations": {
+          "kind": "fixed",
+          "operations": {
+            "can_create_property": true,
+            "never_requires_gc": false,
+            "requires_property": false,
+            "can_be_template_subtype": true,
+            "can_construct": true,
+            "need_construct": true,
+            "can_destruct": true,
+            "need_destruct": false,
+            "can_copy": true,
+            "need_copy": false,
+            "can_compare": true,
+            "can_hash_value": true,
+            "value_size": 8,
+            "value_alignment": 8,
+            "is_object_pointer": true
+          }
+        }
+      },
+      "post_bind": {
+        "kind": "object_type",
+        "engine_type_id": 1140853303
+      },
+      "final_state": {
+        "kind": "object_type",
+        "type_id": 2603,
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "base_type_id": null,
+        "shadow_type_id": 2602,
+        "interface_type_ids": [],
+        "interface_vft_offsets": [],
+        "has_implicit_constructors": false,
+        "accepts_value_subtype": true,
+        "accepts_reference_subtype": true,
+        "is_invalid_generated_type": false
+      },
+      "binds_types": [
+        {
+          "type_name": "UTexture",
+          "unreal_path": "/Script/Engine.Texture"
+        }
+      ]
+    }
+  ],
+  "proof_limit": "Exact sealed registration, final post-bind and reflected Binds authority only. Compiler output identity/flags, Pak-backed file import and visible C-only material effect require their separate checks."
+}

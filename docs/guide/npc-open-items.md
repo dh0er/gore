@@ -23,9 +23,11 @@ recorded with that batch. Preparation does not check off the runtime items.
 - [ ] Truly clean-shaven/bearded faces and independent beard choices per NPC.
   H5/H6 failed visually: the Hero beard is painted into `T_NH_Head_D`; hiding
   the extra `MI_NH_Beard` geometry cannot remove it. Flex has no separate beard.
-  The misleading controls are hidden in0.1.1. A matching face-texture variant
-  and per-NPC assignment remain open; see the
-  [palette result](../../scripts/fixtures/npc-batch-tests/heads/runtime-result.json).
+  Version0.1.2 now implements C-only face-texture switching: a clean Hero and
+  bearded Flex, original-material restoration and restart reconstruction.
+  The new visible beard test remains open; it has priority over voice.
+  See the [beard checklist](../../scripts/fixtures/npc-batch-tests/heads/README.md)
+  and historical [palette result](../../scripts/fixtures/npc-batch-tests/heads/runtime-result.json).
 - [x] Verify animation alignment, save/load, full restart and absence of duplicate
   or overlapping heads.
 

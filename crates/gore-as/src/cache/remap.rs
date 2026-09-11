@@ -2416,7 +2416,7 @@ struct PristinePropertyIdentity {
 // registrar/Binds evidence. Extending it requires repeating the audit and updating this seal.
 const NATIVE_API_SNAPSHOT_BYTES: &[u8] = include_bytes!("../../data/npc-head-native-api-v1.json");
 const NATIVE_API_SNAPSHOT_SHA256: &str =
-    "e8004138e4b07a04203bfb7d10c33e8ba21ca64b0990f91a670b64d2a63fea3b";
+    "1b7cd9228f621b25a307f77ddaa8bab72e7c2c048d7db34855d39329d555b4dd";
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -10715,7 +10715,11 @@ mod native_api_snapshot_tests {
                 row["full_identity"]
                     .as_str()
                     .unwrap()
-                    .contains("UMaterialInstanceDynamic")
+                    .contains("GetVectorParameterValue")
+                    || row["full_identity"]
+                        .as_str()
+                        .unwrap()
+                        .contains("SetVectorParameterValue")
             })
             .cloned()
             .collect();
@@ -10769,6 +10773,202 @@ mod native_api_snapshot_tests {
                 }
             }
         }
+    }
+
+    fn cache_with_beard_texture_bindings(include_bindings: bool) -> Vec<u8> {
+        let mut bytes = empty_cache();
+        bytes.truncate(CacheHeader::SIZE);
+        let types = [
+            (0x100_i64, "UObject"),
+            (0x110, "FString"),
+            (0x120, "UTexture2D"),
+            (0x130, "UMaterialInstanceDynamic"),
+            (0x140, "FName"),
+            (0x160, "UPrimitiveComponent"),
+            (0x170, "UMaterialInterface"),
+            (0x150, "UTexture"),
+        ];
+        let type_count = if include_bindings { 8 } else { 7 };
+        bytes.extend_from_slice(&(type_count as i32).to_le_bytes());
+        for &(pointer, name) in &types[..type_count] {
+            bytes.extend_from_slice(&pointer.to_le_bytes());
+            for value in [name, "", ""] {
+                append_canonical_sia(&mut bytes, value).unwrap();
+            }
+            bytes.extend_from_slice(&0_i32.to_le_bytes());
+        }
+        bytes.extend_from_slice(&(type_count as i32).to_le_bytes());
+        for (index, &(pointer, _)) in types[..type_count].iter().enumerate() {
+            bytes.extend_from_slice(&(0x0400_0001_i32 + index as i32).to_le_bytes());
+            bytes.extend_from_slice(&pointer.to_le_bytes());
+        }
+        type Data = (i64, [i32; 6], i32);
+        let value = |pointer| (pointer, [0; 6], 5);
+        let handle = |pointer| (pointer, [0, 0, 1, 0, 0, 0], 5);
+        let string_ref = (0x110, [1, 1, 0, 1, 0, 0], 5);
+        let functions: [(&str, &str, i64, Vec<Data>, Data); 5] = [
+            (
+                "ImportFileAsTexture2D",
+                "Rendering",
+                0,
+                vec![handle(0x100), string_ref],
+                handle(0x120),
+            ),
+            (
+                "SetTextureParameterValue",
+                "",
+                0x130,
+                vec![value(0x140), handle(0x150)],
+                (0, [0; 6], 0x52),
+            ),
+            ("ProjectContentDir", "FPaths", 0, vec![], value(0x110)),
+            (
+                "ConvertRelativePathToFull",
+                "FPaths",
+                0,
+                vec![string_ref],
+                value(0x110),
+            ),
+            (
+                "SetMaterial",
+                "",
+                0x160,
+                vec![(0, [0; 6], 0x44), handle(0x170)],
+                (0, [0; 6], 0x52),
+            ),
+        ];
+        let count = if include_bindings { functions.len() } else { 0 };
+        bytes.extend_from_slice(&(count as i32).to_le_bytes());
+        for (index, (name, namespace, owner, parameters, result)) in
+            functions[..count].iter().enumerate()
+        {
+            bytes.extend_from_slice(&(0x200_i64 + index as i64).to_le_bytes());
+            for text in [*name, "", *namespace] {
+                append_canonical_sia(&mut bytes, text).unwrap();
+            }
+            for flag in [0_i32, 0, i32::from(*owner != 0)] {
+                bytes.extend_from_slice(&flag.to_le_bytes());
+            }
+            bytes.extend_from_slice(&owner.to_le_bytes());
+            bytes.extend_from_slice(&(parameters.len() as i32).to_le_bytes());
+            for (pointer, flags, token) in parameters.iter().chain(std::iter::once(result)) {
+                for flag in flags {
+                    bytes.extend_from_slice(&flag.to_le_bytes());
+                }
+                bytes.extend_from_slice(&pointer.to_le_bytes());
+                bytes.extend_from_slice(&token.to_le_bytes());
+            }
+        }
+        bytes.extend_from_slice(&(count as i32).to_le_bytes());
+        for index in 0..count {
+            bytes.extend_from_slice(&(12_i32 + index as i32).to_le_bytes());
+            bytes.extend_from_slice(&(0x200_i64 + index as i64).to_le_bytes());
+        }
+        bytes.extend_from_slice(&[0; 12]); // T5/T6/T7
+        bytes
+    }
+
+    #[test]
+    fn beard_texture_snapshot_admits_only_exact_texture_and_path_bindings() {
+        let pristine = cache_with_beard_texture_bindings(false);
+        let output = cache_with_beard_texture_bindings(true);
+        let mut base = build_allow_new_base_context(&pristine).unwrap();
+        assert!(validate_native_admission(&output, &base).is_err());
+        let embedded: serde_json::Value =
+            serde_json::from_slice(NATIVE_API_SNAPSHOT_BYTES).unwrap();
+        let names = [
+            "ImportFileAsTexture2D",
+            "SetTextureParameterValue",
+            "ProjectContentDir",
+            "ConvertRelativePathToFull",
+            "SetMaterial",
+        ];
+        let functions: Vec<_> = embedded["functions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| {
+                names
+                    .iter()
+                    .any(|name| row["full_identity"].as_str().unwrap().contains(name))
+            })
+            .cloned()
+            .collect();
+        assert_eq!(functions.len(), 5);
+        let types: Vec<_> = embedded["types"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["full_identity"] == "0:0:8:UTexture1:00:")
+            .cloned()
+            .collect();
+        assert_eq!(types.len(), 1);
+        assert_eq!(types[0]["object_kind"], 0x0400_0000);
+        let mut document = qualified_document(&pristine);
+        document["functions"] = serde_json::json!(functions);
+        document["types"] = serde_json::json!([]);
+        document["properties"] = serde_json::json!([]);
+        base.declarations.native_api = Some(Arc::new(parse_document(&document).unwrap()));
+        assert!(
+            validate_native_admission(&output, &base).is_err(),
+            "UTexture needs its own exact native type authority"
+        );
+        document["types"] = serde_json::json!(types);
+        base.declarations.native_api = Some(Arc::new(parse_document(&document).unwrap()));
+        validate_native_admission(&output, &base).unwrap();
+        validate_composed_module_records_with_pristine(&output, Some(&base.declarations)).unwrap();
+        let refused = |bytes: &[u8]| {
+            assert!(validate_native_admission(bytes, &base).is_err());
+            assert!(validate_composed_module_records_with_pristine(
+                bytes,
+                Some(&base.declarations)
+            )
+            .is_err());
+        };
+        let meta = TailMetadata::build(&output).unwrap();
+        for function in &meta.funcs {
+            let mut unknown_name = output.clone();
+            unknown_name[function.start + 12] = b'X';
+            refused(&unknown_name);
+            let mut cursor = Cursor::at(&output, function.start + 8);
+            cursor.read_sia().unwrap();
+            cursor.read_sia().unwrap();
+            let namespace_pos = cursor.pos();
+            cursor.read_sia().unwrap();
+            let mut wrong_const = output.clone();
+            wrong_const[cursor.pos()..cursor.pos() + 4].copy_from_slice(&1_i32.to_le_bytes());
+            refused(&wrong_const);
+            if !function.namespace.is_empty() {
+                let mut wrong_namespace = output.clone();
+                wrong_namespace[namespace_pos + 4] = b'X';
+                refused(&wrong_namespace);
+            }
+            if function.is_method {
+                let mut wrong_owner = output.clone();
+                let offset = function.owner_dep.0;
+                wrong_owner[offset..offset + 8].copy_from_slice(&0x100_i64.to_le_bytes());
+                refused(&wrong_owner);
+            }
+            for dependency in function
+                .type_deps
+                .iter()
+                .filter(|dependency| dependency.ptr != 0)
+            {
+                for flag in 0..3 {
+                    // runtime-effective reference/const/handle semantics
+                    let mut changed = output.clone();
+                    let offset = dependency.off - 24 + flag * 4;
+                    let old = i32::from_le_bytes(changed[offset..offset + 4].try_into().unwrap());
+                    changed[offset..offset + 4].copy_from_slice(&(old ^ 1).to_le_bytes());
+                    refused(&changed);
+                }
+            }
+        }
+        let texture_id = meta.type_ids.iter().find(|row| row.ptr == 0x150).unwrap();
+        let mut wrong_kind = output.clone();
+        wrong_kind[texture_id.start..texture_id.start + 4]
+            .copy_from_slice(&0x0800_0008_i32.to_le_bytes());
+        assert!(validate_native_admission(&wrong_kind, &base).is_err());
     }
 
     #[test]

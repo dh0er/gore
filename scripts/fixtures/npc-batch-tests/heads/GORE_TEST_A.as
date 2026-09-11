@@ -897,14 +897,15 @@ class UChoiceGorePaletteHairOn : UTopic_Hero__GORE_TEST_A
 class UChoiceGorePaletteBeardOff : UTopic_Hero__GORE_TEST_A
 {
     default DebugId = 3409845526797150004;
-    default Caption = FText::FromString(n"H5 Bart aus (Heldenkopf)".ToString());
+    default Caption = FText::FromString(n"H5 Bart aus".ToString());
     default PriorityRank = 26;
     UFUNCTION(BlueprintOverride)
-    bool IsVisible() const { return false; } // The visible Hero beard is baked into the face texture.
+    bool IsVisible() const { return FCharacterUniqueName(n"GORE_TEST_C").GetNPCState() != nullptr; }
     UFUNCTION(BlueprintOverride)
     void Act()
     {
         AG1RGameState::SaveWorldFloatData(this.GetSelf().GetWorld(), n"gore_palette_beard_hidden", 1.0f);
+        AG1RGameState::SaveWorldFloatData(this.GetSelf().GetWorld(), n"gore_palette_beard_mode", 1.0f);
         AGothicNPCState C = FCharacterUniqueName(n"GORE_TEST_C").GetNPCState();
         UGoreFlexHeadProbeController::GetOrCreate(C, n"GoreFlexHeadController").Initialize(C);
         this.EndConversation();
@@ -913,14 +914,15 @@ class UChoiceGorePaletteBeardOff : UTopic_Hero__GORE_TEST_A
 class UChoiceGorePaletteBeardOn : UTopic_Hero__GORE_TEST_A
 {
     default DebugId = 3409845526797150005;
-    default Caption = FText::FromString(n"H6 Bart an (Heldenkopf)".ToString());
+    default Caption = FText::FromString(n"H6 Bart an".ToString());
     default PriorityRank = 25;
     UFUNCTION(BlueprintOverride)
-    bool IsVisible() const { return false; } // The visible Hero beard is baked into the face texture.
+    bool IsVisible() const { return FCharacterUniqueName(n"GORE_TEST_C").GetNPCState() != nullptr; }
     UFUNCTION(BlueprintOverride)
     void Act()
     {
         AG1RGameState::SaveWorldFloatData(this.GetSelf().GetWorld(), n"gore_palette_beard_hidden", 0.0f);
+        AG1RGameState::SaveWorldFloatData(this.GetSelf().GetWorld(), n"gore_palette_beard_mode", 2.0f);
         AGothicNPCState C = FCharacterUniqueName(n"GORE_TEST_C").GetNPCState();
         UGoreFlexHeadProbeController::GetOrCreate(C, n"GoreFlexHeadController").Initialize(C);
         this.EndConversation();
@@ -970,6 +972,7 @@ class UChoiceGorePaletteRestore : UTopic_Hero__GORE_TEST_A
         AG1RGameState::SaveWorldFloatData(this.GetSelf().GetWorld(), n"gore_palette_hair_hidden", 0.0f);
         AG1RGameState::SaveWorldFloatData(this.GetSelf().GetWorld(), n"gore_palette_beard_hidden", 0.0f);
         AG1RGameState::SaveWorldFloatData(this.GetSelf().GetWorld(), n"gore_palette_hair_red", 0.0f);
+        AG1RGameState::SaveWorldFloatData(this.GetSelf().GetWorld(), n"gore_palette_beard_mode", 0.0f);
         AGothicNPCState C = FCharacterUniqueName(n"GORE_TEST_C").GetNPCState();
         if (C != nullptr) UGoreFlexHeadProbeController::GetOrCreate(C, n"GoreFlexHeadController").Initialize(C);
         this.EndConversation();

@@ -32,15 +32,17 @@
         {
           "source": "heads/GORE_TEST_A.as",
           "module_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
-          "sha256": "100dfd89787dbb64df1b072c9f987bc26be7705cacea16b986841d02cf0df2dc"
+          "sha256": "9a455ad067305b28d264594fe68825ed887cfe18e1540eba6100b46d2b56e60c"
         },
         {
           "source": "heads/GORE_TEST_B.as",
           "module_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
-          "sha256": "637a06baf3cd51b086772c2af2dec5630d6477849c2d893d9a7f05360952e5f2"
+          "sha256": "b334781f305b2c68ebd3e6d9f948f28d46ce68bbc9b7a22602b1554949219775"
         }
       ],
-      "bundle_version": "0.1.1"
+      "bundle_version": "0.1.2",
+      "cli_sha256": "14dcd61ed8a1b5a3fe52f77526bf3e5da4a7fab8f288a0f5db8e6af37eba5097",
+      "native_api_snapshot_sha256": "1b7cd9228f621b25a307f77ddaa8bab72e7c2c048d7db34855d39329d555b4dd"
     },
     "voice": {
       "bundle_name": "NpcNaturalVoiceTest",

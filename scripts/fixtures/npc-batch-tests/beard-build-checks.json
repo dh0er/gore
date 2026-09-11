@@ -1,0 +1,242 @@
+{
+  "schema": "gore.npc-batch.beard-build.v1",
+  "date": "2026-09-11",
+  "bundle": "NpcHeadPaletteTest",
+  "version": "0.1.2",
+  "passed": true,
+  "runtime_verified": false,
+  "build": {
+    "build": "heads-v4",
+    "source_tree_unchanged": true,
+    "authored_modules": [
+      {
+        "module_name": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A",
+        "relative_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
+        "disposition": "added",
+        "source": {
+          "byte_len": 41314,
+          "sha256": "9a455ad067305b28d264594fe68825ed887cfe18e1540eba6100b46d2b56e60c"
+        }
+      },
+      {
+        "module_name": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B",
+        "relative_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
+        "disposition": "added",
+        "source": {
+          "byte_len": 37090,
+          "sha256": "b334781f305b2c68ebd3e6d9f948f28d46ce68bbc9b7a22602b1554949219775"
+        }
+      },
+      {
+        "module_name": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+        "relative_path": "AI/AIAgent/Human/Config/OC_STT_Diego/CharacterDefinition_OC_STT_Diego.as",
+        "disposition": "edited",
+        "source": {
+          "byte_len": 5203,
+          "sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664"
+        }
+      },
+      {
+        "module_name": "LevelScripts.XardasTower_AI",
+        "relative_path": "LevelScripts/XardasTower_AI.as",
+        "disposition": "edited",
+        "source": {
+          "byte_len": 1814,
+          "sha256": "ee74734e29cafb76445abe5000bc662d2c9e79d3cd6b88a989a17f81d42056eb"
+        }
+      }
+    ],
+    "preservation": {
+      "operation": "product module_ranges exact serialized module span comparison",
+      "mini_modules": 4,
+      "full_modules": 7319,
+      "pristine_modules": 7317,
+      "unselected_pristine_modules_byte_identical": 7315,
+      "exact_selected_module_set": true,
+      "diego_bytes_unchanged_from_0_1_11": false,
+      "tower_bytes_unchanged_from_0_1_11": true,
+      "passed": true
+    },
+    "unchanged_Diego_Tower_emission": {
+      "operation": "product PreparedEmit with exact Binds and class defaults enabled",
+      "modules": [
+        {
+          "module": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+          "exactly_unchanged": true,
+          "prior_emitted_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664",
+          "current_emitted_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664"
+        },
+        {
+          "module": "LevelScripts.XardasTower_AI",
+          "exactly_unchanged": true,
+          "prior_emitted_sha256": "3e66b9ead53daaee8c876ddd2559dbdb31c616b3751a390bedf769467ec95e4f",
+          "current_emitted_sha256": "3e66b9ead53daaee8c876ddd2559dbdb31c616b3751a390bedf769467ec95e4f"
+        }
+      ]
+    },
+    "mini_sha256": "299bc99cea128c54d180d944ed51f20c0f346a3c07398fa551af5f9f6906ebb4",
+    "full_sha256": "cff57ee52d055b921b00d643b78e99ec3e9b0e83b29a0c2b062b9dfd3c64e7b6",
+    "generation_receipt_sha256": "d6f4ee34529cf1b3b34b9303215bd6437ae4b998829d61a1fbf23a674742b95a"
+  },
+  "inspection": {
+    "report_format": 1,
+    "source_kind": "directory",
+    "bundle_format": 2,
+    "mod": {
+      "name": "NpcHeadPaletteTest",
+      "version": "0.1.2",
+      "author": ""
+    },
+    "component_count": 4,
+    "components": [
+      {
+        "type": "loc_patch",
+        "path": "loc/edits.json",
+        "target_count": 42,
+        "footprint_coverage": "exact"
+      },
+      {
+        "type": "voice_archive_patch",
+        "path": "voice",
+        "target_count": 5,
+        "footprint_coverage": "exact"
+      },
+      {
+        "type": "angel_script_patch",
+        "path": "scripts",
+        "target_count": 4,
+        "footprint_coverage": "exact"
+      },
+      {
+        "type": "pak_file_patch",
+        "path": "pak_files",
+        "target_count": 2,
+        "footprint_coverage": "exact"
+      }
+    ],
+    "file_count": 13,
+    "directory_count": 5,
+    "total_file_bytes": 3540638,
+    "manifest_sha256": "c3540d355b26dffcfc2feb6c86f1413a23a3468c0ef79020a4bc0de4f3878ed5",
+    "tree_sha256": "c28f3341ee4ba2ab5bd41b7281f6014a55b46a26b66b20c6eaf07462394b2a07",
+    "evidence": {
+      "verified": [
+        "bounded non-link materialization of the selected directory or ZIP",
+        "root manifest format plus every declared component manifest and referenced payload",
+        "portable paths, payload size limits, and supported payload structure where an offline decoder exists",
+        "SHA-256 identity of the exact manifest bytes and complete normalized bundle tree"
+      ],
+      "not_verified": [
+        "compatibility with any particular game installation or game build",
+        "whether named game-side assets, samples, localization ids, or script edit targets exist",
+        "cross-mod conflicts, load order, or deployment readiness",
+        "runtime behavior, visuals, audio playback, dialog flow, or gameplay effect"
+      ]
+    }
+  },
+  "native_qualification": {
+    "snapshot_sha256": "1b7cd9228f621b25a307f77ddaa8bab72e7c2c048d7db34855d39329d555b4dd",
+    "evidence_sha256": "2fe15b6a453b2d0f339157a9fbd0bddb5405717f961c574ce93f78e97b293371",
+    "test_command": "cargo test -p gore-as --lib native_api_snapshot_tests --target-dir C:/sbx/goresave/target -- --nocapture",
+    "passed": 7,
+    "ignored_existing_export_helper": 1
+  },
+  "helper": {
+    "route": "Existing productive FullGraph Core API; direct rustc link against qualified product Release library",
+    "command": "rustc",
+    "arguments": [
+      "--edition=2021",
+      "-C",
+      "opt-level=3",
+      "work/npc-batch-tests/core-build.rs",
+      "--crate-name",
+      "npc_batch_core_build",
+      "-L",
+      "dependency=C:/sbx/goresave/target/release/deps",
+      "-L",
+      "native=C:/Users/Daniel/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/windows_x86_64_msvc-0.48.5/lib",
+      "--extern",
+      "gore_as=C:/sbx/goresave/target/release/deps/libgore_as-0a303f6a95c2be37.rlib",
+      "--extern",
+      "gore_mod=C:/sbx/goresave/target/release/deps/libgore_mod-826075152e8cbff4.rlib",
+      "--extern",
+      "serde_json=C:/sbx/goresave/target/release/deps/libserde_json-408aeb98b879f5ad.rlib",
+      "--extern",
+      "sha2=C:/sbx/goresave/target/release/deps/libsha2-aafecd3af9485a2d.rlib",
+      "--extern",
+      "anyhow=C:/sbx/goresave/target/release/deps/libanyhow-f743ab8a597f82a4.rlib",
+      "-o",
+      "work/npc-batch-tests/core-build-beard-v1.exe"
+    ],
+    "source_sha256": "9a903c073ce9252d8012bbdfffd16bc98bd821caa0dfacfd1d88d16b499dc83c",
+    "helper_sha256": "4fb511976366c2389ddc47d70e22692e3f0ce566ada5aeea26008264734fcc9a",
+    "gore_as_rlib_sha256": "0ed7cd8a8ae266f2d99cbe82457b47c62a2706ecd8a49fdbde6c2dc77fdbfbac",
+    "embedded_catalog_sha256": "de2a2820193eb81f3032e3731d469a02dbd9ea05942f0ef48ebab58966a46e64",
+    "product_host_sha256": "14dcd61ed8a1b5a3fe52f77526bf3e5da4a7fab8f288a0f5db8e6af37eba5097",
+    "native_api_snapshot_sha256": "1b7cd9228f621b25a307f77ddaa8bab72e7c2c048d7db34855d39329d555b4dd"
+  },
+  "core_route": {
+    "base_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+    "binds_sha256": "aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2",
+    "changed_paths": [
+      "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
+      "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
+      "AI/AIAgent/Human/Config/OC_STT_Diego/CharacterDefinition_OC_STT_Diego.as",
+      "LevelScripts/XardasTower_AI.as"
+    ],
+    "final_source_manifest_sha256": "69b9c523876c74d8b3651bfd0e4d2f11de65f8683ecfc268aea8f41952240c06",
+    "frozen_build": "\\\\?\\C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\builds\\heads-v3",
+    "frozen_manifest_sha256": "32a8430ea3b2a7a5e8dbfc6e52572aa6a391e59db490d368f30ae661b7f44969",
+    "helper_sha256": "4fb511976366c2389ddc47d70e22692e3f0ce566ada5aeea26008264734fcc9a",
+    "overlay_sha256": {
+      "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as": "9a455ad067305b28d264594fe68825ed887cfe18e1540eba6100b46d2b56e60c",
+      "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as": "b334781f305b2c68ebd3e6d9f948f28d46ce68bbc9b7a22602b1554949219775"
+    },
+    "pristine_source_manifest_sha256": "18ba4561d63639f4a78ccba1a8d93c5d7eb99f995a2adcd9ce788c118c281679",
+    "product_package": {
+      "catalog_sha256": "de2a2820193eb81f3032e3731d469a02dbd9ea05942f0ef48ebab58966a46e64",
+      "compatibility_id": "gore-as-standalone-semantic-v2",
+      "manifest_byte_len": 5023,
+      "manifest_sha256": "8d816e27cf7d2a20283239ed3d06347e56a7c5813b9f03eda9a865659d022ba8",
+      "profile_sha256": "264c06884f7d54db2da35cc9c057529be4ccbf208cf577370e4da5199aaf9ab3",
+      "request_version": 2,
+      "response_version": 1,
+      "sidecar_byte_len": 2233608,
+      "sidecar_sha256": "abceb0a495074852441da1b3370122a5bf6d24d4e8096c23596caff2a8ed6ee2",
+      "target": {
+        "pe_codeview": {
+          "age": 1,
+          "guid": "c2ca4ada-4878-d963-e567-717dc2c483a2"
+        },
+        "target": {
+          "architecture": "x86_64",
+          "build_configuration": "shipping",
+          "depot_id": 1297901,
+          "depot_manifest_gid": 382135126159906494,
+          "platform": "windows",
+          "steam_app_id": 1297900,
+          "steam_build_id": 24878692
+        }
+      }
+    },
+    "route": "compile_full_graph_standalone_v1_with_target",
+    "source_modules": 7319,
+    "source_planner": "frozen source inventory compared with prior verified pristine emission; no repeated original emit"
+  },
+  "review_fixes": [
+    "Match the separate direct-master Flex LOD face material.",
+    "Keep Flex original-material records when the same poseable component survives a body rebuild.",
+    "Clear only exact owned Hero MID overrides before discarding obsolete body records."
+  ],
+  "dedicated_inspector": "Installed MCP CLI v0.3.0 rejected the already-used four-module mini-cache envelope; current product CLI inspection succeeded. Version capability mismatch, no permission refusal.",
+  "source_images": [
+    {
+      "path": "work/npc-batch-tests/beard-switch/images/T_NH_Head_Clean_D.png",
+      "sha256": "c1357d23d584892ee0e24064eac4ee259dd2fc683d759830fc95b6c96b06dfb3"
+    },
+    {
+      "path": "work/npc-batch-tests/beard-switch/images/T_OC_IE_Flex_Beard_D.png",
+      "sha256": "52c20ba31e3694f88df1132161b75f52d3c555c9532753193d622b520bd7b290"
+    }
+  ]
+}
