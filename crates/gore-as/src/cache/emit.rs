@@ -24363,7 +24363,10 @@ fn retained_value_arguments(
     let mut out = HashSet::new();
     let uses_by_slot = &uses;
     for (s, dies) in releases {
-        if !matches!(dies.len(), 1 | 2) { continue; }
+        // A single local may leave through any number of returns or loop exits.
+        // The closed creator/consumer proof and statement boundary below decide
+        // its lifetime; the number of cleanup paths does not make it temporary.
+        if dies.is_empty() { continue; }
         let (Some(created), Some(read), Some(uses)) = (creators.get(&s), readers.get(&s), uses.get(&s))
             else { continue; };
         if created.len() != 1 || read.len() != 1 || uses.len() != dies.len() + 2
@@ -38066,6 +38069,69 @@ fn script_value_destructor(ins: &Instr, refs: &RefResolver) -> bool {
         && refs.func_ret_by_id(id).is_some_and(|r| r.token == 0x52 && !r.is_reference)
 }
 
+/// A factory temporary remains the receiver through a fluent reference and an enum copy.
+fn fluent_enum_copy_receiver(
+    instrs: &[Instr], refs: &RefResolver, producer: usize, consumer: Option<usize>,
+    release: usize, copy: usize, slot: i32,
+) -> bool {
+    (|| {
+        let start = producer.checked_sub(7)?;
+        let c = instrs.get(start..release.checked_add(2)?)?;
+        if c.len() != 16 || consumer != Some(producer + 2) || copy != producer + 6
+            || c.iter().map(|i| i.op.name).ne(["PshC4", "CALLSYS", "PshRPtr", "PshVPtr", "ADDSi", "RDSPtr",
+                "PSF", "CALL", "PSF", "CALLSYS", "PshRPtr", "CALLSYS", "RDR1", "CpyVtoV4", "PSF", "CALLSYS"])
+        { return None; }
+        let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+        let p = |i: &Instr| i.qwords.first().map(|v| *v as i64);
+        if slot <= 0 || w(&c[3], 0) != Some(0) || [6, 8, 14].iter().any(|n| w(&c[*n], 0) != Some(slot))
+            || w(&c[12], 0)? <= 0 || w(&c[13], 0)? <= 0 || w(&c[13], 1) != w(&c[12], 0)
+            || [w(&c[12], 0)?, w(&c[13], 0)?].contains(&slot) || w(&c[12], 0) == w(&c[13], 0)
+        { return None; }
+        let plain = |t: &super::types::DataType, token| t.token == token && t.type_info == 0
+            && !t.is_reference && !t.is_object_handle && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+        let object = |t: &super::types::DataType, ty, reference, constant, handle: bool| t.token == 5 && t.type_info == ty
+            && t.is_reference == reference && t.is_object_const == constant && t.is_read_only == (constant && !handle)
+            && t.is_object_handle == handle && !t.is_auto && !t.if_handle_then_const;
+        let native = |ty| refs.type_identity_by_ptr(ty).filter(|t| t.module.is_empty() && t.namespace.is_empty());
+        let factory = *c[7].dwords.first()? as i32;
+        let value = refs.func_ret_by_id(factory)?;
+        let owner = native(value.type_info)?;
+        let [argument] = refs.func_params_by_id(factory)? else { return None; };
+        if refs.is_method_by_id(factory) || !object(value, value.type_info, false, false, false)
+            || is_enum(&owner.name) || !object(argument, argument.type_info, false, false, true)
+        { return None; }
+        // The compiled field-to-handle argument supplies provenance without inventing native ancestry.
+        let field_id = *c[4].dwords.first()? as i32;
+        let field_owner = refs.type_identity_by_id(field_id)?;
+        let (field, old_owner) = refs.member_identity(field_id, w(&c[4], 0)?)?;
+        if refs.type_identity_by_id(old_owner)? != field_owner
+            || !refs.own_field_type_by_class(&field_owner.name, field).is_some_and(is_object_handle_type)
+        { return None; }
+        let (literal, fluent, getter, destructor) = (p(&c[1])?, p(&c[9])?, p(&c[11])?, p(&c[15])?);
+        let [name_argument] = refs.func_params_by_ptr(fluent)? else { return None; };
+        let name_type = native(name_argument.type_info)?;
+        let [index] = refs.func_params_by_ptr(literal)? else { return None; };
+        if is_enum(&name_type.name) || !object(name_argument, name_argument.type_info, false, false, false)
+            || refs.is_method_by_ptr(literal) || refs.func_owner_by_ptr(literal).is_some() || !plain(index, 0x44)
+            || !object(refs.func_ret_by_ptr(literal)?, name_argument.type_info, true, true, false)
+            || !object(refs.func_ret_by_ptr(fluent)?, value.type_info, true, false, false)
+        { return None; }
+        for (ptr, constant) in [(fluent, false), (getter, true), (destructor, false)] {
+            if refs.func_owner_by_ptr(ptr) != Some(owner.name.as_str()) || !refs.is_method_by_ptr(ptr)
+                || refs.is_const_method_by_ptr(ptr) != constant { return None; }
+        }
+        let result = refs.func_ret_by_ptr(getter)?;
+        if !is_enum(&native(result.type_info)?.name) || !object(result, result.type_info, true, true, false)
+            || !refs.func_params_by_ptr(getter)?.is_empty() || refs.func_by_ptr(destructor) != Some("$beh2")
+            || !refs.func_params_by_ptr(destructor)?.is_empty() || !plain(refs.func_ret_by_ptr(destructor)?, 0x52)
+            || instrs.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                target > c[0].offset_dw as i64 && target <= c[15].offset_dw as i64
+            }))) { return None; }
+        Some(())
+    })().is_some()
+}
+
 /// A VALUE object a call builds straight into a declared local: `PSF X; CALL f` with `X` never
 /// constructed by a `$beh0` of its own, and — the same question the construction-site markers
 /// settle by the destructor — released at its block's end rather than right after the first
@@ -38428,7 +38494,9 @@ fn rvo_declared_at_initializer(
             // temporary receiver dies. This exact copy is still the consumer's
             // expression, unlike an arbitrary later local-to-local assignment.
             let enum_result_copy = ins.op.name == "CpyVtoV4" && k >= 2 && k + 1 == release
-                && consumer == Some(k - 2) && instrs[k - 1].op.name == "RDR1"
+                && (consumer == Some(k - 2)
+                    || fluent_enum_copy_receiver(instrs, refs, at, consumer, release, k, slot))
+                && instrs[k - 1].op.name == "RDR1"
                 && ins.words.get(1).map(|v| *v as i16 as i32) == Some(w0(&instrs[k - 1]))
                 && w0(ins) > 0 && w0(ins) != w0(&instrs[k - 1])
                 && instrs[k - 2].op.name == "CALLSYS"
@@ -41747,6 +41815,62 @@ mod member_arithmetic_lifetime_tests {
         }
         let outside = "    UItem local_80 = Pop();\n    if (More())\n    {\n        Use(local_80);\n        local_80 = nullptr;\n    }\n";
         assert_eq!(super::drop_block_end_handle_releases(outside), outside);
+    }
+
+    #[test]
+    fn fluent_enum_copy_finishes_before_the_factory_receiver_is_destroyed() {
+        let mut f = function(&[("PshC4", &[]), ("CALLSYS", &[]), ("PshRPtr", &[]),
+            ("PshVPtr", &[0]), ("ADDSi", &[48]), ("RDSPtr", &[]), ("PSF", &[20]),
+            ("CALL", &[]), ("PSF", &[20]), ("CALLSYS", &[]), ("PshRPtr", &[]),
+            ("CALLSYS", &[]), ("RDR1", &[21]), ("CpyVtoV4", &[11, 21]),
+            ("PSF", &[20]), ("CALLSYS", &[]), ("RET", &[0])]);
+        let code = super::disassemble(&f.bytecode).unwrap();
+        for (at, value) in [(0, 8446), (1, 5), (4, 105), (7, 1), (9, 2), (11, 3), (15, 4)] {
+            f.bytecode[code[at].offset_dw + 1] = value;
+        }
+        let code = super::disassemble(&f.bytecode).unwrap();
+        let refs = RefResolver::from_test_fluent_enum_copy(0);
+        let accepts = |code: &[super::Instr], refs: &RefResolver, slot| {
+            super::fluent_enum_copy_receiver(code, refs, 7, Some(9), 14, 13, slot)
+        };
+        let named = |code: &[super::Instr], refs: &RefResolver, slot| {
+            super::rvo_declared_at_initializer(code, refs, &[(slot, 7)], &[(slot, 9)])
+        };
+        assert!(accepts(&code, &refs, 20));
+        assert!(named(&code, &refs, 20).is_empty());
+        for fault in 1..=15 {
+            let bad = RefResolver::from_test_fluent_enum_copy(fault);
+            assert!(!accepts(&code, &bad, 20), "metadata {fault}");
+            // A handle-valued factory no longer has an RVO to classify.
+            if fault != 7 { assert!(named(&code, &bad, 20).contains(&20), "metadata {fault}"); }
+        }
+        for (at, word, value) in [(3, 0, 2), (4, 0, 52), (6, 0, 22), (8, 0, 22),
+            (12, 0, 20), (13, 0, 20), (13, 1, 22), (14, 0, 22)] {
+            let mut bad = code.clone(); bad[at].words[word] = value;
+            assert!(!accepts(&bad, &refs, 20), "operand {at}:{word}");
+        }
+        let mut branch = super::disassemble(&function(&[("JMP", &[])]).bytecode).unwrap().remove(0);
+        branch.offset_dw = code.last().unwrap().offset_dw + 1;
+        branch.dwords[0] = (code[1].offset_dw as i64 - branch.offset_dw as i64 - 2) as i32 as u32;
+        let mut entered = code.clone(); entered.push(branch.clone());
+        assert!(!accepts(&entered, &refs, 20));
+        assert_eq!(named(&entered, &refs, 20), vec![20]);
+        // An entry at the whole expression's start is safe; only interior entries are refused.
+        branch.dwords[0] = (code[0].offset_dw as i64 - branch.offset_dw as i64 - 2) as i32 as u32;
+        let mut start_entry = code.clone(); start_entry.push(branch);
+        assert!(accepts(&start_entry, &refs, 20));
+        let mut renamed = code.clone();
+        for at in [6, 8, 14] { renamed[at].words[0] = 42; }
+        renamed[12].words[0] = 45; renamed[13].words = vec![37, 45];
+        assert!(accepts(&renamed, &refs, 42));
+        assert!(named(&renamed, &refs, 42).is_empty());
+        assert!(!super::fluent_enum_copy_receiver(&code, &refs, 7, Some(11), 14, 13, 20));
+        // Extra work between the enum read and release remains a statement boundary.
+        let mut interrupted = code.clone(); interrupted[13].op = super::disassemble(
+            &function(&[("SetV4", &[11])]).bytecode).unwrap()[0].op;
+        interrupted[13].words = vec![11]; interrupted[13].dwords = vec![0];
+        assert!(!accepts(&interrupted, &refs, 20));
+        assert_eq!(named(&interrupted, &refs, 20), vec![20]);
     }
 
     #[test]
@@ -54929,6 +55053,55 @@ mod literal_value_lifetime_tests {
         let mut jump = function(&[("JMP", &[])]).bytecode;
         jump[1] = code[1].offset_dw as i32; jump.extend(entry.bytecode); entry.bytecode = jump;
         assert_eq!(super::fold_unary_double_chain(source, &entry, &refs), source);
+    }
+
+    #[test]
+    fn a_value_kept_after_a_void_consumer_survives_multiple_exit_paths() {
+        let refs = RefResolver::from_test_retained_receiver(0x52, true);
+        let check = |f: &Func, refs: &RefResolver, producers: &[(i32, usize)], readers: &[(i32, usize)]| {
+            let fc = super::FuncCode { func: "Synthetic::Use".into(), is_method: false,
+                param_names: Vec::new(), param_types: Vec::new(), ret: f.ret.clone(), bytecode: f.bytecode.clone() };
+            super::retained_value_arguments(f, &fc, refs, producers, readers)
+        };
+        for exits in [3, 5] {
+            let mut ops: Vec<(&str, &[u16])> = vec![("PSF", &[10]), ("CALLSYS", &[]),
+                ("PSF", &[10]), ("CALLSYS", &[]), ("CALLSYS", &[])];
+            let mut edges = Vec::new();
+            for _ in 1..exits {
+                let at = ops.len();
+                ops.extend_from_slice(&[("CMPIi", &[15]), ("JZ", &[]), ("PSF", &[10]),
+                    ("CALLSYS", &[]), ("JMP", &[])]);
+                edges.extend([(at + 1, at + 5), (at + 4, 0)]);
+            }
+            ops.extend_from_slice(&[("PSF", &[10]), ("CALLSYS", &[]), ("RET", &[0])]);
+            let mut f = function(&ops); f.ret.token = 0x52;
+            let code = disassemble(&f.bytecode).unwrap();
+            for (at, ins) in code.iter().enumerate().filter(|(_, i)| i.op.name == "CALLSYS") {
+                f.bytecode[ins.offset_dw + 1] = match at { 1 => 1, 3 => 2, 4 => 4, _ => 3 };
+            }
+            for (from, to) in edges {
+                let to = if to == 0 { code.len() - 1 } else { to };
+                f.bytecode[code[from].offset_dw + 1] = code[to].offset_dw as i32 - code[from].offset_dw as i32 - 2;
+            }
+            let keep = check(&f, &refs, &[(10, 1)], &[(10, 3)]);
+            assert_eq!(keep, HashSet::from([10]));
+            let body = "local_10 = Create();\nlocal_10.Count();\nAct();\n";
+            let locals = BTreeMap::from([(10, "FValue".into())]);
+            assert_eq!(super::inline_call_argument_temporaries(body, &refs, &locals, None, true,
+                &HashMap::new(), &keep, &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
+                &HashSet::new(), &keep, &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new()), body);
+            assert!(check(&f, &RefResolver::from_test_retained_receiver(0x41, true), &[(10, 1)], &[(10, 3)]).is_empty());
+            assert!(check(&f, &refs, &[(10, 1), (10, 4)], &[(10, 3)]).is_empty());
+            assert!(check(&f, &refs, &[(10, 1)], &[(10, 3), (10, 4)]).is_empty());
+            let mut escaped = f.clone(); escaped.bytecode.extend(function(&[("PSF", &[10])]).bytecode);
+            assert!(check(&escaped, &refs, &[(10, 1)], &[(10, 3)]).is_empty());
+            // A temporary released in the consumer's cleanup remains temporary,
+            // even when the same physical slot has more later cleanup sites.
+            let mut immediate = f.clone(); let end = code.len() - 3;
+            immediate.bytecode.splice(code[4].offset_dw..code[4].offset_dw,
+                f.bytecode[code[end].offset_dw..code[end + 2].offset_dw].iter().copied());
+            assert!(check(&immediate, &refs, &[(10, 1)], &[(10, 3)]).is_empty());
+        }
     }
 
     #[test]

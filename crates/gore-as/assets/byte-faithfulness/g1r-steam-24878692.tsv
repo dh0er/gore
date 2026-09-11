@@ -13,7 +13,6 @@ AI.CharacterAI_Orc	2	0	0
 AI.DailyRoutines.DailyRoutines_OG	1	0	0
 AI.NativeAICommands	1	0	0
 AI.States.AIState_FollowCharacterAggressive	1	0	0
-AI.States.AIState_GuideCharacter	2	0	0
 AI.States.FightAI.AIState_PerceptionResponse	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_CombatEndActions	1	0	0
 AI.States.FightAI.CombatState.AIGroup_Attackers	1	0	0

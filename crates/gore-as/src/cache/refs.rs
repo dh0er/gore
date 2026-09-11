@@ -8384,6 +8384,55 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_fluent_enum_copy(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name, module) in [(101, "FTask", ""), (102, "FName", ""), (103, "EOutcome", ""),
+            (104, "UAbility", ""), (105, "UHost", "Fixture")] {
+            r.type_by_ptr.insert(ptr, name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: module.into(), namespace: String::new() });
+            r.typeid_to_ptr.insert(ptr as i32, ptr);
+        }
+        let value = |type_info| DataType { token: 5, type_info, ..Default::default() };
+        let input = |type_info| DataType { is_reference: true, is_object_const: true, is_read_only: true, ..value(type_info) };
+        let void = DataType { token: 0x52, ..Default::default() };
+        for (ptr, name, owner, constant, ret, args) in [
+            (1, "Start", "", false, value(101), vec![DataType { is_object_handle: true, ..value(104) }]),
+            (2, "WithCondition", "FTask", false, DataType { is_reference: true, ..value(101) }, vec![value(102)]),
+            (3, "Outcome", "FTask", true, input(103), vec![]),
+            (4, "$beh2", "FTask", false, void, vec![]),
+            (5, "LiteralName", "", false, input(102), vec![DataType { token: 0x44, ..Default::default() }]),
+        ] {
+            r.func_by_ptr.insert(ptr, name.into()); r.funcid_to_ptr.insert(ptr as i32, ptr);
+            r.func_ret.insert(ptr, ret); r.func_params.insert(ptr, args);
+            if !owner.is_empty() { r.func_owner.insert(ptr, owner.into()); r.func_is_method.insert(ptr); }
+            if constant { r.const_method_ptrs.insert(ptr); }
+        }
+        let key = (48i64 << 33) | (105i64 << 1) | 1;
+        r.prop_by_key.insert(key, "Ability".into()); r.prop_type_id.insert(key, 105);
+        r.class_fields.entry("UHost".into()).or_default().insert("Ability".into(), "ULeafAbility".into());
+        // Deliberately no native superclass edge: the bytecode already supplies the handle argument.
+        match fault {
+            1 => r.func_ret.get_mut(&2).unwrap().is_reference = false,
+            2 => r.func_ret.get_mut(&2).unwrap().is_object_const = true,
+            3 => { r.const_method_ptrs.insert(2); },
+            4 => { r.func_owner.insert(3, "FOther".into()); },
+            5 => r.func_ret.get_mut(&3).unwrap().is_read_only = false,
+            6 => r.func_ret.get_mut(&3).unwrap().is_reference = false,
+            7 => r.func_ret.get_mut(&1).unwrap().is_object_handle = true,
+            8 => r.func_params.get_mut(&1).unwrap()[0].is_reference = true,
+            9 => r.func_params.get_mut(&2).unwrap()[0].is_reference = true,
+            10 => r.func_ret.get_mut(&5).unwrap().type_info = 101,
+            11 => r.func_params.get_mut(&5).unwrap()[0].token = 0x50,
+            12 => r.func_ret.get_mut(&4).unwrap().token = 0x44,
+            13 => { r.const_method_ptrs.insert(4); },
+            14 => { r.class_fields.get_mut("UHost").unwrap().insert("Ability".into(), "FName".into()); },
+            15 => r.type_identity_by_ptr.get_mut(&101).unwrap().module = "Script".into(),
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_short_value_lifetimes(const_argument: bool, enum_reference: bool, const_discard: bool) -> Self {
         let mut r = Self::default();
         for (ptr, name) in [(101, "FString"), (102, "FSettings"), (103, "EOutcome")] {
