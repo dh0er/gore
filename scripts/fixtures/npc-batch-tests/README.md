@@ -7,9 +7,11 @@ die Save-Bereinigung und `7ac45595` die benoetigte native API-Komposition.
 Siehe [Build-/Paketpruefung](build-checks.json) und
 [veroeffentlichte Startstaende](start-saves.json).
 
-**Aktiv ist jetzt NpcHeadPaletteTest**; Manager-Status `in_sync`. Die anderen
-vier Pakete sind importiert und deaktiviert. IDs, Paket-Hashes und Ruecknahme
-stehen im [Deploymentbericht](deployment.json).
+**Aktiv ist jetzt NpcNaturalVoiceTest 0.1.1**; Manager-Status `in_sync`.
+Kopf- und andere Pakete sind deaktiviert. Die aktualisierten Kopf-/Sprachpakete
+sind [geprueft](daylight-build-checks.json); aktuelle IDs und Ruecknahme stehen
+im [Tageslicht-Deploymentbericht](daylight-deployment.json).
+Der urspruengliche [Deploymentbericht](deployment.json) bleibt als Historie erhalten.
 
 Die Pakete werden **einzeln** aktiviert. Zum Paketwechsel das Spiel vollstaendig
 beenden und den zugehoerigen START-Stand laden. Ergebnisse anderer Pakete nicht
@@ -18,7 +20,7 @@ den unten verlinkten Testnamen neu speichern. Spieltests macht der Benutzer.
 
 | Reihenfolge | Paket | Startstaende in Profil 4 | Abdeckung |
 |---|---|---|---|
-| 1 | NpcHeadPaletteTest | 065: NPC 01 Koepfe - START | Gesicht, Haare, Bart-Geometrie, Haarfarbe, Wiederherstellung, Neustart |
+| 1 | NpcHeadPaletteTest | 065: NPC 01 Koepfe - START | Gesicht, Haare, Haarfarbe, Wiederherstellung, Neustart; Barttextur offen |
 | 2 | NpcNaturalVoiceTest | 066: NPC 02 Voice - START | Natuerliche Begruessung/Alltagsstimme, zweites Stimmprofil, Routine, Neustart |
 | 3 | NpcEconomyRolesTest | 067: Handel - LP fehlt; 068: Lehrer - Erz fehlt; 069: Lehrer - bereit | Kaufen/Verkaufen/Abbrechen, beide Lernvoraussetzungen, Kosten, bereits gelernt, Persistenz |
 | 4 | NpcFieldRolesTest | 070: NPC 04 Rollen - START; 072: NPC 04 Rollen - Kampf bereit | Waffenwahl-Diagnose, Folgen/Warten, Feindschaft/Gilde, Flucht, Niederlage/Tod, Wiederbelebung derselben Figur |
@@ -28,11 +30,16 @@ den unten verlinkten Testnamen neu speichern. Spieltests macht der Benutzer.
 
 065 laden, A ansprechen, **H0 Aufbau** waehlen. Danach stehen die Testfiguren
 an den bereits verwendeten Punkten vor Xardas' Turm.
-Die [vollstaendige Kopfliste](heads/README.md) fuehrt durch H1–H9.
-Flex hat keinen separat abschaltbaren Textur-Bart; H5/H6 pruefen die separate
-Bart-Geometrie am Heldenkopf. Haarfarbe wird nur an Cs Materialinstanz geaendert.
+Die [Kopfliste](heads/README.md) dokumentiert den Befund und die verbleibenden Optionen.
+Der Nutzer hat diese Kopftests ausser Bart bestanden. Der Heldenbart ist in
+die Gesichtstextur eingezeichnet; H5/H6 sind ab 0.1.1 verborgen. Ein echter
+Bartwechsel ueber passende Gesichtstexturen bleibt offen. Haarfarbe wird nur an Cs Materialinstanz geaendert.
 
 ## 2. Natuerliche Stimme
+
+Alle acht START-Saves stehen jetzt auf 12:00 Uhr; der [Tageslichtbericht](daylight-starts.json)
+haelt die Aenderung mit Backups fest. Kopf- und Sprach-Aufbau setzen ebenfalls
+Mittag. Beim Sprachtest liegen die optionalen Wechsel jetzt bei 14:00/16:00 Uhr.
 
 066 laden und bei A **01 Natuerliche Stimmen: Aufbau mit B und C** waehlen.
 Erst vor der Annaeherung speichern, dann B und C ohne Dialog annaehern.
@@ -86,7 +93,8 @@ Zwischenstand sowie auf Erfolgs- und Abbruchpfad. Die Belohnung sind einmalig
 entfernt. Die elf behaltenen Vergleichsstaende sind 023, 027, 030, 048, 052, 054,
 060, 061, 062, 063 und 064. Alle urspruenglichen 42 Saves und die Profildatei sind
 archiviert; andere Profile und behaltene Saves wurden per Hash geprueft.
-Mit den acht neuen Starts enthaelt Profil 4 jetzt 19 Saves. Die Vollsicherung
+Unmittelbar nach der Bereinigung waren es mit den acht Starts 19 Saves;
+spaetere Ergebnissaves kommen hinzu. Die Vollsicherung
 liegt lokal unter `work/npc-batch-tests/cleanup/archive-20260911T094051Z`.
 Siehe [Bereinigungsbericht](profile-cleanup.json).
 

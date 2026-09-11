@@ -1,0 +1,206 @@
+{
+  "schema": "gore.npc-batch.daylight-start-saves.v1",
+  "written_utc": "2026-09-11T14:47:53.524772+00:00",
+  "published_count": 8,
+  "prepared_only_count": 0,
+  "displayed_profile": 4,
+  "internal_profile_id": 2,
+  "clock": "12:00:00",
+  "dll": {
+    "bytes": 17931264,
+    "sha256": "54690b5fb7004ae89a5659d38a59cebf5c833fd6c558c73ba3e0a70342baaf14"
+  },
+  "original_publication_report": "scripts\\fixtures\\npc-batch-tests\\start-saves.json",
+  "original_publication_report_sha256": "7caa5538598f5eeeaecec1a55edb75bb017aa9ab2359396480b3245074f5a3d7",
+  "api": {
+    "command": "write_save",
+    "backup": true,
+    "syncPersistentDataList": false,
+    "edit_path": "private.typed.setValue",
+    "typed_path": [
+      "m_GenericData",
+      "{GameTime}",
+      "CurrentTime",
+      "TotalSeconds"
+    ]
+  },
+  "saves": [
+    {
+      "slot": "G1R-065",
+      "title": "NPC 01 Koepfe - START",
+      "published": true,
+      "before": {
+        "bytes": 1018885,
+        "sha256": "ca540dc4cd6720554b4cdbe663052ed74a1708936322b643a27471f078de36bb"
+      },
+      "after": {
+        "bytes": 1018881,
+        "sha256": "b5d319fa117730e1c22d373d8abcd7acb339584b99ad228ee718d627b032ff90"
+      },
+      "day": 0,
+      "before_total_seconds": 45458.36004127562,
+      "after_total_seconds": 43200.0,
+      "clock": "12:00:00",
+      "backup_file": "goresave_backups\\G1R-065.sav.bak.1789137977",
+      "public_payload_unchanged": true,
+      "clock_readback_verified": true
+    },
+    {
+      "slot": "G1R-066",
+      "title": "NPC 02 Voice - START",
+      "published": true,
+      "before": {
+        "bytes": 1018883,
+        "sha256": "b6c3c9ae057afcf6cf7a9cf75a8e964485e0b7e55d942837384df912df08ae7a"
+      },
+      "after": {
+        "bytes": 1018879,
+        "sha256": "553c7a9e4d2fafd5d0e444d669642e89ec3d38640e125a063af0aa0df9785ba5"
+      },
+      "day": 0,
+      "before_total_seconds": 45458.36004127562,
+      "after_total_seconds": 43200.0,
+      "clock": "12:00:00",
+      "backup_file": "goresave_backups\\G1R-066.sav.bak.1789137991",
+      "public_payload_unchanged": true,
+      "clock_readback_verified": true
+    },
+    {
+      "slot": "G1R-067",
+      "title": "NPC 03 Handel - LP fehlt",
+      "published": true,
+      "before": {
+        "bytes": 1034022,
+        "sha256": "8fe3741c6f935a80977087f145a58e15260658d81bdc0f2c4edfc1a470e0d724"
+      },
+      "after": {
+        "bytes": 1034015,
+        "sha256": "528cad0ac5889bf377e8527f7d4bd2704fa86875d84f73288e87b841e0bb05a7"
+      },
+      "day": 0,
+      "before_total_seconds": 45458.36004127562,
+      "after_total_seconds": 43200.0,
+      "clock": "12:00:00",
+      "backup_file": "goresave_backups\\G1R-067.sav.bak.1789138004",
+      "public_payload_unchanged": true,
+      "clock_readback_verified": true
+    },
+    {
+      "slot": "G1R-068",
+      "title": "NPC 03 Lehrer - Erz fehlt",
+      "published": true,
+      "before": {
+        "bytes": 1034001,
+        "sha256": "9617c001bb3b90901e038219f03bed775045fe5dac30012250186d79d332060f"
+      },
+      "after": {
+        "bytes": 1033994,
+        "sha256": "eb36d5b4edf89a0910bb58ec6981a37f258ec372b9cff3bfca0ac754e46c5d88"
+      },
+      "day": 0,
+      "before_total_seconds": 45458.36004127562,
+      "after_total_seconds": 43200.0,
+      "clock": "12:00:00",
+      "backup_file": "goresave_backups\\G1R-068.sav.bak.1789138017",
+      "public_payload_unchanged": true,
+      "clock_readback_verified": true
+    },
+    {
+      "slot": "G1R-069",
+      "title": "NPC 03 Lehrer - bereit",
+      "published": true,
+      "before": {
+        "bytes": 1034020,
+        "sha256": "ed69d38a283ce759945bc212c03043508d060f4b7f6c35a85dad2b1f545931b7"
+      },
+      "after": {
+        "bytes": 1034013,
+        "sha256": "89f1505cca0f01818aee0ae16e6e09bb468c443416688b3bda3ac509edca04b7"
+      },
+      "day": 0,
+      "before_total_seconds": 45458.36004127562,
+      "after_total_seconds": 43200.0,
+      "clock": "12:00:00",
+      "backup_file": "goresave_backups\\G1R-069.sav.bak.1789138029",
+      "public_payload_unchanged": true,
+      "clock_readback_verified": true
+    },
+    {
+      "slot": "G1R-070",
+      "title": "NPC 04 Rollen - START",
+      "published": true,
+      "before": {
+        "bytes": 1034811,
+        "sha256": "e4462d2e0a1bc6d0ed3661a26e813cba9f20bad879b299376813f3c4c94385fe"
+      },
+      "after": {
+        "bytes": 1034804,
+        "sha256": "20f4a849358475a9671961cab18fea35cbb303e5d3dda85b34d52d3e22ded7c2"
+      },
+      "day": 0,
+      "before_total_seconds": 45458.36004127562,
+      "after_total_seconds": 43200.0,
+      "clock": "12:00:00",
+      "backup_file": "goresave_backups\\G1R-070.sav.bak.1789138042",
+      "public_payload_unchanged": true,
+      "clock_readback_verified": true
+    },
+    {
+      "slot": "G1R-071",
+      "title": "NPC 05 Quest - START",
+      "published": true,
+      "before": {
+        "bytes": 1018883,
+        "sha256": "936af9525543703c04b94defee36cb02a80fa48bafd9d6ae3c21990f085ed5c3"
+      },
+      "after": {
+        "bytes": 1018879,
+        "sha256": "aee18515288dc09ebc1f4687fc3da21cccdec946596b2744f2028ccdfaf68db5"
+      },
+      "day": 0,
+      "before_total_seconds": 45458.36004127562,
+      "after_total_seconds": 43200.0,
+      "clock": "12:00:00",
+      "backup_file": "goresave_backups\\G1R-071.sav.bak.1789138055",
+      "public_payload_unchanged": true,
+      "clock_readback_verified": true
+    },
+    {
+      "slot": "G1R-072",
+      "title": "NPC 04 Rollen - Kampf bereit",
+      "published": true,
+      "before": {
+        "bytes": 1034842,
+        "sha256": "a86fca67c4251bf3bb796ca88519a84e93ebc924623429eabcd0f618430043bc"
+      },
+      "after": {
+        "bytes": 1034835,
+        "sha256": "3168d88ef5af260e6e6c58311a71c99b5ffebd8f6e5a680c4c015cda4403fffe"
+      },
+      "day": 0,
+      "before_total_seconds": 45458.36004127562,
+      "after_total_seconds": 43200.0,
+      "clock": "12:00:00",
+      "backup_file": "goresave_backups\\G1R-072.sav.bak.1789138068",
+      "public_payload_unchanged": true,
+      "clock_readback_verified": true
+    }
+  ],
+  "persistent_before_and_after": {
+    "bytes": 48083,
+    "sha256": "d1bdaed7bee2553e202e06e822d45faa9a953574b36e3dc6999f3cdf16825a06"
+  },
+  "checks": {
+    "original_start_hashes_matched": true,
+    "clock_readback_all_eight": true,
+    "same_game_day_preserved": true,
+    "one_clock_leaf_edit_per_save": true,
+    "game_closed_before_each_live_write": true,
+    "all_eight_backups_verified": true,
+    "all_public_payloads_byte_identical": true,
+    "persistent_byte_identical": true,
+    "other_live_files_including_user_results_byte_identical": true,
+    "original_publication_report_unchanged": true
+  },
+  "archived_originals": "work\\npc-batch-tests\\start-saves\\daylight\\originals"
+}

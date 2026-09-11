@@ -1,49 +1,47 @@
-# Koepfe, Haare, Bart und Haarfarbe
+# Koepfe, Haare und Haarfarbe
+
+Der Nutzer hat `NpcHeadPaletteTest 0.1.0` getestet: Kopfwechsel, Halsverbindung,
+Haare aus/an, Flex-Haarfarbe, Wiederherstellung, Speichern/Laden, vollstaendiger
+Neustart und wiederholter Kopfwechsel funktionieren. **Bart aus/an funktioniert
+sichtbar nicht.** Siehe [Laufzeitbefund](runtime-result.json).
+
+## Ursache des Bartbefunds
+
+Der sichtbare Schnurr-, Wangen- und Kinnbart ist bereits in der Helden-
+Gesichtstextur `T_NH_Head_D` eingezeichnet. H5/H6 adressierten nur das zusaetzliche
+Material `MI_NH_Beard`. Im Save „npc koepfe - haare und bart aus“ sind der
+Aus-Flag und fuenf Materialtreffer vorhanden; das beweist keine Rasur der
+Gesichtstextur. Flex besitzt kein entsprechendes separates Bartmaterial.
+
+Die Bezeichnung „Bart aus“ war irrefuehrend. Ab Version **0.1.1** sind H5/H6
+unsichtbar; ihre Klassen und gespeicherten Felder bleiben kompatibel.
+Fuer einen wirklich bartlosen Heldenkopf und separat wechselbare Baerte bleiben
+eigene passende Gesichtstexturen und deren Zuordnung pro NPC offen. Ein
+funktionierender Schalter dafuer ist durch diese Fixture nicht nachgewiesen.
+
+## Verbleibende Steuerung
 
 Nur `NpcHeadPaletteTest` aktivieren. In **Profil 4** den Spielstand
-**065 „NPC 01 Koepfe - START“** laden. Er stammt aus dem Stand vor Cs Erstellung.
-A ansprechen und **H0 Aufbau** waehlen. Held, A und C stehen danach an den
-bekannten Punkten vor Xardas' Turm. A erneut fuer die weiteren Optionen ansprechen.
-Den START-Stand behalten und Ergebnisse unter den unten genannten Namen speichern.
+**065 „NPC 01 Koepfe - START“** laden. A ansprechen und **H0 Aufbau** waehlen.
+Ab 0.1.1 setzt der Aufbau **12:00 Uhr** und stellt Held, A und C an die bekannten
+Punkte vor Xardas' Turm. A erneut fuer die weiteren Optionen ansprechen.
 
-## Testreihenfolge
+- **H1/H2:** Flex-/Heldenkopf.
+- **H3/H4:** Haare aus/an.
+- **H7/H8:** Flex-Haarfarbe rot/original.
+- **H9:** Heldenkopf und urspruengliche Sichtbarkeit/Farbe wiederherstellen.
 
-1. **H0**, danach **H1**: Flex-Kopf, Halsverbindung und normale Koerperbewegung
-   pruefen.
-2. **H3** blendet Haare aus; Augenbrauen, Augen, Gesicht und Koerper bleiben
-   sichtbar. **H4** stellt die Haare wieder her. Einmal wiederholen und von
-   vorne, seitlich und hinten ansehen.
-3. **H7** faerbt Flex' Haare rot; **H8** stellt die urspruengliche Farbe wieder
-   her. Noch einmal H7 waehlen und als **`kopf-farbe`** speichern. Spiel ganz
-   beenden, neu starten und diesen Stand laden. Farbe und Halsverbindung muessen
-   erhalten sein; weiterhin nur ein Kopf. H8 muss die Farbe wiederherstellen.
-4. **H2** waehlt den Heldenkopf. **H5** entfernt dessen separate Bart-Geometrie,
-   **H6** stellt sie wieder her. Aufgemalte Stoppeln koennen bleiben.
-   **H3/H4** auch bei den Haaren des Heldenkopfs pruefen.
-5. Beim Heldenkopf Haare und Bart ausschalten (**H3, H5**). Als **`kopf-teile`**
-   speichern, Spiel ganz beenden und neu laden. Beide bleiben ausgeschaltet.
-   **H9** stellt Heldenkopf, Haare und Bart ohne Absturz wieder her.
-   Als **`kopf-standard`** speichern.
-6. **H1 zweimal** waehlen: weiterhin genau ein korrekt verbundener Flex-Kopf.
-   **H9** muss wieder zum Heldenkopf zurueckkehren.
+Die bestandenen Kopf-Tests muessen fuer den naechsten Sprachtest nicht erneut
+abgearbeitet werden. Die alten Ergebnissaves bleiben erhalten; zum erneuten
+Pruefen den eigenen START-Stand verwenden.
 
-Bitte sichtbare Ergebnisse und die benannten Saves melden. Sichtbare Kappen
-oder Naehte nach dem Ausblenden der Haare ebenfalls melden. Flex' Stoppeln sind
-Teil der Gesichtstextur; H5/H6 testen die separate Bart-Geometrie des Helden.
-Die Kleidung bleibt gleich. Lip Sync ist ausgenommen.
+## Umsetzung
 
-## Umsetzung und Grenzen
+Der poseable Kopf uebernimmt die Koerperpose, setzt nur die Gesichtsknochen
+unterhalb des Kopfes auf Flex' Grundpose zurueck und nimmt C vom inkompatiblen
+BFG-Interpolationspfad aus. Cs eigene Materialinstanzen steuern die Haarfarbe;
+gemeinsam genutzte Materialien bleiben unveraendert. Gespeicherte Auswahlwerte
+werden nach dem Neuladen oder Erneuern der Darstellung angewendet.
 
-Der bereits getestete poseable Kopf uebernimmt die Koerperpose, setzt nur die
-Gesichtsknochen unterhalb des Kopfes auf Flex' Grundpose zurueck und nimmt C vom
-inkompatiblen BFG-Interpolationspfad aus. Die Kopfabschnitte des Originalkoerpers
-bleiben ausschliesslich im Flex-Modus verborgen.
-
-Die Haarfarbe verwendet Cs eigene dynamische Materialinstanzen und die am
-Originalmaterial geprueften Parameter `Root Color` und `Tip Color`. Andere NPCs
-und gemeinsam genutzte Materialien werden dadurch nicht umgefaerbt. Gespeicherte
-Auswahlwerte werden nach dem Neuladen oder Erneuern der Darstellung angewendet.
-
-Build und API-Pruefung sind bestanden. Ob Materialabschnitte und Farben im
-Spiel korrekt erscheinen, bleibt Gegenstand dieses Tests. Die Fixture prueft
-vorhandene Spielgeometrie; sie erstellt keine beliebigen neuen Meshes.
+Die Korrektur 0.1.1 betrifft nur Mittag und das Entfernen der irrefuehrenden
+Menueoptionen. Die getestete Darstellung bleibt gleich. Lip Sync bleibt ausgenommen.

@@ -18,8 +18,14 @@ recorded with that batch. Preparation does not check off the runtime items.
 - [x] Qualify the required native mesh API references through compilation and
   Manager composition. Exact sealed native declarations now pass both admission
   and final cache validation; unknown signatures still fail.
-- [ ] Establish which face, hair, beard and color choices actually work through
-  that path; document any limits separately.
+- [x] Flex/Hero face selection, independent hair visibility, Flex hair color,
+  restoration and restart passed in the user's palette test on2026-09-11.
+- [ ] Truly clean-shaven/bearded faces and independent beard choices per NPC.
+  H5/H6 failed visually: the Hero beard is painted into `T_NH_Head_D`; hiding
+  the extra `MI_NH_Beard` geometry cannot remove it. Flex has no separate beard.
+  The misleading controls are hidden in0.1.1. A matching face-texture variant
+  and per-NPC assignment remain open; see the
+  [palette result](../../scripts/fixtures/npc-batch-tests/heads/runtime-result.json).
 - [x] Verify animation alignment, save/load, full restart and absence of duplicate
   or overlapping heads.
 
@@ -52,7 +58,8 @@ checklist passes: correct connection, restoration without a crash, repeated
 application without duplicates, full restart and restoration after loading.
 Slots 47 (`npc kopf - wiederhergestellt`) and 48 (`npc kopf - erneut`) confirm
 saved modes 0 and 1. This qualifies the tested Flex/Novice combination; arbitrary
-independent face, hair, beard and color choices remain open. Continue with objects.
+independent face, hair, beard and color choices were still open at that stage.
+The later palette result above qualifies the tested hair/color controls only.
 See the [head test](../../scripts/fixtures/npc-head/README.md) and
 [head investigation](../../scripts/fixtures/npc-appearance-routine/RESULTS.md#heads-and-faces).
 

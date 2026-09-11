@@ -9,10 +9,13 @@ Diego bleibt das Stimmprofil von **B in der Gardistenkleidung**. **C in der
 Novizenkleidung** bekommt das originale Lares-Profil. „Profil“ bezeichnet hier
 die Zuordnung der Aufnahmen, nicht eine neue Aufnahme oder Sprecherimitation.
 
+Ab Version 0.1.1 liegen die Routinewechsel bei 14:00 und 16:00 Uhr, damit
+auch dieser Teil bei Tageslicht stattfindet.
+
 ## Ablauf
 
 1. A ansprechen, **01 Natuerliche Stimmen: Aufbau mit B und C** waehlen.
-   Held, A, B und C stehen danach draussen am Xardas-Turm. C steht etwas
+   Der Aufbau setzt 12:00 Uhr. Held, A, B und C stehen danach draussen am Xardas-Turm. C steht etwas
    oberhalb von A, B unterhalb. A hat danach die Bereitschaftszeile **04**.
    Falls stattdessen „C schon vorhanden“ erscheint, den Ausgangsspielstand 066
    laden. Der Aufbau erzeugt C nur einmal; erneuter Aufbau mit unserem eigenen C
@@ -31,11 +34,11 @@ die Zuordnung der Aufnahmen, nicht eine neue Aufnahme oder Sprecherimitation.
 5. Zu **C** gehen und Schritte 3–4 wiederholen. Beobachten, ob die Stimme von B
    unterscheidbar ist. Nur eine sichtbar/hoerbar C zuordenbare Zeile als C-Ergebnis
    werten; auch A kann im Hintergrund die normale Alltagsfaehigkeit benutzen.
-6. Optionaler Tagesablauf-Vergleich: bei A **02 11:59** waehlen und aus Bs Weg
+6. Optionaler Tagesablauf-Vergleich: bei A **02 13:59** waehlen und aus Bs Weg
    treten. Beim normalen naechsten Minutenwechsel laeuft B zum unteren Wartepunkt
    (der Ankunftsort des Helden beim Aufbau). **Bis 30 Sekunden** Bewegung
    beobachten; danach bis **95 Sekunden** normale Alltagsstimme beobachten.
-   **03 17:59** fuehrt B auf dem normalen Minutenwechsel zurueck. Der Wechsel
+   **03 15:59** fuehrt B auf dem normalen Minutenwechsel zurueck. Der Wechsel
    selbst verspricht keinen eigenen Spruch. C bleibt an seinem Platz.
 7. Befunde in **„npc natuerlich - beobachtet“** speichern. Spiel vollstaendig
    beenden, neu starten und **„npc natuerlich - start“** laden. **Ohne erneut 01
