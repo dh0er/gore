@@ -5837,6 +5837,76 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_clamped_vector_expression(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"FVector",""),(2,"UHost","Fixture")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        for (offset,name,ty) in [(40,"Sign","int"),(44,"Inset","float32")] {
+            let key=(offset as i64)<<33|5;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,2);
+            r.class_fields.entry("UHost".into()).or_default().insert(name.into(),ty.into());
+        }
+        let vector=DataType{token:5,type_info:1,..Default::default()};let reference=DataType{is_reference:true,is_object_const:true,is_read_only:true,..vector.clone()};
+        for (ptr,name,args) in [(10,"opMul",vec![DataType{token:0x51,..Default::default()}]),(11,"opSub",vec![reference.clone()]),(12,"opAdd",vec![reference])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,"FVector".into());r.func_is_method.insert(ptr);
+            r.const_method_ptrs.insert(ptr);r.func_ret.insert(ptr,vector.clone());r.func_params.insert(ptr,args);
+        }
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into(),
+            2=>r.type_identity_by_ptr.get_mut(&2).unwrap().namespace="Other".into(),
+            3=>{r.class_fields.get_mut("UHost").unwrap().insert("Sign".into(),"float".into());},
+            4=>{r.class_fields.get_mut("UHost").unwrap().insert("Inset".into(),"float".into());},
+            5=>{r.duplicate_prop_keys.insert((40i64<<33)|5);},
+            6=>{r.prop_type_id.insert((44i64<<33)|5,1);},
+            7=>r.func_params.get_mut(&10).unwrap()[0].token=0x50,
+            8=>r.func_params.get_mut(&11).unwrap()[0].is_read_only=false,
+            9=>r.func_ret.get_mut(&12).unwrap().is_reference=true,
+            10=>{r.const_method_ptrs.remove(&10);},
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_movement_vector_lifetimes(fault:u8)->Self {
+        let mut r=Self::from_test_path_score_conditions(0);
+        for (ptr,name) in [(6,"FString"),(7,"UObject"),(8,"FColor"),(9,"FName")] {
+            r.type_by_ptr.insert(ptr,name.into());r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:String::new(),namespace:String::new()});
+        }
+        let value=|ptr|DataType{token:5,type_info:ptr,..Default::default()};
+        let reference=|ptr|DataType{is_reference:true,is_object_const:true,is_read_only:true,..value(ptr)};
+        let scalar=DataType{token:0x51,..Default::default()};let void=DataType{token:0x52,..Default::default()};
+        for (ptr,name,ret,args,owner) in [(20,"opMul",value(1),vec![scalar.clone()],Some("FVector")),
+            (21,"opSub",value(1),vec![reference(1)],Some("FVector")),(22,"GetSafeNormal",value(1),vec![scalar,reference(1)],Some("FVector")),
+            (23,"opAdd",value(1),vec![reference(1)],Some("FVector")),(24,"$beh0",void.clone(),vec![reference(6)],Some("FName")),
+            (25,"Arrow",void,vec![DataType{is_object_handle:true,..value(7)},reference(6),reference(1),reference(1),reference(8),value(9)],None)] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            if let Some(owner)=owner {r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);}
+        }
+        r.const_method_ptrs.extend([20,21,22,23]);r.func_ns.insert(25,"VLog".into());
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into(),
+            2=>r.type_identity_by_ptr.get_mut(&2).unwrap().namespace="Other".into(),
+            3=>{r.func_owner.insert(10,"UObject".into());},
+            4=>r.func_ret.get_mut(&11).unwrap().is_reference=true,
+            5=>r.func_params.get_mut(&21).unwrap()[0].is_read_only=false,
+            6=>{r.func_params.get_mut(&22).unwrap().pop();},
+            7=>r.func_params.get_mut(&20).unwrap()[0].token=0x50,
+            8=>{r.func_ns.insert(25,"Other".into());},
+            9=>r.func_params.get_mut(&25).unwrap()[5].is_reference=true,
+            10=>r.func_params.get_mut(&24).unwrap()[0].is_object_const=false,
+            11=>{r.const_method_ptrs.remove(&11);},
+            12=>{r.prop_type_id.insert((40i64<<33)|7,4);},
+            13=>{r.class_fields.get_mut("UHost").unwrap().insert("State".into(),"UObject".into());},
+            14=>r.func_params.get_mut(&25).unwrap()[1].type_info=9,
+            15=>{r.class_super.remove("UState");},
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_position_vector_lifetimes(fault:u8)->Self {
         let mut r=Self::default();
         r.type_identity_by_ptr.insert(1,TypeIdentity{name:"FVector2D".into(),module:String::new(),namespace:String::new()});

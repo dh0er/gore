@@ -3335,6 +3335,10 @@ fn emit_function_ctor(
         pass_trace("restore_nested_tag_requirements", &rendered);
         let rendered = restore_named_character_key_constructors(&rendered, f, refs);
         pass_trace("restore_named_character_key_constructors", &rendered);
+        let rendered = restore_clamped_vector_expression(&rendered, f, refs);
+        pass_trace("restore_clamped_vector_expression", &rendered);
+        let rendered = restore_movement_vector_lifetimes(&rendered, f, refs);
+        pass_trace("restore_movement_vector_lifetimes", &rendered);
         let rendered = restore_position_vector_lifetimes(&rendered, f, refs);
         pass_trace("restore_position_vector_lifetimes", &rendered);
         let rendered = restore_scored_branch_lifetimes(&rendered, f, refs);
@@ -10874,6 +10878,180 @@ fn restore_named_character_key_constructors(body: &str, f: &Func, refs: &RefReso
         if let Some((old,new)) = edit { result = result.replacen(&old,&new,1); }
     }
     result
+}
+
+/// Keep the two vector receivers temporary and widen the sign before the native float field.
+fn restore_clamped_vector_expression(body:&str,f:&Func,refs:&RefResolver)->String {
+    if f.ret.token!=5 || f.ret.is_reference || f.ret.is_object_handle || !body.contains("FVector local_") {return body.to_owned();}
+    let vector=f.ret.type_info;
+    if !refs.type_identity_by_ptr(vector).is_some_and(|t|t.name=="FVector" && t.module.is_empty() && t.namespace.is_empty()) {return body.to_owned();}
+    let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    let w=|i:&Instr,n|i.words.get(n).map(|s|*s as i16 as i32);let p=|i:&Instr|i.qwords.first().map(|p|*p as i64);
+    let local=|slot|f.obj_locals.iter().filter(|(s,_)|*s==slot).map(|(_,t)|*t).eq([vector]);
+    let value=|t:&super::types::DataType,reference,constant|t.token==5 && t.type_info==vector && t.is_reference==reference
+        && t.is_object_const==constant && t.is_read_only==constant && !t.is_object_handle && !t.is_auto && !t.if_handle_then_const;
+    let params:Vec<_>=f.params.iter().map(|p|p.ty.clone()).collect();let offsets=super::model::param_slot_map(&params,true,true,Some(refs));
+    let field=|i:&Instr| {
+        let id=*i.dwords.first()? as i32;let owner=refs.type_identity_by_id(id)?;let (name,old)=refs.member_identity(id,w(i,0)?)?;
+        (!owner.module.is_empty() && owner.namespace.is_empty() && refs.type_identity_by_id(old)?==owner).then_some((owner,name))
+    };
+    let mut found=Vec::new();
+    for c in code.windows(23) {
+        let candidate=(|| {
+            if c.iter().map(|i|i.op.name).ne(["PshV8","PSF","PSF","CALLSYS","PSF","PSF","PshVPtr","CALLSYS","LoadThisR","RDR4","iTOd",
+                "LoadThisR","RDR4","fTOd","MULd","PshV8","PSF","PSF","CALLSYS","PSF","PSF","PSF","CALLSYS"]) {return None;}
+            let (dot,scaled,axis,left,input,integer,wide,single,inset,sum)=(w(&c[0],0)?,w(&c[1],0)?,w(&c[2],0)?,w(&c[5],0)?,w(&c[6],0)?,
+                w(&c[9],0)?,w(&c[10],0)?,w(&c[12],0)?,w(&c[13],0)?,w(&c[20],0)?);
+            let vectors=[scaled,axis,left,sum];let scalars=[dot,integer,wide,single,inset];
+            if vectors.iter().any(|s|*s<=0 || !local(*s)) || vectors.into_iter().collect::<HashSet<_>>().len()!=4
+                || scalars.iter().any(|s|*s<=0 || f.obj_locals.iter().any(|(slot,_)|slot==s)) || scalars.into_iter().collect::<HashSet<_>>().len()!=5
+                || [(4,0,scaled),(10,1,integer),(13,1,single),(14,0,wide),(14,1,wide),(14,2,inset),(15,0,wide),
+                    (16,0,scaled),(17,0,axis),(19,0,scaled),(21,0,left)].iter().any(|(n,k,s)|w(&c[*n],*k)!=Some(*s))
+                || p(&c[3])!=p(&c[18]) {return None;}
+            let parameter=f.params.get(*offsets.get(&input)?)?;
+            if parameter.name.is_empty() || parameter.ty.token!=5 || parameter.ty.type_info!=vector || !parameter.ty.is_reference || parameter.ty.is_object_handle {return None;}
+            for (at,name) in [(3,"opMul"),(7,"opSub"),(22,"opAdd")] {
+                let ptr=p(&c[at])?;
+                if refs.func_by_ptr(ptr)!=Some(name) || refs.func_owner_by_ptr(ptr)!=Some("FVector") || !refs.is_method_by_ptr(ptr)
+                    || !refs.is_const_method_by_ptr(ptr) || !value(refs.func_ret_by_ptr(ptr)?,false,false) {return None;}
+                let [arg]=refs.func_params_by_ptr(ptr)? else {return None;};
+                if if at==3 {arg.token!=0x51 || arg.type_info!=0 || arg.is_reference || arg.is_object_handle || arg.is_object_const || arg.is_read_only || arg.is_auto || arg.if_handle_then_const}
+                    else {!value(arg,true,true)} {return None;}
+            }
+            let (owner,sign)=field(&c[8])?;let (other,distance)=field(&c[11])?;
+            if owner!=other || sign==distance || refs.own_field_type_by_class(&owner.name,sign)!=Some("int")
+                || refs.own_field_type_by_class(&owner.name,distance)!=Some("float32")
+                || code.iter().any(|i|i.op.name=="JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                    let target=i.offset_dw as i64+2+*d as i32 as i64;target>c[0].offset_dw as i64 && target<=c[22].offset_dw as i64
+                }))) {return None;}
+            Some((dot,scaled,axis,left,sum,parameter.name.as_str(),sign,distance))
+        })();
+        if let Some(candidate)=candidate {found.push(candidate);}
+    }
+    let [(dot,scaled,axis,left,sum,input,sign,distance)]=found.as_slice() else {return body.to_owned();};
+    let lines:Vec<_>=body.lines().collect();let mut edits=Vec::new();
+    for (at,c) in lines.windows(3).enumerate() {
+        let (Some((pad,a,arhs)),Some((same,b,brhs)),Some((last,result,rrhs)))=(declaration_with_initializer(c[0]),declaration_with_initializer(c[1]),declaration_with_initializer(c[2])) else {continue;};
+        if [c[0],c[1],c[2]].iter().any(|s|!s.trim_start().starts_with("FVector ")) || pad!=same || pad!=last
+            || [(a.as_str(),*left),(b.as_str(),*scaled),(result.as_str(),*sum)].iter().any(|(name,slot)|slot_and_life_any(name).map(|s|s.0)!=Some(*slot))
+            || count_ident(body,&a)!=2 || count_ident(body,&b)!=2 || rrhs!=format!("({a} + {b})") {continue;}
+        let prefix=format!("({input} - (local_{axis} * ");let Some(dot_name)=arhs.strip_prefix(&prefix).and_then(|s|s.strip_suffix("))")) else {continue;};
+        if slot_and_life_any(dot_name).map(|s|s.0)!=Some(*dot) || brhs!=format!("(local_{axis} * (this.{sign} * this.{distance}))") {continue;}
+        edits.push((at,format!("{pad}FVector {result} = ({arhs} + (local_{axis} * (float(this.{sign}) * this.{distance})));")));
+    }
+    let [(at,replacement)]=edits.as_slice() else {return body.to_owned();};
+    let mut out=Vec::new();for (n,line) in lines.iter().enumerate() {if n==*at {out.push(replacement.clone());} else if !(at+1..at+3).contains(&n) {out.push((*line).to_owned());}}
+    let mut out=out.join("\n");if body.ends_with('\n') {out.push('\n');}out
+}
+
+/// Preserve the quotient/normal lives and the two typed diagnostic-call argument frames.
+fn restore_movement_vector_lifetimes(body:&str,f:&Func,refs:&RefResolver)->String {
+    if f.ret.token!=5 || f.ret.is_reference || f.ret.is_object_handle || !body.contains(".GetSafeNormal(") || !body.contains("VLog::Arrow(") {return body.to_owned();}
+    let vector=f.ret.type_info;let native=|ptr,name|refs.type_identity_by_ptr(ptr).is_some_and(|t|t.name==name && t.module.is_empty() && t.namespace.is_empty());
+    if !native(vector,"FVector") {return body.to_owned();}
+    let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    let w=|i:&Instr,n|i.words.get(n).map(|s|*s as i16 as i32);let p=|i:&Instr|i.qwords.first().map(|p|*p as i64);
+    let plain=|t:&super::types::DataType,token|t.token==token && t.type_info==0 && !t.is_reference && !t.is_object_handle && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+    let object=|t:&super::types::DataType,ptr,reference,constant,handle|t.token==5 && t.type_info==ptr && t.is_reference==reference && t.is_object_const==constant
+        && t.is_read_only==constant && t.is_object_handle==handle && !t.is_auto && !t.if_handle_then_const;
+    let local=|slot,ptr|f.obj_locals.iter().filter(|(s,_)|*s==slot).map(|(_,t)|*t).eq([ptr]);
+    let field=|i:&Instr| {
+        let id=*i.dwords.first()? as i32;let owner=refs.type_identity_by_id(id)?;let (name,old)=refs.member_identity(id,w(i,0)?)?;
+        (!owner.module.is_empty() && owner.namespace.is_empty() && refs.type_identity_by_id(old)?==owner).then_some((owner,name))
+    };
+    let enters=|start:usize,end:usize|code.iter().any(|i|i.op.name=="JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+        let target=i.offset_dw as i64+2+*d as i32 as i64;target>start as i64 && target<=end as i64
+    })));
+    let mut arithmetic=Vec::new();
+    for (at,c) in code.windows(26).enumerate() {
+        let found=(|| {
+            if c.iter().map(|i|i.op.name).ne(["MULd","DIVd","PshGPtr","PshC8","PSF","PSF","PshVPtr","ADDSi","RDSPtr","CALLSYS","STOREOBJ","PshVPtr","CALLSYS",
+                "PSF","PshVPtr","CALLSYS","PSF","PSF","PSF","CALLSYS","PSF","CALLSYS","PshV8","PSF","PSF","CALLSYS"]) {return None;}
+            let (quotient,radius,distance,normal,product,actor,target,delta)=(w(&c[0],0)?,w(&c[0],1)?,w(&c[1],2)?,w(&c[4],0)?,w(&c[5],0)?,w(&c[10],0)?,w(&c[14],0)?,w(&c[17],0)?);
+            if [quotient,radius,distance,normal,product,actor,target,delta].iter().any(|s|*s<=0)
+                || HashSet::from([quotient,radius,distance,normal,product,actor,target,delta]).len()!=8
+                || [quotient,radius,distance].iter().any(|s|f.obj_locals.iter().any(|(slot,_)|slot==s))
+                || [normal,product,delta].iter().any(|s|!local(*s,vector))
+                || [(0,2,radius),(1,0,quotient),(1,1,quotient),(6,0,0),(11,0,actor),(13,0,normal),(16,0,normal),
+                    (18,0,product),(20,0,delta),(22,0,quotient),(23,0,product),(24,0,normal)].iter().any(|(n,k,s)|w(&c[*n],*k)!=Some(*s))
+                || p(&c[12])!=p(&c[15]) || enters(c[0].offset_dw,c[25].offset_dw) {return None;}
+            let (owner,state)=field(&c[7])?;let state_type=refs.own_field_type_by_class(&owner.name,state)?;
+            if !refs.is_subclass(state_type,"UCharacterAIState") {return None;}
+            let (get_self,nav,sub,normalize,mul)=(p(&c[9])?,p(&c[12])?,p(&c[19])?,p(&c[21])?,p(&c[25])?);
+            for (ptr,owner,name) in [(get_self,"UCharacterAIState","GetSelf"),(nav,"APawn","GetNavAgentLocation"),(sub,"FVector","opSub"),(normalize,"FVector","GetSafeNormal"),(mul,"FVector","opMul")] {
+                if refs.func_by_ptr(ptr)!=Some(name) || refs.func_owner_by_ptr(ptr)!=Some(owner) || !refs.is_method_by_ptr(ptr) || !refs.is_const_method_by_ptr(ptr) {return None;}
+            }
+            let character=refs.func_ret_by_ptr(get_self)?;
+            if !native(character.type_info,"AGothicCharacter") || !object(character,character.type_info,false,false,true)
+                || !local(actor,character.type_info) || !local(target,character.type_info) || !matches!(refs.func_params_by_ptr(get_self),Some([]))
+                || !matches!(refs.func_params_by_ptr(nav),Some([])) || !object(refs.func_ret_by_ptr(nav)?,vector,false,false,false)
+                || ![sub,normalize,mul].iter().all(|ptr|refs.func_ret_by_ptr(*ptr).is_some_and(|t|object(t,vector,false,false,false)))
+                || !matches!(refs.func_params_by_ptr(sub)?,[t] if object(t,vector,true,true,false))
+                || !matches!(refs.func_params_by_ptr(normalize)?,[a,b] if plain(a,0x51) && object(b,vector,true,true,false))
+                || !matches!(refs.func_params_by_ptr(mul)?,[t] if plain(t,0x51)) {return None;}
+            let tolerance=f64::from_bits(*c[3].qwords.first()?);if !tolerance.is_finite() || tolerance<0.0 {return None;}
+            Some((at,quotient,radius,distance,normal,product,actor,target,delta,owner,state,get_self,nav,tolerance))
+        })();
+        if let Some(found)=found {arithmetic.push(found);}
+    }
+    let [(at,quotient,radius,distance,normal,product,actor,target,delta,owner,state,get_self,nav,tolerance)]=arithmetic.as_slice() else {return body.to_owned();};
+    let mut arrows=Vec::new();
+    for (row,c) in code.windows(35).enumerate() {
+        let found=(|| {
+            if c.iter().map(|i|i.op.name).ne(["PGA","PSF","CALLSYS","PSF","PshGPtr","PSF","PshVPtr","ADDSi","RDSPtr","CALLSYS","STOREOBJ","PshVPtr","CALLSYS",
+                "PSF","PSF","PSF","CALLSYS","PSF","PSF","PshVPtr","ADDSi","RDSPtr","CALLSYS","STOREOBJ","PshVPtr","CALLSYS","PSF","PGA","PshVPtr","ADDSi","RDSPtr","CALLSYS","STOREOBJ","PshVPtr","CALLSYS"]) {return None;}
+            let (category,end,influence,sum,start)=(w(&c[1],0)?,w(&c[5],0)?,w(&c[13],0)?,w(&c[14],0)?,w(&c[18],0)?);
+            if [category,end,influence,sum,start].iter().any(|s|*s<=0) || [end,influence,sum,start].iter().any(|s|!local(*s,vector))
+                || HashSet::from([end,influence,sum]).len()!=3 || [influence,sum].contains(&start)
+                || [(3,category),(6,0),(10,*actor),(11,*actor),(15,end),(17,sum),(19,0),(23,*actor),(24,*actor),(26,start),(28,0),(32,*actor),(33,*actor)].iter().any(|(n,s)|w(&c[*n],0)!=Some(*s))
+                || [7,20,29].iter().any(|n|field(&c[*n])!=Some((*owner,*state))) || [9,22,31].iter().any(|n|p(&c[*n])!=Some(*get_self))
+                || [12,25].iter().any(|n|p(&c[*n])!=Some(*nav)) || enters(c[0].offset_dw,c[34].offset_dw) {return None;}
+            let (ctor,add,arrow)=(p(&c[2])?,p(&c[16])?,p(&c[34])?);let name_type=f.obj_locals.iter().find(|(s,_)|*s==category)?.1;
+            if !local(category,name_type) || !native(name_type,"FName") || refs.func_by_ptr(ctor)!=Some("$beh0") || refs.func_owner_by_ptr(ctor)!=Some("FName")
+                || !refs.is_method_by_ptr(ctor) || refs.is_const_method_by_ptr(ctor) || !plain(refs.func_ret_by_ptr(ctor)?,0x52)
+                || !matches!(refs.func_params_by_ptr(ctor)?,[t] if native(t.type_info,"FString") && object(t,t.type_info,true,true,false))
+                || refs.func_by_ptr(add)!=Some("opAdd") || refs.func_owner_by_ptr(add)!=Some("FVector") || !refs.is_method_by_ptr(add) || !refs.is_const_method_by_ptr(add)
+                || !object(refs.func_ret_by_ptr(add)?,vector,false,false,false) || !matches!(refs.func_params_by_ptr(add)?,[t] if object(t,vector,true,true,false))
+                || refs.func_by_ptr(arrow)!=Some("Arrow") || refs.func_ns_by_ptr(arrow)!=Some("VLog") || refs.func_owner_by_ptr(arrow).is_some() || refs.is_method_by_ptr(arrow)
+                || !plain(refs.func_ret_by_ptr(arrow)?,0x52) {return None;}
+            let [log,message,a,b,color,category_type]=refs.func_params_by_ptr(arrow)? else {return None;};
+            if !native(log.type_info,"UObject") || !object(log,log.type_info,false,false,true) || !native(message.type_info,"FString") || !object(message,message.type_info,true,true,false)
+                || !object(a,vector,true,true,false) || !object(b,vector,true,true,false) || !native(color.type_info,"FColor") || !object(color,color.type_info,true,true,false)
+                || !object(category_type,name_type,false,false,false) {return None;}
+            Some((row,category,end,influence,sum,start))
+        })();
+        if let Some(found)=found {arrows.push(found);}
+    }
+    let [first,second]=arrows.as_slice() else {return body.to_owned();};
+    if first.0+35>*at || second.0!=at+26 || first.1!=second.1 || first.2!=*normal || first.5!=*normal || first.4!=*product
+        || second.3!=*product || second.5!=*delta || second.2==second.5 || [*normal,*product,*delta,first.3,second.2,second.4].into_iter().collect::<HashSet<_>>().len()!=6
+        || count_ident(body,&format!("local_{quotient}"))!=0 || count_ident(body,&format!("local_{normal}"))!=0 {return body.to_owned();}
+    let self_call=format!("this.{state}.GetSelf()");let nav_call=format!("{self_call}.GetNavAgentLocation()");
+    let lines:Vec<_>=body.lines().collect();let mut expression=Vec::new();
+    for (row,line) in lines.iter().enumerate() {
+        let Some((pad,name,rhs))=declaration_with_initializer(line) else {continue;};
+        if !line.trim_start().starts_with("FVector ") || slot_and_life_any(&name).map(|s|s.0)!=Some(*product) {continue;}
+        let prefix=format!("(({nav_call} - local_{target}.GetNavAgentLocation()).GetSafeNormal(");
+        let suffix=format!(", FVector::ZeroVector) * ((local_{radius} * local_{radius}) / local_{distance}))");
+        let Some(literal)=rhs.strip_prefix(&prefix).and_then(|s|s.strip_suffix(&suffix)) else {continue;};
+        if literal.parse::<f64>().ok().map(f64::to_bits)!=Some(tolerance.to_bits()) {continue;}
+        expression.push((row,format!("{pad}float local_{quotient} = (local_{radius} * local_{radius}) / local_{distance};\n{pad}FVector local_{normal} = ({nav_call} - local_{target}.GetNavAgentLocation()).GetSafeNormal({literal}, FVector::ZeroVector);\n{pad}FVector {name} = (local_{normal} * local_{quotient});")));
+    }
+    let [(expression_row,replacement)]=expression.as_slice() else {return body.to_owned();};let mut logs=Vec::new();
+    for (row,line) in lines.iter().enumerate() {
+        if !line.trim_start().starts_with("VLog::Arrow(") {continue;}let Some(open)=line.find('(') else {continue;};let Some((args,close))=argument_list(line,open) else {continue;};
+        if args.len()!=6 || line[close..].trim()!=");" || args[0]!=self_call || args[2]!=nav_call || args[5]!="FName(\"Angelscript\")"
+            || !args[1].starts_with('"') || !args[1].ends_with('"') || !args[4].starts_with("FColor::") {return body.to_owned();}
+        let which=logs.len();let Some(frame)=arrows.get(which) else {return body.to_owned();};
+        if args[3]!=format!("({nav_call} + local_{})",frame.3) {return body.to_owned();}
+        let mut args=args[..5].to_vec();if which==1 {args[2]=format!("{self_call}.NavAgentLocation");}
+        logs.push((row,format!("{}VLog::Arrow({});",indent_of(line),args.join(", "))));
+    }
+    if logs.len()!=2 || logs[0].0>=*expression_row || logs[1].0!=expression_row+1 {return body.to_owned();}
+    let mut out=Vec::new();for (row,line) in lines.iter().enumerate() {
+        if row==*expression_row {out.push(replacement.clone());} else if let Some((_,replacement))=logs.iter().find(|(n,_)|*n==row) {out.push(replacement.clone());} else {out.push((*line).to_owned());}
+    }
+    let mut out=out.join("\n");if body.ends_with('\n') {out.push('\n');}out
 }
 
 /// Retain the first scaled vector and the later normal while their products stay temporary.
@@ -47775,6 +47953,86 @@ mod literal_value_lifetime_tests {
         let mut shifted=f.clone();shifted.obj_locals=vec![(13,10),(18,10)];
         for i in &code {if i.op.name=="PSF" {shifted.bytecode[i.offset_dw]+=10<<16;}}
         assert_eq!(fold(&body.replace("local_8","local_18"),&shifted,&refs),expected.replace("local_8","local_18"));
+    }
+
+    #[test]
+    fn clamped_vector_expression_preserves_width_and_temporary_lifetimes() {
+        let mut f=function(&[("PshV8",&[14]),("PSF",&[24]),("PSF",&[12]),("CALLSYS",&[]),("PSF",&[24]),("PSF",&[40]),("PshVPtr",&[65532]),("CALLSYS",&[]),
+            ("LoadThisR",&[40]),("RDR4",&[16]),("iTOd",&[26,16]),("LoadThisR",&[44]),("RDR4",&[41]),("fTOd",&[44,41]),("MULd",&[26,26,44]),
+            ("PshV8",&[26]),("PSF",&[24]),("PSF",&[12]),("CALLSYS",&[]),("PSF",&[24]),("PSF",&[50]),("PSF",&[40]),("CALLSYS",&[]),("RET",&[0])]);
+        f.ret=DataType{token:5,type_info:1,..Default::default()};f.obj_locals=[12,24,40,50].into_iter().map(|s|(s,1)).collect();
+        f.params=vec![super::super::model::Param{name:"Point".into(),ty:DataType{token:5,type_info:1,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()},flags:3}];
+        let code=disassemble(&f.bytecode).unwrap();for (at,id) in [(3,10),(7,11),(8,2),(11,2),(18,10),(22,12)] {f.bytecode[code[at].offset_dw+1]=id;}
+        let body="    FVector local_40 = (Point - (local_12 * local_14_2));\n    FVector local_24_2 = (local_12 * (this.Sign * this.Inset));\n    FVector local_50 = (local_40 + local_24_2);\n    local_50.Z = Point.Z;\n    return local_50;\n";
+        let expected="    FVector local_50 = ((Point - (local_12 * local_14_2)) + (local_12 * (float(this.Sign) * this.Inset)));\n    local_50.Z = Point.Z;\n    return local_50;\n";
+        let refs=RefResolver::from_test_clamped_vector_expression(0);let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_clamped_vector_expression(s,f,r);
+        assert_eq!(fold(body,&f,&refs),expected);assert_eq!(fold(expected,&f,&refs),expected);
+        for fault in 1..=10 {assert_eq!(fold(body,&f,&RefResolver::from_test_clamped_vector_expression(fault)),body,"metadata {fault}");}
+        for at in [0,1,2,4,5,6,8,9,10,11,12,13,14,15,16,17,19,20,21] {
+            let mut bad=f.clone();bad.bytecode[code[at].offset_dw]^=4<<16;assert_eq!(fold(body,&bad,&refs),body,"operand {at}");
+        }
+        for (at,n) in [(10,1),(13,1),(14,1),(14,2)] {let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1]^=4<<((n-1)*16);assert_eq!(fold(body,&bad,&refs),body,"operand {at}:{n}");}
+        let mut bad=f.clone();bad.obj_locals.push((24,1));assert_eq!(fold(body,&bad,&refs),body);
+        let mut bad=f.clone();bad.params[0].ty.is_reference=false;assert_eq!(fold(body,&bad,&refs),body);
+        let mut bad=f.clone();let offset=bad.bytecode.len();bad.bytecode.extend(function(&[("JMP",&[])]).bytecode);
+        bad.bytecode[offset+1]=code[4].offset_dw as i32-offset as i32-2;assert_eq!(fold(body,&bad,&refs),body);
+        for bad in [format!("{body}    Use(local_40);\n"),format!("{body}    Use(local_24_2);\n"),body.replace("Point -","Other() -"),
+            body.replace("local_14_2","local_16"),body.replace("this.Inset","Other()"),body.replace("local_40 + local_24_2","local_24_2 + local_40")] {assert_eq!(fold(&bad,&f,&refs),bad);}
+        let mut shifted=f.clone();for (slot,_) in &mut shifted.obj_locals {*slot+=100;}
+        for i in &code {for (n,slot) in i.words.iter().enumerate() {
+            if i.op.name=="LoadThisR" || i.op.name=="RET" || (*slot as i16)<=0 {continue;}
+            if n==0 {shifted.bytecode[i.offset_dw]+=100<<16;} else {shifted.bytecode[i.offset_dw+1]+=100<<((n-1)*16);}
+        }}
+        let shift=|s:&str|["12","14_2","24_2","40","50"].iter().fold(s.to_owned(),|s,slot| {
+            let (number,suffix)=slot.split_once('_').unwrap_or((slot,""));let number=number.parse::<i32>().unwrap()+100;
+            let name=if suffix.is_empty(){format!("local_{number}")}else{format!("local_{number}_{suffix}")};super::rename_ident(&s,&format!("local_{slot}"),&name)
+        });
+        assert_eq!(fold(&shift(body),&shifted,&refs),shift(expected));
+    }
+
+    #[test]
+    fn movement_vectors_and_diagnostic_arguments_preserve_their_lifetimes() {
+        let arrow=|end,influence,sum,start|vec![("PGA",vec![]),("PSF",vec![48]),("CALLSYS",vec![]),("PSF",vec![48]),("PshGPtr",vec![]),
+            ("PSF",vec![end]),("PshVPtr",vec![0]),("ADDSi",vec![40]),("RDSPtr",vec![]),("CALLSYS",vec![]),("STOREOBJ",vec![4]),("PshVPtr",vec![4]),("CALLSYS",vec![]),
+            ("PSF",vec![influence]),("PSF",vec![sum]),("PSF",vec![end]),("CALLSYS",vec![]),("PSF",vec![sum]),("PSF",vec![start]),("PshVPtr",vec![0]),
+            ("ADDSi",vec![40]),("RDSPtr",vec![]),("CALLSYS",vec![]),("STOREOBJ",vec![4]),("PshVPtr",vec![4]),("CALLSYS",vec![]),("PSF",vec![start]),("PGA",vec![]),
+            ("PshVPtr",vec![0]),("ADDSi",vec![40]),("RDSPtr",vec![]),("CALLSYS",vec![]),("STOREOBJ",vec![4]),("PshVPtr",vec![4]),("CALLSYS",vec![])];
+        let mut ops=arrow(34,40,46,34);ops.push(("CpyVtoR1",vec![27]));
+        ops.extend([("MULd",vec![64,6,6]),("DIVd",vec![64,64,16]),("PshGPtr",vec![]),("PshC8",vec![]),("PSF",vec![34]),("PSF",vec![46]),("PshVPtr",vec![0]),
+            ("ADDSi",vec![40]),("RDSPtr",vec![]),("CALLSYS",vec![]),("STOREOBJ",vec![4]),("PshVPtr",vec![4]),("CALLSYS",vec![]),("PSF",vec![34]),("PshVPtr",vec![62]),
+            ("CALLSYS",vec![]),("PSF",vec![34]),("PSF",vec![78]),("PSF",vec![46]),("CALLSYS",vec![]),("PSF",vec![78]),("CALLSYS",vec![]),("PshV8",vec![64]),
+            ("PSF",vec![46]),("PSF",vec![34]),("CALLSYS",vec![])]);
+        ops.extend(arrow(72,46,84,78));ops.push(("RET",vec![0]));
+        let borrowed:Vec<_>=ops.iter().map(|(op,w)|(*op,w.as_slice())).collect();let mut f=function(&borrowed);
+        f.ret=DataType{token:5,type_info:1,..Default::default()};f.obj_locals=[34,40,46,72,78,84].into_iter().map(|s|(s,1)).chain([(4,2),(62,2),(48,9)]).collect();
+        let code=disassemble(&f.bytecode).unwrap();
+        for base in [0,62] {for (at,id) in [(2,24),(7,3),(9,10),(12,11),(16,23),(20,3),(22,10),(25,11),(29,3),(31,10),(34,25)] {f.bytecode[code[base+at].offset_dw+1]=id;}}
+        for (at,id) in [(7,3),(9,10),(12,11),(15,11),(19,21),(21,22),(25,20)] {f.bytecode[code[36+at].offset_dw+1]=id;}
+        let bits=0.125f64.to_bits();let at=code[39].offset_dw;f.bytecode[at+1]=bits as i32;f.bytecode[at+2]=(bits>>32) as i32;
+        let body="    FVector local_40 = Influence();\n    if (Allowed())\n    {\n        VLog::Arrow(this.State.GetSelf(), \"One\", this.State.GetSelf().GetNavAgentLocation(), (this.State.GetSelf().GetNavAgentLocation() + local_40), FColor::Green, FName(\"Angelscript\"));\n    }\n    for (auto local_62 : Characters)\n    {\n        FVector local_46 = ((this.State.GetSelf().GetNavAgentLocation() - local_62.GetNavAgentLocation()).GetSafeNormal(0.125, FVector::ZeroVector) * ((local_6 * local_6) / local_16));\n        VLog::Arrow(this.State.GetSelf(), \"Two\", this.State.GetSelf().GetNavAgentLocation(), (this.State.GetSelf().GetNavAgentLocation() + local_46), FColor::Blue, FName(\"Angelscript\"));\n        Use(local_46);\n    }\n    float local_64_2 = Random();\n    return Result();\n";
+        let expected="    FVector local_40 = Influence();\n    if (Allowed())\n    {\n        VLog::Arrow(this.State.GetSelf(), \"One\", this.State.GetSelf().GetNavAgentLocation(), (this.State.GetSelf().GetNavAgentLocation() + local_40), FColor::Green);\n    }\n    for (auto local_62 : Characters)\n    {\n        float local_64 = (local_6 * local_6) / local_16;\n        FVector local_34 = (this.State.GetSelf().GetNavAgentLocation() - local_62.GetNavAgentLocation()).GetSafeNormal(0.125, FVector::ZeroVector);\n        FVector local_46 = (local_34 * local_64);\n        VLog::Arrow(this.State.GetSelf(), \"Two\", this.State.GetSelf().NavAgentLocation, (this.State.GetSelf().GetNavAgentLocation() + local_46), FColor::Blue);\n        Use(local_46);\n    }\n    float local_64_2 = Random();\n    return Result();\n";
+        let refs=RefResolver::from_test_movement_vector_lifetimes(0);let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_movement_vector_lifetimes(s,f,r);
+        assert_eq!(fold(body,&f,&refs),expected);assert_eq!(fold(expected,&f,&refs),expected);
+        for fault in 1..=15 {assert_eq!(fold(body,&f,&RefResolver::from_test_movement_vector_lifetimes(fault)),body,"metadata {fault}");}
+        for at in [1,3,5,6,7,10,11,13,14,15,17,18,19,20,23,24,26,28,29,32,33,36,37,40,41,42,43,46,47,49,50,52,53,54,56,58,59,60,63,75,76,80] {
+            let mut bad=f.clone();bad.bytecode[code[at].offset_dw]^=4<<16;assert_eq!(fold(body,&bad,&refs),body,"operand {at}");
+        }
+        for (at,n) in [(36,1),(36,2),(37,1),(37,2)] {let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1]^=4<<((n-1)*16);assert_eq!(fold(body,&bad,&refs),body,"operand {at}:{n}");}
+        for at in [2,9,12,16,22,25,31,34,39,45,48,51,55,57,61,64,78,96] {let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1]+=1;assert_eq!(fold(body,&bad,&refs),body,"call/tolerance {at}");}
+        let mut bad=f.clone();bad.obj_locals.push((48,9));assert_eq!(fold(body,&bad,&refs),body);
+        let mut bad=f.clone();let offset=bad.bytecode.len();bad.bytecode.extend(function(&[("JMP",&[])]).bytecode);
+        bad.bytecode[offset+1]=code[4].offset_dw as i32-offset as i32-2;assert_eq!(fold(body,&bad,&refs),body);
+        for bad in [format!("{body}    Use(local_64);\n"),format!("{body}    Use(local_34);\n"),body.replace("GetSafeNormal(0.125","GetSafeNormal(0.25"),
+            body.replace("FName(\"Angelscript\")","FName(\"Other\")"),body.replace("/ local_16","/ Other()"),body.replace("+ local_46)","+ local_40)")] {assert_eq!(fold(&bad,&f,&refs),bad);}
+        let mut shifted=f.clone();for (slot,_) in &mut shifted.obj_locals {*slot+=100;}
+        for i in &code {for (n,slot) in i.words.iter().enumerate() {if i.op.name=="ADDSi" || i.op.name=="RET" || (*slot as i16)<=0 {continue;}
+            if n==0 {shifted.bytecode[i.offset_dw]+=100<<16;} else {shifted.bytecode[i.offset_dw+1]+=100<<((n-1)*16);}
+        }}
+        let shift=|s:&str|["6","16","34","40","46","62","64","64_2"].iter().fold(s.to_owned(),|s,slot| {
+            let (number,suffix)=slot.split_once('_').unwrap_or((slot,""));let number=number.parse::<i32>().unwrap()+100;
+            let name=if suffix.is_empty(){format!("local_{number}")}else{format!("local_{number}_{suffix}")};super::rename_ident(&s,&format!("local_{slot}"),&name)
+        });
+        assert_eq!(fold(&shift(body),&shifted,&refs),shift(expected));
     }
 
     #[test]
