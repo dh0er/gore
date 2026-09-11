@@ -3331,6 +3331,8 @@ fn emit_function_ctor(
         pass_trace("restore_reused_script_default", &rendered);
         let rendered = restore_repeated_memory_copy(&rendered, f, refs);
         pass_trace("restore_repeated_memory_copy", &rendered);
+        let rendered = restore_nested_tag_requirements(&rendered, f, refs, is_method);
+        pass_trace("restore_nested_tag_requirements", &rendered);
         let rendered = restore_temporary_vector_expression_lifetimes(&rendered, f, refs);
         pass_trace("restore_temporary_vector_expression_lifetimes", &rendered);
         let rendered = restore_item_transfer_ai_property(&rendered, f, refs);
@@ -10694,6 +10696,105 @@ fn restore_reused_script_default(body: &str, f: &Func, refs: &RefResolver, is_me
     }
     let [(old, new)] = edits.as_slice() else { return body.to_owned(); };
     body.replacen(old, new, 1)
+}
+
+/// Restore the two nested tag guards with their original temporary lifetimes.
+/// Their complete native-call regions establish both grouping and evaluation order.
+fn restore_nested_tag_requirements(body: &str, f: &Func, refs: &RefResolver, is_method: bool) -> String {
+    if !is_method || f.ret.token != 0x41 || f.ret.type_info != 0 || f.ret.is_reference || f.ret.is_object_handle
+        || f.params.len() != 2 || !body.contains("bool local_") || !body.contains(".MatchesAny(") { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let w = |i: &Instr, n| i.words.get(n).map(|v| *v as i16 as i32);
+    let ptr = |i: &Instr| i.qwords.first().map(|v| *v as i64);
+    let target = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+    let plain = |t: &super::types::DataType, token, info| t.token == token && t.type_info == info
+        && !t.is_reference && !t.is_object_handle && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+    let native = |p, name| refs.type_identity_by_ptr(p).is_some_and(|t|
+        t.name == name && t.module.is_empty() && t.namespace.is_empty());
+    let candidate = (|| {
+        if code.len() <= 81 || code.last()?.op.name != "RET" || !plain(&f.ret, 0x41, 0) { return None; }
+        let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+        if params.iter().any(|t| t.token != 5 || !t.is_object_handle || !t.is_object_const || t.is_reference
+            || t.is_read_only || t.is_auto || t.if_handle_then_const || t.type_info != params[0].type_info
+            || !native(t.type_info, "AGothicCharacterState")) { return None; }
+        let offsets = super::model::param_slot_map(&params, true, false, Some(refs));
+        let names: Vec<_> = [-2, -4].iter().map(|slot| offsets.get(slot).and_then(|n| f.params.get(*n))
+            .map(|p| p.name.as_str()).filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))).collect::<Option<_>>()?;
+        if names[0] == names[1] { return None; }
+        let [(tag_slot, tag)] = f.obj_locals.as_slice() else { return None; };
+        if *tag_slot <= 0 || !native(*tag, "FGameplayTag") { return None; }
+        let (empty, getter, matches, destroy) = (ptr(&code[2])?, ptr(&code[13])?, ptr(&code[15])?, ptr(&code[18])?);
+        for (p, owner, name, constant) in [(empty,"FGameplayTagContainer","IsEmpty",true),
+            (getter,"AGothicCharacterState","GetAreaTagOfLocation",true), (matches,"FGameplayTag","MatchesAny",true),
+            (destroy,"FGameplayTag","$beh2",false)] {
+            if refs.func_owner_by_ptr(p) != Some(owner) || refs.func_by_ptr(p) != Some(name)
+                || !refs.is_method_by_ptr(p) || refs.is_const_method_by_ptr(p) != constant { return None; }
+        }
+        let [container] = refs.func_params_by_ptr(matches)? else { return None; };
+        if container.token != 5 || !container.is_reference || !container.is_object_const || !container.is_read_only
+            || container.is_object_handle || container.is_auto || container.if_handle_then_const
+            || !native(container.type_info, "FGameplayTagContainer")
+            || !plain(refs.func_ret_by_ptr(empty)?, 0x41, 0) || !plain(refs.func_ret_by_ptr(matches)?, 0x41, 0)
+            || !plain(refs.func_ret_by_ptr(getter)?, 5, *tag) || !plain(refs.func_ret_by_ptr(destroy)?, 0x52, 0)
+            || [empty,getter,destroy].iter().any(|p| !matches!(refs.func_params_by_ptr(*p), Some([]))) { return None; }
+        let property = |i: &Instr| {
+            let id = *i.dwords.first()? as i32;
+            let owner = refs.type_identity_by_id(id)?;
+            let (name, old) = refs.member_identity(id, w(i,0)?)?;
+            if owner.module.is_empty() || !owner.namespace.is_empty() || refs.type_identity_by_id(old)? != owner
+                || refs.own_field_type_by_class(&owner.name, name) != Some("FGameplayTagContainer") { return None; }
+            Some((owner.clone(),name.to_owned()))
+        };
+        let mut guards = Vec::new();
+        let base_ops = ["PshVPtr","ADDSi","CALLSYS","CpyRtoV4","NOT","CpyVtoR1","JLowNZ","SetV4","JMP",
+            "PshVPtr","ADDSi","PSF","PshVPtr","CALLSYS","PSF","CALLSYS","CpyRtoV4","PSF","CALLSYS",
+            "CpyVtoR1","JLowNZ","SetV4","JMP","PshVPtr","ADDSi","PSF","PshVPtr","CALLSYS",
+            "PSF","CALLSYS","CpyRtoV4","PSF","CALLSYS","CpyVtoV4"];
+        for (start, negated, next) in [(0,true,41),(41,false,81)] {
+            let c = &code[start..next]; let q = 34 + usize::from(negated);
+            if c[..34].iter().map(|i| i.op.name).ne(base_ops)
+                || (negated && c[34].op.name != "NOT")
+                || c[q..].iter().map(|i| i.op.name).ne(["CpyVtoV4","CpyVtoR1","JLowZ","SetV1","CpyVtoR4","JMP"]) { return None; }
+            let (a,b,result) = (w(&c[3],0)?,w(&c[16],0)?,w(&c[7],0)?);
+            if [a,b,result].iter().any(|s| *s <= 0 || s == tag_slot) || HashSet::from([a,b,result]).len() != 3
+                || [(0,0),(9,0),(23,0),(4,a),(5,a),(11,*tag_slot),(12,-2),(14,*tag_slot),(17,*tag_slot),
+                    (19,b),(21,b),(25,*tag_slot),(26,-4),(28,*tag_slot),(30,result),(31,*tag_slot),
+                    (33,b),(q,result),(q+1,result),(q+3,a),(q+4,a)].iter().any(|(n,s)| w(&c[*n],0) != Some(*s))
+                || w(&c[33],1) != Some(result) || w(&c[q],1) != Some(b) || (negated && w(&c[34],0) != Some(b))
+                || [7,21,q+3].iter().any(|n| c[*n].dwords.first() != Some(&0))
+                || [(2,empty),(13,getter),(15,matches),(18,destroy),(27,getter),(29,matches),(32,destroy)]
+                    .iter().any(|(n,p)| ptr(&c[*n]) != Some(*p))
+                || [(6,9),(8,q+1),(20,23),(22,34)].iter().any(|(n,to)| target(&c[*n]) != Some(c[*to].offset_dw as i64))
+                || target(&c[q+2]) != Some(code[next].offset_dw as i64)
+                || target(&c[q+5]) != Some(code.last()?.offset_dw as i64) { return None; }
+            let field = property(&c[1])?;
+            if property(&c[10])? != field || property(&c[24])? != field { return None; }
+            guards.push((a,b,result,field));
+        }
+        let [(a,b,c,first),(d,e,g,second)] = guards.as_slice() else { return None; };
+        if (*a,*b,*c) != (*g,*e,*d) || first.0 != second.0 || first.1 == second.1
+            || code.iter().any(|i| i.op.name == "JMPP")
+            || code[81..].iter().any(|i| i.op.name.starts_with('J')
+                && target(i).is_some_and(|to| to >= 0 && to < code[81].offset_dw as i64)) { return None; }
+        Some((*a,first.1.clone(),second.1.clone(),names[0].to_owned(),names[1].to_owned()))
+    })();
+    let Some((slot,first,second,me,other)) = candidate else { return body.to_owned(); };
+    let lines: Vec<_> = body.lines().collect();
+    let Some((indent,local,value)) = lines.first().and_then(|l| declaration_with_initializer(l)) else { return body.to_owned(); };
+    let empty = |field| format!("!(this.{field}.IsEmpty())");
+    let both = |field| format!("{me}.GetAreaTagOfLocation().MatchesAny(this.{field}) && {other}.GetAreaTagOfLocation().MatchesAny(this.{field})");
+    if !lines[0].trim_start().starts_with("bool ") || slot_and_life_any(&local).map(|v| v.0) != Some(slot)
+        || count_ident(body,&local) != 2 || value != empty(&first) || lines.len() < 9
+        || lines[1] != format!("{indent}if ({local} && !({}))",both(&first))
+        || lines[5] != format!("{indent}if ({} && {})",empty(&second),both(&second)) { return body.to_owned(); }
+    for start in [2,6] {
+        if lines[start] != format!("{indent}{{") || lines[start+1] != format!("{indent}    return false;")
+            || lines[start+2] != format!("{indent}}}") { return body.to_owned(); }
+    }
+    let mut out = lines[1..].iter().map(|l| (*l).to_owned()).collect::<Vec<_>>();
+    out[0] = format!("{indent}if ({} && !({}))",empty(&first),both(&first));
+    out[4] = format!("{indent}if ({} && ({}))",empty(&second),both(&second));
+    let mut text = out.join("\n"); if body.ends_with('\n') { text.push('\n'); } text
 }
 
 /// Keep the reused vector products and widened integer negation inside their expressions.
@@ -47090,6 +47191,72 @@ mod literal_value_lifetime_tests {
         let mut bad = f.clone(); bad.bytecode.extend(function(&[("SetV4", &[94])]).bytecode); assert_eq!(fold(body, &bad, &refs), body);
         let mut bad = f.clone(); let start = bad.bytecode.len(); let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[10].offset_dw as i32 - start as i32 - 2; bad.bytecode.extend(jump); assert_eq!(fold(body, &bad, &refs), body);
         for bad in [body.replace("local_94_2", "local_94_3"), body.replace("local_38.Last()", "local_40.Last()"), format!("{body}{body}")] { assert_eq!(fold(&bad, &f, &refs), bad); }
+    }
+
+    #[test]
+    fn nested_tag_requirements_preserve_guards_and_temporary_lifetimes() {
+        let mut f=function(&[
+            ("PshVPtr",&[0]),("ADDSi",&[0]),("CALLSYS",&[]),("CpyRtoV4",&[1]),("NOT",&[1]),("CpyVtoR1",&[1]),
+            ("JLowNZ",&[]),("SetV4",&[5]),("JMP",&[]),("PshVPtr",&[0]),("ADDSi",&[0]),("PSF",&[3]),
+            ("PshVPtr",&[65534]),("CALLSYS",&[]),("PSF",&[3]),("CALLSYS",&[]),("CpyRtoV4",&[4]),("PSF",&[3]),
+            ("CALLSYS",&[]),("CpyVtoR1",&[4]),("JLowNZ",&[]),("SetV4",&[4]),("JMP",&[]),("PshVPtr",&[0]),
+            ("ADDSi",&[0]),("PSF",&[3]),("PshVPtr",&[65532]),("CALLSYS",&[]),("PSF",&[3]),("CALLSYS",&[]),
+            ("CpyRtoV4",&[5]),("PSF",&[3]),("CALLSYS",&[]),("CpyVtoV4",&[4,5]),("NOT",&[4]),("CpyVtoV4",&[5,4]),
+            ("CpyVtoR1",&[5]),("JLowZ",&[]),("SetV1",&[1]),("CpyVtoR4",&[1]),("JMP",&[]),("PshVPtr",&[0]),
+            ("ADDSi",&[4]),("CALLSYS",&[]),("CpyRtoV4",&[5]),("NOT",&[5]),("CpyVtoR1",&[5]),("JLowNZ",&[]),
+            ("SetV4",&[1]),("JMP",&[]),("PshVPtr",&[0]),("ADDSi",&[4]),("PSF",&[3]),("PshVPtr",&[65534]),
+            ("CALLSYS",&[]),("PSF",&[3]),("CALLSYS",&[]),("CpyRtoV4",&[4]),("PSF",&[3]),("CALLSYS",&[]),
+            ("CpyVtoR1",&[4]),("JLowNZ",&[]),("SetV4",&[4]),("JMP",&[]),("PshVPtr",&[0]),("ADDSi",&[4]),
+            ("PSF",&[3]),("PshVPtr",&[65532]),("CALLSYS",&[]),("PSF",&[3]),("CALLSYS",&[]),("CpyRtoV4",&[1]),
+            ("PSF",&[3]),("CALLSYS",&[]),("CpyVtoV4",&[4,1]),("CpyVtoV4",&[1,4]),("CpyVtoR1",&[1]),("JLowZ",&[]),
+            ("SetV1",&[5]),("CpyVtoR4",&[5]),("JMP",&[]),("SetV1",&[1]),("CpyVtoR4",&[1]),("RET",&[6])]);
+        f.ret=DataType {token:0x41,..Default::default()}; f.obj_locals=vec![(3,1)];
+        f.params=["Me","Other"].into_iter().map(|name| crate::cache::model::Param {name:name.into(),flags:0,
+            ty:DataType {token:5,type_info:3,is_object_handle:true,is_object_const:true,..Default::default()}}).collect();
+        let code=disassemble(&f.bytecode).unwrap();
+        for (start,negated,next) in [(0,true,41),(41,false,81)] {
+            let q=34+usize::from(negated);
+            for (at,pointer) in [(2,10),(13,20),(15,30),(18,40),(27,20),(29,30),(32,40)] {
+                f.bytecode[code[start+at].offset_dw+1]=pointer;
+            }
+            for at in [1,10,24] {f.bytecode[code[start+at].offset_dw+1]=4;}
+            for (at,to) in [(6,start+9),(8,start+q+1),(20,start+23),(22,start+34),(q+2,next),(q+5,83)] {
+                let from=code[start+at].offset_dw;
+                f.bytecode[from+1]=code[to].offset_dw as i32-from as i32-2;
+            }
+        }
+        f.bytecode[code[81].offset_dw+1]=1;
+        let body="    bool local_1 = !(this.Required.IsEmpty());\n    if (local_1 && !(Me.GetAreaTagOfLocation().MatchesAny(this.Required) && Other.GetAreaTagOfLocation().MatchesAny(this.Required)))\n    {\n        return false;\n    }\n    if (!(this.Forbidden.IsEmpty()) && Me.GetAreaTagOfLocation().MatchesAny(this.Forbidden) && Other.GetAreaTagOfLocation().MatchesAny(this.Forbidden))\n    {\n        return false;\n    }\n    return true;\n";
+        let expected=body.replace("    bool local_1 = !(this.Required.IsEmpty());\n","")
+            .replace("if (local_1 && ","if (!(this.Required.IsEmpty()) && ")
+            .replace(" && Me.GetAreaTagOfLocation().MatchesAny(this.Forbidden) && Other.GetAreaTagOfLocation().MatchesAny(this.Forbidden))",
+                " && (Me.GetAreaTagOfLocation().MatchesAny(this.Forbidden) && Other.GetAreaTagOfLocation().MatchesAny(this.Forbidden)))");
+        let refs=RefResolver::from_test_nested_tag_requirements(0);
+        let fold=|s:&str,f:&Func,r:&RefResolver| super::restore_nested_tag_requirements(s,f,r,true);
+        assert_eq!(fold(body,&f,&refs),expected); assert_eq!(fold(&expected,&f,&refs),expected);
+        for fault in 1..=15 {assert_eq!(fold(body,&f,&RefResolver::from_test_nested_tag_requirements(fault)),body,"metadata {fault}");}
+        assert_eq!(super::restore_nested_tag_requirements(body,&f,&refs,false),body);
+        for at in [0,1,3,4,5,7,9,10,11,12,14,16,17,19,21,23,24,25,26,28,30,31,33,34,35,36,38,39,
+            41,42,44,45,46,48,50,51,52,53,55,57,58,60,62,64,65,66,67,69,71,72,74,75,76,78,79] {
+            let mut bad=f.clone();bad.bytecode[code[at].offset_dw]^=8<<16;
+            assert_eq!(fold(body,&bad,&refs),body,"operand {at}");
+        }
+        for at in [6,8,20,22,37,40,47,49,61,63,77,80] {
+            let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1]+=1;
+            assert_eq!(fold(body,&bad,&refs),body,"target {at}");
+        }
+        for source in [format!("{body}    Use(local_1);\n"),body.replace("bool local_1","int local_1"),
+            body.replace("this.Forbidden","this.Other"),body.replace("return false;","return true;")] {
+            assert_eq!(fold(&source,&f,&refs),source);
+        }
+        let mut shifted=f.clone();shifted.obj_locals[0].0+=20;
+        for i in &code {
+            if i.words.first().is_some_and(|s| (*s as i16)>0) && !matches!(i.op.name,"ADDSi"|"RET") {
+                shifted.bytecode[i.offset_dw]+=20<<16;
+            }
+            if i.op.name=="CpyVtoV4" {shifted.bytecode[i.offset_dw+1]+=20;}
+        }
+        assert_eq!(fold(&body.replace("local_1","local_21"),&shifted,&refs),expected);
     }
 
     #[test]

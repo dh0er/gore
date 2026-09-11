@@ -13,7 +13,6 @@ AI.CharacterAI_Gothic	3	0	0
 AI.CharacterAI_Orc	2	0	0
 AI.DailyRoutines.DailyRoutines_OG	1	0	0
 AI.NativeAICommands	1	0	0
-AI.Relationship.PersonalRelationshipModifiers	1	0	0
 AI.States.AIState_FollowCharacterAggressive	1	0	0
 AI.States.AIState_GuideCharacter	2	0	0
 AI.States.FightAI.AIState_PerceptionResponse	2	0	0

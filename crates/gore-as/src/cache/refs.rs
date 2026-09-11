@@ -5757,6 +5757,51 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_nested_tag_requirements(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr,name,module) in [(1,"FGameplayTag",""),(2,"FGameplayTagContainer",""),
+            (3,"AGothicCharacterState",""),(4,"UTagRule","Fixture")] {
+            r.type_by_ptr.insert(ptr,name.into()); r.typeid_to_ptr.insert(ptr as i32,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity { name:name.into(),module:module.into(),namespace:String::new() });
+        }
+        for (offset,name) in [(0,"Required"),(4,"Forbidden")] {
+            let key = (4i64<<1)|((offset as i64)<<33)|1;
+            r.prop_by_key.insert(key,name.into()); r.prop_type_id.insert(key,4);
+            r.class_fields.entry("UTagRule".into()).or_default().insert(name.into(),"FGameplayTagContainer".into());
+        }
+        let boolean = DataType { token:0x41,..Default::default() };
+        let tag = DataType { token:5,type_info:1,..Default::default() };
+        let container = DataType { token:5,type_info:2,is_reference:true,is_object_const:true,is_read_only:true,..Default::default() };
+        for (ptr,name,owner,ret,args) in [(10,"IsEmpty","FGameplayTagContainer",boolean.clone(),vec![]),
+            (20,"GetAreaTagOfLocation","AGothicCharacterState",tag,vec![]),
+            (30,"MatchesAny","FGameplayTag",boolean,vec![container]),
+            (40,"$beh2","FGameplayTag",DataType {token:0x52,..Default::default()},vec![])] {
+            r.func_by_ptr.insert(ptr,name.into()); r.func_owner.insert(ptr,owner.into());
+            r.func_ret.insert(ptr,ret); r.func_params.insert(ptr,args); r.func_is_method.insert(ptr);
+        }
+        r.const_method_ptrs.extend([10,20,30]);
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into(),
+            2=>r.type_identity_by_ptr.get_mut(&2).unwrap().namespace="Other".into(),
+            3=>r.type_identity_by_ptr.get_mut(&3).unwrap().module="Script".into(),
+            4=>r.type_identity_by_ptr.get_mut(&4).unwrap().module.clear(),
+            5=>{r.func_by_ptr.insert(10,"Other".into());},
+            6=>{r.func_owner.insert(20,"Other".into());},
+            7=>{r.const_method_ptrs.remove(&30);},
+            8=>{r.const_method_ptrs.insert(40);},
+            9=>r.func_ret.get_mut(&20).unwrap().is_reference=true,
+            10=>r.func_ret.get_mut(&10).unwrap().token=0x44,
+            11=>r.func_params.get_mut(&30).unwrap()[0].is_read_only=false,
+            12=>r.func_params.get_mut(&10).unwrap().push(DataType::default()),
+            13=>{r.prop_type_id.insert(9,2);},
+            14=>{r.duplicate_prop_keys.insert(9);},
+            15=>{r.class_fields.get_mut("UTagRule").unwrap().insert("Forbidden".into(),"FGameplayTag".into());},
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_temporary_vector_expressions(fault:u8)->Self {
         let mut r=Self::default();
         for (p,name,module) in [(1,"FVector",""),(2,"AHost","Fixture"),(3,"UConfig","Fixture"),(4,"UProjectile","")] {
