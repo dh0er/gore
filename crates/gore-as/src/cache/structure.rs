@@ -3706,6 +3706,22 @@ pub(crate) fn word_positions(text: &str, word: &str) -> Vec<usize> {
     found
 }
 
+/// Script mixins render their first parameter as the receiver. Native method
+/// signatures already exclude it; the temporary check needs the rendered positions.
+fn record_rendered_parameters(
+    resolved: &mut HashMap<(String, usize), Vec<bool>>, name: &str,
+    params: &[DataType], script_mixin: bool,
+) {
+    let accepts: Vec<bool> = params.iter().skip(usize::from(script_mixin))
+        .map(|p| !p.is_reference || p.is_object_const || p.is_read_only).collect();
+    match resolved.get_mut(&(name.to_owned(), accepts.len())) {
+        Some(seen) => {
+            for (slot, accepted) in seen.iter_mut().zip(&accepts) { *slot &= *accepted; }
+        }
+        None => { resolved.insert((name.to_owned(), accepts.len()), accepts); }
+    }
+}
+
 /// `<receiver>.<Method>(<slot>);` — a one-argument call that takes the slot's type by value or by
 /// const reference, which is where a TEMPORARY is legal (`PursuedCrimes.Add(FCrimeSetup());`).
 /// The verdict comes from the cache's own parameter table, over every one-parameter row of that
@@ -5730,20 +5746,8 @@ fn block_stmts_in(
                             .and_then(|name| name.rsplit("::").next())
                             .unwrap_or("call?")
                             .to_string();
-                        let accepts: Vec<bool> = params
-                            .iter()
-                            .map(|p| !p.is_reference || p.is_object_const || p.is_read_only)
-                            .collect();
-                        match resolved_params.get_mut(&(name.clone(), accepts.len())) {
-                            Some(seen) => {
-                                for (slot, accepted) in seen.iter_mut().zip(&accepts) {
-                                    *slot &= *accepted;
-                                }
-                            }
-                            None => {
-                                resolved_params.insert((name, accepts.len()), accepts);
-                            }
-                        }
+                        record_rendered_parameters(&mut resolved_params,&name,params,
+                            ctx.refs.is_restored_mixin_by_id(id));
                     }
                     let owner = ctx.refs.func_owner_by_id(id);
                     let ret_is_ref = ctx
@@ -5827,20 +5831,7 @@ fn block_stmts_in(
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 let f = ctx.refs.func_by_ptr(ptr).unwrap_or("syscall?").to_string();
                 if let Some(params) = ctx.refs.func_params_by_ptr(ptr) {
-                    let accepts: Vec<bool> = params
-                        .iter()
-                        .map(|p| !p.is_reference || p.is_object_const || p.is_read_only)
-                        .collect();
-                    match resolved_params.get_mut(&(f.clone(), accepts.len())) {
-                        Some(seen) => {
-                            for (slot, accepted) in seen.iter_mut().zip(&accepts) {
-                                *slot &= *accepted;
-                            }
-                        }
-                        None => {
-                            resolved_params.insert((f.clone(), accepts.len()), accepts);
-                        }
-                    }
+                    record_rendered_parameters(&mut resolved_params,&f,params,false);
                 }
                 // A behaviour emits no statement of its own and consumes only its own operands,
                 // so a statement flushed for it may still belong to a chain the very next
@@ -13151,6 +13142,27 @@ mod tests {
             assert_eq!(call, if mixin { "(Self()).CanObserve(Other())" } else { "::CanObserve(Self(), Other())" });
             assert_eq!(stack.len(), 1); assert_eq!(stack[0].s, "Outside");
         }
+    }
+    #[test]
+    fn mixin_default_temporaries_use_rendered_parameter_positions() {
+        let refs=RefResolver::default();
+        let handle=DataType {token:5,is_object_handle:true,is_object_const:true,..Default::default()};
+        let time=DataType {token:5,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()};
+        let mut params=[handle.clone(),handle,time.clone(),time];
+        for mixin in [false,true] {
+            let mut resolved=HashMap::new();
+            record_rendered_parameters(&mut resolved,"HasDefeated",&params,mixin);
+            let call=if mixin {"(Self()).HasDefeated(Other(), AfterTime, local_8);"}
+                else {"HasDefeated(Self(), Other(), AfterTime, local_8);"};
+            assert_eq!(temporary_argument_call(call,"local_8","FInGameTime","FInGameTime()",&refs,true,&resolved),
+                Some(call.replace("local_8","FInGameTime()")));
+            assert!(temporary_argument_call(call,"local_8","FInGameTime","FInGameTime()",&refs,false,&resolved).is_none());
+        }
+        let mut resolved=HashMap::new();record_rendered_parameters(&mut resolved,"HasDefeated",&params,true);
+        params[3].is_object_const=false;params[3].is_read_only=false;
+        record_rendered_parameters(&mut resolved,"HasDefeated",&params,true);
+        assert!(temporary_argument_call("(Self()).HasDefeated(Other(), AfterTime, local_8);",
+            "local_8","FInGameTime","FInGameTime()",&refs,true,&resolved).is_none());
     }
     #[test]
     fn default_argument_keeps_its_declaration_before_another_value_constructor() {

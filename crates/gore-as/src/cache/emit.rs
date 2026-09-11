@@ -3331,6 +3331,8 @@ fn emit_function_ctor(
         pass_trace("restore_reused_script_default", &rendered);
         let rendered = restore_repeated_memory_copy(&rendered, f, refs);
         pass_trace("restore_repeated_memory_copy", &rendered);
+        let rendered = restore_temporary_vector_expression_lifetimes(&rendered, f, refs);
+        pass_trace("restore_temporary_vector_expression_lifetimes", &rendered);
         let rendered = restore_item_transfer_ai_property(&rendered, f, refs);
         pass_trace("restore_item_transfer_ai_property", &rendered);
         let rendered = restore_hostility_property_argument(&rendered, f, refs, is_method);
@@ -10694,6 +10696,114 @@ fn restore_reused_script_default(body: &str, f: &Func, refs: &RefResolver, is_me
     body.replacen(old, new, 1)
 }
 
+/// Keep the reused vector products and widened integer negation inside their expressions.
+/// Both original regions must agree on the configuration and destination vector.
+fn restore_temporary_vector_expression_lifetimes(body:&str,f:&Func,refs:&RefResolver)->String {
+    if f.ret.token!=0x52 || !body.contains("FVector local_") || !body.contains(" = -local_") {return body.to_owned();}
+    let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    let w=|i:&Instr,n| i.words.get(n).map(|s| *s as i16 as i32);
+    let p=|i:&Instr| i.qwords.first().map(|p| *p as i64);
+    let local=|slot,ty| f.obj_locals.iter().filter(|(s,_)| *s==slot).map(|(_,t)| *t).eq([ty]);
+    let field=|i:&Instr,n| {
+        let id=*i.dwords.first()? as i32;let owner=refs.type_identity_by_id(id)?;
+        let (name,old)=refs.member_identity(id,w(i,n)?)?;
+        (refs.type_identity_by_id(old)?==owner).then_some((owner,name))
+    };
+    let field_type=|owner:&super::refs::TypeIdentity,name:&str,expected:&str| {
+        refs.own_field_type_by_class(&owner.name,name).or_else(||refs.native_field_value_type(&owner.name,name))==Some(expected)
+    };
+    let enters=|start:usize,end:usize| code.iter().any(|i| i.op.name=="JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+        let target=i.offset_dw as i64+2+*d as i32 as i64;target>start as i64 && target<=end as i64
+    })));
+    let mut candidates=Vec::new();
+    for c in code.windows(35) {
+        let candidate=(|| {
+            if c.iter().map(|i| i.op.name).ne(["PshC8","PSF","PSF","CALLSYS","PSF","PSF","CALLSYS",
+                "PshVPtr","ADDSi","RDSPtr","ADDSi","PopRPtr","RDR4","fTOd","PshV8","PSF","PSF","CALLSYS",
+                "PshVPtr","ADDSi","RDSPtr","ADDSi","PopRPtr","RDR8","PshV8","PSF","PSF","CALLSYS",
+                "PSF","PSF","PSF","CALLSYS","PSF","PSF","CALLSYS"])
+                || c[0].qwords.first()!=Some(&(-1.0f64).to_bits()) {return None;}
+            let (left,axis,first,second,sum,destination)=(w(&c[16],0)?,w(&c[2],0)?,w(&c[1],0)?,w(&c[25],0)?,w(&c[29],0)?,w(&c[33],0)?);
+            let vectors=[left,axis,first,second,sum,destination];
+            if vectors.iter().any(|s| *s<=0) || vectors.into_iter().collect::<HashSet<_>>().len()!=6
+                || [(4,first),(5,axis),(7,0),(15,first),(18,0),(26,axis),(28,second),(30,first),(32,sum)].iter().any(|(at,s)| w(&c[*at],0)!=Some(*s))
+                || p(&c[3])!=p(&c[17]) || p(&c[3])!=p(&c[27]) || p(&c[6])!=p(&c[34]) {return None;}
+            let vector=f.obj_locals.iter().find(|(s,_)| *s==left)?.1;
+            if !refs.type_identity_by_ptr(vector).is_some_and(|t| t.name=="FVector" && t.module.is_empty() && t.namespace.is_empty())
+                || vectors.iter().any(|s| !local(*s,vector)) {return None;}
+            let scalar=w(&c[12],0)?;let wide=w(&c[13],0)?;let turn=w(&c[23],0)?;
+            if [scalar,wide,turn].iter().any(|s| *s<=0 || f.obj_locals.iter().any(|(slot,_)| slot==s))
+                || HashSet::from([scalar,wide,turn]).len()!=3 || w(&c[13],1)!=Some(scalar)
+                || w(&c[14],0)!=Some(wide) || w(&c[24],0)!=Some(turn) {return None;}
+            let value=|t:&super::types::DataType| t.token==5 && t.type_info==vector && !t.is_reference && !t.is_object_handle && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+            let reference=|t:&super::types::DataType| t.token==5 && t.type_info==vector && t.is_reference && t.is_object_const && t.is_read_only && !t.is_object_handle && !t.is_auto && !t.if_handle_then_const;
+            let (mul,add,assign)=(p(&c[3])?,p(&c[31])?,p(&c[6])?);
+            for (ptr,name,constant) in [(mul,"opMul",true),(add,"opAdd",true),(assign,"opAssign",false)] {
+                if refs.func_by_ptr(ptr)!=Some(name) || refs.func_owner_by_ptr(ptr)!=Some("FVector") || !refs.is_method_by_ptr(ptr)
+                    || refs.is_const_method_by_ptr(ptr)!=constant {return None;}
+            }
+            if !value(refs.func_ret_by_ptr(mul)?) || !value(refs.func_ret_by_ptr(add)?)
+                || !matches!(refs.func_params_by_ptr(mul)?,[t] if t.token==0x51 && t.type_info==0 && !t.is_reference && !t.is_object_handle && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const)
+                || !matches!(refs.func_params_by_ptr(add)?,[t] if reference(t)) || !matches!(refs.func_params_by_ptr(assign)?,[t] if reference(t))
+                || !matches!(refs.func_ret_by_ptr(assign)?,t if t.token==5 && t.type_info==vector && t.is_reference && !t.is_object_handle && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const) {return None;}
+            let (owner,configuration)=field(&c[8],0)?;let (speed_owner,speed)=field(&c[10],0)?;let (config_type,turn_field)=field(&c[21],0)?;
+            if field(&c[19],0)?!=(owner,configuration) || owner.module.is_empty() || config_type.module.is_empty()
+                || !owner.namespace.is_empty() || !config_type.namespace.is_empty() || !speed_owner.module.is_empty() || !speed_owner.namespace.is_empty()
+                || refs.class_super_of(&config_type.name)!=Some(speed_owner.name.as_str())
+                || !field_type(owner,configuration,&config_type.name) || !field_type(speed_owner,speed,"float32") || !field_type(config_type,turn_field,"float")
+                || enters(c[0].offset_dw,c[34].offset_dw) {return None;}
+            Some((left,axis,first,second,destination,vector,owner,configuration,config_type,speed,turn_field))
+        })();
+        if let Some(candidate)=candidate {candidates.push(candidate);}
+    }
+    let [(left,axis,first,second,destination,vector,owner,configuration,config_type,speed,turn)]=candidates.as_slice() else {return body.to_owned();};
+    let mut negative=Vec::new();
+    for (at,c) in code.windows(12).enumerate() {
+        let candidate=(|| {
+            if c.iter().map(|i| i.op.name).ne(["CpyVtoV4","NEGi","iTOd","PshVPtr","ADDSi","RDSPtr","ADDSi","PopRPtr","RDR8","MULd","LoadVObjR","WRTV8"]) {return None;}
+            let (temp,input,wide,scalar,result)=(w(&c[0],0)?,w(&c[0],1)?,w(&c[2],0)?,w(&c[8],0)?,w(&c[9],0)?);
+            let slots=[temp,input,wide,scalar,result];
+            if slots.iter().any(|s| *s<=0 || f.obj_locals.iter().any(|(slot,_)| slot==s)) || slots.into_iter().collect::<HashSet<_>>().len()!=5
+                || [(1,temp),(3,0),(10,*destination),(11,result)].iter().any(|(n,s)| w(&c[*n],0)!=Some(*s))
+                || w(&c[2],1)!=Some(temp) || w(&c[9],1)!=Some(wide) || w(&c[9],2)!=Some(scalar)
+                || code.iter().enumerate().filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&temp)).map(|(n,_)| n).ne([at,at+1,at+2]) {return None;}
+            let (height_owner,height)=field(&c[6],0)?;let (component_owner,component)=field(&c[10],1)?;
+            if field(&c[4],0)?!=(*owner,*configuration) || height_owner!=*config_type || !field_type(height_owner,height,"float")
+                || component_owner!=refs.type_identity_by_ptr(*vector)? || !matches!(component,"X"|"Y"|"Z")
+                || refs.own_field_type_by_class(&component_owner.name,component)
+                    .or_else(|| refs.native_field_type(&component_owner.name,component))!=Some("float")
+                || enters(c[0].offset_dw,c[11].offset_dw) {return None;}
+            Some((temp,input,height,component))
+        })();
+        if let Some(candidate)=candidate {negative.push(candidate);}
+    }
+    let [(temp,input,height,component)]=negative.as_slice() else {return body.to_owned();};
+    let lines:Vec<_>=body.lines().collect();let mut edits=Vec::new();
+    for (at,c) in lines.windows(3).enumerate() {
+        let (Some((indent,a,arhs)),Some((other,b,brhs)))=(declaration_with_initializer(c[0]),declaration_with_initializer(c[1])) else {continue;};
+        if !c[0].trim_start().starts_with("FVector ") || !c[1].trim_start().starts_with("FVector ") || indent!=other || indent_of(c[2])!=indent
+            || slot_and_life_any(&a).map(|p| p.0)!=Some(*first) || slot_and_life_any(&b).map(|p| p.0)!=Some(*second)
+            || count_ident(body,&a)!=2 || count_ident(body,&b)!=2
+            || arhs!=format!("(local_{left} * this.{configuration}.{speed})") || brhs!=format!("(local_{axis} * this.{configuration}.{turn})")
+            || c[2].trim()!=format!("local_{destination} = ({a} + {b});") {continue;}
+        edits.push((at,3,format!("{indent}local_{destination} = ({arhs} + {brhs});")));
+    }
+    for (at,c) in lines.windows(2).enumerate() {
+        let Some((indent,name,rhs))=declaration_with_initializer(c[0]) else {continue;};
+        if !c[0].trim_start().starts_with("int ") || slot_and_life_any(&name).map(|p| p.0)!=Some(*temp) || count_ident(body,&name)!=2
+            || rhs!=format!("-local_{input}") || indent_of(c[1])!=indent
+            || c[1].trim()!=format!("local_{destination}.{component} = ({name} * this.{configuration}.{height});") {continue;}
+        edits.push((at,2,format!("{indent}local_{destination}.{component} = (-local_{input} * this.{configuration}.{height});")));
+    }
+    if edits.len()!=2 || edits[0].1!=3 || edits[1].1!=2 || edits[0].0+3>edits[1].0 {return body.to_owned();}
+    let mut output=Vec::new();let mut at=0;
+    while at<lines.len() {
+        if let Some((_,count,replacement))=edits.iter().find(|e| e.0==at) {output.push(replacement.clone());at+=*count;}
+        else {output.push(lines[at].to_owned());at+=1;}
+    }
+    let mut result=output.join("\n");if body.ends_with('\n') {result.push('\n');}result
+}
+
 /// Defer the AI getter until the other transfer arguments have been materialized.
 /// The original native property getter feeds one closed, discarded task result.
 fn restore_item_transfer_ai_property(body: &str, f: &Func, refs: &RefResolver) -> String {
@@ -14194,6 +14304,12 @@ fn receiver_temporary(line: &str) -> Option<String> {
         expression = stripped;
     }
     let (head, rest) = expression.split_once('.')?;
+    // Mixin calls retain parentheses around their receiver. Recognize the same
+    // local only when those parentheses belong to one complete method call.
+    let head = if head.starts_with('(') && matching_paren(head, 0) == Some(head.len() - 1) {
+        call_of_expression(expression)?;
+        head[1..head.len() - 1].trim()
+    } else { head };
     (is_local_ident(head) && rest.contains('(') && count_ident(rest, head) == 0)
         .then(|| head.to_owned())
 }
@@ -38684,6 +38800,25 @@ mod arithmetic_inline_grouping_tests {
     use super::*;
 
     #[test]
+    fn parenthesized_mixin_receivers_use_existing_lifetime_gates() {
+        let source = "    AGothicCharacterState local_6 = Character.GetCharacterState();\n    return (local_6).HasDefeated(Other.GetCharacterState(), Aftertime, FInGameTime());\n";
+        let fold = |body: &str, named: &HashSet<i32>| inline_call_argument_temporaries(
+            body, &RefResolver::default(), &BTreeMap::from([(6, "AGothicCharacterState".into())]), None, true,
+            &HashMap::new(), named, &HashSet::new(), &HashSet::new(), &HashSet::new(),
+            &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
+            &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
+        assert_eq!(fold(source, &HashSet::new()), "    return (Character.GetCharacterState()).HasDefeated(Other.GetCharacterState(), Aftertime, FInGameTime());\n");
+        assert_eq!(fold(source, &HashSet::from([6])), source);
+        for call in ["return (local_6).Check(local_6);", "return (local_6 + other).Check();",
+            "return (local_6).Check() + More();", "Print(\"(local_6).Check()\");"] {
+            assert_eq!(receiver_temporary(call), None, "{call}");
+        }
+        let looped = source.replace("return (local_6).HasDefeated(Other.GetCharacterState(), Aftertime, FInGameTime());",
+            "while ((local_6).HasDefeated(Other.GetCharacterState(), Aftertime, FInGameTime()))");
+        assert_eq!(fold(&looped, &HashSet::new()), looped);
+    }
+
+    #[test]
     fn an_else_with_a_conditional_store_keeps_the_incoming_parameter_copy() {
         let source = "    local_2 = Input;\n    if (local_2 <= 0.0)\n    {\n        local_2 = 0.01;\n    }\n    else\n    {\n        if (local_2 >= 0.6)\n        {\n            local_2 = 1.0;\n        }\n    }\n    Consume(local_2);\n";
         let fold = |text: &str| {
@@ -46955,6 +47090,55 @@ mod literal_value_lifetime_tests {
         let mut bad = f.clone(); bad.bytecode.extend(function(&[("SetV4", &[94])]).bytecode); assert_eq!(fold(body, &bad, &refs), body);
         let mut bad = f.clone(); let start = bad.bytecode.len(); let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[10].offset_dw as i32 - start as i32 - 2; bad.bytecode.extend(jump); assert_eq!(fold(body, &bad, &refs), body);
         for bad in [body.replace("local_94_2", "local_94_3"), body.replace("local_38.Last()", "local_40.Last()"), format!("{body}{body}")] { assert_eq!(fold(&bad, &f, &refs), bad); }
+    }
+
+    #[test]
+    fn vector_products_and_integer_negation_keep_their_temporary_lifetimes() {
+        let mut f=function(&[("PshC8",&[]),("PSF",&[70]),("PSF",&[28]),("CALLSYS",&[]),("PSF",&[70]),("PSF",&[28]),("CALLSYS",&[]),
+            ("PshVPtr",&[0]),("ADDSi",&[0]),("RDSPtr",&[]),("ADDSi",&[0]),("PopRPtr",&[]),("RDR4",&[58]),("fTOd",&[46,58]),("PshV8",&[46]),("PSF",&[70]),("PSF",&[22]),("CALLSYS",&[]),
+            ("PshVPtr",&[0]),("ADDSi",&[0]),("RDSPtr",&[]),("ADDSi",&[0]),("PopRPtr",&[]),("RDR8",&[48]),("PshV8",&[48]),("PSF",&[40]),("PSF",&[28]),("CALLSYS",&[]),
+            ("PSF",&[40]),("PSF",&[64]),("PSF",&[70]),("CALLSYS",&[]),("PSF",&[64]),("PSF",&[56]),("CALLSYS",&[]),
+            ("CpyVtoV4",&[72,71]),("NEGi",&[72]),("iTOd",&[46,72]),("PshVPtr",&[0]),("ADDSi",&[0]),("RDSPtr",&[]),("ADDSi",&[4]),("PopRPtr",&[]),
+            ("RDR8",&[74]),("MULd",&[48,46,74]),("LoadVObjR",&[56,16]),("WRTV8",&[48]),("RET",&[0])]);
+        f.ret=DataType{token:0x52,..Default::default()};f.obj_locals=vec![(22,1),(28,1),(40,1),(56,1),(64,1),(70,1)];
+        let c=disassemble(&f.bytecode).unwrap();
+        let bits=(-1.0f64).to_bits();f.bytecode[1]=bits as u32 as i32;f.bytecode[2]=(bits>>32) as i32;
+        for (at,value) in [(3,10),(6,30),(8,2),(10,4),(17,10),(19,2),(21,3),(27,10),(31,20),(34,30),(39,2),(41,3)] {f.bytecode[c[at].offset_dw+1]=value;}
+        f.bytecode[c[45].offset_dw+2]=1;
+        let body="    FVector local_56;\n    local_28 = (local_28 * -1.0);\n    FVector local_70 = (local_22 * this.Config.Speed);\n    FVector local_40_2 = (local_28 * this.Config.Turn);\n    local_56 = (local_70 + local_40_2);\n    int local_72 = -local_71;\n    local_56.Z = (local_72 * this.Config.Height);\n";
+        let expected="    FVector local_56;\n    local_28 = (local_28 * -1.0);\n    local_56 = ((local_22 * this.Config.Speed) + (local_28 * this.Config.Turn));\n    local_56.Z = (-local_71 * this.Config.Height);\n";
+        let refs=RefResolver::from_test_temporary_vector_expressions(0);
+        let fold=|s:&str,f:&Func,r:&RefResolver| super::restore_temporary_vector_expression_lifetimes(s,f,r);
+        assert_eq!(fold(body,&f,&refs),expected);assert_eq!(fold(expected,&f,&refs),expected);
+        assert_eq!(fold(body,&f,&RefResolver::from_test_temporary_vector_expressions(17)),expected);
+        for fault in 1..=16 {assert_eq!(fold(body,&f,&RefResolver::from_test_temporary_vector_expressions(fault)),body,"metadata {fault}");}
+        for at in [1,2,4,5,7,8,12,13,14,15,16,18,19,21,23,24,25,26,28,29,30,32,33,35,36,37,38,39,41,43,44,45,46] {
+            let mut bad=f.clone();bad.bytecode[c[at].offset_dw]^=2<<16;assert_eq!(fold(body,&bad,&refs),body,"slot or field {at}");
+        }
+        let mut bad=f.clone();bad.bytecode[2]=0;assert_eq!(fold(body,&bad,&refs),body);
+        let mut bad=f.clone();bad.obj_locals.push((40,1));assert_eq!(fold(body,&bad,&refs),body);
+        let mut bad=f.clone();bad.ret.token=0x41;assert_eq!(fold(body,&bad,&refs),body);
+        for target in [3,17,31,36,44] {
+            let mut bad=f.clone();let at=bad.bytecode.len();bad.bytecode.extend(function(&[("JMP",&[])]).bytecode);
+            bad.bytecode[at+1]=c[target].offset_dw as i32-at as i32-2;assert_eq!(fold(body,&bad,&refs),body,"entry {target}");
+        }
+        let mut bad=f.clone();bad.bytecode.extend(function(&[("PshV4",&[72])]).bytecode);assert_eq!(fold(body,&bad,&refs),body);
+        for s in [format!("{body}{body}"),body.replace("this.Config.Height","this.Config.Other"),body.replace("this.Config.Speed","this.Config.Other"),
+            body.replace("local_56 = (local_70 + local_40_2);","local_56 = (local_40_2 + local_70);"),body.replace("int local_72 = -local_71;","int local_72 = local_71;")] {
+            assert_eq!(fold(&s,&f,&refs),s);
+        }
+        let mut shifted=f.clone();for (s,_) in &mut shifted.obj_locals {*s+=100;}
+        for i in &c {
+            if matches!(i.op.name,"PSF"|"RDR4"|"RDR8"|"PshV8"|"fTOd"|"iTOd"|"CpyVtoV4"|"NEGi"|"MULd"|"LoadVObjR"|"WRTV8") {shifted.bytecode[i.offset_dw]+=100<<16;}
+            if matches!(i.op.name,"fTOd"|"iTOd"|"CpyVtoV4") {shifted.bytecode[i.offset_dw+1]+=100;}
+            if i.op.name=="MULd" {shifted.bytecode[i.offset_dw+1]+=100+(100<<16);}
+        }
+        let mut s=body.to_owned();let mut e=expected.to_owned();
+        for slot in [22,28,40,56,64,70,71,72] {for suffix in ["","_2"] {
+            s=super::rename_ident(&s,&format!("local_{slot}{suffix}"),&format!("local_{}{suffix}",slot+100));
+            e=super::rename_ident(&e,&format!("local_{slot}{suffix}"),&format!("local_{}{suffix}",slot+100));
+        }}
+        assert_eq!(fold(&s,&shifted,&refs),e);
     }
 
     #[test]

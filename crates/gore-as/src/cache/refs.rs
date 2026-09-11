@@ -1548,9 +1548,40 @@ impl RefResolver {
         }
     }
 
+    /// Character history predicates carry one or two native time bounds.
+    fn native_timed_predicate_mixin(&self, ret: &DataType, params: &[DataType]) -> bool {
+        let [a,b,times @ ..]=params else { return false; };
+        let Some(character)=self.native_pair_predicate_type(ret,a,b) else { return false; };
+        let expected=if self.type_identity_by_ptr(character).is_some_and(|t| t.name=="AGothicCharacter") {1}else{2};
+        times.len()==expected && times.iter().all(|t| t.token==5 && t.is_reference && t.is_object_const
+            && t.is_read_only && !t.is_object_handle && !t.is_auto && !t.if_handle_then_const
+            && t.type_info==times[0].type_info && self.type_identity_by_ptr(t.type_info)
+                .is_some_and(|i| i.name=="FInGameTime" && i.module.is_empty() && i.namespace.is_empty()))
+    }
+
+    /// Visibility helpers have fixed native receiver and argument roles.
+    fn native_visibility_mixin(&self, ret: &DataType, params: &[DataType]) -> Option<&'static str> {
+        let (receiver,args)=params.split_first()?;
+        let character=self.native_pair_predicate_type(ret,receiver,receiver)?;
+        let native=|t:&DataType,name| t.token==5 && !t.is_auto && !t.if_handle_then_const
+            && self.type_identity_by_ptr(t.type_info).is_some_and(|i| i.name==name && i.module.is_empty() && i.namespace.is_empty());
+        let reference=|t:&DataType,name| native(t,name) && t.is_reference && t.is_object_const && t.is_read_only && !t.is_object_handle;
+        let scalar=|t:&DataType,token| t.token==token && t.type_info==0 && t.is_object_const && t.is_read_only
+            && !t.is_reference && !t.is_object_handle && !t.is_auto && !t.if_handle_then_const;
+        match args {
+            []=>Some("IsInConversation"),
+            [text] if reference(text,"FText") && self.type_identity_by_ptr(character)?.name=="AGothicCharacterState"=>Some("HasListenedTo"),
+            [name,distance] if reference(name,"FName") && scalar(distance,0x51)=>Some("IsCloseToWaypoint"),
+            [item,count] if reference(item,"TSubclassOf") && scalar(count,0x44)
+                && matches!(self.type_subtypes(item.type_info),Some([t]) if native(t,"UItemDefinition") && t.is_object_handle
+                    && !t.is_reference && !t.is_object_const && !t.is_read_only)=>Some("HasItem"),
+            _=>None,
+        }
+    }
+
     fn restored_mixin_types(&self, ret: &DataType, params: &[DataType]) -> Option<Vec<i64>> {
         let predicate = match params { [a,b] => self.native_pair_predicate_type(ret,a,b).is_some(), _ => false };
-        (predicate || self.native_speech_mixin(ret,params)).then(||
+        (predicate || self.native_speech_mixin(ret,params) || self.native_visibility_mixin(ret,params).is_some() || self.native_timed_predicate_mixin(ret,params)).then(||
             std::iter::once(ret.type_info).chain(params.iter().map(|p| p.type_info)).collect())
     }
 
@@ -1558,6 +1589,19 @@ impl RefResolver {
     pub(crate) fn restores_mixin(&self, f: &super::model::Func) -> bool {
         if f.traits & 0x800 == 0 || !f.namespace.is_empty() { return false; }
         let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+        if self.native_timed_predicate_mixin(&f.ret,&params) {
+            return matches!(f.name.as_str(),"HasDefeated"|"WasDefeatedBy")
+                && f.param_defaults.len()==params.len() && f.param_defaults[..2].iter().all(String::is_empty)
+                && f.param_defaults[2..].iter().all(|s| s.chars().filter(|c| !c.is_whitespace()).collect::<String>()=="FInGameTime()")
+                && f.params.iter().all(|p| p.flags==if p.ty.is_reference {3}else{0});
+        }
+        if let Some(name)=self.native_visibility_mixin(&f.ret,&params) {
+            let default=match name { "HasItem"=>"1", "IsCloseToWaypoint"=>"10.0f*100.0f", _=>"" };
+            return f.name==name && f.param_defaults.len()==params.len()
+                && f.param_defaults[..params.len()-1].iter().all(String::is_empty)
+                && f.param_defaults.last().is_some_and(|s| s.chars().filter(|c| !c.is_whitespace()).collect::<String>()==default)
+                && f.params.iter().all(|p| p.flags==if p.ty.is_reference {3}else{0});
+        }
         if self.native_speech_mixin(&f.ret,&params) {
             return f.params.iter().all(|p| p.flags == if p.ty.is_reference { 3 } else { 0 });
         }
@@ -5712,6 +5756,52 @@ impl RefResolver {
         r
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_test_temporary_vector_expressions(fault:u8)->Self {
+        let mut r=Self::default();
+        for (p,name,module) in [(1,"FVector",""),(2,"AHost","Fixture"),(3,"UConfig","Fixture"),(4,"UProjectile","")] {
+            r.type_identity_by_ptr.insert(p,TypeIdentity{name:name.into(),module:module.into(),namespace:String::new()});
+            r.type_by_ptr.insert(p,name.into());r.typeid_to_ptr.insert(p as i32,p);
+        }
+        r.class_super.insert("UConfig".into(),"UProjectile".into());
+        for (id,offset,name) in [(2,0,"Config"),(4,0,"Speed"),(3,0,"Turn"),(3,4,"Height"),(1,16,"Z")] {
+            let key=((id as i64)<<1)|((offset as i64)<<33)|1;
+            r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id);
+        }
+        for (owner,name,ty) in [("AHost","Config","UConfig"),("UProjectile","Speed","float32"),("UConfig","Turn","float"),("UConfig","Height","float"),("FVector","Z","float")] {
+            r.class_fields.entry(owner.into()).or_default().insert(name.into(),ty.into());
+        }
+        let value=DataType{token:5,type_info:1,..Default::default()};
+        let reference=DataType{is_reference:true,is_object_const:true,is_read_only:true,..value.clone()};
+        for (p,name,ret,args) in [(10,"opMul",value.clone(),vec![DataType{token:0x51,..Default::default()}]),
+            (20,"opAdd",value.clone(),vec![reference.clone()]),
+            (30,"opAssign",DataType{is_reference:true,..value},vec![reference])] {
+            r.func_by_ptr.insert(p,name.into());r.func_owner.insert(p,"FVector".into());r.func_ret.insert(p,ret);
+            r.func_params.insert(p,args);r.func_is_method.insert(p);
+        }
+        r.const_method_ptrs.extend([10,20]);
+        match fault {
+            1=>{r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into();},
+            2=>{r.func_ret.get_mut(&10).unwrap().is_reference=true;},
+            3=>{r.func_params.get_mut(&20).unwrap()[0].is_read_only=false;},
+            4=>{r.const_method_ptrs.insert(30);},
+            5=>{r.class_fields.get_mut("UProjectile").unwrap().insert("Speed".into(),"float".into());},
+            6=>{r.class_fields.get_mut("UConfig").unwrap().insert("Turn".into(),"float32".into());},
+            7=>{r.class_fields.get_mut("UConfig").unwrap().insert("Height".into(),"float32".into());},
+            8=>{r.class_fields.get_mut("FVector").unwrap().insert("Z".into(),"float32".into());},
+            9=>{r.class_fields.get_mut("AHost").unwrap().insert("Config".into(),"UOther".into());},
+            10=>{r.prop_type_id.insert((4i64<<33)|7,4);},
+            11=>{r.duplicate_prop_keys.insert(5);},
+            12=>{r.class_super.insert("UConfig".into(),"UOther".into());},
+            13=>{r.func_is_method.remove(&20);},
+            14=>{r.type_identity_by_ptr.get_mut(&3).unwrap().namespace="Other".into();},
+            15=>{r.func_params.get_mut(&10).unwrap()[0].token=0x50;},
+            16=>{r.func_ret.get_mut(&30).unwrap().is_read_only=true;},
+            17=>{r.class_fields.remove("FVector");},_=>{}
+        }
+        r
+    }
+
     /// Exact script transfer overload, including its native argument identities.
     pub(crate) fn is_native_item_transfer_by_id(&self,id:i32)->bool {
         let Some(ptr)=self.funcid_to_ptr.get(&id) else {return false;};
@@ -7576,6 +7666,102 @@ impl RefResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timed_predicate_mixins_keep_native_bounds_and_exact_overloads() {
+        use crate::cache::model::{Func,Module,Param};
+        let make=|| {
+            let mut r=RefResolver::default();
+            for (p,name) in [(1,"AGothicCharacter"),(2,"AGothicCharacterState"),(3,"FInGameTime")] {
+                r.type_identity_by_ptr.insert(p,TypeIdentity{name:name.into(),module:String::new(),namespace:String::new()});
+            }
+            let ret=DataType{token:0x41,..Default::default()};let mut functions=Vec::new();
+            for (ptr,name,character) in [(10,"HasDefeated",1),(11,"WasDefeatedBy",1),(12,"HasDefeated",2),(13,"WasDefeatedBy",2)] {
+                let handle=DataType{token:5,type_info:character,is_object_handle:true,is_object_const:true,..Default::default()};
+                let time=DataType{token:5,type_info:3,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()};
+                let mut types=vec![handle.clone(),handle];types.extend(std::iter::repeat_n(time,character as usize));
+                r.func_by_ptr.insert(ptr,name.into());r.func_module.insert(ptr,"History".into());r.funcid_to_ptr.insert(ptr as i32,ptr);
+                r.func_ret.insert(ptr,ret.clone());r.func_params.insert(ptr,types.clone());
+                functions.push(Func{name:name.into(),namespace:String::new(),ret:ret.clone(),traits:0x820,is_ufunction:character==2,
+                    param_defaults:types.iter().map(|t| if t.is_reference {"FInGameTime ( )".into()}else{String::new()}).collect(),
+                    params:types.into_iter().enumerate().map(|(i,ty)| Param{name:format!("arg{i}"),flags:if ty.is_reference {3}else{0},ty}).collect(),
+                    bytecode:vec![],obj_locals:vec![]});
+            }
+            (r,Module{name:"History".into(),file:String::new(),functions,classes:vec![],enums:vec![],globals:vec![]})
+        };
+        let (mut r,m)=make();for f in &m.functions {assert!(r.restores_mixin(f));assert!(!r.emits_restored_mixin(f));}
+        r.set_restored_mixins(std::slice::from_ref(&m));for id in 10..14 {assert!(r.is_restored_mixin_by_id(id));}
+        for f in &m.functions {assert!(r.emits_restored_mixin(f));}
+        let (mut r,mut m)=make();m.functions.truncate(1);r.set_restored_mixins(&[m]);
+        assert!(r.is_restored_mixin_by_id(10));for id in 11..14 {assert!(!r.is_restored_mixin_by_id(id));}
+        for fault in 0..18 {
+            let (mut r,mut m)=make();let f=&mut m.functions[0];
+            match fault {
+                0=>f.traits=0x20,1=>f.namespace="Other".into(),2=>f.ret.token=0x44,
+                3=>f.params[2].flags=0,4=>f.params[0].ty.is_object_const=false,5=>f.params[1].ty.type_info=2,
+                6=>f.params[2].ty.is_reference=false,7=>f.params[2].ty.is_read_only=false,8=>f.params[2].ty.is_auto=true,
+                9=>{r.type_identity_by_ptr.get_mut(&3).unwrap().module="Script".into();},
+                10=>{r.func_module.insert(10,"Other".into());},11=>{r.func_is_method.insert(10);},
+                12=>{r.func_ns.insert(10,"Other".into());},13=>{r.func_params.get_mut(&10).unwrap()[2].is_object_handle=true;},
+                14=>{f.param_defaults[2]="Other()".into();},15=>{f.param_defaults.pop();},
+                16=>{f.params.push(f.params[2].clone());f.param_defaults.push("FInGameTime()".into());},
+                17=>{f.name="UnprovenHistory".into();},_=>unreachable!(),
+            }
+            r.set_restored_mixins(&[m]);assert!(!r.is_restored_mixin_by_id(10),"fault {fault}");
+        }
+    }
+
+    #[test]
+    fn visibility_mixins_bind_only_their_native_signatures_and_defaults() {
+        use crate::cache::model::{Func,Module,Param};
+        let make=|| {
+            let mut r=RefResolver::default();
+            for (p,name) in [(1,"AGothicCharacter"),(2,"AGothicCharacterState"),(3,"FText"),(4,"FName"),(5,"TSubclassOf"),(6,"UItemDefinition")] {
+                r.type_identity_by_ptr.insert(p,TypeIdentity{name:name.into(),module:String::new(),namespace:String::new()});
+            }
+            let ret=DataType{token:0x41,..Default::default()};let mut functions=Vec::new();
+            let value=|p| DataType{token:5,type_info:p,..Default::default()};
+            let reference=|p| DataType{is_reference:true,is_object_const:true,is_read_only:true,..value(p)};
+            let scalar=|token| DataType{token,is_object_const:true,is_read_only:true,..Default::default()};
+            r.type_subtypes.insert(5,vec![DataType{is_object_handle:true,..value(6)}]);
+            for (ptr,name,character,args,default) in [
+                (10,"HasItem",1,vec![reference(5),scalar(0x44)],"1"),
+                (11,"HasItem",2,vec![reference(5),scalar(0x44)],"1"),
+                (12,"IsCloseToWaypoint",1,vec![reference(4),scalar(0x51)],"10.0f * 100.0f"),
+                (13,"IsCloseToWaypoint",2,vec![reference(4),scalar(0x51)],"10.0f * 100.0f"),
+                (14,"IsInConversation",1,vec![],""),(15,"IsInConversation",2,vec![],""),
+                (16,"HasListenedTo",2,vec![reference(3)],"")] {
+                let mut types=vec![DataType{is_object_handle:true,is_object_const:true,..value(character)}];types.extend(args);
+                r.func_by_ptr.insert(ptr,name.into());r.func_module.insert(ptr,"Visibility".into());r.funcid_to_ptr.insert(ptr as i32,ptr);
+                r.func_ret.insert(ptr,ret.clone());r.func_params.insert(ptr,types.clone());
+                let mut defaults=vec![String::new();types.len()];*defaults.last_mut().unwrap()=default.into();
+                functions.push(Func{name:name.into(),namespace:String::new(),ret:ret.clone(),traits:0x820,is_ufunction:true,param_defaults:defaults,
+                    params:types.into_iter().enumerate().map(|(i,ty)| Param{name:format!("arg{i}"),flags:if ty.is_reference {3}else{0},ty}).collect(),
+                    bytecode:vec![],obj_locals:vec![]});
+            }
+            (r,Module{name:"Visibility".into(),file:String::new(),functions,classes:vec![],enums:vec![],globals:vec![]})
+        };
+        let (mut r,m)=make();for f in &m.functions {assert!(r.restores_mixin(f));assert!(!r.emits_restored_mixin(f));}
+        r.set_restored_mixins(std::slice::from_ref(&m));for id in 10..17 {assert!(r.is_restored_mixin_by_id(id));}
+        for f in &m.functions {assert!(r.emits_restored_mixin(f));}
+        for fault in 0..14 {
+            let (mut r,mut m)=make();m.functions.truncate(1);let f=&mut m.functions[0];
+            match fault {
+                0=>f.traits=0x20,1=>f.namespace="Other".into(),2=>f.ret.is_reference=true,
+                3=>f.params[1].flags=0,4=>f.params[0].ty.is_object_const=false,5=>f.params[2].ty.token=0x51,
+                6=>f.params[1].ty.is_reference=false,7=>f.param_defaults[2]="2".into(),8=>f.params[1].ty.is_auto=true,
+                9=>{r.type_identity_by_ptr.get_mut(&6).unwrap().module="Script".into();},
+                10=>{r.type_subtypes.get_mut(&5).unwrap()[0].is_object_handle=false;},
+                11=>{r.func_module.insert(10,"Other".into());},12=>{r.func_params.get_mut(&10).unwrap()[1].type_info=4;},
+                13=>f.name="UnprovenVisibility".into(),_=>unreachable!(),
+            }
+            r.set_restored_mixins(&[m]);assert!(!r.is_restored_mixin_by_id(10),"fault {fault}");
+        }
+        let (mut r,mut m)=make();m.functions.retain(|f| f.name=="HasListenedTo");m.functions[0].params[0].ty.type_info=1;
+        assert!(!r.restores_mixin(&m.functions[0]));r.set_restored_mixins(std::slice::from_ref(&m));assert!(!r.is_restored_mixin_by_id(16));
+        let (mut r,mut m)=make();m.functions.retain(|f| f.name=="IsCloseToWaypoint");m.functions[0].param_defaults[2]="1000.0".into();
+        r.set_restored_mixins(std::slice::from_ref(&m));assert!(!r.is_restored_mixin_by_id(12));assert!(r.is_restored_mixin_by_id(13));
+    }
 
     #[test]
     fn speech_mixins_bind_each_original_overload_and_native_signature() {
