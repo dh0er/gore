@@ -5837,6 +5837,44 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_scored_branches(fault:u8)->Self {
+        let mut r=Self::from_test_path_score_conditions(0);
+        for (ptr,name,module) in [(6,"TArray","Fixture"),(7,"FPair","Fixture"),(8,"FColor","")] {
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:module.into(),namespace:String::new()});
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32,ptr);
+        }
+        r.type_subtypes.insert(6,vec![DataType{token:5,type_info:4,..Default::default()}]);
+        for (id,offset,name) in [(7,0,"First"),(7,24,"Second"),(8,2,"R"),(8,1,"G")] {
+            let key=((id as i64)<<1)|((offset as i64)<<33)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id);
+        }
+        r.class_fields.insert("FPair".into(),HashMap::from([("First".into(),"FCalculated".into()),("Second".into(),"FCalculated".into())]));
+        r.funcid_to_ptr.insert(200,20);r.script_ctor_owner.insert(20,4);
+        for (ptr,name,ret,args) in [(20,"FScored",DataType{token:0x52,..Default::default()},vec![]),
+            (21,"FloorToInt",DataType{token:0x44,..Default::default()},vec![DataType{token:0x51,..Default::default()}]),
+            (22,"$beh0",DataType{token:0x52,..Default::default()},vec![DataType{token:5,type_info:8,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()}])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+        }
+        r.func_is_method.extend([20,22]);r.func_owner.insert(22,"FColor".into());r.func_ns.insert(21,"Math".into());
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&8).unwrap().module="Script".into(),
+            2=>r.type_subtypes.get_mut(&6).unwrap()[0].is_reference=true,
+            3=>{r.class_fields.get_mut("FCalculated").unwrap().insert("Valid".into(),"uint8".into());},
+            4=>{r.class_fields.get_mut("FPair").unwrap().insert("Second".into(),"FOther".into());},
+            5=>{r.script_ctor_owner.remove(&20);},
+            6=>r.func_params.get_mut(&20).unwrap().push(DataType::default()),
+            7=>r.func_params.get_mut(&21).unwrap()[0].token=0x50,
+            8=>r.func_ret.get_mut(&21).unwrap().token=0x50,
+            9=>{r.func_is_method.insert(21);},
+            10=>{r.duplicate_prop_keys.insert(9);},
+            11=>r.func_params.get_mut(&22).unwrap()[0].is_object_const=false,
+            12=>{r.const_method_ptrs.insert(22);},
+            13=>{r.func_ns.insert(21,"Other".into());},
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_path_score_conditions(fault:u8)->Self {
         let mut r=Self::default();
         for (ptr,name,module) in [(1,"FVector",""),(2,"AGothicCharacter",""),(3,"UHost","Fixture"),(4,"FScored","Fixture"),(5,"FCalculated","Fixture")] {

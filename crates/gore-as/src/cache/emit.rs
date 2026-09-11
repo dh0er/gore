@@ -3335,6 +3335,8 @@ fn emit_function_ctor(
         pass_trace("restore_nested_tag_requirements", &rendered);
         let rendered = restore_named_character_key_constructors(&rendered, f, refs);
         pass_trace("restore_named_character_key_constructors", &rendered);
+        let rendered = restore_scored_branch_lifetimes(&rendered, f, refs);
+        pass_trace("restore_scored_branch_lifetimes", &rendered);
         let rendered = restore_path_cost_and_score_conditions(&rendered, f, refs);
         pass_trace("restore_path_cost_and_score_conditions", &rendered);
         let rendered = restore_linked_bool_guard_lifetimes(&rendered, f, refs);
@@ -10870,6 +10872,127 @@ fn restore_named_character_key_constructors(body: &str, f: &Func, refs: &RefReso
         if let Some((old,new)) = edit { result = result.replacen(&old,&new,1); }
     }
     result
+}
+
+/// Preserve paired scored-value branches, their bool guards and transient color arithmetic.
+fn restore_scored_branch_lifetimes(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if !body.contains("FColor(FColor::Black)") || !body.contains(" != 0)") || f.ret.token!=5 || f.ret.is_reference || f.ret.is_object_handle {return body.to_owned();}
+    let Some(array)=refs.type_identity_by_ptr(f.ret.type_info).filter(|t|t.name=="TArray" && t.namespace.is_empty()) else {return body.to_owned();};
+    let Some([element])=refs.type_subtypes(f.ret.type_info) else {return body.to_owned();};
+    let Some(value)=refs.type_identity_by_ptr(element.type_info).filter(|t|!t.module.is_empty() && t.namespace.is_empty()) else {return body.to_owned();};
+    if element.token!=5 || element.is_reference || element.is_object_handle || array.module!=value.module {return body.to_owned();}
+    let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    let w=|i:&Instr,n|i.words.get(n).map(|s|*s as i16 as i32);
+    let p=|i:&Instr|i.qwords.first().map(|p|*p as i64);
+    let target=|i:&Instr|i.dwords.first().map(|d|i.offset_dw as i64+2+*d as i32 as i64);
+    let plain=|t:&super::types::DataType,token|t.token==token && t.type_info==0 && !t.is_reference && !t.is_object_handle
+        && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+    let local=|slot,ptr|f.obj_locals.iter().filter(|(s,_)|*s==slot).map(|(_,t)|*t).eq([ptr]);
+    let field=|i:&Instr,n| {
+        let id=*i.dwords.first()? as i32;let owner=refs.type_identity_by_id(id)?;
+        let (name,old)=refs.member_identity(id,w(i,n)?)?;
+        (refs.type_identity_by_id(old)?==owner && owner.namespace.is_empty()).then_some((owner,name))
+    };
+    let enters=|start:usize,end:usize|code.iter().any(|i|i.op.name=="JMPP" || (i.op.name.starts_with('J') && target(i).is_some_and(|to|to>start as i64 && to<=end as i64)));
+    let mut guards=Vec::new();
+    for c in code.windows(9) {
+        let found=(|| {
+            if c.iter().map(|i|i.op.name).ne(["PshVPtr","ADDSi","ADDSi","PopRPtr","RDR1","CpyVtoR1","JLowZ","PSF","CALL"]) {return None;}
+            let (root,guard,scored)=(w(&c[0],0)?,w(&c[4],0)?,w(&c[7],0)?);
+            let ctor=*c[8].dwords.first()? as i32;let end=target(&c[6])?;
+            let (pair,member)=field(&c[1],0)?;let (calculated,valid)=field(&c[2],0)?;
+            if root<=0 || guard<=0 || scored<=0 || HashSet::from([root,guard,scored]).len()!=3 || w(&c[5],0)!=Some(guard)
+                || pair.module!=value.module || calculated.module!=value.module || !local(scored,element.type_info)
+                || f.obj_locals.iter().any(|(s,_)|*s==root || *s==guard)
+                || refs.own_field_type_by_class(&pair.name,member)!=Some(calculated.name.as_str())
+                || refs.own_field_type_by_class(&calculated.name,valid)!=Some("bool")
+                || refs.script_constructor_type_by_id(ctor)!=Some(value) || !refs.is_method_by_id(ctor) || refs.is_const_method_by_id(ctor)
+                || !matches!(refs.func_params_by_id(ctor),Some([])) || !plain(refs.func_ret_by_id(ctor)?,0x52)
+                || end<=c[8].offset_dw as i64 || !code.iter().any(|i|i.offset_dw as i64==end) || enters(c[0].offset_dw,c[8].offset_dw) {return None;}
+            Some((root,guard,scored,pair,member,calculated,valid,c[0].offset_dw,end))
+        })();
+        if let Some(found)=found {guards.push(found);}
+    }
+    let [first,second]=guards.as_slice() else {return body.to_owned();};
+    if first.0!=second.0 || first.1!=second.1 || first.2==second.2 || first.3!=second.3 || first.4==second.4 || first.5!=second.5
+        || first.6!=second.6 || first.8>second.7 as i64 || count_ident(body,&format!("local_{}",first.1))!=4 {return body.to_owned();}
+    let mut channels=Vec::new();
+    for (at,c) in code.windows(27).enumerate() {
+        let found=(|| {
+            if c.iter().map(|i|i.op.name).ne(["SetV4","LoadVObjR","RDR8","SetV8","DIVd","SetV8","MULd","PshV8","CALLSYS","CpyRtoV4",
+                "SUBi","iTOb","LoadVObjR","WRTV1","LoadVObjR","RDR8","SetV8","DIVd","SetV8","MULd","PshV8","CALLSYS",
+                "CpyRtoV4","ADDIi","iTOb","LoadVObjR","WRTV1"])
+                || c[0].dwords.first()!=Some(&255) || c[23].dwords.first()!=Some(&0)
+                || [3,16].iter().any(|n|c[*n].qwords.first()!=Some(&3.0f64.to_bits()))
+                || [5,18].iter().any(|n|c[*n].qwords.first()!=Some(&255.0f64.to_bits())) {return None;}
+            let (scored,color,red,other,byte)=(w(&c[1],0)?,w(&c[12],0)?,w(&c[0],0)?,w(&c[9],0)?,w(&c[11],0)?);
+            if HashSet::from([scored,color,red,other,byte]).len()!=5 || [scored,color,red,other,byte].iter().any(|s|*s<=0)
+                || ![first.2,second.2].contains(&scored) || w(&c[14],0)!=Some(scored) || w(&c[25],0)!=Some(color)
+                || [red,other,byte].iter().any(|s|f.obj_locals.iter().any(|(slot,_)|slot==s))
+                || w(&c[10],0)!=Some(red) || w(&c[10],1)!=Some(red) || w(&c[10],2)!=Some(other) || w(&c[11],1)!=Some(red)
+                || w(&c[13],0)!=Some(byte) || w(&c[24],0)!=Some(byte) || w(&c[26],0)!=Some(byte)
+                || !matches!((w(&c[22],0),w(&c[23],0)),(Some(a),Some(b)) if a!=b && [red,other].contains(&a) && [red,other].contains(&b))
+                || w(&c[23],1)!=w(&c[22],0) || w(&c[24],1)!=w(&c[23],0) {return None;}
+            for base in [0,13] {
+                let (read,den,div,factor,mul)=(w(&c[base+2],0)?,w(&c[base+3],0)?,w(&c[base+4],0)?,w(&c[base+5],0)?,w(&c[base+6],0)?);
+                if [read,den,div,factor,mul].iter().any(|s|*s<=0 || [scored,color,red,other,byte].contains(s) || f.obj_locals.iter().any(|(slot,_)|slot==s))
+                    || read==den || factor==div || w(&c[base+4],1)!=Some(read) || w(&c[base+4],2)!=Some(den)
+                    || w(&c[base+6],1)!=Some(div) || w(&c[base+6],2)!=Some(factor) || w(&c[base+7],0)!=Some(mul) {return None;}
+            }
+            let (owner,score)=field(&c[1],1)?;let (color_owner,r)=field(&c[12],1)?;
+            if owner!=value || field(&c[14],1)?!=(owner,score) || refs.own_field_type_by_class(&owner.name,score)!=Some("float")
+                || color_owner.name!="FColor" || !color_owner.module.is_empty() || r!="R" || field(&c[25],1)?!=(color_owner,"G") {return None;}
+            let color_ptr=f.obj_locals.iter().find(|(s,_)|*s==color)?.1;
+            if !local(color,color_ptr) || refs.type_identity_by_ptr(color_ptr)!=Some(color_owner) {return None;}
+            let floor=p(&c[8])?;
+            if p(&c[21])!=Some(floor) || refs.func_by_ptr(floor)!=Some("FloorToInt") || refs.func_ns_by_ptr(floor)!=Some("Math")
+                || refs.is_method_by_ptr(floor) || refs.func_owner_by_ptr(floor).is_some() || !plain(refs.func_ret_by_ptr(floor)?,0x44)
+                || !matches!(refs.func_params_by_ptr(floor)?,[t] if plain(t,0x51)) || enters(c[0].offset_dw,c[26].offset_dw) {return None;}
+            let guard=guards.iter().find(|g|g.2==scored && c[0].offset_dw>g.7 && (c[26].offset_dw as i64)<g.8)?;
+            if at<8 {return None;}let init=&code[at-8..at];
+            if init.iter().map(|i|i.op.name).ne(["PshGPtr","PSF","CALLSYS","LoadVObjR","RDR8","SetV8","CMPd","JS"])
+                || w(&init[1],0)!=Some(color) || w(&init[3],0)!=Some(scored) || field(&init[3],1)?!=(owner,score)
+                || init[5].qwords.first()!=Some(&0.0f64.to_bits()) || w(&init[6],0)!=w(&init[4],0) || w(&init[6],1)!=w(&init[5],0)
+                || target(&init[7])!=Some(code.get(at+27)?.offset_dw as i64) || enters(init[0].offset_dw,init[7].offset_dw) {return None;}
+            let ctor=p(&init[2])?;
+            if refs.func_by_ptr(ctor)!=Some("$beh0") || refs.func_owner_by_ptr(ctor)!=Some("FColor") || !refs.is_method_by_ptr(ctor) || refs.is_const_method_by_ptr(ctor)
+                || !plain(refs.func_ret_by_ptr(ctor)?,0x52) || !matches!(refs.func_params_by_ptr(ctor)?,[t] if t.token==5 && t.type_info==color_ptr
+                    && t.is_reference && t.is_object_const && t.is_read_only && !t.is_object_handle && !t.is_auto && !t.if_handle_then_const) {return None;}
+            Some((guard,scored,color,red,byte,score))
+        })();
+        if let Some(found)=found {channels.push(found);}
+    }
+    if channels.len()!=2 || channels[0].1!=first.2 || channels[1].1!=second.2 || channels[0].2!=channels[1].2 {return body.to_owned();}
+    let lines:Vec<_>=body.lines().collect();let mut removed=HashSet::new();let mut edits=HashMap::new();
+    for (which,(guard,scored,color,red,byte,score)) in channels.iter().enumerate() {
+        let field_expr=format!("local_{}.{}.{}",guard.0,guard.4,guard.6);let name=format!("local_{}",guard.1);
+        let assignments:Vec<_>=lines.iter().enumerate().filter(|(_,line)|line.trim()==format!("{}{name} = {field_expr};",if which==0 {"int "}else{""})).map(|(at,_)|at).collect();
+        let [at]=assignments.as_slice() else {return body.to_owned();};let pad=indent_of(lines[*at]);let nested=format!("{pad}    ");let ty=&value.name;
+        if lines.get(at+1)!=Some(&format!("{pad}if ({name} != 0)").as_str()) || lines.get(at+2)!=Some(&format!("{pad}{{").as_str())
+            || lines.get(at+3)!=Some(&format!("{nested}{ty} local_{scored};").as_str()) {return body.to_owned();}
+        removed.insert(*at);edits.insert(at+1,format!("{pad}if ({field_expr})"));edits.insert(at+3,format!("{nested}{ty} local_{scored} = {ty}();"));
+        let mut writes=Vec::new();
+        for (row,c) in lines.windows(5).enumerate() {
+            let (Some((indent,r,init)),Some((same,g,green)))=(declaration_with_initializer(c[0]),declaration_with_initializer(c[3])) else {continue;};
+            let expr=format!("(local_{scored}.{score} / 3.0) * 255.0");let floor=format!("Math::FloorToInt({expr})");
+            let Some(color_name)=c[2].trim().strip_suffix(&format!(".R = uint8({r});")) else {continue;};
+            if indent!=same || indent!=format!("{nested}    ") || init!="255" || slot_and_life_any(&r).map(|s|s.0)!=Some(*red)
+                || slot_and_life_any(&g).map(|s|s.0)!=Some(*byte) || slot_and_life_any(color_name).map(|s|s.0)!=Some(*color)
+                || !c[0].trim().starts_with("int ") || !c[3].trim().starts_with("int ")
+                || ![format!("{indent}{r} = {r} - {floor};"),format!("{indent}{r} = {r} - Math::FloorToInt(({expr}));")].contains(&c[1].to_owned())
+                || green!=format!("(({floor}) + 0)") || c[4]!=format!("{indent}{color_name}.G = uint8({g});")
+                || count_ident(body,&r)!=4 || count_ident(body,&g)!=2 || count_ident(body,color_name)!=4 {continue;}
+            let old=format!("{nested}FColor {color_name} = FColor(FColor::Black);");
+            let declarations:Vec<_>=lines.iter().enumerate().filter(|(_,line)|**line==old).map(|(i,_)|i).collect();
+            let [decl]=declarations.as_slice() else {continue;};
+            if *decl<=at+3 || *decl>=row {continue;}
+            writes.push((row,*decl,format!("{indent}{color_name}.R = uint8(255 - {floor});\n{indent}{color_name}.G = uint8(0 + {floor});"),format!("{nested}FColor {color_name}(FColor::Black);")));
+        }
+        let [(row,decl,replacement,constructor)]=writes.as_slice() else {return body.to_owned();};
+        edits.insert(*decl,constructor.clone());edits.insert(*row,replacement.clone());removed.extend(row+1..row+5);
+    }
+    let mut out=lines.iter().enumerate().filter(|(at,_)|!removed.contains(at)).map(|(at,line)|edits.get(&at).cloned().unwrap_or_else(||(*line).to_owned())).collect::<Vec<_>>().join("\n");
+    if body.ends_with('\n') {out.push('\n');}out
 }
 
 /// Keep path cost and short-circuit score products in their original evaluation order.
@@ -47560,6 +47683,61 @@ mod literal_value_lifetime_tests {
         let mut shifted=f.clone();shifted.obj_locals=vec![(13,10),(18,10)];
         for i in &code {if i.op.name=="PSF" {shifted.bytecode[i.offset_dw]+=10<<16;}}
         assert_eq!(fold(&body.replace("local_8","local_18"),&shifted,&refs),expected.replace("local_8","local_18"));
+    }
+
+    #[test]
+    fn paired_scored_branches_preserve_guard_and_value_lifetimes() {
+        let mut ops:Vec<(&str,Vec<u16>)>=Vec::new();
+        for (scored,member,red,other,cmp,left,right,green) in [(36,0,46,45,40,[38,40,38,44,40],[44,38,40,50,38],46),
+            (28,24,45,46,50,[38,44,50,40,44],[40,50,38,44,50],46)] {
+            let [a,b,div,c,mul]=left;let [d,e,div2,f,mul2]=right;
+            ops.extend([("PshVPtr",vec![20]),("ADDSi",vec![member]),("ADDSi",vec![16]),("PopRPtr",vec![]),("RDR1",vec![17]),
+                ("CpyVtoR1",vec![17]),("JLowZ",vec![]),("PSF",vec![scored]),("CALL",vec![]),
+                ("PshGPtr",vec![]),("PSF",vec![41]),("CALLSYS",vec![]),("LoadVObjR",vec![scored,0]),("RDR8",vec![cmp]),
+                ("SetV8",vec![38]),("CMPd",vec![cmp,38]),("JS",vec![]),
+                ("SetV4",vec![red]),("LoadVObjR",vec![scored,0]),("RDR8",vec![a]),("SetV8",vec![b]),("DIVd",vec![div,a,b]),
+                ("SetV8",vec![c]),("MULd",vec![mul,div,c]),("PshV8",vec![mul]),("CALLSYS",vec![]),("CpyRtoV4",vec![other]),
+                ("SUBi",vec![red,red,other]),("iTOb",vec![47,red]),("LoadVObjR",vec![41,2]),("WRTV1",vec![47]),
+                ("LoadVObjR",vec![scored,0]),("RDR8",vec![d]),("SetV8",vec![e]),("DIVd",vec![div2,d,e]),("SetV8",vec![f]),
+                ("MULd",vec![mul2,div2,f]),("PshV8",vec![mul2]),("CALLSYS",vec![]),("CpyRtoV4",vec![green]),
+                ("ADDIi",vec![45,green]),("iTOb",vec![47,45]),("LoadVObjR",vec![41,1]),("WRTV1",vec![47]),("CpyVtoR1",vec![17])]);
+        }
+        ops.push(("RET",vec![0]));let borrowed:Vec<_>=ops.iter().map(|(name,w)|(*name,w.as_slice())).collect();let mut f=function(&borrowed);
+        f.ret=DataType{token:5,type_info:6,..Default::default()};f.obj_locals=vec![(4,6),(28,4),(36,4),(41,8)];
+        let code=disassemble(&f.bytecode).unwrap();
+        for base in [0,45] {
+            for (at,id) in [(1,7),(2,5),(8,200),(11,22),(25,21),(38,21)] {f.bytecode[code[base+at].offset_dw+1]=id;}
+            for (at,id) in [(12,4),(18,4),(29,8),(31,4),(42,8)] {f.bytecode[code[base+at].offset_dw+2]=id;}
+            f.bytecode[code[base+17].offset_dw+1]=255;
+            for (at,value) in [(14,0.0f64),(20,3.0),(22,255.0),(33,3.0),(35,255.0)] {
+                let bits=value.to_bits();let offset=code[base+at].offset_dw;f.bytecode[offset+1]=bits as i32;f.bytecode[offset+2]=(bits>>32) as i32;
+            }
+            for (at,to) in [(6,45),(16,44)] {f.bytecode[code[base+at].offset_dw+1]=code[base+to].offset_dw as i32-code[base+at].offset_dw as i32-2;}
+        }
+        let body="    TArray<FScored> BuildValues()\n    {\n        TArray<FScored> local_4;\n        for (auto& local_20 : this.CalculatedPositions)\n        {\n            int local_17 = local_20.First.Valid;\n            if (local_17 != 0)\n            {\n                FScored local_36;\n                local_36.CalculatedPosition = local_20.First;\n                local_36.Score = this.CalculateScoreForPosition(local_36.CalculatedPosition.Position);\n                if (local_36.Score > 0.0)\n                {\n                    local_4.Add(local_36);\n                }\n                FColor local_41 = FColor(FColor::Black);\n                if (local_36.Score >= 0.0)\n                {\n                    int local_46 = 255;\n                    local_46 = local_46 - Math::FloorToInt((local_36.Score / 3.0) * 255.0);\n                    local_41.R = uint8(local_46);\n                    int local_47 = ((Math::FloorToInt((local_36.Score / 3.0) * 255.0)) + 0);\n                    local_41.G = uint8(local_47);\n                }\n                VLog::Circle(this.Combat.GetSelf(), (FString(\"S: \") + local_36.Score), this.RaisePosition(this.PlaceFlatPositionIntoSpace(local_36.CalculatedPosition.Position, this.Combat.GetCharacterOfInterest()), 10.0), 30.0f, local_41, FVector::UpVector, 0, FName(\"Angelscript\"));\n            }\n            else\n            {\n            }\n            local_17 = local_20.Second.Valid;\n            if (local_17 != 0)\n            {\n                FScored local_28;\n                local_28.CalculatedPosition = local_20.Second;\n                local_28.Score = this.CalculateScoreForPosition(local_28.CalculatedPosition.Position);\n                if (local_28.Score >= 0.0)\n                {\n                    local_4.Add(local_28);\n                }\n                FColor local_41_2 = FColor(FColor::Black);\n                if (local_28.Score >= 0.0)\n                {\n                    int local_45 = 255;\n                    local_45 = local_45 - Math::FloorToInt(((local_28.Score / 3.0) * 255.0));\n                    local_41_2.R = uint8(local_45);\n                    int local_47_2 = ((Math::FloorToInt((local_28.Score / 3.0) * 255.0)) + 0);\n                    local_41_2.G = uint8(local_47_2);\n                }\n                VLog::Circle(this.Combat.GetSelf(), (FString(\"S: \") + local_28.Score), this.PlaceFlatPositionIntoSpace(local_28.CalculatedPosition.Position, this.Combat.GetCharacterOfInterest()), 30.0f, local_41_2, FVector::UpVector, 0, FName(\"Angelscript\"));\n                continue;\n            }\n        }\n        local_4.Sort(false);\n        return local_4;\n    }";
+        let expected="    TArray<FScored> BuildValues()\n    {\n        TArray<FScored> local_4;\n        for (auto& local_20 : this.CalculatedPositions)\n        {\n            if (local_20.First.Valid)\n            {\n                FScored local_36 = FScored();\n                local_36.CalculatedPosition = local_20.First;\n                local_36.Score = this.CalculateScoreForPosition(local_36.CalculatedPosition.Position);\n                if (local_36.Score > 0.0)\n                {\n                    local_4.Add(local_36);\n                }\n                FColor local_41(FColor::Black);\n                if (local_36.Score >= 0.0)\n                {\n                    local_41.R = uint8(255 - Math::FloorToInt((local_36.Score / 3.0) * 255.0));\n                    local_41.G = uint8(0 + Math::FloorToInt((local_36.Score / 3.0) * 255.0));\n                }\n                VLog::Circle(this.Combat.GetSelf(), (FString(\"S: \") + local_36.Score), this.RaisePosition(this.PlaceFlatPositionIntoSpace(local_36.CalculatedPosition.Position, this.Combat.GetCharacterOfInterest()), 10.0), 30.0f, local_41, FVector::UpVector, 0, FName(\"Angelscript\"));\n            }\n            else\n            {\n            }\n            if (local_20.Second.Valid)\n            {\n                FScored local_28 = FScored();\n                local_28.CalculatedPosition = local_20.Second;\n                local_28.Score = this.CalculateScoreForPosition(local_28.CalculatedPosition.Position);\n                if (local_28.Score >= 0.0)\n                {\n                    local_4.Add(local_28);\n                }\n                FColor local_41_2(FColor::Black);\n                if (local_28.Score >= 0.0)\n                {\n                    local_41_2.R = uint8(255 - Math::FloorToInt((local_28.Score / 3.0) * 255.0));\n                    local_41_2.G = uint8(0 + Math::FloorToInt((local_28.Score / 3.0) * 255.0));\n                }\n                VLog::Circle(this.Combat.GetSelf(), (FString(\"S: \") + local_28.Score), this.PlaceFlatPositionIntoSpace(local_28.CalculatedPosition.Position, this.Combat.GetCharacterOfInterest()), 30.0f, local_41_2, FVector::UpVector, 0, FName(\"Angelscript\"));\n                continue;\n            }\n        }\n        local_4.Sort(false);\n        return local_4;\n    }";
+        let refs=RefResolver::from_test_scored_branches(0);
+        let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_scored_branch_lifetimes(s,f,r);
+        assert_eq!(fold(body,&f,&refs),expected);assert_eq!(fold(expected,&f,&refs),expected);
+        for fault in 1..=13 {assert_eq!(fold(body,&f,&RefResolver::from_test_scored_branches(fault)),body,"metadata {fault}");}
+        for at in [0,1,2,4,5,7,10,12,15,17,18,21,23,24,26,27,28,29,30,31,34,36,37,39,40,41,42,43] {
+            let mut bad=f.clone();bad.bytecode[code[at].offset_dw]^=4<<16;assert_eq!(fold(body,&bad,&refs),body,"operand {at}");
+        }
+        for at in [6,16,17,20,22,33,35,40,51,61] {let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1]+=1;assert_eq!(fold(body,&bad,&refs),body,"literal/target {at}");}
+        let mut bad=f.clone();bad.obj_locals.push((41,8));assert_eq!(fold(body,&bad,&refs),body);
+        for bad in [format!("{body}    Use(local_17);\n"),format!("{body}    Use(local_46);\n"),format!("{body}    Use(local_41);\n"),
+            body.replace("int local_17 =","bool local_17 ="),body.replace("FColor::Black","FColor::Red"),
+            body.replace("+ 0);","+ 1);"),body.replace("uint8(local_47)","uint8(Other())")] {assert_eq!(fold(&bad,&f,&refs),bad);}
+        let mut shifted=f.clone();for (slot,_) in &mut shifted.obj_locals {*slot+=100;}
+        for i in &code {for (n,slot) in i.words.iter().enumerate() {
+            if *slot==0 || (n==0 && i.op.name=="ADDSi") || (n==1 && i.op.name=="LoadVObjR") {continue;}
+            if n==0 {shifted.bytecode[i.offset_dw]+=100<<16;} else {shifted.bytecode[i.offset_dw+1]+=100<<((n-1)*16);}
+        }}
+        let shift=|s:&str|["4","17","20","28","36","41","41_2","45","46","47","47_2"].iter().fold(s.to_owned(),|s,slot|{
+            let (number,suffix)=slot.split_once('_').unwrap_or((slot,""));let number=number.parse::<i32>().unwrap()+100;
+            let new=if suffix.is_empty(){format!("local_{number}")}else{format!("local_{number}_{suffix}")};super::rename_ident(&s,&format!("local_{slot}"),&new)
+        });
+        assert_eq!(fold(&shift(body),&shifted,&refs),shift(expected));
     }
 
     #[test]
