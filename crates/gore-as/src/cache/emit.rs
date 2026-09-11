@@ -3331,6 +3331,8 @@ fn emit_function_ctor(
         pass_trace("restore_reused_script_default", &rendered);
         let rendered = restore_repeated_memory_copy(&rendered, f, refs);
         pass_trace("restore_repeated_memory_copy", &rendered);
+        let rendered = restore_item_transfer_ai_property(&rendered, f, refs);
+        pass_trace("restore_item_transfer_ai_property", &rendered);
         let rendered = restore_hostility_property_argument(&rendered, f, refs, is_method);
         pass_trace("restore_hostility_property_argument", &rendered);
         let rendered = restore_container_property_copies(&rendered, f, refs);
@@ -10690,6 +10692,80 @@ fn restore_reused_script_default(body: &str, f: &Func, refs: &RefResolver, is_me
     }
     let [(old, new)] = edits.as_slice() else { return body.to_owned(); };
     body.replacen(old, new, 1)
+}
+
+/// Defer the AI getter until the other transfer arguments have been materialized.
+/// The original native property getter feeds one closed, discarded task result.
+fn restore_item_transfer_ai_property(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if !body.contains("::GiveItemTo(") || !body.contains(".GetAI()") { return body.to_owned(); }
+    let Ok(code)=disassemble(&f.bytecode) else { return body.to_owned(); };
+    let native=|p,name| refs.type_identity_by_ptr(p).is_some_and(|t| t.name==name && t.module.is_empty() && t.namespace.is_empty());
+    let w=|i:&Instr| i.words.first().map(|v| *v as i16 as i32);
+    let ptr=|i:&Instr| i.qwords.first().map(|p| *p as i64);
+    let local=|slot,ty| f.obj_locals.iter().filter(|(s,_)| *s==slot).map(|(_,t)| *t).eq([ty]);
+    let mut witnessed=0;
+    let mut targets=HashSet::new();
+    for c in code.windows(8) {
+        let matched=(|| {
+            if c.iter().map(|i| i.op.name).ne(["PshVPtr","CALLSYS","STOREOBJ","PshVPtr","PSF","CALL","PSF","CALLSYS"]) { return None; }
+            let (actor,ai,out)=(w(&c[0])?,w(&c[2])?,w(&c[4])?);
+            if [actor,ai,out].iter().any(|s| *s<=0) || HashSet::from([actor,ai,out]).len()!=3
+                || w(&c[3])!=Some(ai) || w(&c[6])!=Some(out) { return None; }
+            let getter=ptr(&c[1])?;
+            let owner=refs.func_owner_by_ptr(getter)?;
+            if !matches!(owner,"AGothicCharacter"|"AGothicCharacterState") || refs.func_by_ptr(getter)!=Some("GetAI")
+                || !refs.is_method_by_ptr(getter) || !refs.is_const_method_by_ptr(getter)
+                || !refs.func_params_by_ptr(getter)?.is_empty() { return None; }
+            let id=*c[5].dwords.first()? as i32;
+            if !refs.is_native_item_transfer_by_id(id) { return None; }
+            let params=refs.func_params_by_id(id)?;
+            let ret=refs.func_ret_by_id(id)?;
+            let got=refs.func_ret_by_ptr(getter)?;
+            if got.token!=5 || !got.is_object_handle || got.is_reference || got.is_object_const || got.is_read_only
+                || got.is_auto || got.if_handle_then_const || got.type_info!=params[0].type_info
+                || !local(ai,got.type_info) || !local(out,ret.type_info)
+                || !matches!(f.obj_locals.iter().filter(|(s,_)| *s==actor).map(|(_,t)| *t).collect::<Vec<_>>().as_slice(),[p] if native(*p,owner)) { return None; }
+            let destroy=ptr(&c[7])?;
+            if refs.func_by_ptr(destroy)!=Some("$beh2") || refs.func_owner_by_ptr(destroy)!=Some("FAbilityTaskExecutor")
+                || !refs.is_method_by_ptr(destroy) || refs.is_const_method_by_ptr(destroy)
+                || !refs.func_params_by_ptr(destroy)?.is_empty()
+                || !matches!(refs.func_ret_by_ptr(destroy),Some(t) if t.token==0x52 && !t.is_reference && !t.is_object_handle)
+                || code.iter().any(|i| i.op.name=="JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                    let target=i.offset_dw as i64+2+*d as i32 as i64;
+                    target>c[0].offset_dw as i64 && target<=c[7].offset_dw as i64
+                }))) { return None; }
+            Some(id)
+        })();
+        if let Some(id)=matched {witnessed+=1;targets.insert(id);}
+    }
+    if witnessed==0 || targets.len()!=1 {return body.to_owned();}
+    // Require every same-name call in this function to have the same typed witness.
+    let calls=code.iter().filter(|i| matches!(i.op.name,"CALL"|"CALLINTF") && i.dwords.first()
+        .is_some_and(|id| refs.func_by_id(*id as i32)==Some("GiveItemTo"))).count();
+    if calls!=witnessed {return body.to_owned();}
+    let mut edits=Vec::new();let mut offset=0;
+    for line in body.split_inclusive('\n') {
+        let trimmed=line.trim_start();
+        if trimmed.starts_with("::GiveItemTo(") {
+            let open=line.len()-trimmed.len()+"::GiveItemTo".len();
+            if let Some((args,close))=argument_list(line,open) {
+                if matches!(args.len(),3|4) && line[close+1..].trim()==";" {
+                    let first=&args[0];
+                    if let Some(receiver)=first.strip_suffix(".GetAI()") {
+                        if !receiver.is_empty() && !receiver.contains(['"','\'','<','>',';'])
+                            && expression_start(receiver,receiver.len())==Some(0) {
+                            let start=offset+open+1;
+                            if body[start..].starts_with(first) {edits.push((start+receiver.len(),start+first.len()));}
+                        }
+                    }
+                }
+            }
+        }
+        offset+=line.len();
+    }
+    if edits.len()!=witnessed {return body.to_owned();}
+    let mut result=body.to_owned();for (start,end) in edits.into_iter().rev() {result.replace_range(start..end,".AI");}
+    result
 }
 
 /// Keep the previously used character-state temporary for the first query argument.
@@ -46879,6 +46955,36 @@ mod literal_value_lifetime_tests {
         let mut bad = f.clone(); bad.bytecode.extend(function(&[("SetV4", &[94])]).bytecode); assert_eq!(fold(body, &bad, &refs), body);
         let mut bad = f.clone(); let start = bad.bytecode.len(); let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[10].offset_dw as i32 - start as i32 - 2; bad.bytecode.extend(jump); assert_eq!(fold(body, &bad, &refs), body);
         for bad in [body.replace("local_94_2", "local_94_3"), body.replace("local_38.Last()", "local_40.Last()"), format!("{body}{body}")] { assert_eq!(fold(&bad, &f, &refs), bad); }
+    }
+
+    #[test]
+    fn item_transfer_defers_only_the_typed_native_ai_argument() {
+        let mut f=function(&[("PshVPtr",&[6]),("CALLSYS",&[]),("STOREOBJ",&[8]),("PshVPtr",&[8]),
+            ("PSF",&[22]),("CALL",&[]),("PSF",&[22]),("CALLSYS",&[]),("RET",&[0])]);
+        f.obj_locals=vec![(6,1),(8,2),(22,3)];
+        let c=disassemble(&f.bytecode).unwrap();
+        for (at,p) in [(1,10),(5,20),(7,30)] {f.bytecode[c[at].offset_dw+1]=p;}
+        let body="    ::GiveItemTo(this.Sender().GetAI(), this.Recipient(), UItem, 25);\n    (this.Sender().GetAI()).Say(Text);\n";
+        let expected=body.replacen("Sender().GetAI()","Sender().AI",1);
+        let refs=RefResolver::from_test_item_transfer_property(0);
+        let fold=|s:&str,f:&Func,r:&RefResolver| super::restore_item_transfer_ai_property(s,f,r);
+        assert_eq!(fold(body,&f,&refs),expected);assert_eq!(fold(&expected,&f,&refs),expected);
+        assert_eq!(fold(&body.replace(", 25)",")"),&f,&refs),expected.replace(", 25)",")"));
+        for fault in 1..=12 {assert_eq!(fold(body,&f,&RefResolver::from_test_item_transfer_property(fault)),body,"metadata {fault}");}
+        for at in [0,2,3,4,6] {let mut bad=f.clone();bad.bytecode[c[at].offset_dw]^=2<<16;assert_eq!(fold(body,&bad,&refs),body,"slot {at}");}
+        let mut bad=f.clone();bad.obj_locals.push((8,2));assert_eq!(fold(body,&bad,&refs),body);
+        let mut bad=f.clone();bad.bytecode.truncate(c[7].offset_dw);assert_eq!(fold(body,&bad,&refs),body);
+        let mut bad=f.clone();let j=bad.bytecode.len();bad.bytecode.extend(function(&[("JMP",&[])]).bytecode);
+        bad.bytecode[j+1]=c[3].offset_dw as i32-j as i32-2;assert_eq!(fold(body,&bad,&refs),body);
+        let mut bad=f.clone();let j=bad.bytecode.len();bad.bytecode.extend(function(&[("CALL",&[])]).bytecode);
+        bad.bytecode[j+1]=20;assert_eq!(fold(body,&bad,&refs),body);
+        for s in [format!("{body}{body}"),body.replace("::GiveItemTo(","other.GiveItemTo("),body.replace("::GiveItemTo(","Other::GiveItemTo("),
+            body.replace("this.Sender()","this.Sender(\"text\")"),format!("    Print(\"{}\");\n",body.lines().next().unwrap().trim())] {
+            assert_eq!(fold(&s,&f,&refs),s);
+        }
+        let mut shifted=f.clone();for (s,_) in &mut shifted.obj_locals {*s+=100;}
+        for i in &c {if matches!(i.op.name,"PshVPtr"|"STOREOBJ"|"PSF") {shifted.bytecode[i.offset_dw]+=100<<16;}}
+        assert_eq!(fold(body,&shifted,&refs),expected);
     }
 
     #[test]

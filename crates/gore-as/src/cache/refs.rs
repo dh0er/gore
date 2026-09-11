@@ -5712,6 +5712,53 @@ impl RefResolver {
         r
     }
 
+    /// Exact script transfer overload, including its native argument identities.
+    pub(crate) fn is_native_item_transfer_by_id(&self,id:i32)->bool {
+        let Some(ptr)=self.funcid_to_ptr.get(&id) else {return false;};
+        if self.func_by_id(id)!=Some("GiveItemTo") || self.is_method_by_id(id) || self.func_ns.contains_key(ptr)
+            || self.func_module.get(ptr).map(String::as_str)!=Some("AI.NativeAICommands") {return false;}
+        let (Some(ret),Some([ai,other,item,num]))=(self.func_ret_by_id(id),self.func_params_by_id(id)) else {return false;};
+        let native=|t:&DataType,name| t.token==5 && self.type_identity_by_ptr(t.type_info)
+            .is_some_and(|t| t.name==name && t.module.is_empty() && t.namespace.is_empty());
+        let handle=|t:&DataType,name| native(t,name) && t.is_object_handle && !t.is_reference && !t.is_object_const && !t.is_read_only;
+        native(ret,"FAbilityTaskExecutor") && !ret.is_reference && !ret.is_object_handle && !ret.is_object_const && !ret.is_read_only
+            && handle(ai,"UGameplayAbility_AI") && handle(other,"AGothicCharacterState")
+            && native(item,"TSubclassOf") && item.is_reference && item.is_object_const && item.is_read_only && !item.is_object_handle
+            && matches!(self.type_subtypes(item.type_info),Some([t]) if native(t,"UItemDefinition"))
+            && num.token==0x44 && num.type_info==0 && !num.is_reference && !num.is_object_handle && num.is_object_const && num.is_read_only
+            && [ret,ai,other,item,num].iter().all(|t| !t.is_auto && !t.if_handle_then_const)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_item_transfer_property(fault:u8)->Self {
+        let mut r=Self::default();
+        for (p,name) in [(1,"AGothicCharacterState"),(2,"UGameplayAbility_AI"),(3,"FAbilityTaskExecutor"),(4,"TSubclassOf"),(5,"UItemDefinition")] {
+            r.type_identity_by_ptr.insert(p,TypeIdentity{name:name.into(),module:String::new(),namespace:String::new()});
+        }
+        let value=|p| DataType{token:5,type_info:p,..Default::default()};
+        let handle=|p| DataType{is_object_handle:true,..value(p)};
+        r.type_subtypes.insert(4,vec![handle(5)]);
+        for (p,name,ret,args) in [(10,"GetAI",handle(2),vec![]),(20,"GiveItemTo",value(3),vec![handle(2),handle(1),
+            DataType{is_reference:true,is_object_const:true,is_read_only:true,..value(4)},
+            DataType{token:0x44,is_object_const:true,is_read_only:true,..Default::default()}]),
+            (30,"$beh2",DataType{token:0x52,..Default::default()},vec![])] {
+            r.func_by_ptr.insert(p,name.into());r.func_ret.insert(p,ret);r.func_params.insert(p,args);
+        }
+        r.func_owner.insert(10,"AGothicCharacterState".into());r.func_owner.insert(30,"FAbilityTaskExecutor".into());
+        r.func_is_method.extend([10,30]);r.const_method_ptrs.insert(10);r.funcid_to_ptr.insert(20,20);
+        r.func_module.insert(20,"AI.NativeAICommands".into());
+        match fault {
+            1=>{r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into();},
+            2=>{r.func_module.insert(20,"Other".into());},3=>{r.func_is_method.insert(20);},
+            4=>{r.func_ns.insert(20,"Other".into());},5=>{r.const_method_ptrs.remove(&10);},
+            6=>{r.func_ret.get_mut(&10).unwrap().is_reference=true;},7=>{r.func_params.get_mut(&20).unwrap()[2].is_read_only=false;},
+            8=>{r.type_subtypes.get_mut(&4).unwrap()[0].type_info=1;},9=>{r.func_params.get_mut(&20).unwrap()[3].token=0x4b;},
+            10=>{r.func_ret.get_mut(&20).unwrap().is_reference=true;},11=>{r.func_owner.insert(30,"FOther".into());},
+            12=>{r.func_params.get_mut(&10).unwrap().push(value(1));},_=>{}
+        }
+        r
+    }
+
     #[cfg(test)]
     pub(crate) fn from_test_named_box_upper_bound(fault: u8) -> Self {
         let mut r=Self::default();
