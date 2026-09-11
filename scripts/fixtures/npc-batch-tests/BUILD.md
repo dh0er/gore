@@ -202,5 +202,6 @@ are separate Manager entries: import and enable both, disable the previous
 head version, analyze and preflight, then use the authorized Manager Apply.
 See `beard-vt-deployment.json` for this installation's exact Apply/Reset commands.
 The existing `beard-build-checks.json` and `beard-deployment.json` describe the
-superseded 0.1.2 attempt. Neither offline validation nor deployment proves that
-the new beard renders correctly; restart the game and retest from clean START065.
+superseded 0.1.2 attempt. The user subsequently confirmed the complete 0.1.3
+runtime checklist; see `heads/beard-runtime-0.1.3.json`. The build/deployment
+receipts remain historical offline evidence and are not rewritten as runtime proof.

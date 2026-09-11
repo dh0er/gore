@@ -1,7 +1,10 @@
 # Natuerliche Stimmen: Annaeherung und Alltag
 
-Status: vorbereitet; noch nicht im Spiel geprueft. Ausgangspunkt ist **Profil 4,
-Slot 066, „NPC 02 Voice - START“**, die vorbereitete Kopie des bewahrten Slots
+Status: **0.1.1 aktiv**, nachdem der Kopf-/Barttest 0.1.3 bestanden wurde;
+natuerliche Begruessung und Alltag sind noch nicht im Spiel geprueft.
+Die [Aktivierung](deployment-after-heads.json) verwendet das bereits gepruefte,
+unveraenderte Tageslichtpaket. Ausgangspunkt ist **Profil 4,
+Slot 066, „NPC 02 Voice - START“**, die vorbereitete Kopie des inzwischen archivierten Slots
 030. Andere Testmods werden einzeln getestet. Diese Variante
 enthaelt weiterhin Bs Warnungsreparatur aus 0.1.12.
 
@@ -21,7 +24,7 @@ auch dieser Teil bei Tageslicht stattfindet.
    laden. Der Aufbau erzeugt C nur einmal; erneuter Aufbau mit unserem eigenen C
    ist erlaubt. Er ersetzt keinen fremden C aus einem aelteren Teststand.
 2. **Vor der ersten Annaeherung** einen neuen Spielstand
-   **„npc natuerlich - start“** anlegen. Nicht 066 oder 030 ueberschreiben.
+   **„npc natuerlich - start“** anlegen. Nicht 066 ueberschreiben.
 3. Mit leeren, gesenkten Haenden auf **B** zugehen. Ihn nicht ansprechen.
    Vor ihm in etwa **1–2 Metern** Abstand stehen und **10 Sekunden** beobachten.
    Falls er wegschaut, einmal vor sein Gesicht gehen. Erwarteter Trigger ist

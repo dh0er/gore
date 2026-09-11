@@ -2,12 +2,14 @@
 
 `NpcHeadPaletteTest 0.1.3` korrigiert den Bartwechsel auf C:
 ein bartloser Heldenkopf und ein Flex-Kopf mit kurzem Bart. H5/H6 wechseln
-jetzt Gesichtstexturen in Cs eigenen Materialinstanzen. **Der Spieltest dieser
-neuen Korrektur steht aus.** 0.1.2 zeigte schwarze Gesichter; beim Heldenkopf
+jetzt Gesichtstexturen in Cs eigenen Materialinstanzen. **Der Benutzer hat den
+vollstaendigen Nachtest bestaetigt:** beide Bartvarianten, normale Haut,
+Wiederherstellung und vollstaendiger Neustart funktionieren. Siehe
+[Ergebnis 0.1.3](beard-runtime-0.1.3.json). 0.1.2 zeigte schwarze Gesichter; beim Heldenkopf
 funktionierte auch die Wiederherstellung nicht. Die zuvor getesteten Kopf-, Haar- und Farbwechsel
 bleiben erhalten; der [Befund zu 0.1.0](runtime-result.json) bleibt als Historie.
 
-## Spieltest bei Mittag
+## Bestandene Checkliste bei Mittag
 
 Dieses Paket zusammen mit **NpcBeardTextures013** aktivieren, alle anderen
 Testpakete deaktivieren. Das Spiel **vollstaendig beenden und neu starten**.
@@ -82,5 +84,5 @@ Bildhashes sowie die Bearbeitungsprompts. Die [API-Qualifikation](beard-native-a
 belegt die ersten nativen Aufrufe; die [MID-Ergaenzung](fresh-mid-native-api-qualification.json)
 qualifiziert Factory und Override-Kopie. Die [VT-Pruefung](beard-virtual-textures.json)
 belegt neue Paketidentitaeten und unveraendertes Ruecklesen. Der [Fehlversuch](beard-runtime-0.1.2.json)
-bleibt dokumentiert. Offline-Build und Manager-Status
-beweisen noch keine korrekte Darstellung im Spiel.
+bleibt dokumentiert. Der Laufzeitnachweis stammt aus der anschliessenden
+Rueckmeldung des Benutzers, nicht aus Offline-Build oder Manager-Status.

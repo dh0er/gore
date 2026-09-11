@@ -20,17 +20,20 @@ recorded with that batch. Preparation does not check off the runtime items.
   and final cache validation; unknown signatures still fail.
 - [x] Flex/Hero face selection, independent hair visibility, Flex hair color,
   restoration and restart passed in the user's palette test on2026-09-11.
-- [ ] Truly clean-shaven/bearded faces and independent beard choices per NPC.
+- [x] Switch the tested Hero/Flex faces between clean-shaven and short-bearded
+  appearances on C without changing the other characters.
   H5/H6 failed visually: the Hero beard is painted into `T_NH_Head_D`; hiding
   the extra `MI_NH_Beard` geometry cannot remove it. Flex has no separate beard.
   Version0.1.2 then rendered both replacement faces black; Hero restoration
   also failed. Its ordinary PNG textures did not match the original virtual
   textures, and the component MID factory could mutate the saved original.
   Version0.1.3 uses separately cooked VT assets and fresh MIDs with copied
-  original overrides. Rendering, restoration and restart remain unverified
-  in game; this focused retest has priority over voice.
+  original overrides. The user confirms the complete 0.1.3 retest passes:
+  normal skin, both beard variants, original restoration and full restart.
+  This qualifies these two face variants, not arbitrary beard meshes or every
+  head/material combination. Natural-voice testing is next.
   See the [beard checklist](../../scripts/fixtures/npc-batch-tests/heads/README.md)
-  and historical [palette result](../../scripts/fixtures/npc-batch-tests/heads/runtime-result.json).
+  and [0.1.3 runtime result](../../scripts/fixtures/npc-batch-tests/heads/beard-runtime-0.1.3.json).
 - [x] Verify animation alignment, save/load, full restart and absence of duplicate
   or overlapping heads.
 

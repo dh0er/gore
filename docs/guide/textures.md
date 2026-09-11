@@ -101,7 +101,9 @@ The NPC beard fixture documents the exact qualified API calls.
 Ordinary imported PNG resources cannot substitute for a virtual-texture resource
 in a material that expects VT sampling. The beard test 0.1.2 rendered black with
 that combination; 0.1.3 preserves the original VT type. Its cooking and packed
-readback are checked offline; the updated face rendering still needs a game test.
+readback passed offline checks. The user subsequently confirmed both face/beard
+variants render correctly, restore and survive a full restart. See the
+[0.1.3 runtime result](../../scripts/fixtures/npc-batch-tests/heads/beard-runtime-0.1.3.json).
 
 ## Pack and deploy
 
