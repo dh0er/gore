@@ -2396,7 +2396,8 @@ fn emit_function_ctor(
             ""
         };
         let propertyq = if f.traits & 0x200 != 0 { " property" } else { "" };
-        let _ = writeln!(s, "{ind}{ret_sig} {}({params}){constq}{propertyq}", f.name);
+        let mixinq = if !is_method && refs.emits_native_pair_mixin(f) { "mixin " } else { "" };
+        let _ = writeln!(s, "{ind}{mixinq}{ret_sig} {}({params}){constq}{propertyq}", f.name);
     }
     let _ = writeln!(s, "{ind}{{");
 

@@ -2171,6 +2171,7 @@ fn build_call(
     ret_ty: Option<&str>,
     ret_is_ref: bool,
     global_shadowed: bool,
+    script_mixin: bool,
     refs: &RefResolver,
 ) -> Option<String> {
     // The callee's declared default arguments, so a call can be rendered the way it was
@@ -2716,6 +2717,12 @@ fn build_call(
             }
         }
         maybe_reverse_args(&mut a, params, refs);
+        if script_mixin {
+            if let ([receiver, other], Some([first, second])) = (a.as_slice(), params) {
+                return Some(format!("({}).{}({})", cast_arg(receiver, first, refs),
+                    f.trim_start_matches("::"), cast_arg(other, second, refs)));
+            }
+        }
         Some(format!(
             "{f}({})",
             render_args(&a, params, refs, arg_defaults)
@@ -5798,6 +5805,7 @@ fn block_stmts_in(
                         pending_ty.as_deref(),
                         ret_is_ref,
                         free_global_in_class,
+                        ctx.refs.is_native_pair_mixin_by_id(id),
                         ctx.refs,
                     )
                 };
@@ -6391,6 +6399,7 @@ fn block_stmts_in(
                             pending_ty.as_deref(),
                             ret_is_ref,
                             false,
+                            false,
                             ctx.refs,
                         )
                     }
@@ -6430,6 +6439,7 @@ fn block_stmts_in(
                     ctx.class_name,
                     false,
                     None,
+                    false,
                     false,
                     false,
                     ctx.refs,
@@ -13090,7 +13100,7 @@ mod tests {
             let arity = if force_short { Some(3) } else { refs.native_arity_by_ptr(10,"MakeActor") };
             let params = refs.func_params_by_ptr(10);
             let call = build_call(&mut stack,"MakeActor",false,None,params,arity,
-                arity.or_else(|| params.map(|p|p.len())),None,None,false,Some("AActor"),false,false,refs).unwrap();
+                arity.or_else(|| params.map(|p|p.len())),None,None,false,Some("AActor"),false,false,false,refs).unwrap();
             (call,stack)
         };
         assert_eq!(refs.native_arity_by_ptr(10,"MakeActor"),None);
@@ -13107,6 +13117,21 @@ mod tests {
         for fault in 1..=20 {
             let bad=RefResolver::from_test_native_actor_factory(fault);
             assert_eq!(bad.native_arity_by_ptr(10,"MakeActor"),Some(3),"metadata fault {fault}");
+        }
+    }
+
+    #[test]
+    fn script_predicate_mixin_keeps_argument_order_and_the_outer_frame() {
+        let refs = RefResolver::default();
+        let ty = DataType { token: 5, is_object_handle: true, is_object_const: true, ..Default::default() };
+        let params = [ty.clone(), ty];
+        for mixin in [false, true] {
+            // Bytecode pushes the second argument before the receiver/first argument.
+            let mut stack = vec![Arg::obj("Outside".into()), Arg::obj("Other()".into()), Arg::obj("Self()".into())];
+            let call = build_call(&mut stack, "CanObserve", false, None, Some(&params), None, Some(2),
+                None, Some("Host"), false, Some("bool"), false, true, mixin, &refs).unwrap();
+            assert_eq!(call, if mixin { "(Self()).CanObserve(Other())" } else { "::CanObserve(Self(), Other())" });
+            assert_eq!(stack.len(), 1); assert_eq!(stack[0].s, "Outside");
         }
     }
     #[test]

@@ -208,6 +208,9 @@ pub struct RefResolver {
     /// T3 FunctionReferences declaring-module name per NON-method function ptr (batch-25f):
     /// keys the cross-module free-fn rename map, matching the parsed `Module::name` exactly.
     func_module: HashMap<i64, String>,
+    /// Script predicate mixins whose declarations and exact CALL targets agree.
+    native_pair_mixins: HashSet<i64>,
+    native_pair_mixin_declarations: HashSet<(String, i64)>,
     /// batch-25f: per-function-ptr rename for cross-module free-fn collisions — the emit-side
     /// collision scan renames each colliding declaration `Name -> Name_g<mi>` with a TEXT pass
     /// over the DECLARING module only; this id-keyed map lets CALL/CALLINTF sites in EVERY
@@ -1507,6 +1510,56 @@ impl RefResolver {
             .get(&id)
             .and_then(|p| self.free_fn_renames.get(p))
             .map(|s| s.as_str())
+    }
+
+    fn native_pair_predicate_type(&self, ret: &DataType, a: &DataType, b: &DataType) -> Option<i64> {
+        if ret.token != 0x41 || ret.type_info != 0 || ret.is_reference || ret.is_object_handle
+            || ret.is_object_const || ret.is_read_only || ret.is_auto || ret.if_handle_then_const
+            || a.type_info != b.type_info
+            || [a, b].iter().any(|p| p.token != 5 || !p.is_object_handle || !p.is_object_const
+                || p.is_reference || p.is_read_only || p.is_auto || p.if_handle_then_const) { return None; }
+        let ty = self.type_identity_by_ptr(a.type_info)?;
+        (ty.module.is_empty() && ty.namespace.is_empty()
+            && matches!(ty.name.as_str(), "AGothicCharacter" | "AGothicCharacterState")).then_some(a.type_info)
+    }
+
+    /// Preserve the original mixin trait for the proven two-const-character predicate family.
+    pub(crate) fn restores_native_pair_mixin(&self, f: &super::model::Func) -> bool {
+        let [a, b] = f.params.as_slice() else { return false; };
+        f.traits & 0x800 != 0 && f.namespace.is_empty()
+            && f.param_defaults.iter().all(String::is_empty)
+            && a.flags == 0 && b.flags == 0
+            && self.native_pair_predicate_type(&f.ret, &a.ty, &b.ty).is_some()
+    }
+
+    pub(crate) fn set_native_pair_mixins(&mut self, mods: &[super::model::Module]) {
+        let declared: HashSet<_> = mods.iter().flat_map(|m| m.functions.iter()
+            .filter(|f| self.restores_native_pair_mixin(f))
+            .map(|f| (m.name.as_str(), f.name.as_str(), f.params[0].ty.type_info))).collect();
+        let mut targets = HashSet::new();
+        for (ptr, name) in &self.func_by_ptr {
+            if self.is_method_by_ptr(*ptr) || self.func_ns.contains_key(ptr) { continue; }
+            let Some(module) = self.func_module.get(ptr) else { continue; };
+            let Some(params) = self.func_params.get(ptr) else { continue; };
+            let [a, b] = params.as_slice() else { continue; };
+            let Some(ret) = self.func_ret.get(ptr) else { continue; };
+            if self.native_pair_predicate_type(ret, a, b).is_some_and(|ty|
+                declared.contains(&(module.as_str(), name.as_str(), ty))) { targets.insert(*ptr); }
+        }
+        self.native_pair_mixins = targets;
+        self.native_pair_mixin_declarations = declared.into_iter()
+            .map(|(_, name, ty)| (name.to_owned(), ty)).collect();
+    }
+
+    pub(crate) fn is_native_pair_mixin_by_id(&self, id: i32) -> bool {
+        self.funcid_to_ptr.get(&id).is_some_and(|ptr| self.native_pair_mixins.contains(ptr))
+    }
+
+    pub(crate) fn emits_native_pair_mixin(&self, f: &super::model::Func) -> bool {
+        // A bare, unprepared resolver must retain the old declaration together with
+        // its old free calls. Prepared emission binds both sides through the same targets.
+        self.restores_native_pair_mixin(f)
+            && self.native_pair_mixin_declarations.contains(&(f.name.clone(), f.params[0].ty.type_info))
     }
     /// True if `name` exists as a member in cached/script/native evidence.
     ///
@@ -7313,6 +7366,66 @@ impl RefResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn predicate_mixins_require_the_original_trait_and_exact_script_target() {
+        use crate::cache::model::{Func, Module, Param};
+        let make = || {
+            let mut refs = RefResolver::default();
+            refs.type_identity_by_ptr.insert(101, TypeIdentity { name: "AGothicCharacter".into(), module: String::new(), namespace: String::new() });
+            let ty = DataType { token: 5, type_info: 101, is_object_handle: true, is_object_const: true, ..Default::default() };
+            let ret = DataType { token: 0x41, ..Default::default() };
+            let f = Func { name: "CanObserve".into(), namespace: String::new(), param_defaults: vec![],
+                params: ["Self", "Other"].into_iter().map(|n| Param { name: n.into(), ty: ty.clone(), flags: 0 }).collect(),
+                ret: ret.clone(), bytecode: vec![], obj_locals: vec![], is_ufunction: true, traits: 0x820 };
+            let module = Module { name: "Predicates".into(), file: String::new(), functions: vec![f], classes: vec![], enums: vec![], globals: vec![] };
+            for ptr in 1..=4 {
+                refs.funcid_to_ptr.insert(ptr as i32 + 10, ptr);
+                refs.func_by_ptr.insert(ptr, "CanObserve".into());
+                refs.func_module.insert(ptr, if ptr == 2 { "Other" } else { "Predicates" }.into());
+                refs.func_params.insert(ptr, vec![ty.clone(), ty.clone()]); refs.func_ret.insert(ptr, ret.clone());
+            }
+            refs.func_is_method.insert(3); refs.func_ns.insert(4, "Other".into());
+            (refs, module)
+        };
+        let (mut refs, mut module) = make();
+        let mut unused = module.functions[0].clone(); unused.name = "Unused".into();
+        module.functions.push(unused);
+        assert!(refs.restores_native_pair_mixin(&module.functions[0]));
+        assert!(!refs.emits_native_pair_mixin(&module.functions[0]));
+        refs.set_native_pair_mixins(std::slice::from_ref(&module));
+        assert!(refs.emits_native_pair_mixin(&module.functions[0]));
+        assert!(refs.emits_native_pair_mixin(&module.functions[1]));
+        assert!(refs.is_native_pair_mixin_by_id(11));
+        for id in [12, 13, 14, 99] { assert!(!refs.is_native_pair_mixin_by_id(id)); }
+        refs.set_native_pair_mixins(&[]); assert!(!refs.is_native_pair_mixin_by_id(11));
+        for fault in 0..18 {
+            let (mut refs, mut module) = make(); let f = &mut module.functions[0];
+            match fault {
+                0 => f.traits = 0x20,
+                1 => f.namespace = "Other".into(),
+                2 => f.params[1].ty.is_auto = true,
+                3 => f.param_defaults = vec![String::new(), "nullptr".into()],
+                4 => f.params[0].flags = 1,
+                5 => f.params[1].ty.is_reference = true,
+                6 => f.params[0].ty.is_object_const = false,
+                7 => f.params[1].ty.type_info = 102,
+                8 => f.ret.token = 0x44,
+                9 => f.ret.is_reference = true,
+                10 => { f.params.pop(); },
+                11 => refs.type_identity_by_ptr.get_mut(&101).unwrap().module = "Script".into(),
+                12 => refs.type_identity_by_ptr.get_mut(&101).unwrap().name = "AActor".into(),
+                13 => refs.type_identity_by_ptr.get_mut(&101).unwrap().namespace = "Other".into(),
+                14 => refs.func_params.get_mut(&1).unwrap()[1].is_object_const = false,
+                15 => refs.func_ret.get_mut(&1).unwrap().is_reference = true,
+                16 => { refs.func_params.get_mut(&1).unwrap().pop(); },
+                17 => f.name = "AnotherPredicate".into(),
+                _ => unreachable!(),
+            }
+            refs.set_native_pair_mixins(&[module]);
+            assert!(!refs.is_native_pair_mixin_by_id(11), "fault {fault}");
+        }
+    }
 
     #[test]
     fn a_type_key_ignores_namespaces_on_both_sides() {
