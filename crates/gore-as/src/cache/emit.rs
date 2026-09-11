@@ -3324,6 +3324,8 @@ fn emit_function_ctor(
         pass_trace("restore_eager_minimum_location_property", &rendered);
         let rendered = restore_feet_forward_property(&rendered, f, refs);
         pass_trace("restore_feet_forward_property", &rendered);
+        let rendered = restore_reused_script_default(&rendered, f, refs, is_method);
+        pass_trace("restore_reused_script_default", &rendered);
         let rendered = restore_repeated_memory_copy(&rendered, f, refs);
         pass_trace("restore_repeated_memory_copy", &rendered);
         let rendered = restore_hostility_property_argument(&rendered, f, refs, is_method);
@@ -10528,6 +10530,49 @@ fn restore_repeated_memory_copy(body: &str, f: &Func, refs: &RefResolver) -> Str
         result = result.replacen(&old, &format!("FMemorizedEvent {second_name}(local_{array}.Last());"), 1);
     }
     result
+}
+
+/// A named default value reuses the storage of an earlier returned temporary.
+/// The explicit initializer keeps it in the compiler's temporary-storage pool.
+fn restore_reused_script_default(body: &str, f: &Func, refs: &RefResolver, is_method: bool) -> String {
+    if !is_method || f.ret.token != 5 || f.ret.is_reference || f.ret.is_object_handle { return body.to_owned(); }
+    let Some(owner) = refs.type_identity_by_ptr(f.ret.type_info).filter(|t| !t.module.is_empty()) else { return body.to_owned(); };
+    let ty = qualify_decl_type(&owner.name, refs);
+    if !body.contains(&format!("{ty} local_")) { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let w = |i: &Instr| i.words.first().map(|s| *s as i16 as i32);
+    let id = |i: &Instr| i.dwords.first().map(|d| *d as i32);
+    let jump = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+    let mut edits = Vec::new();
+    for (at, c) in code.windows(10).enumerate() {
+        let edit = (|| {
+            if at == 0 || c.iter().map(|i| i.op.name).ne(["PshVPtr", "CALL", "PSF", "PshVPtr", "CALLINTF", "PSF", "PshVPtr", "CopyScript", "PopPtr", "JMP"])
+                || w(&c[0]) != Some(-2) || w(&c[3]) != Some(0) || w(&c[6]) != Some(-2)
+                || c[7].qwords.first().copied() != Some(f.ret.type_info as u64)
+                || code[at - 1].op.name != "JLowZ" || jump(&code[at - 1]) != Some(code.get(at + 10)?.offset_dw as i64)
+                || !matches!(code.last(), Some(i) if i.op.name == "RET" && jump(&c[9]) == Some(i.offset_dw as i64)) { return None; }
+            let (slot, ctor, callee) = (w(&c[2])?, id(&c[1])?, id(&c[4])?);
+            if slot <= 0 || w(&c[5]) != Some(slot) || f.obj_locals.iter().filter(|(s, _)| *s == slot).map(|(_, t)| *t).ne([f.ret.type_info])
+                || refs.script_constructor_type_by_id(ctor) != Some(owner) || !refs.is_method_by_id(ctor) || !refs.func_params_by_id(ctor)?.is_empty()
+                || !matches!(refs.func_ret_by_id(ctor), Some(t) if t.token == 0x52 && !t.is_reference)
+                || !refs.is_method_by_id(callee) || !refs.func_params_by_id(callee)?.is_empty()
+                || !matches!(refs.func_ret_by_id(callee), Some(t) if t.token == 5 && t.type_info == f.ret.type_info && !t.is_reference && !t.is_object_handle) { return None; }
+            let builds: Vec<_> = code.windows(2).enumerate().filter(|(_, v)| v[0].op.name == "PSF" && w(&v[0]) == Some(slot)
+                && v[1].op.name == "CALL" && id(&v[1]).is_some_and(|id| refs.script_constructor_type_by_id(id).is_some())).map(|(at, _)| at).collect();
+            let [built] = builds.as_slice() else { return None; };
+            if *built <= at + 10 || id(&code[*built + 1]) != Some(ctor)
+                || code.iter().any(|i| writes_destination(i.op.name) && w(i) == Some(slot))
+                || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && jump(i).is_some_and(|target|
+                    (target > c[0].offset_dw as i64 && target <= c[9].offset_dw as i64)
+                    || (target > code[*built].offset_dw as i64 && target <= code[*built + 1].offset_dw as i64)))) { return None; }
+            let old = format!("{ty} local_{slot};");
+            (body.lines().filter(|l| l.trim() == old).count() == 1 && body.matches(&old).count() == 1)
+                .then(|| (old, format!("{ty} local_{slot} = {ty}();")))
+        })();
+        if let Some(edit) = edit { edits.push(edit); }
+    }
+    let [(old, new)] = edits.as_slice() else { return body.to_owned(); };
+    body.replacen(old, new, 1)
 }
 
 /// Keep the previously used character-state temporary for the first query argument.
@@ -46556,6 +46601,29 @@ mod literal_value_lifetime_tests {
         let mut bad = f.clone(); bad.bytecode.extend(function(&[("SetV4", &[94])]).bytecode); assert_eq!(fold(body, &bad, &refs), body);
         let mut bad = f.clone(); let start = bad.bytecode.len(); let mut jump = function(&[("JMP", &[])]).bytecode; jump[1] = c[10].offset_dw as i32 - start as i32 - 2; bad.bytecode.extend(jump); assert_eq!(fold(body, &bad, &refs), body);
         for bad in [body.replace("local_94_2", "local_94_3"), body.replace("local_38.Last()", "local_40.Last()"), format!("{body}{body}")] { assert_eq!(fold(&bad, &f, &refs), bad); }
+    }
+
+    #[test]
+    fn named_script_default_reuses_an_earlier_return_temporary() {
+        let mut f = function(&[("JLowZ", &[]), ("PshVPtr", &[65534]), ("CALL", &[]), ("PSF", &[8]), ("PshVPtr", &[0]), ("CALLINTF", &[]),
+            ("PSF", &[8]), ("PshVPtr", &[65534]), ("CopyScript", &[]), ("PopPtr", &[]), ("JMP", &[]), ("CpyVtoR1", &[1]), ("PSF", &[8]), ("CALL", &[]), ("RET", &[4])]);
+        f.ret = DataType { token: 5, type_info: 101, ..Default::default() }; f.obj_locals = vec![(8, 101)]; let c = disassemble(&f.bytecode).unwrap();
+        for (at, id) in [(2, 1), (5, 2), (8, 101), (13, 1)] { f.bytecode[c[at].offset_dw + 1] = id; }
+        for (at, target) in [(0, 11), (10, 14)] { f.bytecode[c[at].offset_dw + 1] = c[target].offset_dw as i32 - c[at].offset_dw as i32 - 2; }
+        let body = "    if (empty)\n    {\n        return this.RandomConfig();\n    }\n    Prepare();\n    FConfig local_8;\n    local_8.Value = Config.Value;\n    return local_8;\n";
+        let expected = body.replace("FConfig local_8;", "FConfig local_8 = FConfig();");
+        let refs = RefResolver::from_test_reused_script_default(0);
+        let fold = |s: &str, f: &Func, r: &RefResolver| super::restore_reused_script_default(s, f, r, true);
+        assert_eq!(fold(body, &f, &refs), expected); assert_eq!(fold(&expected, &f, &refs), expected);
+        assert_eq!(super::restore_reused_script_default(body, &f, &refs, false), body);
+        for fault in 1..=6 { assert_eq!(fold(body, &f, &RefResolver::from_test_reused_script_default(fault)), body, "metadata {fault}"); }
+        for at in [1, 4, 6, 7, 12] { let mut bad = f.clone(); bad.bytecode[c[at].offset_dw] ^= 2 << 16; assert_eq!(fold(body, &bad, &refs), body, "slot {at}"); }
+        let mut bad = f.clone(); bad.obj_locals.push((8, 101)); assert_eq!(fold(body, &bad, &refs), body);
+        let mut bad = f.clone(); bad.ret.is_object_handle = true; assert_eq!(fold(body, &bad, &refs), body);
+        let mut bad = f.clone(); bad.bytecode[c[8].offset_dw + 1] = 102; assert_eq!(fold(body, &bad, &refs), body);
+        let mut bad = f.clone(); bad.bytecode[c[11].offset_dw] = function(&[("FreeNullV8", &[8])]).bytecode[0]; assert_eq!(fold(body, &bad, &refs), body);
+        let mut bad = f.clone(); bad.bytecode[c[0].offset_dw + 1] = c[5].offset_dw as i32 - 2; assert_eq!(fold(body, &bad, &refs), body);
+        for bad in [body.replace("local_8", "local_8_2"), body.replace("FConfig local_8;", "FOther local_8;"), format!("{body}{body}")] { assert_eq!(fold(&bad, &f, &refs), bad); }
     }
 
     #[test]

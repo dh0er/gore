@@ -32,7 +32,6 @@ AI.States.FightAI.FearState.AIState_Fear	1	0	0
 AI.States.FightAI.FleeState.AIState_Flee	2	0	0
 AI.States.FightAI.GoGetGuardState.AIState_GoGetGuard	1	0	0
 AI.States.FightAI.SearchState.AIState_Search	5	0	0
-AI.States.FightAI.SleeperFight.XT_DMB_Xardas_404_Sleeper.Environment.MinionSpotManager	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_Crime	6	0	0
 AI.States.FightAI.WatchFightState.AIGroup_WatchFight	1	0	0

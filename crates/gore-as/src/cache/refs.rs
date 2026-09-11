@@ -5869,6 +5869,29 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_reused_script_default(fault: u8) -> Self {
+        let mut r = Self::default();
+        r.type_by_ptr.insert(101, "FConfig".into());
+        r.type_identity_by_ptr.insert(101, TypeIdentity { name: "FConfig".into(), module: if fault == 1 { "" } else { "Configs" }.into(), namespace: String::new() });
+        for (id, name) in [(1, "FConfig"), (2, "RandomConfig")] {
+            r.funcid_to_ptr.insert(id, id as i64); r.func_by_ptr.insert(id as i64, name.into());
+            r.func_is_method.insert(id as i64); r.func_params.insert(id as i64, Vec::new());
+        }
+        r.script_ctor_owner.insert(1, 101);
+        r.func_ret.insert(1, DataType { token: 0x52, ..Default::default() });
+        r.func_ret.insert(2, DataType { token: 5, type_info: 101, ..Default::default() });
+        match fault {
+            2 => { r.script_ctor_owner.remove(&1); },
+            3 => { r.func_ret.get_mut(&2).unwrap().is_reference = true; },
+            4 => { r.func_params.get_mut(&1).unwrap().push(DataType::default()); },
+            5 => { r.func_params.get_mut(&2).unwrap().push(DataType::default()); },
+            6 => { r.func_is_method.remove(&2); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_hostility_property(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("AGothicCharacter", ""), ("AGothicCharacterState", ""), ("UGameplayAbility_AI", ""), ("ERelationshipHostility", "")]);
         for (p, name) in [(1, "AGothicCharacter"), (2, "AGothicCharacterState"), (3, "UGameplayAbility_AI"), (4, "ERelationshipHostility")] {
