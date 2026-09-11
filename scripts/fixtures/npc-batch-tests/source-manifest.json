@@ -37,12 +37,13 @@
         {
           "source": "heads/GORE_TEST_B.as",
           "module_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
-          "sha256": "b334781f305b2c68ebd3e6d9f948f28d46ce68bbc9b7a22602b1554949219775"
+          "sha256": "f4570f525c247ef074797c25729b9e4306166ade7a7901c38725995a8de461be"
         }
       ],
-      "bundle_version": "0.1.2",
-      "cli_sha256": "14dcd61ed8a1b5a3fe52f77526bf3e5da4a7fab8f288a0f5db8e6af37eba5097",
-      "native_api_snapshot_sha256": "1b7cd9228f621b25a307f77ddaa8bab72e7c2c048d7db34855d39329d555b4dd"
+      "bundle_version": "0.1.3",
+      "cli_sha256": "28b5d76e1e861476c7882725f056bca7cb65e718550203bd6c6dbd9aa9987fe1",
+      "native_api_snapshot_sha256": "e1c3b72c4641b9e0fa5df8ca8d67b91266f13ab68ebae94a30a40dbf6c1a5c78",
+      "companion_assets": "NpcBeardTextures013 (two separately cooked VT triplets; enable alongside script bundle)"
     },
     "voice": {
       "bundle_name": "NpcNaturalVoiceTest",

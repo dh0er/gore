@@ -73,6 +73,12 @@ pub enum TextureAction {
         /// Output mod dir; rewritten cooked files land under <mod_dir>/G1R/Content/…
         #[arg(long)]
         mod_dir: PathBuf,
+        /// Create a separate Texture2D package at this new /Game path; do not override the source
+        #[arg(long)]
+        as_asset: Option<String>,
+        /// Resample the input atlas to the original top-mip dimensions before encoding (required for differently sized VT input)
+        #[arg(long)]
+        fit_original: bool,
     },
     /// Pack a mod dir of cooked files into a Zen triplet (.utoc/.ucas/.pak)
     Pack {
@@ -323,7 +329,11 @@ fn paklist(game: &std::path::Path, filter: Option<&str>, max: usize, json: bool)
     for listing in &listings {
         println!(
             "  {} — mount {} ({} entries)",
-            listing.pak.file_name().unwrap_or_default().to_string_lossy(),
+            listing
+                .pak
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy(),
             listing.mount_point,
             listing.files.len()
         );
@@ -476,6 +486,8 @@ pub fn run(action: TextureAction) -> Result<()> {
             asset,
             image: image_path,
             mod_dir,
+            as_asset,
+            fit_original,
         } => {
             let game = gore_loc::config::game_root(game)?;
             let utoc = gore_tex::paths::main_container(&game)?;
@@ -512,17 +524,52 @@ pub fn run(action: TextureAction) -> Result<()> {
             .with_context(|| format!("decoding original texture {asset}"))?;
             let format = info.format.clone();
 
+            let output_asset = as_asset.as_deref().unwrap_or(&asset);
+            let dir = mount_dir(&mod_dir, output_asset)?;
+            let leaf = output_asset.rsplit('/').next().unwrap_or(output_asset);
+            if let Some(target) = &as_asset {
+                // Validate the package shape/path before encoding or publishing anything.
+                gore_tex::clone_texture::rename_texture_package(&orig_uasset, &asset, target)?;
+                for extension in ["uasset", "uexp", "ubulk"] {
+                    anyhow::ensure!(
+                        !dir.join(format!("{leaf}.{extension}")).try_exists()?,
+                        "clone output already exists: {output_asset}.{extension}"
+                    );
+                }
+                // A new package must not silently override an installed asset of any class.
+                let probe = gore_tex::paths::unique_temp_dir("gore-tex-clone-probe")?;
+                let found = gore_tex::container::unpack_asset(&utoc, &usmap, target, &probe);
+                let _ = std::fs::remove_dir_all(&probe);
+                match found {
+                    Err(gore_tex::TexError::AssetNotFound(_)) => {}
+                    Ok(_) => {
+                        anyhow::bail!("clone destination already exists in the game: {target}")
+                    }
+                    Err(error) => {
+                        return Err(error).context("checking new texture package destination")
+                    }
+                }
+            }
+
             // 2. Load the replacement PNG -> RGBA8 bytes + dims.
-            let img = image::open(&image_path)
+            let mut img = image::open(&image_path)
                 .with_context(|| format!("opening {}", image_path.display()))?
                 .to_rgba8();
+            if fit_original && img.dimensions() != (info.width, info.height) {
+                img = image::imageops::resize(
+                    &img,
+                    info.width,
+                    info.height,
+                    image::imageops::FilterType::Lanczos3,
+                );
+            }
             let (w, h) = img.dimensions();
             let rgba = img.into_raw();
 
             // 3. Rewrite the cooked files. The unified entry encodes mips (regular
             //    texture) or re-tiles (virtual texture) internally based on the
             //    original's shape, so we always pass the raw RGBA + format.
-            let (new_uasset, new_uexp, new_ubulk) = gore_tex::texdata::replace_texture_image(
+            let (mut new_uasset, new_uexp, new_ubulk) = gore_tex::texdata::replace_texture_image(
                 &orig_uasset,
                 &orig_uexp,
                 &orig_ubulk,
@@ -532,11 +579,27 @@ pub fn run(action: TextureAction) -> Result<()> {
                 &format,
             )
             .with_context(|| format!("rewriting cooked texture {asset}"))?;
+            if let Some(target) = &as_asset {
+                new_uasset =
+                    gore_tex::clone_texture::rename_texture_package(&new_uasset, &asset, target)?;
+                // Renaming must preserve the native texture payload and its VT layout.
+                let readback = gore_tex::decode::parse(
+                    &new_uasset,
+                    &new_uexp,
+                    &new_ubulk,
+                    &std::fs::read(&usmap)?,
+                )?;
+                anyhow::ensure!(
+                    readback.width == w
+                        && readback.height == h
+                        && readback.format == format
+                        && readback.is_virtual == info.is_virtual,
+                    "cloned texture readback differs from the encoded texture"
+                );
+            }
 
             // 4. Write the rewritten triplet under the asset's mount path in mod_dir.
-            let dir = mount_dir(&mod_dir, &asset)?;
             std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-            let leaf = asset.rsplit('/').next().unwrap_or(&asset);
             let out_uasset = dir.join(format!("{leaf}.uasset"));
             let out_uexp = dir.join(format!("{leaf}.uexp"));
             std::fs::write(&out_uasset, &new_uasset)

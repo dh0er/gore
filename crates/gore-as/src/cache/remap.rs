@@ -2416,7 +2416,7 @@ struct PristinePropertyIdentity {
 // registrar/Binds evidence. Extending it requires repeating the audit and updating this seal.
 const NATIVE_API_SNAPSHOT_BYTES: &[u8] = include_bytes!("../../data/npc-head-native-api-v1.json");
 const NATIVE_API_SNAPSHOT_SHA256: &str =
-    "1b7cd9228f621b25a307f77ddaa8bab72e7c2c048d7db34855d39329d555b4dd";
+    "e1c3b72c4641b9e0fa5df8ca8d67b91266f13ab68ebae94a30a40dbf6c1a5c78";
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -10786,9 +10786,11 @@ mod native_api_snapshot_tests {
             (0x140, "FName"),
             (0x160, "UPrimitiveComponent"),
             (0x170, "UMaterialInterface"),
+            (0x180, "UMaterialInstance"),
             (0x150, "UTexture"),
+            (0x190, "EMIDCreationFlags"),
         ];
-        let type_count = if include_bindings { 8 } else { 7 };
+        let type_count = if include_bindings { 10 } else { 8 };
         bytes.extend_from_slice(&(type_count as i32).to_le_bytes());
         for &(pointer, name) in &types[..type_count] {
             bytes.extend_from_slice(&pointer.to_le_bytes());
@@ -10799,14 +10801,15 @@ mod native_api_snapshot_tests {
         }
         bytes.extend_from_slice(&(type_count as i32).to_le_bytes());
         for (index, &(pointer, _)) in types[..type_count].iter().enumerate() {
-            bytes.extend_from_slice(&(0x0400_0001_i32 + index as i32).to_le_bytes());
+            let object_kind = if pointer == 0x190 { 0 } else { 0x0400_0000 };
+            bytes.extend_from_slice(&(object_kind + 1_i32 + index as i32).to_le_bytes());
             bytes.extend_from_slice(&pointer.to_le_bytes());
         }
         type Data = (i64, [i32; 6], i32);
         let value = |pointer| (pointer, [0; 6], 5);
         let handle = |pointer| (pointer, [0, 0, 1, 0, 0, 0], 5);
         let string_ref = (0x110, [1, 1, 0, 1, 0, 0], 5);
-        let functions: [(&str, &str, i64, Vec<Data>, Data); 5] = [
+        let functions: [(&str, &str, i64, Vec<Data>, Data); 7] = [
             (
                 "ImportFileAsTexture2D",
                 "Rendering",
@@ -10834,6 +10837,20 @@ mod native_api_snapshot_tests {
                 "",
                 0x160,
                 vec![(0, [0; 6], 0x44), handle(0x170)],
+                (0, [0; 6], 0x52),
+            ),
+            (
+                "CreateDynamicMaterialInstance",
+                "Material",
+                0,
+                vec![handle(0x100), handle(0x170), value(0x140), value(0x190)],
+                handle(0x130),
+            ),
+            (
+                "CopyParameterOverrides",
+                "",
+                0x130,
+                vec![handle(0x180)],
                 (0, [0; 6], 0x52),
             ),
         ];
@@ -10869,7 +10886,7 @@ mod native_api_snapshot_tests {
     }
 
     #[test]
-    fn beard_texture_snapshot_admits_only_exact_texture_and_path_bindings() {
+    fn beard_material_snapshot_admits_only_exact_texture_path_and_factory_bindings() {
         let pristine = cache_with_beard_texture_bindings(false);
         let output = cache_with_beard_texture_bindings(true);
         let mut base = build_allow_new_base_context(&pristine).unwrap();
@@ -10882,6 +10899,8 @@ mod native_api_snapshot_tests {
             "ProjectContentDir",
             "ConvertRelativePathToFull",
             "SetMaterial",
+            "CreateDynamicMaterialInstance",
+            "CopyParameterOverrides",
         ];
         let functions: Vec<_> = embedded["functions"]
             .as_array()
@@ -10894,16 +10913,20 @@ mod native_api_snapshot_tests {
             })
             .cloned()
             .collect();
-        assert_eq!(functions.len(), 5);
+        assert_eq!(functions.len(), 7);
         let types: Vec<_> = embedded["types"]
             .as_array()
             .unwrap()
             .iter()
-            .filter(|row| row["full_identity"] == "0:0:8:UTexture1:00:")
+            .filter(|row| {
+                row["full_identity"] == "0:0:8:UTexture1:00:"
+                    || row["full_identity"] == "0:0:17:EMIDCreationFlags1:00:"
+            })
             .cloned()
             .collect();
-        assert_eq!(types.len(), 1);
+        assert_eq!(types.len(), 2);
         assert_eq!(types[0]["object_kind"], 0x0400_0000);
+        assert_eq!(types[1]["object_kind"], 0);
         let mut document = qualified_document(&pristine);
         document["functions"] = serde_json::json!(functions);
         document["types"] = serde_json::json!([]);
@@ -10912,6 +10935,12 @@ mod native_api_snapshot_tests {
         assert!(
             validate_native_admission(&output, &base).is_err(),
             "UTexture needs its own exact native type authority"
+        );
+        document["types"] = serde_json::json!([types[0]]);
+        base.declarations.native_api = Some(Arc::new(parse_document(&document).unwrap()));
+        assert!(
+            validate_native_admission(&output, &base).is_err(),
+            "EMIDCreationFlags independently needs its exact native enum authority"
         );
         document["types"] = serde_json::json!(types);
         base.declarations.native_api = Some(Arc::new(parse_document(&document).unwrap()));
@@ -10969,6 +10998,11 @@ mod native_api_snapshot_tests {
         wrong_kind[texture_id.start..texture_id.start + 4]
             .copy_from_slice(&0x0800_0008_i32.to_le_bytes());
         assert!(validate_native_admission(&wrong_kind, &base).is_err());
+        let enum_id = meta.type_ids.iter().find(|row| row.ptr == 0x190).unwrap();
+        let mut wrong_enum_kind = output.clone();
+        wrong_enum_kind[enum_id.start..enum_id.start + 4]
+            .copy_from_slice(&0x0400_000a_i32.to_le_bytes());
+        assert!(validate_native_admission(&wrong_enum_kind, &base).is_err());
     }
 
     #[test]

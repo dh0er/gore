@@ -256,8 +256,7 @@ class UGoreFlexHeadProbeController : UActorComponent
             if (!FlexTextureAttempted)
             {
                 FlexTextureAttempted = true;
-                FlexBeardTexture = Rendering::ImportFileAsTexture2D(FPaths::ConvertRelativePathToFull(
-                    FPaths::ProjectContentDir() + "GoreMods/NpcBeardSwitch/T_OC_IE_Flex_Beard_D.png"));
+                FlexBeardTexture = Cast<UTexture2D>(LoadObject(nullptr, "/Game/GoreMods/NpcBeardSwitch/T_OC_IE_Flex_Beard_D.T_OC_IE_Flex_Beard_D"));
             }
             Note(n"gore_beard_flex_texture_loaded", IsValid(FlexBeardTexture) ? 1.0f : -1.0f);
             return FlexBeardTexture;
@@ -265,8 +264,7 @@ class UGoreFlexHeadProbeController : UActorComponent
         if (!HeroTextureAttempted)
         {
             HeroTextureAttempted = true;
-            HeroCleanTexture = Rendering::ImportFileAsTexture2D(FPaths::ConvertRelativePathToFull(
-                FPaths::ProjectContentDir() + "GoreMods/NpcBeardSwitch/T_NH_Head_Clean_D.png"));
+            HeroCleanTexture = Cast<UTexture2D>(LoadObject(nullptr, "/Game/GoreMods/NpcBeardSwitch/T_NH_Head_Clean_D.T_NH_Head_Clean_D"));
         }
         Note(n"gore_beard_hero_texture_loaded", IsValid(HeroCleanTexture) ? 1.0f : -1.0f);
         return HeroCleanTexture;
@@ -295,12 +293,18 @@ class UGoreFlexHeadProbeController : UActorComponent
             }
             if (!IsValid(Entry))
             {
-                // Allocate the record before changing the component: restore always has its original.
+                // Keep Mutable's existing MID untouched: the component factory may return it.
                 Entry = Cast<UGoreBeardMaterial>(NewObject(this, TSubclassOf<UObject>(UGoreBeardMaterial::StaticClass()), NAME_None, false, nullptr));
                 if (!IsValid(Entry)) continue;
                 Entry.Original = Original;
-                Entry.Material = Mesh.CreateDynamicMaterialInstance(Slot, Original, NAME_None);
-                if (!IsValid(Entry.Material)) continue;
+                UMaterialInterface ParentMaterial = Original;
+                UMaterialInstanceDynamic OriginalMID = Cast<UMaterialInstanceDynamic>(Original);
+                if (IsValid(OriginalMID)) ParentMaterial = OriginalMID.Parent;
+                // MIDs cannot be parents. Preserve their generated texture/color overrides instead.
+                if (!IsValid(ParentMaterial) || IsValid(Cast<UMaterialInstanceDynamic>(ParentMaterial))) continue;
+                Entry.Material = Material::CreateDynamicMaterialInstance(ParentMaterial, NAME_None);
+                if (!IsValid(Entry.Material) || Entry.Material == Original) continue;
+                if (IsValid(OriginalMID)) Entry.Material.CopyParameterOverrides(OriginalMID);
                 Entry.Slot = Slot;
                 Entry.Next = Entries;
                 Entries = Entry;
