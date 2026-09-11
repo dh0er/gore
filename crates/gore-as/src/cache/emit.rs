@@ -3337,6 +3337,8 @@ fn emit_function_ctor(
         pass_trace("restore_named_character_key_constructors", &rendered);
         let rendered = restore_circle_radius_arguments(&rendered, f, refs);
         pass_trace("restore_circle_radius_arguments", &rendered);
+        let rendered = restore_paired_debug_line_arguments(&rendered, f, refs, class_name);
+        pass_trace("restore_paired_debug_line_arguments", &rendered);
         let rendered = restore_influence_vector_returns(&rendered, f, refs);
         pass_trace("restore_influence_vector_returns", &rendered);
         let rendered = restore_clamped_vector_expression(&rendered, f, refs);
@@ -10942,6 +10944,120 @@ fn restore_circle_radius_arguments(body:&str,f:&Func,refs:&RefResolver)->String 
     let mut out=Vec::new();for (row,line) in lines.iter().enumerate() {
         if let Some((_,replacement))=edits.iter().find(|(at,_)|*at==row) {out.push(replacement.clone());}
         else if !edits.iter().any(|(at,_)|*at+1==row) {out.push((*line).to_owned());}
+    }
+    let mut out=out.join("\n");if body.ends_with('\n') {out.push('\n');}out
+}
+
+/// Restore two nested-loop line frames whose vector/color arguments share temporary storage.
+fn restore_paired_debug_line_arguments(body:&str,f:&Func,refs:&RefResolver,class_name:Option<&str>)->String {
+    if !body.contains(".GetActorLocation()") || body.matches("DebugScript::DrawLine(").count()!=2 || class_name.is_none() {return body.to_owned();}
+    let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    let w=|i:&Instr|i.words.first().map(|s|*s as i16 as i32);let p=|i:&Instr|i.qwords.first().map(|p|*p as i64);
+    let plain=|t:&super::types::DataType,token|t.token==token && t.type_info==0 && !t.is_reference && !t.is_object_handle && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+    let object=|t:&super::types::DataType,ptr,reference,constant,handle|t.token==5 && t.type_info==ptr && t.is_reference==reference && t.is_object_const==constant
+        && t.is_read_only==constant && t.is_object_handle==handle && !t.is_auto && !t.if_handle_then_const;
+    let native=|ptr,name|refs.type_identity_by_ptr(ptr).is_some_and(|t|t.name==name && t.module.is_empty() && t.namespace.is_empty());
+    if !plain(&f.ret,0x52) || !f.params.is_empty() {return body.to_owned();}
+    struct Frame { at:usize, slots:[i32;4], color:i32, actors:[i32;2], heights:[i32;2], calls:[i64;6], getter:i32, scale:Option<u64>, thickness:u32, lifetime:u32 }
+    let mut frames=Vec::new();
+    for (at,_) in code.iter().enumerate() {for scaled in [false,true] {
+        let found=(|| {
+            let raw=code.get(at..at+if scaled {46}else{42})?;
+            let c:Vec<_>=raw.iter().enumerate().filter(|(n,_)|!scaled || !(17..21).contains(n)).map(|(_,i)|i).collect();
+            if c.iter().map(|i|i.op.name).ne(["PshC4","PshC4","PSF","PshVPtr","CALL","PSF","PSF","PshVPtr","RDSPtr","CALLSYS","PshGPtr","PSF","CALLSYS",
+                "PshV8","PSF","PSF","CALLSYS","PSF","PSF","PSF","CALLSYS","PSF","PSF","PshVPtr","RDSPtr","CALLSYS","PshGPtr","PSF","CALLSYS",
+                "PshV8","PSF","PSF","CALLSYS","PSF","PSF","PSF","CALLSYS","PSF","PshGPtr","CALLSYS","PSF","CALLSYS"]) {return None;}
+            let slots=if scaled {[w(c[18])?,w(c[11])?,w(c[6])?,w(c[14])?]}else{[w(c[18])?,w(c[14])?,w(c[6])?,w(c[22])?]};
+            let [a,b,d,e]=slots;let color=w(c[2])?;let actors=[w(c[23])?,w(c[7])?];let heights=[w(c[29])?,w(c[13])?];
+            if slots.iter().chain([&color]).any(|s|*s<=0) || HashSet::from([a,b,d,e,color]).len()!=5
+                || actors.iter().chain(&heights).any(|s|*s<=0 || slots.contains(s) || *s==color)
+                || actors.iter().any(|s|heights.contains(s)) || heights.iter().any(|s|f.obj_locals.iter().any(|(slot,_)|slot==s))
+                || (!scaled && (actors[0]==actors[1] || heights[0]==heights[1])) || (scaled && (actors[0]!=actors[1] || heights[0]!=heights[1])) {return None;}
+            let expected=if scaled {vec![(11,b),(14,e),(15,b),(17,b),(18,a),(19,d),(21,a),(22,d),(27,e),(30,b),(31,e),(33,b),(34,e),(35,d),(37,e)]}
+                else {vec![(11,a),(14,b),(15,a),(17,b),(18,a),(19,d),(21,a),(22,e),(27,d),(30,b),(31,d),(33,b),(34,d),(35,e),(37,d)]};
+            if [(3,0),(5,color),(40,color)].into_iter().chain(expected).any(|(n,s)|w(c[n])!=Some(s)) {return None;}
+            let calls=[p(c[9])?,p(c[12])?,p(c[16])?,p(c[20])?,p(c[39])?,p(c[41])?];let [location,copy,mul,add,draw,dtor]=calls;
+            if [(25,location),(28,copy),(32,mul),(36,add)].iter().any(|(n,ptr)|p(c[*n])!=Some(*ptr)) {return None;}
+            for (ptr,owner,name,constant) in [(location,"AActor","GetActorLocation",true),(copy,"FVector","$beh0",false),(mul,"FVector","opMul",true),(add,"FVector","opAdd",true),(dtor,"FColor","$beh2",false)] {
+                if refs.func_by_ptr(ptr)!=Some(name) || refs.func_owner_by_ptr(ptr)!=Some(owner) || !refs.is_method_by_ptr(ptr) || refs.is_const_method_by_ptr(ptr)!=constant {return None;}
+            }
+            let [world,start,end,tint,thickness,lifetime]=refs.func_params_by_ptr(draw)? else {return None;};let vector=start.type_info;let color_type=tint.type_info;
+            if refs.func_by_ptr(draw)!=Some("DrawLine") || refs.func_ns_by_ptr(draw)!=Some("DebugScript") || refs.func_owner_by_ptr(draw).is_some() || refs.is_method_by_ptr(draw)
+                || !plain(refs.func_ret_by_ptr(draw)?,0x52) || !native(world.type_info,"UObject") || !object(world,world.type_info,false,false,true)
+                || !native(vector,"FVector") || !native(color_type,"FColor") || ![start,end].iter().all(|t|object(t,vector,false,false,false))
+                || !object(tint,color_type,false,false,false) || !plain(thickness,0x50) || !plain(lifetime,0x50)
+                || ![location,mul,add].iter().all(|ptr|refs.func_ret_by_ptr(*ptr).is_some_and(|t|object(t,vector,false,false,false)))
+                || !matches!(refs.func_params_by_ptr(location),Some([])) || !matches!(refs.func_params_by_ptr(mul)?,[t] if plain(t,0x51))
+                || ![copy,add].iter().all(|ptr|matches!(refs.func_params_by_ptr(*ptr),Some([t]) if object(t,vector,true,true,false)))
+                || ![copy,dtor].iter().all(|ptr|refs.func_ret_by_ptr(*ptr).is_some_and(|t|plain(t,0x52))) || !matches!(refs.func_params_by_ptr(dtor),Some([]))
+                || !slots.iter().all(|s|f.obj_locals.iter().filter(|(slot,_)|slot==s).map(|(_,t)|*t).eq([vector]))
+                || !f.obj_locals.iter().filter(|(s,_)|*s==color).map(|(_,t)|*t).eq([color_type]) {return None;}
+            let getter=*c[4].dwords.first()? as i32;
+            if !refs.is_method_by_id(getter) || refs.func_owner_by_id(getter)!=class_name || !matches!(refs.func_params_by_id(getter),Some([]))
+                || !object(refs.func_ret_by_id(getter)?,color_type,false,false,false) || refs.func_by_id(getter).is_none()
+                || [10,26].iter().any(|n|p(c[*n]).and_then(|ptr|refs.global_by_ptr(ptr))!=Some("UpVector"))
+                || refs.global_by_ptr(p(c[38])?)!=Some("__WorldContext") {return None;}
+            let scale=if scaled {
+                if raw[17..21].iter().map(|i|i.op.name).ne(["PshC8","PSF","PSF","CALLSYS"]) || w(&raw[18])!=Some(b) || w(&raw[19])!=Some(e) || p(&raw[20])!=Some(mul) {return None;}
+                let bits=*raw[17].qwords.first()?;if !f64::from_bits(bits).is_finite() {return None;}Some(bits)
+            } else {None};
+            let thickness=*c[1].dwords.first()?;let lifetime=*c[0].dwords.first()?;
+            if !f32::from_bits(thickness).is_finite() || !f32::from_bits(lifetime).is_finite() || code.iter().any(|i|i.op.name=="JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let target=i.offset_dw as i64+2+*d as i32 as i64;target>raw[0].offset_dw as i64 && target<=raw.last().unwrap().offset_dw as i64
+            }))) {return None;}
+            Some(Frame{at,slots,color,actors,heights,calls,getter,scale,thickness,lifetime})
+        })();if let Some(found)=found {frames.push(found);}
+    }}
+    let [first,second]=frames.as_slice() else {return body.to_owned();};
+    if first.scale.is_some() || second.scale.is_none() || first.at+42>second.at || first.slots!=second.slots || first.color!=second.color || first.calls!=second.calls || first.getter!=second.getter
+        || first.actors[0]!=second.actors[0] || first.heights[0]!=second.heights[0] {return body.to_owned();}
+    let lines:Vec<_>=body.lines().collect();
+    // Borrowed foreach handles are absent from obj_locals. Bind their complete source names,
+    // and keep the separately materialized double-height locals exactly where they were.
+    let actor_name=|slot| {
+        let names:Vec<_>=lines.iter().filter_map(|line|line.trim().strip_prefix("for (auto& ")?.split_once(" : ").map(|(name,_)|name.to_owned()))
+            .filter(|name|slot_and_life_any(name).map(|s|s.0)==Some(slot)).collect();
+        (names.len()==1).then(||names[0].clone())
+    };
+    let height_name=|slot| {
+        let names:Vec<_>=lines.iter().filter(|line|line.trim_start().starts_with("float ")).filter_map(|line|declaration_with_initializer(line).map(|(_,name,_)|name))
+            .filter(|name|slot_and_life_any(name).map(|s|s.0)==Some(slot)).collect();
+        (names.len()==1).then(||names[0].clone())
+    };
+    let (Some(actor),Some(other),Some(height),Some(other_height))=(actor_name(first.actors[0]),actor_name(first.actors[1]),height_name(first.heights[0]),height_name(first.heights[1])) else {return body.to_owned();};
+    let getter=format!("this.{}()",refs.func_by_id(first.getter).unwrap());let up=|h:&str|format!("(FVector(FVector::UpVector) * {h})");
+    let start=format!("({actor}.GetActorLocation() + {})",up(&height));let end=format!("({other}.GetActorLocation() + {})",up(&other_height));
+    let matches_draw=|line:&str,frame:&Frame,a:&str,b:&str,color:&str| {
+        if !line.trim_start().starts_with("DebugScript::DrawLine(") {return None;}
+        let (args,close)=argument_list(line,line.find('(')?)?;
+        (args.len()==5 && line[close..].trim()==");" && args[0]==a && args[1]==b && args[2]==color
+            && args[3].strip_suffix('f').and_then(|s|s.parse::<f32>().ok()).map(f32::to_bits)==Some(frame.thickness)
+            && args[4].strip_suffix('f').and_then(|s|s.parse::<f32>().ok()).map(f32::to_bits)==Some(frame.lifetime)).then_some(args)
+    };
+    let mut edits=Vec::new();
+    for (row,c) in lines.windows(2).enumerate() {
+        let Some((pad,name,rhs))=declaration_with_initializer(c[0]) else {continue;};
+        if !c[0].trim_start().starts_with("FVector ") || slot_and_life_any(&name).map(|s|s.0)!=Some(first.slots[0]) || rhs!=end || count_ident(body,&name)!=2 || indent_of(c[1])!=pad {continue;}
+        let Some(args)=matches_draw(c[1],first,&start,&name,&getter) else {continue;};
+        edits.push((row,2,format!("{pad}DebugScript::DrawLine({}, {}, {getter}, {}, {});",start.replace(".GetActorLocation()",".ActorLocation"),end.replace(".GetActorLocation()",".ActorLocation"),args[3],args[4])));
+    }
+    if edits.len()!=1 {return body.to_owned();}
+    for (row,c) in lines.windows(6).enumerate() {
+        let Some(decls)=c[..4].iter().map(|line|declaration_with_initializer(line)).collect::<Option<Vec<_>>>() else {continue;};
+        let pad=&decls[0].0;let names:Vec<_>=decls.iter().map(|(_,name,_)|name.as_str()).collect();
+        if !c[0].trim_start().starts_with("FColor ") || !c[1..4].iter().all(|line|line.trim_start().starts_with("FVector ")) || !c.iter().all(|line|indent_of(line)==*pad)
+            || names.iter().zip([second.color,second.slots[2],second.slots[1],second.slots[0]]).any(|(name,slot)|slot_and_life_any(name).map(|s|s.0)!=Some(slot))
+            || names.iter().zip([2,2,4,2]).any(|(name,count)|count_ident(body,name)!=count) {continue;}
+        let product=up(&height);let scaled=format!("({product} * {:?})",f64::from_bits(second.scale.unwrap()));
+        if decls[0].2!=getter || decls[1].2!=format!("{actor}.GetActorLocation()") || decls[2].2!=scaled || decls[3].2!=format!("({} + {})",names[1],names[2])
+            || c[4].trim()!=format!("{} = {product};",names[2]) {continue;}
+        let Some(args)=matches_draw(c[5],second,&format!("({actor}.GetActorLocation() + {})",names[2]),names[3],names[0]) else {continue;};
+        edits.push((row,6,format!("{pad}DebugScript::DrawLine(({actor}.ActorLocation + {product}), ({actor}.ActorLocation + {scaled}), {getter}, {}, {});",args[3],args[4])));
+    }
+    if edits.len()!=2 || edits[0].0+edits[0].1>edits[1].0 {return body.to_owned();}
+    let mut out=Vec::new();for (row,line) in lines.iter().enumerate() {
+        if let Some((_,_,replacement))=edits.iter().find(|(at,_,_)|*at==row) {out.push(replacement.clone());}
+        else if !edits.iter().any(|(at,len,_)|row>*at && row<at+len) {out.push((*line).to_owned());}
     }
     let mut out=out.join("\n");if body.ends_with('\n') {out.push('\n');}out
 }
@@ -48174,6 +48290,65 @@ mod literal_value_lifetime_tests {
             let name=if suffix.is_empty(){format!("local_{number}")}else{format!("local_{number}_{suffix}")};super::rename_ident(&s,&format!("local_{slot}"),&name)
         });
         assert_eq!(fold(&shift(&body),&shifted,&refs),shift(&expected));
+    }
+
+    #[test]
+    fn paired_debug_line_arguments_preserve_typed_frames_and_lifetimes() {
+        let frame=|scaled| {
+            let (a,b,c,d)=(40,46,52,58);
+            let mut ops=vec![("PshC4",vec![]),("PshC4",vec![]),("PSF",vec![33]),("PshVPtr",vec![0]),("CALL",vec![]),("PSF",vec![33]),
+                ("PSF",vec![c]),("PshVPtr",vec![if scaled {16}else{30}]),("RDSPtr",vec![]),("CALLSYS",vec![]),("PshGPtr",vec![]),("PSF",vec![if scaled {b}else{a}]),("CALLSYS",vec![]),
+                ("PshV8",vec![if scaled {18}else{32}]),("PSF",vec![if scaled {d}else{b}]),("PSF",vec![if scaled {b}else{a}]),("CALLSYS",vec![]),
+                ("PSF",vec![b]),("PSF",vec![a]),("PSF",vec![c]),("CALLSYS",vec![]),("PSF",vec![a]),("PSF",vec![if scaled {c}else{d}]),("PshVPtr",vec![16]),("RDSPtr",vec![]),("CALLSYS",vec![]),
+                ("PshGPtr",vec![]),("PSF",vec![if scaled {d}else{c}]),("CALLSYS",vec![]),("PshV8",vec![18]),("PSF",vec![b]),("PSF",vec![if scaled {d}else{c}]),("CALLSYS",vec![]),
+                ("PSF",vec![b]),("PSF",vec![if scaled {d}else{c}]),("PSF",vec![if scaled {c}else{d}]),("CALLSYS",vec![]),("PSF",vec![if scaled {d}else{c}]),
+                ("PshGPtr",vec![]),("CALLSYS",vec![]),("PSF",vec![33]),("CALLSYS",vec![])];
+            if scaled {ops.splice(17..17,[("PshC8",vec![]),("PSF",vec![b]),("PSF",vec![d]),("CALLSYS",vec![])]);}
+            ops
+        };
+        let mut ops=frame(false);ops.push(("CpyVtoR1",vec![13]));ops.extend(frame(true));ops.push(("RET",vec![0]));
+        let borrowed:Vec<_>=ops.iter().map(|(op,w)|(*op,w.as_slice())).collect();let mut f=function(&borrowed);
+        f.ret=DataType{token:0x52,..Default::default()};f.obj_locals=[40,46,52,58].into_iter().map(|s|(s,1)).chain([(33,3)]).collect();
+        let code=disassemble(&f.bytecode).unwrap();
+        for (base,scaled) in [(0,false),(43,true)] {
+            for (at,id) in [(4,20),(9,10),(10,91),(12,11),(16,12),(20,13),(25,10),(26,91),(28,11),(32,12),(36,13),(38,90),(39,14),(41,15)] {
+                let at=base+at+if scaled && at>=17 {4}else{0};f.bytecode[code[at].offset_dw+1]=id;
+            }
+        }
+        f.bytecode[code[44].offset_dw+1]=10.0f32.to_bits() as i32;f.bytecode[code[63].offset_dw+1]=12;
+        let bits=3.0f64.to_bits();let at=code[60].offset_dw;f.bytecode[at+1]=bits as i32;f.bytecode[at+2]=(bits>>32) as i32;
+        let body="    for (auto& local_16 : this.Members)\n    {\n        float local_18 = local_16.CapsuleComponent.GetScaledCapsuleHalfHeight();\n        for (auto& local_30 : this.Members)\n        {\n            float local_32 = local_30.CapsuleComponent.GetScaledCapsuleHalfHeight();\n            FVector local_40 = (local_30.GetActorLocation() + (FVector(FVector::UpVector) * local_32));\n            DebugScript::DrawLine((local_16.GetActorLocation() + (FVector(FVector::UpVector) * local_18)), local_40, this.Shade(), 0.0f, 0.0f);\n        }\n        FColor local_33 = this.Shade();\n        FVector local_52 = local_16.GetActorLocation();\n        FVector local_46_2 = ((FVector(FVector::UpVector) * local_18) * 3.0);\n        FVector local_40_2 = (local_52 + local_46_2);\n        local_46_2 = (FVector(FVector::UpVector) * local_18);\n        DebugScript::DrawLine((local_16.GetActorLocation() + local_46_2), local_40_2, local_33, 10.0f, 0.0f);\n    }\n";
+        let expected="    for (auto& local_16 : this.Members)\n    {\n        float local_18 = local_16.CapsuleComponent.GetScaledCapsuleHalfHeight();\n        for (auto& local_30 : this.Members)\n        {\n            float local_32 = local_30.CapsuleComponent.GetScaledCapsuleHalfHeight();\n            DebugScript::DrawLine((local_16.ActorLocation + (FVector(FVector::UpVector) * local_18)), (local_30.ActorLocation + (FVector(FVector::UpVector) * local_32)), this.Shade(), 0.0f, 0.0f);\n        }\n        DebugScript::DrawLine((local_16.ActorLocation + (FVector(FVector::UpVector) * local_18)), (local_16.ActorLocation + ((FVector(FVector::UpVector) * local_18) * 3.0)), this.Shade(), 10.0f, 0.0f);\n    }\n";
+        let refs=RefResolver::from_test_paired_debug_line_arguments(0);let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_paired_debug_line_arguments(s,f,r,Some("UHost"));
+        assert_eq!(fold(body,&f,&refs),expected);assert_eq!(fold(expected,&f,&refs),expected);
+        for fault in 1..=20 {assert_eq!(fold(body,&f,&RefResolver::from_test_paired_debug_line_arguments(fault)),body,"metadata {fault}");}
+        assert_eq!(super::restore_paired_debug_line_arguments(body,&f,&refs,Some("Other")),body);
+        for (at,i) in code.iter().enumerate().filter(|(at,_)|*at!=42 && *at!=89) {
+            if !i.words.is_empty() {let mut bad=f.clone();bad.bytecode[i.offset_dw]^=4<<16;assert_eq!(fold(body,&bad,&refs),body,"operand {at}");}
+            if !i.dwords.is_empty() || !i.qwords.is_empty() {let mut bad=f.clone();bad.bytecode[i.offset_dw+1]+=1;assert_eq!(fold(body,&bad,&refs),body,"call/literal {at}");}
+        }
+        for at in [2,60,85] {let mut bad=f.clone();let start=bad.bytecode.len();bad.bytecode.extend(function(&[("JMP",&[])]).bytecode);bad.bytecode[start+1]=code[at].offset_dw as i32-start as i32-2;
+            assert_eq!(fold(body,&bad,&refs),body,"interior jump {at}");}
+        let mut bad=f.clone();bad.bytecode.extend(function(&[("JMPP",&[1])]).bytecode);assert_eq!(fold(body,&bad,&refs),body);
+        for local in [(40,1),(33,3),(18,1)] {let mut bad=f.clone();bad.obj_locals.push(local);assert_eq!(fold(body,&bad,&refs),body);}
+        let mut bad=f.clone();bad.obj_locals[0].1=3;assert_eq!(fold(body,&bad,&refs),body);
+        for bad in [format!("{body}    Use(local_40);\n"),format!("{body}    Use(local_33);\n"),format!("{body}    Use(local_46_2);\n"),format!("{body}{body}"),
+            body.replace("FColor local_33","FVector local_33"),body.replace("float local_18","float32 local_18"),body.replace("this.Shade()","Other()"),
+            body.replace("10.0f","1.0f"),body.replace("* 3.0","* 2.0"),body.replace("local_40 = ","local_40_3 = "),body.replace("for (auto& local_30", "for (auto& local_31"),
+            body.replacen(".GetActorLocation()",".ActorLocation",1)] {assert_eq!(fold(&bad,&f,&refs),bad);}
+        let mut shifted=f.clone();for (slot,_) in &mut shifted.obj_locals {*slot+=100;}
+        for i in &code {if i.op.name!="RET" && i.words.first().is_some_and(|slot|(*slot as i16)>0) {shifted.bytecode[i.offset_dw]+=100<<16;}}
+        let shift=|s:&str|["16","18","30","32","33","40","40_2","46_2","52"].iter().fold(s.to_owned(),|s,slot| {
+            let (number,suffix)=slot.split_once('_').unwrap_or((slot,""));let number=number.parse::<i32>().unwrap()+100;
+            let name=if suffix.is_empty(){format!("local_{number}")}else{format!("local_{number}_{suffix}")};super::rename_ident(&s,&format!("local_{slot}"),&name)
+        });
+        assert_eq!(fold(&shift(body),&shifted,&refs),shift(expected));
+        // Each source name must retain one valid lifetime suffix, including borrowed actors.
+        let lives=|s:&str|["16","18","30","32","33","40","40_2","46_2","52"].iter().fold(s.to_owned(),|s,slot| {
+            let (number,suffix)=slot.split_once('_').unwrap_or((slot,""));let life=if suffix.is_empty(){7}else{9};
+            super::rename_ident(&s,&format!("local_{slot}"),&format!("local_{number}_{life}"))
+        });
+        assert_eq!(fold(&lives(body),&f,&refs),lives(expected));
     }
 
     #[test]

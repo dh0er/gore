@@ -5867,6 +5867,51 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_paired_debug_line_arguments(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name) in [(1,"FVector"),(2,"UObject"),(3,"FColor")] {
+            r.type_by_ptr.insert(ptr,name.into());r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:String::new(),namespace:String::new()});
+        }
+        let value=|ptr|DataType{token:5,type_info:ptr,..Default::default()};let single=DataType{token:0x50,..Default::default()};let double=DataType{token:0x51,..Default::default()};
+        let void=DataType{token:0x52,..Default::default()};let reference=DataType{is_reference:true,is_object_const:true,is_read_only:true,..value(1)};
+        for (ptr,name,owner,args,ret,constant) in [
+            (10,"GetActorLocation","AActor",vec![],value(1),true),(11,"$beh0","FVector",vec![reference.clone()],void.clone(),false),
+            (12,"opMul","FVector",vec![double],value(1),true),(13,"opAdd","FVector",vec![reference],value(1),true),
+            (15,"$beh2","FColor",vec![],void.clone(),false),(20,"Shade","UHost",vec![],value(3),false)] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);r.func_params.insert(ptr,args);r.func_ret.insert(ptr,ret);
+            if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        r.funcid_to_ptr.insert(20,20);
+        r.func_by_ptr.insert(14,"DrawLine".into());r.func_ns.insert(14,"DebugScript".into());r.func_ret.insert(14,void);
+        r.func_params.insert(14,vec![DataType{is_object_handle:true,..value(2)},value(1),value(1),value(3),single.clone(),single]);
+        r.global_by_ptr.insert(90,"__WorldContext".into());r.global_by_ptr.insert(91,"UpVector".into());
+        match fault {
+            1=>{r.func_ns.insert(14,"Other".into());},
+            2=>r.func_params.get_mut(&14).unwrap()[1].is_reference=true,
+            3=>r.func_params.get_mut(&14).unwrap()[4].token=0x51,
+            4=>r.func_params.get_mut(&14).unwrap()[3].type_info=1,
+            5=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into(),
+            6=>{r.global_by_ptr.insert(90,"Other".into());},
+            7=>{r.global_by_ptr.insert(91,"Other".into());},
+            8=>{r.const_method_ptrs.remove(&10);},
+            9=>{r.func_owner.insert(10,"Other".into());},
+            10=>r.func_params.get_mut(&12).unwrap()[0].token=0x50,
+            11=>r.func_params.get_mut(&11).unwrap()[0].is_read_only=false,
+            12=>r.func_ret.get_mut(&13).unwrap().is_reference=true,
+            13=>{r.const_method_ptrs.insert(15);},
+            14=>r.func_ret.get_mut(&15).unwrap().token=0x44,
+            15=>{r.func_owner.insert(20,"Other".into());},
+            16=>r.func_ret.get_mut(&20).unwrap().is_object_handle=true,
+            17=>{r.func_params.get_mut(&20).unwrap().push(DataType::default());},
+            18=>{r.func_is_method.remove(&20);},
+            19=>{r.func_is_method.insert(14);},
+            20=>r.func_params.get_mut(&14).unwrap()[0].is_object_handle=false,
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_influence_vector_returns(fault:u8)->Self {
         let mut r=Self::from_test_movement_vector_lifetimes(0);
         for (ptr,name) in [(10,"UState"),(11,"FSettings")] {
