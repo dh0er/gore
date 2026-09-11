@@ -7,7 +7,7 @@
   "compiler_profile_sha256": "8d816e27cf7d2a20283239ed3d06347e56a7c5813b9f03eda9a865659d022ba8",
   "registration_trace_sha256": "17f374a632eadb354207aad9de7512367cad72e1c4c7a3253a3f68d9e075999c",
   "post_bind_snapshot_sha256": "e355aeead72953582c31a2c1b933d08f87c4daa20f4cd55ae71db1f51713d4c5",
-  "qualification_evidence": "scripts/fixtures/npc-head/native-poseable-api-qualification.json sha256:de4192161854911db8ab24702991d115ca938564f5cd0109a7a760edf8bf8fdb",
+  "qualification_evidence": "scripts/fixtures/npc-batch-tests/quest/native-availability-property-qualification.json sha256:5b97225cfea73f3d85885a4df78390761e992c642860a5edca1d95ef6f0b0aad",
   "types": [
     {
       "full_identity": "0:0:17:UMaterialInstance1:00:",
@@ -111,6 +111,12 @@
     },
     {
       "full_identity": "6:method0:0:27:0:0:15:UActorComponent1:00:31:RemoveTickPrerequisiteComponent1:054:6:object1:51:01:01:11:027:0:0:15:UActorComponent1:00:,27:9:primitive2:821:01:01:01:0"
+    },
+    {
+      "full_identity": "6:method0:0:36:0:0:24:UMaterialInstanceDynamic1:00:23:GetVectorParameterValue1:043:6:object1:51:01:01:01:016:0:0:5:FName1:00:,50:6:object1:51:01:01:01:024:0:0:12:FLinearColor1:00:"
+    },
+    {
+      "full_identity": "6:method0:0:36:0:0:24:UMaterialInstanceDynamic1:00:23:SetVectorParameterValue1:094:6:object1:51:01:01:01:016:0:0:5:FName1:00:,6:object1:51:01:01:01:024:0:0:12:FLinearColor1:00:,27:9:primitive2:821:01:01:01:0"
     }
   ],
   "properties": [
@@ -120,6 +126,13 @@
       "member_offset": 272,
       "owner_object_kind": 67108864,
       "value_type_full_identity": "0:0:18:UMaterialInterface1:00:"
+    },
+    {
+      "owner_full_identity": "0:0:6:UQuest1:00:",
+      "name": "bExternalAvailabilityTrigger",
+      "member_offset": 322,
+      "owner_object_kind": 67108864,
+      "value_type_full_identity": "9:primitive2:651:01:01:01:0"
     }
   ]
 }

@@ -1384,7 +1384,7 @@ fn string_global_aliases_share_one_canonical_row_within_and_across_minis() {
         .validate(&reference_state, &repacked_output)
         .expect("canonical string alias must remain valid after the first mini");
 
-    let ordinary = remap_module_allow_new(&aliases, &base).unwrap().0;
+    let ordinary = remap_module_allow_new(&aliases, &base, None).unwrap().0;
     let ordinary_meta = TailMetadata::build(&ordinary).unwrap();
     assert_eq!(ordinary_meta.globals.len(), 1);
     assert_eq!(global_ptr_operands(&ordinary).len(), 2);
@@ -1425,7 +1425,7 @@ fn string_global_matching_large_base_alias_bucket_uses_the_smallest_key() {
         "SharedLiteral",
     );
 
-    let ordinary = remap_module_allow_new(&mini, &base).unwrap().0;
+    let ordinary = remap_module_allow_new(&mini, &base, None).unwrap().0;
     assert_eq!(global_ptr_operands(&ordinary), [FIRST_BASE_KEY]);
     assert!(TailMetadata::build(&ordinary).unwrap().globals.is_empty());
 
@@ -1827,6 +1827,160 @@ fn selective_fullgraph_wakes_strict_consumer_by_inner_provider_identity() {
     )
     .unwrap();
     assert_eq!(output.applied_modules, [PROVIDER_OUTER, CONSUMER_OUTER]);
+}
+
+#[test]
+fn selective_fullgraph_retains_qualified_native_property_after_an_earlier_add() {
+    use crate::cache::selective_fullgraph::{
+        compose_selective_full_graph_with_native_authority, SelectiveFullGraphChange,
+        SelectiveFullGraphError,
+    };
+    use crate::cache::splice::{extract_module, splice_case_a, SequentialMiniGuard};
+
+    const FIRST: &str = "A.First";
+    const SECOND: &str = "B.QuestConsumer";
+    const QUEST_PTR: i64 = 0x100;
+    const QUEST_ID: i32 = 0x0400_1636;
+    let quest_rows = || TailRows {
+        types: vec![type_row(QUEST_PTR, "UQuest", "")],
+        type_ids: vec![id_row(QUEST_ID, QUEST_PTR)],
+        ..TailRows::default()
+    };
+    let pristine = cache("Pristine", &[], &[], quest_rows());
+    let first = cache(FIRST, &[], &[], TailRows::default());
+    let second = cache(
+        SECOND,
+        &[function_record_with_code(
+            "UseQuest",
+            &[QUEST_PTR],
+            0x1742,
+            // LoadVObjR reads the parameter's native property; RET. This makes T7 live.
+            &[185, 322, QUEST_ID, 10],
+        )],
+        &[],
+        TailRows {
+            funcs: vec![function_tail_row(0x7420, "UseQuest", SECOND, &[QUEST_PTR])],
+            func_ids: vec![id_row(0x1742, 0x7420)],
+            properties: vec![property_row(QUEST_ID, 322, "bExternalAvailabilityTrigger")],
+            ..quest_rows()
+        },
+    );
+    let full_graph = splice_case_a(&first, &second).unwrap();
+    let changes = || {
+        vec![
+            SelectiveFullGraphChange::add(FIRST),
+            SelectiveFullGraphChange::add(SECOND),
+        ]
+    };
+
+    // Reuse the exact audited property tuple, but qualify this synthetic original separately.
+    let embedded: serde_json::Value = serde_json::from_slice(NATIVE_API_SNAPSHOT_BYTES).unwrap();
+    let property = embedded["properties"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "bExternalAvailabilityTrigger")
+        .unwrap();
+    assert_eq!(property["owner_full_identity"], "0:0:6:UQuest1:00:");
+    assert_eq!(property["member_offset"], 322);
+    assert_eq!(property["owner_object_kind"], APP_OBJECT_KIND);
+    let document = serde_json::json!({
+        "format": "gore-native-api-snapshot-v1", "qualified": true,
+        "pristine_cache_sha256": format!("{:x}", Sha256::digest(&pristine)),
+        "pristine_cache_guid_hex": "00".repeat(16),
+        "binds_cache_sha256": "a".repeat(64), "compiler_profile_sha256": "b".repeat(64),
+        "registration_trace_sha256": "c".repeat(64), "post_bind_snapshot_sha256": "d".repeat(64),
+        "qualification_evidence": "synthetic FullGraph authority-retention regression only",
+        "types": [], "functions": [], "properties": [property]
+    });
+    let bytes = serde_json::to_vec(&document).unwrap();
+    let snapshot =
+        NativeApiSnapshot::from_sealed_bytes(&bytes, &format!("{:x}", Sha256::digest(&bytes)))
+            .unwrap();
+    assert!(snapshot.matches_base(&pristine));
+    let authority = PristineNativeApiAuthority {
+        snapshot: Some(Arc::new(snapshot)),
+    };
+
+    let options = RemapOptions {
+        allow_new_symbols: true,
+    };
+    let first_extracted = extract_module(&full_graph, FIRST).unwrap();
+    let first_mini =
+        remap_module_with_native_authority(&first_extracted, &pristine, options, Some(&authority))
+            .unwrap()
+            .0;
+    assert!(TailMetadata::build(&first_mini)
+        .unwrap()
+        .properties
+        .is_empty());
+    let running = SequentialMiniGuard::new(&pristine)
+        .unwrap()
+        .compose_add(&pristine, &first_mini)
+        .unwrap();
+    assert_ne!(Sha256::digest(&running), Sha256::digest(&pristine));
+    assert_eq!(
+        CacheHeader::parse(&running).unwrap().hash,
+        CacheHeader::parse(&pristine).unwrap().hash
+    );
+    let second_extracted = extract_module(&full_graph, SECOND).unwrap();
+    let missing =
+        remap_module_to_base_with_options(&second_extracted, &running, options).unwrap_err();
+    assert!(
+        missing
+            .to_string()
+            .contains("engine/template properties require an exact pristine property row"),
+        "{missing}"
+    );
+    let second_mini =
+        remap_module_with_native_authority(&second_extracted, &running, options, Some(&authority))
+            .unwrap()
+            .0;
+    assert_eq!(
+        TailMetadata::build(&second_mini).unwrap().properties.len(),
+        1
+    );
+    assert!(SequentialMiniGuard::new(&running)
+        .unwrap()
+        .compose_add(&running, &second_mini)
+        .is_err());
+    SequentialMiniGuard::new_with_native_authority(&running, Some(&authority))
+        .unwrap()
+        .compose_add(&running, &second_mini)
+        .expect("retained authority must also reach the composition guard");
+
+    let output = compose_selective_full_graph_with_native_authority(
+        &pristine,
+        &full_graph,
+        changes(),
+        &authority,
+    )
+    .unwrap();
+    assert_eq!(output.applied_modules, [FIRST, SECOND]);
+    assert_eq!(
+        TailMetadata::build(&output.cache).unwrap().properties.len(),
+        1
+    );
+
+    // A matching generation alone cannot qualify a different original SHA.
+    assert!(matches!(
+        compose_selective_full_graph_with_native_authority(
+            &running,
+            &full_graph,
+            changes(),
+            &authority
+        ),
+        Err(SelectiveFullGraphError::NativeAuthorityMismatch)
+    ));
+    let mut wrong_generation = pristine.clone();
+    wrong_generation[0] ^= 1;
+    assert!(remap_module_with_native_authority(
+        &second_extracted,
+        &wrong_generation,
+        options,
+        Some(&authority)
+    )
+    .is_err());
 }
 
 #[test]

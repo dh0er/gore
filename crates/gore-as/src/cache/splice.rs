@@ -517,6 +517,15 @@ fn preflight_property_reference(c: &mut Cursor<'_>) -> Result<(), WireError> {
 impl SequentialMiniGuard {
     /// Bind the guard to the exact base all incoming minis were independently remapped against.
     pub fn new(base: &[u8]) -> Result<Self, SpliceError> {
+        Self::new_with_native_authority(base, None)
+    }
+
+    /// FullGraph keeps original native authority while rebuilding script authority from each
+    /// successfully composed running cache. Ordinary callers still authenticate their own base.
+    pub(super) fn new_with_native_authority(
+        base: &[u8],
+        native_authority: Option<&super::remap::PristineNativeApiAuthority>,
+    ) -> Result<Self, SpliceError> {
         let header = CacheHeader::parse(base)?;
         // A raw-file component can replace the effective script base before Manager composition.
         // Reject an oversized or record-amplified base before any StaticName, identity, module-name,
@@ -537,7 +546,14 @@ impl SequentialMiniGuard {
             Err(error) => return Err(SpliceError::StaticNameRebase(error)),
             Ok(context) => context,
         };
-        let reference_context = match super::remap::EffectiveReferenceBase::build(base) {
+        let reference_context = match native_authority {
+            Some(authority) => super::remap::EffectiveReferenceBase::build_with_native_authority(
+                base,
+                Some(authority),
+            ),
+            None => super::remap::EffectiveReferenceBase::build(base),
+        };
+        let reference_context = match reference_context {
             Err(super::remap::RemapError::ModuleNameCollision { name }) => {
                 return Err(SpliceError::InnerNameCollision(name));
             }
