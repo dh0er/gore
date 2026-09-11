@@ -1,29 +1,34 @@
 # NPC-Testpakete: restliche Faelle
 
-Stand 2026-09-11: **Alle fuenf Pakete sind gebaut und geprueft; acht Startstaende
-stehen in Profil 4 bereit.** Die Spieltests dieser neuen Faelle sind noch offen.
+Stand 2026-09-11: **Alle fuenf Pakete sind gebaut und geprueft.** Der Kopf-/Barttest
+ist bestanden; die weiteren Spieltests sind noch offen. Von den acht erstellten
+Startstaenden bleiben **066–072 fuer die offenen Tests in Profil 4**; der erledigte
+Kopf-Start065 und alle bisherigen Ergebnissaves sind ausserhalb des Spiels archiviert.
 Der bisher getestete Stand ist mit `6848e475` gesichert; `117be93d` korrigiert
 die Save-Bereinigung und `7ac45595` die benoetigte native API-Komposition.
 Siehe [Build-/Paketpruefung](build-checks.json) und
 [veroeffentlichte Startstaende](start-saves.json).
 
-**Aktiv ist NpcHeadPaletteTest 0.1.3 mit NpcBeardTextures013**; Manager-Status `in_sync`.
-Der Bartwechsel hat Vorrang. Das Sprachpaket und die anderen Pakete bleiben
-deaktiviert. Build und Aktivierung stehen im [VT-Buildbericht](beard-vt-build-checks.json)
-und [VT-Deploymentbericht](beard-vt-deployment.json). Der fehlgeschlagene
-[Barttest 0.1.2](heads/beard-runtime-0.1.2.json) bleibt dokumentiert.
+**Aktiv ist NpcNaturalVoiceTest 0.1.1**; Manager-Status `in_sync`.
+Kopf-Test und Barttexturen sind nach dem bestandenen
+[Barttest 0.1.3](heads/beard-runtime-0.1.3.json) deaktiviert. Die anderen
+Testpakete bleiben deaktiviert. Die aktuelle Aktivierung steht im
+[Sprach-Deploymentbericht](voice/deployment-after-heads.json).
+Der fehlgeschlagene [Barttest 0.1.2](heads/beard-runtime-0.1.2.json) und die
+[VT-Build-](beard-vt-build-checks.json) / [Deploymentbelege](beard-vt-deployment.json)
+bleiben als Historie erhalten.
 Die bisherigen [Tageslicht-](daylight-build-checks.json) und
 [Deploymentberichte](daylight-deployment.json) bleiben als Historie erhalten.
 
 Die Testpakete werden **einzeln** aktiviert; zum Kopf-Test gehoert zusaetzlich
 das Textur-Begleitpaket. Zum Paketwechsel das Spiel vollstaendig
 beenden und den zugehoerigen START-Stand laden. Ergebnisse anderer Pakete nicht
-als Ausgangspunkt verwenden. Die Startstaende bleiben erhalten; Ergebnisse unter
+als Ausgangspunkt verwenden. Die benoetigten Startstaende bleiben erhalten; Ergebnisse unter
 den unten verlinkten Testnamen neu speichern. Spieltests macht der Benutzer.
 
 | Reihenfolge | Paket | Startstaende in Profil 4 | Abdeckung |
 |---|---|---|---|
-| 1 | NpcHeadPaletteTest | 065: NPC 01 Koepfe - START | Gesicht, Haare, Haarfarbe bestanden; echter Bartwechsel/Originale/Neustart jetzt testen |
+| 1 | NpcHeadPaletteTest | 065: NPC 01 Koepfe - START (archiviert) | Bestanden: Gesicht, Haare, Haarfarbe, Bartvarianten, Originale und Neustart |
 | 2 | NpcNaturalVoiceTest | 066: NPC 02 Voice - START | Natuerliche Begruessung/Alltagsstimme, zweites Stimmprofil, Routine, Neustart |
 | 3 | NpcEconomyRolesTest | 067: Handel - LP fehlt; 068: Lehrer - Erz fehlt; 069: Lehrer - bereit | Kaufen/Verkaufen/Abbrechen, beide Lernvoraussetzungen, Kosten, bereits gelernt, Persistenz |
 | 4 | NpcFieldRolesTest | 070: NPC 04 Rollen - START; 072: NPC 04 Rollen - Kampf bereit | Waffenwahl-Diagnose, Folgen/Warten, Feindschaft/Gilde, Flucht, Niederlage/Tod, Wiederbelebung derselben Figur |
@@ -31,15 +36,14 @@ den unten verlinkten Testnamen neu speichern. Spieltests macht der Benutzer.
 
 ## 1. Koepfe
 
-065 laden, A ansprechen, **H0 Aufbau** waehlen. Danach stehen die Testfiguren
-an den bereits verwendeten Punkten vor Xardas' Turm.
-Die [Bart-Checkliste](heads/README.md) beschreibt den jetzt aktiven Nachtest:
+Der abgeschlossene Kopf-Test verwendete065, A und **H0 Aufbau** vor Xardas' Turm.
+Dieser Startstand ist jetzt archiviert und muss nicht erneut getestet werden.
+Die bestandene [Bart-Checkliste](heads/README.md) beschreibt den Nachtest:
 H2/H5 fuer rasierten Heldenkopf, H6 fuer Originalbart; H1/H6 fuer Flex mit Bart,
 H5 fuer Flex ohne Bart. Beide neuen Auswahlen speichern/neu starten, danach H9.
-Die neue Texturzuordnung betrifft nur Cs Materialinstanzen. Der Nutzer hat die
-bisherigen Kopf-, Haar- und Farbtests bestanden; dieser echte Bartwechsel ist
-in 0.1.3 korrigiert und noch nicht im Spiel bestaetigt. Nach vollstaendigem
-Neustart unbedingt den sauberen START065 statt eines schwarzen 0.1.2-Ergebnisses laden.
+Die neue Texturzuordnung betrifft nur Cs Materialinstanzen. Der Nutzer bestaetigt
+auch den vollstaendigen 0.1.3-Nachtest. Kopf-/Barttests sind damit fuer diese
+Varianten abgeschlossen; jetzt folgt Paket 2.
 
 ## 2. Natuerliche Stimme
 
@@ -95,8 +99,19 @@ Zwischenstand sowie auf Erfolgs- und Abbruchpfad. Die Belohnung sind einmalig
 
 ## Profil 4 und Rueckmeldungen
 
+Nach dem bestandenen Kopf-/Barttest wurden auf Wunsch des Benutzers weitere
+**18 Saves aus Profil 4 archiviert**. Im Spiel bleiben nur die **sieben kommenden
+STARTs066–072**; auch bewahrte Vergleichs-/Beweissaves und Kopf-Start065 stehen
+jetzt ausschliesslich im Archiv. Die vollstaendige Sicherung dieses Durchlaufs
+(25 Saves plus Profildatei und Hashmanifest) liegt dauerhaft ausserhalb des
+Worktrees unter `C:\Users\Daniel\Documents\GORE\Savegame-Archiv\npc-tests-20260911T174130Z`.
+Andere Profile und die sieben behaltenen Saves sind bytegleich.
+Siehe [Folgearchivierung](profile-cleanup-after-heads.json).
+
+Historie der ersten Bereinigung:
+
 31 ueberholte Teststaende wurden mit dem korrigierten Save-Core aus Profil 4
-entfernt. Die elf behaltenen Vergleichsstaende sind 023, 027, 030, 048, 052, 054,
+entfernt. Die elf damals behaltenen Vergleichsstaende waren 023, 027, 030, 048, 052, 054,
 060, 061, 062, 063 und 064. Alle urspruenglichen 42 Saves und die Profildatei sind
 archiviert; andere Profile und behaltene Saves wurden per Hash geprueft.
 Unmittelbar nach der Bereinigung waren es mit den acht Starts 19 Saves;
