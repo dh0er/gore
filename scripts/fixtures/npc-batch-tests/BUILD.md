@@ -18,10 +18,10 @@ role sources are also tracked, so that regeneration is optional.
   and sibling `Binds.Cache` SHA256
   `aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2`.
 - A current GORE CLI with its matching qualified standalone compiler package.
-  For this batch use local `work/npc-continuation/runtime/gore-palette-v4.exe`,
-  SHA256 `3e16d37f2c04361e6c80764295a648837a91273c6bef792ac14990c9758c9ada`.
-  It includes the two narrowly qualified material-parameter methods needed by
-  the head palette and the quest availability property, and retains that authenticated
+  For the current head/beard package use local `work/npc-continuation/runtime/gore-beard-v1.exe`,
+  SHA256 `14dcd61ed8a1b5a3fe52f77526bf3e5da4a7fab8f288a0f5db8e6af37eba5097`.
+  It includes the head palette and quest availability bindings plus five narrowly
+  qualified texture/path/material functions and UTexture for beard switching, and retains that authenticated
   native authority throughout selective FullGraph composition. The original 0.1.0
   voice/economy builds used `gore-current.exe`,
   SHA256 `9428ceacd052ba3f6ed98162cfd505536e57979e3ffcfe96a555fb3d2bddf005`.
@@ -153,3 +153,35 @@ Optional displayed NPC-name localization must be recorded as a bundle payload;
 it must not rename the A/B/C technical identities. Inspect the resulting bundle
 and verify its four script modules and declared payloads before handing it off
 for any separately authorized game test.
+
+## Beard follow-up 0.1.2
+
+The head follow-up uses the same productive Core pipeline with frozen heads-v3
+as input and the current tracked head A/B overlays. `beard-build-checks.json`
+records its new native qualification, compile receipt, module preservation and
+bundle inspection. The five new functions are ImportFileAsTexture2D,
+SetTextureParameterValue, SetMaterial, ProjectContentDir and the one-argument
+ConvertRelativePathToFull. Exact registered declarations and effective types
+are sealed; this does not enable unrelated native APIs or bypass admission.
+
+`heads/beard-textures.json` records the two edited face atlases and local paths.
+They must be present with the recorded hashes when rebuilding this package;
+neither the original extracted game atlases nor the edited binaries are in Git.
+The imagegen outputs are 1254x1254 despite a 2048 request; no further image
+resampling was applied. Their intended normalized UV mapping and visual quality
+are part of the user test. Keep a copy of the generated PNGs with the bundle.
+
+Add these entries to the head spec, alongside the existing script/loc/voice:
+
+```json
+"pak_files": [
+  {"game_path":"G1R/Content/GoreMods/NpcBeardSwitch/T_NH_Head_Clean_D.png", "source_path":"../images/T_NH_Head_Clean_D.png"},
+  {"game_path":"G1R/Content/GoreMods/NpcBeardSwitch/T_OC_IE_Flex_Beard_D.png", "source_path":"../images/T_OC_IE_Flex_Beard_D.png"}
+]
+```
+
+This makes a format-2 bundle with an additive pak_file_patch; no original
+face texture or cooked PackageId is replaced. The PNG import happens through
+the mounted game content path at runtime. Offline validation proves package
+ownership and the bound calls, not that the import renders correctly in game.
+See `beard-deployment.json` for the active package and Apply/Reset commands.

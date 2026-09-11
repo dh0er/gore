@@ -235,6 +235,91 @@ class UGoreFlexHeadProbeController : UActorComponent
     // Derived materials belong to this one visual component; shared assets remain unchanged.
     UPROPERTY() UGorePaletteMaterial PaletteMaterials;
     UPROPERTY() UPoseableMeshComponent PaletteOwner;
+    // Append fields: existing saves retain the tested controller field prefix.
+    UPROPERTY() UTexture2D HeroCleanTexture;
+    UPROPERTY() UTexture2D FlexBeardTexture;
+    UPROPERTY() bool HeroTextureAttempted = false;
+    UPROPERTY() bool FlexTextureAttempted = false;
+    UPROPERTY() UGoreBeardMaterial HeroFaceMaterials;
+    UPROPERTY() UGoreBeardMaterial FlexFaceMaterials;
+
+    int BeardMode()
+    {
+        float32 Mode = 0.0f;
+        AG1RGameState::GetWorldFloatData(State.GetWorld(), n"gore_palette_beard_mode", Mode);
+        return int(Mode); // 0: original for this head, 1: clean, 2: beard.
+    }
+    UTexture2D BeardTexture(bool Flex)
+    {
+        if (Flex)
+        {
+            if (!FlexTextureAttempted)
+            {
+                FlexTextureAttempted = true;
+                FlexBeardTexture = Rendering::ImportFileAsTexture2D(FPaths::ConvertRelativePathToFull(
+                    FPaths::ProjectContentDir() + "GoreMods/NpcBeardSwitch/T_OC_IE_Flex_Beard_D.png"));
+            }
+            Note(n"gore_beard_flex_texture_loaded", IsValid(FlexBeardTexture) ? 1.0f : -1.0f);
+            return FlexBeardTexture;
+        }
+        if (!HeroTextureAttempted)
+        {
+            HeroTextureAttempted = true;
+            HeroCleanTexture = Rendering::ImportFileAsTexture2D(FPaths::ConvertRelativePathToFull(
+                FPaths::ProjectContentDir() + "GoreMods/NpcBeardSwitch/T_NH_Head_Clean_D.png"));
+        }
+        Note(n"gore_beard_hero_texture_loaded", IsValid(HeroCleanTexture) ? 1.0f : -1.0f);
+        return HeroCleanTexture;
+    }
+    void ApplyBeardMaterials(UMeshComponent Mesh, bool Flex)
+    {
+        int Mode = BeardMode();
+        bool Replace = Flex ? Mode == 2 : Mode == 1;
+        UTexture2D Texture;
+        if (Replace) Texture = BeardTexture(Flex);
+        UGoreBeardMaterial Entries = Flex ? FlexFaceMaterials : HeroFaceMaterials;
+        int Matches = 0;
+        int Applied = 0;
+        for (int Slot = 0; Slot < Mesh.GetNumMaterials(); ++Slot)
+        {
+            UMaterialInterface Original = Mesh.GetMaterial(Slot);
+            if (Flex ? !NamedMaterial(Original, n"MI_OC_IE_Flex_Head_G21", n"MI_Lods_OC_IE_Flex_Head_G21")
+                : !NamedMaterial(Original, n"MI_NH_Head_G21", n"MI_Lods_NH_Head_G21")) continue;
+            ++Matches;
+            UGoreBeardMaterial Entry = Entries;
+            while (IsValid(Entry) && Entry.Slot != Slot) Entry = Entry.Next;
+            if (!Replace || !IsValid(Texture))
+            {
+                if (IsValid(Entry) && IsValid(Entry.Original)) Mesh.SetMaterial(Slot, Entry.Original);
+                continue;
+            }
+            if (!IsValid(Entry))
+            {
+                // Allocate the record before changing the component: restore always has its original.
+                Entry = Cast<UGoreBeardMaterial>(NewObject(this, TSubclassOf<UObject>(UGoreBeardMaterial::StaticClass()), NAME_None, false, nullptr));
+                if (!IsValid(Entry)) continue;
+                Entry.Original = Original;
+                Entry.Material = Mesh.CreateDynamicMaterialInstance(Slot, Original, NAME_None);
+                if (!IsValid(Entry.Material)) continue;
+                Entry.Slot = Slot;
+                Entry.Next = Entries;
+                Entries = Entry;
+            }
+            Entry.Material.SetTextureParameterValue(n"1 - Albedo (Alpha Cutout)", Texture);
+            if (!Flex)
+            {
+                // Both shipped animated albedos also contain the beard. Keep their normal maps.
+                Entry.Material.SetTextureParameterValue(n"5 - WM1 Albedo", Texture);
+                Entry.Material.SetTextureParameterValue(n"6 - WM2 Albedo", Texture);
+            }
+            Mesh.SetMaterial(Slot, Entry.Material);
+            ++Applied;
+        }
+        if (Flex) FlexFaceMaterials = Entries;
+        else HeroFaceMaterials = Entries;
+        Note(Flex ? n"gore_beard_flex_face_matches" : n"gore_beard_hero_face_matches", float32(Matches));
+        Note(Flex ? n"gore_beard_flex_face_applied" : n"gore_beard_hero_face_applied", float32(Applied));
+    }
     bool PaletteFlag(FName Key)
     {
         float32 Value = 0.0f;
@@ -254,6 +339,7 @@ class UGoreFlexHeadProbeController : UActorComponent
     }
     void ApplyHeroParts(USkeletalMeshComponent Body)
     {
+        ApplyBeardMaterials(Body, false);
         int HairCount=0; int BeardCount=0;
         for (int M=0; M<Body.GetNumMaterials(); ++M)
         {
@@ -263,7 +349,7 @@ class UGoreFlexHeadProbeController : UActorComponent
             if (!Hair && !Beard) continue;
             if (Hair) ++HairCount;
             if (Beard) ++BeardCount;
-            bool Visible=Hair ? !PaletteFlag(n"gore_palette_hair_hidden") : !PaletteFlag(n"gore_palette_beard_hidden");
+            bool Visible=Hair ? !PaletteFlag(n"gore_palette_hair_hidden") : BeardMode() != 1;
             for (int L=0; L<Body.GetNumLODs(); ++L) Body.ShowMaterialSection(M,-1,Visible,L);
         }
         Note(n"gore_palette_hero_hair_matches",float32(HairCount));
@@ -276,6 +362,7 @@ class UGoreFlexHeadProbeController : UActorComponent
         {
             PaletteOwner=PoseHead;
             PaletteMaterials=nullptr;
+            FlexFaceMaterials=nullptr;
             for (int M=0; M<PoseHead.GetNumMaterials(); ++M)
             {
                 if (!NamedMaterial(PoseHead.GetMaterial(M),n"MI_OC_IE_Flex_Hair")) continue;
@@ -306,6 +393,7 @@ class UGoreFlexHeadProbeController : UActorComponent
             Entry.Material.SetVectorParameterValue(n"Tip Color",Red ? FLinearColor(0.9f,0.035f,0.005f,1.0f) : Entry.TipColor);
             ++Tinted;
         }
+        ApplyBeardMaterials(PoseHead, true);
         Note(n"gore_palette_flex_hair_matches",float32(Matches));
         Note(n"gore_palette_tint_materials",float32(Tinted));
     }
@@ -424,10 +512,18 @@ class UGoreFlexHeadProbeController : UActorComponent
                 PoseHead.SetVisibility(false, true);
                 PoseHead.RemoveTickPrerequisiteComponent(this);
             }
+            for (UGoreBeardMaterial Entry = HeroFaceMaterials; IsValid(Entry); Entry = Entry.Next)
+            {
+                if (IsValid(PreviousBody) && IsValid(Entry.Original)
+                    && Entry.Slot >= 0 && Entry.Slot < PreviousBody.GetNumMaterials()
+                    && PreviousBody.GetMaterial(Entry.Slot) == Entry.Material)
+                    PreviousBody.SetMaterial(Entry.Slot, Entry.Original);
+            }
             OriginalVisibility.SetNum(0);
             FacialBones.SetNum(0);
             PreviousBody = Body;
             PreviousBodyAsset = Body.GetSkeletalMeshAsset();
+            HeroFaceMaterials = nullptr;
             HeadComponent = USkeletalMeshComponent::Get(Character, n"GoreFlexHead");
             PoseHead = nullptr;
             AddTickPrerequisiteComponent(Body);
@@ -654,4 +750,13 @@ class UGorePaletteMaterial : UObject
     UPROPERTY() FLinearColor RootColor;
     UPROPERTY() FLinearColor TipColor;
     UPROPERTY() UGorePaletteMaterial Next;
+}
+
+// One linked record per C-owned face slot; no mutation of the source material asset.
+class UGoreBeardMaterial : UObject
+{
+    UPROPERTY() int Slot = -1;
+    UPROPERTY() UMaterialInterface Original;
+    UPROPERTY() UMaterialInstanceDynamic Material;
+    UPROPERTY() UGoreBeardMaterial Next;
 }
