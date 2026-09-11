@@ -2639,9 +2639,8 @@ fn dialog_workspace_source(dir: &Path, value: &str) -> Result<PathBuf> {
     let mut candidate = dir.to_path_buf();
     for (index, component) in components.iter().enumerate() {
         candidate.push(component.as_os_str());
-        let metadata = fs::symlink_metadata(&candidate).with_context(|| {
-            format!("reading dialog source metadata {}", candidate.display())
-        })?;
+        let metadata = fs::symlink_metadata(&candidate)
+            .with_context(|| format!("reading dialog source metadata {}", candidate.display()))?;
         if dialog_metadata_is_link(&metadata) {
             bail!(
                 "dialog manifest source_file crosses a symbolic link or reparse point: {}",
@@ -3211,10 +3210,10 @@ struct ConversationSettingsAnchor {
     participant: String,
 }
 
-/// Recognize only the per-NPC AI settings module shape observed to be loaded by the runtime.
+/// Recognize the per-NPC settings module shape and the combined module emitted by `npc new`.
 /// Merely finding some `UConversationCharacterSettings` subclass is not enough: those classes
 /// occur in unrelated modules too, and a fuzzy participant match could bind a new conversation to
-/// the wrong NPC.
+/// the wrong NPC. Combined modules additionally require their generated NPC declarations below.
 fn conversation_settings_anchor_identity(module: &str) -> Option<ConversationSettingsAnchor> {
     let parts = module.split('.').collect::<Vec<_>>();
     let [ai, agent, human, config, participant, leaf] = parts.as_slice() else {
@@ -3227,14 +3226,54 @@ fn conversation_settings_anchor_identity(module: &str) -> Option<ConversationSet
     {
         return None;
     }
-    let suffix = leaf.strip_prefix("ConversationCharacterSettings_")?;
-    if !suffix.eq_ignore_ascii_case(participant) {
+    let dedicated_settings = leaf
+        .strip_prefix("ConversationCharacterSettings_")
+        .is_some_and(|suffix| suffix.eq_ignore_ascii_case(participant));
+    if !dedicated_settings && !leaf.eq_ignore_ascii_case(participant) {
         return None;
     }
     Some(ConversationSettingsAnchor {
         module: module.to_owned(),
         participant: (*participant).to_owned(),
     })
+}
+
+fn conversation_settings_anchor_for_module(
+    module: &gore_as::cache::model::Module,
+) -> Option<ConversationSettingsAnchor> {
+    let anchor = conversation_settings_anchor_identity(&module.name)?;
+    if module
+        .name
+        .rsplit('.')
+        .next()?
+        .eq_ignore_ascii_case(&anchor.participant)
+    {
+        // `npc new` keeps the character, config, spawn and ambient settings in one module.
+        // Require that exact global declaration set before admitting this second module shape;
+        // a same-named module containing only an arbitrary settings subclass is not an anchor.
+        for prefix in [
+            "UCharacterDefinition_Human_",
+            "UAIAgentConfig_Human_",
+            "USpawnAIAgentDefinition_",
+            "UConversationCharacterSettings_Ambient_",
+        ] {
+            let name = format!("{prefix}{}", anchor.participant);
+            let matches = module
+                .classes
+                .iter()
+                .filter(|class| class.name == name && class.namespace.is_empty())
+                .collect::<Vec<_>>();
+            let [class] = matches.as_slice() else {
+                return None;
+            };
+            if prefix == "UConversationCharacterSettings_Ambient_"
+                && class.super_class.as_deref() != Some("UConversationCharacterSettings")
+            {
+                return None;
+            }
+        }
+    }
+    Some(anchor)
 }
 
 fn requires_topic_scaffold_for_module(module: &str) -> bool {
@@ -3281,9 +3320,16 @@ fn resolve_conversation_settings_anchor(
     new_conversation_module_names(requested_participant)?;
     let modules = gore_as::cache::model::parse_modules(cache)
         .map_err(|error| anyhow::anyhow!("parsing the script cache: {error}"))?;
+    resolve_conversation_settings_anchor_in_modules(&modules, requested_participant)
+}
+
+fn resolve_conversation_settings_anchor_in_modules(
+    modules: &[gore_as::cache::model::Module],
+    requested_participant: &str,
+) -> Result<ConversationSettingsAnchor> {
     let candidates = modules
         .iter()
-        .filter_map(|module| conversation_settings_anchor_identity(&module.name))
+        .filter_map(conversation_settings_anchor_for_module)
         .collect::<Vec<_>>();
     let anchor = select_exact_settings_anchor(requested_participant, &candidates)?.clone();
     let module = modules
@@ -5531,7 +5577,10 @@ mod tests {
 
         assert!(topic_name_matches("UUFoo", "UFoo", true));
         assert!(!topic_name_matches("UUFoo", "UFoo", false));
-        assert_eq!(resolve_topic_in(&conversation, "UFoo").unwrap().class, "UUFoo");
+        assert_eq!(
+            resolve_topic_in(&conversation, "UFoo").unwrap().class,
+            "UUFoo"
+        );
 
         conversation
             .topics
@@ -6717,6 +6766,141 @@ class UFirst : UTopic_Hero__NEW_NPC { }
         );
     }
 
+    fn combined_npc_anchor_module() -> gore_as::cache::model::Module {
+        use gore_as::cache::model::{Class, Module};
+        Module {
+            name: "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A".to_owned(),
+            file: "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as".to_owned(),
+            functions: Vec::new(),
+            classes: [
+                (
+                    "UCharacterDefinition_Human_",
+                    "UCharacterDefinition_Human_OldCamp_Shadow",
+                ),
+                ("UAIAgentConfig_Human_", "UAIAgentConfig_Human"),
+                ("USpawnAIAgentDefinition_", "USpawnAIAgentDefinition"),
+                (
+                    "UConversationCharacterSettings_Ambient_",
+                    "UConversationCharacterSettings",
+                ),
+            ]
+            .into_iter()
+            .map(|(prefix, parent)| Class {
+                name: format!("{prefix}GORE_TEST_A"),
+                namespace: String::new(),
+                super_class: Some(parent.to_owned()),
+                fields: Vec::new(),
+                methods: Vec::new(),
+                ctors: Vec::new(),
+                flags: 0,
+            })
+            .collect(),
+            enums: Vec::new(),
+            globals: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn settings_anchor_accepts_the_generated_combined_npc_module() {
+        let module = combined_npc_anchor_module();
+        let anchor = resolve_conversation_settings_anchor_in_modules(
+            std::slice::from_ref(&module),
+            "gore_test_a",
+        )
+        .unwrap();
+        assert_eq!(anchor.module, module.name);
+        assert_eq!(anchor.participant, "GORE_TEST_A");
+        assert!(requires_topic_scaffold_for_module(&module.name));
+
+        let source = module
+            .classes
+            .iter()
+            .map(|class| {
+                let binding = if class.name == "UConversationCharacterSettings_Ambient_GORE_TEST_A"
+                {
+                    "default ForCharacter = n\"GORE_TEST_A\";"
+                } else {
+                    ""
+                };
+                format!(
+                    "class {} : {} {{ {binding} }}\n",
+                    class.name,
+                    class.super_class.as_deref().unwrap()
+                )
+            })
+            .collect::<String>();
+        let outline = dialog::read_outline(&source).unwrap();
+        validate_settings_anchor_source(&outline, &anchor.participant).unwrap();
+        let rebound =
+            dialog::read_outline(&source.replace("n\"GORE_TEST_A\"", "n\"GORE_TEST_B\"")).unwrap();
+        assert!(validate_settings_anchor_source(&rebound, &anchor.participant).is_err());
+        assert!(resolve_conversation_settings_anchor_in_modules(&[module], "GORE_TEST").is_err());
+    }
+
+    #[test]
+    fn settings_anchor_combined_module_requires_exact_global_npc_declarations() {
+        let module = combined_npc_anchor_module();
+        for index in 0..module.classes.len() {
+            let mut missing = module.clone();
+            missing.classes.remove(index);
+            assert!(conversation_settings_anchor_for_module(&missing).is_none());
+
+            let mut duplicate = module.clone();
+            duplicate.classes.push(module.classes[index].clone());
+            assert!(conversation_settings_anchor_for_module(&duplicate).is_none());
+
+            let mut namespaced = module.clone();
+            namespaced.classes[index].namespace = "Other".to_owned();
+            assert!(conversation_settings_anchor_for_module(&namespaced).is_none());
+        }
+
+        for name in [
+            "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_B",
+            "Story.G1R.Conversation.GORE_TEST_A",
+        ] {
+            let mut unrelated = module.clone();
+            unrelated.name = name.to_owned();
+            assert!(conversation_settings_anchor_for_module(&unrelated).is_none());
+        }
+        let mut indirect = module.clone();
+        indirect.classes[3].super_class = Some("UOtherSettings".to_owned());
+        assert!(conversation_settings_anchor_for_module(&indirect).is_none());
+
+        let mut wrong_npc = module;
+        wrong_npc.classes[3].name = "UConversationCharacterSettings_Ambient_GORE_TEST_B".to_owned();
+        assert!(conversation_settings_anchor_for_module(&wrong_npc).is_none());
+    }
+
+    #[test]
+    fn settings_anchor_combined_module_retains_ambiguity_and_direct_settings_guards() {
+        let module = combined_npc_anchor_module();
+        let mut shipped = module.clone();
+        shipped.name =
+            "AI.AIAgent.Human.Config.GORE_TEST_A.ConversationCharacterSettings_GORE_TEST_A"
+                .to_owned();
+        let error = resolve_conversation_settings_anchor_in_modules(
+            &[module.clone(), shipped],
+            "GORE_TEST_A",
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("ambiguous NPC binding"),
+            "{error}"
+        );
+
+        let mut duplicate_settings = module;
+        let mut extra = duplicate_settings.classes[3].clone();
+        extra.name = "UExtraSettings".to_owned();
+        duplicate_settings.classes.push(extra);
+        let error =
+            resolve_conversation_settings_anchor_in_modules(&[duplicate_settings], "GORE_TEST_A")
+                .unwrap_err();
+        assert!(
+            error.to_string().contains("exactly one is required"),
+            "{error}"
+        );
+    }
+
     #[test]
     fn generated_topic_debug_ids_are_stable_and_avoid_the_module() {
         let first = generated_topic_debug_id("Story.Dialog", "UChoiceNew", "");
@@ -6914,17 +7098,21 @@ class UFirst : UTopic_Hero__NEW_NPC { }
     #[test]
     fn a_settings_anchor_manifest_cannot_disable_its_scaffold_checks() {
         let mut manifest = command_manifest();
-        manifest.module =
-            "AI.AIAgent.Human.Config.NEW_NPC.ConversationCharacterSettings_NEW_NPC".to_owned();
         manifest.participant = "NEW_NPC".to_owned();
         manifest.requires_topic_scaffold = false;
-        let error = validate_manifest_settings_anchor(&[], &manifest).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("must retain `requires_topic_scaffold = true`"),
-            "{error}"
-        );
+        for module in [
+            "AI.AIAgent.Human.Config.NEW_NPC.ConversationCharacterSettings_NEW_NPC",
+            "AI.AIAgent.Human.Config.NEW_NPC.NEW_NPC",
+        ] {
+            manifest.module = module.to_owned();
+            let error = validate_manifest_settings_anchor(&[], &manifest).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("must retain `requires_topic_scaffold = true`"),
+                "{error}"
+            );
+        }
     }
 
     #[test]

@@ -91,6 +91,42 @@ How much of the decompiled tree is proven identical to the shipping cache — an
 numbers come from the whole corpus rather than a sample — is written down in the repository, in
 `crates/gore-as/DECOMPILER_STATUS.md`.
 
+## Engine callbacks in new classes
+
+To override a native Blueprint event in a new script class, use
+`UFUNCTION(BlueprintOverride)` and the unsuffixed event name. For example:
+
+```angelscript
+class UAIState_MyWalk : UGothicCharacterSimulateableAIState
+{
+    UFUNCTION(BlueprintOverride)
+    void DoTask()
+    {
+        ::GotoPreferredLocation(this.AI);
+    }
+}
+```
+
+Likewise, a graceful-exit handler is `UFUNCTION(BlueprintOverride)` followed by
+`void OnGracefulExitRequested()`. The compiler adds `_Implementation` to the
+script method and records its binding to the native event. This rule concerns
+overridden native events; ordinary helpers and delegate/timer callbacks do not
+become Blueprint overrides just because another object calls them.
+
+The emitter prints bare `UFUNCTION()` and suffixed implementation names for
+these methods; it does not reproduce every reflection flag. Editing an existing
+shipping declaration restores its original metadata, but a newly authored class
+has no shipping metadata to restore. Copying the emitted form into a new class
+can therefore compile and install successfully while its callback never runs.
+Comparing emitted source before and after installation cannot detect that loss.
+
+This occurred in the NPC activity fixture: both `DoTask` and the graceful-exit
+handler were ordinary callable methods, so the new state never reached its
+navigation/action body. See the
+[failure and correction](../../scripts/fixtures/npc-appearance-routine/RESULTS.md).
+Correct native event names and override/event flags are verified in the binary
+cache separately from the subsequent user-run gameplay test.
+
 ## Recompiling: standalone first, game fallback
 
 GORE ships its standalone compiler as an internal part of GORE CLI and Mod
@@ -147,6 +183,14 @@ Delete, which currently fails closed because GORE cannot yet prove safe tail
 pruning and absence of retained references. A dependency chain such as a new
 provider module followed by an edited consumer can be composed in order;
 cyclic dependencies among new modules remain unsupported and fail closed.
+
+After updating the CLI, keep authored overlays separate from untouched exports.
+An emitter correction can change the spelling of an unchanged call (for example,
+retaining `SpawnActor`'s default arguments). An old export then differs from the
+current baseline and is treated as an Edit. Refresh only modules proven untouched
+against the same pristine cache and retain authored files; do not replace authored
+changes or disable preservation checks to force the old tree through. The head
+fixture encountered this after the global `LoadObject` arity correction.
 
 ```powershell
 # dump the vanilla modules as an editable tree
@@ -304,6 +348,15 @@ gore as compile-module --op add --module MyMod.Dialog `
 | `--allow-new-symbols` | Retain minimal rows for classes/functions/names absent from the pristine cache. |
 | `-o, --out <PATH>` | The remapped 1-module mini-cache. |
 | `--expect-base <CACHE>` / `--expect-base-sha256 <HEX>` | Refuse to compile unless the selected original is this file's bytes / has this SHA-256. Neither selects the base; both exist on `compile` as well. |
+
+New native references also need verified engine declarations. For the exact
+pristine cache used by build 24878692, GORE includes a sealed qualification of
+the mesh/material APIs needed by the [NPC head probe](../../scripts/fixtures/npc-head/README.md).
+It matches complete type/function identities and exact native property offsets;
+compilation and Manager composition use the same authority. Unknown signatures,
+template specializations and other game builds receive no blanket exemption.
+The [qualification record](../../scripts/fixtures/npc-head/native-api-qualification.json)
+identifies the audited compiler-profile, registration and Binds evidence.
 
 The high-level `dialog new-topic` scaffold uses the same compiler command in a
 more specific shape. A new root or direct sub-topic is appended to the

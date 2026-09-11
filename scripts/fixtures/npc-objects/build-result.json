@@ -1,0 +1,1442 @@
+{
+  "schema": "gore.npc-objects.build-result.v1",
+  "package": "NpcObjectActivities",
+  "version": "0.1.10",
+  "game_build_id": 24878692,
+  "backend": "standalone",
+  "change": "Add separate choices16-19 and B schedule for shipped bed sleep and alchemy object use; keep prior source as exact prefix.",
+  "artifacts": {
+    "NpcObjectActivities.full.Cache": {
+      "bytes": 124636620,
+      "sha256": "f4882de10443509d0889f88fa7cbd92646c2555e20adc2aa3dc9a895d30aa2cc"
+    },
+    "NpcObjectActivities.mini.Cache": {
+      "bytes": 187950,
+      "sha256": "5d323bff9d873bc32bac85ce92d5859a87a154dcc5bf881de85cceb8dbae81f9"
+    },
+    "generation-receipt.json": {
+      "bytes": 1796413,
+      "sha256": "27bbea7e12f965c950f9b61404a95d43d3d75ec15c5c2fd438083c2a907c906d"
+    },
+    "spec.json": {
+      "bytes": 4096,
+      "sha256": "4a0d826881dbe861536dcf2c3ec544c1382a2af6e85f705a8d6205330a37fe4b"
+    }
+  },
+  "generation_receipt_scope": "Product full-graph receipt qualifies the four authored modules and final complete cache.",
+  "full_build_checks": {
+    "operation": "strict standalone full-graph compile",
+    "started_utc": "2026-09-08T14:33:22.3041236+00:00",
+    "completed_utc": "2026-09-08T14:57:31.1569089+00:00",
+    "elapsed_seconds": 1446.621809,
+    "source_tree_unchanged": true,
+    "authored_modules": [
+      "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A",
+      "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B",
+      "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+      "LevelScripts.XardasTower_AI"
+    ],
+    "mini_sha256": "5d323bff9d873bc32bac85ce92d5859a87a154dcc5bf881de85cceb8dbae81f9",
+    "full_sha256": "f4882de10443509d0889f88fa7cbd92646c2555e20adc2aa3dc9a895d30aa2cc",
+    "generation_receipt_sha256": "27bbea7e12f965c950f9b61404a95d43d3d75ec15c5c2fd438083c2a907c906d"
+  },
+  "module_preservation": {
+    "operation": "product module_ranges exact serialized module span comparison",
+    "mini_modules": 4,
+    "full_modules": 7319,
+    "pristine_modules": 7317,
+    "unselected_pristine_modules_byte_identical": 7315,
+    "exact_selected_module_set": true,
+    "diego_bytes_unchanged_from_0_1_9": false,
+    "tower_bytes_unchanged_from_0_1_9": false,
+    "passed": true
+  },
+  "prior_authored_emission": {
+    "operation": "product PreparedEmit with exact Binds and class defaults enabled",
+    "modules": [
+      {
+        "module": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+        "exactly_unchanged": true,
+        "prior_emitted_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664",
+        "current_emitted_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664"
+      },
+      {
+        "module": "LevelScripts.XardasTower_AI",
+        "exactly_unchanged": true,
+        "prior_emitted_sha256": "3e66b9ead53daaee8c876ddd2559dbdb31c616b3751a390bedf769467ec95e4f",
+        "current_emitted_sha256": "3e66b9ead53daaee8c876ddd2559dbdb31c616b3751a390bedf769467ec95e4f"
+      }
+    ]
+  },
+  "bundle_inspection": {
+    "report_format": 1,
+    "source_kind": "directory",
+    "bundle_format": 1,
+    "mod": {
+      "name": "NpcObjectActivities",
+      "version": "0.1.10",
+      "author": ""
+    },
+    "component_count": 3,
+    "components": [
+      {
+        "type": "loc_patch",
+        "path": "loc/edits.json",
+        "target_count": 27,
+        "footprint_coverage": "exact"
+      },
+      {
+        "type": "voice_archive_patch",
+        "path": "voice",
+        "target_count": 5,
+        "footprint_coverage": "exact"
+      },
+      {
+        "type": "angel_script_patch",
+        "path": "scripts",
+        "target_count": 4,
+        "footprint_coverage": "exact"
+      }
+    ],
+    "file_count": 10,
+    "directory_count": 4,
+    "total_file_bytes": 385593,
+    "manifest_sha256": "613157c859662e5645226c684de9ef43ce54cd391f32d08c11f0ef1249e0cb6d",
+    "tree_sha256": "7de7287d428822bcbe41ce765c0f97f421f2e8c681b2fe18e6f07a1449aaccd6",
+    "evidence": {
+      "verified": [
+        "bounded non-link materialization of the selected directory or ZIP",
+        "root manifest format plus every declared component manifest and referenced payload",
+        "portable paths, payload size limits, and supported payload structure where an offline decoder exists",
+        "SHA-256 identity of the exact manifest bytes and complete normalized bundle tree"
+      ],
+      "not_verified": [
+        "compatibility with any particular game installation or game build",
+        "whether named game-side assets, samples, localization ids, or script edit targets exist",
+        "cross-mod conflicts, load order, or deployment readiness",
+        "runtime behavior, visuals, audio playback, dialog flow, or gameplay effect"
+      ]
+    }
+  },
+  "manager_preflight": {
+    "ok": true,
+    "preflight": {
+      "checks": [
+        {
+          "action": "none",
+          "code": "game_root_selected",
+          "detail": "the explicit game root resolves to a readable real directory",
+          "id": "game_root",
+          "items": [
+            "selected: C:/Program Files (x86)/Steam/steamapps/common/Gothic 1 Remake",
+            "resolved: \\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake"
+          ],
+          "state": "ok"
+        },
+        {
+          "action": "none",
+          "code": "install_recognized",
+          "detail": "the executable, Paks, Story\\Cache, Script, and required AngelScript cache paths are present",
+          "id": "install",
+          "items": [],
+          "state": "ok"
+        },
+        {
+          "action": "none",
+          "code": "loadout_metadata_ready",
+          "detail": "the loadout and 1 unique enabled mod metadata entries passed bounded metadata and top-level entry-point inspection",
+          "id": "loadout",
+          "items": [
+            "unverified until Apply: nested manifests, referenced payloads, decoding, cross-mod composition, and current install state"
+          ],
+          "state": "ok"
+        },
+        {
+          "action": "review_apply",
+          "code": "deployment_changes_pending",
+          "detail": "the selected loadout differs from the active Manager deployment; Apply performs authoritative validation before mutation",
+          "id": "deployment",
+          "items": [
+            "deployed count: 1",
+            "target count: 1",
+            "deployed: npcheadrestorefix-4d4ff343",
+            "target: npcobjectactivities-34ee7ff4"
+          ],
+          "state": "problem"
+        },
+        {
+          "action": "none",
+          "code": "install_mutation_clear",
+          "detail": "the game is closed and no known GORE recovery artifact is present",
+          "id": "install_mutation",
+          "items": [],
+          "state": "ok"
+        },
+        {
+          "action": "none",
+          "code": "ue4ss_not_required",
+          "detail": "no readable enabled component requires UE4SS Lua",
+          "id": "ue4ss",
+          "items": [],
+          "state": "not_required"
+        },
+        {
+          "action": "verify_during_apply",
+          "code": "unverified_read_only",
+          "detail": "write access was not tested because this preflight is strictly read-only",
+          "id": "write_access",
+          "items": [],
+          "state": "unverified"
+        }
+      ],
+      "format": 1
+    }
+  },
+  "installed_canonicalization": {
+    "report": "installed-canonicalization-checks.json",
+    "bytes": 69211,
+    "sha256": "8adce891af0879e80e873603d386c8fa4e4876d30b7369846dc8e845e52037fa",
+    "checks": {
+      "all_differences_are_function_id_fields": true,
+      "all_non_function_id_bytes_identical": true,
+      "all_seven_tail_tables_byte_identical": true,
+      "executable_bytecode_and_reference_operands_byte_identical": true,
+      "function_traits_and_unreal_metadata_byte_identical": true,
+      "header_byte_identical": true,
+      "module_order_and_boundaries_identical": true,
+      "only_four_selected_modules_differ": true,
+      "unselected_pristine_modules_byte_identical": 7315
+    },
+    "changed_function_id_count": 318
+  },
+  "source_evidence": {
+    "prior_A_and_B_source_preserved_as_prefix": true,
+    "head_controller_unchanged": true,
+    "voice_localization_inputs_unchanged": true,
+    "catalog_sha256": "fb5cf93a791ce938e94c3d9d9d5b7f12328e9f1b86f35504e76bc605bcd2906f",
+    "spots": [
+      {
+        "location": {
+          "x": 126738.44646137554,
+          "y": -143243.0045906488,
+          "z": 4355.473301594438
+        },
+        "rotation": {
+          "pitch": 0,
+          "yaw": 180,
+          "roll": 0
+        },
+        "name": "Interactive_Bed_Xardas472597",
+        "possibleActions": {
+          "gameplayTags": [
+            {
+              "tagName": "Action.Ambient.Sleep.High.Right"
+            },
+            {
+              "tagName": "Action.Bed"
+            }
+          ]
+        },
+        "bAllowAnyOrientationWhenUsing": false,
+        "bAllowChainingActions": true,
+        "entryDirection": "Right",
+        "areaRadius": 40,
+        "numAllowedUsers": 1,
+        "priority": 1,
+        "actorToInteractWith": "/Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.Interactive_Bed_Xardas_C_UAID_A8A159866C00D0E401_1537273541",
+        "dataLayer": "None",
+        "cooldownDuration": 0,
+        "customRequirements": []
+      },
+      {
+        "location": {
+          "x": 126966.6014239845,
+          "y": -142723.16928330238,
+          "z": 4289.13545
+        },
+        "rotation": {
+          "pitch": 0,
+          "yaw": -79.53961299999997,
+          "roll": 0
+        },
+        "name": "IO_XT_POTION_ALCHEMY_01",
+        "possibleActions": {
+          "gameplayTags": [
+            {
+              "tagName": "Action.Ambient.PotionAlchemy"
+            },
+            {
+              "tagName": "Action.Crafting.Alchemy"
+            }
+          ]
+        },
+        "bAllowAnyOrientationWhenUsing": false,
+        "bAllowChainingActions": true,
+        "entryDirection": "Front",
+        "areaRadius": 40,
+        "numAllowedUsers": 1,
+        "priority": 1,
+        "actorToInteractWith": "/Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.Interactive_AlchemyLab_XardasTower_b_C_UAID_E0D55ED476D2ED9302_2064095446",
+        "dataLayer": "None",
+        "cooldownDuration": 0,
+        "customRequirements": []
+      },
+      {
+        "location": {
+          "x": 126899.3470240067,
+          "y": -142470.28222542696,
+          "z": 4323.979417023596
+        },
+        "rotation": {
+          "pitch": 0,
+          "yaw": 44.35202283416743,
+          "roll": 0
+        },
+        "name": "IO_XT_TAKENOTES_02",
+        "possibleActions": {
+          "gameplayTags": [
+            {
+              "tagName": "Action.Ambient.XardasCheckNotes"
+            }
+          ]
+        },
+        "bAllowAnyOrientationWhenUsing": false,
+        "bAllowChainingActions": true,
+        "entryDirection": "Front",
+        "areaRadius": 40,
+        "numAllowedUsers": 1,
+        "priority": 1,
+        "actorToInteractWith": "None",
+        "dataLayer": "None",
+        "cooldownDuration": 0,
+        "customRequirements": [
+          "/Script/G1R.CharacterSpeciesRequirements(AllowedSpecies=(GameplayTags=((TagName=\"Species.Human\"))))"
+        ]
+      },
+      {
+        "location": {
+          "x": 126592,
+          "y": -142554.9999997567,
+          "z": 4347
+        },
+        "rotation": {
+          "pitch": 0,
+          "yaw": -90.00000000000001,
+          "roll": 0
+        },
+        "name": "WP_OW_TP_XARDASTOWER_BEDROOM",
+        "possibleActions": {
+          "gameplayTags": []
+        },
+        "bAllowAnyOrientationWhenUsing": false,
+        "bAllowChainingActions": false,
+        "entryDirection": "Front",
+        "areaRadius": 40,
+        "numAllowedUsers": 1,
+        "priority": 1,
+        "actorToInteractWith": "None",
+        "dataLayer": "None",
+        "cooldownDuration": 0,
+        "customRequirements": []
+      },
+      {
+        "location": {
+          "x": 126594.75367177432,
+          "y": -141906.71398348158,
+          "z": 4296.927305892565
+        },
+        "rotation": {
+          "pitch": 0,
+          "yaw": 90.95598209734278,
+          "roll": 0
+        },
+        "name": "FP_XT_STANDAROUND_01",
+        "possibleActions": {
+          "gameplayTags": [
+            {
+              "tagName": "Action.Ambient.StandAround"
+            }
+          ]
+        },
+        "bAllowAnyOrientationWhenUsing": false,
+        "bAllowChainingActions": true,
+        "entryDirection": "Front",
+        "areaRadius": 40,
+        "numAllowedUsers": 1,
+        "priority": 1,
+        "actorToInteractWith": "None",
+        "dataLayer": "None",
+        "cooldownDuration": 0,
+        "customRequirements": [
+          "/Script/G1R.UniqueNameRequirements(MustHaveAnyOfTheseUniqueNames=(\"XT_DMB_Xardas_404\"))",
+          "/Script/G1R.CharacterSpeciesRequirements(AllowedSpecies=(GameplayTags=((TagName=\"Species.Human\"))))"
+        ]
+      }
+    ],
+    "source_sha256": {
+      "GORE_TEST_A.as": "f3366e43187abe779637f5beacb5dacfc7e9d62655429e19a8150bbb60439563",
+      "GORE_TEST_B.as": "17ab3a58e175be691a7114a4450be88017160dba522c8e6e992a6f5779bd6d86"
+    }
+  },
+  "deployment": {
+    "manager_status": "in_sync",
+    "loadout": [
+      {
+        "enabled": true,
+        "id": "npcobjectactivities-34ee7ff4"
+      }
+    ],
+    "files": {
+      "shipping": {
+        "bytes": 124636620,
+        "sha256": "e151d2d63138d5d8ecebb369c56b47a54b225a7509bcab4483884b57e69e1649",
+        "backup_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511"
+      },
+      "localization": {
+        "bytes": 37095936,
+        "sha256": "f3c6948bac217b69c457afeed4346bd99540ed47935d52d47db70efc268057d1",
+        "backup_sha256": "e9bc9a0e87b722f62fb352adfeec26dacdaa42630d16aef2cb2abc6975c8dd03"
+      },
+      "voice": {
+        "bytes": 915865276,
+        "sha256": "da44012393ca5dfaeb37ae37625c054a1e9b07d86aacf6e68344e3ff066339c9",
+        "backup_sha256": "ff7aa5b219c2e0ec9840570e42597d3ea3053a7ad592cf7cfa5b61dd895ecd29"
+      }
+    },
+    "compiled_installed_A_B_exact": true,
+    "compiled_installed_full_cache_exact": false,
+    "compiled_installed_non_function_id_bytes_exact": true,
+    "manager_canonicalized_function_ids": 318,
+    "native_event_metadata_exact": true,
+    "original_voice_crc_size_preserved": 33323,
+    "voice_payloads_exact": 5,
+    "localization_matches_passed_voice_campaign": true,
+    "loc_rows": 43904,
+    "baseline_saves_unchanged": [
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48
+    ],
+    "game_launched_by_agent": false,
+    "runtime_proven": false,
+    "C_optimizer_exclusion_before_pose_creation": true,
+    "object_choice_native_events_exact": true
+  },
+  "choice_events": {
+    "full": {
+      "cache": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-objects\\artifacts\\NpcObjectActivities.full.Cache",
+      "sha256": "f4882de10443509d0889f88fa7cbd92646c2555e20adc2aa3dc9a895d30aa2cc",
+      "correct": true,
+      "classes": [
+        {
+          "class": "UChoiceGoreObjectsSetup",
+          "events": [
+            {
+              "record_offset": 88244026,
+              "function_name": "IsVisible_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 247997,
+              "is_ufunction": 1,
+              "metadata_offset": 88244205,
+              "unreal_function_name": "IsVisible",
+              "flags_offset": 88244227,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 1,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            },
+            {
+              "record_offset": 88244299,
+              "function_name": "Act_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 247998,
+              "is_ufunction": 1,
+              "metadata_offset": 88246252,
+              "unreal_function_name": "Act",
+              "flags_offset": 88246268,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 0,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            }
+          ]
+        },
+        {
+          "class": "UChoiceGoreObjectsNoon",
+          "events": [
+            {
+              "record_offset": 88247276,
+              "function_name": "IsVisible_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 248002,
+              "is_ufunction": 1,
+              "metadata_offset": 88247511,
+              "unreal_function_name": "IsVisible",
+              "flags_offset": 88247533,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 1,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            },
+            {
+              "record_offset": 88247605,
+              "function_name": "Act_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 248003,
+              "is_ufunction": 1,
+              "metadata_offset": 88247922,
+              "unreal_function_name": "Act",
+              "flags_offset": 88247938,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 0,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            }
+          ]
+        },
+        {
+          "class": "UChoiceGoreObjectsEvening",
+          "events": [
+            {
+              "record_offset": 88248947,
+              "function_name": "IsVisible_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 248007,
+              "is_ufunction": 1,
+              "metadata_offset": 88249182,
+              "unreal_function_name": "IsVisible",
+              "flags_offset": 88249204,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 1,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            },
+            {
+              "record_offset": 88249276,
+              "function_name": "Act_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 248008,
+              "is_ufunction": 1,
+              "metadata_offset": 88249593,
+              "unreal_function_name": "Act",
+              "flags_offset": 88249609,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 0,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            }
+          ]
+        },
+        {
+          "class": "UChoiceGoreObjectsMorning",
+          "events": [
+            {
+              "record_offset": 88250624,
+              "function_name": "IsVisible_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 248012,
+              "is_ufunction": 1,
+              "metadata_offset": 88250859,
+              "unreal_function_name": "IsVisible",
+              "flags_offset": 88250881,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 1,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            },
+            {
+              "record_offset": 88250953,
+              "function_name": "Act_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 248013,
+              "is_ufunction": 1,
+              "metadata_offset": 88251270,
+              "unreal_function_name": "Act",
+              "flags_offset": 88251286,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 0,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            }
+          ]
+        },
+        {
+          "class": "UChoiceGoreObjectsIncomplete",
+          "events": [
+            {
+              "record_offset": 88252304,
+              "function_name": "IsVisible_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 248017,
+              "is_ufunction": 1,
+              "metadata_offset": 88252539,
+              "unreal_function_name": "IsVisible",
+              "flags_offset": 88252561,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 1,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            },
+            {
+              "record_offset": 88252633,
+              "function_name": "Act_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 248018,
+              "is_ufunction": 1,
+              "metadata_offset": 88252810,
+              "unreal_function_name": "Act",
+              "flags_offset": 88252826,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 0,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "mini": {
+      "cache": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-objects\\artifacts\\NpcObjectActivities.mini.Cache",
+      "sha256": "5d323bff9d873bc32bac85ce92d5859a87a154dcc5bf881de85cceb8dbae81f9",
+      "correct": true,
+      "classes": [
+        {
+          "class": "UChoiceGoreObjectsSetup",
+          "events": [
+            {
+              "record_offset": 127533,
+              "function_name": "IsVisible_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 247997,
+              "is_ufunction": 1,
+              "metadata_offset": 127712,
+              "unreal_function_name": "IsVisible",
+              "flags_offset": 127734,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 1,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            },
+            {
+              "record_offset": 127806,
+              "function_name": "Act_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 247998,
+              "is_ufunction": 1,
+              "metadata_offset": 129759,
+              "unreal_function_name": "Act",
+              "flags_offset": 129775,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 0,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            }
+          ]
+        },
+        {
+          "class": "UChoiceGoreObjectsNoon",
+          "events": [
+            {
+              "record_offset": 130783,
+              "function_name": "IsVisible_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 248002,
+              "is_ufunction": 1,
+              "metadata_offset": 131018,
+              "unreal_function_name": "IsVisible",
+              "flags_offset": 131040,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 1,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            },
+            {
+              "record_offset": 131112,
+              "function_name": "Act_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 248003,
+              "is_ufunction": 1,
+              "metadata_offset": 131429,
+              "unreal_function_name": "Act",
+              "flags_offset": 131445,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 0,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            }
+          ]
+        },
+        {
+          "class": "UChoiceGoreObjectsEvening",
+          "events": [
+            {
+              "record_offset": 132454,
+              "function_name": "IsVisible_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 248007,
+              "is_ufunction": 1,
+              "metadata_offset": 132689,
+              "unreal_function_name": "IsVisible",
+              "flags_offset": 132711,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 1,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            },
+            {
+              "record_offset": 132783,
+              "function_name": "Act_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 248008,
+              "is_ufunction": 1,
+              "metadata_offset": 133100,
+              "unreal_function_name": "Act",
+              "flags_offset": 133116,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 0,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            }
+          ]
+        },
+        {
+          "class": "UChoiceGoreObjectsMorning",
+          "events": [
+            {
+              "record_offset": 134131,
+              "function_name": "IsVisible_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 248012,
+              "is_ufunction": 1,
+              "metadata_offset": 134366,
+              "unreal_function_name": "IsVisible",
+              "flags_offset": 134388,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 1,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            },
+            {
+              "record_offset": 134460,
+              "function_name": "Act_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 248013,
+              "is_ufunction": 1,
+              "metadata_offset": 134777,
+              "unreal_function_name": "Act",
+              "flags_offset": 134793,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 0,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            }
+          ]
+        },
+        {
+          "class": "UChoiceGoreObjectsIncomplete",
+          "events": [
+            {
+              "record_offset": 135811,
+              "function_name": "IsVisible_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 248017,
+              "is_ufunction": 1,
+              "metadata_offset": 136046,
+              "unreal_function_name": "IsVisible",
+              "flags_offset": 136068,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 1,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            },
+            {
+              "record_offset": 136140,
+              "function_name": "Act_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 248018,
+              "is_ufunction": 1,
+              "metadata_offset": 136317,
+              "unreal_function_name": "Act",
+              "flags_offset": 136333,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 0,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "installed": {
+      "cache": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Script\\PrecompiledScript_Shipping.Cache",
+      "sha256": "e151d2d63138d5d8ecebb369c56b47a54b225a7509bcab4483884b57e69e1649",
+      "correct": true,
+      "classes": [
+        {
+          "class": "UChoiceGoreObjectsSetup",
+          "events": [
+            {
+              "record_offset": 88244026,
+              "function_name": "IsVisible_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 1692161980,
+              "is_ufunction": 1,
+              "metadata_offset": 88244205,
+              "unreal_function_name": "IsVisible",
+              "flags_offset": 88244227,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 1,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            },
+            {
+              "record_offset": 88244299,
+              "function_name": "Act_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 1164262109,
+              "is_ufunction": 1,
+              "metadata_offset": 88246252,
+              "unreal_function_name": "Act",
+              "flags_offset": 88246268,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 0,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            }
+          ]
+        },
+        {
+          "class": "UChoiceGoreObjectsNoon",
+          "events": [
+            {
+              "record_offset": 88247276,
+              "function_name": "IsVisible_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 149375697,
+              "is_ufunction": 1,
+              "metadata_offset": 88247511,
+              "unreal_function_name": "IsVisible",
+              "flags_offset": 88247533,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 1,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            },
+            {
+              "record_offset": 88247605,
+              "function_name": "Act_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 114032048,
+              "is_ufunction": 1,
+              "metadata_offset": 88247922,
+              "unreal_function_name": "Act",
+              "flags_offset": 88247938,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 0,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            }
+          ]
+        },
+        {
+          "class": "UChoiceGoreObjectsEvening",
+          "events": [
+            {
+              "record_offset": 88248947,
+              "function_name": "IsVisible_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 73144683,
+              "is_ufunction": 1,
+              "metadata_offset": 88249182,
+              "unreal_function_name": "IsVisible",
+              "flags_offset": 88249204,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 1,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            },
+            {
+              "record_offset": 88249276,
+              "function_name": "Act_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 1158749946,
+              "is_ufunction": 1,
+              "metadata_offset": 88249593,
+              "unreal_function_name": "Act",
+              "flags_offset": 88249609,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 0,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            }
+          ]
+        },
+        {
+          "class": "UChoiceGoreObjectsMorning",
+          "events": [
+            {
+              "record_offset": 88250624,
+              "function_name": "IsVisible_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 1720928551,
+              "is_ufunction": 1,
+              "metadata_offset": 88250859,
+              "unreal_function_name": "IsVisible",
+              "flags_offset": 88250881,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 1,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            },
+            {
+              "record_offset": 88250953,
+              "function_name": "Act_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 1702142846,
+              "is_ufunction": 1,
+              "metadata_offset": 88251270,
+              "unreal_function_name": "Act",
+              "flags_offset": 88251286,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 0,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            }
+          ]
+        },
+        {
+          "class": "UChoiceGoreObjectsIncomplete",
+          "events": [
+            {
+              "record_offset": 88252304,
+              "function_name": "IsVisible_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 1062346647,
+              "is_ufunction": 1,
+              "metadata_offset": 88252539,
+              "unreal_function_name": "IsVisible",
+              "flags_offset": 88252561,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 1,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            },
+            {
+              "record_offset": 88252633,
+              "function_name": "Act_Implementation",
+              "namespace": "G1R::Conversation",
+              "function_id": 942728110,
+              "is_ufunction": 1,
+              "metadata_offset": 88252810,
+              "unreal_function_name": "Act",
+              "flags_offset": 88252826,
+              "flags": {
+                "BlueprintCallable": 0,
+                "BlueprintOverride": 1,
+                "BlueprintEvent": 1,
+                "BlueprintPure": 0,
+                "NetFunction": 0,
+                "NetMulticast": 0,
+                "NetClient": 0,
+                "NetServer": 0,
+                "NetValidate": 0,
+                "Unreliable": 0,
+                "BlueprintAuthorityOnly": 0,
+                "Exec": 0,
+                "CanOverrideEvent": 1,
+                "DevFunction": 0,
+                "IsStatic": 0,
+                "IsConstMethod": 0,
+                "ThreadSafe": 0,
+                "IsNoOp": 0
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "runtime": "passed: user confirmed bed, alchemy, scheduled transitions, full restart and continued sleep at08:00; see runtime-result.json",
+  "prior_head_runtime": "restore-runtime-result.json confirms 0.1.9 full head checklist; head controller retained unchanged",
+  "limits": "Alchemy object use/animations, not recipe or crafted-output validation. Sitting and guard activity remain queued."
+}

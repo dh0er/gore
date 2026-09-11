@@ -1,0 +1,458 @@
+{
+  "format": "gore-poseable-head-compiled-native-tables-check-v1",
+  "qualified": true,
+  "cache": {
+    "path": "work\\npc-head-restore-fix\\artifacts\\GoreHeadRestoreB.mini.Cache",
+    "sha256": "a45375f2b49c3d6e98a7892408b88c8a4a7db8219bc01c01038e1e5b4b6aac5e",
+    "tail_offset": 50401,
+    "t4_end": 67360
+  },
+  "base_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+  "cli_sha256": "9428ceacd052ba3f6ed98162cfd505536e57979e3ffcfe96a555fb3d2bddf005",
+  "checker_sha256": "9792836e1bdf24830213324921730261711d038ee9bd0659b3a32e163f4b7950",
+  "tail_reader_sha256": "96d35c4b297f45a8051d71d8b13d3350f686add84a1a171648c11edb76d556ec",
+  "expected_audit": {
+    "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-head-probe\\native-poseable-head-audit.json",
+    "sha256": "a22ce0a40f3a6a786b321bb605253868165fa0e2232db3e740191e20f31c68d4"
+  },
+  "types": [
+    {
+      "name": "UPoseableMeshComponent",
+      "full_identity": "0:0:22:UPoseableMeshComponent1:00:",
+      "t1_key": "0x6df5b6a25f6a9748",
+      "actual_t2_ids_linked_to_t1_key": [
+        99669737
+      ],
+      "actual_object_kind": 67108864,
+      "registrar_engine_type_id": 1140854613,
+      "id_note": "T2 values are remapped cache OldReference IDs; exact plain T1 identity and all linked object-kind bits are checked.",
+      "qualified": true
+    },
+    {
+      "name": "USkinnedAsset",
+      "full_identity": "0:0:13:USkinnedAsset1:00:",
+      "t1_key": "0x6ad58738669dc540",
+      "actual_t2_ids_linked_to_t1_key": [
+        82882090
+      ],
+      "actual_object_kind": 67108864,
+      "registrar_engine_type_id": 1140853602,
+      "id_note": "T2 values are remapped cache OldReference IDs; exact plain T1 identity and all linked object-kind bits are checked.",
+      "qualified": true
+    },
+    {
+      "name": "EBoneSpaces",
+      "full_identity": "0:0:11:EBoneSpaces1:00:",
+      "t1_key": "0x680757869ac7b260",
+      "actual_t2_ids_linked_to_t1_key": [
+        26423935
+      ],
+      "actual_object_kind": 0,
+      "registrar_engine_type_id": 618,
+      "id_note": "T2 values are remapped cache OldReference IDs; exact plain T1 identity and all linked object-kind bits are checked.",
+      "qualified": true,
+      "registrar_enum_values": [
+        {
+          "name": "WorldSpace",
+          "value": 0,
+          "registration_ordinal": 4573,
+          "post_bind_value_index": 0
+        },
+        {
+          "name": "ComponentSpace",
+          "value": 1,
+          "registration_ordinal": 4574,
+          "post_bind_value_index": 1
+        },
+        {
+          "name": "EBoneSpaces_MAX",
+          "value": 2,
+          "registration_ordinal": 4575,
+          "post_bind_value_index": 2
+        }
+      ],
+      "enum_note": "Enum T1/T2 identity is checked in this cache. Value declarations come from the pinned registry, not T1; bytecode enum literal operands are outside this check."
+    }
+  ],
+  "functions": [
+    {
+      "name": "GetOrCreate",
+      "namespace": "UPoseableMeshComponent",
+      "full_identity": "6:global0:22:UPoseableMeshComponent0:11:GetOrCreate1:087:6:object1:51:01:01:11:017:0:0:6:AActor1:00:,6:object1:51:11:11:01:016:0:0:5:FName1:00:,60:6:object1:51:01:01:11:034:0:0:22:UPoseableMeshComponent1:00:",
+      "is_method": false,
+      "is_const": false,
+      "is_imported": false,
+      "t3_key": "0x696040c9fa729960",
+      "t3_offset": 63274,
+      "actual_parameter_and_return_datatypes": [
+        {
+          "full_identity": "0:0:6:AActor1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:017:0:0:6:AActor1:00:"
+        },
+        {
+          "full_identity": "0:0:5:FName1:00:",
+          "token": 5,
+          "flags": [
+            1,
+            1,
+            0,
+            1,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:11:11:01:016:0:0:5:FName1:00:"
+        },
+        {
+          "full_identity": "0:0:22:UPoseableMeshComponent1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:034:0:0:22:UPoseableMeshComponent1:00:"
+        }
+      ],
+      "actual_t4_ids_linked_to_t3_key": [
+        886612079
+      ],
+      "registrar_engine_function_id": 82041,
+      "id_note": "T4 values are remapped cache OldReference IDs. Exact function identity, owner, namespace, flags and every datatype token/flag are checked.",
+      "qualified": true
+    },
+    {
+      "name": "GetSkinnedAsset",
+      "namespace": "",
+      "full_identity": "6:method0:0:33:0:0:21:USkinnedMeshComponent1:00:15:GetSkinnedAsset1:10:51:6:object1:51:01:01:11:025:0:0:13:USkinnedAsset1:00:",
+      "is_method": true,
+      "is_const": true,
+      "is_imported": false,
+      "t3_key": "0x684192ecc937fec8",
+      "t3_offset": 63461,
+      "actual_parameter_and_return_datatypes": [
+        {
+          "full_identity": "0:0:13:USkinnedAsset1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:025:0:0:13:USkinnedAsset1:00:"
+        }
+      ],
+      "actual_t4_ids_linked_to_t3_key": [
+        1211529862
+      ],
+      "registrar_engine_function_id": 56323,
+      "id_note": "T4 values are remapped cache OldReference IDs. Exact function identity, owner, namespace, flags and every datatype token/flag are checked.",
+      "qualified": true
+    },
+    {
+      "name": "SetSkinnedAssetAndUpdate",
+      "namespace": "",
+      "full_identity": "6:method0:0:33:0:0:21:USkinnedMeshComponent1:00:24:SetSkinnedAssetAndUpdate1:080:6:object1:51:01:01:11:025:0:0:13:USkinnedAsset1:00:,9:primitive2:651:01:01:01:0,27:9:primitive2:821:01:01:01:0",
+      "is_method": true,
+      "is_const": false,
+      "is_imported": false,
+      "t3_key": "0x69240777b83daf78",
+      "t3_offset": 63557,
+      "actual_parameter_and_return_datatypes": [
+        {
+          "full_identity": "0:0:13:USkinnedAsset1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:025:0:0:13:USkinnedAsset1:00:"
+        },
+        {
+          "full_identity": null,
+          "token": 65,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:651:01:01:01:0"
+        },
+        {
+          "full_identity": null,
+          "token": 82,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:821:01:01:01:0"
+        }
+      ],
+      "actual_t4_ids_linked_to_t3_key": [
+        1982820237
+      ],
+      "registrar_engine_function_id": 56343,
+      "id_note": "T4 values are remapped cache OldReference IDs. Exact function identity, owner, namespace, flags and every datatype token/flag are checked.",
+      "qualified": true
+    },
+    {
+      "name": "CopyPoseFromSkeletalComponent",
+      "namespace": "",
+      "full_identity": "6:method0:0:34:0:0:22:UPoseableMeshComponent1:00:29:CopyPoseFromSkeletalComponent1:061:6:object1:51:01:01:11:034:0:0:22:USkeletalMeshComponent1:00:,27:9:primitive2:821:01:01:01:0",
+      "is_method": true,
+      "is_const": false,
+      "is_imported": false,
+      "t3_key": "0x655f9d23d379b508",
+      "t3_offset": 61563,
+      "actual_parameter_and_return_datatypes": [
+        {
+          "full_identity": "0:0:22:USkeletalMeshComponent1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:034:0:0:22:USkeletalMeshComponent1:00:"
+        },
+        {
+          "full_identity": null,
+          "token": 82,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:821:01:01:01:0"
+        }
+      ],
+      "actual_t4_ids_linked_to_t3_key": [
+        1030587520
+      ],
+      "registrar_engine_function_id": 60215,
+      "id_note": "T4 values are remapped cache OldReference IDs. Exact function identity, owner, namespace, flags and every datatype token/flag are checked.",
+      "qualified": true
+    },
+    {
+      "name": "ResetBoneTransformByName",
+      "namespace": "",
+      "full_identity": "6:method0:0:34:0:0:22:UPoseableMeshComponent1:00:24:ResetBoneTransformByName1:043:6:object1:51:01:01:01:016:0:0:5:FName1:00:,27:9:primitive2:821:01:01:01:0",
+      "is_method": true,
+      "is_const": false,
+      "is_imported": false,
+      "t3_key": "0x659650f1703a17d8",
+      "t3_offset": 61837,
+      "actual_parameter_and_return_datatypes": [
+        {
+          "full_identity": "0:0:5:FName1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:016:0:0:5:FName1:00:"
+        },
+        {
+          "full_identity": null,
+          "token": 82,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:821:01:01:01:0"
+        }
+      ],
+      "actual_t4_ids_linked_to_t3_key": [
+        1370649347
+      ],
+      "registrar_engine_function_id": 60220,
+      "id_note": "T4 values are remapped cache OldReference IDs. Exact function identity, owner, namespace, flags and every datatype token/flag are checked.",
+      "qualified": true
+    },
+    {
+      "name": "GetBoneTransformByName",
+      "namespace": "",
+      "full_identity": "6:method0:0:34:0:0:22:UPoseableMeshComponent1:00:22:GetBoneTransformByName1:093:6:object1:51:01:01:01:016:0:0:5:FName1:00:,6:object1:51:01:01:01:023:0:0:11:EBoneSpaces1:00:,48:6:object1:51:01:01:01:022:0:0:10:FTransform1:00:",
+      "is_method": true,
+      "is_const": false,
+      "is_imported": false,
+      "t3_key": "0x65da999fae3b98b0",
+      "t3_offset": 61388,
+      "actual_parameter_and_return_datatypes": [
+        {
+          "full_identity": "0:0:5:FName1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:016:0:0:5:FName1:00:"
+        },
+        {
+          "full_identity": "0:0:11:EBoneSpaces1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:023:0:0:11:EBoneSpaces1:00:"
+        },
+        {
+          "full_identity": "0:0:10:FTransform1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:022:0:0:10:FTransform1:00:"
+        }
+      ],
+      "actual_t4_ids_linked_to_t3_key": [
+        757670160
+      ],
+      "registrar_engine_function_id": 60219,
+      "id_note": "T4 values are remapped cache OldReference IDs. Exact function identity, owner, namespace, flags and every datatype token/flag are checked.",
+      "qualified": true
+    },
+    {
+      "name": "AddTickPrerequisiteComponent",
+      "namespace": "",
+      "full_identity": "6:method0:0:27:0:0:15:UActorComponent1:00:28:AddTickPrerequisiteComponent1:054:6:object1:51:01:01:11:027:0:0:15:UActorComponent1:00:,27:9:primitive2:821:01:01:01:0",
+      "is_method": true,
+      "is_const": false,
+      "is_imported": false,
+      "t3_key": "0x61dc6ed4ddf3f990",
+      "t3_offset": 62651,
+      "actual_parameter_and_return_datatypes": [
+        {
+          "full_identity": "0:0:15:UActorComponent1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:027:0:0:15:UActorComponent1:00:"
+        },
+        {
+          "full_identity": null,
+          "token": 82,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:821:01:01:01:0"
+        }
+      ],
+      "actual_t4_ids_linked_to_t3_key": [
+        1495254382
+      ],
+      "registrar_engine_function_id": 54618,
+      "id_note": "T4 values are remapped cache OldReference IDs. Exact function identity, owner, namespace, flags and every datatype token/flag are checked.",
+      "qualified": true
+    },
+    {
+      "name": "RemoveTickPrerequisiteComponent",
+      "namespace": "",
+      "full_identity": "6:method0:0:27:0:0:15:UActorComponent1:00:31:RemoveTickPrerequisiteComponent1:054:6:object1:51:01:01:11:027:0:0:15:UActorComponent1:00:,27:9:primitive2:821:01:01:01:0",
+      "is_method": true,
+      "is_const": false,
+      "is_imported": false,
+      "t3_key": "0x6e86fa1830e02770",
+      "t3_offset": 62503,
+      "actual_parameter_and_return_datatypes": [
+        {
+          "full_identity": "0:0:15:UActorComponent1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:027:0:0:15:UActorComponent1:00:"
+        },
+        {
+          "full_identity": null,
+          "token": 82,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:821:01:01:01:0"
+        }
+      ],
+      "actual_t4_ids_linked_to_t3_key": [
+        714388111
+      ],
+      "registrar_engine_function_id": 54632,
+      "id_note": "T4 values are remapped cache OldReference IDs. Exact function identity, owner, namespace, flags and every datatype token/flag are checked.",
+      "qualified": true
+    }
+  ],
+  "scope": "Exactly three plain T1/T2 identities and eight T3/T4 signatures/links. No runtime, visual, tick metadata or bytecode argument-value claim."
+}

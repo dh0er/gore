@@ -1,0 +1,206 @@
+{
+  "name": "npc kampf - B freie flaeche",
+  "slot": 64,
+  "profile_id": 2,
+  "source": {
+    "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\G1R-063.sav",
+    "sha256": "da4e3b40976d5e84306474dcd36f8a779ebb9b90aab98df686565d03733dd40a",
+    "bytes": 1128242
+  },
+  "prepared": {
+    "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-weapon-voice\\flat-ground\\G1R-064.sav",
+    "sha256": "9316068d8ac010403ef36af05031e4c6ed1a555cc9db34cb2cecba2f7335744b",
+    "bytes": 1143389
+  },
+  "dll": {
+    "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-weapon-voice\\runtime\\gore_save.dll",
+    "sha256": "0098bddb2bcc4666939aca06da5d288d4843525419bd8028264dda242ad1212e",
+    "bytes": 17927168
+  },
+  "hero_transform": {
+    "location": {
+      "x": 105666.15106149501,
+      "y": -111023.70150332985,
+      "z": -4620.597191915637
+    },
+    "rotation": {
+      "pitch": 1.1927225125621254e-05,
+      "roll": 1.1311144173415625e-05,
+      "yaw": -148.16991529672242
+    }
+  },
+  "B_before": {
+    "inertRoutineClass": "/Script/Angelscript.DailyRoutine_Empty",
+    "pose": {
+      "compact": false,
+      "location": {
+        "x": 108202.97538223336,
+        "y": -107578.47141139425,
+        "z": -4620.6945518414905
+      },
+      "locationPath": [
+        "m_GenericData",
+        "{CharacterStates}",
+        "NPCCharacters",
+        "PositionByGlobalId",
+        "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+        "CharacterLocation"
+      ],
+      "rotation": {
+        "pitch": 0.0,
+        "roll": 0.0,
+        "yaw": 51.80774471476583
+      },
+      "rotationPath": [
+        "m_GenericData",
+        "{CharacterStates}",
+        "NPCCharacters",
+        "PositionByGlobalId",
+        "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+        "CharacterRotation"
+      ],
+      "spawnLocation": {
+        "x": 125313.49,
+        "y": -142845.3,
+        "z": 1713.68
+      },
+      "spawnLocationPath": [
+        "m_GenericData",
+        "{CharacterStates}",
+        "NPCCharacters",
+        "PositionByGlobalId",
+        "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+        "SpawnLocation"
+      ],
+      "spawnRotation": {
+        "pitch": 0.0,
+        "roll": 0.0,
+        "yaw": 89.99999999999999
+      },
+      "spawnRotationPath": [
+        "m_GenericData",
+        "{CharacterStates}",
+        "NPCCharacters",
+        "PositionByGlobalId",
+        "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+        "SpawnRotation"
+      ]
+    },
+    "routineClass": "/Script/Angelscript.DailyRoutine_GoreSeatGuardActivities",
+    "routineClassPath": [
+      "m_GenericData",
+      "{CharacterStates}",
+      "NPCCharacters",
+      "DailyRoutineByGlobalId",
+      "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+      "DailyRoutineClass"
+    ],
+    "undo": null
+  },
+  "B_after": {
+    "inertRoutineClass": "/Script/Angelscript.DailyRoutine_Empty",
+    "pose": {
+      "compact": false,
+      "location": {
+        "x": 105496.22788481414,
+        "y": -111129.18189973924,
+        "z": -4620.597191915637
+      },
+      "locationPath": [
+        "m_GenericData",
+        "{CharacterStates}",
+        "NPCCharacters",
+        "PositionByGlobalId",
+        "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+        "CharacterLocation"
+      ],
+      "rotation": {
+        "pitch": 0.0,
+        "roll": 0.0,
+        "yaw": 31.830084703277578
+      },
+      "rotationPath": [
+        "m_GenericData",
+        "{CharacterStates}",
+        "NPCCharacters",
+        "PositionByGlobalId",
+        "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+        "CharacterRotation"
+      ],
+      "spawnLocation": {
+        "x": 125313.49,
+        "y": -142845.3,
+        "z": 1713.68
+      },
+      "spawnLocationPath": [
+        "m_GenericData",
+        "{CharacterStates}",
+        "NPCCharacters",
+        "PositionByGlobalId",
+        "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+        "SpawnLocation"
+      ],
+      "spawnRotation": {
+        "pitch": 0.0,
+        "roll": 0.0,
+        "yaw": 89.99999999999999
+      },
+      "spawnRotationPath": [
+        "m_GenericData",
+        "{CharacterStates}",
+        "NPCCharacters",
+        "PositionByGlobalId",
+        "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+        "SpawnRotation"
+      ]
+    },
+    "routineClass": "/Script/Angelscript.DailyRoutine_Empty",
+    "routineClassPath": [
+      "m_GenericData",
+      "{CharacterStates}",
+      "NPCCharacters",
+      "DailyRoutineByGlobalId",
+      "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+      "DailyRoutineClass"
+    ],
+    "undo": null
+  },
+  "distance_game_units": 199.99999999999625,
+  "changes": "B CharacterLocation/CharacterRotation and DailyRoutine_Empty; new public save name.",
+  "checks": {
+    "source_and_existing_saves_unchanged": true,
+    "hero_unchanged": true,
+    "hero_and_B_inventory_unchanged": true,
+    "B_attributes_unchanged": true,
+    "B_spawn_pose_unchanged": true,
+    "A_position_and_routine_unchanged": true
+  },
+  "schema": "gore.npc-weapon-voice.flat-ground-input.v1",
+  "date": "2026-09-11",
+  "published_save": {
+    "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\G1R-064.sav",
+    "sha256": "92b44ce937274c40d5439074f1b2b1b9c7a5a3a4b7899a53d8fb327578cd3954",
+    "bytes": 1143389
+  },
+  "persistent_before": {
+    "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\PersistentDataList.sav",
+    "sha256": "868cf5db4172be23b48280a9b3dedab01f037e5db593b50166224d93d8cbf9d5",
+    "bytes": 67408
+  },
+  "persistent_after": {
+    "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\PersistentDataList.sav",
+    "sha256": "8e752993388426ded2d53e427c8d5652a67286cd6fb6ad0d27d221780a57a9ca",
+    "bytes": 68375
+  },
+  "profile_backup": {
+    "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\goresave_backups\\PersistentDataList.sav.bak.1789112267",
+    "sha256": "868cf5db4172be23b48280a9b3dedab01f037e5db593b50166224d93d8cbf9d5",
+    "bytes": 67408
+  },
+  "both_public_identities_and_cache_match": true,
+  "central_registry_adds_64_once": true,
+  "private_stream_preserved_during_import": true,
+  "published": true,
+  "runtime": "pending user; B placement and combat selection not observed by agent",
+  "comparison_limit": "Routine is disabled in this copy to prevent B walking back; live reachability still needs game observation."
+}

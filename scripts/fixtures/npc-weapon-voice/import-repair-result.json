@@ -1,0 +1,89 @@
+{
+  "schema": "gore.npc-weapon-voice.import-repair.v1",
+  "date": "2026-09-10",
+  "before_save_sha256": "5c5a7259fc3202a520d883f25f947ed891b92efeb03fa8df56ec5792ea02a740",
+  "after_save": {
+    "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\G1R-061.sav",
+    "sha256": "7167007aa992627588d8a23cdaf2ef8faa8eb09861dd426e48b639a059dfa527",
+    "bytes": 1124921
+  },
+  "profile_before": {
+    "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\PersistentDataList.sav",
+    "sha256": "f0a1d3af5b7acd881f8790fdbb9bcc5ef4281bf7abb9936d553d372654c84c2e",
+    "bytes": 65457
+  },
+  "profile_after": {
+    "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\PersistentDataList.sav",
+    "sha256": "6175db60e1efe5a0abbfdafab21d7bc020697d7b3307bf0a0c005c34141fdc74",
+    "bytes": 65477
+  },
+  "dll": {
+    "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-weapon-voice\\runtime\\gore_save.dll",
+    "sha256": "0098bddb2bcc4666939aca06da5d288d4843525419bd8028264dda242ad1212e",
+    "bytes": 17927168
+  },
+  "both_public_branches_agree": true,
+  "private_stream_and_trailer_byte_identical": true,
+  "other_numbered_saves_unchanged": true,
+  "cached_metadata_matches_source54_public": true,
+  "source54_public_metadata": {
+    "mapName": "MainMap",
+    "chapterId": 0,
+    "timePlayedSeconds": 1710.3161790370941,
+    "timeLoadedSeconds": 0.0,
+    "quickSave": false,
+    "autoSave": false
+  },
+  "central_registry_contains_61_exactly_once": true,
+  "other_central_registry_entries_unchanged": true,
+  "cached_metadata": {
+    "autoSave": false,
+    "chapterId": 0,
+    "mapName": "MainMap",
+    "playerSaveName": "npc voice - waffentest start",
+    "profileId": 2,
+    "quickSave": false,
+    "slotName": "G1R-061",
+    "timeLoadedSeconds": 0.0,
+    "timePlayedSeconds": 1710.3161790370941
+  },
+  "runtime": "pending user visibility/load test; agent did not launch/control the game",
+  "complete_report": {
+    "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-weapon-voice\\repair-live-result.json",
+    "sha256": "c2da84766390a00919120059eba85d8ffb4d3839480999b1fef79aea8d08e1da",
+    "bytes": 22438
+  },
+  "backups": [
+    {
+      "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\goresave_backups\\G1R-061.sav.bak.1789074604",
+      "sha256": "5c5a7259fc3202a520d883f25f947ed891b92efeb03fa8df56ec5792ea02a740",
+      "bytes": 1124915
+    },
+    {
+      "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\goresave_backups\\G1R-061.sav.bak.1789074605",
+      "sha256": "e6226dd2818cd3b95e1d119858aad495f16b9b5cd8875d455df0a4e675d9d646",
+      "bytes": 1124921
+    },
+    {
+      "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\goresave_backups\\PersistentDataList.sav.bak.1789074605",
+      "sha256": "f0a1d3af5b7acd881f8790fdbb9bcc5ef4281bf7abb9936d553d372654c84c2e",
+      "bytes": 65457
+    }
+  ],
+  "preview_matches_live_save_and_profile": true,
+  "tests": {
+    "library_passed": 471,
+    "library_ignored": 22,
+    "library_failed": 0,
+    "public_filter_passed": 7,
+    "profile_assignment_filter_passed": 5,
+    "library_build": "passed",
+    "warning": "existing retoc private-interface warning"
+  },
+  "time_loaded_note": "Embedded source54 timeLoaded is0; its cached row had a later value. Incoming public metadata is authoritative for import.",
+  "source": {
+    "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\crates\\gore-save\\src\\lib.rs",
+    "sha256": "55a95226d7f5137393ad2cefeafddd4cc479446317980422546173a80c40c6f1",
+    "bytes": 1289890
+  }
+}

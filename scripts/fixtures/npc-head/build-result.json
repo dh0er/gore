@@ -1,0 +1,97 @@
+{
+  "schema": "gore.npc-head.build-result.v1",
+  "package": "NpcHeadProbe",
+  "version": "0.1.5",
+  "game_build_id": 24878692,
+  "backend": "standalone",
+  "artifacts": {
+    "NpcHeadProbe.full.Cache": {
+      "bytes": 124607387,
+      "sha256": "d1cb0307aa5ab0f81c998df836030dd03f1860ffdce29e5f1cfe18c7fd18b128"
+    },
+    "NpcHeadProbe.mini.Cache": {
+      "bytes": 158717,
+      "sha256": "6e4514c1aac9444566f75b923d112e5425942b4bddb86b1cd67c4b5f7cfa1cc7"
+    },
+    "generation-receipt.json": {
+      "bytes": 1796413,
+      "sha256": "8076f6e4284268cc226acbca21dc76b56387e038d6c130f40cfefe48041e1c04"
+    },
+    "spec.json": {
+      "bytes": 4081,
+      "sha256": "de77d9811f2ff214f81e81c74420e86f5b4c833356906a7fc2b41a98110a38fb"
+    }
+  },
+  "tests": {
+    "native_qualification_and_final_composition": 4,
+    "sequential_cache_guards": 85,
+    "native_arity": 2
+  },
+  "source_preservation": {
+    "source_module_count": 7319,
+    "changed_modules_from_0_1_4": [
+      "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
+      "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as"
+    ],
+    "a_only_appended_head_choices": true,
+    "b_only_c_schedule_and_head_controller": true,
+    "voice_and_localization_inputs_unchanged": true,
+    "source_sha256": {
+      "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as": "60cb9734c398549337d0028a4e380c288230feaf5f7d64b1eb53d6947a87dbdb",
+      "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as": "e04c2b726dd9b0c39752cdf01e859da7c1f7993aa363cf3d788fb9970fd23197"
+    }
+  },
+  "deployment": {
+    "manager_status": "in_sync",
+    "loadout": [
+      {
+        "enabled": true,
+        "id": "npcheadprobe-7d814d17"
+      }
+    ],
+    "files": {
+      "shipping": {
+        "bytes": 124607387,
+        "sha256": "85f2d7bea34888cae50f7fb5a2c26ef0b91bf3ac582f75d19fa729e297bdc364",
+        "backup_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511"
+      },
+      "localization": {
+        "bytes": 37095936,
+        "sha256": "f3c6948bac217b69c457afeed4346bd99540ed47935d52d47db70efc268057d1",
+        "backup_sha256": "e9bc9a0e87b722f62fb352adfeec26dacdaa42630d16aef2cb2abc6975c8dd03"
+      },
+      "voice": {
+        "bytes": 915865276,
+        "sha256": "da44012393ca5dfaeb37ae37625c054a1e9b07d86aacf6e68344e3ff066339c9",
+        "backup_sha256": "ff7aa5b219c2e0ec9840570e42597d3ea3053a7ad592cf7cfa5b61dd895ecd29"
+      }
+    },
+    "compiled_installed_A_B_exact": true,
+    "native_event_metadata_exact": true,
+    "original_voice_crc_size_preserved": 33323,
+    "voice_payloads_exact": 5,
+    "localization_matches_passed_voice_campaign": true,
+    "loc_rows": 43904,
+    "baseline_saves_unchanged": [
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42
+    ],
+    "game_launched_by_agent": false,
+    "runtime_proven": false
+  },
+  "head_native_event_metadata_exact": true,
+  "load_object_arguments_and_path_readback_exact": true,
+  "head_path_present_once_in_full_mini_installed": true,
+  "user_runtime_test": "failed appearance; option 15 restore passed. See runtime-result.json; full restart and duplicate prevention not established."
+}

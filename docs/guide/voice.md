@@ -376,6 +376,57 @@ inspect Opus structurally. Lip movement in all five cases isolates the facial
 motion from successful audio playback: it is generic placeholder animation,
 not accurate audio-derived lip sync.
 
+**New recordings and voice selection on an invented NPC.**
+
+On 2026-09-06, BuildID `24878692`, the user completed the eight-case
+`NpcVoiceProof` campaign on `GORE_TEST_A`. It played shipped recordings and five
+new recordings under `german_new/GoreMods/NpcVoiceProof/`, with new subtitle IDs.
+The three tested Vorbis layouts (48 kHz mono, 44.1 kHz mono, 48 kHz stereo)
+worked on this invented actor. An A → Hero → A exchange kept the correct
+speaker turns; its synthetic voices were deliberately distinct, with English
+speech and German subtitles.
+
+Separate generic `Address_Call` and `DailyRoutine_Mumble` requests used A's
+assigned Diego Voice05 subset. Repeat playback, skipping and playback after a
+full restart passed. The deliberate missing-recording case displayed its silent
+subtitle and continued to the next recorded line. These are user-reported
+observations; no loopback correlation was measured in this campaign.
+
+Saves `G1R-029.sav` and `G1R-030.sav` additionally record all eight selected
+topics and preserve the quest and NPC state. See the
+[voice results](../../scripts/fixtures/npc-voice/RESULTS.md) for exact evidence.
+This extends the tested speaker/path coverage beyond Diego. It does not cover
+other archives, arbitrary voice profiles, natural combat/routine triggers or
+line-specific facial animation; lip sync was excluded by the user.
+
+**Natural reaction on an invented NPC.** During the later0.1.11 sitting/watch
+test, the user heard B warn Hero to leave a privately owned hut. The fixture did
+not explicitly request this line. Save56 records B as a witness to Hero's
+trespassing against Digger26_531; B retains Diego Voice05. This qualifies that
+natural reaction and speaker, including a reaction while seated. The exact
+recording ID and why warnings varied between the saved situations were not
+captured. See the [trespassing evidence and next check](../../scripts/fixtures/npc-seat-guard/TRESPASSING.md).
+The subsequent weapon tests below qualify a natural combat-start line as well.
+Everyday/routine triggers and another generic voice profile remain open.
+
+On2026-09-09 B also spoke naturally when threatened with bare fists. Lowering
+fists after warning1 ended the warning, but after warning2 B could remain stuck
+and block saving until the player moved away. Voice playback is a partial pass;
+cleanup is an open AI defect. This was not an equipped-weapon test. Saves57/58,
+the exact scope and the original-cache audit are in the
+[warning result](../../scripts/fixtures/npc-weapon-warning/README.md).
+The subsequent0.1.12 correction passed the user's first/second-warning cleanup,
+nearby saving and reload tests, including remembered escalation when threatening
+B again after reload. See the [recovery result](../../scripts/fixtures/npc-weapon-warning/RECOVERY.md).
+
+On2026-09-10 the equipped-sword test also produced B's attack and distinct natural
+combat-start speech. The user recalled lines such as "jetzt gibts aufs maul" or
+"na dann mal los"; no exact recording ID is inferred. The same actor's bow choice
+at close range remains a separate combat-AI issue: on2026-09-11, open-ground
+test64 reproduced sword selection during warning followed by bow selection at
+combat escalation. This does not invalidate the observed voice trigger. See
+the [weapon/voice result](../../scripts/fixtures/npc-weapon-voice/README.md).
+
 **Existing replacements.**
 
 A replacement has now also been heard. On BuildID 24539464, with the game's

@@ -722,7 +722,8 @@ impl RefResolver {
     /// wrapper). Their cache FunctionReference is the only owner-specific signature evidence.
     /// `FPerceptionHandler::AddEvent(1)` versus the unrelated Binds-only
     /// `UTimelineComponent::AddEvent(2)` is the concrete over-count this gate prevents.
-    /// Free/static calls without an owner retain the unambiguous by-name fallback.
+    /// Free/static calls without an owner prefer their exact FunctionReference signature;
+    /// the by-name fallback is used only when that signature is unavailable.
     pub fn native_arity_by_ptr(&self, ptr: i64, name: &str) -> Option<usize> {
         // batch-20 Class C: natives whose tail-table FunctionReferences param list UNDERCOUNTS
         // the live game API (proven by the in-game error candidates). Keyed (owner, name); the
@@ -752,7 +753,14 @@ impl RefResolver {
                 let cache = self.func_params.get(&ptr)?.len();
                 (by_name <= cache).then_some(by_name)
             }),
-            None => n.arity_by_name(name),
+            // A manually registered global may be absent from Binds while an unrelated
+            // same-named method is present: LoadObject(UObject, const FString&) versus
+            // UGroundTruthData::LoadObject(). Do not let the latter erase the global's args.
+            None => self
+                .func_params
+                .get(&ptr)
+                .map(Vec::len)
+                .or_else(|| n.arity_by_name(name)),
         }
     }
     /// Best-known native arity for a call by function id.
@@ -1664,7 +1672,7 @@ mod tests {
         assert_eq!(refs.native_arity_by_ptr(10, "AddEvent"), None);
         // Exact owner/name evidence still overrides the cache declaration.
         assert_eq!(refs.native_arity_by_ptr(11, "Exact"), Some(1));
-        // Ownerless free/static calls retain the safe globally-unambiguous fallback.
+        // Ownerless free/static calls without a T3 signature retain the by-name fallback.
         assert_eq!(refs.native_arity_by_ptr(12, "AddEvent"), Some(2));
         // A by-name arity that only suppresses source-default args remains safe.
         assert_eq!(refs.native_arity_by_ptr(13, "Last"), Some(0));
@@ -1673,6 +1681,25 @@ mod tests {
         assert_eq!(refs.native_arity_by_ptr(14, "GetComponent"), None);
         // An exact object-owner entry remains authoritative; only the name-only fallback is barred.
         assert_eq!(refs.native_arity_by_ptr(15, "ExactObject"), Some(1));
+    }
+
+    #[test]
+    fn global_native_arity_keeps_exact_t3_args_over_unrelated_zero_arg_method() {
+        let mut refs = RefResolver::default();
+        refs.func_params
+            .insert(10, vec![DataType::default(), DataType::default()]);
+        refs.func_owner.insert(11, "UGroundTruthData".to_string());
+        refs.native = Some(super::super::binds::NativeApi::from_test_arities(
+            &[("UGroundTruthData", "LoadObject", 0)],
+            &[("LoadObject", Some(0))],
+        ));
+
+        // The native global's T3 record declares (UObject, const FString&). The only
+        // Binds declaration is an unrelated zero-argument method with the same name.
+        assert_eq!(refs.native_arity_by_ptr(10, "LoadObject"), Some(2));
+        assert_eq!(refs.native_arity_by_ptr(11, "LoadObject"), Some(0));
+        // Preserve the existing fallback when no exact pointer-specific signature exists.
+        assert_eq!(refs.native_arity_by_ptr(12, "LoadObject"), Some(0));
     }
 
     #[test]

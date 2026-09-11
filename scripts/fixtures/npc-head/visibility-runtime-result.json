@@ -1,0 +1,45 @@
+{
+  "schema": "gore.npc-head.runtime-result.v1",
+  "package": "NpcHeadVisibilityFix",
+  "version": "0.1.6",
+  "tested_by": "user",
+  "date": "2026-09-08",
+  "appearance": "failed: severe vertical stretching remains",
+  "restore_15": "passed, user confirmed",
+  "full_restart": "not performed because appearance failed",
+  "save": {
+    "slot": 44,
+    "name": "npc kopf - materialfix",
+    "sha256": "f5478f254f9cd08cf86649def45e6a5ec4141688a7ba4f4a7eb670dddff22287",
+    "bytes": 1089752
+  },
+  "diagnostics": {
+    "gore_head_v1_mode": 1.0,
+    "gore_head_v1_loaded": 1.0,
+    "gore_head_v1_bones": 1.0,
+    "gore_head_v1_matched": 31.0,
+    "gore_head_v1_hidden": 186.0,
+    "gore_head_v2_expected": 186.0,
+    "gore_head_v1_status": 4.0
+  },
+  "screenshots": [
+    {
+      "file": "codex-clipboard-8303b77e-8a7c-45ab-b69a-7799010c792b.png",
+      "bytes": 1306766,
+      "sha256": "7bae8749c78a3d09728a8845ee306572253072124d8e41dcf0ea30d80e2b660d"
+    },
+    {
+      "file": "codex-clipboard-0dcda69e-904a-46b6-8019-659cf1d1704e.png",
+      "bytes": 1185463,
+      "sha256": "49c03f53137b988689f907aefd65407f5f7024ca0a0be44029214869c376e24c"
+    },
+    {
+      "file": "codex-clipboard-24879050-7732-439a-b061-d0934a97b9ae.png",
+      "bytes": 920267,
+      "sha256": "386ba6920f5d33d9d7bbcd27fa789887cea0ff0a5692839c37c1098a6c50ef21"
+    }
+  ],
+  "original_save_unchanged": true,
+  "game_launched_by_agent": false,
+  "finding": "All 186 requested material/LOD pairs report hidden; visibility change alone does not fix replacement head deformation."
+}

@@ -1,0 +1,467 @@
+{
+  "schema": "gore.npc-seat-guard.trespassing-result.v1",
+  "date": "2026-09-08",
+  "classification": "natural trespassing reaction observed; phase-specific cause unresolved",
+  "area": "Area.OldCamp.OuterRing.Hut.31",
+  "owner": "OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531",
+  "comparisons": [
+    {
+      "slot": 53,
+      "name": "npc sitz-wache - sitzen",
+      "clock": "day 12 08:49:01",
+      "global_crimes": [
+        {
+          "ID": "-1292817873",
+          "CrimeType/TagName": "Crime.Trespassing.OnPerson",
+          "AreaTag/TagName": "Area.OldCamp.OuterRing.Hut.31",
+          "TimeCommitted/TotalSeconds": "1068501.1022631675",
+          "bIsForgiven": "false",
+          "AffectedEntitySource": "ECrimeAffectedEntitySource::Area",
+          "ItemDefinitionClass": "",
+          "InteractiveObjectDefinitionClass": "",
+          "CriminalGlobalID": "Hero",
+          "CriminalGuild/TagName": "Guild.None",
+          "VictimGlobalIDs/[0]": "OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531",
+          "VictimGuilds": "",
+          "TrueCriminalGlobalID": "None"
+        }
+      ],
+      "B_witness_crimes": [],
+      "owner_position": {
+        "inertRoutineClass": "/Script/Angelscript.DailyRoutine_Empty",
+        "pose": {
+          "compact": false,
+          "location": {
+            "x": 108248.31721283817,
+            "y": -107820.78834396035,
+            "z": -4622.896063514913
+          },
+          "locationPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "PositionByGlobalId",
+            "{OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531}",
+            "CharacterLocation"
+          ],
+          "rotation": {
+            "pitch": 0.00035203986626256494,
+            "roll": 0.0004015652646035758,
+            "yaw": 6.155541607737658
+          },
+          "rotationPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "PositionByGlobalId",
+            "{OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531}",
+            "CharacterRotation"
+          ],
+          "spawnLocation": {
+            "x": 108198.78,
+            "y": -107890.0,
+            "z": -4720.0
+          },
+          "spawnLocationPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "PositionByGlobalId",
+            "{OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531}",
+            "SpawnLocation"
+          ],
+          "spawnRotation": {
+            "pitch": 0.0,
+            "roll": 0.0,
+            "yaw": 139.99999999999997
+          },
+          "spawnRotationPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "PositionByGlobalId",
+            "{OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531}",
+            "SpawnRotation"
+          ]
+        },
+        "routineClass": "/Script/Angelscript.DailyRoutine_OC_VLK_Digger26_531_Start",
+        "routineClassPath": [
+          "m_GenericData",
+          "{CharacterStates}",
+          "NPCCharacters",
+          "DailyRoutineByGlobalId",
+          "{OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531}",
+          "DailyRoutineClass"
+        ],
+        "undo": null
+      },
+      "typed_context_evidence": {
+        "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-seat-guard\\evidence\\053-trespass-context.json",
+        "sha256": "034c11950e2234a6ef0a54fff248a607cccc20063363981b8afc27b7048f420d",
+        "bytes": 291856
+      }
+    },
+    {
+      "slot": 54,
+      "name": "npc sitz-wache - wache",
+      "clock": "day 12 12:04:20",
+      "global_crimes": [
+        {
+          "ID": "-1292817873",
+          "CrimeType/TagName": "Crime.Trespassing.OnPerson",
+          "AreaTag/TagName": "Area.OldCamp.OuterRing.Hut.31",
+          "TimeCommitted/TotalSeconds": "1068501.1022631675",
+          "bIsForgiven": "true",
+          "AffectedEntitySource": "ECrimeAffectedEntitySource::Area",
+          "ItemDefinitionClass": "",
+          "InteractiveObjectDefinitionClass": "",
+          "CriminalGlobalID": "Hero",
+          "CriminalGuild/TagName": "Guild.None",
+          "VictimGlobalIDs/[0]": "OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531",
+          "VictimGuilds": "",
+          "TrueCriminalGlobalID": "None"
+        }
+      ],
+      "B_witness_crimes": [],
+      "owner_position": {
+        "inertRoutineClass": "/Script/Angelscript.DailyRoutine_Empty",
+        "pose": {
+          "compact": false,
+          "location": {
+            "x": 108248.31721283817,
+            "y": -107820.78834396035,
+            "z": -4622.896063514913
+          },
+          "locationPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "PositionByGlobalId",
+            "{OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531}",
+            "CharacterLocation"
+          ],
+          "rotation": {
+            "pitch": 0.00035203986626256494,
+            "roll": 0.0004015652646035758,
+            "yaw": 6.155541607737658
+          },
+          "rotationPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "PositionByGlobalId",
+            "{OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531}",
+            "CharacterRotation"
+          ],
+          "spawnLocation": {
+            "x": 108198.78,
+            "y": -107890.0,
+            "z": -4720.0
+          },
+          "spawnLocationPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "PositionByGlobalId",
+            "{OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531}",
+            "SpawnLocation"
+          ],
+          "spawnRotation": {
+            "pitch": 0.0,
+            "roll": 0.0,
+            "yaw": 139.99999999999997
+          },
+          "spawnRotationPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "PositionByGlobalId",
+            "{OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531}",
+            "SpawnRotation"
+          ]
+        },
+        "routineClass": "/Script/Angelscript.DailyRoutine_OC_VLK_Digger26_531_Start",
+        "routineClassPath": [
+          "m_GenericData",
+          "{CharacterStates}",
+          "NPCCharacters",
+          "DailyRoutineByGlobalId",
+          "{OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531}",
+          "DailyRoutineClass"
+        ],
+        "undo": null
+      },
+      "typed_context_evidence": {
+        "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-seat-guard\\evidence\\054-trespass-context.json",
+        "sha256": "f83abddb88c1653fa208a996eea511453ad393cbbe19137b8c256e6e57e0e955",
+        "bytes": 291854
+      }
+    },
+    {
+      "slot": 55,
+      "name": "npc sitz-wache - abend",
+      "clock": "day 12 18:02:16",
+      "global_crimes": [
+        {
+          "ID": "-1292817873",
+          "CrimeType/TagName": "Crime.Trespassing.OnPerson",
+          "AreaTag/TagName": "Area.OldCamp.OuterRing.Hut.31",
+          "TimeCommitted/TotalSeconds": "1068501.1022631675",
+          "bIsForgiven": "true",
+          "AffectedEntitySource": "ECrimeAffectedEntitySource::Area",
+          "ItemDefinitionClass": "",
+          "InteractiveObjectDefinitionClass": "",
+          "CriminalGlobalID": "Hero",
+          "CriminalGuild/TagName": "Guild.None",
+          "VictimGlobalIDs/[0]": "OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531",
+          "VictimGuilds": "",
+          "TrueCriminalGlobalID": "None"
+        }
+      ],
+      "B_witness_crimes": [],
+      "owner_position": {
+        "inertRoutineClass": "/Script/Angelscript.DailyRoutine_Empty",
+        "pose": {
+          "compact": false,
+          "location": {
+            "x": 108778.97245899375,
+            "y": -107774.68304962062,
+            "z": -4564.76823046861
+          },
+          "locationPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "PositionByGlobalId",
+            "{OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531}",
+            "CharacterLocation"
+          ],
+          "rotation": {
+            "pitch": -0.0,
+            "roll": 0.0,
+            "yaw": -78.72779820558547
+          },
+          "rotationPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "PositionByGlobalId",
+            "{OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531}",
+            "CharacterRotation"
+          ],
+          "spawnLocation": {
+            "x": 108198.78,
+            "y": -107890.0,
+            "z": -4720.0
+          },
+          "spawnLocationPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "PositionByGlobalId",
+            "{OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531}",
+            "SpawnLocation"
+          ],
+          "spawnRotation": {
+            "pitch": 0.0,
+            "roll": 0.0,
+            "yaw": 139.99999999999997
+          },
+          "spawnRotationPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "PositionByGlobalId",
+            "{OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531}",
+            "SpawnRotation"
+          ]
+        },
+        "routineClass": "/Script/Angelscript.DailyRoutine_OC_VLK_Digger26_531_Start",
+        "routineClassPath": [
+          "m_GenericData",
+          "{CharacterStates}",
+          "NPCCharacters",
+          "DailyRoutineByGlobalId",
+          "{OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531}",
+          "DailyRoutineClass"
+        ],
+        "undo": null
+      },
+      "typed_context_evidence": {
+        "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-seat-guard\\evidence\\055-trespass-context.json",
+        "sha256": "efc2668ed8cd0bdcd0ff06d6d0109d3c10ae120495eaaf715b742a8bff583dcd",
+        "bytes": 291818
+      }
+    },
+    {
+      "slot": 56,
+      "name": "npc sitz-wache - morgen",
+      "clock": "day 13 08:08:07",
+      "global_crimes": [
+        {
+          "ID": "-1292817873",
+          "CrimeType/TagName": "Crime.Trespassing.OnPerson",
+          "AreaTag/TagName": "Area.OldCamp.OuterRing.Hut.31",
+          "TimeCommitted/TotalSeconds": "1068501.1022631675",
+          "bIsForgiven": "true",
+          "AffectedEntitySource": "ECrimeAffectedEntitySource::Area",
+          "ItemDefinitionClass": "",
+          "InteractiveObjectDefinitionClass": "",
+          "CriminalGlobalID": "Hero",
+          "CriminalGuild/TagName": "Guild.None",
+          "VictimGlobalIDs/[0]": "OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531",
+          "VictimGuilds": "",
+          "TrueCriminalGlobalID": "None"
+        },
+        {
+          "ID": "-1786738111",
+          "CrimeType/TagName": "Crime.Trespassing.OnPerson",
+          "AreaTag/TagName": "Area.OldCamp.OuterRing.Hut.31",
+          "TimeCommitted/TotalSeconds": "1152169.206460625",
+          "bIsForgiven": "true",
+          "AffectedEntitySource": "ECrimeAffectedEntitySource::Area",
+          "ItemDefinitionClass": "",
+          "InteractiveObjectDefinitionClass": "",
+          "CriminalGlobalID": "Hero",
+          "CriminalGuild/TagName": "Guild.None",
+          "VictimGlobalIDs/[0]": "OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531",
+          "VictimGuilds": "",
+          "TrueCriminalGlobalID": "None"
+        },
+        {
+          "ID": "1235305178",
+          "CrimeType/TagName": "Crime.Trespassing.OnPerson",
+          "AreaTag/TagName": "Area.OldCamp.OuterRing.Hut.31",
+          "TimeCommitted/TotalSeconds": "1152308.1126419604",
+          "bIsForgiven": "true",
+          "AffectedEntitySource": "ECrimeAffectedEntitySource::Area",
+          "ItemDefinitionClass": "",
+          "InteractiveObjectDefinitionClass": "",
+          "CriminalGlobalID": "Hero",
+          "CriminalGuild/TagName": "Guild.None",
+          "VictimGlobalIDs/[0]": "OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531",
+          "VictimGuilds": "",
+          "TrueCriminalGlobalID": "None"
+        }
+      ],
+      "B_witness_crimes": [
+        {
+          "ID": "-1786738111",
+          "WitnessGlobalID": "GORE_TEST_B-WP_WarningFlock_XT_02",
+          "BaseSeverity": "4.5",
+          "bIsSuppressed": "false",
+          "RelationshipTowardsCriminal": "ERelationship::Neutral",
+          "RelativeRankTowardsCriminal": "ERelationshipRelativeRank::Scum",
+          "HostilityTowardsCriminal": "ERelationshipHostility::None",
+          "bInPartyWithCriminal": "false",
+          "Directness": "ECrimeDirectness::Indirect",
+          "VictimGuildHandles": "0 elements",
+          "VictimCharacterHandles/[0]/VictimGlobalID": "OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531",
+          "VictimCharacterHandles/[0]/RelationshipTowardsPerson": "ERelationship::Neutral",
+          "VictimCharacterHandles/[0]/RelativeRankTowardsPerson": "ERelationshipRelativeRank::LowerThanMe",
+          "VictimCharacterHandles/[0]/HostilityTowardsPerson": "ERelationshipHostility::ProtectFromDifferentGuild",
+          "OriginSource": "ERelativeCrimeOrigin::Witness"
+        },
+        {
+          "ID": "1235305178",
+          "WitnessGlobalID": "GORE_TEST_B-WP_WarningFlock_XT_02",
+          "BaseSeverity": "4.5",
+          "bIsSuppressed": "false",
+          "RelationshipTowardsCriminal": "ERelationship::Neutral",
+          "RelativeRankTowardsCriminal": "ERelationshipRelativeRank::Scum",
+          "HostilityTowardsCriminal": "ERelationshipHostility::None",
+          "bInPartyWithCriminal": "false",
+          "Directness": "ECrimeDirectness::Indirect",
+          "VictimGuildHandles": "0 elements",
+          "VictimCharacterHandles/[0]/VictimGlobalID": "OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531",
+          "VictimCharacterHandles/[0]/RelationshipTowardsPerson": "ERelationship::Neutral",
+          "VictimCharacterHandles/[0]/RelativeRankTowardsPerson": "ERelationshipRelativeRank::LowerThanMe",
+          "VictimCharacterHandles/[0]/HostilityTowardsPerson": "ERelationshipHostility::ProtectFromDifferentGuild",
+          "OriginSource": "ERelativeCrimeOrigin::Witness"
+        }
+      ],
+      "owner_position": {
+        "inertRoutineClass": "/Script/Angelscript.DailyRoutine_Empty",
+        "pose": {
+          "compact": false,
+          "location": {
+            "x": 108248.31721773486,
+            "y": -107820.78834269755,
+            "z": -4622.896063514909
+          },
+          "locationPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "PositionByGlobalId",
+            "{OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531}",
+            "CharacterLocation"
+          ],
+          "rotation": {
+            "pitch": 0.00035033231363352894,
+            "roll": 0.000403272817128227,
+            "yaw": 6.155543315284901
+          },
+          "rotationPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "PositionByGlobalId",
+            "{OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531}",
+            "CharacterRotation"
+          ],
+          "spawnLocation": {
+            "x": 108198.78,
+            "y": -107890.0,
+            "z": -4720.0
+          },
+          "spawnLocationPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "PositionByGlobalId",
+            "{OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531}",
+            "SpawnLocation"
+          ],
+          "spawnRotation": {
+            "pitch": 0.0,
+            "roll": 0.0,
+            "yaw": 139.99999999999997
+          },
+          "spawnRotationPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "PositionByGlobalId",
+            "{OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531}",
+            "SpawnRotation"
+          ]
+        },
+        "routineClass": "/Script/Angelscript.DailyRoutine_OC_VLK_Digger26_531_Start",
+        "routineClassPath": [
+          "m_GenericData",
+          "{CharacterStates}",
+          "NPCCharacters",
+          "DailyRoutineByGlobalId",
+          "{OC_VLK_Digger26_531-OC_Spawnpoint_Digger26_531}",
+          "DailyRoutineClass"
+        ],
+        "undo": null
+      },
+      "typed_context_evidence": {
+        "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-seat-guard\\evidence\\056-trespass-context.json",
+        "sha256": "37413ae96436e40c3c61eb80c74ab2640ded8135f4b3d651ce844b0fe9ea40e5",
+        "bytes": 345147
+      }
+    }
+  ],
+  "facts": [
+    "All four saves contain a Hero OnPerson trespassing entry for Hut31, victim Digger26_531.",
+    "Only save56 contains B relative-crime witness entries: two IDs join to the new global trespassing entries.",
+    "Those B records store Neutral toward Hero and ProtectFromDifferentGuild toward the victim; no persistent hostility toward Hero in these records.",
+    "The hut owner position is effectively identical in53,54,56; position alone cannot explain the different responses.",
+    "No live perception, exact warning timing or current owner area/sleep state can be reconstructed from these selected saved records."
+  ],
+  "limits": "The absence of a saved B witness entry does not disprove the user-heard warning in wache. Forgiven crime entries are retained; they do not establish active conflict at save time. Exact German recording/subtitle ID was not captured.",
+  "runtime_changed": false
+}

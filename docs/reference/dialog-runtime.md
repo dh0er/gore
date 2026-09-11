@@ -73,6 +73,50 @@ and consecutive actionless menu transition are therefore unsafe, while the
 separate 4→5 edit, placement variants, anchored first conversation and
 action-bearing three-level tree work.
 
+### Invented NPC session evidence
+
+On 2026-09-06, BuildID `24878692`, `dialog new-conversation` recognized the
+combined settings module emitted by `npc new` for `GORE_TEST_A`. The complete
+graph included both invented NPCs, their original world spawns, and A's private
+conversation and quest. The user completed the game campaign, including full
+restarts, and supplied active/completed journal screenshots showing
+`<GORE_TEST_A>` as giver.
+
+Read-only save checks found `Quest_GORE_NPC_SESSION` still `Running` in
+`G1R-023.sav` → `G1R-026.sav` and still `Succeeded` in `G1R-025.sav` →
+`G1R-027.sav`. A retained its own start/completion knowledge and exactly one
+`ActivePersonalRelationshipModifier_Story` targeting Hero with Friend. B, Hero
+and Diego did not own either marker. A/B identities, inventories and attributes
+were unchanged across both reload pairs. The fixture only writes its effects
+in the selected choices, without startup replay.
+
+This qualifies the tested invented identity on this build. Restart evidence
+comes from the user's completed game campaign; save bytes alone cannot prove
+a process restart. [Session results](../../scripts/fixtures/npc-session/RESULTS.md)
+retain the save names, hashes, checks and screenshot scope.
+
+### Invented NPC voice evidence
+
+The subsequent `NpcVoiceProof` campaign on 2026-09-06, BuildID `24878692`, added
+eight repeatable choices to A's existing module. The user reported every game
+step successful, including shipped recordings, new subtitle/recording IDs,
+48 kHz mono, 44.1 kHz mono and 48 kHz stereo Vorbis, and an A → Hero → A
+exchange with distinct synthetic voices. Generic `Address_Call` and
+`DailyRoutine_Mumble` requests used A's Diego Voice05 subset; these exercise
+voice selection separately from `Say` calls with explicit `LocText` IDs.
+
+The user also confirmed repeat playback, skipping a line, silent-subtitle
+continuation to a recorded line, and playback after a full restart. Read-only
+checks of `G1R-029.sav` → `G1R-030.sav` found all eight topics recorded on A,
+the quest still `Succeeded`, and unchanged fixture markers, relationship, A/B
+identities, inventories and attributes. Those saved markers establish recorded
+selection, not audible output; sound and restart evidence is the user's report.
+
+[Voice results](../../scripts/fixtures/npc-voice/RESULTS.md) retain the exact
+case scope and save/report hashes. Lip sync was excluded. The two generic
+requests were deliberately invoked; other native voice profiles and natural
+combat/routine triggers remain outside this evidence.
+
 ### Diagnostic-only evidence
 
 An artificial ambient stress fixture combined automatic opening with a
@@ -439,8 +483,9 @@ shapes that the current pipeline cannot produce safely.
 - Giving an NPC a first conversation when no exact already-loaded per-NPC
   conversation-settings module exists for it. The separate new-module fixture
   compiled and deployed but was not discovered. In practical content terms,
-  `gore dialog` alone cannot yet give a wholly new NPC its first conversation;
-  another NPC pipeline must first supply a settings module that the game loads.
+  `gore dialog` needs the NPC pipeline to supply a settings module that the game
+  loads. The combined `npc new` module now supplies a recognized anchor, with
+  live evidence from `GORE_TEST_A` above.
 - Generating accurate, line-specific lip sync for a new recording. The generic
   placeholder facial moved for every live voice fixture, including silent Opus,
   while shipped accurate facials live as separate cooked `FA_<text-id>` assets

@@ -1,0 +1,65 @@
+{
+  "schema": "gore.npc-head.runtime-result.v1",
+  "package": "NpcHeadRestoreFix",
+  "version": "0.1.9",
+  "date": "2026-09-08",
+  "tested_by": "user",
+  "user_report": "funktioniert jetzt alles perfekt",
+  "head_shape_and_neck_join": "passed",
+  "restore_15": "passed without crash",
+  "apply_14_twice": "passed without duplicates",
+  "full_restart_and_restore_after_load": "passed, user confirmed full checklist",
+  "saves": [
+    {
+      "slot": 47,
+      "save": {
+        "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\G1R-047.sav",
+        "sha256": "b9d0b1a15a8eb56ac7659fe87e9efac4d576d147a5d56cb6759eb53ff5c0a0ab",
+        "bytes": 1087960
+      },
+      "name": "npc kopf - wiederhergestellt",
+      "diagnostics": {
+        "gore_head_v1_loaded": 1.0,
+        "gore_head_v1_bones": 1.0,
+        "gore_head_v4_frames": 792.0,
+        "gore_head_v4_facial": 194.0,
+        "gore_head_v4_head_error": 2.799729e-12,
+        "gore_head_v4_neck_error": 1.2562895e-11,
+        "gore_head_v1_matched": 31.0,
+        "gore_head_v1_mode": 0.0,
+        "gore_head_v1_hidden": 0.0,
+        "gore_head_v2_expected": 0.0,
+        "gore_head_v3_rigid": 0.0,
+        "gore_head_v4_active": 0.0,
+        "gore_head_v1_status": 0.0
+      }
+    },
+    {
+      "slot": 48,
+      "save": {
+        "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\G1R-048.sav",
+        "sha256": "d913e809ed0c591a627559b1d011d42970abaca40f4066b2fd7ac22e205909bc",
+        "bytes": 1090419
+      },
+      "name": "npc kopf - erneut",
+      "diagnostics": {
+        "gore_head_v1_mode": 1.0,
+        "gore_head_v3_rigid": 0.0,
+        "gore_head_v1_loaded": 1.0,
+        "gore_head_v1_bones": 1.0,
+        "gore_head_v4_active": 1.0,
+        "gore_head_v4_frames": 568.0,
+        "gore_head_v4_facial": 194.0,
+        "gore_head_v4_head_error": 9.9063015e-12,
+        "gore_head_v4_neck_error": 6.299371e-12,
+        "gore_head_v1_matched": 31.0,
+        "gore_head_v1_hidden": 186.0,
+        "gore_head_v2_expected": 186.0,
+        "gore_head_v1_status": 4.0
+      }
+    }
+  ],
+  "original_saves_unchanged": true,
+  "game_launched_by_agent": false,
+  "scope": "Shipped Flex head on the tested modular Novice body; arbitrary independent face/hair/beard/color editing and lip sync are not established."
+}

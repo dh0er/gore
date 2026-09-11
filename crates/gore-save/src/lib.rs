@@ -4927,6 +4927,29 @@ fn add_slot_to_profile_array(
     )
 }
 
+/// Modern profile files also enumerate every save in a global slot list.
+/// Older files without that field remain supported.
+fn register_global_save_slot(data: &mut Vec<u8>, slot: &str) -> Result<(), CoreError> {
+    let root = parse_profile_file(data)?;
+    let Some(property) = root
+        .properties
+        .iter()
+        .find(|p| p.name == "m_SavedGamesNames")
+    else {
+        return Ok(());
+    };
+    let path = vec![property.name.to_string()];
+    if string_array_element_index(&root, &path, slot)?.is_some() {
+        return Ok(());
+    }
+    properties::patch_container(
+        data,
+        property,
+        &[],
+        &properties::ContainerEdit::ArrayInsertBytes(properties::encode_fstring_value(slot)),
+    )
+}
+
 fn persistent_slot_profile_path(
     root: &properties::RootObject,
     slot: &str,
@@ -5077,10 +5100,8 @@ fn patch_persistent_slot_scalar_if_present(
     Ok(true)
 }
 
-/// Register a previously detached slot by cloning the on-disk schema of one
-/// existing public-data map entry, then resetting every user-visible field we
-/// understand. Cloning preserves game-version-specific struct layout while
-/// fresh typed resolutions after insertion keep all size fields correct.
+/// Register a previously detached slot using an existing entry's schema. The
+/// incoming save's public metadata is applied separately after registration.
 fn insert_persistent_slot_metadata(
     data: &mut Vec<u8>,
     slot: &str,
@@ -5183,6 +5204,136 @@ fn insert_persistent_slot_metadata(
     Ok(())
 }
 
+fn struct_properties_of_element(
+    value: &properties::PropertyValue,
+) -> Option<&[properties::Property]> {
+    match value {
+        properties::PropertyValue::Struct(properties::StructValue::Properties(props)) => {
+            Some(props)
+        }
+        properties::PropertyValue::Struct(properties::StructValue::Instanced(Some(body))) => {
+            Some(&body.properties)
+        }
+        _ => None,
+    }
+}
+
+/// Copy complete tagged properties, including opaque thumbnails, dates and
+/// version-specific metadata, instead of reconstructing a lossy summary.
+fn raw_public_properties(
+    data: &[u8],
+    props: &[properties::Property],
+    mut start: usize,
+) -> Result<Vec<(String, Vec<u8>)>, CoreError> {
+    let mut fields = Vec::new();
+    for property in props {
+        let end = property
+            .value_offset
+            .checked_add(property.value_size)
+            .ok_or_else(|| CoreError::Parse("public property range overflow".to_string()))?;
+        let bytes = data.get(start..end).ok_or_else(|| {
+            CoreError::Parse("public property range is out of bounds".to_string())
+        })?;
+        fields.push((property.name.to_string(), bytes.to_vec()));
+        start = end;
+    }
+    Ok(fields)
+}
+
+fn incoming_public_metadata(payload: &[u8]) -> Result<Vec<(String, Vec<u8>)>, CoreError> {
+    let root = properties::parse_property_list_root_at(payload, 0)?;
+    let Some(custom) = root.properties.iter().find(|p| p.name == "CustomPayload") else {
+        return raw_public_properties(payload, &root.properties, 0);
+    };
+    let properties::PropertyValue::Map { entries, .. } = &custom.value else {
+        // Older fixtures/saves carry only SaveDataPayload, not a metadata copy.
+        return Ok(Vec::new());
+    };
+    let mut fields = Vec::new();
+    let mut identity = Vec::new();
+    for (key, value) in entries {
+        let properties::PropertyValue::Struct(properties::StructValue::Instanced(Some(body))) =
+            value
+        else {
+            continue;
+        };
+        match map_key_string(key) {
+            Some("/Script/G1R.SaveGamePublicData") => {
+                fields =
+                    raw_public_properties(payload, &body.properties, body.data_size_offset + 4)?;
+            }
+            Some("/Script/G1R.SaveDataPayload") => {
+                identity =
+                    raw_public_properties(payload, &body.properties, body.data_size_offset + 4)?;
+                identity.retain(|(name, _)| {
+                    matches!(name.as_str(), "m_ProfileId" | "m_QuickSave" | "m_AutoSave")
+                });
+            }
+            _ => {}
+        }
+    }
+    // Those fields are absent from SaveGamePublicData on some game versions.
+    for field in identity {
+        if !fields.iter().any(|(name, _)| name == &field.0) {
+            fields.push(field);
+        }
+    }
+    Ok(fields)
+}
+
+/// Refresh only the selected cached row, including when it was registered by an
+/// older importer. Keep the map's order and all unrelated entry bytes intact.
+fn refresh_persistent_slot_metadata(
+    data: &mut Vec<u8>,
+    slot: &str,
+    public_payload: &[u8],
+) -> Result<(), CoreError> {
+    let incoming = incoming_public_metadata(public_payload)?;
+    if incoming.is_empty() {
+        return Ok(());
+    }
+    let root = parse_profile_file(data)?;
+    let (path, map) = properties::find_property_by_name(&root, "m_SavedGamesPublicData")
+        .ok_or_else(|| CoreError::Validation("m_SavedGamesPublicData was not found".to_string()))?;
+    let properties::PropertyValue::Map { entries, .. } = &map.value else {
+        return Err(CoreError::Validation(
+            "m_SavedGamesPublicData is not a map".to_string(),
+        ));
+    };
+    let index = entries
+        .iter()
+        .position(|(key, _)| map_key_string(key) == Some(slot))
+        .ok_or_else(|| CoreError::Validation(format!("public data for {slot} was not found")))?;
+    let props = struct_properties_of_element(&entries[index].1).ok_or_else(|| {
+        CoreError::Validation("cached public data is not a property list".to_string())
+    })?;
+    let layout = properties::map_layout(data, map)?;
+    let range = layout.entry_ranges[index].clone();
+    let key = properties::encode_fstring_value(slot);
+    let mut fields = raw_public_properties(data, props, range.start + key.len())?;
+    for field in incoming {
+        if let Some(existing) = fields.iter_mut().find(|(name, _)| name == &field.0) {
+            *existing = field;
+        } else {
+            fields.push(field);
+        }
+    }
+    let mut entry = key;
+    for (_, bytes) in fields {
+        entry.extend(bytes);
+    }
+    entry.extend(properties::encode_fstring_value("None"));
+    let mut map_body = data[map.value_offset..map.value_offset + map.value_size].to_vec();
+    map_body.splice(
+        range.start - map.value_offset..range.end - map.value_offset,
+        entry,
+    );
+    let chain = properties::resolve_chain(&root.properties, &properties::parse_path(&path)?)?;
+    properties::patch_value_bytes(data, map, &chain.enclosing_size_fields, &map_body)?;
+    parse_profile_file(data)?;
+    Ok(())
+}
+
 /// Change the profile id embedded in the GSAV public payload when that field is
 /// present. The PersistentDataList remains authoritative; older/minimal saves
 /// without the public field are valid and simply return `false` here.
@@ -5197,28 +5348,30 @@ fn set_save_public_profile_id(data: &mut Vec<u8>, profile_id: i32) -> Result<boo
     let mut public_payload = parts.public_payload.to_vec();
     let compressed_stream = parts.compressed_stream.to_vec();
     let trailer = parts.trailer.to_vec();
-    let refs = scan_fstrings(&public_payload, 0);
-    let Some(index) = refs
-        .iter()
-        .position(|reference| reference.value == "m_ProfileId")
-    else {
+    let root = properties::parse_property_list_root_at(&public_payload, 0)?;
+    let paths = public_field_paths(&root, "m_ProfileId");
+    if paths.is_empty() {
         return Ok(false);
-    };
-    let Some(offset) = i32_value_offset_at(&public_payload, &refs, index) else {
-        return Err(CoreError::Validation(
-            "save m_ProfileId is not a writable IntProperty".to_string(),
-        ));
-    };
-    public_payload[offset..offset + 4].copy_from_slice(&profile_id.to_le_bytes());
+    }
+    let before = public_payload.clone();
+    for path in paths {
+        let segments = properties::parse_path(&path)?;
+        let target = properties::resolve(&root.properties, &segments)?;
+        properties::patch_scalar(
+            &mut public_payload,
+            target,
+            properties::ScalarValue::Int(profile_id),
+        )?;
+    }
+    let changed = public_payload != before;
     *data = build_gsav(version, &public_payload, &compressed_stream, &trailer);
-    Ok(true)
+    Ok(changed)
 }
 
 /// Atomically reassign a registered slot or import a detached save into a game
-/// profile. The game keeps the authoritative association in two places inside
-/// PersistentDataList.sav: the slot's `m_ProfileId` and each profile's
-/// slot-name arrays. Both are updated, along with the save's public slot/profile
-/// metadata. Existing slots and the companion file receive paired backups;
+/// profile. Updates PersistentDataList.sav's global slot list, cached public
+/// metadata and per-profile slot arrays, together with every identity copy in
+/// the save's public payload. Existing slots and the companion file receive paired backups;
 /// imports leave the source untouched and back up the companion before the new
 /// target and companion are replaced transactionally.
 fn assign_save_profile(
@@ -5342,6 +5495,18 @@ where
         })?;
     drop(root);
 
+    let mut save_edited = save_original.clone();
+    // Normalize every public identity copy, even when the first copy already
+    // matches (the old importer could leave the second copy stale).
+    if public_summary.slot_name.is_some() {
+        replace_public_fstring(&mut save_edited, "m_SlotName", slot)?;
+    }
+    let public_slot_updated = save_edited != save_original;
+    if public_summary.player_save_name.is_some() {
+        replace_public_fstring(&mut save_edited, "m_PlayerSaveName", &player_save_name)?;
+    }
+    let public_profile_updated = set_save_public_profile_id(&mut save_edited, profile_id)?;
+
     let mut persistent_edited = persistent_original.clone();
     if !registered {
         insert_persistent_slot_metadata(
@@ -5351,6 +5516,12 @@ where
             profile_id,
         )?;
     }
+    refresh_persistent_slot_metadata(
+        &mut persistent_edited,
+        slot,
+        split_gsav(&save_edited)?.public_payload,
+    )?;
+    register_global_save_slot(&mut persistent_edited, slot)?;
     for array_name in ["m_SavedSlotsNames", "m_QuickSaveName", "m_AutoSaveName"] {
         remove_slot_from_all_profile_arrays(&mut persistent_edited, &ids, array_name, slot)?;
     }
@@ -5367,19 +5538,6 @@ where
         add_slot_to_profile_array(&mut persistent_edited, profile_id, "m_AutoSaveName", slot)?;
     }
     set_persistent_slot_profile_id(&mut persistent_edited, slot, profile_id)?;
-
-    let mut save_edited = save_original.clone();
-    // Minimal/older GSAV public payloads may not carry m_SlotName at all. In
-    // that case the target filename and PersistentDataList key remain the slot
-    // authority; only rewrite the field when it actually exists.
-    let public_slot_updated = public_summary
-        .slot_name
-        .as_deref()
-        .is_some_and(|current| current != slot);
-    if public_slot_updated {
-        replace_public_fstring(&mut save_edited, "m_SlotName", slot)?;
-    }
-    let public_profile_updated = set_save_public_profile_id(&mut save_edited, profile_id)?;
 
     // Strict post-edit validation before backups or temp files are created.
     let edited_root = parse_profile_file(&persistent_edited).map_err(|error| {
@@ -16453,6 +16611,45 @@ fn replace_public_fstring(
     Ok(())
 }
 
+/// Current saves duplicate their public identity in two CustomPayload entries.
+/// Scope edits to those entries (or the older flat/struct representation), not
+/// arbitrary similarly named fields in unrelated custom payloads.
+fn public_field_paths(root: &properties::RootObject, name: &str) -> Vec<Vec<String>> {
+    let mut paths = Vec::new();
+    if root.properties.iter().any(|property| property.name == name) {
+        paths.push(vec![name.to_string()]);
+    }
+    if let Some(custom) = root.properties.iter().find(|p| p.name == "CustomPayload") {
+        if let properties::PropertyValue::Map { entries, .. } = &custom.value {
+            for (key, value) in entries {
+                let Some(key) = map_key_string(key) else {
+                    continue;
+                };
+                if !matches!(
+                    key,
+                    "/Script/G1R.SaveDataPayload" | "/Script/G1R.SaveGamePublicData"
+                ) {
+                    continue;
+                }
+                if struct_properties_of_element(value)
+                    .is_some_and(|props| props.iter().any(|p| p.name == name))
+                {
+                    paths.push(vec![
+                        "CustomPayload".to_string(),
+                        format!("{{{key}}}"),
+                        name.to_string(),
+                    ]);
+                }
+            }
+        } else if struct_properties_of_element(&custom.value)
+            .is_some_and(|props| props.iter().any(|p| p.name == name))
+        {
+            paths.push(vec!["CustomPayload".to_string(), name.to_string()]);
+        }
+    }
+    paths
+}
+
 /// One save or profile file the difficulty write will touch, captured up front
 /// so backups, staging, and the atomic replace operate on already-validated
 /// bytes — never on a partially-edited buffer.
@@ -16640,19 +16837,30 @@ fn replace_str_property_fstring(
             "cannot edit {property_name}: the payload is not a parsable property list: {err}"
         ))
     })?;
-    let (path, property) = properties::find_property_by_name(&root, property_name)
-        .ok_or_else(|| CoreError::Parse(format!("property {property_name} was not found")))?;
-    if property.type_name != "StrProperty" {
+    let paths = public_field_paths(&root, property_name);
+    if paths.is_empty() {
         return Err(CoreError::Parse(format!(
-            "property {property_name} is not a StrProperty"
+            "property {property_name} was not found"
         )));
     }
-    let segments = properties::parse_path(&path)?;
-    let chain = properties::resolve_chain(&root.properties, &segments)?;
-    let target = chain.target.clone();
-    let enclosing = chain.enclosing_size_fields.clone();
     drop(root);
-    properties::patch_string(payload, &target, &enclosing, new_value)?;
+    for path in paths {
+        // Each replacement can move the following branch and its size fields.
+        let root = properties::parse_property_list_root_at(payload, 0)?;
+        let segments = properties::parse_path(&path)?;
+        let chain = properties::resolve_chain(&root.properties, &segments)?;
+        if chain.target.type_name != "StrProperty" {
+            return Err(CoreError::Parse(format!(
+                "property {property_name} is not a StrProperty"
+            )));
+        }
+        properties::patch_string(
+            payload,
+            chain.target,
+            &chain.enclosing_size_fields,
+            new_value,
+        )?;
+    }
 
     // Strict gate: the edited list must still parse and consume every byte, the
     // same bar the game's reader applies.
@@ -17390,6 +17598,7 @@ mod tests {
             let mut slot_value = str_property("m_SlotName", slot);
             slot_value.extend_from_slice(&str_property("m_PlayerSaveName", "Assignment test"));
             slot_value.extend_from_slice(&int_property("m_ProfileId", profile_id));
+            slot_value.extend_from_slice(&double_property("m_TimeLoaded", 1710.3161790370941));
             slot_value.extend_from_slice(&fstring("None"));
             map_body.extend_from_slice(&fstring(slot));
             map_body.extend_from_slice(&slot_value);
@@ -17427,6 +17636,15 @@ mod tests {
 
         let mut object = fstring("/Script/G1R.PersistentDataList");
         object.push(0);
+        let global_slots = [slot];
+        object.extend_from_slice(&strict_string_array_property(
+            "m_SavedGamesNames",
+            if registered_profile.is_some() {
+                &global_slots
+            } else {
+                &[]
+            },
+        ));
         object.extend_from_slice(&public_data);
         object.extend_from_slice(&profiles);
         object.extend_from_slice(&fstring("None"));
@@ -17459,6 +17677,306 @@ mod tests {
         payload.extend_from_slice(&int_property("m_ProfileId", profile_id));
         payload.extend_from_slice(&fstring("None"));
         payload
+    }
+
+    fn dual_public_payload(slot: &str, name: &str, profile_id: i32) -> Vec<u8> {
+        let mut map_body = [0u32.to_le_bytes(), 3u32.to_le_bytes()].concat();
+        for class in ["SaveDataPayload", "SaveGamePublicData", "UnrelatedPayload"] {
+            let mut body = [
+                str_property("m_SlotName", slot),
+                str_property("m_PlayerSaveName", name),
+                int_property("m_ProfileId", profile_id),
+                bool_property("m_QuickSave", false),
+                bool_property("m_AutoSave", false),
+            ]
+            .concat();
+            if class == "SaveGamePublicData" {
+                body.extend(str_property("m_MapName", "MainMap"));
+                body.extend(int_property("m_ChapterID", 3));
+                body.extend(double_property("m_TimePlayed", 1710.25));
+                // Real saves can embed zero while their cached row records a
+                // later load. Import the incoming value, including zero.
+                body.extend(double_property("m_TimeLoaded", 0.0));
+                body.extend(bool_property("m_IsPlayerSaveNameCustom", true));
+                body.extend(inv_tagged(
+                    "m_difficultyPreset",
+                    "ObjectProperty",
+                    &[],
+                    0,
+                    &fstring("/Script/Angelscript.DifficultyPreset_Hard"),
+                ));
+                let date_descriptor = [
+                    1u32.to_le_bytes().to_vec(),
+                    fstring("DateTime"),
+                    1u32.to_le_bytes().to_vec(),
+                    fstring("/Script/CoreUObject"),
+                ]
+                .concat();
+                body.extend(inv_tagged(
+                    "m_Date",
+                    "StructProperty",
+                    &date_descriptor,
+                    properties::TAG_FLAG_NATIVE_SERIALIZE,
+                    &639245000000000000i64.to_le_bytes(),
+                ));
+                let byte_descriptor =
+                    [1u32.to_le_bytes().to_vec(), fstring("ByteProperty")].concat();
+                body.extend(inv_tagged(
+                    "m_CompressedBitmap",
+                    "ArrayProperty",
+                    &byte_descriptor,
+                    0,
+                    &[4u32.to_le_bytes().to_vec(), vec![10, 20, 30, 40]].concat(),
+                ));
+            }
+            body.extend(fstring("None"));
+            let class = format!("/Script/G1R.{class}");
+            map_body.extend(fstring(&class));
+            map_body.extend(fstring(&class));
+            map_body.extend((body.len() as u32).to_le_bytes());
+            map_body.extend(body);
+        }
+        let descriptor = [
+            2u32.to_le_bytes().to_vec(),
+            fstring("ObjectProperty"),
+            0u32.to_le_bytes().to_vec(),
+            fstring("StructProperty"),
+            1u32.to_le_bytes().to_vec(),
+            fstring("InstancedStruct"),
+            1u32.to_le_bytes().to_vec(),
+            fstring("/Script/StructUtils"),
+        ]
+        .concat();
+        [
+            inv_tagged(
+                "CustomPayload",
+                "MapProperty",
+                &descriptor,
+                properties::TAG_FLAG_NATIVE_SERIALIZE,
+                &map_body,
+            ),
+            fstring("None"),
+        ]
+        .concat()
+    }
+
+    fn public_branch_field(payload: &[u8], class: &str, field: &str) -> properties::PropertyValue {
+        let root = properties::parse_property_list_root_at(payload, 0).unwrap();
+        assert_eq!(root.consumed, payload.len());
+        let path = properties::parse_path(&[
+            "CustomPayload".to_string(),
+            format!("{{/Script/G1R.{class}}}"),
+            field.to_string(),
+        ])
+        .unwrap();
+        properties::resolve(&root.properties, &path)
+            .unwrap()
+            .value
+            .clone()
+    }
+
+    fn cached_public_entry(data: &[u8], slot: &str) -> Vec<u8> {
+        let root = parse_profile_file(data).unwrap();
+        let (_, map) = properties::find_property_by_name(&root, "m_SavedGamesPublicData").unwrap();
+        let properties::PropertyValue::Map { entries, .. } = &map.value else {
+            panic!()
+        };
+        let index = entries
+            .iter()
+            .position(|(key, _)| map_key_string(key) == Some(slot))
+            .unwrap();
+        let layout = properties::map_layout(data, map).unwrap();
+        data[layout.entry_ranges[index].clone()].to_vec()
+    }
+
+    fn global_save_slots(data: &[u8]) -> Vec<properties::PropertyValue> {
+        let root = parse_profile_file(data).unwrap();
+        let property = root
+            .properties
+            .iter()
+            .find(|p| p.name == "m_SavedGamesNames")
+            .unwrap();
+        let properties::PropertyValue::Array { elements } = &property.value else {
+            panic!("global save names must be an array");
+        };
+        elements.clone()
+    }
+
+    fn assert_cached_public_metadata(data: &[u8], slot: &str, payload: &[u8]) {
+        let root = parse_profile_file(data).unwrap();
+        for field in [
+            "m_SlotName",
+            "m_PlayerSaveName",
+            "m_ProfileId",
+            "m_MapName",
+            "m_ChapterID",
+            "m_TimePlayed",
+            "m_TimeLoaded",
+            "m_Date",
+            "m_difficultyPreset",
+            "m_CompressedBitmap",
+            "m_IsPlayerSaveNameCustom",
+            "m_QuickSave",
+            "m_AutoSave",
+        ] {
+            let path = persistent_slot_property_path(&root, slot, field)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                properties::resolve(&root.properties, &path).unwrap().value,
+                public_branch_field(payload, "SaveGamePublicData", field),
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn public_identity_edits_update_both_payloads_without_touching_other_custom_data() {
+        let original_payload = dual_public_payload("G1R-054", "Old", 0);
+        let mut save = build_gsav(2, &original_payload, &minimal_stream(), &[1, 2, 3, 4]);
+        for name in ["A much longer imported save name", "Short"] {
+            replace_public_fstring(&mut save, "m_PlayerSaveName", name).unwrap();
+            replace_public_fstring(&mut save, "m_SlotName", "G1R-061").unwrap();
+            set_save_public_profile_id(&mut save, 1).unwrap();
+            let parts = split_gsav(&save).unwrap();
+            for class in ["SaveDataPayload", "SaveGamePublicData"] {
+                assert_eq!(
+                    public_branch_field(parts.public_payload, class, "m_PlayerSaveName"),
+                    properties::PropertyValue::Str(name.to_string())
+                );
+                assert_eq!(
+                    public_branch_field(parts.public_payload, class, "m_SlotName"),
+                    properties::PropertyValue::Str("G1R-061".to_string())
+                );
+                assert_eq!(
+                    public_branch_field(parts.public_payload, class, "m_ProfileId"),
+                    properties::PropertyValue::Int(1)
+                );
+            }
+            for field in ["m_SlotName", "m_PlayerSaveName", "m_ProfileId"] {
+                assert_eq!(
+                    public_branch_field(parts.public_payload, "UnrelatedPayload", field),
+                    public_branch_field(&original_payload, "UnrelatedPayload", field)
+                );
+            }
+            assert_eq!(parts.compressed_stream, minimal_stream());
+            assert_eq!(parts.trailer, &[1, 2, 3, 4]);
+        }
+    }
+
+    #[test]
+    fn assign_save_profile_import_copies_incoming_public_metadata() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("detached.sav");
+        let target = dir.path().join("G1R-007.sav");
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let original = build_gsav(
+            2,
+            &dual_public_payload("G1R-054", "Imported", 0),
+            &minimal_stream(),
+            &[1, 2, 3, 4],
+        );
+        let persistent = assignment_persistent_data_list("G1R-006", 0);
+        fs::write(&source, &original).unwrap();
+        fs::write(&persistent_path, &persistent).unwrap();
+        assign_save_profile(&source, Some(&target), &persistent_path, 1, true).unwrap();
+        let written = fs::read(&target).unwrap();
+        let parts = split_gsav(&written).unwrap();
+        let cached = fs::read(&persistent_path).unwrap();
+        assert_cached_public_metadata(&cached, "G1R-007", parts.public_payload);
+        assert_eq!(
+            global_save_slots(&cached),
+            vec![
+                properties::PropertyValue::Str("G1R-006".into()),
+                properties::PropertyValue::Str("G1R-007".into())
+            ]
+        );
+        assert_eq!(
+            cached_public_entry(&cached, "G1R-006"),
+            cached_public_entry(&persistent, "G1R-006")
+        );
+        assert_eq!(fs::read(&source).unwrap(), original);
+        assert_eq!(parts.compressed_stream, minimal_stream());
+        assert_eq!(parts.trailer, &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn assign_save_profile_repairs_registered_slot_with_stale_second_payload() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-007.sav");
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let mut payload = dual_public_payload("G1R-054", "Original", 0);
+        // Reproduce the old writer: only its first public copy has been updated.
+        for (field, value) in [("m_SlotName", "G1R-007"), ("m_PlayerSaveName", "Repaired")] {
+            let root = properties::parse_property_list_root_at(&payload, 0).unwrap();
+            let path = properties::parse_path(&[
+                "CustomPayload".to_string(),
+                "{/Script/G1R.SaveDataPayload}".to_string(),
+                field.to_string(),
+            ])
+            .unwrap();
+            let chain = properties::resolve_chain(&root.properties, &path).unwrap();
+            properties::patch_string(
+                &mut payload,
+                chain.target,
+                &chain.enclosing_size_fields,
+                value,
+            )
+            .unwrap();
+        }
+        fs::write(
+            &path,
+            build_gsav(2, &payload, &minimal_stream(), &[1, 2, 3, 4]),
+        )
+        .unwrap();
+        let mut persistent = assignment_persistent_data_list("G1R-007", 1);
+        // The old importer also omitted the global registration, even though
+        // the metadata map and per-profile arrays already contained this slot.
+        let root = parse_profile_file(&persistent).unwrap();
+        let property = root
+            .properties
+            .iter()
+            .find(|p| p.name == "m_SavedGamesNames")
+            .unwrap();
+        properties::patch_container(
+            &mut persistent,
+            property,
+            &[],
+            &properties::ContainerEdit::ArrayRemove(0),
+        )
+        .unwrap();
+        fs::write(&persistent_path, persistent).unwrap();
+        let result = assign_save_profile(&path, None, &persistent_path, 1, true).unwrap();
+        assert_eq!(result["publicSlotUpdated"], true);
+        let written = fs::read(&path).unwrap();
+        let parts = split_gsav(&written).unwrap();
+        for class in ["SaveDataPayload", "SaveGamePublicData"] {
+            assert_eq!(
+                public_branch_field(parts.public_payload, class, "m_SlotName"),
+                properties::PropertyValue::Str("G1R-007".to_string())
+            );
+            assert_eq!(
+                public_branch_field(parts.public_payload, class, "m_PlayerSaveName"),
+                properties::PropertyValue::Str("Repaired".to_string())
+            );
+            assert_eq!(
+                public_branch_field(parts.public_payload, class, "m_ProfileId"),
+                properties::PropertyValue::Int(1)
+            );
+        }
+        assert_cached_public_metadata(
+            &fs::read(&persistent_path).unwrap(),
+            "G1R-007",
+            parts.public_payload,
+        );
+        assert_eq!(
+            global_save_slots(&fs::read(&persistent_path).unwrap()),
+            vec![properties::PropertyValue::Str("G1R-007".into())]
+        );
+        assert_eq!(parts.compressed_stream, minimal_stream());
+        assert_eq!(parts.trailer, &[1, 2, 3, 4]);
+        let again = assign_save_profile(&path, None, &persistent_path, 1, true).unwrap();
+        assert_eq!(again["bytesChanged"], false);
     }
 
     #[test]

@@ -18,7 +18,7 @@ use crate::{ContentSeal, EntityId, GameGenerationAnchor, Sha256Digest};
 
 /// Stable identity of the current quest generator.
 pub const DRAFT_QUEST_GENERATOR_ID: &str = "gore-authoring.draft-quest-skeleton";
-pub const DRAFT_QUEST_GENERATOR_VERSION: u32 = 4;
+pub const DRAFT_QUEST_GENERATOR_VERSION: u32 = 5;
 pub const MAX_DRAFT_QUEST_TITLE_BYTES: usize = 128;
 pub const MAX_DRAFT_QUEST_DESCRIPTION_BYTES: usize = 512;
 pub const MAX_DRAFT_QUEST_OBJECTIVE_TITLE_BYTES: usize = 128;
@@ -1171,7 +1171,7 @@ impl DraftQuestSkeleton {
         let base_names = &self.technical_names.base;
         let giver = self.input.giver.runtime_unique_name();
         let mut source = format!(
-            "FText {text_helper}(const FName Text)\n{{\n    FString Value = Text.ToString();\n    return FText::FromString(Value);\n}}\n\nclass {root} : {base}\n{{\n    default ParentQuestClass = {parent}::StaticClass();\n    default QuestKind = {root_kind};\n    default InvolvedCharacters.Add(n\"{hero}\");\n    default InvolvedCharacters.Add(n\"{giver}\");\n    default QuestGiverCharacterUniqueName = n\"{giver}\";\n    default NameText = {text_helper}(n\"{title}\");\n    default DescriptionText = {text_helper}(\n        n\"{description}\"\n    );\n",
+            "FText {text_helper}(const FName Text)\n{{\n    FString Value = Text.ToString();\n    return FText::FromString(Value);\n}}\n\nclass {root} : {base}\n{{\n    default ParentQuestClass = TSubclassOf<UQuest>({parent}::StaticClass());\n    default QuestKind = {root_kind};\n    default InvolvedCharacters.Add(n\"{hero}\");\n    default InvolvedCharacters.Add(n\"{giver}\");\n    default QuestGiverCharacterUniqueName = n\"{giver}\";\n    default NameText = {text_helper}(n\"{title}\");\n    default DescriptionText = {text_helper}(\n        n\"{description}\"\n    );\n",
             text_helper = base_names.text_helper,
             root = base_names.root_class,
             base = QUEST_BASE_CLASS,
@@ -1205,7 +1205,7 @@ impl DraftQuestSkeleton {
         {
             let objective = self.objective_names(slot);
             source.push_str(&format!(
-                "class {objective} : {base}\n{{\n    default ParentQuestClass = {root}::StaticClass();\n    default QuestKind = {objective_kind};\n    default NameText = {text_helper}(n\"{objective_title}\");\n",
+                "class {objective} : {base}\n{{\n    default ParentQuestClass = TSubclassOf<UQuest>({root}::StaticClass());\n    default QuestKind = {objective_kind};\n    default NameText = {text_helper}(n\"{objective_title}\");\n",
                 objective = objective.objective_class,
                 base = QUEST_BASE_CLASS,
                 root = base_names.root_class,
