@@ -9261,6 +9261,68 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_shared_flag_switch(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"FRecord","Fixture"),(2,"UDefinition","Fixture"),(3,"AResident",""),(4,"TArray",""),
+            (5,"FGameplayTagContainer",""),(6,"TSet",""),(7,"TSetIterator",""),(8,"FGameplayTag",""),(9,"UPlanner","Fixture"),(10,"UOther","Fixture")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32+100,ptr);r.type_names.insert(name.into());
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        let plain=|token|DataType {token,..Default::default()};
+        let obj=|type_info,reference:bool,constant:bool,handle:bool,readonly:bool|DataType {token:5,type_info,is_reference:reference,is_object_const:constant,is_object_handle:handle,is_read_only:readonly,..Default::default()};
+        for (ptr,args) in [(4,vec![obj(3,false,false,true,false)]),(6,vec![obj(3,false,false,true,false)])] {r.type_subtypes.insert(ptr,args);}
+        r.class_fields.insert("FRecord".into(),HashMap::from([("Key".into(),"FGameplayTag".into()),("SelectedRoute".into(),"ERoute".into())]));
+        r.class_fields.insert("UDefinition".into(),HashMap::from([("Route".into(),"ERoute".into())]));
+        r.class_super.insert("UPlanner".into(),String::new());
+        for (id,offset,name) in [(101,4,"Key"),(101,40,"SelectedRoute"),(102,120,"Route"),(107,24,"CanProceed")] {
+            let key=((id as i64)<<1)|((offset as i64)<<33)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id);
+        }
+        for (ptr,name,owner,constant,ret,args) in [
+            (1001,"LookupDefinition","UPlanner",false,obj(2,false,true,true,false),vec![obj(8,true,true,false,true)]),
+            (11,"$beh0","TArray",false,plain(0x52),vec![]),
+            (12,"$beh0","FGameplayTagContainer",false,plain(0x52),vec![]),
+            (13,"Add","TArray",false,plain(0x52),vec![obj(3,true,true,true,true)]),
+            (14,"IsEmpty","TSet",true,plain(0x41),vec![]),
+            (15,"$beh2","FGameplayTagContainer",false,plain(0x52),vec![]),
+            (16,"$beh2","TSet",false,plain(0x52),vec![]),
+            (17,"Iterator","TSet",false,obj(7,false,false,false,false),vec![]),
+            (18,"Proceed","TSetIterator",false,obj(3,true,false,true,true),vec![])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);
+            r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        r.funcid_to_ptr.insert(1001,1001);
+        match fault {
+            1=>r.func_ret.get_mut(&1001).unwrap().is_object_const=false,
+            2=>r.func_ret.get_mut(&1001).unwrap().is_object_handle=false,
+            3=>r.func_params.get_mut(&1001).unwrap()[0].is_reference=false,
+            4=>r.func_params.get_mut(&1001).unwrap()[0].is_read_only=false,
+            5=>{r.func_owner.insert(1001,"UOther".into());},
+            6=>{r.func_is_method.remove(&1001);},
+            7=>{r.class_fields.get_mut("UDefinition").unwrap().insert("Route".into(),"int".into());},
+            8=>{r.class_fields.get_mut("FRecord").unwrap().insert("SelectedRoute".into(),"EOther".into());},
+            9=>{r.class_fields.get_mut("FRecord").unwrap().insert("Key".into(),"FString".into());},
+            10=>{r.prop_type_id.insert((102i64<<1)|(120i64<<33)|1,101);},
+            11=>{r.prop_by_key.insert((107i64<<1)|(24i64<<33)|1,"Other".into());},
+            12=>r.func_ret.get_mut(&11).unwrap().token=0x41,
+            13=>r.func_params.get_mut(&12).unwrap().push(obj(5,true,true,false,true)),
+            14=>{r.const_method_ptrs.insert(13);},
+            15=>r.func_params.get_mut(&13).unwrap()[0].is_reference=false,
+            16=>r.func_params.get_mut(&13).unwrap()[0].is_read_only=false,
+            17=>{r.const_method_ptrs.remove(&14);},
+            18=>r.func_ret.get_mut(&14).unwrap().token=0x44,
+            19=>r.func_ret.get_mut(&15).unwrap().is_reference=true,
+            20=>r.func_params.get_mut(&16).unwrap().push(obj(6,true,true,false,true)),
+            21=>r.func_ret.get_mut(&17).unwrap().is_reference=true,
+            22=>{r.func_owner.insert(17,"TArray".into());},
+            23=>r.func_ret.get_mut(&18).unwrap().is_read_only=false,
+            24=>r.func_ret.get_mut(&18).unwrap().is_object_const=true,
+            25=>r.func_ret.get_mut(&18).unwrap().type_info=10,
+            _=>{},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_selected_vector_arguments(fault:u8)->Self {
         let mut r=Self::default();
         for (ptr,id,name) in [(1,101,"FVector"),(2,102,"FUnrelated")] {
@@ -9315,6 +9377,75 @@ impl RefResolver {
             27=>{r.func_owner.insert(12,"FUnrelated".into());},
             _=>{},
         }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_clock_property_enum_chain(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr,name,module) in [(1,"FInGameTime",""),(2,"FClockTime",""),(3,"UArchive",""),(4,"UClockSource",""),
+            (5,"EPhase",""),(6,"FSnapshot",""),(7,"AClimateBase",""),(300,"AClimateRecorder","Fixture")] {
+            r.type_by_ptr.insert(ptr,name.into()); r.typeid_to_ptr.insert(ptr as i32,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        r.class_super.insert("AClimateRecorder".into(),"AClimateBase".into());
+        r.class_fields.insert("AClimateRecorder".into(),HashMap::from([
+            ("Source".into(),"UClockSource".into()),("Previous".into(),"FInGameTime".into()),
+            ("Stored".into(),"EPhase".into()),("Enabled".into(),"bool".into())]));
+        for (id,offset,name) in [(300,24,"Source"),(300,8,"Previous"),(300,32,"Stored"),(300,33,"Enabled"),(3,40,"State"),(6,0,"Mode")] {
+            let key = (offset as i64)<<33 | (id as i64)<<1 | 1;
+            r.prop_by_key.insert(key,name.into()); r.prop_type_id.insert(key,id);
+        }
+        let plain = |token| DataType {token,..Default::default()};
+        let value = |ptr,reference: bool,constant: bool| DataType {token:5,type_info:ptr,is_reference:reference,is_object_const:constant,is_read_only:constant,..Default::default()};
+        for (ptr,owner,name,constant,ret,args) in [
+            (104,"UClockSource","ReadTime",true,value(1,false,false),vec![]),
+            (105,"FInGameTime","GetClockTime",true,value(2,false,false),vec![]),
+            (106,"FClockTime","GetHour",true,plain(0x44),vec![]),
+            (107,"FClockTime","$beh2",false,plain(0x52),vec![]),
+            (108,"FInGameTime","GetDay",true,plain(0x44),vec![]),
+            (109,"AClimateBase","GetMode",false,value(5,false,false),vec![]),
+            (110,"FInGameTime","opAssign",false,value(1,true,false),vec![value(1,true,true)]),
+            (111,"FInGameTime","$beh2",false,plain(0x52),vec![]),
+        ] {
+            r.func_by_ptr.insert(ptr,name.into()); r.func_owner.insert(ptr,owner.into()); r.func_is_method.insert(ptr);
+            r.func_ret.insert(ptr,ret); r.func_params.insert(ptr,args); if constant { r.const_method_ptrs.insert(ptr); }
+        }
+        let mut fields = vec![("UArchive","State","FSnapshot"),("FSnapshot","Mode","EPhase")];
+        match fault {
+            1 => { r.const_method_ptrs.remove(&106); },
+            2 => r.func_ret.get_mut(&106).unwrap().token = 0x50,
+            3 => r.func_params.get_mut(&106).unwrap().push(plain(0x44)),
+            4 => { r.func_by_ptr.insert(106,"GetOtherHour".into()); },
+            5 => r.type_identity_by_ptr.get_mut(&2).unwrap().module = "Script".into(),
+            6 => r.func_ret.get_mut(&105).unwrap().is_reference = true,
+            7 => { r.const_method_ptrs.remove(&105); },
+            8 => r.func_params.get_mut(&105).unwrap().push(plain(0x44)),
+            9 => { r.const_method_ptrs.insert(107); },
+            10 => r.func_ret.get_mut(&107).unwrap().token = 0x41,
+            11 => { r.class_fields.insert("FClockTime".into(),HashMap::from([("Hour".into(),"int".into())])); },
+            12 => fields.push(("FClockTime","Hour","int")),
+            13 => { r.class_fields.get_mut("AClimateRecorder").unwrap().insert("Previous".into(),"FOtherTime".into()); },
+            14 => { r.class_fields.get_mut("AClimateRecorder").unwrap().insert("Enabled".into(),"int".into()); },
+            15 => { r.prop_type_id.insert((8i64<<33)|(300<<1)|1,7); },
+            16 => { r.duplicate_prop_keys.insert((32i64<<33)|(300<<1)|1); },
+            17 => r.func_ret.get_mut(&109).unwrap().is_reference = true,
+            18 => { r.class_super.insert("AClimateRecorder".into(),"OtherBase".into()); },
+            19 => { r.class_fields.get_mut("AClimateRecorder").unwrap().insert("Stored".into(),"EOther".into()); },
+            20 => fields[1].2 = "EOther",
+            21 => fields[0].2 = "FOtherState",
+            22 => r.func_ret.get_mut(&104).unwrap().is_object_handle = true,
+            23 => r.func_params.get_mut(&110).unwrap()[0].is_object_const = false,
+            24 => { r.const_method_ptrs.insert(111); },
+            25 => r.func_ret.get_mut(&108).unwrap().token = 0x50,
+            26 => { r.class_fields.insert("FSnapshot".into(),HashMap::from([("Mode".into(),"EOther".into())])); },
+            27 => { r.prop_type_id.insert((40i64<<33)|(3<<1)|1,4); },
+            28 => r.func_ret.get_mut(&105).unwrap().type_info = 1,
+            29 => r.type_identity_by_ptr.get_mut(&1).unwrap().namespace = "Other".into(),
+            30 => { r.func_is_method.remove(&109); },
+            _ => {}
+        }
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&fields,&[],None));
         r
     }
 

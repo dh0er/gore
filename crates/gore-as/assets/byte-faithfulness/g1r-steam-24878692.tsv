@@ -1,7 +1,7 @@
 # module	divergent-functions	behaviour-risks	generated-methods
 AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.SoulHarvest.SoulHarvest_Visual	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	2	0	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	4	0	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	3	0	0
 AI.AssessmentResponseSystem.EventResponses	1	0	0
 AI.NativeAICommands	1	0	0
 AI.States.FightAI.AIState_PerceptionResponse	1	0	0
@@ -15,6 +15,5 @@ AI.States.FightAI.SearchState.AIState_Search	1	0	0
 AI.States.FightAI.WatchFightState.AIGroup_WatchFight	1	0	0
 AI.States.FightAI.WatchFightState.AIState_WatchFight	3	0	0
 Camera.ConversationCameraConfig	1	0	0
-Environment.GothicUltraDynamicControlerAS	1	0	0
 GAS.Abilities.Spells.Spells.Transform.GA_Spell_Transform	1	0	0
 GAS.Calculations.Damage	1	0	0

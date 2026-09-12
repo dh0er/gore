@@ -3469,6 +3469,10 @@ fn emit_function_ctor(
         pass_trace("restore_closed_format_argument_lives", &rendered);
         let rendered = restore_selected_vector_argument_lives(&rendered, f, refs, is_method);
         pass_trace("restore_selected_vector_argument_lives", &rendered);
+        let rendered = restore_shared_flag_and_typed_switch(&rendered, f, refs, class_name, is_method);
+        pass_trace("restore_shared_flag_and_typed_switch", &rendered);
+        let rendered = restore_clock_property_and_enum_chain(&rendered, f, refs, is_method, class_name);
+        pass_trace("restore_clock_property_and_enum_chain", &rendered);
         let rendered = restore_inferred_map_query_lifetimes(&rendered, f, refs);
         pass_trace("restore_inferred_map_query_lifetimes", &rendered);
         let rendered = restore_inferred_query_and_ignore_arrays(&rendered, f, refs, class_name);
@@ -18619,6 +18623,158 @@ fn restore_closed_format_argument_lives(body:&str,f:&Func,refs:&RefResolver,is_m
     lines.join("\n")+if body.ends_with('\n') {"\n"}else {""}
 }
 
+/// Keep an unused shared flag's writes and the exhaustive typed switch that encloses them.
+fn restore_shared_flag_and_typed_switch(body:&str,f:&Func,refs:&RefResolver,class_name:Option<&str>,is_method:bool)->String {
+    if !is_method || !body.contains("switch (int(") {return body.to_owned();}
+    let shape=|t:&super::types::DataType,token,ptr,reference:bool,constant:bool,handle:bool,readonly:bool|
+        t.token==token && t.type_info==ptr && t.is_reference==reference && t.is_object_const==constant
+        && t.is_object_handle==handle && t.is_read_only==readonly && !t.is_auto && !t.if_handle_then_const;
+    if !shape(&f.ret,5,f.ret.type_info,false,false,false,false) {return body.to_owned();}
+    let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    let w=|i:&Instr,n:usize|i.words.get(n).map(|s|*s as i16 as i32);
+    let p=|i:&Instr|i.qwords.first().map(|s|*s as i64);
+    let jump=|i:&Instr|i.dwords.first().and_then(|d|code.iter().position(|c|c.offset_dw as i64==i.offset_dw as i64+2+*d as i32 as i64));
+    let scalar=|s|s>0 && !f.obj_locals.iter().any(|(slot,_)|*slot==s);
+    let local=|s|if s<=0 {None} else {let mut ts=f.obj_locals.iter().filter(|(slot,_)|*slot==s).map(|(_,t)|*t);let t=ts.next()?;if ts.next().is_some() {None} else {Some(t)}};
+    let params=super::model::param_slot_map(&f.params.iter().map(|p|p.ty.clone()).collect::<Vec<_>>(),true,true,Some(refs));
+    let positions:Vec<_>=code.windows(42).enumerate().filter(|(_,a)|a.iter().map(|i|i.op.name).eq(
+        "SetV1 CpyVtoV4 PSF ADDSi PshVPtr CALLINTF STOREOBJ LoadRObjR RDR1 LoadVObjR WRTV1 PSF CALLSYS PSF CALLSYS LoadRObjR RDR1 sbTOi CMPIi JP CMPIi JS SUBIi JMPP JMP JMP JMP PshVPtr RefCpyV CmpPtrNull TNZ CpyRtoV4 CpyVtoV4 PshVPtr RefCpyV CmpPtrNull JNZ JMP PSF PSF CALLSYS JMP".split_whitespace())).map(|(i,_)|i).collect();
+    let [at]=positions.as_slice() else {return body.to_owned();};let at=*at;let a=&code[at..at+42];
+    let found=(|| {
+        let (flag,temp,record,definition,byte,selector,index,array,tags,victim,handle)=
+            (w(&a[1],0)?,w(&a[0],0)?,w(&a[2],0)?,w(&a[6],0)?,w(&a[8],0)?,w(&a[17],0)?,w(&a[22],0)?,w(&a[11],0)?,w(&a[13],0)?,w(&a[27],0)?,w(&a[28],0)?);
+        if [flag,temp,byte,selector,index].iter().any(|s|!scalar(*s)) || HashSet::from([flag,temp,byte,selector,index]).len()!=5
+            || HashSet::from([record,definition,array,tags,handle]).len()!=5 || local(record)!=Some(f.ret.type_info) {return None;}
+        let (definition_ty,array_ty,tags_ty,actor_ty)=(local(definition)?,local(array)?,local(tags)?,local(handle)?);
+        let victim_param=f.params.get(*params.get(&victim)?)?;
+        if victim_param.name.is_empty() || victim_param.flags!=0 || !shape(&victim_param.ty,5,actor_ty,false,false,true,false) {return None;}
+        for (indices,slot) in [(&[0usize,31][..],temp),(&[2,9][..],record),(&[6,7,15][..],definition),(&[8,10,16][..],byte),
+            (&[17,18,20][..],selector),(&[22,23][..],index),(&[11,39][..],array),(&[13][..],tags),(&[27,33,38][..],victim),(&[28,29,34,35][..],handle)] {
+            if indices.iter().any(|i|w(&a[*i],0)!=Some(slot)) {return None;}
+        }
+        if a[1].words!=[flag as u16,temp as u16] || a[32].words!=a[1].words || a[17].words!=[selector as u16,byte as u16]
+            || a[22].words!=[index as u16,selector as u16] || w(&a[4],0)!=Some(0) || a[0].dwords.as_slice()!=[0]
+            || a[7].words!=a[15].words || a[7].dwords!=a[15].dwords {return None;}
+        let low=*a[20].dwords.first()? as i32;let high=*a[18].dwords.first()? as i32;
+        if high.checked_sub(low)!=Some(3) || a[22].dwords.as_slice()!=[low as u32] || a[23].dwords.as_slice()!=[3] {return None;}
+        let (trap,join,case_low,case_middle)=(jump(&a[19])?,jump(&a[37])?,jump(&a[24])?,jump(&a[25])?);
+        if jump(&a[21])!=Some(trap) || jump(&a[26])!=Some(case_middle) || jump(&a[36])!=Some(at+38) || jump(&a[41])!=Some(join)
+            || code.get(trap)?.op.name!="ThrowException" || code[trap].words!=[0] || join!=trap+1
+            || !(at+42<=case_low && case_low<case_middle && case_middle<trap && join<code.len()) {return None;}
+        let record_name=refs.type_identity_by_ptr(f.ret.type_info)?.name.as_str();
+        let def_name=refs.type_identity_by_ptr(definition_ty)?.name.as_str();
+        let array_name=refs.type_identity_by_ptr(array_ty)?.name.as_str();let tags_name=refs.type_identity_by_ptr(tags_ty)?.name.as_str();
+        let field=|i:&Instr,n:usize,owner:&str| {
+            let id=*i.dwords.first()? as i32;let (name,old)=refs.member_identity(id,w(i,n)?)?;
+            if refs.type_identity_by_id(id)?.name!=owner || refs.type_identity_by_id(old)?.name!=owner {return None;}Some(name)
+        };
+        let key=field(&a[3],0,record_name)?;let source_field=field(&a[7],1,def_name)?;let dest_field=field(&a[9],1,record_name)?;
+        let enum_ty=refs.own_field_type_by_class(def_name,source_field)?;
+        if !super::structure::is_enum_name(enum_ty) || refs.own_field_type_by_class(record_name,dest_field)!=Some(enum_ty) {return None;}
+        let getter=*a[5].dwords.first()? as i32;let get_name=refs.func_by_id(getter)?;
+        let getter_ret=refs.func_ret_by_id(getter)?;let [key_param]=refs.func_params_by_id(getter)? else {return None;};
+        if !refs.is_method_by_id(getter) || !refs.is_subclass(class_name?,refs.func_owner_by_id(getter)?)
+            || !shape(getter_ret,5,definition_ty,false,true,true,false) || !shape(key_param,5,key_param.type_info,true,true,false,true)
+            || refs.own_field_type_by_class(record_name,key)!=Some(refs.type_identity_by_ptr(key_param.type_info)?.name.as_str()) {return None;}
+        let method=|ptr,name,owner,constant|refs.func_by_ptr(ptr)==Some(name) && refs.func_owner_by_ptr(ptr)==Some(owner)
+            && refs.is_method_by_ptr(ptr) && refs.is_const_method_by_ptr(ptr)==constant;
+        let void0=|ptr,name,owner|method(ptr,name,owner,false) && refs.func_ret_by_ptr(ptr).is_some_and(|t|shape(t,0x52,0,false,false,false,false))
+            && refs.func_params_by_ptr(ptr).is_some_and(|params| params.is_empty());
+        let add=p(&a[40])?;
+        if !void0(p(&a[12])?,"$beh0",array_name) || !void0(p(&a[14])?,"$beh0",tags_name)
+            || !method(add,"Add",array_name,false) || !shape(refs.func_ret_by_ptr(add)?,0x52,0,false,false,false,false)
+            || !matches!(refs.func_params_by_ptr(add)?,[t] if shape(t,5,actor_ty,true,true,true,true)) {return None;}
+        let mut branches=Vec::new();let mut allowed=HashSet::from([at+19,at+21,at+24,at+25,at+26,at+36,at+37,at+41]);
+        let mut closed=vec![(at,at+42)];
+        for (begin,end) in [(case_low,case_middle),(case_middle,trap)] {
+            let hits:Vec<_>=code[begin..end].windows(14).enumerate().filter(|(_,b)|b.iter().map(|i|i.op.name).eq(
+                "PSF CALLSYS JLowZ PSF CALLSYS PSF CALLSYS JMP SetV1 CpyVtoV4 PSF PSF CALLSYS JMP".split_whitespace())).map(|(i,_)|begin+i).collect();
+            let [bi]=hits.as_slice() else {return None;};let bi=*bi;let b=&code[bi..bi+14];let latch=jump(&b[13])?;
+            let tail=code.get(latch..latch+9)?;let entry=code.get(bi+14..bi+20)?;
+            if !tail.iter().map(|i|i.op.name).eq("LoadVObjR RDR1 CpyVtoR1 JLowNZ PSF CALLSYS PSF CALLSYS JMP".split_whitespace())
+                || !entry.iter().map(|i|i.op.name).eq("SUSPEND PSF CALLSYS PshRPtr RDSPtr RefCpyV".split_whitespace())
+                || latch<bi+20 || latch+9!=end || jump(&b[2])!=Some(bi+8) || jump(&b[7])!=Some(join)
+                || jump(&tail[3])!=Some(bi+14) || jump(&tail[8])!=Some(join) {return None;}
+            let (set,tag,iter,item)=(w(&b[0],0)?,w(&b[3],0)?,w(&b[10],0)?,w(&entry[5],0)?);
+            let (set_ty,iter_ty)=(local(set)?,local(iter)?);let set_name=refs.type_identity_by_ptr(set_ty)?.name.as_str();let iter_name=refs.type_identity_by_ptr(iter_ty)?.name.as_str();
+            if HashSet::from([set,tag,iter,item]).len()!=4 || local(tag)!=Some(tags_ty) || local(item)!=Some(actor_ty)
+                || w(&b[5],0)!=Some(set) || w(&b[11],0)!=Some(set) || w(&b[8],0)!=Some(temp) || b[8].dwords.as_slice()!=[1]
+                || b[9].words!=a[1].words || w(&entry[1],0)!=Some(iter) || w(&tail[0],0)!=Some(iter)
+                || w(&tail[1],0)!=Some(temp) || w(&tail[2],0)!=Some(temp) || w(&tail[4],0)!=Some(tag) || w(&tail[6],0)!=Some(set)
+                || field(&tail[0],1,iter_name)?!="CanProceed" {return None;}
+            let (empty,iterator,proceed)=(p(&b[1])?,p(&b[12])?,p(&entry[2])?);
+            if !method(empty,"IsEmpty",set_name,true) || !shape(refs.func_ret_by_ptr(empty)?,0x41,0,false,false,false,false) || !refs.func_params_by_ptr(empty)?.is_empty()
+                || !void0(p(&b[4])?,"$beh2",tags_name) || !void0(p(&b[6])?,"$beh2",set_name) || p(&tail[5])!=p(&b[4]) || p(&tail[7])!=p(&b[6])
+                || !method(iterator,"Iterator",set_name,false) || !shape(refs.func_ret_by_ptr(iterator)?,5,iter_ty,false,false,false,false) || !refs.func_params_by_ptr(iterator)?.is_empty()
+                || !method(proceed,"Proceed",iter_name,false) || !shape(refs.func_ret_by_ptr(proceed)?,5,actor_ty,true,false,true,true) || !refs.func_params_by_ptr(proceed)?.is_empty() {return None;}
+            branches.push((bi,set,tag,iter,item));allowed.extend([bi+2,bi+7,bi+13,latch+3,latch+8]);closed.extend([(bi,bi+20),(latch,latch+9)]);
+        }
+        if branches[0].1==branches[1].1 || branches[0].2==branches[1].2 || branches[0].3==branches[1].3 {return None;}
+        // The flag has no reads, including elsewhere in the function; all four writes belong to this switch.
+        if !code.iter().enumerate().filter(|(_,i)|super::bytediff::addressed_slots(i).contains(&flag)).map(|(i,_)|i)
+            .eq([at+1,at+32,branches[0].0+9,branches[1].0+9]) {return None;}
+        for (i,c) in code.iter().enumerate().filter(|(_,c)|c.op.name.starts_with('J')) {
+            if c.op.name=="JMPP" {if i!=at+23 {return None;}continue;}
+            let target=jump(c)?;
+            if (closed.iter().any(|(s,e)|target>=*s && target<*e && (*s!=at || target>at)) || target==trap || [at+27,case_low,case_middle].contains(&target)) && !allowed.contains(&i) {return None;}
+            if [(case_low,case_middle),(case_middle,trap)].iter().any(|(s,e)|target>*s && target<*e && !(i>=*s && i<*e)) {return None;}
+            if i>=at && i<trap && target<at {return None;}
+        }
+        Some((flag,record,definition,array,tags,branches,low,high,key.to_owned(),source_field.to_owned(),dest_field.to_owned(),get_name.to_owned(),getter_ret.render(refs),victim_param.name.clone(),actor_ty,tags_name.to_owned()))
+    })();
+    let Some((flag,record,definition,array,tags,branches,low,high,key,source_field,dest_field,getter,def_type,victim,actor_ty,tags_type))=found else {return body.to_owned();};
+    let lines:Vec<_>=body.lines().collect();let mut paths=Vec::new();let mut path=Vec::new();let mut ends=HashMap::new();
+    for (i,line) in lines.iter().enumerate() {
+        paths.push(path.clone());match line.trim() {"{"=>path.push(i),"}"=>{let Some(open)=path.pop() else {return body.to_owned();};ends.insert(open,i);},_=>if brace_net(line)!=0 {return body.to_owned();}}
+    }
+    if !path.is_empty() {return body.to_owned();}
+    let bound=|name:&str,slot|slot_and_life_any(name).map(|v|v.0)==Some(slot);
+    let matches=(|| {
+        let seeds:Vec<_>=lines.iter().enumerate().filter_map(|(row,line)| {
+            let (pad,name,rhs)=declaration_with_initializer(line)?;
+            (bound(&name,flag) && rhs=="false" && *line==format!("{pad}bool {name} = false;")).then_some((row,pad,name))
+        }).collect();let [(row,pad,name)]=seeds.as_slice() else {return None;};let row=*row;
+        let c=lines.get(row..row+9)?;let (_,def,_)=declaration_with_initializer(c[1])?;
+        let (record_name,_) = c[2].trim().split_once('.')?;let (_,array_name)=bare_declaration(c[3])?;let (_,tag_name)=bare_declaration(c[4])?;
+        if !bound(&def,definition) || !bound(record_name,record) || !bound(&array_name,array) || !bound(&tag_name,tags) || count_ident(body,name)!=1 {return None;}
+        let actor_name=refs.type_identity_by_ptr(actor_ty)?.name.as_str();
+        let expected=[format!("{def_type} {def} = this.{getter}({record_name}.{key});"),format!("{record_name}.{dest_field} = {def}.{source_field};"),
+            format!("TArray<{actor_name}> {array_name};"),format!("{tags_type} {tag_name};"),format!("switch (int({def}.{source_field}))"),"{".into(),format!("case {high}:"),"{".into()];
+        if !c[1..].iter().zip(expected).all(|(a,b)|*a==format!("{pad}{b}")) || paths[row]!=paths[row+5] {return None;}
+        let switch_open=row+6;let switch_end=*ends.get(&switch_open)?;let mut switch_path=paths[row].clone();switch_path.push(switch_open);
+        let cases:Vec<_>=(switch_open+1..switch_end).filter(|i|paths[*i]==switch_path && lines[*i].trim().starts_with("case ")).collect();
+        if cases.len()!=4 || cases[0]!=row+7 || !cases.iter().zip([high,low,low+1,low+2]).all(|(i,n)|lines[*i]==format!("{pad}case {n}:"))
+            || cases[3]!=cases[2]+1 || (switch_open+1..switch_end).any(|i|paths[i]==switch_path && lines[i].trim()=="default:") {return None;}
+        let (_,first,rhs)=declaration_with_initializer(lines.get(row+9)?)?;
+        if !bound(&first,flag) || count_ident(body,&first)!=1 || rhs!=format!("({victim} != nullptr)") {return None;}
+        let first_expected=[format!("bool {first} = ({victim} != nullptr);"),format!("if ({victim} == nullptr)"),"{".into(),"    break;".into(),"}".into(),"else".into(),"{".into(),format!("    {array_name}.Add({victim});"),"    break;".into(),"}".into()];
+        if !lines.get(row+9..row+19)?.iter().zip(first_expected).all(|(a,b)|*a==format!("{pad}    {b}")) || *ends.get(&(row+8))?!=cases[1]-1 {return None;}
+        let mut changes=vec![(row+5,format!("{pad}switch ({def}.{source_field})")),(row+9,format!("{pad}    {name} = ({victim} != nullptr);"))];
+        let mut flag_names=HashSet::from([name.clone(),first]);
+        for ((_,set,_,_,item),(case_start,case_end)) in branches.iter().zip([(cases[1],cases[2]),(cases[3],switch_end)]) {
+            let open=case_start+1;if lines.get(open)?.trim()!="{" || *ends.get(&open)?!=case_end-1 {return None;}
+            let mut case_path=switch_path.clone();case_path.push(open);
+            let hits:Vec<_>=(open+1..case_end-1).filter_map(|i| {
+                let (inner,alias,rhs)=declaration_with_initializer(lines[i])?;
+                (bound(&alias,flag) && rhs=="true").then_some((i,inner,alias))
+            }).collect();let [(i,inner,alias)]=hits.as_slice() else {return None;};let i=*i;
+            if !flag_names.insert(alias.clone()) || count_ident(body,alias)!=1 || i<6 || lines[i]!=format!("{inner}bool {alias} = true;") {return None;}
+            let set_name=lines[i-6].trim().strip_prefix("if (")?.strip_suffix(".IsEmpty())")?;
+            let loop_text=lines.get(i+1)?.trim().strip_prefix("for (auto ")?.strip_suffix(')')?;let (item_name,loop_set)=loop_text.split_once(" : ")?;
+            if !bound(set_name,*set) || loop_set!=set_name || !bound(item_name,*item) || paths[i-6]!=case_path || paths[i]!=[case_path.clone(),vec![i-1]].concat()
+                || lines[i-5..i].iter().map(|s|s.trim()).ne(["{","break;","}","else","{"])
+                || lines.get(i+2)?.trim()!="{" || lines.get(*ends.get(&(i+2))?+1)?.trim()!="break;"
+                || *ends.get(&(i-1))?!=case_end-2 {return None;}
+            changes.push((i,format!("{inner}{name} = true;")));
+        }
+        // Reject additional named lives even if their raw compiler slot has since been renamed.
+        let all_names:HashSet<_>=body.split(|c:char|!c.is_ascii_alphanumeric() && c!='_').filter(|s|bound(s,flag)).map(str::to_owned).collect();
+        if all_names!=flag_names {return None;}Some(changes)
+    })();
+    let Some(changes)=matches else {return body.to_owned();};let mut out:Vec<_>=lines.iter().map(|s|(*s).to_owned()).collect();
+    for (row,text) in changes {out[row]=text;}let mut out=out.join("\n");if body.ends_with('\n') {out.push('\n');}out
+}
+
 /// Preserve a conditional vector's allocation and the two linked scalar argument lives.
 fn restore_selected_vector_argument_lives(body:&str,f:&Func,refs:&RefResolver,is_method:bool)->String {
     if !is_method || !f.is_const_method() || !body.contains(".opNeg();") {return body.to_owned();}
@@ -18724,6 +18880,140 @@ fn restore_selected_vector_argument_lives(body:&str,f:&Func,refs:&RefResolver,is
     let [(row,replacement)]=edits.as_slice() else {return body.to_owned();};
     let mut out:Vec<_>=lines.iter().map(|s|(*s).to_owned()).collect();out.splice(*row..*row+17,[replacement.clone()]);
     let mut out=out.join("\n");if body.ends_with('\n') {out.push('\n');}out
+}
+
+/// Preserve two deferred native clock receivers and a typed byte-field assignment value.
+fn restore_clock_property_and_enum_chain(body: &str, f: &Func, refs: &RefResolver, is_method: bool, class_name: Option<&str>) -> String {
+    if !is_method || body.matches(".GetClockTime().GetHour()").count() != 2 { return body.to_owned(); }
+    let found = (|| {
+        let class = class_name?;
+        let shape = |t: &super::types::DataType, token, ptr, reference: bool, constant: bool, handle: bool| {
+            t.token == token && t.type_info == ptr && t.is_reference == reference && t.is_object_const == constant
+                && t.is_read_only == constant && t.is_object_handle == handle && !t.is_auto && !t.if_handle_then_const
+        };
+        if !f.params.is_empty() || f.is_const_method() || !shape(&f.ret, 0x52, 0, false, false, false) { return None; }
+        let native = |ptr, name| refs.type_identity_by_ptr(ptr).is_some_and(|t| t.name == name && t.module.is_empty() && t.namespace.is_empty());
+        let identifier = |s: &str| !s.is_empty() && s.bytes().enumerate().all(|(n,c)| c == b'_' || c.is_ascii_alphabetic() || n > 0 && c.is_ascii_digit());
+        let field_type = |owner: &str, field: &str| {
+            let a = refs.field_type_by_class(owner, field); let b = refs.native_field_value_type(owner, field);
+            match (a,b) { (Some(a),Some(b)) if a != b => None, (Some(a),_) => Some(a.to_owned()), (_,Some(b)) => Some(b.to_owned()), _ => None }
+        };
+        let code = disassemble(&f.bytecode).ok()?;
+        let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+        let p = |i: &Instr| i.qwords.first().map(|v| *v as i64);
+        let ops = |c: &[Instr], names: &str| c.iter().map(|i| i.op.name).eq(names.split_whitespace());
+        let local = |slot| { let mut it = f.obj_locals.iter().filter(|(s,_)| *s == slot); let ptr = it.next()?.1; (slot > 0 && it.next().is_none()).then_some(ptr) };
+        let scalar = |slot| slot > 0 && !f.obj_locals.iter().any(|(s,_)| *s == slot);
+        let uses = |slot| code.iter().enumerate().filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&slot)).map(|(n,_)| n).collect::<Vec<_>>();
+        let method = |ptr, owner, name, constant| refs.func_owner_by_ptr(ptr) == Some(owner) && refs.func_by_ptr(ptr) == Some(name)
+            && refs.is_method_by_ptr(ptr) && refs.is_const_method_by_ptr(ptr) == constant;
+        let site = |i: &Instr| {
+            if !matches!(i.op.name, "ADDSi" | "LoadThisR") { return None; }
+            let id = *i.dwords.first()? as i32; let ty = refs.type_identity_by_id(id)?;
+            let (name, old) = refs.member_identity(id, w(i,0)?)?;
+            (refs.type_identity_by_id(old)? == ty && identifier(name) && identifier(&ty.name)).then_some((ty.name.clone(),name.to_owned()))
+        };
+        let offsets: HashMap<_,_> = code.iter().enumerate().map(|(n,i)| (i.offset_dw as i64,n)).collect();
+        let target = |i: &Instr| offsets.get(&(i.offset_dw as i64 + 2 + *i.dwords.first()? as i32 as i64)).copied();
+        let mut edges = Vec::new();
+        for (n,i) in code.iter().enumerate() {
+            if i.op.name == "JMPP" { return None; }
+            if i.op.name.starts_with('J') { edges.push((n,target(i)?)); }
+        }
+        let starts: Vec<_> = code.windows(41).enumerate().filter(|(_,c)| ops(c,
+            "LoadThisR RDR1 CpyVtoR1 JLowNZ SetV4 JMP PSF PSF CALLSYS PSF CALLSYS CpyRtoV4 PSF CALLSYS PSF PshVPtr ADDSi CALLSYS PSF CALLSYS CpyRtoV4 PSF CALLSYS CMPi JNP SetV1 JMP PSF CALLSYS CpyRtoV4 PshVPtr ADDSi CALLSYS CpyRtoV4 CMPi TP CpyRtoV4 CpyVtoV4 CpyVtoV4 CpyVtoR1 JLowZ"
+        )).map(|(n,_)| n).collect();
+        let [at] = starts.as_slice() else { return None; }; let at = *at;
+        let c = &code[at..at+41]; let init_at = at.checked_sub(5)?; let init = &code[init_at..at];
+        if !ops(init,"PSF PshVPtr ADDSi RDSPtr CALLSYS") { return None; }
+        let (time,clock_a,clock_b,first,second,flag,outer,inner) = (w(&c[7],0)?,w(&c[6],0)?,w(&c[14],0)?,w(&c[11],0)?,w(&c[20],0)?,w(&c[1],0)?,w(&c[4],0)?,w(&c[25],0)?);
+        let time_type = local(time)?; let clock_type = local(clock_a)?;
+        if !native(time_type,"FInGameTime") || !native(clock_type,"FClockTime") || local(clock_b)? != clock_type
+            || HashSet::from([time,clock_a,clock_b]).len() != 3 || HashSet::from([first,second,flag,outer,inner]).len() != 5
+            || [first,second,flag,outer,inner].iter().any(|s| !scalar(*s))
+            || [(2,flag),(9,clock_a),(12,clock_a),(15,0),(18,clock_b),(21,clock_b),(23,first),(27,time),(29,second),
+                (30,0),(33,first),(34,second),(36,outer),(37,inner),(38,outer),(39,outer)].iter().any(|(n,s)| w(&c[*n],0) != Some(*s))
+            || w(&c[23],1) != Some(second) || w(&c[34],1) != Some(first) || w(&c[37],1) != Some(outer) || w(&c[38],1) != Some(inner)
+            || c[4].dwords != [0] || c[25].dwords != [1] || w(&init[0],0) != Some(time) || w(&init[1],0) != Some(0)
+            || target(&c[3]) != Some(at+6) || target(&c[5]) != Some(at+39) || target(&c[24]) != Some(at+27) || target(&c[26]) != Some(at+38)
+            || uses(clock_a) != [at+6,at+9,at+12] || uses(clock_b) != [at+14,at+18,at+21]
+            || f.obj_locals.iter().filter(|(_,p)| *p == clock_type).count() != 2 { return None; }
+        let (make,hour,clock_dtor,day) = (p(&c[8])?,p(&c[10])?,p(&c[13])?,p(&c[28])?);
+        if p(&c[17]) != Some(make) || p(&c[19]) != Some(hour) || p(&c[22]) != Some(clock_dtor) || p(&c[32]) != Some(day)
+            || !method(make,"FInGameTime","GetClockTime",true) || !refs.func_params_by_ptr(make)?.is_empty() || !shape(refs.func_ret_by_ptr(make)?,5,clock_type,false,false,false)
+            || !method(clock_dtor,"FClockTime","$beh2",false) || !refs.func_params_by_ptr(clock_dtor)?.is_empty() || !shape(refs.func_ret_by_ptr(clock_dtor)?,0x52,0,false,false,false)
+            || !method(day,"FInGameTime","GetDay",true) || !refs.func_params_by_ptr(day)?.is_empty() || !shape(refs.func_ret_by_ptr(day)?,0x44,0,false,false,false) { return None; }
+        // Exact pinned native GetHour API: post-bind traits 516 include property 0x200.
+        // FunctionReferences does not carry that trait; this is not a generic Get* inference.
+        if !method(hour,"FClockTime","GetHour",true) || !refs.func_params_by_ptr(hour)?.is_empty() || !shape(refs.func_ret_by_ptr(hour)?,0x44,0,false,false,false)
+            || refs.field_type_by_class("FClockTime","Hour").is_some() || refs.native_field_value_type("FClockTime","Hour").is_some() { return None; }
+        let (owner,last) = site(&c[16])?; let (flag_owner,enabled) = site(&c[0])?; let (source_owner,source_field) = site(&init[2])?;
+        if owner != class || flag_owner != owner || source_owner != owner || site(&c[31])? != (owner.clone(),last.clone())
+            || refs.own_field_type_by_class(class,&last) != Some("FInGameTime") || refs.own_field_type_by_class(class,&enabled) != Some("bool") { return None; }
+        let now = p(&init[4])?; let now_name = refs.func_by_ptr(now)?; let source_type = field_type(class,&source_field)?;
+        if !identifier(now_name) || !method(now,&source_type,now_name,true) || !refs.func_params_by_ptr(now)?.is_empty()
+            || !shape(refs.func_ret_by_ptr(now)?,5,time_type,false,false,false) { return None; }
+        let chain_at = code.len().checked_sub(14)?; let tail = &code[chain_at..];
+        if chain_at <= at+41 || !ops(tail,"PshVPtr CALLSYS CpyRtoV4 LoadThisR WRTV1 RDR1 PshVPtr ADDSi ADDSi PopRPtr WRTV1 PSF CALLSYS RET")
+            || w(&tail[0],0) != Some(0) || w(&tail[11],0) != Some(time) || tail[13].words != [2] { return None; }
+        let value = w(&tail[2],0)?; let holder = w(&tail[6],0)?; let holder_type = local(holder)?;
+        if !scalar(value) || [first,second,flag,outer,inner].contains(&value) || holder == time
+            || [4,5,10].iter().any(|n| w(&tail[*n],0) != Some(value)) || uses(value) != [chain_at+2,chain_at+4,chain_at+5,chain_at+10] { return None; }
+        let getter = p(&tail[1])?; let getter_owner = refs.func_owner_by_ptr(getter)?; let getter_name = refs.func_by_ptr(getter)?;
+        // Same exact value type on the native result and both fields, plus byte read/write ABI.
+        // This is deliberately not a general enum classifier (T1 does not carry that flag).
+        let enum_type = refs.func_ret_by_ptr(getter)?; let enum_name = &refs.type_identity_by_ptr(enum_type.type_info)?.name;
+        if !identifier(getter_name) || !identifier(enum_name) || !refs.is_subclass(class,getter_owner) || !refs.is_method_by_ptr(getter)
+            || !refs.func_params_by_ptr(getter)?.is_empty() || !shape(enum_type,5,enum_type.type_info,false,false,false) { return None; }
+        let (enum_owner,saved) = site(&tail[3])?; let (holder_owner,record) = site(&tail[7])?; let (record_type,current) = site(&tail[8])?;
+        let holder_name = &refs.type_identity_by_ptr(holder_type)?.name;
+        if enum_owner != owner || !native(holder_type,holder_name) || holder_owner != *holder_name || refs.own_field_type_by_class(class,&saved) != Some(enum_name.as_str())
+            || field_type(holder_name,&record)? != record_type || field_type(&record_type,&current)? != *enum_name { return None; }
+        let assign_at = chain_at.checked_sub(4)?; let assign = &code[assign_at..chain_at]; let time_dtor = p(&tail[12])?;
+        if !ops(assign,"PSF PshVPtr ADDSi CALLSYS") || w(&assign[0],0) != Some(time) || w(&assign[1],0) != Some(0) || site(&assign[2])? != (owner,last.clone())
+            || !method(time_dtor,"FInGameTime","$beh2",false) || !refs.func_params_by_ptr(time_dtor)?.is_empty() || !shape(refs.func_ret_by_ptr(time_dtor)?,0x52,0,false,false,false) { return None; }
+        let assign_ptr = p(&assign[3])?;
+        if !method(assign_ptr,"FInGameTime","opAssign",false) || !shape(refs.func_ret_by_ptr(assign_ptr)?,5,time_type,true,false,false)
+            || !matches!(refs.func_params_by_ptr(assign_ptr)?,[v] if shape(v,5,time_type,true,true,false)) { return None; }
+        let later: Vec<_> = code.windows(9).enumerate().filter(|(n,c)| *n > at+40 && *n < assign_at && ops(c,"PSF CALLSYS CpyRtoV4 PshVPtr ADDSi CALLSYS CpyRtoV4 CMPi JNP")).map(|(n,_)| n).collect();
+        let [later] = later.as_slice() else { return None; }; let later = *later; let d = &code[later..later+9];
+        if w(&d[0],0) != Some(time) || p(&d[1]) != Some(day) || w(&d[2],0) != Some(second) || w(&d[3],0) != Some(0)
+            || site(&d[4])? != (class.to_owned(),last.clone()) || p(&d[5]) != Some(day) || w(&d[6],0) != Some(first) || d[7].words != [second as u16,first as u16]
+            || target(&c[40]) != Some(later) || target(&d[8]) != Some(assign_at)
+            || uses(time) != [init_at,at+7,at+27,later,assign_at,chain_at+11] { return None; }
+        // No entry may bypass a construction, a short-circuit decision, or either chained store.
+        let internal = [(at+3,at+6),(at+5,at+39),(at+24,at+27),(at+26,at+38)];
+        if edges.iter().any(|(from,to)| (*to > init_at && *to < at+41 && !internal.contains(&(*from,*to)))
+            || (*to > later && *to < later+9) || (*to > assign_at && *to < code.len()-1)) { return None; }
+        let one_name = |slot| { let names: HashSet<_> = body.split(|c: char| !c.is_ascii_alphanumeric() && c != '_').filter(|s| slot_and_life_any(s).is_some_and(|(n,_)| n == slot)).collect();
+            (names.len() == 1).then(|| names.into_iter().next().unwrap()) };
+        let time = one_name(time)?; let holder = one_name(holder)?;
+        let lines: Vec<_> = body.lines().collect(); let mut paths = Vec::new(); let mut path = Vec::new();
+        for (n,l) in lines.iter().enumerate() { paths.push(path.clone()); match l.trim() { "{" => path.push(n), "}" => { path.pop()?; }, _ => if brace_net(l) != 0 { return None; } } }
+        if !path.is_empty() { return None; }
+        let unique = |text: &str| { let all: Vec<_> = lines.iter().enumerate().filter(|(_,l)| l.trim() == text).map(|(n,_)| n).collect(); (all.len() == 1).then(|| all[0]) };
+        let declaration = unique(&format!("FInGameTime {time} = this.{source_field}.{now_name}();"))?;
+        let condition = unique(&format!("if (this.{enabled} && ({time}.GetClockTime().GetHour() > this.{last}.GetClockTime().GetHour() || ({time}.GetDay() > this.{last}.GetDay())))"))?;
+        let later_condition = unique(&format!("if ({time}.GetDay() > this.{last}.GetDay())"))?;
+        let first_store = unique(&format!("this.{saved} = this.{getter_name}();"))?;
+        let second_store = unique(&format!("{holder}.{record}.{current} = this.{saved};"))?;
+        let holder_declarations: Vec<_> = lines.iter().enumerate().filter_map(|(n,l)| declaration_with_initializer(l).filter(|(_,name,_)| name == holder).map(|_| n)).collect();
+        let [holder_declaration] = holder_declarations.as_slice() else { return None; };
+        if *holder_declaration >= declaration || !lines[*holder_declaration].trim().starts_with(&format!("{holder_name} {holder} = "))
+            || declaration >= condition || condition >= later_condition || later_condition >= first_store || first_store+1 != second_store
+            || lines.get(first_store.checked_sub(1)?)?.trim() != format!("this.{last} = {time};") || lines.get(second_store+1)?.trim() != "return;" || lines.len() != second_store+2
+            || [*holder_declaration,declaration,condition,later_condition,first_store,second_store].iter().any(|n| !paths[*n].is_empty())
+            || count_ident(body,time) != 5 { return None; }
+        for name in [time,holder] {
+            if lines.iter().filter_map(|l| declaration_with_initializer(l).map(|(_,n,_)| n).or_else(|| bare_declaration(l).map(|(_,n)| n))).filter(|n| n == name).count() != 1 { return None; }
+        }
+        Some((condition,first_store,second_store,format!("{holder}.{record}.{current} = this.{saved} = this.{getter_name}();")))
+    })();
+    let Some((condition,first,second,chain)) = found else { return body.to_owned(); };
+    let mut out: Vec<_> = body.lines().map(str::to_owned).collect();
+    out[condition] = out[condition].replace(".GetClockTime().GetHour()", ".GetClockTime().Hour");
+    out[first] = format!("{}{}",indent_of(&out[first]),chain); out.remove(second);
+    out.join("\n") + if body.ends_with('\n') { "\n" } else { "" }
 }
 
 /// Keep the native class-value copy and the per-iteration fallback handle in their original scopes.
@@ -63622,6 +63912,373 @@ mod literal_value_lifetime_tests {
         assert_eq!(fold(&s,&closed_format_arguments_fixture(512),&refs),e,"identifier boundary and distinct existing numeric suffixes");
     }
 
+    fn shared_flag_switch_fixture(bias:u16)->Func {
+        // Original 29..70, paired 82..101 / 203..222 and both latch/cleanup windows.
+        // SUSPEND gaps stand for the unchanged branch setup; Add/FreeNull model each body.
+        let mut f=function(&[
+            ("JMP", &[]),
+            ("SUSPEND", &[]),
+            ("SetV1", &[36]),
+            ("CpyVtoV4", &[35, 36]),
+            ("PSF", &[32]),
+            ("ADDSi", &[4]),
+            ("PshVPtr", &[0]),
+            ("CALLINTF", &[]),
+            ("STOREOBJ", &[38]),
+            ("LoadRObjR", &[38, 120]),
+            ("RDR1", &[41]),
+            ("LoadVObjR", &[32, 40]),
+            ("WRTV1", &[41]),
+            ("PSF", &[46]),
+            ("CALLSYS", &[]),
+            ("PSF", &[54]),
+            ("CALLSYS", &[]),
+            ("LoadRObjR", &[38, 120]),
+            ("RDR1", &[41]),
+            ("sbTOi", &[55, 41]),
+            ("CMPIi", &[55]),
+            ("JP", &[]),
+            ("CMPIi", &[55]),
+            ("JS", &[]),
+            ("SUBIi", &[56, 55]),
+            ("JMPP", &[56]),
+            ("JMP", &[]),
+            ("JMP", &[]),
+            ("JMP", &[]),
+            ("PshVPtr", &[65526]),
+            ("RefCpyV", &[58]),
+            ("CmpPtrNull", &[58]),
+            ("TNZ", &[]),
+            ("CpyRtoV4", &[36]),
+            ("CpyVtoV4", &[35, 36]),
+            ("PshVPtr", &[65526]),
+            ("RefCpyV", &[58]),
+            ("CmpPtrNull", &[58]),
+            ("JNZ", &[]),
+            ("JMP", &[]),
+            ("PSF", &[65526]),
+            ("PSF", &[46]),
+            ("CALLSYS", &[]),
+            ("JMP", &[]),
+            ("SUSPEND", &[]),
+            ("PSF", &[98]),
+            ("CALLSYS", &[]),
+            ("JLowZ", &[]),
+            ("PSF", &[114]),
+            ("CALLSYS", &[]),
+            ("PSF", &[98]),
+            ("CALLSYS", &[]),
+            ("JMP", &[]),
+            ("SetV1", &[36]),
+            ("CpyVtoV4", &[35, 36]),
+            ("PSF", &[122]),
+            ("PSF", &[98]),
+            ("CALLSYS", &[]),
+            ("JMP", &[]),
+            ("SUSPEND", &[]),
+            ("PSF", &[122]),
+            ("CALLSYS", &[]),
+            ("PshRPtr", &[]),
+            ("RDSPtr", &[]),
+            ("RefCpyV", &[132]),
+            ("PSF", &[132]),
+            ("PSF", &[46]),
+            ("CALLSYS", &[]),
+            ("FreeNullV8", &[132]),
+            ("LoadVObjR", &[122, 24]),
+            ("RDR1", &[36]),
+            ("CpyVtoR1", &[36]),
+            ("JLowNZ", &[]),
+            ("PSF", &[114]),
+            ("CALLSYS", &[]),
+            ("PSF", &[98]),
+            ("CALLSYS", &[]),
+            ("JMP", &[]),
+            ("SUSPEND", &[]),
+            ("PSF", &[78]),
+            ("CALLSYS", &[]),
+            ("JLowZ", &[]),
+            ("PSF", &[106]),
+            ("CALLSYS", &[]),
+            ("PSF", &[78]),
+            ("CALLSYS", &[]),
+            ("JMP", &[]),
+            ("SetV1", &[36]),
+            ("CpyVtoV4", &[35, 36]),
+            ("PSF", &[130]),
+            ("PSF", &[78]),
+            ("CALLSYS", &[]),
+            ("JMP", &[]),
+            ("SUSPEND", &[]),
+            ("PSF", &[130]),
+            ("CALLSYS", &[]),
+            ("PshRPtr", &[]),
+            ("RDSPtr", &[]),
+            ("RefCpyV", &[132]),
+            ("PSF", &[132]),
+            ("PSF", &[46]),
+            ("CALLSYS", &[]),
+            ("FreeNullV8", &[132]),
+            ("LoadVObjR", &[130, 24]),
+            ("RDR1", &[36]),
+            ("CpyVtoR1", &[36]),
+            ("JLowNZ", &[]),
+            ("PSF", &[106]),
+            ("CALLSYS", &[]),
+            ("PSF", &[78]),
+            ("CALLSYS", &[]),
+            ("JMP", &[]),
+            ("ThrowException", &[0]),
+            ("SUSPEND", &[]),
+            ("RET", &[16]),
+        ]);
+        f.name="BuildRecord".into();f.ret=DataType {token:5,type_info:1,..Default::default()};
+        f.params=["Key","First","Second","Subject","AreaTag","InteractiveObject"].into_iter().enumerate().map(|(i,name)|
+            super::super::model::Param {name:name.into(),flags:if matches!(i,0|4|5) {3} else {0},
+                ty:DataType {token:5,type_info:if matches!(i,0|4|5) {8} else {3},is_reference:matches!(i,0|4|5),
+                    is_object_const:matches!(i,0|4|5),is_read_only:matches!(i,0|4|5),is_object_handle:matches!(i,1|2|3),..Default::default()}}).collect();
+        f.obj_locals=vec![(32,1),(38,2),(46,4),(54,5),(58,3),(78,6),(98,6),(106,5),(114,5),(122,7),(130,7),(132,3)];
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,offset,value) in [(2, 1, 0), (5, 1, 101), (7, 1, 1001), (9, 2, 102), (11, 2, 101), (17, 2, 102), (20, 1, 3), (22, 1, 0), (24, 2, 0), (25, 1, 3), (53, 1, 1), (69, 2, 107), (87, 1, 1), (103, 2, 107)] {f.bytecode[code[at].offset_dw+offset]=value;}
+        for (at,value) in [(14, 11), (16, 12), (42, 13), (46, 14), (49, 15), (51, 16), (57, 17), (61, 18), (67, 13), (74, 15), (76, 16), (80, 14), (83, 15), (85, 16), (91, 17), (95, 18), (101, 13), (108, 15), (110, 16)] {f.bytecode[code[at].offset_dw+1]=value;}
+        for (from,to) in [(0, 1), (21, 112), (23, 112), (26, 44), (27, 78), (28, 78), (38, 40), (39, 113), (43, 113), (47, 53), (52, 113), (58, 69), (72, 59), (77, 113), (81, 87), (86, 113), (92, 103), (106, 93), (111, 113)] {f.bytecode[code[from].offset_dw+1]=code[to].offset_dw as i32-code[from].offset_dw as i32-2;}
+        for i in &code {
+            if matches!(i.op.name,"RET"|"ThrowException") {continue;}
+            for (n,word) in i.words.iter().enumerate() {
+                if (*word as i16)<=0 || (matches!(i.op.name,"LoadVObjR"|"LoadRObjR") && n==1) || i.op.name=="ADDSi" {continue;}
+                let at=n+1;let dw=i.offset_dw+at/2;let shift=(at%2)*16;
+                f.bytecode[dw]=((f.bytecode[dw] as u32 & !(0xffff<<shift)) | (((*word+bias) as u32)<<shift)) as i32;
+            }
+        }
+        for (slot,_) in &mut f.obj_locals {*slot+=bias as i32;}f
+    }
+
+    #[test]
+    fn shared_unused_flag_and_exhaustive_member_switch_keep_all_writes() {
+        let source=r#"        FRecord local_32;
+        bool local_35 = false;
+        const UDefinition local_38 = this.LookupDefinition(local_32.Key);
+        local_32.SelectedRoute = local_38.Route;
+        TArray<AResident> local_46;
+        FGameplayTagContainer local_54;
+        switch (int(local_38.Route))
+        {
+        case 3:
+        {
+            bool local_35_2 = (Subject != nullptr);
+            if (Subject == nullptr)
+            {
+                break;
+            }
+            else
+            {
+                local_46.Add(Subject);
+                break;
+            }
+        }
+        case 0:
+        {
+            TSet<AResident> local_98 = this.GetEventAreaOwningCharacterStates(AreaTag);
+            FGameplayTagContainer local_114 = this.GetEventAreaOwningGuilds(AreaTag);
+            local_54.AppendTags(local_114);
+            if (local_98.IsEmpty())
+            {
+                break;
+            }
+            else
+            {
+                bool local_35_3 = true;
+                for (auto local_132 : local_98)
+                {
+                    if (::IsIgnoringHomeTrespassing(local_132, AreaTag))
+                    {
+                        return local_32;
+                    }
+                    local_46.Add(local_132);
+                }
+                break;
+            }
+        }
+        case 1:
+        case 2:
+        {
+            if (IsValid(InteractiveObject.InteractiveObjectDefinition))
+            {
+                local_32.InteractiveObjectDefinitionClass = InteractiveObject.InteractiveObjectDefinition.GetClass();
+            }
+            if (IsValid(InteractiveObject.ItemDefinition))
+            {
+                local_32.ItemDefinitionClass = InteractiveObject.ItemDefinition.GetClass();
+            }
+            TSet<AResident> local_78 = this.GetEventInteractableOwningCharacterStates(InteractiveObject);
+            FGameplayTagContainer local_106 = this.GetEventInteractableOwningGuilds(InteractiveObject);
+            if (CriminalCharacterState.GetGuild().MatchesAny(local_106))
+            {
+                return local_32;
+            }
+            local_54.AppendTags(local_106);
+            if (local_78.IsEmpty())
+            {
+                break;
+            }
+            else
+            {
+                bool local_35_4 = true;
+                for (auto local_132 : local_78)
+                {
+                    if (local_132 == CriminalCharacterState)
+                    {
+                        return local_32;
+                    }
+                    local_46.Add(local_132);
+                }
+                break;
+            }
+        }
+        }
+        return local_32;
+"#;
+        let expected=r#"        FRecord local_32;
+        bool local_35 = false;
+        const UDefinition local_38 = this.LookupDefinition(local_32.Key);
+        local_32.SelectedRoute = local_38.Route;
+        TArray<AResident> local_46;
+        FGameplayTagContainer local_54;
+        switch (local_38.Route)
+        {
+        case 3:
+        {
+            local_35 = (Subject != nullptr);
+            if (Subject == nullptr)
+            {
+                break;
+            }
+            else
+            {
+                local_46.Add(Subject);
+                break;
+            }
+        }
+        case 0:
+        {
+            TSet<AResident> local_98 = this.GetEventAreaOwningCharacterStates(AreaTag);
+            FGameplayTagContainer local_114 = this.GetEventAreaOwningGuilds(AreaTag);
+            local_54.AppendTags(local_114);
+            if (local_98.IsEmpty())
+            {
+                break;
+            }
+            else
+            {
+                local_35 = true;
+                for (auto local_132 : local_98)
+                {
+                    if (::IsIgnoringHomeTrespassing(local_132, AreaTag))
+                    {
+                        return local_32;
+                    }
+                    local_46.Add(local_132);
+                }
+                break;
+            }
+        }
+        case 1:
+        case 2:
+        {
+            if (IsValid(InteractiveObject.InteractiveObjectDefinition))
+            {
+                local_32.InteractiveObjectDefinitionClass = InteractiveObject.InteractiveObjectDefinition.GetClass();
+            }
+            if (IsValid(InteractiveObject.ItemDefinition))
+            {
+                local_32.ItemDefinitionClass = InteractiveObject.ItemDefinition.GetClass();
+            }
+            TSet<AResident> local_78 = this.GetEventInteractableOwningCharacterStates(InteractiveObject);
+            FGameplayTagContainer local_106 = this.GetEventInteractableOwningGuilds(InteractiveObject);
+            if (CriminalCharacterState.GetGuild().MatchesAny(local_106))
+            {
+                return local_32;
+            }
+            local_54.AppendTags(local_106);
+            if (local_78.IsEmpty())
+            {
+                break;
+            }
+            else
+            {
+                local_35 = true;
+                for (auto local_132 : local_78)
+                {
+                    if (local_132 == CriminalCharacterState)
+                    {
+                        return local_32;
+                    }
+                    local_46.Add(local_132);
+                }
+                break;
+            }
+        }
+        }
+        return local_32;
+"#;
+        let refs=RefResolver::from_test_shared_flag_switch(0);
+        let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_shared_flag_and_typed_switch(s,f,r,Some("UPlanner"),true);
+        let rename=|s:&str,bias:u16| {
+            let mut s=s.to_owned();for slot in [132u16,130,122,114,106,98,78,58,56,55,54,46,41,38,36,35,32] {
+                for suffix in ["_4","_3","_2",""] {s=super::rename_ident(&s,&format!("local_{slot}{suffix}"),&format!("local_{}{suffix}",slot+bias));}
+            }s
+        };
+        for bias in [0u16,512] {
+            let f=shared_flag_switch_fixture(bias);let s=rename(source,bias);let e=rename(expected,bias);
+            assert_eq!(fold(&s,&f,&refs),e,"positive renamed metadata and slot bias {bias}");
+            assert_eq!(fold(&e,&f,&refs),e,"idempotent");
+            for fault in 1..=25 {assert_eq!(fold(&s,&f,&RefResolver::from_test_shared_flag_switch(fault)),s,"metadata {fault}");}
+        }
+        let f=shared_flag_switch_fixture(0);let code=disassemble(&f.bytecode).unwrap();assert_eq!(code.len(),115);
+        // Every WORD and native QWORD in the closed header / branch / latch witnesses is validated.
+        for at in (2..44).chain(45..65).chain(69..78).chain(79..99).chain(103..113) {
+            let i=&code[at];
+            for n in 0..i.words.len() {
+                let mut bad=f.clone();let word=n+1;bad.bytecode[i.offset_dw+word/2]^=1<<((word%2)*16);
+                assert_eq!(fold(source,&bad,&refs),source,"WORD {at}/{n}");
+            }
+            if !i.qwords.is_empty() {
+                for offset in [1,2] {let mut bad=f.clone();bad.bytecode[i.offset_dw+offset]^=1;assert_eq!(fold(source,&bad,&refs),source,"QWORD {at}/{offset}");}
+            }
+            if !i.dwords.is_empty() && (!i.op.name.starts_with('J') || i.op.name=="JMPP") {
+                let offset=if matches!(i.op.name,"LoadVObjR"|"LoadRObjR"|"SUBIi") {2} else {1};
+                let mut bad=f.clone();bad.bytecode[i.offset_dw+offset]^=1;assert_eq!(fold(source,&bad,&refs),source,"DWORD {at}");
+            }
+        }
+        for (from,to) in [(0,3),(0,45),(0,66),(0,112),(21,113),(26,46),(27,80),(38,41),(47,54),(58,70),(72,60),(86,112),(106,98)] {
+            let mut bad=f.clone();bad.bytecode[code[from].offset_dw+1]=code[to].offset_dw as i32-code[from].offset_dw as i32-2;
+            assert_eq!(fold(source,&bad,&refs),source,"CFG {from}->{to}");
+        }
+        for op in ["CpyVtoR1","SetV1"] {
+            let mut bad=f.clone();bad.bytecode.extend(function(&[(op,&[35])]).bytecode);
+            assert_eq!(fold(source,&bad,&refs),source,"extra flag read/write {op}");
+        }
+        let mut bad=f.clone();bad.obj_locals.extend([(35,1),(35,1)]);assert_eq!(fold(source,&bad,&refs),source,"scalar cannot alias objects");
+        let mut bad=f.clone();bad.obj_locals.push((38,2));assert_eq!(fold(source,&bad,&refs),source,"ambiguous object metadata");
+        for fault in 0..4 {
+            let mut bad=f.clone();match fault {0=>bad.params[3].flags=1,1=>bad.params[3].ty.is_object_const=true,2=>bad.ret.is_reference=true,_=>bad.params[3].ty.type_info=10}
+            assert_eq!(fold(source,&bad,&refs),source,"parameter/return ABI {fault}");
+        }
+        assert_eq!(super::restore_shared_flag_and_typed_switch(source,&f,&refs,None,true),source,"unknown this owner");
+        assert_eq!(super::restore_shared_flag_and_typed_switch(source,&f,&refs,Some("UPlanner"),false),source,"method ABI required");
+        for s in [
+            source.replace("Subject != nullptr","Subject == nullptr"),source.replace("local_35_3 = true","local_35_3 = false"),
+            source.replace("case 2:","case 4:"),source.replace("case 2:","default:"),source.replace("local_38.Route))","local_32.SelectedRoute))"),
+            source.replace("local_98.IsEmpty()","local_78.IsEmpty()"),source.replace(" : local_78)"," : local_98)"),
+            source.replace("                bool local_35_4", "                {\n                bool local_35_4"),
+            format!("{source}Use(local_35);\n"),format!("{source}Use(local_35_3);\n"),format!("{source}bool local_35_9 = false;\n"),
+        ] {assert_eq!(fold(&s,&f,&refs),s,"atomic source/use/scope guard");}
+        let life=|s:&str|super::rename_ident(&super::rename_ident(s,"local_35","local_35_7"),"local_35_3","local_35_11");
+        assert_eq!(fold(&life(source),&f,&refs),life(expected),"life suffixes do not control the match");
+        let s=format!("bool local_350 = false;\n{source}");let e=format!("bool local_350 = false;\n{expected}");
+        assert_eq!(fold(&s,&f,&refs),e,"slot-name prefix stays independent");
+    }
+
     fn selected_vector_arguments_fixture(bias:u16)->Func {
         // Original30..84 is the closed witness; the prefix/return model its surrounding CFG.
         let mut f=function(&[
@@ -63826,6 +64483,350 @@ mod literal_value_lifetime_tests {
         assert_eq!(fold(&rename_life(source),&f,&refs),rename_life(expected),"distinct source life suffixes");
         let s=format!("float local_320 = 2.0;\n{source}");let e=format!("float local_320 = 2.0;\n{expected}");
         assert_eq!(fold(&s,&f,&refs),e,"identifier-prefix collision stays untouched");
+    }
+
+    fn clock_property_enum_chain_fixture(bias: u16) -> Func {
+        // All 112 original operations retain external guards, two clock destructors, and the terminal address chain.
+        let mut f = function(&[
+            ("PshGPtr", &[]), // 0
+            ("CALLSYS", &[]), // 1
+            ("STOREOBJ", &[4]), // 2
+            ("CmpPtrNull", &[4]), // 3
+            ("JNZ", &[]), // 4
+            ("JMP", &[]), // 5
+            ("PshVPtr", &[0]), // 6
+            ("ADDSi", &[24]), // 7
+            ("RDSPtr", &[]), // 8
+            ("RefCpyV", &[8]), // 9
+            ("CmpPtrNull", &[8]), // 10
+            ("JNZ", &[]), // 11
+            ("PshVPtr", &[4]), // 12
+            ("ADDSi", &[40]), // 13
+            ("PshVPtr", &[0]), // 14
+            ("CALLINTF", &[]), // 15
+            ("PshVPtr", &[0]), // 16
+            ("ADDSi", &[24]), // 17
+            ("RDSPtr", &[]), // 18
+            ("RefCpyV", &[8]), // 19
+            ("CmpPtrNull", &[8]), // 20
+            ("JNZ", &[]), // 21
+            ("JMP", &[]), // 22
+            ("PshVPtr", &[0]), // 23
+            ("ADDSi", &[24]), // 24
+            ("RDSPtr", &[]), // 25
+            ("CALLSYS", &[]), // 26
+            ("JLowZ", &[]), // 27
+            ("JMP", &[]), // 28
+            ("PSF", &[10]), // 29
+            ("PshVPtr", &[0]), // 30
+            ("ADDSi", &[24]), // 31
+            ("RDSPtr", &[]), // 32
+            ("CALLSYS", &[]), // 33
+            ("LoadThisR", &[33]), // 34
+            ("RDR1", &[24]), // 35
+            ("CpyVtoR1", &[24]), // 36
+            ("JLowNZ", &[]), // 37
+            ("SetV4", &[23]), // 38
+            ("JMP", &[]), // 39
+            ("PSF", &[16]), // 40
+            ("PSF", &[10]), // 41
+            ("CALLSYS", &[]), // 42
+            ("PSF", &[16]), // 43
+            ("CALLSYS", &[]), // 44
+            ("CpyRtoV4", &[21]), // 45
+            ("PSF", &[16]), // 46
+            ("CALLSYS", &[]), // 47
+            ("PSF", &[20]), // 48
+            ("PshVPtr", &[0]), // 49
+            ("ADDSi", &[8]), // 50
+            ("CALLSYS", &[]), // 51
+            ("PSF", &[20]), // 52
+            ("CALLSYS", &[]), // 53
+            ("CpyRtoV4", &[22]), // 54
+            ("PSF", &[20]), // 55
+            ("CALLSYS", &[]), // 56
+            ("CMPi", &[21, 22]), // 57
+            ("JNP", &[]), // 58
+            ("SetV1", &[5]), // 59
+            ("JMP", &[]), // 60
+            ("PSF", &[10]), // 61
+            ("CALLSYS", &[]), // 62
+            ("CpyRtoV4", &[22]), // 63
+            ("PshVPtr", &[0]), // 64
+            ("ADDSi", &[8]), // 65
+            ("CALLSYS", &[]), // 66
+            ("CpyRtoV4", &[21]), // 67
+            ("CMPi", &[22, 21]), // 68
+            ("TP", &[]), // 69
+            ("CpyRtoV4", &[23]), // 70
+            ("CpyVtoV4", &[5, 23]), // 71
+            ("CpyVtoV4", &[23, 5]), // 72
+            ("CpyVtoR1", &[23]), // 73
+            ("JLowZ", &[]), // 74
+            ("PshVPtr", &[4]), // 75
+            ("ADDSi", &[40]), // 76
+            ("SetV1", &[24]), // 77
+            ("PshV4", &[24]), // 78
+            ("PshVPtr", &[0]), // 79
+            ("CALLSYS", &[]), // 80
+            ("PSF", &[10]), // 81
+            ("CALLSYS", &[]), // 82
+            ("CpyRtoV4", &[22]), // 83
+            ("PshVPtr", &[0]), // 84
+            ("ADDSi", &[8]), // 85
+            ("CALLSYS", &[]), // 86
+            ("CpyRtoV4", &[21]), // 87
+            ("CMPi", &[22, 21]), // 88
+            ("JNP", &[]), // 89
+            ("PshVPtr", &[4]), // 90
+            ("ADDSi", &[40]), // 91
+            ("PshVPtr", &[0]), // 92
+            ("CALLINTF", &[]), // 93
+            ("PSF", &[10]), // 94
+            ("PshVPtr", &[0]), // 95
+            ("ADDSi", &[8]), // 96
+            ("CALLSYS", &[]), // 97
+            ("PshVPtr", &[0]), // 98
+            ("CALLSYS", &[]), // 99
+            ("CpyRtoV4", &[25]), // 100
+            ("LoadThisR", &[32]), // 101
+            ("WRTV1", &[25]), // 102
+            ("RDR1", &[25]), // 103
+            ("PshVPtr", &[4]), // 104
+            ("ADDSi", &[40]), // 105
+            ("ADDSi", &[0]), // 106
+            ("PopRPtr", &[]), // 107
+            ("WRTV1", &[25]), // 108
+            ("PSF", &[10]), // 109
+            ("CALLSYS", &[]), // 110
+            ("RET", &[2]), // 111
+        ]);
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at,delta,value) in [
+            (0,1,3000i32),
+            (0,2,0i32),
+            (1,1,2001i32),
+            (1,2,0i32),
+            (4,1,2i32),
+            (5,1,173i32),
+            (7,1,300i32),
+            (11,1,16i32),
+            (13,1,3i32),
+            (15,1,1015i32),
+            (17,1,300i32),
+            (21,1,2i32),
+            (22,1,149i32),
+            (24,1,300i32),
+            (26,1,2026i32),
+            (26,2,0i32),
+            (27,1,2i32),
+            (28,1,138i32),
+            (31,1,300i32),
+            (33,1,104i32),
+            (33,2,0i32),
+            (34,1,300i32),
+            (37,1,4i32),
+            (38,1,0i32),
+            (39,1,58i32),
+            (42,1,105i32),
+            (42,2,0i32),
+            (44,1,106i32),
+            (44,2,0i32),
+            (47,1,107i32),
+            (47,2,0i32),
+            (50,1,300i32),
+            (51,1,105i32),
+            (51,2,0i32),
+            (53,1,106i32),
+            (53,2,0i32),
+            (56,1,107i32),
+            (56,2,0i32),
+            (58,1,4i32),
+            (59,1,1i32),
+            (60,1,18i32),
+            (62,1,108i32),
+            (62,2,0i32),
+            (65,1,300i32),
+            (66,1,108i32),
+            (66,2,0i32),
+            (74,1,10i32),
+            (76,1,3i32),
+            (77,1,0i32),
+            (80,1,2080i32),
+            (80,2,0i32),
+            (82,1,108i32),
+            (82,2,0i32),
+            (85,1,300i32),
+            (86,1,108i32),
+            (86,2,0i32),
+            (89,1,6i32),
+            (91,1,3i32),
+            (93,1,1093i32),
+            (96,1,300i32),
+            (97,1,110i32),
+            (97,2,0i32),
+            (99,1,109i32),
+            (99,2,0i32),
+            (101,1,300i32),
+            (105,1,3i32),
+            (106,1,6i32),
+            (110,1,111i32),
+            (110,2,0i32),
+        ] { f.bytecode[code[at].offset_dw+delta] = value; }
+        f.name = "RecordDifferentClock".into(); f.namespace = "Elsewhere".into();
+        f.ret = DataType {token:0x52,..Default::default()}; f.traits = 0; f.params.clear();
+        f.obj_locals = vec![(2, 3), (4, 3), (8, 4), (10, 1), (12, 1), (16, 2), (20, 2)];
+        for i in &code {
+            if matches!(i.op.name,"ADDSi"|"LoadThisR"|"RET") { continue; }
+            for (n,word) in i.words.iter().enumerate() {
+                if (*word as i16) <= 0 { continue; }
+                let packed = n+1; let dw = i.offset_dw+packed/2; let shift = (packed%2)*16;
+                f.bytecode[dw] = ((f.bytecode[dw] as u32 & !(0xffff<<shift)) | ((*word+bias) as u32)<<shift) as i32;
+            }
+        }
+        for (slot,_) in &mut f.obj_locals { *slot += bias as i32; }
+        f
+    }
+
+    #[test]
+    fn distinct_clock_receivers_and_same_address_enum_store_restore_together() {
+        let source = r#"        UArchive local_4 = UArchive::GetArchive();
+        if (local_4 == nullptr)
+        {
+            return;
+        }
+        if (this.Source == nullptr)
+        {
+            this.Initialize(local_4.State);
+            if (this.Source == nullptr)
+            {
+                return;
+            }
+        }
+        if (this.Source.IsStopped())
+        {
+            return;
+        }
+        FInGameTime local_10 = this.Source.ReadTime();
+        if (this.Enabled && (local_10.GetClockTime().GetHour() > this.Previous.GetClockTime().GetHour() || (local_10.GetDay() > this.Previous.GetDay())))
+        {
+            this.Refresh(false, local_4.State);
+        }
+        if (local_10.GetDay() > this.Previous.GetDay())
+        {
+            this.Notify(local_4.State);
+        }
+        this.Previous = local_10;
+        this.Stored = this.GetMode();
+        local_4.State.Mode = this.Stored;
+        return;
+"#;
+        let expected = r#"        UArchive local_4 = UArchive::GetArchive();
+        if (local_4 == nullptr)
+        {
+            return;
+        }
+        if (this.Source == nullptr)
+        {
+            this.Initialize(local_4.State);
+            if (this.Source == nullptr)
+            {
+                return;
+            }
+        }
+        if (this.Source.IsStopped())
+        {
+            return;
+        }
+        FInGameTime local_10 = this.Source.ReadTime();
+        if (this.Enabled && (local_10.GetClockTime().Hour > this.Previous.GetClockTime().Hour || (local_10.GetDay() > this.Previous.GetDay())))
+        {
+            this.Refresh(false, local_4.State);
+        }
+        if (local_10.GetDay() > this.Previous.GetDay())
+        {
+            this.Notify(local_4.State);
+        }
+        this.Previous = local_10;
+        local_4.State.Mode = this.Stored = this.GetMode();
+        return;
+"#;
+        let refs = RefResolver::from_test_clock_property_enum_chain(0);
+        let fold = |s: &str,f: &Func,r: &RefResolver| super::restore_clock_property_and_enum_chain(s,f,r,true,Some("AClimateRecorder"));
+        let rename = |text: &str,bias: u16,later: bool| text.split_inclusive(|c: char| !c.is_ascii_alphanumeric() && c != '_').map(|piece| {
+            let name = piece.trim_end_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_');
+            if let Some((slot,life)) = super::slot_and_life_any(name) {
+                let base = format!("local_{slot}"); let suffix = if later { format!("_{}",life+20) } else { name[base.len()..].to_owned() };
+                format!("local_{}{suffix}{}",slot+bias as i32,&piece[name.len()..])
+            } else { piece.to_owned() }
+        }).collect::<String>();
+        for (bias,later) in [(0,false),(512,false),(512,true)] {
+            let f = clock_property_enum_chain_fixture(bias); let s = rename(source,bias,later); let e = rename(expected,bias,later);
+            assert_eq!(fold(&s,&f,&refs),e,"renumber {bias}, later life {later}");
+            assert_eq!(fold(&e,&f,&refs),e,"idempotence");
+            for fault in 1..=30 { assert_eq!(fold(&s,&f,&RefResolver::from_test_clock_property_enum_chain(fault)),s,"metadata {fault}"); }
+        }
+        let f = clock_property_enum_chain_fixture(0); let code = disassemble(&f.bytecode).unwrap();
+        for at in (29..75).chain(81..90).chain(94..112) {
+            let i = &code[at];
+            for word in 0..i.words.len() {
+                let mut bad = f.clone(); let packed = word+1; bad.bytecode[i.offset_dw+packed/2] ^= 1<<((packed%2)*16);
+                assert_eq!(fold(source,&bad,&refs),source,"raw operand {at}/{word}");
+            }
+            if matches!(i.op.name,"CALLSYS"|"ADDSi"|"LoadThisR"|"SetV4"|"SetV1") {
+                let mut bad = f.clone(); bad.bytecode[i.offset_dw+1] ^= 1;
+                assert_eq!(fold(source,&bad,&refs),source,"native/type-id/literal {at}");
+            }
+        }
+        for (at,op) in [(32,"PopRPtr"),(57,"CMPu"),(58,"JS"),(102,"WRTV4"),(103,"RDR4"),(107,"PshRPtr"),(108,"WRTV4")] {
+            let mut bad = f.clone(); let replacement = function(&[(op,&code[at].words)]);
+            bad.bytecode[code[at].offset_dw] = replacement.bytecode[0];
+            assert_eq!(fold(source,&bad,&refs),source,"opcode {at}");
+        }
+        for (from,to) in [(5,40),(22,44),(28,98),(37,41),(39,72),(58,62),(60,73),(74,89),(89,98),(5,103),(5,106),(5,109)] {
+            let mut bad = f.clone(); bad.bytecode[code[from].offset_dw+1] = code[to].offset_dw as i32-code[from].offset_dw as i32-2;
+            assert_eq!(fold(source,&bad,&refs),source,"CFG {from}->{to}");
+        }
+        let mut bad = f.clone(); bad.bytecode[code[5].offset_dw+1] = i32::MAX;
+        assert_eq!(fold(source,&bad,&refs),source,"invalid target");
+        for slot in [4,10,16,20] {
+            let mut bad = f.clone(); bad.obj_locals.push((slot,2));
+            assert_eq!(fold(source,&bad,&refs),source,"duplicate local {slot}");
+        }
+        let mut bad = f.clone(); bad.obj_locals.push((40,2)); assert_eq!(fold(source,&bad,&refs),source,"extra clock allocation");
+        // Keep both clock types and signatures intact while reusing the first receiver for the second call.
+        let mut bad = f.clone();
+        for at in [48,52,55] { bad.bytecode[code[at].offset_dw] = (bad.bytecode[code[at].offset_dw] as u32 & 0xffff | 16<<16) as i32; }
+        assert_eq!(fold(source,&bad,&refs),source,"single reused clock receiver");
+        for slot in [10u16,16,20,25] {
+            let mut bad = f.clone(); bad.bytecode[code[2].offset_dw] = (bad.bytecode[code[2].offset_dw] as u32 & 0xffff | (slot as u32)<<16) as i32;
+            assert_eq!(fold(source,&bad,&refs),source,"extra earlier life {slot}");
+        }
+        let mut bad = f.clone(); bad.ret.token = 0x44; assert_eq!(fold(source,&bad,&refs),source,"return ABI");
+        let mut bad = f.clone(); bad.traits = 4; assert_eq!(fold(source,&bad,&refs),source,"const receiver");
+        let mut bad = f.clone(); bad.params.push(super::super::model::Param {name:"Extra".into(),flags:0,ty:DataType {token:0x44,..Default::default()}});
+        assert_eq!(fold(source,&bad,&refs),source,"parameter ABI");
+        assert_eq!(super::restore_clock_property_and_enum_chain(source,&f,&refs,false,Some("AClimateRecorder")),source,"free function");
+        assert_eq!(super::restore_clock_property_and_enum_chain(source,&f,&refs,true,Some("OtherOwner")),source,"owner identity");
+        for s in [
+            source.replace("FInGameTime local_10 =","auto local_10 ="),
+            source.replace("UArchive local_4 =","UOther local_4 ="),
+            source.replace("local_10.GetClockTime().GetHour() >","local_10.GetClockTime().GetHour() >="),
+            source.replace("this.Previous.GetClockTime().GetHour()","this.Different.GetClockTime().GetHour()"),
+            source.replace("local_10.GetClockTime().GetHour()","local_10.GetClockTime().Hour"),
+            source.replace("this.Stored = this.GetMode();","this.Stored = this.GetOtherMode();"),
+            source.replace("local_4.State.Mode = this.Stored;","local_4.Other.Mode = this.Stored;"),
+            source.replace("this.Previous = local_10;","this.Previous = Other();"),
+            source.replace("        this.Stored = this.GetMode();","        Inspect(local_10);\n        this.Stored = this.GetMode();"),
+            source.replace("        this.Stored = this.GetMode();","        {\n        this.Stored = this.GetMode();").replace("        local_4.State.Mode = this.Stored;","        local_4.State.Mode = this.Stored;\n        }"),
+            source.replace("        local_4.State.Mode = this.Stored;","        Barrier();\n        local_4.State.Mode = this.Stored;"),
+            source.replace("        FInGameTime local_10 =","        int local_10 = 0;\n        FInGameTime local_10 ="),
+            source.replace("this.Previous = local_10;","this.Previous = local_10_2;"),
+        ] { assert_ne!(s,source); assert_eq!(fold(&s,&f,&refs),s,"source type/use/scope/atomicity"); }
+        let s = rename(&format!("        int local_40 = 0;\n{source}"),512,true);
+        let e = rename(&format!("        int local_40 = 0;\n{expected}"),512,true);
+        assert!(s.contains("local_552_21") && s.contains("local_516_21") && s.contains("local_522_21"));
+        assert_eq!(fold(&s,&clock_property_enum_chain_fixture(512),&refs),e,"identifier boundaries include lifetime suffixes");
     }
 
     #[test]
