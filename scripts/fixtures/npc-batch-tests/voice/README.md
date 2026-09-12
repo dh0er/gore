@@ -3,9 +3,14 @@
 Status 2026-09-12: **Begruessung, Alltag und Routine in 0.1.2 bestaetigt.**
 Der Nutzer hat B und C jeweils gruessen und wiederholt selbststaendig sprechen
 gehoert. B laeuft seinen Alltagsweg und sprach dabei einmal. Nicht jeder kurze
-Weg muss eine Zeile ausloesen. Die ausdrueckliche Bestaetigung des vollstaendigen
-Neustarts ohne erneuten Aufbau sowie der hoerbar verschiedenen Stimmprofile
-steht noch aus. Siehe [Spielergebnis](runtime-result-0.1.2.json).
+Weg muss eine Zeile ausloesen. Der Nutzer bestaetigt auch den vollstaendigen
+Neustart ohne erneuten Aufbau. Ein ausdruecklicher hoerbarer Vergleich der
+beiden Stimmprofile wurde nicht berichtet. Siehe [Spielergebnis](runtime-result-0.1.2.json).
+
+Das Paket ist nach dem bestandenen Neustart deaktiviert. Start066 und die
+Ergebnissaves003/022 sind [ausserhalb des Spiels archiviert](../profile-cleanup-after-voice.json).
+Der folgende Ablauf bleibt als Reproduktionsanleitung erhalten; aktuell wird
+das [Handels-/Lehrerpaket](../roles/README.md#economy--teacher) getestet.
 
 Zweimal blitzte eine Alltags-Sprechblase nur sehr kurz auf. Ursache, Sprecher,
 Wortlaut und Verhalten der Tonspur sind unbekannt. Die Auffaelligkeit bleibt

@@ -11,11 +11,11 @@
     "B_periodic_everyday_lines": true,
     "C_periodic_everyday_lines": true,
     "B_routine_walk": true,
-    "B_everyday_line_during_walk_observed_once": true
+    "B_everyday_line_during_walk_observed_once": true,
+    "full_restart_without_repeating_setup": true
   },
   "limits": [
     "The very short routine path does not guarantee speech on each traversal.",
-    "Full application restart without setup has not yet been explicitly confirmed; clarification is pending.",
     "Diego/Lares assignments have source evidence; the user has not explicitly compared their audible identities.",
     "No timings, exact voice lines, or audio recordings were supplied in this report."
   ],
@@ -31,7 +31,7 @@
     "next_if_reproduced": "Record the speaker, line if visible, and whether voice continues after the bubble disappears."
   },
   "code_change_from_this_feedback": false,
-  "next_fixture": "NpcEconomyRolesTest 0.1.0; prepared, not activated by this report",
+  "next_fixture": "NpcEconomyRolesTest 0.1.0; activation recorded in ../roles/economy-deployment.json",
   "prior_setup_report": "runtime-setup-0.1.1.json",
   "build_and_deployment_report": "setup-fix.json",
   "save_evidence": {
@@ -103,5 +103,10 @@
       }
     ],
     "limit": "Saved ready state and NPC records establish persistence in the file, not a successful application restart."
-  }
+  },
+  "restart_confirmation": {
+    "date": "2026-09-12",
+    "user_report": "neustart hat funktioniert. mach nächstes paket jetzt."
+  },
+  "save_archive_report": "../profile-cleanup-after-voice.json"
 }

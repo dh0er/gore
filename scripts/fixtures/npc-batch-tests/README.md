@@ -2,22 +2,24 @@
 
 Stand 2026-09-12: **Alle fuenf Pakete sind gebaut und geprueft.** Der Kopf-/Barttest
 ist bestanden. Beim Sprachtest sind Begruessungen, Alltagszeilen von B/C und Bs
-Routine bestaetigt; die ausdrueckliche Neustartbestaetigung steht noch aus.
+Routine sowie der vollstaendige Neustart ohne erneuten Aufbau bestaetigt.
 Die Rollen- und Quest-Spieltests sind noch offen. Von den acht erstellten
-Startstaenden bleiben **066–072 fuer die offenen Tests in Profil 4**; der erledigte
-Kopf-Start065 und die Ergebnisse bis zum Kopf-/Barttest sind ausserhalb des Spiels
-archiviert. Die neuen Voice-Ergebnisse **003 „npc natuerlich - beobachtet“** und
-**022 „npc natuerlich - start“** bleiben bis zum Abschluss des Sprachtests im Spiel.
+Startstaenden bleiben **067–072 fuer die offenen Tests in Profil 4**.
+Die erledigten Kopf-/Voice-Starts und Ergebnisse sind ausserhalb des Spiels
+archiviert. Zuletzt wurden **003 „npc natuerlich - beobachtet“**, **022 „npc
+natuerlich - start“** und **066 „NPC 02 Voice - START“** aus der Spielliste
+entfernt; siehe [Voice-Archivierung](profile-cleanup-after-voice.json).
 Der bisher getestete Stand ist mit `6848e475` gesichert; `117be93d` korrigiert
 die Save-Bereinigung und `7ac45595` die benoetigte native API-Komposition.
 Siehe [Build-/Paketpruefung](build-checks.json) und
 [veroeffentlichte Startstaende](start-saves.json).
 
-**Aktiv ist NpcNaturalVoiceTest 0.1.2**; Manager-Status `in_sync`.
-Kopf-Test und Barttexturen sind nach dem bestandenen
-[Barttest 0.1.3](heads/beard-runtime-0.1.3.json) deaktiviert. Die anderen
-Testpakete bleiben deaktiviert. Die aktuelle Aktivierung steht im
-[Bericht zur Aufbaukorrektur](voice/setup-fix.json). In0.1.1 blieb der Ortswechsel
+**Aktiv ist NpcEconomyRolesTest 0.1.0**; Manager-Status `in_sync`.
+Alle anderen Testpakete und Barttexturen sind deaktiviert. Die aktuelle
+[Aktivierung](roles/economy-deployment.json) verwendet das bereits gepruefte
+Paket ohne neuen Build. Der [Barttest 0.1.3](heads/beard-runtime-0.1.3.json)
+und der [Bericht zur Sprach-Aufbaukorrektur](voice/setup-fix.json) bleiben
+dokumentiert. In0.1.1 blieb der Ortswechsel
 von Held und A trotz „04 Bereit“ aus; die Teleports stehen nun vor dem Gespraechsende.
 Der fehlgeschlagene [Barttest 0.1.2](heads/beard-runtime-0.1.2.json) und die
 [VT-Build-](beard-vt-build-checks.json) / [Deploymentbelege](beard-vt-deployment.json)
@@ -34,7 +36,7 @@ den unten verlinkten Testnamen neu speichern. Spieltests macht der Benutzer.
 | Reihenfolge | Paket | Startstaende in Profil 4 | Abdeckung |
 |---|---|---|---|
 | 1 | NpcHeadPaletteTest | 065: NPC 01 Koepfe - START (archiviert) | Bestanden: Gesicht, Haare, Haarfarbe, Bartvarianten, Originale und Neustart |
-| 2 | NpcNaturalVoiceTest | 066: NPC 02 Voice - START | Natuerliche Begruessung/Alltagsstimme, zweites Stimmprofil, Routine, Neustart |
+| 2 | NpcNaturalVoiceTest | 066: NPC 02 Voice - START (archiviert) | Begruessung/Alltagsstimme B und C, Routine und Neustart bestanden; kurze Sprechblase und hoerbarer Profilvergleich offen |
 | 3 | NpcEconomyRolesTest | 067: Handel - LP fehlt; 068: Lehrer - Erz fehlt; 069: Lehrer - bereit | Kaufen/Verkaufen/Abbrechen, beide Lernvoraussetzungen, Kosten, bereits gelernt, Persistenz |
 | 4 | NpcFieldRolesTest | 070: NPC 04 Rollen - START; 072: NPC 04 Rollen - Kampf bereit | Waffenwahl-Diagnose, Folgen/Warten, Feindschaft/Gilde, Flucht, Niederlage/Tod, Wiederbelebung derselben Figur |
 | 5 | NpcQuestCallbacksTest | 071: NPC 05 Quest - START | Eigenes Journal, zwei automatische Ziele, Abgabe, einmalige Belohnung, Erfolg/Abbruch, Neustart |
@@ -48,21 +50,22 @@ H2/H5 fuer rasierten Heldenkopf, H6 fuer Originalbart; H1/H6 fuer Flex mit Bart,
 H5 fuer Flex ohne Bart. Beide neuen Auswahlen speichern/neu starten, danach H9.
 Die neue Texturzuordnung betrifft nur Cs Materialinstanzen. Der Nutzer bestaetigt
 auch den vollstaendigen 0.1.3-Nachtest. Kopf-/Barttests sind damit fuer diese
-Varianten abgeschlossen; jetzt folgt Paket 2.
+Varianten abgeschlossen; der folgende Sprachtest wurde inzwischen ebenfalls durchgefuehrt.
 
 ## 2. Natuerliche Stimme
 
 Der [Spielbericht zu 0.1.2](voice/runtime-result-0.1.2.json) bestaetigt B/Cs
 Begruessungen und wiederholte Alltagszeilen sowie Bs Weg mit einer gesprochenen
 Zeile unterwegs. Zweimal sehr kurz sichtbare Sprechblasen bleiben als
-Auffaelligkeit unbekannter Ursache offen. Neustart und ausdruecklicher
-hoerbarer Profilvergleich sind noch nicht separat bestaetigt.
+Auffaelligkeit unbekannter Ursache offen. Der Neustart ohne erneuten Aufbau
+ist ebenfalls bestaetigt; ein ausdruecklicher hoerbarer Profilvergleich wurde
+nicht berichtet.
 
 Alle acht START-Saves stehen jetzt auf 12:00 Uhr; der [Tageslichtbericht](daylight-starts.json)
 haelt die Aenderung mit Backups fest. Kopf- und Sprach-Aufbau setzen ebenfalls
 Mittag. Beim Sprachtest liegen die optionalen Wechsel jetzt bei 14:00/16:00 Uhr.
 
-Nach vollstaendigem Neustart066 laden und bei A
+Zur spaeteren Reproduktion nach Wiederherstellung und Aktivierung des Sprachpakets066 laden und bei A
 **01 Natuerliche Stimmen: Aufbau mit B und C** waehlen. Zuerst pruefen, dass
 Held und A unten vor dem Turm stehen; erst dann vor der Annaeherung speichern
 und B und C ohne Dialog annaehern.
