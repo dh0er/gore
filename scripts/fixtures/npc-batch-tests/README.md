@@ -4,28 +4,29 @@ Stand 2026-09-12: **Alle fuenf Pakete sind gebaut und geprueft.** Der Kopf-/Bart
 ist bestanden. Beim Sprachtest sind Begruessungen, Alltagszeilen von B/C und Bs
 Routine sowie der vollstaendige Neustart ohne erneuten Aufbau bestaetigt.
 Die Lehrerpruefungen einschliesslich Neustart sowie Kaufen/Verkaufen/Abbrechen
-sind bestanden. Nach dem ersten Laden wurde der Haendlerbestand jedoch doppelt
-vergeben; der gezielte Nachtest ist offen. Feldrollen und Quests sind ebenfalls
-noch offen. In Profil4 bleiben **067,070,071,072 fuer die offenen Tests**.
+und die Bestands-Persistenz sind bestanden. Die doppelte Vergabe wurde mit dem
+nativen Anfangsbestand behoben; beide Ladepruefungen in0.1.3 sind bestaetigt.
+Feldrollen sind jetzt aktiv, Quests folgen danach. In Profil4 bleiben **070,071,072**.
 Die erledigten Kopf-/Voice-Starts und Ergebnisse sind ausserhalb des Spiels
 archiviert. Zuletzt wurden **003 „npc natuerlich - beobachtet“**, **022 „npc
 natuerlich - start“** und **066 „NPC 02 Voice - START“** aus der Spielliste
 entfernt; siehe [Voice-Archivierung](profile-cleanup-after-voice.json).
 Die erledigten Lehrerstarts und Wirtschaftsergebnisse003/022–027/068/069 liegen
 jetzt ebenfalls [im externen Archiv](profile-cleanup-after-economy.json).
-**067 `NPC 03 Handel - LP fehlt`** ist der unveraenderte Eingang fuer den Nachtest.
+067 und die drei erfolgreichen Ladeergebnisse sind ebenfalls
+[extern archiviert](profile-cleanup-after-economy-reload.json).
 Der bisher getestete Stand ist mit `6848e475` gesichert; `117be93d` korrigiert
 die Save-Bereinigung und `7ac45595` die benoetigte native API-Komposition.
 Siehe [Build-/Paketpruefung](build-checks.json) und
 [veroeffentlichte Startstaende](start-saves.json).
 
-**Aktiv ist NpcEconomyRolesTest 0.1.3**; Manager-Status `in_sync`.
+**Aktiv ist NpcFieldRolesTest 0.1.0**; Manager-Status `in_sync`.
 Alle anderen Testpakete und Barttexturen sind deaktiviert. Die aktuelle
-[Aktivierung](roles/economy-reload-0.1.3.json) verwendet den nativen Anfangsbestand
-`OnWorldStart`;01 loest keine Warenvergabe mehr aus. Der
-[0.1.2-Befund](roles/economy-runtime-0.1.2.json) dokumentiert funktionierenden
-Handel und die doppelte Vergabe beim Laden. Die genaue native Wiederanwendung
-ist nicht belegt; die alten Originalmodule bleiben erhalten.
+[Aktivierung](roles/field-deployment.json) verwendet den unveraenderten,
+bereits geprueften Rollen-Build. **[Deutsche Testliste fuer Paket4](roles/FIELD-TEST.md)**.
+Der [Wirtschaftsabschluss](roles/economy-runtime-0.1.3.json) bestaetigt den
+nativen Anfangsbestand ohne doppelte Vergabe. Die spaetere Bestandsvergabe per
+eigenem Ereignis bleibt separat ungeprueft; ihr0.1.2-Ladefehler ist dokumentiert.
 Der [Barttest 0.1.3](heads/beard-runtime-0.1.3.json)
 und der [Bericht zur Sprach-Aufbaukorrektur](voice/setup-fix.json) bleiben
 dokumentiert. In0.1.1 blieb der Ortswechsel
@@ -46,7 +47,7 @@ den unten verlinkten Testnamen neu speichern. Spieltests macht der Benutzer.
 |---|---|---|---|
 | 1 | NpcHeadPaletteTest | 065: NPC 01 Koepfe - START (archiviert) | Bestanden: Gesicht, Haare, Haarfarbe, Bartvarianten, Originale und Neustart |
 | 2 | NpcNaturalVoiceTest | 066: NPC 02 Voice - START (archiviert) | Begruessung/Alltagsstimme B und C, Routine und Neustart bestanden; kurze Sprechblase und hoerbarer Profilvergleich offen |
-| 3 | NpcEconomyRolesTest | 067: NPC 03 Handel - LP fehlt | Lehrer und Handel bestanden; Bestand nach wiederholtem Laden offen |
+| 3 | NpcEconomyRolesTest | Starts/Ergebnisse archiviert | Lehrer, Handel und Bestand nach wiederholtem Laden bestanden |
 | 4 | NpcFieldRolesTest | 070: NPC 04 Rollen - START; 072: NPC 04 Rollen - Kampf bereit | Waffenwahl-Diagnose, Folgen/Warten, Feindschaft/Gilde, Flucht, Niederlage/Tod, Wiederbelebung derselben Figur |
 | 5 | NpcQuestCallbacksTest | 071: NPC 05 Quest - START | Eigenes Journal, zwei automatische Ziele, Abgabe, einmalige Belohnung, Erfolg/Abbruch, Neustart |
 
@@ -84,12 +85,10 @@ und Neustart. Sie enthaelt klare Beobachtungsfristen; Stille ist ein Ergebnis.
 ## 3. Handel und Lehrer
 
 **Die Lehrerfaelle unten sind bestanden und muessen nicht wiederholt werden.**
-Aktuell nur den [Lade-Nachtest0.1.3](roles/README.md#commerce-follow-up013)
-mit067 `NPC 03 Handel - LP fehlt` durchfuehren:01 bestaetigt den Anfangsbestand,
-danach02. Erwartet werden3 Kaese,10 Pfeile und100 Haendlererz. Einen Kaese kaufen,
-Werte merken,05 und `handel-startbestand` speichern. Vollstaendig neu starten,
-Bestand vergleichen,05 und `handel-reload-1` speichern. Noch einmal laden,
-vergleichen und `handel-reload-2` speichern. Es darf keine neue Charge hinzukommen.
+Auch der [Lade-Nachtest0.1.3](roles/economy-runtime-0.1.3.json) ist bestanden:
+A behaelt2 Kaese/10 Pfeile/108 Erz und den Grundbestand3/10/100; der Held
+behaelt1 Kaese/42 Erz. Die folgenden alten Lehrerablaeufe dienen nur als
+Referenz, die Starts068/069 und Ergebnisse sind archiviert.
 
 1. 067 laden. Vor Testmitteln oder Handel **03 Lernen** probieren:
    0 LP/50 Erz, daher keine Veraenderung und keine gelernte Faehigkeit.
@@ -103,6 +102,8 @@ vergleichen und `handel-reload-2` speichern. Es darf keine neue Charge hinzukomm
 Weitere Inventar- und Neustartpruefungen: [Rollenliste](roles/README.md).
 
 ## 4. Begleiter, Kampf und Lebenszyklus
+
+**Jetzt dieses Paket testen: [vollstaendige deutsche Anleitung](roles/FIELD-TEST.md).**
 
 070 beginnt auf der bereits erprobten freien Flaeche vor dem Alten Lager;
 B steht vor dem Helden. A bleibt am Tor, etwa 30 Meter entfernt. Fuer die

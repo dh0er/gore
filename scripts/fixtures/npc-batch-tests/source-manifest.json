@@ -94,7 +94,8 @@
           "module_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
           "sha256": "34a5f200d787dacfd3738851bbb716f6345f8788f7c66930960f3965c7fe7b4a"
         }
-      ]
+      ],
+      "bundle_version": "0.1.0"
     },
     "quest": {
       "bundle_name": "NpcQuestCallbacksTest",

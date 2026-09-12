@@ -274,9 +274,10 @@ were preserved. This is a measured failure of that fixture path, not proof that
 all custom events or vanilla trading are broken. Do not reuse it as a qualified
 recipe for persistent late stock grants.
 
-The [0.1.3 fixture](../../scripts/fixtures/npc-batch-tests/roles/README.md#commerce-follow-up013)
-uses normal initial stock and removes the manual event call. Its reload result
-remains pending. Test from an untouched input; an old save with missing defaults
+The [0.1.3 result](../../scripts/fixtures/npc-batch-tests/roles/economy-runtime-0.1.3.json)
+passes normal initial stock and two loads after a purchase. All three saves
+retain A's2 cheese/10 arrows/108 ore, defaults3/10/100, and Hero's1 cheese/42 ore.
+The manual event call is removed. Test from an untouched input; an old save with missing defaults
 or duplicated items cannot prove clean initialization. Read **both** global stock
 maps after a trade and repeated load; a grant marker alone is not stock proof. Difficulty multipliers
 in `UTraderConfigBase` can change quantities; this fixture fixes the relevant

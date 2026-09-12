@@ -1,0 +1,86 @@
+{
+  "schema": "gore.npc-batch.profile-cleanup-after-economy-reload.v1",
+  "date": "2026-09-12",
+  "displayed_profile": 4,
+  "internal_profile_id": 2,
+  "stored_profile_name": "3",
+  "passed": true,
+  "operation": "live",
+  "archive": "C:\\Users\\Daniel\\Documents\\GORE\\Savegame-Archiv\\npc-economy-reload-20260912T215210Z",
+  "manifest_sha256": "7e761c3bc8fa81544eb464fb00dcfafbf705bb9fd3dd50e18b3a7dbcfe4f2c87",
+  "deleted_count": 4,
+  "retained_count": 3,
+  "retained": [
+    "G1R-070",
+    "G1R-071",
+    "G1R-072"
+  ],
+  "removed": [
+    "G1R-003",
+    "G1R-022",
+    "G1R-023",
+    "G1R-067"
+  ],
+  "profile_before": {
+    "bytes": 34558,
+    "sha256": "99020b0f461076101a814e317c90ff6cbabfde2a8030c2a9bd5d06fc65563d81"
+  },
+  "profile_after": {
+    "bytes": 30725,
+    "sha256": "cafc14cd2fa57e6f219c707295b5655e77cf3e11a61806795b403b40fdddfb71"
+  },
+  "dll": {
+    "bytes": 17931264,
+    "sha256": "54690b5fb7004ae89a5659d38a59cebf5c833fd6c558c73ba3e0a70342baaf14"
+  },
+  "titles": {
+    "G1R-067": "NPC 03 Handel - LP fehlt",
+    "G1R-070": "NPC 04 Rollen - START",
+    "G1R-071": "NPC 05 Quest - START",
+    "G1R-072": "NPC 04 Rollen - Kampf bereit",
+    "G1R-003": "handel-startbestand",
+    "G1R-022": "handel-reload-1",
+    "G1R-023": "handel-reload-2"
+  },
+  "retained_save_hashes": {
+    "G1R-070": {
+      "bytes": 1034804,
+      "sha256": "20f4a849358475a9671961cab18fea35cbb303e5d3dda85b34d52d3e22ded7c2"
+    },
+    "G1R-071": {
+      "bytes": 1018879,
+      "sha256": "aee18515288dc09ebc1f4687fc3da21cccdec946596b2744f2028ccdfaf68db5"
+    },
+    "G1R-072": {
+      "bytes": 1034835,
+      "sha256": "3168d88ef5af260e6e6c58311a71c99b5ffebd8f6e5a680c4c015cda4403fffe"
+    }
+  },
+  "removed_original_hashes": {
+    "G1R-003": {
+      "bytes": 1027304,
+      "sha256": "66a17f023adfab71799309aa72cf1b15173e8f1578bc7c6ee0b3c5e8c9f5b237"
+    },
+    "G1R-022": {
+      "bytes": 1032471,
+      "sha256": "702fba02b77e71eb4cf8c5b82ad8307bcdf82cc41b07b14b1c2483f7d83604c4"
+    },
+    "G1R-023": {
+      "bytes": 1027794,
+      "sha256": "c97356170b3dcb1f4ee5025c5bfbd897b840407e8a55ef7a741e93d14e6fee80"
+    },
+    "G1R-067": {
+      "bytes": 1034015,
+      "sha256": "528cad0ac5889bf377e8527f7d4bd2704fa86875d84f73288e87b841e0bb05a7"
+    }
+  },
+  "exact_current_titles_and_source_hashes_verified": true,
+  "paired_backups_verified": true,
+  "other_profiles_byte_identical": true,
+  "retained_saves_byte_identical": true,
+  "other_live_files_unchanged": true,
+  "live_unchanged_during_preview": false,
+  "global_registry_exact_filtered_order": true,
+  "no_removed_slot_reference": true,
+  "archive_hashes_reverified": true
+}

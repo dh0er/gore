@@ -1,0 +1,125 @@
+{
+  "schema": "gore.npc-batch.economy-runtime.v1",
+  "date": "2026-09-12",
+  "bundle": "NpcEconomyRolesTest",
+  "version": "0.1.3",
+  "passed": true,
+  "tested_by": "user",
+  "agent_played_game": false,
+  "user_confirmation": "All requested economy 0.1.3 tests passed.",
+  "user_confirmed": [
+    "native initial stock and cheese purchase",
+    "stock remains correct through two reloads"
+  ],
+  "save_files_inspected_for_this_result": true,
+  "previous_trade_coverage": "Buy/sell/cancel passed in0.1.2;0.1.3 focused on a purchase followed by full restart and another load.",
+  "save_core_dll": {
+    "bytes": 17931264,
+    "sha256": "54690b5fb7004ae89a5659d38a59cebf5c833fd6c558c73ba3e0a70342baaf14"
+  },
+  "saves": [
+    {
+      "slot": "G1R-003",
+      "title": "handel-startbestand",
+      "file": {
+        "bytes": 1027304,
+        "sha256": "66a17f023adfab71799309aa72cf1b15173e8f1578bc7c6ee0b3c5e8c9f5b237"
+      },
+      "items": {
+        "ItAm_Arrow": 10,
+        "ItFo_Cheese": 2,
+        "ItMi_Orenugget": 108
+      },
+      "defaultItems": {
+        "ItAm_Arrow": 10,
+        "ItFo_Cheese": 3,
+        "ItMi_Orenugget": 100
+      },
+      "generatedEvents": [
+        "OnWorldStart"
+      ],
+      "totalSeconds": 43244.60221068561,
+      "hero_item_counts": {
+        "ItWr_Scroll_Letter_01": 1,
+        "ItMs_Glossary": 1,
+        "ItMi_Orenugget": 42,
+        "ItFo_Cheese": 1
+      }
+    },
+    {
+      "slot": "G1R-022",
+      "title": "handel-reload-1",
+      "file": {
+        "bytes": 1032471,
+        "sha256": "702fba02b77e71eb4cf8c5b82ad8307bcdf82cc41b07b14b1c2483f7d83604c4"
+      },
+      "items": {
+        "ItAm_Arrow": 10,
+        "ItFo_Cheese": 2,
+        "ItMi_Orenugget": 108
+      },
+      "defaultItems": {
+        "ItAm_Arrow": 10,
+        "ItFo_Cheese": 3,
+        "ItMi_Orenugget": 100
+      },
+      "generatedEvents": [
+        "OnWorldStart"
+      ],
+      "totalSeconds": 43244.60221068561,
+      "hero_item_counts": {
+        "ItWr_Scroll_Letter_01": 1,
+        "ItMs_Glossary": 1,
+        "ItMi_Orenugget": 42,
+        "ItFo_Cheese": 1
+      }
+    },
+    {
+      "slot": "G1R-023",
+      "title": "handel-reload-2",
+      "file": {
+        "bytes": 1027794,
+        "sha256": "c97356170b3dcb1f4ee5025c5bfbd897b840407e8a55ef7a741e93d14e6fee80"
+      },
+      "items": {
+        "ItAm_Arrow": 10,
+        "ItFo_Cheese": 2,
+        "ItMi_Orenugget": 108
+      },
+      "defaultItems": {
+        "ItAm_Arrow": 10,
+        "ItFo_Cheese": 3,
+        "ItMi_Orenugget": 100
+      },
+      "generatedEvents": [
+        "OnWorldStart"
+      ],
+      "totalSeconds": 43244.60221068561,
+      "hero_item_counts": {
+        "ItWr_Scroll_Letter_01": 1,
+        "ItMs_Glossary": 1,
+        "ItMi_Orenugget": 42,
+        "ItFo_Cheese": 1
+      }
+    }
+  ],
+  "checks": {
+    "A_current_stock_identical_across_two_reloads": true,
+    "A_default_stock_complete_before_first_reload_and_unchanged": true,
+    "A_generated_events_identical_only_OnWorldStart": true,
+    "A_last_trade_time_unchanged": true,
+    "hero_inventory_cheese_and_ore_unchanged": true,
+    "no_duplicate_batch_across_observed_loads": true,
+    "save_evidence_copied_before_cleanup": true
+  },
+  "evidence_directory": "work\\npc-batch-tests\\roles\\runtime-economy-pass-20260912T215024Z",
+  "limits": "The three inspected saves establish persistence for this tested transaction and two reloads; they do not independently replay the trade UI or every item/configuration.",
+  "archive": "C:\\Users\\Daniel\\Documents\\GORE\\Savegame-Archiv\\npc-economy-reload-20260912T215210Z",
+  "archive_manifest_sha256": "7e761c3bc8fa81544eb464fb00dcfafbf705bb9fd3dd50e18b3a7dbcfe4f2c87",
+  "cleanup_report": "scripts\\fixtures\\npc-batch-tests\\profile-cleanup-after-economy-reload.json",
+  "retained_upcoming_slots": [
+    "G1R-070",
+    "G1R-071",
+    "G1R-072"
+  ]
+}
