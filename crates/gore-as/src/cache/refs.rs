@@ -199,6 +199,8 @@ pub struct RefResolver {
     /// `FAngelscriptManager::StaticNames[Id]`, which PrepareToFinalizePrecompiledModules
     /// populates from THIS table — so the bytecode's int operand indexes it directly.
     static_names: Vec<String>,
+    /// Unambiguous parsed const zero-argument Get* property declarations; used only by the counter/range proof.
+    script_property_getters: HashSet<(TypeIdentity, String, usize, bool)>,
     /// Names that exist as a METHOD somewhere: T3 FunctionReferences flagged bIsMethod
     /// (native or script methods actually referenced by bytecode) plus script-class method
     /// declarations injected from the parsed modules. Batch-24b shadow gate: a free script
@@ -8372,6 +8374,110 @@ impl RefResolver {
         r
     }
 
+    /// Exact parsed declarations only; a trait is not inferred from a Get* name.
+    pub(crate) fn set_script_property_getters(&mut self, mods: &[super::model::Module]) {
+        let mut owners = HashMap::new();
+        let mut declarations = HashMap::new();
+        for module in mods {
+            for class in &module.classes {
+                let owner = TypeIdentity { name: class.name.clone(), module: module.name.clone(), namespace: class.namespace.clone() };
+                *owners.entry(owner.clone()).or_insert(0usize) += 1;
+                for method in &class.methods {
+                    if !method.name.starts_with("Get") || !method.params.is_empty() || !method.is_const_method() { continue; }
+                    let key = (owner.clone(), method.name.clone(), method.params.len(), method.is_const_method());
+                    let entry = declarations.entry(key).or_insert((0usize, false));
+                    entry.0 += 1;
+                    entry.1 = method.traits & 0x200 != 0 && method.namespace.is_empty();
+                }
+            }
+        }
+        self.script_property_getters = declarations.into_iter().filter_map(|(key, (count, property))|
+            (count == 1 && property && owners.get(&key.0) == Some(&1)).then_some(key)).collect();
+    }
+
+    pub(crate) fn script_property_getter_owner_by_id(&self, id: i32) -> Option<&TypeIdentity> {
+        if !self.is_method_by_id(id) { return None; }
+        let (owner, name, arity, constant) = (self.func_owner_by_id(id)?, self.func_by_id(id)?,
+            self.func_params_by_id(id)?.len(), self.is_const_method_by_id(id));
+        let matches: Vec<_> = self.script_property_getters.iter().filter(|(ty, method, n, c)|
+            ty.name == owner && method == name && *n == arity && *c == constant).collect();
+        let [(identity, _, _, _)] = matches.as_slice() else { return None; };
+        // FunctionReferences stores the rendered owner name. Require one full identity behind it.
+        let known: Vec<_> = self.type_identity_by_ptr.values().filter(|ty| ty.name == owner).collect();
+        (!known.is_empty() && known.iter().all(|ty| *ty == identity)).then_some(identity)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_counter_range_properties(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name, module) in [(1,"FScopeCycleCounter",""),(2,"FStatID",""),(3,"FName",""),(4,"FString",""),
+            (5,"AGothicCharacter",""),(6,"UMeasured","Fixture"),(7,"UDerivedMeasured","Fixture"),(300,"UQueryHolder","Fixture"),(301,"UDifferentPermission","Fixture")] {
+            r.type_by_ptr.insert(ptr,name.into()); r.typeid_to_ptr.insert(ptr as i32,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        r.class_super.insert("UDifferentPermission".into(),"UQueryHolder".into());
+        r.class_super.insert("UDerivedMeasured".into(),"UMeasured".into());
+        r.class_fields.insert("UQueryHolder".into(),HashMap::from([("State".into(),"UDerivedMeasured".into())]));
+        let key=(40i64<<33)|(300<<1)|1;
+        r.prop_by_key.insert(key,"State".into()); r.prop_type_id.insert(key,300);
+        let plain=|token|DataType {token,..Default::default()};
+        let object=|ptr,reference:bool,constant:bool|DataType {token:5,type_info:ptr,is_reference:reference,
+            is_object_const:constant,is_read_only:constant,..Default::default()};
+        for (ptr,owner,name,ret,args) in [
+            (102,"FStatID","$beh0",plain(0x52),vec![object(3,true,true)]),
+            (103,"FScopeCycleCounter","$beh0",plain(0x52),vec![object(2,true,true)]),
+            (104,"FStatID","$beh2",plain(0x52),vec![]),
+            (105,"FScopeCycleCounter","$beh2",plain(0x52),vec![]),
+            (106,"FString","opAssign",object(4,true,false),vec![object(4,true,true)]),
+            (1203,"UDifferentPermission","GetBound",plain(0x51),vec![]),
+            (1204,"UMeasured","GetMeasure",plain(0x51),vec![]),
+        ] {
+            r.func_by_ptr.insert(ptr,name.into()); r.func_owner.insert(ptr,owner.into()); r.func_is_method.insert(ptr);
+            r.func_ret.insert(ptr,ret); r.func_params.insert(ptr,args);
+        }
+        r.const_method_ptrs.extend([1203,1204]); r.funcid_to_ptr.extend([(203,1203),(204,1204)]);
+        r.func_by_ptr.insert(101,"__STATIC_NAME".into()); r.func_ret.insert(101,object(3,true,true));
+        r.func_params.insert(101,vec![plain(0x44)]); r.static_names.push("Different::Check".into());
+        r.global_by_ptr.insert(994,"Distance to target too close to required distance to move".into()); r.global_is_string.insert(994);
+        let getter=super::model::Func {name:"GetMeasure".into(),param_defaults:vec![],namespace:String::new(),ret:plain(0x51),params:vec![],
+            bytecode:vec![],obj_locals:vec![],is_ufunction:false,traits:0x204};
+        let class=super::model::Class {name:"UMeasured".into(),namespace:String::new(),super_class:None,fields:vec![],methods:vec![getter],ctors:vec![],flags:0};
+        let mut mods=vec![super::model::Module {name:"Fixture".into(),file:String::new(),functions:vec![],classes:vec![class],enums:vec![],globals:vec![]}];
+        match fault {
+            1=>r.func_params.get_mut(&103).unwrap()[0].is_reference=false,
+            2=>r.func_ret.get_mut(&101).unwrap().is_read_only=false,
+            3=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into(),
+            4=>{r.const_method_ptrs.insert(105);},
+            5=>r.func_ret.get_mut(&1204).unwrap().token=0x50,
+            6=>{r.func_params.insert(1203,vec![plain(0x44)]);},
+            7=>{r.class_fields.get_mut("UQueryHolder").unwrap().insert("State".into(),"FOther".into());},
+            8=>{r.prop_type_id.insert(key,6);},
+            9=>mods[0].classes[0].methods[0].traits &= !0x200,
+            10=>{let copy=mods[0].classes[0].clone();mods[0].classes.push(copy);},
+            11=>mods[0].classes[0].methods[0].traits &= !4,
+            12=>mods[0].classes[0].methods[0].params.push(super::model::Param {name:"extra".into(),ty:plain(0x44),flags:0}),
+            13=>{let mut copy=mods[0].classes[0].methods[0].clone();copy.traits &= !0x200;mods[0].classes[0].methods.push(copy);},
+            14=>mods[0].name="OtherModule".into(),
+            15=>mods[0].classes[0].namespace="OtherNamespace".into(),
+            16=>{r.class_fields.insert("UMeasured".into(),HashMap::from([("Measure".into(),"float".into())]));},
+            17=>{r.const_method_ptrs.remove(&1204);},
+            18=>r.func_ret.get_mut(&1203).unwrap().is_read_only=true,
+            19=>r.static_names[0]="Different\"Quote".into(),
+            20=>r.func_ret.get_mut(&106).unwrap().is_reference=false,
+            21=>{r.type_identity_by_ptr.insert(999,TypeIdentity {name:"UMeasured".into(),module:"Other".into(),namespace:String::new()});},
+            22=>r.type_identity_by_ptr.get_mut(&2).unwrap().name="FOther".into(),
+            23=>{r.func_by_ptr.insert(1204,"GetOtherMeasure".into());mods[0].classes[0].methods[0].name="GetOtherMeasure".into();},
+            24=>{
+                r.class_fields.get_mut("UQueryHolder").unwrap().insert("State".into(),"UDerivedMeasured".into());
+                r.class_super.insert("UDerivedMeasured".into(),"UMeasured".into());
+                r.class_fields.insert("UDerivedMeasured".into(),HashMap::from([("Measure".into(),"float".into())]));
+            },
+            _=>{}
+        }
+        r.set_script_property_getters(&mods);
+        r
+    }
+
     #[cfg(test)]
     pub(crate) fn from_test_paired_eye_traces(fault:u8)->Self {
         let mut r=Self::default();
@@ -8452,6 +8558,77 @@ impl RefResolver {
             30=>{r.class_super.remove("UState");},
             31=>r.func_ret.get_mut(&105).unwrap().token=0x44,
             32=>r.func_params.get_mut(&114).unwrap()[0].is_object_const=false,
+            _=>{},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_string_key_queries(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"AActor",""),(2,"FString",""),(3,"FName",""),(4,"UWorld",""),(5,"UHost","Fixture"),
+            (6,"UBase","Fixture"),(7,"UGothicGenericMagicComponent",""),(8,"UActorComponent",""),(9,"UObject",""),(10,"TArray",""),(11,"ENetRole","")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32,ptr);r.type_names.insert(name.into());
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        r.class_super.insert("UHost".into(),"UBase".into());r.class_super.insert("UBase".into(),"UGothicGenericMagicComponent".into());
+        r.class_fields.insert("UBase".into(),HashMap::from([("Prefix".into(),"FName".into()),("Fallback".into(),"FName".into())]));
+        for (id,offset,name) in [(1i64,16i64,"Labels"),(6,24,"Prefix"),(6,32,"Fallback")] {
+            let key=(id<<1)|(offset<<33)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id as i32);
+        }
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&[("AActor","Labels","TArray<FName>")],&[],None));
+        let plain=|token|DataType {token,..Default::default()};
+        let object=|type_info,reference:bool,constant:bool,handle:bool|DataType {token:5,type_info,is_reference:reference,is_object_const:constant,
+            is_object_handle:handle,is_read_only:constant&&!handle,..Default::default()};
+        for (ptr,name,owner,constant,ret,params) in [
+            (101,"Owner","UActorComponent",true,object(1,false,false,true),vec![]),
+            (102,"Empty","TArray",true,plain(0x41),vec![]),
+            (103,"DisplayName","AActor",true,object(2,false,false,false),vec![]),
+            (104,"$beh0","FString",false,plain(0x52),vec![object(2,true,true,false)]),
+            (105,"$beh2","FString",false,plain(0x52),vec![]),
+            (106,"Append","FString",false,object(2,true,false,false),vec![object(2,true,true,false)]),
+            (107,"opIndex","TArray",false,object(3,true,false,false),vec![plain(0x44)]),
+            (108,"ToString","FName",true,object(2,false,false,false),vec![]),
+            (109,"$beh0","FName",false,plain(0x52),vec![object(2,true,true,false)]),
+            (110,"World","UObject",true,object(4,false,false,true),vec![]),
+            (111,"Query","",false,plain(0x41),vec![object(4,false,true,true),object(3,true,true,false),DataType {token:0x50,is_reference:true,..Default::default()}]),
+            (112,"Role","AActor",true,object(11,false,false,false),vec![])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,params);
+            if !owner.is_empty() {r.func_is_method.insert(ptr);r.func_owner.insert(ptr,owner.into());}
+            if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        r.func_ns.insert(111,"WorldData".into());r.global_by_ptr.insert(301,"No labels: ".into());r.global_is_string.insert(301);
+        match fault {
+            1=>{r.class_super.insert("UBase".into(),"UUnrelatedNative".into());},
+            2=>{r.const_method_ptrs.remove(&101);},
+            3=>r.func_ret.get_mut(&101).unwrap().is_object_const=true,
+            4=>{r.func_owner.insert(110,"AActor".into());},
+            5=>r.func_params.get_mut(&110).unwrap().push(object(9,false,true,true)),
+            6=>r.func_ret.get_mut(&103).unwrap().is_reference=true,
+            7=>r.func_params.get_mut(&104).unwrap()[0].is_read_only=false,
+            8=>{r.const_method_ptrs.insert(105);},
+            9=>r.func_ret.get_mut(&106).unwrap().is_reference=false,
+            10=>r.func_ret.get_mut(&106).unwrap().is_object_const=true,
+            11=>r.func_params.get_mut(&106).unwrap()[0].is_reference=false,
+            12=>{r.const_method_ptrs.insert(107);},
+            13=>r.func_ret.get_mut(&107).unwrap().type_info=2,
+            14=>r.func_params.get_mut(&107).unwrap()[0].token=0x47,
+            15=>r.func_ret.get_mut(&108).unwrap().is_reference=true,
+            16=>r.func_params.get_mut(&109).unwrap()[0].is_object_const=false,
+            17=>r.func_params.get_mut(&111).unwrap()[0].is_object_const=false,
+            18=>r.func_params.get_mut(&111).unwrap()[1].is_read_only=false,
+            19=>r.func_params.get_mut(&111).unwrap()[2].is_reference=false,
+            20=>r.func_params.get_mut(&111).unwrap()[2].token=0x51,
+            21=>r.func_params.get_mut(&111).unwrap().push(plain(0x41)),
+            22=>{r.func_is_method.insert(111);},
+            23=>{r.class_fields.get_mut("UBase").unwrap().insert("Prefix".into(),"FString".into());},
+            24=>{r.prop_type_id.insert((6i64<<1)|(32i64<<33)|1,5);},
+            25=>r.set_native_api(super::binds::NativeApi::from_test_field_types(&[("AActor","Labels","TArray<FString>")],&[],None)),
+            26=>{r.global_is_string.remove(&301);},
+            27=>{r.global_by_ptr.insert(301,"Other: ".into());},
+            28=>r.type_identity_by_ptr.get_mut(&2).unwrap().module="Script".into(),
+            29=>r.func_ret.get_mut(&102).unwrap().token=0x44,
+            30=>{r.func_ns.insert(111,"".into());},
             _=>{},
         }
         r

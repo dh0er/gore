@@ -9,7 +9,7 @@ AI.States.FightAI.AIState_PerceptionResponse	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_CombatEndActions	1	0	0
 AI.States.FightAI.CombatState.AIGroup_Attackers	1	0	0
 AI.States.FightAI.CombatState.AIState_OGCombat	1	0	0
-AI.States.FightAI.CombatState.CombatMoves	6	0	0
+AI.States.FightAI.CombatState.CombatMoves	5	0	0
 AI.States.FightAI.CombatState.Positioning.AICombat_Positioning	5	0	0
 AI.States.FightAI.FearState.AIState_Fear	1	0	0
 AI.States.FightAI.FleeState.AIState_Flee	2	0	0
@@ -22,4 +22,3 @@ GAS.Abilities.Locomotion.GA_Falling	1	0	0
 GAS.Abilities.Passive.GA_PlayerPerception_CrimeRegistration	1	0	0
 GAS.Abilities.Spells.Spells.Transform.GA_Spell_Transform	2	0	0
 GAS.Calculations.Damage	1	0	0
-Gameplay.Magic.Components.InExtremo.InExtremoPropComponent	1	0	0
