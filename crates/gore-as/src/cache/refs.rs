@@ -9373,6 +9373,53 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_interpolated_sample(fault:u8)->Self {
+        let mut r=Self::default();r.type_by_ptr.insert(1,"FVector".into());r.typeid_to_ptr.insert(101,1);
+        r.type_identity_by_ptr.insert(1,TypeIdentity {name:"FVector".into(),module:String::new(),namespace:String::new()});
+        let value=DataType {token:5,type_info:1,..Default::default()};
+        let input=DataType {is_reference:true,is_object_const:true,is_read_only:true,..value.clone()};
+        let double=DataType {token:0x51,..Default::default()};let void=DataType {token:0x52,..Default::default()};
+        for (ptr,name,constant,ret,args) in [
+            (11,"opSub",true,value.clone(),vec![input.clone()]),
+            (12,"opMul",true,value.clone(),vec![double.clone()]),
+            (13,"opAdd",true,value.clone(),vec![input.clone()]),
+            (14,"DotProduct",true,double.clone(),vec![input.clone()]),
+            (15,"Size",true,double.clone(),vec![]),
+            (17,"$beh0",false,void,vec![input.clone()]),
+            (18,"GetSafeNormal",true,value.clone(),vec![double.clone(),input.clone()]),
+            (19,"opAssign",false,DataType {is_reference:true,..value},vec![input])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,"FVector".into());r.func_is_method.insert(ptr);
+            r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        r.func_by_ptr.insert(16,"Abs".into());r.func_ns.insert(16,"Math".into());r.func_ret.insert(16,double.clone());r.func_params.insert(16,vec![double]);
+        r.global_by_ptr.insert(201,"ZeroVector".into());r.global_ns.insert(201,"FVector".into());
+        let key=(101i64<<1)|(16i64<<33)|1;r.prop_by_key.insert(key,"Z".into());r.prop_type_id.insert(key,101);
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Other".into(),
+            2=>r.func_ret.get_mut(&11).unwrap().is_reference=true,
+            3=>r.func_params.get_mut(&11).unwrap()[0].is_read_only=false,
+            4=>{r.const_method_ptrs.remove(&11);},
+            5=>r.func_ret.get_mut(&12).unwrap().is_object_const=true,
+            6=>r.func_params.get_mut(&12).unwrap()[0].is_reference=true,
+            7=>r.func_params.get_mut(&12).unwrap()[0].token=0x50,
+            8=>{r.func_owner.insert(13,"FUnrelated".into());},
+            9=>r.func_params.get_mut(&13).unwrap()[0].is_object_handle=true,
+            10=>r.func_ret.get_mut(&14).unwrap().token=0x50,
+            11=>r.func_params.get_mut(&14).unwrap()[0].is_reference=false,
+            12=>r.func_ret.get_mut(&15).unwrap().is_reference=true,
+            13=>r.func_params.get_mut(&15).unwrap().push(DataType {token:0x51,..Default::default()}),
+            14=>{r.func_is_method.remove(&15);},
+            15=>r.func_ret.get_mut(&16).unwrap().is_read_only=true,
+            16=>r.func_params.get_mut(&16).unwrap()[0].is_object_const=true,
+            17=>{r.func_ns.insert(16,"Other".into());},
+            18=>{r.func_is_method.insert(16);},
+            19=>{r.const_method_ptrs.insert(16);},
+            _=>{},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_scoped_tag_predicates(fault:u8)->Self {
         let mut r=Self::default();
         for (ptr,id,name) in [(1,101,"FGameplayTag"),(2,102,"FDelayValues"),(3,103,"UControl"),(4,104,"FHitContext"),(5,105,"FUnrelated")] {

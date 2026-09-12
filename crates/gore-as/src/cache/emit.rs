@@ -3477,6 +3477,8 @@ fn emit_function_ctor(
         pass_trace("restore_guarded_double_argument", &rendered);
         let rendered = restore_scoped_tag_predicate_consumers(&rendered, f, refs);
         pass_trace("restore_scoped_tag_predicate_consumers", &rendered);
+        let rendered = restore_interpolated_sample_lives(&rendered, f, refs);
+        pass_trace("restore_interpolated_sample_lives", &rendered);
         let rendered = restore_captured_predicate_condition_lives(&rendered, f, refs, class_name, is_method);
         pass_trace("restore_captured_predicate_condition_lives", &rendered);
         let rendered = restore_clock_property_and_enum_chain(&rendered, f, refs, is_method, class_name);
@@ -18629,6 +18631,108 @@ fn restore_closed_format_argument_lives(body:&str,f:&Func,refs:&RefResolver,is_m
     let Some((start,end,replacement))=found else {return body.to_owned();};
     let mut lines:Vec<_>=body.lines().map(str::to_owned).collect();lines.splice(start..end,replacement);
     lines.join("\n")+if body.ends_with('\n') {"\n"}else {""}
+}
+
+/// Retain an interpolated sample point and evaluate both cylindrical distances before their test.
+fn restore_interpolated_sample_lives(body:&str,f:&Func,refs:&RefResolver)->String {
+    if f.params.len()!=6 || !f.is_const_method() || !body.contains(".Size()) <= ") {return body.to_owned();}
+    let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    let shape=|t:&super::types::DataType,token,ptr,reference:bool,constant:bool|t.token==token && t.type_info==ptr && t.is_reference==reference
+        && t.is_object_const==constant && t.is_read_only==constant && !t.is_object_handle && !t.is_auto && !t.if_handle_then_const;
+    let double=|t:&super::types::DataType|shape(t,0x51,0,false,false);
+    if !shape(&f.ret,0x41,0,false,false) {return body.to_owned();}
+    let vector=f.params[0].ty.type_info;
+    if !refs.type_identity_by_ptr(vector).is_some_and(|id|id.name=="FVector" && id.module.is_empty() && id.namespace.is_empty())
+        || f.params[..4].iter().any(|p|p.flags!=3 || !shape(&p.ty,5,vector,true,true))
+        || f.params[4..].iter().any(|p|p.flags!=0 || !shape(&p.ty,0x51,0,false,true)) {return body.to_owned();}
+    let slots=super::model::param_slot_map(&f.params.iter().map(|p|p.ty.clone()).collect::<Vec<_>>(),true,false,Some(refs));
+    let parameter=|i|slots.iter().find_map(|(s,n)|(*n==i).then_some(*s));
+    let (Some(axial),Some(radial))=(parameter(4),parameter(5)) else {return body.to_owned();};
+    let frame_size=-radial+super::model::slot_width_dwords(&f.params[5].ty,Some(refs));
+    let w=|i:&Instr,n:usize|i.words.get(n).map(|v|*v as i16 as i32);let ptr=|i:&Instr|i.qwords.first().map(|v|*v as i64);
+    let target=|n:usize|{let i=code.get(n)?;let to=i.offset_dw as i64+2+*i.dwords.first()? as i32 as i64;code.iter().position(|c|c.offset_dw as i64==to)};
+    let mut jumps=Vec::new();
+    for (n,i) in code.iter().enumerate() {if i.op.name=="JMPP" {return body.to_owned();}if i.op.name.starts_with('J') {
+        let Some(to)=target(n) else {return body.to_owned();};jumps.push((n,to));
+    }}
+    let mut sites=Vec::new();
+    for (start,c) in code.windows(60).enumerate() {
+        let found=(|| {
+            if start+60!=code.len() || c.iter().map(|i|i.op.name).ne("SetV4 SetV4 JMP SUSPEND iTOd SetV8 DIVd PSF PSF PSF CALLSYS PshV8 PSF PSF CALLSYS PSF PSF PSF CALLSYS PSF PSF PSF CALLSYS PSF PSF CALLSYS CpyRtoV8 PshV8 PSF PSF CALLSYS PSF PSF PSF CALLSYS PSF CALLSYS CpyRtoV8 PshV8 CALLSYS CpyRtoV8 CMPd JNP SetV4 JMP CMPd TNP CpyRtoV4 CpyVtoV4 CpyVtoR1 JLowZ SetV1 CpyVtoR4 JMP IncVi CMPIi JS SetV1 CpyVtoR4 RET".split_whitespace()) {return None;}
+            let (count,index,ratio,temp,a,point,b,delta,centre,axis,dot,scaled,residual,distance,merged,flag)=
+                (w(&c[0],0)?,w(&c[1],0)?,w(&c[4],0)?,w(&c[5],0)?,w(&c[7],0)?,w(&c[8],0)?,w(&c[9],0)?,w(&c[12],0)?,
+                 w(&c[19],0)?,w(&c[23],0)?,w(&c[26],0)?,w(&c[28],0)?,w(&c[32],0)?,w(&c[37],0)?,w(&c[43],0)?,w(&c[47],0)?);
+            let values=[a,b,centre,axis,point,delta,scaled,residual];let scalars=[count,index,ratio,temp,dot,distance,merged,flag];
+            if values.iter().chain(scalars.iter()).any(|s|*s<=0) || values.into_iter().chain(scalars).collect::<HashSet<_>>().len()!=16
+                || values.iter().any(|slot|f.obj_locals.iter().filter(|(s,_)|s==slot).map(|(_,ty)|*ty).ne([vector]))
+                || scalars.iter().any(|slot|f.obj_locals.iter().any(|(s,_)|s==slot)) {return None;}
+            for (at,n,slot) in [(4,1,index),(6,0,ratio),(6,1,ratio),(6,2,temp),(11,0,ratio),(13,0,point),(15,0,delta),(16,0,point),(17,0,a),
+                (20,0,delta),(21,0,point),(24,0,delta),(27,0,dot),(29,0,axis),(31,0,scaled),(33,0,delta),(35,0,residual),(38,0,dot),(40,0,temp),
+                (41,0,temp),(41,1,axial),(45,0,distance),(45,1,radial),(48,0,merged),(48,1,flag),(49,0,merged),(51,0,flag),(52,0,flag),
+                (54,0,index),(55,0,index),(57,0,merged),(58,0,merged),(59,0,frame_size)] {if w(&c[at],n)!=Some(slot) {return None;}}
+            let limit=*c[0].dwords.first()? as i32;let seed=*c[1].dwords.first()? as i32;let denominator=f64::from_bits(*c[5].qwords.first()?);
+            if !(0<seed && seed<limit) || denominator!=limit as f64 || c[55].dwords.as_slice()!=[limit as u32]
+                || c[43].dwords.as_slice()!=[0] || c[51].dwords.as_slice()!=[1] || c[57].dwords.as_slice()!=[0] {return None;}
+            let edges=[(2,55),(42,45),(44,49),(50,54),(53,59),(56,3)];
+            if edges.iter().any(|(from,to)|target(start+from)!=Some(start+to))
+                || jumps.iter().any(|(from,to)|*to>=start && *to<start+60 && !edges.iter().any(|(a,b)|*from==start+a && *to==start+b)) {return None;}
+            let method=|p,name|refs.func_owner_by_ptr(p)==Some("FVector") && refs.func_by_ptr(p)==Some(name) && refs.is_method_by_ptr(p) && refs.is_const_method_by_ptr(p);
+            for (at,name,ret_vector,input) in [(10,"opSub",true,1),(14,"opMul",true,2),(18,"opAdd",true,1),(25,"DotProduct",false,1),(36,"Size",false,0)] {
+                let p=ptr(&c[at])?;let ret=refs.func_ret_by_ptr(p)?;let args=refs.func_params_by_ptr(p)?;
+                if !method(p,name) || if ret_vector {!shape(ret,5,vector,false,false)}else{!double(ret)} {return None;}
+                if match input {0=>!args.is_empty(),1=>!matches!(args,[t] if shape(t,5,vector,true,true)),_=>!matches!(args,[t] if double(t))} {return None;}
+            }
+            if ptr(&c[22])!=ptr(&c[10]) || ptr(&c[34])!=ptr(&c[10]) || ptr(&c[30])!=ptr(&c[14]) {return None;}
+            let abs=ptr(&c[39])?;
+            if refs.func_by_ptr(abs)!=Some("Abs") || refs.func_ns_by_ptr(abs)!=Some("Math") || refs.is_method_by_ptr(abs) || refs.is_const_method_by_ptr(abs)
+                || refs.func_owner_by_ptr(abs).is_some() || !double(refs.func_ret_by_ptr(abs)?) || !matches!(refs.func_params_by_ptr(abs)?,[t] if double(t)) {return None;}
+            Some((count,index,ratio,a,b,centre,axis,point,delta,dot,distance,limit,seed,denominator))
+        })();if let Some(site)=found {sites.push(site);}
+    }
+    let [site]=sites.as_slice() else {return body.to_owned();};
+    let (count,index,ratio,a,b,centre,axis,point,delta,dot,distance,limit,seed,denominator)=*site;
+    let ratio_name=format!("local_{ratio}");let size_name=format!("local_{distance}");
+    if count_ident(body,&ratio_name)!=0 || count_ident(body,&size_name)!=0 {return body.to_owned();}
+    let bound=|name:&str,slot|slot_and_life_any(name).is_some_and(|(s,_)|s==slot);
+    let lines:Vec<_>=body.lines().collect();let mut scopes=Vec::new();let mut stack=Vec::new();
+    for (at,line) in lines.iter().enumerate() {scopes.push(stack.clone());match line.trim() {"{"=>stack.push(at),"}"=>if stack.pop().is_none() {return body.to_owned();},_=>if brace_net(line)!=0 {return body.to_owned();}}}
+    if !stack.is_empty() {return body.to_owned();}
+    let visible=|name:&str,at| {
+        let declarations:Vec<_>=lines.iter().enumerate().filter(|(_,line)|declaration_with_initializer(line).is_some_and(|(_,n,_)|n==name)).map(|(n,_)|n).collect();
+        matches!(declarations.as_slice(),[decl] if *decl<at && scopes[at].starts_with(&scopes[*decl]) && lines[*decl].trim_start().starts_with(&format!("FVector {name} = ")))
+    };
+    let mut edits=Vec::new();
+    for (row,c) in lines.windows(11).enumerate() {
+        let found=(|| {
+            if row<4 {return None;}
+            let (pad,point_name,sub)=declaration_with_initializer(c[0])?;let (_,delta_name,mul)=declaration_with_initializer(c[1])?;
+            let (end_name,start_name)=sub.strip_prefix('(')?.strip_suffix(')')?.split_once(" - ")?;
+            if !bound(&point_name,point) || !bound(&delta_name,delta) || !bound(start_name,a) || !bound(end_name,b)
+                || count_ident(body,&point_name)!=4 || count_ident(body,&delta_name)!=5
+                || c[0]!=format!("{pad}FVector {point_name} = {sub};") || c[1]!=format!("{pad}FVector {delta_name} = {mul};") {return None;}
+            let (_,counter_name,counter_init)=declaration_with_initializer(lines[row-4])?;let (_,index_name,index_init)=declaration_with_initializer(lines[row-3])?;
+            if !bound(&counter_name,count) || !bound(&index_name,index) || counter_init!=limit.to_string() || index_init!=seed.to_string()
+                || lines[row-4].trim()!=format!("int {counter_name} = {limit};") || lines[row-3].trim()!=format!("int {index_name} = {seed};")
+                || lines[row-2].trim()!=format!("for (; {index_name} < {limit}; ++{index_name})") || lines[row-1].trim()!="{" {return None;}
+            if mul!=format!("({point_name} * ({index_name} / {denominator:?}))") || c[2]!=format!("{pad}{point_name} = ({start_name} + {delta_name});") {return None;}
+            let centre_name=c[3].strip_prefix(&format!("{pad}{delta_name} = ({point_name} - "))?.strip_suffix(");")?;
+            let (_,dot_name,projection)=declaration_with_initializer(c[4])?;
+            let axis_name=projection.strip_prefix(&format!("{delta_name}.DotProduct("))?.strip_suffix(')')?;
+            if !bound(centre_name,centre) || !bound(axis_name,axis) || !bound(&dot_name,dot) || count_ident(body,&dot_name)!=3
+                || c[4]!=format!("{pad}float {dot_name} = {projection};")
+                || [start_name,end_name,centre_name,axis_name].iter().any(|name|!visible(name,row)) {return None;}
+            let axial_name=&f.params[4].name;let radial_name=&f.params[5].name;
+            if c[5]!=format!("{pad}if (Math::Abs({dot_name}) <= {axial_name} && ((({delta_name} - ({axis_name} * {dot_name})).Size()) <= {radial_name}))")
+                || c[6].trim()!="{" || c[7].trim()!="return true;" || c[8].trim()!="}" || c[9].trim()!="}" || c[10].trim()!="return false;"
+                || scopes[row].last()!=Some(&(row-1)) || (0..7).any(|n|scopes[row+n]!=scopes[row])
+                || scopes[row+7].last()!=Some(&(row+6)) || scopes[row+8]!=scopes[row+7] || scopes[row+9]!=scopes[row]
+                || scopes[row+10]!=scopes[row-4] || scopes[row-4]!=scopes[row-3] || scopes[row-3]!=scopes[row-2] {return None;}
+            Some(format!("{pad}float {ratio_name} = {index_name} / {denominator:?};\n{pad}FVector {point_name} = ({start_name} + (({end_name} - {start_name}) * {ratio_name}));\n{pad}FVector {delta_name} = ({point_name} - {centre_name});\n{}\n{pad}float {size_name} = ({delta_name} - ({axis_name} * {dot_name})).Size();\n{pad}if (Math::Abs({dot_name}) <= {axial_name} && ({size_name} <= {radial_name}))",c[4]))
+        })();if let Some(text)=found {edits.push((row,text));}
+    }
+    let [(row,replacement)]=edits.as_slice() else {return body.to_owned();};
+    let mut out:Vec<_>=lines.iter().map(|s|(*s).to_owned()).collect();out.splice(*row..row+6,[replacement.clone()]);
+    out.join("\n")+if body.ends_with('\n') {"\n"}else {""}
 }
 
 /// Keep tag predicates inside a default-constructed value selection and a later short-circuit test.
@@ -58290,6 +58394,221 @@ mod literal_value_lifetime_tests {
         }
         shifted_body=shifted_body.replace("local_26_2","local_126_2");shifted_expected=shifted_expected.replace("local_26_2","local_126_2");
         assert_eq!(fold(&shifted_body,&shifted,&refs),shifted_expected);
+    }
+
+    fn interpolated_sample_fixture(bias:u16)->Func {
+        // Original92 ops, including point32's earlier GetSafeNormal life; helper binds the last60.
+        let mut f=function(&[
+            ("PshVPtr", &[65534]),
+            ("PSF", &[6]),
+            ("CALLSYS", &[]),
+            ("SetV8", &[8]),
+            ("LoadVObjR", &[6, 16]),
+            ("WRTV8", &[8]),
+            ("PshVPtr", &[65532]),
+            ("PSF", &[14]),
+            ("CALLSYS", &[]),
+            ("SetV8", &[8]),
+            ("LoadVObjR", &[14, 16]),
+            ("WRTV8", &[8]),
+            ("PshVPtr", &[65530]),
+            ("PSF", &[20]),
+            ("CALLSYS", &[]),
+            ("SetV8", &[8]),
+            ("LoadVObjR", &[20, 16]),
+            ("WRTV8", &[8]),
+            ("PshVPtr", &[65528]),
+            ("PSF", &[26]),
+            ("CALLSYS", &[]),
+            ("SetV8", &[8]),
+            ("LoadVObjR", &[26, 16]),
+            ("WRTV8", &[8]),
+            ("PshGPtr", &[]),
+            ("PshC8", &[]),
+            ("PSF", &[32]),
+            ("PSF", &[26]),
+            ("CALLSYS", &[]),
+            ("PSF", &[32]),
+            ("PSF", &[26]),
+            ("CALLSYS", &[]),
+            ("SetV4", &[33]),
+            ("SetV4", &[35]),
+            ("JMP", &[]),
+            ("SUSPEND", &[]),
+            ("iTOd", &[8, 35]),
+            ("SetV8", &[42]),
+            ("DIVd", &[8, 8, 42]),
+            ("PSF", &[6]),
+            ("PSF", &[32]),
+            ("PSF", &[14]),
+            ("CALLSYS", &[]),
+            ("PshV8", &[8]),
+            ("PSF", &[54]),
+            ("PSF", &[32]),
+            ("CALLSYS", &[]),
+            ("PSF", &[54]),
+            ("PSF", &[32]),
+            ("PSF", &[6]),
+            ("CALLSYS", &[]),
+            ("PSF", &[20]),
+            ("PSF", &[54]),
+            ("PSF", &[32]),
+            ("CALLSYS", &[]),
+            ("PSF", &[26]),
+            ("PSF", &[54]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV8", &[40]),
+            ("PshV8", &[40]),
+            ("PSF", &[60]),
+            ("PSF", &[26]),
+            ("CALLSYS", &[]),
+            ("PSF", &[60]),
+            ("PSF", &[48]),
+            ("PSF", &[54]),
+            ("CALLSYS", &[]),
+            ("PSF", &[48]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV8", &[62]),
+            ("PshV8", &[40]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV8", &[42]),
+            ("CMPd", &[42, 65526]),
+            ("JNP", &[]),
+            ("SetV4", &[37]),
+            ("JMP", &[]),
+            ("CMPd", &[62, 65524]),
+            ("TNP", &[]),
+            ("CpyRtoV4", &[71]),
+            ("CpyVtoV4", &[37, 71]),
+            ("CpyVtoR1", &[37]),
+            ("JLowZ", &[]),
+            ("SetV1", &[71]),
+            ("CpyVtoR4", &[71]),
+            ("JMP", &[]),
+            ("IncVi", &[35]),
+            ("CMPIi", &[35]),
+            ("JS", &[]),
+            ("SetV1", &[37]),
+            ("CpyVtoR4", &[37]),
+            ("RET", &[14]),
+        ]);
+        f.name="IntersectsSampleVolume".into();f.traits=4;f.ret=DataType {token:0x41,..Default::default()};
+        f.params=["Begin","Finish","Origin","Axis","AxialLimit","RadialLimit"].iter().enumerate().map(|(i,name)|super::super::model::Param {
+            name:(*name).into(),flags:if i<4 {3}else{0},ty:DataType {token:if i<4 {5}else{0x51},type_info:if i<4 {1}else{0},
+                is_reference:i<4,is_object_const:true,is_read_only:true,..Default::default()}}).collect();
+        f.obj_locals=[6,14,20,26,32,48,54,60,68].into_iter().map(|s|(s,1)).collect();
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,offset,value) in [(4, 2, 101), (10, 2, 101), (16, 2, 101), (22, 2, 101), (32, 1, 5), (33, 1, 1), (75, 1, 0), (83, 1, 1), (87, 1, 5), (89, 1, 0)] {f.bytecode[code[at].offset_dw+offset]=value;}
+        for (at,value) in [(2, 17), (3, 0), (8, 17), (9, 0), (14, 17), (15, 0), (20, 17), (21, 0), (24, 201), (25, 4487126258294980608), (28, 18), (31, 19), (37, 4617315517961601024), (42, 11), (46, 12), (50, 13), (54, 11), (57, 14), (62, 12), (66, 11), (68, 15), (71, 16)] {let value:u64=value;f.bytecode[code[at].offset_dw+1]=value as i32;f.bytecode[code[at].offset_dw+2]=(value>>32) as i32;}
+        for (from,to) in [(34, 87), (74, 77), (76, 81), (82, 86), (85, 91), (88, 35)] {f.bytecode[code[from].offset_dw+1]=code[to].offset_dw as i32-code[from].offset_dw as i32-2;}
+        for i in &code {
+            if i.op.name=="RET" {continue;}
+            for (n,word) in i.words.iter().enumerate() {
+                if (*word as i16)<=0 || i.op.name=="LoadVObjR" && n>0 {continue;}
+                let at=n+1;let dw=i.offset_dw+at/2;let shift=(at%2)*16;
+                f.bytecode[dw]=((f.bytecode[dw] as u32 & !(0xffff<<shift)) | (((*word+bias) as u32)<<shift)) as i32;
+            }
+        }
+        for (slot,_) in &mut f.obj_locals {*slot+=bias as i32;}f
+    }
+
+    #[test]
+    fn sample_quotient_point_and_eager_distance_keep_distinct_lives() {
+        let source=r#"        FVector local_6 = Begin;
+        local_6.Z = 0.0;
+        FVector local_14 = Finish;
+        local_14.Z = 0.0;
+        FVector local_20 = Origin;
+        local_20.Z = 0.0;
+        FVector local_26 = Axis;
+        local_26.Z = 0.0;
+        local_26 = local_26.GetSafeNormal(9.99999993922529e-9, FVector::ZeroVector);
+        int local_33 = 5;
+        int local_35 = 1;
+        for (; local_35 < 5; ++local_35)
+        {
+            FVector local_32 = (local_14 - local_6);
+            FVector local_54 = (local_32 * (local_35 / 5.0));
+            local_32 = (local_6 + local_54);
+            local_54 = (local_32 - local_20);
+            float local_40 = local_54.DotProduct(local_26);
+            if (Math::Abs(local_40) <= AxialLimit && (((local_54 - (local_26 * local_40)).Size()) <= RadialLimit))
+            {
+                return true;
+            }
+        }
+        return false;
+"#;
+        let expected=r#"        FVector local_6 = Begin;
+        local_6.Z = 0.0;
+        FVector local_14 = Finish;
+        local_14.Z = 0.0;
+        FVector local_20 = Origin;
+        local_20.Z = 0.0;
+        FVector local_26 = Axis;
+        local_26.Z = 0.0;
+        local_26 = local_26.GetSafeNormal(9.99999993922529e-9, FVector::ZeroVector);
+        int local_33 = 5;
+        int local_35 = 1;
+        for (; local_35 < 5; ++local_35)
+        {
+            float local_8 = local_35 / 5.0;
+            FVector local_32 = (local_6 + ((local_14 - local_6) * local_8));
+            FVector local_54 = (local_32 - local_20);
+            float local_40 = local_54.DotProduct(local_26);
+            float local_62 = (local_54 - (local_26 * local_40)).Size();
+            if (Math::Abs(local_40) <= AxialLimit && (local_62 <= RadialLimit))
+            {
+                return true;
+            }
+        }
+        return false;
+"#;
+        let refs=RefResolver::from_test_interpolated_sample(0);
+        let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_interpolated_sample_lives(s,f,r);
+        let rename=|s:&str,bias:u16| {
+            let mut s=s.to_owned();for slot in [71u16,68,62,60,54,48,42,40,37,35,33,32,26,20,14,8,6] {
+                s=super::rename_ident(&s,&format!("local_{slot}"),&format!("local_{}",slot+bias));
+            }s
+        };
+        for bias in [0u16,512] {let f=interpolated_sample_fixture(bias);let s=rename(source,bias);let e=rename(expected,bias);
+            assert_eq!(fold(&s,&f,&refs),e,"derived source names and relocated locals {bias}");assert_eq!(fold(&e,&f,&refs),e,"idempotence");}
+        let f=interpolated_sample_fixture(0);let code=disassemble(&f.bytecode).unwrap();assert_eq!(code.len(),92);
+        assert_eq!(source.split("        int local_33").next(),expected.split("        int local_33").next(),"earlier normal and flattened input lives untouched");
+        for fault in 1..=19 {assert_eq!(fold(source,&f,&RefResolver::from_test_interpolated_sample(fault)),source,"metadata {fault}");}
+        for at in 32..92 {
+            let i=&code[at];
+            for n in 0..i.words.len() {let mut bad=f.clone();let word=n+1;bad.bytecode[i.offset_dw+word/2]^=1<<((word%2)*16);
+                assert_eq!(fold(source,&bad,&refs),source,"WORD {at}/{n}");}
+            for offset in if i.qwords.is_empty() {Vec::new()}else{vec![1,2]} {let mut bad=f.clone();bad.bytecode[i.offset_dw+offset]^=1;
+                assert_eq!(fold(source,&bad,&refs),source,"QWORD {at}/{offset}");}
+            if !i.dwords.is_empty() && !i.op.name.starts_with('J') {let mut bad=f.clone();bad.bytecode[i.offset_dw+1]^=1;
+                assert_eq!(fold(source,&bad,&refs),source,"DWORD {at}");}
+        }
+        for (from,to) in [(34,36),(74,78),(76,80),(82,87),(85,89),(88,39)] {let mut bad=f.clone();bad.bytecode[code[from].offset_dw+1]=code[to].offset_dw as i32-code[from].offset_dw as i32-2;
+            assert_eq!(fold(source,&bad,&refs),source,"CFG {from}->{to}");}
+        let mut bad=f.clone();let branch=function(&[("JMP",&[]),("SUSPEND",&[])]);bad.bytecode[code[3].offset_dw..code[3].offset_dw+3].copy_from_slice(&branch.bytecode);
+        bad.bytecode[code[3].offset_dw+1]=code[47].offset_dw as i32-code[3].offset_dw as i32-2;
+        assert_eq!(fold(source,&bad,&refs),source,"foreign jump into vector calculation");
+        for (slot,ty) in [(32,1),(54,1),(35,1),(8,1),(62,1)] {let mut bad=f.clone();bad.obj_locals.extend([(slot,ty),(slot,ty)]);
+            assert_eq!(fold(source,&bad,&refs),source,"ambiguous object/scalar {slot}");}
+        for fault in 0..8 {let mut bad=f.clone();match fault {
+            0=>bad.traits=0,1=>bad.ret.is_reference=true,2=>bad.params[0].ty.is_reference=false,
+            3=>bad.params[1].ty.is_read_only=false,4=>bad.params[2].flags=1,5=>bad.params[4].ty.token=0x50,
+            6=>bad.params[5].ty.is_object_const=false,_=>{bad.params.pop();}}
+            assert_eq!(fold(source,&bad,&refs),source,"parameter/return {fault}");}
+        for (old,new) in [("local_14 - local_6","local_6 - local_14"),("local_35 / 5.0","local_35 / 4.0"),
+            ("local_54.DotProduct(local_26)","local_26.DotProduct(local_54)"),("< 5; ++local_35","<= 5; ++local_35"),
+            ("                return true;","                Use(local_32);\n                return true;"),
+            ("            float local_40","            {\n            float local_40"),("int local_35 = 1;","int local_35 = 2;"),
+            ("FVector local_14 = Finish;","float local_14 = 0.0;")] {
+            let s=source.replace(old,new);assert_ne!(s,source);assert_eq!(fold(&s,&f,&refs),s,"source/scope {old}");}
+        for name in ["local_8","local_62"] {let s=format!("float {name} = 0.0;\n{source}");assert_eq!(fold(&s,&f,&refs),s,"introduced-name collision {name}");}
+        for name in ["local_32","local_54","local_40"] {let s=format!("{source}Use({name});\n");assert_eq!(fold(&s,&f,&refs),s,"extra old life {name}");}
+        let suffix=|s:&str|super::rename_ident(&super::rename_ident(&super::rename_ident(s,"local_32","local_32_7"),"local_54","local_54_9"),"local_35","local_35_2");
+        assert_eq!(fold(&suffix(source),&f,&refs),suffix(expected),"names and separate life suffixes");
+        let s=format!("float local_320 = 0.0;\n{source}");let e=format!("float local_320 = 0.0;\n{expected}");
+        assert_eq!(fold(&s,&f,&refs),e,"identifier prefix preserved");
     }
 
     fn scoped_tag_predicate_fixture() -> Func {
