@@ -8004,6 +8004,160 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_actor_argument_value_selection(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"AGothicCharacter",""),(2,"AGothicCharacterState",""),(3,"FClock",""),(4,"UObject",""),
+            (5,"UHost","Fixture"),(6,"UBase","Fixture")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32,ptr);r.type_names.insert(name.into());
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        r.class_super.insert("UHost".into(),"UBase".into());
+        r.class_fields.insert("UHost".into(),HashMap::from([("Chosen".into(),"FClock".into()),("Quick".into(),"bool".into()),("Delay".into(),"float".into())]));
+        for (offset,name) in [(16i64,"Chosen"),(24,"Quick"),(32,"Delay")] {
+            let key=(5i64<<1)|(offset<<33)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,5);
+        }
+        let plain=|token|DataType {token,..Default::default()};
+        let object=|type_info,reference:bool,constant:bool,handle:bool|DataType {token:5,type_info,is_reference:reference,is_object_const:constant,
+            is_object_handle:handle,is_read_only:constant&&!handle,..Default::default()};
+        for (ptr,name,owner,constant,ret,params) in [
+            (101,"GetCharacterState","AGothicCharacter",true,object(2,false,false,true),vec![]),
+            (102,"GetCharacter","AGothicCharacterState",true,object(1,false,false,true),vec![]),
+            (103,"IsValid","FClock",true,plain(0x41),vec![]),
+            (104,"$beh0","FClock",false,plain(0x52),vec![]),
+            (105,"Later","",false,object(3,false,false,false),vec![object(4,false,true,true),plain(0x50)]),
+            (106,"Now","",false,object(3,false,false,false),vec![object(4,false,true,true)]),
+            (107,"opAssign","FClock",false,object(3,true,false,false),vec![object(3,true,true,false)]),
+            (108,"$beh2","FClock",false,plain(0x52),vec![]),
+            (201,"SelectActor","UBase",true,object(1,false,false,true),vec![]),
+            (202,"Evaluate","UHost",true,plain(0x41),vec![object(1,false,false,true)])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,params);
+            if !owner.is_empty() {r.func_is_method.insert(ptr);r.func_owner.insert(ptr,owner.into());}
+            if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        r.funcid_to_ptr.insert(201,201);r.funcid_to_ptr.insert(202,202);
+        r.func_ns.insert(105,"FClock".into());r.func_ns.insert(106,"FClock".into());r.global_by_ptr.insert(301,"__WorldContext".into());
+        match fault {
+            1=>{r.class_super.remove("UHost");},
+            2=>{r.const_method_ptrs.remove(&201);},
+            3=>r.func_ret.get_mut(&201).unwrap().is_object_const=true,
+            4=>r.func_params.get_mut(&202).unwrap()[0].is_reference=true,
+            5=>{r.func_owner.insert(101,"AOther".into());},
+            6=>{r.const_method_ptrs.remove(&102);},
+            7=>r.func_params.get_mut(&102).unwrap().push(object(4,false,true,true)),
+            8=>r.func_ret.get_mut(&102).unwrap().is_object_handle=false,
+            9=>r.func_ret.get_mut(&103).unwrap().token=0x44,
+            10=>{r.const_method_ptrs.insert(104);},
+            11=>r.func_params.get_mut(&105).unwrap()[0].is_object_const=false,
+            12=>r.func_params.get_mut(&105).unwrap()[1].token=0x51,
+            13=>{r.func_ns.insert(106,"Other".into());},
+            14=>r.func_ret.get_mut(&106).unwrap().is_reference=true,
+            15=>r.func_ret.get_mut(&107).unwrap().is_reference=false,
+            16=>r.func_params.get_mut(&107).unwrap()[0].is_read_only=false,
+            17=>r.func_params.get_mut(&108).unwrap().push(plain(0x41)),
+            18=>{r.class_fields.get_mut("UHost").unwrap().insert("Chosen".into(),"FOther".into());},
+            19=>{r.class_fields.get_mut("UHost").unwrap().insert("Quick".into(),"int".into());},
+            20=>{r.class_fields.get_mut("UHost").unwrap().insert("Delay".into(),"float32".into());},
+            21=>{r.prop_type_id.insert((5i64<<1)|(16i64<<33)|1,6);},
+            22=>{r.global_by_ptr.insert(301,"OtherContext".into());},
+            23=>r.type_identity_by_ptr.get_mut(&3).unwrap().module="Script".into(),
+            24=>{r.func_is_method.insert(105);},
+            _=>{},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_guarded_eye_trace(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"AGothicCharacter",""),(2,"FVector",""),(3,"FHitResult",""),(4,"FLinearColor",""),(5,"TArray",""),
+            (6,"UObject",""),(7,"APawn",""),(8,"AActor",""),(9,"UState","Fixture"),(10,"FSettings","Fixture"),(11,"UBase","Fixture"),
+            (12,"UAbility","Fixture"),(13,"UAbilityTaskGeneric",""),(14,"EGothicFocusPriority",""),(15,"ETraceTypeQuery",""),(16,"EDrawDebugTrace",""),
+            (17,"UCharacterAIState","")] {
+            r.type_by_ptr.insert(ptr,name.into());r.type_names.insert(name.into());r.typeid_to_ptr.insert(ptr as i32,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        r.class_super.insert("UState".into(),"UBase".into());r.class_super.insert("UBase".into(),"UCharacterAIState".into());
+        r.class_super.insert("AGothicCharacter".into(),"ACharacter".into()); // Native ACharacter -> APawn/AActor is absent, as in the original cache.
+        r.class_super.insert("UDerivedAbility".into(),"UAbility".into());
+        r.class_fields.insert("UState".into(),HashMap::from([("Settings".into(),"FSettings".into())]));
+        r.class_fields.insert("FSettings".into(),HashMap::from([("Enabled".into(),"bool".into())]));
+        r.class_fields.insert("UBase".into(),HashMap::from([("Priority".into(),"EGothicFocusPriority".into()),("Agent".into(),"UDerivedAbility".into())]));
+        for (id,offset,name) in [(9i64,16i64,"Settings"),(10,3,"Enabled"),(7,32,"EyeElevation"),(11,24,"Priority"),(11,40,"Agent")] {
+            let key=(id<<1)|(offset<<33)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id as i32);
+        }
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&[("APawn","EyeElevation","float32")],&[],None));
+        let plain=|token|DataType {token,..Default::default()};
+        let object=|type_info,reference:bool,constant:bool,handle:bool|DataType {token:5,type_info,is_reference:reference,is_object_const:constant,
+            is_object_handle:handle,is_read_only:constant&&!handle,..Default::default()};
+        r.type_subtypes.insert(5,vec![object(8,false,false,true)]);
+        for (ptr,name,owner,constant,ret,params) in [
+            (101,"IsValid","",false,plain(0x41),vec![object(6,false,true,true)]),
+            (102,"GetSelf","UCharacterAIState",true,object(1,false,false,true),vec![]),
+            (103,"$beh0","FHitResult",false,plain(0x52),vec![]),
+            (104,"GetActorLocation","AActor",true,object(2,false,false,false),vec![]),
+            (105,"$beh0","FVector",false,plain(0x52),vec![object(2,true,true,false)]),
+            (106,"opMul","FVector",true,object(2,false,false,false),vec![plain(0x51)]),
+            (107,"opAdd","FVector",true,object(2,false,false,false),vec![object(2,true,true,false)]),
+            (108,"$beh0","FLinearColor",false,plain(0x52),vec![plain(0x50);4]),
+            (109,"$beh0","TArray",false,plain(0x52),vec![]),
+            (110,"LineTraceSingle","",false,plain(0x41),vec![object(6,false,true,true),object(2,false,true,false),object(2,false,true,false),
+                object(15,false,false,false),plain(0x41),object(5,true,true,false),object(16,false,false,false),object(3,true,false,false),
+                plain(0x41),object(4,false,false,false),object(4,false,false,false),plain(0x50)]),
+            (111,"$beh2","TArray",false,plain(0x52),vec![]),
+            (112,"$beh2","FHitResult",false,plain(0x52),vec![]),
+            (201,"SelectActor","UBase",true,object(1,false,false,true),vec![]),
+            (202,"IsSelected","UBase",true,plain(0x41),vec![]),
+            (203,"InState","",false,plain(0x41),vec![object(1,false,true,true)]),
+            (204,"CanAct","UState",false,plain(0x41),vec![]),
+            (205,"Begin","UAbility",false,plain(0x52),vec![object(14,false,true,false),object(13,false,false,true)])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,params);
+            if !owner.is_empty() {r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);}
+            if constant {r.const_method_ptrs.insert(ptr);}
+            if ptr>=201 {r.funcid_to_ptr.insert(ptr as i32,ptr);}
+        }
+        r.func_ns.insert(110,"System".into());r.global_by_ptr.insert(301,"UpVector".into());r.global_ns.insert(301,"FVector".into());
+        r.global_by_ptr.insert(302,"__WorldContext".into());
+        match fault {
+            1=>{r.class_super.insert("UBase".into(),"UUnrelatedNative".into());},
+            2=>{r.const_method_ptrs.remove(&201);},
+            3=>r.func_ret.get_mut(&201).unwrap().is_object_const=true,
+            4=>{r.func_is_method.insert(203);},
+            5=>r.func_params.get_mut(&203).unwrap()[0].is_object_const=false,
+            6=>{r.func_owner.insert(102,"UOther".into());},
+            7=>{r.const_method_ptrs.remove(&104);},
+            8=>r.func_ret.get_mut(&104).unwrap().is_reference=true,
+            9=>r.func_params.get_mut(&105).unwrap()[0].is_read_only=false,
+            10=>r.func_params.get_mut(&106).unwrap()[0].token=0x50,
+            11=>r.func_ret.get_mut(&107).unwrap().is_reference=true,
+            12=>{r.global_ns.insert(301,"Other".into());},
+            13=>{r.class_fields.get_mut("UState").unwrap().insert("Settings".into(),"FUnrelated".into());},
+            14=>{r.class_fields.get_mut("FSettings").unwrap().insert("Enabled".into(),"int".into());},
+            15=>{r.prop_type_id.insert((7i64<<1)|(32i64<<33)|1,8);},
+            16=>r.set_native_api(super::binds::NativeApi::from_test_field_types(&[("APawn","EyeElevation","float")],&[],None)),
+            17=>{r.const_method_ptrs.insert(103);},
+            18=>r.func_params.get_mut(&108).unwrap()[2].token=0x51,
+            19=>r.func_params.get_mut(&109).unwrap().push(plain(0x44)),
+            20=>r.func_params.get_mut(&110).unwrap()[0].is_object_const=false,
+            21=>r.func_params.get_mut(&110).unwrap()[1].is_reference=true,
+            22=>r.func_params.get_mut(&110).unwrap()[5].is_object_const=false,
+            23=>r.func_params.get_mut(&110).unwrap()[7].is_reference=false,
+            24=>r.func_params.get_mut(&110).unwrap()[8].token=0x44,
+            25=>r.func_params.get_mut(&110).unwrap()[9].is_reference=true,
+            26=>{r.global_by_ptr.insert(302,"OtherContext".into());},
+            27=>{r.const_method_ptrs.insert(112);},
+            28=>r.func_params.get_mut(&205).unwrap()[0].is_read_only=false,
+            29=>{r.class_super.insert("UDerivedAbility".into(),"UOther".into());},
+            30=>r.type_subtypes.get_mut(&5).unwrap()[0].is_object_handle=false,
+            31=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into(),
+            32=>{r.func_owner.insert(202,"UUnrelated".into());},
+            33=>{r.const_method_ptrs.insert(204);},
+            34=>r.func_ret.get_mut(&110).unwrap().token=0x44,
+            _=>{},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_ordered_comparison_distance_lives(fault: u8) -> Self {
         let mut r=Self::default();
         for (ptr,name,module) in [(1,"UState","Fixture"),(2,"FMeasureTime",""),(3,"FVector",""),(4,"AActor",""),
@@ -8146,6 +8300,73 @@ impl RefResolver {
             34 => r.static_names[0] = "Bad\"Name".into(),
             35 => r.func_ret.get_mut(&104).unwrap().is_object_handle = true,
             36 => { r.prop_type_id.insert((4 << 1) | (40i64 << 33) | 1, 6); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_compound_vector_receiver(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name, module) in [(100, "FVector", ""), (101, "AGothicCharacter", ""), (102, "FOther", ""), (103, "UCharacterAIState", ""), (104, "UDifferentState", "Fixture")] {
+            r.type_by_ptr.insert(ptr, name.into()); r.typeid_to_ptr.insert(ptr as i32, ptr); r.type_names.insert(name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: module.into(), namespace: String::new() });
+        }
+        r.set_class_hierarchy(HashMap::from([("UDifferentState".into(), "UCharacterAIState".into())]));
+        let plain = |token| DataType { token, ..Default::default() };
+        let vector = DataType { token: 5, type_info: 100, ..Default::default() };
+        let reference = DataType { is_reference: true, is_object_const: true, is_read_only: true, ..vector.clone() };
+        let handle = DataType { token: 5, type_info: 101, is_object_handle: true, ..Default::default() };
+        for (ptr, owner, name, constant, ret, params) in [
+            (101, "UCharacterAIState", "GetSelf", true, handle.clone(), vec![]),
+            (102, "AGothicCharacter", "GetCrowdAgentRadius", true, plain(0x50), vec![]),
+            (103, "AActor", "GetSimpleCollisionRadius", true, plain(0x50), vec![]),
+            (104, "AActor", "GetActorLocation", true, vector.clone(), vec![]),
+            (105, "AGothicCharacter", "GetFeetLocation", true, vector.clone(), vec![]),
+            (106, "FVector", "Distance", true, plain(0x51), vec![reference.clone()]),
+            (107, "FVector", "$beh0", false, plain(0x52), vec![reference.clone()]),
+            (108, "FVector", "opMul", true, vector.clone(), vec![plain(0x51)]),
+            (109, "FVector", "opAddAssign", false, vector.clone(), vec![reference.clone()]),
+            (110, "FVector", "opAdd", true, vector.clone(), vec![reference.clone()]),
+            (111, "FVector", "opSub", true, vector.clone(), vec![reference.clone()]),
+            (1201, "UCharacterAIState", "GetCharacterOfInterest", false, handle, vec![]),
+        ] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into()); r.func_is_method.insert(ptr);
+            r.func_ret.insert(ptr, ret); r.func_params.insert(ptr, params); if constant { r.const_method_ptrs.insert(ptr); }
+        }
+        r.funcid_to_ptr.insert(201, 1201);
+        // Shipping's global table leaves this native constant namespace empty.
+        r.global_by_ptr.insert(900, "UpVector".into());
+        match fault {
+            1 => r.type_identity_by_ptr.get_mut(&100).unwrap().module = "Script".into(),
+            2 => r.type_identity_by_ptr.get_mut(&100).unwrap().namespace = "Foreign".into(),
+            3 => r.type_identity_by_ptr.get_mut(&101).unwrap().module = "Script".into(),
+            4 => r.func_ret.get_mut(&101).unwrap().is_object_const = true,
+            5 => { r.func_params.insert(101, vec![plain(0x44)]); },
+            6 => r.func_ret.get_mut(&102).unwrap().token = 0x51,
+            7 => { r.func_owner.insert(102, "AActor".into()); },
+            8 => { r.const_method_ptrs.remove(&103); },
+            9 => { r.func_by_ptr.insert(103, "GetAnotherValue".into()); },
+            10 => r.func_ret.get_mut(&104).unwrap().is_reference = true,
+            11 => { r.func_params.insert(105, vec![plain(0x44)]); },
+            12 => r.func_params.get_mut(&106).unwrap()[0].is_read_only = false,
+            13 => r.func_ret.get_mut(&106).unwrap().token = 0x50,
+            14 => r.func_ret.get_mut(&107).unwrap().token = 5,
+            15 => r.func_params.get_mut(&107).unwrap()[0].type_info = 102,
+            16 => r.func_params.get_mut(&108).unwrap()[0].token = 0x50,
+            17 => r.func_ret.get_mut(&109).unwrap().is_reference = true,
+            18 => r.func_ret.get_mut(&109).unwrap().is_object_handle = true,
+            19 => { r.func_is_method.remove(&109); },
+            20 => { r.global_by_ptr.insert(900, "ForwardVector".into()); },
+            21 => { r.global_ns.insert(900, "Foreign".into()); },
+            22 => { r.global_is_string.insert(900); },
+            23 => r.func_ret.get_mut(&1201).unwrap().type_info = 102,
+            24 => { r.func_is_method.remove(&1201); },
+            25 => { r.func_owner.insert(1201, "UForeign".into()); },
+            26 => r.func_params.get_mut(&107).unwrap()[0].is_auto = true,
+            27 => { r.func_ns.insert(104, "Foreign".into()); },
+            28 => { r.class_super.insert("UDifferentState".into(), "UForeign".into()); },
+            29 => { r.func_by_ptr.insert(1201, "GetAlly".into()); },
             _ => {},
         }
         r

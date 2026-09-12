@@ -9,13 +9,12 @@ AI.States.AIState_FollowCharacterAggressive	1	0	0
 AI.States.FightAI.AIState_PerceptionResponse	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_CombatEndActions	1	0	0
 AI.States.FightAI.CombatState.AIGroup_Attackers	1	0	0
-AI.States.FightAI.CombatState.AIState_OGCombat	3	0	0
+AI.States.FightAI.CombatState.AIState_OGCombat	1	0	0
 AI.States.FightAI.CombatState.CombatMoves	6	0	0
 AI.States.FightAI.CombatState.Positioning.AICombat_Positioning	5	0	0
 AI.States.FightAI.FearState.AIState_Fear	1	0	0
 AI.States.FightAI.FleeState.AIState_Flee	2	0	0
 AI.States.FightAI.SearchState.AIState_Search	1	0	0
-AI.States.FightAI.WarningState.AIState_Warning	1	0	0
 AI.States.FightAI.WatchFightState.AIGroup_WatchFight	1	0	0
 AI.States.FightAI.WatchFightState.AIState_WatchFight	4	0	0
 Camera.ConversationCameraConfig	1	0	0
