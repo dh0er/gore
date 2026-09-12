@@ -8371,6 +8371,12 @@ fn header_is_integral_type(ty: Option<&str>) -> bool {
 }
 
 fn header_set_value(op: &str, raw: u64, ty: Option<String>) -> Option<HeaderValue> {
+    // A typed boolean stored as a full VM word is still canonical only for 0/1.
+    if op == "SetV4" && ty.as_deref() == Some("bool") && raw <= 1 {
+        return Some(HeaderValue {
+            expr: HeaderExpr::Int(raw as i64), boolish: true, full_bool: true, ty,
+        });
+    }
     let (expr, boolish) = match op {
         "SetV1" => {
             let raw = raw as u8;
@@ -8618,7 +8624,7 @@ impl Structurer<'_> {
                 let _ = writeln!(out, "{ind}}}");
                 next = test_idx + 1;
             } else if let Some((test_idx, cond, body_end, increment, continue_off, break_off)) =
-                self.for_loop(i, stop)
+                self.for_loop(i, stop).or_else(|| self.compound_test_first_for_loop(i, stop))
             {
                 // A counted `for`: block `i` is the entry `JMP` to the bottom test, whose
                 // statements come before the loop exactly as the source wrote them (the loop
@@ -8640,7 +8646,10 @@ impl Structurer<'_> {
                 };
                 let saved = self.loop_scope;
                 self.loop_scope = Some(ls);
-                if self.body_has_inner_branch(i + 1, body_end, ls)
+                // A nested test-first iterator is structured work even without
+                // an inner forward branch. Its own recognizer and Gate 2 still prove the edges.
+                if (self.body_has_inner_branch(i + 1, body_end, ls)
+                    || (i + 1..body_end).any(|entry| self.test_first_foreach(entry, body_end).is_some()))
                     && self.loop_body_recoverable(i + 1, body_end, ls)
                 {
                     self.emit_range(i + 1, body_end, depth + 1, out);
@@ -12083,6 +12092,86 @@ impl Structurer<'_> {
         }
     }
 
+    /// A test-first counted loop whose materialized predicate occupies a small forward DAG.
+    /// The terminal test branches back to the body; the entry jumps over it to the first test.
+    fn compound_test_first_for_loop(
+        &mut self, e: usize, stop: usize,
+    ) -> Option<(usize, String, usize, String, usize, usize)> {
+        if e >= stop || self.jump_op(e) != "JMP" || self.g.blocks[e].succs.len() != 1 { return None; }
+        let c = *self.idx_of.get(&self.g.blocks[e].succs[0])?;
+        let head = e + 1;
+        if c <= head || c >= stop || self.is_backward_cond(c)
+            || self.ctx.instrs[self.g.blocks[head].instr_lo].op.name != "SUSPEND" { return None; }
+        let body_off = self.g.blocks[head].start_dw;
+        let test_off = self.g.blocks[c].start_dw;
+        for end in (c + 2)..=(c + COMPOUND_HEADER_MAX_BLOCKS).min(stop) {
+            if end >= self.g.blocks.len() { continue; }
+            let terminal = end - 1;
+            let exit_off = self.g.blocks[end].start_dw;
+            if !self.is_backward_cond(terminal)
+                || self.g.blocks[terminal].succs.as_slice() != [body_off, exit_off] { continue; }
+            // Only the terminal test may leave the forward-only predicate DAG.
+            if (c..end).any(|bi| {
+                let b = &self.g.blocks[bi];
+                b.succs.is_empty() || b.succs.iter().any(|s| {
+                    if bi == terminal { return *s != body_off && *s != exit_off; }
+                    !self.idx_of.get(s).is_some_and(|next| *next > bi && *next < end)
+                })
+            }) { continue; }
+            // The setup owns the sole outside entry. Body paths can re-test at its start,
+            // but cannot enter a materialized arm or the final scratch-register test.
+            let mut shape_ok = true;
+            for (src, block) in self.g.blocks.iter().enumerate() {
+                for s in &block.succs {
+                    let Some(&target) = self.idx_of.get(s) else {
+                        if src >= e && src < end { shape_ok = false; }
+                        continue;
+                    };
+                    if target >= head && target < end && !(src >= e && src < end) { shape_ok = false; }
+                    if src >= head && src < c && (target <= head || target > c && target < end) { shape_ok = false; }
+                    if src == e && target != c { shape_ok = false; }
+                }
+            }
+            if !shape_ok { continue; }
+            // Reject dead/unowned blocks in either physical region.
+            let reachable = |start: usize, finish: usize| {
+                let mut seen = std::collections::HashSet::new(); let mut work = vec![start];
+                while let Some(bi) = work.pop() {
+                    if !seen.insert(bi) { continue; }
+                    for s in &self.g.blocks[bi].succs {
+                        if let Some(&next) = self.idx_of.get(s) {
+                            if next >= start && next < finish { work.push(next); }
+                        }
+                    }
+                }
+                (start..finish).all(|bi| seen.contains(&bi))
+            };
+            if !reachable(head, c) || !reachable(c, end) { continue; }
+            let Some(written) = self.compound_header_written_slots(c, end) else { continue; };
+            if !self.compound_header_writes_are_path_local(c, end, &written)
+                || !self.compound_header_writes_are_dead(c, head, end, &written) { continue; }
+            let Some(cond) = self.symbolic_header_condition(c, end, body_off, exit_off) else { continue; };
+            // Same increment rule as the ordinary for-loop: a body jump targets a block
+            // containing only in-place updates, and that block falls into the first test.
+            let inc = c - 1; let inc_off = self.g.blocks[inc].start_dw;
+            let inc_block = &self.g.blocks[inc]; let term = self.jump_op(inc);
+            let (updates, cmp) = block_stmts(self.ctx, inc_block.instr_lo, inc_block.instr_hi);
+            let increment_only = inc > head && (head..inc).any(|bi| self.g.blocks[bi].succs.contains(&inc_off))
+                && inc_block.succs.as_slice() == [test_off] && !matches!(term, "JMP" | "RET" | "JMPP") && !is_cond_op(term)
+                && cmp.is_none() && !updates.is_empty() && updates.iter().all(|s| in_place_update(s));
+            let (body_end, increment, continue_off) = if increment_only {
+                (inc, updates.iter().map(|s| s.trim().trim_end_matches(';').to_owned()).collect::<Vec<_>>().join(", "), inc_off)
+            } else { (c, String::new(), test_off) };
+            let scope = LoopScope { continue_off, break_off: exit_off, continue_only: false, latch_block: None };
+            let saved = self.loop_scope; self.loop_scope = Some(scope);
+            let recoverable = self.body_has_inner_branch(head, body_end, scope)
+                && self.loop_body_recoverable(head, body_end, scope);
+            self.loop_scope = saved;
+            if recoverable { return Some((terminal, cond, body_end, increment, continue_off, exit_off)); }
+        }
+        None
+    }
+
     fn is_backward_cond(&self, bi: usize) -> bool {
         let b = &self.g.blocks[bi];
         matches!(
@@ -13027,6 +13116,97 @@ mod tests {
                 assert!(source.find(copy) < source.find("local_10 = local_8.Target;"), "{source}");
             }
         }
+    }
+
+    fn nested_const_iterator_fixture(mode: u8, shift: u16) -> CompoundFixture {
+        let mut a=TestAssembler::default(); let slot=|s|s+shift;
+        a.label("outer_entry");a.op("SetV4",&[slot(1)],&[0]);a.jump("JMP","outer_test");
+        a.label("outer_body");a.op("SUSPEND",&[],&[]);
+        a.op("PSF",&[slot(8)],&[]);a.op("PshVPtr",&[0],&[]);a.op("CALLSYS",&[],&[10,0]);
+        a.jump("JMP",if mode==3 {"after_inner"} else {"inner_test"});
+        a.label("inner_body");a.op("SUSPEND",&[],&[]);a.op("PSF",&[slot(8)],&[]);
+        a.op("CALLSYS",&[],&[11,0]);a.op("CpyRtoV8",&[slot(16)],&[]);
+        if let Some(target)=match mode {1=>Some("inner_test"),2=>Some("after_inner"),6=>Some("outer_test"),7=>Some("done"),_=>None} {
+            a.op("CALLSYS",&[],&[15,0]);a.jump("JLowNZ",target);
+        }
+        a.op("PSF",&[slot(1)],&[]);a.op("PshVPtr",&[slot(16)],&[]);a.op("CALLSYS",&[],&[12,0]);
+        a.label("inner_test");a.op("LoadVObjR",&[slot(8),16],&[2]);
+        a.op("RDR1",&[slot(12)],&[]);a.op("CpyVtoR1",&[slot(12)],&[]);
+        a.jump("JLowNZ",if mode==4 {"outer_body"} else {"inner_body"});
+        a.label("after_inner");a.op("PshV4",&[slot(1)],&[]);a.op("CALLSYS",&[],&[13,0]);a.op("IncVi",&[slot(1)],&[]);
+        a.label("outer_test");a.op("PshVPtr",&[0],&[]);a.op("CALLSYS",&[],&[14,0]);
+        a.op("CpyRtoV4",&[slot(2)],&[]);a.op("CMPi",&[slot(1),slot(2)],&[]);a.jump("JS","outer_body");
+        a.label("done");if mode==5 {a.jump("JMP","inner_body");}
+        // Keep this outer exit distinct from a bare return, which is also a legal inner return.
+        a.op("SetV4",&[slot(2)],&[0]);a.op("RET",&[2],&[]);
+        let mut fixture=a.finish();
+        for i in &mut fixture.instrs {if i.op.name=="CALLSYS" {i.qwords=vec![i.dwords[0] as u64];}}
+        fixture
+    }
+
+    #[test]
+    fn counted_loop_recurses_into_nested_const_iterator_without_a_forward_branch() {
+        let check=|mode:u8,wrong_field:bool,shift:u16,render:bool| {
+            let fixture=nested_const_iterator_fixture(mode,shift);
+            let refs=RefResolver::from_test_nested_const_iterator(wrong_field);
+            let f=FuncCode {func:"Fixture::Visit".into(),is_method:false,param_names:vec!["Items".into()],
+                param_types:vec![DataType {token:5,type_info:1,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()}],
+                ret:DataType {token:0x52,..Default::default()},bytecode:Vec::new()};
+            let slot=|s|s+shift as i32;
+            let locals=HashMap::from([(slot(1),"int".into()),(slot(2),"int".into()),
+                (slot(8),"TArrayConstIterator".into()),(slot(12),"bool".into()),(slot(16),"FGameplayTag".into())]);
+            let parameter_types=vec!["TArray<FGameplayTag>".to_owned()];
+            let ctx=Ctx {f:&f,refs:&refs,instrs:&fixture.instrs,super_ctor:None,ret_ty:Some(&f.ret),
+                fields:None,param_types:Some(&parameter_types),class_name:None,local_types:Some(&locals),
+                float_slots:std::collections::HashSet::new(),param_off_map:HashMap::from([(0,0)]),rvo_off:None,keep_ints:None,
+                rvo_switch_region:std::cell::Cell::new(false)};
+            let g=cfg::build(&fixture.instrs);let idx_of:HashMap<_,_>=g.blocks.iter().enumerate().map(|(i,b)|(b.start_dw,i)).collect();
+            let mut st=Structurer {ctx:&ctx,g:&g,idx_of:&idx_of,exit_join:None,exit_join_is_ret:false,exit_ret_rows_ok:false,
+                exit_rvo_return:false,exit_mixed_rvo_ret_rows_ok:false,exit_scan_floor:0,carry:None,loop_scope:None,
+                pending_loop_exit:None,shared_return:None};
+            let entry=idx_of[&fixture.labels["outer_entry"]];let lo=idx_of[&fixture.labels["outer_body"]];
+            let hi=idx_of[&fixture.labels["outer_test"]];let inner_test=idx_of.get(&fixture.labels["inner_test"]).copied();
+            let ls=LoopScope {continue_off:fixture.labels["outer_test"],break_off:fixture.labels["done"],continue_only:false,latch_block:None};
+            st.loop_scope=Some(ls);
+            let forward=st.body_has_inner_branch(lo,hi,ls);
+            let iterator=st.test_first_foreach(lo,hi).is_some();
+            let truncated=inner_test.is_some_and(|test|st.test_first_foreach(lo,test).is_some());
+            let recoverable=st.loop_body_recoverable(lo,hi,ls);
+            let outer=st.for_loop(entry,g.blocks.len()).is_some();
+            st.loop_scope=None;let mut body=String::new();
+            if render {st.emit_range(0,g.blocks.len(),0,&mut body);}
+            (forward,iterator,truncated,recoverable,outer,body)
+        };
+        for shift in [0,200] {
+            let (forward,iterator,truncated,recoverable,outer,body)=check(0,false,shift,true);
+            assert!(!forward && iterator && !truncated && recoverable && outer,"{body}");
+            assert_eq!(body.matches("for (").count(),2,"{body}");
+            assert!(body.contains(&format!("for (; local_{}.CanProceed;)",8+shift)),"{body}");
+            assert_eq!(body.matches("Record(").count(),1,"{body}");
+            assert_eq!(body.matches("After(").count(),1,"{body}");
+            // Record remains two scopes deep; After and the increment are outside the inner loop.
+            assert!(body.lines().any(|l|l.starts_with("        Record(")),"{body}");
+            assert!(body.lines().any(|l|l.starts_with("    After(")),"{body}");
+            assert!(body.find("Record(").unwrap()<body.find("After(").unwrap(),"{body}");
+        }
+        for mode in [1,2] {
+            let (_,iterator,_,recoverable,outer,body)=check(mode,false,0,true);
+            assert!(iterator && recoverable && outer,"{body}");
+            assert_eq!(body.matches("for (").count(),2,"{body}");
+            if mode == 1 {
+                // Skipping the rest of the inner iteration can be emitted as an inverted guard.
+                assert!(body.contains("        if (!(Skip()))\n        {\n            Record(local_16, local_1);\n        }"),"{body}");
+                assert!(body.contains("    After(local_1);\n    ++local_1;"),"{body}");
+            } else {
+                assert!(body.lines().any(|l|l.starts_with("            ") && l.trim()=="break;"),"{body}");
+            }
+        }
+        for mode in [3,4,6,7] {
+            let (_,iterator,_,_,_,_)=check(mode,false,0,false);
+            assert!(!iterator,"invalid nested entry/backedge/continue/break mode={mode}");
+        }
+        assert!(!check(5,false,0,false).4,"outside edge enters outer body");
+        assert!(!check(0,true,0,false).1,"other field is not an iterator termination test");
     }
 
     fn guard_field_selection_fixture(fault: u8) -> CompoundFixture {
@@ -14781,6 +14961,88 @@ mod tests {
         assert!(is_cond_op(ins.op.name) && is_cond_op(op.name));
         assert_eq!(op.size_dwords, ins.op.size_dwords);
         ins.op = op;
+    }
+
+    #[test]
+    fn compound_test_first_retry_consumes_the_full_predicate_dag() {
+        let make = |fault: u8, shift: u16| {
+            let mut a = TestAssembler::default();
+            if fault == 2 { a.jump("JMP", "join"); }
+            if fault == 11 { a.jump("JMP", "increment"); }
+            a.label("entry");
+            a.op("SetV4", &[49 + shift], &[3]); a.op("SetV1", &[79 + shift], &[0]);
+            a.op("SetV4", &[85 + shift], &[0]); a.jump("JMP", if fault == 1 { "body" } else { "test" });
+            a.label("body"); a.op("SUSPEND", &[], &[]);
+            if fault == 7 { a.op("CpyVtoR1", &[72 + shift], &[]); }
+            if fault == 9 { a.jump("JMP", "rhs"); }
+            if fault == 12 { a.op("JMPP", &[85 + shift], &[0]); }
+            a.op("SetV4", &[69 + shift], &[0]); a.op("SetV1", &[72 + shift], &[0]);
+            a.op("CMPIi", &[85 + shift], &[0]); a.jump("JZ", "increment");
+            a.op("CMPIi", &[85 + shift], &[2]); a.jump("JNZ", "increment");
+            a.op("SetV1", &[79 + shift], &[1]); a.jump("JMP", "exit");
+            a.label("increment"); a.op("IncVi", &[85 + shift], &[]);
+            a.label("test"); a.op("CMPi", &[85 + shift, 49 + shift], &[]); a.jump("JS", "rhs");
+            if fault == 3 { a.op("CALLSYS", &[], &[0, 0]); }
+            else { a.op("SetV4", &[if fault == 13 { 65534 } else { 69 + shift }], &[if fault == 4 { 2 } else { 0 }]); }
+            a.jump("JMP", if fault == 14 { "test" } else { "join" });
+            a.label("rhs"); a.op("CpyVtoV4", &[72 + shift, if fault == 5 { 69 + shift } else { 79 + shift }], &[]);
+            a.op("NOT", &[72 + shift], &[]); a.op("CpyVtoV4", &[69 + shift, 72 + shift], &[]);
+            a.label("join"); a.op("CpyVtoR1", &[69 + shift], &[]);
+            a.jump("JLowNZ", match fault { 8 => "increment", 10 => "exit", _ => "body" });
+            a.label("exit");
+            if fault == 6 { a.op("CpyVtoR1", &[69 + shift], &[]); }
+            a.op("SetV4", &[69 + shift], &[0]); a.op("SetV1", &[72 + shift], &[0]); a.op("RET", &[0], &[]);
+            a.finish()
+        };
+        let inspect = |fixture: &CompoundFixture, shift: i32, type_fault: u8, emit: bool| {
+            let refs = RefResolver::default();
+            let f = FuncCode { func: "Synthetic::Retry".into(), is_method: false, param_names: Vec::new(), param_types: Vec::new(),
+                ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+            let mut local_types = HashMap::from([(49 + shift, "int".to_owned()), (85 + shift, "int".to_owned()),
+                (69 + shift, "bool".to_owned()), (72 + shift, "bool".to_owned()), (79 + shift, "bool".to_owned())]);
+            match type_fault {
+                1 => { local_types.insert(85 + shift, "float32".into()); },
+                2 => { local_types.insert(69 + shift, "int".into()); },
+                3 => { local_types.insert(79 + shift, "float32".into()); },
+                _ => {}
+            }
+            let g = cfg::build(&fixture.instrs);
+            let idx_of: HashMap<usize, usize> = g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret), fields: None,
+                param_types: None, class_name: None, local_types: Some(&local_types), float_slots: std::collections::HashSet::new(),
+                param_off_map: HashMap::new(), rvo_off: None, keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+            let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of, exit_join: None, exit_join_is_ret: false, exit_ret_rows_ok: false,
+                exit_rvo_return: false, exit_mixed_rvo_ret_rows_ok: false, exit_scan_floor: 0, carry: None, loop_scope: None,
+                pending_loop_exit: None, shared_return: None };
+            let found = st.compound_test_first_for_loop(idx_of[&fixture.labels["entry"]], g.blocks.len());
+            if let Some((terminal, cond, body_end, increment, continue_off, break_off)) = &found {
+                assert_eq!(*terminal, idx_of[&fixture.labels["join"]]);
+                assert_eq!(*body_end, idx_of[&fixture.labels["increment"]]);
+                assert_eq!(*continue_off, fixture.labels["increment"]); assert_eq!(*break_off, fixture.labels["exit"]);
+                assert_eq!(increment, &format!("++local_{}", 85 + shift));
+                assert!(cond.contains(&format!("local_{} < local_{}", 85 + shift, 49 + shift)), "{cond}");
+                assert!(cond.contains(&format!("local_{}", 79 + shift)) && cond.contains('!'), "{cond}");
+                assert!(!cond.contains(&format!("local_{}", 69 + shift)) && !cond.contains(&format!("local_{}", 72 + shift)), "{cond}");
+            }
+            let mut source = String::new(); if emit { st.emit_range(0, g.blocks.len(), 0, &mut source); }
+            (found.is_some(), source)
+        };
+        for shift in [0, 100] {
+            let f = make(0, shift); let (found, source) = inspect(&f, shift as i32, 0, true);
+            assert!(found, "{source}"); assert_eq!(source.matches("for (;").count(), 1, "{source}");
+            assert_eq!(source.matches(&format!("++local_{}", 85 + shift)).count(), 1, "{source}");
+            // A continue at the end of this body is represented by guarding the remaining work.
+            // Its target is independently checked above against the extracted increment block.
+            let guarded_break = format!("    if (local_{} != 0)\n    {{\n        if (local_{} == 2)\n        {{\n            local_{} = true;\n            break;", 85 + shift, 85 + shift, 79 + shift);
+            assert!(source.contains(&guarded_break), "{source}");
+            assert!(!source.contains("while (") && !source.contains("// JMP"), "{source}");
+            assert!(source.find(&format!("local_{} = 0", 85 + shift)).unwrap() < source.find("for (;").unwrap(), "{source}");
+            assert_eq!(inspect(&f, shift as i32, 0, true).1, source);
+        }
+        for fault in 1..=14 { assert!(!inspect(&make(fault, 0), 0, 0, false).0, "raw/CFG {fault}"); }
+        for fault in 1..=3 { assert!(!inspect(&make(0, 0), 0, fault, false).0, "type {fault}"); }
+        assert!(header_set_value("SetV4", 1, Some("bool".into())).unwrap().full_bool);
+        assert!(header_set_value("SetV4", 2, Some("bool".into())).is_none());
     }
 
     #[test]

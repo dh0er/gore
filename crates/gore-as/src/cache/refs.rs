@@ -2150,6 +2150,32 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_nested_const_iterator(wrong_field: bool) -> Self {
+        let mut r=Self::default();
+        for (id,name) in [(1,"TArray"),(2,"TArrayConstIterator"),(3,"FGameplayTag")] {
+            r.typeid_to_ptr.insert(id,id as i64); r.type_by_ptr.insert(id as i64,name.into());
+            r.type_identity_by_ptr.insert(id as i64,TypeIdentity {name:name.into(),module:String::new(),namespace:String::new()});
+        }
+        r.type_subtypes.insert(1,vec![DataType {token:5,type_info:3,..Default::default()}]);
+        let key=(2i64<<1)|(16i64<<33)|1;
+        r.prop_by_key.insert(key,if wrong_field {"Other"} else {"CanProceed"}.into()); r.prop_type_id.insert(key,2);
+        let plain=|token|DataType {token,..Default::default()};
+        let tag=DataType {token:5,type_info:3,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()};
+        for (ptr,name,owner,constant,ret,args) in [
+            (10,"Iterator","TArray",true,DataType {token:5,type_info:2,..Default::default()},vec![]),
+            (11,"Proceed","TArrayConstIterator",false,tag.clone(),vec![]),
+            (12,"Record","",false,plain(0x52),vec![tag,DataType {is_reference:true,is_object_const:true,is_read_only:true,..plain(0x44)}]),
+            (13,"After","",false,plain(0x52),vec![plain(0x44)]),
+            (14,"Num","TArray",true,plain(0x44),vec![]),
+            (15,"Skip","",false,plain(0x41),vec![])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            if !owner.is_empty() {r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);}
+            if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_guard_field_selection(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("UConfig", ""), ("UState", ""), ("UObject", ""), ("UState", "")]);
         for (id, name) in [(1, "UConfig"), (2, "UState"), (3, "UObject"), (4, "UState")] {
@@ -7975,6 +8001,154 @@ impl RefResolver {
             22=>{r.func_owner.insert(201,"UOther".into());},
             _=>{}
         }r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_ordered_comparison_distance_lives(fault: u8) -> Self {
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"UState","Fixture"),(2,"FMeasureTime",""),(3,"FVector",""),(4,"AActor",""),
+            (5,"UGameplayAbility_AI",""),(6,"UBaseState","Fixture"),(7,"AGothicCharacter",""),(8,"FTask",""),(9,"UAbilityTaskGeneric","")] {
+            r.type_by_ptr.insert(ptr,name.into()); r.type_names.insert(name.into()); r.typeid_to_ptr.insert(ptr as i32,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity { name:name.into(),module:module.into(),namespace:String::new() });
+        }
+        r.class_super.insert("UDerived".into(),"UState".into()); r.class_super.insert("UState".into(),"UBaseState".into());
+        r.class_super.insert("UBaseState".into(),"UCharacterAIState".into());
+        r.class_super.insert("UDerivedAI".into(),"UGameplayAbility_CharacterAI".into());
+        r.class_fields.insert("UState".into(),HashMap::from([("Seconds".into(),"float".into()),("Range".into(),"float".into()),("Minimum".into(),"float".into())]));
+        r.class_fields.insert("UBaseState".into(),HashMap::from([("AI".into(),"UDerivedAI".into())]));
+        for (id,offset,name) in [(1i64,24i64,"Seconds"),(1,32,"Range"),(1,40,"Minimum"),(6,16,"AI")] {
+            let key=(id<<1)|(offset<<33)|1; r.prop_by_key.insert(key,name.into()); r.prop_type_id.insert(key,id as i32);
+        }
+        let scalar=|token| DataType { token,..Default::default() };
+        let constant_double=DataType { token:0x51,is_object_const:true,is_read_only:true,..Default::default() };
+        let object=|type_info,reference:bool,constant:bool,handle:bool| DataType { token:5,type_info,is_reference:reference,
+            is_object_const:constant,is_object_handle:handle,is_read_only:constant&&!handle,..Default::default() };
+        for (ptr,name,owner,constant,ret,args) in [
+            (101,"GetElapsed","UAbilityTaskGeneric",true,object(2,false,false,false),vec![]),
+            (102,"FromUnits","",false,object(2,false,false,false),vec![scalar(0x51)]),
+            (103,"opCmp","FMeasureTime",true,scalar(0x44),vec![object(2,true,true,false)]),
+            (104,"$beh2","FMeasureTime",false,scalar(0x52),vec![]),
+            (105,"GetActor","UGameplayAbility_AI",true,object(7,false,false,true),vec![]),
+            (106,"GetPosition","AActor",true,object(3,false,false,false),vec![]),
+            (107,"MeasureTo","FVector",true,scalar(0x51),vec![object(3,true,true,false)]),
+            (108,"$beh2","FTask",false,scalar(0x52),vec![]),
+            (201,"CanMove","",false,scalar(0x41),vec![object(5,false,true,true),object(3,true,true,false),constant_double.clone()]),
+            (202,"Move","",false,object(8,false,false,false),vec![object(5,false,false,true),object(3,true,true,false),constant_double.clone(),constant_double])]
+        {
+            r.func_by_ptr.insert(ptr,name.into()); r.func_ret.insert(ptr,ret); r.func_params.insert(ptr,args);
+            if !owner.is_empty() { r.func_owner.insert(ptr,owner.into()); r.func_is_method.insert(ptr); }
+            if constant { r.const_method_ptrs.insert(ptr); }
+        }
+        r.func_ns.insert(102,"FMeasureTime".into()); r.funcid_to_ptr.insert(201,201); r.funcid_to_ptr.insert(202,202);
+        match fault {
+            1 => r.func_ret.get_mut(&101).unwrap().is_reference=true,
+            2 => { r.const_method_ptrs.remove(&101); },
+            3 => { r.func_is_method.insert(102); },
+            4 => r.func_params.get_mut(&102).unwrap()[0].token=0x50,
+            5 => r.func_params.get_mut(&103).unwrap()[0].is_read_only=false,
+            6 => r.func_ret.get_mut(&103).unwrap().token=0x41,
+            7 => { r.const_method_ptrs.insert(104); },
+            8 => { r.func_ns.remove(&102); },
+            9 => { r.class_fields.get_mut("UState").unwrap().insert("Seconds".into(),"float32".into()); },
+            10 => r.func_ret.get_mut(&105).unwrap().is_object_const=true,
+            11 => r.func_ret.get_mut(&106).unwrap().is_reference=true,
+            12 => r.func_params.get_mut(&107).unwrap()[0].is_reference=false,
+            13 => { r.const_method_ptrs.remove(&107); },
+            14 => r.func_params.get_mut(&201).unwrap()[0].is_object_const=false,
+            15 => r.func_params.get_mut(&202).unwrap()[2].is_read_only=false,
+            16 => r.func_ret.get_mut(&202).unwrap().is_object_handle=true,
+            17 => r.func_params.get_mut(&108).unwrap().push(scalar(0x41)),
+            18 => { r.class_super.remove("UState"); },
+            19 => { r.class_fields.get_mut("UState").unwrap().insert("Range".into(),"float32".into()); },
+            20 => { r.prop_type_id.insert((1i64<<1)|(40i64<<33)|1,6); },
+            21 => { r.class_super.insert("UBaseState".into(),"UUnrelatedNative".into()); },
+            22 => { r.class_super.insert("UDerivedAI".into(),"UUnrelatedNative".into()); },
+            23 => { r.func_owner.insert(105,"UUnrelatedNative".into()); },
+            24 => { r.func_owner.insert(106,"UUnrelatedNative".into()); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_native_scalar_map_temporaries(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("FGameplayTag", ""), ("UMapOwner", "Weights"),
+            ("UNativeBase", ""), ("FSettings", ""), ("FName", ""), ("FOther", ""), ("UDerived", "")]);
+        for (ptr, name, module) in [(1, "FGameplayTag", ""), (2, "UMapOwner", "Fixture"), (3, "UNativeBase", ""),
+            (4, "FSettings", ""), (5, "FName", ""), (6, "FOther", ""), (7, "UDerived", "Fixture")] {
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: module.into(), namespace: String::new() });
+        }
+        for (owner, offset, name) in [(2, 904, "Weights"), (3, 168, "Settings"), (4, 40, "Values")] {
+            let key = (owner << 1) | ((offset as i64) << 33) | 1;
+            r.prop_by_key.insert(key, name.into()); r.prop_type_id.insert(key, owner as i32);
+        }
+        r.set_class_hierarchy(HashMap::from([("UDerived".into(), "UMapOwner".into()), ("UMapOwner".into(), "UNativeBase".into())]));
+        r.class_fields.insert("UMapOwner".into(), HashMap::from([("Weights".into(), "TMap<FGameplayTag, float>".into())]));
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&[
+            ("UNativeBase", "Settings", if fault == 21 { "FOther" } else { "FSettings" }),
+            ("FSettings", "Values", if fault == 22 { "TMap<FName, float>" } else { "TMap<FName, float32>" }),
+        ], &[], None));
+        if fault == 0 {
+            // Exercise the real parser: its two-token plain-field scan omits the map row.
+            let mut bytes = 2u32.to_le_bytes().to_vec();
+            let string = |data: &mut Vec<u8>, value: &str| {
+                data.extend_from_slice(&((value.len() + 1) as u32).to_le_bytes());
+                data.extend_from_slice(value.as_bytes()); data.push(0);
+            };
+            for (owner, name, ty) in [("UNativeBase", "Settings", "FSettings"), ("FSettings", "Values", "TMap<FName, float32>")] {
+                string(&mut bytes, owner); string(&mut bytes, &format!("/Script/Fixture.{owner}"));
+                bytes.extend_from_slice(&1u32.to_le_bytes()); string(&mut bytes, &format!("{ty} {name}")); string(&mut bytes, name);
+                bytes.extend_from_slice(&[0; 32]);
+            }
+            r.set_native_api(super::binds::NativeApi::from_bytes(&bytes).expect("two bounded native field records"));
+        }
+        let scalar = |token, reference: bool, constant: bool| DataType { token, is_reference: reference, is_object_const: constant, is_read_only: constant, ..Default::default() };
+        let object = |type_info| DataType { token: 5, type_info, is_reference: true, is_object_const: true, is_read_only: true, ..Default::default() };
+        for (ptr, name, owner, constant, ret, params) in [
+            (101, "Contains", "TMap", true, scalar(0x41, false, false), vec![object(1)]),
+            (102, "opIndex", "TMap", false, scalar(0x51, true, false), vec![object(1)]),
+            (103, "__STATIC_NAME", "", false, object(5), vec![scalar(0x44, false, false)]),
+            (104, "FindOrAdd", "TMap", false, scalar(0x50, true, false), vec![object(5), scalar(0x50, true, true)]),
+        ] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_ret.insert(ptr, ret); r.func_params.insert(ptr, params);
+            if !owner.is_empty() { r.func_owner.insert(ptr, owner.into()); r.func_is_method.insert(ptr); }
+            if constant { r.const_method_ptrs.insert(ptr); }
+        }
+        r.static_names.push("Scale".into());
+        match fault {
+            1 => r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(),
+            2 => r.type_identity_by_ptr.get_mut(&1).unwrap().namespace = "Foreign".into(),
+            3 => r.func_ret.get_mut(&101).unwrap().token = 0x44,
+            4 => r.func_params.get_mut(&101).unwrap()[0].is_object_handle = true,
+            5 => r.func_ret.get_mut(&102).unwrap().token = 0x50,
+            6 => r.func_ret.get_mut(&102).unwrap().is_read_only = true,
+            7 => { r.func_owner.insert(102, "TArray".into()); },
+            8 => { r.func_is_method.remove(&102); },
+            9 => { r.const_method_ptrs.insert(102); },
+            10 => { r.prop_type_id.insert((2 << 1) | (904i64 << 33) | 1, 6); },
+            11 => { r.class_fields.get_mut("UMapOwner").unwrap().insert("Weights".into(), "TMap<FGameplayTag, int64>".into()); },
+            12 => { r.class_fields.insert("UDerived".into(), HashMap::from([("Weights".into(), "TMap<FName, float>".into())])); },
+            13 => r.func_params.get_mut(&102).unwrap()[0].type_info = 6,
+            14 => r.func_ret.get_mut(&102).unwrap().is_reference = false,
+            15 => { r.class_super.insert("UDerived".into(), "FOther".into()); },
+            20 => { r.prop_type_id.insert((3 << 1) | (168i64 << 33) | 1, 6); },
+            23 => { r.class_fields.insert("UDerived".into(), HashMap::from([("Settings".into(), "FSettings".into())])); },
+            24 => r.func_params.get_mut(&104).unwrap()[1].is_read_only = false,
+            25 => r.func_params.get_mut(&104).unwrap()[1].token = 0x51,
+            26 => r.func_params.get_mut(&104).unwrap()[0].type_info = 6,
+            27 => r.func_ret.get_mut(&104).unwrap().is_reference = false,
+            28 => { r.const_method_ptrs.insert(104); },
+            29 => { r.func_owner.insert(104, "TArray".into()); },
+            30 => r.func_params.get_mut(&103).unwrap()[0].is_reference = true,
+            31 => { r.func_is_method.insert(103); },
+            32 => r.type_identity_by_ptr.get_mut(&5).unwrap().module = "Script".into(),
+            33 => r.static_names.clear(),
+            34 => r.static_names[0] = "Bad\"Name".into(),
+            35 => r.func_ret.get_mut(&104).unwrap().is_object_handle = true,
+            36 => { r.prop_type_id.insert((4 << 1) | (40i64 << 33) | 1, 6); },
+            _ => {},
+        }
+        r
     }
 
     #[cfg(test)]
