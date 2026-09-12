@@ -3399,6 +3399,10 @@ fn emit_function_ctor(
         pass_trace("restore_named_box_upper_bound", &rendered);
         let rendered = restore_vector_return_lifetimes(&rendered, f, refs);
         pass_trace("restore_vector_return_lifetimes", &rendered);
+        let rendered = restore_projected_rotation_lifetimes(&rendered, f, refs, is_method);
+        pass_trace("restore_projected_rotation_lifetimes", &rendered);
+        let rendered = restore_world_context_handle_argument(&rendered, f, refs, is_method);
+        pass_trace("restore_world_context_handle_argument", &rendered);
         s.truncate(declarations_at);
         s.push_str(&rendered);
     } else {
@@ -11732,7 +11736,7 @@ fn restore_paired_nullable_arguments(body: &str, f: &Func, refs: &RefResolver) -
     let ptr = |i: &Instr| i.qwords.first().map(|p| *p as i64);
     let jump = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
     let native = |p, name| refs.type_identity_by_ptr(p).is_some_and(|t| t.name == name && t.module.is_empty() && t.namespace.is_empty());
-    let object = |t: &super::types::DataType, p, reference, constant, handle| t.token == 5 && t.type_info == p
+    let object = |t: &super::types::DataType, p, reference, constant, handle: bool| t.token == 5 && t.type_info == p
         && t.is_reference == reference && t.is_object_const == constant && t.is_read_only == constant
         && t.is_object_handle == handle && !t.is_auto && !t.if_handle_then_const;
     // An earlier bounded switch is valid; its explicit table entries still go through
@@ -12681,6 +12685,146 @@ fn restore_escape_vector_lifetimes(body: &str, f: &Func, refs: &RefResolver, is_
     let mut out:Vec<_>=lines.into_iter().map(str::to_owned).collect();
     for (at,len,replacement) in changes.into_iter().rev() {out.splice(at..at+len,[replacement]);}
     let mut result=out.join("\n");if body.ends_with('\n') {result.push('\n');}result
+}
+
+/// Keep a projected conditional vector and the named rotation axis in their original pools.
+fn restore_projected_rotation_lifetimes(body: &str, f: &Func, refs: &RefResolver, is_method: bool) -> String {
+    if !is_method || !body.contains(".RotateAngleAxis(") { return body.to_owned(); }
+    let value = |t: &super::types::DataType, reference, constant| t.token == 5 && t.type_info == f.ret.type_info
+        && t.is_reference == reference && t.is_object_const == constant && t.is_read_only == constant
+        && !t.is_object_handle && !t.is_auto && !t.if_handle_then_const;
+    let plain = |t: &super::types::DataType, token| t.token == token && t.type_info == 0 && !t.is_reference
+        && !t.is_object_const && !t.is_read_only && !t.is_object_handle && !t.is_auto && !t.if_handle_then_const;
+    let [parameter] = f.params.as_slice() else { return body.to_owned(); };
+    if !value(&f.ret, false, false) || !refs.type_identity_by_ptr(f.ret.type_info).is_some_and(|t| t.name == "FVector" && t.module.is_empty() && t.namespace.is_empty())
+        || parameter.ty.token != 5 || !parameter.ty.is_object_handle || parameter.ty.is_reference || parameter.ty.is_object_const
+        || parameter.ty.is_read_only || parameter.ty.is_auto || parameter.ty.if_handle_then_const || parameter.flags != 0 || parameter.name.is_empty()
+        || !refs.type_identity_by_ptr(parameter.ty.type_info).is_some_and(|t| t.name == "AGothicCharacter" && t.module.is_empty() && t.namespace.is_empty()) { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    if code.iter().any(|i| i.op.name == "JMPP") { return body.to_owned(); }
+    let w = |i: &Instr| i.words.first().map(|n| *n as i16 as i32);
+    let p = |i: &Instr| i.qwords.first().map(|n| *n as i64);
+    let jump = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+    let index = |dw| code.iter().position(|i| i.offset_dw as i64 == dw);
+    let local = |slot, ty| slot > 0 && f.obj_locals.iter().filter(|(s, _)| *s == slot).map(|(_, t)| *t).eq([ty]);
+    let scalar = |slot| slot > 0 && !f.obj_locals.iter().any(|(s, _)| *s == slot);
+    let ops = |c: &[Instr], names: &str| c.iter().map(|i| i.op.name).eq(names.split_whitespace());
+    let closed = |start: usize, end: usize, allowed: &[usize]| !code.iter().enumerate().any(|(at, i)| i.op.name.starts_with('J')
+        && jump(i).is_some_and(|to| to > code[start].offset_dw as i64 && to <= code[end - 1].offset_dw as i64 && !allowed.contains(&at)));
+    let field = |i: &Instr| {
+        let id = *i.dwords.first()? as i32; let host = refs.type_identity_by_id(id)?;
+        let (name, old) = refs.member_identity(id, w(i)?)?;
+        (!host.module.is_empty() && host.namespace.is_empty() && refs.type_identity_by_id(old)? == host).then_some((host, name))
+    };
+    let native = |ptr, name, constant| refs.func_owner_by_ptr(ptr) == Some("FVector") && refs.func_by_ptr(ptr) == Some(name)
+        && refs.is_method_by_ptr(ptr) && refs.is_const_method_by_ptr(ptr) == constant;
+    let offsets = super::model::param_slot_map(&[parameter.ty.clone()], true, true, Some(refs));
+    let mut witnesses = Vec::new();
+    for (start, a) in code.windows(6).enumerate() {
+        let found = (|| {
+            if !ops(a, "PSF CALLSYS PshVPtr RefCpyV CmpPtrNull JZ") || offsets.get(&w(&a[2])?) != Some(&0) || w(&a[3]) != w(&a[4])
+                || !local(w(&a[3])?, parameter.ty.type_info) { return None; }
+            let selected = w(&a[0])?; let ctor = p(&a[1])?;
+            if !local(selected, f.ret.type_info) || !native(ctor, "$beh0", false) || !plain(refs.func_ret_by_ptr(ctor)?, 0x52)
+                || !matches!(refs.func_params_by_ptr(ctor), Some([])) { return None; }
+            let otherwise = index(jump(&a[5])?)?;
+            if otherwise < start + 15 || code[otherwise - 1].op.name != "JMP" { return None; }
+            let join = index(jump(&code[otherwise - 1])?)?;
+            if join < otherwise + 8 || !closed(start, join, &[start + 5, otherwise - 1])
+                || code[start..join].iter().enumerate().any(|(n, i)| i.op.name.starts_with('J') && n != 5 && start + n != otherwise - 1) { return None; }
+            // Only the typed projection/assignment tails constrain the two arms; their argument expressions may differ.
+            let left = &code[otherwise - 9..otherwise - 1]; let right = &code[join - 8..join];
+            let arm = |c: &[Instr]| {
+                if !ops(c, "PSF PshVPtr ADDSi RDSPtr CALLINTF PSF PSF CALLSYS") || w(&c[1]) != Some(0)
+                    || w(&c[0]) != w(&c[5]) || w(&c[6]) != Some(selected) { return None; }
+                let temp = w(&c[0])?; let assign = p(&c[7])?; let id = *c[4].dwords.first()? as i32;
+                let (host, area) = field(&c[2])?; let owner = refs.func_owner_by_id(id)?;
+                if temp == selected || !local(temp, f.ret.type_info) || !native(assign, "opAssign", false)
+                    || !value(refs.func_ret_by_ptr(assign)?, true, false) || !matches!(refs.func_params_by_ptr(assign), Some([t]) if value(t, true, true))
+                    || !refs.is_method_by_id(id) || !value(refs.func_ret_by_id(id)?, false, false)
+                    || !matches!(refs.func_params_by_id(id), Some([t]) if value(t, true, true))
+                    || !refs.own_field_type_by_class(&host.name, area).is_some_and(|ty| refs.is_subclass(ty, owner)) { return None; }
+                Some((host, area, refs.func_by_id(id)?, id, assign, temp))
+            };
+            let (host, area, project, id, assign, first) = arm(left)?;
+            let (other_host, other_area, _, other_id, other_assign, second) = arm(right)?;
+            if (host, area, id, assign) != (other_host, other_area, other_id, other_assign) || first == second { return None; }
+            let mut tails = Vec::new();
+            for (at, c) in code.windows(35).enumerate().skip(join) {
+                let tail = (|| {
+                    if !ops(c, "PshC8 PshC8 PshC8 PSF CALLSYS PSF LoadThisR RDR8 PshV8 LoadThisR RDR8 NEGd PshV8 CALLSYS CpyRtoV8 PshV8 PSF PSF CALLSYS LoadThisR RDR8 PshV8 LoadThisR RDR8 PshV8 CALLSYS CpyRtoV8 PshV8 PSF PSF CALLSYS PSF PSF PSF CALLSYS")
+                        || !closed(at, at + 35, &[]) { return None; }
+                    let (axis, upper, negative, random, rotated, direction, product, sum, base) =
+                        (w(&c[3])?, w(&c[7])?, w(&c[10])?, w(&c[14])?, w(&c[16])?, w(&c[17])?, w(&c[28])?, w(&c[32])?, w(&c[33])?);
+                    let vectors = [axis, rotated, direction, product, sum, base, selected];
+                    if vectors.iter().any(|s| !local(*s, f.ret.type_info)) || vectors.into_iter().collect::<HashSet<_>>().len() != 7
+                        || ![upper, negative, random].iter().all(|s| scalar(*s)) || HashSet::from([upper, negative, random]).len() != 3
+                        || [(5,axis),(8,upper),(11,negative),(12,negative),(15,random),(20,negative),(21,negative),(23,upper),(24,upper),
+                            (26,random),(27,random),(29,rotated),(31,product)].iter().any(|(n,s)| w(&c[*n]) != Some(*s)) { return None; }
+                    let axis_bits = [*c[2].qwords.first()?, *c[1].qwords.first()?, *c[0].qwords.first()?];
+                    if axis_bits != [0, 0, 1.0f64.to_bits()] { return None; }
+                    let (angle_host, angle) = field(&c[6])?; let (outer_host, outer) = field(&c[19])?; let (inner_host, inner) = field(&c[22])?;
+                    if angle_host != host || outer_host != host || inner_host != host || field(&c[9])? != (host, angle)
+                        || HashSet::from([angle, outer, inner]).len() != 3 || [angle, outer, inner].iter().any(|name| refs.own_field_type_by_class(&host.name, name) != Some("float")) { return None; }
+                    let (axis_ctor, rand, rotate, mul, add) = (p(&c[4])?, p(&c[13])?, p(&c[18])?, p(&c[30])?, p(&c[34])?);
+                    if !native(axis_ctor, "$beh0", false) || !plain(refs.func_ret_by_ptr(axis_ctor)?, 0x52)
+                        || !matches!(refs.func_params_by_ptr(axis_ctor), Some([x,y,z]) if [x,y,z].iter().all(|t| plain(t,0x51)))
+                        || refs.func_by_ptr(rand) != Some("RandRange") || refs.func_ns_by_ptr(rand) != Some("Math") || refs.func_owner_by_ptr(rand).is_some()
+                        || refs.is_method_by_ptr(rand) || !plain(refs.func_ret_by_ptr(rand)?, 0x51) || p(&c[25]) != Some(rand)
+                        || !matches!(refs.func_params_by_ptr(rand), Some([a,b]) if plain(a,0x51) && plain(b,0x51))
+                        || !native(rotate, "RotateAngleAxis", true) || !value(refs.func_ret_by_ptr(rotate)?, false, false)
+                        || !matches!(refs.func_params_by_ptr(rotate), Some([a,b]) if plain(a,0x51) && value(b,true,true))
+                        || !native(mul, "opMul", true) || !value(refs.func_ret_by_ptr(mul)?, false, false) || !matches!(refs.func_params_by_ptr(mul), Some([t]) if plain(t,0x51))
+                        || !native(add, "opAdd", true) || !value(refs.func_ret_by_ptr(add)?, false, false) || !matches!(refs.func_params_by_ptr(add), Some([t]) if value(t,true,true)) { return None; }
+                    // The selected value feeds the normalized direction, not another vector life sharing its name.
+                    let bridges: Vec<_> = code[join..at].windows(7).enumerate().filter_map(|(offset,b)| {
+                        if !ops(b, "PSF PSF PSF CALLSYS PshC8 PSF CALLSYS") || [w(&b[0]),w(&b[1]),w(&b[2]),w(&b[5])] != [Some(base),Some(direction),Some(selected),Some(direction)] { return None; }
+                        let sub=p(&b[3])?;let normalize=p(&b[6])?;let epsilon=*b[4].qwords.first()?;
+                        (native(sub,"opSub",true) && value(refs.func_ret_by_ptr(sub)?,false,false) && matches!(refs.func_params_by_ptr(sub),Some([t]) if value(t,true,true))
+                            && native(normalize,"Normalize",false) && plain(refs.func_ret_by_ptr(normalize)?,0x41) && matches!(refs.func_params_by_ptr(normalize),Some([t]) if plain(t,0x51))
+                            && f64::from_bits(epsilon).is_finite() && closed(join+offset,join+offset+7,&[])).then_some(epsilon)
+                    }).collect();
+                    let [epsilon] = bridges.as_slice() else { return None; };
+                    Some((axis, negative, direction, base, angle, inner, outer, *epsilon))
+                })();
+                if let Some(tail) = tail { tails.push(tail); }
+            }
+            let [tail] = tails.as_slice() else { return None; };
+            Some((selected, area, project, *tail))
+        })();
+        if let Some(found) = found { witnesses.push(found); }
+    }
+    let [(selected, area, project, (axis, negative, direction, base, angle, inner, outer, epsilon))] = witnesses.as_slice() else { return body.to_owned(); };
+    let axis_name = format!("local_{axis}");
+    if count_ident(body, &axis_name) != 0 { return body.to_owned(); }
+    let lines: Vec<_> = body.lines().collect(); let mut edits = Vec::new();
+    for (at, c) in lines.windows(14).enumerate() {
+        let Some((indent, selected_name)) = bare_declaration(c[0]) else { continue; };
+        let Some((_, base_name, _)) = declaration_with_initializer(c[9]) else { continue; };
+        let Some((_, direction_name, difference)) = declaration_with_initializer(c[10]) else { continue; };
+        let Some((_, negative_name, negated)) = declaration_with_initializer(c[12]) else { continue; };
+        if slot_and_life_any(&selected_name).map(|s|s.0) != Some(*selected) || slot_and_life_any(&base_name).map(|s|s.0) != Some(*base)
+            || slot_and_life_any(&direction_name).map(|s|s.0) != Some(*direction) || slot_and_life_any(&negative_name).map(|s|s.0) != Some(*negative)
+            || c[0] != format!("{indent}FVector {selected_name};") || c[1] != format!("{indent}if ({} != nullptr)",parameter.name)
+            || c[2] != format!("{indent}{{") || c[4] != format!("{indent}}}") || c[5] != format!("{indent}else") || c[6] != c[2] || c[8] != c[4]
+            || !c[9].starts_with(&format!("{indent}FVector {base_name} = this.{area}.{project}("))
+            || c[10] != format!("{indent}FVector {direction_name} = {difference};") || difference != format!("({selected_name} - {base_name})")
+            || c[12] != format!("{indent}float {negative_name} = {negated};") || negated != format!("-this.{angle}")
+            || count_ident(body,&selected_name) != 4 || count_ident(body,&negative_name) != 2 { continue; }
+        let Some(tolerance) = c[11].strip_prefix(&format!("{indent}{direction_name}.Normalize(")).and_then(|s|s.strip_suffix(");")) else { continue; };
+        if tolerance.parse::<f64>().ok().map(f64::to_bits) != Some(*epsilon) { continue; }
+        let branch = |line: &str| line.strip_prefix(&format!("{indent}    {selected_name} = ")).and_then(|s|s.strip_suffix(';'))
+            .filter(|s| s.starts_with(&format!("this.{area}.{project}(")) && s.ends_with(')')).map(str::to_owned);
+        let (Some(left),Some(right)) = (branch(c[3]),branch(c[7])) else { continue; };
+        let old_return = format!("{indent}return ({base_name} + ({direction_name}.RotateAngleAxis(Math::RandRange({negative_name}, this.{angle}), FVector(0.0, 0.0, 1.0)) * Math::RandRange(this.{inner}, this.{outer})));");
+        if c[13] != old_return { continue; }
+        let new_return = c[13].replace(&format!("RandRange({negative_name},"),&format!("RandRange(-this.{angle},"))
+            .replace("FVector(0.0, 0.0, 1.0)",&axis_name);
+        edits.push((at,format!("{indent}FVector {selected_name} = ({} != nullptr ? {left} : {right});\n{}\n{}\n{}\n{indent}FVector {axis_name} = FVector(0.0, 0.0, 1.0);\n{new_return}",parameter.name,c[9],c[10],c[11])));
+    }
+    let [(at,replacement)] = edits.as_slice() else { return body.to_owned(); };
+    let mut out: Vec<_> = lines.iter().map(|s| (*s).to_owned()).collect(); out.splice(*at..*at+14,[replacement.clone()]);
+    let mut out = out.join("\n"); if body.ends_with('\n') { out.push('\n'); } out
 }
 
 fn restore_vector_accumulation_temporaries(body:&str,f:&Func,refs:&RefResolver,is_method:bool)->String {
@@ -13646,6 +13790,78 @@ fn restore_temporary_vector_expression_lifetimes(body:&str,f:&Func,refs:&RefReso
         else {output.push(lines[at].to_owned());at+=1;}
     }
     let mut result=output.join("\n");if body.ends_with('\n') {result.push('\n');}result
+}
+
+/// A hidden context is not a rendered argument: keep the following handle in its call.
+fn restore_world_context_handle_argument(body: &str, f: &Func, refs: &RefResolver, is_method: bool) -> String {
+    if !is_method || !body.contains("AActor local_") { return body.to_owned(); }
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let word = |i: &Instr| i.words.first().map(|w| *w as i16 as i32);
+    let ptr = |i: &Instr| i.qwords.first().map(|p| *p as i64);
+    let native = |p, name| refs.type_identity_by_ptr(p).is_some_and(|t| t.name == name && t.module.is_empty() && t.namespace.is_empty());
+    let shape = |t: &super::types::DataType, token, type_info, reference, constant, handle: bool| t.token == token && t.type_info == type_info
+        && t.is_reference == reference && t.is_object_const == constant && t.is_object_handle == handle
+        && t.is_read_only == (constant && !handle) && !t.is_auto && !t.if_handle_then_const;
+    let local = |slot, ty| f.obj_locals.iter().filter(|(s,_)| *s == slot).map(|(_,p)| *p).eq([ty]);
+    let mut matches = Vec::new();
+    for c in code.windows(14) {
+        let witness = (|| {
+            if c.iter().map(|i| i.op.name).ne(["SetV1","PshV4","PshC4","PshC4","SetV1","PshV4","PshVPtr","CALLSYS","STOREOBJ","PshVPtr","PSF","PSF","PshGPtr","CALLSYS"])
+                || word(&c[0]) != word(&c[1]) || word(&c[4]) != word(&c[5]) || word(&c[6]) != Some(0)
+                || word(&c[8]) != word(&c[9]) || refs.global_by_ptr(ptr(&c[12])?) != Some("__WorldContext") { return None; }
+            let (getter, call) = (ptr(&c[7])?, ptr(&c[13])?);
+            let get = refs.func_by_ptr(getter)?; let owner = refs.func_owner_by_ptr(getter)?;
+            if !get.starts_with("Get") || !refs.is_method_by_ptr(getter) || !refs.is_const_method_by_ptr(getter)
+                || !matches!(refs.func_params_by_ptr(getter), Some([])) || refs.is_script_class(owner)
+                || !matches!(owner.as_bytes().first(), Some(b'U' | b'A')) || refs.is_method_by_ptr(call) { return None; }
+            let [context,start,output,actor,channel,low,high,flag] = refs.func_params_by_ptr(call)? else { return None; };
+            let scalar = |t,token| shape(t,token,0,false,false,false);
+            let channel_type = refs.type_identity_by_ptr(channel.type_info)?;
+            if !native(context.type_info,"UObject") || !shape(context,5,context.type_info,false,true,true)
+                || !native(start.type_info,"FVector") || !shape(start,5,start.type_info,true,true,false)
+                || !native(output.type_info,"FHitResult") || !shape(output,5,output.type_info,true,false,false)
+                || !native(actor.type_info,"AActor") || !shape(actor,5,actor.type_info,false,false,true)
+                || !shape(refs.func_ret_by_ptr(getter)?,5,actor.type_info,false,false,true)
+                || !shape(channel,5,channel.type_info,false,false,false) || !channel_type.module.is_empty()
+                || !channel_type.namespace.is_empty() || !is_enum(&channel_type.name)
+                || !scalar(low,0x50) || !scalar(high,0x50) || !scalar(flag,0x41)
+                || !scalar(refs.func_ret_by_ptr(call)?,0x41) { return None; }
+            let (slot,hit,position) = (word(&c[8])?,word(&c[10])?,word(&c[11])?);
+            if slot<=0 || hit<=0 || position<=0 || !local(slot,actor.type_info) || !local(hit,output.type_info) || !local(position,start.type_info)
+                || word(&c[0]) == Some(slot) || word(&c[4]) == Some(slot) { return None; }
+            let boolean = *c[0].dwords.first()?; if boolean > 1 { return None; }
+            let (upper,lower) = (*c[2].dwords.first()?,*c[3].dwords.first()?);
+            if !f32::from_bits(upper).is_finite() || !f32::from_bits(lower).is_finite() { return None; }
+            let enum_value = *c[4].dwords.first()? as i32;
+            let name = refs.func_by_ptr(call)?; let ns = refs.func_ns_by_ptr(call).filter(|s| !s.is_empty())?;
+            if code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let target=i.offset_dw as i64+2+*d as i32 as i64;
+                target>c[0].offset_dw as i64 && target<=c[13].offset_dw as i64
+            }))) { return None; }
+            Some((slot,hit,position,get,format!("{ns}::{name}"),&channel_type.name,enum_value,lower,upper,boolean))
+        })();
+        if let Some(witness)=witness { matches.push(witness); }
+    }
+    let [(slot,hit,position,get,callee,channel,value,lower,upper,boolean)] = matches.as_slice() else {return body.to_owned();};
+    let lines:Vec<_>=body.lines().collect();let mut change=None;
+    for (at,pair) in lines.windows(2).enumerate() {
+        let Some((indent,name,rhs))=declaration_with_initializer(pair[0]) else {continue;};
+        if !pair[0].trim_start().starts_with("AActor ") || slot_and_life_any(&name).map(|(s,_)|s)!=Some(*slot)
+            || count_ident(body,&name)!=2 || rhs!=format!("this.{get}()") || indent_of(pair[1])!=indent {continue;}
+        let line=pair[1].trim();let prefix=format!("{callee}(");
+        if !line.starts_with(&prefix) {continue;}
+        let Some((args,close))=argument_list(line,prefix.len()-1) else {continue;};
+        let [start,out,actor,selection,low,high,flag]=args.as_slice() else {continue;};
+        let float_bits=|s:&str|s.strip_suffix('f').and_then(|v|v.parse::<f32>().ok()).map(f32::to_bits);
+        if &line[close+1..]!=";" || actor!=&name || slot_and_life_any(start).map(|(s,_)|s)!=Some(*position)
+            || slot_and_life_any(out).map(|(s,_)|s)!=Some(*hit) || selection!=&format!("{channel}({value})")
+            || float_bits(low)!=Some(*lower) || float_bits(high)!=Some(*upper) || flag!=if *boolean==0 {"false"} else {"true"} {continue;}
+        if change.is_some() {return body.to_owned();}
+        change=Some((at,format!("{indent}{}",rename_ident(line,&name,&rhs))));
+    }
+    let Some((at,line))=change else {return body.to_owned();};
+    let mut out:Vec<_>=lines.into_iter().map(str::to_owned).collect();out.splice(at..at+2,[line]);
+    let mut result=out.join("\n");if body.ends_with('\n') {result.push('\n');}result
 }
 
 /// Materialize the trailing scalar arguments before allocating the perceived actor handle.
@@ -25346,7 +25562,7 @@ fn retained_value_arguments(
                 (native(ty)?, native(result_ty)?, native(local(receiver)?)?, native(local(target)?)?, native(handle_ty)?);
             if !value.name.starts_with('F') || !output.name.starts_with('F')
                 || ![owner, target_owner, handle_owner].iter().all(|t| is_object_handle_type(&t.name)) { return None; }
-            let plain = |t: &super::types::DataType, token, ptr, reference, constant, handle| t.token == token && t.type_info == ptr
+            let plain = |t: &super::types::DataType, token, ptr, reference, constant, handle: bool| t.token == token && t.type_info == ptr
                 && t.is_reference == reference && t.is_object_const == constant && t.is_read_only == constant
                 && t.is_object_handle == handle && !t.is_auto && !t.if_handle_then_const;
             let ptr = |i: usize| c[i].qwords.first().map(|p| *p as i64);
@@ -35198,7 +35414,7 @@ fn named_value_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, String)> {
                 let vector_id = refs.type_identity_by_ptr(vector_ty)?; let actor_id = refs.type_identity_by_ptr(actor_ty)?;
                 if local_type(axis)? != vector_ty || vector_id.name != "FVector" || !vector_id.module.is_empty() || !vector_id.namespace.is_empty()
                     || !actor_id.module.is_empty() || !actor_id.namespace.is_empty() || !actor_id.name.starts_with(['A', 'U']) { return None; }
-                let plain = |t: &super::types::DataType, token, ty, reference, constant, handle| t.token == token && t.type_info == ty
+                let plain = |t: &super::types::DataType, token, ty, reference, constant, handle: bool| t.token == token && t.type_info == ty
                     && t.is_reference == reference && t.is_object_const == constant && t.is_read_only == constant
                     && t.is_object_handle == handle && !t.is_auto && !t.if_handle_then_const;
                 let getter = *c[3].qwords.first()? as i64;
@@ -51406,6 +51622,181 @@ mod literal_value_lifetime_tests {
         assert_eq!(fold(&shifted_body,&shifted,&refs),shifted_expected);
     }
 
+    fn projected_rotation_lifetimes_fixture() -> Func {
+        let mut f = function(&[
+            ("PSF", &[42]),
+            ("CALLSYS", &[]),
+            ("PshVPtr", &[65532]),
+            ("RefCpyV", &[8]),
+            ("CmpPtrNull", &[8]),
+            ("JZ", &[]),
+            ("PSF", &[16]),
+            ("PshVPtr", &[65532]),
+            ("CALLSYS", &[]),
+            ("PSF", &[16]),
+            ("PSF", &[22]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[24]),
+            ("RDSPtr", &[]),
+            ("CALLINTF", &[]),
+            ("PSF", &[22]),
+            ("PSF", &[42]),
+            ("CALLSYS", &[]),
+            ("JMP", &[]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[48]),
+            ("PSF", &[36]),
+            ("CALLSYS", &[]),
+            ("PSF", &[16]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[24]),
+            ("RDSPtr", &[]),
+            ("CALLSYS", &[]),
+            ("PshC8", &[]),
+            ("PSF", &[30]),
+            ("PSF", &[16]),
+            ("CALLSYS", &[]),
+            ("PSF", &[30]),
+            ("PSF", &[16]),
+            ("PSF", &[36]),
+            ("CALLSYS", &[]),
+            ("PSF", &[16]),
+            ("PSF", &[36]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[24]),
+            ("RDSPtr", &[]),
+            ("CALLINTF", &[]),
+            ("PSF", &[36]),
+            ("PSF", &[42]),
+            ("CALLSYS", &[]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[48]),
+            ("PSF", &[30]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[24]),
+            ("RDSPtr", &[]),
+            ("CALLINTF", &[]),
+            ("PSF", &[30]),
+            ("PSF", &[6]),
+            ("PSF", &[42]),
+            ("CALLSYS", &[]),
+            ("PshC8", &[]),
+            ("PSF", &[6]),
+            ("CALLSYS", &[]),
+            ("PshC8", &[]),
+            ("PshC8", &[]),
+            ("PshC8", &[]),
+            ("PSF", &[54]),
+            ("CALLSYS", &[]),
+            ("PSF", &[54]),
+            ("LoadThisR", &[80]),
+            ("RDR8", &[64]),
+            ("PshV8", &[64]),
+            ("LoadThisR", &[80]),
+            ("RDR8", &[24]),
+            ("NEGd", &[24]),
+            ("PshV8", &[24]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV8", &[62]),
+            ("PshV8", &[62]),
+            ("PSF", &[48]),
+            ("PSF", &[6]),
+            ("CALLSYS", &[]),
+            ("LoadThisR", &[88]),
+            ("RDR8", &[24]),
+            ("PshV8", &[24]),
+            ("LoadThisR", &[96]),
+            ("RDR8", &[64]),
+            ("PshV8", &[64]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV8", &[62]),
+            ("PshV8", &[62]),
+            ("PSF", &[60]),
+            ("PSF", &[48]),
+            ("CALLSYS", &[]),
+            ("PSF", &[60]),
+            ("PSF", &[16]),
+            ("PSF", &[30]),
+            ("CALLSYS", &[]),
+            ("PSF", &[16]),
+            ("PshVPtr", &[65534]),
+            ("CALLSYS", &[]),
+            ("RET", &[6]),
+        ]);
+        f.ret=DataType {token:5,type_info:1,..Default::default()};
+        f.params=vec![crate::cache::model::Param {name:"Target".into(),ty:DataType {token:5,type_info:2,is_object_handle:true,..Default::default()},flags:0}];
+        f.obj_locals=[6,16,22,30,36,42,48,54,60,70].into_iter().map(|s|(s,1)).chain([(8,2)]).collect();
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,id) in [(1,10), (8,11), (17,12), (22,13), (27,14), (31,15), (35,16), (44,12), (55,17), (58,18), (63,19), (72,20), (77,21), (84,20), (89,15), (93,16), (96,13), (14,30), (41,30), (51,30), (12,3), (20,3), (25,3), (39,3), (46,3), (49,3), (65,3), (68,3), (78,3), (81,3)] {f.bytecode[code[at].offset_dw+1]=id;}
+        for (at,target) in [(5,19),(18,45)] {f.bytecode[code[at].offset_dw+1]=code[target].offset_dw as i32-code[at].offset_dw as i32-2;}
+        for (at,value) in [(28,10.0f64),(56,9.99999993922529e-9),(59,1.0),(60,0.0),(61,0.0)] {
+            let bits=value.to_bits();f.bytecode[code[at].offset_dw+1]=bits as i32;f.bytecode[code[at].offset_dw+2]=(bits>>32) as i32;
+        }
+        f
+    }
+
+    #[test]
+    fn projected_rotations_preserve_conditional_and_axis_lifetimes() {
+        let f=projected_rotation_lifetimes_fixture();let refs=RefResolver::from_test_projected_rotation_lifetimes(0);
+        let body=r#"    FVector local_42;
+    if (Target != nullptr)
+    {
+        local_42 = this.Area.Project(Target.GetActorLocation());
+    }
+    else
+    {
+        local_42 = this.Area.Project((this.Center + (this.Area.GetActorForwardVector() * 10.0)));
+    }
+    FVector local_30_2 = this.Area.Project(this.Center);
+    FVector local_6 = (local_42 - local_30_2);
+    local_6.Normalize(9.99999993922529e-9);
+    float local_24 = -this.Angle;
+    return (local_30_2 + (local_6.RotateAngleAxis(Math::RandRange(local_24, this.Angle), FVector(0.0, 0.0, 1.0)) * Math::RandRange(this.Inner, this.Outer)));
+"#;
+        let expected=r#"    FVector local_42 = (Target != nullptr ? this.Area.Project(Target.GetActorLocation()) : this.Area.Project((this.Center + (this.Area.GetActorForwardVector() * 10.0))));
+    FVector local_30_2 = this.Area.Project(this.Center);
+    FVector local_6 = (local_42 - local_30_2);
+    local_6.Normalize(9.99999993922529e-9);
+    FVector local_54 = FVector(0.0, 0.0, 1.0);
+    return (local_30_2 + (local_6.RotateAngleAxis(Math::RandRange(-this.Angle, this.Angle), local_54) * Math::RandRange(this.Inner, this.Outer)));
+"#;
+        let fold=|b:&str,f:&Func,r:&RefResolver|super::restore_projected_rotation_lifetimes(b,f,r,true);
+        assert_eq!(fold(body,&f,&refs),expected);
+        assert_eq!(fold(expected,&f,&refs),expected);
+        assert_eq!(super::restore_projected_rotation_lifetimes(body,&f,&refs,false),body);
+        for fault in 1..=14 {assert_eq!(fold(body,&f,&RefResolver::from_test_projected_rotation_lifetimes(fault)),body,"metadata {fault}");}
+        let code=disassemble(&f.bytecode).unwrap();
+        for at in [0,2,3,4,10,11,12,15,16,37,38,39,42,43,52,53,54,57,62,64,65,66,67,68,69,70,71,73,74,75,76,78,79,80,81,82,83,85,86,87,88,90,91,92] {
+            let mut bad=f.clone();bad.bytecode[code[at].offset_dw]^=2<<16;
+            assert_eq!(fold(body,&bad,&refs),body,"operand {at}");
+        }
+        for at in [1,5,12,14,17,18,39,41,44,55,56,58,59,60,61,63,65,68,72,77,78,81,84,89,93] {
+            let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1]+=1;
+            assert_eq!(fold(body,&bad,&refs),body,"call, field, constant or branch {at}");
+        }
+        for target in [6,19,54,64,87] {
+            let mut bad=f.clone();let at=bad.bytecode.len();bad.bytecode.extend(function(&[("JMP",&[])]).bytecode);
+            bad.bytecode[at+1]=code[target].offset_dw as i32-at as i32-2;
+            assert_eq!(fold(body,&bad,&refs),body,"interior entry {target}");
+        }
+        let mut bad=f.clone();bad.obj_locals.push((54,1));assert_eq!(fold(body,&bad,&refs),body);
+        let mut bad=f.clone();bad.params[0].ty.is_object_handle=false;assert_eq!(fold(body,&bad,&refs),body);
+        let mut bad=f.clone();bad.params[0].flags=3;assert_eq!(fold(body,&bad,&refs),body);
+        for bad in [format!("{body}    Use(local_42);\n"),format!("{body}    Use(local_24);\n"),format!("    FVector local_54;\n{body}"),
+            body.replace("Target != nullptr","Target == nullptr"),body.replace("this.Angle","this.OtherAngle"),
+            body.replace("FVector(0.0, 0.0, 1.0)","FVector(0.0, 1.0, 0.0)"),body.replace("this.Inner, this.Outer","this.Outer, this.Inner"),
+            body.replace("9.99999993922529e-9","0.001")] {assert_eq!(fold(&bad,&f,&refs),bad);}
+        let mut shifted=f.clone();for (slot,_) in &mut shifted.obj_locals {*slot+=100;}
+        for i in &code {
+            if !matches!(i.op.name,"ADDSi"|"LoadThisR"|"RET") && i.words.first().is_some_and(|s|(*s as i16)>0) {shifted.bytecode[i.offset_dw]+=100<<16;}
+        }
+        let rename=|s:&str|["6","16","22","24","30_2","36","42","48","54","60","70"].iter().fold(s.to_owned(),|s,n| {
+            let (number,suffix)=n.split_once('_').unwrap_or((n,""));let number=number.parse::<i32>().unwrap()+100;
+            let new=if suffix.is_empty(){format!("local_{number}")}else{format!("local_{number}_{suffix}")};super::rename_ident(&s,&format!("local_{n}"),&new)
+        });
+        assert_eq!(fold(&rename(body),&shifted,&refs),rename(expected));
+    }
+
     #[test]
     fn vector_accumulations_preserve_branch_values_and_temporary_reuse() {
         let mut f=function(&[
@@ -51854,6 +52245,41 @@ mod literal_value_lifetime_tests {
             e=super::rename_ident(&e,&format!("local_{slot}{suffix}"),&format!("local_{}{suffix}",slot+100));
         }}
         assert_eq!(fold(&s,&shifted,&refs),e);
+    }
+
+    #[test]
+    fn hidden_world_context_preserves_the_rendered_handle_argument_position() {
+        let mut f=function(&[("SetV1",&[9]),("PshV4",&[9]),("PshC4",&[]),("PshC4",&[]),
+            ("SetV1",&[109]),("PshV4",&[109]),("PshVPtr",&[0]),("CALLSYS",&[]),("STOREOBJ",&[2]),
+            ("PshVPtr",&[2]),("PSF",&[100]),("PSF",&[16]),("PshGPtr",&[]),("CALLSYS",&[]),("RET",&[0])]);
+        f.obj_locals=vec![(2,2),(100,4),(16,3)];
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,value) in [(2,150.0f32.to_bits() as i32),(3,(-450.0f32).to_bits() as i32),(4,14),(7,10),(12,99),(13,20)] { f.bytecode[code[at].offset_dw+1]=value; }
+        let refs=RefResolver::from_test_world_context_handle(0);
+        let body="    Observe(this.GetTarget());\n    AActor local_2 = this.GetTarget();\n    Geometry::FindPoint(local_16, local_100, local_2, ECollisionChannel(14), -450.0f, 150.0f, false);\n";
+        let expected="    Observe(this.GetTarget());\n    Geometry::FindPoint(local_16, local_100, this.GetTarget(), ECollisionChannel(14), -450.0f, 150.0f, false);\n";
+        let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_world_context_handle_argument(s,f,r,true);
+        assert_eq!(fold(body,&f,&refs),expected);assert_eq!(fold(expected,&f,&refs),expected);
+        assert_eq!(super::restore_world_context_handle_argument(body,&f,&refs,false),body);
+        for fault in 1..=11 {assert_eq!(fold(body,&f,&RefResolver::from_test_world_context_handle(fault)),body,"metadata {fault}");}
+        for at in [0,1,4,5,6,8,9,10,11] {
+            let mut bad=f.clone();bad.bytecode[code[at].offset_dw]^=2<<16;
+            assert_eq!(fold(body,&bad,&refs),body,"operand {at}");
+        }
+        for at in [0,2,3,4,7,12,13] {
+            let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1]^=2;
+            assert_eq!(fold(body,&bad,&refs),body,"value {at}");
+        }
+        let mut bad=f.clone();bad.obj_locals.push((2,2));assert_eq!(fold(body,&bad,&refs),body);
+        let mut bad=f.clone();let at=bad.bytecode.len();bad.bytecode.extend(function(&[("JMP",&[])]).bytecode);
+        bad.bytecode[at+1]=code[7].offset_dw as i32-at as i32-2;assert_eq!(fold(body,&bad,&refs),body);
+        for s in [format!("{body}    Use(local_2);\n"),body.replace("Geometry::FindPoint","Changed::FindPoint"),
+            body.replace("-450.0f","-451.0f"),body.replace("false","true"),body.replace("AActor local_2","UObject local_2"),
+            body.replace("    Geometry::","    Observe();\n    Geometry::")] {assert_eq!(fold(&s,&f,&refs),s);}
+        let mut shifted=f.clone();for (slot,_) in &mut shifted.obj_locals {*slot+=200;}
+        for at in [0,1,4,5,8,9,10,11] {shifted.bytecode[code[at].offset_dw]+=200<<16;}
+        let rename=|s:&str|[("local_2","local_202"),("local_100","local_300"),("local_16","local_216")].iter().fold(s.to_owned(),|s,(a,b)|super::rename_ident(&s,a,b));
+        assert_eq!(fold(&rename(body),&shifted,&refs),rename(expected));
     }
 
     #[test]

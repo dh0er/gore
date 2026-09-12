@@ -6582,6 +6582,63 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_projected_rotation_lifetimes(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name, module) in [(1,"FVector",""),(2,"AGothicCharacter",""),(3,"UProjectionHost","Fixture"),(4,"AProjectionArea","FixtureArea")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        for (offset,name) in [(24i64,"Area"),(48,"Center"),(80,"Angle"),(88,"Outer"),(96,"Inner")] {
+            let key=(offset<<33)|(3<<1)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,3);
+        }
+        r.class_fields.insert("UProjectionHost".into(),HashMap::from([
+            ("Area".into(),"AChildProjectionArea".into()),("Center".into(),"FVector".into()),
+            ("Angle".into(),"float".into()),("Outer".into(),"float".into()),("Inner".into(),"float".into())]));
+        r.class_super.insert("AChildProjectionArea".into(),"AProjectionArea".into());
+        let plain=|token|DataType {token,..Default::default()};
+        let vector=|is_reference,is_object_const|DataType {token:5,type_info:1,is_reference,is_object_const,is_read_only:is_object_const,..Default::default()};
+        for (ptr,name,owner,constant,ret,args) in [
+            (10,"$beh0","FVector",false,plain(0x52),vec![]),
+            (11,"GetActorLocation","AActor",true,vector(false,false),vec![]),
+            (12,"opAssign","FVector",false,vector(true,false),vec![vector(true,true)]),
+            (13,"$beh0","FVector",false,plain(0x52),vec![vector(true,true)]),
+            (14,"GetActorForwardVector","AActor",true,vector(false,false),vec![]),
+            (15,"opMul","FVector",true,vector(false,false),vec![plain(0x51)]),
+            (16,"opAdd","FVector",true,vector(false,false),vec![vector(true,true)]),
+            (17,"opSub","FVector",true,vector(false,false),vec![vector(true,true)]),
+            (18,"Normalize","FVector",false,plain(0x41),vec![plain(0x51)]),
+            (19,"$beh0","FVector",false,plain(0x52),vec![plain(0x51),plain(0x51),plain(0x51)]),
+            (21,"RotateAngleAxis","FVector",true,vector(false,false),vec![plain(0x51),vector(true,true)]),
+            (30,"Project","AProjectionArea",false,vector(false,false),vec![vector(true,true)])
+        ] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);
+            if constant {r.const_method_ptrs.insert(ptr);}
+            r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+        }
+        r.funcid_to_ptr.insert(30,30);
+        r.func_by_ptr.insert(20,"RandRange".into());r.func_ns.insert(20,"Math".into());
+        r.func_ret.insert(20,plain(0x51));r.func_params.insert(20,vec![plain(0x51),plain(0x51)]);
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Shadow".into(),
+            2=>r.func_ret.get_mut(&10).unwrap().token=0x41,
+            3=>r.func_params.get_mut(&12).unwrap()[0].is_object_const=false,
+            4=>r.func_ret.get_mut(&30).unwrap().is_reference=true,
+            5=>r.func_params.get_mut(&30).unwrap()[0].is_reference=false,
+            6=>{r.class_fields.get_mut("UProjectionHost").unwrap().insert("Area".into(),"OtherArea".into());},
+            7=>{r.class_fields.get_mut("UProjectionHost").unwrap().insert("Angle".into(),"float32".into());},
+            8=>r.func_params.get_mut(&19).unwrap()[0].token=0x50,
+            9=>{r.func_ns.insert(20,"Other".into());},
+            10=>{r.func_is_method.insert(20);},
+            11=>r.func_params.get_mut(&21).unwrap()[1].is_read_only=false,
+            12=>{r.const_method_ptrs.remove(&21);},
+            13=>r.func_ret.get_mut(&15).unwrap().is_reference=true,
+            14=>r.func_params.get_mut(&18).unwrap()[0].token=0x50,
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_vector_accumulation_temporaries(fault:u8)->Self {
         let mut r=Self::default();
         for (ptr,name,module) in [(1,"FVector",""),(2,"AGothicCharacter",""),(3,"UAccumulator","Fixture"),(4,"TArrayConstIterator",""),(5,"TArray","")] {
@@ -6935,6 +6992,36 @@ impl RefResolver {
             && matches!(self.type_subtypes(item.type_info),Some([t]) if native(t,"UItemDefinition"))
             && num.token==0x44 && num.type_info==0 && !num.is_reference && !num.is_object_handle && num.is_object_const && num.is_read_only
             && [ret,ai,other,item,num].iter().all(|t| !t.is_auto && !t.if_handle_then_const)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_world_context_handle(fault: u8) -> Self {
+        let mut r=Self::default();
+        for (ptr,name) in [(1,"UObject"),(2,"AActor"),(3,"FVector"),(4,"FHitResult"),(5,"ECollisionChannel")] {
+            r.type_by_ptr.insert(ptr,name.into());r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:String::new(),namespace:String::new()});
+        }
+        let object=|type_info,is_reference,is_object_const,is_object_handle|DataType {token:5,type_info,is_reference,is_object_const,is_object_handle,is_read_only:is_object_const && !is_object_handle,..Default::default()};
+        let scalar=|token|DataType {token,..Default::default()};
+        r.func_by_ptr.insert(10,"GetTarget".into());r.func_owner.insert(10,"UAbility".into());r.func_is_method.insert(10);r.const_method_ptrs.insert(10);
+        r.func_ret.insert(10,object(2,false,false,true));r.func_params.insert(10,vec![]);
+        r.func_by_ptr.insert(20,"FindPoint".into());r.func_ns.insert(20,"Geometry".into());r.func_ret.insert(20,scalar(0x41));
+        r.func_params.insert(20,vec![object(1,false,true,true),object(3,true,true,false),object(4,true,false,false),object(2,false,false,true),object(5,false,false,false),scalar(0x50),scalar(0x50),scalar(0x41)]);
+        r.global_by_ptr.insert(99,"__WorldContext".into());
+        match fault {
+            1=>{r.global_by_ptr.insert(99,"OtherContext".into());},
+            2=>r.func_params.get_mut(&20).unwrap()[0].is_object_const=false,
+            3=>r.func_params.get_mut(&20).unwrap()[2].is_object_const=true,
+            4=>r.func_params.get_mut(&20).unwrap()[3].is_reference=true,
+            5=>r.func_params.get_mut(&20).unwrap()[5].token=0x51,
+            6=>{r.func_is_method.insert(20);},
+            7=>{r.const_method_ptrs.remove(&10);},
+            8=>r.func_ret.get_mut(&10).unwrap().is_object_const=true,
+            9=>r.type_identity_by_ptr.get_mut(&4).unwrap().module="Script".into(),
+            10=>{r.func_params.get_mut(&10).unwrap().push(scalar(0x44));},
+            11=>r.func_ret.get_mut(&20).unwrap().token=0x52,
+            _=>{}
+        }
+        r
     }
 
     #[cfg(test)]
