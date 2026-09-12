@@ -3451,6 +3451,8 @@ fn emit_function_ctor(
         pass_trace("restore_copied_integer_selection_lifetimes", &rendered);
         let rendered = restore_compound_vector_receiver_order(&rendered, f, refs, class_name, is_method);
         pass_trace("restore_compound_vector_receiver_order", &rendered);
+        let rendered = restore_paired_eye_trace_arguments(&rendered, f, refs, class_name);
+        pass_trace("restore_paired_eye_trace_arguments", &rendered);
         s.truncate(declarations_at);
         s.push_str(&rendered);
     } else {
@@ -16906,6 +16908,189 @@ fn restore_compound_vector_receiver_order(body: &str, f: &Func, refs: &RefResolv
     let mut out: Vec<_> = lines.iter().map(|l| (*l).to_owned()).collect();
     for (at, line) in edits.iter().rev() { if line.is_empty() { out.remove(*at); } else { out[*at] = line.clone(); } }
     let mut result = out.join("\n"); if body.ends_with('\n') { result.push('\n'); } result
+}
+
+/// Restore the common eye endpoint and two ordered native traces, including their three verified defaults.
+fn restore_paired_eye_trace_arguments(body:&str,f:&Func,refs:&RefResolver,class_name:Option<&str>)->String {
+    if !body.contains("FVector(FVector::UpVector)") || !body.contains("FLinearColor ") {return body.to_owned();}
+    let found=(|| {
+        let class=class_name?;let code=disassemble(&f.bytecode).ok()?;
+        let plain=|t:&super::types::DataType,token|t.token==token && t.type_info==0 && !t.is_reference && !t.is_object_const
+            && !t.is_object_handle && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+        let object=|t:&super::types::DataType,ptr,reference:bool,constant:bool,handle:bool|t.token==5 && t.type_info==ptr
+            && t.is_reference==reference && t.is_object_const==constant && t.is_object_handle==handle
+            && t.is_read_only==(constant&&(!handle||reference)) && !t.is_auto && !t.if_handle_then_const;
+        let native_type=|ptr,name|refs.type_identity_by_ptr(ptr).is_some_and(|t|t.name==name && t.module.is_empty() && t.namespace.is_empty());
+        let w=|i:&Instr,n:usize|i.words.get(n).map(|s|*s as i16 as i32);
+        let p=|i:&Instr|i.qwords.first().map(|v|*v as i64);
+        let jump=|i:&Instr|i.dwords.first().map(|d|i.offset_dw as i64+2+*d as i32 as i64);
+        let local=|slot| {let rows:Vec<_>=f.obj_locals.iter().filter(|(s,_)|*s==slot).map(|(_,t)|*t).collect();(rows.len()==1).then(||rows[0])};
+        let field=|i:&Instr,n:usize| {let id=*i.dwords.first()? as i32;let owner=refs.type_identity_by_id(id)?;
+            let (name,old)=refs.member_identity(id,w(i,n)?)?;
+            (owner.namespace.is_empty() && refs.type_identity_by_id(old)?==owner).then_some((owner,name))};
+        let [param]=f.params.as_slice() else {return None;};
+        if !f.is_const_method() || !plain(&f.ret,0x41) || param.flags!=0 || !native_type(param.ty.type_info,"AGothicCharacter")
+            || !object(&param.ty,param.ty.type_info,false,false,true) || param.name.is_empty() {return None;}
+        // The same 66-op call/early-return frame occurs twice; its receivers and intermediate RVOs exchange roles.
+        let trace_ops="PshC4 PshC4 PshC4 PshC4 PshC4 PSF CALLSYS PSF PshC4 PshC4 PshC4 PshC4 PSF CALLSYS PSF SetV1 PshV4 PSF SetV1 PshV4 PSF SetV1 PshV4 PshV4 PSF PSF PshVPtr ADDSi RDSPtr CALLSYS STOREOBJ PshVPtr CALLSYS PshGPtr PSF CALLSYS PshVPtr ADDSi RDSPtr CALLSYS STOREOBJ LoadRObjR RDR4 fTOd PshV8 PSF PSF CALLSYS PSF PSF PSF CALLSYS PSF PshGPtr CALLSYS CpyRtoV4 NOT CpyVtoR1 JLowZ SetV1 PSF CALLSYS PSF CALLSYS CpyVtoR4 JMP";
+        let traces:Vec<_>=code.windows(66).enumerate().filter(|(_,c)|c.iter().map(|i|i.op.name).eq(trace_ops.split_whitespace())).map(|(n,_)|n).collect();
+        let [first,second]=traces.as_slice() else {return None;};let (first,second)=(*first,*second);
+        let base=first.checked_sub(36)?;
+        if second!=first+92 || second+73>code.len() {return None;}
+        let (a,m,z)=(&code[base..first],&code[first+66..second],&code[second+66..second+73]);
+        if a.iter().map(|i|i.op.name).ne("SetV1 PshV4 CALLSYS CpyRtoV4 PSF CALLSYS PSF CALLSYS PshVPtr ADDSi RDSPtr CALLSYS STOREOBJ PSF PSF CALLSYS PSF PSF CALLSYS PSF PshVPtr CALLSYS PshGPtr PSF CALLSYS LoadRObjR RDR4 fTOd PshV8 PSF PSF CALLSYS PSF PSF PSF CALLSYS".split_whitespace())
+            || m.iter().map(|i|i.op.name).ne("PshVPtr ADDSi RDSPtr CALLSYS JLowNZ SetV4 JMP PshVPtr ADDSi RDSPtr CALLSYS STOREOBJ PshVPtr CALLSYS CpyRtoV4 CpyVtoV4 CpyVtoR1 JLowZ PshVPtr ADDSi RDSPtr CALLSYS STOREOBJ PSF PSF CALLSYS".split_whitespace())
+            || z.iter().map(|i|i.op.name).ne(["SetV1","PSF","CALLSYS","PSF","CALLSYS","CpyVtoR4","RET"]) {return None;}
+        let c=&code[first..first+66];let d=&code[second..second+66];
+        let (channel,kind,hit,array,handle_a,handle_b,point,endpoint,position,product,narrow,wide,green,red,ignore,draw,complex,first_bool,second_bool,last_bool)=
+            (w(&a[0],0)?,w(&a[3],0)?,w(&a[4],0)?,w(&a[6],0)?,w(&a[12],0)?,w(&c[40],0)?,w(&c[34],0)?,w(&a[23],0)?,w(&a[19],0)?,w(&a[29],0)?,
+             w(&a[26],0)?,w(&a[27],0)?,w(&c[5],0)?,w(&c[12],0)?,w(&c[15],0)?,w(&c[18],0)?,w(&c[21],0)?,w(&c[55],0)?,w(&d[55],0)?,w(&z[0],0)?);
+        let input=w(&a[16],0)?;
+        if super::model::param_slot_map(&[param.ty.clone()],true,false,Some(refs)).get(&input)!=Some(&0) {return None;}
+        let all=[channel,kind,hit,array,handle_a,handle_b,point,endpoint,position,product,narrow,wide,green,red,ignore,draw,complex,first_bool,second_bool,last_bool];
+        if all.iter().any(|s|*s<=0) || HashSet::from(all).len()!=all.len() {return None;}
+        if [(0,0,channel), (1,0,channel), (3,0,kind), (4,0,hit), (6,0,array), (8,0,0), (12,0,handle_a), (13,0,handle_a), (14,0,array), (16,0,input), (17,0,array), (19,0,position), (20,0,input), (23,0,endpoint), (25,0,input), (26,0,narrow), (27,0,wide), (27,1,narrow), (28,0,wide), (29,0,product), (30,0,endpoint), (32,0,product), (33,0,endpoint), (34,0,position)].iter().any(|(n,k,s)|w(&a[*n],*k)!=Some(*s)) {return None;}
+        if [(0,0,0), (5,0,complex), (7,0,0), (11,0,handle_b), (12,0,handle_b), (14,0,ignore), (15,0,complex), (15,1,ignore), (16,0,complex), (18,0,0), (22,0,handle_a), (23,0,handle_a), (24,0,array)].iter().any(|(n,k,s)|w(&m[*n],*k)!=Some(*s)) {return None;}
+        if [(1,array),(3,hit),(5,last_bool)].iter().any(|(n,s)|w(&z[*n],0)!=Some(*s)) || w(&z[6],0)!=Some(2*super::model::AS_PTR_SIZE)
+            || z[0].dwords.as_slice()!=[0] {return None;}
+        let (vector,hit_ty,array_ty,color)=(local(point)?,local(hit)?,local(array)?,local(green)?);
+        if !native_type(vector,"FVector") || !native_type(hit_ty,"FHitResult") || !native_type(array_ty,"TArray") || !native_type(color,"FLinearColor")
+            || local(red)!=Some(color) || [endpoint,position,product].iter().any(|s|local(*s)!=Some(vector))
+            || [handle_a,handle_b].iter().any(|s|local(*s)!=Some(param.ty.type_info))
+            || [channel,kind,narrow,wide,ignore,draw,complex,first_bool,second_bool,last_bool].iter().any(|s|local(*s).is_some()) {return None;}
+        let [element]=refs.type_subtypes(array_ty)? else {return None;};
+        if !native_type(element.type_info,"AActor") || !object(element,element.type_info,false,false,true) {return None;}
+        let (convert,hit_ctor,array_ctor,get_ai,array_add,location,copy,mul,add,colors,trace,array_dtor,hit_dtor,get_state,valid)=
+            (p(&a[2])?,p(&a[5])?,p(&a[7])?,p(&a[11])?,p(&a[15])?,p(&a[21])?,p(&a[24])?,p(&a[31])?,p(&a[35])?,p(&c[6])?,p(&c[54])?,p(&c[61])?,p(&c[63])?,p(&m[10])?,p(&m[3])?);
+        let method=|ptr,owner,name,constant|refs.func_owner_by_ptr(ptr)==Some(owner) && refs.func_by_ptr(ptr)==Some(name)
+            && refs.is_method_by_ptr(ptr) && refs.is_const_method_by_ptr(ptr)==constant;
+        if !method(get_ai,"UGameplayAbility_AI","GetCharacter",true) || !method(get_state,"AGothicCharacterState","GetCharacter",true)
+            || !method(location,"AActor","GetActorLocation",true) || !method(copy,"FVector","$beh0",false)
+            || !method(mul,"FVector","opMul",true) || !method(add,"FVector","opAdd",true)
+            || !method(array_add,"TArray","Add",false) || !method(colors,"FLinearColor","$beh0",false) {return None;}
+        for ptr in [get_ai,get_state] {
+            if !refs.func_params_by_ptr(ptr)?.is_empty() || !object(refs.func_ret_by_ptr(ptr)?,param.ty.type_info,false,false,true) {return None;}
+        }
+        if !refs.func_params_by_ptr(location)?.is_empty() || !object(refs.func_ret_by_ptr(location)?,vector,false,false,false)
+            || !plain(refs.func_ret_by_ptr(copy)?,0x52) || !matches!(refs.func_params_by_ptr(copy)?,[t] if object(t,vector,true,true,false))
+            || !object(refs.func_ret_by_ptr(mul)?,vector,false,false,false) || !matches!(refs.func_params_by_ptr(mul)?,[t] if plain(t,0x51))
+            || !object(refs.func_ret_by_ptr(add)?,vector,false,false,false) || !matches!(refs.func_params_by_ptr(add)?,[t] if object(t,vector,true,true,false))
+            || !plain(refs.func_ret_by_ptr(array_add)?,0x52) || !matches!(refs.func_params_by_ptr(array_add)?,[t] if object(t,element.type_info,true,true,true))
+            || !plain(refs.func_ret_by_ptr(colors)?,0x52) || refs.func_params_by_ptr(colors)?.len()!=4 || !refs.func_params_by_ptr(colors)?.iter().all(|t|plain(t,0x50)) {return None;}
+        for (ptr,owner,name) in [(hit_ctor,"FHitResult","$beh0"),(array_ctor,"TArray","$beh0"),(hit_dtor,"FHitResult","$beh2"),(array_dtor,"TArray","$beh2")] {
+            if !method(ptr,owner,name,false) || !plain(refs.func_ret_by_ptr(ptr)?,0x52) || !refs.func_params_by_ptr(ptr)?.is_empty() {return None;}
+        }
+        if !a[0].dwords.first().is_some_and(|bits|*bits<=255) {return None;}
+        let query=refs.func_ret_by_ptr(convert)?;let [collision]=refs.func_params_by_ptr(convert)? else {return None;};
+        if refs.func_by_ptr(convert)!=Some("ConvertToTraceType") || refs.func_ns_by_ptr(convert)!=Some("UCollisionProfile") || refs.func_owner_by_ptr(convert).is_some()
+            || refs.is_method_by_ptr(convert) || refs.is_const_method_by_ptr(convert) || !native_type(query.type_info,"ETraceTypeQuery")
+            || !object(query,query.type_info,false,false,false) || !native_type(collision.type_info,"ECollisionChannel") || !object(collision,collision.type_info,false,false,false) {return None;}
+        let args=refs.func_params_by_ptr(trace)?;
+        if refs.func_by_ptr(trace)!=Some("LineTraceSingle") || refs.func_ns_by_ptr(trace)!=Some("System") || refs.func_owner_by_ptr(trace).is_some()
+            || refs.is_method_by_ptr(trace) || refs.is_const_method_by_ptr(trace) || !plain(refs.func_ret_by_ptr(trace)?,0x41) || args.len()!=12
+            || !native_type(args[0].type_info,"UObject") || !object(&args[0],args[0].type_info,false,true,true)
+            || !object(&args[1],vector,false,true,false) || !object(&args[2],vector,false,true,false) || !object(&args[3],query.type_info,false,false,false) || !plain(&args[4],0x41)
+            || !object(&args[5],array_ty,true,true,false) || !native_type(args[6].type_info,"EDrawDebugTrace") || !object(&args[6],args[6].type_info,false,false,false)
+            || !object(&args[7],hit_ty,true,false,false) || !plain(&args[8],0x41) || !object(&args[9],color,false,false,false)
+            || !object(&args[10],color,false,false,false) || !plain(&args[11],0x50) {return None;}
+        if refs.func_by_ptr(valid)!=Some("IsValid") || refs.func_owner_by_ptr(valid).is_some() || refs.is_method_by_ptr(valid) || refs.is_const_method_by_ptr(valid)
+            || !refs.func_ns_by_ptr(valid).unwrap_or("").is_empty() || !plain(refs.func_ret_by_ptr(valid)?,0x41) || !matches!(refs.func_params_by_ptr(valid)?,[t] if object(t,args[0].type_info,false,true,true)) {return None;}
+        let (ai_owner,ai)=field(&a[9],0)?;let (state_owner,state)=field(&m[1],0)?;let (pawn,eye)=field(&a[25],1)?;
+        let ai_ty=refs.own_field_type_by_class(&ai_owner.name,ai)?;
+        if ai_owner.module.is_empty() || state_owner.module.is_empty() || !refs.is_subclass(class,&ai_owner.name) || !refs.is_subclass(class,&state_owner.name)
+            || !(refs.is_subclass(ai_ty,"UGameplayAbility_AI") || refs.is_subclass(ai_ty,"UGameplayAbility_CharacterAI"))
+            || refs.own_field_type_by_class(&state_owner.name,state)!=Some("AGothicCharacterState")
+            || !pawn.module.is_empty() || pawn.name!="APawn" || refs.native_field_value_type(&pawn.name,eye)!=Some("float32") {return None;}
+        // Exact native bridge: AGothicCharacter's AActor/APawn bases and CharacterAI's GameplayAbility_AI base are omitted by native ancestry tables.
+        let up=p(&a[22])?;
+        if refs.global_by_ptr(up)!=Some("UpVector") || refs.global_ns(up)!=Some("FVector") || refs.global_is_string(up) {return None;}
+        let world=p(&c[53])?;
+        if refs.global_by_ptr(world)!=Some("__WorldContext") || refs.global_is_string(world) {return None;}
+        if p(&a[18])!=Some(array_add) || p(&m[13])!=Some(valid) || p(&m[21])!=Some(get_state) || p(&m[25])!=Some(array_add)
+            || field(&m[8],0)?!=field(&m[1],0)? || field(&m[19],0)?!=field(&m[1],0)?
+            || jump(&m[4])!=Some(m[7].offset_dw as i64) || jump(&m[6])!=Some(m[16].offset_dw as i64)
+            || jump(&m[17])!=Some(z[0].offset_dw as i64) || m[5].dwords.as_slice()!=[0]
+            || p(&z[2])!=Some(array_dtor) || p(&z[4])!=Some(hit_dtor) {return None;}
+        for (n,t) in [c,d].into_iter().enumerate() {
+            let (receiver,other,part,factor,receiver_field,getter,result,exit)=if n==0 {(handle_a,handle_b,position,product,&a[9],get_ai,first_bool,&m[0])}
+                else {(handle_b,handle_a,product,position,&m[1],get_state,second_bool,&z[0])};
+            if [(5,0,green), (7,0,green), (12,0,red), (14,0,red), (15,0,ignore), (16,0,ignore), (17,0,hit), (18,0,draw), (19,0,draw), (20,0,array), (21,0,complex), (22,0,complex), (23,0,kind), (24,0,endpoint), (25,0,part), (26,0,0), (30,0,receiver), (31,0,receiver), (34,0,point), (36,0,0), (40,0,other), (41,0,other), (42,0,narrow), (43,0,wide), (43,1,narrow), (44,0,wide), (45,0,factor), (46,0,point), (48,0,factor), (49,0,point), (50,0,part), (52,0,point), (55,0,result), (56,0,result), (57,0,result), (59,0,ignore), (60,0,array), (62,0,hit), (64,0,ignore)].iter().any(|(n,k,s)|w(&t[*n],*k)!=Some(*s)) {return None;}
+            // The frozen native signature defaults ONLY TraceColor(red), TraceHitColor(green), and DrawTime(5). bIgnoreSelf remains required.
+            for (at,bits) in [(0,1084227584u32),(1,1065353216),(2,0),(3,1065353216),(4,0),(8,1065353216),(9,0),(10,0),(11,1065353216),
+                (15,1),(18,0),(21,0),(59,1)] {if t[at].dwords.as_slice()!=[bits] {return None;}}
+            for (at,ptr) in [(6,colors),(13,colors),(29,getter),(32,location),(35,copy),(39,getter),(47,mul),(51,add),(54,trace),(61,array_dtor),(63,hit_dtor)] {
+                if p(&t[at])!=Some(ptr) {return None;}
+            }
+            if field(&t[27],0)?!=field(receiver_field,0)? || field(&t[37],0)?!=field(receiver_field,0)? || field(&t[41],1)?!=field(&a[25],1)?
+                || t[41].dwords!=a[25].dwords || w(&t[41],1)!=w(&a[25],1) || p(&t[33])!=Some(up) || p(&t[53])!=Some(world)
+                || jump(&t[58])!=Some(exit.offset_dw as i64) || jump(&t[65])!=Some(z[6].offset_dw as i64) {return None;}
+        }
+        let end=second+73;
+        if code.iter().enumerate().any(|(n,i)|i.op.name=="JMPP" || (i.op.name.starts_with('J') && !(base..end).contains(&n)
+            && jump(i).is_some_and(|t|t>code[base].offset_dw as i64 && t<=z[6].offset_dw as i64))) {return None;}
+        for (slot,sites) in [(input,vec![16,20,25]),
+            (kind,vec![3,59,151]),
+            (hit,vec![4,53,98,145,190,197]),
+            (array,vec![6,14,17,56,96,126,148,188,195]),
+            (handle_a,vec![12,13,66,67,124,125,168,169]),
+            (handle_b,vec![76,77,113,114,158,159]),
+            (point,vec![70,82,85,88,162,174,177,180]),
+            (endpoint,vec![23,30,33,60,152]),
+            (product,vec![29,32,81,84,153,178]),
+            (position,vec![19,34,61,86,173,176]),
+            (green,vec![41,43,133,135]),
+            (red,vec![48,50,140,142]),
+            (ignore,vec![51,52,95,100,116,117,143,144,187,192])] {
+            let actual:Vec<_>=code.iter().enumerate().filter(|(_,i)|super::bytediff::addressed_slots(i).contains(&slot)).map(|(n,_)|n).collect();
+            if actual!=sites.into_iter().map(|n|base+n).collect::<Vec<_>>() {return None;}
+        }
+        Some((kind,hit,array,endpoint,position,product,green,red,ignore,ai,state,eye,*a[0].dwords.first()? as i32,param.name.as_str()))
+    })();
+    let Some((kind,hit,array,endpoint,position,product,green,red,ignore,ai,state,eye,channel,input))=found else {return body.to_owned();};
+    let lines:Vec<_>=body.lines().collect();let mut candidates=Vec::new();
+    for (row,c) in lines.windows(31).enumerate() {
+        let replacement=(|| {
+            let pad=indent_of(c[0]);let inner=format!("{pad}    ");let deep=format!("{inner}    ");
+            let bind=|line:&str,ty:&str,slot| {let (indent,name,rhs)=declaration_with_initializer(line)?;
+                (line==format!("{indent}{ty} {name} = {rhs};") && slot_and_life_any(&name)?.0==slot).then_some((name,rhs))};
+            let (kind_name,kind_rhs)=bind(c[0],"int",kind)?;
+            let (_,hit_name)=bare_declaration(c[1])?;let (_,array_name)=bare_declaration(c[2])?;
+            let (first_part,part_rhs)=bind(c[5],"FVector",position)?;let (target,target_rhs)=bind(c[7],"FVector",endpoint)?;
+            let copy_name=c[6].trim().strip_prefix("FVector ")?.strip_suffix("(FVector::UpVector);")?;
+            if slot_and_life_any(copy_name)?.0!=endpoint || slot_and_life_any(&hit_name)?.0!=hit || slot_and_life_any(&array_name)?.0!=array
+                || kind_rhs!=format!("int(UCollisionProfile::ConvertToTraceType(ECollisionChannel({channel})))")
+                || c[1]!=format!("{pad}FHitResult {hit_name};") || c[2]!=format!("{pad}TArray<AActor> {array_name};")
+                || c[3]!=format!("{pad}{array_name}.Add(Cast<APawn>(this.{ai}.GetCharacter()));") || c[4]!=format!("{pad}{array_name}.Add({input});")
+                || part_rhs!=format!("{input}.GetActorLocation()") || c[6]!=format!("{pad}FVector {copy_name}(FVector::UpVector);")
+                || target_rhs!=format!("({first_part} + ({copy_name} * {input}.{eye}))") || c[5..8].iter().any(|l|indent_of(l)!=pad)
+                || c[17]!=format!("{pad}if (IsValid(this.{state}) && IsValid(Cast<APawn>(this.{state}.GetCharacter())))")
+                || c[18]!=format!("{pad}{{") || c[19]!=format!("{inner}{array_name}.Add(Cast<APawn>(this.{state}.GetCharacter()));")
+                || c[28]!=format!("{inner}}}") || c[29]!=format!("{pad}}}") || c[30]!=format!("{pad}return false;") {return None;}
+            let mut new_calls=Vec::new();let mut used=vec![(kind_name.clone(),3),(hit_name.clone(),3),(array_name.clone(),6),(first_part,2),(copy_name.to_owned(),2),(target.clone(),3)];
+            for (index,begin) in [8usize,20].into_iter().enumerate() {
+                let scope=if index==0 {&pad} else {&inner};let arm=if index==0 {&inner} else {&deep};
+                let recv=if index==0 {format!("Cast<APawn>(this.{ai}.GetCharacter())")} else {format!("Cast<APawn>(this.{state}.GetCharacter())")};
+                let (part_slot,factor_slot)=if index==0 {(position,product)} else {(product,position)};
+                let (green_name,g)=bind(c[begin],"FLinearColor",green)?;let (red_name,r)=bind(c[begin+1],"FLinearColor",red)?;
+                let (flag,yes)=bind(c[begin+2],"bool",ignore)?;let (part,part_expr)=bind(c[begin+3],"FVector",part_slot)?;let (factor,factor_expr)=bind(c[begin+4],"FVector",factor_slot)?;
+                if g!="FLinearColor(0.0f, 1.0f, 0.0f, 1.0f)" || r!="FLinearColor(1.0f, 0.0f, 0.0f, 1.0f)" || yes!="true"
+                    || part_expr!=format!("{recv}.GetActorLocation()") || factor_expr!=format!("(FVector(FVector::UpVector) * {recv}.{eye})")
+                    || c[begin..begin+5].iter().any(|l|indent_of(l)!=*scope)
+                    || c[begin+5]!=format!("{scope}if (!(System::LineTraceSingle(({part} + {factor}), {target}, ETraceTypeQuery({kind_name}), false, {array_name}, EDrawDebugTrace(0), {hit_name}, {flag}, {red_name}, {green_name}, 5.0f)))")
+                    || c[begin+6]!=format!("{scope}{{") || c[begin+7]!=format!("{arm}return true;") || c[begin+8]!=format!("{scope}}}") {return None;}
+                used.extend([(green_name,2),(red_name,2),(flag,2),(part,2),(factor,2)]);
+                new_calls.push(format!("{scope}if (!(System::LineTraceSingle(({recv}.ActorLocation + (FVector::UpVector * {recv}.{eye})), {target}, {kind_name}, false, {array_name}, EDrawDebugTrace(0), {hit_name}, true)))"));
+            }
+            if used.iter().any(|(name,count)|count_ident(body,name)!=*count) {return None;}
+            let mut out=vec![format!("{pad}ETraceTypeQuery {kind_name} = UCollisionProfile::ConvertToTraceType(ECollisionChannel({channel}));")];
+            out.extend(c[1..5].iter().map(|s|(*s).to_owned()));out.push(format!("{pad}FVector {target} = ({input}.ActorLocation + (FVector::UpVector * {input}.{eye}));"));
+            out.push(new_calls[0].clone());out.extend(c[14..20].iter().map(|s|(*s).to_owned()));out.push(new_calls[1].clone());out.extend(c[26..31].iter().map(|s|(*s).to_owned()));Some(out)
+        })();
+        if let Some(replacement)=replacement {candidates.push((row,replacement));}
+    }
+    let [(row,replacement)]=candidates.as_slice() else {return body.to_owned();};
+    let mut out:Vec<_>=lines[..*row].iter().map(|s|(*s).to_owned()).collect();out.extend(replacement.iter().cloned());out.extend(lines[row+31..].iter().map(|s|(*s).to_owned()));
+    let mut out=out.join("\n");if body.ends_with('\n') {out.push('\n');}out
 }
 
 /// Keep the native class-value copy and the per-iteration fallback handle in their original scopes.
@@ -57418,6 +57603,334 @@ mod literal_value_lifetime_tests {
                 super::rename_ident(&out, name, &format!("local_{}{suffix}", slot + 300))
             });
         assert_eq!(fold(&rename(body), &shifted, &refs), rename(expected));
+    }
+
+    fn paired_eye_trace_fixture(bias:u16)->Func {
+        // Two 66-op trace/return frames share the retained target, enum, hit and populated ignore array.
+        let mut f=function(&[
+            ("JMP", &[]),
+            ("SetV1", &[2]),
+            ("PshV4", &[2]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV4", &[3]),
+            ("PSF", &[66]),
+            ("CALLSYS", &[]),
+            ("PSF", &[70]),
+            ("CALLSYS", &[]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[16]),
+            ("RDSPtr", &[]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[72]),
+            ("PSF", &[72]),
+            ("PSF", &[70]),
+            ("CALLSYS", &[]),
+            ("PSF", &[65534]),
+            ("PSF", &[70]),
+            ("CALLSYS", &[]),
+            ("PSF", &[100]),
+            ("PshVPtr", &[65534]),
+            ("CALLSYS", &[]),
+            ("PshGPtr", &[]),
+            ("PSF", &[84]),
+            ("CALLSYS", &[]),
+            ("LoadRObjR", &[65534, 32]),
+            ("RDR4", &[85]),
+            ("fTOd", &[88, 85]),
+            ("PshV8", &[88]),
+            ("PSF", &[94]),
+            ("PSF", &[84]),
+            ("CALLSYS", &[]),
+            ("PSF", &[94]),
+            ("PSF", &[84]),
+            ("PSF", &[100]),
+            ("CALLSYS", &[]),
+            ("PshC4", &[]),
+            ("PshC4", &[]),
+            ("PshC4", &[]),
+            ("PshC4", &[]),
+            ("PshC4", &[]),
+            ("PSF", &[108]),
+            ("CALLSYS", &[]),
+            ("PSF", &[108]),
+            ("PshC4", &[]),
+            ("PshC4", &[]),
+            ("PshC4", &[]),
+            ("PshC4", &[]),
+            ("PSF", &[116]),
+            ("CALLSYS", &[]),
+            ("PSF", &[116]),
+            ("SetV1", &[118]),
+            ("PshV4", &[118]),
+            ("PSF", &[66]),
+            ("SetV1", &[119]),
+            ("PshV4", &[119]),
+            ("PSF", &[70]),
+            ("SetV1", &[120]),
+            ("PshV4", &[120]),
+            ("PshV4", &[3]),
+            ("PSF", &[84]),
+            ("PSF", &[100]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[16]),
+            ("RDSPtr", &[]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[72]),
+            ("PshVPtr", &[72]),
+            ("CALLSYS", &[]),
+            ("PshGPtr", &[]),
+            ("PSF", &[78]),
+            ("CALLSYS", &[]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[16]),
+            ("RDSPtr", &[]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[104]),
+            ("LoadRObjR", &[104, 32]),
+            ("RDR4", &[85]),
+            ("fTOd", &[88, 85]),
+            ("PshV8", &[88]),
+            ("PSF", &[94]),
+            ("PSF", &[78]),
+            ("CALLSYS", &[]),
+            ("PSF", &[94]),
+            ("PSF", &[78]),
+            ("PSF", &[100]),
+            ("CALLSYS", &[]),
+            ("PSF", &[78]),
+            ("PshGPtr", &[]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV4", &[121]),
+            ("NOT", &[121]),
+            ("CpyVtoR1", &[121]),
+            ("JLowZ", &[]),
+            ("SetV1", &[118]),
+            ("PSF", &[70]),
+            ("CALLSYS", &[]),
+            ("PSF", &[66]),
+            ("CALLSYS", &[]),
+            ("CpyVtoR4", &[118]),
+            ("JMP", &[]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[24]),
+            ("RDSPtr", &[]),
+            ("CALLSYS", &[]),
+            ("JLowNZ", &[]),
+            ("SetV4", &[120]),
+            ("JMP", &[]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[24]),
+            ("RDSPtr", &[]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[104]),
+            ("PshVPtr", &[104]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV4", &[118]),
+            ("CpyVtoV4", &[120, 118]),
+            ("CpyVtoR1", &[120]),
+            ("JLowZ", &[]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[24]),
+            ("RDSPtr", &[]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[72]),
+            ("PSF", &[72]),
+            ("PSF", &[70]),
+            ("CALLSYS", &[]),
+            ("PshC4", &[]),
+            ("PshC4", &[]),
+            ("PshC4", &[]),
+            ("PshC4", &[]),
+            ("PshC4", &[]),
+            ("PSF", &[108]),
+            ("CALLSYS", &[]),
+            ("PSF", &[108]),
+            ("PshC4", &[]),
+            ("PshC4", &[]),
+            ("PshC4", &[]),
+            ("PshC4", &[]),
+            ("PSF", &[116]),
+            ("CALLSYS", &[]),
+            ("PSF", &[116]),
+            ("SetV1", &[118]),
+            ("PshV4", &[118]),
+            ("PSF", &[66]),
+            ("SetV1", &[119]),
+            ("PshV4", &[119]),
+            ("PSF", &[70]),
+            ("SetV1", &[120]),
+            ("PshV4", &[120]),
+            ("PshV4", &[3]),
+            ("PSF", &[84]),
+            ("PSF", &[94]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[24]),
+            ("RDSPtr", &[]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[104]),
+            ("PshVPtr", &[104]),
+            ("CALLSYS", &[]),
+            ("PshGPtr", &[]),
+            ("PSF", &[78]),
+            ("CALLSYS", &[]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[24]),
+            ("RDSPtr", &[]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[72]),
+            ("LoadRObjR", &[72, 32]),
+            ("RDR4", &[85]),
+            ("fTOd", &[88, 85]),
+            ("PshV8", &[88]),
+            ("PSF", &[100]),
+            ("PSF", &[78]),
+            ("CALLSYS", &[]),
+            ("PSF", &[100]),
+            ("PSF", &[78]),
+            ("PSF", &[94]),
+            ("CALLSYS", &[]),
+            ("PSF", &[78]),
+            ("PshGPtr", &[]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV4", &[101]),
+            ("NOT", &[101]),
+            ("CpyVtoR1", &[101]),
+            ("JLowZ", &[]),
+            ("SetV1", &[118]),
+            ("PSF", &[70]),
+            ("CALLSYS", &[]),
+            ("PSF", &[66]),
+            ("CALLSYS", &[]),
+            ("CpyVtoR4", &[118]),
+            ("JMP", &[]),
+            ("SetV1", &[122]),
+            ("PSF", &[70]),
+            ("CALLSYS", &[]),
+            ("PSF", &[66]),
+            ("CALLSYS", &[]),
+            ("CpyVtoR4", &[122]),
+            ("RET", &[4]),
+        ]);
+        f.ret=DataType {token:0x41,..Default::default()};f.traits=4;
+        f.params=vec![super::super::model::Param {name:"Candidate".into(),flags:0,ty:DataType {token:5,type_info:1,is_object_handle:true,..Default::default()}}];
+        f.obj_locals=vec![(72,1),(104,1),(66,3),(70,5),(78,2),(84,2),(94,2),(100,2),(108,4),(116,4)];
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,word,value) in [(1, 1, 3), (10, 1, 11), (26, 2, 7), (37, 1, 1084227584), (38, 1, 1065353216), (39, 1, 0), (40, 1, 1065353216), (41, 1, 0), (45, 1, 1065353216), (46, 1, 0), (47, 1, 0), (48, 1, 1065353216), (52, 1, 1), (55, 1, 0), (58, 1, 0), (64, 1, 11), (74, 1, 11), (78, 2, 7), (96, 1, 1), (104, 1, 10), (108, 1, 0), (111, 1, 10), (122, 1, 10), (129, 1, 1084227584), (130, 1, 1065353216), (131, 1, 0), (132, 1, 1065353216), (133, 1, 0), (137, 1, 1065353216), (138, 1, 0), (139, 1, 0), (140, 1, 1065353216), (144, 1, 1), (147, 1, 0), (150, 1, 0), (156, 1, 10), (166, 1, 10), (170, 2, 7), (188, 1, 1), (195, 1, 0)] {f.bytecode[code[at].offset_dw+word]=value;}
+        for (at,value) in [(3, 101), (6, 102), (8, 103), (12, 104), (16, 105), (19, 105), (22, 106), (23, 301), (25, 107), (32, 108), (36, 109), (43, 110), (50, 110), (66, 104), (69, 106), (70, 301), (72, 107), (76, 104), (84, 108), (88, 109), (90, 302), (91, 111), (98, 112), (100, 113), (106, 114), (113, 115), (116, 114), (124, 115), (128, 105), (135, 110), (142, 110), (158, 115), (161, 106), (162, 301), (164, 107), (168, 115), (176, 108), (180, 109), (182, 302), (183, 111), (190, 112), (192, 113), (197, 112), (199, 113)] {f.bytecode[code[at].offset_dw+1]=value;}
+        for (from,to) in [(0, 1), (95, 103), (102, 201), (107, 110), (109, 119), (120, 195), (187, 195), (194, 201)] {
+            f.bytecode[code[from].offset_dw+1]=code[to].offset_dw as i32-code[from].offset_dw as i32-2;
+        }
+        for i in &code {
+            for (n,word) in i.words.iter().enumerate() {
+                if (*word as i16)<=0 || matches!(i.op.name,"ADDSi"|"RET") || (i.op.name=="LoadRObjR" && n==1) {continue;}
+                let at=n+1;let dw=i.offset_dw+at/2;let shift=(at%2)*16;
+                f.bytecode[dw]=((f.bytecode[dw] as u32 & !(0xffff<<shift)) | (((*word+bias) as u32)<<shift)) as i32;
+            }
+        }
+        for (slot,_) in &mut f.obj_locals {*slot+=bias as i32;}
+        f
+    }
+
+    #[test]
+    fn paired_eye_traces_restore_receiver_lives_and_only_three_native_defaults() {
+        let source=r#"        int local_3 = int(UCollisionProfile::ConvertToTraceType(ECollisionChannel(3)));
+        FHitResult local_66;
+        TArray<AActor> local_70;
+        local_70.Add(Cast<APawn>(this.Ability.GetCharacter()));
+        local_70.Add(Candidate);
+        FVector local_100 = Candidate.GetActorLocation();
+        FVector local_84(FVector::UpVector);
+        FVector local_84_2 = (local_100 + (local_84 * Candidate.EyeLift));
+        FLinearColor local_108 = FLinearColor(0.0f, 1.0f, 0.0f, 1.0f);
+        FLinearColor local_116 = FLinearColor(1.0f, 0.0f, 0.0f, 1.0f);
+        bool local_118 = true;
+        FVector local_100_2 = Cast<APawn>(this.Ability.GetCharacter()).GetActorLocation();
+        FVector local_94_2 = (FVector(FVector::UpVector) * Cast<APawn>(this.Ability.GetCharacter()).EyeLift);
+        if (!(System::LineTraceSingle((local_100_2 + local_94_2), local_84_2, ETraceTypeQuery(local_3), false, local_70, EDrawDebugTrace(0), local_66, local_118, local_116, local_108, 5.0f)))
+        {
+            return true;
+        }
+        if (IsValid(this.Followee) && IsValid(Cast<APawn>(this.Followee.GetCharacter())))
+        {
+            local_70.Add(Cast<APawn>(this.Followee.GetCharacter()));
+            FLinearColor local_108_2 = FLinearColor(0.0f, 1.0f, 0.0f, 1.0f);
+            FLinearColor local_116_2 = FLinearColor(1.0f, 0.0f, 0.0f, 1.0f);
+            bool local_118_2 = true;
+            FVector local_94_3 = Cast<APawn>(this.Followee.GetCharacter()).GetActorLocation();
+            FVector local_100_3 = (FVector(FVector::UpVector) * Cast<APawn>(this.Followee.GetCharacter()).EyeLift);
+            if (!(System::LineTraceSingle((local_94_3 + local_100_3), local_84_2, ETraceTypeQuery(local_3), false, local_70, EDrawDebugTrace(0), local_66, local_118_2, local_116_2, local_108_2, 5.0f)))
+            {
+                return true;
+            }
+        }
+        return false;
+"#;
+        let expected=r#"        ETraceTypeQuery local_3 = UCollisionProfile::ConvertToTraceType(ECollisionChannel(3));
+        FHitResult local_66;
+        TArray<AActor> local_70;
+        local_70.Add(Cast<APawn>(this.Ability.GetCharacter()));
+        local_70.Add(Candidate);
+        FVector local_84_2 = (Candidate.ActorLocation + (FVector::UpVector * Candidate.EyeLift));
+        if (!(System::LineTraceSingle((Cast<APawn>(this.Ability.GetCharacter()).ActorLocation + (FVector::UpVector * Cast<APawn>(this.Ability.GetCharacter()).EyeLift)), local_84_2, local_3, false, local_70, EDrawDebugTrace(0), local_66, true)))
+        {
+            return true;
+        }
+        if (IsValid(this.Followee) && IsValid(Cast<APawn>(this.Followee.GetCharacter())))
+        {
+            local_70.Add(Cast<APawn>(this.Followee.GetCharacter()));
+            if (!(System::LineTraceSingle((Cast<APawn>(this.Followee.GetCharacter()).ActorLocation + (FVector::UpVector * Cast<APawn>(this.Followee.GetCharacter()).EyeLift)), local_84_2, local_3, false, local_70, EDrawDebugTrace(0), local_66, true)))
+            {
+                return true;
+            }
+        }
+        return false;
+"#;
+        let refs=RefResolver::from_test_paired_eye_traces(0);
+        let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_paired_eye_trace_arguments(s,f,r,Some("UController"));
+        let rename=|text:&str,bias:u16| {
+            let mut out=text.to_owned();
+            for n in [118,116,108,100,94,84,70,66,3] {out=out.replace(&format!("local_{n}"),&format!("local_{}",n+bias as i32));}
+            out
+        };
+        for bias in [0u16,512] {
+            let f=paired_eye_trace_fixture(bias);let source=rename(source,bias);let expected=rename(expected,bias);
+            assert_eq!(fold(&source,&f,&refs),expected,"renumber {bias}");
+            assert_eq!(fold(&expected,&f,&refs),expected,"idempotent");
+            for fault in 1..=32 {assert_eq!(fold(&source,&f,&RefResolver::from_test_paired_eye_traces(fault)),source,"metadata {fault}");}
+        }
+        let f=paired_eye_trace_fixture(0);let code=disassemble(&f.bytecode).unwrap();
+        for (at,i) in code.iter().enumerate().skip(1) {
+            for n in 0..i.words.len() {
+                let mut bad=f.clone();let word=n+1;bad.bytecode[i.offset_dw+word/2]^=1<<((word%2)*16);
+                assert_eq!(fold(source,&bad,&refs),source,"word {at}/{n}");
+            }
+            if !i.dwords.is_empty() && !i.op.name.starts_with('J') {
+                let mut bad=f.clone();let dw=if i.op.name=="LoadRObjR" {2} else {1};bad.bytecode[i.offset_dw+dw]^=1;
+                assert_eq!(fold(source,&bad,&refs),source,"typed/literal dword {at}");
+            }
+            if !i.qwords.is_empty() {
+                let mut bad=f.clone();bad.bytecode[i.offset_dw+1]^=1;
+                assert_eq!(fold(source,&bad,&refs),source,"native/global pointer {at}");
+            }
+        }
+        for (from,to) in [(0, 2), (95, 104), (102, 200), (107, 111), (109, 120), (120, 196), (187, 196), (194, 200)] {
+            let mut bad=f.clone();bad.bytecode[code[from].offset_dw+1]=code[to].offset_dw as i32-code[from].offset_dw as i32-2;
+            assert_eq!(fold(source,&bad,&refs),source,"changed edge {from}->{to}");
+        }
+        for slot in [3,66,70,72,78,84,94,100,104,108,116,118] {
+            let mut bad=f.clone();bad.bytecode.extend(function(&[("PSF",&[slot])]).bytecode);
+            assert_eq!(fold(source,&bad,&refs),source,"escape {slot}");
+        }
+        let mut bad=f.clone();bad.obj_locals.push((84,2));assert_eq!(fold(source,&bad,&refs),source,"ambiguous object metadata");
+        let mut bad=f.clone();bad.params[0].ty.is_object_const=true;assert_eq!(fold(source,&bad,&refs),source,"parameter qualifier");
+        let mut bad=f.clone();bad.params[0].flags=1;assert_eq!(fold(source,&bad,&refs),source,"parameter passing mode");
+        let mut bad=f.clone();bad.traits=0;assert_eq!(fold(source,&bad,&refs),source,"method qualifier");
+        for changed in [source.replace("bool local_118 = true", "bool local_118 = false"),source.replace("FVector local_100", "FOther local_100"),
+            source.replace("this.Ability.GetCharacter()", "Other().GetCharacter()"),source.replace("this.Followee", "this.Other"),
+            source.replace("5.0f", "6.0f"),source.replace("FLinearColor(1.0f, 0.0f, 0.0f, 1.0f)", "FLinearColor(0.5f, 0.0f, 0.0f, 1.0f)"),
+            source.replace("        FLinearColor local_108", "    }\n    {\n        FLinearColor local_108"),source.to_owned()+"Use(local_108_2);\n",
+            source.to_owned()+"Use(local_84_2);\n",source.replace("        return false;", "        return true;")]
+        {assert_eq!(fold(&changed,&f,&refs),changed,"atomic source, default value or scope mismatch");}
     }
 
     #[test]

@@ -5,7 +5,6 @@ AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	2	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	5	0	0
 AI.AssessmentResponseSystem.EventResponses	1	0	0
 AI.NativeAICommands	1	0	0
-AI.States.AIState_FollowCharacterAggressive	1	0	0
 AI.States.FightAI.AIState_PerceptionResponse	1	0	0
 AI.States.FightAI.CombatEndActionsState.AIState_CombatEndActions	1	0	0
 AI.States.FightAI.CombatState.AIGroup_Attackers	1	0	0

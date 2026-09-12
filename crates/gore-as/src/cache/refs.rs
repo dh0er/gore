@@ -8373,6 +8373,91 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_paired_eye_traces(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"AGothicCharacter",""),(2,"FVector",""),(3,"FHitResult",""),(4,"FLinearColor",""),(5,"TArray",""),
+            (6,"UObject",""),(7,"APawn",""),(8,"AActor",""),(9,"UController","Fixture"),(10,"UState","Fixture"),(11,"UBase","Fixture"),
+            (12,"UGameplayAbility_AI",""),(13,"AGothicCharacterState",""),(14,"ETraceTypeQuery",""),(15,"ECollisionChannel",""),(16,"EDrawDebugTrace",""),
+            (17,"UDerivedAI","Fixture")] {
+            r.type_by_ptr.insert(ptr,name.into());r.type_names.insert(name.into());r.typeid_to_ptr.insert(ptr as i32,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        r.class_super.insert("UController".into(),"UState".into());r.class_super.insert("UState".into(),"UBase".into());
+        r.class_super.insert("AGothicCharacter".into(),"ACharacter".into());
+        r.class_super.insert("UDerivedAI".into(),"UGameplayAbility_CharacterAI".into());
+        r.class_fields.insert("UBase".into(),HashMap::from([("Ability".into(),"UDerivedAI".into())]));
+        r.class_fields.insert("UState".into(),HashMap::from([("Followee".into(),"AGothicCharacterState".into())]));
+        for (id,offset,name) in [(11i64,16i64,"Ability"),(10,24,"Followee"),(7,32,"EyeLift")] {
+            let key=(id<<1)|(offset<<33)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id as i32);
+        }
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&[("APawn","EyeLift","float32")],&[],None));
+        let plain=|token|DataType {token,..Default::default()};
+        let object=|type_info,reference:bool,constant:bool,handle:bool|DataType {token:5,type_info,is_reference:reference,is_object_const:constant,
+            is_object_handle:handle,is_read_only:constant&&(!handle||reference),..Default::default()};
+        r.type_subtypes.insert(5,vec![object(8,false,false,true)]);
+        for (ptr,name,owner,constant,ret,params) in [
+            (101,"ConvertToTraceType","",false,object(14,false,false,false),vec![object(15,false,false,false)]),
+            (102,"$beh0","FHitResult",false,plain(0x52),vec![]),
+            (103,"$beh0","TArray",false,plain(0x52),vec![]),
+            (104,"GetCharacter","UGameplayAbility_AI",true,object(1,false,false,true),vec![]),
+            (105,"Add","TArray",false,plain(0x52),vec![object(8,true,true,true)]),
+            (106,"GetActorLocation","AActor",true,object(2,false,false,false),vec![]),
+            (107,"$beh0","FVector",false,plain(0x52),vec![object(2,true,true,false)]),
+            (108,"opMul","FVector",true,object(2,false,false,false),vec![plain(0x51)]),
+            (109,"opAdd","FVector",true,object(2,false,false,false),vec![object(2,true,true,false)]),
+            (110,"$beh0","FLinearColor",false,plain(0x52),vec![plain(0x50);4]),
+            (111,"LineTraceSingle","",false,plain(0x41),vec![object(6,false,true,true),object(2,false,true,false),object(2,false,true,false),
+                object(14,false,false,false),plain(0x41),object(5,true,true,false),object(16,false,false,false),object(3,true,false,false),
+                plain(0x41),object(4,false,false,false),object(4,false,false,false),plain(0x50)]),
+            (112,"$beh2","TArray",false,plain(0x52),vec![]),
+            (113,"$beh2","FHitResult",false,plain(0x52),vec![]),
+            (114,"IsValid","",false,plain(0x41),vec![object(6,false,true,true)]),
+            (115,"GetCharacter","AGothicCharacterState",true,object(1,false,false,true),vec![])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,params);
+            if !owner.is_empty() {r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);}
+            if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        r.func_ns.insert(101,"UCollisionProfile".into());r.func_ns.insert(111,"System".into());
+        r.global_by_ptr.insert(301,"UpVector".into());r.global_ns.insert(301,"FVector".into());r.global_by_ptr.insert(302,"__WorldContext".into());
+        match fault {
+            1=>{r.class_super.insert("UDerivedAI".into(),"UUnrelatedNative".into());},
+            2=>{r.const_method_ptrs.remove(&104);},
+            3=>r.func_ret.get_mut(&115).unwrap().is_object_const=true,
+            4=>{r.func_owner.insert(106,"APawn".into());},
+            5=>r.func_params.get_mut(&105).unwrap()[0].is_read_only=false,
+            6=>r.func_params.get_mut(&105).unwrap()[0].is_object_handle=false,
+            7=>r.func_params.get_mut(&107).unwrap()[0].is_reference=false,
+            8=>r.func_params.get_mut(&108).unwrap()[0].token=0x50,
+            9=>r.func_ret.get_mut(&109).unwrap().is_reference=true,
+            10=>{r.global_ns.insert(301,"Other".into());},
+            11=>{r.global_is_string.insert(301);},
+            12=>{r.class_fields.get_mut("UState").unwrap().insert("Followee".into(),"UObject".into());},
+            13=>{r.prop_type_id.insert((7i64<<1)|(32i64<<33)|1,8);},
+            14=>r.set_native_api(super::binds::NativeApi::from_test_field_types(&[("APawn","EyeLift","float")],&[],None)),
+            15=>{r.const_method_ptrs.insert(102);},
+            16=>r.func_params.get_mut(&110).unwrap()[2].token=0x51,
+            17=>r.func_params.get_mut(&103).unwrap().push(plain(0x44)),
+            18=>r.func_params.get_mut(&111).unwrap()[0].is_object_const=false,
+            19=>r.func_params.get_mut(&111).unwrap()[1].is_reference=true,
+            20=>r.func_params.get_mut(&111).unwrap()[5].is_object_const=false,
+            21=>r.func_params.get_mut(&111).unwrap()[7].is_reference=false,
+            22=>r.func_params.get_mut(&111).unwrap()[8].token=0x44,
+            23=>r.func_params.get_mut(&111).unwrap()[9].is_reference=true,
+            24=>{r.global_by_ptr.insert(302,"OtherContext".into());},
+            25=>{r.const_method_ptrs.insert(113);},
+            26=>{r.func_ns.insert(101,"Other".into());},
+            27=>r.func_ret.get_mut(&101).unwrap().type_info=15,
+            28=>r.type_subtypes.get_mut(&5).unwrap()[0].is_object_handle=false,
+            29=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into(),
+            30=>{r.class_super.remove("UState");},
+            31=>r.func_ret.get_mut(&105).unwrap().token=0x44,
+            32=>r.func_params.get_mut(&114).unwrap()[0].is_object_const=false,
+            _=>{},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_class_copy_scoped_handle(fault: u8) -> Self {
         let mut r=Self::default();
         for (id,name) in [(1,"TArray"),(2,"TSubclassOf"),(3,"UDefinition"),(4,"FEntry"),(5,"AActorState"),(6,"UObject"),(7,"TArrayIterator"),(8,"FName"),(9,"UHost"),(10,"FPlan"),(11,"FRow")] {
