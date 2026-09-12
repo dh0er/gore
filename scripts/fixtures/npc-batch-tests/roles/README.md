@@ -14,6 +14,11 @@ between combat cases.
 
 ## Economy / teacher
 
+Active as `NpcEconomyRolesTest 0.1.0` since2026-09-12; Manager reports `in_sync`.
+The [deployment report](economy-deployment.json) records the existing verified
+bundle. No source rebuild was needed. Natural-voice testing has finished its
+restart check, and the completed Voice saves are archived outside the game.
+
 Talk to A. This test uses genuine trader inventory and the stock learning helper.
 
 Profil 4: **067 „NPC 03 Handel - LP fehlt“** (0 LP/50 Erz),

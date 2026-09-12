@@ -104,8 +104,9 @@ starting point. Its teleport calls came after `EndConversation`; 0.1.2 moves
 them before the conversation ends, using the tested head-setup order. On
 2026-09-12 the user confirms that B and C both greet and independently mumble,
 and B follows his routine path. B also spoke once while walking; the short path
-does not promise a line on every trip. Full-restart confirmation and an explicit
-audible comparison of the two configured profiles remain pending.
+does not promise a line on every trip. The user also confirms the full-restart
+check without repeating setup. An explicit audible comparison of the two
+configured profiles has not been reported.
 See the [setup correction](../../scripts/fixtures/npc-batch-tests/voice/setup-fix.json).
 The [0.1.2 runtime report](../../scripts/fixtures/npc-batch-tests/voice/runtime-result-0.1.2.json)
 separates the observed behavior from remaining checks.
@@ -117,8 +118,9 @@ separates the observed behavior from remaining checks.
 - [x] Resolve the stuck warning after lowering fists following the second spoken warning; nearby saving and save/load now pass in0.1.12.
 - [x] Preserve escalation after save/load: raising fists again after loading the second-warning save makes B attack immediately.
 - [x] Demonstrate equipped-sword escalation and B's spoken combat-start line.
+- [x] Verify greetings/everyday speech after a full restart without repeating setup.
 - [ ] Explicitly confirm an audible distinction between B's Diego and C's Lares
-  profiles, and persistence after a full restart without repeating setup.
+  profiles.
 - [ ] Investigate two briefly flashing everyday speech bubbles if reproducible.
   Speaker, wording and whether audio also stopped were not reported. No cause
   is established; neither vanilla correctness nor a mod defect is assumed.
@@ -161,7 +163,13 @@ duplicated public metadata and central slot registration were corrected, and61
 was repaired with backups on2026-09-10. The subsequent game test confirms loading;
 the retained source date may sort it beside54 rather than at the top.
 
-## 4. NPC roles — queued
+## 4. NPC roles — economy/teacher test active
+
+`NpcEconomyRolesTest 0.1.0` is active after the natural-voice restart passed.
+Profile 4 starts067/068/069 isolate missing LP, missing ore and successful
+learning. Runtime buying/selling and teacher results remain pending; see the
+[role checklist](../../scripts/fixtures/npc-batch-tests/roles/README.md) and
+[deployment](../../scripts/fixtures/npc-batch-tests/roles/economy-deployment.json).
 
 - [ ] Trader with actual stock and working buying/selling.
 - [ ] Teacher with requirements, cost and persistent learned result.
