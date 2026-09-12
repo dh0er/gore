@@ -20,10 +20,11 @@
       "arrows": 10,
       "ore": 100,
       "stock_seeded_marker": 1,
-      "ordinary_A_inventory_unchanged": true
+      "ordinary_A_inventory_unchanged": true,
+      "inventory_layer": "NPC EInventoryTypes::Trader container; NOT global shop stock"
     },
     "hero_saved_inventory": "Unchanged: quest letter, glossary,50 ore. An empty list of sellable goods before buying is not by itself a Hero inventory defect.",
-    "cause": "Not established. Saved stock exists; investigate runtime trade UI/configuration rather than adding stock again.",
+    "cause": "Corrected after0.1.1 failure: wrong inventory pool. Global shop m_Items and m_DefaultItems are empty; see economy-runtime-0.1.1.json.",
     "commerce_restart_tested": false
   },
   "saves": [
@@ -84,6 +85,7 @@
     ],
     "teacher_and_menu_source_unchanged": true,
     "stock_original_modules_unchanged": true,
-    "runtime_verified": false
+    "runtime_verified": false,
+    "runtime_result": "User reports no improvement; see economy-runtime-0.1.1.json."
   }
 }

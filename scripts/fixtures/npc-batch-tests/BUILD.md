@@ -105,15 +105,20 @@ remain unchanged. Build the voice spec as version0.1.2 with its new mini-cache.
 `voice/runtime-setup-0.1.1.json` records the failed visible setup. Its retest
 starts from the existing untouched START066.
 
-Economy0.1.1 uses frozen economy-v1 plus the tracked economy A/B overlays through
-the same Core caller. A is byte-identical; only the trader config in B explicitly
-sets the shipped Wilderness/General keys. This is a runtime follow-up candidate
-for an empty trading UI despite saved stock, not a proven native fallback defect.
-Build the economy spec as version0.1.1 with its new four-module mini-cache;
-localization and voice payloads remain byte-identical. No new native API binding
-or product CLI change is required. `roles/economy-config-0.1.1.json` records the
-build/readback and activation; `roles/economy-runtime-0.1.0.json` records the
-passed teacher cases and failed trading display.
+Economy0.1.1 added explicit Wilderness/General keys, but the user reported no
+change on saved and fresh inputs. Its historical build is retained in
+`roles/economy-config-0.1.1.json`. The root-cause report
+`roles/economy-runtime-0.1.1.json` distinguishes the wrong NPC inventory container
+from the empty global shop record.
+
+Economy0.1.2 uses frozen economy-v2 plus the tracked economy A/B overlays through
+the same Core caller. The config defines stock through the preserved original
+`AddTraderItemAllDifficulties` helper;01 calls `CallGlobalEvent` and uses a new
+marker for old saves. Teacher logic is unchanged. Build the spec as version0.1.2
+with the new four-module mini-cache; localization and voice remain byte-identical.
+No new native binding or CLI change is required. `roles/economy-stock-0.1.2.json`
+records build/readback and activation.7315 unselected original modules, including
+the decompiler-sensitive stock helper, must remain byte-identical to pristine.
 
 The quest build exposed a core defect: after adding the first module, the running
 cache has a different SHA and no longer authenticates the sealed native API

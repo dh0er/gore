@@ -250,6 +250,31 @@ at that spot. Choose a reachable target near the spawn. `check` looks that
 waypoint up in the bundled location catalog, because the game ignores an unknown
 one without a word; catalog membership does not prove a navigable route.
 
+### Trader stock uses the global shop record
+
+`npc new --trader` supplies an empty config, not goods. Define stock in its
+`UTraderConfigBase` subclass with `AddTraderItemAllDifficulties(ItemClass, Count,
+EventName)`, as shipped configs do. Stock batches can use `OnWorldStart` or a
+dedicated global event dispatched by `UWorldPointManager::Get().CallGlobalEvent`.
+Existing saves can already list `OnWorldStart` as processed; the batch fixture
+uses a new event name when introducing its first actual shop stock.
+
+Do not seed a shop with `AddItemToInventory(..., EInventoryTypes::Trader)`:
+that writes an NPC container. Native trading uses the matching row in
+`m_GenericData["GameStateDataBase"].m_Traders`: `m_Items` holds goods and ore,
+`m_DefaultItems` the restock baseline, and `m_GeneratedEvents` processed batches.
+The [failed economy test](../../scripts/fixtures/npc-batch-tests/roles/economy-runtime-0.1.1.json)
+proved the distinction: the NPC container had3/10/100, but the global shop maps
+were empty. Explicit region/type alone did not fix it.
+
+The [0.1.2 fixture](../../scripts/fixtures/npc-batch-tests/roles/README.md#commerce-follow-up012)
+uses the native config/event path with a versioned one-time menu marker. Its
+runtime result remains pending. Read the global shop maps after a real trade
+and full restart; a grant marker alone is not stock proof. Difficulty multipliers
+in `UTraderConfigBase` can change quantities; this fixture fixes the relevant
+ore/arrow multipliers to1 for reproducible counts. Preserve the shipped helper
+bytecode rather than recompiling a semantically unqualified decompilation.
+
 ### `npc delete` — stop a shipped character being placed
 
 ```
