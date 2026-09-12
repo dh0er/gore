@@ -4,7 +4,8 @@ Stand 2026-09-12: **Alle fuenf Pakete sind gebaut und geprueft.** Der Kopf-/Bart
 ist bestanden. Beim Sprachtest sind Begruessungen, Alltagszeilen von B/C und Bs
 Routine sowie der vollstaendige Neustart ohne erneuten Aufbau bestaetigt.
 Die Lehrerpruefungen einschliesslich Neustart sind bestanden; Handel zeigt
-trotz gespeicherten Bestands eine leere Warenliste. Feldrollen und Quests sind
+eine leere Warenliste: Der Bestand lag faelschlich im NPC-Container statt in
+der globalen Haendlerliste. Der Nachtest der Korrektur ist offen. Feldrollen und Quests sind
 noch offen. Von den acht erstellten
 Startstaenden bleiben **067–072 fuer die offenen Tests in Profil 4**.
 Die erledigten Kopf-/Voice-Starts und Ergebnisse sind ausserhalb des Spiels
@@ -18,10 +19,12 @@ die Save-Bereinigung und `7ac45595` die benoetigte native API-Komposition.
 Siehe [Build-/Paketpruefung](build-checks.json) und
 [veroeffentlichte Startstaende](start-saves.json).
 
-**Aktiv ist NpcEconomyRolesTest 0.1.1**; Manager-Status `in_sync`.
+**Aktiv ist NpcEconomyRolesTest 0.1.2**; Manager-Status `in_sync`.
 Alle anderen Testpakete und Barttexturen sind deaktiviert. Die aktuelle
-[Aktivierung](roles/economy-config-0.1.1.json) prueft explizite Region/Typ in As
-Haendlerkonfiguration; die Ursache der leeren Anzeige ist noch unbewiesen.
+[Aktivierung](roles/economy-stock-0.1.2.json) erzeugt den Ladenbestand ueber
+die native Haendlerkonfiguration und ein eigenes globales Ereignis. Der reine
+Region-/Typ-Nachtest0.1.1 ist fehlgeschlagen; siehe
+[Ursache und Korrektur des bisherigen Befunds](roles/economy-runtime-0.1.1.json).
 Der [Barttest 0.1.3](heads/beard-runtime-0.1.3.json)
 und der [Bericht zur Sprach-Aufbaukorrektur](voice/setup-fix.json) bleiben
 dokumentiert. In0.1.1 blieb der Ortswechsel
@@ -80,10 +83,11 @@ und Neustart. Sie enthaelt klare Beobachtungsfristen; Stille ist ein Ergebnis.
 ## 3. Handel und Lehrer
 
 **Die Lehrerfaelle unten sind bestanden und muessen nicht wiederholt werden.**
-Aktuell nur den [Handels-Nachtest0.1.1](roles/README.md#commerce-follow-up011)
-mit024 `rolle-handel` durchfuehren. Falls er leer bleibt, einmal den frischen
-Aufbau067 vergleichen. Der [0.1.0-Befund](roles/economy-runtime-0.1.0.json)
-trennt vorhandenen Save-Bestand von der fehlgeschlagenen Warenanzeige.
+Aktuell nur den [Handels-Nachtest0.1.2](roles/README.md#commerce-follow-up012)
+mit024 `rolle-handel` durchfuehren: **01 ist wieder sichtbar und muss einmal
+gewaehlt werden**, danach02. Erwartet werden3 Kaese,10 Pfeile und100 Haendlererz.
+Bei erneut leerem Shop nach05 als `handel-leer` speichern, damit die globale
+Haendlerliste und ihr Ereignisprotokoll untersucht werden koennen.
 
 1. 067 laden. Vor Testmitteln oder Handel **03 Lernen** probieren:
    0 LP/50 Erz, daher keine Veraenderung und keine gelernte Faehigkeit.

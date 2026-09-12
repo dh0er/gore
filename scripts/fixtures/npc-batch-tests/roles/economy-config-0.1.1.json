@@ -215,5 +215,6 @@
   },
   "saves_modified": false,
   "profile4_and_registry_hashes_unchanged": true,
-  "retest": "Load024 rolle-handel, use02 without reseeding. If empty compare fresh067 with01/02. Only when visible test purchase/sale/cancel and restart; teacher need not repeat."
+  "retest": "Load024 rolle-handel, use02 without reseeding. If empty compare fresh067 with01/02. Only when visible test purchase/sale/cancel and restart; teacher need not repeat.",
+  "runtime_follow_up": "economy-runtime-0.1.1.json: failed; earlier saved stock meant NPC container, not the global shop."
 }

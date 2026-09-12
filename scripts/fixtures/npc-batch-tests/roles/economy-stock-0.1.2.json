@@ -1,0 +1,220 @@
+{
+  "schema": "gore.npc-batch.economy-stock-correction.v1",
+  "recorded_at": "2026-09-12T21:04:03.355690+00:00",
+  "bundle": "NpcEconomyRolesTest",
+  "version": "0.1.2",
+  "id": "npceconomyrolestest-9ceaf764",
+  "runtime_verified": false,
+  "previous_runtime": "economy-runtime-0.1.1.json",
+  "change": "Declare native TraderConfig stock for GoreNpcTraderStockV2 and dispatch that global event from01. New gore_role_shop_stock_v2 marker enables migration of old saves. No NPC inventory grants.",
+  "source_checks": {
+    "assembly_matches_tracked": true,
+    "compiled_sources_match_tracked": true,
+    "teacher_and_funds_and_snapshot_choices_unchanged": true,
+    "original_B_prefix_byte_exact": true,
+    "localization_and_voice_byte_identical_to_0_1_1": true,
+    "independent_review": "stage_cache: no concrete findings; original event/config path and fixed difficulty counts checked."
+  },
+  "build": {
+    "build": "economy-v3",
+    "source_tree_unchanged": true,
+    "authored_modules": [
+      {
+        "module_name": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A",
+        "relative_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
+        "disposition": "added",
+        "source": {
+          "byte_len": 35771,
+          "sha256": "5675d9d2aaad52679b554c736a6af01f9b33f902db0007b9aff7400617234da3"
+        }
+      },
+      {
+        "module_name": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B",
+        "relative_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
+        "disposition": "added",
+        "source": {
+          "byte_len": 29411,
+          "sha256": "f43ef51374d221b3a36d22f0070bcc3bcd4fd2a2855bbeb33a6f9763c0df64f0"
+        }
+      },
+      {
+        "module_name": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+        "relative_path": "AI/AIAgent/Human/Config/OC_STT_Diego/CharacterDefinition_OC_STT_Diego.as",
+        "disposition": "edited",
+        "source": {
+          "byte_len": 5203,
+          "sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664"
+        }
+      },
+      {
+        "module_name": "LevelScripts.XardasTower_AI",
+        "relative_path": "LevelScripts/XardasTower_AI.as",
+        "disposition": "edited",
+        "source": {
+          "byte_len": 1814,
+          "sha256": "ee74734e29cafb76445abe5000bc662d2c9e79d3cd6b88a989a17f81d42056eb"
+        }
+      }
+    ],
+    "preservation": {
+      "operation": "product module_ranges exact serialized module span comparison",
+      "mini_modules": 4,
+      "full_modules": 7319,
+      "pristine_modules": 7317,
+      "unselected_pristine_modules_byte_identical": 7315,
+      "exact_selected_module_set": true,
+      "diego_bytes_unchanged_from_0_1_11": false,
+      "tower_bytes_unchanged_from_0_1_11": true,
+      "passed": true
+    },
+    "unchanged_Diego_Tower_emission": {
+      "operation": "product PreparedEmit with exact Binds and class defaults enabled",
+      "modules": [
+        {
+          "module": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+          "exactly_unchanged": true,
+          "prior_emitted_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664",
+          "current_emitted_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664"
+        },
+        {
+          "module": "LevelScripts.XardasTower_AI",
+          "exactly_unchanged": true,
+          "prior_emitted_sha256": "3e66b9ead53daaee8c876ddd2559dbdb31c616b3751a390bedf769467ec95e4f",
+          "current_emitted_sha256": "3e66b9ead53daaee8c876ddd2559dbdb31c616b3751a390bedf769467ec95e4f"
+        }
+      ]
+    },
+    "mini_sha256": "5f5c08e1f6c63ebbc824142911f5f28b238a7f22aef13c12c138a9b7c659727e",
+    "full_sha256": "f438a041a403e50bb387593789c4fd4f116412e568be36de9ab06a1f8b0e0143",
+    "generation_receipt_sha256": "89a15a8647aea568bc9dea29934cd1896b6e8e3969fe4dba6e0bfde302bd01be"
+  },
+  "compiled_readback": {
+    "native_world_point_get_t3": "0x1d3c226b140",
+    "native_call_global_event_t3": "0x1d3c226b4c0",
+    "original_add_trader_item_all_difficulties_function_id": "0x28842",
+    "stock_counts": [
+      3,
+      10,
+      100
+    ],
+    "static_names": {
+      "23278": "gore_role_shop_stock_v2",
+      "23279": "GoreNpcTraderStockV2"
+    },
+    "stock_disasm_sha256": "3407e95471c74ee7d115036aa7127e633460f492b45a5a2bfc9013f43261390f",
+    "config_disasm_sha256": "f1fc7939e471cb3ad1aee3a6d19f71e50d08310e74029c8f0305879327111d1c"
+  },
+  "inspection": {
+    "report_format": 1,
+    "source_kind": "directory",
+    "bundle_format": 1,
+    "mod": {
+      "name": "NpcEconomyRolesTest",
+      "version": "0.1.2",
+      "author": ""
+    },
+    "component_count": 3,
+    "components": [
+      {
+        "type": "loc_patch",
+        "path": "loc/edits.json",
+        "target_count": 42,
+        "footprint_coverage": "exact"
+      },
+      {
+        "type": "voice_archive_patch",
+        "path": "voice",
+        "target_count": 5,
+        "footprint_coverage": "exact"
+      },
+      {
+        "type": "angel_script_patch",
+        "path": "scripts",
+        "target_count": 4,
+        "footprint_coverage": "exact"
+      }
+    ],
+    "file_count": 10,
+    "directory_count": 4,
+    "total_file_bytes": 440130,
+    "manifest_sha256": "86c127a63e75e9f8954c61e5003191d52079a5ef583e648a70fdb2f3f3effb32",
+    "tree_sha256": "596d37ab3f29879f025532d7c8855969544606fc33ac06c2a322fc0527d061a8",
+    "evidence": {
+      "verified": [
+        "bounded non-link materialization of the selected directory or ZIP",
+        "root manifest format plus every declared component manifest and referenced payload",
+        "portable paths, payload size limits, and supported payload structure where an offline decoder exists",
+        "SHA-256 identity of the exact manifest bytes and complete normalized bundle tree"
+      ],
+      "not_verified": [
+        "compatibility with any particular game installation or game build",
+        "whether named game-side assets, samples, localization ids, or script edit targets exist",
+        "cross-mod conflicts, load order, or deployment readiness",
+        "runtime behavior, visuals, audio playback, dialog flow, or gameplay effect"
+      ]
+    }
+  },
+  "inspection_tool_limit": "Installed v0.3.0 connector rejects the already used four-module mini-manifest pattern. Qualified local CLI accepts the identical bundle; no approval refusal occurred.",
+  "cli_sha256": "28b5d76e1e861476c7882725f056bca7cb65e718550203bd6c6dbd9aa9987fe1",
+  "helper_sha256": "327dc32a1e4959a448ba690706e7eabcf8b4557eb91aedb5623b75d5e614d43a",
+  "preflight": "Dedicated preflight: game closed, one intended entry, no recovery blocker; analyzer found no recognized conflicts. Expected pending loadout change applied.",
+  "apply_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe\" mgr apply --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
+  "reset_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe\" mgr reset --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
+  "apply_log_sha256": "8505376ef7c0621f93630160f009f596d8925e7eb34f98e0a0420f765a24275d",
+  "pristine_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+  "status": {
+    "loadout": [
+      {
+        "enabled": true,
+        "id": "npceconomyrolestest-9ceaf764"
+      }
+    ],
+    "manager_owned": {
+      "additive": {
+        "items": [],
+        "total": 0,
+        "truncated": false
+      },
+      "backups": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Script\\PrecompiledScript_Shipping.Cache.gore-bak",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\Cache\\AlkimiaLocalization_00000000.lcache.gore-bak",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\VoiceOver\\german_new.zip.gore-bak"
+        ],
+        "total": 3,
+        "truncated": false
+      },
+      "live": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Script\\PrecompiledScript_Shipping.Cache",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\Cache\\AlkimiaLocalization_00000000.lcache",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\VoiceOver\\german_new.zip"
+        ],
+        "total": 3,
+        "truncated": false
+      },
+      "recovery": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\gore-mod.deployed.json"
+        ],
+        "total": 1,
+        "truncated": false
+      },
+      "ue4ss": {
+        "items": [],
+        "total": 0,
+        "truncated": false
+      }
+    },
+    "state": "in_sync"
+  },
+  "saves_modified": false,
+  "all_11_profile4_save_hashes_match_previous_readback": true,
+  "registry_readback": {
+    "current_sha256": "996c395010dadb9d687ac5b39c8e7d108aff3c44531a2f3fd9d8c715bae2d8e0",
+    "previous_readback_sha256": "edadc72b0c5a2449acb5fd9a5cab83a5aa5296f9ae82b9f4316b6216834a225e",
+    "matches_previous_readback": false,
+    "note": "Previous readback predates the user0.1.1 retest. No pre-deployment registry hash captured this turn; no save or registry mutations performed by this correction."
+  },
+  "retest": "Profile4 save024 rolle-handel:01 once,02 stock3 cheese/10 arrows/100 trader ore; buy/sell/cancel,05 save handel-bestand. Full restart/reload without01,05 save handel-bestand-neustart. If empty save handel-leer after05 for global shop/event inspection."
+}

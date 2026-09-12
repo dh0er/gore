@@ -869,15 +869,14 @@ class UChoiceGoreRoleStock : UTopic_GoreRoleControl
     default Caption = FText::FromString(n"01 Handel: einmalig 3 Kaese, 10 Pfeile, 100 Erz".ToString());
     default PriorityRank = 60;
     UFUNCTION(BlueprintOverride)
-    bool IsVisible() const { return GoreRoleRead(this.GetSelf(), n"gore_role_stock_seeded") == 0.0f; }
+    bool IsVisible() const { return GoreRoleRead(this.GetSelf(), n"gore_role_shop_stock_v2") == 0.0f; }
     UFUNCTION(BlueprintOverride)
     void Act()
     {
-        if (this.GetSelf() == nullptr || this.GetSelf().GetInventory() == nullptr) return;
-        ::AddItemToInventory(this.GetSelf(), UItFo_Cheese, 3, EInventoryTypes::Trader);
-        ::AddItemToInventory(this.GetSelf(), UItAm_Arrow, 10, EInventoryTypes::Trader);
-        ::AddItemToInventory(this.GetSelf(), UItMi_Orenugget, 100, EInventoryTypes::Trader);
-        GoreRoleNote(this.GetSelf(), n"gore_role_stock_seeded", 1.0f);
+        UWorldPointManager Manager = UWorldPointManager::Get();
+        if (this.GetSelf() == nullptr || Manager == nullptr) return;
+        Manager.CallGlobalEvent(n"GoreNpcTraderStockV2");
+        GoreRoleNote(this.GetSelf(), n"gore_role_shop_stock_v2", 1.0f);
         GoreRoleEconomySnapshot(this.GetSelf(), Hero());
     }
 }
@@ -888,7 +887,7 @@ class UChoiceGoreRoleTrade : UTopic_GoreRoleControl
     default Caption = FText::FromString(n"02 Handel: kaufen / verkaufen".ToString());
     default PriorityRank = 59;
     UFUNCTION(BlueprintOverride)
-    bool IsVisible() const { return GoreRoleRead(this.GetSelf(), n"gore_role_stock_seeded") == 1.0f; }
+    bool IsVisible() const { return GoreRoleRead(this.GetSelf(), n"gore_role_shop_stock_v2") == 1.0f; }
     UFUNCTION(BlueprintOverride)
     void Act()
     {

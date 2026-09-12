@@ -586,15 +586,22 @@ class UDailyRoutine_GoreRoleWait : UAIState_DailyRoutine_Human
 }
 
 
-// A is the trader and teacher. All stock is seeded explicitly once per test save.
+// A is the trader and teacher. Stock uses the native global trader event path.
 // B, C and every existing character definition remain unchanged.
 class UTraderConfig_GoreRoleEconomy : UTraderConfigBase
 {
     default m_UniqueName = n"GORE_TEST_A";
-    // Explicit shipped lookup keys (LevelScripts/TradersData.as).
-    // This isolates config fallback from the already verified saved stock.
+    // Shipped lookup keys; changing these alone did not fix the empty shop.
     default m_Region = n"Wilderness";
     default m_Type = n"General";
+    // Keep this fixture's promised stock exact on every resources difficulty.
+    default m_EasyOreMult = 1.0;
+    default m_HardOreMult = 1.0;
+    default m_EasyArrowsMult = 1.0;
+    // Native trading reads the global trader record, not NPC inventory slots.
+    default AddTraderItemAllDifficulties(UItFo_Cheese, 3, "GoreNpcTraderStockV2");
+    default AddTraderItemAllDifficulties(UItAm_Arrow, 10, "GoreNpcTraderStockV2");
+    default AddTraderItemAllDifficulties(UItMi_Orenugget, 100, "GoreNpcTraderStockV2");
 }
 
 void GoreRoleEconomySnapshot(AGothicCharacterState Teacher, AGothicCharacterState Hero)
