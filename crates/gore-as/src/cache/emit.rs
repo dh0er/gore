@@ -3379,6 +3379,8 @@ fn emit_function_ctor(
         pass_trace("restore_path_cost_and_score_conditions", &rendered);
         let rendered = restore_linked_bool_guard_lifetimes(&rendered, f, refs);
         pass_trace("restore_linked_bool_guard_lifetimes", &rendered);
+        let rendered = restore_reused_native_guard_values(&rendered, f, refs, class_name);
+        pass_trace("restore_reused_native_guard_values", &rendered);
         let rendered = restore_temporary_vector_expression_lifetimes(&rendered, f, refs);
         pass_trace("restore_temporary_vector_expression_lifetimes", &rendered);
         let rendered = restore_following_target_property(&rendered, f, refs);
@@ -3419,10 +3421,18 @@ fn emit_function_ctor(
         pass_trace("restore_blocking_assessment_lifetimes", &rendered);
         let rendered = restore_stationary_blocking_lifetimes(&rendered, f, refs, class_name);
         pass_trace("restore_stationary_blocking_lifetimes", &rendered);
+        let rendered = restore_native_relationship_inference(&rendered, f, refs, class_name);
+        pass_trace("restore_native_relationship_inference", &rendered);
+        let rendered = restore_scoped_cast_return_tail(&rendered, f, refs, class_name);
+        pass_trace("restore_scoped_cast_return_tail", &rendered);
         let rendered = restore_scoped_character_selection(&rendered, f, refs, class_name);
         pass_trace("restore_scoped_character_selection", &rendered);
         let rendered = restore_reused_timer_scalar_lifetimes(&rendered, f, refs, class_name);
         pass_trace("restore_reused_timer_scalar_lifetimes", &rendered);
+        let rendered = restore_array_branch_and_record_lifetime(&rendered, f, refs, class_name);
+        pass_trace("restore_array_branch_and_record_lifetime", &rendered);
+        let rendered = restore_task_and_reason_boolean_values(&rendered, f, refs, class_name);
+        pass_trace("restore_task_and_reason_boolean_values", &rendered);
         let rendered = restore_context_recipient_arguments(&rendered, f, refs, class_name);
         pass_trace("restore_context_recipient_arguments", &rendered);
         let rendered = restore_copied_integer_selection_lifetimes(&rendered, f, refs, class_name);
@@ -13736,6 +13746,100 @@ fn restore_path_cost_and_score_conditions(body: &str, f: &Func, refs: &RefResolv
     let mut out=out.join("\n");if body.ends_with('\n') {out.push('\n');}out
 }
 
+/// Separate two temporary validity guards from a later named native boolean chain.
+fn restore_reused_native_guard_values(body:&str,f:&Func,refs:&RefResolver,class_name:Option<&str>)->String {
+    if !body.contains("bool local_") || !body.contains(" = !(IsValid(local_") {return body.to_owned();}
+    let Some(class)=class_name else {return body.to_owned();};let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    let w=|i:&Instr,n:usize|i.words.get(n).map(|v|*v as i16 as i32);let p=|i:&Instr|i.qwords.first().map(|v|*v as i64);
+    let jump=|i:&Instr|i.dwords.first().map(|v|i.offset_dw as i64+2+*v as i32 as i64);
+    let plain=|t:&super::types::DataType,k|t.token==k && t.type_info==0 && !t.is_reference && !t.is_object_const && !t.is_object_handle && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+    let object=|t:&super::types::DataType,name:&str,r:bool,c:bool,h:bool|t.token==5 && refs.type_by_ptr(t.type_info)==Some(name) && t.is_reference==r && t.is_object_const==c
+        && t.is_object_handle==h && t.is_read_only==(c&&!h) && !t.is_auto && !t.if_handle_then_const;
+    let local=|slot| {let mut a=f.obj_locals.iter().filter(|(s,_)|*s==slot);let ptr=a.next()?.1;(slot>0 && a.next().is_none()).then(||refs.type_by_ptr(ptr)).flatten()};
+    let scalar=|slot|slot>0 && !f.obj_locals.iter().any(|(s,_)|*s==slot);
+    let native=|ptr,owner:&str,constant|refs.func_owner_by_ptr(ptr)==Some(owner) && refs.is_method_by_ptr(ptr) && refs.is_const_method_by_ptr(ptr)==constant;
+    let getter=|ptr,owner:&str,ret:&str|native(ptr,owner,true) && refs.func_params_by_ptr(ptr).is_some_and(|args|args.is_empty())
+        && refs.func_ret_by_ptr(ptr).is_some_and(|t|object(t,ret,false,false,true));
+    let field=|i:&Instr,owner:&str| {let id=*i.dwords.first()? as i32;let (name,old)=refs.member_identity(id,w(i,0)?)?;
+        (refs.type_by_id(id)==Some(owner) && refs.type_by_id(old)==Some(owner)).then_some(name)};
+    let matches_words=|a:&[Instr],xs:&[(usize,Vec<i32>)]|xs.iter().all(|(n,v)|a[*n].words.iter().map(|v|*v as i16 as i32).eq(v.iter().copied()));
+    let closed=|at:usize,len:usize,edges:&[(usize,usize)]|edges.iter().all(|(a,b)|jump(&code[*a])==Some(code[*b].offset_dw as i64))
+        && !code.iter().enumerate().any(|(n,i)|i.op.name=="JMPP" || i.op.name.starts_with('J') && jump(i).is_some_and(|to|
+            to>=code[at].offset_dw as i64 && to<=code[at+len-1].offset_dw as i64 && !(n<at && to==code[at].offset_dw as i64)
+            && !edges.iter().any(|(a,b)|n==*a && to==code[*b].offset_dw as i64)));
+    let params:Vec<_>=f.params.iter().map(|p|p.ty.clone()).collect();let slots=super::model::param_slot_map(&params,true,false,Some(refs));
+    let mut recipes=Vec::new();
+    for (start,a) in code.windows(35).enumerate() {
+        let found=(|| {
+            if !plain(&f.ret,0x52) || !["UGameplayAbility_AI","UGameplayAbility_CharacterAI"].iter().any(|base|refs.is_subclass(class,base))
+                || a.iter().map(|i|i.op.name).ne("PshVPtr CALLSYS CpyRtoV4 NOT CpyVtoR1 JLowZ SetV1 JMP PshVPtr CALLSYS STOREOBJ PshVPtr CALLSYS CpyRtoV4 NOT CpyVtoV4 CpyVtoR1 JLowZ JMP PshVPtr CALL CpyRtoV4 NOT CpyVtoR1 JLowNZ SetV4 JMP PshVPtr CALL CpyRtoV4 NOT CpyVtoV4 CpyVtoR1 JLowZ JMP".split_whitespace())
+                || !closed(start,35,&[(start+5,start+8),(start+7,start+16),(start+17,start+19),(start+24,start+27),(start+26,start+32)]) {return None;}
+            let (state,guard,actor,scratch)=(w(&a[0],0)?,w(&a[2],0)?,w(&a[10],0)?,w(&a[13],0)?);
+            let (valid,character)=(p(&a[1])?,p(&a[9])?);let end=code.last()?;
+            if !scalar(guard) || !scalar(scratch) || guard==scratch || local(state)?!="AGothicCharacterState" || local(actor)?!="AGothicCharacter"
+                || !matches_words(a,&[(3,vec![guard]),(4,vec![guard]),(6,vec![guard]),(8,vec![state]),(11,vec![actor]),(14,vec![scratch]),(15,vec![guard,scratch]),(16,vec![guard]),
+                    (19,vec![state]),(21,vec![scratch]),(22,vec![scratch]),(23,vec![scratch]),(25,vec![scratch]),(27,vec![state]),(29,vec![guard]),(30,vec![guard]),(31,vec![scratch,guard]),(32,vec![scratch])])
+                || a[6].dwords.first()!=Some(&1) || a[25].dwords.first()!=Some(&0) || p(&a[12])!=Some(valid)
+                || refs.func_by_ptr(valid)!=Some("IsValid") || refs.func_owner_by_ptr(valid).is_some() || refs.is_method_by_ptr(valid) || !plain(refs.func_ret_by_ptr(valid)?,0x41)
+                || !matches!(refs.func_params_by_ptr(valid)?,[t] if object(t,"UObject",false,true,true)) || !getter(character,"AGothicCharacterState","AGothicCharacter")
+                || end.op.name!="RET" || jump(&a[18])!=Some(end.offset_dw as i64) || jump(&a[34])!=Some(end.offset_dw as i64)
+                || jump(&a[33])!=Some(code.get(start+35)?.offset_dw as i64) {return None;}
+            for n in [20,28] {let id=*a[n].dwords.first()? as i32;if refs.is_method_by_id(id) || !plain(refs.func_ret_by_id(id)?,0x41)
+                || !matches!(refs.func_params_by_id(id)?,[t] if object(t,"AGothicCharacterState",false,true,true)) {return None;}}
+            for (at,b) in code.windows(49).enumerate().skip(start+35) {
+                let recipe=(|| {
+                    if b.iter().map(|i|i.op.name).ne("PshVPtr ADDSi PSF CALLSYS PSF ADDSi RDSPtr CALLSYS CpyRtoV4 NOT CpyVtoR1 JLowZ PSF CALLSYS JMP PshGPtr PshVPtr PshVPtr CALLSYS STOREOBJ PshVPtr CALLSYS STOREOBJ PshVPtr CALLSYS CpyRtoV4 CpyVtoR1 JLowZ SetV1 JMP PshGPtr PshVPtr PshVPtr CALLSYS STOREOBJ PshVPtr CALLSYS STOREOBJ PshVPtr CALLSYS CpyRtoV4 CpyVtoV4 CpyVtoV4 NOT CpyVtoR1 JLowZ PSF CALLSYS JMP".split_whitespace())
+                        || !closed(at,49,&[(at+11,at+15),(at+27,at+30),(at+29,at+42)]) {return None;}
+                    let (record,self_state,relationship)=(w(&b[2],0)?,w(&b[19],0)?,w(&b[22],0)?);
+                    let parameter=f.params.get(*slots.get(&w(&b[0],0)?)?)?;let perceived=field(&b[1],"FRememberedPerception")?;let definition=field(&b[5],"FPerceivedInteractiveObject")?;
+                    let (ctor,dtor,self_getter,relation_getter,check)=(p(&b[3])?,p(&b[13])?,p(&b[18])?,p(&b[21])?,p(&b[24])?);
+                    if parameter.flags!=1 || !object(&parameter.ty,"FRememberedPerception",true,true,false) || local(record)?!="FPerceivedInteractiveObject"
+                        || refs.native_field_value_type("FRememberedPerception",perceived)!=Some("FPerceivedInteractiveObject")
+                        || local(self_state)?!="AGothicCharacterState" || self_state==state || local(relationship)?!="UCharacterRelationshipComponent"
+                        || !matches_words(b,&[(4,vec![record]),(8,vec![guard]),(9,vec![guard]),(10,vec![guard]),(12,vec![record]),(16,vec![state]),(17,vec![0]),(20,vec![self_state]),(23,vec![relationship]),
+                            (25,vec![guard]),(26,vec![guard]),(28,vec![guard]),(31,vec![state]),(32,vec![0]),(34,vec![self_state]),(35,vec![self_state]),(37,vec![relationship]),(38,vec![relationship]),
+                            (40,vec![scratch]),(41,vec![guard,scratch]),(42,vec![scratch,guard]),(43,vec![scratch]),(44,vec![scratch]),(46,vec![record])])
+                        || p(&b[7])!=Some(valid) || b[28].dwords.first()!=Some(&1) || p(&b[33])!=Some(self_getter) || p(&b[36])!=Some(relation_getter) || p(&b[39])!=Some(check) || p(&b[47])!=Some(dtor)
+                        || !native(ctor,"FPerceivedInteractiveObject",false) || refs.func_by_ptr(ctor)!=Some("$beh0") || !plain(refs.func_ret_by_ptr(ctor)?,0x52)
+                        || !matches!(refs.func_params_by_ptr(ctor)?,[t] if object(t,"FPerceivedInteractiveObject",true,true,false))
+                        || !native(dtor,"FPerceivedInteractiveObject",false) || refs.func_by_ptr(dtor)!=Some("$beh2") || !plain(refs.func_ret_by_ptr(dtor)?,0x52) || !refs.func_params_by_ptr(dtor)?.is_empty()
+                        || !getter(self_getter,"UGameplayAbility_AI","AGothicCharacterState") || !getter(relation_getter,"AGothicCharacterState","UCharacterRelationshipComponent")
+                        || !native(check,"UCharacterRelationshipComponent",true) || !plain(refs.func_ret_by_ptr(check)?,0x41)
+                        || !matches!(refs.func_params_by_ptr(check)?,[a,b] if object(a,"AGothicCharacterState",false,true,true) && object(b,"FGameplayTag",false,false,false))
+                        || jump(&b[14])!=Some(end.offset_dw as i64) || jump(&b[48])!=Some(end.offset_dw as i64) || jump(&b[45])!=Some(code.get(at+49)?.offset_dw as i64) {return None;}
+                    let uses:Vec<_>=code.iter().enumerate().filter(|(_,i)|super::bytediff::addressed_slots(i).contains(&guard)).map(|(n,_)|n).collect();
+                    let wanted:Vec<_>=[2,3,4,6,15,16,29,30,31].iter().map(|n|start+n).chain([8,9,10,25,26,28,41,42].iter().map(|n|at+n)).collect();
+                    if uses!=wanted {return None;}
+                    let tags=[p(&b[15])?,p(&b[30])?].map(|ptr|refs.global_by_ptr(ptr));let [Some(left),Some(right)]=tags else {return None;};
+                    if left==right || left.starts_with("__") || right.starts_with("__") {return None;}
+                    Some((guard,state,record,refs.func_by_ptr(character)?.to_owned(),definition.to_owned(),refs.func_by_ptr(self_getter)?.to_owned(),
+                        refs.func_by_ptr(relation_getter)?.to_owned(),refs.func_by_ptr(check)?.to_owned(),left.to_owned(),right.to_owned()))
+                })();if let Some(recipe)=recipe {recipes.push(recipe);}
+            }Some(())
+        })();let _=found;
+    }
+    let [(guard,state,record,character,definition,self_getter,relation,check,left,right)]=recipes.as_slice() else {return body.to_owned();};
+    let name=format!("local_{guard}");if count_ident(body,&name)!=6 {return body.to_owned();}
+    let rhs=[format!("!(IsValid(local_{state})) || !(IsValid(local_{state}.{character}()))"),format!("!(IsValid(local_{record}.{definition}))"),
+        format!("this.{self_getter}().{relation}().{check}(local_{state}, GameplayTag::{left}) || this.{self_getter}().{relation}().{check}(local_{state}, GameplayTag::{right})")];
+    let lines:Vec<_>=body.lines().collect();let mut paths=Vec::new();let mut stack=Vec::new();
+    for (at,line) in lines.iter().enumerate() {if line.trim()=="}" && stack.pop().is_none() {return body.to_owned();}paths.push(stack.clone());if line.trim()=="{" {stack.push(at);}}
+    if !stack.is_empty() {return body.to_owned();}
+    let mut points=Vec::new();
+    for n in 0..3 {let expected=format!("{}{} = {};",if n==0 {"bool "} else {""},name,rhs[n]);let found:Vec<_>=lines.iter().enumerate().filter(|(_,l)|l.trim()==expected).map(|(at,_)|at).collect();
+        let [at]=found.as_slice() else {return body.to_owned();};let condition=if n==2 {format!("if (!({name}))")} else {format!("if ({name})")};
+        if lines.get(at+1).map(|l|l.trim())!=Some(condition.as_str()) || lines.get(at+2).map(|l|l.trim())!=Some("{") || lines.get(at+3).map(|l|l.trim())!=Some("return;")
+            || lines.get(at+4).map(|l|l.trim())!=Some("}") {return body.to_owned();}points.push(*at);
+    }
+    if points.windows(2).any(|p|p[0]+4>=p[1] || paths[p[0]]!=paths[p[1]] || indent_of(lines[p[0]])!=indent_of(lines[p[1]])) {return body.to_owned();}
+    let mut out=String::new();for (at,line) in lines.iter().enumerate() {
+        if let Some(n)=points.iter().position(|p|*p==at) {if n==2 {out.push_str(&format!("{}bool {} = {};\n",indent_of(line),name,rhs[n]));}continue;}
+        if let Some(n)=points[..2].iter().position(|p|*p+1==at) {out.push_str(&format!("{}if ({})\n",indent_of(line),rhs[n]));}
+        else {out.push_str(line);out.push('\n');}
+    }
+    if !body.ends_with('\n') {out.pop();}out
+}
+
 /// Preserve the linked bool lifetimes of early guards, two named chains and a final negation.
 fn restore_linked_bool_guard_lifetimes(body: &str, f: &Func, refs: &RefResolver) -> String {
     if f.ret.token != 0x52 || f.ret.type_info != 0 || f.ret.is_reference || f.ret.is_object_handle
@@ -14667,6 +14771,234 @@ fn restore_scoped_character_selection(body: &str, f: &Func, refs: &RefResolver, 
     if results.len()==1 {results.remove(0)} else {body.to_owned()}
 }
 
+/// Keep a checked cast in its return arm and the shared default value outside the final else.
+fn restore_scoped_cast_return_tail(body: &str, f: &Func, refs: &RefResolver, class_name: Option<&str>) -> String {
+    if !body.contains(" = (Cast<") || !body.contains("return FAbilityTaskExecutor();") { return body.to_owned(); }
+    let rewrite = (|| {
+        let class = class_name?;
+        let code = disassemble(&f.bytecode).ok()?;
+        let at = code.len().checked_sub(80)?;
+        let c = &code[at..];
+        let shape = "PshGPtr CALLSYS STOREOBJ PshVPtr PshVPtr CALLSYS JLowZ CmpPtrNull JZ TYPEID PSF PshVPtr CALLSYS JMP ClrVPtr PshVPtr RefCpyV CmpPtrNull JNZ PshVPtr CALLSYS PSF CALLSYS PSF PshVPtr CALLSYS PSF CALLSYS JMP PshVPtr CALLSYS PshVPtr CALLSYS STOREOBJ PshVPtr PSF CALLSYS PSF PSF PshVPtr CALLINTF PSF PshVPtr CALLSYS PSF CALLSYS JMP PshGPtr CALLSYS STOREOBJ PshVPtr PshVPtr CALLSYS JLowZ PshVPtr CALLINTF PshVPtr CALLSYS PshVPtr CALLSYS PshRPtr PshVPtr PSF CALL PSF PshVPtr CALLSYS PSF CALLSYS JMP PshVPtr CALLSYS PSF CALLSYS PSF PshVPtr CALLSYS PSF CALLSYS RET";
+        if c.iter().map(|i| i.op.name).ne(shape.split_whitespace()) { return None; }
+        let w = |i: &Instr| i.words.first().map(|v| *v as i16 as i32);
+        let p = |i: &Instr| i.qwords.first().map(|v| *v as i64);
+        let id = |i: &Instr| i.dwords.first().map(|v| *v as i32);
+        let target = |i: &Instr| id(i).map(|d| i.offset_dw as i64 + 2 + d as i64);
+        let plain = |t: &super::types::DataType, token| t.token == token && t.type_info == 0 && !t.is_reference
+            && !t.is_object_const && !t.is_object_handle && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+        let object = |t: &super::types::DataType, name: &str, reference: bool, constant: bool, handle: bool|
+            t.token == 5 && refs.type_by_ptr(t.type_info) == Some(name) && t.is_reference == reference && t.is_object_const == constant
+                && t.is_object_handle == handle && t.is_read_only == (constant && !handle) && !t.is_auto && !t.if_handle_then_const;
+        let local = |slot| { let mut entries = f.obj_locals.iter().filter(|(s, _)| *s == slot);
+            let ptr = entries.next()?.1; (slot > 0 && entries.next().is_none()).then_some(ptr) };
+        let native = |ptr, owner: &str, name: &str, constant| refs.func_owner_by_ptr(ptr) == Some(owner)
+            && refs.func_by_ptr(ptr) == Some(name) && refs.is_method_by_ptr(ptr) && refs.is_const_method_by_ptr(ptr) == constant;
+        let uses = |slot| code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&slot)).map(|(n, _)| n).collect::<Vec<_>>();
+        let (input, class_slot, temp, retained, value, subclass) = (w(&c[4])?, w(&c[2])?, w(&c[10])?, w(&c[16])?, w(&c[21])?, w(&c[35])?);
+        let output = -super::model::AS_PTR_SIZE;
+        let cast_ptr = local(retained)?;
+        let cast_type = refs.type_by_ptr(cast_ptr)?;
+        let [param] = f.params.as_slice() else { return None; };
+        let input_type = refs.type_by_ptr(param.ty.type_info)?;
+        let params = [param.ty.clone()];
+        if f.is_const_method() || !object(&f.ret, "FAbilityTaskExecutor", false, false, false)
+            || param.flags != 0 || !object(&param.ty, input_type, false, true, true) || !is_object_handle_type(input_type)
+            || super::model::param_slot_map(&params, true, true, Some(refs)).get(&input) != Some(&0)
+            || refs.type_by_ptr(local(class_slot)?) != Some("UClass") || local(temp)? != cast_ptr || !is_object_handle_type(cast_type)
+            || refs.type_by_ptr(local(value)?) != Some("FAbilityTaskExecutor") || refs.type_by_ptr(local(subclass)?) != Some("TSubclassOf")
+            || HashSet::from([class_slot, temp, retained, value, subclass]).len() != 5
+            || id(&c[9])? & 0x6000_0000 != 0x4000_0000 || refs.type_by_id(id(&c[9])? & !0x6000_0000) != Some(cast_type)
+            || uses(temp) != [at+10, at+14, at+15] || uses(retained) != [at+16, at+17, at+31]
+            || uses(subclass) != [at+35, at+37] { return None; }
+        let operands = [(2,class_slot),(3,class_slot),(4,input),(7,input),(10,temp),(11,input),(14,temp),(15,temp),(16,retained),(17,retained),
+            (19,output),(21,value),(23,value),(24,output),(26,value),(29,output),(31,retained),(33,class_slot),(34,class_slot),(35,subclass),
+            (37,subclass),(38,value),(39,0),(41,value),(42,output),(44,value),(49,class_slot),(50,class_slot),(51,input),(54,0),(56,output),
+            (58,input),(61,0),(62,value),(64,value),(65,output),(67,value),(70,output),(72,value),(74,value),(75,output),(77,value),
+            (79,3*super::model::AS_PTR_SIZE)];
+        if operands.iter().any(|(n, slot)| c[*n].words.as_slice() != [*slot as u16]) { return None; }
+        let (convert, isa, cast, ctor, assign, dtor, get_class, class_ctor, other_convert, get_tag) =
+            (p(&c[1])?, p(&c[5])?, p(&c[12])?, p(&c[20])?, p(&c[25])?, p(&c[27])?, p(&c[32])?, p(&c[36])?, p(&c[48])?, p(&c[59])?);
+        let (consume, update, factory) = (id(&c[40])?, id(&c[55])?, id(&c[63])?);
+        let other_type = refs.global_by_ptr(p(&c[47])?)?.strip_prefix("__StaticType_")?;
+        if cast_type == other_type || !is_object_handle_type(other_type) || refs.global_by_ptr(p(&c[0])?)? != format!("__StaticType_{cast_type}")
+            || [22,30,57,71,73].iter().any(|n| p(&c[*n]) != Some(ctor)) || [43,66,76].iter().any(|n| p(&c[*n]) != Some(assign))
+            || [45,68,78].iter().any(|n| p(&c[*n]) != Some(dtor)) || p(&c[52]) != Some(isa) { return None; }
+        for ptr in [convert, other_convert] {
+            if !native(ptr, "TSubclassOf", "opImplConv", true) || !object(refs.func_ret_by_ptr(ptr)?, "UClass", false, false, true)
+                || !refs.func_params_by_ptr(ptr)?.is_empty() { return None; }
+        }
+        if !native(isa, "UObject", "IsA", true) || !plain(refs.func_ret_by_ptr(isa)?, 0x41)
+            || !matches!(refs.func_params_by_ptr(isa)?, [t] if object(t,"UClass",false,true,true))
+            || !native(cast, "UObject", "opCast", true) || !plain(refs.func_ret_by_ptr(cast)?, 0x52)
+            || !matches!(refs.func_params_by_ptr(cast)?, [t] if t.is_reference && plain(&super::types::DataType {is_reference:false,..t.clone()},0x3b))
+            || !native(ctor, "FAbilityTaskExecutor", "$beh0", false) || !plain(refs.func_ret_by_ptr(ctor)?, 0x52) || !refs.func_params_by_ptr(ctor)?.is_empty()
+            || !native(dtor, "FAbilityTaskExecutor", "$beh2", false) || !plain(refs.func_ret_by_ptr(dtor)?, 0x52) || !refs.func_params_by_ptr(dtor)?.is_empty()
+            || !native(assign, "FAbilityTaskExecutor", "opAssign", false) || !object(refs.func_ret_by_ptr(assign)?, "FAbilityTaskExecutor", true, false, false)
+            || !matches!(refs.func_params_by_ptr(assign)?, [t] if object(t,"FAbilityTaskExecutor",true,false,false))
+            || !native(get_class, "UObject", "GetClass", true) || !object(refs.func_ret_by_ptr(get_class)?, "UClass", false, false, true) || !refs.func_params_by_ptr(get_class)?.is_empty()
+            || !native(class_ctor, "TSubclassOf", "$beh0", false) || !plain(refs.func_ret_by_ptr(class_ctor)?, 0x52)
+            || !matches!(refs.func_params_by_ptr(class_ctor)?, [t] if object(t,"UClass",false,false,true))
+            || !matches!(refs.type_subtypes(local(subclass)?)?, [t] if object(t,cast_type,false,false,true)) { return None; }
+        for script in [consume, update] {
+            if !refs.is_method_by_id(script) || !refs.is_subclass(class, refs.func_owner_by_id(script)?) { return None; }
+        }
+        if !object(refs.func_ret_by_id(consume)?, "FAbilityTaskExecutor", false, false, false)
+            || !matches!(refs.func_params_by_id(consume)?, [t] if t.type_info==local(subclass)? && object(t,"TSubclassOf",true,true,false))
+            || !plain(refs.func_ret_by_id(update)?, 0x52) || !refs.func_params_by_id(update)?.is_empty()
+            || !refs.is_method_by_ptr(get_tag) || !refs.is_const_method_by_ptr(get_tag) || refs.func_owner_by_ptr(get_tag) != Some(input_type)
+            || !object(refs.func_ret_by_ptr(get_tag)?, "FGameplayTag", true, true, false) || !refs.func_params_by_ptr(get_tag)?.is_empty()
+            || refs.is_method_by_id(factory) || !object(refs.func_ret_by_id(factory)?, "FAbilityTaskExecutor", false, false, false)
+            || !matches!(refs.func_params_by_id(factory)?, [a,b] if object(a,"UGameplayAbility_AI",false,false,true) && object(b,"FGameplayTag",true,true,false))
+            || !["UGameplayAbility_AI","UGameplayAbility_CharacterAI"].iter().any(|base| refs.is_subclass(class, base)) { return None; }
+        let edges = [(6,47),(8,14),(13,15),(18,29),(28,79),(46,79),(53,70),(69,79)];
+        if edges.iter().any(|(a,b)| target(&c[*a]) != Some(c[*b].offset_dw as i64)) { return None; }
+        for (n, i) in code.iter().enumerate() {
+            if i.op.name == "JMPP" { return None; }
+            if !i.op.name.starts_with('J') { continue; }
+            let to = target(i)?;
+            if to < c[0].offset_dw as i64 { continue; }
+            if edges.iter().any(|(a,b)| n==at+*a && to==c[*b].offset_dw as i64) { continue; }
+            if n < at && to == c[0].offset_dw as i64 { continue; }
+            // Other return arms must finish the same result-copy/destruction before joining RET.
+            if n < at && i.op.name == "JMP" && to == c[79].offset_dw as i64 && n >= 5 {
+                let r=&code[n-5..n];
+                if r.iter().map(|i|i.op.name).eq(["PSF","PshVPtr","CALLSYS","PSF","CALLSYS"])
+                    && w(&r[0])==Some(value) && w(&r[1])==Some(output) && p(&r[2])==Some(assign) && w(&r[3])==Some(value) && p(&r[4])==Some(dtor) { continue; }
+            }
+            return None;
+        }
+        let lines: Vec<_> = body.lines().collect();
+        let name = format!("local_{retained}");
+        let find = |text:&str| { let mut hits=lines.iter().enumerate().filter(|(_,l)| l.trim()==text).map(|(n,_)|n);
+            let n=hits.next()?; hits.next().is_none().then_some(n) };
+        let declaration=find(&format!("{cast_type} {name};"))?;
+        let input_name=&param.name;
+        let assignment=format!("{name} = (Cast<{cast_type}>({input_name}));");
+        let line=find(&assignment)?;
+        let indent=indent_of(lines[line]);
+        let parent=indent.strip_suffix("    ")?;
+        let root=indent_of(lines[declaration]);
+        if declaration>=line.checked_sub(2)? || count_ident(body,&name)!=4 || root.len()>=parent.len()
+            || lines[line-2]!=format!("{parent}if ({input_name}.IsA({cast_type}))") || lines[line-1]!=format!("{parent}{{") { return None; }
+        let expected=[assignment,format!("if ({name} == nullptr)"),"{".into(),"    return FAbilityTaskExecutor();".into(),"}".into(),"else".into(),"{".into(),
+            format!("    return this.{}(TSubclassOf<{cast_type}>({name}.GetClass()));",refs.func_by_id(consume)?),"}".into()];
+        if !lines.get(line..line+9)?.iter().zip(expected).all(|(l,e)| *l==format!("{indent}{e}")) { return None; }
+        let rows=[format!("{parent}}}"),format!("{parent}else"),format!("{parent}{{"),format!("{indent}if ({input_name}.IsA({other_type}))"),format!("{indent}{{"),
+            format!("{indent}    this.{}();",refs.func_by_id(update)?),format!("{indent}    return ::{}(this, {input_name}.{}());",refs.func_by_id(factory)?,refs.func_by_ptr(get_tag)?),
+            format!("{indent}}}"),format!("{indent}else"),format!("{indent}{{"),format!("{indent}    return FAbilityTaskExecutor();"),format!("{indent}}}"),format!("{parent}}}")];
+        if !lines.get(line+9..line+22)?.iter().zip(rows).all(|(l,e)| *l==e) { return None; }
+        // Moving the fallback past the enclosing else chain must cross no work or other exit kind.
+        let mut level=parent;
+        for close in line+22..lines.len() {
+            if lines[close].trim().is_empty() { continue; }
+            level=level.strip_suffix("    ")?;
+            let open=matching_open_brace(&lines,close)?;
+            if lines[close]!=format!("{level}}}") || open<2 || lines[open-1]!=format!("{level}else") || lines[open-2]!=format!("{level}}}")
+                || open-3>=line || !lines[open-3].trim().starts_with("return ") || indent_of(lines[open-3])!=format!("{level}    ") { return None; }
+            let sibling=matching_open_brace(&lines,open-2)?;
+            if sibling==0 || !lines[sibling-1].trim().starts_with("if (") || indent_of(lines[sibling-1])!=level || declaration>=sibling { return None; }
+        }
+        if level!=root { return None; }
+        let mut result=Vec::new();
+        for (n,l) in lines.iter().enumerate() {
+            if n==declaration || (line+17..line+21).contains(&n) { continue; }
+            result.push(if n==line {format!("{indent}{cast_type} {}",l.trim())} else {(*l).to_owned()});
+        }
+        result.push(format!("{root}return FAbilityTaskExecutor();"));
+        Some(result.join("\n")+if body.ends_with('\n') {"\n"} else {""})
+    })();
+    rewrite.unwrap_or_else(||body.to_owned())
+}
+
+/// Preserve native argument preparation before allocating the inferred relationship value.
+fn restore_native_relationship_inference(body: &str, f: &Func, refs: &RefResolver, class_name: Option<&str>) -> String {
+    if !body.contains("FStaticRelationshipEvaluation local_") { return body.to_owned(); }
+    let Some(class)=class_name else {return body.to_owned();};
+    let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    if !["UGameplayAbility_AI","UGameplayAbility_CharacterAI"].iter().any(|base|refs.is_subclass(class,base)) {return body.to_owned();}
+    let w=|i:&Instr|i.words.first().map(|v|*v as i16 as i32);let p=|i:&Instr|i.qwords.first().map(|v|*v as i64);
+    let plain=|t:&super::types::DataType|t.token==0x52 && t.type_info==0 && !t.is_reference && !t.is_object_handle
+        && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+    let native=|ptr,name:&str|refs.type_identity_by_ptr(ptr).is_some_and(|t|t.name==name && t.module.is_empty() && t.namespace.is_empty());
+    let object=|t:&super::types::DataType,name:&str,reference:bool,constant:bool,handle:bool|t.token==5 && native(t.type_info,name)
+        && t.is_reference==reference && t.is_object_const==constant && t.is_object_handle==handle && t.is_read_only==(constant&&!handle) && !t.is_auto && !t.if_handle_then_const;
+    let local=|slot| {let mut entries=f.obj_locals.iter().filter(|(s,_)|*s==slot);let ptr=entries.next()?.1;(slot>0 && entries.next().is_none()).then_some(ptr)};
+    let method=|ptr,owner:&str,constant|refs.is_method_by_ptr(ptr) && refs.func_owner_by_ptr(ptr)==Some(owner) && refs.is_const_method_by_ptr(ptr)==constant;
+    let uses=|slot|code.iter().enumerate().filter(|(_,i)|super::bytediff::addressed_slots(i).contains(&slot)).map(|(n,_)|n).collect::<Vec<_>>();
+    if !plain(&f.ret) {return body.to_owned();}
+    let mut edits=Vec::new();
+    for (at,c) in code.windows(28).enumerate() {
+        let found=(|| {
+            if c.iter().map(|i|i.op.name).ne("PSF CALLSYS CpyRtoV8 PshVPtr PSF PshVPtr CALLSYS STOREOBJ PshVPtr CALLSYS PSF PshGPtr PSF PshVPtr CALLSYS STOREOBJ PshVPtr CALLSYS PSF PSF CALLSYS STOREOBJ PshVPtr CALLSYS PSF CALLSYS PSF CALLSYS".split_whitespace()) {return None;}
+            let (iterator,tag,guild_value,left,species_value,right,result,system)=(w(&c[0])?,w(&c[2])?,w(&c[4])?,w(&c[7])?,w(&c[12])?,w(&c[15])?,w(&c[19])?,w(&c[21])?);
+            let roles=[iterator,tag,guild_value,left,species_value,right,result,system];
+            if roles.iter().any(|s|*s<=0) || HashSet::from(roles).len()!=8 || f.obj_locals.iter().any(|(s,_)|*s==tag)
+                || !native(local(iterator)?,"TArrayIterator") || ![guild_value,species_value].iter().all(|s|local(*s).is_some_and(|t|native(t,"FGameplayTag")))
+                || ![left,right].iter().all(|s|local(*s).is_some_and(|t|native(t,"AGothicCharacterState")))
+                || !native(local(result)?,"FStaticRelationshipEvaluation") || !native(local(system)?,"URelationshipSystem") {return None;}
+            for (n,s) in [(0,iterator),(2,tag),(3,tag),(4,guild_value),(5,0),(7,left),(8,left),(10,guild_value),(12,species_value),(13,0),
+                (15,right),(16,right),(18,species_value),(19,result),(21,system),(22,system),(24,guild_value),(26,species_value)] {
+                if c[n].words.as_slice()!=[s as u16] {return None;}
+            }
+            let (proceed,state,guild,species,get,evaluate,dtor)=(p(&c[1])?,p(&c[6])?,p(&c[9])?,p(&c[17])?,p(&c[20])?,p(&c[23])?,p(&c[25])?);
+            if p(&c[14])!=Some(state) || p(&c[27])!=Some(dtor) || !method(proceed,"TArrayIterator",false)
+                || !object(refs.func_ret_by_ptr(proceed)?,"FGameplayTag",true,false,false) || !refs.func_params_by_ptr(proceed)?.is_empty()
+                || !method(state,"UGameplayAbility_AI",true) || !object(refs.func_ret_by_ptr(state)?,"AGothicCharacterState",false,false,true) || !refs.func_params_by_ptr(state)?.is_empty()
+                || refs.func_by_ptr(guild)!=Some("GetGuild") || refs.func_by_ptr(species)!=Some("GetSpecies") {return None;}
+            for getter in [guild,species] {if !method(getter,"AGothicCharacterState",true) || !refs.func_params_by_ptr(getter)?.is_empty()
+                || !object(refs.func_ret_by_ptr(getter)?,"FGameplayTag",false,false,false) {return None;}}
+            if refs.is_method_by_ptr(get) || refs.is_const_method_by_ptr(get) || refs.func_owner_by_ptr(get).is_some()
+                || refs.func_ns_by_ptr(get)!=Some("URelationshipSystem") || !refs.func_params_by_ptr(get)?.is_empty() || !object(refs.func_ret_by_ptr(get)?,"URelationshipSystem",false,false,true)
+                || !method(evaluate,"URelationshipSystem",true) || !object(refs.func_ret_by_ptr(evaluate)?,"FStaticRelationshipEvaluation",false,false,false)
+                || !matches!(refs.func_params_by_ptr(evaluate)?,[a,b,c,d] if [a,b,c,d].iter().all(|t|object(t,"FGameplayTag",true,true,false)))
+                || !method(dtor,"FGameplayTag",false) || refs.func_by_ptr(dtor)!=Some("$beh2") || !plain(refs.func_ret_by_ptr(dtor)?) || !refs.func_params_by_ptr(dtor)?.is_empty()
+                || code.iter().any(|i|i.op.name=="JMPP" || i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                    let to=i.offset_dw as i64+2+*d as i32 as i64;to>c[0].offset_dw as i64 && to<=c[27].offset_dw as i64 })) {return None;}
+            if uses(tag)!=[at+2,at+3] || uses(guild_value)!=[at+4,at+10,at+24] || uses(species_value)!=[at+12,at+18,at+26]
+                || uses(system)!=[at+21,at+22] || uses(right)!=[at+15,at+16] || uses(left).into_iter().filter(|n|*n>=at).collect::<Vec<_>>()!=[at+7,at+8] {return None;}
+            let result_type=local(result)?;
+            let candidates:Vec<_>=f.obj_locals.iter().filter(|(_,t)|*t==result_type).map(|(s,_)|*s).collect();
+            let [a,b]=candidates.as_slice() else {return None;};let spare=if *a==result {*b} else if *b==result {*a} else {return None;};
+            if spare<=0 || spare==result || !uses(spare).is_empty() {return None;}
+            let mut fields=Vec::new();let mut destructors=0;
+            for n in uses(result) {
+                if n==at+19 {continue;}let i=&code[n];if n<at+28 {return None;}
+                if i.op.name=="LoadVObjR" {
+                    let tid=*i.dwords.first()? as i32;let offset=*i.words.get(1)? as i32;let (name,owner)=refs.member_identity(tid,offset)?;
+                    if refs.type_identity_by_id(tid)?!=refs.type_identity_by_ptr(result_type)?
+                        || refs.type_by_id(owner)!=refs.type_by_ptr(result_type) {return None;}
+                    fields.push(name);
+                } else if i.op.name=="PSF" && code.get(n+1)?.op.name=="CALLSYS" {
+                    let d=p(&code[n+1])?;if !method(d,"FStaticRelationshipEvaluation",false) || refs.func_by_ptr(d)!=Some("$beh2")
+                        || !plain(refs.func_ret_by_ptr(d)?) || !refs.func_params_by_ptr(d)?.is_empty() {return None;}destructors+=1;
+                } else {return None;}
+            }
+            if fields.is_empty() || destructors!=2 {return None;}
+            let global=p(&c[11])?;let namespace=refs.global_ns(global)?;let global_name=refs.global_by_ptr(global)?;
+            if namespace!="GameplayTag" {return None;}
+            let state_name=refs.func_by_ptr(state)?;let guild_name=refs.func_by_ptr(guild)?;let species_name=refs.func_by_ptr(species)?;
+            let name=format!("local_{result}");let element=format!("local_{tag}");
+            let call=format!("URelationshipSystem::{}().{}(this.{state_name}().{species_name}(), {namespace}::{global_name}, this.{state_name}().{guild_name}(), {element})",refs.func_by_ptr(get)?,refs.func_by_ptr(evaluate)?);
+            let old=format!("FStaticRelationshipEvaluation {name} = {call};");let lines:Vec<_>=body.lines().collect();
+            let hits:Vec<_>=lines.iter().enumerate().filter(|(_,l)|l.trim()==old).map(|(n,_)|n).collect();let [line]=hits.as_slice() else {return None;};
+            let indent=indent_of(lines[*line]);let parent=indent.strip_suffix("    ")?;
+            if *line<2 || lines[*line-1]!=format!("{parent}{{") || !lines[*line-2].starts_with(&format!("{parent}for (auto& {element} : "))
+                || !lines[*line-2].ends_with(')') || count_ident(body,&element)!=2 || count_ident(body,&format!("local_{spare}"))!=0 {return None;}
+            let (start,end)=block_span(&lines,*line);let scoped=lines[start..end].join("\n");
+            if start+1!=*line || count_ident(body,&name)!=fields.len()+1 || count_ident(&scoped,&name)!=fields.len()+1 {return None;}
+            for field in fields.iter().copied().collect::<HashSet<_>>() {
+                if count_ident(&scoped,&format!("{name}.{field}"))!=fields.iter().filter(|f|**f==field).count() {return None;}
+            }
+            let new=call.replace(&format!(".{species_name}()"),&format!(".{}",species_name.strip_prefix("Get")?))
+                .replace(&format!(".{guild_name}()"),&format!(".{}",guild_name.strip_prefix("Get")?));
+            Some((lines[*line].to_owned(),format!("{indent}auto {name} = {new};")))
+        })();
+        if let Some(edit)=found {edits.push(edit);}
+    }
+    let [(old,new)]=edits.as_slice() else {return body.to_owned();};body.replacen(old,new,1)
+}
+
 /// Restore a scoped storage query and the scalar lives around a stationary blocking assessment.
 fn restore_stationary_blocking_lifetimes(body:&str,f:&Func,refs:&RefResolver,class_name:Option<&str>)->String {
     if !body.contains("float32 local_") || !body.contains(" = -1.0f;") {return body.to_owned();}
@@ -15414,6 +15746,251 @@ fn restore_context_recipient_arguments(body: &str, f: &Func, refs: &RefResolver,
     let mut out=Vec::new();let mut cursor=0;
     for (at,len,replacement) in edits {out.extend(lines[cursor..at].iter().map(|l|(*l).to_owned()));if !replacement.is_empty() {out.push(replacement);}cursor=at+len;}
     out.extend(lines[cursor..].iter().map(|l|(*l).to_owned()));let mut out=out.join("\n");if body.ends_with('\n') {out.push('\n');}out
+}
+
+/// Preserve the value-form task conjunction and enum disjunction inside one early-return scope.
+fn restore_task_and_reason_boolean_values(body: &str, f: &Func, refs: &RefResolver, class_name: Option<&str>) -> String {
+    if !body.contains("if ((IsValid(this.") || !body.contains(" || (int(local_") {return body.to_owned();}
+    let Some(class)=class_name else {return body.to_owned();};let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    let w=|i:&Instr,n:usize|i.words.get(n).map(|s|*s as i16 as i32);
+    let p=|i:&Instr|i.qwords.first().map(|v|*v as i64);
+    let d=|i:&Instr|i.dwords.first().map(|v|*v as i32);
+    let jump=|i:&Instr|d(i).map(|v|i.offset_dw as i64+2+v as i64);
+    let plain=|t:&super::types::DataType,token|t.token==token && t.type_info==0 && !t.is_reference && !t.is_object_const && !t.is_object_handle
+        && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+    let value=|t:&super::types::DataType|t.token==5 && !t.is_reference && !t.is_object_const && !t.is_object_handle && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+    let scalar=|slot|slot>0 && !f.obj_locals.iter().any(|(s,_)|*s==slot);
+    let field=|i:&Instr| {
+        let owner=refs.type_identity_by_id(d(i)?)?;let (name,old)=refs.member_identity(d(i)?,w(i,0)?)?;
+        if refs.type_identity_by_id(old)?!=owner || !owner.namespace.is_empty() {return None;}
+        let ty=if owner.module.is_empty() {refs.native_field_value_type(&owner.name,name)} else {refs.own_field_type_by_class(&owner.name,name)}?;
+        Some((owner,name,ty))
+    };
+    let closed=|start:usize,len:usize,edges:&[(usize,usize)]|edges.iter().all(|(a,b)|jump(&code[*a])==Some(code[*b].offset_dw as i64))
+        && !code.iter().enumerate().any(|(at,i)|i.op.name=="JMPP" || i.op.name.starts_with('J') && jump(i).is_some_and(|to|
+            to>=code[start].offset_dw as i64 && to<=code[start+len-1].offset_dw as i64 && !(at<start && to==code[start].offset_dw as i64)
+                && !edges.iter().any(|(a,b)|at==*a && to==code[*b].offset_dw as i64)));
+    if !plain(&f.ret,0x52) || !f.params.is_empty() {return body.to_owned();}
+    let mut matches=Vec::new();
+    for (at,a) in code.windows(32).enumerate() {
+        let found=(|| {
+            if at==0 || a.iter().map(|i|i.op.name).ne(["PshVPtr","ADDSi","RDSPtr","CALLSYS","CpyRtoV4","CpyVtoR1","JLowNZ","SetV4","JMP",
+                "PshVPtr","ADDSi","RDSPtr","CALLSYS","CpyRtoV4","CpyVtoV4","CpyVtoR1","JLowNZ","SetV4","JMP","PshVPtr","ADDSi","RDSPtr",
+                "ADDSi","PopRPtr","RDR1","sbTOi","CMPIi","TZ","CpyRtoV4","CpyVtoV4","CpyVtoR1","JLowZ"])
+                || code[at-1].op.name!="JLowZ" || !closed(at,32,&[(at+6,at+9),(at+8,at+15),(at+16,at+19),(at+18,at+30)]) {return None;}
+            let guard_end=code.iter().position(|i|Some(i.offset_dw as i64)==jump(&code[at-1]))?;
+            let (task_value,common,narrow,integer)=(w(&a[4],0)?,w(&a[13],0)?,w(&a[24],0)?,w(&a[25],0)?);
+            if guard_end<=at+32 || ![task_value,common,narrow,integer].iter().all(|s|scalar(*s)) || HashSet::from([task_value,common,narrow,integer]).len()!=4
+                || [(0,0),(5,task_value),(7,task_value),(9,0),(14,task_value),(15,task_value),(17,task_value),(19,0),(28,common),(29,task_value),(30,task_value)].iter().any(|(n,s)|w(&a[*n],0)!=Some(*s))
+                || w(&a[14],1)!=Some(common) || w(&a[29],1)!=Some(common) || w(&a[25],1)!=Some(narrow) || w(&a[26],0)!=Some(integer)
+                || d(&a[7])!=Some(0) || d(&a[17])!=Some(0) {return None;}
+            let (host,task,task_ty)=field(&a[1])?;let (owner,result,result_ty)=field(&a[22])?;
+            let (valid,activated)=(p(&a[3])?,p(&a[12])?);let result_constant=d(&a[26])?;
+            if field(&a[10])?!=(host,task,task_ty) || field(&a[20])?!=(host,task,task_ty) || host.module.is_empty() || !refs.is_subclass(class,&host.name)
+                || !owner.module.is_empty() || !result_ty.starts_with('E') || !refs.is_subclass(task_ty,&owner.name) || i8::try_from(result_constant).is_err()
+                || refs.func_by_ptr(valid)!=Some("IsValid") || refs.is_method_by_ptr(valid) || refs.func_owner_by_ptr(valid).is_some() || !plain(refs.func_ret_by_ptr(valid)?,0x41)
+                || !matches!(refs.func_params_by_ptr(valid)?,[t] if t.token==5 && refs.type_identity_by_ptr(t.type_info).is_some_and(|v|v.name=="UObject" && v.module.is_empty() && v.namespace.is_empty())
+                    && t.is_object_handle && t.is_object_const && !t.is_reference && !t.is_read_only && !t.is_auto && !t.if_handle_then_const)
+                || !refs.is_method_by_ptr(activated) || !refs.is_const_method_by_ptr(activated) || refs.func_owner_by_ptr(activated)!=Some(owner.name.as_str())
+                || !plain(refs.func_ret_by_ptr(activated)?,0x41) || !refs.func_params_by_ptr(activated)?.is_empty() {return None;}
+            let end=code.get(guard_end.checked_sub(1)?)?;
+            if end.op.name!="JMP" || jump(end)!=code.last().filter(|i|i.op.name=="RET").map(|i|i.offset_dw as i64) {return None;}
+            for (next,b) in code.windows(27).enumerate().skip(at+32).take(guard_end-(at+32)) {
+                let reason=(|| {
+                    if next+27>=guard_end || b.iter().map(|i|i.op.name).ne(["PSF","CALL","CpyRtoV4","sbTOi","CMPIi","TZ","CpyRtoV4","CpyVtoR1","JLowZ","SetV1","JMP",
+                        "PSF","CALL","CpyRtoV4","sbTOi","CMPIi","TZ","CpyRtoV4","CpyVtoV4","CpyVtoR1","JLowNZ","SetV4","JMP","LoadThisR","RDR1","CpyVtoV4","CpyVtoR1"])
+                        || jump(&a[31])!=Some(b[0].offset_dw as i64) || code[next-1].op.name!="JMP" || jump(&code[next-1])!=jump(end) || !closed(next,27,&[(next+8,next+11),(next+10,next+19),(next+20,next+23),(next+22,next+26)]) {return None;}
+                    let (item,enum_scratch,int_scratch,reason_value,and_value)=(w(&b[0],0)?,w(&b[2],0)?,w(&b[3],0)?,w(&b[6],0)?,w(&b[21],0)?);
+                    if ![enum_scratch,int_scratch,reason_value,and_value].iter().all(|s|scalar(*s)) || HashSet::from([task_value,common,enum_scratch,int_scratch,reason_value,and_value]).len()!=6
+                        || [(3,int_scratch),(4,int_scratch),(7,reason_value),(9,reason_value),(11,item),(13,enum_scratch),(14,int_scratch),(15,int_scratch),(17,common),(18,reason_value),(19,reason_value),(24,common),(25,and_value),(26,and_value)].iter().any(|(n,s)|w(&b[*n],0)!=Some(*s))
+                        || w(&b[3],1)!=Some(enum_scratch) || w(&b[14],1)!=Some(enum_scratch) || w(&b[18],1)!=Some(common) || w(&b[25],1)!=Some(common)
+                        || d(&b[9])!=Some(1) || d(&b[21])!=Some(0) || d(&b[1])!=d(&b[12]) {return None;}
+                    let getter=d(&b[1])?;let ret=refs.func_ret_by_id(getter)?;let enum_ty=refs.type_identity_by_ptr(ret.type_info)?;
+                    let locals:Vec<_>=f.obj_locals.iter().filter(|(s,_)|*s==item).collect();let [(_,ptr)]=locals.as_slice() else {return None;};
+                    let record=refs.type_identity_by_ptr(*ptr)?;let (left,right)=(d(&b[4])?,d(&b[15])?);
+                    let (enabled_host,enabled,enabled_ty)=field(&b[23])?;
+                    if item<=0 || record.module.is_empty() || enum_ty.module!=record.module || enum_ty.namespace!=record.namespace || !value(ret)
+                        || refs.enumerator_name(&enum_ty.name,left).is_none() || refs.enumerator_name(&enum_ty.name,right).is_none() || left==right || i8::try_from(left).is_err() || i8::try_from(right).is_err()
+                        || !refs.is_method_by_id(getter) || !refs.is_const_method_by_id(getter) || refs.func_owner_by_id(getter)!=Some(record.name.as_str()) || !refs.func_params_by_id(getter)?.is_empty()
+                        || !refs.is_subclass(class,&enabled_host.name) || enabled_ty!="bool" {return None;}
+                    // The reason result's only preceding life here is a completed bool-field store in the returning arm.
+                    let stores:Vec<_>=(at+32..next.saturating_sub(2)).filter_map(|n| {
+                        let c=&code[n..n+3];if c.iter().map(|i|i.op.name).ne(["SetV1","LoadThisR","WRTV1"]) || w(&c[0],0)!=Some(reason_value) || w(&c[2],0)!=Some(reason_value)
+                            || d(&c[0])!=Some(0) || !closed(n,3,&[]) {return None;}
+                        let (owner,flag,ty)=field(&c[1])?;(refs.is_subclass(class,&owner.name) && ty=="bool").then_some((n,flag))
+                    }).collect();let [(store,flag)]=stores.as_slice() else {return None;};
+                    let uses=|slot|code.iter().enumerate().take(guard_end).skip(at).filter(|(_,i)|super::bytediff::addressed_slots(i).contains(&slot)).map(|(n,_)|n).collect::<Vec<_>>();
+                    if uses(task_value)!=[at+4,at+5,at+7,at+14,at+15,at+17,at+29,at+30]
+                        || uses(reason_value)!=[*store,store+2,next+6,next+7,next+9,next+18,next+19] {return None;}
+                    let record_name=if record.namespace.is_empty() {record.name.clone()} else {format!("{}::{}",record.namespace,record.name)};
+                    Some((task_value,reason_value,item,task.to_owned(),refs.func_by_ptr(activated)?.to_owned(),result.to_owned(),result_constant,
+                        refs.func_by_id(getter)?.to_owned(),left,right,enabled.to_owned(),(*flag).to_owned(),record_name))
+                })();if let Some(reason)=reason {matches.push(reason);}
+            }
+            Some(())
+        })();let _=found;
+    }
+    let [(task_value,reason_value,item,task,activated,result,result_constant,getter,left,right,enabled,flag,record_name)]=matches.as_slice() else {return body.to_owned();};
+    if [task_value,reason_value].iter().any(|slot|count_ident(body,&format!("local_{slot}"))!=0) {return body.to_owned();}
+    let lines:Vec<_>=body.lines().collect();let mut scopes=Vec::new();let mut stack=Vec::new();
+    for (n,line) in lines.iter().enumerate() {if line.trim()=="}" && stack.pop().is_none() {return body.to_owned();}scopes.push(stack.clone());if line.trim()=="{" {stack.push(n);}}
+    if !stack.is_empty() {return body.to_owned();}
+    let one=|xs:Vec<usize>|if let [at]=xs.as_slice() {Some(*at)} else {None};
+    let conjunction=format!("(IsValid(this.{task}) && this.{task}.{activated}() && (int(this.{task}.{result}) == {result_constant}))");
+    let disjunction=format!("((int(local_{item}.{getter}()) == {left}) || (int(local_{item}.{getter}()) == {right}))");
+    let edits=(|| {
+        let first=one(lines.iter().enumerate().filter(|(_,l)|l.trim()==format!("if ({conjunction})")).map(|(n,_)|n).collect())?;
+        let prefix=format!("if ({disjunction} && this.{enabled} && ");
+        let second=one(lines.iter().enumerate().filter(|(_,l)|l.trim().starts_with(&prefix) && l.trim().ends_with(')')).map(|(n,_)|n).collect())?;
+        let scope=&scopes[first];let parent=*scope.last()?;let close=block_end(&lines,parent)?;
+        let item_decl=one(lines.iter().enumerate().filter(|(_,l)|l.trim()==format!("{record_name} local_{item};")).map(|(n,_)|n).collect())?;
+        if first>=second || scopes[second]!=*scope || indent_of(lines[first])!=indent_of(lines[second]) || close<=second || lines[close-1].trim()!="return;"
+            || item_decl>=parent || !scope.starts_with(&scopes[item_decl]) || lines.get(first+1)?.trim()!="{" {return None;}
+        let first_close=block_end(&lines,first+1)?;
+        if first_close>=second || lines[first_close-1].trim()!="return;" || !lines[first+2..first_close].iter().any(|l|l.trim()==format!("this.{flag} = false;")) {return None;}
+        let pad=indent_of(lines[first]);let suffix=lines[second].trim().strip_prefix(&format!("if ({disjunction}"))?;
+        Some((first,second,format!("{pad}bool local_{task_value} = {conjunction};\n{pad}if (local_{task_value})"),
+            format!("{pad}bool local_{reason_value} = {disjunction};\n{pad}if (local_{reason_value}{suffix}")))
+    })();let Some((first,second,a,b))=edits else {return body.to_owned();};
+    let mut out=lines.iter().enumerate().map(|(n,line)|if n==first {a.clone()} else if n==second {b.clone()} else {(*line).to_owned()}).collect::<Vec<_>>().join("\n");
+    if body.ends_with('\n') {out.push('\n');}out
+}
+
+/// Restore a shared array-result branch and the record value that survives all three loop exits.
+fn restore_array_branch_and_record_lifetime(body: &str, f: &Func, refs: &RefResolver, class_name: Option<&str>) -> String {
+    if !body.contains("TArray<int> local_") || !body.contains(" ? local_") || !body.contains(")) <= 0.0)") {return body.to_owned();}
+    let rewrite=(|| {
+        let class=class_name?;let code=disassemble(&f.bytecode).ok()?;
+        let w=|i:&Instr,n:usize|i.words.get(n).map(|v|*v as i16 as i32);
+        let p=|i:&Instr|i.qwords.first().map(|v|*v as i64);
+        let d=|i:&Instr|i.dwords.first().map(|v|*v as i32);
+        let target=|i:&Instr|d(i).map(|v|i.offset_dw as i64+2+v as i64);
+        let plain=|t:&super::types::DataType,token|t.token==token && t.type_info==0 && !t.is_reference && !t.is_object_const && !t.is_object_handle
+            && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+        let object=|t:&super::types::DataType,ptr,reference:bool,constant:bool,handle:bool|t.token==5 && t.type_info==ptr && t.is_reference==reference
+            && t.is_object_const==constant && t.is_object_handle==handle && t.is_read_only==(constant&&!handle) && !t.is_auto && !t.if_handle_then_const;
+        let local=|slot|{let mut xs=f.obj_locals.iter().filter(|(s,_)|*s==slot);let ptr=xs.next()?.1;(slot>0 && xs.next().is_none()).then_some(ptr)};
+        let native_type=|ptr,name:&str|refs.type_identity_by_ptr(ptr).is_some_and(|t|t.name==name && t.module.is_empty() && t.namespace.is_empty());
+        let native=|ptr,owner:&str,name:&str,constant:bool|refs.func_owner_by_ptr(ptr)==Some(owner) && refs.func_by_ptr(ptr)==Some(name)
+            && refs.is_method_by_ptr(ptr) && refs.is_const_method_by_ptr(ptr)==constant;
+        let uses=|slot|code.iter().enumerate().filter(|(_,i)|super::bytediff::addressed_slots(i).contains(&slot)).map(|(n,_)|n).collect::<Vec<_>>();
+        let closed=|start:usize,end:usize,edges:&[(usize,usize)]|edges.iter().all(|(a,b)|target(&code[*a])==Some(code[*b].offset_dw as i64))
+            && !code.iter().enumerate().any(|(at,i)|i.op.name=="JMPP" || i.op.name.starts_with('J') && target(i).is_some_and(|to|
+                to>=code[start].offset_dw as i64 && to<code[end].offset_dw as i64 && !(at<start && to==code[start].offset_dw as i64)
+                    && !edges.iter().any(|(a,b)|at==*a && to==code[*b].offset_dw as i64)));
+        if !plain(&f.ret,0x52) || f.is_const_method() {return None;}
+        let params:Vec<_>=f.params.iter().map(|p|p.ty.clone()).collect();let slots=super::model::param_slot_map(&params,true,false,Some(refs));
+        let param=|slot|f.params.get(*slots.get(&slot)?);
+        let mut arrays=Vec::new();
+        for (at,a) in code.windows(30).enumerate() {
+            let found=(|| {
+                if a[..29].iter().map(|i|i.op.name).ne("PSF CALLSYS PshVPtr CALLSYS JLowZ PshVPtr PSF PshVPtr CALLSYS PSF PSF CALLSYS PSF CALLSYS JMP PshGPtr PSF CALLSYS PSF PSF PshVPtr CALLSYS PSF CALLSYS PSF PSF CALLSYS PSF CALLSYS".split_whitespace())
+                    || !closed(at,at+29,&[(at+4,at+15),(at+14,at+29)]) {return None;}
+                let (array,temp,clock,receiver,actor)=(w(&a[0],0)?,w(&a[6],0)?,w(&a[16],0)?,w(&a[7],0)?,w(&a[2],0)?);
+                if HashSet::from([array,temp,clock,receiver]).len()!=4 || [(5,actor),(9,temp),(10,array),(12,temp),(18,clock),(19,temp),(20,receiver),(22,clock),(24,temp),(25,array),(27,temp)]
+                    .iter().any(|(n,s)|a[*n].words.as_slice()!=[*s as u16]) || uses(temp)!=[at+6,at+9,at+12,at+19,at+24,at+27] || uses(clock)!=[at+16,at+18,at+22] {return None;}
+                let (array_ty,clock_ty,receiver_ty)=(local(array)?,local(clock)?,local(receiver)?);let subject=param(actor)?;
+                let receiver_id=refs.type_identity_by_ptr(receiver_ty)?;
+                if local(temp)?!=array_ty || !native_type(array_ty,"TArray") || !native_type(clock_ty,"FInGameTime")
+                    || !matches!(refs.type_subtypes(array_ty)?,[t] if plain(t,0x44)) || !receiver_id.module.is_empty() || !receiver_id.namespace.is_empty() || !is_object_handle_type(&receiver_id.name)
+                    || subject.flags!=0 || !object(&subject.ty,subject.ty.type_info,false,false,true) || !refs.type_identity_by_ptr(subject.ty.type_info).is_some_and(|t|t.module.is_empty() && t.namespace.is_empty() && is_object_handle_type(&t.name)) {return None;}
+                let (ctor,valid,left,assign,dtor,now,right,clock_dtor)=(p(&a[1])?,p(&a[3])?,p(&a[8])?,p(&a[11])?,p(&a[13])?,p(&a[17])?,p(&a[21])?,p(&a[23])?);
+                if p(&a[26])!=Some(assign) || p(&a[28])!=Some(dtor) || refs.global_by_ptr(p(&a[15])?)!=Some("__WorldContext") {return None;}
+                for (ptr,name) in [(ctor,"$beh0"),(dtor,"$beh2")] {if !native(ptr,"TArray",name,false) || !plain(refs.func_ret_by_ptr(ptr)?,0x52) || !refs.func_params_by_ptr(ptr)?.is_empty() {return None;}}
+                if refs.func_by_ptr(valid)!=Some("IsValid") || refs.is_method_by_ptr(valid) || refs.func_owner_by_ptr(valid).is_some() || !plain(refs.func_ret_by_ptr(valid)?,0x41)
+                    || !matches!(refs.func_params_by_ptr(valid)?,[t] if native_type(t.type_info,"UObject") && object(t,t.type_info,false,true,true))
+                    || !native(assign,"TArray","opAssign",false) || !object(refs.func_ret_by_ptr(assign)?,array_ty,true,false,false)
+                    || !matches!(refs.func_params_by_ptr(assign)?,[t] if object(t,array_ty,true,true,false))
+                    || refs.is_method_by_ptr(now) || refs.func_owner_by_ptr(now).is_some() || refs.func_by_ptr(now)!=Some("Now") || !object(refs.func_ret_by_ptr(now)?,clock_ty,false,false,false)
+                    || !matches!(refs.func_params_by_ptr(now)?,[t] if native_type(t.type_info,"UObject") && object(t,t.type_info,false,true,true))
+                    || !native(clock_dtor,"FInGameTime","$beh2",false) || !plain(refs.func_ret_by_ptr(clock_dtor)?,0x52) || !refs.func_params_by_ptr(clock_dtor)?.is_empty() {return None;}
+                for ptr in [left,right] {if !refs.is_method_by_ptr(ptr) || !refs.is_const_method_by_ptr(ptr) || refs.func_owner_by_ptr(ptr)!=Some(receiver_id.name.as_str())
+                    || !object(refs.func_ret_by_ptr(ptr)?,array_ty,false,false,false) {return None;}}
+                if !matches!(refs.func_params_by_ptr(left)?,[t] if object(t,subject.ty.type_info,false,true,true))
+                    || !matches!(refs.func_params_by_ptr(right)?,[t] if object(t,clock_ty,true,true,false)) {return None;}
+                Some((at,array,temp,receiver,array_ty,subject.name.clone(),receiver_id.name.clone(),refs.func_by_ptr(left)?.to_owned(),refs.func_by_ptr(right)?.to_owned(),dtor))
+            })();if let Some(v)=found {arrays.push(v);}
+        }
+        let [(array_at,array,_,receiver,array_ty,subject,receiver_type,left,right,array_dtor)]=arrays.as_slice() else {return None;};
+        let mut records=Vec::new();
+        for (at,b) in code.windows(45).enumerate().skip(array_at+29) {
+            let found=(|| {
+                if b[..44].iter().map(|i|i.op.name).ne("PSF PSF PSF CALL PSF PshVPtr PshVPtr CALLINTF CpyRtoV8 SetV8 CMPd JP PSF CALL PSF CALLSYS FreeNullV8 PSF CALLSYS JMP PSF PSF CALLSYS CpyVtoR1 JLowZ PSF CALL PSF CALLSYS FreeNullV8 PSF CALLSYS JMP PSF CALL PSF CALLSYS FreeNullV8 PSF CALLSYS LoadVObjR RDR1 CpyVtoR1 JLowNZ".split_whitespace()) {return None;}
+                let (relative,global,record,witness,score,zero,handle,item,set,flag,iterator,scratch)=(w(&b[0],0)?,w(&b[1],0)?,w(&b[2],0)?,w(&b[5],0)?,w(&b[8],0)?,w(&b[9],0)?,w(&b[16],0)?,w(&b[20],0)?,w(&b[21],0)?,w(&b[23],0)?,w(&b[40],0)?,w(&b[41],0)?);
+                if [(4,record),(6,0),(12,record),(14,relative),(17,global),(25,record),(27,relative),(29,handle),(30,global),(33,record),(35,relative),(37,handle),(38,global),(42,scratch)]
+                    .iter().any(|(n,s)|b[*n].words.as_slice()!=[*s as u16]) || b[10].words.as_slice()!=[score as u16,zero as u16] || b[9].qwords.as_slice()!=[0]
+                    || [score,zero,item,scratch].iter().any(|s|*s<=0 || f.obj_locals.iter().any(|(n,_)|n==s)) || score==zero
+                    || uses(record)!=[at+2,at+4,at+12,at+25,at+33] {return None;}
+                let (record_ty,global_ty,relative_ty,iterator_ty,set_ty)=(local(record)?,local(global)?,local(relative)?,local(iterator)?,local(set)?);
+                let record_id=refs.type_identity_by_ptr(record_ty)?;let global_id=refs.type_identity_by_ptr(global_ty)?;let relative_id=refs.type_identity_by_ptr(relative_ty)?;
+                let handle_id=refs.type_identity_by_ptr(local(handle)?)?;
+                let siblings:Vec<_>=f.obj_locals.iter().filter(|(_,ty)|*ty==record_ty).map(|(s,_)|*s).collect();
+                if record_id.module.is_empty() || !record_id.namespace.is_empty() || !record_id.name.starts_with('F') || global_ty==relative_ty
+                    || !global_id.module.is_empty() || !relative_id.module.is_empty() || !global_id.namespace.is_empty() || !relative_id.namespace.is_empty()
+                    || !global_id.name.starts_with('F') || !relative_id.name.starts_with('F') || !is_object_handle_type(&handle_id.name)
+                    || siblings.len()!=2 || siblings.iter().filter(|s|**s!=record).count()!=1 || siblings.iter().any(|s|*s<=0 || *s!=record && !uses(*s).is_empty())
+                    || !native_type(iterator_ty,"TArrayIterator") || !native_type(set_ty,"TSet") || !matches!(refs.type_subtypes(set_ty)?,[t] if plain(t,0x44)) {return None;}
+                let (ctor,evaluate,dtor,relative_dtor,global_dtor,add)=(d(&b[3])?,d(&b[7])?,d(&b[13])?,p(&b[15])?,p(&b[18])?,p(&b[22])?);
+                if d(&b[26])!=Some(dtor) || d(&b[34])!=Some(dtor) || p(&b[28])!=Some(relative_dtor) || p(&b[36])!=Some(relative_dtor) || p(&b[31])!=Some(global_dtor) || p(&b[39])!=Some(global_dtor) {return None;}
+                for (id,name) in [(ctor,record_id.name.clone()),(dtor,format!("~{}",record_id.name))] {if !refs.is_method_by_id(id) || refs.is_const_method_by_id(id)
+                    || refs.func_owner_by_id(id)!=Some(record_id.name.as_str()) || refs.func_by_id(id)!=Some(name.as_str()) || !plain(refs.func_ret_by_id(id)?,0x52) {return None;}}
+                let witness_param=param(witness)?;let flag_param=param(flag)?;
+                if witness_param.flags!=0 || !object(&witness_param.ty,witness_param.ty.type_info,false,false,true) || witness_param.ty.type_info!=param(w(&code[array_at+2],0)?)?.ty.type_info
+                    || !plain(&super::types::DataType{is_object_const:false,is_read_only:false,..flag_param.ty.clone()},0x41) || !flag_param.ty.is_object_const || !flag_param.ty.is_read_only || flag_param.flags!=0
+                    || !matches!(refs.func_params_by_id(ctor)?,[a,b] if object(a,global_ty,true,true,false) && object(b,relative_ty,true,true,false)) || !refs.func_params_by_id(dtor)?.is_empty()
+                    || !refs.is_method_by_id(evaluate) || !refs.is_subclass(class,refs.func_owner_by_id(evaluate)?) || !plain(refs.func_ret_by_id(evaluate)?,0x51)
+                    || !matches!(refs.func_params_by_id(evaluate)?,[a,b] if object(a,witness_param.ty.type_info,false,false,true) && object(b,record_ty,true,true,false)) {return None;}
+                for (ptr,ty) in [(relative_dtor,relative_id),(global_dtor,global_id)] {if !native(ptr,&ty.name,"$beh2",false) || !plain(refs.func_ret_by_ptr(ptr)?,0x52) || !refs.func_params_by_ptr(ptr)?.is_empty() {return None;}}
+                if !native(add,"TSet","Add",false) || !plain(refs.func_ret_by_ptr(add)?,0x52)
+                    || !matches!(refs.func_params_by_ptr(add)?,[t] if t.is_reference && t.is_object_const && t.is_read_only && plain(&super::types::DataType{is_reference:false,is_object_const:false,is_read_only:false,..t.clone()},0x44)) {return None;}
+                let (member,old)=refs.member_identity(d(&b[40])?,w(&b[40],1)?)?;
+                if member!="CanProceed" || refs.type_identity_by_id(d(&b[40])?)!=refs.type_identity_by_ptr(iterator_ty) || refs.type_identity_by_id(old)!=refs.type_identity_by_ptr(iterator_ty) {return None;}
+                let loop_at=code.iter().position(|i|Some(i.offset_dw as i64)==target(&b[43]))?;
+                if loop_at<4 || loop_at<=array_at+29 || loop_at+5>=at {return None;}
+                let h=&code[loop_at-4..loop_at+5];
+                let mut edges=vec![(at+11,at+20),(at+19,at+40),(at+24,at+33),(at+32,at+44),(at+43,loop_at),(loop_at-1,at+40)];
+                // Preceding continues may join the condition after their own completed cleanup.
+                for (n,i) in code.iter().enumerate().take(at) {if i.op.name.starts_with('J') && target(i)==Some(b[40].offset_dw as i64) && n!=loop_at-1 {
+                    if n<loop_at || i.op.name!="JMP" || n<2 || code[n-2].op.name!="PSF" || w(&code[n-2],0)!=Some(global) || code[n-1].op.name!="CALLSYS" || p(&code[n-1])!=Some(global_dtor) {return None;}
+                    edges.push((n,at+40));
+                }}
+                if h.iter().map(|i|i.op.name).ne(["PSF","PSF","CALLSYS","JMP","SUSPEND","PSF","CALLSYS","RDR4","CpyVtoV4"])
+                    || [(0,iterator),(1,*array),(5,iterator)].iter().any(|(n,s)|h[*n].words.as_slice()!=[*s as u16]) || w(&h[8],0)!=Some(item) || w(&h[8],1)!=w(&h[7],0)
+                    || target(&h[3])!=Some(b[40].offset_dw as i64) || !closed(at,at+44,&edges)
+                    || !closed(loop_at-4,loop_at+5,&[(loop_at-1,at+40),(at+43,loop_at)]) {return None;}
+                let (iter_fn,proceed)=(p(&h[2])?,p(&h[6])?);
+                if !native(iter_fn,"TArray","Iterator",false) || !object(refs.func_ret_by_ptr(iter_fn)?,iterator_ty,false,false,false) || !refs.func_params_by_ptr(iter_fn)?.is_empty()
+                    || !native(proceed,"TArrayIterator","Proceed",false) || !matches!(refs.func_ret_by_ptr(proceed)?,t if t.is_reference && plain(&super::types::DataType{is_reference:false,..t.clone()},0x44)) || !refs.func_params_by_ptr(proceed)?.is_empty() {return None;}
+                let array_uses=uses(*array);if array_uses.len()!=5 || array_uses[..4]!=[*array_at,array_at+10,array_at+25,loop_at-3] {return None;}
+                let cleanup=*array_uses.last()?;if cleanup<=at+44 || code[cleanup].op.name!="PSF" || code.get(cleanup+1)?.op.name!="CALLSYS" || p(&code[cleanup+1])!=Some(*array_dtor) {return None;}
+                Some((record,global,relative,item,set,record_id.name.clone(),global_id.name.clone(),relative_id.name.clone(),witness_param.name.clone(),flag_param.name.clone(),refs.func_by_id(evaluate)?.to_owned()))
+            })();if let Some(v)=found {records.push(v);}
+        }
+        let [(record,global,relative,item,set,record_type,global_type,relative_type,witness,flag,evaluate)]=records.as_slice() else {return None;};
+        if count_ident(body,&format!("local_{record}"))!=0 {return None;}
+        let lines:Vec<_>=body.lines().collect();let mut paths=Vec::new();let mut stack=Vec::new();
+        for (n,line) in lines.iter().enumerate() {if line.trim()=="}" && stack.pop().is_none() {return None;}paths.push(stack.clone());if line.trim()=="{" {stack.push(n);}}
+        if !stack.is_empty() {return None;}
+        let one=|text:&str|{let mut xs=lines.iter().enumerate().filter(|(_,l)|l.trim()==text).map(|(n,_)|n);let n=xs.next()?;xs.next().is_none().then_some(n)};
+        let expression=format!("IsValid({subject}) ? local_{receiver}.{left}({subject}) : local_{receiver}.{right}(FInGameTime::Now())");
+        let array_line=one(&format!("TArray<int> local_{array} = {expression};"))?;
+        let loop_line=one(&format!("for (auto local_{item} : local_{array})"))?;let set_line=one(&format!("TSet<int> local_{set};"))?;
+        let constructor=format!("{record_type}(local_{global}, local_{relative})");
+        let record_line=one(&format!("if (this.{evaluate}({witness}, {constructor}) <= 0.0)"))?;
+        let global_line=one(&format!("{global_type} local_{global};"))?;let relative_line=one(&format!("{relative_type} local_{relative};"))?;
+        let receiver_lines:Vec<_>=lines.iter().enumerate().filter(|(_,l)|l.trim().starts_with(&format!("{receiver_type} local_{receiver} = "))).map(|(n,_)|n).collect();let [receiver_line]=receiver_lines.as_slice() else {return None;};
+        let scope=&paths[array_line];let pad=indent_of(lines[array_line]);let inner=format!("{pad}    ");
+        if *receiver_line>=array_line || array_line>=set_line || set_line>=loop_line || loop_line+1>=global_line || global_line>=relative_line || relative_line>=record_line
+            || !scope.is_empty() || paths[*receiver_line]!=*scope || paths[set_line]!=*scope || paths[loop_line]!=*scope || lines.get(loop_line+1)?!=&format!("{pad}{{")
+            || paths[record_line]!=vec![loop_line+1] || paths[global_line]!=paths[record_line] || paths[relative_line]!=paths[record_line]
+            || count_ident(body,&format!("local_{array}"))!=2 {return None;}
+        let tail=[format!("if (this.{evaluate}({witness}, {constructor}) <= 0.0)"),"{".into(),"    continue;".into(),"}".into(),format!("local_{set}.Add(local_{item});"),format!("if ({flag})"),"{".into(),"    break;".into(),"}".into()];
+        if !lines.get(record_line..record_line+9)?.iter().zip(tail).all(|(l,e)|*l==format!("{inner}{e}")) || block_end(&lines,loop_line+1)?!=record_line+9 {return None;}
+        let array_source=format!("{pad}TArray<int> local_{array};\n{pad}if (IsValid({subject}))\n{pad}{{\n{inner}local_{array} = local_{receiver}.{left}({subject});\n{pad}}}\n{pad}else\n{pad}{{\n{inner}local_{array} = local_{receiver}.{right}(FInGameTime::Now());\n{pad}}}");
+        let record_source=format!("{inner}{record_type} local_{record} = {constructor};\n{inner}if (this.{evaluate}({witness}, local_{record}) <= 0.0)");
+        let mut out=lines.iter().enumerate().map(|(n,l)|if n==array_line {array_source.clone()} else if n==record_line {record_source.clone()} else {(*l).to_owned()}).collect::<Vec<_>>().join("\n");
+        if body.ends_with('\n') {out.push('\n');}Some(out)
+    })();rewrite.unwrap_or_else(||body.to_owned())
 }
 
 /// Materialize the trailing scalar arguments before allocating the perceived actor handle.
@@ -53943,6 +54520,63 @@ mod literal_value_lifetime_tests {
     }
 
     #[test]
+    fn reused_native_guards_keep_only_the_final_boolean_declaration() {
+        let mut f=function(&[
+            ("PshVPtr",&[2]),("CALLSYS",&[]),("CpyRtoV4",&[5]),("NOT",&[5]),("CpyVtoR1",&[5]),
+            ("JLowZ",&[]),("SetV1",&[5]),("JMP",&[]),("PshVPtr",&[2]),("CALLSYS",&[]),
+            ("STOREOBJ",&[8]),("PshVPtr",&[8]),("CALLSYS",&[]),("CpyRtoV4",&[9]),("NOT",&[9]),
+            ("CpyVtoV4",&[5,9]),("CpyVtoR1",&[5]),("JLowZ",&[]),("JMP",&[]),("PshVPtr",&[2]),
+            ("CALL",&[]),("CpyRtoV4",&[9]),("NOT",&[9]),("CpyVtoR1",&[9]),("JLowNZ",&[]),
+            ("SetV4",&[9]),("JMP",&[]),("PshVPtr",&[2]),("CALL",&[]),("CpyRtoV4",&[5]),
+            ("NOT",&[5]),("CpyVtoV4",&[9,5]),("CpyVtoR1",&[9]),("JLowZ",&[]),("JMP",&[]),
+            ("PshVPtr",&[65534]),("ADDSi",&[1096]),("PSF",&[46]),("CALLSYS",&[]),("PSF",&[46]),
+            ("ADDSi",&[8]),("RDSPtr",&[]),("CALLSYS",&[]),("CpyRtoV4",&[5]),("NOT",&[5]),
+            ("CpyVtoR1",&[5]),("JLowZ",&[]),("PSF",&[46]),("CALLSYS",&[]),("JMP",&[]),
+            ("PshGPtr",&[]),("PshVPtr",&[2]),("PshVPtr",&[0]),("CALLSYS",&[]),("STOREOBJ",&[4]),
+            ("PshVPtr",&[4]),("CALLSYS",&[]),("STOREOBJ",&[50]),("PshVPtr",&[50]),("CALLSYS",&[]),
+            ("CpyRtoV4",&[5]),("CpyVtoR1",&[5]),("JLowZ",&[]),("SetV1",&[5]),("JMP",&[]),
+            ("PshGPtr",&[]),("PshVPtr",&[2]),("PshVPtr",&[0]),("CALLSYS",&[]),("STOREOBJ",&[4]),
+            ("PshVPtr",&[4]),("CALLSYS",&[]),("STOREOBJ",&[50]),("PshVPtr",&[50]),("CALLSYS",&[]),
+            ("CpyRtoV4",&[9]),("CpyVtoV4",&[5,9]),("CpyVtoV4",&[9,5]),("NOT",&[9]),("CpyVtoR1",&[9]),
+            ("JLowZ",&[]),("PSF",&[46]),("CALLSYS",&[]),("JMP",&[]),("SUSPEND",&[]),
+            ("RET",&[6]),
+        ]);f.ret=DataType{token:0x52,..Default::default()};
+        f.obj_locals=vec![(2,1),(8,2),(46,3),(4,1),(50,4)];
+        f.params=vec![super::super::model::Param{name:"Event".into(),flags:1,ty:DataType{token:5,type_info:5,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()}}];
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,value) in [(1,100),(9,101),(12,100),(20,200),(28,201),(38,102),(42,100),(48,103),(53,104),(56,105),(59,106),(68,104),(71,105),(74,106),(82,103),(6,1),(25,0),(63,1),(36,55),(40,53),(50,1000),(65,1001)] {f.bytecode[code[at].offset_dw+1]=value;}
+        for (at,to) in [(5,8),(7,16),(17,19),(18,85),(24,27),(26,32),(33,35),(34,85),(46,50),(49,85),(62,65),(64,77),(80,84),(83,85)] {f.bytecode[code[at].offset_dw+1]=code[to].offset_dw as i32-code[at].offset_dw as i32-2;}
+        let body="    AGothicCharacterState local_2 = StateSeed();\n    bool local_5 = !(IsValid(local_2)) || !(IsValid(local_2.Actor()));\n    if (local_5)\n    {\n        return;\n    }\n    FPerceivedInteractiveObject local_46 = Event.Object;\n    local_5 = !(IsValid(local_46.Definition));\n    if (local_5)\n    {\n        return;\n    }\n    local_5 = this.State().Relation().Applies(local_2, GameplayTag::FirstCrime) || this.State().Relation().Applies(local_2, GameplayTag::SecondCrime);\n    if (!(local_5))\n    {\n        return;\n    }\n    Keep();\n";let expected="    AGothicCharacterState local_2 = StateSeed();\n    if (!(IsValid(local_2)) || !(IsValid(local_2.Actor())))\n    {\n        return;\n    }\n    FPerceivedInteractiveObject local_46 = Event.Object;\n    if (!(IsValid(local_46.Definition)))\n    {\n        return;\n    }\n    bool local_5 = this.State().Relation().Applies(local_2, GameplayTag::FirstCrime) || this.State().Relation().Applies(local_2, GameplayTag::SecondCrime);\n    if (!(local_5))\n    {\n        return;\n    }\n    Keep();\n";let refs=RefResolver::from_test_reused_native_guards(0);
+        let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_reused_native_guard_values(s,f,r,Some("UController"));
+        assert_eq!(fold(body,&f,&refs),expected);assert_eq!(fold(expected,&f,&refs),expected);
+        for fault in 1..=15 {assert_eq!(fold(body,&f,&RefResolver::from_test_reused_native_guards(fault)),body,"metadata {fault}");}
+        for (at,i) in code.iter().enumerate().filter(|(_,i)|!i.words.is_empty() && i.op.name!="RET") {for n in 0..i.words.len() {
+            let mut bad=f.clone();let (dw,shift)=if n==0 {(i.offset_dw,16)} else {(i.offset_dw+1,if n==1 {0} else {16})};
+            bad.bytecode[dw]^=4<<shift;assert_eq!(fold(body,&bad,&refs),body,"word {at}:{n}");
+        }}
+        for at in [1,5,6,7,9,12,17,18,20,24,25,26,28,33,34,36,38,40,42,46,48,49,50,53,56,59,62,63,64,65,68,71,74,80,82,83] {let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1]^=16;assert_eq!(fold(body,&bad,&refs),body,"payload {at}");}
+        let mut bad=f.clone();bad.params[0].flags=0;assert_eq!(fold(body,&bad,&refs),body);
+        let mut bad=f.clone();bad.obj_locals.push((5,1));assert_eq!(fold(body,&bad,&refs),body);
+        let mut bad=f.clone();bad.bytecode[code[84].offset_dw]=function(&[("PshV4",&[5])]).bytecode[0];assert_eq!(fold(body,&bad,&refs),body);
+        for target in [2,13,29,43,60,77] {let mut bad=f.clone();let at=bad.bytecode.len();bad.bytecode.extend(function(&[("JMP",&[]),("RET",&[6])]).bytecode);
+            bad.bytecode[at+1]=code[target].offset_dw as i32-at as i32-2;
+            for branch in [18,34,49,83] {bad.bytecode[code[branch].offset_dw+1]=at as i32+2-code[branch].offset_dw as i32-2;}
+            assert_eq!(fold(body,&bad,&refs),body,"external CFG {target}");
+        }
+        for changed in [body.replace("local_2.Actor()","local_2.Other()"),body.replace("local_46.Definition","local_46.Other"),
+            body.replace("GameplayTag::SecondCrime","GameplayTag::ThirdCrime"),body.replace("    local_5 = !(IsValid(local_46", "    {\n    local_5 = !(IsValid(local_46").replace("    local_5 = this.State()","    }\n    local_5 = this.State()"),
+            body.replace("        return;","        Work();"),format!("{body}Use(local_5);\n")] {assert_eq!(fold(&changed,&f,&refs),changed);}
+        let mut renamed=f.clone();for i in &code {if i.op.name!="RET" {for (n,word) in i.words.iter().enumerate().filter(|(_,w)|**w>0 && **w<32768 && i.op.name!="ADDSi") {
+            let (dw,shift)=if n==0 {(i.offset_dw,16)} else {(i.offset_dw+1,if n==1 {0} else {16})};
+            renamed.bytecode[dw]=(renamed.bytecode[dw] as u32 & !(0xffff<<shift) | ((*word as u32+100)<<shift)) as i32;
+        }}}for (slot,_) in &mut renamed.obj_locals {*slot+=100;}
+        let rename=|s:&str|s.split_inclusive(|c:char|!c.is_ascii_alphanumeric() && c!='_').map(|piece| {
+            let name=piece.trim_end_matches(|c:char|!c.is_ascii_alphanumeric() && c!='_');
+            if let Some((slot,_))=super::slot_and_life_any(name) {piece.replacen(&format!("local_{slot}"),&format!("local_{}",slot+100),1)} else {piece.to_owned()}
+        }).collect::<String>();assert_eq!(fold(&rename(body),&renamed,&refs),rename(expected));
+    }
+
+    #[test]
     fn linked_bool_guards_preserve_reused_and_named_lifetimes() {
         let mut f=function(&[("CALLSYS",&[]),("CpyRtoV4",&[12]),("NOT",&[12]),("CpyVtoR1",&[12]),("JLowZ",&[]),
             ("PSF",&[9]),("CALLSYS",&[]),("JMP",&[]),("CALLSYS",&[]),("CpyRtoV4",&[12]),("NOT",&[12]),("CpyVtoR1",&[12]),
@@ -54296,6 +54930,127 @@ mod literal_value_lifetime_tests {
     }
 
     #[test]
+    fn scoped_cast_return_arms_preserve_the_shared_default_and_handle_lifetime() {
+        let mut f=function(&[
+            ("PshGPtr",&[]),("CALLSYS",&[]),("STOREOBJ",&[14]),("PshVPtr",&[14]),("PshVPtr",&[65532]),
+            ("CALLSYS",&[]),("JLowZ",&[]),("CmpPtrNull",&[65532]),("JZ",&[]),("TYPEID",&[]),
+            ("PSF",&[26]),("PshVPtr",&[65532]),("CALLSYS",&[]),("JMP",&[]),("ClrVPtr",&[26]),
+            ("PshVPtr",&[26]),("RefCpyV",&[28]),("CmpPtrNull",&[28]),("JNZ",&[]),("PshVPtr",&[65534]),
+            ("CALLSYS",&[]),("PSF",&[12]),("CALLSYS",&[]),("PSF",&[12]),("PshVPtr",&[65534]),
+            ("CALLSYS",&[]),("PSF",&[12]),("CALLSYS",&[]),("JMP",&[]),("PshVPtr",&[65534]),
+            ("CALLSYS",&[]),("PshVPtr",&[28]),("CALLSYS",&[]),("STOREOBJ",&[14]),("PshVPtr",&[14]),
+            ("PSF",&[30]),("CALLSYS",&[]),("PSF",&[30]),("PSF",&[12]),("PshVPtr",&[0]),
+            ("CALLINTF",&[]),("PSF",&[12]),("PshVPtr",&[65534]),("CALLSYS",&[]),("PSF",&[12]),
+            ("CALLSYS",&[]),("JMP",&[]),("PshGPtr",&[]),("CALLSYS",&[]),("STOREOBJ",&[14]),
+            ("PshVPtr",&[14]),("PshVPtr",&[65532]),("CALLSYS",&[]),("JLowZ",&[]),("PshVPtr",&[0]),
+            ("CALLINTF",&[]),("PshVPtr",&[65534]),("CALLSYS",&[]),("PshVPtr",&[65532]),("CALLSYS",&[]),
+            ("PshRPtr",&[]),("PshVPtr",&[0]),("PSF",&[12]),("CALL",&[]),("PSF",&[12]),
+            ("PshVPtr",&[65534]),("CALLSYS",&[]),("PSF",&[12]),("CALLSYS",&[]),("JMP",&[]),
+            ("PshVPtr",&[65534]),("CALLSYS",&[]),("PSF",&[12]),("CALLSYS",&[]),("PSF",&[12]),
+            ("PshVPtr",&[65534]),("CALLSYS",&[]),("PSF",&[12]),("CALLSYS",&[]),("RET",&[6]),
+        ]);
+        f.ret=DataType{token:5,type_info:1,..Default::default()};f.obj_locals=vec![(12,1),(14,2),(26,4),(28,4),(30,5)];
+        f.params=vec![super::super::model::Param{name:"Item".into(),flags:0,ty:DataType{token:5,type_info:3,is_object_handle:true,is_object_const:true,..Default::default()}}];
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,value) in [(0,300i64),(1,100i64),(5,101i64),(9,1073741878i64),(12,102i64),(20,103i64),(22,103i64),(25,104i64),(27,105i64),(30,103i64),(32,106i64),(36,107i64),(40,200i64),(43,104i64),(45,105i64),(47,301i64),(48,108i64),(52,101i64),(55,201i64),(57,103i64),(59,109i64),(63,202i64),(66,104i64),(68,105i64),(71,103i64),(73,103i64),(76,104i64),(78,105i64)] {f.bytecode[code[at].offset_dw+1]=value as i32;}
+        let edges=[(6,47),(8,14),(13,15),(18,29),(28,79),(46,79),(53,70),(69,79)];
+        for (a,b) in edges {f.bytecode[code[a].offset_dw+1]=code[b].offset_dw as i32-code[a].offset_dw as i32-2;}
+        let body="    USpecial local_28;\n    if (AlreadyChosen())\n    {\n        return FAbilityTaskExecutor();\n    }\n    else\n    {\n        if (Item.IsA(USpecial))\n        {\n            local_28 = (Cast<USpecial>(Item));\n            if (local_28 == nullptr)\n            {\n                return FAbilityTaskExecutor();\n            }\n            else\n            {\n                return this.Choose(TSubclassOf<USpecial>(local_28.GetClass()));\n            }\n        }\n        else\n        {\n            if (Item.IsA(UAlternate))\n            {\n                this.Update();\n                return ::MakeAlternate(this, Item.Tag());\n            }\n            else\n            {\n                return FAbilityTaskExecutor();\n            }\n        }\n    }\n";
+        let expected="    if (AlreadyChosen())\n    {\n        return FAbilityTaskExecutor();\n    }\n    else\n    {\n        if (Item.IsA(USpecial))\n        {\n            USpecial local_28 = (Cast<USpecial>(Item));\n            if (local_28 == nullptr)\n            {\n                return FAbilityTaskExecutor();\n            }\n            else\n            {\n                return this.Choose(TSubclassOf<USpecial>(local_28.GetClass()));\n            }\n        }\n        else\n        {\n            if (Item.IsA(UAlternate))\n            {\n                this.Update();\n                return ::MakeAlternate(this, Item.Tag());\n            }\n        }\n    }\n    return FAbilityTaskExecutor();\n";
+        let refs=RefResolver::from_test_scoped_cast_returns(0);
+        let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_scoped_cast_return_tail(s,f,r,Some("UController"));
+        assert_eq!(fold(body,&f,&refs),expected);assert_eq!(fold(expected,&f,&refs),expected);
+        for fault in 1..=19 {assert_eq!(fold(body,&f,&RefResolver::from_test_scoped_cast_returns(fault)),body,"metadata {fault}");}
+        for (at,i) in code.iter().enumerate().filter(|(_,i)|!i.words.is_empty()) {
+            let mut bad=f.clone();bad.bytecode[i.offset_dw]^=4<<16;assert_eq!(fold(body,&bad,&refs),body,"operand {at}");
+        }
+        for at in [0,1,5,9,12,20,22,25,27,30,32,36,40,43,45,47,48,52,55,57,59,63,66,68,71,73,76,78] {let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1]^=1<<24;assert_eq!(fold(body,&bad,&refs),body,"payload {at}");}
+        for (at,_) in edges {let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1]^=2;assert_eq!(fold(body,&bad,&refs),body,"edge {at}");}
+        for to in [8,16,29,47,70,79] {let mut bad=f.clone();let mut prefix=function(&[("JMP",&[])]).bytecode;
+            prefix[1]=code[to].offset_dw as i32+prefix.len() as i32-2;prefix.extend(bad.bytecode);bad.bytecode=prefix;
+            assert_eq!(fold(body,&bad,&refs),body,"interior entry {to}");}
+        // An earlier complete return may share RET; an unfinished value may not.
+        let mut earlier=f.clone();let mut prefix=function(&[("CmpPtrNull",&[65532]),("JNZ",&[]),("PshVPtr",&[65534]),("CALLSYS",&[]),
+            ("PSF",&[12]),("CALLSYS",&[]),("PSF",&[12]),("PshVPtr",&[65534]),("CALLSYS",&[]),("PSF",&[12]),("CALLSYS",&[]),("JMP",&[])]).bytecode;
+        let pc=disassemble(&prefix).unwrap();for (at,ptr) in [(3,103),(5,103),(8,104),(10,105)] {prefix[pc[at].offset_dw+1]=ptr;}
+        prefix[pc[1].offset_dw+1]=prefix.len() as i32-pc[1].offset_dw as i32-2;
+        prefix[pc[11].offset_dw+1]=prefix.len() as i32+code[79].offset_dw as i32-pc[11].offset_dw as i32-2;
+        prefix.extend(earlier.bytecode);earlier.bytecode=prefix;assert_eq!(fold(body,&earlier,&refs),expected);
+        earlier.bytecode[pc[10].offset_dw+1]=103;assert_eq!(fold(body,&earlier,&refs),body);
+        for before in [true,false] {let mut extra=f.clone();let op=function(&[("PshVPtr",&[28])]).bytecode;
+            if before {let mut bytes=op;bytes.extend(extra.bytecode);extra.bytecode=bytes;} else {extra.bytecode.extend(op);}
+            assert_eq!(fold(body,&extra,&refs),body);}
+        let mut bad=f.clone();bad.params[0].ty.is_object_const=false;assert_eq!(fold(body,&bad,&refs),body);
+        bad=f.clone();bad.ret.is_reference=true;assert_eq!(fold(body,&bad,&refs),body);
+        bad=f.clone();bad.obj_locals.push((28,4));assert_eq!(fold(body,&bad,&refs),body);
+        bad=f.clone();bad.bytecode.splice(0..0,function(&[("JMPP",&[1])]).bytecode);assert_eq!(fold(body,&bad,&refs),body);
+        for source in [body.replacen("        return FAbilityTaskExecutor();","        Use(local_28);",1),
+            body.replace("    else\n    {","    while (Retry())\n    {"),
+            body.replace("        }\n    }","        }\n        Work();\n    }"),
+            body.replace("Item.Tag()","Other.Tag()"),body.replace("this.Update();","this.OtherUpdate();"),
+            body.replace("local_28 == nullptr","local_28 != nullptr"),body.to_owned()+"    Observe(local_28);\n"] {
+            assert_eq!(fold(&source,&f,&refs),source);
+        }
+        let mut shifted=f.clone();
+        for i in &code {if let Some(s)=i.words.first().copied().filter(|s|*s>0 && *s<32768 && i.op.name!="RET") {
+            shifted.bytecode[i.offset_dw]=(shifted.bytecode[i.offset_dw] as u32 & 0xffff | ((s as u32+200)<<16)) as i32;
+        }}
+        for (slot,_) in &mut shifted.obj_locals {*slot+=200;}
+        let mut bytes=function(&[("SUSPEND",&[])]).bytecode;bytes.extend(shifted.bytecode);shifted.bytecode=bytes;
+        assert_eq!(fold(&body.replace("local_28","local_228"),&shifted,&refs),expected.replace("local_28","local_228"));
+    }
+
+    #[test]
+    fn native_relationship_inference_preserves_property_arguments_and_value_pool() {
+        let mut f=function(&[
+            ("PSF",&[106]),("CALLSYS",&[]),("CpyRtoV8",&[114]),("PshVPtr",&[114]),("PSF",&[120]),
+            ("PshVPtr",&[0]),("CALLSYS",&[]),("STOREOBJ",&[4]),("PshVPtr",&[4]),("CALLSYS",&[]),
+            ("PSF",&[120]),("PshGPtr",&[]),("PSF",&[122]),("PshVPtr",&[0]),("CALLSYS",&[]),
+            ("STOREOBJ",&[118]),("PshVPtr",&[118]),("CALLSYS",&[]),("PSF",&[122]),("PSF",&[182]),
+            ("CALLSYS",&[]),("STOREOBJ",&[116]),("PshVPtr",&[116]),("CALLSYS",&[]),("PSF",&[120]),
+            ("CALLSYS",&[]),("PSF",&[122]),("CALLSYS",&[]),("LoadVObjR",&[182,0]),("RDR1",&[250]),
+            ("LoadVObjR",&[182,8]),("RDR1",&[251]),("CpyVtoR1",&[250]),("JLowZ",&[]),("PSF",&[182]),
+            ("CALLSYS",&[]),("JMP",&[]),("PSF",&[182]),("CALLSYS",&[]),("RET",&[2]),
+        ]);
+        f.ret=DataType{token:0x52,..Default::default()};
+        f.obj_locals=vec![(106,5),(120,1),(122,1),(4,2),(118,2),(116,3),(182,4),(242,4)];
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,value) in [(1,100i64),(6,101i64),(9,102i64),(11,200i64),(14,101i64),(17,103i64),(20,104i64),(23,105i64),(25,106i64),(27,106i64),(28,54i64),(30,54i64),(35,107i64),(38,107i64)] {f.bytecode[code[at].offset_dw+if code[at].op.name=="LoadVObjR" {2} else {1}]=value as i32;}
+        for (a,b) in [(33,37),(36,39)] {f.bytecode[code[a].offset_dw+1]=code[b].offset_dw as i32-code[a].offset_dw as i32-2;}
+        let body="    for (auto& local_114 : Guilds)\n    {\n        FStaticRelationshipEvaluation local_182 = URelationshipSystem::Get().Compare(this.CurrentState().GetSpecies(), GameplayTag::Classification, this.CurrentState().GetGuild(), local_114);\n        if (int(local_182.Relationship) != 5 && int(local_182.Hostility) != 12)\n        {\n            continue;\n        }\n        return;\n    }\n";
+        let expected="    for (auto& local_114 : Guilds)\n    {\n        auto local_182 = URelationshipSystem::Get().Compare(this.CurrentState().Species, GameplayTag::Classification, this.CurrentState().Guild, local_114);\n        if (int(local_182.Relationship) != 5 && int(local_182.Hostility) != 12)\n        {\n            continue;\n        }\n        return;\n    }\n";
+        let refs=RefResolver::from_test_native_relationship_inference(0);
+        let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_native_relationship_inference(s,f,r,Some("UController"));
+        assert!(!refs.is_subclass("UController","UGameplayAbility_AI"));assert!(refs.is_subclass("UController","UGameplayAbility_CharacterAI"));
+        assert_eq!(fold(body,&f,&refs),expected);assert_eq!(fold(expected,&f,&refs),expected);
+        for fault in 1..=19 {assert_eq!(fold(body,&f,&RefResolver::from_test_native_relationship_inference(fault)),body,"metadata {fault}");}
+        for (at,i) in code[..28].iter().enumerate().filter(|(_,i)|!i.words.is_empty()) {
+            let mut bad=f.clone();bad.bytecode[i.offset_dw]^=4<<16;assert_eq!(fold(body,&bad,&refs),body,"operand {at}");
+        }
+        for at in [1,6,9,11,14,17,20,23,25,27,28,30,35,38] {let mut bad=f.clone();bad.bytecode[code[at].offset_dw+if code[at].op.name=="LoadVObjR" {2} else {1}]^=1<<24;
+            assert_eq!(fold(body,&bad,&refs),body,"payload {at}");}
+        for to in [1,4,7,15,19,23,27] {let mut bad=f.clone();let mut prefix=function(&[("JMP",&[])]).bytecode;
+            prefix[1]=code[to].offset_dw as i32+prefix.len() as i32-2;prefix.extend(bad.bytecode);bad.bytecode=prefix;assert_eq!(fold(body,&bad,&refs),body,"entry {to}");}
+        let mut bad=f.clone();bad.bytecode.splice(0..0,function(&[("JMPP",&[1])]).bytecode);assert_eq!(fold(body,&bad,&refs),body);
+        for slot in [114,120,122,118,116,242,182] {let mut extra=f.clone();let mut prefix=function(&[("PshVPtr",&[slot])]).bytecode;prefix.extend(extra.bytecode);extra.bytecode=prefix;
+            assert_eq!(fold(body,&extra,&refs),body,"extra use {slot}");}
+        bad=f.clone();bad.obj_locals.retain(|(s,_)|*s!=242);assert_eq!(fold(body,&bad,&refs),body);
+        bad=f.clone();bad.obj_locals.push((114,1));assert_eq!(fold(body,&bad,&refs),body);
+        bad=f.clone();bad.obj_locals.push((182,4));assert_eq!(fold(body,&bad,&refs),body);
+        for source in [body.replace("for (auto& local_114 : Guilds)","while (Ready())"),body.replace("Item", "Other")+"    Use(local_182);\n",
+            body.replace(".GetGuild()",".GetOther()"),body.replace(".Hostility", ".HostilityExtra"),body.replace("    {\n        FStaticRelationshipEvaluation","    {\n        Work();\n        FStaticRelationshipEvaluation"),
+            body.replace("        return;","        Use(local_114);\n        return;"),body.to_owned()+"    FStaticRelationshipEvaluation local_242;\n"] {
+            assert_eq!(fold(&source,&f,&refs),source);
+        }
+        let mut shifted=f.clone();for i in &code {if i.op.name!="RET" {if let Some(s)=i.words.first().copied().filter(|s|*s>0) {
+            shifted.bytecode[i.offset_dw]=(shifted.bytecode[i.offset_dw] as u32&0xffff|((s as u32+300)<<16)) as i32;
+        }}}for (slot,_) in &mut shifted.obj_locals {*slot+=300;}
+        let rename=|s:&str|s.replace("local_114","local_414").replace("local_182","local_482");
+        let mut prefix=function(&[("SUSPEND",&[])]).bytecode;prefix.extend(shifted.bytecode);shifted.bytecode=prefix;
+        assert_eq!(fold(&rename(body),&shifted,&refs),rename(expected));
+    }
+
+    #[test]
     fn stationary_blocking_preserves_scoped_storage_and_scalar_lifetimes() {
         let mut f=function(&[
             ("PshGPtr",&[]),("CHKREF",&[]),("PshVPtr",&[6]),("CALLSYS",&[]),("STOREOBJ",&[12]),
@@ -54637,6 +55392,135 @@ mod literal_value_lifetime_tests {
         for (slot,_) in &mut renamed.obj_locals {*slot+=200;}
         let rename=|s:&str|{let mut s=s.to_owned();for slot in [68,50] {s=s.replace(&format!("local_{slot}"),&format!("local_{}",slot+200));}s};
         assert_eq!(fold(&rename(body),&renamed,&refs),rename(expected));
+    }
+
+    #[test]
+    fn task_and_reason_results_preserve_only_typed_value_form_lives() {
+        let mut f=function(&[
+            ("JLowZ",&[]),("PshVPtr",&[0]),("ADDSi",&[2536]),("RDSPtr",&[]),("CALLSYS",&[]),
+            ("CpyRtoV4",&[15]),("CpyVtoR1",&[15]),("JLowNZ",&[]),("SetV4",&[15]),("JMP",&[]),
+            ("PshVPtr",&[0]),("ADDSi",&[2536]),("RDSPtr",&[]),("CALLSYS",&[]),("CpyRtoV4",&[1]),
+            ("CpyVtoV4",&[15,1]),("CpyVtoR1",&[15]),("JLowNZ",&[]),("SetV4",&[15]),("JMP",&[]),
+            ("PshVPtr",&[0]),("ADDSi",&[2536]),("RDSPtr",&[]),("ADDSi",&[176]),("PopRPtr",&[]),
+            ("RDR1",&[17]),("sbTOi",&[2,17]),("CMPIi",&[2]),("TZ",&[]),("CpyRtoV4",&[1]),
+            ("CpyVtoV4",&[15,1]),("CpyVtoR1",&[15]),("JLowZ",&[]),("SetV1",&[16]),("LoadThisR",&[2753]),
+            ("WRTV1",&[16]),("JMP",&[]),("PSF",&[10]),("CALL",&[]),("CpyRtoV4",&[20]),
+            ("sbTOi",&[18,20]),("CMPIi",&[18]),("TZ",&[]),("CpyRtoV4",&[16]),("CpyVtoR1",&[16]),
+            ("JLowZ",&[]),("SetV1",&[16]),("JMP",&[]),("PSF",&[10]),("CALL",&[]),
+            ("CpyRtoV4",&[20]),("sbTOi",&[18,20]),("CMPIi",&[18]),("TZ",&[]),("CpyRtoV4",&[1]),
+            ("CpyVtoV4",&[16,1]),("CpyVtoR1",&[16]),("JLowNZ",&[]),("SetV4",&[19]),("JMP",&[]),
+            ("LoadThisR",&[2568]),("RDR1",&[1]),("CpyVtoV4",&[19,1]),("CpyVtoR1",&[19]),("SUSPEND",&[]),
+            ("JMP",&[]),("SUSPEND",&[]),("RET",&[2]),
+        ]);f.ret=DataType{token:0x52,..Default::default()};f.obj_locals=vec![(10,4)];
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,value) in [(2,53),(11,53),(21,53),(23,52),(34,53),(60,53),(4,100),(13,101),(38,200),(49,200),(8,0),(18,0),(27,0),(33,0),(41,3),(46,1),(52,2),(58,0)] {f.bytecode[code[at].offset_dw+1]=value;}
+        for (at,to) in [(0,66),(7,10),(9,16),(17,20),(19,31),(32,37),(36,67),(45,48),(47,56),(57,60),(59,63),(65,67)] {f.bytecode[code[at].offset_dw+1]=code[to].offset_dw as i32-code[at].offset_dw as i32-2;}
+        let body="    Records::FRecord local_10;\n    if (Invalid())\n    {\n        if ((IsValid(this.Task) && this.Task.Activated() && (int(this.Task.Outcome) == 0)))\n        {\n            this.Flag = false;\n            return;\n        }\n        if (((int(local_10.Reason()) == 3) || (int(local_10.Reason()) == 2)) && this.Active && Ready())\n        {\n            Keep();\n        }\n        return;\n    }\n    Other();\n";let expected="    Records::FRecord local_10;\n    if (Invalid())\n    {\n        bool local_15 = (IsValid(this.Task) && this.Task.Activated() && (int(this.Task.Outcome) == 0));\n        if (local_15)\n        {\n            this.Flag = false;\n            return;\n        }\n        bool local_16 = ((int(local_10.Reason()) == 3) || (int(local_10.Reason()) == 2));\n        if (local_16 && this.Active && Ready())\n        {\n            Keep();\n        }\n        return;\n    }\n    Other();\n";
+        let refs=RefResolver::from_test_task_reason_boolean_values(0);
+        let fold=|body:&str,f:&Func,r:&RefResolver|super::restore_task_and_reason_boolean_values(body,f,r,Some("UDerivedState"));
+        assert_eq!(fold(body,&f,&refs),expected);assert_eq!(fold(expected,&f,&refs),expected);
+        for fault in 1..=14 {assert_eq!(fold(body,&f,&RefResolver::from_test_task_reason_boolean_values(fault)),body,"metadata {fault}");}
+        for (at,i) in code.iter().enumerate().filter(|(_,i)|!i.words.is_empty() && i.op.name!="RET") {
+            for n in 0..i.words.len() {let mut bad=f.clone();let (dw,shift)=if n==0 {(i.offset_dw,16)} else {(i.offset_dw+1,0)};
+                bad.bytecode[dw]^=4<<shift;assert_eq!(fold(body,&bad,&refs),body,"operand {at}:{n}");}
+        }
+        for at in [0,2,4,7,8,9,11,13,17,18,19,21,23,27,32,33,34,36,38,41,45,46,47,49,52,57,58,59,60,65] {let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1]^=16;assert_eq!(fold(body,&bad,&refs),body,"call/field/value/edge {at}");}
+        for target in [6,14,27,40,50,61] {let mut bad=f.clone();let at=bad.bytecode.len();bad.bytecode.extend(function(&[("JMP",&[]),("RET",&[2])]).bytecode);
+            bad.bytecode[at+1]=code[target].offset_dw as i32-at as i32-2;
+            // Keep the enclosing return gate valid so this specifically exercises external CFG entry.
+            bad.bytecode[code[65].offset_dw+1]=at as i32+2-code[65].offset_dw as i32-2;
+            assert_eq!(fold(body,&bad,&refs),body,"external entry {target}");}
+        for slot in [15,16] {let mut bad=f.clone();bad.bytecode[code[64].offset_dw]=function(&[("PshV4",&[slot])]).bytecode[0];assert_eq!(fold(body,&bad,&refs),body,"extra scope life {slot}");}
+        let mut bad=f.clone();bad.obj_locals.push((15,4));assert_eq!(fold(body,&bad,&refs),body);
+        for changed in [body.replace("Outcome) == 0","Outcome) == 1"),body.replace("Reason()) == 3","Reason()) == 4"),body.replace("this.Active","this.OtherActive"),
+            body.replace("Records::FRecord local_10","Other::FRecord local_10"),body.replace("this.Flag = false;","this.Flag = true;"),
+            body.replace("        if (((int", "    }\n    if (OtherGuard())\n    {\n        if (((int"),
+            body.replace("        return;\n    }", "        Keep();\n    }"),format!("{body}Use(local_15);\n"),format!("{body}Use(local_16);\n")]
+            {assert_eq!(fold(&changed,&f,&refs),changed,"source fault");}
+        let mut renamed=f.clone();
+        for i in &code {if i.op.name!="RET" {for (n,word) in i.words.iter().enumerate().filter(|(_,w)|**w>0 && **w<32768 && !matches!(i.op.name,"ADDSi"|"LoadThisR")) {
+            let (dw,shift)=if n==0 {(i.offset_dw,16)} else {(i.offset_dw+1,0)};
+            renamed.bytecode[dw]=(renamed.bytecode[dw] as u32 & !(0xffff<<shift) | ((*word as u32+100)<<shift)) as i32;
+        }}}
+        for (slot,_) in &mut renamed.obj_locals {*slot+=100;}
+        let rename=|s:&str|s.split_inclusive(|c:char|!c.is_ascii_alphanumeric() && c!='_').map(|piece| {
+            let name=piece.trim_end_matches(|c:char|!c.is_ascii_alphanumeric() && c!='_');
+            if let Some((slot,_))=super::slot_and_life_any(name) {piece.replacen(&format!("local_{slot}"),&format!("local_{}",slot+100),1)} else {piece.to_owned()}
+        }).collect::<String>();assert_eq!(fold(&rename(body),&renamed,&refs),rename(expected));
+    }
+
+    #[test]
+    fn array_return_branches_preserve_the_three_exit_record_value() {
+        let mut f=function(&[
+            ("PSF",&[10]),("CALLSYS",&[]),("PshVPtr",&[65532]),("CALLSYS",&[]),("JLowZ",&[]),
+            ("PshVPtr",&[65532]),("PSF",&[14]),("PshVPtr",&[6]),("CALLSYS",&[]),("PSF",&[14]),
+            ("PSF",&[10]),("CALLSYS",&[]),("PSF",&[14]),("CALLSYS",&[]),("JMP",&[]),
+            ("PshGPtr",&[]),("PSF",&[16]),("CALLSYS",&[]),("PSF",&[16]),("PSF",&[14]),
+            ("PshVPtr",&[6]),("CALLSYS",&[]),("PSF",&[16]),("CALLSYS",&[]),("PSF",&[14]),
+            ("PSF",&[10]),("CALLSYS",&[]),("PSF",&[14]),("CALLSYS",&[]),("PSF",&[56]),
+            ("CALLSYS",&[]),("PSF",&[62]),("PSF",&[10]),("CALLSYS",&[]),("JMP",&[]),
+            ("SUSPEND",&[]),("PSF",&[62]),("CALLSYS",&[]),("RDR4",&[70]),("CpyVtoV4",&[69,70]),
+            ("PSF",&[102]),("CALLSYS",&[]),("PshV4",&[69]),("PSF",&[102]),("PshVPtr",&[6]),
+            ("CALLSYS",&[]),("CpyRtoV4",&[1]),("NOT",&[1]),("CpyVtoR1",&[1]),("JLowZ",&[]),
+            ("PSF",&[102]),("CALLSYS",&[]),("JMP",&[]),("PSF",&[124]),("CALLSYS",&[]),
+            ("PSF",&[124]),("PSF",&[102]),("PSF",&[212]),("CALL",&[]),("PSF",&[212]),
+            ("PshVPtr",&[65534]),("PshVPtr",&[0]),("CALLINTF",&[]),("CpyRtoV8",&[216]),("SetV8",&[214]),
+            ("CMPd",&[216,214]),("JP",&[]),("PSF",&[212]),("CALL",&[]),("PSF",&[124]),
+            ("CALLSYS",&[]),("FreeNullV8",&[106]),("PSF",&[102]),("CALLSYS",&[]),("JMP",&[]),
+            ("PSF",&[69]),("PSF",&[56]),("CALLSYS",&[]),("CpyVtoR1",&[65528]),("JLowZ",&[]),
+            ("PSF",&[212]),("CALL",&[]),("PSF",&[124]),("CALLSYS",&[]),("FreeNullV8",&[106]),
+            ("PSF",&[102]),("CALLSYS",&[]),("JMP",&[]),("PSF",&[212]),("CALL",&[]),
+            ("PSF",&[124]),("CALLSYS",&[]),("FreeNullV8",&[106]),("PSF",&[102]),("CALLSYS",&[]),
+            ("LoadVObjR",&[62,16]),("RDR1",&[1]),("CpyVtoR1",&[1]),("JLowNZ",&[]),
+            ("SUSPEND",&[]),("PSF",&[10]),("CALLSYS",&[]),("RET",&[10]),
+        ]);
+        let object=|type_info,reference:bool,constant:bool,handle:bool|DataType{token:5,type_info,is_reference:reference,is_object_const:constant,is_object_handle:handle,is_read_only:constant&&!handle,..Default::default()};
+        f.ret=DataType{token:0x52,..Default::default()};f.obj_locals=vec![(6,3),(10,1),(14,1),(16,2),(56,10),(62,11),(102,6),(106,9),(124,7),(176,8),(212,8)];
+        f.params=vec![super::super::model::Param{name:"Witness".into(),flags:0,ty:object(5,false,false,true)},
+            super::super::model::Param{name:"Subject".into(),flags:0,ty:object(5,false,false,true)},
+            super::super::model::Param{name:"Tag".into(),flags:3,ty:object(13,true,true,false)},
+            super::super::model::Param{name:"Latest".into(),flags:0,ty:DataType{token:0x41,is_object_const:true,is_read_only:true,..Default::default()}},
+            super::super::model::Param{name:"Skip".into(),flags:0,ty:DataType{token:0x41,is_object_const:true,is_read_only:true,..Default::default()}}];
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,value) in [(1,100),(3,101),(8,102),(11,103),(13,104),(15,300),(17,105),(21,106),(23,107),(26,103),(28,104),(30,115),(33,108),(37,109),(41,113),(45,116),(51,110),(54,114),(58,200),(62,201),(68,202),(70,111),(73,110),(77,112),(81,202),(83,111),(86,110),(89,202),(91,111),(94,110),(101,104)] {f.bytecode[code[at].offset_dw+1]=value;}
+        f.bytecode[code[95].offset_dw+2]=11;
+        let edges=[(4,15),(14,29),(34,95),(49,53),(52,95),(66,75),(74,95),(79,88),(87,99),(98,35)];
+        for (a,b) in edges {f.bytecode[code[a].offset_dw+1]=code[b].offset_dw as i32-code[a].offset_dw as i32-2;}
+        let body="    UMemory local_6 = UMemory::Get(Witness);\n    TArray<int> local_10 = IsValid(Subject) ? local_6.ByActor(Subject) : local_6.Before(FInGameTime::Now());\n    TSet<int> local_56;\n    for (auto local_69 : local_10)\n    {\n        FGlobal local_102;\n        if (!(local_6.Read(local_102, local_69)))\n        {\n            continue;\n        }\n        FRelative local_124;\n        if (this.Evaluate(Witness, FRecord(local_102, local_124)) <= 0.0)\n        {\n            continue;\n        }\n        local_56.Add(local_69);\n        if (Latest)\n        {\n            break;\n        }\n    }\n    return;\n";
+        let expected="    UMemory local_6 = UMemory::Get(Witness);\n    TArray<int> local_10;\n    if (IsValid(Subject))\n    {\n        local_10 = local_6.ByActor(Subject);\n    }\n    else\n    {\n        local_10 = local_6.Before(FInGameTime::Now());\n    }\n    TSet<int> local_56;\n    for (auto local_69 : local_10)\n    {\n        FGlobal local_102;\n        if (!(local_6.Read(local_102, local_69)))\n        {\n            continue;\n        }\n        FRelative local_124;\n        FRecord local_212 = FRecord(local_102, local_124);\n        if (this.Evaluate(Witness, local_212) <= 0.0)\n        {\n            continue;\n        }\n        local_56.Add(local_69);\n        if (Latest)\n        {\n            break;\n        }\n    }\n    return;\n";
+        let refs=RefResolver::from_test_array_record_lifetimes(0);
+        let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_array_branch_and_record_lifetime(s,f,r,Some("UHost"));
+        assert_eq!(fold(body,&f,&refs),expected);assert_eq!(fold(expected,&f,&refs),expected);
+        for fault in 1..=22 {assert_eq!(fold(body,&f,&RefResolver::from_test_array_record_lifetimes(fault)),body,"metadata {fault}");}
+        for at in [0,2,5,6,7,9,10,12,16,18,19,20,22,24,25,27,31,32,36,38,39,55,56,57,59,60,61,63,64,65,67,69,71,72,75,76,78,80,82,84,85,88,90,92,93,95,96,97] {let mut bad=f.clone();bad.bytecode[code[at].offset_dw]^=4<<16;assert_eq!(fold(body,&bad,&refs),body,"operand {at}");}
+        for at in [4,14,34,52,66,74,79,87,98] {let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1]^=2;assert_eq!(fold(body,&bad,&refs),body,"edge {at}");}
+        for at in [1,3,8,11,13,15,17,21,23,26,28,33,37,51,58,62,68,70,73,77,81,83,86,89,91,94,101] {let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1]^=1<<24;assert_eq!(fold(body,&bad,&refs),body,"reference {at}");}
+        let mut bad=f.clone();bad.bytecode[code[64].offset_dw+1]=1;assert_eq!(fold(body,&bad,&refs),body);
+        bad=f.clone();bad.bytecode[code[95].offset_dw+1]^=4;assert_eq!(fold(body,&bad,&refs),body);
+        bad=f.clone();bad.bytecode[code[95].offset_dw+2]^=4;assert_eq!(fold(body,&bad,&refs),body);
+        for to in [15,59,67,80,88,95] {let mut bad=f.clone();let mut prefix=function(&[("JMP",&[])]).bytecode;
+            prefix[1]=code[to].offset_dw as i32+prefix.len() as i32-2;prefix.extend(bad.bytecode);bad.bytecode=prefix;assert_eq!(fold(body,&bad,&refs),body,"entry {to}");}
+        for slot in [14,16,176,212] {let mut bad=f.clone();bad.bytecode.extend(function(&[("PSF",&[slot])]).bytecode);assert_eq!(fold(body,&bad,&refs),body,"extra use {slot}");}
+        let mut bad=f.clone();bad.obj_locals.retain(|(s,_)|*s!=176);assert_eq!(fold(body,&bad,&refs),body);
+        bad=f.clone();bad.obj_locals.push((212,8));assert_eq!(fold(body,&bad,&refs),body);
+        bad=f.clone();bad.params[3].ty.is_read_only=false;assert_eq!(fold(body,&bad,&refs),body);
+        bad=f.clone();bad.bytecode.splice(0..0,function(&[("JMPP",&[1])]).bytecode);assert_eq!(fold(body,&bad,&refs),body);
+        for source in [body.replace("            break;","            continue;"),body.replace("        local_56.Add(local_69);","        local_56.Add(local_70);"),
+            body.replace("FRecord(local_102, local_124)","FRecord(local_124, local_102)"),body.replace("for (auto local_69 : local_10)","while (Retry())"),
+            body.replace("        FRelative local_124;","        {\n            FRelative local_124;\n        }"),
+            body.replace("    TSet<int> local_56;","    Observe(local_10);\n    TSet<int> local_56;"),body.to_owned()+"    Observe(local_212);\n",
+            body.replace("        }\n    }","        }\n        Work();\n    }")] {assert_eq!(fold(&source,&f,&refs),source);}
+        let mut shifted=f.clone();
+        for i in &code {for (n,s) in i.words.iter().copied().enumerate() {
+            if s>0 && s<32768 && i.op.name!="RET" && !(i.op.name=="LoadVObjR" && n==1) {
+                let dw=i.offset_dw+(n+1)/2;let shift=if n%2==0 {16} else {0};let mask=0xffffu32<<shift;
+                shifted.bytecode[dw]=((shifted.bytecode[dw] as u32 & !mask)|((s as u32+300)<<shift)) as i32;
+            }
+        }}
+        for (s,_) in &mut shifted.obj_locals {*s+=300;}
+        let mut bytes=function(&[("SUSPEND",&[])]).bytecode;bytes.extend(shifted.bytecode);shifted.bytecode=bytes;
+        let rename=|s:&str|{let mut out=s.to_owned();for n in [212,124,102,69,56,10,6] {out=out.replace(&format!("local_{n}"),&format!("local_{}",n+300));}out};
+        assert_eq!(fold(&rename(body),&shifted,&refs),rename(expected));
     }
 
     #[test]

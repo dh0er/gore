@@ -7286,6 +7286,114 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_scoped_cast_returns(fault: u8) -> Self {
+        let mut r=Self::default();
+        for (ptr,name) in [(1,"FAbilityTaskExecutor"),(2,"UClass"),(3,"UInput"),(4,"USpecial"),(5,"TSubclassOf"),
+            (6,"FGameplayTag"),(7,"UGameplayAbility_AI"),(8,"UController")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32+50,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:if ptr==8 {"Fixture"} else {""}.into(),namespace:String::new()});
+        }
+        r.class_super.insert("UController".into(),"UGameplayAbility_CharacterAI".into());
+        let primitive=|token|DataType{token,..Default::default()};
+        let object=|type_info,reference:bool,constant:bool,handle:bool|DataType{token:5,type_info,is_reference:reference,is_object_const:constant,
+            is_object_handle:handle,is_read_only:constant&&!handle,..Default::default()};
+        for (ptr,name,owner,constant,ret,args) in [
+            (100,"opImplConv","TSubclassOf",true,object(2,false,false,true),vec![]),
+            (101,"IsA","UObject",true,primitive(0x41),vec![object(2,false,true,true)]),
+            (102,"opCast","UObject",true,primitive(0x52),vec![DataType{is_reference:true,..primitive(0x3b)}]),
+            (103,"$beh0","FAbilityTaskExecutor",false,primitive(0x52),vec![]),
+            (104,"opAssign","FAbilityTaskExecutor",false,object(1,true,false,false),vec![object(1,true,false,false)]),
+            (105,"$beh2","FAbilityTaskExecutor",false,primitive(0x52),vec![]),
+            (106,"GetClass","UObject",true,object(2,false,false,true),vec![]),
+            (107,"$beh0","TSubclassOf",false,primitive(0x52),vec![object(2,false,false,true)]),
+            (108,"opImplConv","TSubclassOf",true,object(2,false,false,true),vec![]),
+            (109,"Tag","UInput",true,object(6,true,true,false),vec![]),
+            (200,"Choose","UController",false,object(1,false,false,false),vec![object(5,true,true,false)]),
+            (201,"Update","UController",false,primitive(0x52),vec![])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            r.func_is_method.insert(ptr);if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        for ptr in [200,201,202] {r.funcid_to_ptr.insert(ptr as i32,ptr);}
+        r.func_by_ptr.insert(202,"MakeAlternate".into());r.func_ret.insert(202,object(1,false,false,false));
+        r.func_params.insert(202,vec![object(7,false,false,true),object(6,true,true,false)]);
+        r.type_subtypes.insert(5,vec![object(4,false,false,true)]);
+        r.global_by_ptr.insert(300,"__StaticType_USpecial".into());r.global_by_ptr.insert(301,"__StaticType_UAlternate".into());
+        match fault {
+            1=>r.func_params.get_mut(&101).unwrap()[0].is_object_const=false,
+            2=>{r.const_method_ptrs.remove(&102);},
+            3=>r.func_params.get_mut(&102).unwrap()[0].is_read_only=true,
+            4=>r.func_params.get_mut(&103).unwrap().push(primitive(0x44)),
+            5=>r.func_params.get_mut(&104).unwrap()[0].is_object_const=true,
+            6=>{r.const_method_ptrs.insert(105);},
+            7=>r.func_ret.get_mut(&106).unwrap().is_reference=true,
+            8=>r.func_params.get_mut(&107).unwrap()[0].is_object_const=true,
+            9=>r.type_subtypes.get_mut(&5).unwrap()[0].type_info=3,
+            10=>r.func_params.get_mut(&200).unwrap()[0].is_reference=false,
+            11=>{r.func_owner.insert(200,"UOtherController".into());},
+            12=>r.func_ret.get_mut(&201).unwrap().token=0x41,
+            13=>{r.func_owner.insert(109,"UOtherInput".into());},
+            14=>r.func_params.get_mut(&202).unwrap()[1].is_read_only=false,
+            15=>{r.func_is_method.insert(202);},
+            16=>{r.global_by_ptr.insert(300,"__StaticType_UOther".into());},
+            17=>{r.class_super.insert("UController".into(),"UUnrelatedNative".into());},
+            18=>{r.typeid_to_ptr.insert(54,3);},
+            19=>r.func_ret.get_mut(&108).unwrap().is_object_const=true,
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_native_relationship_inference(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name) in [(1,"FGameplayTag"),(2,"AGothicCharacterState"),(3,"URelationshipSystem"),(4,"FStaticRelationshipEvaluation"),(5,"TArrayIterator"),(6,"UController")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32+50,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:if ptr==6 {"Fixture"} else {""}.into(),namespace:String::new()});
+        }
+        r.class_super.insert("UController".into(),"UScriptController".into());r.class_super.insert("UScriptController".into(),"UGameplayAbility_CharacterAI".into());
+        let object=|type_info,reference:bool,constant:bool,handle:bool|DataType{token:5,type_info,is_reference:reference,is_object_const:constant,
+            is_object_handle:handle,is_read_only:constant&&!handle,..Default::default()};
+        let void=DataType{token:0x52,..Default::default()};
+        for (ptr,name,owner,constant,ret,args) in [
+            (100,"Proceed","TArrayIterator",false,object(1,true,false,false),vec![]),
+            (101,"CurrentState","UGameplayAbility_AI",true,object(2,false,false,true),vec![]),
+            (102,"GetGuild","AGothicCharacterState",true,object(1,false,false,false),vec![]),
+            (103,"GetSpecies","AGothicCharacterState",true,object(1,false,false,false),vec![]),
+            (105,"Compare","URelationshipSystem",true,object(4,false,false,false),vec![object(1,true,true,false);4]),
+            (106,"$beh2","FGameplayTag",false,void.clone(),vec![]),
+            (107,"$beh2","FStaticRelationshipEvaluation",false,void.clone(),vec![])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            r.func_is_method.insert(ptr);if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        r.func_by_ptr.insert(104,"Get".into());r.func_ns.insert(104,"URelationshipSystem".into());r.func_ret.insert(104,object(3,false,false,true));r.func_params.insert(104,vec![]);
+        r.global_by_ptr.insert(200,"Classification".into());r.global_ns.insert(200,"GameplayTag".into());
+        for (offset,name) in [(0i64,"Relationship"),(8,"Hostility")] {let key=(54i64<<1)|(offset<<33)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,54);}
+        match fault {
+            1=>r.func_ret.get_mut(&100).unwrap().is_reference=false,
+            2=>{r.func_owner.insert(101,"UUnrelatedAbility".into());},
+            3=>r.func_ret.get_mut(&101).unwrap().is_object_const=true,
+            4=>{r.const_method_ptrs.remove(&102);},
+            5=>r.func_ret.get_mut(&103).unwrap().is_reference=true,
+            6=>{r.func_ns.insert(104,"OtherSystem".into());},
+            7=>r.func_ret.get_mut(&104).unwrap().is_object_const=true,
+            8=>r.func_ret.get_mut(&105).unwrap().is_reference=true,
+            9=>r.func_params.get_mut(&105).unwrap()[0].is_read_only=false,
+            10=>r.func_params.get_mut(&105).unwrap()[2].is_object_const=false,
+            11=>r.func_params.get_mut(&105).unwrap().push(object(1,true,true,false)),
+            12=>{r.const_method_ptrs.insert(106);},
+            13=>r.func_params.get_mut(&107).unwrap().push(void.clone()),
+            14=>{r.type_identity_by_ptr.get_mut(&4).unwrap().module="Fake".into();},
+            15=>{r.class_super.insert("UScriptController".into(),"UUnrelatedNative".into());},
+            16=>{r.global_ns.insert(200,"OtherTag".into());},
+            17=>{r.prop_type_id.insert((54i64<<1)|1,53);},
+            18=>{r.func_by_ptr.insert(103,"GetOther".into());},
+            19=>{r.type_identity_by_ptr.get_mut(&2).unwrap().namespace="Other".into();},
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_stationary_blocking(fault:u8)->Self {
         let mut r=Self::default();
         for (ptr,name) in [(1,"AGothicCharacter"),(2,"AActor"),(3,"UObject"),(4,"FRememberedPerception"),(5,"FPerceivedAgent"),(6,"FInGameTime"),
@@ -7557,6 +7665,166 @@ impl RefResolver {
             _=>{}
         }
         r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_task_reason_boolean_values(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name,module,namespace) in [(1,"UObject","",""),(2,"UAbilityTaskGeneric","",""),(3,"UState","Fixture",""),
+            (4,"FRecord","Fixture","Records"),(5,"EReason","Fixture","Records")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32+50,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:module.into(),namespace:namespace.into()});
+        }
+        r.class_super.insert("UDerivedState".into(),"UState".into());r.class_super.insert("UPickTask".into(),"UAbilityTaskGeneric".into());
+        r.class_fields.insert("UState".into(),HashMap::from([("Task".into(),"UPickTask".into()),("Active".into(),"bool".into()),("Flag".into(),"bool".into())]));
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&[("UAbilityTaskGeneric","Outcome",if fault==1 {"float32"} else {"EGenericTaskResult"})],&[],None));
+        for (id,offset,name) in [(53i64,2536i64,"Task"),(52,176,"Outcome"),(53,2568,"Active"),(53,2753,"Flag")] {
+            let key=(offset<<33)|(id<<1)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id as i32);
+        }
+        let plain=|token|DataType{token,..Default::default()};
+        let value=|type_info|DataType{token:5,type_info,..Default::default()};
+        for (ptr,name,owner,constant,ret,args) in [
+            (100,"IsValid","",false,plain(0x41),vec![DataType{is_object_handle:true,is_object_const:true,..value(1)}]),
+            (101,"Activated","UAbilityTaskGeneric",true,plain(0x41),vec![]),
+            (102,"Reason","FRecord",true,value(5),vec![])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            if !owner.is_empty() {r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);}if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        r.funcid_to_ptr.insert(200,102);r.enum_entries.insert("EReason".into(),vec![("Trade".into(),2),("Gift".into(),3)]);
+        match fault {
+            2=>{r.class_fields.get_mut("UState").unwrap().insert("Task".into(),"UObject".into());},
+            3=>r.func_params.get_mut(&100).unwrap()[0].is_object_const=false,
+            4=>r.func_ret.get_mut(&101).unwrap().token=0x44,
+            5=>{r.const_method_ptrs.remove(&101);},
+            6=>r.func_ret.get_mut(&102).unwrap().is_object_const=true,
+            7=>r.func_params.get_mut(&102).unwrap().push(plain(0x44)),
+            8=>{r.const_method_ptrs.remove(&102);},
+            9=>{r.enum_entries.clear();},
+            10=>r.type_identity_by_ptr.get_mut(&5).unwrap().namespace="Other".into(),
+            11=>{r.class_fields.get_mut("UState").unwrap().insert("Active".into(),"int".into());},
+            12=>{r.class_fields.get_mut("UState").unwrap().insert("Flag".into(),"int".into());},
+            13=>{r.prop_type_id.insert((176i64<<33)|(52i64<<1)|1,53);},
+            14=>{r.func_owner.insert(102,"OtherRecord".into());},
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_reused_native_guards(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name) in [(1,"AGothicCharacterState"),(2,"AGothicCharacter"),(3,"FPerceivedInteractiveObject"),(4,"UCharacterRelationshipComponent"),(5,"FRememberedPerception"),(6,"UObject"),(7,"FGameplayTag")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32+50,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:String::new(),namespace:String::new()});
+        }
+        r.class_super.insert("UController".into(),"UGameplayAbility_CharacterAI".into());
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&[("FRememberedPerception","Object","FPerceivedInteractiveObject")],&[],None));
+        for (id,offset,name) in [(55i64,1096i64,"Object"),(53,8,"Definition")] {
+            let key=(offset<<33)|(id<<1)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id as i32);
+        }
+        let plain=|token|DataType{token,..Default::default()};let value=|type_info|DataType{token:5,type_info,..Default::default()};
+        let handle=|type_info,c|DataType{is_object_handle:true,is_object_const:c,..value(type_info)};
+        let reference=|type_info|DataType{is_reference:true,is_object_const:true,is_read_only:true,..value(type_info)};
+        for (ptr,name,owner,constant,ret,args) in [
+            (100,"IsValid","",false,plain(0x41),vec![handle(6,true)]),
+            (101,"Actor","AGothicCharacterState",true,handle(2,false),vec![]),
+            (102,"$beh0","FPerceivedInteractiveObject",false,plain(0x52),vec![reference(3)]),
+            (103,"$beh2","FPerceivedInteractiveObject",false,plain(0x52),vec![]),
+            (104,"State","UGameplayAbility_AI",true,handle(1,false),vec![]),
+            (105,"Relation","AGothicCharacterState",true,handle(4,false),vec![]),
+            (106,"Applies","UCharacterRelationshipComponent",true,plain(0x41),vec![handle(1,true),value(7)]),
+            (107,"PlayerOne","",false,plain(0x41),vec![handle(1,true)]),
+            (108,"PlayerTwo","",false,plain(0x41),vec![handle(1,true)])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            if !owner.is_empty() {r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);}if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        r.funcid_to_ptr.insert(200,107);r.funcid_to_ptr.insert(201,108);r.global_by_ptr.insert(1000,"FirstCrime".into());r.global_by_ptr.insert(1001,"SecondCrime".into());
+        match fault {
+            1=>{r.class_super.insert("UController".into(),"UUnrelatedNative".into());},
+            2=>r.func_params.get_mut(&100).unwrap()[0].is_object_const=false,
+            3=>{r.const_method_ptrs.remove(&101);},
+            4=>r.func_ret.get_mut(&101).unwrap().is_object_handle=false,
+            5=>r.func_params.get_mut(&102).unwrap()[0].is_reference=false,
+            6=>r.func_params.get_mut(&103).unwrap().push(plain(0x41)),
+            7=>{r.func_owner.insert(104,"UObject".into());},
+            8=>{r.const_method_ptrs.remove(&105);},
+            9=>r.func_ret.get_mut(&106).unwrap().token=0x44,
+            10=>r.func_params.get_mut(&106).unwrap()[1].is_reference=true,
+            11=>r.func_params.get_mut(&107).unwrap()[0].is_object_const=false,
+            12=>{r.func_is_method.insert(108);},
+            13=>{r.global_by_ptr.insert(1001,"FirstCrime".into());},
+            14=>{r.prop_type_id.insert((8i64<<33)|(53i64<<1)|1,55);},
+            15=>{r.set_native_api(super::binds::NativeApi::from_test_field_types(&[("FRememberedPerception","Object","FVector")],&[],None));},
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_array_record_lifetimes(fault: u8) -> Self {
+        let mut r=Self::default();
+        for (id,name) in [(1,"TArray"),(2,"FInGameTime"),(3,"UMemory"),(4,"UObject"),(5,"AActorState"),(6,"FGlobal"),(7,"FRelative"),
+            (8,"FRecord"),(9,"UDefinition"),(10,"TSet"),(11,"TArrayIterator"),(12,"UHost"),(13,"FGameplayTag")] {
+            r.type_by_ptr.insert(id,name.into());r.typeid_to_ptr.insert(id as i32,id);
+            r.type_identity_by_ptr.insert(id,TypeIdentity{name:name.into(),module:if [8,9,12].contains(&id) {"Fixture"} else {""}.into(),namespace:String::new()});
+        }
+        let primitive=|token|DataType{token,..Default::default()};
+        let object=|type_info,reference:bool,constant:bool,handle:bool|DataType{token:5,type_info,is_reference:reference,is_object_const:constant,
+            is_object_handle:handle,is_read_only:constant&&!handle,..Default::default()};
+        let const_int=DataType{is_reference:true,is_object_const:true,is_read_only:true,..primitive(0x44)};
+        r.type_subtypes.insert(1,vec![primitive(0x44)]);r.type_subtypes.insert(10,vec![primitive(0x44)]);
+        r.prop_by_key.insert((11<<1)|(16i64<<33)|1,"CanProceed".into());r.prop_type_id.insert((11<<1)|(16i64<<33)|1,11);
+        for (ptr,name,owner,constant,ret,args) in [
+            (100,"$beh0","TArray",false,primitive(0x52),vec![]),
+            (101,"IsValid","",false,primitive(0x41),vec![object(4,false,true,true)]),
+            (102,"ByActor","UMemory",true,object(1,false,false,false),vec![object(5,false,true,true)]),
+            (103,"opAssign","TArray",false,object(1,true,false,false),vec![object(1,true,true,false)]),
+            (104,"$beh2","TArray",false,primitive(0x52),vec![]),
+            (105,"Now","",false,object(2,false,false,false),vec![object(4,false,true,true)]),
+            (106,"Before","UMemory",true,object(1,false,false,false),vec![object(2,true,true,false)]),
+            (107,"$beh2","FInGameTime",false,primitive(0x52),vec![]),
+            (108,"Iterator","TArray",false,object(11,false,false,false),vec![]),
+            (109,"Proceed","TArrayIterator",false,DataType{is_reference:true,..primitive(0x44)},vec![]),
+            (110,"$beh2","FGlobal",false,primitive(0x52),vec![]),
+            (111,"$beh2","FRelative",false,primitive(0x52),vec![]),
+            (112,"Add","TSet",false,primitive(0x52),vec![const_int]),
+            (113,"$beh0","FGlobal",false,primitive(0x52),vec![]),
+            (114,"$beh0","FRelative",false,primitive(0x52),vec![]),
+            (115,"$beh0","TSet",false,primitive(0x52),vec![]),
+            (116,"Read","UMemory",true,primitive(0x41),vec![object(6,true,false,false),DataType{is_object_const:true,is_read_only:true,..primitive(0x44)}]),
+            (200,"FRecord","FRecord",false,primitive(0x52),vec![object(6,true,true,false),object(7,true,true,false)]),
+            (201,"Evaluate","UHost",false,primitive(0x51),vec![object(5,false,false,true),object(8,true,true,false)]),
+            (202,"~FRecord","FRecord",false,primitive(0x52),vec![])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            if !owner.is_empty() {r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);}if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        for id in [200,201,202] {r.funcid_to_ptr.insert(id,id as i64);}
+        r.global_by_ptr.insert(300,"__WorldContext".into());
+        match fault {
+            1=>r.type_subtypes.get_mut(&1).unwrap()[0].token=0x45,
+            2=>r.func_ret.get_mut(&106).unwrap().type_info=10,
+            3=>r.func_params.get_mut(&102).unwrap()[0].is_object_const=false,
+            4=>r.func_params.get_mut(&103).unwrap()[0].is_read_only=false,
+            5=>r.func_params.get_mut(&105).unwrap()[0].is_object_const=false,
+            6=>{r.const_method_ptrs.insert(104);},
+            7=>r.func_ret.get_mut(&107).unwrap().token=0x41,
+            8=>r.type_identity_by_ptr.get_mut(&8).unwrap().module.clear(),
+            9=>r.type_identity_by_ptr.get_mut(&6).unwrap().module="Script".into(),
+            10=>r.func_params.get_mut(&200).unwrap()[1].type_info=6,
+            11=>r.func_params.get_mut(&201).unwrap()[1].is_reference=false,
+            12=>{r.func_owner.insert(202,"FOther".into());},
+            13=>r.func_ret.get_mut(&201).unwrap().token=0x50,
+            14=>r.func_params.get_mut(&202).unwrap().push(primitive(0x44)),
+            15=>r.func_params.get_mut(&112).unwrap()[0].is_object_const=false,
+            16=>r.func_ret.get_mut(&109).unwrap().is_reference=false,
+            17=>{r.prop_type_id.insert((11<<1)|(16i64<<33)|1,10);},
+            18=>{r.prop_by_key.insert((11<<1)|(16i64<<33)|1,"Other".into());},
+            19=>r.type_identity_by_ptr.get_mut(&8).unwrap().namespace="Other".into(),
+            20=>{r.global_by_ptr.insert(300,"Other".into());},
+            21=>r.type_subtypes.get_mut(&10).unwrap()[0].token=0x45,
+            22=>{r.func_owner.insert(201,"UOther".into());},
+            _=>{}
+        }r
     }
 
     #[cfg(test)]
