@@ -586,7 +586,7 @@ class UDailyRoutine_GoreRoleWait : UAIState_DailyRoutine_Human
 }
 
 
-// A is the trader and teacher. Stock uses the native global trader event path.
+// A is the trader and teacher. Native initialization owns the initial shop stock.
 // B, C and every existing character definition remain unchanged.
 class UTraderConfig_GoreRoleEconomy : UTraderConfigBase
 {
@@ -598,10 +598,11 @@ class UTraderConfig_GoreRoleEconomy : UTraderConfigBase
     default m_EasyOreMult = 1.0;
     default m_HardOreMult = 1.0;
     default m_EasyArrowsMult = 1.0;
-    // Native trading reads the global trader record, not NPC inventory slots.
-    default AddTraderItemAllDifficulties(UItFo_Cheese, 3, "GoreNpcTraderStockV2");
-    default AddTraderItemAllDifficulties(UItAm_Arrow, 10, "GoreNpcTraderStockV2");
-    default AddTraderItemAllDifficulties(UItMi_Orenugget, 100, "GoreNpcTraderStockV2");
+    // Initialize current AND default stock through the shipped starting batch.
+    // A late manual event filled current stock but added the batch again on load.
+    default AddTraderItemAllDifficulties(UItFo_Cheese, 3, "OnWorldStart");
+    default AddTraderItemAllDifficulties(UItAm_Arrow, 10, "OnWorldStart");
+    default AddTraderItemAllDifficulties(UItMi_Orenugget, 100, "OnWorldStart");
 }
 
 void GoreRoleEconomySnapshot(AGothicCharacterState Teacher, AGothicCharacterState Hero)

@@ -69,15 +69,15 @@
         {
           "source": "roles/economy/GORE_TEST_A.as",
           "module_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
-          "sha256": "5675d9d2aaad52679b554c736a6af01f9b33f902db0007b9aff7400617234da3"
+          "sha256": "d38bd567cdb1b530b99af2b0970b99dc6c4d9f3897ab339ca226fb05fe8b2471"
         },
         {
           "source": "roles/economy/GORE_TEST_B.as",
           "module_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
-          "sha256": "f43ef51374d221b3a36d22f0070bcc3bcd4fd2a2855bbeb33a6f9763c0df64f0"
+          "sha256": "3f99220ad6f2985acb0771445a7a7f9d9da88b9cc343ebe60d3ca8587f6e9679"
         }
       ],
-      "bundle_version": "0.1.2",
+      "bundle_version": "0.1.3",
       "cli_sha256": "28b5d76e1e861476c7882725f056bca7cb65e718550203bd6c6dbd9aa9987fe1",
       "native_api_snapshot_sha256": "e1c3b72c4641b9e0fa5df8ca8d67b91266f13ab68ebae94a30a40dbf6c1a5c78"
     },

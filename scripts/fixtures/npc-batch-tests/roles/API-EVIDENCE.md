@@ -8,7 +8,8 @@ behavior remain separate checks. The fixture copies no decompiled combat loops.
 | Fixture operation | Existing source evidence (relative to the tree) |
 | --- | --- |
 | Trader configuration | `Items/GenericItems/TradersGeneric.as`: named subclasses of `UTraderConfigBase`; generator `crates/gore/src/cmd/npc/generate.rs` uses this exact custom-NPC config pattern. |
-| Stock seeding | `GAS/GASCharacterStateMixins.as:717`: `AddItemToInventory` forwards class/count/inventory to `AddItemOfClassInventory`. Exact build registration trace declares `EInventoryTypes::Trader=7` (do not confuse it with `EInventoryOpenedStates::TradingInventoryTrader=3`). |
+| Initial shop stock | `Items/GenericItems/TradersGeneric.as`: `AddTraderItemAllDifficulties` with `OnWorldStart`; preserves the original `TraderConfigBase` helper bytecode. Use this for initial stock, without a manual event call. |
+| Wrong inventory pool / late-event limit | `EInventoryTypes::Trader=7` is an NPC container, not the global shop.0.1.0/0.1.1 saved goods there while trade stayed empty.0.1.2 native config + manual global event made trade work but duplicated stock on reload; see `economy-runtime-0.1.2.json`. Initial stock reload in0.1.3 remains pending. |
 | Trade UI | `AI/NativeAICommands.as:1140`: `StartTradingWith` wraps `TaskTradeWith`; `Story/G1R/Conversation/Conversation_OC_STT_FISK_311.as:711` calls it from a real trader choice. |
 | Teacher requirements | `Story/Support/DialogTeaching.as:7`: `TryLearnSkill` checks LP, ore, already known, then calls `LearnSkill` with costs. `GAS/GASCharacterStateMixins.as:984` charges LP/ore only after successful effect application and memorizes the skill. |
 | Skill/cost/persistence | `GAS/Effects/Skills/GE_Skills.as:907`: Diving has 5 LP / 30 ore and `GE_Persistent`. `HasLearnedSkill` checks the active skill effect. |

@@ -254,10 +254,9 @@ one without a word; catalog membership does not prove a navigable route.
 
 `npc new --trader` supplies an empty config, not goods. Define stock in its
 `UTraderConfigBase` subclass with `AddTraderItemAllDifficulties(ItemClass, Count,
-EventName)`, as shipped configs do. Stock batches can use `OnWorldStart` or a
-dedicated global event dispatched by `UWorldPointManager::Get().CallGlobalEvent`.
-Existing saves can already list `OnWorldStart` as processed; the batch fixture
-uses a new event name when introducing its first actual shop stock.
+EventName)`, as shipped configs do. Use `OnWorldStart` for initial stock. Shipped
+configs also use chapter and dedicated global events, but the batch fixture's
+manual late event did not pass save/load persistence; see the observed limit below.
 
 Do not seed a shop with `AddItemToInventory(..., EInventoryTypes::Trader)`:
 that writes an NPC container. Native trading uses the matching row in
@@ -267,10 +266,19 @@ The [failed economy test](../../scripts/fixtures/npc-batch-tests/roles/economy-r
 proved the distinction: the NPC container had3/10/100, but the global shop maps
 were empty. Explicit region/type alone did not fix it.
 
-The [0.1.2 fixture](../../scripts/fixtures/npc-batch-tests/roles/README.md#commerce-follow-up012)
-uses the native config/event path with a versioned one-time menu marker. Its
-runtime result remains pending. Read the global shop maps after a real trade
-and full restart; a grant marker alone is not stock proof. Difficulty multipliers
+The [0.1.2 result](../../scripts/fixtures/npc-batch-tests/roles/economy-runtime-0.1.2.json)
+passed buying/selling/cancel. However, its manually called custom event filled
+current stock while the default map stayed empty; the first reload populated
+defaults and added the same batch again. Both the event ledger and menu marker
+were preserved. This is a measured failure of that fixture path, not proof that
+all custom events or vanilla trading are broken. Do not reuse it as a qualified
+recipe for persistent late stock grants.
+
+The [0.1.3 fixture](../../scripts/fixtures/npc-batch-tests/roles/README.md#commerce-follow-up013)
+uses normal initial stock and removes the manual event call. Its reload result
+remains pending. Test from an untouched input; an old save with missing defaults
+or duplicated items cannot prove clean initialization. Read **both** global stock
+maps after a trade and repeated load; a grant marker alone is not stock proof. Difficulty multipliers
 in `UTraderConfigBase` can change quantities; this fixture fixes the relevant
 ore/arrow multipliers to1 for reproducible counts. Preserve the shipped helper
 bytecode rather than recompiling a semantically unqualified decompilation.
