@@ -3471,6 +3471,8 @@ fn emit_function_ctor(
         pass_trace("restore_selected_vector_argument_lives", &rendered);
         let rendered = restore_shared_flag_and_typed_switch(&rendered, f, refs, class_name, is_method);
         pass_trace("restore_shared_flag_and_typed_switch", &rendered);
+        let rendered = restore_closed_string_value_arguments(&rendered, f, refs);
+        pass_trace("restore_closed_string_value_arguments", &rendered);
         let rendered = restore_clock_property_and_enum_chain(&rendered, f, refs, is_method, class_name);
         pass_trace("restore_clock_property_and_enum_chain", &rendered);
         let rendered = restore_inferred_map_query_lifetimes(&rendered, f, refs);
@@ -18623,6 +18625,188 @@ fn restore_closed_format_argument_lives(body:&str,f:&Func,refs:&RefResolver,is_m
     lines.join("\n")+if body.ends_with('\n') {"\n"}else {""}
 }
 
+/// Restore native string expression lives whose original destructors precede their next consumer.
+fn restore_closed_string_value_arguments(body:&str,f:&Func,refs:&RefResolver)->String {
+    if !body.contains("FString local_") {return body.to_owned();}
+    let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    let shape=|t:&super::types::DataType,token,ptr,reference:bool,constant:bool,handle:bool,readonly:bool|
+        t.token==token && t.type_info==ptr && t.is_reference==reference && t.is_object_const==constant && t.is_object_handle==handle
+        && t.is_read_only==readonly && !t.is_auto && !t.if_handle_then_const;
+    let plain=|t:&super::types::DataType,token|shape(t,token,0,false,false,false,false);
+    let object=|t:&super::types::DataType,ptr,reference:bool,constant:bool|shape(t,5,ptr,reference,constant,false,constant);
+    let native=|ptr,name|refs.type_identity_by_ptr(ptr).is_some_and(|t|t.name==name && t.module.is_empty() && t.namespace.is_empty());
+    let local=|slot|{let mut it=f.obj_locals.iter().filter(|(s,_)|*s==slot);let ptr=it.next()?.1;(slot>0 && it.next().is_none()).then_some(ptr)};
+    let scalar=|slot|slot>0 && !f.obj_locals.iter().any(|(s,_)|*s==slot);
+    let w=|i:&Instr,n:usize|i.words.get(n).map(|v|*v as i16 as i32);let p=|i:&Instr|i.qwords.first().map(|v|*v as i64);
+    let ops=|c:&[Instr],names:&str|c.iter().map(|i|i.op.name).eq(names.split_whitespace());
+    let method=|ptr,owner,name,constant|refs.func_by_ptr(ptr)==Some(name) && refs.func_owner_by_ptr(ptr)==Some(owner)
+        && refs.is_method_by_ptr(ptr) && refs.is_const_method_by_ptr(ptr)==constant;
+    let void0=|ptr,owner,name|method(ptr,owner,name,false) && refs.func_ret_by_ptr(ptr).is_some_and(|t|plain(t,0x52))
+        && refs.func_params_by_ptr(ptr).is_some_and(|args|args.is_empty());
+    let copy=|ptr,string|method(ptr,"FString","$beh0",false) && refs.func_ret_by_ptr(ptr).is_some_and(|t|plain(t,0x52))
+        && matches!(refs.func_params_by_ptr(ptr),Some([t]) if object(t,string,true,true));
+    let add=|ptr,string,token,arg|method(ptr,"FString","opAdd",true) && refs.func_ret_by_ptr(ptr).is_some_and(|t|object(t,string,false,false))
+        && matches!(refs.func_params_by_ptr(ptr),Some([t]) if shape(t,token,arg,true,true,false,true));
+    let literal=|i:&Instr|{let ptr=p(i)?;let s=refs.global_by_ptr(ptr)?;
+        (refs.global_is_string(ptr) && !s.chars().any(|c|c.is_control() || matches!(c,'"'|'\\'))).then(||format!("\"{s}\""))};
+    let names=|slot|body.split(|c:char|!c.is_ascii_alphanumeric() && c!='_').filter(|s|slot_and_life_any(s).is_some_and(|(n,_)|n==slot)).collect::<HashSet<_>>();
+    let one=|slot|{let names=names(slot);(names.len()==1).then(||names.into_iter().next().unwrap())};
+    let bound=|name:&str,slot|slot_and_life_any(name).is_some_and(|(n,_)|n==slot);
+    let lines:Vec<_>=body.lines().collect();let mut paths=Vec::new();let mut path=Vec::new();
+    for (n,line) in lines.iter().enumerate() {paths.push(path.clone());match line.trim() {"{"=>path.push(n),"}"=>if path.pop().is_none() {return body.to_owned();},_=>if brace_net(line)!=0 {return body.to_owned();}}}
+    if !path.is_empty() {return body.to_owned();}
+    let mut edges=Vec::new();
+    for c in &code {if c.op.name=="JMPP" {return body.to_owned();}if c.op.name.starts_with('J') {
+        let Some(d)=c.dwords.first() else {return body.to_owned();};let target=c.offset_dw as i64+2+*d as i32 as i64;
+        let Some(to)=code.iter().position(|i|i.offset_dw as i64==target) else {return body.to_owned();};edges.push(to);
+    }}
+    let closed=|start,end|!edges.iter().any(|to|*to>start && *to<end);
+    let mut edits:Vec<(usize,usize,String)>=Vec::new();
+
+    // Value opAdd -> FName construction -> by-value name argument, with the output address already pushed.
+    for (start,c) in code.windows(26).enumerate() {
+        if !ops(c,"PSF PGA PSF CALLSYS PSF PSF PSF CALLSYS PSF CALLSYS PSF PSF CALLSYS PSF CALLSYS PSF CALLSYS STOREOBJ PshVPtr PSF CALLSYS PSF CALLSYS CpyRtoV4 CpyVtoR1 JLowZ") {continue;}
+        let found=(|| {
+            let (out,prefix,rhs,result,name_slot,class_handle,subclass,boolean)=(w(&c[0],0)?,w(&c[2],0)?,w(&c[4],0)?,w(&c[5],0)?,w(&c[11],0)?,w(&c[17],0)?,w(&c[19],0)?,w(&c[23],0)?);
+            if HashSet::from([out,prefix,rhs,result,name_slot,class_handle,subclass]).len()!=7 || !scalar(boolean)
+                || [(6,prefix),(8,prefix),(10,result),(13,result),(15,name_slot),(18,class_handle),(21,subclass),(24,boolean)].iter().any(|(n,s)|w(&c[*n],0)!=Some(*s)) {return None;}
+            let string=local(result)?;let name_ty=local(name_slot)?;let out_ty=local(out)?;let sub_ty=local(subclass)?;let class_ty=local(class_handle)?;
+            if !native(string,"FString") || local(prefix)?!=string || local(rhs)?!=string || !native(name_ty,"FName") || !native(class_ty,"UClass")
+                || refs.type_identity_by_ptr(sub_ty)?.name!="TSubclassOf" || !closed(start,start+26) {return None;}
+            let (ctor,dtor,name_ctor,class_get,sub_ctor,query)=(p(&c[3])?,p(&c[9])?,p(&c[12])?,p(&c[16])?,p(&c[20])?,p(&c[22])?);
+            if !copy(ctor,string) || !add(p(&c[7])?,string,5,string) || p(&c[14])!=Some(dtor) || !void0(dtor,"FString","$beh2")
+                || !method(name_ctor,"FName","$beh0",false) || !plain(refs.func_ret_by_ptr(name_ctor)?,0x52)
+                || !matches!(refs.func_params_by_ptr(name_ctor)?,[t] if object(t,string,true,true))
+                || refs.is_method_by_ptr(class_get) || refs.is_const_method_by_ptr(class_get) || refs.func_owner_by_ptr(class_get).is_some()
+                || refs.func_by_ptr(class_get)!=Some("StaticClass") || !refs.func_params_by_ptr(class_get)?.is_empty()
+                || !shape(refs.func_ret_by_ptr(class_get)?,5,class_ty,false,false,true,false)
+                || !method(sub_ctor,"TSubclassOf","$beh0",false) || !plain(refs.func_ret_by_ptr(sub_ctor)?,0x52)
+                || !matches!(refs.func_params_by_ptr(sub_ctor)?,[t] if shape(t,5,class_ty,false,false,true,false))
+                || refs.is_method_by_ptr(query) || refs.is_const_method_by_ptr(query) || refs.func_owner_by_ptr(query).is_some() || !plain(refs.func_ret_by_ptr(query)?,0x41)
+                || !matches!(refs.func_params_by_ptr(query)?,[s,n,o] if object(s,sub_ty,false,false) && object(n,name_ty,false,false) && object(o,out_ty,true,false)) {return None;}
+            let query_name=refs.func_by_ptr(query)?;let ns=refs.func_ns_by_ptr(query)?;let class_ns=refs.func_ns_by_ptr(class_get)?;
+            if ns.is_empty() || class_ns.is_empty() {return None;}
+            let target=c[25].offset_dw as i64+2+*c[25].dwords.first()? as i32 as i64;
+            let kill=code.iter().position(|i|i.offset_dw as i64==target)?;
+            if kill<start+26 || code[kill].op.name!="SetV1" || w(&code[kill],0)!=Some(boolean) || code[kill].dwords.as_slice()!=[0] {return None;}
+            for (n,i) in code.iter().enumerate().filter(|(_,i)|i.op.name.starts_with('J')) {
+                let target=i.offset_dw as i64+2+*i.dwords.first()? as i32 as i64;let to=code.iter().position(|c|c.offset_dw as i64==target)?;
+                if to>=start+26 && to<kill && !(n>=start+25 && n<kill) {return None;}
+            }
+            let mut pending=vec![start+26];let mut visited=HashSet::new();
+            while let Some(n)=pending.pop() {
+                if n==kill || !visited.insert(n) {continue;}
+                if n<start+26 || n>=kill || super::bytediff::addressed_slots(&code[n]).contains(&boolean) || matches!(code[n].op.name,"RET"|"ThrowException") {return None;}
+                if code[n].op.name.starts_with('J') {
+                    let target=code[n].offset_dw as i64+2+*code[n].dwords.first()? as i32 as i64;
+                    let to=code.iter().position(|i|i.offset_dw as i64==target)?;
+                    if to<=n {return None;}pending.push(to);if code[n].op.name=="JMP" {continue;}
+                }
+                pending.push(n+1);
+            }
+            let sub=refs.func_params_by_ptr(query)?[0].render(refs);let rhs_name=one(rhs)?;let out_name=one(out)?;let boolean_name=one(boolean)?;
+            let expr=format!("(FString({}) + {rhs_name})",literal(&c[1])?);
+            let mut candidates=Vec::new();
+            for (row,pair) in lines.windows(3).enumerate() {
+                let Some((pad,alias,init))=declaration_with_initializer(pair[0]) else {continue;};
+                if !bound(&alias,result) || init!=expr || pair[0]!=format!("{pad}FString {alias} = {expr};") || count_ident(body,&alias)!=2
+                    || paths[row]!=paths[row+1] || paths[row]!=paths[row+2] || pair[2]!=format!("{pad}if ({boolean_name})")
+                    || pair[1]!=format!("{pad}{boolean_name} = {ns}::{query_name}({sub}({class_ns}::StaticClass()), FName({alias}), {out_name});") {continue;}
+                let declarations:Vec<_>=lines.iter().enumerate().filter(|(_,l)|l.trim()==format!("bool {boolean_name};")).map(|(n,_)|n).collect();
+                let [decl]=declarations.as_slice() else {continue;};if *decl>=row || paths[*decl]!=paths[row] {continue;}
+                let later:Vec<_>=lines.iter().enumerate().skip(row+3).filter(|(_,l)|count_ident(l,boolean_name)>0).map(|(n,_)|n).collect();
+                let Some(write)=later.first().copied() else {continue;};let Some(rhs)=lines[write].trim().strip_prefix(&format!("{boolean_name} = ")).and_then(|s|s.strip_suffix(';')) else {continue;};
+                if count_ident(rhs,boolean_name)!=0 || later.iter().any(|n|!paths[*n].starts_with(&paths[write])) {continue;}
+                candidates.push((row,format!("{pad}if ({ns}::{query_name}({sub}({class_ns}::StaticClass()), FName({expr}), {out_name}))")));
+            }
+            let [(row,text)]=candidates.as_slice() else {return None;};Some((*row,*row+3,text.clone()))
+        })();if let Some(edit)=found {edits.push(edit);}
+    }
+
+    // Two concrete headers feed the same five native value additions and final const-value consumer.
+    for start in 0..code.len() {
+        let found=(|| {
+            let head=code.get(start..start+3)?;let mut at;let mut nodes:Vec<(i32,String)>=Vec::new();let string;
+            let getter=|c:&[Instr]| {
+                if !ops(c,"PSF PshVPtr CALLSYS") {return None;}
+                let name_slot=w(&c[0],0)?;let actor=w(&c[1],0)?;let name_ty=local(name_slot)?;let actor_ty=local(actor)?;let ptr=p(&c[2])?;
+                let actor_id=refs.type_identity_by_ptr(actor_ty)?;let owner=refs.func_owner_by_ptr(ptr)?;
+                // Native AActor -> UObject is absent from the serialized script ancestry table.
+                let compatible=refs.is_subclass(&actor_id.name,owner) || (owner=="UObject" && native(actor_ty,"AActor"));
+                if !native(name_ty,"FName") || !compatible || !refs.is_method_by_ptr(ptr) || !refs.is_const_method_by_ptr(ptr) || !refs.func_params_by_ptr(ptr)?.is_empty()
+                    || !object(refs.func_ret_by_ptr(ptr)?,name_ty,false,false) {return None;}
+                Some((name_slot,name_ty,format!("{}.{}()",one(actor)?,refs.func_by_ptr(ptr)?)))
+            };
+            let name_header=!ops(head,"PGA PSF CALLSYS");
+            if !name_header {
+                let slot=w(&head[1],0)?;string=local(slot)?;
+                if !native(string,"FString") || !copy(p(&head[2])?,string) {return None;}
+                nodes.push((slot,format!("FString({})",literal(&head[0])?)));at=start+3;
+            }else {
+                let h=code.get(start..start+7)?;let (name_slot,name_ty,name_expr)=getter(&h[..3])?;
+                if !ops(&h[3..],"PSF PSF PGA CALLSYS") || w(&h[3],0)!=Some(name_slot) {return None;}
+                let slot=w(&h[4],0)?;string=local(slot)?;let reverse=p(&h[6])?;
+                if !native(string,"FString") || !method(reverse,"FString","opAdd_r",true) || !object(refs.func_ret_by_ptr(reverse)?,string,false,false)
+                    || !matches!(refs.func_params_by_ptr(reverse)?,[t] if object(t,name_ty,true,true)) {return None;}
+                nodes.push((slot,format!("{}.opAdd_r({name_expr})",literal(&h[5])?)));at=start+7;
+            }
+            let first=nodes[0].0;let mut other=None;let mut dtor=None;let mut suffixes=Vec::new();
+            for step in 0..5 {
+                let name_arg=name_header && step==0;let mut name_operand=None;
+                if name_arg {let g=code.get(at..at+3)?;name_operand=Some(getter(g)?);at+=3;}
+                let c=code.get(at..at+6)?;
+                if !matches!(c[0].op.name,"PSF"|"PGA") || !ops(&c[1..],"PSF PSF CALLSYS PSF CALLSYS") {return None;}
+                let previous=nodes.last()?.0;let result=w(&c[1],0)?;
+                if result==previous || local(result)?!=string || w(&c[2],0)!=Some(previous) || w(&c[4],0)!=Some(previous) {return None;}
+                if let Some(second)=other {if result!=if previous==first {second} else {first} {return None;}}else {other=Some(result);}
+                let arg=if let Some((name_slot,name_ty,expr))=name_operand {
+                    if c[0].op.name!="PSF" || w(&c[0],0)!=Some(name_slot) || !add(p(&c[3])?,string,5,name_ty) {return None;}expr
+                }else if step%2==1 {
+                    if c[0].op.name!="PGA" || !add(p(&c[3])?,string,5,string) {return None;}literal(&c[0])?
+                }else {
+                    let slot=w(&c[0],0)?;if c[0].op.name!="PSF" || !scalar(slot) || !add(p(&c[3])?,string,0x51,0) {return None;}one(slot)?.to_owned()
+                };
+                let destructor=p(&c[5])?;if !void0(destructor,"FString","$beh2") || dtor.is_some_and(|old|old!=destructor) {return None;}dtor=Some(destructor);
+                nodes.push((result,format!("({} + {arg})",nodes.last()?.1)));suffixes.push(arg);at+=6;
+            }
+            let tail=code.get(at..at+6)?;let result=nodes.last()?.0;
+            if !ops(tail,"PSF SetV1 PshV4 CALLSYS PSF CALLSYS") || w(&tail[0],0)!=Some(result) || w(&tail[4],0)!=Some(result)
+                || !scalar(w(&tail[1],0)?) || w(&tail[2],0)!=w(&tail[1],0) || p(&tail[5])!=dtor || !closed(start,at+6) {return None;}
+            let consumer=p(&tail[3])?;let [category,text]=refs.func_params_by_ptr(consumer)? else {return None;};let enum_ty=category.base_name(refs);
+            if refs.is_method_by_ptr(consumer) || refs.is_const_method_by_ptr(consumer) || refs.func_owner_by_ptr(consumer).is_some() || !plain(refs.func_ret_by_ptr(consumer)?,0x52)
+                || !object(text,string,false,true) || !object(category,category.type_info,false,false) || !is_enum(&enum_ty) {return None;}
+            let ns=refs.func_ns_by_ptr(consumer)?;if ns.is_empty() {return None;}let call=format!("{ns}::{}",refs.func_by_ptr(consumer)?);let value=*tail[1].dwords.first()? as i32;
+            let mut candidates=Vec::new();
+            for (row,line) in lines.iter().enumerate() {
+                let Some((pad,alias,init))=declaration_with_initializer(line) else {continue;};
+                let initial_node=if name_header {0} else {2};
+                if !bound(&alias,nodes[initial_node].0) || init!=nodes[initial_node].1 || *line!=format!("{pad}FString {alias} = {init};") || count_ident(body,&alias)!=2 {continue;}
+                let mut aliases=vec![alias.clone()];let mut cursor=alias;let mut line_at=row+1;let mut valid=true;
+                for node in initial_node+1..nodes.len()-1 {
+                    let Some(next)=lines.get(line_at) else {valid=false;break;};let Some((next_pad,next_alias,next_init))=declaration_with_initializer(next) else {valid=false;break;};
+                    let expr=format!("({cursor} + {})",suffixes[node-1]);
+                    if next_pad!=pad || !bound(&next_alias,nodes[node].0) || next_init!=expr || *next!=format!("{pad}FString {next_alias} = {expr};")
+                        || aliases.contains(&next_alias) || count_ident(body,&next_alias)!=2 || paths[line_at]!=paths[row] {valid=false;break;}
+                    aliases.push(next_alias.clone());cursor=next_alias;line_at+=1;
+                }
+                if !valid || lines.get(line_at).copied()!=Some(format!("{pad}{call}({enum_ty}({value}), ({cursor} + {}));",suffixes.last()?).as_str()) || paths[line_at]!=paths[row] {continue;}
+                // Apply the proven source nesting, including its intentional parentheses, after validating the entire chain.
+                let mut rewritten:Vec<_>=lines[row..=line_at].iter().map(|s|(*s).to_owned()).collect();
+                for n in 0..aliases.len() {
+                    let (_,name,expr)=declaration_with_initializer(&rewritten[n])?;
+                    for next in &mut rewritten[n+1..] {*next=rename_ident(next,&name,&format!("({expr})"));}
+                }
+                candidates.push((row,line_at+1,rewritten.pop()?));
+            }
+            let [edit]=candidates.as_slice() else {return None;};Some(edit.clone())
+        })();if let Some(edit)=found {edits.push(edit);}
+    }
+    edits.sort_by_key(|edit|edit.0);
+    if edits.windows(2).any(|p|p[0].1>p[1].0) {return body.to_owned();}
+    let mut out:Vec<_>=lines.iter().map(|s|(*s).to_owned()).collect();for (start,end,text) in edits.into_iter().rev() {out.splice(start..end,[text]);}
+    out.join("\n")+if body.ends_with('\n') {"\n"}else {""}
+}
+
 /// Keep an unused shared flag's writes and the exhaustive typed switch that encloses them.
 fn restore_shared_flag_and_typed_switch(body:&str,f:&Func,refs:&RefResolver,class_name:Option<&str>,is_method:bool)->String {
     if !is_method || !body.contains("switch (int(") {return body.to_owned();}
@@ -27218,6 +27402,8 @@ fn fold_unary_double_chain(body: &str, f: &Func, refs: &RefResolver) -> String {
     let body = fold_widened_final_product_operand(&body, f, refs, &instrs);
     let body = fold_negated_narrow_call_argument(&body, f, refs, &instrs);
     let body = fold_direct_enum_index_argument(&body, f, refs, &instrs);
+    let body = fold_joined_native_widening_copies(&body, f, refs, &instrs);
+    let body = fold_native_double_product_result(&body, f, refs, &instrs);
     fold_double_product_before_bool_argument(&body, f, refs, &instrs)
 }
 
@@ -28067,6 +28253,233 @@ fn fold_widened_final_product_operand(body: &str, f: &Func, refs: &RefResolver, 
         if let Some(line)=folded { lines.splice(at..at+2,[line]); } else { at+=1; }
     }
     let mut out=lines.join("\n"); if body.ends_with('\n') { out.push('\n'); } out
+}
+
+/// The two native f32 results already widen into one named double target.
+/// Their shared conversion slot is killed at the join; preserve its later lives.
+fn fold_joined_native_widening_copies(body: &str, f: &Func, refs: &RefResolver, code: &[Instr]) -> String {
+    if !body.contains(" = local_") { return body.to_owned(); }
+    let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+    let store = |line: &str| {
+        let (name, value) = line.trim().strip_suffix(';')?.split_once(" = ")?;
+        (slot_and_life_any(name).is_some_and(|(slot, _)| slot > 0) && !value.is_empty())
+            .then(|| (name.to_owned(), value.to_owned()))
+    };
+    let jump = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+    let plain = |t: &super::types::DataType, token, ptr, reference: bool, constant: bool, handle: bool|
+        t.token == token && t.type_info == ptr && t.is_reference == reference && t.is_object_const == constant
+            && t.is_read_only == (constant && !handle) && t.is_object_handle == handle && !t.is_auto && !t.if_handle_then_const;
+    let native = |ptr| refs.type_identity_by_ptr(ptr).filter(|t| t.module.is_empty() && t.namespace.is_empty());
+    let local = |slot| {
+        let ts: Vec<_> = f.obj_locals.iter().filter(|(s, _)| *s == slot).map(|(_, p)| *p).collect();
+        if let [ty] = ts.as_slice() { Some(*ty) } else { None }
+    };
+    let scalar = |slot| slot > 0 && !f.obj_locals.iter().any(|(s, _)| *s == slot);
+    if code.iter().any(|i| i.op.name == "JMPP" || i.op.name.starts_with('J')
+        && jump(i).is_none_or(|to| !code.iter().any(|p| p.offset_dw as i64 == to))) { return body.to_owned(); }
+    let mut witnesses = Vec::new();
+    for (start, c) in code.windows(22).enumerate() {
+        let site = (|| {
+            if c.iter().map(|i| i.op.name).ne(["PSF","PSF","PshVPtr","CALL","STOREOBJ","PshVPtr","CALLSYS",
+                "CpyRtoV4","fTOd","CpyVtoV8","FreeNullV8","JMP","PSF","PSF","PshVPtr","CALLSYS",
+                "CpyRtoV4","fTOd","CpyVtoV8","SetV8","CMPd","JNS"]) { return None; }
+            let (flag, attribute, released, receiver, first, wide, target, direct, second) =
+                (w(&c[0],0)?,w(&c[1],0)?,w(&c[2],0)?,w(&c[4],0)?,w(&c[7],0)?,w(&c[8],0)?,w(&c[9],0)?,w(&c[14],0)?,w(&c[16],0)?);
+            let slots = [flag,attribute,released,receiver,first,wide,target,direct,second];
+            if slots.iter().any(|s| *s <= 0) || slots.iter().collect::<HashSet<_>>().len() != slots.len()
+                || ![flag,first,wide,target,second].iter().all(|s| scalar(*s))
+                || [(5,0,receiver),(8,1,first),(9,1,wide),(10,0,released),(12,0,flag),(13,0,attribute),
+                    (17,0,wide),(17,1,second),(18,0,target),(18,1,wide),(19,0,wide),(20,0,target),(20,1,wide)]
+                    .iter().any(|(at,word,slot)| w(&c[*at],*word) != Some(*slot))
+                || jump(&c[11]) != Some(c[19].offset_dw as i64)
+                || !jump(&c[21]).is_some_and(|to| to > c[21].offset_dw as i64)
+                || c[6].qwords != c[15].qwords { return None; }
+            // Either entry starts before its complete argument frame. The null
+            // arm may enter the JMP at 11; neither conversion has an interior entry.
+            if code.iter().any(|i| i.op.name.starts_with('J') && jump(i).is_some_and(|to|
+                to > c[0].offset_dw as i64 && to <= c[10].offset_dw as i64
+                    || to > c[12].offset_dw as i64 && to <= c[18].offset_dw as i64)) { return None; }
+            if code[start+8..start+20].iter().enumerate().filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&wide))
+                .map(|(n,_)| n).ne([0,1,9,10,11]) { return None; }
+            let query = *c[6].qwords.first()? as i64;
+            let [handle,value,out] = refs.func_params_by_ptr(query)? else { return None; };
+            if refs.is_method_by_ptr(query) || refs.is_const_method_by_ptr(query) || refs.func_owner_by_ptr(query).is_some()
+                || !plain(refs.func_ret_by_ptr(query)?,0x50,0,false,false,false)
+                || !plain(handle,5,handle.type_info,false,true,true) || !is_object_handle_type(&native(handle.type_info)?.name)
+                || !plain(value,5,local(attribute)?,false,false,false) || !is_value_struct_type(&native(value.type_info)?.name)
+                || !plain(out,0x41,0,true,false,false) { return None; }
+            let getter = *c[3].dwords.first()? as i32;
+            let returned = refs.func_ret_by_id(getter)?;
+            let [actor] = refs.func_params_by_id(getter)? else { return None; };
+            if refs.is_method_by_id(getter) || refs.is_const_method_by_id(getter) || refs.func_owner_by_id(getter).is_some()
+                || !plain(returned,5,local(receiver)?,false,false,true) || local(direct)? != returned.type_info
+                || !is_object_handle_type(&native(returned.type_info)?.name)
+                || !plain(actor,5,local(released)?,false,true,true) || !is_object_handle_type(&native(actor.type_info)?.name) { return None; }
+            // The original argument frame already proves the native base-handle
+            // binding. No new native inheritance table is needed to keep it intact.
+            let qualified = |ns: &str, name: &str| format!("{ns}::{name}");
+            let call = qualified(refs.func_ns_by_ptr(query).unwrap_or(""),refs.func_by_ptr(query)?);
+            let get = qualified(refs.func_ns_by_id(getter).unwrap_or(""),refs.func_by_id(getter)?);
+            Some((wide,target,flag,attribute,released,direct,call,get,native(actor.type_info)?.name.clone(),native(value.type_info)?.name.clone(),native(returned.type_info)?.name.clone()))
+        })();
+        if let Some(site) = site { witnesses.push(site); }
+    }
+    let [site] = witnesses.as_slice() else { return body.to_owned(); };
+    let (wide,target,flag,attribute,released,direct,call,get,actor_type,value_type,receiver_type) = site;
+    let lines: Vec<_> = body.lines().collect(); let mut scopes = Vec::new(); let mut stack = Vec::new();
+    for (n,line) in lines.iter().enumerate() {
+        if line.trim() == "}" && stack.pop().is_none() { return body.to_owned(); }
+        scopes.push(stack.clone());
+        if line.trim() == "{" { stack.push(n); } else if line.trim() != "}" && brace_net(line) != 0 { return body.to_owned(); }
+    }
+    if !stack.is_empty() { return body.to_owned(); }
+    let visible = |name: &str, ty: &str, at: usize, bare: bool| {
+        let declarations: Vec<_> = lines.iter().enumerate().filter(|(_,l)| declaration_with_initializer(l).map(|(_,n,_)| n)
+            .or_else(|| bare_declaration(l).map(|(_,n)| n)).as_deref() == Some(name)).map(|(n,_)| n).collect();
+        let [decl] = declarations.as_slice() else { return false; };
+        *decl < at && scopes[at].starts_with(&scopes[*decl]) && (lines[*decl].trim() == format!("{ty} {name};")
+            || !bare && lines[*decl].trim().starts_with(&format!("{ty} {name} = ")))
+    };
+    let mut pairs = Vec::new();
+    for (at,p) in lines.windows(2).enumerate() {
+        let candidate = (|| {
+            let (name,init) = store(p[0])?; let (output,value) = store(p[1])?;
+            if slot_and_life_any(&name)?.0 != *wide || slot_and_life_any(&output)?.0 != *target || value != name
+                || scopes[at] != scopes[at+1] || indent_of(p[0]) != indent_of(p[1]) || !init.starts_with(&format!("{call}(")) { return None; }
+            let (_,args) = call_of_expression(&init)?;
+            let [input,attr,out] = args.as_slice() else { return None; };
+            if slot_and_life_any(attr)?.0 != *attribute || slot_and_life_any(out)?.0 != *flag
+                || !visible(attr,value_type,at,false) || !visible(out,"bool",at,false)
+                || !visible(&name,"float",at,true) || !visible(&output,"float",at,false) { return None; }
+            let nested = input.starts_with(&format!("{get}("));
+            let actor = if nested { let (_,xs) = call_of_expression(input)?; let [x] = xs.as_slice() else { return None; }; x.clone() } else { input.clone() };
+            if slot_and_life_any(&actor)?.0 != if nested { *released } else { *direct }
+                || !visible(&actor,if nested { actor_type } else { receiver_type },at,false) { return None; }
+            Some((at,name,output,init,nested,actor))
+        })();
+        if let Some(pair) = candidate { pairs.push(pair); }
+    }
+    let [(first,name,output,first_call,true,actor),(second,other,other_output,second_call,false,_)] = pairs.as_slice() else { return body.to_owned(); };
+    // At this early seam the raw FreeNullV8 may still be explicit. Keep it
+    // in place; the existing block-end cleanup pass removes it later.
+    let cleanup = usize::from(lines.get(first+2).is_some_and(|l| l.trim() == format!("{actor} = nullptr;")));
+    if name != other || output != other_output || *second != first+6+cleanup
+        || lines[first+2+cleanup..*second].iter().map(|l| l.trim()).ne(["}","}","else","{"])
+        || lines.get(second+2).is_none_or(|l| l.trim() != "}") { return body.to_owned(); }
+    // No extra textual old-value read may hide beside these two source lives.
+    if lines[first+2..*second].iter().any(|l| count_ident(l,name) != 0)
+        || lines[second+2..].iter().find(|l| count_ident(l,name) != 0).is_some_and(|l|
+            !store(l).is_some_and(|(n,value)| n == *name && count_ident(&value,name) == 0)) { return body.to_owned(); }
+    let mut out: Vec<_> = lines.iter().map(|s| (*s).to_owned()).collect();
+    for (at,value) in [(*second,second_call),(*first,first_call)] {
+        out.splice(at..at+2,[format!("{}{output} = {value};",indent_of(lines[at]))]);
+    }
+    let mut result = out.join("\n"); if body.ends_with('\n') { result.push('\n'); } result
+}
+
+/// One closed unary double result is consumed in the following product/addition.
+/// Preserve the named slot's declaration; later paths overwrite it before a read.
+fn fold_native_double_product_result(body: &str, f: &Func, refs: &RefResolver, code: &[Instr]) -> String {
+    if !body.contains(" = ") || !body.contains(" * local_") { return body.to_owned(); }
+    let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+    let store = |line: &str| {
+        let (name, value) = line.trim().strip_suffix(';')?.split_once(" = ")?;
+        (slot_and_life_any(name).is_some_and(|(slot, _)| slot > 0) && !value.is_empty())
+            .then(|| (name.to_owned(), value.to_owned()))
+    };
+    let jump = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+    let plain = |t: &super::types::DataType, token| t.token == token && t.type_info == 0 && !t.is_reference
+        && !t.is_object_handle && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+    let indices: HashMap<_,_> = code.iter().enumerate().map(|(n,i)| (i.offset_dw as i64,n)).collect();
+    if code.iter().any(|i| i.op.name == "JMPP" || i.op.name.starts_with('J') && jump(i).is_none_or(|to| !indices.contains_key(&to))) { return body.to_owned(); }
+    let dead_after = |slot: i32, start: usize| {
+        let mut todo = vec![start]; let mut seen = HashSet::new();
+        while let Some(at) = todo.pop() {
+            let Some(i) = code.get(at) else { return false; }; if !seen.insert(at) { continue; }
+            let uses = super::bytediff::addressed_slots(i);
+            if uses.contains(&slot) {
+                if matches!(i.op.name,"SetV8"|"CpyVtoV8") && uses.first() == Some(&slot) && !uses[1..].contains(&slot) { continue; }
+                return false;
+            }
+            if i.op.name == "RET" { continue; }
+            if i.op.name.starts_with('J') {
+                let Some(to) = jump(i).and_then(|to| indices.get(&to)).copied() else { return false; };
+                todo.push(to); if i.op.name == "JMP" { continue; }
+            }
+            todo.push(at+1);
+        }
+        true
+    };
+    let mut sites = Vec::new();
+    for (start,c) in code.windows(12).enumerate() {
+        let site = (|| {
+            if c.iter().map(|i| i.op.name).ne(["PshVPtr","CALLSYS","CpyRtoV4","fTOd","SetV8","DIVd","DIVd",
+                "PshV8","CALLSYS","CpyRtoV8","MULd","ADDd"]) { return None; }
+            let (owner,narrow,work,result,base,scale,output) =
+                (w(&c[0],0)?,w(&c[2],0)?,w(&c[3],0)?,w(&c[4],0)?,w(&c[5],2)?,w(&c[10],2)?,w(&c[11],0)?);
+            let slots = [owner,narrow,work,result,base,scale,output];
+            if slots.iter().any(|s| *s <= 0) || slots.iter().collect::<HashSet<_>>().len() != slots.len()
+                || f.obj_locals.iter().any(|(s,_)| slots[1..].contains(s))
+                || [(3,1,narrow),(5,0,result),(5,1,result),(6,0,work),(6,1,work),(6,2,result),
+                    (7,0,work),(9,0,result),(10,0,work),(10,1,result),(11,1,base),(11,2,work)]
+                    .iter().any(|(at,n,s)| w(&c[*at],*n) != Some(*s))
+                || !dead_after(result,start+11)
+                || code.iter().any(|i| i.op.name.starts_with('J') && jump(i).is_some_and(|to|
+                    to > c[0].offset_dw as i64 && to <= c[11].offset_dw as i64)) { return None; }
+            let ts: Vec<_> = f.obj_locals.iter().filter(|(s,_)| *s == owner).map(|(_,p)| *p).collect();
+            let [ty] = ts.as_slice() else { return None; }; let identity = refs.type_identity_by_ptr(*ty)?;
+            if !identity.module.is_empty() || !identity.namespace.is_empty() || !is_object_handle_type(&identity.name) { return None; }
+            let (getter,unary) = (*c[1].qwords.first()? as i64,*c[8].qwords.first()? as i64);
+            if refs.func_owner_by_ptr(getter) != Some(identity.name.as_str()) || !refs.is_method_by_ptr(getter)
+                || !refs.is_const_method_by_ptr(getter) || !refs.func_params_by_ptr(getter)?.is_empty()
+                || !plain(refs.func_ret_by_ptr(getter)?,0x50) || refs.is_method_by_ptr(unary) || refs.is_const_method_by_ptr(unary)
+                || refs.func_owner_by_ptr(unary).is_some() || !plain(refs.func_ret_by_ptr(unary)?,0x51)
+                || !matches!(refs.func_params_by_ptr(unary)?,[t] if plain(t,0x51)) { return None; }
+            let literal = *c[4].qwords.first()?;
+            if !f64::from_bits(literal).is_finite() { return None; }
+            let qualified = format!("{}::{}",refs.func_ns_by_ptr(unary).unwrap_or(""),refs.func_by_ptr(unary)?);
+            Some((owner,result,base,scale,output,identity.name.clone(),refs.func_by_ptr(getter)?.to_owned(),qualified,literal))
+        })();
+        if let Some(site) = site { sites.push(site); }
+    }
+    let [site] = sites.as_slice() else { return body.to_owned(); };
+    let (owner,result,base,scale,output,owner_type,getter,unary,bits) = site;
+    let lines: Vec<_> = body.lines().collect(); let mut scopes = Vec::new(); let mut stack = Vec::new();
+    for (n,line) in lines.iter().enumerate() {
+        if line.trim() == "}" && stack.pop().is_none() { return body.to_owned(); }
+        scopes.push(stack.clone()); if line.trim() == "{" { stack.push(n); }
+        else if line.trim() != "}" && brace_net(line) != 0 { return body.to_owned(); }
+    }
+    if !stack.is_empty() { return body.to_owned(); }
+    let visible = |name: &str, ty: &str, at: usize, bare: bool| {
+        let ds: Vec<_> = lines.iter().enumerate().filter(|(_,l)| declaration_with_initializer(l).map(|(_,n,_)| n)
+            .or_else(|| bare_declaration(l).map(|(_,n)| n)).as_deref() == Some(name)).map(|(n,_)| n).collect();
+        let [decl] = ds.as_slice() else { return false; };
+        *decl < at && scopes[at].starts_with(&scopes[*decl]) && (lines[*decl].trim() == format!("{ty} {name};")
+            || !bare && lines[*decl].trim().starts_with(&format!("{ty} {name} = ")))
+    };
+    let pairs: Vec<_> = lines.windows(2).enumerate().filter_map(|(at,p)| {
+        let (name,init) = store(p[0])?; let (target,value) = store(p[1])?;
+        if slot_and_life_any(&name)?.0 != *result || slot_and_life_any(&target)?.0 != *output
+            || scopes[at] != scopes[at+1] || indent_of(p[0]) != indent_of(p[1]) || !init.starts_with(&format!("{unary}(")) { return None; }
+        let (_,args) = call_of_expression(&init)?; let [arg] = args.as_slice() else { return None; };
+        let (get,division) = unwrap_brackets(arg).split_once(" / ")?;
+        let (literal,base_name) = unwrap_brackets(division).split_once(" / ")?;
+        let owner_name = get.strip_suffix(&format!(".{getter}()"))?;
+        let (added,product) = value.split_once(" + ")?;
+        let (read,scale_name) = unwrap_brackets(product).split_once(" * ")?;
+        if slot_and_life_any(owner_name)?.0 != *owner || slot_and_life_any(base_name)?.0 != *base
+            || slot_and_life_any(scale_name)?.0 != *scale || added != base_name || read != name
+            || literal.parse::<f64>().ok()?.to_bits() != *bits
+            || !visible(&name,"float",at,true) || !visible(&target,"float",at,false)
+            || !visible(base_name,"float",at,false) || !visible(scale_name,"float",at,false) || !visible(owner_name,owner_type,at,false)
+            || lines[at+2..].iter().find(|l| count_ident(l,&name) != 0).is_some_and(|l|
+                !store(l).is_some_and(|(n,value)| n == name && count_ident(&value,&name) == 0)) { return None; }
+        Some((at,format!("{}{target} = {added} + ({init} * {scale_name});",indent_of(p[1]))))
+    }).collect();
+    let [(at,replacement)] = pairs.as_slice() else { return body.to_owned(); };
+    let mut out: Vec<_> = lines.iter().map(|s| (*s).to_owned()).collect(); out.splice(*at..at+2,[replacement.clone()]);
+    let mut result = out.join("\n"); if body.ends_with('\n') { result.push('\n'); } result
 }
 
 /// A double argument expression finishes before the next call's bool argument.
@@ -41092,6 +41505,40 @@ fn named_value_sites(f: &Func, refs: &RefResolver) -> HashSet<(i32, String)> {
                     && target(i).is_some_and(|t| t > producer.offset_dw as i64 && t <= c[10].offset_dw as i64)) { continue; }
             if let Some(callee) = callee_of(producer) { out.insert((slot, callee)); }
         }
+        // The same closed AND diamond with a saved/negated native bool and ==.
+        // Keep the existing eleven-op positive path above unchanged.
+        for (at, c) in instrs.windows(14).enumerate() {
+            if c.iter().map(|i| i.op.name).ne(["CALLSYS", "CpyRtoV4", "NOT", "CpyVtoR1", "JLowNZ",
+                "SetV4", "JMP", "sbTOi", "CMPIi", "TZ", "CpyRtoV4", "CpyVtoV4", "CpyVtoR1", "JLowZ"])
+                || c[5].dwords.first() != Some(&0) || w(&c[8], 0) != w(&c[7], 0)
+                || [2, 3, 5, 11, 12].iter().any(|n| w(&c[*n], 0) != w(&c[1], 0))
+                || w(&c[11], 1) != w(&c[10], 0)
+                || target(&c[4]) != Some(c[7].offset_dw as i64)
+                || target(&c[6]) != Some(c[12].offset_dw as i64) { continue; }
+            let boolean = c[0].qwords.first().and_then(|p| refs.func_ret_by_ptr(*p as i64));
+            if !boolean.is_some_and(|r| r.token == 0x41 && r.type_info == 0 && plain(r)) { continue; }
+            let Some(slot) = w(&c[7], 1).filter(|s| *s > 0) else { continue; };
+            if f.obj_locals.iter().any(|(s, _)| *s == slot) { continue; }
+            let uses: Vec<_> = instrs.iter().enumerate()
+                .filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&slot)).map(|(n, _)| n).collect();
+            let [made, read] = uses.as_slice() else { continue; };
+            if *made == 0 || *made >= at || *read != at + 7 || instrs[*made].op.name != "CpyRtoV4"
+                || w(&instrs[*made], 0) != Some(slot) { continue; }
+            let producer = &instrs[*made - 1];
+            let ret = match producer.op.name {
+                "CALL" => producer.dwords.first().and_then(|id| refs.func_ret_by_id(*id as i32)),
+                "CALLSYS" => producer.qwords.first().and_then(|p| refs.func_ret_by_ptr(*p as i64)),
+                _ => None,
+            };
+            let Some(ret) = ret else { continue; };
+            if ret.token != 5 || !plain(ret) || !is_enum(&ret.base_name(refs))
+                || enum_slots.get(&slot) != Some(&ret.base_name(refs)) { continue; }
+            if instrs[*made + 1..at].iter().any(|i| i.op.name.starts_with('J') || i.op.name == "RET")
+                || !target(&c[13]).is_some_and(|t| t > c[13].offset_dw as i64 && instrs.iter().any(|i| i.offset_dw as i64 == t))
+                || instrs.iter().enumerate().any(|(n, i)| i.op.name.starts_with('J') && ![at + 4, at + 6].contains(&n)
+                    && target(i).is_some_and(|t| t > producer.offset_dw as i64 && t <= c[13].offset_dw as i64)) { continue; }
+            if let Some(callee) = callee_of(producer) { out.insert((slot, callee)); }
+        }
     }
     out.extend(enum_reference_copy_initializers(f, refs));
     out.extend(named_index_field_sites(f, refs));
@@ -49440,6 +49887,220 @@ mod literal_value_lifetime_tests {
         let mut duplicate = f.clone(); duplicate.obj_locals.push((38, 101));
         assert!(super::script_copy_argument_temporary(&duplicate, &refs, true, Some("FSource")).is_none());
         assert!(super::script_copy_argument_temporary(&f, &refs, false, Some("FSource")).is_none());
+    }
+
+    fn negated_enum_diamond_fixture(bias: u16) -> Func {
+        // Original 335..355, including a predecessor edge before the eager-call arguments.
+        let mut f = function(&[
+            ("PshVPtr", &[22]), ("CALLSYS", &[]), ("JLowNZ", &[]), ("JMP", &[]),
+            ("PshVPtr", &[22]), ("PshVPtr", &[26]), ("CALL", &[]), ("CpyRtoV4", &[352]),
+            ("PshVPtr", &[22]), ("CALLSYS", &[]), ("CpyRtoV4", &[263]), ("NOT", &[263]),
+            ("CpyVtoR1", &[263]), ("JLowNZ", &[]), ("SetV4", &[263]), ("JMP", &[]),
+            ("sbTOi", &[317,352]), ("CMPIi", &[317]), ("TZ", &[]), ("CpyRtoV4", &[262]),
+            ("CpyVtoV4", &[263,262]), ("CpyVtoR1", &[263]), ("JLowZ", &[]),
+            ("SetV1", &[262]), ("CpyVtoV4", &[347,262]), ("RET", &[2]),
+        ]);
+        f.name = "DifferentConsumer".into(); f.namespace = "Elsewhere".into();
+        f.ret = DataType {token:0x52,..Default::default()}; f.params.clear();
+        f.obj_locals = vec![(22+bias as i32,2),(26+bias as i32,2)];
+        let c = disassemble(&f.bytecode).unwrap();
+        for (at,value) in [(1,1803),(6,701),(9,1802),(17,16),(23,1)] { f.bytecode[c[at].offset_dw+1] = value; }
+        for (at,to) in [(2,4),(3,25),(13,16),(15,21),(22,25)] {
+            f.bytecode[c[at].offset_dw+1] = c[to].offset_dw as i32-c[at].offset_dw as i32-2;
+        }
+        for i in &c {
+            if i.op.name == "RET" { continue; }
+            for (word,value) in i.words.iter().enumerate() {
+                let packed = word+1; let shift = (packed%2)*16; let dw = i.offset_dw+packed/2;
+                f.bytecode[dw] = ((f.bytecode[dw] as u32 & !(0xffff<<shift)) | ((*value+bias) as u32)<<shift) as i32;
+            }
+        }
+        f
+    }
+
+    #[test]
+    fn eager_script_enum_survives_a_negated_bool_and_equality_diamond() {
+        let source = "local_352 = ::EvaluateAgreement(local_26, local_22);\nif (local_22.IsExcluded())\n{\n    local_263 = false;\n}\nelse\n{\n    local_263 = (int(local_352) == 16);\n}\nif (local_263)\n{\n    local_347 = true;\n}\nreturn;\n";
+        let rename = |text: &str,bias: u16| text.split_inclusive(|c: char| !c.is_ascii_alphanumeric() && c != '_').map(|piece| {
+            let name = piece.trim_end_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_');
+            if let Some((slot,_)) = super::slot_and_life_any(name) {
+                let prefix = format!("local_{slot}");
+                format!("local_{}{}{}",slot+bias as i32,&name[prefix.len()..],&piece[name.len()..])
+            } else { piece.to_owned() }
+        }).collect::<String>();
+        for (bias,renamed) in [(0,false),(512,false),(512,true)] {
+            let f = negated_enum_diamond_fixture(bias); let refs = RefResolver::from_test_negated_enum_diamond(0,renamed);
+            let (enum_name,query,bool_name,actor) = if renamed { ("EPriority","ReadPriority","IsSuppressed","AOtherParticipant") }
+                else { ("EAgreement","EvaluateAgreement","IsExcluded","AParticipant") };
+            let slot = 352+bias as i32; let name = format!("local_{slot}"); let site = (slot,query.to_owned());
+            let types = super::enum_call_result_slots(&f,&refs); assert_eq!(types.get(&slot).map(String::as_str),Some(enum_name));
+            let sites = super::named_value_sites(&f,&refs); assert!(sites.contains(&site));
+            assert_eq!(super::named_value_sites(&f,&refs),sites,"stable keeper set");
+            let locals = BTreeMap::from([(slot,enum_name.into()),(22+bias as i32,actor.into()),(26+bias as i32,actor.into()),
+                (263+bias as i32,"bool".into()),(347+bias as i32,"bool".into())]);
+            let empty = HashSet::new();
+            let inline = |body: &str,sites: &HashSet<(i32,String)>| super::inline_call_argument_temporaries(
+                body,&refs,&locals,None,true,&types,&empty,&empty,&empty,&empty,&empty,
+                &empty,&empty,&empty,&HashMap::new(),&empty,sites,&HashSet::new());
+            let s = rename(source,bias).replace("EvaluateAgreement",query).replace("IsExcluded",bool_name);
+            let first = inline(&s,&sites);
+            let joined = super::fold_short_circuits(&first,&locals,&refs,None,&HashMap::new(),None,&empty);
+            assert!(joined.contains("&&") && joined.contains(&format!("int({name})")),"{joined}");
+            let kept = inline(&joined,&sites);
+            assert!(kept.starts_with(&format!("{name} = ::{query}(")),"{kept}");
+            assert!(kept.contains(&format!("int({name})")),"{kept}");
+            assert_eq!(inline(&kept,&sites),kept,"second inliner idempotence");
+            let lost = inline(&joined,&HashSet::new());
+            assert!(!lost.contains(&format!("{name} =")) && lost.contains(&format!("int(::{query}(")),"empty witness reproduces lazy enum: {lost}");
+            let (declared,_) = super::rewrite_first_use_decl_init(&kept,&locals,&refs,&empty,&HashMap::new(),&empty,
+                &empty,&HashMap::new(),&empty,&empty,&empty);
+            assert!(declared.starts_with(&format!("{enum_name} {name} = ::{query}(")),"{declared}");
+            let late = super::inline_unnamed_value_temporaries(&declared,&HashSet::from([(slot,1)]),&empty,&empty,
+                &refs,&empty,&empty,&HashMap::new(),&sites,&empty,&empty,&empty);
+            assert_eq!(late,declared,"late inliner retains exact typed producer");
+            assert!(!super::is_named_value_site(slot,"::OtherQuery(a, b)",&sites));
+            assert!(!super::is_named_value_site(slot+1,&format!("::{query}(a, b)"),&sites));
+            for fault in 1..=19 {
+                assert!(!super::named_value_sites(&f,&RefResolver::from_test_negated_enum_diamond(fault,renamed)).contains(&site),"metadata {fault}");
+            }
+        }
+        let f = negated_enum_diamond_fixture(0); let refs = RefResolver::from_test_negated_enum_diamond(0,false);
+        let site = (352,"EvaluateAgreement".to_owned()); let kept = |bad: &Func| super::named_value_sites(bad,&refs).contains(&site);
+        let c = disassemble(&f.bytecode).unwrap();
+        for at in [7,10,11,12,14,16,17,19,20,21] {
+            for word in 0..c[at].words.len() {
+                let mut bad = f.clone(); let packed = word+1;
+                bad.bytecode[c[at].offset_dw+packed/2] ^= 1<<((packed%2)*16);
+                assert!(!kept(&bad),"raw slot {at}/{word}");
+            }
+        }
+        for at in [6,9,14] {
+            let mut bad = f.clone(); bad.bytecode[c[at].offset_dw+1] ^= 1; assert!(!kept(&bad),"callee/false literal {at}");
+        }
+        for (at,op) in [(6,"CALLINTF"),(10,"CpyRtoV8"),(11,"CpyVtoR1"),(16,"ubTOi"),(18,"TNZ"),(22,"JLowNZ")] {
+            let mut bad = f.clone(); let replacement = function(&[(op,&c[at].words)]);
+            bad.bytecode[c[at].offset_dw] = replacement.bytecode[0]; assert!(!kept(&bad),"raw op {at}");
+        }
+        for (from,to) in [(2,7),(2,9),(2,16),(3,17),(3,21),(13,17),(15,22),(22,4),(22,9),(22,24)] {
+            let mut bad = f.clone(); bad.bytecode[c[from].offset_dw+1] = c[to].offset_dw as i32-c[from].offset_dw as i32-2;
+            // A forward final exit may legitimately skip a differently sized body.
+            if (from,to) == (22,24) { assert!(kept(&bad)); } else { assert!(!kept(&bad),"CFG {from}->{to}"); }
+        }
+        let mut bad = f.clone(); bad.bytecode[c[22].offset_dw+1] = i32::MAX; assert!(!kept(&bad),"unresolved final exit");
+        let mut bad = f.clone(); bad.obj_locals.push((352,1)); assert!(!kept(&bad),"object local");
+        for extra in [function(&[("PSF",&[352])]),function(&[("SetV4",&[352])]),function(&[("CpyVtoV4",&[400,352])])] {
+            let mut bad = f.clone(); bad.bytecode.extend(extra.bytecode); assert!(!kept(&bad),"extra life/use");
+        }
+        let mut bad = f.clone(); let duplicate = function(&[("CALL",&[]),("CpyRtoV4",&[352])]);
+        bad.bytecode.extend(duplicate.bytecode); assert!(!kept(&bad),"reused enum producer slot");
+        let mut bad = f.clone(); bad.bytecode.extend(function(&[("JMPP",&[22])]).bytecode); assert!(!kept(&bad),"indirect jump");
+        let boundary = rename("local_352 local_352_2 local_3520",512);
+        assert_eq!(boundary,"local_864 local_864_2 local_4032","identifier and lifetime boundaries");
+    }
+
+    fn retained_scalar_lives_fixture(bias: u16) -> Func {
+        // Pair frame follows the outer branch/null guard; floor frame then fans
+        // out into three independent double overwrites before a later old-slot read.
+        let mut f = function(&[
+            ("CpyVtoR1",&[90]),("JLowZ",&[]),("CpyVtoR1",&[91]),("JLowZ",&[]),("CmpPtrNull",&[492]),("JZ",&[]),
+            ("PSF",&[269]),("PSF",&[484]),("PshVPtr",&[496]),("CALL",&[]),("STOREOBJ",&[6]),("PshVPtr",&[6]),
+            ("CALLSYS",&[]),("CpyRtoV4",&[435]),("fTOd",&[458,435]),("CpyVtoV8",&[486,458]),("FreeNullV8",&[496]),("JMP",&[]),
+            ("PSF",&[269]),("PSF",&[484]),("PshVPtr",&[2]),("CALLSYS",&[]),("CpyRtoV4",&[436]),("fTOd",&[458,436]),
+            ("CpyVtoV8",&[486,458]),("SetV8",&[458]),("CMPd",&[486,458]),("JNS",&[]),("SetV8",&[486]),
+            ("PshVPtr",&[346]),("CALLSYS",&[]),("CpyRtoV4",&[337]),("fTOd",&[586,337]),("SetV8",&[458]),
+            ("DIVd",&[458,458,404]),("DIVd",&[586,586,458]),("PshV8",&[586]),("CALLSYS",&[]),("CpyRtoV8",&[458]),
+            ("MULd",&[586,458,428]),("ADDd",&[584,404,586]),("CpyVtoR1",&[91]),("JLowZ",&[]),
+            ("CpyVtoR1",&[92]),("JLowZ",&[]),("CpyVtoV8",&[458,404]),("JMP",&[]),("CpyVtoV8",&[458,428]),
+            ("JMP",&[]),("SetV8",&[458]),("PshV8",&[458]),("RET",&[2]),
+        ]);
+        f.name="IndependentCalculation".into(); f.namespace="Different".into(); f.params.clear();
+        f.ret=DataType {token:0x52,..Default::default()};
+        f.obj_locals=vec![(484+bias as i32,4),(496+bias as i32,1),(6+bias as i32,2),(2+bias as i32,2),(346+bias as i32,5),(492+bias as i32,1)];
+        let c=disassemble(&f.bytecode).unwrap();
+        for (at,ptr) in [(9,401),(12,302),(21,302),(30,303),(37,304)] { f.bytecode[c[at].offset_dw+1]=ptr; }
+        let bits=100.0f64.to_bits(); f.bytecode[c[33].offset_dw+1]=bits as i32; f.bytecode[c[33].offset_dw+2]=(bits>>32) as i32;
+        for (from,to) in [(1,29),(3,18),(5,17),(17,25),(27,29),(42,47),(44,49),(46,50),(48,50)] {
+            f.bytecode[c[from].offset_dw+1]=c[to].offset_dw as i32-c[from].offset_dw as i32-2;
+        }
+        for i in &c {
+            if i.op.name=="RET" {continue;}
+            for (word,value) in i.words.iter().enumerate() {
+                let packed=word+1; let shift=(packed%2)*16; let dw=i.offset_dw+packed/2;
+                f.bytecode[dw]=((f.bytecode[dw] as u32 & !(0xffff<<shift)) | ((*value+bias) as u32)<<shift) as i32;
+            }
+        }
+        f
+    }
+
+    #[test]
+    fn native_scalar_lives_keep_the_named_target_and_later_overwrites() {
+        let source = "bool local_269;\nfloat local_458;\nfloat local_584;\nfloat local_404 = 2.0;\nfloat local_428 = 3.0;\nUDerivedMeter local_2 = GetDirect();\nUCounter local_346 = GetCounter();\nFProperty local_484;\nfloat local_486 = 0.0;\nif (mounted)\n{\n    if (hasRider)\n    {\n        AUnit local_496 = FindUnit();\n        local_458 = Numbers::Measure(::GetMeter(local_496), local_484, local_269);\n        local_486 = local_458;\n    }\n}\nelse\n{\n    local_458 = Numbers::Measure(local_2, local_484, local_269);\n    local_486 = local_458;\n}\nif (local_486 < 0.0)\n{\n    local_486 = 0.0;\n}\nif (critical)\n{\n    local_458 = Numbers::Round((local_346.ReadCount() / (100.0 / local_404)));\n    local_584 = local_404 + (local_458 * local_428);\n}\nif (first)\n{\n    if (second)\n    {\n        local_458 = local_404;\n    }\n    else\n    {\n        local_458 = 0.0;\n    }\n}\nelse\n{\n    local_458 = local_428;\n}\nConsume(local_458);\nreturn;\n";
+        let pair_expected=source.replace("        local_458 = Numbers::Measure(::GetMeter(local_496), local_484, local_269);\n        local_486 = local_458;",
+            "        local_486 = Numbers::Measure(::GetMeter(local_496), local_484, local_269);")
+            .replace("    local_458 = Numbers::Measure(local_2, local_484, local_269);\n    local_486 = local_458;",
+                "    local_486 = Numbers::Measure(local_2, local_484, local_269);");
+        let floor_before="    local_458 = Numbers::Round((local_346.ReadCount() / (100.0 / local_404)));\n    local_584 = local_404 + (local_458 * local_428);";
+        let floor_after="    local_584 = local_404 + (Numbers::Round((local_346.ReadCount() / (100.0 / local_404))) * local_428);";
+        let floor_expected=source.replace(floor_before,floor_after); let expected=pair_expected.replace(floor_before,floor_after);
+        let rename = |text: &str,bias: u16,renamed: bool| {
+            let mut out=text.split_inclusive(|c: char| !c.is_ascii_alphanumeric() && c!='_').map(|piece| {
+                let name=piece.trim_end_matches(|c: char| !c.is_ascii_alphanumeric() && c!='_');
+                if let Some((slot,_))=super::slot_and_life_any(name) {
+                    let prefix=format!("local_{slot}");format!("local_{}{}{}",slot+bias as i32,&name[prefix.len()..],&piece[name.len()..])
+                } else {piece.to_owned()}
+            }).collect::<String>();
+            if renamed {for (a,b) in [("AUnit","AOtherUnit"),("UDerivedMeter","UDerivedGauge"),("UMeter","UGauge"),("FProperty","FMetric"),
+                ("UCounter","UTally"),("GetMeter","ResolveGauge"),("Measure","ReadMetric"),("ReadCount","ReadTotal"),("Round","Snap"),("Numbers","Arithmetic")] {out=out.replace(a,b);}}
+            out
+        };
+        for (bias,renamed) in [(0,false),(512,false),(512,true)] {
+            let f=retained_scalar_lives_fixture(bias);let code=disassemble(&f.bytecode).unwrap();let refs=RefResolver::from_test_retained_scalar_lives(0,renamed);
+            let s=rename(source,bias,renamed);let e=rename(&expected,bias,renamed);
+            assert_eq!(super::fold_joined_native_widening_copies(&s,&f,&refs,&code),rename(&pair_expected,bias,renamed));
+            assert_eq!(super::fold_native_double_product_result(&s,&f,&refs,&code),rename(&floor_expected,bias,renamed));
+            let actual=super::fold_unary_double_chain(&s,&f,&refs);assert_eq!(actual,e);
+            assert_eq!(super::fold_unary_double_chain(&actual,&f,&refs),actual,"idempotence and other lives");
+            for fault in 1..=19 {assert_eq!(super::fold_joined_native_widening_copies(&s,&f,&RefResolver::from_test_retained_scalar_lives(fault,renamed),&code),s,"pair metadata {fault}");}
+            for fault in 21..=35 {assert_eq!(super::fold_native_double_product_result(&s,&f,&RefResolver::from_test_retained_scalar_lives(fault,renamed),&code),s,"floor metadata {fault}");}
+            let suffixed=super::rename_ident(&s,&format!("local_{}",458+bias as i32),&format!("local_{}_2",458+bias as i32));
+            let suffixed_expected=super::rename_ident(&e,&format!("local_{}",458+bias as i32),&format!("local_{}_2",458+bias as i32));
+            assert_eq!(super::fold_unary_double_chain(&suffixed,&f,&refs),suffixed_expected,"life suffix");
+        }
+        let f=retained_scalar_lives_fixture(0);let refs=RefResolver::from_test_retained_scalar_lives(0,false);let c=disassemble(&f.bytecode).unwrap();
+        let pairs=|bad:&Func,s:&str| super::fold_joined_native_widening_copies(s,bad,&refs,&disassemble(&bad.bytecode).unwrap());
+        let cleanup = "        local_496 = nullptr;\n";
+        let released = source.replacen("        local_486 = local_458;\n", &format!("        local_486 = local_458;\n{cleanup}"), 1);
+        let released_expected = pair_expected.replacen("        local_486 = Numbers::Measure(::GetMeter(local_496), local_484, local_269);\n",
+            &format!("        local_486 = Numbers::Measure(::GetMeter(local_496), local_484, local_269);\n{cleanup}"), 1);
+        assert_eq!(pairs(&f,&released),released_expected,"early seam retains witnessed cleanup");
+        assert_eq!(super::drop_block_end_handle_releases(&released_expected),pair_expected,"late cleanup keeps the same result");
+        assert_eq!(pairs(&f,&released.replace(cleanup,"        local_2 = nullptr;\n")),released.replace(cleanup,"        local_2 = nullptr;\n"),"wrong released receiver");
+        let floor=|bad:&Func,s:&str| super::fold_native_double_product_result(s,bad,&refs,&disassemble(&bad.bytecode).unwrap());
+        for at in [6,7,8,10,11,13,14,15,16,18,19,20,22,23,24,25,26] {
+            for word in 0..c[at].words.len() {let mut bad=f.clone();let packed=word+1;bad.bytecode[c[at].offset_dw+packed/2]^=1<<((packed%2)*16);assert_eq!(pairs(&bad,source),source,"pair operand {at}/{word}");}
+        }
+        for at in [29,31,32,33,34,35,36,38,39,40] {
+            for word in 0..c[at].words.len() {let mut bad=f.clone();let packed=word+1;bad.bytecode[c[at].offset_dw+packed/2]^=1<<((packed%2)*16);assert_eq!(floor(&bad,source),source,"floor operand {at}/{word}");}
+        }
+        for at in [9,12,21] {let mut bad=f.clone();bad.bytecode[c[at].offset_dw+1]^=1;assert_eq!(pairs(&bad,source),source,"pair callee {at}");}
+        for at in [30,33,37] {let mut bad=f.clone();bad.bytecode[c[at].offset_dw+1]^=1;assert_eq!(floor(&bad,source),source,"floor call/literal {at}");}
+        for (from,to) in [(3,7),(5,13),(3,21),(3,23),(17,24),(17,29)] {let mut bad=f.clone();bad.bytecode[c[from].offset_dw+1]=c[to].offset_dw as i32-c[from].offset_dw as i32-2;assert_eq!(pairs(&bad,source),source,"pair CFG {from}->{to}");}
+        for (from,to) in [(1,30),(1,39),(42,50),(44,50),(46,39)] {let mut bad=f.clone();bad.bytecode[c[from].offset_dw+1]=c[to].offset_dw as i32-c[from].offset_dw as i32-2;assert_eq!(floor(&bad,source),source,"floor CFG/live-read {from}->{to}");}
+        for at in [45,47,49] {let mut bad=f.clone();bad.bytecode[c[at].offset_dw]^=1<<16;assert_eq!(floor(&bad,source),source,"missing overwrite {at}");}
+        for slot in [269,435,458,486] {let mut bad=f.clone();bad.obj_locals.push((slot,4));assert_eq!(pairs(&bad,source),source,"pair object slot {slot}");}
+        for slot in [337,458,586,404,428,584] {let mut bad=f.clone();bad.obj_locals.push((slot,4));assert_eq!(floor(&bad,source),source,"floor object slot {slot}");}
+        for broken in [source.replace("float local_458;","float32 local_458;"),source.replace("float local_458;","float local_458 = 1.0;"),
+            source.replace("float local_486 = 0.0;","float32 local_486 = 0.0;"),source.replace("Numbers::Measure(local_2","Other::Measure(local_2"),
+            source.replace("    local_486 = local_458;\n}","    local_486 = local_458;\n    Consume(local_458);\n}"),
+            source.replace("        local_458 = Numbers::Measure", "        float local_458;\n        local_458 = Numbers::Measure"),
+            source.replace("else\n{\n    local_458 = Numbers::Measure","}\nelse\n{\n    local_458 = Numbers::Measure")] {assert_eq!(pairs(&f,&broken),broken,"pair source scope/use/type");}
+        for broken in [source.replace("float local_458;","float32 local_458;"),source.replace("Numbers::Round(","Other::Round("),source.replace("100.0 / local_404","101.0 / local_404"),
+            source.replace("local_458 * local_428","local_428 * local_458"),source.replace("    local_584 = local_404 + (local_458 * local_428);","}\n    local_584 = local_404 + (local_458 * local_428);\n{"),
+            source.replace("        local_458 = local_404;","        Consume(local_458);\n        local_458 = local_404;"),
+            source.replace("    local_458 = Numbers::Round", "    float local_458;\n    local_458 = Numbers::Round")] {assert_eq!(floor(&f,&broken),broken,"floor source scope/use/type");}
+        let mut bad=f.clone();bad.bytecode[c[3].offset_dw+1]=i32::MAX;assert_eq!(pairs(&bad,source),source);assert_eq!(floor(&bad,source),source);
+        let mut bad=f.clone();bad.bytecode.extend(function(&[("JMPP",&[22])]).bytecode);assert_eq!(pairs(&bad,source),source);assert_eq!(floor(&bad,source),source);
+        assert_eq!(rename("local_458 local_458_2 local_4580",512,false),"local_970 local_970_2 local_5092");
     }
 
     fn enum_before_conditional_comparison_fixture() -> Func {
@@ -63910,6 +64571,278 @@ mod literal_value_lifetime_tests {
         let s=rename(&s,512,true);let e=rename(&e,512,true);assert!(s.contains("local_952_21"));
         assert!(s.contains("local_556_21") && s.contains("local_556_22") && s.contains("local_556_23"));
         assert_eq!(fold(&s,&closed_format_arguments_fixture(512),&refs),e,"identifier boundary and distinct existing numeric suffixes");
+    }
+
+    fn closed_string_value_fixture(bias:u16)->Func {
+        // Original argument26 + scalar-log39 + name-log46, with a closed two-arm bool join.
+        let mut f=function(&[
+            ("JMP", &[]),
+            ("SUSPEND", &[]),
+            ("PSF", &[484]),
+            ("PGA", &[]),
+            ("PSF", &[466]),
+            ("CALLSYS", &[]),
+            ("PSF", &[470]),
+            ("PSF", &[490]),
+            ("PSF", &[466]),
+            ("CALLSYS", &[]),
+            ("PSF", &[466]),
+            ("CALLSYS", &[]),
+            ("PSF", &[490]),
+            ("PSF", &[492]),
+            ("CALLSYS", &[]),
+            ("PSF", &[490]),
+            ("CALLSYS", &[]),
+            ("PSF", &[492]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[290]),
+            ("PshVPtr", &[290]),
+            ("PSF", &[320]),
+            ("CALLSYS", &[]),
+            ("PSF", &[320]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV4", &[263]),
+            ("CpyVtoR1", &[263]),
+            ("JLowZ", &[]),
+            ("JZ", &[]),
+            ("SUSPEND", &[]),
+            ("JMP", &[]),
+            ("SUSPEND", &[]),
+            ("SetV1", &[263]),
+            ("SUSPEND", &[]),
+            ("SetV1", &[263]),
+            ("CpyVtoR1", &[263]),
+            ("JLowZ", &[]),
+            ("SUSPEND", &[]),
+            ("PGA", &[]),
+            ("PSF", &[490]),
+            ("CALLSYS", &[]),
+            ("PSF", &[420]),
+            ("PSF", &[466]),
+            ("PSF", &[490]),
+            ("CALLSYS", &[]),
+            ("PSF", &[490]),
+            ("CALLSYS", &[]),
+            ("PGA", &[]),
+            ("PSF", &[490]),
+            ("PSF", &[466]),
+            ("CALLSYS", &[]),
+            ("PSF", &[466]),
+            ("CALLSYS", &[]),
+            ("PSF", &[422]),
+            ("PSF", &[466]),
+            ("PSF", &[490]),
+            ("CALLSYS", &[]),
+            ("PSF", &[490]),
+            ("CALLSYS", &[]),
+            ("PGA", &[]),
+            ("PSF", &[490]),
+            ("PSF", &[466]),
+            ("CALLSYS", &[]),
+            ("PSF", &[466]),
+            ("CALLSYS", &[]),
+            ("PSF", &[424]),
+            ("PSF", &[466]),
+            ("PSF", &[490]),
+            ("CALLSYS", &[]),
+            ("PSF", &[490]),
+            ("CALLSYS", &[]),
+            ("PSF", &[466]),
+            ("SetV1", &[607]),
+            ("PshV4", &[607]),
+            ("CALLSYS", &[]),
+            ("PSF", &[466]),
+            ("CALLSYS", &[]),
+            ("SUSPEND", &[]),
+            ("PSF", &[492]),
+            ("PshVPtr", &[16]),
+            ("CALLSYS", &[]),
+            ("PSF", &[492]),
+            ("PSF", &[490]),
+            ("PGA", &[]),
+            ("CALLSYS", &[]),
+            ("PSF", &[492]),
+            ("PshVPtr", &[20]),
+            ("CALLSYS", &[]),
+            ("PSF", &[492]),
+            ("PSF", &[466]),
+            ("PSF", &[490]),
+            ("CALLSYS", &[]),
+            ("PSF", &[490]),
+            ("CALLSYS", &[]),
+            ("PGA", &[]),
+            ("PSF", &[490]),
+            ("PSF", &[466]),
+            ("CALLSYS", &[]),
+            ("PSF", &[466]),
+            ("CALLSYS", &[]),
+            ("PSF", &[584]),
+            ("PSF", &[466]),
+            ("PSF", &[490]),
+            ("CALLSYS", &[]),
+            ("PSF", &[490]),
+            ("CALLSYS", &[]),
+            ("PGA", &[]),
+            ("PSF", &[490]),
+            ("PSF", &[466]),
+            ("CALLSYS", &[]),
+            ("PSF", &[466]),
+            ("CALLSYS", &[]),
+            ("PSF", &[434]),
+            ("PSF", &[466]),
+            ("PSF", &[490]),
+            ("CALLSYS", &[]),
+            ("PSF", &[490]),
+            ("CALLSYS", &[]),
+            ("PSF", &[466]),
+            ("SetV1", &[607]),
+            ("PshV4", &[607]),
+            ("CALLSYS", &[]),
+            ("PSF", &[466]),
+            ("CALLSYS", &[]),
+            ("RET", &[0]),
+        ]);
+        f.name="ObserveValues".into();f.ret=DataType {token:0x52,..Default::default()};
+        f.obj_locals=vec![(466,1),(490,1),(470,1),(492,2),(320,3),(290,4),(484,5),(16,7),(20,7)];
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,value) in [(32, 0), (34, 1), (72, 2), (119, 2)] {f.bytecode[code[at].offset_dw+1]=value;}
+        for (at,value) in [(3, 101), (5, 12), (9, 13), (11, 11), (14, 14), (16, 11), (18, 15), (22, 16), (24, 17), (38, 102), (40, 12), (44, 18), (46, 11), (47, 103), (50, 13), (52, 11), (56, 18), (58, 11), (59, 104), (62, 13), (64, 11), (68, 18), (70, 11), (74, 22), (76, 11), (80, 19), (83, 105), (84, 20), (87, 19), (91, 21), (93, 11), (94, 106), (97, 13), (99, 11), (103, 18), (105, 11), (106, 107), (109, 13), (111, 11), (115, 18), (117, 11), (121, 22), (123, 11)] {f.bytecode[code[at].offset_dw+1]=value;}
+        for (from,to) in [(0, 1), (27, 32), (28, 31), (30, 32), (36, 37)] {f.bytecode[code[from].offset_dw+1]=code[to].offset_dw as i32-code[from].offset_dw as i32-2;}
+        for i in &code {
+            if i.op.name=="RET" {continue;}
+            for (n,word) in i.words.iter().enumerate() {
+                if (*word as i16)<=0 {continue;}
+                let at=n+1;let dw=i.offset_dw+at/2;let shift=(at%2)*16;
+                f.bytecode[dw]=((f.bytecode[dw] as u32 & !(0xffff<<shift)) | (((*word+bias) as u32)<<shift)) as i32;
+            }
+        }
+        for (slot,_) in &mut f.obj_locals {*slot+=bias as i32;}f
+    }
+
+    #[test]
+    fn value_string_arguments_and_both_log_chains_end_their_temporary_lives() {
+        let prefix=r#"        FString local_470 = "Key";
+        FGameplayAttribute local_484;
+        AActor local_16 = First;
+        AActor local_20 = Second;
+        float local_420 = 1.0;
+        float local_422 = 2.0;
+        float local_424 = 3.0;
+        float local_584 = 4.0;
+        float local_434 = 5.0;
+"#;
+        let parts=[r#"        bool local_263;
+        FString local_490 = (FString("Prefix ") + local_470);
+        local_263 = Attributes::TryAttribute(TSubclassOf<USet>(USpecialSet::StaticClass()), FName(local_490), local_484);
+        if (local_263)
+        {
+            if (ChooseArm())
+            {
+                Use(local_484);
+            }
+            else
+            {
+                Keep(local_484);
+            }
+        }
+        local_263 = LaterPredicate();
+        if (local_263)
+        {
+            Finish();
+        }
+"#,r#"        FString local_490_2 = ((FString("Summary: ") + local_420) + " / ");
+        FString local_466_2 = (local_490_2 + local_422);
+        FString local_490_3 = (local_466_2 + " = ");
+        Trace::Write(ETraceCategory(2), (local_490_3 + local_424));
+"#,r#"        FString local_490_4 = " links ".opAdd_r(local_16.Label());
+        FString local_466_3 = (local_490_4 + local_20.Label());
+        FString local_490_5 = (local_466_3 + " HP ");
+        FString local_466_4 = (local_490_5 + local_584);
+        FString local_490_6 = (local_466_4 + " SP ");
+        Trace::Write(ETraceCategory(2), (local_490_6 + local_434));
+"#];
+        let expected=[r#"        bool local_263;
+        if (Attributes::TryAttribute(TSubclassOf<USet>(USpecialSet::StaticClass()), FName((FString("Prefix ") + local_470)), local_484))
+        {
+            if (ChooseArm())
+            {
+                Use(local_484);
+            }
+            else
+            {
+                Keep(local_484);
+            }
+        }
+        local_263 = LaterPredicate();
+        if (local_263)
+        {
+            Finish();
+        }
+"#,r#"        Trace::Write(ETraceCategory(2), ((((((((FString("Summary: ") + local_420) + " / ")) + local_422)) + " = ")) + local_424));
+"#,r#"        Trace::Write(ETraceCategory(2), ((((((((((" links ".opAdd_r(local_16.Label())) + local_20.Label())) + " HP ")) + local_584)) + " SP ")) + local_434));
+"#];
+        let refs=RefResolver::from_test_closed_string_values(0);
+        let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_closed_string_value_arguments(s,f,r);
+        let rename=|s:&str,bias:u16| {
+            let mut s=s.to_owned();for slot in [607u16,584,492,490,484,470,466,434,424,422,420,320,290,263,20,16] {
+                for suffix in ["_6","_5","_4","_3","_2",""] {s=super::rename_ident(&s,&format!("local_{slot}{suffix}"),&format!("local_{}{suffix}",slot+bias));}
+            }s
+        };
+        for bias in [0u16,512] {
+            let f=closed_string_value_fixture(bias);let source=rename(&format!("{prefix}{}",parts.concat()),bias);let result=rename(&format!("{prefix}{}",expected.concat()),bias);
+            assert_eq!(fold(&source,&f,&refs),result,"all nine string captures, bool use, renamed APIs and slot bias {bias}");
+            assert_eq!(fold(&result,&f,&refs),result,"idempotent");
+            for n in 0..3 {let source=rename(&format!("{prefix}{}",parts[n]),bias);let result=rename(&format!("{prefix}{}",expected[n]),bias);
+                assert_eq!(fold(&source,&f,&refs),result,"independent closed expression {n}/{bias}");
+            }
+        }
+        let f=closed_string_value_fixture(0);let code=disassemble(&f.bytecode).unwrap();assert_eq!(code.len(),125);
+        let sources:Vec<_>=parts.iter().map(|part|format!("{prefix}{part}")).collect();
+        for (fault,part) in [(1,0),(1,1),(1,2),(2,0),(2,1),(2,2),(3,0),(3,1),(4,0),(4,1),(4,2),(5,0),(5,1),
+            (6,0),(7,0),(8,0),(9,0),(10,0),(11,0),(12,0),(13,0),(14,0),(15,0),(16,1),(16,2),(17,1),(18,2),(19,2),(20,2),
+            (21,2),(22,2),(23,1),(23,2),(24,1),(25,2),(26,1),(27,1),(28,2),(29,1)] {
+            assert_eq!(fold(&sources[part],&f,&RefResolver::from_test_closed_string_values(fault)),sources[part],"metadata {fault}/{part}");
+        }
+        for (part,range) in [(0,2..28),(1,38..77),(2,78..124)] {
+            for at in range {
+                let i=&code[at];
+                for n in 0..i.words.len() {
+                    let mut bad=f.clone();let word=n+1;bad.bytecode[i.offset_dw+word/2]^=1<<((word%2)*16);
+                    assert_eq!(fold(&sources[part],&bad,&refs),sources[part],"WORD {at}/{n}");
+                }
+                for offset in if i.qwords.is_empty() {Vec::new()} else {vec![1,2]} {
+                    let mut bad=f.clone();bad.bytecode[i.offset_dw+offset]^=1;
+                    assert_eq!(fold(&sources[part],&bad,&refs),sources[part],"QWORD {at}/{offset}");
+                }
+                if i.op.name=="SetV1" {let mut bad=f.clone();bad.bytecode[i.offset_dw+1]^=1;assert_eq!(fold(&sources[part],&bad,&refs),sources[part],"literal/category {at}");}
+            }
+        }
+        for (from,to,part) in [(0,3,0),(0,29,0),(27,33,0),(28,26,0),(30,29,0),(0,39,1),(0,86,2)] {
+            let mut bad=f.clone();bad.bytecode[code[from].offset_dw+1]=code[to].offset_dw as i32-code[from].offset_dw as i32-2;
+            assert_eq!(fold(&sources[part],&bad,&refs),sources[part],"CFG {from}->{to}/{part}");
+        }
+        let mut bad=f.clone();let read=function(&[("CpyVtoR1",&[263])]);bad.bytecode[code[29].offset_dw]=read.bytecode[0];
+        assert_eq!(fold(&sources[0],&bad,&refs),sources[0],"live bool read before kill");
+        let mut bad=f.clone();bad.bytecode[code[32].offset_dw+1]=1;
+        assert_eq!(fold(&sources[0],&bad,&refs),sources[0],"different kill witness");
+        for (slot,ty,part) in [(490,1,0),(466,1,1),(492,2,2),(420,1,1)] {
+            let mut bad=f.clone();bad.obj_locals.extend([(slot,ty),(slot,ty)]);
+            assert_eq!(fold(&sources[part],&bad,&refs),sources[part],"ambiguous object/scalar {slot}");
+        }
+        for (part,old,new) in [(0,"FName(local_490)","FName(local_470)"),(0,"                Use(local_484);","                Use(local_263);"),
+            (0,"local_263 = LaterPredicate();","Use(local_263);"),(1,"local_490_2 + local_422","local_490_2 + local_424"),
+            (2,"local_20.Label()","local_16.Label()"),(2,"ETraceCategory(2)","ETraceCategory(3)"),
+            (1,"        FString local_466_2", "        {\n        FString local_466_2")] {
+            let s=sources[part].replace(old,new);assert_ne!(s,sources[part]);assert_eq!(fold(&s,&f,&refs),s,"source association/scope {part}/{old}");
+        }
+        for (part,name) in [(0,"local_490"),(1,"local_466_2"),(2,"local_490_5")] {
+            let s=format!("{}Use({name});\n",sources[part]);assert_eq!(fold(&s,&f,&refs),s,"extra source use {name}");
+        }
+        let rename_life=|s:&str|super::rename_ident(&super::rename_ident(s,"local_490_2","local_490_17"),"local_466_4","local_466_21");
+        let s=rename_life(&format!("{prefix}{}",parts.concat()));let e=rename_life(&format!("{prefix}{}",expected.concat()));
+        assert_eq!(fold(&s,&f,&refs),e,"source life suffixes stay independent of slot identity");
+        let s=format!("float local_4900 = 0.0;\n{prefix}{}",parts.concat());let e=format!("float local_4900 = 0.0;\n{prefix}{}",expected.concat());
+        assert_eq!(fold(&s,&f,&refs),e,"identifier-prefix collision preserved");
     }
 
     fn shared_flag_switch_fixture(bias:u16)->Func {

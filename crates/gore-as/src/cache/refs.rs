@@ -5434,6 +5434,113 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_negated_enum_diamond(fault: u8, renamed: bool) -> Self {
+        let (enumeration_name,actor_name,query_name,bool_name) = if renamed {
+            ("EPriority","AOtherParticipant","ReadPriority","IsSuppressed")
+        } else { ("EAgreement","AParticipant","EvaluateAgreement","IsExcluded") };
+        let mut r = Self::from_test_member_chain(&[(enumeration_name,""),(actor_name,"")]);
+        r.type_identity_by_ptr.insert(1,TypeIdentity {name:enumeration_name.into(),module:String::new(),namespace:String::new()});
+        let enumeration = DataType {token:5,type_info:1,..Default::default()};
+        let actor = DataType {token:5,type_info:2,is_object_handle:true,is_object_const:true,..Default::default()};
+        // The script id deliberately differs from its pointer; resolve CALL through the id map.
+        r.funcid_to_ptr.insert(701,1701);
+        r.func_by_ptr.insert(1701,query_name.into()); r.func_ret.insert(1701,enumeration);
+        r.func_params.insert(1701,vec![actor.clone(),actor]); r.func_module.insert(1701,"Other.Relationships".into());
+        r.func_by_ptr.insert(1802,bool_name.into()); r.func_ret.insert(1802,DataType {token:0x41,..Default::default()});
+        r.func_owner.insert(1802,actor_name.into()); r.func_is_method.insert(1802); r.const_method_ptrs.insert(1802);
+        r.func_params.insert(1802,vec![]);
+        r.func_ret_names.insert(query_name.into(),enumeration_name.into()); r.func_ret_names.insert(bool_name.into(),"bool".into());
+        r.temporary_arg_positions.insert(query_name.into(),HashMap::from([(2,vec![true,true])]));
+        r.temporary_arg_positions.insert(bool_name.into(),HashMap::from([(0,vec![])]));
+        r.ctor_arg_positions.insert("int".into(),HashMap::from([(1,vec![true])]));
+        match fault {
+            1 => r.func_ret.get_mut(&1701).unwrap().is_reference = true,
+            2 => r.func_ret.get_mut(&1701).unwrap().is_object_handle = true,
+            3 => r.func_ret.get_mut(&1701).unwrap().is_object_const = true,
+            4 => r.func_ret.get_mut(&1701).unwrap().is_read_only = true,
+            5 => r.func_ret.get_mut(&1701).unwrap().is_auto = true,
+            6 => r.func_ret.get_mut(&1701).unwrap().if_handle_then_const = true,
+            7 => r.func_ret.get_mut(&1701).unwrap().token = 0x44,
+            8 => r.func_ret.get_mut(&1701).unwrap().type_info = 2,
+            9 => { r.func_ret.remove(&1701); },
+            10 => { r.funcid_to_ptr.remove(&701); },
+            11 => r.func_ret.get_mut(&1802).unwrap().token = 0x44,
+            12 => r.func_ret.get_mut(&1802).unwrap().type_info = 1,
+            13 => r.func_ret.get_mut(&1802).unwrap().is_reference = true,
+            14 => r.func_ret.get_mut(&1802).unwrap().is_read_only = true,
+            15 => r.func_ret.get_mut(&1802).unwrap().is_object_const = true,
+            16 => r.func_ret.get_mut(&1802).unwrap().is_object_handle = true,
+            17 => r.func_ret.get_mut(&1802).unwrap().is_auto = true,
+            18 => r.func_ret.get_mut(&1802).unwrap().if_handle_then_const = true,
+            19 => { r.func_ret.remove(&1802); },
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_retained_scalar_lives(fault: u8, renamed: bool) -> Self {
+        let names = if renamed { ["AOtherUnit","UDerivedGauge","UGauge","FMetric","UTally"] }
+            else { ["AUnit","UDerivedMeter","UMeter","FProperty","UCounter"] };
+        let mut r = Self::from_test_member_chain(&names.iter().map(|n| (*n,"")).collect::<Vec<_>>());
+        for (n,name) in names.iter().enumerate() {
+            r.type_identity_by_ptr.insert(n as i64+1,TypeIdentity {name:(*name).into(),module:String::new(),namespace:String::new()});
+        }
+        let scalar = |token| DataType {token,..Default::default()};
+        let value = |ty| DataType {token:5,type_info:ty,..Default::default()};
+        let handle = |ty,constant| DataType {token:5,type_info:ty,is_object_handle:true,is_object_const:constant,..Default::default()};
+        let (get,query,count,unary,ns) = if renamed { ("ResolveGauge","ReadMetric","ReadTotal","Snap","Arithmetic") }
+            else { ("GetMeter","Measure","ReadCount","Round","Numbers") };
+        r.funcid_to_ptr.insert(401,1401); r.func_by_ptr.insert(1401,get.into()); r.func_ret.insert(1401,handle(2,false));
+        r.func_params.insert(1401,vec![handle(1,true)]); r.func_module.insert(1401,"Independent.Access".into());
+        r.func_by_ptr.insert(302,query.into()); r.func_ret.insert(302,scalar(0x50)); r.func_ns.insert(302,ns.into());
+        // Actual native ABI: base handle differs from the returned/direct native subtype.
+        r.func_params.insert(302,vec![handle(3,true),value(4),DataType {token:0x41,is_reference:true,..Default::default()}]);
+        r.func_by_ptr.insert(303,count.into()); r.func_ret.insert(303,scalar(0x50)); r.func_params.insert(303,vec![]);
+        r.func_owner.insert(303,names[4].into()); r.func_is_method.insert(303); r.const_method_ptrs.insert(303);
+        r.func_by_ptr.insert(304,unary.into()); r.func_ret.insert(304,scalar(0x51)); r.func_params.insert(304,vec![scalar(0x51)]);
+        r.func_ns.insert(304,ns.into());
+        match fault {
+            1 => r.func_ret.get_mut(&302).unwrap().token = 0x51,
+            2 => r.func_ret.get_mut(&302).unwrap().type_info = 4,
+            3 => r.func_ret.get_mut(&302).unwrap().is_reference = true,
+            4 => r.func_ret.get_mut(&302).unwrap().is_read_only = true,
+            5 => r.func_ret.get_mut(&302).unwrap().is_object_const = true,
+            6 => r.func_ret.get_mut(&302).unwrap().is_object_handle = true,
+            7 => r.func_ret.get_mut(&302).unwrap().is_auto = true,
+            8 => r.func_ret.get_mut(&302).unwrap().if_handle_then_const = true,
+            9 => r.func_params.get_mut(&302).unwrap()[2].is_reference = false,
+            10 => r.func_params.get_mut(&302).unwrap()[1].type_info = 5,
+            11 => { r.func_is_method.insert(302); },
+            12 => { r.func_params.remove(&1401); },
+            13 => r.func_ret.get_mut(&1401).unwrap().type_info = 3,
+            14 => r.func_params.get_mut(&1401).unwrap()[0].is_object_const = false,
+            15 => { r.func_ns.insert(302,"Other".into()); },
+            16 => { r.type_identity_by_ptr.remove(&4); },
+            17 => r.func_ret.get_mut(&1401).unwrap().is_object_handle = false,
+            18 => { r.func_owner.insert(302,names[2].into()); },
+            19 => { r.func_ret.remove(&302); },
+            21 => r.func_ret.get_mut(&304).unwrap().token = 0x50,
+            22 => r.func_ret.get_mut(&304).unwrap().type_info = 4,
+            23 => r.func_ret.get_mut(&304).unwrap().is_reference = true,
+            24 => r.func_ret.get_mut(&304).unwrap().is_read_only = true,
+            25 => r.func_ret.get_mut(&304).unwrap().is_object_const = true,
+            26 => r.func_ret.get_mut(&304).unwrap().is_object_handle = true,
+            27 => r.func_ret.get_mut(&304).unwrap().is_auto = true,
+            28 => r.func_ret.get_mut(&304).unwrap().if_handle_then_const = true,
+            29 => r.func_params.get_mut(&304).unwrap()[0].is_reference = true,
+            30 => { r.func_is_method.insert(304); },
+            31 => { r.const_method_ptrs.remove(&303); },
+            32 => { r.func_owner.insert(303,names[2].into()); },
+            33 => r.func_ret.get_mut(&303).unwrap().token = 0x51,
+            34 => { r.func_ns.insert(304,"Other".into()); },
+            35 => { r.func_ret.remove(&304); },
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_enum_before_conditional_comparison(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("ERelation", ""), ("ARelationOwner", "")]);
         r.type_identity_by_ptr.insert(1, TypeIdentity { name: "ERelation".into(), module: String::new(), namespace: String::new() });
@@ -9256,6 +9363,72 @@ impl RefResolver {
             24=>r.func_ret.get_mut(&103).unwrap().token=0x41,
             25=>r.func_params.get_mut(&107).unwrap().push(plain(0x44)),
             _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_closed_string_values(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name) in [(1,"FString"),(2,"FName"),(3,"TSubclassOf"),(4,"UClass"),(5,"FGameplayAttribute"),(6,"USet"),(7,"AActor"),(8,"UObject"),(9,"ETraceCategory")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32,ptr);r.type_names.insert(name.into());
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:String::new(),namespace:String::new()});
+        }
+        let plain=|token|DataType {token,..Default::default()};
+        let obj=|ptr,reference:bool,constant:bool|DataType {token:5,type_info:ptr,is_reference:reference,is_object_const:constant,is_read_only:constant,..Default::default()};
+        let class_handle=DataType {token:5,type_info:4,is_object_handle:true,..Default::default()};
+        r.type_subtypes.insert(3,vec![DataType {token:5,type_info:6,is_object_handle:true,..Default::default()}]);
+        for (ptr,name,owner,ns,constant,ret,args) in [
+            (11,"$beh2","FString","",false,plain(0x52),vec![]),
+            (12,"$beh0","FString","",false,plain(0x52),vec![obj(1,true,true)]),
+            (13,"opAdd","FString","",true,obj(1,false,false),vec![obj(1,true,true)]),
+            (14,"$beh0","FName","",false,plain(0x52),vec![obj(1,true,true)]),
+            (15,"StaticClass","","USpecialSet",false,class_handle.clone(),vec![]),
+            (16,"$beh0","TSubclassOf","",false,plain(0x52),vec![class_handle]),
+            (17,"TryAttribute","","Attributes",false,plain(0x41),vec![obj(3,false,false),obj(2,false,false),obj(5,true,false)]),
+            (18,"opAdd","FString","",true,obj(1,false,false),vec![DataType {token:0x51,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()}]),
+            (19,"Label","UObject","",true,obj(2,false,false),vec![]),
+            (20,"opAdd_r","FString","",true,obj(1,false,false),vec![obj(2,true,true)]),
+            (21,"opAdd","FString","",true,obj(1,false,false),vec![obj(2,true,true)]),
+            (22,"Write","","Trace",false,plain(0x52),vec![obj(9,false,false),obj(1,false,true)])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            if !owner.is_empty() {r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);}
+            if !ns.is_empty() {r.func_ns.insert(ptr,ns.into());}if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        for (ptr,text) in [(101,"Prefix "),(102,"Summary: "),(103," / "),(104," = "),(105," links "),(106," HP "),(107," SP ")] {
+            r.global_by_ptr.insert(ptr,text.into());r.global_is_string.insert(ptr);
+        }
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Shadow".into(),
+            2=>r.func_ret.get_mut(&11).unwrap().is_reference=true,
+            3=>r.func_params.get_mut(&12).unwrap()[0].is_read_only=false,
+            4=>r.func_ret.get_mut(&13).unwrap().is_reference=true,
+            5=>r.func_params.get_mut(&13).unwrap()[0].is_object_const=false,
+            6=>r.func_params.get_mut(&14).unwrap()[0].is_reference=false,
+            7=>r.func_ret.get_mut(&15).unwrap().is_object_const=true,
+            8=>{r.func_ns.insert(15,"UOtherSet".into());},
+            9=>r.func_params.get_mut(&16).unwrap()[0].is_object_handle=false,
+            10=>r.func_ret.get_mut(&17).unwrap().token=0x44,
+            11=>r.func_params.get_mut(&17).unwrap()[0].is_reference=true,
+            12=>r.func_params.get_mut(&17).unwrap()[1].is_object_const=true,
+            13=>r.func_params.get_mut(&17).unwrap()[2].is_reference=false,
+            14=>{r.func_ns.insert(17,"Other".into());},
+            15=>{r.global_is_string.remove(&101);},
+            16=>r.func_params.get_mut(&18).unwrap()[0].token=0x50,
+            17=>r.func_params.get_mut(&18).unwrap()[0].is_read_only=false,
+            18=>{r.func_owner.insert(19,"AUnrelated".into());},
+            19=>{r.const_method_ptrs.remove(&19);},
+            20=>r.func_ret.get_mut(&19).unwrap().is_reference=true,
+            21=>r.func_params.get_mut(&20).unwrap()[0].is_object_handle=true,
+            22=>r.func_ret.get_mut(&21).unwrap().is_object_const=true,
+            23=>r.func_params.get_mut(&22).unwrap()[1].is_reference=true,
+            24=>r.func_params.get_mut(&22).unwrap()[1].is_read_only=false,
+            25=>{r.func_ns.insert(22,"Other".into());},
+            26=>r.func_params.get_mut(&22).unwrap()[0].type_info=2,
+            27=>{r.global_is_string.remove(&103);},
+            28=>{r.global_by_ptr.insert(106,"different".into());},
+            29=>{r.const_method_ptrs.insert(22);},
+            _=>{},
         }
         r
     }
