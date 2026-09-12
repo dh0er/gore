@@ -7184,6 +7184,86 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_blocking_assessment(fault: u8) -> Self {
+        let mut r=Self::default();
+        for (ptr,name) in [(1,"AGothicCharacter"),(2,"AActor"),(3,"UObject"),(4,"FPerceivedAgent"),(5,"FRememberedPerception"),
+            (6,"FInGameTime"),(7,"UAIValueSet"),(8,"TSubclassOf"),(9,"ULimits"),(10,"UTestAI"),(11,"UState")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32+50,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:if ptr>=9 {"Fixture"} else {""}.into(),namespace:String::new()});
+        }
+        r.class_super.insert("ULimits".into(),"UAIValueSet".into());r.class_super.insert("UTestAI".into(),"UGameplayAbility_CharacterAI".into());
+        r.class_fields.insert("ULimits".into(),HashMap::from([("Scale".into(),"float".into()),("Emitted".into(),"bool".into()),("Clock".into(),"FInGameTime".into()),("Frustrated".into(),"bool".into())]));
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&[("FRememberedPerception","Origin","FPerceivedAgent")],&[],None));
+        for (id,offset,name) in [(55i64,192i64,"Origin"),(59,216,"Scale"),(59,241,"Emitted"),(59,248,"Clock"),(59,240,"Frustrated")] {
+            let key=(id<<1)|(offset<<33)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id as i32);
+        }
+        let scalar=|token|DataType{token,..Default::default()};
+        let object=|type_info,reference:bool,constant:bool,handle:bool|DataType{token:5,type_info,is_reference:reference,is_object_const:constant,
+            is_object_handle:handle,is_read_only:constant && !handle,..Default::default()};
+        for (ptr,name,owner,ret,args) in [
+            (100,"Actor","FPerceivedAgent",object(1,false,false,true),vec![object(3,false,true,true)]),
+            (101,"Self","UGameplayAbility_CharacterAI",object(1,false,false,true),vec![]),
+            (102,"Distance","AActor",scalar(0x50),vec![object(2,false,true,true)]),
+            (103,"Radius","AActor",scalar(0x50),vec![]),
+            (104,"Age","FInGameTime",scalar(0x50),vec![object(3,false,true,true)]),
+            (105,"Storage","UGameplayAbility_CharacterAI",object(7,false,false,true),vec![object(8,true,true,false)])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            r.func_is_method.insert(ptr);r.const_method_ptrs.insert(ptr);
+        }
+        r.type_subtypes.insert(8,vec![object(7,false,false,true)]);
+        r.global_by_ptr.insert(200,"__WorldContext".into());r.global_by_ptr.insert(201,"__StaticType_ULimits".into());
+        match fault {
+            1=>r.func_ret.get_mut(&102).unwrap().token=0x51,
+            2=>r.func_params.get_mut(&100).unwrap()[0].is_object_const=false,
+            3=>{r.const_method_ptrs.remove(&103);},
+            4=>r.func_params.get_mut(&104).unwrap()[0].is_reference=true,
+            5=>{r.class_fields.get_mut("ULimits").unwrap().insert("Scale".into(),"float32".into());},
+            6=>{r.class_fields.get_mut("ULimits").unwrap().insert("Clock".into(),"FVector".into());},
+            7=>{r.class_fields.get_mut("ULimits").unwrap().insert("Frustrated".into(),"float".into());},
+            8=>{r.class_super.remove("UTestAI");},
+            9=>{r.class_super.remove("ULimits");},
+            10=>r.type_subtypes.get_mut(&8).unwrap()[0].type_info=3,
+            11=>{r.global_by_ptr.insert(200,"OtherContext".into());},
+            12=>{r.global_by_ptr.insert(201,"__StaticType_UAIValueSet".into());},
+            13=>r.func_ret.get_mut(&105).unwrap().is_object_const=true,
+            14=>{r.func_is_method.remove(&101);},
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_context_comparisons(fault: u8) -> Self {
+        let mut r=Self::default();
+        for (ptr,name) in [(1,"UContext"),(2,"FEntry"),(3,"UTuning"),(4,"AGothicCharacterState"),(5,"UObject"),(6,"UController")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32+50,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:if [1,2,3,6].contains(&ptr) {"Fixture"} else {""}.into(),namespace:String::new()});
+        }
+        for (id,offset,name,ty) in [(51i64,46i64,"Witness","bool"),(51,49,"Accumulated","ESeverity"),(51,50,"Escalated","bool"),(51,51,"Execute","bool"),
+            (52,136,"Directness","ECrimeDirectness"),(53,40,"Escalation","ESeverity"),(53,41,"Execution","ESeverity")] {
+            let key=(id<<1)|(offset<<33)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id as i32);
+            let owner=match id {51=>"UContext",52=>"FEntry",_=>"UTuning"};r.class_fields.entry(owner.into()).or_default().insert(name.into(),ty.into());
+        }
+        r.enum_entries.insert("ESeverity".into(),vec![("Mild".into(),4),("Severe".into(),5)]);
+        r.func_by_ptr.insert(200,"IsValid".into());r.func_ret.insert(200,DataType{token:0x41,..Default::default()});
+        r.func_params.insert(200,vec![DataType{token:5,type_info:5,is_object_handle:true,is_object_const:true,..Default::default()}]);
+        match fault {
+            1=>{r.class_fields.get_mut("UContext").unwrap().insert("Witness".into(),"int".into());},
+            2=>{r.class_fields.get_mut("FEntry").unwrap().insert("Directness".into(),"bool".into());},
+            3=>{r.class_fields.get_mut("UTuning").unwrap().insert("Execution".into(),"OtherEnum".into());},
+            4=>{r.class_fields.get_mut("UContext").unwrap().insert("Escalated".into(),"ESeverity".into());},
+            5=>{r.enum_entries.clear();},
+            6=>{r.enum_entries.get_mut("ESeverity").unwrap().push(("Ambiguous".into(),4));},
+            7=>{r.func_is_method.insert(200);},
+            8=>r.func_ret.get_mut(&200).unwrap().token=0x44,
+            9=>r.func_params.get_mut(&200).unwrap()[0].is_object_const=false,
+            10=>{r.func_owner.insert(200,"UObject".into());},
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_visibility_lives(fault: u8) -> Self {
         let mut r=Self::default();
         for (ptr,name) in [(1,"AGothicCharacter"),(2,"UCharacterPerceptionComponent"),(3,"UObject"),(4,"FInGameTime"),(5,"UGameplayAbility_AI"),(6,"UState"),(7,"UBase")] {
@@ -7221,6 +7301,55 @@ impl RefResolver {
             8=>r.func_ret.get_mut(&13).unwrap().type_info=1,
             9=>{r.global_by_ptr.insert(99,"Other".into());},
             10=>{r.class_fields.get_mut("UBase").unwrap().insert("Controller".into(),"UObject".into());},
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_position_timer_lives(fault: u8) -> Self {
+        let mut r=Self::default();
+        for (ptr,name) in [(1,"FVector"),(2,"AGothicCharacter"),(3,"UObject"),(4,"FInGameTime"),(5,"UState"),(6,"UConfig"),(7,"UBase")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32+50,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:if ptr>=5 {"Fixture"} else {""}.into(),namespace:String::new()});
+        }
+        r.class_super.insert("UState".into(),"UBase".into());
+        for (id,offset,name,ty) in [(55i64,50i64,"Settings","UConfig"),(56,52,"Duration","float"),(55,54,"Deadline","FInGameTime")] {
+            let key=(offset<<33)|(id<<1)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id as i32);
+            let owner=if id==55 {"UState"} else {"UConfig"};r.class_fields.entry(owner.into()).or_default().insert(name.into(),ty.into());
+        }
+        let plain=|token|DataType {token,..Default::default()};
+        let object=|type_info,reference,constant,handle|DataType {token:5,type_info,is_reference:reference,is_object_const:constant,is_object_handle:handle,is_read_only:constant && !handle,..Default::default()};
+        for (ptr,name,owner,constant,ret,args) in [
+            (10,"Location",Some("AGothicCharacter"),true,object(1,false,false,false),vec![]),
+            (11,"SelfActor",Some("UBase"),true,object(2,false,false,true),vec![]),
+            (12,"Target",Some("UBase"),false,object(2,false,false,true),vec![]),
+            (13,"opSub",Some("FVector"),true,object(1,false,false,false),vec![object(1,true,true,false)]),
+            (14,"GetSafeNormal2D",Some("FVector"),true,object(1,false,false,false),vec![plain(0x51),object(1,true,true,false)]),
+            (15,"XRealtimeSecondsFromNow",None,false,object(4,false,false,false),vec![object(3,false,true,true),plain(0x50)]),
+            (16,"IsValid",None,false,plain(0x41),vec![object(3,false,true,true)]),
+            (17,"opAssign",Some("FInGameTime"),false,object(4,true,false,false),vec![object(4,true,true,false)]),
+            (18,"$beh2",Some("FInGameTime"),false,plain(0x52),vec![]),
+            (19,"Threshold",Some("UBase"),false,plain(0x51),vec![])
+        ] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            if let Some(owner)=owner {r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);}
+            if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        r.funcid_to_ptr.insert(12,12);r.funcid_to_ptr.insert(19,19);
+        r.global_by_ptr.insert(99,"ZeroVector".into());r.global_ns.insert(99,"FVector".into());r.global_by_ptr.insert(98,"__WorldContext".into());
+        match fault {
+            1=>r.func_ret.get_mut(&10).unwrap().is_reference=true,
+            2=>r.func_params.get_mut(&14).unwrap()[0].token=0x50,
+            3=>{r.func_owner.insert(11,"Unrelated".into());},
+            4=>{r.global_ns.insert(99,"Other".into());},
+            5=>{r.const_method_ptrs.remove(&10);},
+            6=>r.func_params.get_mut(&15).unwrap()[1].token=0x51,
+            7=>r.func_ret.get_mut(&19).unwrap().token=0x50,
+            8=>{r.class_fields.get_mut("UConfig").unwrap().insert("Duration".into(),"float32".into());},
+            9=>r.func_params.get_mut(&17).unwrap()[0].is_object_const=false,
+            10=>{r.global_by_ptr.insert(98,"Other".into());},
+            11=>r.func_ret.get_mut(&16).unwrap().token=0x44,
             _=>{}
         }
         r
