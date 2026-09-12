@@ -1267,6 +1267,7 @@ fn emit_function_ctor(
     statement_producers.extend(receivers_built_before_their_rvo_push(f, refs));
     statement_producers.extend(named_copy_before_value_chain(f, refs));
     statement_producers.extend(member_results_before_argument_pushes(f, refs));
+    statement_producers.extend(captured_handle_before_fluent_arguments(f, refs, class_name));
     // Where vanilla destroyed a value slot mid-expression it was calling on a temporary there.
     // A by-value call result pushed again straight after the call is consumed where it was
     // produced — the temporary of a fluent chain (`AI.FearHere(…).While(n"…")`): vanilla ran
@@ -3409,6 +3410,8 @@ fn emit_function_ctor(
         pass_trace("restore_switch_query_foreach_lifetimes", &rendered);
         let rendered = restore_clamped_product_lifetimes(&rendered, f, refs);
         pass_trace("restore_clamped_product_lifetimes", &rendered);
+        let rendered = restore_visibility_scalar_lifetimes(&rendered, f, refs, class_name);
+        pass_trace("restore_visibility_scalar_lifetimes", &rendered);
         s.truncate(declarations_at);
         s.push_str(&rendered);
     } else {
@@ -14205,6 +14208,115 @@ fn restore_clamped_product_lifetimes(body: &str, f: &Func, refs: &RefResolver) -
     }
     let [(at,tail,average,replacement)]=changes.as_slice() else {return body.to_owned();};
     let mut out:Vec<_>=lines.into_iter().map(str::to_owned).collect();out.splice(*tail..tail+5,[replacement.clone()]);out.splice(*at..at+2,[average.clone()]);
+    let mut out=out.join("\n");if body.ends_with('\n') {out.push('\n');}out
+}
+
+/// Allocate a short-circuit result before the later scalar branch locals.
+fn restore_visibility_scalar_lifetimes(body: &str, f: &Func, refs: &RefResolver, class_name: Option<&str>) -> String {
+    if !body.contains("float32 local_") || !body.contains(" && ") || !body.contains("1.7976931348623157e308;") {return body.to_owned();}
+    let Some(class)=class_name else {return body.to_owned();};
+    let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    let w=|i:&Instr,n:usize|i.words.get(n).map(|v|*v as i16 as i32);
+    let p=|i:&Instr|i.qwords.first().map(|v|*v as i64);
+    let target=|i:&Instr|i.dwords.first().map(|d|i.offset_dw as i64+2+*d as i32 as i64);
+    let scalar=|t:&super::types::DataType,token|t.token==token && t.type_info==0 && !t.is_reference && !t.is_object_handle && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+    let handle=|t:&super::types::DataType,name:&str,constant|t.token==5 && refs.type_by_ptr(t.type_info)==Some(name) && t.is_object_handle && t.is_object_const==constant && !t.is_reference && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+    let native=|ptr,name:&str,owner:Option<&str>,ret_token,args:usize|refs.func_by_ptr(ptr)==Some(name) && refs.func_owner_by_ptr(ptr)==owner && refs.is_method_by_ptr(ptr)==owner.is_some()
+        && refs.func_ret_by_ptr(ptr).is_some_and(|t|scalar(t,ret_token)) && refs.func_params_by_ptr(ptr).is_some_and(|a|a.len()==args);
+    let field=|i:&Instr,ty:&str| {
+        let id=*i.dwords.first()? as i32;let owner=refs.type_by_id(id)?;let name=refs.member(id,w(i,0)?)?;
+        let actual=refs.own_field_type_by_class(owner,name)?;
+        // CharacterAI's native parent is absent from the cache's script inheritance map.
+        let typed=actual==ty || (ty=="UGameplayAbility_AI" && ["UGameplayAbility_AI","UGameplayAbility_CharacterAI"].iter().any(|base|refs.is_subclass(actual,base)));
+        (refs.is_subclass(class,owner) && typed).then_some(name)
+    };
+    let closed=|start:usize,end:usize,allowed:&[(usize,usize)]|!code.iter().enumerate().any(|(at,i)|i.op.name=="JMPP" || (i.op.name.starts_with('J') && target(i).is_some_and(|t|
+        t>=code[start].offset_dw as i64 && t<=code[end].offset_dw as i64 && !allowed.iter().any(|(from,to)|at==*from && t==code[*to].offset_dw as i64)
+            && !(t==code[start].offset_dw as i64 && at<start))));
+    let mut candidates=Vec::new();
+    for (at,c) in code.windows(13).enumerate() {
+        let witness=(|| {
+            if c.iter().map(|i|i.op.name).ne(["CpyVtoR1","JLowZ","SetV4","JMP","PshGPtr","PshVPtr","ADDSi","CALLSYS","CpyRtoV4","CpyVtoV4","fTOd","CpyVtoV8","SetV8"])
+                || target(&c[1])!=Some(c[4].offset_dw as i64) || target(&c[3])!=Some(c[10].offset_dw as i64)
+                || c[2].dwords.first()!=Some(&0) || c[12].qwords.first()!=Some(&f64::MAX.to_bits()) || w(&c[5],0)!=Some(0)
+                || !closed(at,at+12,&[(at+1,at+4),(at+3,at+10)]) {return None;}
+            let (flag,value,scratch,wide,elapsed,distance)=(w(&c[0],0)?,w(&c[2],0)?,w(&c[8],0)?,w(&c[10],0)?,w(&c[11],0)?,w(&c[12],0)?);
+            let slots=[flag,value,scratch,wide,elapsed,distance];
+            if HashSet::from(slots).len()!=slots.len() || slots.iter().any(|s|*s<=0 || f.obj_locals.iter().any(|(n,_)|n==s))
+                || w(&c[9],0)!=Some(value) || w(&c[9],1)!=Some(scratch) || w(&c[10],1)!=Some(value) || w(&c[11],1)!=Some(wide) {return None;}
+            let age=p(&c[7])?;let clock=field(&c[6],"FInGameTime")?;
+            if !native(age,"GetAgeInRealtimeSeconds",Some("FInGameTime"),0x50,1) || !refs.is_const_method_by_ptr(age)
+                || !handle(&refs.func_params_by_ptr(age)?[0],"UObject",true)
+                || !c[4].qwords.first().is_some_and(|q|refs.global_by_ptr(*q as i64)==Some("__WorldContext")) {return None;}
+            // The float32 result has exactly the two branch definitions and one widening use.
+            let uses:Vec<_>=code.iter().enumerate().filter(|(_,i)|super::bytediff::addressed_slots(i).contains(&value)).map(|(n,_)|n).collect();
+            if uses!=[at+2,at+9,at+10] {return None;}
+            let mut booleans=Vec::new();
+            for (before,b) in code[..at].windows(28).enumerate() {
+                if b.iter().map(|i|i.op.name).ne(["PshVPtr","CALLINTF","STOREOBJ","PshVPtr","CALLSYS","CpyRtoV4","CpyVtoR1","JLowNZ","SetV4","JMP",
+                    "PshC4","PshC4","PshVPtr","CALLINTF","STOREOBJ","PshVPtr","PshVPtr","ADDSi","RDSPtr","CALLSYS","STOREOBJ","PshVPtr","CALLSYS","STOREOBJ","PshVPtr","CALLSYS","CpyRtoV4","CpyVtoV4"])
+                    || w(&b[5],0)!=Some(flag) || w(&b[6],0)!=Some(flag) || w(&b[8],0)!=Some(flag) || w(&b[27],0)!=Some(flag)
+                    || b[8].dwords.first()!=Some(&0) || [10,11].iter().any(|n|b[*n].dwords.first()!=Some(&0))
+                    || [0,12,16].iter().any(|n|w(&b[*n],0)!=Some(0)) || w(&b[2],0)!=w(&b[3],0) || w(&b[2],0)!=w(&b[20],0) || w(&b[2],0)!=w(&b[21],0)
+                    || w(&b[14],0)!=w(&b[15],0) || w(&b[23],0)!=w(&b[24],0) || w(&b[26],0)!=w(&b[27],1) || w(&b[26],0)==Some(flag)
+                    || b[1].dwords.first()!=b[13].dwords.first() || target(&b[7])!=Some(b[10].offset_dw as i64)
+                    || target(&b[9])!=code.get(before+28).map(|i|i.offset_dw as i64)
+                    || !closed(before,before+27,&[(before+7,before+10)]) {continue;}
+                let typed=(|| {
+                    let getter=*b[1].dwords.first()? as i32;let get_name=refs.func_by_id(getter)?;
+                    if !refs.is_method_by_id(getter) || !refs.func_params_by_id(getter)?.is_empty() || !handle(refs.func_ret_by_id(getter)?,"AGothicCharacter",false) {return None;}
+                    let valid=p(&b[4])?;let see=p(&b[25])?;
+                    if !native(valid,"IsValid",None,0x41,1) || !handle(&refs.func_params_by_ptr(valid)?[0],"UObject",true)
+                        || !native(see,"CanSee",Some("UCharacterPerceptionComponent"),0x41,3) || !refs.is_const_method_by_ptr(see) {return None;}
+                    let params=refs.func_params_by_ptr(see)?;
+                    if !handle(&params[0],"AGothicCharacter",true) || !params[1..].iter().all(|t|scalar(t,0x50)) {return None;}
+                    let ai=field(&b[17],"UGameplayAbility_AI")?;
+                    let mut names=Vec::new();
+                    for (index,owner,ret) in [(19,"UGameplayAbility_AI","AGothicCharacter"),(22,"AGothicCharacter","UCharacterPerceptionComponent")] {
+                        let ptr=p(&b[index])?;
+                        if refs.func_owner_by_ptr(ptr)!=Some(owner) || !refs.is_method_by_ptr(ptr) || !refs.is_const_method_by_ptr(ptr)
+                            || !refs.func_params_by_ptr(ptr)?.is_empty() || !handle(refs.func_ret_by_ptr(ptr)?,ret,false) {return None;}
+                        names.push(refs.func_by_ptr(ptr)?);
+                    }
+                    for (index,name) in [(2,"AGothicCharacter"),(14,"AGothicCharacter"),(23,"UCharacterPerceptionComponent")] {
+                        let slot=w(&b[index],0)?;
+                        if slot<=0 || !f.obj_locals.iter().any(|(s,t)|*s==slot && refs.type_by_ptr(*t)==Some(name)) {return None;}
+                    }
+                    Some(format!("IsValid(this.{get_name}()) && this.{ai}.{}().{}().CanSee(this.{get_name}(), 0.0f, 0.0f)",names[0],names[1]))
+                })();
+                if let Some(expr)=typed {booleans.push(expr);}
+            }
+            let [expr]=booleans.as_slice() else {return None;};
+            Some((flag,value,elapsed,distance,clock.to_owned(),expr.clone()))
+        })();
+        if let Some(witness)=witness {candidates.push(witness);}
+    }
+    let [(flag,value,elapsed,distance,clock,expr)]=candidates.as_slice() else {return body.to_owned();};
+    let lines:Vec<_>=body.lines().collect();let mut changes=Vec::new();
+    let (flag,value,elapsed,distance)=(format!("local_{flag}"),format!("local_{value}"),format!("local_{elapsed}"),format!("local_{distance}"));
+    for (at,b) in lines.windows(3).enumerate() {
+        let indent=indent_of(b[0]);
+        if b[0]!=format!("{indent}float {distance};") || b[1]!=format!("{indent}bool {flag};") || b[2]!=format!("{indent}{flag} = {expr};") {continue;}
+        let narrow:Vec<_>=lines[..at].iter().enumerate().filter(|(_,s)|s.trim()==format!("float32 {value};")).map(|(n,_)|n).collect();
+        let [declaration]=narrow.as_slice() else {continue;};
+        for (branch,b) in lines.windows(10).enumerate().skip(at+3) {
+            let expected=[format!("if ({flag})"),"{".into(),format!("    {value} = 0.0f;"),"}".into(),"else".into(),"{".into(),
+                format!("    {value} = this.{clock}.GetAgeInRealtimeSeconds();"),"}".into(),format!("float {elapsed} = {value};"),
+                format!("{distance} = 1.7976931348623157e308;")];
+            if b.iter().zip(&expected).any(|(line,e)|*line!=format!("{indent}{e}")) || count_ident(body,&value)!=4
+                || count_ident(&lines[..branch+9].join("\n"),&distance)!=1 || count_ident(&lines[..at].join("\n"),&flag)!=0 {continue;}
+            changes.push((*declaration,at,branch,indent.to_owned()));
+        }
+    }
+    let [(declaration,at,branch,indent)]=changes.as_slice() else {return body.to_owned();};
+    let mut out=Vec::new();
+    for (n,line) in lines.iter().enumerate() {
+        if n==*declaration || n==*at || n==at+1 {continue;}
+        if n==at+2 {out.push(format!("{indent}auto {flag} = {expr};"));}
+        else if n==*branch {out.push(format!("{indent}float32 {value};"));out.push((*line).to_owned());}
+        else if n==branch+9 {out.push(format!("{indent}float {distance} = 1.7976931348623157e308;"));}
+        else {out.push((*line).to_owned());}
+    }
     let mut out=out.join("\n");if body.ends_with('\n') {out.push('\n');}out
 }
 
@@ -32796,6 +32908,81 @@ fn next_declaration_to_split(
         return Some((index, opens, line.clone()));
     }
     None
+}
+
+/// A class-selected handle exists before a fluent call's name and scalar arguments.
+/// Its sole later read supplies a narrowed member value; preserve the producer statement.
+fn captured_handle_before_fluent_arguments(f: &Func, refs: &RefResolver, class_name: Option<&str>) -> HashSet<i32> {
+    let Some(class) = class_name else { return HashSet::new(); };
+    let Ok(code) = disassemble(&f.bytecode) else { return HashSet::new(); };
+    let scalar = |t: &super::types::DataType, token, constant: bool| t.token == token && t.type_info == 0
+        && !t.is_reference && !t.is_object_handle && t.is_object_const == constant && t.is_read_only == constant
+        && !t.is_auto && !t.if_handle_then_const;
+    let object = |t: &super::types::DataType, ptr, reference: bool, constant: bool, handle: bool| t.token == 5 && t.type_info == ptr
+        && t.is_reference == reference && t.is_object_const == constant && t.is_read_only == (constant && !handle)
+        && t.is_object_handle == handle && !t.is_auto && !t.if_handle_then_const;
+    let native = |ptr, name| refs.type_identity_by_ptr(ptr).is_some_and(|t| t.name == name && t.module.is_empty() && t.namespace.is_empty());
+    if !scalar(&f.ret, 0x52, false) { return HashSet::new(); }
+    let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+    let param_slots = super::model::param_slot_map(&params, true, false, Some(refs));
+    code.windows(22).enumerate().filter_map(|(at, c)| {
+        if c.iter().map(|i| i.op.name).ne(["PshGPtr", "CHKREF", "PshVPtr", "CALLSYS", "STOREOBJ", "PshC4", "CALLSYS", "PshRPtr",
+            "PshVPtr", "PshC4", "LoadRObjR", "RDR8", "dTOf", "PshV4", "PshC8", "PshVPtr", "CALL", "PshRPtr", "CALLSYS", "PshRPtr", "ADDSi", "CALLSYS"])
+            || code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+                let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+                target > c[0].offset_dw as i64 && target <= c[21].offset_dw as i64
+            }))) { return None; }
+        let w = |i: usize, n: usize| c[i].words.get(n).map(|v| *v as i16 as i32);
+        let p = |i: usize| c[i].qwords.first().map(|v| *v as i64);
+        let (slot, wide, narrow) = (w(4, 0)?, w(11, 0)?, w(12, 0)?);
+        if [slot, wide, narrow].iter().any(|s| *s <= 0) || HashSet::from([slot, wide, narrow]).len() != 3
+            || w(2, 0) != Some(0) || w(8, 0) != Some(0) || w(10, 0) != Some(slot) || w(12, 1) != Some(wide) || w(13, 0) != Some(narrow)
+            || [wide, narrow].iter().any(|s| f.obj_locals.iter().any(|(n, _)| s == n))
+            || !f32::from_bits(*c[9].dwords.first()?).is_finite() || !f64::from_bits(*c[14].qwords.first()?).is_finite()
+            || code.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&slot)).map(|(i, _)| i).ne([at + 4, at + 10]) { return None; }
+        let locals: Vec<_> = f.obj_locals.iter().filter(|(s, _)| *s == slot).map(|(_, p)| *p).collect();
+        let [stored] = locals.as_slice() else { return None; };
+        let owner = refs.type_identity_by_ptr(*stored)?;
+        let id = *c[10].dwords.first()? as i32;
+        let (field, old_owner) = refs.member_identity(id, w(10, 1)?)?;
+        if owner.module.is_empty() || !owner.namespace.is_empty() || refs.type_identity_by_id(id)? != owner || refs.type_identity_by_id(old_owner)? != owner
+            || refs.own_field_type_by_class(&owner.name, field) != Some("float")
+            || refs.global_by_ptr(p(0)?)? != format!("__StaticType_{}", owner.name) || refs.global_is_string(p(0)?) || refs.global_ns(p(0)?).is_some() { return None; }
+        let getter = p(3)?; let ret = refs.func_ret_by_ptr(getter)?;
+        let [class_arg] = refs.func_params_by_ptr(getter)? else { return None; };
+        let [subtype] = refs.type_subtypes(class_arg.type_info)? else { return None; };
+        let base = refs.type_identity_by_ptr(ret.type_info)?;
+        if !object(ret, ret.type_info, false, false, true) || !base.module.is_empty() || !base.namespace.is_empty()
+            || !refs.is_subclass(&owner.name, &base.name) || !refs.is_method_by_ptr(getter) || !refs.is_const_method_by_ptr(getter)
+            || !refs.is_subclass(class, refs.func_owner_by_ptr(getter)?)
+            || !object(class_arg, class_arg.type_info, true, true, false) || !native(class_arg.type_info, "TSubclassOf")
+            || !object(subtype, ret.type_info, false, false, true) { return None; }
+        let static_name = p(6)?; let name_ty = refs.func_ret_by_ptr(static_name)?.type_info;
+        if refs.func_by_ptr(static_name) != Some("__STATIC_NAME") || refs.is_method_by_ptr(static_name) || refs.func_owner_by_ptr(static_name).is_some()
+            || !native(name_ty, "FName") || !object(refs.func_ret_by_ptr(static_name)?, name_ty, true, true, false)
+            || !matches!(refs.func_params_by_ptr(static_name), Some([t]) if scalar(t, 0x44, false))
+            || refs.static_name(*c[5].dwords.first()? as i64)?.is_empty() { return None; }
+        let factory = *c[16].dwords.first()? as i32;
+        let [input, radius] = refs.func_params_by_id(factory)? else { return None; };
+        let parameter = f.params.get(*param_slots.get(&w(15, 0)?)?)?;
+        let handler = refs.func_ret_by_id(factory)?.type_info;
+        if refs.is_method_by_id(factory) || !object(input, input.type_info, false, false, true) || parameter.flags != 0
+            || !object(&parameter.ty, input.type_info, false, false, true) || !scalar(radius, 0x51, true)
+            || !native(handler, "FPerceptionHandler") || !object(refs.func_ret_by_id(factory)?, handler, true, false, false) { return None; }
+        let fluent = p(18)?;
+        if !refs.is_method_by_ptr(fluent) || refs.is_const_method_by_ptr(fluent) || refs.func_owner_by_ptr(fluent) != Some("FPerceptionHandler")
+            || !object(refs.func_ret_by_ptr(fluent)?, handler, true, false, false)
+            || !matches!(refs.func_params_by_ptr(fluent), Some([a, b]) if scalar(a, 0x50, false) && scalar(b, 0x50, false)) { return None; }
+        let event_id = *c[20].dwords.first()? as i32;
+        let (event, event_owner) = refs.member_identity(event_id, w(20, 0)?)?;
+        let bind = p(21)?; let [target, event_name] = refs.func_params_by_ptr(bind)? else { return None; };
+        if refs.type_identity_by_id(event_id)? != refs.type_identity_by_ptr(handler)? || refs.type_identity_by_id(event_owner)? != refs.type_identity_by_ptr(handler)?
+            || refs.native_field_value_type("FPerceptionHandler", event).or_else(|| refs.native_field_type("FPerceptionHandler", event)) != Some("FPerceptionDelegate")
+            || !refs.is_method_by_ptr(bind) || refs.is_const_method_by_ptr(bind) || refs.func_owner_by_ptr(bind) != Some("FPerceptionDelegate")
+            || !scalar(refs.func_ret_by_ptr(bind)?, 0x52, false) || !native(target.type_info, "UObject") || !object(target, target.type_info, false, false, true)
+            || !object(event_name, name_ty, true, true, false) { return None; }
+        Some(slot)
+    }).collect()
 }
 
 /// A by-value result already exists when the next call's argument pushes start.
@@ -52871,6 +53058,47 @@ mod literal_value_lifetime_tests {
     }
 
     #[test]
+    fn visibility_boolean_precedes_its_branch_scalar_lifetimes() {
+        let mut f=function(&[("PshVPtr",&[0]),("CALLINTF",&[]),("STOREOBJ",&[6]),("PshVPtr",&[6]),("CALLSYS",&[]),("CpyRtoV4",&[2]),("CpyVtoR1",&[2]),("JLowNZ",&[]),("SetV4",&[2]),("JMP",&[]),("PshC4",&[]),("PshC4",&[]),("PshVPtr",&[0]),("CALLINTF",&[]),("STOREOBJ",&[12]),("PshVPtr",&[12]),("PshVPtr",&[0]),("ADDSi",&[20]),("RDSPtr",&[]),("CALLSYS",&[]),("STOREOBJ",&[6]),("PshVPtr",&[6]),("CALLSYS",&[]),("STOREOBJ",&[8]),("PshVPtr",&[8]),("CALLSYS",&[]),("CpyRtoV4",&[1]),("CpyVtoV4",&[2,1]),("SUSPEND",&[]),("CpyVtoR1",&[2]),("JLowZ",&[]),("SetV4",&[10]),("JMP",&[]),("PshGPtr",&[]),("PshVPtr",&[0]),("ADDSi",&[10]),("CALLSYS",&[]),("CpyRtoV4",&[9]),("CpyVtoV4",&[10,9]),("fTOd",&[20,10]),("CpyVtoV8",&[16,20]),("SetV8",&[22]),("RET",&[2])]);
+        f.obj_locals=vec![(6,1),(12,1),(8,2)];
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,value) in [(1,10),(4,11),(13,10),(17,57),(19,12),(22,13),(25,14),(33,99),(35,56),(36,15)] {f.bytecode[code[at].offset_dw+1]=value;}
+        for (at,dest) in [(7,10),(9,28),(30,33),(32,39)] {f.bytecode[code[at].offset_dw+1]=code[dest].offset_dw as i32-code[at].offset_dw as i32-2;}
+        let bits=f64::MAX.to_bits();f.bytecode[code[41].offset_dw+1]=bits as i32;f.bytecode[code[41].offset_dw+2]=(bits>>32) as i32;
+        let body="        float32 local_10;\n        if (Exit())\n        {\n            return;\n        }\n        else\n        {\n            float local_22;\n            bool local_2;\n            local_2 = IsValid(this.Target()) && this.Controller.Character().Perception().CanSee(this.Target(), 0.0f, 0.0f);\n            Remember(local_2);\n            if (local_2)\n            {\n                local_10 = 0.0f;\n            }\n            else\n            {\n                local_10 = this.Clock.GetAgeInRealtimeSeconds();\n            }\n            float local_16 = local_10;\n            local_22 = 1.7976931348623157e308;\n            Use(local_22, local_16, local_2);\n        }\n";
+        let expected="        if (Exit())\n        {\n            return;\n        }\n        else\n        {\n            auto local_2 = IsValid(this.Target()) && this.Controller.Character().Perception().CanSee(this.Target(), 0.0f, 0.0f);\n            Remember(local_2);\n            float32 local_10;\n            if (local_2)\n            {\n                local_10 = 0.0f;\n            }\n            else\n            {\n                local_10 = this.Clock.GetAgeInRealtimeSeconds();\n            }\n            float local_16 = local_10;\n            float local_22 = 1.7976931348623157e308;\n            Use(local_22, local_16, local_2);\n        }\n";
+        let refs=RefResolver::from_test_visibility_lives(0);
+        assert!(!refs.is_subclass("UDerivedAI","UGameplayAbility_AI"));assert!(refs.is_subclass("UDerivedAI","UGameplayAbility_CharacterAI"));
+        let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_visibility_scalar_lifetimes(s,f,r,Some("UState"));
+        assert_eq!(fold(body,&f,&refs),expected);assert_eq!(fold(expected,&f,&refs),expected);
+        for fault in 1..=10 {assert_eq!(fold(body,&f,&RefResolver::from_test_visibility_lives(fault)),body,"metadata {fault}");}
+        for (at,i) in code.iter().enumerate().filter(|(_,i)|!i.words.is_empty() && i.op.name!="RET") {
+            for n in 0..i.words.len() {
+                let mut bad=f.clone();let (dw,shift)=if n==0 {(i.offset_dw,16)} else {(i.offset_dw+1,if n==1 {0} else {16})};
+                bad.bytecode[dw]^=4<<shift;assert_eq!(fold(body,&bad,&refs),body,"operand {at}:{n}");
+            }
+        }
+        for at in [1,4,7,8,9,10,11,13,17,19,22,25,30,31,32,33,35,36,41] {
+            let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1]^=2;assert_eq!(fold(body,&bad,&refs),body,"constant/call {at}");
+        }
+        for target in [10,26,31,35,39] {
+            let mut bad=f.clone();let at=bad.bytecode.len();bad.bytecode.extend(function(&[("JMP",&[])]).bytecode);
+            bad.bytecode[at+1]=code[target].offset_dw as i32-at as i32-2;assert_eq!(fold(body,&bad,&refs),body);
+        }
+        for changed in [format!("{body}Use(local_10);\n"),body.replace("Remember(local_2);","Remember(local_22);"),
+            body.replace(" && "," || "),body.replace("this.Clock.","this.OtherClock."),body.replace("1.7976931348623157e308","1.0")] {assert_eq!(fold(&changed,&f,&refs),changed);}
+        let mut bad=f.clone();bad.bytecode.extend(function(&[("PshV4",&[10])]).bytecode);assert_eq!(fold(body,&bad,&refs),body);
+        let mut renamed=f.clone();
+        for i in &code {if !matches!(i.op.name,"RET"|"ADDSi") {for (n,word) in i.words.iter().enumerate().filter(|(_,w)|**w>0) {
+            let (dw,shift)=if n==0 {(i.offset_dw,16)} else {(i.offset_dw+1,if n==1 {0} else {16})};
+            renamed.bytecode[dw]=(renamed.bytecode[dw] as u32 & !(0xffff<<shift) | ((*word as u32+100)<<shift)) as i32;
+        }}}
+        for (s,_) in &mut renamed.obj_locals {*s+=100;}
+        let rename=|s:&str|[1,2,6,8,9,10,12,16,20,22].iter().fold(s.to_owned(),|s,n|super::rename_ident(&s,&format!("local_{n}"),&format!("local_{}",n+100)));
+        assert_eq!(fold(&rename(body),&renamed,&refs),rename(expected));
+    }
+
+    #[test]
     fn perceived_actor_argument_defers_only_its_proven_property_getter() {
         let mut f = function(&[("SetV1", &[3]), ("PshV4", &[3]), ("PshC8", &[]),
             ("SetV1", &[43]), ("PshV4", &[43]), ("PshC8", &[]), ("PshGPtr", &[]),
@@ -53986,6 +54214,70 @@ mod literal_value_lifetime_tests {
         let mut entered = function(&[("JMP", &[])]); entered.bytecode[1] = code[9].offset_dw as i32;
         entered.bytecode.extend(f.bytecode.clone()); entered.ret = f.ret.clone(); entered.obj_locals = f.obj_locals.clone();
         assert!(super::reused_null_guard_getter_slots(&entered, &refs).is_empty());
+    }
+
+    #[test]
+    fn captured_class_handle_stays_before_fluent_arguments() {
+        let mut f = function(&[
+            ("PshGPtr", &[]), ("CHKREF", &[]), ("PshVPtr", &[0]), ("CALLSYS", &[]), ("STOREOBJ", &[10]),
+            ("PshC4", &[]), ("CALLSYS", &[]), ("PshRPtr", &[]), ("PshVPtr", &[0]), ("PshC4", &[]),
+            ("LoadRObjR", &[10, 80]), ("RDR8", &[2]), ("dTOf", &[4, 2]), ("PshV4", &[4]), ("PshC8", &[]),
+            ("PshVPtr", &[65534]), ("CALL", &[]), ("PshRPtr", &[]), ("CALLSYS", &[]), ("PshRPtr", &[]),
+            ("ADDSi", &[40]), ("CALLSYS", &[]), ("RET", &[4]),
+        ]);
+        f.ret = DataType { token: 0x52, ..Default::default() }; f.obj_locals = vec![(8, 1), (10, 1)];
+        f.params = vec![crate::cache::model::Param { name: "Perception".into(), flags: 0,
+            ty: DataType { token: 5, type_info: 9, is_object_handle: true, ..Default::default() } }];
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, value) in [(0, 99), (3, 10), (6, 11), (16, 20), (18, 12), (20, 6), (21, 13)] { f.bytecode[code[at].offset_dw + 1] = value; }
+        f.bytecode[code[10].offset_dw + 2] = 1;
+        let bits = 1000.0f64.to_bits(); f.bytecode[code[14].offset_dw + 1] = bits as i32; f.bytecode[code[14].offset_dw + 2] = (bits >> 32) as i32;
+        let refs = RefResolver::from_test_captured_fluent_handle(0);
+        let check = |f: &Func, refs: &RefResolver| super::captured_handle_before_fluent_arguments(f, refs, Some("UTestAI"));
+        let keep = check(&f, &refs); assert_eq!(keep, HashSet::from([10]));
+        let source = "ULimits local_10 = Cast<ULimits>(this.Storage(ULimits));\n::Observe(Perception, 1000.0).Later(float32(local_10.Duration), 0.0f).Changed.Connect(this, n\"OnEvent\");\n";
+        let late = |source: &str, keep: &HashSet<i32>| super::inline_unnamed_value_temporaries(source, &HashSet::from([(10, 1)]),
+            &HashSet::new(), &HashSet::new(), &refs, &HashSet::new(), keep, &HashMap::new(), &HashSet::new(),
+            &HashSet::new(), &HashSet::new(), &HashSet::new());
+        assert_eq!(late(source, &keep), source); assert_ne!(late(source, &HashSet::new()), source);
+        let assignments = source.replacen("ULimits local_10 =", "local_10 =", 1);
+        let early = super::inline_call_argument_temporaries(&assignments, &refs, &BTreeMap::from([(10, "ULimits".into())]), None, true,
+            &HashMap::new(), &keep, &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(),
+            &HashSet::new(), &HashSet::new(), &HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new());
+        assert_eq!(early, assignments);
+        assert!(super::captured_handle_before_fluent_arguments(&f, &refs, None).is_empty());
+        for fault in 1..=14 { assert!(check(&f, &RefResolver::from_test_captured_fluent_handle(fault)).is_empty(), "metadata {fault}"); }
+        for (at, i) in code.iter().enumerate().filter(|(_, i)| !i.words.is_empty() && i.op.name != "RET") {
+            for n in 0..i.words.len() {
+                let mut bad = f.clone(); let (dw, shift) = if n == 0 { (i.offset_dw, 16) } else { (i.offset_dw + 1, 0) };
+                bad.bytecode[dw] ^= 2 << shift; assert!(check(&bad, &refs).is_empty(), "operand {at}:{n}");
+            }
+        }
+        for (at, relative) in [(0, 1), (3, 1), (5, 1), (6, 1), (10, 2), (16, 1), (18, 1), (20, 1), (21, 1)] {
+            let mut bad = f.clone(); bad.bytecode[code[at].offset_dw + relative] += 1;
+            assert!(check(&bad, &refs).is_empty(), "type/call/literal {at}");
+        }
+        let mut bad = f.clone(); bad.bytecode[code[9].offset_dw + 1] = f32::NAN.to_bits() as i32; assert!(check(&bad, &refs).is_empty());
+        let mut bad = f.clone(); let bits = f64::NAN.to_bits(); bad.bytecode[code[14].offset_dw + 1] = bits as i32;
+        bad.bytecode[code[14].offset_dw + 2] = (bits >> 32) as i32; assert!(check(&bad, &refs).is_empty());
+        let mut bad = f.clone(); bad.bytecode[code[20].offset_dw] += 8 << 16; assert!(check(&bad, &refs).is_empty()); // Known non-delegate field.
+        let mut bad = f.clone(); bad.obj_locals.push((10, 1)); assert!(check(&bad, &refs).is_empty());
+        let mut bad = f.clone(); bad.params[0].flags = 1; assert!(check(&bad, &refs).is_empty());
+        let mut bad = f.clone(); bad.bytecode.extend(function(&[("PshVPtr", &[10])]).bytecode); assert!(check(&bad, &refs).is_empty());
+        for target in [3, 10, 18, 21] {
+            let mut bad = f.clone(); let at = bad.bytecode.len(); bad.bytecode.extend(function(&[("JMP", &[])]).bytecode);
+            bad.bytecode[at + 1] = code[target].offset_dw as i32 - at as i32 - 2; assert!(check(&bad, &refs).is_empty());
+        }
+        let mut bad = f.clone(); bad.bytecode.extend(function(&[("JMPP", &[2])]).bytecode); assert!(check(&bad, &refs).is_empty());
+        let mut shifted = f.clone(); for (slot, _) in &mut shifted.obj_locals { *slot += 100; }
+        for i in &code { if i.op.name != "ADDSi" && i.op.name != "RET" {
+            for (n, value) in i.words.iter().enumerate() {
+                if *value == 0 || (*value as i16) < 0 || (i.op.name == "LoadRObjR" && n == 1) { continue; }
+                let (dw, shift) = if n == 0 { (i.offset_dw, 16) } else { (i.offset_dw + 1, 0) };
+                shifted.bytecode[dw] += 100 << shift;
+            }
+        } }
+        assert_eq!(check(&shifted, &refs), HashSet::from([110]));
     }
 
     #[test]

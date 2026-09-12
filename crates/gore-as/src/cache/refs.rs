@@ -2703,6 +2703,59 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_captured_fluent_handle(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(1, "ULimits"), (2, "UStore"), (3, "UProvider"), (4, "TSubclassOf"), (5, "FName"),
+            (6, "FPerceptionHandler"), (7, "FPerceptionDelegate"), (8, "UObject"), (9, "UPerception")] {
+            r.type_by_ptr.insert(ptr, name.into()); r.type_names.insert(name.into()); r.typeid_to_ptr.insert(ptr as i32, ptr);
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: if ptr == 1 { "Fixture" } else { "" }.into(), namespace: String::new() });
+        }
+        r.class_super.insert("ULimits".into(), "UStore".into());
+        r.class_super.insert("UTestAI".into(), "UScriptAI".into()); r.class_super.insert("UScriptAI".into(), "UProvider".into());
+        r.class_fields.insert("ULimits".into(), HashMap::from([("Duration".into(), "float".into())]));
+        for (id, offset, name) in [(1i64, 80i64, "Duration"), (6, 40, "Changed"), (6, 48, "Count")] {
+            let key = (id << 1) | (offset << 33) | 1; r.prop_by_key.insert(key, name.into()); r.prop_type_id.insert(key, id as i32);
+        }
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(
+            &[("FPerceptionHandler", "Changed", "FPerceptionDelegate"), ("FPerceptionHandler", "Count", "int")], &[], None));
+        let scalar = |token| DataType { token, ..Default::default() };
+        let object = |type_info, is_reference: bool, is_object_const: bool, is_object_handle: bool| DataType { token: 5, type_info,
+            is_reference, is_object_const, is_object_handle, is_read_only: is_object_const && !is_object_handle, ..Default::default() };
+        r.type_subtypes.insert(4, vec![object(2, false, false, true)]);
+        for (ptr, name, owner, ret, params) in [
+            (10, "Storage", "UProvider", object(2, false, false, true), vec![object(4, true, true, false)]),
+            (12, "Later", "FPerceptionHandler", object(6, true, false, false), vec![scalar(0x50), scalar(0x50)]),
+            (13, "Connect", "FPerceptionDelegate", scalar(0x52), vec![object(8, false, false, true), object(5, true, true, false)]),
+        ] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into()); r.func_is_method.insert(ptr);
+            r.func_ret.insert(ptr, ret); r.func_params.insert(ptr, params);
+        }
+        r.const_method_ptrs.insert(10);
+        r.func_by_ptr.insert(11, "__STATIC_NAME".into()); r.func_ret.insert(11, object(5, true, true, false)); r.func_params.insert(11, vec![scalar(0x44)]);
+        r.funcid_to_ptr.insert(20, 20); r.func_by_ptr.insert(20, "Observe".into()); r.func_ret.insert(20, object(6, true, false, false));
+        r.func_params.insert(20, vec![object(9, false, false, true), DataType { is_object_const: true, is_read_only: true, ..scalar(0x51) }]);
+        r.global_by_ptr.insert(99, "__StaticType_ULimits".into()); r.static_names.push("OnEvent".into());
+        match fault {
+            1 => { r.class_fields.get_mut("ULimits").unwrap().insert("Duration".into(), "float32".into()); },
+            2 => { r.class_super.remove("ULimits"); },
+            3 => { r.class_super.remove("UScriptAI"); },
+            4 => r.func_ret.get_mut(&10).unwrap().is_object_handle = false,
+            5 => r.func_params.get_mut(&10).unwrap()[0].is_reference = false,
+            6 => r.type_subtypes.get_mut(&4).unwrap()[0].type_info = 9,
+            7 => r.func_params.get_mut(&20).unwrap()[0].type_info = 8,
+            8 => r.func_params.get_mut(&20).unwrap()[1].is_read_only = false,
+            9 => r.func_ret.get_mut(&12).unwrap().is_reference = false,
+            10 => { r.const_method_ptrs.insert(12); },
+            11 => r.func_params.get_mut(&12).unwrap()[0].token = 0x51,
+            12 => r.func_params.get_mut(&13).unwrap()[1].type_info = 7,
+            13 => { r.global_by_ptr.insert(99, "__StaticType_UStore".into()); },
+            14 => { r.static_names.clear(); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_member_result_before_arguments(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("FPoint", "Z"), ("FPoint", "Z")]);
         for id in [1, 2] {
@@ -7125,6 +7178,49 @@ impl RefResolver {
             4=>{r.func_params.get_mut(&12).unwrap().pop();},
             5=>{r.func_is_method.insert(11);},
             6=>r.func_params.get_mut(&12).unwrap()[0].is_reference=true,
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_visibility_lives(fault: u8) -> Self {
+        let mut r=Self::default();
+        for (ptr,name) in [(1,"AGothicCharacter"),(2,"UCharacterPerceptionComponent"),(3,"UObject"),(4,"FInGameTime"),(5,"UGameplayAbility_AI"),(6,"UState"),(7,"UBase")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32+50,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:if ptr>=6 {"Fixture"} else {""}.into(),namespace:String::new()});
+        }
+        r.class_super.insert("UState".into(),"UBase".into());
+        r.class_super.insert("UDerivedAI".into(),"UGameplayAbility_CharacterAI".into());
+        for (id,offset,name,ty) in [(56i64,10i64,"Clock","FInGameTime"),(57,20,"Controller","UDerivedAI")] {
+            let key=(offset<<33)|(id<<1)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id as i32);
+            let owner=if id==56 {"UState"} else {"UBase"};r.class_fields.entry(owner.into()).or_default().insert(name.into(),ty.into());
+        }
+        let plain=|token|DataType{token,..Default::default()};
+        let handle=|type_info,constant|DataType{token:5,type_info,is_object_handle:true,is_object_const:constant,..Default::default()};
+        for (ptr,name,owner,ret,args) in [
+            (10,"Target",Some("UBase"),handle(1,false),vec![]),
+            (11,"IsValid",None,plain(0x41),vec![handle(3,true)]),
+            (12,"Character",Some("UGameplayAbility_AI"),handle(1,false),vec![]),
+            (13,"Perception",Some("AGothicCharacter"),handle(2,false),vec![]),
+            (14,"CanSee",Some("UCharacterPerceptionComponent"),plain(0x41),vec![handle(1,true),plain(0x50),plain(0x50)]),
+            (15,"GetAgeInRealtimeSeconds",Some("FInGameTime"),plain(0x50),vec![handle(3,true)])
+        ] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            if let Some(owner)=owner {r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);r.const_method_ptrs.insert(ptr);}
+        }
+        r.funcid_to_ptr.insert(10,10);r.global_by_ptr.insert(99,"__WorldContext".into());
+        match fault {
+            1=>r.func_ret.get_mut(&11).unwrap().token=0x44,
+            2=>r.func_params.get_mut(&14).unwrap()[1].token=0x51,
+            3=>r.func_ret.get_mut(&15).unwrap().token=0x51,
+            4=>r.func_params.get_mut(&15).unwrap()[0].is_object_const=false,
+            5=>{r.class_fields.get_mut("UState").unwrap().insert("Clock".into(),"FVector".into());},
+            6=>{r.class_super.clear();},
+            7=>{r.const_method_ptrs.remove(&12);},
+            8=>r.func_ret.get_mut(&13).unwrap().type_info=1,
+            9=>{r.global_by_ptr.insert(99,"Other".into());},
+            10=>{r.class_fields.get_mut("UBase").unwrap().insert("Controller".into(),"UObject".into());},
             _=>{}
         }
         r
