@@ -1,6 +1,6 @@
 # NPC modding: open work
 
-Updated 2026-09-11. The user sets this order: **heads, objects, voice triggers,
+Updated 2026-09-12. The user sets this order: **heads, objects, voice triggers,
 NPC roles**. Game tests are performed by the user. Complete each focused change,
 then batch offline checks and provide a short game checklist. An untested behavior
 is not automatically a missing CLI capability.
@@ -31,7 +31,7 @@ recorded with that batch. Preparation does not check off the runtime items.
   original overrides. The user confirms the complete 0.1.3 retest passes:
   normal skin, both beard variants, original restoration and full restart.
   This qualifies these two face variants, not arbitrary beard meshes or every
-  head/material combination. Natural-voice testing is next.
+  head/material combination. Natural-voice results are recorded below.
   See the [beard checklist](../../scripts/fixtures/npc-batch-tests/heads/README.md)
   and [0.1.3 runtime result](../../scripts/fixtures/npc-batch-tests/heads/beard-runtime-0.1.3.json).
 - [x] Verify animation alignment, save/load, full restart and absence of duplicate
@@ -97,21 +97,31 @@ routine. GuardWatch is a posture with small gestures, not a patrol test.
 The absence of custom restrictions on an interaction spot does not make its
 surrounding room public; the hut belongs to Digger26_531.
 
-## 3. Natural voice triggers — in progress
+## 3. Natural voice triggers — greeting and everyday speech passed
 
 The 0.1.1 batch setup displayed ready but left Hero and A at the tower's upper
 starting point. Its teleport calls came after `EndConversation`; 0.1.2 moves
-them before the conversation ends, using the tested head-setup order. Retest
-the actual relocation before interpreting silence as a voice-system result.
+them before the conversation ends, using the tested head-setup order. On
+2026-09-12 the user confirms that B and C both greet and independently mumble,
+and B follows his routine path. B also spoke once while walking; the short path
+does not promise a line on every trip. Full-restart confirmation and an explicit
+audible comparison of the two configured profiles remain pending.
 See the [setup correction](../../scripts/fixtures/npc-batch-tests/voice/setup-fix.json).
+The [0.1.2 runtime report](../../scripts/fixtures/npc-batch-tests/voice/runtime-result-0.1.2.json)
+separates the observed behavior from remaining checks.
 
-- [ ] Demonstrate naturally triggered everyday/routine lines on a new NPC.
+- [x] Demonstrate natural greetings and everyday lines on B and fresh C,
+  including one everyday line while B walks his routine.
 - [x] Observe a naturally triggered trespassing warning spoken by invented B.
 - [x] Observe B's natural threat warning with voice and cleanup after the first warning (bare fists).
 - [x] Resolve the stuck warning after lowering fists following the second spoken warning; nearby saving and save/load now pass in0.1.12.
 - [x] Preserve escalation after save/load: raising fists again after loading the second-warning save makes B attack immediately.
 - [x] Demonstrate equipped-sword escalation and B's spoken combat-start line.
-- [ ] Check an additional voice profile and persistence after restart.
+- [ ] Explicitly confirm an audible distinction between B's Diego and C's Lares
+  profiles, and persistence after a full restart without repeating setup.
+- [ ] Investigate two briefly flashing everyday speech bubbles if reproducible.
+  Speaker, wording and whether audio also stopped were not reported. No cause
+  is established; neither vanilla correctness nor a mod defect is assumed.
 
 Current result: existing/new recordings, subtitles, A/Hero speaker changes,
 explicit generic requests, repeat, skip and restart passed. Deliberately invoking
