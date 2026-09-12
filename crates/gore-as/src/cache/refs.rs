@@ -8776,6 +8776,203 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_query_loop_clock(fault: u8) -> Self {
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"UBaseTask","Fixture"),(2,"UDerivedAgent","Fixture"),(3,"AObservedActor",""),
+            (4,"USensor",""),(5,"FGameplayTagContainer",""),(6,"TArray",""),(8,"TArrayConstIterator",""),
+            (9,"UObservedTimes","Fixture"),(10,"FInGameTime",""),(11,"UObject",""),(12,"UBaseAgent",""),(13,"ESense",""),(14,"UDifferentTask","Fixture")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        r.class_super.insert("UDifferentTask".into(),"UBaseTask".into());r.class_super.insert("UDerivedAgent".into(),"UBaseAgent".into());
+        r.class_fields.insert("UBaseTask".into(),HashMap::from([("Agent".into(),"UDerivedAgent".into())]));
+        r.class_fields.insert("UObservedTimes".into(),HashMap::from([("ObservedAt".into(),"FInGameTime".into()),("ResumedAt".into(),"FInGameTime".into())]));
+        let key=|id:i64,offset:i64|(id<<1)|(offset<<33)|1;
+        for (id,offset,name) in [(1,40,"Agent"),(8,16,"CanProceed"),(9,56,"ObservedAt"),(9,64,"ResumedAt")] {
+            r.prop_by_key.insert(key(id,offset),name.into());r.prop_type_id.insert(key(id,offset),id as i32);
+        }
+        let plain=|token|DataType {token,..Default::default()};
+        let value=|type_info|DataType {token:5,type_info,..Default::default()};
+        let handle=|type_info|DataType {is_object_handle:true,..value(type_info)};
+        let input=|type_info|DataType {is_reference:true,is_object_const:true,is_read_only:true,..value(type_info)};
+        r.type_subtypes.insert(6,vec![handle(3)]);
+        for (ptr,owner,name,constant,ret,args) in [
+            (201,"UBaseAgent","GetActor",true,handle(3),vec![]),
+            (202,"AObservedActor","GetSensor",true,handle(4),vec![]),
+            (203,"USensor","FindActors",true,value(6),vec![input(5),input(5),DataType {is_object_const:true,is_read_only:true,..value(13)},plain(0x41),plain(0x50)]),
+            (204,"TArray","Iterator",true,value(8),vec![]),
+            (205,"TArrayConstIterator","Proceed",false,DataType {is_reference:true,is_read_only:true,..handle(3)},vec![]),
+            (206,"FGameplayTagContainer","$beh0",false,plain(0x52),vec![]),
+            (207,"FGameplayTagContainer","$beh2",false,plain(0x52),vec![]),
+            (208,"TArray","$beh2",false,plain(0x52),vec![]),
+            (210,"FInGameTime","opAssign",false,DataType {is_reference:true,..value(10)},vec![input(10)]),
+            (211,"FInGameTime","$beh2",false,plain(0x52),vec![]),
+            (212,"FInGameTime","$beh0",false,plain(0x52),vec![]),
+        ] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);
+            if constant {r.const_method_ptrs.insert(ptr);}r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+        }
+        r.func_by_ptr.insert(209,"Now".into());r.func_ns.insert(209,"FInGameTime".into());r.func_ret.insert(209,value(10));
+        r.func_params.insert(209,vec![DataType {is_object_const:true,..handle(11)}]);r.global_by_ptr.insert(500,"__WorldContext".into());
+        // Template native fields may be absent from PlainFields; typed RDR1 and member identity are the positive witness.
+        match fault {
+            1=>r.func_ret.get_mut(&201).unwrap().is_object_handle=false,
+            2=>{r.const_method_ptrs.remove(&202);},
+            3=>r.func_params.get_mut(&203).unwrap()[0].is_reference=false,
+            4=>r.func_params.get_mut(&203).unwrap()[1].is_object_const=false,
+            5=>r.func_params.get_mut(&203).unwrap()[2].is_read_only=false,
+            6=>r.func_params.get_mut(&203).unwrap()[3].token=0x44,
+            7=>r.func_params.get_mut(&203).unwrap()[4].token=0x51,
+            8=>r.func_ret.get_mut(&203).unwrap().is_reference=true,
+            9=>r.type_subtypes.get_mut(&6).unwrap()[0].is_object_handle=false,
+            10=>r.func_ret.get_mut(&204).unwrap().type_info=6,
+            11=>{r.const_method_ptrs.remove(&204);},
+            12=>r.func_ret.get_mut(&205).unwrap().is_read_only=false,
+            13=>{r.const_method_ptrs.insert(205);},
+            14=>r.func_params.get_mut(&206).unwrap().push(input(5)),
+            15=>{r.const_method_ptrs.insert(207);},
+            16=>r.func_ret.get_mut(&208).unwrap().token=0x44,
+            17=>{r.prop_type_id.insert(key(8,16),6);},
+            18=>{r.prop_type_id.insert(key(1,40),14);},
+            19=>{r.class_fields.get_mut("UBaseTask").unwrap().insert("Agent".into(),"UUnrelated".into());},
+            20=>{r.func_is_method.insert(209);},
+            21=>r.func_params.get_mut(&209).unwrap()[0].is_object_const=false,
+            22=>r.func_ret.get_mut(&209).unwrap().is_reference=true,
+            23=>r.func_params.get_mut(&210).unwrap()[0].is_read_only=false,
+            24=>r.func_ret.get_mut(&210).unwrap().is_reference=false,
+            25=>r.func_params.get_mut(&212).unwrap().push(input(10)),
+            26=>{r.const_method_ptrs.insert(211);},
+            27=>{r.class_fields.get_mut("UObservedTimes").unwrap().insert("ObservedAt".into(),"float".into());},
+            28=>{r.prop_type_id.insert(key(9,64),1);},
+            29=>{r.global_by_ptr.insert(500,"DifferentContext".into());},
+            30=>r.type_identity_by_ptr.get_mut(&5).unwrap().module="Script".into(),
+            31=>r.type_identity_by_ptr.get_mut(&9).unwrap().namespace="Different".into(),
+            32=>{r.duplicate_prop_keys.insert(key(9,56));},
+            33=>r.set_native_api(super::binds::NativeApi::from_test_field_types(&[("TArrayConstIterator","CanProceed","int")],&[],None)),
+            34=>{r.func_ns.insert(209,"Other".into());},
+            35=>r.type_identity_by_ptr.get_mut(&8).unwrap().module="Script".into(),
+            36=>{r.duplicate_prop_keys.insert(key(1,40));},
+            37=>{r.class_fields.insert("UDifferentTask".into(),HashMap::from([("Agent".into(),"UDerivedAgent".into())]));},
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_conditional_query_array(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"UAbility","Fixture"),(2,"AGothicCharacter",""),(3,"UCharacterPerceptionComponent",""),(4,"AGothicCharacterState",""),
+            (5,"ULongTermMemoryComponent",""),(6,"TArray",""),(7,"TArray",""),(8,"AActor",""),(9,"TArrayIterator",""),(10,"FGameplayTag",""),(11,"FGameplayTagContainer",""),(12,"EPerceptionSense","")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32,ptr);r.type_names.insert(name.into());
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        let scalar=|token|DataType {token,..Default::default()};
+        let obj=|type_info,reference:bool,constant:bool,handle:bool|DataType {token:5,type_info,is_reference:reference,is_object_const:constant,
+            is_object_handle:handle,is_read_only:constant && (reference || !handle),..Default::default()};
+        r.type_subtypes.insert(6,vec![obj(2,false,false,true)]);r.type_subtypes.insert(7,vec![obj(8,false,false,true)]);
+        let key=(9i64<<1)|(16i64<<33)|1;r.prop_by_key.insert(key,"CanProceed".into());r.prop_type_id.insert(key,9);
+        for (ptr,name,owner,constant,ret,args) in [
+            (501,"GetPerception","AGothicCharacter",true,obj(3,false,false,true),vec![]),
+            (503,"Query","UCharacterPerceptionComponent",true,obj(6,false,false,false),vec![obj(12,false,false,false),scalar(0x41)]),
+            (505,"Contains","TArray",true,scalar(0x41),vec![obj(2,true,true,true)]),
+            (507,"$beh0","FGameplayTagContainer",false,scalar(0x52),vec![]),
+            (509,"GetState","AGothicCharacter",true,obj(4,false,false,true),vec![]),
+            (511,"GetMemory","AGothicCharacterState",true,obj(5,false,false,true),vec![]),
+            (513,"$beh2","FGameplayTagContainer",false,scalar(0x52),vec![]),
+            (515,"$beh2","TArray",false,scalar(0x52),vec![]),
+            (517,"$beh2","TArray",false,scalar(0x52),vec![]),
+            (519,"Iterator","TArray",false,obj(9,false,false,false),vec![]),
+            (521,"Proceed","TArrayIterator",false,obj(8,true,false,true),vec![]),
+            (901,"RecordAction","",false,scalar(0x52),vec![obj(5,false,false,true),obj(10,true,true,false),obj(4,false,true,true),obj(4,false,true,true),obj(11,true,true,false)])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            if !owner.is_empty() {r.func_is_method.insert(ptr);r.func_owner.insert(ptr,owner.into());}
+            if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        r.funcid_to_ptr.insert(901,901);r.global_by_ptr.insert(1001,"Witnessed".into());r.global_ns.insert(1001,"GameplayTag".into());
+        match fault {
+            1=>r.func_ret.get_mut(&501).unwrap().is_object_const=true,
+            2=>{r.const_method_ptrs.remove(&503);},
+            3=>r.func_ret.get_mut(&503).unwrap().is_reference=true,
+            4=>r.func_params.get_mut(&503).unwrap()[0].is_reference=true,
+            5=>r.func_params.get_mut(&503).unwrap()[1].is_read_only=true,
+            6=>r.type_subtypes.get_mut(&6).unwrap()[0].type_info=8,
+            7=>r.type_subtypes.get_mut(&7).unwrap()[0].is_object_handle=false,
+            8=>r.func_params.get_mut(&505).unwrap()[0].is_read_only=false,
+            9=>r.func_params.get_mut(&505).unwrap()[0].is_reference=false,
+            10=>r.func_params.get_mut(&505).unwrap()[0].if_handle_then_const=true,
+            11=>r.func_params.get_mut(&507).unwrap().push(obj(11,true,true,false)),
+            12=>r.func_ret.get_mut(&509).unwrap().is_object_const=true,
+            13=>{r.func_owner.insert(511,"UCharacterPerceptionComponent".into());},
+            14=>{r.func_is_method.insert(901);},
+            15=>r.func_ret.get_mut(&901).unwrap().token=0x41,
+            16=>r.func_params.get_mut(&901).unwrap()[1].is_read_only=false,
+            17=>r.func_params.get_mut(&901).unwrap()[2].is_object_const=false,
+            18=>r.func_params.get_mut(&901).unwrap()[3].type_info=2,
+            19=>r.func_params.get_mut(&901).unwrap()[4].is_reference=false,
+            20=>{r.const_method_ptrs.insert(513);},
+            21=>{r.func_owner.insert(515,"FGameplayTagContainer".into());},
+            22=>{r.const_method_ptrs.insert(519);},
+            23=>r.func_ret.get_mut(&521).unwrap().is_read_only=true,
+            24=>{r.prop_type_id.insert(key,7);},
+            25=>{r.global_is_string.insert(1001);},
+            26=>{r.global_ns.insert(1001,"Other".into());},
+            _=>{},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_held_map_integer_reference(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(11, "TMap"), (12, "FGameplayTag")] {
+            r.type_by_ptr.insert(ptr, name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        let ty = |token, type_info, constant: bool| DataType { token, type_info, is_reference: true,
+            is_object_const: constant, is_read_only: constant, ..Default::default() };
+        r.func_by_ptr.insert(101, "FindOrAdd".into());
+        r.func_owner.insert(101, "TMap".into());
+        r.func_is_method.insert(101);
+        r.func_ret.insert(101, ty(0x44, 0, false));
+        r.func_params.insert(101, vec![ty(5, 12, true), ty(0x44, 0, true)]);
+        r.type_subtypes.insert(11,vec![DataType {token:5,type_info:12,..Default::default()},DataType {token:0x44,..Default::default()}]);
+        for (ptr,name,ret,args) in [
+            (102,"CurrentTag",ty(5,12,false),vec![]),
+            (103,"FillComparison",DataType {token:0x52,..Default::default()},vec![ty(0x44,0,false)]),
+            (104,"Consume",DataType {token:0x52,..Default::default()},vec![DataType {token:0x44,..Default::default()}]),
+            (105,"HasNext",DataType {token:0x41,..Default::default()},vec![]),
+            (106,"Skip",DataType {token:0x41,..Default::default()},vec![]),
+            (107,"$beh0",DataType {token:0x52,..Default::default()},vec![]),
+            (108,"$beh2",DataType {token:0x52,..Default::default()},vec![]),
+        ] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            if ptr>=107 {r.func_owner.insert(ptr,"TMap".into());r.func_is_method.insert(ptr);}
+        }
+        match fault {
+            1 => r.func_ret.get_mut(&101).unwrap().is_reference = false,
+            2 => r.func_ret.get_mut(&101).unwrap().is_read_only = true,
+            3 => r.func_ret.get_mut(&101).unwrap().is_object_const = true,
+            4 => r.func_ret.get_mut(&101).unwrap().token = 0x50,
+            5 => { r.const_method_ptrs.insert(101); },
+            6 => { r.func_owner.insert(101, "TArray".into()); },
+            7 => r.func_params.get_mut(&101).unwrap()[0].is_read_only = false,
+            8 => r.func_params.get_mut(&101).unwrap()[0].is_reference = false,
+            9 => r.func_params.get_mut(&101).unwrap()[1].is_reference = false,
+            10 => r.func_params.get_mut(&101).unwrap()[1].is_object_const = false,
+            11 => r.func_params.get_mut(&101).unwrap().truncate(1),
+            12 => r.type_identity_by_ptr.get_mut(&11).unwrap().module = "Script".into(),
+            13 => { r.func_by_ptr.insert(101, "Find".into()); },
+            14 => r.type_identity_by_ptr.get_mut(&12).unwrap().name = "FName".into(),
+            15 => r.type_subtypes.get_mut(&11).unwrap()[1].token=0x50,
+            16 => r.type_subtypes.get_mut(&11).unwrap()[0].is_object_handle=true,
+            17 => {r.type_subtypes.remove(&11);},
+            18 => {r.func_is_method.remove(&101);},
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_class_copy_scoped_handle(fault: u8) -> Self {
         let mut r=Self::default();
         for (id,name) in [(1,"TArray"),(2,"TSubclassOf"),(3,"UDefinition"),(4,"FEntry"),(5,"AActorState"),(6,"UObject"),(7,"TArrayIterator"),(8,"FName"),(9,"UHost"),(10,"FPlan"),(11,"FRow")] {

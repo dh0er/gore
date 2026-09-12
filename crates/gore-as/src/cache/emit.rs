@@ -3461,6 +3461,12 @@ fn emit_function_ctor(
         pass_trace("restore_inferred_string_event_argument", &rendered);
         let rendered = restore_copied_navigation_vector_lives(&rendered, f, refs, class_name);
         pass_trace("restore_copied_navigation_vector_lives", &rendered);
+        let rendered = restore_held_map_integer_reference(&rendered, f, refs);
+        pass_trace("restore_held_map_integer_reference", &rendered);
+        let rendered = restore_query_array_across_conditional_action(&rendered, f, refs, class_name);
+        pass_trace("restore_query_array_across_conditional_action", &rendered);
+        let rendered = restore_query_loop_and_clock_temporaries(&rendered, f, refs, class_name);
+        pass_trace("restore_query_loop_and_clock_temporaries", &rendered);
         s.truncate(declarations_at);
         s.push_str(&rendered);
     } else {
@@ -17642,6 +17648,385 @@ fn restore_copied_navigation_vector_lives(body:&str,f:&Func,refs:&RefResolver,cl
         } else {out.push((*line).to_owned());}
     }
     let mut out=out.join("\n");if body.ends_with('\n') {out.push('\n');}out
+}
+
+/// Keep query argument temporaries through a counted loop, and end a clock RVO at its assignment.
+fn restore_query_loop_and_clock_temporaries(body: &str, f: &Func, refs: &RefResolver, class_name: Option<&str>) -> String {
+    if !body.contains(".Iterator();") || !body.contains("for (; local_") || !body.contains(" = FInGameTime::Now();") { return body.to_owned(); }
+    let found = (|| {
+        let class = class_name?;
+        let shape = |t: &super::types::DataType, token, ptr, reference: bool, constant: bool, readonly: bool, handle: bool|
+            t.token == token && t.type_info == ptr && t.is_reference == reference && t.is_object_const == constant
+                && t.is_read_only == readonly && t.is_object_handle == handle && !t.is_auto && !t.if_handle_then_const;
+        let plain = |t: &super::types::DataType, token| shape(t, token, 0, false, false, false, false);
+        let native = |ptr, name| refs.type_identity_by_ptr(ptr).is_some_and(|t| t.name == name && t.module.is_empty() && t.namespace.is_empty());
+        let local = |slot| { let mut found = f.obj_locals.iter().filter(|(s, _)| *s == slot); let ptr = found.next()?.1; found.next().is_none().then_some(ptr) };
+        let scalar = |slot| slot > 0 && !f.obj_locals.iter().any(|(s, _)| *s == slot);
+        let method = |ptr, owner, name, constant| refs.func_owner_by_ptr(ptr) == Some(owner) && refs.func_by_ptr(ptr) == Some(name)
+            && refs.is_method_by_ptr(ptr) && refs.is_const_method_by_ptr(ptr) == constant;
+        let w = |i: &Instr, n| i.words.get(n).map(|v| *v as i16 as i32);
+        let p = |i: &Instr| i.qwords.first().map(|v| *v as i64);
+        let jump = |i: &Instr| i.dwords.first().map(|v| i.offset_dw as i64 + 2 + *v as i32 as i64);
+        let ident = |s: &str| !s.is_empty() && s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_');
+        if !f.params.is_empty() || f.is_const_method() || !plain(&f.ret, 0x52) { return None; }
+        let code = disassemble(&f.bytecode).ok()?;
+        if code.last()?.op.name != "RET" || code.last()?.words != [2] { return None; }
+        let offsets: HashMap<_, _> = code.iter().enumerate().map(|(n, i)| (i.offset_dw as i64, n)).collect();
+        let mut edges = HashMap::new();
+        for (n, i) in code.iter().enumerate() {
+            if i.op.name == "JMPP" { return None; }
+            if i.op.name.starts_with('J') { edges.insert(n, *offsets.get(&jump(i)?)?); }
+        }
+        let uses = |slot, start, end| code.iter().enumerate().take(end).skip(start)
+            .filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&slot)).map(|(n, _)| n).collect::<Vec<_>>();
+        let mut loops = Vec::new();
+        for (at, c) in code.windows(26).enumerate() {
+            let candidate = (|| {
+                if c.iter().map(|i| i.op.name).ne("PSF PshC4 SetV1 PshV4 SetV1 PshV4 PSF CALLSYS PSF PSF CALLSYS PSF PSF PshVPtr ADDSi RDSPtr CALLSYS STOREOBJ PshVPtr CALLSYS STOREOBJ PshVPtr CALLSYS PSF CALLSYS JMP".split_whitespace()) { return None; }
+                let (iterator, first, second, array, subject, query) = (w(&c[0],0)?,w(&c[6],0)?,w(&c[9],0)?,w(&c[12],0)?,w(&c[17],0)?,w(&c[20],0)?);
+                let slots = [iterator, first, second, array, subject, query];
+                if slots.iter().any(|s| *s <= 0) || HashSet::from(slots).len() != slots.len()
+                    || [(8,first),(11,second),(13,0),(18,subject),(21,query),(23,array)].iter().any(|(n,s)|w(&c[*n],0)!=Some(*s))
+                    || [1,2,4].iter().any(|n| c[*n].dwords != [0]) || !scalar(w(&c[2],0)?) || !scalar(w(&c[4],0)?)
+                    || w(&c[2],0) == w(&c[4],0) || w(&c[3],0) != w(&c[2],0) || w(&c[5],0) != w(&c[4],0) { return None; }
+                let (iter_ty, tag_ty, array_ty, subject_ty, query_ty) = (local(iterator)?,local(first)?,local(array)?,local(subject)?,local(query)?);
+                if local(second)? != tag_ty || !native(iter_ty,"TArrayConstIterator") || !native(tag_ty,"FGameplayTagContainer") || !native(array_ty,"TArray") { return None; }
+                let subject_name = &refs.type_identity_by_ptr(subject_ty)?.name;
+                let query_name = &refs.type_identity_by_ptr(query_ty)?.name;
+                if !native(subject_ty,subject_name) || !native(query_ty,query_name) || !ident(subject_name) || !ident(query_name)
+                    || !matches!(refs.type_subtypes(array_ty)?, [t] if shape(t,5,subject_ty,false,false,false,true)) { return None; }
+                let iterator_slots: Vec<_> = f.obj_locals.iter().filter(|(_,t)|*t==iter_ty).map(|(s,_)|*s).collect();
+                if iterator_slots.len()!=2 || iterator_slots.iter().any(|s|*s!=iterator && (*s<=0 || !uses(*s,0,code.len()).is_empty())) { return None; }
+                let (ctor,get_subject,get_query,collect,iterate) = (p(&c[7])?,p(&c[16])?,p(&c[19])?,p(&c[22])?,p(&c[24])?);
+                if p(&c[10])!=Some(ctor) || !method(ctor,"FGameplayTagContainer","$beh0",false) || !plain(refs.func_ret_by_ptr(ctor)?,0x52)
+                    || !refs.func_params_by_ptr(ctor)?.is_empty() || !method(iterate,"TArray","Iterator",true)
+                    || !shape(refs.func_ret_by_ptr(iterate)?,5,iter_ty,false,false,false,false) || !refs.func_params_by_ptr(iterate)?.is_empty() { return None; }
+                let (subject_getter,query_getter,collect_name) = (refs.func_by_ptr(get_subject)?,refs.func_by_ptr(get_query)?,refs.func_by_ptr(collect)?);
+                let subject_owner = refs.func_owner_by_ptr(get_subject)?;
+                if ![subject_getter,query_getter,collect_name,subject_owner].iter().all(|s|ident(s))
+                    || !method(get_subject,subject_owner,subject_getter,true) || !method(get_query,subject_name,query_getter,true)
+                    || !method(collect,query_name,collect_name,true) || !refs.func_params_by_ptr(get_subject)?.is_empty() || !refs.func_params_by_ptr(get_query)?.is_empty()
+                    || !shape(refs.func_ret_by_ptr(get_subject)?,5,subject_ty,false,false,false,true)
+                    || !shape(refs.func_ret_by_ptr(get_query)?,5,query_ty,false,false,false,true)
+                    || !shape(refs.func_ret_by_ptr(collect)?,5,array_ty,false,false,false,false) { return None; }
+                let [a,b,enumeration,flag,distance] = refs.func_params_by_ptr(collect)? else { return None; };
+                let enum_name = &refs.type_identity_by_ptr(enumeration.type_info)?.name;
+                if !shape(a,5,tag_ty,true,true,true,false) || !shape(b,5,tag_ty,true,true,true,false)
+                    || !shape(enumeration,5,enumeration.type_info,false,true,true,false) || !native(enumeration.type_info,enum_name) || !ident(enum_name)
+                    || !plain(flag,0x41) || !plain(distance,0x50) { return None; }
+                let field_id = *c[14].dwords.first()? as i32;
+                let owner = refs.type_identity_by_id(field_id)?;
+                let (field,old) = refs.member_identity(field_id,w(&c[14],0)?)?;
+                if owner.module.is_empty() || !owner.namespace.is_empty() || refs.type_identity_by_id(old)?!=owner || !ident(field)
+                    || !refs.is_subclass(class,&owner.name) || !refs.is_subclass(refs.own_field_type_by_class(&owner.name,field)?,subject_owner) { return None; }
+                let mut current=class; let mut seen=HashSet::new();
+                while current!=owner.name {
+                    if !seen.insert(current) || refs.own_field_type_by_class(current,field).is_some() { return None; }
+                    current=refs.class_super_of(current)?;
+                }
+                let test = *edges.get(&(at+25))?;
+                let tail = code.get(test..test+12)?;
+                if test <= at+31 || tail.iter().map(|i|i.op.name).ne("LoadVObjR RDR1 CpyVtoR1 JLowNZ FreeNullV8 FreeNullV8 PSF CALLSYS PSF CALLSYS PSF CALLSYS".split_whitespace()) { return None; }
+                let iter_id = *tail[0].dwords.first()? as i32;
+                let (property,old) = refs.member_identity(iter_id,w(&tail[0],1)?)?;
+                if refs.type_identity_by_id(iter_id)?!=refs.type_identity_by_ptr(iter_ty)? || refs.type_identity_by_id(old)?!=refs.type_identity_by_ptr(iter_ty)?
+                    || property!="CanProceed" || refs.native_field_value_type("TArrayConstIterator",property).or_else(||refs.native_field_type("TArrayConstIterator",property)).is_some_and(|t|t!="bool")
+                    || w(&tail[0],0)!=Some(iterator) || !scalar(w(&tail[1],0)?) || w(&tail[1],0)!=w(&tail[2],0)
+                    || [(4,subject),(5,query),(6,first),(8,second),(10,array)].iter().any(|(n,s)|w(&tail[*n],0)!=Some(*s))
+                    || edges.get(&(test+3))!=Some(&(at+26)) { return None; }
+                let head = code.get(at+26..at+32)?;
+                let proceed = p(&head[2])?;
+                if head.iter().map(|i|i.op.name).ne("SUSPEND PSF CALLSYS PshRPtr RDSPtr RefCpyV".split_whitespace())
+                    || w(&head[1],0)!=Some(iterator) || local(w(&head[5],0)?)?!=subject_ty
+                    || !method(proceed,"TArrayConstIterator","Proceed",false) || !refs.func_params_by_ptr(proceed)?.is_empty()
+                    || !shape(refs.func_ret_by_ptr(proceed)?,5,subject_ty,true,false,true,true) { return None; }
+                let (tag_dtor,array_dtor) = (p(&tail[7])?,p(&tail[11])?);
+                if p(&tail[9])!=Some(tag_dtor) || ![(tag_dtor,"FGameplayTagContainer"),(array_dtor,"TArray")].iter().all(|(ptr,name)|
+                    method(*ptr,name,"$beh2",false) && refs.func_ret_by_ptr(*ptr).is_some_and(|t|plain(t,0x52)) && refs.func_params_by_ptr(*ptr).is_some_and(|p|p.is_empty())) { return None; }
+                for (slot,expected) in [(iterator,vec![at,at+27,test]),(first,vec![at+6,at+8,test+6]),(second,vec![at+9,at+11,test+8]),(array,vec![at+12,at+23,test+10])] {
+                    if uses(slot,0,code.len())!=expected { return None; }
+                }
+                if uses(subject,at+17,test+5)!=[at+17,at+18,test+4] || uses(query,at+20,test+6)!=[at+20,at+21,test+5] { return None; }
+                // Only the entry jump and backedge enter the test/body. Continues and breaks use the complete cleanup boundary.
+                for (&from,&to) in &edges {
+                    if to>at && to<at+26 { return None; }
+                    if to>=at+26 && to<test && !(from>=at+26 && from<test || from==test+3 && to==at+26) { return None; }
+                    if to>=test && to<test+12 && !(to==test && (from==at+25 || from>=at+26 && from<test) || to==test+4 && from>=at+26 && from<test) { return None; }
+                    if from>=at+26 && from<test && !(to>from && to<=test || to==test+4) { return None; }
+                }
+                if code[at+26..test].iter().any(|i|i.op.name=="RET") { return None; }
+                let expression = format!("this.{field}.{subject_getter}().{query_getter}().{collect_name}(FGameplayTagContainer(), FGameplayTagContainer(), {enum_name}(0), false, 0.0f).Iterator()");
+                Some((at,test+12,iterator,w(&head[5],0)?,expression))
+            })();
+            if let Some(candidate)=candidate { loops.push(candidate); }
+        }
+        let [(_,loop_end,iterator,element,expression)] = loops.as_slice() else { return None; };
+        let mut clocks = Vec::new();
+        for (at,c) in code.windows(17).enumerate().skip(*loop_end) {
+            let candidate = (|| {
+                if c.iter().map(|i|i.op.name).ne("PshGPtr PSF CALLSYS PSF PshVPtr ADDSi CALLSYS PSF CALLSYS PSF CALLSYS PSF PshVPtr ADDSi CALLSYS PSF CALLSYS".split_whitespace()) { return None; }
+                let (time,receiver)=(w(&c[1],0)?,w(&c[4],0)?); let time_ty=local(time)?; let receiver_ty=local(receiver)?;
+                if time<=0 || receiver<=0 || time==receiver || !native(time_ty,"FInGameTime") || f.obj_locals.iter().filter(|(_,t)|*t==time_ty).count()!=1
+                    || [3,7,9,11,15].iter().any(|n|w(&c[*n],0)!=Some(time)) || w(&c[12],0)!=Some(receiver)
+                    || uses(time,0,code.len())!=[at+1,at+3,at+7,at+9,at+11,at+15] { return None; }
+                let (now,assign,dtor,ctor)=(p(&c[2])?,p(&c[6])?,p(&c[8])?,p(&c[10])?);
+                if refs.func_by_ptr(now)!=Some("Now") || refs.func_owner_by_ptr(now).is_some() || refs.is_method_by_ptr(now) || refs.is_const_method_by_ptr(now)
+                    || refs.func_ns_by_ptr(now).is_some_and(|s|!s.is_empty() && s!="FInGameTime") || !shape(refs.func_ret_by_ptr(now)?,5,time_ty,false,false,false,false)
+                    || refs.global_by_ptr(p(&c[0])?)!=Some("__WorldContext") { return None; }
+                let [context]=refs.func_params_by_ptr(now)? else {return None;};
+                if !native(context.type_info,"UObject") || !shape(context,5,context.type_info,false,true,false,true)
+                    || !method(assign,"FInGameTime","opAssign",false) || !shape(refs.func_ret_by_ptr(assign)?,5,time_ty,true,false,false,false)
+                    || !matches!(refs.func_params_by_ptr(assign)?,[t] if shape(t,5,time_ty,true,true,true,false))
+                    || p(&c[14])!=Some(assign) || p(&c[16])!=Some(dtor)
+                    || ![(ctor,"$beh0"),(dtor,"$beh2")].iter().all(|(ptr,name)|method(*ptr,"FInGameTime",name,false)
+                        && refs.func_ret_by_ptr(*ptr).is_some_and(|t|plain(t,0x52)) && refs.func_params_by_ptr(*ptr).is_some_and(|p|p.is_empty())) { return None; }
+                let owner=refs.type_identity_by_ptr(receiver_ty)?;
+                if owner.module.is_empty() || !owner.namespace.is_empty() || !ident(&owner.name) { return None; }
+                let mut fields=Vec::new();
+                for n in [5,13] {
+                    let id=*c[n].dwords.first()? as i32; let (field,old)=refs.member_identity(id,w(&c[n],0)?)?;
+                    if refs.type_identity_by_id(id)?!=owner || refs.type_identity_by_id(old)?!=owner || !ident(field)
+                        || refs.own_field_type_by_class(&owner.name,field)!=Some("FInGameTime") { return None; }
+                    fields.push(field.to_owned());
+                }
+                if fields[0]==fields[1] || edges.iter().any(|(_,to)|*to>at && *to<at+17) { return None; }
+                Some((time,receiver,owner.name.clone(),fields))
+            })();
+            if let Some(candidate)=candidate { clocks.push(candidate); }
+        }
+        let [(time,receiver,receiver_type,fields)] = clocks.as_slice() else { return None; };
+        let lines:Vec<_>=body.lines().collect(); let mut paths=Vec::new(); let mut path=Vec::new(); let mut ends=HashMap::new();
+        for (at,line) in lines.iter().enumerate() {
+            paths.push(path.clone());
+            match line.trim() { "{"=>path.push(at), "}"=>{let start=path.pop()?;ends.insert(start,at);}, _=>if brace_net(line)!=0 {return None;} }
+        }
+        if !path.is_empty() { return None; }
+        let names = |slot| body.split(|c:char|!c.is_ascii_alphanumeric() && c!='_').filter(|n|slot_and_life_any(n).is_some_and(|(s,_)|s==slot)).collect::<HashSet<_>>();
+        let one_name = |slot| { let found=names(slot); (found.len()==1).then(||found.into_iter().next().unwrap()) };
+        let (iterator_name,element_name,time_name,receiver_name)=(one_name(*iterator)?,one_name(*element)?,one_name(*time)?,one_name(*receiver)?);
+        let declarations = |name: &str| lines.iter().enumerate().filter_map(|(at,line)|
+            declaration_with_initializer(line).map(|(_,n,_)|n).or_else(||bare_declaration(line).map(|(_,n)|n)).filter(|n|n==name).map(|_|at)).collect::<Vec<_>>();
+        let iterator_decls=declarations(iterator_name); let [decl]=iterator_decls.as_slice() else {return None;}; let decl=*decl;
+        if lines[decl].trim()!=format!("auto {iterator_name} = {expression};") || !paths[decl].is_empty() || count_ident(body,iterator_name)!=3
+            || lines.get(decl+1)?.trim()!=format!("for (; {iterator_name}.CanProceed;)") || lines.get(decl+2)?.trim()!="{"
+            || lines.get(decl+3)?.trim()!=format!("{element_name} = {iterator_name}.Proceed();") { return None; }
+        let loop_close=*ends.get(&(decl+2))?;
+        if lines.iter().enumerate().any(|(at,l)|at>loop_close && count_ident(l,iterator_name)>0) { return None; }
+        let time_decls=declarations(time_name); let [time_decl]=time_decls.as_slice() else {return None;}; let time_decl=*time_decl;
+        let receiver_decls=declarations(receiver_name); let [receiver_decl]=receiver_decls.as_slice() else {return None;}; let receiver_decl=*receiver_decl;
+        if time_decl<=loop_close || paths[time_decl].len()!=1 || receiver_decl<=loop_close || receiver_decl>=time_decl || paths[receiver_decl]!=paths[time_decl]
+            || !lines[receiver_decl].trim_start().starts_with(&format!("{receiver_type} {receiver_name} = "))
+            || lines[time_decl].trim()!=format!("FInGameTime {time_name} = FInGameTime::Now();") || count_ident(body,time_name)!=2
+            || lines.get(time_decl+1)?.trim()!=format!("{receiver_name}.{} = {time_name};",fields[0])
+            || lines.get(time_decl+2)?.trim()!=format!("{receiver_name}.{} = FInGameTime();",fields[1])
+            || paths[time_decl+1]!=paths[time_decl] || paths[time_decl+2]!=paths[time_decl]
+            || indent_of(lines[decl])!=indent_of(lines[decl+1]) || indent_of(lines[time_decl])!=indent_of(lines[time_decl+1]) || indent_of(lines[time_decl])!=indent_of(lines[time_decl+2]) { return None; }
+        Some((decl,time_decl,format!("{}for (auto {iterator_name} = {expression}; {iterator_name}.CanProceed;)",indent_of(lines[decl])),
+            format!("{}{receiver_name}.{} = FInGameTime::Now();",indent_of(lines[time_decl]),fields[0])))
+    })();
+    let Some((decl,time_decl,header,assignment))=found else { return body.to_owned(); };
+    let mut lines:Vec<_>=body.lines().map(str::to_owned).collect();
+    lines[time_decl+1]=assignment; lines.remove(time_decl); lines[decl+1]=header; lines.remove(decl);
+    lines.join("\n")+if body.ends_with('\n') {"\n"} else {""}
+}
+
+/// Keep a native query array alive across its conditional script action until the loop-body cleanup.
+fn restore_query_array_across_conditional_action(body:&str,f:&Func,refs:&RefResolver,class_name:Option<&str>)->String {
+    if class_name.is_none() || !body.contains(".Contains(") {return body.to_owned();}
+    let shape=|t:&super::types::DataType,token,ptr,reference:bool,constant:bool,handle:bool|t.token==token && t.type_info==ptr
+        && t.is_reference==reference && t.is_object_const==constant && t.is_object_handle==handle
+        && t.is_read_only==(constant && (reference || !handle)) && !t.is_auto && !t.if_handle_then_const;
+    let native=|ptr,name|refs.type_identity_by_ptr(ptr).is_some_and(|t|t.name==name && t.module.is_empty() && t.namespace.is_empty());
+    let [subject,other]=f.params.as_slice() else {return body.to_owned();};
+    if f.is_const_method() || !shape(&f.ret,0x52,0,false,false,false) || subject.name.is_empty() || other.name.is_empty()
+        || subject.name==other.name || !native(subject.ty.type_info,"AGothicCharacter")
+        || [subject,other].iter().any(|p|p.flags!=0 || !shape(&p.ty,5,subject.ty.type_info,false,false,true)) {return body.to_owned();}
+    let offsets=super::model::param_slot_map(&[subject.ty.clone(),other.ty.clone()],true,false,Some(refs));
+    let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    let w=|i:&Instr,n:usize|i.words.get(n).map(|v|*v as i16 as i32);
+    let p=|i:&Instr|i.qwords.first().map(|v|*v as i64);
+    let jump=|i:&Instr|i.dwords.first().map(|v|i.offset_dw as i64+2+*v as i32 as i64);
+    let local=|slot| {let t:Vec<_>=f.obj_locals.iter().filter(|(s,_)|*s==slot).map(|(_,t)|*t).collect();(t.len()==1).then(||t[0])};
+    let ops=|c:&[Instr],names:&str|c.iter().map(|i|i.op.name).eq(names.split_whitespace());
+    let names="SetV1 PshV4 SetV1 PshV4 PSF PshVPtr CALLSYS STOREOBJ PshVPtr CALLSYS PSF PSF CALLSYS JLowZ PSF CALLSYS PSF PshVPtr PshVPtr CALLSYS STOREOBJ PshVPtr PshGPtr PshVPtr CALLSYS STOREOBJ PshVPtr CALLSYS STOREOBJ PshVPtr CALL PSF CALLSYS PSF CALLSYS FreeNullV8 FreeNullV8 LoadVObjR RDR1 CpyVtoR1 JLowNZ PSF CALLSYS RET";
+    let found:Vec<_>=code.windows(44).enumerate().filter(|(_,c)|ops(c,names)).map(|(i,_)|i).collect();
+    let [at]=found.as_slice() else {return body.to_owned();};let at=*at;let c=&code[at..at+44];
+    let found=(|| {
+        if at+44!=code.len() {return None;}
+        let (flag,mode,array,actor,perception,instigator,victim,state,memory,tags,loop_actor,iterator,flow,outer)=(w(&c[0],0)?,w(&c[2],0)?,w(&c[4],0)?,w(&c[5],0)?,w(&c[7],0)?,w(&c[17],0)?,w(&c[20],0)?,w(&c[25],0)?,w(&c[28],0)?,w(&c[14],0)?,w(&c[36],0)?,w(&c[37],0)?,w(&c[38],0)?,w(&c[41],0)?);
+        let slots=[flag,mode,array,actor,perception,instigator,victim,state,memory,tags,loop_actor,iterator,flow,outer];
+        if slots.iter().any(|s|*s<=0) || HashSet::from(slots).len()!=slots.len() || offsets.get(&w(&c[10],0)?)!=Some(&0) || w(&c[43],0)!=Some(6)
+            || c[0].dwords.as_slice()!=[0] || c[2].dwords.first().is_none_or(|v|*v>255) {return None;}
+        for (indices,slot) in [(&[0usize,1][..],flag),(&[2,3],mode),(&[4,11,33],array),(&[5,18,23,35],actor),(&[7,8],perception),(&[17],instigator),(&[20,21],victim),(&[25,26],state),(&[28,29],memory),(&[14,16,31],tags),(&[36],loop_actor),(&[37],iterator),(&[38,39],flow),(&[41],outer)] {
+            if indices.iter().any(|i|w(&c[*i],0)!=Some(slot)) {return None;}
+        }
+        let (array_ty,actor_ty,perception_ty,state_ty,memory_ty,tags_ty,loop_actor_ty,iterator_ty,outer_ty)=(local(array)?,local(actor)?,local(perception)?,local(state)?,local(memory)?,local(tags)?,local(loop_actor)?,local(iterator)?,local(outer)?);
+        if actor_ty!=subject.ty.type_info || !native(array_ty,"TArray") || !native(perception_ty,"UCharacterPerceptionComponent")
+            || !native(state_ty,"AGothicCharacterState") || !native(memory_ty,"ULongTermMemoryComponent") || !native(tags_ty,"FGameplayTagContainer")
+            || !native(loop_actor_ty,"AActor") || !native(iterator_ty,"TArrayIterator") || !native(outer_ty,"TArray") || array_ty==outer_ty
+            || local(instigator)!=Some(state_ty) || local(victim)!=Some(state_ty) || [flag,mode,flow].iter().any(|s|local(*s).is_some())
+            || !matches!(refs.type_subtypes(array_ty)?,[t] if shape(t,5,actor_ty,false,false,true))
+            || !matches!(refs.type_subtypes(outer_ty)?,[t] if shape(t,5,loop_actor_ty,false,false,true)) {return None;}
+        if jump(&c[13])!=Some(c[33].offset_dw as i64) {return None;}
+        let target=jump(&c[40])?;let entry=code.iter().position(|i|i.offset_dw as i64==target)?;
+        if entry<4 || entry+6>at {return None;}
+        let head=&code[entry-4..entry+6];
+        if !ops(head,"PSF PSF CALLSYS JMP SUSPEND PSF CALLSYS PshRPtr RDSPtr RefCpyV")
+            || w(&head[0],0)!=Some(iterator) || w(&head[1],0)!=Some(outer) || w(&head[5],0)!=Some(iterator)
+            || w(&head[9],0)!=Some(loop_actor) || jump(&head[3])!=Some(c[37].offset_dw as i64) {return None;}
+        if code.iter().enumerate().any(|(n,i)|i.op.name=="JMPP" || (i.op.name.starts_with('J') && !(at..at+44).contains(&n)
+            && jump(i).is_some_and(|t|t>c[0].offset_dw as i64 && t<c[43].offset_dw as i64 && t!=c[37].offset_dw as i64))) {return None;}
+        for (slot,expected) in [(array,&[4usize,11,33][..]),(tags,&[14,16,31])] {
+            if !code.iter().enumerate().filter(|(_,i)|super::bytediff::addressed_slots(i).contains(&slot)).map(|(n,_)|n).eq(expected.iter().map(|i|at+i)) {return None;}
+        }
+        let id=*c[37].dwords.first()? as i32;let (can_proceed,old)=refs.member_identity(id,w(&c[37],1)?)?;
+        if can_proceed!="CanProceed" || refs.type_identity_by_id(id)?!=refs.type_identity_by_ptr(iterator_ty)? || refs.type_identity_by_id(old)?!=refs.type_identity_by_ptr(iterator_ty)? {return None;}
+        let (get_perception,query,contains,ctor,get_state,get_memory,dtor,array_dtor,outer_dtor,make_iterator,proceed)=(p(&c[6])?,p(&c[9])?,p(&c[12])?,p(&c[15])?,p(&c[19])?,p(&c[27])?,p(&c[32])?,p(&c[34])?,p(&c[42])?,p(&head[2])?,p(&head[6])?);
+        if p(&c[24])!=Some(get_state) {return None;}
+        let method=|ptr,owner:&str,constant|refs.is_method_by_ptr(ptr) && refs.is_const_method_by_ptr(ptr)==constant && refs.func_owner_by_ptr(ptr)==Some(owner);
+        for (ptr,owner,ret) in [(get_perception,"AGothicCharacter",perception_ty),(get_state,"AGothicCharacter",state_ty),(get_memory,"AGothicCharacterState",memory_ty)] {
+            if !method(ptr,owner,true) || !refs.func_params_by_ptr(ptr)?.is_empty() || !shape(refs.func_ret_by_ptr(ptr)?,5,ret,false,false,true) {return None;}
+        }
+        let [sense,option]=refs.func_params_by_ptr(query)? else {return None;};let sense_identity=refs.type_identity_by_ptr(sense.type_info)?;
+        if !method(query,"UCharacterPerceptionComponent",true) || !shape(refs.func_ret_by_ptr(query)?,5,array_ty,false,false,false)
+            || !native(sense.type_info,"EPerceptionSense") || !shape(sense,5,sense.type_info,false,false,false) || !shape(option,0x41,0,false,false,false)
+            || !method(contains,"TArray",true) || refs.func_by_ptr(contains)!=Some("Contains") || !shape(refs.func_ret_by_ptr(contains)?,0x41,0,false,false,false)
+            || !matches!(refs.func_params_by_ptr(contains)?,[t] if shape(t,5,actor_ty,true,true,true)) {return None;}
+        for (ptr,owner,name) in [(ctor,"FGameplayTagContainer","$beh0"),(dtor,"FGameplayTagContainer","$beh2"),(array_dtor,"TArray","$beh2"),(outer_dtor,"TArray","$beh2")] {
+            if !method(ptr,owner,false) || refs.func_by_ptr(ptr)!=Some(name) || !refs.func_params_by_ptr(ptr)?.is_empty() || !shape(refs.func_ret_by_ptr(ptr)?,0x52,0,false,false,false) {return None;}
+        }
+        if !method(make_iterator,"TArray",false) || refs.func_by_ptr(make_iterator)!=Some("Iterator") || !refs.func_params_by_ptr(make_iterator)?.is_empty()
+            || !shape(refs.func_ret_by_ptr(make_iterator)?,5,iterator_ty,false,false,false) || !method(proceed,"TArrayIterator",false)
+            || refs.func_by_ptr(proceed)!=Some("Proceed") || !refs.func_params_by_ptr(proceed)?.is_empty() || !shape(refs.func_ret_by_ptr(proceed)?,5,loop_actor_ty,true,false,true) {return None;}
+        let action=*c[30].dwords.first()? as i32;let [memory_arg,tag_arg,victim_arg,instigator_arg,tags_arg]=refs.func_params_by_id(action)? else {return None;};
+        if refs.is_method_by_id(action) || !shape(refs.func_ret_by_id(action)?,0x52,0,false,false,false)
+            || !shape(memory_arg,5,memory_ty,false,false,true) || !native(tag_arg.type_info,"FGameplayTag") || !shape(tag_arg,5,tag_arg.type_info,true,true,false)
+            || ![victim_arg,instigator_arg].iter().all(|t|shape(t,5,state_ty,false,true,true)) || !shape(tags_arg,5,tags_ty,true,true,false) {return None;}
+        let global=p(&c[22])?;let ns=refs.global_ns(global)?;if ns.is_empty() || refs.global_is_string(global) {return None;}
+        Some((slots,refs.func_by_ptr(get_perception)?,refs.func_by_ptr(query)?,refs.func_by_ptr(get_state)?,refs.func_by_ptr(get_memory)?,refs.func_by_id(action)?,
+            format!("{ns}::{}",refs.global_by_ptr(global)?),sense_identity.name.as_str(),c[2].dwords[0]))
+    })();
+    let Some((s,get_perception,query,get_state,get_memory,action,tag,sense,sense_value))=found else {return body.to_owned();};
+    let [_,_,array,actor,_,instigator,_,_,_,_,loop_actor,_,_,outer]=s.map(|slot|format!("local_{slot}"));
+    if count_ident(body,&array)!=0 {return body.to_owned();}
+    let expression=format!("{actor}.{get_perception}().{query}({sense}({sense_value}), false)");
+    let condition=format!("if ({expression}.Contains({}))",subject.name);
+    let expected=[condition,"{".into(),format!("    ::{action}({actor}.{get_state}().{get_memory}(), {tag}, {actor}.{get_state}(), {instigator}, FGameplayTagContainer());"),"}".into()];
+    let lines:Vec<_>=body.lines().collect();let rows:Vec<_>=lines.windows(4).enumerate().filter(|(_,c)| {
+        let pad=indent_of(c[0]);c.iter().zip(&expected).all(|(l,e)|*l==format!("{pad}{e}"))
+    }).map(|(n,_)|n).collect();let [row]=rows.as_slice() else {return body.to_owned();};let row=*row;
+    let headers:Vec<_>=lines.iter().enumerate().filter(|(_,l)|l.trim()==format!("for (auto {loop_actor} : {outer})")).map(|(n,_)|n).collect();
+    let [header]=headers.as_slice() else {return body.to_owned();};let header=*header;let loop_pad=indent_of(lines[header]);let pad=indent_of(lines[row]);
+    if header+2>row || lines.get(header+1)!=Some(&format!("{loop_pad}{{").as_str()) || pad!=format!("{loop_pad}    ")
+        || lines.get(row+4)!=Some(&format!("{loop_pad}}}").as_str()) {return body.to_owned();}
+    let mut depth=0;if !lines[header+1..row].iter().all(|l|{depth+=brace_net(l);depth>=1}) || depth!=1 {return body.to_owned();}
+    let mut out=Vec::new();for (n,line) in lines.iter().enumerate() {
+        if n==row {out.push(format!("{pad}auto {array} = {expression};"));out.push(format!("{pad}if ({array}.Contains({}))",subject.name));}
+        else {out.push((*line).to_owned());}
+    }
+    let mut out=out.join("\n");if body.ends_with('\n') {out.push('\n');}out
+}
+
+/// Preserve a mutable native integer reference that is incremented and subsequently read again.
+fn restore_held_map_integer_reference(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if !body.contains(".FindOrAdd(") { return body.to_owned(); }
+    let shape = |t: &super::types::DataType, token, ptr, reference: bool, constant: bool| {
+        t.token == token && t.type_info == ptr && t.is_reference == reference
+            && t.is_object_const == constant && t.is_read_only == constant
+            && !t.is_object_handle && !t.is_auto && !t.if_handle_then_const
+    };
+    let native = |ptr, name| refs.type_identity_by_ptr(ptr).is_some_and(|t|
+        t.name == name && t.module.is_empty() && t.namespace.is_empty());
+    let Ok(code) = disassemble(&f.bytecode) else { return body.to_owned(); };
+    let w = |i: &Instr, n| i.words.get(n).map(|v| *v as i16 as i32);
+    let jump = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+    let local = |slot| {
+        let types: Vec<_> = f.obj_locals.iter().filter(|(s, _)| *s == slot).map(|(_, t)| *t).collect();
+        (types.len() == 1).then(|| types[0])
+    };
+    let producers: Vec<_> = code.windows(9).enumerate().filter(|(_, c)|
+        c.iter().map(|i| i.op.name).eq("SetV4 PSF PshVPtr PSF CALLSYS CpyRtoV8 PshVPtr PopRPtr INCi".split_whitespace())
+    ).map(|(i, _)| i).collect();
+    let [at] = producers.as_slice() else { return body.to_owned(); };
+    let at = *at;
+    let a = &code[at..at + 9];
+    let found = (|| {
+        let (default, key, map, reference) = (w(&a[0], 0)?, w(&a[2], 0)?, w(&a[3], 0)?, w(&a[5], 0)?);
+        if a[0].dwords.as_slice() != [0] || w(&a[1], 0) != Some(default) || w(&a[6], 0) != Some(reference) { return None; }
+        let reads: Vec<_> = code.windows(6).enumerate().filter(|(_, c)|
+            c.iter().map(|i| i.op.name).eq("PshVPtr PopRPtr RDR4 CMPi JS JMP".split_whitespace())
+                && w(&c[0], 0) == Some(reference)
+        ).map(|(i, _)| i).collect();
+        let [read_at] = reads.as_slice() else { return None; };
+        let read_at = *read_at;
+        if read_at < at + 9 { return None; }
+        let b = &code[read_at..read_at + 6];
+        let (value, comparison) = (w(&b[2], 0)?, w(&b[3], 0)?);
+        let slots = [default, key, map, reference, value, comparison];
+        if slots.iter().any(|s| *s <= 0) || HashSet::from(slots).len() != slots.len()
+            || w(&b[3], 1) != Some(value) || !native(local(map)?, "TMap")
+            || [default, reference, value, comparison].iter().any(|s| f.obj_locals.iter().any(|(slot,_)|slot==s)) { return None; }
+        let uses: Vec<_> = code.iter().enumerate().filter(|(_, i)|
+            super::bytediff::addressed_slots(i).contains(&reference)).map(|(i, _)| i).collect();
+        if uses != [at + 5, at + 6, read_at] { return None; }
+        let offsets: HashMap<_,_> = code.iter().enumerate().map(|(n,i)|(i.offset_dw as i64,n)).collect();
+        for (from,i) in code.iter().enumerate() {
+            if i.op.name=="JMPP" {return None;}
+            if !i.op.name.starts_with('J') {continue;}
+            let target=*offsets.get(&jump(i)?)?;
+            if target>at && target<at+9 || target>read_at && target<read_at+6
+                || target>=at+9 && target<=read_at && !(from>=at && from<read_at) {return None;}
+        }
+        if *offsets.get(&jump(&b[4])?)?!=read_at+6 || *offsets.get(&jump(&b[5])?)?<=read_at+6 {return None;}
+        let callee = *a[4].qwords.first()? as i64;
+        if !refs.is_method_by_ptr(callee) || refs.is_const_method_by_ptr(callee)
+            || refs.func_owner_by_ptr(callee) != Some("TMap") || refs.func_by_ptr(callee) != Some("FindOrAdd")
+            || !shape(refs.func_ret_by_ptr(callee)?, 0x44, 0, true, false) { return None; }
+        let [key_type, default_type] = refs.func_params_by_ptr(callee)? else { return None; };
+        if !native(key_type.type_info, "FGameplayTag") || !shape(key_type, 5, key_type.type_info, true, true)
+            || !shape(default_type, 0x44, 0, true, true) { return None; }
+        if !matches!(refs.type_subtypes(local(map)?)?, [k,v] if shape(k,5,key_type.type_info,false,false) && shape(v,0x44,0,false,false)) {return None;}
+        Some((key, map, reference, comparison))
+    })();
+    let Some((key, map, reference, comparison)) = found else { return body.to_owned(); };
+    let one_name=|slot| {
+        let names:HashSet<_>=body.split(|c:char|!c.is_ascii_alphanumeric() && c!='_').filter(|name|
+            slot_and_life_any(name).is_some_and(|(s,_)|s==slot)).collect();
+        (names.len()==1).then(||names.into_iter().next().unwrap())
+    };
+    let (Some(key),Some(map),Some(reference),Some(comparison))=(one_name(key),one_name(map),one_name(reference),one_name(comparison)) else {return body.to_owned();};
+    if count_ident(body, &reference) != 3 { return body.to_owned(); }
+    let declaration = format!("int {reference} = {map}.FindOrAdd({key}, 0);");
+    let increment = format!("++{reference};");
+    let comparison_line = format!("if ({comparison} >= int({reference}))");
+    let map_declaration = format!("TMap<FGameplayTag, int> {map};");
+    let lines: Vec<_> = body.lines().collect();
+    let unique = |text: &str| {
+        let positions: Vec<_> = lines.iter().enumerate().filter(|(_, line)| line.trim() == text).map(|(i, _)| i).collect();
+        (positions.len() == 1).then(|| positions[0])
+    };
+    let (Some(decl), Some(cmp), Some(map_decl)) = (unique(&declaration), unique(&comparison_line), unique(&map_declaration)) else { return body.to_owned(); };
+    if map_decl >= decl || cmp <= decl + 1 || lines.get(decl + 1).is_none_or(|line| line.trim() != increment)
+        || indent_of(lines[decl]) != indent_of(lines[cmp]) { return body.to_owned(); }
+    let mut path=Vec::new();let mut paths=Vec::new();
+    for (at,line) in lines.iter().enumerate() {
+        paths.push(path.clone());
+        match line.trim() {
+            "{"=>path.push(at),
+            "}"=>if path.pop().is_none() {return body.to_owned();},
+            _=>if brace_net(line)!=0 {return body.to_owned();},
+        }
+    }
+    if !path.is_empty() || paths[decl]!=paths[cmp] || !paths[decl].starts_with(&paths[map_decl]) {return body.to_owned();}
+    for name in [map,reference] {
+        if lines.iter().filter_map(|line|declaration_with_initializer(line).map(|(_,n,_)|n)
+            .or_else(||bare_declaration(line).map(|(_,n)|n))).filter(|n|n==name).count()!=1 {return body.to_owned();}
+    }
+    let mut out: Vec<String> = lines.iter().map(|line| (*line).to_owned()).collect();
+    out[decl] = format!("{}{}", indent_of(lines[decl]), declaration.replacen("int ", "int& ", 1));
+    let mut out = out.join("\n");
+    if body.ends_with('\n') { out.push('\n'); }
+    out
 }
 
 /// Keep the native class-value copy and the per-iteration fallback handle in their original scopes.
@@ -59557,6 +59942,1129 @@ mod literal_value_lifetime_tests {
             source.replace("        if (this.RequirePath", "        {\n        if (this.RequirePath"),
             format!("    {{\n{source}    }}\n")]
         {assert_eq!(fold(&s,&f,&refs),s,"atomic source/scope witness");}
+    }
+
+    fn query_loop_clock_fixture(bias:u16)->Func {
+        // Complete original topology includes earlier/later reused handles and both loop exits.
+        let mut f=function(&[
+            ("SetV1",&[1]), // 0
+            ("PshV4",&[1]), // 1
+            ("PshVPtr",&[0]), // 2
+            ("CALLSYS",&[]), // 3
+            ("PshVPtr",&[0]), // 4
+            ("CALL",&[]), // 5
+            ("PshVPtr",&[0]), // 6
+            ("ADDSi",&[40]), // 7
+            ("RDSPtr",&[]), // 8
+            ("CALLSYS",&[]), // 9
+            ("STOREOBJ",&[4]), // 10
+            ("PshVPtr",&[4]), // 11
+            ("CALL",&[]), // 12
+            ("JLowZ",&[]), // 13
+            ("SetV1",&[5]), // 14
+            ("JMP",&[]), // 15
+            ("PshVPtr",&[0]), // 16
+            ("ADDSi",&[40]), // 17
+            ("RDSPtr",&[]), // 18
+            ("CALLSYS",&[]), // 19
+            ("STOREOBJ",&[4]), // 20
+            ("PshVPtr",&[4]), // 21
+            ("CALL",&[]), // 22
+            ("CpyRtoV4",&[6]), // 23
+            ("CpyVtoV4",&[5, 6]), // 24
+            ("CpyVtoR1",&[5]), // 25
+            ("JLowZ",&[]), // 26
+            ("PSF",&[50]), // 27
+            ("CALLSYS",&[]), // 28
+            ("PSF",&[50]), // 29
+            ("PshGPtr",&[]), // 30
+            ("PshVPtr",&[0]), // 31
+            ("ADDSi",&[40]), // 32
+            ("RDSPtr",&[]), // 33
+            ("CALLSYS",&[]), // 34
+            ("STOREOBJ",&[4]), // 35
+            ("PshVPtr",&[4]), // 36
+            ("CALLSYS",&[]), // 37
+            ("PSF",&[50]), // 38
+            ("CALLSYS",&[]), // 39
+            ("PshVPtr",&[0]), // 40
+            ("CALLINTF",&[]), // 41
+            ("PshVPtr",&[0]), // 42
+            ("CALLINTF",&[]), // 43
+            ("PshVPtr",&[0]), // 44
+            ("CALLINTF",&[]), // 45
+            ("PSF",&[82]), // 46
+            ("PshC4",&[]), // 47
+            ("SetV1",&[5]), // 48
+            ("PshV4",&[5]), // 49
+            ("SetV1",&[72]), // 50
+            ("PshV4",&[72]), // 51
+            ("PSF",&[62]), // 52
+            ("CALLSYS",&[]), // 53
+            ("PSF",&[62]), // 54
+            ("PSF",&[70]), // 55
+            ("CALLSYS",&[]), // 56
+            ("PSF",&[70]), // 57
+            ("PSF",&[76]), // 58
+            ("PshVPtr",&[0]), // 59
+            ("ADDSi",&[40]), // 60
+            ("RDSPtr",&[]), // 61
+            ("CALLSYS",&[]), // 62
+            ("STOREOBJ",&[4]), // 63
+            ("PshVPtr",&[4]), // 64
+            ("CALLSYS",&[]), // 65
+            ("STOREOBJ",&[54]), // 66
+            ("PshVPtr",&[54]), // 67
+            ("CALLSYS",&[]), // 68
+            ("PSF",&[76]), // 69
+            ("CALLSYS",&[]), // 70
+            ("JMP",&[]), // 71
+            ("SUSPEND",&[]), // 72
+            ("PSF",&[82]), // 73
+            ("CALLSYS",&[]), // 74
+            ("PshRPtr",&[]), // 75
+            ("RDSPtr",&[]), // 76
+            ("RefCpyV",&[90]), // 77
+            ("PshVPtr",&[0]), // 78
+            ("ADDSi",&[40]), // 79
+            ("RDSPtr",&[]), // 80
+            ("CALLSYS",&[]), // 81
+            ("STOREOBJ",&[94]), // 82
+            ("PshVPtr",&[94]), // 83
+            ("PshVPtr",&[90]), // 84
+            ("CALLSYS",&[]), // 85
+            ("STOREOBJ",&[92]), // 86
+            ("PshVPtr",&[92]), // 87
+            ("CALL",&[]), // 88
+            ("CpyRtoV4",&[6]), // 89
+            ("NOT",&[6]), // 90
+            ("CpyVtoR1",&[6]), // 91
+            ("JLowZ",&[]), // 92
+            ("FreeNullV8",&[90]), // 93
+            ("JMP",&[]), // 94
+            ("PshVPtr",&[90]), // 95
+            ("CALL",&[]), // 96
+            ("CpyRtoV4",&[6]), // 97
+            ("NOT",&[6]), // 98
+            ("CpyVtoR1",&[6]), // 99
+            ("JLowNZ",&[]), // 100
+            ("SetV4",&[6]), // 101
+            ("JMP",&[]), // 102
+            ("PSF",&[120]), // 103
+            ("PshGPtr",&[]), // 104
+            ("PshC4",&[]), // 105
+            ("PshGPtr",&[]), // 106
+            ("PshVPtr",&[90]), // 107
+            ("PshGPtr",&[]), // 108
+            ("PSF",&[114]), // 109
+            ("PshVPtr",&[0]), // 110
+            ("CALLSYS",&[]), // 111
+            ("STOREOBJ",&[96]), // 112
+            ("PshVPtr",&[96]), // 113
+            ("CALLSYS",&[]), // 114
+            ("STOREOBJ",&[98]), // 115
+            ("PshVPtr",&[98]), // 116
+            ("CALLSYS",&[]), // 117
+            ("PshRPtr",&[]), // 118
+            ("CALLSYS",&[]), // 119
+            ("PSF",&[114]), // 120
+            ("CALLSYS",&[]), // 121
+            ("PshRPtr",&[]), // 122
+            ("CALLSYS",&[]), // 123
+            ("PshRPtr",&[]), // 124
+            ("CALLSYS",&[]), // 125
+            ("PshRPtr",&[]), // 126
+            ("CALLSYS",&[]), // 127
+            ("PSF",&[114]), // 128
+            ("CALLSYS",&[]), // 129
+            ("PSF",&[120]), // 130
+            ("CALLSYS",&[]), // 131
+            ("CpyRtoV4",&[121]), // 132
+            ("PSF",&[120]), // 133
+            ("CALLSYS",&[]), // 134
+            ("CpyVtoV4",&[6, 121]), // 135
+            ("CpyVtoR1",&[6]), // 136
+            ("JLowZ",&[]), // 137
+            ("FreeNullV8",&[90]), // 138
+            ("JMP",&[]), // 139
+            ("PshVPtr",&[90]), // 140
+            ("RefCpyV",&[52]), // 141
+            ("FreeNullV8",&[90]), // 142
+            ("JMP",&[]), // 143
+            ("LoadVObjR",&[82, 16]), // 144
+            ("RDR1",&[6]), // 145
+            ("CpyVtoR1",&[6]), // 146
+            ("JLowNZ",&[]), // 147
+            ("FreeNullV8",&[4]), // 148
+            ("FreeNullV8",&[54]), // 149
+            ("PSF",&[62]), // 150
+            ("CALLSYS",&[]), // 151
+            ("PSF",&[70]), // 152
+            ("CALLSYS",&[]), // 153
+            ("PSF",&[76]), // 154
+            ("CALLSYS",&[]), // 155
+            ("PshGPtr",&[]), // 156
+            ("CHKREF",&[]), // 157
+            ("PshVPtr",&[0]), // 158
+            ("ADDSi",&[40]), // 159
+            ("RDSPtr",&[]), // 160
+            ("CALLSYS",&[]), // 161
+            ("STOREOBJ",&[126]), // 162
+            ("LoadRObjR",&[126, 48]), // 163
+            ("RDR8",&[128]), // 164
+            ("CpyVtoV8",&[124, 128]), // 165
+            ("PshVPtr",&[52]), // 166
+            ("CALLSYS",&[]), // 167
+            ("CpyRtoV4",&[121]), // 168
+            ("NOT",&[121]), // 169
+            ("CpyVtoR1",&[121]), // 170
+            ("JLowZ",&[]), // 171
+            ("PshVPtr",&[0]), // 172
+            ("ADDSi",&[2392]), // 173
+            ("RDSPtr",&[]), // 174
+            ("CALLSYS",&[]), // 175
+            ("JLowNZ",&[]), // 176
+            ("SetV4",&[5]), // 177
+            ("JMP",&[]), // 178
+            ("PshVPtr",&[0]), // 179
+            ("ADDSi",&[2392]), // 180
+            ("RDSPtr",&[]), // 181
+            ("CALLSYS",&[]), // 182
+            ("STOREOBJ",&[96]), // 183
+            ("PshVPtr",&[96]), // 184
+            ("CALLSYS",&[]), // 185
+            ("CpyRtoV4",&[121]), // 186
+            ("CpyVtoV4",&[5, 121]), // 187
+            ("CpyVtoR1",&[5]), // 188
+            ("JLowZ",&[]), // 189
+            ("PshVPtr",&[0]), // 190
+            ("ADDSi",&[2392]), // 191
+            ("RDSPtr",&[]), // 192
+            ("CALLSYS",&[]), // 193
+            ("STOREOBJ",&[90]), // 194
+            ("JMP",&[]), // 195
+            ("PshVPtr",&[0]), // 196
+            ("ADDSi",&[2408]), // 197
+            ("RDSPtr",&[]), // 198
+            ("CALLSYS",&[]), // 199
+            ("JLowNZ",&[]), // 200
+            ("SetV4",&[6]), // 201
+            ("JMP",&[]), // 202
+            ("PshVPtr",&[0]), // 203
+            ("ADDSi",&[2408]), // 204
+            ("RDSPtr",&[]), // 205
+            ("CALLSYS",&[]), // 206
+            ("STOREOBJ",&[4]), // 207
+            ("PshVPtr",&[4]), // 208
+            ("CALLSYS",&[]), // 209
+            ("CpyRtoV4",&[121]), // 210
+            ("CpyVtoV4",&[6, 121]), // 211
+            ("CpyVtoR1",&[6]), // 212
+            ("JLowZ",&[]), // 213
+            ("PshVPtr",&[0]), // 214
+            ("ADDSi",&[2408]), // 215
+            ("RDSPtr",&[]), // 216
+            ("CALLSYS",&[]), // 217
+            ("STOREOBJ",&[90]), // 218
+            ("JMP",&[]), // 219
+            ("PshVPtr",&[0]), // 220
+            ("CALLINTF",&[]), // 221
+            ("STOREOBJ",&[4]), // 222
+            ("PshVPtr",&[4]), // 223
+            ("CALLSYS",&[]), // 224
+            ("JLowZ",&[]), // 225
+            ("PshVPtr",&[0]), // 226
+            ("CALLINTF",&[]), // 227
+            ("STOREOBJ",&[90]), // 228
+            ("PshVPtr",&[90]), // 229
+            ("CALLSYS",&[]), // 230
+            ("JLowNZ",&[]), // 231
+            ("SetV4",&[6]), // 232
+            ("JMP",&[]), // 233
+            ("PshVPtr",&[90]), // 234
+            ("CALLSYS",&[]), // 235
+            ("STOREOBJ",&[92]), // 236
+            ("PshVPtr",&[92]), // 237
+            ("CALLSYS",&[]), // 238
+            ("CpyRtoV4",&[5]), // 239
+            ("CpyVtoV4",&[6, 5]), // 240
+            ("CpyVtoR1",&[6]), // 241
+            ("JLowNZ",&[]), // 242
+            ("SetV4",&[121]), // 243
+            ("JMP",&[]), // 244
+            ("PshVPtr",&[0]), // 245
+            ("ADDSi",&[40]), // 246
+            ("RDSPtr",&[]), // 247
+            ("CALLSYS",&[]), // 248
+            ("STOREOBJ",&[92]), // 249
+            ("PshVPtr",&[92]), // 250
+            ("PshVPtr",&[90]), // 251
+            ("CALLSYS",&[]), // 252
+            ("STOREOBJ",&[94]), // 253
+            ("PshVPtr",&[94]), // 254
+            ("CALL",&[]), // 255
+            ("CpyRtoV4",&[5]), // 256
+            ("CpyVtoV4",&[121, 5]), // 257
+            ("CpyVtoR1",&[121]), // 258
+            ("JLowNZ",&[]), // 259
+            ("SetV4",&[5]), // 260
+            ("JMP",&[]), // 261
+            ("PshVPtr",&[90]), // 262
+            ("CALL",&[]), // 263
+            ("JLowZ",&[]), // 264
+            ("SetV1",&[6]), // 265
+            ("JMP",&[]), // 266
+            ("PSF",&[120]), // 267
+            ("PshGPtr",&[]), // 268
+            ("dTOf",&[115, 124]), // 269
+            ("PshV4",&[115]), // 270
+            ("PshGPtr",&[]), // 271
+            ("PshVPtr",&[90]), // 272
+            ("PshGPtr",&[]), // 273
+            ("PSF",&[114]), // 274
+            ("PshVPtr",&[0]), // 275
+            ("CALLSYS",&[]), // 276
+            ("STOREOBJ",&[4]), // 277
+            ("PshVPtr",&[4]), // 278
+            ("CALLSYS",&[]), // 279
+            ("STOREOBJ",&[98]), // 280
+            ("PshVPtr",&[98]), // 281
+            ("CALLSYS",&[]), // 282
+            ("PshRPtr",&[]), // 283
+            ("CALLSYS",&[]), // 284
+            ("PSF",&[114]), // 285
+            ("CALLSYS",&[]), // 286
+            ("PshRPtr",&[]), // 287
+            ("CALLSYS",&[]), // 288
+            ("PshRPtr",&[]), // 289
+            ("CALLSYS",&[]), // 290
+            ("PshRPtr",&[]), // 291
+            ("CALLSYS",&[]), // 292
+            ("PSF",&[114]), // 293
+            ("CALLSYS",&[]), // 294
+            ("PSF",&[120]), // 295
+            ("CALLSYS",&[]), // 296
+            ("CpyRtoV4",&[5]), // 297
+            ("PSF",&[120]), // 298
+            ("CALLSYS",&[]), // 299
+            ("NOT",&[5]), // 300
+            ("CpyVtoV4",&[6, 5]), // 301
+            ("CpyVtoV4",&[5, 6]), // 302
+            ("CpyVtoR1",&[5]), // 303
+            ("JLowZ",&[]), // 304
+            ("PshVPtr",&[90]), // 305
+            ("RefCpyV",&[52]), // 306
+            ("FreeNullV8",&[90]), // 307
+            ("PshVPtr",&[52]), // 308
+            ("CALLSYS",&[]), // 309
+            ("JLowZ",&[]), // 310
+            ("PshGPtr",&[]), // 311
+            ("CHKREF",&[]), // 312
+            ("PshVPtr",&[0]), // 313
+            ("ADDSi",&[40]), // 314
+            ("RDSPtr",&[]), // 315
+            ("CALLSYS",&[]), // 316
+            ("STOREOBJ",&[130]), // 317
+            ("PshVPtr",&[52]), // 318
+            ("PshVPtr",&[130]), // 319
+            ("ADDSi",&[96]), // 320
+            ("REFCPY",&[]), // 321
+            ("PopPtr",&[]), // 322
+            ("PshGPtr",&[]), // 323
+            ("PSF",&[132]), // 324
+            ("CALLSYS",&[]), // 325
+            ("PSF",&[132]), // 326
+            ("PshVPtr",&[130]), // 327
+            ("ADDSi",&[56]), // 328
+            ("CALLSYS",&[]), // 329
+            ("PSF",&[132]), // 330
+            ("CALLSYS",&[]), // 331
+            ("PSF",&[132]), // 332
+            ("CALLSYS",&[]), // 333
+            ("PSF",&[132]), // 334
+            ("PshVPtr",&[130]), // 335
+            ("ADDSi",&[64]), // 336
+            ("CALLSYS",&[]), // 337
+            ("PSF",&[132]), // 338
+            ("CALLSYS",&[]), // 339
+            ("SetV1",&[121]), // 340
+            ("LoadRObjR",&[130, 120]), // 341
+            ("WRTV1",&[121]), // 342
+            ("PSF",&[458]), // 343
+            ("CALLSYS",&[]), // 344
+            ("PSF",&[458]), // 345
+            ("PshGPtr",&[]), // 346
+            ("PshVPtr",&[0]), // 347
+            ("ADDSi",&[40]), // 348
+            ("RDSPtr",&[]), // 349
+            ("CALLSYS",&[]), // 350
+            ("PSF",&[458]), // 351
+            ("CALLSYS",&[]), // 352
+            ("PshC4",&[]), // 353
+            ("PshVPtr",&[0]), // 354
+            ("CALLSYS",&[]), // 355
+            ("JMP",&[]), // 356
+            ("PshVPtr",&[0]), // 357
+            ("CALLINTF",&[]), // 358
+            ("PshC4",&[]), // 359
+            ("PshVPtr",&[0]), // 360
+            ("CALLSYS",&[]), // 361
+            ("RET",&[2]), // 362
+        ]);
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,delta,value) in [
+            (0,1,1i32),
+            (3,1,1003i32),
+            (3,2,0i32),
+            (5,1,10005i32),
+            (7,1,1i32),
+            (9,1,1009i32),
+            (9,2,0i32),
+            (12,1,10012i32),
+            (13,1,4i32),
+            (14,1,1i32),
+            (15,1,14i32),
+            (17,1,1i32),
+            (19,1,1019i32),
+            (19,2,0i32),
+            (22,1,10022i32),
+            (26,1,24i32),
+            (28,1,1028i32),
+            (28,2,0i32),
+            (30,1,5030i32),
+            (30,2,0i32),
+            (32,1,1i32),
+            (34,1,1034i32),
+            (34,2,0i32),
+            (37,1,1037i32),
+            (37,2,0i32),
+            (39,1,1039i32),
+            (39,2,0i32),
+            (41,1,10041i32),
+            (43,1,10043i32),
+            (45,1,10045i32),
+            (47,1,0i32),
+            (48,1,0i32),
+            (50,1,0i32),
+            (53,1,206i32),
+            (53,2,0i32),
+            (56,1,206i32),
+            (56,2,0i32),
+            (60,1,1i32),
+            (62,1,201i32),
+            (62,2,0i32),
+            (65,1,202i32),
+            (65,2,0i32),
+            (68,1,203i32),
+            (68,2,0i32),
+            (70,1,204i32),
+            (70,2,0i32),
+            (71,1,119i32),
+            (74,1,205i32),
+            (74,2,0i32),
+            (79,1,1i32),
+            (81,1,1081i32),
+            (81,2,0i32),
+            (85,1,1085i32),
+            (85,2,0i32),
+            (88,1,10088i32),
+            (92,1,3i32),
+            (94,1,86i32),
+            (96,1,10096i32),
+            (100,1,4i32),
+            (101,1,0i32),
+            (102,1,63i32),
+            (104,1,5104i32),
+            (104,2,0i32),
+            (105,1,1092616192i32),
+            (106,1,5106i32),
+            (106,2,0i32),
+            (108,1,5108i32),
+            (108,2,0i32),
+            (111,1,1111i32),
+            (111,2,0i32),
+            (114,1,202i32),
+            (114,2,0i32),
+            (117,1,1117i32),
+            (117,2,0i32),
+            (119,1,1119i32),
+            (119,2,0i32),
+            (121,1,1121i32),
+            (121,2,0i32),
+            (123,1,1123i32),
+            (123,2,0i32),
+            (125,1,1125i32),
+            (125,2,0i32),
+            (127,1,1127i32),
+            (127,2,0i32),
+            (129,1,1129i32),
+            (129,2,0i32),
+            (131,1,1131i32),
+            (131,2,0i32),
+            (134,1,1134i32),
+            (134,2,0i32),
+            (137,1,3i32),
+            (139,1,5i32),
+            (143,1,7i32),
+            (144,2,8i32),
+            (147,1,-126i32),
+            (151,1,207i32),
+            (151,2,0i32),
+            (153,1,207i32),
+            (153,2,0i32),
+            (155,1,208i32),
+            (155,2,0i32),
+            (156,1,5156i32),
+            (156,2,0i32),
+            (159,1,1i32),
+            (161,1,1161i32),
+            (161,2,0i32),
+            (163,2,10647i32),
+            (167,1,1167i32),
+            (167,2,0i32),
+            (171,1,234i32),
+            (173,1,10646i32),
+            (175,1,1175i32),
+            (175,2,0i32),
+            (176,1,4i32),
+            (177,1,0i32),
+            (178,1,15i32),
+            (180,1,10646i32),
+            (182,1,1182i32),
+            (182,2,0i32),
+            (185,1,1185i32),
+            (185,2,0i32),
+            (189,1,10i32),
+            (191,1,10646i32),
+            (193,1,1193i32),
+            (193,2,0i32),
+            (195,1,55i32),
+            (197,1,10646i32),
+            (199,1,1199i32),
+            (199,2,0i32),
+            (200,1,4i32),
+            (201,1,0i32),
+            (202,1,15i32),
+            (204,1,10646i32),
+            (206,1,1206i32),
+            (206,2,0i32),
+            (209,1,1209i32),
+            (209,2,0i32),
+            (213,1,10i32),
+            (215,1,10646i32),
+            (217,1,1217i32),
+            (217,2,0i32),
+            (219,1,14i32),
+            (221,1,10221i32),
+            (224,1,1224i32),
+            (224,2,0i32),
+            (225,1,4i32),
+            (227,1,10227i32),
+            (230,1,1230i32),
+            (230,2,0i32),
+            (231,1,4i32),
+            (232,1,0i32),
+            (233,1,12i32),
+            (235,1,1235i32),
+            (235,2,0i32),
+            (238,1,1238i32),
+            (238,2,0i32),
+            (242,1,4i32),
+            (243,1,0i32),
+            (244,1,20i32),
+            (246,1,1i32),
+            (248,1,1248i32),
+            (248,2,0i32),
+            (252,1,1252i32),
+            (252,2,0i32),
+            (255,1,10255i32),
+            (259,1,4i32),
+            (260,1,0i32),
+            (261,1,76i32),
+            (263,1,10263i32),
+            (264,1,4i32),
+            (265,1,1i32),
+            (266,1,65i32),
+            (268,1,5268i32),
+            (268,2,0i32),
+            (271,1,5271i32),
+            (271,2,0i32),
+            (273,1,5273i32),
+            (273,2,0i32),
+            (276,1,1276i32),
+            (276,2,0i32),
+            (279,1,202i32),
+            (279,2,0i32),
+            (282,1,1282i32),
+            (282,2,0i32),
+            (284,1,1284i32),
+            (284,2,0i32),
+            (286,1,1286i32),
+            (286,2,0i32),
+            (288,1,1288i32),
+            (288,2,0i32),
+            (290,1,1290i32),
+            (290,2,0i32),
+            (292,1,1292i32),
+            (292,2,0i32),
+            (294,1,1294i32),
+            (294,2,0i32),
+            (296,1,1296i32),
+            (296,2,0i32),
+            (299,1,1299i32),
+            (299,2,0i32),
+            (304,1,2i32),
+            (309,1,1309i32),
+            (309,2,0i32),
+            (310,1,84i32),
+            (311,1,5311i32),
+            (311,2,0i32),
+            (314,1,1i32),
+            (316,1,1316i32),
+            (316,2,0i32),
+            (320,1,10647i32),
+            (323,1,500i32),
+            (323,2,0i32),
+            (325,1,209i32),
+            (325,2,0i32),
+            (328,1,9i32),
+            (329,1,210i32),
+            (329,2,0i32),
+            (331,1,211i32),
+            (331,2,0i32),
+            (333,1,212i32),
+            (333,2,0i32),
+            (336,1,9i32),
+            (337,1,210i32),
+            (337,2,0i32),
+            (339,1,211i32),
+            (339,2,0i32),
+            (340,1,0i32),
+            (341,2,10647i32),
+            (344,1,1344i32),
+            (344,2,0i32),
+            (346,1,5346i32),
+            (346,2,0i32),
+            (348,1,1i32),
+            (350,1,1350i32),
+            (350,2,0i32),
+            (352,1,1352i32),
+            (352,2,0i32),
+            (353,1,1077936128i32),
+            (355,1,1355i32),
+            (355,2,0i32),
+            (356,1,9i32),
+            (358,1,10358i32),
+            (359,1,1077936128i32),
+            (361,1,1361i32),
+            (361,2,0i32),
+        ] {f.bytecode[code[at].offset_dw+delta]=value;}
+        f.name="DifferentWork".into();f.ret=DataType {token:0x52,..Default::default()};f.traits=0;
+        f.obj_locals=vec![(4, 3), (52, 3), (54, 4), (90, 3), (92, 107), (94, 107), (96, 3), (98, 4), (126, 9), (130, 9), (50, 108), (62, 5), (70, 5), (76, 6), (82, 8), (88, 8), (114, 109), (120, 110), (132, 10), (458, 111)];
+        for i in &code {
+            if matches!(i.op.name,"ADDSi"|"LoadThisR"|"RET") {continue;}
+            for (n,word) in i.words.iter().enumerate() {
+                if (*word as i16)<=0 || (matches!(i.op.name,"LoadVObjR"|"LoadRObjR") && n==1) {continue;}
+                let packed=n+1;let dw=i.offset_dw+packed/2;let shift=(packed%2)*16;
+                f.bytecode[dw]=((f.bytecode[dw] as u32 & !(0xffff<<shift))|(((*word+bias) as u32)<<shift)) as i32;
+            }
+        }
+        for (slot,_) in &mut f.obj_locals {*slot+=bias as i32;}
+        f
+    }
+
+    #[test]
+    fn query_loop_initializer_and_clock_assignment_require_both_complete_lives() {
+        let source=r#"        AObservedActor local_52;
+        AObservedActor local_90;
+        this.SetWalkSpeed(EWalkSpeed(1));
+        Super::DoTask_Implementation();
+        if (::HasDrawnBow(this.Agent.GetCharacter()) || ::HasDrawnCrossbow(this.Agent.GetCharacter()))
+        {
+            AbilitySystem::SendGameplayEventToActor(this.Agent.GetCharacter(), GameplayTag::End_Action_Aiming, FGameplayEventData());
+        }
+        this.Execute();
+        this.Loot();
+        this.Heal();
+        auto local_82 = this.Agent.GetActor().GetSensor().FindActors(FGameplayTagContainer(), FGameplayTagContainer(), ESense(0), false, 0.0f).Iterator();
+        for (; local_82.CanProceed;)
+        {
+            local_90 = local_82.Proceed();
+            if (!((local_90.GetCharacterState()).IsCharacterTrespassingAccordingToWitness(this.Agent.GetCharacterState())))
+            {
+                local_90 = nullptr;
+                continue;
+            }
+            if (!(::IsDefeated(local_90)) && this.GetActor().GetSensor().GetMemory().Filter().FilterByType(GameplayTag::AIEvent_Seen_Defeated).FilterOriginCharacterIs(local_90).FilterRecent(10.0f).ToArray().IsEmpty())
+            {
+                local_90 = nullptr;
+                continue;
+            }
+            local_52 = local_90;
+            local_90 = nullptr;
+            break;
+        }
+        float local_124 = Cast<UObservedTimes>(this.Agent.SpawnedStorage(UObservedTimes)).DefeatedMemoryRecentSeconds;
+        if (!(IsValid(local_52)))
+        {
+            if (IsValid(this.LastCharacterStateExecuted) && IsValid(this.LastCharacterStateExecuted.GetCharacter()))
+            {
+                local_90 = this.LastCharacterStateExecuted.GetCharacter();
+            }
+            else
+            {
+                if (IsValid(this.LastCharacterStateLooted) && IsValid(this.LastCharacterStateLooted.GetCharacter()))
+                {
+                    local_90 = this.LastCharacterStateLooted.GetCharacter();
+                }
+                else
+                {
+                    if (IsValid(this.GetCharacterOfInterest()))
+                    {
+                        local_90 = this.GetCharacterOfInterest();
+                    }
+                }
+            }
+            if ((IsValid(local_90) && IsValid(local_90.GetCharacterState())) && (local_90.GetCharacterState()).IsCharacterTrespassingAccordingToWitness(this.Agent.GetCharacterState()) && (::IsDefeated(local_90) || !(this.GetActor().GetSensor().GetMemory().Filter().FilterByType(GameplayTag::AIEvent_Seen_Defeated).FilterOriginCharacterIs(local_90).FilterRecent(float32(local_124)).ToArray().IsEmpty())))
+            {
+                local_52 = local_90;
+            }
+            local_90 = nullptr;
+        }
+        if (IsValid(local_52))
+        {
+            UObservedTimes local_130 = Cast<UObservedTimes>(this.Agent.SpawnedStorage(UObservedTimes));
+            local_130.LastKnownIntruder = local_52;
+            FInGameTime local_132 = FInGameTime::Now();
+            local_130.ObservedAt = local_132;
+            local_130.ResumedAt = FInGameTime();
+            local_130.bTrespassReactivationFired = false;
+            this.Agent.AssessEvent(GameplayTag::AIEvent_WaitForDefeatedIntruder, FRememberedPerception());
+            this.WaitSeconds(3.0f);
+            return;
+        }
+        this.AssessEndState();
+        this.WaitSeconds(3.0f);
+        return;
+"#;
+        let expected=r#"        AObservedActor local_52;
+        AObservedActor local_90;
+        this.SetWalkSpeed(EWalkSpeed(1));
+        Super::DoTask_Implementation();
+        if (::HasDrawnBow(this.Agent.GetCharacter()) || ::HasDrawnCrossbow(this.Agent.GetCharacter()))
+        {
+            AbilitySystem::SendGameplayEventToActor(this.Agent.GetCharacter(), GameplayTag::End_Action_Aiming, FGameplayEventData());
+        }
+        this.Execute();
+        this.Loot();
+        this.Heal();
+        for (auto local_82 = this.Agent.GetActor().GetSensor().FindActors(FGameplayTagContainer(), FGameplayTagContainer(), ESense(0), false, 0.0f).Iterator(); local_82.CanProceed;)
+        {
+            local_90 = local_82.Proceed();
+            if (!((local_90.GetCharacterState()).IsCharacterTrespassingAccordingToWitness(this.Agent.GetCharacterState())))
+            {
+                local_90 = nullptr;
+                continue;
+            }
+            if (!(::IsDefeated(local_90)) && this.GetActor().GetSensor().GetMemory().Filter().FilterByType(GameplayTag::AIEvent_Seen_Defeated).FilterOriginCharacterIs(local_90).FilterRecent(10.0f).ToArray().IsEmpty())
+            {
+                local_90 = nullptr;
+                continue;
+            }
+            local_52 = local_90;
+            local_90 = nullptr;
+            break;
+        }
+        float local_124 = Cast<UObservedTimes>(this.Agent.SpawnedStorage(UObservedTimes)).DefeatedMemoryRecentSeconds;
+        if (!(IsValid(local_52)))
+        {
+            if (IsValid(this.LastCharacterStateExecuted) && IsValid(this.LastCharacterStateExecuted.GetCharacter()))
+            {
+                local_90 = this.LastCharacterStateExecuted.GetCharacter();
+            }
+            else
+            {
+                if (IsValid(this.LastCharacterStateLooted) && IsValid(this.LastCharacterStateLooted.GetCharacter()))
+                {
+                    local_90 = this.LastCharacterStateLooted.GetCharacter();
+                }
+                else
+                {
+                    if (IsValid(this.GetCharacterOfInterest()))
+                    {
+                        local_90 = this.GetCharacterOfInterest();
+                    }
+                }
+            }
+            if ((IsValid(local_90) && IsValid(local_90.GetCharacterState())) && (local_90.GetCharacterState()).IsCharacterTrespassingAccordingToWitness(this.Agent.GetCharacterState()) && (::IsDefeated(local_90) || !(this.GetActor().GetSensor().GetMemory().Filter().FilterByType(GameplayTag::AIEvent_Seen_Defeated).FilterOriginCharacterIs(local_90).FilterRecent(float32(local_124)).ToArray().IsEmpty())))
+            {
+                local_52 = local_90;
+            }
+            local_90 = nullptr;
+        }
+        if (IsValid(local_52))
+        {
+            UObservedTimes local_130 = Cast<UObservedTimes>(this.Agent.SpawnedStorage(UObservedTimes));
+            local_130.LastKnownIntruder = local_52;
+            local_130.ObservedAt = FInGameTime::Now();
+            local_130.ResumedAt = FInGameTime();
+            local_130.bTrespassReactivationFired = false;
+            this.Agent.AssessEvent(GameplayTag::AIEvent_WaitForDefeatedIntruder, FRememberedPerception());
+            this.WaitSeconds(3.0f);
+            return;
+        }
+        this.AssessEndState();
+        this.WaitSeconds(3.0f);
+        return;
+"#;
+        let refs=RefResolver::from_test_query_loop_clock(0);
+        let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_query_loop_and_clock_temporaries(s,f,r,Some("UDifferentTask"));
+        // Rename whole identifiers, including numeric lifetime suffixes; never replace local-number prefixes.
+        let renumber=|s:&str,bias:u16,life:bool|s.split_inclusive(|c:char|!c.is_ascii_alphanumeric() && c!='_').map(|piece| {
+            let name=piece.trim_end_matches(|c:char|!c.is_ascii_alphanumeric() && c!='_');
+            if let Some((slot,_))=super::slot_and_life_any(name) {
+                let old=format!("local_{slot}");let suffix=&name[old.len()..];
+                let suffix=if life && suffix.is_empty() {"_2"} else {suffix};
+                format!("local_{}{suffix}{}",slot+bias as i32,&piece[name.len()..])
+            } else {piece.to_owned()}
+        }).collect::<String>();
+        for (bias,life) in [(0,false),(512,false),(512,true)] {
+            let f=query_loop_clock_fixture(bias);let s=renumber(source,bias,life);let e=renumber(expected,bias,life);
+            assert_eq!(fold(&s,&f,&refs),e,"renumber {bias}, life suffix {life}");
+            assert_eq!(fold(&e,&f,&refs),e,"idempotence");
+            for fault in 1..=37 {assert_eq!(fold(&s,&f,&RefResolver::from_test_query_loop_clock(fault)),s,"metadata {fault}");}
+        }
+        let f=query_loop_clock_fixture(0);let code=disassemble(&f.bytecode).unwrap();
+        for at in (46..78).chain(144..156).chain(323..340) {
+            let i=&code[at];
+            for word in 0..i.words.len() {
+                let mut bad=f.clone();let packed=word+1;bad.bytecode[i.offset_dw+packed/2]^=1<<((packed%2)*16);
+                assert_eq!(fold(source,&bad,&refs),source,"word {at}/{word}");
+            }
+            if matches!(i.op.name,"CALLSYS"|"ADDSi"|"LoadVObjR"|"PshGPtr"|"PshC4"|"SetV1") {
+                let mut bad=f.clone();bad.bytecode[i.offset_dw+if i.op.name=="LoadVObjR" {2} else {1}]^=1;
+                assert_eq!(fold(source,&bad,&refs),source,"typed/immediate operand {at}");
+            }
+        }
+        for (from,to) in [(13,47),(13,72),(13,144),(13,148),(71,145),(94,156),(143,156),(147,73),(310,326)] {
+            let mut bad=f.clone();bad.bytecode[code[from].offset_dw+1]=code[to].offset_dw as i32-code[from].offset_dw as i32-2;
+            assert_eq!(fold(source,&bad,&refs),source,"foreign entry or cleanup bypass {from}->{to}");
+        }
+        for slot in [62u16,70,76,82,88,132] {
+            let mut bad=f.clone();let i=&code[359];let replacement=function(&[("PshV4",&[slot]),("SUSPEND",&[])]);
+            bad.bytecode[i.offset_dw..i.offset_dw+2].copy_from_slice(&replacement.bytecode);
+            assert_eq!(fold(source,&bad,&refs),source,"extra raw use of {slot}");
+        }
+        let mut bad=f.clone();bad.bytecode[code[72].offset_dw]=function(&[("RET",&[2])]).bytecode[0];
+        assert_eq!(fold(source,&bad,&refs),source,"return bypasses cleanup");
+        for slot in [54,82,88,130,132] {
+            let mut bad=f.clone();let pair=*bad.obj_locals.iter().find(|(s,_)|*s==slot).unwrap();bad.obj_locals.push(pair);
+            assert_eq!(fold(source,&bad,&refs),source,"ambiguous local {slot}");
+        }
+        for fault in 0..3 {
+            let mut bad=f.clone();match fault {0=>bad.ret.token=0x41,1=>bad.traits=4,_=>bad.bytecode[code[362].offset_dw]^=1<<16}
+            assert_eq!(fold(source,&bad,&refs),source,"consumer ABI {fault}");
+        }
+        for s in [
+            source.replace("auto local_82 =", "TArrayConstIterator<AObservedActor> local_82 ="),
+            source.replace("ESense(0)","ESense(1)"),
+            source.replace("false, 0.0f).Iterator()","true, 0.0f).Iterator()"),
+            source.replace("for (; local_82.CanProceed;)","for (; local_82.CanProceed; local_82.Proceed())"),
+            source.replace("local_90 = local_82.Proceed();","Use(local_82);\n            local_90 = local_82.Proceed();"),
+            source.replace("        float local_124 =","        Use(local_82);\n        float local_124 ="),
+            source.replace("FInGameTime local_132 = FInGameTime::Now();","FInGameTime local_132 = Other();"),
+            source.replace("local_130.ObservedAt = local_132;","local_130.ObservedAt = local_132;\n            Use(local_132);"),
+            source.replace("local_130.ResumedAt = FInGameTime();","local_130.ResumedAt = FInGameTime::Now();"),
+            source.replace("UObservedTimes local_130 =","UDerivedTimes local_130 ="),
+            source.replace("            local_130.LastKnownIntruder =", "            UObservedTimes local_130;\n            local_130.LastKnownIntruder ="),
+            source.replace("            FInGameTime local_132 =","            {\n            FInGameTime local_132 =").replace("            local_130.bTrespassReactivationFired =", "            }\n            local_130.bTrespassReactivationFired ="),
+            source.replace("        auto local_82 =","        {\n        auto local_82 =").replace("        float local_124 =","        }\n        float local_124 ="),
+            format!("    {{\n{source}    }}\n"),
+        ] {assert_eq!(fold(&s,&f,&refs),s,"atomic source and scope proof");}
+        let prefix_source=source.replace("        this.Heal();","        this.Heal();\n        int local_1320 = 1;");
+        let prefix_expected=expected.replace("        this.Heal();","        this.Heal();\n        int local_1320 = 1;");
+        let prefix_source=renumber(&prefix_source,512,true);let prefix_expected=renumber(&prefix_expected,512,true);
+        assert!(prefix_source.contains("local_1832_2"));
+        assert_eq!(fold(&prefix_source,&query_loop_clock_fixture(512),&refs),prefix_expected,"identifier boundary and lifetime suffix");
+    }
+
+    fn conditional_query_array_fixture(bias:u16)->Func {
+        // Original iterator origin50..59 plus the complete conditional/cleanup tail132..175.
+        let mut f=function(&[
+            ("PSF", &[38]),
+            ("PSF", &[28]),
+            ("CALLSYS", &[]),
+            ("JMP", &[]),
+            ("SUSPEND", &[]),
+            ("PSF", &[38]),
+            ("CALLSYS", &[]),
+            ("PshRPtr", &[]),
+            ("RDSPtr", &[]),
+            ("RefCpyV", &[46]),
+            ("SetV1", &[5]),
+            ("PshV4", &[5]),
+            ("SetV1", &[57]),
+            ("PshV4", &[57]),
+            ("PSF", &[62]),
+            ("PshVPtr", &[50]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[56]),
+            ("PshVPtr", &[56]),
+            ("CALLSYS", &[]),
+            ("PSF", &[65534]),
+            ("PSF", &[62]),
+            ("CALLSYS", &[]),
+            ("JLowZ", &[]),
+            ("PSF", &[74]),
+            ("CALLSYS", &[]),
+            ("PSF", &[74]),
+            ("PshVPtr", &[8]),
+            ("PshVPtr", &[50]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[76]),
+            ("PshVPtr", &[76]),
+            ("PshGPtr", &[]),
+            ("PshVPtr", &[50]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[4]),
+            ("PshVPtr", &[4]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[54]),
+            ("PshVPtr", &[54]),
+            ("CALL", &[]),
+            ("PSF", &[74]),
+            ("CALLSYS", &[]),
+            ("PSF", &[62]),
+            ("CALLSYS", &[]),
+            ("FreeNullV8", &[50]),
+            ("FreeNullV8", &[46]),
+            ("LoadVObjR", &[38, 16]),
+            ("RDR1", &[1]),
+            ("CpyVtoR1", &[1]),
+            ("JLowNZ", &[]),
+            ("PSF", &[28]),
+            ("CALLSYS", &[]),
+            ("RET", &[6]),
+        ]);
+        f.ret=DataType {token:0x52,..Default::default()};
+        f.params=["caster","transformedCharacter"].into_iter().map(|name|super::super::model::Param {name:name.into(),flags:0,
+            ty:DataType {token:5,type_info:2,is_object_handle:true,..Default::default()}}).collect();
+        f.obj_locals=vec![(4,4),(8,4),(28,7),(38,9),(46,8),(50,2),(54,5),(56,3),(62,6),(66,6),(74,11),(76,4)];
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,offset,value) in [(10, 1, 0), (12, 1, 0), (40, 1, 901), (47, 2, 9)] {f.bytecode[code[at].offset_dw+offset]=value;}
+        for (at,value) in [(2, 519), (6, 521), (16, 501), (19, 503), (22, 505), (25, 507), (29, 509), (32, 1001), (34, 509), (37, 511), (42, 513), (44, 515), (52, 517)] {f.bytecode[code[at].offset_dw+1]=value;}
+        for (from,to) in [(3, 47), (23, 43), (50, 4)] {f.bytecode[code[from].offset_dw+1]=code[to].offset_dw as i32-code[from].offset_dw as i32-2;}
+        for i in &code {
+            if i.op.name=="RET" {continue;}
+            for (n,word) in i.words.iter().enumerate() {
+                if (*word as i16)<=0 || (i.op.name=="LoadVObjR" && n==1) {continue;}
+                let at=n+1;let dw=i.offset_dw+at/2;let shift=(at%2)*16;
+                f.bytecode[dw]=((f.bytecode[dw] as u32 & !(0xffff<<shift)) | (((*word+bias) as u32)<<shift)) as i32;
+            }
+        }
+        for (slot,_) in &mut f.obj_locals {*slot+=bias as i32;}
+        f
+    }
+
+    #[test]
+    fn query_array_capture_retains_action_and_loop_cleanup_order() {
+        let source=r#"        int local_62_copy;
+        if (!(IsValid(caster)) || !(IsValid(caster.GetState())) || !(IsValid(transformedCharacter)))
+        {
+            return;
+        }
+        AGothicCharacterState local_8 = caster.GetState();
+        TArray<AActor> local_28 = UNearbyActorsSubsystem::Get().FindActorsOfClassInRadius(TSubclassOf<AActor>(AGothicCharacter::StaticClass()), caster.GetActorLocation(), float32(this.WitnessSearchRadius));
+        for (auto local_46 : local_28)
+        {
+            AGothicCharacter local_50 = (Cast<AGothicCharacter>(local_46));
+            if (!(IsValid(local_50)) || (local_50 == caster) || (local_50 == transformedCharacter))
+            {
+                continue;
+            }
+            if (!(IsValid(local_50.GetState())) || !(IsValid(local_50.GetState().GetMemory())))
+            {
+                continue;
+            }
+            if (local_50.IsPlayerCharacterOrPlayerControlled())
+            {
+                continue;
+            }
+            if (local_50.GetPerception().Query(EPerceptionSense(0), false).Contains(caster))
+            {
+                ::RecordAction(local_50.GetState().GetMemory(), GameplayTag::Witnessed, local_50.GetState(), local_8, FGameplayTagContainer());
+            }
+        }
+        return;
+"#;
+        let expected=r#"        int local_62_copy;
+        if (!(IsValid(caster)) || !(IsValid(caster.GetState())) || !(IsValid(transformedCharacter)))
+        {
+            return;
+        }
+        AGothicCharacterState local_8 = caster.GetState();
+        TArray<AActor> local_28 = UNearbyActorsSubsystem::Get().FindActorsOfClassInRadius(TSubclassOf<AActor>(AGothicCharacter::StaticClass()), caster.GetActorLocation(), float32(this.WitnessSearchRadius));
+        for (auto local_46 : local_28)
+        {
+            AGothicCharacter local_50 = (Cast<AGothicCharacter>(local_46));
+            if (!(IsValid(local_50)) || (local_50 == caster) || (local_50 == transformedCharacter))
+            {
+                continue;
+            }
+            if (!(IsValid(local_50.GetState())) || !(IsValid(local_50.GetState().GetMemory())))
+            {
+                continue;
+            }
+            if (local_50.IsPlayerCharacterOrPlayerControlled())
+            {
+                continue;
+            }
+            auto local_62 = local_50.GetPerception().Query(EPerceptionSense(0), false);
+            if (local_62.Contains(caster))
+            {
+                ::RecordAction(local_50.GetState().GetMemory(), GameplayTag::Witnessed, local_50.GetState(), local_8, FGameplayTagContainer());
+            }
+        }
+        return;
+"#;
+        let refs=RefResolver::from_test_conditional_query_array(0);
+        let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_query_array_across_conditional_action(s,f,r,Some("UAbility"));
+        let rename=|text:&str,bias:u16| {
+            let mut text=text.to_owned();
+            for slot in [76u16,74,66,62,57,56,54,50,46,38,28,8,5,4,1] {
+                text=super::rename_ident(&text,&format!("local_{slot}_copy"),&format!("local_{}_copy",slot+bias));
+                text=super::rename_ident(&text,&format!("local_{slot}"),&format!("local_{}",slot+bias));
+            }
+            text
+        };
+        for bias in [0u16,512] {
+            let f=conditional_query_array_fixture(bias);let s=rename(source,bias);let e=rename(expected,bias);
+            assert_eq!(fold(&s,&f,&refs),e,"boundary-safe renumber {bias}");
+            assert_eq!(fold(&e,&f,&refs),e,"idempotent");
+            for fault in 1..=26 {assert_eq!(fold(&s,&f,&RefResolver::from_test_conditional_query_array(fault)),s,"metadata {fault}");}
+        }
+        let f=conditional_query_array_fixture(0);let code=disassemble(&f.bytecode).unwrap();
+        for (at,i) in code.iter().enumerate() {
+            for n in 0..i.words.len() {
+                let mut bad=f.clone();let word=n+1;bad.bytecode[i.offset_dw+word/2]^=1<<((word%2)*16);
+                assert_eq!(fold(source,&bad,&refs),source,"word {at}/{n}");
+            }
+            if matches!(i.op.name,"CALLSYS"|"CALL"|"PshGPtr"|"LoadVObjR"|"SetV1") {
+                let mut bad=f.clone();bad.bytecode[i.offset_dw+if i.op.name=="LoadVObjR" {2} else {1}]^=1;
+                assert_eq!(fold(source,&bad,&refs),source,"typed/immediate operand {at}");
+            }
+        }
+        for (from,to) in [(3,11),(3,46),(3,48),(23,42),(23,44),(50,5),(50,10)] {
+            let mut bad=f.clone();bad.bytecode[code[from].offset_dw+1]=code[to].offset_dw as i32-code[from].offset_dw as i32-2;
+            assert_eq!(fold(source,&bad,&refs),source,"edge {from}->{to}");
+        }
+        for slot in [62u16,74] {
+            let mut bad=f.clone();let i=&code[9];
+            bad.bytecode[i.offset_dw]=((bad.bytecode[i.offset_dw] as u32 & 0xffff) | ((slot as u32)<<16)) as i32;
+            assert_eq!(fold(source,&bad,&refs),source,"raw escape {slot}");
+        }
+        let mut bad=f.clone();bad.obj_locals.push((62,6));assert_eq!(fold(source,&bad,&refs),source,"duplicate metadata");
+        for fault in 0..4 {
+            let mut bad=f.clone();match fault {0=>bad.params[0].flags=1,1=>bad.params[0].ty.is_reference=true,
+                2=>bad.params[1].ty.is_object_const=true,_=>bad.ret.token=0x41}
+            assert_eq!(fold(source,&bad,&refs),source,"function qualifier {fault}");
+        }
+        for s in [source.replace(".Contains(caster)",".Contains(transformedCharacter)"),source.replace("EPerceptionSense(0), false","EPerceptionSense(0), true"),
+            source.replace("FGameplayTagContainer());","OtherTags);"),source.replace("local_50.GetState(), local_8","local_8, local_50.GetState()"),
+            source.replace("GameplayTag::Witnessed","GameplayTag::Other"),source.replace("for (auto local_46 : local_28)","for (auto local_46 : Other())"),
+            source.replace("        int local_62_copy;","        int local_62;"),
+            source.replace("            if (local_50.GetPerception().Query", "            {\n            if (local_50.GetPerception().Query"),
+            source.replace("            if (local_50.GetPerception().Query", "            Use(local_62);\n            if (local_50.GetPerception().Query"),
+            source.replace("FGameplayTagContainer());\n            }", "FGameplayTagContainer());\n            }\n            Other();")]
+        {assert_eq!(fold(&s,&f,&refs),s,"source lifetime/scope witness");}
+    }
+
+    fn held_map_integer_reference_fixture(bias:u16)->Func {
+        // A real map object, borrowed tag, skipped iterations and the later signed comparison.
+        let mut f=function(&[
+            ("PSF",&[18]),("CALLSYS",&[]),("SetV4",&[33]),("JMP",&[]),
+            ("SUSPEND",&[]),("CALLSYS",&[]),("CpyRtoV8",&[24]),
+            ("SetV4",&[7]),("PSF",&[7]),("PshVPtr",&[24]),("PSF",&[18]),("CALLSYS",&[]),
+            ("CpyRtoV8",&[26]),("PshVPtr",&[26]),("PopRPtr",&[]),("INCi",&[]),
+            ("CALLSYS",&[]),("CpyRtoV4",&[4]),("CpyVtoR1",&[4]),("JLowNZ",&[]),
+            ("PSF",&[33]),("CALLSYS",&[]),
+            ("PshVPtr",&[26]),("PopRPtr",&[]),("RDR4",&[9]),("CMPi",&[33,9]),("JS",&[]),("JMP",&[]),
+            ("PshV4",&[33]),("CALLSYS",&[]),
+            ("CALLSYS",&[]),("CpyRtoV4",&[3]),("CpyVtoR1",&[3]),("JLowNZ",&[]),
+            ("PSF",&[18]),("CALLSYS",&[]),("RET",&[2]),
+        ]);
+        let c=disassemble(&f.bytecode).unwrap();
+        for (at,ptr) in [(1,107),(5,102),(11,101),(16,106),(21,103),(29,104),(30,105),(35,108)] {f.bytecode[c[at].offset_dw+1]=ptr;}
+        for (from,to) in [(3,30),(19,30),(26,28),(27,30),(33,4)] {f.bytecode[c[from].offset_dw+1]=c[to].offset_dw as i32-c[from].offset_dw as i32-2;}
+        f.name="DifferentResponse".into();f.obj_locals=vec![(18+bias as i32,11)];
+        for i in &c {
+            if i.op.name=="RET" {continue;}
+            for (n,word) in i.words.iter().enumerate() {
+                if (*word as i16)<=0 {continue;}
+                let packed=n+1;let shift=(packed%2)*16;let dw=i.offset_dw+packed/2;
+                f.bytecode[dw]=((f.bytecode[dw] as u32 & !(0xffff<<shift))|(((*word+bias) as u32)<<shift)) as i32;
+            }
+        }
+        f
+    }
+
+    #[test]
+    fn held_map_integer_reference_keeps_mutation_and_the_later_read() {
+        let source="        TMap<FGameplayTag, int> local_18;\n        int local_33 = 0;\n        while (HasNext())\n        {\n            FGameplayTag& local_24 = CurrentTag();\n            int local_26 = local_18.FindOrAdd(local_24, 0);\n            ++local_26;\n            if (Skip())\n            {\n                continue;\n            }\n            FillComparison(local_33);\n            if (local_33 >= int(local_26))\n            {\n                continue;\n            }\n            Consume(local_33);\n        }\n        return;\n";
+        let expected=source.replace("int local_26 =","int& local_26 =");
+        let refs=RefResolver::from_test_held_map_integer_reference(0);
+        let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_held_map_integer_reference(s,f,r);
+        let rename=|text:&str,bias:u16,life:bool|text.split_inclusive(|c:char|!c.is_ascii_alphanumeric() && c!='_').map(|piece| {
+            let name=piece.trim_end_matches(|c:char|!c.is_ascii_alphanumeric() && c!='_');
+            if let Some((slot,_))=super::slot_and_life_any(name) {
+                let old=format!("local_{slot}");let suffix=&name[old.len()..];let suffix=if life && suffix.is_empty() {"_2"} else {suffix};
+                format!("local_{}{suffix}{}",slot+bias as i32,&piece[name.len()..])
+            } else {piece.to_owned()}
+        }).collect::<String>();
+        for (bias,life) in [(0,false),(512,false),(512,true)] {
+            let f=held_map_integer_reference_fixture(bias);let s=rename(source,bias,life);let e=rename(&expected,bias,life);
+            assert_eq!(fold(&s,&f,&refs),e,"renumber {bias}, numeric lifetime suffix {life}");
+            assert_eq!(fold(&e,&f,&refs),e,"idempotence");
+            for fault in 1..=18 {assert_eq!(fold(&s,&f,&RefResolver::from_test_held_map_integer_reference(fault)),s,"metadata {fault}");}
+        }
+        let f=held_map_integer_reference_fixture(0);let c=disassemble(&f.bytecode).unwrap();
+        for at in (7..16).chain(22..28) {
+            for word in 0..c[at].words.len() {
+                let mut bad=f.clone();let packed=word+1;bad.bytecode[c[at].offset_dw+packed/2]^=1<<((packed%2)*16);
+                assert_eq!(fold(source,&bad,&refs),source,"stack operand {at}/{word}");
+            }
+        }
+        for at in [7,11] {let mut bad=f.clone();bad.bytecode[c[at].offset_dw+1]^=1;assert_eq!(fold(source,&bad,&refs),source,"default or native pointer {at}");}
+        for (at,op) in [(15,"DECi"),(24,"RDR8"),(25,"CMPf"),(26,"JNS")] {
+            let mut bad=f.clone();let replacement=function(&[(op,&c[at].words)]).bytecode[0];
+            bad.bytecode[c[at].offset_dw]=replacement;
+            assert_eq!(fold(source,&bad,&refs),source,"opcode {at} -> {op}");
+        }
+        for (from,to) in [(3,8),(3,16),(3,22),(3,24),(19,24),(26,29),(27,28)] {
+            let mut bad=f.clone();bad.bytecode[c[from].offset_dw+1]=c[to].offset_dw as i32-c[from].offset_dw as i32-2;
+            assert_eq!(fold(source,&bad,&refs),source,"entry/bypass/comparison edge {from}->{to}");
+        }
+        let mut bad=f.clone();bad.bytecode[c[3].offset_dw+1]=c[11].offset_dw as i32+1-c[3].offset_dw as i32-2;
+        assert_eq!(fold(source,&bad,&refs),source,"edge into an instruction operand");
+        let mut bad=f.clone();bad.bytecode[c[28].offset_dw]=function(&[("PshVPtr",&[26])]).bytecode[0];
+        assert_eq!(fold(source,&bad,&refs),source,"additional held-reference use");
+        let mut bad=f.clone();bad.obj_locals.push((18,11));assert_eq!(fold(source,&bad,&refs),source,"ambiguous map metadata");
+        let mut bad=f.clone();bad.obj_locals.extend([(26,12),(26,12)]);assert_eq!(fold(source,&bad,&refs),source,"ambiguous object metadata cannot masquerade as scalar");
+        for s in [
+            source.replace("TMap<FGameplayTag, int>","TMap<FName, int>"),
+            source.replace("FindOrAdd(local_24, 0)","FindOrAdd(local_24, 1)"),
+            source.replace("++local_26;","local_26++;"),
+            source.replace("local_33 >= int(local_26)","local_33 <= int(local_26)"),
+            source.replace("            ++local_26;","            Inspect(local_26);\n            ++local_26;"),
+            source.replace("        TMap<FGameplayTag, int> local_18;","        {\n        TMap<FGameplayTag, int> local_18;\n        }"),
+            source.replace("            int local_26 =","            TMap<FGameplayTag, float> local_18;\n            int local_26 ="),
+            source.replace("            if (local_33 >=", "            }\n            {\n            if (local_33 >="),
+            source.replace("            FillComparison(local_33);", "            {\n            FillComparison(local_33);").replace("            Consume(local_33);", "            Consume(local_33);\n            }"),
+        ] {assert_eq!(fold(&s,&f,&refs),s,"source type, use and lexical visibility");}
+        let s=source.replace("        int local_33 =", "        int local_260 = 0;\n        int local_33 =");
+        let e=expected.replace("        int local_33 =", "        int local_260 = 0;\n        int local_33 =");
+        let s=rename(&s,512,true);let e=rename(&e,512,true);assert!(s.contains("local_772_2"));
+        assert_eq!(fold(&s,&held_map_integer_reference_fixture(512),&refs),e,"identifier boundaries survive suffix renumbering");
     }
 
     #[test]

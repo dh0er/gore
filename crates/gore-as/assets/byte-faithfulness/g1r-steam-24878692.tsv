@@ -6,7 +6,6 @@ AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	5	
 AI.AssessmentResponseSystem.EventResponses	1	0	0
 AI.NativeAICommands	1	0	0
 AI.States.FightAI.AIState_PerceptionResponse	1	0	0
-AI.States.FightAI.CombatEndActionsState.AIState_CombatEndActions	1	0	0
 AI.States.FightAI.CombatState.AIGroup_Attackers	1	0	0
 AI.States.FightAI.CombatState.AIState_OGCombat	1	0	0
 AI.States.FightAI.CombatState.CombatMoves	4	0	0
@@ -19,5 +18,5 @@ AI.States.FightAI.WatchFightState.AIState_WatchFight	4	0	0
 Camera.ConversationCameraConfig	1	0	0
 Environment.GothicUltraDynamicControlerAS	1	0	0
 GAS.Abilities.Locomotion.GA_Falling	1	0	0
-GAS.Abilities.Spells.Spells.Transform.GA_Spell_Transform	2	0	0
+GAS.Abilities.Spells.Spells.Transform.GA_Spell_Transform	1	0	0
 GAS.Calculations.Damage	1	0	0
