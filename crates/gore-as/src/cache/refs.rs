@@ -7233,6 +7233,118 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_scoped_character_selection(fault: u8) -> Self {
+        let mut r=Self::default();
+        for (ptr,name) in [(1,"AGothicCharacter"),(2,"AActor"),(3,"UCharacterPerceptionComponent"),(4,"TArray"),
+            (5,"UState"),(6,"UBase"),(7,"UDerivedAI")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32+50,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:if ptr>=5 {"Fixture"} else {""}.into(),namespace:String::new()});
+        }
+        r.class_super.insert("UState".into(),"UBase".into());r.class_super.insert("UBase".into(),"UCharacterAIState".into());
+        r.class_super.insert("UDerivedAI".into(),"UGameplayAbility_CharacterAI".into());
+        for (id,offset,name,owner,ty) in [(55i64,32i64,"Target","UState","AGothicCharacter"),(56,64,"Controller","UBase","UDerivedAI")] {
+            let key=(id<<1)|(offset<<33)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id as i32);
+            r.class_fields.entry(owner.into()).or_default().insert(name.into(),ty.into());
+        }
+        let scalar=|token|DataType{token,..Default::default()};
+        let object=|type_info,constant:bool|DataType{token:5,type_info,is_object_handle:true,is_object_const:constant,..Default::default()};
+        for (ptr,name,owner,constant,ret,args) in [
+            (100,"SelfActor","UCharacterAIState",true,object(1,false),vec![]),
+            (101,"Distance","AActor",true,scalar(0x50),vec![object(2,true)]),
+            (102,"$beh0","TArray",false,scalar(0x52),vec![]),
+            (103,"$beh2","TArray",false,scalar(0x52),vec![]),
+            (104,"Actor","UGameplayAbility_AI",true,object(1,false),vec![]),
+            (105,"Perception","AGothicCharacter",true,object(3,false),vec![]),
+            (106,"Sees","UCharacterPerceptionComponent",true,scalar(0x41),vec![object(1,true),scalar(0x50),scalar(0x50)]),
+            (200,"TargetActor","UBase",false,object(1,false),vec![]),
+            (201,"SelectActor","UBase",false,scalar(0x52),vec![object(1,false)])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            r.func_is_method.insert(ptr);if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        r.funcid_to_ptr.insert(200,200);r.funcid_to_ptr.insert(201,201);r.type_subtypes.insert(4,vec![object(1,false)]);
+        match fault {
+            1=>r.func_ret.get_mut(&100).unwrap().is_object_const=true,
+            2=>r.func_params.get_mut(&101).unwrap()[0].is_reference=true,
+            3=>r.func_ret.get_mut(&101).unwrap().token=0x51,
+            4=>{r.const_method_ptrs.remove(&104);},
+            5=>r.func_ret.get_mut(&105).unwrap().type_info=1,
+            6=>r.func_params.get_mut(&106).unwrap()[0].is_object_const=false,
+            7=>r.func_params.get_mut(&106).unwrap()[1].token=0x51,
+            8=>r.func_ret.get_mut(&200).unwrap().is_reference=true,
+            9=>{r.func_owner.insert(201,"OtherState".into());},
+            10=>r.func_params.get_mut(&201).unwrap()[0].is_object_const=true,
+            11=>{r.class_fields.get_mut("UState").unwrap().insert("Target".into(),"AActor".into());},
+            12=>{r.class_super.remove("UDerivedAI");},
+            13=>r.type_subtypes.get_mut(&4).unwrap()[0].is_object_handle=false,
+            14=>{r.const_method_ptrs.insert(103);},
+            15=>{r.func_params.get_mut(&102).unwrap().push(scalar(0x44));},
+            16=>{r.func_is_method.remove(&200);},
+            17=>{r.class_super.remove("UBase");},
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_stationary_blocking(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name) in [(1,"AGothicCharacter"),(2,"AActor"),(3,"UObject"),(4,"FRememberedPerception"),(5,"FPerceivedAgent"),(6,"FInGameTime"),
+            (7,"UAIValueSet"),(8,"TSubclassOf"),(9,"ULimits"),(10,"UController"),(11,"FVector"),(12,"UState")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32+50,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:if [9,10,12].contains(&ptr) {"Fixture"} else {""}.into(),namespace:String::new()});
+        }
+        r.class_super.insert("ULimits".into(),"UAIValueSet".into());r.class_super.insert("UController".into(),"UGameplayAbility_CharacterAI".into());
+        r.class_super.insert("UState".into(),"UIntermediateRoutine".into());
+        r.class_super.insert("UIntermediateRoutine".into(),"UAIState_DailyRoutine".into());
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&[("FRememberedPerception","Origin","FPerceivedAgent")],&[],None));
+        for (id,offset,name,ty) in [(54i64,192i64,"Origin","FPerceivedAgent"),(59,272,"Grace","bool"),(59,216,"Multiplier","float"),(59,241,"Emitted","bool"),
+            (59,248,"Clock","FInGameTime"),(59,200,"Cooldown","float"),(59,256,"Count","int"),(59,208,"Threshold","int"),(59,120,"ActiveRadius","float")] {
+            let key=(id<<1)|(offset<<33)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id as i32);
+            if id==59 {r.class_fields.entry("ULimits".into()).or_default().insert(name.into(),ty.into());}
+        }
+        let primitive=|token,constant:bool|DataType{token,is_object_const:constant,is_read_only:constant,..Default::default()};
+        let object=|type_info,reference:bool,constant:bool,handle:bool|DataType{token:5,type_info,is_reference:reference,is_object_const:constant,
+            is_object_handle:handle,is_read_only:constant&&!handle,..Default::default()};
+        for (ptr,name,owner,ret,args) in [
+            (100,"Spawned","UGameplayAbility_CharacterAI",object(7,false,false,true),vec![object(8,true,true,false)]),
+            (101,"Actor","FPerceivedAgent",object(1,false,false,true),vec![object(3,false,true,true)]),
+            (102,"SelfActor","UCharacterAIState",object(1,false,false,true),vec![]),
+            (103,"Distance","AActor",primitive(0x50,false),vec![object(2,false,true,true)]),
+            (104,"Radius","AActor",primitive(0x50,false),vec![]),
+            (105,"Age","FInGameTime",primitive(0x50,false),vec![object(3,false,true,true)])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            r.func_is_method.insert(ptr);r.const_method_ptrs.insert(ptr);
+        }
+        r.func_by_ptr.insert(200,"Facing".into());r.funcid_to_ptr.insert(200,200);r.func_ret.insert(200,primitive(0x41,false));
+        r.func_params.insert(200,vec![object(1,false,true,true),object(1,false,true,true),object(11,true,true,false),primitive(0x51,true)]);
+        r.func_by_ptr.insert(201,"Following".into());r.funcid_to_ptr.insert(201,201);r.func_ret.insert(201,primitive(0x41,false));r.func_params.insert(201,vec![object(1,false,true,true)]);
+        r.type_subtypes.insert(8,vec![object(7,false,false,true)]);r.global_by_ptr.insert(300,"__WorldContext".into());r.global_by_ptr.insert(301,"__StaticType_ULimits".into());
+        match fault {
+            1=>r.func_ret.get_mut(&103).unwrap().token=0x51,
+            2=>r.func_params.get_mut(&101).unwrap()[0].is_object_const=false,
+            3=>{r.const_method_ptrs.remove(&104);},
+            4=>r.func_params.get_mut(&105).unwrap()[0].is_reference=true,
+            5=>r.func_ret.get_mut(&102).unwrap().is_object_const=true,
+            6=>r.func_params.get_mut(&200).unwrap()[2].is_reference=false,
+            7=>r.func_params.get_mut(&200).unwrap()[3].is_object_const=false,
+            8=>{r.func_is_method.insert(200);},
+            9=>{r.class_fields.get_mut("ULimits").unwrap().insert("Count".into(),"uint".into());},
+            10=>{r.class_fields.get_mut("ULimits").unwrap().insert("Clock".into(),"float".into());},
+            11=>{r.class_fields.get_mut("ULimits").unwrap().insert("ActiveRadius".into(),"float32".into());},
+            12=>{r.class_fields.get_mut("ULimits").unwrap().insert("Grace".into(),"int".into());},
+            13=>{r.class_super.remove("UController");},
+            14=>r.type_subtypes.get_mut(&8).unwrap()[0].is_object_handle=false,
+            15=>{r.global_by_ptr.insert(301,"__StaticType_UAIValueSet".into());},
+            16=>{r.class_super.remove("UState");},
+            17=>r.func_params.get_mut(&201).unwrap()[0].is_object_const=false,
+            18=>{r.class_super.insert("UState".into(),"UCharacterAIState".into());},
+            19=>{r.class_super.insert("UState".into(),"UUnrelatedNative".into());},
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_context_comparisons(fault: u8) -> Self {
         let mut r=Self::default();
         for (ptr,name) in [(1,"UContext"),(2,"FEntry"),(3,"UTuning"),(4,"AGothicCharacterState"),(5,"UObject"),(6,"UController")] {
@@ -7350,6 +7462,98 @@ impl RefResolver {
             9=>r.func_params.get_mut(&17).unwrap()[0].is_object_const=false,
             10=>{r.global_by_ptr.insert(98,"Other".into());},
             11=>r.func_ret.get_mut(&16).unwrap().token=0x44,
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_copied_integer_selections(fault:u8) -> Self {
+        let mut r=Self::default();
+        for (ptr,name) in [(1,"TSubclassOf"),(2,"UItemDefinition"),(3,"UObject"),(4,"FInGameTime"),(5,"UState"),(6,"UConfig")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32+50,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:if ptr>=5 {"Fixture"} else {""}.into(),namespace:String::new()});
+        }
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&[("UItemDefinition","m_Value",if fault==1 {"float32"} else {"int"})],&[],None));
+        for (id,offset,name,ty) in [(52i64,128i64,"m_Value","int"),(55,2640,"Total","float"),(55,2648,"Config","UConfig"),(55,2592,"Default","UItemDefinition"),
+            (56,168,"Floor","float"),(56,176,"ScaleA","float"),(56,184,"ScaleB","float"),(56,104,"Limit","int"),(55,2680,"Count","int"),
+            (56,112,"Gap","float"),(56,96,"Duration","float"),(55,2688,"FirstDeadline","FInGameTime"),(55,2656,"SecondDeadline","FInGameTime"),(55,2704,"HalfDeadline","FInGameTime")] {
+            let key=(offset<<33)|(id<<1)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id as i32);
+            if id>=55 {r.class_fields.entry(if id==55 {"UState"} else {"UConfig"}.into()).or_default().insert(name.into(),ty.into());}
+        }
+        let scalar=|token|DataType{token,..Default::default()};
+        let object=|type_info,reference:bool,constant:bool,handle:bool|DataType{token:5,type_info,is_reference:reference,is_object_const:constant,is_object_handle:handle,is_read_only:constant && !handle,..Default::default()};
+        r.type_subtypes.insert(1,vec![object(2,false,false,true)]);
+        for (ptr,name,owner,constant,ret,args) in [
+            (100,"GetDefaultObject",Some("TSubclassOf"),true,object(2,false,false,true),vec![]),
+            (101,"IsValid",None,false,scalar(0x41),vec![object(3,false,true,true)]),
+            (102,"Max",None,false,scalar(0x51),vec![scalar(0x51),scalar(0x51)]),
+            (103,"XRealtimeSecondsFromNow",None,false,object(4,false,false,false),vec![object(3,false,true,true),scalar(0x50)]),
+            (104,"opAssign",Some("FInGameTime"),false,object(4,true,false,false),vec![object(4,true,true,false)]),
+            (105,"$beh2",Some("FInGameTime"),false,scalar(0x52),vec![])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            if let Some(owner)=owner {r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);}if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        r.global_by_ptr.insert(200,"__WorldContext".into());
+        match fault {
+            2=>{r.class_fields.get_mut("UState").unwrap().insert("Total".into(),"float32".into());},
+            3=>{r.class_fields.get_mut("UConfig").unwrap().insert("ScaleA".into(),"float32".into());},
+            4=>{r.class_fields.get_mut("UConfig").unwrap().insert("Limit".into(),"uint".into());},
+            5=>{r.class_fields.get_mut("UState").unwrap().insert("Default".into(),"UObject".into());},
+            6=>r.func_ret.get_mut(&100).unwrap().is_object_handle=false,
+            7=>{r.const_method_ptrs.remove(&100);},
+            8=>r.func_params.get_mut(&101).unwrap()[0].is_object_const=false,
+            9=>r.func_params.get_mut(&102).unwrap()[0].token=0x50,
+            10=>r.func_params.get_mut(&103).unwrap()[1].token=0x51,
+            11=>r.func_params.get_mut(&104).unwrap()[0].is_object_const=false,
+            12=>{r.global_by_ptr.insert(200,"Other".into());},
+            13=>{r.type_identity_by_ptr.get_mut(&2).unwrap().module="Foreign".into();},
+            14=>{r.class_fields.get_mut("UState").unwrap().insert("HalfDeadline".into(),"float".into());},
+            15=>r.type_subtypes.get_mut(&1).unwrap()[0].is_object_const=true,
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_context_recipient(fault:u8) -> Self {
+        let mut r=Self::default();
+        for (ptr,name) in [(1,"FGenericVoicelineRequestContext"),(2,"AGothicCharacter"),(3,"AGothicCharacterState"),(4,"UGenericVoicelineComponent"),
+            (5,"FGameplayTag"),(6,"EPerceptionNoiseLoudness"),(7,"UObject"),(8,"UState")] {
+            r.type_by_ptr.insert(ptr,name.into());r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:if ptr==8 {"Fixture"} else {""}.into(),namespace:String::new()});
+            r.typeid_to_ptr.insert(ptr as i32+50,ptr);
+        }
+        r.class_super.insert("UWarningState".into(),"UState".into());r.class_super.insert("UAIImpl".into(),"UGameplayAbility_CharacterAI".into());
+        r.class_fields.insert("UState".into(),HashMap::from([("Controller".into(),"UAIImpl".into())]));
+        let key=(58i64<<1)|(40i64<<33)|1;r.prop_by_key.insert(key,"Controller".into());r.prop_type_id.insert(key,58);
+        let object=|ptr,reference:bool,constant:bool,handle:bool|DataType{token:5,type_info:ptr,is_reference:reference,is_object_const:constant,is_object_handle:handle,is_read_only:constant&&!handle,..Default::default()};
+        let plain=|token|DataType{token,..Default::default()};
+        for (ptr,name,owner,constant,ret,params) in [
+            (100,"MakeContext","UState",false,object(1,false,false,false),vec![]),
+            (101,"Target","UState",false,object(2,false,false,true),vec![]),
+            (102,"IsValid","",false,plain(0x41),vec![object(7,false,true,true)]),
+            (103,"GetCharacterState","AGothicCharacter",true,object(3,false,false,true),vec![]),
+            (104,"GetCharacterState","UGameplayAbility_AI",true,object(3,false,false,true),vec![]),
+            (105,"GetVoiceline","AGothicCharacterState",true,object(4,false,false,true),vec![]),
+            (106,"SayVoicelineWithContext","UGenericVoicelineComponent",false,plain(0x41),vec![object(5,true,true,false),object(3,false,true,true),object(1,true,true,false),object(6,false,false,false)]),
+            (107,"$beh2","FGenericVoicelineRequestContext",false,plain(0x52),vec![])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,params);
+            if !owner.is_empty() {r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);}
+            if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        r.funcid_to_ptr.insert(200,100);r.funcid_to_ptr.insert(201,101);r.global_by_ptr.insert(300,"Reaction".into());r.global_ns.insert(300,"GameplayTag".into());
+        match fault {
+            1=>r.func_ret.get_mut(&100).unwrap().is_object_handle=true,
+            2=>{r.func_owner.insert(101,"Unrelated".into());},
+            3=>r.func_params.get_mut(&102).unwrap()[0].is_object_const=false,
+            4=>{r.const_method_ptrs.remove(&103);},
+            5=>{r.class_fields.get_mut("UState").unwrap().insert("Controller".into(),"Unrelated".into());},
+            6=>r.func_params.get_mut(&106).unwrap()[1].is_object_const=false,
+            7=>r.func_params.get_mut(&106).unwrap()[2].is_reference=false,
+            8=>{r.func_params.get_mut(&106).unwrap().pop();},
+            9=>{r.const_method_ptrs.insert(107);},
+            10=>{r.global_ns.insert(300,"Other".into());},
+            11=>{r.func_params.get_mut(&105).unwrap().push(plain(0x44));},
             _=>{}
         }
         r
