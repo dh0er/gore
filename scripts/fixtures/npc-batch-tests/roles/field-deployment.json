@@ -1,0 +1,140 @@
+{
+  "schema": "gore.npc-batch.field-deployment.v1",
+  "recorded_at": "2026-09-12T21:55:31.707313+00:00",
+  "bundle": "NpcFieldRolesTest",
+  "version": "0.1.0",
+  "id": "npcfieldrolestest-3d1bf76b",
+  "runtime_verified": false,
+  "build_reused": "field-v2",
+  "recompiled": false,
+  "source_and_package_identity_match_prior_qualified_build": true,
+  "build_report": "../build-checks.json",
+  "full_sha256": "1cf1d537e146ce53da5d5e07380f33e1d5beb48734fa9dfa6a3948f7e97c1532",
+  "mini_sha256": "d94b6383781485a29193f2dfc7b3d3ed200429120aad695c7def0734c1bec07a",
+  "generation_receipt_sha256": "50489ae0b7f72c2b7a57bdb9b5d6a79d06f35d09b8b2692b43957f87542e0651",
+  "original_module_preservation": {
+    "operation": "product module_ranges exact serialized module span comparison",
+    "mini_modules": 4,
+    "full_modules": 7319,
+    "pristine_modules": 7317,
+    "unselected_pristine_modules_byte_identical": 7315,
+    "exact_selected_module_set": true,
+    "diego_bytes_unchanged_from_0_1_11": false,
+    "tower_bytes_unchanged_from_0_1_11": true,
+    "passed": true
+  },
+  "inspection": {
+    "report_format": 1,
+    "source_kind": "directory",
+    "bundle_format": 1,
+    "mod": {
+      "name": "NpcFieldRolesTest",
+      "version": "0.1.0",
+      "author": ""
+    },
+    "component_count": 3,
+    "components": [
+      {
+        "type": "loc_patch",
+        "path": "loc/edits.json",
+        "target_count": 42,
+        "footprint_coverage": "exact"
+      },
+      {
+        "type": "voice_archive_patch",
+        "path": "voice",
+        "target_count": 5,
+        "footprint_coverage": "exact"
+      },
+      {
+        "type": "angel_script_patch",
+        "path": "scripts",
+        "target_count": 4,
+        "footprint_coverage": "exact"
+      }
+    ],
+    "file_count": 10,
+    "directory_count": 4,
+    "total_file_bytes": 472072,
+    "manifest_sha256": "16fd921d9110f0229c75e700a8040e75d1f3fb93443bae71155abd41175b9c78",
+    "tree_sha256": "627f40f47f398d7f4613bc863447c8bedec79346d8889c52b9d83e7b2a83abdf",
+    "evidence": {
+      "verified": [
+        "bounded non-link materialization of the selected directory or ZIP",
+        "root manifest format plus every declared component manifest and referenced payload",
+        "portable paths, payload size limits, and supported payload structure where an offline decoder exists",
+        "SHA-256 identity of the exact manifest bytes and complete normalized bundle tree"
+      ],
+      "not_verified": [
+        "compatibility with any particular game installation or game build",
+        "whether named game-side assets, samples, localization ids, or script edit targets exist",
+        "cross-mod conflicts, load order, or deployment readiness",
+        "runtime behavior, visuals, audio playback, dialog flow, or gameplay effect"
+      ]
+    }
+  },
+  "inspection_tool_limit": "Installed v0.3.0 connector rejects the known four-module mini-manifest pattern; qualified local CLI inspected the same unchanged bundle successfully. No approval refusal.",
+  "manager_cli_sha256": "28b5d76e1e861476c7882725f056bca7cb65e718550203bd6c6dbd9aa9987fe1",
+  "import_disposition": "unchanged; matched_by=source",
+  "preflight": "Dedicated preflight: game closed, one intended field entry, no recovery blocker; analyzer no recognized conflicts. Expected loadout change applied.",
+  "apply_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe\" mgr apply --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
+  "reset_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe\" mgr reset --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
+  "apply_log_sha256": "1fd2e802d5aba898ac3a00ffcba1ae71e6fd227d2d714cb41006ed01536ff5e2",
+  "pristine_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+  "status": {
+    "loadout": [
+      {
+        "enabled": true,
+        "id": "npcfieldrolestest-3d1bf76b"
+      }
+    ],
+    "manager_owned": {
+      "additive": {
+        "items": [],
+        "total": 0,
+        "truncated": false
+      },
+      "backups": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Script\\PrecompiledScript_Shipping.Cache.gore-bak",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\Cache\\AlkimiaLocalization_00000000.lcache.gore-bak",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\VoiceOver\\german_new.zip.gore-bak"
+        ],
+        "total": 3,
+        "truncated": false
+      },
+      "live": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Script\\PrecompiledScript_Shipping.Cache",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\Cache\\AlkimiaLocalization_00000000.lcache",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\VoiceOver\\german_new.zip"
+        ],
+        "total": 3,
+        "truncated": false
+      },
+      "recovery": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\gore-mod.deployed.json"
+        ],
+        "total": 1,
+        "truncated": false
+      },
+      "ue4ss": {
+        "items": [],
+        "total": 0,
+        "truncated": false
+      }
+    },
+    "state": "in_sync"
+  },
+  "completed_previous_package": "economy-runtime-0.1.3.json",
+  "save_cleanup_report": "../profile-cleanup-after-economy-reload.json",
+  "retained_starts": [
+    "070 NPC 04 Rollen - START",
+    "071 NPC 05 Quest - START",
+    "072 NPC 04 Rollen - Kampf bereit"
+  ],
+  "retained_saves_and_registry_match_cleanup": true,
+  "test_instructions": "FIELD-TEST.md",
+  "runtime_scope": "First passive mixed-weapon diagnosis on070; follow/wait; separate training defeat/enmity/faction/flee/death and explicit same-NPC revival.070 unchanged Hero,072 stronger Hero for combat; both daylight. No game launch or manual test performed by Codex."
+}

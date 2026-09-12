@@ -163,10 +163,10 @@ duplicated public metadata and central slot registration were corrected, and61
 was repaired with backups on2026-09-10. The subsequent game test confirms loading;
 the retained source date may sort it beside54 rather than at the top.
 
-## 4. NPC roles — economy/teacher test active
+## 4. NPC roles — field test active
 
-`NpcEconomyRolesTest 0.1.3` is active after the natural-voice restart passed.
-Profile 4 starts067/068/069 isolate missing LP, missing ore and successful
+`NpcFieldRolesTest 0.1.0` is active; [field checklist](../../scripts/fixtures/npc-batch-tests/roles/FIELD-TEST.md).
+The completed economy/teacher starts067/068/069 isolate missing LP, missing ore and successful
 learning. The user confirms all teacher cases, including exact cost, duplicate
 prevention and full restart. Trading0.1.0 and0.1.1 failed: result024 contains stock
 only in A's NPC container, while the separate global shop maps are empty. See the
@@ -178,11 +178,13 @@ TraderConfig plus a dedicated global event made purchase/sale/cancel work in0.1.
 but the first reload duplicated the batch while rebuilding the empty default map.
 See the [runtime report](../../scripts/fixtures/npc-batch-tests/roles/economy-runtime-0.1.2.json).
 The0.1.3 correction uses native `OnWorldStart` initial stock without a manual event
-call. Retest067 and two loads; earlier results are archived outside the game.
+call. The [0.1.3 result](../../scripts/fixtures/npc-batch-tests/roles/economy-runtime-0.1.3.json)
+passes both loads with unchanged traded stock and Hero inventory. Completed
+starts/results are archived outside the game; Profile4 retains070/071/072.
 The earlier NPC-container readback was not shop-stock proof.
 
 - [x] Trader with actual stock and working buying/selling/cancel, tested0.1.2.
-- [ ] Initial trader stock and transaction changes survive repeated loading (0.1.3 prepared).
+- [x] Initial trader stock and transaction changes survive full restart and repeated loading (0.1.3).
 - [ ] Qualify persistent late stock-event grants;0.1.2 duplicated a batch on first reload despite a retained event ledger.
 - [x] Teacher with separate LP/ore requirements, exact cost, no duplicate charge
   and persistent learned result after full restart.

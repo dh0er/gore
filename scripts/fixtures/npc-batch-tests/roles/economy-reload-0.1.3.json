@@ -205,5 +205,6 @@
   },
   "cleanup_report": "../profile-cleanup-after-economy.json",
   "retained_saves_and_registry_match_cleanup": true,
-  "retest": "Profile4 fresh067:01/02 initial3 cheese/10 arrows/100 ore; buy1 cheese, record ore,05 save handel-startbestand. Full restart/reload without01, compare2 cheese/10 arrows/saved ore,05 save handel-reload-1. Load that again, compare,05 save handel-reload-2. No teacher or cancel reruns."
+  "retest": "Profile4 fresh067:01/02 initial3 cheese/10 arrows/100 ore; buy1 cheese, record ore,05 save handel-startbestand. Full restart/reload without01, compare2 cheese/10 arrows/saved ore,05 save handel-reload-1. Load that again, compare,05 save handel-reload-2. No teacher or cancel reruns.",
+  "runtime_follow_up": "economy-runtime-0.1.3.json: user checklist passes; three saves retain current/default shop stock and Hero inventory across both loads."
 }

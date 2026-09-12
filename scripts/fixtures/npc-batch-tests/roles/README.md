@@ -14,8 +14,9 @@ between combat cases.
 
 ## Economy / teacher
 
-Active as `NpcEconomyRolesTest 0.1.3` since2026-09-12; Manager reports `in_sync`.
-The [reload correction](economy-reload-0.1.3.json) records the focused rebuild.
+Completed as `NpcEconomyRolesTest 0.1.3` on2026-09-12; now disabled for field tests.
+The [runtime result](economy-runtime-0.1.3.json) confirms both reloads preserve
+the traded stock and Hero inventory. The [reload correction](economy-reload-0.1.3.json) records the focused rebuild.
 The [0.1.0 deployment report](economy-deployment.json) remains historical.
 Natural-voice testing has finished its restart check, and the completed Voice
 saves are archived outside the game.
@@ -33,7 +34,12 @@ Choice01 wrote to the wrong pool. The Hero owns only the
 quest letter, glossary and50 ore, so an initially empty sellable-goods list is
 not itself a defect. See the [runtime result](economy-runtime-0.1.0.json).
 
-### Commerce follow-up0.1.3
+### Commerce follow-up0.1.3 (passed)
+
+The user confirms the complete checklist below. All three result saves have
+A current2 cheese/10 arrows/108 ore, default3/10/100, and Hero1 cheese/42 ore.
+The starting save067 and results are now [archived outside the game](../profile-cleanup-after-economy-reload.json).
+No additional commerce/teacher test is needed for this initial-stock path.
 
 The [0.1.2 user test](economy-runtime-0.1.2.json) passed stock visibility,
 purchase/sale and cancel, but failed persistence:026 had3/10/105 current stock
@@ -62,8 +68,8 @@ the event ledger and Hero inventory; menu markers alone are not proof.
 
 ### Original full checklist (teacher already passed)
 
-Historical checklist:068/069 and the completed teacher results are now archived
-outside the game. Only067 is retained as the current commerce input.
+Historical checklist: all economy/teacher starts and results are now archived
+outside the game; no commerce input needs to stay in the live profile.
 
 Profil 4: **067 „NPC 03 Handel - LP fehlt“** (0 LP/50 Erz),
 **068 „NPC 03 Lehrer - Erz fehlt“** (5 LP/0 Erz),
@@ -89,6 +95,10 @@ tested. Stock prices depend on shipped trading rules; compare displayed prices
 and actual ore deltas, not a fabricated fixed price.
 
 ## Field roles / lifecycle / mixed weapons
+
+**Active: `NpcFieldRolesTest 0.1.0`**, unchanged qualified build, Manager `in_sync`.
+See [deployment](field-deployment.json) and the **[German step-by-step test list](FIELD-TEST.md)**.
+Runtime results are pending. Profile4 now contains only070/071/072.
 
 Talk to A. B is the subject; keep A alive as the control menu. Start each combat,
 faction, flee or death case from the same clean copied save, rather than carrying
