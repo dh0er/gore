@@ -6582,6 +6582,55 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_scoped_tag_predicate(fault: u8) -> Self {
+        let mut r=Self::default();
+        for (ptr,name) in [(1,"FScopeCycleCounter"),(2,"FStatID"),(3,"FName"),(4,"FString"),(5,"FGameplayTagContainer"),(6,"UWeaponItemAnimConfig"),(7,"FGameplayTag"),(8,"URequirements")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:if ptr==8 {"Fixture"} else {""}.into(),namespace:String::new()});
+        }
+        for (offset,name) in [(20i64,"Required"),(52,"Any"),(84,"Rejected")] {
+            let key=(offset<<33)|(8<<1)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,8);
+        }
+        r.class_fields.insert("URequirements".into(),["Required","Any","Rejected"].into_iter().map(|s|(s.into(),"FGameplayTagContainer".into())).collect());
+        r.class_super.insert("UTestPermission".into(),"UPredicateOwner".into());
+        let plain=|token|DataType {token,..Default::default()};
+        let object=|type_info,is_reference,is_object_const,is_object_handle:bool|DataType {token:5,type_info,is_reference,is_object_const,is_object_handle,is_read_only:is_object_const && !is_object_handle,..Default::default()};
+        for (ptr,name,owner,ret,args) in [
+            (11,"$beh0","FStatID",plain(0x52),vec![object(3,true,true,false)]),
+            (12,"$beh0","FScopeCycleCounter",plain(0x52),vec![object(2,true,true,false)]),
+            (13,"$beh2","FStatID",plain(0x52),vec![]),
+            (14,"$beh0","FGameplayTagContainer",plain(0x52),vec![object(5,true,true,false)]),
+            (15,"$beh2","FGameplayTagContainer",plain(0x52),vec![]),
+            (16,"$beh2","FScopeCycleCounter",plain(0x52),vec![]),
+            (17,"$beh2","FGameplayTag",plain(0x52),vec![]),
+            (18,"opAssign","FString",object(4,true,false,false),vec![object(4,true,true,false)]),
+            (20,"Available","UPredicateOwner",plain(0x41),vec![object(6,false,true,true),object(5,true,true,false),object(5,true,true,false),object(5,true,true,false)])
+        ] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+        }
+        r.const_method_ptrs.insert(20);r.funcid_to_ptr.insert(20,20);
+        r.func_by_ptr.insert(10,"__STATIC_NAME".into());r.func_ret.insert(10,object(3,true,true,false));r.func_params.insert(10,vec![plain(0x44)]);
+        r.static_names.push("Arbitrary::Allow".into());r.global_by_ptr.insert(99,"Unavailable".into());
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Other".into(),
+            2=>r.func_params.get_mut(&12).unwrap()[0].is_reference=false,
+            3=>r.func_ret.get_mut(&10).unwrap().is_object_const=false,
+            4=>r.func_params.get_mut(&14).unwrap()[0].is_read_only=false,
+            5=>{r.const_method_ptrs.insert(15);},
+            6=>{r.class_fields.get_mut("URequirements").unwrap().insert("Rejected".into(),"FGameplayTag".into());},
+            7=>r.func_params.get_mut(&20).unwrap()[3].is_object_const=false,
+            8=>{r.const_method_ptrs.remove(&20);},
+            9=>r.func_ret.get_mut(&20).unwrap().token=0x52,
+            10=>r.func_params.get_mut(&20).unwrap()[0].is_object_const=false,
+            11=>{r.class_super.clear();},
+            12=>{r.func_params.get_mut(&16).unwrap().push(plain(0x44));},
+            13=>r.static_names[0]="Changed".into(),
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_projected_rotation_lifetimes(fault: u8) -> Self {
         let mut r = Self::default();
         for (ptr, name, module) in [(1,"FVector",""),(2,"AGothicCharacter",""),(3,"UProjectionHost","Fixture"),(4,"AProjectionArea","FixtureArea")] {
@@ -7019,6 +7068,63 @@ impl RefResolver {
             9=>r.type_identity_by_ptr.get_mut(&4).unwrap().module="Script".into(),
             10=>{r.func_params.get_mut(&10).unwrap().push(scalar(0x44));},
             11=>r.func_ret.get_mut(&20).unwrap().token=0x52,
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_switch_query_lives(fault: u8) -> Self {
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"UQueryProvider","Query"),(2,"AEntry",""),(3,"TArray",""),(4,"TArrayConstIterator","")] {
+            r.type_by_ptr.insert(ptr,name.into());r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        r.typeid_to_ptr.insert(44,4);
+        let object=|type_info,is_reference,is_object_const,is_object_handle,is_read_only|DataType{token:5,type_info,is_reference,is_object_const,is_object_handle,is_read_only,..Default::default()};
+        for (id,ptr,name,owner,ret,params) in [
+            (20,120,"GetProvider","UConsumer",object(1,false,false,true,false),vec![]),
+            (21,121,"FindCandidates","UQueryProvider",object(3,false,false,false,false),vec![DataType{token:0x41,is_object_const:true,is_read_only:true,..Default::default()}])
+        ] {
+            r.funcid_to_ptr.insert(id,ptr);r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,params);
+        }
+        for (ptr,name,owner,constant,ret,params) in [
+            (30,"Iterator","TArray",true,object(4,false,false,false,false),vec![]),
+            (31,"Proceed","TArrayConstIterator",false,object(2,true,false,true,true),vec![]),
+            (32,"$beh2","TArray",false,DataType{token:0x52,..Default::default()},vec![]),
+            (33,"GetState","AEntry",true,object(2,false,false,true,false),vec![]),
+            (34,"Add","TArray",false,DataType{token:0x52,..Default::default()},vec![object(2,true,true,true,true)])
+        ] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);
+            if constant {r.const_method_ptrs.insert(ptr);}r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,params);
+        }
+        match fault {
+            1=>r.func_ret.get_mut(&120).unwrap().is_object_const=true,
+            2=>r.func_params.get_mut(&121).unwrap()[0].token=0x44,
+            3=>{r.const_method_ptrs.remove(&30);},
+            4=>r.func_ret.get_mut(&31).unwrap().is_read_only=false,
+            5=>{r.const_method_ptrs.insert(32);},
+            6=>{r.func_owner.insert(121,"UOther".into());},
+            7=>r.type_identity_by_ptr.get_mut(&3).unwrap().module="Script".into(),
+            8=>{r.typeid_to_ptr.insert(44,3);},
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_clamped_product_lives(fault: u8) -> Self {
+        let mut r=Self::default();
+        for (ptr,name,token,arity) in [(10,"Max",0x44,2),(11,"Clamp",0x51,3),(12,"Max",0x51,2)] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ns.insert(ptr,"Math".into());
+            r.func_ret.insert(ptr,DataType{token,..Default::default()});r.func_params.insert(ptr,vec![DataType{token,..Default::default()};arity]);
+        }
+        match fault {
+            1=>{r.func_ns.insert(10,"Other".into());},
+            2=>r.func_ret.get_mut(&10).unwrap().token=0x45,
+            3=>r.func_params.get_mut(&11).unwrap()[0].token=0x50,
+            4=>{r.func_params.get_mut(&12).unwrap().pop();},
+            5=>{r.func_is_method.insert(11);},
+            6=>r.func_params.get_mut(&12).unwrap()[0].is_reference=true,
             _=>{}
         }
         r
