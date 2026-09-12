@@ -1,22 +1,20 @@
 {
-  "schema": "gore.npc-batch.economy-stock-correction.v1",
-  "recorded_at": "2026-09-12T21:04:03.355690+00:00",
+  "schema": "gore.npc-batch.economy-reload-correction.v1",
+  "recorded_at": "2026-09-12T21:40:49.744542+00:00",
   "bundle": "NpcEconomyRolesTest",
-  "version": "0.1.2",
-  "id": "npceconomyrolestest-9ceaf764",
+  "version": "0.1.3",
+  "id": "npceconomyrolestest-2c9febbb",
   "runtime_verified": false,
-  "previous_runtime": "economy-runtime-0.1.1.json",
-  "change": "Declare native TraderConfig stock for GoreNpcTraderStockV2 and dispatch that global event from01. New gore_role_shop_stock_v2 marker enables migration of old saves. No NPC inventory grants.",
+  "previous_runtime": "economy-runtime-0.1.2.json",
+  "change": "Use OnWorldStart for native initial stock.01 only acknowledges stock and unlocks02; no CallGlobalEvent and no inventory grant. Keep existing menu marker for compatibility; test fresh067 instead of normalizing old faulty results.",
   "source_checks": {
-    "assembly_matches_tracked": true,
-    "compiled_sources_match_tracked": true,
-    "teacher_and_funds_and_snapshot_choices_unchanged": true,
-    "original_B_prefix_byte_exact": true,
-    "localization_and_voice_byte_identical_to_0_1_1": true,
-    "independent_review": "stage_cache: no concrete findings; original event/config path and fixed difficulty counts checked."
+    "assembly_matches_tracked_and_compiled": true,
+    "trade_teacher_funds_and_snapshot_choices_unchanged": true,
+    "localization_and_voice_byte_identical_to_0_1_2": true,
+    "manual_stock_event_absent": true
   },
   "build": {
-    "build": "economy-v3",
+    "build": "economy-v4",
     "source_tree_unchanged": true,
     "authored_modules": [
       {
@@ -24,8 +22,8 @@
         "relative_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
         "disposition": "added",
         "source": {
-          "byte_len": 35771,
-          "sha256": "5675d9d2aaad52679b554c736a6af01f9b33f902db0007b9aff7400617234da3"
+          "byte_len": 35690,
+          "sha256": "d38bd567cdb1b530b99af2b0970b99dc6c4d9f3897ab339ca226fb05fe8b2471"
         }
       },
       {
@@ -33,8 +31,8 @@
         "relative_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
         "disposition": "added",
         "source": {
-          "byte_len": 29411,
-          "sha256": "f43ef51374d221b3a36d22f0070bcc3bcd4fd2a2855bbeb33a6f9763c0df64f0"
+          "byte_len": 29474,
+          "sha256": "3f99220ad6f2985acb0771445a7a7f9d9da88b9cc343ebe60d3ca8587f6e9679"
         }
       },
       {
@@ -84,25 +82,22 @@
         }
       ]
     },
-    "mini_sha256": "5f5c08e1f6c63ebbc824142911f5f28b238a7f22aef13c12c138a9b7c659727e",
-    "full_sha256": "f438a041a403e50bb387593789c4fd4f116412e568be36de9ab06a1f8b0e0143",
-    "generation_receipt_sha256": "89a15a8647aea568bc9dea29934cd1896b6e8e3969fe4dba6e0bfde302bd01be"
+    "mini_sha256": "65429fbae1f740b7cc87ebe7a1a004a81c06c7852bd5abec816e627de6e8058d",
+    "full_sha256": "0a9a68083faa232e4136e589b719b6fc34d723ab9061b549019cc8276ae40804",
+    "generation_receipt_sha256": "851074aca7794bf46e0db88e90afc48f3883db121dc01bed3ab89bf2b1d6bd44"
   },
   "compiled_readback": {
-    "native_world_point_get_t3": "0x1d3c226b140",
-    "native_call_global_event_t3": "0x1d3c226b4c0",
+    "original_OnWorldStart_global_pointer": "0x1d38069ee70",
     "original_add_trader_item_all_difficulties_function_id": "0x28842",
-    "stock_counts": [
+    "three_stock_calls_and_counts": [
       3,
       10,
       100
     ],
-    "static_names": {
-      "23278": "gore_role_shop_stock_v2",
-      "23279": "GoreNpcTraderStockV2"
-    },
-    "stock_disasm_sha256": "3407e95471c74ee7d115036aa7127e633460f492b45a5a2bfc9013f43261390f",
-    "config_disasm_sha256": "f1fc7939e471cb3ad1aee3a6d19f71e50d08310e74029c8f0305879327111d1c"
+    "world_point_manager_get_and_event_calls_absent_from01": true,
+    "stock_disasm_sha256": "2188dc23c4e004509b88bffde64bec13e8cf7ebe1356f96a1b5ba7641e9edffe",
+    "config_disasm_sha256": "174f5653dc2d422e6f25553d6893d20919bdd06df81f193270ddc03e10441753",
+    "original_config_disasm_sha256": "cb8c9d61f809c8723b3c277869dfc2e1c96926f4b4f74f7947d2c1071e0688c7"
   },
   "inspection": {
     "report_format": 1,
@@ -110,7 +105,7 @@
     "bundle_format": 1,
     "mod": {
       "name": "NpcEconomyRolesTest",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "author": ""
     },
     "component_count": 3,
@@ -136,9 +131,9 @@
     ],
     "file_count": 10,
     "directory_count": 4,
-    "total_file_bytes": 440130,
-    "manifest_sha256": "86c127a63e75e9f8954c61e5003191d52079a5ef583e648a70fdb2f3f3effb32",
-    "tree_sha256": "596d37ab3f29879f025532d7c8855969544606fc33ac06c2a322fc0527d061a8",
+    "total_file_bytes": 439905,
+    "manifest_sha256": "e54983c035e57f9c7f8940d1f55b55bd71dc04180dc28365ed2e8495bd538f64",
+    "tree_sha256": "867cdc300da930fd73d5307ca5e6f055a689ff5596cfa2b30f77be5f2c23b088",
     "evidence": {
       "verified": [
         "bounded non-link materialization of the selected directory or ZIP",
@@ -166,7 +161,7 @@
     "loadout": [
       {
         "enabled": true,
-        "id": "npceconomyrolestest-9ceaf764"
+        "id": "npceconomyrolestest-2c9febbb"
       }
     ],
     "manager_owned": {
@@ -208,14 +203,7 @@
     },
     "state": "in_sync"
   },
-  "saves_modified": false,
-  "all_11_profile4_save_hashes_match_previous_readback": true,
-  "registry_readback": {
-    "current_sha256": "996c395010dadb9d687ac5b39c8e7d108aff3c44531a2f3fd9d8c715bae2d8e0",
-    "previous_readback_sha256": "edadc72b0c5a2449acb5fd9a5cab83a5aa5296f9ae82b9f4316b6216834a225e",
-    "matches_previous_readback": false,
-    "note": "Previous readback predates the user0.1.1 retest. No pre-deployment registry hash captured this turn; no save or registry mutations performed by this correction."
-  },
-  "retest": "Profile4 save024 rolle-handel:01 once,02 stock3 cheese/10 arrows/100 trader ore; buy/sell/cancel,05 save handel-bestand. Full restart/reload without01,05 save handel-bestand-neustart. If empty save handel-leer after05 for global shop/event inspection.",
-  "runtime_follow_up": "economy-runtime-0.1.2.json: purchase/sale/cancel pass; first reload duplicates batch despite retained ledger and marker."
+  "cleanup_report": "../profile-cleanup-after-economy.json",
+  "retained_saves_and_registry_match_cleanup": true,
+  "retest": "Profile4 fresh067:01/02 initial3 cheese/10 arrows/100 ore; buy1 cheese, record ore,05 save handel-startbestand. Full restart/reload without01, compare2 cheese/10 arrows/saved ore,05 save handel-reload-1. Load that again, compare,05 save handel-reload-2. No teacher or cancel reruns."
 }

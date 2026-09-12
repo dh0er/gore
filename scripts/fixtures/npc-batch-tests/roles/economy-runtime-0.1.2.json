@@ -1,0 +1,63 @@
+{
+  "schema": "gore.npc-batch.economy-runtime.v1",
+  "date": "2026-09-12",
+  "bundle": "NpcEconomyRolesTest",
+  "version": "0.1.2",
+  "user_results": {
+    "shop_stock_visible": true,
+    "purchase_sale_and_cancel": true,
+    "first_reload_preserves_stock": false,
+    "report": "Everything works except final reload: A receives another3 cheese,10 arrows,100 ore; resulting6/20/205 includes5 earned from trading."
+  },
+  "save_evidence": [
+    {
+      "slot": "G1R-026",
+      "title": "handel-bestand",
+      "sha256": "53018e4245c08d88592bc8b15d1a04e374f802e842d3b10ae802806fe7124319",
+      "items": {
+        "ItAm_Arrow": 10,
+        "ItFo_Cheese": 3,
+        "ItMi_Orenugget": 105
+      },
+      "default_items": {},
+      "generated_events": [
+        "OnWorldStart",
+        "GoreNpcTraderStockV2"
+      ],
+      "last_trade_seconds": 43462.28886884451,
+      "once_marker": "gore_role_shop_stock_v2 → 1",
+      "active_event_count": 1,
+      "world_point_events_to_call_count": 2643
+    },
+    {
+      "slot": "G1R-027",
+      "title": "handel-bestand-neustart",
+      "sha256": "cba90cfd8a6810c53173ee42697eb2081c6193e6de0ef71bb73d185b4a415cf1",
+      "items": {
+        "ItAm_Arrow": 20,
+        "ItFo_Cheese": 6,
+        "ItMi_Orenugget": 205
+      },
+      "default_items": {
+        "ItAm_Arrow": 10,
+        "ItFo_Cheese": 3,
+        "ItMi_Orenugget": 100
+      },
+      "generated_events": [
+        "OnWorldStart",
+        "GoreNpcTraderStockV2"
+      ],
+      "last_trade_seconds": 43462.28886884451,
+      "once_marker": "gore_role_shop_stock_v2 → 1",
+      "active_event_count": 0,
+      "world_point_events_to_call_count": 2643
+    }
+  ],
+  "comparison_path": "work/npc-batch-tests/roles/runtime-trader-replay-20260912T212802Z/replay-comparison.json",
+  "comparison_sha256": "ce398517ddc7ea251d337931c6623f5db1c58ca4ae46e09ff78efe1865d41ea2",
+  "interpretation": "Current stock gains one full batch while empty default stock is rebuilt. The generated-event ledger and one-time menu marker persist. Saves do not distinguish native event replay from baseline/delta handling; no missing marker or general vanilla defect is established.",
+  "shipped_counterexample": "Regions/Traits/QuestRelatedTraits.as calls OnOrcEnclaveFightStarted; TradersGeneric.as uses it for Cronos/BaalCadar stock. A custom event name alone is not the cause.",
+  "correction": "economy-reload-0.1.3.json: use native OnWorldStart initial stock, remove manual event call; runtime reload retest pending.",
+  "late_event_persistence": "Unqualified; retain as an open NPC authoring item.",
+  "archive_report": "../profile-cleanup-after-economy.json"
+}

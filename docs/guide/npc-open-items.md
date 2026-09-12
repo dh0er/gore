@@ -165,20 +165,25 @@ the retained source date may sort it beside54 rather than at the top.
 
 ## 4. NPC roles — economy/teacher test active
 
-`NpcEconomyRolesTest 0.1.2` is active after the natural-voice restart passed.
+`NpcEconomyRolesTest 0.1.3` is active after the natural-voice restart passed.
 Profile 4 starts067/068/069 isolate missing LP, missing ore and successful
 learning. The user confirms all teacher cases, including exact cost, duplicate
 prevention and full restart. Trading0.1.0 and0.1.1 failed: result024 contains stock
 only in A's NPC container, while the separate global shop maps are empty. See the
 [root-cause report](../../scripts/fixtures/npc-batch-tests/roles/economy-runtime-0.1.1.json),
 [role checklist](../../scripts/fixtures/npc-batch-tests/roles/README.md) and
-[stock correction](../../scripts/fixtures/npc-batch-tests/roles/economy-stock-0.1.2.json).
+[reload correction](../../scripts/fixtures/npc-batch-tests/roles/economy-reload-0.1.3.json).
 The explicit Wilderness/General config candidate made no visible difference.
-The correction defines stock through TraderConfig and dispatches a dedicated
-global event;01 is available again on024. Purchase/sale/cancel and full restart
-remain unverified. The earlier NPC-container readback was not shop-stock proof.
+TraderConfig plus a dedicated global event made purchase/sale/cancel work in0.1.2,
+but the first reload duplicated the batch while rebuilding the empty default map.
+See the [runtime report](../../scripts/fixtures/npc-batch-tests/roles/economy-runtime-0.1.2.json).
+The0.1.3 correction uses native `OnWorldStart` initial stock without a manual event
+call. Retest067 and two loads; earlier results are archived outside the game.
+The earlier NPC-container readback was not shop-stock proof.
 
-- [ ] Trader with actual stock and working buying/selling.
+- [x] Trader with actual stock and working buying/selling/cancel, tested0.1.2.
+- [ ] Initial trader stock and transaction changes survive repeated loading (0.1.3 prepared).
+- [ ] Qualify persistent late stock-event grants;0.1.2 duplicated a batch on first reload despite a retained event ledger.
 - [x] Teacher with separate LP/ore requirements, exact cost, no duplicate charge
   and persistent learned result after full restart.
 - [ ] Companion/following behavior, including stopping and resuming.

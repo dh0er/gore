@@ -14,8 +14,8 @@ between combat cases.
 
 ## Economy / teacher
 
-Active as `NpcEconomyRolesTest 0.1.2` since2026-09-12; Manager reports `in_sync`.
-The [stock correction](economy-stock-0.1.2.json) records the focused rebuild.
+Active as `NpcEconomyRolesTest 0.1.3` since2026-09-12; Manager reports `in_sync`.
+The [reload correction](economy-reload-0.1.3.json) records the focused rebuild.
 The [0.1.0 deployment report](economy-deployment.json) remains historical.
 Natural-voice testing has finished its restart check, and the completed Voice
 saves are archived outside the game.
@@ -33,30 +33,37 @@ Choice01 wrote to the wrong pool. The Hero owns only the
 quest letter, glossary and50 ore, so an initially empty sellable-goods list is
 not itself a defect. See the [runtime result](economy-runtime-0.1.0.json).
 
-### Commerce follow-up0.1.2
+### Commerce follow-up0.1.3
 
-The config now declares3 cheese,10 arrows and100 ore through
-`AddTraderItemAllDifficulties`, with fixed difficulty multipliers. Choice01
-dispatches the unique `GoreNpcTraderStockV2` global event. Its versioned menu
-marker makes01 available on old024, whose previous marker only records the
-wrong-pool grant. Original trading modules and the teacher logic are preserved.
-Runtime stock generation and persistence still need the following user test.
+The [0.1.2 user test](economy-runtime-0.1.2.json) passed stock visibility,
+purchase/sale and cancel, but failed persistence:026 had3/10/105 current stock
+and an empty default map;027 had6/20/205 current stock and3/10/100 defaults.
+The generated-event ledger and once marker survived unchanged. This rules out
+a lost menu marker; saves alone do not identify the exact native replay/delta
+implementation. The late custom stock event remains unqualified for persistence.
 
-1. Start the game and load **024 `rolle-handel`** in Profile4. Talk to A and
-   choose **01 once**, then02. Expect3 cheese,10 arrows and100 trader ore;
-   Hero still has50 ore.01 should then be unavailable.
-2. Buy1 cheese, sell it back, and compare the shown prices
-   with ore/inventory changes. Prepare another transaction and cancel before
-   confirming it: no transfer. Hero's initial empty list should gain the bought
-   cheese. End the trade, choose05 and save `handel-bestand`.
-3. Fully quit/restart, reload `handel-bestand`, check retained stock/ore and01
-   remaining unavailable. Choose05 and save `handel-bestand-neustart`.
+For initial stock0.1.3 uses the shipped `OnWorldStart` batch. No choice dispatches
+a stock event or adds goods.01 only acknowledges the prepared stock and unlocks
+02. Original trading modules and teacher logic are preserved. Use untouched067;
+026 already lacks its default baseline and027 already contains duplicates.
 
-If the shop stays empty after01, end trade, choose05 and save `handel-leer`.
-Inspect the global trader row and generated-event ledger from that result;
-do not infer success from a menu marker or the NPC inventory container.
+1. Profile4: load **067 `NPC 03 Handel - LP fehlt`**. At A choose
+   **01 Anfangsbestand bereit**, then02. Expect3 cheese,10 arrows and100 trader ore.
+2. Buy1 cheese and note A's resulting ore. Expect2 cheese and10 arrows.
+   End trade, choose05 and save **`handel-startbestand`**.
+3. Fully quit/restart, reload that save, choose02 directly. Expect exactly the
+   recorded stock/ore, including2 cheese. Choose05, save **`handel-reload-1`**.
+4. Reload `handel-reload-1` once more, repeat02/05 and save **`handel-reload-2`**.
+   Counts must still match. Neither restocking nor an additional grant is expected.
+
+No repeated teacher or cancel tests. If stock is empty or changes, save the
+observed result and report counts. Readback must inspect both global stock maps,
+the event ledger and Hero inventory; menu markers alone are not proof.
 
 ### Original full checklist (teacher already passed)
+
+Historical checklist:068/069 and the completed teacher results are now archived
+outside the game. Only067 is retained as the current commerce input.
 
 Profil 4: **067 „NPC 03 Handel - LP fehlt“** (0 LP/50 Erz),
 **068 „NPC 03 Lehrer - Erz fehlt“** (5 LP/0 Erz),
@@ -69,7 +76,7 @@ Ergebnisse bitte `lehrer-lp-fehlt`, `lehrer-erz-fehlt`, `lehrer-gelernt`,
 
 | Choice | Test / expected observation |
 | --- | --- |
-| 01 | Request A's native shop stock event once: 3 cheese, 10 arrows, 100 ore; inspect the global trader row. |
+| 01 | Acknowledge the native initial shop stock and unlock02; this choice never grants goods. |
 | 02 | Open trade, buy 1 cheese, then sell it back. Check both inventories and ore changes; cancel a second pending transaction and confirm no transfer. |
 | 03, before 04 | On an input without Diving and with fewer than 5 LP **or** 30 ore, learning must fail and charge nothing. For separate LP/ore gates, use inputs satisfying only the other requirement. The fixture never removes existing resources to manufacture this state. |
 | 04 | Optional, once per save: explicitly grants 5 LP and 50 ore for the positive test. It does not reset resources or unlearn skills. |

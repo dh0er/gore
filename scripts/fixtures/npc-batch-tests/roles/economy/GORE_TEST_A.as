@@ -866,16 +866,15 @@ namespace G1R::Conversation
 class UChoiceGoreRoleStock : UTopic_GoreRoleControl
 {
     default DebugId = 3409845526797146001;
-    default Caption = FText::FromString(n"01 Handel: einmalig 3 Kaese, 10 Pfeile, 100 Erz".ToString());
+    default Caption = FText::FromString(n"01 Handel: Anfangsbestand bereit".ToString());
     default PriorityRank = 60;
     UFUNCTION(BlueprintOverride)
     bool IsVisible() const { return GoreRoleRead(this.GetSelf(), n"gore_role_shop_stock_v2") == 0.0f; }
     UFUNCTION(BlueprintOverride)
     void Act()
     {
-        UWorldPointManager Manager = UWorldPointManager::Get();
-        if (this.GetSelf() == nullptr || Manager == nullptr) return;
-        Manager.CallGlobalEvent(n"GoreNpcTraderStockV2");
+        if (this.GetSelf() == nullptr) return;
+        // Only unlock the test menu. Stock belongs to native initialization.
         GoreRoleNote(this.GetSelf(), n"gore_role_shop_stock_v2", 1.0f);
         GoreRoleEconomySnapshot(this.GetSelf(), Hero());
     }

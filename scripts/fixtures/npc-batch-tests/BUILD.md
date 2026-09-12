@@ -120,6 +120,14 @@ No new native binding or CLI change is required. `roles/economy-stock-0.1.2.json
 records build/readback and activation.7315 unselected original modules, including
 the decompiler-sensitive stock helper, must remain byte-identical to pristine.
 
+Economy0.1.2 passed trade operations but duplicated stock on first reload;
+`roles/economy-runtime-0.1.2.json` records the retained event ledger and
+empty-to-populated default map. Economy0.1.3 builds frozen economy-v3 with the
+tracked overlays, changes only the batch to `OnWorldStart` and removes the
+manual stock event from01 (now an acknowledgement). The spec version is0.1.3;
+loc/voice and native bindings remain unchanged. Use the same preservation and
+readback checks; `roles/economy-reload-0.1.3.json` records the activation.
+
 The quest build exposed a core defect: after adding the first module, the running
 cache has a different SHA and no longer authenticates the sealed native API
 snapshot. FullGraph now authenticates native authority once against the original
