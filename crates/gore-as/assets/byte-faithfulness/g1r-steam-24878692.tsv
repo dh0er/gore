@@ -2,7 +2,7 @@
 AI.AIAgent.Creature.Skeleton.SkeletonMage.Spells.SoulHarvest.SoulHarvest_Visual	1	0	0
 AI.AssessmentResponseSystem.AssessmentBits	1	0	0
 AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict	2	0	0
-AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	7	0	0
+AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	5	0	0
 AI.AssessmentResponseSystem.EventResponses	1	0	0
 AI.NativeAICommands	1	0	0
 AI.States.AIState_FollowCharacterAggressive	1	0	0
@@ -26,5 +26,4 @@ GAS.Abilities.Passive.GA_PlayerPerception_CrimeRegistration	1	0	0
 GAS.Abilities.Spells.Spells.Transform.GA_Spell_Transform	2	0	0
 GAS.Calculations.Damage	1	0	0
 Gameplay.Magic.Components.InExtremo.InExtremoPropComponent	1	0	0
-Regions.Traits.QuestRelatedTraits	1	0	0
 Sound.FXDefinitions.FXDefinitions_AttackImpact	1	0	0

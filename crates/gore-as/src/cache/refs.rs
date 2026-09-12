@@ -2022,6 +2022,134 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_member_value_selection(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (id, name, module) in [(1, "UState", "Fixture"), (2, "UGroup", "GroupFixture"),
+            (3, "FVector", ""), (4, "UObject", ""), (5, "UState", "OtherFixture")]
+        {
+            r.typeid_to_ptr.insert(id, id as i64); r.type_by_ptr.insert(id as i64, name.into());
+            r.type_names.insert(name.into());
+            r.type_identity_by_ptr.insert(id as i64, TypeIdentity {
+                name: name.into(), module: module.into(), namespace: String::new() });
+        }
+        r.class_super.insert("UGroup".into(), "UObject".into());
+        let mut fields: HashMap<String, HashMap<String, String>> = HashMap::new();
+        for (id, owner, offset, name, ty) in [(1i32, "UState", 16i32, "Group", "UGroup"),
+            (1, "UState", 48, "Fallback", "FVector"), (2, "UGroup", 24, "Point", "FVector")]
+        {
+            let key = (id as i64) << 1 | (offset as i64) << 33 | 1;
+            r.prop_by_key.insert(key, name.into()); r.prop_type_id.insert(key, id);
+            fields.entry(owner.into()).or_default().insert(name.into(), ty.into());
+        }
+        if fault == 1 { fields.get_mut("UGroup").unwrap().insert("Point".into(), "float".into()); }
+        if fault == 2 { fields.get_mut("UState").unwrap().insert("Group".into(), "UObject".into()); }
+        if fault == 3 { fields.get_mut("UState").unwrap().insert("Fallback".into(), "FName".into()); }
+        r.set_class_fields(fields);
+        let void = DataType { token: 0x52, ..Default::default() };
+        let boolean = DataType { token: 0x41, ..Default::default() };
+        let value = DataType { token: 5, type_info: 3, is_reference: true,
+            is_object_const: true, is_read_only: true, ..Default::default() };
+        for (ptr, name, owner, constant, ret, params) in [
+            (100, "$beh0", "FVector", false, void.clone(), vec![value.clone()]),
+            (101, "$beh2", "FVector", false, void.clone(), vec![]),
+            (102, "IsValid", "", false, boolean.clone(), vec![DataType { token: 5, type_info: 4,
+                is_object_handle: true, is_object_const: true, ..Default::default() }]),
+            (103, "IsNearlyZero", "FVector", true, boolean, vec![DataType { token: 0x51, ..Default::default() }]),
+            (104, "Before", "", false, void.clone(), vec![value.clone()]),
+            (105, "After", "", false, void.clone(), vec![value.clone()]),
+            (106, "Observe", "", false, void, vec![value])]
+        {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_ret_names.insert(name.into(), ret.base_name(&r));
+            r.func_ret.insert(ptr, ret); r.func_params.insert(ptr, params);
+            if !owner.is_empty() { r.func_owner.insert(ptr, owner.into()); r.func_is_method.insert(ptr); }
+            if constant { r.const_method_ptrs.insert(ptr); }
+        }
+        match fault {
+            4 => { r.prop_type_id.insert((1i64 << 1) | (48i64 << 33) | 1, 5); },
+            5 => r.func_params.get_mut(&100).unwrap()[0].is_reference = false,
+            6 => r.func_params.get_mut(&100).unwrap()[0].is_object_const = false,
+            7 => r.func_params.get_mut(&100).unwrap()[0].is_read_only = false,
+            8 => r.func_params.get_mut(&100).unwrap()[0].is_object_handle = true,
+            9 => r.func_params.get_mut(&100).unwrap()[0].is_auto = true,
+            10 => r.func_params.get_mut(&100).unwrap()[0].if_handle_then_const = true,
+            11 => { r.func_owner.insert(100, "FOther".into()); },
+            12 => { r.const_method_ptrs.insert(100); },
+            13 => { r.func_is_method.remove(&100); },
+            14 => r.func_ret.get_mut(&100).unwrap().is_reference = true,
+            15 => r.func_ret.get_mut(&100).unwrap().is_object_const = true,
+            16 => r.func_params.get_mut(&100).unwrap().clear(),
+            17 => r.type_identity_by_ptr.get_mut(&3).unwrap().module = "Script".into(),
+            18 => r.type_identity_by_ptr.get_mut(&2).unwrap().namespace = "Other".into(),
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_class_guard_bool_lifetimes(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr,name,module) in [(1,"ARecipient",""),(2,"FEntry",""),(3,"TSubclassOf",""),
+            (4,"UObject",""),(5,"UItem",""),(6,"UInteractive",""),(7,"FPlan","Fixture"),(8,"UPlanner","Fixture"),(9,"TArrayIterator","")]
+        {
+            r.type_by_ptr.insert(ptr,name.into()); r.typeid_to_ptr.insert(ptr as i32+50,ptr);
+            r.type_names.insert(name.into());
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity { name:name.into(),module:module.into(),namespace:String::new() });
+        }
+        let plain = |token| DataType { token,..Default::default() };
+        let object = |type_info,reference:bool,constant:bool,handle:bool| DataType { token:5,type_info,
+            is_reference:reference,is_object_const:constant,is_read_only:constant&&!handle,is_object_handle:handle,..Default::default() };
+        r.type_subtypes.insert(3,vec![object(5,false,false,true)]);
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&[
+            ("FEntry","ItemClass",if fault==1 {"TSubclassOf<UOther>"} else {"TSubclassOf<UItem>"}),
+            ("FEntry","InteractiveClass",if fault==2 {"UInteractive"} else {"TSubclassOf<UInteractive>"})],&[],None));
+        for (offset,name) in [(40i64,"ItemClass"),(48,"InteractiveClass")] {
+            let key=(52i64<<1)|(offset<<33)|1;
+            r.prop_by_key.insert(key,name.into()); r.prop_type_id.insert(key,52);
+        }
+        for (ptr,name,owner,constant,ret,args) in [
+            (101,"$beh2","FEntry",false,plain(0x52),vec![]),
+            (102,"$beh0","TSubclassOf",false,plain(0x52),vec![object(3,true,true,false)]),
+            (103,"IsValid","TSubclassOf",true,plain(0x41),vec![]),
+            (104,"opImplConv","TSubclassOf",true,object(4,false,false,true),vec![]),
+            (105,"IsValid","",false,plain(0x41),vec![object(4,false,true,true)]),
+            (106,"$beh2","TSubclassOf",false,plain(0x52),vec![]),
+            (200,"Matches","UPlanner",false,plain(0x41),vec![object(1,false,false,true);2])]
+        {
+            r.func_by_ptr.insert(ptr,name.into()); r.func_ret.insert(ptr,ret); r.func_params.insert(ptr,args);
+            if !owner.is_empty() { r.func_owner.insert(ptr,owner.into()); r.func_is_method.insert(ptr); }
+            if constant { r.const_method_ptrs.insert(ptr); }
+        }
+        r.funcid_to_ptr.insert(200,200);
+        match fault {
+            3 => { r.prop_type_id.insert((52i64<<1)|(48i64<<33)|1,53); },
+            4 => { r.func_owner.insert(200,"UOtherPlanner".into()); },
+            5 => r.func_ret.get_mut(&200).unwrap().token=0x44,
+            6 => r.func_params.get_mut(&200).unwrap()[1].is_object_const=true,
+            7 => { r.func_is_method.remove(&200); },
+            8 => r.func_params.get_mut(&101).unwrap().push(plain(0x41)),
+            9 => { r.const_method_ptrs.insert(101); },
+            10 => r.func_params.get_mut(&102).unwrap()[0].is_reference=false,
+            11 => r.func_params.get_mut(&102).unwrap()[0].is_object_const=false,
+            12 => r.func_params.get_mut(&102).unwrap()[0].is_read_only=false,
+            13 => r.func_params.get_mut(&102).unwrap()[0].is_object_handle=true,
+            14 => { r.const_method_ptrs.remove(&103); },
+            15 => r.func_params.get_mut(&103).unwrap().push(plain(0x41)),
+            16 => r.func_ret.get_mut(&104).unwrap().is_reference=true,
+            17 => r.func_ret.get_mut(&104).unwrap().is_object_const=true,
+            18 => { r.const_method_ptrs.remove(&104); },
+            19 => { r.func_is_method.insert(105); },
+            20 => r.func_params.get_mut(&105).unwrap()[0].is_object_const=false,
+            21 => r.func_ret.get_mut(&105).unwrap().is_read_only=true,
+            22 => { r.func_ns.insert(105,"Other".into()); },
+            23 => r.type_subtypes.get_mut(&3).unwrap()[0].is_object_handle=false,
+            24 => r.type_identity_by_ptr.get_mut(&2).unwrap().module="Script".into(),
+            25 => r.type_identity_by_ptr.get_mut(&7).unwrap().module=String::new(),
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_guard_field_selection(fault: u8) -> Self {
         let mut r = Self::from_test_member_chain(&[("UConfig", ""), ("UState", ""), ("UObject", ""), ("UState", "")]);
         for (id, name) in [(1, "UConfig"), (2, "UState"), (3, "UObject"), (4, "UState")] {
@@ -5521,6 +5649,28 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_native_mutated_defaults(fault: u8) -> Self {
+        let mut r = Self::from_test_mutable_native_value_outputs(0);
+        r.func_is_method.insert(20);
+        r.func_owner.insert(20, "FVector".into());
+        r.func_params.insert(20, vec![DataType {token:5,type_info:1,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()}]);
+        match fault {
+            1 => {r.const_method_ptrs.insert(20);},
+            2 => {r.func_is_method.remove(&20);},
+            3 => {r.func_owner.insert(20,"FOther".into());},
+            4 => {r.func_ns.insert(20,"Other".into());},
+            5 => r.func_ret.get_mut(&20).unwrap().token=0x41,
+            6 => r.func_ret.get_mut(&20).unwrap().is_reference=true,
+            7 => {r.const_method_ptrs.insert(10);},
+            8 => r.func_ret.get_mut(&10).unwrap().is_object_const=true,
+            9 => {r.func_params.remove(&20);},
+            10 => {r.func_by_ptr.insert(20,"$beh2".into());},
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_mutable_native_value_outputs(fault:u8)->Self {
         let mut r=Self::default();
         r.type_by_ptr.insert(1,"FVector".into()); r.type_names.insert("FVector".into());
@@ -7823,6 +7973,70 @@ impl RefResolver {
             20=>{r.global_by_ptr.insert(300,"Other".into());},
             21=>r.type_subtypes.get_mut(&10).unwrap()[0].token=0x45,
             22=>{r.func_owner.insert(201,"UOther".into());},
+            _=>{}
+        }r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_class_copy_scoped_handle(fault: u8) -> Self {
+        let mut r=Self::default();
+        for (id,name) in [(1,"TArray"),(2,"TSubclassOf"),(3,"UDefinition"),(4,"FEntry"),(5,"AActorState"),(6,"UObject"),(7,"TArrayIterator"),(8,"FName"),(9,"UHost"),(10,"FPlan"),(11,"FRow")] {
+            r.type_by_ptr.insert(id,name.into());r.typeid_to_ptr.insert(id as i32,id);
+            r.type_identity_by_ptr.insert(id,TypeIdentity{name:name.into(),module:if id>=9 {"Fixture"} else {""}.into(),namespace:String::new()});
+        }
+        let plain=|token|DataType{token,..Default::default()};
+        let object=|type_info,reference:bool,constant:bool,handle:bool|DataType{token:5,type_info,is_reference:reference,is_object_const:constant,is_object_handle:handle,is_read_only:constant&&!handle,..Default::default()};
+        r.type_subtypes.insert(1,vec![object(2,false,false,false)]);r.type_subtypes.insert(2,vec![object(3,false,false,true)]);
+        for (id,offset,name) in [(4,40,"Class"),(4,72,"Ids"),(7,16,"CanProceed"),(11,8,"Class")] {
+            let key=((id as i64)<<1)|((offset as i64)<<33)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id);
+        }
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(&[("FEntry","Class",if fault==1 {"TSubclassOf<UOther>"} else {"TSubclassOf<UDefinition>"}),
+            ("FEntry","Ids",if fault==2 {"TArray<int>"} else {"TArray<FName>"})],&[],None));
+        for (ptr,name,owner,constant,ret,args) in [
+            (100,"$beh0","TSubclassOf",false,plain(0x52),vec![object(2,true,true,false)]),
+            (101,"IsValid","TSubclassOf",true,plain(0x41),vec![]),
+            (102,"Contains","TArray",true,plain(0x41),vec![object(2,true,true,false)]),
+            (103,"Add","TArray",false,plain(0x52),vec![object(2,true,true,false)]),
+            (104,"Iterator","TArray",false,object(7,false,false,false),vec![]),
+            (105,"Proceed","TArrayIterator",false,object(8,true,false,false),vec![]),
+            (106,"FindById","",false,object(5,false,false,true),vec![object(6,false,true,true),object(8,false,false,false)]),
+            (107,"IsValid","",false,plain(0x41),vec![object(6,false,true,true)]),
+            (108,"IsDead","AActorState",true,plain(0x41),vec![]),
+            (109,"IsDefeated","AActorState",true,plain(0x41),vec![]),
+            (110,"$beh2","FEntry",false,plain(0x52),vec![]),
+            (111,"opAssign","TSubclassOf",false,object(2,true,false,false),vec![object(2,true,true,false)]),
+            (201,"IsSpecial","UHost",false,plain(0x41),vec![object(2,true,true,false)]),
+            (200,"Matches","UHost",false,plain(0x41),vec![object(5,false,false,true),object(5,false,false,true)])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            if !owner.is_empty() {r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);}if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        r.funcid_to_ptr.insert(200,200);r.funcid_to_ptr.insert(201,201);r.global_by_ptr.insert(300,"__WorldContext".into());
+        r.class_fields.insert("FRow".into(),HashMap::from([("Class".into(),"TSubclassOf<UDefinition>".into())]));
+        match fault {
+            3=>r.type_subtypes.get_mut(&2).unwrap()[0].is_object_handle=false,
+            4=>r.type_subtypes.get_mut(&1).unwrap()[0].is_reference=true,
+            5=>r.func_params.get_mut(&100).unwrap()[0].is_read_only=false,
+            6=>r.func_params.get_mut(&103).unwrap()[0].type_info=3,
+            7=>{r.const_method_ptrs.remove(&101);},
+            8=>r.func_ret.get_mut(&102).unwrap().token=0x44,
+            9=>r.func_params.get_mut(&200).unwrap()[0].is_object_const=true,
+            10=>{r.func_owner.insert(200,"UOther".into());},
+            11=>r.type_identity_by_ptr.get_mut(&4).unwrap().module="Script".into(),
+            12=>{r.prop_type_id.insert((4<<1)|(40i64<<33)|1,7);},
+            13=>{r.prop_type_id.insert((4<<1)|(72i64<<33)|1,7);},
+            14=>{r.prop_type_id.insert((7<<1)|(16i64<<33)|1,4);},
+            15=>r.func_ret.get_mut(&105).unwrap().is_reference=false,
+            16=>r.func_ret.get_mut(&104).unwrap().type_info=1,
+            17=>r.func_params.get_mut(&106).unwrap()[0].is_object_const=false,
+            18=>r.func_params.get_mut(&107).unwrap()[0].is_object_handle=false,
+            19=>{r.global_by_ptr.insert(300,"Other".into());},
+            20=>{r.const_method_ptrs.remove(&108);},
+            21=>{r.func_owner.insert(109,"UOther".into());},
+            22=>r.func_params.get_mut(&110).unwrap().push(plain(0x44)),
+            23=>{r.class_fields.get_mut("FRow").unwrap().insert("Class".into(),"TSubclassOf<UOther>".into());},
+            24=>r.func_params.get_mut(&201).unwrap()[0].is_read_only=false,
+            25=>r.func_ret.get_mut(&111).unwrap().is_reference=false,
+            26=>r.type_identity_by_ptr.get_mut(&11).unwrap().module.clear(),
             _=>{}
         }r
     }

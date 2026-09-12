@@ -1682,6 +1682,69 @@ fn local_lvalue_selection(ctx: &Ctx<'_>, join: usize) -> Option<LocalLvalueSelec
                 ctx.slot_name(s16(test.words[0])), ctx.slot_name(s16(test.words[1])),
                 ctx.slot_name(yes), ctx.slot_name(no)) });
     }
+    // A bool selects a member address through a handle or directly on this.
+    // Neither arm executes a call; the join immediately copy-constructs one value.
+    if let Some(c) = join.checked_sub(9).and_then(|head| ctx.instrs.get(head..join + 2))
+        .filter(|c| c.iter().map(|i| i.op.name).eq([
+            "CpyVtoR1", "JLowZ", "PshVPtr", "ADDSi", "RDSPtr", "ADDSi",
+            "JMP", "PshVPtr", "ADDSi", "PSF", "CALLSYS"]))
+    {
+        let head = join - 9;
+        let word = |i: &Instr| i.words.first().map(|w| *w as i16 as i32);
+        let target = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+        let (test, dst) = (word(&c[0])?, word(&c[9])?);
+        if !ctx.f.is_method || test <= 0 || dst <= 0 || test == dst
+            || ctx.slot_type(test).as_deref() != Some("bool") || ctx.float_slots.contains(&test)
+            || word(&c[2]) != Some(0) || word(&c[7]) != Some(0)
+            || target(&c[1]) != Some(c[7].offset_dw as i64)
+            || target(&c[6]) != Some(c[9].offset_dw as i64)
+        { return None; }
+        for (at, i) in ctx.instrs.iter().enumerate() {
+            if i.op.name == "JMPP" { return None; }
+            if (is_cond_op(i.op.name) || i.op.name == "JMP") && at != head + 1 && at != head + 6 {
+                let to = target(i)?;
+                if to > c[0].offset_dw as i64 && to <= c[10].offset_dw as i64 { return None; }
+            }
+        }
+        let ptr = *c[10].qwords.first()? as i64;
+        let [param] = ctx.refs.func_params_by_ptr(ptr)? else { return None; };
+        let value = ctx.refs.type_identity_by_ptr(param.type_info)?;
+        let ret = ctx.refs.func_ret_by_ptr(ptr)?;
+        if param.token != 5 || !param.is_reference || !param.is_object_const || !param.is_read_only
+            || param.is_object_handle || param.is_auto || param.if_handle_then_const
+            || !value.module.is_empty() || !value.namespace.is_empty()
+            || !matches!(value.name.as_bytes().first(), Some(b'F' | b'T'))
+            || ctx.slot_type(dst).as_deref() != Some(value.name.as_str())
+            || ctx.refs.func_by_ptr(ptr) != Some("$beh0")
+            || ctx.refs.func_owner_by_ptr(ptr) != Some(value.name.as_str())
+            || !ctx.refs.is_method_by_ptr(ptr) || ctx.refs.is_const_method_by_ptr(ptr)
+            || ret.token != 0x52 || ret.type_info != 0 || ret.is_reference || ret.is_object_handle
+            || ret.is_object_const || ret.is_read_only || ret.is_auto || ret.if_handle_then_const
+        { return None; }
+        let field = |i: &Instr| {
+            let id = *i.dwords.first()? as i32;
+            let owner = ctx.refs.type_identity_by_id(id)?;
+            let (name, old) = ctx.refs.member_identity(id, word(i)?)?;
+            if ctx.refs.type_identity_by_id(old)? != owner || owner.module.is_empty()
+                || !owner.namespace.is_empty() || !matches!(owner.name.as_bytes().first(), Some(b'A' | b'U'))
+            { return None; }
+            Some((owner, name, ctx.refs.own_field_type_by_class(&owner.name, name)?))
+        };
+        let (this_owner, handle, handle_ty) = field(&c[3])?;
+        let (other_owner, yes, yes_ty) = field(&c[5])?;
+        let (fallback_owner, no, no_ty) = field(&c[8])?;
+        if ctx.class_name != Some(this_owner.name.as_str()) || this_owner != fallback_owner
+            || handle_ty != other_owner.name || yes_ty != value.name || no_ty != value.name
+            || ctx.fields.and_then(|f| f.get(handle)).map(String::as_str) != Some(handle_ty)
+            || ctx.fields.and_then(|f| f.get(no)).map(String::as_str) != Some(no_ty)
+        { return None; }
+        // A physical destination may have an earlier, already destroyed life.
+        // The existing join hook records this constructor's own RVO producer.
+        return Some(LocalLvalueSelection { head, consumed: 2, copy_ctor_slot: Some(dst),
+            statement: format!("{} = ({} ? this.{handle}.{yes} : this.{no});",
+                ctx.slot_name(dst), ctx.slot_name(test)) });
+    }
+
     let head = join.checked_sub(5)?;
     // A guarded member address can likewise feed one immediate f64 field store.
     if let Some(c) = ctx.instrs.get(head..join + 3).filter(|c| c.iter().map(|i| i.op.name)
@@ -3378,6 +3441,28 @@ fn retained_default_constructions(instrs: &[Instr], refs: &RefResolver) -> std::
                 || identity.namespace != refs.func_ns_by_ptr(ctor).unwrap_or("") { continue; }
             eager.insert(slot);
         }
+    }
+
+    // A non-const native receiver can change a value without a source assignment.
+    // Keep its single construction when a later call reads that populated value.
+    for (at, pair) in instrs.windows(2).enumerate() {
+        if pair[0].op.name != "PSF" || pair[1].op.name != "CALLSYS" { continue; }
+        let Some(slot) = w(&pair[0]).filter(|s| *s > 0) else { continue; };
+        let Some(&created) = defaults.get(&slot).filter(|created| **created < at) else { continue; };
+        if sites.get(&slot).is_none_or(|site| site.0 != 1) { continue; }
+        let Some(call) = pair[1].qwords.first().map(|p| *p as i64) else { continue; };
+        let ctor = instrs[created].qwords[0] as i64;
+        let plain_void = |ptr| refs.func_ret_by_ptr(ptr).is_some_and(|t|
+            t.token == 0x52 && t.type_info == 0 && !t.is_reference && !t.is_object_handle
+                && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const);
+        if !refs.is_method_by_ptr(call) || refs.is_const_method_by_ptr(call)
+            || refs.is_const_method_by_ptr(ctor) || !plain_void(call) || !plain_void(ctor)
+            || !refs.func_by_ptr(call).is_some_and(|name| !name.starts_with(['$', '~']))
+            || refs.func_owner_by_ptr(call) != refs.func_owner_by_ptr(ctor)
+            || refs.func_ns_by_ptr(call).unwrap_or("") != refs.func_ns_by_ptr(ctor).unwrap_or("")
+            || refs.func_params_by_ptr(call).is_none()
+        { continue; }
+        eager.insert(slot);
     }
 
     // Two separately default-constructed values, then configuration and a
@@ -13120,6 +13205,41 @@ mod tests {
             (false, false, "JNZ", Some("const AActor")), (false, false, "JNZ", Some("AActor&"))] {
             let other = render_lvalue_selection(true, entry, wrong, jump, ty, true);
             assert!(!other.contains(" ? "), "{other}");
+        }
+    }
+
+    #[test]
+    fn native_mutators_keep_populated_default_values_for_later_arguments() {
+        let make=|fault:u8,shift:u16| {
+            let mut a=TestAssembler::default();
+            if fault==3 {a.op("PSF",&[14+shift],&[]);a.op("PSF",&[8+shift],&[]);a.op("CALLSYS",&[],&[20,0]);}
+            for slot in [20,8,14] {a.op("PSF",&[slot+shift],&[]);a.op("CALLSYS",&[],&[10,0]);}
+            if fault==1 {a.op("PSF",&[8+shift],&[]);a.op("CALLSYS",&[],&[10,0]);}
+            if fault!=3 {
+                a.op("PSF",&[14+shift],&[]);
+                a.op(if fault==2 {"PshVPtr"}else{"PSF"},&[8+shift],&[]);
+                a.op("CALLSYS",&[],&[20,0]);
+            }
+            a.op("PSF",&[8+shift],&[]);a.op("PSF",&[20+shift],&[]);a.op("CALLSYS",&[],&[21,0]);
+            a.op("CpyRtoV8",&[22+shift],&[]);a.op("RET",&[0],&[]);
+            let mut f=a.finish();for i in &mut f.instrs {if i.op.name=="CALLSYS" {i.qwords=vec![i.dwords[0] as u64];}}f
+        };
+        let refs=RefResolver::from_test_native_mutated_defaults(0);
+        for shift in [0,100] {
+            let f=make(0,shift);
+            let kept=retained_default_constructions(&f.instrs,&refs);
+            assert!(kept.contains(&(8+shift as i32)));
+            assert!(!kept.contains(&(14+shift as i32)) && !kept.contains(&(20+shift as i32)));
+            let body=render_fixture_range_with_return(&f,None,&refs,"FVector",None,0x52);
+            assert!(body.contains(&format!("Distance(local_{})",8+shift)),"{body}");
+            assert!(!body.contains("Distance(FVector())"),"{body}");
+        }
+        let f=make(0,0);
+        for fault in 1..=10 {
+            assert!(!retained_default_constructions(&f.instrs,&RefResolver::from_test_native_mutated_defaults(fault)).contains(&8),"metadata {fault}");
+        }
+        for fault in 1..=3 {
+            assert!(!retained_default_constructions(&make(fault,0).instrs,&refs).contains(&8),"raw {fault}");
         }
     }
 

@@ -3381,6 +3381,8 @@ fn emit_function_ctor(
         pass_trace("restore_linked_bool_guard_lifetimes", &rendered);
         let rendered = restore_reused_native_guard_values(&rendered, f, refs, class_name);
         pass_trace("restore_reused_native_guard_values", &rendered);
+        let rendered = restore_class_guard_bool_lifetimes(&rendered, f, refs, class_name);
+        pass_trace("restore_class_guard_bool_lifetimes", &rendered);
         let rendered = restore_temporary_vector_expression_lifetimes(&rendered, f, refs);
         pass_trace("restore_temporary_vector_expression_lifetimes", &rendered);
         let rendered = restore_following_target_property(&rendered, f, refs);
@@ -3431,6 +3433,8 @@ fn emit_function_ctor(
         pass_trace("restore_reused_timer_scalar_lifetimes", &rendered);
         let rendered = restore_array_branch_and_record_lifetime(&rendered, f, refs, class_name);
         pass_trace("restore_array_branch_and_record_lifetime", &rendered);
+        let rendered = restore_class_copy_and_scoped_handle_default(&rendered, f, refs, class_name);
+        pass_trace("restore_class_copy_and_scoped_handle_default", &rendered);
         let rendered = restore_task_and_reason_boolean_values(&rendered, f, refs, class_name);
         pass_trace("restore_task_and_reason_boolean_values", &rendered);
         let rendered = restore_context_recipient_arguments(&rendered, f, refs, class_name);
@@ -13840,6 +13844,149 @@ fn restore_reused_native_guard_values(body:&str,f:&Func,refs:&RefResolver,class_
     if !body.ends_with('\n') {out.pop();}out
 }
 
+/// Separate a retained matcher result from two later temporary boolean guards.
+fn restore_class_guard_bool_lifetimes(body: &str, f: &Func, refs: &RefResolver, class_name: Option<&str>) -> String {
+    if !body.contains("bool local_") || !body.contains("TSubclassOf<") { return body.to_owned(); }
+    let rewrite = (|| {
+        let class = class_name?; let code = disassemble(&f.bytecode).ok()?;
+        let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+        let p = |i: &Instr| i.qwords.first().map(|v| *v as i64);
+        let jump = |i: &Instr| i.dwords.first().map(|v| i.offset_dw as i64 + 2 + *v as i32 as i64);
+        let plain = |t: &super::types::DataType, token| t.token == token && t.type_info == 0 && !t.is_reference
+            && !t.is_object_handle && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+        let object = |t: &super::types::DataType, ptr, reference: bool, constant: bool, handle: bool|
+            t.token == 5 && t.type_info == ptr && t.is_reference == reference && t.is_object_const == constant
+            && t.is_object_handle == handle && t.is_read_only == (constant && !handle) && !t.is_auto && !t.if_handle_then_const;
+        let local = |slot| { let mut xs = f.obj_locals.iter().filter(|(s, _)| *s == slot);
+            let ptr = xs.next()?.1; (slot > 0 && xs.next().is_none()).then_some(ptr) };
+        let scalar = |slot| slot > 0 && !f.obj_locals.iter().any(|(s, _)| *s == slot);
+        let native_type = |ptr| refs.type_identity_by_ptr(ptr).filter(|t| t.module.is_empty() && t.namespace.is_empty());
+        let native = |ptr, owner: &str, name: &str, constant: bool| refs.func_owner_by_ptr(ptr) == Some(owner)
+            && refs.func_by_ptr(ptr) == Some(name) && refs.is_method_by_ptr(ptr) && refs.is_const_method_by_ptr(ptr) == constant;
+        let result = refs.type_identity_by_ptr(f.ret.type_info)?;
+        if !object(&f.ret, f.ret.type_info, false, false, false) || result.module.is_empty()
+            || !result.namespace.is_empty() || !result.name.starts_with('F') || f.is_const_method()
+            || !super::model::returns_struct_by_value(&f.ret, refs) { return None; }
+        let params: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+        let slots = super::model::param_slot_map(&params, true, true, Some(refs));
+        let mut candidates = Vec::new();
+        for (at, c) in code.windows(44).enumerate() {
+            let candidate = (|| {
+                if c.iter().map(|i| i.op.name).ne("PshVPtr PshVPtr PshVPtr CALLINTF CpyRtoV4 CpyVtoV4 NOT CpyVtoR1 JLowNZ SetV4 JMP CpyVtoV4 NOT CpyVtoV4 CpyVtoR1 JLowZ FreeNullV8 PSF CALLSYS JMP PSF ADDSi PSF CALLSYS PSF CALLSYS CpyRtoV4 NOT CpyVtoR1 JLowZ PSF ADDSi CALLSYS STOREOBJ PshVPtr CALLSYS CpyRtoV4 CpyVtoR1 JLowNZ SetV4 JMP CpyVtoV4 CpyVtoR1 JLowZ".split_whitespace()) { return None; }
+                let (looter, victim, named, temp, guard, flag, record, copied, converted) =
+                    (w(&c[0], 0)?, w(&c[1], 0)?, w(&c[4], 0)?, w(&c[5], 0)?, w(&c[11], 0)?,
+                        w(&c[11], 1)?, w(&c[17], 0)?, w(&c[22], 0)?, w(&c[33], 0)?);
+                if ![named, temp, guard].iter().all(|s| scalar(*s)) || HashSet::from([named, temp, guard]).len() != 3
+                    || HashSet::from([victim, record, copied, converted]).len() != 4
+                    || [(2,0),(6,temp),(7,temp),(9,temp),(12,guard),(14,temp),(16,victim),(20,record),
+                        (24,copied),(26,guard),(27,guard),(28,guard),(30,record),(34,converted),
+                        (36,temp),(37,temp),(39,guard),(42,guard)].iter().any(|(n,s)| c[*n].words.as_slice() != [*s as u16])
+                    || c[5].words.as_slice() != [temp as u16,named as u16]
+                    || c[13].words.as_slice() != [temp as u16,guard as u16]
+                    || c[41].words.as_slice() != [guard as u16,flag as u16]
+                    || c[9].dwords.first() != Some(&0) || c[39].dwords.first() != Some(&0) { return None; }
+                let person = f.params.get(*slots.get(&looter)?)?; let enabled = f.params.get(*slots.get(&flag)?)?;
+                let person_id = native_type(person.ty.type_info)?;
+                if looter >= 0 || flag >= 0 || looter == flag || person.flags != 0 || enabled.flags != 0
+                    || !is_object_handle_type(&person_id.name) || !object(&person.ty,person.ty.type_info,false,false,true)
+                    || local(victim)? != person.ty.type_info || !plain(&super::types::DataType {
+                        is_object_const: false, is_read_only: false, ..enabled.ty.clone() },0x41)
+                    || !enabled.ty.is_object_const || !enabled.ty.is_read_only { return None; }
+                let matcher = *c[3].dwords.first()? as i32;
+                if !refs.is_method_by_id(matcher) || !refs.is_subclass(class,refs.func_owner_by_id(matcher)?)
+                    || !plain(refs.func_ret_by_id(matcher)?,0x41)
+                    || !matches!(refs.func_params_by_id(matcher)?,[a,b] if object(a,person.ty.type_info,false,false,true) && object(b,person.ty.type_info,false,false,true)) { return None; }
+                let (record_ty, copy_ty, object_ty) = (local(record)?, local(copied)?, local(converted)?);
+                let record_id = native_type(record_ty)?;
+                if !record_id.name.starts_with('F') || native_type(copy_ty)?.name != "TSubclassOf"
+                    || native_type(object_ty)?.name != "UObject" { return None; }
+                let [subtype] = refs.type_subtypes(copy_ty)? else { return None; };
+                if !object(subtype,subtype.type_info,false,false,true) || !is_object_handle_type(&native_type(subtype.type_info)?.name) { return None; }
+                let copy_name = format!("TSubclassOf<{}>",native_type(subtype.type_info)?.name);
+                let field = |i: &Instr| { let id = *i.dwords.first()? as i32;
+                    let (name,old) = refs.member_identity(id,w(i,0)?)?;
+                    (refs.type_identity_by_id(id) == Some(record_id) && refs.type_identity_by_id(old) == Some(record_id)).then_some(name) };
+                let (item, interactive) = (field(&c[21])?, field(&c[31])?);
+                let interactive_ty = refs.native_field_value_type(&record_id.name,interactive)?;
+                if item == interactive || refs.native_field_value_type(&record_id.name,item) != Some(copy_name.as_str())
+                    || !is_object_handle_type(interactive_ty.strip_prefix("TSubclassOf<")?.strip_suffix('>')?) { return None; }
+                let (dtor,ctor,valid,convert,object_valid) = (p(&c[18])?,p(&c[23])?,p(&c[25])?,p(&c[32])?,p(&c[35])?);
+                if !native(dtor,&record_id.name,"$beh2",false) || !plain(refs.func_ret_by_ptr(dtor)?,0x52) || !refs.func_params_by_ptr(dtor)?.is_empty()
+                    || !native(ctor,"TSubclassOf","$beh0",false) || !plain(refs.func_ret_by_ptr(ctor)?,0x52)
+                    || !matches!(refs.func_params_by_ptr(ctor)?,[t] if object(t,copy_ty,true,true,false))
+                    || !native(valid,"TSubclassOf","IsValid",true) || !plain(refs.func_ret_by_ptr(valid)?,0x41) || !refs.func_params_by_ptr(valid)?.is_empty()
+                    || !native(convert,"TSubclassOf","opImplConv",true) || !object(refs.func_ret_by_ptr(convert)?,object_ty,false,false,true) || !refs.func_params_by_ptr(convert)?.is_empty()
+                    || refs.func_by_ptr(object_valid) != Some("IsValid") || refs.func_owner_by_ptr(object_valid).is_some() || refs.is_method_by_ptr(object_valid)
+                    || refs.func_ns_by_ptr(object_valid).is_some_and(|ns| !ns.is_empty()) || !plain(refs.func_ret_by_ptr(object_valid)?,0x41)
+                    || !matches!(refs.func_params_by_ptr(object_valid)?,[t] if object(t,object_ty,false,true,true)) { return None; }
+                let edges = [(8,11),(10,14),(15,20),(38,41),(40,42)];
+                if edges.iter().any(|(a,b)| jump(&c[*a]) != Some(c[*b].offset_dw as i64)) { return None; }
+                let exits = [jump(&c[19])?,jump(&c[29])?,jump(&c[43])?];
+                if !(exits[0] > exits[1] && exits[1] > exits[2] && exits[2] > c[43].offset_dw as i64)
+                    || exits.iter().any(|to| !code.iter().any(|i| i.offset_dw as i64 == *to)) { return None; }
+                for (n,i) in code.iter().enumerate() {
+                    if i.op.name == "JMPP" { return None; }
+                    if i.op.name.starts_with('J') { let to = jump(i)?;
+                        if to > c[0].offset_dw as i64 && to <= c[43].offset_dw as i64
+                            && !edges.iter().any(|(a,b)| n == at+a && to == c[*b].offset_dw as i64) { return None; }
+                    }
+                }
+                // The outer loop's latch overwrites this physical bool after its named life.
+                // No incoming edge may skip that fresh RDR1 and read the preceding value.
+                let uses: Vec<_> = code.iter().enumerate().skip(at)
+                    .filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&named)).map(|(n,_)|n).collect();
+                let [write,copy,next,read] = uses.as_slice() else { return None; };
+                let latch = code.get(next.checked_sub(1)?..next+3)?;
+                if *write != at+4 || *copy != at+5 || *read != next+1
+                    || latch.iter().map(|i|i.op.name).ne(["LoadVObjR","RDR1","CpyVtoR1","JLowNZ"])
+                    || latch[0].offset_dw as i64 != exits[0]
+                    || latch[1].words.as_slice() != [named as u16] || latch[2].words.as_slice() != [named as u16]
+                    || jump(&latch[3])? > c[0].offset_dw as i64
+                    || !code.iter().any(|i| Some(i.offset_dw as i64) == jump(&latch[3]))
+                    || code.iter().any(|i| i.op.name.starts_with('J') && jump(i).is_some_and(|to|
+                        to > latch[0].offset_dw as i64 && to <= latch[3].offset_dw as i64)) { return None; }
+                Some((named,temp,guard,victim,record,copied,copy_name,person_id.name.clone(),
+                    person.name.clone(),enabled.name.clone(),refs.func_by_id(matcher)?.to_owned(),item.to_owned(),interactive.to_owned()))
+            })(); if let Some(candidate) = candidate { candidates.push(candidate); }
+        }
+        let [(named,temp,guard,victim,record,copied,copy_ty,person_ty,looter,flag,matcher,item,interactive)] = candidates.as_slice() else { return None; };
+        let (named,temp,guard) = (format!("local_{named}"),format!("local_{temp}"),format!("local_{guard}"));
+        if count_ident(body,&named) != 0 || count_ident(body,&temp) != 2 || count_ident(body,&guard) != 5 { return None; }
+        let call = format!("this.{matcher}(local_{victim}, {looter})");
+        let head = format!("if (!({call}) && !({flag}))");
+        let lines: Vec<_> = body.lines().collect(); let mut paths = Vec::new(); let mut stack = Vec::new();
+        for (at,line) in lines.iter().enumerate() { if line.trim() == "}" && stack.pop().is_none() { return None; }
+            paths.push(stack.clone()); if line.trim() == "{" { stack.push(at); } }
+        if !stack.is_empty() { return None; }
+        let decls: Vec<_> = lines.iter().enumerate().filter(|(_,line)| line.trim() == format!("bool {guard};")).map(|(n,_)|n).collect();
+        let starts: Vec<_> = lines.iter().enumerate().filter(|(_,line)| line.trim() == head).map(|(n,_)|n).collect();
+        let ([decl],[at]) = (decls.as_slice(),starts.as_slice()) else { return None; };
+        let c = lines.get(*at..at+12)?; let indent = indent_of(c[0]);
+        let (_,receiver,_) = declaration_with_initializer(lines.get(at.checked_sub(1)?)?)?;
+        if receiver != format!("local_{victim}") || !lines[at-1].trim().starts_with(&format!("{person_ty} "))
+            || paths[at-1] != paths[*at] || *decl >= *at || !paths[*at].starts_with(&paths[*decl])
+            || paths[*at].len() <= paths[*decl].len()
+            || c[1].trim() != "{" || c[2].trim() != "continue;" || c[3].trim() != "}"
+            || ![format!("{copy_ty} local_{copied};"),format!("{copy_ty} local_{copied} = local_{record}.{item};")].contains(&c[4].trim().to_owned())
+            || c[5].trim() != format!("{guard} = !(local_{copied}.IsValid());") || c[6].trim() != format!("if ({guard})") || c[7].trim() != "{"
+            || c[8].trim() != format!("bool {temp} = IsValid(local_{record}.{interactive});")
+            || c[9].trim() != format!("{guard} = {temp} && {flag};") || c[10].trim() != format!("if ({guard})") || c[11].trim() != "{"
+            || [3,4,5,6,7].iter().any(|n| indent_of(c[*n]) != indent)
+            || [8,9,10,11].iter().any(|n| indent_of(c[*n]) != format!("{indent}    ")) { return None; }
+        let outer_end = block_end(&lines,at+7)?; let inner_end = block_end(&lines,at+11)?;
+        if inner_end >= outer_end || paths[at+5] != paths[*at] || paths[at+9] != [paths[*at].clone(),vec![at+7]].concat() { return None; }
+        let mut out = Vec::new();
+        for (n,line) in lines.iter().enumerate() {
+            if [*decl,at+5,at+9].contains(&n) { continue; }
+            out.push(if n == *at { format!("{indent}bool {named} = {call};\n{indent}if (!({named}) && !({flag}))") }
+                else if n == at+6 { format!("{indent}if (!(local_{copied}.IsValid()))") }
+                else if n == at+10 { format!("{indent}    if ({temp} && {flag})") } else { (*line).to_owned() });
+        }
+        let mut result = out.join("\n"); if body.ends_with('\n') { result.push('\n'); } Some(result)
+    })();
+    rewrite.unwrap_or_else(|| body.to_owned())
+}
+
 /// Preserve the linked bool lifetimes of early guards, two named chains and a final negation.
 fn restore_linked_bool_guard_lifetimes(body: &str, f: &Func, refs: &RefResolver) -> String {
     if f.ret.token != 0x52 || f.ret.type_info != 0 || f.ret.is_reference || f.ret.is_object_handle
@@ -15990,6 +16137,173 @@ fn restore_array_branch_and_record_lifetime(body: &str, f: &Func, refs: &RefReso
         let record_source=format!("{inner}{record_type} local_{record} = {constructor};\n{inner}if (this.{evaluate}({witness}, local_{record}) <= 0.0)");
         let mut out=lines.iter().enumerate().map(|(n,l)|if n==array_line {array_source.clone()} else if n==record_line {record_source.clone()} else {(*l).to_owned()}).collect::<Vec<_>>().join("\n");
         if body.ends_with('\n') {out.push('\n');}Some(out)
+    })();rewrite.unwrap_or_else(||body.to_owned())
+}
+
+/// Keep the native class-value copy and the per-iteration fallback handle in their original scopes.
+fn restore_class_copy_and_scoped_handle_default(body: &str, f: &Func, refs: &RefResolver, class_name: Option<&str>) -> String {
+    if !body.contains("TSubclassOf<") || !body.contains(" = nullptr;") || !body.contains(" && !(") {return body.to_owned();}
+    let rewrite=(|| {
+        let class=class_name?;let code=disassemble(&f.bytecode).ok()?;
+        let w=|i:&Instr,n:usize|i.words.get(n).map(|v|*v as i16 as i32);
+        let p=|i:&Instr|i.qwords.first().map(|v|*v as i64);
+        let d=|i:&Instr|i.dwords.first().map(|v|*v as i32);
+        let jump=|i:&Instr|d(i).map(|v|i.offset_dw as i64+2+v as i64);
+        let local=|slot|{let mut xs=f.obj_locals.iter().filter(|(s,_)|*s==slot);let ptr=xs.next()?.1;(slot>0 && xs.next().is_none()).then_some(ptr)};
+        let plain=|t:&super::types::DataType,token|t.token==token && t.type_info==0 && !t.is_reference && !t.is_object_const && !t.is_object_handle && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+        let object=|t:&super::types::DataType,ptr,reference:bool,constant:bool,handle:bool|t.token==5 && t.type_info==ptr && t.is_reference==reference && t.is_object_const==constant
+            && t.is_object_handle==handle && t.is_read_only==(constant&&!handle) && !t.is_auto && !t.if_handle_then_const;
+        let native_type=|ptr|refs.type_identity_by_ptr(ptr).filter(|t|t.module.is_empty() && t.namespace.is_empty());
+        let native=|ptr,owner:&str,name:&str,constant:bool|refs.func_owner_by_ptr(ptr)==Some(owner) && refs.func_by_ptr(ptr)==Some(name) && refs.is_method_by_ptr(ptr) && refs.is_const_method_by_ptr(ptr)==constant;
+        let uses=|slot|code.iter().enumerate().filter(|(_,i)|super::bytediff::addressed_slots(i).contains(&slot)).map(|(n,_)|n).collect::<Vec<_>>();
+        let closed=|start:usize,end:usize,edges:&[(usize,usize)]|edges.iter().all(|(a,b)|jump(&code[*a])==Some(code[*b].offset_dw as i64))
+            && !code.iter().enumerate().any(|(at,i)|i.op.name=="JMPP" || i.op.name.starts_with('J') && jump(i).is_some_and(|to|to>=code[start].offset_dw as i64 && to<code[end].offset_dw as i64
+                && !(at<start && to==code[start].offset_dw as i64) && !edges.iter().any(|(a,b)|at==*a && to==code[*b].offset_dw as i64)));
+        let params:Vec<_>=f.params.iter().map(|v|v.ty.clone()).collect();let param_slots=super::model::param_slot_map(&params,true,true,Some(refs));
+        if !object(&f.ret,f.ret.type_info,false,false,false) || !super::model::returns_struct_by_value(&f.ret,refs) || f.is_const_method() {return None;}
+        let mut copies=Vec::new();
+        for (at,a) in code.windows(7).enumerate() {
+            let found=(|| {
+                if a[..6].iter().map(|i|i.op.name).ne(["PSF","ADDSi","PSF","CALLSYS","PSF","CALLSYS"]) || !closed(at,at+6,&[]) {return None;}
+                let (record,copy)=(w(&a[0],0)?,w(&a[2],0)?);let (record_ty,copy_ty)=(local(record)?,local(copy)?);
+                let record_id=native_type(record_ty)?;
+                if a[4].words.as_slice()!=[copy as u16] || !record_id.name.starts_with('F') || native_type(copy_ty)?.name!="TSubclassOf" {return None;}
+                let [subtype]=refs.type_subtypes(copy_ty)? else {return None;};let subtype_id=native_type(subtype.type_info)?;
+                if !is_object_handle_type(&subtype_id.name) || !object(subtype,subtype.type_info,false,false,true) {return None;}
+                let copy_name=format!("TSubclassOf<{}>",subtype_id.name);
+                let (member,old)=refs.member_identity(d(&a[1])?,w(&a[1],0)?)?;
+                if refs.type_identity_by_id(d(&a[1])?)!=Some(record_id) || refs.type_identity_by_id(old)!=Some(record_id)
+                    || refs.native_field_value_type(&record_id.name,member)!=Some(copy_name.as_str()) {return None;}
+                let (ctor,valid)=(p(&a[3])?,p(&a[5])?);
+                if !native(ctor,"TSubclassOf","$beh0",false) || !plain(refs.func_ret_by_ptr(ctor)?,0x52) || !matches!(refs.func_params_by_ptr(ctor)?,[t] if object(t,copy_ty,true,true,false))
+                    || !native(valid,"TSubclassOf","IsValid",true) || !plain(refs.func_ret_by_ptr(valid)?,0x41) || !refs.func_params_by_ptr(valid)?.is_empty() {return None;}
+                let copy_uses=uses(copy);let [init,read,check,write]=copy_uses.as_slice() else {return None;};
+                if *init!=at+2 || *read!=at+4 || *check<=at+5 || *write<=*check+2 || *write+4>=code.len() {return None;}
+                let check_ops=&code[*check..*check+3];let write_ops=&code[*write..*write+4];
+                let (consumer,query,row_field,valid_bool)=if check_ops.iter().map(|i|i.op.name).eq(["PSF","PSF","CALLSYS"])
+                    && write_ops[..3].iter().map(|i|i.op.name).eq(["PSF","PSF","CALLSYS"]) {
+                    let array=w(&check_ops[1],0)?;let array_ty=local(array)?;
+                    if native_type(array_ty)?.name!="TArray" || !matches!(refs.type_subtypes(array_ty)?,[t] if object(t,copy_ty,false,false,false))
+                        || write_ops[1].words.as_slice()!=[array as u16] {return None;}
+                    for (ptr,name,constant,ret) in [(p(&check_ops[2])?,"Contains",true,0x41),(p(&write_ops[2])?,"Add",false,0x52)] {
+                        if !native(ptr,"TArray",name,constant) || !plain(refs.func_ret_by_ptr(ptr)?,ret) || !matches!(refs.func_params_by_ptr(ptr)?,[t] if object(t,copy_ty,true,true,false)) {return None;}
+                    }
+                    (array,String::new(),None,None)
+                } else {
+                    if check_ops.iter().map(|i|i.op.name).ne(["PSF","PshVPtr","CALLINTF"]) || check_ops[1].words.as_slice()!=[0]
+                        || write_ops.iter().map(|i|i.op.name).ne(["PSF","PSF","ADDSi","CALLSYS"])
+                        || code.get(at+6..at+9)?.iter().map(|i|i.op.name).ne(["CpyRtoV4","NOT","CpyVtoR1"]) {return None;}
+                    let boolean=w(&code[at+6],0)?;let row=w(&write_ops[1],0)?;let row_ty=local(row)?;let row_id=refs.type_identity_by_ptr(row_ty)?;
+                    let query=d(&check_ops[2])?;let assign=p(&write_ops[3])?;let (field,old)=refs.member_identity(d(&write_ops[2])?,w(&write_ops[2],0)?)?;
+                    if boolean<=0 || f.obj_locals.iter().any(|(s,_)|*s==boolean) || code[at+7].words.as_slice()!=[boolean as u16] || code[at+8].words.as_slice()!=[boolean as u16]
+                        || row_id.module.is_empty() || !row_id.namespace.is_empty() || !row_id.name.starts_with('F')
+                        || refs.type_identity_by_id(d(&write_ops[2])?)!=Some(row_id) || refs.type_identity_by_id(old)!=Some(row_id)
+                        || refs.own_field_type_by_class(&row_id.name,field)!=Some(copy_name.as_str())
+                        || !refs.is_method_by_id(query) || !refs.is_subclass(class,refs.func_owner_by_id(query)?) || !plain(refs.func_ret_by_id(query)?,0x41)
+                        || !matches!(refs.func_params_by_id(query)?,[t] if object(t,copy_ty,true,true,false))
+                        || !native(assign,"TSubclassOf","opAssign",false) || !object(refs.func_ret_by_ptr(assign)?,copy_ty,true,false,false)
+                        || !matches!(refs.func_params_by_ptr(assign)?,[t] if object(t,copy_ty,true,true,false)) {return None;}
+                    (row,refs.func_by_id(query)?.to_owned(),Some(field.to_owned()),Some(boolean))
+                };
+                let end=*write+if row_field.is_some() {4} else {3};
+                if !closed(*check,*check+3,&[]) || !closed(*write,end,&[]) || code.iter().enumerate().any(|(n,i)|i.op.name.starts_with('J') && jump(i).is_some_and(|to|
+                    (n<at || n>=end) && to>code[at].offset_dw as i64 && to<code[end].offset_dw as i64)) {return None;}
+                Some((at,record,copy,record_ty,copy_name,record_id.name.clone(),member.to_owned(),consumer,query,row_field,valid_bool))
+            })();if let Some(v)=found {copies.push(v);}
+        }
+        let [(copy_at,record,copy,record_ty,copy_type,record_type,member,consumer,query,row_field,valid_bool)]=copies.as_slice() else {return None;};
+        let mut lives=Vec::new();
+        for (at,b) in code.windows(47).enumerate().skip(copy_at+6) {
+            let found=(|| {
+                if at<5 || b[..39].iter().map(|i|i.op.name).ne("SUSPEND PSF CALLSYS CpyRtoV8 PshVPtr PshGPtr CALLSYS STOREOBJ PshVPtr CALLSYS CpyRtoV4 NOT CpyVtoR1 JLowZ FreeNullV8 JMP PshVPtr RefCpyV PshVPtr CALLSYS CpyRtoV4 NOT CpyVtoR1 JLowNZ SetV4 JMP PshVPtr CALLSYS CpyRtoV4 NOT CpyVtoV4 CpyVtoR1 JLowZ PshVPtr RefCpyV PshVPtr PshVPtr PshVPtr CALLINTF".split_whitespace()) {return None;}
+                let actor=w(&b[7],0)?;let fallback=w(&b[16],0)?;let actor_ty=local(actor)?;let actor_id=native_type(actor_ty)?;
+                let actor_type=&actor_id.name;let matcher=d(&b[38])?;let fallback_param=f.params.get(*param_slots.get(&fallback)?)?;
+                if !is_object_handle_type(actor_type) || fallback_param.flags!=0 || !object(&fallback_param.ty,actor_ty,false,false,true)
+                    || !refs.is_method_by_id(matcher) || !refs.is_subclass(class,refs.func_owner_by_id(matcher)?) || !plain(refs.func_ret_by_id(matcher)?,0x41)
+                    || !matches!(refs.func_params_by_id(matcher)?,[a,b] if object(a,actor_ty,false,false,true) && object(b,actor_ty,false,false,true)) {return None;}
+                let (iterator,key,boolean,other,selected)=(w(&b[1],0)?,w(&b[3],0)?,w(&b[10],0)?,w(&b[20],0)?,w(&b[17],0)?);
+                if [(4,key),(7,actor),(8,actor),(11,boolean),(12,boolean),(14,actor),(16,fallback),(18,actor),(21,other),(22,other),(24,other),(26,actor),(28,boolean),(29,boolean),(31,other),
+                    (33,actor),(34,selected),(35,fallback),(36,selected),(37,0)].iter().any(|(n,s)|b[*n].words.as_slice()!=[*s as u16])
+                    || b[30].words.as_slice()!=[other as u16,boolean as u16] || d(&b[24])!=Some(0) || local(selected)?!=actor_ty || selected==actor
+                    || [key,boolean,other].iter().any(|s|*s<=0 || f.obj_locals.iter().any(|(n,_)|n==s)) || HashSet::from([key,boolean,other]).len()!=3 {return None;}
+                let inverted=b[39].op.name=="CpyRtoV4";let branch=if inverted {42} else {39};let end=branch+4;
+                if inverted && (b[39..42].iter().map(|i|i.op.name).ne(["CpyRtoV4","NOT","CpyVtoR1"]) || b[39..42].iter().any(|i|i.words.as_slice()!=[boolean as u16]))
+                    || b[branch..end].iter().map(|i|i.op.name).ne(["JLowZ","FreeNullV8","FreeNullV8","JMP"])
+                    || b[branch+1].words.as_slice()!=[selected as u16] || b[branch+2].words.as_slice()!=[actor as u16] {return None;}
+                let footer=code.iter().position(|i|Some(i.offset_dw as i64)==jump(&b[end-1]))?;
+                if footer<=at+end+1 || footer+6>=code.len() || uses(selected)!=[at+17,at+34,at+36,at+branch+1,footer-2] {return None;}
+                let tail=&code[footer-2..footer+6];
+                if tail.iter().map(|i|i.op.name).ne(["FreeNullV8","FreeNullV8","LoadVObjR","RDR1","CpyVtoR1","JLowNZ","PSF","CALLSYS"])
+                    || [(0,selected),(1,actor),(2,iterator),(3,boolean),(4,boolean),(6,*record)].iter().any(|(n,s)|w(&tail[*n],0)!=Some(*s)) {return None;}
+                let iterator_ty=local(iterator)?;if native_type(iterator_ty)?.name!="TArrayIterator" {return None;}
+                let (can_proceed,old)=refs.member_identity(d(&tail[2])?,w(&tail[2],1)?)?;
+                if can_proceed!="CanProceed" || refs.type_identity_by_id(d(&tail[2])?)!=native_type(iterator_ty) || refs.type_identity_by_id(old)!=native_type(iterator_ty) {return None;}
+                let h=&code[at-5..at];
+                if h.iter().map(|i|i.op.name).ne(["PSF","PSF","ADDSi","CALLSYS","JMP"]) || h[0].words.as_slice()!=[iterator as u16] || h[1].words.as_slice()!=[*record as u16] {return None;}
+                let (items,old)=refs.member_identity(d(&h[2])?,w(&h[2],0)?)?;
+                if refs.type_identity_by_id(d(&h[2])?)!=native_type(*record_ty) || refs.type_identity_by_id(old)!=native_type(*record_ty) {return None;}
+                let (iter_fn,proceed,lookup,valid,left,right,dtor)=(p(&h[3])?,p(&b[2])?,p(&b[6])?,p(&b[9])?,p(&b[19])?,p(&b[27])?,p(&tail[7])?);
+                let key_ty=refs.func_ret_by_ptr(proceed)?.type_info;let key_id=native_type(key_ty)?;
+                if !native(proceed,"TArrayIterator","Proceed",false) || !object(refs.func_ret_by_ptr(proceed)?,key_ty,true,false,false) || !refs.func_params_by_ptr(proceed)?.is_empty()
+                    || refs.native_field_value_type(record_type,items)!=Some(format!("TArray<{}>",key_id.name).as_str())
+                    || !native(iter_fn,"TArray","Iterator",false) || !object(refs.func_ret_by_ptr(iter_fn)?,iterator_ty,false,false,false) || !refs.func_params_by_ptr(iter_fn)?.is_empty()
+                    || refs.is_method_by_ptr(lookup) || refs.func_owner_by_ptr(lookup).is_some() || !object(refs.func_ret_by_ptr(lookup)?,actor_ty,false,false,true)
+                    || !matches!(refs.func_params_by_ptr(lookup)?,[a,b] if native_type(a.type_info).is_some_and(|t|t.name=="UObject") && object(a,a.type_info,false,true,true) && object(b,key_ty,false,false,false))
+                    || refs.global_by_ptr(p(&b[5])?)!=Some("__WorldContext")
+                    || refs.func_by_ptr(valid)!=Some("IsValid") || refs.is_method_by_ptr(valid) || refs.func_owner_by_ptr(valid).is_some() || !plain(refs.func_ret_by_ptr(valid)?,0x41)
+                    || !matches!(refs.func_params_by_ptr(valid)?,[a] if native_type(a.type_info).is_some_and(|t|t.name=="UObject") && object(a,a.type_info,false,true,true))
+                    || !native(dtor,record_type,"$beh2",false) || !plain(refs.func_ret_by_ptr(dtor)?,0x52) || !refs.func_params_by_ptr(dtor)?.is_empty() {return None;}
+                for ptr in [left,right] {if !refs.is_method_by_ptr(ptr) || !refs.is_const_method_by_ptr(ptr) || refs.func_owner_by_ptr(ptr)!=Some(actor_type.as_str()) || !plain(refs.func_ret_by_ptr(ptr)?,0x41) || !refs.func_params_by_ptr(ptr)?.is_empty() {return None;}}
+                if left==right || !closed(at-5,at+end,&[(at-1,footer),(footer+3,at),(at+13,at+16),(at+15,footer),(at+23,at+26),(at+25,at+31),(at+32,at+35),(at+branch,at+end),(at+end-1,footer)])
+                    || jump(&code[footer+3])!=Some(b[0].offset_dw as i64) {return None;}
+                // The nested work cannot enter the initialized handle life or bypass its final cleanup.
+                for (n,i) in code.iter().enumerate() {if !i.op.name.starts_with('J') {continue;}let to=jump(i)?;
+                    if n>=at+end && n<footer-2 && (to<code[at+end].offset_dw as i64 || to>code[footer-2].offset_dw as i64) {return None;}
+                    if to>=code[at+end].offset_dw as i64 && to<code[footer+4].offset_dw as i64 && !(n>=at && n<footer+4) && n!=at-1 {return None;}
+                    if to==code[footer-1].offset_dw as i64 || to>code[footer].offset_dw as i64 && to<code[footer+4].offset_dw as i64 {return None;}
+                }
+                Some((selected,key,refs.func_by_ptr(lookup)?.to_owned(),refs.func_by_ptr(left)?.to_owned(),refs.func_by_ptr(right)?.to_owned(),items.to_owned(),actor,actor_type.clone(),fallback_param.name.clone(),refs.func_by_id(matcher)?.to_owned(),inverted))
+            })();if let Some(v)=found {lives.push(v);}
+        }
+        let [(selected,key,lookup,left,right,items,actor,actor_type,fallback_name,matcher_name,inverted)]=lives.as_slice() else {return None;};
+        let lines:Vec<_>=body.lines().collect();let mut paths=Vec::new();let mut stack=Vec::new();
+        for (n,line) in lines.iter().enumerate() {if line.trim()=="}" && stack.pop().is_none() {return None;}paths.push(stack.clone());if line.trim()=="{" {stack.push(n);}}
+        if !stack.is_empty() {return None;}
+        let one=|text:&str|{let mut xs=lines.iter().enumerate().filter(|(_,l)|l.trim()==text).map(|(n,_)|n);let n=xs.next()?;xs.next().is_none().then_some(n)};
+        let declaration=one(&format!("{actor_type} local_{selected};"))?;let copy_line=one(&format!("{copy_type} local_{copy};"))?;
+        let assignment_prefix=format!("local_{selected} = ");
+        let assignments:Vec<_>=lines.iter().enumerate().filter_map(|(n,l)|l.trim().strip_prefix(&assignment_prefix)?.strip_suffix(';').filter(|v|*v!="nullptr").map(|v|(n,v))).collect();
+        let [(assignment,donor)]=assignments.as_slice() else {return None;};let actor_prefix=format!("local_{actor}");
+        if *donor!=actor_prefix && !donor.strip_prefix(&format!("{actor_prefix}_")).is_some_and(|s|!s.is_empty() && s.bytes().all(|b|b.is_ascii_digit())) {return None;}
+        let health=assignment.checked_sub(2)?;let pad=indent_of(lines[health]);let parent=pad.strip_suffix("    ")?;
+        let loop_line=one(&format!("for (auto& local_{key} : local_{record}.{items})"))?;let loop_end=block_end(&lines,loop_line+1)?;
+        let record_decl=one(&format!("{record_type} local_{record};"))?;
+        if !paths[declaration].is_empty() || declaration>=copy_line || copy_line>=loop_line || loop_line>=health || health+9>=loop_end || paths[health]!=paths[loop_line].iter().copied().chain([loop_line+1]).collect::<Vec<_>>()
+            || !paths[loop_line].starts_with(&paths[record_decl]) || record_decl>=copy_line || !paths[copy_line].starts_with(&paths[record_decl])
+            || count_ident(body,&format!("local_{selected}"))!=5 || count_ident(body,&format!("local_{copy}"))!=4 {return None;}
+        let copy_pad=indent_of(lines[copy_line]);
+        if let Some(field)=row_field {
+            let query_line=one(&format!("if (this.{query}(local_{copy}))"))?;
+            let assignment_line=one(&format!("local_{consumer}.{field} = local_{copy};"))?;
+            let boolean=(*valid_bool)?;
+            if !(lines.get(copy_line+1)==Some(&format!("{copy_pad}local_{boolean} = !(local_{copy}.IsValid());").as_str())
+                    && lines.get(copy_line+2)==Some(&format!("{copy_pad}if (local_{boolean})").as_str())
+                || lines.get(copy_line+1)==Some(&format!("{copy_pad}if (!(local_{copy}.IsValid()))").as_str()))
+                || query_line<=copy_line || assignment_line<=query_line || paths[query_line]!=paths[copy_line] || paths[assignment_line]!=paths[copy_line] {return None;}
+        } else {
+            let rows=[format!("{copy_type} local_{copy};"),format!("if (local_{copy}.IsValid() && !(local_{consumer}.Contains(local_{copy})))"),"{".into(),format!("    local_{consumer}.Add(local_{copy});"),"}".into()];
+            if !lines.get(copy_line..copy_line+5)?.iter().zip(rows).all(|(l,e)|*l==format!("{copy_pad}{e}")) {return None;}
+        }
+        let before=[format!("{actor_type} {donor} = {actor_type}::{lookup}(local_{key});"),format!("if (!(IsValid({donor})))"),"{".into(),"    continue;".into(),"}".into()];
+        let after=[format!("if (!({donor}.{left}()) && !({donor}.{right}()))"),"{".into(),format!("    local_{selected} = {donor};"),"}".into(),if *inverted {format!("if ((!(this.{matcher_name}(local_{selected}, {fallback_name}))))")} else {format!("if (this.{matcher_name}(local_{selected}, {fallback_name}))")},"{".into(),format!("    local_{selected} = nullptr;"),"    continue;".into(),"}".into()];
+        if !lines.get(health.checked_sub(5)?..health)?.iter().zip(before).all(|(l,e)|*l==format!("{pad}{e}")) || !lines.get(health..health+9)?.iter().zip(after).all(|(l,e)|*l==format!("{pad}{e}"))
+            || lines[loop_line+1]!=format!("{parent}{{") || lines[loop_end]!=format!("{parent}}}") || lines[loop_end-1]!=format!("{pad}local_{selected} = nullptr;") || paths[loop_end-1]!=paths[health] {return None;}
+        let mut out=Vec::new();for (n,l) in lines.iter().enumerate() {
+            if [declaration,health+6,loop_end-1].contains(&n) {continue;}
+            if n==copy_line {out.push(format!("{copy_pad}{copy_type} local_{copy} = local_{record}.{member};"));}
+            else {if n==health {out.push(format!("{pad}{actor_type} local_{selected} = {fallback_name};"));}out.push((*l).to_owned());}
+        }
+        Some(out.join("\n")+if body.ends_with('\n') {"\n"} else {""})
     })();rewrite.unwrap_or_else(||body.to_owned())
 }
 
@@ -55524,6 +55838,113 @@ mod literal_value_lifetime_tests {
     }
 
     #[test]
+    fn native_class_copy_keeps_the_per_iteration_fallback_handle() {
+        let mut f=function(&[
+            ("PshVPtr",&[65530]),("PshVPtr",&[72]),("PshVPtr",&[0]),("CALLINTF",&[]),("CpyRtoV4",&[5]),
+            ("NOT",&[5]),("CpyVtoR1",&[5]),("JLowZ",&[]),("PSF",&[70]),("ADDSi",&[40]),
+            ("PSF",&[76]),("CALLSYS",&[]),("PSF",&[76]),("CALLSYS",&[]),("JLowNZ",&[]),
+            ("SetV4",&[6]),("JMP",&[]),("PSF",&[76]),("PSF",&[4]),("CALLSYS",&[]),
+            ("CpyRtoV4",&[5]),("NOT",&[5]),("CpyVtoV4",&[6,5]),("CpyVtoR1",&[6]),("JLowZ",&[]),
+            ("PSF",&[76]),("PSF",&[4]),("CALLSYS",&[]),("FreeNullV8",&[72]),("JMP",&[]),
+            ("PSF",&[84]),("PSF",&[70]),("ADDSi",&[72]),("CALLSYS",&[]),("JMP",&[]),
+            ("SUSPEND",&[]),("PSF",&[84]),("CALLSYS",&[]),("CpyRtoV8",&[92]),("PshVPtr",&[92]),
+            ("PshGPtr",&[]),("CALLSYS",&[]),("STOREOBJ",&[72]),("PshVPtr",&[72]),("CALLSYS",&[]),
+            ("CpyRtoV4",&[5]),("NOT",&[5]),("CpyVtoR1",&[5]),("JLowZ",&[]),("FreeNullV8",&[72]),
+            ("JMP",&[]),("PshVPtr",&[65530]),("RefCpyV",&[94]),("PshVPtr",&[72]),("CALLSYS",&[]),
+            ("CpyRtoV4",&[6]),("NOT",&[6]),("CpyVtoR1",&[6]),("JLowNZ",&[]),("SetV4",&[6]),
+            ("JMP",&[]),("PshVPtr",&[72]),("CALLSYS",&[]),("CpyRtoV4",&[5]),("NOT",&[5]),
+            ("CpyVtoV4",&[6,5]),("CpyVtoR1",&[6]),("JLowZ",&[]),("PshVPtr",&[72]),("RefCpyV",&[94]),
+            ("PshVPtr",&[65530]),("PshVPtr",&[94]),("PshVPtr",&[0]),("CALLINTF",&[]),("JLowZ",&[]),
+            ("FreeNullV8",&[94]),("FreeNullV8",&[72]),("JMP",&[]),("SUSPEND",&[]),("CpyVtoR1",&[8]),
+            ("JLowZ",&[]),("SUSPEND",&[]),("FreeNullV8",&[94]),("FreeNullV8",&[72]),("LoadVObjR",&[84,16]),
+            ("RDR1",&[5]),("CpyVtoR1",&[5]),("JLowNZ",&[]),("PSF",&[70]),("CALLSYS",&[]),
+            ("RET",&[8]),
+        ]);
+        let object=|type_info,reference:bool,constant:bool,handle:bool|DataType{token:5,type_info,is_reference:reference,is_object_const:constant,is_object_handle:handle,is_read_only:constant&&!handle,..Default::default()};
+        f.ret=object(1,false,false,false);f.obj_locals=vec![(4,1),(70,4),(72,5),(76,2),(84,7),(94,5)];
+        f.params=vec![super::super::model::Param{name:"Subject".into(),flags:0,ty:object(5,false,false,true)},
+            super::super::model::Param{name:"Fallback".into(),flags:0,ty:object(5,false,false,true)}];
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,value) in [(3,200),(9,4),(11,100),(13,101),(19,102),(27,103),(32,4),(33,104),(37,105),(40,300),(41,106),(44,107),(54,108),(62,109),(73,200),(89,110)] {f.bytecode[code[at].offset_dw+1]=value;}
+        f.bytecode[code[84].offset_dw+2]=7;
+        let edges=[(7,28),(14,17),(16,23),(24,28),(29,88),(34,84),(48,51),(50,84),(58,61),(60,66),(67,70),(74,78),(77,84),(87,35),(80,82)];
+        for (a,b) in edges {f.bytecode[code[a].offset_dw+1]=code[b].offset_dw as i32-code[a].offset_dw as i32-2;}
+        let body="    AActorState local_94;\n    TArray<TSubclassOf<UDefinition>> local_4;\n    while (Next())\n    {\n        FEntry local_70;\n        if (First())\n        {\n            AActorState local_72 = GetActor();\n            if (!(this.Matches(local_72, Fallback)))\n            {\n                TSubclassOf<UDefinition> local_76;\n                if (local_76.IsValid() && !(local_4.Contains(local_76)))\n                {\n                    local_4.Add(local_76);\n                }\n            }\n        }\n        else\n        {\n            for (auto& local_92 : local_70.Ids)\n            {\n                AActorState local_72_2 = AActorState::FindById(local_92);\n                if (!(IsValid(local_72_2)))\n                {\n                    continue;\n                }\n                if (!(local_72_2.IsDead()) && !(local_72_2.IsDefeated()))\n                {\n                    local_94 = local_72_2;\n                }\n                if (this.Matches(local_94, Fallback))\n                {\n                    local_94 = nullptr;\n                    continue;\n                }\n                if (Work())\n                {\n                    Observe();\n                }\n                local_94 = nullptr;\n            }\n        }\n    }\n    return local_4;\n";
+        let expected="    TArray<TSubclassOf<UDefinition>> local_4;\n    while (Next())\n    {\n        FEntry local_70;\n        if (First())\n        {\n            AActorState local_72 = GetActor();\n            if (!(this.Matches(local_72, Fallback)))\n            {\n                TSubclassOf<UDefinition> local_76 = local_70.Class;\n                if (local_76.IsValid() && !(local_4.Contains(local_76)))\n                {\n                    local_4.Add(local_76);\n                }\n            }\n        }\n        else\n        {\n            for (auto& local_92 : local_70.Ids)\n            {\n                AActorState local_72_2 = AActorState::FindById(local_92);\n                if (!(IsValid(local_72_2)))\n                {\n                    continue;\n                }\n                AActorState local_94 = Fallback;\n                if (!(local_72_2.IsDead()) && !(local_72_2.IsDefeated()))\n                {\n                    local_94 = local_72_2;\n                }\n                if (this.Matches(local_94, Fallback))\n                {\n                    continue;\n                }\n                if (Work())\n                {\n                    Observe();\n                }\n            }\n        }\n    }\n    return local_4;\n";
+        let refs=RefResolver::from_test_class_copy_scoped_handle(0);
+        let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_class_copy_and_scoped_handle_default(s,f,r,Some("UHost"));
+        assert_eq!(fold(body,&f,&refs),expected);assert_eq!(fold(expected,&f,&refs),expected);
+        for fault in 1..=22 {assert_eq!(fold(body,&f,&RefResolver::from_test_class_copy_scoped_handle(fault)),body,"metadata {fault}");}
+        for at in [8,9,10,12,17,18,25,26,30,31,32,36,38,39,42,43,45,46,47,49,51,52,53,55,56,57,59,61,63,64,65,66,68,69,70,71,72,75,76,82,83,84,85,86,88] {let mut bad=f.clone();bad.bytecode[code[at].offset_dw]^=4<<16;assert_eq!(fold(body,&bad,&refs),body,"operand {at}");}
+        for (at,_) in edges {if at<30 || at==80 {continue;}let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1]^=2;assert_eq!(fold(body,&bad,&refs),body,"edge {at}");}
+        for at in [9,11,13,19,27,32,33,37,40,41,44,54,62,73,89] {let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1]^=1<<24;assert_eq!(fold(body,&bad,&refs),body,"reference {at}");}
+        let mut bad=f.clone();bad.bytecode[code[65].offset_dw+1]^=4;assert_eq!(fold(body,&bad,&refs),body,"second operand");
+        bad=f.clone();bad.bytecode[code[59].offset_dw+1]=1;assert_eq!(fold(body,&bad,&refs),body,"immediate");
+        for delta in [1,2] {let mut bad=f.clone();bad.bytecode[code[84].offset_dw+delta]^=4;assert_eq!(fold(body,&bad,&refs),body,"field operand {delta}");}
+        for to in [10,51,69,75,78,82,83,84,85] {let mut bad=f.clone();let mut prefix=function(&[("JMP",&[])]).bytecode;
+            prefix[1]=code[to].offset_dw as i32+prefix.len() as i32-2;prefix.extend(bad.bytecode);bad.bytecode=prefix;assert_eq!(fold(body,&bad,&refs),body,"entry {to}");}
+        for to in [51,75,83,84,88] {let mut bad=f.clone();bad.bytecode[code[80].offset_dw+1]=code[to].offset_dw as i32-code[80].offset_dw as i32-2;assert_eq!(fold(body,&bad,&refs),body,"nested escape {to}");}
+        for slot in [76,94] {let mut bad=f.clone();bad.bytecode.extend(function(&[("PSF",&[slot])]).bytecode);assert_eq!(fold(body,&bad,&refs),body,"extra use {slot}");}
+        let mut bad=f.clone();bad.obj_locals.push((94,5));assert_eq!(fold(body,&bad,&refs),body);
+        bad=f.clone();bad.obj_locals.push((92,8));assert_eq!(fold(body,&bad,&refs),body);
+        bad=f.clone();bad.params[1].ty.is_object_const=true;assert_eq!(fold(body,&bad,&refs),body);
+        bad=f.clone();bad.ret.is_object_handle=true;assert_eq!(fold(body,&bad,&refs),body);
+        bad=f.clone();bad.bytecode.splice(0..0,function(&[("JMPP",&[1])]).bytecode);assert_eq!(fold(body,&bad,&refs),body);
+        for source in [body.replace("local_94 = local_72_2;","local_94 = Other;"),body.replace("this.Matches(local_94, Fallback)","this.Other(local_94, Fallback)"),
+            body.replace("for (auto& local_92 : local_70.Ids)","while (Retry())"),body.replace("    AActorState local_94;","    {\n    AActorState local_94;\n    }"),
+            body.replace("        FEntry local_70;","        {\n        FEntry local_70;\n        }"),body.replace("local_76.IsValid()","local_76.Other()"),
+            body.replace("                local_94 = nullptr;\n            }","                local_94 = nullptr;\n                Work();\n            }"),
+            body.to_owned()+"    Observe(local_94);\n",body.to_owned()+"    Observe(local_76);\n"] {assert_eq!(fold(&source,&f,&refs),source);}
+        let mut shifted=f.clone();
+        for i in &code {for (n,s) in i.words.iter().copied().enumerate() {
+            if s>0 && s<32768 && !matches!(i.op.name,"RET"|"ADDSi") && !(i.op.name=="LoadVObjR" && n==1) {
+                let dw=i.offset_dw+(n+1)/2;let shift=if n%2==0 {16} else {0};let mask=0xffffu32<<shift;
+                shifted.bytecode[dw]=((shifted.bytecode[dw] as u32 & !mask)|((s as u32+300)<<shift)) as i32;
+            }
+        }}
+        for (s,_) in &mut shifted.obj_locals {*s+=300;}
+        let mut bytes=function(&[("SUSPEND",&[])]).bytecode;bytes.extend(shifted.bytecode);shifted.bytecode=bytes;
+        let rename=|s:&str|{let mut out=s.to_owned();for n in [94,92,76,72,70,4] {out=out.replace(&format!("local_{n}"),&format!("local_{}",n+300));}out};
+        assert_eq!(fold(&rename(body),&shifted,&refs),rename(expected));
+        let mut row=function(&[
+            ("PSF",&[84]),("ADDSi",&[40]),("PSF",&[92]),("CALLSYS",&[]),("PSF",&[92]),
+            ("CALLSYS",&[]),("CpyRtoV4",&[89]),("NOT",&[89]),("CpyVtoR1",&[89]),("JLowZ",&[]),
+            ("JMP",&[]),("PSF",&[92]),("PshVPtr",&[0]),("CALLINTF",&[]),("JLowZ",&[]),
+            ("JMP",&[]),("PSF",&[92]),("PSF",&[106]),("ADDSi",&[8]),("CALLSYS",&[]),
+            ("SUSPEND",&[]),("PSF",&[116]),("PSF",&[84]),("ADDSi",&[72]),("CALLSYS",&[]),
+            ("JMP",&[]),("SUSPEND",&[]),("PSF",&[116]),("CALLSYS",&[]),("CpyRtoV8",&[124]),
+            ("PshVPtr",&[124]),("PshGPtr",&[]),("CALLSYS",&[]),("STOREOBJ",&[86]),("PshVPtr",&[86]),
+            ("CALLSYS",&[]),("CpyRtoV4",&[89]),("NOT",&[89]),("CpyVtoR1",&[89]),("JLowZ",&[]),
+            ("FreeNullV8",&[86]),("JMP",&[]),("PshVPtr",&[65530]),("RefCpyV",&[126]),("PshVPtr",&[86]),
+            ("CALLSYS",&[]),("CpyRtoV4",&[93]),("NOT",&[93]),("CpyVtoR1",&[93]),("JLowNZ",&[]),
+            ("SetV4",&[93]),("JMP",&[]),("PshVPtr",&[86]),("CALLSYS",&[]),("CpyRtoV4",&[89]),
+            ("NOT",&[89]),("CpyVtoV4",&[93,89]),("CpyVtoR1",&[93]),("JLowZ",&[]),("PshVPtr",&[86]),
+            ("RefCpyV",&[126]),("PshVPtr",&[65530]),("PshVPtr",&[126]),("PshVPtr",&[0]),("CALLINTF",&[]),
+            ("CpyRtoV4",&[89]),("NOT",&[89]),("CpyVtoR1",&[89]),("JLowZ",&[]),("FreeNullV8",&[126]),
+            ("FreeNullV8",&[86]),("JMP",&[]),("SUSPEND",&[]),("CpyVtoR1",&[8]),("JLowZ",&[]),
+            ("SUSPEND",&[]),("FreeNullV8",&[126]),("FreeNullV8",&[86]),("LoadVObjR",&[116,16]),("RDR1",&[89]),
+            ("CpyVtoR1",&[89]),("JLowNZ",&[]),("PSF",&[84]),("CALLSYS",&[]),("RET",&[8]),
+        ]);
+        row.ret=object(10,false,false,false);row.params=f.params.clone();row.obj_locals=vec![(84,4),(92,2),(106,11),(86,5),(126,5),(116,7)];
+        let row_code=disassemble(&row.bytecode).unwrap();
+        for (at,value) in [(1,4),(3,100),(5,101),(13,201),(18,11),(19,111),(23,4),(24,104),(28,105),(31,300),(32,106),(35,107),(45,108),(53,109),(64,200),(83,110)] {row.bytecode[row_code[at].offset_dw+1]=value;}
+        row.bytecode[row_code[78].offset_dw+2]=7;
+        let row_edges=[(9,11),(10,82),(14,16),(15,82),(25,78),(39,42),(41,78),(49,52),(51,57),(58,61),(68,72),(71,78),(74,76),(81,26)];
+        for (a,b) in row_edges {row.bytecode[row_code[a].offset_dw+1]=row_code[b].offset_dw as i32-row_code[a].offset_dw as i32-2;}
+        let row_body="    AActorState local_126;\n    bool local_89;\n    FPlan local_18;\n    while (Next())\n    {\n        FEntry local_84;\n        if (First())\n        {\n            TSubclassOf<UDefinition> local_92;\n            local_89 = !(local_92.IsValid());\n            if (local_89)\n            {\n                continue;\n            }\n            if (this.IsSpecial(local_92))\n            {\n                continue;\n            }\n            FRow local_106;\n            local_106.Class = local_92;\n        }\n        else\n        {\n            for (auto& local_124 : local_84.Ids)\n            {\n                AActorState local_86_2 = AActorState::FindById(local_124);\n                if (!(IsValid(local_86_2)))\n                {\n                    continue;\n                }\n                if (!(local_86_2.IsDead()) && !(local_86_2.IsDefeated()))\n                {\n                    local_126 = local_86_2;\n                }\n                if ((!(this.Matches(local_126, Fallback))))\n                {\n                    local_126 = nullptr;\n                    continue;\n                }\n                if (Work())\n                {\n                    Observe();\n                }\n                local_126 = nullptr;\n            }\n        }\n    }\n    return local_18;\n";
+        let row_expected="    bool local_89;\n    FPlan local_18;\n    while (Next())\n    {\n        FEntry local_84;\n        if (First())\n        {\n            TSubclassOf<UDefinition> local_92 = local_84.Class;\n            local_89 = !(local_92.IsValid());\n            if (local_89)\n            {\n                continue;\n            }\n            if (this.IsSpecial(local_92))\n            {\n                continue;\n            }\n            FRow local_106;\n            local_106.Class = local_92;\n        }\n        else\n        {\n            for (auto& local_124 : local_84.Ids)\n            {\n                AActorState local_86_2 = AActorState::FindById(local_124);\n                if (!(IsValid(local_86_2)))\n                {\n                    continue;\n                }\n                AActorState local_126 = Fallback;\n                if (!(local_86_2.IsDead()) && !(local_86_2.IsDefeated()))\n                {\n                    local_126 = local_86_2;\n                }\n                if ((!(this.Matches(local_126, Fallback))))\n                {\n                    continue;\n                }\n                if (Work())\n                {\n                    Observe();\n                }\n            }\n        }\n    }\n    return local_18;\n";
+        assert_eq!(fold(row_body,&row,&refs),row_expected);assert_eq!(fold(row_expected,&row,&refs),row_expected);
+        for fault in [1,2,3,5,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26] {assert_eq!(fold(row_body,&row,&RefResolver::from_test_class_copy_scoped_handle(fault)),row_body,"row metadata {fault}");}
+        let folded=|s:&str|s.replace("            local_89 = !(local_92.IsValid());\n            if (local_89)","            if (!(local_92.IsValid()))");
+        assert_eq!(fold(&folded(row_body),&row,&refs),folded(row_expected));
+        for at in [65,66,67] {let mut bad=row.clone();bad.bytecode[row_code[at].offset_dw+0]^=4<<16;assert_eq!(fold(row_body,&bad,&refs),row_body,"inverted operand {at}");}
+        for at in [13,19,18] {let mut bad=row.clone();bad.bytecode[row_code[at].offset_dw+1]^=4<<16;assert_eq!(fold(row_body,&bad,&refs),row_body,"row reference {at}");}
+        for source in [row_body.replace("if ((!(this.Matches(local_126, Fallback))))","if (this.Matches(local_126, Fallback))"),
+            row_body.replace("local_106.Class = local_92;","local_106.Other = local_92;"),row_body.replace("if (this.IsSpecial(local_92))","if (this.Other(local_92))"),
+            row_body.replace("            local_106.Class = local_92;","            {\n            local_106.Class = local_92;\n            }")] {assert_eq!(fold(&source,&row,&refs),source);}
+    }
+
+    #[test]
     fn perceived_actor_argument_defers_only_its_proven_property_getter() {
         let mut f = function(&[("SetV1", &[3]), ("PshV4", &[3]), ("PshC8", &[]),
             ("SetV1", &[43]), ("PshV4", &[43]), ("PshC8", &[]), ("PshGPtr", &[]),
@@ -59533,6 +59954,192 @@ mod literal_value_lifetime_tests {
         assert_eq!(super::address_push_counts(&f, &RefResolver::default()).get(&8),Some(&1));
         assert_eq!(super::restore_dropped_struct_arguments(source,&super::address_push_counts(&f, &RefResolver::default())),
             source.replace("RemoveActiveEffectsWithTags(FGameplayTagContainer())","RemoveActiveEffectsWithTags(local_8)"));
+    }
+
+    fn member_value_selection_fixture() -> Func {
+        let mut f = function(&[
+            // A completed earlier life in the very same destination slot.
+            ("PshVPtr", &[0]), ("ADDSi", &[48]), ("PSF", &[8]), ("CALLSYS", &[]),
+            ("PSF", &[8]), ("CALLSYS", &[]), ("PSF", &[8]), ("CALLSYS", &[]),
+            // The compiler's materialized validity && nonzero test precedes the diamond.
+            ("PshVPtr", &[0]), ("ADDSi", &[16]), ("RDSPtr", &[]), ("CALLSYS", &[]),
+            ("JLowNZ", &[]), ("SetV4", &[15]), ("JMP", &[]), ("PshC8", &[]),
+            ("PshVPtr", &[0]), ("ADDSi", &[16]), ("RDSPtr", &[]), ("ADDSi", &[24]),
+            ("CALLSYS", &[]), ("CpyRtoV4", &[13]), ("NOT", &[13]), ("CpyVtoV4", &[15, 13]),
+            ("CpyVtoR1", &[15]), ("JLowZ", &[]), ("PshVPtr", &[0]), ("ADDSi", &[16]),
+            ("RDSPtr", &[]), ("ADDSi", &[24]), ("JMP", &[]), ("PshVPtr", &[0]),
+            ("ADDSi", &[48]), ("PSF", &[8]), ("CALLSYS", &[]),
+            ("PSF", &[8]), ("CALLSYS", &[]), ("PSF", &[8]), ("CALLSYS", &[]),
+            ("PSF", &[8]), ("CALLSYS", &[]), ("RET", &[2]),
+        ]);
+        f.ret = DataType { token: 0x52, ..Default::default() }; f.obj_locals = vec![(8, 3)];
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, value) in [(1, 1), (3, 100), (5, 104), (7, 101), (9, 1), (11, 102),
+            (17, 1), (19, 2), (20, 103), (27, 1), (29, 2), (32, 1),
+            (34, 100), (36, 105), (38, 106), (40, 101)]
+        { f.bytecode[code[at].offset_dw + 1] = value; }
+        let epsilon = 1e-4f64.to_bits();
+        f.bytecode[code[15].offset_dw + 1] = epsilon as i32;
+        f.bytecode[code[15].offset_dw + 2] = (epsilon >> 32) as i32;
+        for (at, to) in [(12, 15), (14, 24), (25, 31), (30, 33)] {
+            f.bytecode[code[at].offset_dw + 1] = code[to].offset_dw as i32 - code[at].offset_dw as i32 - 2;
+        }
+        f
+    }
+
+    #[test]
+    fn member_address_selection_preserves_prior_bool_fold_and_reused_value_life() {
+        let f = member_value_selection_fixture(); let refs = RefResolver::from_test_member_value_selection(0);
+        let code = disassemble(&f.bytecode).unwrap();
+        let raw = |f: &Func, refs: &RefResolver, shift: i32, test_ty: &str, value_ty: &str, method: bool| {
+            let fc = super::FuncCode { func: f.name.clone(), is_method: method, param_names: vec![],
+                param_types: vec![], ret: f.ret.clone(), bytecode: f.bytecode.clone() };
+            let locals = HashMap::from([(8 + shift, value_ty.into()), (13 + shift, "bool".into()), (15 + shift, test_ty.into())]);
+            super::super::structure::body_statements_ctor(&fc, refs, 0, None, Some(&f.ret),
+                refs.class_field_types("UState"), None, Some("UState"), Some(&locals), None)
+        };
+        super::super::structure::take_rvo_producers();
+        let body = raw(&f, &refs, 0, "bool", "FVector", true);
+        let selected = "local_8 = (local_15 ? this.Group.Point : this.Fallback);";
+        assert_eq!(body.matches(selected).count(), 1, "{body}");
+        assert!(body.find("Before(").unwrap() < body.find(selected).unwrap(), "{body}");
+        assert!(body.find(selected).unwrap() < body.find("After(local_8)").unwrap(), "{body}");
+        assert!(body.contains("Observe(local_8)"), "{body}");
+        assert!(super::super::structure::take_rvo_producers().contains(&(8, 34)));
+        // Full emitter includes the real short-circuit fold and object-life splitting.
+        let mut source = String::new();
+        super::emit_function_ctor(&mut source, &f, &refs, true, false, 0, None,
+            refs.class_field_types("UState"), Some("UState"));
+        assert_eq!(source.matches("? this.Group.Point : this.Fallback").count(), 1, "{source}");
+        assert!(source.contains("&&") && source.contains("IsValid(this.Group)"), "{source}");
+        assert!(source.contains("IsNearlyZero("), "{source}");
+        assert_eq!(source.matches("Before(").count(), 1, "{source}");
+        assert!(source.find("Before(").unwrap() < source.find("? this.Group.Point").unwrap(), "{source}");
+        assert!(source.find("? this.Group.Point").unwrap() < source.find("After(").unwrap(), "{source}");
+        assert_eq!(source.matches("Observe(").count(), 1, "{source}");
+        for fault in 1..=18 {
+            assert!(!raw(&f, &RefResolver::from_test_member_value_selection(fault), 0, "bool", "FVector", true)
+                .contains(" ? "), "metadata {fault}");
+        }
+        for (test_ty, value_ty, method) in [("int", "FVector", true), ("bool", "FName", true), ("bool", "FVector", false)] {
+            assert!(!raw(&f, &refs, 0, test_ty, value_ty, method).contains(" ? "));
+        }
+        // Every word-bearing instruction in the 11-op diamond has a typed role.
+        for at in [24, 26, 27, 29, 31, 32, 33] {
+            let mut bad = f.clone(); bad.bytecode[code[at].offset_dw] ^= 4 << 16;
+            assert!(!raw(&bad, &refs, 0, "bool", "FVector", true).contains(" ? "), "operand {at}");
+        }
+        for at in [27, 29, 32, 34] {
+            let mut bad = f.clone(); bad.bytecode[code[at].offset_dw + 1] ^= 1 << 24;
+            assert!(!raw(&bad, &refs, 0, "bool", "FVector", true).contains(" ? "), "identity {at}");
+        }
+        for (at, to) in [(25, 30), (30, 34)] {
+            let mut bad = f.clone(); bad.bytecode[code[at].offset_dw + 1] = code[to].offset_dw as i32 - code[at].offset_dw as i32 - 2;
+            assert!(!raw(&bad, &refs, 0, "bool", "FVector", true).contains(" ? "), "edge {at}");
+        }
+        for to in 25..=34 {
+            let mut bad = f.clone(); let mut prefix = function(&[("JZ", &[])]).bytecode;
+            prefix[1] = code[to].offset_dw as i32; prefix.extend(bad.bytecode); bad.bytecode = prefix;
+            assert!(!raw(&bad, &refs, 0, "bool", "FVector", true).contains(" ? "), "entry {to}");
+        }
+        let mut bad = f.clone(); let mut prefix = function(&[("JMPP", &[1])]).bytecode;
+        prefix.extend(bad.bytecode); bad.bytecode = prefix;
+        assert!(!raw(&bad, &refs, 0, "bool", "FVector", true).contains(" ? "));
+        let mut shifted = f.clone();
+        for i in &code {
+            if !matches!(i.op.name, "ADDSi" | "RET") {
+                for (index, value) in i.words.iter().enumerate().filter(|(_, w)| **w > 0) {
+                    let half = index + 1; let at = i.offset_dw + half / 2; let bits = (half % 2) * 16;
+                    shifted.bytecode[at] = ((shifted.bytecode[at] as u32 & !(0xffff << bits))
+                        | ((*value as u32 + 200) << bits)) as i32;
+                }
+            }
+        }
+        shifted.obj_locals[0].0 += 200;
+        let mut prefix = function(&[("SUSPEND", &[])]).bytecode; prefix.extend(shifted.bytecode); shifted.bytecode = prefix;
+        assert!(raw(&shifted, &refs, 200, "bool", "FVector", true)
+            .contains("local_208 = (local_215 ? this.Group.Point : this.Fallback);"));
+        super::super::structure::take_rvo_producers();
+    }
+
+    #[test]
+    fn class_guard_bool_lifetimes_keep_named_matcher_and_inline_later_conditions() {
+        let mut f = function(&[
+            // An earlier unnamed life in the retained bool's physical slot is legitimate.
+            ("PshVPtr",&[(-4i16) as u16]),("CALLSYS",&[]),("CpyRtoV4",&[3]),
+            ("CpyVtoR1",&[3]),("JLowZ",&[]),("SUSPEND",&[]),
+            ("PshVPtr",&[(-6i16) as u16]),("PshVPtr",&[8]),("PshVPtr",&[0]),("CALLINTF",&[]),
+            ("CpyRtoV4",&[3]),("CpyVtoV4",&[4,3]),("NOT",&[4]),("CpyVtoR1",&[4]),("JLowNZ",&[]),
+            ("SetV4",&[4]),("JMP",&[]),("CpyVtoV4",&[5,(-8i16) as u16]),("NOT",&[5]),("CpyVtoV4",&[4,5]),
+            ("CpyVtoR1",&[4]),("JLowZ",&[]),("FreeNullV8",&[8]),("PSF",&[14]),("CALLSYS",&[]),("JMP",&[]),
+            ("PSF",&[14]),("ADDSi",&[40]),("PSF",&[22]),("CALLSYS",&[]),("PSF",&[22]),("CALLSYS",&[]),
+            ("CpyRtoV4",&[5]),("NOT",&[5]),("CpyVtoR1",&[5]),("JLowZ",&[]),
+            ("PSF",&[14]),("ADDSi",&[48]),("CALLSYS",&[]),("STOREOBJ",&[26]),("PshVPtr",&[26]),("CALLSYS",&[]),
+            ("CpyRtoV4",&[4]),("CpyVtoR1",&[4]),("JLowNZ",&[]),("SetV4",&[5]),("JMP",&[]),
+            ("CpyVtoV4",&[5,(-8i16) as u16]),("CpyVtoR1",&[5]),("JLowZ",&[]),
+            ("SUSPEND",&[]),("JMP",&[]),("SUSPEND",&[]),("JMP",&[]),("SUSPEND",&[]),
+            ("PSF",&[22]),("CALLSYS",&[]),("SetV4",&[5]),("CpyVtoR1",&[5]),("JLowNZ",&[]),
+            ("LoadVObjR",&[30,16]),("RDR1",&[3]),("CpyVtoR1",&[3]),("JLowNZ",&[]),("RET",&[9]),
+        ]);
+        f.ret=DataType { token:5,type_info:7,..Default::default() };
+        f.obj_locals=vec![(8,1),(14,2),(22,3),(26,4),(30,9)];
+        f.params=vec![super::super::model::Param { name:"Criminal".into(),flags:0,ty:DataType {token:5,type_info:1,is_object_handle:true,..Default::default()} },
+            super::super::model::Param { name:"Recipient".into(),flags:0,ty:DataType {token:5,type_info:1,is_object_handle:true,..Default::default()} },
+            super::super::model::Param { name:"IgnorePriority".into(),flags:0,ty:DataType {token:0x41,is_object_const:true,is_read_only:true,..Default::default()} }];
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,value) in [(1,105),(9,200),(24,101),(27,52),(29,102),(31,103),(37,52),(38,104),(41,105),(56,106)] {
+            f.bytecode[code[at].offset_dw+1]=value;
+        }
+        f.bytecode[code[60].offset_dw+2]=59;
+        for (at,to) in [(4,6),(14,17),(16,20),(21,26),(25,60),(35,54),(44,47),(46,48),(49,52),(51,60),(53,60),(59,6),(63,6)] {
+            f.bytecode[code[at].offset_dw+1]=code[to].offset_dw as i32-code[at].offset_dw as i32-2;
+        }
+        let body="    bool local_5;\n    for (auto index : Entries)\n    {\n        FEntry local_14;\n        ARecipient local_8 = this.Select();\n        if (!(this.Matches(local_8, Recipient)) && !(IgnorePriority))\n        {\n            continue;\n        }\n        TSubclassOf<UItem> local_22;\n        local_5 = !(local_22.IsValid());\n        if (local_5)\n        {\n            bool local_4 = IsValid(local_14.InteractiveClass);\n            local_5 = local_4 && IgnorePriority;\n            if (local_5)\n            {\n                MarkContainer(index);\n                continue;\n            }\n            MarkInvalid(index);\n            continue;\n        }\n        Use(local_22);\n    }\n";
+        let expected=body.replace("    bool local_5;\n","")
+            .replace("        if (!(this.Matches(local_8, Recipient)) && !(IgnorePriority))", "        bool local_3 = this.Matches(local_8, Recipient);\n        if (!(local_3) && !(IgnorePriority))")
+            .replace("        local_5 = !(local_22.IsValid());\n        if (local_5)","        if (!(local_22.IsValid()))")
+            .replace("            local_5 = local_4 && IgnorePriority;\n            if (local_5)","            if (local_4 && IgnorePriority)");
+        let refs=RefResolver::from_test_class_guard_bool_lifetimes(0);
+        let fold=|body:&str,f:&Func,r:&RefResolver|super::restore_class_guard_bool_lifetimes(body,f,r,Some("UPlanner"));
+        assert_eq!(fold(body,&f,&refs),expected); assert_eq!(fold(&expected,&f,&refs),expected);
+        // The independent copy repair may already have run; this pass preserves its initializer.
+        let copied=body.replace("TSubclassOf<UItem> local_22;","TSubclassOf<UItem> local_22 = local_14.ItemClass;");
+        assert_eq!(fold(&copied,&f,&refs),expected.replace("TSubclassOf<UItem> local_22;","TSubclassOf<UItem> local_22 = local_14.ItemClass;"));
+        for fault in 1..=25 {assert_eq!(fold(body,&f,&RefResolver::from_test_class_guard_bool_lifetimes(fault)),body,"metadata {fault}");}
+        for (at,i) in code[6..50].iter().enumerate() {
+            for word in 0..i.words.len() {let mut bad=f.clone();let half=word+1;bad.bytecode[i.offset_dw+half/2]^=4<<((half%2)*16);
+                assert_eq!(fold(body,&bad,&refs),body,"operand {}:{word}",at+6);}
+        }
+        for at in [9,24,27,29,31,37,38,41] {let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1]^=1<<24;assert_eq!(fold(body,&bad,&refs),body,"identity {at}");}
+        for at in [14,16,21,44,46] {let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1]+=1;assert_eq!(fold(body,&bad,&refs),body,"edge {at}");}
+        for (at,to) in [(25,54),(35,52),(49,54)] {let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1]=code[to].offset_dw as i32-code[at].offset_dw as i32-2;
+            assert_eq!(fold(body,&bad,&refs),body,"exit order {at}");}
+        for at in [15,45] {let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1]=1;assert_eq!(fold(body,&bad,&refs),body,"literal {at}");}
+        for to in [7,10,17,26,29,36,42,49,61,62,63] {let mut bad=f.clone();let mut prefix=function(&[("JMP",&[])]).bytecode;
+            prefix[1]=code[to].offset_dw as i32;prefix.extend(bad.bytecode);bad.bytecode=prefix;assert_eq!(fold(body,&bad,&refs),body,"entry {to}");}
+        let mut bad=f.clone();let mut prefix=function(&[("JMPP",&[1])]).bytecode;prefix.extend(bad.bytecode);bad.bytecode=prefix;assert_eq!(fold(body,&bad,&refs),body);
+        bad=f.clone();bad.bytecode.extend(function(&[("CpyVtoR1",&[3])]).bytecode);assert_eq!(fold(body,&bad,&refs),body);
+        bad=f.clone();bad.params[2].ty.is_reference=true;assert_eq!(fold(body,&bad,&refs),body);
+        bad=f.clone();bad.ret.is_object_handle=true;assert_eq!(fold(body,&bad,&refs),body);
+        bad=f.clone();bad.obj_locals.push((5,4));assert_eq!(fold(body,&bad,&refs),body);
+        for source in [body.to_owned()+"    Observe(local_5);\n",body.to_owned()+"    bool local_3;\n",
+            body.replace("MarkContainer(index);","Use(local_4);"),body.replace("this.Matches(local_8, Recipient)","this.Matches(local_8, Criminal)"),
+            body.replace("        local_5 = !(local_22.IsValid());","        Work();\n        local_5 = !(local_22.IsValid());"),
+            body.replace("            bool local_4 = IsValid(local_14.InteractiveClass);","            bool local_4 = IsValid(local_14.ItemClass);"),
+            body.replace("    bool local_5;\n","").replace("                MarkContainer(index);","                bool local_5;\n                MarkContainer(index);"),
+            body.replace("            local_5 = local_4 && IgnorePriority;","            {\n            local_5 = local_4 && IgnorePriority;"),
+            body.replace("        TSubclassOf<UItem> local_22;","        TSubclassOf<UItem> local_22 = Other;")] {
+            assert_eq!(fold(&source,&f,&refs),source);
+        }
+        let mut shifted=f.clone();let positive=[3u16,4,5,8,14,22,26,30];
+        for i in &code {if !matches!(i.op.name,"ADDSi"|"RET") {for (n,s) in i.words.iter().enumerate().filter(|(_,s)|positive.contains(s)) {
+            let half=n+1;let at=i.offset_dw+half/2;let bits=(half%2)*16;
+            shifted.bytecode[at]=((shifted.bytecode[at] as u32&!(0xffff<<bits))|((*s as u32+200)<<bits)) as i32;
+        }}}
+        for (s,_) in &mut shifted.obj_locals {*s+=200;}
+        let rename=|s:&str|{let mut s=s.to_owned();for slot in positive {s=s.replace(&format!("local_{slot}"),&format!("local_{}",slot+200));}s};
+        let mut prefix=function(&[("SUSPEND",&[])]).bytecode;prefix.extend(shifted.bytecode);shifted.bytecode=prefix;
+        assert_eq!(fold(&rename(body),&shifted,&refs),rename(&expected));
     }
 
     fn native_value_selection_fixture() -> Func {
