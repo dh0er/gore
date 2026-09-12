@@ -6399,6 +6399,189 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_navigation_candidates(fault: u8) -> Self {
+        let mut r = Self::default();
+        r.type_by_ptr.insert(1,"AGothicCharacter".into()); r.type_identity_by_ptr.insert(1,TypeIdentity{name:"AGothicCharacter".into(),module:String::new(),namespace:String::new()});
+        r.type_by_ptr.insert(2,"AGothicCharacterState".into()); r.type_identity_by_ptr.insert(2,TypeIdentity{name:"AGothicCharacterState".into(),module:String::new(),namespace:String::new()});
+        r.type_by_ptr.insert(3,"TArray".into()); r.type_identity_by_ptr.insert(3,TypeIdentity{name:"TArray".into(),module:String::new(),namespace:String::new()});
+        r.type_by_ptr.insert(4,"TArrayIterator".into()); r.type_identity_by_ptr.insert(4,TypeIdentity{name:"TArrayIterator".into(),module:String::new(),namespace:String::new()});
+        r.type_by_ptr.insert(5,"FVector".into()); r.type_identity_by_ptr.insert(5,TypeIdentity{name:"FVector".into(),module:String::new(),namespace:String::new()});
+        r.type_by_ptr.insert(6,"FString".into()); r.type_identity_by_ptr.insert(6,TypeIdentity{name:"FString".into(),module:String::new(),namespace:String::new()});
+        r.type_by_ptr.insert(7,"FInGameTime".into()); r.type_identity_by_ptr.insert(7,TypeIdentity{name:"FInGameTime".into(),module:String::new(),namespace:String::new()});
+        r.type_by_ptr.insert(8,"TArray".into()); r.type_identity_by_ptr.insert(8,TypeIdentity{name:"TArray".into(),module:String::new(),namespace:String::new()});
+        r.type_by_ptr.insert(9,"FAbilityTaskExecutor".into()); r.type_identity_by_ptr.insert(9,TypeIdentity{name:"FAbilityTaskExecutor".into(),module:String::new(),namespace:String::new()});
+        r.type_by_ptr.insert(10,"UGameplayAbility_AI".into()); r.type_identity_by_ptr.insert(10,TypeIdentity{name:"UGameplayAbility_AI".into(),module:String::new(),namespace:String::new()});
+        r.type_by_ptr.insert(400,"UFixtureNavigation".into()); r.type_identity_by_ptr.insert(400,TypeIdentity{name:"UFixtureNavigation".into(),module:"Fixture".into(),namespace:String::new()});
+        r.type_by_ptr.insert(401,"UGothicCharacterAIState".into()); r.type_identity_by_ptr.insert(401,TypeIdentity{name:"UGothicCharacterAIState".into(),module:"".into(),namespace:String::new()});
+        r.typeid_to_ptr.insert(5,5);
+        r.typeid_to_ptr.insert(400,400);
+        r.typeid_to_ptr.insert(401,401);
+        r.func_by_ptr.insert(100,"GetSelf".into()); r.func_ret.insert(100,DataType{token:5,type_info:1,is_object_handle:true,..Default::default()}); r.func_params.insert(100,vec![]);
+        r.func_owner.insert(100,"UCharacterAIState".into()); r.func_is_method.insert(100);
+        r.const_method_ptrs.insert(100);
+        r.func_by_ptr.insert(101,"GetFeetLocation".into()); r.func_ret.insert(101,DataType{token:5,type_info:5,..Default::default()}); r.func_params.insert(101,vec![]);
+        r.func_owner.insert(101,"AGothicCharacter".into()); r.func_is_method.insert(101);
+        r.const_method_ptrs.insert(101);
+        r.func_by_ptr.insert(102,"GetCharacter".into()); r.func_ret.insert(102,DataType{token:5,type_info:1,is_object_handle:true,..Default::default()}); r.func_params.insert(102,vec![]);
+        r.func_owner.insert(102,"AGothicCharacterState".into()); r.func_is_method.insert(102);
+        r.const_method_ptrs.insert(102);
+        r.func_by_ptr.insert(103,"opSub".into()); r.func_ret.insert(103,DataType{token:5,type_info:5,..Default::default()}); r.func_params.insert(103,vec![DataType{token:5,type_info:5,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()}]);
+        r.func_owner.insert(103,"FVector".into()); r.func_is_method.insert(103);
+        r.const_method_ptrs.insert(103);
+        r.func_by_ptr.insert(104,"GetSafeNormal".into()); r.func_ret.insert(104,DataType{token:5,type_info:5,..Default::default()}); r.func_params.insert(104,vec![DataType{token:81,..Default::default()},DataType{token:5,type_info:5,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()}]);
+        r.func_owner.insert(104,"FVector".into()); r.func_is_method.insert(104);
+        r.const_method_ptrs.insert(104);
+        r.func_by_ptr.insert(105,"GetVelocity".into()); r.func_ret.insert(105,DataType{token:5,type_info:5,..Default::default()}); r.func_params.insert(105,vec![]);
+        r.func_owner.insert(105,"AActor".into()); r.func_is_method.insert(105);
+        r.const_method_ptrs.insert(105);
+        r.func_by_ptr.insert(106,"Size".into()); r.func_ret.insert(106,DataType{token:81,..Default::default()}); r.func_params.insert(106,vec![]);
+        r.func_owner.insert(106,"FVector".into()); r.func_is_method.insert(106);
+        r.const_method_ptrs.insert(106);
+        r.func_by_ptr.insert(107,"DotProduct".into()); r.func_ret.insert(107,DataType{token:81,..Default::default()}); r.func_params.insert(107,vec![DataType{token:5,type_info:5,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()}]);
+        r.func_owner.insert(107,"FVector".into()); r.func_is_method.insert(107);
+        r.const_method_ptrs.insert(107);
+        r.func_by_ptr.insert(108,"$beh0".into()); r.func_ret.insert(108,DataType{token:82,..Default::default()}); r.func_params.insert(108,vec![]);
+        r.func_owner.insert(108,"FString".into()); r.func_is_method.insert(108);
+        r.func_by_ptr.insert(109,"opAssign".into()); r.func_ret.insert(109,DataType{token:5,type_info:6,is_reference:true,..Default::default()}); r.func_params.insert(109,vec![DataType{token:5,type_info:6,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()}]);
+        r.func_owner.insert(109,"FString".into()); r.func_is_method.insert(109);
+        r.func_by_ptr.insert(110,"$beh2".into()); r.func_ret.insert(110,DataType{token:82,..Default::default()}); r.func_params.insert(110,vec![]);
+        r.func_owner.insert(110,"FString".into()); r.func_is_method.insert(110);
+        r.func_by_ptr.insert(111,"$beh0".into()); r.func_ret.insert(111,DataType{token:82,..Default::default()}); r.func_params.insert(111,vec![]);
+        r.func_owner.insert(111,"FVector".into()); r.func_is_method.insert(111);
+        r.func_by_ptr.insert(112,"IsNearlyZero".into()); r.func_ret.insert(112,DataType{token:65,..Default::default()}); r.func_params.insert(112,vec![DataType{token:81,..Default::default()}]);
+        r.func_owner.insert(112,"FVector".into()); r.func_is_method.insert(112);
+        r.const_method_ptrs.insert(112);
+        r.func_by_ptr.insert(113,"opAssign".into()); r.func_ret.insert(113,DataType{token:5,type_info:5,is_reference:true,..Default::default()}); r.func_params.insert(113,vec![DataType{token:5,type_info:5,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()}]);
+        r.func_owner.insert(113,"FVector".into()); r.func_is_method.insert(113);
+        r.func_by_ptr.insert(114,"opMul".into()); r.func_ret.insert(114,DataType{token:5,type_info:5,..Default::default()}); r.func_params.insert(114,vec![DataType{token:81,..Default::default()}]);
+        r.func_owner.insert(114,"FVector".into()); r.func_is_method.insert(114);
+        r.const_method_ptrs.insert(114);
+        r.func_by_ptr.insert(115,"opAdd".into()); r.func_ret.insert(115,DataType{token:5,type_info:5,..Default::default()}); r.func_params.insert(115,vec![DataType{token:5,type_info:5,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()}]);
+        r.func_owner.insert(115,"FVector".into()); r.func_is_method.insert(115);
+        r.const_method_ptrs.insert(115);
+        r.func_by_ptr.insert(116,"opNeg".into()); r.func_ret.insert(116,DataType{token:5,type_info:5,..Default::default()}); r.func_params.insert(116,vec![]);
+        r.func_owner.insert(116,"FVector".into()); r.func_is_method.insert(116);
+        r.const_method_ptrs.insert(116);
+        r.func_by_ptr.insert(117,"$beh0".into()); r.func_ret.insert(117,DataType{token:82,..Default::default()}); r.func_params.insert(117,vec![]);
+        r.func_owner.insert(117,"TArray".into()); r.func_is_method.insert(117);
+        r.func_by_ptr.insert(118,"Add".into()); r.func_ret.insert(118,DataType{token:82,..Default::default()}); r.func_params.insert(118,vec![DataType{token:5,type_info:5,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()}]);
+        r.func_owner.insert(118,"TArray".into()); r.func_is_method.insert(118);
+        r.func_by_ptr.insert(119,"Clamp".into()); r.func_ret.insert(119,DataType{token:81,..Default::default()}); r.func_params.insert(119,vec![DataType{token:81,..Default::default()},DataType{token:81,..Default::default()},DataType{token:81,..Default::default()}]);
+        r.func_by_ptr.insert(120,"opIndex".into()); r.func_ret.insert(120,DataType{token:5,type_info:5,is_reference:true,..Default::default()}); r.func_params.insert(120,vec![DataType{token:68,..Default::default()}]);
+        r.func_owner.insert(120,"TArray".into()); r.func_is_method.insert(120);
+        r.func_by_ptr.insert(121,"$beh0".into()); r.func_ret.insert(121,DataType{token:82,..Default::default()}); r.func_params.insert(121,vec![DataType{token:5,type_info:5,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()}]);
+        r.func_owner.insert(121,"FVector".into()); r.func_is_method.insert(121);
+        r.func_by_ptr.insert(122,"Num".into()); r.func_ret.insert(122,DataType{token:68,..Default::default()}); r.func_params.insert(122,vec![]);
+        r.func_owner.insert(122,"TArray".into()); r.func_is_method.insert(122);
+        r.const_method_ptrs.insert(122);
+        r.func_by_ptr.insert(123,"$beh0".into()); r.func_ret.insert(123,DataType{token:82,..Default::default()}); r.func_params.insert(123,vec![DataType{token:5,type_info:6,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()}]);
+        r.func_owner.insert(123,"FString".into()); r.func_is_method.insert(123);
+        r.func_by_ptr.insert(124,"opAdd".into()); r.func_ret.insert(124,DataType{token:5,type_info:6,..Default::default()}); r.func_params.insert(124,vec![DataType{token:5,type_info:6,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()}]);
+        r.func_owner.insert(124,"FString".into()); r.func_is_method.insert(124);
+        r.const_method_ptrs.insert(124);
+        r.funcid_to_ptr.insert(200,200); r.func_by_ptr.insert(200,"TestSegment".into()); r.func_ret.insert(200,DataType{token:65,..Default::default()}); r.func_params.insert(200,vec![DataType{token:5,type_info:5,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()},DataType{token:5,type_info:5,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()},DataType{token:81,is_object_const:true,is_read_only:true,..Default::default()}]);
+        r.func_is_method.insert(200);
+        r.funcid_to_ptr.insert(201,201); r.func_by_ptr.insert(201,"TestDirection".into()); r.func_ret.insert(201,DataType{token:65,..Default::default()}); r.func_params.insert(201,vec![DataType{token:5,type_info:10,is_object_const:true,is_object_handle:true,..Default::default()},DataType{token:5,type_info:5,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()},DataType{token:81,is_object_const:true,is_read_only:true,..Default::default()},DataType{token:81,is_object_const:true,is_read_only:true,..Default::default()},DataType{token:81,is_object_const:true,is_read_only:true,..Default::default()}]);
+        r.prop_by_key.insert(137438953483,"Z".into()); r.prop_type_id.insert(137438953483,5);
+        r.prop_by_key.insert(19963007992609,"Witness1".into()); r.prop_type_id.insert(19963007992609,400);
+        r.class_fields.entry("UFixtureNavigation".into()).or_default().insert("Witness1".into(),"float32".into());
+        r.prop_by_key.insert(19997367730977,"Witness2".into()); r.prop_type_id.insert(19997367730977,400);
+        r.class_fields.entry("UFixtureNavigation".into()).or_default().insert("Witness2".into(),"float32".into());
+        r.prop_by_key.insert(19825569039137,"Witness3".into()); r.prop_type_id.insert(19825569039137,400);
+        r.class_fields.entry("UFixtureNavigation".into()).or_default().insert("Witness3".into(),"float32".into());
+        r.prop_by_key.insert(21371757265697,"Witness4".into()); r.prop_type_id.insert(21371757265697,400);
+        r.class_fields.entry("UFixtureNavigation".into()).or_default().insert("Witness4".into(),"FString".into());
+        r.prop_by_key.insert(22677427323681,"Witness5".into()); r.prop_type_id.insert(22677427323681,400);
+        r.class_fields.entry("UFixtureNavigation".into()).or_default().insert("Witness5".into(),"FVector".into());
+        r.prop_by_key.insert(21715354649377,"Witness6".into()); r.prop_type_id.insert(21715354649377,400);
+        r.class_fields.entry("UFixtureNavigation".into()).or_default().insert("Witness6".into(),"FVector".into());
+        r.prop_by_key.insert(20787641713441,"Witness7".into()); r.prop_type_id.insert(20787641713441,400);
+        r.class_fields.entry("UFixtureNavigation".into()).or_default().insert("Witness7".into(),"float32".into());
+        r.prop_by_key.insert(20822001451809,"Witness8".into()); r.prop_type_id.insert(20822001451809,400);
+        r.class_fields.entry("UFixtureNavigation".into()).or_default().insert("Witness8".into(),"float32".into());
+        r.prop_by_key.insert(19791209300769,"Witness9".into()); r.prop_type_id.insert(19791209300769,400);
+        r.class_fields.entry("UFixtureNavigation".into()).or_default().insert("Witness9".into(),"float32".into());
+        r.prop_by_key.insert(20718922236705,"Witness10".into()); r.prop_type_id.insert(20718922236705,400);
+        r.class_fields.entry("UFixtureNavigation".into()).or_default().insert("Witness10".into(),"float32".into());
+        r.prop_by_key.insert(6459630813987,"Witness11".into()); r.prop_type_id.insert(6459630813987,401);
+        r.class_fields.entry("UGothicCharacterAIState".into()).or_default().insert("Witness11".into(),"UGameplayAbility_CharacterAI_Gothic".into());
+        r.global_by_ptr.insert(300,"ZeroVector".into());
+        r.global_ns.insert(300,"FVector".into());
+        r.global_by_ptr.insert(301,"strafe-too-close".into());
+        r.global_is_string.insert(301);
+        r.global_by_ptr.insert(302,"strafe-charge".into());
+        r.global_is_string.insert(302);
+        r.global_by_ptr.insert(303,"-no-clear".into());
+        r.global_is_string.insert(303);
+        match fault {
+            1 => { r.const_method_ptrs.remove(&100); },
+            2 => r.func_ret.get_mut(&101).unwrap().is_reference = true,
+            3 => r.func_params.get_mut(&104).unwrap()[0].token = 0x50,
+            4 => r.func_ret.get_mut(&108).unwrap().token = 0x41,
+            5 => { r.const_method_ptrs.insert(109); },
+            6 => r.func_params.get_mut(&111).unwrap().push(DataType::default()),
+            7 => r.func_ret.get_mut(&112).unwrap().is_reference = true,
+            8 => r.func_ret.get_mut(&114).unwrap().is_object_handle = true,
+            9 => r.func_params.get_mut(&118).unwrap()[0].is_object_const = false,
+            10 => r.func_params.get_mut(&119).unwrap()[0].token = 0x50,
+            11 => { r.const_method_ptrs.insert(120); },
+            12 => r.func_params.get_mut(&121).unwrap()[0].is_read_only = false,
+            13 => r.func_params.get_mut(&200).unwrap()[2].is_read_only = false,
+            14 => { r.class_fields.get_mut("UFixtureNavigation").unwrap().insert("Witness2".into(),"float".into()); },
+            15 => { r.global_is_string.remove(&301); },
+            16 => { r.prop_type_id.insert(21371757265697,5); },
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_escape_vector_lifetimes(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr,name) in [(1,"FVector"),(2,"AGothicCharacter"),(3,"UState"),(4,"TArray")] {
+            r.type_by_ptr.insert(ptr,name.into()); r.typeid_to_ptr.insert(ptr as i32,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:if ptr==3 {"Fixture"} else {""}.into(),namespace:String::new()});
+        }
+        for (id,offset,name) in [(3,24,"Anchor"),(3,72,"Fallback"),(3,112,"Step"),(1,16,"Z")] {
+            let key=(offset<<33)|(id<<1)|1;
+            r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id as i32);
+        }
+        r.class_fields.insert("UState".into(),HashMap::from([("Anchor".into(),"FVector".into()),("Fallback".into(),"FVector".into()),("Step".into(),"float32".into())]));
+        let plain = |token| DataType {token,..Default::default()};
+        let obj = |type_info,is_reference,is_object_const,is_object_handle| DataType {token:5,type_info,is_reference,is_object_const,is_object_handle,is_read_only:is_object_const && !is_object_handle,..Default::default()};
+        for (ptr,name,owner,constant,ret,params) in [
+            (10,"$beh0","FVector",false,plain(0x52),vec![]),
+            (11,"$beh0","FVector",false,plain(0x52),vec![obj(1,true,true,false)]),
+            (12,"IsNearlyZero","FVector",true,plain(0x41),vec![plain(0x51)]),
+            (13,"opAssign","FVector",false,obj(1,true,false,false),vec![obj(1,true,true,false)]),
+            (14,"opSub","FVector",true,obj(1,false,false,false),vec![obj(1,true,true,false)]),
+            (15,"GetSelf","UCharacterAIState",true,obj(2,false,false,true),vec![]),
+            (16,"GetFeetLocation","AGothicCharacter",true,obj(1,false,false,false),vec![]),
+            (17,"opIndex","TArray",false,obj(1,true,false,false),vec![plain(0x44)]),
+            (18,"opMul","FVector",true,obj(1,false,false,false),vec![plain(0x51)]),
+            (19,"opAdd","FVector",true,obj(1,false,false,false),vec![obj(1,true,true,false)]),
+        ] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);
+            if constant {r.const_method_ptrs.insert(ptr);}
+            r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,params);
+        }
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into(),
+            2=>r.type_identity_by_ptr.get_mut(&2).unwrap().namespace="Shadow".into(),
+            3=>{r.const_method_ptrs.remove(&16);},
+            4=>r.func_ret.get_mut(&16).unwrap().is_reference=true,
+            5=>r.func_params.get_mut(&13).unwrap()[0].is_object_const=false,
+            6=>r.func_ret.get_mut(&17).unwrap().is_read_only=true,
+            7=>r.func_params.get_mut(&18).unwrap()[0].token=0x50,
+            8=>{r.class_fields.get_mut("UState").unwrap().insert("Step".into(),"float64".into());},
+            9=>{r.class_fields.get_mut("UState").unwrap().insert("Anchor".into(),"FOther".into());},
+            10=>{r.func_is_method.remove(&15);},
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_vector_accumulation_temporaries(fault:u8)->Self {
         let mut r=Self::default();
         for (ptr,name,module) in [(1,"FVector",""),(2,"AGothicCharacter",""),(3,"UAccumulator","Fixture"),(4,"TArrayConstIterator",""),(5,"TArray","")] {
