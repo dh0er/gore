@@ -3465,6 +3465,10 @@ fn emit_function_ctor(
         pass_trace("restore_held_map_integer_reference", &rendered);
         let rendered = restore_scoped_predicate_and_named_tag(&rendered, f, refs, is_method);
         pass_trace("restore_scoped_predicate_and_named_tag", &rendered);
+        let rendered = restore_closed_format_argument_lives(&rendered, f, refs, is_method);
+        pass_trace("restore_closed_format_argument_lives", &rendered);
+        let rendered = restore_selected_vector_argument_lives(&rendered, f, refs, is_method);
+        pass_trace("restore_selected_vector_argument_lives", &rendered);
         let rendered = restore_inferred_map_query_lifetimes(&rendered, f, refs);
         pass_trace("restore_inferred_map_query_lifetimes", &rendered);
         let rendered = restore_inferred_query_and_ignore_arrays(&rendered, f, refs, class_name);
@@ -18485,6 +18489,241 @@ fn restore_scoped_predicate_and_named_tag(body:&str,f:&Func,refs:&RefResolver,is
     let Some((ret,boolean,tag,return_line,condition_line,tag_line))=found else {return body.to_owned();};
     let mut lines:Vec<_>=body.lines().map(str::to_owned).collect();lines[tag]=tag_line;lines[boolean+1]=condition_line;lines.remove(boolean);lines[ret+1]=return_line;lines.remove(ret);
     lines.join("\n")+if body.ends_with('\n') {"\n"} else {""}
+}
+
+/// End each native format argument before Append while keeping its result in the temporary pool.
+fn restore_closed_format_argument_lives(body:&str,f:&Func,refs:&RefResolver,is_method:bool)->String {
+    if !body.contains("FString::ApplyFormat(") || !body.contains(".Append(") || !body.contains("FString local_") {return body.to_owned();}
+    let found=(|| {
+        let plain=|t:&super::types::DataType,token|t.token==token && t.type_info==0 && !t.is_reference && !t.is_object_const && !t.is_object_handle
+            && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+        let object=|t:&super::types::DataType,ptr,reference:bool,constant:bool|t.token==5 && t.type_info==ptr && t.is_reference==reference
+            && t.is_object_const==constant && t.is_read_only==constant && !t.is_object_handle && !t.is_auto && !t.if_handle_then_const;
+        let [parameter]=f.params.as_slice() else {return None;};
+        if !plain(&f.ret,0x50) || f.is_const_method() || parameter.flags!=0 || parameter.ty.token!=0x51 || parameter.ty.type_info!=0
+            || !parameter.ty.is_object_const || !parameter.ty.is_read_only || parameter.ty.is_reference || parameter.ty.is_object_handle || parameter.ty.is_auto || parameter.ty.if_handle_then_const
+            || parameter.name.is_empty() || !parameter.name.bytes().all(|b|b.is_ascii_alphanumeric() || b==b'_') {return None;}
+        let parameter_slot=if is_method {-2} else {0};let ret_width=if is_method {4} else {2};
+        let code=disassemble(&f.bytecode).ok()?;
+        let w=|i:&Instr,n:usize|i.words.get(n).map(|v|*v as i16 as i32);let p=|i:&Instr|i.qwords.first().map(|v|*v as i64);
+        let ops=|c:&[Instr],names:&str|c.iter().map(|i|i.op.name).eq(names.split_whitespace());
+        let local=|slot|{let mut it=f.obj_locals.iter().filter(|(s,_)|*s==slot);let ptr=it.next()?.1;(slot>0 && it.next().is_none()).then_some(ptr)};
+        let scalar=|slot|slot>0 && !f.obj_locals.iter().any(|(s,_)|*s==slot);
+        let method=|ptr,name|refs.func_owner_by_ptr(ptr)==Some("FString") && refs.func_by_ptr(ptr)==Some(name) && refs.is_method_by_ptr(ptr) && !refs.is_const_method_by_ptr(ptr);
+        let literal=|i:&Instr|{let ptr=p(i)?;let text=refs.global_by_ptr(ptr)?;
+            (refs.global_is_string(ptr) && !text.chars().any(|c|c.is_control() || matches!(c,'"'|'\\'))).then_some(text)};
+        let offsets:HashMap<_,_>=code.iter().enumerate().map(|(n,i)|(i.offset_dw as i64,n)).collect();let mut edges=Vec::new();
+        for (n,i) in code.iter().enumerate() {if i.op.name=="JMPP" {return None;}if i.op.name.starts_with('J') {
+            let target=i.offset_dw as i64+2+*i.dwords.first()? as i32 as i64;edges.push((n,*offsets.get(&target)?));
+        }}
+        let mut candidates=Vec::new();
+        for (start,head) in code.windows(3).enumerate() {
+            if !ops(head,"PGA PSF CALLSYS") {continue;}
+            let candidate=(|| {
+                let receiver=w(&head[1],0)?;let string=local(receiver)?;
+                if !refs.type_identity_by_ptr(string).is_some_and(|t|t.name=="FString" && t.module.is_empty() && t.namespace.is_empty()) {return None;}
+                let prefix=literal(&head[0])?;let copy=p(&head[2])?;
+                if !method(copy,"$beh0") || !plain(refs.func_ret_by_ptr(copy)?,0x52) || !matches!(refs.func_params_by_ptr(copy)?,[v] if object(v,string,true,true)) {return None;}
+                let mut at=start+3;let mut formats:Vec<(usize,i32,i32,i32,i32)>=Vec::new();let mut separators=Vec::new();let mut overloads=HashMap::new();
+                let mut identities=None;
+                loop {
+                    let c=code.get(at..at+13)?;
+                    if !ops(&c[..3],"PSF CALLSYS PSF") || !matches!(c[3].op.name,"PshV4"|"PshV8")
+                        || !ops(&c[4..],"PSF CALLSYS PSF CALLSYS PSF PSF CALLSYS PSF CALLSYS") {return None;}
+                    let (specifier,result,argument)=(w(&c[0],0)?,w(&c[4],0)?,w(&c[3],0)?);
+                    if specifier==result || [specifier,result].contains(&receiver) || local(specifier)?!=string || local(result)?!=string
+                        || !(scalar(argument) || argument==parameter_slot)
+                        || [(2,specifier),(6,specifier),(8,result),(9,receiver),(11,result)].iter().any(|(n,s)|w(&c[*n],0)!=Some(*s)) {return None;}
+                    let (default,format,dtor,append)=(p(&c[1])?,p(&c[5])?,p(&c[7])?,p(&c[10])?);
+                    if p(&c[12])!=Some(dtor) || !method(default,"$beh0") || !plain(refs.func_ret_by_ptr(default)?,0x52) || !refs.func_params_by_ptr(default)?.is_empty()
+                        || !method(dtor,"$beh2") || !plain(refs.func_ret_by_ptr(dtor)?,0x52) || !refs.func_params_by_ptr(dtor)?.is_empty()
+                        || !method(append,"Append") || !object(refs.func_ret_by_ptr(append)?,string,true,false) || !matches!(refs.func_params_by_ptr(append)?,[v] if object(v,string,true,true))
+                        || refs.is_method_by_ptr(format) || refs.is_const_method_by_ptr(format) || refs.func_owner_by_ptr(format).is_some()
+                        || refs.func_by_ptr(format)!=Some("ApplyFormat") || refs.func_ns_by_ptr(format)!=Some("FString") || !object(refs.func_ret_by_ptr(format)?,string,false,false) {return None;}
+                    let [number,spec]=refs.func_params_by_ptr(format)? else {return None;};let token=number.token;
+                    if ![0x44,0x50,0x51].contains(&token) || !plain(number,token) || !object(spec,string,true,true)
+                        || c[3].op.name!=if token==0x51 {"PshV8"} else {"PshV4"} || (argument==parameter_slot && token!=0x51) {return None;}
+                    if let Some(old)=overloads.insert(token,format) {if old!=format {return None;}}
+                    let ids=(default,dtor,append);if let Some(old)=identities {if old!=ids {return None;}}else {identities=Some(ids);}
+                    if let Some((_,previous_specifier,previous_result,_,_))=formats.last() {if specifier!=*previous_result || result!=*previous_specifier {return None;}}
+                    formats.push((at,specifier,result,argument,token));at+=13;
+                    if code.get(at)?.op.name!="PGA" {break;}
+                    let sep=code.get(at..at+8)?;
+                    if !ops(sep,"PGA PSF CALLSYS PSF PSF CALLSYS PSF CALLSYS") || [(1,specifier),(3,specifier),(4,receiver),(6,specifier)].iter().any(|(n,s)|w(&sep[*n],0)!=Some(*s))
+                        || p(&sep[2])!=Some(copy) || p(&sep[5])!=Some(append) || p(&sep[7])!=Some(dtor) {return None;}
+                    separators.push(literal(&sep[0])?.to_owned());at+=8;
+                }
+                if formats.len()!=7 || separators.len()!=6 || overloads.len()!=3 || formats.iter().map(|v|v.3).collect::<HashSet<_>>().len()!=7
+                    || formats.iter().filter(|v|v.3==parameter_slot).count()!=1 {return None;}
+                let (first,last)=(formats.first()?,formats.last()?);let tail=code.get(at..)?;
+                if !ops(tail,"MULf PSF CALLSYS CpyVtoR4 RET") || first.4!=0x50 || last.4!=0x50 || tail[0].words!=[w(&tail[0],0)? as u16,first.3 as u16,last.3 as u16]
+                    || !scalar(w(&tail[0],0)?) || w(&tail[1],0)!=Some(receiver) || p(&tail[2])!=Some(identities?.1) || w(&tail[3],0)!=w(&tail[0],0) || tail[4].words!=[ret_width]
+                    || edges.iter().any(|(from,to)|*from>=start || *to>start) {return None;}
+                let slots=[receiver,first.1,first.2];
+                if f.obj_locals.iter().filter(|(_,ty)|*ty==string).count()!=3 || code[..start].iter().any(|i|super::bytediff::addressed_slots(i).iter().any(|s|slots.contains(s))) {return None;}
+                Some((receiver,prefix.to_owned(),formats,separators))
+            })();if let Some(candidate)=candidate {candidates.push(candidate);}
+        }
+        let [(receiver,prefix,formats,separators)]=candidates.as_slice() else {return None;};
+        let names=|slot|body.split(|c:char|!c.is_ascii_alphanumeric() && c!='_').filter(|s|slot_and_life_any(s).is_some_and(|(n,_)|n==slot)).collect::<HashSet<_>>();
+        let one=|slot|{let v=names(slot);(v.len()==1).then(||v.into_iter().next().unwrap())};let receiver=one(*receiver)?;
+        let lines:Vec<_>=body.lines().collect();let mut paths=Vec::new();let mut path=Vec::new();
+        for (n,l) in lines.iter().enumerate() {paths.push(path.clone());match l.trim() {"{"=>path.push(n),"}"=>{path.pop()?;},_=>if brace_net(l)!=0 {return None;}}}if !path.is_empty() {return None;}
+        let headers:Vec<_>=lines.iter().enumerate().filter(|(_,l)|l.trim()==format!("FString {receiver} = \"{prefix}\";")).map(|(n,_)|n).collect();
+        let [header]=headers.as_slice() else {return None;};let header=*header;if !paths[header].is_empty() {return None;}
+        let pad=indent_of(lines[header]);let mut values=Vec::new();
+        for (_,_,_,slot,token) in formats {
+            let value=if *slot==parameter_slot {parameter.name.as_str()}else {one(*slot)?};
+            if *slot!=parameter_slot {
+                let declarations:Vec<_>=lines.iter().enumerate().filter_map(|(n,l)|declaration_with_initializer(l).filter(|(_,name,_)|name==value).map(|_|n)).collect();
+                let [n]=declarations.as_slice() else {return None;};let ty=match *token {0x44=>"int",0x50=>"float32",0x51=>"float",_=>return None};
+                if *n>=header || !paths[*n].is_empty() || !lines[*n].trim().starts_with(&format!("{ty} {value} = ")) {return None;}
+            }
+            values.push(value.to_owned());
+        }
+        let (_,initial)=bare_declaration(lines.get(header+1)?)?;
+        if lines[header+1].trim()!=format!("FString {initial};") || slot_and_life_any(&initial)?.0!=formats[0].1 {return None;}
+        let mut aliases=HashMap::from([(formats[0].1,initial.to_owned())]);let mut consumed=HashSet::from([initial.to_owned()]);let mut at=header+2;let mut replacement=Vec::new();
+        for (n,(_,specifier,result,_,_)) in formats.iter().enumerate() {
+            let argument=aliases.get(specifier)?;let value=&values[n];let call=format!("FString::ApplyFormat({value}, {argument})");
+            if n+1==formats.len() {
+                if lines.get(at)?.trim()!=format!("{receiver}.Append({call});") {return None;}at+=1;
+            }else {
+                let output=if *result==formats[0].2 {
+                    let (_,name,init)=declaration_with_initializer(lines.get(at)?)?;
+                    if lines[at].trim()!=format!("FString {name} = {call};") || init!=call || consumed.contains(&name) {return None;}name
+                }else {
+                    let name=aliases.get(result)?;if lines.get(at)?.trim()!=format!("{name} = {call};") {return None;}name.clone()
+                };
+                if slot_and_life_any(&output)?.0!=*result || lines.get(at+1)?.trim()!=format!("{receiver}.Append({output});") {return None;}
+                let output=output.to_owned();consumed.insert(output.clone());aliases.insert(*result,output);at+=2;
+            }
+            replacement.push(format!("{pad}{receiver}.Append(FString::ApplyFormat({value}, FString()));"));
+            if let Some(literal)=separators.get(n) {
+                let expected=format!("{receiver}.Append(FString(\"{literal}\"));");if lines.get(at)?.trim()!=expected {return None;}
+                replacement.push(format!("{pad}{expected}"));at+=1;
+            }
+        }
+        if lines.get(at)?.trim()!=format!("return ({} * {});",values.first()?,values.last()?) || lines.len()!=at+1
+            || lines[header..=at].iter().enumerate().any(|(n,l)|!paths[header+n].is_empty() || indent_of(l)!=pad) {return None;}
+        let old=lines[header+1..at].join("\n");
+        if count_ident(body,receiver)!=14 || consumed.iter().any(|name|count_ident(body,name)!=count_ident(&old,name))
+            || names(formats[0].1).union(&names(formats[0].2)).copied().collect::<HashSet<_>>()!=consumed.iter().map(String::as_str).collect::<HashSet<_>>() {return None;}
+        for name in consumed.iter().map(String::as_str).chain([receiver]) {
+            if lines.iter().filter_map(|l|declaration_with_initializer(l).map(|(_,n,_)|n).or_else(||bare_declaration(l).map(|(_,n)|n))).filter(|n|*n==name).count()!=1 {return None;}
+        }
+        Some((header+1,at,replacement))
+    })();
+    let Some((start,end,replacement))=found else {return body.to_owned();};
+    let mut lines:Vec<_>=body.lines().map(str::to_owned).collect();lines.splice(start..end,replacement);
+    lines.join("\n")+if body.ends_with('\n') {"\n"}else {""}
+}
+
+/// Preserve a conditional vector's allocation and the two linked scalar argument lives.
+fn restore_selected_vector_argument_lives(body:&str,f:&Func,refs:&RefResolver,is_method:bool)->String {
+    if !is_method || !f.is_const_method() || !body.contains(".opNeg();") {return body.to_owned();}
+    let shape=|t:&super::types::DataType,token,ptr,reference:bool,constant:bool|t.token==token && t.type_info==ptr
+        && t.is_reference==reference && t.is_object_const==constant && t.is_read_only==constant
+        && !t.is_object_handle && !t.is_auto && !t.if_handle_then_const;
+    let Some(vector)=refs.type_identity_by_ptr(f.ret.type_info) else {return body.to_owned();};
+    let [start,end,center,axis_param,half,radius]=f.params.as_slice() else {return body.to_owned();};
+    if !shape(&f.ret,5,f.ret.type_info,false,false) || !vector.module.is_empty() || !vector.namespace.is_empty()
+        || [start,end,center,axis_param].iter().any(|p|p.flags!=3 || !shape(&p.ty,5,f.ret.type_info,true,true))
+        || [half,radius].iter().any(|p|p.flags!=0 || !shape(&p.ty,0x51,0,false,true))
+        || f.params.iter().any(|p|p.name.is_empty()) || f.params.iter().map(|p|p.name.as_str()).collect::<HashSet<_>>().len()!=6 {return body.to_owned();}
+    let params=super::model::param_slot_map(&f.params.iter().map(|p|p.ty.clone()).collect::<Vec<_>>(),true,true,Some(refs));
+    let Ok(code)=disassemble(&f.bytecode) else {return body.to_owned();};
+    if code.iter().any(|i|i.op.name=="JMPP") {return body.to_owned();}
+    let w=|i:&Instr,n:usize|i.words.get(n).map(|s|*s as i16 as i32);
+    let p=|i:&Instr|i.qwords.first().map(|s|*s as i64);
+    let jump=|i:&Instr|i.dwords.first().map(|d|i.offset_dw as i64+2+*d as i32 as i64);
+    let local=|s|s>0 && f.obj_locals.iter().filter(|(slot,_)|*slot==s).map(|(_,t)|*t).eq([f.ret.type_info]);
+    let scalar=|s|s>0 && !f.obj_locals.iter().any(|(slot,_)|*slot==s);
+    let method=|ptr,name,constant|refs.func_by_ptr(ptr)==Some(name) && refs.func_owner_by_ptr(ptr)==Some(vector.name.as_str())
+        && refs.is_method_by_ptr(ptr) && refs.is_const_method_by_ptr(ptr)==constant;
+    let positions:Vec<_>=code.windows(55).enumerate().filter(|(_,c)|c.iter().map(|i|i.op.name).eq(
+        "PSF PSF CALLSYS CpyRtoV8 PSF CALLSYS SetV8 CMPd JS PSF PSF CALLSYS JMP PSF PSF CALLSYS PSF PSF CALLSYS PshVPtr PSF PshVPtr CALLSYS SetV8 LoadVObjR WRTV8 PSF PSF CALLSYS CpyRtoV8 PshV8 CpyVtoV8 NEGd PshV8 PshV8 CALLSYS CpyRtoV8 PshV8 PSF PSF CALLSYS PSF PSF PshVPtr CALLSYS SetV8 ADDd PshV8 PSF PSF CALLSYS PSF PSF PSF CALLSYS".split_whitespace())).map(|(i,_)|i).collect();
+    let [at]=positions.as_slice() else {return body.to_owned();};let at=*at;let a=&code[at..at+55];
+    let found=(|| {
+        let (donor,first_delta,comparison,selected,dot_value,reused,axis,negative,sum,output,base,product)=
+            (w(&a[0],0)?,w(&a[1],0)?,w(&a[3],0)?,w(&a[4],0)?,w(&a[6],0)?,w(&a[13],0)?,w(&a[26],0)?,w(&a[31],0)?,w(&a[36],0)?,w(&a[38],0)?,w(&a[42],0)?,w(&a[48],0)?);
+        let values=[donor,first_delta,selected,reused,axis,output,base,product];let scalars=[comparison,dot_value,negative,sum];
+        if values.iter().any(|s|!local(*s)) || HashSet::from(values).len()!=values.len()
+            || scalars.iter().any(|s|!scalar(*s)) || HashSet::from(scalars).len()!=scalars.len() {return None;}
+        for (indices,slot) in [(&[0usize,9,14][..],donor),(&[1][..],first_delta),(&[3][..],comparison),(&[4,10,17,49][..],selected),
+            (&[6,23,25,29,34][..],dot_value),(&[13,16,20,24,27][..],reused),(&[26,39][..],axis),(&[31,32,33,45][..],negative),
+            (&[36,37,47][..],sum),(&[38,41,52][..],output),(&[42,53][..],base),(&[48,51][..],product)] {
+            if indices.iter().any(|i|w(&a[*i],0)!=Some(slot)) {return None;}
+        }
+        if a[7].words!=[comparison as u16,dot_value as u16] || w(&a[31],1)!=w(&a[30],0)
+            || a[46].words!=[sum as u16,w(&a[46],1)? as u16,negative as u16]
+            || [(19,2),(21,1),(30,4),(43,2)].iter().any(|(i,n)|params.get(&w(&a[*i],0).unwrap_or(1))!=Some(n))
+            || params.get(&w(&a[46],1)?)!=Some(&5) || a[6].qwords.as_slice()!=[0] || a[23].qwords.as_slice()!=[0]
+            || jump(&a[8])!=Some(a[13].offset_dw as i64) || jump(&a[12])!=Some(a[19].offset_dw as i64) {return None;}
+        for (i,c) in code.iter().enumerate().filter(|(_,c)|c.op.name.starts_with('J')) {
+            let target=jump(c)?;
+            if !code.iter().any(|c|c.offset_dw as i64==target) || (target>a[0].offset_dw as i64 && target<=a[54].offset_dw as i64 && i!=at+8 && i!=at+12) {return None;}
+        }
+        // This includes the later named use of the negated vector slot and both scalar lives.
+        for (slot,expected) in [(selected,vec![4,10,17,49]),(reused,vec![13,16,20,24,27]),(dot_value,vec![6,7,23,25,29,34]),
+            (negative,vec![31,32,33,45,46]),(sum,vec![36,37,46,47]),(base,vec![42,53])] {
+            if !code.iter().enumerate().filter(|(_,i)|super::bytediff::addressed_slots(i).contains(&slot)).map(|(i,_)|i).eq(expected.into_iter().map(|i|at+i)) {return None;}
+        }
+        let id=*a[24].dwords.first()? as i32;let (field,old)=refs.member_identity(id,w(&a[24],1)?)?;
+        if refs.type_identity_by_id(id)!=Some(vector) || refs.type_identity_by_id(old)!=Some(vector)
+            || refs.native_field_type(&vector.name,field)!=Some("float") {return None;}
+        let (dot,ctor,assign,neg,sub,clamp,mul,add)=(p(&a[2])?,p(&a[5])?,p(&a[11])?,p(&a[15])?,p(&a[22])?,p(&a[35])?,p(&a[40])?,p(&a[44])?);
+        if p(&a[18])!=Some(assign) || p(&a[28])!=Some(dot) || p(&a[50])!=Some(mul) || p(&a[54])!=Some(add)
+            || !method(ctor,"$beh0",false) || !shape(refs.func_ret_by_ptr(ctor)?,0x52,0,false,false) || !refs.func_params_by_ptr(ctor)?.is_empty()
+            || !method(assign,"opAssign",false) || !shape(refs.func_ret_by_ptr(assign)?,5,f.ret.type_info,true,false)
+            || !matches!(refs.func_params_by_ptr(assign)?,[t] if shape(t,5,f.ret.type_info,true,true))
+            || !method(neg,"opNeg",true) || !shape(refs.func_ret_by_ptr(neg)?,5,f.ret.type_info,false,false) || !refs.func_params_by_ptr(neg)?.is_empty()
+            || !method(dot,"DotProduct",true) || !shape(refs.func_ret_by_ptr(dot)?,0x51,0,false,false)
+            || !matches!(refs.func_params_by_ptr(dot)?,[t] if shape(t,5,f.ret.type_info,true,true)) {return None;}
+        for (ptr,name,token,ty,reference,constant) in [(sub,"opSub",5,f.ret.type_info,true,true),(add,"opAdd",5,f.ret.type_info,true,true),(mul,"opMul",0x51,0,false,false)] {
+            if !method(ptr,name,true) || !shape(refs.func_ret_by_ptr(ptr)?,5,f.ret.type_info,false,false)
+                || !matches!(refs.func_params_by_ptr(ptr)?,[t] if shape(t,token,ty,reference,constant)) {return None;}
+        }
+        if refs.func_by_ptr(clamp)!=Some("Clamp") || refs.is_method_by_ptr(clamp) || refs.is_const_method_by_ptr(clamp) || refs.func_owner_by_ptr(clamp).is_some()
+            || !shape(refs.func_ret_by_ptr(clamp)?,0x51,0,false,false)
+            || !matches!(refs.func_params_by_ptr(clamp)?,[x,y,z] if [x,y,z].iter().all(|t|shape(t,0x51,0,false,false))) {return None;}
+        let extra=f64::from_bits(*a[45].qwords.first()?);if !extra.is_finite() {return None;}
+        let ns=refs.func_ns_by_ptr(clamp).unwrap_or("");let clamp=if ns.is_empty() {"Clamp".to_owned()} else {format!("{ns}::Clamp")};
+        Some(([donor,first_delta,comparison,selected,dot_value,reused,axis,negative,sum,output,base],field.to_owned(),clamp,format!("{extra:?}")))
+    })();
+    let Some((slots,field,clamp,extra))=found else {return body.to_owned();};
+    let lines:Vec<_>=body.lines().collect();let mut path=Vec::new();let mut paths=Vec::new();
+    for (i,line) in lines.iter().enumerate() {
+        paths.push(path.clone());match line.trim() {"{"=>path.push(i),"}"=>if path.pop().is_none() {return body.to_owned();},_=>if brace_net(line)!=0 {return body.to_owned();}}
+    }
+    if !path.is_empty() {return body.to_owned();}
+    let mut edits=Vec::new();let ty=f.ret.render(refs);
+    for (row,c) in lines.windows(17).enumerate() {
+        let candidate=(|| {
+            let (pad,comparison,dot_expression)=declaration_with_initializer(c[0])?;let (_,selected)=bare_declaration(c[1])?;
+            let (_,reused,_)=declaration_with_initializer(c[10])?;let (_,dot_value,_)=declaration_with_initializer(c[12])?;
+            let (_,negative,_)=declaration_with_initializer(c[13])?;let (_,base,_)=declaration_with_initializer(c[14])?;
+            let (_,sum,_)=declaration_with_initializer(c[15])?;let (_,output,_)=declaration_with_initializer(c[16])?;
+            let (first_delta,donor)=dot_expression.strip_suffix(')')?.split_once(".DotProduct(")?;
+            let axis_expr=c[12].strip_prefix(&format!("{pad}float {dot_value} = {reused}.DotProduct("))?.strip_suffix(");")?;
+            let names=[donor,first_delta,&comparison,&selected,&dot_value,&reused,axis_expr,&negative,&sum,&output,&base];
+            if !names.iter().zip(slots).all(|(name,slot)|slot_and_life_any(name).map(|s|s.0)==Some(slot))
+                || count_ident(body,&selected)!=4 || count_ident(body,&negative)!=2 || count_ident(body,&sum)!=2 || count_ident(body,&comparison)!=2
+                || paths[row]!=paths[row+10] || paths[row]!=paths[row+16] {return None;}
+            let expected=[format!("float {comparison} = {first_delta}.DotProduct({donor});"),format!("{ty} {selected};"),format!("if ({comparison} >= 0.0)"),"{".into(),
+                format!("    {selected} = {donor};"),"}".into(),"else".into(),"{".into(),format!("    {selected} = {donor}.opNeg();"),"}".into(),
+                format!("{ty} {reused} = ({} - {});",end.name,center.name),format!("{reused}.{field} = 0.0;"),format!("float {dot_value} = {reused}.DotProduct({axis_expr});"),
+                format!("float {negative} = -{};",half.name),format!("{ty} {base} = ({} + ({axis_expr} * ({clamp}({dot_value}, {negative}, {}))));",center.name,half.name),
+                format!("float {sum} = {} + {extra};",radius.name),format!("{ty} {output} = ({base} + ({selected} * {sum}));")];
+            if !c.iter().zip(expected).all(|(a,b)|*a==format!("{pad}{b}")) {return None;}
+            Some(format!("{}\n{pad}{ty} {selected} = ({comparison} >= 0.0 ? {donor} : {donor}.opNeg());\n{}\n{}\n{}\n{pad}{ty} {base} = ({} + ({axis_expr} * ({clamp}({dot_value}, -{}, {}))));\n{pad}{ty} {output} = ({base} + ({selected} * ({} + {extra})));",
+                c[0],c[10],c[11],c[12],center.name,half.name,half.name,radius.name))
+        })();
+        if let Some(replacement)=candidate {edits.push((row,replacement));}
+    }
+    let [(row,replacement)]=edits.as_slice() else {return body.to_owned();};
+    let mut out:Vec<_>=lines.iter().map(|s|(*s).to_owned()).collect();out.splice(*row..*row+17,[replacement.clone()]);
+    let mut out=out.join("\n");if body.ends_with('\n') {out.push('\n');}out
 }
 
 /// Keep the native class-value copy and the per-iteration fallback handle in their original scopes.
@@ -62861,6 +63100,732 @@ mod literal_value_lifetime_tests {
         let s=format!("    int local_380 = 0;\n{source}");let e=format!("    int local_380 = 0;\n{expected}");
         let s=rename(&s,512,true);let e=rename(&e,512,true);assert!(s.contains("local_892_2"));
         assert_eq!(fold(&s,&scoped_predicate_named_tag_fixture(512),&refs),e,"identifier prefix boundary");
+    }
+
+    fn closed_format_arguments_fixture(bias:u16)->Func {
+        // Complete original topology retains the external prefix edges and all seven alternating lives.
+        let mut f=function(&[
+            ("PshVPtr",&[0]), // 0
+            ("CALLSYS",&[]), // 1
+            ("CpyRtoV4",&[1]), // 2
+            ("fTOd",&[4, 1]), // 3
+            ("SUBd",&[4, 65534, 4]), // 4
+            ("SetV8",&[6]), // 5
+            ("DIVd",&[4, 4, 6]), // 6
+            ("PshV8",&[4]), // 7
+            ("CALLSYS",&[]), // 8
+            ("CpyRtoV4",&[9]), // 9
+            ("PshC4",&[]), // 10
+            ("PshVPtr",&[0]), // 11
+            ("CALLINTF",&[]), // 12
+            ("STOREOBJ",&[12]), // 13
+            ("PshVPtr",&[12]), // 14
+            ("CALL",&[]), // 15
+            ("CpyRtoV4",&[13]), // 16
+            ("fTOd",&[8, 13]), // 17
+            ("PshVPtr",&[0]), // 18
+            ("CALLINTF",&[]), // 19
+            ("CpyRtoV8",&[6]), // 20
+            ("MULd",&[8, 8, 6]), // 21
+            ("SetV8",&[16]), // 22
+            ("DIVd",&[6, 8, 16]), // 23
+            ("iTOd",&[16, 9]), // 24
+            ("MULd",&[18, 16, 6]), // 25
+            ("dTOf",&[14, 18]), // 26
+            ("SetV4",&[20]), // 27
+            ("CALL",&[]), // 28
+            ("STOREOBJ",&[22]), // 29
+            ("CmpPtrNull",&[22]), // 30
+            ("JZ",&[]), // 31
+            ("PshVPtr",&[22]), // 32
+            ("CALLSYS",&[]), // 33
+            ("STOREOBJ",&[30]), // 34
+            ("CmpPtrNull",&[30]), // 35
+            ("JZ",&[]), // 36
+            ("TYPEID",&[]), // 37
+            ("PSF",&[32]), // 38
+            ("PshVPtr",&[30]), // 39
+            ("CALLSYS",&[]), // 40
+            ("JMP",&[]), // 41
+            ("ClrVPtr",&[32]), // 42
+            ("PshVPtr",&[32]), // 43
+            ("RefCpyV",&[28]), // 44
+            ("CmpPtrNull",&[28]), // 45
+            ("JZ",&[]), // 46
+            ("PshVPtr",&[28]), // 47
+            ("CALLINTF",&[]), // 48
+            ("CpyRtoV4",&[19]), // 49
+            ("CpyVtoV4",&[20, 19]), // 50
+            ("FreeNullV8",&[28]), // 51
+            ("PGA",&[]), // 52
+            ("PSF",&[40]), // 53
+            ("CALLSYS",&[]), // 54
+            ("PSF",&[36]), // 55
+            ("CALLSYS",&[]), // 56
+            ("PSF",&[36]), // 57
+            ("PshV4",&[14]), // 58
+            ("PSF",&[44]), // 59
+            ("CALLSYS",&[]), // 60
+            ("PSF",&[36]), // 61
+            ("CALLSYS",&[]), // 62
+            ("PSF",&[44]), // 63
+            ("PSF",&[40]), // 64
+            ("CALLSYS",&[]), // 65
+            ("PSF",&[44]), // 66
+            ("CALLSYS",&[]), // 67
+            ("PGA",&[]), // 68
+            ("PSF",&[36]), // 69
+            ("CALLSYS",&[]), // 70
+            ("PSF",&[36]), // 71
+            ("PSF",&[40]), // 72
+            ("CALLSYS",&[]), // 73
+            ("PSF",&[36]), // 74
+            ("CALLSYS",&[]), // 75
+            ("PSF",&[44]), // 76
+            ("CALLSYS",&[]), // 77
+            ("PSF",&[44]), // 78
+            ("PshV8",&[65534]), // 79
+            ("PSF",&[36]), // 80
+            ("CALLSYS",&[]), // 81
+            ("PSF",&[44]), // 82
+            ("CALLSYS",&[]), // 83
+            ("PSF",&[36]), // 84
+            ("PSF",&[40]), // 85
+            ("CALLSYS",&[]), // 86
+            ("PSF",&[36]), // 87
+            ("CALLSYS",&[]), // 88
+            ("PGA",&[]), // 89
+            ("PSF",&[44]), // 90
+            ("CALLSYS",&[]), // 91
+            ("PSF",&[44]), // 92
+            ("PSF",&[40]), // 93
+            ("CALLSYS",&[]), // 94
+            ("PSF",&[44]), // 95
+            ("CALLSYS",&[]), // 96
+            ("PSF",&[36]), // 97
+            ("CALLSYS",&[]), // 98
+            ("PSF",&[36]), // 99
+            ("PshV8",&[4]), // 100
+            ("PSF",&[44]), // 101
+            ("CALLSYS",&[]), // 102
+            ("PSF",&[36]), // 103
+            ("CALLSYS",&[]), // 104
+            ("PSF",&[44]), // 105
+            ("PSF",&[40]), // 106
+            ("CALLSYS",&[]), // 107
+            ("PSF",&[44]), // 108
+            ("CALLSYS",&[]), // 109
+            ("PGA",&[]), // 110
+            ("PSF",&[36]), // 111
+            ("CALLSYS",&[]), // 112
+            ("PSF",&[36]), // 113
+            ("PSF",&[40]), // 114
+            ("CALLSYS",&[]), // 115
+            ("PSF",&[36]), // 116
+            ("CALLSYS",&[]), // 117
+            ("PSF",&[44]), // 118
+            ("CALLSYS",&[]), // 119
+            ("PSF",&[44]), // 120
+            ("PshV4",&[9]), // 121
+            ("PSF",&[36]), // 122
+            ("CALLSYS",&[]), // 123
+            ("PSF",&[44]), // 124
+            ("CALLSYS",&[]), // 125
+            ("PSF",&[36]), // 126
+            ("PSF",&[40]), // 127
+            ("CALLSYS",&[]), // 128
+            ("PSF",&[36]), // 129
+            ("CALLSYS",&[]), // 130
+            ("PGA",&[]), // 131
+            ("PSF",&[44]), // 132
+            ("CALLSYS",&[]), // 133
+            ("PSF",&[44]), // 134
+            ("PSF",&[40]), // 135
+            ("CALLSYS",&[]), // 136
+            ("PSF",&[44]), // 137
+            ("CALLSYS",&[]), // 138
+            ("PSF",&[36]), // 139
+            ("CALLSYS",&[]), // 140
+            ("PSF",&[36]), // 141
+            ("PshV4",&[13]), // 142
+            ("PSF",&[44]), // 143
+            ("CALLSYS",&[]), // 144
+            ("PSF",&[36]), // 145
+            ("CALLSYS",&[]), // 146
+            ("PSF",&[44]), // 147
+            ("PSF",&[40]), // 148
+            ("CALLSYS",&[]), // 149
+            ("PSF",&[44]), // 150
+            ("CALLSYS",&[]), // 151
+            ("PGA",&[]), // 152
+            ("PSF",&[36]), // 153
+            ("CALLSYS",&[]), // 154
+            ("PSF",&[36]), // 155
+            ("PSF",&[40]), // 156
+            ("CALLSYS",&[]), // 157
+            ("PSF",&[36]), // 158
+            ("CALLSYS",&[]), // 159
+            ("PSF",&[44]), // 160
+            ("CALLSYS",&[]), // 161
+            ("PSF",&[44]), // 162
+            ("PshV8",&[6]), // 163
+            ("PSF",&[36]), // 164
+            ("CALLSYS",&[]), // 165
+            ("PSF",&[44]), // 166
+            ("CALLSYS",&[]), // 167
+            ("PSF",&[36]), // 168
+            ("PSF",&[40]), // 169
+            ("CALLSYS",&[]), // 170
+            ("PSF",&[36]), // 171
+            ("CALLSYS",&[]), // 172
+            ("PGA",&[]), // 173
+            ("PSF",&[44]), // 174
+            ("CALLSYS",&[]), // 175
+            ("PSF",&[44]), // 176
+            ("PSF",&[40]), // 177
+            ("CALLSYS",&[]), // 178
+            ("PSF",&[44]), // 179
+            ("CALLSYS",&[]), // 180
+            ("PSF",&[36]), // 181
+            ("CALLSYS",&[]), // 182
+            ("PSF",&[36]), // 183
+            ("PshV4",&[20]), // 184
+            ("PSF",&[44]), // 185
+            ("CALLSYS",&[]), // 186
+            ("PSF",&[36]), // 187
+            ("CALLSYS",&[]), // 188
+            ("PSF",&[44]), // 189
+            ("PSF",&[40]), // 190
+            ("CALLSYS",&[]), // 191
+            ("PSF",&[44]), // 192
+            ("CALLSYS",&[]), // 193
+            ("MULf",&[1, 14, 20]), // 194
+            ("PSF",&[40]), // 195
+            ("CALLSYS",&[]), // 196
+            ("CpyVtoR4",&[1]), // 197
+            ("RET",&[4]), // 198
+        ]);
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,delta,value) in [
+            (1,1,1001i32),
+            (1,2,0i32),
+            (5,1,0i32),
+            (5,2,1079574528i32),
+            (8,1,1008i32),
+            (8,2,0i32),
+            (10,1,0i32),
+            (12,1,10012i32),
+            (15,1,10015i32),
+            (19,1,10019i32),
+            (22,1,0i32),
+            (22,2,1079574528i32),
+            (27,1,1065353216i32),
+            (28,1,10028i32),
+            (31,1,30i32),
+            (33,1,1033i32),
+            (33,2,0i32),
+            (36,1,9i32),
+            (37,1,10037i32),
+            (40,1,1040i32),
+            (40,2,0i32),
+            (41,1,1i32),
+            (46,1,6i32),
+            (48,1,10048i32),
+            (52,1,300i32),
+            (52,2,0i32),
+            (54,1,101i32),
+            (54,2,0i32),
+            (56,1,102i32),
+            (56,2,0i32),
+            (60,1,105i32),
+            (60,2,0i32),
+            (62,1,103i32),
+            (62,2,0i32),
+            (65,1,104i32),
+            (65,2,0i32),
+            (67,1,103i32),
+            (67,2,0i32),
+            (68,1,301i32),
+            (68,2,0i32),
+            (70,1,101i32),
+            (70,2,0i32),
+            (73,1,104i32),
+            (73,2,0i32),
+            (75,1,103i32),
+            (75,2,0i32),
+            (77,1,102i32),
+            (77,2,0i32),
+            (81,1,106i32),
+            (81,2,0i32),
+            (83,1,103i32),
+            (83,2,0i32),
+            (86,1,104i32),
+            (86,2,0i32),
+            (88,1,103i32),
+            (88,2,0i32),
+            (89,1,302i32),
+            (89,2,0i32),
+            (91,1,101i32),
+            (91,2,0i32),
+            (94,1,104i32),
+            (94,2,0i32),
+            (96,1,103i32),
+            (96,2,0i32),
+            (98,1,102i32),
+            (98,2,0i32),
+            (102,1,106i32),
+            (102,2,0i32),
+            (104,1,103i32),
+            (104,2,0i32),
+            (107,1,104i32),
+            (107,2,0i32),
+            (109,1,103i32),
+            (109,2,0i32),
+            (110,1,303i32),
+            (110,2,0i32),
+            (112,1,101i32),
+            (112,2,0i32),
+            (115,1,104i32),
+            (115,2,0i32),
+            (117,1,103i32),
+            (117,2,0i32),
+            (119,1,102i32),
+            (119,2,0i32),
+            (123,1,107i32),
+            (123,2,0i32),
+            (125,1,103i32),
+            (125,2,0i32),
+            (128,1,104i32),
+            (128,2,0i32),
+            (130,1,103i32),
+            (130,2,0i32),
+            (131,1,304i32),
+            (131,2,0i32),
+            (133,1,101i32),
+            (133,2,0i32),
+            (136,1,104i32),
+            (136,2,0i32),
+            (138,1,103i32),
+            (138,2,0i32),
+            (140,1,102i32),
+            (140,2,0i32),
+            (144,1,105i32),
+            (144,2,0i32),
+            (146,1,103i32),
+            (146,2,0i32),
+            (149,1,104i32),
+            (149,2,0i32),
+            (151,1,103i32),
+            (151,2,0i32),
+            (152,1,305i32),
+            (152,2,0i32),
+            (154,1,101i32),
+            (154,2,0i32),
+            (157,1,104i32),
+            (157,2,0i32),
+            (159,1,103i32),
+            (159,2,0i32),
+            (161,1,102i32),
+            (161,2,0i32),
+            (165,1,106i32),
+            (165,2,0i32),
+            (167,1,103i32),
+            (167,2,0i32),
+            (170,1,104i32),
+            (170,2,0i32),
+            (172,1,103i32),
+            (172,2,0i32),
+            (173,1,306i32),
+            (173,2,0i32),
+            (175,1,101i32),
+            (175,2,0i32),
+            (178,1,104i32),
+            (178,2,0i32),
+            (180,1,103i32),
+            (180,2,0i32),
+            (182,1,102i32),
+            (182,2,0i32),
+            (186,1,105i32),
+            (186,2,0i32),
+            (188,1,103i32),
+            (188,2,0i32),
+            (191,1,104i32),
+            (191,2,0i32),
+            (193,1,103i32),
+            (193,2,0i32),
+            (196,1,103i32),
+            (196,2,0i32),
+        ] {f.bytecode[code[at].offset_dw+delta]=value;}
+        f.name="DifferentFormatter".into();f.namespace="Elsewhere".into();f.ret=DataType {token:0x50,..Default::default()};f.traits=0;
+        f.params=vec![super::super::model::Param {name:"DropHeight".into(),flags:0,ty:DataType {token:0x51,is_object_const:true,is_read_only:true,..Default::default()}}];
+        f.obj_locals=vec![(12, 2), (22, 3), (24, 3), (28, 4), (30, 5), (32, 4), (36, 1), (40, 1), (44, 1)];
+        for i in &code {
+            if i.op.name=="RET" {continue;}
+            for (n,word) in i.words.iter().enumerate() {
+                if (*word as i16)<=0 {continue;}
+                let packed=n+1;let dw=i.offset_dw+packed/2;let shift=(packed%2)*16;
+                f.bytecode[dw]=((f.bytecode[dw] as u32 & !(0xffff<<shift))|(((*word+bias) as u32)<<shift)) as i32;
+            }
+        }
+        for (slot,_) in &mut f.obj_locals {*slot+=bias as i32;}
+        f
+    }
+
+    #[test]
+    fn native_format_value_results_remain_in_the_alternating_temporary_pool() {
+        let source=r#"        float local_4 = (DropHeight - this.Minimum()) / 100.0;
+        int local_9 = Math::RoundToInt(local_4);
+        float32 local_13 = ::Limit(this.Actor());
+        float local_6_2 = (local_13 * this.Ratio()) / 100.0;
+        float32 local_14 = float32((local_9 * local_6_2));
+        float32 local_20 = 1.0f;
+        UTuning local_22 = ::UTuning::Get();
+        if (local_22 != nullptr)
+        {
+            USettings local_28 = (Cast<USettings>(local_22.Settings()));
+            if (local_28 != nullptr)
+            {
+                local_20 = local_28.Scale();
+            }
+        }
+        FString local_40 = "Trace: ";
+        FString local_36;
+        FString local_44 = FString::ApplyFormat(local_14, local_36);
+        local_40.Append(local_44);
+        local_40.Append(FString(" / height / "));
+        local_36 = FString::ApplyFormat(DropHeight, local_44);
+        local_40.Append(local_36);
+        local_40.Append(FString(" / metric / "));
+        FString local_44_2 = FString::ApplyFormat(local_4, local_36);
+        local_40.Append(local_44_2);
+        local_40.Append(FString(" / rounded / "));
+        local_36 = FString::ApplyFormat(local_9, local_44_2);
+        local_40.Append(local_36);
+        local_40.Append(FString(" / limit / "));
+        FString local_44_3 = FString::ApplyFormat(local_13, local_36);
+        local_40.Append(local_44_3);
+        local_40.Append(FString(" / ratio / "));
+        local_36 = FString::ApplyFormat(local_6_2, local_44_3);
+        local_40.Append(local_36);
+        local_40.Append(FString(" / tuning / "));
+        local_40.Append(FString::ApplyFormat(local_20, local_36));
+        return (local_14 * local_20);
+"#;
+        let expected=r#"        float local_4 = (DropHeight - this.Minimum()) / 100.0;
+        int local_9 = Math::RoundToInt(local_4);
+        float32 local_13 = ::Limit(this.Actor());
+        float local_6_2 = (local_13 * this.Ratio()) / 100.0;
+        float32 local_14 = float32((local_9 * local_6_2));
+        float32 local_20 = 1.0f;
+        UTuning local_22 = ::UTuning::Get();
+        if (local_22 != nullptr)
+        {
+            USettings local_28 = (Cast<USettings>(local_22.Settings()));
+            if (local_28 != nullptr)
+            {
+                local_20 = local_28.Scale();
+            }
+        }
+        FString local_40 = "Trace: ";
+        local_40.Append(FString::ApplyFormat(local_14, FString()));
+        local_40.Append(FString(" / height / "));
+        local_40.Append(FString::ApplyFormat(DropHeight, FString()));
+        local_40.Append(FString(" / metric / "));
+        local_40.Append(FString::ApplyFormat(local_4, FString()));
+        local_40.Append(FString(" / rounded / "));
+        local_40.Append(FString::ApplyFormat(local_9, FString()));
+        local_40.Append(FString(" / limit / "));
+        local_40.Append(FString::ApplyFormat(local_13, FString()));
+        local_40.Append(FString(" / ratio / "));
+        local_40.Append(FString::ApplyFormat(local_6_2, FString()));
+        local_40.Append(FString(" / tuning / "));
+        local_40.Append(FString::ApplyFormat(local_20, FString()));
+        return (local_14 * local_20);
+"#;
+        let refs=RefResolver::from_test_closed_format_arguments(0);
+        let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_closed_format_argument_lives(s,f,r,true);
+        let rename=|text:&str,bias:u16,later:bool|text.split_inclusive(|c:char|!c.is_ascii_alphanumeric() && c!='_').map(|piece| {
+            let name=piece.trim_end_matches(|c:char|!c.is_ascii_alphanumeric() && c!='_');
+            if let Some((slot,life))=super::slot_and_life_any(name) {
+                let base=format!("local_{slot}");let suffix=if later {format!("_{}",life+20)}else {name[base.len()..].to_owned()};
+                format!("local_{}{suffix}{}",slot+bias as i32,&piece[name.len()..])
+            }else {piece.to_owned()}
+        }).collect::<String>();
+        for (bias,later) in [(0,false),(512,false),(512,true)] {
+            let f=closed_format_arguments_fixture(bias);let s=rename(source,bias,later);let e=rename(expected,bias,later);
+            assert_eq!(fold(&s,&f,&refs),e,"renumber {bias}, distinct later lives {later}");
+            assert_eq!(fold(&e,&f,&refs),e,"idempotence");
+            for fault in 1..=25 {assert_eq!(fold(&s,&f,&RefResolver::from_test_closed_format_arguments(fault)),s,"metadata {fault}");}
+        }
+        let f=closed_format_arguments_fixture(0);let code=disassemble(&f.bytecode).unwrap();
+        for at in 52..199 {
+            let i=&code[at];
+            for word in 0..i.words.len() {
+                let mut bad=f.clone();let packed=word+1;bad.bytecode[i.offset_dw+packed/2]^=1<<((packed%2)*16);
+                assert_eq!(fold(source,&bad,&refs),source,"word {at}/{word}");
+            }
+            if matches!(i.op.name,"CALLSYS"|"PGA") {
+                let mut bad=f.clone();bad.bytecode[i.offset_dw+1]^=1;
+                assert_eq!(fold(source,&bad,&refs),source,"native/literal reference {at}");
+            }
+        }
+        for at in [55,61,66,76,87,192,195] {
+            let mut bad=f.clone();let replacement=function(&[("PshV4",&[code[at].words[0]])]);
+            bad.bytecode[code[at].offset_dw]=replacement.bytecode[0];
+            assert_eq!(fold(source,&bad,&refs),source,"changed stack-reference operation {at}");
+        }
+        for (from,to) in [(31,53),(31,55),(36,76),(41,194),(46,195)] {
+            let mut bad=f.clone();bad.bytecode[code[from].offset_dw+1]=code[to].offset_dw as i32-code[from].offset_dw as i32-2;
+            assert_eq!(fold(source,&bad,&refs),source,"interior entry {from}->{to}");
+        }
+        let mut bad=f.clone();bad.bytecode[code[31].offset_dw+1]=i32::MAX;
+        assert_eq!(fold(source,&bad,&refs),source,"invalid branch target");
+        for slot in [36u16,40,44] {
+            let mut bad=f.clone();bad.bytecode[code[2].offset_dw]=(bad.bytecode[code[2].offset_dw] as u32 & 0xffff | (slot as u32)<<16) as i32;
+            assert_eq!(fold(source,&bad,&refs),source,"extra earlier string use {slot}");
+            let mut bad=f.clone();bad.obj_locals.push((slot as i32,1));
+            assert_eq!(fold(source,&bad,&refs),source,"ambiguous string local {slot}");
+        }
+        let mut bad=f.clone();bad.obj_locals.push((60,1));assert_eq!(fold(source,&bad,&refs),source,"fourth string allocation");
+        // Preserve every type and per-interval reference while breaking only the alternating pool relation.
+        let mut bad=f.clone();
+        for i in &code[76..97] {for (n,word) in i.words.iter().enumerate() {
+            let new=match *word {36=>44,44=>36,_=>continue};let packed=n+1;let dw=i.offset_dw+packed/2;let shift=(packed%2)*16;
+            bad.bytecode[dw]=((bad.bytecode[dw] as u32 & !(0xffff<<shift))|((new as u32)<<shift)) as i32;
+        }}
+        assert_eq!(fold(source,&bad,&refs),source,"nonalternating typed pool");
+        for fault in 0..7 {
+            let mut bad=f.clone();match fault {0=>bad.ret.token=0x51,1=>bad.params[0].ty.is_read_only=false,2=>bad.params[0].ty.is_reference=true,
+                3=>bad.params[0].flags=1,4=>bad.traits=4,5=>bad.params[0].name="OtherHeight".into(),_=>bad.params[0].ty.token=0x50}
+            assert_eq!(fold(source,&bad,&refs),source,"signature {fault}");
+        }
+        assert_eq!(super::restore_closed_format_argument_lives(source,&f,&refs,false),source,"receiver ABI");
+        for s in [
+            source.replace("FString local_36;","FString local_36 = FString();"),
+            source.replace("FString::ApplyFormat(local_14, local_36)","FString::ApplyFormat(local_13, local_36)"),
+            source.replace("int local_9 =","float32 local_9 ="),
+            source.replace("float local_6_2 =","float32 local_6_2 ="),
+            source.replace("FString local_44 =","auto local_44 ="),
+            source.replace("FString::ApplyFormat(local_20, local_36)","FString::ApplyFormat(local_20, FString())"),
+            source.replace("FString::ApplyFormat(local_4, local_36)","Other::ApplyFormat(local_4, local_36)"),
+            source.replace("        FString local_40 =","        Inspect(local_44);\n        FString local_40 ="),
+            source.replace("        FString local_36;","        {\n        FString local_36;").replace("        return (local_14 * local_20);","        }\n        return (local_14 * local_20);"),
+            source.replace("local_40.Append(FString(\" / rounded / \"));","local_40.Append(FString(\"different\"));"),
+            source.replace("local_6_2, local_44_3","local_6_2, local_44_2"),
+            source.replace("return (local_14 * local_20);","return (local_20 * local_14);"),
+            source.replace("FString local_44_2 =","FString local_44 ="),
+            source.replace("        float32 local_13 = ::Limit(this.Actor());","        {\n        float32 local_13 = ::Limit(this.Actor());\n        }"),
+        ] {assert_ne!(s,source);assert_eq!(fold(&s,&f,&refs),s,"source type, argument, lifetime or scope witness");}
+        let s=format!("        int local_440 = 0;\n{source}");let e=format!("        int local_440 = 0;\n{expected}");
+        let s=rename(&s,512,true);let e=rename(&e,512,true);assert!(s.contains("local_952_21"));
+        assert!(s.contains("local_556_21") && s.contains("local_556_22") && s.contains("local_556_23"));
+        assert_eq!(fold(&s,&closed_format_arguments_fixture(512),&refs),e,"identifier boundary and distinct existing numeric suffixes");
+    }
+
+    fn selected_vector_arguments_fixture(bias:u16)->Func {
+        // Original30..84 is the closed witness; the prefix/return model its surrounding CFG.
+        let mut f=function(&[
+            ("JMP", &[]),
+            ("SUSPEND", &[]),
+            ("PSF", &[26]),
+            ("PSF", &[14]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV8", &[8]),
+            ("PSF", &[32]),
+            ("CALLSYS", &[]),
+            ("SetV8", &[34]),
+            ("CMPd", &[8, 34]),
+            ("JS", &[]),
+            ("PSF", &[26]),
+            ("PSF", &[32]),
+            ("CALLSYS", &[]),
+            ("JMP", &[]),
+            ("PSF", &[20]),
+            ("PSF", &[26]),
+            ("CALLSYS", &[]),
+            ("PSF", &[20]),
+            ("PSF", &[32]),
+            ("CALLSYS", &[]),
+            ("PshVPtr", &[65528]),
+            ("PSF", &[20]),
+            ("PshVPtr", &[65530]),
+            ("CALLSYS", &[]),
+            ("SetV8", &[34]),
+            ("LoadVObjR", &[20, 16]),
+            ("WRTV8", &[34]),
+            ("PSF", &[6]),
+            ("PSF", &[20]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV8", &[34]),
+            ("PshV8", &[65524]),
+            ("CpyVtoV8", &[50, 65524]),
+            ("NEGd", &[50]),
+            ("PshV8", &[50]),
+            ("PshV8", &[34]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV8", &[58]),
+            ("PshV8", &[58]),
+            ("PSF", &[48]),
+            ("PSF", &[6]),
+            ("CALLSYS", &[]),
+            ("PSF", &[48]),
+            ("PSF", &[40]),
+            ("PshVPtr", &[65528]),
+            ("CALLSYS", &[]),
+            ("SetV8", &[50]),
+            ("ADDd", &[58, 65522, 50]),
+            ("PshV8", &[58]),
+            ("PSF", &[56]),
+            ("PSF", &[32]),
+            ("CALLSYS", &[]),
+            ("PSF", &[56]),
+            ("PSF", &[48]),
+            ("PSF", &[40]),
+            ("CALLSYS", &[]),
+            ("LoadRObjR", &[65532, 16]),
+            ("RDR8", &[60]),
+            ("LoadVObjR", &[48, 16]),
+            ("WRTV8", &[60]),
+            ("PSF", &[48]),
+            ("PshVPtr", &[65534]),
+            ("CALLSYS", &[]),
+            ("RET", &[16]),
+        ]);
+        f.name="SelectOffset".into();f.traits=4;f.ret=DataType {token:5,type_info:1,..Default::default()};
+        f.params=["Source","Target","Origin","Heading","HalfExtent","Padding"].into_iter().enumerate().map(|(i,name)|
+            super::super::model::Param {name:name.into(),flags:if i<4 {3} else {0},ty:DataType {token:if i<4 {5} else {0x51},type_info:if i<4 {1} else {0},
+                is_reference:i<4,is_object_const:true,is_read_only:true,..Default::default()}}).collect();
+        f.obj_locals=[6,14,20,26,32,40,48,56,66].into_iter().map(|s|(s,1)).collect();
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,offset,value) in [(26, 2, 101), (57, 2, 101), (59, 2, 101)] {f.bytecode[code[at].offset_dw+offset]=value;}
+        for (at,value) in [(4, 11), (7, 12), (13, 13), (17, 14), (20, 13), (24, 15), (30, 11), (37, 16), (42, 17), (46, 18), (52, 17), (56, 18), (63, 19)] {f.bytecode[code[at].offset_dw+1]=value;}
+        for (from,to) in [(0, 1), (10, 15), (14, 21)] {f.bytecode[code[from].offset_dw+1]=code[to].offset_dw as i32-code[from].offset_dw as i32-2;}
+        for (at,value) in [(8,0.0f64),(25,0.0),(47,100.0)] {
+            let bits=value.to_bits();f.bytecode[code[at].offset_dw+1]=bits as i32;f.bytecode[code[at].offset_dw+2]=(bits>>32) as i32;
+        }
+        for i in &code {
+            if i.op.name=="RET" {continue;}
+            for (n,word) in i.words.iter().enumerate() {
+                if (*word as i16)<=0 || (matches!(i.op.name,"LoadVObjR"|"LoadRObjR") && n==1) {continue;}
+                let at=n+1;let dw=i.offset_dw+at/2;let shift=(at%2)*16;
+                f.bytecode[dw]=((f.bytecode[dw] as u32 & !(0xffff<<shift)) | (((*word+bias) as u32)<<shift)) as i32;
+            }
+        }
+        for (slot,_) in &mut f.obj_locals {*slot+=bias as i32;}f
+    }
+
+    #[test]
+    fn conditional_vector_and_two_scalar_arguments_keep_their_linked_lives() {
+        let source=r#"        FVector local_6 = Heading;
+        local_6.Z = 0.0;
+        local_6 = local_6.GetSafeNormal(9.99999993922529e-9, FVector::ZeroVector);
+        FVector local_26 = local_6.CrossProduct(FVector::UpVector).GetSafeNormal(9.99999993922529e-9, FVector::ZeroVector);
+        FVector local_14 = (Source - Origin);
+        local_14.Z = 0.0;
+        float local_8_3 = local_14.DotProduct(local_26);
+        FVector local_32;
+        if (local_8_3 >= 0.0)
+        {
+            local_32 = local_26;
+        }
+        else
+        {
+            local_32 = local_26.opNeg();
+        }
+        FVector local_20 = (Target - Origin);
+        local_20.Z = 0.0;
+        float local_34_2 = local_20.DotProduct(local_6);
+        float local_50 = -HalfExtent;
+        FVector local_40 = (Origin + (local_6 * (Math::Clamp(local_34_2, local_50, HalfExtent))));
+        float local_58_2 = Padding + 100.0;
+        FVector local_48_2 = (local_40 + (local_32 * local_58_2));
+        local_48_2.Z = Source.Z;
+        return local_48_2;
+"#;
+        let expected=r#"        FVector local_6 = Heading;
+        local_6.Z = 0.0;
+        local_6 = local_6.GetSafeNormal(9.99999993922529e-9, FVector::ZeroVector);
+        FVector local_26 = local_6.CrossProduct(FVector::UpVector).GetSafeNormal(9.99999993922529e-9, FVector::ZeroVector);
+        FVector local_14 = (Source - Origin);
+        local_14.Z = 0.0;
+        float local_8_3 = local_14.DotProduct(local_26);
+        FVector local_32 = (local_8_3 >= 0.0 ? local_26 : local_26.opNeg());
+        FVector local_20 = (Target - Origin);
+        local_20.Z = 0.0;
+        float local_34_2 = local_20.DotProduct(local_6);
+        FVector local_40 = (Origin + (local_6 * (Math::Clamp(local_34_2, -HalfExtent, HalfExtent))));
+        FVector local_48_2 = (local_40 + (local_32 * (Padding + 100.0)));
+        local_48_2.Z = Source.Z;
+        return local_48_2;
+"#;
+        let refs=RefResolver::from_test_selected_vector_arguments(0);
+        let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_selected_vector_argument_lives(s,f,r,true);
+        let rename=|s:&str,bias:u16| {
+            let mut s=s.to_owned();
+            for slot in [66u16,60,58,56,50,48,40,34,32,26,20,14,8,6] {
+                for suffix in ["_3","_2",""] {s=super::rename_ident(&s,&format!("local_{slot}{suffix}"),&format!("local_{}{suffix}",slot+bias));}
+            }s
+        };
+        for bias in [0u16,512] {
+            let f=selected_vector_arguments_fixture(bias);let s=rename(source,bias);let e=rename(expected,bias);
+            assert_eq!(fold(&s,&f,&refs),e,"positive with parameter-name and slot renumber {bias}");
+            assert_eq!(fold(&e,&f,&refs),e,"idempotent");
+            for fault in 1..=27 {assert_eq!(fold(&s,&f,&RefResolver::from_test_selected_vector_arguments(fault)),s,"metadata {fault}");}
+        }
+        let f=selected_vector_arguments_fixture(0);let code=disassemble(&f.bytecode).unwrap();
+        assert_eq!(code.len(),65);
+        // All operands of the 55-operation witness are checked; surrounding unrelated instructions are not frozen.
+        for (at,i) in code.iter().enumerate().take(57).skip(2) {
+            for n in 0..i.words.len() {
+                let mut bad=f.clone();let word=n+1;bad.bytecode[i.offset_dw+word/2]^=1<<((word%2)*16);
+                assert_eq!(fold(source,&bad,&refs),source,"operand {at}/{n}");
+            }
+            if !i.qwords.is_empty() {
+                for offset in [1,2] {
+                    let mut bad=f.clone();bad.bytecode[i.offset_dw+offset]^=1;
+                    assert_eq!(fold(source,&bad,&refs),source,"native/immediate {at}/{offset}");
+                }
+            }
+            if i.op.name=="LoadVObjR" {
+                let mut bad=f.clone();bad.bytecode[i.offset_dw+2]^=1;
+                assert_eq!(fold(source,&bad,&refs),source,"typed member owner");
+            }
+        }
+        for (from,to) in [(0,3),(0,15),(10,16),(14,22)] {
+            let mut bad=f.clone();bad.bytecode[code[from].offset_dw+1]=code[to].offset_dw as i32-code[from].offset_dw as i32-2;
+            assert_eq!(fold(source,&bad,&refs),source,"external/interior edge {from}->{to}");
+        }
+        let mut bad=f.clone();let computed=function(&[("JMPP",&[0])]);
+        bad.bytecode[0]=(bad.bytecode[0]&!0xff)|(computed.bytecode[0]&0xff);
+        assert_eq!(fold(source,&bad,&refs),source,"computed entry");
+        for slot in [20u16,32,34,40,50,58] {
+            let mut bad=f.clone();bad.bytecode.extend(function(&[("PSF",&[slot])]).bytecode);
+            assert_eq!(fold(source,&bad,&refs),source,"extra raw use {slot}");
+        }
+        let mut bad=f.clone();bad.obj_locals.push((32,1));assert_eq!(fold(source,&bad,&refs),source,"duplicate selected object");
+        let mut bad=f.clone();bad.obj_locals.extend([(50,1),(50,1)]);assert_eq!(fold(source,&bad,&refs),source,"duplicate objects cannot become a scalar");
+        for fault in 0..6 {
+            let mut bad=f.clone();match fault {
+                0=>bad.params[1].flags=1,1=>bad.params[4].ty.is_read_only=false,2=>bad.params[2].ty.type_info=2,
+                3=>bad.ret.is_reference=true,4=>bad.traits=0,_=>bad.params[4].ty.token=0x50,
+            }
+            assert_eq!(fold(source,&bad,&refs),source,"function ABI {fault}");
+        }
+        assert_eq!(super::restore_selected_vector_argument_lives(source,&f,&refs,false),source,"method return ABI");
+        for s in [
+            source.replace("if (local_8_3 >= 0.0)","if (local_8_3 > 0.0)"),
+            source.replace("local_32 = local_26;","local_32 = local_14;"),
+            source.replace("float local_50 = -HalfExtent;","float local_50 = HalfExtent;"),
+            source.replace("Padding + 100.0","Padding + 101.0"),
+            source.replace("(Target - Origin)","(Source - Origin)"),
+            source.replace("local_20.Z = 0.0;","local_20.Z = 1.0;"),
+            source.replace("        float local_58_2", "        {\n        float local_58_2"),
+            format!("{source}Use(local_32);\n"),format!("{source}Use(local_50);\n"),format!("{source}Use(local_58_2);\n"),
+        ] {assert_eq!(fold(&s,&f,&refs),s,"atomic source/lifetime/scope guard");}
+        let rename_life=|s:&str|super::rename_ident(&super::rename_ident(s,"local_32","local_32_7"),"local_50","local_50_4");
+        assert_eq!(fold(&rename_life(source),&f,&refs),rename_life(expected),"distinct source life suffixes");
+        let s=format!("float local_320 = 2.0;\n{source}");let e=format!("float local_320 = 2.0;\n{expected}");
+        assert_eq!(fold(&s,&f,&refs),e,"identifier-prefix collision stays untouched");
     }
 
     #[test]

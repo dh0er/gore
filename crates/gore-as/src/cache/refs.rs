@@ -9213,6 +9213,112 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_closed_format_arguments(fault:u8)->Self {
+        let mut r=Self::default();
+        r.type_by_ptr.insert(1,"FString".into());r.typeid_to_ptr.insert(1,1);
+        r.type_identity_by_ptr.insert(1,TypeIdentity {name:"FString".into(),module:String::new(),namespace:String::new()});
+        let plain=|token|DataType {token,..Default::default()};
+        let string=|reference:bool,constant:bool|DataType {token:5,type_info:1,is_reference:reference,is_object_const:constant,is_read_only:constant,..Default::default()};
+        for (ptr,name,ret,args) in [(101,"$beh0",plain(0x52),vec![string(true,true)]),(102,"$beh0",plain(0x52),vec![]),
+            (103,"$beh2",plain(0x52),vec![]),(104,"Append",string(true,false),vec![string(true,true)])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,"FString".into());r.func_is_method.insert(ptr);r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+        }
+        for (ptr,token) in [(105,0x50),(106,0x51),(107,0x44)] {
+            r.func_by_ptr.insert(ptr,"ApplyFormat".into());r.func_ns.insert(ptr,"FString".into());r.func_ret.insert(ptr,string(false,false));r.func_params.insert(ptr,vec![plain(token),string(true,true)]);
+        }
+        for (ptr,text) in [(300,"Trace: "),(301," / height / "),(302," / metric / "),(303," / rounded / "),(304," / limit / "),(305," / ratio / "),(306," / tuning / ")] {
+            r.global_by_ptr.insert(ptr,text.into());r.global_is_string.insert(ptr);
+        }
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into(),
+            2=>r.type_identity_by_ptr.get_mut(&1).unwrap().namespace="Other".into(),
+            3=>r.func_params.get_mut(&101).unwrap()[0].is_read_only=false,
+            4=>r.func_params.get_mut(&102).unwrap().push(string(true,true)),
+            5=>{r.const_method_ptrs.insert(103);},
+            6=>r.func_ret.get_mut(&104).unwrap().is_reference=false,
+            7=>{r.const_method_ptrs.insert(104);},
+            8=>r.func_params.get_mut(&104).unwrap()[0].is_reference=false,
+            9=>r.func_ret.get_mut(&105).unwrap().is_reference=true,
+            10=>r.func_ret.get_mut(&106).unwrap().is_object_const=true,
+            11=>r.func_ret.get_mut(&107).unwrap().is_object_handle=true,
+            12=>r.func_params.get_mut(&105).unwrap()[0].is_reference=true,
+            13=>r.func_params.get_mut(&106).unwrap()[0].token=0x50,
+            14=>r.func_params.get_mut(&107).unwrap()[0].token=0x41,
+            15=>r.func_params.get_mut(&105).unwrap()[1].is_object_const=false,
+            16=>r.func_params.get_mut(&106).unwrap()[1].is_reference=false,
+            17=>{r.func_is_method.insert(107);},
+            18=>{r.func_owner.insert(105,"FString".into());},
+            19=>{r.func_ns.insert(106,"Other".into());},
+            20=>{r.func_by_ptr.insert(107,"OtherFormat".into());},
+            21=>{r.global_is_string.remove(&300);},
+            22=>{r.global_is_string.remove(&303);},
+            23=>{r.global_by_ptr.insert(306,"escaped\ntext".into());},
+            24=>r.func_ret.get_mut(&103).unwrap().token=0x41,
+            25=>r.func_params.get_mut(&107).unwrap().push(plain(0x44)),
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_selected_vector_arguments(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,id,name) in [(1,101,"FVector"),(2,102,"FUnrelated")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(id,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:String::new(),namespace:String::new()});
+        }
+        let key=(101i64<<1)|(16i64<<33)|1;
+        r.prop_by_key.insert(key,"Z".into());r.prop_type_id.insert(key,101);
+        let plain=|token|DataType {token,..Default::default()};
+        let vector=|reference:bool,constant:bool|DataType {token:5,type_info:1,is_reference:reference,is_object_const:constant,is_read_only:constant,..Default::default()};
+        for (ptr,name,constant,ret,args) in [
+            (11,"DotProduct",true,plain(0x51),vec![vector(true,true)]),
+            (12,"$beh0",false,plain(0x52),vec![]),
+            (13,"opAssign",false,vector(true,false),vec![vector(true,true)]),
+            (14,"opNeg",true,vector(false,false),vec![]),
+            (15,"opSub",true,vector(false,false),vec![vector(true,true)]),
+            (17,"opMul",true,vector(false,false),vec![plain(0x51)]),
+            (18,"opAdd",true,vector(false,false),vec![vector(true,true)]),
+            (19,"$beh0",false,plain(0x52),vec![vector(true,true)])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,"FVector".into());r.func_is_method.insert(ptr);
+            r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        r.func_by_ptr.insert(16,"Clamp".into());r.func_ns.insert(16,"Math".into());
+        r.func_ret.insert(16,plain(0x51));r.func_params.insert(16,vec![plain(0x51),plain(0x51),plain(0x51)]);
+        match fault {
+            1=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Shadow".into(),
+            2=>r.func_ret.get_mut(&12).unwrap().token=0x41,
+            3=>r.func_params.get_mut(&12).unwrap().push(vector(true,true)),
+            4=>r.func_ret.get_mut(&13).unwrap().is_reference=false,
+            5=>r.func_params.get_mut(&13).unwrap()[0].is_object_const=false,
+            6=>r.func_params.get_mut(&13).unwrap()[0].is_read_only=false,
+            7=>{r.const_method_ptrs.insert(13);},
+            8=>r.func_ret.get_mut(&14).unwrap().is_reference=true,
+            9=>r.func_params.get_mut(&14).unwrap().push(plain(0x51)),
+            10=>{r.const_method_ptrs.remove(&14);},
+            11=>r.func_ret.get_mut(&11).unwrap().token=0x50,
+            12=>r.func_params.get_mut(&11).unwrap()[0].is_reference=false,
+            13=>{r.func_owner.insert(11,"FUnrelated".into());},
+            14=>r.func_ret.get_mut(&15).unwrap().type_info=2,
+            15=>{r.const_method_ptrs.remove(&15);},
+            16=>r.func_params.get_mut(&17).unwrap()[0].is_read_only=true,
+            17=>r.func_params.get_mut(&17).unwrap()[0].is_reference=true,
+            18=>r.func_ret.get_mut(&18).unwrap().is_object_const=true,
+            19=>r.func_ret.get_mut(&18).unwrap().is_object_handle=true,
+            20=>r.func_ret.get_mut(&16).unwrap().is_reference=true,
+            21=>{r.func_is_method.insert(16);},
+            22=>{r.func_params.get_mut(&16).unwrap().pop();},
+            23=>{r.func_ns.insert(16,"Other".into());},
+            24=>{r.prop_type_id.insert(key,102);},
+            25=>{r.prop_by_key.insert(key,"Unknown".into());},
+            26=>r.type_identity_by_ptr.get_mut(&1).unwrap().namespace="Other".into(),
+            27=>{r.func_owner.insert(12,"FUnrelated".into());},
+            _=>{},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_class_copy_scoped_handle(fault: u8) -> Self {
         let mut r=Self::default();
         for (id,name) in [(1,"TArray"),(2,"TSubclassOf"),(3,"UDefinition"),(4,"FEntry"),(5,"AActorState"),(6,"UObject"),(7,"TArrayIterator"),(8,"FName"),(9,"UHost"),(10,"FPlan"),(11,"FRow")] {
