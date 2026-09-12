@@ -3912,6 +3912,57 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_foreach_query_receivers(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (p, name) in [(1, "AGothicCharacter"), (2, "UActorQuery"), (3, "FVector"), (4, "TArray"),
+            (5, "TArrayConstIterator"), (6, "AActor"), (7, "TSubclassOf"), (8, "UQueryState")] {
+            r.type_by_ptr.insert(p, name.into()); r.typeid_to_ptr.insert(p as i32, p);
+            r.type_identity_by_ptr.insert(p, TypeIdentity { name: name.into(), module: if p == 8 { "Fixture" } else { "" }.into(), namespace: String::new() });
+        }
+        let value = |type_info| DataType { token: 5, type_info, ..Default::default() };
+        let handle = |type_info| DataType { is_object_handle: true, ..value(type_info) };
+        let input = |type_info| DataType { is_reference: true, is_object_const: true, is_read_only: true, ..value(type_info) };
+        for (p, name, owner, constant, ret, args) in [
+            (10, "GetSubject", "UCharacterAIState", true, handle(1), vec![]),
+            (11, "GetLocation", "APawn", true, value(3), vec![]),
+            (12, "Get", "", false, handle(2), vec![]),
+            (13, "FindActors", "UActorQuery", true, value(4), vec![value(7), input(3), DataType { token: 0x50, ..Default::default() }]),
+            (14, "Iterator", "TArray", true, value(5), vec![]),
+            (15, "Proceed", "TArrayConstIterator", false, DataType { is_reference: true, is_read_only: true, ..handle(6) }, vec![]),
+            (16, "$beh2", "TArray", false, DataType { token: 0x52, ..Default::default() }, vec![]),
+        ] {
+            r.func_by_ptr.insert(p, name.into()); r.func_ret.insert(p, ret); r.func_params.insert(p, args);
+            if !owner.is_empty() { r.func_owner.insert(p, owner.into()); r.func_is_method.insert(p); }
+            if constant { r.const_method_ptrs.insert(p); }
+        }
+        r.func_ns.insert(12, "UActorQuery".into());
+        r.global_by_ptr.insert(90, "__StaticType_AGothicCharacter".into());
+        let key = (8i64 << 1) | (48i64 << 33) | 1;
+        r.prop_by_key.insert(key, "Radius".into()); r.prop_type_id.insert(key, 8);
+        r.class_fields.entry("UQueryState".into()).or_default().insert("Radius".into(), "float".into());
+        match fault {
+            1 => { r.const_method_ptrs.remove(&10); },
+            2 => r.func_ret.get_mut(&10).unwrap().is_reference = true,
+            3 => r.func_ret.get_mut(&12).unwrap().is_object_handle = false,
+            4 => { r.func_is_method.insert(12); },
+            5 => r.func_params.get_mut(&13).unwrap()[1].is_read_only = false,
+            6 => r.func_params.get_mut(&13).unwrap()[2].token = 0x51,
+            7 => { r.func_owner.insert(13, "UOther".into()); },
+            8 => { r.const_method_ptrs.remove(&14); },
+            9 => r.func_ret.get_mut(&15).unwrap().is_reference = false,
+            10 => r.func_ret.get_mut(&15).unwrap().is_read_only = false,
+            11 => { r.const_method_ptrs.insert(16); },
+            12 => { r.class_fields.get_mut("UQueryState").unwrap().insert("Radius".into(), "int".into()); },
+            13 => { r.prop_type_id.insert(key, 1); },
+            14 => { r.global_by_ptr.insert(90, "OrdinaryGlobal".into()); },
+            15 => r.type_identity_by_ptr.get_mut(&3).unwrap().module = "Script".into(),
+            16 => r.func_params.get_mut(&11).unwrap().push(value(3)),
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_foreach_getter(fault: u8) -> Self {
         let mut r = Self::default();
         for (ptr, name) in [(1, "UActor"), (2, "UComponent"), (3, "TArrayIterator")] {
@@ -5478,6 +5529,45 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_bool_field_retry(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UTask", "bStop"), ("ARecipient", ""), ("FWork", "")]);
+        for (ptr, name) in [(1, "UTask"), (2, "ARecipient"), (3, "FWork")] {
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.into(), module: String::new(), namespace: String::new() });
+        }
+        r.prop_type_id.insert(3, if fault == 1 { 2 } else { 1 });
+        r.class_super.insert("URetryTask".into(), "UTask".into());
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(
+            &[("UTask", "bStop", if fault == 2 { "uint8" } else { "bool" })], &[], None));
+        for (id, name) in [(20, "Unavailable"), (21, "Finished")] {
+            r.funcid_to_ptr.insert(id, id as i64); r.func_by_ptr.insert(id as i64, name.into());
+            r.func_ret.insert(id as i64, DataType { token: 0x41, ..Default::default() });
+            r.func_params.insert(id as i64, vec![DataType { token: 5, type_info: 2,
+                is_object_const: true, is_object_handle: true, ..Default::default() }]);
+        }
+        for (ptr, name, owner, params) in [
+            (10, "Pause", "UTask", vec![DataType { token: 0x50, ..Default::default() }]),
+            (11, "$beh2", "FWork", vec![]), (12, "FinishWork", "UTask", vec![]),
+        ] {
+            r.func_by_ptr.insert(ptr, name.into()); r.func_owner.insert(ptr, owner.into()); r.func_is_method.insert(ptr);
+            r.func_ret.insert(ptr, DataType { token: 0x52, ..Default::default() }); r.func_params.insert(ptr, params);
+        }
+        match fault {
+            3 => { r.class_super.clear(); },
+            4 => { r.func_ret.get_mut(&20).unwrap().is_reference = true; },
+            5 => { r.func_params.get_mut(&21).unwrap()[0].type_info = 3; },
+            6 => { r.func_params.get_mut(&20).unwrap()[0].is_object_const = false; },
+            7 => { r.func_params.get_mut(&20).unwrap()[0].if_handle_then_const = true; },
+            8 => { r.func_is_method.insert(20); },
+            9 => { r.func_params.get_mut(&10).unwrap()[0].token = 0x51; },
+            10 => { r.func_ret.get_mut(&11).unwrap().is_auto = true; },
+            11 => { r.const_method_ptrs.insert(11); },
+            12 => { r.func_owner.insert(11, "FOther".into()); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_guarded_retry_loop(fault: u8) -> Self {
         let mut r = Self::default();
         r.func_by_ptr.insert(10, "WaitTick".into()); r.func_owner.insert(10, "UTask".into()); r.func_is_method.insert(10);
@@ -6662,6 +6752,50 @@ impl RefResolver {
             && matches!(self.type_subtypes(item.type_info),Some([t]) if native(t,"UItemDefinition"))
             && num.token==0x44 && num.type_info==0 && !num.is_reference && !num.is_object_handle && num.is_object_const && num.is_read_only
             && [ret,ai,other,item,num].iter().all(|t| !t.is_auto && !t.if_handle_then_const)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_following_property(fault: u8) -> Self {
+        let mut r = Self::from_test_member_chain(&[("UState", "Memory"), ("FRememberedPerception", "Source"),
+            ("FPerceivedAgent", ""), ("AGothicCharacter", ""), ("AActor", ""), ("UGameplayAbility_CharacterAI", ""), ("UObject", "")]);
+        for (&ptr, name) in &r.type_by_ptr {
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity { name: name.clone(), namespace: String::new(),
+                module: if ptr == 1 { "Fixture" } else { "" }.into() });
+        }
+        r.prop_type_id.insert(3, 1); r.prop_type_id.insert(5, 2);
+        let key = (8i64 << 33) | 3;
+        r.prop_by_key.insert(key, "Brain".into()); r.prop_type_id.insert(key, 1);
+        r.class_fields.insert("UState".into(), HashMap::from([("Memory".into(), "FRememberedPerception".into()),
+            ("Brain".into(), "UChildAI".into())]));
+        r.class_super.insert("UChildAI".into(), "UGameplayAbility_CharacterAI".into());
+        r.set_native_api(super::binds::NativeApi::from_test_field_types(
+            &[("FRememberedPerception", "Source", "FPerceivedAgent")], &[], None));
+        let handle = |type_info, constant| DataType { token: 5, type_info, is_object_handle: true,
+            is_object_const: constant, ..Default::default() };
+        let scalar = |token| DataType { token, is_object_const: true, is_read_only: true, ..Default::default() };
+        r.global_by_ptr.insert(1000, "__WorldContext".into());
+        r.func_by_ptr.insert(10, "GetCharacter".into()); r.func_owner.insert(10, "FPerceivedAgent".into());
+        r.func_is_method.insert(10); r.const_method_ptrs.insert(10);
+        r.func_ret.insert(10, handle(4, false)); r.func_params.insert(10, vec![handle(7, true)]);
+        r.func_by_ptr.insert(20, "Follow".into()); r.funcid_to_ptr.insert(20, 20);
+        r.func_ret.insert(20, DataType { token: 0x52, ..Default::default() });
+        r.func_params.insert(20, vec![handle(6, false), handle(5, false), scalar(0x51), scalar(0x41), scalar(0x51), scalar(0x41)]);
+        match fault {
+            1 => r.func_ret.get_mut(&20).unwrap().token = 0x41,
+            2 => { r.func_is_method.insert(20); },
+            3 => r.func_params.get_mut(&20).unwrap()[1].is_reference = true,
+            4 => r.func_params.get_mut(&20).unwrap()[3].is_read_only = false,
+            5 => { r.const_method_ptrs.remove(&10); },
+            6 => r.func_ret.get_mut(&10).unwrap().is_object_handle = false,
+            7 => r.func_params.get_mut(&10).unwrap()[0].is_object_const = false,
+            8 => { r.global_by_ptr.insert(1000, "OtherContext".into()); },
+            9 => { r.class_fields.get_mut("UState").unwrap().insert("Memory".into(), "FOther".into()); },
+            10 => { r.class_fields.get_mut("UState").unwrap().insert("Brain".into(), "UObject".into()); },
+            11 => r.type_identity_by_ptr.get_mut(&2).unwrap().module = "Script".into(),
+            12 => r.func_ret.get_mut(&10).unwrap().is_read_only = true,
+            _ => {}
+        }
+        r
     }
 
     #[cfg(test)]

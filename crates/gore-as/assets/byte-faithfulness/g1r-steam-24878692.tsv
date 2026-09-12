@@ -22,7 +22,6 @@ AI.States.FightAI.CombatState.Positioning.AICombat_Positioning	5	0	0
 AI.States.FightAI.DisengageBehavior.AIState_Disengage	1	0	0
 AI.States.FightAI.FearState.AIState_Fear	1	0	0
 AI.States.FightAI.FleeState.AIState_Flee	2	0	0
-AI.States.FightAI.GoGetGuardState.AIState_GoGetGuard	1	0	0
 AI.States.FightAI.SearchState.AIState_Search	2	0	0
 AI.States.FightAI.WarningState.AIState_Warning	1	0	0
 AI.States.FightAI.WarningState.AIState_Warning_Crime	6	0	0

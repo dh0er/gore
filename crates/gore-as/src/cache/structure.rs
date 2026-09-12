@@ -11457,6 +11457,115 @@ impl Structurer<'_> {
         witness.is_some()
     }
 
+    /// A native bool-field test owns a guarded retry before the final cleanup-and-break.
+    fn has_bool_field_retry_and_final_break(&self, head: usize, exit: usize) -> bool {
+        let witness = (|| {
+            let plain = |t: &super::types::DataType, token| t.token == token && t.type_info == 0
+                && !t.is_reference && !t.is_object_const && !t.is_object_handle
+                && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+            if !self.ctx.f.is_method || !plain(&self.ctx.f.ret, 0x52)
+                || exit <= head + 5 || exit >= self.g.blocks.len() { return None; }
+            let block = |n: usize| &self.g.blocks[n];
+            let code = |n: usize| &self.ctx.instrs[block(n).instr_lo..block(n).instr_hi];
+            let w = |i: &Instr, n: usize| i.words.get(n).map(|v| s16(*v));
+            let h = code(head); let header = block(head).start_dw; let after = block(exit).start_dw;
+            if h.iter().map(|i| i.op.name).ne(["LoadThisR", "RDR1", "NOT", "CpyVtoR1", "JLowZ"])
+                || w(&h[1], 0)? <= 0 || h[1].words != h[2].words || h[1].words != h[3].words
+                || code(head + 1).first()?.op.name != "SUSPEND"
+                || block(head).succs.as_slice() != [after, block(head + 1).start_dw] { return None; }
+            let id = *h[0].dwords.first()? as i32;
+            let (field, old) = self.ctx.refs.member_identity(id, w(&h[0], 0)?)?;
+            let owner = self.ctx.refs.type_identity_by_id(id)?;
+            if !owner.module.is_empty() || !owner.namespace.is_empty()
+                || self.ctx.refs.type_identity_by_id(old)? != owner
+                || self.ctx.refs.native_field_value_type(&owner.name, field) != Some("bool")
+                || !self.ctx.refs.is_subclass(self.ctx.class_name?, &owner.name) { return None; }
+
+            let retries: Vec<_> = (head + 1..exit).filter(|n| block(*n).succs.contains(&header)).collect();
+            let [retry] = retries.as_slice() else { return None; };
+            let retry = *retry;
+            if code(retry).iter().map(|i| i.op.name).ne(["JMP"]) || retry + 1 >= exit { return None; }
+            let end = block(retry).instr_hi;
+            let c = self.ctx.instrs.get(end.checked_sub(12)?..end)?;
+            if c[0].offset_dw <= header || c.iter().map(|i| i.op.name).ne([
+                "PshVPtr", "CALL", "JLowZ", "SetV1", "JMP", "PshVPtr", "CALL",
+                "CpyRtoV4", "CpyVtoV4", "CpyVtoR1", "JLowZ", "JMP",
+            ]) { return None; }
+            let (handle, result, scratch) = (w(&c[0], 0)?, w(&c[3], 0)?, w(&c[7], 0)?);
+            if [handle, result, scratch].iter().any(|s| *s <= 0)
+                || std::collections::HashSet::from([handle, result, scratch]).len() != 3
+                || w(&c[5], 0) != Some(handle) || c[3].dwords.first() != Some(&1)
+                || w(&c[8], 0) != Some(result) || w(&c[8], 1) != Some(scratch)
+                || w(&c[9], 0) != Some(result) || w(&h[1], 0) != Some(scratch) { return None; }
+            let mut argument_type = None;
+            for at in [1, 6] {
+                let id = *c[at].dwords.first()? as i32;
+                let [arg] = self.ctx.refs.func_params_by_id(id)? else { return None; };
+                if self.ctx.refs.is_method_by_id(id) || !plain(self.ctx.refs.func_ret_by_id(id)?, 0x41)
+                    || arg.token != 5 || !arg.is_object_handle || !arg.is_object_const || arg.is_reference
+                    || arg.is_read_only || arg.is_auto || arg.if_handle_then_const
+                    || self.ctx.refs.type_identity_by_ptr(arg.type_info)?.module != "" { return None; }
+                if argument_type.replace(arg.type_info).is_some_and(|p| p != arg.type_info) { return None; }
+            }
+            if c[1].dwords == c[6].dwords { return None; }
+            let target = |i: &Instr| Some(i.offset_dw as i64 + 2 + *i.dwords.first()? as i32 as i64);
+            for (at, dest) in [(2, c[5].offset_dw), (4, c[9].offset_dw),
+                (10, block(retry + 1).start_dw), (11, header)] {
+                if target(&c[at])? != dest as i64 { return None; }
+            }
+
+            let tail = code(exit - 1);
+            let tail = tail.get(tail.len().checked_sub(7)?..)?;
+            if tail.iter().map(|i| i.op.name).ne(["PshC4", "PshVPtr", "CALLSYS", "PSF", "CALLSYS", "FreeNullV8", "JMP"])
+                || w(&tail[1], 0) != Some(0) || w(&tail[3], 0)? <= 0 || w(&tail[5], 0)? <= 0
+                || w(&tail[3], 0) == w(&tail[5], 0) || block(exit - 1).succs.as_slice() != [after] { return None; }
+            let wait = *tail[2].qwords.first()? as i64; let dtor = *tail[4].qwords.first()? as i64;
+            let [seconds] = self.ctx.refs.func_params_by_ptr(wait)? else { return None; };
+            let dtor_owner = self.ctx.refs.func_owner_by_ptr(dtor)?;
+            if !plain(seconds, 0x50) || self.ctx.refs.func_by_ptr(dtor) != Some("$beh2")
+                || !self.ctx.refs.func_params_by_ptr(dtor)?.is_empty()
+                || self.ctx.slot_type(w(&tail[3], 0)?).as_deref() != Some(dtor_owner) { return None; }
+            for ptr in [wait, dtor] {
+                self.ctx.refs.func_owner_by_ptr(ptr)?;
+                if !self.ctx.refs.is_method_by_ptr(ptr) || self.ctx.refs.is_const_method_by_ptr(ptr)
+                    || !plain(self.ctx.refs.func_ret_by_ptr(ptr)?, 0x52) { return None; }
+            }
+
+            // Keep the nested foreach latch, but admit no second outer retry or entry into
+            // the short-circuit materialization. Other exits must be shared bare returns.
+            for (n, b) in self.g.blocks.iter().enumerate() {
+                if n >= head && n < exit && code(n).iter().any(|i| i.op.name == "JMPP") { return None; }
+                for &dest in &b.succs {
+                    if (n < head || n >= exit) && dest >= header && dest < after
+                        && !(n < head && dest == header) { return None; }
+                    if n <= head || n >= exit { continue; }
+                    if dest == after && n != exit - 1 { return None; }
+                    if (dest < header || dest > after) && !self.is_bare_ret_off(dest) { return None; }
+                    if dest <= b.start_dw && !(n == retry && dest == header) {
+                        let inner = *self.idx_of.get(&dest)?;
+                        if n >= retry || inner <= head || code(inner).first()?.op.name != "SUSPEND"
+                            || !self.is_backward_cond(n) || self.loop_latch(inner, n + 1) != Some(n) { return None; }
+                    }
+                    if dest > c[0].offset_dw && dest <= c[11].offset_dw {
+                        let last = &self.ctx.instrs[b.instr_hi - 1];
+                        if ![(2, 3), (2, 5), (4, 9), (8, 9), (10, 11)].iter()
+                            .any(|&(src, dst)| last.offset_dw == c[src].offset_dw && dest == c[dst].offset_dw) { return None; }
+                    }
+                }
+            }
+            let mut seen = std::collections::HashSet::new(); let mut work = vec![head];
+            while let Some(n) = work.pop() {
+                if !seen.insert(n) { continue; }
+                for dest in &block(n).succs {
+                    let next = *self.idx_of.get(dest)?;
+                    if next >= head && next < exit { work.push(next); }
+                }
+            }
+            (head..exit).all(|n| seen.contains(&n)).then_some(())
+        })();
+        witness.is_some()
+    }
+
     /// One guarded retry returns to the time test; the final body block exits.
     fn has_guarded_retry_and_final_break(&self, head: usize, exit: usize) -> bool {
         let witness = (|| {
@@ -11551,6 +11660,7 @@ impl Structurer<'_> {
             && self.g.blocks[prev].succs.first().copied() == Some(b.start_dw))
             || self.has_two_released_retry_edges(i, taken_idx)
             || self.has_guarded_retry_and_final_break(i, taken_idx)
+            || self.has_bool_field_retry_and_final_break(i, taken_idx)
             || self.has_two_timed_retries_and_final_wait(i, taken_idx);
         // … unless the body is one the compiler marked as a loop body anyway. A `SUSPEND` stands
         // at the head of every loop body and nowhere else behind a test. Where every path through
@@ -13596,6 +13706,67 @@ mod tests {
         assert!(!render(&fixture,&refs,0x44).starts_with("while ("));
     }
     #[test]
+    fn bool_field_retry_keeps_the_nested_loop_and_final_cleanup_break() {
+        let mut a = TestAssembler::default();
+        a.label("entry"); a.jump("JMP", "head");
+        a.label("head"); a.op("LoadThisR", &[0], &[1]);
+        a.label("read"); a.op("RDR1", &[7], &[]); a.op("NOT", &[7], &[]); a.op("CpyVtoR1", &[7], &[]); a.jump("JLowZ", "exit");
+        a.label("body"); a.op("SUSPEND", &[], &[]); a.jump("JMP", "inner_test");
+        a.label("inner"); a.op("SUSPEND", &[], &[]); a.op("IncVi", &[15], &[]);
+        a.label("inner_test"); a.op("CpyVtoR1", &[7], &[]); a.label("inner_back"); a.jump("JLowNZ", "inner");
+        a.label("predicate"); a.op("PshVPtr", &[12], &[]); a.op("CALL", &[], &[20]); a.jump("JLowZ", "second");
+        a.op("SetV1", &[9], &[1]); a.jump("JMP", "merge");
+        a.label("second"); a.op("PshVPtr", &[12], &[]); a.op("CALL", &[], &[21]); a.op("CpyRtoV4", &[7], &[]);
+        a.label("copy"); a.op("CpyVtoV4", &[9, 7], &[]);
+        a.label("merge"); a.op("CpyVtoR1", &[9], &[]); a.jump("JLowZ", "success");
+        a.label("retry"); a.jump("JMP", "head");
+        a.label("success"); a.op("PshVPtr", &[0], &[]); a.label("work"); a.op("CALLSYS", &[], &[]);
+        a.op("PshC4", &[], &[1.0f32.to_bits()]); a.op("PshVPtr", &[0], &[]);
+        a.label("wait"); a.op("CALLSYS", &[], &[]); a.op("PSF", &[4], &[]);
+        a.label("dtor"); a.op("CALLSYS", &[], &[]); a.label("clear"); a.op("FreeNullV8", &[6], &[]);
+        a.label("break"); a.jump("JMP", "exit");
+        a.label("exit"); a.op("IncVi", &[15], &[]); a.op("RET", &[0], &[]);
+        let mut fixture = a.finish();
+        for (label, ptr) in [("wait", 10), ("dtor", 11), ("work", 12)] {
+            fixture.instrs.iter_mut().find(|i| i.offset_dw == fixture.labels[label]).unwrap().qwords = vec![ptr];
+        }
+        let refs = RefResolver::from_test_bool_field_retry(0);
+        let render = |f: &CompoundFixture, refs: &RefResolver, ret| render_fixture_range_with_return_class(
+            f, None, refs, "FWork", None, ret, Some("URetryTask"));
+        let out = render(&fixture, &refs, 0x52);
+        assert!(out.starts_with("while (!(this.bStop))"), "{out}");
+        assert_eq!(out.matches("while (").count(), 1, "{out}");
+        assert!(out.contains("for (; local_7; )\n    {\n        ++local_15;"), "{out}");
+        assert_eq!(out.matches("continue;").count(), 1, "{out}");
+        assert_eq!(out.matches("break;").count(), 1, "{out}");
+        assert!(out.contains("Unavailable(local_12)") && out.contains("Finished(local_12)"), "{out}");
+        assert!(out.find("this.FinishWork();").unwrap() < out.find("break;").unwrap(), "{out}");
+        for fault in 1..=12 {
+            assert!(!render(&fixture, &RefResolver::from_test_bool_field_retry(fault), 0x52).starts_with("while ("), "metadata {fault}");
+        }
+        for (label, op, words) in [("read", "RDR1", vec![8]), ("body", "CpyVtoR1", vec![7]),
+            ("second", "PshVPtr", vec![14]), ("copy", "CpyVtoV4", vec![9, 8]), ("clear", "FreeNullV8", vec![4])] {
+            let mut bad = fixture.clone(); replace_same_width(&mut bad, label, op, &words, &[]);
+            assert!(!render(&bad, &refs, 0x52).starts_with("while ("), "operand {label}");
+        }
+        for (label, target) in [("entry", "retry"), ("retry", "predicate"), ("break", "success"), ("inner_back", "merge")] {
+            let mut bad = fixture.clone(); retarget(&mut bad, label, target);
+            assert!(!render(&bad, &refs, 0x52).starts_with("while ("), "edge {label}");
+        }
+        assert!(!render(&fixture, &refs, 0x44).starts_with("while ("));
+        // Allocation numbers are incidental; preserve the destructor's typed slot 4.
+        let mut renamed = fixture.clone();
+        for ins in &mut renamed.instrs {
+            for word in &mut ins.words { if *word > 0 && *word != 4 { *word += 20; } }
+        }
+        let out = render(&renamed, &refs, 0x52);
+        // The shared renderer types only slot 7; renumbering preserves the loop
+        // witness even though the generic condition printer adds integer casts.
+        assert!(out.starts_with("while (") && out.contains("this.bStop"), "{out}");
+        assert!(out.contains("Unavailable(local_32)") && out.contains("continue;"), "{out}");
+    }
+
+    #[test]
     fn guarded_wait_repeats_the_time_test_and_target_check() {
         let mut a = TestAssembler::default();
         a.label("head"); a.op("CMPd", &[4, 12], &[]); a.jump("JNS", "exit");
@@ -14444,7 +14615,7 @@ mod tests {
             .iter_mut()
             .find(|ins| ins.offset_dw == source)
             .expect("source instruction");
-        assert!(matches!(ins.op.name, "JMP" | "JZ" | "JNZ" | "JLowZ"));
+        assert!(matches!(ins.op.name, "JMP" | "JZ" | "JNZ" | "JLowZ" | "JLowNZ"));
         ins.dwords[0] = (target as i64 - source as i64 - 2) as i32 as u32;
     }
 
