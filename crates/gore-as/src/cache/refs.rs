@@ -8922,6 +8922,73 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_inferred_map_query_lifetimes(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"UStore",""),(2,"UObject",""),(3,"AState",""),(4,"TArray",""),(5,"TArray",""),(6,"TMap","Fixture"),
+            (7,"TMap",""),(8,"TMap",""),(9,"FEntry",""),(10,"FName",""),(11,"FGameplayTag",""),(12,"FGameplayTagContainer",""),(13,"FStack","Fixture")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32,ptr);r.type_names.insert(name.into());
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        let scalar=|token|DataType {token,..Default::default()};
+        let obj=|type_info,reference:bool,constant:bool,handle:bool|DataType {token:5,type_info,is_reference:reference,is_object_const:constant,
+            is_object_handle:handle,is_read_only:constant && (reference || !handle),..Default::default()};
+        for (ptr,subtypes) in [(4,vec![obj(9,false,false,false)]),(5,vec![scalar(0x44)]),(6,vec![scalar(0x44),obj(13,false,false,false)]),
+            (7,vec![obj(10,false,false,false),obj(12,false,false,false)]),(8,vec![obj(11,false,false,false),obj(12,false,false,false)])] {r.type_subtypes.insert(ptr,subtypes);}
+        for (ptr,name,owner,constant,ret,args) in [
+            (101,"Get","",false,obj(1,false,false,true),vec![obj(2,false,true,true)]),
+            (103,"$beh0","TArray",false,scalar(0x52),vec![]),
+            (105,"Fill","UStore",true,scalar(0x41),vec![obj(4,true,false,false),obj(3,false,false,true)]),
+            (107,"$beh0","TMap",false,scalar(0x52),vec![]),
+            (109,"opAssign","TMap",false,obj(6,true,false,false),vec![obj(6,true,true,false)]),
+            (111,"$beh2","TMap",false,scalar(0x52),vec![]),
+            (113,"$beh2","TArray",false,scalar(0x52),vec![]),
+            (115,"Query","UStore",true,obj(5,false,false,false),vec![obj(3,false,true,true)]),
+            (117,"$beh0","TMap",false,scalar(0x52),vec![]),
+            (119,"$beh0","TMap",false,scalar(0x52),vec![]),
+            (121,"Num","TArray",true,scalar(0x44),vec![]),
+            (123,"FindOrAdd","TMap",false,obj(13,true,false,false),vec![DataType {token:0x44,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()},obj(13,true,true,false)]),
+            (125,"$beh2","TMap",false,scalar(0x52),vec![]),
+            (127,"$beh2","TMap",false,scalar(0x52),vec![]),
+            (129,"$beh2","TArray",false,scalar(0x52),vec![]),
+            (901,"FStack","FStack",false,scalar(0x52),vec![])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            if !owner.is_empty() {r.func_is_method.insert(ptr);r.func_owner.insert(ptr,owner.into());}
+            if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        r.funcid_to_ptr.insert(901,901);r.script_ctor_owner.insert(901,13);
+        match fault {
+            1=>r.func_ret.get_mut(&101).unwrap().is_reference=true,
+            2=>r.func_params.get_mut(&101).unwrap()[0].is_object_const=false,
+            3=>{r.func_is_method.insert(101);},
+            4=>r.func_params.get_mut(&103).unwrap().push(obj(4,true,true,false)),
+            5=>{r.const_method_ptrs.remove(&105);},
+            6=>r.func_params.get_mut(&105).unwrap()[0].is_object_const=true,
+            7=>r.func_params.get_mut(&105).unwrap()[1].type_info=2,
+            8=>r.func_ret.get_mut(&107).unwrap().token=0x41,
+            9=>r.func_params.get_mut(&109).unwrap()[0].is_read_only=false,
+            10=>r.func_ret.get_mut(&109).unwrap().is_reference=false,
+            11=>{r.const_method_ptrs.insert(111);},
+            12=>r.func_ret.get_mut(&115).unwrap().is_reference=true,
+            13=>r.func_params.get_mut(&115).unwrap()[0].is_object_const=false,
+            14=>{r.func_owner.insert(115,"UObject".into());},
+            15=>r.func_ret.get_mut(&121).unwrap().token=0x51,
+            16=>r.func_params.get_mut(&123).unwrap()[0].is_reference=false,
+            17=>r.func_params.get_mut(&123).unwrap()[1].is_read_only=false,
+            18=>r.func_ret.get_mut(&123).unwrap().is_object_const=true,
+            19=>{r.script_ctor_owner.insert(901,9);},
+            20=>r.func_params.get_mut(&901).unwrap().push(obj(13,true,true,false)),
+            21=>r.type_subtypes.get_mut(&6).unwrap()[0].token=0x4b,
+            22=>r.type_subtypes.get_mut(&5).unwrap()[0].is_read_only=true,
+            23=>r.type_subtypes.get_mut(&6).unwrap()[1].type_info=9,
+            24=>{r.const_method_ptrs.insert(125);},
+            25=>r.type_identity_by_ptr.get_mut(&13).unwrap().module.clear(),
+            26=>r.type_subtypes.get_mut(&7).unwrap()[1].is_object_handle=true,
+            _=>{},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_held_map_integer_reference(fault: u8) -> Self {
         let mut r = Self::default();
         for (ptr, name) in [(11, "TMap"), (12, "FGameplayTag")] {
@@ -8968,6 +9035,179 @@ impl RefResolver {
             17 => {r.type_subtypes.remove(&11);},
             18 => {r.func_is_method.remove(&101);},
             _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_inferred_query_ignore_arrays(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"AResident",""),(2,"ABystander",""),(3,"TArray",""),(4,"TArray",""),(5,"FVector",""),(6,"TSubclassOf",""),
+            (7,"UActorSearch",""),(8,"UClass",""),(9,"UResidentState",""),(10,"TArrayIterator",""),(11,"UPlanner","Fixture"),
+            (12,"UCombatCtx","Fixture"),(13,"UStateBase",""),(14,"UScriptTarget","Fixture"),(15,"UChildPlanner","Fixture"),(16,"UPerception",""),(17,"ANavigable","")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        for (child,base) in [("UChildPlanner","UPlanner"),("UCombatCtx","UScriptTarget"),("UScriptTarget","UStateBase")] {r.class_super.insert(child.into(),base.into());}
+        r.class_fields.insert("UPlanner".into(),HashMap::from([("Context".into(),"UCombatCtx".into()),("Found".into(),"TArray<AResident>".into()),("Maximum".into(),"float".into())]));
+        let key=|id:i64,offset:i64|(id<<1)|(offset<<33)|1;
+        for (id,offset,name) in [(11,16,"Context"),(11,24,"Found"),(11,32,"Maximum"),(10,24,"CanProceed")] {
+            r.prop_by_key.insert(key(id,offset),name.into());r.prop_type_id.insert(key(id,offset),id as i32);
+        }
+        let plain=|token|DataType {token,..Default::default()};
+        let value=|type_info|DataType {token:5,type_info,..Default::default()};
+        let handle=|type_info|DataType {is_object_handle:true,..value(type_info)};
+        let input=|type_info|DataType {is_reference:true,is_object_const:true,is_read_only:true,..value(type_info)};
+        r.type_subtypes.insert(3,vec![handle(1)]);r.type_subtypes.insert(4,vec![handle(2)]);r.type_subtypes.insert(6,vec![handle(2)]);
+        for (ptr,owner,name,constant,ret,args) in [
+            (101,"TArray","$beh0",false,plain(0x52),vec![]),
+            (102,"TArray","opAssign",false,DataType {is_reference:true,..value(3)},vec![input(3)]),
+            (103,"TArray","$beh2",false,plain(0x52),vec![]),
+            (104,"ANavigable","Point",true,value(5),vec![]),
+            (106,"TSubclassOf","$beh0",false,plain(0x52),vec![handle(8)]),
+            (108,"UActorSearch","Find",true,value(4),vec![value(6),input(5),plain(0x50)]),
+            (109,"TArray","Add",false,plain(0x52),vec![DataType {is_object_handle:true,..input(1)}]),
+            (110,"UStateBase","State",true,handle(9),vec![]),
+            (111,"UResidentState","Character",true,handle(1),vec![]),
+            (112,"TArray","Iterator",false,value(10),vec![]),
+            (113,"TArrayIterator","Proceed",false,DataType {is_reference:true,..handle(2)},vec![]),
+            (114,"TArray","Contains",true,plain(0x41),vec![DataType {is_object_handle:true,..input(1)}]),
+            (115,"TArray","$beh2",false,plain(0x52),vec![]),
+            (1201,"UScriptTarget","Interest",true,handle(1),vec![]),
+        ] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);
+            if constant {r.const_method_ptrs.insert(ptr);}r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+        }
+        r.funcid_to_ptr.insert(201,1201);
+        for (ptr,name,ns,ret) in [(105,"StaticClass","AResident",handle(8)),(107,"Get","UActorSearch",handle(7))] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ns.insert(ptr,ns.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,vec![]);
+        }
+        match fault {
+            1=>r.type_subtypes.get_mut(&3).unwrap()[0].is_object_handle=false,
+            2=>r.type_subtypes.get_mut(&4).unwrap()[0].is_object_const=true,
+            3=>r.type_subtypes.get_mut(&6).unwrap()[0].type_info=1,
+            4=>r.func_ret.get_mut(&102).unwrap().is_reference=false,
+            5=>r.func_params.get_mut(&102).unwrap()[0].is_read_only=false,
+            6=>r.func_params.get_mut(&101).unwrap().push(input(3)),
+            7=>{r.const_method_ptrs.insert(103);},
+            8=>r.func_ret.get_mut(&104).unwrap().is_reference=true,
+            9=>{r.func_ns.insert(105,"ABystander".into());},
+            10=>r.func_params.get_mut(&106).unwrap()[0].is_object_handle=false,
+            11=>{r.func_ns.insert(107,"OtherSystem".into());},
+            12=>{r.const_method_ptrs.remove(&108);},
+            13=>r.func_ret.get_mut(&108).unwrap().type_info=3,
+            14=>r.func_params.get_mut(&108).unwrap()[0].is_reference=true,
+            15=>r.func_params.get_mut(&108).unwrap()[1].is_object_const=false,
+            16=>r.func_params.get_mut(&108).unwrap()[2].token=0x51,
+            17=>r.func_params.get_mut(&109).unwrap()[0].is_read_only=false,
+            18=>r.func_ret.get_mut(&110).unwrap().is_object_handle=false,
+            19=>{r.func_owner.insert(111,"OtherState".into());},
+            20=>{r.const_method_ptrs.insert(112);},
+            21=>r.func_ret.get_mut(&113).unwrap().is_read_only=true,
+            22=>{r.const_method_ptrs.remove(&114);},
+            23=>r.func_params.get_mut(&114).unwrap()[0].type_info=2,
+            24=>r.func_ret.get_mut(&115).unwrap().token=0x44,
+            25=>{r.prop_type_id.insert(key(11,24),12);},
+            26=>{r.prop_type_id.insert(key(10,24),11);},
+            27=>{r.class_fields.get_mut("UPlanner").unwrap().insert("Found".into(),"TArray<ABystander>".into());},
+            28=>{r.class_fields.get_mut("UPlanner").unwrap().insert("Context".into(),"Unrelated".into());},
+            29=>{r.class_fields.insert("UChildPlanner".into(),HashMap::from([("Context".into(),"UCombatCtx".into())]));},
+            30=>r.type_identity_by_ptr.get_mut(&3).unwrap().module="Script".into(),
+            31=>r.type_identity_by_ptr.get_mut(&4).unwrap().namespace="Other".into(),
+            32=>{r.func_is_method.remove(&1201);},
+            33=>r.func_ret.get_mut(&1201).unwrap().type_info=2,
+            34=>{r.duplicate_prop_keys.insert(key(11,16));},
+            35=>{r.func_owner.remove(&104);},
+            36=>{r.func_is_method.insert(107);},
+            _=>{}
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_scoped_predicate_named_tag(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"AState",""),(2,"FName",""),(3,"FGameplayTag",""),(4,"FGameplayTagContainer",""),(5,"TSet",""),
+            (6,"FRememberedPerception",""),(7,"FPerceivedAgent",""),(8,"UObject",""),(9,"UController","Fixture"),(10,"UQueryHub","Fixture"),(11,"UBaseAI","")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        let key=|id:i64,offset:i64|(id<<1)|(offset<<33)|1;
+        for (id,offset,name) in [(6,16,"Target"),(6,24,"Labels"),(6,32,"Source"),(7,16,"Marks")] {
+            r.prop_by_key.insert(key(id,offset),name.into());r.prop_type_id.insert(key(id,offset),id as i32);
+        }
+        // These owners are native values. Exercise the real NativeApi field lookup, not script class_fields.
+        let mut fields=vec![("FRememberedPerception","Target","FPerceivedAgent"),("FRememberedPerception","Labels","TArray<FName>"),
+            ("FRememberedPerception","Source","FPerceivedAgent"),("FPerceivedAgent","Marks","FGameplayTagContainer")];
+        if fault==1 {fields[0].2="UObject";}if fault==2 {fields[1].2="TArray<FGameplayTag>";}if fault==3 {fields[2].2="UObject";}
+        if fault==4 {fields[3].2="FGameplayTag";}if fault==5 {fields.remove(1);}
+        if fault!=6 {r.set_native_api(super::binds::NativeApi::from_test_field_types(&fields,&[],None));}
+        let plain=|token|DataType {token,..Default::default()};
+        let value=|type_info|DataType {token:5,type_info,..Default::default()};
+        let handle=|type_info|DataType {is_object_handle:true,..value(type_info)};
+        let input=|type_info|DataType {is_reference:true,is_object_const:true,is_read_only:true,..value(type_info)};
+        for (ptr,owner,name,constant,ret,args) in [
+            (101,"FPerceivedAgent","State",true,handle(1),vec![DataType {is_object_const:true,..handle(8)}]),
+            (102,"UBaseAI","State",true,handle(1),vec![]),
+            (103,"AState","Label",true,value(2),vec![]),
+            (104,"TArray","Contains",true,plain(0x41),vec![input(2)]),
+            (105,"AState","Guild",true,value(3),vec![]),
+            (106,"FGameplayTag","MatchesAny",true,plain(0x41),vec![input(4)]),
+            (107,"FGameplayTag","$beh2",false,plain(0x52),vec![]),
+            (108,"FGameplayTagContainer","$beh0",false,plain(0x52),vec![]),
+            (109,"FGameplayTagContainer","AddTag",false,plain(0x52),vec![input(3)]),
+            (110,"FGameplayTagContainer","Filter",true,value(4),vec![input(4)]),
+            (111,"FGameplayTag","$beh0",false,plain(0x52),vec![input(3)]),
+            (112,"FGameplayTagContainer","IsEmpty",true,plain(0x41),vec![]),
+            (113,"FGameplayTagContainer","Last",true,value(3),vec![]),
+            (114,"FGameplayTag","opAssign",false,DataType {is_reference:true,..value(3)},vec![input(3)]),
+            (115,"FGameplayTag","IsValid",true,plain(0x41),vec![]),
+            (116,"FGameplayTagContainer","$beh2",false,plain(0x52),vec![]),
+            (117,"TSet","$beh2",false,plain(0x52),vec![]),
+            (118,"TSet","Contains",true,plain(0x41),vec![DataType {is_object_handle:true,..input(1)}]),
+            (1201,"UController","Queries",false,handle(10),vec![]),
+            (1202,"UQueryHub","Owners",false,value(5),vec![input(3)]),
+            (1203,"UQueryHub","Roles",false,value(4),vec![input(3)]),
+        ] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);
+            if constant {r.const_method_ptrs.insert(ptr);}r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+        }
+        for (id,ptr) in [(201,1201),(202,1202),(203,1203)] {r.funcid_to_ptr.insert(id,ptr);}
+        for (ptr,name,ns) in [(300,"__WorldContext",""),(301,"Empty","FGameplayTag"),(302,"Area","GameplayTag")] {
+            r.global_by_ptr.insert(ptr,name.into());r.global_ns.insert(ptr,ns.into());
+        }
+        match fault {
+            7=>{r.prop_type_id.insert(key(6,16),7);},
+            8=>{r.prop_type_id.insert(key(7,16),6);},
+            9=>{r.duplicate_prop_keys.insert(key(6,24));},
+            10=>r.type_identity_by_ptr.get_mut(&6).unwrap().namespace="Other".into(),
+            11=>r.type_identity_by_ptr.get_mut(&7).unwrap().module="Script".into(),
+            12=>r.type_identity_by_ptr.get_mut(&3).unwrap().module="Script".into(),
+            13=>r.func_params.get_mut(&101).unwrap()[0].is_object_const=false,
+            14=>r.func_ret.get_mut(&101).unwrap().is_object_const=true,
+            15=>{r.const_method_ptrs.remove(&102);},
+            16=>r.func_params.get_mut(&102).unwrap().push(handle(1)),
+            17=>r.func_ret.get_mut(&103).unwrap().is_reference=true,
+            18=>r.func_params.get_mut(&104).unwrap()[0].is_read_only=false,
+            19=>{r.func_owner.insert(104,"TSet".into());},
+            20=>r.func_ret.get_mut(&105).unwrap().is_reference=true,
+            21=>r.func_params.get_mut(&106).unwrap()[0].type_info=3,
+            22=>{r.const_method_ptrs.insert(107);},
+            23=>r.func_params.get_mut(&108).unwrap().push(input(4)),
+            24=>r.func_ret.get_mut(&109).unwrap().token=0x41,
+            25=>r.func_ret.get_mut(&110).unwrap().is_reference=true,
+            26=>r.func_params.get_mut(&111).unwrap()[0].is_reference=false,
+            27=>{r.const_method_ptrs.remove(&112);},
+            28=>r.func_ret.get_mut(&113).unwrap().is_reference=true,
+            29=>r.func_ret.get_mut(&114).unwrap().is_read_only=true,
+            30=>r.func_ret.get_mut(&115).unwrap().token=0x44,
+            31=>{r.global_ns.insert(301,"Other".into());},
+            32=>{r.global_by_ptr.insert(300,"OtherContext".into());},
+            33=>{r.global_ns.insert(302,"Other".into());},
+            34=>r.func_ret.get_mut(&1201).unwrap().is_object_handle=false,
+            35=>r.func_params.get_mut(&1202).unwrap()[0].is_reference=false,
+            36=>{r.func_owner.insert(1203,"Other".into());},
+            _=>{}
         }
         r
     }
