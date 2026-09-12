@@ -1,9 +1,13 @@
 # NPC-Testpakete: restliche Faelle
 
-Stand 2026-09-11: **Alle fuenf Pakete sind gebaut und geprueft.** Der Kopf-/Barttest
-ist bestanden; die weiteren Spieltests sind noch offen. Von den acht erstellten
+Stand 2026-09-12: **Alle fuenf Pakete sind gebaut und geprueft.** Der Kopf-/Barttest
+ist bestanden. Beim Sprachtest sind Begruessungen, Alltagszeilen von B/C und Bs
+Routine bestaetigt; die ausdrueckliche Neustartbestaetigung steht noch aus.
+Die Rollen- und Quest-Spieltests sind noch offen. Von den acht erstellten
 Startstaenden bleiben **066–072 fuer die offenen Tests in Profil 4**; der erledigte
-Kopf-Start065 und alle bisherigen Ergebnissaves sind ausserhalb des Spiels archiviert.
+Kopf-Start065 und die Ergebnisse bis zum Kopf-/Barttest sind ausserhalb des Spiels
+archiviert. Die neuen Voice-Ergebnisse **003 „npc natuerlich - beobachtet“** und
+**022 „npc natuerlich - start“** bleiben bis zum Abschluss des Sprachtests im Spiel.
 Der bisher getestete Stand ist mit `6848e475` gesichert; `117be93d` korrigiert
 die Save-Bereinigung und `7ac45595` die benoetigte native API-Komposition.
 Siehe [Build-/Paketpruefung](build-checks.json) und
@@ -47,6 +51,12 @@ auch den vollstaendigen 0.1.3-Nachtest. Kopf-/Barttests sind damit fuer diese
 Varianten abgeschlossen; jetzt folgt Paket 2.
 
 ## 2. Natuerliche Stimme
+
+Der [Spielbericht zu 0.1.2](voice/runtime-result-0.1.2.json) bestaetigt B/Cs
+Begruessungen und wiederholte Alltagszeilen sowie Bs Weg mit einer gesprochenen
+Zeile unterwegs. Zweimal sehr kurz sichtbare Sprechblasen bleiben als
+Auffaelligkeit unbekannter Ursache offen. Neustart und ausdruecklicher
+hoerbarer Profilvergleich sind noch nicht separat bestaetigt.
 
 Alle acht START-Saves stehen jetzt auf 12:00 Uhr; der [Tageslichtbericht](daylight-starts.json)
 haelt die Aenderung mit Backups fest. Kopf- und Sprach-Aufbau setzen ebenfalls

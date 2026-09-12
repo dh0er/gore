@@ -32,7 +32,7 @@ Ergebnisse bitte `lehrer-lp-fehlt`, `lehrer-erz-fehlt`, `lehrer-gelernt`,
 | 03, before 04 | On an input without Diving and with fewer than 5 LP **or** 30 ore, learning must fail and charge nothing. For separate LP/ore gates, use inputs satisfying only the other requirement. The fixture never removes existing resources to manufacture this state. |
 | 04 | Optional, once per save: explicitly grants 5 LP and 50 ore for the positive test. It does not reset resources or unlearn skills. |
 | 03 | With Diving unknown and both resources sufficient, learn it: precisely 5 LP and 30 ore deducted. Repeat: already learned must cause no second charge. |
-| 05 | Record current ore/LP, skill and requirement checks. Save, reload, talk again and repeat 05: Diving and changed stock must persist; 01 and 04 must stay unavailable. |
+| 05 | Record current ore/LP, skill and requirement checks. Save, reload, talk again and repeat 05: Diving and changed stock must persist; 01 and 04 must stay unavailable if already used in that save. |
 
 If the input already knows Diving, its positive learning case is inapplicable:
 use an earlier test-save copy without the skill. Never count a skipped gate as
