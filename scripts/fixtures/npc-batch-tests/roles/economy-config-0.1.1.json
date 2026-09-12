@@ -1,0 +1,219 @@
+{
+  "schema": "gore.npc-batch.economy-config-follow-up.v1",
+  "recorded_at": "2026-09-12T20:37:01.186090+00:00",
+  "bundle": "NpcEconomyRolesTest",
+  "version": "0.1.1",
+  "id": "npceconomyrolestest-2b04c8b8",
+  "runtime_verified": false,
+  "purpose": "Test explicit shipped Wilderness/General config keys against an empty trading UI with saved trader stock. Global defaults exist; causal fix not established.",
+  "previous_runtime": "economy-runtime-0.1.0.json",
+  "source_checks": {
+    "assembly_matches_tracked_both_variants": true,
+    "A_source_byte_unchanged": true,
+    "B_only_trader_region_type_and_comment_changed": true,
+    "B_sha256": "8dc8cd6ac4e004eb87e0e512a0fa7c684f79b66643be1f2d07a66e83dff3e1c0"
+  },
+  "build": {
+    "build": "economy-v2",
+    "source_tree_unchanged": true,
+    "authored_modules": [
+      {
+        "module_name": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A",
+        "relative_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
+        "disposition": "added",
+        "source": {
+          "byte_len": 35937,
+          "sha256": "5dd6bb2bbdf3cd6cabf6aa565e3eb727bba51e4884fd64843f08f7d665c10b64"
+        }
+      },
+      {
+        "module_name": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B",
+        "relative_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
+        "disposition": "added",
+        "source": {
+          "byte_len": 28966,
+          "sha256": "8dc8cd6ac4e004eb87e0e512a0fa7c684f79b66643be1f2d07a66e83dff3e1c0"
+        }
+      },
+      {
+        "module_name": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+        "relative_path": "AI/AIAgent/Human/Config/OC_STT_Diego/CharacterDefinition_OC_STT_Diego.as",
+        "disposition": "edited",
+        "source": {
+          "byte_len": 5203,
+          "sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664"
+        }
+      },
+      {
+        "module_name": "LevelScripts.XardasTower_AI",
+        "relative_path": "LevelScripts/XardasTower_AI.as",
+        "disposition": "edited",
+        "source": {
+          "byte_len": 1814,
+          "sha256": "ee74734e29cafb76445abe5000bc662d2c9e79d3cd6b88a989a17f81d42056eb"
+        }
+      }
+    ],
+    "preservation": {
+      "operation": "product module_ranges exact serialized module span comparison",
+      "mini_modules": 4,
+      "full_modules": 7319,
+      "pristine_modules": 7317,
+      "unselected_pristine_modules_byte_identical": 7315,
+      "exact_selected_module_set": true,
+      "diego_bytes_unchanged_from_0_1_11": false,
+      "tower_bytes_unchanged_from_0_1_11": true,
+      "passed": true
+    },
+    "unchanged_Diego_Tower_emission": {
+      "operation": "product PreparedEmit with exact Binds and class defaults enabled",
+      "modules": [
+        {
+          "module": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+          "exactly_unchanged": true,
+          "prior_emitted_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664",
+          "current_emitted_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664"
+        },
+        {
+          "module": "LevelScripts.XardasTower_AI",
+          "exactly_unchanged": true,
+          "prior_emitted_sha256": "3e66b9ead53daaee8c876ddd2559dbdb31c616b3751a390bedf769467ec95e4f",
+          "current_emitted_sha256": "3e66b9ead53daaee8c876ddd2559dbdb31c616b3751a390bedf769467ec95e4f"
+        }
+      ]
+    },
+    "mini_sha256": "9c4f280dc64cb81979ba7b70e58a254ae2848b172e95afe0f3942f66d0c46790",
+    "full_sha256": "98febfba4207f9b276c833da947ff38f4565ca02b53d514ebdb566ac6dd30a59",
+    "generation_receipt_sha256": "3a12b8212667c9a9eee51326d4100cac810e117c467356fcfbdbf5476e8a7471"
+  },
+  "compiled_default_readback": {
+    "method": "Disassemble UTraderConfig_GoreRoleEconomy __InitDefaults and resolve its StaticNames indexes. Plain CLI emit lacks native Binds metadata for these inherited defaults, so source emission alone was insufficient.",
+    "verified_writes": [
+      {
+        "offset": 48,
+        "static_name_index": 23197,
+        "value": "GORE_TEST_A"
+      },
+      {
+        "offset": 56,
+        "static_name_index": 12248,
+        "value": "Wilderness"
+      },
+      {
+        "offset": 64,
+        "static_name_index": 12238,
+        "value": "General"
+      }
+    ],
+    "disassembly_sha256": "16e4b6a28ca1462464646ef69bda90eb822d0e97521749ef508a6535cc7bef5e"
+  },
+  "inspection": {
+    "report_format": 1,
+    "source_kind": "directory",
+    "bundle_format": 1,
+    "mod": {
+      "name": "NpcEconomyRolesTest",
+      "version": "0.1.1",
+      "author": ""
+    },
+    "component_count": 3,
+    "components": [
+      {
+        "type": "loc_patch",
+        "path": "loc/edits.json",
+        "target_count": 42,
+        "footprint_coverage": "exact"
+      },
+      {
+        "type": "voice_archive_patch",
+        "path": "voice",
+        "target_count": 5,
+        "footprint_coverage": "exact"
+      },
+      {
+        "type": "angel_script_patch",
+        "path": "scripts",
+        "target_count": 4,
+        "footprint_coverage": "exact"
+      }
+    ],
+    "file_count": 10,
+    "directory_count": 4,
+    "total_file_bytes": 440007,
+    "manifest_sha256": "21336fdd0f9935f5affb9b98708f0b7ce20f06af801cf8fd468596ca6a0a32ca",
+    "tree_sha256": "614a594b934906793e59f1375c5159df6b92e0df6e0417bc385f93e27686c092",
+    "evidence": {
+      "verified": [
+        "bounded non-link materialization of the selected directory or ZIP",
+        "root manifest format plus every declared component manifest and referenced payload",
+        "portable paths, payload size limits, and supported payload structure where an offline decoder exists",
+        "SHA-256 identity of the exact manifest bytes and complete normalized bundle tree"
+      ],
+      "not_verified": [
+        "compatibility with any particular game installation or game build",
+        "whether named game-side assets, samples, localization ids, or script edit targets exist",
+        "cross-mod conflicts, load order, or deployment readiness",
+        "runtime behavior, visuals, audio playback, dialog flow, or gameplay effect"
+      ]
+    }
+  },
+  "inspection_tool_limit": "Installed v0.3.0 connector rejects the already used four-module mini-manifest pattern. Qualified local CLI accepts the identical bundle; no approval refusal occurred.",
+  "localization_and_voice_payloads_byte_identical_to_0_1_0": true,
+  "cli": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe",
+  "cli_sha256": "28b5d76e1e861476c7882725f056bca7cb65e718550203bd6c6dbd9aa9987fe1",
+  "helper_sha256": "327dc32a1e4959a448ba690706e7eabcf8b4557eb91aedb5623b75d5e614d43a",
+  "preflight": "Dedicated preflight: closed game, one intended entry, no recovery blocker; analyzer no recognized conflicts.",
+  "apply_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe\" mgr apply --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
+  "reset_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe\" mgr reset --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
+  "apply_log_sha256": "8505376ef7c0621f93630160f009f596d8925e7eb34f98e0a0420f765a24275d",
+  "pristine_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+  "status": {
+    "loadout": [
+      {
+        "enabled": true,
+        "id": "npceconomyrolestest-2b04c8b8"
+      }
+    ],
+    "manager_owned": {
+      "additive": {
+        "items": [],
+        "total": 0,
+        "truncated": false
+      },
+      "backups": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Script\\PrecompiledScript_Shipping.Cache.gore-bak",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\Cache\\AlkimiaLocalization_00000000.lcache.gore-bak",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\VoiceOver\\german_new.zip.gore-bak"
+        ],
+        "total": 3,
+        "truncated": false
+      },
+      "live": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Script\\PrecompiledScript_Shipping.Cache",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\Cache\\AlkimiaLocalization_00000000.lcache",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\VoiceOver\\german_new.zip"
+        ],
+        "total": 3,
+        "truncated": false
+      },
+      "recovery": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\gore-mod.deployed.json"
+        ],
+        "total": 1,
+        "truncated": false
+      },
+      "ue4ss": {
+        "items": [],
+        "total": 0,
+        "truncated": false
+      }
+    },
+    "state": "in_sync"
+  },
+  "saves_modified": false,
+  "profile4_and_registry_hashes_unchanged": true,
+  "retest": "Load024 rolle-handel, use02 without reseeding. If empty compare fresh067 with01/02. Only when visible test purchase/sale/cancel and restart; teacher need not repeat."
+}

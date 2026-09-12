@@ -3,21 +3,26 @@
 Stand 2026-09-12: **Alle fuenf Pakete sind gebaut und geprueft.** Der Kopf-/Barttest
 ist bestanden. Beim Sprachtest sind Begruessungen, Alltagszeilen von B/C und Bs
 Routine sowie der vollstaendige Neustart ohne erneuten Aufbau bestaetigt.
-Die Rollen- und Quest-Spieltests sind noch offen. Von den acht erstellten
+Die Lehrerpruefungen einschliesslich Neustart sind bestanden; Handel zeigt
+trotz gespeicherten Bestands eine leere Warenliste. Feldrollen und Quests sind
+noch offen. Von den acht erstellten
 Startstaenden bleiben **067–072 fuer die offenen Tests in Profil 4**.
 Die erledigten Kopf-/Voice-Starts und Ergebnisse sind ausserhalb des Spiels
 archiviert. Zuletzt wurden **003 „npc natuerlich - beobachtet“**, **022 „npc
 natuerlich - start“** und **066 „NPC 02 Voice - START“** aus der Spielliste
 entfernt; siehe [Voice-Archivierung](profile-cleanup-after-voice.json).
+Neue Wirtschaftsergebnisse sind003/022/023/024/025;024 `rolle-handel` bleibt
+der direkte Ausgangspunkt fuer den Handels-Nachtest.
 Der bisher getestete Stand ist mit `6848e475` gesichert; `117be93d` korrigiert
 die Save-Bereinigung und `7ac45595` die benoetigte native API-Komposition.
 Siehe [Build-/Paketpruefung](build-checks.json) und
 [veroeffentlichte Startstaende](start-saves.json).
 
-**Aktiv ist NpcEconomyRolesTest 0.1.0**; Manager-Status `in_sync`.
+**Aktiv ist NpcEconomyRolesTest 0.1.1**; Manager-Status `in_sync`.
 Alle anderen Testpakete und Barttexturen sind deaktiviert. Die aktuelle
-[Aktivierung](roles/economy-deployment.json) verwendet das bereits gepruefte
-Paket ohne neuen Build. Der [Barttest 0.1.3](heads/beard-runtime-0.1.3.json)
+[Aktivierung](roles/economy-config-0.1.1.json) prueft explizite Region/Typ in As
+Haendlerkonfiguration; die Ursache der leeren Anzeige ist noch unbewiesen.
+Der [Barttest 0.1.3](heads/beard-runtime-0.1.3.json)
 und der [Bericht zur Sprach-Aufbaukorrektur](voice/setup-fix.json) bleiben
 dokumentiert. In0.1.1 blieb der Ortswechsel
 von Held und A trotz „04 Bereit“ aus; die Teleports stehen nun vor dem Gespraechsende.
@@ -37,7 +42,7 @@ den unten verlinkten Testnamen neu speichern. Spieltests macht der Benutzer.
 |---|---|---|---|
 | 1 | NpcHeadPaletteTest | 065: NPC 01 Koepfe - START (archiviert) | Bestanden: Gesicht, Haare, Haarfarbe, Bartvarianten, Originale und Neustart |
 | 2 | NpcNaturalVoiceTest | 066: NPC 02 Voice - START (archiviert) | Begruessung/Alltagsstimme B und C, Routine und Neustart bestanden; kurze Sprechblase und hoerbarer Profilvergleich offen |
-| 3 | NpcEconomyRolesTest | 067: Handel - LP fehlt; 068: Lehrer - Erz fehlt; 069: Lehrer - bereit | Kaufen/Verkaufen/Abbrechen, beide Lernvoraussetzungen, Kosten, bereits gelernt, Persistenz |
+| 3 | NpcEconomyRolesTest | 024: rolle-handel fuer Nachtest; 067–069: urspruengliche Starts | Lehrer inkl. Neustart bestanden; Handelsanzeige/Kaufen/Verkaufen/Abbrechen/Persistenz offen |
 | 4 | NpcFieldRolesTest | 070: NPC 04 Rollen - START; 072: NPC 04 Rollen - Kampf bereit | Waffenwahl-Diagnose, Folgen/Warten, Feindschaft/Gilde, Flucht, Niederlage/Tod, Wiederbelebung derselben Figur |
 | 5 | NpcQuestCallbacksTest | 071: NPC 05 Quest - START | Eigenes Journal, zwei automatische Ziele, Abgabe, einmalige Belohnung, Erfolg/Abbruch, Neustart |
 
@@ -73,6 +78,12 @@ Die [Stimmenliste](voice/README.md) trennt Begruessung, selbststaendiges Murmeln
 und Neustart. Sie enthaelt klare Beobachtungsfristen; Stille ist ein Ergebnis.
 
 ## 3. Handel und Lehrer
+
+**Die Lehrerfaelle unten sind bestanden und muessen nicht wiederholt werden.**
+Aktuell nur den [Handels-Nachtest0.1.1](roles/README.md#commerce-follow-up011)
+mit024 `rolle-handel` durchfuehren. Falls er leer bleibt, einmal den frischen
+Aufbau067 vergleichen. Der [0.1.0-Befund](roles/economy-runtime-0.1.0.json)
+trennt vorhandenen Save-Bestand von der fehlgeschlagenen Warenanzeige.
 
 1. 067 laden. Vor Testmitteln oder Handel **03 Lernen** probieren:
    0 LP/50 Erz, daher keine Veraenderung und keine gelernte Faehigkeit.

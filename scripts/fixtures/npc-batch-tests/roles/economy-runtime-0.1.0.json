@@ -1,0 +1,89 @@
+{
+  "schema": "gore.npc-batch.economy-runtime.v1",
+  "date": "2026-09-12",
+  "bundle": "NpcEconomyRolesTest",
+  "version": "0.1.0",
+  "teacher": {
+    "missing_lp_no_charge": true,
+    "missing_ore_no_charge": true,
+    "learn_diving_cost_5_lp_30_ore": true,
+    "already_learned_no_second_charge": true,
+    "full_restart_retains_diving_and_no_second_charge": true,
+    "evidence": "User confirms tests1,2,3 and teacher part of5."
+  },
+  "trading": {
+    "runtime_passed": false,
+    "user_observation": "Choice01 disappears without visible inventory change. Both lists in02 are empty; Hero shows50 ore, A0.",
+    "stock_saved": {
+      "A_is_trader": true,
+      "cheese": 3,
+      "arrows": 10,
+      "ore": 100,
+      "stock_seeded_marker": 1,
+      "ordinary_A_inventory_unchanged": true
+    },
+    "hero_saved_inventory": "Unchanged: quest letter, glossary,50 ore. An empty list of sellable goods before buying is not by itself a Hero inventory defect.",
+    "cause": "Not established. Saved stock exists; investigate runtime trade UI/configuration rather than adding stock again.",
+    "commerce_restart_tested": false
+  },
+  "saves": [
+    {
+      "slot": "G1R-003",
+      "title": "lehrer-lp-fehlt",
+      "file": {
+        "bytes": 1028637,
+        "sha256": "86ae80ce1ede47911f7cf7cbc7d74ef878b56e5224c619e3918767505bf452c4"
+      }
+    },
+    {
+      "slot": "G1R-022",
+      "title": "lehrer-erz-fehlt",
+      "file": {
+        "bytes": 1027670,
+        "sha256": "ba1f0c9ad950765c4583a4efbb94e360a3827f69bde66839c0233a148c7872ed"
+      }
+    },
+    {
+      "slot": "G1R-023",
+      "title": "lehrer-gelernt",
+      "file": {
+        "bytes": 1026172,
+        "sha256": "0ba00f27be245622e541a6ebf5f58b02b81de821529bc354333ecb31fda1b479"
+      }
+    },
+    {
+      "slot": "G1R-024",
+      "title": "rolle-handel",
+      "file": {
+        "bytes": 1027128,
+        "sha256": "f882a8840b6fba9ef93c7836fa2ee556b31764c9afbfc52c71f34b5c6134c07c"
+      }
+    },
+    {
+      "slot": "G1R-025",
+      "title": "lehrer-neustart",
+      "file": {
+        "bytes": 1023322,
+        "sha256": "05dc8e46d1b71d1eeb4436c202ac64f9a2921cd14a5c54abb4ca7e76a792a09e"
+      }
+    }
+  ],
+  "save_inspection": {
+    "operation": "Read-only copied-save comparison of START067 and result024; no live recovery scan or mutation.",
+    "inventory_path": "work/npc-batch-tests/roles/runtime-trader-review-20260912T202043Z/inventory.json",
+    "inventory_sha256": "8f0c1f6a627adcdd6aeaacbe54f5b5ddfbfb4bbd87c3c079781d7fe0de304776",
+    "comparison_path": "work/npc-batch-tests/roles/runtime-trader-review-20260912T202043Z/trader-comparison.json",
+    "comparison_sha256": "d7c512efbe97c3bc7a02d60b0aca075f0c002d9b251fab0beee2705a107ec0d6"
+  },
+  "candidate_0_1_1": {
+    "change": "Explicit m_Region Wilderness and m_Type General in the economy fixture only.",
+    "provenance": [
+      "LevelScripts/TradersData.as UQuestDealerTraderConfig uses both exact keys.",
+      "LevelScripts/WorldDefinition.as already declares Wilderness/General defaults.",
+      "Items/GenericItems/TradersGeneric.as UDemoHunterTraderConfig omits m_Type, so missing metadata is not a proven cause."
+    ],
+    "teacher_and_menu_source_unchanged": true,
+    "stock_original_modules_unchanged": true,
+    "runtime_verified": false
+  }
+}

@@ -74,9 +74,12 @@
         {
           "source": "roles/economy/GORE_TEST_B.as",
           "module_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
-          "sha256": "69c4c1bb77c686b96b82515f0628f76422dc7b52b1a564619408b86316ff4193"
+          "sha256": "8dc8cd6ac4e004eb87e0e512a0fa7c684f79b66643be1f2d07a66e83dff3e1c0"
         }
-      ]
+      ],
+      "bundle_version": "0.1.1",
+      "cli_sha256": "28b5d76e1e861476c7882725f056bca7cb65e718550203bd6c6dbd9aa9987fe1",
+      "native_api_snapshot_sha256": "e1c3b72c4641b9e0fa5df8ca8d67b91266f13ab68ebae94a30a40dbf6c1a5c78"
     },
     "roles/field": {
       "bundle_name": "NpcFieldRolesTest",

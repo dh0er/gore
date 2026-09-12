@@ -18,7 +18,7 @@ role sources are also tracked, so that regeneration is optional.
   and sibling `Binds.Cache` SHA256
   `aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2`.
 - A current GORE CLI with its matching qualified standalone compiler package.
-  For the current head/beard and voice setup correction use local `work/npc-continuation/runtime/gore-beard-v2.exe`,
+  For the current head/beard, voice setup and economy configuration follow-ups use local `work/npc-continuation/runtime/gore-beard-v2.exe`,
   SHA256 `28b5d76e1e861476c7882725f056bca7cb65e718550203bd6c6dbd9aa9987fe1`.
   It includes the head palette and quest availability bindings plus five narrowly
   qualified texture/path/material functions and UTexture, plus the fresh MID factory,
@@ -104,6 +104,16 @@ remain unchanged. Build the voice spec as version0.1.2 with its new mini-cache.
 `voice/setup-fix.json` records the source/build/payload and installation checks;
 `voice/runtime-setup-0.1.1.json` records the failed visible setup. Its retest
 starts from the existing untouched START066.
+
+Economy0.1.1 uses frozen economy-v1 plus the tracked economy A/B overlays through
+the same Core caller. A is byte-identical; only the trader config in B explicitly
+sets the shipped Wilderness/General keys. This is a runtime follow-up candidate
+for an empty trading UI despite saved stock, not a proven native fallback defect.
+Build the economy spec as version0.1.1 with its new four-module mini-cache;
+localization and voice payloads remain byte-identical. No new native API binding
+or product CLI change is required. `roles/economy-config-0.1.1.json` records the
+build/readback and activation; `roles/economy-runtime-0.1.0.json` records the
+passed teacher cases and failed trading display.
 
 The quest build exposed a core defect: after adding the first module, the running
 cache has a different SHA and no longer authenticates the sealed native API

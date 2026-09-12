@@ -165,14 +165,22 @@ the retained source date may sort it beside54 rather than at the top.
 
 ## 4. NPC roles — economy/teacher test active
 
-`NpcEconomyRolesTest 0.1.0` is active after the natural-voice restart passed.
+`NpcEconomyRolesTest 0.1.1` is active after the natural-voice restart passed.
 Profile 4 starts067/068/069 isolate missing LP, missing ore and successful
-learning. Runtime buying/selling and teacher results remain pending; see the
+learning. The user confirms all teacher cases, including exact cost, duplicate
+prevention and full restart. Trading failed: result024 contains the requested
+stock, but the UI shows no goods or trader ore. See the
+[runtime report](../../scripts/fixtures/npc-batch-tests/roles/economy-runtime-0.1.0.json),
 [role checklist](../../scripts/fixtures/npc-batch-tests/roles/README.md) and
-[deployment](../../scripts/fixtures/npc-batch-tests/roles/economy-deployment.json).
+[configuration follow-up](../../scripts/fixtures/npc-batch-tests/roles/economy-config-0.1.1.json).
+The follow-up explicitly supplies the shipped Wilderness/General config keys.
+Vanilla has matching global defaults; whether config fallback causes the empty
+list is still unproven. Saved stock creation itself passed, so repeated grants
+or speculative changes to the original trading logic would not be justified.
 
 - [ ] Trader with actual stock and working buying/selling.
-- [ ] Teacher with requirements, cost and persistent learned result.
+- [x] Teacher with separate LP/ore requirements, exact cost, no duplicate charge
+  and persistent learned result after full restart.
 - [ ] Companion/following behavior, including stopping and resuming.
 - [ ] Combat, hostility/faction reactions and fleeing.
 - [ ] Investigate B drawing a bow next to the Hero and sometimes switching to a
