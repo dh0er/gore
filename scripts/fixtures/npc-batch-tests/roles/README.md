@@ -8,18 +8,51 @@ and source hashes. See the parent BUILD.md for compilation and packaging.
 Both retain every old A class, hide its 29 previous choices, and append the new
 menu to A. B's complete original source is an exact prefix; its equipment,
 personality, AI mapping and existing fields are unchanged. Build and inspection
-results are recorded in the parent batch; game results remain pending. Use the
+results are recorded in the parent batch; runtime results are recorded below. Use the
 prepared starts below with A and B already present. Reload the same clean input
 between combat cases.
 
 ## Economy / teacher
 
-Active as `NpcEconomyRolesTest 0.1.0` since2026-09-12; Manager reports `in_sync`.
-The [deployment report](economy-deployment.json) records the existing verified
-bundle. No source rebuild was needed. Natural-voice testing has finished its
-restart check, and the completed Voice saves are archived outside the game.
+Active as `NpcEconomyRolesTest 0.1.1` since2026-09-12; Manager reports `in_sync`.
+The [configuration follow-up](economy-config-0.1.1.json) records the focused
+rebuild. The [0.1.0 deployment report](economy-deployment.json) remains historical.
+Natural-voice testing has finished its restart check, and the completed Voice
+saves are archived outside the game.
 
 Talk to A. This test uses genuine trader inventory and the stock learning helper.
+
+Runtime2026-09-12: the user confirms all teacher cases and the full-restart
+recheck. They do not need repeating for the commerce follow-up. Trading0.1.0
+failed visually: both goods lists were empty, Hero showed50 ore and A0.
+Save024 `rolle-handel` nevertheless contains A's trader flag,3 cheese,10 arrows,
+100 trader ore and the one-time stock marker. Choice01 did populate the saved
+trader compartment; it does not add goods to the Hero. The Hero owns only the
+quest letter, glossary and50 ore, so an initially empty sellable-goods list is
+not itself a defect. See the [runtime result](economy-runtime-0.1.0.json).
+
+### Commerce follow-up0.1.1
+
+Only the trader config now explicitly sets the shipped `Wilderness`/`General`
+keys. Those are also global vanilla defaults, and a vanilla trader omits its
+type, so this is a targeted candidate rather than an established cause/fix.
+The CLI generator and vanilla trade logic remain unchanged until evidence
+justifies changing them. The teacher/menu source is byte-identical to0.1.0.
+
+1. Start the game and load **024 `rolle-handel`** in Profile4. Talk to A and
+   choose02 directly. Choice01 remains absent because the stock is already saved.
+   Expect3 cheese,10 arrows and100 trader ore; Hero still has50 ore.
+2. If A's side is still empty, load untouched067 and use01 then02 once. Report
+   whether this fresh setup differs. If both inputs fail, stop the trade test;
+   do not repeat the teacher cases or manufacture more stock.
+3. If goods appear, buy1 cheese, sell it back, and compare the shown prices
+   with ore/inventory changes. Prepare another transaction and cancel before
+   confirming it: no transfer. Hero's initial empty list should gain the bought
+   cheese. End the trade, choose05 and save `handel-konfig`.
+4. Fully quit/restart, reload `handel-konfig`, check retained stock/ore and01
+   remaining unavailable. Choose05 and save `handel-konfig-neustart`.
+
+### Original full checklist (teacher already passed)
 
 Profil 4: **067 „NPC 03 Handel - LP fehlt“** (0 LP/50 Erz),
 **068 „NPC 03 Lehrer - Erz fehlt“** (5 LP/0 Erz),

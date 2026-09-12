@@ -3,8 +3,10 @@
 class UTraderConfig_GoreRoleEconomy : UTraderConfigBase
 {
     default m_UniqueName = n"GORE_TEST_A";
-    // Existing base/default region and type; stock is deliberately menu-seeded
-    // so this fixture also works on an already-started test save.
+    // Explicit shipped lookup keys (LevelScripts/TradersData.as).
+    // This isolates config fallback from the already verified saved stock.
+    default m_Region = n"Wilderness";
+    default m_Type = n"General";
 }
 
 void GoreRoleEconomySnapshot(AGothicCharacterState Teacher, AGothicCharacterState Hero)
