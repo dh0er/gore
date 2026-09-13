@@ -1,12 +1,13 @@
 # NPC-Testpakete: restliche Faelle
 
-Stand 2026-09-12: **Alle fuenf Pakete sind gebaut und geprueft.** Der Kopf-/Barttest
+Stand 2026-09-13: **Alle fuenf Pakete sind gebaut und geprueft.** Der Kopf-/Barttest
 ist bestanden. Beim Sprachtest sind Begruessungen, Alltagszeilen von B/C und Bs
 Routine sowie der vollstaendige Neustart ohne erneuten Aufbau bestaetigt.
 Die Lehrerpruefungen einschliesslich Neustart sowie Kaufen/Verkaufen/Abbrechen
 und die Bestands-Persistenz sind bestanden. Die doppelte Vergabe wurde mit dem
 nativen Anfangsbestand behoben; beide Ladepruefungen in0.1.3 sind bestaetigt.
-Feldrollen sind jetzt aktiv, Quests folgen danach. In Profil4 bleiben **070,071,072**.
+Die Feldrollen einschliesslich Flucht und Wiederbelebung sind bestanden.
+Als Naechstes folgt das Questpaket. In Profil4 bleibt **071**.
 Die erledigten Kopf-/Voice-Starts und Ergebnisse sind ausserhalb des Spiels
 archiviert. Zuletzt wurden **003 „npc natuerlich - beobachtet“**, **022 „npc
 natuerlich - start“** und **066 „NPC 02 Voice - START“** aus der Spielliste
@@ -20,10 +21,13 @@ die Save-Bereinigung und `7ac45595` die benoetigte native API-Komposition.
 Siehe [Build-/Paketpruefung](build-checks.json) und
 [veroeffentlichte Startstaende](start-saves.json).
 
-**Aktiv ist NpcFieldRolesTest 0.1.0**; Manager-Status `in_sync`.
+**Aktiv ist NpcQuestCallbacksTest 0.1.0**; Manager-Status `in_sync`.
 Alle anderen Testpakete und Barttexturen sind deaktiviert. Die aktuelle
-[Aktivierung](roles/field-deployment.json) verwendet den unveraenderten,
-bereits geprueften Rollen-Build. **[Deutsche Testliste fuer Paket4](roles/FIELD-TEST.md)**.
+[Aktivierung](quest/deployment.json) verwendet den unveraenderten,
+bereits geprueften Quest-Build. **[Deutsche Testliste fuer Paket5](quest/FIELD-TEST.md)**.
+Der [Fluchtabschluss](roles/field-runtime-0.1.3.json) dokumentiert den erfolgreichen
+Nachtest und die gespeicherten Bewegungswerte. Die Feld-Starts070/072 und der
+letzte Ergebnisstand sind [extern archiviert](profile-cleanup-after-field-complete.json).
 Der [Wirtschaftsabschluss](roles/economy-runtime-0.1.3.json) bestaetigt den
 nativen Anfangsbestand ohne doppelte Vergabe. Die spaetere Bestandsvergabe per
 eigenem Ereignis bleibt separat ungeprueft; ihr0.1.2-Ladefehler ist dokumentiert.
@@ -48,7 +52,7 @@ den unten verlinkten Testnamen neu speichern. Spieltests macht der Benutzer.
 | 1 | NpcHeadPaletteTest | 065: NPC 01 Koepfe - START (archiviert) | Bestanden: Gesicht, Haare, Haarfarbe, Bartvarianten, Originale und Neustart |
 | 2 | NpcNaturalVoiceTest | 066: NPC 02 Voice - START (archiviert) | Begruessung/Alltagsstimme B und C, Routine und Neustart bestanden; kurze Sprechblase und hoerbarer Profilvergleich offen |
 | 3 | NpcEconomyRolesTest | Starts/Ergebnisse archiviert | Lehrer, Handel und Bestand nach wiederholtem Laden bestanden |
-| 4 | NpcFieldRolesTest | 070: NPC 04 Rollen - START; 072: NPC 04 Rollen - Kampf bereit | Waffenwahl-Diagnose, Folgen/Warten, Feindschaft/Gilde, Flucht, Niederlage/Tod, Wiederbelebung derselben Figur |
+| 4 | NpcFieldRolesTest | Starts070/072 und Ergebnisse archiviert | Folgen/Warten, Feindschaft/Gilde, Flucht, Niederlage/Tod und Wiederbelebung bestanden; Waffenwahl-Ursache offen |
 | 5 | NpcQuestCallbacksTest | 071: NPC 05 Quest - START | Eigenes Journal, zwei automatische Ziele, Abgabe, einmalige Belohnung, Erfolg/Abbruch, Neustart |
 
 ## 1. Koepfe
@@ -103,7 +107,8 @@ Weitere Inventar- und Neustartpruefungen: [Rollenliste](roles/README.md).
 
 ## 4. Begleiter, Kampf und Lebenszyklus
 
-**Jetzt dieses Paket testen: [vollstaendige deutsche Anleitung](roles/FIELD-TEST.md).**
+**Abgeschlossen.** Die folgenden Angaben sind Referenz fuer die archivierten
+Feldtests; [Anleitung und Abschluss](roles/FIELD-TEST.md).
 
 070 beginnt auf der bereits erprobten freien Flaeche vor dem Alten Lager;
 B steht vor dem Helden. A bleibt am Tor, etwa 30 Meter entfernt. Fuer die
@@ -123,17 +128,22 @@ andere Figur eingreift, dies getrennt notieren.
 Die [Rollenliste](roles/README.md) beschreibt 20–31 und die getrennten Zweige.
 Zwischen Feindschaft, Gilde, Flucht und Tod jeweils den sauberen Start neu laden.
 Wiederbelebung ist eine explizit gewaehlte native Tagesablauf-Regel nach Tod,
-kein automatisch nachgespawnter zweiter B. Ob die Regel bei diesem menschlichen
-NPC greift, ist genau der offene Test.
+kein automatisch nachgespawnter zweiter B. Der Benutzer hat Wiederbelebung und
+den Flucht-Nachtest bestaetigt; die Ursache der Waffenwahl bleibt separat offen.
 
 ## 5. Quest
 
 071 laden, bei A **Q1 Auftrag: Proviant fuer die Wache** waehlen.
-Die [Questliste](quest/README.md) prueft Q1–Q7 einschliesslich Neustarts im
+Die [deutsche Questliste](quest/FIELD-TEST.md) prueft Q1–Q7 einschliesslich Neustarts im
 Zwischenstand sowie auf Erfolgs- und Abbruchpfad. Die Belohnung sind einmalig
 25 Erz fuer zwei Kaese. Q3 liefert den Testvorrat genau einmal.
 
 ## Profil 4 und Rueckmeldungen
+
+Aktuell bleibt **nur071** fuer Paket5 im Spiel. Die abgeschlossenen
+Feld-Starts070/072 und `rolle-flucht-v4` sind extern gesichert:
+[letzte Bereinigung](profile-cleanup-after-field-complete.json).
+Die folgenden Zahlen beschreiben fruehere Bereinigungen.
 
 Nach dem bestandenen Kopf-/Barttest wurden auf Wunsch des Benutzers weitere
 **18 Saves aus Profil 4 archiviert**. Im Spiel bleiben nur die **sieben kommenden

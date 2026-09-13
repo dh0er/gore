@@ -1,6 +1,17 @@
 # Paket4: Begleiter, Kampf und Lebenszyklus
 
-## Aktueller Nachtest — 0.1.3
+## Ergebnis — 0.1.3 bestanden
+
+Der Benutzer bestaetigt den Flucht-Nachtest. Der Save protokolliert Eintritt1,
+41 Bewegungsversuche und rund54 Meter kumulierte Bewegung; danach ist die
+Warteroutine gespeichert. [Ergebnisbericht](field-runtime-0.1.3.json).
+Flucht, Folgen/Warten, Kampf-/Gildenfaelle, Tod und Wiederbelebung muessen jetzt
+nicht wiederholt werden. Die Ursache der auffaelligen Waffenwahl bleibt separat
+offen. Die Feld-Starts und Ergebnisse sind extern archiviert.
+
+**Als Naechstes: [Paket 5 — Quest](../quest/FIELD-TEST.md), Start071.**
+
+## Abgeschlossener Nachtest — 0.1.3 (Referenz)
 
 Folgen/Warten, Niederlage/Erholung, Feindschaft, Gildenwechsel und Tod/Laden haben
 funktioniert. Auch die Wiederbelebung mit0.1.1 ist jetzt vom Benutzer bestaetigt.
@@ -9,7 +20,7 @@ Der vorherige Versuch hat den Fluchtzustand nicht bis zur ersten Diagnosemarke
 ausgefuehrt.0.1.3 erlaubt wie die funktionierenden Tagesablaeufe simulierte
 Ablaufschritte; ob das den Eintritt behebt, klaert dieser Nachtest.
 Die alten Ergebnisse und der nicht mehr benoetigte tote Ausgangsstand030 sind
-extern archiviert. Profil4 enthaelt noch070–072.
+extern archiviert. Die folgenden Schritte dokumentieren den abgeschlossenen Versuch.
 
 1. **072 „NPC 04 Rollen - Kampf bereit“ frisch laden.** Bei A **26** waehlen,
    dann sofort unbewaffnet zu B gehen, bis du weniger als zehn Meter entfernt bist.

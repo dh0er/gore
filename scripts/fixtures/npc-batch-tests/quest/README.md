@@ -1,5 +1,7 @@
 # Quest: Proviant fuer die Wache
 
+**Aktuelle deutsche Spielanleitung: [Paket 5 testen](FIELD-TEST.md).**
+
 Focused game test for the callback paths that the basic session quest did not
 cover. The user performs the game campaign. Compilation and bundle inspection
 do not establish that these callbacks execute in the game.
