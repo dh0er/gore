@@ -695,29 +695,54 @@ class UAIState_GoreRoleFlee : UGothicCharacterSimulateableAIState
     UFUNCTION(BlueprintOverride)
     void DoTask()
     {
-        if (this.AI == nullptr || !IsValid(this.GetSelf())) return;
-        AGothicCharacter Target = this.GetOther();
-        if (!IsValid(Target)) return;
+        AGothicNPCState Subject = FCharacterUniqueName(n"GORE_TEST_B").GetNPCState();
+        if (Subject == nullptr) return;
+        GoreRoleNote(Subject, n"gore_role_flee_entered", 1.0f);
+        if (this.AI == nullptr || !IsValid(this.GetSelf()))
+        {
+            GoreRoleNote(Subject, n"gore_role_flee_exit", -1.0f);
+            return;
+        }
+        AGothicCharacter Target = Cast<AGothicCharacter>(Gameplay::GetPlayerCharacter(0));
+        if (!IsValid(Target))
+        {
+            GoreRoleNote(Subject, n"gore_role_flee_exit", -2.0f);
+            return;
+        }
         float StopAt = this.GetWorld().GetTimeSeconds() + 60.0;
         ::UndrawWeapon(this.AI);
         this.SetWalkSpeed(EWalkSpeed(1));
         while (!this.bShouldExitState && this.GetWorld().GetTimeSeconds() < StopAt
             && IsValid(Target) && !::IsDead(Target) && !::IsDefeated(Target))
         {
-            if (Target.GetDistanceTo(this.GetSelf()) < 1000.0)
+            float Distance = Target.GetDistanceTo(this.GetSelf());
+            GoreRoleNote(Subject, n"gore_role_flee_distance", float32(Distance));
+            if (Distance < 1000.0)
             {
                 FVector Away = (this.GetSelf().GetFeetLocation() - Target.GetFeetLocation()).GetSafeNormal2D(0.00000001, FVector::ZeroVector);
-                ::GoIntoDirection(this.AI, Away, 1500.0, -1.0, 5.0, 150.0);
+                FVector Start = this.GetSelf().GetFeetLocation();
+                GoreRoleNote(Subject, n"gore_role_flee_attempts", GoreRoleRead(Subject, n"gore_role_flee_attempts") + 1.0f);
+                ::GotoPosition(this.AI, Start + Away * 500.0, 75.0, 5.0);
+                GoreRoleNote(Subject, n"gore_role_flee_moved_cm", GoreRoleRead(Subject, n"gore_role_flee_moved_cm") + float32(Start.Distance(this.GetSelf().GetFeetLocation())));
                 if (this.bShouldExitState) return;
             }
             this.WaitSeconds(0.25f);
         }
-        if (!this.bShouldExitState) this.AI.SwitchToDailyRoutine();
+        GoreRoleNote(Subject, n"gore_role_flee_exit", this.bShouldExitState ? 2.0f : 1.0f);
+        if (!this.bShouldExitState) ::ExchangeDailyRoutineToClass(Subject, UDailyRoutine_GoreRoleWait);
     }
 }
 
 // Only this routine permits same-identity revival. Ordinary role wait does not.
 // Executing a defeated NPC records Character.Defeated.Kill, not Conflict.Killed.
+class UDailyRoutine_GoreRoleFlee : UAIState_DailyRoutine_Human
+{
+    default ScheduleTimeOffsetMinutesMin = 0.0f;
+    default ScheduleTimeOffsetMinutesMax = 0.0f;
+    default TeleportToCurrentTaskWhen = EDailyRoutineTeleportMode::Never;
+    default Schedule(0, 0, UAIState_GoreRoleFlee(), Location::Anywhere, 1000.0f, TSubclassOf<UNavArea>(nullptr), nullptr);
+}
+
 class UDailyRoutine_GoreRoleRevive : UAIState_DailyRoutine_Human
 {
     default Schedule(0, 0, UAIState_Stand(), Location::Anywhere, 1000.0f, TSubclassOf<UNavArea>(nullptr), nullptr);

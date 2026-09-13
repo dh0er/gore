@@ -163,9 +163,11 @@ duplicated public metadata and central slot registration were corrected, and61
 was repaired with backups on2026-09-10. The subsequent game test confirms loading;
 the retained source date may sort it beside54 rather than at the top.
 
-## 4. NPC roles — fleeing and revival retest
+## 4. NPC roles — fleeing retest
 
-`NpcFieldRolesTest 0.1.0` was tested on2026-09-13; only fleeing and revival failed.
+`NpcFieldRolesTest 0.1.0` was tested on2026-09-13; fleeing and revival failed.
+The0.1.1 retest confirms revival, while B still does not flee.0.1.2 targets only
+flight; [latest report](../../scripts/fixtures/npc-batch-tests/roles/field-runtime-0.1.1.json).
 See the [save-backed results](../../scripts/fixtures/npc-batch-tests/roles/field-runtime-0.1.0.json)
 and [targeted field retest](../../scripts/fixtures/npc-batch-tests/roles/FIELD-TEST.md).
 The completed economy/teacher starts067/068/069 isolate missing LP, missing ore and successful
@@ -194,7 +196,9 @@ The earlier NPC-container readback was not shop-stock proof.
 - [x] Training defeat/recovery, hostility until defeat and saved faction roundtrip.
 - [ ] Fleeing from Hero:0.1.0 attacked. Retest an explicit authored retreat with
   Hero selected and native navigation, bypassing conditional fight assessment
-  and same-species filtering.
+  and same-species filtering.0.1.1 stopped attacking but did not move;0.1.2 uses
+  the proven routine entry path, explicit player target and native pathfinding,
+  with a few saved diagnostic values. Its exact earlier failure cause remains open.
 - [ ] Investigate B drawing a bow next to the Hero and sometimes switching to a
   sword before firing. Archer personality and both usable weapons are confirmed;
   the runtime cause remains open. See the
@@ -207,9 +211,11 @@ The earlier NPC-container readback was not shop-stock proof.
   The2026-09-13 trace captures warning sword at97cm but no combat-phase sample;
   it does not resolve the bow cause.
 - [x] Death/defeat and persistence of death on reload.
-- [ ] Explicit same-NPC revival:0.1.0 stayed dead despite82.7 game minutes since
-  execution. Its filter missed the actual Character.Defeated.Kill death memory.
-  Corrected routine/timer behavior still requires a runtime retest.
+- [x] Explicit same-NPC revival:0.1.0 stayed dead despite82.7 game minutes since
+  execution. Adding the actual Character.Defeated.Kill death memory to its
+  filter fixed the user's0.1.1 runtime test. No separate post-revival save
+  readback was available in that follow-up; do not extend this to arbitrary
+  death types, all streaming conditions or unseen reload cases.
 
 These are focused role tests still to perform, not claims that the corresponding
 engine features or script paths are absent. `npc new --trader` currently creates

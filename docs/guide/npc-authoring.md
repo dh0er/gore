@@ -691,6 +691,17 @@ The registered `SubscribeToReviveClockEventIfNeeded` method has no exact native
 reference in this pristine cache, so selective composition rejects an explicit
 call. The corrected fixture keeps the existing routine-exchange path and fixes
 the death filter; it does not bypass the native-membership guard.
+The user subsequently confirmed that revival works with0.1.1. This qualifies
+the tested execution-save workflow; other death types and arbitrary streaming
+conditions still need their own evidence. No new post-revival save was read back.
+
+The0.1.1 authored retreat stopped attacking but did not move. Discarded
+`FAbilityTaskExecutor` temporaries are not by themselves a bug: the shipped
+walking and successfully tested reading/drinking code use the same destructor
+execution pattern.0.1.2 instead uses the proven routine entry path, resolves
+the player explicitly and sends nearby retreat goals through `GotoPosition`.
+Saved entry, distance, attempt and movement values will distinguish another
+failed entry from a blocked path. This candidate still needs the game test.
 See the [focused retry](../../scripts/fixtures/npc-batch-tests/roles/FIELD-TEST.md).
 
 ### Remaining limits

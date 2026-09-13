@@ -976,16 +976,15 @@ class UChoiceGoreRoleFlee : UTopic_GoreRoleControl
     {
         UGameplayAbility_CharacterAI_Gothic AI = Cast<UGameplayAbility_CharacterAI_Gothic>(Subject().GetAI());
         if (AI == nullptr || Hero() == nullptr || Hero().GetCharacter() == nullptr) return;
-        UCharacterAIState Flee = Cast<UCharacterAIState>(UAngelscriptAbilityTask::CreateAbilityTask(UAIState_GoreRoleFlee, AI, NAME_None, nullptr));
-        if (Flee == nullptr) return;
         if (GoreRoleRead(Subject(), n"gore_role_flee_override") == 0.0f)
             GoreRoleNote(Subject(), n"gore_role_old_flee_mode", float32(int(AI.ModeOfFleeOnUnfavorableCombat)));
-        Flee.SetOther(Hero().GetCharacter());
-        AI.SetCharacterOfInterest(Hero().GetCharacter());
-        if (IsValid(AI.GetCurrentState()) && !AI.GetCurrentState().IsA(UAIState_PerceptionResponse))
-            AI.GetCurrentState().EndTaskAsCancelled();
-        AI.SwitchAIStateImmediately(Flee, nullptr);
+        GoreRoleNote(Subject(), n"gore_role_flee_entered", 0.0f);
+        GoreRoleNote(Subject(), n"gore_role_flee_attempts", 0.0f);
+        GoreRoleNote(Subject(), n"gore_role_flee_moved_cm", 0.0f);
+        GoreRoleNote(Subject(), n"gore_role_flee_distance", -1.0f);
+        GoreRoleNote(Subject(), n"gore_role_flee_exit", 0.0f);
         GoreRoleNote(Subject(), n"gore_role_flee_override", 1.0f);
+        ::ExchangeDailyRoutineToClass(Subject(), UDailyRoutine_GoreRoleFlee);
         this.EndConversation();
     }
 }
@@ -1003,11 +1002,8 @@ class UChoiceGoreRoleFleeRestore : UTopic_GoreRoleControl
         UGameplayAbility_CharacterAI_Gothic AI = Cast<UGameplayAbility_CharacterAI_Gothic>(Subject().GetAI());
         if (AI == nullptr) return;
         AI.ModeOfFleeOnUnfavorableCombat = EFleeOnUnfavorableCombatMode(int(GoreRoleRead(Subject(), n"gore_role_old_flee_mode")));
-        if (AI.IsInState(UAIState_GoreRoleFlee))
-        {
-            AI.SetCharacterOfInterest(nullptr);
-            AI.SwitchToDailyRoutine();
-        }
+        GoreRoleNote(Subject(), n"gore_role_flee_exit", 2.0f);
+        ::ExchangeDailyRoutineToClass(Subject(), UDailyRoutine_GoreRoleWait);
         GoreRoleNote(Subject(), n"gore_role_flee_override", 0.0f);
         this.EndConversation();
     }
