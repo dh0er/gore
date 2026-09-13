@@ -163,9 +163,11 @@ duplicated public metadata and central slot registration were corrected, and61
 was repaired with backups on2026-09-10. The subsequent game test confirms loading;
 the retained source date may sort it beside54 rather than at the top.
 
-## 4. NPC roles — field test active
+## 4. NPC roles — fleeing and revival retest
 
-`NpcFieldRolesTest 0.1.0` is active; [field checklist](../../scripts/fixtures/npc-batch-tests/roles/FIELD-TEST.md).
+`NpcFieldRolesTest 0.1.0` was tested on2026-09-13; only fleeing and revival failed.
+See the [save-backed results](../../scripts/fixtures/npc-batch-tests/roles/field-runtime-0.1.0.json)
+and [targeted field retest](../../scripts/fixtures/npc-batch-tests/roles/FIELD-TEST.md).
 The completed economy/teacher starts067/068/069 isolate missing LP, missing ore and successful
 learning. The user confirms all teacher cases, including exact cost, duplicate
 prevention and full restart. Trading0.1.0 and0.1.1 failed: result024 contains stock
@@ -188,8 +190,11 @@ The earlier NPC-container readback was not shop-stock proof.
 - [ ] Qualify persistent late stock-event grants;0.1.2 duplicated a batch on first reload despite a retained event ledger.
 - [x] Teacher with separate LP/ore requirements, exact cost, no duplicate charge
   and persistent learned result after full restart.
-- [ ] Companion/following behavior, including stopping and resuming.
-- [ ] Combat, hostility/faction reactions and fleeing.
+- [x] Companion/following behavior, including stopping, resuming and reload.
+- [x] Training defeat/recovery, hostility until defeat and saved faction roundtrip.
+- [ ] Fleeing from Hero:0.1.0 attacked. Retest an explicit authored retreat with
+  Hero selected and native navigation, bypassing conditional fight assessment
+  and same-species filtering.
 - [ ] Investigate B drawing a bow next to the Hero and sometimes switching to a
   sword before firing. Archer personality and both usable weapons are confirmed;
   the runtime cause remains open. See the
@@ -199,7 +204,12 @@ The earlier NPC-container readback was not shop-stock proof.
   Weapons/combat AI are retained. The user reproduced it on2026-09-11: B draws
   the sword during the warning, then switches to his bow when combat starts.
   The hut is not required to reproduce it; runtime scoring and attribution remain open.
-- [ ] Death/defeat and any explicitly configured respawn behavior.
+  The2026-09-13 trace captures warning sword at97cm but no combat-phase sample;
+  it does not resolve the bow cause.
+- [x] Death/defeat and persistence of death on reload.
+- [ ] Explicit same-NPC revival:0.1.0 stayed dead despite82.7 game minutes since
+  execution. Its filter missed the actual Character.Defeated.Kill death memory.
+  Corrected routine/timer behavior still requires a runtime retest.
 
 These are focused role tests still to perform, not claims that the corresponding
 engine features or script paths are absent. `npc new --trader` currently creates

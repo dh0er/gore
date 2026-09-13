@@ -1,0 +1,155 @@
+{
+  "schema": "gore.npc-batch.field-fix.v1",
+  "recorded_at": "2026-09-13T10:28:08.311821+00:00",
+  "bundle": "NpcFieldRolesTest",
+  "version": "0.1.1",
+  "manager_id": "npcfieldrolestest-04eca4ae",
+  "bundle_path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\packages-field-fix\\NpcFieldRolesTest",
+  "runtime_verified": false,
+  "prior_runtime": "field-runtime-0.1.0.json",
+  "build": {
+    "authored_modules": [
+      {
+        "module_name": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A",
+        "operation": "Add",
+        "relative_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
+        "source_byte_len": 40760,
+        "source_sha256": "03038313d0b513db9fab44fb18fdcd779a6690afc61e5ce6d4cc59da7c418ed2"
+      },
+      {
+        "module_name": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B",
+        "operation": "Add",
+        "relative_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
+        "source_byte_len": 35682,
+        "source_sha256": "d9b3c0b7ccd41ded820fd059b93d5cc8eefc04105ac3ed904b431c0c6a4900ca"
+      },
+      {
+        "module_name": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+        "operation": "Edit",
+        "relative_path": "AI/AIAgent/Human/Config/OC_STT_Diego/CharacterDefinition_OC_STT_Diego.as",
+        "source_byte_len": 5203,
+        "source_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664"
+      },
+      {
+        "module_name": "LevelScripts.XardasTower_AI",
+        "operation": "Edit",
+        "relative_path": "LevelScripts/XardasTower_AI.as",
+        "source_byte_len": 1814,
+        "source_sha256": "ee74734e29cafb76445abe5000bc662d2c9e79d3cd6b88a989a17f81d42056eb"
+      }
+    ],
+    "elapsed_seconds": 149.0174017,
+    "full_modules": 7319,
+    "full_sha256": "45d0de0d63f5302224cb0c4817a4ac1a4454232abaaf58b8f16a529c460b8e0b",
+    "game_backend_attempted": false,
+    "mini_compose_upsert": true,
+    "mini_modules": 4,
+    "mini_sha256": "a6735b2ddc8dacbb53452f49872eec46f0f37dac6271b75512d48ee5b61e080f",
+    "passed": true,
+    "product_generation_receipt": true,
+    "route": "productive Core FullGraph; frozen-manifest plan",
+    "source_modules_verified": 7319,
+    "target_closing_audit": true,
+    "unselected_pristine_modules_byte_identical": 7315
+  },
+  "generation_receipt_sha256": "b0816e4510c55b9d2001b1f65c944aaf490bbb0a79fa0e52d642ac5b6f88a780",
+  "original_module_preservation": {
+    "unselected_pristine_byte_identical": 7315,
+    "tower_byte_identical_to_field_0_1_0": true,
+    "diego_byte_identical_to_field_0_1_0": false,
+    "Diego_and_Tower_source_unchanged": true,
+    "emission_comparison": {
+      "operation": "product PreparedEmit with exact Binds and class defaults enabled",
+      "modules": [
+        {
+          "module": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+          "exactly_unchanged": true,
+          "prior_emitted_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664",
+          "current_emitted_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664"
+        },
+        {
+          "module": "LevelScripts.XardasTower_AI",
+          "exactly_unchanged": true,
+          "prior_emitted_sha256": "3e66b9ead53daaee8c876ddd2559dbdb31c616b3751a390bedf769467ec95e4f",
+          "current_emitted_sha256": "3e66b9ead53daaee8c876ddd2559dbdb31c616b3751a390bedf769467ec95e4f"
+        }
+      ]
+    },
+    "qualification": "Diego serialized span differs, while source and PreparedEmit output including defaults are identical; this is not a claim of byte identity or a complete semantic proof from decompilation alone."
+  },
+  "inspection": {
+    "report_format": 1,
+    "source_kind": "directory",
+    "bundle_format": 1,
+    "mod": {
+      "name": "NpcFieldRolesTest",
+      "version": "0.1.1",
+      "author": ""
+    },
+    "component_count": 3,
+    "components": [
+      {
+        "type": "loc_patch",
+        "path": "loc/edits.json",
+        "target_count": 42,
+        "footprint_coverage": "exact"
+      },
+      {
+        "type": "voice_archive_patch",
+        "path": "voice",
+        "target_count": 5,
+        "footprint_coverage": "exact"
+      },
+      {
+        "type": "angel_script_patch",
+        "path": "scripts",
+        "target_count": 4,
+        "footprint_coverage": "exact"
+      }
+    ],
+    "file_count": 10,
+    "directory_count": 4,
+    "total_file_bytes": 476415,
+    "manifest_sha256": "a9202e2e0b99f44289f52a4a6998dd7ad1b581cb6a15bccc96a25ecc001ed737",
+    "tree_sha256": "22a381facc44ef5662cbdaa8db72246ce88f3dc17d838afcbf976133e0516494",
+    "evidence": {
+      "verified": [
+        "bounded non-link materialization of the selected directory or ZIP",
+        "root manifest format plus every declared component manifest and referenced payload",
+        "portable paths, payload size limits, and supported payload structure where an offline decoder exists",
+        "SHA-256 identity of the exact manifest bytes and complete normalized bundle tree"
+      ],
+      "not_verified": [
+        "compatibility with any particular game installation or game build",
+        "whether named game-side assets, samples, localization ids, or script edit targets exist",
+        "cross-mod conflicts, load order, or deployment readiness",
+        "runtime behavior, visuals, audio playback, dialog flow, or gameplay effect"
+      ]
+    }
+  },
+  "manager_status": "in_sync",
+  "manager_cli_sha256": "28b5d76e1e861476c7882725f056bca7cb65e718550203bd6c6dbd9aa9987fe1",
+  "changes": {
+    "26": "Authored simulateable state uses existing native sheathing/navigation tasks to retreat from explicit Hero below10m for approximately60s; no new enmity.",
+    "27": "Exit authored retreat to the daily routine; restore captured legacy policy.",
+    "29": "Keep same-NPC timed routine exchange and add actual Memory.Character.Defeated.Kill execution tag to accepted death filter."
+  },
+  "constraints": {
+    "stock_AI_modules_unchanged": true,
+    "no_game_backend": true,
+    "no_new_actor_or_raw_dead_tag_removal": true,
+    "unused_native_SubscribeToReviveClockEventIfNeeded_not_called": "Rejected by native-membership composition guard; retained existing routine exchange instead."
+  },
+  "apply_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe\" mgr apply --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
+  "reset_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe\" mgr reset --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
+  "apply_log_sha256": "1fd2e802d5aba898ac3a00ffcba1ae71e6fd227d2d714cb41006ed01536ff5e2",
+  "save_cleanup_report": "../profile-cleanup-after-field.json",
+  "retained_inputs": [
+    "G1R-070",
+    "G1R-071",
+    "G1R-072",
+    "G1R-030"
+  ],
+  "checklist": "FIELD-TEST.md",
+  "remaining_runtime": "Retreat and stopping, then execution-save timed same-NPC revival; native clock/simulation distance gates remain unverified."
+}

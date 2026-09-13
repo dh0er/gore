@@ -678,13 +678,52 @@ class UGoreRoleWeaponTrace : UActorComponent
     }
 }
 
+// Explicit flight uses the same native navigation task as the stock fear state.
+// Its target selection is final and excludes humans, so do not inherit it.
+class UAIState_GoreRoleFlee : UGothicCharacterSimulateableAIState
+{
+    default OwnedGameplayTags.AddTag(GameplayTag::AIState_Conflict_Flee);
+    default bSupportsSimulatedSteps = false;
+
+    UFUNCTION(BlueprintOverride)
+    void OnGracefulExitRequested()
+    {
+        this.bShouldExitState = true;
+        this.StopWaitingAndContinueTask();
+    }
+
+    UFUNCTION(BlueprintOverride)
+    void DoTask()
+    {
+        if (this.AI == nullptr || !IsValid(this.GetSelf())) return;
+        AGothicCharacter Target = this.GetOther();
+        if (!IsValid(Target)) return;
+        float StopAt = this.GetWorld().GetTimeSeconds() + 60.0;
+        ::UndrawWeapon(this.AI);
+        this.SetWalkSpeed(EWalkSpeed(1));
+        while (!this.bShouldExitState && this.GetWorld().GetTimeSeconds() < StopAt
+            && IsValid(Target) && !::IsDead(Target) && !::IsDefeated(Target))
+        {
+            if (Target.GetDistanceTo(this.GetSelf()) < 1000.0)
+            {
+                FVector Away = (this.GetSelf().GetFeetLocation() - Target.GetFeetLocation()).GetSafeNormal2D(0.00000001, FVector::ZeroVector);
+                ::GoIntoDirection(this.AI, Away, 1500.0, -1.0, 5.0, 150.0);
+                if (this.bShouldExitState) return;
+            }
+            this.WaitSeconds(0.25f);
+        }
+        if (!this.bShouldExitState) this.AI.SwitchToDailyRoutine();
+    }
+}
+
 // Only this routine permits same-identity revival. Ordinary role wait does not.
-// Exact death-memory tags come from UAIState_Conflict::MemorizeConflictEnd.
+// Executing a defeated NPC records Character.Defeated.Kill, not Conflict.Killed.
 class UDailyRoutine_GoreRoleRevive : UAIState_DailyRoutine_Human
 {
     default Schedule(0, 0, UAIState_Stand(), Location::Anywhere, 1000.0f, TSubclassOf<UNavArea>(nullptr), nullptr);
     default RestoreAttributesAfterTimespan = FInGameTime::FromHours(1.0);
     default TryReviveAfterTimespan = FInGameTime::FromHours(1.0);
+    default TryReviveIfDeathMemoryHasAnyOf.AddTag(GameplayTag::Memory_Character_Defeated_Kill);
     default TryReviveIfDeathMemoryHasAnyOf.AddTag(GameplayTag::Memory_Conflict_Killed_TrainingFight);
     default TryReviveIfDeathMemoryHasAnyOf.AddTag(GameplayTag::Memory_Conflict_Killed_PettyFight);
     default TryReviveIfDeathMemoryHasAnyOf.AddTag(GameplayTag::Memory_Conflict_Killed_TrueFight);
@@ -702,4 +741,3 @@ void GoreRoleFieldSnapshot(AGothicNPCState B, AGothicCharacterState Hero)
     GoreRoleNote(B, n"gore_role_flee", ::HasGameplayTag(B, GameplayTag::AIState_Conflict_Flee) ? 1.0f : 0.0f);
     GoreRoleNote(B, n"gore_role_follow", ::HasGameplayTag(B, GameplayTag::AIState_Follow) ? 1.0f : 0.0f);
 }
-

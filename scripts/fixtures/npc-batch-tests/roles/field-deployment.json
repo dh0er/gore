@@ -138,5 +138,7 @@
   "test_instructions": "FIELD-TEST.md",
   "runtime_scope": "First passive mixed-weapon diagnosis on070; follow/wait; separate training defeat/enmity/faction/flee/death and explicit same-NPC revival.070 unchanged Hero,072 stronger Hero for combat; both daylight. No game launch or manual test performed by Codex.",
   "start_health_follow_up": "field-health-starts.json:070/072 updated on2026-09-13 to Hero10000/B50 Health and MaxHealth (base/current); original health baselines archived.",
-  "start_damage_follow_up": "field-damage-starts.json:070/072 updated on2026-09-13 to Hero Strength1000 and B Resistance_Blunt/Edge/Point0 (base/current); health values retained, preimages archived."
+  "start_damage_follow_up": "field-damage-starts.json:070/072 updated on2026-09-13 to Hero Strength1000 and B Resistance_Blunt/Edge/Point0 (base/current); health values retained, preimages archived.",
+  "runtime_follow_up": "field-runtime-0.1.0.json: cases1-7 completed; only flee/revive failed.",
+  "deployment_follow_up": "field-fix-0.1.1.json: corrected field package installed for two targeted retries."
 }
