@@ -104,12 +104,15 @@ Talk to A. B is the subject; keep A alive as the control menu. Start each combat
 faction, flee or death case from the same clean copied save, rather than carrying
 hostility or injuries from a previous case.
 
-Profil 4: **070 „NPC 04 Rollen - START“** fuer die unveraenderte Waffen-Diagnose
+Profil 4: **070 „NPC 04 Rollen - START“** fuer die Waffen-Diagnose
 und Folgen/Warten. B steht auf der freien Flaeche vor dem Alten Lager; A steht
 am Tor etwa 30 Meter hinter dir. Dort 30 einschalten, dann innerhalb der
 60 Sekunden zu B zurueckgehen. **072 „NPC 04 Rollen - Kampf bereit“** hat einen
-verstaerkten Helden fuer die positiven Niederlage-/Tod-Tests; Bs Werte bleiben
-unveraendert. Zwischen den Kampf-, Gilden- und Fluchtzweigen frisch laden.
+verstaerkten Helden fuer die positiven Niederlage-/Tod-Tests. Seit2026-09-13
+haben **beide Starts Hero Health/MaxHealth10.000 und B Health/MaxHealth50**,
+jeweils base/current. Nur diese Lebenswerte wurden auf Wunsch geaendert;
+Waffen, Kampfregeln und alle anderen Attribute bleiben erhalten. Die Originale
+sind [archiviert](field-health-starts.json). Zwischen den Zweigen frisch laden.
 
 Ergebnisse bitte passend benennen: `rolle-waffenwahl`, `rolle-folgen`,
 `rolle-warten`, `rolle-niederlage`, `rolle-feind-besiegt`, `rolle-gilde-neutral`,
@@ -129,13 +132,19 @@ melden; der fehlende Spielstand ist dann kein Grund, den Test zu erzwingen.
 | 30 | Arm a 60-second passive mixed-weapon trace. Close dialogue and reproduce warning sword → combat bow on the known input, keeping both weapons and arrows. Save promptly after the transition. |
 | 31 | Record B's health, dead/defeated, relationship, follow and flee state before saving. |
 
-Run weapon choice 30 on the unchanged combat input **before** faction/flee or
+Run weapon choice 30 on the fresh070 input **before** faction/flee or
 training controls. The trace reads B's actual selected item, equipped item,
 conflict phase, character-of-interest, distance and the exact 100-unit grounded
 reachability query used by the close-target multiplier. It never calls selection,
 draw, inventory-update or scoring-manager functions. It captures changes and
 the first ten combat samples, at most 40 rows. This tests a concrete cause of
 the already-reproduced transition; it is not another generic terrain comparison.
+
+The2026-09-13 user requested easier health values because the Hero died before
+a save could be made. These new traces use modified health; do not attribute
+them to the original health baseline. The trace does not clear its captured
+values when combat or the60-second window ends. Defeat B without killing him
+or withdraw, end the conflict and save; do not re-arm30 before saving.
 
 World-float keys `gore_role_weapon_<row>_<field>` contain `seconds`, `phase`
 (0 other / 1 warning / 2 combat), `selected` and `equipped` (0 none / 1 Diego

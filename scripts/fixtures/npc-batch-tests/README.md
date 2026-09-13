@@ -109,11 +109,12 @@ Weitere Inventar- und Neustartpruefungen: [Rollenliste](roles/README.md).
 B steht vor dem Helden. A bleibt am Tor, etwa 30 Meter entfernt. Fuer die
 Steueroptionen zuerst zurueck zu A gehen. Die Diagnose 30 laeuft 60 Sekunden;
 danach direkt zu B zurueck und den bekannten Waffenwechsel reproduzieren.
-070 behaelt die urspruenglichen Heldenwerte. Bs Waffen und Werte werden durch
-den Startstand nicht geaendert.
+Auf Wunsch sind070 und072 seit2026-09-13 leichter: **Held10.000 Leben, B50 Leben**,
+jeweils aktuelle und maximale Werte. Waffen und Kampfregeln bleiben erhalten;
+die unveraenderten Originale liegen im [externen Archiv](roles/field-health-starts.json).
 
 072 ist fuer die positiven Sieg-/Tod-Tests bestimmt: gleicher frischer
-NPC-Ausgangspunkt, aber ein ausdruecklich verstaerkter Held. Die Ressourcen
+NPC-Ausgangspunkt, aber weiterhin zusaetzlich erhoehte Staerke-/Schutzwerte des Helden. Die Ressourcen
 stehen im abschliessenden Startstandbericht. Dieser Stand ist kein Ersatz fuer
 die unveraenderte Waffenwahl-Diagnose. A soll am Tor bleiben; falls er oder eine
 andere Figur eingreift, dies getrennt notieren.
