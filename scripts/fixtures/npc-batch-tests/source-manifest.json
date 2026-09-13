@@ -87,15 +87,15 @@
         {
           "source": "roles/field/GORE_TEST_A.as",
           "module_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
-          "sha256": "40c59b6053412f40ba0fcdc33e77d6a431e64e070b68a78133be0c606bf83b2c"
+          "sha256": "03038313d0b513db9fab44fb18fdcd779a6690afc61e5ce6d4cc59da7c418ed2"
         },
         {
           "source": "roles/field/GORE_TEST_B.as",
           "module_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
-          "sha256": "34a5f200d787dacfd3738851bbb716f6345f8788f7c66930960f3965c7fe7b4a"
+          "sha256": "d9b3c0b7ccd41ded820fd059b93d5cc8eefc04105ac3ed904b431c0c6a4900ca"
         }
       ],
-      "bundle_version": "0.1.0"
+      "bundle_version": "0.1.1"
     },
     "quest": {
       "bundle_name": "NpcQuestCallbacksTest",

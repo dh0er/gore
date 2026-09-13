@@ -129,9 +129,9 @@ melden; der fehlende Spielstand ist dann kein Grund, den Test zu erzwingen.
 | 22 | Stock training fight with a defeat goal, both weapons retained. Win and observe defeat/recovery without a death goal. |
 | 23 | B becomes Hero's enemy until defeat. Observe actual hostility/combat and relationship reset after defeat. This is a personal modifier, not a guild change. |
 | 24 / 25 | Change **B only** to guild None, then restore his original ShadowLeader guild. Inspect saved guild and relationships. Do this on a separate clean branch from 23 so its personal modifier cannot mask faction effects. |
-| 26 / 27 | Change B's actual unfavorable-combat policy to Always-flee, introduce Hero as enemy, observe fleeing. 27 restores the captured original policy; it does not erase conflict memory. Reload the clean input afterward. |
+| 26 / 27 | Since0.1.1, enter an authored retreat state using native navigation away from Hero, without introducing enmity. Approach within10m immediately; it lasts approximately60 real seconds. 27 ends this state and restores any captured legacy flee policy. Reload the clean input afterward. |
 | 28 | Stock training fight with a death goal. Kill B through combat/execution and verify the corpse/dead state persists through save/load. This is deliberately separate from ordinary defeat. |
-| 29 | Available only while B is dead: explicitly enable his same-NPC native timed revival policy. Leave the area and allow at least one game hour; return and inspect. Verify the **same global ID**, living state, one B only, and retained inventory/state. Then use 21 to disable this policy again. No actor is spawned by this choice. Native simulation/distance timing is an open runtime test, not a guaranteed one-hour visible pop-in. |
+| 29 | Available only while B is dead: explicitly enable his same-NPC native timed revival policy. Since0.1.1 the filter also accepts the actual execution memory. Leave the area and allow at least one game hour; return and inspect. Verify the **same global ID**, living state, one B only, and retained inventory/state. Then use21 to disable this policy again. No actor is spawned by this choice. Native simulation/distance timing remains an open runtime test. |
 | 30 | Arm a 60-second passive mixed-weapon trace. Close dialogue and reproduce warning sword → combat bow on the known input, keeping both weapons and arrows. Save promptly after the transition. |
 | 31 | Record B's health, dead/defeated, relationship, follow and flee state before saving. |
 
@@ -143,9 +143,10 @@ draw, inventory-update or scoring-manager functions. It captures changes and
 the first ten combat samples, at most 40 rows. This tests a concrete cause of
 the already-reproduced transition; it is not another generic terrain comparison.
 
-The2026-09-13 user requested easier health values because the Hero died before
-a save could be made. These new traces use modified health; do not attribute
-them to the original health baseline. The trace does not clear its captured
+The2026-09-13 user requested easier health, strength and protection values because
+the Hero died before a save could be made and dealt too little damage. These new
+traces use modified combat attributes; do not attribute them to the original
+baseline. The trace does not clear its captured
 values when combat or the60-second window ends. Defeat B without killing him
 or withdraw, end the conflict and save; do not re-arm30 before saving.
 
@@ -163,3 +164,24 @@ Readback must distinguish command markers from observed results. For example,
 `gore_role_revive_enabled=1` only proves the policy was requested, and
 `gore_role_follow_command=1` only proves the follow request was sent. Record
 visible behavior, original/final saves and exact inventory/resource deltas.
+
+### Runtime result — 13 September2026
+
+The user completed cases1–7: follow/wait/resume, training defeat/recovery,
+enmity until defeat, guild roundtrip and death surviving reload passed.
+The eleven [result saves](field-runtime-0.1.0.json) confirm one B with the same
+identity, the follow/wait routines, Guild_None/ShadowLeader effects and retained death.
+The weapon trace contains a close reachable Hero and warning sword, but no combat-phase
+sample; it cannot settle the earlier bow-selection cause.
+
+Flucht0.1.0 failed: Always-flee was only an unfavorable-combat preference, and
+the stock flee target collector also excludes the same species.0.1.1 explicitly
+selects Hero in an authored state using native weapon-sheathing and navigation tasks;
+it does not change the stock combat/flee assessment rules.
+Wiederkehr0.1.0 failed:032 is still dead82.7 game minutes after the execution
+memory, despite the assigned revival routine. The authored Conflict.Killed filter
+did not include the actual Character.Defeated.Kill execution tag. These are
+targeted mod corrections; no vanilla-defect attribution is established.
+
+Completed results are [archived outside the game](../profile-cleanup-after-field.json).
+030 remains for the resurrection retry;070/071/072 remain unchanged.

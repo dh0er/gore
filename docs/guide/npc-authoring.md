@@ -665,6 +665,34 @@ during the warning, then switches to the bow at combat escalation. This also
 occurs with his daily routine disabled. Cached bytecode confirms separate
 warning and combat item selection; the actual winning combat scores remain unknown.
 
+### Follow, combat roles and death
+
+The user completed the field-role tests on2026-09-13. Follow, stop, resume and
+reload worked; so did training defeat/recovery, temporary enmity ending after
+defeat, a Guild_None/ShadowLeader roundtrip and death persisting after reload.
+The [eleven result saves](../../scripts/fixtures/npc-batch-tests/roles/field-runtime-0.1.0.json)
+retain the same single B identity, the selected routines and actual guild effects.
+The two starts used deliberately increased Hero health/strength and reduced B
+health/protection, so this is functional role evidence under easier combat conditions.
+
+Two authored cases failed. Setting `ModeOfFleeOnUnfavorableCombat` to `Always`
+and introducing enmity does not guarantee an immediate retreat: assessment rules
+still apply. The stock flee target collector also filters out the same species,
+and its ordinary method is final in the shipped ABI. An explicit authored
+retreat must use supported state/task entry points instead of overriding it.
+
+Timed revival must match the actual saved death memory. A finishing blow in the
+tested sequence records `Memory.Character.Defeated.Kill` and `Memory.Execution`,
+not `Memory.Conflict.Killed.*`. The initial test accepted only the latter and
+left B dead82.7 game minutes after execution despite the saved revival routine.
+Native clock subscription and simulation gates remain runtime qualification
+points; positive health or a command marker alone does not prove resurrection.
+The registered `SubscribeToReviveClockEventIfNeeded` method has no exact native
+reference in this pristine cache, so selective composition rejects an explicit
+call. The corrected fixture keeps the existing routine-exchange path and fixes
+the death filter; it does not bypass the native-membership guard.
+See the [focused retry](../../scripts/fixtures/npc-batch-tests/roles/FIELD-TEST.md).
+
 ### Remaining limits
 
 - **`--modular-visuals` does not reproduce the template's look.** `B` was built

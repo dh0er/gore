@@ -1,5 +1,25 @@
 # Paket4: Begleiter, Kampf und Lebenszyklus
 
+## Aktueller Nachtest — 0.1.1
+
+Die Runde vom 13.09.2026 ist abgeschlossen. Folgen/Warten, Niederlage/Erholung,
+Feindschaft, Gildenwechsel und Tod/Laden haben funktioniert. Nur Flucht und
+Wiederkehr erneut testen; [Ergebnis und Save-Auswertung](field-runtime-0.1.0.json).
+Die alten Ergebnisse sind extern archiviert. Profil4 enthaelt noch 030 und 070–072.
+
+1. **072 „NPC 04 Rollen - Kampf bereit“ frisch laden.** Bei A **26** waehlen,
+   dann sofort unbewaffnet zu B gehen, bis du weniger als zehn Meter entfernt bist.
+   B soll vor dir weglaufen. Der Testzustand endet nach rund 60 Echtzeitsekunden;
+   deshalb direkt nach der Auswahl hingehen. Speichern als **`rolle-flucht-v2`**.
+   Bei A **27** waehlen; die Flucht soll enden. **`rolle-flucht-ende-v2`** speichern.
+2. **030 „rolle-tod“ laden.** B ist bereits tot; der Kampf muss nicht wiederholt
+   werden. Bei A **29** waehlen, ans andere Ende des Alten Lagers gehen und mindestens
+   eine Spielstunde warten. Zurueckkehren: Derselbe einzelne B soll wieder leben.
+   **31**, dann **`rolle-wiederkehr-v2`** speichern, auch wenn er weiterhin tot ist.
+   Wenn er lebt, abschliessend **21** waehlen.
+
+## Vollstaendige Referenz der ersten Runde
+
 Profil4. In **070 „NPC 04 Rollen - START“** und **072 „NPC 04 Rollen - Kampf bereit“**
 hat der Held jetzt **10.000/10.000 Leben und 1.000 Staerke**, B **50/50 Leben
 und 0 Schutz gegen Hieb, Schlag und Stich**. 072 behaelt zusaetzlich die bisherigen
@@ -60,9 +80,12 @@ Beziehung prueft Codex anhand der Saves. Auffaellige Reaktionen trotzdem melden.
 
 ## 6. Fluchtregel — 072 frisch laden
 
-Bei A **26**, zu B gehen. Er soll vor dem nun feindlichen Helden fliehen.
+Bei A **26**, sofort unbewaffnet auf weniger als zehn Meter an B herangehen.
+Er soll im expliziten Fluchtzustand vor dem Helden fliehen; diese Option erzeugt
+seit0.1.1 keine neue Feindschaft. Die Flucht ist auf rund60 Echtzeitsekunden begrenzt.
 **31**, **`rolle-flucht`** speichern, soweit moeglich. Bei A **27** stellt die
-vorherige Fluchtregel wieder her, loescht aber keine Feindschaftserinnerung.
+vorherige Fluchtregel wieder her und beendet den expliziten Fluchtzustand,
+loescht aber keine vorhandene Feindschaftserinnerung.
 **31**, **`rolle-flucht-zurueck`** speichern. Danach erneut den sauberen START laden.
 
 ## 7. Tod und Wiederkehr derselben Figur — 072 frisch laden

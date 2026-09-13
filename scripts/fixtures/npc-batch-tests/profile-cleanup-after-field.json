@@ -1,0 +1,128 @@
+{
+  "schema": "gore.npc-batch.profile-cleanup-after-field.v1",
+  "date": "2026-09-13",
+  "displayed_profile": 4,
+  "internal_profile_id": 2,
+  "stored_profile_name": "3",
+  "passed": true,
+  "operation": "live",
+  "archive": "C:\\Users\\Daniel\\Documents\\GORE\\Savegame-Archiv\\npc-field-results-20260913T101218Z",
+  "manifest_sha256": "3e3a3e374ad3e1285e0e2ab8f9422687e456ff58152d14b11bc0ee426fa8565d",
+  "deleted_count": 10,
+  "retained_count": 4,
+  "retained": [
+    "G1R-070",
+    "G1R-071",
+    "G1R-072",
+    "G1R-030"
+  ],
+  "removed": [
+    "G1R-003",
+    "G1R-022",
+    "G1R-023",
+    "G1R-024",
+    "G1R-025",
+    "G1R-026",
+    "G1R-027",
+    "G1R-029",
+    "G1R-031",
+    "G1R-032"
+  ],
+  "profile_before": {
+    "bytes": 41237,
+    "sha256": "2fd1c43817857f9a7c0ac97e3875eed372782ea00328e95401ff35c3470e71a0"
+  },
+  "profile_after": {
+    "bytes": 31674,
+    "sha256": "9580bceb845239e7a2aea14b56d51e6b06ac58059342d0679267e08eee21aa0d"
+  },
+  "dll": {
+    "bytes": 17931264,
+    "sha256": "54690b5fb7004ae89a5659d38a59cebf5c833fd6c558c73ba3e0a70342baaf14"
+  },
+  "titles": {
+    "G1R-070": "NPC 04 Rollen - START",
+    "G1R-071": "NPC 05 Quest - START",
+    "G1R-072": "NPC 04 Rollen - Kampf bereit",
+    "G1R-003": "rolle-waffenwahl",
+    "G1R-022": "rolle-folgen",
+    "G1R-023": "rolle-warten",
+    "G1R-024": "rolle-niederlage",
+    "G1R-025": "rolle-feind-besiegt",
+    "G1R-026": "rolle-gilde-neutral",
+    "G1R-029": "rolle-gilde-zurueck",
+    "G1R-027": "rolle-flucht",
+    "G1R-031": "rolle-flucht-zurueck",
+    "G1R-030": "rolle-tod",
+    "G1R-032": "rolle-wiederbelebt"
+  },
+  "retained_save_hashes": {
+    "G1R-070": {
+      "bytes": 1035034,
+      "sha256": "60dd5ac6cebab1cd62f1005ae0fa47618161b6db6d83cda1ca88868f445922b4"
+    },
+    "G1R-071": {
+      "bytes": 1018879,
+      "sha256": "aee18515288dc09ebc1f4687fc3da21cccdec946596b2744f2028ccdfaf68db5"
+    },
+    "G1R-072": {
+      "bytes": 1035056,
+      "sha256": "5feb135c3a3e689e38976823c1ee70d1c5ae57c4292a79e2aa9c8bbd605e6451"
+    },
+    "G1R-030": {
+      "bytes": 1047266,
+      "sha256": "addca3838d2b701cf5988183bb722afaeb13a12efac89e039b967fc2772706ba"
+    }
+  },
+  "removed_original_hashes": {
+    "G1R-003": {
+      "bytes": 1047189,
+      "sha256": "f28d8534f0d6150396ba84ed4a2472b87f6a8faa0db0eec8833095be60706176"
+    },
+    "G1R-022": {
+      "bytes": 1042671,
+      "sha256": "0354e5dee162d3abc680125920330fa49c7e08744c0dcd351db6303f4192fb4a"
+    },
+    "G1R-023": {
+      "bytes": 1051013,
+      "sha256": "1cf44cf50708597a50676a21913a8b557d7657703515350c35f301a9f1b32374"
+    },
+    "G1R-024": {
+      "bytes": 1050256,
+      "sha256": "33eacde2bdda6a0c277fce5a64bad39873c40696a95d744e719ea86199497d37"
+    },
+    "G1R-025": {
+      "bytes": 1052079,
+      "sha256": "ef71fd6c05e25643b66f65507358f3fee0be7f6f91c431252c747a63fda554d9"
+    },
+    "G1R-026": {
+      "bytes": 1037241,
+      "sha256": "f0b2b65f68c572098dbdb0910c6a1490d84a6aa26186031d3efd61deb3842035"
+    },
+    "G1R-027": {
+      "bytes": 1044354,
+      "sha256": "49ffb99e035feaf8c99891a8547c8049fa2d46732bd1c8fd57ac87378fa6183f"
+    },
+    "G1R-029": {
+      "bytes": 1042463,
+      "sha256": "0c8e6584509751392d904c763e89180f4497da37214d04fbc7800a4e74c91710"
+    },
+    "G1R-031": {
+      "bytes": 1043853,
+      "sha256": "0cb99af5e5e074cd04e2d7dc72dc4f33df8d76ce548a9ea3ba3c1c8586a38910"
+    },
+    "G1R-032": {
+      "bytes": 1127490,
+      "sha256": "8fc8dcbf4b94acb0fc2c52cf3163d24aa6c0c1ef0fa96ee87b1edacfada446f6"
+    }
+  },
+  "exact_current_titles_and_source_hashes_verified": true,
+  "paired_backups_verified": true,
+  "other_profiles_byte_identical": true,
+  "retained_saves_byte_identical": true,
+  "other_live_files_unchanged": true,
+  "live_unchanged_during_preview": false,
+  "global_registry_exact_filtered_order": true,
+  "no_removed_slot_reference": true,
+  "archive_hashes_reverified": true
+}

@@ -967,7 +967,7 @@ class UChoiceGoreRoleGuildRestore : UTopic_GoreRoleControl
 class UChoiceGoreRoleFlee : UTopic_GoreRoleControl
 {
     default DebugId = 3409845526797146026;
-    default Caption = FText::FromString(n"26 Flucht: B immer fliehen lassen (danach 27)".ToString());
+    default Caption = FText::FromString(n"26 Flucht: B vor dem Helden fliehen lassen (danach 27)".ToString());
     default PriorityRank = 74;
     UFUNCTION(BlueprintOverride)
     bool IsVisible() const { return Subject() != nullptr && !::IsDead(Subject()); }
@@ -975,13 +975,17 @@ class UChoiceGoreRoleFlee : UTopic_GoreRoleControl
     void Act()
     {
         UGameplayAbility_CharacterAI_Gothic AI = Cast<UGameplayAbility_CharacterAI_Gothic>(Subject().GetAI());
-        if (AI == nullptr || Hero() == nullptr) return;
+        if (AI == nullptr || Hero() == nullptr || Hero().GetCharacter() == nullptr) return;
+        UCharacterAIState Flee = Cast<UCharacterAIState>(UAngelscriptAbilityTask::CreateAbilityTask(UAIState_GoreRoleFlee, AI, NAME_None, nullptr));
+        if (Flee == nullptr) return;
         if (GoreRoleRead(Subject(), n"gore_role_flee_override") == 0.0f)
             GoreRoleNote(Subject(), n"gore_role_old_flee_mode", float32(int(AI.ModeOfFleeOnUnfavorableCombat)));
-        AI.ModeOfFleeOnUnfavorableCombat = EFleeOnUnfavorableCombatMode::Always;
+        Flee.SetOther(Hero().GetCharacter());
+        AI.SetCharacterOfInterest(Hero().GetCharacter());
+        if (IsValid(AI.GetCurrentState()) && !AI.GetCurrentState().IsA(UAIState_PerceptionResponse))
+            AI.GetCurrentState().EndTaskAsCancelled();
+        AI.SwitchAIStateImmediately(Flee, nullptr);
         GoreRoleNote(Subject(), n"gore_role_flee_override", 1.0f);
-        ::SetRelationshipUntilDefeat(Subject(), Hero(), ERelationship::Enemy);
-        ::ForceHearingPerception(AI, Hero());
         this.EndConversation();
     }
 }
@@ -989,7 +993,7 @@ class UChoiceGoreRoleFlee : UTopic_GoreRoleControl
 class UChoiceGoreRoleFleeRestore : UTopic_GoreRoleControl
 {
     default DebugId = 3409845526797146027;
-    default Caption = FText::FromString(n"27 Fluchtregel wiederherstellen".ToString());
+    default Caption = FText::FromString(n"27 Flucht beenden / Regel wiederherstellen".ToString());
     default PriorityRank = 73;
     UFUNCTION(BlueprintOverride)
     bool IsVisible() const { return Subject() != nullptr && GoreRoleRead(Subject(), n"gore_role_flee_override") == 1.0f; }
@@ -999,6 +1003,11 @@ class UChoiceGoreRoleFleeRestore : UTopic_GoreRoleControl
         UGameplayAbility_CharacterAI_Gothic AI = Cast<UGameplayAbility_CharacterAI_Gothic>(Subject().GetAI());
         if (AI == nullptr) return;
         AI.ModeOfFleeOnUnfavorableCombat = EFleeOnUnfavorableCombatMode(int(GoreRoleRead(Subject(), n"gore_role_old_flee_mode")));
+        if (AI.IsInState(UAIState_GoreRoleFlee))
+        {
+            AI.SetCharacterOfInterest(nullptr);
+            AI.SwitchToDailyRoutine();
+        }
         GoreRoleNote(Subject(), n"gore_role_flee_override", 0.0f);
         this.EndConversation();
     }
