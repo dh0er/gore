@@ -1,22 +1,24 @@
 # Paket4: Begleiter, Kampf und Lebenszyklus
 
-## Aktueller Nachtest — 0.1.1
+## Aktueller Nachtest — 0.1.2
 
-Die Runde vom 13.09.2026 ist abgeschlossen. Folgen/Warten, Niederlage/Erholung,
-Feindschaft, Gildenwechsel und Tod/Laden haben funktioniert. Nur Flucht und
-Wiederkehr erneut testen; [Ergebnis und Save-Auswertung](field-runtime-0.1.0.json).
-Die alten Ergebnisse sind extern archiviert. Profil4 enthaelt noch 030 und 070–072.
+Folgen/Warten, Niederlage/Erholung, Feindschaft, Gildenwechsel und Tod/Laden haben
+funktioniert. Auch die Wiederbelebung mit0.1.1 ist jetzt vom Benutzer bestaetigt.
+Nur Flucht erneut testen; [letzte Rueckmeldung](field-runtime-0.1.1.json).
+Die alten Ergebnisse und der nicht mehr benoetigte tote Ausgangsstand030 sind
+extern archiviert. Profil4 enthaelt noch070–072.
 
 1. **072 „NPC 04 Rollen - Kampf bereit“ frisch laden.** Bei A **26** waehlen,
    dann sofort unbewaffnet zu B gehen, bis du weniger als zehn Meter entfernt bist.
-   B soll vor dir weglaufen. Der Testzustand endet nach rund 60 Echtzeitsekunden;
-   deshalb direkt nach der Auswahl hingehen. Speichern als **`rolle-flucht-v2`**.
-   Bei A **27** waehlen; die Flucht soll enden. **`rolle-flucht-ende-v2`** speichern.
-2. **030 „rolle-tod“ laden.** B ist bereits tot; der Kampf muss nicht wiederholt
-   werden. Bei A **29** waehlen, ans andere Ende des Alten Lagers gehen und mindestens
-   eine Spielstunde warten. Zurueckkehren: Derselbe einzelne B soll wieder leben.
-   **31**, dann **`rolle-wiederkehr-v2`** speichern, auch wenn er weiterhin tot ist.
-   Wenn er lebt, abschliessend **21** waehlen.
+   B soll vor dir weglaufen. Der Testzustand endet nach rund60 Echtzeitsekunden;
+   deshalb direkt nach der Auswahl hingehen.
+2. Wenn er weggelaufen ist oder nach20–30 Sekunden weiter nichts tut, zurueck zu A.
+   **27** beendet die Flucht, **31** protokolliert den Zustand. Anschliessend
+   **`rolle-flucht-v3`** speichern, auch bei Stillstand.26 vorher nicht erneut
+   auswaehlen: Das setzt die Diagnosewerte zurueck.27 erhaelt Eintritts- und
+   Bewegungswerte; nur der Abschlusscode wird auf „explizit gestoppt“ gesetzt.
+   Der Save enthaelt Eintritt, Entfernung, Bewegungsversuche und tatsaechlich
+   zurueckgelegte Strecke. Bei aktivem Konflikt erst dessen Ende abwarten.
 
 ## Vollstaendige Referenz der ersten Runde
 

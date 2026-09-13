@@ -90,8 +90,8 @@ class UGoreRoleWeaponTrace : UActorComponent
     }
 }
 
-// Explicit flight uses the same native navigation task as the stock fear state.
-// Its target selection is final and excludes humans, so do not inherit it.
+// Run through the same routine entry path as the proven read/drink states.
+// Use pathfinding to a nearby retreat point rather than a straight nav ray.
 class UAIState_GoreRoleFlee : UGothicCharacterSimulateableAIState
 {
     default OwnedGameplayTags.AddTag(GameplayTag::AIState_Conflict_Flee);
@@ -107,25 +107,50 @@ class UAIState_GoreRoleFlee : UGothicCharacterSimulateableAIState
     UFUNCTION(BlueprintOverride)
     void DoTask()
     {
-        if (this.AI == nullptr || !IsValid(this.GetSelf())) return;
-        AGothicCharacter Target = this.GetOther();
-        if (!IsValid(Target)) return;
+        AGothicNPCState Subject = FCharacterUniqueName(n"GORE_TEST_B").GetNPCState();
+        if (Subject == nullptr) return;
+        GoreRoleNote(Subject, n"gore_role_flee_entered", 1.0f);
+        if (this.AI == nullptr || !IsValid(this.GetSelf()))
+        {
+            GoreRoleNote(Subject, n"gore_role_flee_exit", -1.0f);
+            return;
+        }
+        AGothicCharacter Target = Cast<AGothicCharacter>(Gameplay::GetPlayerCharacter(0));
+        if (!IsValid(Target))
+        {
+            GoreRoleNote(Subject, n"gore_role_flee_exit", -2.0f);
+            return;
+        }
         float StopAt = this.GetWorld().GetTimeSeconds() + 60.0;
         ::UndrawWeapon(this.AI);
         this.SetWalkSpeed(EWalkSpeed(1));
         while (!this.bShouldExitState && this.GetWorld().GetTimeSeconds() < StopAt
             && IsValid(Target) && !::IsDead(Target) && !::IsDefeated(Target))
         {
-            if (Target.GetDistanceTo(this.GetSelf()) < 1000.0)
+            float Distance = Target.GetDistanceTo(this.GetSelf());
+            GoreRoleNote(Subject, n"gore_role_flee_distance", float32(Distance));
+            if (Distance < 1000.0)
             {
                 FVector Away = (this.GetSelf().GetFeetLocation() - Target.GetFeetLocation()).GetSafeNormal2D(0.00000001, FVector::ZeroVector);
-                ::GoIntoDirection(this.AI, Away, 1500.0, -1.0, 5.0, 150.0);
+                FVector Start = this.GetSelf().GetFeetLocation();
+                GoreRoleNote(Subject, n"gore_role_flee_attempts", GoreRoleRead(Subject, n"gore_role_flee_attempts") + 1.0f);
+                ::GotoPosition(this.AI, Start + Away * 500.0, 75.0, 5.0);
+                GoreRoleNote(Subject, n"gore_role_flee_moved_cm", GoreRoleRead(Subject, n"gore_role_flee_moved_cm") + float32(Start.Distance(this.GetSelf().GetFeetLocation())));
                 if (this.bShouldExitState) return;
             }
             this.WaitSeconds(0.25f);
         }
-        if (!this.bShouldExitState) this.AI.SwitchToDailyRoutine();
+        GoreRoleNote(Subject, n"gore_role_flee_exit", this.bShouldExitState ? 2.0f : 1.0f);
+        if (!this.bShouldExitState) ::ExchangeDailyRoutineToClass(Subject, UDailyRoutine_GoreRoleWait);
     }
+}
+
+class UDailyRoutine_GoreRoleFlee : UAIState_DailyRoutine_Human
+{
+    default ScheduleTimeOffsetMinutesMin = 0.0f;
+    default ScheduleTimeOffsetMinutesMax = 0.0f;
+    default TeleportToCurrentTaskWhen = EDailyRoutineTeleportMode::Never;
+    default Schedule(0, 0, UAIState_GoreRoleFlee(), Location::Anywhere, 1000.0f, TSubclassOf<UNavArea>(nullptr), nullptr);
 }
 
 // Only this routine permits same-identity revival. Ordinary role wait does not.
@@ -269,16 +294,15 @@ class UChoiceGoreRoleFlee : UTopic_GoreRoleControl
     {
         UGameplayAbility_CharacterAI_Gothic AI = Cast<UGameplayAbility_CharacterAI_Gothic>(Subject().GetAI());
         if (AI == nullptr || Hero() == nullptr || Hero().GetCharacter() == nullptr) return;
-        UCharacterAIState Flee = Cast<UCharacterAIState>(UAngelscriptAbilityTask::CreateAbilityTask(UAIState_GoreRoleFlee, AI, NAME_None, nullptr));
-        if (Flee == nullptr) return;
         if (GoreRoleRead(Subject(), n"gore_role_flee_override") == 0.0f)
             GoreRoleNote(Subject(), n"gore_role_old_flee_mode", float32(int(AI.ModeOfFleeOnUnfavorableCombat)));
-        Flee.SetOther(Hero().GetCharacter());
-        AI.SetCharacterOfInterest(Hero().GetCharacter());
-        if (IsValid(AI.GetCurrentState()) && !AI.GetCurrentState().IsA(UAIState_PerceptionResponse))
-            AI.GetCurrentState().EndTaskAsCancelled();
-        AI.SwitchAIStateImmediately(Flee, nullptr);
+        GoreRoleNote(Subject(), n"gore_role_flee_entered", 0.0f);
+        GoreRoleNote(Subject(), n"gore_role_flee_attempts", 0.0f);
+        GoreRoleNote(Subject(), n"gore_role_flee_moved_cm", 0.0f);
+        GoreRoleNote(Subject(), n"gore_role_flee_distance", -1.0f);
+        GoreRoleNote(Subject(), n"gore_role_flee_exit", 0.0f);
         GoreRoleNote(Subject(), n"gore_role_flee_override", 1.0f);
+        ::ExchangeDailyRoutineToClass(Subject(), UDailyRoutine_GoreRoleFlee);
         this.EndConversation();
     }
 }
@@ -296,11 +320,8 @@ class UChoiceGoreRoleFleeRestore : UTopic_GoreRoleControl
         UGameplayAbility_CharacterAI_Gothic AI = Cast<UGameplayAbility_CharacterAI_Gothic>(Subject().GetAI());
         if (AI == nullptr) return;
         AI.ModeOfFleeOnUnfavorableCombat = EFleeOnUnfavorableCombatMode(int(GoreRoleRead(Subject(), n"gore_role_old_flee_mode")));
-        if (AI.IsInState(UAIState_GoreRoleFlee))
-        {
-            AI.SetCharacterOfInterest(nullptr);
-            AI.SwitchToDailyRoutine();
-        }
+        GoreRoleNote(Subject(), n"gore_role_flee_exit", 2.0f);
+        ::ExchangeDailyRoutineToClass(Subject(), UDailyRoutine_GoreRoleWait);
         GoreRoleNote(Subject(), n"gore_role_flee_override", 0.0f);
         this.EndConversation();
     }

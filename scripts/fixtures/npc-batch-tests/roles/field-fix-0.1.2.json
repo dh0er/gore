@@ -1,27 +1,27 @@
 {
   "schema": "gore.npc-batch.field-fix.v1",
-  "recorded_at": "2026-09-13T10:28:08.311821+00:00",
+  "recorded_at": "2026-09-13T13:24:38.498504+00:00",
   "bundle": "NpcFieldRolesTest",
-  "version": "0.1.1",
-  "manager_id": "npcfieldrolestest-04eca4ae",
-  "bundle_path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\packages-field-fix\\NpcFieldRolesTest",
+  "version": "0.1.2",
+  "manager_id": "npcfieldrolestest-cec9fbc0",
+  "bundle_path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\packages-field-flee-fix\\NpcFieldRolesTest",
   "runtime_verified": false,
-  "prior_runtime": "field-runtime-0.1.0.json",
+  "prior_runtime": "field-runtime-0.1.1.json",
   "build": {
     "authored_modules": [
       {
         "module_name": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A",
         "operation": "Add",
         "relative_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
-        "source_byte_len": 40760,
-        "source_sha256": "03038313d0b513db9fab44fb18fdcd779a6690afc61e5ce6d4cc59da7c418ed2"
+        "source_byte_len": 40656,
+        "source_sha256": "b4167a6f505f6a0027b1301afe0e15535ae76be872c8bee3abec21c13494f72c"
       },
       {
         "module_name": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B",
         "operation": "Add",
         "relative_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
-        "source_byte_len": 35682,
-        "source_sha256": "d9b3c0b7ccd41ded820fd059b93d5cc8eefc04105ac3ed904b431c0c6a4900ca"
+        "source_byte_len": 37087,
+        "source_sha256": "fedfc552c1badbb239f35cfc5ba84426884916d99de7239c24078b77a2b9e922"
       },
       {
         "module_name": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
@@ -38,13 +38,13 @@
         "source_sha256": "ee74734e29cafb76445abe5000bc662d2c9e79d3cd6b88a989a17f81d42056eb"
       }
     ],
-    "elapsed_seconds": 149.0174017,
+    "elapsed_seconds": 181.7852323,
     "full_modules": 7319,
-    "full_sha256": "45d0de0d63f5302224cb0c4817a4ac1a4454232abaaf58b8f16a529c460b8e0b",
+    "full_sha256": "b434d143bff9ba5e4a26465bfd7ed72d15be2c2dd39a5fecddb9bff55169227d",
     "game_backend_attempted": false,
     "mini_compose_upsert": true,
     "mini_modules": 4,
-    "mini_sha256": "a6735b2ddc8dacbb53452f49872eec46f0f37dac6271b75512d48ee5b61e080f",
+    "mini_sha256": "92636d7b5ec2816968bb9aeed0eda55ccb8cdcf7396b4cd6e0d5da950e38a1e8",
     "passed": true,
     "product_generation_receipt": true,
     "route": "productive Core FullGraph; frozen-manifest plan",
@@ -52,11 +52,11 @@
     "target_closing_audit": true,
     "unselected_pristine_modules_byte_identical": 7315
   },
-  "generation_receipt_sha256": "b0816e4510c55b9d2001b1f65c944aaf490bbb0a79fa0e52d642ac5b6f88a780",
+  "generation_receipt_sha256": "78d91574ad99d875a43b9f755b986edc3597fbcb1550c7114aa583577f2b843c",
   "original_module_preservation": {
     "unselected_pristine_byte_identical": 7315,
-    "tower_byte_identical_to_field_0_1_0": true,
-    "diego_byte_identical_to_field_0_1_0": false,
+    "tower_byte_identical_to_field_0_1_1": true,
+    "diego_byte_identical_to_field_0_1_1": false,
     "Diego_and_Tower_source_unchanged": true,
     "emission_comparison": {
       "operation": "product PreparedEmit with exact Binds and class defaults enabled",
@@ -75,7 +75,7 @@
         }
       ]
     },
-    "qualification": "Diego serialized span differs, while source and PreparedEmit output including defaults are identical; this is not a claim of byte identity or a complete semantic proof from decompilation alone."
+    "qualification": "Diego serialized span differs, while source and PreparedEmit output including defaults are identical; this is not byte identity or a complete semantic proof from decompilation alone."
   },
   "inspection": {
     "report_format": 1,
@@ -83,7 +83,7 @@
     "bundle_format": 1,
     "mod": {
       "name": "NpcFieldRolesTest",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "author": ""
     },
     "component_count": 3,
@@ -109,9 +109,9 @@
     ],
     "file_count": 10,
     "directory_count": 4,
-    "total_file_bytes": 476415,
-    "manifest_sha256": "a9202e2e0b99f44289f52a4a6998dd7ad1b581cb6a15bccc96a25ecc001ed737",
-    "tree_sha256": "22a381facc44ef5662cbdaa8db72246ce88f3dc17d838afcbf976133e0516494",
+    "total_file_bytes": 479699,
+    "manifest_sha256": "0fe1ea980cc80e0b959cf1550df038e7046cea3865289f8e48ff44a95bca0496",
+    "tree_sha256": "acb1585fd8bfd3e8295a2c3b432e2fec5a6d6828dc97e5e19e1dd84a9eeacd10",
     "evidence": {
       "verified": [
         "bounded non-link materialization of the selected directory or ZIP",
@@ -127,31 +127,44 @@
       ]
     }
   },
+  "legacy_connector_limit": "Dedicated gore_mod_inspect uses CLI0.3.0 and rejects the existing four-module mini-cache manifest form. The qualified current CLI successfully inspected the exact bundle and applied it.",
   "manager_status": "in_sync",
   "manager_cli_sha256": "28b5d76e1e861476c7882725f056bca7cb65e718550203bd6c6dbd9aa9987fe1",
   "changes": {
-    "26": "Authored simulateable state uses existing native sheathing/navigation tasks to retreat from explicit Hero below10m for approximately60s; no new enmity.",
-    "27": "Exit authored retreat to the daily routine; restore captured legacy policy.",
-    "29": "Keep same-NPC timed routine exchange and add actual Memory.Character.Defeated.Kill execution tag to accepted death filter."
+    "26": "ExchangeDailyRoutineToClass enters authored retreat through the proven scheduled-state path. Explicit player target; native GotoPosition to nearby5m retreat goals,75cm reach,5s timeout, approximately60s window. No new enmity or teleport.",
+    "27": "Exchange to wait routine and restore captured legacy flee policy. Preserve entry/distance/attempt/movement values; overwrite exit code with2 for explicit stop.",
+    "29": "Unchanged from user-confirmed0.1.1 revival; complete source class bodies compared."
+  },
+  "diagnostics": {
+    "prefix": "gore_role_flee_",
+    "fields": [
+      "entered",
+      "distance",
+      "attempts",
+      "moved_cm",
+      "exit"
+    ],
+    "reset": "Choice26 only; choice27 retains movement and entry values.",
+    "exit": "0 no completion,1 loop ended,2 explicit stop,-1 unavailable AI/body,-2 unavailable player. Choice27 replaces any earlier exit with2.",
+    "cause_limit": "Previous failure cause remains unproven; distinguish state entry from attempted movement using next user save."
   },
   "constraints": {
     "stock_AI_modules_unchanged": true,
     "no_game_backend": true,
-    "no_new_actor_or_raw_dead_tag_removal": true,
-    "unused_native_SubscribeToReviveClockEventIfNeeded_not_called": "Rejected by native-membership composition guard; retained existing routine exchange instead."
+    "revival_source_classes_unchanged": [
+      "UDailyRoutine_GoreRoleRevive",
+      "UChoiceGoreRoleRevive"
+    ]
   },
   "apply_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe\" mgr apply --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
   "reset_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe\" mgr reset --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
-  "apply_log_sha256": "1fd2e802d5aba898ac3a00ffcba1ae71e6fd227d2d714cb41006ed01536ff5e2",
-  "save_cleanup_report": "../profile-cleanup-after-field.json",
+  "apply_log_sha256": "a97487c457dc26fe056b6205483758ef3fd311595fa6695a2fbdd6bb23df71e8",
+  "save_cleanup_report": "../profile-cleanup-after-revive.json",
   "retained_inputs": [
     "G1R-070",
     "G1R-071",
-    "G1R-072",
-    "G1R-030"
+    "G1R-072"
   ],
   "checklist": "FIELD-TEST.md",
-  "remaining_runtime": "Retreat and stopping, then execution-save timed same-NPC revival; native clock/simulation distance gates remain unverified.",
-  "runtime_follow_up": "field-runtime-0.1.1.json: revival passed by user observation; flight no attack but no movement.",
-  "deployment_follow_up": "field-fix-0.1.2.json: only flight candidate installed; revival unchanged."
+  "remaining_runtime": "Only flight: fresh072 ->26 -> approach unarmed below10m ->27 ->31 -> save rolle-flucht-v3, even if still stationary."
 }

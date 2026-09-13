@@ -129,9 +129,9 @@ melden; der fehlende Spielstand ist dann kein Grund, den Test zu erzwingen.
 | 22 | Stock training fight with a defeat goal, both weapons retained. Win and observe defeat/recovery without a death goal. |
 | 23 | B becomes Hero's enemy until defeat. Observe actual hostility/combat and relationship reset after defeat. This is a personal modifier, not a guild change. |
 | 24 / 25 | Change **B only** to guild None, then restore his original ShadowLeader guild. Inspect saved guild and relationships. Do this on a separate clean branch from 23 so its personal modifier cannot mask faction effects. |
-| 26 / 27 | Since0.1.1, enter an authored retreat state using native navigation away from Hero, without introducing enmity. Approach within10m immediately; it lasts approximately60 real seconds. 27 ends this state and restores any captured legacy flee policy. Reload the clean input afterward. |
+| 26 / 27 | Since0.1.2, assign an authored retreat routine using native pathfinding away from the explicit player, without introducing enmity. Approach within10m immediately; it lasts approximately60 real seconds. 27 exchanges it for the wait routine and restores any captured legacy flee policy. Reload the clean input afterward. |
 | 28 | Stock training fight with a death goal. Kill B through combat/execution and verify the corpse/dead state persists through save/load. This is deliberately separate from ordinary defeat. |
-| 29 | Available only while B is dead: explicitly enable his same-NPC native timed revival policy. Since0.1.1 the filter also accepts the actual execution memory. Leave the area and allow at least one game hour; return and inspect. Verify the **same global ID**, living state, one B only, and retained inventory/state. Then use21 to disable this policy again. No actor is spawned by this choice. Native simulation/distance timing remains an open runtime test. |
+| 29 | Available only while B is dead: explicitly enable his same-NPC native timed revival policy. Since0.1.1 the filter also accepts the actual execution memory. Leave the area and allow at least one game hour; return and inspect. Verify the **same global ID**, living state, one B only, and retained inventory/state. Then use21 to disable this policy again. No actor is spawned by this choice. The user confirmed revival on the tested execution-save workflow; other death types and streaming conditions remain unverified. |
 | 30 | Arm a 60-second passive mixed-weapon trace. Close dialogue and reproduce warning sword → combat bow on the known input, keeping both weapons and arrows. Save promptly after the transition. |
 | 31 | Record B's health, dead/defeated, relationship, follow and flee state before saving. |
 
@@ -183,5 +183,19 @@ memory, despite the assigned revival routine. The authored Conflict.Killed filte
 did not include the actual Character.Defeated.Kill execution tag. These are
 targeted mod corrections; no vanilla-defect attribution is established.
 
+The0.1.1 retest confirms revival. Flight stopped attacking but still did not move;
+no new result save was available for a readback. See [the user report](field-runtime-0.1.1.json).
+The0.1.2 candidate uses the proven scheduled-state entry path, resolves the player
+explicitly and uses GotoPosition for five-metre retreat goals. The previous
+straight nav-ray gate is removed; its role in the failure is not yet proven.
+It records `gore_role_flee_entered`, `_distance`, `_attempts`, `_moved_cm` and `_exit`
+for the next save. Exit0 means no recorded completion,1 end of the bounded loop,
+2 explicit stop, negative values an unavailable AI/body (-1) or player (-2).
+Choice27 overwrites the exit code with2 but keeps entry, distance and movement
+measurements. Those measurements are the diagnostics used by the requested
+post-stop save; earlier exit codes are not retained in that save.
+Successful movement remains a manual test; a queued routine is not movement proof.
+
 Completed results are [archived outside the game](../profile-cleanup-after-field.json).
-030 remains for the resurrection retry;070/071/072 remain unchanged.
+After the revival pass,030 is [archived too](../profile-cleanup-after-revive.json);
+070/071/072 remain unchanged.
