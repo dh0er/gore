@@ -1,0 +1,91 @@
+{
+  "schema": "gore.npc-batch.quest-deployment.v1",
+  "date": "2026-09-13T17:51:31.743908+00:00",
+  "bundle": "NpcQuestCallbacksTest",
+  "version": "0.1.0",
+  "build": "quest-v6",
+  "manager_id": "npcquestcallbackstest-43e8193f",
+  "manager_status": "in_sync",
+  "bundle_path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\packages\\NpcQuestCallbacksTest",
+  "qualified_build_report": "../build-checks.json",
+  "inspection": {
+    "report_format": 1,
+    "source_kind": "directory",
+    "bundle_format": 1,
+    "mod": {
+      "name": "NpcQuestCallbacksTest",
+      "version": "0.1.0",
+      "author": ""
+    },
+    "component_count": 3,
+    "components": [
+      {
+        "type": "loc_patch",
+        "path": "loc/edits.json",
+        "target_count": 42,
+        "footprint_coverage": "exact"
+      },
+      {
+        "type": "voice_archive_patch",
+        "path": "voice",
+        "target_count": 5,
+        "footprint_coverage": "exact"
+      },
+      {
+        "type": "angel_script_patch",
+        "path": "scripts",
+        "target_count": 4,
+        "footprint_coverage": "exact"
+      }
+    ],
+    "file_count": 10,
+    "directory_count": 4,
+    "total_file_bytes": 461740,
+    "manifest_sha256": "cd4eb892658c7b70a16129f078a5f1d6b4cbdeb0d79f28efd85cfe4c276f7aa8",
+    "tree_sha256": "c9aba85b4aed34a85202919132218d7dcac142770ef4f10c12756e8478bd49b1",
+    "evidence": {
+      "verified": [
+        "bounded non-link materialization of the selected directory or ZIP",
+        "root manifest format plus every declared component manifest and referenced payload",
+        "portable paths, payload size limits, and supported payload structure where an offline decoder exists",
+        "SHA-256 identity of the exact manifest bytes and complete normalized bundle tree"
+      ],
+      "not_verified": [
+        "compatibility with any particular game installation or game build",
+        "whether named game-side assets, samples, localization ids, or script edit targets exist",
+        "cross-mod conflicts, load order, or deployment readiness",
+        "runtime behavior, visuals, audio playback, dialog flow, or gameplay effect"
+      ]
+    }
+  },
+  "unchanged_since_qualified_build": true,
+  "source_manifest_matches": true,
+  "mini_sha256": "f4560fc6f6b2cccf685f60b5eb2b58891e231acd516601e73adfcceb057219d4",
+  "full_sha256": "16cd55df3765f27ede0547cb3a22c2e258466444aa450319488d6908c99360ab",
+  "receipt_sha256": "ce140221c40b8ec1512ef4449de7f29db994f82a4c8918efa2bb3108a29f545c",
+  "manager_cli_sha256": "28b5d76e1e861476c7882725f056bca7cb65e718550203bd6c6dbd9aa9987fe1",
+  "legacy_connector_limit": "Dedicated inspector uses CLI0.3.0 and rejects this qualified four-module mini-cache manifest. Current CLI inspection and Manager Apply accept the exact previously checked bundle.",
+  "start": {
+    "displayed_profile": 4,
+    "slot": "G1R-071",
+    "title": "NPC 05 Quest - START",
+    "clock": "12:00:00",
+    "sha256": "aee18515288dc09ebc1f4687fc3da21cccdec946596b2744f2028ccdfaf68db5",
+    "bytes": 1018879,
+    "NPC": "Proviantmeister A, already opposite Hero; no setup required",
+    "daylight_report": "../daylight-starts.json"
+  },
+  "cleanup": "../profile-cleanup-after-field-complete.json",
+  "previous_runtime": "../roles/field-runtime-0.1.3.json",
+  "game_tests_performed_by": "user",
+  "runtime_verified": false,
+  "checklist": "FIELD-TEST.md",
+  "coverage": [
+    "Own journal and two automatic objectives",
+    "Two-cheese hand-in and exactly-once25-ore reward",
+    "Success/failure branches and intermediate/terminal full restart persistence"
+  ],
+  "apply_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe\" mgr apply --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
+  "reset_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe\" mgr reset --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
+  "apply_log_sha256": "0dbe949eea0c089d34c2eb1c1ba3bc5e4675d5106026196c09f5fc60f4b6ae78"
+}

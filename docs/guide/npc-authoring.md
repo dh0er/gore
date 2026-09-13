@@ -706,10 +706,14 @@ not clear those values. Live-cache metadata binds DoTask and graceful exit just
 like the working activity state, but the authored template explicitly disabled
 simulated steps while the base, walking and activity states enable them.
 Version0.1.3 enables that support and preserves previous exit/error codes on27.
-The native scheduling gate is not exposed in the script source, so this remains
-a focused candidate pending runtime confirmation, not a proven root cause.
-See the [save diagnosis](../../scripts/fixtures/npc-batch-tests/roles/field-runtime-0.1.2.json).
-See the [focused retry](../../scripts/fixtures/npc-batch-tests/roles/FIELD-TEST.md).
+The0.1.3 user test passed; the result save records entry1,41 movement attempts,
+5381.774cm cumulative movement and the wait routine after stopping. The native
+scheduling gate is not exposed in the script source; the test qualifies the
+corrected authored flight/stop path rather than all fear/streaming behavior.
+The last recorded exit is-1 (AI/body unavailable on an invocation), so the
+retained diagnostics are not a claim that every invocation had a physical body.
+See the [successful result](../../scripts/fixtures/npc-batch-tests/roles/field-runtime-0.1.3.json)
+and [original field checklist](../../scripts/fixtures/npc-batch-tests/roles/FIELD-TEST.md).
 
 ### Remaining limits
 

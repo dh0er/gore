@@ -157,5 +157,6 @@
     "DoTask_and_OnGracefulExit_event_bindings_correct": true,
     "native_property_offset": 537,
     "limit": "Compiled property value and event binding verified; no game execution performed."
-  }
+  },
+  "runtime_follow_up": "field-runtime-0.1.3.json: user pass, entry1,41 attempts and5381.774cm movement; wait routine after stop."
 }

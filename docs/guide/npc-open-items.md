@@ -163,12 +163,14 @@ duplicated public metadata and central slot registration were corrected, and61
 was repaired with backups on2026-09-10. The subsequent game test confirms loading;
 the retained source date may sort it beside54 rather than at the top.
 
-## 4. NPC roles — fleeing retest
+## 4. NPC roles — field campaign passed; remaining limits
 
 `NpcFieldRolesTest 0.1.0` was tested on2026-09-13; fleeing and revival failed.
 The0.1.1 retest confirms revival.0.1.2 still did not flee; its saved diagnostics
-never reached the task body's first marker.0.1.3 targets only the state-entry
-configuration; [latest report](../../scripts/fixtures/npc-batch-tests/roles/field-runtime-0.1.2.json).
+never reached the task body's first marker.0.1.3 enabled simulated steps and
+the user confirms the complete flight test passed. Its save records entry1,
+41 movement attempts and5381.774cm cumulative movement, then the wait routine.
+See the [latest report](../../scripts/fixtures/npc-batch-tests/roles/field-runtime-0.1.3.json).
 See the [save-backed results](../../scripts/fixtures/npc-batch-tests/roles/field-runtime-0.1.0.json)
 and [targeted field retest](../../scripts/fixtures/npc-batch-tests/roles/FIELD-TEST.md).
 The completed economy/teacher starts067/068/069 isolate missing LP, missing ore and successful
@@ -185,7 +187,8 @@ See the [runtime report](../../scripts/fixtures/npc-batch-tests/roles/economy-ru
 The0.1.3 correction uses native `OnWorldStart` initial stock without a manual event
 call. The [0.1.3 result](../../scripts/fixtures/npc-batch-tests/roles/economy-runtime-0.1.3.json)
 passes both loads with unchanged traded stock and Hero inventory. Completed
-starts/results are archived outside the game; Profile4 retains070/071/072.
+starts/results are archived outside the game. After the field campaign,
+Profile4 retains only071 for the quest tests.
 The earlier NPC-container readback was not shop-stock proof.
 
 - [x] Trader with actual stock and working buying/selling/cancel, tested0.1.2.
@@ -195,13 +198,14 @@ The earlier NPC-container readback was not shop-stock proof.
   and persistent learned result after full restart.
 - [x] Companion/following behavior, including stopping, resuming and reload.
 - [x] Training defeat/recovery, hostility until defeat and saved faction roundtrip.
-- [ ] Fleeing from Hero:0.1.0 attacked. Retest an explicit authored retreat with
-  Hero selected and native navigation, bypassing conditional fight assessment
+- [x] Fleeing from Hero:0.1.0 attacked. The explicit authored retreat uses
+  Hero as its target and native navigation, bypassing conditional fight assessment
   and same-species filtering.0.1.1 stopped attacking but did not move;0.1.2 uses
   the proven routine entry path, explicit player target and native pathfinding,
   with a few saved diagnostic values.0.1.2 records no entry or movement attempt;
-  0.1.3 enables simulated steps like the proven routine states. The native
-  entry gate and successful movement still require runtime confirmation.
+  0.1.3 enables simulated steps like the proven routine states; the user and
+  saved movement measurements confirm the tested flight/stop path. This does
+  not qualify stock fear assessment, all streaming cases or every terrain.
 - [ ] Investigate B drawing a bow next to the Hero and sometimes switching to a
   sword before firing. Archer personality and both usable weapons are confirmed;
   the runtime cause remains open. See the
@@ -224,7 +228,10 @@ These are focused role tests still to perform, not claims that the corresponding
 engine features or script paths are absent. `npc new --trader` currently creates
 an empty trader configuration; it does not by itself qualify a working shop.
 
-## 5. Quest completion beyond the basic session fixture — pending
+## 5. Quest completion beyond the basic session fixture — current test
+
+NpcQuestCallbacksTest0.1.0 is the next prepared package, using Profile4 slot071
+at noon. Follow the [German quest checklist](../../scripts/fixtures/npc-batch-tests/quest/FIELD-TEST.md).
 
 The [session campaign](../../scripts/fixtures/npc-session/RESULTS.md) passed
 quest acceptance, active/completed journal presence, direct start/success calls,

@@ -1,0 +1,51 @@
+{
+  "schema": "gore.npc-batch.field-runtime.v1",
+  "date": "2026-09-13",
+  "bundle": "NpcFieldRolesTest",
+  "version": "0.1.3",
+  "user_results": {
+    "flee": true,
+    "stop": true,
+    "report": "This time everything worked."
+  },
+  "save": {
+    "slot": "G1R-003",
+    "title": "rolle-flucht-v4",
+    "file": {
+      "bytes": 1060824,
+      "sha256": "09c053f1b71aece712e5a912549a576f14a5f1f0e19eadde909431bb3ceb74e7"
+    },
+    "global_id": "GORE_TEST_B-WP_WarningFlock_XT_02",
+    "one_saved_B": true,
+    "is_dead": false,
+    "routine_after_stop": "/Script/Angelscript.DailyRoutine_GoreRoleWait",
+    "markers": {
+      "gore_role_old_flee_mode": 2.0,
+      "gore_role_flee_attempts": 41.0,
+      "gore_role_flee_moved_cm": 5381.774,
+      "gore_role_flee_distance": 3602.8555,
+      "gore_role_flee_entered": 1.0,
+      "gore_role_flee_exit": -1.0,
+      "gore_role_flee_override": 0.0,
+      "gore_role_dead": 0.0,
+      "gore_role_defeated": 0.0,
+      "gore_role_health": 50.0,
+      "gore_role_enemy": 0.0,
+      "gore_role_relationship": 4.0,
+      "gore_role_flee": 0.0,
+      "gore_role_follow": 0.0
+    },
+    "readback_sha256": "0e6fc356dae0276525e6fff65cd6cf79a4490c890af21b5f2bb8933d951262da"
+  },
+  "interpretation": {
+    "passed": "User confirms the complete requested flight/stop test. Entry1,41 movement attempts and5381.774cm cumulative movement corroborate execution; wait routine, cleared override and no enmity are retained after stop.",
+    "correction": "0.1.3 enables simulated steps on the existing state, matching the base and proven activities;27 preserves earlier nonzero exit codes. Navigation and revival were unchanged.",
+    "exit_note": "The latest retained exit is-1, which the source writes on an invocation without valid AI/body. Its exact timing is not reconstructable from this save; no claim of error-free execution across all streaming cases.",
+    "limits": "Qualifies this authored flight/stop workflow, not stock threat/fear assessment, every terrain, arbitrary unloaded-NPC behavior or all game builds."
+  },
+  "field_campaign": "Follow/wait, defeat/recovery, enmity/faction roundtrip, death/reload, explicit revival and authored flight now have user passes. Bow-selection attribution and persistent late stock-event grants remain separate open items.",
+  "prior_results": "field-runtime-0.1.2.json",
+  "deployment": "field-fix-0.1.3.json",
+  "archive_report": "../profile-cleanup-after-field-complete.json",
+  "next_test": "../quest/FIELD-TEST.md"
+}
