@@ -1,8 +1,10 @@
 # Paket4: Begleiter, Kampf und Lebenszyklus
 
-Profil4. **070 „NPC 04 Rollen - START“** behaelt die normalen Heldenwerte.
-**072 „NPC 04 Rollen - Kampf bereit“** hat einen verstaerkten Helden fuer
-die Sieg-/Tod-Tests. Beide beginnen mittags auf der freien Flaeche vor dem Alten
+Profil4. In **070 „NPC 04 Rollen - START“** und **072 „NPC 04 Rollen - Kampf bereit“**
+hat der Held jetzt **10.000/10.000 Leben**, B **50/50 Leben**.072 behaelt zusaetzlich
+seine bisherigen erhoehten Staerke-/Schutzwerte fuer die Sieg-/Tod-Tests.
+Die Originale sind extern archiviert; siehe [Gesundheitsanpassung](field-health-starts.json).
+Beide beginnen mittags auf der freien Flaeche vor dem Alten
 Lager. B steht vor dir; **A steht am Tor etwa30 Meter hinter dir**.
 Alle nummerierten Optionen waehlst du bei A. Es gibt keinen neuen Aufbau.
 
@@ -18,10 +20,15 @@ Bei A **30** waehlen. Danach sofort zu B zurueck: Die Aufzeichnung laeuft
 60 Sekunden. Direkt vor B dein Schwert ziehen und die Warnung zum Kampf
 eskalieren lassen, wie beim bisherigen Schwert-zu-Bogen-Fehler. Bs Waffen
 behalten. Beobachten, was er waehrend Warnung und Kampf zieht.
-Ergebnis **`rolle-waffenwahl`** speichern, sobald moeglich; danach070 frisch laden.
+Nach der Beobachtung B ohne Todesstoss besiegen oder auf Abstand gehen. Waffe
+einstecken und das Ende des Konflikts abwarten, dann **`rolle-waffenwahl`** speichern.
+Die Diagnosewerte bleiben erhalten;30 nicht erneut starten. Im Kampf oder bei
+totem Helden bleibt Speichern gesperrt. Danach070 frisch laden.
 Keine bestimmte Waffenwahl gilt vorab als bestanden. Dieser Test soll deren
 Ursache eingrenzen. Falls andere NPCs eingreifen oder B gar nicht reagiert,
 getrennt notieren; die Aufnahme nicht durch andere Rollenoptionen vorbereiten.
+Diese Runde nutzt die auf Wunsch angepassten Lebenswerte; die urspruengliche
+Waffenwahl mit normalen Lebenswerten bleibt als fruehere Beobachtung dokumentiert.
 
 ## 2. Folgen und Warten — 070
 

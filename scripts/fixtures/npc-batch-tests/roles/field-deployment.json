@@ -136,5 +136,6 @@
   ],
   "retained_saves_and_registry_match_cleanup": true,
   "test_instructions": "FIELD-TEST.md",
-  "runtime_scope": "First passive mixed-weapon diagnosis on070; follow/wait; separate training defeat/enmity/faction/flee/death and explicit same-NPC revival.070 unchanged Hero,072 stronger Hero for combat; both daylight. No game launch or manual test performed by Codex."
+  "runtime_scope": "First passive mixed-weapon diagnosis on070; follow/wait; separate training defeat/enmity/faction/flee/death and explicit same-NPC revival.070 unchanged Hero,072 stronger Hero for combat; both daylight. No game launch or manual test performed by Codex.",
+  "start_health_follow_up": "field-health-starts.json:070/072 updated on2026-09-13 to Hero10000/B50 Health and MaxHealth (base/current); original health baselines archived."
 }
