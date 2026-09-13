@@ -9373,6 +9373,81 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_scoped_event_receiver(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"FGameplayTag",""),(2,"FGameplayTagContainer",""),(3,"AGothicCharacterState",""),(4,"AGothicCharacter",""),
+            (5,"UPerceptionSystem",""),(6,"FVector",""),(7,"AActor",""),(8,"TArray",""),(9,"TArrayIterator",""),
+            (10,"UGothicCharacterAIState","Fixture"),(11,"UNoticeState","Fixture"),(12,"UCharacterPlanner","Fixture"),(13,"UGameplayAbility_CharacterAI",""),(15,"UGameplayAbility_AI","")] {
+            r.type_by_ptr.insert(ptr,name.into());r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:module.into(),namespace:String::new()});
+            r.typeid_to_ptr.insert(ptr as i32+1000,ptr);
+        }
+        r.class_super.insert("UNoticeState".into(),"UGothicCharacterAIState".into());
+        r.class_super.insert("UCharacterPlanner".into(),"UGameplayAbility_CharacterAI".into());
+        r.class_fields.entry("UGothicCharacterAIState".into()).or_default().insert("Brain".into(),"UCharacterPlanner".into());
+        for (id,offset,name) in [(1010,752,"Brain"),(1009,16,"CanProceed")] {
+            let key=((id as i64)<<1)|((offset as i64)<<33)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id);
+        }
+        let value=|ptr|DataType {token:5,type_info:ptr,..Default::default()};
+        let handle=|ptr|DataType {is_object_handle:true,..value(ptr)};
+        let input=|ptr|DataType {is_reference:true,is_object_const:true,is_read_only:true,..value(ptr)};
+        let void=DataType {token:0x52,..Default::default()};let single=DataType {token:0x50,..Default::default()};
+        r.type_subtypes.insert(8,vec![handle(4)]);
+        let mut arguments=vec![input(1),input(6)];arguments.extend((0..5).map(|_|DataType {is_object_const:true,..handle(7)}));
+        arguments.extend([value(2),single.clone(),single]);
+        for (ptr,name,owner,constant,ret,args) in [
+            (101,"GetSelf","UGameplayAbility_CharacterAI",true,handle(4),vec![]),
+            (102,"GetCharacterState","AGothicCharacter",true,handle(3),vec![]),
+            (104,"$beh0","FGameplayTagContainer",false,void.clone(),vec![]),
+            (105,"GetActorLocation","AActor",true,value(6),vec![]),
+            (106,"BroadcastPerceptionEvent","UPerceptionSystem",false,void.clone(),arguments),
+            (107,"$beh2","FGameplayTagContainer",false,void.clone(),vec![]),
+            (108,"Iterator","TArray",false,value(9),vec![]),
+            (109,"Proceed","TArrayIterator",false,DataType {is_reference:true,..handle(4)},vec![]),
+            (110,"$beh2","TArray",false,void.clone(),vec![])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);
+            if constant {r.const_method_ptrs.insert(ptr);}r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+        }
+        r.func_by_ptr.insert(103,"Get".into());r.func_ns.insert(103,"UPerceptionSystem".into());r.func_ret.insert(103,handle(5));r.func_params.insert(103,vec![]);
+        r.func_by_ptr.insert(120,"ForceHearingPerception".into());r.funcid_to_ptr.insert(201,120);r.func_ret.insert(120,void);r.func_params.insert(120,vec![handle(15),handle(3)]);
+        let field_key=(1010i64<<1)|(752i64<<33)|1;let iter_key=(1009i64<<1)|(16i64<<33)|1;
+        match fault {
+            1=>r.func_ret.get_mut(&101).unwrap().is_reference=true,
+            2=>{r.const_method_ptrs.remove(&101);},
+            3=>{r.func_by_ptr.insert(101,"GetOther".into());},
+            4=>{r.func_owner.insert(101,"UOtherPlanner".into());},
+            5=>r.func_ret.get_mut(&105).unwrap().is_reference=true,
+            6=>r.func_params.get_mut(&105).unwrap().push(DataType {token:0x51,..Default::default()}),
+            7=>{r.func_ns.insert(103,"Other".into());},
+            8=>{r.func_is_method.insert(103);},
+            9=>r.func_ret.get_mut(&103).unwrap().is_object_const=true,
+            10=>{r.const_method_ptrs.insert(104);},
+            11=>r.func_ret.get_mut(&107).unwrap().token=0x41,
+            12=>{r.const_method_ptrs.insert(106);},
+            13=>r.func_params.get_mut(&106).unwrap()[2].is_read_only=true,
+            14=>r.func_params.get_mut(&106).unwrap()[0].is_reference=false,
+            15=>r.func_params.get_mut(&106).unwrap()[7].is_reference=true,
+            16=>r.func_params.get_mut(&106).unwrap()[8].token=0x51,
+            17=>r.func_params.get_mut(&106).unwrap().pop().map(|_|()).unwrap(),
+            18=>r.func_ret.get_mut(&109).unwrap().is_read_only=true,
+            19=>{r.const_method_ptrs.insert(108);},
+            20=>r.type_subtypes.get_mut(&8).unwrap()[0].is_object_handle=false,
+            21=>{r.class_super.insert("UCharacterPlanner".into(),"UOtherNative".into());},
+            22=>{r.class_super.insert("UNoticeState".into(),"UOtherState".into());},
+            23=>{r.prop_type_id.insert(field_key,1011);},
+            24=>{r.prop_by_key.insert(iter_key,"Other".into());},
+            25=>{r.prop_type_id.insert(iter_key,1008);},
+            26=>r.type_identity_by_ptr.get_mut(&4).unwrap().module="Script".into(),
+            27=>r.func_ret.get_mut(&102).unwrap().type_info=4,
+            28=>{r.func_owner.insert(110,"FGameplayTagContainer".into());},
+            29=>r.func_params.get_mut(&106).unwrap()[5].type_info=3,
+            30=>r.func_ret.get_mut(&106).unwrap().is_reference=true,
+            31=>{r.class_fields.entry("UGameplayAbility_CharacterAI".into()).or_default().insert("Self".into(),"AActor".into());},
+            _=>{},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_interpolated_sample(fault:u8)->Self {
         let mut r=Self::default();r.type_by_ptr.insert(1,"FVector".into());r.typeid_to_ptr.insert(101,1);
         r.type_identity_by_ptr.insert(1,TypeIdentity {name:"FVector".into(),module:String::new(),namespace:String::new()});
@@ -9626,6 +9701,68 @@ impl RefResolver {
             32=>{r.global_ns.remove(&202);},
             33=>{r.class_fields.insert(names[4].into(),HashMap::from([(field.into(),names[5].into())]));},
             34=>r.func_ret.get_mut(&1401).unwrap().type_info=6,
+            _=>{}
+        } r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_named_projection(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name) in [(1,"FVector"),(2,"AActor"),(3,"UObject"),(4,"FLinearColor"),(5,"ACharacter")] {
+            r.type_by_ptr.insert(ptr,name.into()); r.typeid_to_ptr.insert(ptr as i32,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:String::new(),namespace:String::new()});
+        }
+        // Real script ancestry stops at this native root; no fictitious ACharacter->AActor row.
+        r.class_super.insert("AIndependentVisual".into(),"ACharacter".into());
+        let shape=|token,type_info,reference:bool,constant:bool,readonly:bool,handle:bool| DataType {
+            token,type_info,is_reference:reference,is_object_const:constant,is_read_only:readonly,is_object_handle:handle,..Default::default()
+        };
+        let vec=shape(5,1,false,false,false,false); let vr=shape(5,1,true,true,true,false);
+        let cv=shape(5,1,false,true,true,false); let world=shape(5,3,false,true,false,true);
+        let color=shape(5,4,false,false,false,false); let double=shape(0x51,0,false,false,false,false);
+        let single=shape(0x50,0,false,false,false,false); let void=shape(0x52,0,false,false,false,false);
+        for (ptr,name,owner,ns,ret,args) in [
+            (301,"FindClosestPointOnLine",None,"MagicScript",vec.clone(),vec![vec.clone(),vec.clone(),vec.clone()]),
+            (302,"Distance",Some("FVector"),"",double.clone(),vec![vr.clone()]),
+            (303,"opSub",Some("FVector"),"",vec.clone(),vec![vr.clone()]),
+            (304,"DotProduct",Some("FVector"),"",double.clone(),vec![vr.clone()]),
+            (305,"opMul",Some("FVector"),"",vec.clone(),vec![double.clone()]),
+            (306,"opAdd",Some("FVector"),"",vec.clone(),vec![vr.clone()]),
+            (307,"opEquals",Some("FVector"),"",shape(0x41,0,false,false,false,false),vec![vr.clone()]),
+            (308,"DrawDebugSphere",None,"System",void.clone(),vec![world.clone(),cv.clone(),single.clone(),shape(0x44,0,false,false,false,false),color.clone(),single.clone(),single.clone()]),
+            (309,"GetActorLocation",Some("AActor"),"",vec.clone(),vec![]),
+            (310,"DrawDebugLine",None,"System",void.clone(),vec![world,cv.clone(),cv,color,single.clone(),single]),
+            (311,"opNeg",Some("FVector"),"",vec,vec![]),
+        ] {
+            r.func_by_ptr.insert(ptr,name.into()); r.func_ret.insert(ptr,ret); r.func_params.insert(ptr,args);
+            if let Some(owner)=owner {r.func_owner.insert(ptr,owner.into());r.func_is_method.insert(ptr);r.const_method_ptrs.insert(ptr);}
+            else {r.func_ns.insert(ptr,ns.into());}
+        }
+        for (ptr,name,ns) in [(201,"Purple","FLinearColor"),(202,"Yellow","FLinearColor"),(203,"__WorldContext","System")] {
+            r.global_by_ptr.insert(ptr,name.into());r.global_ns.insert(ptr,ns.into());
+        }
+        match fault {
+            1=>{r.const_method_ptrs.remove(&307);},
+            2=>r.func_params.get_mut(&307).unwrap()[0].is_reference=false,
+            3=>r.func_ret.get_mut(&307).unwrap().is_object_const=true,
+            4=>r.func_ret.get_mut(&304).unwrap().token=0x50,
+            5=>r.func_ret.get_mut(&304).unwrap().is_reference=true,
+            6=>{r.const_method_ptrs.remove(&304);},
+            7=>r.func_params.get_mut(&305).unwrap()[0].token=0x50,
+            8=>r.func_params.get_mut(&306).unwrap()[0].is_read_only=false,
+            9=>r.func_ret.get_mut(&309).unwrap().is_object_handle=true,
+            10=>{r.const_method_ptrs.remove(&309);},
+            11=>r.func_params.get_mut(&310).unwrap()[1].is_reference=true,
+            12=>r.func_params.get_mut(&310).unwrap()[0].is_read_only=true,
+            13=>r.func_params.get_mut(&301).unwrap()[2].is_reference=true,
+            14=>{r.func_ns.insert(310,"Other".into());},
+            15=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into(),
+            16=>{r.global_ns.insert(202,"Other".into());},
+            17=>{r.class_super.remove("AIndependentVisual");},
+            18=>r.func_params.get_mut(&309).unwrap().push(double),
+            19=>r.func_ret.get_mut(&311).unwrap().is_auto=true,
+            20=>r.func_params.get_mut(&308).unwrap()[2].is_object_const=true,
+            21=>{r.global_by_ptr.insert(203,"OtherWorld".into());},
             _=>{}
         } r
     }

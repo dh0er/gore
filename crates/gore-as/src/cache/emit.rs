@@ -3387,6 +3387,8 @@ fn emit_function_ctor(
         pass_trace("restore_class_guard_bool_lifetimes", &rendered);
         let rendered = restore_temporary_vector_expression_lifetimes(&rendered, f, refs);
         pass_trace("restore_temporary_vector_expression_lifetimes", &rendered);
+        let rendered = restore_named_projection_and_draw_arguments(&rendered, f, refs, class_name, is_method);
+        pass_trace("restore_named_projection_and_draw_arguments", &rendered);
         let rendered = restore_following_target_property(&rendered, f, refs);
         pass_trace("restore_following_target_property", &rendered);
         let rendered = restore_item_transfer_ai_property(&rendered, f, refs);
@@ -3479,6 +3481,8 @@ fn emit_function_ctor(
         pass_trace("restore_scoped_tag_predicate_consumers", &rendered);
         let rendered = restore_interpolated_sample_lives(&rendered, f, refs);
         pass_trace("restore_interpolated_sample_lives", &rendered);
+        let rendered = restore_scoped_event_self_argument(&rendered, f, refs, class_name, is_method);
+        pass_trace("restore_scoped_event_self_argument", &rendered);
         let rendered = restore_captured_predicate_condition_lives(&rendered, f, refs, class_name, is_method);
         pass_trace("restore_captured_predicate_condition_lives", &rendered);
         let rendered = restore_clock_property_and_enum_chain(&rendered, f, refs, is_method, class_name);
@@ -14131,6 +14135,255 @@ fn restore_linked_bool_guard_lifetimes(body: &str, f: &Func, refs: &RefResolver)
     if body.ends_with('\n') {out.push('\n');} out
 }
 
+/// Preserve a named projection and equality RHS while closing two native draw argument lives.
+/// This is the measured partial repair: the negative receiver remains an explicit getter.
+fn restore_named_projection_and_draw_arguments(body: &str, f: &Func, refs: &RefResolver, class_name: Option<&str>, is_method: bool) -> String {
+    if !is_method || !body.contains(".DotProduct(") || !body.contains("System::DrawDebugLine(")
+        || !body.contains(".GetActorLocation()") || !body.contains(" == ") { return body.to_owned(); }
+    let qualify = || -> Option<(String, String)> {
+        let class = class_name?;
+        // Script ancestry stops at native ACharacter; both expose this exact AActor getter.
+        if !refs.is_subclass(class, "AActor") && !refs.is_subclass(class, "ACharacter") { return None; }
+        let shape = |t: &super::types::DataType, token, ptr, reference: bool, constant: bool, readonly: bool, handle: bool| {
+            t.token == token && t.type_info == ptr && t.is_reference == reference && t.is_object_const == constant
+                && t.is_read_only == readonly && t.is_object_handle == handle && !t.is_auto && !t.if_handle_then_const
+        };
+        if !shape(&f.ret, 0x52, 0, false, false, false, false) { return None; }
+        let code = disassemble(&f.bytecode).ok()?;
+        let w = |i: &Instr, n| i.words.get(n).map(|v| *v as i16 as i32);
+        let q = |i: &Instr| i.qwords.first().copied();
+        let target = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+        let starts: Vec<_> = code.windows(128).enumerate().filter(|(_, c)| c.iter().map(|i| i.op.name).eq([
+            "SetV8","CMPd","JS","PshVPtr","PshVPtr","PshVPtr","PSF","CALLSYS",
+            "PSF","PshVPtr","CALLSYS","CpyRtoV8","PshVPtr","PSF","PshVPtr","CALLSYS",
+            "PshVPtr","PSF","CALLSYS","CpyRtoV8","PshV8","PSF","PshVPtr","CALLSYS",
+            "PSF","PSF","PshVPtr","CALLSYS","PSF","PSF","CALLSYS","JLowZ",
+            "PshC4","PshC4","PshGPtr","PshC4","PshC4","PSF","PshGPtr","CALLSYS",
+            "PshC4","PshC4","PshGPtr","PSF","PshVPtr","CALLSYS","PshV8","PSF",
+            "PshVPtr","CALLSYS","PSF","PSF","PSF","CALLSYS","PSF","PSF",
+            "PshVPtr","CALLSYS","PSF","PshGPtr","CALLSYS","JMP","PSF","PshVPtr",
+            "CALLSYS","PSF","PshVPtr","PshVPtr","PSF","CALLSYS","PSF","PshVPtr",
+            "CALLSYS","CpyRtoV8","PshC4","PshC4","PshGPtr","PshC4","PshC4","PSF",
+            "PshGPtr","CALLSYS","PshC4","PshC4","PshGPtr","PSF","PshVPtr","CALLSYS",
+            "PshV8","PSF","PshVPtr","CALLSYS","PshC8","PSF","PSF","CALLSYS",
+            "PSF","PSF","PSF","CALLSYS","PSF","PSF","PshVPtr","CALLSYS",
+            "PSF","PshGPtr","CALLSYS","SetV8","CMPd","JS","JMP","PshC4",
+            "PshC4","PshGPtr","PSF","PshVPtr","CALLSYS","PshVPtr","PSF","PSF",
+            "CALLSYS","PSF","PSF","PshVPtr","CALLSYS","PSF","PshGPtr","CALLSYS",
+        ])).map(|(n, _)| n).collect();
+        let [start] = starts.as_slice() else { return None; };
+        let c = &code[*start..*start + 128];
+        let (distance, dot, reverse_distance) = (w(&c[0], 0)?, w(&c[19], 0)?, w(&c[73], 0)?);
+        let (point, difference, product, receiver, rhs, reverse_point) =
+            (w(&c[6], 0)?, w(&c[13], 0)?, w(&c[21], 0)?, w(&c[43], 0)?, w(&c[25], 0)?, w(&c[51], 0)?);
+        let (forward, location, target_location, forward_dot, right_dot, velocity) =
+            (w(&c[3], 0)?, w(&c[4], 0)?, w(&c[5], 0)?, w(&c[1], 0)?, w(&c[108], 0)?, w(&c[117], 0)?);
+        let locals = [distance, dot, reverse_distance, point, difference, product, receiver, rhs, reverse_point];
+        if locals.iter().any(|s| *s <= 0) || locals.into_iter().collect::<HashSet<_>>().len() != locals.len() { return None; }
+        // Every packed operand in the two branches and their following reuse is checked.
+        for (at, words) in [
+            (0, &[distance][..]),
+            (1, &[forward_dot,distance][..]),
+            (3, &[forward][..]),
+            (4, &[location][..]),
+            (5, &[target_location][..]),
+            (6, &[point][..]),
+            (8, &[point][..]),
+            (9, &[location][..]),
+            (11, &[distance][..]),
+            (12, &[location][..]),
+            (13, &[difference][..]),
+            (14, &[target_location][..]),
+            (16, &[forward][..]),
+            (17, &[difference][..]),
+            (19, &[dot][..]),
+            (20, &[dot][..]),
+            (21, &[product][..]),
+            (22, &[forward][..]),
+            (24, &[product][..]),
+            (25, &[rhs][..]),
+            (26, &[location][..]),
+            (28, &[rhs][..]),
+            (29, &[point][..]),
+            (37, &[point][..]),
+            (43, &[receiver][..]),
+            (44, &[0][..]),
+            (46, &[distance][..]),
+            (47, &[product][..]),
+            (48, &[forward][..]),
+            (50, &[product][..]),
+            (51, &[reverse_point][..]),
+            (52, &[receiver][..]),
+            (54, &[reverse_point][..]),
+            (55, &[receiver][..]),
+            (56, &[0][..]),
+            (58, &[receiver][..]),
+            (62, &[product][..]),
+            (63, &[forward][..]),
+            (65, &[product][..]),
+            (66, &[location][..]),
+            (67, &[target_location][..]),
+            (68, &[reverse_point][..]),
+            (70, &[reverse_point][..]),
+            (71, &[location][..]),
+            (73, &[reverse_distance][..]),
+            (79, &[reverse_point][..]),
+            (85, &[rhs][..]),
+            (86, &[0][..]),
+            (88, &[reverse_distance][..]),
+            (89, &[product][..]),
+            (90, &[forward][..]),
+            (93, &[receiver][..]),
+            (94, &[product][..]),
+            (96, &[receiver][..]),
+            (97, &[product][..]),
+            (98, &[rhs][..]),
+            (100, &[product][..]),
+            (101, &[rhs][..]),
+            (102, &[0][..]),
+            (104, &[rhs][..]),
+            (107, &[distance][..]),
+            (108, &[right_dot,distance][..]),
+            (114, &[receiver][..]),
+            (115, &[0][..]),
+            (117, &[velocity][..]),
+            (118, &[product][..]),
+            (119, &[receiver][..]),
+            (121, &[product][..]),
+            (122, &[rhs][..]),
+            (123, &[0][..]),
+            (125, &[rhs][..]),
+        ] { if c[at].words.iter().map(|v| *v as i16 as i32).ne(words.iter().copied()) { return None; } }
+        for (at, value) in [(32,1092616192),(33,0),(35,12),(36,1092616192),(40,1092616192),(41,0),(74,1092616192),(75,0),(77,12),(78,1092616192),(82,1092616192),(83,0),(111,1092616192),(112,0)] { if c[at].dwords.as_slice() != [value] { return None; } }
+        if q(&c[0]) != Some(0) || q(&c[107]) != Some(0) || q(&c[92]) != Some((-1.0f64).to_bits()) { return None; }
+        for (from, to) in [(2,62), (31,32), (61,107), (109,111), (110,111)] {
+            if target(&c[from]) != Some(c[to].offset_dw as i64) { return None; }
+        }
+        // No hidden edge may enter an operand interval, including either sibling branch.
+        if code.iter().enumerate().any(|(at, i)| i.op.name == "JMPP" ||
+            (i.op.name.starts_with('J') && (at < *start || at >= *start + 128)
+                && target(i).is_some_and(|t| t > c[0].offset_dw as i64 && t <= c[127].offset_dw as i64))) { return None; }
+        let vector = const_native_value_equality(f, refs, &c[30], rhs)?;
+        let identity = refs.type_identity_by_ptr(vector)?;
+        if identity.name != "FVector" { return None; }
+        if [point,difference,product,receiver,rhs,reverse_point].into_iter().any(|s|
+            f.obj_locals.iter().filter(|(slot,_)| *slot == s).map(|(_,p)| *p).ne([vector]))
+            || f.obj_locals.iter().any(|(s,_)| [distance,dot,reverse_distance].contains(s)) { return None; }
+        // The materialized primitive has exactly one definition and its one original read.
+        if code.iter().enumerate().filter(|(_,i)| super::bytediff::addressed_slots(i).contains(&dot))
+            .map(|(n,_)| n).ne([*start+19,*start+20]) { return None; }
+        let types: Vec<_> = f.params.iter().map(|p| p.ty.clone()).collect();
+        let parameters = super::model::param_slot_map(&types, true, false, Some(refs));
+        let parameter = |slot, scalar: bool| -> Option<&str> {
+            let p = f.params.get(*parameters.get(&slot)?)?;
+            if !shape(&p.ty, if scalar {0x51} else {5}, if scalar {0} else {vector}, !scalar, true, true, false)
+                || p.flags != if scalar {0} else {3} || p.name.is_empty()
+                || !p.name.chars().enumerate().all(|(i,ch)| ch == '_' || ch.is_ascii_alphabetic() || (i>0 && ch.is_ascii_digit())) { return None; }
+            Some(p.name.as_str())
+        };
+        let (pf, pl, pt, fd, rd, pv) = (parameter(forward,false)?,parameter(location,false)?,parameter(target_location,false)?,
+            parameter(forward_dot,true)?,parameter(right_dot,true)?,parameter(velocity,false)?);
+        if [pf,pl,pt,fd,rd,pv].into_iter().collect::<HashSet<_>>().len() != 6 { return None; }
+        let call = |at: usize, name: &str, owner: Option<&str>, namespace: &str, ret_token, ret_ptr, args: &[(i32,i64,bool,bool,bool,bool)]| {
+            let Some(ptr) = q(&c[at]).map(|p| p as i64) else { return false; };
+            refs.func_by_ptr(ptr) == Some(name) && refs.func_owner_by_ptr(ptr) == owner
+                && refs.is_method_by_ptr(ptr) == owner.is_some() && refs.is_const_method_by_ptr(ptr) == owner.is_some()
+                && (owner.is_some() || refs.func_ns_by_ptr(ptr) == Some(namespace))
+                && refs.func_ret_by_ptr(ptr).is_some_and(|t| shape(t,ret_token,ret_ptr,false,false,false,false))
+                && refs.func_params_by_ptr(ptr).is_some_and(|p| p.len() == args.len() && p.iter().zip(args).all(|(t,a)| shape(t,a.0,a.1,a.2,a.3,a.4,a.5)))
+        };
+        let vr = (5,vector,true,true,true,false); let vv = (5,vector,false,false,false,false);
+        let cv = (5,vector,false,true,true,false); let double = (0x51,0,false,false,false,false);
+        for (at,name) in [(15,"opSub"),(27,"opAdd"),(53,"opAdd"),(99,"opAdd"),(120,"opAdd")] {
+            if !call(at,name,Some("FVector"),"",5,vector,&[vr]) { return None; }
+        }
+        for at in [23,49,91,95] { if !call(at,"opMul",Some("FVector"),"",5,vector,&[double]) { return None; } }
+        for (at,name) in [(10,"Distance"),(18,"DotProduct"),(72,"Distance")] {
+            if !call(at,name,Some("FVector"),"",0x51,0,&[vr]) { return None; }
+        }
+        if !call(64,"opNeg",Some("FVector"),"",5,vector,&[]) { return None; }
+        for at in [7,69] { if !call(at,"FindClosestPointOnLine",None,"MagicScript",5,vector,&[vv,vv,vv]) { return None; } }
+        for at in [45,57,87,103,116,124] { if !call(at,"GetActorLocation",Some("AActor"),"",5,vector,&[]) { return None; } }
+        let draw_params = refs.func_params_by_ptr(q(&c[60])? as i64)?;
+        if draw_params.len()!=6 { return None; }
+        let (object,color)=(draw_params[0].type_info,draw_params[3].type_info);
+        for (ptr,name) in [(object,"UObject"),(color,"FLinearColor")] {
+            let id=refs.type_identity_by_ptr(ptr)?;
+            if id.name!=name || !id.module.is_empty() || !id.namespace.is_empty() { return None; }
+        }
+        let world=(5,object,false,true,false,true); let color_value=(5,color,false,false,false,false);
+        let single=(0x50,0,false,false,false,false); let integer=(0x44,0,false,false,false,false);
+        for at in [60,106,127] { if !call(at,"DrawDebugLine",None,"System",0x52,0,&[world,cv,cv,color_value,single,single]) { return None; } }
+        for at in [39,81] { if !call(at,"DrawDebugSphere",None,"System",0x52,0,&[world,cv,single,integer,color_value,single,single]) { return None; } }
+        let (purple,yellow,world_ptr)=(q(&c[34])?,q(&c[42])?,q(&c[38])?);
+        if refs.global_by_ptr(world_ptr as i64)!=Some("__WorldContext") { return None; }
+        for at in [76] { if q(&c[at])!=Some(purple) { return None; } }
+        for at in [84,113] { if q(&c[at])!=Some(yellow) { return None; } }
+        for at in [59,80,105,126] { if q(&c[at])!=Some(world_ptr) { return None; } }
+        let color_name=|ptr:u64| -> Option<String> {
+            if refs.global_ns(ptr as i64)!=Some("FLinearColor") { return None; }
+            Some(format!("FLinearColor::{}",refs.global_by_ptr(ptr as i64)?))
+        };
+        let (purple,yellow)=(color_name(purple)?,color_name(yellow)?);
+        // Exact adjacent source branch, with local life suffixes resolved from declarations.
+        let lines: Vec<_> = body.lines().collect();
+        let mut paths=Vec::new();let mut path=Vec::new();
+        for (n,line) in lines.iter().enumerate() {
+            paths.push(path.clone());
+            match line.trim() {"{"=>path.push(n),"}"=>{path.pop()?;},_=>if line.contains('{') || line.contains('}') {return None;}}
+        }
+        if !path.is_empty() {return None;}
+        let header=format!("if ({fd} >= 0.0)");
+        let found: Vec<_>=lines.iter().enumerate().filter(|(_,l)| l.trim()==header).map(|(i,_)|i).collect();
+        let [at]=found.as_slice() else { return None; };
+        let old=lines.get(*at..*at+21)?;
+        let indent=indent_of(old[0]); let inner=format!("{indent}    ");
+        let name = |at:usize,slot:i32,ty:&str| -> Option<String> {
+            let (_,name,_)=declaration_with_initializer(old[at])?;
+            if slot_and_life_any(&name)?.0 != slot || !old[at].starts_with(&format!("{inner}{ty} ")) { return None; }
+            Some(name)
+        };
+        let (np,nd,nsub,nprod,nrev,nrd,nget,nprod2)=(name(2,point,"FVector")?,name(3,distance,"float")?,name(4,difference,"FVector")?,
+            name(9,product,"FVector")?,name(14,reverse_point,"FVector")?,name(15,reverse_distance,"float")?,name(17,rhs,"FVector")?,name(18,product,"FVector")?);
+        let (new_dot,new_rhs)=(format!("local_{dot}"),format!("local_{rhs}"));
+        let expected = vec![header,"{".into(),format!("FVector {np} = MagicScript::FindClosestPointOnLine({pt}, {pl}, {pf});"),
+            format!("float {nd} = {pl}.Distance({np});"),format!("FVector {nsub} = ({pt} - {pl});"),
+            format!("if (({np} == ({pl} + ({pf} * {nsub}.DotProduct({pf})))))"),
+            "{".into(),"}".into(),format!("System::DrawDebugSphere({np}, 10.0f, 12, {purple}, 0.0f, 10.0f);"),
+            format!("FVector {nprod} = ({pf} * {nd});"),format!("System::DrawDebugLine(this.GetActorLocation(), (this.GetActorLocation() + {nprod}), {yellow}, 0.0f, 10.0f);"),
+            "}".into(),"else".into(),"{".into(),format!("FVector {nrev} = MagicScript::FindClosestPointOnLine({pt}, {pl}, {pf}.opNeg());"),
+            format!("float {nrd} = {pl}.Distance({nrev});"),format!("System::DrawDebugSphere({nrev}, 10.0f, 12, {purple}, 0.0f, 10.0f);"),
+            format!("FVector {nget} = this.GetActorLocation();"),format!("FVector {nprod2} = ({pf} * {nrd});"),
+            format!("System::DrawDebugLine(this.GetActorLocation(), ({nget} + ({nprod2} * -1.0)), {yellow}, 0.0f, 10.0f);"),
+            "}".into()];
+        // Twenty-one actual Allman lines; no source normalization is involved.
+        if old.iter().map(|l| l.trim()).ne(expected.iter().map(String::as_str)) { return None; }
+        for (i,l) in old.iter().enumerate() {
+            if *l!=format!("{}{}",if [0,1,11,12,13,20].contains(&i) {indent.as_str()} else {inner.as_str()},expected[i]) { return None; }
+        }
+        if [&np,&nd,&nsub,&nprod,&nrev,&nrd,&nget,&nprod2].into_iter().collect::<HashSet<_>>().len()!=8
+            || count_ident(body,&new_dot)!=0 || count_ident(body,&nprod)!=2 || count_ident(body,&nprod2)!=2 || count_ident(body,&nget)!=2 { return None; }
+        // A same-spelling negative getter is removed atomically; no other occurrence may collide.
+        if count_ident(body,&new_rhs) != if new_rhs==nget {2} else {0} { return None; }
+        // Positive/negative siblings and the empty equality branch must have their actual scopes.
+        let parent=&paths[*at];
+        if [1,12,13].into_iter().any(|n| &paths[*at+n]!=parent)
+            || paths[*at+2].last()!=Some(&(*at+1)) || !paths[*at+2].starts_with(parent)
+            || [3,4,5,6,8,9,10,11].into_iter().any(|n| paths[*at+n]!=paths[*at+2])
+            || paths[*at+7].last()!=Some(&(*at+6)) || !paths[*at+7].starts_with(&paths[*at+2])
+            || paths[*at+14].last()!=Some(&(*at+13)) || !paths[*at+14].starts_with(parent)
+            || (15..=20).any(|n| paths[*at+n]!=paths[*at+14]) {return None;}
+        let old_text=old.join("\n");
+        let mut new=old.iter().map(|l| (*l).to_owned()).collect::<Vec<_>>();
+        new[19]=format!("{inner}System::DrawDebugLine(this.GetActorLocation(), (this.GetActorLocation() + (({pf} * {nrd}) * -1.0)), {yellow}, 0.0f, 10.0f);");
+        new[10]=format!("{inner}System::DrawDebugLine(this.GetActorLocation(), (this.GetActorLocation() + ({pf} * {nd})), {yellow}, 0.0f, 10.0f);");
+        new[5]=format!("{inner}float {new_dot} = {nsub}.DotProduct({pf});\n{inner}FVector {new_rhs} = ({pl} + ({pf} * {new_dot}));\n{inner}if ({np}.opEquals({new_rhs}))");
+        for remove in [18,17,9] {new.remove(remove);}
+        Some((old_text,new.join("\n")))
+    };
+    match qualify() {Some((before,after)) if body.matches(&before).count()==1 => body.replacen(&before,&after,1),_=>body.to_owned()}
+}
+
 /// Keep the reused vector products and widened integer negation inside their expressions.
 /// Both original regions must agree on the configuration and destination vector.
 fn restore_temporary_vector_expression_lifetimes(body:&str,f:&Func,refs:&RefResolver)->String {
@@ -18631,6 +18884,124 @@ fn restore_closed_format_argument_lives(body:&str,f:&Func,refs:&RefResolver,is_m
     let Some((start,end,replacement))=found else {return body.to_owned();};
     let mut lines:Vec<_>=body.lines().map(str::to_owned).collect();lines.splice(start..end,replacement);
     lines.join("\n")+if body.ends_with('\n') {"\n"}else {""}
+}
+
+/// Close a native event receiver before the loop character and defer its standalone Self argument.
+fn restore_scoped_event_self_argument(body:&str,f:&Func,refs:&RefResolver,class_name:Option<&str>,is_method:bool)->String {
+    if !is_method || f.is_const_method() || f.params.len()!=5 || !body.contains(".GetSelf(), ") || !body.contains(" = nullptr;") {return body.to_owned();}
+    let found=(|| {
+        let class=class_name?;
+        let shape=|t:&super::types::DataType,token,ptr,reference:bool,constant:bool,readonly:bool,handle:bool|
+            t.token==token && t.type_info==ptr && t.is_reference==reference && t.is_object_const==constant && t.is_read_only==readonly
+                && t.is_object_handle==handle && !t.is_auto && !t.if_handle_then_const;
+        let plain=|t:&super::types::DataType,token|shape(t,token,0,false,false,false,false);
+        let native=|ptr|refs.type_identity_by_ptr(ptr).filter(|id|id.module.is_empty() && id.namespace.is_empty());
+        let ident=|s:&str|!s.is_empty() && s.bytes().enumerate().all(|(n,b)|b==b'_' || b.is_ascii_alphabetic() || (n>0 && b.is_ascii_digit()));
+        if !plain(&f.ret,0x52) || f.params.iter().any(|p|!ident(&p.name)) {return None;}
+        let (tag_ty,tags_ty,state_ty)=(f.params[0].ty.type_info,f.params[2].ty.type_info,f.params[3].ty.type_info);
+        if native(tag_ty)?.name!="FGameplayTag" || native(tags_ty)?.name!="FGameplayTagContainer" || native(state_ty)?.name!="AGothicCharacterState"
+            || !shape(&f.params[1].ty,0x51,0,false,true,true,false) || f.params[1].flags!=0 {return None;}
+        for (n,ty,reference,constant,handle,flags) in [(0,tag_ty,true,true,false,3),(2,tags_ty,true,true,false,3),(3,state_ty,false,false,true,0),(4,state_ty,false,false,true,0)] {
+            if f.params[n].flags!=flags || !shape(&f.params[n].ty,5,ty,reference,constant,constant,handle) {return None;}
+        }
+        let slots=super::model::param_slot_map(&f.params.iter().map(|p|p.ty.clone()).collect::<Vec<_>>(),true,false,Some(refs));
+        let parameter=|n|slots.iter().find_map(|(s,i)|(*i==n).then_some(*s));
+        let (event,affected,instigator)=(parameter(0)?,parameter(3)?,parameter(4)?);
+        let frame=-instigator+super::model::slot_width_dwords(&f.params[4].ty,Some(refs));
+        let code=disassemble(&f.bytecode).ok()?;let at=code.len().checked_sub(50)?;let c=&code[at..];
+        let ops=|c:&[Instr],text:&str|c.iter().map(|i|i.op.name).eq(text.split_whitespace());
+        if !ops(c,"PSF PSF CALLSYS JMP SUSPEND PSF CALLSYS PshRPtr RDSPtr RefCpyV CALLSYS STOREOBJ PshC4 PshC4 PSF CALLSYS PSF PshNull PshVPtr PshVPtr PshVPtr PshVPtr ADDSi RDSPtr CALLSYS STOREOBJ PshVPtr PSF PshVPtr ADDSi RDSPtr CALLSYS STOREOBJ PshVPtr CALLSYS PSF PshVPtr PshVPtr CALLSYS PSF CALLSYS FreeNullV8 FreeNullV8 LoadVObjR RDR1 CpyVtoR1 JLowNZ PSF CALLSYS RET") {return None;}
+        let w=|i:&Instr,n:usize|i.words.get(n).map(|v|*v as i16 as i32);let p=|i:&Instr|i.qwords.first().map(|v|*v as i64);
+        let local=|slot|{let mut matches=f.obj_locals.iter().filter(|(s,_)|*s==slot);let ty=matches.next()?.1;(slot>0 && matches.next().is_none()).then_some(ty)};
+        let (iterator,array,character,system,tags,fresh,vector,old,flag)=(w(&c[0],0)?,w(&c[1],0)?,w(&c[9],0)?,w(&c[11],0)?,w(&c[14],0)?,w(&c[25],0)?,w(&c[27],0)?,w(&c[32],0)?,w(&c[44],0)?);
+        let roles=[iterator,array,character,system,tags,fresh,vector,old,flag];
+        if roles.iter().any(|s|*s<=0) || roles.into_iter().collect::<HashSet<_>>().len()!=9 || f.obj_locals.iter().any(|(s,_)|*s==flag) {return None;}
+        let (iter_ty,array_ty,char_ty,system_ty,vector_ty)=(local(iterator)?,local(array)?,local(character)?,local(system)?,local(vector)?);
+        if native(iter_ty)?.name!="TArrayIterator" || native(array_ty)?.name!="TArray" || native(char_ty)?.name!="AGothicCharacter"
+            || native(system_ty)?.name!="UPerceptionSystem" || native(vector_ty)?.name!="FVector" || local(tags)?!=tags_ty || local(fresh)?!=char_ty || local(old)?!=char_ty
+            || !matches!(refs.type_subtypes(array_ty)?,[t] if shape(t,5,char_ty,false,false,false,true)) {return None;}
+        for (n,k,s) in [(5,0,iterator),(16,0,tags),(18,0,affected),(19,0,instigator),(20,0,character),(21,0,0),(26,0,fresh),(28,0,0),
+            (33,0,old),(35,0,vector),(36,0,event),(37,0,system),(39,0,tags),(41,0,system),(42,0,character),(43,0,iterator),(45,0,flag),(47,0,array),(49,0,frame)] {
+            if w(&c[n],k)!=Some(s) {return None;}
+        }
+        if c[12].dwords.as_slice()!=[0] || c[13].dwords.as_slice()!=[0] || c[22].words!=c[29].words || c[22].dwords!=c[29].dwords || p(&c[24])!=p(&c[31]) {return None;}
+        let offsets:HashMap<_,_>=code.iter().enumerate().map(|(n,i)|(i.offset_dw as i64,n)).collect();let mut edges=Vec::new();
+        for (n,i) in code.iter().enumerate() {if i.op.name=="JMPP" {return None;}if i.op.name.starts_with('J') {
+            let to=*offsets.get(&(i.offset_dw as i64+2+*i.dwords.first()? as i32 as i64))?;edges.push((n,to));
+        }}
+        if !edges.contains(&(at+3,at+43)) || !edges.contains(&(at+46,at+4)) || edges.iter().any(|(from,to)|*to>at && *to<code.len()
+            && ![(*from,*to)==(at+3,at+43),(*from,*to)==(at+46,at+4),*from<at && *to==at+49].into_iter().any(|v|v)) {return None;}
+        let uses=|slot|code.iter().enumerate().filter(|(_,i)|super::bytediff::addressed_slots(i).contains(&slot)).map(|(n,_)|n).collect::<Vec<_>>();
+        for (slot,expected) in [(iterator,&[0usize,5,43][..]),(system,&[11,37,41]),(tags,&[14,16,39]),(fresh,&[25,26])] {
+            if uses(slot)!=expected.iter().map(|n|at+n).collect::<Vec<_>>() {return None;}
+        }
+        let field_id=*c[22].dwords.first()? as i32;let field_offset=w(&c[22],0)?;
+        let (field,old_owner)=refs.member_identity(field_id,field_offset)?;let owner=refs.type_identity_by_id(field_id)?;
+        let receiver_ty=refs.own_field_type_by_class(&owner.name,field)?;
+        if !ident(field) || refs.type_identity_by_id(old_owner)!=Some(owner) || !refs.is_subclass(class,&owner.name)
+            || !refs.is_subclass(receiver_ty,"UGameplayAbility_CharacterAI") || refs.field_type_by_class(receiver_ty,"Self").is_some() {return None;}
+        let iter_id=*c[43].dwords.first()? as i32;let (can_proceed,iter_old)=refs.member_identity(iter_id,w(&c[43],1)?)?;
+        if can_proceed!="CanProceed" || refs.type_identity_by_id(iter_id)!=native(iter_ty) || refs.type_identity_by_id(iter_old)!=native(iter_ty) {return None;}
+        let (make_iter,proceed,get_system,ctor,get_self,location,broadcast,dtor,array_dtor)=(p(&c[2])?,p(&c[6])?,p(&c[10])?,p(&c[15])?,p(&c[24])?,p(&c[34])?,p(&c[38])?,p(&c[40])?,p(&c[48])?);
+        let method=|ptr,owner,name,constant|refs.func_owner_by_ptr(ptr)==Some(owner) && refs.func_by_ptr(ptr)==Some(name) && refs.is_method_by_ptr(ptr) && refs.is_const_method_by_ptr(ptr)==constant;
+        for (ptr,owner,name) in [(ctor,"FGameplayTagContainer","$beh0"),(dtor,"FGameplayTagContainer","$beh2"),(array_dtor,"TArray","$beh2")] {
+            if !method(ptr,owner,name,false) || !plain(refs.func_ret_by_ptr(ptr)?,0x52) || !refs.func_params_by_ptr(ptr)?.is_empty() {return None;}
+        }
+        if !method(make_iter,"TArray","Iterator",false) || !shape(refs.func_ret_by_ptr(make_iter)?,5,iter_ty,false,false,false,false) || !refs.func_params_by_ptr(make_iter)?.is_empty()
+            || !method(proceed,"TArrayIterator","Proceed",false) || !shape(refs.func_ret_by_ptr(proceed)?,5,char_ty,true,false,false,true) || !refs.func_params_by_ptr(proceed)?.is_empty()
+            || refs.is_method_by_ptr(get_system) || refs.is_const_method_by_ptr(get_system) || refs.func_owner_by_ptr(get_system).is_some() || refs.func_ns_by_ptr(get_system)!=Some(native(system_ty)?.name.as_str())
+            || !shape(refs.func_ret_by_ptr(get_system)?,5,system_ty,false,false,false,true) || !refs.func_params_by_ptr(get_system)?.is_empty() {return None;}
+        // Shipping registration 516 proves this exact native GetSelf is a const property accessor.
+        if !method(get_self,"UGameplayAbility_CharacterAI","GetSelf",true) || !shape(refs.func_ret_by_ptr(get_self)?,5,char_ty,false,false,false,true) || !refs.func_params_by_ptr(get_self)?.is_empty() {return None;}
+        let location_name=refs.func_by_ptr(location)?;let call_name=refs.func_by_ptr(broadcast)?;let get_name=refs.func_by_ptr(get_system)?;
+        if ![location_name,call_name,get_name].iter().all(|s|ident(s)) || !method(location,"AActor",location_name,true)
+            || !shape(refs.func_ret_by_ptr(location)?,5,vector_ty,false,false,false,false) || !refs.func_params_by_ptr(location)?.is_empty()
+            || !method(broadcast,"UPerceptionSystem",call_name,false) || !plain(refs.func_ret_by_ptr(broadcast)?,0x52) {return None;}
+        let args=refs.func_params_by_ptr(broadcast)?;if args.len()!=10 {return None;}
+        let actor_ty=args[2].type_info;
+        // The native hierarchy ends at ACharacter/AGothicCharacterState in script metadata.
+        if native(actor_ty)?.name!="AActor" || !refs.is_subclass(&native(char_ty)?.name,"ACharacter")
+            || !shape(&args[0],5,tag_ty,true,true,true,false) || !shape(&args[1],5,vector_ty,true,true,true,false)
+            || args[2..7].iter().any(|t|!shape(t,5,actor_ty,false,true,false,true)) || !shape(&args[7],5,tags_ty,false,false,false,false)
+            || args[8..].iter().any(|t|!plain(t,0x50)) {return None;}
+        // The location receiver reuses an earlier GetSelf/GetCharacterState temporary; the other argument is fresh.
+        let earlier=code[..at].windows(9).enumerate().filter(|(start,a)|ops(a,"PshVPtr ADDSi RDSPtr CALLSYS STOREOBJ PshVPtr CALLSYS STOREOBJ PshVPtr")
+            && w(&a[0],0)==Some(0) && a[1].words==c[22].words && a[1].dwords==c[22].dwords && p(&a[3])==Some(get_self)
+            && w(&a[4],0)==Some(old) && w(&a[5],0)==Some(old) && w(&a[7],0)==w(&a[8],0)
+            && w(&a[7],0).and_then(local)==Some(state_ty) && p(&a[6]).is_some_and(|ptr|method(ptr,"AGothicCharacter","GetCharacterState",true)
+                && refs.func_ret_by_ptr(ptr).is_some_and(|t|shape(t,5,state_ty,false,false,false,true)) && refs.func_params_by_ptr(ptr).is_some_and(|args|args.is_empty()))
+            && !edges.iter().any(|(_,to)|*to>*start && *to<start+9)).count();
+        if earlier!=1 {return None;}
+        let lines:Vec<_>=body.lines().collect();let mut paths=Vec::new();let mut path=Vec::new();
+        for (n,line) in lines.iter().enumerate() {paths.push(path.clone());match line.trim() {"{"=>path.push(n),"}"=>if path.pop().is_none() {return None;},_=>if brace_net(line)!=0 {return None;}}}
+        if !path.is_empty() {return None;}
+        let bound=|name:&str,slot|slot_and_life_any(name).is_some_and(|(n,_)|n==slot);
+        let mut edits=Vec::new();
+        for (row,s) in lines.windows(10).enumerate() {let candidate=(|| {
+            let (outer,iter_name,iter_expr)=declaration_with_initializer(s[0])?;let array_name=iter_expr.strip_suffix(".Iterator()")?;
+            let pad=format!("{outer}    ");let (decl_pad,system_name,system_expr)=declaration_with_initializer(s[4])?;
+            let character_name=s[3].strip_prefix(&pad)?.strip_suffix(&format!(" = {iter_name}.Proceed();"))?;
+            if !bound(&iter_name,iterator) || !bound(array_name,array) || !bound(character_name,character) || !bound(&system_name,system)
+                || s[0]!=format!("{outer}auto {iter_name} = {iter_expr};") || s[1]!=format!("{outer}for (; {iter_name}.CanProceed;)") || s[2]!=format!("{outer}{{")
+                || decl_pad!=pad || system_expr!=format!("UPerceptionSystem::{get_name}()") || s[4]!=format!("{pad}UPerceptionSystem {system_name} = {system_expr};")
+                || count_ident(body,&system_name)!=3 || count_ident(body,&iter_name)!=3 {return None;}
+            let call=format!("{system_name}.{call_name}({}, this.{field}.GetSelf().{location_name}(), this.{field}.GetSelf(), {character_name}, {}, {}, nullptr, FGameplayTagContainer(), 0.0f, 0.0f);",f.params[0].name,f.params[4].name,f.params[3].name);
+            if s[5]!=format!("{pad}{call}") || s[6]!=format!("{pad}{system_name} = nullptr;") || s[7]!=format!("{pad}{character_name} = nullptr;") || s[8]!=format!("{outer}}}")
+                || s[9]!=format!("{outer}return;") || lines[row+10..].iter().any(|l|!l.trim().is_empty())
+                || paths[row]!=paths[row+1] || paths[row]!=paths[row+2] || paths[row]!=paths[row+9] || paths[row+3].last()!=Some(&(row+2))
+                || (3..=8).any(|n|paths[row+n]!=paths[row+3]) {return None;}
+            for (name,ty) in [(array_name,format!("TArray<{}>",native(char_ty)?.name)),(character_name,native(char_ty)?.name.clone())] {
+                let declarations:Vec<_>=lines.iter().enumerate().filter(|(_,l)|l.trim()==format!("{ty} {name};")).map(|(n,_)|n).collect();
+                let [decl]=declarations.as_slice() else {return None;};
+                if *decl>=row || !paths[row].starts_with(&paths[*decl]) {return None;}
+            }
+            let replacement=format!("{pad}{{\n{pad}    {}\n{pad}    {}\n{pad}}}",s[4].trim(),call.replace(&format!(", this.{field}.GetSelf(),"),&format!(", this.{field}.Self,")));
+            Some((row+4,replacement))
+        })();if let Some(edit)=candidate {edits.push(edit);}}
+        let [edit]=edits.as_slice() else {return None;};Some((edit.0,edit.1.clone()))
+    })();
+    let Some((row,replacement))=found else {return body.to_owned();};let mut out:Vec<_>=body.lines().map(str::to_owned).collect();out.splice(row..row+3,[replacement]);
+    out.join("\n")+if body.ends_with('\n') {"\n"}else {""}
 }
 
 /// Retain an interpolated sample point and evaluate both cylindrical distances before their test.
@@ -58396,6 +58767,185 @@ mod literal_value_lifetime_tests {
         assert_eq!(fold(&shifted_body,&shifted,&refs),shifted_expected);
     }
 
+    fn scoped_event_receiver_fixture(bias:u16)->Func {
+        // Original156..166 and182..231, separated by SUSPEND: 62 ops, two distinct GetSelf lives.
+        let mut f=function(&[
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[752]),
+            ("RDSPtr", &[]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[4]),
+            ("PshVPtr", &[4]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[44]),
+            ("PshVPtr", &[44]),
+            ("PshVPtr", &[52]),
+            ("CALL", &[]),
+            ("SUSPEND", &[]),
+            ("PSF", &[58]),
+            ("PSF", &[12]),
+            ("CALLSYS", &[]),
+            ("JMP", &[]),
+            ("SUSPEND", &[]),
+            ("PSF", &[58]),
+            ("CALLSYS", &[]),
+            ("PshRPtr", &[]),
+            ("RDSPtr", &[]),
+            ("RefCpyV", &[42]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[68]),
+            ("PshC4", &[]),
+            ("PshC4", &[]),
+            ("PSF", &[76]),
+            ("CALLSYS", &[]),
+            ("PSF", &[76]),
+            ("PshNull", &[]),
+            ("PshVPtr", &[65528]),
+            ("PshVPtr", &[65526]),
+            ("PshVPtr", &[42]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[752]),
+            ("RDSPtr", &[]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[80]),
+            ("PshVPtr", &[80]),
+            ("PSF", &[22]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[752]),
+            ("RDSPtr", &[]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[4]),
+            ("PshVPtr", &[4]),
+            ("CALLSYS", &[]),
+            ("PSF", &[22]),
+            ("PshVPtr", &[65534]),
+            ("PshVPtr", &[68]),
+            ("CALLSYS", &[]),
+            ("PSF", &[76]),
+            ("CALLSYS", &[]),
+            ("FreeNullV8", &[68]),
+            ("FreeNullV8", &[42]),
+            ("LoadVObjR", &[58, 16]),
+            ("RDR1", &[2]),
+            ("CpyVtoR1", &[2]),
+            ("JLowNZ", &[]),
+            ("PSF", &[12]),
+            ("CALLSYS", &[]),
+            ("RET", &[12]),
+        ]);
+        f.name="NotifyNearbyRecipients".into();f.traits=32;f.ret=DataType {token:0x52,..Default::default()};
+        f.params=[("Notice",1,true,true,false,3),("Range",0,false,true,false,0),("Filter",2,true,true,false,3),("Subject",3,false,false,true,0),("Sender",3,false,false,true,0)]
+            .into_iter().map(|(name,ptr,reference,constant,handle,flags)|super::super::model::Param {name:name.into(),flags,
+                ty:DataType {token:if ptr==0 {0x51}else{5},type_info:ptr,is_reference:reference,is_object_const:constant,is_read_only:constant,is_object_handle:handle,..Default::default()}}).collect();
+        f.obj_locals=vec![(4,4),(12,8),(22,6),(42,4),(44,3),(52,12),(58,9),(68,5),(76,2),(80,4)];
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,offset,value) in [(1, 1, 1010), (10, 1, 201), (24, 1, 0), (25, 1, 0), (34, 1, 1010), (41, 1, 1010), (55, 2, 1009)] {f.bytecode[code[at].offset_dw+offset]=value;}
+        for (at,value) in [(3, 101), (6, 102), (14, 108), (18, 109), (22, 103), (27, 104), (36, 101), (43, 101), (46, 105), (50, 106), (52, 107), (60, 110)] {let value:u64=value;f.bytecode[code[at].offset_dw+1]=value as i32;f.bytecode[code[at].offset_dw+2]=(value>>32) as i32;}
+        for (from,to) in [(15, 55), (58, 16)] {f.bytecode[code[from].offset_dw+1]=code[to].offset_dw as i32-code[from].offset_dw as i32-2;}
+        for i in &code {if matches!(i.op.name,"RET"|"ADDSi") {continue;}
+            for (n,word) in i.words.iter().enumerate() {if (*word as i16)<=0 || (i.op.name=="LoadVObjR" && n>0) {continue;}
+                let lane=n+1;let dw=i.offset_dw+lane/2;let shift=(lane%2)*16;
+                f.bytecode[dw]=((f.bytecode[dw] as u32 & !(0xffff<<shift)) | (((*word+bias) as u32)<<shift)) as i32;
+            }
+        }
+        for (slot,_) in &mut f.obj_locals {*slot+=bias as i32;}f
+    }
+
+    #[test]
+    fn broadcast_self_argument_and_receiver_cleanup_keep_their_original_lives() {
+        let source=r#"    AGothicCharacter local_42;
+    UCharacterPlanner local_52;
+    TArray<AGothicCharacter> local_12;
+    ::ForceHearingPerception(local_52, this.Brain.GetSelf().GetCharacterState());
+    auto local_58 = local_12.Iterator();
+    for (; local_58.CanProceed;)
+    {
+        local_42 = local_58.Proceed();
+        UPerceptionSystem local_68 = UPerceptionSystem::Get();
+        local_68.BroadcastPerceptionEvent(Notice, this.Brain.GetSelf().GetActorLocation(), this.Brain.GetSelf(), local_42, Sender, Subject, nullptr, FGameplayTagContainer(), 0.0f, 0.0f);
+        local_68 = nullptr;
+        local_42 = nullptr;
+    }
+    return;
+"#;
+        let expected=r#"    AGothicCharacter local_42;
+    UCharacterPlanner local_52;
+    TArray<AGothicCharacter> local_12;
+    ::ForceHearingPerception(local_52, this.Brain.GetSelf().GetCharacterState());
+    auto local_58 = local_12.Iterator();
+    for (; local_58.CanProceed;)
+    {
+        local_42 = local_58.Proceed();
+        {
+            UPerceptionSystem local_68 = UPerceptionSystem::Get();
+            local_68.BroadcastPerceptionEvent(Notice, this.Brain.GetSelf().GetActorLocation(), this.Brain.Self, local_42, Sender, Subject, nullptr, FGameplayTagContainer(), 0.0f, 0.0f);
+        }
+        local_42 = nullptr;
+    }
+    return;
+"#;
+        let refs=RefResolver::from_test_scoped_event_receiver(0);
+        let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_scoped_event_self_argument(s,f,r,Some("UNoticeState"),true);
+        let rename=|s:&str,bias:u16|{let mut out=s.to_owned();for slot in [80u16,76,68,58,52,44,42,22,12,4] {
+            out=super::rename_ident(&out,&format!("local_{slot}"),&format!("local_{}",slot+bias));}out};
+        for bias in [0u16,512] {let f=scoped_event_receiver_fixture(bias);let s=rename(source,bias);let e=rename(expected,bias);
+            assert_eq!(fold(&s,&f,&refs),e,"raw/source relocation {bias}");assert_eq!(fold(&e,&f,&refs),e,"idempotence");}
+        let f=scoped_event_receiver_fixture(0);let code=disassemble(&f.bytecode).unwrap();assert_eq!(code.len(),62);
+        for fault in 1..=31 {assert_eq!(fold(source,&f,&RefResolver::from_test_scoped_event_receiver(fault)),source,"native, field or inherited Self shadow {fault}");}
+        for at in (0..9).chain(12..62) {let i=&code[at];
+            for n in 0..i.words.len() {let mut bad=f.clone();let lane=n+1;bad.bytecode[i.offset_dw+lane/2]^=1<<((lane%2)*16);
+                assert_eq!(fold(source,&bad,&refs),source,"WORD {at}/{n}");}
+            if !i.qwords.is_empty() {for lane in [1,2] {let mut bad=f.clone();bad.bytecode[i.offset_dw+lane]^=1;
+                assert_eq!(fold(source,&bad,&refs),source,"QWORD {at}/{lane}");}}
+            if !i.dwords.is_empty() {let mut bad=f.clone();let lane=if i.op.name=="LoadVObjR" {2}else{1};bad.bytecode[i.offset_dw+lane]^=1;
+                assert_eq!(fold(source,&bad,&refs),source,"DWORD/edge {at}");}
+        }
+        for (from,to) in [(15,54),(58,17)] {let mut bad=f.clone();bad.bytecode[code[from].offset_dw+1]=code[to].offset_dw as i32-code[from].offset_dw as i32-2;
+            assert_eq!(fold(source,&bad,&refs),source,"valid-boundary wrong edge {from}");}
+        for to in [1,16,22,37,45,53,55] {let mut bad=f.clone();let mut branch=function(&[("JMP",&[])]).bytecode;
+            branch[1]=code[to].offset_dw as i32;branch.extend(bad.bytecode);bad.bytecode=branch;
+            assert_eq!(fold(source,&bad,&refs),source,"foreign entry {to}");}
+        let mut bad=f.clone();bad.bytecode.splice(0..0,function(&[("JMPP",&[1])]).bytecode);assert_eq!(fold(source,&bad,&refs),source);
+        for slot in [58,68,76,80] {let mut bad=f.clone();let mut prefix=function(&[("PshVPtr",&[slot])]).bytecode;prefix.extend(bad.bytecode);bad.bytecode=prefix;
+            assert_eq!(fold(source,&bad,&refs),source,"extra raw life {slot}");}
+        for slot in [2,4,12,22,42,58,68,76,80] {let mut bad=f.clone();bad.obj_locals.extend([(slot,4),(slot,4)]);
+            assert_eq!(fold(source,&bad,&refs),source,"ambiguous object/scalar {slot}");}
+        for mode in 0..11 {let mut bad=f.clone();match mode {
+            0=>bad.traits|=4,1=>bad.ret.is_object_handle=true,2=>bad.params[0].ty.is_read_only=false,3=>bad.params[0].flags=1,
+            4=>bad.params[1].ty.token=0x50,5=>bad.params[2].ty.is_object_const=false,6=>bad.params[3].ty.is_reference=true,
+            7=>bad.params[4].ty.is_object_const=true,8=>bad.params[4].flags=3,9=>bad.params[4].name="bad.name".into(),_=>{bad.params.pop();}}
+            assert_eq!(fold(source,&bad,&refs),source,"function/parameter {mode}");}
+        assert_eq!(super::restore_scoped_event_self_argument(source,&f,&refs,None,true),source);
+        assert_eq!(super::restore_scoped_event_self_argument(source,&f,&refs,Some("UNoticeState"),false),source);
+        for s in [source.replace("this.Brain.GetSelf(), local_42","this.Brain.GetCharacter(), local_42"),
+            source.replace("GetSelf().GetActorLocation()","GetSelf().OtherLocation()"),source.replace("local_42, Sender, Subject","local_42, Subject, Sender"),
+            source.replace("0.0f, 0.0f","1.0f, 0.0f"),source.replace("FGameplayTagContainer()","FGameplayTagContainer(Filter)"),
+            source.replace("        local_68 = nullptr;","        Observe(local_68);
+        local_68 = nullptr;"),
+            source.replace("        local_68 = nullptr;
+        local_42 = nullptr;","        local_42 = nullptr;
+        local_68 = nullptr;"),
+            source.replace("    for (; local_58.CanProceed;)","    while (Ready())"),
+            source.replace("    AGothicCharacter local_42;","    {
+        AGothicCharacter local_42;
+    }"),
+            source.replace("    TArray<AGothicCharacter> local_12;","    {
+        TArray<AGothicCharacter> local_12;
+    }"),
+            source.replace("    return;","    Observe(local_68);
+    return;"),source.replace("local_42 = local_58.Proceed();","local_42 = Other;"),
+            source.replace("        local_42 = nullptr;","        local_42 = nullptr;
+        Work();")]
+            {assert_eq!(fold(&s,&f,&refs),s,"closed source lifetime");}
+        let life=|s:&str|{let mut s=s.to_owned();for (a,b) in [("local_58","local_58_2"),("local_68","local_68_4"),("local_42","local_42_6")] {s=super::rename_ident(&s,a,b);}s};
+        assert_eq!(fold(&life(source),&f,&refs),life(expected),"life suffixes");
+        let named=|s:&str|s.replace("Sender","Initiator").replace("Subject","Target").replace("Notice","Event");
+        let mut renamed=f.clone();renamed.params[0].name="Event".into();renamed.params[3].name="Target".into();renamed.params[4].name="Initiator".into();
+        assert_eq!(fold(&named(source),&renamed,&refs),named(expected),"metadata-derived argument names");
+        let prefix="    int local_680 = 0;\n";
+        assert_eq!(fold(&format!("{prefix}{source}"),&f,&refs),format!("{prefix}{expected}"),"identifier prefixes remain unchanged");
+    }
+
     fn interpolated_sample_fixture(bias:u16)->Func {
         // Original92 ops, including point32's earlier GetSafeNormal life; helper binds the last60.
         let mut f=function(&[
@@ -66125,6 +66675,350 @@ mod literal_value_lifetime_tests {
             source.replace("        if (local_593)\n        {\n            Work();", "        if (local_593)\n        {\n            Observe(local_593);\n            Work();"),
             source.replace("Observe(!(local_262));","Observe(local_263);"),format!("{source}Observe(local_593);\n")]
         {assert_eq!(fold(&f,&broken),broken,"source type/use/scope/operand");}
+    }
+
+    fn named_projection_fixture(bias:u16, padding:usize)->Func {
+        let mut f=function(&[
+            ("SetV8", &[14]), // 37
+            ("CMPd", &[65530,14]), // 38
+            ("JS", &[]), // 39
+            ("PshVPtr", &[65526]), // 40
+            ("PshVPtr", &[65528]), // 41
+            ("PshVPtr", &[65524]), // 42
+            ("PSF", &[8]), // 43
+            ("CALLSYS", &[]), // 44
+            ("PSF", &[8]), // 45
+            ("PshVPtr", &[65528]), // 46
+            ("CALLSYS", &[]), // 47
+            ("CpyRtoV8", &[14]), // 48
+            ("PshVPtr", &[65528]), // 49
+            ("PSF", &[20]), // 50
+            ("PshVPtr", &[65524]), // 51
+            ("CALLSYS", &[]), // 52
+            ("PshVPtr", &[65526]), // 53
+            ("PSF", &[20]), // 54
+            ("CALLSYS", &[]), // 55
+            ("CpyRtoV8", &[22]), // 56
+            ("PshV8", &[22]), // 57
+            ("PSF", &[28]), // 58
+            ("PshVPtr", &[65526]), // 59
+            ("CALLSYS", &[]), // 60
+            ("PSF", &[28]), // 61
+            ("PSF", &[42]), // 62
+            ("PshVPtr", &[65528]), // 63
+            ("CALLSYS", &[]), // 64
+            ("PSF", &[42]), // 65
+            ("PSF", &[8]), // 66
+            ("CALLSYS", &[]), // 67
+            ("JLowZ", &[]), // 68
+            ("PshC4", &[]), // 69
+            ("PshC4", &[]), // 70
+            ("PshGPtr", &[]), // 71
+            ("PshC4", &[]), // 72
+            ("PshC4", &[]), // 73
+            ("PSF", &[8]), // 74
+            ("PshGPtr", &[]), // 75
+            ("CALLSYS", &[]), // 76
+            ("PshC4", &[]), // 77
+            ("PshC4", &[]), // 78
+            ("PshGPtr", &[]), // 79
+            ("PSF", &[36]), // 80
+            ("PshVPtr", &[0]), // 81
+            ("CALLSYS", &[]), // 82
+            ("PshV8", &[14]), // 83
+            ("PSF", &[28]), // 84
+            ("PshVPtr", &[65526]), // 85
+            ("CALLSYS", &[]), // 86
+            ("PSF", &[28]), // 87
+            ("PSF", &[48]), // 88
+            ("PSF", &[36]), // 89
+            ("CALLSYS", &[]), // 90
+            ("PSF", &[48]), // 91
+            ("PSF", &[36]), // 92
+            ("PshVPtr", &[0]), // 93
+            ("CALLSYS", &[]), // 94
+            ("PSF", &[36]), // 95
+            ("PshGPtr", &[]), // 96
+            ("CALLSYS", &[]), // 97
+            ("JMP", &[]), // 98
+            ("PSF", &[28]), // 99
+            ("PshVPtr", &[65526]), // 100
+            ("CALLSYS", &[]), // 101
+            ("PSF", &[28]), // 102
+            ("PshVPtr", &[65528]), // 103
+            ("PshVPtr", &[65524]), // 104
+            ("PSF", &[48]), // 105
+            ("CALLSYS", &[]), // 106
+            ("PSF", &[48]), // 107
+            ("PshVPtr", &[65528]), // 108
+            ("CALLSYS", &[]), // 109
+            ("CpyRtoV8", &[30]), // 110
+            ("PshC4", &[]), // 111
+            ("PshC4", &[]), // 112
+            ("PshGPtr", &[]), // 113
+            ("PshC4", &[]), // 114
+            ("PshC4", &[]), // 115
+            ("PSF", &[48]), // 116
+            ("PshGPtr", &[]), // 117
+            ("CALLSYS", &[]), // 118
+            ("PshC4", &[]), // 119
+            ("PshC4", &[]), // 120
+            ("PshGPtr", &[]), // 121
+            ("PSF", &[42]), // 122
+            ("PshVPtr", &[0]), // 123
+            ("CALLSYS", &[]), // 124
+            ("PshV8", &[30]), // 125
+            ("PSF", &[28]), // 126
+            ("PshVPtr", &[65526]), // 127
+            ("CALLSYS", &[]), // 128
+            ("PshC8", &[]), // 129
+            ("PSF", &[36]), // 130
+            ("PSF", &[28]), // 131
+            ("CALLSYS", &[]), // 132
+            ("PSF", &[36]), // 133
+            ("PSF", &[28]), // 134
+            ("PSF", &[42]), // 135
+            ("CALLSYS", &[]), // 136
+            ("PSF", &[28]), // 137
+            ("PSF", &[42]), // 138
+            ("PshVPtr", &[0]), // 139
+            ("CALLSYS", &[]), // 140
+            ("PSF", &[42]), // 141
+            ("PshGPtr", &[]), // 142
+            ("CALLSYS", &[]), // 143
+            ("SetV8", &[14]), // 144
+            ("CMPd", &[65532,14]), // 145
+            ("JS", &[]), // 146
+            ("JMP", &[]), // 147
+            ("PshC4", &[]), // 148
+            ("PshC4", &[]), // 149
+            ("PshGPtr", &[]), // 150
+            ("PSF", &[36]), // 151
+            ("PshVPtr", &[0]), // 152
+            ("CALLSYS", &[]), // 153
+            ("PshVPtr", &[65522]), // 154
+            ("PSF", &[28]), // 155
+            ("PSF", &[36]), // 156
+            ("CALLSYS", &[]), // 157
+            ("PSF", &[28]), // 158
+            ("PSF", &[42]), // 159
+            ("PshVPtr", &[0]), // 160
+            ("CALLSYS", &[]), // 161
+            ("PSF", &[42]), // 162
+            ("PshGPtr", &[]), // 163
+            ("CALLSYS", &[]), // 164
+            ("RET", &[16]),
+        ]);
+        f.name="IndependentProjection".into(); f.namespace="Other".into();
+        f.ret=DataType {token:0x52,..Default::default()};
+        f.obj_locals=[8,20,28,36,42,48].into_iter().map(|s|(s+bias as i32,1)).collect();
+        f.params=["Angle","Side","Ahead","Origin","Direction","Goal","Motion"].into_iter().enumerate().map(|(n,name)| crate::cache::model::Param {
+            name:name.into(), flags:if n<3 {0} else {3}, ty:DataType {token:if n<3 {0x51} else {5},type_info:if n<3 {0} else {1},is_reference:n>=3,is_object_const:true,is_read_only:true,..Default::default()} }).collect();
+        let c=disassemble(&f.bytecode).unwrap();
+        f.bytecode[c[7].offset_dw+1]=301;
+        f.bytecode[c[10].offset_dw+1]=302;
+        f.bytecode[c[15].offset_dw+1]=303;
+        f.bytecode[c[18].offset_dw+1]=304;
+        f.bytecode[c[23].offset_dw+1]=305;
+        f.bytecode[c[27].offset_dw+1]=306;
+        f.bytecode[c[30].offset_dw+1]=307;
+        f.bytecode[c[32].offset_dw+1]=1092616192;
+        f.bytecode[c[33].offset_dw+1]=0;
+        f.bytecode[c[35].offset_dw+1]=12;
+        f.bytecode[c[36].offset_dw+1]=1092616192;
+        f.bytecode[c[39].offset_dw+1]=308;
+        f.bytecode[c[40].offset_dw+1]=1092616192;
+        f.bytecode[c[41].offset_dw+1]=0;
+        f.bytecode[c[45].offset_dw+1]=309;
+        f.bytecode[c[49].offset_dw+1]=305;
+        f.bytecode[c[53].offset_dw+1]=306;
+        f.bytecode[c[57].offset_dw+1]=309;
+        f.bytecode[c[60].offset_dw+1]=310;
+        f.bytecode[c[64].offset_dw+1]=311;
+        f.bytecode[c[69].offset_dw+1]=301;
+        f.bytecode[c[72].offset_dw+1]=302;
+        f.bytecode[c[74].offset_dw+1]=1092616192;
+        f.bytecode[c[75].offset_dw+1]=0;
+        f.bytecode[c[77].offset_dw+1]=12;
+        f.bytecode[c[78].offset_dw+1]=1092616192;
+        f.bytecode[c[81].offset_dw+1]=308;
+        f.bytecode[c[82].offset_dw+1]=1092616192;
+        f.bytecode[c[83].offset_dw+1]=0;
+        f.bytecode[c[87].offset_dw+1]=309;
+        f.bytecode[c[91].offset_dw+1]=305;
+        f.bytecode[c[95].offset_dw+1]=305;
+        f.bytecode[c[99].offset_dw+1]=306;
+        f.bytecode[c[103].offset_dw+1]=309;
+        f.bytecode[c[106].offset_dw+1]=310;
+        f.bytecode[c[111].offset_dw+1]=1092616192;
+        f.bytecode[c[112].offset_dw+1]=0;
+        f.bytecode[c[116].offset_dw+1]=309;
+        f.bytecode[c[120].offset_dw+1]=306;
+        f.bytecode[c[124].offset_dw+1]=309;
+        f.bytecode[c[127].offset_dw+1]=310;
+        f.bytecode[c[2].offset_dw+1]=c[62].offset_dw as i32-c[2].offset_dw as i32-2;
+        f.bytecode[c[31].offset_dw+1]=c[32].offset_dw as i32-c[31].offset_dw as i32-2;
+        f.bytecode[c[61].offset_dw+1]=c[107].offset_dw as i32-c[61].offset_dw as i32-2;
+        f.bytecode[c[109].offset_dw+1]=c[111].offset_dw as i32-c[109].offset_dw as i32-2;
+        f.bytecode[c[110].offset_dw+1]=c[111].offset_dw as i32-c[110].offset_dw as i32-2;
+        f.bytecode[c[92].offset_dw+2]=((-1.0f64).to_bits()>>32) as i32;
+        f.bytecode[c[34].offset_dw+1]=201;
+        f.bytecode[c[76].offset_dw+1]=201;
+        f.bytecode[c[42].offset_dw+1]=202;
+        f.bytecode[c[84].offset_dw+1]=202;
+        f.bytecode[c[113].offset_dw+1]=202;
+        f.bytecode[c[38].offset_dw+1]=203;
+        f.bytecode[c[59].offset_dw+1]=203;
+        f.bytecode[c[80].offset_dw+1]=203;
+        f.bytecode[c[105].offset_dw+1]=203;
+        f.bytecode[c[126].offset_dw+1]=203;
+        for i in &c { if i.op.name=="RET" {continue;} for (n,value) in i.words.iter().enumerate() {
+            if (*value as i16)<=0 {continue;} let packed=n+1;let shift=(packed%2)*16;let dw=i.offset_dw+packed/2;
+            f.bytecode[dw]=((f.bytecode[dw] as u32 & !(0xffff<<shift))|((*value+bias) as u32)<<shift) as i32;
+        }}
+        let nop=OPCODES.iter().find(|o|o.name=="SUSPEND").unwrap().opcode as i32;
+        f.bytecode.splice(0..0,std::iter::repeat(nop).take(padding)); f
+    }
+
+    fn named_projection_source()->String { r#"    void IndependentProjection(const float Angle, const float Side, const float Ahead, const FVector &inout Origin, const FVector &inout Direction, const FVector &inout Goal, const FVector &inout Motion)
+    {
+        if (this.m_SpellConfig.m_EnableDebug)
+        {
+            System::DrawDebugLine(this.GetActorLocation(), Goal, FLinearColor::Gray, 0.0f, 10.0f);
+            System::DrawDebugSphere(this.GetActorLocation(), 10.0f, 12, FLinearColor::Red, 0.0f, 10.0f);
+            System::DrawDebugSphere(Goal, 10.0f, 12, FLinearColor::Green, 0.0f, 10.0f);
+            if (Ahead >= 0.0)
+            {
+                FVector local_8 = MagicScript::FindClosestPointOnLine(Goal, Origin, Direction);
+                float local_14 = Origin.Distance(local_8);
+                FVector local_20 = (Goal - Origin);
+                if ((local_8 == (Origin + (Direction * local_20.DotProduct(Direction)))))
+                {
+                }
+                System::DrawDebugSphere(local_8, 10.0f, 12, FLinearColor::Purple, 0.0f, 10.0f);
+                FVector local_28_2 = (Direction * local_14);
+                System::DrawDebugLine(this.GetActorLocation(), (this.GetActorLocation() + local_28_2), FLinearColor::Yellow, 0.0f, 10.0f);
+            }
+            else
+            {
+                FVector local_48 = MagicScript::FindClosestPointOnLine(Goal, Origin, Direction.opNeg());
+                float local_30 = Origin.Distance(local_48);
+                System::DrawDebugSphere(local_48, 10.0f, 12, FLinearColor::Purple, 0.0f, 10.0f);
+                FVector local_42 = this.GetActorLocation();
+                FVector local_28_3 = (Direction * local_30);
+                System::DrawDebugLine(this.GetActorLocation(), (local_42 + (local_28_3 * -1.0)), FLinearColor::Yellow, 0.0f, 10.0f);
+            }
+            if (Side >= 0.0)
+            {
+            }
+            else
+            {
+            }
+            System::DrawDebugLine(this.GetActorLocation(), (this.GetActorLocation() + Motion), FLinearColor::Yellow, 0.0f, 10.0f);
+        }
+        return;
+    }"#.into() }
+
+    fn named_projection_expected()->String { r#"    void IndependentProjection(const float Angle, const float Side, const float Ahead, const FVector &inout Origin, const FVector &inout Direction, const FVector &inout Goal, const FVector &inout Motion)
+    {
+        if (this.m_SpellConfig.m_EnableDebug)
+        {
+            System::DrawDebugLine(this.GetActorLocation(), Goal, FLinearColor::Gray, 0.0f, 10.0f);
+            System::DrawDebugSphere(this.GetActorLocation(), 10.0f, 12, FLinearColor::Red, 0.0f, 10.0f);
+            System::DrawDebugSphere(Goal, 10.0f, 12, FLinearColor::Green, 0.0f, 10.0f);
+            if (Ahead >= 0.0)
+            {
+                FVector local_8 = MagicScript::FindClosestPointOnLine(Goal, Origin, Direction);
+                float local_14 = Origin.Distance(local_8);
+                FVector local_20 = (Goal - Origin);
+                float local_22 = local_20.DotProduct(Direction);
+                FVector local_42 = (Origin + (Direction * local_22));
+                if (local_8.opEquals(local_42))
+                {
+                }
+                System::DrawDebugSphere(local_8, 10.0f, 12, FLinearColor::Purple, 0.0f, 10.0f);
+                System::DrawDebugLine(this.GetActorLocation(), (this.GetActorLocation() + (Direction * local_14)), FLinearColor::Yellow, 0.0f, 10.0f);
+            }
+            else
+            {
+                FVector local_48 = MagicScript::FindClosestPointOnLine(Goal, Origin, Direction.opNeg());
+                float local_30 = Origin.Distance(local_48);
+                System::DrawDebugSphere(local_48, 10.0f, 12, FLinearColor::Purple, 0.0f, 10.0f);
+                System::DrawDebugLine(this.GetActorLocation(), (this.GetActorLocation() + ((Direction * local_30) * -1.0)), FLinearColor::Yellow, 0.0f, 10.0f);
+            }
+            if (Side >= 0.0)
+            {
+            }
+            else
+            {
+            }
+            System::DrawDebugLine(this.GetActorLocation(), (this.GetActorLocation() + Motion), FLinearColor::Yellow, 0.0f, 10.0f);
+        }
+        return;
+    }"#.into() }
+
+    #[test]
+    fn named_projection_and_closed_draw_arguments_require_the_original_lives() {
+        let base=named_projection_source();
+        let run=|source:&str,f:&Func,r:&RefResolver| crate::cache::emit::restore_named_projection_and_draw_arguments(source,f,r,Some("AIndependentVisual"),true);
+        let r=RefResolver::from_test_named_projection(0);
+        for (bias,padding,suffix) in [(0,0,false),(512,3,false),(512,5,true)] {
+            let f=named_projection_fixture(bias,padding);
+            let mut source=base.clone();
+            let mut expected=named_projection_expected();
+            // Boundary-safe replacement includes the numbered life suffix; no local_2/local_20 collision.
+            for name in ["local_28_2","local_28_3","local_8","local_14","local_20","local_30","local_42","local_48"] {
+                let (slot,life)=crate::cache::emit::slot_and_life_any(name).unwrap();
+                let new=format!("local_{}{}",slot+bias as i32,if suffix {format!("_{}",life+7)} else if life>1 {format!("_{life}")} else {String::new()});
+                source=crate::cache::emit::rename_ident(&source,name,&new);
+                expected=crate::cache::emit::rename_ident(&expected,name,&new);
+            }
+            // Insertions name raw slots independently of the input declaration life spelling.
+            if bias!=0 {expected=crate::cache::emit::rename_ident(&expected,"local_22",&format!("local_{}",22+bias));}
+            if suffix { expected=crate::cache::emit::rename_ident(&expected,&format!("local_{}_8",42+bias),&format!("local_{}",42+bias)); }
+            let actual=run(&source,&f,&r);
+            assert_eq!(actual,expected,"bias={bias}, suffix={suffix}");
+            assert_eq!(run(&actual,&f,&r),actual,"idempotence");
+        }
+        let f=named_projection_fixture(0,0);
+        for fault in 1..=21 {assert_eq!(run(&base,&f,&RefResolver::from_test_named_projection(fault)),base,"metadata {fault}");}
+        for fault in 0..9 {
+            let mut bad=f.clone(); let c=disassemble(&bad.bytecode).unwrap();
+            match fault {
+                0=>bad.bytecode[c[20].offset_dw]^=1<<16, // Dot read uses a different scalar.
+                1=>bad.bytecode[c[31].offset_dw+1]=1, // Equality no longer immediately rejoins.
+                2=>bad.bytecode[c[61].offset_dw+1]+=1, // Positive branch no longer skips its sibling.
+                3=>bad.bytecode[c[91].offset_dw+1]=303, // Negative product is not double multiplication.
+                4=>bad.bytecode[c[95].offset_dw+1]=303, // Second product changed.
+                5=>bad.bytecode[c[92].offset_dw+2]=0, // Wrong negative scalar.
+                6=>bad.bytecode[c[59].offset_dw+1]=204, // Different hidden draw receiver.
+                7=>bad.obj_locals.push((42,1)), // Ambiguous value identity.
+                8=>bad.params[4].ty.is_read_only=false,
+                _=>unreachable!()
+            }
+            assert_eq!(run(&base,&bad,&r),base,"raw/metadata {fault}");
+        }
+        // Outside entry into the equality interval; moving the window alone is allowed above.
+        let mut bad=named_projection_fixture(0,0); let c=disassemble(&bad.bytecode).unwrap();
+        let jmp=OPCODES.iter().find(|o|o.name=="JMP").unwrap().opcode as i32;
+        bad.bytecode.splice(0..0,[jmp,c[25].offset_dw as i32]);
+        assert_eq!(run(&base,&bad,&r),base);
+        // A third primitive read outside the qualified interval is not hidden by the profile.
+        let mut bad=f.clone(); let c=disassemble(&bad.bytecode).unwrap();
+        bad.bytecode.splice(c[128].offset_dw..c[128].offset_dw,function(&[("PshV8",&[22])]).bytecode);
+        assert_eq!(run(&base,&bad,&r),base);
+        for changed in [
+            base.replace("FVector local_20 =", "FVector& local_20 ="),
+            base.replace("float local_14 =", "float32 local_14 ="),
+            base.replace("local_20.DotProduct(Direction)","local_20.DotProduct(Motion)"),
+            base.replace("FVector local_28_2 =", "float local_22 = 1.0;\n                FVector local_28_2 ="),
+            base.replace("\n            else\n", "\n            if (false)\n"),
+            base.replace("return;", "Consume(local_28_2);\n        return;"),
+            base.replace("return;", "Consume(local_42);\n        return;"),
+            base.replace("FVector local_42 = this.GetActorLocation();", "FVector local_42 = this.ActorLocation;"),
+        ] {assert_ne!(changed,base);assert_eq!(run(&changed,&f,&r),changed,"source rejection");}
+        assert_eq!(crate::cache::emit::restore_named_projection_and_draw_arguments(&base,&f,&r,None,true),base);
+        assert_eq!(crate::cache::emit::restore_named_projection_and_draw_arguments(&base,&f,&r,Some("AIndependentVisual"),false),base);
     }
 
     fn shared_flag_switch_fixture(bias:u16)->Func {
