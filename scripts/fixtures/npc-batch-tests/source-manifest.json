@@ -103,14 +103,16 @@
         {
           "source": "quest/GORE_TEST_A.as",
           "module_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
-          "sha256": "c7943e2b04c0817c0f883644a60e8b5038210a9a30bb2f6f5c7e60bd4728768d"
+          "sha256": "997d9b8ea5c1a5bb73e177cb5d53ebd9d12c7790653188302d7f89f24ff31661"
         },
         {
           "source": "quest/GORE_TEST_B.as",
           "module_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
           "sha256": "af5a3dbfd775e36643033c2b0d91f182c46836b7808bda67a3cd83115e04fcc0"
         }
-      ]
+      ],
+      "bundle_version": "0.1.1",
+      "qualification": "quest/fix-0.1.1.json"
     }
   },
   "palette_cli_sha256": "3e16d37f2c04361e6c80764295a648837a91273c6bef792ac14990c9758c9ada",

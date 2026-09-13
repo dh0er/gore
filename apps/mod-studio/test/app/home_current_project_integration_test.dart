@@ -17765,7 +17765,7 @@ Revision3ContentIndex _questOpeningRecipeContentIndex({
           'origin': <String, Object?>{
             'type': 'generated',
             'generator_id': 'gore-authoring.draft-quest-skeleton',
-            'generator_version': 4,
+            'generator_version': 5,
             'owner': <String, Object?>{
               'project_id': projectId,
               'entity_id': _homeQuestOpeningRecipeQuestId,
@@ -17776,7 +17776,7 @@ Revision3ContentIndex _questOpeningRecipeContentIndex({
             'kind': 'script_module',
             'data': <String, Object?>{
               'generator_id': 'gore-authoring.draft-quest-skeleton',
-              'generator_version': 4,
+              'generator_version': 5,
               'module_namespace': 'PROJECT.QUESTS.WARNASGHAN',
               'module_relative_path': 'PROJECT/QUESTS/WARNASGHAN.as',
               'status': <String, Object?>{
@@ -19118,7 +19118,7 @@ Revision3ContentIndex _storyWorkbenchGameGateIndex({
       'origin': <String, Object?>{
         'type': 'generated',
         'generator_id': 'gore-authoring.draft-quest-skeleton',
-        'generator_version': 4,
+        'generator_version': 5,
         'owner': <String, Object?>{
           'project_id': projectId,
           'entity_id': revision3QuestOutlineQuestId,
@@ -19129,7 +19129,7 @@ Revision3ContentIndex _storyWorkbenchGameGateIndex({
         'kind': 'script_module',
         'data': <String, Object?>{
           'generator_id': 'gore-authoring.draft-quest-skeleton',
-          'generator_version': 4,
+          'generator_version': 5,
           'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
           'module_relative_path': 'PROJECT/QUESTS/FINDHOMER.as',
           'status': <String, Object?>{
@@ -19243,7 +19243,7 @@ Revision3ContentIndex _questTranscriptHomeIndex({required int revision}) {
       'origin': <String, Object?>{
         'type': 'generated',
         'generator_id': 'gore-authoring.draft-quest-skeleton',
-        'generator_version': 4,
+        'generator_version': 5,
         'owner': <String, Object?>{
           'project_id': revision3VoiceContentProjectId,
           'entity_id': _homeQuestTranscriptQuestId,
@@ -19254,7 +19254,7 @@ Revision3ContentIndex _questTranscriptHomeIndex({required int revision}) {
         'kind': 'script_module',
         'data': <String, Object?>{
           'generator_id': 'gore-authoring.draft-quest-skeleton',
-          'generator_version': 4,
+          'generator_version': 5,
           'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
           'module_relative_path': 'PROJECT/QUESTS/FINDHOMER.as',
           'status': <String, Object?>{

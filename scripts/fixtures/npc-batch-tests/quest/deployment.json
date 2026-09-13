@@ -87,5 +87,7 @@
   ],
   "apply_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe\" mgr apply --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
   "reset_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe\" mgr reset --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
-  "apply_log_sha256": "0dbe949eea0c089d34c2eb1c1ba3bc5e4675d5106026196c09f5fc60f4b6ae78"
+  "apply_log_sha256": "0dbe949eea0c089d34c2eb1c1ba3bc5e4675d5106026196c09f5fc60f4b6ae78",
+  "runtime_followup": "runtime-0.1.0.json",
+  "superseded_by": "fix-0.1.1.json"
 }

@@ -230,8 +230,13 @@ an empty trader configuration; it does not by itself qualify a working shop.
 
 ## 5. Quest completion beyond the basic session fixture — current test
 
-NpcQuestCallbacksTest0.1.0 is the next prepared package, using Profile4 slot071
+NpcQuestCallbacksTest0.1.1 is the current test package, using Profile4 slot071
 at noon. Follow the [German quest checklist](../../scripts/fixtures/npc-batch-tests/quest/FIELD-TEST.md).
+In0.1.0 A had no dialogue menu. All29 authored events were incorrectly registered
+as ordinary callables;0.1.1 fixes dialog, quest and document event bindings and
+const predicate signatures. Generator v6 and revision3 generator v5 now emit the
+correct native overrides too. Runtime progression remains unverified;
+[failure and diagnosis](../../scripts/fixtures/npc-batch-tests/quest/runtime-0.1.0.json).
 
 The [session campaign](../../scripts/fixtures/npc-session/RESULTS.md) passed
 quest acceptance, active/completed journal presence, direct start/success calls,

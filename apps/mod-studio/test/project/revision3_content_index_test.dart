@@ -179,7 +179,7 @@ Map<String, Object?> _questFixture() => <String, Object?>{
       'origin': <String, Object?>{
         'type': 'generated',
         'generator_id': 'gore-authoring.draft-quest-skeleton',
-        'generator_version': 4,
+        'generator_version': 5,
         'owner': <String, Object?>{
           'project_id': _projectId,
           'entity_id': _npcId,
@@ -190,7 +190,7 @@ Map<String, Object?> _questFixture() => <String, Object?>{
         'kind': 'script_module',
         'data': <String, Object?>{
           'generator_id': 'gore-authoring.draft-quest-skeleton',
-          'generator_version': 4,
+          'generator_version': 5,
           'module_namespace': 'PROJECT.QUESTS.GUARDDUTY',
           'module_relative_path': 'Project/Quests/GuardDuty.as',
           'status': <String, Object?>{
@@ -373,7 +373,7 @@ void main() {
     );
     expect(
       index.entityById(_moduleId)?.summary.scriptModule?.generatorVersion,
-      4,
+      5,
     );
   });
 
@@ -415,9 +415,9 @@ void main() {
     final oldModule =
         (oldGenerator['entities']! as List<Object?>).last!
             as Map<String, Object?>;
-    (oldModule['origin']! as Map<String, Object?>)['generator_version'] = 3;
+    (oldModule['origin']! as Map<String, Object?>)['generator_version'] = 4;
     final oldSummary = oldModule['summary']! as Map<String, Object?>;
-    (oldSummary['data']! as Map<String, Object?>)['generator_version'] = 3;
+    (oldSummary['data']! as Map<String, Object?>)['generator_version'] = 4;
     expect(
       () => Revision3ContentIndex.fromJsonObject(oldGenerator),
       throwsFormatException,

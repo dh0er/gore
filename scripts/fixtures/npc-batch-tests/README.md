@@ -21,10 +21,11 @@ die Save-Bereinigung und `7ac45595` die benoetigte native API-Komposition.
 Siehe [Build-/Paketpruefung](build-checks.json) und
 [veroeffentlichte Startstaende](start-saves.json).
 
-**Aktiv ist NpcQuestCallbacksTest 0.1.0**; Manager-Status `in_sync`.
+**Aktiv ist NpcQuestCallbacksTest 0.1.1**; Manager-Status `in_sync`.
 Alle anderen Testpakete und Barttexturen sind deaktiviert. Die aktuelle
-[Aktivierung](quest/deployment.json) verwendet den unveraenderten,
-bereits geprueften Quest-Build. **[Deutsche Testliste fuer Paket5](quest/FIELD-TEST.md)**.
+[Aktivierung](quest/fix-0.1.1.json) korrigiert die Ereignisbindungen des Quest-Builds.
+In0.1.0 blieb As Dialogmenue aus; neue Dialog-, Quest- und Journalmethoden waren
+nicht als native Ereignisse registriert. **[Deutsche Testliste fuer Paket5](quest/FIELD-TEST.md)**.
 Der [Fluchtabschluss](roles/field-runtime-0.1.3.json) dokumentiert den erfolgreichen
 Nachtest und die gespeicherten Bewegungswerte. Die Feld-Starts070/072 und der
 letzte Ergebnisstand sind [extern archiviert](profile-cleanup-after-field-complete.json).

@@ -476,7 +476,7 @@ String _projectJsonWithPlan(
   final questData = (questPayload['data']! as Map).cast<String, Object?>();
   final input = (questData['input']! as Map).cast<String, Object?>();
   if (advance) quest['revision'] = fixture.questRevision + 1;
-  questData['generator_version'] = 4;
+  questData['generator_version'] = 5;
   input['transition_plan'] = plan.toJson();
 
   final module = (entities[revision3QuestOutlineModuleId]! as Map)
@@ -485,8 +485,8 @@ String _projectJsonWithPlan(
   final modulePayload = (module['payload']! as Map).cast<String, Object?>();
   final moduleData = (modulePayload['data']! as Map).cast<String, Object?>();
   if (advance) module['revision'] = fixture.moduleRevision + 1;
-  moduleOrigin['generator_version'] = 4;
-  moduleData['generator_version'] = 4;
+  moduleOrigin['generator_version'] = 5;
+  moduleData['generator_version'] = 5;
   moduleData['input_fingerprint'] = revision3QuestInputFingerprint(input);
   return jsonEncode(project);
 }

@@ -19,7 +19,7 @@ const _lineId = '66666666666666666666666666666666';
       ),
       AuthoringStoryDraftKind.questDraft => (
         id: 'gore-authoring.draft-quest-skeleton',
-        version: 4,
+        version: 5,
       ),
     };
 
@@ -443,7 +443,7 @@ void main() {
       kind: 'quest_draft',
       data: <String, Object?>{
         'generator_id': 'gore-authoring.draft-quest-skeleton',
-        'generator_version': 4,
+        'generator_version': 5,
         'script_module': _ref(_moduleId, 'script_module'),
       },
     );

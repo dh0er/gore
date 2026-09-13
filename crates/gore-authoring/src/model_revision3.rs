@@ -56,7 +56,7 @@ pub const MAX_REVISION3_BASE_SNAPSHOT_BYTES: u64 = 16 * 1024 * 1024;
 /// Maximum final revision-3 Store snapshot, including its bounded retained-history envelope.
 pub const MAX_REVISION3_SNAPSHOT_BYTES: u64 = 17 * 1024 * 1024;
 pub const REVISION3_QUEST_GENERATOR_ID: &str = "gore-authoring.draft-quest-skeleton";
-pub const REVISION3_QUEST_GENERATOR_VERSION: u32 = 4;
+pub const REVISION3_QUEST_GENERATOR_VERSION: u32 = 5;
 pub const MAX_QUEST_TRANSITION_PREDICATE_GROUPS_V1: usize = 8;
 pub const MAX_QUEST_TRANSITION_PREDICATE_ATOMS_V1: usize = 8;
 pub const MAX_QUEST_TRANSITION_EFFECTS_V1: usize = 8;
