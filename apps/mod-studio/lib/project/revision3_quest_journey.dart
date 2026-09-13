@@ -200,7 +200,7 @@ final class Revision3QuestJourneyProjection {
           owner.projectId == index.projectId &&
           owner.entityId == quest.id &&
           owner.expectedKind == Revision3ContentEntityKind.questDraft &&
-          module.origin.generatorVersion == 4 &&
+          module.origin.generatorVersion == 5 &&
           module.summary.primaryIdentity == summary.moduleNamespace,
     );
     final questSummary = summary!;

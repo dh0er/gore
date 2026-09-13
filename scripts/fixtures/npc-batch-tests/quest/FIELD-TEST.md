@@ -1,5 +1,9 @@
 # Paket 5: Proviant fuer die Wache
 
+**Korrigierter Stand: 0.1.1.** In0.1.0 waren die neuen Ereignisse nicht korrekt
+an das Spiel gebunden; dadurch blieb As Menue aus. Der neue Stand korrigiert
+Dialog-, Quest- und Journal-Callbacks gemeinsam. Bitte wieder bei Schritt1 beginnen.
+
 **Profil 4, 071 „NPC 05 Quest - START“ laden.** Der Start ist auf Mittag
 gestellt. **Proviantmeister A steht direkt vor dir.** Mit ihm sprechen;
 die Optionen beginnen mit Q1 bis Q7.

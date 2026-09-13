@@ -187,6 +187,10 @@ fn predicates_external_overlap_and_effects_lower_to_exact_guarded_hooks() {
         QuestTransitionNodeV1::Root,
         QuestTransitionStateTestV1::Running,
     ));
+    transition_mut(&mut plan, node(2), QuestTransitionEdgeV1::Start).predicate = Some(predicate(
+        QuestTransitionNodeV1::Root,
+        QuestTransitionStateTestV1::Running,
+    ));
     let success = transition_mut(&mut plan, node(1), QuestTransitionEdgeV1::Success);
     success.predicate = Some(predicate(
         QuestTransitionNodeV1::Root,
@@ -215,15 +219,19 @@ fn predicates_external_overlap_and_effects_lower_to_exact_guarded_hooks() {
             .generate()
             .source;
     for hook in [
-        "bool ShouldBeAvailable_Implementation()",
-        "bool ShouldSucceed_Implementation()",
-        "bool ShouldFail_Implementation()",
-        "void HandleQuestStarted_Implementation()",
-        "void HandleQuestSucceeded_Implementation()",
-        "void HandleQuestFailed_Implementation()",
+        "bool ShouldBeAvailable() const",
+        "bool ShouldStart() const",
+        "bool ShouldSucceed() const",
+        "bool ShouldFail() const",
+        "void HandleQuestStarted()",
+        "void HandleQuestSucceeded()",
+        "void HandleQuestFailed()",
     ] {
-        assert!(source.contains(hook), "missing hook {hook}");
+        let declaration = format!("UFUNCTION(BlueprintOverride)\n    {hook}\n");
+        assert!(source.contains(&declaration), "missing native override {hook}");
     }
+    assert!(!source.contains("_Implementation"));
+    assert!(!source.contains("UFUNCTION()"));
     // External success and an automatic predicate are independent and intentionally coexist.
     let objective_one = source
         .find("class UQuest_GORE_SEMANTIC_QUEST_OBJ_DONE")
@@ -232,7 +240,7 @@ fn predicates_external_overlap_and_effects_lower_to_exact_guarded_hooks() {
         .find("class UQuest_GORE_SEMANTIC_QUEST_OBJ_2")
         .unwrap();
     assert!(source[objective_one..objective_two].contains("bExternalSuccessTrigger = true"));
-    assert!(source[objective_one..objective_two].contains("ShouldSucceed_Implementation"));
+    assert!(source[objective_one..objective_two].contains("bool ShouldSucceed() const"));
     assert!(source[objective_one..objective_two].contains("bExternalAvailabilityTrigger = false"));
     assert!(source[objective_two..].contains("bExternalFailTrigger = true"));
     assert!(source.contains("if (ObjectiveQuest2 != nullptr && !ObjectiveQuest2.HasBeenStarted())"));

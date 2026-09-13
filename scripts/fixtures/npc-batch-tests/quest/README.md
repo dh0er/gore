@@ -2,6 +2,15 @@
 
 **Aktuelle deutsche Spielanleitung: [Paket 5 testen](FIELD-TEST.md).**
 
+Version0.1.0 did not open A's dialogue menu in the user's game. Live-cache
+inspection found all29 new dialog/quest/document methods registered as ordinary
+callables with `_Implementation` in their Unreal names, not as native overrides.
+Version0.1.1 authors them with `UFUNCTION(BlueprintOverride)` and native names;
+all seven quest predicates also use their required const signature. Shared
+script predicates guard both visibility and actions without calling the
+unsupported native `UConversationTopic::IsVisible` wrapper directly.
+See [the failure report](runtime-0.1.0.json) and [corrected deployment](fix-0.1.1.json).
+
 Focused game test for the callback paths that the basic session quest did not
 cover. The user performs the game campaign. Compilation and bundle inspection
 do not establish that these callbacks execute in the game.
@@ -74,8 +83,8 @@ Root class: `G1R::Quest::UQuest_GORE_BATCH_PROVISIONS`. Its children end in
 `G1R::Document::UDocument_GORE_BATCH_PROVISIONS`.
 
 Dialogue only writes persistent Hero knowledge and performs the guarded item
-transaction. `ShouldStart_Implementation` starts the root after acceptance;
-`HandleQuestStarted_Implementation` starts the first objective and unlocks the
+transaction. `ShouldStart` starts the root after acceptance;
+`HandleQuestStarted` starts the first objective and unlocks the
 first journal segment. The first objective's success predicate recognizes the
 agreement. The second objective's start predicate follows the first objective's
 success; its start handler unlocks the next paragraph. Hand-in knowledge drives
@@ -83,7 +92,7 @@ the second objective's success predicate, which drives the root's success
 predicate. The root success handler is the sole reward site and guards it with
 Hero knowledge. The root failure predicate and handler implement cancellation,
 fail a running child, and unlock the failure paragraph. These are the same
-native callback names and transition operations used by generator v5; this
+native callback names and transition operations used by corrected generator v6; this
 handwritten fixture is not proof of every generated transition plan.
 
 All knowledge below belongs to Hero. The prefix is `gore_batch_quest_`:
@@ -112,7 +121,7 @@ Existing source references were read in the BuildID 24878692 source tree at
   document-segment unlocking.
 - `Story/G1R/Conversation/Conversation_Generic_AboutCamp_NC_ORG.as`:
   `AddItemToInventory(Hero, UItMi_Orenugget, count, EInventoryTypes(1))`.
-- `crates/gore-authoring/src/quest.rs`, generator v5:
+- `crates/gore-authoring/src/quest.rs`, generator v6:
   explicit availability override, `Should*` predicates, `HandleQuest*` effects,
   guarded `StartQuest`/`FailQuest` and the FName text helper.
 

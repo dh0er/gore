@@ -9476,7 +9476,7 @@ class _FakeRevision3Store
     quest['revision'] = fixture.questRevision + 1;
     final questPayload = (quest['payload']! as Map).cast<String, Object?>();
     final questData = (questPayload['data']! as Map).cast<String, Object?>();
-    questData['generator_version'] = 4;
+    questData['generator_version'] = 5;
     final input = (questData['input']! as Map).cast<String, Object?>();
     input['transition_plan'] = request.transitionPlan.toJson();
 
@@ -9484,10 +9484,10 @@ class _FakeRevision3Store
         .cast<String, Object?>();
     module['revision'] = fixture.moduleRevision + 1;
     final origin = (module['origin']! as Map).cast<String, Object?>();
-    origin['generator_version'] = 4;
+    origin['generator_version'] = 5;
     final modulePayload = (module['payload']! as Map).cast<String, Object?>();
     final moduleData = (modulePayload['data']! as Map).cast<String, Object?>();
-    moduleData['generator_version'] = 4;
+    moduleData['generator_version'] = 5;
     moduleData['input_fingerprint'] = revision3QuestInputFingerprint(input);
 
     final candidateProject = jsonEncode(candidate);
@@ -12783,7 +12783,7 @@ AuthoringRevision3QuestSourceInspectionResult _questSourceInspectionResult({
       },
       'generated': <String, Object?>{
         'generator_id': 'gore-authoring.draft-quest-skeleton',
-        'generator_version': 4,
+        'generator_version': 5,
         'owner': typedRef(questId, 'quest_draft'),
         'module_namespace': 'GoreMods.Quests.Inspection',
         'module_relative_path': 'GoreMods/Quests/Inspection.as',
@@ -12897,7 +12897,7 @@ Map<String, Object?> _questEntity({
     'kind': 'quest_draft',
     'data': <String, Object?>{
       'generator_id': 'gore-authoring.draft-quest-skeleton',
-      'generator_version': 4,
+      'generator_version': 5,
       'input': input,
       'script_module': <String, Object?>{
         'project_id': projectId,
@@ -12929,7 +12929,7 @@ Map<String, Object?> _questModuleEntity({
     'origin': <String, Object?>{
       'type': 'generated',
       'generator_id': 'gore-authoring.draft-quest-skeleton',
-      'generator_version': 4,
+      'generator_version': 5,
       'owner': <String, Object?>{
         'project_id': projectId,
         'id': request.questId,
@@ -12941,7 +12941,7 @@ Map<String, Object?> _questModuleEntity({
       'kind': 'script_module',
       'data': <String, Object?>{
         'generator_id': 'gore-authoring.draft-quest-skeleton',
-        'generator_version': 4,
+        'generator_version': 5,
         'owner': <String, Object?>{
           'project_id': projectId,
           'id': request.questId,

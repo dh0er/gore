@@ -11285,7 +11285,7 @@ AuthoringRevision3QuestSourceInspectionResult _controllerQuestInspectionResult({
       },
       'generated': <String, Object?>{
         'generator_id': 'gore-authoring.draft-quest-skeleton',
-        'generator_version': 4,
+        'generator_version': 5,
         'owner': typedRef(questId, 'quest_draft'),
         'module_namespace': 'GoreMods.Quests.ControllerInspection',
         'module_relative_path': 'GoreMods/Quests/ControllerInspection.as',

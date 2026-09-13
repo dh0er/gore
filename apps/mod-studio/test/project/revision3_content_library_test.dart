@@ -862,12 +862,12 @@ void main() {
   test('arbitrary or obsolete Quest generators are rejected', () {
     expect(
       () => _fixture(
-        questGeneratorVersion: 4,
+        questGeneratorVersion: 5,
         questGeneratorId: 'gore-authoring.unrelated-generator',
       ),
       throwsFormatException,
     );
-    expect(() => _fixture(questGeneratorVersion: 2), throwsFormatException);
+    expect(() => _fixture(questGeneratorVersion: 4), throwsFormatException);
   });
 
   testWidgets('routes Quest context editing from Overview', (tester) async {
@@ -2439,7 +2439,7 @@ Future<void> _expectOverviewActionFullyInteractive(WidgetTester tester) async {
 
 Future<void> _pumpLoadedLibrary(
   WidgetTester tester, {
-  int questGeneratorVersion = 4,
+  int questGeneratorVersion = 5,
   String questGeneratorId = 'gore-authoring.draft-quest-skeleton',
   Revision3QuestOutlineEditor? editQuestOutline,
   Revision3QuestContextEditor? editQuestContext,
@@ -2534,7 +2534,7 @@ Future<void> _pumpLibrary(
 Revision3ContentIndex _fixture({
   int revision = 7,
   bool includeQuest = true,
-  int questGeneratorVersion = 4,
+  int questGeneratorVersion = 5,
   String questGeneratorId = 'gore-authoring.draft-quest-skeleton',
   bool includeNpc = true,
 }) => Revision3ContentIndex.fromJsonObject(<String, Object?>{

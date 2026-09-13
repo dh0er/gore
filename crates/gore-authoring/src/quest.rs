@@ -18,7 +18,7 @@ use crate::{ContentSeal, EntityId, GameGenerationAnchor, Sha256Digest};
 
 /// Stable identity of the current quest generator.
 pub const DRAFT_QUEST_GENERATOR_ID: &str = "gore-authoring.draft-quest-skeleton";
-pub const DRAFT_QUEST_GENERATOR_VERSION: u32 = 5;
+pub const DRAFT_QUEST_GENERATOR_VERSION: u32 = 6;
 pub const MAX_DRAFT_QUEST_TITLE_BYTES: usize = 128;
 pub const MAX_DRAFT_QUEST_DESCRIPTION_BYTES: usize = 512;
 pub const MAX_DRAFT_QUEST_OBJECTIVE_TITLE_BYTES: usize = 128;
@@ -1300,12 +1300,16 @@ impl DraftQuestSkeleton {
         predicate: &QuestTransitionPredicateV1,
     ) {
         let method = match edge {
-            QuestTransitionEdgeV1::Availability => "ShouldBeAvailable_Implementation",
-            QuestTransitionEdgeV1::Start => "ShouldStart_Implementation",
-            QuestTransitionEdgeV1::Success => "ShouldSucceed_Implementation",
-            QuestTransitionEdgeV1::Failure => "ShouldFail_Implementation",
+            QuestTransitionEdgeV1::Availability => "ShouldBeAvailable",
+            QuestTransitionEdgeV1::Start => "ShouldStart",
+            QuestTransitionEdgeV1::Success => "ShouldSucceed",
+            QuestTransitionEdgeV1::Failure => "ShouldFail",
         };
-        source.push_str(&format!("\n    UFUNCTION()\n    bool {method}()\n    {{\n"));
+        // Authored classes must override the native const event. Decompiled
+        // `_Implementation` names with plain UFUNCTION do not bind that event.
+        source.push_str(&format!(
+            "\n    UFUNCTION(BlueprintOverride)\n    bool {method}() const\n    {{\n"
+        ));
         let referenced = predicate
             .any_of
             .iter()
@@ -1331,12 +1335,14 @@ impl DraftQuestSkeleton {
 
     fn render_effect_handler(&self, source: &mut String, transition: &QuestTransitionV1) {
         let method = match transition.edge {
-            QuestTransitionEdgeV1::Start => "HandleQuestStarted_Implementation",
-            QuestTransitionEdgeV1::Success => "HandleQuestSucceeded_Implementation",
-            QuestTransitionEdgeV1::Failure => "HandleQuestFailed_Implementation",
+            QuestTransitionEdgeV1::Start => "HandleQuestStarted",
+            QuestTransitionEdgeV1::Success => "HandleQuestSucceeded",
+            QuestTransitionEdgeV1::Failure => "HandleQuestFailed",
             QuestTransitionEdgeV1::Availability => unreachable!("validated without effects"),
         };
-        source.push_str(&format!("\n    UFUNCTION()\n    void {method}()\n    {{\n"));
+        source.push_str(&format!(
+            "\n    UFUNCTION(BlueprintOverride)\n    void {method}()\n    {{\n"
+        ));
         let targets = transition
             .effects
             .iter()
