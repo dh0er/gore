@@ -110,9 +110,12 @@ am Tor etwa 30 Meter hinter dir. Dort 30 einschalten, dann innerhalb der
 60 Sekunden zu B zurueckgehen. **072 „NPC 04 Rollen - Kampf bereit“** hat einen
 verstaerkten Helden fuer die positiven Niederlage-/Tod-Tests. Seit2026-09-13
 haben **beide Starts Hero Health/MaxHealth10.000 und B Health/MaxHealth50**,
-jeweils base/current. Nur diese Lebenswerte wurden auf Wunsch geaendert;
-Waffen, Kampfregeln und alle anderen Attribute bleiben erhalten. Die Originale
-sind [archiviert](field-health-starts.json). Zwischen den Zweigen frisch laden.
+jeweils base/current. Nach der Rueckmeldung zu kaum vorhandenem Schaden wurden
+zusaetzlich in beiden Starts **Hero Strength 1000 und Bs Resistance_Blunt/Edge/Point 0**
+gesetzt, ebenfalls base/current. Waffen und Kampfregeln bleiben erhalten.
+Die Originale sind archiviert: [Lebenswerte](field-health-starts.json),
+[Staerke und Schutzwerte](field-damage-starts.json). Diese Starts sind bewusst
+erleichterte Kampfbedingungen. Zwischen den Zweigen frisch laden.
 
 Ergebnisse bitte passend benennen: `rolle-waffenwahl`, `rolle-folgen`,
 `rolle-warten`, `rolle-niederlage`, `rolle-feind-besiegt`, `rolle-gilde-neutral`,

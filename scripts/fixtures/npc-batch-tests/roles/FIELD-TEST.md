@@ -1,9 +1,10 @@
 # Paket4: Begleiter, Kampf und Lebenszyklus
 
 Profil4. In **070 „NPC 04 Rollen - START“** und **072 „NPC 04 Rollen - Kampf bereit“**
-hat der Held jetzt **10.000/10.000 Leben**, B **50/50 Leben**.072 behaelt zusaetzlich
-seine bisherigen erhoehten Staerke-/Schutzwerte fuer die Sieg-/Tod-Tests.
-Die Originale sind extern archiviert; siehe [Gesundheitsanpassung](field-health-starts.json).
+hat der Held jetzt **10.000/10.000 Leben und 1.000 Staerke**, B **50/50 Leben
+und 0 Schutz gegen Hieb, Schlag und Stich**. 072 behaelt zusaetzlich die bisherigen
+erhoehten Schutzwerte des Helden. Die Originale sind extern archiviert; siehe
+[Gesundheitsanpassung](field-health-starts.json) und [Schadensanpassung](field-damage-starts.json).
 Beide beginnen mittags auf der freien Flaeche vor dem Alten
 Lager. B steht vor dir; **A steht am Tor etwa30 Meter hinter dir**.
 Alle nummerierten Optionen waehlst du bei A. Es gibt keinen neuen Aufbau.
@@ -27,8 +28,8 @@ totem Helden bleibt Speichern gesperrt. Danach070 frisch laden.
 Keine bestimmte Waffenwahl gilt vorab als bestanden. Dieser Test soll deren
 Ursache eingrenzen. Falls andere NPCs eingreifen oder B gar nicht reagiert,
 getrennt notieren; die Aufnahme nicht durch andere Rollenoptionen vorbereiten.
-Diese Runde nutzt die auf Wunsch angepassten Lebenswerte; die urspruengliche
-Waffenwahl mit normalen Lebenswerten bleibt als fruehere Beobachtung dokumentiert.
+Diese Runde nutzt die auf Wunsch angepassten Lebens-, Staerke- und Schutzwerte;
+die urspruengliche Waffenwahl bleibt als fruehere Beobachtung dokumentiert.
 
 ## 2. Folgen und Warten — 070
 
