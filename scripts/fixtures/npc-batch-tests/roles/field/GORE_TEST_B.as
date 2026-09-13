@@ -683,7 +683,7 @@ class UGoreRoleWeaponTrace : UActorComponent
 class UAIState_GoreRoleFlee : UGothicCharacterSimulateableAIState
 {
     default OwnedGameplayTags.AddTag(GameplayTag::AIState_Conflict_Flee);
-    default bSupportsSimulatedSteps = false;
+    default bSupportsSimulatedSteps = true;
 
     UFUNCTION(BlueprintOverride)
     void OnGracefulExitRequested()

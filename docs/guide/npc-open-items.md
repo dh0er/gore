@@ -166,8 +166,9 @@ the retained source date may sort it beside54 rather than at the top.
 ## 4. NPC roles — fleeing retest
 
 `NpcFieldRolesTest 0.1.0` was tested on2026-09-13; fleeing and revival failed.
-The0.1.1 retest confirms revival, while B still does not flee.0.1.2 targets only
-flight; [latest report](../../scripts/fixtures/npc-batch-tests/roles/field-runtime-0.1.1.json).
+The0.1.1 retest confirms revival.0.1.2 still did not flee; its saved diagnostics
+never reached the task body's first marker.0.1.3 targets only the state-entry
+configuration; [latest report](../../scripts/fixtures/npc-batch-tests/roles/field-runtime-0.1.2.json).
 See the [save-backed results](../../scripts/fixtures/npc-batch-tests/roles/field-runtime-0.1.0.json)
 and [targeted field retest](../../scripts/fixtures/npc-batch-tests/roles/FIELD-TEST.md).
 The completed economy/teacher starts067/068/069 isolate missing LP, missing ore and successful
@@ -198,7 +199,9 @@ The earlier NPC-container readback was not shop-stock proof.
   Hero selected and native navigation, bypassing conditional fight assessment
   and same-species filtering.0.1.1 stopped attacking but did not move;0.1.2 uses
   the proven routine entry path, explicit player target and native pathfinding,
-  with a few saved diagnostic values. Its exact earlier failure cause remains open.
+  with a few saved diagnostic values.0.1.2 records no entry or movement attempt;
+  0.1.3 enables simulated steps like the proven routine states. The native
+  entry gate and successful movement still require runtime confirmation.
 - [ ] Investigate B drawing a bow next to the Hero and sometimes switching to a
   sword before firing. Archer personality and both usable weapons are confirmed;
   the runtime cause remains open. See the

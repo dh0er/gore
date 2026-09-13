@@ -1002,7 +1002,8 @@ class UChoiceGoreRoleFleeRestore : UTopic_GoreRoleControl
         UGameplayAbility_CharacterAI_Gothic AI = Cast<UGameplayAbility_CharacterAI_Gothic>(Subject().GetAI());
         if (AI == nullptr) return;
         AI.ModeOfFleeOnUnfavorableCombat = EFleeOnUnfavorableCombatMode(int(GoreRoleRead(Subject(), n"gore_role_old_flee_mode")));
-        GoreRoleNote(Subject(), n"gore_role_flee_exit", 2.0f);
+        if (GoreRoleRead(Subject(), n"gore_role_flee_exit") == 0.0f)
+            GoreRoleNote(Subject(), n"gore_role_flee_exit", 2.0f);
         ::ExchangeDailyRoutineToClass(Subject(), UDailyRoutine_GoreRoleWait);
         GoreRoleNote(Subject(), n"gore_role_flee_override", 0.0f);
         this.EndConversation();

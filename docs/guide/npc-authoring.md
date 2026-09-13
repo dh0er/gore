@@ -700,8 +700,15 @@ The0.1.1 authored retreat stopped attacking but did not move. Discarded
 walking and successfully tested reading/drinking code use the same destructor
 execution pattern.0.1.2 instead uses the proven routine entry path, resolves
 the player explicitly and sends nearby retreat goals through `GotoPosition`.
-Saved entry, distance, attempt and movement values will distinguish another
-failed entry from a blocked path. This candidate still needs the game test.
+The0.1.2 result save records entry0, attempts0, distance-1 and movement0: the
+first marker in the task body was not reached. The user's31/27/31 sequence did
+not clear those values. Live-cache metadata binds DoTask and graceful exit just
+like the working activity state, but the authored template explicitly disabled
+simulated steps while the base, walking and activity states enable them.
+Version0.1.3 enables that support and preserves previous exit/error codes on27.
+The native scheduling gate is not exposed in the script source, so this remains
+a focused candidate pending runtime confirmation, not a proven root cause.
+See the [save diagnosis](../../scripts/fixtures/npc-batch-tests/roles/field-runtime-0.1.2.json).
 See the [focused retry](../../scripts/fixtures/npc-batch-tests/roles/FIELD-TEST.md).
 
 ### Remaining limits
