@@ -3483,6 +3483,8 @@ fn emit_function_ctor(
         pass_trace("restore_interpolated_sample_lives", &rendered);
         let rendered = restore_scoped_event_self_argument(&rendered, f, refs, class_name, is_method);
         pass_trace("restore_scoped_event_self_argument", &rendered);
+        let rendered = restore_named_normalized_accumulation(&rendered, f, refs, class_name, is_method);
+        pass_trace("restore_named_normalized_accumulation", &rendered);
         let rendered = restore_captured_predicate_condition_lives(&rendered, f, refs, class_name, is_method);
         pass_trace("restore_captured_predicate_condition_lives", &rendered);
         let rendered = restore_clock_property_and_enum_chain(&rendered, f, refs, is_method, class_name);
@@ -18884,6 +18886,229 @@ fn restore_closed_format_argument_lives(body:&str,f:&Func,refs:&RefResolver,is_m
     let Some((start,end,replacement))=found else {return body.to_owned();};
     let mut lines:Vec<_>=body.lines().map(str::to_owned).collect();lines.splice(start..end,replacement);
     lines.join("\n")+if body.ends_with('\n') {"\n"}else {""}
+}
+
+/// Keep a normalized loop direction named while its weighted argument and fallback receiver stay temporary.
+fn restore_named_normalized_accumulation(body:&str,f:&Func,refs:&RefResolver,class_name:Option<&str>,is_method:bool)->String {
+    if !is_method || !f.is_const_method() || !f.params.is_empty() || !body.contains(" += ") || !body.contains(".GetSafeNormal2D(") {return body.to_owned();}
+    let found=(|| {
+        let class=class_name?;let vector=f.ret.type_info;
+        let shape=|t:&super::types::DataType,token,ptr,reference:bool,constant:bool,readonly:bool,handle:bool|
+            t.token==token && t.type_info==ptr && t.is_reference==reference && t.is_object_const==constant && t.is_read_only==readonly
+                && t.is_object_handle==handle && !t.is_auto && !t.if_handle_then_const;
+        let plain=|t:&super::types::DataType,token|shape(t,token,0,false,false,false,false);
+        let native=|ptr,name|refs.type_identity_by_ptr(ptr).is_some_and(|id|id.name==name && id.module.is_empty() && id.namespace.is_empty());
+        let ident=|s:&str|!s.is_empty() && s.bytes().enumerate().all(|(n,b)|b==b'_' || b.is_ascii_alphabetic() || (n>0 && b.is_ascii_digit()));
+        if !native(vector,"FVector") || !shape(&f.ret,5,vector,false,false,false,false) {return None;}
+        let code=disassemble(&f.bytecode).ok()?;
+        let candidates:Vec<_>=[(81usize,false),(136usize,true)].into_iter().filter_map(|(len,base)| {
+            let at=code.len().checked_sub(len)?;
+            (at>=19 && code[at].op.name=="SetV8" && code[at+1].op.name=="DIVd").then_some((at,base))
+        }).collect();
+        let [(at,base)]=candidates.as_slice() else {return None;};let (at,base)=(*at,*base);
+        let h=code.get(..15)?;let c=&code[at..];let clamp=&code[at-4..at];
+        let ops=|c:&[Instr],s:&str|c.iter().map(|i|i.op.name).eq(s.split_whitespace());
+        if !ops(h,"PshGPtr PSF CALLSYS SetV8 PSF PshVPtr ADDSi CALLSYS JMP SUSPEND PSF CALLSYS PshRPtr RDSPtr RefCpyV")
+            || !ops(clamp,"SetV8 CMPd JNS SetV8")
+            || !ops(c,if base {"SetV8 DIVd PshGPtr PshC8 PSF PSF PshVPtr CALLSYS STOREOBJ PshVPtr CALLSYS PSF PshVPtr CALLSYS PSF PSF PSF CALLSYS PSF CALLSYS PshV8 PSF PSF CALLSYS PSF PSF PSF CALLSYS ADDd FreeNullV8 LoadVObjR RDR1 CpyVtoR1 JLowNZ PshGPtr PSF CALLSYS SetV8 CMPd JNP PshGPtr PshC8 PSF PSF CALLSYS PSF PSF CALLSYS JMP PshVPtr CALLINTF STOREOBJ PshVPtr CALLSYS JLowZ PshGPtr PshC8 PSF PSF PshVPtr CALLSYS STOREOBJ PshVPtr CALLSYS PSF PshVPtr CALLINTF STOREOBJ PshVPtr CALLSYS PSF PSF PSF CALLSYS PSF CALLSYS PSF PSF CALLSYS PshVPtr ADDSi RDSPtr CALLSYS CpyRtoV4 NOT CpyVtoR1 JLowZ PSF PshVPtr CALLSYS JMP PshGPtr PshC8 PSF PSF PshVPtr ADDSi RDSPtr CALLSYS PSF PshVPtr CALLSYS STOREOBJ PshVPtr CALLSYS PSF PSF PSF CALLSYS PSF CALLSYS PshGPtr PshC8 PSF LoadThisR RDR8 PshV8 PSF PSF CALLSYS LoadThisR RDR8 PshV8 PSF PSF CALLSYS PSF PSF PSF CALLSYS PSF CALLSYS PSF PshVPtr CALLSYS RET"} else {"SetV8 DIVd PshGPtr PshC8 PSF PSF PshVPtr CALLSYS STOREOBJ PshVPtr CALLSYS PSF PshVPtr CALLSYS PSF PSF PSF CALLSYS PSF CALLSYS PshV8 PSF PSF CALLSYS PSF PSF PSF CALLSYS ADDd FreeNullV8 LoadVObjR RDR1 CpyVtoR1 JLowNZ SetV8 CMPd JNP PshGPtr PshC8 PSF PSF CALLSYS PSF PshVPtr CALLSYS JMP PshVPtr CALLINTF STOREOBJ PshVPtr CALLSYS JLowZ PshGPtr PshC8 PSF PSF PshVPtr CALLSYS STOREOBJ PshVPtr CALLSYS PSF PshVPtr CALLINTF STOREOBJ PshVPtr CALLSYS PSF PSF PSF CALLSYS PSF CALLSYS PSF PshVPtr CALLSYS JMP PshGPtr PshVPtr CALLSYS RET"}) {return None;}
+        let w=|i:&Instr,n:usize|i.words.get(n).map(|s|*s as i16 as i32);let p=|i:&Instr|i.qwords.first().map(|s|*s as i64);
+        let local=|s|{let mut all=f.obj_locals.iter().filter(|(slot,_)|*slot==s);let ty=all.next()?.1;(s>0 && all.next().is_none()).then_some(ty)};
+        let (sum,total,iterator,enemy,weight,distance,normal,weighted,actor,difference,discarded,flag,zero)=
+            (w(&h[1],0)?,w(&h[3],0)?,w(&h[4],0)?,w(&h[14],0)?,w(&c[0],0)?,w(&c[1],2)?,w(&c[4],0)?,w(&c[5],0)?,
+             w(&c[8],0)?,w(&c[15],0)?,w(&c[25],0)?,w(&c[31],0)?,w(&c[if base {37}else{34}],0)?);
+        let roles=[sum,total,iterator,enemy,weight,distance,normal,weighted,actor,difference,discarded,flag,zero];
+        if roles.iter().any(|s|*s<=0) || roles.into_iter().collect::<HashSet<_>>().len()!=13 || [sum,normal,weighted,difference,discarded].iter().any(|s|local(*s)!=Some(vector))
+            || [total,weight,distance,flag,zero].iter().any(|s|f.obj_locals.iter().any(|(slot,_)|s==slot)) {return None;}
+        let character=local(enemy)?;let iter_ty=local(iterator)?;
+        if !native(character,"AGothicCharacter") || local(actor)?!=character || !native(iter_ty,"TArrayConstIterator") {return None;}
+        let guard_scaled=if base {w(&c[113],0)?}else{0};
+        if base && (guard_scaled<=0 || roles.contains(&guard_scaled) || local(guard_scaled)!=Some(vector)) {return None;}
+        for (n,k,s) in [(1,0,weight),(1,1,weight),(6,0,0),(9,0,actor),(11,0,normal),(12,0,enemy),(14,0,normal),
+            (16,0,weighted),(18,0,difference),(20,0,weight),(21,0,weighted),(22,0,normal),(24,0,weighted),(26,0,sum),
+            (28,0,total),(28,1,total),(28,2,weight),(29,0,enemy),(30,0,iterator),(32,0,flag)] {if w(&c[n],k)!=Some(s) {return None;}}
+        let tail_words:&[(usize,usize,i32)]=if base {&[(35,0,normal),(37,0,zero),(38,0,total),(38,1,zero),(42,0,discarded),(43,0,sum),(45,0,discarded),
+            (46,0,normal),(49,0,0),(51,0,actor),(52,0,actor),(57,0,difference),(58,0,discarded),(59,0,0),
+            (61,0,actor),(62,0,actor),(64,0,difference),(65,0,0),(67,0,actor),(68,0,actor),(70,0,difference),
+            (71,0,weighted),(72,0,discarded),(74,0,weighted),(76,0,difference),(77,0,normal),(79,0,0),(83,0,flag),
+            (84,0,flag),(85,0,flag),(87,0,normal),(88,0,-2),(93,0,difference),(94,0,discarded),(95,0,0),
+            (99,0,difference),(100,0,0),(102,0,actor),(103,0,actor),(105,0,difference),(106,0,weighted),(107,0,discarded),
+            (109,0,weighted),(113,0,guard_scaled),(115,0,zero),(116,0,zero),(117,0,discarded),(118,0,normal),(121,0,zero),
+            (122,0,zero),(123,0,guard_scaled),(124,0,difference),(126,0,guard_scaled),(127,0,weighted),(128,0,discarded),(130,0,weighted),
+            (132,0,guard_scaled),(133,0,-2),(135,0,4)]}else{&[(35,0,total),(35,1,zero),(39,0,discarded),(40,0,sum),(42,0,discarded),(43,0,-2),(46,0,0),
+            (48,0,actor),(49,0,actor),(54,0,difference),(55,0,discarded),(56,0,0),(58,0,actor),(59,0,actor),
+            (61,0,difference),(62,0,0),(64,0,actor),(65,0,actor),(67,0,difference),(68,0,weighted),(69,0,discarded),
+            (71,0,weighted),(73,0,difference),(74,0,-2),(78,0,-2),(80,0,4)]};
+        for &(n,k,s) in tail_words {if w(&c[n],k)!=Some(s) {return None;}}
+        if w(&h[5],0)!=Some(0) || w(&h[10],0)!=Some(iterator) || w(&clamp[0],0)!=Some(weight) || w(&clamp[1],0)!=Some(distance)
+            || w(&clamp[1],1)!=Some(weight) || w(&clamp[3],0)!=Some(distance) || h[3].qwords.as_slice()!=[0] || c[if base {37}else{34}].qwords.as_slice()!=[0]
+            || c[0].qwords.as_slice()!=[1.0f64.to_bits()] || clamp[0].qwords!=c[0].qwords || clamp[3].qwords!=c[0].qwords {return None;}
+        let zero_global=p(&h[0])?;let tolerance=*c[3].qwords.first()?;
+        if refs.global_is_string(zero_global) || refs.global_by_ptr(zero_global)!=Some("ZeroVector") || refs.global_ns(zero_global)!=Some("FVector")
+            || (if base {&[2usize,34,40,55,91,111][..]}else{&[2usize,37,52,77][..]}).iter().any(|n|p(&c[*n])!=Some(zero_global))
+            || (if base {&[41usize,56,92,112][..]}else{&[38usize,53][..]}).iter().any(|n|c[*n].qwords!=c[3].qwords)
+            || !f64::from_bits(tolerance).is_finite() || f64::from_bits(tolerance)<=0.0 {return None;}
+        let offsets:HashMap<_,_>=code.iter().enumerate().map(|(n,i)|(i.offset_dw as i64,n)).collect();let mut edges=Vec::new();
+        for (n,i) in code.iter().enumerate() {if i.op.name=="JMPP" {return None;}if i.op.name.starts_with('J') {
+            let to=*offsets.get(&(i.offset_dw as i64+2+*i.dwords.first()? as i32 as i64))?;edges.push((n,to));
+        }}
+        let required=if base {vec![(8,at+30),(at-2,at),(at+33,9),(at+39,at+49),(at+48,at+79),(at+54,at+79),(at+86,at+91),(at+90,at+135)]}
+            else {vec![(8,at+30),(at-2,at),(at+33,9),(at+36,at+46),(at+45,at+80),(at+51,at+77),(at+76,at+80)]};
+        if required.iter().any(|e|!edges.contains(e)) || edges.iter().any(|(from,to)| {
+            if required.contains(&(*from,*to)) {return false;}
+            if *to>0 && *to<15 || *from>=at-4 || *to>=at-4 {
+                // Earlier rejected loop elements may release their borrowed handle and continue to the latch.
+                return !(*from<at-4 && *to==at+30 && code[*from].op.name=="JMP" && *from>0 && code[*from-1].op.name=="FreeNullV8" && w(&code[*from-1],0)==Some(enemy));
+            }false
+        }) {return None;}
+        let method=|ptr,owner,name,constant|refs.func_owner_by_ptr(ptr)==Some(owner) && refs.func_by_ptr(ptr)==Some(name) && refs.is_method_by_ptr(ptr) && refs.is_const_method_by_ptr(ptr)==constant;
+        let (copy,make_iter,proceed,get_self,feet,subtract,normalize,multiply,add,valid)=(p(&h[2])?,p(&h[7])?,p(&h[11])?,p(&c[7])?,p(&c[10])?,p(&c[17])?,p(&c[19])?,p(&c[23])?,p(&c[27])?,p(&c[if base {53}else{50}])?);
+        let (self_name,feet_name,normal_name)=(refs.func_by_ptr(get_self)?,refs.func_by_ptr(feet)?,refs.func_by_ptr(normalize)?);
+        if ![self_name,feet_name,normal_name].iter().all(|n|ident(n)) || !refs.is_subclass(class,refs.func_owner_by_ptr(get_self)?)
+            || !method(get_self,"UCharacterAIState",self_name,true) || !shape(refs.func_ret_by_ptr(get_self)?,5,character,false,false,false,true) || !refs.func_params_by_ptr(get_self)?.is_empty()
+            || !method(feet,"AGothicCharacter",feet_name,true) || !shape(refs.func_ret_by_ptr(feet)?,5,vector,false,false,false,false) || !refs.func_params_by_ptr(feet)?.is_empty() {return None;}
+        for (ptr,name,constant,ret_vector,arg_kind) in [(copy,"$beh0",false,false,1),(subtract,"opSub",true,true,1),(normalize,"GetSafeNormal2D",true,true,2),(multiply,"opMul",true,true,3),(add,"opAddAssign",false,true,1)] {
+            if !method(ptr,"FVector",name,constant) || if ret_vector {!shape(refs.func_ret_by_ptr(ptr)?,5,vector,false,false,false,false)}else{!plain(refs.func_ret_by_ptr(ptr)?,0x52)} {return None;}
+            let args=refs.func_params_by_ptr(ptr)?;
+            if match arg_kind {1=>!matches!(args,[t] if shape(t,5,vector,true,true,true,false)),2=>!matches!(args,[a,b] if plain(a,0x51) && shape(b,5,vector,true,true,true,false)),_=>!matches!(args,[t] if plain(t,0x51))} {return None;}
+        }
+        let calls:&[(usize,i64)]=if base {&[(13,feet),(36,copy),(44,normalize),(60,get_self),(63,feet),(69,feet),(73,subtract),(75,normalize),(82,valid),
+            (89,copy),(98,feet),(101,get_self),(104,feet),(108,subtract),(110,normalize),(119,multiply),(125,multiply),(131,normalize),(134,copy)]}
+            else {&[(13,feet),(41,normalize),(44,copy),(57,get_self),(60,feet),(66,feet),(70,subtract),(72,normalize),(75,copy),(79,copy)]};
+        for &(n,ptr) in calls {if p(&c[n])!=Some(ptr) {return None;}}
+        let interest_at=if base {50}else{47};let repeated_interest=if base {66}else{63};
+        let interest=*c[interest_at].dwords.first()? as i32;let interest_name=refs.func_by_id(interest)?;
+        if c[repeated_interest].dwords!=c[interest_at].dwords || !ident(interest_name) || !refs.is_method_by_id(interest) || !refs.is_const_method_by_id(interest)
+            || !refs.is_subclass(class,refs.func_owner_by_id(interest)?) || !shape(refs.func_ret_by_id(interest)?,5,character,false,false,false,true) || !refs.func_params_by_id(interest)?.is_empty()
+            || refs.func_by_ptr(valid)!=Some("IsValid") || refs.func_owner_by_ptr(valid).is_some() || refs.func_ns_by_ptr(valid).is_some_and(|s|!s.is_empty())
+            || refs.is_method_by_ptr(valid) || refs.is_const_method_by_ptr(valid) || !plain(refs.func_ret_by_ptr(valid)?,0x41)
+            || !matches!(refs.func_params_by_ptr(valid)?,[t] if native(t.type_info,"UObject") && shape(t,5,t.type_info,false,true,false,true)) {return None;}
+        if !method(make_iter,"TArray","Iterator",true) || !shape(refs.func_ret_by_ptr(make_iter)?,5,iter_ty,false,false,false,false) || !refs.func_params_by_ptr(make_iter)?.is_empty()
+            || !method(proceed,"TArrayConstIterator","Proceed",false) || !shape(refs.func_ret_by_ptr(proceed)?,5,character,true,false,true,true) || !refs.func_params_by_ptr(proceed)?.is_empty() {return None;}
+        let field_id=*h[6].dwords.first()? as i32;let (field,old_owner)=refs.member_identity(field_id,w(&h[6],0)?)?;let owner=refs.type_identity_by_id(field_id)?;
+        let iter_id=*c[30].dwords.first()? as i32;let (can_proceed,iter_old)=refs.member_identity(iter_id,w(&c[30],1)?)?;
+        if !ident(field) || refs.type_identity_by_id(old_owner)!=Some(owner) || !refs.is_subclass(class,&owner.name)
+            || refs.own_field_type_by_class(&owner.name,field)?!="TArray<AGothicCharacter>" || can_proceed!="CanProceed"
+            || refs.type_identity_by_id(iter_id)!=refs.type_identity_by_ptr(iter_ty) || refs.type_identity_by_id(iter_old)!=refs.type_identity_by_ptr(iter_ty) {return None;}
+        if base {
+            // The second form assigns an outer direction, then returns it or a weighted guard sum.
+            // Its entire original tail is checked before permitting the same loop repair.
+            let assign=p(&c[47])?;let combine=p(&c[129])?;
+            if p(&c[78])!=Some(assign) || !method(assign,"FVector","opAssign",false)
+                || !shape(refs.func_ret_by_ptr(assign)?,5,vector,true,false,false,false)
+                || !matches!(refs.func_params_by_ptr(assign)?,[t] if shape(t,5,vector,true,true,true,false))
+                || !method(combine,"FVector","opAdd",true) || !shape(refs.func_ret_by_ptr(combine)?,5,vector,false,false,false,false)
+                || !matches!(refs.func_params_by_ptr(combine)?,[t] if shape(t,5,vector,true,true,true,false)) {return None;}
+            let typed_field=|at:usize,ty:&str| {
+                let id=*c[at].dwords.first()? as i32;let owner=refs.type_identity_by_id(id)?;
+                let (name,old)=refs.member_identity(id,w(&c[at],0)?)?;
+                (refs.type_identity_by_id(old)==Some(owner) && refs.is_subclass(class,&owner.name) && ident(name)
+                    && refs.own_field_type_by_class(&owner.name,name)==Some(ty)).then_some((owner,name))
+            };
+            let (owner,guard)=typed_field(80,"AGothicCharacter")?;
+            let (away_owner,away)=typed_field(114,"float")?;let (toward_owner,toward)=typed_field(120,"float")?;
+            if owner!=away_owner || owner!=toward_owner || away==toward
+                || c[80].words!=c[96].words || c[80].dwords!=c[96].dwords {return None;}
+            let lines:Vec<_>=body.lines().collect();let mut paths=Vec::new();let mut path=Vec::new();
+            for (n,line) in lines.iter().enumerate() {
+                paths.push(path.clone());match line.trim() {"{"=>path.push(n),"}"=>{path.pop()?;},
+                    _=>if line.contains('{') || line.contains('}') {return None;}}
+            }
+            if !path.is_empty() {return None;}
+            let bound=|name:&str,slot|slot_and_life_any(name).is_some_and(|(n,_)|n==slot);
+            let mut edits=Vec::new();
+            for (row,s) in lines.windows(24).enumerate() {let candidate=(|| {
+                let (pad,weight_name,ratio)=declaration_with_initializer(s[0])?;let distance_name=ratio.strip_prefix("1.0 / ")?;
+                let (_,weighted_name,product)=declaration_with_initializer(s[1])?;
+                let sum_name=s[2].strip_prefix(&pad)?.strip_suffix(&format!(" += {weighted_name};"))?;
+                let loop_open=*paths[row].last()?;let outer=pad.strip_suffix("    ")?;
+                let head=lines.get(loop_open.checked_sub(1)?)?.trim();
+                let enemy_name=head.strip_prefix("for (auto ")?.strip_suffix(&format!(" : this.{field})"))?;
+                let normal_expr=format!("(this.{self_name}().{feet_name}() - {enemy_name}.{feet_name}()).{normal_name}({:?}, FVector::ZeroVector)",f64::from_bits(tolerance));
+                if !bound(&weight_name,weight) || !bound(distance_name,distance) || !bound(&weighted_name,weighted) || !bound(sum_name,sum) || !bound(enemy_name,enemy)
+                    || count_ident(body,&weighted_name)!=2 || count_ident(body,&weight_name)!=3 || count_ident(body,sum_name)!=3
+                    || s[0]!=format!("{pad}float {weight_name} = {ratio};") || s[1]!=format!("{pad}FVector {weighted_name} = {product};")
+                    || product!=format!("({normal_expr} * {weight_name})") || indent_of(lines[loop_open])!=outer {return None;}
+                let (total_name,right)=s[3].trim().strip_suffix(';')?.split_once(" = ")?;
+                let direction=s[5].strip_prefix(&format!("{outer}FVector "))?.strip_suffix("(FVector::ZeroVector);")?;
+                if !bound(total_name,total) || right!=format!("{total_name} + {weight_name}") || s[3]!=format!("{pad}{total_name} = {right};")
+                    || count_ident(body,total_name)!=4 || !bound(direction,normal) || count_ident(body,direction)!=5
+                    || s[4]!=format!("{outer}}}") || s[6]!=format!("{outer}if ({total_name} > 0.0)") || s[7]!=format!("{outer}{{")
+                    || s[8]!=format!("{pad}{direction} = {sum_name}.{normal_name}({:?}, FVector::ZeroVector);",f64::from_bits(tolerance))
+                    || s[9]!=format!("{outer}}}") || s[10]!=format!("{outer}else") || s[11]!=format!("{outer}{{")
+                    || s[12]!=format!("{pad}if (IsValid(this.{interest_name}()))") || s[13]!=format!("{pad}{{") {return None;}
+                let nested=format!("{pad}    ");let (_,fallback_name,receiver)=declaration_with_initializer(s[14])?;
+                let fallback_expr=format!("(this.{self_name}().{feet_name}() - this.{interest_name}().{feet_name}())");
+                let (_,guard_name,guard_expr)=declaration_with_initializer(s[22])?;
+                if !bound(&fallback_name,weighted) || fallback_name==weighted_name || count_ident(body,&fallback_name)!=2
+                    || s[14]!=format!("{nested}FVector {fallback_name} = {fallback_expr};") || receiver!=fallback_expr
+                    || s[15]!=format!("{nested}{direction} = {fallback_name}.{normal_name}({:?}, FVector::ZeroVector);",f64::from_bits(tolerance))
+                    || s[16]!=format!("{pad}}}") || s[17]!=format!("{outer}}}")
+                    || s[18]!=format!("{outer}if (!(IsValid(this.{guard})))") || s[19]!=format!("{outer}{{")
+                    || s[20]!=format!("{pad}return {direction};") || s[21]!=format!("{outer}}}")
+                    || !bound(&guard_name,difference) || count_ident(body,&guard_name)!=2
+                    || guard_expr!=format!("(this.{guard}.{feet_name}() - this.{self_name}().{feet_name}()).{normal_name}({:?}, FVector::ZeroVector)",f64::from_bits(tolerance))
+                    || s[22]!=format!("{outer}FVector {guard_name} = {guard_expr};")
+                    || s[23]!=format!("{outer}return (({direction} * this.{away}) + ({guard_name} * this.{toward})).{normal_name}({:?}, FVector::ZeroVector);",f64::from_bits(tolerance)) {return None;}
+                let parent=&paths[loop_open];
+                if (0..=4).any(|n|paths[row+n]!=paths[row]) || [5,6,7,10,11,18,19,22,23].into_iter().any(|n|&paths[row+n]!=parent)
+                    || paths[row+8].last()!=Some(&(row+7)) || paths[row+9]!=paths[row+8]
+                    || paths[row+12].last()!=Some(&(row+11)) || paths[row+13]!=paths[row+12] || paths[row+17]!=paths[row+12]
+                    || paths[row+14].last()!=Some(&(row+13)) || paths[row+15]!=paths[row+14] || paths[row+16]!=paths[row+14]
+                    || paths[row+20].last()!=Some(&(row+19)) || paths[row+21]!=paths[row+20]
+                    || lines[row+24..].iter().any(|l|!l.trim().is_empty()) {return None;}
+                let initial_sum=format!("{outer}FVector {sum_name}(FVector::ZeroVector);");let initial_total=format!("{outer}float {total_name} = 0.0;");
+                if loop_open<3 || lines[loop_open-3]!=initial_sum || lines[loop_open-2]!=initial_total
+                    || paths[loop_open-3]!=*parent || paths[loop_open-2]!=*parent {return None;}
+                // Only the proven later outer direction may already occupy the normalized slot's source namespace.
+                if body.split(|c:char|!c.is_ascii_alphanumeric() && c!='_').any(|name|bound(name,normal) && name!=direction) {return None;}
+                let mut life=2usize;let mut new_name=format!("local_{normal}_{life}");
+                while count_ident(body,&new_name)!=0 {life+=1;new_name=format!("local_{normal}_{life}");}
+                Some((row+1,format!("{pad}FVector {new_name} = {normal_expr};\n{pad}{sum_name}.opAddAssign(({new_name} * {weight_name}));"),row+14,
+                    format!("{nested}{direction} = {fallback_expr}.{normal_name}({:?}, FVector::ZeroVector);",f64::from_bits(tolerance))))
+            })();if let Some(edit)=candidate {edits.push(edit);}}
+            let [edit]=edits.as_slice() else {return None;};return Some(edit.clone());
+        }
+
+        let new_name=format!("local_{normal}");
+        if body.split(|c:char|!c.is_ascii_alphanumeric() && c!='_').any(|s|slot_and_life_any(s).is_some_and(|(slot,_)|slot==normal)) {return None;}
+        let lines:Vec<_>=body.lines().collect();let mut paths=Vec::new();let mut path=Vec::new();
+        for (n,line) in lines.iter().enumerate() {paths.push(path.clone());match line.trim() {"{"=>path.push(n),"}"=>if path.pop().is_none() {return None;},_=>if brace_net(line)!=0 {return None;}}}
+        if !path.is_empty() {return None;}
+        let bound=|name:&str,slot|slot_and_life_any(name).is_some_and(|(n,_)|n==slot);let mut edits=Vec::new();
+        for (row,s) in lines.windows(15).enumerate() {let candidate=(|| {
+            let (pad,weight_name,ratio)=declaration_with_initializer(s[0])?;let distance_name=ratio.strip_prefix("1.0 / ")?;
+            let (_,weighted_name,product)=declaration_with_initializer(s[1])?;let sum_name=s[2].strip_prefix(&pad)?.strip_suffix(&format!(" += {weighted_name};"))?;
+            let loop_open=*paths[row].last()?;let head=lines.get(loop_open.checked_sub(1)?)?.trim();
+            let enemy_name=head.strip_prefix("for (auto ")?.strip_suffix(&format!(" : this.{field})"))?;
+            let normal_expr=format!("(this.{self_name}().{feet_name}() - {enemy_name}.{feet_name}()).{normal_name}({:?}, FVector::ZeroVector)",f64::from_bits(tolerance));
+            let outer=pad.strip_suffix("    ")?;
+            if !bound(&weight_name,weight) || !bound(distance_name,distance) || !bound(&weighted_name,weighted) || !bound(sum_name,sum) || !bound(enemy_name,enemy)
+                || count_ident(body,&weighted_name)!=2 || count_ident(body,&weight_name)!=3 || count_ident(body,sum_name)!=3
+                || s[0]!=format!("{pad}float {weight_name} = {ratio};") || s[1]!=format!("{pad}FVector {weighted_name} = {product};")
+                || product!=format!("({normal_expr} * {weight_name})") || indent_of(lines[loop_open])!=outer {return None;}
+            let (total_name,right)=s[3].trim().strip_suffix(';')?.split_once(" = ")?;
+            if !bound(total_name,total) || right!=format!("{total_name} + {weight_name}") || s[3]!=format!("{pad}{total_name} = {right};") || count_ident(body,total_name)!=4
+                || s[4]!=format!("{outer}}}") || s[5]!=format!("{outer}if ({total_name} > 0.0)") || s[6]!=format!("{outer}{{")
+                || s[7]!=format!("{pad}return {sum_name}.{normal_name}({:?}, FVector::ZeroVector);",f64::from_bits(tolerance)) || s[8]!=format!("{outer}}}")
+                || s[9]!=format!("{outer}if (IsValid(this.{interest_name}()))") || s[10]!=format!("{outer}{{") {return None;}
+            let (_,fallback_name,receiver)=declaration_with_initializer(s[11])?;
+            let fallback_expr=format!("(this.{self_name}().{feet_name}() - this.{interest_name}().{feet_name}())");
+            if !bound(&fallback_name,weighted) || fallback_name==weighted_name || count_ident(body,&fallback_name)!=2
+                || s[11]!=format!("{pad}FVector {fallback_name} = {fallback_expr};") || receiver!=fallback_expr
+                || s[12]!=format!("{pad}return {fallback_name}.{normal_name}({:?}, FVector::ZeroVector);",f64::from_bits(tolerance))
+                || s[13]!=format!("{outer}}}") || s[14]!=format!("{outer}return FVector::ZeroVector;") {return None;}
+            if (0..=4).any(|n|paths[row+n]!=paths[row]) || paths[row+7].last()!=Some(&(row+6)) || paths[row+8]!=paths[row+7]
+                || paths[row+11].last()!=Some(&(row+10)) || paths[row+12]!=paths[row+11] || paths[row+13]!=paths[row+11]
+                || [5,6,9,10,14].iter().any(|n|paths[row+*n]!=paths[loop_open]) || lines[row+15..].iter().any(|l|!l.trim().is_empty()) {return None;}
+            let initial_sum=format!("{outer}FVector {sum_name}(FVector::ZeroVector);");let initial_total=format!("{outer}float {total_name} = 0.0;");
+            if loop_open<3 || lines[loop_open-3]!=initial_sum || lines[loop_open-2]!=initial_total || paths[loop_open-3]!=paths[loop_open] || paths[loop_open-2]!=paths[loop_open] {return None;}
+            Some((row+1,format!("{pad}FVector {new_name} = {normal_expr};\n{pad}{sum_name}.opAddAssign(({new_name} * {weight_name}));"),row+11,
+                format!("{pad}return {fallback_expr}.{normal_name}({:?}, FVector::ZeroVector);",f64::from_bits(tolerance))))
+        })();if let Some(edit)=candidate {edits.push(edit);}}
+        let [edit]=edits.as_slice() else {return None;};Some(edit.clone())
+    })();
+    let Some((loop_row,loop_text,fallback_row,fallback_text))=found else {return body.to_owned();};let mut out:Vec<_>=body.lines().map(str::to_owned).collect();
+    out.splice(fallback_row..fallback_row+2,[fallback_text]);out.splice(loop_row..loop_row+2,[loop_text]);out.join("\n")+if body.ends_with('\n') {"\n"}else {""}
 }
 
 /// Close a native event receiver before the loop character and defer its standalone Self argument.
@@ -58765,6 +58990,569 @@ mod literal_value_lifetime_tests {
         }
         shifted_body=shifted_body.replace("local_26_2","local_126_2");shifted_expected=shifted_expected.replace("local_26_2","local_126_2");
         assert_eq!(fold(&shifted_body,&shifted,&refs),shifted_expected);
+    }
+
+    fn named_normalized_accumulation_fixture(bias:u16)->Func {
+        // All121 original ops, preserving earlier getter lives at36/42 and every original branch.
+        let mut f=function(&[
+            ("PshGPtr", &[]),
+            ("PSF", &[6]),
+            ("CALLSYS", &[]),
+            ("SetV8", &[8]),
+            ("PSF", &[16]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[2320]),
+            ("CALLSYS", &[]),
+            ("JMP", &[]),
+            ("SUSPEND", &[]),
+            ("PSF", &[16]),
+            ("CALLSYS", &[]),
+            ("PshRPtr", &[]),
+            ("RDSPtr", &[]),
+            ("RefCpyV", &[26]),
+            ("PshVPtr", &[26]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV4", &[23]),
+            ("NOT", &[23]),
+            ("CpyVtoR1", &[23]),
+            ("JLowZ", &[]),
+            ("FreeNullV8", &[26]),
+            ("JMP", &[]),
+            ("PSF", &[42]),
+            ("PshVPtr", &[26]),
+            ("CALLSYS", &[]),
+            ("PSF", &[42]),
+            ("PSF", &[36]),
+            ("PshVPtr", &[0]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[30]),
+            ("PshVPtr", &[30]),
+            ("CALLSYS", &[]),
+            ("PSF", &[36]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV8", &[10]),
+            ("SetV8", &[28]),
+            ("CMPd", &[10, 28]),
+            ("JNS", &[]),
+            ("SetV8", &[10]),
+            ("SetV8", &[28]),
+            ("DIVd", &[28, 28, 10]),
+            ("PshGPtr", &[]),
+            ("PshC8", &[]),
+            ("PSF", &[42]),
+            ("PSF", &[36]),
+            ("PshVPtr", &[0]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[30]),
+            ("PshVPtr", &[30]),
+            ("CALLSYS", &[]),
+            ("PSF", &[42]),
+            ("PshVPtr", &[26]),
+            ("CALLSYS", &[]),
+            ("PSF", &[42]),
+            ("PSF", &[56]),
+            ("PSF", &[36]),
+            ("CALLSYS", &[]),
+            ("PSF", &[56]),
+            ("CALLSYS", &[]),
+            ("PshV8", &[28]),
+            ("PSF", &[36]),
+            ("PSF", &[42]),
+            ("CALLSYS", &[]),
+            ("PSF", &[36]),
+            ("PSF", &[50]),
+            ("PSF", &[6]),
+            ("CALLSYS", &[]),
+            ("ADDd", &[8, 8, 28]),
+            ("FreeNullV8", &[26]),
+            ("LoadVObjR", &[16, 16]),
+            ("RDR1", &[23]),
+            ("CpyVtoR1", &[23]),
+            ("JLowNZ", &[]),
+            ("SetV8", &[44]),
+            ("CMPd", &[8, 44]),
+            ("JNP", &[]),
+            ("PshGPtr", &[]),
+            ("PshC8", &[]),
+            ("PSF", &[50]),
+            ("PSF", &[6]),
+            ("CALLSYS", &[]),
+            ("PSF", &[50]),
+            ("PshVPtr", &[65534]),
+            ("CALLSYS", &[]),
+            ("JMP", &[]),
+            ("PshVPtr", &[0]),
+            ("CALLINTF", &[]),
+            ("STOREOBJ", &[30]),
+            ("PshVPtr", &[30]),
+            ("CALLSYS", &[]),
+            ("JLowZ", &[]),
+            ("PshGPtr", &[]),
+            ("PshC8", &[]),
+            ("PSF", &[56]),
+            ("PSF", &[50]),
+            ("PshVPtr", &[0]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[30]),
+            ("PshVPtr", &[30]),
+            ("CALLSYS", &[]),
+            ("PSF", &[56]),
+            ("PshVPtr", &[0]),
+            ("CALLINTF", &[]),
+            ("STOREOBJ", &[30]),
+            ("PshVPtr", &[30]),
+            ("CALLSYS", &[]),
+            ("PSF", &[56]),
+            ("PSF", &[36]),
+            ("PSF", &[50]),
+            ("CALLSYS", &[]),
+            ("PSF", &[36]),
+            ("CALLSYS", &[]),
+            ("PSF", &[56]),
+            ("PshVPtr", &[65534]),
+            ("CALLSYS", &[]),
+            ("JMP", &[]),
+            ("PshGPtr", &[]),
+            ("PshVPtr", &[65534]),
+            ("CALLSYS", &[]),
+            ("RET", &[4]),
+        ]);
+        f.name="CalculateWeightedAwayDirection".into();f.traits=4;f.ret=DataType {token:5,type_info:1,..Default::default()};
+        f.obj_locals=vec![(26,2),(30,2),(6,1),(16,4),(22,4),(36,1),(42,1),(50,1),(56,1)];
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,offset,value) in [(6, 1, 1007), (70, 2, 1004), (87, 1, 201), (103, 1, 201)] {f.bytecode[code[at].offset_dw+offset]=value;}
+        for (at,value) in [(0, 301), (2, 11), (3, 0), (7, 12), (11, 13), (16, 14), (25, 15), (29, 16), (32, 15), (34, 17), (36, 4607182418800017408), (39, 4607182418800017408), (40, 4607182418800017408), (42, 301), (43, 4487126258294980608), (47, 16), (50, 15), (53, 15), (57, 18), (59, 19), (63, 20), (67, 21), (74, 0), (77, 301), (78, 4487126258294980608), (81, 19), (84, 11), (90, 14), (92, 301), (93, 4487126258294980608), (97, 16), (100, 15), (106, 15), (110, 18), (112, 19), (115, 11), (117, 301), (119, 11)] {let value:u64=value;f.bytecode[code[at].offset_dw+1]=value as i32;f.bytecode[code[at].offset_dw+2]=(value>>32) as i32;}
+        for (from,to) in [(8, 70), (20, 23), (22, 70), (38, 40), (73, 9), (76, 86), (85, 120), (91, 117), (116, 120)] {f.bytecode[code[from].offset_dw+1]=code[to].offset_dw as i32-code[from].offset_dw as i32-2;}
+        for i in &code {if matches!(i.op.name,"RET"|"ADDSi") {continue;}
+            for (n,word) in i.words.iter().enumerate() {if (*word as i16)<=0 || (i.op.name=="LoadVObjR" && n>0) {continue;}
+                let lane=n+1;let dw=i.offset_dw+lane/2;let shift=(lane%2)*16;
+                f.bytecode[dw]=((f.bytecode[dw] as u32 & !(0xffff<<shift)) | (((*word+bias) as u32)<<shift)) as i32;
+            }
+        }
+        for (slot,_) in &mut f.obj_locals {*slot+=bias as i32;}f
+    }
+
+    #[test]
+    fn normalized_direction_survives_accumulation_while_argument_and_fallback_stay_temporary() {
+        let source=r#"        FVector local_6(FVector::ZeroVector);
+        float local_8 = 0.0;
+        for (auto local_26 : this.Neighbours)
+        {
+            if (!(IsValid(local_26)))
+            {
+                continue;
+            }
+            float local_10 = this.GetSelf().GetFeetLocation().Distance(local_26.GetFeetLocation());
+            if (local_10 < 1.0)
+            {
+                local_10 = 1.0;
+            }
+            float local_28 = 1.0 / local_10;
+            FVector local_36 = ((this.GetSelf().GetFeetLocation() - local_26.GetFeetLocation()).GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector) * local_28);
+            local_6 += local_36;
+            local_8 = local_8 + local_28;
+        }
+        if (local_8 > 0.0)
+        {
+            return local_6.GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);
+        }
+        if (IsValid(this.GetCharacterOfInterest()))
+        {
+            FVector local_36_2 = (this.GetSelf().GetFeetLocation() - this.GetCharacterOfInterest().GetFeetLocation());
+            return local_36_2.GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);
+        }
+        return FVector::ZeroVector;
+"#;
+        let expected=r#"        FVector local_6(FVector::ZeroVector);
+        float local_8 = 0.0;
+        for (auto local_26 : this.Neighbours)
+        {
+            if (!(IsValid(local_26)))
+            {
+                continue;
+            }
+            float local_10 = this.GetSelf().GetFeetLocation().Distance(local_26.GetFeetLocation());
+            if (local_10 < 1.0)
+            {
+                local_10 = 1.0;
+            }
+            float local_28 = 1.0 / local_10;
+            FVector local_42 = (this.GetSelf().GetFeetLocation() - local_26.GetFeetLocation()).GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);
+            local_6.opAddAssign((local_42 * local_28));
+            local_8 = local_8 + local_28;
+        }
+        if (local_8 > 0.0)
+        {
+            return local_6.GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);
+        }
+        if (IsValid(this.GetCharacterOfInterest()))
+        {
+            return (this.GetSelf().GetFeetLocation() - this.GetCharacterOfInterest().GetFeetLocation()).GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);
+        }
+        return FVector::ZeroVector;
+"#;
+        let refs=RefResolver::from_test_named_normalized_accumulation(0);
+        let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_named_normalized_accumulation(s,f,r,Some("UCollector"),true);
+        let rename=|s:&str,bias:u16|{let mut out=s.to_owned();for slot in [56u16,50,44,42,36,30,28,26,23,22,16,10,8,6] {
+            for suffix in ["_2",""] {out=super::rename_ident(&out,&format!("local_{slot}{suffix}"),&format!("local_{}{suffix}",slot+bias));}}out};
+        for bias in [0u16,512] {let f=named_normalized_accumulation_fixture(bias);let s=rename(source,bias);let e=rename(expected,bias);
+            assert_eq!(fold(&s,&f,&refs),e,"slot/source relocation {bias}");assert_eq!(fold(&e,&f,&refs),e,"idempotence");}
+        let f=named_normalized_accumulation_fixture(0);let code=disassemble(&f.bytecode).unwrap();assert_eq!(code.len(),121);
+        for fault in 1..=31 {assert_eq!(fold(source,&f,&RefResolver::from_test_named_normalized_accumulation(fault)),source,"metadata {fault}");}
+        for at in (0..15).chain(36..121) {let i=&code[at];
+            for n in 0..i.words.len() {let mut bad=f.clone();let lane=n+1;bad.bytecode[i.offset_dw+lane/2]^=1<<((lane%2)*16);
+                assert_eq!(fold(source,&bad,&refs),source,"WORD {at}/{n}");}
+            if !i.qwords.is_empty() {for lane in [1,2] {let mut bad=f.clone();bad.bytecode[i.offset_dw+lane]^=1;
+                assert_eq!(fold(source,&bad,&refs),source,"QWORD {at}/{lane}");}}
+            if !i.dwords.is_empty() {let mut bad=f.clone();let lane=if i.op.name=="LoadVObjR" {2}else{1};bad.bytecode[i.offset_dw+lane]^=1;
+                assert_eq!(fold(source,&bad,&refs),source,"DWORD/branch {at}");}
+        }
+        for (from,to) in [(8,71),(22,69),(38,41),(73,10),(76,87),(85,119),(91,118),(116,119),(20,44)] {
+            let mut bad=f.clone();bad.bytecode[code[from].offset_dw+1]=code[to].offset_dw as i32-code[from].offset_dw as i32-2;
+            assert_eq!(fold(source,&bad,&refs),source,"valid-boundary wrong entry/exit {from}->{to}");}
+        let mut bad=f.clone();bad.bytecode[code[21].offset_dw]^=1<<16;assert_eq!(fold(source,&bad,&refs),source,"continue must release the matched element");
+        for slot in [6,8,10,16,23,26,28,30,36,42,44,50,56] {let mut bad=f.clone();bad.obj_locals.extend([(slot,1),(slot,1)]);
+            assert_eq!(fold(source,&bad,&refs),source,"duplicate vector/scalar {slot}");}
+        for mode in 0..6 {let mut bad=f.clone();match mode {0=>bad.traits=0,1=>bad.ret.is_reference=true,2=>bad.ret.is_object_const=true,
+            3=>bad.ret.is_object_handle=true,4=>bad.params.push(super::super::model::Param {name:"Extra".into(),flags:0,ty:DataType {token:0x51,..Default::default()}}),
+            _=>{bad.bytecode[code[8].offset_dw]=(bad.bytecode[code[8].offset_dw] & !0xff) | function(&[("JMPP",&[1])]).bytecode[0];}}
+            assert_eq!(fold(source,&bad,&refs),source,"function metadata/dispatch {mode}");}
+        assert_eq!(super::restore_named_normalized_accumulation(source,&f,&refs,None,true),source);
+        assert_eq!(super::restore_named_normalized_accumulation(source,&f,&refs,Some("UCollector"),false),source);
+        for s in [source.replace("local_6 += local_36;","local_6 += Other;"),source.replace("local_8 = local_8 + local_28;","local_8 = local_8 + Other;"),
+            source.replace(" * local_28)"," * local_10)"),source.replace("1.0 / local_10","1.0 / Other"),
+            source.replace("this.Neighbours","this.Other"),source.replace("return local_36_2.GetSafeNormal2D","return local_6.GetSafeNormal2D"),
+            source.replace("this.GetCharacterOfInterest().GetFeetLocation()","this.GetSelf().GetFeetLocation()"),
+            source.replace("        return FVector::ZeroVector;","        Observe(local_36);\n        return FVector::ZeroVector;"),
+            source.replace("            local_8 = local_8 + local_28;","            Observe(local_36);\n            local_8 = local_8 + local_28;"),
+            source.replace("        float local_8 = 0.0;","        {\n            float local_8 = 0.0;\n        }"),
+            source.replace("        if (local_8 > 0.0)","        if (local_8 >= 0.0)"),
+            source.replace("        FVector local_6(FVector::ZeroVector);","        FVector local_42_7(FVector::ZeroVector);\n        FVector local_6(FVector::ZeroVector);")]
+            {assert_eq!(fold(&s,&f,&refs),s,"source lifetime/scope/operand");}
+        let lives=|s:&str|{let s=super::rename_ident(s,"local_36_2","local_36_9");let s=super::rename_ident(&s,"local_36","local_36_4");
+            let s=super::rename_ident(&s,"local_26","local_26_2");super::rename_ident(&s,"local_6","local_6_3")};
+        assert_eq!(fold(&lives(source),&f,&refs),lives(expected),"distinct physical-slot lives");
+        let prefix="        int local_360 = 0;\n";
+        assert_eq!(fold(&format!("{prefix}{source}"),&f,&refs),format!("{prefix}{expected}"),"identifier boundary");
+    }
+
+    fn assigned_normalized_accumulation_fixture(bias:u16)->Func {
+        // All176 original operations, including outer42, Guard fields and final weighted normal.
+        let mut f=function(&[
+            ("PshGPtr", &[]),
+            ("PSF", &[6]),
+            ("CALLSYS", &[]),
+            ("SetV8", &[8]),
+            ("PSF", &[16]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[2320]),
+            ("CALLSYS", &[]),
+            ("JMP", &[]),
+            ("SUSPEND", &[]),
+            ("PSF", &[16]),
+            ("CALLSYS", &[]),
+            ("PshRPtr", &[]),
+            ("RDSPtr", &[]),
+            ("RefCpyV", &[26]),
+            ("PshVPtr", &[26]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV4", &[23]),
+            ("NOT", &[23]),
+            ("CpyVtoR1", &[23]),
+            ("JLowZ", &[]),
+            ("FreeNullV8", &[26]),
+            ("JMP", &[]),
+            ("PSF", &[42]),
+            ("PshVPtr", &[26]),
+            ("CALLSYS", &[]),
+            ("PSF", &[42]),
+            ("PSF", &[36]),
+            ("PshVPtr", &[0]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[30]),
+            ("PshVPtr", &[30]),
+            ("CALLSYS", &[]),
+            ("PSF", &[36]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV8", &[10]),
+            ("SetV8", &[28]),
+            ("CMPd", &[10, 28]),
+            ("JNS", &[]),
+            ("SetV8", &[10]),
+            ("SetV8", &[28]),
+            ("DIVd", &[28, 28, 10]),
+            ("PshGPtr", &[]),
+            ("PshC8", &[]),
+            ("PSF", &[42]),
+            ("PSF", &[36]),
+            ("PshVPtr", &[0]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[30]),
+            ("PshVPtr", &[30]),
+            ("CALLSYS", &[]),
+            ("PSF", &[42]),
+            ("PshVPtr", &[26]),
+            ("CALLSYS", &[]),
+            ("PSF", &[42]),
+            ("PSF", &[56]),
+            ("PSF", &[36]),
+            ("CALLSYS", &[]),
+            ("PSF", &[56]),
+            ("CALLSYS", &[]),
+            ("PshV8", &[28]),
+            ("PSF", &[36]),
+            ("PSF", &[42]),
+            ("CALLSYS", &[]),
+            ("PSF", &[36]),
+            ("PSF", &[50]),
+            ("PSF", &[6]),
+            ("CALLSYS", &[]),
+            ("ADDd", &[8, 8, 28]),
+            ("FreeNullV8", &[26]),
+            ("LoadVObjR", &[16, 16]),
+            ("RDR1", &[23]),
+            ("CpyVtoR1", &[23]),
+            ("JLowNZ", &[]),
+            ("PshGPtr", &[]),
+            ("PSF", &[42]),
+            ("CALLSYS", &[]),
+            ("SetV8", &[44]),
+            ("CMPd", &[8, 44]),
+            ("JNP", &[]),
+            ("PshGPtr", &[]),
+            ("PshC8", &[]),
+            ("PSF", &[50]),
+            ("PSF", &[6]),
+            ("CALLSYS", &[]),
+            ("PSF", &[50]),
+            ("PSF", &[42]),
+            ("CALLSYS", &[]),
+            ("JMP", &[]),
+            ("PshVPtr", &[0]),
+            ("CALLINTF", &[]),
+            ("STOREOBJ", &[30]),
+            ("PshVPtr", &[30]),
+            ("CALLSYS", &[]),
+            ("JLowZ", &[]),
+            ("PshGPtr", &[]),
+            ("PshC8", &[]),
+            ("PSF", &[56]),
+            ("PSF", &[50]),
+            ("PshVPtr", &[0]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[30]),
+            ("PshVPtr", &[30]),
+            ("CALLSYS", &[]),
+            ("PSF", &[56]),
+            ("PshVPtr", &[0]),
+            ("CALLINTF", &[]),
+            ("STOREOBJ", &[30]),
+            ("PshVPtr", &[30]),
+            ("CALLSYS", &[]),
+            ("PSF", &[56]),
+            ("PSF", &[36]),
+            ("PSF", &[50]),
+            ("CALLSYS", &[]),
+            ("PSF", &[36]),
+            ("CALLSYS", &[]),
+            ("PSF", &[56]),
+            ("PSF", &[42]),
+            ("CALLSYS", &[]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[2576]),
+            ("RDSPtr", &[]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV4", &[23]),
+            ("NOT", &[23]),
+            ("CpyVtoR1", &[23]),
+            ("JLowZ", &[]),
+            ("PSF", &[42]),
+            ("PshVPtr", &[65534]),
+            ("CALLSYS", &[]),
+            ("JMP", &[]),
+            ("PshGPtr", &[]),
+            ("PshC8", &[]),
+            ("PSF", &[56]),
+            ("PSF", &[50]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[2576]),
+            ("RDSPtr", &[]),
+            ("CALLSYS", &[]),
+            ("PSF", &[56]),
+            ("PshVPtr", &[0]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[30]),
+            ("PshVPtr", &[30]),
+            ("CALLSYS", &[]),
+            ("PSF", &[56]),
+            ("PSF", &[36]),
+            ("PSF", &[50]),
+            ("CALLSYS", &[]),
+            ("PSF", &[36]),
+            ("CALLSYS", &[]),
+            ("PshGPtr", &[]),
+            ("PshC8", &[]),
+            ("PSF", &[62]),
+            ("LoadThisR", &[2552]),
+            ("RDR8", &[44]),
+            ("PshV8", &[44]),
+            ("PSF", &[50]),
+            ("PSF", &[42]),
+            ("CALLSYS", &[]),
+            ("LoadThisR", &[2560]),
+            ("RDR8", &[44]),
+            ("PshV8", &[44]),
+            ("PSF", &[62]),
+            ("PSF", &[56]),
+            ("CALLSYS", &[]),
+            ("PSF", &[62]),
+            ("PSF", &[36]),
+            ("PSF", &[50]),
+            ("CALLSYS", &[]),
+            ("PSF", &[36]),
+            ("CALLSYS", &[]),
+            ("PSF", &[62]),
+            ("PshVPtr", &[65534]),
+            ("CALLSYS", &[]),
+            ("RET", &[4]),
+        ]);
+        f.name="CalculateGuardedAwayDirection".into();f.traits=4;f.ret=DataType {token:5,type_info:1,..Default::default()};
+        f.obj_locals=vec![(26,2),(30,2),(6,1),(16,4),(22,4),(36,1),(42,1),(50,1),(56,1),(62,1),(68,1)];
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,offset,value) in [(6, 1, 1007), (70, 2, 1004), (90, 1, 201), (106, 1, 201), (120, 1, 1008), (136, 1, 1008), (154, 1, 1008), (160, 1, 1008)] {f.bytecode[code[at].offset_dw+offset]=value;}
+        for (at,value) in [(0, 301), (2, 11), (3, 0), (7, 12), (11, 13), (16, 14), (25, 15), (29, 16), (32, 15), (34, 17), (36, 4607182418800017408), (39, 4607182418800017408), (40, 4607182418800017408), (42, 301), (43, 4487126258294980608), (47, 16), (50, 15), (53, 15), (57, 18), (59, 19), (63, 20), (67, 21), (74, 301), (76, 11), (77, 0), (80, 301), (81, 4487126258294980608), (84, 19), (87, 31), (93, 14), (95, 301), (96, 4487126258294980608), (100, 16), (103, 15), (109, 15), (113, 18), (115, 19), (118, 31), (122, 14), (129, 11), (131, 301), (132, 4487126258294980608), (138, 15), (141, 16), (144, 15), (148, 18), (150, 19), (151, 301), (152, 4487126258294980608), (159, 20), (165, 20), (169, 32), (171, 19), (174, 11)] {let value:u64=value;f.bytecode[code[at].offset_dw+1]=value as i32;f.bytecode[code[at].offset_dw+2]=(value>>32) as i32;}
+        for (from,to) in [(8, 70), (20, 23), (22, 70), (38, 40), (73, 9), (79, 89), (88, 119), (94, 119), (126, 131), (130, 175)] {f.bytecode[code[from].offset_dw+1]=code[to].offset_dw as i32-code[from].offset_dw as i32-2;}
+        for i in &code {if matches!(i.op.name,"RET"|"ADDSi"|"LoadThisR") {continue;}
+            for (n,word) in i.words.iter().enumerate() {if (*word as i16)<=0 || (i.op.name=="LoadVObjR" && n>0) {continue;}
+                let lane=n+1;let dw=i.offset_dw+lane/2;let shift=(lane%2)*16;
+                f.bytecode[dw]=((f.bytecode[dw] as u32 & !(0xffff<<shift)) | (((*word+bias) as u32)<<shift)) as i32;
+            }
+        }
+        for (slot,_) in &mut f.obj_locals {*slot+=bias as i32;}f
+    }
+
+    fn assigned_normalized_source()->String {r#"        FVector local_6(FVector::ZeroVector);
+        float local_8 = 0.0;
+        for (auto local_26 : this.Neighbours)
+        {
+            if (!(IsValid(local_26)))
+            {
+                continue;
+            }
+            float local_10 = this.GetSelf().GetFeetLocation().Distance(local_26.GetFeetLocation());
+            if (local_10 < 1.0)
+            {
+                local_10 = 1.0;
+            }
+            float local_28 = 1.0 / local_10;
+            FVector local_36 = ((this.GetSelf().GetFeetLocation() - local_26.GetFeetLocation()).GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector) * local_28);
+            local_6 += local_36;
+            local_8 = local_8 + local_28;
+        }
+        FVector local_42(FVector::ZeroVector);
+        if (local_8 > 0.0)
+        {
+            local_42 = local_6.GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);
+        }
+        else
+        {
+            if (IsValid(this.GetCharacterOfInterest()))
+            {
+                FVector local_36_2 = (this.GetSelf().GetFeetLocation() - this.GetCharacterOfInterest().GetFeetLocation());
+                local_42 = local_36_2.GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);
+            }
+        }
+        if (!(IsValid(this.Guardian)))
+        {
+            return local_42;
+        }
+        FVector local_56_2 = (this.Guardian.GetFeetLocation() - this.GetSelf().GetFeetLocation()).GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);
+        return ((local_42 * this.ThreatWeight) + (local_56_2 * this.GuardWeight)).GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);
+"#.into()}
+
+    fn assigned_normalized_expected()->String {r#"        FVector local_6(FVector::ZeroVector);
+        float local_8 = 0.0;
+        for (auto local_26 : this.Neighbours)
+        {
+            if (!(IsValid(local_26)))
+            {
+                continue;
+            }
+            float local_10 = this.GetSelf().GetFeetLocation().Distance(local_26.GetFeetLocation());
+            if (local_10 < 1.0)
+            {
+                local_10 = 1.0;
+            }
+            float local_28 = 1.0 / local_10;
+            FVector local_42_2 = (this.GetSelf().GetFeetLocation() - local_26.GetFeetLocation()).GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);
+            local_6.opAddAssign((local_42_2 * local_28));
+            local_8 = local_8 + local_28;
+        }
+        FVector local_42(FVector::ZeroVector);
+        if (local_8 > 0.0)
+        {
+            local_42 = local_6.GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);
+        }
+        else
+        {
+            if (IsValid(this.GetCharacterOfInterest()))
+            {
+                local_42 = (this.GetSelf().GetFeetLocation() - this.GetCharacterOfInterest().GetFeetLocation()).GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);
+            }
+        }
+        if (!(IsValid(this.Guardian)))
+        {
+            return local_42;
+        }
+        FVector local_56_2 = (this.Guardian.GetFeetLocation() - this.GetSelf().GetFeetLocation()).GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);
+        return ((local_42 * this.ThreatWeight) + (local_56_2 * this.GuardWeight)).GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);
+"#.into()}
+
+    #[test]
+    fn assigned_normalized_direction_requires_the_complete_guarded_tail() {
+        let source=assigned_normalized_source();let expected=assigned_normalized_expected();
+        let refs=RefResolver::from_test_assigned_normalized_accumulation(0);
+        let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_named_normalized_accumulation(s,f,r,Some("UCollector"),true);
+        let rename=|s:&str,bias:u16| {let mut out=s.to_owned();for slot in [68u16,62,56,50,44,42,36,30,28,26,23,22,16,10,8,6] {
+            for suffix in ["_2",""] {out=super::rename_ident(&out,&format!("local_{slot}{suffix}"),&format!("local_{}{suffix}",slot+bias));}}out};
+        for bias in [0u16,512] {let f=assigned_normalized_accumulation_fixture(bias);let s=rename(&source,bias);let e=rename(&expected,bias);
+            assert_eq!(fold(&s,&f,&refs),e,"base relocation {bias}");assert_eq!(fold(&e,&f,&refs),e,"idempotence");}
+        let f=assigned_normalized_accumulation_fixture(0);let c=disassemble(&f.bytecode).unwrap();assert_eq!(c.len(),176);
+        for fault in 1..=43 {assert_eq!(fold(&source,&f,&RefResolver::from_test_assigned_normalized_accumulation(fault)),source,"metadata {fault}");}
+        // Every operand in the newly admitted tail is exercised, including all field offsets/owners.
+        for at in 74..176 {let i=&c[at];
+            for n in 0..i.words.len() {let mut bad=f.clone();let lane=n+1;bad.bytecode[i.offset_dw+lane/2]^=1<<((lane%2)*16);
+                assert_eq!(fold(&source,&bad,&refs),source,"WORD {at}/{n}");}
+            if !i.qwords.is_empty() {for lane in [1,2] {let mut bad=f.clone();bad.bytecode[i.offset_dw+lane]^=1;
+                assert_eq!(fold(&source,&bad,&refs),source,"QWORD {at}/{lane}");}}
+            if !i.dwords.is_empty() {let mut bad=f.clone();bad.bytecode[i.offset_dw+1]^=1;
+                assert_eq!(fold(&source,&bad,&refs),source,"DWORD/CFG {at}");}
+        }
+        for (from,to) in [(8,75),(22,69),(38,41),(73,10),(79,95),(88,120),(94,131),(126,132),(130,174),(20,114)] {
+            let mut bad=f.clone();bad.bytecode[c[from].offset_dw+1]=c[to].offset_dw as i32-c[from].offset_dw as i32-2;
+            assert_eq!(fold(&source,&bad,&refs),source,"boundary-valid foreign edge {from}->{to}");}
+        for slot in [42,44,56,62] {let mut bad=f.clone();bad.obj_locals.push((slot,1));assert_eq!(fold(&source,&bad,&refs),source,"unique tail local {slot}");}
+        for changed in [source.replace("local_6 += local_36;","local_6 += Other;"),
+            source.replace("local_42 = local_36_2.GetSafeNormal2D","local_6 = local_36_2.GetSafeNormal2D"),
+            source.replace("this.Guardian.GetFeetLocation()","this.GetSelf().GetFeetLocation()"),
+            source.replace("this.ThreatWeight","this.GuardWeight"),
+            source.replace("FVector local_42(FVector::ZeroVector);","FVector local_42;"),
+            source.replace("return local_42;","Observe(local_36_2);\n            return local_42;"),
+            source.replace("float local_8 = 0.0;","FVector local_42_7;\n        float local_8 = 0.0;"),
+            source.replace("        else\n        {", "        if (true)\n        {"),
+            source.replace("local_8 > 0.0","local_8 >= 0.0"),
+            source.replace("local_42 * this.ThreatWeight","local_6 * this.ThreatWeight"),
+            format!("{source}        Observe(local_42);\n")]
+            {assert_ne!(changed,source);assert_eq!(fold(&changed,&f,&refs),changed,"source scope/use/tail");}
+        let lives=|s:&str| {let s=super::rename_ident(s,"local_36_2","local_36_9");let s=super::rename_ident(&s,"local_36","local_36_4");
+            let s=super::rename_ident(&s,"local_56_2","local_56_8");super::rename_ident(&s,"local_42","local_42_5")};
+        assert_eq!(fold(&lives(&source),&f,&refs),lives(&expected),"existing outer/argument lives preserve their own suffixes");
+        // A pre-existing outer _2 life forces the fresh inner name to _3, never shadowing it.
+        let source2=super::rename_ident(&source,"local_42","local_42_2");
+        let expected2=super::rename_ident(&expected,"local_42_2","local_42_3");
+        let expected2=super::rename_ident(&expected2,"local_42","local_42_2");
+        assert_eq!(fold(&source2,&f,&refs),expected2,"fresh source lifetime suffix");
+        let mut mutable=f.clone();mutable.traits=0;assert_eq!(fold(&source,&mutable,&refs),source);
     }
 
     fn scoped_event_receiver_fixture(bias:u16)->Func {

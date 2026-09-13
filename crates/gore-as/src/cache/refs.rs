@@ -9373,6 +9373,111 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_named_normalized_accumulation(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"FVector",""),(2,"AGothicCharacter",""),(3,"UObject",""),(4,"TArrayConstIterator",""),(5,"UCharacterAIState",""),
+            (6,"UGothicCharacterAIState","Fixture"),(7,"UThreatBase","Fixture"),(8,"UCollector","Fixture")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32+1000,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        for (a,b) in [("UCollector","UThreatBase"),("UThreatBase","UGothicCharacterAIState"),("UGothicCharacterAIState","UCharacterAIState")] {r.class_super.insert(a.into(),b.into());}
+        r.class_fields.entry("UThreatBase".into()).or_default().insert("Neighbours".into(),"TArray<AGothicCharacter>".into());
+        for (id,offset,name) in [(1007,2320,"Neighbours"),(1004,16,"CanProceed")] {
+            let key=((id as i64)<<1)|((offset as i64)<<33)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id);
+        }
+        let value=DataType {token:5,type_info:1,..Default::default()};let input=DataType {is_reference:true,is_object_const:true,is_read_only:true,..value.clone()};
+        let character=DataType {token:5,type_info:2,is_object_handle:true,..Default::default()};
+        let double=DataType {token:0x51,..Default::default()};let void=DataType {token:0x52,..Default::default()};
+        for (ptr,name,owner,constant,ret,args) in [
+            (11,"$beh0","FVector",false,void,vec![input.clone()]),
+            (12,"Iterator","TArray",true,DataType {token:5,type_info:4,..Default::default()},vec![]),
+            (13,"Proceed","TArrayConstIterator",false,DataType {is_reference:true,is_read_only:true,..character.clone()},vec![]),
+            (15,"GetFeetLocation","AGothicCharacter",true,value.clone(),vec![]),
+            (16,"GetSelf","UCharacterAIState",true,character.clone(),vec![]),
+            (17,"Distance","FVector",true,double.clone(),vec![input.clone()]),
+            (18,"opSub","FVector",true,value.clone(),vec![input.clone()]),
+            (19,"GetSafeNormal2D","FVector",true,value.clone(),vec![double.clone(),input.clone()]),
+            (20,"opMul","FVector",true,value.clone(),vec![double]),
+            (21,"opAddAssign","FVector",false,value,vec![input]),
+            (22,"GetCharacterOfInterest","UGothicCharacterAIState",true,character,vec![])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);r.func_is_method.insert(ptr);
+            if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        r.funcid_to_ptr.insert(201,22);
+        r.func_by_ptr.insert(14,"IsValid".into());r.func_ret.insert(14,DataType {token:0x41,..Default::default()});
+        r.func_params.insert(14,vec![DataType {token:5,type_info:3,is_object_handle:true,is_object_const:true,..Default::default()}]);
+        r.global_by_ptr.insert(301,"ZeroVector".into());r.global_ns.insert(301,"FVector".into());
+        let key=(1007i64<<1)|(2320i64<<33)|1;let iter=(1004i64<<1)|(16i64<<33)|1;
+        match fault {
+            1=>r.func_ret.get_mut(&21).unwrap().is_reference=true,
+            2=>r.func_ret.get_mut(&21).unwrap().token=0x52,
+            3=>{r.const_method_ptrs.insert(21);},
+            4=>r.func_params.get_mut(&21).unwrap()[0].is_reference=false,
+            5=>r.func_params.get_mut(&21).unwrap()[0].is_read_only=false,
+            6=>r.func_params.get_mut(&19).unwrap()[0].token=0x50,
+            7=>r.func_ret.get_mut(&19).unwrap().is_reference=true,
+            8=>{r.const_method_ptrs.remove(&15);},
+            9=>{r.func_owner.insert(16,"UOtherState".into());},
+            10=>r.func_params.get_mut(&16).unwrap().push(DataType {token:0x44,..Default::default()}),
+            11=>{r.const_method_ptrs.remove(&22);},
+            12=>{r.func_owner.insert(22,"UUnrelated".into());},
+            13=>r.func_ret.get_mut(&22).unwrap().is_reference=true,
+            14=>r.func_params.get_mut(&14).unwrap()[0].is_object_const=false,
+            15=>r.func_params.get_mut(&14).unwrap()[0].type_info=2,
+            16=>r.func_ret.get_mut(&11).unwrap().token=5,
+            17=>r.func_ret.get_mut(&12).unwrap().is_reference=true,
+            18=>r.func_ret.get_mut(&13).unwrap().is_read_only=false,
+            19=>{r.class_fields.get_mut("UThreatBase").unwrap().insert("Neighbours".into(),"TArray<UObject>".into());},
+            20=>{r.prop_type_id.insert(key,1008);},
+            21=>{r.prop_by_key.insert(iter,"Other".into());},
+            22=>{r.prop_type_id.insert(iter,1007);},
+            23=>{r.global_is_string.insert(301);},
+            24=>{r.global_ns.insert(301,"Other".into());},
+            25=>r.type_identity_by_ptr.get_mut(&1).unwrap().module="Script".into(),
+            26=>r.func_ret.get_mut(&15).unwrap().is_object_const=true,
+            27=>{r.func_by_ptr.insert(15,"OtherLocation".into());},
+            28=>{r.func_owner.insert(21,"FVector2D".into());},
+            29=>r.func_params.get_mut(&22).unwrap().push(DataType {token:0x44,..Default::default()}),
+            30=>{r.class_super.insert("UGothicCharacterAIState".into(),"UOtherNative".into());},
+            31=>r.func_params.get_mut(&20).unwrap()[0].is_auto=true,
+            _=>{},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_assigned_normalized_accumulation(fault:u8)->Self {
+        let mut r=Self::from_test_named_normalized_accumulation(if fault<32 {fault}else{0});
+        let value=DataType {token:5,type_info:1,..Default::default()};
+        let input=DataType {is_reference:true,is_object_const:true,is_read_only:true,..value.clone()};
+        for (ptr,name,constant,ret) in [(31,"opAssign",false,DataType {is_reference:true,..value.clone()}),(32,"opAdd",true,value)] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,"FVector".into());r.func_is_method.insert(ptr);
+            if constant {r.const_method_ptrs.insert(ptr);}
+            r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,vec![input.clone()]);
+        }
+        for (offset,name,ty) in [(2576,"Guardian","AGothicCharacter"),(2552,"ThreatWeight","float"),(2560,"GuardWeight","float")] {
+            let key=(1008i64<<1)|((offset as i64)<<33)|1;
+            r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,1008);
+            r.class_fields.entry("UCollector".into()).or_default().insert(name.into(),ty.into());
+        }
+        match fault {
+            32=>r.func_ret.get_mut(&31).unwrap().is_reference=false,
+            33=>r.func_ret.get_mut(&31).unwrap().is_read_only=true,
+            34=>{r.const_method_ptrs.insert(31);},
+            35=>r.func_params.get_mut(&31).unwrap()[0].is_object_const=false,
+            36=>{r.const_method_ptrs.remove(&32);},
+            37=>r.func_ret.get_mut(&32).unwrap().is_reference=true,
+            38=>r.func_params.get_mut(&32).unwrap()[0].is_reference=false,
+            39=>{r.class_fields.get_mut("UCollector").unwrap().insert("Guardian".into(),"UObject".into());},
+            40=>{r.class_fields.get_mut("UCollector").unwrap().insert("ThreatWeight".into(),"float32".into());},
+            41=>{r.prop_type_id.insert((1008i64<<1)|(2560i64<<33)|1,1007);},
+            42=>{r.class_fields.get_mut("UCollector").unwrap().remove("GuardWeight");},
+            43=>{r.prop_by_key.insert((1008i64<<1)|(2560i64<<33)|1,"ThreatWeight".into());},
+            _=>{}
+        } r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_scoped_event_receiver(fault:u8)->Self {
         let mut r=Self::default();
         for (ptr,name,module) in [(1,"FGameplayTag",""),(2,"FGameplayTagContainer",""),(3,"AGothicCharacterState",""),(4,"AGothicCharacter",""),
