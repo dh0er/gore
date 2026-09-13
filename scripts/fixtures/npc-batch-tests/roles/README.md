@@ -191,11 +191,20 @@ straight nav-ray gate is removed; its role in the failure is not yet proven.
 It records `gore_role_flee_entered`, `_distance`, `_attempts`, `_moved_cm` and `_exit`
 for the next save. Exit0 means no recorded completion,1 end of the bounded loop,
 2 explicit stop, negative values an unavailable AI/body (-1) or player (-2).
-Choice27 overwrites the exit code with2 but keeps entry, distance and movement
-measurements. Those measurements are the diagnostics used by the requested
-post-stop save; earlier exit codes are not retained in that save.
+In0.1.2, choice27 overwrites the exit code with2 but keeps entry, distance and
+movement measurements. Since0.1.3, it writes2 only when the code is still0,
+preserving earlier completion/error codes as well.
 Successful movement remains a manual test; a queued routine is not movement proof.
+
+The [0.1.2 result save](field-runtime-0.1.2.json) records entry0, attempts0,
+distance-1 and movement0, despite the accepted command.31/27/31 did not erase
+these values. The live event metadata matches the working activity state.
+The flee template, however, explicitly disabled simulated steps, unlike its
+base and the proven walking/activity templates.0.1.3 enables that flag and
+keeps the navigation code unchanged. The native scheduler's precise gate is
+not exposed in script source; successful entry/movement still needs the test.
 
 Completed results are [archived outside the game](../profile-cleanup-after-field.json).
 After the revival pass,030 is [archived too](../profile-cleanup-after-revive.json);
 070/071/072 remain unchanged.
+The completed0.1.2 flight result is [also archived](../profile-cleanup-after-flee-v3.json).

@@ -1,10 +1,13 @@
 # Paket4: Begleiter, Kampf und Lebenszyklus
 
-## Aktueller Nachtest — 0.1.2
+## Aktueller Nachtest — 0.1.3
 
 Folgen/Warten, Niederlage/Erholung, Feindschaft, Gildenwechsel und Tod/Laden haben
 funktioniert. Auch die Wiederbelebung mit0.1.1 ist jetzt vom Benutzer bestaetigt.
-Nur Flucht erneut testen; [letzte Rueckmeldung](field-runtime-0.1.1.json).
+Nur Flucht erneut testen; [letzte Rueckmeldung und Save-Diagnose](field-runtime-0.1.2.json).
+Der vorherige Versuch hat den Fluchtzustand nicht bis zur ersten Diagnosemarke
+ausgefuehrt.0.1.3 erlaubt wie die funktionierenden Tagesablaeufe simulierte
+Ablaufschritte; ob das den Eintritt behebt, klaert dieser Nachtest.
 Die alten Ergebnisse und der nicht mehr benoetigte tote Ausgangsstand030 sind
 extern archiviert. Profil4 enthaelt noch070–072.
 
@@ -14,11 +17,15 @@ extern archiviert. Profil4 enthaelt noch070–072.
    deshalb direkt nach der Auswahl hingehen.
 2. Wenn er weggelaufen ist oder nach20–30 Sekunden weiter nichts tut, zurueck zu A.
    **27** beendet die Flucht, **31** protokolliert den Zustand. Anschliessend
-   **`rolle-flucht-v3`** speichern, auch bei Stillstand.26 vorher nicht erneut
+   **`rolle-flucht-v4`** speichern, auch bei Stillstand.26 vorher nicht erneut
    auswaehlen: Das setzt die Diagnosewerte zurueck.27 erhaelt Eintritts- und
-   Bewegungswerte; nur der Abschlusscode wird auf „explizit gestoppt“ gesetzt.
+   Bewegungswerte und bereits vorhandene Abschluss-/Fehlercodes. Nur ein noch
+   offener Abschlusscode wird auf „explizit gestoppt“ gesetzt.
    Der Save enthaelt Eintritt, Entfernung, Bewegungsversuche und tatsaechlich
    zurueckgelegte Strecke. Bei aktivem Konflikt erst dessen Ende abwarten.
+
+31 vor27 ist ebenfalls okay;31 zeichnet den aktuellen Zustand auf und setzt
+keine Eintritts- oder Bewegungswerte zurueck.
 
 ## Vollstaendige Referenz der ersten Runde
 
